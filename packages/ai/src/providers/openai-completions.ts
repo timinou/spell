@@ -9,6 +9,7 @@ import type {
 	ChatCompletionMessageParam,
 	ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions";
+import { buildImageDropMarker, validateImage } from "../image-validation";
 import { calculateCost } from "../models";
 import { getEnvApiKey } from "../stream";
 import {
@@ -846,12 +847,20 @@ export function convertMessages(
 							text,
 						} satisfies ChatCompletionContentPartText);
 					} else {
-						content.push({
-							type: "image_url",
-							image_url: {
-								url: `data:${item.mimeType};base64,${item.data}`,
-							},
-						} satisfies ChatCompletionContentPartImage);
+						const v = validateImage({ data: item.data, mimeType: item.mimeType });
+						if (!v.ok) {
+							content.push({
+								type: "text",
+								text: buildImageDropMarker(v.reason).text,
+							} satisfies ChatCompletionContentPartText);
+						} else {
+							content.push({
+								type: "image_url",
+								image_url: {
+									url: `data:${v.mimeType};base64,${v.data}`,
+								},
+							} satisfies ChatCompletionContentPartImage);
+						}
 					}
 				}
 				const filteredContent = !model.input.includes("image")
@@ -978,7 +987,8 @@ export function convertMessages(
 			params.push(assistantMsg);
 		} else if (msg.role === "toolResult") {
 			// Batch consecutive tool results and collect all images
-			const imageBlocks: Array<{ type: "image_url"; image_url: { url: string } }> = [];
+			const imageBlocks: Array<{ type: "image_url"; image_url: { url: string } } | { type: "text"; text: string }> =
+				[];
 			let j = i;
 
 			for (; j < transformedMessages.length && transformedMessages[j].role === "toolResult"; j++) {
@@ -1010,12 +1020,17 @@ export function convertMessages(
 				if (hasImages && model.input.includes("image")) {
 					for (const block of toolMsg.content) {
 						if (block.type === "image") {
-							imageBlocks.push({
-								type: "image_url",
-								image_url: {
-									url: `data:${(block as any).mimeType};base64,${(block as any).data}`,
-								},
-							});
+							const v = validateImage({ data: block.data, mimeType: block.mimeType });
+							if (!v.ok) {
+								imageBlocks.push({ type: "text", text: buildImageDropMarker(v.reason).text });
+							} else {
+								imageBlocks.push({
+									type: "image_url",
+									image_url: {
+										url: `data:${v.mimeType};base64,${v.data}`,
+									},
+								});
+							}
 						}
 					}
 				}
