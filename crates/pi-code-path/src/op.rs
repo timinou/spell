@@ -2,6 +2,7 @@
 //! Replaces flat Action enum's stringly-typed dispatch with per-variant
 //! target newtypes. Migration via Op::from_legacy(action, cp).
 
+use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use strum::EnumIter;
 
@@ -52,19 +53,19 @@ fn locator_hint(locator: &Locator) -> String {
 }
 
 /// Wraps a bare CodePath (file-level target; no query, no qualifier).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FileTarget(pub(crate) CodePath);
 
 /// Wraps a CodePath with a ::Symbol query segment.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SymbolTarget(pub(crate) CodePath);
 
 /// Wraps a CodePath for CSS-procedural mutations.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CssTarget(pub(crate) CodePath);
 
 /// Wraps a CodePath for markdown/org heading mutations.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HeadingTarget(pub(crate) CodePath);
 
 impl FileTarget {
@@ -174,6 +175,37 @@ impl HeadingTarget {
 	}
 }
 
+
+// ── Custom Deserialize: validate invariants via Target::new ───────
+
+impl<'de> Deserialize<'de> for FileTarget {
+	fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+		let cp = CodePath::deserialize(d)?;
+		FileTarget::new(cp).map_err(|diag| de::Error::custom(diag.message))
+	}
+}
+
+impl<'de> Deserialize<'de> for SymbolTarget {
+	fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+		let cp = CodePath::deserialize(d)?;
+		SymbolTarget::new(cp).map_err(|diag| de::Error::custom(diag.message))
+	}
+}
+
+impl<'de> Deserialize<'de> for CssTarget {
+	fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+		let cp = CodePath::deserialize(d)?;
+		CssTarget::new(cp).map_err(|diag| de::Error::custom(diag.message))
+	}
+}
+
+impl<'de> Deserialize<'de> for HeadingTarget {
+	fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+
+		let cp = CodePath::deserialize(d)?;
+		HeadingTarget::new(cp).map_err(|diag| de::Error::custom(diag.message))
+	}
+}
 // ── Helper types ──────────────────────────────────────────────────
 
 /// Scope for symbolReplace: whole declaration, body only, or signature only.
