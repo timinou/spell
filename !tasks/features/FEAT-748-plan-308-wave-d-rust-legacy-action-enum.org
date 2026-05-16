@@ -1,0 +1,20 @@
+#+TITLE: PLAN-308 Wave D — Rust legacy Action enum retirement (#[deprecated], from_legacy single-entry fallback)
+#+STATE: ITEM
+#+SESSION_ID: 14dd802985b2a5f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
+#+CUSTOM_ID: FEAT-748-plan-308-wave-d-rust-legacy-action-enum
+#+LAYER: kernel
+
+* Initial Message
+
+Investigate how you'd fold in PLAN-304 into the next swarm waves deeply. I want super super clean code
+
+Parent: [[id:PLAN-308-op-wire-format-cutover-kernel-as-sole-so]]
+Parallel with: Wave C
+
+- D1: crates/pi-code-path/src/ast.rs — Action enum #[deprecated(since="...", note="Use Op")]
+- D2: crates/pi-natives/src/code_path/napi.rs dispatch loop accepts Op JSON natively; Op::from_legacy retained as single fallback lane gated on legacy-kind check
+- D3: Kernel-internal call sites of Action replaced with Op
+- D4: FUP filed for hard Action removal (one minor's grace)
+
+Acceptance: cargo test -p pi-code-path -p pi-natives green. cargo build --release no deprecation warnings except explicitly-allowed legacy entry-point.

@@ -1,0 +1,23 @@
+#+TITLE: PLAN-308 Wave F — Prompt generator unification (one gen:prompts entrypoint)
+#+STATE: ITEM
+#+SESSION_ID: 14dd802985b2a5f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
+#+CUSTOM_ID: FEAT-750-plan-308-wave-f-prompt-generator-unifica
+#+LAYER: ts
+
+* Initial Message
+
+Investigate how you'd fold in PLAN-304 into the next swarm waves deeply. I want super super clean code
+
+Parent: [[id:PLAN-308-op-wire-format-cutover-kernel-as-sole-so]]
+Parallel with: Wave E
+
+- F1: packages/coding-agent/scripts/gen-prompts.ts replaces gen-tool-prompts.ts
+  - Inputs: listOps, listQualifiers, listEdgeKinds, listDiagnosticVariants, listLanguageDialects
+  - Outputs: _generated/{find-recipes, edit-ops, diag-vocabulary, status-cmds, dialects}.md
+  - edit-ops.md now generated from listOps() field-level metadata (richer than current OpKind-only output)
+- F2: Sentinel content in find.md / edit.md updated; byte-equal regen test extended to cover edit.md edit-ops sentinel
+- F3: Delete gen-tool-prompts.ts
+- F4: packages/coding-agent/package.json replaces gen:tool-prompts with gen:prompts
+
+Acceptance: one entrypoint bun run gen:prompts regens all fragments; byte-equal test green across find/edit/status/dialects/diag.

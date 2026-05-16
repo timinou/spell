@@ -1,0 +1,21 @@
+#+TITLE: PLAN-308 Wave G — ADR locking JTD/TypeBox schema-grammar boundary
+#+STATE: ITEM
+#+SESSION_ID: 14dd802985b2a5f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
+#+CUSTOM_ID: FEAT-751-plan-308-wave-g-adr-locking-jtd-typebox
+#+LAYER: docs
+
+* Initial Message
+
+Investigate how you'd fold in PLAN-304 into the next swarm waves deeply. I want super super clean code
+
+Parent: [[id:PLAN-308-op-wire-format-cutover-kernel-as-sole-so]]
+
+- G1: !tasks/plans/plan-artifacts/PLAN-308/ADR-schema-grammar-boundary.md
+  - Decision: JTD for agent frontmatter (user-authored .md); TypeBox for code-resident schemas (developer-authored .ts)
+  - Rationale: skill-author ergonomics ≠ developer ergonomics
+  - Boundary: jtdToJsonSchema (packages/coding-agent/src/tools/jtd-to-json-schema) is the only legal crosswalk
+  - Current consumer inventory on each side
+- G2: Module comment reference in packages/coding-agent/src/task/executor.ts pointing to ADR
+
+Acceptance: ADR committed; zero code change.

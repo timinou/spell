@@ -1,0 +1,18 @@
+#+TITLE: PLAN-308 Wave E — Op-schema regen-byte-equal CI test
+#+STATE: ITEM
+#+SESSION_ID: 14dd802985b2a5f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
+#+CUSTOM_ID: FEAT-749-plan-308-wave-e-op-schema-regen-byte-equ
+#+LAYER: test
+
+* Initial Message
+
+Investigate how you'd fold in PLAN-304 into the next swarm waves deeply. I want super super clean code
+
+Parent: [[id:PLAN-308-op-wire-format-cutover-kernel-as-sole-so]]
+Blocks on: Wave C
+
+- E1: packages/coding-agent/test/codepath/op-schema-parity.test.ts new — run gen:op-schema to temp file; assert byte-equal to committed codepath-op-schema.generated.ts
+- E2: CI pre-commit documentation; gen-op-schema runs before push when Op enum or list_ops() change
+
+Acceptance: Adding an Op variant in Rust without regen breaks bun test loudly with variant-name in diff.
