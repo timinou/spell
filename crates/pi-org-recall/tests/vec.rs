@@ -54,6 +54,55 @@ fn vec_index_replace_on_duplicate_id() {
 	assert_eq!(idx.len(), 1);
 }
 
+/// Stronger upsert check: the prior `vec_index_replace_on_duplicate_id`
+/// asserts only `len() == 1`. Because `test_vector` normalises, both
+/// `test_vector(4, 1.0)` and `test_vector(4, 2.0)` collapse to the same
+/// unit vector — a regression that silently kept the old vector in the
+/// HNSW would still pass. Here we replace a direction with a near-orthogonal
+/// one and confirm the new direction is the search winner.
+#[test]
+fn vec_index_replace_swaps_search_direction() {
+	let dim = 8;
+	let mut idx = VecIndex::new(dim);
+
+	// e0 unit vector
+	let mut v_old = vec![0.0f32; dim];
+	v_old[0] = 1.0;
+
+	// e3 unit vector (orthogonal to e0)
+	let mut v_new = vec![0.0f32; dim];
+	v_new[3] = 1.0;
+
+	idx.insert("X".into(), v_old.clone()).unwrap();
+
+	// Sanity: query e0 returns X with score ~1.0.
+	let hits = idx.search(&v_old, 4).unwrap();
+	assert_eq!(hits[0].0, "X");
+	assert!(hits[0].1 > 0.99, "pre-replace self-score should be near 1.0, was {}", hits[0].1);
+
+	// Replace direction.
+	idx.insert("X".into(), v_new.clone()).unwrap();
+	assert_eq!(idx.len(), 1, "upsert must keep len at 1");
+
+	// Query the OLD direction. X should now score near zero against e0
+	// (cosine of orthogonal vectors). A regression that left the stale
+	// HNSW edges in place would keep returning ~1.0.
+	let hits = idx.search(&v_old, 4).unwrap();
+	assert!(
+		hits.is_empty() || hits[0].1.abs() < 0.01,
+		"after replace, score against old direction must be ~0 (stale neighbour edges?); got {hits:?}"
+	);
+
+	// Query the NEW direction returns X near 1.0.
+	let hits = idx.search(&v_new, 4).unwrap();
+	assert_eq!(hits[0].0, "X");
+	assert!(
+		hits[0].1 > 0.99,
+		"post-replace self-score on new direction should be near 1.0, was {}",
+		hits[0].1,
+	);
+}
+
 #[test]
 fn vec_index_persistence() {
 	let dir = tempdir().unwrap();

@@ -53,7 +53,7 @@ use pi_workspace_cache::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::embedding_worker;
+use crate::{embedding_worker, org_index::PersistedOrgItem};
 
 /// Lightweight stderr logging. pi-natives doesn't pull in `tracing`; we match
 /// the convention used by `org_buffer.rs` (single-line `eprintln!`). Gated
@@ -190,10 +190,18 @@ struct WarmEngine {
 	graph:       TypedGraph,
 }
 
+/// On-disk cache entry. Uses `PersistedOrgItem` (not `OrgItem`) because
+/// `OrgItem`'s serde derive marks `body`, `clocks`, `children`, and
+/// `relations` with `#[serde(skip_serializing_if = ...)]` — fatal for
+/// bincode, a positional non-self-describing format. The encoder skips
+/// absent fields, but the decoder still expects them at their byte
+/// offsets, producing "failed to fill whole buffer". `PersistedOrgItem`
+/// strips those attributes; the conversion is `From`-implemented in
+/// `org_index.rs`.
 #[derive(Serialize, Deserialize)]
 struct EngineCacheEntry {
 	fingerprint: WorkspaceFingerprint,
-	items:       Vec<OrgItem>,
+	items:       Vec<PersistedOrgItem>,
 }
 
 impl PersistentCacheEntry for EngineCacheEntry {
@@ -346,10 +354,12 @@ impl RecallEngineHandle {
 			);
 			return Ok(None);
 		}
-		let graph = build_typed_graph(&entry.items);
+		// Convert persisted shape back to OrgItem for in-memory use.
+		let items: Vec<OrgItem> = entry.items.into_iter().map(OrgItem::from).collect();
+		let graph = build_typed_graph(&items);
 		Ok(Some(WarmEngine {
 			fingerprint: entry.fingerprint,
-			items: entry.items,
+			items,
 			fts,
 			vec,
 			graph,
@@ -371,7 +381,7 @@ impl RecallEngineHandle {
 	fn save_warm(&self, warm: &WarmEngine) -> Result<(), String> {
 		let entry = EngineCacheEntry {
 			fingerprint: warm.fingerprint.clone(),
-			items:       warm.items.clone(),
+			items:       warm.items.iter().cloned().map(PersistedOrgItem::from).collect(),
 		};
 		// Atomic-save pattern: write to `<name>.tmp`, then rename over the
 		// final path. `CacheStore::save` truncates in place, so a crash
@@ -727,6 +737,64 @@ mod tests {
 			expected.is_dir(),
 			"override fts dir missing at {}",
 			expected.display(),
+		);
+		forget(repo.path());
+	}
+
+	/// Disk fast path: cold-build, drop the in-memory handle via `forget()`,
+	/// then `get_or_create` again with no source changes. `try_load_warm`
+	/// must reconstruct the `WarmEngine` from `engine.bin` + `vec.bin` + the
+	/// on-disk Tantivy directory WITHOUT calling `full_rebuild`. Validated by
+	/// asserting `engine.bin` mtime is stable across the two queries.
+	///
+	/// Sibling `warm_restore_serves_unchanged_repo_without_rebuild` covers
+	/// the in-memory warm path (no `forget`, same handle reused). Together
+	/// they pin both halves of the cache hit story.
+	#[test]
+	fn disk_fast_path_restores_warm_engine_without_full_rebuild() {
+		let _no_worker = force_no_worker("disk-fastpath");
+		let repo = tempdir().unwrap();
+		write_item(
+			&repo.path().join("!tasks"),
+			"E.org",
+			"* TODO E\n:PROPERTIES:\n:CUSTOM_ID: E-1\n:END:\n",
+		);
+		let cache = tempdir().unwrap();
+		let canon = canonical_root(repo.path());
+		let engine_bin = repo_cache_dir_at(&canon, cache.path())
+			.unwrap()
+			.join("engine.bin");
+
+		// Cold build via first get_or_create.
+		get_or_create(repo.path(), Some(cache.path()))
+			.unwrap()
+			.query(q("E"))
+			.unwrap();
+		assert!(engine_bin.is_file(), "cold build must persist engine.bin");
+		let mtime_cold = fs::metadata(&engine_bin).unwrap().modified().unwrap();
+
+		// Drop the in-memory handle. The cache directory is untouched.
+		forget(repo.path());
+		std::thread::sleep(std::time::Duration::from_millis(50));
+
+		// Second get_or_create: handle is gone, must hit try_load_warm.
+		let hits = get_or_create(repo.path(), Some(cache.path()))
+			.unwrap()
+			.query(q("E"))
+			.unwrap();
+		assert!(
+			hits.iter().any(|h| h.id == "E-1"),
+			"disk fast path should surface E-1; got {hits:?}"
+		);
+
+		// If full_rebuild had run, save_warm would have rewritten engine.bin
+		// and the mtime would advance. A successful disk-restore takes the
+		// try_load_warm branch which does NOT call save_warm, so the file
+		// must be untouched.
+		let mtime_warm = fs::metadata(&engine_bin).unwrap().modified().unwrap();
+		assert_eq!(
+			mtime_cold, mtime_warm,
+			"disk fast path triggered a rebuild (engine.bin mtime advanced)"
 		);
 		forget(repo.path());
 	}
