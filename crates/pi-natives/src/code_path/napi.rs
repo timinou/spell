@@ -446,11 +446,26 @@ pub fn execute_code_path_inner(
 			},
 		};
 
-		// Parse each action as Op (preferred) or legacy Action (fallback)
+		// Parse each action as Op (preferred) or legacy Action (fallback).
+		//
+		// PLAN-308 wire-format: TS sends `target` at options level (already
+		// parsed into `cp` above) and `actions: [{kind, ...fields}]` without
+		// embedded target. Op variants require `target: FileTarget(CodePath)`
+		// as a struct field. We inject the parsed CodePath into each action
+		// JSON before deserialization so the Op-first dispatch succeeds.
+		let cp_value = serde_json::to_value(&cp).ok();
 		let ops: Vec<Op> = {
 			let mut parsed = Vec::with_capacity(raw_actions.len());
 			for raw in &raw_actions {
-				match serde_json::from_value::<Op>(raw.clone()) {
+				let raw_with_target = match (&cp_value, raw) {
+					(Some(t), serde_json::Value::Object(obj)) if !obj.contains_key("target") => {
+						let mut clone = obj.clone();
+						clone.insert("target".to_string(), t.clone());
+						serde_json::Value::Object(clone)
+					},
+					_ => raw.clone(),
+				};
+				match serde_json::from_value::<Op>(raw_with_target) {
 					Ok(op) => parsed.push(op),
 					Err(_) => {
 						#[allow(deprecated)]

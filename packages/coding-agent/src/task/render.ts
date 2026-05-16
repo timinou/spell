@@ -522,12 +522,32 @@ export function renderResult(
 	return {
 		render(width) {
 			const { expanded, isPartial, spinnerFrame } = options;
-			const key = new Hasher()
+			const hasher = new Hasher()
 				.bool(expanded)
 				.bool(isPartial)
 				.u32(spinnerFrame ?? 0)
-				.u32(width)
-				.digest();
+				.u32(width);
+			// Mix in a progress content signature so heartbeat-driven updates and
+			// in-place progress mutations actually invalidate the cached lines.
+			// Without this, the spinner frame is the only time-varying input the
+			// renderer sees, and tool/duration changes are silently dropped until
+			// the next #updateDisplay() rebuilds the closure.
+			hasher.u32(details.progress?.length ?? 0);
+			if (details.progress) {
+				for (const p of details.progress) {
+					hasher
+						.str(p.status)
+						.u32(p.toolCount)
+						.u32(p.tokens)
+						.u32(p.durationMs)
+						.u32(p.recentTools.length)
+						.optional(p.currentTool ?? null)
+						.optional(p.lastIntent ?? null)
+						.optional(p.retry ? `r${p.retry.attempt}/${p.retry.maxAttempts}` : null);
+				}
+			}
+			hasher.u32(details.results?.length ?? 0);
+			const key = hasher.digest();
 			if (cached?.key === key) return cached.lines;
 
 			const lines: string[] = [];

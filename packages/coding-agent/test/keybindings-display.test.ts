@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { KeybindingsManager } from "../src/config/keybindings";
+import { DEFAULT_APP_KEYBINDINGS, KeybindingsManager } from "../src/config/keybindings";
 
 describe("KeybindingsManager.getDisplayString", () => {
 	it("formats a single binding as a human-readable key hint", () => {
@@ -24,5 +24,19 @@ describe("KeybindingsManager.getDisplayString", () => {
 		});
 
 		expect(keybindings.getDisplayString("copyPrompt")).toBe("");
+	});
+});
+
+describe("subagentViewer default keybinding", () => {
+	// Ghostty (and several other terminals) consume ctrl+tab for their own
+	// tab-cycling, swallowing the kitty CSI-u sequence before it reaches
+	// Spell. Default to alt+j which is unclaimed by mainstream terminals.
+	it("defaults to alt+j to avoid Ghostty ctrl+tab conflict", () => {
+		expect(DEFAULT_APP_KEYBINDINGS.subagentViewer).toBe("alt+j");
+	});
+
+	it("renders the alt+j default in display string form", () => {
+		const keybindings = KeybindingsManager.inMemory({});
+		expect(keybindings.getDisplayString("subagentViewer")).toBe("Alt+J");
 	});
 });

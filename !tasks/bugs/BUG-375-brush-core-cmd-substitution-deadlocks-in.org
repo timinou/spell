@@ -1,5 +1,5 @@
 #+TITLE: brush-core cmd substitution deadlocks in bash tool
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14e36d0179617e04
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-16T11-14-31-013Z_14e36d0179617e04.jsonl]]
 #+CUSTOM_ID: BUG-375-brush-core-cmd-substitution-deadlocks-in
@@ -85,3 +85,5 @@ This eliminates the deadlock class entirely:
 * SCOPE NOTES
 - This is the same class of bug as upstream brush PR #748 ("fix: command substitutions with large output") - that PR fixed the *buffer-fill* variant; HEAD's later refactor to =AsyncPipeReader= fixes the *signal-starvation* variant we are hitting.
 - Watchdog (~bash-executor.ts~ =brokenShellSessions=) is doing its job; this BUG eliminates the need to ever reach the watchdog.
+
+NOTE [2026-05-16]: Fixed in 7be970f18. AsyncPipeReader + tokio::spawn replaces sync-read-in-async anti-pattern. 3/3 napi regression tests pass in 756 ms; same patterns hung 305 s pre-fix. Brush-core lib tests 37/37 ok.

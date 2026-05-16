@@ -149,7 +149,7 @@ describe("CreateTool", () => {
 			expect.objectContaining({
 				command: "edit",
 				target: "spy.txt",
-				actions: [expect.objectContaining({ kind: "create", content: "spy content", force: false })],
+				actions: [expect.objectContaining({ kind: "fileCreate", content: "spy content", force: false })],
 			}),
 		);
 		spy.mockRestore();

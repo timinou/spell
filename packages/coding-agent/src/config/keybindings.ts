@@ -86,7 +86,10 @@ export const DEFAULT_APP_KEYBINDINGS: Record<AppAction, KeyId | KeyId[]> = {
 	resume: [],
 	toggleSTT: "alt+h",
 	toggleUserPause: "alt+shift+u",
-	subagentViewer: "ctrl+tab",
+	// alt+j chosen because ctrl+tab is captured by Ghostty (and many other
+	// terminals) for built-in tab cycling, so the kitty CSI-u sequence never
+	// reaches Spell. alt+j stays free across mainstream terminals.
+	subagentViewer: "alt+j",
 };
 
 /**

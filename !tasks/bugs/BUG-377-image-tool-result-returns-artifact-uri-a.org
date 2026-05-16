@@ -1,5 +1,5 @@
 #+TITLE: image tool result returns artifact:// URI as base64, Anthropic API 400
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14e386f9d5d16b69
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-16T13-07-58-935Z_14e386f9d5d16b69.jsonl]]
 #+CUSTOM_ID: BUG-377-image-tool-result-returns-artifact-uri-a
@@ -56,3 +56,5 @@ Producer-side fix only. Defense-in-depth handled by sibling BUG.
 - claude-code#36511 (data:image stdout interception)
 - claude-code#9049 (large screenshot 400)
 - MCP spec §image-content (canonical shape)
+
+NOTE [2026-05-16]: Closed in commits 307d845c2 (consumer + marshal text-preserve + integration tests) + e01a9673f (initial T1 marshal sniff). All acceptance tests pass: cargo test -p pi-natives code_path::marshal (7 tests including 3 new); bun test packages/coding-agent/test/get-image.test.ts (2 tests). Content::Image { bytes: Some(_) } never returns artifact_uri; extractImages never emits image block with URI data.

@@ -1,0 +1,182 @@
+#+TITLE: TUI: task progress freezes, render cache misses progress, ctrl+tab keybind conflict
+#+STATE: DONE
+#+SESSION_ID: 14e27df0702351e9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-15T17-50-01-152Z_14e27df0702351e9.jsonl]]
+#+CUSTOM_ID: BUG-376-tui-task-progress-freezes-render-cache-m
+
+* Initial Message
+
+try to find the root causes for why the TUI hangs: the task agents sometimes stop updating, when I am scrolled up and there's an update it scrolls back, the ⣾ stays blocked inside task blocks, Ctrl+Tab doesn't take me to the job window (it does nothing), and the niri overview overlay is super slow to update the TUI
+
+* Initial Message
+
+User report (2026-05-15): TUI hangs in several distinct ways while subagents run:
+- "the task agents sometimes stop updating"
+- "the ⣾ stays blocked inside task blocks"
+- "Ctrl+Tab doesn't take me to the job window (it does nothing)"
+
+Investigation in this session traced three independently fixable root causes; the remaining two reported symptoms (scroll-up snaps back, niri overview lag) are out of scope and tracked separately by the user.
+
+* Scope
+
+In:
+- (1) Add a periodic heartbeat in =runSubprocess= (=packages/coding-agent/src/task/executor.ts=) so subagent =progress= forwards to the parent even when no =AgentEvent= arrives. Today =scheduleProgress= only fires from event handlers, so a long-running child tool (bash sleep, slow read) leaves the parent stuck on the last partial.
+- (3) Include the live =progress= content signature in the =renderResult= cache key (=packages/coding-agent/src/task/render.ts=) so the cached lines actually reflect freshness of =progress[].durationMs= / =status= / =toolCount= / =tokens= / =currentTool= when the heartbeat ticks. Today the key only mixes =expanded=, =isPartial=, =spinnerFrame=, =width=; that means any future caller that reuses a renderer across content changes (or any time-dependent read inside the renderer) silently serves stale lines.
+- (4) Change the default =subagentViewer= binding from =ctrl+tab= to =alt+j= (=packages/coding-agent/src/config/keybindings.ts=). Ghostty's default bindings consume =ctrl+tab=/=ctrl+shift+tab= for tab cycling, so the kitty CSI-u sequence =\x1b[9;5u= never reaches Spell.
+
+Out:
+- Scroll-on-update behavior in normal screen buffer (filed elsewhere if approved).
+- Niri overview frame throttling (filed elsewhere if approved).
+- Any change to the keybinding parser, kitty negotiation, or terminal layer.
+- Any change to the eventBus or session stream contract.
+
+Rationale:
+- Repo evidence (=packages/coding-agent/src/task/executor.ts:894-916=): =scheduleProgress= only runs from inside =processEvent= / =processSessionEvent= / final =scheduleProgress(true)= after =runSubagent= returns. No timer drives it.
+- Repo evidence (=packages/coding-agent/src/task/render.ts:524-528=): cache key omits =details.progress=, =progress.durationMs=, =progress.status=, =progress.currentTool=.
+- Repo evidence (=packages/coding-agent/src/config/keybindings.ts:89=): =subagentViewer: "ctrl+tab"=.
+- Ghostty default keybinds claim =ctrl+tab=/=ctrl+shift+tab= for =next_tab=/=previous_tab= unless explicitly unbound in user config; user's =~/.config/ghostty/config= does not unbind them.
+
+* Existing Patterns
+
+- =packages/coding-agent/src/task/executor.ts=
+  - =scheduleProgress(flush)= already coalesces emits via =PROGRESS_COALESCE_MS = 150=. A heartbeat should drive it through the same coalescer (no parallel emission path), so subagent-tracker / parent =onUpdate= stay on a single code path.
+  - Cleanup already clears =progressTimeoutId= at the post-=runSubagent= block; the heartbeat timer follows the same shape.
+- =packages/coding-agent/src/task/render.ts=
+  - =Hasher= chain (=str= / =bool= / =u32= / =u64= / =optional=) is the canonical cache-key style; extend it, do not add a parallel hashing helper.
+- =packages/coding-agent/src/config/keybindings.ts=
+  - =DEFAULT_APP_KEYBINDINGS= is the single source of truth read by =KeybindingsManager= and by the kdl loader. Changing the default propagates through =/hotkeys= help and the user-config defaulting path automatically.
+- =packages/coding-agent/test/task/executor-warnings.test.ts=, =packages/coding-agent/test/task/render-report-finding.test.ts=, =packages/coding-agent/test/keybindings-display.test.ts=
+  - Existing test shapes for executor helpers, renderResult rendering, and keybinding defaults. New tests should mirror them.
+
+* Tests
+
+Workflows the new tests must lock:
+1. Heartbeat: while a subagent is running and emitting no events, the parent =onProgress= callback still receives ticks at a bounded interval (e.g. <=600ms).
+2. Heartbeat: heartbeat stops once the subagent run resolves (no leaked interval after completion / abort).
+3. Heartbeat: heartbeat shares the existing 150ms coalescer (does not produce extra emissions back-to-back with real events).
+4. Render cache: =renderResult= produces different output for two distinct =details.progress= snapshots that share the same =(expanded, isPartial, spinnerFrame, width)= options.
+5. Render cache: =renderResult= still hits its cache (no recompute) for two consecutive renders with identical options *and* identical progress signature.
+6. Keybindings default: =DEFAULT_APP_KEYBINDINGS.subagentViewer === "alt+j"=.
+7. Keybindings display: =KeybindingsManager.inMemory({}).getDisplayString("subagentViewer")= reflects the new default.
+
+Concrete test files:
+- =packages/coding-agent/test/task/executor-heartbeat.test.ts= (new) — unit test for an extracted =createProgressHeartbeat(...)= helper covering workflows 1–3.
+- =packages/coding-agent/test/task/render-cache.test.ts= (new) — covers workflows 4–5 by calling =taskToolRenderer.renderResult(...)= twice on the same component instance, mutating the captured details in between, with cache-hit detection via a recompute counter or by asserting line content.
+- =packages/coding-agent/test/keybindings-display.test.ts= (extend) — covers workflows 6–7.
+
+Sequencing: tests first, implementations after.
+
+* Implementation
+
+** ITEM Add render-cache progress-signature regression test (TDD: first)
+:PROPERTIES:
+:CUSTOM_ID: BUG-TUI-PROGRESS-FREEZE::render-cache-test
+:LAYER: test
+:END:
+- Files:
+  - =packages/coding-agent/test/task/render-cache.test.ts= (new)
+- Build initially-failing tests for workflows 4 and 5.
+- Use =getThemeByName("dark")= as in =render-report-finding.test.ts=.
+- Render with the SAME =Component= instance returned by =renderResult=, advancing only the captured progress between the two render calls.
+
+** ITEM Add executor heartbeat regression tests (TDD: first)
+:PROPERTIES:
+:CUSTOM_ID: BUG-TUI-PROGRESS-FREEZE::heartbeat-test
+:LAYER: test
+:END:
+- Files:
+  - =packages/coding-agent/test/task/executor-heartbeat.test.ts= (new)
+- Test an extracted =createProgressHeartbeat({ intervalMs, isActive, tick })= helper:
+  - tick fires repeatedly while =isActive()= returns true
+  - tick stops once =stop()= is called
+  - tick is silently skipped while =isActive()= returns false (used by subprocess to gate on =resolved=)
+- Keep the helper free of timers other than =setInterval=, so the test can drive it deterministically via short =Bun.sleep= or =setTimeout=.
+
+** ITEM Add keybinding default regression test (TDD: first)
+:PROPERTIES:
+:CUSTOM_ID: BUG-TUI-PROGRESS-FREEZE::keybinding-test
+:LAYER: test
+:END:
+- Files:
+  - =packages/coding-agent/test/keybindings-display.test.ts= (extend)
+- Assert =DEFAULT_APP_KEYBINDINGS.subagentViewer === "alt+j"=.
+- Assert =KeybindingsManager.inMemory({}).getDisplayString("subagentViewer") === "Alt+J"=.
+
+** ITEM Extend renderResult cache key with progress signature
+:PROPERTIES:
+:CUSTOM_ID: BUG-TUI-PROGRESS-FREEZE::render-cache-impl
+:DEPENDS: BUG-TUI-PROGRESS-FREEZE::render-cache-test
+:LAYER: ui
+:END:
+- Files:
+  - =packages/coding-agent/src/task/render.ts=
+- Hash each entry of =details.progress=: =status=, =toolCount=, =tokens=, =durationMs=, =currentTool= (optional), =currentToolStartMs=-bucket (optional, coarse), =recentTools.length=, plus a presence sentinel when the array is empty.
+- Keep the chain inside the existing =Hasher= sequence; do not introduce a parallel hash function.
+- Preserve cache-hit behavior when progress is unchanged so the per-frame spinner path stays cheap.
+
+** ITEM Add progress heartbeat to runSubprocess
+:PROPERTIES:
+:CUSTOM_ID: BUG-TUI-PROGRESS-FREEZE::heartbeat-impl
+:DEPENDS: BUG-TUI-PROGRESS-FREEZE::heartbeat-test BUG-TUI-PROGRESS-FREEZE::render-cache-impl
+:LAYER: backend
+:END:
+- Files:
+  - =packages/coding-agent/src/task/executor.ts=
+- Export =createProgressHeartbeat= helper (testable).
+- Wire one heartbeat per =runSubprocess= call:
+  - =intervalMs=: 500ms.
+  - =isActive=: returns true while the subprocess has not =resolved=.
+  - =tick=: =scheduleProgress(false)= (routes through the existing 150ms coalescer; never floods the parent).
+- Stop the heartbeat at the same cleanup point that clears =progressTimeoutId= so we never leak the timer.
+- Unref the timer so the heartbeat never keeps the process alive.
+
+** ITEM Change subagent-viewer default keybind to alt+j
+:PROPERTIES:
+:CUSTOM_ID: BUG-TUI-PROGRESS-FREEZE::keybinding-impl
+:DEPENDS: BUG-TUI-PROGRESS-FREEZE::keybinding-test
+:LAYER: ui
+:END:
+- Files:
+  - =packages/coding-agent/src/config/keybindings.ts=
+- Set =subagentViewer: "alt+j"= in =DEFAULT_APP_KEYBINDINGS=.
+- Search for hard-coded =ctrl+tab= mentions in prompts / help text and update the user-visible string where it is now wrong; do not silently keep stale text.
+
+* Edge Cases
+
+- Heartbeat must not fire after subprocess resolution; otherwise the post-completion =scheduleProgress(true)= at the bottom of =runSubprocess= races against a stale tick.
+- Heartbeat must coexist with =PROGRESS_COALESCE_MS=: it must not bypass coalescing, since real events should still take priority and back-to-back emits would amplify cost in nested =task= batches.
+- Cache key extension must not be sensitive to incidental ordering differences in =details.progress= (the producer sorts by =index= already; tests should encode that invariant rather than rely on it).
+- Cache key must remain stable when only =Date.now()=-derived data changes within the same =durationMs= bucket (avoid per-frame recompute storm when nothing else changed).
+- Keybinding change must not collide with another configured =alt+j= binding; grep the config tree before landing.
+- If a user has already pinned =subagentViewer: ctrl+tab= in their kdl, the user-config still wins; the change is to the *default* only.
+
+* Acceptance Criteria
+
+- Subagents that go silent for >1s still produce visible progress ticks on the parent (durationMs advances).
+- =renderResult= cache invalidates when progress content changes and continues to cache-hit when it does not.
+- =ctrl+tab= is no longer the default; =alt+j= opens the subagent viewer out of the box.
+- All new and existing tests pass.
+
+* Verification
+
+- =bun test packages/coding-agent/test/task/executor-heartbeat.test.ts=
+- =bun test packages/coding-agent/test/task/render-cache.test.ts=
+- =bun test packages/coding-agent/test/keybindings-display.test.ts=
+- =bun run --filter @oh-my-pi/pi-coding-agent check:ts=
+- Manual repro: start a subagent that sleeps inside a bash call for ~10s; observe the parent task block elapsed counter advancing and the spinner content not freezing.
+
+NOTE [2026-05-16]: Completed 2026-05-15: all three implementation items landed in one pass.
+
+Files touched:
+- packages/coding-agent/src/task/progress-heartbeat.ts (new) — testable helper.
+- packages/coding-agent/src/task/executor.ts — heartbeat wired into runSubprocess, stopped at the same cleanup point as progressTimeoutId.
+- packages/coding-agent/src/task/render.ts — renderResult cache key now mixes a progress content signature (status, toolCount, tokens, durationMs, recentTools.length, currentTool, lastIntent, retry, results length).
+- packages/coding-agent/src/config/keybindings.ts — subagentViewer default changed from ctrl+tab to alt+j with a comment explaining Ghostty's interception.
+- packages/coding-agent/src/modes/controllers/command-controller.ts — fallback display string updated to "Alt+J".
+- packages/coding-agent/test/task/executor-heartbeat.test.ts (new) — 4 tests.
+- packages/coding-agent/test/task/render-cache.test.ts (new) — 3 tests.
+- packages/coding-agent/test/keybindings-display.test.ts — +2 tests.
+
+Verification:
+- `bun test packages/coding-agent/test/task/executor-heartbeat.test.ts packages/coding-agent/test/task/render-cache.test.ts packages/coding-agent/test/keybindings-display.test.ts` → 12 pass / 0 fail.
+- Type errors visible in coding-agent are pre-existing WIP under tools/codepath-* and tools/edit.ts, untouched by this BUG.
