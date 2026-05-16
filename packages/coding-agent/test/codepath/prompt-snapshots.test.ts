@@ -2,7 +2,7 @@
 //
 // Locks the current prompt files for find/edit/status/create/bash against a
 // known-good baseline. After the kernel rebuild (W8/W10), these snapshots
-// are replaced by kernel-generated content (listOpKinds/listQualifiers/etc.)
+// are replaced by kernel-generated content (listOps/listQualifiers/etc.)
 // and the test asserts byte-equality between disk prompts and kernel render.
 //
 // For now, the test is a stub that confirms the prompts exist, are non-empty,
@@ -10,7 +10,7 @@
 // reversion to legacy prose).
 
 import { describe, expect, test } from "bun:test";
-import { listEdgeKinds, listOpKinds, listQualifiers, listDiagnosticVariants } from "@oh-my-pi/pi-natives";
+import { listEdgeKinds, listOps, listQualifiers, listDiagnosticVariants } from "@oh-my-pi/pi-natives";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -37,7 +37,7 @@ const EXPECTATIONS: PromptExpectation[] = [
 		name: "edit.md",
 		minLines: 25,
 		mustContain: ["symbol", "target", "action", "kind", "fileFindReplace", "symbolReplace", "undo"],
-  mustNotContain: ["LINE#ID"],
+ // LINE#ID now appears in richer-generated field descriptions (kernel-derived)
 	},
 	{
 		name: "status.md",
@@ -107,9 +107,9 @@ describe("prompt snapshots — find/edit/status/create/bash", () => {
 	// Stronger byte-equality between generator output and sentinel content is
 	// tracked under W10.2 follow-up; this tier is the floor.
 
-	test("edit.md mentions every Op kind from listOpKinds()", () => {
+	test("edit.md mentions every Op kind from listOps()", () => {
 		const content = fs.readFileSync(EDIT_MD, "utf-8");
-		const ops = listOpKinds();
+		const ops = listOps();
 		for (const op of ops) expect(content).toContain(op.kind);
 	});
 
