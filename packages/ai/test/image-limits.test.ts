@@ -74,6 +74,13 @@ import * as path from "node:path";
 import { getBundledModel } from "@oh-my-pi/pi-ai/models";
 import { complete } from "@oh-my-pi/pi-ai/stream";
 import type { Api, Context, ImageContent, Model, OptionsForApi, UserMessage } from "@oh-my-pi/pi-ai/types";
+import { buildImageDropMarker, validateImage } from "../src/image-validation";
+import { convertAnthropicMessages } from "../src/providers/anthropic";
+import { convertMessages } from "../src/providers/openai-completions";
+import {
+	appendResponsesToolResultMessages,
+	convertResponsesInputContent,
+} from "../src/providers/openai-responses-shared";
 import { e2eApiKey } from "./oauth";
 
 const TEMP_DIR = path.join(import.meta.dir, ".temp-images");
@@ -1235,5 +1242,415 @@ describe("Image Limits E2E Tests", () => {
 			},
 			{ timeout: 900000 },
 		);
+	});
+});
+
+// =============================================================================
+// Validation substitution unit tests (T4 preflight validation)
+// =============================================================================
+
+describe("Image Validation Substitution (unit tests)", () => {
+	const PNG_B64 = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]).toString("base64");
+
+	describe("validateImage", () => {
+		it("rejects URI-shaped data", () => {
+			const r = validateImage({ data: "https://example.com/img.png", mimeType: "image/png" });
+			expect(r.ok).toBe(false);
+			if (!r.ok) expect(r.reason).toBe("uri-shaped");
+		});
+
+		it("rejects empty data", () => {
+			const r = validateImage({ data: "", mimeType: "image/png" });
+			expect(r.ok).toBe(false);
+			if (!r.ok) expect(r.reason).toBe("empty");
+		});
+
+		it("rejects invalid base64", () => {
+			const r = validateImage({ data: "!!!invalid!!!", mimeType: "image/png" });
+			expect(r.ok).toBe(false);
+			if (!r.ok) expect(r.reason).toBe("invalid-base64");
+		});
+
+		it("accepts valid PNG", () => {
+			const r = validateImage({ data: PNG_B64, mimeType: "image/png" });
+			expect(r.ok).toBe(true);
+			if (r.ok) {
+				expect(r.mimeType).toBe("image/png");
+				expect(r.data).toBe(PNG_B64);
+			}
+		});
+
+		it("detects mime mismatch (JPEG declared as PNG)", () => {
+			const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+			const r = validateImage({ data: jpegBytes.toString("base64"), mimeType: "image/png" });
+			expect(r.ok).toBe(true);
+			if (r.ok) {
+				expect(r.mimeType).toBe("image/jpeg");
+			}
+		});
+
+		it("rejects unrecognized format", () => {
+			const garbage = Buffer.from([0x00, 0x01, 0x02, 0x03]);
+			const r = validateImage({ data: garbage.toString("base64"), mimeType: "image/png" });
+			expect(r.ok).toBe(false);
+			if (!r.ok) expect(r.reason).toBe("unrecognized-format");
+		});
+	});
+
+	describe("buildImageDropMarker", () => {
+		it("produces correct text for each reason", () => {
+			const tests: Array<{ reason: Parameters<typeof buildImageDropMarker>[0]; expected: string }> = [
+				{ reason: "empty", expected: "[image dropped: empty]" },
+				{ reason: "uri-shaped", expected: "[image dropped: uri-shaped]" },
+				{ reason: "invalid-base64", expected: "[image dropped: invalid-base64]" },
+				{ reason: "unrecognized-format", expected: "[image dropped: unrecognized-format]" },
+				{ reason: "mime-mismatch", expected: "[image dropped: mime-mismatch]" },
+				{ reason: "oversize", expected: "[image dropped: oversize]" },
+			];
+			for (const { reason, expected } of tests) {
+				const m = buildImageDropMarker(reason);
+				expect(m.type).toBe("text");
+				expect(m.text).toBe(expected);
+			}
+		});
+
+		it("includes optional detail", () => {
+			const m = buildImageDropMarker("uri-shaped", "extra context");
+			expect(m.text).toBe("[image dropped: uri-shaped: extra context]");
+		});
+	});
+
+	describe("convertResponsesInputContent (openai-responses-shared)", () => {
+		it("substitutes URI-shaped with text block", () => {
+			const r = convertResponsesInputContent(
+				[{ type: "image", data: "https://example.com/img.png", mimeType: "image/png" }],
+				true,
+			);
+			expect(r).toBeDefined();
+			if (!r) return;
+			expect(r[0]).toEqual({ type: "input_text", text: "[image dropped: uri-shaped]" });
+		});
+
+		it("substitutes empty data with text block", () => {
+			const r = convertResponsesInputContent([{ type: "image", data: "", mimeType: "image/png" }], true);
+			expect(r).toBeDefined();
+			if (!r) return;
+			expect(r[0]).toEqual({ type: "input_text", text: "[image dropped: empty]" });
+		});
+
+		it("substitutes invalid base64 with text block", () => {
+			const r = convertResponsesInputContent(
+				[{ type: "image", data: "!!!invalid!!!", mimeType: "image/png" }],
+				true,
+			);
+			expect(r).toBeDefined();
+			if (!r) return;
+			expect(r[0]).toEqual({ type: "input_text", text: "[image dropped: invalid-base64]" });
+		});
+
+		it("passes valid PNG as input_image", () => {
+			const r = convertResponsesInputContent([{ type: "image", data: PNG_B64, mimeType: "image/png" }], true);
+			expect(r).toBeDefined();
+			if (!r || !("image_url" in r[0])) return;
+			expect(r[0].type).toBe("input_image");
+			expect((r[0] as any).image_url).toContain("image/png;base64,");
+		});
+
+		it("uses canonical mime on mismatch", () => {
+			const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+			const r = convertResponsesInputContent(
+				[{ type: "image", data: jpeg.toString("base64"), mimeType: "image/png" }],
+				true,
+			);
+			expect(r).toBeDefined();
+			if (!r || !("image_url" in r[0])) return;
+			expect((r[0] as any).image_url).toContain("image/jpeg;base64,");
+		});
+
+		it("does not throw on any bad input", () => {
+			expect(() =>
+				convertResponsesInputContent([{ type: "image", data: "!!!invalid!!!", mimeType: "image/png" }], true),
+			).not.toThrow();
+			expect(() =>
+				convertResponsesInputContent([{ type: "image", data: "", mimeType: "image/png" }], true),
+			).not.toThrow();
+			expect(() =>
+				convertResponsesInputContent(
+					[{ type: "image", data: "https://example.com/x.png", mimeType: "image/png" }],
+					true,
+				),
+			).not.toThrow();
+		});
+	});
+
+	describe("appendResponsesToolResultMessages (toolResult path)", () => {
+		it("substitutes bad image with text block, no input_image", () => {
+			const messages: any[] = [];
+			const knownCallIds = new Set<string>();
+			appendResponsesToolResultMessages(
+				messages as any,
+				{
+					role: "toolResult",
+					toolCallId: "call_1",
+					toolName: "test",
+					content: [
+						{ type: "text", text: "result" },
+						{ type: "image", data: "https://example.com/x.png", mimeType: "image/png" },
+					],
+					isError: false,
+					timestamp: Date.now(),
+				},
+				getBundledModel("openai", "gpt-4o-mini") as any,
+				false,
+				knownCallIds,
+			);
+			expect(messages.length).toBeGreaterThanOrEqual(1);
+			const userMsg = messages.find((m: any) => m.role === "user");
+			expect(userMsg).toBeDefined();
+			if (!userMsg) return;
+			const content = userMsg.content as any[];
+			expect(content.some((c: any) => c.type === "input_text" && c.text?.includes("[image dropped"))).toBe(true);
+			expect(content.some((c: any) => c.type === "input_image")).toBe(false);
+		});
+	});
+
+	describe("convertAnthropicMessages (both user & toolResult paths)", () => {
+		const model = getBundledModel("anthropic", "claude-haiku-4-5-20251001");
+
+		it("substitutes URI-shaped image with text block, no image block", () => {
+			const result = convertAnthropicMessages(
+				[
+					{
+						role: "user",
+						content: [
+							{ type: "text", text: "hello" },
+							{ type: "image", data: "https://example.com/x.png", mimeType: "image/png" },
+						],
+						timestamp: 0,
+					},
+				],
+				model as any,
+				false,
+			);
+			expect(result.length).toBeGreaterThanOrEqual(1);
+			const msg = result[0];
+			const msgContent = msg.content;
+			if (!Array.isArray(msgContent)) return;
+			expect(msgContent.some((b: any) => b.type === "text" && b.text?.includes("[image dropped"))).toBe(true);
+			expect(msgContent.some((b: any) => b.type === "image")).toBe(false);
+		});
+
+		it("substitutes empty data image", () => {
+			const result = convertAnthropicMessages(
+				[
+					{
+						role: "user",
+						content: [{ type: "image", data: "", mimeType: "image/png" }],
+						timestamp: 0,
+					},
+				],
+				model as any,
+				false,
+			);
+			const msg = result[0];
+			const msgContent = msg.content;
+			if (!Array.isArray(msgContent)) return;
+			expect(msgContent.some((b: any) => b.type === "text" && b.text?.includes("[image dropped: empty]"))).toBe(
+				true,
+			);
+			expect(msgContent.some((b: any) => b.type === "image")).toBe(false);
+		});
+
+		it("substitutes invalid base64", () => {
+			const result = convertAnthropicMessages(
+				[
+					{
+						role: "user",
+						content: [{ type: "image", data: "!!!invalid!!!", mimeType: "image/png" }],
+						timestamp: 0,
+					},
+				],
+				model as any,
+				false,
+			);
+			const msg = result[0];
+			const msgContent = msg.content;
+			if (!Array.isArray(msgContent)) return;
+			expect(
+				msgContent.some((b: any) => b.type === "text" && b.text?.includes("[image dropped: invalid-base64]")),
+			).toBe(true);
+			expect(msgContent.some((b: any) => b.type === "image")).toBe(false);
+		});
+
+		it("passes valid PNG as image block", () => {
+			const result = convertAnthropicMessages(
+				[
+					{
+						role: "user",
+						content: [{ type: "image", data: PNG_B64, mimeType: "image/png" }],
+						timestamp: 0,
+					},
+				],
+				model as any,
+				false,
+			);
+			const msg = result[0];
+			const msgContent = msg.content;
+			if (!Array.isArray(msgContent)) return;
+			expect(msgContent.some((b: any) => b.type === "image")).toBe(true);
+			const imgBlock = msgContent.find((b: any) => b.type === "image");
+			expect((imgBlock as any)?.source?.data).toBe(PNG_B64);
+		});
+
+		it("uses canonical mime on mismatch", () => {
+			const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+			const result = convertAnthropicMessages(
+				[
+					{
+						role: "user",
+						content: [{ type: "image", data: jpeg.toString("base64"), mimeType: "image/png" }],
+						timestamp: 0,
+					},
+				],
+				model as any,
+				false,
+			);
+			const msg = result[0];
+			const msgContent = msg.content;
+			if (!Array.isArray(msgContent)) return;
+			const imgBlock = msgContent.find((b: any) => b.type === "image");
+			expect(imgBlock).toBeDefined();
+			if (imgBlock) {
+				expect((imgBlock as any).source.media_type).toBe("image/jpeg");
+			}
+		});
+
+		it("toolResult path: substitutes URI-shaped image with text block", () => {
+			const result = convertAnthropicMessages(
+				[
+					{
+						role: "assistant",
+						content: [{ type: "text", text: "Let me check." }],
+						timestamp: 0,
+						api: "anthropic",
+						provider: "anthropic",
+						model: "claude-haiku-4-5-20251001",
+						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 } as any,
+						stopReason: "stop",
+					},
+					{
+						role: "toolResult",
+						toolCallId: "call_1",
+						toolName: "test",
+						content: [
+							{ type: "text", text: "result" },
+							{ type: "image", data: "https://example.com/x.png", mimeType: "image/png" },
+						],
+						isError: false,
+						timestamp: 0,
+					},
+				],
+				model as any,
+				false,
+			);
+			const userMsgs = result.filter((m: any) => m.role === "user");
+			expect(userMsgs.length).toBeGreaterThanOrEqual(1);
+			const toolResultMsg = userMsgs[userMsgs.length - 1];
+			const trContent = toolResultMsg.content;
+			if (!Array.isArray(trContent)) return;
+			// Tool result wraps in tool_result blocks; content is nested
+			const toolResultBlock = trContent.find((b: any) => b.type === "tool_result");
+			expect(toolResultBlock).toBeDefined();
+			if (!toolResultBlock) return;
+			expect(Array.isArray(toolResultBlock.content)).toBe(true);
+			expect(toolResultBlock.content.some((c: any) => c.type === "text" && c.text?.includes("[image dropped"))).toBe(
+				true,
+			);
+			expect(toolResultBlock.content.some((c: any) => c.type === "image")).toBe(false);
+		});
+
+		it("does not throw on any bad input", () => {
+			expect(() =>
+				convertAnthropicMessages(
+					[
+						{
+							role: "user",
+							content: [{ type: "image", data: "!!!invalid!!!", mimeType: "image/png" }],
+							timestamp: 0,
+						},
+					],
+					model as any,
+					false,
+				),
+			).not.toThrow();
+		});
+	});
+	describe("convertMessages (openai-completions user path)", () => {
+		const model = { ...getBundledModel("openai", "gpt-4o-mini"), api: "openai-completions" as const };
+
+		it("substitutes URI-shaped image with text block, no image_url", () => {
+			const result = convertMessages(
+				model as any,
+				{
+					messages: [
+						{
+							role: "user",
+							content: [
+								{ type: "text", text: "hello" },
+								{ type: "image", data: "https://example.com/x.png", mimeType: "image/png" },
+							],
+							timestamp: 0,
+						},
+					],
+				} as any,
+				{} as any,
+			);
+			expect(result.length).toBeGreaterThanOrEqual(1);
+			const msg = result[0];
+			const content = msg.content;
+			if (!Array.isArray(content)) return;
+			expect(content.some((c: any) => c.type === "text" && c.text?.includes("[image dropped"))).toBe(true);
+			expect(content.some((c: any) => c.type === "image_url")).toBe(false);
+		});
+
+		it("passes valid PNG as image_url", () => {
+			const result = convertMessages(
+				model as any,
+				{
+					messages: [
+						{
+							role: "user",
+							content: [{ type: "image", data: PNG_B64, mimeType: "image/png" }],
+							timestamp: 0,
+						},
+					],
+				} as any,
+				{} as any,
+			);
+			const msg = result[0];
+			const content = msg.content;
+			if (!Array.isArray(content)) return;
+			expect(
+				content.some((c: any) => c.type === "image_url" && (c as any).image_url?.url?.includes("image/png")),
+			).toBe(true);
+		});
+
+		it("does not throw on bad input", () => {
+			expect(() =>
+				convertMessages(
+					model as any,
+					{
+						messages: [
+							{
+								role: "user",
+								content: [{ type: "image", data: "!!!bad!!!", mimeType: "image/png" }],
+								timestamp: 0,
+							},
+						],
+					} as any,
+					{} as any,
+				),
+			).not.toThrow();
+		});
 	});
 });

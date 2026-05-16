@@ -11,6 +11,7 @@ import type {
 	ResponseReasoningItem,
 } from "openai/resources/responses/responses";
 import packageJson from "../../package.json" with { type: "json" };
+import { buildImageDropMarker, validateImage } from "../image-validation";
 import { calculateCost } from "../models";
 import { getEnvApiKey } from "../stream";
 import {
@@ -2208,11 +2209,19 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 				];
 				for (const block of msg.content) {
 					if (block.type === "image") {
-						contentParts.push({
-							type: "input_image",
-							detail: "auto",
-							image_url: `data:${block.mimeType};base64,${block.data}`,
-						} satisfies ResponseInputImage);
+						const v = validateImage({ data: block.data, mimeType: block.mimeType });
+						if (!v.ok) {
+							contentParts.push({
+								type: "input_text",
+								text: buildImageDropMarker(v.reason).text,
+							} satisfies ResponseInputText);
+						} else {
+							contentParts.push({
+								type: "input_image",
+								detail: "auto",
+								image_url: `data:${v.mimeType};base64,${v.data}`,
+							} satisfies ResponseInputImage);
+						}
 					}
 				}
 				messages.push({ role: "user", content: contentParts });
@@ -2238,10 +2247,14 @@ function normalizeInputMessageContent(
 		if (item.type === "text") {
 			return { type: "input_text", text: item.text.toWellFormed() } satisfies ResponseInputText;
 		}
+		const v = validateImage({ data: item.data, mimeType: item.mimeType });
+		if (!v.ok) {
+			return { type: "input_text", text: buildImageDropMarker(v.reason).text } satisfies ResponseInputText;
+		}
 		return {
 			type: "input_image",
 			detail: "auto",
-			image_url: `data:${item.mimeType};base64,${item.data}`,
+			image_url: `data:${v.mimeType};base64,${v.data}`,
 		} satisfies ResponseInputImage;
 	});
 

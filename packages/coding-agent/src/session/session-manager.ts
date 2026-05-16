@@ -13,6 +13,7 @@ import {
 	type ToolCallStreamDiagnostic,
 	type Usage,
 } from "@oh-my-pi/pi-ai";
+import { validateImage } from "@oh-my-pi/pi-ai/image-validation";
 import { getTerminalId } from "@oh-my-pi/pi-tui";
 import {
 	getBlobsDir,
@@ -997,37 +998,38 @@ async function persistToolCallStreamDiagnostic(
 	};
 }
 
-async function truncateForPersistence(
+export async function truncateForPersistence(
 	obj: FileEntry,
 	blobStore: BlobStore,
 	artifactManager: ArtifactManager | null,
 	key?: string,
 ): Promise<FileEntry>;
-async function truncateForPersistence(
+export async function truncateForPersistence(
 	obj: string,
 	blobStore: BlobStore,
 	artifactManager: ArtifactManager | null,
 	key?: string,
 ): Promise<string>;
-async function truncateForPersistence(
+export async function truncateForPersistence(
 	obj: unknown[],
 	blobStore: BlobStore,
 	artifactManager: ArtifactManager | null,
 	key?: string,
 ): Promise<unknown[]>;
-async function truncateForPersistence(
+export async function truncateForPersistence(
 	obj: object,
 	blobStore: BlobStore,
 	artifactManager: ArtifactManager | null,
 	key?: string,
 ): Promise<object>;
-async function truncateForPersistence(
+export async function truncateForPersistence(
 	obj: null | undefined,
 	blobStore: BlobStore,
 	artifactManager: ArtifactManager | null,
 	key?: string,
 ): Promise<null | undefined>;
-async function truncateForPersistence(
+/** Exported for tests. */
+export async function truncateForPersistence(
 	obj: unknown,
 	blobStore: BlobStore,
 	artifactManager: ArtifactManager | null,
@@ -1060,10 +1062,29 @@ async function truncateForPersistence(
 			obj.map(async item => {
 				// Special handling: compress oversized images while preserving shape
 				if (key === TEXT_CONTENT_KEY && isImageBlock(item)) {
-					if (!isBlobRef(item.data) && item.data.length >= BLOB_EXTERNALIZE_THRESHOLD) {
+					// Skip blob refs — already-externalized valid images, resolved on load.
+					if (isBlobRef(item.data)) {
+						return item;
+					}
+					// Validate before persisting. Bad blocks would poison every replay.
+					const v = validateImage({ data: item.data, mimeType: item.mimeType ?? "" });
+					if (!v.ok) {
+						changed = true;
+						return {
+							type: "text" as const,
+							text: `[image dropped at persist: ${v.reason}]`,
+						};
+					}
+					// Valid image: externalize if large enough.
+					if (item.data.length >= BLOB_EXTERNALIZE_THRESHOLD) {
 						changed = true;
 						const blobRef = await externalizeImageData(blobStore, item.data);
-						return { ...item, data: blobRef };
+						return { ...item, data: blobRef, mimeType: v.mimeType };
+					}
+					// Valid but small — keep inline; correct mime if sniffer disagreed.
+					if (v.mimeType !== item.mimeType) {
+						changed = true;
+						return { ...item, mimeType: v.mimeType };
 					}
 				}
 

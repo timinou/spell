@@ -1,0 +1,56 @@
+#+TITLE: malformed image blocks brick sessions; no validation at producer/transport/persist
+#+STATE: DOING
+#+SESSION_ID: 14e386f9d5d16b69
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-16T13-07-58-935Z_14e386f9d5d16b69.jsonl]]
+#+CUSTOM_ID: BUG-378-malformed-image-blocks-brick-sessions-no
+
+* Initial Message
+
+Error: 400
+ {"type":"error","error":{"type":"invalid_request_error","message":"messages.90.content.1.tool_result.content.1.image.source.base64:
+ invalid base64 data"},"request_id":"req_011Cb6GvVYxdvfdnU4fNEZXL"}
+ raw-http-request=/home/user/.spell/logs/http-400-requests/1778935761564-3vngji1q7mfn3.json
+
+
+in /home/user/.spell/agent/sessions/-code-ora-cais/2026-05-16T11-12-33-866Z_14e36c8f12b84467.jsonl
+
+
+
+find the root cause and propose structural fixes
+
+* Class
+Bug class documented across multiple harnesses:
+- claude-code#47976 — mislabeled .png with JSON/HTML/BMP/SVG/stderr text → 400 → session bricked
+- claude-code#36511 — bash stdout containing =data:image/...= URL truncated → 400 → session bricked
+- claude-code#9049  — Playwright screenshot >8000px → 400 → session bricked
+- claude-code#17452 — 400 from image encoding error makes conversation unrecoverable
+- claude-code#15722 — base64 corruption in transit → 400 → session bricked
+- claude-code#8947  — empty base64 in tool result → 400 → session bricked
+
+Pattern: once a malformed image block lands in the persisted transcript, every replay
+re-sends it; only manual JSONL surgery recovers.
+
+* Mitigation: three-layer defense
+1. Producer-side magic-byte sniff at =marshal.rs::content_to_dto= (Content::Image arm) —
+   bytes-vs-declared-mime sanity, downgrade to text on unrecognized formats. Catches
+   the mislabeled-file family.
+2. Shared validator =packages/ai/src/image-validation.ts= used by every provider mapper
+   before serialization. Substitutes a text marker on failure; never throws.
+3. Session-write guard in =packages/coding-agent/src/session/session-manager.ts= using
+   the same validator before JSONL append. Bad blocks never enter the transcript.
+
+* Acceptance
+- Validator: empty / URI-shaped / non-base64 / mime-mismatch / oversize → =ok:false=.
+- Anthropic provider: URI-shaped data → text block, no API call attempted with bad data.
+- Session: bad image block in =appendMessage= → JSONL contains text marker, image type absent.
+- Session reload after bad-block insert → no 400 on next turn.
+- =bun run --workspaces --if-present --parallel test=
+
+* Non-goals
+- Auto-recovery on Anthropic 400 (scrub block, retry) — separate FUP.
+- 8000px dimension validation — separate FUP (requires header parse).
+- Unification of session blob store and codepath blob store — separate FUP.
+
+* Related
+- BUG-α (sibling, producer-side fix for the reported failure)
+- MCP spec §image-content (canonical shape, base64 only at tool boundary)

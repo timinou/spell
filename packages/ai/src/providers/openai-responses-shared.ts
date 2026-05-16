@@ -9,6 +9,7 @@ import type {
 	ResponseOutputMessage,
 	ResponseReasoningItem,
 } from "openai/resources/responses/responses";
+import { buildImageDropMarker, validateImage } from "../image-validation";
 import { calculateCost } from "../models";
 import type {
 	Api,
@@ -85,10 +86,14 @@ export function convertResponsesInputContent(
 					text: item.text.toWellFormed(),
 				} satisfies ResponseInputText;
 			}
+			const v = validateImage({ data: item.data, mimeType: item.mimeType });
+			if (!v.ok) {
+				return { type: "input_text", text: buildImageDropMarker(v.reason).text } satisfies ResponseInputText;
+			}
 			return {
 				type: "input_image",
 				detail: "auto",
-				image_url: `data:${item.mimeType};base64,${item.data}`,
+				image_url: `data:${v.mimeType};base64,${v.data}`,
 			} satisfies ResponseInputImage;
 		})
 		.filter(item => supportsImages || item.type !== "input_image")
@@ -188,11 +193,19 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 	];
 	for (const block of toolResult.content) {
 		if (block.type === "image") {
-			contentParts.push({
-				type: "input_image",
-				detail: "auto",
-				image_url: `data:${block.mimeType};base64,${block.data}`,
-			} satisfies ResponseInputImage);
+			const v = validateImage({ data: block.data, mimeType: block.mimeType });
+			if (!v.ok) {
+				contentParts.push({
+					type: "input_text",
+					text: buildImageDropMarker(v.reason).text,
+				} satisfies ResponseInputText);
+			} else {
+				contentParts.push({
+					type: "input_image",
+					detail: "auto",
+					image_url: `data:${v.mimeType};base64,${v.data}`,
+				} satisfies ResponseInputImage);
+			}
 		}
 	}
 	messages.push({ role: "user", content: contentParts });

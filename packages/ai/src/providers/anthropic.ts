@@ -9,7 +9,8 @@ import type {
 	MessageParam,
 } from "@anthropic-ai/sdk/resources/messages";
 import { $env, abortableSleep, isEnoent } from "@oh-my-pi/pi-utils";
-import { cassetteFetch, type CassetteMode } from "../cassette";
+import { type CassetteMode, cassetteFetch } from "../cassette";
+import { buildImageDropMarker, validateImage } from "../image-validation";
 import { mapEffortToAnthropicAdaptiveEffort } from "../model-thinking";
 import { calculateCost } from "../models";
 import { getEnvApiKey, OUTPUT_FALLBACK_BUFFER } from "../stream";
@@ -330,12 +331,16 @@ function convertContentBlocks(content: (TextContent | ImageContent)[]):
 				text: block.text.toWellFormed(),
 			};
 		}
+		const v = validateImage({ data: block.data, mimeType: block.mimeType });
+		if (!v.ok) {
+			return buildImageDropMarker(v.reason);
+		}
 		return {
 			type: "image" as const,
 			source: {
 				type: "base64" as const,
-				media_type: block.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
-				data: block.data,
+				media_type: v.mimeType,
+				data: v.data,
 			},
 		};
 	});
@@ -1517,12 +1522,16 @@ export function convertAnthropicMessages(
 							text: item.text.toWellFormed(),
 						};
 					}
+					const v = validateImage({ data: item.data, mimeType: item.mimeType });
+					if (!v.ok) {
+						return buildImageDropMarker(v.reason);
+					}
 					return {
 						type: "image",
 						source: {
 							type: "base64",
-							media_type: item.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
-							data: item.data,
+							media_type: v.mimeType,
+							data: v.data,
 						},
 					};
 				});
