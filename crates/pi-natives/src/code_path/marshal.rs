@@ -125,46 +125,38 @@ fn content_to_dto(content: Content, threshold: usize) -> ContentDto {
 		},
 		Content::Image { handle, mime_type, width, height, bytes } => {
 			if let Some(b) = bytes {
-				if b.len() <= threshold {
-					let base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &b);
-					ContentDto {
-						kind: "image".to_string(),
-						value: Some(base64),
-						mime_type: Some(mime_type),
-						width,
-						height,
-						..Default::default()
+				match sniff_image_mime(&b) {
+					Some(actual_mime) => {
+						let value = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &b);
+						ContentDto {
+							kind: "image".to_string(),
+							value: Some(value),
+							mime_type: Some(actual_mime.to_string()),
+							width,
+							height,
+							..Default::default()
+						}
 					}
-				} else {
-					match stage_artifact(&b) {
-						Ok(uri) => ContentDto {
-							kind: "image".to_string(),
-							artifact_uri: Some(uri),
-							mime_type: Some(mime_type),
-							width,
-							height,
-							..Default::default()
-						},
-						Err(_) => ContentDto {
-							kind: "image".to_string(),
-							value: Some(base64::Engine::encode(
-								&base64::engine::general_purpose::STANDARD,
-								&b,
+					None => {
+						let preview: String = b.iter().take(8).map(|byte| format!("{:02x}", byte)).collect::<Vec<_>>().join(" ");
+						ContentDto {
+							kind: "extracted_text".to_string(),
+							value: Some(format!(
+								"[not an image: declared {}, bytes start with {}]",
+								mime_type, preview
 							)),
-							mime_type: Some(mime_type),
-							width,
-							height,
+							source_kind: Some("image".to_string()),
 							..Default::default()
-						},
+						}
 					}
 				}
 			} else {
 				ContentDto {
 					kind: "image".to_string(),
-					artifact_uri: Some(handle),
 					mime_type: Some(mime_type),
 					width,
 					height,
+					handle: Some(handle),
 					..Default::default()
 				}
 			}
@@ -189,14 +181,33 @@ fn content_to_dto(content: Content, threshold: usize) -> ContentDto {
 			} else {
 				ContentDto {
 					kind: "extracted_text".to_string(),
-					source_kind: Some(source_kind),
-					text: Some(text),
-					mime_type,
-					..Default::default()
+						source_kind: Some(source_kind),
+						text: Some(text),
+						mime_type,
+						..Default::default()
+					}
 				}
-			}
-		},
+			},
+		}
 	}
+
+fn sniff_image_mime(bytes: &[u8]) -> Option<&'static str> {
+	if bytes.len() >= 8 && bytes[0..8] == [137, 80, 78, 71, 13, 10, 26, 10] {
+		return Some("image/png");
+	}
+	if bytes.len() >= 3 && bytes[0..3] == [255, 216, 255] {
+		return Some("image/jpeg");
+	}
+	if bytes.len() >= 4 && bytes[0..4] == [71, 73, 70, 56] {
+		return Some("image/gif");
+	}
+	if bytes.len() >= 12
+		&& bytes[0..4] == [82, 73, 70, 70]
+		&& bytes[8..12] == [87, 69, 66, 80]
+	{
+		return Some("image/webp");
+	}
+	None
 }
 
 fn stage_artifact(bytes: &[u8]) -> std::io::Result<String> {
@@ -271,4 +282,60 @@ mod tests {
 		assert!(c.artifact_uri.is_none(), "expected no artifact_uri for huge threshold");
 		assert!(c.value.is_some(), "expected inline value");
 	}
+
+fn image_node(handle: &str, mime_type: &str, width: Option<u32>, height: Option<u32>, bytes: Option<Vec<u8>>) -> NodeRef {
+	NodeRef {
+		locator: "test".to_string(),
+		range: 0..0,
+		kind: "test".to_string(),
+		content: Some(Content::Image {
+			handle: handle.to_string(),
+			mime_type: mime_type.to_string(),
+			width,
+			height,
+			bytes,
+		}),
+		metadata: HashMap::new(),
+		diagnostics: Vec::new(),
+	}
+}
+
+#[test]
+fn image_bytes_returned_inline_even_when_oversized() {
+	let png_header: Vec<u8> = vec![137, 80, 78, 71, 13, 10, 26, 10];
+	let mut bytes = png_header;
+	bytes.extend(vec![0u8; ARTIFACT_THRESHOLD + 1024]);
+	let node = image_node("h", "image/png", None, None, Some(bytes));
+	let dtos = nodes_to_dtos(vec![node], ARTIFACT_THRESHOLD);
+	assert_eq!(dtos.len(), 1);
+	let c = dtos[0].content.as_ref().expect("content expected");
+	assert_eq!(c.kind, "image", "expected image kind");
+	assert!(c.value.is_some(), "expected inline base64 value");
+	assert!(c.artifact_uri.is_none(), "expected no artifact_uri");
+	assert_eq!(c.mime_type.as_deref(), Some("image/png"));
+}
+
+#[test]
+fn image_with_wrong_extension_downgrades_to_text() {
+	let bytes = b"{\"format\":\"png\"}".to_vec();
+	let node = image_node("h", "image/png", None, None, Some(bytes));
+	let dtos = nodes_to_dtos(vec![node], ARTIFACT_THRESHOLD);
+	assert_eq!(dtos.len(), 1);
+	let c = dtos[0].content.as_ref().expect("content expected");
+	assert_eq!(c.kind, "extracted_text", "expected extracted_text kind");
+	let val = c.value.as_ref().expect("expected value");
+	assert!(val.contains("[not an image:"), "missing diagnostic prefix");
+	assert!(val.contains("image/png"), "missing declared mime in diagnostic");
+}
+
+#[test]
+fn image_mime_corrected_from_bytes() {
+	let bytes = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01];
+	let node = image_node("h", "image/png", None, None, Some(bytes));
+	let dtos = nodes_to_dtos(vec![node], ARTIFACT_THRESHOLD);
+	assert_eq!(dtos.len(), 1);
+	let c = dtos[0].content.as_ref().expect("content expected");
+	assert_eq!(c.kind, "image", "expected image kind");
+	assert_eq!(c.mime_type.as_deref(), Some("image/jpeg"), "sniffer should detect JPEG magic over declared png");
+}
 }
