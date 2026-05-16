@@ -243,6 +243,9 @@ function normalizeOutputSchema(schema: unknown): {
 	}
 	return { normalized: schema };
 }
+// Schema grammar boundary: JTD in agent frontmatter vs TypeBox in code.
+// See tasks/plans/plan-artifacts/PLAN-308/ADR-schema-grammar-boundary.md
+
 
 function buildOutputValidator(schema: unknown): {
 	validate?: ValidateFunction;
