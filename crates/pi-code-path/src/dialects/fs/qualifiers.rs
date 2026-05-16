@@ -47,17 +47,46 @@ fn resolve_listing(node: &NodeRef, root: &Path) -> Result<Vec<NodeRef>, Diagnost
 
 	let mut nodes = Vec::new();
 	for entry in entries {
-		let entry = entry.map_err(|e| Diagnostic {
-			variant: DiagnosticVariant::Inaccessible,
-			message: format!("directory entry error: {e}"),
-			span:    None,
-		})?;
+		// BUG-371: resilient mid-walk errors — record as §inaccessible
+		// with a per-node diagnostic instead of aborting the listing.
+		let entry = match entry {
+			Ok(e) => e,
+			Err(e) => {
+				nodes.push(NodeRef {
+					locator:     path.to_string_lossy().to_string(),
+					range:       0..0,
+					kind:        "§inaccessible".into(),
+					content:     None,
+					metadata:    HashMap::new(),
+					diagnostics: vec![Diagnostic {
+						variant: DiagnosticVariant::Inaccessible,
+						message: format!("directory entry error: {e}"),
+						span:    None,
+					}],
+				});
+				continue;
+			},
+		};
 		let name = entry.file_name().to_string_lossy().to_string();
-		let meta = entry.metadata().map_err(|e| Diagnostic {
-			variant: DiagnosticVariant::Inaccessible,
-			message: format!("metadata error: {e}"),
-			span:    None,
-		})?;
+		let meta = match entry.metadata() {
+			Ok(m) => m,
+			Err(e) => {
+				let child_path = path.join(&name);
+				nodes.push(NodeRef {
+					locator:     child_path.to_string_lossy().to_string(),
+					range:       0..0,
+					kind:        "§inaccessible".into(),
+					content:     None,
+					metadata:    HashMap::new(),
+					diagnostics: vec![Diagnostic {
+						variant: DiagnosticVariant::Inaccessible,
+						message: format!("metadata error: {e}"),
+						span:    None,
+					}],
+				});
+				continue;
+			},
+		};
 		let kind = if meta.is_dir() {
 			"§dir".to_string()
 		} else if meta.is_symlink() {
@@ -104,11 +133,35 @@ fn resolve_tree(
 
 		let full_path = resolve_full_path(&path, root);
 
-		let meta = std::fs::metadata(&full_path).map_err(|e| Diagnostic {
-			variant: DiagnosticVariant::Inaccessible,
-			message: format!("metadata error: {e}"),
-			span:    None,
-		})?;
+		// BUG-371: use symlink_metadata so dangling symlinks don't abort
+		// the entire walk. The *first* (entry-point) node may still hard-
+		// error with ?; mid-walk failures produce per-node diagnostics.
+		let first = results.is_empty();
+		let meta = match std::fs::symlink_metadata(&full_path) {
+			Ok(m) => m,
+			Err(e) => {
+				if first {
+					return Err(Diagnostic {
+						variant: DiagnosticVariant::Inaccessible,
+						message: format!("metadata error: {e}"),
+						span:    None,
+					});
+				}
+				results.push(NodeRef {
+					locator:     path.to_string_lossy().to_string(),
+					range:       0..0,
+					kind:        "§inaccessible".into(),
+					content:     None,
+					metadata:    HashMap::new(),
+					diagnostics: vec![Diagnostic {
+						variant: DiagnosticVariant::Inaccessible,
+						message: format!("metadata error: {e}"),
+						span:    None,
+					}],
+				});
+				continue;
+			},
+		};
 
 		let kind = if meta.is_dir() {
 			"§dir".to_string()
@@ -119,27 +172,65 @@ fn resolve_tree(
 		};
 
 		let size = meta.len();
+
+		// BUG-371: detect dangling symlinks so the caller gets a per-node
+		// diagnostic instead of a hard crash on a later stat() call.
+		let mut diagnostics = Vec::new();
+		if meta.is_symlink() && std::fs::metadata(&full_path).is_err() {
+			diagnostics.push(Diagnostic {
+				variant: DiagnosticVariant::Inaccessible,
+				message: "dangling symlink: target does not exist".into(),
+				span:    None,
+			});
+		}
+
 		results.push(NodeRef {
 			locator: path.to_string_lossy().to_string(),
-			range: 0..size as usize,
+			range:   0..size as usize,
 			kind,
-			content: None,
-			metadata: HashMap::new(),
-			diagnostics: Vec::new(),
+			content:     None,
+			metadata:    HashMap::new(),
+			diagnostics,
 		});
 
 		if meta.is_dir() && depth < max_depth {
-			let entries = std::fs::read_dir(&full_path).map_err(|e| Diagnostic {
-				variant: DiagnosticVariant::Inaccessible,
-				message: format!("read_dir error: {e}"),
-				span:    None,
-			})?;
+			let entries = match std::fs::read_dir(&full_path) {
+				Ok(e) => e,
+				Err(e) => {
+					results.push(NodeRef {
+						locator:     path.to_string_lossy().to_string(),
+						range:       0..0,
+						kind:        "§inaccessible".into(),
+						content:     None,
+						metadata:    HashMap::new(),
+						diagnostics: vec![Diagnostic {
+							variant: DiagnosticVariant::Inaccessible,
+							message: format!("read_dir error: {e}"),
+							span:    None,
+						}],
+					});
+					continue;
+				},
+			};
 			for entry in entries {
-				let entry = entry.map_err(|e| Diagnostic {
-					variant: DiagnosticVariant::Inaccessible,
-					message: format!("directory entry error: {e}"),
-					span:    None,
-				})?;
+				let entry = match entry {
+					Ok(e) => e,
+					Err(e) => {
+						results.push(NodeRef {
+							locator:     path.to_string_lossy().to_string(),
+							range:       0..0,
+							kind:        "§inaccessible".into(),
+							content:     None,
+							metadata:    HashMap::new(),
+							diagnostics: vec![Diagnostic {
+								variant: DiagnosticVariant::Inaccessible,
+								message: format!("directory entry error: {e}"),
+								span:    None,
+							}],
+						});
+						continue;
+					},
+				};
 				let name = entry.file_name();
 				let child_path = path.join(&name);
 				stack.push((child_path, depth + 1));

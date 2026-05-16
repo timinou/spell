@@ -108,12 +108,24 @@ impl Resolver for FsResolver {
 		if let Some(qual) = &path.qualifier {
 			let mut out = Vec::new();
 			for n in nodes {
+				// BUG-371: §not-found is a sentinel node carrying DID_YOU_MEAN
+				// diagnostics — applying #tree / #stat / #listing to it is a
+				// category error. Preserve it unchanged in the output.
+				if n.kind == "§not-found" {
+					out.push(n);
+					continue;
+				}
 				match qualifiers::resolve(&n, qual, &self.root) {
 					Ok(more) => out.extend(more),
 					Err(d) => return Err(d),
 				}
 			}
 			nodes = out;
+			// BUG-371: when a qualifier is present, strip any §not-found
+			// sentinel nodes that leaked through from suffix fallback —
+			// the caller asked about a specific path (e.g. `#stat`),
+			// not a fuzzy DID_YOU_MEAN suggestion.
+			nodes.retain(|n| n.kind != "§not-found");
 		}
 		Ok(nodes)
 	}
