@@ -110,7 +110,8 @@ pub fn get_or_create(
 	if let Some(h) = map.get(&canon) {
 		return Ok(Arc::clone(h));
 	}
-	let h = Arc::new(RecallEngineHandle::new(canon.clone(), cache_dir));
+	let base_owned = cache_base.map(Path::to_path_buf);
+	let h = Arc::new(RecallEngineHandle::new(canon.clone(), cache_dir, base_owned));
 	map.insert(canon, Arc::clone(&h));
 	Ok(h)
 }
@@ -137,6 +138,12 @@ pub fn forget(repo_root: &Path) {
 pub struct RecallEngineHandle {
 	repo_root: PathBuf,
 	cache_dir: PathBuf,
+	/// Mirrors the `cache_base` argument from `get_or_create`. When set, the
+	/// engine opens `FtsIndex` via `open_at(repo_root, base)` so the Tantivy
+	/// directory co-locates under the same base as `engine.bin` / `vec.bin`.
+	/// `None` means production: `FtsIndex::open` resolves the default
+	/// `cache_base()` and writes under `~/.cache/spell/recall/{hash}/fts/`.
+	cache_base: Option<PathBuf>,
 	state:     Mutex<EngineState>,
 }
 
@@ -166,8 +173,22 @@ impl PersistentCacheEntry for EngineCacheEntry {
 }
 
 impl RecallEngineHandle {
-	fn new(repo_root: PathBuf, cache_dir: PathBuf) -> Self {
-		Self { repo_root, cache_dir, state: Mutex::new(EngineState::Cold) }
+	fn new(repo_root: PathBuf, cache_dir: PathBuf, cache_base: Option<PathBuf>) -> Self {
+		Self {
+			repo_root,
+			cache_dir,
+			cache_base,
+			state: Mutex::new(EngineState::Cold),
+		}
+	}
+
+	/// Open `FtsIndex` honoring the cache_base override if set.
+	fn open_fts(&self) -> Result<FtsIndex, String> {
+		let result = match &self.cache_base {
+			Some(base) => FtsIndex::open_at(&self.repo_root, base),
+			None => FtsIndex::open(&self.repo_root),
+		};
+		result.map_err(|e| format!("fts open: {e}"))
 	}
 
 	/// Serve a recall query. Rebuilds the warm engine on first call or when
@@ -198,6 +219,13 @@ impl RecallEngineHandle {
 			return Ok(());
 		}
 		engine_log!("cold or stale; rebuilding for {}", self.repo_root.display());
+		// Drop the previous `WarmEngine` (and the `FtsIndex` inside it) BEFORE
+		// opening a new one. Tantivy's `INDEX_WRITER_LOCK` is held by the
+		// `IndexWriter` stored inside `FtsIndex`; if we kept the old engine
+		// alive while constructing the new one, `FtsIndex::open` would fail
+		// with `LockBusy` (single-process exclusive writer). On rebuild failure
+		// we leave state as `Cold` so the next query retries cleanly.
+		*state = EngineState::Cold;
 		let warm = self.build_warm(current)?;
 		*state = EngineState::Warm(Box::new(warm));
 		Ok(())
@@ -259,7 +287,35 @@ impl RecallEngineHandle {
 			},
 		};
 		// Tantivy is naturally persistent — opening reuses the on-disk segments.
-		let fts = FtsIndex::open(&self.repo_root).map_err(|e| format!("fts open: {e}"))?;
+		let fts = self.open_fts()?;
+		// Consistency probe: if the fingerprint matches but the Tantivy index
+		// is empty (or doc count diverges from items), the on-disk fts/ was
+		// wiped or corrupted under us. Fall back to full rebuild so we don't
+		// serve BM25-empty results indefinitely.
+		let on_disk_docs = match fts.doc_count() {
+			Ok(n) => n,
+			Err(e) => {
+				engine_log!("fts doc_count failed ({e}); will rebuild");
+				return Ok(None);
+			},
+		};
+		// Compare against unique-id count, not raw items.len(). `FtsIndex::index`
+		// does `delete_term(id) + add_document` per item, so duplicate CUSTOM_IDs
+		// in `entry.items` collapse to one Tantivy doc each. Comparing raw
+		// items.len() would loop a repo with duplicate ids into permanent
+		// rebuild.
+		let unique_id_count = entry
+			.items
+			.iter()
+			.map(|item| item.id.as_str())
+			.collect::<std::collections::HashSet<_>>()
+			.len();
+		if (on_disk_docs as usize) < unique_id_count {
+			engine_log!(
+				"fts/items mismatch (fts={on_disk_docs}, unique_ids={unique_id_count}); will rebuild",
+			);
+			return Ok(None);
+		}
 		let graph = build_typed_graph(&entry.items);
 		Ok(Some(WarmEngine {
 			fingerprint: entry.fingerprint,
@@ -272,7 +328,7 @@ impl RecallEngineHandle {
 
 	fn full_rebuild(&self, fingerprint: WorkspaceFingerprint) -> Result<WarmEngine, String> {
 		let items = scan_items(&self.repo_root);
-		let fts = FtsIndex::open(&self.repo_root).map_err(|e| format!("fts open: {e}"))?;
+		let fts = self.open_fts()?;
 		// Re-index from scratch: delete-all-then-add for every id. The on-disk
 		// Tantivy index may have stale segments from a prior schema/version;
 		// upserting every id makes the on-disk state match `items`.
@@ -487,7 +543,6 @@ impl Embedder for WorkerEmbedderAdapter {
 
 #[cfg(test)]
 mod tests {
-	use std::collections::HashMap;
 
 	use tempfile::tempdir;
 
@@ -551,13 +606,234 @@ mod tests {
 		assert_ne!(fp1.files, fp2.files, "size change must invalidate fingerprint");
 	}
 
+	/// Drop-based env-var guard. Saves the prior value of an env var on
+	/// construction, sets the new one, and restores the prior value on drop
+	/// even if the test body panics. Pairs with `lock_test_env`'s mutex so
+	/// concurrent tests don't race on the same env.
+	struct EnvVarGuard {
+		key:     &'static str,
+		prior:   Option<std::ffi::OsString>,
+		_locked: std::sync::MutexGuard<'static, ()>,
+	}
+
+	impl EnvVarGuard {
+		fn set(key: &'static str, value: &str) -> Self {
+			let locked = crate::embedding_worker::lock_test_env();
+			let prior = std::env::var_os(key);
+			// SAFETY: `locked` serialises env mutation across tests in this
+			// process. Other processes don't share the lock, but `cargo test`
+			// runs each binary single-process and tests within a process see
+			// the lock.
+			unsafe { std::env::set_var(key, value) };
+			Self { key, prior, _locked: locked }
+		}
+	}
+
+	impl Drop for EnvVarGuard {
+		fn drop(&mut self) {
+			// SAFETY: lock guard is still held until self is fully dropped.
+			unsafe {
+				match &self.prior {
+					Some(v) => std::env::set_var(self.key, v),
+					None => std::env::remove_var(self.key),
+				}
+			}
+		}
+	}
+
+	/// Convenience: force the embedding worker to be unresolvable so tests
+	/// don't spawn the real subprocess or download the Jina model.
+	fn force_no_worker(test_name: &'static str) -> EnvVarGuard {
+		EnvVarGuard::set(
+			"PI_EMBEDDING_WORKER",
+			&format!("/nonexistent/pi-embedding-worker-{test_name}"),
+		)
+	}
+
+	/// Convenience: tiny RecallQuery builder.
+	fn q(text: &str) -> RecallQuery {
+		RecallQuery {
+			text: Some(text.into()),
+			limit: 10,
+			..Default::default()
+		}
+	}
+
+	#[test]
+	fn cache_base_override_relocates_fts_to_provided_dir() {
+		// Locks in the P1 fix: passing Some(cache) to get_or_create must
+		// route the Tantivy index under `cache/{repo_hash}/fts/`, NOT under
+		// the default `cache_base()` (~/.cache/spell/recall/...). Otherwise
+		// the warm-restore probe test could silently pass against the real
+		// cache while the engine ignores the override.
+		let _no_worker = force_no_worker("cache-base-relocates");
+		let repo = tempdir().unwrap();
+		write_item(
+			&repo.path().join("!tasks"),
+			"B.org",
+			"* TODO B\n:PROPERTIES:\n:CUSTOM_ID: B-1\n:END:\n",
+		);
+		let cache = tempdir().unwrap();
+		let handle = get_or_create(repo.path(), Some(cache.path())).unwrap();
+		handle.query(q("B")).unwrap();
+
+		let canon = canonical_root(repo.path());
+		let expected = repo_cache_dir_at(&canon, cache.path()).unwrap().join("fts");
+		assert!(
+			expected.is_dir(),
+			"override fts dir missing at {}",
+			expected.display(),
+		);
+		forget(repo.path());
+	}
+
+	#[test]
+	fn warm_restore_rejected_when_fts_dir_is_wiped() {
+		// Negative warm-restore: if fingerprint matches but Tantivy state was
+		// wiped underneath us (rm -rf fts/, partial corruption, schema bump),
+		// the doc_count probe must reject the disk fast-path and trigger a
+		// full rebuild.
+		let _no_worker = force_no_worker("warm-restore-wipe");
+		let repo = tempdir().unwrap();
+		write_item(
+			&repo.path().join("!tasks"),
+			"A.org",
+			"* TODO A\n:PROPERTIES:\n:CUSTOM_ID: A-1\n:END:\n",
+		);
+		let cache = tempdir().unwrap();
+
+		// Cold build → engine.bin + vec.bin + fts/ on disk.
+		get_or_create(repo.path(), Some(cache.path()))
+			.unwrap()
+			.query(q("A"))
+			.unwrap();
+		forget(repo.path());
+
+		// Locate fts/ via the same path the engine uses. Assert (don't gate)
+		// so a regression that ignores cache_base fails loudly here rather
+		// than silently no-op'ing the wipe below.
+		let canon = canonical_root(repo.path());
+		let repo_cache = repo_cache_dir_at(&canon, cache.path()).unwrap();
+		let fts_dir = repo_cache.join("fts");
+		assert!(
+			fts_dir.is_dir(),
+			"precondition: fts/ must exist under override cache base at {} \
+			 (cache_base override regressed?)",
+			fts_dir.display(),
+		);
+		fs::remove_dir_all(&fts_dir).unwrap();
+
+		// Second call: doc_count probe sees fts empty vs items=1 → rebuild.
+		let hits = get_or_create(repo.path(), Some(cache.path()))
+			.unwrap()
+			.query(q("A"))
+			.unwrap();
+		assert!(
+			hits.iter().any(|h| h.id == "A-1"),
+			"after fts wipe, second query should rebuild and surface A-1; got {hits:?}"
+		);
+		forget(repo.path());
+	}
+
+	#[test]
+	fn warm_restore_serves_unchanged_repo_without_rebuild() {
+		// Positive warm-restore: two queries back-to-back with no source
+		// changes. The second must serve from the WarmEngine in memory; we
+		// approximate "didn't rebuild" by asserting engine.bin mtime is
+		// unchanged across calls (full_rebuild calls save_warm which would
+		// touch it).
+		let _no_worker = force_no_worker("warm-restore-happy");
+		let repo = tempdir().unwrap();
+		write_item(
+			&repo.path().join("!tasks"),
+			"C.org",
+			"* TODO C\n:PROPERTIES:\n:CUSTOM_ID: C-1\n:END:\n",
+		);
+		let cache = tempdir().unwrap();
+		let canon = canonical_root(repo.path());
+		let engine_bin = repo_cache_dir_at(&canon, cache.path())
+			.unwrap()
+			.join("engine.bin");
+
+		get_or_create(repo.path(), Some(cache.path()))
+			.unwrap()
+			.query(q("C"))
+			.unwrap();
+		let mtime1 = fs::metadata(&engine_bin).unwrap().modified().unwrap();
+		// Sleep briefly so a needless rewrite would advance mtime past
+		// filesystem timestamp resolution (msec on most FSes, but EXT4 with
+		// noatime sometimes coalesces).
+		std::thread::sleep(std::time::Duration::from_millis(50));
+
+		get_or_create(repo.path(), Some(cache.path()))
+			.unwrap()
+			.query(q("C"))
+			.unwrap();
+		let mtime2 = fs::metadata(&engine_bin).unwrap().modified().unwrap();
+		assert_eq!(
+			mtime1, mtime2,
+			"second query rebuilt despite unchanged source (engine.bin mtime drifted)"
+		);
+		forget(repo.path());
+	}
+
+	#[test]
+	fn stale_fingerprint_triggers_rebuild() {
+		// Negative: editing a tracked .org file between queries must
+		// invalidate the warm cache and rebuild. Approximated by asserting
+		// engine.bin mtime advances and the new content is searchable.
+		let _no_worker = force_no_worker("stale-fingerprint");
+		let repo = tempdir().unwrap();
+		let tasks = repo.path().join("!tasks");
+		write_item(
+			&tasks,
+			"D.org",
+			"* TODO D first\n:PROPERTIES:\n:CUSTOM_ID: D-1\n:END:\n",
+		);
+		let cache = tempdir().unwrap();
+		let canon = canonical_root(repo.path());
+		let engine_bin = repo_cache_dir_at(&canon, cache.path())
+			.unwrap()
+			.join("engine.bin");
+
+		// First query: cold build.
+		let hits1 = get_or_create(repo.path(), Some(cache.path()))
+			.unwrap()
+			.query(q("first"))
+			.unwrap();
+		assert!(hits1.iter().any(|h| h.id == "D-1"));
+		let mtime1 = fs::metadata(&engine_bin).unwrap().modified().unwrap();
+
+		// Edit the file: change title + add a unique token. Sleep to
+		// guarantee mtime resolution distinguishes the two writes.
+		std::thread::sleep(std::time::Duration::from_millis(50));
+		write_item(
+			&tasks,
+			"D.org",
+			"* TODO D second uniqueazaza\n:PROPERTIES:\n:CUSTOM_ID: D-1\n:END:\n",
+		);
+
+		// Second query: must rebuild and surface the new token.
+		let hits2 = get_or_create(repo.path(), Some(cache.path()))
+			.unwrap()
+			.query(q("uniqueazaza"))
+			.unwrap();
+		assert!(
+			hits2.iter().any(|h| h.id == "D-1"),
+			"after edit, recall should surface new content; got {hits2:?}"
+		);
+		let mtime2 = fs::metadata(&engine_bin).unwrap().modified().unwrap();
+		assert!(
+			mtime2 > mtime1,
+			"engine.bin mtime should advance after stale-fingerprint rebuild"
+		);
+		forget(repo.path());
+	}
+
 	#[test]
 	fn handle_falls_back_gracefully_when_worker_unavailable() {
-		// With no PI_EMBEDDING_WORKER and no co-located binary, the worker
-		// path resolution fails. The engine should still warm up (BM25 +
-		// graph), just with an empty VecIndex.
-		// SAFETY: tests run sequentially when sharing env vars; this test
-		// doesn't write env, only reads (and the override mechanism is opt-in).
+		// Vector lane disabled → BM25 + graph still serve.
+		let _no_worker = force_no_worker("worker-unavailable");
 		let repo = tempdir().unwrap();
 		write_item(
 			&repo.path().join("!tasks"),
@@ -566,18 +842,8 @@ mod tests {
 		);
 		let cache = tempdir().unwrap();
 		let handle = get_or_create(repo.path(), Some(cache.path())).unwrap();
-		// Drop handle reference from the global map so the next call rebuilds.
-		// We use a dedicated cache_base per-test, so no cross-test pollution.
-
-		let query = RecallQuery {
-			text: Some("X".into()),
-			limit: 10,
-			..Default::default()
-		};
-		let _ = handle.query(query); // must not panic; vector lane may be empty
+		let result = handle.query(q("X"));
+		assert!(result.is_ok(), "engine.query failed: {result:?}");
 		forget(repo.path());
 	}
-
-	#[allow(dead_code)]
-	fn _suppress_unused(_: HashMap<String, String>) {}
 }
