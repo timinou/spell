@@ -4,6 +4,8 @@
 //! embedding worker. Run with `cargo test -p pi-org-recall --features
 //! test-mock`.
 
+#![cfg(feature = "test-mock")]
+
 use pi_org_recall::embedder::{Embedder, MockEmbedder};
 
 #[test]

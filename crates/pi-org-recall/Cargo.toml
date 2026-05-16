@@ -27,6 +27,13 @@ tracing = "0.1"
 tempfile = "3"
 
 [features]
-default = ["test-mock"]
+# `test-mock` exposes a blake3-derived `MockEmbedder` used by this crate's
+# integration tests. It MUST NOT ship in production binaries: production
+# embeddings route through `pi-embedding-worker` via the adapter in
+# `pi-natives::recall_engine`. Tests opt in explicitly via
+# `cargo test -p pi-org-recall --features test-mock`; CI runs them under
+# that flag. The `-p` is required because the feature is crate-local; a
+# bare `cargo test --features test-mock` from the workspace root fails.
+default = []
 test-embedding = []
 test-mock = []

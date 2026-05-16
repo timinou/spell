@@ -3,6 +3,12 @@
 //! Tests the full [`recall`] pipeline with real (or mock) BM25, vector, and
 //! graph lanes fused via RRF. Each test builds a small in-memory org-item
 //! snapshot.
+//!
+//! Requires the `test-mock` feature (a deterministic blake3-based embedder)
+//! to avoid spawning the real `pi-embedding-worker` subprocess. Run with:
+//!     cargo test -p pi-org-recall --features test-mock
+
+#![cfg(feature = "test-mock")]
 
 use std::collections::HashMap;
 
