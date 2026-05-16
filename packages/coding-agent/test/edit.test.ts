@@ -110,6 +110,36 @@ describe("CodepathEditTool", () => {
 		expect(content).toContain("beta");
 	});
 
+	// PLAN-308 regression: legacy append on a MISSING file used to silently
+	// create an empty file (legacyKindAdapter renamed lines→content; the
+	// missing-file create branch in #executeLineId still read action.lines).
+	// The fix reads action.content ?? action.lines so both shapes work.
+	it("creates a file with content via anchorless append on missing target", async () => {
+		const file = path.join(tmpDir, "newly-created.txt");
+		// Pre-condition: file must NOT exist
+		expect(await fs.exists(file)).toBe(false);
+		const tool = new CodepathEditTool(createSession());
+		const result = await tool.execute("t", {
+			operations: [{ target: file, action: { kind: "append", lines: ["alpha", "beta"] } }],
+		});
+		expect((result as any).isError).toBeFalsy();
+		const content = await fs.readFile(file, "utf-8");
+		expect(content).toContain("alpha");
+		expect(content).toContain("beta");
+	});
+
+	it("creates a file with content via anchorless fileAppend (new kind) on missing target", async () => {
+		const file = path.join(tmpDir, "newly-created-v2.txt");
+		expect(await fs.exists(file)).toBe(false);
+		const tool = new CodepathEditTool(createSession());
+		const result = await tool.execute("t", {
+			operations: [{ target: file, action: { kind: "fileAppend", content: "fresh content" } }],
+		});
+		expect((result as any).isError).toBeFalsy();
+		const content = await fs.readFile(file, "utf-8");
+		expect(content).toBe("fresh content");
+	});
+
 	it("prepends at BOF via anchorless prepend", async () => {
 		const file = path.join(tmpDir, "prepend.txt");
 		await writeFile(file, "beta");
