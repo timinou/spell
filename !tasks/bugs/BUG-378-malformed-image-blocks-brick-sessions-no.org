@@ -1,5 +1,5 @@
 #+TITLE: malformed image blocks brick sessions; no validation at producer/transport/persist
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14e386f9d5d16b69
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-16T13-07-58-935Z_14e386f9d5d16b69.jsonl]]
 #+CUSTOM_ID: BUG-378-malformed-image-blocks-brick-sessions-no
@@ -54,3 +54,5 @@ re-sends it; only manual JSONL surgery recovers.
 * Related
 - BUG-α (sibling, producer-side fix for the reported failure)
 - MCP spec §image-content (canonical shape, base64 only at tool boundary)
+
+NOTE [2026-05-16]: Closed in commit 8b2eb6568. Three-layer defense landed: (1) shared validator with 18 tests; (2) provider preflight across 4 mappers/8 sites, 25 new tests; (3) session-write guard with 6 tests. Bad image blocks never reach API or transcript. Pattern documented in commit message references the recurring failure family (claude-code #47976, #36511, #9049, #17452, #15722, #8947).

@@ -16,346 +16,25 @@ export type {
 
 // ── Common field schemas ──
 
-const filePathSchema = Type.String({
-	pattern: "^[^:]*$|^[^:]*:[^:].*$",
-	description: "Bare file path; MUST NOT contain '::' (symbol separator)",
-});
+// Schema primitives moved to ./codepath-primitives to break circular imports
+// (codepath-op-schema.generated.ts depends on them; if they lived here, this
+//  file's re-export of the generated schemas would create a cycle).
+export {
+	contentSchema,
+	directionSchema,
+	filePathSchema,
+	lineAnchorSchema,
+	lineAtSchema,
+	lineSpanSchema,
+	occurrenceSchema,
+	spliceModeSchema,
+	symbolPathSchema,
+	symScopeSchema,
+} from "./codepath-primitives";
 
-const symbolPathSchema = Type.String({
-	pattern: "^.+::.+$",
-	description: "Symbol target; MUST contain '::Symbol[.member]'",
-});
-
-const contentSchema = Type.Union([Type.String(), Type.Array(Type.String())]);
-
-const symScopeSchema = Type.Union([Type.Literal("whole"), Type.Literal("body"), Type.Literal("sig")]);
-
-const occurrenceSchema = Type.Union([
-	Type.Literal("first"),
-	Type.Literal("last"),
-	Type.Literal("all"),
-	Type.Integer({ minimum: 1 }),
-]);
-
-const directionSchema = Type.Union([Type.Literal("up"), Type.Literal("down")]);
-const spliceModeSchema = Type.Union([Type.Literal("self"), Type.Literal("up"), Type.Literal("down")]);
-
-const lineAnchorSchema = Type.String({
-	pattern: "^\\d+#.+$",
-	description: "LINE#HASH anchor copied from get output (e.g. '42#ZP')",
-});
-
-const lineSpanSchema = Type.Object({
-	start: lineAnchorSchema,
-	end: Type.Optional(lineAnchorSchema),
-});
-
-const lineAtSchema = Type.Union([
-	Type.Object({ side: Type.Literal("before"), anchor: lineAnchorSchema }),
-	Type.Object({ side: Type.Literal("after"), anchor: lineAnchorSchema }),
-]);
-
-// ── Per-variant ops (new discriminated union) ──
-
-export const fileCreateOp = Type.Object(
-	{
-		kind: Type.Literal("fileCreate"),
-		target: filePathSchema,
-		content: contentSchema,
-		force: Type.Optional(Type.Boolean()),
-	},
-	{ additionalProperties: false, description: "Create a new file; bare path; force=true overwrites" },
-);
-
-export const fileWriteOp = Type.Object(
-	{
-		kind: Type.Literal("fileWrite"),
-		target: filePathSchema,
-		content: contentSchema,
-		force: Type.Optional(Type.Boolean()),
-	},
-	{ additionalProperties: false, description: "Replace entire file content; bare path" },
-);
-
-export const fileDeleteOp = Type.Object(
-	{
-		kind: Type.Literal("fileDelete"),
-		target: filePathSchema,
-	},
-	{ additionalProperties: false, description: "Delete file; bare path" },
-);
-
-export const fileAppendOp = Type.Object(
-	{
-		kind: Type.Literal("fileAppend"),
-		target: filePathSchema,
-		content: contentSchema,
-	},
-	{ additionalProperties: false },
-);
-
-export const filePrependOp = Type.Object(
-	{
-		kind: Type.Literal("filePrepend"),
-		target: filePathSchema,
-		content: contentSchema,
-	},
-	{ additionalProperties: false },
-);
-
-export const filePatchOp = Type.Object(
-	{
-		kind: Type.Literal("filePatch"),
-		target: filePathSchema,
-		diff: Type.String({ description: "Unified diff string" }),
-	},
-	{ additionalProperties: false },
-);
-
-export const lineReplaceOp = Type.Object(
-	{
-		kind: Type.Literal("lineReplace"),
-		target: filePathSchema,
-		span: lineSpanSchema,
-		content: contentSchema,
-	},
-	{ additionalProperties: false },
-);
-
-export const lineInsertOp = Type.Object(
-	{
-		kind: Type.Literal("lineInsert"),
-		target: filePathSchema,
-		at: lineAtSchema,
-		content: contentSchema,
-	},
-	{ additionalProperties: false },
-);
-
-export const lineAppendOp = Type.Object(
-	{
-		kind: Type.Literal("lineAppend"),
-		target: filePathSchema,
-		at: lineAnchorSchema,
-		content: contentSchema,
-	},
-	{ additionalProperties: false },
-);
-
-export const linePrependOp = Type.Object(
-	{
-		kind: Type.Literal("linePrepend"),
-		target: filePathSchema,
-		at: lineAnchorSchema,
-		content: contentSchema,
-	},
-	{ additionalProperties: false },
-);
-
-export const symbolReplaceOp = Type.Object(
-	{
-		kind: Type.Literal("symbolReplace"),
-		target: symbolPathSchema,
-		scope: Type.Optional(symScopeSchema),
-		content: contentSchema,
-	},
-	{
-		additionalProperties: false,
-		description: "Replace symbol declaration; scope=whole|body|sig (default whole)",
-	},
-);
-
-export const symbolRenameOp = Type.Object(
-	{
-		kind: Type.Literal("symbolRename"),
-		target: symbolPathSchema,
-		newName: Type.String(),
-	},
-	{ additionalProperties: false },
-);
-
-export const symbolWrapOp = Type.Object(
-	{
-		kind: Type.Literal("symbolWrap"),
-		target: symbolPathSchema,
-		content: contentSchema,
-	},
-	{ additionalProperties: false },
-);
-
-export const symbolDeleteOp = Type.Object(
-	{
-		kind: Type.Literal("symbolDelete"),
-		target: symbolPathSchema,
-		allowSiblingDelete: Type.Optional(Type.Boolean()),
-	},
-	{ additionalProperties: false },
-);
-
-export const symbolInsertBeforeOp = Type.Object(
-	{
-		kind: Type.Literal("symbolInsertBefore"),
-		target: symbolPathSchema,
-		content: contentSchema,
-	},
-	{ additionalProperties: false },
-);
-
-export const symbolInsertAfterOp = Type.Object(
-	{
-		kind: Type.Literal("symbolInsertAfter"),
-		target: symbolPathSchema,
-		content: contentSchema,
-	},
-	{ additionalProperties: false },
-);
-
-export const symbolFindReplaceOp = Type.Object(
-	{
-		kind: Type.Literal("symbolFindReplace"),
-		target: symbolPathSchema,
-		find: contentSchema,
-		content: contentSchema,
-		occurrence: Type.Optional(occurrenceSchema),
-	},
-	{ additionalProperties: false },
-);
-
-export const symbolRawTextReplaceOp = Type.Object(
-	{
-		kind: Type.Literal("symbolRawTextReplace"),
-		target: symbolPathSchema,
-		find: contentSchema,
-		content: contentSchema,
-		occurrence: Type.Optional(occurrenceSchema),
-	},
-	{ additionalProperties: false },
-);
-
-// File-scoped find/replace variants (PLAN-300 wave 3). Kernel `Op::from_legacy`
-// routes `Action::FindAndReplace` to `Op::FileFindReplace` when the target has
-// no `::Symbol` query segment; these schemas let agents address that path
-// explicitly via the new-kind names instead of relying on the legacy alias.
-export const fileFindReplaceOp = Type.Object(
-	{
-		kind: Type.Literal("fileFindReplace"),
-		target: filePathSchema,
-		find: contentSchema,
-		content: contentSchema,
-		occurrence: Type.Optional(occurrenceSchema),
-	},
-	{ additionalProperties: false },
-);
-
-export const fileRawTextReplaceOp = Type.Object(
-	{
-		kind: Type.Literal("fileRawTextReplace"),
-		target: filePathSchema,
-		find: contentSchema,
-		content: contentSchema,
-		occurrence: Type.Optional(occurrenceSchema),
-	},
-	{ additionalProperties: false },
-);
-
-export const symbolMoveOp = Type.Object(
-	{
-		kind: Type.Literal("symbolMove"),
-		target: symbolPathSchema,
-		direction: directionSchema,
-	},
-	{ additionalProperties: false },
-);
-
-export const symbolCloneOp = Type.Object(
-	{
-		kind: Type.Literal("symbolClone"),
-		target: symbolPathSchema,
-		renameTo: Type.Optional(Type.String()),
-	},
-	{ additionalProperties: false },
-);
-
-export const symbolSpliceOp = Type.Object(
-	{
-		kind: Type.Literal("symbolSplice"),
-		target: symbolPathSchema,
-		mode: spliceModeSchema,
-	},
-	{ additionalProperties: false },
-);
-
-export const symbolTransposeOp = Type.Object(
-	{
-		kind: Type.Literal("symbolTranspose"),
-		target: symbolPathSchema,
-		column: Type.Integer({ minimum: 0 }),
-	},
-	{ additionalProperties: false },
-);
-
-export const cssRenameClassTokenOp = Type.Object(
-	{
-		kind: Type.Literal("cssRenameClassToken"),
-		target: Type.String(),
-		find: Type.String(),
-		replace: Type.String(),
-	},
-	{ additionalProperties: false },
-);
-
-export const cssRenameIdTokenOp = Type.Object(
-	{
-		kind: Type.Literal("cssRenameIdToken"),
-		target: Type.String(),
-		find: Type.String(),
-		replace: Type.String(),
-	},
-	{ additionalProperties: false },
-);
-
-export const cssRenameCustomPropOp = Type.Object(
-	{
-		kind: Type.Literal("cssRenameCustomProp"),
-		target: Type.String(),
-		find: Type.String(),
-		replace: Type.String(),
-	},
-	{ additionalProperties: false },
-);
-
-export const cssRemoveDeadStyleOp = Type.Object(
-	{
-		kind: Type.Literal("cssRemoveDeadStyle"),
-		target: Type.String(),
-	},
-	{ additionalProperties: false },
-);
-
-export const headingPromoteOp = Type.Object(
-	{
-		kind: Type.Literal("headingPromote"),
-		target: Type.String(),
-	},
-	{ additionalProperties: false },
-);
-
-export const headingDemoteOp = Type.Object(
-	{
-		kind: Type.Literal("headingDemote"),
-		target: Type.String(),
-	},
-	{ additionalProperties: false },
-);
-
-export const headingReplaceBlockOp = Type.Object(
-	{
-		kind: Type.Literal("headingReplaceBlock"),
-		target: Type.String(),
-		content: contentSchema,
-	},
-	{ additionalProperties: false },
-);
+// ── Per-variant Op schemas + editOpSchema + EditOp type are GENERATED ──
+// Source: kernel Op enum via list_ops() NAPI introspection.
+// Refresh: `bun run gen:op-schema`. See codepath-op-schema.generated.ts.
 
 // ── Legacy action shape (flat bag-of-fields, for backward compatibility) ──
 // Keep this for tests and legacy adapter typing.
@@ -422,45 +101,44 @@ export const legacyActionSchema = Type.Object(
 
 export type LegacyAction = Static<typeof legacyActionSchema>;
 
-// ── Union of all new Op variants ──
-
-export const editOpSchema = Type.Union([
-	fileCreateOp,
-	fileWriteOp,
-	fileDeleteOp,
+// ── Re-export generated Op schemas (kernel-derived) ──
+export {
+	cssRemoveDeadStyleOp,
+	cssRenameClassTokenOp,
+	cssRenameCustomPropOp,
+	cssRenameIdTokenOp,
+	editOpSchema,
 	fileAppendOp,
-	filePrependOp,
-	filePatchOp,
-	lineReplaceOp,
-	lineInsertOp,
-	lineAppendOp,
-	linePrependOp,
-	symbolReplaceOp,
-	symbolRenameOp,
-	symbolWrapOp,
-	symbolDeleteOp,
-	symbolInsertBeforeOp,
-	symbolInsertAfterOp,
-	symbolFindReplaceOp,
-	symbolRawTextReplaceOp,
+	fileCreateOp,
+	fileDeleteOp,
 	fileFindReplaceOp,
+	filePatchOp,
+	filePrependOp,
 	fileRawTextReplaceOp,
-	symbolMoveOp,
+	fileWriteOp,
+	headingDemoteOp,
+	headingPromoteOp,
+	headingReplaceBlockOp,
+	lineAppendOp,
+	lineInsertOp,
+	linePrependOp,
+	lineReplaceOp,
 	symbolCloneOp,
+	symbolDeleteOp,
+	symbolFindReplaceOp,
+	symbolInsertAfterOp,
+	symbolInsertBeforeOp,
+	symbolMoveOp,
+	symbolRawTextReplaceOp,
+	symbolRenameOp,
+	symbolReplaceOp,
 	symbolSpliceOp,
 	symbolTransposeOp,
-	cssRenameClassTokenOp,
-	cssRenameIdTokenOp,
-	cssRenameCustomPropOp,
-	cssRemoveDeadStyleOp,
-	headingPromoteOp,
-	headingDemoteOp,
-	headingReplaceBlockOp,
-]);
+	symbolWrapOp,
+} from "./codepath-op-schema.generated";
+export type { EditOp } from "./codepath-op-schema.generated";
 
-export type EditOp = Static<typeof editOpSchema>;
-
-// ── Public alias for backward compat ──
+// Backward compat alias (still used by editSchema's union for legacy adapter input).
 export const codePathActionSchema = legacyActionSchema;
 export type CodePathAction = LegacyAction;
 

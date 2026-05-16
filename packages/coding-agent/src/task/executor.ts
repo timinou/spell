@@ -38,6 +38,7 @@ import { buildNamedToolChoice } from "../utils/tool-choice";
 // Import bash subprocess handler for side effects (tracks bash commands for gate verification)
 import "./bash-subprocess-handler";
 import { type GateFailure, type TrackedBashExecution, verifyGates } from "./gate-verification";
+import { createProgressHeartbeat } from "./progress-heartbeat";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import {
 	type AgentDefinition,
@@ -917,6 +918,17 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		}, PROGRESS_COALESCE_MS - elapsed);
 	};
 
+	// Heartbeat: keep parent progress alive when the subagent is silent (long
+	// tool call, idle wait). Routed through `scheduleProgress(false)` so the
+	// existing 150ms coalescer still gates real emissions — heartbeats never
+	// flood the parent or stack on top of genuine events.
+	const PROGRESS_HEARTBEAT_MS = 500;
+	const heartbeat = createProgressHeartbeat({
+		intervalMs: PROGRESS_HEARTBEAT_MS,
+		isActive: () => !resolved,
+		tick: () => scheduleProgress(false),
+	});
+
 	const getMessageContent = (message: unknown): unknown => {
 		if (message && typeof message === "object" && "content" in message) {
 			return (message as { content?: unknown }).content;
@@ -1757,6 +1769,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	await pendingEventProcessing;
 	resolved = true;
 	listenerController.abort();
+	heartbeat.stop();
 
 	if (progressTimeoutId) {
 		clearTimeout(progressTimeoutId);
