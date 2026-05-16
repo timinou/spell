@@ -116,7 +116,7 @@ export class CreateTool implements AgentTool<typeof createSchema> {
 		const chunks = await executeCodePath({
 			command: "edit",
 			target: path.relative(sessionCwd, resolvedPath),
-			actions: [{ kind: "create", content, force: params.force ?? false }],
+			actions: [{ kind: "fileCreate", content, force: params.force ?? false }],
 			root: this.session.cwd,
 		});
 

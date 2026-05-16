@@ -225,6 +225,8 @@ function normalizeStructuralAction(action: CodePathAction): Record<string, unkno
 	if (action.nodeType) out.nodeType = action.nodeType;
 	if (action.allowSiblingDelete !== undefined) out.allowSiblingDelete = action.allowSiblingDelete;
 	if (action.occurrence !== undefined) out.occurrence = action.occurrence;
+	// PLAN-308 W A2: force was previously dropped on fileCreate/fileWrite → create/write translation.
+	if ((action as any).force !== undefined) out.force = (action as any).force;
 	return out;
 }
 
