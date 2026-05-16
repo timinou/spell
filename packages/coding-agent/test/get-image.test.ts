@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { createTools, GetTool } from "@oh-my-pi/pi-coding-agent/tools";
+import { GetTool } from "@oh-my-pi/pi-coding-agent/tools";
 import * as nativesModule from "@oh-my-pi/pi-natives";
 
 function createSession(): any {
@@ -12,7 +12,20 @@ function createSession(): any {
 	};
 }
 
-function makeChunk(nodes: Array<{ locator: string; kind: string; content?: { kind: string; value?: string; mimeType?: string; artifactUri?: string; width?: number; height?: number } }>): any {
+function makeChunk(
+	nodes: Array<{
+		locator: string;
+		kind: string;
+		content?: {
+			kind: string;
+			value?: string;
+			mimeType?: string;
+			artifactUri?: string;
+			width?: number;
+			height?: number;
+		};
+	}>,
+): any {
 	return {
 		nodes: nodes.map(n => ({
 			locator: n.locator,
@@ -65,7 +78,7 @@ describe("GetTool image blocks", () => {
 		expect(spy).toHaveBeenCalled();
 	});
 
-	it("returns an image content block for large images using artifactUri", async () => {
+	it("emits a text marker, not an image block, when image content has only an artifactUri", async () => {
 		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 			makeChunk([
 				{
@@ -86,12 +99,12 @@ describe("GetTool image blocks", () => {
 		const result = await tool.execute("t", { target: "huge.png" }, undefined, undefined, createSession());
 
 		const imageBlocks = result.content.filter((c: any) => c.type === "image");
-		expect(imageBlocks).toHaveLength(1);
-		expect(imageBlocks[0]).toMatchObject({
-			type: "image",
-			data: "artifact://blobs/code-path/large.bin",
-			mimeType: "image/png",
-		});
+		expect(imageBlocks).toHaveLength(0);
+
+		const textBlocks = result.content.filter((c: any) => c.type === "text");
+		const marker = textBlocks.find((c: any) => (c.text as string)?.includes("image unavailable"));
+		expect(marker).toBeTruthy();
+		expect((marker as any).text).toContain("artifact://blobs/code-path/large.bin");
 		expect(spy).toHaveBeenCalled();
 	});
 });

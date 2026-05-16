@@ -138,15 +138,31 @@ fn content_to_dto(content: Content, threshold: usize) -> ContentDto {
 						}
 					}
 					None => {
-						let preview: String = b.iter().take(8).map(|byte| format!("{:02x}", byte)).collect::<Vec<_>>().join(" ");
-						ContentDto {
-							kind: "extracted_text".to_string(),
-							value: Some(format!(
-								"[not an image: declared {}, bytes start with {}]",
-								mime_type, preview
-							)),
-							source_kind: Some("image".to_string()),
-							..Default::default()
+						// Bytes aren't a transportable raster image (PNG/JPEG/GIF/WebP).
+						// If valid UTF-8 (SVG, ASCII art, etc.) preserve content as text so the
+						// model can still reason about it. Otherwise emit a hex diagnostic.
+						match std::str::from_utf8(&b) {
+							Ok(text) => ContentDto {
+								kind: "extracted_text".to_string(),
+								value: Some(text.to_string()),
+								mime_type: Some(mime_type),
+								source_kind: Some("image".to_string()),
+								width,
+								height,
+								..Default::default()
+							},
+							Err(_) => {
+								let preview: String = b.iter().take(8).map(|byte| format!("{:02x}", byte)).collect::<Vec<_>>().join(" ");
+								ContentDto {
+									kind: "extracted_text".to_string(),
+									value: Some(format!(
+										"[not an image: declared {}, bytes start with {}]",
+										mime_type, preview
+									)),
+									source_kind: Some("image".to_string()),
+									..Default::default()
+								}
+							}
 						}
 					}
 				}
@@ -316,16 +332,38 @@ fn image_bytes_returned_inline_even_when_oversized() {
 }
 
 #[test]
-fn image_with_wrong_extension_downgrades_to_text() {
+fn image_with_utf8_bytes_preserves_text() {
+	// Non-image but valid UTF-8 (e.g. JSON saved with .png extension, SVG, ASCII
+	// art) is preserved verbatim as `extracted_text` so the model can still read
+	// it. The previous behavior dropped content for a hex diagnostic; this avoids
+	// the lossy substitution while still keeping it out of the image transport
+	// path (BUG-378).
 	let bytes = b"{\"format\":\"png\"}".to_vec();
-	let node = image_node("h", "image/png", None, None, Some(bytes));
+	let node = image_node("h", "image/png", None, None, Some(bytes.clone()));
 	let dtos = nodes_to_dtos(vec![node], ARTIFACT_THRESHOLD);
 	assert_eq!(dtos.len(), 1);
 	let c = dtos[0].content.as_ref().expect("content expected");
 	assert_eq!(c.kind, "extracted_text", "expected extracted_text kind");
+	assert_eq!(c.source_kind.as_deref(), Some("image"));
+	assert_eq!(c.mime_type.as_deref(), Some("image/png"));
 	let val = c.value.as_ref().expect("expected value");
-	assert!(val.contains("[not an image:"), "missing diagnostic prefix");
-	assert!(val.contains("image/png"), "missing declared mime in diagnostic");
+	assert_eq!(val, &String::from_utf8(bytes).unwrap(), "text bytes preserved verbatim");
+}
+
+#[test]
+fn image_with_non_utf8_bytes_emits_diagnostic() {
+	// Bytes that are neither a recognized image format nor valid UTF-8 (e.g.
+	// random binary in a .png file) fall back to a hex preview diagnostic so the
+	// model knows something exists at this path but cannot be processed.
+	let bytes = vec![0x00, 0xC0, 0xFF, 0xEE, 0xDE, 0xAD, 0xBE, 0xEF, 0xFF];
+	let node = image_node("h", "image/png", None, None, Some(bytes));
+	let dtos = nodes_to_dtos(vec![node], ARTIFACT_THRESHOLD);
+	assert_eq!(dtos.len(), 1);
+	let c = dtos[0].content.as_ref().expect("content expected");
+	assert_eq!(c.kind, "extracted_text");
+	let val = c.value.as_ref().expect("expected value");
+	assert!(val.contains("[not an image:"), "missing diagnostic prefix: {val}");
+	assert!(val.contains("image/png"), "missing declared mime in diagnostic: {val}");
 }
 
 #[test]
