@@ -327,7 +327,9 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		if (result.images.length > 0) {
 			const content = [...toolRes.content];
 			for (const img of result.images) {
-				content.push({ type: "image", data: img.data, mimeType: img.mimeType });
+				if (!img.skipImageBlock) {
+					content.push({ type: "image", data: img.data, mimeType: img.mimeType });
+				}
 				if (img.text) {
 					content.push({ type: "text", text: img.text });
 				}

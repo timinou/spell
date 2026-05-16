@@ -13,7 +13,7 @@ export interface CodePathResultOptions {
 export interface CodePathResult {
 	text: string;
 	meta?: ReturnType<typeof outputMeta>["get"] extends () => infer R ? R : never;
-	images: Array<{ data: string; mimeType: string; text?: string }>;
+	images: Array<{ data: string; mimeType: string; text?: string; skipImageBlock?: boolean }>;
 }
 
 function formatLocator(locator: string): {
@@ -250,15 +250,22 @@ function buildFsListing(nodes: NodeRefDto[]): string {
 	return lines.join("\n");
 }
 
-function extractImages(nodes: NodeRefDto[]): Array<{ data: string; mimeType: string; text?: string }> {
-	const images: Array<{ data: string; mimeType: string; text?: string }> = [];
+function extractImages(nodes: NodeRefDto[]): Array<{ data: string; mimeType: string; text?: string; skipImageBlock?: boolean }> {
+	const images: Array<{ data: string; mimeType: string; text?: string; skipImageBlock?: boolean }> = [];
 	for (const node of nodes) {
 		const content = node.content;
-		if (content && content.kind === "image" && content.mimeType) {
-			const data = content.value ?? content.artifactUri;
-			if (data) {
-				images.push({ data, mimeType: content.mimeType, text: content.text });
-			}
+		if (!content || content.kind !== "image" || !content.mimeType) continue;
+		if (content.value) {
+			images.push({ data: content.value, mimeType: content.mimeType, text: content.text });
+		} else if (content.artifactUri) {
+			// Image bytes externalized but no JS resolver for the URI namespace.
+			// Emit a text-only entry; never put a URI into the data field.
+			images.push({
+				data: "",
+				mimeType: content.mimeType,
+				text: `[image unavailable: bytes externalized to ${content.artifactUri}]`,
+				skipImageBlock: true,
+			});
 		}
 	}
 	return images;

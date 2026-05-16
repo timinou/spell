@@ -1,0 +1,58 @@
+#+TITLE: image tool result returns artifact:// URI as base64, Anthropic API 400
+#+STATE: DOING
+#+SESSION_ID: 14e386f9d5d16b69
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-16T13-07-58-935Z_14e386f9d5d16b69.jsonl]]
+#+CUSTOM_ID: BUG-377-image-tool-result-returns-artifact-uri-a
+
+* Initial Message
+
+Error: 400
+ {"type":"error","error":{"type":"invalid_request_error","message":"messages.90.content.1.tool_result.content.1.image.source.base64:
+ invalid base64 data"},"request_id":"req_011Cb6GvVYxdvfdnU4fNEZXL"}
+ raw-http-request=/home/user/.spell/logs/http-400-requests/1778935761564-3vngji1q7mfn3.json
+
+
+in /home/user/.spell/agent/sessions/-code-ora-cais/2026-05-16T11-12-33-866Z_14e36c8f12b84467.jsonl
+
+
+
+find the root cause and propose structural fixes
+
+* Reproduction
+- =get { target: "<png>#image" }= where image bytes exceed 256 KiB.
+- Effect: =messages[N].content[K].tool_result.content[K'].image.source.base64.data= contains
+  =artifact://blobs/code-path/<id>.bin= instead of base64.
+- Anthropic responds 400 =invalid_request_error: invalid base64 data=.
+- Captured failure: =/home/user/.spell/logs/http-400-requests/1778935761564-3vngji1q7mfn3.json=
+- Captured session: =/home/user/.spell/agent/sessions/-code-ora-cais/2026-05-16T11-12-33-866Z_14e36c8f12b84467.jsonl=
+
+* Root cause
+- =crates/pi-natives/src/code_path/marshal.rs::stage_artifact= externalises image bytes for
+  =Content::Image= when len > 256 KiB, emitting =artifact_uri= inside =ContentDto=.
+- =packages/coding-agent/src/tools/codepath-result.ts::extractImages= leaks the URI into
+  =ImageContent.data= via =content.value ?? content.artifactUri=.
+- =packages/ai/src/providers/anthropic.ts::convertContentBlocks= passes =data= verbatim into
+  =source.base64.data=.
+- No JS resolver exists for =artifact://blobs/code-path/*= URIs.
+
+* Scope
+Producer-side fix only. Defense-in-depth handled by sibling BUG.
+
+* Layers
+- =crates/pi-natives/src/code_path/marshal.rs=
+- =packages/coding-agent/src/tools/codepath-result.ts=
+- =packages/coding-agent/src/tools/get.ts=
+- =packages/coding-agent/test/get-image.test.ts=
+
+* Acceptance
+- =Content::Image { bytes: Some(_) }= always produces inline base64; never =artifact_uri=.
+- =extractImages= never emits image block whose =data= is a URI or empty.
+- Bytes that do not match a supported image format → downgrade to =extracted_text= with diagnostic.
+- =bun test packages/coding-agent/test/get-image.test.ts=
+- =cargo test -p pi-natives code_path::marshal=
+
+* Related
+- claude-code#47976 (mislabeled .png class)
+- claude-code#36511 (data:image stdout interception)
+- claude-code#9049 (large screenshot 400)
+- MCP spec §image-content (canonical shape)
