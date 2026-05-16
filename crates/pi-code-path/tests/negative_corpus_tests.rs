@@ -290,6 +290,7 @@ fn file_target_rejects_qualifier() {
 /// Document current overload behavior:
 /// `fileFindReplace` on a `::Symbol` target dispatches to `SymbolFindReplace`.
 #[test]
+#[allow(deprecated)]
 fn from_legacy_filefindreplace_on_symbol_creates_symbol_op() {
     let action = Action::FindAndReplace {
         find:       ActionContent::Single("old".to_string()),
@@ -306,6 +307,7 @@ fn from_legacy_filefindreplace_on_symbol_creates_symbol_op() {
 
 /// Document that a bare-path target with a `Write` action creates `FileWrite`.
 #[test]
+#[allow(deprecated)]
 fn from_legacy_write_on_bare_path_creates_file_write() {
     let action = Action::Write {
         content: ActionContent::Single("new content".to_string()),
@@ -317,6 +319,7 @@ fn from_legacy_write_on_bare_path_creates_file_write() {
 
 /// Document that a `::Symbol` target with a `Write` action creates `SymbolReplace`.
 #[test]
+#[allow(deprecated)]
 fn from_legacy_write_on_symbol_path_creates_symbol_replace() {
     let action = Action::Write {
         content: ActionContent::Single("new content".to_string()),
@@ -332,6 +335,7 @@ fn from_legacy_write_on_symbol_path_creates_symbol_replace() {
 
 /// Document that `Insert` without `pos` or `line` fails.
 #[test]
+#[allow(deprecated)]
 fn from_legacy_insert_without_pos_or_line_returns_parse_error() {
     let action = Action::Insert {
         pos:   None,
@@ -348,6 +352,7 @@ fn from_legacy_insert_without_pos_or_line_returns_parse_error() {
 
 /// `from_legacy` on a URI locator rejects via target constructors.
 #[test]
+#[allow(deprecated)]
 fn from_legacy_write_on_uri_returns_incompatible_target() {
     let action = Action::Write {
         content: ActionContent::Single("x".to_string()),

@@ -5,8 +5,10 @@
 use serde::{Deserialize, Serialize};
 use strum::EnumIter;
 
+#[allow(deprecated)]
+use crate::ast::Action;
 use crate::{
-	ast::{Action, ActionContent, CodePath, Direction, Locator, Occurrence, SpliceMode},
+	ast::{ActionContent, CodePath, Direction, Locator, Occurrence, SpliceMode},
 	types::{Diagnostic, DiagnosticVariant},
 };
 
@@ -493,6 +495,7 @@ impl Op {
 
 	/// Bridge from legacy Action enum (Wave 3 cutover).
 	/// The legacy Action does NOT carry the target, so the bridge takes both.
+	#[allow(deprecated)]
 	pub fn from_legacy(action: &Action, cp: &CodePath) -> Result<Self, Diagnostic> {
 		let has_sym = cp.has_target_query();
 
@@ -687,6 +690,7 @@ impl Op {
 // ── Tests ─────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
 	use strum::IntoEnumIterator;
 

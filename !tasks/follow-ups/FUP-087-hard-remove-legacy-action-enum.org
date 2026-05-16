@@ -1,0 +1,18 @@
+#+TITLE: Hard-remove legacy Action enum
+#+STATE: ITEM
+#+SESSION_ID: 14e38ef350aaa767
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-11T20-47-19-574Z_14dd802985b2a5f1/32-WaveDRustLegacyRetire.jsonl]]
+#+CUSTOM_ID: FUP-087-hard-remove-legacy-action-enum
+#+PARENT: PLAN-308
+#+PRIORITY: C
+
+Trigger: 1 minor version after PLAN-308 ships, OR immediately if code_buffer scope investigation recommends option (a)/(b).
+
+Files to modify:
+- Delete Action enum from crates/pi-code-path/src/ast.rs
+- Delete Op::from_legacy from crates/pi-code-path/src/op.rs
+- Remove all #[allow(deprecated)] annotations added in PLAN-308 Wave D
+- Clean up Action import in crates/pi-natives/src/code_path/napi.rs
+- Clean up Action import in crates/pi-code-path/tests/negative_corpus_tests.rs
+- Remove Action variant tests in crates/pi-code-path/src/op.rs: tests module
+- Remove Action variant tests in crates/pi-code-path/src/ast.rs: tests module

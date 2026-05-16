@@ -309,6 +309,10 @@ impl fmt::Display for Axis {
 }
 // ── Actions ──────────────────────────────────────────────────────
 
+#[deprecated(
+    since = "13.12.8",
+    note = "Use Op enum (crates/pi-code-path/src/op.rs). Action is retained as legacy-input fallback only, accepted at the NAPI entry via Op::from_legacy. PLAN-308 Wave D."
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Action {
@@ -498,6 +502,7 @@ pub enum ActionKind {
 	InsertAfter,
 }
 
+#[allow(deprecated)]
 impl Action {
 	pub fn kind(&self) -> ActionKind {
 		match self {
@@ -543,6 +548,7 @@ pub struct MutationOutcome {
 	pub target_summary: Option<String>,
 }
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
 	use super::*;
 

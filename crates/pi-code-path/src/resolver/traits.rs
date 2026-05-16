@@ -12,7 +12,7 @@ use std::{
 };
 
 use crate::{
-	ast::{Action, ActionKind, CodePath, EdgeKind, MutationOutcome, Query, UriLocator},
+	ast::{ActionKind, CodePath, EdgeKind, MutationOutcome, Query, UriLocator},
 	types::{Diagnostic, NodeRef},
 };
 
