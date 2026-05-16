@@ -59,6 +59,28 @@ impl VectorIndex {
 		Self { hnsw, entries: normalized_entries, dimensions }
 	}
 
+	/// Append a single entry to the index using `hnsw_rs`' incremental
+	/// `insert_slice`. O(log n) on the existing graph — no rebuild.
+	///
+	/// The caller chooses `entry.node_index` (typically `self.len()` for a
+	/// fresh node). The vector is normalized in place before insertion.
+	/// Zero-norm vectors are inserted as-is (cosine similarity will be
+	/// undefined for them; the caller should filter zero-norm inputs).
+	pub fn insert(&mut self, mut entry: VectorEntry) -> Result<()> {
+		if entry.vector.len() != self.dimensions {
+			return Err(Error::DimensionMismatch {
+				expected: self.dimensions,
+				actual:   entry.vector.len(),
+			});
+		}
+		normalize(&mut entry.vector);
+		self
+			.hnsw
+			.insert_slice((entry.vector.as_slice(), entry.node_index));
+		self.entries.push(entry);
+		Ok(())
+	}
+
 	/// Cosine similarity search via HNSW.
 	pub fn search(&self, query_vector: &[f32], limit: usize) -> Result<Vec<VectorSearchHit>> {
 		if self.entries.is_empty() {
@@ -179,3 +201,45 @@ fn normalize(v: &mut [f32]) {
 		}
 	}
 }
+
+#[cfg(test)]
+mod insert_tests {
+	use super::*;
+
+	fn unit(i: usize, dim: usize) -> Vec<f32> {
+		let mut v = vec![0.0f32; dim];
+		v[i % dim] = 1.0;
+		v
+	}
+
+	#[test]
+	fn incremental_insert_grows_index_without_rebuild() {
+		// Dim = 32 so basis vectors don't collide for 0..32 inserts.
+		let dim = 32;
+		let mut idx = VectorIndex::new(Vec::new(), dim);
+		assert!(idx.is_empty());
+
+		for i in 0..32 {
+			idx
+				.insert(VectorEntry { node_index: i, vector: unit(i, dim) })
+				.expect("incremental insert");
+		}
+		assert_eq!(idx.len(), 32);
+
+		// Self-query for node 5 should return node 5 as top hit.
+		let hits = idx.search(&unit(5, dim), 4).expect("search");
+		assert!(!hits.is_empty());
+		assert_eq!(hits[0].node_index, 5);
+		assert!((hits[0].score - 1.0).abs() < 1e-5);
+	}
+
+	#[test]
+	fn insert_rejects_wrong_dimension() {
+		let mut idx = VectorIndex::new(Vec::new(), 8);
+		let err = idx
+			.insert(VectorEntry { node_index: 0, vector: vec![1.0; 4] })
+			.expect_err("wrong dim");
+		assert!(matches!(err, Error::DimensionMismatch { expected: 8, actual: 4 }));
+	}
+}
+
