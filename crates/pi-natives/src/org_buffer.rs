@@ -837,20 +837,30 @@ fn cmd_recall(options: &Value) -> Result<Value> {
 	let hits_json: Vec<Value> = hits
 		.iter()
 		.map(|hit| {
-			let mut h = serde_json::to_value(hit).unwrap_or(Value::Null);
-			// Truncate excerpts to 200 chars (display contract preserved from
-			// the pre-engine implementation; the engine itself returns raw).
-			if let Some(excerpt) = h.get("excerpt").and_then(Value::as_str) {
-				let truncated: String = excerpt.chars().take(200).collect();
-				if truncated.len() < excerpt.len() {
-					h["excerpt"] = json!(truncated);
-				}
-			}
-			h
+			let h = serde_json::to_value(hit).unwrap_or(Value::Null);
+			truncate_excerpt(h, EXCERPT_CHAR_LIMIT)
 		})
 		.collect();
 
 	Ok(json_response(json!({ "hits": hits_json }), false))
+}
+
+/// Display contract for recall hits: long excerpts are truncated to N
+/// characters (counted by `char_indices`, so multi-byte UTF-8 is respected
+/// and we never split mid-codepoint). Preserved from the pre-engine
+/// implementation; the engine itself returns raw excerpts so callers can
+/// pick their own truncation policy.
+const EXCERPT_CHAR_LIMIT: usize = 200;
+
+fn truncate_excerpt(mut hit: Value, max_chars: usize) -> Value {
+	let Some(excerpt) = hit.get("excerpt").and_then(Value::as_str) else {
+		return hit;
+	};
+	let truncated: String = excerpt.chars().take(max_chars).collect();
+	if truncated.len() < excerpt.len() {
+		hit["excerpt"] = json!(truncated);
+	}
+	hit
 }
 
 fn cmd_remember(options: &Value) -> Result<Value> {
@@ -1708,5 +1718,50 @@ mod tests {
 			result["output"]["message"],
 			json!("duplicate CUSTOM_ID values in wave input: DUP-010"),
 		);
+	}
+
+	// truncate_excerpt: sole site where `org recall` shrinks excerpts before
+	// they cross the NAPI boundary. The engine returns raw text; the shim
+	// caps to EXCERPT_CHAR_LIMIT chars (counted as codepoints, not bytes).
+
+	#[test]
+	fn truncate_excerpt_caps_long_ascii_at_limit() {
+		let excerpt = "a".repeat(500);
+		let hit = json!({ "id": "X-1", "excerpt": excerpt });
+		let capped = super::truncate_excerpt(hit, super::EXCERPT_CHAR_LIMIT);
+		let got = capped["excerpt"].as_str().expect("str");
+		assert_eq!(got.chars().count(), super::EXCERPT_CHAR_LIMIT);
+		assert_eq!(got.len(), super::EXCERPT_CHAR_LIMIT, "ascii: byte count == char count");
+	}
+
+	#[test]
+	fn truncate_excerpt_leaves_short_text_unchanged() {
+		let hit = json!({ "id": "X-1", "excerpt": "short" });
+		let out = super::truncate_excerpt(hit, super::EXCERPT_CHAR_LIMIT);
+		assert_eq!(out["excerpt"], json!("short"));
+	}
+
+	#[test]
+	fn truncate_excerpt_respects_multibyte_codepoints() {
+		// 250 é characters × 2 bytes each = 500 bytes, 250 chars. A regression
+		// that did `&excerpt[..200]` instead of `chars().take(200)` would
+		// panic at the byte-boundary check; this test catches that.
+		let excerpt: String = "é".repeat(250);
+		let hit = json!({ "id": "X-1", "excerpt": excerpt });
+		let capped = super::truncate_excerpt(hit, super::EXCERPT_CHAR_LIMIT);
+		let got = capped["excerpt"].as_str().expect("str");
+		assert_eq!(got.chars().count(), super::EXCERPT_CHAR_LIMIT);
+		assert_eq!(
+			got.len(),
+			super::EXCERPT_CHAR_LIMIT * 2,
+			"u00e9 is 2 bytes; truncation must NOT split mid-codepoint"
+		);
+	}
+
+	#[test]
+	fn truncate_excerpt_passes_through_when_field_absent() {
+		let hit = json!({ "id": "X-1" });
+		let out = super::truncate_excerpt(hit.clone(), super::EXCERPT_CHAR_LIMIT);
+		assert_eq!(out, hit);
 	}
 }

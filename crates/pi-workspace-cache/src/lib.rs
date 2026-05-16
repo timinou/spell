@@ -1,7 +1,7 @@
 use std::{
 	collections::BTreeMap,
 	fmt, fs,
-	io::{BufReader, BufWriter},
+	io::{BufReader, BufWriter, Write},
 	path::{Path, PathBuf},
 	time::UNIX_EPOCH,
 };
@@ -104,8 +104,18 @@ impl CacheStore {
 		fs::create_dir_all(&self.directory)?;
 		let path = self.entry_path(name);
 		let file = fs::File::create(path)?;
-		let writer = BufWriter::new(file);
-		bincode::serialize_into(writer, entry)?;
+		let mut writer = BufWriter::new(file);
+		// Pass `&mut writer` so we retain ownership and can explicitly flush
+		// the BufWriter before drop. `BufWriter::drop` swallows flush errors
+		// silently — if the final partial buffer fails to write the on-disk
+		// file is truncated and `load()` later fails with bincode
+		// "failed to fill whole buffer". Discovered while wiring CacheStore
+		// into the recall engine hot path (was masked for org_index and
+		// code_graph because their saves are infrequent and small).
+		bincode::serialize_into(&mut writer, entry)?;
+		writer
+			.flush()
+			.map_err(WorkspaceCacheError::Io)?;
 		Ok(())
 	}
 
