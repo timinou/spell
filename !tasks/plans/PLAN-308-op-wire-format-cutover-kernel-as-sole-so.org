@@ -192,3 +192,13 @@ Acceptance: ADR committed; zero code change.
 - D-8 Prompt generators: single =gen:prompts= entrypoint. Both old scripts deleted.
 - D-9 Agent output schema grammar: JTD for frontmatter (user-authored), TypeBox for code-resident (developer-authored). Locked in Wave G ADR.
 - D-10 Plan absorbs PLAN-304 Wave 5 (FUP-084 hard cutover) — supersedes the deferred FUP.
+
+* Children
+
+- [[id:FEAT-745-plan-308-wave-a-pre-cutover-audit-op-ser]] Wave A — Pre-cutover audit (4× parallel)
+- [[id:FEAT-746-plan-308-wave-b-rust-op-schema-napi-list]] Wave B — Rust op_schema + NAPI listOps
+- [[id:FEAT-747-plan-308-wave-c-ts-codegen-per-variant-d]] Wave C — TS codegen + per-variant deletion
+- [[id:FEAT-748-plan-308-wave-d-rust-legacy-action-enum]] Wave D — Rust legacy Action retirement
+- [[id:FEAT-749-plan-308-wave-e-op-schema-regen-byte-equ]] Wave E — Regen-byte-equal CI test
+- [[id:FEAT-750-plan-308-wave-f-prompt-generator-unifica]] Wave F — Prompt generator unification
+- [[id:FEAT-751-plan-308-wave-g-adr-locking-jtd-typebox]] Wave G — JTD/TypeBox boundary ADR

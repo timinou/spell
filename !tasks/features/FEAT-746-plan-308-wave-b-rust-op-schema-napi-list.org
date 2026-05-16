@@ -1,0 +1,26 @@
+#+TITLE: PLAN-308 Wave B — Rust op_schema + NAPI listOps() introspection extension
+#+STATE: ITEM
+#+SESSION_ID: 14dd802985b2a5f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
+#+CUSTOM_ID: FEAT-746-plan-308-wave-b-rust-op-schema-napi-list
+#+LAYER: kernel
+
+* Initial Message
+
+Investigate how you'd fold in PLAN-304 into the next swarm waves deeply. I want super super clean code
+
+Parent: [[id:PLAN-308-op-wire-format-cutover-kernel-as-sole-so]]
+Blocks on: Wave A
+
+- B1: crates/pi-code-path/src/op_schema.rs new
+  - struct OpSchema { kind, target_family, fields, description }
+  - struct FieldSchema { name, type_name: FieldType, required, description }
+  - enum TargetFamily { File, Symbol, Css, Heading }
+  - enum FieldType { Content, Identifier, Bool, SymScope, Occurrence, Direction, SpliceMode, LineAnchor, LineSpan, LineAt, Diff, StringField, U32 }
+  - impl Op { pub fn all_schemas() -> Vec<OpSchema> } — one match arm per variant; compile-time exhaustive
+- B2: crates/pi-natives/src/code_path/napi.rs adds #[napi] pub fn list_ops() -> Vec<OpSchemaDto>
+  - OpSchemaDto, FieldSchemaDto, TargetFamilyDto, FieldTypeDto — NAPI-mirror structs
+- B3: NAPI rebuild (linux-x64-modern + dev variant)
+- B4: packages/natives/index.d.ts regenerated; listOps() visible to TS
+
+Acceptance: bun -e "import { listOps } from '@oh-my-pi/pi-natives'; console.log(listOps().length)" prints 31. Each entry has kind/targetFamily/fields/description.

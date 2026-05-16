@@ -1,0 +1,29 @@
+#+TITLE: PLAN-308 Wave C — TS codegen + per-variant deletion (gen-op-schema.ts, codepath-types shrink, edit.ts cleanup)
+#+STATE: ITEM
+#+SESSION_ID: 14dd802985b2a5f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
+#+CUSTOM_ID: FEAT-747-plan-308-wave-c-ts-codegen-per-variant-d
+#+LAYER: ts
+
+* Initial Message
+
+Investigate how you'd fold in PLAN-304 into the next swarm waves deeply. I want super super clean code
+
+Parent: [[id:PLAN-308-op-wire-format-cutover-kernel-as-sole-so]]
+Blocks on: Wave B
+
+- C1: packages/coding-agent/scripts/gen-op-schema.ts new
+  - Reads listOps() at runtime
+  - For each variant emits Type.Object({kind: Type.Literal(...), target: <by family>, ...fields}) using FieldType → TypeBox primitive mapping table (12 cases)
+  - Emits editOpSchema = Type.Union([...]) and type EditOp = Static<typeof editOpSchema>
+  - Writes packages/coding-agent/src/tools/codepath-op-schema.generated.ts with AUTO-GENERATED header
+- C2: codepath-types.ts shrinks 661 → ~80 lines
+  - Keep primitives: contentSchema, filePathSchema, symbolPathSchema, lineAnchorSchema, lineSpanSchema, lineAtSchema, occurrenceSchema, directionSchema, spliceModeSchema, symScopeSchema
+  - Keep NAPI surface re-exports
+  - Delete all 31 per-variant Type.Object blocks
+  - Add export * from "./codepath-op-schema.generated"
+- C3: edit.ts — delete normalizeStructuralAction (~60 lines); add single legacyKindAdapter at handler entry; switch(op.kind) with const _: never = op exhaustiveness tail
+- C4: Delete gen-edit-prompt.ts (subsumed by Wave F)
+- C5: packages/coding-agent/package.json adds gen:op-schema script
+
+Acceptance: bun run gen:op-schema produces zero diff after first commit. codepath-types.ts < 100 lines. edit.ts never-tail compiles.

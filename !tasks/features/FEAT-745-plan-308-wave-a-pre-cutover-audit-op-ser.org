@@ -1,0 +1,21 @@
+#+TITLE: PLAN-308 Wave A — Pre-cutover audit (Op serde, from_legacy lossy-cases, reverse-map disposition, legacy-kind usage)
+#+STATE: ITEM
+#+SESSION_ID: 14dd802985b2a5f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
+#+CUSTOM_ID: FEAT-745-plan-308-wave-a-pre-cutover-audit-op-ser
+#+LAYER: audit
+
+* Initial Message
+
+Investigate how you'd fold in PLAN-304 into the next swarm waves deeply. I want super super clean code
+
+Parent: [[id:PLAN-308-op-wire-format-cutover-kernel-as-sole-so]]
+
+Four parallel quick_task audits. Outputs feed Wave C scope decisions.
+
+- A1: Op serde sanity + round-trip proptest. Op derives Serialize/Deserialize with #[serde(tag="kind", rename_all="camelCase")]; add proptest if missing. Output: yes/no + patch.
+- A2: Op::from_legacy lossy-case enumeration. Every legacy Action variant → Op mapping; list lossy fields. Output: lossy table or empty.
+- A3: edit.ts::normalizeStructuralAction reverse-map disposition. Identity entries vs field-rename entries; classify each. Output: disposition table (delete vs centralise-as-adapter).
+- A4: Legacy kind usage audit. Grep test corpus + packages/coding-agent/src/prompts for legacy kind strings; list what breaks if Action is deprecated. Output: breakage list + migration patch.
+
+Gate to Wave B: A1 clean round-trip OR patches in. A2 empty OR fixes from_legacy first.
