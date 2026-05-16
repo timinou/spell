@@ -31,7 +31,6 @@
 //! change, not per query.
 
 use std::{
-	collections::HashMap,
 	fs,
 	path::{Path, PathBuf},
 	sync::{Arc, OnceLock},
@@ -57,10 +56,14 @@ use serde::{Deserialize, Serialize};
 use crate::embedding_worker;
 
 /// Lightweight stderr logging. pi-natives doesn't pull in `tracing`; we match
-/// the convention used by `org_buffer.rs` (single-line `eprintln!`).
+/// the convention used by `org_buffer.rs` (single-line `eprintln!`). Gated
+/// behind `PI_RECALL_LOG` so agent-driven workflows (frequent fingerprint
+/// invalidations) don't spam stderr; set the var to any value to enable.
 macro_rules! engine_log {
 	($($arg:tt)*) => {
-		eprintln!("recall_engine: {}", format_args!($($arg)*));
+		if std::env::var_os("PI_RECALL_LOG").is_some() {
+			eprintln!("recall_engine: {}", format_args!($($arg)*));
+		}
 	};
 }
 
@@ -72,6 +75,15 @@ const DIM: usize = 768;
 /// agent-written episodes and concepts.
 const SCANNED_SUBDIRS: &[&str] = &["!tasks", ".spell/memory"];
 
+/// Cap on the `ENGINES` LRU. Each entry holds a Tantivy `IndexWriter` (50 MB
+/// arena), an HNSW (one 768-f32 vector per item), and the full parsed item
+/// vector — easily 60-200 MB resident. A long-lived Spell session that
+/// touches more repos than this will evict the least-recently-used handle
+/// on insert; the evicted handle drops its `IndexWriter` (releases Tantivy's
+/// flock) and HNSW. The next query for that repo pays the warm-restore cost
+/// (~50 ms with disk cache) again. Sized for typical multi-worktree work.
+const ENGINES_CAP: usize = 4;
+
 /// Bincode filename inside the per-repo cache dir.
 const ENGINE_CACHE_FILE: &str = "engine.bin";
 
@@ -82,10 +94,15 @@ const VEC_CACHE_FILE: &str = "vec.bin";
 // Static singleton
 // ---------------------------------------------------------------------------
 
-static ENGINES: OnceLock<Mutex<HashMap<PathBuf, Arc<RecallEngineHandle>>>> = OnceLock::new();
+/// LRU map of repo-keyed engine handles. Bound by `ENGINES_CAP` to keep
+/// memory bounded across long Spell sessions that touch many repos.
+/// `Vec<(PathBuf, Arc<Handle>)>` ordered LRU-first (last touched at the
+/// back). At our cap (4) the linear scans are O(N) on a tiny N and cheaper
+/// than the overhead of pulling in a real LRU crate.
+static ENGINES: OnceLock<Mutex<Vec<(PathBuf, Arc<RecallEngineHandle>)>>> = OnceLock::new();
 
-fn engines() -> &'static Mutex<HashMap<PathBuf, Arc<RecallEngineHandle>>> {
-	ENGINES.get_or_init(|| Mutex::new(HashMap::new()))
+fn engines() -> &'static Mutex<Vec<(PathBuf, Arc<RecallEngineHandle>)>> {
+	ENGINES.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 fn canonical_root(root: &Path) -> PathBuf {
@@ -107,12 +124,23 @@ pub fn get_or_create(
 		None => repo_cache_dir(&canon).map_err(|e| e.to_string())?,
 	};
 	let mut map = engines().lock();
-	if let Some(h) = map.get(&canon) {
-		return Ok(Arc::clone(h));
+	// LRU lookup: linear scan, move-to-back on hit.
+	if let Some(pos) = map.iter().position(|(k, _)| k == &canon) {
+		let entry = map.remove(pos);
+		let handle = Arc::clone(&entry.1);
+		map.push(entry);
+		return Ok(handle);
 	}
 	let base_owned = cache_base.map(Path::to_path_buf);
 	let h = Arc::new(RecallEngineHandle::new(canon.clone(), cache_dir, base_owned));
-	map.insert(canon, Arc::clone(&h));
+	map.push((canon, Arc::clone(&h)));
+	while map.len() > ENGINES_CAP {
+		// Drop the LRU entry. The `Arc` may still be held by an in-flight
+		// query on another thread; in that case its resources release when
+		// that query returns. New calls for the evicted repo will rebuild.
+		let evicted = map.remove(0);
+		engine_log!("LRU evicted {} (cap={ENGINES_CAP})", evicted.0.display());
+	}
 	Ok(h)
 }
 
@@ -127,7 +155,9 @@ pub fn query(repo_root: &Path, query_args: RecallQuery) -> Result<Vec<RecallHit>
 #[cfg(test)]
 pub fn forget(repo_root: &Path) {
 	if let Some(slot) = ENGINES.get() {
-		slot.lock().remove(&canonical_root(repo_root));
+		let canon = canonical_root(repo_root);
+		let mut map = slot.lock();
+		map.retain(|(k, _)| k != &canon);
 	}
 }
 
@@ -343,15 +373,29 @@ impl RecallEngineHandle {
 			fingerprint: warm.fingerprint.clone(),
 			items:       warm.items.clone(),
 		};
-		let store = CacheStore::new(self.cache_dir.clone());
-		store
-			.save("engine", &entry)
+		// Atomic-save pattern: write to `<name>.tmp`, then rename over the
+		// final path. `CacheStore::save` truncates in place, so a crash
+		// mid-write would leave a half-written file that `from_disk` rejects
+		// on magic-bytes mismatch — forcing a full 3-5 min rebuild on every
+		// subsequent process start until a clean save lands. The temp+rename
+		// dance guarantees that the on-disk artifact is either fully valid or
+		// absent. Implemented locally rather than in `CacheStore` so this
+		// change stays scoped to the recall hot path.
+		let tmp_store = CacheStore::new(self.cache_dir.clone());
+		tmp_store
+			.save("engine.tmp", &entry)
 			.map_err(|e| format!("save engine cache: {e}"))?;
-		let vec_path = self.cache_dir.join(VEC_CACHE_FILE);
+		let src = self.cache_dir.join("engine.tmp.bin");
+		let dst = self.cache_dir.join("engine.bin");
+		fs::rename(&src, &dst).map_err(|e| format!("rename engine.bin: {e}"))?;
+
+		let vec_final = self.cache_dir.join(VEC_CACHE_FILE);
+		let vec_tmp = self.cache_dir.join("vec.bin.tmp");
 		warm
 			.vec
-			.to_disk(&vec_path)
-			.map_err(|e| format!("write vec.bin: {e}"))?;
+			.to_disk(&vec_tmp)
+			.map_err(|e| format!("write vec.bin.tmp: {e}"))?;
+		fs::rename(&vec_tmp, &vec_final).map_err(|e| format!("rename vec.bin: {e}"))?;
 		Ok(())
 	}
 }
