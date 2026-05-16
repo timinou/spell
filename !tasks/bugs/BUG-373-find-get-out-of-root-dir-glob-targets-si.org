@@ -1,5 +1,5 @@
 #+TITLE: find/get: out-of-root dir/glob targets silently return empty instead of OUT_OF_PROJECT_ROOT
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14e36d0179617e04
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-16T11-14-31-013Z_14e36d0179617e04.jsonl]]
 #+CUSTOM_ID: BUG-373-find-get-out-of-root-dir-glob-targets-si
@@ -147,3 +147,5 @@ end.
 - [[id:BUG-371-find-get-path-tree-errors-with-bare-meta]]
 - [[id:BUG-372-find-get-and-tree-not-treated-as-current]]
 - [[id:FUP-086-find-get-walk-outside-project-root-by-d]] (next id reserved below)
+
+NOTE [2026-05-16]: Fixed in 9b659a9f4. Hoisted OUT_OF_PROJECT_ROOT pre-check in get.ts handles file/dir/glob/qualified symmetrically; gitignore:false override preserved.

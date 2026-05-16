@@ -1,0 +1,86 @@
+#+TITLE: spell server config-dir fallback silently lands on coding-agent's ~/.spell
+#+STATE: DONE
+#+SESSION_ID: 14dd7fd0da2866de
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-11T20-45-48-776Z_14dd7fd0da2866de.jsonl]]
+#+CUSTOM_ID: BUG-364-spell-server-config-dir-fallback-silentl
+#+LAYER: spell-server
+#+PRIORITY: #B
+
+* Initial Message
+
+∙ cd ~/code/ora/spell-remote-example/
+∙ spell server
+
+[Uncaught Exception] Error: Missing required config file: /home/user/.spell/server.kdl
+    at readRequiredConfigFile (/home/user/code/ora/spell/packages/spell-server/src/config/loader.ts:152:14)
+    at async loadConfig (/home/user/code/ora/spell/packages/spell-server/src/config/loader.ts:21:30)
+    at async run (/home/user/code/ora/spell/packages/coding-agent/src/commands/server.ts:29:24)
+    at async run (/home/user/code/ora/spell/packages/utils/src/cli.ts:421:17)
+    at processTicksAndRejections (native:7:39)
+Crash report written to /home/user/.spell/reports/crash-2026-05-11T20-45-39-678Z.json
+
+
+
+what's up? find the root cause please
+
+* Scope
+In scope: tighten `resolveDefaultConfigDir` in `packages/coding-agent/src/commands/server.ts` so the `~/.spell` fallback only commits when it actually contains a spell-server config, and produce a useful error otherwise. Update the unit test that mocks the fallback path so it still describes the intended behavior.
+
+Out of scope: removing the `~/.spell` global-config UX (intentional, has integration test coverage), changing `packages/spell-server/src/main.ts` cwd-only default, or refactoring `loadConfig`'s error messages in `packages/spell-server/src/config/loader.ts`.
+
+* Reproduction
+1. Run `spell server` from a directory that has no `./.spell/` (e.g., a fresh project).
+2. Have `~/.spell/` already populated by the coding-agent (`~/.spell/spell.kdl` etc.), but NO `~/.spell/server.kdl`.
+3. Observe: error `Missing required config file: /home/<user>/.spell/server.kdl`. The user has no obvious way to know the resolver silently chose `~/.spell/` — they typically expect the failure to reference `./.spell/`.
+
+* Root Cause
+`resolveDefaultConfigDir` (`packages/coding-agent/src/commands/server.ts:60`) commits to `~/.spell` whenever `./.spell/` is not a directory. The fallback dir is shared with `coding-agent` (which stores `~/.spell/spell.kdl`, an unrelated config), so the existence probe succeeds on a dir that will never satisfy spell-server's `readRequiredConfigFile(..., "server.kdl")` (`packages/spell-server/src/config/loader.ts:148`).
+
+The two config namespaces — coding-agent (`spell.kdl`) and spell-server (`server.kdl`, `channels.kdl`, `autonomy.kdl`) — share the directory but not the file set. The resolver doesn't notice that and produces a misleading error path.
+
+* Existing Patterns
+- Cwd-first resolution from `packages/spell-server/src/main.ts:7-17` (`resolveConfigDir`). The legacy entrypoint uses cwd-only (`cwd/.spell`) with no home fallback — which would have produced the more honest error `Missing required config file: ./.spell/server.kdl`.
+- Config-file existence probing from `loader.ts:148` (`readRequiredConfigFile`) — uses `Bun.file(...).text()` and `isEnoent` from `@oh-my-pi/pi-utils`.
+- Multi-candidate resolution pattern from `packages/coding-agent/src/commands/server.ts:60-72` (the function in scope).
+
+* Tests
+- T1 — `resolveDefaultConfigDir` returns `cwd/.spell` when that dir exists, regardless of `~/.spell` state.
+- T2 — when `cwd/.spell` is missing AND `~/.spell/server.kdl` exists, returns `~/.spell` (preserves the existing global-config integration test).
+- T3 — when `cwd/.spell` is missing AND `~/.spell/server.kdl` does not exist, throws an error whose message names both candidate paths and recommends `--config-dir`.
+- T4 — non-ENOENT errors from probing `cwd/.spell` still propagate unchanged.
+
+* Implementation
+** ITEM Tighten fallback to require server.kdl in ~/.spell
+:PROPERTIES:
+:CUSTOM_ID: BUG-364-spell-server-config-dir-fallback-silentl::tighten-fallback
+:END:
+- Files: `packages/coding-agent/src/commands/server.ts`
+- Change `resolveDefaultConfigDir` so the `~/.spell` branch only returns when `~/.spell/server.kdl` is statable. Otherwise throw a `MissingConfigError` whose message lists both candidate paths and suggests `--config-dir`.
+- Keep the cwd-only short-circuit identical: if `cwd/.spell` exists as a directory, return it without checking files inside (let loader.ts produce file-specific errors).
+
+** ITEM Update unit tests in test/server-command.test.ts
+:PROPERTIES:
+:CUSTOM_ID: BUG-364-spell-server-config-dir-fallback-silentl::update-tests
+:DEPENDS: BUG-364-spell-server-config-dir-fallback-silentl::tighten-fallback
+:END:
+- Files: `packages/coding-agent/test/server-command.test.ts`
+- Update the existing `"falls back to ~/.spell on ENOENT from ./.spell"` test to additionally mock the `~/.spell/server.kdl` stat success (matches T2).
+- Add T3: mock both stats to ENOENT; expect the thrown error to contain both candidate paths and the `--config-dir` hint.
+- T4 already covered by the existing "rethrows non-ENOENT" test; verify it still passes.
+- Re-run the existing integration test "falls back to ~/.spell when the workspace has no .spell directory" — it populates `~/.spell` with all three KDL files so it satisfies the new probe.
+
+* Edge Cases
+- Permissions error (`EACCES`) on the home probe: bubble up rather than swallowing. Same pattern as the existing cwd probe.
+- Symlinks: `fs.stat` follows symlinks, which matches the cwd probe's behavior. No change.
+- `--config-dir` flag: unchanged; resolver is only consulted when the flag is absent.
+- `~/.spell/server.kdl` exists but is unreadable: let the loader's `readRequiredConfigFile` produce the file-specific error. Resolver only proves the file is statable.
+
+* Acceptance Criteria
+- Running `spell server` from a project with no `.spell/` and a `~/.spell/` lacking `server.kdl` fails with an error that names both candidate paths and suggests `--config-dir`.
+- The existing global-config flow (writing all three KDL files into `~/.spell/`) keeps working without changes.
+- Unit and integration tests in `packages/coding-agent/test/server-command.test.ts` all pass.
+- `bun run --cwd packages/coding-agent check:ts` and `bun test packages/coding-agent/test/server-command.test.ts` both pass.
+
+NOTE [2026-05-11]: Surfaced while bootstrapping `~/code/ora/spell-remote-example/` whose config lives in `./config/`, not `./.spell/`. The misleading error pointed at `~/.spell/server.kdl` rather than helping the user discover `-c ./config`.
+
+NOTE [2026-05-11] resolution: Fixed in `packages/coding-agent/src/commands/server.ts` (resolveDefaultConfigDir now probes ~/.spell/server.kdl before committing; throws candidate-listing error otherwise) and `packages/coding-agent/test/server-command.test.ts` (3 resolveDefaultConfigDir tests, all passing; tsgo clean). Pre-existing test flakes in 'keeps stderr quiet by default' and 'mirrors debug logs to stderr when --debug is set' confirmed on base (pre-stash) and are unrelated to this change.

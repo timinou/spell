@@ -1,0 +1,71 @@
+#+TITLE: AsyncJobManager has no per-job liveness watchdog; hung jobs block parent forever
+#+STATE: DONE
+#+SESSION_ID: 14e209047bb5e05f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-15T09-19-10-831Z_14e209047bb5e05f.jsonl]]
+#+CUSTOM_ID: BUG-370-asyncjobmanager-has-no-per-job-liveness
+#+EFFORT: 3h
+#+LAYER: packages/coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+bro i keep having issues in subagents:
+
+├─ ⡿ W3T2_RewriteSubstrateTests: Rewrite substrate + app tests that call find_or_start to use ConversationRuntime verbs or a documented internal helper · 78 tools · 2.3M tokens
+    │  └ Retrying (1/3) in 2.0s — Attempt 1/3 failed; retrying. Assistant resp…
+
+
+File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-hotelcomm/2026-05-13T11-51-30-487Z_14df98b3edff3385.jsonl
+
+
+Subagents are now stallinhg way too often. PLease find the root cause and exlpain it to me
+
+* Symptom
+When a background job (=type: "task"= subagent or =type: "bash"=) hangs in its =run()= function — e.g., upstream session bug, deadlocked stream, lost connection that never fires its abort — the wrapping =job.promise= never settles. The parent's =await= tool blocks on =Promise.race([job.promise, signal])= forever. The orchestrator has no signal that the job is dead. No timeout exists at the job layer.
+
+* Root cause
+=AsyncJobManager.register= wraps =run= in an async IIFE that only reaches terminal status when =run= resolves or throws. It has no upper bound on =run= execution time and no liveness check based on progress updates. There is no =maxRuntimeMs=, no progress-idle deadline, and no watchdog timer.
+
+* Required behavior
+Add an opt-out, configurable watchdog. Default =25 min= per job.
+
+Specifically:
+1. Add =jobTimeoutMs= option to =AsyncJobManagerOptions= and a per-=register= override =options.timeoutMs=. Default value: =25 * 60 * 1000=.
+2. When a job is registered, schedule a watchdog timer. On fire:
+   - Abort the job's =abortController= (so cooperative cleanup runs)
+   - Mark =job.status = "failed"=, set =job.errorText = "Job exceeded ${timeoutMs/60000}m timeout watchdog"=, =job.endTime = Date.now()=, =enqueueDelivery=, =scheduleEviction=
+   - Best-effort: if =run= eventually settles after the timeout, the late result must NOT change status (already terminal); just log a debug.
+3. Reset the watchdog deadline whenever =reportProgress= is called. Use progress-since-last-update for liveness, not wall-clock-since-start. This way long-but-active jobs are fine; hung jobs are killed.
+4. Surface watchdog timeouts as a distinct outcome shape: =errorText= must contain a clear =watchdog timeout= signal so the parent can detect/attribute the failure.
+5. Cancellation order: abort first, sleep brief grace (e.g. 2s), then transition to terminal. If =run= settles within grace, prefer its result.
+6. Setting =timeoutMs <= 0= disables the watchdog (escape hatch).
+
+* Settings
+- Add =async.jobTimeoutMs= to settings schema with default =1_500_000= (25 min).
+- Wire through =AsyncJobManager= construction in the session manager.
+- KDL config mapping: =async timeout-ms 1500000=.
+
+* Verification
+- Test: register a job whose =run= awaits a never-resolving promise; watchdog fires after a small test timeout (use injectable clock), =job.status === "failed"=, =job.errorText= contains "watchdog timeout".
+- Test: register a job that calls =reportProgress= every 100ms; with a 500ms watchdog it must complete normally (deadline keeps resetting).
+- Test: =timeoutMs: 0= disables the watchdog.
+- Test: graceful — job aborts in response to =abortController.signal= within the grace window; final =status === "cancelled"= or ="failed"= per actual settle path.
+- Test: parent's =await= tool returns immediately when watchdog fires (the awaited =job.promise= settles).
+
+* Scope
+- Files:
+  - =packages/coding-agent/src/async/job-manager.ts=
+  - =packages/coding-agent/src/config/settings-schema.ts=
+  - =packages/coding-agent/src/config/kdl-settings-map.ts=
+  - =packages/coding-agent/src/session/session-manager.ts= (or wherever =AsyncJobManager= is constructed)
+- Tests: =packages/coding-agent/test/async/job-manager-watchdog.test.ts= (new)
+
+* Non-goals
+- Do not change retry behavior at the session layer (handled by sibling BUGs).
+- Do not change =maxRunningJobs= or delivery retry semantics.
+- Do not auto-restart watchdog-killed jobs.
+
+* Rationale
+This is defense-in-depth. Even after BUG-368/369 fix the known orphan paths, future bugs at any layer of the subagent stack must not silently freeze the orchestrator. A bounded job lifetime converts "unknown indefinite hang" into "actionable timeout error".
+
+NOTE [2026-05-15]: Implemented per-job liveness watchdog in AsyncJobManager. Default 25min via async.jobTimeoutMs (1_500_000), overridable per-register via options.timeoutMs. Watchdog resets on reportProgress, aborts the job's AbortController, then a configurable grace window (default 2s) before marking failed with 'Job exceeded Ns watchdog timeout'. timeoutMs<=0 disables. Wired through settings-schema, kdl-settings-map, and sdk.ts. 5 new tests in async-job-manager-watchdog.test.ts; existing async-job-manager.test.ts (12 tests) still pass.

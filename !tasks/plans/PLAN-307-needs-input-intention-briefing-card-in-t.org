@@ -1,0 +1,96 @@
+#+TITLE: Needs-input intention briefing card in TUI chat
+#+STATE: DONE
+#+SESSION_ID: 14e278cdf6c434b0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-15T17-27-35-132Z_14e278cdf6c434b0.jsonl]]
+#+CUSTOM_ID: PLAN-307-needs-input-intention-briefing-card-in-t
+#+EFFORT: 1d
+#+LAYER: packages/coding-agent
+
+* Initial Message
+
+can you tell me how you would have a small summary of the intention of a session when it goes to needs_input, shown in the TUI and stuff? look at the codebase and recent changes to choose the best way to represent this (for example, to make it easy to add it to team chat later)
+
+* Initial Message
+
+generate a small summary of the intention of a session when it transitions to needs_input, shown in the TUI chat window as a modal-like inline card. design must keep team-chat fan-out as a trivial follow-up.
+
+* Intention & Purpose
+
+When a coding-agent session transitions from a working state (running / streaming) into a "needs the user" state (needs_input / pending_approval), generate a compact "briefing" of what was done, what is stuck, and what is being asked — and render it as a prominent inline card in the TUI chat scroll just before the input editor. The briefing is a first-class session message so it persists across resume and so fan-out to spell-team-chat and Telegram becomes a render-side addition rather than a new pipeline.
+
+* Context & Narrative
+
+Today the user sees the agent's last assistant text, then an editor cursor. The "what am I being asked to decide?" cue is buried in chat scroll. Existing affordances:
+- ~SessionManager.setSessionName~ + ~generateSessionTitle~ (utils/title-generator.ts) — proves the smol-model 1-liner pattern.
+- ~deriveAgentStatus~ (packages/desktop-common) — the state precedence used to compute ~AgentStatus~.
+- ~CompactionSummaryMessageComponent~, ~BranchSummaryMessageComponent~ — established inline "boxed callout" pattern in chat scroll; both backed by a first-class session message kind.
+- ~packages/coding-agent/src/session/messages.ts~ — declaration-merging hub for custom session message kinds.
+- ~packages/coding-agent/src/modes/utils/ui-helpers.ts~ — message → component dispatch table.
+
+The fan-out target (later, separate work):
+- ~EventLogEntryKind~ in ~packages/coding-agent/src/session-bridge/types.ts~ — already plumbs message-shaped events to spell-server registry → spell-team-chat + Telegram.
+
+* Scope
+** In-scope (this PLAN)
+- A new ~IntentionSummaryMessage~ session message kind (role: "intentionSummary") with fields ~did~, ~stuck?~, ~ask~, ~trigger~, ~eventId?~, ~timestamp~.
+- A new ~intention-summarizer.ts~ utility paralleling ~title-generator.ts~: smol-model call returning the three-line DID/STUCK/ASK shape, with current-model fallback when smol unavailable.
+- A new ~IntentionSummaryMessageComponent~ rendered as a bordered card with collapsed (3 lines) and expanded (~ctrl+o~) states, accent-coloured to read as "awaiting you", placed at chat tail.
+- A new ~IntentionController~ subscribing to status-change in interactive-mode; rising-edge detector into BRIEFING_STATES (needs_input, pending_approval); single in-flight generation with AbortController; placeholder "summarizing…" card swap-on-resolve; debounce/cancel on falling edge.
+- Resume: the persisted IntentionSummaryMessage rehydrates the card; no regeneration on startup.
+- Tests at three layers: pure transition logic (controller unit), summarizer prompt shape (mock model), component render snapshot.
+
+** Out-of-scope (filed as FUP)
+- spell-team-chat bubble + protocol propagation.
+- Telegram session-notifications caption prepend.
+- ~session-bridge/types.ts~ EventLogEntryKind extension.
+- Theme token additions for a dedicated intentionMode accent (uses existing planMode/warning tokens for now).
+- Multi-question / multi-event briefing aggregation (the current design emits one card per transition, superseding the previous via ~eventId~).
+
+* Tests
+- Workflow 1: session transitions running → needs_input → ~IntentionSummaryMessage~ appended to sessionManager, rendered as boxed card with DID/STUCK/ASK lines.
+- Workflow 2: running → needs_input → user submits (running again) before generation resolves → AbortController fires, placeholder dropped, no card persisted.
+- Workflow 3: needs_input → user_paused → needs_input → no second briefing; only the first persists.
+- Workflow 4: pending_approval with planSummary populated → briefing card includes the plan title in ASK and expanded view shows full planSummary.
+- Workflow 5: resume from disk into needs_input with a persisted IntentionSummaryMessage → card renders without re-generation; latest card marked "live" (◆).
+- Workflow 6: smol model unavailable + current-model fallback succeeds → card renders with generated text.
+- Workflow 7: both smol and fallback fail → minimal card with BlockingEvent.title as ASK, empty DID/STUCK.
+
+* Existing Patterns
+- ~packages/coding-agent/src/utils/title-generator.ts~ : smol-model invocation, model resolution via ~resolveModelRoleValue("smol")~, ~completeSimple~ with maxTokens.
+- ~packages/coding-agent/src/prompts/system/title-system.md~ : tight system-prompt template format.
+- ~packages/coding-agent/src/session/messages.ts~ : ~CompactionSummaryMessage~ as the structural template for new message kinds (interface + factory + declaration-merge).
+- ~packages/coding-agent/src/modes/components/compaction-summary-message.ts~ : ~Box~-based collapsed/expanded inline card.
+- ~packages/coding-agent/src/modes/utils/ui-helpers.ts~ : ~switch(message.role)~ dispatch site.
+- ~packages/coding-agent/src/modes/controllers/input-controller.ts~ : controller class shape (constructor takes ctx, owns its own subscriptions).
+- ~packages/coding-agent/src/modes/interactive-mode.ts~ : controller construction site + status derivation hook.
+
+* Risks
+- *Generation latency dominates UX.* Smol model can be 1-3s. Mitigation: placeholder card emitted synchronously on transition; swap content when generation resolves; AbortController on retransition.
+- *Re-render thrash on rapid status flicker.* Mitigation: rising-edge detector with ~#lastBriefedStatus~ guard; user_paused does not count as fresh entry.
+- *Persisted card drift after resume.* Mitigation: card carries ~eventId~; on resume, controller reads sessionManager tail and only re-renders the latest card as "live" if the current ~currentBlockingEvent~ matches.
+- *Smol model absent in tests.* Mitigation: summarizer accepts an injected ~complete~ fn; default uses ~completeSimple~ but tests pass a stub.
+
+* Implementation
+Sub-outline: see Execution Manifest below.
+
+** Children (work graph)
+- [[id:FEAT-741-intentionsummarymessage-session-message]] — message kind + factory (W0)
+- [[id:FEAT-742-intention-summarizer-smol-model-utility]] — smol-model summarizer + prompt (W1, blocks on FEAT-741)
+- [[id:FEAT-743-intentionsummarymessagecomponent-chat-pa]] — TUI card + dispatch (W1, blocks on FEAT-741)
+- [[id:FEAT-744-intentioncontroller-transition-detector]] — controller + wiring (W2, blocks on FEAT-741/742/743)
+- [[id:FUP-085-fan-out-intentionsummary-to-spell-team-c]] — remote fan-out (deferred, blocks on PLAN-307)
+
+** Execution Manifest
+W0 — foundation:
+  - FEAT-741 (message type + factory + declaration merge)
+W1 — parallel after W0:
+  - FEAT-742 (summarizer + prompt + unit tests)
+  - FEAT-743 (component + dispatch + render tests)
+W2 — integration:
+  - FEAT-744 (controller + interactive-mode wiring + transition tests)
+W3 — verification (orchestrator):
+  - workspace ~bun test packages/coding-agent~
+  - ~tsgo -p packages/coding-agent~
+  - ~biome check~ on touched files
+
+NOTE [2026-05-15]: All four FEATs landed (FEAT-741/742/743/744). 36 PLAN-307 tests pass across messages.test (5), intention-summarizer (11), intention-summary-message (7), intention-controller (13). Biome clean on all touched files. 7 pre-existing test failures in AgentDashboard+SubagentViewer remain in the package (unrelated, predate this work — confirmed via baseline stash). Resume-rehydration, AbortController cancellation, user_paused suppression, and supersede-prior all unit-covered. Wiring committed in HEAD; W0–W2 dispatched via swarm; W2 agent hung in workspace-wide tsgo verification loop after autocommit landed mid-flight — root cause logged, fix is to scope tsgo to touched files in future gate commands. Fan-out to spell-team-chat and Telegram intentionally deferred to FUP-085.

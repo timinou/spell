@@ -1,0 +1,122 @@
+#+TITLE: FS-mediator Phase 2: write passthrough — rename, hardlink, mmap, the corners
+#+STATE: ITEM
+#+SESSION_ID: 14e152ccec5129f7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-14T20-03-03-729Z_14e152ccec5129f7.jsonl]]
+#+BLOCKED_BY: Phase 1 green
+#+CUSTOM_ID: FEAT-739-fs-mediator-phase-2-write-passthrough-re
+#+PARENT_PLAN: PLAN-305-filesystem-mediator-bash-launched-writes
+#+PHASE: 2
+
+* Initial Message
+
+look at brush and tell me how it manages file writes
+
+* Adds
+- src/write.rs (write/pwrite/writev/append/truncate)
+- src/rename.rs (renameat2 with all flags)
+- src/mmap.rs (msync hooks)
+- src/locks.rs (flock + fcntl + OFD)
+- tests/layer2.rs
+
+* Test suite — Layer 2 (full filesystem write semantics)
+
+CREATE
+T2.1   O_CREAT new file, mode honoured
+T2.2   O_CREAT|O_EXCL existing -> EEXIST
+T2.3   O_CREAT|O_EXCL race: two threads, exactly one wins
+T2.4   O_CREAT parent missing -> ENOENT
+T2.5   umask masking
+T2.6   creat(2) legacy
+
+WRITE
+T2.7   small payload bytes
+T2.8   pwrite at offset
+T2.9   writev N iovecs
+T2.10  cross page-boundary
+T2.11  1GB stream, daemon RSS bounded (< 32 MB)
+T2.12  ENOSPC short write semantics
+T2.13  write to RD-only fd -> EBADF
+T2.14  write to unlinked-but-open fd: bytes preserved per POSIX
+
+APPEND
+T2.15  O_APPEND atomic seek-to-EOF
+T2.16  O_APPEND concurrent writers: no torn writes
+
+TRUNCATE
+T2.17  O_TRUNC on existing: size=0
+T2.18  ftruncate shorter
+T2.19  ftruncate longer: hole reads as zero
+T2.20  truncate(2) by path
+
+RENAME (most-bug-prone area)
+T2.21  rename atomic when target absent
+T2.22  rename atomic replace
+T2.23  RENAME_NOREPLACE -> EEXIST if present
+T2.24  RENAME_EXCHANGE: both inodes preserved, paths swap
+T2.25  RENAME_WHITEOUT -> EINVAL (don't lie)
+T2.26  rename across dirs in same mount
+T2.27  rename onto open fd: fd remains valid on old inode
+T2.28  EISDIR/ENOTDIR target-type mismatch per POSIX
+T2.29  cross-mount -> EXDEV (no silent copy)
+T2.30  rename of broken symlink
+T2.31  parallel rename stress: 1k iters, target always valid
+
+HARDLINKS
+T2.32  link: same ino, nlink=2
+T2.33  unlink one: other survives
+T2.34  edit via one path visible via other
+T2.35  cross-mount link -> EXDEV
+
+SYMLINKS
+T2.36  symlink creation writes target string
+T2.37  symlink to /etc/passwd: created but follow respects mount root
+T2.38  symlinkat with dirfd
+
+UNLINK / RMDIR
+T2.39  unlink while open: delete-on-close
+T2.40  unlinkat AT_REMOVEDIR
+T2.41  rmdir empty
+T2.42  rmdir non-empty -> ENOTEMPTY
+T2.43  rmdir with hidden file -> ENOTEMPTY
+
+DIRECTORIES
+T2.44  mkdirat mode + parent
+T2.45  mkdir over file -> EEXIST
+T2.46  readdir after create
+T2.47  readdir during concurrent create
+
+MODE/OWN
+T2.48  fchmodat
+T2.49  7777 setuid/setgid/sticky bits
+T2.50  chown EPERM if not owner
+T2.51  utimensat mtime/atime/ctime semantics
+
+XATTR
+T2.52  setxattr/getxattr round-trip
+T2.53  removexattr
+T2.54  listxattr enumerate
+
+MMAP WRITES
+T2.55  MAP_SHARED PROT_WRITE visible via fresh open
+T2.56  msync MS_SYNC durable
+T2.57  munmap flushes
+
+FSYNC
+T2.58  fsync calls lower fdatasync, returns after
+T2.59  fdatasync skips metadata-only
+T2.60  syncfs across mount
+
+LOCKS
+T2.61  flock LOCK_EX
+T2.62  fcntl F_SETLK per-byte
+T2.63  OFD F_OFD_SETLK
+
+COPY
+T2.64  copy_file_range same-mount
+T2.65  copy_file_range cross-mount fallback
+
+* Property test
+proptest! { random op sequence 200 ops × 1000 cases match oracle }
+
+* Gate
+cargo test -p pi-edit-broker-fs --test layer2 + property suite

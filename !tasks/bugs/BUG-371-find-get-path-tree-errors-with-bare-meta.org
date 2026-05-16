@@ -1,5 +1,5 @@
 #+TITLE: find/get: `<path>/#tree` errors with bare `metadata error` on real repos
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14e36d0179617e04
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-16T11-14-31-013Z_14e36d0179617e04.jsonl]]
 #+CUSTOM_ID: BUG-371-find-get-path-tree-errors-with-bare-meta
@@ -152,3 +152,5 @@ The cais reproduction stops at
 * Non-goals
 - Reworking the FS dialect grammar (out of scope; covered by FUP-086 if needed).
 - Symlink semantics beyond reporting (no follow/no-follow toggle here).
+
+NOTE [2026-05-16]: Fixed in 9b659a9f4. 5 new bug371_/bug372_ reproducer tests pass; all 407 pi-code-path tests green.

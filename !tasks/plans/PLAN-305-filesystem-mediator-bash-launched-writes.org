@@ -1,0 +1,372 @@
+#+TITLE: Filesystem mediator: bash-launched writes flow through pi-edit-broker
+#+STATE: ITEM
+#+SESSION_ID: 14e152ccec5129f7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-14T20-03-03-729Z_14e152ccec5129f7.jsonl]]
+#+CUSTOM_ID: PLAN-305-filesystem-mediator-bash-launched-writes
+#+ESCAPE_HATCH: PI_EDIT_BROKER_FS=0 env + .pi-no-mediate sentinel + admin unmount
+#+LAYER: systems
+#+PROTOCOL: 178-B triple-sure
+#+RISK: high
+
+* Initial Message
+
+look at brush and tell me how it manages file writes
+
+* Problem
+Bash-spawned writes (sed -i, python script.py, go build, npm install)
+bypass the existing intent/commit coordination layer because they touch
+files directly. Multi-spell coordination only works when all writers go
+through the broker socket. Goal: make this universal.
+
+* Solution shape
+Per-repo FUSE mount, owned by a new pi-edit-broker-fs daemon. Spawned
+and supervised by pi-edit-broker using the same fork+setsid+pidfile
+pattern that already exists. Mount-over-self so users see ONE folder.
+All filesystem syscalls in the repo route through the daemon, which
+translates them into the existing intent/commit protocol against the
+coordination broker.
+
+* Non-goals
+- Replace existing intent/commit protocol -- extend it
+- Block writes by default -- mediate, observe, journal; rejection is opt-in
+- Sandbox semantics -- this is a coordination layer, not a security boundary
+- Windows support in v1 -- Linux + macOS only
+
+* Phases (each gated on full green test layer)
+0. Scratch crate proves FUSE mount-over-self end-to-end (isolated)
+1. Read-only passthrough + differential-with-ext4 test infra
+2. Write passthrough + rename/hardlink/mmap correctness
+3. Journal w/ crash injection + replay
+4. Broker protocol integration (intents/commits for raw writes)
+5. pi-edit-broker-fs daemon binary + supervision in broker
+6. brush integration: ensure-mount-before-spawn one-liner
+7. Memory/CPU perf hardening
+8. Multi-spell stress + property tests
+9. Real-tool conformance (python, sed, go, vim, git, make, cargo, npm)
+
+* Protocol 178-B
+Live broker code in crates/pi-edit-broker/ MUST NOT be touched until
+Phase 4 passes its full test layer. All Phase 0-3 work happens in a NEW
+crate crates/pi-edit-broker-fs/ that depends on pi-edit-broker only
+for protocol types. Integration with pi-edit-broker is a separate
+reviewed PR after Phase 4 green.
+
+* Escape hatches (ordered by user-facing simplicity)
+1. PI_EDIT_BROKER_FS=0 env: disables mount entirely
+2. .pi-no-mediate sentinel file in repo root: this repo opts out
+3. pi-edit-broker --unmount <path> admin command
+4. FUSE handler timeout: stuck > 5s -> kernel returns EIO, broker logs
+5. Panic in write handler -> READONLY remount, alert, mount stays usable
+6. fusermount3 -u -z <path> lazy unmount as last resort
+7. Broker grace-period exit naturally tears down mounts
+
+* Verification gates per phase
+- Phase X cannot start until Phase X-1 gateCmd passes
+- Each phase has a dedicated test crate or test module
+- CI matrix: ext4 + xfs + btrfs + macFUSE
+- Property tests run nightly with 10k cases shrunk
+
+* Architecture (final, after broker code review)
+The existing pi-edit-broker already owns:
+- multi-spell coordination via Unix socket
+- intent/commit/multi-txn protocol
+- daemonization (fork+setsid+pidfile+probe)
+- grace-period exit
+- journal replay for crash recovery
+- session reaper
+
+The new pi-edit-broker-fs daemon extends this same pattern:
+- per-repo singleton (pidfile at $XDG_RUNTIME_DIR/spell/fs-<repo-hash>.pid)
+- spawned & supervised by pi-edit-broker via the existing spawn helper
+- mounts FUSE over the real repo path (mount-over-self with O_PATH lower_fd)
+- translates each kernel call to existing Intent/Commit RPCs
+- holds a synthetic SessionId per writing process (synthesised from /proc pid)
+
+Multi-spell-instance protection lives at three layers:
+  L1 kernel: single FUSE mount per repo, kernel serializes per-inode
+  L2 fs-daemon: per-inode write queue (parking_lot::Mutex)
+  L3 broker: existing intent/commit protocol arbitrates across sessions
+
+The broker is unchanged in Phases 0-4. Phase 5 is the only PR that
+modifies pi-edit-broker's own code (adds the supervision hook).
+
+* Phase 2 -- write passthrough (gate: Layer 2 matrix + property tests)
+
+Crate adds:
+- src/write.rs   write/pwrite/writev/append/truncate
+- src/rename.rs  renameat2 all flags
+- src/mmap.rs    msync hooks
+- src/locks.rs   flock + fcntl + OFD
+- tests/layer2.rs (T2.1 -- T2.65)
+
+Test groups: CREATE/WRITE/APPEND/TRUNCATE/RENAME/HARDLINK/SYMLINK/
+UNLINK/DIRS/MODE/XATTR/MMAP/FSYNC/LOCKS/COPY. Most-bug-prone area is
+renameat2 with RENAME_EXCHANGE and rename-onto-open-fd.
+
+Property test: 200-op random sequences x 1000 cases match oracle.
+
+* Phase 3 -- journal + crash injection (gate: replay recovers consistent state)
+
+Crate adds:
+- src/journal.rs   append-only log, fsync batched
+- src/inject.rs    deterministic crash points (cfg(test) only)
+- tests/layer3.rs (T3.1 -- T3.20)
+
+Journal format reuses pi-edit-broker's TxnJournalEntry shape; raw writes
+become single-file transactions with auto-generated TxnId. This is the
+key compatibility move -- the broker's existing replay logic already
+handles rollback of incomplete txns.
+
+Crash matrix:
+  T3.1   crash after journal-start, before lower-write -> replay rolls back
+  T3.2   crash after lower-write, before journal-commit -> replay completes
+  T3.3   crash mid-rename (linkat done, unlinkat pending) -> consistent
+  T3.4   crash mid-mmap msync -> next-mount sees pre-flush state
+  T3.5   N-step write, crash at each step k in 0..N -> all consistent
+  T3.6   power-loss simulation via O_DIRECT writes + drop
+  T3.7   journal corruption (truncated tail) -> ignore tail, warn
+  T3.8   journal sequence reset detection
+  T3.9   double-mount detection via pidfile lock
+  T3.10  pidfile race: two processes claim same repo -> only one wins
+  T3.11  unmount during pending journal flush -> blocks until flushed
+  T3.12  graceful broker shutdown: journal closed cleanly
+  T3.13  SIGKILL of fs-daemon: next mount detects + replays
+  T3.14  reboot simulation (mount table cleared)
+  T3.15  journal size growth bounded (rotation at 16 MB)
+  T3.16  rotated journals chained via seq
+  T3.17  fsck-style consistency check (lower vs journal vs reality)
+  T3.18  recover from broker socket death: fs-daemon reconnects with backoff
+  T3.19  recover from broker absence: fs-daemon spawns broker
+  T3.20  pre-image dedup verified via content-addressed store
+
+* Phase 4 -- broker protocol integration (gate: end-to-end intent/commit cycle)
+
+Touches pi-edit-broker for the FIRST time, narrowly:
+- protocol.rs: add ClientMessage::FsHello { repo_root, daemon_pid }
+- protocol.rs: add ServerMessage::FsAck { mount_token }
+- conn.rs:    handle the new variants (no state changes; pure dispatch)
+
+The fs-daemon does NOT speak code-path intents (it doesn't parse code).
+Instead it uses path::* wildcard intent on a synthetic code_path
+"raw:<sha256-of-pid-cmdline>" so the broker's existing conflict detection
+fires for cross-session same-file writes.
+
+Test groups:
+  T4.1 -- T4.8   intent/commit happy path from fs-daemon
+  T4.9 -- T4.14  conflicts surface via existing CommitConflict
+  T4.15 -- T4.18 broker dies mid-commit: fs-daemon retries with backoff
+  T4.19 -- T4.22 multiple fs-daemons (multi-repo) share one broker
+  T4.23 -- T4.26 broker journal sees fs-daemon's MultiCommit records
+  T4.27 -- T4.30 reaper kills dead fs-daemon sessions on broker side
+  T4.31 -- T4.34 PI_EDIT_BROKER_FS=0 disables intent flow but mount still works
+                 (escape hatch verified)
+
+* Phase 5 -- pi-edit-broker-fs daemon binary + broker supervision
+
+Adds:
+- crates/pi-edit-broker-fs/src/bin/main.rs   (CLI mirror of broker main.rs)
+- crates/pi-edit-broker/src/fs_supervisor.rs (NEW; broker side)
+- crates/pi-edit-broker/src/spawn.rs         (extend: spawn_fs_if_absent)
+- crates/pi-edit-broker/src/protocol.rs      (FsHello/FsAck/MountStatus)
+
+Test groups:
+  T5.1   broker spawns fs-daemon on first repo mount request
+  T5.2   pidfile lock prevents double-spawn race
+  T5.3   broker observes fs-daemon death + restarts
+  T5.4   fs-daemon survives broker death (mount stays usable, read-only mode)
+  T5.5   graceful shutdown unmounts all repos
+  T5.6   SIGTERM to broker: cascade unmount with 5s deadline
+  T5.7   unmount admin command: pi-edit-broker --unmount <path>
+  T5.8   --no-mediate sentinel file in repo root: broker skips mount
+  T5.9   stale pidfile detection (pid no longer alive)
+  T5.10  XDG_RUNTIME_DIR fallback to /tmp when unset
+
+* Phase 6 -- brush integration (one-liner; the smallest layer)
+
+Touches:
+- crates/brush-core-vendored/src/process.rs (single pre-spawn hook)
+
+The hook:
+  if let Some(repo) = detect_managed_repo(&cwd) {
+      pi_edit_broker::spawn::ensure_repo_mounted(&repo)?;
+  }
+
+That's it. No env injection, no shim, no seccomp. The mount is already
+at the real path; kernel does routing.
+
+Test groups:
+  T6.1   brush -c 'echo x > foo.txt' inside managed repo -> commit appears
+  T6.2   brush -c 'python script.py' writing files -> all routed
+  T6.3   brush -c 'go build' -> Go binary writes mediated (the Go gap closed)
+  T6.4   brush -c 'sed -i s/a/b/ x' -> atomic rename mediated
+  T6.5   brush outside managed repo -> no hook fires, native behaviour
+  T6.6   PI_EDIT_BROKER_FS=0: brush bypasses mount entirely
+  T6.7   brush detects .pi-no-mediate sentinel and skips
+  T6.8   brush startup latency < 50 ms even when mount must spawn
+
+* Phase 7 -- memory + CPU hardening (gate: perf benchmarks)
+
+Targets:
+- Read passthrough: zero-copy via splice(2) when both fds are pipe-able;
+  fall back to read+write
+- Write hot path: bytes -> lower fd direct; journal entry queued on
+  bounded channel; batched fsync every 16ms or 64 entries
+- Pre-image snapshots: content-addressed (blake3) store in
+  $XDG_CACHE_HOME/spell/snapshots/; dedup across files; LRU-evicted
+- Snapshot skip threshold: 16 MB default (metadata-only journal entry)
+- Inode table: dashmap<u64, InodeState>, lock-free reads
+- io_uring opt-in for lower fd batch I/O (cfg gated)
+- Daemon RSS budget: 32 MB steady-state, hard cap 128 MB
+- Per-call latency budget: p50 < 50 us, p99 < 500 us for hot ops
+
+Benchmarks (criterion):
+  B7.1   sequential read 1 GB: throughput within 5% of ext4 baseline
+  B7.2   sequential write 1 GB: within 10% of ext4 baseline
+  B7.3   1000 small files create+write+close: throughput
+  B7.4   tar extract of linux kernel source tree: total time
+  B7.5   make -j8 on a real C codebase: total time
+  B7.6   git clone --depth=1 inside mount: total time
+  B7.7   RSS over a 24h soak with random workload: bounded
+  B7.8   p99 latency of FUSE openat under load
+
+Memory tests:
+  M7.1   leak check (valgrind-style: track InodeState allocations across
+         100k open/close cycles)
+  M7.2   bounded queue back-pressure when journal flush slow
+  M7.3   handler thread pool sized to ncpus, not unbounded
+
+* Phase 8 -- multi-spell stress + property tests (gate: 24h soak green)
+
+Stress:
+  S8.1   two spell instances writing same repo, no overlapping paths:
+         linearizable, no journal conflicts
+  S8.2   two instances writing same file: existing CommitConflict fires;
+         one wins per broker rules
+  S8.3   four instances, 1000 ops each, random files: no torn writes,
+         all commits journaled
+  S8.4   instance A holds intent, instance B writes raw via bash:
+         broker mediates (intent wins or B retries)
+  S8.5   instance death mid-write: reaper cleans up, mount stays usable
+  S8.6   broker death + restart: all mounts recover within 5 s
+  S8.7   network FS as lower (NFS, sshfs): semantics preserved
+  S8.8   filesystem fills up mid-write: ENOSPC propagated correctly
+
+Property tests (proptest, 10k cases each, nightly CI):
+  P8.1   linearizability: random ops across 4 sessions match a sequential
+         oracle
+  P8.2   crash at any step in any sequence -> replay always consistent
+  P8.3   rename + concurrent open: fd validity invariant
+  P8.4   no-orphan-inodes invariant after random unlink/rename mixes
+  P8.5   journal monotonic seq invariant under concurrent writers
+
+* Phase 9 -- real-tool conformance (gate: each tool's manifest of writes recorded)
+
+Real-world workload tests:
+  W9.1   python: open/write/close, atomic os.replace, shutil.copytree
+  W9.2   sed -i s/// (atomic rename pattern)
+  W9.3   gofmt -w (same pattern)
+  W9.4   rustfmt --edition (same pattern)
+  W9.5   vim with swapfile + recovery
+  W9.6   nano with backup file
+  W9.7   git init / add / commit / merge / rebase (object writes,
+         pack files, refs, index, lock files)
+  W9.8   git lfs (large file pointers + object store)
+  W9.9   cargo build (target/ creation, many parallel writes)
+  W9.10  go build (Go runtime gap closed via FUSE)
+  W9.11  make -j8 on a multi-target Makefile
+  W9.12  npm install (pathological number of small writes)
+  W9.13  yarn install (similar)
+  W9.14  pnpm install (symlink-heavy)
+  W9.15  tar xzf (many creates)
+  W9.16  rsync -a from outside the mount into the mount
+  W9.17  unzip into mount
+  W9.18  cp -a deep tree
+  W9.19  mv from inside to inside (same fs, rename optimisation)
+  W9.20  mv from inside to outside (cross-mount, copy+unlink)
+
+For each: assert (a) lower state correct, (b) journal contains expected
+sequence of FileCommit entries, (c) any tool's own integrity check
+passes (e.g., git fsck after the W9.7 chain).
+
+* Swarm dispatch manifest (parallel where independent, sequential where layered)
+
+WAVE 0 (parallel, no blockers)
+  - Phase 0 scratch PoC (1 subagent, 1-2 days)
+  - BUG-367 org schema fix (1 subagent, already dispatched)
+  - test harness scaffolding for future phases (1 subagent, can pre-build
+    diff-with-ext4 framework)
+
+WAVE 1 (blocked on Phase 0 green)
+  - Phase 1 read-only passthrough (1 subagent, 2-3 days)
+
+WAVE 2 (blocked on Phase 1)
+  - Phase 2a CREATE/WRITE/TRUNCATE/APPEND (1 subagent)
+  - Phase 2b RENAME variants (1 subagent, parallel with 2a; same crate
+    but different files -- write.rs vs rename.rs)
+  - Phase 2c HARDLINK/SYMLINK/UNLINK/DIRS (1 subagent)
+  - Phase 2d MODE/XATTR/MMAP/FSYNC/LOCKS/COPY (1 subagent)
+  - Phase 2e property tests on op sequences (1 subagent, after 2a-d)
+
+WAVE 3 (blocked on Phase 2)
+  - Phase 3 journal + crash injection (1 subagent, deeply sequential
+    because of crash matrix interdependence)
+
+WAVE 4 (blocked on Phase 3 + BUG-367 green)
+  - Phase 4 broker integration (1 subagent, touches broker for first time;
+    needs careful review)
+
+WAVE 5 (blocked on Phase 4)
+  - Phase 5 daemon binary + supervision (1 subagent)
+
+WAVE 6 (blocked on Phase 5)
+  - Phase 6 brush hook (1 subagent, tiny)
+  - Phase 7a benchmark harness (1 subagent, parallel)
+
+WAVE 7 (blocked on Phase 6 + Phase 7a)
+  - Phase 7 perf hardening (1 subagent, iterates against benchmarks)
+  - Phase 8 multi-spell stress + property tests (1 subagent, parallel)
+
+WAVE 8 (blocked on Phases 7-8)
+  - Phase 9a python/sed/git conformance (1 subagent)
+  - Phase 9b go/cargo/rustfmt conformance (1 subagent)
+  - Phase 9c make/npm/yarn/pnpm conformance (1 subagent)
+  - Phase 9d tar/zip/rsync/cp/mv conformance (1 subagent)
+
+Total subagent-days estimate: 25-40 across 9 phases + 4 conformance
+sub-swarms. Critical path: Phase 0 -> 1 -> 2 -> 3 -> 4 -> 5 -> 6.
+Phases 7-9 parallelise once 6 lands.
+
+* Protocol 178-B compliance
+
+Triple-sure verification before touching live broker code:
+
+CIRCLE 1 -- isolation
+  - Phases 0-4 develop in crates/pi-edit-broker-fs/ and crates/pi-fs-scratch/
+  - pi-edit-broker code touched only in Phase 4 (single new variant pair
+    in protocol.rs + matching conn.rs dispatch) and Phase 5 (supervisor)
+  - Both broker-touching phases are reviewed by code-reviewer agent
+    BEFORE merge with explicit checklist:
+      * existing intent/commit tests still pass
+      * existing multi-spell tests still pass
+      * journal replay logic untouched
+      * grace-period exit untouched
+
+CIRCLE 2 -- shadow run
+  - Phase 4 lands behind feature flag PI_EDIT_BROKER_FS=0 (default OFF)
+  - Phases 5-6 keep feature flag default OFF
+  - First live enablement: a single dev opt-in via env, observed for 7d
+  - Metrics: write counts, journal-fsync latency, daemon RSS, conflicts/h
+  - If any spike > 2x baseline, flag stays OFF and we iterate
+
+CIRCLE 3 -- escape hatches always-present
+  - PI_EDIT_BROKER_FS=0 disables at all phase gates
+  - .pi-no-mediate sentinel file in repo root for per-repo opt-out
+  - pi-edit-broker --unmount <path> for admin recovery
+  - FUSE handler timeout 5s -> EIO -> mount stays usable
+  - Write-handler panic -> read-only remount, alert, mount still mounts
+  - fusermount3 -u -z as documented last resort
+  - Broker grace-period exit cleanly unmounts all repos
+
+If any phase gate is yellow (some tests fail, some flaky), the phase
+STAYS pending. No "good enough to ship" until the test matrix is fully
+green on ext4 + xfs + btrfs + macFUSE for that phase.

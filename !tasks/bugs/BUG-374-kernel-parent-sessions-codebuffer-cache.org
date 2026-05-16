@@ -1,0 +1,147 @@
+#+TITLE: kernel: parent session's CodeBuffer cache not invalidated when sibling subagent writes the same file
+#+STATE: ITEM
+#+SESSION_ID: 14e36d0179617e04
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-16T11-14-31-013Z_14e36d0179617e04.jsonl]]
+#+CUSTOM_ID: BUG-374-kernel-parent-sessions-codebuffer-cache
+#+EFFORT: 5h
+#+LAYER: pi-natives coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+Find
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ metadata error: No such file or directory (os error 2)                                            │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Find
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ [§no-results] .#tree                                                                              │
+ │   reason:    no-match                                                                             │
+ │   try next:  verify path/symbol exists, or try target: "."                                        │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Get
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ [§no-results] .                                                                                   │
+ │   attached:  #listing (auto)                                                                      │
+ │   resolved:  /home/user/code/ora/cais                                                             │
+ │   reason:    empty-result                                                                         │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+in File: /home/user/.spell/agent/sessions/-code-ora-cais/2026-05-16T11-12-33-866Z_14e36c8f12b84467.jsonl
+
+
+
+Please explain what went wrong.
+
+
+* Initial Message
+
+In session =14e36d0179617e04= (2026-05-16) three parallel =quick_task=
+subagents fixed BUG-371 / BUG-372 / BUG-373. Each subagent's edits
+were on disk at submit time (confirmed by their own =git diff= run).
+After the swarm, the parent session re-read =walker.rs= and =get.ts=
+through =find=; the kernel returned the *pre-edit* content. The
+parent then ran =edit { findAndReplace }= against that stale view
+and wrote the result, **silently clobbering** the subagent's
+already-persisted fix.
+
+Files only one subagent touched (=mod.rs=, =qualifiers.rs=) survived
+because the parent never re-edited them. The two files the parent
+*did* re-edit (=walker.rs=, =get.ts=) lost their subagent fixes.
+
+* Symptom
+- Subagent writes file F at T1; =git diff F= run inside the subagent
+  confirms F on disk has the change.
+- Parent's =find F:A-B= at T2 (T2 > T1) returns the pre-T1 content.
+- Parent's =edit F= at T3, anchored on the stale text, succeeds.
+- Disk at T3 = parent's stale-buffer-with-my-changes; the subagent's
+  fix is gone with no diagnostic.
+
+Reproducer (real session):
+1. Parent dispatches three parallel =quick_task= subagents editing
+   distinct files (walker.rs, get.ts, mod.rs/qualifiers.rs).
+2. After =await=, parent reads walker.rs:201-250 via =find=.
+3. Returned text matches the **pre-task** snapshot, even though the
+   on-disk file was rewritten ~10 min earlier by sibling subagent.
+
+* Root Cause (hypothesis)
+The pi-natives =CodeBuffer= cache is keyed by =(session_id, path)= or
+=path= alone with a stale mtime/version stamp. Sibling sessions
+(spawned via =task tool=) don't invalidate each other's buffers when
+they write through their own kernel handle. The parent's =find=
+reads from the parent's stale buffer; the parent's =edit= writes
+through the parent's buffer back to disk, replacing whatever the
+sibling left.
+
+Candidate culprits to investigate (read-only):
+- =crates/pi-natives/src/code_buffer.rs= — buffer ownership, mtime
+  refresh policy, cross-session invalidation hooks.
+- =crates/pi-edit-broker= — if the broker maintains a per-session
+  edit history without cross-session reconciliation.
+- =crates/pi-code-path/src/dialects/fs/walker.rs= — only reads disk,
+  unlikely culprit; but its callers may read through CodeBuffer.
+
+* Acceptance
+- After a sibling session writes F at T1, the parent's =find F= at
+  T2 > T1 MUST return the post-T1 content. Either by:
+  (a) invalidate the parent's buffer when *any* session writes F, or
+  (b) re-stat F on every parent-side read and reload on mtime change.
+- After invalidation, the parent's =edit F= operates against fresh
+  text and cannot clobber by accident.
+- Diagnostic surface: when a parent =edit= would overwrite content
+  that has changed under it (sibling write, external editor),
+  surface =STALE_BUFFER= with sibling-write metadata instead of
+  silently winning.
+
+* Edge Cases
+- Parent edits F, then sibling edits F: parent's next read must see
+  the sibling's later version, not its own buffer view.
+- Sibling completes via =submit_result= but parent already cached
+  pre-completion content: invalidation must trigger on each disk
+  write, not on session lifecycle events.
+- Isolated tasks (=isolated: true=): keep current patch-merging
+  behaviour — this bug is specifically about the *default* shared
+  workspace mode.
+
+* Tests (TDD; need to be written)
+- =crates/pi-natives/tests/code_buffer_cross_session.rs::sibling_write_invalidates_parent_buffer=
+  - Open buffer in session A, read.
+  - Session B writes same file via kernel edit.
+  - Session A reads again → must see B's content.
+- =packages/coding-agent/test/tools/task-swarm-cache.test.ts=
+  - End-to-end: dispatch two =quick_task= subagents to edit two files.
+  - Parent re-reads each via =find=.
+  - Assert content matches post-swarm disk truth.
+
+* Verification
+- Re-run the reproducer manually: dispatch swarm, run =find= +
+  =git diff= post-await, confirm content matches disk.
+- =cargo test -p pi-natives code_buffer_cross_session=
+- =bun test packages/coding-agent/test/tools/task-swarm-cache.test.ts=
+
+* Workarounds (today)
+- After =await=, run =bash { command: "git diff --stat" }= to inspect
+  disk truth before any parent-side =edit=.
+- Re-apply any subagent edits the parent intends to follow with its
+  own =edit= against the same file.
+- For multi-subagent file-overlap fixes, prefer =isolated: true= so
+  the kernel reconciles via patches rather than shared buffers.
+
+* Severity
+*Silent data loss in delegated work.* Subagents report success
+truthfully (their own git diff confirms it); operators trust the
+report and move on; the parent's later edits revert the gains
+without any signal. Severity #A.
+
+* Related
+- Session log: =[[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-16T11-14-31-013Z_14e36d0179617e04.jsonl]]=
+- Subagent transcripts under =14e36d0179617e04/{0,1,2}-FixBug*.jsonl=
+- Sibling fix commits already applied inline: =9b659a9f4=

@@ -1,0 +1,70 @@
+#+TITLE: tools.getSpillThreshold dedicated 25k-token budget for get tool
+#+STATE: DONE
+#+SESSION_ID: 14e2358c95b8f739
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-15T12-33-44-534Z_14e2358c95b8f739.jsonl]]
+#+CLOSES: BUG-365 BUG-366
+#+CUSTOM_ID: FEAT-740-tools-getspillthreshold-dedicated-25k-to
+#+EFFORT: 2h
+#+LAYER: coding-agent
+
+* Initial Message
+
+make sure the spill threshold does not affect the get tool, and that the get tool can access all artifacts.
+
+* Goal
+Make =get= the unconditional canonical read/search tool by giving it a spill threshold large enough to cover virtually all single-call reads. Closes [[id:BUG-365-get-tool-subject-to-default-spill-thresh]] and [[id:BUG-366-artifact-resolution-via-get-round-trips]].
+
+* Setting
+- Path: =tools.getSpillThreshold=
+- Units: *tokens* (cheap deterministic estimator already canonical in this repo: =Math.ceil(text.length / 4)= — see =packages/coding-agent/src/commit/map-reduce/utils.ts= and =packages/coding-agent/src/session/compaction/compaction.ts=).
+- Default: =25_000= tokens (~100 KB at 4 chars/token).
+- Internal conversion on the spill hot path: =bytes = tokens * 4= via a single =TOKEN_BYTE_RATIO= constant.
+
+* Surface Changes
+- =packages/coding-agent/src/config/settings-schema.ts=
+  - add =tools.getSpillThreshold=: number (default =25000=), units: tokens.
+- =packages/coding-agent/src/config/kdl-settings-map.ts=
+  - map =tools.get-spill-threshold= ↔ =tools.getSpillThreshold=.
+- =packages/coding-agent/src/session/spill-policy.ts=
+  - export =TOKEN_BYTE_RATIO = 4=.
+  - new builder =getGetToolSpillPolicy(settings)= → =SpillPolicy= where =trigger.maxBytes = tokens * TOKEN_BYTE_RATIO=, =success.maxBytes = same=, =maxLines = UNBOUNDED_SPILL_LINES=.
+  - =resolveToolSpillPolicy= routes =toolName === "get"= to the new builder *before* the precision-exempt check.
+  - Defensive: add ="get"= to =PRECISION_SPILL_EXEMPT_TOOLS= as fallback path.
+- =packages/coding-agent/src/tools/output-meta.ts=
+  - no signature change; =spillLargeResultToArtifact= already takes =toolName= and calls =resolveToolSpillPolicy= → policy swap is transparent.
+- =packages/coding-agent/src/modes/components/settings-defs.ts=
+  - expose numeric input (tokens, step =1000=, min =1000=, max =200_000=).
+
+* Behavior Contract
+- =get= output ≤ 25k tokens → full inline, never spilled, no =artifact://= notice.
+- =get= output > 25k tokens → spill to artifact AND inline-truncate via *tail-mode* to the same threshold (i.e. show ≈ threshold worth of tail bytes). Notice block points to the full artifact, but the agent still sees a substantial useful tail.
+- Setting is hot-reloadable like other =tools.*= settings.
+- =get= on =artifact://= URLs within threshold → byte-identical to source content; no recursive spill.
+
+* Non-goals
+- Not changing =tools.artifactSpillThreshold= default (still applies to =bash=, =fetch=, =puppeteer=, etc.).
+- No real tokenizer integration; the 4-byte heuristic is documented inline and matches existing =estimateTokens= usage across the codebase.
+- No UI rendering changes for the =get= result cell.
+
+* Test Plan
+=packages/coding-agent/test/tools/output-meta-spill-policy.test.ts= (extend):
+- "get tool below threshold returns full content without spill" — 80-line result, name="get", expect =saved.length === 0=, no =artifact://= in text.
+- "get tool above threshold spills with tail equal to threshold" — generate >25k-tokens worth, expect =saved.length === 1=, text contains last-N tail equal to threshold byte count, notice present.
+- "get tool honors tools.getSpillThreshold override" — settings override to =5000= tokens, expect 20KB cap takes effect immediately.
+
+=packages/coding-agent/test/tools/get-artifact-roundtrip.test.ts= (new):
+- "get on artifact:// returns byte-identical content within threshold" — seed artifact via SessionManager, call =get=, expect content match.
+- "get on oversize artifact tail-truncates without creating a third-level artifact for the same payload" — verify idempotency (same input → no new artifact emitted).
+
+* Verification Commands
+- =bun test packages/coding-agent/test/tools/output-meta-spill-policy.test.ts=
+- =bun test packages/coding-agent/test/tools/get-artifact-roundtrip.test.ts=
+- =bun run --filter @oh-my-pi/coding-agent check:ts=
+- =bun run --filter @oh-my-pi/coding-agent lint:ts=
+
+* Acceptance
+- All new + existing tests pass.
+- Manual: =get= on a 10_000-line file in the live agent shows full content without spill notice.
+- Manual: =get artifact://...= for a previously-spilled bash payload returns the original content unchanged.
+
+NOTE [2026-05-15]: Implemented in session 14e2358c95b8f739. Default = 25_000 tokens (≈100 KB at chars/4). `get` routed first in resolveToolSpillPolicy; added to PRECISION_SPILL_EXEMPT_TOOLS as defensive fallback. 26 spill-related tests pass; biome + tsgo clean on touched files. Closes BUG-365 and BUG-366.

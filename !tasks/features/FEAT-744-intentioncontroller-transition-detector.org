@@ -1,0 +1,61 @@
+#+TITLE: IntentionController transition detector + interactive-mode wiring
+#+STATE: DONE
+#+SESSION_ID: 14e278cdf6c434b0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-15T17-27-35-132Z_14e278cdf6c434b0.jsonl]]
+#+CUSTOM_ID: FEAT-744-intentioncontroller-transition-detector
+#+DEPENDS: FEAT-741-intentionsummarymessage-session-message FEAT-742-intention-summarizer-smol-model-utility FEAT-743-intentionsummarymessagecomponent-chat-pa
+#+EFFORT: 5h
+#+LAYER: packages/coding-agent/src/modes/controllers
+#+PARENT: PLAN-307-needs-input-intention-briefing-card-in-t
+
+* Scope
+Glue layer. Detects rising-edge transitions into briefing states, kicks off generation, manages placeholder/abort/supersede lifecycle, appends/updates the briefing as a ~CustomMessage<IntentionSummaryDetails>~ via existing ~SessionManager~ surface (~appendCustomMessageEntry~ + ~rewriteEntries~). No new ~SessionManager~ public method required.
+
+* Existing Patterns
+- ~packages/coding-agent/src/modes/controllers/input-controller.ts~ : controller class shape, ctx-injection, ownership of subscriptions and teardown.
+- ~packages/coding-agent/src/modes/controllers/event-controller.ts~ : observer pattern over session state.
+- ~packages/coding-agent/src/modes/interactive-mode.ts~ : controller construction site + ~deriveAgentStatus~ inputs (~isAwaitingHookInput~ getter near line 562, plus ~isPendingApproval~, ~isStreaming~, ~hasInputCallback~, ~isUserPaused~).
+- ~packages/desktop-common/src/status-derive.ts~ : authoritative status precedence.
+- ~packages/coding-agent/src/session/session-manager.ts~ : ~appendCustomMessageEntry~ (line 2179) + ~getEntries()~ (line 2353) + ~rewriteEntries()~ (line 2160) — sufficient to persist + mutate without adding public API.
+
+* Tests
+~packages/coding-agent/test/modes/controllers/intention-controller.test.ts~ (new):
+- T1: rising edge running → needs_input fires generator once and appends placeholder ~CustomMessage~ (pending:true) followed by resolved update (pending:false with parsed DID/STUCK/ASK).
+- T2: needs_input → user_paused → needs_input does NOT fire a second time.
+- T3: running → needs_input → running before generator resolves: ~AbortController~ called, placeholder ~superseded~/dropped, no resolved details persisted.
+- T4: pending_approval transition is treated as a briefing state; ~trigger~ field set accordingly.
+- T5: error / completed / idle transitions do NOT fire briefing.
+- T6: when a new briefing resolves, prior intentionSummary entries (same session, earlier eventId) are mutated in-place to ~superseded:true~ via ~rewriteEntries~.
+- T7: generator returns null → fallback minimal card using ~BlockingEvent.title~ (or "Awaiting input") as the ~ask~ field, empty ~did~/~stuck~, still persisted.
+- T8: on construct, controller scans ~sessionManager.getEntries()~ tail; if the most recent ~CustomMessageEntry~ with ~customType === INTENTION_SUMMARY_MESSAGE_TYPE~ has ~details.pending~ true, mark it superseded (the gen it was waiting on is dead) and do NOT regenerate.
+
+* Implementation
+1. New ~packages/coding-agent/src/modes/controllers/intention-controller.ts~ exporting ~IntentionController~:
+   - Constructor: ~(deps: { sessionManager, settings, modelRegistry, getBlockingEvent: () => BlockingEventLike | undefined, getCurrentModel: () => Model<Api> | undefined, getSessionId: () => string | undefined })~.
+   - Owns ~#lastBriefedStatus: AgentStatus | null~, ~#pendingGen: AbortController | null~, ~#activeEntryId: string | null~.
+   - ~handleStatusChange(prev, next)~ — pure logic, exhaustively unit-tested.
+   - ~#fireBriefing(trigger)~ — synchronously appends placeholder via ~appendCustomMessageEntry(INTENTION_SUMMARY_MESSAGE_TYPE, buildIntentionSummaryContent({did:"", ask:"", trigger}), true, { …details, pending:true }, "agent")~; stores returned id; kicks off ~generateIntentionSummary(...)~ from FEAT-742; on resolve mutates the same entry by walking ~getEntries()~ to find the entry by id, updating ~entry.content~ + ~entry.details~, then awaiting ~rewriteEntries()~.
+   - ~#supersedePrior()~ — finds prior intentionSummary entries with ~details.superseded !== true~, sets ~superseded:true~, then ~rewriteEntries()~.
+   - ~dispose()~ — abort pending, drop subscription.
+2. In-place mutation note: ~rewriteEntries()~ is documented as "use sparingly". Briefings happen at most a handful of times per session, so frequency is acceptable. If the cost ever matters, the controller can batch supersede + resolve into a single ~rewriteEntries~ call.
+3. Wire in ~packages/coding-agent/src/modes/interactive-mode.ts~:
+   - Construct ~IntentionController~ next to other controllers (search for ~InputController~ instantiation site).
+   - Where ~AgentStatus~ is currently computed for ~deriveAgentStatus~ consumers, ALSO call ~intentionController.handleStatusChange(prev, next)~. A small ~#lastDerivedStatus: AgentStatus | null~ field on the mode keeps the prev/next pair without coupling new infrastructure.
+   - Add ~intentionController.dispose()~ in the existing shutdown path next to other controller disposals.
+4. Resume rehydration: at controller construct, run a single sweep over ~sessionManager.getEntries()~:
+   - find the latest entry with ~type === "custom_message" && customType === INTENTION_SUMMARY_MESSAGE_TYPE~;
+   - if its ~details.pending~ is true → mark ~superseded:true~ (orphan from previous run) and persist.
+   - set ~#lastBriefedStatus~ from the current derived status so the very first ~handleStatusChange~ call after construct does not double-fire.
+
+* Edge Cases
+- Multiple rapid transitions: ~#pendingGen?.abort()~ before each new fire.
+- ~user_paused~: treat any transition into ~user_paused~ as "no new briefing" and treat coming back from ~user_paused~ to ~needs_input~ as "still the same briefing" (do not re-fire). Encode this by treating the (user_paused → needs_input) edge as NOT a rising edge.
+- BlockingEvent superseded by a new one (different ~eventId~) without an intervening non-briefing state: treat as a fresh briefing trigger; supersede the prior card.
+- Generator latency exceeds the session lifetime: placeholder remains as ~pending:true~ on disk; T8 covers cleanup on next resume.
+
+* Acceptance
+- ~bun test packages/coding-agent/test/modes/controllers/intention-controller.test.ts~ passes.
+- ~bun test packages/coding-agent~ no regressions in interactive-mode tests.
+- ~tsgo -p packages/coding-agent~ clean.
+- ~biome check~ on touched files clean.
+- Manual smoke note in PR: a TUI session with a hook ~ask~ shows the briefing card above the editor within ~3s of the ask firing; pressing ~ctrl+o~ expands the card; submitting an answer dismisses (supersedes) it.

@@ -1,0 +1,62 @@
+#+TITLE: INTENTION_SUMMARY_MESSAGE_TYPE custom-message kind + details
+#+STATE: DONE
+#+SESSION_ID: 14e278cdf6c434b0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-15T17-27-35-132Z_14e278cdf6c434b0.jsonl]]
+#+CUSTOM_ID: FEAT-741-intentionsummarymessage-session-message
+#+EFFORT: 1h
+#+LAYER: packages/coding-agent/src/session
+#+PARENT: PLAN-307-needs-input-intention-briefing-card-in-t
+
+* Scope
+Add a new custom-message type constant and structured details interface to ~packages/coding-agent/src/session/messages.ts~, mirroring ~SKILL_PROMPT_MESSAGE_TYPE~ exactly. This is the canonical persistence shape for the needs-input briefing: a ~CustomMessage<IntentionSummaryDetails>~ persisted via ~SessionManager.appendCustomMessageEntry~.
+
+Architectural decision: do NOT introduce a new ~SessionEntry~ kind (avoids cross-package edits in ~pi-agent-core~) and do NOT add a new top-level ~message.role~ value. Pattern verified against existing ~SKILL_PROMPT_MESSAGE_TYPE~ which is dispatched inside ~case "custom":~ in ~ui-helpers.ts~ at line 113.
+
+* Existing Patterns
+- ~packages/coding-agent/src/session/messages.ts~ line 26: ~export const SKILL_PROMPT_MESSAGE_TYPE = "skill-prompt"~ + ~SkillPromptDetails~ interface.
+- ~packages/coding-agent/src/modes/utils/ui-helpers.ts~ line 113: dispatch via ~customType === SKILL_PROMPT_MESSAGE_TYPE~.
+
+* Tests
+~packages/coding-agent/test/session/messages.test.ts~ (extend, do not create new file):
+- T1: ~INTENTION_SUMMARY_MESSAGE_TYPE === "intentionSummary"~ (stable string for on-disk forward compat).
+- T2: ~IntentionSummaryDetails~ TypeScript surface compiles with required fields ~did~, ~ask~, ~trigger~ and optional ~stuck~, ~eventId~, ~superseded~, ~pending~.
+- T3: factory ~buildIntentionSummaryMessage(details)~ returns ~{ content, details }~ pair suitable to pass to ~appendCustomMessageEntry~. ~content~ is a stable plain-text serialisation (~DID: …
+STUCK: …
+ASK: …~) so reload paths that ignore ~details~ still produce a readable history line.
+
+* Implementation
+1. Add to ~packages/coding-agent/src/session/messages.ts~ next to the SKILL_PROMPT block:
+   #+begin_src typescript
+   export const INTENTION_SUMMARY_MESSAGE_TYPE = "intentionSummary";
+
+   export interface IntentionSummaryDetails {
+       did: string;
+       /** Empty/absent when there is nothing the agent is blocked on. */
+       stuck?: string;
+       ask: string;
+       /** Which blocking-state triggered this briefing. */
+       trigger: "needs_input" | "pending_approval";
+       /** Origin blocking-event id, used by the controller to supersede prior cards. */
+       eventId?: string;
+       /** True until the smol-model generation resolves; component renders "summarizing…" state. */
+       pending?: boolean;
+       /** True once a later briefing has been emitted; component renders dimmed historic state. */
+       superseded?: boolean;
+   }
+
+   export function buildIntentionSummaryContent(details: IntentionSummaryDetails): string {
+       const lines = [`DID: ${details.did}`];
+       if (details.stuck) lines.push(`STUCK: ${details.stuck}`);
+       lines.push(`ASK: ${details.ask}`);
+       return lines.join("
+");
+   }
+   #+end_src
+2. No declaration-merging changes. No new entry kind. No changes outside ~messages.ts~ + its test file.
+
+* Acceptance
+- ~bun test packages/coding-agent/test/session/messages.test.ts~ passes.
+- ~tsgo -p packages/coding-agent~ clean.
+- ~biome check packages/coding-agent/src/session/messages.ts~ clean.
+
+NOTE [2026-05-15]: Added INTENTION_SUMMARY_MESSAGE_TYPE constant, IntentionSummaryDetails interface, and buildIntentionSummaryContent() to packages/coding-agent/src/session/messages.ts. Created tests at packages/coding-agent/test/session/messages.test.ts with 5 passing cases (T1-T5). Biome clean. tsgo unavailable but tsc errors are pre-existing in unrelated files.

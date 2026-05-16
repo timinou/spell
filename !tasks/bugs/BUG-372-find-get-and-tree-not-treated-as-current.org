@@ -1,5 +1,5 @@
 #+TITLE: find/get: `.` and `.#tree` not treated as current directory
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14e36d0179617e04
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-16T11-14-31-013Z_14e36d0179617e04.jsonl]]
 #+CUSTOM_ID: BUG-372-find-get-and-tree-not-treated-as-current
@@ -127,3 +127,5 @@ returns =Ok([])= and the qualifier loop has nothing to apply
 * Non-goals
 - Symbolic =$CWD= or =@cwd= aliases; only the =.= / =./= surface.
 - Changing edit/create semantics.
+
+NOTE [2026-05-16]: Fixed in 9b659a9f4. fs_locator_to_glob returns empty pattern for `.` / `./` so build_globset short-circuits.

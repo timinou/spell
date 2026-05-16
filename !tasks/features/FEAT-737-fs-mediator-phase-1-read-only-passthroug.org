@@ -1,0 +1,85 @@
+#+TITLE: FS-mediator Phase 1: read-only passthrough + diff-with-ext4 harness
+#+STATE: ITEM
+#+SESSION_ID: 14e152ccec5129f7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-14T20-03-03-729Z_14e152ccec5129f7.jsonl]]
+#+BLOCKED_BY: Phase 0 green
+#+CUSTOM_ID: FEAT-737-fs-mediator-phase-1-read-only-passthroug
+#+PARENT_PLAN: PLAN-305-filesystem-mediator-bash-launched-writes
+#+PHASE: 1
+
+* Initial Message
+
+look at brush and tell me how it manages file writes
+
+* Location
+crates/pi-edit-broker-fs/  (NEW; lives alongside pi-edit-broker; broker
+code is NOT touched yet)
+
+* Crate layout
+src/lib.rs
+src/fs.rs            -- fuser::Filesystem impl, read-only
+src/lower.rs         -- *at syscall wrappers on lower_fd
+src/inode.rs         -- inode table (FUSE u64 <-> lower fd + RelPath)
+src/mount.rs         -- mount-over-self orchestration
+tests/harness/       -- TestFs + OracleFs + assert_same_as_ext4
+tests/layer1.rs      -- T1.1 – T1.30
+
+* Test suite — Layer 1 (read-only)
+
+Read content
+T1.1   empty file
+T1.2   small text file
+T1.3   8MB file via 4KB chunks
+T1.4   64MB streaming read
+T1.5   pread at random offset
+T1.6   pread past EOF returns 0
+T1.7   lseek SEEK_SET/CUR/END/HOLE/DATA
+
+Metadata
+T1.8   stat: size/mtime/ctime/mode/nlink/ino/dev
+T1.9   fstat via fd
+T1.10  statx with STATX_BTIME
+
+Directory
+T1.11  readdir parity with ext4
+T1.12  10k-entry dir pagination
+T1.13  stable offset cookies across calls
+
+Symlinks
+T1.14  readlink to inside-repo target
+T1.15  readlink to outside-repo target
+T1.16  readlink to absolute path
+T1.17  follow symlink resolves via mount
+
+Hardlinks
+T1.18  two paths same inode, same content
+
+Errors
+T1.19  permission 000 -> EACCES
+T1.20  missing path -> ENOENT
+T1.21  file used as dir -> ENOTDIR
+T1.22  ENAMETOOLONG matches ext4
+T1.23  access F_OK/R_OK/W_OK/X_OK
+T1.24  faccessat AT_EACCESS
+
+Memory
+T1.25  mmap PROT_READ MAP_SHARED returns lower bytes
+T1.26  mmap larger than file -> trailing zeros
+
+xattr
+T1.27  getxattr/listxattr passthrough
+
+Open flags
+T1.28  O_DIRECTORY on file -> ENOTDIR
+T1.29  O_NOFOLLOW on symlink -> ELOOP
+
+Negative
+T1.30  ANY write op -> EROFS (locked until Phase 2)
+
+* Gate (gateCmd)
+cargo test -p pi-edit-broker-fs --test layer1 -- --nocapture
+
+* Acceptance
+- 30/30 tests pass on ext4
+- Same 30 on macFUSE (CI matrix)
+- assert_same_as_ext4 harness re-usable from later phases

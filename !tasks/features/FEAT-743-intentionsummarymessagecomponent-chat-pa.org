@@ -1,0 +1,63 @@
+#+TITLE: IntentionSummaryMessageComponent + chat-pane dispatch
+#+STATE: DONE
+#+SESSION_ID: 14e278cdf6c434b0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-15T17-27-35-132Z_14e278cdf6c434b0.jsonl]]
+#+CUSTOM_ID: FEAT-743-intentionsummarymessagecomponent-chat-pa
+#+DEPENDS: FEAT-741-intentionsummarymessage-session-message
+#+EFFORT: 3h
+#+LAYER: packages/coding-agent/src/modes/components
+#+PARENT: PLAN-307-needs-input-intention-briefing-card-in-t
+
+* Scope
+Render the briefing as a boxed inline card in the chat scroll. Mirrors ~SkillMessageComponent~ exactly: dispatched inside ~case "custom":~ in ~ui-helpers.ts~ when ~message.customType === INTENTION_SUMMARY_MESSAGE_TYPE~. Pure view of a ~CustomMessage<IntentionSummaryDetails>~. No state machine, no generation, no SessionManager interaction.
+
+* Existing Patterns
+- ~packages/coding-agent/src/modes/components/compaction-summary-message.ts~ : Box subclass with collapsed/expanded state, theme-fg/bg, ~setExpanded~ tied to ~ctx.toolOutputExpanded~.
+- ~packages/coding-agent/src/modes/components/skill-message.ts~ : closest structural analog because it is also dispatched off ~customType~ rather than a top-level role.
+- ~packages/coding-agent/src/modes/utils/ui-helpers.ts~ near line 113: the ~SKILL_PROMPT_MESSAGE_TYPE~ branch — model the new branch identically, immediately after it.
+
+* Tests
+~packages/coding-agent/test/modes/components/intention-summary-message.test.ts~ (new):
+- T1: collapsed render — boxed, label "◆ awaiting you", and ~DID: …~ / ~ASK: …~ lines.
+- T2: ~details.stuck~ present → ~STUCK: …~ line is rendered between DID and ASK.
+- T3: ~details.stuck~ absent → no blank STUCK line, no whitespace gap.
+- T4: ~details.pending~ true → label "◆ summarizing…" and no DID/STUCK/ASK lines.
+- T5: ~details.superseded~ true → label "◇ past briefing" with dimmed accent; content still rendered.
+- T6: expanded (~setExpanded(true)~) — same content shape, but also includes ~content~ string verbatim (the plain-text serialisation from ~buildIntentionSummaryContent~) so resume sessions where ~details~ was stripped still render meaningfully.
+
+* Implementation
+1. New ~packages/coding-agent/src/modes/components/intention-summary-message.ts~:
+   #+begin_src typescript
+   export class IntentionSummaryMessageComponent extends Box {
+       #expanded = false;
+       constructor(private readonly message: CustomMessage<IntentionSummaryDetails>) {
+           super(1, 1, t => theme.bg("customMessageBg", t));
+           this.#updateDisplay();
+       }
+       setExpanded(expanded: boolean): void { this.#expanded = expanded; this.#updateDisplay(); }
+       override invalidate(): void { super.invalidate(); this.#updateDisplay(); }
+       #updateDisplay(): void { /* label + DID/STUCK?/ASK or "summarizing…" */ }
+   }
+   #+end_src
+   - Accent: reuse ~theme.fg("planMode", …)~ for the active label; use ~theme.fg("customMessageText", …)~ (or a muted variant) for ~superseded~.
+   - Do NOT add new theme tokens — that is explicitly out-of-scope for this PLAN.
+2. Edit ~packages/coding-agent/src/modes/utils/ui-helpers.ts~:
+   - Import ~INTENTION_SUMMARY_MESSAGE_TYPE~ and ~IntentionSummaryDetails~ from ~../../session/messages~ alongside ~SKILL_PROMPT_MESSAGE_TYPE~.
+   - Import ~IntentionSummaryMessageComponent~ alongside ~SkillMessageComponent~.
+   - Inside ~case "custom":~ block, after the ~SKILL_PROMPT_MESSAGE_TYPE~ branch, add:
+     #+begin_src typescript
+     if (message.customType === INTENTION_SUMMARY_MESSAGE_TYPE) {
+         const component = new IntentionSummaryMessageComponent(message as CustomMessage<IntentionSummaryDetails>);
+         component.setExpanded(this.ctx.toolOutputExpanded);
+         this.ctx.chatContainer.addChild(component);
+         break;
+     }
+     #+end_src
+
+* Acceptance
+- ~bun test packages/coding-agent/test/modes/components/intention-summary-message.test.ts~ passes.
+- ~tsgo -p packages/coding-agent~ clean.
+- ~biome check~ on the two touched files clean.
+- No other files modified.
+
+NOTE [2026-05-15]: Implementation complete: component + tests + dispatch. 7 tests pass, biome clean, tsgo clean for touched files.

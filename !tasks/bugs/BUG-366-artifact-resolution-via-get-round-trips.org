@@ -1,0 +1,35 @@
+#+TITLE: artifact resolution via get round-trips through spill breaking retrieval
+#+STATE: DONE
+#+SESSION_ID: 14e2358c95b8f739
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-15T12-33-44-534Z_14e2358c95b8f739.jsonl]]
+#+CUSTOM_ID: BUG-366-artifact-resolution-via-get-round-trips
+#+EFFORT: 30m
+#+LAYER: coding-agent
+#+DEPENDS: FEAT-740-tools-getspillthreshold-dedicated-25k-to BUG-365-get-tool-subject-to-default-spill-thresh
+
+* Initial Message
+
+make sure the spill threshold does not affect the get tool, and that the get tool can access all artifacts.
+
+* Symptom
+=get artifact://<session>/<agent>/<tool>/<n>.txt= for any payload that originally caused a spill ALSO returns a truncated tail + new artifact URI → loss of contract that =artifact://= gives full content. Second hop also clamped, third hop too — non-idempotent recursive fanout.
+
+* Root Cause
+- =internal-urls/artifact-protocol.ts::ArtifactProtocolHandler.resolve()= correctly returns full file content via =Bun.file(filePath).text()=.
+- =output-meta.ts::wrappedExecute= then runs =spillLargeResultToArtifact= on the result regardless of the source → re-spill to a sibling artifact.
+- ∴ artifact retrieval is non-idempotent; each retrieval generates a new artifact.
+
+* Fix
+Closed by [[id:FEAT-A-tools-get-spill-threshold]] (the per-tool budget for =get= eliminates the recursion).
+
+Optional hardening (separate slice): in =spillLargeResultToArtifact=, detect =result.details?.source?.kind === "internal"= with =scheme === "artifact"= and bypass spill — prevents future regressions if another tool reads artifacts.
+
+* Verification
+- Seed artifact with 100KB text. Call =get= on its URI → exact byte-for-byte match, no new artifact emitted.
+- Negative: ensure non-artifact paths still spill normally per their tool's policy.
+
+* Related
+- [[id:BUG-A-get-spill-misroute]] (root cause shared)
+- [[id:FEAT-A-tools-get-spill-threshold]] (closes both)
+
+NOTE [2026-05-15]: Closed by FEAT-740. 100 KB artifact reads now fit inside the get-tool budget → no recursive spill. Verified via output-meta-spill-policy.test.ts "keeps get tool output inline up to tools.getSpillThreshold".
