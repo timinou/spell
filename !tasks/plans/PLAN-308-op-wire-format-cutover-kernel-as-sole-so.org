@@ -1,0 +1,194 @@
+#+TITLE: Op wire-format cutover — kernel as sole source of truth via NAPI introspection
+#+STATE: ITEM
+#+SESSION_ID: 14dd802985b2a5f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
+#+CUSTOM_ID: PLAN-308-op-wire-format-cutover-kernel-as-sole-so
+
+* Initial Message
+
+Investigate how you'd fold in PLAN-304 into the next swarm waves deeply. I want super super clean code
+
+* Problem (root causes)
+
+| # | Cause | Effect |
+|---|---|---|
+| RC-1 | TS restates every Op variant in TypeBox (codepath-types.ts:60-660, 31 variants × ~15 lines) | hand-mirror of Rust Op enum; drifts silently when kernel evolves |
+| RC-2 | edit.ts::normalizeStructuralAction reverse-maps new kind names to legacy Action vocab before sending to kernel (~60 lines) | TS→kernel wire uses old grammar even though both sides speak new |
+| RC-3 | Kernel Op::from_legacy translates legacy Action → Op on receive | mirror-image translation of RC-2; cancels itself out, does zero useful work |
+| RC-4 | Rust Action enum still exists alongside Op (crates/pi-code-path/src/ast.rs:313+) | two grammars in kernel; new contributors must learn legacy |
+| RC-5 | Two prompt generators: gen-tool-prompts.ts (PLAN-306 W10) + gen-edit-prompt.ts (PLAN-304 W3) | duplicated entrypoints; unclear which runs first |
+| RC-6 | PLAN-304 D-4 chose TypeBox-canonical / Rust-mirrors / parity-test; schema lives in two languages, drift caught post-commit | dual-grammar tax exactly where the migration tried to eliminate it |
+
+Concrete inventory:
+- codepath-types.ts: 661 lines; ~600 are per-variant Type.Object blocks; target ~80 lines (primitives only)
+- edit.ts: normalizeStructuralAction is the legacy reverse-map; deletable post-cutover
+- op.rs: Op enum complete (31 variants); OpKind has EnumIter; from_legacy is the bridge
+- napi.rs: dispatch loop already routes via Op (PLAN-304 Wave 2 landed)
+- listOpKinds() NAPI returns only names; needs field-level extension for codegen
+
+* Goals
+
+- (G1) Kernel Op enum is THE source of truth; every Op variant declared once in Rust
+- (G2) NAPI carries semantic intent (variant name, field name, field type-kind, required, description); each language renders in its own grammar
+- (G3) TS codepath-op-schema.generated.ts produced by =bun run gen:op-schema=; committed; regen byte-equal in CI
+- (G4) codepath-types.ts shrinks to hand-authored primitives (~80 lines); imports & re-exports the generated file
+- (G5) edit.ts::normalizeStructuralAction deleted; TS wire format IS Op JSON (camelCase kind, no translation)
+- (G6) Op::from_legacy reduced to single legacy-input lane at kernel entry; one minor's grace, FUP for hard delete
+- (G7) Prompt generators consolidate to one entrypoint (=bun run gen:prompts=); takes NAPI introspection; emits all _generated/*.md fragments
+- (G8) Adding a new Op variant: touch Rust Op enum + Op::all_schemas() match arm + resolver. Run =bun run gen:op-schema=. Done. Zero TS hand-edits.
+
+* Non-goals
+
+- No new edit capabilities. Surface stays semantically identical.
+- No user-visible behaviour change. Agents using legacy kind names still work via single entry-point adapter (one deprecation note, same as today).
+- No schemars dependency. Rust hand-writes Op::all_schemas() match (one screen).
+- No JSON-Schema-as-canonical-output. NAPI returns structured =OpSchemaDto= records; TS composes TypeBox locally. (Option A from tradeoff analysis.)
+- No reviewer/agent-output grammar change. JTD stays canonical for agent frontmatter. ADR locks the dual-grammar boundary (Wave G).
+- No URI-locator mutation surface.
+
+* Existing Patterns
+
+- Kernel Op enum: =crates/pi-code-path/src/op.rs:223-380= (Op variants), =:380-440= (OpKind with EnumIter)
+- Target newtypes: FileTarget, SymbolTarget, CssTarget, HeadingTarget smart constructors
+- Legacy adapter: =crates/pi-code-path/src/op.rs::Op::from_legacy(action, cp)=
+- Dispatch loop: =crates/pi-natives/src/code_path/napi.rs:490+= (Op::from_legacy → dispatch_op → try_apply)
+- Three resolvers (typed on &Op): fs/mutation.rs, text/mutation.rs, code_resolver/mutation.rs
+- Css/Heading procedural resolvers: =crates/pi-natives/src/code_path/{css,heading}_resolver/=
+- Existing introspection NAPI (PLAN-306 W8.2): listOpKinds, listQualifiers, listEdgeKinds, listDiagnosticVariants, listLanguageDialects
+- TS per-variant schemas: =packages/coding-agent/src/tools/codepath-types.ts:60-660=
+- TS legacy reverse-map: =packages/coding-agent/src/tools/edit.ts::normalizeStructuralAction=
+- Existing generators: =packages/coding-agent/scripts/gen-tool-prompts.ts= + =gen-edit-prompt.ts=
+- Sentinel convention (PLAN-306): =<!-- @generated:NAME -->= ... =<!-- @end -->=, byte-equal regen test
+- Agent output grammar: JTD in markdown frontmatter → =tools/jtd-to-json-schema= → ajv (=task/executor.ts:253=)
+- Reviewer output: =packages/coding-agent/src/prompts/agents/reviewer.md= frontmatter; =tools/review.ts= for report_finding
+
+* Tests / Workflows
+
+- W1: Rust Op::all_schemas() match exhaustiveness — adding a new Op variant without extending all_schemas() breaks compile
+- W2: NAPI listOps() returns one entry per OpKind (count = OpKind::iter().count())
+- W3: TS gen-op-schema.ts regen is byte-equal to committed codepath-op-schema.generated.ts
+- W4: Generated TypeBox schema validates a canonical payload for every variant (one fixture per variant; loop via listOps)
+- W5: Generated schema rejects every known-bad payload class (fileWrite with `::`, symbolReplace bare path, lineReplace missing span, scope=banana, unknown kind, missing required field, extra field)
+- W6: Legacy kind adapter centralisation — single entry-point translates legacy → new kind name, emits one deprecation note in tool result text; dispatch sees only Op
+- W7: edit.ts handler — switch(op.kind) with =const _: never = op= exhaustiveness tail
+- W8: Op JSON round-trip — Op serializes → kernel deserializes → Op equal (proptest in Rust + matching corpus in TS)
+- W9: Original transcript regression — =edit {target:"a.ts::Foo", action:{kind:"symbolReplace", content:"..."}}= succeeds directly (no legacy translation in middle)
+- W10: gen:prompts unified generator regen byte-equal across find.md / edit.md / status.md sentinels
+- W11: =bun run check:ts= and =cargo check= green; full =bun test= green
+
+* Execution Manifest
+
+** Wave A — Pre-cutover audit (4× quick_task parallel)
+
+- A1: =crates/pi-code-path/src/op.rs= — does Op derive Serialize/Deserialize with =#[serde(tag = "kind", rename_all = "camelCase")]= ? if not, add. Add proptest for Op → JSON → Op round-trip. Verify every variant survives.
+- A2: =Op::from_legacy= lossy-cases — enumerate every legacy Action variant; map to Op; list any lossy fields. Output: lossy table or empty.
+- A3: =edit.ts::normalizeStructuralAction= reverse-map — identity entries vs field-rename entries; classify each. Output: disposition table.
+- A4: legacy kind usage in tests + agent prompts — grep for legacy kind strings; list what breaks if Action is deprecated. Output: breakage list + migration patch.
+
+Gate: A1 clean round-trip. A2 empty or patched. A3+A4 inform Wave C scope.
+
+** Wave B — Rust op_schema + NAPI extension (1× task, blocks on A)
+
+- B1: =crates/pi-code-path/src/op_schema.rs= new file
+  - =pub struct OpSchema { kind, target_family, fields, description }=
+  - =pub struct FieldSchema { name, type_name: FieldType, required, description }=
+  - =pub enum TargetFamily { File, Symbol, Css, Heading }=
+  - =pub enum FieldType { Content, Identifier, Bool, SymScope, Occurrence, Direction, SpliceMode, LineAnchor, LineSpan, LineAt, Diff, StringField, U32 }=
+  - =impl Op { pub fn all_schemas() -> Vec<OpSchema> }= — one match arm per variant; compile-time exhaustive
+- B2: =crates/pi-natives/src/code_path/napi.rs= adds =#[napi] pub fn list_ops() -> Vec<OpSchemaDto>=
+- B3: NAPI rebuild (linux-x64-modern + dev variant)
+- B4: =packages/natives/index.d.ts= regenerated; listOps() visible to TS
+
+Acceptance: =bun -e "import { listOps } from '@oh-my-pi/pi-natives'; console.log(listOps().length)"= prints 31.
+
+** Wave C — TS codegen + per-variant deletion (1× task, blocks on B)
+
+- C1: =packages/coding-agent/scripts/gen-op-schema.ts= new
+  - Reads listOps() once at run time
+  - For each variant emits =Type.Object({...})= using FieldType → TypeBox primitive mapping table (12 cases)
+  - Emits =editOpSchema = Type.Union([...])= and =type EditOp = Static<typeof editOpSchema>=
+  - Writes =packages/coding-agent/src/tools/codepath-op-schema.generated.ts= with AUTO-GENERATED header
+- C2: =codepath-types.ts= shrinks
+  - Keep primitives: contentSchema, filePathSchema, symbolPathSchema, lineAnchorSchema, lineSpanSchema, lineAtSchema, occurrenceSchema, directionSchema, spliceModeSchema, symScopeSchema
+  - Keep NAPI re-exports
+  - Delete all 31 per-variant Type.Object blocks
+  - Add =export * from "./codepath-op-schema.generated"=
+  - Target: 661 → ~80 lines
+- C3: =edit.ts= — delete normalizeStructuralAction; add single =legacyKindAdapter= at handler entry; switch(op.kind) with =const _: never = op= tail
+- C4: Delete =gen-edit-prompt.ts= (subsumed by Wave F)
+- C5: =package.json= adds =gen:op-schema= script
+
+Acceptance: =bun run gen:op-schema= zero diff after first commit. codepath-types.ts < 100 lines. edit.ts never-tail compiles.
+
+** Wave D — Rust legacy retirement (1× task, parallel with C)
+
+- D1: =Action= enum =#[deprecated(since = "...", note = "Use Op")]=
+- D2: Dispatch loop accepts Op JSON natively; Op::from_legacy retained as single fallback lane gated on legacy-kind check
+- D3: Kernel-internal call sites of Action replaced with Op
+- D4: FUP filed for hard Action removal
+
+Acceptance: =cargo test -p pi-code-path -p pi-natives= green; release build no deprecation warnings except the legacy entry-point.
+
+** Wave E — Regen-byte-equal test (1× task, blocks on C)
+
+- E1: =packages/coding-agent/test/codepath/op-schema-parity.test.ts= — run gen:op-schema to temp file; assert byte-equal to committed generated file
+- E2: CI guard documents pre-commit regen
+
+Acceptance: test fails loudly if anyone adds Op variant in Rust without regen.
+
+** Wave F — Prompt generator unification (1× task, parallel with E)
+
+- F1: =packages/coding-agent/scripts/gen-prompts.ts= replaces gen-tool-prompts.ts
+  - Inputs: listOps, listQualifiers, listEdgeKinds, listDiagnosticVariants, listLanguageDialects
+  - Outputs: _generated/find-recipes.md, edit-ops.md, diag-vocabulary.md, status-cmds.md, dialects.md
+  - edit-ops.md now generated from listOps() metadata (richer than current OpKind-only output)
+- F2: Sentinel content in find.md / edit.md updated; byte-equal regen test extended
+- F3: Delete =gen-tool-prompts.ts=
+- F4: package.json replaces gen:tool-prompts with gen:prompts
+
+Acceptance: one entrypoint =bun run gen:prompts=; byte-equal test green across all sentinel blocks.
+
+** Wave G — Reviewer JTD-vs-TypeBox ADR (docs)
+
+- G1: =!tasks/plans/plan-artifacts/PLAN-308/ADR-schema-grammar-boundary.md=
+  - Decision: JTD for agent frontmatter (user-authored .md); TypeBox for code-resident schemas (developer-authored .ts)
+  - Rationale, boundary, current-consumer inventory
+- G2: Module comment reference in =task/executor.ts=
+
+Acceptance: ADR committed; zero code change.
+
+* Acceptance
+
+- (A1) =cargo test -p pi-code-path -p pi-natives= green, including Op round-trip proptest + all_schemas() exhaustiveness
+- (A2) =bun test packages/coding-agent/test/codepath/= green, including op-schema-parity regen test + variant validation matrix + negative shapes + transcript regression
+- (A3) =bun run --parallel check:ts check:rs= green
+- (A4) =codepath-types.ts= line count < 100 (was 661)
+- (A5) =normalizeStructuralAction= absent; single =legacyKindAdapter= at entry
+- (A6) =bun run gen:op-schema= and =bun run gen:prompts= produce zero diff on second run
+- (A7) New Op variant without regen breaks =cargo test= (exhaustiveness) AND =bun test= (parity)
+- (A8) Legacy form =edit { kind:"write", target:"a.ts::Foo" }= translated, deprecation note, succeeds — backwards-compat preserved
+- (A9) New form =edit { kind:"symbolReplace", ... }= succeeds directly — no translation in middle
+- (A10) FUP filed for hard Action enum removal
+- (A11) ADR-schema-grammar-boundary.md committed under plan-artifacts/PLAN-308/
+
+* Risks
+
+- R-1 In-flight agent sessions using legacy kind names mid-session → =legacyKindAdapter= preserves backward-compat one minor; same UX
+- R-2 PLAN-304 Wave 4 tests possibly incomplete → Wave A audit checks; absorbed into Wave E
+- R-3 NAPI metadata drift from Op variants → exhaustive match compile-fails; count assertion catches drift
+- R-4 FieldType primitives drift TS↔Rust → fixed 12-case enum; TS table extension required for new FieldType (tsgo catches missing import)
+- R-5 Committed generated file diverges mid-dev → regen byte-equal test in CI; documented pre-commit hook
+- R-6 Sentinel discipline lapses during generator merge → keep PLAN-306 sentinel test pattern; extend to new outputs
+
+* Decisions (locked)
+
+- D-1 Source of truth: Rust Op enum + Op::all_schemas() match. TS derives via NAPI.
+- D-2 NAPI carries structured metadata (Option A), not JSON Schema documents. Each language renders intent natively.
+- D-3 Field-type vocabulary: 12-case FieldType enum in Rust. TS maps each to TypeBox primitive imported from codepath-types.ts.
+- D-4 Generated file location: =packages/coding-agent/src/tools/codepath-op-schema.generated.ts=. AUTO-GENERATED header. Refresh: =bun run gen:op-schema=.
+- D-5 Drift detection: byte-equal regen test (not parity test). Catches at gen-time.
+- D-6 Legacy kind support: single =legacyKindAdapter= at TS entry-point for one minor; FUP for hard removal.
+- D-7 Rust Action enum: =#[deprecated]= for one minor; Op::from_legacy retained as input-only fallback; FUP for hard removal.
+- D-8 Prompt generators: single =gen:prompts= entrypoint. Both old scripts deleted.
+- D-9 Agent output schema grammar: JTD for frontmatter (user-authored), TypeBox for code-resident (developer-authored). Locked in Wave G ADR.
+- D-10 Plan absorbs PLAN-304 Wave 5 (FUP-084 hard cutover) — supersedes the deferred FUP.
