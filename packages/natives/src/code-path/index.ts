@@ -5,8 +5,10 @@ import type {
 	CodePathOptions,
 	DiagnosticVariantInfo,
 	EdgeKindInfo,
+	FieldSchemaDto,
 	LanguageDialectInfo,
 	OpKindInfo,
+	OpSchemaDto,
 	QualifierInfo,
 } from "./types";
 
@@ -17,12 +19,18 @@ export type {
 	DiagnosticDto,
 	DiagnosticVariantInfo,
 	EdgeKindInfo,
+	FieldSchemaDto,
 	LanguageDialectInfo,
 	NodeRefDto,
 	OpKindInfo,
+	OpSchemaDto,
 	QualifierInfo,
 	SpanDto,
 } from "./types";
+
+export function listOps(): OpSchemaDto[] {
+	return native.listOps();
+}
 
 export async function executeCodePath(options: CodePathOptions): Promise<CodePathChunk[]> {
 	return native.executeCodePath(options);

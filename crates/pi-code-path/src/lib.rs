@@ -15,6 +15,7 @@
 pub mod ast;
 pub mod dialect;
 pub mod dialects;
+pub mod op_schema;
 pub mod introspection;
 pub mod op;
 pub mod parser;
@@ -33,4 +34,5 @@ pub use parser::{parse_code_path, parse_locator};
 pub use renderer::render_code_path;
 pub use resolver::traits::MutationResolver;
 pub use introspection::*;
+pub use op_schema::{FieldSchema, FieldType, OpSchema, TargetFamily};
 pub use types::*;

@@ -88,6 +88,20 @@ export interface DiagnosticVariantInfo {
 	template: string;
 }
 
+export interface OpSchemaDto {
+	kind:          string;
+	targetFamily:  string;
+	fields:        FieldSchemaDto[];
+	description:   string;
+}
+
+export interface FieldSchemaDto {
+	name:        string;
+	typeName:    string;
+	required:    boolean;
+	description: string;
+}
+
 export interface LanguageDialectInfo {
 	id: string;
 	extensions: string[];
@@ -105,5 +119,6 @@ declare module "../bindings" {
 		listEdgeKinds(): EdgeKindInfo[];
 		listDiagnosticVariants(): DiagnosticVariantInfo[];
 		listLanguageDialects(): LanguageDialectInfo[];
+		listOps(): OpSchemaDto[];
 	}
 }
