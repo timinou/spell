@@ -3,18 +3,22 @@
  * Generate tool-prompt fragment files from kernel introspection data.
  *
  * Sources:
- *   listOpKinds(), listQualifiers(), listEdgeKinds(), listDiagnosticVariants(),
- *   listLanguageDialects()
+ *   listOps(), listQualifiers(), listEdgeKinds(),
+ *   listDiagnosticVariants(), listLanguageDialects()
+ *
+ * Uses `listOps()` (PLAN-308 Wave B) for richer per-variant metadata
+ * including field types and descriptions — supersedes `listOpKinds()`.
  *
  * Output (under src/prompts/tools/_generated/):
- *   edit-ops.md         — Op variants grouped by family
- *   find-recipes.md     — Recipe table of qualifiers, edges, and common targets
+ *   edit-ops.md         — Op variants grouped by family, with field types & descriptions
+ *   find-recipes.md     — Recipe table of qualifiers, edges
  *   status-cmds.md      — Status command table (hand-crafted; kernel not introspected)
  *   diag-vocabulary.md  — Diagnostic variants from kernel
+ *   dialects.md         — Language dialects from kernel
  */
 
 import {
-	listOpKinds,
+	listOps,
 	listQualifiers,
 	listEdgeKinds,
 	listDiagnosticVariants,
@@ -25,7 +29,17 @@ import * as path from "node:path";
 
 const OUT_DIR = path.join(import.meta.dir, "..", "src", "prompts", "tools", "_generated");
 
-// ── Families ────────────────────────────────────────────────────────
+// ── Family helpers ───────────────────────────────────────────────────
+
+/** Infer the target family from the Op's kind name prefix. */
+function familyForKind(kind: string): string {
+	if (kind.startsWith("symbol")) return "symbol";
+	if (kind.startsWith("file")) return "file";
+	if (kind.startsWith("line")) return "line";
+	if (kind.startsWith("css")) return "css";
+	if (kind.startsWith("heading")) return "heading";
+	return "unknown";
+}
 
 interface FamilyDef {
 	name: string;
@@ -41,45 +55,63 @@ const FAMILIES: FamilyDef[] = [
 	{ name: "css", label: "heading/css", targetHint: "Markdown/Org/CSS specific" },
 ];
 
-function describeOp(op: { kind: string; requiredFields: string[]; optionalFields: string[] }): string {
-	const parts: string[] = [];
-	if (op.requiredFields.length > 0) {
-		parts.push(`(${op.requiredFields.join(", ")})`);
-	}
-	if (op.optionalFields.length > 0) {
-		parts.push(`(${op.optionalFields.join(", ")}?)`);
-	}
-	return parts.join(" ");
-}
-
 // ── Fragment: edit-ops.md ───────────────────────────────────────────
 
+/**
+ * Build a field summary string for one Op variant, excluding the `target` field
+ * (described in the family header).
+ */
+function describeFields(op: { kind: string; fields: { name: string; typeName: string; required: boolean; description: string }[] }): string {
+	const nonTarget = op.fields.filter(f => f.name !== "target");
+	if (nonTarget.length === 0) return "";
+
+	const parts = nonTarget.map(f => {
+		const req = f.required ? "required" : "optional";
+		return `${f.name} (${req} ${f.typeName}) — ${f.description}`;
+	});
+	return parts.join(" · ");
+}
+
 function genEditOps(): string {
-	const ops = listOpKinds();
+	const ops = listOps();
 	const lines: string[] = [];
 
 	for (const family of FAMILIES) {
-		const familyOps = ops.filter(o => o.family === family.name).sort((a, b) => a.kind.localeCompare(b.kind));
+		// css merged into heading
+		if (family.name === "css") continue;
+
+		const familyOps = ops
+			.filter(o => familyForKind(o.kind) === family.name)
+			.sort((a, b) => a.kind.localeCompare(b.kind));
+
 		if (familyOps.length === 0) continue;
-		if (family.name === "css") {
-			// Merge with heading under "heading/css" heading
-			continue;
-		}
+
 		if (family.name === "heading") {
-			lines.push(`${family.label} — ${family.targetHint}`);
-			// Add heading ops
-			const hdrOps = ops.filter(o => o.family === "heading").sort((a, b) => a.kind.localeCompare(b.kind));
-			const cssOps = ops.filter(o => o.family === "css").sort((a, b) => a.kind.localeCompare(b.kind));
+			// Merge heading + css ops
+			const hdrOps = ops.filter(o => familyForKind(o.kind) === "heading").sort((a, b) => a.kind.localeCompare(b.kind));
+			const cssOps = ops.filter(o => familyForKind(o.kind) === "css").sort((a, b) => a.kind.localeCompare(b.kind));
 			const combined = [...hdrOps, ...cssOps];
-			lines.push(`  ${combined.map(o => o.kind).join(" · ")}`);
+
+			lines.push(`${family.label} — ${family.targetHint}`);
+			const combinedPad = Math.max(...combined.map(x => x.kind.length)) + 2;
+			const entries = combined.map(o => {
+				const fields = describeFields(o);
+				if (!fields) return `  ${o.kind.padEnd(combinedPad)}`;
+				return `  ${o.kind.padEnd(combinedPad)} ${fields}`;
+			});
+			lines.push(...entries);
 			lines.push("");
 			continue;
 		}
+
 		lines.push(`${family.label} — ${family.targetHint}`);
-		for (const op of familyOps) {
-			const desc = describeOp(op);
-			lines.push(`  ${op.kind.padEnd(22)} ${desc}`);
-		}
+		const padLen = Math.max(...familyOps.map(x => x.kind.length)) + 2;
+		const entries = familyOps.map(o => {
+			const fields = describeFields(o);
+			if (!fields) return `  ${o.kind.padEnd(padLen)}`;
+			return `  ${o.kind.padEnd(padLen)} ${fields}`;
+		});
+		lines.push(...entries);
 		lines.push("");
 	}
 
@@ -121,6 +153,8 @@ function genFindRecipes(): string {
 
 	return lines.join("\n");
 }
+
+// ── Fragment: dialects.md ───────────────────────────────────────────
 
 function genDialects(): string {
 	const dialects = listLanguageDialects().sort((a, b) => a.id.localeCompare(b.id));

@@ -38,7 +38,8 @@
 		"prepack": "bun scripts/generate-docs-index.ts",
 		"build:binary": "cd ../.. && bun --cwd=packages/stats scripts/generate-client-bundle.ts && bun --cwd=packages/natives run embed:native && bun build --compile --define PI_COMPILED=true --root . ./packages/coding-agent/src/cli.ts --outfile packages/coding-agent/dist/spell && bun --cwd=packages/natives run embed:native --reset && bun --cwd=packages/stats scripts/generate-client-bundle.ts --reset",
 		"gen:op-schema": "bun scripts/gen-op-schema.ts",
-		"gen:tool-prompts": "bun scripts/gen-tool-prompts.ts",
+		"gen:tool-prompts": "bun scripts/gen-tool-prompts.ts", // DEPRECATED — use gen:prompts
+		"gen:prompts": "bun scripts/gen-prompts.ts",
 		"generate-template": "bun scripts/generate-template.ts",
 		"test": "bun test",
 		"replay-gate": "bun test ./test/tools/replay-corpus.test.ts"
