@@ -1,5 +1,5 @@
 #+TITLE: find/get: walk outside project root by default; KDL authorization scheme
-#+STATE: ITEM
+#+STATE: CANCELLED
 #+SESSION_ID: 14e36d0179617e04
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-16T11-14-31-013Z_14e36d0179617e04.jsonl]]
 #+CUSTOM_ID: FUP-086-find-get-walk-outside-project-root-by-de
@@ -131,3 +131,5 @@ Three modes:
 - BUG-373 lands first (out-of-root diagnostics become symmetric
   and structured). This FUP then flips the default and adds the
   KDL knob on top of the same code path.
+
+NOTE [2026-05-16]: Superseded by BUG-379. The KDL `fs.walk-mode` design was overengineered: the ergonomic answer is to delete the `OUT_OF_PROJECT_ROOT` wall entirely and let absolute targets self-root. No new config knobs. Sandbox/server deployments rely on OS-level permissions instead.

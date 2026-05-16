@@ -35,7 +35,7 @@ function indicatesDiagnostic(result: AgentToolResult): boolean {
 		.filter(c => c.type === "text")
 		.map(c => (c as { text?: string }).text ?? "")
 		.join("\n");
-	// Match all-caps error codes (OUT_OF_PROJECT_ROOT, PATH_NOT_FOUND, etc) and structured diagnostics
+	// Match all-caps error codes (PATH_NOT_FOUND, etc) and structured diagnostics
 	return (
 		/\[§|\b[A-Z][A-Z_]{4,}\b|error|invalid|incompatible|not[\s_-]?found|no[\s_-]?match|out[\s_-]?of|cwd_prefix|cannot|forbidden|history_op/i.test(
 			text,
