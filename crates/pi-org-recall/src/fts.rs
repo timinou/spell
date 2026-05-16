@@ -275,6 +275,14 @@ impl FtsIndex {
 		Ok(results)
 	}
 
+	/// Number of live documents in the index (excludes deletes that have
+	/// not yet been merged out). Used by the engine layer as a cheap
+	/// consistency probe after a warm restore from disk.
+	pub fn doc_count(&self) -> Result<u64> {
+		self.reader.reload()?;
+		Ok(self.reader.searcher().num_docs())
+	}
+
 	/// Remove documents by their item id.
 	pub fn remove(&self, ids: &[String]) -> Result<()> {
 		let mut writer = self.writer.lock().unwrap();
