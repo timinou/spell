@@ -456,13 +456,13 @@ impl BufferRegistry {
 			if latest_coord_revision > cached_revision {
 				drop(buffer);
 				self.close(&key)?;
-			} else if self
-				.watcher()
-				.is_some_and(|watcher| !watcher.is_stale(&key))
-			{
-				return Ok(buffer);
 			}
 		}
+		// BUG-374: never trust the watcher's dirty flag as the sole freshness
+		// signal. The watcher is async (inotify), can be disabled, can drop
+		// events under load, and `mark_self_write` from any session in this
+		// process suppresses sibling events globally. `reload_if_stale` does
+		// the authoritative (mtime, size, content) check on every open.
 		self.reload_if_stale(&key)?;
 		if let Some(buffer) = self.get(&key) {
 			buffer.lock().coord_revision = latest_coord_revision;
@@ -521,13 +521,24 @@ impl BufferRegistry {
 			return Ok(());
 		};
 		let should_close = with_shared_lock(&key, REVALIDATE_LOCK_BUDGET, || {
-			let disk_mtime = match fs::metadata(&key) {
-				Ok(metadata) => metadata_modified(&metadata),
+			let metadata = match fs::metadata(&key) {
+				Ok(m) => m,
 				Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
 				Err(error) => return Err(error.into()),
 			};
+			let disk_mtime = metadata_modified(&metadata);
+			let disk_size = metadata.len() as usize;
 			let mut guard = buffer.lock();
-			if guard.dirty || !is_newer_mtime(disk_mtime, guard.disk_mtime) {
+			// Local dirty edits take precedence — do not clobber unsaved work.
+			if guard.dirty {
+				return Ok(false);
+			}
+			// BUG-374: stat-fast trust ONLY when mtime AND size match exactly.
+			// Any drift (newer, older, equal-mtime-different-size) falls
+			// through to a content readback. Equal-mtime-equal-size +
+			// different-content is the unavoidable readback case; we pay one
+			// disk read to detect it rather than silently return stale.
+			if disk_mtime == guard.disk_mtime && disk_size == guard.source().len() {
 				return Ok(false);
 			}
 			let disk_source = fs::read_to_string(&key)?;
