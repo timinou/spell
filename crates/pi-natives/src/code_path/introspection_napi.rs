@@ -184,3 +184,70 @@ pub fn list_language_dialects() -> Vec<LanguageDialectInfo> {
 	}
 	dialects
 }
+
+// ── OpSchema DTOs (PLAN-308 Wave B) ──────────────────────────────
+
+#[napi(object)]
+pub struct OpSchemaDto {
+	pub kind:          String,
+	pub target_family: String,
+	pub fields:        Vec<FieldSchemaDto>,
+	pub description:   String,
+}
+
+#[napi(object)]
+pub struct FieldSchemaDto {
+	pub name:        String,
+	pub type_name:   String,
+	pub required:    bool,
+	pub description: String,
+}
+
+impl From<pi_code_path::OpSchema> for OpSchemaDto {
+	fn from(schema: pi_code_path::OpSchema) -> Self {
+		let target_family =
+			serde_json::to_value(&schema.target_family)
+				.expect("TargetFamily serialization")
+				.as_str()
+				.expect("TargetFamily is a string")
+				.to_string();
+		OpSchemaDto {
+			kind:          schema.kind.to_string(),
+			target_family,
+			fields:        schema.fields.into_iter().map(FieldSchemaDto::from).collect(),
+			description:   schema.description.to_string(),
+		}
+	}
+}
+
+impl From<pi_code_path::FieldSchema> for FieldSchemaDto {
+	fn from(field: pi_code_path::FieldSchema) -> Self {
+		let type_name =
+			serde_json::to_value(&field.type_name)
+				.expect("FieldType serialization")
+				.as_str()
+				.expect("FieldType is a string")
+				.to_string();
+		FieldSchemaDto {
+			name:        field.name.to_string(),
+			type_name,
+			required:    field.required,
+			description: field.description.to_string(),
+		}
+	}
+}
+
+/// List every Op variant with full field metadata (kind, target family,
+/// field schemas, description).
+///
+/// Used by the TypeScript codegen (Wave C) to generate per-variant
+/// TypeBox schemas at build time, eliminating hand-maintained mirrors
+/// of the Rust Op enum.
+#[napi]
+pub fn list_ops() -> Vec<OpSchemaDto> {
+	pi_code_path::Op::all_schemas()
+		.into_iter()
+		.map(OpSchemaDto::from)
+		.collect()
+}
+
