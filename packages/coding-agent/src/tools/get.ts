@@ -168,6 +168,39 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		let attachedQualifier: string | null = null;
 		let resolvedAbs: string | null = null;
 
+		// BUG-373: symmetric OUT_OF_PROJECT_ROOT for *every* absolute target
+		// (file, dir, glob, qualified). The bare-plain branch below handles
+		// the file case; this pre-check handles dir/glob/qualified targets
+		// that would otherwise silently degrade to `empty-result` because
+		// the kernel walker can't see paths outside its root.
+		if (
+			!looksLikeRegex
+			&& !target.includes("://")
+			&& params.gitignore !== false
+			&& path.isAbsolute(target.replace(/^[!~]/, ""))
+		) {
+			const rootDir = params.root ?? process.cwd();
+			// Strip qualifier (`#...`), glob tail (everything from first
+			// `*`/`?`/`[`), and symbol query (`::Sym`) to get the longest
+			// absolute prefix we can sanity-check against the walker root.
+			const prefix = target
+				.replace(/::.*$/, "")
+				.replace(/#.*$/, "")
+				.replace(/[*?[].*$/, "")
+				.replace(/\/+$/, "");
+			if (path.isAbsolute(prefix) && !isInsideRoot(prefix, rootDir)) {
+				const hint = `(hint: pass gitignore: false to read this file directly, or set root: "${prefix}" to walk from there.)`;
+				return toolResult<GetToolResultDetails>({
+					target: params.target,
+					error: "OUT_OF_PROJECT_ROOT",
+				})
+					.text(
+						`OUT_OF_PROJECT_ROOT: ${params.target}\n  project root: ${rootDir}\n  resolved:     ${prefix}\n\n${hint}`,
+					)
+					.done();
+			}
+		}
+
 		if (params.content !== false && !looksLikeRegex && classifyBareTarget(target) === "bare-plain") {
 			const normalized = target.replace(/\/+$/, "");
 			const rootDir = params.root ?? process.cwd();

@@ -244,6 +244,12 @@ fn fs_locator_to_glob(loc: &FsLocator) -> String {
 			},
 		}
 	}
+	// BUG-372: `.` and `./` are the cwd alias — walk the root unfiltered.
+	// build_globset returns None for an empty pattern, which is exactly the
+	// "no glob filter" path the walker already honours for `**`.
+	if out == "." || out == "./" {
+		return String::new();
+	}
 	out
 }
 
