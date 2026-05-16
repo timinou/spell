@@ -106,3 +106,33 @@ fn zero_vector_skipped_with_warning() {
 	idx.insert("zero".to_string(), zero).unwrap();
 	assert_eq!(idx.len(), 1, "zero vector should be skipped");
 }
+
+/// Regression: prior implementation rebuilt the inner HNSW on every insert,
+/// making N inserts O(N² log N). For N = 500 that exceeded several seconds
+/// even with mock data; for N = 1870 it was minutes. Incremental insert is
+/// O(log N) per call. We assert a generous wall-clock budget so the test is
+/// stable on slow CI, while still catching a regression to quadratic behavior.
+#[test]
+fn vec_index_inserts_scale_better_than_quadratic() {
+	use std::time::Instant;
+
+	let dim = 64;
+	let n = 500;
+	let mut idx = VecIndex::new(dim);
+	let start = Instant::now();
+	for i in 0..n {
+		let id = format!("row-{i}");
+		let vec = test_vector(dim, (i as f32) + 1.0);
+		idx.insert(id, vec).unwrap();
+	}
+	let elapsed = start.elapsed();
+	assert_eq!(idx.len(), n);
+	// 500 incremental HNSW inserts should comfortably fit in a few seconds
+	// even in debug builds. The old O(n²) path on this size took 30s+.
+	assert!(
+		elapsed.as_secs() < 10,
+		"insertion took {:?} for {n} items; suspected quadratic regression",
+		elapsed,
+	);
+}
+

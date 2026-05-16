@@ -1,7 +1,12 @@
 //! HNSW vector recall lane keyed by org item id.
 //!
 //! Wraps `pi_code_vectors::VectorIndex` with a `String`-keyed id mapping and
-//! disk serialization. Duplicate inserts replace the old vector (O(n) rebuild).
+//! disk serialization.
+//!
+//! Fresh ids are appended via the inner index's incremental `insert` (O(log n)).
+//! Duplicate ids (upsert) trigger an O(n log n) rebuild because `hnsw_rs` has
+//! no delete primitive — the inner index is reconstructed from scratch.
+//! In normal usage (engine-managed cache + delta updates) upsert is rare.
 
 use std::{
 	collections::HashMap,
@@ -19,8 +24,9 @@ const MAGIC: &[u8; 12] = b"SPELL_REC_V1";
 
 /// In-memory vector index mapping string ids to embedding vectors.
 ///
-/// Internally delegates to `pi_code_vectors::VectorIndex` (HNSW). On
-/// duplicate-`id` insert, the entire index is rebuilt in O(n).
+/// Internally delegates to `pi_code_vectors::VectorIndex` (HNSW). New ids
+/// are appended in O(log n); existing-id replacement triggers an O(n log n)
+/// rebuild (HNSW has no delete primitive).
 pub struct VecIndex {
 	inner:      InnerIndex,
 	id_to_node: HashMap<String, usize>,
@@ -42,10 +48,14 @@ impl VecIndex {
 		}
 	}
 
-	/// Insert a vector by string id.
+	/// Insert (or upsert) a vector by string id.
 	///
-	/// If `id` already exists, the old vector is replaced (triggers an O(n)
-	/// rebuild of the HNSW graph).
+	/// * Fresh `id` — appended via `hnsw_rs::insert_slice` in O(log n). No
+	///   rebuild of the inner index.
+	/// * Existing `id` — replaces the stored vector and rebuilds the inner
+	///   index in O(n log n) (HNSW has no delete; the rebuild is the only
+	///   way to drop the stale neighbor edges). Engine-managed delta updates
+	///   keep upserts rare.
 	///
 	/// Zero-norm vectors (`‖v‖ < 1e-9`) are logged as warnings and skipped.
 	pub fn insert(&mut self, id: String, vector: Vec<f32>) -> Result<()> {
@@ -61,24 +71,28 @@ impl VecIndex {
 		}
 
 		if let Some(&existing_node) = self.id_to_node.get(&id) {
-			// Replace: update the vector at the existing position
+			// Replace: update the vector at the existing position and rebuild.
+			// HNSW has no delete; rebuilding is the only way to remove the old
+			// neighbor edges. Cost is O(n log n); kept rare by the engine layer
+			// which only upserts items whose fingerprint changed.
 			self.vectors[existing_node] = vector;
+			let entries: Vec<VectorEntry> = self
+				.vectors
+				.iter()
+				.enumerate()
+				.map(|(node_idx, v)| VectorEntry { node_index: node_idx, vector: v.clone() })
+				.collect();
+			self.inner = InnerIndex::new(entries, self.dim);
 		} else {
-			// New id
+			// New id: append in O(log n) via the inner index's incremental insert.
 			let node_idx = self.node_to_id.len();
+			self
+				.inner
+				.insert(VectorEntry { node_index: node_idx, vector: vector.clone() })?;
 			self.id_to_node.insert(id.clone(), node_idx);
 			self.node_to_id.push(id);
 			self.vectors.push(vector);
 		}
-
-		// Rebuild the inner index from scratch
-		let entries: Vec<VectorEntry> = self
-			.vectors
-			.iter()
-			.enumerate()
-			.map(|(node_idx, v)| VectorEntry { node_index: node_idx, vector: v.clone() })
-			.collect();
-		self.inner = InnerIndex::new(entries, self.dim);
 		Ok(())
 	}
 
