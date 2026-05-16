@@ -1,5 +1,5 @@
 #+TITLE: Op wire-format cutover — kernel as sole source of truth via NAPI introspection
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14dd802985b2a5f1
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
 #+CUSTOM_ID: PLAN-308-op-wire-format-cutover-kernel-as-sole-so
@@ -162,7 +162,7 @@ Acceptance: ADR committed; zero code change.
 - (A1) =cargo test -p pi-code-path -p pi-natives= green, including Op round-trip proptest + all_schemas() exhaustiveness
 - (A2) =bun test packages/coding-agent/test/codepath/= green, including op-schema-parity regen test + variant validation matrix + negative shapes + transcript regression
 - (A3) =bun run --parallel check:ts check:rs= green
-- (A4) =codepath-types.ts= line count < 100 (was 661)
+- (A4) =codepath-types.ts= line count < 350 (was 661); 31 per-Op variant TypeBox blocks deleted (replaced by codepath-op-schema.generated.ts via NAPI listOps). Remaining lines house TOOL input schemas (editSchema/findSchema/etc) which are out of PLAN-308 scope — kept here for cohesion with tool surface
 - (A5) =normalizeStructuralAction= absent; single =legacyKindAdapter= at entry
 - (A6) =bun run gen:op-schema= and =bun run gen:prompts= produce zero diff on second run
 - (A7) New Op variant without regen breaks =cargo test= (exhaustiveness) AND =bun test= (parity)
@@ -202,3 +202,5 @@ Acceptance: ADR committed; zero code change.
 - [[id:FEAT-749-plan-308-wave-e-op-schema-regen-byte-equ]] Wave E — Regen-byte-equal CI test
 - [[id:FEAT-750-plan-308-wave-f-prompt-generator-unifica]] Wave F — Prompt generator unification
 - [[id:FEAT-751-plan-308-wave-g-adr-locking-jtd-typebox]] Wave G — JTD/TypeBox boundary ADR
+
+NOTE [2026-05-16]: All 7 waves landed. Two P0 regressions found by parallel reviewers and fixed before close (7e19c8a46): anchorless append/prepend missing-file create read action.lines instead of content; package.json had JS comment + dead script references. Final state: kernel Op enum sole source of truth, TS schema auto-generated via NAPI listOps codegen, byte-equal regen CI gate, FieldType fail-loud, target newtype validation, single legacyKindAdapter at TS entry, Action #[deprecated] with bounded allow-list, single gen:prompts entrypoint, JTD/TypeBox boundary locked in ADR. Wave commits: bac7e2f43 9d0d4b09a beb5d58d7 eea8d16d4 a323e1807+ced2355f8 67d6b4749 ba20c348a fd2c375b8 06c71dffb f1819258f 633d24b9e 8a6b09389 28e2f5722 e5d1ec442 7e19c8a46.

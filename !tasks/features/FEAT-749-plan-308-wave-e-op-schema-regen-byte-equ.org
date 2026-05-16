@@ -1,5 +1,5 @@
 #+TITLE: PLAN-308 Wave E — Op-schema regen-byte-equal CI test
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14dd802985b2a5f1
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
 #+CUSTOM_ID: FEAT-749-plan-308-wave-e-op-schema-regen-byte-equ
