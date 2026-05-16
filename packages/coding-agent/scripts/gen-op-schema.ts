@@ -56,8 +56,11 @@ function fieldTypeExpression(
     return FIELD_TYPES[typeName] as string;
   }
 
-  // Fallback: inline as plain string with description
-  return `Type.String({ description: ${JSON.stringify(description)} })`;
+  // Unknown FieldType — fail loud so new enum variants are explicitly handled
+  throw new Error(
+    `gen-op-schema: unknown FieldType '${typeName}'. ` +
+      `Extend FIELD_TYPES in ${__filename} to handle this kernel-side enum variant. PLAN-308 D-3.`
+  );
 }
 
 function schemaForField(
@@ -138,7 +141,14 @@ function generateFile(): string {
 }
 
 async function main() {
-  const outputPath = path.join(import.meta.dir, "../src/tools/codepath-op-schema.generated.ts");
+  // Default output path
+  const defaultOutputPath = path.join(import.meta.dir, '../src/tools/codepath-op-schema.generated.ts');
+
+  // Accept --out PATH to override output location
+  const outFlagIdx = process.argv.indexOf('--out');
+  const outputPath = outFlagIdx !== -1 && outFlagIdx + 1 < process.argv.length
+    ? path.resolve(process.argv[outFlagIdx + 1])
+    : defaultOutputPath;
   const code = generateFile();
   await fs.writeFile(outputPath, code, "utf-8");
 
