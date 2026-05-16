@@ -1,0 +1,156 @@
+#+TITLE: Type-correct edit Op surface: discriminated union, exhaustive dispatch, schema parity
+#+STATE: ITEM
+#+SESSION_ID: 14dce1e1b5fdd6c4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-11T09-15-47-287Z_14dce1e1b5fdd6c4.jsonl]]
+#+CUSTOM_ID: PLAN-304-type-correct-edit-op-surface-discriminat
+#+EFFORT: 20h
+#+LAYER: pi-code-path pi-natives coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+Edit
+ ┌─── ✔ Edit ───────────────────────────────────────────────────────┐
+ │ no resolver supports action Write                                │
+ └──────────────────────────────────────────────────────────────────┘
+
+
+in /home/user/.spell/agent/sessions/-code-ora-spell/2026-05-10T23-49-06-414Z_14dc602dbbba509c.jsonl
+ ID: 14dc602dbbba509c
+
+
+please explain the root causes of this issue
+
+* Initial Message
+
+Edit tool surface today admits "no resolver supports action Write" on symbol-targeted writes — a routing bug rooted in a flat 25-variant ~18-field Action enum where ActionKind is the dispatch key. Bring the (target × action) compatibility into the type system end-to-end so impossible combos can't be constructed, can't validate, and can't dispatch silently.
+
+* Problem (root causes)
+
+| # | Cause | Effect |
+|---|---|---|
+| RC-1 | Action is flat enum of 25 variants with ~18 mostly-optional fields | invalid combos parse; schema cannot express constraints |
+| RC-2 | ActionKind (string) is the routing key, not Action variant | routing decided imperatively per-resolver |
+| RC-3 | MutationResolver::supports() is per-resolver match | no totality/uniqueness check across resolvers |
+| RC-4 | TS surface uses Type.String() for kind/scope/mode/direction | typos + drift typecheck |
+| RC-5 | code_buffer JSON surface is a superset of kernel Action | scope:"body" reachable in code_buffer, silently dropped in kernel |
+| RC-6 | edit.md hand-written prose drifts from schema | agents see false affordances |
+
+Concrete holes catalogued today:
+- Write+S fails-but-implemented (code_buffer supports; CodeResolver.supports skips)
+- Append/Prepend/Patch on symbol targets silently fall through
+- Rename+F nonsensical but only fails at apply()
+- Procedural Css/Heading variants claim supports() but apply() throws NotImpl
+- scope:"body" passed through TS adapter, dropped in kernel deserialization
+- Replace/Insert without pos/end/line passes parse, fails at apply()
+
+* Goals
+
+- (G1) Every valid op JSON has exactly one resolver — total + unique dispatch
+- (G2) Every Op variant's required fields are statically present (no Option-on-required)
+- (G3) Every Op variant's target type ⊆ allowed locator shapes (FileTarget refuses ::, SymbolTarget requires ::)
+- (G4) TS schema is a discriminated union on `kind` — Type.Literal narrowing in user code
+- (G5) Adapter translates legacy kind names ("write","delete","rename"…) for one minor with deprecation note in result text
+- (G6) edit.md prompt is generated from schema; no hand-drift
+- (G7) Compile-time exhaustiveness in Rust (match on &Op) and TS (`const _: never = op` tail in switch)
+
+* Non-goals
+
+- No new editing capabilities beyond closing existing holes
+- No schemars / Rust-side schema generation (TS is source of truth; parity test); revisit later as FUP
+- No changes to LINE#ID anchor mechanism in TS sidecar (`edit.ts` already pre-routes those)
+- No URI-locator mutation support (out of scope)
+
+* Existing Patterns
+
+- Kernel Action enum: =crates/pi-code-path/src/ast.rs= lines 313-540 (Action, ActionKind, ActionContent, Occurrence, SpliceMode, Direction)
+- Locator types: =crates/pi-code-path/src/ast.rs= lines 32-80 (Locator, FsLocator, FsSegment, UriLocator)
+- has_target_query: =crates/pi-code-path/src/ast.rs::CodePath::has_target_query=
+- Three resolvers + supports():
+  - =crates/pi-code-path/src/dialects/fs/mutation.rs= (FsResolver, lines 52-130)
+  - =crates/pi-code-path/src/dialects/text/mutation.rs= (TextResolver, lines 130-260)
+  - =crates/pi-natives/src/code_path/code_resolver/mutation.rs= (CodeResolverImpl, lines 116-260)
+- Dispatcher: =crates/pi-natives/src/code_path/napi.rs= lines 451-487 (the three-way if-else chain)
+- code_buffer JSON surface: =crates/pi-natives/src/code_buffer.rs::single_action= lines 890-1160 (already supports scope:"body" via raw JSON)
+- TS schema: =packages/coding-agent/src/tools/codepath-types.ts= line 17-79 (current flat codePathActionSchema)
+- TS edit handler: =packages/coding-agent/src/tools/edit.ts= (normalizeStructuralAction line 122; LINE#ID branch isLineIdAction)
+- Prompt: =packages/coding-agent/src/prompts/tools/edit.md=
+- FEAT-689 (the safety guard that surfaces the bug) is the precedent for "refuse silently rather than nuke file"
+
+* Tests / Workflows
+
+- W1: Op variant exhaustiveness — match on &Op covers every variant; adding a new variant breaks compile
+- W2: FileTarget::new rejects S/Sq/Q/U; SymbolTarget::new requires query; CssTarget requires dialect==css; HeadingTarget requires dialect∈{md,org}
+- W3: Dispatch matrix — every OpKind has a fixture, routes to exactly one resolver, succeeds on a real tempfile (or returns explicit NotYetImplemented)
+- W4: Round-trip — Op → JSON → Op preserves every field (catches scope-drop class)
+- W5: TS schema accepts every valid variant; rejects impossible JSON (fileWrite with `::` target; symbolReplace with bare target; lineReplace missing span; scope=banana; unknown kind)
+- W6: Legacy adapter — kind:"write" target:"a.ts" → fileWrite; kind:"write" target:"a.ts::Foo" → symbolReplace; kind:"write" scope:"body" → symbolReplace{scope:Body}
+- W7: TS↔Rust schema parity — TypeBox-emitted JSON Schema deep-equals Rust deserializer's accepted shape (test enumerates variants)
+- W8: edit.md regenerated from schema; no hand-edits in the generated section
+- W9: Tool-call test against transcript scenario in PLAN body — `edit {target:"a.ts::Foo", action:{kind:"write", content:"..."}}` succeeds (current "no resolver supports" path)
+
+* Execution Manifest
+Wave 0 — ADR + freeze
+- [[id:FEAT-XXX-edit-op-adr-and-naming-lock]] ADR document; lock Op variant naming (camelCase, target-prefix), SymScope shape
+
+Wave 1 — Rust core types (parallel within wave)
+- [[id:FEAT-XXX-edit-op-enum-and-targets]] pi-code-path: Op enum + FileTarget/SymbolTarget/CssTarget/HeadingTarget newtypes + smart constructors + OpKind enum with strum::EnumIter
+- [[id:FEAT-XXX-edit-op-deserializer]] pi-code-path: Op::from_json discriminated-union deserializer with NotYetImplemented variant for procedurals
+- [[id:FEAT-XXX-edit-legacy-action-bridge]] pi-code-path: From<&Action> → Result<Op,Diagnostic> bridge for cutover safety
+
+Wave 2 — Dispatcher refactor (after Wave 1)
+- [[id:FEAT-XXX-edit-resolver-try-apply]] pi-code-path: MutationResolver::try_apply(&Op) replaces supports/apply; delete .supports()
+- [[id:FEAT-XXX-edit-fs-resolver-typed]] FsResolver claims File{Create,Write,Delete} only via exhaustive match
+- [[id:FEAT-XXX-edit-text-resolver-typed]] TextResolver claims File{Append,Prepend,Patch} + Line{Replace,Insert,Append,Prepend}
+- [[id:FEAT-XXX-edit-code-resolver-typed]] CodeResolverImpl claims every Symbol*
+- [[id:FEAT-XXX-edit-css-heading-resolvers]] New CssResolver + HeadingResolver modules; remove procedural switch from code_buffer
+- [[id:FEAT-XXX-edit-dispatch-coverage-assertion]] napi.rs: assert_coverage(&op) match — compile-time totality
+
+Wave 3 — TS surface (after Wave 2)
+- [[id:FEAT-XXX-edit-typebox-discriminated-union]] codepath-types.ts: replace flat codePathActionSchema with editOpSchema = Union(Object per variant) with kind: Type.Literal
+- [[id:FEAT-XXX-edit-handler-exhaustive-switch]] edit.ts: switch(op.kind) with `const _: never = op` tail; remove normalizeStructuralAction bag-forwarding
+- [[id:FEAT-XXX-edit-legacy-kind-adapter]] Pre-validation adapter: legacyKind → newKind translation table; emit deprecation note in tool result text
+- [[id:FEAT-XXX-edit-prompt-from-schema]] Generated edit.md from schema descriptions; fenced "generated" section; `bun run schema:gen` script
+
+Wave 4 — Tests (after Wave 3, parallelizable)
+- [[id:FEAT-XXX-edit-rust-dispatch-matrix-test]] cargo test op_matrix: every OpKind has a fixture, fixtures cover all OpKind variants (strum), dispatch totality + uniqueness
+- [[id:FEAT-XXX-edit-rust-roundtrip-proptest]] proptest Op↔JSON round-trip (catches scope-drop class)
+- [[id:FEAT-XXX-edit-ts-matrix-test]] bun test edit-matrix.test.ts: every variant succeeds on real tempfs
+- [[id:FEAT-XXX-edit-ts-negative-shape-test]] Negative tests for every impossible JSON shape
+- [[id:FEAT-XXX-edit-schema-parity-test]] TS schema ↔ Rust deserializer parity (enumerate variants, deep-equal accepted fields)
+- [[id:FEAT-XXX-edit-original-bug-regression-test]] Regression test reproducing the transcript scenario: edit {target:"path::Symbol", action:{kind:"write"}} now succeeds
+
+Wave 5 — Cleanup (deferred to FUP, NOT part of this PLAN)
+- See [[id:FUP-084-edit-op-hard-cutover-remove-legacy-actio]] — remove legacy Action enum, remove TS legacy adapter, AGENTS.md update; triggered when no active sessions are using legacy kind names
+
+* Acceptance
+
+- (A1) `cargo test -p pi-code-path -p pi-natives` green, including op_matrix dispatch totality + uniqueness assertions
+- (A2) `bun test packages/coding-agent/test/tools/edit*.test.ts` green, including matrix + negative + parity
+- (A3) `bun run --parallel check:ts check:rs` green
+- (A4) The original transcript scenario succeeds: `edit {target:"a.ts::Foo", action:{kind:"write", content:"…"}}` returns the structural diff, NOT "no resolver supports action Write"
+- (A5) `edit {kind:"write", target:"a.ts::Foo", scope:"body"}` (legacy) → translated to symbolReplace{scope:Body}, applies body-scoped write; deprecation note in result text
+- (A6) `edit {kind:"fileWrite", target:"a.ts::Foo"}` rejected by schema with message naming `symbolReplace` as the right kind
+- (A7) edit.md regenerated; no drift between prompt and schema field set
+- (A8) FUP filed for hard cutover (legacy adapter removal)
+
+* Risks
+
+- R-1 Behavioral drift: code_buffer accepts richer JSON than Op exposes
+  → Mitigation: Wave 2 makes Op authoritative at the code_buffer boundary; any kernel-only field becomes an Op variant or is deleted
+- R-2 In-flight agent sessions using legacy kind names
+  → Mitigation: Wave 3 adapter for one minor; deprecation note; FUP for cutover triggered manually after session quiesce
+- R-3 Heading/CSS resolvers don't exist as separate modules today
+  → Mitigation: thin wrappers over existing code_buffer procedure machinery; no new dialect logic
+- R-4 TypeBox-only schema means manual Rust parity
+  → Mitigation: schema-parity test (W7) catches drift; schemars is FUP not blocker
+- R-5 edit.md regeneration overwrites human edits
+  → Mitigation: hand-authored prose in separate file; generated section fenced and rebuilt by `bun run schema:gen`
+
+* Decisions (locked)
+
+- D-1 (legacy kinds): soft-deprecate with adapter; hard cutover filed as FUP, triggered manually
+- D-2 (naming): camelCase target-prefix (`fileWrite`, `symbolReplace`, `lineInsert`)
+- D-3 (procedurals): split into dedicated CssResolver + HeadingResolver modules
+- D-4 (schema source-of-truth): TypeBox-only, Rust hand-mirrors, parity test; schemars deferred to FUP
+- D-5: file PLAN now, swarm-orchestrate within this session

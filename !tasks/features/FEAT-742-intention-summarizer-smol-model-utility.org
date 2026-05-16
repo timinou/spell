@@ -1,0 +1,83 @@
+#+TITLE: intention-summarizer smol-model utility (DID/STUCK/ASK)
+#+STATE: DONE
+#+SESSION_ID: 14e278cdf6c434b0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-15T17-27-35-132Z_14e278cdf6c434b0.jsonl]]
+#+CUSTOM_ID: FEAT-742-intention-summarizer-smol-model-utility
+#+DEPENDS: FEAT-741-intentionsummarymessage-session-message
+#+EFFORT: 3h
+#+LAYER: packages/coding-agent/src/utils
+#+PARENT: PLAN-307-needs-input-intention-briefing-card-in-t
+
+* Initial Message
+
+can you tell me how you would have a small summary of the intention of a session when it goes to needs_input, shown in the TUI and stuff? look at the codebase and recent changes to choose the best way to represent this (for example, to make it easy to add it to team chat later)
+
+* Scope
+Add ~packages/coding-agent/src/utils/intention-summarizer.ts~ and ~packages/coding-agent/src/prompts/system/intention-system.md~. Generate a 3-line DID/STUCK/ASK briefing using the smol model role, falling back to the current session model when smol is unavailable. Inputs are limited to the last few assistant messages, the originating user message, the current ~BlockingEventPayload~, and in-progress todos. Never read the full transcript.
+
+* Existing Patterns
+- ~packages/coding-agent/src/utils/title-generator.ts~ : model resolution via ~resolveModelRoleValue("smol")~, ~completeSimple~, error/no-key handling, trimming.
+- ~packages/coding-agent/src/prompts/system/title-system.md~ : compact system-prompt format with strict output constraints.
+
+* Tests
+~packages/coding-agent/test/utils/intention-summarizer.test.ts~ (new):
+- T1: parses well-formed ~DID:/STUCK:/ASK:~ output into fields; trims whitespace.
+- T2: malformed output (only DID line) → returns partial with empty stuck/ask.
+- T3: model unavailable → returns null (controller falls back to BlockingEvent.title).
+- T4: empty firstMessage + no assistant tail → returns null (nothing to summarize).
+- T5: BlockingEvent kind ~plan_approval~ → planSummary is included in the prompt and the parsed ASK echoes the plan title.
+- T6: maxTokens caps response; oversize output is truncated by the model client, not by parsing logic.
+- T7: aborted AbortSignal causes the async fn to reject with an abort error (does NOT throw an unhandled rejection).
+
+* Implementation
+1. Exported function:
+   #+begin_src typescript
+   export interface IntentionSummaryInput {
+       firstUserMessage: string;
+       recentAssistantTexts: string[];   // newest-last, cap 3
+       blockingEvent?: BlockingEventLike;
+       inProgressTodoTitles: string[];   // cap 5
+       sessionTitle?: string;
+   }
+   export interface IntentionSummaryResult {
+       did: string;
+       stuck?: string;
+       ask: string;
+   }
+   export async function generateIntentionSummary(
+       input: IntentionSummaryInput,
+       registry: ModelRegistry,
+       settings: Settings,
+       opts?: { sessionId?: string; currentModel?: Model<Api>; signal?: AbortSignal },
+   ): Promise<IntentionSummaryResult | null>
+   #+end_src
+2. Prompt enforces output as exactly three lines:
+   ~DID: <past tense, ≤120 chars>~
+   ~STUCK: <empty allowed>~
+   ~ASK: <≤120 chars>~
+3. Parser is line-prefix based; tolerant to missing STUCK; rejects no DID + no ASK.
+4. ~maxTokens: 120~ on the completion request.
+5. Honor ~signal~ end-to-end (passed into ~completeSimple~ if supported, otherwise check before/after the await).
+
+* Acceptance
+- New file ~intention-summarizer.ts~ + ~intention-system.md~.
+- New tests file pass with stubbed ~ModelRegistry~ + injected fake completion.
+- ~tsgo -p packages/coding-agent~ clean.
+- No changes outside the two new files + the test file.
+
+NOTE [2026-05-15]: Started implementation: creating intention-summarizer.ts, intention-system.md, and tests.
+
+NOTE [2026-05-15]: Completed FEAT-742.
+
+Files created:
+- packages/coding-agent/src/utils/intention-summarizer.ts
+- packages/coding-agent/src/prompts/system/intention-system.md
+- packages/coding-agent/test/utils/intention-summarizer.test.ts
+
+Verification:
+- bun test packages/coding-agent/test/utils/intention-summarizer.test.ts: 11 pass, 0 fail, 15 expect() calls.
+- tsgo -p . --noEmit: clean (no output).
+- biome check on intention-summarizer.ts: clean.
+- git status shows the 3 new files as untracked; no existing files modified.
+
+Note: Workspace has many pre-existing dirty files from unrelated prior sessions, but none are related to this task.

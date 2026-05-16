@@ -1,0 +1,93 @@
+#+TITLE: Edit Op: hard cutover — remove legacy Action enum and TS legacy-kind adapter
+#+STATE: ITEM
+#+SESSION_ID: 14dce1e1b5fdd6c4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-11T09-15-47-287Z_14dce1e1b5fdd6c4.jsonl]]
+#+CUSTOM_ID: FUP-084-edit-op-hard-cutover-remove-legacy-actio
+#+DEPENDS: 
+#+EFFORT: 4h
+#+LAYER: pi-code-path pi-natives coding-agent
+#+PRIORITY: #B
+
+* Initial Message
+
+Edit
+ ┌─── ✔ Edit ───────────────────────────────────────────────────────┐
+ │ no resolver supports action Write                                │
+ └──────────────────────────────────────────────────────────────────┘
+
+
+in /home/user/.spell/agent/sessions/-code-ora-spell/2026-05-10T23-49-06-414Z_14dc602dbbba509c.jsonl
+ ID: 14dc602dbbba509c
+
+
+please explain the root causes of this issue
+
+* Initial Message
+
+After PLAN-304 lands, the kernel `Action` enum and the TS legacy-kind translation adapter remain for one minor as a soft-deprecation grace period. This FUP cuts them over once no active sessions are still issuing legacy `kind:"write"|"delete"|"rename"|…` calls.
+
+* Trigger condition
+
+User-triggered, manually, at end of a session window when:
+- No long-running agent sessions are observed using legacy kinds (grep recent transcripts for legacy kind tokens against the post-cutover migration window)
+- Spell extensions, skills, and rules have been audited for hand-rolled action JSON
+
+* Scope
+
+- In-scope: delete `Action` enum, `ActionKind` enum, `MutationResolver::supports`, `MutationResolver::apply` (replaced by `try_apply(&Op)`)
+- In-scope: delete TS pre-validation adapter (`legacyKind → newKind` translation table) from `packages/coding-agent/src/tools/edit.ts`
+- In-scope: delete the From<&Action>→Result<Op,Diagnostic> bridge
+- In-scope: update AGENTS.md / extension guidance with the new op names
+- Out-of-scope: re-flow of code_buffer.rs's JSON surface (that landed in PLAN-304 Wave 2)
+- Out-of-scope: schemars / Rust-side schema generation (separate FUP)
+
+* Existing Patterns
+
+- Legacy adapter lives in `packages/coding-agent/src/tools/edit.ts` (translation table added in PLAN-304 Wave 3)
+- From-bridge lives in `crates/pi-code-path/src/op.rs` (added in PLAN-304 Wave 1)
+- Action enum still referenced by: tests in `crates/pi-code-path/src/dialects/{fs,text}/mutation.rs`, by `crates/pi-natives/src/code_path/code_resolver/mutation.rs::action_to_value`
+- Deprecation note format: emitted in result text as `⚠ kind "write" is deprecated; use "symbolReplace" / "fileWrite"`
+
+* Tests / Workflows
+
+- W1: After cutover, `edit {kind:"write", target:"a.ts"}` returns schema error (not adapter translation)
+- W2: Rust `cargo test -p pi-code-path` still green with Action enum removed
+- W3: All resolver call sites use Op exclusively; grep for `ActionKind::|Action::` returns zero hits outside historical comments
+- W4: Extension/skill catalog audit: no manifest references legacy kinds
+
+* Implementation
+
+** Sweep transcripts and extensions for legacy callers
+- Grep `~/.spell/agent/sessions/*/transcript*.jsonl` for legacy kind tokens within the deprecation window
+- Audit `~/.spell/extensions/*/spell.kdl` and skill manifests
+- Output: list of stragglers + remediation
+
+** Remove TS adapter
+- Delete translation table from `packages/coding-agent/src/tools/edit.ts`
+- Replace with `schemaError("kind 'write' is no longer supported; use 'fileWrite' or 'symbolReplace'")`
+- Drop deprecation-note path from result text
+
+** Remove Rust legacy bridge
+- Delete `Action` enum + `ActionKind` enum from `crates/pi-code-path/src/ast.rs`
+- Delete From<&Action> → Op bridge
+- Delete `MutationResolver::supports`, `MutationResolver::apply` trait methods
+- Migrate any remaining Action-typed tests to construct Op directly
+
+** Update AGENTS.md and extension guidance
+- Note removal in CHANGELOG / migration notes
+- Verify regenerated edit.md still passes drift check
+
+* Acceptance Criteria
+
+- `grep -r 'ActionKind\|Action::' crates/pi-code-path crates/pi-natives` returns only comments/historical references
+- `grep -rn 'legacyKind\|deprecated' packages/coding-agent/src/tools/edit.ts` returns no live code
+- `bun test` + `cargo test` green
+- `bun run --parallel check:ts check:rs` green
+- Tool call `edit {kind:"write", target:"a.ts"}` returns a schema error pointing at the new kind names
+
+* Risks
+
+- R-1 Stragglers issuing legacy kinds will hard-fail after cutover
+  → Mitigation: sweep step before removal; explicit error message names the new kind
+- R-2 External extensions in the wild may carry hard-coded legacy kinds
+  → Mitigation: telegraph cutover in CHANGELOG before merge; allow operators to re-pin to pre-cutover version

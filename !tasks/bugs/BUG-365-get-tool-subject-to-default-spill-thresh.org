@@ -1,0 +1,35 @@
+#+TITLE: get tool subject to default spill threshold breaking mid-size reads
+#+STATE: DONE
+#+SESSION_ID: 14e2358c95b8f739
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-15T12-33-44-534Z_14e2358c95b8f739.jsonl]]
+#+CUSTOM_ID: BUG-365-get-tool-subject-to-default-spill-thresh
+#+EFFORT: 1h
+#+LAYER: coding-agent
+#+DEPENDS: FEAT-740-tools-getspillthreshold-dedicated-25k-to
+
+* Initial Message
+
+make sure the spill threshold does not affect the get tool, and that the get tool can access all artifacts.
+
+* Symptom
+=get= on any file > ~1KB returns =[Showing lines X-Y of Z (1.0KB limit)]= with body redirected to =artifact://…=. The follow-up =get= on that artifact ALSO spills to a new artifact → infinite indirection. Agent cannot read mid-size source files in a single call.
+
+* Root Cause
+- =packages/coding-agent/src/tools/output-meta.ts::spillLargeResultToArtifact= wraps every tool result through =resolveToolSpillPolicy()=.
+- =packages/coding-agent/src/session/spill-policy.ts::PRECISION_SPILL_EXEMPT_TOOLS= = ={ read, grep, org, find, code, lsp, ast_grep, ast_edit }= → ="get"= is missing despite being the canonical replacement for read/grep/find/ast_grep per Tool Precedence in =AGENTS.md=.
+- Fallthrough policy = =getLowSpillPolicy=: 50-line trigger / settings-driven byte trigger (default ≈1KB) clamps =get= output and re-spills artifact reads.
+
+* Impact
+- Cannot read files > 50 lines or > spill-threshold KB in one call.
+- =artifact://= reads via =get= are useless (recursive spill).
+- Forces agent to use bash =sed=/=head= fallbacks → violates =get over bash= guidance from =AGENTS.md= and triggers the same 1KB clamp anyway.
+
+* Fix
+Closed by [[id:FEAT-A-tools-get-spill-threshold]].
+
+* Verification
+- =get= on 10_000-line file → full content, no =artifact://= notice.
+- =get= on =artifact://…= for 100KB blob → identical content, no re-spill.
+- =packages/coding-agent/test/tools/output-meta-spill-policy.test.ts=: add =get= case mirroring read case.
+
+NOTE [2026-05-15]: Closed by FEAT-740. `get` now routed to dedicated 25k-token spill policy in spill-policy.ts::resolveToolSpillPolicy; also added to PRECISION_SPILL_EXEMPT_TOOLS as defensive fallback. Verified via output-meta-spill-policy + get-spill-policy unit tests.

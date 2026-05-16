@@ -1,0 +1,36 @@
+#+TITLE: Fan out IntentionSummary to spell-team-chat and Telegram
+#+STATE: ITEM
+#+SESSION_ID: 14e278cdf6c434b0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-15T17-27-35-132Z_14e278cdf6c434b0.jsonl]]
+#+CUSTOM_ID: FUP-085-fan-out-intentionsummary-to-spell-team-c
+#+DEPENDS: PLAN-307-needs-input-intention-briefing-card-in-t
+#+EFFORT: 4h
+#+LAYER: packages/spell-server packages/spell-team-chat
+
+* Initial Message
+
+can you tell me how you would have a small summary of the intention of a session when it goes to needs_input, shown in the TUI and stuff? look at the codebase and recent changes to choose the best way to represent this (for example, to make it easy to add it to team chat later)
+
+* Scope
+Once PLAN-307 lands the TUI-first briefing card, propagate the same content to the remote surfaces:
+1. Add ~"intention_summary"~ to ~EventLogEntryKind~ in ~packages/coding-agent/src/session-bridge/types.ts~ (mirror in ~packages/spell-server/src/socket/types.ts~).
+2. Coding-agent session-bridge client emits one ~event_log~ entry per finalised briefing.
+3. spell-team-chat ~Bubble.svelte~ branches on the new kind and renders the same 3-row card with web styling.
+4. Telegram ~packages/spell-server/src/telegram/session-notifications.ts~ prepends a ~Now: DID … / ASK …~ pair to the caption above the existing ~Session: <cwd>~ line.
+
+Intentionally deferred from PLAN-307 so the TUI lands first and the remote surfaces stay opt-in.
+
+* Existing Patterns
+- ~EventLogEntry~ shape already supports ~text~ + ~meta~ — sufficient to carry DID/STUCK/ASK as a structured ~meta~ object plus a joined ~text~ fallback.
+- ~packages/spell-team-chat/src/components/Bubble.svelte~ — branch-by-kind rendering.
+- ~packages/spell-server/src/telegram/session-notifications.ts~ — ~formatGenericBlockingMessage~ / ~formatAskMessage~ / ~formatHookSelectorMessage~ / ~formatPlanApprovalMessage~ all need the prepend.
+
+* Tests
+- T1: client emits one ~event_log~ entry per IntentionSummaryMessage finalised.
+- T2: registry forwards to subscribers; web/ws fan-out delivers to clients.
+- T3: team-chat reducer test renders the new bubble shape.
+- T4: telegram formatter test asserts the prepended ~Now: …~ lines in each blocking-kind formatter.
+
+* Acceptance
+- One bubble in team-chat per briefing, one Telegram caption preamble per blocking-event notification.
+- No regression in existing chat / notification paths.

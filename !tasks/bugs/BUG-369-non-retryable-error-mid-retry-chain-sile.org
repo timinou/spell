@@ -1,0 +1,54 @@
+#+TITLE: Non-retryable error mid-retry-chain silently abandons retry promise
+#+STATE: DONE
+#+SESSION_ID: 14e209047bb5e05f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-15T09-19-10-831Z_14e209047bb5e05f.jsonl]]
+#+CUSTOM_ID: BUG-369-non-retryable-error-mid-retry-chain-sile
+#+DEPENDS: BUG-368-agentsession-retry-promise-can-orphan-an
+#+EFFORT: 1h
+#+LAYER: packages/coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+bro i keep having issues in subagents:
+
+├─ ⡿ W3T2_RewriteSubstrateTests: Rewrite substrate + app tests that call find_or_start to use ConversationRuntime verbs or a documented internal helper · 78 tools · 2.3M tokens
+    │  └ Retrying (1/3) in 2.0s — Attempt 1/3 failed; retrying. Assistant resp…
+
+
+File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-hotelcomm/2026-05-13T11-51-30-487Z_14df98b3edff3385.jsonl
+
+
+Subagents are now stallinhg way too often. PLease find the root cause and exlpain it to me
+
+* Symptom
+While an =AgentSession= retry chain is active (=#retryAttempt > 0=, =#retryPromise= pending), a follow-up assistant message can arrive with =stopReason === "error"= whose =errorMessage= is not matched by =#isRetryableErrorMessage=. The =agent_end= handler skips =#handleRetryableError=, walks past the success-resolveRetry branch (which is gated on =stopReason !== "error"=), and falls off the end of the handler. =#retryPromise= is left pending; =auto_retry_end= is never emitted; consumers think a retry is still in flight.
+
+* Examples of non-retryable mid-chain errors
+- Provider-specific structured errors whose surface text doesn't include =overloaded|rate.?limit|429|500|502|503|504|connection.?error|fetch failed|...=
+- =ToolCallStreamDiagnosticError= with a =completed_tool_call_missing_trailing_stop= or =stalled_incomplete_tool_args= state when the diagnostic message wording diverges from the regex
+- A schema validation failure surfaced as an =error= stop, e.g., =Tool xxx not found= from =executeToolCalls=
+- Anything else that lands as =stopReason: "error"= without overlap with the regex set
+
+* Required behavior
+Treat any =stopReason === "error"= observed while =#retryPromise= exists (or =#retryAttempt > 0=) as terminal for the chain:
+1. Emit =auto_retry_end { success: false, attempt: #retryAttempt, finalError: msg.errorMessage ?? "Retry chain ended on non-retryable error" }=
+2. Set =#retryAttempt = 0=
+3. Call =#resolveRetry()=
+4. Continue the existing =agent_end= flow (compaction check, audit clear, etc.)
+
+This must run before the existing fall-through and apply even when the message has tool calls.
+
+* Fix surface
+- File: =packages/coding-agent/src/session/agent-session.ts=
+- Affected: =agent_end= branch of the handler around lines ~907–945
+- Helper: add =#forceEndRetryChain(message: AssistantMessage, finalErrorOverride?: string)= used by both this path and the sibling BUG paths
+
+* Verification
+- Test: drive a session through retry chain where the third attempt's stream emits =stopReason: "error"= with =errorMessage="Tool xxx not found"= (which doesn't match the regex). Assert =prompt()= returns, =session.isRetrying === false=, and =auto_retry_end= was emitted with =success: false=.
+- Test: same with a content-block schema error surfaced via =formatAssistantToolCallFailureMessage=.
+
+* Non-goals
+- Do not extend =#isRetryableErrorMessage= to swallow these failures — they should fail loudly with the actual error, not pretend to be retryable.
+
+NOTE [2026-05-15]: Resolved alongside BUG-368: the agent_end handler now force-ends the retry chain when a non-retryable stopReason='error' arrives mid-chain (#retryAttempt > 0 || #retryPromise). Test case 1 in agent-session-retry-orphan.test.ts pins the behavior with a 'Tool foo not found' error injected after an overloaded_error retry start.

@@ -36,8 +36,11 @@ line-scoped — target is `<file>`
   linePrepend            (at, content)
   lineReplace            (span, content)
 
-heading/css — Markdown/Org/CSS specific
-  headingDemote · headingPromote · headingReplaceBlock · cssRemoveDeadStyle · cssRenameClassToken · cssRenameCustomProp · cssRenameIdToken
+heading — Markdown/Org specific
+  headingDemote · headingPromote · headingReplaceBlock
+
+css specific
+cssRemoveDeadStyle · cssRenameClassToken · cssRenameCustomProp · cssRenameIdToken
 
 history — no target, dispatched alone (not mixed with other ops)
   undo · redo

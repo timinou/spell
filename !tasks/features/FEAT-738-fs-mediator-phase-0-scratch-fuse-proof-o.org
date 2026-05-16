@@ -1,0 +1,34 @@
+#+TITLE: FS-mediator Phase 0: scratch FUSE proof-of-concept
+#+STATE: ITEM
+#+SESSION_ID: 14e152ccec5129f7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-14T20-03-03-729Z_14e152ccec5129f7.jsonl]]
+#+CUSTOM_ID: FEAT-738-fs-mediator-phase-0-scratch-fuse-proof-o
+#+GATE: 8 PoC tests green on Linux + macFUSE
+#+PARENT_PLAN: PLAN-305-filesystem-mediator-bash-launched-writes
+#+PHASE: 0
+
+* Initial Message
+
+look at brush and tell me how it manages file writes
+
+* Location
+crates/pi-fs-scratch/  (DELETED after Phase 1 lands; this crate exists
+only to de-risk the mount-over-self pattern before we commit architecture.)
+
+* Test suite (T0.1 – T0.8)
+T0.1  fuser mount + unmount cycle 100x, no leaked fds, no zombies
+T0.2  mount-over-self: open(repo, O_PATH) BEFORE mount;
+      after mount, lower fd still reaches real files via openat(lower_fd,…)
+T0.3  read passthrough: cat $repo/Cargo.toml from outside returns lower bytes
+T0.4  unmount with active client fd open: client fd survives (FUSE semantics)
+T0.5  fusermount3 -u after handler panic recovers cleanly
+T0.6  panic in any FUSE op returns EIO to caller, daemon stays alive
+T0.7  SIGKILL of daemon: mount becomes stale, fusermount3 -u heals; lower intact
+T0.8  reboot sim: kill daemon, restart, repo files still byte-identical
+
+* Gate
+cargo test -p pi-fs-scratch + manual macFUSE run on macOS dev box.
+
+* On completion
+Mark this FEAT DONE; delete crates/pi-fs-scratch/ in the same PR that
+opens Phase 1.

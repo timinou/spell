@@ -1,0 +1,71 @@
+#+TITLE: AgentSession retry promise can orphan and hang prompt() / subagents indefinitely
+#+STATE: DONE
+#+SESSION_ID: 14e209047bb5e05f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-15T09-19-10-831Z_14e209047bb5e05f.jsonl]]
+#+CUSTOM_ID: BUG-368-agentsession-retry-promise-can-orphan-an
+#+EFFORT: 3h
+#+LAYER: packages/coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+bro i keep having issues in subagents:
+
+├─ ⡿ W3T2_RewriteSubstrateTests: Rewrite substrate + app tests that call find_or_start to use ConversationRuntime verbs or a documented internal helper · 78 tools · 2.3M tokens
+    │  └ Retrying (1/3) in 2.0s — Attempt 1/3 failed; retrying. Assistant resp…
+
+
+File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-hotelcomm/2026-05-13T11-51-30-487Z_14df98b3edff3385.jsonl
+
+
+Subagents are now stallinhg way too often. PLease find the root cause and exlpain it to me
+
+* Symptom
+Subagents enter the "Retrying (N/M)" loader, then never reach a terminal status. The parent's =await= tool stays blocked on =job.promise= forever; the orchestrator stalls and never observes that the subagent died.
+
+* Evidence
+Session =/home/user/.spell/agent/sessions/-code-ora-monorepo-apps-hotelcomm/2026-05-13T11-51-30-487Z_14df98b3edff3385.jsonl= shows multiple =stopReason: "error"= assistant events with zero token usage, including =overloaded_error=, =500 proxy_error=, and bare =Connection error=. Some chains exhaust cleanly via the "Final attempt N/M failed" path; the failure mode we're filing covers the cases where they don't.
+
+* Root cause
+=AgentSession.#retryPromise= is created in =#handleRetryableError= but =#resolveRetry()= is only called in four narrow paths:
+1. Success path in the =message= event branch when the next assistant message has =stopReason !== "error" && #retryAttempt > 0=
+2. =#retryAttempt > maxAttempts= in =#handleRetryableError=
+3. Sleep aborted in =#handleRetryableError=
+4. Explicit =abortRetry()=
+
+The =agent_end= handler has multiple early-return / fall-through paths that exit while a retry chain is live and never reach any of those four cases:
+- =if (!msg) return;= when no last-assistant + no fallback assistant present
+- =if (#skipPostTurnMaintenanceAssistantTimestamp === msg.timestamp) return;=
+- =if (hasToolCalls) return;= after retry classification skipped (=#isRetryableError= false)
+- Falls off the end when =stopReason === "error"= but message is *not* classified retryable (e.g., schema-validation error, =ToolCallStreamDiagnosticError= whose =errorMessage= doesn't match =#isRetryableErrorMessage= regex)
+
+Two additional scheduler-level leaks:
+- =#scheduleAgentContinue= catches =agent.continue()= exceptions and calls optional =onError=; =#handleRetryableError= passes no =onError= → orphan on synchronous continue failure
+- =#schedulePostPromptTask= silently skips when =#promptGeneration= moved forward and calls =onSkip=; =#handleRetryableError= passes no =onSkip= → orphan on generation rollover
+
+Once =#retryPromise= is pending forever:
+- =#waitForPostPromptRecovery= loops awaiting it indefinitely
+- =session.prompt()= never returns → =session.waitForIdle()= hangs
+- =task/executor.ts::#executeSync= never returns
+- =AsyncJobManager= job's =run()= is suspended → =job.promise= never settles
+- Parent =await= tool's =Promise.race([job.promise, signal])= waits forever
+
+* Fix
+1. In =#handleRetryableError=, when calling =#scheduleAgentContinue=, pass =onError= and =onSkip= callbacks that emit =auto_retry_end{success:false, finalError}=, reset =#retryAttempt=, and call =#resolveRetry()=.
+2. In the =agent_end= handler, on every early-return / fall-through path where =#retryAttempt > 0= (or =#retryPromise= exists), force-end the retry chain (emit =auto_retry_end{success:false, finalError: msg.errorMessage ?? "retry interrupted"}=, reset =#retryAttempt=, =#resolveRetry()=).
+3. Treat any non-retryable =stopReason === "error"= arriving while =#retryAttempt > 0= as terminal for the chain: force-end as above before falling through.
+
+* Verification
+- New focused test in =packages/coding-agent/test/session= that drives an AgentSession through a retry chain that ends with (a) a non-retryable stopReason=error, (b) a synchronous =agent.continue()= throw, (c) a generation-rollover skip — each must have =prompt()= return within bounded time and =isRetrying= return =false=.
+- Subagent end-to-end: =task/executor= test that simulates the same conditions in =run()= and verifies the wrapping job reaches =failed= status with a non-empty =errorText=.
+
+* Scope
+- Files: =packages/coding-agent/src/session/agent-session.ts=
+- Tests: =packages/coding-agent/test/session/agent-session-retry-orphan.test.ts= (new)
+
+* Non-goals
+- Do not change retry classification regex
+- Do not change retry backoff schedule
+- Do not introduce a new generic timeout (handled by sibling BUG)
+
+NOTE [2026-05-15]: Fixed via #forceEndRetryChain wired into all orphan paths in agent_end and onError/onSkip of #scheduleAgentContinue. 4 new tests in agent-session-retry-orphan.test.ts cover non-retryable mid-chain, missing assistant, skipPostTurnMaintenance match, and tool-calls-with-error. 23 tests pass across 4 files, tsgo clean.

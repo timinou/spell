@@ -1,0 +1,88 @@
+#+TITLE: Org tool schema misses parentId/slug/depends; suboutline-add unreachable from agent
+#+STATE: ITEM
+#+SESSION_ID: 14e152ccec5129f7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-14T20-03-03-729Z_14e152ccec5129f7.jsonl]]
+#+AFFECTS: all agents using proxy_org
+#+CUSTOM_ID: BUG-367-org-tool-schema-misses-parentid-slug-dep
+#+LAYER: tooling
+#+REPRO: org suboutline-add returns 'Missing required field: id'
+
+* Initial Message
+
+look at brush and tell me how it manages file writes
+
+* Symptom
+Calling org suboutline-add with parentId + slug + title from a coding-agent
+session fails with:
+    {"error":true,"message":"GenericFailure, Missing required field: id"}
+
+Root cause: the agent-facing JSON schema does not declare parentId, slug,
+depends, or layer as accepted fields. The agent SDK strips unknown fields
+before forwarding, so by the time the dispatcher reads args.parentId it is
+undefined. The error message is misleading -- it surfaces an internal
+"id required" check rather than naming the actually-missing field.
+
+* Drift surfaces (two of them)
+
+** packages/coding-agent/src/tools/org.ts:27 (the LLM-facing schema)
+orgSchema TypeBox object declares:
+  command, title, category, state, properties, body, append, manifest,
+  planItemId, section, file, dir, priority, layer, agent, query, ql,
+  includeBody, sort, limit, offset, id, note, property, value
+MISSING: parentId, slug, depends
+
+The "command" description string lists only:
+  init | create | query | get | update | delete | note | set | validate
+  | validate-plan | dashboard | wave | graph | archive
+MISSING from docs: suboutline-add, recall, remember, timeline, subgraph, link
+(all 6 subcommands exist in the dispatcher at packages/org/src/tool.ts:1354+)
+
+** packages/org/src/tool.ts:1233 (the tool's own parameters schema)
+Declares ONLY `command` as a property. Every other field the dispatcher
+reads (id, title, body, parentId, slug, ...) is undocumented. This is
+"loose JSON schema by intent" -- works because callers know the shape --
+but it's fragile and any agent SDK that schema-validates strictly will
+break the same way.
+
+* Fix shape (proposed)
+
+A) Update orgSchema in coding-agent/src/tools/org.ts:
+   - Add parentId: Type.Optional(Type.String({...}))
+   - Add slug:     Type.Optional(Type.String({...}))
+   - Add depends:  Type.Optional(Type.Array(Type.String(), {...}))
+   - Expand "command" description to enumerate ALL 20 subcommands
+   - Add explicit per-command "required fields" hints
+
+B) Update packages/org/src/tool.ts:1233:
+   - Replace the {command-only} parameters schema with the full set
+   - Better: derive both schemas from a single shared SoT module
+     `packages/org/src/tool-schema.ts` exporting the JTD shape; both
+     tool.ts (internal) and coding-agent/tools/org.ts (LLM-facing)
+     import it.
+
+C) Improve the error message:
+   When suboutline-add dispatcher receives args without parentId, return
+   { code: "MISSING_PARENT_ID", message: "suboutline-add requires parentId" }
+   instead of the generic "Missing required field: id" stemming from
+   downstream updateItem.
+
+* TDD checklist
+1. failing test: call suboutline-add via the SDK-validated path with
+   { command, parentId, slug, title }; assert success (currently fails
+   because schema strips parentId/slug).
+2. failing test: call with { command, parentId } missing slug; assert
+   code === "MISSING_SUBOUTLINE_SLUG" (currently surfaces wrong code).
+3. failing test: call without parentId; assert
+   code === "MISSING_PARENT_ID" (currently "Missing required field: id").
+4. red -> green by adding fields to orgSchema and improving dispatcher
+   error returns.
+5. tool.description test must include all 20 subcommand names.
+6. regression: ensure existing 14 subcommand calls still validate.
+
+* Acceptance
+- bun test packages/coding-agent --filter org passes
+- bun test packages/org passes (existing 564+ test in tool-commands)
+- new test: org-schema-conformance.test.ts asserts every command listed
+  in the description has its required fields declared.
+- An agent can call suboutline-add through the coding-agent tool surface
+  without "GenericFailure".
