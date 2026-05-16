@@ -23,13 +23,7 @@ use pi_org_engine::{
 	query::{self, QueryFilter},
 	section,
 };
-use pi_org_recall::{
-	Embedder,
-	embedder::MockEmbedder,
-	fts::FtsIndex,
-	recall::{RecallContext, RecallQuery, recall},
-	vec::VecIndex,
-};
+use pi_org_recall::recall::RecallQuery;
 use serde_json::{Value, json};
 
 use crate::{buffer_registry, org_index};
@@ -784,128 +778,68 @@ fn build_relations_drawer(
 	lines.join("\n")
 }
 
+/// `org recall` command. Thin shim over `pi_natives::recall_engine`: parses
+/// the JSON options into a `RecallQuery`, delegates to the process-singleton
+/// engine (which handles walking, parsing, indexing, embedding, persistence,
+/// and fingerprint-based staleness checks), then formats the hits into the
+/// existing JSON response shape.
+///
+/// The engine resolves its own `repo_root`-keyed cache and reuses warm state
+/// across calls, so the previous cold-rebuild-every-time behaviour is gone.
 fn cmd_recall(options: &Value) -> Result<Value> {
-	let query_text = options
-		.get("text")
-		.and_then(Value::as_str)
-		.map(String::from);
-	let scope: Vec<String> = options
-		.get("scope")
-		.and_then(Value::as_array)
-		.map(|arr| {
-			arr.iter()
-				.filter_map(|v| v.as_str().map(String::from))
-				.collect()
-		})
-		.unwrap_or_default();
-	let focus = options
-		.get("focus")
-		.and_then(Value::as_str)
-		.map(String::from);
-	let graph_hops = options
-		.get("graphHops")
-		.and_then(Value::as_u64)
-		.unwrap_or(1) as u8;
-	let limit = options.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize;
-	let include_personal = options
-		.get("includePersonal")
-		.and_then(Value::as_bool)
-		.unwrap_or(false);
-	let weights = options
-		.get("weights")
-		.and_then(|w| serde_json::from_value::<pi_org_recall::FusionWeights>(w.clone()).ok());
-
-	let graph_kinds: Vec<EdgeKind> = options
-		.get("graphKinds")
-		.and_then(Value::as_array)
-		.map(|arr| {
-			arr.iter()
-				.filter_map(|v| v.as_str().map(EdgeKind::parse))
-				.collect()
-		})
-		.unwrap_or_default();
-
 	let repo_root = options
 		.get("repoRoot")
 		.and_then(Value::as_str)
 		.map(PathBuf::from)
 		.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-	let mut all_items: Vec<OrgItem> = Vec::new();
-
-	let tasks_dir = repo_root.join("!tasks");
-	if tasks_dir.is_dir() {
-		let files = walk_org_files(&tasks_dir);
-		all_items.append(&mut parse_org_files(&files));
-	}
-
-	let memory_dir = repo_root.join(".spell").join("memory");
-	if memory_dir.is_dir() {
-		let files = walk_org_files(&memory_dir);
-		all_items.append(&mut parse_org_files(&files));
-	}
-
-	if all_items.is_empty() {
-		return Ok(json_response(json!({ "hits": [] }), false));
-	}
-
-	let fts = FtsIndex::open(&repo_root).map_err(|e| org_err(format!("fts open: {e}")))?;
-	fts.index(&all_items)
-		.map_err(|e| org_err(format!("fts index: {e}")))?;
-
-	let mut vec_idx = VecIndex::new(768);
-	let embedder = MockEmbedder::new();
-
-	// Embed each item and insert into VecIndex (uses blake3-based MockEmbedder)
-	let embed_texts: Vec<String> = all_items
-		.iter()
-		.map(|item| match item.body.as_ref() {
-			Some(body) => format!("{} {}", item.title, body.chars().take(512).collect::<String>()),
-			None => item.title.clone(),
-		})
-		.collect();
-	let embed_refs: Vec<&str> = embed_texts.iter().map(String::as_str).collect();
-
-	if let Ok(vectors) = embedder.embed_batch(&embed_refs) {
-		for (i, item) in all_items.iter().enumerate() {
-			if let Some(vec) = vectors.get(i) {
-				let _ = vec_idx.insert(item.id.clone(), vec.clone());
-			}
-		}
-	}
-
-	let typed_graph = build_typed_graph(&all_items);
-
 	let query = RecallQuery {
-		text: query_text,
-		scope,
-		focus,
-		graph_hops,
-		graph_kinds,
-		limit,
-		weights,
-		profile: options
+		text:             options.get("text").and_then(Value::as_str).map(String::from),
+		scope:            options
+			.get("scope")
+			.and_then(Value::as_array)
+			.map(|arr| {
+				arr.iter()
+					.filter_map(|v| v.as_str().map(String::from))
+					.collect()
+			})
+			.unwrap_or_default(),
+		focus:            options.get("focus").and_then(Value::as_str).map(String::from),
+		graph_hops:       options
+			.get("graphHops")
+			.and_then(Value::as_u64)
+			.unwrap_or(1) as u8,
+		graph_kinds:      options
+			.get("graphKinds")
+			.and_then(Value::as_array)
+			.map(|arr| {
+				arr.iter()
+					.filter_map(|v| v.as_str().map(EdgeKind::parse))
+					.collect()
+			})
+			.unwrap_or_default(),
+		limit:            options.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize,
+		weights:          options
+			.get("weights")
+			.and_then(|w| serde_json::from_value::<pi_org_recall::FusionWeights>(w.clone()).ok()),
+		profile:          options
 			.get("profile")
 			.and_then(Value::as_str)
 			.map(String::from),
-		include_personal,
+		include_personal: options
+			.get("includePersonal")
+			.and_then(Value::as_bool)
+			.unwrap_or(false),
 	};
 
-	let ctx = RecallContext {
-		items:    &all_items,
-		fts:      &fts,
-		vec:      &vec_idx,
-		embedder: &embedder,
-		graph:    &typed_graph,
-	};
-
-	let hits = recall(query, &ctx).map_err(|e| org_err(format!("recall: {e}")))?;
+	let hits = crate::recall_engine::query(&repo_root, query).map_err(org_err)?;
 
 	let hits_json: Vec<Value> = hits
 		.iter()
 		.map(|hit| {
 			let mut h = serde_json::to_value(hit).unwrap_or(Value::Null);
-			// Truncate excerpts to 200 chars
+			// Truncate excerpts to 200 chars (display contract preserved from
+			// the pre-engine implementation; the engine itself returns raw).
 			if let Some(excerpt) = h.get("excerpt").and_then(Value::as_str) {
 				let truncated: String = excerpt.chars().take(200).collect();
 				if truncated.len() < excerpt.len() {

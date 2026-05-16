@@ -1,6 +1,11 @@
 //! Integration tests for dual-root recall (`personal::recall_dual`).
 //!
 //! Tests fused results from cwd + personal contexts with deduplication.
+//!
+//! Requires the `test-mock` feature; see `tests/recall.rs` for the run
+//! command.
+
+#![cfg(feature = "test-mock")]
 
 use std::collections::HashMap;
 
