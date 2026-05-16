@@ -475,10 +475,11 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		if (!exists) {
 			// File creation via anchorless append/prepend
 			if ((action.kind === "fileAppend" || action.kind === "filePrepend") && !action.pos && !action.end) {
-				const lines = normalizeLines(action.lines) ?? "";
-				const content = action.kind === "filePrepend" ? lines : lines;
+				// PLAN-308: legacyKindAdapter renames legacy `lines` → `content`. Read either
+				// to support both shapes (avoid silent empty-file creation regression).
+				const body = normalizeLines(action.content ?? action.lines) ?? "";
 				await fs.mkdir(nodePath.dirname(targetPath), { recursive: true });
-				await fs.writeFile(targetPath, content, "utf-8");
+				await fs.writeFile(targetPath, body, "utf-8");
 				return toolResult<EditToolResultDetails>({
 					target: nodePath.relative(this.session.cwd, targetPath),
 					op: "create",
