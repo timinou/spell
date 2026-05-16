@@ -10,8 +10,10 @@ use std::{
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+#[allow(deprecated)]
+use pi_code_path::ast::Action;
 use pi_code_path::{
-	ast::{Action, Axis, CodePath, FsSegment, Head, Locator, MutationOutcome},
+	ast::{Axis, CodePath, FsSegment, Head, Locator, MutationOutcome},
 	dialect::NameLexer,
 	dialects::{fs::FsResolver, text::TextResolver},
 	op::Op,
@@ -145,11 +147,11 @@ pub struct FileSnapshot {
 /// unresolvable paths are skipped silently — the loop will surface
 /// them as runtime diagnostics.
 pub fn snapshot_targets(
-	actions: &[Action],
+	ops: &[Op],
 	cp: &CodePath,
 	root: &std::path::Path,
 ) -> Vec<FileSnapshot> {
-	let _ = actions;
+	let _ = ops;
 	let mut paths: Vec<std::path::PathBuf> = Vec::new();
 	if let Locator::Fs(fs) = &cp.locator {
 		let mut p = root.to_path_buf();
@@ -428,7 +430,7 @@ pub fn execute_code_path_inner(
 
 	// ── Edit command branch ──────────────────────────────────────
 	if opts.command == "edit" {
-		let actions: Vec<Action> = match opts.actions {
+		let raw_actions: Vec<serde_json::Value> = match opts.actions {
 			Some(v) => serde_json::from_value(v)
 				.map_err(|e| Error::from_reason(format!("invalid actions: {e}")))?,
 			None => {
@@ -442,6 +444,45 @@ pub fn execute_code_path_inner(
 					done:        true,
 				}]);
 			},
+		};
+
+		// Parse each action as Op (preferred) or legacy Action (fallback)
+		let ops: Vec<Op> = {
+			let mut parsed = Vec::with_capacity(raw_actions.len());
+			for raw in &raw_actions {
+				match serde_json::from_value::<Op>(raw.clone()) {
+					Ok(op) => parsed.push(op),
+					Err(_) => {
+						#[allow(deprecated)]
+						let action: Action = match serde_json::from_value(raw.clone()) {
+							Ok(a) => a,
+							Err(e) => {
+								return Ok(vec![CodePathChunk {
+									nodes: vec![],
+									diagnostics: vec![DiagnosticDto {
+										variant: "parse_error".to_string(),
+										message: format!("invalid action JSON: {e}"),
+										span:    None,
+									}],
+									done:    true,
+								}]);
+							},
+						};
+						match Op::from_legacy(&action, &cp) {
+							Ok(op) => parsed.push(op),
+							Err(d) => {
+								let diag = diagnostic_to_dto(d);
+								return Ok(vec![CodePathChunk {
+									nodes:       vec![],
+									diagnostics: vec![diag],
+									done:        true,
+								}]);
+							},
+						}
+					},
+				}
+			}
+			parsed
 		};
 
 		let fs_resolver = FsResolver::new(root.clone());
@@ -463,7 +504,7 @@ pub fn execute_code_path_inner(
 		// the pre-FEAT-712 behaviour: prior writes stay on disk.
 		let strict_mode = opts.transaction == Some(TransactionMode::Strict);
 		let snapshots: Vec<FileSnapshot> = if strict_mode {
-			snapshot_targets(&actions, &cp, &root)
+			snapshot_targets(&ops, &cp, &root)
 		} else {
 			Vec::new()
 		};
@@ -486,25 +527,7 @@ pub fn execute_code_path_inner(
 		};
 
 		let mut outcomes: Vec<MutationOutcome> = Vec::new();
-		for action in &actions {
-			// Wave 2 (PLAN-304): Action → Op → typed dispatch
-			let op = match Op::from_legacy(action, &cp) {
-				Ok(o) => o,
-				Err(d) => {
-					let diag = diagnostic_to_dto(d);
-					let rolled = if strict_mode { restore_strict(&snapshots) } else { 0 };
-					let final_message = if strict_mode {
-						format!("{} (rolled back {rolled} file(s))", diag.message)
-					} else {
-						diag.message
-					};
-					return Ok(vec![CodePathChunk {
-						nodes:       outcomes.into_iter().map(mutation_outcome_to_dto).collect(),
-						diagnostics: vec![DiagnosticDto { variant: diag.variant, message: final_message, span: diag.span }],
-						done:        true,
-					}]);
-				},
-			};
+		for op in &ops {
 
 			let resolver = dispatch_op(&op, &fs_resolver, &text_resolver, &code_resolver_arc, &css_resolver, &heading_resolver);
 
