@@ -314,8 +314,10 @@ export const TOOL_TIERS: Record<string, ToolTier> = {
 	approvals: "standard",
 
 	// Standard — loaded by default
-	get: "standard",
-	manage: "standard",
+	find: "standard",
+	status: "standard",
+	get: "standard", // legacy alias for find
+	manage: "standard", // legacy alias for status
 	create: "standard",
 
 	// Specialized — compact API descriptions to reduce token usage

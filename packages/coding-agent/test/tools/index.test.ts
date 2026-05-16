@@ -234,14 +234,15 @@ describe("TOOL_TIERS", () => {
 		}
 	});
 
-	it("assigns standard tier to get/edit/create (post-cutover)", () => {
-		for (const name of ["get", "edit", "create"]) {
+	it("assigns standard tier to find/edit/create/status (post-PLAN-306 cutover)", () => {
+		for (const name of ["find", "edit", "create", "status", "get", "manage"]) {
 			expect(getToolTier(name)).toBe("standard");
 		}
 	});
 
 	it("assigns specialized tier to deferred tools", () => {
-		const specialized: string[] = ["canvas", "browser", "calc", "gateway"];
+		// gateway/loop_* dropped in PLAN-306 W11.4.d (BUILTIN_TOOLS commit 2f6958d7a)
+		const specialized: string[] = ["canvas", "browser", "calc"];
 		for (const name of specialized) {
 			expect(getToolTier(name)).toBe("specialized");
 		}
