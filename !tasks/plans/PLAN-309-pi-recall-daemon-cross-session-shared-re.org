@@ -1,0 +1,369 @@
+#+TITLE: pi-recall-daemon: cross-session shared recall engine + embedder
+#+STATE: ITEM
+#+SESSION_ID: 14e6073129986fc8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-18T11-45-07-750Z_14e6073129986fc8.jsonl]]
+#+CUSTOM_ID: PLAN-309-pi-recall-daemon-cross-session-shared-re
+
+* Initial Message
+
+recently, spell sessions have been taking a lot of memory, can you find out why?
+
+#+LAYER: systems
+#+PROTOCOL: 178-B triple-sure
+#+RISK: medium
+#+ESCAPE_HATCH: PI_RECALL_DAEMON=0 env disables daemon; in-process path is fallback
+
+* Initial Message
+
+file ENGINES_CAP=1 + idle TTL as a BUG, then give me your full plan
+for the sidecar with how you'll verify its improvements and that it
+works.
+
+* Problem
+
+=pi-natives::recall_engine::ENGINES= is a per-Bun-process static. Each
+Spell session owns its own:
+- Tantivy =IndexWriter= 50 MB arena per repo
+- HNSW =VecIndex= + parsed =OrgItem= vec + =TypedGraph= per repo
+- =pi-embedding-worker= subprocess (Jina v2 base code, ~250 MB) per
+  session once recall runs
+
+Observed: 29 concurrent sessions, ~5.9 GB RSS aggregate, with recall
+state duplicated across every session pointing at the same on-disk
+indices. The duplication is not a leak — it is the natural consequence
+of session-scoped ownership of workspace-scoped state.
+
+BUG-382 caps the in-process footprint (=ENGINES_CAP = 1 + TTL=). That
+helps a single session but does nothing for the N-session multiplier.
+This plan addresses the multiplier.
+
+* Solution shape
+
+New crate =pi-recall-daemon= — per-user singleton on
+=$XDG_RUNTIME_DIR/spell/recall-daemon.sock=, owns one =ENGINES= map
+for the machine and one embedder child. Follows the
+=pi-edit-broker= playbook (fork + setsid + pidfile + probe + grace
+exit + journal). Clients in =pi-natives::recall_engine= try the
+socket first; on any failure they fall back to the existing in-process
+path. The daemon is a performance layer, never a correctness gate.
+
+The embedding worker (=pi-embedding-worker=) currently spawned per
+session moves under the daemon — one Jina v2 model resident for the
+machine, accessed by every session through the daemon's RPC.
+
+* Non-goals
+
+- Replace the in-process =RecallEngine= — daemon delegates to it.
+- Change the =RecallQuery= / =RecallHit= public shape — bit-for-bit
+  identical results required.
+- Multi-machine sharing — single host.
+- Persisting daemon state independently — daemon uses the same
+  on-disk =engine.bin= / =vec.bin= the in-process path already writes.
+- Authentication beyond Unix socket permissions (=0600=, user-owned).
+- Windows support in v1 (XDG_RUNTIME_DIR semantics differ).
+
+* Phases (each gated on full green test layer; cannot start phase X
+  until phase X-1 gate passes)
+
+** Phase 0 — IPC contract crate (=pi-recall-proto=)
+
+Scope: types only. =Request= enum (=Query=, =Invalidate=, =Status=,
+=Shutdown=), =Response= enum, length-prefixed JSON framing helpers.
+Zero runtime dependencies on the engine.
+
+Gate: =cargo test -p pi-recall-proto= — round-trip fuzz on every
+variant, schema snapshot test (=cargo insta=) so wire shape can't
+drift silently.
+
+** Phase 1 — daemon skeleton (=pi-recall-daemon= binary)
+
+Spawn + socket bind + pidfile + probe + signal handling + idle
+shutdown. =Status= returns daemon PID, uptime, mem-estimate; =Query=
+returns =Vec<RecallHit>= but the implementation is a stub that
+constructs an in-process =RecallEngineHandle= and delegates. No
+shared state yet — proves the lifecycle.
+
+Gate:
+- =cargo test -p pi-recall-daemon lifecycle= — spawn, connect,
+  status, shutdown.
+- =cargo test -p pi-recall-daemon spawn_race= — N concurrent
+  clients race to spawn, exactly one daemon process exists.
+- =cargo test -p pi-recall-daemon orphan_pidfile= — stale pidfile
+  on disk, no live process: daemon claims it and starts.
+
+** Phase 2 — engine ownership transfer
+
+Move the =ENGINES= static into the daemon. Per-repo handle now lives
+inside one process; the in-process path remains for fallback. Add a
+=daemon_or_inprocess= dispatch in =pi-natives::recall_engine::query=
+gated by =PI_RECALL_DAEMON= env (default off in this phase).
+
+Gate:
+- =cargo test -p pi-natives recall_engine= — all 10 existing tests
+  green with both dispatch modes via test matrix.
+- New differential test =recall_daemon_matches_inprocess=: 50
+  =RecallQuery= fixtures × 3 fixture repos, snapshot-equal results
+  (id-set identical, score-set within epsilon=1e-6) between modes.
+- =cargo test -p pi-recall-daemon concurrent_queries= — 16 clients
+  × 1000 queries, no panics, all results match in-process oracle.
+
+** Phase 3 — embedder consolidation
+
+Move =pi-embedding-worker= ownership from each Spell process to the
+daemon. The daemon spawns one worker child; client requests embed
+through the daemon's RPC. Removes the =OnceLock<EmbeddingWorker>= in
+=pi-natives::embedding_worker= when daemon mode is active; keeps it
+as fallback when daemon is unavailable.
+
+Gate:
+- =cargo test -p pi-recall-daemon embedder= — embedder subprocess
+  spawned exactly once per daemon lifetime, even with N concurrent
+  clients triggering first-use simultaneously.
+- =cargo test -p pi-natives embedding_worker= — existing tests pass
+  with both dispatch modes.
+- Memory check: =pgrep pi-embedding-worker | wc -l= = 1 across
+  N>1 active Spell sessions.
+
+** Phase 4 — fallback & crash recovery
+
+Client behaviour on socket failure: try connect, on ENOENT spawn
+daemon and retry once, on retry failure construct in-process engine
+inline (today's path). Daemon mid-query crash: client retries with
+exponential backoff up to 200 ms total, then falls back. Daemon must
+expose a deterministic crash injection point
+(=PI_RECALL_DAEMON_CRASH_AT={pre_query|mid_query|post_save}=) for
+tests.
+
+Gate:
+- =cargo test -p pi-natives daemon_fallback= — every failure mode
+  injected (ENOENT, ECONNREFUSED, timeout, daemon-crash) returns
+  the same =Vec<RecallHit>= as the in-process oracle.
+- =cargo test -p pi-recall-daemon crash_recovery= — kill -9 mid-query
+  on three crash points, client gets correct answer.
+
+** Phase 5 — idle shutdown + supervision hooks
+
+Daemon exits cleanly after =IDLE_SHUTDOWN= seconds (default 1800)
+with no active clients AND no in-flight queries. Releases all
+=IndexWriter= flocks before exit. Pidfile is removed atomically.
+Re-spawn on next client is transparent (already covered by Phase 1).
+
+Gate:
+- =cargo test -p pi-recall-daemon idle_shutdown= — fake clock,
+  assert exit after idle window.
+- =cargo test -p pi-recall-daemon active_client_blocks_shutdown=
+  — long-poll Status keeps daemon alive past idle window.
+- Manual: =systemd-run --user --scope= the daemon, verify clean
+  shutdown leaves no orphan tantivy locks (=lsof
+  ~/.cache/spell/recall/.../.tantivy-meta.lock=).
+
+** Phase 6 — multi-spell stress + property tests
+
+Property test harness in =tests/property.rs=: random
+=(client_count, query_seq, invalidation_seq, crash_inject)= tuples
+× 1000 cases, asserts:
+- Final hit set converges to in-process oracle's answer.
+- No deadlocks (=parking_lot::deadlock::check_deadlock()=
+  instrumented).
+- Daemon RSS stays bounded across the workload (sample, assert
+  =rss_max < 2 × rss_steady_state=).
+
+** Phase 7 — rollout
+
+Default-off behind =PI_RECALL_DAEMON= for one week. Capture memory
+telemetry from opt-in users (a single =Status= snapshot per session
+end, opt-in). Flip default to on once Phase 6 has run a 7-day soak
+test with =PI_RECALL_DAEMON_CRASH_AT=random_1pct= injecting random
+crashes — assert no client-visible failures across all sessions.
+
+* Protocol 178-B
+
+Live =pi-edit-broker= code MUST NOT be touched. The daemon uses
+broker's *patterns* (fork+setsid+pidfile, supervision shape,
+journal-style invalidation log) but reimplements them in
+=pi-recall-daemon=. Phase 5 may extract shared lifecycle helpers
+into a new =pi-daemon-common= crate iff the duplication exceeds
+~150 LOC; otherwise duplicate.
+
+* Architecture (final)
+
+Layers:
+- L0 wire: Unix domain socket, length-prefixed JSON. Path
+  =$XDG_RUNTIME_DIR/spell/recall-daemon.sock=. Mode 0600.
+- L1 protocol: =pi-recall-proto::{Request, Response}= — versioned
+  via a leading =protocol_version: u16=. Mismatch ⇒ daemon refuses;
+  client falls back.
+- L2 daemon: tokio runtime, =DashMap<PathBuf, Arc<RecallEngineHandle>>=
+  unbounded (one machine ⇒ ENGINES_CAP no longer needed; still
+  TTL-evict at 1h idle). Owns one =EmbeddingWorker= child.
+- L3 engine: same =RecallEngineHandle= used by in-process path. No
+  duplication of engine logic — daemon is a transport over the
+  existing struct.
+- L4 client: =pi-natives::recall_engine::query()= becomes a
+  dispatcher.  =Daemon= variant connects, sends, decodes.
+  =InProcess= variant is today's code, unchanged.
+
+Concurrency invariants preserved from current code:
+- =Arc::strong_count == 1= eviction guard (54fef66f3) — still
+  required inside daemon for TTL evictions.
+- Single =IndexWriter= per index, =parking_lot::Mutex= around writes.
+- =IndexReader= clones for concurrent reads (Tantivy idiom).
+
+Failure modes (each falls back to in-process, never user-visible):
+- socket ENOENT ⇒ spawn daemon, retry once
+- ECONNREFUSED (stale socket file) ⇒ unlink, spawn, retry
+- timeout >200 ms on connect ⇒ in-process
+- daemon panic mid-query ⇒ in-process
+- protocol version mismatch ⇒ in-process
+- ENOMEM in daemon ⇒ daemon =Response::Err=, client in-process
+
+* Verification — memory improvements
+
+** Synthetic baseline harness =bench/recall_memory_aggregate.rs=
+
+Fixed workload: spawn N ∈ {1, 5, 10, 20} Spell sessions; each runs a
+scripted sequence of 10 =recall= queries against a fixture repo with
+1870 .org items. Sample =VmRSS= per PID every 5 s for 5 min. Report
+=sum(rss_peak)= and =sum(rss_steady)=.
+
+Pre-merge gate (Phase 2 complete):
+- N=10, single repo: =sum(rss_peak)= drops ≥ 1.5 GB vs in-process
+  baseline. (Math: 10 × ~200 MB recall state collapses to 1 ×
+  ~200 MB; 90% saved on the recall slice = ~1.8 GB; conservative
+  target 1.5 GB accounts for daemon process overhead.)
+- N=10, three repos: =sum(rss_peak)= drops ≥ 2 GB.
+
+Phase 7 gate:
+- 7-day production opt-in soak across 5 operator boxes: =sum(rss)=
+  for =bun spell= processes drops ≥ 30% vs the pre-daemon snapshot
+  on the same boxes.
+
+** Continuous regression guard
+
+CI job =recall_memory_regression= runs the N=5 single-repo harness
+on every PR touching =pi-natives=, =pi-recall-daemon=, or
+=pi-org-recall=. Asserts =sum(rss_peak) < 1.2 × baseline_recorded=.
+Baseline updated on intentional regressions via a flag in the
+commit message (=memory-bump-ok: <reason>=).
+
+** Per-session ceiling
+
+Existing in-process test =recall_engine_rss_bound= (new in this
+plan): one Spell-equivalent harness process, recall on 4 distinct
+repos, assert peak =VmRSS < 250 MB= (daemon mode; in-process mode
+keeps its own bound from BUG-382 fix).
+
+* Verification — correctness
+
+** Differential corpus
+
+=tests/differential_corpus.rs= in =pi-recall-daemon=. Fixture
+directory =tests/fixtures/recall-corpus/= containing:
+- 5 repo snapshots (small, medium, large, multi-worktree,
+  empty-org).
+- 50 =RecallQuery= JSON fixtures spanning all query knobs (kind,
+  filters, k, graph_hops, profile).
+
+For each (repo, query) pair: run in-process path → capture hits;
+run daemon path → capture hits; assert id-list identical and scores
+within epsilon=1e-6. This is the *primary* correctness gate — any
+divergence is a hard fail.
+
+** Property test
+
+=tests/property.rs= using =proptest=. Generators:
+- =RecallQueryArb= — random valid queries.
+- =WorkloadArb= — interleaved =Query=/=Invalidate=/=Embed=
+  operations across 1–16 simulated clients.
+- =CrashScheduleArb= — random crash points in =[pre_query,
+  mid_query, post_save, embedder_spawn]=.
+
+For 1000 cases: every completed query's hit-set equals the
+in-process oracle's hit-set for the same final workspace state.
+Shrunk failures committed as regression fixtures into the
+differential corpus.
+
+** Concurrency
+
+=tests/concurrent.rs=: 16 client threads × 1000 queries each on
+shared daemon. Asserts no panics, no =Mutex= poisoning, no
+=PoisonError= surfacing to clients. Run under
+=parking_lot::deadlock::check_deadlock=.
+
+Optional: =loom= model of the =DashMap= entry creation race and TTL
+eviction guard — bounded scope, ~100 lines.
+
+** Crash injection
+
+=PI_RECALL_DAEMON_CRASH_AT= takes a comma-separated list. Test
+matrix exercises each value individually plus =random_1pct=. After
+crash: client must return correct answer (matching in-process
+oracle) within 500 ms wall-clock.
+
+** Multi-spell race
+
+=tests/multi_spell.rs=: two daemon-client processes start
+simultaneously, both call =Invalidate= for the same repo while a
+third does =Query=. Final result equals in-process oracle re-running
+the full pipeline on the post-invalidation workspace.
+
+** Conformance with existing tests
+
+=cargo test -p pi-natives recall_engine=,
+=cargo test -p pi-org-recall= must remain green in both dispatch
+modes via a test matrix env var (=PI_RECALL_DAEMON_MODE={off,on}=).
+
+** Operational smoke
+
+End-to-end: launch real Spell session, =org recall=, verify daemon
+spawned via =pgrep pi-recall-daemon=, =Status= reports the query.
+Launch second session, =org recall= again, daemon process count
+stays at 1, =Status= reports both clients.
+
+* Acceptance summary
+
+- Phase gates above all pass.
+- Differential corpus: 100% match (id-set identical, scores within
+  epsilon).
+- Memory: N=10 single-repo synthetic drops =sum(rss_peak)= ≥ 1.5 GB
+  vs pre-daemon baseline; 7-day soak shows ≥ 30% aggregate RSS
+  reduction on real boxes.
+- Concurrency: 16 × 1000 stress passes; no flakes in 100 CI runs.
+- Crash recovery: 4 deterministic crash points + 1% random injection
+  all recover within 500 ms to oracle-matching answers.
+- Fallback: every daemon failure mode results in correct in-process
+  answer; no user-visible failure.
+- Existing test suite green under both dispatch modes.
+
+* Risk register
+
+- Tantivy =INDEX_WRITER_LOCK= held by daemon across an idle
+  shutdown bug ⇒ next session's in-process fallback fails with
+  =LockBusy=. Mitigation: explicit =writer.commit().wait()= +
+  =drop(writer)= in shutdown handler; integration test
+  =idle_shutdown_releases_locks=.
+- Daemon corruption corrupting =engine.bin= / =vec.bin= for
+  in-process users ⇒ atomic =tmp+rename= already exists (c0a28831d),
+  reuse unchanged.
+- Embedder model load time (~3 s for Jina v2) on daemon spawn ⇒
+  first recall after daemon restart is slow. Mitigation: spawn
+  embedder eagerly on daemon init; client connects only after
+  embedder reports ready (probe loop).
+- Multi-user shared host ⇒ XDG_RUNTIME_DIR is per-user, socket
+  =0600=, one daemon per user. Verified in Phase 1
+  =spawn_per_user_isolation= test.
+- Stale daemon serving stale state ⇒ workspace fingerprint check on
+  every query (unchanged from in-process path) catches it.
+- Daemon RSS unbounded if every repo on disk ends up cached ⇒ TTL
+  eviction at 1h idle, plus =Status= exposes per-handle size for
+  ops introspection.
+
+* Related
+
+- BUG-382 — within-session cap fix; remains the fallback path.
+- 88e41a511, c0a28831d, 6aa5d28a9, 54fef66f3 — recall-engine
+  history; invariants from these (atomic save, strong-count
+  eviction guard, =PersistedOrgItem= serde) all carry forward.
+- =pi-edit-broker= — supervision pattern reused; code not modified.
+- =pi-embedding-worker= — child process consolidates into daemon
+  under Phase 3.

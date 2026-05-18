@@ -1,0 +1,112 @@
+#+TITLE: RecallEngine LRU holds 4 repo handles forever per session; bound to 1 + idle TTL
+#+STATE: ITEM
+#+SESSION_ID: 14e6073129986fc8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-18T11-45-07-750Z_14e6073129986fc8.jsonl]]
+#+CUSTOM_ID: BUG-382-recallengine-lru-holds-4-repo-handles-fo
+
+* Initial Message
+
+recently, spell sessions have been taking a lot of memory, can you find out why?
+
+* Symptom
+
+Long-lived Spell sessions touching multiple repos accumulate up to
+~800 MB resident in =pi-natives::recall_engine::ENGINES= and never
+release it until process exit. Observed per-session =VmHWM= = 1.0–1.5 GB
+on sessions running >1 day; aggregate across 29 concurrent sessions is
+~5.9 GB RSS (see Class).
+
+* Class
+
+Steady-state memory regression introduced by the RecallEngine
+process-singleton landing on 2026-05-16:
+
+- 88e41a511 feat(natives): RecallEngine process singleton with fingerprint cache
+- c0a28831d harden(natives): RecallEngine production hardening — LRU, atomic save, quiet log
+  - introduced =ENGINES_CAP: usize = 4= (=crates/pi-natives/src/recall_engine.rs:85=)
+- 6aa5d28a9 fix(recall): persist via PersistedOrgItem; fix CacheStore silent flush bug
+- 54fef66f3 fix(recall): preserve :RELATIONS: across warm restore; strong-count-aware LRU
+
+Each handle holds:
+- Tantivy =IndexWriter= 50 MB arena (=pi-org-recall/src/fts.rs:150=, =index.writer(50_000_000)=)
+- HNSW =VecIndex= (768-f32 / item) + parsed =OrgItem= vec + =TypedGraph=
+
+Per-handle 60–200 MB resident. Cap=4 ⇒ ~240–800 MB upper bound per
+session held for the process lifetime with no idle eviction.
+
+The cap was a hardening pass on an unbounded =HashMap=; it stops the
+absolute leak but leaves an oversized steady-state floor for the
+common case (sessions work one repo at a time and warm-restore from
+disk is ~50 ms — bench from the c0a28831d commit message).
+
+* Root cause
+
+=get_or_create= in =crates/pi-natives/src/recall_engine.rs:115-160=:
+1. Cap sized for "typical multi-worktree work" (4) — overestimates the
+   common single-repo case by 4×.
+2. No idle eviction. A handle stays resident even if untouched for
+   hours; only insert pressure (a 5th distinct repo) frees memory.
+
+* Mitigation
+
+Two-line change shape:
+
+1. =ENGINES_CAP: usize = 1=. Sized for the common case. Multi-repo
+   sessions pay one warm-restore (~50 ms) on repo switch — measured
+   acceptable in c0a28831d.
+2. Idle TTL eviction. Track =last_used: Instant= per entry; on
+   =get_or_create= entry, sweep entries with =now - last_used > IDLE_TTL=
+   AND =Arc::strong_count == 1=, drop them. =IDLE_TTL = 10 min=.
+
+Both gated on =Arc::strong_count == 1= (already the LRU eviction
+invariant) — never drop a handle held by an in-flight query, else
+Tantivy =INDEX_WRITER_LOCK= leaks (the bug already fixed in 54fef66f3).
+
+This is *not* a replacement for the sidecar (filed separately). It is
+the within-session win that ships in one PR with bounded risk; the
+sidecar is the cross-session architectural fix.
+
+* Acceptance
+
+- =ENGINES_CAP = 1=; comment updated to reflect single-repo sizing.
+- =IDLE_TTL = Duration::from_secs(600)= constant.
+- =RecallEngineHandle= or its LRU tuple gains =last_used: Instant=,
+  updated on every =get_or_create= hit.
+- New test =idle_ttl_evicts_unused_engine=: build engine for repo A,
+  advance clock past TTL (inject =now()= via test seam or use
+  =std::time::Instant= with a controllable wrapper), build engine for
+  repo B, assert A is no longer in =ENGINES=.
+- New test =idle_ttl_does_not_evict_live_handle=: hold an =Arc= clone
+  past TTL, build engine for repo B, assert A is still present
+  (strong_count guard wins over TTL).
+- Existing 10 =recall_engine= tests stay green.
+- Memory acceptance: run a fresh session, =recall= once on repo A,
+  =recall= once on repo B, sleep 11 min, =recall= once on repo B
+  again — A's handle should be gone (assert via a debug-only
+  =engines_snapshot()= helper, or by RSS delta vs control).
+
+* Non-goals
+
+- Cross-session sharing (filed as PLAN sidecar).
+- Tantivy arena reduction below 50 MB (writer throughput floor).
+- Embedder lifecycle changes (sidecar territory).
+- Forcing eviction on memory pressure (RSS-driven) — would need
+  malloc instrumentation; TTL is the proxy.
+
+* Verification
+
+- =cargo test -p pi-natives recall_engine=
+- =cargo test -p pi-org-recall=
+- Manual: =PI_RECALL_LOG=1 cargo run= a Spell session, run recall on
+  two repos with sleep, observe =LRU evicted= log on second.
+- Before/after RSS sample: build same session, run recall on two
+  repos, =awk '/VmHWM/' /proc/$pid/status= — expect ~50–200 MB lower
+  peak.
+
+* Related
+
+- Sidecar plan (PLAN-XXX) — supersedes this on multi-session machines
+  but this fix remains the in-process fallback when sidecar is
+  unreachable.
+- c0a28831d (LRU hardening that introduced the current cap)
+- 54fef66f3 (strong-count invariant — must preserve)
