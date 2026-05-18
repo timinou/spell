@@ -34,7 +34,7 @@ use std::{
 	fs,
 	path::{Path, PathBuf},
 	sync::{Arc, OnceLock},
-	time::UNIX_EPOCH,
+	time::{Duration, Instant, UNIX_EPOCH},
 };
 
 use parking_lot::Mutex;
@@ -77,12 +77,33 @@ const SCANNED_SUBDIRS: &[&str] = &["!tasks", ".spell/memory"];
 
 /// Cap on the `ENGINES` LRU. Each entry holds a Tantivy `IndexWriter` (50 MB
 /// arena), an HNSW (one 768-f32 vector per item), and the full parsed item
-/// vector — easily 60-200 MB resident. A long-lived Spell session that
-/// touches more repos than this will evict the least-recently-used handle
-/// on insert; the evicted handle drops its `IndexWriter` (releases Tantivy's
-/// flock) and HNSW. The next query for that repo pays the warm-restore cost
-/// (~50 ms with disk cache) again. Sized for typical multi-worktree work.
-const ENGINES_CAP: usize = 4;
+/// vector — easily 60-200 MB resident. Sized for the common case (a session
+/// works one repo at a time); cross-repo work pays one warm-restore on
+/// switch (~50 ms with disk cache). Cross-session sharing is PLAN-309's
+/// territory; this cap addresses single-session memory only (BUG-382).
+const ENGINES_CAP: usize = 1;
+
+/// Idle TTL: drop cached handles whose `last_used` is older than this on the
+/// next `get_or_create` miss for a different repo. Eviction respects the
+/// same `Arc::strong_count == 1` invariant as LRU eviction — an in-flight
+/// query keeps its handle alive past the TTL. The warm-restore on re-use is
+/// ~50 ms; 10 min idle window is sized so an operator's lunch break frees
+/// the ~60-200 MB without penalising active back-to-back work.
+const IDLE_TTL: Duration = Duration::from_secs(600);
+
+/// Test-only override for `IDLE_TTL`. Tests acquire `lock_test_env()` before
+/// mutating to serialise across the test binary. `None` ⇒ use `IDLE_TTL`.
+#[cfg(test)]
+static IDLE_TTL_OVERRIDE: parking_lot::Mutex<Option<Duration>> = parking_lot::Mutex::new(None);
+
+#[inline]
+fn idle_ttl() -> Duration {
+	#[cfg(test)]
+	if let Some(d) = *IDLE_TTL_OVERRIDE.lock() {
+		return d;
+	}
+	IDLE_TTL
+}
 
 /// Bincode filename inside the per-repo cache dir.
 const ENGINE_CACHE_FILE: &str = "engine.bin";
@@ -95,13 +116,22 @@ const VEC_CACHE_FILE: &str = "vec.bin";
 // ---------------------------------------------------------------------------
 
 /// LRU map of repo-keyed engine handles. Bound by `ENGINES_CAP` to keep
-/// memory bounded across long Spell sessions that touch many repos.
-/// `Vec<(PathBuf, Arc<Handle>)>` ordered LRU-first (last touched at the
-/// back). At our cap (4) the linear scans are O(N) on a tiny N and cheaper
-/// than the overhead of pulling in a real LRU crate.
-static ENGINES: OnceLock<Mutex<Vec<(PathBuf, Arc<RecallEngineHandle>)>>> = OnceLock::new();
+/// memory bounded across long Spell sessions that touch many repos, plus
+/// `IDLE_TTL`-based eviction so a single-repo session that goes idle for
+/// a long stretch (lunch break, overnight) frees its 60-200 MB without
+/// waiting for a different repo to push it out. Ordered LRU-first (last
+/// touched at the back). At the current cap (1) the linear scans are O(1)
+/// in practice; the structure stays a `Vec` to keep eviction semantics
+/// explicit and avoid pulling in an LRU crate.
+struct LruEntry {
+	repo:      PathBuf,
+	handle:    Arc<RecallEngineHandle>,
+	last_used: Instant,
+}
 
-fn engines() -> &'static Mutex<Vec<(PathBuf, Arc<RecallEngineHandle>)>> {
+static ENGINES: OnceLock<Mutex<Vec<LruEntry>>> = OnceLock::new();
+
+fn engines() -> &'static Mutex<Vec<LruEntry>> {
 	ENGINES.get_or_init(|| Mutex::new(Vec::new()))
 }
 
@@ -124,30 +154,54 @@ pub fn get_or_create(
 		None => repo_cache_dir(&canon).map_err(|e| e.to_string())?,
 	};
 	let mut map = engines().lock();
-	// LRU lookup: linear scan, move-to-back on hit.
-	if let Some(pos) = map.iter().position(|(k, _)| k == &canon) {
-		let entry = map.remove(pos);
-		let handle = Arc::clone(&entry.1);
+	let now = Instant::now();
+	// LRU lookup: linear scan, move-to-back on hit. Update `last_used` so
+	// the TTL sweep below treats this entry as freshly touched.
+	if let Some(pos) = map.iter().position(|e| e.repo == canon) {
+		let mut entry = map.remove(pos);
+		entry.last_used = now;
+		let handle = Arc::clone(&entry.handle);
 		map.push(entry);
 		return Ok(handle);
 	}
+	// Miss path. Before we allocate the new handle, sweep idle entries so
+	// the new handle doesn't push memory above where it needs to be. Same
+	// `Arc::strong_count == 1` invariant as LRU eviction (54fef66f3): never
+	// drop a handle held by an in-flight query, else Tantivy's
+	// `INDEX_WRITER_LOCK` stays held and the next `open_fts` fails with
+	// `LockBusy`. Walk back-to-front so removals don't shift unscanned
+	// indices.
+	let ttl = idle_ttl();
+	for idx in (0..map.len()).rev() {
+		if now.duration_since(map[idx].last_used) > ttl
+			&& Arc::strong_count(&map[idx].handle) == 1
+		{
+			let evicted = map.remove(idx);
+			engine_log!(
+				"TTL evicted {} (idle {:?} > {:?})",
+				evicted.repo.display(),
+				now.duration_since(evicted.last_used),
+				ttl,
+			);
+		}
+	}
 	let base_owned = cache_base.map(Path::to_path_buf);
 	let h = Arc::new(RecallEngineHandle::new(canon.clone(), cache_dir, base_owned));
-	map.push((canon, Arc::clone(&h)));
-	// LRU eviction: only evict entries whose Arc strong count is 1 (no
-	// in-flight query holds a clone). Evicting an in-use handle would still
-	// leak its Tantivy `INDEX_WRITER_LOCK` until the in-flight query
-	// returns; the next `get_or_create` for the evicted repo would then
-	// fail `open_fts` with `LockBusy`. We walk LRU-first and skip live
-	// entries; under sustained pressure the map may briefly exceed
-	// `ENGINES_CAP`, but never indefinitely (queries are bounded in time).
+	map.push(LruEntry { repo: canon, handle: Arc::clone(&h), last_used: now });
+	// LRU cap eviction: only evict entries whose Arc strong count is 1 (no
+	// in-flight query holds a clone). Evicting an in-use handle would leak
+	// its Tantivy `INDEX_WRITER_LOCK` until the in-flight query returns;
+	// the next `get_or_create` for the evicted repo would then fail
+	// `open_fts` with `LockBusy`. Walk LRU-first and skip live entries;
+	// under sustained pressure the map may briefly exceed `ENGINES_CAP`,
+	// but never indefinitely (queries are bounded in time).
 	let mut scan_idx = 0;
 	while map.len() > ENGINES_CAP && scan_idx < map.len() {
-		if Arc::strong_count(&map[scan_idx].1) == 1 {
+		if Arc::strong_count(&map[scan_idx].handle) == 1 {
 			let evicted = map.remove(scan_idx);
 			engine_log!(
 				"LRU evicted {} (cap={ENGINES_CAP}, len was {})",
-				evicted.0.display(),
+				evicted.repo.display(),
 				map.len() + 1,
 			);
 			// scan_idx stays; next iteration retests this position.
@@ -171,7 +225,7 @@ pub fn forget(repo_root: &Path) {
 	if let Some(slot) = ENGINES.get() {
 		let canon = canonical_root(repo_root);
 		let mut map = slot.lock();
-		map.retain(|(k, _)| k != &canon);
+		map.retain(|e| e.repo != canon);
 	}
 }
 
@@ -1001,6 +1055,137 @@ mod tests {
 			"disk-restored graph must include 1-hop neighbours from :RELATIONS:; got {ids:?}"
 		);
 		forget(repo.path());
+	}
+
+	/// RAII override for `IDLE_TTL_OVERRIDE`. Pairs with `force_no_worker`'s
+	/// env lock so concurrent tests don't race on the override slot.
+	struct IdleTtlGuard;
+
+	impl IdleTtlGuard {
+		fn set(d: Duration) -> Self {
+			*IDLE_TTL_OVERRIDE.lock() = Some(d);
+			Self
+		}
+	}
+
+	impl Drop for IdleTtlGuard {
+		fn drop(&mut self) {
+			*IDLE_TTL_OVERRIDE.lock() = None;
+		}
+	}
+
+	/// Test-only inspection of the global LRU. Used to assert TTL behaviour
+	/// without poking the static directly from each test body.
+	fn engines_contains(repo: &Path) -> bool {
+		let Some(slot) = ENGINES.get() else {
+			return false;
+		};
+		let canon = canonical_root(repo);
+		slot.lock().iter().any(|e| e.repo == canon)
+	}
+
+	#[test]
+	fn idle_ttl_evicts_unused_engine_on_next_miss() {
+		// TTL semantics: after `IDLE_TTL` of no use, the next `get_or_create`
+		// for a *different* repo sweeps the idle entry before allocating the
+		// new handle. Sweep runs on the miss path only — we never do work on
+		// hit paths, so an actively-used engine never gets touched.
+		let _no_worker = force_no_worker("ttl-evicts");
+		let _ttl = IdleTtlGuard::set(Duration::from_millis(50));
+		let repo_a = tempdir().unwrap();
+		write_item(
+			&repo_a.path().join("!tasks"),
+			"A.org",
+			"* TODO A\n:PROPERTIES:\n:CUSTOM_ID: TTL-A\n:END:\n",
+		);
+		let repo_b = tempdir().unwrap();
+		write_item(
+			&repo_b.path().join("!tasks"),
+			"B.org",
+			"* TODO B\n:PROPERTIES:\n:CUSTOM_ID: TTL-B\n:END:\n",
+		);
+		let cache = tempdir().unwrap();
+
+		// Cold-build A. Temporary Arc drops at end of statement, leaving
+		// strong_count = 1 (only ENGINES holds it).
+		get_or_create(repo_a.path(), Some(cache.path()))
+			.unwrap()
+			.query(q("A"))
+			.unwrap();
+		assert!(engines_contains(repo_a.path()), "precondition: A cached");
+
+		// Idle past TTL.
+		std::thread::sleep(Duration::from_millis(100));
+
+		// Get-or-create for B: miss path runs TTL sweep, sees A idle >
+		// 50 ms with strong_count == 1, drops it.
+		get_or_create(repo_b.path(), Some(cache.path()))
+			.unwrap()
+			.query(q("B"))
+			.unwrap();
+
+		assert!(
+			!engines_contains(repo_a.path()),
+			"A should have been TTL-evicted on B's miss"
+		);
+		assert!(engines_contains(repo_b.path()), "B should be cached");
+
+		forget(repo_a.path());
+		forget(repo_b.path());
+	}
+
+	#[test]
+	fn idle_ttl_skips_handles_held_by_inflight_queries() {
+		// Strong-count invariant (54fef66f3 carried forward to TTL path):
+		// never drop a handle still held outside ENGINES. Dropping it would
+		// keep Tantivy's `INDEX_WRITER_LOCK` held inside the still-live
+		// `FtsIndex`, and the next `open_fts` on the same repo would fail
+		// with `LockBusy`. Test: hold an explicit Arc clone, sleep past TTL,
+		// trigger a sweep via a miss on a different repo, assert the held
+		// handle survives.
+		let _no_worker = force_no_worker("ttl-strong-count");
+		let _ttl = IdleTtlGuard::set(Duration::from_millis(50));
+		let repo_a = tempdir().unwrap();
+		write_item(
+			&repo_a.path().join("!tasks"),
+			"A.org",
+			"* TODO A\n:PROPERTIES:\n:CUSTOM_ID: TTL-HOLD-A\n:END:\n",
+		);
+		let repo_b = tempdir().unwrap();
+		write_item(
+			&repo_b.path().join("!tasks"),
+			"B.org",
+			"* TODO B\n:PROPERTIES:\n:CUSTOM_ID: TTL-HOLD-B\n:END:\n",
+		);
+		let cache = tempdir().unwrap();
+
+		// Hold a clone outside ENGINES — simulates an in-flight query.
+		let held_a = get_or_create(repo_a.path(), Some(cache.path())).unwrap();
+		held_a.query(q("A")).unwrap();
+		assert_eq!(
+			Arc::strong_count(&held_a),
+			2,
+			"precondition: held_a + ENGINES = 2 strong refs"
+		);
+
+		std::thread::sleep(Duration::from_millis(100));
+
+		// Miss on B triggers the sweep. A is idle but `strong_count == 2`
+		// so the guard skips it. Also exercises LRU cap eviction: cap=1
+		// would normally evict A, but the same strong-count guard skips it.
+		let _hb = get_or_create(repo_b.path(), Some(cache.path())).unwrap();
+		_hb.query(q("B")).unwrap();
+
+		assert!(
+			engines_contains(repo_a.path()),
+			"A must survive TTL sweep while held outside ENGINES (Tantivy lock invariant)"
+		);
+		assert!(engines_contains(repo_b.path()), "B should be cached");
+
+		drop(held_a);
+		drop(_hb);
+		forget(repo_a.path());
+		forget(repo_b.path());
 	}
 
 	#[test]
