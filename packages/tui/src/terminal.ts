@@ -99,6 +99,17 @@ export interface Terminal {
 	 */
 	onLost(callback: (reason: string) => void): () => void;
 
+	/**
+	 * Register a callback for terminal focus changes.
+	 * Uses CSI 1004h (focus tracking) to detect when the terminal window
+	 * gains or loses focus. The callback receives `true` for focus-in,
+	 * `false` for focus-out. Returns an unsubscribe function.
+	 *
+	 * Niri overview / window-manager workspace switches fire focus-out;
+	 * consumers may throttle rendering when unfocused.
+	 */
+	onFocusChange(callback: (focused: boolean) => void): () => void;
+
 	/** The last detected terminal appearance, or undefined if not yet known. */
 	get appearance(): TerminalAppearance | undefined;
 }
@@ -119,6 +130,8 @@ export class ProcessTerminal implements Terminal {
 	#writeLogPath = $env.PI_TUI_WRITE_LOG || "";
 	#windowsVTInputRestore?: () => void;
 	#appearanceCallbacks: Array<(appearance: TerminalAppearance) => void> = [];
+	#focusCallbacks: Array<(focused: boolean) => void> = [];
+	#focused = true;
 	#lossCallbacks: Array<(reason: string) => void> = [];
 	#appearance: TerminalAppearance | undefined;
 	#osc11Pending = false;
@@ -153,6 +166,16 @@ export class ProcessTerminal implements Terminal {
 			const index = this.#lossCallbacks.indexOf(callback);
 			if (index >= 0) {
 				this.#lossCallbacks.splice(index, 1);
+			}
+		};
+	}
+
+	onFocusChange(callback: (focused: boolean) => void): () => void {
+		this.#focusCallbacks.push(callback);
+		return () => {
+			const idx = this.#focusCallbacks.indexOf(callback);
+			if (idx >= 0) {
+				this.#focusCallbacks.splice(idx, 1);
 			}
 		};
 	}
@@ -240,6 +263,12 @@ export class ProcessTerminal implements Terminal {
 		// When the terminal reports a change, we re-query OSC 11 to get the
 		// actual background color (following Neovim convention) with 100ms debounce.
 		this.#safeWrite("\x1b[?2031h");
+
+		// Enable focus event reporting (CSI 1004h). Terminal sends \x1b[I on
+		// focus-in and \x1b[O on focus-out. Used by TUI to throttle rendering
+		// when the terminal window is not visible (niri overview switching,
+		// minimized, other workspace, etc.).
+		this.#safeWrite("\x1b[?1004h");
 
 		// Start periodic OSC 11 re-query for terminals without Mode 2031
 		// (Warp, Alacritty, WezTerm, iTerm2). Self-disables once Mode 2031 fires.
@@ -389,6 +418,20 @@ export class ProcessTerminal implements Terminal {
 					this.#handleOsc11Response(rHex!, gHex!, bHex!);
 					return;
 				}
+			}
+
+			// Focus events: \x1b[I (focus-in), \x1b[O (focus-out). Sent by
+			// terminal when CSI 1004h is active. Fire callbacks; swallow event
+			// (do not forward to input handler since it's not a user keystroke).
+			if (sequence === "\x1b[I" || sequence === "\x1b[O") {
+				const focused = sequence === "\x1b[I";
+				if (focused !== this.#focused) {
+					this.#focused = focused;
+					for (const cb of [...this.#focusCallbacks]) {
+						try { cb(focused); } catch { /* swallow */ }
+					}
+				}
+				return;
 			}
 
 			// Mode 2031 change notification: re-query OSC 11 with 100ms debounce
@@ -601,6 +644,8 @@ export class ProcessTerminal implements Terminal {
 
 		// Disable Mode 2031 appearance change notifications
 		this.#safeWrite("\x1b[?2031l");
+		// Disable focus event reporting
+		this.#safeWrite("\x1b[?1004l");
 		this.#stopOsc11Poll();
 		this.#stopLivenessTimer();
 		if (this.#mode2031DebounceTimer) {
