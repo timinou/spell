@@ -47,8 +47,8 @@ rayon = "1.10"
 ast-grep-core = { version = "0.39", default-features = false, features = [
    "tree-sitter",
 ] }
-pi-code-graph = { path = "../pi-code-graph", features = ["semantic"] }
-pi-code-vectors = { path = "../pi-code-vectors" }
+pi-code-graph = { path = "../pi-code-graph" }
+pi-knowledge-core = { path = "../pi-knowledge-core" }
 pi-code-engine = { path = "../pi-code-engine" }
 pi-code-path = { path = "../pi-code-path" }
 pi-org-engine = { path = "../pi-org-engine" }

@@ -1,5 +1,5 @@
 #+TITLE: Adaptive idle baseline: stop polling once we know the answer
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14ea14814559e822
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T15-17-13-109Z_14ea14814559e822.jsonl]]
 #+CUSTOM_ID: FEAT-759-adaptive-idle-baseline-stop-polling-once
@@ -59,3 +59,5 @@ Idle session sits at ≤0.5% CPU, ≤3 active timerfds. When the terminal loses 
 
 - Part of =PLAN-XXX-tui-responsiveness=.
 - Companion to =BUG-382= (recall-engine idle TTL) — same philosophy applied to terminal/UI layer.
+
+NOTE [2026-05-21]: Closed in commit. OSC11 self-disable on first reply (Mode 2031 push events still drive re-queries); decoupled liveness timer from OSC11 poll; cursor + memories heartbeat debounce-on-silence; managed-daemon probe-on-failure; comprehensive .unref() audit across tui/ai/coding-agent. Deferred: focus-event render-throttle (skeleton onFocusChange API ready for follow-up; needs TUI.setMinRenderInterval wiring); session-bridge heartbeat unchanged (cursor + memories cover the bulk).

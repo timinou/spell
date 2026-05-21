@@ -1,5 +1,5 @@
 #+TITLE: Shared SpinnerClock: one ticker drives all active spinners
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14ea14814559e822
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T15-17-13-109Z_14ea14814559e822.jsonl]]
 #+CUSTOM_ID: FEAT-761-shared-spinnerclock-one-ticker-drives-al
@@ -94,3 +94,5 @@ For animations that aren't exactly 80ms (e.g. voice anim, caveman frames), accep
 * Related
 
 - Part of =PLAN-XXX-tui-responsiveness=.
+
+NOTE [2026-05-21]: Closed in commit (FEAT-761 commit). Singleton SpinnerClock in packages/tui/src/spinner-clock.ts (80ms .unref(), starts on first subscribe, stops on empty, snapshot-iterates). Migrated: tool-execution.ts + oauth-selector.ts. Not migrated (intentional): mcp-add-wizard (120ms custom cadence), voice anim, caveman frames, countdown/login/model-selector (non-spinner timers). 4 spinner-clock tests + 27 component tests + tui 337/0.

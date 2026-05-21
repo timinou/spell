@@ -689,17 +689,17 @@ export class TUI extends Container {
 	#executeRender(): void {
 		this.#renderRequested = false;
 		this.#lastRenderTime = performance.now();
-		if (!DevProfile.enabled) {
+		if (DevProfile.enabled) {
+			const start = performance.now();
+			const beforeLines = this.#previousLines.length;
 			this.#doRender();
+			devProfile.recordFrame({
+				frameMs: performance.now() - start,
+				linesChanged: Math.abs(this.#previousLines.length - beforeLines),
+			});
 			return;
 		}
-		const start = performance.now();
-		const beforeLines = this.#previousLines.length;
 		this.#doRender();
-		devProfile.recordFrame({
-			frameMs: performance.now() - start,
-			linesChanged: Math.abs(this.#previousLines.length - beforeLines),
-		});
 	}
 
 	#handleInput(data: string): void {

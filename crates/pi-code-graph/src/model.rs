@@ -107,8 +107,7 @@ pub struct PersistedCodeGraph {
 pub struct CodeGraph {
 	persisted:    PersistedCodeGraph,
 	search_index: SearchIndex,
-	#[cfg(feature = "semantic")]
-	vector_index: Option<pi_code_vectors::VectorIndex>,
+	vector_index: Option<std::sync::Arc<pi_knowledge_core::vec::VectorIndex>>,
 }
 
 impl CodeGraph {
@@ -117,7 +116,6 @@ impl CodeGraph {
 		Self {
 			persisted,
 			search_index,
-			#[cfg(feature = "semantic")]
 			vector_index: None,
 		}
 	}
@@ -168,19 +166,17 @@ impl CodeGraph {
 	}
 
 	/// Construct with a pre-built vector index for hybrid search.
-	#[cfg(feature = "semantic")]
 	pub fn with_vectors(
 		persisted: PersistedCodeGraph,
-		vectors: pi_code_vectors::VectorIndex,
+		vectors: pi_knowledge_core::vec::VectorIndex,
 	) -> Self {
 		let search_index = SearchIndex::build(&persisted);
-		Self { persisted, search_index, vector_index: Some(vectors) }
+		Self { persisted, search_index, vector_index: Some(std::sync::Arc::new(vectors)) }
 	}
 
 	/// Access the vector index if available.
-	#[cfg(feature = "semantic")]
-	pub const fn vector_index(&self) -> Option<&pi_code_vectors::VectorIndex> {
-		self.vector_index.as_ref()
+	pub fn vector_index(&self) -> Option<&pi_knowledge_core::vec::VectorIndex> {
+		self.vector_index.as_deref()
 	}
 }
 

@@ -156,9 +156,7 @@ impl CodeGraph {
 		query_vector: Option<&[f32]>,
 		limit: usize,
 	) -> Vec<GraphSearchMatch> {
-		// When semantic feature is enabled and vectors are available, use hybrid
-		// search.
-		#[cfg(feature = "semantic")]
+		// When vectors are available, use hybrid search.
 		if let (Some(vector_index), Some(qv)) = (self.vector_index(), query_vector) {
 			let bm25_hits = self.search_index().search(query, limit * 2);
 			let vector_hits = vector_index.search(qv, limit * 2).unwrap_or_default();
@@ -173,8 +171,6 @@ impl CodeGraph {
 				})
 				.collect();
 		}
-		// Suppress unused variable warning when semantic feature is disabled.
-		let _ = query_vector;
 		// Fallback: BM25 only.
 		let graph = self.graph();
 		self

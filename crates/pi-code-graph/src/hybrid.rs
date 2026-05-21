@@ -44,7 +44,7 @@ pub struct HybridSearchHit {
 /// Documents appearing in both lists get scores from both.
 pub fn reciprocal_rank_fusion(
 	bm25_hits: &[SearchHit],
-	vector_hits: &[pi_code_vectors::VectorSearchHit],
+	vector_hits: &[pi_knowledge_core::vec::VectorSearchHit],
 	graph: &CodeGraph,
 	limit: usize,
 ) -> Vec<HybridSearchHit> {
@@ -69,11 +69,12 @@ pub fn reciprocal_rank_fusion(
 	}
 
 	for (rank, hit) in vector_hits.iter().enumerate() {
-		let entry = entries.entry(hit.node_index).or_insert_with(|| {
+		let node_index = hit.node_id as usize;
+		let entry = entries.entry(node_index).or_insert_with(|| {
 			// Look up label + path from the graph for vector-only hits.
-			let (label, path) = node_label_path(petgraph, hit.node_index);
+			let (label, path) = node_label_path(petgraph, node_index);
 			HybridSearchHit {
-				node_index: hit.node_index,
+				node_index,
 				score: 0.0,
 				label,
 				path,
@@ -273,9 +274,9 @@ mod tests {
 		];
 		// Vector found: B (rank 0), D (rank 1), A (rank 2)
 		let vector = vec![
-			pi_code_vectors::VectorSearchHit { node_index: 2, score: 0.95 },
-			pi_code_vectors::VectorSearchHit { node_index: 4, score: 0.80 },
-			pi_code_vectors::VectorSearchHit { node_index: 1, score: 0.70 },
+			pi_knowledge_core::vec::VectorSearchHit { node_id: 2, score: 0.95 },
+			pi_knowledge_core::vec::VectorSearchHit { node_id: 4, score: 0.80 },
+			pi_knowledge_core::vec::VectorSearchHit { node_id: 1, score: 0.70 },
 		];
 
 		let hits = reciprocal_rank_fusion(&bm25, &vector, &graph, 10);
@@ -308,9 +309,9 @@ mod tests {
 			path:       PathBuf::from("src/lib.rs"),
 		}];
 		let vector = vec![
-			pi_code_vectors::VectorSearchHit { node_index: 2, score: 0.95 },
-			pi_code_vectors::VectorSearchHit { node_index: 4, score: 0.30 },
-			pi_code_vectors::VectorSearchHit { node_index: 3, score: 0.40 },
+			pi_knowledge_core::vec::VectorSearchHit { node_id: 2, score: 0.95 },
+			pi_knowledge_core::vec::VectorSearchHit { node_id: 4, score: 0.30 },
+			pi_knowledge_core::vec::VectorSearchHit { node_id: 3, score: 0.40 },
 		];
 
 		let hits = reciprocal_rank_fusion(&bm25, &vector, &graph, 10);
@@ -340,7 +341,7 @@ mod tests {
 				path:       PathBuf::from("src/lib.rs"),
 			},
 		];
-		let vector: Vec<pi_code_vectors::VectorSearchHit> = vec![];
+		let vector: Vec<pi_knowledge_core::vec::VectorSearchHit> = vec![];
 
 		let hits = reciprocal_rank_fusion(&bm25, &vector, &graph, 10);
 		assert_eq!(hits.len(), 2);
@@ -352,15 +353,16 @@ mod tests {
 	fn graph_search_surfaces_vector_only_matches() {
 		let graph = test_graph();
 		let bm25_graph = CodeGraph::new(graph.persisted().clone());
-		let vector_index = pi_code_vectors::VectorIndex::new(
-			vec![
-				pi_code_vectors::VectorEntry { node_index: 1, vector: vec![0.95, 0.05, 0.0] },
-				pi_code_vectors::VectorEntry { node_index: 2, vector: vec![0.80, 0.20, 0.0] },
-				pi_code_vectors::VectorEntry { node_index: 4, vector: vec![0.70, 0.30, 0.0] },
-				pi_code_vectors::VectorEntry { node_index: 3, vector: vec![0.05, 0.05, 0.90] },
+		let vector_index = pi_knowledge_core::vec::VectorIndex::from_entries(
+			&[
+				pi_knowledge_core::vec::VectorEntry { node_id: 1, vector: vec![0.95, 0.05, 0.0] },
+				pi_knowledge_core::vec::VectorEntry { node_id: 2, vector: vec![0.80, 0.20, 0.0] },
+				pi_knowledge_core::vec::VectorEntry { node_id: 4, vector: vec![0.70, 0.30, 0.0] },
+				pi_knowledge_core::vec::VectorEntry { node_id: 3, vector: vec![0.05, 0.05, 0.90] },
 			],
 			3,
-		);
+		)
+		.expect("build vector index");
 		let graph_with_vectors = CodeGraph::with_vectors(graph.into_persisted(), vector_index);
 		let query_vector = vec![1.0, 0.0, 0.0];
 
