@@ -6,7 +6,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir, getProjectDir, isEnoent } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+
 import chalk from "chalk";
 import { theme } from "../modes/theme/theme";
 import { loadBundledAgents } from "../task/agents";
@@ -52,27 +52,65 @@ function resolveTargetDir(flags: AgentsCommandArgs["flags"]): string {
 	return path.join(getAgentDir(), "agents");
 }
 
-function toFrontmatter(agent: AgentDefinition): Record<string, unknown> {
-	const frontmatter: Record<string, unknown> = {
-		name: agent.name,
-		description: agent.description,
-	};
-
-	if (agent.tools && agent.tools.length > 0) frontmatter.tools = agent.tools;
-	if (agent.spawns !== undefined) frontmatter.spawns = agent.spawns;
-	if (agent.model && agent.model.length > 0) frontmatter.model = agent.model;
-	if (agent.thinkingLevel) frontmatter.thinkingLevel = agent.thinkingLevel;
-	if (agent.output !== undefined) frontmatter.output = agent.output;
-	if (agent.blocking) frontmatter.blocking = true;
-	if (agent.roster === false) frontmatter.roster = false;
-
-	return frontmatter;
-}
 
 function serializeAgent(agent: AgentDefinition): string {
-	const frontmatter = YAML.stringify(toFrontmatter(agent), null, 2).trimEnd();
+	const frontmatter = toKdlFrontmatter(agent);
 	const body = agent.systemPrompt.trim();
-	return `---\n${frontmatter}\n---\n\n${body}\n`;
+	return `---kdl\n${frontmatter}\n---\n\n${body}\n`;
+}
+
+/**
+ * Emit an agent's frontmatter as a KDL document body.
+ *
+ * Per PLAN-311 WAVE 3: Spell-authored markdown frontmatter uses `---kdl`
+ * blocks. The frontmatter parser is dual-mode (still accepts legacy `---`
+ * YAML for third-party content), but new files written by Spell tools use
+ * KDL by default.
+ *
+ * KDL conventions:
+ *   - keys are kebab-case (parser converts to camelCase)
+ *   - string values are quoted positional arguments
+ *   - boolean true is a bare node name (parser yields `true` when no args)
+ *   - arrays are multiple positional arguments on a single node
+ */
+function toKdlFrontmatter(agent: AgentDefinition): string {
+	const lines: string[] = [];
+	lines.push(`name ${kdlString(agent.name)}`);
+	lines.push(`description ${kdlString(agent.description)}`);
+	if (agent.tools && agent.tools.length > 0) {
+		lines.push(`tools ${agent.tools.map(kdlString).join(" ")}`);
+	}
+	if (agent.spawns !== undefined) {
+		if (agent.spawns === "*") {
+			lines.push(`spawns ${kdlString("*")}`);
+		} else if (Array.isArray(agent.spawns) && agent.spawns.length > 0) {
+			lines.push(`spawns ${agent.spawns.map(kdlString).join(" ")}`);
+		}
+	}
+	if (agent.model && agent.model.length > 0) {
+		lines.push(`model ${agent.model.map(kdlString).join(" ")}`);
+	}
+	if (agent.thinkingLevel) lines.push(`thinking-level ${kdlString(agent.thinkingLevel)}`);
+	if (agent.output !== undefined) {
+		// `output` is `unknown` and is commonly a JSON Schema object. KDL has no
+		// native object/map literal, so serialize structured values as a
+		// single JSON-encoded string. Scalars pass through verbatim.
+		if (typeof agent.output === "string") {
+			lines.push(`output ${kdlString(agent.output)}`);
+		} else if (typeof agent.output === "number" || typeof agent.output === "boolean") {
+			lines.push(`output ${agent.output}`);
+		} else {
+			lines.push(`output ${kdlString(JSON.stringify(agent.output))}`);
+		}
+	}
+	if (agent.blocking) lines.push("blocking");
+	if (agent.scopeRestricted) lines.push("scope-restricted #true");
+	if (agent.roster === false) lines.push("roster #false");
+	return lines.join("\n");
+}
+
+function kdlString(s: string): string {
+	return JSON.stringify(s);
 }
 
 async function unpackBundledAgents(flags: AgentsCommandArgs["flags"]): Promise<UnpackResult> {
