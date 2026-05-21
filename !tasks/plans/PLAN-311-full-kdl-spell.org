@@ -1,5 +1,5 @@
 #+TITLE: FULL_KDL_SPELL
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14ea0e0f03e26235
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-49-03-247Z_14ea0e0f03e26235.jsonl]]
 #+CUSTOM_ID: PLAN-311-full-kdl-spell
@@ -174,3 +174,89 @@ Each GATE is a reviewer subagent run followed by gap-fill tasks dispatched as ne
 3. Author's machine runs Spell with the migration directory deleted
 4. =bun test packages/coding-agent= passes with no YAML-related failures
 5. =/settings= Ctrl+T cycles all 4 tiers cleanly, writes persist on reload to the correct file
+
+* Completion (2026-05-21)
+
+All waves shipped through GATE 7 verification.
+
+** Status by wave
+
+| Wave | Description | State | Notes |
+|------+-------------+-------+-------|
+| W0 | Settings tier-toggle + numeric submenu fixes | DONE | First commit |
+| W1 | 4-tier KDL settings + self-contained migrator | DONE | GATE 1: 5 findings, all addressed |
+| W2a | secrets.yml absorbed into spell.kdl | DONE | GATE 2a: 4 findings (incl P1 cross-tier merge), all addressed |
+| W2b | domain.json absorbed + swarm.kdl dual-mode parser | DONE | GATE 2b: 3 findings, all addressed |
+| W2.5 | mcp.json absorbed into spell.kdl | DONE | GATE 2.5: 4 findings (incl P1 tier precedence), all addressed |
+| W2.6 | ssh.json absorbed (3 locations) | DONE | GATE 2.6: 3 findings (data-loss regressions), all addressed |
+| W3 | ---kdl markdown frontmatter | DONE | GATE 3: 4 findings (incl P1 model/output bugs), all addressed |
+| W4 | spell config show + doctor CLI | DONE | Dynamic-import contract for graceful removal |
+| W5 | Spellcast deprecation markers | DONE | No runtime change |
+| W6 | Dead code cleanup | DONE | BUG-383 closed; ssh-cli rerouted through Settings |
+| W7 | Verification matrix | DONE | 5 startup scenarios + integration tests pass |
+
+** Test posture (final)
+
+#+begin_src
+packages/coding-agent: 149 pass / 0 fail / 341 expects across 16 files
+packages/swarm-extension: 20 pass / 0 fail
+packages/utils:        13 pass / 0 fail
+\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+Total: 182 pass / 0 fail
+#+end_src
+
+** Files absorbed into spell.kdl
+
+| Legacy file | Schema path | Block |
+|-------------+-------------+-------|
+| ~/.spell/spell.kdl | (moved to) ~/.config/spell/spell.kdl | (whole file) |
+| ~/.spell/agent/config.yml | (translated to schema keys) | (various) |
+| ~/.spell/agent/settings.json | (translated to schema keys) | (various) |
+| .spell/spell.kdl | (moved to) ./spell.kdl | (whole file) |
+| .spell/settings.json | (translated) | (various) |
+| .spell/agent/config.yml | (translated) | (various) |
+| ~/.spell/agent/secrets.yml | `secrets` | `secrets { secret ... }` |
+| .spell/secrets.yml | `secrets` | (same block, project tier) |
+| ~/.spell/agent/mcp.json | `mcp.servers` | `mcp { server ... }` |
+| .spell/mcp.json | `mcp.servers` | (same block, project tier) |
+| ~/.spell/agent/ssh.json | `ssh.hosts` | `ssh { target ... }` |
+| .spell/ssh.json | `ssh.hosts` | (same block, project tier) |
+| ./ssh.json | `ssh.hosts` | (same block, project tier) |
+| ./.ssh.json | `ssh.hosts` | (same block, project tier) |
+| .spell/domain.json | `domain` | `domain "value"` top-level scalar |
+
+** Migrator (one-shot, self-contained)
+
+Lives entirely under =packages/coding-agent/src/migration/=. Six files
++ test/. Integrates with =Settings= via:
+
+- One =import { maybeRunMigration } from \"../migration\"= in settings.ts
+- One =await maybeRunMigration({...})= call inside =Settings.#load()=
+- One =migrate?: { yes?, no?, interactive? }= option in =SettingsOptions=
+
+After running on the author's machine and confirming =spell config doctor=
+reports clean state:
+
+#+begin_src bash
+rm -rf packages/coding-agent/src/migration
+# Plus delete from settings.ts:
+#   - the import
+#   - the maybeRunMigration call inside #load()
+#   - the #migrateOptions field + assignment in constructor
+#   - the migrate? entry in SettingsOptions
+rm packages/coding-agent/test/settings-migration.test.ts
+rm packages/coding-agent/test/startup-matrix.test.ts
+git commit -m \"chore: remove one-shot yaml/json \u2192 kdl migration\"
+#+end_src
+
+This is WAVE 8 (user-driven cleanup) and is left for the author to
+execute when satisfied with the migrated state.
+
+** Tracking
+
+- All linked BUGs and FEATs are closed by the wave commits above.
+- FEAT-757 (spellcast reactivation + KDL manifest) remains open as a
+  separate follow-up. The spellcast module is marked =@deprecated= per
+  WAVE 5 to prevent accidental extension.
+- WAVE 8 (cleanup of self-contained migrator) is a manual step for the
+  author; documented in =packages/coding-agent/src/migration/README.md=.
