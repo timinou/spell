@@ -6,9 +6,11 @@ import { isEnoent } from "@oh-my-pi/pi-utils";
 import { withFileLock } from "./file-lock";
 import {
 	writeAllowedFolders,
+	writeMcpServers,
 	writeSecrets,
 	writeStatusLineSegmentOptions,
 	writeTreeStringRecord,
+	type McpServerKdlEntry,
 	type SecretsKdlEntry,
 } from "./kdl-compatibility";
 import { findOrCreateChildNode, findOrCreateDocumentNode, setArgument } from "./kdl-helpers";
@@ -55,6 +57,11 @@ function applySetting(doc: Document, path: string, value: unknown): void {
 	// Block-aware writers (operate on the block / current node directly).
 	if (path === "secrets") {
 		writeSecrets(current, value as SecretsKdlEntry[]);
+		return;
+	}
+
+	if (path === "mcp.servers") {
+		writeMcpServers(current, value as Record<string, McpServerKdlEntry>);
 		return;
 	}
 

@@ -103,6 +103,60 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 	const items: MCPServer[] = [];
 	const warnings: string[] = [];
 
+	// PRIMARY SOURCE: spell.kdl `mcp { server ... }` block via Settings.
+	//
+	// Tier precedence mirrors `settings.get("mcp.servers")`: higher tiers
+	// override lower-tier server definitions of the same name. Iterate
+	// lowest → highest and LAST-wins so the final entry per server is from
+	// the most-specific tier.
+	const { settings } = await import("../config/settings");
+	const spellTiers = settings.getPerTier("mcp.servers" as never);
+	const tierEntries: Array<{ tier: "user" | "project"; value: unknown }> = [
+		{ tier: "user", value: spellTiers.user },
+		{ tier: "project", value: spellTiers.project },
+		// `local` and `session` are project-scoped overrides; surface them as "project".
+		{ tier: "project", value: spellTiers.local },
+		{ tier: "project", value: spellTiers.session },
+	];
+	const spellSources = new Map<string, "user" | "project">();
+	const itemsByName = new Map<string, MCPServer>();
+	for (const { tier, value } of tierEntries) {
+		if (!value || typeof value !== "object") continue;
+		const expanded = expandEnvVarsDeep(value as Record<string, unknown>);
+		for (const [serverName, raw] of Object.entries(expanded as Record<string, unknown>)) {
+			const prior = spellSources.get(serverName);
+			if (prior && prior !== tier) {
+				warnings.push(
+					`MCP server "${serverName}": defined at both ${prior}-tier and ${tier}-tier; ${tier}-tier wins`,
+				);
+			}
+			spellSources.set(serverName, tier);
+			const cfg = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+			itemsByName.set(serverName, {
+				name: serverName,
+				enabled: typeof cfg.enabled === "boolean" ? cfg.enabled : undefined,
+				timeout: typeof cfg.timeout === "number" && cfg.timeout > 0 ? cfg.timeout : undefined,
+				command: typeof cfg.command === "string" ? cfg.command : undefined,
+				args: Array.isArray(cfg.args) ? (cfg.args as string[]) : undefined,
+				env: (cfg.env as Record<string, string> | undefined) ?? undefined,
+				url: typeof cfg.url === "string" ? cfg.url : undefined,
+				headers: (cfg.headers as Record<string, string> | undefined) ?? undefined,
+				auth: cfg.auth as { type: "oauth" | "apikey"; credentialId?: string } | undefined,
+				oauth: cfg.oauth as { clientId?: string; callbackPort?: number } | undefined,
+				transport:
+					cfg.type === "stdio" || cfg.type === "sse" || cfg.type === "http"
+						? (cfg.type as "stdio" | "sse" | "http")
+						: undefined,
+				_source: createSourceMeta(PROVIDER_ID, `<spell.kdl:${tier}>`, tier),
+			});
+		}
+	}
+	items.push(...itemsByName.values());
+	const seenNames = new Set(itemsByName.keys());
+
+	// LEGACY: continue reading user+project mcp.json/.mcp.json during the
+	// migration window. Once the migrator has run on the target machine,
+	// these files become *.bak and contribute nothing. See PLAN-311 WAVE 2.5.
 	const parseMcpServers = (content: string, path: string, level: "user" | "project"): MCPServer[] => {
 		const result: MCPServer[] = [];
 		const data = tryParseJson<{ mcpServers?: Record<string, unknown> }>(content);
@@ -193,7 +247,19 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 	for (const result of contents) {
 		if (result.status === "fulfilled" && result.value) {
 			const { path, content, level } = result.value;
-			items.push(...parseMcpServers(content, path, level));
+			for (const server of parseMcpServers(content, path, level)) {
+				// Servers already in Settings take precedence; legacy files only
+				// contribute names not yet seen. Migrator will translate the legacy
+				// files into Settings on the next launch.
+				if (seenNames.has(server.name)) {
+					warnings.push(
+						`MCP server "${server.name}": defined in both spell.kdl and ${path}; spell.kdl wins (legacy file is shadowed)`,
+					);
+					continue;
+				}
+				seenNames.add(server.name);
+				items.push(server);
+			}
 		}
 	}
 

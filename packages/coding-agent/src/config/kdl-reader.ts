@@ -5,6 +5,7 @@ import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 
 import {
 	readAllowedFolders,
+	readMcpServers,
 	readSecrets,
 	readStatusLineSegmentOptions,
 	readTreeStringRecord,
@@ -74,6 +75,13 @@ function readSettingValue(node: Node, settingPath: SettingPath): unknown {
 
 	if (settingPath === "secrets") {
 		const result = readSecrets(node);
+		for (const warning of result.warnings)
+			logger.warn("kdl-reader: compatibility warning", { path: warning.path, message: warning.message });
+		return result.value;
+	}
+
+	if (settingPath === "mcp.servers") {
+		const result = readMcpServers(node);
 		for (const warning of result.warnings)
 			logger.warn("kdl-reader: compatibility warning", { path: warning.path, message: warning.message });
 		return result.value;

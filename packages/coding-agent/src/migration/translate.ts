@@ -174,18 +174,30 @@ export async function translateFinding(finding: Finding, now: Date = new Date())
 
 	let changes: Map<string, unknown>;
 	if (finding.topLevelKey) {
-		// Whole-file mode: the entire parsed value becomes one SettingPath.
-		// Used for legacy files whose top level is an array or non-Spell record
-		// (e.g. secrets.yml → the `secrets` block).
+		// Whole-file (or extracted-key) mode: a designated SettingPath receives
+		// the entire parsed value, OR — if topLevelSourceKey is set — a nested
+		// key extracted from the parsed record. Used for legacy files whose
+		// shape doesn't fit the dotted-key flattener:
+		//   secrets.yml → topLevelKey="secrets", whole array
+		//   mcp.json   → topLevelKey="mcp.servers", extract "mcpServers"
 		changes = new Map<string, unknown>();
-		const incoming = await coerceTopLevel(finding.topLevelKey, parsed, finding.source);
+		let effectiveParsed: ParseResult = parsed;
+		if (finding.topLevelSourceKey && parsed.kind === "ok") {
+			const extracted = (parsed.data as Record<string, unknown>)[finding.topLevelSourceKey];
+			if (extracted === undefined || extracted === null) {
+				effectiveParsed = { kind: "empty" };
+			} else if (typeof extracted === "object" && !Array.isArray(extracted)) {
+				effectiveParsed = { kind: "ok", data: extracted as Record<string, unknown> };
+			} else if (Array.isArray(extracted)) {
+				effectiveParsed = { kind: "raw", data: extracted };
+			} else {
+				effectiveParsed = { kind: "raw", data: extracted };
+			}
+		}
+		const incoming = await coerceTopLevel(finding.topLevelKey, effectiveParsed, finding.source);
 		if (incoming !== undefined) {
-			// Read-modify-write: preserve any pre-existing block content at the
-			// destination by unioning the incoming entries with what's already
-			// there (dedupe by content for secrets). Without this, manual edits
-			// to spell.kdl made between migrations would be clobbered.
 			const existing = await readExistingTopLevel(finding.dest, finding.topLevelKey);
-			const merged = mergeTopLevelArrays(finding.topLevelKey, existing, incoming);
+			const merged = mergeTopLevelValue(finding.topLevelKey, existing, incoming);
 			changes.set(finding.topLevelKey, merged);
 		}
 	} else if (parsed.kind === "ok") {
@@ -225,13 +237,15 @@ async function coerceTopLevel(
 	key: string,
 	parsed: ParseResult,
 	source: string,
-): Promise<unknown[] | undefined> {
+): Promise<unknown[] | Record<string, unknown> | undefined> {
 	if (parsed.kind === "empty" || parsed.kind === "error") return undefined;
 	const data = parsed.kind === "ok" ? parsed.data : parsed.data;
 
-	// Known mergeable-array keys. Add to this list as new top-level array
-	// settings get absorbed (e.g. WAVE 2.5+ MCP/SSH may benefit).
+	// Known mergeable-array keys.
 	const ARRAY_KEYS = new Set(["secrets"]);
+	// Known mergeable-record keys (object whose properties dedupe by key).
+	const RECORD_KEYS = new Set(["mcp.servers"]);
+
 	if (ARRAY_KEYS.has(key)) {
 		if (!Array.isArray(data)) {
 			logger.warn("migration: source has wrong shape for top-level key (expected array)", {
@@ -243,19 +257,42 @@ async function coerceTopLevel(
 		return data as unknown[];
 	}
 
-	// Unknown top-level key: best-effort pass-through if it's already an array,
-	// otherwise refuse.
+	if (RECORD_KEYS.has(key)) {
+		if (!data || typeof data !== "object" || Array.isArray(data)) {
+			logger.warn("migration: source has wrong shape for top-level key (expected record)", {
+				key,
+				source,
+			});
+			return undefined;
+		}
+		return data as Record<string, unknown>;
+	}
+
+	// Unknown top-level key: best-effort pass-through.
 	if (Array.isArray(data)) return data as unknown[];
-	logger.warn("migration: unknown top-level key with non-array value; skipping", { key, source });
+	if (data && typeof data === "object") return data as Record<string, unknown>;
+	logger.warn("migration: unknown top-level key with non-record value; skipping", { key, source });
 	return undefined;
 }
 
 /** Read the existing top-level array value from a destination KDL file. */
-async function readExistingTopLevel(dest: string, key: string): Promise<unknown[]> {
+async function readExistingTopLevel(dest: string, key: string): Promise<unknown[] | Record<string, unknown>> {
 	try {
 		const raw = await loadKdlSettings(dest);
-		const value = (raw as Record<string, unknown>)[key];
-		return Array.isArray(value) ? value : [];
+		// Schema keys may be dotted (e.g. "mcp.servers"). loadKdlSettings
+		// produces nested objects, so split the dotted path and walk.
+		const segments = key.split(".");
+		let cur: unknown = raw;
+		for (const seg of segments) {
+			if (cur === null || cur === undefined || typeof cur !== "object" || Array.isArray(cur)) {
+				cur = undefined;
+				break;
+			}
+			cur = (cur as Record<string, unknown>)[seg];
+		}
+		if (Array.isArray(cur)) return cur;
+		if (cur && typeof cur === "object") return cur as Record<string, unknown>;
+		return [];
 	} catch {
 		return [];
 	}
@@ -269,8 +306,22 @@ async function readExistingTopLevel(dest: string, key: string): Promise<unknown[
  * doesn't need to appear twice). For other keys: dedupe by deep equality on
  * JSON serialization (cheap fallback).
  */
-function mergeTopLevelArrays(key: string, existing: unknown[], incoming: unknown[]): unknown[] {
-	if (key === "secrets") {
+/**
+ * Union an existing top-level value with incoming data. Dedupe by the
+ * appropriate uniqueness key for the SettingPath in question.
+ *
+ * - `secrets` (array): dedupe by `entry.content`.
+ * - `mcp.servers` (record): merge by server name; existing entries win on
+ *   conflict (manual edits to spell.kdl beat re-migrated legacy mcp.json).
+ * - other arrays: dedupe by JSON equality.
+ * - other records: shallow union; existing wins on conflict.
+ */
+function mergeTopLevelValue(
+	key: string,
+	existing: unknown[] | Record<string, unknown>,
+	incoming: unknown[] | Record<string, unknown>,
+): unknown[] | Record<string, unknown> {
+	if (key === "secrets" && Array.isArray(existing) && Array.isArray(incoming)) {
 		const seen = new Set<string>();
 		const result: unknown[] = [];
 		for (const layer of [existing, incoming]) {
@@ -286,16 +337,32 @@ function mergeTopLevelArrays(key: string, existing: unknown[], incoming: unknown
 		return result;
 	}
 
-	const seenJson = new Set<string>();
-	const result: unknown[] = [];
-	for (const layer of [existing, incoming]) {
-		for (const entry of layer) {
-			const json = JSON.stringify(entry);
-			if (seenJson.has(json)) continue;
-			seenJson.add(json);
-			result.push(entry);
-		}
+	if (key === "mcp.servers" && !Array.isArray(existing) && !Array.isArray(incoming)) {
+		// Manual edits to spell.kdl take precedence over re-migrated entries.
+		return { ...(incoming as Record<string, unknown>), ...(existing as Record<string, unknown>) };
 	}
-	return result;
+
+	if (Array.isArray(existing) && Array.isArray(incoming)) {
+		const seenJson = new Set<string>();
+		const result: unknown[] = [];
+		for (const layer of [existing, incoming]) {
+			for (const entry of layer) {
+				const json = JSON.stringify(entry);
+				if (seenJson.has(json)) continue;
+				seenJson.add(json);
+				result.push(entry);
+			}
+		}
+		return result;
+	}
+
+	if (!Array.isArray(existing) && !Array.isArray(incoming)) {
+		return { ...(incoming as Record<string, unknown>), ...(existing as Record<string, unknown>) };
+	}
+
+	// Shape mismatch: incoming wins (existing was a different shape, likely
+	// from a prior schema). The reader will warn if the resulting KDL is
+	// internally inconsistent.
+	return incoming;
 }
 

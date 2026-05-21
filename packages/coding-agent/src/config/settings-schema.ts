@@ -191,6 +191,15 @@ export const SETTINGS_SCHEMA = {
 	 */
 	secrets: { type: "array", default: EMPTY_SECRETS_ARRAY },
 
+	/**
+	 * MCP server config map. Sourced from spell.kdl `mcp { server "name" ... }`
+	 * block. Replaces legacy `~/.spell/agent/mcp.json` /
+	 * `<cwd>/.spell/mcp.json` (BUG-388, WAVE 2.5). Foreign `.mcp.json`
+	 * conventions (Claude/Cursor/VSCode) stay native — they are discovered
+	 * via mcp-json provider, separately.
+	 */
+	"mcp.servers": { type: "record", default: EMPTY_STRING_RECORD as unknown as Record<string, unknown> } as RecordDef<unknown>,
+
 	// ────────────────────────────────────────────────────────────────────────
 	// Appearance
 	// ────────────────────────────────────────────────────────────────────────
