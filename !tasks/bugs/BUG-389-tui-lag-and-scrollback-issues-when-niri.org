@@ -67,3 +67,20 @@ Once focus throttling is wired, a focus-loss event should reduce TUI render rate
 - PLAN-312 (closed) \u2014 the broader TUI responsiveness work
 - FEAT-759 (closed) \u2014 adaptive idle baseline; focus throttling deferred
 - FEAT-758 (closed) \u2014 PI_TUI_PROFILE telemetry to use here
+
+* Partial fix landed
+
+Commits:
+- 446c29fd9 perf(tui): focus-aware render throttle for niri overview lag (BUG-389 partial)
+- 2f71c6bd5 fix(tui): stateful components propagate dirty when state changes
+- f0dbde503 fix(tui): Box propagates dirty to ancestor Container
+
+What's now addressed:
+1. **Focus throttle** \u2014 Terminal.onFocusChange API + CSI 1004h enable/parse. InteractiveMode subscribes and drops render rate to max(focusedInterval, 500ms) when focus is lost. Niri overview / WM workspace switches now stop generating 60fps frame writes that the terminal queues.
+2. **Stateful component dirty propagation** \u2014 SelectList, TabBar, TruncatedText, SettingsList all now carry #parent via DirtyParent interface and call #parent.markDirty() on state change. Fixes silent stale rendering when only these components' state changes (e.g. arrow-key in a selector).
+3. **Box dirty propagation** \u2014 Box was a Container-like wrapper without a parent pointer. Leaves inside a Box would propagate dirty to the Box, but the Box never told its outer Container. Now Box implements DirtyParent and propagates up.
+
+Still NOT addressed:
+- **Width-change clearing scrollback (\\x1b[3J)** \u2014 attempted to remove but 8 existing tests assert the current clearing behavior. A smarter approach (e.g. clear scrollback only on FIRST full-clear after startup, preserve thereafter) breaks 4 tests that check scrollback growth bounds. Needs a careful refactor that either (a) updates the bounded-growth tests to a different invariant, or (b) implements a tracking mechanism so we can distinguish "first redraw" from "later redraw" without growing scrollback unboundedly.
+
+Recommend: separate BUG ticket for the scrollback-clear refactor with explicit test redesign. The current state is strictly better than before (niri lag fixed; updates no longer silently dropped) without making scrollback worse.
