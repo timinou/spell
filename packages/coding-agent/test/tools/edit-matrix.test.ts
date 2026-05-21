@@ -409,31 +409,11 @@ describe("PLAN-304 matrix — css* + heading* (schema validation)", () => {
 	});
 });
 
-describe("PLAN-304 legacy kind compatibility (schema accepts)", () => {
-	test("kind:write on symbol (schema validation)", async () => {
+describe("PLAN-309 canonical Op kinds executes (smoke)", () => {
+	test("symbolFindReplace executes", async () => {
 		const tool = await setup();
 		const r = await exec(tool, `${path.join(tmpDir, "a.ts")}::foo`, {
-			kind: "write",
-			content: "export function foo() { return 99; }",
-		});
-		// Legacy adapter may not be implemented; validate execution doesn't crash
-		expect(getText(r)).toBeDefined();
-	});
-
-	test("kind:write with scope:body (schema validation)", async () => {
-		const tool = await setup();
-		const r = await exec(tool, `${path.join(tmpDir, "a.ts")}::foo`, {
-			kind: "write",
-			scope: "body",
-			content: "return 42;",
-		});
-		expect(getText(r)).toBeDefined();
-	});
-
-	test("kind:findAndReplace executes", async () => {
-		const tool = await setup();
-		const r = await exec(tool, `${path.join(tmpDir, "a.ts")}::foo`, {
-			kind: "findAndReplace",
+			kind: "symbolFindReplace",
 			find: "return 1",
 			content: "return 8",
 		});
@@ -442,19 +422,19 @@ describe("PLAN-304 legacy kind compatibility (schema accepts)", () => {
 		expect(text).toContain("return 8");
 	});
 
-	test("kind:delete executes", async () => {
+	test("symbolDelete executes", async () => {
 		const tool = await setup();
-		const r = await exec(tool, `${path.join(tmpDir, "a.ts")}::bar`, { kind: "delete" });
+		const r = await exec(tool, `${path.join(tmpDir, "a.ts")}::bar`, { kind: "symbolDelete" });
 		expect((r as any).isError).toBeFalsy();
 		const text = await fs.readFile(path.join(tmpDir, "a.ts"), "utf-8");
 		expect(text).not.toContain("function bar");
 	});
 
-	test("kind:rename executes", async () => {
+	test("symbolRename executes", async () => {
 		const tool = await setup();
 		const r = await exec(tool, `${path.join(tmpDir, "a.ts")}::foo`, {
-			kind: "rename",
-			content: "renamedFoo",
+			kind: "symbolRename",
+			newName: "renamedFoo",
 		});
 		expect((r as any).isError).toBeFalsy();
 		const text = await fs.readFile(path.join(tmpDir, "a.ts"), "utf-8");

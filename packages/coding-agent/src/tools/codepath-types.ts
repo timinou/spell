@@ -1,4 +1,5 @@
 import { type Static, Type } from "@sinclair/typebox";
+import { editOpSchema } from "./codepath-op-schema.generated";
 
 // Re-export NAPI surface types
 export type {
@@ -36,70 +37,6 @@ export {
 // Source: kernel Op enum via list_ops() NAPI introspection.
 // Refresh: `bun run gen:op-schema`. See codepath-op-schema.generated.ts.
 
-// ── Legacy action shape (flat bag-of-fields, for backward compatibility) ──
-// Keep this for tests and legacy adapter typing.
-
-export const legacyActionSchema = Type.Object(
-	{
-		kind: Type.String({
-			description:
-				"Action kind: write | findAndReplace | rawTextReplace | wrap | rename | delete | insertBefore | insertAfter | splice | move | clone | transpose | renameClassToken | renameIdToken | renameCustomProperty | removeDeadStyle | promote | demote | replaceCodeBlock | replace | append | prepend | patch | create",
-		}),
-		scope: Type.Optional(Type.String({ description: "Write scope: target | body" })),
-		content: Type.Optional(
-			Type.Union([Type.String(), Type.Array(Type.String())], {
-				description: "Canonical content payload for write-like actions",
-			}),
-		),
-		find: Type.Optional(
-			Type.Union([Type.String(), Type.Array(Type.String())], {
-				description: "Find text for findAndReplace within the resolved target scope",
-			}),
-		),
-		mode: Type.Optional(Type.String({ description: "Splice mode: self | up | down (default: self)" })),
-		direction: Type.Optional(Type.String({ description: "Move direction: up | down" })),
-		line: Type.Optional(
-			Type.Integer({ description: "1-indexed line for positional actions when needed", minimum: 1 }),
-		),
-		column: Type.Optional(Type.Integer({ description: "1-indexed column for transpose actions when needed" })),
-		nodeType: Type.Optional(Type.String({ description: "Optional node type hint for positional actions" })),
-		allowSiblingDelete: Type.Optional(
-			Type.Boolean({ description: "Allow sibling deletion when structural matching proves it safe" }),
-		),
-		occurrence: Type.Optional(
-			Type.Union([Type.Literal("first"), Type.Literal("last"), Type.Literal("all"), Type.Integer({ minimum: 1 })], {
-				description: "Match occurrence selector: first | last | all | 1-indexed number",
-			}),
-		),
-		// LINE#ID fields
-		pos: Type.Optional(
-			Type.String({
-				description:
-					'Start anchor in LINE#ID format copied from read output (e.g. "5#QW"). Supported on replace, append, prepend, insertBefore, insertAfter, and splice. A single anchor (pos or end, but not both) replaces exactly one line; lines.length does not control span.',
-			}),
-		),
-		end: Type.Optional(
-			Type.String({
-				description:
-					"End anchor in LINE#ID format copied from read output (optional range end; when both pos and end are set they define a multi-line range).",
-			}),
-		),
-		lines: Type.Optional(
-			Type.Union([
-				Type.Array(Type.String()),
-				Type.String({ description: "Replacement content as a newline-delimited string" }),
-				Type.Null({ description: "Delete the targeted content" }),
-			]),
-		),
-		// Patch fields
-		diff: Type.Optional(Type.String({ description: "Unified diff string for patch action" })),
-		// Create fields
-		force: Type.Optional(Type.Boolean({ description: "Overwrite existing file" })),
-	},
-	{ additionalProperties: false },
-);
-
-export type LegacyAction = Static<typeof legacyActionSchema>;
 
 // ── Re-export generated Op schemas (kernel-derived) ──
 export {
@@ -138,9 +75,6 @@ export {
 } from "./codepath-op-schema.generated";
 export type { EditOp } from "./codepath-op-schema.generated";
 
-// Backward compat alias (still used by editSchema's union for legacy adapter input).
-export const codePathActionSchema = legacyActionSchema;
-export type CodePathAction = LegacyAction;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Get tool schema
@@ -206,7 +140,11 @@ export const editOperationSchema = Type.Recursive(This =>
 				description:
 					"Stable edit target ID: '<file>' for file roots or '<file>::Symbol.member' for declarations. Multi-word symbols may be backtick-quoted, e.g. foo.ts::`export * from \"./json\"`",
 			}),
-			action: codePathActionSchema,
+			action: Type.Union([
+				Type.Omit(editOpSchema, ["target"]),
+				Type.Object({ kind: Type.Literal("undo") }, { additionalProperties: false, description: "Undo the last edit transaction in this session" }),
+				Type.Object({ kind: Type.Literal("redo") }, { additionalProperties: false, description: "Redo the most recently undone transaction in this session" }),
+			]),
 			children: Type.Optional(
 				Type.Array(This, { description: "Nested child target operations under the same file tree" }),
 			),

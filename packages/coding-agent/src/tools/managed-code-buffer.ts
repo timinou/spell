@@ -1,6 +1,11 @@
 import * as nodePath from "node:path";
 import * as piNatives from "@oh-my-pi/pi-natives";
-import { callCodeBuffer, type SessionIdSource } from "../session/edit-coordinator";
+import { executeCodePath } from "@oh-my-pi/pi-natives";
+import type { SessionIdSource } from "../session/edit-coordinator";
+
+function resolveSessionId(session: SessionIdSource): string | undefined {
+	return session.getSessionId?.()?.trim() || undefined;
+}
 
 export interface ManagedBufferMutationResult {
 	bufferInvalidationError?: string;
@@ -63,65 +68,25 @@ export function ensureManagedBufferFresh(file: string): void {
 	}
 }
 
-interface EditFileResultLike {
-	file?: unknown;
-	status?: unknown;
-	error?: unknown;
-}
 
-/**
- * The native `edit` command reports per-file failures inside
- * `output.fileResults[]` while keeping top-level `error: false`. Callers that
- * only inspect `result.error` silently accept failed edits. Extract a truthful
- * message here; returns undefined when every file succeeded or was a noop.
- */
-function extractEditFailureMessage(output: unknown): string | undefined {
-	if (!output || typeof output !== "object" || Array.isArray(output)) return undefined;
-	const status = Reflect.get(output, "status");
-	if (status !== "failed" && status !== "partial") return undefined;
-	const fileResults = Reflect.get(output, "fileResults");
-	if (!Array.isArray(fileResults)) {
-		return extractCodeToolErrorMessage(output);
-	}
-	const failures: string[] = [];
-	for (const entry of fileResults as EditFileResultLike[]) {
-		if (!entry || typeof entry !== "object") continue;
-		if (entry.status !== "failed") continue;
-		const file = typeof entry.file === "string" ? entry.file : "<unknown>";
-		const message = extractCodeToolErrorMessage(entry.error ?? entry);
-		failures.push(`${file}: ${message}`);
-	}
-	if (failures.length === 0) {
-		return extractCodeToolErrorMessage(output);
-	}
-	return failures.join("; ");
-}
-
-export function applyManagedBufferContent(
+export async function applyManagedBufferContent(
 	file: string,
 	content: string,
 	options: { create: boolean; session: SessionIdSource },
-): ManagedBufferMutationResult {
-	const result = options.create
-		? callCodeBuffer(
-				{ session: options.session },
-				{
-					command: "edit",
-					root: process.cwd(),
-					operations: [{ targetId: file, actions: [{ kind: "write", content }] }],
-				},
-			)
-		: callCodeBuffer({ session: options.session }, { command: "replace_content", file, content });
-	if (result.error) {
-		throw new Error(`Managed code buffer update failed for ${file}: ${extractCodeToolErrorMessage(result.output)}`);
-	}
-	const perFileFailure = options.create ? extractEditFailureMessage(result.output) : undefined;
-	if (perFileFailure) {
-		throw new Error(`Managed code buffer update failed for ${file}: ${perFileFailure}`);
-	}
-	const saveResult = callCodeBuffer({ session: options.session }, { command: "save", file });
-	if (saveResult.error) {
-		throw new Error(`Managed code buffer save failed for ${file}: ${extractCodeToolErrorMessage(saveResult.output)}`);
+): Promise<ManagedBufferMutationResult> {
+	const sessionId = resolveSessionId(options.session);
+	const root = nodePath.dirname(file);
+	const chunks = await executeCodePath({
+		command: "edit",
+		target: nodePath.basename(file),
+		actions: [{ kind: "fileWrite", content, force: true }],
+		root,
+		sessionId,
+	});
+	const diagnostics = chunks.flatMap(c => c.diagnostics);
+	if (diagnostics.length > 0) {
+		const message = diagnostics.map(d => d.message).join("; ");
+		throw new Error(`Managed code buffer update failed for ${file}: ${message}`);
 	}
 	const bufferInvalidationError = collectManagedCodeBufferInvalidationError([file], true);
 	return bufferInvalidationError ? { bufferInvalidationError } : {};

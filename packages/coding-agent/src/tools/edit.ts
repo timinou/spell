@@ -151,77 +151,6 @@ class SimpleFileSystem implements FileSystem {
 }
 
 
-// PLAN-308 W C3: legacy kind strings translate at the door.
-// Internal pipeline only sees Op-shaped kinds.
-function legacyKindAdapter(action: any, target: string): { action: any; deprecated?: string } {
-  const legacyKind = action?.kind;
-  if (!legacyKind || typeof legacyKind !== "string") return { action };
-  const isSymbolTarget = typeof target === "string" && target.includes("::");
-  const map: Record<string, string | ((sym: boolean) => string)> = {
-    create: "fileCreate",
-    write: (sym) => (sym ? "symbolReplace" : "fileWrite"),
-    delete: (sym) => (sym ? "symbolDelete" : "fileDelete"),
-    append: () => "fileAppend",
-    prepend: () => "filePrepend",
-    rename: "symbolRename",
-    wrap: "symbolWrap",
-    findAndReplace: (sym) => (sym ? "symbolFindReplace" : "fileFindReplace"),
-    rawTextReplace: (sym) => (sym ? "symbolRawTextReplace" : "fileRawTextReplace"),
-    splice: "symbolSplice",
-    move: "symbolMove",
-    clone: "symbolClone",
-    transpose: "symbolTranspose",
-    insertBefore: (sym) => (sym ? "symbolInsertBefore" : "lineInsert"),
-    insertAfter: (sym) => (sym ? "symbolInsertAfter" : "lineInsert"),
-    patch: "filePatch",
-    replace: "lineReplace",
-    promote: "headingPromote",
-    demote: "headingDemote",
-    replaceCodeBlock: "headingReplaceBlock",
-    renameClassToken: "cssRenameClassToken",
-    renameIdToken: "cssRenameIdToken",
-    renameCustomProperty: "cssRenameCustomProp",
-    removeDeadStyle: "cssRemoveDeadStyle",
-  };
-  const entry = map[legacyKind];
-  if (entry === undefined) return { action }; // already a new kind
-  const newKind = typeof entry === "function" ? entry(isSymbolTarget) : entry;
-  const translated: any = { ...action, kind: newKind };
-  // Lines→content: legacy Action used `lines` for append/prepend/insert/wrap/splice;
-  // new Op uses `content` uniformly. Rename here so kernel-bound ops match Op JSON.
-  if (translated.lines !== undefined && translated.content === undefined) {
-    translated.content = translated.lines;
-    delete translated.lines;
-  }
-  // Legacy insertBefore/insertAfter on non-symbol target → kernel Op `lineInsert`
-  // requires `at: { side, anchor }`. Synthesize from legacy `pos` so dispatch
-  // routing (see execute()) recognises this as a LINE#ID line-anchor insert.
-  // Don't overwrite a caller-supplied `at` (mixed-shape inputs preserve intent).
-  if ((legacyKind === "insertBefore" || legacyKind === "insertAfter") && !isSymbolTarget && action.at === undefined) {
-    if (action.pos !== undefined) {
-      translated.at = { side: legacyKind === "insertBefore" ? "before" : "after", anchor: action.pos };
-    }
-    // else: no anchor + no `at` — caller intended line-insert but supplied no anchor.
-    // Let dispatch fall through to executeStructural; kernel will produce a clear
-    // missing-`at` diagnostic rather than us throwing here (no surprise raises in adapter).
-  }
-  if (legacyKind === "rename" && action.content !== undefined) {
-    translated.newName = action.content;
-    delete translated.content;
-  } else if (legacyKind === "clone" && action.content !== undefined) {
-    translated.renameTo = action.content;
-    delete translated.content;
-  } else if (["renameClassToken", "renameIdToken", "renameCustomProperty"].includes(legacyKind)) {
-    if (action.content !== undefined) {
-      translated.replace = action.content;
-      delete translated.content;
-    }
-  }
-  // LINE#ID dispatch (legacy 'replace' / 'insertBefore' / 'insertAfter' with pos/end)
-  // is handled TS-locally by #executeLineId, which expects flat pos/end fields.
-  // We do NOT translate those to the Op-style span/at shape here.
-  return { action: translated, deprecated: `kind:'${legacyKind}' is deprecated; use kind:'${newKind}'` };
-}
 
 export class CodepathEditTool implements AgentTool<typeof editSchema> {
 	readonly name = "edit";
@@ -263,6 +192,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 				command: "manage",
 				manage: kind,
 				target: "",
+				sessionId: this.session.getSessionId?.()?.trim() || undefined,
 				abortSignal: signal,
 			});
 			const formatted = formatCodePathResult(chunks, { format: "node-list" });
@@ -336,29 +266,21 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
   			const action = op.action;
   			const idempotent = op.idempotent ?? params.idempotent ?? false;
 
-  			const deprecationWarnings: string[] = [];
-
-  			// Translate legacy kinds at the door
-  			const { action: normalizedAction, deprecated } = legacyKindAdapter(action, op.target);
-  			if (deprecated) {
-  				deprecationWarnings.push(deprecated);
-  			}
-
   			let result: AgentToolResult;
-  			// Route by new-style Op kind
-  			const opKind = (normalizedAction as any).kind;
+  			// Route by Op kind
+  			const opKind = (action as any).kind;
   			if (opKind === "filePatch") {
-  				result = await this.#executePatch(targetPath, (normalizedAction as any).diff!, signal);
+  				result = await this.#executePatch(targetPath, (action as any).diff!, signal);
   			} else if (
   				opKind === "lineReplace" ||
   				opKind === "lineAppend" ||
   				opKind === "linePrepend" ||
-  				(opKind === "lineInsert" && (normalizedAction as any).at !== undefined) ||
-  				((opKind === "fileAppend" || opKind === "filePrepend") && !(normalizedAction as any).pos && !(normalizedAction as any).end)
+  				(opKind === "lineInsert" && (action as any).at !== undefined) ||
+  				((opKind === "fileAppend" || opKind === "filePrepend") && !(action as any).pos && !(action as any).end)
   			) {
-  				result = await this.#executeLineId(targetPath, normalizedAction, i + 1, idempotent);
+  				result = await this.#executeLineId(targetPath, action, i + 1, idempotent);
   			} else {
-  				result = await this.#executeStructural(targetPath, normalizedAction, signal);
+  				result = await this.#executeStructural(targetPath, action, signal);
   			}
 
   			if (isErrorResult(result)) {
@@ -381,13 +303,6 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
   						const firstTextIdx = all.findIndex(x => x.type === "text");
   						return idx === firstTextIdx ? { ...c, text: `${c.text}\n⚠ ${resolved.warning}` } : c;
   					}),
-  				};
-  			}
-  			if (deprecationWarnings.length > 0) {
-  				const warningText = deprecationWarnings.map(d => `WARNING: ${d}`).join("\n");
-  				result = {
-  					...result,
-  					content: result.content.map(c => c.type === "text" ? { ...c, text: c.text + "\n" + warningText } : c),
   				};
   			}
   			results.push(result);
@@ -438,6 +353,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 			target: nodePath.relative(this.session.cwd, targetPath),
 			actions: [action],
 			root: this.session.cwd,
+			sessionId: this.session.getSessionId?.()?.trim() || undefined,
 		});
 
 		const diagnostics = chunks.flatMap(c => c.diagnostics);
@@ -481,9 +397,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		if (!exists) {
 			// File creation via anchorless append/prepend
 			if ((action.kind === "fileAppend" || action.kind === "filePrepend") && !action.pos && !action.end) {
-				// PLAN-308: legacyKindAdapter renames legacy `lines` → `content`. Read either
-				// to support both shapes (avoid silent empty-file creation regression).
-				const body = normalizeLines(action.content ?? action.lines) ?? "";
+ 			const body = normalizeLines(action.content) ?? "";
 				await fs.mkdir(nodePath.dirname(targetPath), { recursive: true });
 				await fs.writeFile(targetPath, body, "utf-8");
 				return toolResult<EditToolResultDetails>({
