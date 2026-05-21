@@ -22,33 +22,33 @@ describe("applyManagedBufferContent", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("leaves no file behind when a missing markdown create is structurally invalid", () => {
+	it("leaves no file behind when a missing markdown create is structurally invalid", async () => {
 		const file = join(dir, "subagent-envelope-v2.md");
 
-		expect(() =>
+		await expect(
 			applyManagedBufferContent(file, "# broken\u0000markdown\n", {
 				create: true,
 				session: testSession,
 			}),
-		).toThrow(/Managed code buffer update failed/);
+		).rejects.toThrow(/Managed code buffer update failed/);
 		expect(existsSync(file)).toBe(false);
 	});
 
-	it("restores the exact prior bytes when an existing overwrite is structurally invalid", () => {
+	it("restores the exact prior bytes when an existing overwrite is structurally invalid", async () => {
 		const file = join(dir, "module.ts");
 		const original = "export const value = 1;\n";
 		writeFileSync(file, original);
 
-		expect(() =>
+		await expect(
 			applyManagedBufferContent(file, "export const = ;\n", {
 				create: false,
 				session: testSession,
 			}),
-		).toThrow(/Managed code buffer update failed/);
+		).rejects.toThrow(/Managed code buffer update failed/);
 		expect(readFileSync(file, "utf8")).toBe(original);
 	});
 
-	it("returns a warning when bytes persist but managed-buffer invalidation fails", () => {
+	it("returns a warning when bytes persist but managed-buffer invalidation fails", async () => {
 		const file = join(dir, "module.ts");
 		const replacement = "export const value = 42;\n";
 		writeFileSync(file, "export const value = 1;\n");
@@ -61,7 +61,7 @@ describe("applyManagedBufferContent", () => {
 			return executeCodeBuffer(options);
 		});
 
-		const result = applyManagedBufferContent(file, replacement, {
+		const result = await applyManagedBufferContent(file, replacement, {
 			create: false,
 			session: testSession,
 		});

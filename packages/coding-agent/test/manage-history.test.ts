@@ -26,7 +26,7 @@ async function edit(file: string, sessionId: string, find: string, replace: stri
 		root: tmpDir,
 		actions: [
 			{
-				kind: "rawTextReplace",
+				kind: "fileRawTextReplace",
 				find,
 				content: replace,
 			},
