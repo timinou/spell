@@ -165,6 +165,14 @@ export const SETTINGS_SCHEMA = {
 
 	shellPath: { type: "string", default: undefined },
 
+	/**
+	 * Active Spell domain (e.g. "coding", "research"). Top-level `domain`
+	 * node in spell.kdl. Read independently by `parseSpellKdl` for the
+	 * project-init flow, and via Settings for consumers that want a unified
+	 * accessor. WAVE 2b: replaces legacy `.spell/domain.json`.
+	 */
+	domain: { type: "string", default: undefined },
+
 	extensions: { type: "array", default: EMPTY_STRING_ARRAY },
 
 	enabledModels: { type: "array", default: EMPTY_STRING_ARRAY },

@@ -13,7 +13,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { buildDependencyGraph, buildExecutionWaves, detectCycles } from "./swarm/dag";
 import { PipelineController } from "./swarm/pipeline";
 import { renderSwarmProgress } from "./swarm/render";
-import { parseSwarmYaml, validateSwarmDefinition } from "./swarm/schema";
+import { parseSwarm, validateSwarmDefinition } from "./swarm/schema";
 import { StateTracker } from "./swarm/state";
 
 const yamlPath = process.argv[2];
@@ -26,7 +26,7 @@ const resolvedPath = path.resolve(yamlPath);
 console.log(`Reading: ${resolvedPath}`);
 
 const content = await Bun.file(resolvedPath).text();
-const def = parseSwarmYaml(content);
+const def = parseSwarm(content);
 
 console.log(`Swarm: ${def.name}`);
 console.log(`Mode: ${def.mode}`);

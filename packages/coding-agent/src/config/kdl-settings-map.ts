@@ -48,6 +48,9 @@ export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> =
 	// ── Runtime / extensibility ───────────────────────────────────────────
 	shellPath: { block: "runtime", nodePath: "shell-path", accessor: "argument" },
 
+	// ── Top-level scalar nodes (use `_self` sentinel for the block-itself) ──
+	domain: { block: "domain", nodePath: "_self", accessor: "argument" },
+
 	// ── Secrets (block-only; see kdl-compatibility.writeSecrets) ──────────────
 	secrets: { block: "secrets", nodePath: "_self", accessor: "argument" },
 	extensions: { block: "extensibility", nodePath: "extensions", accessor: "argument" },

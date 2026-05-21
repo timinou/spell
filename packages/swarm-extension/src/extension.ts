@@ -16,7 +16,7 @@ import { formatDuration } from "@oh-my-pi/pi-utils";
 import { buildDependencyGraph, buildExecutionWaves, detectCycles } from "./swarm/dag";
 import { PipelineController } from "./swarm/pipeline";
 import { renderSwarmProgress } from "./swarm/render";
-import { parseSwarmYaml, type SwarmDefinition, validateSwarmDefinition } from "./swarm/schema";
+import { parseSwarm, type SwarmDefinition, validateSwarmDefinition } from "./swarm/schema";
 import { StateTracker } from "./swarm/state";
 
 export default function swarmExtension(pi: ExtensionAPI): void {
@@ -80,12 +80,12 @@ async function handleRun(yamlPath: string, ctx: ExtensionCommandContext, pi: Ext
 		return;
 	}
 
-	// 2. Parse YAML
+	// 2. Parse (auto-detects KDL or YAML)
 	let def: SwarmDefinition;
 	try {
-		def = parseSwarmYaml(content);
+		def = parseSwarm(content);
 	} catch (err) {
-		ctx.ui.notify(`YAML error: ${err instanceof Error ? err.message : String(err)}`, "error");
+		ctx.ui.notify(`Parse error: ${err instanceof Error ? err.message : String(err)}`, "error");
 		return;
 	}
 

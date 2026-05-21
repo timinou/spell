@@ -4,41 +4,19 @@ import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 
 import { parseSpellKdl } from "../config/spell-kdl";
 
-/** Shape of the optional `.spell/domain.json` override file. */
-interface DomainOverrideFile {
-	domain: string;
-}
-
-function parseDomainOverride(raw: string, overridePath: string): string {
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(raw);
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		throw new Error(`Invalid domain override file at '${overridePath}': ${message}`);
-	}
-	if (parsed === null || typeof parsed !== "object") {
-		throw new Error(
-			`Invalid domain override file at '${overridePath}': expected an object with a non-empty 'domain' field`,
-		);
-	}
-	const domain = (parsed as DomainOverrideFile).domain?.trim();
-	if (!domain) {
-		throw new Error(`Invalid domain override file at '${overridePath}': expected a non-empty string field 'domain'`);
-	}
-	return domain;
-}
-
 /**
  * Determine which Spell domain is active for a given working directory.
  *
  * Resolution order:
  * 1. `cliOverride` — explicit flag wins outright.
  * 2. `spell.kdl` `domain` node at project root.
- * 3. `.spell/domain.json` — legacy override (logs deprecation warning).
- * 4. Default: `coding`.
+ * 3. Default: `coding`.
  *
- * @throws If `.spell/domain.json` exists but cannot be parsed or validated.
+ * The legacy `.spell/domain.json` reader was removed in PLAN-311 WAVE 2b
+ * after the YAML/JSON → KDL cutover. The one-shot migrator translates
+ * pre-existing domain.json into the spell.kdl `domain` node; running this
+ * function on a never-migrated source returns the default and ignores any
+ * stray domain.json files.
  */
 export async function detectDomain(cwd: string, cliOverride?: string): Promise<string> {
 	const trimmedOverride = cliOverride?.trim();
@@ -46,15 +24,12 @@ export async function detectDomain(cwd: string, cliOverride?: string): Promise<s
 		return trimmedOverride;
 	}
 
-	// 2. Try spell.kdl domain field
 	const spellKdlPath = path.join(cwd, "spell.kdl");
 	try {
 		const spellKdlContent = await Bun.file(spellKdlPath).text();
 		// Pre-validate KDL syntax before calling parseSpellKdl. parseSpellKdl
 		// returns an empty config for both broken KDL and valid KDL with no
-		// domain — but we need to distinguish them: broken KDL should fall
-		// back to "coding" immediately, while valid KDL with no domain should
-		// fall through to domain.json.
+		// domain. Broken KDL → default; valid KDL with no domain → default.
 		try {
 			parse(spellKdlContent);
 		} catch {
@@ -72,16 +47,21 @@ export async function detectDomain(cwd: string, cliOverride?: string): Promise<s
 		}
 	}
 
-	// 3. Legacy: .spell/domain.json (with deprecation warning)
-	const overridePath = path.join(cwd, ".spell", "domain.json");
+	// Orphan-detection warning: if a legacy .spell/domain.json exists but
+	// nothing in spell.kdl supplies a domain, the user is silently falling
+	// back to the default. Preserve the pre-WAVE-2b deprecation warning so
+	// users who skipped the migrator (--no-migrate, declined dialog, or
+	// .migration-skipped marker) discover the issue. One stat call on the
+	// rare default path.
+	const legacyPath = path.join(cwd, ".spell", "domain.json");
 	try {
-		const raw = await Bun.file(overridePath).text();
-		logger.warn("domain.json is deprecated; use spell.kdl instead. Run `spell init` to migrate.");
-		return parseDomainOverride(raw, overridePath);
-	} catch (error) {
-		if (!isEnoent(error)) {
-			throw error;
-		}
+		await Bun.file(legacyPath).text();
+		logger.warn(
+			"spell-kdl: found orphan .spell/domain.json but no `domain` in spell.kdl; defaulting to 'coding'. Run the migrator (Settings.init prompts) or add `domain \"...\"` to spell.kdl manually.",
+			{ legacyPath },
+		);
+	} catch {
+		// missing or unreadable — no warning needed.
 	}
 
 	return "coding";
