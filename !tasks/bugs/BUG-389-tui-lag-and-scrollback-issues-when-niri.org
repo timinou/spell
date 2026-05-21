@@ -1,0 +1,69 @@
+#+TITLE: TUI lag and scrollback issues when niri overview mode activates
+#+STATE: ITEM
+#+SESSION_ID: 14ea14814559e822
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T15-17-13-109Z_14ea14814559e822.jsonl]]
+#+CUSTOM_ID: BUG-389-tui-lag-and-scrollback-issues-when-niri
+#+EFFORT: 8h
+#+LAYER: tui
+#+PRIORITY: #A
+
+* Initial Message
+
+Spell has been using CPU like crazy recently. Why?
+
+* Initial Message
+
+User report (2026-05-21): "the pty scrollback and update issues are now really bad, the terminal seems to be super super laggy especially when niri overview mode is activated".
+
+Reported while PLAN-312 (TUI responsiveness) was in flight; many uncommitted W3/W5 changes were active in the working tree at the time. PLAN-312 is now closed; the worst of the lag-in-uncommitted-work likely landed in fixes (see below). This BUG tracks remaining niri-specific issues and any residual regression.
+
+* What was fixed in PLAN-312
+
+Three issues addressed during the plan that likely accounted for the bulk of the reported lag:
+
+1. *requestRender swallowing updates* \u2014 the W3 early-exit guard in #doRender combined with incomplete leaf-to-parent dirty propagation made streaming updates appear frozen. Fixed: added setParent + #parent.markDirty() to Markdown/Text/Image/Spacer (W3 agent had only wired editor + input). See commit dcc500e0e.
+
+2. *Tool execution spinner appearing frozen* \u2014 spinner setInterval mutated #renderState.spinnerFrame without invalidating any component. With the new Container cache being authoritative, the cached child components held a stale spinnerFrame. Fixed: spinner tick now calls #updateDisplay() which clears+addChild the rendered components, propagating dirty up. See commit dcc500e0e.
+
+3. *OSC11 polling forever + heartbeats firing periodically* \u2014 OSC11 query was sent every 2s regardless of whether a valid reply was received; multiple subsystems heartbeat on fixed cadence. Fixed: OSC11 self-disables on first reply; cursor + memories heartbeats debounce on silence. See FEAT-759 commit.
+
+* What is NOT yet addressed
+
+** A. Focus-event-aware render throttling
+W5 deferred CSI 1004h focus tracking + Terminal.onFocusChange(cb) API wiring to TUI.setMinRenderInterval. Without this, Spell renders at full 60fps regardless of whether the terminal window is focused. Niri overview activates a workspace switcher that takes focus away from the terminal. Spell continues writing frames; the terminal queues them; when overview deactivates, the burst plays back as lag.
+
+Fix scaffold:
+- Parse =\\x1b[I= (focus in) / =\\x1b[O= (focus out) in stdin-buffer or terminal.ts (after sending =\\x1b[?1004h= enable).
+- Expose =Terminal.onFocusChange(cb: (focused: boolean) => void)=.
+- TUI subscribes and toggles =#minRenderInterval= between 16ms (focused) and 500ms (unfocused).
+
+** B. Width-change clearing scrollback
+=TUI.#doRender= width-change branch calls =fullRender(true)= which emits =\\x1b[3J\\x1b[2J\\x1b[H= (clear scrollback, screen, home). If niri overview happens to cause a resize event for any reason (some niri configurations resize tiles during overview), this clears the user's terminal scrollback every time the user enters/exits overview.
+
+Question: is the scrollback clear ever actually needed? The existing differential rendering already handles full re-render via the widthChanged path. The =\\x1b[3J= sequence is destructive and irreversible. Consider:
+- Removing =\\x1b[3J= from the width-change branch; keep only =\\x1b[2J\\x1b[H= (clear visible screen, home).
+- The old content remains in terminal scrollback above the new render \u2014 different wrapping but still readable.
+
+** C. Niri-specific reproduction
+Need a deterministic test scenario:
+- Start spell in a niri-managed terminal
+- Trigger overview activation/deactivation rapidly (Ctrl-Alt-O bind or mouse hover)
+- Observe lag pattern + scrollback state
+
+Without this, the residual issue is hard to triangulate.
+
+* Recommended next steps
+
+1. *Land focus-throttling* (A). The TUI.setMinRenderInterval API already exists; just need to parse the focus events and wire the callback.
+2. *Investigate the =\\x1b[3J= clear in width-change* (B). Determine if it's safe to drop. If yes, rapid resize stops destroying scrollback.
+3. *Run with PI_TUI_PROFILE=1* during a niri-overview-lag reproduction to get per-frame timing + heap data. The profiler landed in FEAT-758 commit.
+
+* Verification
+
+Once focus throttling is wired, a focus-loss event should reduce TUI render rate to \u22652 renders/sec. Profile JSONL should show =frameMs= concentrated in dirty frames only; idle frames should be near-zero count.
+
+* Related
+
+- PLAN-312 (closed) \u2014 the broader TUI responsiveness work
+- FEAT-759 (closed) \u2014 adaptive idle baseline; focus throttling deferred
+- FEAT-758 (closed) \u2014 PI_TUI_PROFILE telemetry to use here
