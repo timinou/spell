@@ -1,6 +1,6 @@
 //! Typed Op surface (PLAN-304).
 //! Replaces flat Action enum's stringly-typed dispatch with per-variant
-//! target newtypes. Migration via Op::from_legacy(action, cp).
+//! target newtypes.
 
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};

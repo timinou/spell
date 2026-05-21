@@ -139,18 +139,8 @@ pub struct FileSnapshot {
 	pub prior: Option<Vec<u8>>,
 }
 
-/// FEAT-712: walk the action list and the resolved CodePath, collect
-/// the absolute path of every file that could be mutated, snapshot
-/// the current bytes (or mark "didn't exist"). Best-effort:
-/// unresolvable paths are skipped silently — the loop will surface
-/// them as runtime diagnostics.
-pub fn snapshot_targets(
-	ops: &[Op],
-	cp: &CodePath,
-	root: &std::path::Path,
-) -> Vec<FileSnapshot> {
-	let _ = ops;
-	let mut paths: Vec<std::path::PathBuf> = Vec::new();
+/// Convert a CodePath with an FsLocator to an absolute filesystem path.
+fn code_path_to_fs_path(cp: &CodePath, root: &std::path::Path) -> Option<std::path::PathBuf> {
 	if let Locator::Fs(fs) = &cp.locator {
 		let mut p = root.to_path_buf();
 		for seg in &fs.segments {
@@ -161,17 +151,53 @@ pub fn snapshot_targets(
 				p.push(s);
 			}
 		}
-		paths.push(p);
+		Some(p)
+	} else {
+		None
 	}
-	paths.sort();
-	paths.dedup();
-	paths
-		.into_iter()
-		.map(|path| {
-			let prior = std::fs::read(&path).ok();
-			FileSnapshot { path, prior }
-		})
-		.collect()
+}
+
+/// Map an edit-transaction error to a DiagnosticDto.
+/// PeerConflict is surfaced as its own variant so callers can distinguish
+/// concurrent-edit errors from genuine unsupported ops.
+fn map_edit_error_to_diagnostic(e: pi_code_engine::CodeEngineError) -> DiagnosticDto {
+	let variant = if let pi_code_engine::CodeEngineError::PeerConflict { .. } = e {
+		pi_code_path::types::DiagnosticVariant::PeerConflict
+	} else {
+		pi_code_path::types::DiagnosticVariant::UnsupportedOperation
+	};
+	diagnostic_to_dto(pi_code_path::types::Diagnostic {
+		variant,
+		message: e.to_string(),
+		span:    None,
+	})
+}
+
+/// FEAT-712: walk the action list and the resolved CodePath, collect
+/// the absolute path of every file that could be mutated, snapshot
+/// the current bytes (or mark "didn't exist"). Best-effort:
+/// unresolvable paths are skipped silently — the loop will surface
+/// them as runtime diagnostics.
+pub fn snapshot_targets(
+	ops: &[Op],
+	cp: &CodePath,
+	root: &std::path::Path,
+) -> Vec<FileSnapshot> {
+	let mut paths: std::collections::BTreeSet<std::path::PathBuf> = std::collections::BTreeSet::new();
+
+	if let Some(p) = code_path_to_fs_path(cp, root) {
+		paths.insert(p);
+	}
+	for op in ops {
+		if let Some(p) = code_path_to_fs_path(op.target_codepath(), root) {
+			paths.insert(p);
+		}
+	}
+
+	paths.into_iter().map(|path| {
+		let prior = std::fs::read(&path).ok();
+		FileSnapshot { path, prior }
+	}).collect()
 }
 
 // ── Task options (owned, Send) ───────────────────────────────────
@@ -462,19 +488,7 @@ pub fn execute_code_path_inner(
 		let heading_resolver = heading_resolver::HeadingResolver::new(code_resolver_arc.clone());
 
 		fn resolve_op_path(op: &Op, root: &std::path::Path) -> Option<std::path::PathBuf> {
-			let cp = op.target_codepath();
-			if let Locator::Fs(fs) = &cp.locator {
-				let mut target = root.to_path_buf();
-				for seg in &fs.segments {
-					if let pi_code_path::ast::FsSegment::Literal(s) = seg {
-						if s == "/" { continue; }
-						target.push(s);
-					}
-				}
-				Some(target)
-			} else {
-				None
-			}
+			code_path_to_fs_path(op.target_codepath(), root)
 		}
 
 		let strict_mode = opts.transaction == Some(TransactionMode::Strict);
@@ -602,19 +616,22 @@ pub fn execute_code_path_inner(
 								| Op::LineInsert { .. }
 								| Op::LineAppend { .. }
 								| Op::LinePrepend { .. } => {
-									let outcome = text_resolver
-										.try_apply(op, &pi_token)
-										.unwrap()
-										.map_err(|d| pi_code_engine::CodeEngineError::Edit(d.message))?;
-									let disk = std::fs::read_to_string(&path).unwrap_or_default();
 									let current = buf.source();
-									if disk != current {
+									let (new_text, mut outcome) = match pi_code_path::dialects::text::mutation::apply_to_text(op, &current) {
+										Some(Ok(r)) => r,
+										Some(Err(d)) => return Err(pi_code_engine::CodeEngineError::Edit(d.message)),
+										None => return Err(pi_code_engine::CodeEngineError::Edit(
+											"text resolver does not support this op".to_string()
+										)),
+									};
+									if current != new_text {
 										buf.edit_batch(vec![TextEdit {
 											start_byte:   0,
 											old_end_byte: current.len(),
-											new_text:     disk,
+											new_text,
 										}])?;
 									}
+									outcome.target_summary = Some(path.to_string_lossy().to_string());
 									group_outcomes.push(outcome);
 								},
 								Op::CssRenameClassToken { .. }
@@ -647,14 +664,10 @@ pub fn execute_code_path_inner(
 						Ok((group_outcomes, should_delete))
 					},
 				);
-			match result {
+		match result {
 				Ok((_, group_outcomes)) => outcomes.extend(group_outcomes),
 				Err(e) => {
-					let mut diag = diagnostic_to_dto(pi_code_path::types::Diagnostic {
-						variant: pi_code_path::types::DiagnosticVariant::UnsupportedOperation,
-						message: e.to_string(),
-						span:    None,
-					});
+					let mut diag = map_edit_error_to_diagnostic(e);
 					if strict_mode {
 						let rolled = restore_strict(&snapshots);
 						diag.message = format!("{} (rolled back {rolled} file(s))", diag.message);
@@ -968,6 +981,11 @@ mod tests {
 	use std::path::PathBuf;
 
 	use super::*;
+	use pi_code_path::{
+		ActionContent,
+		ast::{CodePath, FsLocator, FsSegment, Locator},
+		op::{FileTarget, Op},
+	};
 	fn opts(target: impl Into<String>) -> CodePathTaskOptions {
 		CodePathTaskOptions {
 			command:            "resolve".to_string(),
@@ -1436,5 +1454,67 @@ mod tests {
 		assert!(chunks[0].done);
 		assert_eq!(chunks[0].nodes.len(), 1);
 		assert_eq!(chunks[0].nodes[0].kind, "§file");
+	}
+
+	#[test]
+	fn peer_conflict_produces_peer_conflict_diagnostic_variant() {
+		let diag = map_edit_error_to_diagnostic(pi_code_engine::CodeEngineError::PeerConflict {
+			session:        "peer".to_string(),
+			path:           std::path::PathBuf::from("/tmp/test"),
+			code_path:      "test".to_string(),
+			peer_revision:  1,
+			peer_commit_ts: 0,
+		});
+		assert_eq!(diag.variant, "peer_conflict", "PeerConflict must map to peer_conflict variant");
+	}
+
+	#[test]
+	fn snapshot_targets_includes_all_op_paths() {
+		use pi_code_path::ast::{FsLocator, FsSegment, Locator};
+		use pi_code_path::op::FileTarget;
+
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path();
+		std::fs::write(root.join("a.txt"), "a").unwrap();
+		std::fs::write(root.join("b.txt"), "b").unwrap();
+
+		let cp = CodePath {
+			locator:   Locator::Fs(FsLocator {
+				segments: vec![FsSegment::Literal("a.txt".to_string())],
+			}),
+			query:     None,
+			qualifier: None,
+		};
+		let ops = vec![
+			Op::FileWrite {
+				target:  FileTarget::new(CodePath {
+					locator:   Locator::Fs(FsLocator {
+						segments: vec![FsSegment::Literal("a.txt".to_string())],
+					}),
+					query:     None,
+					qualifier: None,
+				})
+				.unwrap(),
+				content: ActionContent::Single("x".to_string()),
+				force:   false,
+			},
+			Op::FileWrite {
+				target:  FileTarget::new(CodePath {
+					locator:   Locator::Fs(FsLocator {
+						segments: vec![FsSegment::Literal("b.txt".to_string())],
+					}),
+					query:     None,
+					qualifier: None,
+				})
+				.unwrap(),
+				content: ActionContent::Single("y".to_string()),
+				force:   false,
+			},
+		];
+
+		let snaps = snapshot_targets(&ops, &cp, root);
+		let paths: Vec<_> = snaps.iter().map(|s| s.path.file_name().unwrap().to_str().unwrap()).collect();
+		assert!(paths.contains(&"a.txt"));
+		assert!(paths.contains(&"b.txt"));
 	}
 }

@@ -4,7 +4,7 @@
 //! variant, never silent success. Tests are organised in three tiers:
 //!
 //! 1. **Parse-level** — `parse_code_path` rejects syntactically invalid input.
-//! 2. **Op-level** — target constructors / `Op::from_legacy` reject shape mismatches.
+//! 2. **Op-level** — target constructors reject shape mismatches.
 //! 3. **Resolver-level** (mostly #[ignore]) — require wired resolvers not yet built.
 //!
 //! Mirrors `packages/coding-agent/test/codepath/negative.test.ts` at the kernel
@@ -285,6 +285,7 @@ fn file_target_rejects_qualifier() {
         "message should mention symbol/qualifier: {}",
         err.message
     );
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // Tier 3: Resolver-level negative tests (dispatch engine)
