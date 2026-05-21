@@ -4,9 +4,12 @@
  * Handles `spell ssh <command>` subcommands for SSH host configuration management.
  */
 
-import { getSSHConfigPath } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
-import { addSSHHost, readSSHConfigFile, removeSSHHost, type SSHHostConfig } from "../ssh/config-writer";
+import { Settings, settings } from "../config/settings";
+import type { SshHostKdlEntry } from "../config/kdl-compatibility";
+
+// Local alias — the CLI's user-facing shape matches the KDL writer entry.
+type SSHHostConfig = SshHostKdlEntry;
 
 // =============================================================================
 // Types
@@ -92,11 +95,16 @@ async function handleAdd(cmd: SSHCommandArgs): Promise<void> {
 	if (cmd.flags.compat) hostConfig.compat = true;
 
 	const scope = cmd.flags.scope ?? "project";
-	const filePath = getSSHConfigPath(scope);
 
 	try {
-		await addSSHHost(filePath, name, hostConfig);
-		process.stdout.write(chalk.green(`Added SSH host "${name}" to ${scope} config\n`));
+		await Settings.init();
+		const tiers = settings.getPerTier("ssh.hosts" as never);
+		const current =
+			(scope === "project" ? tiers.project : tiers.user) as Record<string, SSHHostConfig> | undefined;
+		const updated = { ...(current ?? {}), [name]: hostConfig };
+		settings.set("ssh.hosts" as never, updated as never, scope);
+		await settings.flush();
+		process.stdout.write(chalk.green(`Added SSH host "${name}" to ${scope} spell.kdl\n`));
 	} catch (err) {
 		process.stdout.write(chalk.red(`Error: ${err instanceof Error ? err.message : String(err)}\n`));
 		process.exitCode = 1;
@@ -113,11 +121,21 @@ async function handleRemove(cmd: SSHCommandArgs): Promise<void> {
 	}
 
 	const scope = cmd.flags.scope ?? "project";
-	const filePath = getSSHConfigPath(scope);
 
 	try {
-		await removeSSHHost(filePath, name);
-		process.stdout.write(chalk.green(`Removed SSH host "${name}" from ${scope} config\n`));
+		await Settings.init();
+		const tiers = settings.getPerTier("ssh.hosts" as never);
+		const current =
+			(scope === "project" ? tiers.project : tiers.user) as Record<string, SSHHostConfig> | undefined;
+		if (!current || !(name in current)) {
+			process.stdout.write(chalk.yellow(`No host "${name}" in ${scope} spell.kdl\n`));
+			return;
+		}
+		const { [name]: _, ...rest } = current;
+		void _;
+		settings.set("ssh.hosts" as never, rest as never, scope);
+		await settings.flush();
+		process.stdout.write(chalk.green(`Removed SSH host "${name}" from ${scope} spell.kdl\n`));
 	} catch (err) {
 		process.stdout.write(chalk.red(`Error: ${err instanceof Error ? err.message : String(err)}\n`));
 		process.exitCode = 1;
@@ -125,13 +143,10 @@ async function handleRemove(cmd: SSHCommandArgs): Promise<void> {
 }
 
 async function handleList(cmd: SSHCommandArgs): Promise<void> {
-	const projectPath = getSSHConfigPath("project");
-	const userPath = getSSHConfigPath("user");
-
-	const [projectConfig, userConfig] = await Promise.all([readSSHConfigFile(projectPath), readSSHConfigFile(userPath)]);
-
-	const projectHosts = projectConfig.hosts ?? {};
-	const userHosts = userConfig.hosts ?? {};
+	await Settings.init();
+	const tiers = settings.getPerTier("ssh.hosts" as never);
+	const projectHosts = ((tiers.project as Record<string, SSHHostConfig> | undefined) ?? {});
+	const userHosts = ((tiers.user as Record<string, SSHHostConfig> | undefined) ?? {});
 
 	if (cmd.flags.json) {
 		process.stdout.write(JSON.stringify({ project: projectHosts, user: userHosts }, null, 2));
@@ -149,7 +164,7 @@ async function handleList(cmd: SSHCommandArgs): Promise<void> {
 	}
 
 	if (hasProject) {
-		process.stdout.write(chalk.bold("Project SSH Hosts (.spell/ssh.json):\n"));
+		process.stdout.write(chalk.bold("Project SSH Hosts (./spell.kdl):\n"));
 		printHosts(projectHosts);
 	}
 
@@ -158,7 +173,7 @@ async function handleList(cmd: SSHCommandArgs): Promise<void> {
 	}
 
 	if (hasUser) {
-		process.stdout.write(chalk.bold("User SSH Hosts (~/.spell/agent/ssh.json):\n"));
+		process.stdout.write(chalk.bold("User SSH Hosts (~/.config/spell/spell.kdl):\n"));
 		printHosts(userHosts);
 	}
 }
