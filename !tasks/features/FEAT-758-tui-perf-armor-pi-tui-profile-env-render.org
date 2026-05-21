@@ -1,0 +1,78 @@
+#+TITLE: TUI perf armor: PI_TUI_PROFILE env + render/alloc baseline tests
+#+STATE: ITEM
+#+SESSION_ID: 14ea14814559e822
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T15-17-13-109Z_14ea14814559e822.jsonl]]
+#+CUSTOM_ID: FEAT-758-tui-perf-armor-pi-tui-profile-env-render
+#+EFFORT: 8h
+#+LAYER: tui
+#+PRIORITY: #B
+
+* Initial Message
+
+Spell has been using CPU like crazy recently. Why?
+
+* Initial Message
+
+The TUI has had 12+ render-correctness fixes in the last quarter (viewport/cursor/scrollback). None of them carry perf assertions. The wins from the responsiveness plan will silently regress in the next render fix unless we lock them in with executable invariants.
+
+* Problem
+
+There is no perf-counting test infrastructure in =packages/tui/test/=. The closest is =render-scheduling.test.ts=, which counts =requestRender= calls but not actual =doRender= runs or component allocations.
+
+Without these, the rebuild-tree-per-token regression (the kind that motivated the whole plan) is invisible until someone profiles a real session and notices HeapHelpers at 14%.
+
+* Goal
+
+Three artifacts:
+
+1. =PI_TUI_PROFILE=1= env writes per-render telemetry to a JSONL log: frame timestamp, frame time (ms), allocations delta (via =Bun.gc(true)= snapshot), render count, dirty-set size, lines-changed count.
+2. A small set of CI tests assert invariants that would catch the regressions this plan fixed.
+3. Documentation in =packages/tui/README.md= for how to use the profiler when investigating slowness.
+
+* Fix
+
+New module =packages/tui/src/dev-profile.ts=:
+
+#+begin_src
+export class DevProfile {
+  static enabled = process.env.PI_TUI_PROFILE === "1";
+  #lastHeap = 0;
+  #frameCount = 0;
+  recordFrame(opts: { frameMs: number; dirtyCount: number; linesChanged: number }): void {
+    if (!DevProfile.enabled) return;
+    const heap = Bun.gc(true) ?? process.memoryUsage().heapUsed;
+    const allocDelta = heap - this.#lastHeap;
+    this.#lastHeap = heap;
+    appendJsonl(profilePath(), { t: Date.now(), frame: ++this.#frameCount, ...opts, allocDelta, heap });
+  }
+}
+#+end_src
+
+Wire into =TUI.#executeRender= behind the env gate.
+
+New tests in =packages/tui/test/perf-baselines.test.ts=:
+
+1. *Streaming-allocation invariant* — simulate a 1k-chunk streaming reply with one growing text block. Assert =new Markdown= called exactly once for that block. (Companion to the AssistantMessage reconciliation FEAT.)
+2. *Idle-render invariant* — register a TUI, sleep 5 seconds simulated time with no input. Assert =#doRender= invocations ≤ 2 total.
+3. *Container-cache hit invariant* — push 100 =requestRender= calls with no mutations. Assert =Container.render(width)= early-returns on the root ≥ 95% of calls.
+4. *Timer-count invariant* — assert at most 3 active =setInterval=s after init (OSC11 query reply received, no spinners active).
+
+* Acceptance
+
+- =PI_TUI_PROFILE=1 spell= produces a parseable JSONL log at =/tmp/spell-tui-profile-<pid>.jsonl=.
+- All four invariant tests green on main after Phase 1–5 land.
+- README section documents the env, the log format, and the four invariants the tests guard.
+
+* Sequencing
+
+Land *last* in the plan. The invariants need to be set against the post-fix baseline, not the pre-fix one.
+
+* Non-goals
+
+- Continuous profiling in production sessions — opt-in only.
+- Replace existing logger telemetry — additive only.
+- Allocation-tracking in non-Bun runtimes.
+
+* Related
+
+- Part of =PLAN-XXX-tui-responsiveness=.
