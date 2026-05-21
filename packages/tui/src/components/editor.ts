@@ -5,7 +5,7 @@ import { type EditorKeybindingsManager, getEditorKeybindings } from "../keybindi
 import { extractPrintableText, matchesKey } from "../keys";
 import { KillRing } from "../kill-ring";
 import type { SymbolTheme } from "../symbols";
-import { type Component, CURSOR_MARKER, type Focusable } from "../tui";
+import { type Component, CURSOR_MARKER, type DirtyParent, type Focusable } from "../tui";
 import {
 	getSegmenter,
 	getWordNavKind,

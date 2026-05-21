@@ -41,16 +41,23 @@ export interface Component {
 	handleInput?(data: string): void;
 
 	/**
+	 * Optional invalidate hook — clear any internal cache + signal that the
+	 * component needs re-rendering. Should call #parent.markDirty() if a parent
+	 * has been set, to propagate dirty up the tree.
+	 */
+	invalidate?(): void;
+
+	/**
+	 * Optional parent assignment — set by addChild / clear / removeChild on
+	 * Container and Container-like (Box). Enables upward dirty propagation.
+	 */
+	setParent?(parent: DirtyParent | undefined): void;
+
+	/**
 	 * If true, component receives key release events (Kitty protocol).
 	 * Default is false - release events are filtered out.
 	 */
 	wantsKeyRelease?: boolean;
-
-	/**
-	 * Invalidate any cached rendering state.
-	 * Called when theme changes or when component needs to re-render from scratch.
-	 */
-	invalidate(): void;
 }
 
 /**

@@ -124,7 +124,7 @@ export async function startDaemon(config: DaemonConfig): Promise<ManagedDaemon> 
 		command,
 		socketPath,
 		stopCommand,
-		_healthIntervalMs = DEFAULT_HEALTH_INTERVAL_MS,
+		healthIntervalMs: _healthIntervalMs = DEFAULT_HEALTH_INTERVAL_MS,
 		startupTimeoutMs = DEFAULT_STARTUP_TIMEOUT_MS,
 		env,
 		cwd,
