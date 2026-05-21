@@ -1,0 +1,37 @@
+#+TITLE: YAML overlay silently shadows project KDL settings
+#+STATE: ITEM
+#+SESSION_ID: 14ea0e0f03e26235
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-49-03-247Z_14ea0e0f03e26235.jsonl]]
+#+CUSTOM_ID: BUG-386-yaml-overlay-silently-shadows-project-kd
+
+* Initial Message
+
+the settings thing doesn't work. I'd like a simple toggle on top for user/project/session. right now, when I do settings, it just shows [user] ... and keeps printing it, fucking up the layout of everything. I also don't see settings persisted when they need to be added to the kdl (please reproduce the error)
+
+investigate.
+
+* Problem
+
+After the KDL settings cutover, =discovery/builtin.ts:786-810= still reads =<cwd>/.spell/agent/config.yml= and feeds it into the =settings= capability. =settings.ts:438= then merges that overlay on top of values read from =spell.kdl=.
+
+∴ Two valid project-config files. Whichever provider runs last in the merge order wins — *not* whichever file the user edited most recently. Users editing =spell.kdl= via =/settings= can have their changes silently shadowed by a stale =config.yml=.
+
+* Evidence
+
+#+begin_src
+packages/coding-agent/src/discovery/builtin.ts:786
+  // YAML: agent/config.yml in config dir (project-level only;
+  // user-level YAML is loaded directly by Settings.#loadYaml)
+  if (level === "project") {
+    const yamlPath = path.join(dir, "agent", "config.yml");
+    ...
+  }
+#+end_src
+
+* Fix
+
+Remove the YAML overlay branch from the =settings= capability provider. KDL-only inputs for Spell-owned config.
+
+* Tracking
+
+Subsumed by =FULL_KDL_SPELL= plan, WAVE 1.3.

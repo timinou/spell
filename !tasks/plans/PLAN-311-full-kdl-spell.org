@@ -1,0 +1,176 @@
+#+TITLE: FULL_KDL_SPELL
+#+STATE: ITEM
+#+SESSION_ID: 14ea0e0f03e26235
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-49-03-247Z_14ea0e0f03e26235.jsonl]]
+#+CUSTOM_ID: PLAN-311-full-kdl-spell
+
+* Initial Message
+
+the settings thing doesn't work. I'd like a simple toggle on top for user/project/session. right now, when I do settings, it just shows [user] ... and keeps printing it, fucking up the layout of everything. I also don't see settings persisted when they need to be added to the kdl (please reproduce the error)
+
+investigate.
+
+* Goal
+
+One canonical format for all Spell-owned configuration: KDL. Single user (the author of this plan) — so the migration can be aggressive and self-contained, and dual-read windows can be replaced by one-shot translation.
+
+After the plan completes and the user runs migration on their machine, =rm -rf packages/coding-agent/src/migration/= plus deleting two lines from =settings.ts= leaves Spell full-KDL with zero residual code.
+
+* Non-goals
+
+- Foreign-tool config formats (=.claude/=, =.codex/=, =.gemini/=, =.cursor/=, =.opencode/=) stay native. The =settingsCapability= still discovers them; only the Spell-owned overlays come out of that pipeline.
+- Spellcast reactivation: tracked in [[id:FEAT-757-reactivate-spellcast-and-migrate-manifes]], separate work.
+- YAML frontmatter parser branch stays in place for third-party content.
+
+* Path & tier model (locked)
+
+#+begin_src
+READ precedence (overlay; last-write-per-key wins)
+  session  in-memory                              volatile
+  local    <cwd>/.local/spell.kdl                 gitignored, machine
+  project  <cwd>/spell.kdl                        committed, team
+  user     ~/.config/spell/spell.kdl              XDG-style global
+
+WRITE tier  /settings UI Ctrl+T cycles 4-way
+
+IMPORTS inside a KDL file
+  relative "./*" SHOULD resolve under <cwd>/.spell/ (soft convention)
+#+end_src
+
+* Linked items
+* Linked items
+
+Bugs (state at plan creation):
+- [[id:BUG-386-yaml-overlay-silently-shadows-project-kd]] YAML overlay shadows project KDL — closed by W1.3
+- [[id:BUG-384-spell-settings-json-overlay-duplicates-p]] settings.json overlay — closed by W1.2
+- [[id:BUG-388-magic-spell-owned-config-file-names-beyo]] magic file names beyond spell.kdl — closed by W2
+- [[id:BUG-385-stale-yaml-test-fixtures-in-settings-man]] stale YAML tests — closed by W1.6
+- [[id:BUG-383-dead-deprecated-migration-code-in-agent]] dead agent-storage code — closed by W6.1
+
+Features:
+- [[id:FEAT-752-four-tier-settings-session-local-project]] 4-tier settings + XDG path
+- [[id:FEAT-753-one-shot-self-contained-yaml-json-kdl-mi]] self-contained migrator
+- [[id:FEAT-754-secrets-kdl-and-swarm-kdl-parsers]] spell.kdl absorbs all Spell-owned config
+- [[id:FEAT-755-markdown-frontmatter-authored-as-kdl-by]] ---kdl frontmatter
+- [[id:FEAT-756-spell-config-cli-and-kdl-schema-referenc]] spell config CLI + schema
+- [[id:FEAT-757-reactivate-spellcast-and-migrate-manifes]] spellcast (separated)
+* Prior context
+
+WAVE 0 landed in the previous session. Fixed by [[id:PLAN-307-settings-tier-toggle-and-numeric-submenu-persistence]] (file content embedded below for context — no separate PLAN item was created at the time):
+
+- =settings-selector.ts= tier indicator orphan accumulation
+- =selector-controller.ts= double-set corrupting numeric submenu persistence (silent data loss for =temperature= / =topP= / =topK= / etc on reload)
+- =test/settings-tier-persistence.test.ts= regression coverage (5 tests)
+
+* Waves
+
+** WAVE 0  Triage + initial fix
+DONE in prior session. Both =settings-selector.ts= and =selector-controller.ts= touched; regression test added.
+
+** WAVE 1  Settings collapse + self-contained migrator
+*** 1.1 dirs.ts: =getUserKdlPath()= returning =~/.config/spell/spell.kdl= (decoupled from =agentDir=, which stays at =~/.spell/agent= for sessions/plugins/logs)
+*** 1.2 settings.ts: 4 tier paths, merge in precedence order, =WriteTier= adds ="local"=
+*** 1.3 discovery/builtin.ts settings provider: delete YAML and JSON overlay branches. =settingsCapability= now feeds foreign-tool data only.
+*** 1.4 migration/ directory — self-contained per [[id:FEAT-753-one-shot-self-contained-yaml-json-kdl-mi]]
+*** 1.5 settings-selector.ts: 4-segment tier pill (today's fix extended)
+*** 1.6 tests:
+- rewrite =settings-manager.test.ts= (drop YAML helpers)
+- rewrite =autocomplete-max-visible.test.ts=
+- new: =settings-migration.test.ts= golden fixtures
+- new: =settings-precedence.test.ts= 4-tier matrix
+
+** GATE 1  Review + gap fill
+Reviewer pass on all WAVE 1 touchpoints. Look for:
+- silent overlay paths still firing
+- write-tier UI not honoring new "local" target
+- migration round-trip data loss
+Any gaps → implementation tasks added before WAVE 2 starts.
+
+** WAVE 2  Ancillary Spell-owned files
+** WAVE 2  Absorb magic files into spell.kdl
+
+Per [[id:BUG-388-magic-spell-owned-config-file-names-beyo]] and [[id:FEAT-754-secrets-kdl-and-swarm-kdl-parsers]].
+
+Five magic config files (secrets, mcp, ssh, domain × user/project locations) collapse into inline blocks of =spell.kdl=.
+
+*** 2.1 schema: new top-level groups in =settings-schema.ts= — =secrets=, =mcp=, =ssh=, =domain=
+*** 2.2 =kdl-settings-map.ts= block-aware mapping
+*** 2.3 readers rerouted to read from =Settings=:
+- =secrets/index.ts= drops YAML branch
+- =mcp/loader.ts= drops =mcp.json= branch
+- =discovery/ssh.ts= drops =ssh.json= branch
+- =domain/detection.ts= drops =domain.json= branch
+*** 2.4 migrator absorbs the five legacy files into the appropriate-tier =spell.kdl=
+*** 2.5 swarm extension parser: =swarm.yml= → KDL format. NOT a magic file — it is a path passed by the caller. Narrow change to =packages/swarm-extension/src/swarm/schema.ts=.
+** GATE 2  Review + gap fill
+Particular focus: secrets path is security-sensitive. Verify no plaintext logged in migration dialog; .bak files have same permission bits as originals.
+
+** WAVE 3  Markdown frontmatter cutover
+Per [[id:FEAT-755-markdown-frontmatter-authored-as-kdl-by]]. Parser already dual-mode → zero runtime risk.
+
+** GATE 3  Review + gap fill
+Spot-check rendered prompts in =/agents= and =/modes= selectors. Ensure no =kebab-case= keys lost in =camelCase= normalization.
+
+** WAVE 4  Tooling
+*** 4.1 =spell config show/set/doctor= CLI per [[id:FEAT-756-spell-config-cli-and-kdl-schema-referenc]]
+*** 4.2 =kdl-schema.kdl= generation from settings-schema SoT
+*** 4.3 =/settings= UI: inline KDL write-error display
+
+** GATE 4  Review + gap fill
+=spell config doctor= must report zero orphan files in a clean install. Verify on a fresh =$HOME=.
+
+** WAVE 5  Mark spellcast deprecated
+*** 5.1 =spellcast/manifest.ts= module-level =@deprecated= header
+*** 5.2 Header note pointing at [[id:FEAT-757-reactivate-spellcast-and-migrate-manifes]]
+No runtime change.
+
+** WAVE 6  Delete dead code
+*** 6.1 =agent-storage.ts= =getSettings()=/=saveSettings()= per [[id:BUG-383-dead-deprecated-migration-code-in-agent]]
+*** 6.2 =builtin.ts= residual legacy branches
+*** 6.3 stale YAML test cases per [[id:BUG-385-stale-yaml-test-fixtures-in-settings-man]]
+*** 6.4 regenerate =docs-index.generated.ts= from updated .md
+
+** GATE 6  Review + gap fill
+Final sweep with =rg "YAML|yml|yaml|config\.yml"= in =packages/coding-agent/src= and =packages/swarm-extension/src=. Expected zero hits for Spell-owned code (foreign discovery providers still match — that is correct).
+
+** WAVE 7  Verification matrix
+*** Startup states:
+  (a) no config        → defaults render, no files created
+  (b) legacy YAML only → dialog appears, accept → migrated, .bak left
+  (c) decline migration→ KDL loaded if exists, else defaults, warn-once
+  (d) KDL only         → loads cleanly, no dialog
+  (e) all 3 KDL tiers  → correct precedence (local > project > user)
+*** Round-trip golden fixtures: kdl → Raw → kdl byte-identical
+*** Concurrent edits: external editor + Spell save → file-lock holds
+*** Numeric submenu round-trip: covered by W0 regression test
+
+** WAVE 8  User-driven cleanup
+After running on the author's machine and confirming clean state:
+- =rm -rf packages/coding-agent/src/migration/=
+- delete the 2 lines in =settings.ts=
+- commit =chore: remove one-shot migration=
+- Spell is full-KDL, zero legacy code
+
+* Ordering
+
+#+begin_src
+W0 ✓
+W1 ════►   blocks W2..W6
+   W2 ──►  parallel-safe after W1
+   W3 ──►  parallel-safe after W1
+W4 ────►   after W1
+W5 ────►   anytime (marker only)
+W6 ────►   after W1+W2 land
+W7 ────►   rolling verification after each wave
+W8 ────►   manual cleanup step
+#+end_src
+
+Each GATE is a reviewer subagent run followed by gap-fill tasks dispatched as needed before the next wave starts. Gates are not skipped.
+
+* Acceptance for the whole plan
+
+1. =rg "YAML|\\.yml|\\.yaml"= in =packages/coding-agent/src= and =packages/swarm-extension/src= returns zero Spell-owned hits (foreign discovery providers still match)
+2. =spell config doctor= reports a clean install
+3. Author's machine runs Spell with the migration directory deleted
+4. =bun test packages/coding-agent= passes with no YAML-related failures
+5. =/settings= Ctrl+T cycles all 4 tiers cleanly, writes persist on reload to the correct file

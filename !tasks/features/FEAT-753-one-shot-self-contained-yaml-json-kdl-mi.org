@@ -1,0 +1,77 @@
+#+TITLE: One-shot self-contained YAML/JSON → KDL migrator
+#+STATE: ITEM
+#+SESSION_ID: 14ea0e0f03e26235
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-49-03-247Z_14ea0e0f03e26235.jsonl]]
+#+CUSTOM_ID: FEAT-753-one-shot-self-contained-yaml-json-kdl-mi
+
+* Initial Message
+
+the settings thing doesn't work. I'd like a simple toggle on top for user/project/session. right now, when I do settings, it just shows [user] ... and keeps printing it, fucking up the layout of everything. I also don't see settings persisted when they need to be added to the kdl (please reproduce the error)
+
+investigate.
+
+* Goal
+
+A single deletable =packages/coding-agent/src/migration/= directory that detects legacy config files, prompts the user interactively, translates YAML/JSON → KDL via the existing writer, and renames originals to =*.migrated-YYYY-MM-DD.bak=.
+
+Removal contract: once migration is complete on a user's machine, =rm -rf src/migration/= plus deleting two lines in =settings.ts= leaves Spell full-KDL with zero residual code.
+
+* Sources detected
+
+| location | action |
+|----------+--------|
+| =~/.spell/spell.kdl= | move → =~/.config/spell/spell.kdl= |
+| =~/.spell/agent/config.yml= | translate → =~/.config/spell/spell.kdl= |
+| =~/.spell/agent/settings.json= | translate → =~/.config/spell/spell.kdl= |
+| =~/.spell/agent/secrets.yml= | translate → =~/.config/spell/secrets.kdl= |
+| =<cwd>/.spell/spell.kdl= | move → =<cwd>/spell.kdl= |
+| =<cwd>/.spell/settings.json= | translate → =<cwd>/spell.kdl= |
+| =<cwd>/.spell/agent/config.yml= | translate → =<cwd>/spell.kdl= |
+| =<cwd>/.spell/secrets.yml= | translate → =<cwd>/.spell/secrets.kdl= |
+| =<cwd>/.spell/swarm.yml= | translate → =<cwd>/.spell/swarm.kdl= |
+
+Idempotent: skip when a sibling =.migrated-*.bak= exists.
+
+* Interactive dialog
+
+#+begin_src
+╭─ Migrate Spell config to KDL? ───────────────────────────────╮
+│ Found legacy:                                                │
+│   ~/.spell/agent/config.yml      (12 keys)                   │
+│   ./.spell/settings.json         ( 4 keys)                   │
+│                                                              │
+│ Will write:                                                  │
+│   ~/.config/spell/spell.kdl                                  │
+│   ./spell.kdl                                                │
+│                                                              │
+│ Originals → *.migrated-2026-05-21.bak                        │
+│                                                              │
+│ [Y]es   [N]o (warn next launch)   [D]iff   [S]kip forever    │
+╰──────────────────────────────────────────────────────────────╯
+#+end_src
+
+Non-interactive (CI / =--yes-migrate=, =--no-migrate=): never prompts; honors flag.
+
+* Layout
+
+#+begin_src
+packages/coding-agent/src/migration/
+  README.md          DELETE THIS DIRECTORY WHEN FULLY MIGRATED
+  index.ts           public API: maybeRunMigration({ cwd, interactive })
+  detect.ts          scan known legacy locations → Findings[]
+  translate.ts       yaml/json → RawSettings → kdl
+  dialog.ts          interactive prompt
+  test/*.test.ts     unit tests (delete with parent)
+#+end_src
+
+settings.ts integration is the entire spread:
+
+#+begin_src typescript
+import { maybeRunMigration } from "../migration"; // line 1
+// inside Settings.init():
+await maybeRunMigration({ cwd, interactive: !isAutomated }); // line 2
+#+end_src
+
+* Tracking
+
+Subsumed by =FULL_KDL_SPELL= plan, WAVE 1.4. Self-contained removal step is WAVE 8.

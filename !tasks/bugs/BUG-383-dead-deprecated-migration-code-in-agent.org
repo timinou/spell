@@ -1,0 +1,25 @@
+#+TITLE: Dead deprecated migration code in agent-storage
+#+STATE: ITEM
+#+SESSION_ID: 14ea0e0f03e26235
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-49-03-247Z_14ea0e0f03e26235.jsonl]]
+#+CUSTOM_ID: BUG-383-dead-deprecated-migration-code-in-agent
+
+* Initial Message
+
+the settings thing doesn't work. I'd like a simple toggle on top for user/project/session. right now, when I do settings, it just shows [user] ... and keeps printing it, fucking up the layout of everything. I also don't see settings persisted when they need to be added to the kdl (please reproduce the error)
+
+investigate.
+
+* Problem
+
+=session/agent-storage.ts:199-230= contains =getSettings()= and =saveSettings()= marked =@deprecated= since the YAML cutover. =saveSettings()= is a no-op that only emits a warn. =getSettings()= reads from the legacy =settings= sqlite table.
+
+Grep confirms zero callers in =packages/coding-agent/src=. Pure dead code.
+
+* Fix
+
+Delete both methods + the underlying =#listSettingsStmt= statement and the =settings= table schema if no other code depends on it. Drop any test that exercises only these methods.
+
+* Tracking
+
+Subsumed by =FULL_KDL_SPELL= plan, WAVE 6.1.

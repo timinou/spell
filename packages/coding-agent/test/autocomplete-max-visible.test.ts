@@ -5,57 +5,71 @@ import * as path from "node:path";
 import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getDefault } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
-import { getProjectAgentDir, Snowflake } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { Snowflake } from "@oh-my-pi/pi-utils";
 
 describe("autocompleteMaxVisible setting", () => {
 	let testDir: string;
 	let agentDir: string;
 	let projectDir: string;
+	let userKdl: string;
+	let projectKdl: string;
+	let localKdl: string;
+
+	function initOptions() {
+		return {
+			cwd: projectDir,
+			agentDir,
+			userKdlPath: userKdl,
+			projectKdlPath: projectKdl,
+			localKdlPath: localKdl,
+		};
+	}
 
 	beforeEach(() => {
 		_resetSettingsForTest();
-		testDir = path.join(os.tmpdir(), "test-autocomplete-settings", Snowflake.next());
-		agentDir = path.join(testDir, "agent");
+		testDir = path.join(os.tmpdir(), "autocomplete-settings", Snowflake.next());
+		agentDir = path.join(testDir, ".spell", "agent");
 		projectDir = path.join(testDir, "project");
 		fs.mkdirSync(agentDir, { recursive: true });
-		fs.mkdirSync(getProjectAgentDir(projectDir), { recursive: true });
+		fs.mkdirSync(projectDir, { recursive: true });
+		userKdl = path.join(testDir, "user-config", "spell.kdl");
+		projectKdl = path.join(projectDir, "spell.kdl");
+		localKdl = path.join(projectDir, ".local", "spell.kdl");
 	});
 
 	afterEach(() => {
 		_resetSettingsForTest();
-		if (fs.existsSync(testDir)) {
-			fs.rmSync(testDir, { recursive: true });
-		}
+		if (fs.existsSync(testDir)) fs.rmSync(testDir, { recursive: true });
 	});
 
-	it("should have default value of 5", () => {
+	it("has default value of 5", () => {
 		expect(getDefault("autocompleteMaxVisible")).toBe(5);
 	});
 
-	it("should return default when not configured", async () => {
-		const settings = await Settings.init({ cwd: projectDir, agentDir });
+	it("returns default when not configured", async () => {
+		const settings = await Settings.init(initOptions());
 		expect(settings.get("autocompleteMaxVisible")).toBe(5);
 	});
 
-	it("should persist and read back a configured value", async () => {
-		const settings = await Settings.init({ cwd: projectDir, agentDir });
+	it("persists and reads back a configured value via KDL", async () => {
+		const settings = await Settings.init(initOptions());
 		settings.set("autocompleteMaxVisible", 10);
 		await settings.flush();
 
-		// Re-init to verify persistence
 		_resetSettingsForTest();
-		const settings2 = await Settings.init({ cwd: projectDir, agentDir });
+		const settings2 = await Settings.init(initOptions());
 		expect(settings2.get("autocompleteMaxVisible")).toBe(10);
 	});
 
-	it("should read from config.yml", async () => {
-		await Bun.write(path.join(agentDir, "config.yml"), YAML.stringify({ autocompleteMaxVisible: 15 }, null, 2));
-		const settings = await Settings.init({ cwd: projectDir, agentDir });
+	it("reads from a hand-written user spell.kdl", async () => {
+		// Pre-populate user KDL by hand to test the read path.
+		fs.mkdirSync(path.dirname(userKdl), { recursive: true });
+		fs.writeFileSync(userKdl, "interaction {\n  autocomplete-max-visible 15\n}\n");
+		const settings = await Settings.init(initOptions());
 		expect(settings.get("autocompleteMaxVisible")).toBe(15);
 	});
 
-	it("should coerce submenu string values for live editor updates", () => {
+	it("coerces submenu string values for live editor updates", () => {
 		const setAutocompleteMaxVisible = vi.fn();
 		const controller = new SelectorController({
 			editor: { setAutocompleteMaxVisible },
@@ -66,7 +80,7 @@ describe("autocompleteMaxVisible setting", () => {
 		expect(setAutocompleteMaxVisible).toHaveBeenCalledWith(10);
 	});
 
-	it("should work with isolated instances", () => {
+	it("works with isolated instances", () => {
 		const settings = Settings.isolated({ autocompleteMaxVisible: 12 });
 		expect(settings.get("autocompleteMaxVisible")).toBe(12);
 	});

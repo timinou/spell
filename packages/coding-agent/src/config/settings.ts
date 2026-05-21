@@ -15,17 +15,19 @@ import * as path from "node:path";
 import {
 	getAgentDbPath,
 	getAgentDir,
+	getLocalKdlPath,
 	getProjectDir,
+	getProjectKdlPath,
+	getUserKdlPath,
 	logger,
 	postmortem,
 	procmgr,
 	setDefaultTabWidth,
 } from "@oh-my-pi/pi-utils";
-import { type Settings as SettingsCapabilityItem, settingsCapability } from "../capability/settings";
 import type { ModelRole } from "../config/model-registry";
-import { loadCapability } from "../discovery";
 import { isLightTheme, setAutoThemeMapping, setColorBlindMode, setSymbolPreset } from "../modes/theme/theme";
 import { type EditMode, normalizeEditMode } from "../patch";
+import { maybeRunMigration } from "../migration";
 import { AgentStorage } from "../session/agent-storage";
 import { loadKdlSettings } from "./kdl-reader";
 import { writeKdlSettings } from "./kdl-writer";
@@ -52,18 +54,49 @@ export interface RawSettings {
 	[key: string]: unknown;
 }
 
-/** Write tier for settings persistence. */
-export type WriteTier = "session" | "project" | "user";
+/**
+ * Write tier for settings persistence.
+ *
+ * Read precedence (highest → lowest; last write per key wins):
+ *   session  in-memory                          volatile
+ *   local    <cwd>/.local/spell.kdl             gitignored, machine
+ *   project  <cwd>/spell.kdl                    committed, team
+ *   user     ~/.config/spell/spell.kdl          XDG-style global
+ */
+export type WriteTier = "session" | "local" | "project" | "user";
+
+/** Persistent tiers (i.e. tiers that map to a file on disk). */
+export type PersistTier = Exclude<WriteTier, "session">;
 
 export interface SettingsOptions {
 	/** Current working directory for project settings discovery */
 	cwd?: string;
-	/** Agent directory for persistent storage */
+	/** Agent directory for persistent storage (runtime state only) */
 	agentDir?: string;
 	/** Don't persist to disk (for tests) */
 	inMemory?: boolean;
 	/** Initial overrides */
 	overrides?: Partial<Record<SettingPath, unknown>>;
+	/** Explicit user-tier KDL path (defaults to getUserKdlPath()) */
+	userKdlPath?: string;
+	/** Explicit project-tier KDL path (defaults to <cwd>/spell.kdl) */
+	projectKdlPath?: string;
+	/** Explicit local-tier KDL path (defaults to <cwd>/.local/spell.kdl) */
+	localKdlPath?: string;
+	/**
+	 * One-shot YAML/JSON → KDL migration knobs. Plumbed through to
+	 * `maybeRunMigration()` so callers (CLI flags, tests) can force a decision
+	 * without importing the migration module directly. Removing the migrator
+	 * later — see migration/README.md — also deletes this option type.
+	 */
+	migrate?: {
+		/** Force-yes: translate every detected legacy source without prompting. */
+		yes?: boolean;
+		/** Force-no: skip the prompt entirely. */
+		no?: boolean;
+		/** Override interactive (default: true). */
+		interactive?: boolean;
+	};
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -116,23 +149,30 @@ function setByPath(obj: RawSettings, segments: string[], value: unknown): void {
 export class Settings {
 	#userKdlPath: string;
 	#projectKdlPath: string;
+	#localKdlPath: string;
 	#cwd: string;
 	#agentDir: string;
 	#storage: AgentStorage | null = null;
+	/** Plumbed-through migrator options (W1; deleted with migration/). */
+	#migrateOptions: SettingsOptions["migrate"];
 
-	/** User settings from user spell.kdl */
+	/** User settings from user spell.kdl (lowest precedence) */
 	#global: RawSettings = {};
 	/** Project settings from project-local spell.kdl */
 	#project: RawSettings = {};
-	/** Runtime overrides (not persisted) */
+	/** Local-only settings from <cwd>/.local/spell.kdl (highest persisted) */
+	#local: RawSettings = {};
+	/** Runtime overrides (not persisted; session tier) */
 	#overrides: RawSettings = {};
-	/** Merged view (global + project + overrides) */
+	/** Merged view (user ← project ← local ← overrides) */
 	#merged: RawSettings = {};
 
-	/** Paths modified during this session (for partial save to user KDL) */
-	#modified = new Set<string>();
-	/** Paths modified for project-level save */
+	/** Paths modified for user-tier save */
+	#userModified = new Set<string>();
+	/** Paths modified for project-tier save */
 	#projectModified = new Set<string>();
+	/** Paths modified for local-tier save */
+	#localModified = new Set<string>();
 
 	/** Pending save (debounced) */
 	#saveTimer?: NodeJS.Timeout;
@@ -144,11 +184,20 @@ export class Settings {
 	constructor(options: SettingsOptions = {}) {
 		this.#cwd = path.normalize(options.cwd ?? getProjectDir());
 		this.#agentDir = path.normalize(options.agentDir ?? getAgentDir());
-		// User KDL: ~/.spell/spell.kdl (parent of agentDir which is ~/.spell/agent)
-		this.#userKdlPath = options.inMemory ? "" : path.join(path.dirname(this.#agentDir), "spell.kdl");
-		// Project KDL: ./spell.kdl
-		this.#projectKdlPath = options.inMemory ? "" : path.join(this.#cwd, "spell.kdl");
+
+		// KDL config paths are decoupled from agentDir. agentDir holds runtime
+		// state (sessions/plugins/logs); KDL config lives elsewhere.
+		if (options.inMemory) {
+			this.#userKdlPath = "";
+			this.#projectKdlPath = "";
+			this.#localKdlPath = "";
+		} else {
+			this.#userKdlPath = options.userKdlPath ?? getUserKdlPath();
+			this.#projectKdlPath = options.projectKdlPath ?? getProjectKdlPath(this.#cwd);
+			this.#localKdlPath = options.localKdlPath ?? getLocalKdlPath(this.#cwd);
+		}
 		this.#persist = !options.inMemory;
+		this.#migrateOptions = options.migrate;
 
 		if (options.overrides) {
 			for (const [key, value] of Object.entries(options.overrides)) {
@@ -226,7 +275,10 @@ export class Settings {
 
 	/**
 	 * Set a setting value (sync).
-	 * Default tier is "user" (persisted to spell.kdl). Use "session" for in-memory, "project" for project-local.
+	 *
+	 * `tier` defaults to `"user"` (persisted to `~/.config/spell/spell.kdl`).
+	 * Other tiers: `"session"` (in-memory only), `"local"` (./.local/spell.kdl,
+	 * machine-local), `"project"` (./spell.kdl, committed).
 	 * Triggers hooks for settings that have side effects.
 	 */
 	set<P extends SettingPath>(path: P, value: SettingValue<P>, tier?: WriteTier): void {
@@ -236,6 +288,11 @@ export class Settings {
 			case "session":
 				setByPath(this.#overrides, segments, value);
 				break;
+			case "local":
+				setByPath(this.#local, segments, value);
+				this.#localModified.add(path);
+				this.#queueSave();
+				break;
 			case "project":
 				setByPath(this.#project, segments, value);
 				this.#projectModified.add(path);
@@ -243,7 +300,7 @@ export class Settings {
 				break;
 			case "user":
 				setByPath(this.#global, segments, value);
-				this.#modified.add(path);
+				this.#userModified.add(path);
 				this.#queueSave();
 				break;
 		}
@@ -292,7 +349,7 @@ export class Settings {
 		if (this.#savePromise) {
 			await this.#savePromise;
 		}
-		if (this.#modified.size > 0 || this.#projectModified.size > 0) {
+		if (this.#userModified.size > 0 || this.#projectModified.size > 0 || this.#localModified.size > 0) {
 			await this.#saveNow();
 		}
 	}
@@ -415,15 +472,31 @@ export class Settings {
 	// Loading
 	// ─────────────────────────────────────────────────────────────────────────
 
-	async #load(): Promise<Settings> {
+				async #load(): Promise<Settings> {
 		if (this.#persist) {
+			// One-shot legacy YAML/JSON → KDL migration. Runs BEFORE the KDL
+			// readers so any translated content is visible on this same launch.
+			// Self-contained in src/migration/ — see migration/README.md for the
+			// removal contract.
+			await maybeRunMigration({
+				cwd: this.#cwd,
+				agentDir: this.#agentDir,
+				userKdlDest: this.#userKdlPath,
+				projectKdlDest: this.#projectKdlPath,
+				yes: this.#migrateOptions?.yes,
+				no: this.#migrateOptions?.no,
+				interactive: this.#migrateOptions?.interactive,
+			});
+
 			// Open storage
 			this.#storage = await AgentStorage.open(getAgentDbPath(this.#agentDir));
 			// Load user settings from user spell.kdl
 			this.#global = await loadKdlSettings(this.#userKdlPath);
+			// Load local-tier overrides from <cwd>/.local/spell.kdl
+			this.#local = await loadKdlSettings(this.#localKdlPath);
 		}
 
-		// Load project settings from project-local spell.kdl, then capability overlays
+		// Load project settings from project-local spell.kdl
 		this.#project = await this.#loadProjectSettings();
 
 		// Build merged view
@@ -432,17 +505,13 @@ export class Settings {
 		return this;
 	}
 
-	async #loadProjectSettings(): Promise<RawSettings> {
-		let merged = await loadKdlSettings(this.#projectKdlPath);
-		try {
-			const result = await loadCapability(settingsCapability.id, { cwd: this.#cwd });
-			for (const item of result.items as SettingsCapabilityItem[]) {
-				if (item.level === "project") {
-					merged = this.#deepMerge(merged, item.data as RawSettings);
-				}
-			}
-		} catch {}
-		return this.#migrateRawSettings(merged);
+		async #loadProjectSettings(): Promise<RawSettings> {
+		// Spell-owned project config = <cwd>/spell.kdl. Foreign-tool settings
+		// (cursor/gemini/etc.) live behind `settingsCapability` and are surfaced
+		// via the extension dashboard — they are NOT merged here because their
+		// schemas differ from Spell's and silent collisions are unsafe.
+		const raw = await loadKdlSettings(this.#projectKdlPath);
+		return this.#migrateRawSettings(raw);
 	}
 
 	/** Apply schema migrations to raw settings */
@@ -505,21 +574,24 @@ export class Settings {
 		}, 100);
 	}
 
-	async #saveNow(): Promise<void> {
+		async #saveNow(): Promise<void> {
 		await this.#saveTier("user");
 		await this.#saveTier("project");
+		await this.#saveTier("local");
 	}
 
-	async #saveTier(target: "user" | "project"): Promise<void> {
-		const filePath = target === "user" ? this.#userKdlPath : this.#projectKdlPath;
-		const modified = target === "user" ? this.#modified : this.#projectModified;
+		async #saveTier(target: PersistTier): Promise<void> {
+		const filePath =
+			target === "user" ? this.#userKdlPath : target === "project" ? this.#projectKdlPath : this.#localKdlPath;
+		const modified =
+			target === "user" ? this.#userModified : target === "project" ? this.#projectModified : this.#localModified;
+		const source = target === "user" ? this.#global : target === "project" ? this.#project : this.#local;
 		if (!this.#persist || !filePath || modified.size === 0) return;
 		const modifiedPaths = [...modified];
 		modified.clear();
 		const changes = new Map<string, unknown>();
 		for (const modPath of modifiedPaths) {
 			const segments = parsePath(modPath);
-			const source = target === "user" ? this.#global : this.#project;
 			changes.set(modPath, getByPath(source, segments));
 		}
 		try {
@@ -536,9 +608,13 @@ export class Settings {
 	// Utilities
 	// ─────────────────────────────────────────────────────────────────────────
 
-	#rebuildMerged(): void {
-		this.#merged = this.#deepMerge(this.#deepMerge({}, this.#global), this.#project);
-		this.#merged = this.#deepMerge(this.#merged, this.#overrides);
+		#rebuildMerged(): void {
+		// Read precedence (highest ← lowest): session > local > project > user
+		let merged = this.#deepMerge({}, this.#global);
+		merged = this.#deepMerge(merged, this.#project);
+		merged = this.#deepMerge(merged, this.#local);
+		merged = this.#deepMerge(merged, this.#overrides);
+		this.#merged = merged;
 	}
 
 	#fireAllHooks(): void {

@@ -1,3 +1,17 @@
+/**
+ * Settings manager: KDL-only semantics.
+ *
+ * Replaces the legacy YAML/JSON overlay test suite that pre-dated the KDL
+ * cutover. WAVE 1 of PLAN-311 removed the config.yml + settings.json overlay
+ * paths; this suite asserts the cutover invariants:
+ *
+ *   - external edits to spell.kdl are preserved across in-process saves
+ *   - project-level reads come from <cwd>/spell.kdl, not from any sibling
+ *     YAML/JSON file
+ *   - in-memory settings win when both the file and the runtime mutate the
+ *     same key
+ */
+
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -5,187 +19,134 @@ import * as path from "node:path";
 import * as ai from "@oh-my-pi/pi-ai";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { reset as resetCapabilityCache } from "@oh-my-pi/pi-coding-agent/discovery";
-import { getProjectAgentDir, Snowflake } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { Snowflake } from "@oh-my-pi/pi-utils";
 
-describe("Settings", () => {
-	let testDir: string;
-	let agentDir: string;
-	let projectDir: string;
+let testDir: string;
+let agentDir: string;
+let projectDir: string;
+let userKdl: string;
+let projectKdl: string;
+let localKdl: string;
 
-	beforeEach(() => {
-		// Reset global singleton so each test gets a fresh instance
+function initOptions() {
+	return { cwd: projectDir, agentDir, userKdlPath: userKdl, projectKdlPath: projectKdl, localKdlPath: localKdl };
+}
+
+beforeEach(() => {
+	_resetSettingsForTest();
+	testDir = path.join(os.tmpdir(), "settings-manager", Snowflake.next());
+	agentDir = path.join(testDir, ".spell", "agent");
+	projectDir = path.join(testDir, "project");
+	fs.mkdirSync(agentDir, { recursive: true });
+	fs.mkdirSync(projectDir, { recursive: true });
+	userKdl = path.join(testDir, "user-config", "spell.kdl");
+	projectKdl = path.join(projectDir, "spell.kdl");
+	localKdl = path.join(projectDir, ".local", "spell.kdl");
+});
+
+afterEach(() => {
+	delete Bun.env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS;
+	ai.setAnthropicStreamIdleTimeoutOverrideMs(undefined);
+	if (fs.existsSync(testDir)) fs.rmSync(testDir, { recursive: true });
+});
+
+describe("Settings: KDL persistence", () => {
+	it("writes new settings to user spell.kdl on flush", async () => {
+		const s = await Settings.init(initOptions());
+		s.set("defaultThinkingLevel", Effort.High);
+		await s.flush();
+
+		expect(fs.existsSync(userKdl)).toBe(true);
+		const content = fs.readFileSync(userKdl, "utf8");
+		// defaultThinkingLevel → model.thinking
+		expect(content).toMatch(/model[\s\S]*thinking[\s\S]*high/);
+	});
+
+	it("reloads written settings on next init", async () => {
+		{
+			const s = await Settings.init(initOptions());
+			s.set("defaultThinkingLevel", Effort.High);
+			await s.flush();
+		}
 		_resetSettingsForTest();
+		const s2 = await Settings.init(initOptions());
+		expect(s2.get("defaultThinkingLevel")).toBe(Effort.High);
+	});
+});
 
-		// Use snowflake to isolate parallel test runs (SQLite files can't be shared)
-		testDir = path.join(os.tmpdir(), "test-settings-tmp", Snowflake.next());
-		agentDir = path.join(testDir, "agent");
-		projectDir = path.join(testDir, "project");
+describe("Settings: external KDL edits preserved on partial saves", () => {
+	it("saving one key does not clobber unrelated keys in the same file", async () => {
+		// Pre-existing user KDL with a key the runtime won't touch.
+		fs.mkdirSync(path.dirname(userKdl), { recursive: true });
+		fs.writeFileSync(userKdl, 'appearance {\n  theme dark="anthracite"\n}\n');
 
-		if (fs.existsSync(testDir)) {
-			fs.rmSync(testDir, { recursive: true });
-		}
-		fs.mkdirSync(agentDir, { recursive: true });
-		fs.mkdirSync(getProjectAgentDir(projectDir), { recursive: true });
+		const s = await Settings.init(initOptions());
+		s.set("defaultThinkingLevel", Effort.High);
+		await s.flush();
+
+		const content = fs.readFileSync(userKdl, "utf8");
+		expect(content).toMatch(/anthracite/); // pre-existing preserved
+		expect(content).toMatch(/model[\s\S]*thinking[\s\S]*high/); // new key added
 	});
 
-	const getConfigPath = () => path.join(agentDir, "config.yml");
+	it("in-memory settings win when an external write happens between init and flush", async () => {
+		fs.mkdirSync(path.dirname(userKdl), { recursive: true });
+		fs.writeFileSync(userKdl, 'model {\n  thinking "low"\n}\n');
 
-	const writeSettings = async (settings: Record<string, unknown>) => {
-		await Bun.write(getConfigPath(), YAML.stringify(settings, null, 2));
-	};
+		const s = await Settings.init(initOptions());
+		expect(s.get("defaultThinkingLevel")).toBe(Effort.Low);
 
-	// providers.anthropicStreamIdleTimeoutMs removed in kdl-config cutover — test section deleted
-	const readSettings = async (): Promise<Record<string, unknown>> => {
-		const file = Bun.file(getConfigPath());
-		if (!(await file.exists())) return {};
-		const content = await file.text();
-		const parsed = YAML.parse(content);
-		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-		return parsed as Record<string, unknown>;
-	};
+		// External tool edits the file while we hold an in-memory copy.
+		fs.writeFileSync(userKdl, 'model {\n  thinking "medium"\n}\n');
 
-	afterEach(() => {
-		delete Bun.env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS;
-		ai.setAnthropicStreamIdleTimeoutOverrideMs(undefined);
+		// In-memory set + flush MUST win for the path we touched.
+		s.set("defaultThinkingLevel", Effort.High);
+		await s.flush();
 
-		if (fs.existsSync(testDir)) {
-			fs.rmSync(testDir, { recursive: true });
-		}
+		_resetSettingsForTest();
+		const reloaded = await Settings.init(initOptions());
+		expect(reloaded.get("defaultThinkingLevel")).toBe(Effort.High);
+	});
+});
+
+describe("Settings: project-level reads come from spell.kdl only", () => {
+	it("reads from <cwd>/spell.kdl at project tier", async () => {
+		fs.writeFileSync(projectKdl, 'appearance {\n  theme dark="anthracite"\n}\n');
+		const s = await Settings.init(initOptions());
+		expect(s.get("theme.dark")).toBe("anthracite");
 	});
 
-	// Tests that SettingsManager merges with DB state on save rather than blindly overwriting.
-	// This ensures external edits (via AgentStorage directly) aren't lost when the app saves.
-	describe("preserves externally added settings", () => {
-		it("should preserve enabledModels when changing thinking level", async () => {
-			// Seed initial settings in config.yml
-			await writeSettings({
-				theme: "dark",
-				modelRoles: { default: "claude-sonnet" },
-			});
+	it("ignores legacy project .spell/settings.json (no overlay)", async () => {
+		// WAVE 1.3: discovery/builtin.ts no longer reads settings.json.
+		fs.mkdirSync(path.join(projectDir, ".spell"), { recursive: true });
+		fs.writeFileSync(
+			path.join(projectDir, ".spell", "settings.json"),
+			JSON.stringify({ theme: { dark: "anthracite" } }),
+		);
 
-			// Settings loads the initial state
-			const settings = await Settings.init({ cwd: projectDir, agentDir });
-
-			// Simulate external edit (e.g., user modifying DB directly or another process)
-			await writeSettings({
-				theme: { dark: "anthracite" },
-				modelRoles: { default: "claude-sonnet" },
-				enabledModels: ["claude-opus-4-5", "gpt-5.2-codex"],
-			});
-
-			// Settings saves a change - should merge, not overwrite
-			settings.set("defaultThinkingLevel", Effort.High);
-			await settings.flush();
-
-			const savedSettings = await readSettings();
-			expect(savedSettings.enabledModels).toEqual(["claude-opus-4-5", "gpt-5.2-codex"]);
-			expect(savedSettings.defaultThinkingLevel).toBe(Effort.High);
-			expect(savedSettings.theme).toEqual({ dark: "anthracite" });
-			expect((savedSettings.modelRoles as { default?: string } | undefined)?.default).toBe("claude-sonnet");
-		});
-
-		it("should preserve custom settings when changing theme", async () => {
-			await writeSettings({
-				modelRoles: { default: "claude-sonnet" },
-			});
-
-			const settings = await Settings.init({ cwd: projectDir, agentDir });
-
-			await writeSettings({
-				modelRoles: { default: "claude-sonnet" },
-				shellPath: "/bin/zsh",
-				extensions: ["/path/to/extension.ts"],
-			});
-
-			settings.set("theme.dark", "anthracite");
-			await settings.flush();
-
-			const savedSettings = await readSettings();
-			expect(savedSettings.shellPath).toBe("/bin/zsh");
-			expect(savedSettings.extensions).toEqual(["/path/to/extension.ts"]);
-			expect(savedSettings.theme).toEqual({ dark: "anthracite" });
-		});
-
-		it("should let in-memory changes override file changes for same key", async () => {
-			await writeSettings({
-				theme: { dark: "anthracite" },
-			});
-
-			const settings = await Settings.init({ cwd: projectDir, agentDir });
-
-			await writeSettings({
-				theme: { dark: "anthracite" },
-				defaultThinkingLevel: Effort.Low,
-			});
-
-			settings.set("defaultThinkingLevel", Effort.High);
-			await settings.flush();
-
-			const savedSettings = await readSettings();
-			expect(savedSettings.defaultThinkingLevel).toBe(Effort.High);
-		});
+		const s = await Settings.init(initOptions());
+		// The legacy file is invisible to the runtime now.
+		// Default theme is used because no Spell-shaped config exists.
+		expect(s.get("theme.dark")).not.toBe("anthracite");
 	});
 
-	describe("project-level config.yml loading", () => {
-		const writeProjectYaml = async (data: Record<string, unknown>) => {
-			const yamlDir = path.join(getProjectAgentDir(projectDir), "agent");
-			fs.mkdirSync(yamlDir, { recursive: true });
-			await Bun.write(path.join(yamlDir, "config.yml"), YAML.stringify(data, null, 2));
-		};
+	it("ignores legacy project .spell/agent/config.yml (no overlay)", async () => {
+		fs.mkdirSync(path.join(projectDir, ".spell", "agent"), { recursive: true });
+		fs.writeFileSync(
+			path.join(projectDir, ".spell", "agent", "config.yml"),
+			"theme:\n  dark: anthracite\n",
+		);
 
-		beforeEach(() => {
-			// Clear capability FS cache so each test reads fresh files
-			resetCapabilityCache();
-		});
+		const s = await Settings.init(initOptions());
+		expect(s.get("theme.dark")).not.toBe("anthracite");
+	});
 
-		it("should load planMode.allowedFolders from project .spell/agent/config.yml", async () => {
-			await writeProjectYaml({
-				planMode: {
-					allowedFolders: { "./specs": "Spec files" },
-				},
-			});
+	it("project tier read precedence: project spell.kdl > user spell.kdl", async () => {
+		fs.mkdirSync(path.dirname(userKdl), { recursive: true });
+		fs.writeFileSync(userKdl, 'appearance {\n  theme dark="solarized-light"\n}\n');
+		fs.writeFileSync(projectKdl, 'appearance {\n  theme dark="anthracite"\n}\n');
 
-			const settings = await Settings.init({ cwd: projectDir, agentDir });
-			expect(settings.get("planMode.allowedFolders")).toEqual({ "./specs": "Spec files" });
-		});
-
-		it("should merge project YAML with global config without clobbering", async () => {
-			// Global config sets theme
-			await writeSettings({ theme: { dark: "anthracite" } });
-			// Project YAML sets planMode
-			await writeProjectYaml({
-				planMode: {
-					allowedFolders: { "./specs": "Spec files" },
-				},
-			});
-
-			const settings = await Settings.init({ cwd: projectDir, agentDir });
-			// Global setting preserved
-			expect(settings.get("theme.dark")).toBe("anthracite");
-			// Project YAML setting merged in
-			expect(settings.get("planMode.allowedFolders")).toEqual({ "./specs": "Spec files" });
-		});
-
-		it("should load from both settings.json and config.yml at project level", async () => {
-			// Write project-level settings.json (in .spell/ dir)
-			await Bun.write(
-				path.join(getProjectAgentDir(projectDir), "settings.json"),
-				JSON.stringify({ shellPath: "/bin/zsh" }),
-			);
-			// Write project-level config.yml (in .spell/agent/ dir)
-			await writeProjectYaml({
-				planMode: {
-					allowedFolders: { "./docs": "Documentation" },
-				},
-			});
-
-			const settings = await Settings.init({ cwd: projectDir, agentDir });
-			// JSON settings.json value present
-			expect(settings.get("shellPath")).toBe("/bin/zsh");
-			// YAML config.yml value also present
-			expect(settings.get("planMode.allowedFolders")).toEqual({ "./docs": "Documentation" });
-		});
+		const s = await Settings.init(initOptions());
+		expect(s.get("theme.dark")).toBe("anthracite");
 	});
 });

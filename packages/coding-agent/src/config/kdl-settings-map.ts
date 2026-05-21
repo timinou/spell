@@ -30,10 +30,6 @@ export interface KdlSettingMapping {
 
 /** Settings that are internal state and not written to spell.kdl */
 export const EXCLUDED_FROM_KDL = new Set<string>([
-	"shellPath",
-	"extensions",
-	"disabledExtensions",
-	"disabledProviders",
 	// STT paths are system-specific, not config
 	"stt.whisperPath",
 	"stt.modelPath",
@@ -49,6 +45,12 @@ export const EXCLUDED_FROM_KDL = new Set<string>([
 
 /** Complete mapping of all SettingPaths to KDL locations */
 export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> = {
+	// ── Runtime / extensibility ───────────────────────────────────────────
+	shellPath: { block: "runtime", nodePath: "shell-path", accessor: "argument" },
+	extensions: { block: "extensibility", nodePath: "extensions", accessor: "argument" },
+	disabledExtensions: { block: "extensibility", nodePath: "disabled-extensions", accessor: "argument" },
+	disabledProviders: { block: "extensibility", nodePath: "disabled-providers", accessor: "argument" },
+
 	// ── Appearance ────────────────────────────────────────────────────────
 	"theme.dark": { block: "appearance", nodePath: "theme", accessor: "property", propertyName: "dark" },
 	"theme.light": { block: "appearance", nodePath: "theme", accessor: "property", propertyName: "light" },

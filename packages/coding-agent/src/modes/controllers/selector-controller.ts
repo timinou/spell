@@ -206,8 +206,13 @@ export class SelectorController {
 	 * This handles side effects and session-specific settings.
 	 */
 	handleSettingChange(id: string, value: unknown, tier: WriteTier): void {
-		// Persist to the requested tier (session methods also write, but override wins)
-		settings.set(id as never, value as never, tier);
+		// NOTE: persistence is handled by SettingsSelectorComponent (type-aware via
+		// #setSettingValue). Do NOT settings.set here — the submenu value passed
+		// to this callback is the raw display string (e.g. "0.7"), and writing it
+		// would clobber the typed value, corrupting numeric persistence on reload.
+		// This handler is for side effects (session state, UI updates) only.
+		void tier;
+
 		// Discovery provider toggles
 		if (id.startsWith("discovery.")) {
 			const providerId = id.replace("discovery.", "");
