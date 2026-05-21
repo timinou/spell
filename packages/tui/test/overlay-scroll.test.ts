@@ -19,17 +19,23 @@ class LineComponent implements Component {
 
 class MutableContentComponent implements Component {
 	#lines: string[];
+	#parent?: import("@oh-my-pi/pi-tui").Container;
 
 	constructor(lines: string[]) {
 		this.#lines = [...lines];
 	}
 
+	setParent(p: import("@oh-my-pi/pi-tui").Container | undefined): void {
+		this.#parent = p;
+	}
+
 	setLines(lines: string[]): void {
 		this.#lines = [...lines];
+		this.#parent?.markDirty();
 	}
 
 	invalidate(): void {
-		// No cached state
+		this.#parent?.markDirty();
 	}
 
 	render(_width: number): string[] {

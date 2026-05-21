@@ -5,20 +5,28 @@ import { VirtualTerminal } from "./virtual-terminal";
 class StaticComponent implements Component {
 	#lines: string[];
 	#renderCount = 0;
+	#parent?: import("@oh-my-pi/pi-tui").Container;
 
 	constructor(lines: string[]) {
 		this.#lines = [...lines];
 	}
 
+	setParent(p: import("@oh-my-pi/pi-tui").Container | undefined): void {
+		this.#parent = p;
+	}
+
 	setLines(lines: string[]): void {
 		this.#lines = [...lines];
+		this.invalidate();
 	}
 
 	get renderCount(): number {
 		return this.#renderCount;
 	}
 
-	invalidate(): void {}
+	invalidate(): void {
+		this.#parent?.markDirty();
+	}
 
 	render(_width: number): string[] {
 		this.#renderCount += 1;

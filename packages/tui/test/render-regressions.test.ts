@@ -4,16 +4,24 @@ import { VirtualTerminal } from "./virtual-terminal";
 
 class MutableLinesComponent implements Component {
 	#lines: string[];
+	#parent?: import("@oh-my-pi/pi-tui").Container;
 
 	constructor(lines: string[]) {
 		this.#lines = [...lines];
 	}
 
-	setLines(lines: string[]): void {
-		this.#lines = [...lines];
+	setParent(p: import("@oh-my-pi/pi-tui").Container | undefined): void {
+		this.#parent = p;
 	}
 
-	invalidate(): void {}
+	setLines(lines: string[]): void {
+		this.#lines = [...lines];
+		this.invalidate();
+	}
+
+	invalidate(): void {
+		this.#parent?.markDirty();
+	}
 
 	render(width: number): string[] {
 		return this.#lines.map(line => line.slice(0, width));
