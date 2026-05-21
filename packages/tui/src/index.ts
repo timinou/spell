@@ -2,6 +2,7 @@
 
 // Autocomplete support
 export * from "./autocomplete";
+export * from "./dev-profile";
 export * from "./spinner-clock";
 // Components
 export * from "./components/box";

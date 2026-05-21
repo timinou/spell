@@ -4,6 +4,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getCrashLogPath, getDebugLogPath } from "@oh-my-pi/pi-utils";
+import { DevProfile, devProfile } from "./dev-profile";
 import { isKeyRelease, matchesKey } from "./keys";
 import type { Terminal } from "./terminal";
 import { ImageProtocol, setCellDimensions, setTerminalImageProtocol, TERMINAL } from "./terminal-capabilities";
@@ -688,7 +689,17 @@ export class TUI extends Container {
 	#executeRender(): void {
 		this.#renderRequested = false;
 		this.#lastRenderTime = performance.now();
+		if (!DevProfile.enabled) {
+			this.#doRender();
+			return;
+		}
+		const start = performance.now();
+		const beforeLines = this.#previousLines.length;
 		this.#doRender();
+		devProfile.recordFrame({
+			frameMs: performance.now() - start,
+			linesChanged: Math.abs(this.#previousLines.length - beforeLines),
+		});
 	}
 
 	#handleInput(data: string): void {
