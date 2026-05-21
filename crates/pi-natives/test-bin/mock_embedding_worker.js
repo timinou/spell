@@ -24,7 +24,7 @@ function markModeSeen(key) {
 // Must match `EMBEDDER_DIM` in crates/pi-natives/src/embedding_worker.rs;
 // otherwise `KnowledgeMeta::status_against` marks every mock-built cache as
 // Stale on load and tests that exercise the load path stop working.
-const REAL_DIM = 768;
+const REAL_DIM = 1024;
 
 function makeVector(seed) {
 	const v = new Array(REAL_DIM).fill(0);
@@ -73,7 +73,7 @@ function handleRequest(line) {
 	if (request.command === "embed_query") {
 		const text = typeof request.text === "string" ? request.text : "";
 		// query_dim_mismatch fakes an embedder whose query path produces a vector
-		// of a different dimensionality than the cached batch vectors (768). The
+		// of a different dimensionality than the cached batch vectors (1024). The
 		// cached index loads as Fresh (model+dim match), then graph_search's
 		// query-time dim check trips and the system falls back to lexical search.
 		const vector = mode === "query_dim_mismatch"

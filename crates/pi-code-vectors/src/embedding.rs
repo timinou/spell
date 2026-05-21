@@ -4,7 +4,8 @@ use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
 
 use crate::error::{Error, Result};
 
-/// Wraps fastembed's `TextEmbedding` for jina-code-v2 model lifecycle.
+/// Wraps fastembed's `TextEmbedding` for bge-m3 model lifecycle.
+/// PLAN-310 W2.5 unified the embedder model across code-graph + memory lanes.
 ///
 /// Thread-safe via internal `Mutex` since `TextEmbedding::embed` requires `&mut
 /// self`.
@@ -18,16 +19,16 @@ pub struct EmbeddingEngine {
 unsafe impl Sync for EmbeddingEngine {}
 
 impl EmbeddingEngine {
-	/// Initialize with jina-embeddings-v2-base-code. Downloads the model
-	/// (~500 MB) on first call if not already cached.
+	/// Initialize with BAAI/bge-m3 (1024-dim, multilingual). Downloads the model
+	/// (~1.2 GB on disk; ~2.5 GB resident) on first call if not already cached.
 	pub fn new(show_progress: bool) -> Result<Self> {
-		let options = TextInitOptions::new(EmbeddingModel::JinaEmbeddingsV2BaseCode)
+		let options = TextInitOptions::new(EmbeddingModel::BGEM3)
 			.with_show_download_progress(show_progress);
 		let model = TextEmbedding::try_new(options).map_err(|e| Error::Embedding(e.to_string()))?;
 		Ok(Self { model: Mutex::new(model) })
 	}
 
-	/// Embed a batch of documents. Returns `Vec<Vec<f32>>` of 768-dim vectors.
+	/// Embed a batch of documents. Returns `Vec<Vec<f32>>` of 1024-dim vectors.
 	/// fastembed handles tokenization and batching internally.
 	pub fn embed_batch(
 		&self,
@@ -64,24 +65,24 @@ mod tests {
 
 	#[test]
 	#[ignore = "requires model download (~500 MB)"]
-	fn embed_batch_returns_768_dim_vectors() {
+	fn embed_batch_returns_1024_dim_vectors() {
 		let engine = EmbeddingEngine::new(false).expect("engine init");
 		let docs = &["fn hello() { println!(\"hello\"); }", "class Foo { bar() {} }"];
 		let vectors = engine.embed_batch(docs, None).expect("embed_batch");
 		assert_eq!(vectors.len(), 2);
 		for v in &vectors {
-			assert_eq!(v.len(), 768);
+			assert_eq!(v.len(), 1024);
 		}
 	}
 
 	#[test]
 	#[ignore = "requires model download (~500 MB)"]
-	fn embed_query_returns_768_dim_vector() {
+	fn embed_query_returns_1024_dim_vector() {
 		let engine = EmbeddingEngine::new(false).expect("engine init");
 		let vector = engine
 			.embed_query("find rate limiting logic")
 			.expect("embed_query");
-		assert_eq!(vector.len(), 768);
+		assert_eq!(vector.len(), 1024);
 	}
 
 	#[test]
