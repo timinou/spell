@@ -126,6 +126,54 @@ async function loadSshJsonFile(
 	};
 }
 async function load(ctx: LoadContext): Promise<LoadResult<SSHHost>> {
+	const items: SSHHost[] = [];
+	const warnings: string[] = [];
+
+	// PRIMARY: Settings (spell.kdl `ssh { target ... }` block). Per-tier read
+	// mirrors MCP precedence: higher tiers (project/local/session) override
+	// lower (user) on same-name collision; warn on conflict.
+	const { settings } = await import("../config/settings");
+	const spellTiers = settings.getPerTier("ssh.hosts" as never);
+	const tierEntries: Array<{ tier: "user" | "project"; value: unknown }> = [
+		{ tier: "user", value: spellTiers.user },
+		{ tier: "project", value: spellTiers.project },
+		{ tier: "project", value: spellTiers.local },
+		{ tier: "project", value: spellTiers.session },
+	];
+	const spellSources = new Map<string, "user" | "project">();
+	const itemsByName = new Map<string, SSHHost>();
+	for (const { tier, value } of tierEntries) {
+		if (!value || typeof value !== "object") continue;
+		const expanded = expandEnvVarsDeep(value as Record<string, unknown>);
+		for (const [name, raw] of Object.entries(expanded as Record<string, unknown>)) {
+			const prior = spellSources.get(name);
+			if (prior && prior !== tier) {
+				warnings.push(`SSH target "${name}": defined at both ${prior}-tier and ${tier}-tier; ${tier}-tier wins`);
+			}
+			spellSources.set(name, tier);
+			const cfg = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+			const host = typeof cfg.host === "string" ? cfg.host : undefined;
+			if (!host) {
+				warnings.push(`SSH target "${name}": missing host; skipping`);
+				continue;
+			}
+			const keyPathRaw = typeof cfg.keyPath === "string" ? cfg.keyPath : undefined;
+			itemsByName.set(name, {
+				name,
+				host,
+				username: typeof cfg.username === "string" ? cfg.username : undefined,
+				port: typeof cfg.port === "number" && Number.isFinite(cfg.port) ? cfg.port : undefined,
+				keyPath: keyPathRaw ? expandTilde(keyPathRaw, ctx.home) : undefined,
+				compat: typeof cfg.compat === "boolean" ? cfg.compat : undefined,
+				description: typeof cfg.description === "string" ? cfg.description : undefined,
+				_source: createSourceMeta(PROVIDER_ID, `<spell.kdl:${tier}>`, tier),
+			} as SSHHost);
+		}
+	}
+	items.push(...itemsByName.values());
+	const seenNames = new Set(itemsByName.keys());
+
+	// LEGACY: continue reading ssh.json files during the migration window.
 	const candidateSources: Array<{ path: string; level: "user" | "project" }> = [
 		{ path: getSSHConfigPath("project", ctx.cwd), level: "project" },
 		{ path: getSSHConfigPath("user", ctx.cwd), level: "user" },
@@ -136,11 +184,22 @@ async function load(ctx: LoadContext): Promise<LoadResult<SSHHost>> {
 		(source, index, arr) => arr.findIndex(candidate => candidate.path === source.path) === index,
 	);
 	const results = await Promise.all(uniqueSources.map(source => loadSshJsonFile(ctx, source.path, source.level)));
-	const allItems = results.flatMap(r => r.items);
-	const allWarnings = results.flatMap(r => r.warnings ?? []);
+	for (const r of results) {
+		for (const host of r.items) {
+			if (seenNames.has(host.name)) {
+				warnings.push(
+					`SSH target "${host.name}": defined in both spell.kdl and a legacy ssh.json; spell.kdl wins (legacy file shadowed)`,
+				);
+				continue;
+			}
+			seenNames.add(host.name);
+			items.push(host);
+		}
+		if (r.warnings) warnings.push(...r.warnings);
+	}
 	return {
-		items: allItems,
-		warnings: allWarnings.length > 0 ? allWarnings : undefined,
+		items,
+		warnings: warnings.length > 0 ? warnings : undefined,
 	};
 }
 

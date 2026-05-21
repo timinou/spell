@@ -200,6 +200,14 @@ export const SETTINGS_SCHEMA = {
 	 */
 	"mcp.servers": { type: "record", default: EMPTY_STRING_RECORD as unknown as Record<string, unknown> } as RecordDef<unknown>,
 
+	/**
+	 * SSH host map. Sourced from spell.kdl `ssh { target "name" ... }` block.
+	 * Replaces legacy ssh.json files at ~/.spell/agent/ssh.json,
+	 * <cwd>/.spell/ssh.json, and <cwd>/ssh.json (BUG-388, WAVE 2.6).
+	 * ~/.ssh/config (system SSH) is foreign and stays native.
+	 */
+	"ssh.hosts": { type: "record", default: EMPTY_STRING_RECORD as unknown as Record<string, unknown> } as RecordDef<unknown>,
+
 	// ────────────────────────────────────────────────────────────────────────
 	// Appearance
 	// ────────────────────────────────────────────────────────────────────────

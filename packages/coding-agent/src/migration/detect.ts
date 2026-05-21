@@ -201,6 +201,40 @@ export async function detectLegacyConfig(options: DetectOptions = {}): Promise<D
 			topLevelKey: "mcp.servers",
 			topLevelSourceKey: "mcpServers",
 		},
+		// Legacy ssh.json: `{hosts: {name: {host, username, port, ...}}}`.
+		// 3 locations: ~/.spell/agent/ssh.json, <cwd>/.spell/ssh.json, <cwd>/ssh.json.
+		{
+			source: path.join(userAgentDir, "ssh.json"),
+			format: "json",
+			dest: userDest,
+			tier: "user",
+			topLevelKey: "ssh.hosts",
+			topLevelSourceKey: "hosts",
+		},
+		{
+			source: path.join(projectBase, "ssh.json"),
+			format: "json",
+			dest: projectDest,
+			tier: "project",
+			topLevelKey: "ssh.hosts",
+			topLevelSourceKey: "hosts",
+		},
+		{
+			source: path.join(cwd, "ssh.json"),
+			format: "json",
+			dest: projectDest,
+			tier: "project",
+			topLevelKey: "ssh.hosts",
+			topLevelSourceKey: "hosts",
+		},
+		{
+			source: path.join(cwd, ".ssh.json"),
+			format: "json",
+			dest: projectDest,
+			tier: "project",
+			topLevelKey: "ssh.hosts",
+			topLevelSourceKey: "hosts",
+		},
 	];
 
 	const findings: Finding[] = [];

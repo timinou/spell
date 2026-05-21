@@ -7,6 +7,7 @@ import {
 	readAllowedFolders,
 	readMcpServers,
 	readSecrets,
+	readSshHosts,
 	readStatusLineSegmentOptions,
 	readTreeStringRecord,
 } from "./kdl-compatibility";
@@ -82,6 +83,13 @@ function readSettingValue(node: Node, settingPath: SettingPath): unknown {
 
 	if (settingPath === "mcp.servers") {
 		const result = readMcpServers(node);
+		for (const warning of result.warnings)
+			logger.warn("kdl-reader: compatibility warning", { path: warning.path, message: warning.message });
+		return result.value;
+	}
+
+	if (settingPath === "ssh.hosts") {
+		const result = readSshHosts(node);
 		for (const warning of result.warnings)
 			logger.warn("kdl-reader: compatibility warning", { path: warning.path, message: warning.message });
 		return result.value;
