@@ -1,0 +1,17 @@
+#+TITLE: Vendor Coordination — Payment Vendor Playbook
+#+CUSTOM_ID: CON-vendor-coordination
+#+KIND: playbook
+
+:PROPERTIES:
+:KIND: playbook
+:TAGS: playbook
+:END:
+
+:RELATIONS:
+MENTIONS: ENT-vendor-stripe
+DISTILLED_FROM: EP-2026-05-17-vendor-meeting
+:END:
+
+* Body
+
+When coordinating with payment vendors like Stripe, always clarify token expiry semantics, webhook tolerance windows, and incident escalation paths upfront. Schedule a kickoff call before the refactor begins, document decisions in shared concept notes, and obtain written confirmation of rate-limit guarantees. The auth refactor arc demonstrated that a single alignment meeting can prevent days of debugging production edge cases.

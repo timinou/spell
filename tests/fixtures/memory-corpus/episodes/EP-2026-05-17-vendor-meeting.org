@@ -1,0 +1,18 @@
+#+TITLE: Vendor Meeting — Stripe Coordination
+#+CUSTOM_ID: EP-2026-05-17-vendor-meeting
+#+KIND: episode
+
+:PROPERTIES:
+:KIND: episode
+:END:
+
+:RELATIONS:
+ABOUT: ENT-vendor-stripe
+ABOUT: ENT-product-checkout
+INVOLVED: ACT-sam-founder
+INVOLVED: ACT-mira-engineer
+:END:
+
+* Body
+
+Sam and Mira joined a video call with Stripe's developer-support team to align on token expiry semantics. Stripe confirmed that refresh tokens are valid for twenty-four hours but recommended a proactive rotation strategy at the nineteen-hour mark. They also clarified webhook signature tolerance windows, which fed directly into the auth refactor requirements. Sam committed to a staged rollout timeline by end of week.

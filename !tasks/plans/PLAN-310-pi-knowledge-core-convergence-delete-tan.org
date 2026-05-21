@@ -1,0 +1,402 @@
+#+TITLE: pi-knowledge-core convergence — delete tantivy, usearch swap, bge-m3, memory tool, TUI browser
+#+STATE: DOING
+#+SESSION_ID: 14ea0d7add095343
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
+#+CUSTOM_ID: PLAN-310-pi-knowledge-core-convergence-delete-tan
+#+EFFORT: 80h
+#+ESCAPE_HATCH: on-disk cache version-stamped; old engine.bin auto-discarded on schema mismatch (no rollback)
+#+LAYER: natives coding-agent
+#+PRIORITY: #A
+#+RISK: medium
+
+* Initial Message
+
+bro tantivy is super super overkill; what is its purpose in this codebase? is it actually being used in spell sessions? what is its promise, and can it be fulfilled more leanly in an environment in which many (tens) of sessions are running on the same laptop, across workspaces?
+
+look at the org tool from first principle, as an agentic memory+PRD system. push back and ask me questions.
+
+* Locked decisions (from this conversation)
+
+1. *Embedder* — =bge-m3= (BAAI/bge-m3, multilingual, 1024-dim, ~1.2 GB on disk, ~2.5 GB resident). One user-scoped subprocess; serves both org/memory AND code-graph lanes. =jina-v2-base-code= retires.
+2. *HNSW backend* — =usearch= (Unum). Replaces =hnsw_rs=. mmap-backed =.uidx= files → multiple sessions share the on-disk vector index without a daemon.
+3. *Tantivy* — *deleted*. =pi-org-recall= crate dies. BM25 served by extracted-and-generalized =pi-knowledge-core::bm25= (today's =pi-code-graph::search::SearchIndex=, 129 LOC pure Rust, BTreeMap inverted index, k1=1.5 b=0.75, camelCase/snake_case tokenization, exact-match boost). No tantivy. No feature flag. No legacy alias.
+4. *Producers* — auto-write episodes on (a) compaction, (b) finished tasks (org item state→DONE with non-trivial work), (c) elective =memory.note=/=memory.save=. =MEMORY.md= LLM blob path retires; =memory_summary.md= becomes a deterministic projection.
+
+* Problem
+
+Across 13,544 historical Spell sessions on this machine, the =org recall= tool was invoked 2 times (~0.012% of 17,232 =org= calls). =org remember= / =timeline= / =subgraph=: 0. =:KIND:= drawer adoption in this repo: 2 of 1,875 .org files. =:RELATIONS:= drawer adoption: 2 of 1,875. =.spell/memory/episodes=: 0 files. =~/.spell/personal=: 0 files. =renderSessionStartSummary= (the projection that drives session-start recall): 0 call sites.
+
+Yet the cost is paid in full per session:
+
+- Tantivy =IndexWriter= 50 MB arena per repo handle (hard-coded =fts.rs:150=)
+- =fastembed= + Jina v2 base code subprocess: ~500 MB resident per session
+- ~40 MB tantivy rlib through =libpi_natives.so= (8 tantivy-* subcrates)
+- BUG-382 capped per-session damage at 1 handle + 10-min idle TTL, but the multiplier across N concurrent sessions is unchanged (PLAN-309's territory)
+
+Two crates already solve the same hybrid retrieval problem with ~one tenth the machinery:
+
+- =pi-code-graph::search::SearchIndex= — pure-Rust BM25, 129 LOC, 0 external deps, bincode-serializable, already exercised on the ~12k-symbol code corpus
+- =pi-workspace-cache::CacheStore= — engine.bin format + fingerprint + atomic rename
+- =pi-code-vectors::VectorIndex= — hnsw_rs wrapper + bincode persistence
+
+=pi-org-recall= reinvented all three (tantivy / VecIndex String-shim / hand-rolled HashMap-of-edges TypedGraph) instead of consuming them. The convergence undoes that.
+
+* Goal
+
+One =pi-knowledge-core= crate. Two consumers: =pi-code-graph= (code intelligence) and =pi-org-engine= (org/memory). Zero tantivy. Zero =hnsw_rs= (replaced by =usearch=). One user-scoped =pi-embedding-worker= subprocess serving both lanes with =bge-m3=. Memory becomes a first-class tool surface (=memory= top-level tool + =memory://= URIs + =/memory= TUI panel). Producers wire on compaction + task-completion + elective.
+
+* Non-goals
+
+- *No backwards compatibility* with =engine.bin= / =vec.bin= / =fts/= on disk. Old caches discarded on first run (version stamp mismatch → rebuild). One-shot, no migration tool.
+- *No PLAN-309 daemon.* Embedder is one user-scoped subprocess (XDG_RUNTIME_DIR socket, flock pidfile, 30-min idle exit). Index state lives on disk, mmap'd via usearch — no IPC layer for it.
+- *No SurrealDB / SQLite / external DB.* Org files remain the source of truth.
+- *No code-graph behavior change* visible to its consumers. The crate gets refactored under it but the existing =hybrid_search= API stays.
+- *No new edge kinds beyond what FEAT-631 already defined.* This plan is infra cutover, not vocabulary expansion.
+
+* Final crate layout
+
+#+begin_src
+crates/
+├── pi-knowledge-core/                  NEW — single shared layer
+│   ├── src/bm25.rs                     SearchIndex<Doc> generic over doc shape
+│   ├── src/vec.rs                      usearch HNSW wrapper, mmap-backed .uidx
+│   ├── src/graph.rs                    petgraph wrapper: NodeKey, EdgeKind, BFS, path
+│   ├── src/cache.rs                    re-export pi-workspace-cache::CacheStore (or absorb)
+│   ├── src/fusion.rs                   RRF + lateral signals (recency, backlinks, confidence)
+│   ├── src/ingest.rs                   notify-driven incremental indexer
+│   ├── src/embedder.rs                 client to user-scoped pi-embedding-worker
+│   └── src/lib.rs                      re-exports
+├── pi-code-graph/                      consumes pi-knowledge-core (drop search.rs, hybrid.rs)
+├── pi-org-engine/                      consumes pi-knowledge-core (drop hand-rolled TypedGraph)
+├── pi-embedding-worker/                user-scoped lifecycle, bge-m3 + ONNX, XDG socket
+└── DELETE:
+    ├── crates/pi-org-recall/           entire crate
+    ├── crates/pi-code-vectors/         absorbed into pi-knowledge-core::vec
+    ├── tantivy dep                     all 8 tantivy-* subcrates
+    └── hnsw_rs dep                     replaced by usearch
+#+end_src
+
+On-disk layout (single root, one schema):
+
+#+begin_src
+~/.cache/spell/knowledge/<repo-hash>/
+├── meta.bin                            schema version + fingerprint + git head
+├── bm25.bin                            SearchIndex bincode
+├── graph.bin                           PersistedGraph bincode
+├── vectors.uidx                        usearch mmap (cross-session readable)
+└── items.bin                           parsed OrgItem / CodeNode payloads
+
+~/.cache/spell/knowledge/personal/      cross-repo personal store
+~/.cache/spell/knowledge/code/<hash>/   code-graph variant uses same schema
+$XDG_RUNTIME_DIR/spell/embed.sock       user-scoped embedder socket
+$XDG_RUNTIME_DIR/spell/embed.pid        flock-protected pidfile
+#+end_src
+
+* Memory tool surface (agent-facing)
+
+#+begin_src
+memory {
+  action:
+    | "search"     // fuzzy text + scope + focus → ranked hits with why
+    | "about"      // pull item by id + body + neighbors + lineage
+    | "neighbors"  // typed graph walk
+    | "note"       // append observation → episode
+    | "save"       // structured concept / decision
+    | "link"       // typed edge between items
+    | "since"      // diff against timestamp
+  _i: string
+  ...
+}
+
+memory://search?text=…&scope=concept     // URI form, agent can quote in messages
+memory://item/<id>
+memory://since/<ISO8601>
+memory://browse                           // opens TUI panel
+#+end_src
+
+Existing =org recall/remember/timeline/subgraph/link= subcommands retire; the migration is mechanical (=org recall= → =memory search=, etc.). No deprecation cycle.
+
+* Execution Manifest
+
+** Wave 0 — Inventory, corpus, baselines [parallel]
+
+- T0.1 Enumerate every callsite of: =pi-org-recall=, =FtsIndex=, =VecIndex= (in =pi-org-recall=), =TypedGraph= (in =pi-org-engine=), =RecallEngineHandle=, =cmdRecall/Remember/Timeline/Subgraph/Link= in TS
+- T0.2 Build golden fixture corpus at =tests/fixtures/memory-corpus/= — 6 episodes, 4 concepts, 2 actors, 2 entities, with realistic =:RELATIONS:= drawers and =DISTILLED_FROM= lineage
+- T0.3 Run baseline benchmarks: cold/warm BM25 latency, current per-session RSS delta after one =recall= call, current libpi_natives.so size, current =engine.bin= shape (artifact dump)
+- T0.4 Snapshot current TS tool surface (org subcommand registry, prompts referencing recall/remember)
+- T0.5 Write the loop-acceptance test scaffolding (T10.* matrix, all expected-to-fail) — gates the cutover
+
+Gate: =plan-artifacts/PLAN-310/W0-baselines.md= committed with raw numbers; loop tests committed in red state.
+
+** Wave 1 — pi-knowledge-core skeleton [parallel-internal, no consumer changes]
+
+- T1.1 New crate scaffold, Cargo.toml, lib.rs re-exports
+- T1.2 =bm25.rs= — extract =pi-code-graph::search::SearchIndex=, make generic over =trait Document { fn id() -> &str; fn label() -> &str; fn body() -> Option<&str>; fn scope() -> &str; }=
+- T1.3 =graph.rs= — petgraph wrapper, =NodeKey = SmolStr=, =EdgeKind= enum (FEAT-631's set: INVOLVED/ABOUT/PRODUCED/DISTILLED_FROM/MENTIONS/SUPERSEDES/DERIVED_FROM/BLOCKS/ACTION + code-graph's existing set), BFS hop-tracking, path-from-focus
+- T1.4 =fusion.rs= — RRF (today's =pi-org-recall::rrf=), plus lateral signals: recency (exponential decay by mtime), backlinks (in-degree boost), confidence (item property)
+- T1.5 =cache.rs= — absorb =pi-workspace-cache::CacheStore= (or re-export; decide during impl based on circular-dep avoidance)
+- T1.6 Unit tests at the leaf level: 95% line coverage on bm25/graph/fusion (cheap because of no IO)
+
+Gate: =cargo test -p pi-knowledge-core= passes; crate compiles in isolation with no consumers wired.
+
+** Wave 1.5 — Review of pi-knowledge-core API [transitional]
+
+- T1.5.1 Self-review pass: are the BM25 trait bounds the right level of generality? does =fusion.rs= leak per-domain knowledge?
+- T1.5.2 Code review subagent on =pi-knowledge-core/= only; report ≤5 high-confidence findings
+- T1.5.3 Apply review patches in a single commit; re-run W1 gate
+
+Gate: review report committed at =plan-artifacts/PLAN-310/W1-5-review.md=; W1 tests still green.
+
+** Wave 2 — usearch swap-in [serial after W1]
+
+- T2.1 Add =usearch = "..."= dep to =pi-knowledge-core=
+- T2.2 =vec.rs= — port =pi-code-vectors::VectorIndex= surface onto usearch =Index= primitive. Public API stays =VectorIndex / VectorEntry / VectorSearchHit / serialize_index / deserialize_index= (same shapes, new backend)
+- T2.3 Cross-session sharing: confirm usearch mmap reload behavior — write a stress test (2 processes opening the same .uidx, one writes, the other reads at intervals)
+- T2.4 Migrate =pi-code-graph= internals to call =pi-knowledge-core::vec= (consumers untouched at API level)
+- T2.5 Delete =pi-code-vectors= crate; update workspace =Cargo.toml=
+
+Gate: =cargo test --workspace= green; =pi-code-graph= behavior unchanged (regression suite passes); =vectors.uidx= cross-process read test passes.
+
+** Wave 2.5 — Embedder retarget to bge-m3 [transitional]
+
+- T2.5.1 Inventory current Jina v2 base code references in =fastembed= options
+- T2.5.2 Switch =pi-code-vectors::embedding= (now =pi-knowledge-core::embedder=) to =EmbeddingModel::BGEM3=, dim = 1024
+- T2.5.3 Re-run code-graph regression suite — embeddings differ, but rank-1 hit on golden queries must hold
+- T2.5.4 Document the on-disk schema bump (version-stamped meta.bin discards old caches)
+
+Gate: =cargo test --workspace= green with bge-m3 model downloaded once into CI cache; benchmark cold-build latency on a 12k-symbol corpus < 90 s.
+
+** Wave 3 — User-scoped embedding worker [serial after W2.5]
+
+- T3.1 =pi-embedding-worker= gains XDG_RUNTIME_DIR socket mode (existing stdin/stdout JSON-RPC stays for fallback)
+- T3.2 flock-protected pidfile; idle-30-min self-exit; on SIGTERM drain in-flight requests then exit
+- T3.3 Client side (=pi-knowledge-core::embedder=): try socket, on ENOENT spawn-and-retry-once, on persistent failure fall back to in-process =fastembed= (so test runs without daemon work fine)
+- T3.4 Spell session startup: opportunistic warm-up (don't block first user input)
+- T3.5 Tests: socket happy path, ENOENT spawn path, crashed daemon recovery, in-process fallback path
+
+Gate: =cargo test -p pi-embedding-worker=; manual: launch two Spell sessions, observe only one =pi-embedding-worker= process in =ps=, both sessions get correct embeddings.
+
+** Wave 4 — pi-org-engine retarget [serial after W1, parallel with W2-W3]
+
+- T4.1 Delete =pi-org-engine::graph::TypedGraph= (hand-rolled HashMap)
+- T4.2 Reimplement =build_typed_graph= over =pi-knowledge-core::graph::TypedGraph= (petgraph)
+- T4.3 Existing =:RELATIONS:= drawer parser stays; only the build target changes
+- T4.4 All 28 graph-related tests in =pi-org-engine= must pass unchanged
+
+Gate: =cargo test -p pi-org-engine=; graph BFS semantics bit-for-bit identical to old impl (parameterized snapshot test).
+
+** Wave 5 — Tantivy delete + new ingest pipeline [serial after W2, W4]
+
+- T5.1 Move =pi-org-recall::personal.rs= (cross-repo merge) and =recall.rs= (RecallQuery/RecallHit types, recall pipeline) into =pi-knowledge-core::recall=
+- T5.2 Replace =FtsIndex= callers with =pi-knowledge-core::bm25::SearchIndex<OrgItem>=
+- T5.3 New =pi-knowledge-core::ingest= module: =notify=-driven file watcher, debounced 250 ms, incremental upsert. Watches =!tasks/=, =<repo>/.spell/memory/=, =~/.spell/personal/=
+- T5.4 Schema-stamped =meta.bin= at the cache root; on version mismatch, delete the cache dir and rebuild
+- T5.5 =pi-natives::recall_engine= rewires onto =pi-knowledge-core::recall= — keep the public =query()= signature for one cycle so TS callers don't break
+- T5.6 *Delete* =crates/pi-org-recall/= entirely. Delete tantivy dep. Delete tantivy-* subcrate references. Confirm =cargo tree= shows no tantivy.
+
+Gate: =cargo test --workspace=; =grep -r tantivy crates/ Cargo.lock= → empty; =libpi_natives.so= release size delta < +5 MB vs pre-W5 (target: -30 MB, plan for noise).
+
+** Wave 5.5 — Performance baseline review [transitional]
+
+- T5.5.1 Re-run W0.3 benchmarks: cold/warm BM25 latency, per-session RSS after one search, .so size
+- T5.5.2 Compare to W0 numbers; commit deltas at =plan-artifacts/PLAN-310/W5-5-perf.md=
+- T5.5.3 Hard gates: cold P99 < 200 ms on 10k corpus; warm P99 < 50 ms; per-session RSS delta < 80 MB; .so contribution ≤ +5 MB vs pre-PLAN-290
+
+Gate: every hard threshold met; if any fail, add a remediation sub-wave before W6.
+
+** Wave 6 — Memory tool surface in TS [serial after W5]
+
+- T6.1 Define =memory= tool schema in =packages/coding-agent/src/tools/memory.ts= (zod)
+- T6.2 Dispatch each action to =executeOrg= equivalents — interim shim, ultimate impl will inline =pi-knowledge-core::recall= once we cut the org subcommands
+- T6.3 Implement =memory://= URI router in =packages/coding-agent/src/internal-urls/=: =search?...=, =item/<id>=, =since/<ts>=, =browse=
+- T6.4 Update =memory-protocol.ts= to resolve =memory://search= → top-N JSON, =memory://item/<id>= → full body
+- T6.5 Register =memory= in BUILTIN_TOOLS; agent prompt teaches the four query archetypes (priors / neighbours / dedup / since)
+- T6.6 Mechanical migration: every =org recall/remember/timeline/subgraph/link= callsite in TS → =memory= equivalent. Then *delete* those org subcommands from =packages/org/src/tool.ts=. The org tool stops listing them in its description.
+
+Gate: =bun test=; =bun check:ts=; the long subcommand string in =packages/org/src/tool.ts:1232= no longer mentions recall/remember/timeline/subgraph/link.
+
+** Wave 6.5 — Tool surface review [transitional]
+
+- T6.5.1 Subagent review of the memory tool prompt for ergonomic fit (does it teach when to call?)
+- T6.5.2 Replay-corpus check: run a 20-turn stub-LLM session against the new tool; assert no malformed action values
+- T6.5.3 Apply patches; commit
+
+Gate: review report at =plan-artifacts/PLAN-310/W6-5-tool-review.md=; replay corpus green.
+
+** Wave 7 — Producers wired [serial after W6]
+
+- T7.1 *Compaction producer* — in =packages/coding-agent/src/memories/index.ts= consolidation path, replace =MEMORY.md= write with a call that issues =memory.save({kind:"concept", title, body, distilled_from:[...]})= per consolidated entry. Delete =MEMORY.md= write path; the file unlinks on next consolidation.
+- T7.2 *Task-completion producer* — when an org item transitions to =DONE= and has non-trivial NOTE entries / completion section / closing artifact, auto-emit =memory.save({kind:"episode", title=item.title, body=completion summary, about:[item.id], involved:[session actor]})=
+- T7.3 *Elective producers* — wire =memory.note= and =memory.save= as documented in agent prompt; no LLM behavior shift required (the tools exist and are documented).
+- T7.4 =renderSessionStartSummary= wired into actual session-start path (today it's dead). Renders =cache/memory_summary.md= from =memory.search({profile:"session-start", scope:["concept"]})= + active workflow query + last-24h episodes.
+- T7.5 Update the system prompt's "Memory Guidance" block to reflect the new tools (replace =org recall= references).
+
+Gate: integration test (=test/memory-loop.test.ts=) — run consolidation against a fixture rollout, assert episode written, =memory.search= retrieves it, =memory.about= shows lineage edges.
+
+** Wave 7.5 — Production smoke [transitional]
+
+- T7.5.1 Author dogfoods for one session: =memory.search= called at least once organically; observe latency
+- T7.5.2 Observe per-process RSS over a 1-hour window; commit dashboard screenshot
+- T7.5.3 Address any blocker found (small remediation OK)
+
+Gate: smoke OK; if blocker found, add remediation sub-wave before W8.
+
+** Wave 8 — TUI memory browser [serial after W6, parallel with W7]
+
+- T8.1 New file =packages/coding-agent/src/modes/components/memory-browser.ts= (≤ 350 LOC TS)
+- T8.2 Layout: tab-bar [search | graph | recent | diff], left pane = query+hits, right pane = preview
+- T8.3 Reuse =packages/tui/src/components/{select-list,editor,box,tab-bar}=
+- T8.4 Slash command =/memory= (alias =/mem=) registered in =packages/coding-agent/src/slash-commands/builtin-registry.ts=
+- T8.5 Keybind =Ctrl-M= opens panel ambient (parallel to =Ctrl-T= settings)
+- T8.6 Debounced (80 ms) =memory.search= invocation on input
+- T8.7 Selecting a hit prefetches body; cached for session
+- T8.8 =graph= tab: BFS from selected, indented tree render (no graphviz)
+- T8.9 =since= tab: =memory.since(sessionStart)= diff view
+- T8.10 =recent= tab: last 50 episodes by mtime
+- T8.11 Empty-corpus render; Esc closes without losing input
+
+Gate: =bun test packages/coding-agent/test/memory-browser*= green; manual: =/memory= opens, search debounce works, Esc closes.
+
+** Wave 9 — Cross-repo personal store [serial after W6]
+
+- T9.1 =~/.spell/personal/= treated as just another knowledge root by the ingest pipeline
+- T9.2 id resolver in =pi-org-engine::locate= extended to union personal + per-cwd; collision: per-cwd shadows personal
+- T9.3 =memory.search({include_personal:true})= default behavior; toggle in TUI browser
+- T9.4 Cross-repo episode write path: =memory.save({kind:"playbook"})= writes to =~/.spell/personal/concepts/<slug>.org= regardless of cwd
+- T9.5 Tests: cross-repo id resolution, shadow semantics, personal-only search scope
+
+Gate: =cargo test --workspace=; integration test for cross-repo resolve.
+
+** Wave 10 — Loop tests + acceptance [serial after W7, W8, W9]
+
+T10 is the proof. Tests written red in W0 must all be green now.
+
+- T10.1 search returns episode by topic (T1 from conversation)
+- T10.2 search respects scope
+- T10.3 graph hop surfaces neighbours via SUPERSEDES
+- T10.4 save creates concept file, indexed within 250 ms (ingest debounce)
+- T10.5 link round-trip via pi-edit-broker MultiIntent
+- T10.6 since diff captures writes
+- T10.7 session-start projection regenerates memory_summary.md
+- T10.8 failure→note→search loop (next search for error retrieves the note)
+- T10.9 distillation lineage round-trip
+- T10.10 personal store union with shadow semantics
+- T10.11 LLM-loop test (stub LLM, deterministic tool call sequence, citation graph asserted)
+
+Performance acceptance (must all hold):
+
+- cold P99 search < 200 ms on 10k corpus
+- warm P99 < 50 ms
+- =memory.save= end-to-end < 100 ms
+- per-session resident overhead < 80 MB warm
+- =libpi_natives.so= contribution ≤ +5 MB vs pre-PLAN-290 baseline
+
+Gate: every T10.* green; benchmarks meet thresholds; =plan-artifacts/PLAN-310/W10-acceptance.md= committed with raw numbers.
+
+** Wave 10.5 — End-to-end review [transitional]
+
+- T10.5.1 Code-reviewer subagent across the full diff (post-merge to a working branch)
+- T10.5.2 Address any HIGH-confidence finding; LOW deferred to FUP
+- T10.5.3 PLAN-309 closed with deviation note ("superseded by PLAN-310")
+- T10.5.4 BUG-382 closure note updated to mention PLAN-310 follow-through
+
+Gate: review committed; PLAN-309 marked DONE-deviated.
+
+** Wave 11 — Documentation, sweep, close
+
+- T11.1 Update =AGENTS.md= memory section; replace =org recall= references with =memory=
+- T11.2 Update =specs/org-graph-memory.md= to reflect actual shipped state (pi-knowledge-core, usearch, bge-m3, no daemon)
+- T11.3 Delete =renderSessionStartSummary= dead-code branch if W7.4 superseded it
+- T11.4 Update =memory_summary.md= regeneration to use the new tool
+- T11.5 Migration note in CHANGELOG.md noting old caches discarded
+- T11.6 Final =bun test=, =cargo test --workspace=, =bun check:ts=, =bun check:rs=
+
+Gate: full test matrix green, all PLAN-310 artifacts committed, item state → DONE.
+
+* Dependency graph
+
+#+begin_src dot
+W0 → W1 → W1.5 → {W2 → W2.5 → W3, W4} → W5 → W5.5 → W6 → W6.5 → {W7 → W7.5, W8, W9} → W10 → W10.5 → W11
+#+end_src
+
+Critical path: W0 → W1 → W2 → W2.5 → W5 → W5.5 → W6 → W7 → W10 → W11.
+Parallelizable: W4 (org graph retarget) runs alongside W2/W3; W8 (TUI) and W9 (personal) run alongside W7.
+
+* Verification gates summary
+
+| Wave   | gate                                                                 |
+|--------|----------------------------------------------------------------------|
+| W0     | baselines + golden corpus + red loop tests committed                 |
+| W1     | =cargo test -p pi-knowledge-core= green; no consumers wired          |
+| W1.5   | review report committed; W1 still green                              |
+| W2     | usearch swap behind code-graph API; cross-process mmap test passes   |
+| W2.5   | bge-m3 active; code-graph regression rank-1 hits hold                |
+| W3     | user-scoped embedder; one process across sessions confirmed in =ps=  |
+| W4     | pi-org-engine retargeted to petgraph; 28 graph tests unchanged       |
+| W5     | tantivy gone from =cargo tree=; org recall callers rewired           |
+| W5.5   | performance gates met (cold/warm/RSS/.so)                            |
+| W6     | =memory= tool registered; org subcommands deleted from tool.ts       |
+| W6.5   | tool-prompt review + 20-turn replay corpus green                     |
+| W7     | producers wired; compaction + task-completion writes episodes        |
+| W7.5   | dogfood smoke; 1-hour RSS observation OK                             |
+| W8     | =/memory= TUI panel functional; manual smoke                         |
+| W9     | personal store union; shadow semantics tested                        |
+| W10    | every T10.* green; all perf gates met                                |
+| W10.5  | end-to-end review; PLAN-309 closed; BUG-382 updated                  |
+| W11    | docs synced; CHANGELOG updated; full test matrix green               |
+
+* Risk register
+
+- R1 — *bge-m3 download size (1.2 GB)* — adds 1-time bandwidth cost per developer/CI runner. Mitigation: =fastembed= caches in =$XDG_DATA_HOME/spell/models=; document in CONTRIBUTING.md; CI gets a pre-warm step.
+- R2 — *usearch maturity* — 0.x crate; API may shift. Mitigation: pin exact version in workspace =Cargo.toml=; isolate behind =pi-knowledge-core::vec= so swap-out is a one-file change if needed.
+- R3 — *On-disk cache rebuild on first run* — every developer pays a 30–90 s rebuild once after this lands. Acceptable; document in MIGRATION note. No rollback path.
+- R4 — *Loop test brittleness* — stub-LLM tests may drift if model behavior changes. Mitigation: stub is local deterministic JSON, not a real model.
+- R5 — *PLAN-309 obsolescence* — that plan stays in DOING/ITEM state; W10.5 closes it with a deviation note. No code from PLAN-309 lands.
+- R6 — *Notify watcher reliability on macOS/WSL* — inotify is Linux-only; =notify= crate abstracts FSEvents/inotify/ReadDirectoryChangesW but edge cases exist. Mitigation: keep fingerprint-on-demand path as fallback (already in =pi-workspace-cache=).
+- R7 — *Embedder spawn race* — two sessions starting in parallel both try to spawn the worker. Mitigation: flock pidfile; loser blocks on socket connect.
+- R8 — *Compaction producer over-writes* — if every consolidation writes new episodes, =.spell/memory/episodes/= grows unbounded. Mitigation: idempotency key = (rollout_id, content hash); dedupe at write site.
+
+* Acceptance
+
+- =cargo tree -p pi-natives | grep tantivy= → empty
+- =cargo tree -p pi-natives | grep hnsw_rs= → empty
+- =find crates/pi-org-recall= → empty
+- =find crates/pi-code-vectors= → empty
+- =find crates/pi-knowledge-core= → exists with the 6 modules listed in W1
+- =memory= tool registered; old =org recall/remember/timeline/subgraph/link= subcommands deleted from =packages/org/src/tool.ts=
+- =memory://= URIs resolve; =/memory= TUI panel opens
+- Compaction writes episodes (verified by integration test with fixture rollout)
+- Task-completion writes episodes (verified by integration test with fixture DONE transition)
+- =memory_summary.md= regenerated deterministically from real recall projection
+- Cross-repo personal store usable from any cwd
+- All performance gates met
+- All T10.* loop tests green
+- =bun test=, =cargo test --workspace=, =bun check:ts=, =bun check:rs= all green
+- PLAN-309 closed with deviation note
+- =plan-artifacts/PLAN-310/= contains W0-baselines.md, W1-5-review.md, W5-5-perf.md, W6-5-tool-review.md, W10-acceptance.md
+
+* Post-cutover discipline
+
+Once landed, this is the only retrieval substrate. Forbidden after merge:
+
+- Any new BM25 / FTS impl outside =pi-knowledge-core=
+- Any new HNSW backend outside =pi-knowledge-core=
+- Any new per-session embedder subprocess (always user-scoped)
+- Any =memory_summary.md= writer outside the W7.4 projection path
+- Any =:RELATIONS:= consumer that doesn't go through =pi-knowledge-core::graph=
+
+The convergence is load-bearing for the "industry-defining" memory-infra positioning. Two parallel impls of the same idea is the regression to guard against.
+
+* Children
+
+Kickoff child (Wave 0):
+- [[id:FEAT-760-plan-310-w0-inventory-golden-corpus-base]] — inventory, golden corpus, baselines, red-state loop tests
+
+Downstream FEAT/BUG items created during execution will be added here as waves activate. Each major wave (W1 through W11 + the transitional W*.5 review waves) opens with its own FEAT linked from this section.
+
+
+* Cross-references
+
+- Supersedes =PLAN-309-pi-recall-daemon-cross-session-shared-re= (the recall-daemon plan; this convergence does the same work without an IPC daemon)
+- Carries forward =BUG-382-recallengine-lru-holds-4-repo-handles-fo= (cap=1+TTL stays in place during the transition; the broader N-session multiplier is closed by the user-scoped embedder in W3)
+- Replaces architecture in =PLAN-290-org-graph-memory-v1-typed-edges-hybrid-r= for the recall/embedding layers; PLAN-290's :RELATIONS: drawer, typed-graph, and memory pipeline cutover work all carry forward unchanged

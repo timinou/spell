@@ -1,0 +1,16 @@
+#+TITLE: Auth Discovery — JWT Brittleness in Checkout
+#+CUSTOM_ID: EP-2026-05-15-auth-discovery
+#+KIND: episode
+
+:PROPERTIES:
+:KIND: episode
+:END:
+
+:RELATIONS:
+ABOUT: ENT-product-checkout
+INVOLVED: ACT-mira-engineer
+:END:
+
+* Body
+
+Mira was running load tests against the checkout preview environment when she noticed intermittent 401s under burst traffic. The logs showed JWT verification failures that recovered spontaneously, suggesting a race between token expiry and the validation cache. She documented the pattern and flagged it as a blocking issue for the upcoming auth refactor. This discovery kicked off the six-day arc.

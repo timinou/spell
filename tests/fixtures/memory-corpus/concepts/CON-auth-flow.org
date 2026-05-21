@@ -1,0 +1,17 @@
+#+TITLE: Auth Flow — Checkout Authentication Design
+#+CUSTOM_ID: CON-auth-flow
+#+KIND: concept
+
+:PROPERTIES:
+:KIND: concept
+:END:
+
+:RELATIONS:
+ABOUT: ENT-product-checkout
+DISTILLED_FROM: EP-2026-05-15-auth-discovery
+DISTILLED_FROM: EP-2026-05-16-jwt-deep-dive
+:END:
+
+* Body
+
+The checkout authentication flow uses short-lived JWTs issued by an internal identity service and validated at the edge. Tokens carry scoped claims for payment actions, subscription management, and admin overrides. The refactor made leeway configurable, added key rotation without restart, and tightened expiry checks using monotonic clocks. This concept note captures the stable design decisions that survived the six-day arc.

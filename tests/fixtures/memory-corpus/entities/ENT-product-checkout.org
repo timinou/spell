@@ -1,0 +1,14 @@
+#+TITLE: Checkout — Internal Product
+#+CUSTOM_ID: ENT-product-checkout
+#+KIND: entity
+
+:PROPERTIES:
+:KIND: entity
+:END:
+
+:RELATIONS:
+:END:
+
+* Body
+
+Checkout is the company's flagship payment-acceptance product. It handles cart abandonment recovery, multi-currency pricing, and PCI-compliant token vaulting. The auth layer sits at the edge of every request path, making the JWT refactor a high-risk, high-visibility project. Checkout's rollout pipeline supports staged canary deploys with automatic rollback triggers.
