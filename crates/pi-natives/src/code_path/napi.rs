@@ -10,8 +10,6 @@ use std::{
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-#[allow(deprecated)]
-use pi_code_path::ast::Action;
 use pi_code_path::{
 	ast::{Axis, CodePath, FsSegment, Head, Locator, MutationOutcome},
 	dialect::NameLexer,
@@ -399,37 +397,11 @@ pub fn execute_code_path_inner(
 	let pi_token = CancellationToken::new();
 
 
-	/// Compile-time totality: every Op variant routes to exactly one resolver.
-	/// Adding an Op variant without updating this match = compile error.
-	fn dispatch_op<'a>(
-		op: &Op,
-		fs: &'a FsResolver,
-		text: &'a TextResolver,
-		code: &'a code_resolver::CodeResolverImpl,
-		css: &'a css_resolver::CssResolver,
-		heading: &'a heading_resolver::HeadingResolver,
-	) -> &'a dyn MutationResolver {
-		match op {
-			Op::FileCreate { .. } | Op::FileWrite { .. } | Op::FileDelete { .. } => fs,
-			Op::FileAppend { .. } | Op::FilePrepend { .. } | Op::FilePatch { .. }
-			| Op::LineReplace { .. } | Op::LineInsert { .. }
-			| Op::LineAppend { .. } | Op::LinePrepend { .. } => text,
-			Op::SymbolReplace { .. } | Op::SymbolRename { .. } | Op::SymbolWrap { .. }
-			| Op::SymbolDelete { .. } | Op::SymbolInsertBefore { .. }
-			| Op::SymbolInsertAfter { .. } | Op::SymbolFindReplace { .. }
-			| Op::SymbolRawTextReplace { .. } | Op::SymbolMove { .. }
-			| Op::SymbolClone { .. } | Op::SymbolSplice { .. }
-			| Op::SymbolTranspose { .. }
-			| Op::FileFindReplace { .. } | Op::FileRawTextReplace { .. } => code,
-			Op::CssRenameClassToken { .. } | Op::CssRenameIdToken { .. }
-			| Op::CssRenameCustomProp { .. } | Op::CssRemoveDeadStyle { .. } => css,
-			Op::HeadingPromote { .. } | Op::HeadingDemote { .. }
-			| Op::HeadingReplaceBlock { .. } => heading,
-		}
-	}
-
 	// ── Edit command branch ──────────────────────────────────────
 	if opts.command == "edit" {
+		use pi_code_engine::buffer::TextEdit;
+		use pi_code_path::ast::Locator;
+
 		let raw_actions: Vec<serde_json::Value> = match opts.actions {
 			Some(v) => serde_json::from_value(v)
 				.map_err(|e| Error::from_reason(format!("invalid actions: {e}")))?,
@@ -446,13 +418,6 @@ pub fn execute_code_path_inner(
 			},
 		};
 
-		// Parse each action as Op (preferred) or legacy Action (fallback).
-		//
-		// PLAN-308 wire-format: TS sends `target` at options level (already
-		// parsed into `cp` above) and `actions: [{kind, ...fields}]` without
-		// embedded target. Op variants require `target: FileTarget(CodePath)`
-		// as a struct field. We inject the parsed CodePath into each action
-		// JSON before deserialization so the Op-first dispatch succeeds.
 		let cp_value = serde_json::to_value(&cp).ok();
 		let ops: Vec<Op> = {
 			let mut parsed = Vec::with_capacity(raw_actions.len());
@@ -467,40 +432,23 @@ pub fn execute_code_path_inner(
 				};
 				match serde_json::from_value::<Op>(raw_with_target) {
 					Ok(op) => parsed.push(op),
-					Err(_) => {
-						#[allow(deprecated)]
-						let action: Action = match serde_json::from_value(raw.clone()) {
-							Ok(a) => a,
-							Err(e) => {
-								return Ok(vec![CodePathChunk {
-									nodes: vec![],
-									diagnostics: vec![DiagnosticDto {
-										variant: "parse_error".to_string(),
-										message: format!("invalid action JSON: {e}"),
-										span:    None,
-									}],
-									done:    true,
-								}]);
-							},
-						};
-						match Op::from_legacy(&action, &cp) {
-							Ok(op) => parsed.push(op),
-							Err(d) => {
-								let diag = diagnostic_to_dto(d);
-								return Ok(vec![CodePathChunk {
-									nodes:       vec![],
-									diagnostics: vec![diag],
-									done:        true,
-								}]);
-							},
-						}
+					Err(e) => {
+						return Ok(vec![CodePathChunk {
+							nodes: vec![],
+							diagnostics: vec![DiagnosticDto {
+								variant: "parse_error".to_string(),
+								message: format!("invalid action JSON: {e}"),
+								span:    None,
+							}],
+							done:    true,
+						}]);
 					},
 				}
 			}
 			parsed
 		};
 
-		let fs_resolver = FsResolver::new(root.clone());
+		let _fs_resolver = FsResolver::new(root.clone());
 		let extractors = default_extractors();
 		let text_resolver = TextResolver::new(root.clone()).with_extractors(extractors);
 		let mut code_resolver = code_resolver::new()
@@ -513,10 +461,22 @@ pub fn execute_code_path_inner(
 		let css_resolver = css_resolver::CssResolver::new(code_resolver_arc.clone());
 		let heading_resolver = heading_resolver::HeadingResolver::new(code_resolver_arc.clone());
 
-		// FEAT-712: when transaction:"strict", snapshot every target
-		// file before the loop. On any failure, restore the snapshots
-		// before returning the diagnostic. Default `BestEffort` keeps
-		// the pre-FEAT-712 behaviour: prior writes stay on disk.
+		fn resolve_op_path(op: &Op, root: &std::path::Path) -> Option<std::path::PathBuf> {
+			let cp = op.target_codepath();
+			if let Locator::Fs(fs) = &cp.locator {
+				let mut target = root.to_path_buf();
+				for seg in &fs.segments {
+					if let pi_code_path::ast::FsSegment::Literal(s) = seg {
+						if s == "/" { continue; }
+						target.push(s);
+					}
+				}
+				Some(target)
+			} else {
+				None
+			}
+		}
+
 		let strict_mode = opts.transaction == Some(TransactionMode::Strict);
 		let snapshots: Vec<FileSnapshot> = if strict_mode {
 			snapshot_targets(&ops, &cp, &root)
@@ -541,15 +501,160 @@ pub fn execute_code_path_inner(
 			restored
 		};
 
-		let mut outcomes: Vec<MutationOutcome> = Vec::new();
+		use std::collections::HashMap;
+		let mut file_groups: HashMap<std::path::PathBuf, Vec<&Op>> = HashMap::new();
 		for op in &ops {
+			let path = resolve_op_path(op, &root).ok_or_else(|| {
+				Error::from_reason("edit op target must be a filesystem path".to_string())
+			})?;
+			file_groups.entry(path).or_default().push(op);
+		}
 
-			let resolver = dispatch_op(&op, &fs_resolver, &text_resolver, &code_resolver_arc, &css_resolver, &heading_resolver);
-
-			match resolver.try_apply(&op, &pi_token) {
-				Some(Ok(outcome)) => outcomes.push(outcome),
-				Some(Err(d)) => {
-					let mut diag = diagnostic_to_dto(d);
+		let mut outcomes: Vec<MutationOutcome> = Vec::new();
+		for (path, group_ops) in file_groups {
+			let code_paths: Vec<String> = group_ops
+				.iter()
+				.map(|op| {
+					crate::code_path::code_resolver::mutation::build_target_id(
+						op.target_codepath(),
+						Some(&root),
+					)
+					.unwrap_or_default()
+				})
+				.collect();
+			let result = crate::buffer_registry()
+				.edit_transaction_with_delete(
+					opts.session_id.as_deref(),
+					&path,
+					&code_paths,
+					|buf| {
+						let mut group_outcomes = Vec::new();
+						let mut should_delete = false;
+						for op in &group_ops {
+							match op {
+								Op::FileCreate { target: _, content, force } => {
+									if path.exists() && !force {
+										return Err(pi_code_engine::CodeEngineError::Edit(format!(
+											"file already exists: {}",
+											path.display()
+										)));
+									}
+									let text = content.join("\n");
+									let current = buf.source();
+									if current != text {
+										buf.edit_batch(vec![TextEdit {
+											start_byte:   0,
+											old_end_byte: current.len(),
+											new_text:     text,
+										}])?;
+									}
+									group_outcomes.push(MutationOutcome {
+										edit_count:     1,
+										diff:           None,
+										created:        !path.exists(),
+										target_summary: Some(path.to_string_lossy().to_string()),
+									});
+								},
+								Op::FileWrite { target: _, content, force: _ } => {
+									let text = content.join("\n");
+									let current = buf.source();
+									if current != text {
+										buf.edit_batch(vec![TextEdit {
+											start_byte:   0,
+											old_end_byte: current.len(),
+											new_text:     text,
+										}])?;
+									}
+									group_outcomes.push(MutationOutcome {
+										edit_count:     1,
+										diff:           None,
+										created:        !path.exists(),
+										target_summary: Some(path.to_string_lossy().to_string()),
+									});
+								},
+								Op::FileDelete { target: _ } => {
+									if !path.exists() {
+										return Err(pi_code_engine::CodeEngineError::Edit(format!(
+											"file not found: {}",
+											path.display()
+										)));
+									}
+									let current = buf.source();
+									if !current.is_empty() {
+										buf.edit_batch(vec![TextEdit {
+											start_byte:   0,
+											old_end_byte: current.len(),
+											new_text:     String::new(),
+										}])?;
+									}
+									should_delete = true;
+									group_outcomes.push(MutationOutcome {
+										edit_count:     1,
+										diff:           None,
+										created:        false,
+										target_summary: Some(path.to_string_lossy().to_string()),
+									});
+								},
+								Op::FileAppend { .. }
+								| Op::FilePrepend { .. }
+								| Op::FilePatch { .. }
+								| Op::LineReplace { .. }
+								| Op::LineInsert { .. }
+								| Op::LineAppend { .. }
+								| Op::LinePrepend { .. } => {
+									let outcome = text_resolver
+										.try_apply(op, &pi_token)
+										.unwrap()
+										.map_err(|d| pi_code_engine::CodeEngineError::Edit(d.message))?;
+									let disk = std::fs::read_to_string(&path).unwrap_or_default();
+									let current = buf.source();
+									if disk != current {
+										buf.edit_batch(vec![TextEdit {
+											start_byte:   0,
+											old_end_byte: current.len(),
+											new_text:     disk,
+										}])?;
+									}
+									group_outcomes.push(outcome);
+								},
+								Op::CssRenameClassToken { .. }
+								| Op::CssRenameIdToken { .. }
+								| Op::CssRenameCustomProp { .. }
+								| Op::CssRemoveDeadStyle { .. } => {
+									let outcome = css_resolver
+										.apply_to_buffer(buf, op)
+										.map_err(|d| pi_code_engine::CodeEngineError::Edit(d.message))?;
+									group_outcomes.push(outcome);
+								},
+								Op::HeadingPromote { .. }
+								| Op::HeadingDemote { .. }
+								| Op::HeadingReplaceBlock { .. } => {
+									let outcome = heading_resolver
+										.apply_to_buffer(buf, op)
+										.map_err(|d| pi_code_engine::CodeEngineError::Edit(d.message))?;
+									group_outcomes.push(outcome);
+								},
+								_ => {
+									let action_json =
+    						crate::code_path::code_resolver::mutation::op_to_code_buffer_action(op);
+									let outcome = code_resolver_arc
+										.apply_to_buffer(buf, op.target_codepath(), &action_json)
+										.map_err(|d| pi_code_engine::CodeEngineError::Edit(d.message))?;
+									group_outcomes.push(outcome);
+								},
+							}
+						}
+						Ok((group_outcomes, should_delete))
+					},
+				);
+			match result {
+				Ok((_, group_outcomes)) => outcomes.extend(group_outcomes),
+				Err(e) => {
+					let mut diag = diagnostic_to_dto(pi_code_path::types::Diagnostic {
+						variant: pi_code_path::types::DiagnosticVariant::UnsupportedOperation,
+						message: e.to_string(),
+						span:    None,
+					});
 					if strict_mode {
 						let rolled = restore_strict(&snapshots);
 						diag.message = format!("{} (rolled back {rolled} file(s))", diag.message);
@@ -557,21 +662,6 @@ pub fn execute_code_path_inner(
 					return Ok(vec![CodePathChunk {
 						nodes:       outcomes.into_iter().map(mutation_outcome_to_dto).collect(),
 						diagnostics: vec![diag],
-						done:        true,
-					}]);
-				},
-				None => {
-					// Unreachable due to dispatch_op exhaustiveness, but handle defensively
-					let rolled = if strict_mode { restore_strict(&snapshots) } else { 0 };
-					let message = format!("internal error: no resolver claimed Op variant {:?}", op.kind());
-					let final_message = if strict_mode {
-						format!("{message} (rolled back {rolled} file(s))")
-					} else {
-						message
-					};
-					return Ok(vec![CodePathChunk {
-						nodes:       outcomes.into_iter().map(mutation_outcome_to_dto).collect(),
-						diagnostics: vec![DiagnosticDto { variant: "internal_error".to_string(), message: final_message, span: None }],
 						done:        true,
 					}]);
 				},

@@ -82,14 +82,14 @@ async fn edit_transaction_reloads_when_peer_committed_between_reads() {
 
 	let _ = reg_a.open(&path).expect("open stale buffer");
 	reg_b
-		.edit_transaction("s2", &path, &[DISPATCH_PATH.into()], |buffer| {
+		.edit_transaction(Some("s2"), &path, &[DISPATCH_PATH.into()], |buffer| {
 			replace_once(buffer, "\"dispatch\"", "\"dispatch-peer\"")?;
 			Ok(())
 		})
 		.expect("peer commit");
 
 	reg_a
-		.edit_transaction("s1", &path, &[HANDLE_PATH.into()], |buffer| {
+		.edit_transaction(Some("s1"), &path, &[HANDLE_PATH.into()], |buffer| {
 			replace_once(buffer, "\"handle\"", "\"handle-local\"")?;
 			Ok(())
 		})
@@ -119,7 +119,7 @@ async fn edit_transaction_surfaces_peer_conflict_on_overlapping_intent() {
 	let _ = holder.recv().await.expect("intent ack");
 
 	let error = reg_b
-		.edit_transaction("s2", &path, &[HANDLE_PATH.into()], |buffer| {
+		.edit_transaction(Some("s2"), &path, &[HANDLE_PATH.into()], |buffer| {
 			replace_once(buffer, "\"handle\"", "\"handle-b\"")?;
 			Ok(())
 		})
@@ -142,13 +142,13 @@ async fn edit_transaction_succeeds_when_peer_touched_different_node() {
 	let reg_b = registry_with_socket(&broker.socket_path, "s2");
 
 	let (first, ()) = reg_a
-		.edit_transaction("s1", &path, &[DISPATCH_PATH.into()], |buffer| {
+		.edit_transaction(Some("s1"), &path, &[DISPATCH_PATH.into()], |buffer| {
 			replace_once(buffer, "\"dispatch\"", "\"dispatch-a\"")?;
 			Ok(())
 		})
 		.expect("first commit");
 	let (second, ()) = reg_b
-		.edit_transaction("s2", &path, &[HANDLE_PATH.into()], |buffer| {
+		.edit_transaction(Some("s2"), &path, &[HANDLE_PATH.into()], |buffer| {
 			replace_once(buffer, "\"handle\"", "\"handle-b\"")?;
 			Ok(())
 		})
@@ -168,7 +168,7 @@ async fn edit_transaction_emits_journal_entry_on_success() {
 	let reg = registry_with_socket(&broker.socket_path, "s1");
 
 	let (outcome, ()) = reg
-		.edit_transaction("s1", &path, &[HANDLE_PATH.into()], |buffer| {
+		.edit_transaction(Some("s1"), &path, &[HANDLE_PATH.into()], |buffer| {
 			replace_once(buffer, "\"handle\"", "\"handle-journal\"")?;
 			Ok(())
 		})
@@ -194,7 +194,7 @@ async fn edit_transaction_broadcasts_to_subscribers() {
 		.await;
 	sleep(Duration::from_millis(50)).await;
 
-	reg.edit_transaction("s2", &path, &[DISPATCH_PATH.into()], |buffer| {
+	reg.edit_transaction(Some("s2"), &path, &[DISPATCH_PATH.into()], |buffer| {
 		replace_once(buffer, "\"dispatch\"", "\"dispatch-peer\"")?;
 		Ok(())
 	})
@@ -229,7 +229,7 @@ async fn cached_buffer_invalidated_on_peer_commit() {
 	assert!(before.lock().source().contains("dispatch"));
 
 	reg_b
-		.edit_transaction("s2", &path, &[DISPATCH_PATH.into()], |buffer| {
+		.edit_transaction(Some("s2"), &path, &[DISPATCH_PATH.into()], |buffer| {
 			replace_once(buffer, "\"dispatch\"", "\"dispatch-new\"")?;
 			Ok(())
 		})
@@ -249,7 +249,7 @@ async fn edit_transaction_handles_broker_down_gracefully() {
 	let reg = registry_with_socket(&missing_socket, "s1");
 
 	let (outcome, ()) = reg
-		.edit_transaction("s1", &path, &[HANDLE_PATH.into()], |buffer| {
+		.edit_transaction(Some("s1"), &path, &[HANDLE_PATH.into()], |buffer| {
 			replace_once(buffer, "\"handle\"", "\"handle-offline\"")?;
 			Ok(())
 		})
@@ -282,7 +282,7 @@ async fn edit_transaction_lock_timeout_returns_structured_error() {
 	let _guard = lock.try_write().expect("hold exclusive lock");
 
 	let error = reg
-		.edit_transaction("s1", &path, &[HANDLE_PATH.into()], |buffer| {
+		.edit_transaction(Some("s1"), &path, &[HANDLE_PATH.into()], |buffer| {
 			replace_once(buffer, "\"handle\"", "\"handle-timeout\"")?;
 			Ok(())
 		})
@@ -312,7 +312,7 @@ async fn edit_transaction_is_idempotent_on_retry_after_conflict() {
 	let _ = holder.recv().await.expect("intent ack");
 
 	let first = reg
-		.edit_transaction("s2", &path, &[HANDLE_PATH.into()], |buffer| {
+		.edit_transaction(Some("s2"), &path, &[HANDLE_PATH.into()], |buffer| {
 			replace_once(buffer, "\"handle\"", "\"handle-retry\"")?;
 			Ok(())
 		})
@@ -321,7 +321,7 @@ async fn edit_transaction_is_idempotent_on_retry_after_conflict() {
 	holder.send(&ClientMessage::Bye).await;
 	sleep(Duration::from_millis(50)).await;
 
-	reg.edit_transaction("s2", &path, &[HANDLE_PATH.into()], |buffer| {
+	reg.edit_transaction(Some("s2"), &path, &[HANDLE_PATH.into()], |buffer| {
 		replace_once(buffer, "\"handle\"", "\"handle-retry\"")?;
 		Ok(())
 	})
@@ -340,7 +340,7 @@ async fn batch_edit_transaction_attributes_all_nodes() {
 	let code_paths =
 		vec![HANDLE_PATH.to_string(), DISPATCH_PATH.to_string(), RENDER_PATH.to_string()];
 
-	reg.edit_transaction("s1", &path, &code_paths, |buffer| {
+	reg.edit_transaction(Some("s1"), &path, &code_paths, |buffer| {
 		replace_once(buffer, "\"handle\"", "\"handle-1\"")?;
 		replace_once(buffer, "\"dispatch\"", "\"dispatch-2\"")?;
 		replace_once(buffer, "\"render\"", "\"render-3\"")?;
@@ -361,13 +361,13 @@ async fn edit_transaction_records_parent_revision_from_last_own_commit() {
 	let reg = registry_with_socket(&broker.socket_path, "s1");
 
 	let (first, ()) = reg
-		.edit_transaction("s1", &path, &[HANDLE_PATH.into()], |buffer| {
+		.edit_transaction(Some("s1"), &path, &[HANDLE_PATH.into()], |buffer| {
 			replace_once(buffer, "\"handle\"", "\"handle-parent\"")?;
 			Ok(())
 		})
 		.expect("first commit");
 	let (second, ()) = reg
-		.edit_transaction("s1", &path, &[DISPATCH_PATH.into()], |buffer| {
+		.edit_transaction(Some("s1"), &path, &[DISPATCH_PATH.into()], |buffer| {
 			replace_once(buffer, "\"dispatch\"", "\"dispatch-parent\"")?;
 			Ok(())
 		})
