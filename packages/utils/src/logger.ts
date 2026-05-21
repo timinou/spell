@@ -80,6 +80,7 @@ const winstonLogger = winston.createLogger({
 export interface Logger {
 	error(message: string, context?: Record<string, unknown>): void;
 	warn(message: string, context?: Record<string, unknown>): void;
+	info(message: string, context?: Record<string, unknown>): void;
 	debug(message: string, context?: Record<string, unknown>): void;
 	setStderrDebugEnabled(enabled: boolean): void;
 	time<T>(op: string, fn: () => T): T;
@@ -139,7 +140,18 @@ export function warn(message: string, context?: Record<string, unknown>): void {
 		// Silently ignore logging failures
 	}
 }
-
+/**
+ * Log an info message.
+ * @param message - The message to log.
+ * @param context - The context to log.
+ */
+export function info(message: string, context?: Record<string, unknown>): void {
+	try {
+		winstonLogger.info(message, context);
+	} catch {
+		// Silently ignore logging failures
+	}
+}
 /**
  * Log a debug message.
  * @param message - The message to log.

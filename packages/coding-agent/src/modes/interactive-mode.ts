@@ -225,7 +225,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Set when user explicitly acknowledged needs_input; silences the actionable indicator. */
 	#isUserPaused = false;
 	optimisticUserMessageSignature: string | undefined = undefined;
-	#pendingSubmittedInput: SubmittedUserInput | undefined;
+	#pendingSubmittedInput: Extract<SubmittedUserInput, { kind: "user-input" }> | undefined;
 	lastSigintTime = 0;
 	lastEscapeTime = 0;
 	shutdownRequested = false;
@@ -242,6 +242,8 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#pendingSlashCommands: SlashCommand[] = [];
 	#cleanupUnsubscribe?: () => void;
+	#terminalLostUnsubscribe?: () => void;
+	#terminalLostHandled = false;
 	readonly #version: string;
 	readonly #changelogMarkdown: string | undefined;
 	#planModePreviousTools: string[] | undefined;
@@ -433,6 +435,12 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.sessionManager.appendCrashMarker(reason);
 			}
 			return this.sessionManager.flush();
+		});
+
+		// Detect when the controlling pty is destroyed (e.g. SSH session dies,
+		// parent shell exits). This is an orderly shutdown path parallel to SIGHUP.
+		this.#terminalLostUnsubscribe = this.ui.terminal.onLost(reason => {
+			void this.#handleTerminalLost(reason);
 		});
 
 		await logger.timeAsync("InteractiveMode.init:slashCommands", () =>
@@ -670,8 +678,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		return promise;
 	}
 
-	startPendingSubmission(input: { text: string; images?: ImageContent[] }): SubmittedUserInput {
+	startPendingSubmission(input: {
+		text: string;
+		images?: ImageContent[];
+	}): Extract<SubmittedUserInput, { kind: "user-input" }> {
 		const submission: SubmittedUserInput = {
+			kind: "user-input",
 			text: input.text,
 			images: input.images,
 			cancelled: false,
@@ -714,7 +726,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		return true;
 	}
 
-	markPendingSubmissionStarted(input: SubmittedUserInput): boolean {
+	markPendingSubmissionStarted(input: Extract<SubmittedUserInput, { kind: "user-input" }>): boolean {
 		if (this.#pendingSubmittedInput !== input || input.cancelled) {
 			return false;
 		}
@@ -722,10 +734,21 @@ export class InteractiveMode implements InteractiveModeContext {
 		return true;
 	}
 
-	finishPendingSubmission(input: SubmittedUserInput): void {
+	finishPendingSubmission(input: Extract<SubmittedUserInput, { kind: "user-input" }>): void {
 		if (this.#pendingSubmittedInput === input) {
 			this.#pendingSubmittedInput = undefined;
 		}
+	}
+
+	async #handleTerminalLost(reason: string): Promise<void> {
+		if (this.#terminalLostHandled) return;
+		this.#terminalLostHandled = true;
+
+		logger.info("terminal lost — shutting down session", { reason });
+		if (this.onInputCallback) {
+			this.onInputCallback({ kind: "terminal-lost" } satisfies SubmittedUserInput);
+		}
+		await postmortem.quitGracefully(postmortem.Reason.TERMINAL_LOST);
 	}
 
 	#computeEditorMaxHeight(): number {
@@ -1640,6 +1663,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (this.#cleanupUnsubscribe) {
 			this.#cleanupUnsubscribe();
+		}
+		if (this.#terminalLostUnsubscribe) {
+			this.#terminalLostUnsubscribe();
 		}
 		this.#intentionSubscriptionUnsub?.();
 		this.#intentionController.dispose();

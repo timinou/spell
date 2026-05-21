@@ -2,8 +2,11 @@ import { describe, expect, it, vi } from "bun:test";
 import { submitInteractiveInput } from "@oh-my-pi/pi-coding-agent/main";
 import type { SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 
-function createInput(overrides: Partial<SubmittedUserInput> = {}): SubmittedUserInput {
+function createInput(
+	overrides: Partial<Extract<SubmittedUserInput, { kind: "user-input" }>> = {},
+): Extract<SubmittedUserInput, { kind: "user-input" }> {
 	return {
+		kind: "user-input",
 		text: "hello",
 		images: undefined,
 		cancelled: false,

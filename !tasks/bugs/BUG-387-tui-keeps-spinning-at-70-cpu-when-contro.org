@@ -1,0 +1,62 @@
+#+TITLE: TUI keeps spinning at ~70% CPU when controlling pty is destroyed
+#+STATE: DOING
+#+SESSION_ID: 14ea14814559e822
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T15-17-13-109Z_14ea14814559e822.jsonl]]
+#+CUSTOM_ID: BUG-387-tui-keeps-spinning-at-70-cpu-when-contro
+#+EFFORT: 4h
+#+LAYER: tui coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+Spell has been using CPU like crazy recently. Why?
+
+* Initial Message
+
+Spell has been using CPU like crazy recently. The worst case observed: a 5-day-old session at 71.9% CPU continuously, holding 6 file descriptors pointing to =/dev/pts/6 (deleted)= — the terminal was closed but the spell process kept running.
+
+* Problem
+
+=Terminal.#safeWrite= in =packages/tui/src/terminal.ts= only flips =#dead= when =process.stdout.write= throws *synchronously*. Pty hangup doesn't throw synchronously in Bun/Node — the kernel returns EIO async, the stream emits an =error= event, no listener catches it, the render/poll loop keeps running forever.
+
+Missing hooks:
+- =process.stdout.on('error', ...)= — never registered
+- =process.stdin.on('end' | 'close', ...)= — never registered
+- Active liveness probe — none
+
+SIGHUP is not a backstop: spell processes are commonly reparented to =systemd --user= (=ppid=2374= observed). The terminal emulator is not the session leader of the pty, so destroying the pts emits no signal to spell.
+
+Effect: =#osc11PollTimer= keeps firing OSC 11 queries every 2s; the render loop keeps scheduling renders; both write into a closed fd; CPU saturates a core indefinitely until the process is killed manually.
+
+* Evidence
+
+#+begin_src
+PID 264516, age 5d 0h, CPU 71.9%
+  /proc/264516/fd/51 → /dev/pts/6 (deleted)
+  /proc/264516/fd/0-2,etc. → 6 entries pointing to deleted pts
+  wchan = 0, syscall = (empty) — looping in userspace
+  nonvoluntary_ctxt_switches: 34,614,099 vs voluntary: 19,235
+#+end_src
+
+Aggregate observed today: ~302% CPU across 22 spell processes; one zombie alone accounted for ~24% of system load.
+
+* Fix
+
+1. In =Terminal.enterRawMode=: register =process.stdout.on('error')=, =process.stdin.on('end')=, =process.stdin.on('close')=. Each handler calls =#markDead(reason)=.
+2. Repurpose the existing =#osc11PollTimer= (2s cadence) to also check =process.stdout.writable !== false= and =process.stdin.readable !== false=. On failure → =#markDead('not-writable')=.
+3. New =Terminal.onLost(cb)= API. =interactive-mode.ts= subscribes; callback runs =sessionManager.flush()= then =process.exit(0)=.
+4. SIGHUP/SIGTERM paths in =packages/utils/src/postmortem.ts= route through the same =Terminal.onLost= path so logs are consistent (orderly exit, not crash report).
+
+* Acceptance
+
+- New regression test =packages/tui/test/terminal-pty-loss.test.ts= mocks =process.stdout=/=process.stdin= emitting =error=/=end=/=close=; asserts (a) =Terminal.onLost= callback fires within one event-loop tick, (b) no subsequent =safeWrite= invocations occur.
+- Manual reproduction: open a ghostty tab running spell, close the tab without =/quit=. Process exits within ≤2s of pty teardown. =ps= shows no surviving process; no entry with =fd → (deleted)= for spell.
+
+* Non-goals
+
+- Hibernate / persistent state restore — separate workstream.
+- Rework SIGHUP delivery semantics — accept the systemd reparenting reality, detect at the fd layer.
+
+* Related
+
+- Part of =PLAN-XXX-tui-responsiveness=.
