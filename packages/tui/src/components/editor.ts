@@ -308,7 +308,7 @@ export class Editor implements Component, Focusable {
 
 	#theme: EditorTheme;
 	#useTerminalCursor = false;
-	#parent?: Container;
+	#parent?: DirtyParent;
 
 	/** When set, replaces the normal cursor glyph at end-of-text with this ANSI-styled string. */
 	cursorOverride: string | undefined;
@@ -371,7 +371,7 @@ export class Editor implements Component, Focusable {
 	// Custom top border (for status line integration)
 	#topBorderContent?: EditorTopBorder;
 
-	setParent(p: Container | undefined): void {
+	setParent(p: DirtyParent | undefined): void {
 		this.#parent = p;
 	}
 

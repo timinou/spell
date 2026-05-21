@@ -1,17 +1,17 @@
-import type { Component, Container } from "../tui";
+import type { Component, DirtyParent } from "../tui";
 
 /**
  * Spacer component that renders empty lines
  */
 export class Spacer implements Component {
 	#lines: number;
-	#parent?: Container;
+	#parent?: DirtyParent;
 
 	constructor(lines: number = 1) {
 		this.#lines = lines;
 	}
 
-	setParent(p: Container | undefined): void {
+	setParent(p: DirtyParent | undefined): void {
 		this.#parent = p;
 	}
 

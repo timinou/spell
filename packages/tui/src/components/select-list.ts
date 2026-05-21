@@ -1,6 +1,6 @@
 import { matchesKey } from "../keys";
 import type { SymbolTheme } from "../symbols";
-import type { Component, Container } from "../tui";
+import type { Component, DirtyParent } from "../tui";
 import { Ellipsis, padding, replaceTabs, truncateToWidth, visibleWidth } from "../utils";
 
 export interface SelectItem {
@@ -30,9 +30,9 @@ function sanitizeSingleLine(text: string): string {
 export class SelectList implements Component {
 	#filteredItems: ReadonlyArray<SelectItem>;
 	#selectedIndex: number = 0;
-	#parent?: Container;
+	#parent?: DirtyParent;
 
-	setParent(p: Container | undefined): void {
+	setParent(p: DirtyParent | undefined): void {
 		this.#parent = p;
 	}
 

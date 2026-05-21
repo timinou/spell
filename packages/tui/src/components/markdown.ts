@@ -1,7 +1,7 @@
 import { marked, type Token } from "marked";
 import type { SymbolTheme } from "../symbols";
 import { TERMINAL } from "../terminal-capabilities";
-import type { Component, Container } from "../tui";
+import type { Component, DirtyParent } from "../tui";
 import { applyBackgroundToLine, padding, replaceTabs, visibleWidth, wrapTextWithAnsi } from "../utils";
 
 /**
@@ -88,9 +88,9 @@ export class Markdown implements Component {
 	#cachedText?: string;
 	#cachedWidth?: number;
 	#cachedLines?: string[];
-	#parent?: Container;
+	#parent?: DirtyParent;
 
-	setParent(p: Container | undefined): void {
+	setParent(p: DirtyParent | undefined): void {
 		this.#parent = p;
 	}
 

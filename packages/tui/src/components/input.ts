@@ -2,7 +2,7 @@ import { BracketedPasteHandler } from "../bracketed-paste";
 import { getEditorKeybindings } from "../keybindings";
 import { extractPrintableText } from "../keys";
 import { KillRing } from "../kill-ring";
-import { type Component, Container, CURSOR_MARKER, type Focusable } from "../tui";
+import { type Component, DirtyParent, CURSOR_MARKER, type Focusable } from "../tui";
 import {
 	getSegmenter,
 	getWordNavKind,
@@ -27,7 +27,7 @@ interface InputState {
 export class Input implements Component, Focusable {
 	#value: string = "";
 	#cursor: number = 0; // Cursor position in the value
-	#parent?: Container;
+	#parent?: DirtyParent;
 	onSubmit?: (value: string) => void;
 	onEscape?: () => void;
 
@@ -44,7 +44,7 @@ export class Input implements Component, Focusable {
 	// Undo support
 	#undoStack: InputState[] = [];
 
-	setParent(p: Container | undefined): void {
+	setParent(p: DirtyParent | undefined): void {
 		this.#parent = p;
 	}
 
