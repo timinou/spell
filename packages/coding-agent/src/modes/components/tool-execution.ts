@@ -329,9 +329,11 @@ export class ToolExecutionComponent extends Container {
 				const frameCount = theme.spinnerFrames.length;
 				if (frameCount === 0) return;
 				this.#spinnerFrame = (this.#spinnerFrame + 1) % frameCount;
-				this.#renderState.spinnerFrame = this.#spinnerFrame;
+				// Re-run renderCall/renderResult with the new spinner frame so cached
+				// child components reflect the change. updateDisplay clears +
+				// re-adds via addChild — dirty propagates up the parent chain.
+				this.#updateDisplay();
 				this.#ui.requestRender();
-				// NO updateDisplay() — existing component closures read from renderState
 			}, 80);
 		} else if (!needsSpinner && this.#spinnerInterval) {
 			clearInterval(this.#spinnerInterval);

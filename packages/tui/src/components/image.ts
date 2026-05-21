@@ -5,7 +5,7 @@ import {
 	renderImage,
 	TERMINAL,
 } from "../terminal-capabilities";
-import type { Component } from "../tui";
+import type { Component, Container } from "../tui";
 
 export interface ImageTheme {
 	fallbackColor: (str: string) => string;
@@ -26,6 +26,11 @@ export class Image implements Component {
 
 	#cachedLines?: string[];
 	#cachedWidth?: number;
+	#parent?: Container;
+
+	setParent(p: Container | undefined): void {
+		this.#parent = p;
+	}
 
 	constructor(
 		base64Data: string,
@@ -44,6 +49,7 @@ export class Image implements Component {
 	invalidate(): void {
 		this.#cachedLines = undefined;
 		this.#cachedWidth = undefined;
+		this.#parent?.markDirty();
 	}
 
 	render(width: number): string[] {

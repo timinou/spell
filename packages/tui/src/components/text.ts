@@ -1,4 +1,4 @@
-import type { Component } from "../tui";
+import type { Component, Container } from "../tui";
 import { applyBackgroundToLine, padding, replaceTabs, visibleWidth, wrapTextWithAnsi } from "../utils";
 
 /**
@@ -14,6 +14,11 @@ export class Text implements Component {
 	#cachedText?: string;
 	#cachedWidth?: number;
 	#cachedLines?: string[];
+	#parent?: Container;
+
+	setParent(p: Container | undefined): void {
+		this.#parent = p;
+	}
 
 	constructor(text: string = "", paddingX: number = 1, paddingY: number = 1, customBgFn?: (text: string) => string) {
 		this.#text = text;
@@ -28,22 +33,19 @@ export class Text implements Component {
 
 	setText(text: string): void {
 		this.#text = text;
-		this.#cachedText = undefined;
-		this.#cachedWidth = undefined;
-		this.#cachedLines = undefined;
+		this.invalidate();
 	}
 
 	setCustomBgFn(customBgFn?: (text: string) => string): void {
 		this.#customBgFn = customBgFn;
-		this.#cachedText = undefined;
-		this.#cachedWidth = undefined;
-		this.#cachedLines = undefined;
+		this.invalidate();
 	}
 
 	invalidate(): void {
 		this.#cachedText = undefined;
 		this.#cachedWidth = undefined;
 		this.#cachedLines = undefined;
+		this.#parent?.markDirty();
 	}
 
 	render(width: number): string[] {

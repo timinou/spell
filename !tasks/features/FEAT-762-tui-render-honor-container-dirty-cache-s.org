@@ -1,0 +1,80 @@
+#+TITLE: TUI render: honor Container dirty cache, stop force-invalidating subtree per frame
+#+STATE: DOING
+#+SESSION_ID: 14ea14814559e822
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T15-17-13-109Z_14ea14814559e822.jsonl]]
+#+CUSTOM_ID: FEAT-762-tui-render-honor-container-dirty-cache-s
+#+EFFORT: 12h
+#+LAYER: tui
+#+PRIORITY: #A
+
+* Initial Message
+
+Spell has been using CPU like crazy recently. Why?
+
+* Initial Message
+
+Even after fixing the per-token rebuild, idle UI still re-renders the entire component tree on every =requestRender= call. The differential cache that was supposed to help doesn't engage.
+
+* Problem
+
+=TUI.#executeRender= in =packages/tui/src/tui.ts:660-672= calls =this.markTreeDirty()= unconditionally before rendering:
+
+#+begin_src
+#executeRender(): void {
+  this.#renderRequested = false;
+  this.#lastRenderTime = performance.now();
+  // Mark all Containers dirty so leaf component changes are picked up.
+  // This is O(n_containers) but avoids calling Component.invalidate()
+  // on leaf components (which can be expensive, e.g. Markdown cache clear).
+  this.markTreeDirty();
+  this.#doRender();
+}
+#+end_src
+
+The comment justifies *why* it's cheap (doesn't blow leaf caches), but the side effect is that =Container.#dirty= and =Container.#cachedLines= cache are reset on every frame. =Container.render= then takes the slow path on every call:
+
+#+begin_src
+render(width: number): string[] {
+  if (!this.#dirty && this.#cachedWidth === width) {
+    return this.#cachedLines;  // never hits — #dirty was forced true
+  }
+  // ...full child walk + string concat...
+}
+#+end_src
+
+Result: idle frame produces a full UI re-render → line-diff → typically detects no changes → does nothing. The diff cost is paid every time; the cache is dead code.
+
+* Goal
+
+1. =requestRender= with no actual component mutation → =#doRender= early-returns or runs in <0.1ms.
+2. Container =#cachedLines= hit rate ≥ 95% during a typical session.
+3. The leaf-cache concern from the existing comment stays addressed: leaf =Markdown= caches are untouched unless the leaf's own =setText= invalidates them.
+
+* Fix
+
+1. Delete =this.markTreeDirty()= from =#executeRender=.
+2. Make =Component.invalidate= and =Container.markDirty= propagate the dirty flag *up* the parent chain so ancestor =#cachedLines= caches are invalidated when any descendant changes. The =#parent= pointer exists in =Container=; the propagation is missing.
+3. In =#doRender=: before string concat, check if root container has any descendant with =#dirty=. If not, set =newLines = this.#previousLines= and skip the diff entirely (still update =#hardwareCursorRow= if needed).
+4. Audit callers of =Component.invalidate= in =packages/coding-agent/src/modes/components/= to confirm parent propagation is correct.
+
+* Acceptance
+
+- New test =packages/tui/test/render-coalescing.test.ts=: register a TUI tree with N=20 containers, call =requestRender= 1000× with no state changes, assert =Container.render(width)= invoked ≤ 1× total at root.
+- Existing =packages/tui/test/render-regressions.test.ts= and =render-scheduling.test.ts= stay green.
+- Existing =container-dirty.test.ts= updated to verify upward propagation.
+- Manual: cursor blink with no other activity → ≤2 renders/second total (today: 60/second due to OSC11 + spinner + heartbeat coalesced).
+
+* Sequencing
+
+Land *after* the assistant-message reconciliation feat. Container dirty semantics only make sense once child mutations are surgical, not wholesale.
+
+* Non-goals
+
+- React-style virtual-DOM diffing — keep the existing line-diff for actual changes.
+- Per-leaf dirty propagation to siblings.
+- Width-change handling — already correct, do not touch.
+
+* Related
+
+- Part of =PLAN-XXX-tui-responsiveness=.
+- Builds on recent render-scheduling work: =68ae5b9c0= (input starvation), =ff544f38f= (force-path renderRequested reset).

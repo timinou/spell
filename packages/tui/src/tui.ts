@@ -174,9 +174,14 @@ export interface OverlayHandle {
 export class Container implements Component {
 	children: Component[] = [];
 	#dirty = true;
-	#cachedLines: string[] = [];
-	#cachedWidth = -1;
+	#cachedLines?: string[];
+	#cachedWidth?: number;
 	#parent?: Container;
+
+	setParent(p: Container | undefined): void {
+		if (p === this) throw new Error("Container cannot be its own parent");
+		this.#parent = p;
+	}
 
 	markDirty(): void {
 		if (this.#dirty) return;
@@ -184,23 +189,41 @@ export class Container implements Component {
 		this.#parent?.markDirty();
 	}
 
-	/** Mark this Container and all descendant Containers dirty.
-	 *  Unlike invalidate(), does NOT call Component.invalidate() on leaf
-	 *  components (avoids expensive cache clears like Markdown). */
-	markTreeDirty(): void {
+	isDirty(): boolean {
+		return this.#dirty;
+	}
+
+	/** Mark this Container and every descendant Container dirty WITHOUT
+	 *  invalidating leaf-component caches. Used by TUI.requestRender to
+	 *  defeat per-Container cache without losing the leaf-level cache wins
+	 *  (Markdown.#cachedText etc.). Leaves keep their own caches; if their
+	 *  state actually changed they invalidate themselves via their own setters. */
+	markContainersDirty(): void {
+		this.#cachedLines = undefined;
+		this.#cachedWidth = undefined;
 		this.#dirty = true;
+		for (const child of this.children) {
+			if (child instanceof Container) child.markContainersDirty();
+		}
+	}
+
+	/** Mark this Container and all descendant Containers dirty.
+	 *  Unlike invalidate(), this recursively walks the subtree and
+	 *  also calls Component.invalidate() on leaf components. */
+	markTreeDirty(): void {
+		this.invalidate();
 		for (const child of this.children) {
 			if (child instanceof Container) {
 				child.markTreeDirty();
+			} else {
+				child.invalidate?.();
 			}
 		}
 	}
 
 	addChild(component: Component): void {
 		this.children.push(component);
-		if (component instanceof Container) {
-			component.#parent = this;
-		}
+		component.setParent?.(this);
 		this.markDirty();
 	}
 
@@ -208,37 +231,33 @@ export class Container implements Component {
 		const index = this.children.indexOf(component);
 		if (index !== -1) {
 			this.children.splice(index, 1);
-			if (component instanceof Container && component.#parent === this) {
-				component.#parent = undefined;
-			}
+			component.setParent?.(undefined);
 			this.markDirty();
 		}
 	}
 
 	clear(): void {
 		for (const child of this.children) {
-			if (child instanceof Container && child.#parent === this) {
-				child.#parent = undefined;
-			}
+			child.setParent?.(undefined);
 		}
 		this.children = [];
 		this.markDirty();
 	}
 
 	invalidate(): void {
+		this.#cachedLines = undefined;
+		this.#cachedWidth = undefined;
 		this.markDirty();
-		for (const child of this.children) {
-			child.invalidate?.();
-		}
 	}
 
 	render(width: number): string[] {
 		width = Math.max(1, width);
-		if (!this.#dirty && this.#cachedWidth === width) {
+		if (!this.#dirty && this.#cachedWidth === width && this.#cachedLines) {
 			return this.#cachedLines;
 		}
+		const snapshot = [...this.children];
 		const lines: string[] = [];
-		for (const child of this.children) {
+		for (const child of snapshot) {
 			lines.push(...child.render(width));
 		}
 		this.#cachedLines = lines;
@@ -279,6 +298,7 @@ export class TUI extends Container {
 	#maxLinesRendered = 0; // High-water line count used for clear-on-shrink policy
 	#fullRedrawCount = 0;
 	#stopped = false;
+	#overlayChanged = false;
 
 	// Overlay stack for modal components rendered on top of base content
 	overlayStack: {
@@ -359,6 +379,7 @@ export class TUI extends Container {
 			this.setFocus(component);
 		}
 		this.terminal.hideCursor();
+		this.#overlayChanged = true;
 		this.requestRender();
 
 		// Return handle for controlling this overlay
@@ -373,6 +394,7 @@ export class TUI extends Container {
 						this.setFocus(topVisible?.component ?? entry.preFocus);
 					}
 					if (this.overlayStack.length === 0) this.terminal.hideCursor();
+					this.#overlayChanged = true;
 					this.requestRender();
 				}
 			},
@@ -392,6 +414,7 @@ export class TUI extends Container {
 						this.setFocus(component);
 					}
 				}
+				this.#overlayChanged = true;
 				this.requestRender();
 			},
 			isHidden: () => entry.hidden,
@@ -406,6 +429,7 @@ export class TUI extends Container {
 		const topVisible = this.#getTopmostFocusableOverlay();
 		this.setFocus(topVisible?.component ?? overlay.preFocus);
 		if (this.overlayStack.length === 0) this.terminal.hideCursor();
+		this.#overlayChanged = true;
 		this.requestRender();
 	}
 
@@ -623,6 +647,7 @@ export class TUI extends Container {
 	}
 
 	requestRender(force = false): void {
+
 		if (force) {
 			this.#previousLines = [];
 			this.#previousWidth = -1; // -1 triggers widthChanged, forcing a full clear
@@ -663,10 +688,6 @@ export class TUI extends Container {
 	#executeRender(): void {
 		this.#renderRequested = false;
 		this.#lastRenderTime = performance.now();
-		// Mark all Containers dirty so leaf component changes are picked up.
-		// This is O(n_containers) but avoids calling Component.invalidate()
-		// on leaf components (which can be expensive, e.g. Markdown cache clear).
-		this.markTreeDirty();
 		this.#doRender();
 	}
 
@@ -1085,6 +1106,13 @@ export class TUI extends Container {
 		if (this.#stopped) return;
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
+
+		// Early exit: nothing dirty, width unchanged, not first render, no overlay change
+		const shouldEarlyExit = !this.isDirty() && width === this.#previousWidth && this.#previousLines.length > 0 && !this.#overlayChanged;
+		if (shouldEarlyExit) {
+			return;
+		}
+		this.#overlayChanged = false;
 		let viewportTop = Math.max(0, this.#maxLinesRendered - height);
 		let prevViewportTop = this.#viewportTopRow;
 		let hardwareCursorRow = this.#hardwareCursorRow;
