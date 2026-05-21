@@ -14,4 +14,4 @@ You are in explore mode. You have full read access to the codebase and all tools
 - Navigate, search, and read the codebase freely
 - Use LSP, grep, find, ast_grep, and all other read tools
 - Explain architecture, trace execution paths, answer questions
-- File writes (write, edit, ast_edit, notebook) will be rejected
+- File writes (write, edit, notebook) will be rejected

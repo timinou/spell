@@ -395,13 +395,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		) {
 			requestedTools.push("ast_grep");
 		}
-		if (
-			requestedTools.includes("edit") &&
-			!requestedTools.includes("ast_edit") &&
-			session.settings.get("astEdit.enabled")
-		) {
-			requestedTools.push("ast_edit");
-		}
 	}
 	const allTools: Record<string, ToolFactory> = {
 		...BUILTIN_TOOLS,
@@ -420,7 +413,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "find") return session.settings.get("find.enabled");
 		if (name === "grep") return session.settings.get("grep.enabled");
 		if (name === "ast_grep") return session.settings.get("astGrep.enabled");
-		if (name === "ast_edit") return session.settings.get("astEdit.enabled");
 		if (name === "render_mermaid") return session.settings.get("renderMermaid.enabled");
 
 		if (name === "inspect_image") return session.settings.get("inspect_image.enabled");
