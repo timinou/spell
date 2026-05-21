@@ -4072,6 +4072,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "pi-knowledge-core"
+version = "13.12.8"
+dependencies = [
+ "bincode",
+ "chrono",
+ "petgraph",
+ "pi-workspace-cache",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "pi-natives"
 version = "13.12.8"
 dependencies = [

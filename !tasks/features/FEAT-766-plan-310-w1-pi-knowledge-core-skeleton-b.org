@@ -1,0 +1,52 @@
+#+TITLE: PLAN-310 W1 — pi-knowledge-core skeleton (bm25, graph, fusion, cache)
+#+STATE: DOING
+#+SESSION_ID: 14ea0d7add095343
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
+#+CUSTOM_ID: FEAT-766-plan-310-w1-pi-knowledge-core-skeleton-b
+#+LAYER: natives
+#+PARENT: PLAN-310-pi-knowledge-core-convergence-delete-tan
+#+PRIORITY: #A
+
+* Initial Message
+
+Bro tantivy is super super overkill; what is its purpose in this codebase? is it actually being used in spell sessions? what is its
+ promise, and can it be fulfilled more leanly in an environment in which many (tens) of sessions are running on the same laptop, across
+ workspaces? the ONLY case where you're allowed to have tantivy is if it provides a REAL advantage, and in that case, memory and CPU
+ usage needs to be taken care of, and the agent interface and tools need to reflect the promise actually delivered.
+
+ This is an investigation session for now. Gather the information, learn online, and come back to me with real data
+
+Look at the org tool from first principle, as an agentic memory+PRD system (look up online). org recall isn't used but maybe the plan is
+ to actually either:
+ have a simpler FTS that is plugged into the pi-org-* machinery that enables the kind of graph+FTS that Surreal was enabling, by
+ bascially keeping the org files themselves as sources of truth, and pooling hte resources e.g. with a user-level daemon?
+
+ Think from first principles. I want lower memory usage and actually used tools out of this. Just because it wasn't used in the past
+ doesn't mean that it should be removed. This has a lot of potential, especially when we start leveraging more of the org syntax, to have
+ a clean model out of this. Right now it's opaque and unfinished; i'd like something powerful, ergonomic for the agent, and where the
+ text file is the source of truth. Thanks.
+
+ push back and ask me questions
+
+Wave 1 of PLAN-310. New crate =pi-knowledge-core= with the four shared modules. No consumer changes. Crate compiles + tests pass in isolation.
+
+* Scope (6 sub-tasks)
+
+- T1.1 Cargo scaffold + lib.rs re-exports (depended on by all others)
+- T1.2 =bm25.rs= \u2014 extracted from =pi-code-graph::search::SearchIndex=, made generic over =Document=
+- T1.3 =graph.rs= \u2014 petgraph wrapper with unified =EdgeKind=
+- T1.4 =fusion.rs= \u2014 RRF + recency/backlinks/confidence
+- T1.5 =cache.rs= \u2014 re-export =pi-workspace-cache=
+- T1.6 Unit tests at leaf level (95% line coverage on bm25/graph/fusion)
+
+* Gate
+
+=cargo test -p pi-knowledge-core= green; =cargo check --workspace= green (no consumer change yet).
+
+* Non-goals
+
+- No usearch yet (W2)
+- No bge-m3 retarget yet (W2.5)
+- No consumer rewiring (W4, W5)
+- No notify ingestion (W5)
+- No embedder client (W3)
