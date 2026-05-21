@@ -194,7 +194,22 @@ export async function translateFinding(finding: Finding, now: Date = new Date())
 				effectiveParsed = { kind: "raw", data: extracted };
 			}
 		}
-		const incoming = await coerceTopLevel(finding.topLevelKey, effectiveParsed, finding.source);
+		let incoming = await coerceTopLevel(finding.topLevelKey, effectiveParsed, finding.source);
+		// Schema-shape normalization for known top-level keys with legacy
+		// permissive shapes. Applied AFTER extraction so the normalizer sees
+		// the host map directly, not the wrapping {hosts:{...}} record.
+		// Without this, legacy permissive forms (port as string, compat as
+		// 'yes', `key` alias) survive into KDL but are then dropped by the
+		// readers — a one-way silent data loss since the legacy file has
+		// already been renamed to .bak.
+		if (
+			finding.topLevelKey === "ssh.hosts" &&
+			incoming !== undefined &&
+			!Array.isArray(incoming) &&
+			typeof incoming === "object"
+		) {
+			incoming = normalizeLegacySshHosts(incoming as Record<string, unknown>);
+		}
 		if (incoming !== undefined) {
 			const existing = await readExistingTopLevel(finding.dest, finding.topLevelKey);
 			const merged = mergeTopLevelValue(finding.topLevelKey, existing, incoming);
@@ -244,7 +259,7 @@ async function coerceTopLevel(
 	// Known mergeable-array keys.
 	const ARRAY_KEYS = new Set(["secrets"]);
 	// Known mergeable-record keys (object whose properties dedupe by key).
-	const RECORD_KEYS = new Set(["mcp.servers"]);
+	const RECORD_KEYS = new Set(["mcp.servers", "ssh.hosts"]);
 
 	if (ARRAY_KEYS.has(key)) {
 		if (!Array.isArray(data)) {
@@ -337,7 +352,7 @@ function mergeTopLevelValue(
 		return result;
 	}
 
-	if (key === "mcp.servers" && !Array.isArray(existing) && !Array.isArray(incoming)) {
+	if ((key === "mcp.servers" || key === "ssh.hosts") && !Array.isArray(existing) && !Array.isArray(incoming)) {
 		// Manual edits to spell.kdl take precedence over re-migrated entries.
 		return { ...(incoming as Record<string, unknown>), ...(existing as Record<string, unknown>) };
 	}
@@ -364,5 +379,63 @@ function mergeTopLevelValue(
 	// from a prior schema). The reader will warn if the resulting KDL is
 	// internally inconsistent.
 	return incoming;
+}
+
+
+/**
+ * Normalize legacy ssh.json host entries into the canonical schema shape
+ * before persisting to spell.kdl. Without this, permissive forms (port as
+ * string, compat as 'yes'/'no', `key` alias) survive the round-trip into
+ * KDL but are then dropped by `readSshHosts`, since the legacy `ssh.json`
+ * has already been renamed to .bak — a one-way silent data loss.
+ */
+function normalizeLegacySshHosts(hosts: Record<string, unknown>): Record<string, unknown> {
+	const result: Record<string, unknown> = {};
+	for (const [name, raw] of Object.entries(hosts)) {
+		if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+			result[name] = raw;
+			continue;
+		}
+		const entry = raw as Record<string, unknown>;
+		const out: Record<string, unknown> = {};
+
+		// host / hostname
+		if (typeof entry.host === "string") out.host = entry.host;
+		else if (typeof entry.hostname === "string") out.host = entry.hostname;
+
+		// username / user
+		if (typeof entry.username === "string") out.username = entry.username;
+		else if (typeof entry.user === "string") out.username = entry.user;
+
+		// port: number | numeric string
+		if (entry.port !== undefined && entry.port !== null) {
+			if (typeof entry.port === "number" && Number.isFinite(entry.port)) {
+				out.port = entry.port;
+			} else if (typeof entry.port === "string") {
+				const n = Number.parseInt(entry.port, 10);
+				if (Number.isFinite(n)) out.port = n;
+			}
+		}
+
+		// compat: boolean | yes/no/true/false string | 0/1
+		if (entry.compat !== undefined && entry.compat !== null) {
+			if (typeof entry.compat === "boolean") out.compat = entry.compat;
+			else if (typeof entry.compat === "string") {
+				const v = entry.compat.trim().toLowerCase();
+				if (v === "true" || v === "1" || v === "yes") out.compat = true;
+				else if (v === "false" || v === "0" || v === "no") out.compat = false;
+			}
+		}
+
+		// keyPath alias: legacy ssh.json accepted both `keyPath` and `key`
+		if (typeof entry.keyPath === "string") out.keyPath = entry.keyPath;
+		else if (typeof entry.key === "string") out.keyPath = entry.key;
+
+		// description (pass-through)
+		if (typeof entry.description === "string") out.description = entry.description;
+
+		result[name] = out;
+	}
+	return result;
 }
 

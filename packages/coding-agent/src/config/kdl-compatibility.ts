@@ -461,3 +461,79 @@ export function writeMcpServers(node: Node, value: Record<string, McpServerKdlEn
 	node.children = children;
 }
 
+
+// =============================================================================
+// ssh.hosts — SSH host config map
+// =============================================================================
+//
+// On disk:
+//
+//   ssh {
+//     target "prod" hostname="prod.example.com" username="deploy" port=22 \
+//                   key-path="~/.ssh/prod" description="Production" compat=true
+//     target "staging" hostname="staging.example.com" username="deploy"
+//   }
+//
+// In memory: Record<targetName, SshHostKdlEntry>.
+
+export interface SshHostKdlEntry {
+	host?: string;
+	username?: string;
+	port?: number;
+	keyPath?: string;
+	compat?: boolean;
+	description?: string;
+}
+
+export function readSshHosts(node: Node): KdlCompatResult<Record<string, SshHostKdlEntry>> {
+	const value: Record<string, SshHostKdlEntry> = {};
+	const warnings: KdlCompatWarning[] = [];
+	for (const child of getChildNodes(node)) {
+		if (child.getName() !== "target") {
+			warnings.push({
+				path: `ssh.${child.getName()}`,
+				message: "unknown node inside `ssh` block ignored (expected `target`)",
+			});
+			continue;
+		}
+		const name = getStringArgument(child);
+		if (!name) {
+			warnings.push({ path: "ssh.target", message: "missing target name; skipping" });
+			continue;
+		}
+		const entry: SshHostKdlEntry = {};
+		const hostname = child.getProperty("hostname") ?? child.getProperty("host");
+		if (typeof hostname === "string") entry.host = hostname;
+		const username = child.getProperty("username") ?? child.getProperty("user");
+		if (typeof username === "string") entry.username = username;
+		const port = child.getProperty("port");
+		if (typeof port === "number" && Number.isFinite(port)) entry.port = port;
+		const keyPath = child.getProperty("key-path") ?? child.getProperty("keyPath");
+		if (typeof keyPath === "string") entry.keyPath = keyPath;
+		const compat = child.getProperty("compat");
+		if (typeof compat === "boolean") entry.compat = compat;
+		const description = child.getProperty("description");
+		if (typeof description === "string") entry.description = description;
+		value[name] = entry;
+	}
+	return { value, warnings };
+}
+
+export function writeSshHosts(node: Node, value: Record<string, SshHostKdlEntry>): void {
+	clearNodeEntries(node);
+	const children = new Document([]);
+	for (const [name, entry] of Object.entries(value)) {
+		if (!entry || typeof entry !== "object") continue;
+		const target = NodeClass.create("target");
+		target.addArgument(name);
+		if (entry.host !== undefined) target.setProperty("hostname", entry.host);
+		if (entry.username !== undefined) target.setProperty("username", entry.username);
+		if (entry.port !== undefined) target.setProperty("port", entry.port);
+		if (entry.keyPath !== undefined) target.setProperty("key-path", entry.keyPath);
+		if (entry.compat !== undefined) target.setProperty("compat", entry.compat);
+		if (entry.description !== undefined) target.setProperty("description", entry.description);
+		children.appendNode(target);
+	}
+	node.children = children;
+}
+

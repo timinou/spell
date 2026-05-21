@@ -56,6 +56,9 @@ export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> =
 
 	// ── MCP servers (block-only; see kdl-compatibility.writeMcpServers) ─────
 	"mcp.servers": { block: "mcp", nodePath: "_self", accessor: "argument" },
+
+	// ── SSH hosts (block-only; see kdl-compatibility.writeSshHosts) ─────────
+	"ssh.hosts": { block: "ssh", nodePath: "_self", accessor: "argument" },
 	extensions: { block: "extensibility", nodePath: "extensions", accessor: "argument" },
 	disabledExtensions: { block: "extensibility", nodePath: "disabled-extensions", accessor: "argument" },
 	disabledProviders: { block: "extensibility", nodePath: "disabled-providers", accessor: "argument" },

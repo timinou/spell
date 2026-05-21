@@ -8,10 +8,12 @@ import {
 	writeAllowedFolders,
 	writeMcpServers,
 	writeSecrets,
+	writeSshHosts,
 	writeStatusLineSegmentOptions,
 	writeTreeStringRecord,
 	type McpServerKdlEntry,
 	type SecretsKdlEntry,
+	type SshHostKdlEntry,
 } from "./kdl-compatibility";
 import { findOrCreateChildNode, findOrCreateDocumentNode, setArgument } from "./kdl-helpers";
 import { getKdlMapping } from "./kdl-settings-map";
@@ -62,6 +64,11 @@ function applySetting(doc: Document, path: string, value: unknown): void {
 
 	if (path === "mcp.servers") {
 		writeMcpServers(current, value as Record<string, McpServerKdlEntry>);
+		return;
+	}
+
+	if (path === "ssh.hosts") {
+		writeSshHosts(current, value as Record<string, SshHostKdlEntry>);
 		return;
 	}
 
