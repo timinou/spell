@@ -167,7 +167,7 @@ fn scope_field() -> FieldSchema {
 		name:        "scope",
 		type_name:   FieldType::SymScope,
 		required:    false,
-		description: "Replacement scope: whole (default), body, or target",
+		description: "Replacement scope: whole (default), body (content MUST include outer braces { ... }), or target",
 	}
 }
 

@@ -135,10 +135,12 @@ describe("Pipeline 2: insert a guard clause at top of function", () => {
 					action: {
 						kind: "symbolReplace",
 						scope: "body",
-						content: `if (!token) {
+						content: `{
+  if (!token) {
     throw new Error("Token required");
   }
-  return token.length > 0;`,
+  return token.length > 0;
+}`,
 					},
 				},
 			],
