@@ -1,0 +1,48 @@
+#+TITLE: Four-tier settings: session/local/project/user with XDG user path
+#+STATE: ITEM
+#+SESSION_ID: 14ea0e0f03e26235
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-49-03-247Z_14ea0e0f03e26235.jsonl]]
+#+CUSTOM_ID: FEAT-752-four-tier-settings-session-local-project
+
+* Initial Message
+
+the settings thing doesn't work. I'd like a simple toggle on top for user/project/session. right now, when I do settings, it just shows [user] ... and keeps printing it, fucking up the layout of everything. I also don't see settings persisted when they need to be added to the kdl (please reproduce the error)
+
+investigate.
+
+* Goal
+
+Expand =WriteTier= from 3 to 4 tiers and decouple the user config file from =agentDir=.
+
+| tier | path | role |
+|------+------+------|
+| session | in-memory | volatile |
+| local | =<cwd>/.local/spell.kdl= | gitignored personal override |
+| project | =<cwd>/spell.kdl= | committed team config |
+| user | =~/.config/spell/spell.kdl= | XDG-style global default |
+
+Read precedence: session > local > project > user. Last write per key wins.
+
+* Why
+
+Today's "project" tier is a single file. Users have no way to keep machine-specific overrides separate from team config without manual git ignore tricks. The user KDL also lives at =~/.spell/spell.kdl= (state-coupled), polluting a directory that otherwise holds runtime state (sessions, logs, plugins).
+
+* Implementation surface
+
+- =packages/utils/src/dirs.ts= — new =getUserKdlPath()= returning =~/.config/spell/spell.kdl=
+- =packages/coding-agent/src/config/settings.ts= — track 3 file paths + memory; merge in precedence order
+- =packages/coding-agent/src/config/types.ts= — =WriteTier= adds ="local"=
+- =packages/coding-agent/src/modes/components/settings-selector.ts= — 4-segment tier pill, Ctrl+T cycles 4-way
+- =packages/coding-agent/src/modes/controllers/selector-controller.ts= — already tier-agnostic after BUG-379 fix
+
+* Acceptance
+
+- four files can coexist; reading produces deterministic precedence
+- writing via =/settings= UI lands in the selected tier's file (verified by test)
+- =~/.config/spell/= directory created on first user-tier write
+- =./.local/= directory created on first local-tier write
+- Ctrl+T in =/settings= cycles session → local → project → user → session
+
+* Tracking
+
+Subsumed by =FULL_KDL_SPELL= plan, WAVE 1.

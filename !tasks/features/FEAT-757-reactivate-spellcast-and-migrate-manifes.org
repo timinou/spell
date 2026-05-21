@@ -1,0 +1,30 @@
+#+TITLE: Reactivate spellcast and migrate manifest to KDL
+#+STATE: ITEM
+#+SESSION_ID: 14ea0e0f03e26235
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-49-03-247Z_14ea0e0f03e26235.jsonl]]
+#+CUSTOM_ID: FEAT-757-reactivate-spellcast-and-migrate-manifes
+
+* Initial Message
+
+the settings thing doesn't work. I'd like a simple toggle on top for user/project/session. right now, when I do settings, it just shows [user] ... and keeps printing it, fucking up the layout of everything. I also don't see settings persisted when they need to be added to the kdl (please reproduce the error)
+
+investigate.
+
+* Goal
+
+Spellcast (shareable spell packages) is currently inactive and its manifest format is the last Spell-owned YAML format outside the migration scope. Separate workstream from =FULL_KDL_SPELL=.
+
+* Scope
+
+- Decide whether spellcast stays in-tree
+- If yes: define =spellcast.kdl= manifest schema
+- Reactivate publish/install flows
+- Update =packages/coding-agent/src/spellcast/manifest.ts= to KDL parser
+
+* Why separated from FULL_KDL_SPELL
+
+The plan covers config; spellcast needs reactivation work first. Marker-only changes in =FULL_KDL_SPELL= WAVE 5 add =@deprecated= headers so contributors stop adding to spellcast until this item is picked up.
+
+* Tracking
+
+Tracked separately. =FULL_KDL_SPELL= WAVE 5 only attaches the deprecation marker.

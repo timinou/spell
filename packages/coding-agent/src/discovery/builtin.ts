@@ -6,7 +6,7 @@
 
 import * as path from "node:path";
 import { logger, tryParseJson } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+
 import { registerProvider } from "../capability";
 import { type ContextFile, contextFileCapability } from "../capability/context-file";
 import { type Extension, type ExtensionManifest, extensionCapability } from "../capability/extension";
@@ -18,7 +18,7 @@ import { type MCPServer, mcpCapability } from "../capability/mcp";
 import { type ModeConfig, type ModeConfigFrontmatter, modeConfigCapability } from "../capability/mode";
 import { type Prompt, promptCapability } from "../capability/prompt";
 import { type Rule, ruleCapability } from "../capability/rule";
-import { type Settings, settingsCapability } from "../capability/settings";
+
 import { type Skill, skillCapability } from "../capability/skill";
 import { type SlashCommand, slashCommandCapability } from "../capability/slash-command";
 import { type SystemPrompt, systemPromptCapability } from "../capability/system-prompt";
@@ -762,61 +762,14 @@ registerProvider<CustomTool>(toolCapability.id, {
 });
 
 // Settings
-async function loadSettings(ctx: LoadContext): Promise<LoadResult<Settings>> {
-	const items: Settings[] = [];
-	const warnings: string[] = [];
-
-	for (const { dir, level } of await getConfigDirs(ctx)) {
-		// JSON: settings.json in config dir
-		const settingsPath = path.join(dir, "settings.json");
-		const jsonContent = await readFile(settingsPath);
-		if (jsonContent) {
-			const data = tryParseJson<Record<string, unknown>>(jsonContent);
-			if (!data) {
-				warnings.push(`Failed to parse ${settingsPath}`);
-			} else {
-				items.push({
-					path: settingsPath,
-					data,
-					level,
-					_source: createSourceMeta(PROVIDER_ID, settingsPath, level),
-				});
-			}
-		}
-
-		// YAML: agent/config.yml in config dir (project-level only;
-		// user-level YAML is loaded directly by Settings.#loadYaml)
-		if (level === "project") {
-			const yamlPath = path.join(dir, "agent", "config.yml");
-			const yamlContent = await readFile(yamlPath);
-			if (yamlContent) {
-				try {
-					const parsed = YAML.parse(yamlContent);
-					if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-						items.push({
-							path: yamlPath,
-							data: parsed as Record<string, unknown>,
-							level,
-							_source: createSourceMeta(PROVIDER_ID, yamlPath, level),
-						});
-					}
-				} catch {
-					warnings.push(`Failed to parse ${yamlPath}`);
-				}
-			}
-		}
-	}
-
-	return { items, warnings };
-}
-
-registerProvider<Settings>(settingsCapability.id, {
-	id: PROVIDER_ID,
-	displayName: DISPLAY_NAME,
-	description: DESCRIPTION,
-	priority: PRIORITY,
-	load: loadSettings,
-});
+//
+// As of the KDL cutover, Spell-owned settings are read directly by the
+// `Settings` class from spell.kdl files. The native builtin provider no
+// longer emits items for the `settings` capability — foreign-tool providers
+// (claude/codex/gemini/cursor/opencode) keep their own registrations against
+// the same capability ID for their respective formats.
+//
+// Closes BUG-384 (settings.json overlay) and BUG-386 (config.yml overlay).
 
 // Context Files (AGENTS.md)
 async function loadContextFiles(ctx: LoadContext): Promise<LoadResult<ContextFile>> {

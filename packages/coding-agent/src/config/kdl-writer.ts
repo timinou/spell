@@ -1,3 +1,5 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { Document, format, type Node, parse } from "@bgotink/kdl";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 
@@ -68,6 +70,12 @@ export function applySettingsToKdl(doc: Document, changes: Map<string, unknown>)
 }
 
 export async function writeKdlSettings(filePath: string, changes: Map<string, unknown>): Promise<void> {
+	// Ensure parent directory exists. First-write on a fresh install targets a
+	// path whose parent may not exist (e.g. ~/.config/spell/ on a clean home).
+	// withFileLock uses fs.mkdir(lockPath) without recursion — it ENOENTs if the
+	// parent is missing. Materialize the directory up-front.
+	await fs.mkdir(path.dirname(filePath), { recursive: true });
+
 	await withFileLock(filePath, async () => {
 		let doc: Document;
 		try {

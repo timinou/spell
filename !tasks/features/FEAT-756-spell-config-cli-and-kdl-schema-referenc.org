@@ -1,0 +1,37 @@
+#+TITLE: spell config CLI and KDL schema reference
+#+STATE: ITEM
+#+SESSION_ID: 14ea0e0f03e26235
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-49-03-247Z_14ea0e0f03e26235.jsonl]]
+#+CUSTOM_ID: FEAT-756-spell-config-cli-and-kdl-schema-referenc
+
+* Initial Message
+
+the settings thing doesn't work. I'd like a simple toggle on top for user/project/session. right now, when I do settings, it just shows [user] ... and keeps printing it, fucking up the layout of everything. I also don't see settings persisted when they need to be added to the kdl (please reproduce the error)
+
+investigate.
+
+* Goal
+
+Operational tooling for the full-KDL configuration:
+
+** =spell config show [--tier local|project|user]=
+Renders the resolved merged KDL or the single-tier view. Useful for debugging precedence.
+
+** =spell config set <path> <value> [--tier]=
+Typed write, validates against schema, persists to the requested tier file.
+
+** =spell config doctor=
+Scans known locations for orphan =*.yml=, =settings.json=, or stray =spell.kdl= files outside the canonical 3-tier set. Reports findings. Used post-migration to confirm clean state.
+
+** KDL schema reference
+Generate =kdl-schema.kdl= at build time from =settings-schema.ts= (SoT). Expose via =pi://spell/spell-kdl-schema=. Drives editor completion (VS Code KDL extension consumes it) and powers =/settings= header link to "open in editor".
+
+* Surface
+
+- =packages/coding-agent/src/cli/config-cli.ts= new
+- =packages/coding-agent/src/config/schema-export.ts= new
+- =packages/coding-agent/src/internal-urls/spell-protocol.ts= add schema URL handler
+
+* Tracking
+
+Subsumed by =FULL_KDL_SPELL= plan, WAVE 4.

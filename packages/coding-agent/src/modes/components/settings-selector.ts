@@ -179,6 +179,7 @@ export interface SettingsCallbacks {
  */
 export class SettingsSelectorComponent extends Container {
 	#tabBar: TabBar;
+	#tierIndicator: Text | null = null;
 	#currentList: SettingsList | null = null;
 	#currentSubmenu: Container | null = null;
 	#pluginComponent: PluginSettingsComponent | null = null;
@@ -203,7 +204,12 @@ export class SettingsSelectorComponent extends Container {
 		};
 		this.addChild(this.#tabBar);
 
-		// Spacer after tab bar
+		// Persistent tier toggle at top (single instance, updated via #updateTierIndicator)
+		this.#tierIndicator = new Text("", 0, 0);
+		this.addChild(this.#tierIndicator);
+		this.#updateTierIndicator();
+
+		// Spacer after tier indicator
 		this.addChild(new Spacer(1));
 
 		// Initialize with first tab
@@ -439,12 +445,6 @@ export class SettingsSelectorComponent extends Container {
 			this.addChild(this.#statusPreviewContainer);
 		}
 
-		// Tier indicator: shows where settings will be saved
-		const tierLabel = `  Tier: ${this.#currentTier === "user" ? "[user] ~/.spell/spell.kdl" : this.#currentTier === "project" ? "[project] ./spell.kdl" : "[session] in-memory only"}`;
-		const tierColors: Record<WriteTier, ThemeColor> = { user: "accent", project: "success", session: "warning" };
-		this.addChild(new Text(theme.fg(tierColors[this.#currentTier], tierLabel), 0, 0));
-		this.addChild(new Spacer(1));
-
 		this.#currentList = new SettingsList(
 			items,
 			10,
@@ -486,8 +486,44 @@ export class SettingsSelectorComponent extends Container {
 	}
 
 	/**
-	 * Trigger status line preview with current settings.
+	 * Update the persistent tier toggle indicator. Renders as a segmented
+	 * pill showing all four tiers with the active one highlighted. No
+	 * children are added or removed — only the Text content changes.
+	 *
+	 * Tiers, in declaration order (display order):
+	 *   session  in-memory                       volatile
+	 *   local    <cwd>/.local/spell.kdl          gitignored, machine
+	 *   project  <cwd>/spell.kdl                 committed, team
+	 *   user     ~/.config/spell/spell.kdl       XDG-style global
 	 */
+	#updateTierIndicator(): void {
+		if (!this.#tierIndicator) return;
+
+		const tiers: Array<{ id: WriteTier; label: string; target: string }> = [
+			{ id: "session", label: "session", target: "in-memory only" },
+			{ id: "local", label: "local", target: "./.local/spell.kdl" },
+			{ id: "project", label: "project", target: "./spell.kdl" },
+			{ id: "user", label: "user", target: "~/.config/spell/spell.kdl" },
+		];
+		const active = tiers.find(t => t.id === this.#currentTier) ?? tiers[0];
+		const tierColors: Record<WriteTier, ThemeColor> = {
+			session: "warning",
+			local: "borderAccent",
+			project: "success",
+			user: "accent",
+		};
+
+		const segments = tiers
+			.map(t =>
+				t.id === this.#currentTier
+					? theme.bold(theme.fg(tierColors[t.id], `[${t.label}]`))
+					: theme.fg("dim", ` ${t.label} `),
+			)
+			.join(" ");
+
+		const hint = theme.fg("dim", `\u2192 ${active.target}    (\u2303T to cycle)`);
+		this.#tierIndicator.setText(`  Save to: ${segments}   ${hint}`);
+	}
 	#triggerStatusLinePreview(): void {
 		const statusLineSettings: StatusLinePreviewSettings = {
 			preset: settings.get("statusLine.preset"),
@@ -522,12 +558,12 @@ export class SettingsSelectorComponent extends Container {
 	}
 
 	handleInput(data: string): void {
-		// Ctrl+T cycles the write tier (user → project → session → user)
+		// Ctrl+T cycles the write tier: session → local → project → user → session
 		if (matchesKey(data, "ctrl+t")) {
-			this.#currentTier =
-				this.#currentTier === "user" ? "project" : this.#currentTier === "project" ? "session" : "user";
-			// Refresh the list to update the tier indicator
-			this.#switchToTab(this.#currentTabId);
+			const CYCLE: WriteTier[] = ["session", "local", "project", "user"];
+			const idx = CYCLE.indexOf(this.#currentTier);
+			this.#currentTier = CYCLE[(idx + 1) % CYCLE.length];
+			this.#updateTierIndicator();
 			return;
 		}
 

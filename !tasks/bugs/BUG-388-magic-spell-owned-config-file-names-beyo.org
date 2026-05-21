@@ -1,0 +1,40 @@
+#+TITLE: Magic Spell-owned config file names beyond spell.kdl
+#+STATE: ITEM
+#+SESSION_ID: 14ea0e0f03e26235
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-49-03-247Z_14ea0e0f03e26235.jsonl]]
+#+CUSTOM_ID: BUG-388-magic-spell-owned-config-file-names-beyo
+
+* Initial Message
+
+the settings thing doesn't work. I'd like a simple toggle on top for user/project/session. right now, when I do settings, it just shows [user] ... and keeps printing it, fucking up the layout of everything. I also don't see settings persisted when they need to be added to the kdl (please reproduce the error)
+
+investigate.
+
+* Problem
+
+Even after the KDL cutover, Spell loads from five magic file names besides =spell.kdl=:
+
+| file | reader |
+|------+--------|
+| =~/.spell/agent/secrets.yml=, =<cwd>/.spell/secrets.yml= | =secrets/index.ts= |
+| =~/.spell/agent/mcp.json=, =<cwd>/.spell/mcp.json= | =discovery/builtin.ts:177-180=, =mcp/loader.ts= |
+| =~/.spell/agent/ssh.json=, =<cwd>/.spell/ssh.json=, =<cwd>/ssh.json= | =discovery/ssh.ts:132= |
+| =<cwd>/.spell/domain.json= | =domain/detection.ts:76= |
+| (foreign =.mcp.json= is *not* this bug — it's a discovered foreign convention, kept native by design) |
+
+Each is a separate path string hard-coded in code. There's no single answer to "what file holds my Spell config?" — there are six.
+
+* Why it matters
+
+- Users editing =spell.kdl= can be silently overridden by a stale =mcp.json= sibling
+- New contributors must discover six magic locations to understand Spell's runtime
+- =/settings= UI cannot present a coherent picture of what is configured where
+- Migration / backup / sync stories fragment across six files
+
+* Fix
+
+Absorb all five into inline blocks of =spell.kdl=. See [[id:FEAT-754-spell-kdl-absorbs-all-spell-owned-config]].
+
+* Tracking
+
+Subsumed by =FULL_KDL_SPELL= plan, WAVE 2.

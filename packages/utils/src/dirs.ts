@@ -218,6 +218,71 @@ export function getProjectAgentDir(cwd: string = getProjectDir()): string {
 }
 
 // =============================================================================
+// KDL config file paths
+// =============================================================================
+//
+// Four-tier settings model. State (sessions/plugins/logs) stays under the
+// legacy agent dir; only the KDL config files live in the new locations.
+//
+//   session  in-memory                          volatile
+//   local    <cwd>/.local/spell.kdl             gitignored, machine
+//   project  <cwd>/spell.kdl                    committed, team
+//   user     ~/.config/spell/spell.kdl          XDG-style global
+//
+// Read precedence: session > local > project > user (last-write-per-key wins).
+//
+// XDG: honors XDG_CONFIG_HOME on Linux/macOS for the user tier. PI_USER_KDL
+// overrides the user path entirely (test / advanced use).
+
+/** Resolve the XDG config home, defaulting to ~/.config. */
+function getXdgConfigHome(): string {
+	const envHome = process.env.XDG_CONFIG_HOME;
+	if (envHome && envHome.length > 0) return envHome;
+	return path.join(os.homedir(), ".config");
+}
+
+/**
+ * Path to the user-tier spell.kdl.
+ *
+ * - PI_USER_KDL env var overrides everything (absolute path expected).
+ * - Otherwise: $XDG_CONFIG_HOME/spell/spell.kdl, falling back to
+ *   ~/.config/spell/spell.kdl.
+ *
+ * Decoupled from getAgentDir() on purpose: ~/.spell/ remains the home for
+ * runtime state (sessions/plugins/logs/etc.); user *config* moves to the
+ * XDG-compliant location.
+ */
+export function getUserKdlPath(): string {
+	const override = process.env.PI_USER_KDL;
+	if (override && override.length > 0) return path.resolve(override);
+	return path.join(getXdgConfigHome(), APP_NAME, "spell.kdl");
+}
+
+/** Path to the committed project-tier spell.kdl. */
+export function getProjectKdlPath(cwd: string = getProjectDir()): string {
+	return path.join(cwd, "spell.kdl");
+}
+
+/**
+ * Path to the gitignored machine-local-tier spell.kdl.
+ *
+ * <cwd>/.local/spell.kdl — intended to be excluded from VCS and to hold
+ * per-machine overrides (paths, credentials, personal preferences).
+ */
+export function getLocalKdlPath(cwd: string = getProjectDir()): string {
+	return path.join(cwd, ".local", "spell.kdl");
+}
+
+/**
+ * Legacy user-tier KDL location (~/.spell/spell.kdl), pre-XDG cutover.
+ * The one-shot migrator reads this and writes forward to getUserKdlPath().
+ * Safe to delete once the migration directory is removed.
+ */
+export function getLegacyUserKdlPath(): string {
+	return path.join(path.dirname(getAgentDir()), "spell.kdl");
+}
+
+// =============================================================================
 // Config-root subdirectories (~/.spell/*)
 // =============================================================================
 
