@@ -1,0 +1,61 @@
+#+TITLE: AssistantMessage: incremental reconciliation instead of full child rebuild per token
+#+STATE: DOING
+#+SESSION_ID: 14ea14814559e822
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T15-17-13-109Z_14ea14814559e822.jsonl]]
+#+CUSTOM_ID: FEAT-763-assistantmessage-incremental-reconciliat
+#+EFFORT: 12h
+#+LAYER: coding-agent tui
+#+PRIORITY: #A
+
+* Initial Message
+
+Spell has been using CPU like crazy recently. Why?
+
+* Initial Message
+
+During a streaming assistant turn, the bun main thread sits at 30–70% CPU and seven HeapHelper threads run at 2% each (~14% aggregate GC overhead). Profiling pointed at one component as the dominant allocator.
+
+* Problem
+
+=AssistantMessage.updateContent= in =packages/coding-agent/src/modes/components/assistant-message.ts:120-170= is invoked on every streamed chunk. Its body:
+
+1. =this.#contentContainer.clear()= — drops every existing child
+2. Walks the entire =message.content[]= array (grows monotonically with streaming)
+3. =new Markdown(text, ...)= for every text block, =new Text(...)=, =new Spacer(...)= for the rest
+4. Then =requestRender= cascades to a full subtree render
+
+Net cost per turn: O(content.length × token-count) component allocations + O(content.length × token-count) =marked.lexer= invocations on the *whole* growing message. =Markdown.#cachedLines= is per-instance and dies with each old instance.
+
+Concretely, a 1000-token assistant reply with one accumulating text block produces ~1000 distinct =Markdown= instances and ~1000 full re-lexes — each over progressively longer input.
+
+* Goal
+
+For a streaming reply with N content blocks, =new Markdown= is constructed ≤N times across the entire turn (target: exactly once per text block). =Markdown.invalidate= is called O(chunks) but the per-instance lex cache survives.
+
+* Fix
+
+1. =AssistantMessage= maintains =#childrenByIndex: (Markdown | Text | Image | Spacer)[]= keyed on =message.content[]= position.
+2. =updateContent= becomes a reconcile pass:
+   - For each =i= in =0..content.length=: if existing child slot matches the new content's kind (=text→Markdown=, =thinking→Markdown=, =image→Image=), call =setText= / =setData=. Otherwise dispose+replace that one slot.
+   - Drop trailing slots if =content.length= shrinks (rare; only on retry).
+   - Only structural shape changes (block count delta, kind delta) touch the =Container= child list.
+3. Drop the unconditional =#contentContainer.clear()=.
+4. Keep =Markdown.setText= behavior (already exists; calls =invalidate= → next render re-lexes that one instance).
+
+Optional follow-on (gated by bench): =Markdown= prefix-stable lex cache. When new =#text= starts with old =#text= (streaming append), retain previously-lexed token prefix and only lex the trailing delta. Skip if =marked.lexer= on growing strings is already cheap.
+
+* Acceptance
+
+- New test =packages/coding-agent/test/modes/components/assistant-message-streaming.test.ts=: simulate 1k chunked updates to a single text block, assert =new Markdown= called exactly once for that block (spy on constructor) and =setText= called 1000 times.
+- Existing assistant-message tests stay green.
+- Manual perf: =PI_TUI_PROFILE=1 spell= during a long reply, observed HeapHelper aggregate ≤3% (today: ~14%).
+
+* Non-goals
+
+- Replace =marked= or change markdown rendering semantics.
+- Add new content block types.
+- Touch =tool-execution.ts= rebuild logic — independent FEAT if needed.
+
+* Related
+
+- Part of =PLAN-XXX-tui-responsiveness=.
