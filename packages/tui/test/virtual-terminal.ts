@@ -72,6 +72,14 @@ export class VirtualTerminal implements Terminal {
 		// No-op for virtual terminal
 	}
 
+	onLost(_callback: (reason: string) => void): () => void {
+		return () => {};
+	}
+
+	onFocusChange(_callback: (focused: boolean) => void): () => void {
+		return () => {};
+	}
+
 	moveBy(lines: number): void {
 		if (lines > 0) {
 			// Move down

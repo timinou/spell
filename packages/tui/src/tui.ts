@@ -647,6 +647,20 @@ export class TUI extends Container {
 		this.terminal.stop();
 	}
 
+	/**
+	 * Set the minimum interval (ms) between renders. Used by consumers to
+	 * throttle rendering when the terminal is not visible (e.g. niri
+	 * overview, terminal unfocused). 0 disables throttling.
+	 */
+	setMinRenderInterval(ms: number): void {
+		this.#minRenderInterval = Math.max(0, ms);
+	}
+
+	/** Current minimum render interval (ms). */
+	get minRenderInterval(): number {
+		return this.#minRenderInterval;
+	}
+
 	requestRender(force = false): void {
 
 		if (force) {

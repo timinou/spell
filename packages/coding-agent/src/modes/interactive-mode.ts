@@ -243,6 +243,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#pendingSlashCommands: SlashCommand[] = [];
 	#cleanupUnsubscribe?: () => void;
 	#terminalLostUnsubscribe?: () => void;
+	#terminalFocusUnsubscribe?: () => void;
 	#terminalLostHandled = false;
 	readonly #version: string;
 	readonly #changelogMarkdown: string | undefined;
@@ -439,6 +440,16 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Detect when the controlling pty is destroyed (e.g. SSH session dies,
 		// parent shell exits). This is an orderly shutdown path parallel to SIGHUP.
+		// Focus-aware render throttle: when the terminal window loses focus
+		// (niri overview, minimize, switch workspace), drop render rate to
+		// once per 500ms. Restores on focus regain. Reduces output buffering
+		// pressure and CPU usage when invisible.
+		const focusedInterval = this.ui.minRenderInterval;
+		const unfocusedInterval = Math.max(focusedInterval, 500);
+		this.#terminalFocusUnsubscribe = this.ui.terminal.onFocusChange(focused => {
+			this.ui.setMinRenderInterval(focused ? focusedInterval : unfocusedInterval);
+		});
+
 		this.#terminalLostUnsubscribe = this.ui.terminal.onLost(reason => {
 			void this.#handleTerminalLost(reason);
 		});
@@ -1666,6 +1677,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (this.#terminalLostUnsubscribe) {
 			this.#terminalLostUnsubscribe();
+		}
+		if (this.#terminalFocusUnsubscribe) {
+			this.#terminalFocusUnsubscribe();
 		}
 		this.#intentionSubscriptionUnsub?.();
 		this.#intentionController.dispose();
