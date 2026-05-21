@@ -152,24 +152,21 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		terminal.stop();
 	});
 
-	it("poll timer self-disables when Mode 2031 fires", () => {
+	it("poll timer self-disables after first valid OSC 11 reply", () => {
 		vi.useFakeTimers();
 		const { terminal, queryCount } = setupTerminal();
 
-		// Complete initial OSC 11 + DA1 cycle
+		// Complete initial OSC 11 + DA1 cycle — poll should self-disable now
 		process.stdin.emit("data", "\x1b]11;rgb:ffff/ffff/ffff\x07");
 		process.stdin.emit("data", "\x1b[?1;2c");
 
 		const afterInitial = queryCount();
 
-		// Advance 2s — poll should fire and send another query
+		// Advance 2s — no additional poll queries should fire (already self-disabled)
 		vi.advanceTimersByTime(2000);
-		expect(queryCount()).toBe(afterInitial + 1);
+		expect(queryCount()).toBe(afterInitial);
 
-		// Complete poll's OSC 11 + DA1
-		process.stdin.emit("data", "\x1b]11;rgb:ffff/ffff/ffff\x07");
-		process.stdin.emit("data", "\x1b[?1;2c");
-		// Send Mode 2031 notification — this activates push mode and stops polling
+		// Send Mode 2031 notification — this activates push mode and triggers re-query
 		process.stdin.emit("data", "\x1b[?997;1n");
 		vi.advanceTimersByTime(100);
 

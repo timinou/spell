@@ -347,6 +347,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 					this.emit("data", sequence);
 				}
 			}, this.#timeoutMs);
+			this.#timeout.unref?.();
 		}
 	}
 

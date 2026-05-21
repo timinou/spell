@@ -200,45 +200,37 @@ describe("startDaemon", () => {
 		registerSpy.mockRestore();
 	});
 
-	it("detects crash when socket disappears (health check)", async () => {
+	it("detects crash when socket disappears via probe", async () => {
 		const sock = sockPath("health");
 		const onCrash = mock(() => {});
 
 		const config = shellDaemonConfig({
 			socketPath: sock,
-			healthIntervalMs: 100, // fast for testing
 			onCrash,
 		});
 		daemon = await startDaemon(config);
 
 		// Socket exists, daemon is alive.
 		expect(daemon.isAlive()).toBe(true);
+		expect(await daemon.probe()).toBe(true);
 
 		// Remove the socket to simulate a crash.
 		await fs.unlink(sock);
 
-		// Wait for health check to notice.
-		await Bun.sleep(300);
-
+		// Probe should detect the missing socket.
+		expect(await daemon.probe()).toBe(false);
 		expect(daemon.isAlive()).toBe(false);
 		expect(onCrash).toHaveBeenCalledTimes(1);
 	});
 
-	it("does not create health timer when healthIntervalMs is 0", async () => {
-		const onCrash = mock(() => {});
-		const config = shellDaemonConfig({
-			healthIntervalMs: 0,
-			onCrash,
-		});
+	it("probe deep check validates live listener", async () => {
+		const config = shellDaemonConfig();
 		daemon = await startDaemon(config);
 
-		// Remove socket — no health timer should notice.
-		await fs.unlink(config.socketPath);
-		await Bun.sleep(200);
-
-		// isAlive is still true (no health check running to detect).
-		expect(daemon.isAlive()).toBe(true);
-		expect(onCrash).not.toHaveBeenCalled();
+		// Shallow probe checks file existence only.
+		expect(await daemon.probe()).toBe(true);
+		// Deep probe would need a real socket listener; shellDaemonConfig does not create one.
+		expect(await daemon.probe(true)).toBe(false);
 	});
 
 	it("executes stopCommand during stop when provided", async () => {

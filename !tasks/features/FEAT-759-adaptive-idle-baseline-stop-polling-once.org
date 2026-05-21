@@ -1,0 +1,61 @@
+#+TITLE: Adaptive idle baseline: stop polling once we know the answer
+#+STATE: DOING
+#+SESSION_ID: 14ea14814559e822
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T15-17-13-109Z_14ea14814559e822.jsonl]]
+#+CUSTOM_ID: FEAT-759-adaptive-idle-baseline-stop-polling-once
+#+EFFORT: 8h
+#+LAYER: tui coding-agent utils
+#+PRIORITY: #B
+
+* Initial Message
+
+Spell has been using CPU like crazy recently. Why?
+
+* Initial Message
+
+Even with all render-side fixes, an idle Spell session still sits at 0.5–9% CPU and 22 accumulated long-lived sessions push aggregate load over 100%. The cost is in the polling fan-out — multiple subsystems poll on fixed intervals forever, regardless of whether they've already learned what they were polling for.
+
+* Problem
+
+Polling sources in a typical Spell session (audited via =setInterval= grep across =packages/= and =/proc/$pid/fd | grep timerfd=):
+
+| Source | Cadence | Self-stops? | Cost when idle |
+|--------+---------+-------------+----------------|
+| =Terminal.#osc11PollTimer= | 2s | only on Mode 2031 | always polls on Warp/Alacritty/WezTerm |
+| =cursor.ts= heartbeat | 5s | no | always |
+| =session-bridge/client.ts= heartbeat | configurable | no | always |
+| =ManagedDaemon= health probe | 5s default | no | always, even when daemon is healthy and idle |
+| =AsyncJobManager= watchdog | per-job | resets on progress | runs per job |
+| =lsp/client.ts= idleCheck | constant | no | always |
+| =web-session-hub= processInfo | constant | no | always |
+
+Result: 7+ timerfds open per idle session × 22 sessions = ~150 wakeups/second on this host doing nothing useful.
+
+* Goal
+
+Idle session sits at ≤0.5% CPU, ≤3 active timerfds. When the terminal loses focus, drop further. Aggregate idle wakeups across N sessions scale O(N) at a much smaller constant.
+
+* Fix
+
+1. *OSC11 poll*: =Terminal= already self-disables on Mode 2031 push events. Extend to *also* stop after the first valid OSC 11 reply on non-2031 terminals. Once we know the background color, we know it. Re-arm only on a focus-gained event (CSI 1004h) or =SIGWINCH=.
+2. *Heartbeats*: change from periodic to event-driven debounced. =cursor.ts= and =session-bridge/client.ts= reset a =setTimeout(N seconds)= on every real outbound message. Send heartbeat only if the timeout fires (= N seconds of silence). Cost when chatty: 0 heartbeats. Cost when idle: 1 per N seconds, same as today's worst case.
+3. *ManagedDaemon health*: =packages/utils/src/managed-daemon.ts:163-180= replaces the periodic probe with probe-on-failure. Skip routine probing; if the next RPC call fails, probe once, restart if needed.
+4. *Focus-aware throttling*: when CSI 1004h reports focus loss, =TUI= sets =#minRenderInterval= to 500ms (from 16ms). On focus-gain, restore. Documented in the existing terminal-capabilities path.
+5. *=.unref()= audit*: every =setInterval= and long =setTimeout= in =packages/tui/=, =packages/coding-agent/=, and =packages/utils/= must call =.unref()=. Audit and fix; a single non-unref'd timer keeps the event loop alive past meaningful work.
+
+* Acceptance
+
+- New test =packages/coding-agent/test/idle-baseline.test.ts=: drive a TUI through init + 60s of simulated idle, assert (a) total render count ≤ 2, (b) heartbeat send count = 0 if any traffic occurred in last N seconds, (c) OSC11 poll count = 1 after a synthetic OSC11 reply.
+- =ls /proc/$(pgrep spell | head -1)/fd | grep timerfd | wc -l= on a fresh idle session ≤ 3.
+- =top -d 5 -p $(pgrep spell | head -1)= over 1 minute idle: avg CPU ≤ 0.5%.
+
+* Non-goals
+
+- Replace polling architecture with eventfd/io_uring fanout. Wins are smaller than the cost.
+- Per-session idle TTL / sleep mode — separate workstream.
+- Touch =RecallEngine= idle TTL (already fixed in BUG-382).
+
+* Related
+
+- Part of =PLAN-XXX-tui-responsiveness=.
+- Companion to =BUG-382= (recall-engine idle TTL) — same philosophy applied to terminal/UI layer.

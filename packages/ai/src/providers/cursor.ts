@@ -465,6 +465,18 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 				}
 			});
 
+			const originalWrite = h2Request.write.bind(h2Request);
+			const wrappedWrite = (
+				chunk: Buffer | string,
+				encoding?: BufferEncoding | (() => void),
+				cb?: () => void,
+			): boolean => {
+				const result = originalWrite(chunk, encoding as any, cb);
+				resetSilence();
+				return result;
+			};
+			(h2Request as any).write = wrappedWrite;
+
 			h2Request.write(frameConnectMessage(requestBytes));
 
 			const sendHeartbeat = () => {
@@ -478,7 +490,16 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 				h2Request.write(frameConnectMessage(heartbeatBytes));
 			};
 
-			heartbeatTimer = setInterval(sendHeartbeat, 5000);
+			const resetSilence = (): void => {
+				if (heartbeatTimer) {
+					clearTimeout(heartbeatTimer);
+				}
+				heartbeatTimer = setTimeout(() => {
+					sendHeartbeat();
+				}, 5_000);
+				heartbeatTimer.unref?.();
+			};
+			resetSilence();
 
 			await new Promise<void>((resolve, reject) => {
 				h2Request!.on("trailers", trailers => {

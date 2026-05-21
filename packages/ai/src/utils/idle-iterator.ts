@@ -105,10 +105,12 @@ export async function* iterateWithIdleTimeout<T>(
 				const timeoutResult = Promise.withResolvers<{ kind: "timeout" }>();
 				timeoutPromise = timeoutResult.promise;
 				timer = setTimeout(() => timeoutResult.resolve({ kind: "timeout" }), idleTimeoutMs);
+				timer.unref?.();
 				currentReset = () => {
 					if (!timer) return;
 					clearTimeout(timer);
 					timer = setTimeout(() => timeoutResult.resolve({ kind: "timeout" }), idleTimeoutMs);
+					timer.unref?.();
 				};
 			} else {
 				currentReset = undefined;

@@ -160,6 +160,7 @@ export class AssistantMessageEventStream extends EventStream<AssistantMessageEve
 				this.#flushTimer = undefined;
 				this.#flushDeltas();
 			}, delay);
+			this.#flushTimer.unref?.();
 		}
 	}
 
