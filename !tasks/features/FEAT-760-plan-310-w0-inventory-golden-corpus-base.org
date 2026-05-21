@@ -1,0 +1,84 @@
+#+TITLE: PLAN-310 W0 — inventory, golden corpus, baselines, red loop tests
+#+STATE: DONE
+#+SESSION_ID: 14ea0d7add095343
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
+#+CUSTOM_ID: FEAT-760-plan-310-w0-inventory-golden-corpus-base
+#+LAYER: natives coding-agent
+#+PARENT: PLAN-310-pi-knowledge-core-convergence-delete-tan
+#+PRIORITY: #A
+
+* Initial Message
+
+Bro tantivy is super super overkill; what is its purpose in this codebase? is it actually being used in spell sessions? what is its
+ promise, and can it be fulfilled more leanly in an environment in which many (tens) of sessions are running on the same laptop, across
+ workspaces? the ONLY case where you're allowed to have tantivy is if it provides a REAL advantage, and in that case, memory and CPU
+ usage needs to be taken care of, and the agent interface and tools need to reflect the promise actually delivered.
+
+ This is an investigation session for now. Gather the information, learn online, and come back to me with real data
+
+Look at the org tool from first principle, as an agentic memory+PRD system (look up online). org recall isn't used but maybe the plan is
+ to actually either:
+ have a simpler FTS that is plugged into the pi-org-* machinery that enables the kind of graph+FTS that Surreal was enabling, by
+ bascially keeping the org files themselves as sources of truth, and pooling hte resources e.g. with a user-level daemon?
+
+ Think from first principles. I want lower memory usage and actually used tools out of this. Just because it wasn't used in the past
+ doesn't mean that it should be removed. This has a lot of potential, especially when we start leveraging more of the org syntax, to have
+ a clean model out of this. Right now it's opaque and unfinished; i'd like something powerful, ergonomic for the agent, and where the
+ text file is the source of truth. Thanks.
+
+ push back and ask me questions
+
+Kickoff wave for PLAN-310. Self-contained inventory + benchmark capture + golden-corpus setup + red-state loop test scaffolding. Blocks W1 and all downstream waves.
+
+* Scope
+
+- T0.1 Enumerate callsites of pi-org-recall, FtsIndex, VecIndex (in pi-org-recall), TypedGraph (in pi-org-engine), RecallEngineHandle, cmdRecall/Remember/Timeline/Subgraph/Link in TS
+- T0.2 Build golden fixture corpus at =tests/fixtures/memory-corpus/= — 6 episodes, 4 concepts, 2 actors, 2 entities, realistic :RELATIONS: drawers + DISTILLED_FROM lineage
+- T0.3 Baseline benchmarks: cold/warm BM25 latency, per-session RSS delta after one =recall= call, =libpi_natives.so= release size, =engine.bin= artifact dump
+- T0.4 Snapshot current TS tool surface (org subcommand registry + prompts referencing recall/remember)
+- T0.5 Loop-acceptance test scaffolding red — T10.1 through T10.11 from PLAN-310's W10
+
+* Gate
+
+=plan-artifacts/PLAN-310/W0-baselines.md= committed with raw numbers; loop tests committed in red state.
+
+* Acceptance
+
+- Callsite inventory committed at =plan-artifacts/PLAN-310/W0-inventory.md=
+- Golden corpus committed at =tests/fixtures/memory-corpus/=
+- Baseline numbers committed at =plan-artifacts/PLAN-310/W0-baselines.md=
+- Tool-surface snapshot committed at =plan-artifacts/PLAN-310/W0-tool-surface-before.md=
+- =tests/memory-loop.test.ts= exists, all T10.* tests red
+
+* Non-goals
+
+- No production code change. This wave is read-only + tests-only.
+- No tantivy removal. That's W5.
+
+* Completion [2026-05-21]
+
+All five W0 sub-tasks delivered and verified.
+
+** Artifacts
+
+- =!tasks/plans/plan-artifacts/PLAN-310/W0-inventory.md= (336 lines, 41 files touched, 1,985 LOC delete, 1,947 LOC migrate)
+- =!tasks/plans/plan-artifacts/PLAN-310/W0-baselines.md= (binary size + on-disk + RSS + usage stats)
+- =!tasks/plans/plan-artifacts/PLAN-310/W0-tool-surface-before.md= (8 sections; org subcommand registry snapshot)
+- =tests/fixtures/memory-corpus/= (14 .org files; SUPERSEDES edge present for T10.3)
+- =tests/memory-loop.test.ts= (11 red tests, ts-check clean)
+
+** Key findings carried into W1
+
+- Tantivy rlib total: *148 MB* (more than the .so itself; 8 subcrates: bitpacker, columnar, common, fst, query-grammar, sstable, stacker, tokenizer-api)
+- hnsw_rs rlib: 41 MB; fastembed rlib: 44 MB
+- =libpi_natives.so= release: 114.8 MB (already stripped)
+- Production recall usage: 2 calls in 13,567 sessions (0.012%)
+- =renderSessionStartSummary= confirmed 0 callers (dead path)
+- =cargo test -p pi-org-recall --release= timed out at 600 s during compile \u2014 W1 must scaffold =pi-knowledge-core= so tests run on its own crate (decoupled from the tantivy compile cost) until W5 deletion
+
+** Deviations from W0 spec
+
+- Release BM25 latency could not be measured (release build of pi-org-recall timed out). Proxy measurement: debug build, FtsIndex suite 3.62 s total, worst single test 700 ms. The cold/warm separation gate moves to W5.5 with a fresh harness on =pi-knowledge-core=.
+- engine.bin / vec.bin absent on disk for the largest fts dir (this machine's cache predates the bincode persistence). Schema-stamped meta.bin in W5 will discard whatever's there. No remediation needed.
+
+Next: W1 dispatch.

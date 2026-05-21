@@ -1,0 +1,17 @@
+#+TITLE: JWT Rollout — Staged Deployment Complete
+#+CUSTOM_ID: EP-2026-05-20-jwt-rollout
+#+KIND: episode
+
+:PROPERTIES:
+:KIND: episode
+:END:
+
+:RELATIONS:
+ABOUT: ENT-product-checkout
+INVOLVED: ACT-sam-founder
+INVOLVED: ACT-mira-engineer
+:END:
+
+* Body
+
+Sam and Mira monitored the final rollout from the war room. The canary started at one percent, held for thirty minutes, then ramped to ten, fifty, and finally one hundred. JWT validation latency dropped by twelve percent, and token expiry errors fell to zero. Sam sent a company-wide update declaring the auth refactor complete. Mira immediately began distilling the arc into concept notes for future reference.

@@ -1,0 +1,16 @@
+#+TITLE: Token Expiry Fix — Root Cause Patch
+#+CUSTOM_ID: EP-2026-05-19-token-expiry-fix
+#+KIND: episode
+
+:PROPERTIES:
+:KIND: episode
+:END:
+
+:RELATIONS:
+ABOUT: ENT-product-checkout
+INVOLVED: ACT-mira-engineer
+:END:
+
+* Body
+
+Mira rewrote the token expiry comparison to use monotonic clock sources instead of wall-clock timestamps, eliminating the leap-second race entirely. She added unit tests that simulate clock jumps forward and backward, and an integration test that floods the validator with near-expiry tokens. The fix passed code review and was merged into the auth refactor branch by evening. Checkout's staging environment showed zero regressions under replayed production traffic.

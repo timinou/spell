@@ -1,0 +1,14 @@
+#+TITLE: Mira — Engineer
+#+CUSTOM_ID: ACT-mira-engineer
+#+KIND: actor
+
+:PROPERTIES:
+:KIND: actor
+:END:
+
+:RELATIONS:
+:END:
+
+* Body
+
+Mira is the senior backend engineer who owns the authentication and payments stack. She led the JWT refactor from discovery through rollout, pairing with Sam on vendor coordination. She writes detailed incident postmortems and distills technical findings into long-lived concept notes. Her deep-dive on token expiry edge cases uncovered the root cause behind the rollback.

@@ -1,0 +1,14 @@
+#+TITLE: Stripe — Payment Vendor
+#+CUSTOM_ID: ENT-vendor-stripe
+#+KIND: entity
+
+:PROPERTIES:
+:KIND: entity
+:END:
+
+:RELATIONS:
+:END:
+
+* Body
+
+Stripe is the primary payment processor for the checkout product. The integration relies on webhook signatures, API keys with scoped permissions, and session tokens with configurable expiry windows. During the auth refactor arc, the team discovered that Stripe's token refresh semantics interacted poorly with the legacy JWT validation layer, requiring a coordination meeting with their developer-support team.

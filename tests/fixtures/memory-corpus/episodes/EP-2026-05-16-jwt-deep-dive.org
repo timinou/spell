@@ -1,0 +1,16 @@
+#+TITLE: JWT Deep Dive — Token Validation Internals
+#+CUSTOM_ID: EP-2026-05-16-jwt-deep-dive
+#+KIND: episode
+
+:PROPERTIES:
+:KIND: episode
+:END:
+
+:RELATIONS:
+ABOUT: ENT-product-checkout
+INVOLVED: ACT-mira-engineer
+:END:
+
+* Body
+
+Mira spent the day tracing the JWT validation path through the checkout middleware. She found that the leeway buffer was hard-coded to thirty seconds and did not account for clock skew between the edge nodes and the token issuer. The refactor plan needed to make this configurable and add jitter to retry loops. She also noted that the current library lacked support for rotated signing keys without a restart.

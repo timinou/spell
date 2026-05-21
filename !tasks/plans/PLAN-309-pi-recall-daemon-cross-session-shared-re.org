@@ -8,7 +8,7 @@
 
 recently, spell sessions have been taking a lot of memory, can you find out why?
 
-#+LAYER: systems
+#+LAYER: natives
 #+PROTOCOL: 178-B triple-sure
 #+RISK: medium
 #+ESCAPE_HATCH: PI_RECALL_DAEMON=0 env disables daemon; in-process path is fallback

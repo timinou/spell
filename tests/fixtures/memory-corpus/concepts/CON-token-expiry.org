@@ -1,0 +1,17 @@
+#+TITLE: Token Expiry — Lessons from the Auth Refactor
+#+CUSTOM_ID: CON-token-expiry
+#+KIND: concept
+
+:PROPERTIES:
+:KIND: concept
+:END:
+
+:RELATIONS:
+SUPERSEDES: CON-jwt
+DISTILLED_FROM: EP-2026-05-19-token-expiry-fix
+DISTILLED_FROM: EP-2026-05-18-auth-rollback
+:END:
+
+* Body
+
+The auth refactor taught us that wall-clock token expiry comparisons are fragile. The correct approach uses monotonic clock sources, adds configurable leeway with jitter, and tests against simulated clock jumps. This concept supersedes the earlier JWT note by incorporating the rollback incident and the verified fix. Checkout now enforces these patterns in its middleware layer, and the same principles apply to any future payment vendor integration.

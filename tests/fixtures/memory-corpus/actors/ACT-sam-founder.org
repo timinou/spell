@@ -1,0 +1,14 @@
+#+TITLE: Sam — Founder
+#+CUSTOM_ID: ACT-sam-founder
+#+KIND: actor
+
+:PROPERTIES:
+:KIND: actor
+:END:
+
+:RELATIONS:
+:END:
+
+* Body
+
+Sam founded the fintech startup eighteen months ago and still reviews every critical architectural decision personally. He has a strong product sense but trusts Mira with implementation details. During the auth refactor arc, he stepped in to coordinate with the Stripe partnership team and sign off on the staged rollout plan. He prefers async written updates over standups.

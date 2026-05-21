@@ -1,0 +1,16 @@
+#+TITLE: JWT — Early Token Architecture Thinking
+#+CUSTOM_ID: CON-jwt
+#+KIND: concept
+
+:PROPERTIES:
+:KIND: concept
+:END:
+
+:RELATIONS:
+ABOUT: ENT-product-checkout
+DISTILLED_FROM: EP-2026-05-16-jwt-deep-dive
+:END:
+
+* Body
+
+Early thinking on JWT usage in checkout assumed symmetric signing and a single issuer. The deep-dive revealed that asymmetric RS256 keys, combined with a key-id header, would support rotation and multi-region validation. This concept note records the pre-refactor assumptions that were later challenged by the token expiry incident. It is superseded by the token expiry concept which incorporates post-incident learnings.

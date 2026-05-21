@@ -1,8 +1,9 @@
 #+TITLE: RecallEngine LRU holds 4 repo handles forever per session; bound to 1 + idle TTL
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14e6073129986fc8
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-18T11-45-07-750Z_14e6073129986fc8.jsonl]]
 #+CUSTOM_ID: BUG-382-recallengine-lru-holds-4-repo-handles-fo
+#+LAYER: natives
 
 * Initial Message
 
@@ -110,3 +111,5 @@ sidecar is the cross-session architectural fix.
   unreachable.
 - c0a28831d (LRU hardening that introduced the current cap)
 - 54fef66f3 (strong-count invariant — must preserve)
+
+NOTE [2026-05-18]: Closed in commit 6c6adf3d8. ENGINES_CAP 4→1, IDLE_TTL=600s, sweep-on-miss with Arc::strong_count==1 guard. LruEntry struct replaces tuple. Test seam IDLE_TTL_OVERRIDE + IdleTtlGuard RAII. Two new tests pin behaviour: idle_ttl_evicts_unused_engine_on_next_miss, idle_ttl_skips_handles_held_by_inflight_queries. All 12 recall_engine tests green in 2.86s. Per-session peak RSS expected to drop by ~150–600 MB on sessions touching multiple repos; 10-min idle window frees the engine for sessions that pause. Cross-session multiplier (29× duplication) deferred to PLAN-309.

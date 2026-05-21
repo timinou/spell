@@ -1,0 +1,16 @@
+#+TITLE: Auth Rollback — Incident in Production
+#+CUSTOM_ID: EP-2026-05-18-auth-rollback
+#+KIND: episode
+
+:PROPERTIES:
+:KIND: episode
+:END:
+
+:RELATIONS:
+ABOUT: ENT-product-checkout
+INVOLVED: ACT-mira-engineer
+:END:
+
+* Body
+
+The checkout canary deployment began rejecting valid sessions at 14:23 UTC after the JWT refactor hit production. Mira triggered the automatic rollback within four minutes, limiting impact to under two hundred requests. Root-cause analysis revealed that the new token expiry check did not handle leap-second boundaries correctly, causing a one-second window where all tokens appeared expired. The rollback preserved customer trust but delayed the rollout by two days.
