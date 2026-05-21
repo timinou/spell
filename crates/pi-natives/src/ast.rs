@@ -1,13 +1,11 @@
 //! AST-aware structural search and rewrite powered by ast-grep.
 
 use std::{
-	collections::{BTreeMap, BTreeSet, HashMap},
+	collections::{BTreeSet, HashMap},
 	path::{Path, PathBuf},
 };
 
-use ast_grep_core::{
-	Language, MatchStrictness, matcher::Pattern, source::Edit, tree_sitter::LanguageExt,
-};
+use ast_grep_core::{Language, MatchStrictness, matcher::Pattern, tree_sitter::LanguageExt};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
@@ -68,80 +66,9 @@ pub struct AstFindResult {
 	pub parse_errors:       Option<Vec<String>>,
 }
 
-#[napi(object)]
-pub struct AstReplaceOptions<'env> {
-	pub rewrites:            Option<HashMap<String, String>>,
-	pub lang:                Option<String>,
-	pub path:                Option<String>,
-	pub glob:                Option<String>,
-	pub selector:            Option<String>,
-	pub strictness:          Option<String>,
-	#[napi(js_name = "dryRun")]
-	pub dry_run:             Option<bool>,
-	#[napi(js_name = "maxReplacements")]
-	pub max_replacements:    Option<u32>,
-	#[napi(js_name = "maxFiles")]
-	pub max_files:           Option<u32>,
-	#[napi(js_name = "failOnParseError")]
-	pub fail_on_parse_error: Option<bool>,
-	pub signal:              Option<Unknown<'env>>,
-	#[napi(js_name = "timeoutMs")]
-	pub timeout_ms:          Option<u32>,
-}
-
-#[napi(object)]
-pub struct AstReplaceChange {
-	pub path:           String,
-	pub before:         String,
-	pub after:          String,
-	#[napi(js_name = "byteStart")]
-	pub byte_start:     u32,
-	#[napi(js_name = "byteEnd")]
-	pub byte_end:       u32,
-	#[napi(js_name = "deletedLength")]
-	pub deleted_length: u32,
-	#[napi(js_name = "startLine")]
-	pub start_line:     u32,
-	#[napi(js_name = "startColumn")]
-	pub start_column:   u32,
-	#[napi(js_name = "endLine")]
-	pub end_line:       u32,
-	#[napi(js_name = "endColumn")]
-	pub end_column:     u32,
-}
-
-#[napi(object)]
-pub struct AstReplaceFileChange {
-	pub path:  String,
-	pub count: u32,
-}
-
-#[napi(object)]
-pub struct AstReplaceResult {
-	pub changes:            Vec<AstReplaceChange>,
-	#[napi(js_name = "fileChanges")]
-	pub file_changes:       Vec<AstReplaceFileChange>,
-	#[napi(js_name = "totalReplacements")]
-	pub total_replacements: u32,
-	#[napi(js_name = "filesTouched")]
-	pub files_touched:      u32,
-	#[napi(js_name = "filesSearched")]
-	pub files_searched:     u32,
-	pub applied:            bool,
-	#[napi(js_name = "limitReached")]
-	pub limit_reached:      bool,
-	#[napi(js_name = "parseErrors")]
-	pub parse_errors:       Option<Vec<String>>,
-}
-
 struct FileCandidate {
 	absolute_path: PathBuf,
 	display_path:  String,
-}
-
-struct PendingFileChange {
-	change: AstReplaceChange,
-	edit:   Edit<String>,
 }
 
 fn to_u32(value: usize) -> u32 {
@@ -273,45 +200,7 @@ fn is_supported_file(file_path: &Path, explicit_lang: Option<&str>) -> bool {
 	resolve_language(None, file_path).is_ok()
 }
 
-fn infer_single_replace_lang(
-	candidates: &[FileCandidate],
-	ct: &task::CancelToken,
-) -> Result<String> {
-	let mut inferred = BTreeSet::new();
-	let mut unresolved = Vec::new();
-	for candidate in candidates {
-		ct.heartbeat()?;
-		match resolve_language(None, &candidate.absolute_path) {
-			Ok(language) => {
-				inferred.insert(language.canonical_name().to_string());
-			},
-			Err(err) => unresolved.push(format!("{}: {}", candidate.display_path, err)),
-		}
-	}
-	if !unresolved.is_empty() {
-		let details = unresolved
-			.into_iter()
-			.map(|entry| format!("- {entry}"))
-			.collect::<Vec<_>>()
-			.join("\n");
-		return Err(Error::from_reason(format!(
-			"`lang` is required for ast_edit when language cannot be inferred from all \
-			 files:\n{details}"
-		)));
-	}
-	if inferred.is_empty() {
-		return Err(Error::from_reason(
-			"`lang` is required for ast_edit when no files match path/glob".to_string(),
-		));
-	}
-	if inferred.len() > 1 {
-		return Err(Error::from_reason(format!(
-			"`lang` is required for ast_edit when path/glob resolves to multiple languages: {}",
-			inferred.into_iter().collect::<Vec<_>>().join(", ")
-		)));
-	}
-	Ok(inferred.into_iter().next().expect("non-empty inferred set"))
-}
+
 fn parse_strictness(value: Option<&str>) -> Result<MatchStrictness> {
 	let Some(raw) = value.map(str::trim).filter(|v| !v.is_empty()) else {
 		return Ok(MatchStrictness::Smart);
@@ -422,34 +311,6 @@ fn compile_pattern(
 	Ok(compiled)
 }
 
-fn apply_edits(content: &str, edits: &[Edit<String>]) -> Result<String> {
-	let mut sorted: Vec<&Edit<String>> = edits.iter().collect();
-	sorted.sort_by_key(|edit| edit.position);
-	let mut prev_end = 0usize;
-	for edit in &sorted {
-		if edit.position < prev_end {
-			return Err(Error::from_reason(
-				"Overlapping replacements detected; refine pattern to avoid ambiguous edits"
-					.to_string(),
-			));
-		}
-		prev_end = edit.position.saturating_add(edit.deleted_length);
-	}
-
-	let mut output = content.to_string();
-	for edit in sorted.into_iter().rev() {
-		let start = edit.position;
-		let end = edit.position.saturating_add(edit.deleted_length);
-		if end > output.len() || start > end {
-			return Err(Error::from_reason("Computed edit range is out of bounds".to_string()));
-		}
-		let replacement = String::from_utf8(edit.inserted_text.clone()).map_err(|err| {
-			Error::from_reason(format!("Replacement text is not valid UTF-8: {err}"))
-		})?;
-		output.replace_range(start..end, &replacement);
-	}
-	Ok(output)
-}
 
 fn normalize_pattern_list(patterns: Option<Vec<String>>) -> Result<Vec<String>> {
 	let mut normalized = Vec::new();
@@ -471,27 +332,7 @@ fn normalize_pattern_list(patterns: Option<Vec<String>>) -> Result<Vec<String>> 
 	Ok(normalized)
 }
 
-fn normalize_rewrite_map(
-	rewrites: Option<HashMap<String, String>>,
-) -> Result<Vec<(String, String)>> {
-	let mut normalized = Vec::new();
-	for (pattern, rewrite) in rewrites.unwrap_or_default() {
-		if pattern.is_empty() {
-			return Err(Error::from_reason(
-				"`rewrites` keys must be non-empty pattern strings".to_string(),
-			));
-		}
-		normalized.push((pattern, rewrite));
-	}
-	if normalized.is_empty() {
-		return Err(Error::from_reason(
-			"`rewrites` is required and must include at least one pattern->rewrite mapping"
-				.to_string(),
-		));
-	}
-	normalized.sort_by(|left, right| left.0.cmp(&right.0));
-	Ok(normalized)
-}
+
 struct CompiledFindPattern {
 	pattern:                String,
 	compiled_by_lang:       HashMap<String, Pattern>,
@@ -726,194 +567,6 @@ pub fn ast_grep(options: AstFindOptions<'_>) -> task::Async<AstFindResult> {
 	})
 }
 
-#[napi(js_name = "astEdit")]
-pub fn ast_edit(options: AstReplaceOptions<'_>) -> task::Async<AstReplaceResult> {
-	let AstReplaceOptions {
-		rewrites,
-		lang,
-		path,
-		glob,
-		selector,
-		strictness,
-		dry_run,
-		max_replacements,
-		max_files,
-		fail_on_parse_error,
-		signal,
-		timeout_ms,
-	} = options;
-
-	let ct = task::CancelToken::new(timeout_ms, signal);
-	task::blocking("ast_edit", ct, move |ct| {
-		let rewrite_rules = normalize_rewrite_map(rewrites)?;
-		let strictness = parse_strictness(strictness.as_deref())?;
-		let dry_run = dry_run.unwrap_or(true);
-		let max_replacements = max_replacements.unwrap_or(u32::MAX).max(1);
-		let max_files = max_files.unwrap_or(u32::MAX).max(1);
-		let fail_on_parse_error = fail_on_parse_error.unwrap_or(false);
-
-		let lang_str = lang.as_deref().map(str::trim).filter(|v| !v.is_empty());
-		let candidates: Vec<_> = collect_candidates(path, glob.as_deref(), &ct)?
-			.into_iter()
-			.filter(|candidate| is_supported_file(&candidate.absolute_path, lang_str))
-			.collect();
-		let effective_lang = if let Some(lang) = lang_str {
-			lang.to_string()
-		} else {
-			infer_single_replace_lang(&candidates, &ct)?
-		};
-
-		let language = resolve_supported_lang(&effective_lang)?;
-		let mut parse_errors = Vec::new();
-		let mut compiled_rules = Vec::new();
-		for (pattern, rewrite) in rewrite_rules {
-			ct.heartbeat()?;
-			match compile_pattern(&pattern, selector.as_deref(), &strictness, language) {
-				Ok(compiled) => compiled_rules.push((pattern, rewrite, compiled)),
-				Err(err) => {
-					if fail_on_parse_error {
-						return Err(err);
-					}
-					parse_errors.push(format!("{pattern}: {err}"));
-				},
-			}
-		}
-		if compiled_rules.is_empty() {
-			return Ok(AstReplaceResult {
-				file_changes:       vec![],
-				total_replacements: 0,
-				files_touched:      0,
-				files_searched:     to_u32(candidates.len()),
-				applied:            !dry_run,
-				limit_reached:      false,
-				parse_errors:       (!parse_errors.is_empty()).then_some(parse_errors),
-				changes:            vec![],
-			});
-		}
-
-		let mut changes = Vec::new();
-		let mut file_counts: BTreeMap<String, u32> = BTreeMap::new();
-		let mut files_touched = 0u32;
-		let mut limit_reached = false;
-
-		for candidate in &candidates {
-			ct.heartbeat()?;
-			let source = match std::fs::read_to_string(&candidate.absolute_path) {
-				Ok(source) => source,
-				Err(err) => {
-					if fail_on_parse_error {
-						return Err(Error::from_reason(format!("{}: {err}", candidate.display_path)));
-					}
-					parse_errors.push(format!("{}: {err}", candidate.display_path));
-					continue;
-				},
-			};
-
-			let ast = language.ast_grep(&source);
-			if ast.root().dfs().any(|node| node.is_error()) {
-				let parse_issue = format!(
-					"{}: parse error (syntax tree contains error nodes)",
-					candidate.display_path
-				);
-				if fail_on_parse_error {
-					return Err(Error::from_reason(parse_issue));
-				}
-				parse_errors.push(parse_issue);
-				continue;
-			}
-
-			let mut file_changes = Vec::new();
-			let mut reached_max_replacements = false;
-			'patterns: for (_pattern, rewrite, compiled) in &compiled_rules {
-				for matched in ast.root().find_all(compiled.clone()) {
-					ct.heartbeat()?;
-					if changes.len() + file_changes.len() >= max_replacements as usize {
-						limit_reached = true;
-						reached_max_replacements = true;
-						break 'patterns;
-					}
-					let edit = matched.replace_by(rewrite.as_str());
-					let range = matched.range();
-					let start = matched.start_pos();
-					let end = matched.end_pos();
-					let after = String::from_utf8(edit.inserted_text.clone()).map_err(|err| {
-						Error::from_reason(format!(
-							"{}: replacement text is not valid UTF-8: {err}",
-							candidate.display_path
-						))
-					})?;
-					file_changes.push(PendingFileChange {
-						change: AstReplaceChange {
-							path: candidate.display_path.clone(),
-							before: matched.text().into_owned(),
-							after,
-							byte_start: to_u32(range.start),
-							byte_end: to_u32(range.end),
-							deleted_length: to_u32(edit.deleted_length),
-							start_line: to_u32(start.line().saturating_add(1)),
-							start_column: to_u32(start.column(matched.get_node()).saturating_add(1)),
-							end_line: to_u32(end.line().saturating_add(1)),
-							end_column: to_u32(end.column(matched.get_node()).saturating_add(1)),
-						},
-						edit,
-					});
-				}
-			}
-
-			if file_changes.is_empty() {
-				if reached_max_replacements {
-					break;
-				}
-				continue;
-			}
-			if files_touched >= max_files {
-				limit_reached = true;
-				break;
-			}
-			files_touched = files_touched.saturating_add(1);
-			file_counts.insert(candidate.display_path.clone(), to_u32(file_changes.len()));
-
-			if !dry_run {
-				let edits: Vec<Edit<String>> = file_changes
-					.iter()
-					.map(|entry| Edit {
-						position:       entry.edit.position,
-						deleted_length: entry.edit.deleted_length,
-						inserted_text:  entry.edit.inserted_text.clone(),
-					})
-					.collect();
-				let output = apply_edits(&source, &edits)?;
-				if output != source {
-					std::fs::write(&candidate.absolute_path, output).map_err(|err| {
-						Error::from_reason(format!("Failed to write {}: {err}", candidate.display_path))
-					})?;
-				}
-			}
-
-			changes.extend(file_changes.into_iter().map(|entry| entry.change));
-			if reached_max_replacements {
-				break;
-			}
-		}
-
-		let file_changes = file_counts
-			.into_iter()
-			.map(|(path, count)| AstReplaceFileChange { path, count })
-			.collect::<Vec<_>>();
-
-		Ok(AstReplaceResult {
-			file_changes,
-			total_replacements: to_u32(changes.len()),
-			files_touched,
-			files_searched: to_u32(candidates.len()),
-			applied: !dry_run,
-			limit_reached,
-			parse_errors: (!parse_errors.is_empty()).then_some(parse_errors),
-			changes,
-		})
-	})
-}
-
 #[cfg(test)]
 mod tests {
 	use std::{
@@ -974,41 +627,6 @@ mod tests {
 			.collect::<Vec<_>>();
 		assert_eq!(paths, vec!["a.ts".to_string(), "nested/b.ts".to_string()]);
 	}
-	fn make_mixed_temp_tree() -> TempTree {
-		let unique = SystemTime::now()
-			.duration_since(UNIX_EPOCH)
-			.expect("system time should be after UNIX_EPOCH")
-			.as_nanos();
-		let root = std::env::temp_dir().join(format!("pi-ast-mixed-lang-test-{unique}"));
-		fs::create_dir_all(&root).expect("temp mixed-lang dir should be created");
-		fs::write(root.join("a.ts"), "const a = 1;\n").expect("temp file a.ts should be written");
-		fs::write(root.join("b.rs"), "fn main() {}\n").expect("temp file b.rs should be written");
-		TempTree { root }
-	}
-
-	#[test]
-	fn infers_single_replace_lang_for_uniform_candidates() {
-		let tree = make_temp_tree();
-		let ct = task::CancelToken::default();
-		let candidates =
-			collect_candidates(Some(tree.root.to_string_lossy().into_owned()), Some("**/*.ts"), &ct)
-				.expect("candidate collection should succeed");
-		let inferred =
-			infer_single_replace_lang(&candidates, &ct).expect("language should be inferred");
-		assert_eq!(inferred, "typescript");
-	}
-
-	#[test]
-	fn rejects_mixed_replace_lang_inference() {
-		let tree = make_mixed_temp_tree();
-		let ct = task::CancelToken::default();
-		let candidates =
-			collect_candidates(Some(tree.root.to_string_lossy().into_owned()), None, &ct)
-				.expect("candidate collection should succeed");
-		let err = infer_single_replace_lang(&candidates, &ct)
-			.expect_err("mixed language inference should fail");
-		assert!(err.to_string().contains("multiple languages"));
-	}
 	#[test]
 	fn resolves_supported_language_aliases() {
 		assert_eq!(resolve_supported_lang("ts").ok(), Some(SupportLang::TypeScript));
@@ -1021,24 +639,4 @@ mod tests {
 		assert!(resolve_supported_lang("brainfuck").is_err());
 	}
 
-	#[test]
-	fn applies_non_overlapping_edits() {
-		let source = "const answer = 41;";
-		let edits = vec![
-			Edit::<String> { position: 6, deleted_length: 6, inserted_text: b"value".to_vec() },
-			Edit::<String> { position: 15, deleted_length: 2, inserted_text: b"42".to_vec() },
-		];
-		let output = apply_edits(source, &edits).expect("edits should apply");
-		assert_eq!(output, "const value = 42;");
-	}
-
-	#[test]
-	fn rejects_overlapping_edits() {
-		let source = "abcdef";
-		let edits = vec![
-			Edit::<String> { position: 1, deleted_length: 3, inserted_text: b"x".to_vec() },
-			Edit::<String> { position: 2, deleted_length: 1, inserted_text: b"y".to_vec() },
-		];
-		assert!(apply_edits(source, &edits).is_err());
-	}
 }

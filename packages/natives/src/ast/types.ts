@@ -40,51 +40,8 @@ export interface AstFindResult {
 	parseErrors?: string[];
 }
 
-export interface AstReplaceOptions extends Cancellable {
-	rewrites?: Record<string, string>;
-	lang?: string;
-	path?: string;
-	glob?: string;
-	selector?: string;
-	strictness?: AstStrictness;
-	dryRun?: boolean;
-	maxReplacements?: number;
-	maxFiles?: number;
-	failOnParseError?: boolean;
-}
-
-export interface AstReplaceChange {
-	path: string;
-	before: string;
-	after: string;
-	byteStart: number;
-	byteEnd: number;
-	deletedLength: number;
-	startLine: number;
-	startColumn: number;
-	endLine: number;
-	endColumn: number;
-}
-
-export interface AstReplaceFileChange {
-	path: string;
-	count: number;
-}
-
-export interface AstReplaceResult {
-	changes: AstReplaceChange[];
-	fileChanges: AstReplaceFileChange[];
-	totalReplacements: number;
-	filesTouched: number;
-	filesSearched: number;
-	applied: boolean;
-	limitReached: boolean;
-	parseErrors?: string[];
-}
-
 declare module "../bindings" {
 	interface NativeBindings {
 		astGrep(options: AstFindOptions): Promise<AstFindResult>;
-		astEdit(options: AstReplaceOptions): Promise<AstReplaceResult>;
 	}
 }

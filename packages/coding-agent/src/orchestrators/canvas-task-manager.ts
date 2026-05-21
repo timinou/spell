@@ -28,7 +28,7 @@ import {
 import type { EventBus } from "../utils/event-bus";
 
 const DEFAULT_MODEL = "pi/sniper";
-const DEFAULT_TOOLS = ["read", "grep", "find", "edit", "lsp", "bash", "ast_grep", "ast_edit"];
+const DEFAULT_TOOLS = ["read", "grep", "find", "edit", "lsp", "bash", "ast_grep"];
 const DEFAULT_TASK_TIMEOUT_MS = 120_000;
 
 function stringifyTaskResult(value: unknown): string | undefined {

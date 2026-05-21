@@ -1,10 +1,7 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { applyPendingAction, PendingActionStore } from "@oh-my-pi/pi-coding-agent/tools/pending-action";
 import { ResolveTool, resolveToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/resolve";
 import * as nativesModule from "@oh-my-pi/pi-natives";
@@ -272,43 +269,6 @@ describe("ResolveTool", () => {
 	});
 });
 
-it("discards previewed ast edits without mutating disk", async () => {
-	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "resolve-discard-preview-"));
-	try {
-		const filePath = path.join(tempDir, "legacy.ts");
-		await Bun.write(filePath, "legacyWrap(x, value)\n");
-		const pendingActionStore = new PendingActionStore();
-		const tools = await createTools(
-			createSession(pendingActionStore, {
-				cwd: tempDir,
-				settings: Settings.isolated({ "lsp.enabled": false }),
-			}),
-		);
-		const astEditTool = tools.find(entry => entry.name === "ast_edit");
-		const resolveTool = tools.find(entry => entry.name === "resolve");
-		expect(astEditTool).toBeDefined();
-		expect(resolveTool).toBeDefined();
-
-		await astEditTool!.execute("ast-edit-preview", {
-			ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
-			lang: "typescript",
-			path: filePath,
-		});
-		expect(pendingActionStore.hasPending).toBe(true);
-
-		const result = await resolveTool!.execute("resolve-discard", {
-			action: "discard",
-			reason: "Preview should not land",
-		});
-
-		expect(getText(result)).toContain("Discarded");
-		expect(result.details).toEqual(expect.objectContaining({ mutationState: "discarded", persisted: false }));
-		expect(pendingActionStore.hasPending).toBe(false);
-		expect(await Bun.file(filePath).text()).toBe("legacyWrap(x, value)\n");
-	} finally {
-		await fs.rm(tempDir, { recursive: true, force: true });
-	}
-});
 
 it("renders a highlighted apply summary", async () => {
 	const theme = await getThemeByName("dark");

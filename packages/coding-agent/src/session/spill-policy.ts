@@ -51,7 +51,6 @@ export const PRECISION_SPILL_EXEMPT_TOOLS = new Set([
 	"code",
 	"lsp",
 	"ast_grep",
-	"ast_edit",
 	GET_TOOL_NAME,
 ]);
 

@@ -470,7 +470,6 @@ export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> =
 	},
 	"grep.contextAfter": { block: "tools", nodePath: "grep", accessor: "property", propertyName: "context-after" },
 	"astGrep.enabled": { block: "tools", nodePath: "ast-grep", accessor: "property", propertyName: "enabled" },
-	"astEdit.enabled": { block: "tools", nodePath: "ast-edit", accessor: "property", propertyName: "enabled" },
 
 	"renderMermaid.enabled": {
 		block: "tools",

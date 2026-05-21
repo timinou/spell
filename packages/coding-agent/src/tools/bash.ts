@@ -238,7 +238,6 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		this.description = renderPromptTemplate(bashDescription, {
 			asyncEnabled: this.#asyncEnabled,
 			hasAstGrep: this.session.settings.get("astGrep.enabled"),
-			hasAstEdit: this.session.settings.get("astEdit.enabled"),
 		});
 	}
 
