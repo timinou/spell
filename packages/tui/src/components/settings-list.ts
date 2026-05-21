@@ -1,5 +1,5 @@
 import { matchesKey } from "../keys";
-import type { Component } from "../tui";
+import type { Component, Container } from "../tui";
 import { Ellipsis, padding, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
 
 export interface SettingItem {
@@ -59,8 +59,15 @@ export class SettingsList implements Component {
 		}
 	}
 
+	#parent?: Container;
+
+	setParent(p: Container | undefined): void {
+		this.#parent = p;
+	}
+
 	invalidate(): void {
 		this.#submenuComponent?.invalidate?.();
+		this.#parent?.markDirty();
 	}
 
 	render(width: number): string[] {

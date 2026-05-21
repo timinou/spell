@@ -1,6 +1,6 @@
 import { matchesKey } from "../keys";
 import type { SymbolTheme } from "../symbols";
-import type { Component } from "../tui";
+import type { Component, Container } from "../tui";
 import { Ellipsis, padding, replaceTabs, truncateToWidth, visibleWidth } from "../utils";
 
 export interface SelectItem {
@@ -30,6 +30,11 @@ function sanitizeSingleLine(text: string): string {
 export class SelectList implements Component {
 	#filteredItems: ReadonlyArray<SelectItem>;
 	#selectedIndex: number = 0;
+	#parent?: Container;
+
+	setParent(p: Container | undefined): void {
+		this.#parent = p;
+	}
 
 	onSelect?: (item: SelectItem) => void;
 	onCancel?: () => void;
@@ -47,14 +52,16 @@ export class SelectList implements Component {
 		this.#filteredItems = this.items.filter(item => item.value.toLowerCase().startsWith(filter.toLowerCase()));
 		// Reset selection when filter changes
 		this.#selectedIndex = 0;
+		this.#parent?.markDirty();
 	}
 
 	setSelectedIndex(index: number): void {
 		this.#selectedIndex = Math.max(0, Math.min(index, this.#filteredItems.length - 1));
+		this.#parent?.markDirty();
 	}
 
 	invalidate(): void {
-		// No cached state to invalidate currently
+		this.#parent?.markDirty();
 	}
 
 	render(width: number): string[] {

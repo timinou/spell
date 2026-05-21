@@ -1,4 +1,4 @@
-import type { Component } from "../tui";
+import type { Component, Container } from "../tui";
 import { padding, truncateToWidth } from "../utils";
 
 /**
@@ -15,8 +15,14 @@ export class TruncatedText implements Component {
 		this.#paddingY = paddingY;
 	}
 
+	#parent?: Container;
+
+	setParent(p: Container | undefined): void {
+		this.#parent = p;
+	}
+
 	invalidate(): void {
-		// No cached state to invalidate currently
+		this.#parent?.markDirty();
 	}
 
 	render(width: number): string[] {

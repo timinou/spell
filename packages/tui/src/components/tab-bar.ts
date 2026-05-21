@@ -9,7 +9,7 @@
  * - Shift+Tab / Arrow Left: Previous tab (wraps around)
  */
 import { matchesKey } from "../keys";
-import type { Component } from "../tui";
+import type { Component, Container } from "../tui";
 import { truncateToWidth, visibleWidth } from "../utils";
 
 /** Tab definition */
@@ -50,6 +50,11 @@ export class TabBar implements Component {
 	#activeIndex: number = 0;
 	#theme: TabBarTheme;
 	#label: string;
+	#parent?: Container;
+
+	setParent(p: Container | undefined): void {
+		this.#parent = p;
+	}
 
 	/** Callback fired when the active tab changes */
 	onTabChange?: (tab: Tab, index: number) => void;
@@ -77,6 +82,7 @@ export class TabBar implements Component {
 		if (newIndex !== this.#activeIndex) {
 			this.#activeIndex = newIndex;
 			this.onTabChange?.(this.#tabs[this.#activeIndex], this.#activeIndex);
+			this.#parent?.markDirty();
 		}
 	}
 
@@ -91,7 +97,7 @@ export class TabBar implements Component {
 	}
 
 	invalidate(): void {
-		// No cached state to invalidate
+		this.#parent?.markDirty();
 	}
 
 	/**
