@@ -4157,6 +4157,9 @@ dependencies = [
 name = "pi-embedding-worker"
 version = "13.12.8"
 dependencies = [
+ "clap",
+ "fd-lock",
+ "nix 0.29.0",
  "pi-code-vectors",
  "serde",
  "serde_json",
@@ -4184,6 +4187,7 @@ dependencies = [
  "arboard",
  "ast-grep-core",
  "base64 0.22.1",
+ "bincode",
  "brush-builtins",
  "brush-core",
  "clap",
