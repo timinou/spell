@@ -50,7 +50,7 @@ impl NameLexer for DummyLexer {
 /// open it without depending on cwd. FEAT-689.
 /// Qualifiers are rejected because the code_buffer `resolve_symbol`
 /// surface only understands simple symbol names.
-fn build_target_id(path: &CodePath, root: Option<&std::path::Path>) -> Result<String, Diagnostic> {
+pub(crate) fn build_target_id(path: &CodePath, root: Option<&std::path::Path>) -> Result<String, Diagnostic> {
 	if path.qualifier.is_some() {
 		return Err(Diagnostic {
 			variant: DiagnosticVariant::UnsupportedOperation,
@@ -94,7 +94,7 @@ fn flatten_string_array(obj: &mut serde_json::Map<String, Value>, key: &str) {
 
 /// Convert an Op variant into the JSON shape expected by
 /// `execute_code_buffer_inner`.
-fn op_to_code_buffer_action(op: &Op) -> Value {
+pub(crate) fn op_to_code_buffer_action(op: &Op) -> Value {
 	let mut value = match op {
 		Op::SymbolReplace { scope, content, .. } => {
 			let scope_str = match scope {
@@ -283,83 +283,76 @@ impl CodeResolverImpl {
 	///
 	/// Wave 2: extracted from old `apply` to enable reuse by CssResolver
 	/// and HeadingResolver.
+	pub(crate) fn apply_to_buffer(
+		&self,
+		buffer: &mut pi_code_engine::buffer::CodeBuffer,
+		target: &CodePath,
+		action_json: &Value,
+	) -> Result<MutationOutcome, Diagnostic> {
+		let target_id = build_target_id(target, self.root.as_deref())?;
+		let path = buffer.path().ok_or_else(|| Diagnostic {
+			variant: DiagnosticVariant::IncompatibleTargetShape,
+			message: "buffer has no path".into(),
+			span:    None,
+		})?;
+		let profile = crate::code_buffer::get_profile(path, buffer.language())
+			.map_err(|e| Diagnostic {
+				variant: DiagnosticVariant::Inaccessible,
+				message: e.to_string(),
+				span:    None,
+			})?;
+		let prepared = crate::code_buffer::single_action(buffer, &profile, path, &target_id, action_json)
+			.map_err(|e| Diagnostic {
+				variant: DiagnosticVariant::UnsupportedOperation,
+				message: e.to_string(),
+				span:    None,
+			})?;
+		buffer.edit_batch(prepared.edits)
+			.map_err(|e| Diagnostic {
+				variant: DiagnosticVariant::UnsupportedOperation,
+				message: e.to_string(),
+				span:    None,
+			})?;
+		Ok(MutationOutcome {
+			edit_count:     1,
+			diff:           None,
+			created:        false,
+			target_summary: Some(target_id),
+		})
+	}
+
+	/// Wraps `apply_to_buffer` in an `edit_transaction` so callers that
+	/// don't have a `CodeBuffer` handle (e.g. matrix tests) can still
+	/// dispatch symbol/CSS/heading ops through the canonical path.
 	pub(crate) fn apply_via_code_buffer(
 		&self,
 		target: &CodePath,
 		action_json: &Value,
 	) -> Result<MutationOutcome, Diagnostic> {
 		let target_id = build_target_id(target, self.root.as_deref())?;
-		let request = json!({
-			"command": "edit",
-			"sessionId": self.session_id.as_deref().unwrap_or(MUTATION_SESSION_ID),
-			"operations": [{
-				"targetId": target_id,
-				"actions": [action_json]
-			}]
-		});
+		let (file_part, _) = target_id.split_once("::").unwrap_or((&target_id, ""));
+		let path = std::path::Path::new(file_part);
+		let path = if path.is_absolute() {
+			path.to_path_buf()
+		} else {
+			self.root.as_deref().unwrap_or(std::path::Path::new(".")).join(path)
+		};
 
-		let result =
-			crate::code_buffer::execute_code_buffer_inner(&request).map_err(|e| Diagnostic {
-				variant: DiagnosticVariant::Inaccessible,
+		let code_paths = vec![target_id];
+		let session_id = self.session_id.as_deref().unwrap_or(MUTATION_SESSION_ID);
+
+		let (_, outcome) = crate::buffer_registry()
+			.edit_transaction(Some(session_id), &path, &code_paths, |buffer| {
+				self.apply_to_buffer(buffer, target, action_json)
+					.map_err(|d| pi_code_engine::CodeEngineError::Edit(d.message))
+			})
+			.map_err(|e| Diagnostic {
+				variant: DiagnosticVariant::UnsupportedOperation,
 				message: format!("code buffer execution failed: {e}"),
 				span:    None,
 			})?;
 
-		// Top-level wrapper: { error: bool, output: {...} }
-		if result.get("error").and_then(Value::as_bool).unwrap_or(true) {
-			let msg = result
-				.get("output")
-				.and_then(|o| o.get("message"))
-				.and_then(Value::as_str)
-				.unwrap_or("unknown code buffer error");
-			return Err(Diagnostic {
-				variant: DiagnosticVariant::UnsupportedOperation,
-				message: msg.to_string(),
-				span:    None,
-			});
-		}
-
-		let output = result.get("output").cloned().unwrap_or_default();
-		let status = output
-			.get("status")
-			.and_then(Value::as_str)
-			.unwrap_or("unknown");
-
-		let file_results = output
-			.get("fileResults")
-			.and_then(Value::as_array)
-			.and_then(|arr| arr.first())
-			.cloned()
-			.unwrap_or_default();
-
-		if status == "failed" {
-			let msg = file_results
-				.get("error")
-				.and_then(|e| e.get("message"))
-				.and_then(Value::as_str)
-				.unwrap_or("edit failed");
-			return Err(Diagnostic {
-				variant: DiagnosticVariant::UnsupportedOperation,
-				message: msg.to_string(),
-				span:    None,
-			});
-		}
-
-		let edit_count = file_results
-			.get("editCount")
-			.and_then(Value::as_u64)
-			.map(|n| n as u32)
-			.unwrap_or(0);
-		let diff = file_results
-			.get("diff")
-			.and_then(Value::as_str)
-			.map(String::from);
-		let created = file_results
-			.get("created")
-			.and_then(Value::as_bool)
-			.unwrap_or(false);
-
-		Ok(MutationOutcome { edit_count, diff, created, target_summary: Some(target_id) })
+		Ok(outcome)
 	}
 }
 

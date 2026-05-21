@@ -11,7 +11,7 @@ use pi_code_path::{
 	ast::MutationOutcome,
 	op::Op,
 	resolver::traits::{CancellationToken, MutationResolver},
-	types::Diagnostic,
+	types::{Diagnostic, DiagnosticVariant},
 };
 use serde_json::json;
 
@@ -24,6 +24,46 @@ pub struct CssResolver {
 impl CssResolver {
 	pub fn new(inner: Arc<CodeResolverImpl>) -> Self {
 		Self { inner }
+	}
+
+	pub(crate) fn apply_to_buffer(
+		&self,
+		buffer: &mut pi_code_engine::buffer::CodeBuffer,
+		op: &Op,
+	) -> Result<MutationOutcome, Diagnostic> {
+		let action_json = match op {
+			Op::CssRenameClassToken { target: _, find, replace } => json!({
+				"kind": "renameClassToken",
+				"find": find,
+				"content": replace
+			}),
+			Op::CssRenameIdToken { target: _, find, replace } => json!({
+				"kind": "renameIdToken",
+				"find": find,
+				"content": replace
+			}),
+			Op::CssRenameCustomProp { target: _, find, replace } => json!({
+				"kind": "renameCustomProperty",
+				"find": find,
+				"content": replace
+			}),
+			Op::CssRemoveDeadStyle { target: _ } => json!({ "kind": "removeDeadStyle" }),
+			_ => {
+				return Err(Diagnostic {
+					variant: DiagnosticVariant::UnsupportedOperation,
+					message: "unexpected CSS op variant".into(),
+					span:    None,
+				});
+			},
+		};
+		let target = match op {
+			Op::CssRenameClassToken { target, .. }
+			| Op::CssRenameIdToken { target, .. }
+			| Op::CssRenameCustomProp { target, .. }
+			| Op::CssRemoveDeadStyle { target } => target,
+			_ => unreachable!(),
+		};
+		self.inner.apply_to_buffer(buffer, target.as_codepath(), &action_json)
 	}
 }
 

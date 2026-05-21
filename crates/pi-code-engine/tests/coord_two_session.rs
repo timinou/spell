@@ -68,13 +68,13 @@ async fn two_session_disjoint_edits_share_broker_and_journal() {
 	let reg_b = registry_with_socket(&broker.socket_path, "s2");
 
 	let (first, ()) = reg_a
-		.edit_transaction("s1", &path, &[HANDLE_PATH.into()], |buffer| {
+		.edit_transaction(Some("s1"), &path, &[HANDLE_PATH.into()], |buffer| {
 			replace_once(buffer, "\"handle\"", "\"handle-a\"")?;
 			Ok(())
 		})
 		.expect("first commit");
 	let (second, ()) = reg_b
-		.edit_transaction("s2", &path, &[DISPATCH_PATH.into()], |buffer| {
+		.edit_transaction(Some("s2"), &path, &[DISPATCH_PATH.into()], |buffer| {
 			replace_once(buffer, "\"dispatch\"", "\"dispatch-b\"")?;
 			Ok(())
 		})
