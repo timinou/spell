@@ -25,7 +25,7 @@ import { initXdg } from "./commands/init-xdg";
 // Types
 // =============================================================================
 
-export type ConfigAction = "list" | "get" | "set" | "reset" | "path" | "init-xdg";
+export type ConfigAction = "list" | "get" | "set" | "reset" | "path" | "init-xdg" | "show" | "doctor";
 
 export interface ConfigCommandArgs {
 	action: ConfigAction;
@@ -73,7 +73,7 @@ function getSettingValues(def: CliSettingDef): readonly string[] | undefined {
 // Argument Parser
 // =============================================================================
 
-const VALID_ACTIONS: ConfigAction[] = ["list", "get", "set", "reset", "path", "init-xdg"];
+const VALID_ACTIONS: ConfigAction[] = ["list", "get", "set", "reset", "path", "init-xdg", "show", "doctor"];
 
 /**
  * Parse config subcommand arguments.
@@ -254,6 +254,12 @@ export async function runConfigCommand(cmd: ConfigCommandArgs): Promise<void> {
 		case "init-xdg":
 			await initXdg();
 			break;
+		case "show":
+			await handleShow(cmd.flags);
+			break;
+		case "doctor":
+			await handleDoctor();
+			break;
 	}
 }
 
@@ -416,3 +422,89 @@ ${chalk.bold("Boolean Values:")}
   true, false, yes, no, on, off, 1, 0
 `);
 }
+
+// =============================================================================
+// `spell config show` — raw KDL view per tier
+// =============================================================================
+
+async function handleShow(_flags: { json?: boolean }): Promise<void> {
+	const { getUserKdlPath, getLocalKdlPath, getProjectKdlPath } = await import("@oh-my-pi/pi-utils");
+	const { default: fs } = await import("node:fs/promises");
+
+	const tiers: Array<{ name: string; path: string }> = [
+		{ name: "user", path: getUserKdlPath() },
+		{ name: "project", path: getProjectKdlPath() },
+		{ name: "local", path: getLocalKdlPath() },
+	];
+
+	for (const { name, path: filePath } of tiers) {
+		console.log(chalk.bold.cyan(`\n── ${name} tier ──\n   ${filePath}\n`));
+		try {
+			const content = await fs.readFile(filePath, "utf8");
+			console.log(content);
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+				console.log(chalk.dim("(file does not exist)"));
+			} else {
+				console.log(chalk.red(`error: ${String(err)}`));
+			}
+		}
+	}
+
+	console.log(chalk.bold.cyan(`\n\u2500\u2500 session tier \u2500\u2500`));
+	console.log(chalk.dim("(volatile / in-memory only)"));
+}
+
+// =============================================================================
+// `spell config doctor` — orphan legacy file scan
+// =============================================================================
+//
+// Post-migration verification. Walks the same candidate locations the
+// migrator knows about. Reports findings so the user can confirm clean
+// state before deleting src/migration/ (WAVE 8 of PLAN-311).
+
+async function handleDoctor(): Promise<void> {
+	// Dynamic import to keep the migrator's removability contract intact:
+	// once the user deletes src/migration/, doctor still works — it just
+	// reports a clean state (no detector available, nothing to detect).
+	let detectLegacyConfig:
+		| ((opts: { cwd: string }) => Promise<{ findings: unknown[]; skipped: string[] }>)
+		| undefined;
+	try {
+		({ detectLegacyConfig } = (await import("../migration/detect")) as never);
+	} catch {
+		console.log(
+			chalk.green("\u2713 Migration module not present — nothing to detect (clean install)."),
+		);
+		return;
+	}
+	if (!detectLegacyConfig) {
+		console.log(chalk.dim("detectLegacyConfig export missing; skipping doctor scan."));
+		return;
+	}
+	const { findings, skipped } = await detectLegacyConfig({ cwd: process.cwd() });
+
+	if (findings.length === 0 && skipped.length === 0) {
+		console.log(chalk.green("\u2713 Clean: no legacy Spell config files detected."));
+		console.log(chalk.dim("  You can safely delete packages/coding-agent/src/migration/"));
+		console.log(chalk.dim("  (after removing the integration in src/config/settings.ts)."));
+		return;
+	}
+
+	if (findings.length > 0) {
+		console.log(chalk.bold.yellow(`\nFound ${findings.length} unmigrated legacy file(s):`));
+		for (const raw of findings) {
+			const f = raw as { source: string; dest: string; format: string; bytes: number; tier: string };
+			console.log(`  ${chalk.cyan(f.source)}`);
+			console.log(`    \u2192 ${f.dest}  ${chalk.dim(`(${f.format}, ${f.bytes} B, ${f.tier} tier)`)}`);
+		}
+		console.log();
+		console.log(chalk.dim("Run Spell (with the migrator enabled) to translate these to KDL."));
+	}
+
+	if (skipped.length > 0) {
+		console.log(chalk.bold.dim(`\nSkipped ${skipped.length} legacy file(s) (already have .bak siblings):`));
+		for (const s of skipped) console.log(`  ${chalk.dim(s)}`);
+	}
+}
+
