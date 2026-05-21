@@ -24,6 +24,15 @@ export interface Finding {
 	tier: "user" | "project";
 	/** Size of the source file in bytes (for dialog display). */
 	bytes: number;
+	/**
+	 * When set, the entire parsed file content (array or record) becomes the
+	 * value of this `SettingPath` in the destination KDL. Used for legacy
+	 * files whose top-level shape doesn't match the dotted-key flattener:
+	 *   - secrets.yml — a top-level YAML array; `topLevelKey: "secrets"`
+	 * When unset, the translator flattens the parsed object against
+	 * KDL_SETTINGS_MAP (the common case).
+	 */
+	topLevelKey?: string;
 }
 
 /** Options for the scan. */
@@ -91,6 +100,7 @@ interface Candidate {
 	format: LegacyFormat;
 	dest: string;
 	tier: "user" | "project";
+	topLevelKey?: string;
 }
 
 /**
@@ -132,6 +142,13 @@ export async function detectLegacyConfig(options: DetectOptions = {}): Promise<D
 		{ source: legacyUserKdl, format: "kdl", dest: userDest, tier: "user" },
 		{ source: path.join(userAgentDir, "config.yml"), format: "yaml", dest: userDest, tier: "user" },
 		{ source: path.join(userAgentDir, "settings.json"), format: "json", dest: userDest, tier: "user" },
+		{
+			source: path.join(userAgentDir, "secrets.yml"),
+			format: "yaml",
+			dest: userDest,
+			tier: "user",
+			topLevelKey: "secrets",
+		},
 		// PROJECT tier
 		{ source: path.join(projectBase, "spell.kdl"), format: "kdl", dest: projectDest, tier: "project" },
 		{ source: path.join(projectBase, "settings.json"), format: "json", dest: projectDest, tier: "project" },
@@ -140,6 +157,13 @@ export async function detectLegacyConfig(options: DetectOptions = {}): Promise<D
 			format: "yaml",
 			dest: projectDest,
 			tier: "project",
+		},
+		{
+			source: path.join(projectBase, "secrets.yml"),
+			format: "yaml",
+			dest: projectDest,
+			tier: "project",
+			topLevelKey: "secrets",
 		},
 	];
 
@@ -164,6 +188,7 @@ export async function detectLegacyConfig(options: DetectOptions = {}): Promise<D
 			dest: c.dest,
 			tier: c.tier,
 			bytes: size,
+			...(c.topLevelKey ? { topLevelKey: c.topLevelKey } : {}),
 		});
 	}
 

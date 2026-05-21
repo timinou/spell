@@ -143,6 +143,20 @@ type SettingDef =
 const EMPTY_STRING_ARRAY: string[] = [];
 const EMPTY_STRING_RECORD: Record<string, string> = {};
 
+/**
+ * Secret obfuscation entry. Mirrors `SecretEntry` from `secrets/obfuscator.ts`
+ * — duplicated here to keep settings-schema dependency-free of the secrets
+ * module. Consumers cast `settings.get("secrets")` to `SecretEntry[]`.
+ */
+export interface SecretEntrySchema {
+	type: "plain" | "regex";
+	content: string;
+	mode?: "obfuscate" | "replace";
+	replacement?: string;
+	flags?: string;
+}
+const EMPTY_SECRETS_ARRAY: SecretEntrySchema[] = [];
+
 export const SETTINGS_SCHEMA = {
 	// ────────────────────────────────────────────────────────────────────────
 	// General settings (no UI)
@@ -160,6 +174,14 @@ export const SETTINGS_SCHEMA = {
 	disabledExtensions: { type: "array", default: EMPTY_STRING_ARRAY },
 
 	modelRoles: { type: "record", default: EMPTY_STRING_RECORD },
+
+	/**
+	 * Secret obfuscation entries. Sourced from spell.kdl `secrets { secret ... }`
+	 * block. Replaces legacy `~/.spell/agent/secrets.yml` /
+	 * `<cwd>/.spell/secrets.yml` files (BUG-388, WAVE 2). No UI — edited
+	 * directly in spell.kdl.
+	 */
+	secrets: { type: "array", default: EMPTY_SECRETS_ARRAY },
 
 	// ────────────────────────────────────────────────────────────────────────
 	// Appearance

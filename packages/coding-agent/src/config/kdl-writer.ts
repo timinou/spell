@@ -4,7 +4,13 @@ import { Document, format, type Node, parse } from "@bgotink/kdl";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 
 import { withFileLock } from "./file-lock";
-import { writeAllowedFolders, writeStatusLineSegmentOptions, writeTreeStringRecord } from "./kdl-compatibility";
+import {
+	writeAllowedFolders,
+	writeSecrets,
+	writeStatusLineSegmentOptions,
+	writeTreeStringRecord,
+	type SecretsKdlEntry,
+} from "./kdl-compatibility";
 import { findOrCreateChildNode, findOrCreateDocumentNode, setArgument } from "./kdl-helpers";
 import { getKdlMapping } from "./kdl-settings-map";
 
@@ -35,6 +41,13 @@ function setNodeValue(node: Node, value: unknown): void {
 function applySetting(doc: Document, path: string, value: unknown): void {
 	const mapping = getKdlMapping(path);
 	if (!mapping) return;
+
+	// Block-only settings: writer operates on the top-level node directly.
+	if (path === "secrets") {
+		const blockNode = findOrCreateDocumentNode(doc, mapping.block);
+		writeSecrets(blockNode, value as SecretsKdlEntry[]);
+		return;
+	}
 
 	const blockNode = findOrCreateDocumentNode(doc, mapping.block);
 	const segments = mapping.nodePath.split(".");
