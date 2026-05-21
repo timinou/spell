@@ -275,3 +275,189 @@ export function writeSecrets(node: Node, value: SecretsKdlEntry[]): void {
 	node.children = children;
 }
 
+
+// =============================================================================
+// mcp.servers — MCP server config map
+// =============================================================================
+//
+// On disk:
+//
+//   mcp {
+//     server "memory" type="stdio" enabled=true timeout=30 {
+//       command "mcp-memory"
+//       args "--db" "./memory.db"
+//       env "FOO" "bar"
+//     }
+//     server "exa" type="http" {
+//       url "https://mcp.exa.ai/sse?exaApiKey=..."
+//       headers "X-Foo" "bar"
+//     }
+//   }
+//
+// In memory: Record<serverName, McpServerKdlEntry>.
+
+export interface McpServerKdlEntry {
+	type?: "stdio" | "http" | "sse";
+	enabled?: boolean;
+	timeout?: number;
+	command?: string;
+	args?: string[];
+	env?: Record<string, string>;
+	url?: string;
+	headers?: Record<string, string>;
+	auth?: { type: "oauth" | "apikey"; credentialId?: string };
+	oauth?: { clientId?: string; callbackPort?: number };
+}
+
+function readStringRecordFromKv(parent: Node, name: string): Record<string, string> | undefined {
+	const rec: Record<string, string> = {};
+	let found = false;
+	for (const child of getChildNodes(parent)) {
+		if (child.getName() !== name) continue;
+		const args = [...child.getArguments()];
+		if (args.length < 2) continue;
+		const k = args[0];
+		const v = args[1];
+		if (typeof k !== "string" || typeof v !== "string") continue;
+		rec[k] = v;
+		found = true;
+	}
+	return found ? rec : undefined;
+}
+
+function writeStringRecordKv(name: string, value: Record<string, string>, children: Document): void {
+	for (const [k, v] of Object.entries(value)) {
+		const node = NodeClass.create(name);
+		node.addArgument(k);
+		node.addArgument(v);
+		children.appendNode(node);
+	}
+}
+
+export function readMcpServers(node: Node): KdlCompatResult<Record<string, McpServerKdlEntry>> {
+	const value: Record<string, McpServerKdlEntry> = {};
+	const warnings: KdlCompatWarning[] = [];
+	for (const child of getChildNodes(node)) {
+		if (child.getName() !== "server") {
+			warnings.push({
+				path: `mcp.${child.getName()}`,
+				message: "unknown node inside `mcp` block ignored (expected `server`)",
+			});
+			continue;
+		}
+		const name = getStringArgument(child);
+		if (!name) {
+			warnings.push({ path: "mcp.server", message: "missing server name; skipping" });
+			continue;
+		}
+
+		const entry: McpServerKdlEntry = {};
+		const rawType = child.getProperty("type");
+		if (rawType === "stdio" || rawType === "http" || rawType === "sse") entry.type = rawType;
+		else if (rawType !== undefined)
+			warnings.push({ path: `mcp.servers.${name}.type`, message: `unknown type ${JSON.stringify(rawType)}` });
+
+		const rawEnabled = child.getProperty("enabled");
+		if (typeof rawEnabled === "boolean") entry.enabled = rawEnabled;
+
+		const rawTimeout = child.getProperty("timeout");
+		if (typeof rawTimeout === "number" && Number.isFinite(rawTimeout) && rawTimeout > 0) entry.timeout = rawTimeout;
+
+		const commandNode = getChildNodes(child).find(n => n.getName() === "command");
+		if (commandNode) {
+			const cmd = getStringArgument(commandNode);
+			if (cmd) entry.command = cmd;
+		}
+
+		const argsNode = getChildNodes(child).find(n => n.getName() === "args");
+		if (argsNode) {
+			const args = [...argsNode.getArguments()].filter((a): a is string => typeof a === "string");
+			if (args.length > 0) entry.args = args;
+		}
+
+		const env = readStringRecordFromKv(child, "env");
+		if (env) entry.env = env;
+
+		const urlNode = getChildNodes(child).find(n => n.getName() === "url");
+		if (urlNode) {
+			const url = getStringArgument(urlNode);
+			if (url) entry.url = url;
+		}
+
+		const headers = readStringRecordFromKv(child, "headers");
+		if (headers) entry.headers = headers;
+
+		const authNode = getChildNodes(child).find(n => n.getName() === "auth");
+		if (authNode) {
+			const authType = authNode.getProperty("type");
+			if (authType === "oauth" || authType === "apikey") {
+				const credentialId = authNode.getProperty("credentialId");
+				entry.auth = {
+					type: authType,
+					...(typeof credentialId === "string" ? { credentialId } : {}),
+				};
+			}
+		}
+
+		const oauthNode = getChildNodes(child).find(n => n.getName() === "oauth");
+		if (oauthNode) {
+			const clientId = oauthNode.getProperty("clientId");
+			const callbackPort = oauthNode.getProperty("callbackPort");
+			entry.oauth = {
+				...(typeof clientId === "string" ? { clientId } : {}),
+				...(typeof callbackPort === "number" ? { callbackPort } : {}),
+			};
+		}
+
+		value[name] = entry;
+	}
+	return { value, warnings };
+}
+
+export function writeMcpServers(node: Node, value: Record<string, McpServerKdlEntry>): void {
+	clearNodeEntries(node);
+	const children = new Document([]);
+	for (const [name, entry] of Object.entries(value)) {
+		if (!entry || typeof entry !== "object") continue;
+		const server = NodeClass.create("server");
+		server.addArgument(name);
+		if (entry.type) server.setProperty("type", entry.type);
+		if (entry.enabled !== undefined) server.setProperty("enabled", entry.enabled);
+		if (entry.timeout !== undefined) server.setProperty("timeout", entry.timeout);
+
+		const serverChildren = new Document([]);
+		if (entry.command) {
+			const n = NodeClass.create("command");
+			n.addArgument(entry.command);
+			serverChildren.appendNode(n);
+		}
+		if (entry.args && entry.args.length > 0) {
+			const n = NodeClass.create("args");
+			for (const a of entry.args) n.addArgument(a);
+			serverChildren.appendNode(n);
+		}
+		if (entry.env) writeStringRecordKv("env", entry.env, serverChildren);
+		if (entry.url) {
+			const n = NodeClass.create("url");
+			n.addArgument(entry.url);
+			serverChildren.appendNode(n);
+		}
+		if (entry.headers) writeStringRecordKv("headers", entry.headers, serverChildren);
+		if (entry.auth) {
+			const n = NodeClass.create("auth");
+			n.setProperty("type", entry.auth.type);
+			if (entry.auth.credentialId !== undefined) n.setProperty("credentialId", entry.auth.credentialId);
+			serverChildren.appendNode(n);
+		}
+		if (entry.oauth) {
+			const n = NodeClass.create("oauth");
+			if (entry.oauth.clientId !== undefined) n.setProperty("clientId", entry.oauth.clientId);
+			if (entry.oauth.callbackPort !== undefined) n.setProperty("callbackPort", entry.oauth.callbackPort);
+			serverChildren.appendNode(n);
+		}
+		server.children = serverChildren;
+		children.appendNode(server);
+	}
+	node.children = children;
+}
+

@@ -33,6 +33,14 @@ export interface Finding {
 	 * KDL_SETTINGS_MAP (the common case).
 	 */
 	topLevelKey?: string;
+	/**
+	 * Optional: when `topLevelKey` is set, extract this nested key from the
+	 * parsed record instead of using the whole document. Used for legacy
+	 * files whose schema differs from Spell's canonical path — e.g.
+	 * `mcp.json` has `{ mcpServers: {...} }` but Spell's path is
+	 * `mcp.servers`. `topLevelSourceKey: "mcpServers"` does the rename.
+	 */
+	topLevelSourceKey?: string;
 }
 
 /** Options for the scan. */
@@ -101,6 +109,7 @@ interface Candidate {
 	dest: string;
 	tier: "user" | "project";
 	topLevelKey?: string;
+	topLevelSourceKey?: string;
 }
 
 /**
@@ -174,6 +183,24 @@ export async function detectLegacyConfig(options: DetectOptions = {}): Promise<D
 			dest: projectDest,
 			tier: "project",
 		},
+		// Legacy mcp.json shape: `{mcpServers: {...}}`. The schema path is
+		// `mcp.servers`, so we extract `mcpServers` from the parsed record.
+		{
+			source: path.join(userAgentDir, "mcp.json"),
+			format: "json",
+			dest: userDest,
+			tier: "user",
+			topLevelKey: "mcp.servers",
+			topLevelSourceKey: "mcpServers",
+		},
+		{
+			source: path.join(projectBase, "mcp.json"),
+			format: "json",
+			dest: projectDest,
+			tier: "project",
+			topLevelKey: "mcp.servers",
+			topLevelSourceKey: "mcpServers",
+		},
 	];
 
 	const findings: Finding[] = [];
@@ -198,6 +225,7 @@ export async function detectLegacyConfig(options: DetectOptions = {}): Promise<D
 			tier: c.tier,
 			bytes: size,
 			...(c.topLevelKey ? { topLevelKey: c.topLevelKey } : {}),
+			...(c.topLevelSourceKey ? { topLevelSourceKey: c.topLevelSourceKey } : {}),
 		});
 	}
 
