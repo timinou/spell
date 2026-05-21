@@ -1,0 +1,96 @@
+#+TITLE: Shared SpinnerClock: one ticker drives all active spinners
+#+STATE: DOING
+#+SESSION_ID: 14ea14814559e822
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T15-17-13-109Z_14ea14814559e822.jsonl]]
+#+CUSTOM_ID: FEAT-761-shared-spinnerclock-one-ticker-drives-al
+#+EFFORT: 4h
+#+LAYER: tui coding-agent
+#+PRIORITY: #B
+
+* Initial Message
+
+Spell has been using CPU like crazy recently. Why?
+
+* Initial Message
+
+Multi-tool turns spawn one =setInterval(80ms)= per concurrent =ToolExecution=. Four parallel bash calls = 4 independent timers, each firing =requestRender= every 80ms. Combined with the render-coalescing fix (separate FEAT), this is still 4× the wakeups it needs to be.
+
+* Problem
+
+=packages/coding-agent/src/modes/components/tool-execution.ts:324-340= creates a per-instance =setInterval=:
+
+#+begin_src
+this.#spinnerInterval = setInterval(() => {
+  this.#spinnerFrame = (this.#spinnerFrame + 1) % theme.spinnerFrames.length;
+  this.#renderState.spinnerFrame = this.#spinnerFrame;
+  this.#ui.requestRender();
+}, 80);
+#+end_src
+
+N concurrent tools → N timers → N wakeups every 80ms. Same pattern repeats in:
+- =packages/tui/src/components/loader.ts:42=
+- =packages/coding-agent/src/modes/components/oauth-selector.ts:112=
+- =packages/coding-agent/src/modes/components/mcp-add-wizard.ts:1143=
+- =packages/coding-agent/src/modes/interactive-mode.ts:1976= (voice animation)
+- =packages/coding-agent/src/extensibility/extensions/caveman.ts:179=
+
+Each =setInterval= keeps a timerfd open and the event loop alive even when the spinner is invisible (e.g. tool execution offscreen in scrollback).
+
+* Goal
+
+One process-global ticker drives every spinner. Tick rate = 80ms (theme constant). When no spinner is active, the ticker stops entirely. Wakeup count = 1 per tick regardless of how many spinners are visible.
+
+* Fix
+
+New module =packages/tui/src/spinner-clock.ts=:
+
+#+begin_src
+class SpinnerClock {
+  #subscribers = new Set<() => void>();
+  #interval?: NodeJS.Timeout;
+  #frame = 0;
+
+  subscribe(cb: () => void): () => void {
+    this.#subscribers.add(cb);
+    if (!this.#interval) {
+      this.#interval = setInterval(() => this.#tick(), 80);
+      this.#interval.unref();
+    }
+    return () => {
+      this.#subscribers.delete(cb);
+      if (this.#subscribers.size === 0 && this.#interval) {
+        clearInterval(this.#interval);
+        this.#interval = undefined;
+      }
+    };
+  }
+
+  get frame(): number { return this.#frame; }
+
+  #tick(): void {
+    this.#frame = (this.#frame + 1) % theme.spinnerFrames.length;
+    for (const cb of this.#subscribers) cb();
+  }
+}
+
+export const spinnerClock = new SpinnerClock();
+#+end_src
+
+Migrate each callsite: replace =setInterval= with =spinnerClock.subscribe(() => this.#ui.requestRender())=, read =spinnerClock.frame= for the glyph.
+
+For animations that aren't exactly 80ms (e.g. voice anim, caveman frames), accept the small jitter or keep dedicated clocks; do not force uniformity for visually-distinct animations.
+
+* Acceptance
+
+- New test =packages/tui/test/spinner-clock.test.ts=: subscribe 5 sinks, advance fake timer 80ms, assert each sink called once, only one underlying =setInterval=.
+- =ToolExecution= test refactored to use the clock; assert =requestRender= called once per tick regardless of how many tool components exist.
+- Manual: =strace= or =/proc/$pid/fd | grep timerfd | wc -l= during a 4-parallel-tool turn — count = baseline + 1, not baseline + 4.
+
+* Non-goals
+
+- Unify visually-distinct animations (voice, caveman) into the same clock.
+- Replace render-throttle with this clock — render scheduling stays as-is.
+
+* Related
+
+- Part of =PLAN-XXX-tui-responsiveness=.
