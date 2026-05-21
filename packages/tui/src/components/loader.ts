@@ -43,6 +43,7 @@ export class Loader extends Text {
 			this.#currentFrame = (this.#currentFrame + 1) % this.#frames.length;
 			this.#updateDisplay();
 		}, 80);
+		this.#intervalId.unref?.();
 	}
 
 	stop() {

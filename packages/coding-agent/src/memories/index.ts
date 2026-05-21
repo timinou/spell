@@ -492,18 +492,25 @@ async function runPhase2(options: {
 		}
 
 		let heartbeatLostOwnership = false;
-		const heartbeat = setInterval(() => {
-			const ok = heartbeatGlobalJob(db, {
-				ownershipToken: claim.ownershipToken,
-				leaseSeconds: config.phase2LeaseSeconds,
-				nowSec: unixNow(),
-				cwd,
-			});
-			if (!ok) {
-				heartbeatLostOwnership = true;
-				clearInterval(heartbeat);
-			}
-		}, config.phase2HeartbeatSeconds * 1000);
+		let heartbeatTimer: NodeJS.Timeout | undefined;
+		const scheduleHeartbeat = (): void => {
+			if (heartbeatLostOwnership) return;
+			heartbeatTimer = setTimeout(() => {
+				const ok = heartbeatGlobalJob(db, {
+					ownershipToken: claim.ownershipToken,
+					leaseSeconds: config.phase2LeaseSeconds,
+					nowSec: unixNow(),
+					cwd,
+				});
+				if (!ok) {
+					heartbeatLostOwnership = true;
+				} else {
+					scheduleHeartbeat();
+				}
+			}, config.phase2HeartbeatSeconds * 1000);
+			heartbeatTimer.unref?.();
+		};
+		scheduleHeartbeat();
 
 		try {
 			const consolidated = await runConsolidationModel({
@@ -535,7 +542,7 @@ async function runPhase2(options: {
 				error,
 			});
 		} finally {
-			clearInterval(heartbeat);
+			if (heartbeatTimer) clearTimeout(heartbeatTimer);
 		}
 	} finally {
 		closeMemoryDb(db);

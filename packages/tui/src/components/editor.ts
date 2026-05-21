@@ -308,6 +308,7 @@ export class Editor implements Component, Focusable {
 
 	#theme: EditorTheme;
 	#useTerminalCursor = false;
+	#parent?: Container;
 
 	/** When set, replaces the normal cursor glyph at end-of-text with this ANSI-styled string. */
 	cursorOverride: string | undefined;
@@ -369,6 +370,10 @@ export class Editor implements Component, Focusable {
 
 	// Custom top border (for status line integration)
 	#topBorderContent?: EditorTopBorder;
+
+	setParent(p: Container | undefined): void {
+		this.#parent = p;
+	}
 
 	constructor(theme: EditorTheme) {
 		this.#theme = theme;
@@ -1027,6 +1032,7 @@ export class Editor implements Component, Focusable {
 				this.#insertCharacter(printableText);
 			}
 		}
+		this.#parent?.markDirty();
 	}
 
 	#layoutText(contentWidth: number): LayoutLine[] {
@@ -1148,18 +1154,22 @@ export class Editor implements Component, Focusable {
 
 	moveToLineStart(): void {
 		this.#moveToLineStart();
+		this.#parent?.markDirty();
 	}
 
 	moveToLineEnd(): void {
 		this.#moveToLineEnd();
+		this.#parent?.markDirty();
 	}
 
 	moveToMessageStart(): void {
 		this.#moveToMessageStart();
+		this.#parent?.markDirty();
 	}
 
 	moveToMessageEnd(): void {
 		this.#moveToMessageEnd();
+		this.#parent?.markDirty();
 	}
 
 	/**
@@ -1169,6 +1179,7 @@ export class Editor implements Component, Focusable {
 	undoPastTransientText(transientText: string): void {
 		if (transientText.length === 0) {
 			this.#applyUndo();
+			this.#parent?.markDirty();
 			return;
 		}
 
@@ -1176,6 +1187,7 @@ export class Editor implements Component, Focusable {
 		const transientStartCol = this.#state.cursorCol - transientText.length;
 		if (transientStartCol < 0 || currentLine.slice(transientStartCol, this.#state.cursorCol) !== transientText) {
 			this.#applyUndo();
+			this.#parent?.markDirty();
 			return;
 		}
 
@@ -1208,16 +1220,19 @@ export class Editor implements Component, Focusable {
 			if (this.onChange) {
 				this.onChange(this.getText());
 			}
+			this.#parent?.markDirty();
 			return;
 		}
 
 		this.#applyUndo();
+		this.#parent?.markDirty();
 	}
 
 	setText(text: string): void {
 		this.#historyIndex = -1; // Exit history browsing mode
 		this.#resetKillSequence();
 		this.#setTextInternal(text);
+		this.#parent?.markDirty();
 	}
 
 	#exitHistoryForEditing(): void {
@@ -1237,6 +1252,7 @@ export class Editor implements Component, Focusable {
 		this.#recordUndoState();
 
 		const line = this.#state.lines[this.#state.cursorLine] || "";
+		this.#parent?.markDirty();
 		const before = line.slice(0, this.#state.cursorCol);
 		const after = line.slice(this.#state.cursorCol);
 
@@ -2333,6 +2349,7 @@ https://github.com/EsotericSoftware/spine-runtimes/actions/runs/19536643416/job/
 			this.#updateAutocomplete();
 			this.#autocompleteTimeout = undefined;
 		}, 100);
+		this.#autocompleteTimeout.unref?.();
 	}
 
 	#clearAutocompleteTimeout(): void {

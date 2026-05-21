@@ -51,6 +51,7 @@ function startIdleChecker(): void {
 			}
 		}
 	}, IDLE_CHECK_INTERVAL_MS);
+	idleCheckInterval.unref?.();
 }
 
 function stopIdleChecker(): void {

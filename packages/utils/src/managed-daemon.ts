@@ -48,6 +48,8 @@ export interface ManagedDaemon {
 	readonly pid: number;
 	/** True when the daemon process is alive and socket exists. */
 	isAlive(): boolean;
+	/** Check whether the socket still exists (lightweight) or has a live listener (deep). */
+	probe(deep?: boolean): Promise<boolean>;
 	/** Graceful stop: stopCommand → SIGTERM → SIGKILL. Removes socket. Deregisters postmortem. */
 	stop(): Promise<void>;
 }
@@ -122,7 +124,7 @@ export async function startDaemon(config: DaemonConfig): Promise<ManagedDaemon> 
 		command,
 		socketPath,
 		stopCommand,
-		healthIntervalMs = DEFAULT_HEALTH_INTERVAL_MS,
+		_healthIntervalMs = DEFAULT_HEALTH_INTERVAL_MS,
 		startupTimeoutMs = DEFAULT_STARTUP_TIMEOUT_MS,
 		env,
 		cwd,
@@ -160,34 +162,13 @@ export async function startDaemon(config: DaemonConfig): Promise<ManagedDaemon> 
 	// --- Mutable state ---
 	let alive = true;
 	let stopped = false;
-	let healthTimer: ReturnType<typeof setInterval> | undefined;
 	let cancelPostmortem: (() => void) | undefined;
-
-	// Health check timer.
-	if (healthIntervalMs > 0) {
-		healthTimer = setInterval(async () => {
-			try {
-				await fs.access(socketPath);
-			} catch {
-				logger.warn(`[managed-daemon] Socket disappeared — daemon may have crashed`, { name, socketPath });
-				alive = false;
-				if (healthTimer) clearInterval(healthTimer);
-				healthTimer = undefined;
-				onCrash?.();
-			}
-		}, healthIntervalMs);
-		healthTimer.unref();
-	}
 
 	// Postmortem registration — so signals and exit clean up the daemon.
 	cancelPostmortem = postmortem.register(name, reason => {
 		if (stopped) return;
 		stopped = true;
 		alive = false;
-		if (healthTimer) {
-			clearInterval(healthTimer);
-			healthTimer = undefined;
-		}
 		// In EXIT context, only synchronous operations are safe.
 		// proc.kill() is our best effort.
 		if (reason === postmortem.Reason.EXIT) {
@@ -214,12 +195,6 @@ export async function startDaemon(config: DaemonConfig): Promise<ManagedDaemon> 
 		// Deregister postmortem so we don't double-dispose.
 		cancelPostmortem?.();
 		cancelPostmortem = undefined;
-
-		// Clear health timer.
-		if (healthTimer) {
-			clearInterval(healthTimer);
-			healthTimer = undefined;
-		}
 
 		logger.debug(`[managed-daemon] Stopping daemon`, { name });
 
@@ -269,6 +244,19 @@ export async function startDaemon(config: DaemonConfig): Promise<ManagedDaemon> 
 		pid: proc.pid,
 		isAlive(): boolean {
 			return alive;
+		},
+		async probe(deep = false): Promise<boolean> {
+			if (!alive) return false;
+			try {
+				await fs.access(socketPath);
+			} catch {
+				logger.warn(`[managed-daemon] Socket disappeared — daemon may have crashed`, { name, socketPath });
+				alive = false;
+				onCrash?.();
+				return false;
+			}
+			if (!deep) return true;
+			return probeSocket(socketPath, 1000);
 		},
 		stop,
 	};

@@ -126,6 +126,7 @@ export class ProcessTerminal implements Terminal {
 	#osc11ResponseBuffer = "";
 	#pendingDa1Sentinels = 0;
 	#osc11PollTimer?: Timer;
+	#livenessTimer?: Timer;
 	#mode2031Active = false;
 	#mode2031DebounceTimer?: Timer;
 
@@ -160,6 +161,7 @@ export class ProcessTerminal implements Terminal {
 		if (this.#dead) return;
 		this.#dead = true;
 		this.#stopOsc11Poll();
+		this.#stopLivenessTimer();
 		logger.info("terminal lost", { reason });
 		for (const cb of [...this.#lossCallbacks]) {
 			try {
@@ -452,6 +454,10 @@ export class ProcessTerminal implements Terminal {
 	 * Handles 1-, 2-, 3-, and 4-digit XParseColor hex components.
 	 */
 	#handleOsc11Response(rHex: string, gHex: string, bHex: string): void {
+		// First valid reply means we have an answer; the periodic re-query is no
+		// longer needed for THIS appearance. Mode 2031 push events (and SIGWINCH-
+		// driven explicit queries) still trigger fresh queries on changes.
+		this.#stopOsc11Poll();
 		const normalize = (hex: string): number => {
 			const value = parseInt(hex, 16);
 			if (Number.isNaN(value)) return 0;
@@ -485,13 +491,36 @@ export class ProcessTerminal implements Terminal {
 			if (!this.#checkPtyLiveness()) return;
 			this.#queryBackgroundColor();
 		}, 2_000);
-		this.#osc11PollTimer.unref();
+		this.#osc11PollTimer.unref?.();
+		// Separate liveness probe — must keep running even after OSC11 poll
+		// self-disables on first valid reply. This is what detects pty death
+		// when the user has accepted the background-color answer.
+		this.#startLivenessTimer();
 	}
 
 	#stopOsc11Poll(): void {
 		if (this.#osc11PollTimer) {
 			clearInterval(this.#osc11PollTimer);
 			this.#osc11PollTimer = undefined;
+		}
+	}
+
+	#startLivenessTimer(): void {
+		this.#stopLivenessTimer();
+		this.#livenessTimer = setInterval(() => {
+			if (this.#dead) {
+				this.#stopLivenessTimer();
+				return;
+			}
+			this.#checkPtyLiveness();
+		}, 2_000);
+		this.#livenessTimer.unref?.();
+	}
+
+	#stopLivenessTimer(): void {
+		if (this.#livenessTimer) {
+			clearInterval(this.#livenessTimer);
+			this.#livenessTimer = undefined;
 		}
 	}
 
@@ -516,6 +545,7 @@ export class ProcessTerminal implements Terminal {
 			this.#safeWrite("\x1b[>4;2m");
 			this.#modifyOtherKeysActive = true;
 		}, 150);
+		this.#modifyOtherKeysTimeout.unref?.();
 	}
 
 	async drainInput(maxMs = 1000, idleMs = 50): Promise<void> {
@@ -572,6 +602,7 @@ export class ProcessTerminal implements Terminal {
 		// Disable Mode 2031 appearance change notifications
 		this.#safeWrite("\x1b[?2031l");
 		this.#stopOsc11Poll();
+		this.#stopLivenessTimer();
 		if (this.#mode2031DebounceTimer) {
 			clearTimeout(this.#mode2031DebounceTimer);
 			this.#mode2031DebounceTimer = undefined;
