@@ -1,5 +1,5 @@
 import { getOAuthProviders, type OAuthProviderInfo } from "@oh-my-pi/pi-ai";
-import { Container, matchesKey, Spacer, TruncatedText } from "@oh-my-pi/pi-tui";
+import { Container, matchesKey, Spacer, spinnerClock, TruncatedText } from "@oh-my-pi/pi-tui";
 import { theme } from "../../modes/theme/theme";
 import type { AuthStorage } from "../../session/auth-storage";
 import { DynamicBorder } from "./dynamic-border";
@@ -19,7 +19,7 @@ export class OAuthSelectorComponent extends Container {
 	#requestRenderCallback?: () => void;
 	#authState: Map<string, "checking" | "valid" | "invalid"> = new Map();
 	#spinnerFrame: number = 0;
-	#spinnerInterval?: NodeJS.Timeout;
+	#spinnerUnsubscribe?: () => void;
 	#validationGeneration: number = 0;
 	constructor(
 		mode: "login" | "logout",
@@ -108,21 +108,21 @@ export class OAuthSelectorComponent extends Container {
 	}
 
 	#startSpinner(): void {
-		if (this.#spinnerInterval) return;
-		this.#spinnerInterval = setInterval(() => {
+		if (this.#spinnerUnsubscribe) return;
+		this.#spinnerUnsubscribe = spinnerClock.subscribe(() => {
 			const frameCount = theme.spinnerFrames.length;
 			if (frameCount > 0) {
-				this.#spinnerFrame = (this.#spinnerFrame + 1) % frameCount;
+				this.#spinnerFrame = spinnerClock.frame % frameCount;
 			}
 			this.#updateList();
 			this.#requestRenderCallback?.();
-		}, 80);
+		});
 	}
 
 	#stopSpinner(): void {
-		if (this.#spinnerInterval) {
-			clearInterval(this.#spinnerInterval);
-			this.#spinnerInterval = undefined;
+		if (this.#spinnerUnsubscribe) {
+			this.#spinnerUnsubscribe();
+			this.#spinnerUnsubscribe = undefined;
 		}
 	}
 

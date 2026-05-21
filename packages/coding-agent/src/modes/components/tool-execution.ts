@@ -9,6 +9,7 @@ import {
 	ImageProtocol,
 	imageFallback,
 	Spacer,
+	spinnerClock,
 	TERMINAL,
 	Text,
 	type TUI,
@@ -106,7 +107,7 @@ export class ToolExecutionComponent extends Container {
 	#convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
 	// Spinner animation for partial task results
 	#spinnerFrame = 0;
-	#spinnerInterval?: NodeJS.Timeout;
+	#spinnerUnsubscribe?: () => void;
 	// Track if args are still being streamed (for edit/write spinner)
 	#argsComplete = false;
 	#renderState: {
@@ -324,20 +325,20 @@ export class ToolExecutionComponent extends Container {
 			(this.#result?.details as { async?: { state?: string } } | undefined)?.async?.state === "running";
 		const isPartialTask = this.#isPartial && this.#toolName === "task" && !isBackgroundAsyncTask;
 		const needsSpinner = isStreamingArgs || isPartialTask;
-		if (needsSpinner && !this.#spinnerInterval) {
-			this.#spinnerInterval = setInterval(() => {
+		if (needsSpinner && !this.#spinnerUnsubscribe) {
+			this.#spinnerUnsubscribe = spinnerClock.subscribe(() => {
 				const frameCount = theme.spinnerFrames.length;
 				if (frameCount === 0) return;
-				this.#spinnerFrame = (this.#spinnerFrame + 1) % frameCount;
+				this.#spinnerFrame = spinnerClock.frame % frameCount;
 				// Re-run renderCall/renderResult with the new spinner frame so cached
 				// child components reflect the change. updateDisplay clears +
 				// re-adds via addChild — dirty propagates up the parent chain.
 				this.#updateDisplay();
 				this.#ui.requestRender();
-			}, 80);
-		} else if (!needsSpinner && this.#spinnerInterval) {
-			clearInterval(this.#spinnerInterval);
-			this.#spinnerInterval = undefined;
+			});
+		} else if (!needsSpinner && this.#spinnerUnsubscribe) {
+			this.#spinnerUnsubscribe();
+			this.#spinnerUnsubscribe = undefined;
 		}
 	}
 
@@ -345,9 +346,9 @@ export class ToolExecutionComponent extends Container {
 	 * Stop spinner animation and cleanup resources.
 	 */
 	stopAnimation(): void {
-		if (this.#spinnerInterval) {
-			clearInterval(this.#spinnerInterval);
-			this.#spinnerInterval = undefined;
+		if (this.#spinnerUnsubscribe) {
+			this.#spinnerUnsubscribe();
+			this.#spinnerUnsubscribe = undefined;
 		}
 	}
 
