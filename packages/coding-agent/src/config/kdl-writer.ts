@@ -42,17 +42,21 @@ function applySetting(doc: Document, path: string, value: unknown): void {
 	const mapping = getKdlMapping(path);
 	if (!mapping) return;
 
-	// Block-only settings: writer operates on the top-level node directly.
-	if (path === "secrets") {
-		const blockNode = findOrCreateDocumentNode(doc, mapping.block);
-		writeSecrets(blockNode, value as SecretsKdlEntry[]);
-		return;
+	const blockNode = findOrCreateDocumentNode(doc, mapping.block);
+
+	// `_self` sentinel: the writer operates on the block node directly
+	// (no nested descent). Used for top-level scalar settings like `domain`
+	// and block-aware writers like `secrets`.
+	let current = blockNode;
+	if (mapping.nodePath !== "_self") {
+		for (const segment of mapping.nodePath.split(".")) current = findOrCreateChildNode(current, segment);
 	}
 
-	const blockNode = findOrCreateDocumentNode(doc, mapping.block);
-	const segments = mapping.nodePath.split(".");
-	let current = blockNode;
-	for (const segment of segments) current = findOrCreateChildNode(current, segment);
+	// Block-aware writers (operate on the block / current node directly).
+	if (path === "secrets") {
+		writeSecrets(current, value as SecretsKdlEntry[]);
+		return;
+	}
 
 	if (path === "modelRoles" || path === "task.agentModelOverrides") {
 		writeTreeStringRecord(current, value as Record<string, string>);

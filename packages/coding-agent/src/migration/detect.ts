@@ -165,6 +165,15 @@ export async function detectLegacyConfig(options: DetectOptions = {}): Promise<D
 			tier: "project",
 			topLevelKey: "secrets",
 		},
+		// Legacy .spell/domain.json — record with single `domain` key. Flattens
+		// to the schema's `domain` setting via the standard flattener (no
+		// topLevelKey needed).
+		{
+			source: path.join(projectBase, "domain.json"),
+			format: "json",
+			dest: projectDest,
+			tier: "project",
+		},
 	];
 
 	const findings: Finding[] = [];
