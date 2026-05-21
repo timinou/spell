@@ -1,8 +1,6 @@
 pub mod cache;
-#[cfg(feature = "semantic")]
 pub mod chunking;
 pub mod error;
-#[cfg(feature = "semantic")]
 pub mod hybrid;
 pub mod indexer;
 pub mod language;
@@ -12,10 +10,8 @@ pub mod search;
 pub mod store;
 
 pub use cache::{CacheStatus, CacheStore, FileFingerprint, GraphCacheEntry, GraphFingerprint};
-#[cfg(feature = "semantic")]
 pub use chunking::{ChunkResult, extract_chunks};
 pub use error::{CodeGraphError, Result};
-#[cfg(feature = "semantic")]
 pub use hybrid::{HybridSearchHit, reciprocal_rank_fusion};
 pub use indexer::{BuildGraphOptions, CodeGraphBuilder, GraphBuildOutcome};
 pub use language::{

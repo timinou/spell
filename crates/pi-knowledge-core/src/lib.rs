@@ -15,5 +15,6 @@ pub mod cache;
 pub mod error;
 pub mod fusion;
 pub mod graph;
+pub mod vec;
 
 pub use error::{Error, Result};

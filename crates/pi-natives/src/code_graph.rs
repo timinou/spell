@@ -3,7 +3,6 @@ use std::{
 	fmt::Write as _,
 	fs,
 	hash::{Hash, Hasher},
-	io::{BufReader, BufWriter},
 	path::{Path, PathBuf},
 };
 
@@ -25,6 +24,8 @@ const DEFAULT_DEPTH: u32 = 3;
 const DEFAULT_LIMIT: u32 = 10;
 const CACHE_NAME: &str = "workspace";
 const VECTORS_CACHE_NAME: &str = "workspace-vectors";
+const VECTORS_FILE_EXT: &str = "uidx";
+const VECTORS_FINGERPRINT_EXT: &str = "fp";
 
 #[napi(object)]
 pub struct CodeGraphOptions<'env> {
@@ -85,8 +86,8 @@ pub struct CodeGraphResult {
 
 enum VectorCacheState {
 	Missing,
-	Fresh(pi_code_vectors::PersistedVectorIndex),
-	Stale(pi_code_vectors::PersistedVectorIndex),
+	Fresh(pi_knowledge_core::vec::VectorIndex),
+	Stale(pi_knowledge_core::vec::VectorIndex),
 	Corrupt(String),
 }
 
@@ -94,8 +95,8 @@ impl VectorCacheState {
 	fn describe(&self) -> String {
 		match self {
 			Self::Missing => "missing".to_string(),
-			Self::Fresh(persisted) => format!("{} vectors (fresh)", persisted.entries.len()),
-			Self::Stale(persisted) => format!("{} vectors (stale)", persisted.entries.len()),
+			Self::Fresh(idx) => format!("{} vectors (fresh)", idx.len()),
+			Self::Stale(idx) => format!("{} vectors (stale)", idx.len()),
 			Self::Corrupt(reason) => format!("corrupt ({reason})"),
 		}
 	}
@@ -234,16 +235,14 @@ fn run_code_graph(
 				format_search(&graph.graph_search(query, None, limit))
 			} else {
 				match load_vector_cache(&cache, graph_fingerprint_hash(&cache)) {
-					VectorCacheState::Fresh(persisted) => {
-						let vector_count = persisted.entries.len();
+					VectorCacheState::Fresh(vector_index) => {
+						let vector_count = vector_index.len();
 						match embedding_worker::embed_query(query) {
 							Ok(query_vector) => {
 								semantic_status =
 									Some(format!("hybrid search using {vector_count} cached vectors"));
-								let search_graph = CodeGraph::with_vectors(
-									graph.into_persisted(),
-									pi_code_vectors::VectorIndex::from_persisted(persisted),
-								);
+								let search_graph =
+									CodeGraph::with_vectors(graph.into_persisted(), vector_index);
 								format_search(&search_graph.graph_search(query, Some(&query_vector), limit))
 							},
 							Err(error) => {
@@ -362,17 +361,17 @@ fn build_semantic_index(graph: &CodeGraph, cache: &CacheStore) -> napi::Result<u
 	let vectors = embedding_worker::embed_batch(&texts, None)?;
 	let (entries, dimensions) = validate_worker_vectors(&chunks, vectors)?;
 	let count = entries.len();
-	let vector_index = pi_code_vectors::VectorIndex::new(entries, dimensions);
+	let vector_index = pi_knowledge_core::vec::VectorIndex::from_entries(&entries, dimensions)
+		.map_err(|e| Error::from_reason(format!("Failed to build vector index: {e}")))?;
 	let fingerprint_hash = compute_fingerprint_hash(cache);
-	let persisted = vector_index.to_persisted("jina-embeddings-v2-base-code", fingerprint_hash);
-	save_vector_cache(cache, &persisted)?;
+	save_vector_cache(cache, &vector_index, fingerprint_hash)?;
 	Ok(count)
 }
 
 fn validate_worker_vectors(
 	chunks: &[pi_code_graph::ChunkResult],
 	vectors: Vec<Vec<f32>>,
-) -> napi::Result<(Vec<pi_code_vectors::VectorEntry>, usize)> {
+) -> napi::Result<(Vec<pi_knowledge_core::vec::VectorEntry>, usize)> {
 	if vectors.len() != chunks.len() {
 		return Err(Error::from_reason(format!(
 			"Embedding worker returned {} vectors for {} chunks",
@@ -399,7 +398,10 @@ fn validate_worker_vectors(
 	let entries = chunks
 		.iter()
 		.zip(vectors)
-		.map(|(chunk, vector)| pi_code_vectors::VectorEntry { node_index: chunk.node_index, vector })
+		.map(|(chunk, vector)| pi_knowledge_core::vec::VectorEntry {
+			node_id: chunk.node_index as u64,
+			vector,
+		})
 		.collect();
 	Ok((entries, dimensions))
 }
@@ -419,47 +421,52 @@ fn compute_fingerprint_hash(cache: &CacheStore) -> u64 {
 
 fn save_vector_cache(
 	cache: &CacheStore,
-	vectors: &pi_code_vectors::PersistedVectorIndex,
+	vectors: &pi_knowledge_core::vec::VectorIndex,
+	fingerprint_hash: u64,
 ) -> napi::Result<()> {
 	fs::create_dir_all(cache.directory())
 		.map_err(|e| Error::from_reason(format!("Failed to create cache dir: {e}")))?;
-	let temp_path = cache
+	let index_path = cache
 		.directory()
-		.join(format!("{VECTORS_CACHE_NAME}.bin.tmp"));
-	let final_path = cache.directory().join(format!("{VECTORS_CACHE_NAME}.bin"));
-	let file = fs::File::create(&temp_path)
-		.map_err(|e| Error::from_reason(format!("Failed to create temp vector cache: {e}")))?;
-	{
-		let writer = BufWriter::new(file);
-		pi_code_vectors::serialize_index(writer, vectors)
-			.map_err(|e| Error::from_reason(format!("Failed to write temp vector cache: {e}")))?;
-	}
-	fs::rename(&temp_path, &final_path)
-		.map_err(|e| Error::from_reason(format!("Failed to rename temp vector cache: {e}")))
+		.join(format!("{VECTORS_CACHE_NAME}.{VECTORS_FILE_EXT}"));
+	vectors
+		.save(&index_path)
+		.map_err(|e| Error::from_reason(format!("Failed to write vector cache: {e}")))?;
+	let fp_path = cache
+		.directory()
+		.join(format!("{VECTORS_CACHE_NAME}.{VECTORS_FINGERPRINT_EXT}"));
+	let tmp_fp = fp_path.with_extension(format!("{VECTORS_FINGERPRINT_EXT}.tmp"));
+	fs::write(&tmp_fp, fingerprint_hash.to_le_bytes())
+		.map_err(|e| Error::from_reason(format!("Failed to write vector fingerprint: {e}")))?;
+	fs::rename(&tmp_fp, &fp_path)
+		.map_err(|e| Error::from_reason(format!("Failed to rename vector fingerprint: {e}")))
 }
 
 fn load_vector_cache(cache: &CacheStore, expected_hash: Option<u64>) -> VectorCacheState {
-	let path = cache.directory().join(format!("{VECTORS_CACHE_NAME}.bin"));
-	let file = match fs::File::open(&path) {
-		Ok(file) => file,
-		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-			return VectorCacheState::Missing;
-		},
-		Err(error) => {
-			return VectorCacheState::Corrupt(format!("failed to open {}: {error}", path.display()));
-		},
-	};
-	let persisted = match pi_code_vectors::deserialize_index(BufReader::new(file)) {
-		Ok(persisted) => persisted,
+	let path = cache
+		.directory()
+		.join(format!("{VECTORS_CACHE_NAME}.{VECTORS_FILE_EXT}"));
+	if !path.exists() {
+		return VectorCacheState::Missing;
+	}
+	let vectors = match pi_knowledge_core::vec::VectorIndex::load(&path) {
+		Ok(v) => v,
 		Err(error) => return VectorCacheState::Corrupt(error.to_string()),
 	};
-	let Some(expected_hash) = expected_hash else {
-		return VectorCacheState::Stale(persisted);
-	};
-	if persisted.graph_fingerprint_hash != expected_hash {
-		return VectorCacheState::Stale(persisted);
+	let fp_path = cache
+		.directory()
+		.join(format!("{VECTORS_CACHE_NAME}.{VECTORS_FINGERPRINT_EXT}"));
+	let stored_hash = read_fingerprint(&fp_path);
+	match (expected_hash, stored_hash) {
+		(Some(expected), Some(stored)) if expected == stored => VectorCacheState::Fresh(vectors),
+		_ => VectorCacheState::Stale(vectors),
 	}
-	VectorCacheState::Fresh(persisted)
+}
+
+fn read_fingerprint(path: &Path) -> Option<u64> {
+	let bytes = fs::read(path).ok()?;
+	let arr: [u8; 8] = bytes.as_slice().try_into().ok()?;
+	Some(u64::from_le_bytes(arr))
 }
 
 fn resolve_root(root: Option<&str>) -> napi::Result<PathBuf> {
@@ -931,7 +938,7 @@ mod tests {
 
 		assert!(result.semantic_status.is_none());
 		assert!(
-			!root.join(".spell/graph/workspace-vectors.bin").exists(),
+			!root.join(".spell/graph/workspace-vectors.uidx").exists(),
 			"plain index should not create a vector cache"
 		);
 
@@ -982,7 +989,7 @@ mod tests {
 			result.output
 		);
 		assert!(
-			!root.join(".spell/graph/workspace-vectors.bin").exists(),
+			!root.join(".spell/graph/workspace-vectors.uidx").exists(),
 			"failed semantic indexing should not create a vector cache"
 		);
 
@@ -1020,7 +1027,7 @@ mod tests {
 			result.semantic_status
 		);
 		assert!(
-			root.join(".spell/graph/workspace-vectors.bin").exists(),
+			root.join(".spell/graph/workspace-vectors.uidx").exists(),
 			"successful semantic indexing should persist the vector cache"
 		);
 
@@ -1043,7 +1050,7 @@ mod tests {
 			result.output
 		);
 		assert!(
-			!root.join(".spell/graph/workspace-vectors.bin").exists(),
+			!root.join(".spell/graph/workspace-vectors.uidx").exists(),
 			"failed semantic indexing should not write a vector cache"
 		);
 
@@ -1064,7 +1071,7 @@ mod tests {
 			result.output
 		);
 		assert!(
-			!root.join(".spell/graph/workspace-vectors.bin").exists(),
+			!root.join(".spell/graph/workspace-vectors.uidx").exists(),
 			"failed semantic indexing should not write a vector cache"
 		);
 
@@ -1107,7 +1114,7 @@ mod tests {
 		run_fixture_command(&root, "index", None, None).expect("graph index should succeed");
 		let graph_dir = root.join(".spell/graph");
 		fs::create_dir_all(&graph_dir).expect("graph dir should exist");
-		fs::write(graph_dir.join("workspace-vectors.bin"), [1_u8, 2, 3])
+		fs::write(graph_dir.join("workspace-vectors.uidx"), [1_u8, 2, 3])
 			.expect("fake vector cache should be written");
 
 		let result = run_fixture_command(&root, "status", None, None).expect("status should succeed");

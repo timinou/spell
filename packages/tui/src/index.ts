@@ -2,8 +2,6 @@
 
 // Autocomplete support
 export * from "./autocomplete";
-export * from "./dev-profile";
-export * from "./spinner-clock";
 // Components
 export * from "./components/box";
 export * from "./components/cancellable-loader";
@@ -18,6 +16,7 @@ export * from "./components/spacer";
 export * from "./components/tab-bar";
 export * from "./components/text";
 export * from "./components/truncated-text";
+export * from "./dev-profile";
 // Editor component interface (for custom editors)
 export type * from "./editor-component";
 // Fuzzy matching
@@ -26,6 +25,7 @@ export * from "./fuzzy";
 export * from "./keybindings";
 // Kitty keyboard protocol helpers
 export * from "./keys";
+export * from "./spinner-clock";
 // Mermaid diagram support
 // Input buffering for batch splitting
 export * from "./stdin-buffer";

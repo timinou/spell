@@ -1,5 +1,5 @@
 #+TITLE: PLAN-310 W1 — pi-knowledge-core skeleton (bm25, graph, fusion, cache)
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14ea0d7add095343
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
 #+CUSTOM_ID: FEAT-766-plan-310-w1-pi-knowledge-core-skeleton-b
@@ -50,3 +50,41 @@ Wave 1 of PLAN-310. New crate =pi-knowledge-core= with the four shared modules. 
 - No consumer rewiring (W4, W5)
 - No notify ingestion (W5)
 - No embedder client (W3)
+
+* Completion [2026-05-21]
+
+W1 (skeleton) + W1.5 (review + 8-finding gap fix) landed together. 53 tests, clippy clean.
+
+** Crate shape (final)
+
+#+begin_src
+crates/pi-knowledge-core/
+\u251c\u2500\u2500 Cargo.toml          # petgraph 0.8 serde-1, serde_json, bincode 1.3, chrono 0.4, thiserror 2, tempfile (dev)
+\u2514\u2500\u2500 src/
+    \u251c\u2500\u2500 lib.rs          # module wiring; W2/W3/W5 stubs flagged
+    \u251c\u2500\u2500 error.rs        # Error enum (io / bincode / cache / other)
+    \u251c\u2500\u2500 bm25.rs         # SearchIndex<D>, Document trait, Unicode tokenizer
+    \u251c\u2500\u2500 graph.rs        # TypedGraph<P, E>, EdgeKind union (25 + Other), Neighbor/PathStep
+    \u251c\u2500\u2500 fusion.rs       # RRF + recency + backlinks + confidence; FusedHit::why
+    \u2514\u2500\u2500 cache.rs        # re-export pi-workspace-cache + KnowledgeMeta + save_all
+#+end_src
+
+** Review (W1.5)
+
+Reviewer artifact: =!tasks/plans/plan-artifacts/PLAN-310/W1-5-review.md=. Eight HIGH-confidence findings, all fixed. Two deviations from reviewer's exact patches, both for cleanliness:
+
+1. =Neighbor= and =PathStep= made generic over =E= (=Neighbor<E = EdgeKind>=) rather than hardcoded; keeps the public surface consistent with =TypedGraph<P, E>=.
+2. =bincode_round_trip= test switched to a typed payload (=MyStruct=) instead of =serde_json::Value= because bincode can't deserialize untyped =Value= without =deserialize_any= \u2014 the JSON-string workaround was solving exactly that; with the generic surface, callers carry their own typed payload.
+
+LOW-confidence findings deferred to FUP (documented in the review's "Deferred to FUP" section).
+
+** Forward references
+
+- W2 (usearch swap) consumes =KnowledgeMeta::embedder_dim= for cache stale detection
+- W4 (org-engine retarget) consumes =TypedGraph<P, E>= with org-specific =P=
+- W5 (tantivy delete + ingest) consumes =save_all= for atomic multi-blob writes
+- W6 (memory tool) consumes =Neighbor::via= and =PathStep::kind= for the "why this was returned" agent prompt
+
+** Next
+
+W2 \u2014 usearch swap-in.

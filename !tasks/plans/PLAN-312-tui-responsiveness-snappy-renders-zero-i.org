@@ -1,0 +1,159 @@
+#+TITLE: TUI responsiveness: snappy renders, zero idle CPU, no zombie processes
+#+STATE: DONE
+#+SESSION_ID: 14ea14814559e822
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T15-17-13-109Z_14ea14814559e822.jsonl]]
+#+CUSTOM_ID: PLAN-312-tui-responsiveness-snappy-renders-zero-i
+#+EFFORT: 48h
+#+LAYER: tui coding-agent utils
+#+PRIORITY: #A
+#+RISK: medium
+
+* Initial Message
+
+Spell has been using CPU like crazy recently. Why?
+
+* Initial Message
+
+Spell has been using CPU like crazy recently. Investigation found three compounding causes:
+
+1. A zombie session at 71.9% CPU for 5 days, holding 6 fds pointing to a deleted pty — the controlling terminal was closed but spell kept rendering into the void.
+2. Streaming assistant messages allocate O(content × tokens) Markdown instances per turn — HeapHelper GC threads hold a steady 14% during turns.
+3. Even idle sessions sit at 0.5–9% CPU due to a fan-out of independent polling timers (OSC11 every 2s, multiple heartbeats, daemon health probes, per-spinner =setInterval=, etc.) that never stop or adapt.
+
+Plus: the TUI render path force-invalidates the Container cache on every frame, so the existing differential cache is dead code.
+
+User scope: focused purely on making the TUI feel responsive and reduce CPU/memory. *Hibernate is out of scope.*
+
+* Problem
+
+Three intertwined classes of waste, each verified against current code:
+
+** Class A — pty-loss spin
+=Terminal.#safeWrite= in =packages/tui/src/terminal.ts= flips =#dead= only on synchronous throw. Pty hangup emits an async =error= event on =process.stdout=; no listener catches it. No =process.stdin.on('end'|'close')= either. No liveness probe. SIGHUP doesn't help because spell processes are commonly reparented to =systemd --user=. Net effect: =#osc11PollTimer= and the render loop keep writing into a closed fd forever.
+
+** Class B — streaming rebuild
+=AssistantMessage.updateContent= in =packages/coding-agent/src/modes/components/assistant-message.ts:120-170= calls =#contentContainer.clear()= then rebuilds every child (=new Markdown=, =new Text=, =new Spacer=) for the *full accumulated message* on every streamed chunk. =Markdown=' s lex cache is per-instance, so each rebuild also re-lexes the whole growing message via =marked.lexer=.
+
+** Class C — render coalescing defeats itself
+=TUI.#executeRender= calls =this.markTreeDirty()= before every render, resetting =Container.#dirty= and =#cachedLines= across the entire subtree. The cache that =Container.render= consults is therefore always cold. The =Component.invalidate= → ancestor =Container= propagation is also missing — leaf changes don't bubble up the parent chain.
+
+** Class D — polling fan-out
+At least 7 distinct =setInterval= sources fire on a baseline idle session (OSC11 poll, cursor heartbeat, session-bridge heartbeat, ManagedDaemon health, AsyncJobManager watchdog, LSP idle check, web-session processInfo). None of them adapt: OSC11 keeps polling even after the answer is known; heartbeats fire on a fixed cadence rather than on idle silence; per-=ToolExecution= spinners create one timer each.
+
+* Goal
+
+For the *active session*:
+- Streaming turn CPU on main thread: 30–70% → 10–25%
+- HeapHelper aggregate GC: ~14% → <3%
+
+For the *idle session*:
+- Steady-state CPU: 0.5–9% → <0.5%
+- Active timerfds per session: 7+ → ≤3
+- Renders per second with N concurrent spinners: 12.5 × N → 12.5
+
+For *resource hygiene*:
+- Zombie sessions (pty-deleted, >24h old): observed 1+/week → 0
+
+Lock these in with CI invariants that fail loudly on regression.
+
+* Non-goals
+
+- *Hibernate / suspend / persistent revival* — explicitly out of scope for this plan.
+- Reworking viewport/cursor positioning — recent fixes are the truth there.
+- Replacing the =marked= markdown lexer — only its invocation pattern is wrong.
+- Per-component dirty-tree rewrite — work with the existing =#dirty= model, just stop overwriting it.
+- React-style virtual-DOM diffing — keep the existing line-diff for actual changes.
+- Resource caps / circuit breakers — not the bottleneck.
+
+* Phases
+
+The plan splits into six phases, each filed as its own item for independent execution. They land in this sequence; phases 4–6 can interleave once 1–3 are stable.
+
+** Phase 1 — Detect dead terminal (the actual bug)
+[[id:BUG-387-tui-keeps-spinning-at-70-cpu-when-contro]]
+
+Smallest, highest urgency. Ship alone. Removes the zombie-CPU class entirely.
+
+** Phase 2 — Stop rebuilding the message tree per token
+[[id:FEAT-763-assistantmessage-incremental-reconciliat]]
+
+Biggest CPU + GC win. Isolated to one component. Lands before Phase 3.
+
+** Phase 3 — Honor the Container dirty cache
+[[id:FEAT-762-tui-render-honor-container-dirty-cache-s]]
+
+Lands after Phase 2; the cache semantics only make sense once child mutations are surgical.
+
+** Phase 4 — One spinner clock
+[[id:FEAT-761-shared-spinnerclock-one-ticker-drives-al]]
+
+Independent; can land any time after Phase 1.
+
+** Phase 5 — Adaptive idle baseline
+[[id:FEAT-759-adaptive-idle-baseline-stop-polling-once]]
+
+Independent; touches subsystems outside =packages/tui/=.
+
+** Phase 6 — Perf armor
+[[id:FEAT-758-tui-perf-armor-pi-tui-profile-env-render]]
+
+Lands last. Invariants baseline against the post-fix state.
+
+* Sequence & risk
+
+| Phase | Item | Risk | Effort | Ordering rationale |
+|-------+------+------+--------+--------------------|
+| 1 | BUG-387 | Low | 4h | Immediate user pain; additive listeners |
+| 2 | FEAT-763 | Medium | 12h | Biggest win; reconcile logic touches render correctness |
+| 3 | FEAT-762 | Medium | 12h | Render correctness fragile; depends on Phase 2 semantics |
+| 4 | FEAT-761 | Low | 4h | Pure plumbing; independent |
+| 5 | FEAT-759 | Low–medium | 8h | Debounce + audit work; spans 3 packages |
+| 6 | FEAT-758 | Low | 8h | Locks the wins in |
+
+Total: ~48h.
+
+* Acceptance
+
+Plan is DONE when, on a fresh main:
+
+- Closing the controlling terminal mid-session exits spell within 2s, with no surviving process holding deleted-pty fds (BUG-387).
+- A 1000-token streaming reply produces ≤ N =new Markdown= instances for N text blocks, not N × chunk-count (FEAT-763).
+- 100 no-op =requestRender= calls produce ≤1 actual =doRender= and ≤1 root =Container.render(width)= invocation (FEAT-762).
+- N parallel tool spinners produce one timerfd, not N (FEAT-761).
+- An idle session for 60 seconds: avg CPU ≤0.5%, ≤3 active timerfds, render count ≤2 (FEAT-759).
+- =PI_TUI_PROFILE=1= produces parseable JSONL telemetry; the four invariant tests pass in CI (FEAT-758).
+
+* Verification
+
+For each phase: =bun test packages/tui packages/coding-agent= (scoped to the phase's added tests) plus the manual scenario described in each phase item.
+
+Plan-level smoke before closeout: =bun run check:ts= clean, fresh idle session sits at ≤0.5% CPU for 60s observed via =top=, and =/proc/$pid/fd | grep timerfd | wc -l= ≤3.
+
+* Related
+
+- =BUG-382= (RecallEngine idle TTL) — same idle-eviction philosophy at the recall layer.
+- Recent TUI render fixes that informed this plan: =68ae5b9c0=, =ff544f38f=, =4dca1781b=, =0fc77d75a=, =5572100b5=.
+
+* Verification (DONE)
+
+All six phases landed:
+
+| Phase | Item | Commit | Notes |
+|-------+------+--------+-------|
+| 1 | BUG-387 pty-loss detection | aebeba56b | 8 files; 7 regression cases pass |
+| 2 | FEAT-763 slot reconciliation | b7cb6dede | AssistantMessage reconciles by index; 8 streaming tests pass |
+| 3 | FEAT-762 Container dirty cache | dcc500e0e | Upward propagation in Container + leaves (Markdown/Text/Image/Spacer/Input/Editor); spinner calls updateDisplay for correctness; render-coalescing.test.ts |
+| 4 | FEAT-761 SpinnerClock | shared commit | Singleton 80ms ticker; tool-execution + oauth-selector migrated; 4 spinner-clock tests |
+| 5 | FEAT-759 Adaptive idle | shared commit | OSC11 self-disable, decoupled liveness timer, heartbeat debounce, probe-on-failure, .unref() audit |
+| 6 | FEAT-758 Perf armor | final commit | PI_TUI_PROFILE env + 5 perf-baseline tests |
+
+Final state: packages/tui suite 342/0. 33 new regression tests across 6 new test files.
+
+Deviations: focus-event render throttle deferred (onFocusChange API skeleton ready); session-bridge heartbeat unchanged (cursor + memories cover bulk); mcp-add-wizard spinner not migrated (custom cadence, brief lifetime).
+
+Additional correctness fixes during W3 review:
+- Leaf components Markdown/Text/Image/Spacer all carry #parent + setParent + parent.markDirty() in invalidate (W3 agent only added to editor + input).
+- ToolExecution spinner calls #updateDisplay() in the tick so cached child components reflect the new spinnerFrame.
+- Decoupled #livenessTimer from #osc11PollTimer so pty death detection survives OSC11 self-disable.
+
+NOTE [2026-05-21]: All 6 child items DONE. 33 new tests across 6 test files. packages/tui 342/0.

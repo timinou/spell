@@ -1,5 +1,5 @@
 #+TITLE: TUI render: honor Container dirty cache, stop force-invalidating subtree per frame
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14ea14814559e822
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T15-17-13-109Z_14ea14814559e822.jsonl]]
 #+CUSTOM_ID: FEAT-762-tui-render-honor-container-dirty-cache-s
@@ -78,3 +78,5 @@ Land *after* the assistant-message reconciliation feat. Container dirty semantic
 
 - Part of =PLAN-XXX-tui-responsiveness=.
 - Builds on recent render-scheduling work: =68ae5b9c0= (input starvation), =ff544f38f= (force-path renderRequested reset).
+
+NOTE [2026-05-21]: Closed in commit dcc500e0e. Container#dirty + #parent + upward propagation. Leaf components (Markdown/Text/Image/Spacer/Input/Editor) all carry setParent + #parent.markDirty() inside invalidate. tool-execution spinner converted to call #updateDisplay() in tick (cached child components now reflect new spinnerFrame). New render-coalescing.test.ts (7 cases) + updates to render-scheduling/render-regressions/overlay-scroll. tui 337/0; components 27/0.

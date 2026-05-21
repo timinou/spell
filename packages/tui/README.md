@@ -690,6 +690,28 @@ Run it:
 npx tsx test/chat-simple.ts
 ```
 
+## Debug profiling
+
+Set `PI_TUI_PROFILE=1` to enable opt-in per-frame JSONL telemetry. Each record contains:
+
+- `t` — wall-clock timestamp (ms since epoch)
+- `frame` — monotonic frame counter
+- `frameMs` — wall time spent inside `#doRender` for this frame
+- `linesChanged` — `|new lines| - |old lines|`
+- `allocDelta` — heap bytes delta vs previous frame
+- `heap` — heap bytes at end of frame (`Bun.gc(false)` when available, else `process.memoryUsage().heapUsed`)
+
+Records are appended to `/tmp/spell-tui-profile-<pid>.jsonl` by default. Override with `PI_TUI_PROFILE_PATH=/your/path.jsonl`.
+
+When `PI_TUI_PROFILE` is unset (default) the profiler is fully disabled — `recordFrame` early-returns on the first guard and no stream is opened.
+
+Perf invariants are pinned by `packages/tui/test/perf-baselines.test.ts`:
+
+1. **Idle**: TUI with no `requestRender` produces no renders after init.
+2. **Coalescing**: 100 no-op `requestRender` calls produce ≤1 root render.
+3. **Streaming**: leaf caches survive across re-renders when content is unchanged; 1000 chunk updates coalesce to ≤2 leaf renders.
+4. **Off-by-default**: `DevProfile.enabled` is `false` unless `PI_TUI_PROFILE=1`.
+
 ## Development
 
 ```bash
