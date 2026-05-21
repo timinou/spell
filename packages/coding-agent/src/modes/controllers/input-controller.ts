@@ -176,7 +176,7 @@ export class InputController {
 				if (this.ctx.onInputCallback) {
 					this.ctx.editor.setText("");
 					this.ctx.pendingImages = [];
-					this.ctx.onInputCallback({ text: "", cancelled: false, started: true });
+					this.ctx.onInputCallback({ kind: "user-input", text: "", cancelled: false, started: true });
 				}
 				return;
 			}

@@ -24,6 +24,7 @@ export enum Reason {
 	UNCAUGHT_EXCEPTION = "uncaught_exception", // Fatal exception
 	UNHANDLED_REJECTION = "unhandled_rejection", // Unhandled promise rejection
 	MANUAL = "manual", // Manual cleanup (not triggered by process)
+	TERMINAL_LOST = "terminal_lost", // Controlling pty destroyed
 }
 
 export interface CrashSessionContext {
@@ -413,4 +414,27 @@ export async function quit(code: number = 0): Promise<void> {
 		await Promise.race([promise, Bun.sleep(5000)]);
 	}
 	process.exit(code);
+}
+
+/**
+ * Runs cleanup callbacks for a specific reason and exits gracefully.
+ * Used for non-signal shutdown paths (e.g. terminal pty loss).
+ */
+export async function quitGracefully(reason: Reason): Promise<void> {
+	await runCleanup(reason);
+
+	if (!isMainThread) {
+		return;
+	}
+
+	if (process.stdout.writableLength > 0) {
+		if (!process.stdout.writable) {
+			// stdout is not writable — cannot drain, skip wait
+		} else {
+			const { promise, resolve } = Promise.withResolvers<void>();
+			process.stdout.once("drain", resolve);
+			await Promise.race([promise, Bun.sleep(1500)]);
+		}
+	}
+	process.exit(0);
 }

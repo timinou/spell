@@ -31,12 +31,9 @@ export type CompactionQueuedMessage = {
 	mode: "steer" | "followUp";
 };
 
-export type SubmittedUserInput = {
-	text: string;
-	images?: ImageContent[];
-	cancelled: boolean;
-	started: boolean;
-};
+export type SubmittedUserInput =
+	| { kind: "terminal-lost" }
+	| { kind: "user-input"; text: string; images?: ImageContent[]; cancelled: boolean; started: boolean };
 
 export interface InteractiveModeContext {
 	// UI access
@@ -126,10 +123,13 @@ export interface InteractiveModeContext {
 	setWorkingMessage(message?: string): void;
 	applyPendingWorkingMessage(): void;
 	ensureLoadingAnimation(): void;
-	startPendingSubmission(input: { text: string; images?: ImageContent[] }): SubmittedUserInput;
+	startPendingSubmission(input: {
+		text: string;
+		images?: ImageContent[];
+	}): Extract<SubmittedUserInput, { kind: "user-input" }>;
 	cancelPendingSubmission(): boolean;
-	markPendingSubmissionStarted(input: SubmittedUserInput): boolean;
-	finishPendingSubmission(input: SubmittedUserInput): void;
+	markPendingSubmissionStarted(input: Extract<SubmittedUserInput, { kind: "user-input" }>): boolean;
+	finishPendingSubmission(input: Extract<SubmittedUserInput, { kind: "user-input" }>): void;
 	isKnownSlashCommand(text: string): boolean;
 	addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void;
 	renderSessionContext(

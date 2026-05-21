@@ -90,6 +90,8 @@ export async function submitInteractiveInput(
 	session: Pick<AgentSession, "prompt">,
 	input: SubmittedUserInput,
 ): Promise<void> {
+	if (input.kind === "terminal-lost") return;
+
 	if (input.cancelled) {
 		return;
 	}
@@ -196,6 +198,7 @@ async function runInteractiveMode(
 
 	while (true) {
 		const input = await mode.getUserInput();
+		if (input.kind === "terminal-lost") break;
 		await submitInteractiveInput(mode, session, input);
 	}
 }

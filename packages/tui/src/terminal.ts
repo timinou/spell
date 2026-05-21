@@ -92,6 +92,13 @@ export interface Terminal {
 	 */
 	onAppearanceChange(callback: (appearance: TerminalAppearance) => void): void;
 
+	/**
+	 * Register a callback for when the controlling pty is destroyed.
+	 * The callback receives a reason string (e.g. 'stdout-error').
+	 * Returns an unsubscribe function.
+	 */
+	onLost(callback: (reason: string) => void): () => void;
+
 	/** The last detected terminal appearance, or undefined if not yet known. */
 	get appearance(): TerminalAppearance | undefined;
 }
@@ -112,6 +119,7 @@ export class ProcessTerminal implements Terminal {
 	#writeLogPath = $env.PI_TUI_WRITE_LOG || "";
 	#windowsVTInputRestore?: () => void;
 	#appearanceCallbacks: Array<(appearance: TerminalAppearance) => void> = [];
+	#lossCallbacks: Array<(reason: string) => void> = [];
 	#appearance: TerminalAppearance | undefined;
 	#osc11Pending = false;
 	#osc11QueryQueued = false;
@@ -120,6 +128,11 @@ export class ProcessTerminal implements Terminal {
 	#osc11PollTimer?: Timer;
 	#mode2031Active = false;
 	#mode2031DebounceTimer?: Timer;
+
+	#onStdoutError = () => this.#onPtyLost("stdout-error");
+	#onStdinError = () => this.#onPtyLost("stdin-error");
+	#onStdinEnd = () => this.#onPtyLost("stdin-end");
+	#onStdinClose = () => this.#onPtyLost("stdin-close");
 
 	get kittyProtocolActive(): boolean {
 		return this.#kittyProtocolActive;
@@ -133,6 +146,49 @@ export class ProcessTerminal implements Terminal {
 		this.#appearanceCallbacks.push(callback);
 	}
 
+	onLost(callback: (reason: string) => void): () => void {
+		this.#lossCallbacks.push(callback);
+		return () => {
+			const index = this.#lossCallbacks.indexOf(callback);
+			if (index >= 0) {
+				this.#lossCallbacks.splice(index, 1);
+			}
+		};
+	}
+
+	#onPtyLost(reason: string): void {
+		if (this.#dead) return;
+		this.#dead = true;
+		this.#stopOsc11Poll();
+		logger.info("terminal lost", { reason });
+		for (const cb of [...this.#lossCallbacks]) {
+			try {
+				cb(reason);
+			} catch {
+				/* ignore callback errors */
+			}
+		}
+		process.stdout.removeListener("error", this.#onStdoutError);
+		process.stdin.removeListener("error", this.#onStdinError);
+		process.stdin.removeListener("end", this.#onStdinEnd);
+		process.stdin.removeListener("close", this.#onStdinClose);
+	}
+	/**
+	 * Liveness check: detect when the controlling pty has been destroyed by
+	 * checking whether stdout/stdin are still usable. Called from the OSC 11
+	 * poll interval so we piggy-back on the existing 2s cadence.
+	 */
+	#checkPtyLiveness(): boolean {
+		if (!process.stdout.writable) {
+			this.#onPtyLost("stdout-unwritable");
+			return false;
+		}
+		if (!process.stdin.readable) {
+			this.#onPtyLost("stdin-unreadable");
+			return false;
+		}
+		return true;
+	}
 	start(onInput: (data: string) => void, onResize: () => void): void {
 		this.#inputHandler = onInput;
 		this.#resizeHandler = onResize;
@@ -186,6 +242,15 @@ export class ProcessTerminal implements Terminal {
 		// Start periodic OSC 11 re-query for terminals without Mode 2031
 		// (Warp, Alacritty, WezTerm, iTerm2). Self-disables once Mode 2031 fires.
 		this.#startOsc11Poll();
+
+		// Detect controlling-pty destruction asynchronously. When the parent
+		// shell or SSH session dies, stdout will emit 'error' (often EIO) and
+		// stdin will emit 'end' or 'close'. These are the only reliable signals
+		// because there is no portable SIGWINCH-like notification for pty loss.
+		process.stdout.on("error", this.#onStdoutError);
+		process.stdin.on("error", this.#onStdinError);
+		process.stdin.on("end", this.#onStdinEnd);
+		process.stdin.on("close", this.#onStdinClose);
 	}
 
 	/**
@@ -417,6 +482,7 @@ export class ProcessTerminal implements Terminal {
 				this.#stopOsc11Poll();
 				return;
 			}
+			if (!this.#checkPtyLiveness()) return;
 			this.#queryBackgroundColor();
 		}, 2_000);
 		this.#osc11PollTimer.unref();
@@ -511,6 +577,7 @@ export class ProcessTerminal implements Terminal {
 			this.#mode2031DebounceTimer = undefined;
 		}
 		this.#appearanceCallbacks = [];
+		this.#lossCallbacks = [];
 		this.#osc11Pending = false;
 		this.#osc11QueryQueued = false;
 		this.#osc11ResponseBuffer = "";
@@ -550,6 +617,10 @@ export class ProcessTerminal implements Terminal {
 			process.stdout.removeListener("resize", this.#resizeHandler);
 			this.#resizeHandler = undefined;
 		}
+		process.stdout.removeListener("error", this.#onStdoutError);
+		process.stdin.removeListener("error", this.#onStdinError);
+		process.stdin.removeListener("end", this.#onStdinEnd);
+		process.stdin.removeListener("close", this.#onStdinClose);
 
 		// Pause stdin to prevent any buffered input (e.g., Ctrl+D) from being
 		// re-interpreted after raw mode is disabled. This fixes a race condition

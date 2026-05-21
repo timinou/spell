@@ -31,6 +31,7 @@ function createSubmission(input: {
 	images?: InteractiveModeContext["pendingImages"];
 }): SubmittedUserInput {
 	return {
+		kind: "user-input",
 		text: input.text,
 		images: input.images,
 		cancelled: false,
