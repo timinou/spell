@@ -1,4 +1,4 @@
-import type { Component, Container } from "../tui";
+import type { Component, DirtyParent } from "../tui";
 import { applyBackgroundToLine, padding, replaceTabs, visibleWidth, wrapTextWithAnsi } from "../utils";
 
 /**
@@ -14,9 +14,9 @@ export class Text implements Component {
 	#cachedText?: string;
 	#cachedWidth?: number;
 	#cachedLines?: string[];
-	#parent?: Container;
+	#parent?: DirtyParent;
 
-	setParent(p: Container | undefined): void {
+	setParent(p: DirtyParent | undefined): void {
 		this.#parent = p;
 	}
 

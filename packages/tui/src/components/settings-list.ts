@@ -1,5 +1,5 @@
 import { matchesKey } from "../keys";
-import type { Component, Container } from "../tui";
+import type { Component, DirtyParent } from "../tui";
 import { Ellipsis, padding, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
 
 export interface SettingItem {
@@ -59,9 +59,9 @@ export class SettingsList implements Component {
 		}
 	}
 
-	#parent?: Container;
+	#parent?: DirtyParent;
 
-	setParent(p: Container | undefined): void {
+	setParent(p: DirtyParent | undefined): void {
 		this.#parent = p;
 	}
 

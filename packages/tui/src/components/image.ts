@@ -5,7 +5,7 @@ import {
 	renderImage,
 	TERMINAL,
 } from "../terminal-capabilities";
-import type { Component, Container } from "../tui";
+import type { Component, DirtyParent } from "../tui";
 
 export interface ImageTheme {
 	fallbackColor: (str: string) => string;
@@ -26,9 +26,9 @@ export class Image implements Component {
 
 	#cachedLines?: string[];
 	#cachedWidth?: number;
-	#parent?: Container;
+	#parent?: DirtyParent;
 
-	setParent(p: Container | undefined): void {
+	setParent(p: DirtyParent | undefined): void {
 		this.#parent = p;
 	}
 

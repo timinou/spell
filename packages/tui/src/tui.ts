@@ -16,6 +16,15 @@ type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;
 
 /**
+ * Minimal interface for anything that can serve as a parent for dirty propagation.
+ * Containers implement this directly; Box and other Container-like wrappers can
+ * implement it too without needing to inherit from Container.
+ */
+export interface DirtyParent {
+	markDirty(): void;
+}
+
+/**
  * Component interface - all components must implement this
  */
 export interface Component {
@@ -177,9 +186,9 @@ export class Container implements Component {
 	#dirty = true;
 	#cachedLines?: string[];
 	#cachedWidth?: number;
-	#parent?: Container;
+	#parent?: DirtyParent;
 
-	setParent(p: Container | undefined): void {
+	setParent(p: DirtyParent | undefined): void {
 		if (p === this) throw new Error("Container cannot be its own parent");
 		this.#parent = p;
 	}

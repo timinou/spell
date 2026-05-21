@@ -1,4 +1,4 @@
-import type { Component } from "../tui";
+import type { Component, DirtyParent } from "../tui";
 import { applyBackgroundToLine, padding, visibleWidth } from "../utils";
 
 type Cache = {
@@ -9,14 +9,24 @@ type Cache = {
 /**
  * Box component - a container that applies padding and background to all children
  */
-export class Box implements Component {
+export class Box implements Component, DirtyParent {
 	children: Component[] = [];
 	#paddingX: number;
 	#paddingY: number;
 	#bgFn?: (text: string) => string;
+	#parent?: DirtyParent;
 
 	// Cache for rendered output
 	#cached?: Cache;
+
+	setParent(p: DirtyParent | undefined): void {
+		this.#parent = p;
+	}
+
+	markDirty(): void {
+		this.#cached = undefined;
+		this.#parent?.markDirty();
+	}
 
 	constructor(paddingX = 1, paddingY = 1, bgFn?: (text: string) => string) {
 		this.#paddingX = paddingX;
@@ -26,20 +36,25 @@ export class Box implements Component {
 
 	addChild(component: Component): void {
 		this.children.push(component);
-		this.#invalidateCache();
+		component.setParent?.(this);
+		this.markDirty();
 	}
 
 	removeChild(component: Component): void {
 		const index = this.children.indexOf(component);
 		if (index !== -1) {
 			this.children.splice(index, 1);
-			this.#invalidateCache();
+			component.setParent?.(undefined);
+			this.markDirty();
 		}
 	}
 
 	clear(): void {
+		for (const child of this.children) {
+			child.setParent?.(undefined);
+		}
 		this.children = [];
-		this.#invalidateCache();
+		this.markDirty();
 	}
 
 	setBgFn(bgFn?: (text: string) => string): void {
@@ -74,6 +89,7 @@ export class Box implements Component {
 		for (const child of this.children) {
 			child.invalidate?.();
 		}
+		this.#parent?.markDirty();
 	}
 
 	render(width: number): string[] {
