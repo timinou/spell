@@ -21,12 +21,29 @@ function markModeSeen(key) {
 	return false;
 }
 
+// Must match `EMBEDDER_DIM` in crates/pi-natives/src/embedding_worker.rs;
+// otherwise `KnowledgeMeta::status_against` marks every mock-built cache as
+// Stale on load and tests that exercise the load path stop working.
+const REAL_DIM = 768;
+
+function makeVector(seed) {
+	const v = new Array(REAL_DIM).fill(0);
+	v[0] = 1;
+	v[1] = seed;
+	v[2] = 1;
+	return v;
+}
+
 function buildBatchVectors(texts) {
-	return texts.map((_text, index) => [1, index + 1, texts.length || 1]);
+	return texts.map((_text, index) => {
+		const v = makeVector(index + 1);
+		v[2] = texts.length || 1;
+		return v;
+	});
 }
 
 function buildQueryVector(text) {
-	return [1, Math.max(text.length, 1), 1];
+	return makeVector(Math.max(text.length, 1));
 }
 
 function respond(payload) {
@@ -47,7 +64,7 @@ function handleRequest(line) {
 			vectors = vectors.slice(0, Math.max(texts.length - 1, 0));
 		}
 		if (mode === "batch_dim_mismatch" && vectors.length > 0) {
-			vectors = vectors.map((vector, index) => (index === Math.min(1, vectors.length - 1) ? vector.slice(0, 2) : vector));
+			vectors = vectors.map((vector, index) => (index === Math.min(1, vectors.length - 1) ? vector.slice(0, REAL_DIM - 1) : vector));
 		}
 		respond({ ok: true, vectors });
 		return;
@@ -55,7 +72,13 @@ function handleRequest(line) {
 
 	if (request.command === "embed_query") {
 		const text = typeof request.text === "string" ? request.text : "";
-		const vector = mode === "query_dim_mismatch" ? [1, Math.max(text.length, 1)] : buildQueryVector(text);
+		// query_dim_mismatch fakes an embedder whose query path produces a vector
+		// of a different dimensionality than the cached batch vectors (768). The
+		// cached index loads as Fresh (model+dim match), then graph_search's
+		// query-time dim check trips and the system falls back to lexical search.
+		const vector = mode === "query_dim_mismatch"
+			? [1, Math.max(text.length, 1)]
+			: buildQueryVector(text);
 		respond({ ok: true, vector });
 		return;
 	}

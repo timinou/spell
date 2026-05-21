@@ -11,6 +11,16 @@ use napi::{Error, Result};
 use serde::{Deserialize, Serialize};
 
 const WORKER_ENV_VAR: &str = "PI_EMBEDDING_WORKER";
+
+/// Identifier of the embedder model the worker is expected to use. Persisted
+/// in `KnowledgeMeta::embedder_model` so a model swap invalidates every
+/// existing vector cache without further intervention. W2 ships Jina v2 base
+/// code (768-dim); W2.5 flips this constant + `EMBEDDER_DIM` to bge-m3 and
+/// every workspace silently rebuilds on next load.
+pub const EMBEDDER_MODEL: &str = "jina-embeddings-v2-base-code";
+
+/// Dimensionality of vectors produced by `EMBEDDER_MODEL`. Must stay in sync.
+pub const EMBEDDER_DIM: usize = 768;
 const WORKER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(windows)]

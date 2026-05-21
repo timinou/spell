@@ -1,8 +1,7 @@
 use std::{
-	collections::hash_map::DefaultHasher,
 	fmt::Write as _,
-	fs,
-	hash::{Hash, Hasher},
+	fs::{self, File},
+	io::{BufReader, BufWriter},
 	path::{Path, PathBuf},
 };
 
@@ -14,18 +13,21 @@ use pi_code_graph::{
 	GraphFlowResult, GraphImpactResult, GraphNodeSummary, GraphSearchMatch, GraphStatus,
 	GraphSymbolsResult, GraphTraversalLevel, LanguageRegistry,
 };
+use pi_knowledge_core::cache::{KnowledgeMeta, WorkspaceFingerprint, save_all};
 
 use crate::{
-	embedding_worker,
+	embedding_worker::{self, EMBEDDER_DIM, EMBEDDER_MODEL},
 	task::{self, CancelToken},
 };
 
 const DEFAULT_DEPTH: u32 = 3;
 const DEFAULT_LIMIT: u32 = 10;
 const CACHE_NAME: &str = "workspace";
-const VECTORS_CACHE_NAME: &str = "workspace-vectors";
+const VECTORS_BASENAME: &str = "workspace-vectors";
 const VECTORS_FILE_EXT: &str = "uidx";
-const VECTORS_FINGERPRINT_EXT: &str = "fp";
+/// `save_all` writes `<name>.bin`; this is the basename of the meta sidecar
+/// that supersedes the W2 `workspace-vectors.fp` u64 LE fingerprint sidecar.
+const VECTORS_META_NAME: &str = "workspace-vectors-meta";
 
 #[napi(object)]
 pub struct CodeGraphOptions<'env> {
@@ -234,7 +236,12 @@ fn run_code_graph(
 			if options.semantic == Some(false) {
 				format_search(&graph.graph_search(query, None, limit))
 			} else {
-				match load_vector_cache(&cache, graph_fingerprint_hash(&cache)) {
+				match load_vector_cache(
+					&cache,
+					current_graph_fingerprint(&cache).as_ref(),
+					EMBEDDER_MODEL,
+					EMBEDDER_DIM,
+				) {
 					VectorCacheState::Fresh(vector_index) => {
 						let vector_count = vector_index.len();
 						match embedding_worker::embed_query(query) {
@@ -332,7 +339,13 @@ fn render_status(root: &Path, builder: &CodeGraphBuilder) -> napi::Result<CodeGr
 		.load::<GraphCacheEntry>(CACHE_NAME)
 		.map_err(to_napi_error)?
 		.map(|entry| CodeGraph::from(entry.graph).graph_status());
-	let semantic_status = load_vector_cache(cache, graph_fingerprint_hash(cache)).describe();
+	let semantic_status = load_vector_cache(
+		cache,
+		current_graph_fingerprint(cache).as_ref(),
+		EMBEDDER_MODEL,
+		EMBEDDER_DIM,
+	)
+	.describe();
 	let mut output = if let Some(status) = &status {
 		format_status(status, &cache_status, false)
 	} else {
@@ -363,8 +376,12 @@ fn build_semantic_index(graph: &CodeGraph, cache: &CacheStore) -> napi::Result<u
 	let count = entries.len();
 	let vector_index = pi_knowledge_core::vec::VectorIndex::from_entries(&entries, dimensions)
 		.map_err(|e| Error::from_reason(format!("Failed to build vector index: {e}")))?;
-	let fingerprint_hash = compute_fingerprint_hash(cache);
-	save_vector_cache(cache, &vector_index, fingerprint_hash)?;
+	let fingerprint = current_graph_fingerprint(cache).ok_or_else(|| {
+		Error::from_reason(
+			"Graph cache missing while persisting semantic vectors; rebuild the graph first",
+		)
+	})?;
+	save_vector_cache(cache, &vector_index, &fingerprint, EMBEDDER_MODEL)?;
 	Ok(count)
 }
 
@@ -406,67 +423,101 @@ fn validate_worker_vectors(
 	Ok((entries, dimensions))
 }
 
-fn graph_fingerprint_hash(cache: &CacheStore) -> Option<u64> {
-	let entry = cache.load::<GraphCacheEntry>(CACHE_NAME).ok().flatten()?;
-	let mut hasher = DefaultHasher::new();
-	entry.fingerprint.hash(&mut hasher);
-	Some(hasher.finish())
+/// Pluck the persisted graph fingerprint without hashing — `KnowledgeMeta`
+/// stores the full `WorkspaceFingerprint`, so the load-side comparison happens
+/// against the same shape that was written.
+fn current_graph_fingerprint(cache: &CacheStore) -> Option<WorkspaceFingerprint> {
+	cache
+		.load::<GraphCacheEntry>(CACHE_NAME)
+		.ok()
+		.flatten()
+		.map(|entry| entry.fingerprint)
 }
 
-/// Compute a deterministic hash of the graph fingerprint for vector cache
-/// validation.
-fn compute_fingerprint_hash(cache: &CacheStore) -> u64 {
-	graph_fingerprint_hash(cache).unwrap_or(0)
-}
-
+/// Persist the usearch index plus a `KnowledgeMeta` sidecar via the W1.5
+/// atomic-multi-blob writer. The usearch `.uidx` is already atomic via
+/// `VectorIndex::save` (tmp+rename inside the native lib); `save_all` covers
+/// the meta blob. `embedder_model` is recorded so a later embedder swap (W2.5
+/// bge-m3) drops the cache automatically through `status_against`.
 fn save_vector_cache(
 	cache: &CacheStore,
 	vectors: &pi_knowledge_core::vec::VectorIndex,
-	fingerprint_hash: u64,
+	fingerprint: &WorkspaceFingerprint,
+	embedder_model: &str,
 ) -> napi::Result<()> {
 	fs::create_dir_all(cache.directory())
 		.map_err(|e| Error::from_reason(format!("Failed to create cache dir: {e}")))?;
-	let index_path = cache
+	let vectors_path = cache
 		.directory()
-		.join(format!("{VECTORS_CACHE_NAME}.{VECTORS_FILE_EXT}"));
+		.join(format!("{VECTORS_BASENAME}.{VECTORS_FILE_EXT}"));
 	vectors
-		.save(&index_path)
+		.save(&vectors_path)
 		.map_err(|e| Error::from_reason(format!("Failed to write vector cache: {e}")))?;
-	let fp_path = cache
-		.directory()
-		.join(format!("{VECTORS_CACHE_NAME}.{VECTORS_FINGERPRINT_EXT}"));
-	let tmp_fp = fp_path.with_extension(format!("{VECTORS_FINGERPRINT_EXT}.tmp"));
-	fs::write(&tmp_fp, fingerprint_hash.to_le_bytes())
-		.map_err(|e| Error::from_reason(format!("Failed to write vector fingerprint: {e}")))?;
-	fs::rename(&tmp_fp, &fp_path)
-		.map_err(|e| Error::from_reason(format!("Failed to rename vector fingerprint: {e}")))
+
+	let mut meta = KnowledgeMeta::new(fingerprint.clone());
+	embedder_model.clone_into(&mut meta.embedder_model);
+	meta.embedder_dim = vectors.dim();
+
+	save_all(
+		cache,
+		vec![(
+			VECTORS_META_NAME,
+			Box::new(move |w: &mut BufWriter<File>| {
+				bincode::serialize_into(w, &meta).map_err(pi_knowledge_core::Error::Bincode)
+			}) as Box<dyn FnOnce(&mut BufWriter<File>) -> pi_knowledge_core::Result<()>>,
+		)],
+	)
+	.map_err(|e| Error::from_reason(format!("Failed to write vector cache meta: {e}")))
 }
 
-fn load_vector_cache(cache: &CacheStore, expected_hash: Option<u64>) -> VectorCacheState {
-	let path = cache
+/// Load the vector cache and validate it against `current_fingerprint` /
+/// `expected_model` / `expected_dim` via `KnowledgeMeta::status_against`.
+///
+/// `current_fingerprint = None` means the graph cache itself is gone; we can't
+/// trust the vector cache either, so any present file is reported `Stale` and
+/// the caller will rebuild.
+fn load_vector_cache(
+	cache: &CacheStore,
+	current_fingerprint: Option<&WorkspaceFingerprint>,
+	expected_model: &str,
+	expected_dim: usize,
+) -> VectorCacheState {
+	use pi_knowledge_core::cache::CacheStatus as KnowledgeCacheStatus;
+
+	let vectors_path = cache
 		.directory()
-		.join(format!("{VECTORS_CACHE_NAME}.{VECTORS_FILE_EXT}"));
-	if !path.exists() {
+		.join(format!("{VECTORS_BASENAME}.{VECTORS_FILE_EXT}"));
+	if !vectors_path.exists() {
 		return VectorCacheState::Missing;
 	}
-	let vectors = match pi_knowledge_core::vec::VectorIndex::load(&path) {
+	let vectors = match pi_knowledge_core::vec::VectorIndex::load(&vectors_path) {
 		Ok(v) => v,
 		Err(error) => return VectorCacheState::Corrupt(error.to_string()),
 	};
-	let fp_path = cache
-		.directory()
-		.join(format!("{VECTORS_CACHE_NAME}.{VECTORS_FINGERPRINT_EXT}"));
-	let stored_hash = read_fingerprint(&fp_path);
-	match (expected_hash, stored_hash) {
-		(Some(expected), Some(stored)) if expected == stored => VectorCacheState::Fresh(vectors),
-		_ => VectorCacheState::Stale(vectors),
-	}
-}
 
-fn read_fingerprint(path: &Path) -> Option<u64> {
-	let bytes = fs::read(path).ok()?;
-	let arr: [u8; 8] = bytes.as_slice().try_into().ok()?;
-	Some(u64::from_le_bytes(arr))
+	let meta_path = cache.directory().join(format!("{VECTORS_META_NAME}.bin"));
+	let Ok(meta_file) = File::open(&meta_path) else {
+		// No meta sidecar → can't validate freshness; treat as stale rather than
+		// silently serving a vector index of unknown provenance.
+		return VectorCacheState::Stale(vectors);
+	};
+	let meta: KnowledgeMeta = match bincode::deserialize_from(BufReader::new(meta_file)) {
+		Ok(meta) => meta,
+		Err(_) => return VectorCacheState::Stale(vectors),
+	};
+
+	let Some(current) = current_fingerprint else {
+		return VectorCacheState::Stale(vectors);
+	};
+
+	match meta.status_against(current, expected_model, expected_dim) {
+		KnowledgeCacheStatus::Fresh => VectorCacheState::Fresh(vectors),
+		// `status_against` only emits `Fresh` or `Stale`; `Missing` is the shared
+		// enum's third variant and can't originate here, but match exhaustively.
+		KnowledgeCacheStatus::Stale { .. } | KnowledgeCacheStatus::Missing => {
+			VectorCacheState::Stale(vectors)
+		},
+	}
 }
 
 fn resolve_root(root: Option<&str>) -> napi::Result<PathBuf> {
@@ -1133,6 +1184,114 @@ mod tests {
 		);
 
 		let _ = fs::remove_dir_all(root);
+	}
+
+	fn dummy_fingerprint() -> WorkspaceFingerprint {
+		use std::collections::BTreeMap;
+		WorkspaceFingerprint {
+			root:     PathBuf::from("/tmp/code-graph-cache-test"),
+			git_head: Some("deadbeef".into()),
+			files:    BTreeMap::new(),
+		}
+	}
+
+	fn tiny_vector_index(dim: usize) -> pi_knowledge_core::vec::VectorIndex {
+		let entries = vec![
+			pi_knowledge_core::vec::VectorEntry { node_id: 1, vector: vec![0.1_f32; dim] },
+			pi_knowledge_core::vec::VectorEntry { node_id: 2, vector: vec![0.2_f32; dim] },
+		];
+		pi_knowledge_core::vec::VectorIndex::from_entries(&entries, dim)
+			.expect("vector index should build for test")
+	}
+
+	fn test_cache_store(name: &str) -> (CacheStore, PathBuf) {
+		let unique = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.unwrap_or_default()
+			.as_nanos();
+		let dir = std::env::temp_dir().join(format!(
+			"pi-natives-code-graph-meta-{name}-{}-{unique}",
+			std::process::id()
+		));
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).expect("cache dir should be created");
+		(CacheStore::new(&dir), dir)
+	}
+
+	#[test]
+	fn load_returns_stale_on_embedder_model_mismatch() {
+		let (cache, dir) = test_cache_store("model-mismatch");
+		let vectors = tiny_vector_index(8);
+		let fingerprint = dummy_fingerprint();
+		save_vector_cache(&cache, &vectors, &fingerprint, "model-X")
+			.expect("save should succeed");
+
+		let state = load_vector_cache(&cache, Some(&fingerprint), "model-Y", vectors.dim());
+		assert!(
+			matches!(state, VectorCacheState::Stale(_)),
+			"model swap must invalidate the cache, got {:?}",
+			state.describe()
+		);
+
+		let _ = fs::remove_dir_all(dir);
+	}
+
+	#[test]
+	fn load_returns_stale_on_embedder_dim_mismatch() {
+		let (cache, dir) = test_cache_store("dim-mismatch");
+		let vectors = tiny_vector_index(8);
+		let fingerprint = dummy_fingerprint();
+		save_vector_cache(&cache, &vectors, &fingerprint, "model-X")
+			.expect("save should succeed");
+
+		let state = load_vector_cache(&cache, Some(&fingerprint), "model-X", 16);
+		assert!(
+			matches!(state, VectorCacheState::Stale(_)),
+			"dim change must invalidate the cache, got {:?}",
+			state.describe()
+		);
+
+		let _ = fs::remove_dir_all(dir);
+	}
+
+	#[test]
+	fn load_returns_stale_when_meta_missing() {
+		let (cache, dir) = test_cache_store("meta-missing");
+		let vectors = tiny_vector_index(8);
+		let fingerprint = dummy_fingerprint();
+		save_vector_cache(&cache, &vectors, &fingerprint, "model-X")
+			.expect("save should succeed");
+
+		let meta_path = dir.join(format!("{VECTORS_META_NAME}.bin"));
+		assert!(meta_path.exists(), "sanity: meta sidecar exists after save");
+		fs::remove_file(&meta_path).expect("unlink meta");
+
+		let state = load_vector_cache(&cache, Some(&fingerprint), "model-X", vectors.dim());
+		assert!(
+			matches!(state, VectorCacheState::Stale(_)),
+			"missing meta must be Stale (not Fresh, not Corrupt), got {:?}",
+			state.describe()
+		);
+
+		let _ = fs::remove_dir_all(dir);
+	}
+
+	#[test]
+	fn load_returns_fresh_on_full_match() {
+		let (cache, dir) = test_cache_store("fresh");
+		let vectors = tiny_vector_index(8);
+		let fingerprint = dummy_fingerprint();
+		save_vector_cache(&cache, &vectors, &fingerprint, "model-X")
+			.expect("save should succeed");
+
+		let state = load_vector_cache(&cache, Some(&fingerprint), "model-X", vectors.dim());
+		assert!(
+			matches!(state, VectorCacheState::Fresh(_)),
+			"matched model+dim+fingerprint must be Fresh, got {:?}",
+			state.describe()
+		);
+
+		let _ = fs::remove_dir_all(dir);
 	}
 
 	#[test]
