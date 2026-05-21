@@ -383,6 +383,28 @@ export class Settings {
 	}
 
 	/**
+	 * Per-tier raw value lookup. Returns the value at each persisted tier
+	 * + the session overrides (undefined when not present at that tier).
+	 *
+	 * Use this for settings that need additive cross-tier semantics (e.g.
+	 * `secrets` — user-tier + project-tier obfuscation patterns BOTH apply).
+	 * The default `get()` returns the deep-merged value, in which arrays at
+	 * higher tiers REPLACE arrays at lower tiers (intentional for most
+	 * settings; wrong for additive lists).
+	 */
+	getPerTier<P extends SettingPath>(
+		path: P,
+	): { user: unknown; project: unknown; local: unknown; session: unknown } {
+		const segments = parsePath(path);
+		return {
+			user: getByPath(this.#global, segments),
+			project: getByPath(this.#project, segments),
+			local: getByPath(this.#local, segments),
+			session: getByPath(this.#overrides, segments),
+		};
+	}
+
+	/**
 	 * Get all settings in a group with full type safety.
 	 */
 	getGroup<G extends GroupPrefix>(prefix: G): GroupTypeMap[G] {

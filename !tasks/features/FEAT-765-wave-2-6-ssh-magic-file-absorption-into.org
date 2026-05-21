@@ -1,0 +1,57 @@
+#+TITLE: WAVE 2.6: SSH magic file absorption into spell.kdl
+#+STATE: ITEM
+#+SESSION_ID: 14ea0e0f03e26235
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-49-03-247Z_14ea0e0f03e26235.jsonl]]
+#+CUSTOM_ID: FEAT-765-wave-2-6-ssh-magic-file-absorption-into
+
+* Initial Message
+
+the settings thing doesn't work. I'd like a simple toggle on top for user/project/session. right now, when I do settings, it just shows [user] ... and keeps printing it, fucking up the layout of everything. I also don't see settings persisted when they need to be added to the kdl (please reproduce the error)
+
+investigate.
+
+* Goal
+
+Absorb the Spell-owned SSH config files (=~/.spell/agent/ssh.json= and =<cwd>/.spell/ssh.json= and =<cwd>/ssh.json=) into =spell.kdl= as an inline =ssh= block.
+
+* Why deferred from WAVE 2
+
+SSH host entries have a rich shape (host, user, port, identityFile, jumpHost, options.compression, options.serverAliveInterval, etc.). Modeling all of it in KDL needs a small special-case writer (similar to existing =writeAllowedFolders=).
+
+There are also THREE Spell-owned magic file locations (vs. two for the others), making the migrator's idempotency story a bit more involved.
+
+* Proposed schema
+
+#+begin_src kdl
+ssh {
+  host "prod" {
+    hostname "prod.example.com"
+    user "deploy"
+    port 22
+    identity-file "~/.ssh/prod"
+    options compression=true server-alive-interval=60
+  }
+  host "staging" {
+    hostname "staging.example.com"
+    user "deploy"
+  }
+}
+#+end_src
+
+* Implementation surface
+
+- =packages/coding-agent/src/config/settings-schema.ts= \u2014 add =ssh.hosts= Record<string, SshHostEntry>
+- =packages/coding-agent/src/config/kdl-settings-map.ts= \u2014 add =ssh.hosts= with special-case writer
+- =packages/coding-agent/src/config/kdl-writer.ts= \u2014 add =writeSshHosts= helper
+- =packages/coding-agent/src/config/kdl-reader.ts= \u2014 add =readSshHosts= helper
+- =packages/coding-agent/src/discovery/ssh.ts= \u2014 read from Settings
+- =packages/coding-agent/src/migration/translate.ts= \u2014 ssh.json schema translator
+- =packages/coding-agent/src/migration/detect.ts= \u2014 add ssh.json (3 locations) candidates
+
+* Non-goals
+
+- =~/.ssh/config= and other foreign SSH configs stay native \u2014 only Spell's own ssh.json is in scope.
+
+* Tracking
+
+Subsumed by =FULL_KDL_SPELL= plan, WAVE 2.6 (transitional). Closes the SSH portion of =BUG-388=.

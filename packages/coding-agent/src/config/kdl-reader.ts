@@ -3,7 +3,12 @@ import { parse } from "@bgotink/kdl";
 
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 
-import { readAllowedFolders, readStatusLineSegmentOptions, readTreeStringRecord } from "./kdl-compatibility";
+import {
+	readAllowedFolders,
+	readSecrets,
+	readStatusLineSegmentOptions,
+	readTreeStringRecord,
+} from "./kdl-compatibility";
 import {
 	getBooleanArgument,
 	getBooleanProperty,
@@ -37,6 +42,10 @@ function getNodeForPath(doc: Document, block: string, nodePath: string): Node | 
 	const root = getDocumentNode(doc, block);
 	if (!root) return undefined;
 
+	// Block-only mapping (sentinel "_self"): the writer operates on the block
+	// node itself; the reader does the same.
+	if (nodePath === "_self") return root;
+
 	let current: Node | undefined = root;
 	for (const segment of nodePath.split(".")) {
 		current = current ? getChildNode(current, segment) : undefined;
@@ -58,6 +67,13 @@ function readSettingValue(node: Node, settingPath: SettingPath): unknown {
 
 	if (settingPath === "planMode.allowedFolders") {
 		const result = readAllowedFolders(node);
+		for (const warning of result.warnings)
+			logger.warn("kdl-reader: compatibility warning", { path: warning.path, message: warning.message });
+		return result.value;
+	}
+
+	if (settingPath === "secrets") {
+		const result = readSecrets(node);
 		for (const warning of result.warnings)
 			logger.warn("kdl-reader: compatibility warning", { path: warning.path, message: warning.message });
 		return result.value;

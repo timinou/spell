@@ -47,6 +47,9 @@ export const EXCLUDED_FROM_KDL = new Set<string>([
 export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> = {
 	// ── Runtime / extensibility ───────────────────────────────────────────
 	shellPath: { block: "runtime", nodePath: "shell-path", accessor: "argument" },
+
+	// ── Secrets (block-only; see kdl-compatibility.writeSecrets) ──────────────
+	secrets: { block: "secrets", nodePath: "_self", accessor: "argument" },
 	extensions: { block: "extensibility", nodePath: "extensions", accessor: "argument" },
 	disabledExtensions: { block: "extensibility", nodePath: "disabled-extensions", accessor: "argument" },
 	disabledProviders: { block: "extensibility", nodePath: "disabled-providers", accessor: "argument" },

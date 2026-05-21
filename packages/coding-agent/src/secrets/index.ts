@@ -1,29 +1,55 @@
-import * as path from "node:path";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { logger } from "@oh-my-pi/pi-utils";
+import { settings } from "../config/settings";
 import type { SecretEntry } from "./obfuscator";
 import { compileSecretRegex } from "./regex";
 
 export { obfuscateMessages, type SecretEntry, SecretObfuscator } from "./obfuscator";
 
 /**
- * Load secrets from project-local and global secrets.yml files.
- * Project-local entries override global entries with matching content.
+ * Load secret obfuscation entries from spell.kdl.
+ *
+ * Sources from the unified `secrets` block via Settings, which reads from
+ * (in precedence order) <cwd>/.local/spell.kdl, <cwd>/spell.kdl, then
+ * ~/.config/spell/spell.kdl. The migrator (src/migration/) translates legacy
+ * ~/.spell/agent/secrets.yml and <cwd>/.spell/secrets.yml on first launch.
+ *
+ * @param _cwd Unused; preserved for callsite compatibility.
+ * @param _agentDir Unused; preserved for callsite compatibility.
  */
-export async function loadSecrets(cwd: string, agentDir: string): Promise<SecretEntry[]> {
-	const projectPath = path.join(cwd, ".spell", "secrets.yml");
-	const globalPath = path.join(agentDir, "secrets.yml");
-
-	const globalEntries = await loadSecretsFile(globalPath);
-	const projectEntries = await loadSecretsFile(projectPath);
-
-	if (globalEntries.length === 0) return projectEntries;
-	if (projectEntries.length === 0) return globalEntries;
-
-	// Merge: project overrides global by content match
-	const projectContents = new Set(projectEntries.map(e => e.content));
-	const merged = [...globalEntries.filter(e => !projectContents.has(e.content)), ...projectEntries];
-	return merged;
+export async function loadSecrets(_cwd: string, _agentDir: string): Promise<SecretEntry[]> {
+	void _cwd;
+	void _agentDir;
+	// Per-tier read — cross-tier additive semantics. Pre-WAVE-2 `loadSecrets`
+	// merged user-tier + project-tier YAML files; the default `settings.get`
+	// would replace arrays wholesale (project array wins, user secrets
+	// invisible). Restore the legacy contract by walking each tier and
+	// deduping by content.
+	const tiers = settings.getPerTier("secrets");
+	const seen = new Set<string>();
+	const entries: SecretEntry[] = [];
+	// Order: user → project → local → session. Each layer adds entries the
+	// previous layers did not contribute. "Higher" tiers don't OVERRIDE the
+	// lower ones — every configured obfuscation pattern applies.
+	let layerIdx = 0;
+	for (const layer of [tiers.user, tiers.project, tiers.local, tiers.session]) {
+		layerIdx++;
+		if (!Array.isArray(layer)) continue;
+		for (let i = 0; i < layer.length; i++) {
+			const entry = layer[i];
+			if (!validateEntry(entry, i)) continue;
+			if (seen.has(entry.content)) continue;
+			seen.add(entry.content);
+			entries.push({
+				type: entry.type,
+				content: entry.content,
+				mode: entry.mode ?? "obfuscate",
+				replacement: entry.replacement,
+				flags: entry.flags,
+			});
+		}
+	}
+	void layerIdx;
+	return entries;
 }
 
 /** Minimum env var value length to consider as a secret. */
@@ -46,66 +72,37 @@ export function collectEnvSecrets(): SecretEntry[] {
 	return entries;
 }
 
-async function loadSecretsFile(filePath: string): Promise<SecretEntry[]> {
-	try {
-		const text = await Bun.file(filePath).text();
-		const raw = YAML.parse(text);
-		if (!Array.isArray(raw)) {
-			logger.warn("secrets.yml must be a YAML array", { path: filePath });
-			return [];
-		}
-		const entries: SecretEntry[] = [];
-		for (let i = 0; i < raw.length; i++) {
-			const entry = raw[i];
-			if (!validateEntry(entry, filePath, i)) continue;
-			entries.push({
-				type: entry.type,
-				content: entry.content,
-				mode: entry.mode ?? "obfuscate",
-				replacement: entry.replacement,
-				flags: entry.flags,
-			});
-		}
-		return entries;
-	} catch (err) {
-		if (isEnoent(err)) return [];
-		logger.warn("Failed to load secrets.yml", { path: filePath, error: String(err) });
-		return [];
-	}
-}
-
-function validateEntry(entry: unknown, filePath: string, index: number): entry is SecretEntry {
+function validateEntry(entry: unknown, index: number): entry is SecretEntry {
 	if (entry === null || typeof entry !== "object") {
-		logger.warn(`secrets.yml[${index}]: entry must be an object`, { path: filePath });
+		logger.warn(`secrets[${index}]: entry must be an object`);
 		return false;
 	}
 	const e = entry as Record<string, unknown>;
 	if (e.type !== "plain" && e.type !== "regex") {
-		logger.warn(`secrets.yml[${index}]: type must be "plain" or "regex"`, { path: filePath });
+		logger.warn(`secrets[${index}]: type must be "plain" or "regex"`);
 		return false;
 	}
 	if (typeof e.content !== "string" || e.content.length === 0) {
-		logger.warn(`secrets.yml[${index}]: content must be a non-empty string`, { path: filePath });
+		logger.warn(`secrets[${index}]: content must be a non-empty string`);
 		return false;
 	}
 	if (e.mode !== undefined && e.mode !== "obfuscate" && e.mode !== "replace") {
-		logger.warn(`secrets.yml[${index}]: mode must be "obfuscate" or "replace"`, { path: filePath });
+		logger.warn(`secrets[${index}]: mode must be "obfuscate" or "replace"`);
 		return false;
 	}
 	if (e.replacement !== undefined && typeof e.replacement !== "string") {
-		logger.warn(`secrets.yml[${index}]: replacement must be a string`, { path: filePath });
+		logger.warn(`secrets[${index}]: replacement must be a string`);
 		return false;
 	}
 	if (e.flags !== undefined && typeof e.flags !== "string") {
-		logger.warn(`secrets.yml[${index}]: flags must be a string`, { path: filePath });
+		logger.warn(`secrets[${index}]: flags must be a string`);
 		return false;
 	}
 	if (e.type === "regex") {
 		try {
 			compileSecretRegex(e.content as string, e.flags as string | undefined);
 		} catch (error) {
-			logger.warn(`secrets.yml[${index}]: invalid regex pattern`, {
-				path: filePath,
+			logger.warn(`secrets[${index}]: invalid regex pattern`, {
 				pattern: e.content,
 				error: String(error),
 			});

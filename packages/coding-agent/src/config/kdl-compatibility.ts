@@ -200,3 +200,78 @@ export function writeStatusLineSegmentOptions(node: Node, value: Record<string, 
 	}
 	node.children = children;
 }
+
+// =============================================================================
+// secrets — secret obfuscation entries
+// =============================================================================
+//
+// On disk:
+//
+//   secrets {
+//     secret type=plain content="sk-..."
+//     secret type=regex content="AKIA[0-9A-Z]{16}"
+//     secret type=regex content="postgres://[^\\s]+" mode=replace replacement="<x>" flags="i"
+//   }
+//
+// In memory: Array<{ type, content, mode?, replacement?, flags? }>.
+
+export interface SecretsKdlEntry {
+	type: "plain" | "regex";
+	content: string;
+	mode?: "obfuscate" | "replace";
+	replacement?: string;
+	flags?: string;
+}
+
+export function readSecrets(node: Node): KdlCompatResult<SecretsKdlEntry[]> {
+	const value: SecretsKdlEntry[] = [];
+	const warnings: KdlCompatWarning[] = [];
+	for (const child of getChildNodes(node)) {
+		if (child.getName() !== "secret") {
+			warnings.push({
+				path: `secrets.${child.getName()}`,
+				message: "unknown node inside `secrets` block ignored",
+			});
+			continue;
+		}
+		const rawType = child.getProperty("type");
+		if (rawType !== "plain" && rawType !== "regex") {
+			warnings.push({
+				path: "secrets.secret",
+				message: `unknown type ${JSON.stringify(rawType)}; expected "plain" or "regex"`,
+			});
+			continue;
+		}
+		const content = child.getProperty("content");
+		if (typeof content !== "string" || content.length === 0) {
+			warnings.push({ path: "secrets.secret", message: "missing content; skipping" });
+			continue;
+		}
+		const entry: SecretsKdlEntry = { type: rawType, content };
+		const rawMode = child.getProperty("mode");
+		if (rawMode === "obfuscate" || rawMode === "replace") entry.mode = rawMode;
+		const replacement = child.getProperty("replacement");
+		if (typeof replacement === "string") entry.replacement = replacement;
+		const flags = child.getProperty("flags");
+		if (typeof flags === "string") entry.flags = flags;
+		value.push(entry);
+	}
+	return { value, warnings };
+}
+
+export function writeSecrets(node: Node, value: SecretsKdlEntry[]): void {
+	clearNodeEntries(node);
+	const children = new Document([]);
+	for (const entry of value) {
+		if (!entry || typeof entry !== "object") continue;
+		const child = NodeClass.create("secret");
+		child.setProperty("type", entry.type);
+		child.setProperty("content", entry.content);
+		if (entry.mode) child.setProperty("mode", entry.mode);
+		if (entry.replacement !== undefined) child.setProperty("replacement", entry.replacement);
+		if (entry.flags !== undefined) child.setProperty("flags", entry.flags);
+		children.appendNode(child);
+	}
+	node.children = children;
+}
+
