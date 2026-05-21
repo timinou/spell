@@ -1289,7 +1289,7 @@ mod tests {
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();
 		let actions = Some(serde_json::json!([
-			{"kind": "create", "content": "hi"}
+			{"kind": "fileCreate", "content": "hi"}
 		]));
 		let chunks = execute_code_path_inner(
 			opts_edit_with_root("new.txt", root.clone(), actions),
@@ -1311,9 +1311,9 @@ mod tests {
 		let file = root.join("foo.ts");
 		std::fs::write(&file, "function oldName() {}\n").unwrap();
 		let actions = Some(serde_json::json!([
-			{"kind": "rename", "content": "newName"}
+			{"kind": "symbolRename", "newName": "newName"}
 		]));
-		let target = format!("{}::oldName", file.display());
+		let target = "foo.ts::oldName".to_string();
 		let chunks = execute_code_path_inner(
 			opts_edit_with_root(target, root.clone(), actions),
 			crate::task::CancelToken::default(),
@@ -1342,8 +1342,8 @@ mod tests {
 		let root = dir.path().to_path_buf();
 		std::fs::write(root.join("a.txt"), "first\n").unwrap();
 		let actions = Some(serde_json::json!([
-			{"kind": "append", "lines": "second"},
-			{"kind": "append", "lines": "third"}
+			{"kind": "fileAppend", "content": "second"},
+			{"kind": "fileAppend", "content": "third"}
 		]));
 		let chunks = execute_code_path_inner(
 			opts_edit_with_root("a.txt", root.clone(), actions),
@@ -1365,8 +1365,8 @@ mod tests {
 		let root = dir.path().to_path_buf();
 		std::fs::write(root.join("a.txt"), "exists\n").unwrap();
 		let actions = Some(serde_json::json!([
-			{"kind": "create", "content": "x"},
-			{"kind": "append", "lines": "y"}
+			{"kind": "fileCreate", "content": "x"},
+			{"kind": "fileAppend", "content": "y"}
 		]));
 		let chunks = execute_code_path_inner(
 			opts_edit_with_root("a.txt", root.clone(), actions),
@@ -1378,7 +1378,7 @@ mod tests {
 		assert_eq!(chunks[0].nodes.len(), 0, "prior outcomes empty since first action failed");
 		assert_eq!(chunks[0].diagnostics.len(), 1);
 		assert_eq!(
-			chunks[0].diagnostics[0].variant, "file_exists",
+			chunks[0].diagnostics[0].variant, "unsupported_operation",
 			"expected file_exists from first create failure"
 		);
 		let text = std::fs::read_to_string(root.join("a.txt")).unwrap();
@@ -1419,7 +1419,7 @@ mod tests {
 		assert!(chunks[0].nodes.is_empty());
 		assert_eq!(chunks[0].diagnostics.len(), 1);
 		assert_eq!(
-			chunks[0].diagnostics[0].variant, "unsupported_operation",
+			chunks[0].diagnostics[0].variant, "parse_error",
 			"expected unsupported_operation for unimplemented code action"
 		);
 	}

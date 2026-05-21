@@ -286,7 +286,7 @@ fn delete_with_bare_file_target_uses_fs_resolver() {
 	let root = dir.path().to_path_buf();
 	std::fs::write(root.join("doomed.txt"), "bye").unwrap();
 	let chunks = execute_code_path_inner(
-		opts_edit_with_root("doomed.txt", root.clone(), serde_json::json!([{"kind": "delete"}])),
+		opts_edit_with_root("doomed.txt", root.clone(), serde_json::json!([{"kind": "fileDelete"}])),
 		crate::task::CancelToken::default(),
 	)
 	.unwrap();
@@ -301,7 +301,7 @@ fn delete_with_qualifier_target_rejects_at_fs() {
 	let root = dir.path().to_path_buf();
 	std::fs::write(root.join("safe.txt"), "intact").unwrap();
 	let chunks = execute_code_path_inner(
-		opts_edit_with_root("safe.txt#stat", root.clone(), serde_json::json!([{"kind": "delete"}])),
+		opts_edit_with_root("safe.txt#stat", root.clone(), serde_json::json!([{"kind": "fileDelete"}])),
 		crate::task::CancelToken::default(),
 	)
 	.unwrap();
@@ -322,7 +322,7 @@ fn delete_with_symbol_target_routes_to_code_resolver() {
 	)
 	.unwrap();
 	let _ = execute_code_path_inner(
-		opts_edit_with_root("a.ts::remove_me", root.clone(), serde_json::json!([{"kind": "delete"}])),
+		opts_edit_with_root("a.ts::remove_me", root.clone(), serde_json::json!([{"kind": "fileDelete"}])),
 		crate::task::CancelToken::default(),
 	)
 	.unwrap();
@@ -342,7 +342,7 @@ fn wrap_action_with_trivial_template_succeeds() {
 			"a.ts::foo",
 			root.clone(),
 			serde_json::json!([{
-				"kind": "wrap",
+				"kind": "symbolWrap",
 				"content": ["if (true) {", "$BODY", "}"]
 			}]),
 		),
@@ -367,7 +367,7 @@ fn clone_with_content_renames_clone() {
 		opts_edit_with_root(
 			"c.ts::foo",
 			root.clone(),
-			serde_json::json!([{"kind": "clone", "content": "bar"}]),
+			serde_json::json!([{"kind": "symbolClone", "renameTo": "bar"}]),
 		),
 		crate::task::CancelToken::default(),
 	)
@@ -449,11 +449,11 @@ fn transaction_strict_restores_modified_file() {
 			"a.txt",
 			root.clone(),
 			serde_json::json!([
-				{"kind": "write", "content": "v2"},
+				{"kind": "fileWrite", "content": "v2"},
 				// Second op: wrap requires a declaration target; this
 				// is a bare-file target so it fails inside the loop
 				// after the first write succeeds — exercising rollback.
-				{"kind": "wrap", "content": ["if (true) {", "$BODY", "}"]}
+				{"kind": "symbolWrap", "content": ["if (true) {", "$BODY", "}"]}
 			]),
 		),
 		crate::task::CancelToken::default(),
@@ -471,7 +471,7 @@ fn transaction_strict_succeeds_when_all_ops_succeed() {
 		opts_edit_strict(
 			"new.txt",
 			root.clone(),
-			serde_json::json!([{"kind": "create", "content": "hello"}]),
+			serde_json::json!([{"kind": "fileCreate", "content": "hello"}]),
 		),
 		crate::task::CancelToken::default(),
 	)
@@ -491,8 +491,8 @@ fn transaction_best_effort_default_unchanged() {
 			"a.txt",
 			root.clone(),
 			serde_json::json!([
-				{"kind": "write", "content": "v2"},
-				{"kind": "delete"}  // expected to succeed too — no failure here
+				{"kind": "fileWrite", "content": "v2"},
+				{"kind": "fileDelete"}  // expected to succeed too — no failure here
 			]),
 		),
 		crate::task::CancelToken::default(),
@@ -500,6 +500,7 @@ fn transaction_best_effort_default_unchanged() {
 	.unwrap();
 	// Best-effort: each op runs in order, both succeed → file deleted.
 	assert!(
-		!root.join("a.txt").exists() || std::fs::read_to_string(root.join("a.txt")).unwrap() == "v2"
+		!root.join("a.txt").exists(),
+		"best-effort write then delete should remove the file"
 	);
 }
