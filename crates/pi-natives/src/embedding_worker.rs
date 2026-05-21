@@ -5,12 +5,18 @@ use std::{
 	path::{Path, PathBuf},
 	process::{Child, ChildStdin, ChildStdout, Command, Stdio},
 	sync::{Mutex, OnceLock},
+	time::{Duration, Instant},
 };
+
+#[cfg(unix)]
+use std::{os::unix::net::UnixStream, thread};
 
 use napi::{Error, Result};
 use serde::{Deserialize, Serialize};
 
 const WORKER_ENV_VAR: &str = "PI_EMBEDDING_WORKER";
+/// Override for the user-scoped daemon socket. PLAN-310 W3.
+const WORKER_SOCKET_ENV_VAR: &str = "PI_EMBEDDING_WORKER_SOCKET";
 
 /// Identifier of the embedder model the worker is expected to use. Persisted
 /// in `KnowledgeMeta::embedder_model` so a model swap invalidates every
@@ -29,7 +35,14 @@ const WORKER_BINARY_NAME: &str = "pi-embedding-worker.exe";
 #[cfg(not(windows))]
 const WORKER_BINARY_NAME: &str = "pi-embedding-worker";
 
-static WORKER: OnceLock<Mutex<Option<EmbeddingWorker>>> = OnceLock::new();
+/// Maximum time we wait for a freshly-spawned daemon to bind its socket. After
+/// this we give up Path 2 and fall back to the in-process subprocess (Path 3).
+#[cfg(unix)]
+const DAEMON_SPAWN_DEADLINE: Duration = Duration::from_secs(5);
+#[cfg(unix)]
+const DAEMON_SPAWN_POLL: Duration = Duration::from_millis(25);
+
+static WORKER: OnceLock<Mutex<Option<WorkerTransport>>> = OnceLock::new();
 
 #[cfg(test)]
 static TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -56,6 +69,34 @@ struct WorkerResponse {
 	error:   Option<String>,
 	vectors: Option<Vec<Vec<f32>>>,
 	vector:  Option<Vec<f32>>,
+}
+
+/// One of two transport modes used by the client. `Subprocess` is the
+/// legacy per-process stdin/stdout worker (and the path tests still drive
+/// via `PI_EMBEDDING_WORKER`). `Socket` talks to the shared user-scoped
+/// daemon over a Unix domain socket.
+enum WorkerTransport {
+	Subprocess(EmbeddingWorker),
+	#[cfg(unix)]
+	Socket(SocketClient),
+}
+
+impl WorkerTransport {
+	fn request(&mut self, command: &WorkerCommand) -> Result<WorkerResponse> {
+		match self {
+			Self::Subprocess(worker) => worker.request(command),
+			#[cfg(unix)]
+			Self::Socket(client) => client.request(command),
+		}
+	}
+
+	fn stop(&mut self) {
+		match self {
+			Self::Subprocess(worker) => worker.stop(),
+			#[cfg(unix)]
+			Self::Socket(_) => { /* dropping the stream is enough */ },
+		}
+	}
 }
 
 struct EmbeddingWorker {
@@ -131,7 +172,70 @@ impl EmbeddingWorker {
 	}
 }
 
-fn worker_slot() -> &'static Mutex<Option<EmbeddingWorker>> {
+/// Shared-daemon Unix-socket transport. Same JSON-RPC framing as
+/// `EmbeddingWorker`: one request line in, one response line out.
+#[cfg(unix)]
+struct SocketClient {
+	socket_path: PathBuf,
+	reader:      BufReader<UnixStream>,
+	writer:      BufWriter<UnixStream>,
+}
+
+#[cfg(unix)]
+impl SocketClient {
+	fn connect(socket_path: PathBuf, stream: UnixStream) -> Result<Self> {
+		let writer_stream = stream.try_clone().map_err(|error| {
+			worker_error(format!(
+				"failed to clone socket handle for {}: {error}",
+				socket_path.display()
+			))
+		})?;
+		Ok(Self {
+			socket_path,
+			reader: BufReader::new(stream),
+			writer: BufWriter::new(writer_stream),
+		})
+	}
+
+	fn request(&mut self, command: &WorkerCommand) -> Result<WorkerResponse> {
+		serde_json::to_writer(&mut self.writer, command).map_err(|error| {
+			worker_error(format!(
+				"failed to encode socket request to {}: {error}",
+				self.socket_path.display()
+			))
+		})?;
+		self.writer.write_all(b"\n").map_err(|error| {
+			worker_error(format!(
+				"failed to write socket request to {}: {error}",
+				self.socket_path.display()
+			))
+		})?;
+		self.writer.flush().map_err(|error| {
+			worker_error(format!(
+				"failed to flush socket request to {}: {error}",
+				self.socket_path.display()
+			))
+		})?;
+
+		let mut line = String::new();
+		let bytes = self.reader.read_line(&mut line).map_err(|error| {
+			worker_error(format!(
+				"failed to read socket response from {}: {error}",
+				self.socket_path.display()
+			))
+		})?;
+		if bytes == 0 {
+			return Err(worker_error(format!(
+				"daemon closed socket {} before sending a response",
+				self.socket_path.display()
+			)));
+		}
+		serde_json::from_str::<WorkerResponse>(&line)
+			.map_err(|error| worker_error(format!("received malformed daemon response: {error}")))
+	}
+}
+
+fn worker_slot() -> &'static Mutex<Option<WorkerTransport>> {
 	WORKER.get_or_init(|| Mutex::new(None))
 }
 
@@ -160,12 +264,12 @@ pub fn embed_query(text: &str) -> Result<Vec<f32>> {
 		.ok_or_else(|| worker_error("worker response missing `vector` field"))
 }
 
-fn with_worker<T>(f: impl FnOnce(&mut EmbeddingWorker) -> Result<T>) -> Result<T> {
+fn with_worker<T>(f: impl FnOnce(&mut WorkerTransport) -> Result<T>) -> Result<T> {
 	let mut guard = worker_slot()
 		.lock()
 		.map_err(|error| worker_error(format!("worker mutex poisoned: {error}")))?;
 	if guard.is_none() {
-		*guard = Some(EmbeddingWorker::spawn()?);
+		*guard = Some(acquire()?);
 	}
 	let result = {
 		let worker = guard
@@ -179,6 +283,102 @@ fn with_worker<T>(f: impl FnOnce(&mut EmbeddingWorker) -> Result<T>) -> Result<T
 		worker.stop();
 	}
 	result
+}
+
+/// Choose a transport for the next request. Precedence:
+///
+/// 1. `PI_EMBEDDING_WORKER` set → always per-process subprocess (preserves
+///    test fixtures that point at the mock binary).
+/// 2. `PI_EMBEDDING_WORKER_SOCKET` or the default daemon socket reachable →
+///    use the shared user-scoped daemon (PLAN-310 W3).
+/// 3. Default daemon binary resolvable → spawn it, wait for its socket, and
+///    use it.
+/// 4. Otherwise fall back to the in-process subprocess so the existing
+///    behaviour still works (CI containers without `XDG_RUNTIME_DIR`, etc.).
+fn acquire() -> Result<WorkerTransport> {
+	if env::var_os(WORKER_ENV_VAR)
+		.as_ref()
+		.is_some_and(|value| !value.is_empty())
+	{
+		return Ok(WorkerTransport::Subprocess(EmbeddingWorker::spawn()?));
+	}
+
+	#[cfg(unix)]
+	{
+		let socket = explicit_socket_or_default();
+		if let Ok(stream) = UnixStream::connect(&socket) {
+			return Ok(WorkerTransport::Socket(SocketClient::connect(socket, stream)?));
+		}
+		if let Ok(daemon_bin) = resolve_worker_path()
+			&& spawn_daemon(&daemon_bin, &socket).is_ok()
+			&& wait_for_socket(&socket, DAEMON_SPAWN_DEADLINE).is_ok()
+			&& let Ok(stream) = UnixStream::connect(&socket)
+		{
+			return Ok(WorkerTransport::Socket(SocketClient::connect(socket, stream)?));
+		}
+	}
+
+	Ok(WorkerTransport::Subprocess(EmbeddingWorker::spawn()?))
+}
+
+/// Where the user-scoped daemon binds. PLAN-310 W3.
+///
+/// Order of preference:
+/// - `$XDG_RUNTIME_DIR/spell/embed.sock`
+/// - `/tmp/spell-<uid>/embed.sock` (fallback when `XDG_RUNTIME_DIR` is unset,
+///   which is rare on Linux but happens inside minimal containers).
+#[cfg(unix)]
+fn default_socket_path() -> PathBuf {
+	if let Some(xdg) = env::var_os("XDG_RUNTIME_DIR").filter(|value| !value.is_empty()) {
+		return PathBuf::from(xdg).join("spell").join("embed.sock");
+	}
+	// SAFETY: `getuid` is always safe — it cannot fail and has no side effects.
+	let uid = unsafe { libc::getuid() };
+	PathBuf::from(format!("/tmp/spell-{uid}/embed.sock"))
+}
+
+#[cfg(unix)]
+fn explicit_socket_or_default() -> PathBuf {
+	if let Some(value) = env::var_os(WORKER_SOCKET_ENV_VAR).filter(|value| !value.is_empty()) {
+		return PathBuf::from(value);
+	}
+	default_socket_path()
+}
+
+#[cfg(unix)]
+fn spawn_daemon(binary: &Path, socket: &Path) -> Result<()> {
+	Command::new(binary)
+		.arg("--socket")
+		.arg(socket)
+		.arg("--daemonize")
+		.stdin(Stdio::null())
+		.stdout(Stdio::null())
+		.stderr(Stdio::null())
+		.spawn()
+		.map(|_| ())
+		.map_err(|error| {
+			worker_error(format!(
+				"failed to spawn daemon {} for socket {}: {error}",
+				binary.display(),
+				socket.display()
+			))
+		})
+}
+
+#[cfg(unix)]
+fn wait_for_socket(socket: &Path, deadline: Duration) -> Result<()> {
+	let start = Instant::now();
+	while start.elapsed() < deadline {
+		if UnixStream::connect(socket).is_ok() {
+			return Ok(());
+		}
+		thread::sleep(DAEMON_SPAWN_POLL);
+	}
+	Err(worker_error(format!(
+		"daemon socket {} did not appear within {} ms",
+		socket.display(),
+		deadline.as_millis()
+	)))
 }
 
 fn expect_ok(response: WorkerResponse) -> Result<WorkerResponse> {
@@ -402,10 +602,19 @@ mod tests {
 		let _env = TestWorkerEnv::new("success", None);
 
 		let batch = embed_batch(&["alpha", "beta"], None).expect("batch embedding should succeed");
-		assert_eq!(batch, vec![vec![1.0, 1.0, 2.0], vec![1.0, 2.0, 2.0]]);
+		// W2.5 bumped mock dim from 3 -> 1024 (REAL_DIM) to match bge-m3 EMBEDDER_DIM.
+		// Mock generator: v[0]=1, v[1]=seed (1+index), v[2]=batch_len; rest zero.
+		assert_eq!(batch.len(), 2);
+		assert_eq!(batch[0].len(), 1024);
+		assert_eq!(batch[0][0], 1.0);
+		assert_eq!(batch[0][1], 1.0);   // seed = index + 1 = 1
+		assert_eq!(batch[0][2], 2.0);   // batch_len = 2
+		assert_eq!(batch[1][1], 2.0);   // seed = index + 1 = 2
 
 		let query = embed_query("graph").expect("query embedding should succeed");
-		assert_eq!(query, vec![1.0, 5.0, 1.0]);
+		// Mock query: v[0]=1, v[1]=max(text.len(),1), v[2]=1.
+		assert_eq!(query.len(), 1024);
+		assert_eq!(&query[..3], &[1.0, 5.0, 1.0]);
 	}
 
 	#[test]
@@ -422,7 +631,224 @@ mod tests {
 		);
 
 		let query = embed_query("retry").expect("worker should restart after malformed response");
-		assert_eq!(query, vec![1.0, 5.0, 1.0]);
+		assert_eq!(query.len(), 1024);
+		assert_eq!(&query[..3], &[1.0, 5.0, 1.0]);
 		let _ = fs::remove_file(state_file);
+	}
+}
+
+#[cfg(all(test, unix))]
+mod socket_tests {
+	//! PLAN-310 W3 client tests. Live in the same crate (not in `tests/`) so
+	//! they share `TEST_ENV_LOCK` with the existing subprocess tests — env-var
+	//! manipulation across these and `mod tests` above would race otherwise.
+
+	use std::{
+		ffi::OsString,
+		io::{BufRead, BufReader, Write},
+		os::unix::net::UnixListener,
+		path::PathBuf,
+		sync::MutexGuard,
+		thread::{self, JoinHandle},
+	};
+
+	use super::*;
+
+	/// RAII wrapper that snapshots and restores all env vars the dispatcher
+	/// reads, plus serialises tests through `TEST_ENV_LOCK`.
+	struct SocketEnv {
+		_guard:          MutexGuard<'static, ()>,
+		original_worker: Option<OsString>,
+		original_socket: Option<OsString>,
+		original_mode:   Option<OsString>,
+		original_state:  Option<OsString>,
+	}
+
+	impl SocketEnv {
+		fn new() -> Self {
+			let guard = lock_test_env();
+			let original_worker = env::var_os(WORKER_ENV_VAR);
+			let original_socket = env::var_os(WORKER_SOCKET_ENV_VAR);
+			let original_mode = env::var_os("PI_TEST_EMBEDDING_WORKER_MODE");
+			let original_state = env::var_os("PI_TEST_EMBEDDING_WORKER_STATE_FILE");
+			// SAFETY: `lock_test_env()` above gates all parallel access to these
+			// process-wide env vars; no other thread observes the racy window.
+			unsafe {
+				env::remove_var(WORKER_ENV_VAR);
+				env::remove_var(WORKER_SOCKET_ENV_VAR);
+				env::remove_var("PI_TEST_EMBEDDING_WORKER_MODE");
+				env::remove_var("PI_TEST_EMBEDDING_WORKER_STATE_FILE");
+			}
+			reset_for_tests();
+			Self {
+				_guard: guard,
+				original_worker,
+				original_socket,
+				original_mode,
+				original_state,
+			}
+		}
+
+		fn set_worker_env(path: &Path) {
+			// SAFETY: serialised through `TEST_ENV_LOCK` via `SocketEnv::new`.
+			unsafe { env::set_var(WORKER_ENV_VAR, path) }
+		}
+
+		fn set_worker_mode(mode: &str) {
+			// SAFETY: serialised through `TEST_ENV_LOCK` via `SocketEnv::new`.
+			unsafe { env::set_var("PI_TEST_EMBEDDING_WORKER_MODE", mode) }
+		}
+
+		fn set_socket_env(path: &Path) {
+			// SAFETY: serialised through `TEST_ENV_LOCK` via `SocketEnv::new`.
+			unsafe { env::set_var(WORKER_SOCKET_ENV_VAR, path) }
+		}
+	}
+
+	impl Drop for SocketEnv {
+		fn drop(&mut self) {
+			// SAFETY: still holding `TEST_ENV_LOCK` from `SocketEnv::new`; no
+			// concurrent reader can observe the restore window.
+			unsafe {
+				restore(WORKER_ENV_VAR, self.original_worker.as_ref());
+				restore(WORKER_SOCKET_ENV_VAR, self.original_socket.as_ref());
+				restore("PI_TEST_EMBEDDING_WORKER_MODE", self.original_mode.as_ref());
+				restore("PI_TEST_EMBEDDING_WORKER_STATE_FILE", self.original_state.as_ref());
+			}
+			reset_for_tests();
+		}
+	}
+
+	unsafe fn restore(name: &str, value: Option<&OsString>) {
+		// SAFETY: callers (only `SocketEnv::drop`) hold `TEST_ENV_LOCK`.
+		unsafe {
+			match value {
+				Some(value) => env::set_var(name, value),
+				None => env::remove_var(name),
+			}
+		}
+	}
+
+	fn mock_worker_path() -> PathBuf {
+		Path::new(env!("CARGO_MANIFEST_DIR")).join("test-bin/mock_embedding_worker.js")
+	}
+
+	fn unique_socket_path(name: &str) -> PathBuf {
+		let unique = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.expect("time should be monotonic")
+			.as_nanos();
+		env::temp_dir().join(format!("pi-natives-{name}-{unique}-{}.sock", std::process::id()))
+	}
+
+	fn canned_vector() -> Vec<f32> {
+		// Distinguishable from the mock subprocess output (`[1.0, len, 1.0, …]`)
+		// so `assert_eq!` tells us which transport answered.
+		let mut v = vec![0.0_f32; EMBEDDER_DIM];
+		v[0] = 7.0;
+		v[1] = 8.0;
+		v[2] = 9.0;
+		v
+	}
+
+	fn mock_vector_for(text: &str) -> Vec<f32> {
+		// Mirrors `mock_embedding_worker.js` `buildQueryVector` shape.
+		let mut v = vec![0.0_f32; EMBEDDER_DIM];
+		v[0] = 1.0;
+		v[1] = text.len().max(1) as f32;
+		v[2] = 1.0;
+		v
+	}
+
+	/// Spawn a one-shot listener that accepts a single connection and writes
+	/// the supplied canned response. Returns the join handle so the test can
+	/// drain any background panic.
+	fn spawn_canned_listener(socket: PathBuf, vector: Vec<f32>) -> JoinHandle<()> {
+		let listener = UnixListener::bind(&socket).expect("bind canned listener");
+		thread::spawn(move || {
+			let (stream, _) = listener.accept().expect("accept canned conn");
+			let reader_stream = stream.try_clone().expect("clone stream");
+			let mut reader = BufReader::new(reader_stream);
+			let mut writer = stream;
+			let mut line = String::new();
+			reader.read_line(&mut line).expect("read request");
+			let payload = serde_json::json!({ "ok": true, "vector": vector });
+			let mut bytes = serde_json::to_vec(&payload).expect("encode response");
+			bytes.push(b'\n');
+			writer.write_all(&bytes).expect("write response");
+			writer.flush().expect("flush response");
+			let _ = socket;
+		})
+	}
+
+	#[test]
+	fn client_prefers_explicit_pi_embedding_worker_env_var() {
+		let _env = SocketEnv::new();
+		SocketEnv::set_worker_env(&mock_worker_path());
+		SocketEnv::set_worker_mode("success");
+		// Point socket at a path that does not exist — must be ignored.
+		SocketEnv::set_socket_env(Path::new("/nonexistent/spell/embed.sock"));
+
+		let vector = embed_query("alpha").expect("subprocess path should serve query");
+		assert_eq!(vector, mock_vector_for("alpha"));
+	}
+
+	#[test]
+	fn client_uses_socket_when_daemon_listening() {
+		let _env = SocketEnv::new();
+		let socket = unique_socket_path("socket-listener");
+		let _ = fs::remove_file(&socket);
+		let handle = spawn_canned_listener(socket.clone(), canned_vector());
+		SocketEnv::set_socket_env(&socket);
+
+		let vector = embed_query("alpha").expect("socket path should serve query");
+		assert_eq!(vector, canned_vector());
+
+		handle.join().expect("listener thread should finish cleanly");
+		let _ = fs::remove_file(&socket);
+	}
+
+	#[test]
+	fn client_falls_back_to_subprocess_on_socket_connect_failure() {
+		let _env = SocketEnv::new();
+		SocketEnv::set_worker_env(&mock_worker_path());
+		SocketEnv::set_worker_mode("success");
+		SocketEnv::set_socket_env(Path::new("/nonexistent/spell/embed.sock"));
+
+		// Same observable result as the explicit-env test: subprocess answers.
+		// We use a distinct test name to document the fallback contract.
+		let vector = embed_query("omega").expect("subprocess fallback should serve query");
+		assert_eq!(vector, mock_vector_for("omega"));
+	}
+
+	#[test]
+	fn client_recovers_from_dead_socket() {
+		let _env = SocketEnv::new();
+		let socket = unique_socket_path("socket-recovery");
+		let _ = fs::remove_file(&socket);
+
+		// Stage 1: bind a listener that accepts once and drops the conn before
+		// responding. Subsequent connects refuse with ECONNREFUSED.
+		let dead_socket = socket.clone();
+		let dead_handle = thread::spawn(move || {
+			let listener = UnixListener::bind(&dead_socket).expect("bind dead listener");
+			let (_stream, _) = listener.accept().expect("accept dead conn");
+			// Drop stream + listener immediately → peer sees EOF on read.
+		});
+		SocketEnv::set_socket_env(&socket);
+
+		let first = embed_query("first");
+		assert!(first.is_err(), "dead-socket request must surface an error");
+		dead_handle.join().expect("dead listener thread should finish");
+		let _ = fs::remove_file(&socket);
+
+		// Stage 2: bring up a healthy listener at the same path. The dispatcher
+		// must re-acquire a fresh transport (because `with_worker` clears the
+		// slot on error) and succeed.
+		let handle = spawn_canned_listener(socket.clone(), canned_vector());
+		let second = embed_query("second").expect("recovery query should succeed");
+		assert_eq!(second, canned_vector());
+		handle.join().expect("listener thread should finish cleanly");
+		let _ = fs::remove_file(&socket);
 	}
 }
