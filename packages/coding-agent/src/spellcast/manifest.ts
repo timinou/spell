@@ -1,3 +1,10 @@
+/**
+ * @deprecated PLAN-311 WAVE 5: Spellcast is not active. Its YAML manifest
+ * format is the last Spell-owned YAML reader outside the migrator's scope.
+ * Reactivation + KDL manifest cutover is tracked in FEAT-757. New code
+ * MUST NOT extend this module — it is intentionally frozen until that
+ * follow-up is picked up.
+ */
 import * as path from "node:path";
 import { YAML } from "bun";
 

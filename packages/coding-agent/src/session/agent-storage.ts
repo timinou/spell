@@ -5,11 +5,6 @@ import { type AuthCredential, AuthCredentialStore, type StoredAuthCredential } f
 import { getAgentDbPath, isRecord, logger } from "@oh-my-pi/pi-utils";
 import type { RawSettings as Settings } from "../config/settings";
 
-/** Row shape for settings table queries */
-type SettingsRow = {
-	key: string;
-	value: string;
-};
 
 /** Row shape for model_usage table queries */
 type ModelUsageRow = {
@@ -32,7 +27,7 @@ export class AgentStorage {
 	#db: Database;
 	#authStore: AuthCredentialStore;
 
-	#listSettingsStmt: Statement;
+
 	#upsertModelUsageStmt: Statement;
 	#listModelUsageStmt: Statement;
 	#modelUsageCache: string[] | null = null;
@@ -58,7 +53,7 @@ export class AgentStorage {
 		// Create AuthCredentialStore with our open database
 		this.#authStore = new AuthCredentialStore(this.#db);
 
-		this.#listSettingsStmt = this.#db.prepare("SELECT key, value FROM settings");
+
 
 		this.#upsertModelUsageStmt = this.#db.prepare(
 			"INSERT INTO model_usage (model_key, last_used_at) VALUES (?, unixepoch()) ON CONFLICT(model_key) DO UPDATE SET last_used_at = unixepoch()",
@@ -194,39 +189,6 @@ CREATE TABLE settings (
 		throw lastError ?? new Error("Failed to open database after retries");
 	}
 
-	/**
-	 * Retrieves all settings from storage (legacy, for migration only).
-	 * Settings are now stored in config.yml. This method is only used
-	 * during migration from agent.db to config.yml.
-	 * @returns Settings object, or null if no settings are stored
-	 * @deprecated Use config.yml instead. This is only for migration.
-	 */
-	getSettings(): Settings | null {
-		const rows = (this.#listSettingsStmt.all() as SettingsRow[]) ?? [];
-		if (rows.length === 0) return null;
-		const settings: Record<string, unknown> = {};
-		for (const row of rows) {
-			try {
-				settings[row.key] = JSON.parse(row.value) as unknown;
-			} catch (error) {
-				logger.warn("AgentStorage failed to parse setting", {
-					key: row.key,
-					error: String(error),
-				});
-			}
-		}
-		return settings as Settings;
-	}
-
-	/**
-	 * @deprecated Settings are now stored in config.yml, not agent.db.
-	 * This method is kept for backward compatibility but does nothing.
-	 */
-	saveSettings(settings: Settings): void {
-		logger.warn("AgentStorage.saveSettings is deprecated - settings are now stored in config.yml", {
-			keys: Object.keys(settings),
-		});
-	}
 
 	/**
 	 * Records model usage, updating the last-used timestamp.
