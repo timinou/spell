@@ -121,6 +121,8 @@ pub enum DiagnosticVariant {
 	RangeClamped,
 	/// Target shape incompatible with the requested Op family.
 	IncompatibleTargetShape,
+	/// Another session holds an active intent on the target.
+	PeerConflict,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
