@@ -1109,11 +1109,15 @@ impl CodeBuffer {
 					.collect();
 				if errors_intersect_ranges(&self.tree, &edit_ranges) {
 					restore(self);
-					return Err(CodeEngineError::Edit(
-						"Edit batch would leave the buffer structurally invalid. Re-anchor the target \
-						 or include an explicit separator."
-							.into(),
-					));
+					let excerpt: String = all_forwards
+						.first()
+						.map(|e| e.new_text.chars().take(40).collect())
+						.unwrap_or_default();
+					return Err(CodeEngineError::Edit(format!(
+						"Edit batch would leave the buffer structurally invalid (new content starts with: \
+						 `{excerpt}`). If replacing a body, content must include outer braces {{ ... }}. \
+						 Re-anchor the target or include an explicit separator."
+					)));
 				}
 			}
 		}
