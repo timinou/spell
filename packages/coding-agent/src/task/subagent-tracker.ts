@@ -153,6 +153,11 @@ export class SubagentTracker {
 		};
 	}
 
+	/** Snapshot of every non-terminal agent currently tracked. Used by viewers to hydrate on mount. */
+	getActiveAgents(): AgentProgress[] {
+		return Array.from(this.#activeAgents.values(), agent => structuredClone(agent));
+	}
+
 	getActivityForSession(sessionId: string): AgentProgress | undefined {
 		const normalized = this.#normalizeSessionId(sessionId);
 		if (!normalized) {

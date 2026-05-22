@@ -1,5 +1,32 @@
 import { logger, Snowflake } from "@oh-my-pi/pi-utils";
 import type { SubagentOutcome } from "../task/types";
+import type { EventBus } from "../utils/event-bus";
+import { Priority } from "../utils/event-bus";
+
+/** Event bus channel published on async job lifecycle/progress transitions. */
+export const ASYNC_JOB_PROGRESS_CHANNEL = "async:job:progress" as const;
+
+/** Reason an `AsyncJobUpdate` was emitted. */
+export type AsyncJobUpdateReason = "registered" | "progress" | "terminal";
+
+/** Wire-shape payload emitted on `ASYNC_JOB_PROGRESS_CHANNEL`. */
+export interface AsyncJobUpdate {
+	reason: AsyncJobUpdateReason;
+	job: AsyncJobSnapshot;
+}
+
+/** Serialisable subset of an `AsyncJob`. */
+export interface AsyncJobSnapshot {
+	id: string;
+	type: "bash" | "task";
+	status: SubagentOutcome;
+	label: string;
+	startTime: number;
+	endTime?: number;
+	latestProgress?: AsyncJobProgress;
+	resultPreview?: string;
+	errorPreview?: string;
+}
 
 const DELIVERY_RETRY_BASE_MS = 500;
 const DELIVERY_RETRY_MAX_MS = 30_000;
@@ -40,6 +67,8 @@ export interface AsyncJobManagerOptions {
 	jobTimeoutMs?: number;
 	/** Grace window after abort before forcing terminal status. Default: 2_000ms. */
 	watchdogGraceMs?: number;
+	/** Optional event bus for publishing lifecycle/progress updates on `ASYNC_JOB_PROGRESS_CHANNEL`. */
+	eventBus?: EventBus;
 }
 
 interface AsyncJobDelivery {
@@ -76,6 +105,7 @@ export class AsyncJobManager {
 	readonly #watchdogGraceMs: number;
 	readonly #watchdogTimers = new Map<string, { timer: NodeJS.Timeout; timeoutMs: number; graceMs: number; inGrace?: boolean }>();
 	readonly #watchdogRejects = new Map<string, (error: Error) => void>();
+	readonly #eventBus: EventBus | undefined;
 	#deliveryLoop: Promise<void> | undefined;
 	#activeDelivery: AsyncJobDelivery | undefined;
 	#disposed = false;
@@ -86,6 +116,36 @@ export class AsyncJobManager {
 		this.#retentionMs = Math.max(0, Math.floor(options.retentionMs ?? DEFAULT_RETENTION_MS));
 		this.#jobTimeoutMs = Math.max(0, Math.floor(options.jobTimeoutMs ?? DEFAULT_JOB_TIMEOUT_MS));
 		this.#watchdogGraceMs = Math.max(0, Math.floor(options.watchdogGraceMs ?? DEFAULT_WATCHDOG_GRACE_MS));
+		this.#eventBus = options.eventBus;
+	}
+
+	/** Build a serialisable snapshot of a job. */
+	static snapshot(job: AsyncJob): AsyncJobSnapshot {
+		return {
+			id: job.id,
+			type: job.type,
+			status: job.status,
+			label: job.label,
+			startTime: job.startTime,
+			endTime: job.endTime,
+			latestProgress: job.latestProgress ? { ...job.latestProgress } : undefined,
+			resultPreview: job.resultText ? AsyncJobManager.#previewText(job.resultText) : undefined,
+			errorPreview: job.errorText ? AsyncJobManager.#previewText(job.errorText) : undefined,
+		};
+	}
+
+	static #previewText(text: string): string {
+		const MAX = 4_000;
+		return text.length <= MAX ? text : `${text.slice(0, MAX)}\n… (${text.length - MAX} more chars)`;
+	}
+
+	#publishUpdate(jobId: string, reason: AsyncJobUpdateReason): void {
+		const bus = this.#eventBus;
+		if (!bus) return;
+		const job = this.#jobs.get(jobId);
+		if (!job) return;
+		const payload: AsyncJobUpdate = { reason, job: AsyncJobManager.snapshot(job) };
+		bus.enqueue(ASYNC_JOB_PROGRESS_CHANNEL, payload, Priority.P2, `async-job-${jobId}`);
 	}
 
 	register(
@@ -130,6 +190,7 @@ export class AsyncJobManager {
 				updatedAt: Date.now(),
 			};
 			this.#rescheduleWatchdog(id);
+			this.#publishUpdate(id, "progress");
 			if (!options?.onProgress) return;
 			try {
 				await options.onProgress(text, details);
@@ -158,28 +219,33 @@ export class AsyncJobManager {
 				this.#clearWatchdog(id);
 				this.#watchdogRejects.delete(id);
 				if (job.status === "failed") {
+					this.#publishUpdate(id, "terminal");
 					this.#scheduleEviction(id);
 					return;
 				}
 				if (job.status === "cancelled") {
 					job.resultText = text;
+					this.#publishUpdate(id, "terminal");
 					this.#scheduleEviction(id);
 					return;
 				}
 				job.status = "completed";
 				job.resultText = text;
 				job.endTime = Date.now();
+				this.#publishUpdate(id, "terminal");
 				this.#enqueueDelivery(id, text);
 				this.#scheduleEviction(id);
 			} catch (error) {
 				this.#clearWatchdog(id);
 				this.#watchdogRejects.delete(id);
 				if (job.status === "failed") {
+					this.#publishUpdate(id, "terminal");
 					this.#scheduleEviction(id);
 					return;
 				}
 				if (job.status === "cancelled") {
 					job.errorText = error instanceof Error ? error.message : String(error);
+					this.#publishUpdate(id, "terminal");
 					this.#scheduleEviction(id);
 					return;
 				}
@@ -187,6 +253,7 @@ export class AsyncJobManager {
 				job.status = "failed";
 				job.errorText = errorText;
 				job.endTime = Date.now();
+				this.#publishUpdate(id, "terminal");
 				this.#enqueueDelivery(id, errorText);
 				this.#scheduleEviction(id);
 			}
@@ -197,6 +264,7 @@ export class AsyncJobManager {
 		if (effectiveTimeoutMs > 0) {
 			this.#scheduleWatchdog(id, effectiveTimeoutMs, this.#watchdogGraceMs);
 		}
+		this.#publishUpdate(id, "registered");
 		return id;
 	}
 
@@ -207,6 +275,7 @@ export class AsyncJobManager {
 		job.status = "cancelled";
 		job.endTime = Date.now();
 		job.abortController.abort();
+		this.#publishUpdate(id, "terminal");
 		this.#scheduleEviction(id);
 		return true;
 	}
@@ -270,6 +339,7 @@ export class AsyncJobManager {
 			job.status = "cancelled";
 			job.endTime = Date.now();
 			job.abortController.abort();
+			this.#publishUpdate(job.id, "terminal");
 			this.#scheduleEviction(job.id);
 		}
 		this.#clearAllWatchdogTimers();
@@ -457,6 +527,7 @@ export class AsyncJobManager {
 			j.status = "failed";
 			j.errorText = `Job exceeded ${Math.round(timeoutMs / 1000)}s watchdog timeout`;
 			j.endTime = Date.now();
+			this.#publishUpdate(jobId, "terminal");
 			this.#enqueueDelivery(jobId, j.errorText);
 			this.#scheduleEviction(jobId);
 		}, graceMs);
