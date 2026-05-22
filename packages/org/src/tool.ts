@@ -2,6 +2,7 @@
  * The `org` tool — project management via org-mode files.
  */
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { executeOrg } from "@oh-my-pi/pi-natives";
@@ -559,7 +560,7 @@ async function cmdUpdate(
 		}
 		if (result.error) return null;
 		const output = result.output as { updated?: string[] };
-		return await buildMutationResponse(
+		const response = await buildMutationResponse(
 			args.id,
 			output.updated ?? [],
 			filePath,
@@ -567,6 +568,14 @@ async function cmdUpdate(
 			ctx,
 			args.body !== undefined ? "full" : args.append !== undefined ? "length" : undefined,
 		);
+		if (args.state === "DONE") {
+			try {
+				await emitCompletionEpisode(ctx, args.id, filePath);
+			} catch (err) {
+				logger.warn("org.completion-episode emit failed", { id: args.id, error: String(err) });
+			}
+		}
+		return response;
 	};
 	if (args.file) {
 		const direct = await tryUpdate(args.file);
@@ -582,6 +591,71 @@ async function cmdUpdate(
 		code: "NOT_FOUND",
 		message: `Item not found: ${args.id}`,
 	};
+}
+
+/**
+ * Auto-emit a memory episode when an org item transitions to DONE and carries
+ * non-trivial completion content (a `* Completion` section or recent NOTE
+ * lines). Idempotent via the `COMPLETION_HASH` property: re-saving the same
+ * completion content is a no-op. PLAN-310 W7.
+ */
+async function emitCompletionEpisode(ctx: OrgContext, id: string, _filePath: string): Promise<void> {
+	const item = await fetchItem(ctx, id);
+	if (!item) return;
+	const completionText = extractCompletionText(item.body ?? "");
+	if (!completionText) return;
+	const hash = createHash("sha256").update(`${item.title}\n${completionText}`).digest("hex").slice(0, 16);
+	if (item.properties.COMPLETION_HASH === hash) return;
+
+	const summary = `${item.title}\n\n${completionText}`;
+	const result = executeOrg({
+		command: "remember",
+		kind: "episode",
+		summary,
+		about: [item.id],
+		repoRoot: ctx.projectRoot,
+	});
+	if (result.error) {
+		throw new Error(`executeOrg(remember) failed: ${String(result.output)}`);
+	}
+	// Persist the hash on the source item so re-runs (re-saves of the same
+	// completion text) skip cleanly. Best-effort: a failure here does not
+	// invalidate the episode we just wrote.
+	try {
+		executeOrg({
+			command: "setProperty",
+			file: item.file,
+			id: item.id,
+			property: "COMPLETION_HASH",
+			value: hash,
+			todoKeywords: ctx.config.todoKeywords,
+			root: ctx.projectRoot,
+			categories: indexCategories(ctx),
+		});
+	} catch (err) {
+		logger.warn("org.completion-episode hash set failed", { id: item.id, error: String(err) });
+	}
+}
+
+const COMPLETION_HEADING_RE = /^\*{1,6}\s+Completion\s*$([\s\S]*?)(?=^\*{1,6}\s|\Z)/m;
+const NOTE_LINE_RE = /^NOTE \[[^\]]+\]:\s*(.*)$/gm;
+
+/**
+ * Extract the body text of a `* Completion` heading (any nesting level) from
+ * an org item body, or fall back to concatenated `NOTE [...]:` lines. Returns
+ * `""` when neither is present, signalling “no completion content—skip”.
+ */
+export function extractCompletionText(body: string): string {
+	const sectionMatch = COMPLETION_HEADING_RE.exec(body);
+	if (sectionMatch?.[1]) {
+		const inner = sectionMatch[1].trim();
+		if (inner.length > 0) return inner;
+	}
+	const notes = [...body.matchAll(NOTE_LINE_RE)]
+		.map(m => m[1].trim())
+		.filter(line => line.length > 0);
+	if (notes.length === 0) return "";
+	return notes.join("\n");
 }
 
 async function buildMutationResponse(

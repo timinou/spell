@@ -212,9 +212,11 @@ describe("memories runtime", () => {
 
 		const memoryRoot = getMemoryRoot(fx.agentDir, fx.session.sessionManager.getCwd());
 		await waitFor(async () => {
-			expect((await fs.readFile(path.join(memoryRoot, "MEMORY.md"), "utf8")).trim()).toBe(
-				"# Memory\n\nConsolidated body",
-			);
+			// PLAN-310 W7: MEMORY.md is no longer written by phase2. memory_summary.md
+			// remains as a legacy fallback for prompt injection. Structured concept
+			// entries are routed through executeOrg(remember, ...) into
+			// `<cwd>/.spell/memory/concepts/`.
+			expect(await Bun.file(path.join(memoryRoot, "MEMORY.md")).exists()).toBe(false);
 			expect((await fs.readFile(path.join(memoryRoot, "memory_summary.md"), "utf8")).trim()).toBe(
 				"Consolidated summary",
 			);
