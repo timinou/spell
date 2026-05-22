@@ -385,7 +385,7 @@ pub fn execute_code_path(options: CodePathOptions<'_>) -> crate::task::Async<Vec
 	})
 }
 pub fn execute_code_path_inner(
-	opts: CodePathTaskOptions,
+	mut opts: CodePathTaskOptions,
 	cancel_token: CancelToken,
 ) -> Result<Vec<CodePathChunk>> {
 	// FEAT-704: `command:"manage"` short-circuits the CodePath parser.
@@ -436,6 +436,12 @@ pub fn execute_code_path_inner(
 		};
 		return Ok(vec![chunk]);
 	}
+	// PLAN-310 Block C: rewrite agent path-form into kernel #json: qualifier.
+	//   agent://X/foo/0  →  agent://X#json:.foo[0]
+	// Preserves jq parity with the legacy TS agent-protocol.ts which mapped
+	// the URL path segments to jq via pathToQuery() + applyQuery().
+	rewrite_agent_path_form(&mut opts.target);
+
 	let (lexer, parse_diagnostics) = select_lexer(&opts.target);
 	let mut cp = parse_code_path(&opts.target, &lexer).map_err(|d| Error::from_reason(d.message))?;
 
@@ -845,6 +851,54 @@ pub fn execute_code_path_inner(
 			let cancel_tok = pi_code_path::resolver::traits::CancellationToken::new();
 			match registry.resolve(uri, session_ctx.as_ref(), &cancel_tok) {
 				Ok(resolved) => {
+					// PLAN-310 Block C: `#json:<jq-expr>` qualifier applies a jq subset
+					// to the resolved content (works on both fs-backed and virtual
+					// schemes; doesn't need source_path forwarding).
+					if let Some(q) = &cp.qualifier {
+						if q.name == "json" {
+							let expr = q.args.as_deref().unwrap_or(".");
+							let text = match &resolved.content {
+								pi_code_path::types::Content::Text { value } => value.clone(),
+								pi_code_path::types::Content::ExtractedText { text, .. } => text.clone(),
+								_ => return Err(Error::from_reason(format!(
+									"#json: requires text content; got binary for {}://{}",
+									uri.scheme, uri.path
+								))),
+							};
+							let extracted = match pi_code_path::jq_subset::eval(&text, expr) {
+								Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_default(),
+								Err(e) => {
+									return Err(Error::from_reason(format!(
+										"#json: failed for {}://{}: {e}",
+										uri.scheme, uri.path
+									)));
+								},
+							};
+							let mut metadata = HashMap::new();
+							metadata.insert(
+								"mime".into(),
+								serde_json::Value::String("application/json".into()),
+							);
+							let mut notes = resolved.notes.clone();
+							notes.push(format!("Extracted: {expr}"));
+							metadata.insert(
+								"notes".into(),
+								serde_json::Value::Array(
+									notes.into_iter().map(serde_json::Value::String).collect(),
+								),
+							);
+							let node = pi_code_path::types::NodeRef {
+								locator: resolved.url.clone(),
+								range: 0..0,
+								kind: format!("§{}", uri.scheme),
+								content: Some(pi_code_path::types::Content::Text { value: extracted }),
+								metadata,
+								diagnostics: vec![],
+							};
+							return Ok(single_node_chunks(node));
+						}
+					}
+
 					// Codepath forwarding: when the URI has a query/qualifier AND the
 					// resolved scheme is fs-backed with a real source_path, re-dispatch
 					// against that path so the kernel evaluates the suffix natively.
@@ -1657,3 +1711,97 @@ mod tests {
 		assert!(paths.contains(&"b.txt"));
 	}
 }
+
+/// Wrap a single NodeRef into the standard CodePathChunk[] shape with done=true.
+/// Used by special-case branches that bypass the main projection/limit pipeline.
+fn single_node_chunks(node: pi_code_path::types::NodeRef) -> Vec<CodePathChunk> {
+	let dtos = nodes_to_dtos(vec![node], ARTIFACT_THRESHOLD);
+	vec![CodePathChunk { nodes: dtos, diagnostics: vec![], done: true }]
+}
+
+
+/// PLAN-310: agent:// URL path-form sugar.
+///
+/// `agent://<id>/seg1/seg2/0` is rewritten to `agent://<id>#json:.seg1.seg2[0]`
+/// in place when the path has at least one segment AND the URI has no existing
+/// `#` qualifier. Mirrors the TS pathToQuery() + applyQuery() pattern, but
+/// expressed as the kernel-native #json: qualifier (Block C).
+///
+/// Numeric segments become `[N]`; identifier-ish segments become `.<name>`;
+/// other segments become `["<name>"]` with quotes escaped.
+fn rewrite_agent_path_form(target: &mut String) {
+	let Some(rest) = target.strip_prefix("agent://") else { return };
+	if rest.contains('#') {
+		return; // already has qualifier; user-controlled
+	}
+	let (path, suffix) = match rest.find("::") {
+		Some(idx) => (&rest[..idx], &rest[idx..]),
+		None => (rest, ""),
+	};
+	let mut parts = path.splitn(2, '/');
+	let id = parts.next().unwrap_or("");
+	let Some(json_path) = parts.next() else { return };
+	if id.is_empty() || json_path.is_empty() {
+		return;
+	}
+	let jq_expr = path_segments_to_jq(json_path);
+	*target = format!("agent://{id}#json:{jq_expr}{suffix}");
+}
+
+fn path_segments_to_jq(path: &str) -> String {
+	let mut out = String::new();
+	for segment in path.split('/').filter(|s| !s.is_empty()) {
+		// Best-effort URL-decode; non-UTF-8 percent-escapes fall through verbatim.
+		let decoded = percent_decode_str(segment);
+		if decoded.bytes().all(|b| b.is_ascii_digit()) {
+			out.push('[');
+			out.push_str(&decoded);
+			out.push(']');
+		} else if decoded
+			.bytes()
+			.all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+		{
+			out.push('.');
+			out.push_str(&decoded);
+		} else {
+			let esc = decoded.replace('\\', "\\\\").replace('"', "\\\"");
+			out.push('[');
+			out.push('"');
+			out.push_str(&esc);
+			out.push('"');
+			out.push(']');
+		}
+	}
+	out
+}
+
+
+/// Best-effort percent-decoding (URL-encoded segments). Returns the raw
+/// segment when the bytes don't form a valid UTF-8 string after decoding.
+fn percent_decode_str(s: &str) -> String {
+	let bytes = s.as_bytes();
+	let mut out = Vec::with_capacity(bytes.len());
+	let mut i = 0;
+	while i < bytes.len() {
+		if bytes[i] == b'%' && i + 2 < bytes.len() {
+			if let (Some(hi), Some(lo)) = (hex_digit(bytes[i + 1]), hex_digit(bytes[i + 2])) {
+				out.push((hi << 4) | lo);
+				i += 3;
+				continue;
+			}
+		}
+		out.push(bytes[i]);
+		i += 1;
+	}
+	String::from_utf8(out).unwrap_or_else(|_| s.to_string())
+}
+
+fn hex_digit(b: u8) -> Option<u8> {
+	match b {
+		b'0'..=b'9' => Some(b - b'0'),
+		b'a'..=b'f' => Some(10 + b - b'a'),
+		b'A'..=b'F' => Some(10 + b - b'A'),
+		_ => None,
+	}
+}
+

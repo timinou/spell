@@ -919,6 +919,32 @@ fn quoted_string(input: &mut &str) -> ModalResult<String> {
 fn qualifier(input: &mut &str) -> ModalResult<Qualifier> {
 	'#'.parse_next(input)?;
 	let name: &str = ident.parse_next(input)?;
+	// Two args forms:
+	//   #<name>[<args>]  — classical bracket form (tree, lines, etc.)
+	//   #<name>:<args>   — colon form, consumes to next kernel boundary.
+	//     Used by #json:<jq-expr> where the expression contains [] / .
+	if let Some(c) = input.chars().next() {
+		if c == ':' {
+			// consume ':'
+			':'.parse_next(input)?;
+			// Take everything up to next kernel boundary: space, `::`, `#`, or EOF.
+			// Brackets and dots inside the arg are passed through.
+			let mut s = String::new();
+			let mut bytes_consumed = 0usize;
+			for (idx, ch) in input.char_indices() {
+				if ch == ' ' || ch == '#' {
+					break;
+				}
+				if ch == ':' && input[idx..].starts_with("::") {
+					break;
+				}
+				s.push(ch);
+				bytes_consumed = idx + ch.len_utf8();
+			}
+			*input = &input[bytes_consumed..];
+			return Ok(Qualifier { name: name.to_string(), args: Some(s) });
+		}
+	}
 	let args =
 		opt(delimited('[', take_till(0.., |c: char| c == ']').map(|s: &str| s.to_string()), ']'))
 			.parse_next(input)?;
