@@ -28,9 +28,7 @@ impl SchemeCallback for FakeCallback {
 		Ok(ResolvedContent {
 			url:          format!("test://{body}"),
 			source_path:  None,
-			content:      Content::Text {
-				value: format!("{} (for body={body})", self.response),
-			},
+			content:      Content::Text { value: format!("{} (for body={body})", self.response) },
 			mime:         None,
 			notes:        vec![],
 			source_mtime: None,
@@ -106,10 +104,7 @@ fn dynamic_profile_invalid_name_rejected() {
 #[test]
 fn static_profile_takes_precedence_over_dynamic() {
 	// scheme_dispatch::SchemeRegistry::lookup checks static map first.
-	let mut reg = SchemeRegistry::from_static(
-		[pi_natives::code_path::uri::skill::build as _],
-		None,
-	);
+	let mut reg = SchemeRegistry::from_static([pi_natives::code_path::uri::skill::build as _], None);
 	// Attempt to override skill via dynamic should reject (reserved).
 	let err = reg
 		.register_dynamic_profile(build_dynamic_profile("skill", "x"))

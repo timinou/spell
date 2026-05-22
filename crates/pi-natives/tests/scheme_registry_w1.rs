@@ -1,12 +1,10 @@
-//! W1 integration: auto-registry populated from `crates/pi-natives/src/code_path/uri/`
-//! resolves each declarative profile against fixture filesystems.
+//! W1 integration: auto-registry populated from
+//! `crates/pi-natives/src/code_path/uri/` resolves each declarative profile
+//! against fixture filesystems.
 
 use pi_code_path::{
-	UriLocator,
-	resolver::traits::CancellationToken,
-	scheme::SessionContext,
-	scheme_dispatch::SchemeRegistry,
-	types::Content,
+	UriLocator, resolver::traits::CancellationToken, scheme::SessionContext,
+	scheme_dispatch::SchemeRegistry, types::Content,
 };
 use pi_natives::code_path::uri::SCHEME_FACTORIES;
 use tempfile::TempDir;
@@ -73,15 +71,42 @@ fn rule_resolves_with_ext_appended() {
 #[test]
 fn memory_resolves_root() {
 	let dir = TempDir::new().unwrap();
-	let mem_root = dir.path().join(".spell/memory/memory_summary.md");
-	std::fs::create_dir_all(mem_root.parent().unwrap()).unwrap();
-	std::fs::write(&mem_root, "# memory\n").unwrap();
+	let mem_file = dir.path().join(".spell/memory/memory_summary.md");
+	std::fs::create_dir_all(mem_file.parent().unwrap()).unwrap();
+	std::fs::write(&mem_file, "# memory\n").unwrap();
 	let ctx = SessionContext::new(dir.path(), "/home/u");
 	let reg = registry(Some(&ctx));
-	let uri = UriLocator { scheme: "memory".into(), path: "memory_summary.md".into() };
+	// `memory://root` → default file `memory_summary.md` (Namespaced layout).
+	let uri = UriLocator { scheme: "memory".into(), path: "root".into() };
 	let cancel = CancellationToken::new();
 	let r = reg.resolve(&uri, Some(&ctx), &cancel).unwrap();
 	assert!(r.source_path.is_some());
+	assert_eq!(r.source_path.as_ref().unwrap(), &mem_file);
+}
+
+#[test]
+fn memory_resolves_subpath() {
+	let dir = TempDir::new().unwrap();
+	let sub = dir.path().join(".spell/memory/sub/note.md");
+	std::fs::create_dir_all(sub.parent().unwrap()).unwrap();
+	std::fs::write(&sub, "# sub\n").unwrap();
+	let ctx = SessionContext::new(dir.path(), "/home/u");
+	let reg = registry(Some(&ctx));
+	let uri = UriLocator { scheme: "memory".into(), path: "root/sub/note.md".into() };
+	let cancel = CancellationToken::new();
+	let r = reg.resolve(&uri, Some(&ctx), &cancel).unwrap();
+	assert_eq!(r.source_path.as_ref().unwrap(), &sub);
+}
+
+#[test]
+fn memory_unknown_namespace_rejected() {
+	let dir = TempDir::new().unwrap();
+	let ctx = SessionContext::new(dir.path(), "/home/u");
+	let reg = registry(Some(&ctx));
+	let uri = UriLocator { scheme: "memory".into(), path: "other".into() };
+	let cancel = CancellationToken::new();
+	let err = reg.resolve(&uri, Some(&ctx), &cancel).unwrap_err();
+	assert!(err.message.contains("namespace"), "diag: {}", err.message);
 }
 
 #[test]
@@ -127,10 +152,7 @@ fn missing_file_returns_filenotfound() {
 	let uri = UriLocator { scheme: "skill".into(), path: "nonexistent".into() };
 	let cancel = CancellationToken::new();
 	let err = reg.resolve(&uri, Some(&ctx), &cancel).unwrap_err();
-	assert!(matches!(
-		err.variant,
-		pi_code_path::types::DiagnosticVariant::FileNotFound
-	));
+	assert!(matches!(err.variant, pi_code_path::types::DiagnosticVariant::FileNotFound));
 }
 
 #[test]
@@ -158,17 +180,14 @@ fn pi_unknown_doc_returns_not_found() {
 	let uri = UriLocator { scheme: "pi".into(), path: "definitely-not-a-real-doc-name.md".into() };
 	let cancel = CancellationToken::new();
 	let err = reg.resolve(&uri, None, &cancel).unwrap_err();
-	assert!(matches!(
-		err.variant,
-		pi_code_path::types::DiagnosticVariant::FileNotFound
-	));
+	assert!(matches!(err.variant, pi_code_path::types::DiagnosticVariant::FileNotFound));
 }
 
 #[test]
 fn session_context_built_from_task_options() {
 	let opts = pi_natives::code_path::napi::CodePathTaskOptions {
-		root:        Some("/proj".into()),
-		home:        Some("/home/u".into()),
+		root: Some("/proj".into()),
+		home: Some("/home/u".into()),
 		session_dir: Some("/sess".into()),
 		..Default::default()
 	};

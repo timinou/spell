@@ -1,4 +1,5 @@
-//! Language matrix — structural edits across supported languages (PLAN-306 W9.1).
+//! Language matrix — structural edits across supported languages (PLAN-306
+//! W9.1).
 //!
 //! Mirrors `packages/coding-agent/test/codepath/language-matrix.test.ts` at the
 //! kernel level, invoking MutationResolver directly (no JS/NAPI layer).
@@ -14,29 +15,25 @@
 //! | CSS        | .css   | cssRenameClassToken | cssRenameIdToken    | cssRenameCustomProp¹   |
 //! | HTML       | .html  | symbolReplace       | symbolWrap          | symbolInsertAfter²     |
 //!
-//! ¹ `#[ignore = "FUP-010: kernel rejects token-only rename target; must supply rule-context
-//!    selector (.cls, #id, :root) instead of bare token. CssResolver build_target_id falls
-//!    through to code_buffer which expects a selector-formatted CodePath target."]`
-//! ² `#[ignore = "FUP-011: HTML element selectors resolved but code_buffer symbol-resolver
-//!    does not treat element names as symbol targets. Needs HTML-aware symbol target handling."]`
+//! ¹ `#[ignore = "FUP-010: kernel rejects token-only rename target; must supply
+//! rule-context    selector (.cls, #id, :root) instead of bare token.
+//! CssResolver build_target_id falls    through to code_buffer which expects a
+//! selector-formatted CodePath target."]` ² `#[ignore = "FUP-011: HTML element
+//! selectors resolved but code_buffer symbol-resolver    does not treat element
+//! names as symbol targets. Needs HTML-aware symbol target handling."]`
 
 use std::sync::Arc;
 
 use pi_code_engine::language::LanguageRegistry;
 use pi_code_path::{
 	ast::{ActionContent, CodePath, FsLocator, FsSegment, Head, Locator, NamePayload, Query, Step},
-	dialects::{
-		css::CssNameLexer, mdorg::MdNameLexer, typescript::TsNameLexer,
-	},
-	op::{
-		CssTarget, HeadingTarget, Identifier, Op, SymScope, SymbolTarget,
-	},
+	dialects::{css::CssNameLexer, mdorg::MdNameLexer, typescript::TsNameLexer},
+	op::{CssTarget, HeadingTarget, Identifier, Op, SymScope, SymbolTarget},
 	resolver::traits::{CancellationToken, MutationResolver},
 };
 
 use super::{
-	code_resolver::CodeResolverImpl, css_resolver::CssResolver,
-	heading_resolver::HeadingResolver,
+	code_resolver::CodeResolverImpl, css_resolver::CssResolver, heading_resolver::HeadingResolver,
 };
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -97,7 +94,8 @@ fn dispatch_op(
 	let token = CancellationToken::new();
 
 	// Mirror dispatch order from napi.rs / op_matrix_tests.rs
-	// FsResolver and TextResolver are skipped — they return None for Symbol/Heading/CSS ops.
+	// FsResolver and TextResolver are skipped — they return None for
+	// Symbol/Heading/CSS ops.
 	let result = code_r
 		.try_apply(op, &token)
 		.or_else(|| css_r.try_apply(op, &token))
@@ -155,26 +153,35 @@ mod typescript {
 	#[test]
 	fn symbol_replace() {
 		// JS test uses symbolFindReplace (action kind), not symbolReplace
-		run_case("typescript", "symbolReplace", SYMBOL_REPLACE_BEFORE_TS, SYMBOL_REPLACE_AFTER_TS, |p| {
-			let target = SymbolTarget::new(symbol_path(p, "greet")).unwrap();
-			Op::SymbolFindReplace {
-				target,
-				find: ActionContent::Single("return 'hello ' + name;".into()),
-				content: ActionContent::Single("return 'hello ' + name + '!';".into()),
-				occurrence: None,
-			}
-		});
+		run_case(
+			"typescript",
+			"symbolReplace",
+			SYMBOL_REPLACE_BEFORE_TS,
+			SYMBOL_REPLACE_AFTER_TS,
+			|p| {
+				let target = SymbolTarget::new(symbol_path(p, "greet")).unwrap();
+				Op::SymbolFindReplace {
+					target,
+					find: ActionContent::Single("return 'hello ' + name;".into()),
+					content: ActionContent::Single("return 'hello ' + name + '!';".into()),
+					occurrence: None,
+				}
+			},
+		);
 	}
 
 	#[test]
 	fn symbol_rename() {
-		run_case("typescript", "symbolRename", SYMBOL_RENAME_BEFORE_TS, SYMBOL_RENAME_AFTER_TS, |p| {
-			let target = SymbolTarget::new(symbol_path(p, "greet")).unwrap();
-			Op::SymbolRename {
-				target,
-				new_name: Identifier("salute".into()),
-			}
-		});
+		run_case(
+			"typescript",
+			"symbolRename",
+			SYMBOL_RENAME_BEFORE_TS,
+			SYMBOL_RENAME_AFTER_TS,
+			|p| {
+				let target = SymbolTarget::new(symbol_path(p, "greet")).unwrap();
+				Op::SymbolRename { target, new_name: Identifier("salute".into()) }
+			},
+		);
 	}
 
 	#[test]
@@ -210,8 +217,7 @@ mod rust {
 				target,
 				scope: SymScope::Whole,
 				content: ActionContent::Single(
-					"pub fn greet(name: &str) -> String {\n    format!(\"hello {}!\", name)\n}"
-						.into(),
+					"pub fn greet(name: &str) -> String {\n    format!(\"hello {}!\", name)\n}".into(),
 				),
 			}
 		});
@@ -221,10 +227,7 @@ mod rust {
 	fn symbol_rename() {
 		run_case("rust", "symbolRename", SYMBOL_RENAME_BEFORE_RS, SYMBOL_RENAME_AFTER_RS, |p| {
 			let target = SymbolTarget::new(symbol_path(p, "greet")).unwrap();
-			Op::SymbolRename {
-				target,
-				new_name: Identifier("salute".into()),
-			}
+			Op::SymbolRename { target, new_name: Identifier("salute".into()) }
 		});
 	}
 
@@ -269,10 +272,7 @@ mod python {
 	fn symbol_rename() {
 		run_case("python", "symbolRename", SYMBOL_RENAME_BEFORE_PY, SYMBOL_RENAME_AFTER_PY, |p| {
 			let target = SymbolTarget::new(symbol_path(p, "greet")).unwrap();
-			Op::SymbolRename {
-				target,
-				new_name: Identifier("salute".into()),
-			}
+			Op::SymbolRename { target, new_name: Identifier("salute".into()) }
 		});
 	}
 
@@ -298,6 +298,7 @@ mod python {
 
 mod markdown {
 	use pi_code_path::op::SymScope;
+
 	use super::*;
 
 	#[test]
@@ -329,23 +330,23 @@ mod markdown {
 	}
 
 	#[test]
- 	fn heading_replace_block() {
- 		// JS test uses kind: symbolReplace, scope: whole on heading
- 		run_case(
- 			"markdown",
- 			"headingReplaceBlock",
- 			HEADING_REPLACE_BLOCK_BEFORE_MD,
- 			HEADING_REPLACE_BLOCK_AFTER_MD,
- 			|p| {
- 				let target = SymbolTarget::new(symbol_path(p, "Top")).unwrap();
- 				Op::SymbolReplace {
- 					target,
- 					scope: SymScope::Whole,
- 					content: ActionContent::Single("# Top\n\nReplaced content.".into()),
- 				}
- 			},
- 		);
- 	}
+	fn heading_replace_block() {
+		// JS test uses kind: symbolReplace, scope: whole on heading
+		run_case(
+			"markdown",
+			"headingReplaceBlock",
+			HEADING_REPLACE_BLOCK_BEFORE_MD,
+			HEADING_REPLACE_BLOCK_AFTER_MD,
+			|p| {
+				let target = SymbolTarget::new(symbol_path(p, "Top")).unwrap();
+				Op::SymbolReplace {
+					target,
+					scope: SymScope::Whole,
+					content: ActionContent::Single("# Top\n\nReplaced content.".into()),
+				}
+			},
+		);
+	}
 }
 
 // ── CSS ───────────────────────────────────────────────────────────
@@ -354,64 +355,54 @@ mod css {
 	use super::*;
 
 	#[test]
- 	fn rename_class_token() {
- 		run_case(
- 			"css",
- 			"cssRenameClassToken",
- 			CSS_RENAME_CLASS_BEFORE,
- 			CSS_RENAME_CLASS_AFTER,
- 			|p| {
- 				// JS test targets $FILE::.my-class — selector in query
- 				let cp = CodePath {
- 					locator:   Locator::Fs(FsLocator {
- 						segments: vec![FsSegment::Literal(p.display().to_string())],
- 					}),
- 					query:     Some(Query::single(Step {
- 						axis:       None,
- 						head:       Head::Name(NamePayload::Raw(".my-class".into())),
- 						predicates: vec![],
- 					})),
- 					qualifier: None,
- 				};
- 				let target = CssTarget::new(cp).unwrap();
- 				Op::CssRenameClassToken {
- 					target,
- 					find: "my-class".into(),
- 					replace: "renamed-class".into(),
- 				}
- 			},
- 		);
- 	}
+	fn rename_class_token() {
+		run_case(
+			"css",
+			"cssRenameClassToken",
+			CSS_RENAME_CLASS_BEFORE,
+			CSS_RENAME_CLASS_AFTER,
+			|p| {
+				// JS test targets $FILE::.my-class — selector in query
+				let cp = CodePath {
+					locator:   Locator::Fs(FsLocator {
+						segments: vec![FsSegment::Literal(p.display().to_string())],
+					}),
+					query:     Some(Query::single(Step {
+						axis:       None,
+						head:       Head::Name(NamePayload::Raw(".my-class".into())),
+						predicates: vec![],
+					})),
+					qualifier: None,
+				};
+				let target = CssTarget::new(cp).unwrap();
+				Op::CssRenameClassToken {
+					target,
+					find: "my-class".into(),
+					replace: "renamed-class".into(),
+				}
+			},
+		);
+	}
 
 	#[test]
- 	fn rename_id_token() {
- 		run_case(
- 			"css",
- 			"cssRenameIdToken",
- 			CSS_RENAME_ID_BEFORE,
- 			CSS_RENAME_ID_AFTER,
- 			|p| {
- 				// JS test targets $FILE::#my-id — selector in query
- 				let cp = CodePath {
- 					locator:   Locator::Fs(FsLocator {
- 						segments: vec![FsSegment::Literal(p.display().to_string())],
- 					}),
- 					query:     Some(Query::single(Step {
- 						axis:       None,
- 						head:       Head::Name(NamePayload::Raw("#my-id".into())),
- 						predicates: vec![],
- 					})),
- 					qualifier: None,
- 				};
- 				let target = CssTarget::new(cp).unwrap();
- 				Op::CssRenameIdToken {
- 					target,
- 					find: "my-id".into(),
- 					replace: "renamed-id".into(),
- 				}
- 			},
- 		);
- 	}
+	fn rename_id_token() {
+		run_case("css", "cssRenameIdToken", CSS_RENAME_ID_BEFORE, CSS_RENAME_ID_AFTER, |p| {
+			// JS test targets $FILE::#my-id — selector in query
+			let cp = CodePath {
+				locator:   Locator::Fs(FsLocator {
+					segments: vec![FsSegment::Literal(p.display().to_string())],
+				}),
+				query:     Some(Query::single(Step {
+					axis:       None,
+					head:       Head::Name(NamePayload::Raw("#my-id".into())),
+					predicates: vec![],
+				})),
+				qualifier: None,
+			};
+			let target = CssTarget::new(cp).unwrap();
+			Op::CssRenameIdToken { target, find: "my-id".into(), replace: "renamed-id".into() }
+		});
+	}
 
 	/// FUP-010: kernel rejects token-only rename target; must supply
 	/// rule-context selector (.cls, #id, :root) instead of bare token.
@@ -446,50 +437,37 @@ mod html {
 
 	#[test]
 	fn symbol_replace() {
-		run_case(
-			"html",
-			"symbolReplace",
-			HTML_REPLACE_BEFORE,
-			HTML_REPLACE_AFTER,
-			|p| {
-				let target = SymbolTarget::new(symbol_path(p, "section")).unwrap();
-				Op::SymbolReplace {
-					target,
-					scope: SymScope::Whole,
-					content: ActionContent::Single(
-						"<section>\n  <p>Goodbye world</p>\n</section>".into(),
-					),
-				}
-			},
-		);
+		run_case("html", "symbolReplace", HTML_REPLACE_BEFORE, HTML_REPLACE_AFTER, |p| {
+			let target = SymbolTarget::new(symbol_path(p, "section")).unwrap();
+			Op::SymbolReplace {
+				target,
+				scope: SymScope::Whole,
+				content: ActionContent::Single("<section>\n  <p>Goodbye world</p>\n</section>".into()),
+			}
+		});
 	}
 
 	#[test]
 	fn symbol_wrap() {
-		run_case(
-			"html",
-			"symbolWrap",
-			HTML_WRAP_BEFORE,
-			HTML_WRAP_AFTER,
-			|p| {
-				let target = SymbolTarget::new(symbol_path(p, "section")).unwrap();
-				Op::SymbolWrap {
-					target,
-					content: ActionContent::Multi(vec![
-						"<wrapper>".into(),
-						"  $BODY".into(),
-						"</wrapper>".into(),
-					]),
-				}
-			},
-		);
+		run_case("html", "symbolWrap", HTML_WRAP_BEFORE, HTML_WRAP_AFTER, |p| {
+			let target = SymbolTarget::new(symbol_path(p, "section")).unwrap();
+			Op::SymbolWrap {
+				target,
+				content: ActionContent::Multi(vec![
+					"<wrapper>".into(),
+					"  $BODY".into(),
+					"</wrapper>".into(),
+				]),
+			}
+		});
 	}
 
 	/// FUP-011: HTML element names (e.g. `section`) resolve via tree-sitter
 	/// query but the code_buffer symbol-resolver does not treat element names
 	/// as symbol targets. Needs HTML-aware symbol-target handling in the
 	/// code_buffer edit dispatch path.
-	#[ignore = "FUP-011: HTML element name not treated as symbol target by code_buffer; needs HTML-aware symbol resolution"]
+	#[ignore = "FUP-011: HTML element name not treated as symbol target by code_buffer; needs \
+	            HTML-aware symbol resolution"]
 	#[test]
 	fn symbol_insert_after() {
 		run_case(
@@ -501,9 +479,7 @@ mod html {
 				let target = SymbolTarget::new(symbol_path(p, "section")).unwrap();
 				Op::SymbolInsertAfter {
 					target,
-					content: ActionContent::Single(
-						"<!-- inserted after section -->\n".into(),
-					),
+					content: ActionContent::Single("<!-- inserted after section -->\n".into()),
 				}
 			},
 		);
@@ -548,8 +524,9 @@ const SYMBOL_RENAME_AFTER_RS: &str = r#"pub fn salute(name: &str) -> String {
 const SYMBOL_INSERT_AFTER_BEFORE_RS: &str = r#"pub fn greet(name: &str) -> String {
     format!("hello {}", name)
 }"#;
-const SYMBOL_INSERT_AFTER_AFTER_RS: &str =
-	"pub fn greet(name: &str) -> String {\n    format!(\"hello {}\", name)\n}\n// inserted after greet";
+const SYMBOL_INSERT_AFTER_AFTER_RS: &str = "pub fn greet(name: &str) -> String {\n    \
+                                            format!(\"hello {}\", name)\n}\n// inserted after \
+                                            greet";
 
 // Python
 const SYMBOL_REPLACE_BEFORE_PY: &str = "def greet(name):\n    return f'hello {name}'";

@@ -3,11 +3,8 @@
 use std::path::PathBuf;
 
 use pi_code_path::{
-	UriLocator,
-	resolver::traits::CancellationToken,
-	scheme::SessionContext,
-	scheme_dispatch::SchemeRegistry,
-	types::Content,
+	UriLocator, resolver::traits::CancellationToken, scheme::SessionContext,
+	scheme_dispatch::SchemeRegistry, types::Content,
 };
 use pi_natives::code_path::uri::SCHEME_FACTORIES;
 use tempfile::TempDir;
@@ -62,9 +59,7 @@ fn agent_requires_session_dir() {
 #[test]
 fn artifact_resolves_multi_segment_body() {
 	let dir = TempDir::new().unwrap();
-	let target = dir
-		.path()
-		.join(".spell/sessions/abc123/reviewer/get/3.txt");
+	let target = dir.path().join(".spell/sessions/abc123/reviewer/get/3.txt");
 	std::fs::create_dir_all(target.parent().unwrap()).unwrap();
 	std::fs::write(&target, "artifact content\n").unwrap();
 
@@ -158,10 +153,7 @@ fn jobs_unknown_id_returns_not_found() {
 	let uri = UriLocator { scheme: "jobs".into(), path: "no-such-job".into() };
 	let cancel = CancellationToken::new();
 	let err = reg.resolve(&uri, Some(&ctx), &cancel).unwrap_err();
-	assert!(matches!(
-		err.variant,
-		pi_code_path::types::DiagnosticVariant::FileNotFound
-	));
+	assert!(matches!(err.variant, pi_code_path::types::DiagnosticVariant::FileNotFound));
 }
 
 // ── org:// ───────────────────────────────────────────────────────
@@ -174,7 +166,8 @@ fn org_resolves_item_by_id() {
 	let org_file = cat_dir.join("FEAT-foo.org");
 	std::fs::write(
 		&org_file,
-		"#+TITLE: foo\n#+CUSTOM_ID: TOPLEVEL\n\n* TODO Implement [#A] :feature:\n:PROPERTIES:\n:CUSTOM_ID: FEAT-123\n:END:\n\nThe body.\n",
+		"#+TITLE: foo\n#+CUSTOM_ID: TOPLEVEL\n\n* TODO Implement [#A] \
+		 :feature:\n:PROPERTIES:\n:CUSTOM_ID: FEAT-123\n:END:\n\nThe body.\n",
 	)
 	.unwrap();
 
@@ -204,8 +197,5 @@ fn org_unknown_id_returns_not_found() {
 	let uri = UriLocator { scheme: "org".into(), path: "FEAT-doesnt-exist".into() };
 	let cancel = CancellationToken::new();
 	let err = reg.resolve(&uri, Some(&ctx), &cancel).unwrap_err();
-	assert!(matches!(
-		err.variant,
-		pi_code_path::types::DiagnosticVariant::FileNotFound
-	));
+	assert!(matches!(err.variant, pi_code_path::types::DiagnosticVariant::FileNotFound));
 }

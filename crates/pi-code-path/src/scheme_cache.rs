@@ -2,8 +2,10 @@
 //!
 //! Three strategies (see `CacheStrategy`):
 //! - `None`             — always re-resolve
-//! - `UntilMtimeChange` — keep entry while source_path mtime is unchanged (fs-backed schemes)
-//! - `Ttl(Duration)`    — keep entry for fixed wall-clock duration (callback schemes)
+//! - `UntilMtimeChange` — keep entry while source_path mtime is unchanged
+//!   (fs-backed schemes)
+//! - `Ttl(Duration)`    — keep entry for fixed wall-clock duration (callback
+//!   schemes)
 
 use std::{
 	collections::HashMap,
@@ -41,10 +43,12 @@ impl SchemeCache {
 		Self::default()
 	}
 
-	/// Returns cached content if valid; otherwise calls `resolve`, stores, returns.
+	/// Returns cached content if valid; otherwise calls `resolve`, stores,
+	/// returns.
 	///
-	/// For `UntilMtimeChange`: the resolver must populate `ResolvedContent.source_mtime`
-	/// at read time. Invalidated when the current on-disk mtime differs.
+	/// For `UntilMtimeChange`: the resolver must populate
+	/// `ResolvedContent.source_mtime` at read time. Invalidated when the
+	/// current on-disk mtime differs.
 	pub fn get_or_resolve<F>(
 		&self,
 		key: CacheKey,
@@ -61,11 +65,7 @@ impl SchemeCache {
 		}
 	}
 
-	fn fs_cached<F>(
-		&self,
-		key: CacheKey,
-		resolve: F,
-	) -> Result<Arc<ResolvedContent>, Diagnostic>
+	fn fs_cached<F>(&self, key: CacheKey, resolve: F) -> Result<Arc<ResolvedContent>, Diagnostic>
 	where
 		F: FnOnce() -> Result<ResolvedContent, Diagnostic>,
 	{
@@ -83,7 +83,8 @@ impl SchemeCache {
 		let resolved = resolve()?;
 		let mtime = resolved.source_mtime.unwrap_or(SystemTime::UNIX_EPOCH);
 		let arc = Arc::new(resolved);
-		self.fs
+		self
+			.fs
 			.write()
 			.unwrap()
 			.insert(key, FsEntry { content: arc.clone(), mtime });
@@ -108,10 +109,11 @@ impl SchemeCache {
 		// Slow-path
 		let resolved = resolve()?;
 		let arc = Arc::new(resolved);
-		self.ttl.write().unwrap().insert(
-			key,
-			TtlEntry { content: arc.clone(), expires_at: Instant::now() + ttl },
-		);
+		self
+			.ttl
+			.write()
+			.unwrap()
+			.insert(key, TtlEntry { content: arc.clone(), expires_at: Instant::now() + ttl });
 		Ok(arc)
 	}
 

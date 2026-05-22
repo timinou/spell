@@ -305,7 +305,11 @@ fn delete_with_qualifier_target_rejects_at_fs() {
 	let root = dir.path().to_path_buf();
 	std::fs::write(root.join("safe.txt"), "intact").unwrap();
 	let chunks = execute_code_path_inner(
-		opts_edit_with_root("safe.txt#stat", root.clone(), serde_json::json!([{"kind": "fileDelete"}])),
+		opts_edit_with_root(
+			"safe.txt#stat",
+			root.clone(),
+			serde_json::json!([{"kind": "fileDelete"}]),
+		),
 		crate::task::CancelToken::default(),
 	)
 	.unwrap();
@@ -326,7 +330,11 @@ fn delete_with_symbol_target_routes_to_code_resolver() {
 	)
 	.unwrap();
 	let _ = execute_code_path_inner(
-		opts_edit_with_root("a.ts::remove_me", root.clone(), serde_json::json!([{"kind": "fileDelete"}])),
+		opts_edit_with_root(
+			"a.ts::remove_me",
+			root.clone(),
+			serde_json::json!([{"kind": "fileDelete"}]),
+		),
 		crate::task::CancelToken::default(),
 	)
 	.unwrap();
@@ -505,48 +513,57 @@ fn transaction_best_effort_default_unchanged() {
 	)
 	.unwrap();
 	// Best-effort: each op runs in order, both succeed → file deleted.
-	assert!(
-		!root.join("a.txt").exists(),
-		"best-effort write then delete should remove the file"
-	);
+	assert!(!root.join("a.txt").exists(), "best-effort write then delete should remove the file");
 }
 
 #[test]
 fn strict_rollback_restores_all_targeted_files() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().to_path_buf();
-    std::fs::write(root.join("a.txt"), "a-v1").unwrap();
-    std::fs::write(root.join("b.txt"), "b-v1").unwrap();
-    let _ = execute_code_path_inner(
-        opts_edit_strict(
-            "a.txt",
-            root.clone(),
-            serde_json::json!([
-                {"kind": "fileWrite", "target": "a.txt", "content": "a-v2"},
-                {"kind": "fileCreate", "target": "b.txt", "content": "b-v2"}
-            ]),
-        ),
-        crate::task::CancelToken::default(),
-    );
-    assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap_or_default(), "a-v1", "a.txt should be restored");
-    assert_eq!(std::fs::read_to_string(root.join("b.txt")).unwrap_or_default(), "b-v1", "b.txt should be restored");
+	let dir = tempfile::tempdir().unwrap();
+	let root = dir.path().to_path_buf();
+	std::fs::write(root.join("a.txt"), "a-v1").unwrap();
+	std::fs::write(root.join("b.txt"), "b-v1").unwrap();
+	let _ = execute_code_path_inner(
+		opts_edit_strict(
+			"a.txt",
+			root.clone(),
+			serde_json::json!([
+				 {"kind": "fileWrite", "target": "a.txt", "content": "a-v2"},
+				 {"kind": "fileCreate", "target": "b.txt", "content": "b-v2"}
+			]),
+		),
+		crate::task::CancelToken::default(),
+	);
+	assert_eq!(
+		std::fs::read_to_string(root.join("a.txt")).unwrap_or_default(),
+		"a-v1",
+		"a.txt should be restored"
+	);
+	assert_eq!(
+		std::fs::read_to_string(root.join("b.txt")).unwrap_or_default(),
+		"b-v1",
+		"b.txt should be restored"
+	);
 }
 
 #[test]
 fn text_op_in_strict_transaction_rolls_back_on_failure() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().to_path_buf();
-    std::fs::write(root.join("a.txt"), "A\n").unwrap();
-    let _ = execute_code_path_inner(
-        opts_edit_strict(
-            "a.txt",
-            root.clone(),
-            serde_json::json!([
-                {"kind": "fileAppend", "content": "B\n"},
-                {"kind": "fileCreate", "target": "a.txt", "content": "C\n"}
-            ]),
-        ),
-        crate::task::CancelToken::default(),
-    );
-    assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap_or_default(), "A\n", "text op should be rolled back");
+	let dir = tempfile::tempdir().unwrap();
+	let root = dir.path().to_path_buf();
+	std::fs::write(root.join("a.txt"), "A\n").unwrap();
+	let _ = execute_code_path_inner(
+		opts_edit_strict(
+			"a.txt",
+			root.clone(),
+			serde_json::json!([
+				 {"kind": "fileAppend", "content": "B\n"},
+				 {"kind": "fileCreate", "target": "a.txt", "content": "C\n"}
+			]),
+		),
+		crate::task::CancelToken::default(),
+	);
+	assert_eq!(
+		std::fs::read_to_string(root.join("a.txt")).unwrap_or_default(),
+		"A\n",
+		"text op should be rolled back"
+	);
 }

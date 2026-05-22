@@ -90,7 +90,8 @@ fn vec_index_replace_swaps_search_direction() {
 	let hits = idx.search(&v_old, 4).unwrap();
 	assert!(
 		hits.is_empty() || hits[0].1.abs() < 0.01,
-		"after replace, score against old direction must be ~0 (stale neighbour edges?); got {hits:?}"
+		"after replace, score against old direction must be ~0 (stale neighbour edges?); got \
+		 {hits:?}"
 	);
 
 	// Query the NEW direction returns X near 1.0.
@@ -184,4 +185,3 @@ fn vec_index_inserts_scale_better_than_quadratic() {
 		elapsed,
 	);
 }
-

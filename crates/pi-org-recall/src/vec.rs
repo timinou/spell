@@ -3,9 +3,9 @@
 //! Wraps `pi_code_vectors::VectorIndex` with a `String`-keyed id mapping and
 //! disk serialization.
 //!
-//! Fresh ids are appended via the inner index's incremental `insert` (O(log n)).
-//! Duplicate ids (upsert) trigger an O(n log n) rebuild because `hnsw_rs` has
-//! no delete primitive — the inner index is reconstructed from scratch.
+//! Fresh ids are appended via the inner index's incremental `insert` (O(log
+//! n)). Duplicate ids (upsert) trigger an O(n log n) rebuild because `hnsw_rs`
+//! has no delete primitive — the inner index is reconstructed from scratch.
 //! In normal usage (engine-managed cache + delta updates) upsert is rare.
 
 use std::{
@@ -52,10 +52,10 @@ impl VecIndex {
 	///
 	/// * Fresh `id` — appended via `hnsw_rs::insert_slice` in O(log n). No
 	///   rebuild of the inner index.
-	/// * Existing `id` — replaces the stored vector and rebuilds the inner
-	///   index in O(n log n) (HNSW has no delete; the rebuild is the only
-	///   way to drop the stale neighbor edges). Engine-managed delta updates
-	///   keep upserts rare.
+	/// * Existing `id` — replaces the stored vector and rebuilds the inner index
+	///   in O(n log n) (HNSW has no delete; the rebuild is the only way to drop
+	///   the stale neighbor edges). Engine-managed delta updates keep upserts
+	///   rare.
 	///
 	/// Zero-norm vectors (`‖v‖ < 1e-9`) are logged as warnings and skipped.
 	pub fn insert(&mut self, id: String, vector: Vec<f32>) -> Result<()> {

@@ -3,7 +3,8 @@
 //! Mirrors the language-dialect pattern (`dialect.rs`) but for URIs. Each
 //! scheme is a declarative profile pinning four axes:
 //!
-//! - **Root**         — where the scheme's namespace anchors (project / session / user / virtual)
+//! - **Root**         — where the scheme's namespace anchors (project / session
+//!   / user / virtual)
 //! - **Layout**       — how the URI body maps to an address under that root
 //! - **Loader**       — how the address materializes into bytes
 //! - **Capabilities** — what the kernel may subsequently do with the result
@@ -45,11 +46,7 @@ pub struct SessionContext {
 
 impl SessionContext {
 	pub fn new(project_root: impl Into<PathBuf>, home: impl Into<PathBuf>) -> Self {
-		Self {
-			project_root: project_root.into(),
-			session_dir:  None,
-			home:         home.into(),
-		}
+		Self { project_root: project_root.into(), session_dir: None, home: home.into() }
 	}
 
 	pub fn with_session_dir(mut self, dir: impl Into<PathBuf>) -> Self {
@@ -120,15 +117,19 @@ pub enum PathLayout {
 	/// `skill://canvas/scripts/x.py` → `<root>/canvas/scripts/x.py`
 	NamedDir { entry_file: String, subpath_allowed: bool },
 
+	/// Body is `<namespace>[/<subpath>]` where `<namespace>` must equal the
+	/// configured value. Unlike `NamedDir`, the namespace is NOT used as a path
+	/// segment — it's a gate. Bare namespace resolves to `default_file`.
+	/// `memory://root`         → `<root>/memory_summary.md`
+	/// `memory://root/foo.md`  → `<root>/foo.md`
+	Namespaced { namespace: String, default_file: String, subpath_allowed: bool },
+
 	/// Body is `<name>`. Append fixed extension.
 	/// `rule://canvas` → `<root>/canvas.md`
 	NamedFile { extension: String },
 
 	/// Body is `<id>[#<fragment>]`. Fragments select files under `<root>/<id>/`.
-	IdFragment {
-		default:   FragmentEntry,
-		fragments: HashMap<String, FragmentEntry>,
-	},
+	IdFragment { default: FragmentEntry, fragments: HashMap<String, FragmentEntry> },
 
 	/// Body is opaque; loader's `Indexed` mode performs the lookup.
 	Indexed,
@@ -185,11 +186,9 @@ impl PathLayout {
 	/// Parse the URI's body into an address description.
 	pub fn parse(&self, body: &str) -> Result<LayoutMatch, Diagnostic> {
 		match self {
-			Self::Direct => Ok(LayoutMatch {
-				path:     Some(PathBuf::from(body)),
-				fragment: None,
-				id:       None,
-			}),
+			Self::Direct => {
+				Ok(LayoutMatch { path: Some(PathBuf::from(body)), fragment: None, id: None })
+			},
 
 			Self::NamedDir { entry_file, subpath_allowed } => {
 				if body.is_empty() {
@@ -210,6 +209,28 @@ impl PathLayout {
 				Ok(LayoutMatch { path: Some(p), fragment: None, id: None })
 			},
 
+			Self::Namespaced { namespace, default_file, subpath_allowed } => {
+				if body.is_empty() {
+					return Err(layout_err(&format!(
+						"Namespaced layout requires '{namespace}' namespace: {namespace}://[/subpath]"
+					)));
+				}
+				let (ns, rest) = body.split_once('/').unwrap_or((body, ""));
+				if ns != namespace {
+					return Err(layout_err(&format!(
+						"unknown namespace '{ns}'; supported: {namespace}"
+					)));
+				}
+				let p = if rest.is_empty() {
+					PathBuf::from(default_file)
+				} else if *subpath_allowed {
+					PathBuf::from(rest)
+				} else {
+					return Err(layout_err("subpath not allowed for this scheme"));
+				};
+				Ok(LayoutMatch { path: Some(p), fragment: None, id: None })
+			},
+
 			Self::NamedFile { extension } => {
 				if body.is_empty() || body.contains('/') {
 					return Err(layout_err("NamedFile expects a bare name"));
@@ -222,34 +243,28 @@ impl PathLayout {
 			},
 
 			Self::IdFragment { .. } => {
-				let (id, fragment) = body.split_once('#').map_or((body, None), |(i, f)| {
-					(i, Some(f.to_string()))
-				});
+				let (id, fragment) = body
+					.split_once('#')
+					.map_or((body, None), |(i, f)| (i, Some(f.to_string())));
 				if id.is_empty() {
 					return Err(layout_err("IdFragment requires an id"));
 				}
 				Ok(LayoutMatch {
-					path:     None,   // loader resolves via SynthSpec / FragmentEntry::File
+					path: None, // loader resolves via SynthSpec / FragmentEntry::File
 					fragment,
-					id:       Some(id.to_string()),
+					id: Some(id.to_string()),
 				})
 			},
 
-			Self::Indexed => Ok(LayoutMatch {
-				path:     None,
-				fragment: None,
-				id:       Some(body.to_string()),
-			}),
+			Self::Indexed => {
+				Ok(LayoutMatch { path: None, fragment: None, id: Some(body.to_string()) })
+			},
 		}
 	}
 }
 
 fn layout_err(msg: &str) -> Diagnostic {
-	Diagnostic {
-		variant: DiagnosticVariant::ParseError,
-		message: msg.to_string(),
-		span:    None,
-	}
+	Diagnostic { variant: DiagnosticVariant::ParseError, message: msg.to_string(), span: None }
 }
 
 // ── ContentLoader ────────────────────────────────────────────────
@@ -286,7 +301,8 @@ impl std::fmt::Debug for ContentLoader {
 	}
 }
 
-/// Lookup for `PathLayout::Indexed` schemes (e.g. `org://` task-id → file path).
+/// Lookup for `PathLayout::Indexed` schemes (e.g. `org://` task-id → file
+/// path).
 pub trait IndexLookup: Send + Sync {
 	fn lookup(
 		&self,
@@ -299,7 +315,8 @@ pub trait IndexLookup: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct ResolvedAddress {
 	pub path:  PathBuf,
-	/// Optional byte-range within the file (used by `org://` for heading regions).
+	/// Optional byte-range within the file (used by `org://` for heading
+	/// regions).
 	pub range: Option<Range<usize>>,
 }
 
@@ -333,19 +350,21 @@ impl Default for CacheStrategy {
 
 #[derive(Clone, Debug, Default)]
 pub struct SchemeCapabilities {
-	/// Resolved `source_path` is a real fs path: enables codepath suffix forwarding.
+	/// Resolved `source_path` is a real fs path: enables codepath suffix
+	/// forwarding.
 	pub fs_backed:           bool,
-	/// `<uri>::<codepath-suffix>` (`::Symbol`, `::§line[…]`, `#tree`) is supported.
-	/// Implies `fs_backed`.
+	/// `<uri>::<codepath-suffix>` (`::Symbol`, `::§line[…]`, `#tree`) is
+	/// supported. Implies `fs_backed`.
 	pub codepath_compatible: bool,
 	/// MIME hint surfaced to renderers.
 	pub mime_hint:           Option<&'static str>,
 	/// Caching policy.
 	pub cache:               CacheStrategy,
-	/// Whether this scheme may be expanded inside bash commands (brush integration).
-	/// Requires `fs_backed`.
+	/// Whether this scheme may be expanded inside bash commands (brush
+	/// integration). Requires `fs_backed`.
 	pub bash_expandable:     bool,
-	/// For `Callback` loader: max time to wait before timeout. None = no timeout.
+	/// For `Callback` loader: max time to wait before timeout. None = no
+	/// timeout.
 	pub callback_budget:     Option<Duration>,
 }
 
@@ -366,12 +385,13 @@ pub struct SchemeProfile {
 /// What the registry returns to callers after dispatch.
 #[derive(Debug, Clone)]
 pub struct ResolvedContent {
-	pub url:         String,
-	/// `Some(_)` when the resolved address is a real fs path; gates codepath forwarding.
-	pub source_path: Option<PathBuf>,
-	pub content:     Content,
-	pub mime:        Option<String>,
-	pub notes:       Vec<String>,
+	pub url:          String,
+	/// `Some(_)` when the resolved address is a real fs path; gates codepath
+	/// forwarding.
+	pub source_path:  Option<PathBuf>,
+	pub content:      Content,
+	pub mime:         Option<String>,
+	pub notes:        Vec<String>,
 	/// Internal: mtime at read time (for `UntilMtimeChange` cache invalidation).
 	#[doc(hidden)]
 	pub source_mtime: Option<SystemTime>,
@@ -448,30 +468,21 @@ mod tests {
 
 	#[test]
 	fn layout_named_dir_bare_appends_entry() {
-		let l = PathLayout::NamedDir {
-			entry_file:      "SKILL.md".into(),
-			subpath_allowed: true,
-		};
+		let l = PathLayout::NamedDir { entry_file: "SKILL.md".into(), subpath_allowed: true };
 		let m = l.parse("canvas").unwrap();
 		assert_eq!(m.path, Some(PathBuf::from("canvas/SKILL.md")));
 	}
 
 	#[test]
 	fn layout_named_dir_subpath() {
-		let l = PathLayout::NamedDir {
-			entry_file:      "SKILL.md".into(),
-			subpath_allowed: true,
-		};
+		let l = PathLayout::NamedDir { entry_file: "SKILL.md".into(), subpath_allowed: true };
 		let m = l.parse("canvas/scripts/init.py").unwrap();
 		assert_eq!(m.path, Some(PathBuf::from("canvas/scripts/init.py")));
 	}
 
 	#[test]
 	fn layout_named_dir_subpath_disallowed() {
-		let l = PathLayout::NamedDir {
-			entry_file:      "RULE.md".into(),
-			subpath_allowed: false,
-		};
+		let l = PathLayout::NamedDir { entry_file: "RULE.md".into(), subpath_allowed: false };
 		assert!(l.parse("foo/bar").is_err());
 	}
 

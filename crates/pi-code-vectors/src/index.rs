@@ -220,8 +220,7 @@ mod insert_tests {
 		assert!(idx.is_empty());
 
 		for i in 0..32 {
-			idx
-				.insert(VectorEntry { node_index: i, vector: unit(i, dim) })
+			idx.insert(VectorEntry { node_index: i, vector: unit(i, dim) })
 				.expect("incremental insert");
 		}
 		assert_eq!(idx.len(), 32);
@@ -242,4 +241,3 @@ mod insert_tests {
 		assert!(matches!(err, Error::DimensionMismatch { expected: 8, actual: 4 }));
 	}
 }
-

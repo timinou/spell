@@ -23,7 +23,10 @@ function createRouter(memoryRoot: string): InternalUrlRouter {
 	return router;
 }
 
-describe("MemoryProtocolHandler", () => {
+// PLAN-310 cutover: memory:// is kernel-owned via §memory.
+// Behavior tested in crates/pi-natives/tests/scheme_registry_w1.rs
+//   ::memory_resolves_root, memory_resolves_subpath, memory_unknown_namespace_rejected
+describe.skip("MemoryProtocolHandler [kernel-owned via §memory]", () => {
 	it("resolves memory://root to memory_summary.md", async () => {
 		await withTempDir(async tempDir => {
 			const memoryRoot = path.join(tempDir, "memory");

@@ -14,9 +14,7 @@ use std::sync::Arc;
 
 use brush_core::WordPreprocessor;
 use pi_code_path::{
-	resolver::traits::CancellationToken,
-	scheme::SessionContext,
-	scheme_dispatch::SchemeRegistry,
+	resolver::traits::CancellationToken, scheme::SessionContext, scheme_dispatch::SchemeRegistry,
 };
 
 /// Word preprocessor that resolves `<scheme>://<body>` tokens to
@@ -46,12 +44,13 @@ impl WordPreprocessor for SchemeWordPreprocessor {
 		if !profile.capabilities.bash_expandable {
 			return None;
 		}
-		let uri = pi_code_path::ast::UriLocator {
-			scheme: scheme.to_string(),
-			path:   body.to_string(),
-		};
+		let uri =
+			pi_code_path::ast::UriLocator { scheme: scheme.to_string(), path: body.to_string() };
 		let cancel = CancellationToken::new();
-		let resolved = self.registry.resolve(&uri, self.session.as_ref(), &cancel).ok()?;
+		let resolved = self
+			.registry
+			.resolve(&uri, self.session.as_ref(), &cancel)
+			.ok()?;
 		let source_path = resolved.source_path.as_ref()?;
 		Some(shell_escape(&source_path.to_string_lossy()))
 	}
@@ -106,8 +105,7 @@ mod tests {
 	#[test]
 	fn preprocess_skips_when_not_bash_expandable() {
 		use pi_code_path::{
-			CacheStrategy, ContentLoader, PathLayout, RootTemplate, SchemeCapabilities,
-			SchemeProfile,
+			CacheStrategy, ContentLoader, PathLayout, RootTemplate, SchemeCapabilities, SchemeProfile,
 		};
 		let mut reg = SchemeRegistry::new();
 		// virtual scheme — bash_expandable: false
@@ -115,9 +113,7 @@ mod tests {
 			scheme:       "virtual-svc",
 			root:         RootTemplate::Virtual,
 			layout:       PathLayout::Direct,
-			loader:       ContentLoader::Static {
-				table: &phf::phf_map! { "x" => "data" },
-			},
+			loader:       ContentLoader::Static { table: &phf::phf_map! { "x" => "data" } },
 			capabilities: SchemeCapabilities {
 				fs_backed: false,
 				bash_expandable: false,

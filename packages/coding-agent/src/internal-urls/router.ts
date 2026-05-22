@@ -20,7 +20,8 @@ import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
  */
 export const KERNEL_OWNED_SCHEMES: ReadonlySet<string> = new Set<string>([
 	// PLAN-310 Phase 2 cutover order — simplest schemes first.
-	"pi", // embedded markdown docs (Static loader)
+	"pi",     // embedded markdown docs (Static loader)
+	"memory", // .spell/memory/[root|<path>] (Namespaced layout, fs-backed)
 ]);
 
 /**

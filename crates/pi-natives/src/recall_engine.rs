@@ -13,9 +13,10 @@
 //!   `VecIndex`, the typed graph, and parsed items alive for the process
 //!   lifetime — matching the long-lived-writer pattern from the Tantivy docs
 //!   and Quickwit.
-//! * Detects staleness by comparing a `pi_workspace_cache::WorkspaceFingerprint`
-//!   (per-file size + mtime + git HEAD) against the in-memory copy on every
-//!   query (~5 ms walk for 1870 files).
+//! * Detects staleness by comparing a
+//!   `pi_workspace_cache::WorkspaceFingerprint` (per-file size + mtime + git
+//!   HEAD) against the in-memory copy on every query (~5 ms walk for 1870
+//!   files).
 //! * Persists the warm state to `{recall cache}/{repo_hash}/{engine.bin,
 //!   vec.bin}` (Tantivy is already on disk) so a Spell restart hits the warm
 //!   path immediately without rebuilding.
@@ -173,9 +174,7 @@ pub fn get_or_create(
 	// indices.
 	let ttl = idle_ttl();
 	for idx in (0..map.len()).rev() {
-		if now.duration_since(map[idx].last_used) > ttl
-			&& Arc::strong_count(&map[idx].handle) == 1
-		{
+		if now.duration_since(map[idx].last_used) > ttl && Arc::strong_count(&map[idx].handle) == 1 {
 			let evicted = map.remove(idx);
 			engine_log!(
 				"TTL evicted {} (idle {:?} > {:?})",
@@ -234,15 +233,15 @@ pub fn forget(repo_root: &Path) {
 // ---------------------------------------------------------------------------
 
 pub struct RecallEngineHandle {
-	repo_root: PathBuf,
-	cache_dir: PathBuf,
+	repo_root:  PathBuf,
+	cache_dir:  PathBuf,
 	/// Mirrors the `cache_base` argument from `get_or_create`. When set, the
 	/// engine opens `FtsIndex` via `open_at(repo_root, base)` so the Tantivy
 	/// directory co-locates under the same base as `engine.bin` / `vec.bin`.
 	/// `None` means production: `FtsIndex::open` resolves the default
 	/// `cache_base()` and writes under `~/.cache/spell/recall/{hash}/fts/`.
 	cache_base: Option<PathBuf>,
-	state:     Mutex<EngineState>,
+	state:      Mutex<EngineState>,
 }
 
 enum EngineState {
@@ -280,12 +279,7 @@ impl PersistentCacheEntry for EngineCacheEntry {
 
 impl RecallEngineHandle {
 	fn new(repo_root: PathBuf, cache_dir: PathBuf, cache_base: Option<PathBuf>) -> Self {
-		Self {
-			repo_root,
-			cache_dir,
-			cache_base,
-			state: Mutex::new(EngineState::Cold),
-		}
+		Self { repo_root, cache_dir, cache_base, state: Mutex::new(EngineState::Cold) }
 	}
 
 	/// Open `FtsIndex` honoring the cache_base override if set.
@@ -358,7 +352,10 @@ impl RecallEngineHandle {
 		Ok(warm)
 	}
 
-	fn try_load_warm(&self, current_fp: &WorkspaceFingerprint) -> Result<Option<WarmEngine>, String> {
+	fn try_load_warm(
+		&self,
+		current_fp: &WorkspaceFingerprint,
+	) -> Result<Option<WarmEngine>, String> {
 		let entry_path = self.cache_dir.join(ENGINE_CACHE_FILE);
 		let vec_path = self.cache_dir.join(VEC_CACHE_FILE);
 		if !entry_path.exists() || !vec_path.exists() {
@@ -379,7 +376,8 @@ impl RecallEngineHandle {
 			engine_log!("disk cache stale; rebuilding");
 			return Ok(None);
 		}
-		// `entry_path` is checked above; `entry.bin` lives at `engine.bin` via CacheStore.
+		// `entry_path` is checked above; `entry.bin` lives at `engine.bin` via
+		// CacheStore.
 		let _ = entry_path;
 		if !vec_path.exists() {
 			engine_log!("vec cache missing; will rebuild");
@@ -425,13 +423,7 @@ impl RecallEngineHandle {
 		// Convert persisted shape back to OrgItem for in-memory use.
 		let items: Vec<OrgItem> = entry.items.into_iter().map(OrgItem::from).collect();
 		let graph = build_typed_graph(&items);
-		Ok(Some(WarmEngine {
-			fingerprint: entry.fingerprint,
-			items,
-			fts,
-			vec,
-			graph,
-		}))
+		Ok(Some(WarmEngine { fingerprint: entry.fingerprint, items, fts, vec, graph }))
 	}
 
 	fn full_rebuild(&self, fingerprint: WorkspaceFingerprint) -> Result<WarmEngine, String> {
@@ -449,7 +441,12 @@ impl RecallEngineHandle {
 	fn save_warm(&self, warm: &WarmEngine) -> Result<(), String> {
 		let entry = EngineCacheEntry {
 			fingerprint: warm.fingerprint.clone(),
-			items:       warm.items.iter().cloned().map(PersistedOrgItem::from).collect(),
+			items:       warm
+				.items
+				.iter()
+				.cloned()
+				.map(PersistedOrgItem::from)
+				.collect(),
 		};
 		// Atomic-save pattern: write to `<name>.tmp`, then rename over the
 		// final path. `CacheStore::save` truncates in place, so a crash
@@ -510,7 +507,12 @@ fn scan_items(repo_root: &Path) -> Vec<OrgItem> {
 				continue;
 			};
 			let Ok(parsed) = pi_org_engine::buffer::extract_items_from_source(
-				&source, &[], "", "", &path_str, false,
+				&source,
+				&[],
+				"",
+				"",
+				&path_str,
+				false,
 			) else {
 				continue;
 			};
@@ -645,8 +647,7 @@ struct WorkerEmbedderAdapter;
 
 impl Embedder for WorkerEmbedderAdapter {
 	fn embed_query(&self, text: &str) -> pi_org_recall::Result<Vec<f32>> {
-		embedding_worker::embed_query(text)
-			.map_err(|e| pi_org_recall::Error::Embedder(e.to_string()))
+		embedding_worker::embed_query(text).map_err(|e| pi_org_recall::Error::Embedder(e.to_string()))
 	}
 
 	fn embed_batch(&self, texts: &[&str]) -> pi_org_recall::Result<Vec<Vec<f32>>> {
@@ -774,11 +775,7 @@ mod tests {
 
 	/// Convenience: tiny RecallQuery builder.
 	fn q(text: &str) -> RecallQuery {
-		RecallQuery {
-			text: Some(text.into()),
-			limit: 10,
-			..Default::default()
-		}
+		RecallQuery { text: Some(text.into()), limit: 10, ..Default::default() }
 	}
 
 	#[test]
@@ -801,11 +798,7 @@ mod tests {
 
 		let canon = canonical_root(repo.path());
 		let expected = repo_cache_dir_at(&canon, cache.path()).unwrap().join("fts");
-		assert!(
-			expected.is_dir(),
-			"override fts dir missing at {}",
-			expected.display(),
-		);
+		assert!(expected.is_dir(), "override fts dir missing at {}", expected.display(),);
 		forget(repo.path());
 	}
 
@@ -897,8 +890,8 @@ mod tests {
 		let fts_dir = repo_cache.join("fts");
 		assert!(
 			fts_dir.is_dir(),
-			"precondition: fts/ must exist under override cache base at {} \
-			 (cache_base override regressed?)",
+			"precondition: fts/ must exist under override cache base at {} (cache_base override \
+			 regressed?)",
 			fts_dir.display(),
 		);
 		fs::remove_dir_all(&fts_dir).unwrap();
@@ -965,11 +958,7 @@ mod tests {
 		let _no_worker = force_no_worker("stale-fingerprint");
 		let repo = tempdir().unwrap();
 		let tasks = repo.path().join("!tasks");
-		write_item(
-			&tasks,
-			"D.org",
-			"* TODO D first\n:PROPERTIES:\n:CUSTOM_ID: D-1\n:END:\n",
-		);
+		write_item(&tasks, "D.org", "* TODO D first\n:PROPERTIES:\n:CUSTOM_ID: D-1\n:END:\n");
 		let cache = tempdir().unwrap();
 		let canon = canonical_root(repo.path());
 		let engine_bin = repo_cache_dir_at(&canon, cache.path())
@@ -1003,10 +992,7 @@ mod tests {
 			"after edit, recall should surface new content; got {hits2:?}"
 		);
 		let mtime2 = fs::metadata(&engine_bin).unwrap().modified().unwrap();
-		assert!(
-			mtime2 > mtime1,
-			"engine.bin mtime should advance after stale-fingerprint rebuild"
-		);
+		assert!(mtime2 > mtime1, "engine.bin mtime should advance after stale-fingerprint rebuild");
 		forget(repo.path());
 	}
 
@@ -1024,7 +1010,9 @@ mod tests {
 		write_item(
 			&repo.path().join("!tasks"),
 			"F.org",
-			"* TODO F\n:PROPERTIES:\n:CUSTOM_ID: F-1\n:END:\n:RELATIONS:\nABOUT: G-1\nINVOLVED: H-1\n:END:\n* TODO G\n:PROPERTIES:\n:CUSTOM_ID: G-1\n:END:\n* TODO H\n:PROPERTIES:\n:CUSTOM_ID: H-1\n:END:\n",
+			"* TODO F\n:PROPERTIES:\n:CUSTOM_ID: F-1\n:END:\n:RELATIONS:\nABOUT: G-1\nINVOLVED: \
+			 H-1\n:END:\n* TODO G\n:PROPERTIES:\n:CUSTOM_ID: G-1\n:END:\n* TODO \
+			 H\n:PROPERTIES:\n:CUSTOM_ID: H-1\n:END:\n",
 		);
 		let cache = tempdir().unwrap();
 
@@ -1042,10 +1030,10 @@ mod tests {
 		let hits = get_or_create(repo.path(), Some(cache.path()))
 			.unwrap()
 			.query(RecallQuery {
-				text:        None,
-				focus:       Some("F-1".into()),
-				graph_hops:  1,
-				limit:       10,
+				text: None,
+				focus: Some("F-1".into()),
+				graph_hops: 1,
+				limit: 10,
 				..Default::default()
 			})
 			.unwrap();
@@ -1124,10 +1112,7 @@ mod tests {
 			.query(q("B"))
 			.unwrap();
 
-		assert!(
-			!engines_contains(repo_a.path()),
-			"A should have been TTL-evicted on B's miss"
-		);
+		assert!(!engines_contains(repo_a.path()), "A should have been TTL-evicted on B's miss");
 		assert!(engines_contains(repo_b.path()), "B should be cached");
 
 		forget(repo_a.path());
@@ -1162,11 +1147,7 @@ mod tests {
 		// Hold a clone outside ENGINES — simulates an in-flight query.
 		let held_a = get_or_create(repo_a.path(), Some(cache.path())).unwrap();
 		held_a.query(q("A")).unwrap();
-		assert_eq!(
-			Arc::strong_count(&held_a),
-			2,
-			"precondition: held_a + ENGINES = 2 strong refs"
-		);
+		assert_eq!(Arc::strong_count(&held_a), 2, "precondition: held_a + ENGINES = 2 strong refs");
 
 		std::thread::sleep(Duration::from_millis(100));
 

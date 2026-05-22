@@ -449,6 +449,7 @@ pub fn execute_code_path_inner(
 
 	let root = opts
 		.root
+		.as_deref()
 		.map(PathBuf::from)
 		.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
@@ -844,34 +845,90 @@ pub fn execute_code_path_inner(
 			let cancel_tok = pi_code_path::resolver::traits::CancellationToken::new();
 			match registry.resolve(uri, session_ctx.as_ref(), &cancel_tok) {
 				Ok(resolved) => {
-					let mut metadata = HashMap::new();
-					if let Some(mime) = &resolved.mime {
-						metadata.insert("mime".into(), serde_json::Value::String(mime.clone()));
+					// Codepath forwarding: when the URI has a query/qualifier AND the
+					// resolved scheme is fs-backed with a real source_path, re-dispatch
+					// against that path so the kernel evaluates the suffix natively.
+					// (e.g. `memory://root::§line[2..2]` → evaluate §line on the resolved
+					// `.spell/memory/memory_summary.md`).
+					let has_suffix = cp.query.is_some() || cp.qualifier.is_some();
+					if has_suffix && resolved.source_path.is_some() {
+						let sp = resolved.source_path.as_ref().unwrap().clone();
+						let rel = sp
+							.strip_prefix(&root)
+							.map(|p| p.to_path_buf())
+							.unwrap_or_else(|_| sp.clone());
+						// Extract the suffix from the original target string. The
+						// parser only consumes up to `::` for URIs, so the rest of
+						// the input — starting with `::` or `#` — is the suffix.
+						let original = &opts.target;
+						let uri_prefix_end = original
+							.find("::")
+							.or_else(|| original.find('#'))
+							.unwrap_or(original.len());
+						let suffix = &original[uri_prefix_end..];
+						let forwarded_target = format!("{}{}", rel.display(), suffix);
+						let forwarded_opts = CodePathTaskOptions {
+							command:            opts.command.clone(),
+							target:             forwarded_target,
+							transaction:        opts.transaction,
+							limit:              opts.limit,
+							head:               opts.head,
+							tail:               opts.tail,
+							offset:             opts.offset,
+							format:             opts.format.clone(),
+							root:               opts.root.clone(),
+							actions:            opts.actions.clone(),
+							manage:             opts.manage.clone(),
+							gitignore:          opts.gitignore,
+							session_id:         opts.session_id.clone(),
+							artifact_threshold: opts.artifact_threshold,
+							home:               opts.home.clone(),
+							session_dir:        opts.session_dir.clone(),
+						};
+						return execute_code_path_inner(forwarded_opts, cancel_token);
+					} else {
+						let mut metadata = HashMap::new();
+						if let Some(mime) = &resolved.mime {
+							metadata.insert("mime".into(), serde_json::Value::String(mime.clone()));
+						}
+						if !resolved.notes.is_empty() {
+							metadata.insert(
+								"notes".into(),
+								serde_json::Value::Array(
+									resolved.notes.iter().map(|n| serde_json::Value::String(n.clone())).collect(),
+								),
+							);
+						}
+						if let Some(p) = &resolved.source_path {
+							metadata.insert(
+								"source_path".into(),
+								serde_json::Value::String(p.display().to_string()),
+							);
+						}
+						// If suffix present but scheme is virtual (no source_path),
+						// emit a note that the qualifier was ignored.
+						if has_suffix {
+							metadata
+								.entry("notes".into())
+								.or_insert_with(|| serde_json::Value::Array(vec![]));
+							if let Some(serde_json::Value::Array(arr)) = metadata.get_mut("notes") {
+								arr.push(serde_json::Value::String(format!(
+									"codepath qualifier ignored (resource '{}://' is not filesystem-backed)",
+									uri.scheme
+								)));
+							}
+						}
+						let kind = format!("§{}", uri.scheme);
+						let node = pi_code_path::types::NodeRef {
+							locator: resolved.url.clone(),
+							range: 0..0,
+							kind,
+							content: Some(resolved.content.clone()),
+							metadata,
+							diagnostics: vec![],
+						};
+						vec![node]
 					}
-					if !resolved.notes.is_empty() {
-						metadata.insert(
-							"notes".into(),
-							serde_json::Value::Array(
-								resolved.notes.iter().map(|n| serde_json::Value::String(n.clone())).collect(),
-							),
-						);
-					}
-					if let Some(p) = &resolved.source_path {
-						metadata.insert(
-							"source_path".into(),
-							serde_json::Value::String(p.display().to_string()),
-						);
-					}
-					let kind = format!("§{}", uri.scheme);
-					let node = pi_code_path::types::NodeRef {
-						locator: resolved.url.clone(),
-						range: 0..0,
-						kind,
-						content: Some(resolved.content.clone()),
-						metadata,
-						diagnostics: vec![],
-					};
-					vec![node]
 				},
 				Err(d) => {
 					return Err(Error::from_reason(d.message));

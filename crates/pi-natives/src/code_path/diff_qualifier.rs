@@ -10,8 +10,10 @@
 //! # Supported forms
 //! - `<path>#diff` — working-tree diff for file vs HEAD
 //! - `<path>#diff[base=HEAD~1]` — diff vs an arbitrary ref
-//! - `<path>#diff[since=2026-05-01]` — diff vs the commit at-or-before that date
-//! - `#diff` (bare, no path) — workspace-wide diff (one NodeRef per changed file)
+//! - `<path>#diff[since=2026-05-01]` — diff vs the commit at-or-before that
+//!   date
+//! - `#diff` (bare, no path) — workspace-wide diff (one NodeRef per changed
+//!   file)
 //!
 //! # Edge cases
 //! - Clean tree → empty Vec, no diagnostic
@@ -19,11 +21,7 @@
 //! - Binary files → placeholder content "Binary files … differ"
 //! - Submodules → silently skipped
 
-use std::{
-	collections::HashMap,
-	path::Path,
-	process::Command,
-};
+use std::{collections::HashMap, path::Path, process::Command};
 
 use pi_code_path::{
 	ast::Qualifier,
@@ -177,7 +175,10 @@ fn resolve_file_diff(
 
 	// Clamp: make sure the path is relative. If absolute, try to make it relative.
 	let rel_path = if file_path.is_absolute() {
-		file_path.strip_prefix(root).unwrap_or(file_path).to_path_buf()
+		file_path
+			.strip_prefix(root)
+			.unwrap_or(file_path)
+			.to_path_buf()
 	} else {
 		file_path.to_path_buf()
 	};
@@ -235,8 +236,8 @@ fn resolve_file_diff(
 
 	let node = NodeRef {
 		locator: rel_path.to_string_lossy().to_string(),
-		range:   0..diff_text.len(),
-		kind:    "§diff".to_string(),
+		range: 0..diff_text.len(),
+		kind: "§diff".to_string(),
 		content: Some(Content::Text { value: content }),
 		metadata,
 		diagnostics: Vec::new(),
@@ -247,10 +248,7 @@ fn resolve_file_diff(
 
 // ── Workspace-wide diff ──────────────────────────────────────────
 
-fn resolve_workspace_diff(
-	root: &Path,
-	rev: Option<&str>,
-) -> Result<Vec<NodeRef>, Diagnostic> {
+fn resolve_workspace_diff(root: &Path, rev: Option<&str>) -> Result<Vec<NodeRef>, Diagnostic> {
 	let rev_arg = rev.unwrap_or("HEAD");
 
 	let output = Command::new("git")
@@ -314,8 +312,8 @@ fn resolve_workspace_diff(
 
 		nodes.push(NodeRef {
 			locator: path,
-			range:   0..file_diff.len(),
-			kind:    "§diff".to_string(),
+			range: 0..file_diff.len(),
+			kind: "§diff".to_string(),
 			content: Some(Content::Text { value: content }),
 			metadata,
 			diagnostics: Vec::new(),
@@ -456,12 +454,24 @@ mod tests {
 		};
 		assert!(text.contains("+world"), "expected +world in diff");
 
-		let adds = results[0].metadata.get("additions").and_then(|v| v.as_u64()).unwrap();
-		let dels = results[0].metadata.get("deletions").and_then(|v| v.as_u64()).unwrap();
+		let adds = results[0]
+			.metadata
+			.get("additions")
+			.and_then(|v| v.as_u64())
+			.unwrap();
+		let dels = results[0]
+			.metadata
+			.get("deletions")
+			.and_then(|v| v.as_u64())
+			.unwrap();
 		assert_eq!(adds, 1, "expected 1 addition");
 		assert_eq!(dels, 0, "expected 0 deletions (hello is context)");
 		assert_eq!(
-			results[0].metadata.get("change_kind").and_then(|v| v.as_str()).unwrap(),
+			results[0]
+				.metadata
+				.get("change_kind")
+				.and_then(|v| v.as_str())
+				.unwrap(),
 			"modified"
 		);
 	}
@@ -487,10 +497,18 @@ mod tests {
 		let n = node("new.txt", "§file");
 		let results = resolve(&n, &qual(None), &root).unwrap();
 		assert_eq!(results.len(), 1);
-		let adds = results[0].metadata.get("additions").and_then(|v| v.as_u64()).unwrap();
+		let adds = results[0]
+			.metadata
+			.get("additions")
+			.and_then(|v| v.as_u64())
+			.unwrap();
 		assert!(adds > 0, "expected additions for new file");
 		assert_eq!(
-			results[0].metadata.get("change_kind").and_then(|v| v.as_str()).unwrap(),
+			results[0]
+				.metadata
+				.get("change_kind")
+				.and_then(|v| v.as_str())
+				.unwrap(),
 			"added"
 		);
 	}
@@ -510,10 +528,18 @@ mod tests {
 		let n = node("f.txt", "§file");
 		let results = resolve(&n, &qual(None), &root).unwrap();
 		assert_eq!(results.len(), 1);
-		let dels = results[0].metadata.get("deletions").and_then(|v| v.as_u64()).unwrap();
+		let dels = results[0]
+			.metadata
+			.get("deletions")
+			.and_then(|v| v.as_u64())
+			.unwrap();
 		assert!(dels > 0, "expected deletions for deleted file");
 		assert_eq!(
-			results[0].metadata.get("change_kind").and_then(|v| v.as_str()).unwrap(),
+			results[0]
+				.metadata
+				.get("change_kind")
+				.and_then(|v| v.as_str())
+				.unwrap(),
 			"deleted"
 		);
 	}
@@ -561,7 +587,11 @@ mod tests {
 		let n = node("f.txt", "§file");
 		let results = resolve(&n, &qual(Some("base=HEAD~1")), &root).unwrap();
 		assert_eq!(results.len(), 1);
-		let adds = results[0].metadata.get("additions").and_then(|v| v.as_u64()).unwrap();
+		let adds = results[0]
+			.metadata
+			.get("additions")
+			.and_then(|v| v.as_u64())
+			.unwrap();
 		assert_eq!(adds, 2, "expected 2 additions from HEAD~1 (vs first commit)");
 	}
 
@@ -601,7 +631,11 @@ mod tests {
 		let n = node("f.txt", "§file");
 		let results = resolve(&n, &qual(Some("since=2000-01-01")), &root).unwrap();
 		assert_eq!(results.len(), 1, "should diff against earliest commit");
-		let rev = results[0].metadata.get("rev").and_then(|v| v.as_str()).unwrap();
+		let rev = results[0]
+			.metadata
+			.get("rev")
+			.and_then(|v| v.as_str())
+			.unwrap();
 		assert!(!rev.is_empty(), "rev should not be empty");
 	}
 }

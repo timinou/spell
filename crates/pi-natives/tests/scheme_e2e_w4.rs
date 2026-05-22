@@ -1,8 +1,10 @@
 //! W4 e2e: URI locator goes through executeCodePath → kernel SchemeRegistry,
 //! no TS-side router involvement. Validates the Locator::Uri branch wiring.
 
-use pi_natives::code_path::napi::{CodePathTaskOptions, execute_code_path_inner};
-use pi_natives::task::CancelToken;
+use pi_natives::{
+	code_path::napi::{CodePathTaskOptions, execute_code_path_inner},
+	task::CancelToken,
+};
 use tempfile::TempDir;
 
 #[test]
@@ -14,9 +16,9 @@ fn execute_code_path_resolves_skill_uri() {
 
 	let opts = CodePathTaskOptions {
 		command: "get".into(),
-		target:  "skill://canvas".into(),
-		root:    Some(dir.path().to_string_lossy().into()),
-		home:    Some("/home/u".into()),
+		target: "skill://canvas".into(),
+		root: Some(dir.path().to_string_lossy().into()),
+		home: Some("/home/u".into()),
 		..Default::default()
 	};
 	let chunks = execute_code_path_inner(opts, CancelToken::default()).unwrap();
@@ -27,7 +29,12 @@ fn execute_code_path_resolves_skill_uri() {
 	assert_eq!(nodes[0].kind, "§skill");
 	match &nodes[0].content {
 		Some(c) if c.kind == "text" => {
-			assert!(c.value.as_deref().unwrap_or("").contains("canvas skill content"));
+			assert!(
+				c.value
+					.as_deref()
+					.unwrap_or("")
+					.contains("canvas skill content")
+			);
 		},
 		other => panic!("expected Text content, got {other:?}"),
 	}
@@ -37,28 +44,68 @@ fn execute_code_path_resolves_skill_uri() {
 fn execute_code_path_resolves_pi_uri_virtual() {
 	let opts = CodePathTaskOptions {
 		command: "get".into(),
-		target:  "pi://memory.md".into(),
-		root:    Some("/tmp".into()),
-		home:    Some("/home/u".into()),
+		target: "pi://memory.md".into(),
+		root: Some("/tmp".into()),
+		home: Some("/home/u".into()),
 		..Default::default()
 	};
 	let chunks = execute_code_path_inner(opts, CancelToken::default()).unwrap();
 	let nodes = &chunks[0].nodes;
 	assert_eq!(nodes.len(), 1);
 	assert_eq!(nodes[0].kind, "§pi");
-	assert!(nodes[0].content.as_ref().map(|c| c.kind == "text").unwrap_or(false));
+	assert!(
+		nodes[0]
+			.content
+			.as_ref()
+			.map(|c| c.kind == "text")
+			.unwrap_or(false)
+	);
 }
 
 #[test]
 fn execute_code_path_unknown_scheme_errors() {
 	let opts = CodePathTaskOptions {
 		command: "get".into(),
-		target:  "nope://foo".into(),
-		root:    Some("/tmp".into()),
+		target: "nope://foo".into(),
+		root: Some("/tmp".into()),
 		..Default::default()
 	};
 	let result = execute_code_path_inner(opts, CancelToken::default());
-	let err = match result { Ok(_) => panic!("expected error"), Err(e) => e };
+	let err = match result {
+		Ok(_) => panic!("expected error"),
+		Err(e) => e,
+	};
 	let msg = err.to_string();
 	assert!(msg.contains("unknown URI scheme") || msg.contains("nope"));
 }
+
+#[test]
+fn execute_code_path_forwards_suffix_to_source_path() {
+	use pi_natives::code_path::napi::{execute_code_path_inner, CodePathTaskOptions};
+	use pi_natives::task::CancelToken as NativesCancelToken;
+
+	let dir = tempfile::TempDir::new().unwrap();
+	let mem_file = dir.path().join(".spell/memory/memory_summary.md");
+	std::fs::create_dir_all(mem_file.parent().unwrap()).unwrap();
+	std::fs::write(&mem_file, "LINE_ONE\nLINE_TWO\nLINE_THREE\n").unwrap();
+
+	let opts = CodePathTaskOptions {
+		command: "get".into(),
+		target: "memory://root::§line[2..2]".into(),
+		root: Some(dir.path().display().to_string()),
+		home: Some("/home/u".into()),
+		..Default::default()
+	};
+	let token = NativesCancelToken::new(None, None);
+	let chunks = execute_code_path_inner(opts, token).unwrap();
+	let all_text: String = chunks
+		.iter()
+		.flat_map(|c| c.nodes.iter())
+		.filter_map(|n| n.content.as_ref())
+		.filter_map(|c| c.value.clone().or_else(|| c.text.clone()))
+		.collect::<Vec<_>>()
+		.join("\n");
+	assert!(all_text.contains("LINE_TWO"), "got: {all_text}");
+	assert!(!all_text.contains("LINE_ONE"), "line 2 should not include line 1: {all_text}");
+}
+

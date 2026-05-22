@@ -794,7 +794,10 @@ fn cmd_recall(options: &Value) -> Result<Value> {
 		.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
 	let query = RecallQuery {
-		text:             options.get("text").and_then(Value::as_str).map(String::from),
+		text:             options
+			.get("text")
+			.and_then(Value::as_str)
+			.map(String::from),
 		scope:            options
 			.get("scope")
 			.and_then(Value::as_array)
@@ -804,7 +807,10 @@ fn cmd_recall(options: &Value) -> Result<Value> {
 					.collect()
 			})
 			.unwrap_or_default(),
-		focus:            options.get("focus").and_then(Value::as_str).map(String::from),
+		focus:            options
+			.get("focus")
+			.and_then(Value::as_str)
+			.map(String::from),
 		graph_hops:       options
 			.get("graphHops")
 			.and_then(Value::as_u64)

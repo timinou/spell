@@ -10,12 +10,10 @@ use std::{path::Path, sync::Arc};
 use pi_code_engine::language::LanguageRegistry;
 use pi_code_path::{
 	ast::{ActionContent, Direction, SpliceMode},
-	dialects::{
-		fs::FsResolver, mdorg::MdNameLexer, text::TextResolver, typescript::TsNameLexer,
-	},
+	dialects::{fs::FsResolver, mdorg::MdNameLexer, text::TextResolver, typescript::TsNameLexer},
 	op::{
-		CssTarget, FileTarget, HeadingTarget, Identifier, LineAnchor, LineAt, LineSpan, Op,
-		OpKind, SymScope, SymbolTarget,
+		CssTarget, FileTarget, HeadingTarget, Identifier, LineAnchor, LineAt, LineSpan, Op, OpKind,
+		SymScope, SymbolTarget,
 	},
 	parser::parse_code_path,
 	resolver::traits::{CancellationToken, MutationResolver},
@@ -23,11 +21,11 @@ use pi_code_path::{
 use strum::IntoEnumIterator;
 
 use super::{
-	code_resolver::CodeResolverImpl, css_resolver::CssResolver,
-	heading_resolver::HeadingResolver,
+	code_resolver::CodeResolverImpl, css_resolver::CssResolver, heading_resolver::HeadingResolver,
 };
 
-/// Builds a tempdir with known TS/MD/CSS files and returns (dir, ts_file, md_file, css_file).
+/// Builds a tempdir with known TS/MD/CSS files and returns (dir, ts_file,
+/// md_file, css_file).
 fn setup_world() -> (tempfile::TempDir, String, String, String) {
 	let dir = tempfile::tempdir().unwrap();
 	let root = dir.path().to_path_buf();
@@ -36,19 +34,9 @@ fn setup_world() -> (tempfile::TempDir, String, String, String) {
 		"function foo(a, b) { const x = 1; return x; }\nfunction bar() { return 2; }\n",
 	)
 	.unwrap();
-	std::fs::write(root.join("a.md"), "# Hello\n\nBody.\n\n## Sub\nMore.\n")
-		.unwrap();
-	std::fs::write(
-		root.join("a.css"),
-		".foo { color: red; }\n#myId { color: blue; }\n",
-	)
-	.unwrap();
-	(
-		dir,
-		"a.ts".to_string(),
-		"a.md".to_string(),
-		"a.css".to_string(),
-	)
+	std::fs::write(root.join("a.md"), "# Hello\n\nBody.\n\n## Sub\nMore.\n").unwrap();
+	std::fs::write(root.join("a.css"), ".foo { color: red; }\n#myId { color: blue; }\n").unwrap();
+	(dir, "a.ts".to_string(), "a.md".to_string(), "a.css".to_string())
 }
 
 fn build_target_file(_root: &Path, name: &str) -> FileTarget {
@@ -77,7 +65,8 @@ fn build_target_heading(_root: &Path, name: &str, sym: &str) -> HeadingTarget {
 	HeadingTarget::new(cp).unwrap()
 }
 
-/// Inline FNV-1a hash computation (mirrors pi-code-path::dialects::text::mutation::compute_line_hash).
+/// Inline FNV-1a hash computation (mirrors
+/// pi-code-path::dialects::text::mutation::compute_line_hash).
 fn compute_line_hash(_idx: usize, line: &str) -> String {
 	let normalized = line.replace('\r', "").trim_end().to_string();
 	let mut hash: u64 = 0xcbf29ce484222325; // FNV offset basis
@@ -114,13 +103,7 @@ fn fixtures() -> Vec<Fixture> {
 			},
 			false,
 		),
-		(
-			OpKind::FileDelete,
-			|_r| Op::FileDelete {
-				target: build_target_file(_r, "a.ts"),
-			},
-			false,
-		),
+		(OpKind::FileDelete, |_r| Op::FileDelete { target: build_target_file(_r, "a.ts") }, false),
 		(
 			OpKind::FileAppend,
 			|_r| Op::FileAppend {
@@ -141,7 +124,9 @@ fn fixtures() -> Vec<Fixture> {
 			OpKind::FilePatch,
 			|_r| Op::FilePatch {
 				target: build_target_file(_r, "a.ts"),
-				diff:   "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-function foo(a, b) { const x = 1; return x; }\n+function foo(a, b) { const y = 99; return y; }\n".into(),
+				diff:   "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-function foo(a, b) { const x = 1; \
+				         return x; }\n+function foo(a, b) { const y = 99; return y; }\n"
+					.into(),
 			},
 			false,
 		),
@@ -173,11 +158,10 @@ fn fixtures() -> Vec<Fixture> {
 				let h = compute_line_hash(1, line1);
 				Op::LineReplace {
 					target:  build_target_file(_r, "a.ts"),
-					span:    LineSpan {
-						start: LineAnchor { line: 1, hash: h },
-						end:   None,
-					},
-					content: ActionContent::Single("function foo(a, b) { const y = 99; return y; }".into()),
+					span:    LineSpan { start: LineAnchor { line: 1, hash: h }, end: None },
+					content: ActionContent::Single(
+						"function foo(a, b) { const y = 99; return y; }".into(),
+					),
 				}
 			},
 			false,
@@ -189,9 +173,7 @@ fn fixtures() -> Vec<Fixture> {
 				let h = compute_line_hash(1, line1);
 				Op::LineInsert {
 					target:  build_target_file(_r, "a.ts"),
-					at:      LineAt::Before {
-						anchor: LineAnchor { line: 1, hash: h },
-					},
+					at:      LineAt::Before { anchor: LineAnchor { line: 1, hash: h } },
 					content: ActionContent::Single("// new\n".into()),
 				}
 			},
@@ -318,10 +300,7 @@ fn fixtures() -> Vec<Fixture> {
 		),
 		(
 			OpKind::SymbolTranspose,
-			|_r| Op::SymbolTranspose {
-				target: build_target_symbol_ts(_r, "a.ts", "foo"),
-				column: 1,
-			},
+			|_r| Op::SymbolTranspose { target: build_target_symbol_ts(_r, "a.ts", "foo"), column: 1 },
 			true, // Needs proper transposable nodes (params, etc)
 		),
 		(
@@ -353,23 +332,17 @@ fn fixtures() -> Vec<Fixture> {
 		),
 		(
 			OpKind::CssRemoveDeadStyle,
-			|_r| Op::CssRemoveDeadStyle {
-				target: build_target_css(_r, "a.css"),
-			},
+			|_r| Op::CssRemoveDeadStyle { target: build_target_css(_r, "a.css") },
 			true, // CSS ops require declaration target
 		),
 		(
 			OpKind::HeadingPromote,
-			|_r| Op::HeadingPromote {
-				target: build_target_heading(_r, "a.md", "Sub"),
-			},
+			|_r| Op::HeadingPromote { target: build_target_heading(_r, "a.md", "Sub") },
 			true, // Heading ops need proper heading structure
 		),
 		(
 			OpKind::HeadingDemote,
-			|_r| Op::HeadingDemote {
-				target: build_target_heading(_r, "a.md", "Hello"),
-			},
+			|_r| Op::HeadingDemote { target: build_target_heading(_r, "a.md", "Hello") },
 			false,
 		),
 		(
@@ -385,10 +358,7 @@ fn fixtures() -> Vec<Fixture> {
 
 #[test]
 fn fixtures_cover_every_op_kind() {
-	let covered: std::collections::HashSet<OpKind> = fixtures()
-		.iter()
-		.map(|(k, _, _)| *k)
-		.collect();
+	let covered: std::collections::HashSet<OpKind> = fixtures().iter().map(|(k, ..)| *k).collect();
 	let all: std::collections::HashSet<OpKind> = OpKind::iter().collect();
 	let missing: Vec<OpKind> = all.difference(&covered).copied().collect();
 	assert!(
@@ -404,14 +374,13 @@ fn every_op_dispatches_or_explicitly_unimpl() {
 
 	for (kind, build, expected_unimpl) in fixtures() {
 		// Fresh tempdir per op (some ops are destructive)
-		let (sub_dir, _, _, _) = setup_world();
+		let (sub_dir, ..) = setup_world();
 		let sub_root = sub_dir.path().to_path_buf();
 
 		// Rebuild resolvers per iteration with root set
 		let fs_r = FsResolver::new(sub_root.clone());
 		let text_r = TextResolver::new(sub_root.clone());
-		let code_r =
-			CodeResolverImpl::new(registry.clone()).with_root(sub_root.clone());
+		let code_r = CodeResolverImpl::new(registry.clone()).with_root(sub_root.clone());
 		let css_r = CssResolver::new(Arc::new(
 			CodeResolverImpl::new(registry.clone()).with_root(sub_root.clone()),
 		));
@@ -433,23 +402,18 @@ fn every_op_dispatches_or_explicitly_unimpl() {
 		match result {
 			Some(Ok(_outcome)) => {
 				// Success — op dispatched and applied
-				assert!(
-					!expected_unimpl,
-					"{kind:?} succeeded but was marked expected_unimpl"
-				);
-			}
+				assert!(!expected_unimpl, "{kind:?} succeeded but was marked expected_unimpl");
+			},
 			Some(Err(d)) => {
 				if expected_unimpl {
 					// Expected to fail or unimplemented — pass
 					continue;
 				}
 				panic!("{kind:?} dispatched but failed: {}", d.message);
-			}
+			},
 			None => {
-				panic!(
-					"{kind:?} was NOT claimed by any resolver — dispatch totality broken"
-				);
-			}
+				panic!("{kind:?} was NOT claimed by any resolver — dispatch totality broken");
+			},
 		}
 	}
 }

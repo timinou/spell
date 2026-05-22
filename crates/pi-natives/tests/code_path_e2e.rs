@@ -566,7 +566,8 @@ mod anchor_tests {
 mod uri_scheme_tests {
 	use super::*;
 
-	#[ignore = "BUG-388: kernel URI scheme resolution not wired; URI routing is TS-side via internal-urls"]
+	#[ignore = "BUG-388: kernel URI scheme resolution not wired; URI routing is TS-side via \
+	            internal-urls"]
 	#[test]
 	fn memory_uri_scheme_returns_memory_node() {
 		let dir = tempfile::tempdir().unwrap();

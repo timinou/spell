@@ -19,10 +19,7 @@ fn file_target_rejects_uri_locator_via_deserialize() {
 		"content": "x"
 	});
 	let result: Result<Op, _> = serde_json::from_value(json);
-	assert!(
-		result.is_err(),
-		"FileTarget should reject URI locator via custom Deserialize"
-	);
+	assert!(result.is_err(), "FileTarget should reject URI locator via custom Deserialize");
 }
 
 #[test]
@@ -40,10 +37,7 @@ fn file_target_rejects_symbol_query_via_deserialize() {
 		"content": "x"
 	});
 	let result: Result<Op, _> = serde_json::from_value(json);
-	assert!(
-		result.is_err(),
-		"FileTarget should reject ::Symbol query via custom Deserialize"
-	);
+	assert!(result.is_err(), "FileTarget should reject ::Symbol query via custom Deserialize");
 }
 
 #[test]
@@ -58,10 +52,7 @@ fn file_target_accepts_valid_fs_target_via_deserialize() {
 		"content": "x"
 	});
 	let result: Result<Op, _> = serde_json::from_value(json);
-	assert!(
-		result.is_ok(),
-		"FileTarget should accept valid FsLocator with no query"
-	);
+	assert!(result.is_ok(), "FileTarget should accept valid FsLocator with no query");
 }
 
 // ── SymbolTarget ─────────────────────────────────────────────────
@@ -101,10 +92,7 @@ fn symbol_target_rejects_uri_locator_via_deserialize() {
 		"content": "x"
 	});
 	let result: Result<Op, _> = serde_json::from_value(json);
-	assert!(
-		result.is_err(),
-		"SymbolTarget should reject URI locator via custom Deserialize"
-	);
+	assert!(result.is_err(), "SymbolTarget should reject URI locator via custom Deserialize");
 }
 
 #[test]
@@ -123,10 +111,7 @@ fn symbol_target_accepts_valid_symbol_target_via_deserialize() {
 		"content": "x"
 	});
 	let result: Result<Op, _> = serde_json::from_value(json);
-	assert!(
-		result.is_ok(),
-		"SymbolTarget should accept valid FsLocator with ::Symbol query"
-	);
+	assert!(result.is_ok(), "SymbolTarget should accept valid FsLocator with ::Symbol query");
 }
 
 // ── CssTarget ────────────────────────────────────────────────────
@@ -144,10 +129,7 @@ fn css_target_rejects_uri_locator_via_deserialize() {
 		"replace": ".new"
 	});
 	let result: Result<Op, _> = serde_json::from_value(json);
-	assert!(
-		result.is_err(),
-		"CssTarget should reject URI locator via custom Deserialize"
-	);
+	assert!(result.is_err(), "CssTarget should reject URI locator via custom Deserialize");
 }
 
 #[test]
@@ -163,10 +145,7 @@ fn css_target_accepts_valid_fs_target_via_deserialize() {
 		"replace": ".new"
 	});
 	let result: Result<Op, _> = serde_json::from_value(json);
-	assert!(
-		result.is_ok(),
-		"CssTarget should accept valid FsLocator"
-	);
+	assert!(result.is_ok(), "CssTarget should accept valid FsLocator");
 }
 
 // ── HeadingTarget ────────────────────────────────────────────────
@@ -182,10 +161,7 @@ fn heading_target_rejects_uri_locator_via_deserialize() {
 		}
 	});
 	let result: Result<Op, _> = serde_json::from_value(json);
-	assert!(
-		result.is_err(),
-		"HeadingTarget should reject URI locator via custom Deserialize"
-	);
+	assert!(result.is_err(), "HeadingTarget should reject URI locator via custom Deserialize");
 }
 
 #[test]
@@ -199,8 +175,5 @@ fn heading_target_accepts_valid_fs_target_via_deserialize() {
 		}
 	});
 	let result: Result<Op, _> = serde_json::from_value(json);
-	assert!(
-		result.is_ok(),
-		"HeadingTarget should accept valid FsLocator"
-	);
+	assert!(result.is_ok(), "HeadingTarget should accept valid FsLocator");
 }

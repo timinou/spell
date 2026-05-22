@@ -4,8 +4,7 @@
 //! resolved by the kernel SchemeRegistry before brush's normal expansion sees
 //! them. Single-quoted text stays literal (bash semantics).
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use brush_core::{ExecutionParameters, WordPreprocessor};
 use pi_code_path::{
@@ -14,7 +13,8 @@ use pi_code_path::{
 };
 use pi_natives::exec::scheme_preprocessor::SchemeWordPreprocessor;
 
-/// Build a scheme registry with one fs-backed test scheme and one virtual scheme.
+/// Build a scheme registry with one fs-backed test scheme and one virtual
+/// scheme.
 fn test_registry() -> (Arc<SchemeRegistry>, tempfile::TempDir) {
 	let dir = tempfile::tempdir().unwrap();
 	std::fs::write(dir.path().join("hello.txt"), "fixture").unwrap();
@@ -26,10 +26,10 @@ fn test_registry() -> (Arc<SchemeRegistry>, tempfile::TempDir) {
 		layout:       PathLayout::Direct,
 		loader:       ContentLoader::FsRead { mode: ReadMode::Utf8Text },
 		capabilities: SchemeCapabilities {
-			fs_backed:           true,
+			fs_backed: true,
 			codepath_compatible: true,
-			bash_expandable:     true,
-			cache:               CacheStrategy::None,
+			bash_expandable: true,
+			cache: CacheStrategy::None,
 			..Default::default()
 		},
 	})
@@ -38,13 +38,11 @@ fn test_registry() -> (Arc<SchemeRegistry>, tempfile::TempDir) {
 		scheme:       "tvirt",
 		root:         RootTemplate::Virtual,
 		layout:       PathLayout::Direct,
-		loader:       ContentLoader::Static {
-			table: &phf::phf_map! { "x" => "data" },
-		},
+		loader:       ContentLoader::Static { table: &phf::phf_map! { "x" => "data" } },
 		capabilities: SchemeCapabilities {
-			fs_backed:           false,
-			bash_expandable:     false,
-			cache:               CacheStrategy::None,
+			fs_backed: false,
+			bash_expandable: false,
+			cache: CacheStrategy::None,
 			..Default::default()
 		},
 	})
@@ -139,16 +137,17 @@ fn matrix_execution_params_carries_preprocessor() {
 
 #[test]
 fn matrix_preprocessor_keeps_registry_alive() {
-	// Box::leak via Arc semantics: SchemeWordPreprocessor holds Arc<SchemeRegistry>;
-	// dropping the local reg variable after construction shouldn't invalidate.
+	// Box::leak via Arc semantics: SchemeWordPreprocessor holds
+	// Arc<SchemeRegistry>; dropping the local reg variable after construction
+	// shouldn't invalidate.
 	let pre_arc: Arc<dyn brush_core::WordPreprocessor> = {
 		let (reg, _dir) = test_registry();
 		let pre = SchemeWordPreprocessor::new(reg, None);
 		Arc::new(pre) as Arc<dyn brush_core::WordPreprocessor>
 	};
 	// reg dropped; pre_arc still owns it.
-	// Calling preprocess on a known-good fixture is racy because the tempdir is gone,
-	// so just sanity-check the trait dispatch works.
+	// Calling preprocess on a known-good fixture is racy because the tempdir is
+	// gone, so just sanity-check the trait dispatch works.
 	let _ = pre_arc.preprocess("unrelated://word");
 }
 
@@ -164,10 +163,7 @@ fn matrix_session_aware_local_resolves_under_session_dir() {
 	std::fs::write(&file, "note").unwrap();
 
 	let ctx = SessionContext::new(dir.path(), "/home/u").with_session_dir(&sess);
-	let reg = Arc::new(SchemeRegistry::from_static(
-		SCHEME_FACTORIES.iter().copied(),
-		Some(&ctx),
-	));
+	let reg = Arc::new(SchemeRegistry::from_static(SCHEME_FACTORIES.iter().copied(), Some(&ctx)));
 	let pre = SchemeWordPreprocessor::new(reg, Some(ctx));
 	let out = pre.preprocess("local://note.txt").unwrap();
 	assert_eq!(out, format!("'{}'", file.display()));

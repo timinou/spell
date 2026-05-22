@@ -39,11 +39,7 @@ pub struct SchemeRegistry {
 
 impl Default for SchemeRegistry {
 	fn default() -> Self {
-		Self {
-			profiles: HashMap::new(),
-			dynamic:  HashMap::new(),
-			cache:    SchemeCache::new(),
-		}
+		Self { profiles: HashMap::new(), dynamic: HashMap::new(), cache: SchemeCache::new() }
 	}
 }
 
@@ -53,7 +49,8 @@ impl SchemeRegistry {
 	}
 
 	/// Build registry from a slice of static profile factories.
-	/// Each factory builds a `SchemeProfile`; the `'static` scheme name is the key.
+	/// Each factory builds a `SchemeProfile`; the `'static` scheme name is the
+	/// key.
 	pub fn from_static<I>(factories: I, ctx: Option<&SessionContext>) -> Self
 	where
 		I: IntoIterator<Item = fn(Option<&SessionContext>) -> SchemeProfile>,
@@ -71,20 +68,17 @@ impl SchemeRegistry {
 	pub fn register_dynamic_profile(&mut self, profile: SchemeProfile) -> Result<(), Diagnostic> {
 		validate_scheme_name(profile.scheme)?;
 		if RESERVED_SCHEMES.contains(&profile.scheme) {
-			return Err(invalid(format!(
-				"scheme '{}' is reserved by the kernel", profile.scheme
-			)));
+			return Err(invalid(format!("scheme '{}' is reserved by the kernel", profile.scheme)));
 		}
 		if self.dynamic.contains_key(profile.scheme) {
-			return Err(invalid(format!(
-				"scheme '{}' already registered", profile.scheme
-			)));
+			return Err(invalid(format!("scheme '{}' already registered", profile.scheme)));
 		}
 		self.dynamic.insert(profile.scheme.to_string(), profile);
 		Ok(())
 	}
 
-	/// Convenience: build a Callback-backed profile from (name, callback, capabilities).
+	/// Convenience: build a Callback-backed profile from (name, callback,
+	/// capabilities).
 	pub fn register_callback(
 		&mut self,
 		scheme: String,
@@ -94,7 +88,8 @@ impl SchemeRegistry {
 		validate_scheme_name(&scheme)?;
 		if RESERVED_SCHEMES.contains(&scheme.as_str()) {
 			return Err(invalid(format!(
-				"scheme '{scheme}' is reserved by the kernel; rename your MCP server or pick a non-conflicting schemePrefix"
+				"scheme '{scheme}' is reserved by the kernel; rename your MCP server or pick a \
+				 non-conflicting schemePrefix"
 			)));
 		}
 		if self.dynamic.contains_key(&scheme) {
@@ -103,10 +98,10 @@ impl SchemeRegistry {
 			)));
 		}
 		let profile = SchemeProfile {
-			scheme:       Box::leak(scheme.clone().into_boxed_str()),
-			root:         crate::scheme::RootTemplate::Virtual,
-			layout:       PathLayout::Direct,
-			loader:       ContentLoader::Callback(callback),
+			scheme: Box::leak(scheme.clone().into_boxed_str()),
+			root: crate::scheme::RootTemplate::Virtual,
+			layout: PathLayout::Direct,
+			loader: ContentLoader::Callback(callback),
 			capabilities,
 		};
 		self.dynamic.insert(scheme, profile);
@@ -117,9 +112,11 @@ impl SchemeRegistry {
 		self.dynamic.remove(scheme).is_some()
 	}
 
-	/// Look up a profile by scheme name. Static profiles take precedence over dynamic.
+	/// Look up a profile by scheme name. Static profiles take precedence over
+	/// dynamic.
 	pub fn lookup(&self, scheme: &str) -> Option<&SchemeProfile> {
-		self.profiles
+		self
+			.profiles
 			.get(scheme)
 			.or_else(|| self.dynamic.get(scheme))
 	}
@@ -135,7 +132,8 @@ impl SchemeRegistry {
 		s
 	}
 
-	/// Resolve a URI locator. Returns the full `ResolvedContent` or a diagnostic.
+	/// Resolve a URI locator. Returns the full `ResolvedContent` or a
+	/// diagnostic.
 	pub fn resolve(
 		&self,
 		uri: &UriLocator,
@@ -151,13 +149,15 @@ impl SchemeRegistry {
 		let key = CacheKey { scheme: uri.scheme.clone(), body: uri.path.clone() };
 		let url = format!("{}://{}", uri.scheme, uri.path);
 
-		self.cache
+		self
+			.cache
 			.get_or_resolve(key, &profile.capabilities.cache, || {
 				dispatch(profile, &uri.path, &url, ctx, cancel)
 			})
 	}
 
-	/// Variant of `resolve` that skips the cache. Used by tests + invalidation paths.
+	/// Variant of `resolve` that skips the cache. Used by tests + invalidation
+	/// paths.
 	pub fn resolve_uncached(
 		&self,
 		uri: &UriLocator,
@@ -178,7 +178,8 @@ impl SchemeRegistry {
 ///   1. parse the URI body via `PathLayout`
 ///   2. resolve root via `RootTemplate` (None for Virtual)
 ///   3. dispatch to the appropriate path:
-///      - `IdFragment` layout owns its own dispatch (per-fragment file or synthesizer)
+///      - `IdFragment` layout owns its own dispatch (per-fragment file or
+///        synthesizer)
 ///      - else by `ContentLoader` variant
 fn dispatch(
 	profile: &SchemeProfile,
@@ -196,7 +197,10 @@ fn dispatch(
 
 	// IdFragment owns its own dispatch path — bypasses ContentLoader.
 	if let PathLayout::IdFragment { default, fragments } = &profile.layout {
-		let id = m.id.as_deref().ok_or_else(|| invalid("IdFragment without id"))?;
+		let id = m
+			.id
+			.as_deref()
+			.ok_or_else(|| invalid("IdFragment without id"))?;
 		let root = root.ok_or_else(|| invalid("IdFragment requires a non-virtual root"))?;
 		let entry = match m.fragment.as_deref() {
 			Some(f) => fragments.get(f).unwrap_or(default),
@@ -222,16 +226,19 @@ fn dispatch(
 				span:    None,
 			})?;
 			Ok(ResolvedContent {
-				url: url.to_string(),
-				source_path: None,
-				content: Content::Text { value: (*text).to_string() },
-				mime: profile.capabilities.mime_hint.map(String::from),
-				notes: vec![],
+				url:          url.to_string(),
+				source_path:  None,
+				content:      Content::Text { value: (*text).to_string() },
+				mime:         profile.capabilities.mime_hint.map(String::from),
+				notes:        vec![],
 				source_mtime: None,
 			})
 		},
 		ContentLoader::Indexed { lookup } => {
-			let id = m.id.as_deref().ok_or_else(|| invalid("Indexed loader requires Indexed layout"))?;
+			let id = m
+				.id
+				.as_deref()
+				.ok_or_else(|| invalid("Indexed loader requires Indexed layout"))?;
 			let addr = lookup.lookup(id, ctx, cancel)?;
 			read_file_with_range(
 				&addr.path,
@@ -283,11 +290,11 @@ fn resolve_fragment(
 				.collect();
 			let text = synthesize(&spec, &parts);
 			Ok(ResolvedContent {
-				url:         url.to_string(),
-				source_path: Some(id_dir.to_path_buf()),
-				content:     Content::Text { value: text },
-				mime:        mime.map(String::from),
-				notes:       vec![],
+				url:          url.to_string(),
+				source_path:  Some(id_dir.to_path_buf()),
+				content:      Content::Text { value: text },
+				mime:         mime.map(String::from),
+				notes:        vec![],
 				source_mtime: None,
 			})
 		},
@@ -323,11 +330,7 @@ fn synthesize(spec: &SynthSpec, parts: &[(&str, Option<String>)]) -> String {
 	}
 }
 
-fn read_file(
-	path: &Path,
-	mode: ReadMode,
-	url: String,
-) -> Result<ResolvedContent, Diagnostic> {
+fn read_file(path: &Path, mode: ReadMode, url: String) -> Result<ResolvedContent, Diagnostic> {
 	read_file_with_range(path, None, mode, url, None)
 }
 
@@ -390,11 +393,7 @@ fn clamp_range(text: String, range: Option<std::ops::Range<usize>>) -> String {
 }
 
 fn invalid(msg: impl Into<String>) -> Diagnostic {
-	Diagnostic {
-		variant: DiagnosticVariant::ParseError,
-		message: msg.into(),
-		span:    None,
-	}
+	Diagnostic { variant: DiagnosticVariant::ParseError, message: msg.into(), span: None }
 }
 
 fn cancelled() -> Diagnostic {
@@ -415,9 +414,7 @@ pub fn validate_scheme_name(name: &str) -> Result<(), Diagnostic> {
 	let mut chars = name.chars();
 	let first = chars.next().unwrap();
 	if !first.is_ascii_lowercase() {
-		return Err(invalid(format!(
-			"scheme '{name}' must start with [a-z]; got '{first}'"
-		)));
+		return Err(invalid(format!("scheme '{name}' must start with [a-z]; got '{first}'")));
 	}
 	for c in chars {
 		if !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
@@ -448,12 +445,12 @@ mod tests {
 			},
 			loader:       ContentLoader::FsRead { mode: ReadMode::Utf8Text },
 			capabilities: SchemeCapabilities {
-				fs_backed: true,
+				fs_backed:           true,
 				codepath_compatible: true,
-				mime_hint: Some("text/markdown"),
-				cache: CacheStrategy::None,
-				bash_expandable: true,
-				callback_budget: None,
+				mime_hint:           Some("text/markdown"),
+				cache:               CacheStrategy::None,
+				bash_expandable:     true,
+				callback_budget:     None,
 			},
 		}
 	}
@@ -498,10 +495,7 @@ mod tests {
 		let cancel = CancellationToken::new();
 		let r = reg.resolve(&uri, Some(&ctx), &cancel).unwrap();
 		assert_eq!(r.url, "skill://canvas");
-		assert_eq!(
-			r.source_path,
-			Some(dir.path().join(".spell/skills/canvas/SKILL.md"))
-		);
+		assert_eq!(r.source_path, Some(dir.path().join(".spell/skills/canvas/SKILL.md")));
 		match &r.content {
 			Content::Text { value } => assert_eq!(value, "# canvas"),
 			_ => panic!("expected Text"),
@@ -514,10 +508,7 @@ mod tests {
 		let uri = UriLocator { scheme: "nope".into(), path: "x".into() };
 		let cancel = CancellationToken::new();
 		let err = reg.resolve(&uri, None, &cancel).unwrap_err();
-		assert!(matches!(
-			err.variant,
-			DiagnosticVariant::UnknownLocatorScheme { .. }
-		));
+		assert!(matches!(err.variant, DiagnosticVariant::UnknownLocatorScheme { .. }));
 	}
 
 	#[test]
