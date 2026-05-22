@@ -84,3 +84,27 @@ Partial DONE. T10.7 RELATIONS-drawer fix landed in pi-org-engine::buffer::extrac
 :RELATIONS:
 ABOUT: FEAT-773-plan-315-w7-dual-recall-personal-store-f
 :END:
+** ITEM PLAN-315 W3 — code-graph lane in daemon (RepoCache::CodeGraph + symbol/vec hybrid search)
+
+W3 code-graph lane delivered. lane_code.rs wraps pi_code_graph::CodeGraph; CgSearch/CgDefinition/CgReferences/CgCallers commands wired via repo_cache::with_code_lane; 7 new tests. Daemon BM25-only inside cg_search to avoid embedder cold-load; vector-hybrid dispatch reserved for FUP-089. RPC client-side dispatch deferred to W5 cutover wave (FUP-089) where code-graph in-process WarmEngine is replaced; for now the in-process path remains canonical.
+:PROPERTIES:
+:CUSTOM_ID: EP-eed57b7fa557a112
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T16:11:17Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-769-plan-315-w3-code-graph-lane-in-daemon-re
+:END:
+** ITEM PLAN-315 W4 — push-subscribe protocol (daemon → client streaming notifications)
+
+W4 push-subscribe delivered end-to-end. Daemon: subscribe.rs module (EventRegistry, LaneEvents, SubscriptionToken with RAII Drop, bounded sync_channel with lag-drop). ConnState refactor across handle_socket_conn and run_stdio_mode with writer thread + outbox. Client: pi_natives::knowledge_client::KnowledgeSubscription with own socket + background reader. 5 daemon unit + 4 daemon integration + 1 client e2e tests, all green. Heartbeat helper exists (spawn_heartbeat) but not wired to per-connection threads since socket-read-zero already detects disconnects on Unix sockets; cross-NAT heartbeat is FUP-089.
+:PROPERTIES:
+:CUSTOM_ID: EP-2b9fc3aaaf897b3b
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T16:11:52Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-770-plan-315-w4-push-subscribe-protocol-daem
+:END:
