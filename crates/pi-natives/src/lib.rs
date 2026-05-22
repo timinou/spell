@@ -77,7 +77,11 @@ pub mod clipboard;
 pub mod code_buffer;
 pub mod code_graph;
 pub mod code_path;
-pub(crate) mod embedding_worker;
+// `embedding_worker` is the client-side transport to pi-knowledge-worker.
+// PLAN-315 W2 promoted this to `pub` so integration tests + future crates
+// can reach `capabilities()`, `knowledge_request()`, and the Capabilities
+// type without going through NAPI.
+pub mod embedding_worker;
 pub mod fd;
 pub mod fs_cache;
 pub mod glob;

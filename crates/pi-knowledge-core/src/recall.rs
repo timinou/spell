@@ -133,7 +133,7 @@ impl Default for FusionWeights {
 	}
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecallHit {
 	pub id:              String,
 	pub kind:            String,
@@ -152,7 +152,7 @@ fn default_source() -> String {
 	"repo".to_string()
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WhyHit {
 	pub bm25_rank:             Option<usize>,
 	pub vector_rank:           Option<usize>,
