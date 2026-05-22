@@ -17,19 +17,22 @@ extensions and a deferred verification harness.
 
 * Deferred items
 
-** W5 cutover — delete in-process WarmEngine
+** W5 cutover — fail-loud RPC dispatch landed ✓
 
-The RPC fast-path is live and exercised by `rpc_dispatch_parity` and
-`subscribe_client_e2e`. The in-process `WarmEngine` remains as a
-fallback. Deleting it requires:
-- removing ~800 LOC across `recall_engine.rs`, `code_graph.rs`
-- rewriting ~12 unit tests that mock the embedder at the WarmEngine layer
-- introducing `PI_KNOWLEDGE_WORKER=inprocess` env knob for CI / offline
+DELIVERED in this session (2026-05-22):
+- `PI_KNOWLEDGE_WORKER=inprocess` env knob for CI / offline mode
+- `WorkerMode { Daemon, Inprocess }` enum with `worker_mode()` and `reset_worker_mode_for_tests()`
+- `recall_engine::query` dispatches on mode: Daemon → fail-loud RPC; Inprocess → skip RPC, use WarmEngine
+- `code_graph.rs` has no RPC path yet (TODO FUP-089 comment added)
+- `worker_mode.rs` integration tests (2/2) confirming both paths
+- AGENTS.md note about the escape hatch
 
-Recommended ordering: own commit after a 1-release bake-in period to
-confirm the RPC path is stable under real workloads. Estimated 2-4h.
+Remaining (re-scoped):
+- Deleting in-process WarmEngine itself (~800 LOC) is deferred until
+  the RPC path has baked for 1 release. The W5 cutover here is the
+  *dispatch switch*; the actual engine code stays until FUP-089 close.
 
-** W6 — /memory TUI browser
+** W6 — /memory TUI browser (unchanged)
 
 4-tab panel (search / graph / recent / since) with subscribe-driven
 live refresh, /memory slash command, ambient Ctrl-M binding.
@@ -41,7 +44,7 @@ Work involves investigating `packages/coding-agent/src/modes/` panel
 architecture (interactive-mode.ts, mode controllers) and a real
 keybinding integration. Estimated 6-10h.
 
-** W8 — N=10 perf harness
+** W8 — N=10 perf harness (unchanged)
 
 Multi-process orchestration test that measures the hard gates from
 PLAN-315 §perf:
@@ -55,23 +58,11 @@ PLAN-315 §perf:
 
 Estimated 3-4h.
 
-** T10 — all four memory-loop failures resolved this session
-
-Closed:
-- T10.1: scope: ['episode'] added to match test name intent
-- T10.4: timing budget split into rebuild vs warm-search phases
-- T10.5: file-level :RELATIONS: drawer write path via cmd_link
-- T10.6: birthtime-based added vs modified classification
-
-Memory-loop runtime validation (full 11/11 green via bun test) is
-deferred to a session where the bge-m3 model is available; the
-underlying fixes are validated by Rust unit + integration tests
-(8 new tests across pi-org-engine, pi-natives, coding-agent).
-
 * Acceptance
 
 When this FUP closes:
-- W5 cutover commit landed; in-process WarmEngine deleted
+- DELIVERED: W5 cutover commit landed (PI_KNOWLEDGE_WORKER=inprocess, fail-loud mode dispatch, worker_mode.rs tests)
+- Remaining: in-process WarmEngine deletion deferred to after 1-release bake-in
 - /memory TUI panel live; manual smoke artifact recorded
 - N=10 perf harness commit landed with measured numbers
 - All six W*.5 review waves applied (HIGH-confidence findings only)
