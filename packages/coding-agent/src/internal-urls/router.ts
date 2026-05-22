@@ -1,7 +1,38 @@
 /**
  * Internal URL router for internal protocols (agent://, artifact://, memory://, skill://, rule://, mcp://, pi://, local://).
+ *
+ * PLAN-310 cutover note: this router is being phased out. Schemes listed in
+ * `KERNEL_OWNED_SCHEMES` short-circuit `resolve()` with `RouterDelegateToKernel`,
+ * which callers (get.ts:tryResolveViaInternalRouter) treat as "fall through to
+ * `executeCodePath`". The set grows one scheme per cutover commit until all
+ * registered schemes are kernel-owned, at which point the entire router is
+ * deleted (Phase 4).
  */
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
+
+/**
+ * Schemes whose resolution has been migrated to the kernel SchemeRegistry.
+ * `InternalUrlRouter.resolve()` throws `RouterDelegateToKernel` for any URL
+ * with a scheme in this set; callers must catch and fall through to the
+ * kernel via `executeCodePath`.
+ *
+ * Order of entry mirrors PLAN-310 cutover order: simplest schemes first.
+ */
+export const KERNEL_OWNED_SCHEMES: ReadonlySet<string> = new Set<string>([
+	// populated per cutover commit; see PLAN-310 Phase 2
+]);
+
+/**
+ * Sentinel exception thrown by `InternalUrlRouter.resolve()` when the URL's
+ * scheme is in `KERNEL_OWNED_SCHEMES`. Callers catch this to delegate to the
+ * kernel without raising a user-facing error.
+ */
+export class RouterDelegateToKernel extends Error {
+	constructor(public readonly scheme: string) {
+		super(`scheme '${scheme}' delegated to kernel SchemeRegistry`);
+		this.name = "RouterDelegateToKernel";
+	}
+}
 
 /**
  * Router for internal URL schemes.
@@ -37,6 +68,12 @@ export class InternalUrlRouter {
 	 * @throws Error if scheme is not registered or resolution fails
 	 */
 	async resolve(input: string): Promise<InternalResource> {
+		// PLAN-310 cutover: schemes migrated to kernel signal delegation via sentinel.
+		const schemeMatch = input.match(/^([a-z][a-z0-9+.-]*):\/\//i);
+		if (schemeMatch && KERNEL_OWNED_SCHEMES.has(schemeMatch[1].toLowerCase())) {
+			throw new RouterDelegateToKernel(schemeMatch[1].toLowerCase());
+		}
+
 		let parsed: URL;
 		try {
 			parsed = new URL(input);
