@@ -1,0 +1,36 @@
+#+TITLE: Cutover skill scheme to kernel — multi-source discovery
+#+STATE: ITEM
+#+SESSION_ID: 14dd802985b2a5f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan309/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
+#+BLOCKED_BY: BUG-393
+#+CUSTOM_ID: BUG-394-cutover-skill-scheme-to-kernel-multi-sou
+#+LAYER: kernel
+#+PLAN: PLAN-310
+
+* Initial Message
+
+please explain. what the deferred items are about and what the difficulty is and what it would enable. explain deeply, show the plan and how you would implement it
+
+Same shape as BUG-393 (rule scheme cutover).
+
+The TS SkillProtocolHandler resolves names against an in-memory list of Skill objects aggregated from many discovery sources:
+- builtin: .spell/skills/*/SKILL.md
+- claude: .claude/skills/*/SKILL.md
+- claude-plugins
+- codex: .codex/skills/*/SKILL.md
+- agents.md
+- plus support for SKILL.org alongside SKILL.md
+
+The kernel skill.rs profile uses NamedDir against .spell/skills, only matching the builtin source.
+
+Recommended approach: callback profile (D6-style dynamic registration), same as BUG-393.
+
+Implementation:
+1. Remove skill from RESERVED_NATIVE_SCHEMES in scheme-callbacks.ts.
+2. Delete crates/pi-natives/src/code_path/uri/skill.rs.
+3. In sdk.ts session bootstrap, after skill discovery completes, registerScheme that maps body to skill name lookup + relative path under baseDir.
+4. Add to KERNEL_OWNED_SCHEMES via dynamic callback bridge.
+
+Acceptance: skill scheme works for skills from any discovery source; bash expansion resolves via brush; agent get tool resolves.
+
+See BUG-393 for the analogous rule scheme work; both should land in the same PR.
