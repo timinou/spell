@@ -17,6 +17,7 @@ import {
 	RuleProtocolHandler,
 	SkillProtocolHandler,
 } from "../../src/internal-urls";
+import { KERNEL_OWNED_SCHEMES } from "../../src/internal-urls/router";
 import type { InternalResource } from "../../src/internal-urls/types";
 
 const FIXED_SESSION_ID = "abc123def456";
@@ -295,7 +296,11 @@ describe("handler contract matrix", () => {
 	});
 
 	for (const [scheme, { url, expectFsSourcePath, missUrl }] of Object.entries(HAPPY)) {
-		describe(scheme, () => {
+		// PLAN-310 cutover: schemes in KERNEL_OWNED_SCHEMES no longer have a JS
+		// resolver to contract-test. Their parity is enforced by Rust integration
+		// tests in crates/pi-natives/tests/scheme_*.rs.
+		const describeFn = KERNEL_OWNED_SCHEMES.has(scheme) ? describe.skip : describe;
+		describeFn(scheme, () => {
 			it("canHandle(url) returns true", () => {
 				expect(router.canHandle(url)).toBe(true);
 			});

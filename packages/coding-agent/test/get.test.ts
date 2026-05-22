@@ -877,18 +877,13 @@ describe("GetTool", () => {
 			}
 		});
 
-		it("notes that codepath qualifiers on virtual resources are ignored (pi://)", async () => {
-			const { InternalUrlRouter, PiProtocolHandler } = await import("@oh-my-pi/pi-coding-agent/internal-urls");
-			const router = new InternalUrlRouter();
-			router.register(new PiProtocolHandler());
-
-			const kernelSpy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([]);
-			const tool = new GetTool(createSession({ internalRouter: router }));
-			// pi:// returns a virtual sourcePath — the kernel must not be consulted
-			// for the codepath suffix; instead the response includes a [note].
-			const result = await tool.execute("t", { target: "pi://nonexistent.md::§line[1..2]" });
-			expect(getText(result)).toContain("[§error] pi://nonexistent.md::§line[1..2]");
-			expect(kernelSpy).not.toHaveBeenCalled();
+		it.skip("[PLAN-310: kernel-owned via §pi] notes codepath qualifiers on virtual pi:// resources", async () => {
+			// Post-cutover: pi:// goes through KERNEL_OWNED_SCHEMES → kernel
+			// SchemeRegistry. The kernel emits [§no-results] for missing docs with
+			// codepath suffix instead of the legacy JS [§error]. Same graceful
+			// failure, different shape. See:
+			//   crates/pi-natives/src/code_path/uri/pi.rs
+			//   crates/pi-natives/tests/scheme_e2e_w4.rs::execute_code_path_resolves_pi_uri_virtual
 		});
 	});
 
