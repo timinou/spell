@@ -5,6 +5,9 @@
  * link · timeline) under a single action-discriminated tool. Replaces the five
  * org subcommands that were deleted in PLAN-310 W6.
  */
+
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type {
 	AgentTool,
 	AgentToolContext,
@@ -12,8 +15,6 @@ import type {
 	AgentToolUpdateCallback,
 	RenderResultOptions,
 } from "@oh-my-pi/pi-agent-core";
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
 import { executeOrg } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
@@ -24,6 +25,49 @@ import memoryDescription from "../prompts/tools/memory.md" with { type: "text" }
 import { renderStatusLine } from "../tui/status-line";
 import type { ToolSession } from ".";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "./render-utils";
+
+/**
+ * Canonical node kinds (mirrors `RecallKind` in `pi-knowledge-core::recall`).
+ * Used by `scope`, `kind` (save), and `scope_personal_only`'s implicit filter.
+ */
+export const MEMORY_NODE_KINDS = ["episode", "concept", "playbook", "decision", "entity", "actor", "workflow"] as const;
+
+/**
+ * Canonical edge kinds (mirrors the closed variants of `EdgeKind` in
+ * `pi-knowledge-core::graph`; `Other(String)` forward-compat lives in Rust).
+ * Used by `kind` (link), `kinds[]`, and `relations[].kind`.
+ */
+export const MEMORY_EDGE_KINDS = [
+	"DEFINES",
+	"IMPORTS",
+	"CALLS",
+	"REFERENCES",
+	"INHERITS",
+	"RENDERS",
+	"STYLES",
+	"REQUIRES",
+	"REFERS",
+	"ALIASES",
+	"IMPLEMENTS",
+	"DISPATCHES",
+	"TESTS",
+	"USES_KEYWORD",
+	"TYPE_IMPORTS",
+	"TYPE_PARAMETER_OF",
+	"INVOLVED",
+	"ABOUT",
+	"PRODUCED",
+	"DISTILLED_FROM",
+	"MENTIONS",
+	"SUPERSEDES",
+	"DERIVED_FROM",
+	"BLOCKS",
+	"ACTION",
+	"CONTAINS",
+] as const;
+
+const NodeKindLit = Type.Union(MEMORY_NODE_KINDS.map(k => Type.Literal(k)));
+const EdgeKindLit = Type.Union(MEMORY_EDGE_KINDS.map(k => Type.Literal(k)));
 
 export const memorySchema = Type.Object({
 	action: Type.Union(
@@ -39,45 +83,61 @@ export const memorySchema = Type.Object({
 		{ description: "search | about | neighbors | note | save | link | since" },
 	),
 
+	// Unified text field: `search` query · `note` summary · `save` body context.
+	text: Type.Optional(Type.String({ description: "Search query (search) · episode summary (note)" })),
+	// Unified kind field: `save` node kind · `link` edge kind · `neighbors` n/a.
+	kind: Type.Optional(
+		Type.Union([NodeKindLit, EdgeKindLit], {
+			description:
+				"save: episode|concept|playbook|decision · link: INVOLVED|ABOUT|PRODUCED|DISTILLED_FROM|SUPERSEDES|…",
+		}),
+	),
+
 	// search / about / neighbors / since
-	text: Type.Optional(Type.String({ description: "FTS query (search)" })),
 	id: Type.Optional(Type.String({ description: "Item id (about) or focus fallback (neighbors)" })),
 	scope: Type.Optional(
-		Type.Array(Type.String(), {
-			description: "Kind filter: episode, concept, playbook, decision, entity, actor, workflow",
+		Type.Array(NodeKindLit, {
+			description: "Kind filter: episode | concept | playbook | decision | entity | actor | workflow",
 		}),
 	),
 	focus: Type.Optional(Type.String({ description: "Graph focus node id (search, neighbors)" })),
 	hops: Type.Optional(Type.Number({ description: "Graph hop depth (default 1)" })),
-	kinds: Type.Optional(Type.Array(Type.String(), { description: "Edge kind filter (neighbors)" })),
+	kinds: Type.Optional(Type.Array(EdgeKindLit, { description: "Edge kind filter (neighbors)" })),
 	limit: Type.Optional(Type.Number({ description: "Max hits (search)" })),
 	profile: Type.Optional(Type.String({ description: "Recall profile name (search)" })),
-	includePersonal: Type.Optional(Type.Boolean({ description: "Include personal-store memories (search)" })),
-	ts: Type.Optional(Type.String({ description: "ISO-8601 timestamp (since)" })),
+	include_personal: Type.Optional(
+		Type.Boolean({
+			description: "Union with personal-store memories (search; default false)",
+		}),
+	),
+	scope_personal_only: Type.Optional(
+		Type.Boolean({
+			description: "Restrict search to personal store only (search; default false)",
+		}),
+	),
+	ts: Type.Optional(
+		Type.Union([Type.String(), Type.Number()], {
+			description: "ISO-8601 string or epoch-ms number (since)",
+		}),
+	),
 
-	// note
-	note_text: Type.Optional(Type.String({ description: "Episode summary (note)" })),
-	note_about: Type.Optional(Type.Array(Type.String(), { description: "ABOUT edges (note)" })),
-	note_involved: Type.Optional(Type.Array(Type.String(), { description: "INVOLVED edges (note)" })),
+	// note / save edge-list shorthands (note inherits these from the unified set)
+	about: Type.Optional(Type.Array(Type.String(), { description: "ABOUT edges (note, save)" })),
+	involved: Type.Optional(Type.Array(Type.String(), { description: "INVOLVED edges (note, save)" })),
 
 	// save
-	save_kind: Type.Optional(
-		Type.String({ description: "Kind: concept | playbook | decision | episode (save)" }),
-	),
 	title: Type.Optional(Type.String({ description: "Title (save)" })),
 	body: Type.Optional(Type.String({ description: "Body (save)" })),
 	distilled_from: Type.Optional(Type.Array(Type.String(), { description: "DISTILLED_FROM edges (save)" })),
 	relations: Type.Optional(
-		Type.Array(
-			Type.Object({ kind: Type.String(), target: Type.String() }),
-			{ description: "Additional typed edges (save)" },
-		),
+		Type.Array(Type.Object({ kind: EdgeKindLit, target: Type.String() }), {
+			description: "Additional typed edges (save)",
+		}),
 	),
 
 	// link
 	from: Type.Optional(Type.String({ description: "Source id (link)" })),
 	to: Type.Optional(Type.String({ description: "Target id (link)" })),
-	link_kind: Type.Optional(Type.String({ description: "Edge kind (link)" })),
 
 	_i: Type.Optional(Type.String({ description: "Intent: ≤6 words, present participle" })),
 });
@@ -96,14 +156,17 @@ const SINCE_SCAN_DIRS = ["concepts", "episodes", "playbooks", "decisions"] as co
  * deferral; finer-grained diffing lands when the recall engine persists a
  * watermark/manifest.
  */
-const SINCE_GRANULARITY_NOTE =
-	"granularity: file-mtime only; added/deleted deferred — see PLAN-310 W7";
+const SINCE_GRANULARITY_NOTE = "granularity: file-mtime only; added/deleted deferred — see PLAN-310 W7";
 
 export class MemoryTool implements AgentTool<typeof memorySchema, MemoryDetails, Theme> {
 	readonly name = "memory";
 	readonly label = "Memory";
 	readonly description = memoryDescription;
 	readonly parameters = memorySchema;
+	// Lenient validation matches the tool-suite convention (find/get/edit/…):
+	// unknown fields pass through. Closed enum on `kind`/`scope`/`kinds`/
+	// `relations[].kind` (F5) still rejects bad *values*, so the strictness
+	// ratchet only relaxes for forward-compat *fields*.
 	readonly lenientArgValidation = true;
 
 	#session: ToolSession;
@@ -156,10 +219,34 @@ export class MemoryTool implements AgentTool<typeof memorySchema, MemoryDetails,
 }
 
 /**
+ * Compact, content-free digest of `params` for telemetry. Booleans + lengths
+ * only — free text (`text`, `body`) never reaches the log stream.
+ */
+function digestMemoryArgs(params: MemoryParams): Record<string, unknown> {
+	return {
+		action: params.action,
+		hasText: typeof params.text === "string" && params.text.length > 0,
+		textLen: typeof params.text === "string" ? params.text.length : 0,
+		hasBody: typeof params.body === "string" && params.body.length > 0,
+		bodyLen: typeof params.body === "string" ? params.body.length : 0,
+		kind: params.kind,
+		scope: params.scope,
+		hasFocus: typeof params.focus === "string" && params.focus.length > 0,
+		hasId: typeof params.id === "string" && params.id.length > 0,
+		hops: params.hops,
+		limit: params.limit,
+		includePersonal: params.include_personal === true,
+		scopePersonalOnly: params.scope_personal_only === true,
+		relationsCount: params.relations?.length ?? 0,
+	};
+}
+
+/**
  * Dispatch a memory `action` to the right executeOrg command. Pure, exported
  * for unit tests.
  */
 export async function dispatchMemoryAction(params: MemoryParams, repoRoot: string): Promise<unknown> {
+	logger.debug("memory.dispatch", digestMemoryArgs(params));
 	switch (params.action) {
 		case "search": {
 			const result = executeOrg({
@@ -169,7 +256,7 @@ export async function dispatchMemoryAction(params: MemoryParams, repoRoot: strin
 				focus: params.focus,
 				graphHops: params.hops,
 				limit: params.limit,
-				includePersonal: params.includePersonal,
+				includePersonal: params.include_personal,
 				profile: params.profile,
 				repoRoot,
 			});
@@ -179,8 +266,8 @@ export async function dispatchMemoryAction(params: MemoryParams, repoRoot: strin
 		case "about": {
 			const focusId = params.id ?? params.focus;
 			if (!focusId) throw new Error("memory.about requires `id`");
-			// subgraph(hops=1) returns the focus node + its 1-hop neighbours,
-			// fulfilling the get+neighbours fusion the spec asks for.
+			// subgraph(hops=1) is the cheapest single-node fetch the native
+			// surface offers; we then narrow it to {node, neighbors[], lineage[]}.
 			const result = executeOrg({
 				command: "subgraph",
 				root: focusId,
@@ -188,7 +275,7 @@ export async function dispatchMemoryAction(params: MemoryParams, repoRoot: strin
 				repoRoot,
 			});
 			if (result.error) throw new Error(String(result.output));
-			return result.output;
+			return buildAboutResult(focusId, result.output);
 		}
 		case "neighbors": {
 			const focusId = params.focus ?? params.id;
@@ -204,63 +291,145 @@ export async function dispatchMemoryAction(params: MemoryParams, repoRoot: strin
 			return result.output;
 		}
 		case "note": {
-			if (!params.note_text) throw new Error("memory.note requires `note_text`");
+			if (!params.text) throw new Error("memory.note requires `text`");
 			const result = executeOrg({
 				command: "remember",
 				kind: "episode",
-				summary: params.note_text,
-				about: params.note_about,
-				involves: params.note_involved,
+				summary: params.text,
+				about: params.about,
+				involves: params.involved,
 				repoRoot,
 			});
 			if (result.error) throw new Error(String(result.output));
 			return result.output;
 		}
 		case "save": {
-			if (!params.save_kind) throw new Error("memory.save requires `save_kind`");
+			if (!params.kind) throw new Error("memory.save requires `kind`");
 			if (!params.title) throw new Error("memory.save requires `title`");
 			const summary = params.body ? `${params.title}\n\n${params.body}` : params.title;
-			const aboutEdges = params.relations?.filter(r => r.kind === "ABOUT").map(r => r.target);
-			const involvesEdges = params.relations?.filter(r => r.kind === "INVOLVED").map(r => r.target);
-			const producedEdges = params.relations?.filter(r => r.kind === "PRODUCED").map(r => r.target);
-			const supersedesEdges = params.relations?.filter(r => r.kind === "SUPERSEDES").map(r => r.target);
+			const relationAbout = params.relations?.filter(r => r.kind === "ABOUT").map(r => r.target);
+			const relationInvolved = params.relations?.filter(r => r.kind === "INVOLVED").map(r => r.target);
+			const relationProduced = params.relations?.filter(r => r.kind === "PRODUCED").map(r => r.target);
+			const relationSupersedes = params.relations?.filter(r => r.kind === "SUPERSEDES").map(r => r.target);
+			// Merge top-level `about`/`involved` shorthand with `relations[]` entries.
+			const aboutEdges = mergeEdgeLists(params.about, relationAbout);
+			const involvesEdges = mergeEdgeLists(params.involved, relationInvolved);
 			const result = executeOrg({
 				command: "remember",
-				kind: params.save_kind,
+				kind: params.kind,
 				summary,
 				distilledFrom: params.distilled_from,
-				about: aboutEdges && aboutEdges.length > 0 ? aboutEdges : undefined,
-				involves: involvesEdges && involvesEdges.length > 0 ? involvesEdges : undefined,
-				produced: producedEdges && producedEdges.length > 0 ? producedEdges : undefined,
-				supersedes: supersedesEdges && supersedesEdges.length > 0 ? supersedesEdges : undefined,
+				about: aboutEdges,
+				involves: involvesEdges,
+				produced: relationProduced && relationProduced.length > 0 ? relationProduced : undefined,
+				supersedes: relationSupersedes && relationSupersedes.length > 0 ? relationSupersedes : undefined,
 				repoRoot,
 			});
 			if (result.error) throw new Error(String(result.output));
 			return result.output;
 		}
 		case "link": {
-			if (!params.from || !params.to || !params.link_kind) {
-				throw new Error("memory.link requires `from`, `to`, and `link_kind`");
+			if (!params.from || !params.to || !params.kind) {
+				throw new Error("memory.link requires `from`, `to`, and `kind`");
 			}
 			const result = executeOrg({
 				command: "link",
 				from: params.from,
 				to: params.to,
-				kind: params.link_kind,
+				kind: params.kind,
 				repoRoot,
 			});
 			if (result.error) throw new Error(String(result.output));
 			return result.output;
 		}
 		case "since": {
-			if (!params.ts) throw new Error("memory.since requires `ts`");
-			return await diffMemorySince(repoRoot, params.ts);
+			if (params.ts === undefined) throw new Error("memory.since requires `ts`");
+			const tsIso = normalizeTsToIso(params.ts);
+			return await diffMemorySince(repoRoot, tsIso);
 		}
 		default: {
 			const exhaustive: never = params.action;
 			throw new Error(`Unknown memory action: ${String(exhaustive)}`);
 		}
 	}
+}
+
+function mergeEdgeLists(a: string[] | undefined, b: string[] | undefined): string[] | undefined {
+	const merged = [...(a ?? []), ...(b ?? [])];
+	if (merged.length === 0) return undefined;
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const id of merged) {
+		if (seen.has(id)) continue;
+		seen.add(id);
+		out.push(id);
+	}
+	return out;
+}
+
+/**
+ * Accept ISO-8601 string OR epoch-ms number; return canonical ISO string.
+ * `Date.parse` accepts most ISO variants; pure digits route through `new Date(n)`.
+ */
+function normalizeTsToIso(ts: string | number): string {
+	if (typeof ts === "number") {
+		if (!Number.isFinite(ts)) throw new Error(`memory.since: invalid timestamp: ${ts}`);
+		return new Date(ts).toISOString();
+	}
+	return ts;
+}
+
+/**
+ * Reshape a `subgraph(hops=1)` result into the agent-facing `about` payload:
+ *   { node:{id,kind,title}, neighbors:[{id,kind,via}], lineage:[id, …] }
+ *
+ * `via` is the edge kind that connects the neighbour to the focus, with
+ * direction encoded by edge orientation (out = focus→other, in = other→focus).
+ * `lineage` is the focus's 1-hop closure over DISTILLED_FROM / SUPERSEDES —
+ * the "where did this come from" chain T10.9 asserts.
+ */
+function buildAboutResult(
+	focusId: string,
+	output: unknown,
+): {
+	node: { id: string; kind?: string; title?: string };
+	neighbors: Array<{ id: string; kind: string; via: "in" | "out" }>;
+	lineage: string[];
+} {
+	const { nodes, edges } = output as {
+		nodes?: Array<Record<string, unknown>>;
+		edges?: Array<Record<string, unknown>>;
+	};
+	const nodeArr = Array.isArray(nodes) ? nodes : [];
+	const edgeArr = Array.isArray(edges) ? edges : [];
+	const seed = nodeArr.find(n => n.id === focusId);
+	const node = {
+		id: focusId,
+		kind: typeof seed?.kind === "string" ? (seed.kind as string) : undefined,
+		title: typeof seed?.title === "string" ? (seed.title as string) : undefined,
+	};
+	const neighborSeen = new Set<string>();
+	const neighbors: Array<{ id: string; kind: string; via: "in" | "out" }> = [];
+	const lineage: string[] = [];
+	const lineageSeen = new Set<string>();
+	for (const edge of edgeArr) {
+		const from = String(edge.from ?? "");
+		const to = String(edge.to ?? "");
+		const kind = String(edge.kind ?? "");
+		if (from !== focusId && to !== focusId) continue;
+		const via: "in" | "out" = from === focusId ? "out" : "in";
+		const otherId = via === "out" ? to : from;
+		const key = `${otherId}|${kind}|${via}`;
+		if (!neighborSeen.has(key)) {
+			neighborSeen.add(key);
+			neighbors.push({ id: otherId, kind, via });
+		}
+		if ((kind === "DISTILLED_FROM" || kind === "SUPERSEDES") && !lineageSeen.has(otherId)) {
+			lineageSeen.add(otherId);
+			lineage.push(otherId);
+		}
+	}
+	return { node, neighbors, lineage };
 }
 
 /**
@@ -275,7 +444,13 @@ export async function dispatchMemoryAction(params: MemoryParams, repoRoot: strin
 export async function diffMemorySince(
 	repoRoot: string,
 	tsIso: string,
-): Promise<{ added: unknown[]; modified: Array<{ id: string; file: string; mtime: string }>; deleted: unknown[]; ts: string; note: string }> {
+): Promise<{
+	added: unknown[];
+	modified: Array<{ id: string; file: string; mtime: string }>;
+	deleted: unknown[];
+	ts: string;
+	note: string;
+}> {
 	const tsMs = Date.parse(tsIso);
 	if (!Number.isFinite(tsMs)) {
 		throw new Error(`memory.since: invalid timestamp: ${tsIso}`);
@@ -354,19 +529,19 @@ function buildMemoryCallPreview(args: MemoryParams): MemoryCallPreview {
 			if (args.kinds?.length) pushMeta(meta, "kinds", args.kinds.join(","), TRUNCATE_LENGTHS.SHORT);
 			break;
 		case "note":
-			pushMeta(meta, "text", args.note_text);
+			pushMeta(meta, "text", args.text);
 			break;
 		case "save":
-			pushMeta(meta, "kind", args.save_kind, TRUNCATE_LENGTHS.SHORT);
+			pushMeta(meta, "kind", args.kind, TRUNCATE_LENGTHS.SHORT);
 			pushMeta(meta, "title", args.title);
 			break;
 		case "link":
 			pushMeta(meta, "from", args.from, TRUNCATE_LENGTHS.SHORT);
 			pushMeta(meta, "to", args.to, TRUNCATE_LENGTHS.SHORT);
-			pushMeta(meta, "kind", args.link_kind, TRUNCATE_LENGTHS.SHORT);
+			pushMeta(meta, "kind", args.kind, TRUNCATE_LENGTHS.SHORT);
 			break;
 		case "since":
-			pushMeta(meta, "ts", args.ts, TRUNCATE_LENGTHS.SHORT);
+			pushMeta(meta, "ts", typeof args.ts === "number" ? String(args.ts) : args.ts, TRUNCATE_LENGTHS.SHORT);
 			break;
 	}
 	return { description: args.action, meta };
@@ -398,7 +573,23 @@ export function formatMemoryResult(result: unknown, action: MemoryAction): strin
 			if (hits.length > 20) lines.push(`[${hits.length - 20} more hits hidden]`);
 			return lines.join("\n");
 		}
-		case "about":
+		case "about": {
+			const node = record.node as { id?: string; title?: string; kind?: string } | undefined;
+			const neighbors = Array.isArray(record.neighbors) ? (record.neighbors as Array<Record<string, unknown>>) : [];
+			const lineage = Array.isArray(record.lineage) ? (record.lineage as string[]) : [];
+			const lines: string[] = [];
+			if (node?.id) lines.push(`node: ${node.id}${node.title ? ` ${node.title}` : ""}`);
+			lines.push(`neighbors: ${neighbors.length}`);
+			for (const n of neighbors.slice(0, 20)) {
+				const nid = typeof n.id === "string" ? n.id : "?";
+				const nk = typeof n.kind === "string" ? ` ${n.kind}` : "";
+				const via = typeof n.via === "string" ? ` (${n.via})` : "";
+				lines.push(`- ${nid}${nk}${via}`);
+			}
+			if (neighbors.length > 20) lines.push(`[${neighbors.length - 20} more neighbors hidden]`);
+			if (lineage.length > 0) lines.push(`lineage: ${lineage.join(", ")}`);
+			return lines.join("\n");
+		}
 		case "neighbors": {
 			const nodes = Array.isArray(record.nodes) ? (record.nodes as Array<Record<string, unknown>>) : [];
 			const edges = Array.isArray(record.edges) ? (record.edges as Array<Record<string, unknown>>) : [];

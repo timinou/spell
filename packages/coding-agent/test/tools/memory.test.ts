@@ -13,10 +13,9 @@ mock.module("@oh-my-pi/pi-natives", () => ({
 	executeOrg: mockExecuteOrg,
 }));
 
-const { dispatchMemoryAction, formatMemoryResult, MemoryTool, memorySchema } = await import(
-	"../../src/tools/memory"
-);
+const { dispatchMemoryAction, formatMemoryResult, MemoryTool, memorySchema } = await import("../../src/tools/memory");
 const { Settings } = await import("@oh-my-pi/pi-coding-agent/config/settings");
+
 import { Value } from "@sinclair/typebox/value";
 import type { ToolSession } from "../../src/tools";
 
@@ -52,7 +51,7 @@ describe("dispatchMemoryAction", () => {
 				hops: 1,
 				limit: 5,
 				profile: "session-start",
-				includePersonal: true,
+				include_personal: true,
 			},
 			repoRoot,
 		)) as { hits: unknown[] };
@@ -69,13 +68,37 @@ describe("dispatchMemoryAction", () => {
 		expect(args.repoRoot).toBe(repoRoot);
 	});
 
-	it("about routes to subgraph with hops=1", async () => {
-		mockExecuteOrg.mockReturnValueOnce(ok({ nodes: [{ id: "CON-x" }], edges: [] }));
-		await dispatchMemoryAction({ action: "about", id: "CON-x" }, repoRoot);
+	it("about returns {node, neighbors[], lineage[]} agent-facing shape", async () => {
+		mockExecuteOrg.mockReturnValueOnce(
+			ok({
+				nodes: [
+					{ id: "CON-x", kind: "concept", title: "Seed" },
+					{ id: "EP-1", kind: "episode", title: "Source" },
+					{ id: "CON-old", kind: "concept", title: "Older" },
+				],
+				edges: [
+					{ from: "CON-x", to: "EP-1", kind: "DISTILLED_FROM" },
+					{ from: "CON-x", to: "CON-old", kind: "SUPERSEDES" },
+					{ from: "EP-1", to: "CON-x", kind: "ABOUT" },
+				],
+			}),
+		);
+		const out = (await dispatchMemoryAction({ action: "about", id: "CON-x" }, repoRoot)) as {
+			node: { id: string; kind?: string; title?: string };
+			neighbors: Array<{ id: string; kind: string; via: "in" | "out" }>;
+			lineage: string[];
+		};
 		const [args] = calls();
 		expect(args.command).toBe("subgraph");
 		expect(args.root).toBe("CON-x");
 		expect(args.hops).toBe(1);
+		expect(out.node).toEqual({ id: "CON-x", kind: "concept", title: "Seed" });
+		expect(out.neighbors).toEqual([
+			{ id: "EP-1", kind: "DISTILLED_FROM", via: "out" },
+			{ id: "CON-old", kind: "SUPERSEDES", via: "out" },
+			{ id: "EP-1", kind: "ABOUT", via: "in" },
+		]);
+		expect(out.lineage).toEqual(["EP-1", "CON-old"]);
 	});
 
 	it("about throws without id or focus", async () => {
@@ -85,10 +108,7 @@ describe("dispatchMemoryAction", () => {
 
 	it("neighbors routes to subgraph with kinds filter", async () => {
 		mockExecuteOrg.mockReturnValueOnce(ok({ nodes: [], edges: [] }));
-		await dispatchMemoryAction(
-			{ action: "neighbors", focus: "CON-root", hops: 2, kinds: ["INVOLVED"] },
-			repoRoot,
-		);
+		await dispatchMemoryAction({ action: "neighbors", focus: "CON-root", hops: 2, kinds: ["INVOLVED"] }, repoRoot);
 		const [args] = calls();
 		expect(args.command).toBe("subgraph");
 		expect(args.root).toBe("CON-root");
@@ -109,9 +129,9 @@ describe("dispatchMemoryAction", () => {
 		await dispatchMemoryAction(
 			{
 				action: "note",
-				note_text: "Debugged auth flow",
-				note_about: ["CON-oauth"],
-				note_involved: ["FEAT-001"],
+				text: "Debugged auth flow",
+				about: ["CON-oauth"],
+				involved: ["FEAT-001"],
 			},
 			repoRoot,
 		);
@@ -128,7 +148,7 @@ describe("dispatchMemoryAction", () => {
 		await dispatchMemoryAction(
 			{
 				action: "save",
-				save_kind: "concept",
+				kind: "concept",
 				title: "JWT Validation",
 				body: "Use ES256 keys.",
 				distilled_from: ["EP-001"],
@@ -152,18 +172,15 @@ describe("dispatchMemoryAction", () => {
 		expect(args.supersedes).toEqual(["CON-old-jwt"]);
 	});
 
-	it("save throws without save_kind", async () => {
-		await expect(
-			dispatchMemoryAction({ action: "save", title: "x" }, repoRoot),
-		).rejects.toThrow("requires `save_kind`");
+	it("save throws without kind", async () => {
+		await expect(dispatchMemoryAction({ action: "save", title: "x" }, repoRoot)).rejects.toThrow("requires `kind`");
 	});
 
 	it("link routes to executeOrg(link, ...)", async () => {
 		mockExecuteOrg.mockReturnValueOnce(ok({ revision: 1, file: "/x/y.org" }));
-		const out = (await dispatchMemoryAction(
-			{ action: "link", from: "A", to: "B", link_kind: "INVOLVED" },
-			repoRoot,
-		)) as { revision: number };
+		const out = (await dispatchMemoryAction({ action: "link", from: "A", to: "B", kind: "INVOLVED" }, repoRoot)) as {
+			revision: number;
+		};
 		expect(out.revision).toBe(1);
 		const [args] = calls();
 		expect(args.command).toBe("link");
@@ -173,18 +190,21 @@ describe("dispatchMemoryAction", () => {
 	});
 
 	it("link throws on missing fields", async () => {
-		await expect(
-			dispatchMemoryAction({ action: "link", from: "A", to: "B" }, repoRoot),
-		).rejects.toThrow("requires `from`, `to`, and `link_kind`");
+		await expect(dispatchMemoryAction({ action: "link", from: "A", to: "B" }, repoRoot)).rejects.toThrow(
+			"requires `from`, `to`, and `kind`",
+		);
 	});
 
 	it("since with empty memory dir returns no modified entries", async () => {
 		const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "mem-since-empty-"));
 		try {
-			const out = (await dispatchMemoryAction(
-				{ action: "since", ts: "2026-05-21T00:00:00Z" },
-				tmp,
-			)) as { added: unknown[]; modified: unknown[]; deleted: unknown[]; note: string; ts: string };
+			const out = (await dispatchMemoryAction({ action: "since", ts: "2026-05-21T00:00:00Z" }, tmp)) as {
+				added: unknown[];
+				modified: unknown[];
+				deleted: unknown[];
+				note: string;
+				ts: string;
+			};
 			expect(out.added).toEqual([]);
 			expect(out.modified).toEqual([]);
 			expect(out.deleted).toEqual([]);
@@ -219,10 +239,10 @@ describe("dispatchMemoryAction", () => {
 			await Bun.write(nodrawer, "#+TITLE: Episodes 2026-05-22\n");
 			await fs.utimes(nodrawer, new Date("2026-05-22T11:00:00Z"), new Date("2026-05-22T11:00:00Z"));
 
-			const out = (await dispatchMemoryAction(
-				{ action: "since", ts: "2026-05-21T00:00:00Z" },
-				tmp,
-			)) as { modified: Array<{ id: string; file: string; mtime: string }>; note: string };
+			const out = (await dispatchMemoryAction({ action: "since", ts: "2026-05-21T00:00:00Z" }, tmp)) as {
+				modified: Array<{ id: string; file: string; mtime: string }>;
+				note: string;
+			};
 
 			expect(out.modified.map(m => m.id)).toEqual(["CON-fresh", "EP-2026-05-22"]);
 			expect(out.note).not.toContain("not yet implemented");
@@ -238,10 +258,9 @@ describe("dispatchMemoryAction", () => {
 			const conceptsDir = path.join(tmp, ".spell", "memory", "concepts");
 			await fs.mkdir(conceptsDir, { recursive: true });
 			await Bun.write(path.join(conceptsDir, "x.org"), ":CUSTOM_ID: CON-x\n");
-			const out = (await dispatchMemoryAction(
-				{ action: "since", ts: "2099-01-01T00:00:00Z" },
-				tmp,
-			)) as { modified: unknown[] };
+			const out = (await dispatchMemoryAction({ action: "since", ts: "2099-01-01T00:00:00Z" }, tmp)) as {
+				modified: unknown[];
+			};
 			expect(out.modified).toEqual([]);
 		} finally {
 			await fs.rm(tmp, { recursive: true, force: true });
@@ -250,9 +269,9 @@ describe("dispatchMemoryAction", () => {
 
 	it("propagates native error.output as Error.message", async () => {
 		mockExecuteOrg.mockReturnValueOnce(err("ITEM_NOT_FOUND: CON-x"));
-		await expect(
-			dispatchMemoryAction({ action: "about", id: "CON-x" }, repoRoot),
-		).rejects.toThrow("ITEM_NOT_FOUND: CON-x");
+		await expect(dispatchMemoryAction({ action: "about", id: "CON-x" }, repoRoot)).rejects.toThrow(
+			"ITEM_NOT_FOUND: CON-x",
+		);
 	});
 });
 
@@ -270,7 +289,7 @@ describe("MemoryTool wiring", () => {
 
 	it("declares the action union in its schema", () => {
 		expect(Value.Check(memorySchema, { action: "search", text: "x" })).toBe(true);
-		expect(Value.Check(memorySchema, { action: "save", save_kind: "concept", title: "t" })).toBe(true);
+		expect(Value.Check(memorySchema, { action: "save", kind: "concept", title: "t" })).toBe(true);
 		expect(Value.Check(memorySchema, { action: "nope" })).toBe(false);
 	});
 
@@ -308,10 +327,25 @@ describe("formatMemoryResult", () => {
 		expect(out).toContain("note: n");
 	});
 
-	it("formats subgraph-like results for about/neighbors", () => {
-		const out = formatMemoryResult({ nodes: [{ id: "A" }, { id: "B" }], edges: [{}] }, "about");
+	it("formats neighbors-shaped results for neighbors", () => {
+		const out = formatMemoryResult({ nodes: [{ id: "A" }, { id: "B" }], edges: [{}] }, "neighbors");
 		expect(out).toContain("nodes: 2");
 		expect(out).toContain("edges: 1");
+	});
+
+	it("formats about-shaped results with node, neighbors, lineage", () => {
+		const out = formatMemoryResult(
+			{
+				node: { id: "CON-x", kind: "concept", title: "Seed" },
+				neighbors: [{ id: "EP-1", kind: "DISTILLED_FROM", via: "out" }],
+				lineage: ["EP-1"],
+			},
+			"about",
+		);
+		expect(out).toContain("node: CON-x Seed");
+		expect(out).toContain("neighbors: 1");
+		expect(out).toContain("EP-1");
+		expect(out).toContain("lineage: EP-1");
 	});
 
 	it("formats save/note response with id+file+kind", () => {
