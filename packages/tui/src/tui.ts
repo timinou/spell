@@ -344,6 +344,7 @@ export class TUI extends Container {
 	#spinnerFrames: string[] = [];
 	#spinnerGlyph: string = "";
 	#spinnerUnsubscribe?: () => void;
+	#spinnerIdleRenders = 0;
 
 	// Overlay stack for modal components rendered on top of base content
 	overlayStack: {
@@ -734,6 +735,7 @@ export class TUI extends Container {
 			this.#spinnerUnsubscribe();
 			this.#spinnerUnsubscribe = undefined;
 		}
+		this.#spinnerIdleRenders = 0;
 	}
 
 	/**
@@ -841,7 +843,11 @@ export class TUI extends Container {
 			return;
 		}
 		this.#doRender();
-		dbgStartup("exec:#executeRender:exit", { lineCount: this.#previousLines.length }, { firstOnly: 6, bucket: "execExit" });
+		dbgStartup(
+			"exec:#executeRender:exit",
+			{ lineCount: this.#previousLines.length },
+			{ firstOnly: 6, bucket: "execExit" },
+		);
 	}
 
 	#handleInput(data: string): void {
@@ -1287,10 +1293,15 @@ export class TUI extends Container {
 		// Extract cursor position before applying line resets (marker must be found first)
 		const cursorPos = this.#extractCursorPosition(newLines, height);
 
-		// Substitute spinner sentinels in place. Auto-subscribes to spinnerClock
-		// on first marker observed so the renderer body never has to run on tick.
+		// Substitute spinner sentinels in place. Subscribes to spinnerClock when
+		// at least one marker is rendered; auto-releases once two consecutive
+		// renders observe no marker so the 80ms tick doesn't run forever.
 		if (this.#substituteSpinnerMarkers(newLines)) {
+			this.#spinnerIdleRenders = 0;
 			this.#ensureSpinnerSubscription();
+		} else if (this.#spinnerUnsubscribe) {
+			this.#spinnerIdleRenders += 1;
+			if (this.#spinnerIdleRenders >= 2) this.#releaseSpinnerSubscription();
 		}
 
 		newLines = this.#applyLineResets(newLines);
