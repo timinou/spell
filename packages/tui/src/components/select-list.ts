@@ -164,39 +164,45 @@ export class SelectList implements Component {
 	}
 
 	handleInput(keyData: string): void {
-		if (this.#filteredItems.length === 0) return;
-		// Up arrow - wrap to bottom when at top
-		if (matchesKey(keyData, "up")) {
-			this.#selectedIndex = this.#selectedIndex === 0 ? this.#filteredItems.length - 1 : this.#selectedIndex - 1;
-			this.#notifySelectionChange();
-		}
-		// Down arrow - wrap to top when at bottom
-		else if (matchesKey(keyData, "down")) {
-			this.#selectedIndex = this.#selectedIndex === this.#filteredItems.length - 1 ? 0 : this.#selectedIndex + 1;
-			this.#notifySelectionChange();
-		}
-		// PageUp - jump up by one visible page
-		else if (matchesKey(keyData, "pageUp")) {
-			this.#selectedIndex = Math.max(0, this.#selectedIndex - this.maxVisible);
-			this.#notifySelectionChange();
-		}
-		// PageDown - jump down by one visible page
-		else if (matchesKey(keyData, "pageDown")) {
-			this.#selectedIndex = Math.min(this.#filteredItems.length - 1, this.#selectedIndex + this.maxVisible);
-			this.#notifySelectionChange();
-		}
-		// Enter
-		else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
-			const selectedItem = this.#filteredItems[this.#selectedIndex];
-			if (selectedItem && this.onSelect) {
-				this.onSelect(selectedItem);
+		try {
+			if (this.#filteredItems.length === 0) return;
+			// Up arrow - wrap to bottom when at top
+			if (matchesKey(keyData, "up")) {
+				this.#selectedIndex = this.#selectedIndex === 0 ? this.#filteredItems.length - 1 : this.#selectedIndex - 1;
+				this.#notifySelectionChange();
 			}
-		}
-		// Escape or Ctrl+C
-		else if (matchesKey(keyData, "escape") || matchesKey(keyData, "esc") || matchesKey(keyData, "ctrl+c")) {
-			if (this.onCancel) {
-				this.onCancel();
+			// Down arrow - wrap to top when at bottom
+			else if (matchesKey(keyData, "down")) {
+				this.#selectedIndex = this.#selectedIndex === this.#filteredItems.length - 1 ? 0 : this.#selectedIndex + 1;
+				this.#notifySelectionChange();
 			}
+			// PageUp - jump up by one visible page
+			else if (matchesKey(keyData, "pageUp")) {
+				this.#selectedIndex = Math.max(0, this.#selectedIndex - this.maxVisible);
+				this.#notifySelectionChange();
+			}
+			// PageDown - jump down by one visible page
+			else if (matchesKey(keyData, "pageDown")) {
+				this.#selectedIndex = Math.min(this.#filteredItems.length - 1, this.#selectedIndex + this.maxVisible);
+				this.#notifySelectionChange();
+			}
+			// Enter
+			else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
+				const selectedItem = this.#filteredItems[this.#selectedIndex];
+				if (selectedItem && this.onSelect) {
+					this.onSelect(selectedItem);
+				}
+			}
+			// Escape or Ctrl+C
+			else if (matchesKey(keyData, "escape") || matchesKey(keyData, "esc") || matchesKey(keyData, "ctrl+c")) {
+				if (this.onCancel) {
+					this.onCancel();
+				}
+			}
+		} finally {
+			// BUG-391: ensure dirty propagates regardless of which branch ran.
+			// The Container dirty-cache (FEAT-762) serves stale lines otherwise.
+			this.#parent?.markDirty();
 		}
 	}
 

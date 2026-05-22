@@ -696,6 +696,17 @@ export class Editor implements Component, Focusable {
 	}
 
 	handleInput(data: string): void {
+		try {
+			this.#handleInputInner(data);
+		} finally {
+			// BUG-391: ensure dirty propagates regardless of which inner branch
+			// took an early return. The Container dirty-cache (FEAT-762) would
+			// otherwise serve stale lines (paste/cursor-jump/etc).
+			this.#parent?.markDirty();
+		}
+	}
+
+	#handleInputInner(data: string): void {
 		const kb = getEditorKeybindings();
 
 		// Handle character jump mode (awaiting next character to jump to)
@@ -1032,7 +1043,7 @@ export class Editor implements Component, Focusable {
 				this.#insertCharacter(printableText);
 			}
 		}
-		this.#parent?.markDirty();
+		// markDirty is now handled by the handleInput wrapper (BUG-391).
 	}
 
 	#layoutText(contentWidth: number): LayoutLine[] {
