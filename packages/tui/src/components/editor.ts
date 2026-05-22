@@ -375,6 +375,22 @@ export class Editor implements Component, Focusable {
 		this.#parent = p;
 	}
 
+	/**
+	 * Propagate a dirty-cache signal up the parent chain.
+	 *
+	 * Public surface so subclasses (e.g. `CustomEditor`) can mark dirty
+	 * from their `handleInput` wrapper without reaching into the private
+	 * `#parent` field. Without this method, BUG-391's `try/finally` wrapper
+	 * threw `TypeError: this.markDirty is not a function` on every keystroke;
+	 * the throw bubbled through the `process.stdin` 'data' listener and was
+	 * re-emitted as a stdin `'error'` event, which the TUI's pty-loss
+	 * detector (BUG-387) treated as terminal destruction and gracefully shut
+	 * the session down on the user's very first input.
+	 */
+	markDirty(): void {
+		this.#parent?.markDirty();
+	}
+
 	constructor(theme: EditorTheme) {
 		this.#theme = theme;
 		this.borderColor = theme.borderColor;

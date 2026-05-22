@@ -12,13 +12,6 @@
 //! - Stale socket files (regular file or dead listener) are unlinked on
 //!   startup before rebinding.
 
-mod embedder_adapter;
-mod engine;
-mod lane_code;
-mod lane_org;
-mod repo_cache;
-mod subscribe;
-
 use std::{
 	fs::{self, File, OpenOptions, Permissions},
 	io::{self, BufRead, BufReader, Write},
@@ -32,10 +25,7 @@ use std::{
 	panic::{self, AssertUnwindSafe},
 	path::{Path, PathBuf},
 	process,
-	sync::{
-		Mutex, OnceLock,
-		atomic::{AtomicBool, AtomicU64, Ordering},
-	},
+	sync::atomic::{AtomicBool, AtomicU64, Ordering},
 	thread,
 	time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -47,7 +37,7 @@ use nix::{
 	sys::signal::{self, SaFlags, SigAction, SigHandler, SigSet, Signal},
 	unistd::{ForkResult, fork, setsid},
 };
-use engine::EmbeddingEngine;
+use pi_knowledge_worker::{Lane, init_engine, lane_org, repo_cache, subscribe, with_engine};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -55,14 +45,17 @@ use serde_json::{Value, json};
 // Shared protocol (used by both stdio and socket modes)
 // =====================================================================
 
-static ENGINE: OnceLock<Mutex<Option<EmbeddingEngine>>> = OnceLock::new();
-
 #[derive(Debug, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 enum Command {
 	Init,
-	EmbedBatch { texts: Vec<String>, batch_size: Option<usize> },
-	EmbedQuery { text: String },
+	EmbedBatch {
+		texts:      Vec<String>,
+		batch_size: Option<usize>,
+	},
+	EmbedQuery {
+		text: String,
+	},
 	/// PLAN-315 W1: warm-load a repo's knowledge cache (org/memory and/or
 	/// code-graph lane). W1 returns a placeholder repo_handle; W2/W3 wire
 	/// the actual cache load.
@@ -74,7 +67,9 @@ enum Command {
 		lanes:            Vec<Lane>,
 	},
 	/// Close a previously-opened repo handle; daemon may evict its cache.
-	Close { repo_handle: String },
+	Close {
+		repo_handle: String,
+	},
 	/// Report daemon RSS and per-repo cache stats. `repo_handle: None`
 	/// returns daemon-wide aggregate.
 	Stats {
@@ -89,7 +84,10 @@ enum Command {
 		query:       pi_knowledge_core::recall::RecallQuery,
 	},
 	/// `about(id)` — node + 1-hop neighbors + distillation lineage.
-	About { repo_handle: String, id: String },
+	About {
+		repo_handle: String,
+		id:          String,
+	},
 	/// BFS expansion from a focus node.
 	Neighbors {
 		repo_handle: String,
@@ -143,15 +141,6 @@ fn default_cg_depth() -> usize {
 	3
 }
 
-/// Knowledge lane identifier. Two cache shapes live in the daemon:
-/// the org/memory recall lane and the code-graph hybrid-search lane.
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Clone, Copy, Hash)]
-#[serde(rename_all = "snake_case")]
-enum Lane {
-	OrgMemory,
-	CodeGraph,
-}
-
 /// Protocol version. Bumped to 2 when PLAN-315 W1 lands the knowledge
 /// command surface. Clients gate features off this number.
 const PROTOCOL_VERSION: u32 = 2;
@@ -193,41 +182,6 @@ enum Response {
 	},
 }
 
-fn engine_slot() -> &'static Mutex<Option<EmbeddingEngine>> {
-	ENGINE.get_or_init(|| Mutex::new(None))
-}
-
-fn init_engine() -> Result<(), String> {
-let engine = EmbeddingEngine::new(false)?;
-	let mut slot = engine_slot()
-		.lock()
-		.map_err(|error| format!("mutex poisoned: {error}"))?;
-	*slot = Some(engine);
-	Ok(())
-}
-
-pub(crate) fn with_engine<T>(
-	mut f: impl FnMut(&EmbeddingEngine) -> Result<T, String>,
-) -> Result<T, String> {
-	{
-		let needs_init = engine_slot()
-			.lock()
-			.map_err(|error| format!("mutex poisoned: {error}"))?
-			.is_none();
-		if needs_init {
-			init_engine()?;
-		}
-	}
-
-	let slot = engine_slot()
-		.lock()
-		.map_err(|error| format!("mutex poisoned: {error}"))?;
-	let engine = slot
-		.as_ref()
-		.ok_or_else(|| "embedding engine unavailable after init".to_string())?;
-	f(engine)
-}
-
 fn handle_command(command: Command) -> Response {
 	match panic::catch_unwind(AssertUnwindSafe(|| match command {
 		Command::Init => {
@@ -252,12 +206,10 @@ fn handle_command(command: Command) -> Response {
 		},
 		Command::Close { repo_handle } => repo_cache::close(&repo_handle),
 		Command::Stats { repo_handle } => repo_cache::stats(repo_handle.as_deref()),
-		Command::Search { repo_handle, query } => {
-			repo_cache::with_org_lane(&repo_handle, |lane| {
-				let hits = lane.search(query)?;
-				Ok(json!({ "hits": hits }))
-			})
-		},
+		Command::Search { repo_handle, query } => repo_cache::with_org_lane(&repo_handle, |lane| {
+			let hits = lane.search(query)?;
+			Ok(json!({ "hits": hits }))
+		}),
 		Command::About { repo_handle, id } => {
 			repo_cache::with_org_lane(&repo_handle, |lane| lane.about(&id))
 		},
@@ -408,11 +360,8 @@ extern "C" fn signal_handler(_: nix::libc::c_int) {
 
 fn install_signal_handlers() {
 	// Flag-set-only handler is async-signal-safe.
-	let action = SigAction::new(
-		SigHandler::Handler(signal_handler),
-		SaFlags::empty(),
-		SigSet::empty(),
-	);
+	let action =
+		SigAction::new(SigHandler::Handler(signal_handler), SaFlags::empty(), SigSet::empty());
 	// SAFETY: handler only touches an AtomicBool which is signal-safe.
 	unsafe {
 		let _ = signal::sigaction(Signal::SIGTERM, &action);
@@ -757,16 +706,11 @@ fn drain_inflight() {
 	}
 }
 
-fn run_socket_mode(
-	socket: PathBuf,
-	pidfile: Option<PathBuf>,
-	idle_secs: u64,
-	daemonize: bool,
-) {
+fn run_socket_mode(socket: PathBuf, pidfile: Option<PathBuf>, idle_secs: u64, daemonize: bool) {
 	let pidfile = pidfile.unwrap_or_else(|| default_pidfile_for(&socket));
 
-	// 1. Acquire the pidfile flock before doing anything observable.
-	//    Contention → another worker is alive → exit silently.
+	// 1. Acquire the pidfile flock before doing anything observable. Contention →
+	//    another worker is alive → exit silently.
 	if !acquire_pidfile_lock(&pidfile) {
 		process::exit(0);
 	}

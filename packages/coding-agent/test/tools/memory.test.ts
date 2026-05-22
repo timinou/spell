@@ -354,3 +354,133 @@ describe("formatMemoryResult", () => {
 		expect(out).toContain("file: /x.org");
 	});
 });
+
+const { MemoryTool: _MemoryToolUnused, peekMemoryProgress, warmMemoryLane } = await import(
+	"../../src/tools/memory"
+);
+void _MemoryToolUnused;
+
+describe("peekMemoryProgress", () => {
+	it("returns the org_lane snapshot when the daemon reports warming", () => {
+		mockExecuteOrg.mockReturnValueOnce(
+			ok({ status: "warming", progress: { phase: "embed", done: 12, total: 40, started_ms: 1 } }),
+		);
+		const snap = peekMemoryProgress("/tmp/repo");
+		expect(snap.status).toBe("warming");
+		expect(snap.progress?.done).toBe(12);
+		expect(snap.progress?.total).toBe(40);
+		expect(snap.progress?.phase).toBe("embed");
+
+		const [args] = calls();
+		expect(args.command).toBe("recall_stats");
+		expect(args.repoRoot).toBe("/tmp/repo");
+	});
+
+	it("treats error / throw as 'unavailable' so we never force the slow init", () => {
+		mockExecuteOrg.mockReturnValueOnce(err("daemon unreachable"));
+		expect(peekMemoryProgress("/tmp/repo").status).toBe("unavailable");
+
+		mockExecuteOrg.mockImplementationOnce(() => {
+			throw new Error("native panic");
+		});
+		expect(peekMemoryProgress("/tmp/repo").status).toBe("unavailable");
+	});
+});
+
+describe("warmMemoryLane", () => {
+	it("fires executeOrg(recall_warm) once and ignores errors", () => {
+		mockExecuteOrg.mockReturnValueOnce(ok({ status: "warming" }));
+		warmMemoryLane("/tmp/repo");
+		const [args] = calls();
+		expect(args.command).toBe("recall_warm");
+		expect(args.repoRoot).toBe("/tmp/repo");
+
+		mockExecuteOrg.mockImplementationOnce(() => {
+			throw new Error("socket missing");
+		});
+		expect(() => warmMemoryLane("/tmp/repo")).not.toThrow();
+	});
+});
+
+describe("MemoryTool.execute progress preamble", () => {
+	function makeTool(): {
+		tool: InstanceType<typeof MemoryTool>;
+		updates: { content: { type: string; text: string }[] }[];
+	} {
+		const updates: { content: { type: string; text: string }[] }[] = [];
+		const session: ToolSession = {
+			cwd: "/tmp/repo",
+			settings: new Settings({ tier: "user" }),
+		} as unknown as ToolSession;
+		const tool = new MemoryTool(session);
+		return {
+			tool,
+			updates,
+		};
+	}
+
+	it("emits onUpdate with progress text when daemon is warming", async () => {
+		const updates: { content: { type: string; text: string }[] }[] = [];
+		const onUpdate = (u: { content: { type: string; text: string }[] }) => {
+			updates.push(u);
+		};
+		const { tool } = makeTool();
+		mockExecuteOrg.mockReturnValueOnce(
+			ok({ status: "warming", progress: { phase: "embed", done: 5, total: 20, started_ms: 0 } }),
+		);
+		mockExecuteOrg.mockReturnValueOnce(ok({ hits: [] }));
+
+		await tool.execute(
+			"call-1",
+			{ action: "search", text: "foo" },
+			undefined,
+			onUpdate as unknown as Parameters<typeof tool.execute>[3],
+		);
+
+		expect(updates).toHaveLength(1);
+		const text = updates[0].content[0].text;
+		expect(text).toContain("indexing org memory");
+		expect(text).toContain("5/20");
+		expect(text).toContain("embed");
+	});
+
+	it("does NOT emit onUpdate when daemon is warm", async () => {
+		const updates: { content: { type: string; text: string }[] }[] = [];
+		const onUpdate = (u: { content: { type: string; text: string }[] }) => {
+			updates.push(u);
+		};
+		const { tool } = makeTool();
+		mockExecuteOrg.mockReturnValueOnce(ok({ status: "warm" }));
+		mockExecuteOrg.mockReturnValueOnce(ok({ hits: [] }));
+
+		await tool.execute(
+			"call-2",
+			{ action: "search", text: "foo" },
+			undefined,
+			onUpdate as unknown as Parameters<typeof tool.execute>[3],
+		);
+
+		expect(updates).toHaveLength(0);
+	});
+
+	it("does NOT consult stats for write actions (note/save/link)", async () => {
+		const updates: { content: { type: string; text: string }[] }[] = [];
+		const onUpdate = (u: { content: { type: string; text: string }[] }) => {
+			updates.push(u);
+		};
+		const { tool } = makeTool();
+		mockExecuteOrg.mockReturnValueOnce(ok({ id: "EP-1", file: "/x.org", kind: "episode" }));
+
+		await tool.execute(
+			"call-3",
+			{ action: "note", text: "hello" },
+			undefined,
+			onUpdate as unknown as Parameters<typeof tool.execute>[3],
+		);
+
+		const commandSeq = calls().map(c => c.command);
+		expect(commandSeq).not.toContain("recall_stats");
+		expect(updates).toHaveLength(0);
+	});
+});
+

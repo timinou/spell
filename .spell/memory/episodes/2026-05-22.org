@@ -84,6 +84,43 @@ Partial DONE. T10.7 RELATIONS-drawer fix landed in pi-org-engine::buffer::extrac
 :RELATIONS:
 ABOUT: FEAT-773-plan-315-w7-dual-recall-personal-store-f
 :END:
+** ITEM handleInput state mutations bypass markDirty; W3 cache serves stale lines
+
+Fixed in commit f6b783a40. Pattern: wrap each handleInput in try/finally with markDirty in finally. Added regression test in packages/tui/test/input-dirty-propagation.test.ts (6/6). All three reported symptoms (spell -r arrows, settings modal arrows, paste invisible) addressed by unconditional dirty propagation.
+Closed via two follow-up commits 37356527a + 6b91a5108. Round 1 fixed SelectList/SettingsList/Input/Editor/SessionList. Round 2 fixed HookSelector (ask tool) via Container.invalidate force-propagation, CustomEditor.handleInput try/finally, Editor.setBorderColor/setTopBorder propagating dirty, StatusLineComponent.invalidate propagating dirty. 8 new regression tests cover all four areas.
+:PROPERTIES:
+:CUSTOM_ID: EP-4a9eb9042157c249
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T14:41:16Z
+:END:
+:RELATIONS:
+ABOUT: BUG-391-handleinput-state-mutations-bypass-markd
+:END:
+** ITEM Non-blocking warm-load on pi-knowledge-worker daemon
+
+PLAN-316 W1 landed: `LaneState { Cold | Warming | Warm | Error }` with `WarmProgress` atomics, slots mutex no longer held during warm-load. 7 integration tests in `tests/warm_progress.rs`; existing repo_cache + protocol_v2 tests still pass.
+:PROPERTIES:
+:CUSTOM_ID: EP-c50f562f6d6faa2
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T15:13:06Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-777-non-blocking-warm-load-on-pi-knowledge-w
+:END:
+** ITEM Memory index build TUI affordance + non-blocking warm
+
+Implementation landed. Daemon: non-blocking warm + progress atomics. pi-natives: `recall_warm` + `recall_stats` commands. memory tool: emits `📚 indexing N/M (phase)` preamble during warming. Eager warm in interactive/RPC/print session_start. Core MemoryStatusController publishes a status-line hook segment. Tests: 7 daemon integration, 6 memory tool, 7 controller, 345 pi-natives unit, 16 pi-knowledge-worker unit — all green. Pre-existing workspace-wide check:ts (166 err) and check:rs (~200 fmt) failures untouched.
+:PROPERTIES:
+:CUSTOM_ID: EP-ffc57c585b30bd97
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T15:13:55Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-316-memory-index-build-tui-affordance-non-bl
+:END:
 ** ITEM PLAN-315 W3 — code-graph lane in daemon (RepoCache::CodeGraph + symbol/vec hybrid search)
 
 W3 code-graph lane delivered. lane_code.rs wraps pi_code_graph::CodeGraph; CgSearch/CgDefinition/CgReferences/CgCallers commands wired via repo_cache::with_code_lane; 7 new tests. Daemon BM25-only inside cg_search to avoid embedder cold-load; vector-hybrid dispatch reserved for FUP-089. RPC client-side dispatch deferred to W5 cutover wave (FUP-089) where code-graph in-process WarmEngine is replaced; for now the in-process path remains canonical.
@@ -108,7 +145,7 @@ W4 push-subscribe delivered end-to-end. Daemon: subscribe.rs module (EventRegist
 :RELATIONS:
 ABOUT: FEAT-770-plan-315-w4-push-subscribe-protocol-daem
 :END:
-** ITEM PLAN-315 autonomous second session 2026-05-22: shipped W5 (PI_KNOWLEDGE_WORKER mode, fail-loud RPC default — FEAT-771), W6 (/memory TUI browser with Alt+M panel, 4 tabs, 534 LOC across 8 new files — FEAT-774), W8 (N=10 perf harness scaffolding + BenchPayload event variant + publish_bench_event helper). Ran W*.5 review+gap-fix waves on W5/W6/W8 — surfaced 12 HIGH findings in total (1 doc lie in W5, 2 P1 this-binding bugs + 1 P2 race in W6, 9 HIGH harness bugs in W8 including wrong JSON keys, RSS sampler ordering, totals math). All HIGH findings fixed in dedicated gap-fix commits. Three key architectural decisions ratified: Alt+M not Ctrl+M (Ctrl+M = \\r byte conflict with Enter); shared-daemon RSS attribution (per-session = total/N); sustained python per session for latency measurement (per-query python3 -c spawn cost dwarfs 50ms gate). 21 commits on plan-315-complete branch at /home/user/code/ora/spell-plan315. All package tests green: pi-knowledge-worker 52/52, pi-natives 349 lib + integration, pi-knowledge-core 91/91, pi-org-engine 81/81. FUP-089 reduced to W5-erase + W8-measurement-run + push_latency.rs bench binary.
+** ITEM PLAN-315 autonomous second session 2026-05-22: shipped W5 (PI_KNOWLEDGE_WORKER mode, fail-loud RPC default — FEAT-771), W6 (/memory TUI browser with Alt+M panel, 4 tabs, 534 LOC across 8 new files — FEAT-774), W8 (N=10 perf harness scaffolding + BenchPayload event variant + publish_bench_event helper). Ran W*.5 review+gap-fix waves on W5/W6/W8 — surfaced 12 HIGH findings in total (1 doc lie in W5, 2 P1 this-binding bugs + 1 P2 race in W6, 9 HIGH harness bugs in W8 including wrong JSON keys, RSS sampler ordering, totals math). All HIGH findings fixed in dedicated gap-fix commits. Three key architectural decisions ratified: Alt+M not Ctrl+M (Ctrl+M = \r byte conflict with Enter); shared-daemon RSS attribution (per-session = total/N); sustained python per session for latency measurement (per-query python3 -c spawn cost dwarfs 50ms gate). 21 commits on plan-315-complete branch at /home/user/code/ora/spell-plan315. All package tests green: pi-knowledge-worker 52/52, pi-natives 349 lib + integration, pi-knowledge-core 91/91, pi-org-engine 81/81. FUP-089 reduced to W5-erase + W8-measurement-run + push_latency.rs bench binary.
 :PROPERTIES:
 :CUSTOM_ID: EP-1233920b90754e27
 :KIND: episode
@@ -118,4 +155,16 @@ ABOUT: FEAT-770-plan-315-w4-push-subscribe-protocol-daem
 :RELATIONS:
 ABOUT: PLAN-315-pi-knowledge-worker-shared-knowledge-dae
 ABOUT: FUP-089-plan-315-deferred-code-graph-lane-w3-pus
+:END:
+** ITEM Unify non-blocking warm-load with code-graph lane and push-subscribe
+
+Merged PLAN-315 W3/W4 (code-graph lane + push-subscribe) with PLAN-316 (non-blocking warm-load).
+:PROPERTIES:
+:CUSTOM_ID: EP-9415ed7116b63f1b
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T21:39:24Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-779-unify-non-blocking-warm-load-with-code-g
 :END:

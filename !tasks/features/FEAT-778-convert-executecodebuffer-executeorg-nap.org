@@ -1,0 +1,201 @@
+#+TITLE: convert executeCodeBuffer + executeOrg NAPI bindings to AsyncTask
+#+STATE: ITEM
+#+SESSION_ID: 14ea14814559e822
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T15-17-13-109Z_14ea14814559e822.jsonl]]
+#+CUSTOM_ID: FEAT-778-convert-executecodebuffer-executeorg-nap
+
+* Initial Message
+
+do a deep, critical review of the work just done, and identify any sources of lag or undue TUI renders. the TUI stil feels a bit slow.
+
+* Goal
+
+Stop blocking the JS event loop while Rust does file I/O + parsing
++ diff work in ~executeCodeBuffer~ and ~executeOrg~. Match the
+already-correct pattern used by ~executeCodePath~ (BUG-393).
+
+* Diagnosis
+
+Today, both bindings are sync:
+
+#+begin_src rust
+#[napi(js_name = "executeCodeBuffer")]
+pub fn execute_code_buffer(options: Value) -> Result<Value> {
+    match execute_code_buffer_inner(&options) { ... }
+}
+
+#[napi(js_name = "executeOrg")]
+pub fn execute_org(options: Value) -> Result<Value> {
+    Ok(execute_org_catching(&options, execute_org_inner))
+}
+#+end_src
+
+The JS main thread is held for the entire Rust call (50-500ms typical
+for parse/diff/format on real files). Cursor stops blinking, input
+buffers, renders stall. User-visible UI hang.
+
+~executeCodePath~ is already correct: returns
+~crate::task::Async<Vec<CodePathChunk>>~, runs on the libuv blocking
+thread pool, frees the JS event loop for the duration.
+
+Both ~execute_code_buffer_inner~ and ~execute_org_inner~ use
+~buffer_registry()~ — the same global state used by the already-async
+~executeCodePath~. Thread-safety is already established.
+
+* Mechanical changes
+
+** 1. Rust bindings (2 files, ~50 LOC total)
+
+   crates/pi-natives/src/code_buffer.rs:1874
+   crates/pi-natives/src/org_buffer.rs:1399
+
+   Before:
+#+begin_src rust
+#[napi(js_name = "executeCodeBuffer")]
+pub fn execute_code_buffer(options: Value) -> Result<Value> {
+    match execute_code_buffer_inner(&options) {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            // synthesize JSON error response, return Ok(...)
+            Ok(json_response(output, true))
+        }
+    }
+}
+#+end_src
+
+   After:
+#+begin_src rust
+#[napi(js_name = "executeCodeBuffer")]
+pub fn execute_code_buffer(
+    options: Value,
+    abort_signal: Option<AbortSignal>,
+) -> crate::task::Async<Value> {
+    let ct = CancelToken::new(None, abort_signal);
+    crate::task::blocking("code_buffer", ct, move |_ct| {
+        match execute_code_buffer_inner(&options) {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                // (same error-to-JSON path as before)
+                Ok(json_response(output, true))
+            }
+        }
+    })
+}
+#+end_src
+
+   Same pattern for ~execute_org~. Inner functions are unchanged —
+   they already take ~&Value~ and return ~Result<Value>~. Just move
+   the body into a ~task::blocking~ closure.
+
+   ~abort_signal~ is additive; existing callers can pass ~None~.
+
+** 2. JS wrappers (2 files, ~10 LOC)
+
+   packages/natives/src/code-buffer/index.ts:6
+   packages/natives/src/org-buffer/index.ts:6
+
+   Before:
+#+begin_src ts
+export function executeCodeBuffer(options: CodeBufferOptions): CodeBufferResult {
+    return native.executeCodeBuffer(options);
+}
+#+end_src
+
+   After:
+#+begin_src ts
+export function executeCodeBuffer(
+    options: CodeBufferOptions,
+    signal?: AbortSignal,
+): Promise<CodeBufferResult> {
+    return native.executeCodeBuffer(options, signal);
+}
+#+end_src
+
+   Type change is what surfaces stale sync callers in tsgo.
+
+** 3. Callers (~15 + ~21 = 36 files, mechanical add of `await`)
+
+   executeCodeBuffer callers (5 prod, 5 test):
+   - packages/coding-agent/src/session/edit-coordinator.ts
+   - packages/coding-agent/src/tools/managed-code-buffer.ts
+   - packages/coding-agent/src/tools/managed-buffer-guards.ts
+   - packages/coding-agent/src/tools/pending-action.ts
+   - packages/coding-agent/src/tools/code-supported-files.ts
+   - test files: code-buffer.test.ts, code-buffer-coord.test.ts,
+     resolve.test.ts, managed-code-buffer-errors.test.ts,
+     harness-bug-repro.test.ts, edit-coordinator.test.ts,
+     wave-j-buffer-registry.test.ts
+
+   executeOrg callers (7 prod, 14 test):
+   - packages/coding-agent/src/tools/memory.ts
+   - packages/coding-agent/src/memories/projection.ts
+   - packages/coding-agent/src/memories/index.ts
+   - packages/coding-agent/src/internal-urls/memory-protocol.ts
+   - packages/org/src/tool.ts
+   - packages/org/src/native-ops.ts
+   - packages/org/src/org-parse.ts
+   - test files in packages/org/test and packages/natives/test
+
+   Mechanical edit per caller:
+   - Add ~await~ before the call.
+   - If the enclosing function isn't ~async~ yet, mark it ~async~ and
+     propagate up. (Most are already ~async~ — the callers live in
+     tool handlers which are async by contract.)
+   - Same for the test files.
+
+** 4. Type sanity
+
+   - tsgo will surface every stale sync usage as a type error
+     ("Promise<X> is not assignable to X"). Use this as the audit list;
+     don't grep.
+   - The internal-urls memory protocol resolver and tool dispatch must
+     remain ~async~ end-to-end. Same for the edit coordinator state
+     machine.
+
+* Error semantics (must preserve)
+
+Both sync bindings today *never throw* on Rust errors — they synthesize
+a ~json_response(error_payload, true)~ Value. The JS sees a regular
+object, often with ~success: false~ or an ~error~ field.
+
+The async version *must* preserve this: never reject the Promise on
+Rust errors; always resolve with the response shape. Panics inside
+the work closure should still be caught (matching
+~execute_org_catching~).
+
+A real Promise rejection only happens for:
+- ~AbortError~ when the signal aborts (new behaviour, opt-in)
+- Genuine NAPI marshalling failures (already a Promise rejection)
+
+* Thread-safety pre-flight
+
+Spot-check before flipping the switch:
+- ~buffer_registry()~ → already used from libuv pool by
+  executeCodePath. Thread-safe (RwLock + Mutex).
+- ~org_buffer_registry()~ → ditto.
+- File I/O: tokio::fs in inner functions? Or std::fs? std::fs is fine
+  on the blocking pool; libuv thread is dedicated to this work.
+
+No expected thread-safety issues, but a quick grep for
+~thread_local!~ or ~RefCell~ in the inner code paths is the audit.
+
+* Verification
+
+- Before: ~time bun -e "..."~ on a representative call returns
+  blocking timing.
+- After: same call returns ~~10ms (just IPC marshal); the work
+  happens off the JS thread.
+- Manual UX: edit a 2000-line file while typing in editor. Pre-fix
+  the cursor stalls; post-fix typing is unaffected.
+- Test suites: ~bun test packages/coding-agent~,
+  ~bun test packages/natives~, ~bun test packages/org~ all pass with
+  the added ~await~ wave.
+
+* Out of scope (separate FEATs)
+
+- AbortSignal *consumer side* (proper cancellation of in-flight Rust
+  work) — wire-up at tool dispatch level. Useful for ~/abort~ to
+  interrupt a heavy edit. Land after the basic conversion is in.
+- Converting other sync NAPI bindings (~sanitizeText~,
+  ~visibleWidth~, etc.) — these are short calls (microseconds), not
+  worth the conversion cost.

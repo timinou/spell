@@ -11,6 +11,7 @@
  * - Extension UI: Extension UI requests are emitted, client responds with extension_ui_response
  */
 import { readJsonl, Snowflake } from "@oh-my-pi/pi-utils";
+import { warmMemoryLane } from "../../tools/memory";
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../../extensibility/extensions";
 import { type Theme, theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
@@ -420,6 +421,8 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 		await extensionRunner.emit({
 			type: "session_start",
 		});
+		// PLAN-316: eager warm of the recall daemon. See extension-ui-controller.
+		warmMemoryLane(session.sessionManager.getCwd());
 	}
 
 	// Output all agent events as JSON
