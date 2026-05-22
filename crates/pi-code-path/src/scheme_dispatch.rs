@@ -66,8 +66,25 @@ impl SchemeRegistry {
 		Self { profiles, dynamic: HashMap::new(), cache: SchemeCache::new() }
 	}
 
-	/// Register a dynamic profile (callback-backed). Errors on collision with
-	/// reserved native names or existing dynamic registrations.
+	/// Register a complete dynamic SchemeProfile. The scheme name in the profile
+	/// is used as the key; reserved names + duplicates are rejected.
+	pub fn register_dynamic_profile(&mut self, profile: SchemeProfile) -> Result<(), Diagnostic> {
+		validate_scheme_name(profile.scheme)?;
+		if RESERVED_SCHEMES.contains(&profile.scheme) {
+			return Err(invalid(format!(
+				"scheme '{}' is reserved by the kernel", profile.scheme
+			)));
+		}
+		if self.dynamic.contains_key(profile.scheme) {
+			return Err(invalid(format!(
+				"scheme '{}' already registered", profile.scheme
+			)));
+		}
+		self.dynamic.insert(profile.scheme.to_string(), profile);
+		Ok(())
+	}
+
+	/// Convenience: build a Callback-backed profile from (name, callback, capabilities).
 	pub fn register_callback(
 		&mut self,
 		scheme: String,
