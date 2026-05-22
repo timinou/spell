@@ -23,6 +23,8 @@ fn opts_with_root(target: impl Into<String>, root: PathBuf) -> CodePathTaskOptio
 		artifact_threshold: None,
 		gitignore:          None,
 		session_id:         None,
+		home:               None,
+		session_dir:        None,
 	}
 }
 
@@ -226,6 +228,8 @@ fn opts_edit_with_root(
 		artifact_threshold: None,
 		gitignore:          None,
 		session_id:         None,
+		home:               None,
+		session_dir:        None,
 	}
 }
 
@@ -436,6 +440,8 @@ fn opts_edit_strict(
 		artifact_threshold: None,
 		gitignore:          None,
 		session_id:         None,
+		home:               None,
+		session_dir:        None,
 	}
 }
 
