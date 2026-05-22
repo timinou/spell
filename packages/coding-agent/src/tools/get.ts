@@ -15,6 +15,7 @@ import { getSchema } from "./codepath-types";
 import type { ToolSession } from "./index";
 import { replaceTabs } from "./render-utils";
 import { type DetailsWithMeta, toolResult } from "./tool-result";
+import { sessionContextOpts } from "./codepath-session";
 
 type GetToolResultDetails = DetailsWithMeta & {
 	format?: string;
@@ -300,6 +301,7 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		}
 
 		const chunks = await executeCodePath({
+			...sessionContextOpts(this.session ?? null),
 			command: "get",
 			target,
 
@@ -416,6 +418,7 @@ export class GetTool implements AgentTool<typeof getSchema> {
 				}
 			}
 			const chunks = await executeCodePath({
+				...sessionContextOpts(this.session ?? null),
 				command: "get",
 				target: effectiveTarget,
 				format: params.format,

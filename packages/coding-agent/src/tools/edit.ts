@@ -29,6 +29,7 @@ import { enforceModeWrite } from "./mode-guard";
 import { resolveCwdRelativePath } from "./path-resolution";
 import { replaceTabs } from "./render-utils";
 import { type DetailsWithMeta, toolResult } from "./tool-result";
+import { sessionContextOpts } from "./codepath-session";
 
 type EditToolResultDetails = DetailsWithMeta & {
 	operations?: number;
@@ -189,6 +190,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 			}
 			const kind = params.operations[0].action.kind as "undo" | "redo";
 			const chunks = await executeCodePath({
+				...sessionContextOpts(this.session ?? null),
 				command: "manage",
 				manage: kind,
 				target: "",
@@ -349,6 +351,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 	): Promise<AgentToolResult> {
 		// Delegate structural ops to the unified executeCodePath edit surface.
 		const chunks = await executeCodePath({
+			...sessionContextOpts(this.session ?? null),
 			command: "edit",
 			target: nodePath.relative(this.session.cwd, targetPath),
 			actions: [action],
