@@ -1,0 +1,51 @@
+#+TITLE: PLAN-315 W4 — push-subscribe protocol (daemon → client streaming notifications)
+#+STATE: ITEM
+#+SESSION_ID: 14ea0d7add095343
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
+#+CUSTOM_ID: FEAT-770-plan-315-w4-push-subscribe-protocol-daem
+#+LAYER: natives tui
+#+PLAN: PLAN-315
+#+PRIORITY: #A
+
+* Initial Message
+
+please investigate why the tests are flaky and investigate what is missing after finishing this report. I also would like a leaner FTS layer over pi-org with a shared user-level daemon. What would that look like? What would it enable?
+
+* Scope
+
+Add subscription channel: daemon pushes =index_changed= events to long-lived clients when a repo's lane rebuilds. Enables /memory TUI live refresh + zero-staleness session views.
+
+* Deliverables
+
+** Wire protocol
+- Connection upgrade: first message =Command::Subscribe { repo_handles: Vec<String>, lanes: Vec<Lane> }=. Daemon flips the connection from request-response to bidirectional streaming.
+- Frame format: line-delimited JSON in both directions. Server frames:
+  #+begin_src jsonc
+  { "event": "index_changed", "repo_handle": "abc", "lane": "OrgMemory", "fingerprint": "..." }
+  { "event": "warm_completed", "repo_handle": "abc", "lane": "CodeGraph", "ms": 4321 }
+  { "event": "evicted",        "repo_handle": "abc", "reason": "idle_ttl" }
+  { "event": "heartbeat",      "ts": "2026-..." }
+  #+end_src
+- Client may interleave queries on the same connection; replies are tagged with optional =request_id= correlator.
+
+** Daemon side
+- One =tokio= task per connection holds a =BroadcastReceiver<Event>=. Ingest watcher publishes on the broadcast channel under the per-lane write lock.
+- Heartbeat every 30s; disconnect on missed.
+- Backpressure: if client lags, drop oldest events (channel bound 256); send =event: "lag" { dropped: N }= on recovery.
+
+** Client side
+- New =pi-natives::knowledge_client::Subscription= handle. =memory= NAPI exposes =subscribe(repo, lanes, callback)= for TUI; non-TUI clients ignore.
+- TUI =/memory= panel (W6) subscribes on open, unsubscribes on close.
+
+** Test matrix
+- =crates/pi-knowledge-worker/tests/subscribe.rs=: 4 tests (subscribe→edit file→push received, multi-subscriber broadcast, lag handling, disconnect→evicted).
+
+* Non-goals
+- TUI consumption (W6 uses it)
+- Drop in-process fallback (W5)
+
+* Acceptance
+- =cargo test -p pi-knowledge-worker= green (12 tests; 8 lifecycle + 4 subscribe)
+- Subscribe → modify .org file → daemon ingest fires → client receives =index_changed= within 500 ms (debounce 250 ms + delivery)
+- 100 concurrent subscribers on same repo all receive each event (broadcast)
+- Killing a subscriber leaks no daemon-side memory (=stats= shows clean slot)

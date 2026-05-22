@@ -840,7 +840,7 @@ mod tests {
 	}
 
 	struct MockWorkerEnv {
-		_guard:          MutexGuard<'static, ()>,
+		_guard:          std::sync::RwLockWriteGuard<'static, ()>,
 		original_worker: Option<OsString>,
 		original_mode:   Option<OsString>,
 		original_state:  Option<OsString>,

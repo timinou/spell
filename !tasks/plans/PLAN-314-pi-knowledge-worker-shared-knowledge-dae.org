@@ -1,0 +1,15 @@
+#+TITLE: pi-knowledge-worker — shared knowledge daemon, push-subscribe, both lanes, TUI + dual-recall
+#+STATE: ITEM
+#+SESSION_ID: 14ea0d7add095343
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
+#+CUSTOM_ID: PLAN-314-pi-knowledge-worker-shared-knowledge-dae
+#+EFFORT: 60h
+#+LAYER: natives coding-agent tui
+#+PRIORITY: #A
+#+RISK: medium
+
+* Initial Message
+
+please investigate why the tests are flaky and investigate what is missing after finishing this report. I also would like a leaner FTS layer over pi-org with a shared user-level daemon. What would that look like? What would it enable?
+
+Bootstrap body — see below for the full text after creation.

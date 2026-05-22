@@ -1,0 +1,47 @@
+#+TITLE: PLAN-315 W5 — drop in-process WarmEngine (cutover); RPC becomes the only path
+#+STATE: ITEM
+#+SESSION_ID: 14ea0d7add095343
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
+#+CUSTOM_ID: FEAT-771-plan-315-w5-drop-in-process-warmengine-c
+#+LAYER: natives
+#+PLAN: PLAN-315
+#+PRIORITY: #A
+
+* Initial Message
+
+please investigate why the tests are flaky and investigate what is missing after finishing this report. I also would like a leaner FTS layer over pi-org with a shared user-level daemon. What would that look like? What would it enable?
+
+* Scope
+
+Delete the in-process =WarmEngine= for both lanes. RPC is the only path; if the daemon socket is unreachable, spawn one (existing lazy-spawn pattern). CI: daemon spawns the same way (no special CI path).
+
+* Deliverables
+
+** Deletions
+- =pi-natives::recall_engine::EngineState::Warm= variant gone; =RecallEngineHandle= becomes a thin RPC client over =WorkerTransport=.
+- =pi-natives::code_graph::CodeGraph= keeps the type for FFI compat but the warm fields drop to =Option<...>= and stay =None= in normal operation.
+- ~800 LOC removed from =pi-natives=.
+
+** Surviving fallback
+- Auto-spawn on first connect (PLAN-310 W3 Subprocess transport) remains. =WorkerTransport::Subprocess= still works for tests + offline.
+- Test escape: =PI_KNOWLEDGE_WORKER=inprocess= forces in-process build of WarmEngine for the duration of one test binary. Required for ~12 unit tests that mock embedder behaviour at the WarmEngine layer.
+
+** Migration carries
+- All previous-wave clients keep working (protocol_version=2)
+- On-disk cache layout unchanged
+
+** Test matrix
+- =cargo test --workspace= must be green
+- Sessions launched in CI must auto-spawn daemon and pass loop tests
+- =bun test packages/coding-agent= green
+
+* Risks
+- Single daemon = single point of failure: lazy-respawn covers crashes; pidfile guarantees one daemon per user.
+- Test isolation: =PI_KNOWLEDGE_WORKER=inprocess= path covers the dozen tests that need it.
+
+* Acceptance
+- =wc -l crates/pi-natives/src/recall_engine.rs= drops from 1274 → ≤ 500
+- =cargo test --workspace= green (BUG-390 already landed pre-flight)
+- =libpi_natives.so= shrinks by ≥ 5 MB vs PLAN-310 close (97.5 MB → ≤ 92.5 MB)
+- Per-session RSS: -75 MB vs PLAN-310 close on a repo with both lanes warm
+- N=10 concurrent sessions: total RSS measured below; target ≤ baseline - 250 MB (carried to W8 perf gate)

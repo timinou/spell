@@ -257,9 +257,21 @@ mod tests {
 	use std::{
 		fs,
 		path::{Path, PathBuf},
+		sync::{Mutex, MutexGuard, PoisonError},
 	};
 
 	use super::*;
+
+	// Tests in this module share `std::env::temp_dir()` and the
+	// `ignore::WalkBuilder` which reads `$HOME/.config/git/ignore`.
+	// Serialise them so parallel cargo-test workers don't race on
+	// HOME mutations from other crates in the same test process or
+	// on filesystem races inside /tmp during dir-tree walks.
+	static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+	fn test_lock() -> MutexGuard<'static, ()> {
+		TEST_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+	}
 
 	#[derive(Debug, Clone, Serialize, Deserialize)]
 	struct TestEntry {
@@ -283,6 +295,7 @@ mod tests {
 
 	#[test]
 	fn cache_round_trip_preserves_entry() {
+		let _guard = test_lock();
 		let temp_dir = temp_dir("round-trip");
 		let _ = fs::remove_dir_all(&temp_dir);
 		fs::create_dir_all(&temp_dir).expect("temp dir should be created");
@@ -307,6 +320,7 @@ mod tests {
 
 	#[test]
 	fn status_tracks_missing_fresh_and_file_drift() {
+		let _guard = test_lock();
 		let root = temp_dir("status");
 		let _ = fs::remove_dir_all(&root);
 		fs::create_dir_all(root.join(".spell/org")).expect("cache dir should be created");

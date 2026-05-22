@@ -1,0 +1,27 @@
+#+TITLE: plan-312-post-review-tui-lag-findings--a
+
+** ITEM PLAN-312 post-review TUI lag findings
+
+After PLAN-312 + BUG-389 work, remaining TUI lag sources:
+
+P0 — Loader still has independent 80ms setInterval calling requestRender each tick (loader.ts:42). W4 SpinnerClock missed it. Every Loader instance is a 12.5Hz render driver until explicit stop().
+
+P0 — tool-execution.ts #updateDisplay() unconditionally clears+rebuilds entire child tree on every spinner tick AND every updateArgs/updateResult call. New Text/Markdown/Image instances created each time → Image caches are per-instance, so sixel/kitty PNG re-encoded every tick for tools with image results. Box cache busted via clear().
+
+P1 — Text/Markdown setText() always invalidates even when text identical. AssistantMessage reconciler calls setText on every stable slot per token.
+
+P1 — AssistantMessage #rebuildChildrenArray() calls #contentContainer.clear() + addChild for every slot per token even when structure unchanged.
+
+P1 — Container.markContainersDirty() (added W3) is unreferenced dead code.
+
+P2 — Box bgFn("test") sample on every render for cache key.
+P2 — Editor: no render cache.</body>
+<parameter name="distilled_from">["FEAT-761","FEAT-762","FEAT-763","BUG-389"]
+:PROPERTIES:
+:CUSTOM_ID: CON-plan-312-post-review-tui-lag-findings--a
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T11:04:12Z
+:END:
+:RELATIONS:
+:END:

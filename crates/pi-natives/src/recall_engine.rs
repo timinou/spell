@@ -748,7 +748,7 @@ mod tests {
 	struct EnvVarGuard {
 		key:     &'static str,
 		prior:   Option<std::ffi::OsString>,
-		_locked: std::sync::MutexGuard<'static, ()>,
+		_locked: std::sync::RwLockWriteGuard<'static, ()>,
 	}
 
 	impl EnvVarGuard {

@@ -45,12 +45,25 @@ const DAEMON_SPAWN_POLL: Duration = Duration::from_millis(25);
 static WORKER: OnceLock<Mutex<Option<WorkerTransport>>> = OnceLock::new();
 
 #[cfg(test)]
-static TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
+static TEST_ENV_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(());
 
+/// Acquire exclusive (writer) access to process env state. Tests that
+/// mutate HOME/PI_EMBEDDING_WORKER/WORKER must hold this guard.
 #[cfg(test)]
-pub(crate) fn lock_test_env() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) fn lock_test_env() -> std::sync::RwLockWriteGuard<'static, ()> {
 	TEST_ENV_LOCK
-		.lock()
+		.write()
+		.unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Acquire shared (reader) access to process env state. Tests that only
+/// *read* HOME via subprocess (e.g. `git init`, `ignore::WalkBuilder`)
+/// take this guard so they can run in parallel with each other but
+/// block any writer mid-transition.
+#[cfg(test)]
+pub(crate) fn lock_test_env_read() -> std::sync::RwLockReadGuard<'static, ()> {
+	TEST_ENV_LOCK
+		.read()
 		.unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
@@ -532,7 +545,7 @@ mod tests {
 	use super::*;
 
 	struct TestWorkerEnv {
-		_guard:          MutexGuard<'static, ()>,
+		_guard:          std::sync::RwLockWriteGuard<'static, ()>,
 		original_worker: Option<OsString>,
 		original_mode:   Option<OsString>,
 		original_state:  Option<OsString>,
@@ -657,7 +670,7 @@ mod socket_tests {
 	/// RAII wrapper that snapshots and restores all env vars the dispatcher
 	/// reads, plus serialises tests through `TEST_ENV_LOCK`.
 	struct SocketEnv {
-		_guard:          MutexGuard<'static, ()>,
+		_guard:          std::sync::RwLockWriteGuard<'static, ()>,
 		original_worker: Option<OsString>,
 		original_socket: Option<OsString>,
 		original_mode:   Option<OsString>,

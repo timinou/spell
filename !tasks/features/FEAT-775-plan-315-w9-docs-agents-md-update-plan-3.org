@@ -1,0 +1,31 @@
+#+TITLE: PLAN-315 W9 — docs, AGENTS.md update, PLAN-315 + FUP-088 close, CHANGELOG
+#+STATE: ITEM
+#+SESSION_ID: 14ea0d7add095343
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
+#+CUSTOM_ID: FEAT-775-plan-315-w9-docs-agents-md-update-plan-3
+#+LAYER: docs
+#+PLAN: PLAN-315
+#+PRIORITY: #B
+
+* Initial Message
+
+please investigate why the tests are flaky and investigate what is missing after finishing this report. I also would like a leaner FTS layer over pi-org with a shared user-level daemon. What would that look like? What would it enable?
+
+* Scope
+
+Close PLAN-315. Final docs sweep. FUP-088 → DONE (W8 TUI and W9 dual-recall both landed).
+
+* Deliverables
+
+- =AGENTS.md=: update "Tool surface" + "Daemon" sections to describe pi-knowledge-worker, =/memory= panel, subscribe model
+- =specs/org-graph-memory.md=: refresh architecture diagram (daemon-centric)
+- =CHANGELOG.md=: PLAN-315 migration note + perf numbers
+- =!tasks/plans/plan-artifacts/PLAN-315/W9-final.md=: link to W8 perf artifact, before/after RSS, deleted-LOC tally
+- Close PLAN-315 → DONE
+- Close FUP-088 → DONE (deviated: folded into PLAN-315)
+- BUG-390 → DONE (pre-flight already; verify still green)
+
+* Acceptance
+- =org validate-plan PLAN-315= clean
+- All FEAT-767..FEAT-774 in DONE
+- AGENTS.md merged, CHANGELOG updated

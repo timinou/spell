@@ -1,0 +1,52 @@
+#+TITLE: workspace cargo-test flake — diff_qualifier + workspace_cache + code_buffer race on HOME/buffer_registry
+#+STATE: ITEM
+#+SESSION_ID: 14ea0d7add095343
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
+#+CUSTOM_ID: BUG-390-workspace-cargo-test-flake-diff-qualifie
+#+LAYER: natives workspace-cache
+#+PLAN: PLAN-315
+#+PRIORITY: #B
+
+* Initial Message
+
+please investigate why the tests are flaky and investigate what is missing after finishing this report. I also would like a leaner FTS layer over pi-org with a shared user-level daemon. What would that look like? What would it enable?
+
+* Symptom
+
+`cargo test --workspace` fails non-deterministically (~0.3% per run, varies by load). Different test fails each invocation:
+- =pi-natives::code_path::diff_qualifier::tests::{clean_tree_returns_empty,modified_file_returns_diff,workspace_diff_returns_multi_file,diff_against_historical_rev}=
+- =pi-workspace-cache::tests::status_tracks_missing_fresh_and_file_drift=
+- =pi-natives::code_buffer::tests::execute_code_buffer_inner_persisted_edit_preserves_undo_history=
+
+Each test passes 100% when its crate runs alone (=cargo test -p <crate>=).
+
+* Root cause
+
+Two mechanisms:
+
+** Mechanism A — HOME env shared, lock asymmetric
+
+=pi-natives::embedding_worker::lock_test_env()= is a process-wide =Mutex<()>= that *writers* (HOME-mutating tests) acquire. *Readers* (tests that spawn =git= or use =ignore::WalkBuilder=) don't acquire it. While a writer holds the lock, HOME points to a tempdir; when the writer drops the tempdir guard, HOME points to a deleted path. Concurrent readers spawning =git= read the missing HOME and behave unexpectedly (silent fail on =git init=, ignore-walker fallthrough).
+
+Confirmed lock-takers (writers):
+- =org_buffer.rs:1815=, =recall_engine.rs:756=, =embedding_worker.rs:{543,669}=, =code_graph.rs:{851,1020}=
+
+Missing lock-takers (readers): all =diff_qualifier= tests, =pi-workspace-cache::status_tracks_*=, any =ignore::WalkBuilder= caller in tests.
+
+** Mechanism B — buffer_registry is process-global
+
+=pi-natives::buffer_registry()= is a singleton with an LRU watcher. Concurrent =execute_code_buffer_inner= calls across tests race on open/close. The assertion =buffer_registry().get(&path).is_some()= after commit fails when an unrelated concurrent test evicts via LRU pressure.
+
+* Fix
+
+1. Promote =lock_test_env= from =pi-natives::embedding_worker= → =pi-workspace-cache::test_support= (lower in dep graph; both crates take it).
+2. Convert from =Mutex<()>= → =RwLock<()>=: writers acquire =write()=, subprocess-spawners acquire =read()=. Preserves parallelism; serialises HOME transitions.
+3. =code_buffer= test → =#[serial_test::serial(buffer_registry)]= attribute. Adds =serial_test= as dev-dep on =pi-natives= (already in workspace via =pi-code-graph=).
+
+Total: ~60 LOC. Lands as pre-flight commit before PLAN-315 W0.
+
+* Acceptance
+
+- =cargo test --workspace= passes 10/10 consecutive runs
+- No new dep added beyond =serial_test= dev-dep on =pi-natives=
+- Existing 4 lock_test_env takers continue to compile + pass

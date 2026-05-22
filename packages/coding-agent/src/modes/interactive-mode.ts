@@ -2083,6 +2083,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	// Selector handling
+	showMemoryBrowser(): void {
+		this.#selectorController.showMemoryBrowser();
+	}
+
 	showSettingsSelector(): void {
 		this.#selectorController.showSettingsSelector();
 	}

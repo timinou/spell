@@ -43,7 +43,8 @@ export type AppAction =
 	| "resume"
 	| "toggleSTT"
 	| "toggleUserPause"
-	| "subagentViewer";
+	| "subagentViewer"
+	| "openMemoryBrowser";
 
 /**
  * All configurable actions.
@@ -90,6 +91,7 @@ export const DEFAULT_APP_KEYBINDINGS: Record<AppAction, KeyId | KeyId[]> = {
 	// terminals) for built-in tab cycling, so the kitty CSI-u sequence never
 	// reaches Spell. alt+j stays free across mainstream terminals.
 	subagentViewer: "alt+j",
+	openMemoryBrowser: "ctrl+m",
 };
 
 /**
@@ -127,6 +129,7 @@ const APP_ACTIONS: AppAction[] = [
 	"toggleSTT",
 	"toggleUserPause",
 	"subagentViewer",
+	"openMemoryBrowser",
 ];
 
 function isAppAction(action: string): action is AppAction {
