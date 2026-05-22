@@ -112,6 +112,24 @@ export interface LanguageDialectInfo {
 	capabilities: string[];
 }
 
+
+/** PLAN-310: result returned by a JS callback registered with registerSchemeCallback. */
+export interface JsResolvedContent {
+	url: string;
+	content: string;
+	mime?: string;
+	notes?: string[];
+}
+
+/** PLAN-310: options for registerSchemeCallback. */
+export interface SchemeCallbackOptions {
+	fsBacked?: boolean;
+	codepathCompatible?: boolean;
+	mimeHint?: string;
+	bashExpandable?: boolean;
+	budgetMs?: number;
+}
+
 declare module "../bindings" {
 	interface NativeBindings {
 		executeCodePath(options: CodePathOptions): Promise<CodePathChunk[]>;
@@ -124,5 +142,10 @@ declare module "../bindings" {
 		listDiagnosticVariants(): DiagnosticVariantInfo[];
 		listLanguageDialects(): LanguageDialectInfo[];
 		listOps(): OpSchemaDto[];
+		// PLAN-310: dynamic scheme registration via TSFn callback.
+		registerSchemeCallback(scheme: string, callback: (err: Error | null, body: string) => JsResolvedContent | Promise<JsResolvedContent>, options?: SchemeCallbackOptions): void;
+		unregisterSchemeCallback(scheme: string): boolean;
+		listRegisteredSchemes(): string[];
+		clearRuntimeSchemes(): void;
 	}
 }

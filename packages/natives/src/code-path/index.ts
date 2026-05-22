@@ -67,3 +67,27 @@ export function listDiagnosticVariants(): DiagnosticVariantInfo[] {
 export function listLanguageDialects(): LanguageDialectInfo[] {
 	return native.listLanguageDialects();
 }
+
+// PLAN-310: dynamic scheme registration helpers.
+export function registerSchemeCallback(
+	scheme: string,
+	callback: (body: string) => Promise<{ url: string; content: string; mime?: string; notes?: string[] }>,
+	options?: import("./types").SchemeCallbackOptions,
+): void {
+	native.registerSchemeCallback(scheme, (err: Error | null, body: string) => {
+		if (err) throw err;
+		return callback(body);
+	}, options);
+}
+
+export function unregisterSchemeCallback(scheme: string): boolean {
+	return native.unregisterSchemeCallback(scheme);
+}
+
+export function listRegisteredSchemes(): string[] {
+	return native.listRegisteredSchemes();
+}
+
+export function clearRuntimeSchemes(): void {
+	native.clearRuntimeSchemes();
+}
