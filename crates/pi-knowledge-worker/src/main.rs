@@ -14,6 +14,7 @@
 
 mod embedder_adapter;
 mod engine;
+mod lane_code;
 mod lane_org;
 mod repo_cache;
 mod subscribe;
@@ -103,6 +104,43 @@ enum Command {
 		repo_handle: String,
 		ts:          lane_org::SinceTimestamp,
 	},
+	/// PLAN-315 W3: code-graph hybrid/bm25/vec search. `kind` defaults to
+	/// "hybrid" if unspecified.
+	CgSearch {
+		repo_handle: String,
+		query:       String,
+		#[serde(default = "default_cg_kind")]
+		kind:        String,
+		#[serde(default = "default_cg_limit")]
+		limit:       usize,
+	},
+	/// `cg_definition` — resolve a symbol query to its primary location.
+	CgDefinition { repo_handle: String, query: String },
+	/// `cg_references` — downstream references via graph_impact, bounded
+	/// by `max_depth` (default 3).
+	CgReferences {
+		repo_handle: String,
+		query:       String,
+		#[serde(default = "default_cg_depth")]
+		max_depth:   usize,
+	},
+	/// `cg_callers` — upstream callers via graph_flow up to `max_depth`.
+	CgCallers {
+		repo_handle: String,
+		query:       String,
+		#[serde(default = "default_cg_depth")]
+		max_depth:   usize,
+	},
+}
+
+fn default_cg_kind() -> String {
+	"hybrid".to_string()
+}
+fn default_cg_limit() -> usize {
+	20
+}
+fn default_cg_depth() -> usize {
+	3
 }
 
 /// Knowledge lane identifier. Two cache shapes live in the daemon:
@@ -134,6 +172,10 @@ fn supported_commands() -> &'static [&'static str] {
 		"since",
 		"subscribe",
 		"unsubscribe",
+		"cg_search",
+		"cg_definition",
+		"cg_references",
+		"cg_callers",
 	]
 }
 
@@ -224,6 +266,30 @@ fn handle_command(command: Command) -> Response {
 		},
 		Command::Since { repo_handle, ts } => {
 			repo_cache::with_org_lane(&repo_handle, |lane| lane.since(&ts))
+		},
+		Command::CgSearch { repo_handle, query, kind, limit } => {
+			repo_cache::with_code_lane(&repo_handle, |lane| {
+				let hits = lane.search(&query, &kind, limit)?;
+				Ok(json!({ "hits": hits }))
+			})
+		},
+		Command::CgDefinition { repo_handle, query } => {
+			repo_cache::with_code_lane(&repo_handle, |lane| {
+				let ctx = lane.definition(&query)?;
+				Ok(json!({ "context": ctx }))
+			})
+		},
+		Command::CgReferences { repo_handle, query, max_depth } => {
+			repo_cache::with_code_lane(&repo_handle, |lane| {
+				let impact = lane.references(&query, max_depth)?;
+				Ok(json!({ "impact": impact }))
+			})
+		},
+		Command::CgCallers { repo_handle, query, max_depth } => {
+			repo_cache::with_code_lane(&repo_handle, |lane| {
+				let flow = lane.callers(&query, max_depth)?;
+				Ok(json!({ "flow": flow }))
+			})
 		},
 	})) {
 		Ok(Ok(data)) => Response::Ok { ok: true, data },

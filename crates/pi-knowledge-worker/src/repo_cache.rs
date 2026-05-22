@@ -19,7 +19,7 @@ use std::{
 
 use serde_json::{Value, json};
 
-use crate::{Lane, lane_org::OrgLane, subscribe};
+use crate::{Lane, lane_code::CodeLane, lane_org::OrgLane, subscribe};
 
 /// FNV-1a 64-bit hash. Stable, no_std-compatible, no crypto guarantees.
 /// Matches PLAN-310 W1.5 F6 `pi_knowledge_core::cache::repo_hash`.
@@ -47,6 +47,7 @@ struct RepoSlot {
 	lanes:            Vec<Lane>,
 	include_personal: bool,
 	org_lane:         Option<OrgLane>,
+	code_lane:        Option<CodeLane>,
 	last_used:        Instant,
 	opened_at:        SystemTime,
 }
@@ -108,6 +109,7 @@ pub fn open(
 		lanes: lanes.to_vec(),
 		include_personal,
 		org_lane: None,
+		code_lane: None,
 		last_used: Instant::now(),
 		opened_at: SystemTime::now(),
 	});
@@ -135,6 +137,17 @@ pub fn open(
 				subscribe::publish_warm_completed(&handle, Lane::OrgMemory, elapsed_ms);
 			},
 			Err(e) => return Err(format!("warm-load org_memory lane: {e}")),
+		}
+	}
+	if slot.lanes.contains(&Lane::CodeGraph) && slot.code_lane.is_none() {
+		let started = Instant::now();
+		match CodeLane::warm_load(&canonical) {
+			Ok(lane) => {
+				slot.code_lane = Some(lane);
+				let elapsed_ms = started.elapsed().as_millis() as u64;
+				subscribe::publish_warm_completed(&handle, Lane::CodeGraph, elapsed_ms);
+			},
+			Err(e) => return Err(format!("warm-load code_graph lane: {e}")),
 		}
 	}
 
@@ -167,6 +180,25 @@ where
 		.org_lane
 		.as_ref()
 		.ok_or_else(|| format!("org_memory lane not opened for {repo_handle}"))?;
+	f(lane)
+}
+
+/// Borrow the code-graph lane for a repo handle. Mirrors `with_org_lane`
+/// shape: returns `Err` if handle is unknown or code_graph lane wasn't
+/// requested at `open` time.
+pub fn with_code_lane<T, F>(repo_handle: &str, f: F) -> Result<T, String>
+where
+	F: FnOnce(&CodeLane) -> Result<T, String>,
+{
+	let mut map = slots().lock().map_err(|e| format!("slots mutex: {e}"))?;
+	let slot = map
+		.get_mut(repo_handle)
+		.ok_or_else(|| format!("unknown repo_handle: {repo_handle}"))?;
+	slot.last_used = Instant::now();
+	let lane = slot
+		.code_lane
+		.as_ref()
+		.ok_or_else(|| format!("code_graph lane not opened for {repo_handle}"))?;
 	f(lane)
 }
 
