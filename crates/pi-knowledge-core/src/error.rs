@@ -6,10 +6,14 @@ pub enum Error {
 	Bincode(#[from] bincode::Error),
 	#[error("cache error: {0}")]
 	Cache(#[from] pi_workspace_cache::WorkspaceCacheError),
- #[error("usearch error: {0}")]
- 	Usearch(String),
- 	#[error("{0}")]
- 	Other(String),
+	#[error("usearch error: {0}")]
+	Usearch(String),
+	#[error("embedder error: {0}")]
+	Embedder(String),
+	#[error("watcher error: {0}")]
+	Watcher(String),
+	#[error("{0}")]
+	Other(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

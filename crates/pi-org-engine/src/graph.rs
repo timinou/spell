@@ -565,6 +565,7 @@ pub fn connected_components(items: &[OrgItem]) -> Vec<Vec<String>> {
 
 use std::collections::BTreeSet;
 
+use pi_knowledge_core::recall::RecallGraph;
 use pi_knowledge_core::graph::{
 	EdgeKind as KnowledgeEdgeKind, Neighbor, Node as KnowledgeNode, NodeKey, PathStep,
 	TypedGraph as InnerGraph,
@@ -696,6 +697,26 @@ fn walk_items(
 		});
 		collect_edges(item, all_edges);
 		walk_items(&item.children, nodes, inner, all_edges);
+	}
+}
+
+/// `RecallGraph` impl so `pi_knowledge_core::recall::recall()` can BFS the
+/// org-graph directly. Combines outgoing + incoming edges into one neighbor
+/// list (recall treats relations as undirected for hop tracking).
+impl RecallGraph for TypedGraph {
+	fn neighbors(&self, id: &str) -> Vec<(String, EdgeKind)> {
+		let mut out = Vec::new();
+		if let Some(es) = self.out_edges.get(id) {
+			for edge in es {
+				out.push((edge.to.clone(), edge.kind.clone()));
+			}
+		}
+		if let Some(es) = self.in_edges.get(id) {
+			for edge in es {
+				out.push((edge.from.clone(), edge.kind.clone()));
+			}
+		}
+		out
 	}
 }
 

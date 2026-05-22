@@ -15,6 +15,8 @@ pub mod cache;
 pub mod error;
 pub mod fusion;
 pub mod graph;
+pub mod ingest;
+pub mod recall;
 pub mod vec;
 
 pub use error::{Error, Result};

@@ -5,6 +5,22 @@ use usearch::{Index, IndexOptions, MetricKind, ScalarKind};
 
 use crate::{Error, Result};
 
+/// Stable 64-bit FNV-1a hash mapping a string id to a usearch `u64` key.
+///
+/// Used by the recall pipeline to project domain-level `String` ids onto
+/// `VectorIndex`'s native key space. The same input produces the same
+/// output across processes — required so an `id_hash(id)` computed on
+/// rebuild matches the keys written on the previous run.
+#[must_use]
+pub fn id_hash(id: &str) -> u64 {
+	let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+	for b in id.bytes() {
+		h ^= u64::from(b);
+		h = h.wrapping_mul(0x0000_0001_0000_01b3);
+	}
+	h
+}
+
 /// A single entry mapping a node id to its embedding. (Pre-W2: `node_index: usize`.)
 #[derive(Debug, Clone)]
 pub struct VectorEntry {
