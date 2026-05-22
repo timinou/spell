@@ -284,7 +284,13 @@ export class Container implements Component {
 	invalidate(): void {
 		this.#cachedLines = undefined;
 		this.#cachedWidth = undefined;
-		this.markDirty();
+		// Explicit invalidation must propagate to parent even if we are already
+		// dirty. Subclasses that override render() (e.g. OutlinedList) never
+		// reset #dirty back to false, which would otherwise leave markDirty
+		// permanently short-circuited. Bypass the optimisation by calling parent
+		// markDirty directly. BUG-391 follow-up.
+		this.#dirty = true;
+		this.#parent?.markDirty();
 	}
 
 	render(width: number): string[] {
