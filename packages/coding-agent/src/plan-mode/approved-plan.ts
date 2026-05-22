@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import { resolveLocalUrlToPath } from "../internal-urls";
+import { localUrlToPath } from "../tools/local-path";
 
 interface RenameApprovedPlanFileOptions {
 	planFilePath: string;
@@ -24,8 +24,8 @@ export async function renameApprovedPlanFile(options: RenameApprovedPlanFileOpti
 		getArtifactsDir: () => getArtifactsDir(),
 		getSessionId: () => getSessionId(),
 	};
-	const resolvedSource = resolveLocalUrlToPath(planFilePath, resolveOptions);
-	const resolvedDestination = resolveLocalUrlToPath(finalPlanFilePath, resolveOptions);
+	const resolvedSource = localUrlToPath(planFilePath, resolveOptions);
+	const resolvedDestination = localUrlToPath(finalPlanFilePath, resolveOptions);
 
 	if (resolvedSource === resolvedDestination) {
 		return;
