@@ -17,6 +17,7 @@ pub mod diagnostic_render;
 pub mod dialect;
 pub mod dialects;
 pub mod introspection;
+pub mod jq_subset;
 pub mod op;
 pub mod op_schema;
 pub mod parser;

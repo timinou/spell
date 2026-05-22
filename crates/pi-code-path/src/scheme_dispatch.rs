@@ -515,6 +515,7 @@ mod tests {
 				cache:               CacheStrategy::None,
 				bash_expandable:     true,
 				callback_budget:     None,
+				static_notes:        &[],
 			},
 		}
 	}

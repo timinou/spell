@@ -109,3 +109,93 @@ fn execute_code_path_forwards_suffix_to_source_path() {
 	assert!(!all_text.contains("LINE_ONE"), "line 2 should not include line 1: {all_text}");
 }
 
+
+#[test]
+fn execute_code_path_json_qualifier_extracts_field() {
+	use pi_natives::code_path::napi::{execute_code_path_inner, CodePathTaskOptions};
+	use pi_natives::task::CancelToken as NativesCancelToken;
+
+	let dir = tempfile::TempDir::new().unwrap();
+	let mem_file = dir.path().join(".spell/memory/data.json");
+	std::fs::create_dir_all(mem_file.parent().unwrap()).unwrap();
+	std::fs::write(&mem_file, r#"{"foo":{"bar":"hello"},"arr":[1,2,3]}"#).unwrap();
+
+	let opts = CodePathTaskOptions {
+		command: "get".into(),
+		target: "memory://root/data.json#json:.foo.bar".into(),
+		root: Some(dir.path().display().to_string()),
+		home: Some("/home/u".into()),
+		..Default::default()
+	};
+	let token = NativesCancelToken::new(None, None);
+	let chunks = execute_code_path_inner(opts, token).unwrap();
+	let text: String = chunks
+		.iter()
+		.flat_map(|c| c.nodes.iter())
+		.filter_map(|n| n.content.as_ref())
+		.filter_map(|c| c.value.clone())
+		.collect::<Vec<_>>()
+		.join("\n");
+	assert!(text.contains("hello"), "got: {text}");
+}
+
+#[test]
+fn execute_code_path_json_qualifier_array_index() {
+	use pi_natives::code_path::napi::{execute_code_path_inner, CodePathTaskOptions};
+	use pi_natives::task::CancelToken as NativesCancelToken;
+
+	let dir = tempfile::TempDir::new().unwrap();
+	let mem_file = dir.path().join(".spell/memory/arr.json");
+	std::fs::create_dir_all(mem_file.parent().unwrap()).unwrap();
+	std::fs::write(&mem_file, r#"{"items":["a","b","c"]}"#).unwrap();
+
+	let opts = CodePathTaskOptions {
+		command: "get".into(),
+		target: "memory://root/arr.json#json:.items[1]".into(),
+		root: Some(dir.path().display().to_string()),
+		home: Some("/home/u".into()),
+		..Default::default()
+	};
+	let token = NativesCancelToken::new(None, None);
+	let chunks = execute_code_path_inner(opts, token).unwrap();
+	let text: String = chunks
+		.iter()
+		.flat_map(|c| c.nodes.iter())
+		.filter_map(|n| n.content.as_ref())
+		.filter_map(|c| c.value.clone())
+		.collect::<Vec<_>>()
+		.join("\n");
+	assert!(text.contains("b"), "got: {text}");
+}
+
+
+#[test]
+fn execute_code_path_agent_path_form_extracts_via_jq() {
+	use pi_natives::code_path::napi::{execute_code_path_inner, CodePathTaskOptions};
+	use pi_natives::task::CancelToken as NativesCancelToken;
+
+	let dir = tempfile::TempDir::new().unwrap();
+	let sess_dir = dir.path().to_path_buf();
+	let agent_file = sess_dir.join("X.md");
+	std::fs::write(&agent_file, r#"{"foo":["bar"]}"#).unwrap();
+
+	let opts = CodePathTaskOptions {
+		command: "get".into(),
+		target: "agent://X/foo/0".into(),
+		root: Some(dir.path().display().to_string()),
+		home: Some("/home/u".into()),
+		session_dir: Some(sess_dir.display().to_string()),
+		..Default::default()
+	};
+	let token = NativesCancelToken::new(None, None);
+	let chunks = execute_code_path_inner(opts, token).unwrap();
+	let text: String = chunks
+		.iter()
+		.flat_map(|c| c.nodes.iter())
+		.filter_map(|n| n.content.as_ref())
+		.filter_map(|c| c.value.clone())
+		.collect::<Vec<_>>()
+		.join("\n");
+	assert!(text.contains("bar"), "path-form should extract via #json: — got: {text}");
+}
+
