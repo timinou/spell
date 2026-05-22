@@ -23,6 +23,7 @@ export const KERNEL_OWNED_SCHEMES: ReadonlySet<string> = new Set<string>([
 	"pi",     // embedded markdown docs (Static loader)
 	"memory", // .spell/memory/[root|<path>] (Namespaced layout, fs-backed)
 	"local",  // <session_dir>/local/<path> (Direct layout, fs-backed, write-path note)
+	"org",    // <project>/!tasks/* + <home>/.org/* via MultiRootIndex (Indexed layout)
 ]);
 
 /**

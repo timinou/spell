@@ -318,6 +318,9 @@ pub struct ResolvedAddress {
 	/// Optional byte-range within the file (used by `org://` for heading
 	/// regions).
 	pub range: Option<Range<usize>>,
+	/// Per-resolution notes appended to the resulting ResolvedContent. Use for
+	/// dynamic hints that depend on the lookup result (e.g. org item title).
+	pub notes: Vec<String>,
 }
 
 /// Callback contract for runtime-registered schemes (canvas, MCP-advertised).

@@ -24,7 +24,10 @@ function makeUrl(itemId: string): InternalUrl {
 	return parsed;
 }
 
-describe("OrgProtocolHandler", () => {
+// PLAN-310 cutover: org scheme is kernel-owned via §org.
+// Behavior tested in scheme_registry_w3.rs::org_resolves_item_by_id,
+// org_resolves_item_under_project_tasks, org_unknown_id_returns_not_found.
+describe.skip("OrgProtocolHandler [kernel-owned via §org]", () => {
 	let tmpDir: string;
 	let getCwd: () => string;
 
