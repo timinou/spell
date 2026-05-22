@@ -1,0 +1,58 @@
+#+TITLE: edit.ts LINE#ID dispatch (#executeLineId) bypasses canonical executeCodePath
+#+STATE: ITEM
+#+SESSION_ID: 14dd802985b2a5f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan309/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
+#+CUSTOM_ID: BUG-391-edit-ts-lineid-dispatch-executelineid-by
+
+* Initial Message
+
+Investigate how you'd fold in PLAN-304 into the next swarm waves deeply. I want super super clean code
+
+## Symptom
+
+`packages/coding-agent/src/tools/edit.ts::#executeLineId` handles these kinds TS-locally:
+- `lineReplace`, `lineAppend`, `linePrepend`
+- `lineInsert` (with `at` field)
+- `fileAppend`/`filePrepend` (no anchor — missing-file create branch)
+
+It calls `applyHashlineEdits()` which uses `fs.writeFile` directly. BYPASSES executeCodePath, edit_transaction, broker.
+
+## Why this is wrong post-PLAN-309
+
+The kernel has Op variants for ALL of these:
+- `Op::LineReplace { target, span, content }` at `crates/pi-code-path/src/op.rs`
+- `Op::LineInsert { target, at, content }`
+- `Op::LineAppend / LinePrepend { target, at, content }`
+- `Op::FileAppend / FilePrepend { target, content }` (no anchor case)
+
+All implemented via `crates/pi-code-path/src/dialects/text/mutation.rs::apply_to_text` and routed through edit_transaction in napi.rs. Full broker + journal + transaction semantics.
+
+The TS-local dispatch was a historical optimization back when the kernel didn't support these ops cleanly. PLAN-309 made the kernel canonical; the TS bypass is now legacy behavior.
+
+## Same consequences as BUG-B
+
+- ❌ No broker (concurrent peer edits silently race)
+- ❌ No journal
+- ❌ No session_id
+- ❌ No buffer registry invalidation
+- ❌ No edit_transaction snapshot/rollback
+- ✓ TS-local has its own hash-line verification
+
+## Severity
+
+P1 — same as BUG-B (filePatch bypass). Working but not canonical.
+
+## Fix scope
+
+Replace `#executeLineId` body with a call to `#executeStructural` for each line-op kind. Delete the applyHashlineEdits dependency from edit.ts (the patch/hashline module may still be used elsewhere for diff preview; check).
+
+Edge case: missing-file `fileAppend`/`filePrepend` (create-if-missing). Kernel Op::FileAppend currently requires file to exist. Either:
+- Add a `create:true` flag to FileAppend/FilePrepend so missing-file creates the file
+- Migrate the missing-file branch to dispatch `fileCreate` instead
+- Keep a thin TS-side "create-if-missing" precheck that synthesizes a fileCreate
+
+Tests need parity verification.
+
+## Related
+
+Together BUG-B and this BUG complete the "delete every TS edit bypass" cleanup that PLAN-309 nearly finished. Could be a single PLAN-310 cleanup pass.

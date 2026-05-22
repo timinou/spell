@@ -1,38 +1,11 @@
 import {
-	type CodeBufferOptions,
-	type CodeBufferResult,
 	type CodeCoordPeerActivity,
 	type CodeCoordStatus,
 	executeCodeBuffer,
 } from "@oh-my-pi/pi-natives";
 
-const MUTATING_CODE_BUFFER_COMMANDS = new Set(["edit", "replace_content", "save"]);
-
 export interface SessionIdSource {
 	getSessionId?: () => string | null | undefined;
-}
-
-export interface CallCodeBufferContext {
-	session: SessionIdSource;
-}
-
-export function isMutatingCommand(command: string): boolean {
-	return MUTATING_CODE_BUFFER_COMMANDS.has(command);
-}
-
-function resolveSessionId(ctx: CallCodeBufferContext): string | undefined {
-	return ctx.session.getSessionId?.()?.trim() || undefined;
-}
-
-export function callCodeBuffer(ctx: CallCodeBufferContext, opts: CodeBufferOptions): CodeBufferResult {
-	if (!isMutatingCommand(opts.command)) {
-		return executeCodeBuffer(opts);
-	}
-	const sessionId = resolveSessionId(ctx);
-	if (sessionId) {
-		return executeCodeBuffer({ ...opts, sessionId });
-	}
-	return executeCodeBuffer(opts);
 }
 
 export function recentPeerActivity(

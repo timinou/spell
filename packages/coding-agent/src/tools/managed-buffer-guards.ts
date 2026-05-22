@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { executeCodeBuffer } from "@oh-my-pi/pi-natives";
+import { executeCodeBuffer, executeCodePath } from "@oh-my-pi/pi-natives";
 import { isCodeToolSupportedPath } from "./code-supported-files";
 
 export type WriteGuardCode = "WRITE_PARSE_REGRESSION";
@@ -18,32 +18,63 @@ export interface WriteGuardBlocked {
 
 const PARSE_PROBE_SESSION_ID = "write-guard-parse-probe";
 
-function extractEditFailure(output: unknown): boolean {
-	if (!output || typeof output !== "object" || Array.isArray(output)) return false;
-	const status = Reflect.get(output, "status");
-	if (status !== "failed" && status !== "partial") return false;
-	const fileResults = Reflect.get(output, "fileResults");
-	if (!Array.isArray(fileResults)) return true;
-	return fileResults.some(entry => entry && typeof entry === "object" && Reflect.get(entry, "status") === "failed");
-}
-
-function probesAsStructurallyValid(sourcePath: string, initialContent: string, nextContent: string): boolean {
+/**
+ * Run `nextContent` through the canonical edit pipeline (executeCodePath
+ * with `Op::FileWrite`) on a scratch tempfile. The kernel's buf.edit_batch
+ * triggers `errors_intersect_ranges` (the tree-sitter structural-invariant
+ * guard). If the new content would leave the buffer parse-invalid, the
+ * diagnostic surfaces in the resulting chunks.
+ *
+ * Replaces the pre-PLAN-309 implementation which called the now-deleted
+ * executeCodeBuffer `replace_content`/`save` commands (BUG-390).
+ */
+async function probesAsStructurallyValid(
+	sourcePath: string,
+	initialContent: string,
+	nextContent: string,
+): Promise<boolean> {
 	const tempDir = mkdtempSync(path.join(tmpdir(), "write-guard-parse-"));
 	const probePath = path.join(tempDir, path.basename(sourcePath));
 	writeFileSync(probePath, initialContent);
 	try {
-		const result = executeCodeBuffer({
-			command: "replace_content",
-			file: probePath,
-			content: nextContent,
+		const chunks = await executeCodePath({
+			command: "edit",
+			target: probePath,
+			actions: [{ kind: "fileWrite", content: nextContent, force: true }],
+			root: tempDir,
 			sessionId: PARSE_PROBE_SESSION_ID,
 		});
-		if (result.error || extractEditFailure(result.output)) return false;
-		const save = executeCodeBuffer({ command: "save", file: probePath, sessionId: PARSE_PROBE_SESSION_ID });
-		return save.error !== true;
+		for (const chunk of chunks) {
+			for (const diag of chunk.diagnostics ?? []) {
+				const msg = typeof diag.message === "string" ? diag.message : "";
+				if (msg.includes("structurally invalid") || msg.includes("buffer structurally invalid")) {
+					return false;
+				}
+			}
+			for (const node of chunk.nodes ?? []) {
+				for (const diag of node.diagnostics ?? []) {
+					const msg = typeof diag.message === "string" ? diag.message : "";
+					if (msg.includes("structurally invalid") || msg.includes("buffer structurally invalid")) {
+						return false;
+					}
+				}
+			}
+		}
+		return true;
+	} catch (_e) {
+		// edit_transaction throws on certain failures; treat as parse-fail.
+		return false;
 	} finally {
-		executeCodeBuffer({ command: "close", file: probePath });
-		rmSync(tempDir, { recursive: true, force: true });
+		try {
+			executeCodeBuffer({ command: "close", file: probePath });
+		} catch (_e) {
+			/* buffer may not be open; ignore */
+		}
+		try {
+			rmSync(tempDir, { recursive: true, force: true });
+		} catch (_e) {
+			/* tempdir cleanup is best-effort */
+		}
 	}
 }
 
@@ -55,11 +86,11 @@ function probesAsStructurallyValid(sourcePath: string, initialContent: string, n
  * `force:true` does not bypass it because shipping unparseable code is never
  * a valid intent.
  */
-export function evaluateWriteGuards(
+export async function evaluateWriteGuards(
 	absolutePath: string,
 	newContent: string,
 	_options: { force?: boolean } = {},
-): WriteGuardResult | WriteGuardBlocked {
+): Promise<WriteGuardResult | WriteGuardBlocked> {
 	if (!isCodeToolSupportedPath(absolutePath)) {
 		return { ok: true };
 	}
@@ -69,8 +100,8 @@ export function evaluateWriteGuards(
 	}
 
 	const oldContent = readFileSync(absolutePath, "utf8");
-	const oldParses = probesAsStructurallyValid(absolutePath, "", oldContent);
-	if (oldParses && !probesAsStructurallyValid(absolutePath, oldContent, newContent)) {
+	const oldParses = await probesAsStructurallyValid(absolutePath, "", oldContent);
+	if (oldParses && !(await probesAsStructurallyValid(absolutePath, oldContent, newContent))) {
 		return {
 			ok: false,
 			code: "WRITE_PARSE_REGRESSION",

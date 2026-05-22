@@ -352,12 +352,15 @@ fn peer_edit_from_entry(entry: &JournalEntry) -> PeerEdit {
 
 fn peer_edits_since_revision(
 	path: &Path,
-	session_id: &str,
+	session_id: Option<&str>,
 	base_revision: u64,
 ) -> Result<Vec<PeerEdit>> {
 	Ok(journal_entries_for(path, 64)?
 		.into_iter()
-		.filter(|entry| entry.revision > base_revision && entry.session_id != session_id)
+		.filter(|entry| {
+			entry.revision > base_revision
+				&& session_id.map_or(true, |sid| entry.session_id != sid)
+		})
 		.map(|entry| peer_edit_from_entry(&entry))
 		.collect())
 }
@@ -578,30 +581,45 @@ impl BufferRegistry {
 
 	pub fn edit_transaction<T>(
 		&self,
-		session_id: &str,
+		session_id: Option<&str>,
 		path: &Path,
 		target_code_paths: &[String],
 		mut apply: impl FnMut(&mut CodeBuffer) -> Result<T>,
+	) -> Result<(TransactionOutcome, T)> {
+		self.edit_transaction_with_delete(session_id, path, target_code_paths, |buf| {
+			let r = apply(buf)?;
+			Ok((r, false))
+		})
+	}
+
+	pub fn edit_transaction_with_delete<T>(
+		&self,
+		session_id: Option<&str>,
+		path: &Path,
+		target_code_paths: &[String],
+		mut apply: impl FnMut(&mut CodeBuffer) -> Result<(T, bool)>,
 	) -> Result<(TransactionOutcome, T)> {
 		let key = registry_key(path);
 		let mut last_conflict: Option<CodeEngineError> = None;
 		for _attempt in 0..2 {
 			let base_revision = latest_coord_revision_for(&key)?;
-			if !target_code_paths.is_empty() {
-				match self
-					.coord
-					.intent(session_id, &key, target_code_paths, base_revision)
-				{
-					crate::coord::IntentResult::Granted => {},
-					crate::coord::IntentResult::Conflict { peer_session, code_path, peer_intent_ts } => {
-						return Err(CodeEngineError::PeerConflict {
-							session: peer_session,
-							path: key.clone(),
-							code_path,
-							peer_revision: base_revision,
-							peer_commit_ts: peer_intent_ts,
-						});
-					},
+			if let Some(sid) = session_id {
+				if !target_code_paths.is_empty() {
+					match self
+						.coord
+						.intent(sid, &key, target_code_paths, base_revision)
+					{
+						crate::coord::IntentResult::Granted => {},
+						crate::coord::IntentResult::Conflict { peer_session, code_path, peer_intent_ts } => {
+							return Err(CodeEngineError::PeerConflict {
+								session: peer_session,
+								path: key.clone(),
+								code_path,
+								peer_revision: base_revision,
+								peer_commit_ts: peer_intent_ts,
+							});
+						},
+					}
 				}
 			}
 			let attempt = with_exclusive_lock(&key, SAVE_LOCK_BUDGET, || {
@@ -615,7 +633,7 @@ impl BufferRegistry {
 				};
 				fresh.coord_revision = parent_revision;
 				let before_source = fresh.source();
-				let result = apply(&mut fresh)?;
+				let (result, should_delete) = apply(&mut fresh)?;
 				let after_source = fresh.source();
 				let source = after_source.clone();
 				let diff = crate::diff_lines(&before_source, &after_source)
@@ -626,7 +644,7 @@ impl BufferRegistry {
 						"
 ",
 					);
-				if !fresh.dirty {
+				if !fresh.dirty && !should_delete {
 					warnings.extend(self.coord.drain_warnings());
 					return Ok(Ok((
 						TransactionOutcome {
@@ -648,62 +666,74 @@ impl BufferRegistry {
 				let diff_hash = crate::coord::blake3_short(source.as_bytes());
 				let byte_len = source.len() as u64;
 				let revision = parent_revision.saturating_add(1);
-				match self.coord.commit(
-					session_id,
-					&key,
-					revision,
-					parent_revision,
-					target_code_paths,
-					&diff_hash,
-					byte_len,
-				) {
+				let commit_result = if let Some(sid) = session_id {
+					self.coord.commit(
+						sid,
+						&key,
+						revision,
+						parent_revision,
+						target_code_paths,
+						&diff_hash,
+						byte_len,
+					)
+				} else {
+					crate::coord::CommitResult::Ok
+				};
+				match commit_result {
 					crate::coord::CommitResult::Ok => {
-						let disk_mtime = write_file_atomically(&key, &source)?;
-						if let Some(watcher) = self.watcher() {
-							watcher.mark_self_write(&key, disk_mtime);
-							watcher.clear_stale(&key);
+						if should_delete {
+							let _ = std::fs::remove_file(&key);
+							let _ = self.close(&key);
+						} else {
+							let disk_mtime = write_file_atomically(&key, &source)?;
+							if let Some(watcher) = self.watcher() {
+								watcher.mark_self_write(&key, disk_mtime);
+								watcher.clear_stale(&key);
+							}
+							fresh.disk_mtime = disk_mtime;
+							fresh.history.mark_saved();
+							fresh.dirty = false;
+							fresh.coord_revision = revision;
+							self
+								.buffers
+								.insert(key.clone(), Arc::new(Mutex::new(fresh)));
 						}
-						let entry = JournalEntry {
-							ts: SystemTime::now()
-								.duration_since(SystemTime::UNIX_EPOCH)
-								.unwrap_or_default()
-								.as_millis()
-								.try_into()
-								.unwrap_or(u64::MAX),
-							session_id: session_id.to_string(),
-							pid: std::process::id(),
-							kind: "commit".into(),
-							revision,
-							parent_revision: Some(parent_revision),
-							code_paths: target_code_paths.to_vec(),
-							diff_hash: diff_hash.clone(),
-							byte_len,
-						};
-						if let Err(error) = JournalWriter::append(
-							&default_journal_root(),
-							&workspace_root_for(&key),
-							&key,
-							&entry,
-						) {
-							warnings.push(format!("journal append failed: {error}"));
+						if let Some(sid) = session_id {
+							let entry = JournalEntry {
+								ts: SystemTime::now()
+									.duration_since(SystemTime::UNIX_EPOCH)
+									.unwrap_or_default()
+									.as_millis()
+									.try_into()
+									.unwrap_or(u64::MAX),
+								session_id: sid.to_string(),
+								pid: std::process::id(),
+								kind: "commit".into(),
+								revision,
+								parent_revision: Some(parent_revision),
+								code_paths: target_code_paths.to_vec(),
+								diff_hash: diff_hash.clone(),
+								byte_len,
+							};
+							if let Err(error) = JournalWriter::append(
+								&default_journal_root(),
+								&workspace_root_for(&key),
+								&key,
+								&entry,
+							) {
+								warnings.push(format!("journal append failed: {error}"));
+							}
+							if let Some(ref recorder) = self.edit_recorder {
+								recorder(EditRecord {
+									session_id: sid.to_string(),
+									file: key.clone(),
+									before: before_source.clone(),
+									after: after_source.clone(),
+									diff,
+								});
+							}
 						}
 						warnings.extend(self.coord.drain_warnings());
-						fresh.disk_mtime = disk_mtime;
-						fresh.history.mark_saved();
-						fresh.dirty = false;
-						fresh.coord_revision = revision;
-						self
-							.buffers
-							.insert(key.clone(), Arc::new(Mutex::new(fresh)));
-						if let Some(ref recorder) = self.edit_recorder {
-							recorder(EditRecord {
-								session_id: session_id.to_string(),
-								file: key.clone(),
-								before: before_source.clone(),
-								after: after_source.clone(),
-								diff,
-							});
-						}
 						Ok(Ok((
 							TransactionOutcome {
 								revision,
@@ -1079,11 +1109,15 @@ impl CodeBuffer {
 					.collect();
 				if errors_intersect_ranges(&self.tree, &edit_ranges) {
 					restore(self);
-					return Err(CodeEngineError::Edit(
-						"Edit batch would leave the buffer structurally invalid. Re-anchor the target \
-						 or include an explicit separator."
-							.into(),
-					));
+					let excerpt: String = all_forwards
+						.first()
+						.map(|e| e.new_text.chars().take(40).collect())
+						.unwrap_or_default();
+					return Err(CodeEngineError::Edit(format!(
+						"Edit batch would leave the buffer structurally invalid (new content starts with: \
+						 `{excerpt}`). If replacing a body, content must include outer braces {{ ... }}. \
+						 Re-anchor the target or include an explicit separator."
+					)));
 				}
 			}
 		}
@@ -2059,6 +2093,110 @@ mod tests {
 			CodeEngineError::LockTimeout { path: error_path, .. } => assert_eq!(error_path, path),
 			other => panic!("expected lock timeout, got {other:?}"),
 		}
-		lock_thread.join().expect("lock thread join");
-	}
-}
+ 	lock_thread.join().expect("lock thread join");
+ 	}
+
+ 	#[test]
+ 	fn edit_transaction_with_session_invokes_broker() {
+ 		let path = temp_path("edit-broker.ts");
+ 		std::fs::write(&path, "export const value = 1;\n").expect("write");
+ 		let client = Arc::new(crate::coord::MockCoordClient::new());
+ 		let reg = BufferRegistry::new_with_coord(registry(), None, client.clone());
+ 		let (outcome, ()) = reg
+ 			.edit_transaction(Some("s1"), &path, &["::value".into()], |buf| {
+ 				buf.edit(TextEdit {
+ 					start_byte:   0,
+ 					old_end_byte: buf.source().len(),
+ 					new_text:     "export const value = 2;\n".into(),
+ 				})?;
+ 				Ok(())
+ 			})
+ 			.expect("commit");
+ 		assert!(outcome.revision > 0);
+ 		assert!(client.intent_called());
+ 		assert!(client.commit_called());
+ 	}
+
+ 	#[test]
+ 	fn edit_transaction_no_session_skips_broker() {
+ 		let path = temp_path("edit-no-broker.ts");
+ 		std::fs::write(&path, "export const value = 1;\n").expect("write");
+ 		let client = Arc::new(crate::coord::MockCoordClient::new());
+ 		let reg = BufferRegistry::new_with_coord(registry(), None, client.clone());
+ 		let (outcome, ()) = reg
+ 			.edit_transaction(None::<&str>, &path, &["::value".into()], |buf| {
+ 				buf.edit(TextEdit {
+ 					start_byte:   0,
+ 					old_end_byte: buf.source().len(),
+ 					new_text:     "export const value = 2;\n".into(),
+ 				})?;
+ 				Ok(())
+ 			})
+ 			.expect("commit");
+ 		assert!(!client.intent_called());
+ 		assert!(!client.commit_called());
+ 	}
+
+ 	#[test]
+ 	fn edit_transaction_no_session_writes_atomically() {
+ 		let path = temp_path("edit-no-session-write.ts");
+ 		std::fs::write(&path, "old\n").expect("write");
+ 		let reg = BufferRegistry::new(registry());
+ 		reg.edit_transaction(None::<&str>, &path, &[], |buf| {
+ 			buf.edit(TextEdit {
+ 				start_byte:   0,
+ 				old_end_byte: buf.source().len(),
+ 				new_text:     "new\n".into(),
+ 			})?;
+ 			Ok(())
+ 		})
+ 		.expect("commit");
+ 		assert_eq!(
+ 			std::fs::read_to_string(&path).expect("read"),
+ 			"new\n"
+ 		);
+ 	}
+
+ 	#[test]
+ 	fn edit_transaction_no_session_skips_journal() {
+ 		let path = temp_path("edit-no-session-journal.ts");
+ 		std::fs::write(&path, "a\n").expect("write");
+ 		let reg = BufferRegistry::new(registry());
+ 		reg.edit_transaction(None::<&str>, &path, &[], |buf| {
+ 			buf.edit(TextEdit {
+ 				start_byte:   0,
+ 				old_end_byte: buf.source().len(),
+ 				new_text:     "b\n".into(),
+ 			})?;
+ 			Ok(())
+ 		})
+ 		.expect("commit");
+ 		let root = workspace_root_for(&path);
+ 		let journal_path = journal_path_for(&default_journal_root(), &root, &path);
+ 		let entries = JournalReader::tail(&journal_path, 1).unwrap_or_default();
+ 		assert!(entries.is_empty(), "no session = no journal entry");
+ 	}
+
+ 	#[test]
+ 	fn edit_transaction_no_session_skips_edit_recorder() {
+ 		use std::sync::atomic::{AtomicBool, Ordering};
+ 		let path = temp_path("edit-no-session-recorder.ts");
+ 		std::fs::write(&path, "a\n").expect("write");
+ 		let called = Arc::new(AtomicBool::new(false));
+ 		let c2 = called.clone();
+ 		let reg = BufferRegistry::new(registry())
+ 			.with_edit_recorder(Arc::new(move |_r| {
+ 				c2.store(true, Ordering::SeqCst);
+ 			}));
+ 		reg.edit_transaction(None::<&str>, &path, &[], |buf| {
+ 			buf.edit(TextEdit {
+ 				start_byte:   0,
+ 				old_end_byte: buf.source().len(),
+ 				new_text:     "b\n".into(),
+ 			})?;
+ 			Ok(())
+ 		})
+ 		.expect("commit");
+ 		assert!(!called.load(Ordering::SeqCst), "no session = no recorder call");
+ 	}
+ }

@@ -48,7 +48,7 @@ Tools: `read`, `grep`, `find`, `lsp`, `ast_grep`, `web_search`, `fetch`, `org`, 
 
 Full access including file writes and code execution. Typically restricted to owners via `/unlock`.
 
-Tools: `read`, `grep`, `find`, `lsp`, `ast_grep`, `web_search`, `fetch`, `org`, `calc`, `code_search`, `edit`, `write`, `bash`, `ast_edit`, `task`, `todo_write`, `emacs_code`, `notebook`, `generate_image`, `send_file`
+Tools: `read`, `grep`, `find`, `lsp`, `ast_grep`, `web_search`, `fetch`, `org`, `calc`, `code_search`, `edit`, `write`, `bash`, `task`, `todo_write`, `emacs_code`, `notebook`, `generate_image`, `send_file`
 
 `/unlock` respawns the session in `telegram-full` mode. `/lock` respawns it back to `telegram-readonly`.
 

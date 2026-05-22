@@ -157,8 +157,7 @@ describe("negative space — edit", () => {
 			operations: [
 				{
 					target: "foo.ts::NotASymbol",
-					// legacyActionSchema is a bag-of-fields; newName is read by the kernel
-					action: { kind: "symbolRename", newName: "Renamed" } as any,
+					action: { kind: "symbolRename", newName: "Renamed" },
 				},
 			],
 		});

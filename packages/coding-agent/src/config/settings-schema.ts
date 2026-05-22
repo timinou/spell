@@ -1154,15 +1154,6 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"astEdit.enabled": {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "tools",
-			label: "AST Edit",
-			description: "Enable the ast_edit tool for structural AST rewrites",
-		},
-	},
 
 	// Optional tools
 

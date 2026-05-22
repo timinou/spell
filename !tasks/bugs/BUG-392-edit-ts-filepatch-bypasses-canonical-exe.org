@@ -1,0 +1,41 @@
+#+TITLE: edit.ts filePatch bypasses canonical executeCodePath; writes directly to fs
+#+STATE: ITEM
+#+SESSION_ID: 14dd802985b2a5f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan309/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
+#+CUSTOM_ID: BUG-392-edit-ts-filepatch-bypasses-canonical-exe
+
+* Initial Message
+
+Investigate how you'd fold in PLAN-304 into the next swarm waves deeply. I want super super clean code
+
+## Symptom
+
+`packages/coding-agent/src/tools/edit.ts::#executePatch` routes `kind: "filePatch"` actions to `applyPatch()` (from `patch/applicator.ts`) which writes via `SimpleFileSystem` → `fs.writeFile`. This BYPASSES executeCodePath entirely.
+
+Consequences:
+- ❌ No broker coordination (peer can race-overwrite)
+- ❌ No journal append (.spell/edit-history.jsonl)
+- ❌ No session_id attribution
+- ❌ No buffer registry invalidation (open buffers go stale)
+- ❌ No edit_transaction atomicity (no snapshot-restore on failure)
+- ✓ Has its own structural validation
+
+## Why this is wrong post-PLAN-309
+
+The kernel has `Op::FilePatch { target, diff }` fully implemented at `crates/pi-code-path/src/dialects/text/mutation.rs:174`. It's wired through dispatch_op, goes through buf.edit_batch, gets full broker + journal + transaction semantics. The TS-side bypass is now legacy behavior.
+
+## Severity
+
+P1 — works correctly in isolation but breaks the "one canonical edit path" invariant PLAN-309 established. Concurrent agents could race-overwrite each other's patch edits without broker detecting.
+
+## Fix scope
+
+Replace `#executePatch` with a dispatch to `#executeStructural` with `kind: "filePatch", diff: ...`. Delete the SimpleFileSystem class. Delete the applyPatch import in edit.ts (other consumers may need it; check).
+
+Tests need verification — some TS-local patch tests may exercise the SimpleFileSystem code path; migrate them to verify kernel-side behavior.
+
+## Tracked work
+
+- Verify `applyPatch` has other consumers (task/worktree.ts uses it for git-style patches; that's separate from edit-tool diffs and should keep its own implementation)
+- Migrate edit.ts:#executePatch to executeCodePath
+- Test parity: same diff input → same file output via both paths

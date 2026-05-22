@@ -1,5 +1,5 @@
 #+TITLE: AssistantMessage: incremental reconciliation instead of full child rebuild per token
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14ea14814559e822
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T15-17-13-109Z_14ea14814559e822.jsonl]]
 #+CUSTOM_ID: FEAT-763-assistantmessage-incremental-reconciliat
@@ -59,3 +59,5 @@ Optional follow-on (gated by bench): =Markdown= prefix-stable lex cache. When ne
 * Related
 
 - Part of =PLAN-XXX-tui-responsiveness=.
+
+NOTE [2026-05-21]: Closed in commit b7cb6dede. Slot-based reconciliation with stable component instances in #slotsByIndex, dedicated #toolImagesContainer sub-Container, stable trailing markers (abort/error/usage). 8 streaming tests cover identity-stable single-block, 3-block reuse, thinking toggle, truncation, visual identity, tool-images sub-container, usage marker mount, and direct setText-spy assertion. Reviewer surfaced 1 P2 (biome lint — unused stale binding + format) + 2 P3 (setText spy + visual-snapshot vs pre-refactor) — P2 fixed via biome --write + dead-binding drop; one P3 addressed via new setText spy test; visual-snapshot P3 accepted (review note: structural ordering preserved, idempotence proves rendering, sub-container covered by test #6). coding-agent/test/modes/components 26/0; tui 326/0.

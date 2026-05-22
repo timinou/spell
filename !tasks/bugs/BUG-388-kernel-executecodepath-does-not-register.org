@@ -1,0 +1,64 @@
+#+TITLE: Kernel executeCodePath does not register URI scheme resolvers (memory/skill/artifact/agent)
+#+STATE: ITEM
+#+SESSION_ID: 14dd802985b2a5f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan309/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
+#+CUSTOM_ID: BUG-388-kernel-executecodepath-does-not-register
+
+* Initial Message
+
+Investigate how you'd fold in PLAN-304 into the next swarm waves deeply. I want super super clean code
+
+## Symptom
+
+`cargo test -p pi-natives --test code_path_e2e uri_scheme_tests::memory_uri_scheme_returns_memory_node` fails:
+
+```
+called Result::unwrap() on an Err value: Error {
+  status: "GenericFailure",
+  reason: "unknown locator scheme: memory"
+}
+```
+
+Three sibling tests in the same module are already `#[ignore]`d for the same reason (skill/artifact/agent URI schemes). The memory test was an oversight.
+
+## Root cause
+
+`crates/pi-natives/src/code_path/napi.rs:805` hard-errors on ANY `Locator::Uri` variant:
+
+```rust
+Locator::Uri(uri) => {
+    return Err(Error::from_reason(format!("unknown locator scheme: {}", uri.scheme)));
+},
+```
+
+The `UriResolver` trait exists at `crates/pi-code-path/src/resolver/traits.rs:85` but no implementation is registered with the kernel dispatch.
+
+## Why it works in practice
+
+URI scheme resolution lives in TS-side `packages/coding-agent/src/internal-urls/` (memory-protocol.ts, skill-protocol.ts, agent-protocol.ts, artifact-protocol.ts, etc). The `get`/`find`/etc tools route URI-prefixed targets through this TS-side router BEFORE invoking executeCodePath. Agents never reach the kernel with a `memory://` target in normal use.
+
+## Scope
+
+Architectural gap, not a regression. The kernel's executeCodePath could grow native URI resolution for completeness (matching the trait it exposes), but doing so duplicates TS-side internal-urls routing. Worth a deliberate decision:
+
+- **Option A** — kernel learns memory/skill/agent/artifact protocols natively, removing the TS-side router. Single source of truth; consistent with PLAN-309 philosophy.
+- **Option B** — leave URI routing TS-side; delete the URI-scheme tests entirely; the kernel only handles `Fs` locators.
+- **Option C** (current) — leave it half-wired; tests `#[ignore]`d with this BUG citation.
+
+Recommendation: **Option B** in a future cleanup wave. URI protocols (memory://, skill://, etc) are SPELL-internal concepts; kernel shouldn't need to know them.
+
+## Workaround applied
+
+`#[ignore = "BUG-N: kernel URI scheme resolution not wired; URI routing is TS-side via internal-urls"]` matching the 3 sibling test ignores.
+
+## Fix scope when prioritized
+
+If pursuing Option A:
+- `crates/pi-code-path/src/resolver/`: implement `MemoryResolver`, `SkillResolver`, `AgentResolver`, `ArtifactResolver` traits
+- `crates/pi-natives/src/code_path/napi.rs`: register them in the dispatch match
+- Delete the TS-side internal-urls router OR keep it as a thin adapter to kernel resolvers
+
+If pursuing Option B (recommended):
+- Delete `uri_scheme_tests` module from `crates/pi-natives/tests/code_path_e2e.rs`
+- Delete the `Locator::Uri` arm from napi.rs dispatch with a `Diagnostic::unsupported` for clarity
+- Document in `packages/coding-agent/src/internal-urls/index.ts` that URI dispatch is TS-side by design

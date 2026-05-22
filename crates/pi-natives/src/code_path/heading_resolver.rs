@@ -10,7 +10,7 @@ use pi_code_path::{
 	ast::{ActionContent, MutationOutcome},
 	op::Op,
 	resolver::traits::{CancellationToken, MutationResolver},
-	types::Diagnostic,
+	types::{Diagnostic, DiagnosticVariant},
 };
 use serde_json::json;
 
@@ -23,6 +23,42 @@ pub struct HeadingResolver {
 impl HeadingResolver {
 	pub fn new(inner: Arc<CodeResolverImpl>) -> Self {
 		Self { inner }
+	}
+
+	pub(crate) fn apply_to_buffer(
+		&self,
+		buffer: &mut pi_code_engine::buffer::CodeBuffer,
+		op: &Op,
+	) -> Result<MutationOutcome, Diagnostic> {
+		use pi_code_path::ast::ActionContent;
+		let action_json = match op {
+			Op::HeadingPromote { .. } => json!({ "kind": "promote" }),
+			Op::HeadingDemote { .. } => json!({ "kind": "demote" }),
+			Op::HeadingReplaceBlock { content, .. } => {
+				let content_str = match content {
+					ActionContent::Single(s) => s.clone(),
+					ActionContent::Multi(v) => v.join("\n"),
+				};
+				json!({
+					"kind": "replaceCodeBlock",
+					"content": content_str
+				})
+			},
+			_ => {
+				return Err(Diagnostic {
+					variant: DiagnosticVariant::UnsupportedOperation,
+					message: "unexpected heading op variant".into(),
+					span:    None,
+				});
+			},
+		};
+		let target = match op {
+			Op::HeadingPromote { target }
+			| Op::HeadingDemote { target }
+			| Op::HeadingReplaceBlock { target, .. } => target,
+			_ => unreachable!(),
+		};
+		self.inner.apply_to_buffer(buffer, target.as_codepath(), &action_json)
 	}
 }
 

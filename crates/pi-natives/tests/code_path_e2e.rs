@@ -564,7 +564,8 @@ mod anchor_tests {
 mod uri_scheme_tests {
 	use super::*;
 
-	#[ignore = "PLAN-310: memory:// URL routes through coding-agent's MemoryProtocolHandler, not pi-code-path's CodePath locator; test predates PLAN-310 W6 router redesign"]
+	#[ignore = "BUG-388: kernel URI scheme resolution not wired; URI routing is TS-side via \
+	            internal-urls"]
 	#[test]
 	fn memory_uri_scheme_returns_memory_node() {
 		let dir = tempfile::tempdir().unwrap();

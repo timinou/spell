@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::{
-	ast::{ActionContent, CodePath, FsSegment, Locator, MutationOutcome},
-	op::{LineAnchor, LineAt, LineSpan, Op},
+	ast::{CodePath, FsSegment, Locator, MutationOutcome},
+	op::{LineAt, Op},
 	resolver::{CancellationToken, MutationResolver},
 	types::{Diagnostic, DiagnosticVariant},
 };
@@ -57,7 +57,23 @@ pub(crate) fn compute_line_hash(_idx: usize, line: &str) -> String {
 	format!("{}{}", alphabet[high] as char, alphabet[low] as char)
 }
 
-fn verify_anchor(path: &Path, pos: &str) -> Result<usize, Diagnostic> {
+fn text_to_lines(text: &str) -> Vec<String> {
+	let mut lines: Vec<String> = text.split('\n').map(String::from).collect();
+	if text.ends_with('\n') && !lines.is_empty() {
+		lines.pop();
+	}
+	lines
+}
+
+fn lines_to_text(lines: &[String]) -> String {
+	let mut text = lines.join("\n");
+	if !text.is_empty() {
+		text.push('\n');
+	}
+	text
+}
+
+fn verify_anchor_in_text(text: &str, pos: &str) -> Result<usize, Diagnostic> {
 	let parts: Vec<&str> = pos.split('#').collect();
 	if parts.len() != 2 {
 		return Err(Diagnostic {
@@ -73,12 +89,7 @@ fn verify_anchor(path: &Path, pos: &str) -> Result<usize, Diagnostic> {
 	})?;
 	let expected_hash = parts[1];
 
-	let content = std::fs::read_to_string(path).map_err(|e| Diagnostic {
-		variant: DiagnosticVariant::Inaccessible,
-		message: format!("cannot read file for anchor verification: {e}"),
-		span:    None,
-	})?;
-	let lines: Vec<&str> = content.split('\n').collect();
+	let lines: Vec<&str> = text.split('\n').collect();
 	let line_idx = line_num.saturating_sub(1);
 	let actual_line = lines.get(line_idx).unwrap_or(&"");
 	let actual_hash = compute_line_hash(line_num, actual_line);
@@ -94,24 +105,27 @@ fn verify_anchor(path: &Path, pos: &str) -> Result<usize, Diagnostic> {
 	Ok(line_num)
 }
 
+fn verify_anchor(path: &Path, pos: &str) -> Result<usize, Diagnostic> {
+	let text = std::fs::read_to_string(path).map_err(|e| Diagnostic {
+		variant: DiagnosticVariant::Inaccessible,
+		message: format!("cannot read file for anchor verification: {e}"),
+		span:    None,
+	})?;
+	verify_anchor_in_text(&text, pos)
+}
+
 fn read_file(path: &Path) -> Result<(String, Vec<String>), Diagnostic> {
 	let text = std::fs::read_to_string(path).map_err(|e| Diagnostic {
 		variant: DiagnosticVariant::Inaccessible,
 		message: format!("cannot read file: {e}"),
 		span:    None,
 	})?;
-	let mut lines: Vec<String> = text.split('\n').map(String::from).collect();
-	if text.ends_with('\n') && !lines.is_empty() {
-		lines.pop();
-	}
+	let lines = text_to_lines(&text);
 	Ok((text, lines))
 }
 
 fn write_file(path: &Path, lines: &[String]) -> Result<String, Diagnostic> {
-	let mut text = lines.join("\n");
-	if !text.is_empty() {
-		text.push('\n');
-	}
+	let text = lines_to_text(lines);
 	std::fs::write(path, &text).map_err(|e| Diagnostic {
 		variant: DiagnosticVariant::Inaccessible,
 		message: format!("cannot write file: {e}"),
@@ -128,315 +142,253 @@ fn make_diff(old: &str, new: &str) -> Option<String> {
 	Some(patch.to_string())
 }
 
+/// Pure in-memory text transformation without disk I/O.
+/// Returns `None` if this op is not a text mutation handled by this resolver.
+pub fn apply_to_text(op: &Op, source: &str) -> Option<Result<(String, MutationOutcome), Diagnostic>> {
+	match op {
+		Op::FileAppend { content, .. } => {
+			let mut lines = text_to_lines(source);
+			let new_lines = content.lines();
+			lines.extend(new_lines);
+			let new_text = lines_to_text(&lines);
+			let diff = make_diff(source, &new_text);
+			Some(Ok((new_text, MutationOutcome {
+				edit_count:     if diff.is_some() { 1 } else { 0 },
+				diff,
+				created:        false,
+				target_summary: None,
+			})))
+		},
+		Op::FilePrepend { content, .. } => {
+			let mut prepended = content.lines();
+			prepended.extend(text_to_lines(source));
+			let new_text = lines_to_text(&prepended);
+			let diff = make_diff(source, &new_text);
+			Some(Ok((new_text, MutationOutcome {
+				edit_count:     if diff.is_some() { 1 } else { 0 },
+				diff,
+				created:        false,
+				target_summary: None,
+			})))
+		},
+		Op::FilePatch { diff, .. } => {
+			let patch = match diffy::Patch::from_str(diff) {
+				Ok(p) => p,
+				Err(e) => return Some(Err(Diagnostic {
+					variant: DiagnosticVariant::ParseError,
+					message: format!("invalid diff format: {e}"),
+					span:    None,
+				})),
+			};
+			let new_text = match diffy::apply(source, &patch) {
+				Ok(n) => n,
+				Err(e) => return Some(Err(Diagnostic {
+					variant: DiagnosticVariant::ParseError,
+					message: format!("failed to apply patch: {e}"),
+					span:    None,
+				})),
+			};
+			let diff_out = make_diff(source, &new_text);
+			Some(Ok((new_text, MutationOutcome {
+				edit_count:     if diff_out.is_some() { 1 } else { 0 },
+				diff:           diff_out,
+				created:        false,
+				target_summary: None,
+			})))
+		},
+		Op::LineReplace { span, content, .. } => {
+			let start_line = match verify_anchor_in_text(
+				source,
+				&format!("{}#{}", span.start.line, span.start.hash),
+			) {
+				Ok(n) => n,
+				Err(e) => return Some(Err(e)),
+			};
+			let end_line = if let Some(ref end_anchor) = span.end {
+				end_anchor.line as usize
+			} else {
+				start_line
+			};
+			let file_lines = text_to_lines(source);
+			let replacement_lines: Vec<String> = content.lines();
+			let start_idx = start_line.saturating_sub(1);
+			let end_idx = end_line.saturating_sub(1).min(file_lines.len().saturating_sub(1));
+			let mut new_lines = file_lines.clone();
+			for _ in start_idx..=end_idx {
+				if start_idx < new_lines.len() {
+					new_lines.remove(start_idx);
+				}
+			}
+			for (i, l) in replacement_lines.iter().enumerate() {
+				new_lines.insert(start_idx + i, l.clone());
+			}
+			let new_text = lines_to_text(&new_lines);
+			if source == new_text {
+				return Some(Ok((new_text, MutationOutcome {
+					edit_count:     0,
+					diff:           None,
+					created:        false,
+					target_summary: None,
+				})));
+			}
+			let diff = make_diff(source, &new_text);
+			Some(Ok((new_text, MutationOutcome {
+				edit_count:     1,
+				diff,
+				created:        false,
+				target_summary: None,
+			})))
+		},
+		Op::LineInsert { at, content, .. } => {
+			let line_num = match at {
+				LineAt::Before { anchor } => {
+					match verify_anchor_in_text(source, &format!("{}#{}", anchor.line, anchor.hash)) {
+						Ok(n) => n,
+						Err(e) => return Some(Err(e)),
+					}
+				},
+				LineAt::After { anchor } => {
+					match verify_anchor_in_text(source, &format!("{}#{}", anchor.line, anchor.hash)) {
+						Ok(n) => n + 1,
+						Err(e) => return Some(Err(e)),
+					}
+				},
+			};
+			let old = source.to_string();
+			let mut file_lines = text_to_lines(source);
+			let text_lines: Vec<String> = content.lines();
+			let insert_idx = line_num.saturating_sub(1);
+			for (i, l) in text_lines.into_iter().enumerate() {
+				if insert_idx + i <= file_lines.len() {
+					file_lines.insert(insert_idx + i, l);
+				} else {
+					file_lines.push(l);
+				}
+			}
+			let new_text = lines_to_text(&file_lines);
+			if old == new_text {
+				return Some(Ok((new_text, MutationOutcome {
+					edit_count:     0,
+					diff:           None,
+					created:        false,
+					target_summary: None,
+				})));
+			}
+			let diff = make_diff(source, &new_text);
+			Some(Ok((new_text, MutationOutcome {
+				edit_count:     1,
+				diff,
+				created:        false,
+				target_summary: None,
+			})))
+		},
+		Op::LineAppend { at, content, .. } => {
+			let line_num = match verify_anchor_in_text(source, &format!("{}#{}", at.line, at.hash)) {
+				Ok(n) => n + 1,
+				Err(e) => return Some(Err(e)),
+			};
+			let old = source.to_string();
+			let mut file_lines = text_to_lines(source);
+			let text_lines: Vec<String> = content.lines();
+			let insert_idx = line_num.saturating_sub(1);
+			for (i, l) in text_lines.into_iter().enumerate() {
+				if insert_idx + i <= file_lines.len() {
+					file_lines.insert(insert_idx + i, l);
+				} else {
+					file_lines.push(l);
+				}
+			}
+			let new_text = lines_to_text(&file_lines);
+			if old == new_text {
+				return Some(Ok((new_text, MutationOutcome {
+					edit_count:     0,
+					diff:           None,
+					created:        false,
+					target_summary: None,
+				})));
+			}
+			let diff = make_diff(source, &new_text);
+			Some(Ok((new_text, MutationOutcome {
+				edit_count:     1,
+				diff,
+				created:        false,
+				target_summary: None,
+			})))
+		},
+		Op::LinePrepend { at, content, .. } => {
+			let line_num = match verify_anchor_in_text(source, &format!("{}#{}", at.line, at.hash)) {
+				Ok(n) => n,
+				Err(e) => return Some(Err(e)),
+			};
+			let old = source.to_string();
+			let mut file_lines = text_to_lines(source);
+			let text_lines: Vec<String> = content.lines();
+			let insert_idx = line_num.saturating_sub(1);
+			for (i, l) in text_lines.into_iter().enumerate() {
+				if insert_idx + i <= file_lines.len() {
+					file_lines.insert(insert_idx + i, l);
+				} else {
+					file_lines.push(l);
+				}
+			}
+			let new_text = lines_to_text(&file_lines);
+			if old == new_text {
+				return Some(Ok((new_text, MutationOutcome {
+					edit_count:     0,
+					diff:           None,
+					created:        false,
+					target_summary: None,
+				})));
+			}
+			let diff = make_diff(source, &new_text);
+			Some(Ok((new_text, MutationOutcome {
+				edit_count:     1,
+				diff,
+				created:        false,
+				target_summary: None,
+			})))
+		},
+		_ => None,
+	}
+}
+
 impl MutationResolver for super::TextResolver {
 	fn try_apply(
 		&self,
 		op: &Op,
 		_cancel: &CancellationToken,
 	) -> Option<Result<MutationOutcome, Diagnostic>> {
-		match op {
-			Op::FileAppend { target, content } => {
-				let path = match resolve_target_path(&self.root, target.as_codepath()) {
-					Ok(p) => p,
-					Err(e) => return Some(Err(e)),
-				};
-				let old = match std::fs::read_to_string(&path) {
-					Ok(s) => s,
-					Err(e) => {
-						return Some(Err(Diagnostic {
-							variant: DiagnosticVariant::Inaccessible,
-							message: format!("cannot read file: {e}"),
-							span:    None,
-						}));
-					},
-				};
-				let (_, mut file_lines) = match read_file(&path) {
-					Ok(f) => f,
-					Err(e) => return Some(Err(e)),
-				};
-				let new_lines: Vec<String> = content.lines();
-				file_lines.extend(new_lines);
-				let new = match write_file(&path, &file_lines) {
-					Ok(n) => n,
-					Err(e) => return Some(Err(e)),
-				};
-				Some(Ok(MutationOutcome {
-					edit_count:     1,
-					diff:           make_diff(&old, &new),
-					created:        false,
-					target_summary: Some(path.to_string_lossy().to_string()),
-				}))
-			},
-			Op::FilePrepend { target, content } => {
-				let path = match resolve_target_path(&self.root, target.as_codepath()) {
-					Ok(p) => p,
-					Err(e) => return Some(Err(e)),
-				};
-				let old = match std::fs::read_to_string(&path) {
-					Ok(s) => s,
-					Err(e) => {
-						return Some(Err(Diagnostic {
-							variant: DiagnosticVariant::Inaccessible,
-							message: format!("cannot read file: {e}"),
-							span:    None,
-						}));
-					},
-				};
-				let (_, mut file_lines) = match read_file(&path) {
-					Ok(f) => f,
-					Err(e) => return Some(Err(e)),
-				};
-				let mut prepended: Vec<String> = content.lines();
-				prepended.append(&mut file_lines);
-				let new = match write_file(&path, &prepended) {
-					Ok(n) => n,
-					Err(e) => return Some(Err(e)),
-				};
-				Some(Ok(MutationOutcome {
-					edit_count:     1,
-					diff:           make_diff(&old, &new),
-					created:        false,
-					target_summary: Some(path.to_string_lossy().to_string()),
-				}))
-			},
-			Op::FilePatch { target, diff } => {
-				let path = match resolve_target_path(&self.root, target.as_codepath()) {
-					Ok(p) => p,
-					Err(e) => return Some(Err(e)),
-				};
-				let old = match std::fs::read_to_string(&path) {
-					Ok(s) => s,
-					Err(e) => {
-						return Some(Err(Diagnostic {
-							variant: DiagnosticVariant::Inaccessible,
-							message: format!("cannot read file: {e}"),
-							span:    None,
-						}));
-					},
-				};
-				let patch = match diffy::Patch::from_str(diff) {
-					Ok(p) => p,
-					Err(e) => {
-						return Some(Err(Diagnostic {
-							variant: DiagnosticVariant::ParseError,
-							message: format!("invalid diff format: {e}"),
-							span:    None,
-						}));
-					},
-				};
-				let new = match diffy::apply(&old, &patch) {
-					Ok(n) => n,
-					Err(e) => {
-						return Some(Err(Diagnostic {
-							variant: DiagnosticVariant::ParseError,
-							message: format!("failed to apply patch: {e}"),
-							span:    None,
-						}));
-					},
-				};
-				if let Err(e) = std::fs::write(&path, &new) {
-					return Some(Err(Diagnostic {
-						variant: DiagnosticVariant::Inaccessible,
-						message: format!("cannot write file: {e}"),
-						span:    None,
-					}));
-				}
-				Some(Ok(MutationOutcome {
-					edit_count:     1,
-					diff:           make_diff(&old, &new),
-					created:        false,
-					target_summary: Some(path.to_string_lossy().to_string()),
-				}))
-			},
-			Op::LineReplace { target, span, content } => {
-				let path = match resolve_target_path(&self.root, target.as_codepath()) {
-					Ok(p) => p,
-					Err(e) => return Some(Err(e)),
-				};
-				let start_line =
-					match verify_anchor(&path, &format!("{}#{}", span.start.line, span.start.hash)) {
-						Ok(n) => n,
-						Err(e) => return Some(Err(e)),
-					};
-				let end_line = if let Some(ref end_anchor) = span.end {
-					end_anchor.line as usize
-				} else {
-					start_line
-				};
-				let (old, file_lines) = match read_file(&path) {
-					Ok(f) => f,
-					Err(e) => return Some(Err(e)),
-				};
-				let replacement_lines: Vec<String> = content.lines();
-				let start_idx = start_line.saturating_sub(1);
-				let end_idx = end_line
-					.saturating_sub(1)
-					.min(file_lines.len().saturating_sub(1));
-				let mut new_lines = file_lines.clone();
-				for _ in start_idx..=end_idx {
-					if start_idx < new_lines.len() {
-						new_lines.remove(start_idx);
-					}
-				}
-				for (i, l) in replacement_lines.iter().enumerate() {
-					new_lines.insert(start_idx + i, l.clone());
-				}
-				let new = match write_file(&path, &new_lines) {
-					Ok(n) => n,
-					Err(e) => return Some(Err(e)),
-				};
-				if old == new {
-					return Some(Ok(MutationOutcome {
-						edit_count:     0,
-						diff:           None,
-						created:        false,
-						target_summary: Some(path.to_string_lossy().to_string()),
-					}));
-				}
-				Some(Ok(MutationOutcome {
-					edit_count:     1,
-					diff:           make_diff(&old, &new),
-					created:        false,
-					target_summary: Some(path.to_string_lossy().to_string()),
-				}))
-			},
-			Op::LineInsert { target, at, content } => {
-				let path = match resolve_target_path(&self.root, target.as_codepath()) {
-					Ok(p) => p,
-					Err(e) => return Some(Err(e)),
-				};
-				let line_num = match at {
-					LineAt::Before { anchor } => {
-						match verify_anchor(&path, &format!("{}#{}", anchor.line, anchor.hash)) {
-							Ok(n) => n,
-							Err(e) => return Some(Err(e)),
-						}
-					},
-					LineAt::After { anchor } => {
-						match verify_anchor(&path, &format!("{}#{}", anchor.line, anchor.hash)) {
-							Ok(n) => n + 1,
-							Err(e) => return Some(Err(e)),
-						}
-					},
-				};
-				let (old, mut file_lines) = match read_file(&path) {
-					Ok(f) => f,
-					Err(e) => return Some(Err(e)),
-				};
-				let text_lines: Vec<String> = content.lines();
-				let insert_idx = line_num.saturating_sub(1);
-				for (i, l) in text_lines.into_iter().enumerate() {
-					if insert_idx + i <= file_lines.len() {
-						file_lines.insert(insert_idx + i, l);
-					} else {
-						file_lines.push(l);
-					}
-				}
-				let new = match write_file(&path, &file_lines) {
-					Ok(n) => n,
-					Err(e) => return Some(Err(e)),
-				};
-				if old == new {
-					return Some(Ok(MutationOutcome {
-						edit_count:     0,
-						diff:           None,
-						created:        false,
-						target_summary: Some(path.to_string_lossy().to_string()),
-					}));
-				}
-				Some(Ok(MutationOutcome {
-					edit_count:     1,
-					diff:           make_diff(&old, &new),
-					created:        false,
-					target_summary: Some(path.to_string_lossy().to_string()),
-				}))
-			},
-			Op::LineAppend { target, at, content } => {
-				// LineAppend is semantically "insert after anchor"
-				let path = match resolve_target_path(&self.root, target.as_codepath()) {
-					Ok(p) => p,
-					Err(e) => return Some(Err(e)),
-				};
-				let line_num = match verify_anchor(&path, &format!("{}#{}", at.line, at.hash)) {
-					Ok(n) => n + 1, // insert AFTER the anchor line
-					Err(e) => return Some(Err(e)),
-				};
-				let (old, mut file_lines) = match read_file(&path) {
-					Ok(f) => f,
-					Err(e) => return Some(Err(e)),
-				};
-				let text_lines: Vec<String> = content.lines();
-				let insert_idx = line_num.saturating_sub(1);
-				for (i, l) in text_lines.into_iter().enumerate() {
-					if insert_idx + i <= file_lines.len() {
-						file_lines.insert(insert_idx + i, l);
-					} else {
-						file_lines.push(l);
-					}
-				}
-				let new = match write_file(&path, &file_lines) {
-					Ok(n) => n,
-					Err(e) => return Some(Err(e)),
-				};
-				if old == new {
-					return Some(Ok(MutationOutcome {
-						edit_count:     0,
-						diff:           None,
-						created:        false,
-						target_summary: Some(path.to_string_lossy().to_string()),
-					}));
-				}
-				Some(Ok(MutationOutcome {
-					edit_count:     1,
-					diff:           make_diff(&old, &new),
-					created:        false,
-					target_summary: Some(path.to_string_lossy().to_string()),
-				}))
-			},
-			Op::LinePrepend { target, at, content } => {
-				// LinePrepend is semantically "insert before anchor"
-				let path = match resolve_target_path(&self.root, target.as_codepath()) {
-					Ok(p) => p,
-					Err(e) => return Some(Err(e)),
-				};
-				let line_num = match verify_anchor(&path, &format!("{}#{}", at.line, at.hash)) {
-					Ok(n) => n,
-					Err(e) => return Some(Err(e)),
-				};
-				let (old, mut file_lines) = match read_file(&path) {
-					Ok(f) => f,
-					Err(e) => return Some(Err(e)),
-				};
-				let text_lines: Vec<String> = content.lines();
-				let insert_idx = line_num.saturating_sub(1);
-				for (i, l) in text_lines.into_iter().enumerate() {
-					if insert_idx + i <= file_lines.len() {
-						file_lines.insert(insert_idx + i, l);
-					} else {
-						file_lines.push(l);
-					}
-				}
-				let new = match write_file(&path, &file_lines) {
-					Ok(n) => n,
-					Err(e) => return Some(Err(e)),
-				};
-				if old == new {
-					return Some(Ok(MutationOutcome {
-						edit_count:     0,
-						diff:           None,
-						created:        false,
-						target_summary: Some(path.to_string_lossy().to_string()),
-					}));
-				}
-				Some(Ok(MutationOutcome {
-					edit_count:     1,
-					diff:           make_diff(&old, &new),
-					created:        false,
-					target_summary: Some(path.to_string_lossy().to_string()),
-				}))
-			},
-			_ => None,
+		// Fast-path: reject non-text ops before touching disk
+		if apply_to_text(op, "").is_none() {
+			return None;
 		}
+		let path = match resolve_target_path(&self.root, op.target_codepath()) {
+			Ok(p) => p,
+			Err(e) => return Some(Err(e)),
+		};
+		let old = match std::fs::read_to_string(&path) {
+			Ok(s) => s,
+			Err(e) => {
+				return Some(Err(Diagnostic {
+					variant: DiagnosticVariant::Inaccessible,
+					message: format!("cannot read file: {e}"),
+					span:    None,
+				}));
+			},
+		};
+		let (new_text, mut outcome) = match apply_to_text(op, &old)? {
+			Ok(r) => r,
+			Err(e) => return Some(Err(e)),
+		};
+		if let Err(e) = std::fs::write(&path, &new_text) {
+			return Some(Err(Diagnostic {
+				variant: DiagnosticVariant::Inaccessible,
+				message: format!("cannot write file: {e}"),
+				span:    None,
+			}));
+		}
+		outcome.target_summary = Some(path.to_string_lossy().to_string());
+		Some(Ok(outcome))
 	}
 }
 

@@ -187,6 +187,12 @@ fn variant_info(variant: &DiagnosticVariant) -> (String, String, Severity) {
 				.into(),
 			Severity::Error,
 		),
+		DiagnosticVariant::PeerConflict => (
+			"E_PEER_CONFLICT".into(),
+			"Another session holds an active intent on the target; retry after the peer releases its lock"
+				.into(),
+			Severity::Error,
+		),
 	}
 }
 

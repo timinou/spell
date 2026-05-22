@@ -6,7 +6,6 @@ This document explains how preview/apply workflows are modeled in coding-agent a
 
 - [`src/tools/resolve.ts`](../packages/coding-agent/src/tools/resolve.ts)
 - [`src/tools/pending-action.ts`](../packages/coding-agent/src/tools/pending-action.ts)
-- [`src/tools/ast-edit.ts`](../packages/coding-agent/src/tools/ast-edit.ts)
 - [`src/extensibility/custom-tools/types.ts`](../packages/coding-agent/src/extensibility/custom-tools/types.ts)
 - [`src/extensibility/custom-tools/loader.ts`](../packages/coding-agent/src/extensibility/custom-tools/loader.ts)
 - [`src/sdk.ts`](../packages/coding-agent/src/sdk.ts)
@@ -33,15 +32,6 @@ Pending actions are stored in `PendingActionStore` as a push/pop stack:
 
 `resolve` always consumes the **topmost** pending action first (`pop()`), so multiple preview-producing tools resolve in reverse order of registration.
 
-## Built-in producer example (`ast_edit`)
-
-`ast_edit` previews structural replacements first. When the preview has replacements and is not applied yet, it pushes a pending action that contains:
-
-- label (human-readable summary)
-- `sourceToolName` (`ast_edit`)
-- `apply(reason: string)` callback that reruns AST edit with `dryRun: false`
-
-`resolve(action="apply", reason="...")` passes `reason` into this callback.
 
 ## Custom tools: `pushPendingAction`
 
