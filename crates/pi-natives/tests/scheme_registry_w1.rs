@@ -1,9 +1,5 @@
 //! W1 integration: auto-registry populated from `crates/pi-natives/src/code_path/uri/`
 //! resolves each declarative profile against fixture filesystems.
-//!
-//! Covers: skill, rule, memory, local (4 of the 5 simple profiles; pi:// covered
-//! separately in w1b once docs embedding lands).
-
 
 use pi_code_path::{
 	UriLocator,
@@ -23,7 +19,7 @@ fn registry(ctx: Option<&SessionContext>) -> SchemeRegistry {
 fn auto_registry_contains_w1_profiles() {
 	let reg = registry(None);
 	let names = reg.known_schemes();
-	for expected in ["skill", "rule", "memory", "local"] {
+	for expected in ["skill", "rule", "memory", "local", "pi"] {
 		assert!(names.contains(&expected.to_string()), "missing {expected}");
 	}
 }
@@ -34,13 +30,11 @@ fn skill_resolves() {
 	let skill_md = dir.path().join(".spell/skills/canvas/SKILL.md");
 	std::fs::create_dir_all(skill_md.parent().unwrap()).unwrap();
 	std::fs::write(&skill_md, "# canvas skill\n").unwrap();
-
 	let ctx = SessionContext::new(dir.path(), "/home/u");
 	let reg = registry(Some(&ctx));
 	let uri = UriLocator { scheme: "skill".into(), path: "canvas".into() };
 	let cancel = CancellationToken::new();
 	let r = reg.resolve(&uri, Some(&ctx), &cancel).unwrap();
-
 	assert_eq!(r.source_path, Some(skill_md));
 	match &r.content {
 		Content::Text { value } => assert!(value.contains("canvas skill")),
@@ -54,7 +48,6 @@ fn skill_subpath_resolves() {
 	let target = dir.path().join(".spell/skills/canvas/scripts/init.py");
 	std::fs::create_dir_all(target.parent().unwrap()).unwrap();
 	std::fs::write(&target, "print('hi')\n").unwrap();
-
 	let ctx = SessionContext::new(dir.path(), "/home/u");
 	let reg = registry(Some(&ctx));
 	let uri = UriLocator { scheme: "skill".into(), path: "canvas/scripts/init.py".into() };
@@ -69,7 +62,6 @@ fn rule_resolves_with_ext_appended() {
 	let rule_md = dir.path().join(".spell/rules/canvas-activation.md");
 	std::fs::create_dir_all(rule_md.parent().unwrap()).unwrap();
 	std::fs::write(&rule_md, "# canvas activation rule\n").unwrap();
-
 	let ctx = SessionContext::new(dir.path(), "/home/u");
 	let reg = registry(Some(&ctx));
 	let uri = UriLocator { scheme: "rule".into(), path: "canvas-activation".into() };
@@ -84,7 +76,6 @@ fn memory_resolves_root() {
 	let mem_root = dir.path().join(".spell/memory/memory_summary.md");
 	std::fs::create_dir_all(mem_root.parent().unwrap()).unwrap();
 	std::fs::write(&mem_root, "# memory\n").unwrap();
-
 	let ctx = SessionContext::new(dir.path(), "/home/u");
 	let reg = registry(Some(&ctx));
 	let uri = UriLocator { scheme: "memory".into(), path: "memory_summary.md".into() };
@@ -96,7 +87,6 @@ fn memory_resolves_root() {
 #[test]
 fn local_requires_session_dir() {
 	let dir = TempDir::new().unwrap();
-	// ctx without session_dir → local:// fails loudly
 	let ctx = SessionContext::new(dir.path(), "/home/u");
 	let reg = registry(Some(&ctx));
 	let uri = UriLocator { scheme: "local".into(), path: "x.txt".into() };
@@ -111,7 +101,6 @@ fn local_resolves_with_session_dir() {
 	let sess = dir.path().join("session-abc");
 	std::fs::create_dir_all(sess.join("local")).unwrap();
 	std::fs::write(sess.join("local/notes.md"), "session notes\n").unwrap();
-
 	let ctx = SessionContext::new(dir.path(), "/home/u").with_session_dir(&sess);
 	let reg = registry(Some(&ctx));
 	let uri = UriLocator { scheme: "local".into(), path: "notes.md".into() };
@@ -138,14 +127,10 @@ fn missing_file_returns_filenotfound() {
 	let uri = UriLocator { scheme: "skill".into(), path: "nonexistent".into() };
 	let cancel = CancellationToken::new();
 	let err = reg.resolve(&uri, Some(&ctx), &cancel).unwrap_err();
-	assert!(
-		matches!(
-			err.variant,
-			pi_code_path::types::DiagnosticVariant::FileNotFound
-		),
-		"unexpected diagnostic variant: {:?}",
-		err.variant
-	);
+	assert!(matches!(
+		err.variant,
+		pi_code_path::types::DiagnosticVariant::FileNotFound
+	));
 }
 
 #[test]
@@ -159,9 +144,8 @@ fn pi_resolves_known_doc() {
 	let reg = registry(None);
 	let uri = UriLocator { scheme: "pi".into(), path: "memory.md".into() };
 	let cancel = CancellationToken::new();
-	// memory.md exists in docs/ — embedded at build time
 	let r = reg.resolve(&uri, None, &cancel).unwrap();
-	assert!(r.source_path.is_none(), "pi:// is virtual");
+	assert!(r.source_path.is_none());
 	match &r.content {
 		Content::Text { value } => assert!(!value.is_empty()),
 		_ => panic!("expected Text"),
@@ -178,4 +162,24 @@ fn pi_unknown_doc_returns_not_found() {
 		err.variant,
 		pi_code_path::types::DiagnosticVariant::FileNotFound
 	));
+}
+
+#[test]
+fn session_context_built_from_task_options() {
+	let opts = pi_natives::code_path::napi::CodePathTaskOptions {
+		root:        Some("/proj".into()),
+		home:        Some("/home/u".into()),
+		session_dir: Some("/sess".into()),
+		..Default::default()
+	};
+	let ctx = opts.session_context().expect("ctx");
+	assert_eq!(ctx.project_root, std::path::PathBuf::from("/proj"));
+	assert_eq!(ctx.home, std::path::PathBuf::from("/home/u"));
+	assert_eq!(ctx.session_dir, Some(std::path::PathBuf::from("/sess")));
+}
+
+#[test]
+fn session_context_none_when_root_missing() {
+	let opts = pi_natives::code_path::napi::CodePathTaskOptions::default();
+	assert!(opts.session_context().is_none());
 }

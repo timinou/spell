@@ -4025,6 +4025,7 @@ dependencies = [
  "image",
  "insta",
  "miette",
+ "phf 0.13.1",
  "proptest",
  "regex",
  "serde",

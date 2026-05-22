@@ -2179,6 +2179,8 @@ mod tests {
 				gitignore: None,
 				artifact_threshold: None,
 				session_id: None,
+				home:               None,
+				session_dir:        None,
 			},
 			crate::task::CancelToken::default(),
 		)

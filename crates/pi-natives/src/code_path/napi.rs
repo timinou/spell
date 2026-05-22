@@ -104,6 +104,10 @@ pub struct CodePathOptions<'env> {
 	pub timeout_ms:         Option<u32>,
 	#[napi(js_name = "artifactThreshold")]
 	pub artifact_threshold: Option<u32>,
+	// PLAN-310 W1: SessionContext threading.
+	pub home:               Option<String>,
+	#[napi(js_name = "sessionDir")]
+	pub session_dir:        Option<String>,
 }
 
 // ── Transaction mode ─────────────────────────────────────────────
@@ -203,6 +207,7 @@ pub fn snapshot_targets(
 // ── Task options (owned, Send) ───────────────────────────────────
 
 #[allow(dead_code)]
+#[derive(Default)]
 pub struct CodePathTaskOptions {
 	pub command:            String,
 	pub target:             String,
@@ -218,6 +223,24 @@ pub struct CodePathTaskOptions {
 	pub gitignore:          Option<bool>,
 	pub session_id:         Option<String>,
 	pub artifact_threshold: Option<u32>,
+	// PLAN-310 W1: SessionContext threading.
+	pub home:               Option<String>,
+	pub session_dir:        Option<String>,
+}
+
+impl CodePathTaskOptions {
+	/// Build a `SessionContext` from `root` + `home` + `session_dir`. Returns
+	/// `None` when `root` is unset (anonymous mode).
+	/// Per PLAN-310: threaded through every URI resolution path.
+	pub fn session_context(&self) -> Option<pi_code_path::SessionContext> {
+		let root = self.root.as_deref()?;
+		let home = self.home.clone().or_else(|| std::env::var("HOME").ok()).unwrap_or_default();
+		let mut ctx = pi_code_path::SessionContext::new(root, home);
+		if let Some(dir) = &self.session_dir {
+			ctx = ctx.with_session_dir(dir);
+		}
+		Some(ctx)
+	}
 }
 
 impl From<CodePathOptions<'_>> for CodePathTaskOptions {
@@ -240,6 +263,8 @@ impl From<CodePathOptions<'_>> for CodePathTaskOptions {
 			session_id:         value.session_id,
 			gitignore:          value.gitignore,
 			artifact_threshold: value.artifact_threshold,
+			home:               value.home,
+			session_dir:        value.session_dir,
 		}
 	}
 }
@@ -999,6 +1024,8 @@ mod tests {
 			gitignore:          None,
 			artifact_threshold: None,
 			session_id:         None,
+			home:               None,
+			session_dir:        None,
 		}
 	}
 	fn opts_with_root(target: impl Into<String>, root: PathBuf) -> CodePathTaskOptions {
@@ -1017,6 +1044,8 @@ mod tests {
 			gitignore:          None,
 			artifact_threshold: None,
 			session_id:         None,
+			home:               None,
+			session_dir:        None,
 		}
 	}
 	fn opts_edit_with_root(
@@ -1039,6 +1068,8 @@ mod tests {
 			gitignore: None,
 			artifact_threshold: None,
 			session_id: None,
+			home:               None,
+			session_dir:        None,
 		}
 	}
 	#[test]
