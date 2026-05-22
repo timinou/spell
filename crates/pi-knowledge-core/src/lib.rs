@@ -7,7 +7,7 @@
 //! Module wiring lands incrementally per PLAN-310:
 //! * W1: `bm25`, `graph`, `fusion`, `cache` (this wave)
 //! * W2: `vec` (usearch)
-//! * W3: `embedder` (user-scoped pi-embedding-worker client)
+//! * W3: `embedder` (user-scoped pi-knowledge-worker client)
 //! * W5: `ingest` (notify-driven watcher), `recall` (hybrid orchestrator)
 
 pub mod bm25;

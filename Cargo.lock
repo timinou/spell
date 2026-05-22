@@ -3869,18 +3869,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pi-embedding-worker"
-version = "13.12.8"
-dependencies = [
- "clap",
- "fastembed",
- "fd-lock",
- "nix 0.29.0",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "pi-knowledge-core"
 version = "13.12.8"
 dependencies = [
@@ -3894,6 +3882,20 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "usearch",
+]
+
+[[package]]
+name = "pi-knowledge-worker"
+version = "13.12.8"
+dependencies = [
+ "clap",
+ "fastembed",
+ "fd-lock",
+ "libc",
+ "nix 0.29.0",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

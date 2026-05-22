@@ -17,7 +17,7 @@ use std::{
 	time::{Duration, Instant},
 };
 
-const BIN: &str = env!("CARGO_BIN_EXE_pi-embedding-worker");
+const BIN: &str = env!("CARGO_BIN_EXE_pi-knowledge-worker");
 
 fn unique_dir(label: &str) -> PathBuf {
 	let nanos = std::time::SystemTime::now()

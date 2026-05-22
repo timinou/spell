@@ -1,4 +1,4 @@
-//! `pi-embedding-worker` binary.
+//! `pi-knowledge-worker` binary.
 //!
 //! Default mode reads JSON commands from stdin and writes JSON responses to
 //! stdout (one per line). Invoked with `--socket <path>` it becomes a
@@ -13,6 +13,7 @@
 //!   startup before rebinding.
 
 mod engine;
+mod repo_cache;
 
 use std::{
 	fs::{self, File, OpenOptions, Permissions},
@@ -58,6 +59,50 @@ enum Command {
 	Init,
 	EmbedBatch { texts: Vec<String>, batch_size: Option<usize> },
 	EmbedQuery { text: String },
+	/// PLAN-315 W1: warm-load a repo's knowledge cache (org/memory and/or
+	/// code-graph lane). W1 returns a placeholder repo_handle; W2/W3 wire
+	/// the actual cache load.
+	Open {
+		repo_root:        std::path::PathBuf,
+		#[serde(default)]
+		include_personal: bool,
+		#[serde(default)]
+		lanes:            Vec<Lane>,
+	},
+	/// Close a previously-opened repo handle; daemon may evict its cache.
+	Close { repo_handle: String },
+	/// Report daemon RSS and per-repo cache stats. `repo_handle: None`
+	/// returns daemon-wide aggregate.
+	Stats {
+		#[serde(default)]
+		repo_handle: Option<String>,
+	},
+}
+
+/// Knowledge lane identifier. Two cache shapes live in the daemon:
+/// the org/memory recall lane and the code-graph hybrid-search lane.
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Clone, Copy, Hash)]
+#[serde(rename_all = "snake_case")]
+enum Lane {
+	OrgMemory,
+	CodeGraph,
+}
+
+/// Protocol version. Bumped to 2 when PLAN-315 W1 lands the knowledge
+/// command surface. Clients gate features off this number.
+const PROTOCOL_VERSION: u32 = 2;
+
+/// Returns the command names this daemon understands. Clients use
+/// this list for forward-compatible feature detection.
+fn supported_commands() -> &'static [&'static str] {
+	&[
+		"init",
+		"embed_batch",
+		"embed_query",
+		"open",
+		"close",
+		"stats",
+	]
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -111,17 +156,26 @@ fn handle_command(command: Command) -> Response {
 	match panic::catch_unwind(AssertUnwindSafe(|| match command {
 		Command::Init => {
 			init_engine()?;
-			Ok(json!({"initialized": true}))
+			Ok(json!({
+				"initialized": true,
+				"protocol_version": PROTOCOL_VERSION,
+				"supported_commands": supported_commands(),
+			}))
 		},
 		Command::EmbedBatch { texts, batch_size } => with_engine(|engine| {
 			let docs: Vec<&str> = texts.iter().map(String::as_str).collect();
-let vectors = engine.embed_batch(&docs, batch_size)?;
+			let vectors = engine.embed_batch(&docs, batch_size)?;
 			Ok(json!({"vectors": vectors}))
 		}),
 		Command::EmbedQuery { text } => with_engine(|engine| {
-let vector = engine.embed_query(&text)?;
+			let vector = engine.embed_query(&text)?;
 			Ok(json!({"vector": vector}))
 		}),
+		Command::Open { repo_root, include_personal, lanes } => {
+			repo_cache::open(&repo_root, include_personal, &lanes)
+		},
+		Command::Close { repo_handle } => repo_cache::close(&repo_handle),
+		Command::Stats { repo_handle } => repo_cache::stats(repo_handle.as_deref()),
 	})) {
 		Ok(Ok(data)) => Response::Ok { ok: true, data },
 		Ok(Err(error)) => Response::Err { ok: false, error },
@@ -431,7 +485,7 @@ fn run_socket_mode(
 	let listener = match bind_listener(&socket) {
 		Ok(l) => l,
 		Err(err) => {
-			eprintln!("pi-embedding-worker: {err}");
+			eprintln!("pi-knowledge-worker: {err}");
 			let _ = fs::remove_file(&pidfile);
 			process::exit(1);
 		},
@@ -453,7 +507,7 @@ fn run_socket_mode(
 // =====================================================================
 
 #[derive(Debug, Parser)]
-#[command(name = "pi-embedding-worker", version)]
+#[command(name = "pi-knowledge-worker", version)]
 struct Cli {
 	/// Run as a socket-mode daemon listening at this path.
 	#[arg(long)]

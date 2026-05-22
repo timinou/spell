@@ -1,8 +1,9 @@
 #+TITLE: spinner-sentinel: decouple tool renderers from spinner ticks
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14ea14814559e822
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T15-17-13-109Z_14ea14814559e822.jsonl]]
 #+CUSTOM_ID: FEAT-776-spinner-sentinel-decouple-tool-renderers
+#+COMPLETION_HASH: 283c0978bea7fdc6
 
 * Initial Message
 
@@ -23,3 +24,5 @@ Stop calling renderer.renderCall/renderResult at 12.5Hz to animate one character
 3. ~TUI~ accepts spinnerFrames; lazy-subscribes to spinnerClock on first marker observed.
 4. ~TUI.#doRender~ post-process: replaceAll SPINNER_MARKER → currentGlyph after composite.
 5. ~ToolExecutionComponent.#updateSpinnerAnimation~ → no-op (drop tick subscription + #updateDisplay).
+
+NOTE [2026-05-22]: Landed in commit 0d62c39e6. Tool-renderer body no longer runs at 12.5Hz. tui 346/0 (incl. new spinner-sentinel.test.ts 4/4), components 27/0, task 11/0. tsgo + biome clean.
