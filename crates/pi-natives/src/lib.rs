@@ -75,6 +75,7 @@ pub mod appearance;
 pub mod ast;
 pub mod clipboard;
 pub mod code_buffer;
+pub mod exec;
 pub mod code_graph;
 pub mod code_path;
 pub(crate) mod embedding_worker;

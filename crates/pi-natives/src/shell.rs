@@ -99,6 +99,12 @@ struct ShellRunConfig {
 	cwd:     Option<String>,
 	/// Environment variables to apply for this command only.
 	env:     Option<HashMap<String, String>>,
+	/// PLAN-310: project root for SchemeRegistry-backed URI expansion.
+	root:    Option<String>,
+	/// PLAN-310: user home dir.
+	home:    Option<String>,
+	/// PLAN-310: per-session dir.
+	session_dir: Option<String>,
 }
 
 /// Options for running a shell command.
@@ -115,6 +121,13 @@ pub struct ShellRunOptions<'env> {
 	pub timeout_ms: Option<u32>,
 	/// Abort signal for cancelling the operation.
 	pub signal:     Option<Unknown<'env>>,
+	/// PLAN-310 W5: project root for SchemeRegistry-backed URI expansion.
+	pub root:       Option<String>,
+	/// PLAN-310 W5: user home dir.
+	pub home:       Option<String>,
+	/// PLAN-310 W5: per-session dir.
+	#[napi(js_name = "sessionDir")]
+	pub session_dir: Option<String>,
 }
 
 /// Result of running a shell command.
@@ -173,8 +186,14 @@ impl Shell {
 		let abort_state = self.abort_state.clone();
 		let config = self.config.clone();
 
-		let run_config =
-			ShellRunConfig { command: options.command, cwd: options.cwd, env: options.env };
+		let run_config = ShellRunConfig {
+			command: options.command,
+			cwd: options.cwd,
+			env: options.env,
+			root: options.root,
+			home: options.home,
+			session_dir: options.session_dir,
+		};
 
 		task::future(env, "shell.run", async move {
 			run_shell_session(session, abort_state, config, run_config, on_chunk, ct).await
@@ -272,6 +291,13 @@ pub struct ShellExecuteOptions<'env> {
 	pub snapshot_path: Option<String>,
 	/// Abort signal for cancelling the operation.
 	pub signal:        Option<Unknown<'env>>,
+	/// PLAN-310 W5: project root for kernel SchemeRegistry (URI scheme expansion in bash).
+	pub root:          Option<String>,
+	/// PLAN-310 W5: user home dir for UserRoot scheme templates.
+	pub home:          Option<String>,
+	/// PLAN-310 W5: per-session dir for SessionRoot scheme templates.
+	#[napi(js_name = "sessionDir")]
+	pub session_dir:   Option<String>,
 }
 
 /// Result of executing a shell command via brush-core.
@@ -300,8 +326,14 @@ pub fn execute_shell<'env>(
 ) -> Result<PromiseRaw<'env, ShellExecuteResult>> {
 	let config =
 		ShellConfig { session_env: options.session_env, snapshot_path: options.snapshot_path };
-	let run_config =
-		ShellRunConfig { command: options.command, cwd: options.cwd, env: options.env };
+	let run_config = ShellRunConfig {
+		command: options.command,
+		cwd: options.cwd,
+		env: options.env,
+		root: options.root,
+		home: options.home,
+		session_dir: options.session_dir,
+	};
 
 	let ct = task::CancelToken::new(options.timeout_ms, options.signal);
 	task::future(env, "shell.execute", async move {
@@ -554,6 +586,21 @@ async fn run_shell_command(
 	params.set_fd(OpenFiles::STDERR_FD, stderr_file);
 	params.process_group_policy = ProcessGroupPolicy::NewProcessGroup;
 	params.set_cancel_token(cancel_token.clone());
+
+	// PLAN-310 W5: install scheme-aware word preprocessor when project root is known.
+	if let Some(root) = options.root.as_deref() {
+		let home = options.home.clone().unwrap_or_else(|| std::env::var("HOME").unwrap_or_default());
+		let mut session_ctx = pi_code_path::SessionContext::new(root, home);
+		if let Some(sd) = &options.session_dir {
+			session_ctx = session_ctx.with_session_dir(sd);
+		}
+		let registry = std::sync::Arc::new(
+			crate::code_path::runtime_schemes::scheme_registry_for_session(Some(&session_ctx)),
+		);
+		params.word_preprocessor = Some(std::sync::Arc::new(
+			crate::exec::scheme_preprocessor::SchemeWordPreprocessor::new(registry, Some(session_ctx)),
+		));
+	}
 
 	let mut env_scope_pushed = false;
 	if let Some(env) = options.env.as_ref() {
