@@ -12,6 +12,7 @@
 //! - Stale socket files (regular file or dead listener) are unlinked on
 //!   startup before rebinding.
 
+mod embedder_adapter;
 mod engine;
 mod repo_cache;
 
@@ -132,7 +133,9 @@ let engine = EmbeddingEngine::new(false)?;
 	Ok(())
 }
 
-fn with_engine<T>(mut f: impl FnMut(&EmbeddingEngine) -> Result<T, String>) -> Result<T, String> {
+pub(crate) fn with_engine<T>(
+	mut f: impl FnMut(&EmbeddingEngine) -> Result<T, String>,
+) -> Result<T, String> {
 	{
 		let needs_init = engine_slot()
 			.lock()
