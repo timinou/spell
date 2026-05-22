@@ -1,0 +1,50 @@
+#+TITLE: PLAN-310 W8 + W9 dual-recall + T10.10 — TUI memory browser, personal store dual-recall wiring
+#+STATE: ITEM
+#+SESSION_ID: 14ea0d7add095343
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
+#+CUSTOM_ID: FUP-088-plan-310-w8-w9-dual-recall-t10-10-tui-me
+#+LAYER: coding-agent natives
+#+PRIORITY: #B
+
+* Initial Message
+
+Bro tantivy is super super overkill; what is its purpose in this codebase? is it actually being used in spell sessions? what is its
+ promise, and can it be fulfilled more leanly in an environment in which many (tens) of sessions are running on the same laptop, across
+ workspaces? the ONLY case where you're allowed to have tantivy is if it provides a REAL advantage, and in that case, memory and CPU
+ usage needs to be taken care of, and the agent interface and tools need to reflect the promise actually delivered.
+
+ This is an investigation session for now. Gather the information, learn online, and come back to me with real data
+
+Look at the org tool from first principle, as an agentic memory+PRD system (look up online). org recall isn't used but maybe the plan is
+ to actually either:
+ have a simpler FTS that is plugged into the pi-org-* machinery that enables the kind of graph+FTS that Surreal was enabling, by
+ bascially keeping the org files themselves as sources of truth, and pooling hte resources e.g. with a user-level daemon?
+
+ Think from first principles. I want lower memory usage and actually used tools out of this. Just because it wasn't used in the past
+ doesn't mean that it should be removed. This has a lot of potential, especially when we start leveraging more of the org syntax, to have
+ a clean model out of this. Right now it's opaque and unfinished; i'd like something powerful, ergonomic for the agent, and where the
+ text file is the source of truth. Thanks.
+
+ push back and ask me questions
+
+Three non-blocking follow-ups extracted from PLAN-310 W8 + W9 + W10 attempt. PLAN-310 cuts over and closes at W11 even without these.
+
+** W8 - TUI memory browser
+
+Slash command /memory + ambient Ctrl-M opens a 4-tab panel (search/graph/recent/since). Two task-agent attempts aborted on budget. Estimated 1 day.
+
+** W9 dual-recall wiring
+
+Schema + RecallHit.source already landed. Missing: recall_engine::query() acquiring a personal WarmEngine when include_personal:true is set, and calling pi_knowledge_core::recall::recall_dual instead of recall. Estimated 0.5 day.
+
+** T10.10 cross-repo loop test
+
+Currently RED. Depends on W9 dual-recall above.
+
+** ingest multi-root regression test
+
+watch_and_rebuild already supports multi-root; just lacks an explicit test. ~30 LOC.
+
+** Why deferred
+
+PLAN-310's measurable wins are shipped: tantivy + hnsw_rs gone (-22 MB .so), pi-org-recall + pi-code-vectors deleted, one user-scoped embedder daemon, memory tool live, producers wired, session-start projection live. Remaining work is polish (TUI) and feature completeness (dual-recall).
