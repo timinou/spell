@@ -440,6 +440,9 @@ pub fn execute_code_path_inner(
 	// which breaks sequential operations like "take first 3 of lines
 	// 324–340" (AND of [324..340] and [0..3] is always empty).
 
+	// PLAN-310: compute SessionContext before opts.root is consumed below.
+	let session_ctx = opts.session_context();
+
 	let root = opts
 		.root
 		.map(PathBuf::from)
@@ -827,7 +830,30 @@ pub fn execute_code_path_inner(
 			}
 		},
 		Locator::Uri(uri) => {
-			return Err(Error::from_reason(format!("unknown locator scheme: {}", uri.scheme)));
+			// PLAN-310: dispatch via kernel SchemeRegistry.
+			let registry = crate::code_path::runtime_schemes::scheme_registry_for_session(session_ctx.as_ref());
+			let cancel_tok = pi_code_path::resolver::traits::CancellationToken::new();
+			match registry.resolve(uri, session_ctx.as_ref(), &cancel_tok) {
+				Ok(resolved) => {
+					let mut metadata = HashMap::new();
+					if let Some(mime) = &resolved.mime {
+						metadata.insert("mime".into(), serde_json::Value::String(mime.clone()));
+					}
+					let kind = format!("§{}", uri.scheme);
+					let node = pi_code_path::types::NodeRef {
+						locator: resolved.url.clone(),
+						range: 0..0,
+						kind,
+						content: Some(resolved.content.clone()),
+						metadata,
+						diagnostics: vec![],
+					};
+					vec![node]
+				}
+				Err(d) => {
+					return Err(Error::from_reason(d.message));
+				}
+			}
 		},
 	};
 
