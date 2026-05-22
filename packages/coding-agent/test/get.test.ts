@@ -843,14 +843,23 @@ describe("GetTool", () => {
 				const kernelSpy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([]);
 				const tool = new GetTool(createSession({ internalRouter: router }));
 				const plain = await tool.execute("t", { target: "memory://root" });
-				expect(getText(plain)).toContain("# Memory");
-				expect(kernelSpy).not.toHaveBeenCalled();
+				// PLAN-310 cutover: memory:// is kernel-owned. The JS router throws
+				// RouterDelegateToKernel; get.ts catches it and dispatches via the
+				// kernel SchemeRegistry. kernelSpy IS called (which the legacy assertion
+				// rejected). The kernel returns memory_summary.md content (the "# Memory"
+				// listing-style preamble is JS-only); for the cutover assertion we just
+				// verify the kernel was consulted.
+				void plain;
+				expect(kernelSpy).toHaveBeenCalled();
 			} finally {
 				await fs.rm(tmp, { recursive: true });
 			}
 		});
 
-		it("forwards codepath suffix on memory:// to kernel using resolved sourcePath", async () => {
+		it.skip("[PLAN-310: kernel-owned via §memory] forwards codepath suffix natively", async () => {
+			// Behavior tested in crates/pi-natives/tests/scheme_e2e_w4.rs::
+			//   execute_code_path_forwards_suffix_to_source_path
+			return;
 			const { InternalUrlRouter, MemoryProtocolHandler } = await import("@oh-my-pi/pi-coding-agent/internal-urls");
 
 			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-feat815-memory-cp");
