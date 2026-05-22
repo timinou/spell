@@ -52,11 +52,13 @@ pub struct PersistedOrgItem {
 	/// Typed edges from the `:RELATIONS:` drawer (FEAT-631). Persisted as
 	/// `(token, target_id)` rather than `(EdgeKind, target_id)` because
 	/// `EdgeKind`'s serde repr (`tag = "kind", content = "value"`) requires
-	/// `deserialize_identifier`, which bincode does not support. We round
-	/// trip through `EdgeKind::token()` / `EdgeKind::parse()` in the From
-	/// impls; both are total functions (unknown tokens become
-	/// `EdgeKind::Other`). Defaulted on deserialize so older cache files
-	/// without this field remain loadable.
+	/// `deserialize_identifier`, which bincode does not support. We round-trip
+	/// through `EdgeKind::token()` / `EdgeKind::parse()` in the From impls;
+	/// both are total functions (unknown tokens become `EdgeKind::Other`).
+	///
+	/// NB: `#[serde(default)]` does NOT provide backward compat for bincode
+	/// (positional format). Schema changes require bumping
+	/// `OrgIndexEntry::SCHEMA_VERSION` so stale caches are discarded.
 	#[serde(default)]
 	pub relations:  Vec<(String, String)>,
 }
@@ -126,6 +128,10 @@ pub struct OrgIndexEntry {
 }
 
 impl PersistentCacheEntry for OrgIndexEntry {
+	// Bump when PersistedOrgItem/OrgIndex/OrgIndexEntry fields change.
+	// v1: added `relations` field to PersistedOrgItem.
+	const SCHEMA_VERSION: u32 = 1;
+
 	fn fingerprint(&self) -> &WorkspaceFingerprint {
 		&self.fingerprint
 	}
