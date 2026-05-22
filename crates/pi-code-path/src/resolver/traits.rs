@@ -81,20 +81,8 @@ pub trait EdgeResolver: Send + Sync {
 	) -> Result<Vec<NodeRef>, Diagnostic>;
 }
 
-/// Resolves URI locators to NodeRefs.
-pub trait UriResolver: Send + Sync {
-	fn resolve(
-		&self,
-		uri: &UriLocator,
-		cancel: &CancellationToken,
-	) -> Result<Vec<NodeRef>, Diagnostic>;
-}
-
-/// Per-scheme handler for custom URI schemes.
-pub trait SchemeHandler: Send + Sync {
-	fn handle(&self, path: &str, cancel: &CancellationToken) -> Result<NodeRef, Diagnostic>;
-	fn scheme(&self) -> &'static str;
-}
+// FEAT-722-era UriResolver + SchemeHandler traits removed in PLAN-310.
+// Kernel SchemeRegistry (scheme_dispatch.rs) is the canonical surface.
 
 /// Filesystem anchor context — tells the resolver how to classify
 /// file extensions and basenames.
