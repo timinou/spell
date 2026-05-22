@@ -149,7 +149,44 @@ fn extract_file_level_item(
 		}
 	}
 
-	let blockers_rels = synthesize_blockers_property(&properties);
+	let mut relations = synthesize_blockers_property(&properties);
+
+	// PLAN-315 W7 (T10.7 fix): the file-level :RELATIONS: drawer (and the
+	// :PROPERTIES: drawer if present after frontmatter) is part of the
+	// pre-heading block in many .spell/memory/{concepts,episodes,...}
+	// fixtures. Scan forward from frontmatter_end up to the first heading
+	// and parse both drawers. Without this, RELATIONS at file scope never
+	// reach TypedGraph and `memory.about` returns no neighbors for
+	// concept/episode notes.
+	//
+	// IMPORTANT: only run when frontmatter is present (frontmatter_end > 0)
+	// AND the preamble actually precedes a heading. Otherwise a file whose
+	// FIRST line is a heading (e.g. `* DOING My task`) would have its
+	// heading's own `:PROPERTIES:` drawer mis-attributed at file level.
+	if frontmatter_end > 0 {
+		let tail = &source[frontmatter_end..];
+		let preamble_end = tail.find("\n*").map_or(tail.len(), |off| off);
+		let preamble = &tail[..preamble_end];
+		if let Some(drawer) = extract_drawer(preamble, ":PROPERTIES:") {
+			for line in drawer.lines() {
+				let l = line.trim();
+				if l.is_empty() || l == ":PROPERTIES:" || l == ":END:" {
+					continue;
+				}
+				if let Some((k, v)) = l.trim_start_matches(':').split_once(':') {
+					let key = k.trim().to_uppercase();
+					if !properties.contains_key(&key) {
+						properties.insert(key, v.trim().to_string());
+					}
+				}
+			}
+		}
+		if let Some(drawer) = extract_drawer(preamble, ":RELATIONS:") {
+			relations.extend(parse_relations_drawer_text(drawer));
+		}
+	}
+
+	let blockers_rels = relations;
 
 	let custom_id = properties.get("CUSTOM_ID")?.clone();
 	let body = if include_body {
@@ -552,6 +589,19 @@ fn parse_relations_line(line: &str) -> Option<(EdgeKind, String)> {
 }
 
 /// Parse RELATIONS drawer lines from a text block (between :RELATIONS: and
+/// Extract a drawer (e.g. `:RELATIONS:` or `:PROPERTIES:`) from `source`
+/// starting at the marker. Returns the slice from the marker up to and
+/// including the matching `:END:` line, or `None` if not found.
+fn extract_drawer<'a>(source: &'a str, marker: &str) -> Option<&'a str> {
+	let start = source.find(marker)?;
+	let rel = &source[start..];
+	let end_off = rel.find(":END:")?;
+	// Include the :END: line itself (rest of that line through newline).
+	let after_end = &rel[end_off..];
+	let end_line_len = after_end.find('\n').map_or(after_end.len(), |n| n + 1);
+	Some(&rel[..end_off + end_line_len])
+}
+
 /// :END:).
 fn parse_relations_drawer_text(text: &str) -> Vec<(EdgeKind, String)> {
 	let mut relations = Vec::new();
@@ -863,6 +913,73 @@ mod tests {
 		assert_eq!(item.state, "DOING");
 		assert_eq!(item.level, 0);
 		assert!(item.body.as_ref().unwrap().contains("Plan body"));
+	}
+
+	/// PLAN-315 W7 — T10.7 fix: file-level :RELATIONS: drawer must propagate
+	/// to the file-level OrgItem so TypedGraph picks up the edges. Without
+	/// the fix `memory.about` returns no neighbors for concept/episode notes.
+	#[test]
+	fn file_level_relations_drawer_propagates_to_item() {
+		let src = concat!(
+			"#+TITLE: Auth Flow\n",
+			"#+CUSTOM_ID: CON-auth-flow\n",
+			"#+KIND: concept\n",
+			"\n",
+			":RELATIONS:\n",
+			"ABOUT: ENT-product-checkout\n",
+			"DISTILLED_FROM: EP-2026-05-15-auth-discovery\n",
+			":END:\n",
+			"\n",
+			"* Body\n",
+			"Some content.\n",
+		);
+		let items = extract_test_items(src, false);
+		let root = items.iter().find(|it| it.id == "CON-auth-flow").expect("file-level item");
+		assert_eq!(root.relations.len(), 2, "two relations parsed; got {:?}", root.relations);
+		assert!(
+			root.relations
+				.iter()
+				.any(|(_, target)| target == "ENT-product-checkout"),
+			"ABOUT edge: {:?}",
+			root.relations
+		);
+		assert!(
+			root.relations
+				.iter()
+				.any(|(_, target)| target == "EP-2026-05-15-auth-discovery"),
+			"DISTILLED_FROM edge: {:?}",
+			root.relations
+		);
+	}
+
+	/// File-level PROPERTIES drawer (positioned after the `#+KEY: value`
+	/// frontmatter) should also be parsed so e.g. `:KIND: concept` is
+	/// available as a property even when not also given as `#+KIND: concept`.
+	#[test]
+	fn file_level_properties_drawer_propagates() {
+		let src = concat!(
+			"#+TITLE: Concept\n",
+			"#+CUSTOM_ID: CON-x\n",
+			"\n",
+			":PROPERTIES:\n",
+			":KIND: concept\n",
+			":TAGS: alpha beta\n",
+			":END:\n",
+		);
+		let items = extract_test_items(src, false);
+		let root = items.iter().find(|it| it.id == "CON-x").expect("file-level item");
+		assert_eq!(root.property("KIND"), Some("concept"));
+		assert_eq!(root.property("TAGS"), Some("alpha beta"));
+	}
+
+	/// File whose first line is a heading must NOT pick up the heading's
+	/// PROPERTIES drawer at file level (regression guard for the W7 fix).
+	#[test]
+	fn heading_first_file_does_not_create_spurious_file_level_item() {
+		let src = "* DOING My task\n:PROPERTIES:\n:CUSTOM_ID: PROJ-001\n:END:\nBody\n";
+		let items = extract_test_items(src, false);
+		assert_eq!(items.len(), 1, "one item only; got {items:#?}");
+		assert_eq!(items[0].level, 1, "item is heading-level");
 	}
 
 	#[test]
