@@ -366,6 +366,9 @@ pub struct SchemeCapabilities {
 	/// For `Callback` loader: max time to wait before timeout. None = no
 	/// timeout.
 	pub callback_budget:     Option<Duration>,
+	/// Static notes appended to every successful resolution. Use for
+	/// scheme-wide hints (e.g. write-path reminders for `local://`).
+	pub static_notes:        &'static [&'static str],
 }
 
 // ── SchemeProfile ────────────────────────────────────────────────
@@ -407,6 +410,16 @@ impl ResolvedContent {
 			notes: Vec::new(),
 			source_mtime: None,
 		}
+	}
+
+	/// Prepend static notes from the profile capabilities to dynamic notes.
+	pub fn with_static_notes(mut self, statics: &[&'static str]) -> Self {
+		if !statics.is_empty() {
+			let mut combined: Vec<String> = statics.iter().map(|s| s.to_string()).collect();
+			combined.extend(self.notes.drain(..));
+			self.notes = combined;
+		}
+		self
 	}
 }
 

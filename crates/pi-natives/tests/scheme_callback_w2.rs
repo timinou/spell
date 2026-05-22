@@ -51,6 +51,7 @@ fn build_dynamic_profile(name: &'static str, response: &str) -> SchemeProfile {
 			cache:               CacheStrategy::None,
 			bash_expandable:     false,
 			callback_budget:     Some(Duration::from_secs(5)),
+			static_notes:        &[],
 		},
 	}
 }

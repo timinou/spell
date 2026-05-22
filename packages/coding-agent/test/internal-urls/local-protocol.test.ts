@@ -29,7 +29,9 @@ function createRouter(options: { artifactsDir?: string | null; sessionId?: strin
 	return router;
 }
 
-describe("LocalProtocolHandler", () => {
+// PLAN-310 cutover: local:// is kernel-owned via §local.
+// Behavior + traversal safety tested in scheme_registry_w1.rs::local_*
+describe.skip("LocalProtocolHandler [kernel-owned via §local]", () => {
 	it("lists files at local://", async () => {
 		await withTempDir(async tempDir => {
 			const artifactsDir = path.join(tempDir, "artifacts");

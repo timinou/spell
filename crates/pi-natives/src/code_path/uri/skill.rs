@@ -26,6 +26,7 @@ pub fn build(_ctx: Option<&SessionContext>) -> SchemeProfile {
 			cache:               CacheStrategy::None,
 			bash_expandable:     true,
 			callback_budget:     None,
+			static_notes:        &[],
 		},
 	}
 }

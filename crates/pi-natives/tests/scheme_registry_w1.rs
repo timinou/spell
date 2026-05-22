@@ -202,3 +202,15 @@ fn session_context_none_when_root_missing() {
 	let opts = pi_natives::code_path::napi::CodePathTaskOptions::default();
 	assert!(opts.session_context().is_none());
 }
+
+#[test]
+fn local_rejects_path_traversal() {
+	let dir = TempDir::new().unwrap();
+	let ctx = SessionContext::new(dir.path(), "/home/u").with_session_dir(dir.path());
+	let reg = registry(Some(&ctx));
+	let uri = UriLocator { scheme: "local".into(), path: "../etc/passwd".into() };
+	let cancel = CancellationToken::new();
+	let err = reg.resolve(&uri, Some(&ctx), &cancel).unwrap_err();
+	assert!(err.message.contains("escapes scheme root"), "diag: {}", err.message);
+}
+
