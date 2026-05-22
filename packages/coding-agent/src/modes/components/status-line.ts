@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { type Component, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
+import { type Component, type DirtyParent, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { formatCount } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { settings } from "../../config/settings";
@@ -48,6 +48,7 @@ export interface StatusLineSettings {
 
 export class StatusLineComponent implements Component {
 	#settings: StatusLineSettings = {};
+	#parent?: DirtyParent;
 	#cachedBranch: string | null | undefined = undefined;
 	#cachedBranchRepoId: string | null | undefined = undefined;
 	#gitWatcher: fs.FSWatcher | null = null;
@@ -156,6 +157,14 @@ export class StatusLineComponent implements Component {
 
 	invalidate(): void {
 		this.#invalidateGitCaches();
+		// Propagate to parent Container so its cache is busted and the next
+		// render walks children (which rebuild the status line content).
+		// BUG-391 follow-up.
+		this.#parent?.markDirty();
+	}
+
+	setParent(p: DirtyParent | undefined): void {
+		this.#parent = p;
 	}
 
 	#invalidateGitCaches(): void {
