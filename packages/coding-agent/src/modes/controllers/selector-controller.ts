@@ -38,6 +38,15 @@ import { ToolExecutionComponent } from "../components/tool-execution";
 import { TreeSelectorComponent } from "../components/tree-selector";
 import { UserMessageSelectorComponent } from "../components/user-message-selector";
 
+import {
+	MemoryBrowserComponent,
+	MemoryBrowserTab,
+	MemoryGraphTab,
+	MemoryRecentTab,
+	MemorySearchTab,
+	MemorySinceTab,
+} from "../components/memory-browser/index.js";
+
 const CALLBACK_SERVER_PROVIDERS = new Set<OAuthProvider>([
 	"anthropic",
 	"openai-codex",
@@ -811,6 +820,46 @@ export class SelectorController {
 				},
 			});
 			return { component: viewer, focus: viewer };
+		});
+	}
+
+	showMemoryBrowser(): void {
+		this.showSelector((done) => {
+			const cwd = getProjectDir();
+			const onRequestRender = () => this.ctx.ui.requestRender();
+			const search = new MemorySearchTab(cwd, onRequestRender);
+			const graph = new MemoryGraphTab(cwd, onRequestRender);
+			const recent = new MemoryRecentTab(cwd, onRequestRender);
+			const since = new MemorySinceTab(cwd, onRequestRender);
+
+			let browser: MemoryBrowserComponent;
+
+			const onClose = () => {
+				browser.dispose();
+				done();
+				this.ctx.ui.requestRender();
+			};
+
+			search.setOnSelectHit((hit) => {
+				browser.setActiveTab(MemoryBrowserTab.Graph);
+				graph.setFocus(hit.id);
+			});
+			graph.setOnSelectNeighbor((id) => graph.setFocus(id));
+			recent.setOnSelectItem((id) => {
+				browser.setActiveTab(MemoryBrowserTab.Graph);
+				graph.setFocus(id);
+			});
+			since.setOnSelectItem((id) => {
+				browser.setActiveTab(MemoryBrowserTab.Graph);
+				graph.setFocus(id);
+			});
+
+			browser = new MemoryBrowserComponent(
+				{ cwd, onClose, onRequestRender },
+				[search, graph, recent, since],
+			);
+
+			return { component: browser, focus: browser };
 		});
 	}
 }
