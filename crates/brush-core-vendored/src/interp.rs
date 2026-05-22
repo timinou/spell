@@ -58,6 +58,15 @@ struct PipelineExecutionContext<'a> {
     process_group_id: Option<i32>,
 }
 
+/// Hook for preprocessing word pieces during shell expansion.
+///
+/// PLAN-310 Spell-fork addition. Some(expanded) claims the token;
+/// None defers to normal expansion. Single-quoted text is bypassed.
+pub trait WordPreprocessor: Send + Sync + std::fmt::Debug {
+    /// Preprocess one word-piece text. Returns Some(replacement) to claim it; None to defer.
+    fn preprocess(&self, text: &str) -> Option<String>;
+}
+
 /// Parameters for execution.
 #[derive(Clone, Default)]
 pub struct ExecutionParameters {
@@ -67,6 +76,8 @@ pub struct ExecutionParameters {
     pub process_group_policy: ProcessGroupPolicy,
     /// Optional cancellation token shared with callers.
     cancel_token: Option<CancellationToken>,
+    /// PLAN-310: optional word-piece preprocessor.
+    pub word_preprocessor: Option<std::sync::Arc<dyn WordPreprocessor>>,
 }
 
 impl ExecutionParameters {
