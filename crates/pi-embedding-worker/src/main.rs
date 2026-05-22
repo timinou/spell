@@ -12,6 +12,8 @@
 //! - Stale socket files (regular file or dead listener) are unlinked on
 //!   startup before rebinding.
 
+mod engine;
+
 use std::{
 	fs::{self, File, OpenOptions, Permissions},
 	io::{self, BufRead, BufReader, Write},
@@ -40,7 +42,7 @@ use nix::{
 	sys::signal::{self, SaFlags, SigAction, SigHandler, SigSet, Signal},
 	unistd::{ForkResult, fork, setsid},
 };
-use pi_code_vectors::EmbeddingEngine;
+use engine::EmbeddingEngine;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -77,7 +79,7 @@ fn engine_slot() -> &'static Mutex<Option<EmbeddingEngine>> {
 }
 
 fn init_engine() -> Result<(), String> {
-	let engine = EmbeddingEngine::new(false).map_err(|error| error.to_string())?;
+let engine = EmbeddingEngine::new(false)?;
 	let mut slot = engine_slot()
 		.lock()
 		.map_err(|error| format!("mutex poisoned: {error}"))?;
@@ -113,15 +115,11 @@ fn handle_command(command: Command) -> Response {
 		},
 		Command::EmbedBatch { texts, batch_size } => with_engine(|engine| {
 			let docs: Vec<&str> = texts.iter().map(String::as_str).collect();
-			let vectors = engine
-				.embed_batch(&docs, batch_size)
-				.map_err(|error| error.to_string())?;
+let vectors = engine.embed_batch(&docs, batch_size)?;
 			Ok(json!({"vectors": vectors}))
 		}),
 		Command::EmbedQuery { text } => with_engine(|engine| {
-			let vector = engine
-				.embed_query(&text)
-				.map_err(|error| error.to_string())?;
+let vector = engine.embed_query(&text)?;
 			Ok(json!({"vector": vector}))
 		}),
 	})) {

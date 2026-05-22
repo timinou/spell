@@ -23,7 +23,7 @@ use pi_org_engine::{
 	query::{self, QueryFilter},
 	section,
 };
-use pi_org_recall::recall::RecallQuery;
+use pi_knowledge_core::recall::RecallQuery;
 use serde_json::{Value, json};
 
 use crate::{buffer_registry, org_index};
@@ -821,7 +821,7 @@ fn cmd_recall(options: &Value) -> Result<Value> {
 		limit:            options.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize,
 		weights:          options
 			.get("weights")
-			.and_then(|w| serde_json::from_value::<pi_org_recall::FusionWeights>(w.clone()).ok()),
+			.and_then(|w| serde_json::from_value::<pi_knowledge_core::recall::FusionWeights>(w.clone()).ok()),
 		profile:          options
 			.get("profile")
 			.and_then(Value::as_str)
