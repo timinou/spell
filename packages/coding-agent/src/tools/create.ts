@@ -101,7 +101,7 @@ export class CreateTool implements AgentTool<typeof createSchema> {
 		// caller deliberately wants to replace a large file with a tiny
 		// one. Parse-regression guard stays on either way.
 		if (params.force && isCodeToolSupportedPath(resolvedPath)) {
-			const guard = evaluateWriteGuards(resolvedPath, content, { force: params.force === true });
+   const guard = await evaluateWriteGuards(resolvedPath, content, { force: params.force === true });
 			if ("ok" in guard && guard.ok === false) {
 				return toolResult<CreateToolResultDetails>({ path: params.path, error: guard.code })
 					.text(guard.detail)
