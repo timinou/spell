@@ -163,8 +163,12 @@ describe("expandInternalUrls", () => {
 			"cat agent://reviewer_0 artifact://12 memory://root/memory_summary.md rule://rs-no-unwrap skill://valid-skill/scripts/init.py";
 		const expectedSkillPath = path.join(skills[0].baseDir, "scripts/init.py");
 
+		// PLAN-310 cutover: agent:// and memory:// are kernel-owned and pass
+		// through TS pre-pass unchanged — brush WordPreprocessor in the kernel
+		// shell exec handles them. artifact:// and rule:// remain JS-routed
+		// (BUG-393/394/396). skill:// + local:// special-cased here.
 		await expect(expandInternalUrls(command, { skills, internalRouter: router })).resolves.toBe(
-			`cat ${shellEscape("/tmp/session/reviewer_0.md")} ${shellEscape("/tmp/artifacts/12.bash.log")} ${shellEscape("/tmp/memories/memory_summary.md")} ${shellEscape("/tmp/rules/rs-no-unwrap.md")} ${shellEscape(expectedSkillPath)}`,
+			`cat ${shellEscape("agent://reviewer_0")} ${shellEscape("/tmp/artifacts/12.bash.log")} ${shellEscape("memory://root/memory_summary.md")} ${shellEscape("/tmp/rules/rs-no-unwrap.md")} ${shellEscape(expectedSkillPath)}`,
 		);
 	});
 
@@ -177,12 +181,14 @@ describe("expandInternalUrls", () => {
 		);
 	});
 
-	it("expands agent:// URLs when router is available", async () => {
+	it("passes agent:// URLs through unchanged (PLAN-310: kernel-owned via §agent)", async () => {
 		const router = createInternalRouter({
 			"agent://abc": { sourcePath: "/tmp/session/abc.md" },
 		});
+		// agent:// is kernel-owned: TS pre-pass is a no-op; brush in the kernel
+		// shell exec resolves the URL via SchemeRegistry just before running.
 		await expect(expandInternalUrls("echo agent://abc", { skills: [], internalRouter: router })).resolves.toBe(
-			`echo ${shellEscape("/tmp/session/abc.md")}`,
+			`echo ${shellEscape("agent://abc")}`,
 		);
 	});
 
@@ -220,12 +226,14 @@ describe("expandInternalUrls", () => {
 		);
 	});
 
-	it("surfaces resolver errors with actionable context", async () => {
+	it("surfaces resolver errors with actionable context (for JS-routed schemes)", async () => {
+		// PLAN-310: memory:// is kernel-owned and passes through; use a still-JS-routed
+		// scheme (artifact://) to validate error surfacing.
 		const router = createInternalRouter({
-			"memory://root/missing.md": { error: "Memory file not found" },
+			"artifact://missing": { error: "Artifact not found" },
 		});
 		await expect(
-			expandInternalUrls("cat memory://root/missing.md", { skills: [], internalRouter: router }),
-		).rejects.toThrow("Failed to resolve memory:// URL in bash command");
+			expandInternalUrls("cat artifact://missing", { skills: [], internalRouter: router }),
+		).rejects.toThrow("Failed to resolve artifact:// URL in bash command");
 	});
 });

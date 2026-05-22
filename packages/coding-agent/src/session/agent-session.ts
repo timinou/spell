@@ -89,7 +89,7 @@ import { ExtensionToolWrapper } from "../extensibility/extensions/wrapper";
 import type { HookCommandContext } from "../extensibility/hooks/types";
 import type { Skill, SkillWarning } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
-import { resolveLocalUrlToPath } from "../internal-urls";
+import { localUrlToPath } from "../tools/local-path";
 import type { LoopManager } from "../loop/loop-manager";
 import manifestBuildingPrompt from "../loop/prompts/manifest-building-active.md" with { type: "text" };
 import {
@@ -2228,7 +2228,7 @@ export class AgentSession {
 			planContent = item.body;
 		} else {
 			// File-backed plan: resolve local:// to filesystem path and read.
-			const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			const resolvedPlanPath = localUrlToPath(planFilePath, {
 				getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
 				getSessionId: () => this.sessionManager.getSessionId(),
 			});
@@ -2262,12 +2262,12 @@ export class AgentSession {
 		if (!state?.enabled) return null;
 		const sessionPlanUrl = "local://PLAN.md";
 		const resolvedPlanPath = state.planFilePath.startsWith("local://")
-			? resolveLocalUrlToPath(state.planFilePath, {
+			? localUrlToPath(state.planFilePath, {
 					getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
 					getSessionId: () => this.sessionManager.getSessionId(),
 				})
 			: resolveToCwd(state.planFilePath, this.sessionManager.getCwd());
-		const resolvedSessionPlan = resolveLocalUrlToPath(sessionPlanUrl, {
+		const resolvedSessionPlan = localUrlToPath(sessionPlanUrl, {
 			getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
 			getSessionId: () => this.sessionManager.getSessionId(),
 		});
