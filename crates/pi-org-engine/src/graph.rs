@@ -9,10 +9,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-	edge::{EdgeKind, ItemId},
-	item::OrgItem,
-};
+use crate::item::OrgItem;
 
 /// A dependency edge: `from` is blocked by `to`.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -557,6 +554,30 @@ pub fn connected_components(items: &[OrgItem]) -> Vec<Vec<String>> {
 	components.into_values().collect()
 }
 
+// ── Typed graph ───────────────────────────────────────────────────────
+//
+// Backed by `pi_knowledge_core::graph::TypedGraph<TypedGraphNode, EdgeKind>`.
+// Public output shapes (`Subgraph`, `TimelineEntry`, `GraphPath`,
+// `TypedEdge`, `TypedGraphNode`) are unchanged from the FEAT-638 contract.
+// The `nodes` / `out_edges` / `in_edges` fields on `TypedGraph` are
+// denormalised lookup tables maintained by `build_typed_graph` so callers
+// that hold a `&TypedGraph` can still index edges directly.
+
+use std::collections::BTreeSet;
+
+use pi_knowledge_core::graph::{
+	EdgeKind as KnowledgeEdgeKind, Neighbor, Node as KnowledgeNode, NodeKey, PathStep,
+	TypedGraph as InnerGraph,
+};
+
+/// Re-export of the unified edge kind so call sites that read
+/// `pi_org_engine::graph::EdgeKind` keep working. Identical to
+/// `pi_knowledge_core::graph::EdgeKind`.
+pub type EdgeKind = KnowledgeEdgeKind;
+
+/// Stable identifier for an org item across files (a `CUSTOM_ID`).
+pub type ItemId = String;
+
 /// A typed edge between two items in the org graph.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct TypedEdge {
@@ -566,7 +587,7 @@ pub struct TypedEdge {
 }
 
 /// A node in the typed org graph.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TypedGraphNode {
 	pub id:       ItemId,
 	pub kind:     String,
@@ -575,12 +596,18 @@ pub struct TypedGraphNode {
 	pub dangling: bool,
 }
 
-/// The full typed graph with bidirectional edge indexing.
-#[derive(Debug, Clone, Serialize)]
+/// Typed graph backed by `pi_knowledge_core::graph::TypedGraph`.
+///
+/// `inner` is the canonical store traversed by [`neighborhood`] and [`path`].
+/// `nodes` / `out_edges` / `in_edges` are denormalised views populated by
+/// [`build_typed_graph`] for direct lookup.
+#[derive(Debug, Default, Serialize)]
 pub struct TypedGraph {
 	pub nodes:     BTreeMap<ItemId, TypedGraphNode>,
 	pub out_edges: HashMap<ItemId, Vec<TypedEdge>>,
 	pub in_edges:  HashMap<ItemId, Vec<TypedEdge>>,
+	#[serde(skip)]
+	inner:         InnerGraph<TypedGraphNode, EdgeKind>,
 }
 
 /// A subgraph result from neighborhood queries.
@@ -603,157 +630,197 @@ pub struct GraphPath {
 	pub edges: Vec<TypedEdge>,
 }
 
-/// Build a typed graph from a set of org items, including children.
-/// Synthesizes legacy BLOCKERS/DEPENDS properties into Blocks edges.
-pub fn build_typed_graph(items: &[OrgItem]) -> TypedGraph {
-	let mut nodes = BTreeMap::new();
-	let mut out_edges: HashMap<ItemId, Vec<TypedEdge>> = HashMap::new();
-	let mut in_edges: HashMap<ItemId, Vec<TypedEdge>> = HashMap::new();
-
-	fn collect_edges(item: &OrgItem, edges: &mut Vec<TypedEdge>) {
-		for (kind, target) in &item.relations {
-			if !target.is_empty() {
+/// Synthesise the typed edges declared by an item — both RELATIONS-drawer
+/// entries and legacy `BLOCKERS`/`DEPENDS` properties (the latter become
+/// `Blocks` edges, deduped against drawer entries).
+fn collect_edges(item: &OrgItem, edges: &mut Vec<TypedEdge>) {
+	for (kind, target) in &item.relations {
+		if target.is_empty() {
+			continue;
+		}
+		edges.push(TypedEdge {
+			from: item.id.clone(),
+			to:   target.clone(),
+			kind: kind.clone(),
+		});
+	}
+	let blockers_prop = item
+		.properties
+		.get("BLOCKERS")
+		.or_else(|| item.properties.get("DEPENDS"));
+	if let Some(value) = blockers_prop {
+		for token in value
+			.split(|c: char| c == ',' || c.is_whitespace())
+			.map(str::trim)
+			.filter(|s| !s.is_empty())
+		{
+			let already = item
+				.relations
+				.iter()
+				.any(|(k, t)| *k == EdgeKind::Blocks && t == token);
+			if !already {
 				edges.push(TypedEdge {
 					from: item.id.clone(),
-					to:   target.clone(),
-					kind: kind.clone(),
+					to:   token.to_string(),
+					kind: EdgeKind::Blocks,
 				});
 			}
 		}
-		let blockers_prop = item
-			.properties
-			.get("BLOCKERS")
-			.or_else(|| item.properties.get("DEPENDS"));
-		if let Some(value) = blockers_prop {
-			for token in value
-				.split(|c: char| c == ',' || c.is_whitespace())
-				.map(str::trim)
-				.filter(|s| !s.is_empty())
-			{
-				let already = item
-					.relations
-					.iter()
-					.any(|(k, t)| *k == EdgeKind::Blocks && t == token);
-				if !already {
-					edges.push(TypedEdge {
-						from: item.id.clone(),
-						to:   token.to_string(),
-						kind: EdgeKind::Blocks,
-					});
-				}
-			}
-		}
 	}
+}
 
-	fn walk_items(
-		items: &[OrgItem],
-		nodes: &mut BTreeMap<ItemId, TypedGraphNode>,
-		all_edges: &mut Vec<TypedEdge>,
-	) {
-		for item in items {
-			if item.id.is_empty() {
-				continue;
-			}
-			nodes
-				.entry(item.id.clone())
-				.or_insert_with(|| TypedGraphNode {
-					id:       item.id.clone(),
+fn walk_items(
+	items: &[OrgItem],
+	nodes: &mut BTreeMap<ItemId, TypedGraphNode>,
+	inner: &mut InnerGraph<TypedGraphNode, EdgeKind>,
+	all_edges: &mut Vec<TypedEdge>,
+) {
+	for item in items {
+		if item.id.is_empty() {
+			continue;
+		}
+		let node = TypedGraphNode {
+			id:       item.id.clone(),
+			kind:     String::new(),
+			title:    item.title.clone(),
+			file:     item.file.clone(),
+			dangling: false,
+		};
+		nodes
+			.entry(item.id.clone())
+			.or_insert_with(|| node.clone());
+		inner.upsert_node(KnowledgeNode {
+			key:     NodeKey::new(item.id.clone()),
+			kind:    String::new(),
+			payload: node,
+		});
+		collect_edges(item, all_edges);
+		walk_items(&item.children, nodes, inner, all_edges);
+	}
+}
+
+/// Build a typed graph from a set of org items, including children.
+///
+/// Synthesises legacy `BLOCKERS`/`DEPENDS` properties into `Blocks` edges and
+/// adds dangling placeholder nodes for relation targets outside the input.
+pub fn build_typed_graph(items: &[OrgItem]) -> TypedGraph {
+	let mut graph = TypedGraph::default();
+	let mut all_edges: Vec<TypedEdge> = Vec::new();
+
+	walk_items(items, &mut graph.nodes, &mut graph.inner, &mut all_edges);
+
+	// Ensure every edge endpoint exists so `inner.add_edge` succeeds.
+	// Unknown endpoints become dangling placeholders (id only, empty meta).
+	for edge in &all_edges {
+		for endpoint in [&edge.from, &edge.to] {
+			if !graph.nodes.contains_key(endpoint) {
+				let placeholder = TypedGraphNode {
+					id:       endpoint.clone(),
 					kind:     String::new(),
-					title:    item.title.clone(),
-					file:     item.file.clone(),
-					dangling: false,
+					title:    String::new(),
+					file:     String::new(),
+					dangling: true,
+				};
+				graph.nodes.insert(endpoint.clone(), placeholder.clone());
+				graph.inner.upsert_node(KnowledgeNode {
+					key:     NodeKey::new(endpoint.clone()),
+					kind:    String::new(),
+					payload: placeholder,
 				});
-			collect_edges(item, all_edges);
-			walk_items(&item.children, nodes, all_edges);
+			}
 		}
 	}
-
-	let mut all_edges = Vec::new();
-	walk_items(items, &mut nodes, &mut all_edges);
 
 	for edge in &all_edges {
-		out_edges
+		graph.inner.add_edge(
+			&NodeKey::new(edge.from.clone()),
+			&NodeKey::new(edge.to.clone()),
+			edge.kind.clone(),
+		);
+		graph
+			.out_edges
 			.entry(edge.from.clone())
 			.or_default()
 			.push(edge.clone());
-		in_edges
+		graph
+			.in_edges
 			.entry(edge.to.clone())
 			.or_default()
 			.push(edge.clone());
 	}
 
-	TypedGraph { nodes, out_edges, in_edges }
+	graph
 }
 
-/// Compute the neighborhood of a node up to `hops` away, optionally filtered by
-/// kind.
+/// Compute the neighborhood of a node up to `hops` away, optionally filtered
+/// by edge kind. Edges in the result are those among the visited node set.
 pub fn neighborhood(
 	graph: &TypedGraph,
 	root: &str,
 	hops: u8,
 	kinds_filter: &[EdgeKind],
 ) -> Subgraph {
-	let mut visited: HashSet<ItemId> = HashSet::new();
-	let mut found_edges: Vec<TypedEdge> = Vec::new();
-	let mut queue: VecDeque<(ItemId, u8)> = VecDeque::new();
+	let focus = NodeKey::new(root.to_string());
+	let filter: Option<&[EdgeKind]> =
+		if kinds_filter.is_empty() { None } else { Some(kinds_filter) };
 
-	visited.insert(root.to_string());
-	queue.push_back((root.to_string(), 0));
+	let visits: Vec<Neighbor<EdgeKind>> =
+		graph.inner.neighborhood(&focus, hops as usize, filter);
 
-	while let Some((current, depth)) = queue.pop_front() {
-		if depth >= hops {
-			continue;
-		}
-
-		if let Some(edges) = graph.out_edges.get(&current) {
-			for edge in edges {
-				if !kinds_filter.is_empty() && !kinds_filter.contains(&edge.kind) {
-					continue;
-				}
-				if visited.insert(edge.to.clone()) {
-					queue.push_back((edge.to.clone(), depth + 1));
-				}
-				found_edges.push(edge.clone());
-			}
-		}
-
-		if let Some(edges) = graph.in_edges.get(&current) {
-			for edge in edges {
-				if !kinds_filter.is_empty() && !kinds_filter.contains(&edge.kind) {
-					continue;
-				}
-				if visited.insert(edge.from.clone()) {
-					queue.push_back((edge.from.clone(), depth + 1));
-				}
-				found_edges.push(edge.clone());
-			}
-		}
+	if visits.is_empty() {
+		// Root not present in inner — degrade to a single-node dangling
+		// subgraph so callers always get the focus back.
+		return Subgraph {
+			nodes: vec![TypedGraphNode {
+				id:       root.to_string(),
+				kind:     String::new(),
+				title:    String::new(),
+				file:     String::new(),
+				dangling: true,
+			}],
+			edges: Vec::new(),
+		};
 	}
 
-	let mut seen_edges: HashSet<TypedEdge> = HashSet::new();
-	let deduped_edges: Vec<TypedEdge> = found_edges
-		.into_iter()
-		.filter(|e| seen_edges.insert(e.clone()))
-		.collect();
+	let visited: BTreeSet<ItemId> =
+		visits.iter().map(|n| n.key.as_str().to_string()).collect();
 
-	let nodes: Vec<TypedGraphNode> = visited
+	let sub_nodes: Vec<TypedGraphNode> = visited
 		.iter()
 		.map(|id| {
-			graph
-				.nodes
-				.get(id)
-				.cloned()
-				.unwrap_or_else(|| TypedGraphNode {
+			graph.inner.node(&NodeKey::new(id.clone())).map_or_else(
+				|| TypedGraphNode {
 					id:       id.clone(),
 					kind:     String::new(),
 					title:    String::new(),
 					file:     String::new(),
 					dangling: true,
-				})
+				},
+				|n| n.payload.clone(),
+			)
 		})
 		.collect();
 
-	Subgraph { nodes, edges: deduped_edges }
+	// Collect all edges among visited nodes (deterministic via BTreeSet iter).
+	let mut seen: HashSet<TypedEdge> = HashSet::new();
+	let mut edges: Vec<TypedEdge> = Vec::new();
+	for id in &visited {
+		for (target, kind) in graph.inner.out_edges(&NodeKey::new(id.clone())) {
+			let target_str = target.as_str();
+			if !visited.contains(target_str) {
+				continue;
+			}
+			if !kinds_filter.is_empty() && !kinds_filter.contains(&kind) {
+				continue;
+			}
+			let edge = TypedEdge { from: id.clone(), to: target.0.clone(), kind };
+			if seen.insert(edge.clone()) {
+				edges.push(edge);
+			}
+		}
+	}
+
+	Subgraph { nodes: sub_nodes, edges }
 }
 
 /// Timeline of items that `About` a target entity, sorted chronologically.
@@ -784,12 +851,10 @@ pub fn timeline(items: &[OrgItem], target: &str) -> Vec<TimelineEntry> {
 			}
 		})
 		.collect();
-
 	entries.sort_by(|a, b| a.ts.cmp(&b.ts));
 	entries
 }
 
-/// Parse an ISO-8601 datetime string to epoch milliseconds.
 fn parse_iso_datetime(s: &str) -> Option<i64> {
 	if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s.trim(), "%Y-%m-%dT%H:%M:%S") {
 		return Some(dt.and_utc().timestamp_millis());
@@ -802,128 +867,26 @@ fn parse_iso_datetime(s: &str) -> Option<i64> {
 	None
 }
 
-/// Find the shortest path between two nodes in the typed graph.
-/// Uses bidirectional BFS with optional kind filter.
+/// Find the shortest path between two nodes in the typed graph, honouring an
+/// optional edge-kind filter. Traverses both edge directions.
 pub fn path(graph: &TypedGraph, a: &str, b: &str, kinds_filter: &[EdgeKind]) -> Option<GraphPath> {
 	if a == b {
 		return Some(GraphPath { edges: Vec::new() });
 	}
-
-	let mut forward_visited: HashMap<ItemId, Option<(ItemId, TypedEdge)>> = HashMap::new();
-	let mut backward_visited: HashMap<ItemId, Option<(ItemId, TypedEdge)>> = HashMap::new();
-	let mut forward_queue: VecDeque<ItemId> = VecDeque::new();
-	let mut backward_queue: VecDeque<ItemId> = VecDeque::new();
-
-	forward_visited.insert(a.to_string(), None);
-	backward_visited.insert(b.to_string(), None);
-	forward_queue.push_back(a.to_string());
-	backward_queue.push_back(b.to_string());
-
-	let mut meeting: Option<ItemId> = None;
-
-	while meeting.is_none() && (!forward_queue.is_empty() || !backward_queue.is_empty()) {
-		if let Some(current) = forward_queue.pop_front() {
-			if let Some(edges) = graph.out_edges.get(&current) {
-				for edge in edges {
-					if !kinds_filter.is_empty() && !kinds_filter.contains(&edge.kind) {
-						continue;
-					}
-					if !forward_visited.contains_key(&edge.to) {
-						let prev = (current.clone(), edge.clone());
-						forward_visited.insert(edge.to.clone(), Some(prev));
-						if backward_visited.contains_key(&edge.to) {
-							meeting = Some(edge.to.clone());
-							break;
-						}
-						forward_queue.push_back(edge.to.clone());
-					}
-				}
-			}
-			if let Some(edges) = graph.in_edges.get(&current) {
-				for edge in edges {
-					if !kinds_filter.is_empty() && !kinds_filter.contains(&edge.kind) {
-						continue;
-					}
-					if !forward_visited.contains_key(&edge.from) {
-						let rev = TypedEdge {
-							from: edge.from.clone(),
-							to:   current.clone(),
-							kind: edge.kind.clone(),
-						};
-						forward_visited.insert(edge.from.clone(), Some((current.clone(), rev)));
-						if backward_visited.contains_key(&edge.from) {
-							meeting = Some(edge.from.clone());
-							break;
-						}
-						forward_queue.push_back(edge.from.clone());
-					}
-				}
-			}
-		}
-
-		if meeting.is_some() {
-			break;
-		}
-
-		if let Some(current) = backward_queue.pop_front() {
-			if let Some(edges) = graph.in_edges.get(&current) {
-				for edge in edges {
-					if !kinds_filter.is_empty() && !kinds_filter.contains(&edge.kind) {
-						continue;
-					}
-					if !backward_visited.contains_key(&edge.from) {
-						let rev = TypedEdge {
-							from: edge.from.clone(),
-							to:   current.clone(),
-							kind: edge.kind.clone(),
-						};
-						backward_visited.insert(edge.from.clone(), Some((current.clone(), rev)));
-						if forward_visited.contains_key(&edge.from) {
-							meeting = Some(edge.from.clone());
-							break;
-						}
-						backward_queue.push_back(edge.from.clone());
-					}
-				}
-			}
-			if let Some(edges) = graph.out_edges.get(&current) {
-				for edge in edges {
-					if !kinds_filter.is_empty() && !kinds_filter.contains(&edge.kind) {
-						continue;
-					}
-					if !backward_visited.contains_key(&edge.to) {
-						backward_visited.insert(edge.to.clone(), Some((current.clone(), edge.clone())));
-						if forward_visited.contains_key(&edge.to) {
-							meeting = Some(edge.to.clone());
-							break;
-						}
-						backward_queue.push_back(edge.to.clone());
-					}
-				}
-			}
-		}
-	}
-
-	let meeting = meeting?;
-
-	let mut forward_edges: Vec<TypedEdge> = Vec::new();
-	let mut current = meeting.clone();
-	while let Some(Some((prev, edge))) = forward_visited.get(&current).cloned() {
-		forward_edges.push(edge);
-		current = prev;
-	}
-	forward_edges.reverse();
-
-	let mut backward_edges: Vec<TypedEdge> = Vec::new();
-	let mut current = meeting;
-	while let Some(Some((prev, edge))) = backward_visited.get(&current).cloned() {
-		backward_edges.push(edge);
-		current = prev;
-	}
-
-	forward_edges.extend(backward_edges);
-	Some(GraphPath { edges: forward_edges })
+	let from = NodeKey::new(a.to_string());
+	let to = NodeKey::new(b.to_string());
+	let filter: Option<&[EdgeKind]> =
+		if kinds_filter.is_empty() { None } else { Some(kinds_filter) };
+	let steps: Vec<PathStep<EdgeKind>> = graph.inner.path(&from, &to, filter)?;
+	let edges = steps
+		.into_iter()
+		.map(|PathStep { from, to, kind }| TypedEdge { from: from.0, to: to.0, kind })
+		.collect();
+	Some(GraphPath { edges })
 }
+
+
+#[cfg(test)]
 mod tests {
 	use super::*;
 

@@ -15,9 +15,11 @@ use pi_code_engine::{
 };
 use tree_sitter::Node;
 
+use pi_knowledge_core::graph::EdgeKind;
+
 use crate::{
 	clock::{self, ClockEntry},
-	edge::EdgeKind,
+
 	item::OrgItem,
 };
 

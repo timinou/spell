@@ -12,7 +12,17 @@
 pub mod buffer;
 pub mod clock;
 pub mod diff;
-pub mod edge;
+pub mod edge {
+	//! Re-export of the unified `EdgeKind`.
+	//!
+	//! Kept as a module for backward compatibility with external imports of
+	//! `pi_org_engine::edge::EdgeKind`. New code should depend on
+	//! `pi_knowledge_core::graph::EdgeKind` directly.
+	pub use pi_knowledge_core::graph::EdgeKind;
+
+	/// Stable identifier for an org item across files (a `CUSTOM_ID`).
+	pub type ItemId = String;
+}
 pub mod edit;
 pub mod effort;
 pub mod graph;

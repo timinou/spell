@@ -22,7 +22,8 @@ impl NodeKey {
 
 /// Unified edge kind across code-graph + org-graph. New variants land here;
 /// no other crate defines its own edge kind enum.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum EdgeKind {
 	// Code-graph lane (matches pi-code-graph::model::EdgeKind ordinally)
 	Defines,
@@ -98,7 +99,8 @@ impl EdgeKind {
 	/// Parse a drawer keyword. Case-insensitive. Unknown tokens become
 	/// `EdgeKind::Other` for forward compatibility.
 	pub fn from_drawer_keyword(s: &str) -> Self {
-		match s.to_ascii_uppercase().as_str() {
+		let upper = s.to_ascii_uppercase();
+		match upper.as_str() {
 			"DEFINES" => Self::Defines,
 			"IMPORTS" => Self::Imports,
 			"CALLS" => Self::Calls,
@@ -125,8 +127,35 @@ impl EdgeKind {
 			"BLOCKS" => Self::Blocks,
 			"ACTION" => Self::Action,
 			"CONTAINS" => Self::Contains,
-			_ => Self::Other(s.to_owned()),
+			_ => Self::Other(upper.clone()),
 		}
+	}
+
+	/// Convenience wrapper used by org-engine call sites.
+	/// Trims whitespace, then maps to a canonical variant via
+	/// `from_drawer_keyword`. Unknown tokens become `Self::Other(UPPERCASE)`.
+	#[must_use]
+	pub fn parse(s: &str) -> Self {
+		Self::from_drawer_keyword(s.trim())
+	}
+
+	/// Canonical uppercase token (owned). Mirrors the legacy
+	/// `pi-org-engine::edge::EdgeKind::token` signature.
+	#[must_use]
+	pub fn token(&self) -> String {
+		self.drawer_keyword().to_owned()
+	}
+
+	/// True for kinds in the closed enum; `Other(_)` returns false.
+	#[must_use]
+	pub const fn is_known(&self) -> bool {
+		!matches!(self, Self::Other(_))
+	}
+}
+
+impl std::fmt::Display for EdgeKind {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.write_str(self.drawer_keyword())
 	}
 }
 

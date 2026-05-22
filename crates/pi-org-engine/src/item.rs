@@ -7,7 +7,9 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 
-use crate::{clock::ClockEntry, edge::EdgeKind};
+use pi_knowledge_core::graph::EdgeKind;
+
+use crate::clock::ClockEntry;
 
 /// A single org-mode item (heading or file-level).
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
