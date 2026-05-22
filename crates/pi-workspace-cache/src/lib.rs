@@ -1,10 +1,15 @@
 use std::{
 	collections::BTreeMap,
 	fmt, fs,
-	io::{BufReader, BufWriter, Write},
+	io::{BufReader, BufWriter, Read, Write},
 	path::{Path, PathBuf},
 	time::UNIX_EPOCH,
 };
+
+use bincode::Options;
+
+/// Magic bytes identifying a versioned workspace cache file.
+const CACHE_MAGIC: &[u8; 4] = b"PIWC";
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
@@ -62,6 +67,10 @@ pub enum CacheStatus {
 }
 
 pub trait PersistentCacheEntry {
+	/// Schema version for this cache entry type. Bump when the struct
+	/// shape changes (bincode is positional — any field add/remove/reorder
+	/// makes old caches unreadable and can cause OOM-abort on load).
+	const SCHEMA_VERSION: u32 = 0;
 	fn fingerprint(&self) -> &WorkspaceFingerprint;
 }
 
@@ -85,33 +94,65 @@ impl CacheStore {
 
 	pub fn load<T>(&self, name: &str) -> Result<Option<T>>
 	where
-		T: DeserializeOwned,
+		T: DeserializeOwned + PersistentCacheEntry,
 	{
 		let path = self.entry_path(name);
 		if !path.exists() {
 			return Ok(None);
 		}
-		let file = fs::File::open(path)?;
-		let reader = BufReader::new(file);
-		let entry = bincode::deserialize_from(reader)?;
-		Ok(Some(entry))
+		let meta = fs::metadata(&path)?;
+		let file = fs::File::open(&path)?;
+		let mut reader = BufReader::new(file);
+
+		// Validate magic + schema version header. On mismatch treat as
+		// cache-miss so callers rebuild instead of reading garbage.
+		let mut header = [0u8; 8];
+		if reader.read_exact(&mut header).is_err() {
+			return Ok(None);
+		}
+		if &header[..4] != CACHE_MAGIC {
+			return Ok(None);
+		}
+		let version = u32::from_le_bytes(header[4..8].try_into().unwrap());
+		if version != T::SCHEMA_VERSION {
+			return Ok(None);
+		}
+
+		// Cap deserialization at file size so a corrupt length prefix
+		// returns Err instead of OOM-aborting the process.
+		match bincode::DefaultOptions::new()
+			.with_fixint_encoding()
+			.allow_trailing_bytes()
+			.with_limit(meta.len())
+			.deserialize_from(reader)
+		{
+			Ok(entry) => Ok(Some(entry)),
+			Err(_) => {
+				// Corrupt or schema-drifted cache file — delete and miss.
+				let _ = fs::remove_file(&path);
+				Ok(None)
+			},
+		}
 	}
 
 	pub fn save<T>(&self, name: &str, entry: &T) -> Result<()>
 	where
-		T: Serialize,
+		T: Serialize + PersistentCacheEntry,
 	{
 		fs::create_dir_all(&self.directory)?;
 		let path = self.entry_path(name);
 		let file = fs::File::create(path)?;
 		let mut writer = BufWriter::new(file);
-		// Pass `&mut writer` so we retain ownership and can explicitly flush
-		// the BufWriter before drop. `BufWriter::drop` swallows flush errors
-		// silently — if the final partial buffer fails to write the on-disk
-		// file is truncated and `load()` later fails with bincode
-		// "failed to fill whole buffer". Discovered while wiring CacheStore
-		// into the recall engine hot path (was masked for org_index and
-		// code_graph because their saves are infrequent and small).
+		// Header: magic + schema version so load() can reject incompatible
+		// caches without attempting deserialization.
+		writer
+			.write_all(CACHE_MAGIC)
+			.map_err(WorkspaceCacheError::Io)?;
+		writer
+			.write_all(&T::SCHEMA_VERSION.to_le_bytes())
+			.map_err(WorkspaceCacheError::Io)?;
+		// Pass `&mut writer` so we retain ownership and can explicitly flush.
+		// `BufWriter::drop` swallows flush errors silently.
 		bincode::serialize_into(&mut writer, entry)?;
 		writer
 			.flush()
@@ -307,5 +348,73 @@ mod tests {
 			CacheStatus::Stale { reason: "workspace files changed".into() },
 		);
 		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn load_returns_none_for_wrong_schema_version() {
+		let dir = temp_dir("version-mismatch");
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).expect("temp dir");
+		let store = CacheStore::new(&dir);
+
+		// Write a valid cache file
+		let entry = TestEntry {
+			value:       "payload".into(),
+			fingerprint: WorkspaceFingerprint {
+				root:     PathBuf::from("/tmp"),
+				git_head: None,
+				files:    BTreeMap::new(),
+			},
+		};
+		store.save("unit", &entry).expect("save");
+
+		// Corrupt the version byte (offset 4..8) to a different version
+		let path = store.entry_path("unit");
+		let mut data = fs::read(&path).expect("read");
+		assert_eq!(&data[..4], b"PIWC", "magic header present");
+		data[4] = 0xFF; // bad version
+		fs::write(&path, &data).expect("overwrite");
+
+		let loaded = store.load::<TestEntry>("unit").expect("no error");
+		assert!(loaded.is_none(), "version mismatch should return None");
+		let _ = fs::remove_dir_all(dir);
+	}
+
+	#[test]
+	fn load_returns_none_for_missing_magic() {
+		let dir = temp_dir("no-magic");
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).expect("temp dir");
+		let store = CacheStore::new(&dir);
+
+		// Write raw bincode (old format, no header)
+		let path = store.entry_path("unit");
+		fs::write(&path, b"not a valid cache file at all").expect("write");
+
+		let loaded = store.load::<TestEntry>("unit").expect("no error");
+		assert!(loaded.is_none(), "missing magic should return None");
+		let _ = fs::remove_dir_all(dir);
+	}
+
+	#[test]
+	fn load_returns_none_for_corrupt_bincode_payload() {
+		let dir = temp_dir("corrupt-payload");
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).expect("temp dir");
+		let store = CacheStore::new(&dir);
+
+		// Write valid header but garbage payload
+		let path = store.entry_path("unit");
+		let mut data = Vec::new();
+		data.extend_from_slice(b"PIWC");
+		data.extend_from_slice(&TestEntry::SCHEMA_VERSION.to_le_bytes());
+		data.extend_from_slice(b"garbage bincode payload here!!");
+		fs::write(&path, &data).expect("write");
+
+		let loaded = store.load::<TestEntry>("unit").expect("no error");
+		assert!(loaded.is_none(), "corrupt payload should return None, not crash");
+		// Corrupt file should be cleaned up
+		assert!(!path.exists(), "corrupt cache file should be deleted");
+		let _ = fs::remove_dir_all(dir);
 	}
 }
