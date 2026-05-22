@@ -43,7 +43,9 @@ use std::{
 use parking_lot::Mutex;
 use pi_knowledge_core::{
 	bm25::SearchIndex,
-	recall::{Embedder, RecallContext, RecallDoc, RecallHit, RecallQuery, recall},
+	cache::KnowledgeMeta,
+	ingest::purge_if_stale,
+	recall::{Embedder, RecallContext, RecallDoc, RecallHit, RecallProfileRegistry, RecallQuery, recall},
 	vec::{VectorEntry, VectorIndex, id_hash},
 };
 use pi_org_engine::{
@@ -107,6 +109,26 @@ const BM25_CACHE_FILE: &str = "bm25.bin";
 
 /// `VectorIndex` usearch filename inside the per-repo cache dir.
 const VEC_CACHE_FILE: &str = "vec.uidx";
+
+/// `KnowledgeMeta` filename inside the per-repo cache dir. Consumed by
+/// `pi_knowledge_core::ingest::purge_if_stale` — see W5.5 F2.
+const META_CACHE_FILE: &str = "meta.bin";
+
+/// Default embedder model name when `PI_EMBEDDING_MODEL` is unset. Matches
+/// the production worker default (BAAI/bge-m3). The exact string is part of
+/// the cache invalidation contract; changing it wipes everyone's cache.
+const DEFAULT_EMBEDDER_MODEL: &str = "bge-m3";
+
+fn current_embedder_model() -> String {
+	std::env::var("PI_EMBEDDING_MODEL").unwrap_or_else(|_| DEFAULT_EMBEDDER_MODEL.into())
+}
+
+/// Process-wide profile registry. Built once, shared across queries. Profiles
+/// are pure-data and `Send + Sync`; the `OnceLock` is cheap.
+static PROFILES: OnceLock<RecallProfileRegistry> = OnceLock::new();
+fn profiles() -> &'static RecallProfileRegistry {
+	PROFILES.get_or_init(RecallProfileRegistry::defaults)
+}
 
 // ---------------------------------------------------------------------------
 // Cache path helpers (local; the old `pi_org_recall::fts` helpers are gone).
@@ -274,6 +296,12 @@ impl RecallEngineHandle {
 
 	/// Serve a recall query. Rebuilds the warm engine on first call or when
 	/// the workspace fingerprint has changed; otherwise serves from cache.
+	///
+	/// If the embedder worker was unavailable at index-build time, the vector
+	/// lane is *operationally disabled* for this query by forcing its weight
+	/// to 0 — BM25 and the graph lane still serve recall. This preserves the
+	/// W5 "silently disabled" contract while keeping the underlying
+	/// `pi_knowledge_core::recall` strict about error propagation (W5.5 F1).
 	pub fn query(&self, query_args: RecallQuery) -> Result<Vec<RecallHit>, String> {
 		let mut state = self.state.lock();
 		self.ensure_warm(&mut state)?;
@@ -282,14 +310,25 @@ impl RecallEngineHandle {
 			None => return Err("recall engine: warm state unavailable".into()),
 		};
 		let embedder = WorkerEmbedderAdapter;
+		// Disable vector lane when no vectors were upserted (worker was down
+		// at build time). Without this, recall() would propagate the worker
+		// error and BM25 hits would never reach the caller.
+		let effective_query = if warm.vec.is_empty() {
+			let mut w = query_args.weights.clone().unwrap_or_default();
+			w.vector = 0.0;
+			RecallQuery { weights: Some(w), ..query_args }
+		} else {
+			query_args
+		};
 		let ctx = RecallContext {
 			docs:     &warm.docs,
 			bm25:     &warm.bm25,
 			vec:      &warm.vec,
 			embedder: &embedder,
 			graph:    &warm.graph,
+			profiles: profiles(),
 		};
-		recall(query_args, &ctx).map_err(|e| format!("recall: {e}"))
+		recall(effective_query, &ctx).map_err(|e| format!("recall: {e}"))
 	}
 
 	fn ensure_warm(&self, state: &mut EngineState) -> Result<(), String> {
@@ -306,27 +345,42 @@ impl RecallEngineHandle {
 		Ok(())
 	}
 
-fn build_warm(&self, current_fp: WorkspaceFingerprint) -> Result<WarmEngine, String> {
+	fn build_warm(&self, current_fp: WorkspaceFingerprint) -> Result<WarmEngine, String> {
 		fs::create_dir_all(&self.cache_dir).map_err(|e| format!("mkdir cache: {e}"))?;
 		if let Some(warm) = self.try_load_warm(&current_fp) {
 			engine_log!("warm state restored from disk");
 			return Ok(warm);
 		}
-		let warm = self.full_rebuild(current_fp);
+		let warm = self.full_rebuild(current_fp)?;
 		if let Err(e) = self.save_warm(&warm) {
 			engine_log!("failed to persist warm state: {e}");
 		}
 		Ok(warm)
 	}
 
-fn try_load_warm(&self, current_fp: &WorkspaceFingerprint) -> Option<WarmEngine> {
+	fn try_load_warm(&self, current_fp: &WorkspaceFingerprint) -> Option<WarmEngine> {
 		let entry_path = self.cache_dir.join(ENGINE_CACHE_FILE);
 		let bm25_path = self.cache_dir.join(BM25_CACHE_FILE);
 		let vec_path = self.cache_dir.join(VEC_CACHE_FILE);
 		if !entry_path.exists() || !bm25_path.exists() || !vec_path.exists() {
 			return None;
 		}
-let entry: EngineCacheEntry = match load_bincode(&entry_path) {
+		// W5.5 F2: gate the disk fast-path on KnowledgeMeta. Schema bumps,
+		// embedder swaps (model name or dim), and fingerprint divergence all
+		// wipe the cache dir wholesale via `purge_if_stale`.
+		let model = current_embedder_model();
+		match purge_if_stale(&self.cache_dir, current_fp, &model, DIM) {
+			Ok(true) => {},
+			Ok(false) => {
+				engine_log!("meta.bin missing or stale; will rebuild");
+				return None;
+			},
+			Err(e) => {
+				engine_log!("purge_if_stale failed ({e}); will rebuild");
+				return None;
+			},
+		}
+		let entry: EngineCacheEntry = match load_bincode(&entry_path) {
 			Ok(e) => e,
 			Err(e) => {
 				engine_log!("engine.bin load failed ({e}); will rebuild");
@@ -377,13 +431,13 @@ if bm25.doc_count() < unique_id_count {
 		})
 	}
 
-	fn full_rebuild(&self, fingerprint: WorkspaceFingerprint) -> WarmEngine {
+	fn full_rebuild(&self, fingerprint: WorkspaceFingerprint) -> Result<WarmEngine, String> {
 		let items = scan_items(&self.repo_root);
 		let docs = project_docs(&items);
 		let bm25 = SearchIndex::from_docs(&docs);
-		let vec = build_vec_index(&items);
+		let vec = build_vec_index(&items)?;
 		let graph = build_typed_graph(&items);
-		WarmEngine { fingerprint, items, docs, bm25, vec, graph }
+		Ok(WarmEngine { fingerprint, items, docs, bm25, vec, graph })
 	}
 
 	fn save_warm(&self, warm: &WarmEngine) -> Result<(), String> {
@@ -399,6 +453,15 @@ if bm25.doc_count() < unique_id_count {
 			.vec
 			.save(&self.cache_dir.join(VEC_CACHE_FILE))
 			.map_err(|e| format!("save vec.uidx: {e}"))?;
+		// W5.5 F2: persist KnowledgeMeta alongside the heavy blobs. Written
+		// *last* so a crash leaves a half-built cache that fails the
+		// `purge_if_stale` check on next load (rather than appearing Fresh
+		// atop stale blobs).
+		let mut meta = KnowledgeMeta::new(warm.fingerprint.clone());
+		meta.embedder_model = current_embedder_model();
+		meta.embedder_dim = DIM;
+		save_bincode(&self.cache_dir.join(META_CACHE_FILE), &meta)
+			.map_err(|e| format!("save meta.bin: {e}"))?;
 		Ok(())
 	}
 }
@@ -503,11 +566,11 @@ fn walk_org_files(dir: &Path) -> Vec<PathBuf> {
 	files
 }
 
-fn build_vec_index(items: &[OrgItem]) -> VectorIndex {
+fn build_vec_index(items: &[OrgItem]) -> Result<VectorIndex, String> {
 	let mut vec = VectorIndex::new(DIM, items.len().max(1))
-		.unwrap_or_else(|e| panic!("vec index init failed: {e}"));
+		.map_err(|e| format!("vec init: {e}"))?;
 	if items.is_empty() {
-		return vec;
+		return Ok(vec);
 	}
 	let texts: Vec<String> = items
 		.iter()
@@ -532,7 +595,7 @@ fn build_vec_index(items: &[OrgItem]) -> VectorIndex {
 			engine_log!("embedder unavailable, vector lane disabled: {e}");
 		},
 	}
-	vec
+	Ok(vec)
 }
 
 // ---------------------------------------------------------------------------
@@ -1057,5 +1120,155 @@ mod tests {
 		let result = handle.query(q("X"));
 		assert!(result.is_ok(), "engine.query failed: {result:?}");
 		forget(repo.path());
+	}
+
+	// --- W5.5 F2: cache invalidation via KnowledgeMeta ---------------------
+
+	#[test]
+	fn recall_engine_writes_meta_bin_on_save() {
+		let _no_worker = force_no_worker("meta-bin-written");
+		let repo = tempdir().unwrap();
+		write_item(
+			&repo.path().join("!tasks"),
+			"M.org",
+			"* TODO M\n:PROPERTIES:\n:CUSTOM_ID: M-1\n:END:\n",
+		);
+		let cache = tempdir().unwrap();
+		get_or_create(repo.path(), Some(cache.path()))
+			.unwrap()
+			.query(q("M"))
+			.unwrap();
+		let canon = canonical_root(repo.path());
+		let meta_path = repo_cache_dir_at(&canon, cache.path()).join(META_CACHE_FILE);
+		assert!(
+			meta_path.is_file(),
+			"meta.bin must be persisted by save_warm; expected at {}",
+			meta_path.display(),
+		);
+		forget(repo.path());
+	}
+
+	#[test]
+	fn recall_engine_invalidates_cache_on_schema_bump() {
+		use pi_knowledge_core::cache::KnowledgeMeta;
+		let _no_worker = force_no_worker("schema-bump");
+		let repo = tempdir().unwrap();
+		write_item(
+			&repo.path().join("!tasks"),
+			"S.org",
+			"* TODO S\n:PROPERTIES:\n:CUSTOM_ID: S-1\n:END:\n",
+		);
+		let cache = tempdir().unwrap();
+		get_or_create(repo.path(), Some(cache.path()))
+			.unwrap()
+			.query(q("S"))
+			.unwrap();
+		let canon = canonical_root(repo.path());
+		let dir = repo_cache_dir_at(&canon, cache.path());
+		let meta_path = dir.join(META_CACHE_FILE);
+		assert!(meta_path.is_file(), "precondition: meta.bin exists");
+
+		// Rewrite meta.bin with a schema version that no longer matches
+		// current code.
+		let fp = compute_fingerprint(repo.path()).unwrap();
+		let mut bad = KnowledgeMeta::new(fp);
+		bad.schema_version = 0;
+		bad.embedder_model = current_embedder_model();
+		bad.embedder_dim = DIM;
+		let bytes = bincode::serialize(&bad).unwrap();
+		std::fs::write(&meta_path, bytes).unwrap();
+		forget(repo.path());
+
+		// Next query should observe the stale meta, wipe the cache dir, and
+		// rebuild. The dir gets removed wholesale by purge_if_stale, so the
+		// engine.bin path should disappear before the rebuild rewrites it.
+		let hits = get_or_create(repo.path(), Some(cache.path()))
+			.unwrap()
+			.query(q("S"))
+			.unwrap();
+		assert!(
+			hits.iter().any(|h| h.id == "S-1"),
+			"after schema-bump invalidation, recall must still surface S-1; got {hits:?}",
+		);
+		assert!(
+			meta_path.is_file(),
+			"rebuild must re-persist meta.bin at {}",
+			meta_path.display(),
+		);
+		// Verify the new meta has the current schema.
+		let fresh: KnowledgeMeta =
+			bincode::deserialize(&std::fs::read(&meta_path).unwrap()).unwrap();
+		assert_eq!(
+			fresh.schema_version,
+			pi_knowledge_core::cache::KNOWLEDGE_SCHEMA_VERSION,
+			"rewritten meta must carry current schema version",
+		);
+		forget(repo.path());
+	}
+
+	#[test]
+	fn recall_engine_invalidates_cache_on_embedder_swap() {
+		use pi_knowledge_core::cache::KnowledgeMeta;
+		let _no_worker = force_no_worker("embedder-swap");
+		let repo = tempdir().unwrap();
+		write_item(
+			&repo.path().join("!tasks"),
+			"K.org",
+			"* TODO K\n:PROPERTIES:\n:CUSTOM_ID: K-1\n:END:\n",
+		);
+		let cache = tempdir().unwrap();
+		get_or_create(repo.path(), Some(cache.path()))
+			.unwrap()
+			.query(q("K"))
+			.unwrap();
+		let canon = canonical_root(repo.path());
+		let meta_path =
+			repo_cache_dir_at(&canon, cache.path()).join(META_CACHE_FILE);
+
+		// Forge meta with a different embedder model.
+		let fp = compute_fingerprint(repo.path()).unwrap();
+		let mut forged = KnowledgeMeta::new(fp);
+		forged.embedder_model = "some-other-model".into();
+		forged.embedder_dim = DIM;
+		std::fs::write(&meta_path, bincode::serialize(&forged).unwrap()).unwrap();
+		forget(repo.path());
+
+		let hits = get_or_create(repo.path(), Some(cache.path()))
+			.unwrap()
+			.query(q("K"))
+			.unwrap();
+		assert!(
+			hits.iter().any(|h| h.id == "K-1"),
+			"embedder-swap meta must trigger rebuild + still surface K-1",
+		);
+		forget(repo.path());
+	}
+
+	// --- W5.5 F7: build_vec_index returns Result --------------------------
+
+	#[test]
+	fn build_vec_index_returns_err_not_panics_on_dim_zero() {
+		// Smoke check: build_vec_index against the empty corpus must yield
+		// `Ok(empty_index)` rather than panicking. Before W5.5 F7 the helper
+		// panicked on any `VectorIndex::new` failure; the Result shape now
+		// surfaces all init errors as `Err(String)` and the empty-corpus
+		// fast-path returns a usable empty index without invoking the worker.
+		let result = build_vec_index(&[]);
+		assert!(
+			result.is_ok(),
+			"empty corpus must yield Ok, not panic; got {result:?}",
+		);
+		assert!(result.unwrap().is_empty());
+	}
+
+	#[test]
+	fn build_vec_index_signature_propagates_err() {
+		// Compile-time check that callers can `?` the Result. Without this,
+		// a regression to the panicking shape would be silent at the type
+		// level until something actually triggered the panic.
+		fn _assert_sig(f: fn(&[OrgItem]) -> Result<VectorIndex, String>) {
+			let _: fn(&[OrgItem]) -> Result<VectorIndex, String> = f;
+		}
+		_assert_sig(build_vec_index);
 	}
 }

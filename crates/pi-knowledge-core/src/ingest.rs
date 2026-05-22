@@ -96,12 +96,14 @@ impl Drop for IngestHandle {
 /// multiple events on the same path within the window collapse to one
 /// [`IngestEvent`].
 ///
-/// `cache_dir` is reserved for future schema-gating; right now it's accepted
-/// to lock in the signature W7 producers will call.
-#[allow(clippy::needless_pass_by_value, reason = "future-use callback shape")]
+/// Filesystem events whose path is rooted at `cache_dir` (or any of its
+/// descendants) are **dropped** before reaching `on_change`. This prevents
+/// the obvious feedback loop where writing cache files inside a watched
+/// root would otherwise re-trigger the rebuild. Pass an empty path
+/// (`Path::new("")`) to disable the filter.
 pub fn watch_and_rebuild<F>(
 	roots: &[PathBuf],
-	_cache_dir: &Path,
+	cache_dir: &Path,
 	on_change: F,
 ) -> Result<IngestHandle>
 where
@@ -136,6 +138,12 @@ for p in ev.paths {
 	let thread_stop = Arc::clone(&stop_flag);
 	let pending_reader = Arc::clone(&pending);
 	let known_existing: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
+	// Canonicalize so a symlinked cache_dir still excludes correctly.
+	let cache_prefix: Option<PathBuf> = if cache_dir.as_os_str().is_empty() {
+		None
+	} else {
+		Some(std::fs::canonicalize(cache_dir).unwrap_or_else(|_| cache_dir.to_path_buf()))
+	};
 
 	let thread = thread::Builder::new()
 		.name("pi-kc-ingest".into())
@@ -151,8 +159,17 @@ for p in ev.paths {
 					Err(p) => p.into_inner(),
 				};
 				for (path, raw_kind) in ready {
+					// Skip events on cache files — their writes are *our* writes,
+					// emitted as part of the rebuild we just kicked off.
+					if let Some(ref prefix) = cache_prefix
+						&& path_under(&path, prefix)
+					{
+						continue;
+					}
 					let exists = path.exists();
-let kind = classify(raw_kind, exists, known.contains(&path));
+					let Some(kind) = classify(raw_kind, exists, known.contains(&path)) else {
+						continue;
+					};
 					match kind {
 						IngestEventKind::Created | IngestEventKind::Modified => {
 							known.insert(path.clone());
@@ -233,26 +250,49 @@ let settled: Vec<PathBuf> = guard
 	out
 }
 
-const fn classify(raw: EventKind, exists: bool, known: bool) -> IngestEventKind {
+/// Map a raw notify event into the coarse [`IngestEventKind`] we expose.
+///
+/// Returns `None` for events the watcher should *drop* (Access reads, the
+/// `Any`/`Other` synthetic catch-alls). On macOS `FSEvents` conflates several
+/// lifecycle bits into the catch-all; treating those as Modified caused
+/// spurious rebuilds. We now keep classification exhaustive.
+const fn classify(raw: EventKind, exists: bool, known: bool) -> Option<IngestEventKind> {
 	if !exists {
-		return IngestEventKind::Deleted;
+		return Some(IngestEventKind::Deleted);
 	}
-if matches!(raw, EventKind::Remove(_)) {
+	if matches!(raw, EventKind::Remove(_)) {
 		// notify saw a remove, but the path exists now — treat as Created/Modified.
-		return if known { IngestEventKind::Modified } else { IngestEventKind::Created };
+		return Some(if known { IngestEventKind::Modified } else { IngestEventKind::Created });
 	}
 	match raw {
-		EventKind::Create(_) => {
-			if known { IngestEventKind::Modified } else { IngestEventKind::Created }
-		},
+		EventKind::Create(_) => Some(if known {
+			IngestEventKind::Modified
+		} else {
+			IngestEventKind::Created
+		}),
 		EventKind::Modify(kind) => match kind {
-			event::ModifyKind::Name(_) if !known => IngestEventKind::Created,
-			_ => IngestEventKind::Modified,
+			event::ModifyKind::Name(_) if !known => Some(IngestEventKind::Created),
+			_ => Some(IngestEventKind::Modified),
 		},
-		_ => {
-			if known { IngestEventKind::Modified } else { IngestEventKind::Created }
-		},
+		EventKind::Remove(_) => None, // handled above; explicit for exhaustiveness
+		// Linux inotify reports `IN_CLOSE_WRITE` as `Access(Close(Write))` —
+		// this is a real write-completion signal, so treat it like Modify.
+		// Open/Read accesses are noise and stay dropped.
+		EventKind::Access(event::AccessKind::Close(event::AccessMode::Write)) => Some(if known {
+			IngestEventKind::Modified
+		} else {
+			IngestEventKind::Created
+		}),
+		EventKind::Access(_) | EventKind::Other | EventKind::Any => None,
 	}
+}
+
+/// True iff `path` is rooted under `prefix`. Canonicalizes `path` when it
+/// exists so symlinks and `..`-relative paths agree with the canonical
+/// `prefix` captured at watcher init.
+fn path_under(path: &Path, prefix: &Path) -> bool {
+	let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+	canonical.starts_with(prefix)
 }
 
 fn watch_err(e: notify::Error) -> Error {
@@ -442,6 +482,60 @@ mod tests {
 		let fresh = purge_if_stale(cache.path(), &fp, "", 0).unwrap();
 		assert!(fresh, "fresh meta must report fresh");
 		assert!(meta_path.exists(), "fresh meta must not be removed");
+	}
+
+	#[test]
+	fn ingest_skips_excluded_cache_dir_events() {
+		// Place cache_dir *inside* the watched root — the realistic shape
+		// for a feedback-loop bug. Writing to the cache file must not fire
+		// an event to the callback.
+		let root = tempdir().unwrap();
+		let cache = root.path().join("cache");
+		fs::create_dir_all(&cache).unwrap();
+
+		let (events, cb) = collector();
+		let handle =
+			watch_and_rebuild(&[root.path().to_path_buf()], &cache, cb).unwrap();
+		sleep(Duration::from_millis(50));
+
+		// Sentinel write inside the watched root but *outside* the cache.
+		fs::write(root.path().join("keep.txt"), b"hi").unwrap();
+		// Cache write — should be filtered.
+		fs::write(cache.join("engine.bin"), b"bin").unwrap();
+
+		let got = drain_events(&events, 1, Duration::from_secs(2));
+		assert!(
+			got.iter().any(|e| e.path.ends_with("keep.txt")),
+			"sentinel keep.txt event missing; got {got:?}",
+		);
+		assert!(
+			got.iter().all(|e| !e.path.ends_with("engine.bin")),
+			"cache_dir/engine.bin event must be filtered; got {got:?}",
+		);
+		handle.stop();
+	}
+
+	#[test]
+	fn classify_drops_access_and_other_events() {
+		use notify::event::{AccessKind, AccessMode};
+		assert_eq!(
+			classify(EventKind::Access(AccessKind::Read), true, true),
+			None,
+			"Access events must not surface as Modified",
+		);
+		assert_eq!(
+			classify(EventKind::Access(AccessKind::Open(AccessMode::Read)), true, false),
+			None,
+		);
+		assert_eq!(classify(EventKind::Other, true, true), None);
+		assert_eq!(classify(EventKind::Any, true, false), None);
+		// Sanity: real events still classify.
+		assert_eq!(
+			classify(EventKind::Modify(notify::event::ModifyKind::Data(
+				notify::event::DataChange::Any
+			)), true, true),
+			Some(IngestEventKind::Modified),
+		);
 	}
 
 	#[test]
