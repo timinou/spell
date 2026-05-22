@@ -1807,13 +1807,16 @@ mod tests {
 
 	#[test]
 	fn remember_playbook_writes_slug_keyed_file_under_personal_store() {
-		// PLAN-310 W9: playbook goes to $HOME/.spell/personal/playbooks/, not repo-local.
-		// Override HOME to a tempdir to avoid touching the developer's real ~.
+		// PLAN-310 W9: playbook goes to $HOME/.spell/personal/playbooks/, not
+		// repo-local. Override HOME to a tempdir to avoid touching the developer's
+		// real ~. The env lock serialises against every other test that fiddles
+		// with HOME / WORKER_ENV_VAR (e.g. embedding_worker tests) so we don't
+		// trip git_diff or other HOME-sensitive paths in parallel runners.
+		let _guard = crate::embedding_worker::lock_test_env();
 		let home_override = tempdir().expect("home tempdir");
 		let repo_dir = tempdir().expect("repo tempdir");
 		let prev_home = std::env::var("HOME").ok();
-		// SAFETY: tests in this module run on a single thread by virtue of the
-		// repository's `cargo test --jobs 1` default; HOME is restored below.
+		// SAFETY: env lock above gates parallel access to HOME; restored on drop.
 		unsafe { std::env::set_var("HOME", home_override.path()); }
 		let result = remember(repo_dir.path(), "playbook", "JWT Rotation Runbook");
 		if let Some(prev) = prev_home {

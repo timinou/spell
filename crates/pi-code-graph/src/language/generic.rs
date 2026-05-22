@@ -1181,6 +1181,7 @@ mod tests {
 			.collect::<Vec<_>>();
 		supported.sort();
 		assert_eq!(supported, vec![
+			"clojure".to_string(),
 			"css".to_string(),
 			"elixir".to_string(),
 			"html".to_string(),
