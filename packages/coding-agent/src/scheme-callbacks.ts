@@ -1,0 +1,111 @@
+/**
+ * Runtime scheme registration helpers for MCP-advertised schemes + canvas.
+ *
+ * Per PLAN-310 W6: each MCP server registers ITS native scheme(s) via
+ * `registerSchemeCallback`. Server name is the default schemePrefix when
+ * the server doesn't declare one. Collisions with reserved native schemes
+ * or with already-registered dynamic schemes are rejected with a clear
+ * diagnostic.
+ *
+ * Reserved native schemes (kernel-owned, see `crates/pi-natives/src/code_path/uri/`):
+ *   skill, rule, memory, agent, artifact, jobs, org, pi, local
+ */
+
+import {
+	listRegisteredSchemes,
+	registerSchemeCallback,
+	unregisterSchemeCallback,
+} from "@oh-my-pi/pi-natives";
+
+export const RESERVED_NATIVE_SCHEMES = [
+	"skill",
+	"rule",
+	"memory",
+	"agent",
+	"artifact",
+	"jobs",
+	"org",
+	"pi",
+	"local",
+] as const;
+
+/**
+ * Sanitize an MCP server name into a URL-scheme-safe kebab token.
+ * Lowercase ASCII alphanumeric + hyphens; runs of non-alphanumeric collapse to one hyphen.
+ *
+ * Throws if the sanitized result is empty (caller must provide a fallback schemePrefix).
+ */
+export function deriveSchemeFromServerName(name: string): string {
+	const sanitized = name
+		.toLowerCase()
+		.replace(/[^a-z0-9-]+/g, "-")
+		.replace(/-+/g, "-")
+		.replace(/^-+|-+$/g, "");
+	if (!sanitized) {
+		throw new Error(`Cannot derive URL scheme from server name: '${name}' (sanitization yielded empty string)`);
+	}
+	if (!/^[a-z]/.test(sanitized)) {
+		// schemes must start with a letter
+		throw new Error(`Derived scheme '${sanitized}' must start with [a-z]`);
+	}
+	return sanitized;
+}
+
+export interface SchemeRegistrationOptions {
+	/** Treat as fs-backed (codepath suffix forwarding). Default: false. */
+	fsBacked?: boolean;
+	/** `<uri>::<codepath-suffix>` supported. Implies fsBacked. Default: false. */
+	codepathCompatible?: boolean;
+	/** MIME type hint. */
+	mimeHint?: string;
+	/** Whether brush should expand this scheme inside bash commands. Default: false. */
+	bashExpandable?: boolean;
+	/** Sync callback budget in milliseconds. Default 5000. */
+	budgetMs?: number;
+}
+
+export interface SchemeResolveResult {
+	url: string;
+	content: string;
+	mime?: string;
+	notes?: string[];
+}
+
+export interface AdvertiseError {
+	scheme: string;
+	reason: string;
+}
+
+/**
+ * Register a scheme handler. Validates against reserved native names and
+ * already-registered dynamic schemes. Returns null on success, AdvertiseError
+ * on rejection (callers can collect to surface diagnostics in batch).
+ */
+export function registerScheme(
+	scheme: string,
+	resolve: (body: string) => Promise<SchemeResolveResult>,
+	options?: SchemeRegistrationOptions,
+): AdvertiseError | null {
+	if (RESERVED_NATIVE_SCHEMES.includes(scheme as (typeof RESERVED_NATIVE_SCHEMES)[number])) {
+		return {
+			scheme,
+			reason: `scheme '${scheme}' is reserved by the kernel; choose a non-conflicting schemePrefix`,
+		};
+	}
+	const existing = listRegisteredSchemes();
+	if (existing.includes(scheme)) {
+		return { scheme, reason: `scheme '${scheme}' is already registered` };
+	}
+	try {
+		registerSchemeCallback(scheme, resolve, options);
+		return null;
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		return { scheme, reason: message };
+	}
+}
+
+/** Convenience: unregister a scheme. Returns true if removed. */
+export function unregisterScheme(scheme: string): boolean {
+	return unregisterSchemeCallback(scheme);
+}
