@@ -7,6 +7,7 @@
 | 1 | `fix(pi-natives,pi-workspace-cache): BUG-390 stabilise workspace test parallelism` | Pre-flight. Mutex→RwLock for `lock_test_env`; read-guard on diff_qualifier (8 tests); inline mutex on workspace_cache (2 tests); buffer_registry mutex on code_buffer flake. `cargo test --workspace` 5/5 consecutive green. |
 | 2 | `feat(pi-knowledge-worker): PLAN-315 W0 + W1 — daemon rename + protocol v2` | W0 protocol design + ingest audit. W1 crate/binary/socket/env rename with legacy fallbacks; daemon `Open`/`Close`/`Stats` commands wired through `repo_cache` module; init returns `protocol_version=2` + `supported_commands`. 21/21 tests. |
 | 3 | `feat(pi-knowledge-worker): PLAN-315 W2 scaffold — pi-knowledge-core dep + DaemonEmbedder` | W2 scaffold. `pi-knowledge-core` added as path dep. `DaemonEmbedder` adapter impls `pi_knowledge_core::recall::Embedder` by delegating to the shared `EmbeddingEngine` via `with_engine`. |
+| 4 | `feat(pi-knowledge-worker): PLAN-315 W2 lane_org — daemon-side org/memory warm-load + commands` | W2 daemon side. `OrgLane::warm_load` scans repo, parses via `pi_org_engine`, builds BM25 + VectorIndex + TypedGraph. `search`/`about`/`neighbors`/`since` commands wired through `with_org_lane`. RepoSlot now carries `org_lane: Option<OrgLane>`. Adds `pi-org-engine` as daemon dep. **37/37 tests** (was 21). |
 
 ## Files changed
 
@@ -42,10 +43,11 @@ crates/pi-knowledge-core/src/{recall,lib}.rs  Doc updates
 
 | crate | tests | result |
 |---|---|---|
-| pi-knowledge-worker | 21 | ✓ all green (11 repo_cache unit + 4 daemon lifecycle + 6 protocol_v2 integration) |
+| pi-knowledge-worker | 37 | ✓ all green (11 repo_cache + 10 lane_org + 4 daemon lifecycle + 12 protocol_v2) |
 | pi-natives lib | 354 | ✓ all green (14 ignored) |
 | pi-workspace-cache | 5 | ✓ all green |
 | pi-knowledge-core | 91 | ✓ all green (unchanged from PLAN-310) |
+| pi-org-engine | 106 | ✓ all green (unchanged from PLAN-310) |
 | workspace `cargo test --workspace` | full | ✓ 5/5 consecutive runs green |
 
 ## Plan progress
@@ -54,7 +56,8 @@ crates/pi-knowledge-core/src/{recall,lib}.rs  Doc updates
 ✓ Pre-flight  BUG-390 flake fix                                           DONE
 ✓ W0          Protocol design + ingest audit docs                         DONE (RSS baseline + red loop tests deferred to W8)
 ✓ W1          Daemon rename + protocol_version=2 + open/close/stats       DONE (FEAT-767)
-◐ W2          Org/memory lane in daemon                                   SCAFFOLDED (DaemonEmbedder ready; LaneState load pending)
+✓ W2 daemon   Org/memory lane (warm-load + search/about/neighbors/since)  DONE (FEAT-768)
+◐ W2 client   pi-natives::recall_engine RPC dispatch                      pending — see below
 ○ W3          Code-graph lane in daemon                                   pending
 ○ W4          Push-subscribe protocol                                     pending
 ○ W5          Cutover — delete in-process WarmEngine                      pending
@@ -64,55 +67,68 @@ crates/pi-knowledge-core/src/{recall,lib}.rs  Doc updates
 ○ W9          Docs + close                                                pending
 ```
 
-## Resume — W2 work order
+## Resume — W2 client work order
 
-To complete W2 (org/memory lane in daemon), the next session should:
+W2 daemon side is **complete**. The daemon now serves search/about/
+neighbors/since over stdio (and will over socket once spawned in daemon
+mode). All 37 daemon tests pass. The remaining W2 work is **pi-natives
+client-side dispatch**:
 
-### A. Lift warm-build into pi-knowledge-core
-`pi-natives::recall_engine::full_rebuild` currently does:
-1. Walks repo + personal store via `pi_knowledge_core::ingest`
-2. Parses .org files into `OrgItem` (`pi_org_engine::parse_org_buffer`)
-3. Builds `Vec<RecallDoc>` from items
-4. Builds `SearchIndex<OrgItem>` (BM25)
-5. Builds `VectorIndex` (usearch) using `WorkerEmbedderAdapter`
-6. Builds `TypedGraph` from `:RELATIONS:` drawers
+### Steps
 
-Steps 3-6 belong in `pi_knowledge_core::engine` (NEW module). The parsing
-of `.org` files into `OrgItem` requires `pi_org_engine`; the daemon needs
-to depend on `pi_org_engine` for that, OR `pi_org_engine` must export a
-parse-only function the daemon can call without the NAPI dep chain.
+1. **Parse init response in `pi-natives::embedding_worker`**
+   When `WorkerTransport` calls `init`, capture `protocol_version` and
+   `supported_commands` from the response into a `Capabilities` struct on
+   the transport. Add `Transport::supports(&str) -> bool` predicate.
 
-### B. Add `LaneState::OrgMemory` to repo_cache
-Replace `RepoSlot.lanes: Vec<Lane>` with `RepoSlot.lanes: HashMap<Lane, LaneState>`. `LaneState::OrgMemory { items, docs, bm25, vec, graph }` wraps the lifted warm-engine struct.
+2. **Add typed RPC methods on `WorkerTransport`**
+   For each of search/about/neighbors/since, write a method that
+   serializes the args, sends, awaits one line, deserializes into the
+   matching response struct from `pi_knowledge_core::recall`.
 
-### C. Wire Search/About/Neighbors/Since commands
-After `repo_cache::open` completes the warm-load, add command handlers:
+3. **Wire `RecallEngineHandle::query` dispatch**
+   At the top of `query`, check `transport.supports("search")`. If true:
+   - ensure the daemon has the repo open (cache the handle in
+     `RecallEngineHandle`); call `open` once on first query
+   - emit `search` over the transport; return its hits
+   If false: continue to the current in-process `WarmEngine` path.
 
-```rust
-Command::Search { repo_handle, text, scope, limit, ... } =>
-    repo_cache::with_org_lane(&repo_handle, |lane| {
-        let ctx = pi_knowledge_core::recall::RecallContext {
-            docs: &lane.docs,
-            bm25: &lane.bm25,
-            vec: &lane.vec,
-            embedder: &DaemonEmbedder,
-            graph: &lane.graph,
-            profiles: &lane.profiles,
-        };
-        pi_knowledge_core::recall::recall(query, &ctx)
-    })
-```
+4. **Parity test**
+   In `pi-natives/tests/`, add `recall_engine_rpc_parity.rs`:
+   - boot the daemon in stdio mode against a tempdir corpus
+   - spawn an in-process WarmEngine over the same corpus
+   - assert `RecallHit`s match (or at least overlap; vector ordering may
+     differ if embedder is unreachable)
 
-### D. Client side
-`pi-natives::recall_engine::RecallEngineHandle::query` chooses between:
-- RPC (preferred when `WorkerTransport::supports_knowledge` is true)
-- In-process WarmEngine (current code path, retained as fallback through W5)
+### Daemon already ships
 
-The `supports_knowledge` flag is parsed from the daemon's `init` response
-where `protocol_version >= 2` and `"search"` appears in
-`supported_commands`. W1 already returns `protocol_version: 2` but
-`"search"` is NOT in the list yet — clients still take the in-process
-path. Adding `"search"` to `supported_commands()` flips the switch.
+- `Open { repo_root, include_personal, lanes }` → warm-load on demand
+- `Close { repo_handle }`
+- `Stats { repo_handle? }`
+- `Search { repo_handle, query: RecallQuery }`
+- `About { repo_handle, id }`
+- `Neighbors { repo_handle, focus, hops, kinds }`
+- `Since { repo_handle, ts }`
+- `init` response: `{ protocol_version: 2, supported_commands: ["init",
+   "embed_batch", "embed_query", "open", "close", "stats", "search",
+   "about", "neighbors", "since"] }`
+
+### Pitfalls to avoid
+
+- `Command` enum derives `Deserialize` only — not `PartialEq` (because
+  `RecallQuery` and `SinceTimestamp` don't impl `Eq`). The test that used
+  `assert_eq!(command, Command::Init)` was rewritten as `matches!(...)`.
+- ISO-8601 parser in `lane_org.rs` is intentionally minimal (no chrono).
+  Handles `YYYY-MM-DDTHH:MM:SS[.fff][Z]`; rejects pre-1970 explicitly.
+  Year-day math verified via python3 datetime for 2026-05-22 and the
+  2024-03-01 leap-year boundary.
+- `with_org_lane` takes a `&mut HashMap` lock, touches `last_used`, then
+  hands the lane via `f(&OrgLane)`. Holding the slot mutex for the
+  duration of a query is *intentional* for W2 — W4 will break this into
+  a finer-grained per-lane `RwLock` when push-subscribe lands.
+- The daemon **does not auto-`open`** on a `search` for an unknown repo.
+  The client must call `open` first. Round-trip integration tests use
+  `round_trip_sequence` to chain `open` + `search` on one daemon process.
 
 ## Remaining BUG-390-class flake
 

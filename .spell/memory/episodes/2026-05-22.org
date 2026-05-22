@@ -48,3 +48,15 @@ Fixed in commit f6b783a40. Pattern: wrap each handleInput in try/finally with ma
 :RELATIONS:
 ABOUT: BUG-391-handleinput-state-mutations-bypass-markd
 :END:
+** ITEM PLAN-315 W2 — org/memory lane in daemon (RepoCache::OrgMemory + search/about/neighbors/since)
+
+W2 daemon side complete: OrgLane warm-load + search/about/neighbors/since commands. 37/37 daemon tests, workspace clean. Client-side dispatch (RPC vs in-process fallback) tracked separately; daemon ships ready for any client to consume.
+:PROPERTIES:
+:CUSTOM_ID: EP-c17509ef1532fbb2
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T13:55:00Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-768-plan-315-w2-org-memory-lane-in-daemon-re
+:END:
