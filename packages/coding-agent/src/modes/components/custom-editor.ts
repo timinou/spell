@@ -52,6 +52,18 @@ export class CustomEditor extends Editor {
 	}
 
 	handleInput(data: string): void {
+		try {
+			this.#handleInputInner(data);
+		} finally {
+			// BUG-391: ensure dirty propagates regardless of which intercepted
+			// shortcut took an early return. Without this, paths like Shift+Tab
+			// (which mutates external state via onShiftTab) never flip the
+			// parent Container's #dirty flag, so the cached render is reused.
+			this.markDirty();
+		}
+	}
+
+	#handleInputInner(data: string): void {
 		const parsed = parseKittySequence(data);
 		if (parsed && (parsed.modifier & 64) !== 0 && this.onCapsLock) {
 			// Caps Lock is modifier bit 64

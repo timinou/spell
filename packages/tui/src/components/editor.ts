@@ -389,7 +389,20 @@ export class Editor implements Component, Focusable {
 	 * Pass undefined to use the default plain border.
 	 */
 	setTopBorder(content: EditorTopBorder | undefined): void {
+		if (this.#topBorderContent === content) return;
 		this.#topBorderContent = content;
+		this.#parent?.markDirty();
+	}
+
+	/**
+	 * Update the editor border color and propagate dirty so the parent
+	 * Container's cache (FEAT-762) is invalidated. Prefer this over direct
+	 * `editor.borderColor = ...` assignment (which is silent).
+	 */
+	setBorderColor(fn: (str: string) => string): void {
+		if (this.borderColor === fn) return;
+		this.borderColor = fn;
+		this.#parent?.markDirty();
 	}
 
 	/**

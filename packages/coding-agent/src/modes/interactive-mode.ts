@@ -274,6 +274,11 @@ export class InteractiveMode implements InteractiveModeContext {
 	taskManager?: import("../orchestrators/canvas-task-manager").CanvasTaskManager;
 	eventBus?: EventBus;
 	#subagentTracker?: SubagentTracker;
+
+	/** Public accessor for the session's subagent tracker so panels (Jobs & Agents viewer) can hydrate. */
+	get subagentTracker(): SubagentTracker | undefined {
+		return this.#subagentTracker;
+	}
 	sessionBridge?: SessionBridgeClient;
 	readonly #toolUiContextSetter: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
 
@@ -806,14 +811,18 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	updateEditorBorderColor(): void {
+		let fn: (s: string) => string;
 		if (this.planModeEnabled) {
-			this.editor.borderColor = theme.getPlanModeBorderColor();
+			fn = theme.getPlanModeBorderColor();
 		} else if (this.isBashMode) {
-			this.editor.borderColor = theme.getBashModeBorderColor();
+			fn = theme.getBashModeBorderColor();
 		} else {
 			const level = this.session.thinkingLevel ?? ThinkingLevel.Off;
-			this.editor.borderColor = theme.getThinkingBorderColor(level);
+			fn = theme.getThinkingBorderColor(level);
 		}
+		// setBorderColor propagates markDirty so the parent Container cache is
+		// invalidated (BUG-391 follow-up). Direct field assignment is silent.
+		this.editor.setBorderColor(fn);
 		this.updateEditorTopBorder();
 		this.ui.requestRender();
 	}
