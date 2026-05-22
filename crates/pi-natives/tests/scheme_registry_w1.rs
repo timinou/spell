@@ -147,3 +147,35 @@ fn missing_file_returns_filenotfound() {
 		err.variant
 	);
 }
+
+#[test]
+fn pi_lists_embedded_docs() {
+	let reg = registry(None);
+	assert!(reg.has_scheme("pi"));
+}
+
+#[test]
+fn pi_resolves_known_doc() {
+	let reg = registry(None);
+	let uri = UriLocator { scheme: "pi".into(), path: "memory.md".into() };
+	let cancel = CancellationToken::new();
+	// memory.md exists in docs/ — embedded at build time
+	let r = reg.resolve(&uri, None, &cancel).unwrap();
+	assert!(r.source_path.is_none(), "pi:// is virtual");
+	match &r.content {
+		Content::Text { value } => assert!(!value.is_empty()),
+		_ => panic!("expected Text"),
+	}
+}
+
+#[test]
+fn pi_unknown_doc_returns_not_found() {
+	let reg = registry(None);
+	let uri = UriLocator { scheme: "pi".into(), path: "definitely-not-a-real-doc-name.md".into() };
+	let cancel = CancellationToken::new();
+	let err = reg.resolve(&uri, None, &cancel).unwrap_err();
+	assert!(matches!(
+		err.variant,
+		pi_code_path::types::DiagnosticVariant::FileNotFound
+	));
+}
