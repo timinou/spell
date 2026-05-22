@@ -1,0 +1,45 @@
+#+TITLE: Parse-probe write guard silently broken — calls deleted executeCodeBuffer commands
+#+STATE: ITEM
+#+SESSION_ID: 14dd802985b2a5f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan309/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
+#+CUSTOM_ID: BUG-390-parse-probe-write-guard-silently-broken
+
+* Initial Message
+
+Investigate how you'd fold in PLAN-304 into the next swarm waves deeply. I want super super clean code
+
+## Symptom
+
+`packages/coding-agent/src/tools/managed-buffer-guards.ts::probesAsStructurallyValid` calls `executeCodeBuffer({command: "replace_content"})` and `executeCodeBuffer({command: "save"})`. PLAN-309 Wave H kernel cutover DELETED both commands from `crates/pi-natives/src/code_buffer.rs`.
+
+The probe now always returns `false` because the first `result.error` (from `Unknown command: replace_content`) short-circuits:
+
+```js
+> executeCodeBuffer({ command: "save", file: "/tmp/test.ts", sessionId: "test" })
+{ output: "Unknown command: save", error: true }
+```
+
+## Blast radius
+
+`evaluateWriteGuards()` (sole caller) uses the probe in this pattern:
+```ts
+const oldParses = probesAsStructurallyValid(absolutePath, "", oldContent);
+if (oldParses && !probesAsStructurallyValid(absolutePath, oldContent, newContent)) {
+  return { ok: false, code: "WRITE_PARSE_REGRESSION", ... };
+}
+return { ok: true };
+```
+
+Because `oldParses` is now ALWAYS `false`, the second probe never runs and the guard always returns `{ok: true}`. Every code-supported write since PLAN-309 Wave H has skipped the structural parse check.
+
+Used by `tools/create.ts:104` for force-overwrites of existing code-supported files. Means an agent could (today, on this branch) `create --force` a file with code that doesn't parse, and the guard would silently allow it.
+
+## Severity
+
+P0 — silent safety regression. Files can now ship with parse errors that the probe was designed to catch.
+
+## Fix
+
+Make `probesAsStructurallyValid` async; route through `executeCodePath` with `Op::FileWrite` which goes through `buf.edit_batch` which runs `errors_intersect_ranges` (the structural-invariant check). Detect the "structurally invalid" diagnostic in the resulting chunks.
+
+Propagate async-ness up to `evaluateWriteGuards` → `create.ts:104` (already async).
