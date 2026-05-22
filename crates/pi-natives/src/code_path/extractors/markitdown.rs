@@ -40,11 +40,14 @@ const TRUNCATION_NOTICE: &str = "\n[truncated by extractor]\n";
 
 pub struct MarkitdownExtractor {
 	pub timeout_secs: u64,
+	/// Binary name or absolute path. Default "markitdown" (uses PATH).
+	/// Override in tests to avoid clobbering global env.
+	pub binary:       String,
 }
 
 impl MarkitdownExtractor {
 	pub fn new() -> Self {
-		MarkitdownExtractor { timeout_secs: 30 }
+		MarkitdownExtractor { timeout_secs: 30, binary: "markitdown".to_string() }
 	}
 }
 
@@ -92,7 +95,7 @@ impl FormatExtractor for MarkitdownExtractor {
 			})?;
 		}
 
-		let mut child = Command::new("markitdown")
+		let mut child = Command::new(&self.binary)
 			.arg(temp.path())
 			.stdout(Stdio::piped())
 			.stderr(Stdio::null())
@@ -184,21 +187,15 @@ mod tests {
 
 	#[test]
 	fn binary_missing_diagnostic() {
-		let e = MarkitdownExtractor { timeout_secs: 5 };
-		// Temporarily override PATH to a non-existent directory so markitdown
-		// cannot be found, triggering the NotFound branch.
-		let result = std::env::var_os("PATH").and_then(|original_path| {
-			unsafe {
-				std::env::set_var("PATH", "/nonexistent/bin");
-			}
-			let res = e.extract(b"fake pdf bytes", &CancellationToken::new());
-			unsafe {
-				std::env::set_var("PATH", original_path);
-			}
-			Some(res)
-		});
-
-		let err = result.expect("PATH env var should exist").unwrap_err();
+		// BUG-388 sibling fix: use a non-existent binary path on the extractor
+		// itself rather than clobbering global PATH. The previous approach raced
+		// with parallel tests spawning `git` (diff_qualifier) since env::set_var
+		// mutates process-wide state and the test runner uses multi-threading.
+		let e = MarkitdownExtractor {
+			timeout_secs: 5,
+			binary:       "/nonexistent/bin/markitdown".to_string(),
+		};
+		let err = e.extract(b"fake pdf bytes", &CancellationToken::new()).unwrap_err();
 		assert!(matches!(err.variant, DiagnosticVariant::ParseError));
 		assert!(err.message.contains("markitdown not found"));
 		assert!(err.message.contains("uv tool install markitdown"));

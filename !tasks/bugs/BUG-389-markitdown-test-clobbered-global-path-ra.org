@@ -1,0 +1,48 @@
+#+TITLE: markitdown test clobbered global PATH; raced with parallel git-spawning tests
+#+STATE: DONE
+#+SESSION_ID: 14dd802985b2a5f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan309/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
+#+CUSTOM_ID: BUG-389-markitdown-test-clobbered-global-path-ra
+
+* Initial Message
+
+Investigate how you'd fold in PLAN-304 into the next swarm waves deeply. I want super super clean code
+
+## Symptom
+
+Intermittent failures in `cargo test -p pi-natives` (whole-crate run, default multi-threaded):
+
+```
+code_path::diff_qualifier::tests::clean_tree_returns_empty
+  → "not a git repository"
+code_path::diff_qualifier::tests::diff_against_historical_rev
+  → "git diff failed: No such file or directory (os error 2)"
+```
+
+Tests passed in isolation, failed when run alongside the full lib suite. Flakiness depended on test-scheduling order.
+
+## Root cause
+
+`crates/pi-natives/src/code_path/extractors/markitdown.rs:188-196` had:
+
+```rust
+unsafe { std::env::set_var("PATH", "/nonexistent/bin"); }
+let res = e.extract(b"fake pdf bytes", &CancellationToken::new());
+unsafe { std::env::set_var("PATH", original_path); }
+```
+
+`env::set_var` mutates process-wide state. While the markitdown test held PATH=/nonexistent/bin briefly, any concurrent test running on another thread that called `Command::new("git")` (or any other PATH-resolved binary) hit ENOENT. The diff_qualifier tests spawn git for fixture setup; they failed when their git invocation happened during markitdown's PATH window.
+
+## Fix
+
+`MarkitdownExtractor` gains a configurable `binary: String` field (default `"markitdown"`). Test sets it to `"/nonexistent/bin/markitdown"` — `Command::new(&self.binary)` returns ENOENT without touching global env.
+
+No more env mutation; no more cross-test interference.
+
+## Verification
+
+`cargo test -p pi-natives` 329/0 across 3 consecutive whole-suite runs (was flaky before).
+
+## Commit
+
+(landed inline with BUG-388 closure; see git log)
