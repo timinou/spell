@@ -14,7 +14,9 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{edge::EdgeKind, item::OrgItem};
+use pi_knowledge_core::graph::EdgeKind;
+
+use crate::item::OrgItem;
 
 /// Whether the item appeared, mutated, or vanished between snapshots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,18 +162,6 @@ fn collect_relation_kinds(rels: &[(EdgeKind, String)]) -> Vec<EdgeKind> {
 	set.into_iter().collect()
 }
 
-// EdgeKind needs Ord for use in BTreeSet
-impl PartialOrd for EdgeKind {
-	fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-		Some(self.cmp(other))
-	}
-}
-
-impl Ord for EdgeKind {
-	fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-		self.token().cmp(&other.token())
-	}
-}
 
 #[cfg(test)]
 mod tests {

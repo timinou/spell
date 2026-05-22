@@ -4284,6 +4284,7 @@ version = "13.12.8"
 dependencies = [
  "chrono",
  "pi-code-engine",
+ "pi-knowledge-core",
  "regex",
  "serde",
  "serde_json",
