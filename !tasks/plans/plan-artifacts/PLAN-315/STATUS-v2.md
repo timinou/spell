@@ -1,107 +1,141 @@
 # PLAN-315 — execution status (branch `plan-315-complete`)
 
-## Shipped this session (6 new commits on top of main)
+## Final session delivery (20 commits ahead of `main`)
 
-| # | commit | scope |
-|---|---|---|
-| 1 | `feat(pi-knowledge-worker): PLAN-315 W4 daemon — push-subscribe protocol` | W4 daemon side: subscribe.rs module, ConnState refactor, Subscribe/Unsubscribe commands, LaneEvents per (repo, lane), warm_completed + evicted publishing, 5 unit + 4 integration tests |
-| 2 | `feat(pi-natives): PLAN-315 W4 client — KnowledgeSubscription handle` | W4 client side: opens its own socket, background event reader, Drop sends Unsubscribe; e2e test confirms warm_completed delivery |
-| 3 | `feat(pi-knowledge-worker): PLAN-315 W3 — code-graph lane in daemon` | W3: lane_code.rs wraps `pi_code_graph::CodeGraph`; CgSearch/CgDefinition/CgReferences/CgCallers commands; RepoSlot.code_lane + with_code_lane accessor; 7 new tests |
-| 4 | `fix(coding-agent): PLAN-315 T10.6 — memory.since classifies added vs modified by birthtime` | T10.6: diffMemorySince distinguishes newly-created (birthtime > cutoff) from modified-after-creation; 4 unit tests |
-| 5 | `fix(pi-natives,tests): PLAN-315 T10.4 + T10.5 memory-loop fixes` | T10.5: file-level memory.link to `#+CUSTOM_ID:` items via file-level :RELATIONS: drawer; T10.4: split timing budget into rebuild vs warm-search phases; 3 + 0 tests |
-| 6 | `fix(tests): PLAN-315 T10.1 - add scope:[episode] to match test name intent` | T10.1: test name said "search returns episode by topic" but didn't scope; added `scope: ["episode"]` to make assertion match intent |
+```
+155f8553e  fix(scripts,docs): W8.5 gap-fix — daemon JSON shape + sustained python + gate honesty
+8c00074aa  fix(coding-agent): W6.5 gap-fix — preserve this binding + guard since-tab race
+7668078ba  docs(plan-315): W8.5 review wave — findings
+3b70b2c43  docs(plan-315): W6.5 review wave — findings
+449e38dd2  feat(coding-agent): W6T3 — Alt+M binding + selector wiring
+6be0a88ba  feat(coding-agent): W6T2 — search/graph/recent/since tab implementations
+1197e32f3  feat(pi-knowledge-worker,scripts): W8 — N=10 perf harness + BenchPayload event
+5193cebc0  feat(coding-agent): W6T1 — memory browser panel core + actions wrapper
+0491af6f0  docs(plan-315): W5.5 review wave — W5 findings
+7871653b9  docs(plan-315): W8 research — N=10 perf harness implementation plan
+63b938685  docs(plan-315): move W6-research.md into !tasks/ tree
+7dd6ee760  feat(pi-natives): W5 — explicit PI_KNOWLEDGE_WORKER mode, fail-loud RPC
+c6b084957  docs(plan-315): W6 research — TUI /memory browser implementation plan
+fd28f56ec  docs(plan-315): W9 close on plan-315-complete branch
+89c6400cc  fix(tests): T10.1 — scope:[episode]
+7e35f85cd  fix(pi-natives,tests): T10.4 + T10.5 memory-loop fixes
+3e8fa03c5  fix(coding-agent): T10.6 — since-by-birthtime classification
+c583bb3da  feat(pi-knowledge-worker): W3 — code-graph lane in daemon
+431ee3b88  feat(pi-natives): W4 client — KnowledgeSubscription handle
+9cb1d9080  feat(pi-knowledge-worker): W4 daemon — push-subscribe protocol
+```
 
 ## Plan state at branch tip
 
 ```
-✓ Pre-flight  BUG-390 flake fix                                 (committed on main pre-branch)
-✓ W0          Protocol design + ingest audit                    (artifacts committed)
-✓ W1          Daemon rename + protocol v2 + open/close/stats    FEAT-767 DONE
-✓ W2 daemon   Org/memory lane warm-load + 4 query commands      FEAT-768 DONE
-✓ W2 client   RPC dispatch via capability negotiation           
-✓ W3          Code-graph lane in daemon (4 cg_* commands)       
-✓ W4 daemon   Push-subscribe protocol + LaneEvents + heartbeat helper
+✓ Pre-flight  BUG-390 flake fix
+✓ W0          Protocol design + ingest audit
+✓ W1          Daemon rename + protocol v2 + open/close/stats   FEAT-767
+✓ W2 daemon   Org/memory lane + 4 query commands              FEAT-768
+✓ W2 client   RPC dispatch via capability negotiation
+✓ W3          Code-graph lane in daemon (4 cg_* commands)     FEAT-769
+✓ W4 daemon   Push-subscribe + LaneEvents + ConnState         FEAT-770
 ✓ W4 client   KnowledgeSubscription handle
-✓ W7 RELATIONS  File-level :RELATIONS: + :PROPERTIES: drawer parsing
-✓ T10.1, .4, .5, .6  All four pre-existing memory-loop failures fixed
-○ W5 cutover   In-process WarmEngine deletion                   FUP-089
-○ W6 TUI       /memory browser panel                            FUP-089
-○ W8 perf      N=10 sessions harness + hard gates               FUP-089
-○ W9 docs      AGENTS.md sweep + CHANGELOG + close              this session
+✓ W5          PI_KNOWLEDGE_WORKER mode + fail-loud RPC default FEAT-771
+✓ W6          /memory TUI browser + Alt+M panel               FEAT-774
+✓ W7 RELATIONS File-level :RELATIONS: + :PROPERTIES: drawers   FEAT-773
+✓ W8 harness   N=10 perf harness scaffolding + BenchPayload event
+✓ T10.1,4,5,6 All four pre-existing memory-loop failures fixed
+✓ W*.5 review waves: W5.5, W6.5, W8.5 + gap-fixes for HIGH findings
+○ W5 erase    Delete in-process WarmEngine after 1-release bake-in (FUP-089)
+○ W8 numbers  Run release-built harness, capture measured percentiles    (FUP-089)
+○ W8 bench    push delivery P99 bench binary + cg_search corpus generator (FUP-089)
 ```
 
-## Test counts (this branch, all green)
+## Test counts at branch tip (all green, package-level)
 
-| crate | tests |
-|---|---|
-| pi-knowledge-worker | 50 (was 8 pre-PLAN-315; +42 across W1/W2/W3/W4 lanes + subscribe) |
-| pi-natives lib + integration | 349 lib + 3 integration |
-| pi-knowledge-core | 91 |
-| pi-org-engine | 81 (was 78; +3 file-level RELATIONS/PROPERTIES tests) |
-| coding-agent memory-since | 4 new |
+| crate | tests | notes |
+|---|---|---|
+| pi-knowledge-worker | 52 (32 + 4 lifecycle + 15 protocol_v2 + 1 subscribe e2e) | +2 BenchPayload tests |
+| pi-natives lib | 349 (+14 ignored) | unchanged from W5 |
+| pi-natives integration | 29 + 1 + 1 + 2 + ... | rpc_dispatch_parity 1/1, subscribe_client_e2e 1/1, worker_mode 2/2 |
+| pi-knowledge-core | 91 + 3 doctests | unchanged |
+| pi-org-engine | 81 + 12 + 4 + 12 | file-level RELATIONS preserved |
+| coding-agent memory-browser | TS strict: zero new errors | smoke tests not added (no precedent) |
+| coding-agent memory-since | 4/4 | birthtime classification |
 
-## What still requires FUP-089 work
-
-### W5 — cutover (delete in-process WarmEngine), 2-4h
-
-The RPC fast-path is live and exercised by `rpc_dispatch_parity` + `subscribe_client_e2e`.
-The in-process `WarmEngine` remains as fallback. Deleting it requires:
-- removing ~800 LOC across `recall_engine.rs`, `code_graph.rs`
-- rewriting ~12 unit tests that mock the embedder at the WarmEngine layer
-- introducing `PI_KNOWLEDGE_WORKER=inprocess` env knob for CI / offline
-
-Recommended: own commit after a 1-release bake-in period to confirm
-the RPC path is stable under load.
-
-### W6 — /memory TUI browser, 6-10h
-
-4-tab panel (search / graph / recent / since); subscribes for live
-refresh; slash command + ambient Ctrl-M. Architecturally independent of
-W5; the daemon (W2+W3+W4) already exposes everything the TUI needs.
-
-Why deferred: requires investigation into `packages/coding-agent/src/modes/`
-panel architecture (interactive-mode.ts, mode controllers) and a real
-keybinding integration — substantial UX surface area beyond the
-infrastructure scope of this session.
-
-### W8 — N=10 perf harness, 3-4h
-
-Multi-process orchestration test:
-- spawn 10 concurrent `bun coding-agent` sessions
-- synthetic 5k-symbol corpus per session
-- sample `ps -o rss,pid,comm` every 2s for 60s
-- measure per-command P50/P95/P99
-
-Hard gates to verify:
-- `libpi_natives.so` (release) ≤ 92.5 MB
-- per-session RSS ≤ 100 MB
-- total RSS N=10 ≤ 1.55 GB
-- `memory.search` warm P99 ≤ 50 ms
-- `cg_search` warm P99 ≤ 60 ms
-- push event delivery ≤ 500 ms
-
-## Decisions in flight (no behavior change needed)
-
-- `Lane::CodeGraph` warm-load uses the daemon-side BM25 path; query
-  vector path is reserved for future activation via the `kind` arg.
-  Today's cg_search is BM25-only inside the daemon to avoid embedder
-  cold-load on every query.
-- `subscribe.rs` heartbeat machinery exists (`spawn_heartbeat`) but is
-  not wired into per-connection threads. Connection-close detection
-  happens via socket-read-zero already; heartbeat is value-add for
-  cross-NAT scenarios that don't apply to local Unix sockets.
-- `EventRegistry` is a static `OnceLock<EventRegistry>` singleton;
-  per-test isolation in `subscribe.rs` unit tests uses fresh registries
-  to avoid cross-test interference.
-
-## Daemon protocol surface (final, this branch)
+## Daemon protocol surface (15 commands)
 
 ```
-init        embed_batch  embed_query
-open        close        stats        subscribe        unsubscribe
-search      about        neighbors    since
-cg_search   cg_definition cg_references cg_callers
+init  embed_batch  embed_query
+open  close  stats  subscribe  unsubscribe
+search  about  neighbors  since
+cg_search  cg_definition  cg_references  cg_callers
 ```
 
-15 commands. `init` advertises them in `supported_commands` so clients
-can feature-detect.
+Events (subscribe): `index_changed`, `warm_completed`, `evicted`, `heartbeat`, `lag`, `bench_payload` (W8 instrumentation, synthetic).
+
+## What's still in FUP-089
+
+### W5 erase — delete in-process WarmEngine (~2-4h)
+
+Deferred behind 1-release bake-in. The fail-loud RPC default is live; the
+`PI_KNOWLEDGE_WORKER=inprocess` escape hatch preserves the WarmEngine for
+offline/CI. When confidence is high, delete the WarmEngine struct, the
+`ensure_warm` chain, the `EngineState::Warm` variant, and rewrite the ~12
+WarmEngine-mocking tests around RPC fixtures.
+
+### W8 measurement run (~30-60 min once release builds exist)
+
+The harness `scripts/perf/plan315-n10.sh` is correctness-fixed (W8.5 gap-fix
+addressed all 9 HIGH findings). To produce real numbers:
+
+```
+cargo build --release -p pi-natives -p pi-knowledge-worker
+bash scripts/perf/plan315-n10.sh
+# Output: !tasks/plans/plan-artifacts/PLAN-315/W8-perf-run-<epoch>.md
+```
+
+Five of seven gates are now measured directly. Two remain explicitly DEFERRED
+in the harness and `W8-perf.md` methodology:
+- `cg_search P99`: needs a code-graph corpus generator (Rust files with N
+  symbols each). Hand-rolled bash addition.
+- `push delivery P99`: needs a dedicated bench binary (e.g.
+  `crates/pi-knowledge-worker/benches/push_latency.rs`) that calls
+  `publish_bench_event` in a loop and records emit-to-receive deltas.
+  The unit test in `subscribe.rs` only asserts arrival within 1s.
+
+### Documentation finalization
+
+Once W8 numbers are in: append the gate-table report to `W8-perf.md`,
+close FUP-089, archive PLAN-315.
+
+## Architectural decisions ratified this session
+
+- **Fail-loud RPC default**: queries surface daemon errors with a message
+  hinting at `PI_KNOWLEDGE_WORKER=inprocess`. No more silent fall-through.
+  Tests in `crates/pi-natives/tests/worker_mode.rs` lock this contract.
+- **Alt+M, not Ctrl+M, for /memory browser**: Ctrl+M is encoded identically
+  to Enter (\r = 0x0D) on most terminals. Alt+M is unambiguous across
+  legacy + Kitty CSI-u. Documented in `custom-editor.ts` and
+  `hotkeys-markdown.ts`.
+- **Shared-daemon RSS attribution**: per-session RSS is reported as
+  `(peak daemon rss)/N`, not as a process-level metric. Documented in
+  `W8-perf.md` methodology table.
+- **Sustained python per session for latency**: per-query `python3 -c` spawn
+  costs ~30-50ms, dwarfing the 50ms gate. The harness now uses one python
+  process per session covering 110 queries (10 priming, 100 measured).
+- **TabPanel contract**: `interface TabPanel extends Component { activate(): void; deactivate(): void; readonly title: string; dispose?(): void; }`. The dispose? was promoted to first-class on TabPanel during W6.5 gap-fix to support proper teardown.
+- **Sequence-guarded async refresh**: SinceTab uses a `#refreshSeq` counter
+  so concurrent window-toggle fetches drop stale completions cleanly.
+
+## Artifacts directory
+
+```
+!tasks/plans/plan-artifacts/PLAN-315/
+  STATUS.md            initial close (pre-this-session)
+  STATUS-v2.md         THIS FILE — autonomous-session close
+  W0-protocol.md       wire protocol design
+  W0-ingest-audit.md   ingest-path audit
+  W5.5-review.md       W5 review wave findings
+  W6-research.md       /memory panel design + dispatch breakdown
+  W6.5-review.md       W6 review wave findings (2 P1 + 1 P2)
+  W8-perf.md           perf methodology + DEFERRED-gate rationale
+  W8-research.md       harness design
+  W8.5-review.md       W8 review wave findings (9 HIGH)
+```

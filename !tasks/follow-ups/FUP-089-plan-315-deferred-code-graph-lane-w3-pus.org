@@ -1,4 +1,4 @@
-#+TITLE: PLAN-315 deferred — W5 cutover, W6 TUI, W8 N=10 perf harness
+#+TITLE: PLAN-315 deferred — W5 WarmEngine erase, W8 measurement run, W8 push-bench binary
 #+STATE: ITEM
 #+SESSION_ID: 14ea0d7add095343
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
@@ -9,68 +9,89 @@
 
 * Scope
 
-Updated 2026-05-22 after PLAN-315 plan-315-complete branch session.
+Updated 2026-05-22 after the second autonomous PLAN-315 session.
 
-PLAN-315 critical path + W3 + W4 + all four T10 memory-loop fixes have
-all shipped end-to-end. The remaining items are non-blocking
-extensions and a deferred verification harness.
+PLAN-315 has now delivered:
+- W3 code-graph lane (FEAT-769)
+- W4 push-subscribe daemon + client (FEAT-770)
+- W5 PI_KNOWLEDGE_WORKER mode + fail-loud RPC (FEAT-771)
+- W6 /memory TUI browser with Alt+M panel (FEAT-774)
+- W7 file-level :RELATIONS: + :PROPERTIES: drawers (FEAT-773)
+- W8 N=10 perf harness scaffolding + BenchPayload event (this session)
+- W*.5 review+gap-fix waves on W5, W6, W8
+
+20 commits on `plan-315-complete` branch (`/home/user/code/ora/spell-plan315`).
+All package-level tests green: pi-knowledge-worker 52/52, pi-natives 349 lib +
+integration tests, pi-knowledge-core 91/91, pi-org-engine 81/81.
+
+See `!tasks/plans/plan-artifacts/PLAN-315/STATUS-v2.md` for the
+delivery snapshot.
 
 * Deferred items
 
-** W5 cutover — fail-loud RPC dispatch landed ✓
+** W5 erase — delete in-process WarmEngine (~2-4h)
 
-DELIVERED in this session (2026-05-22):
-- `PI_KNOWLEDGE_WORKER=inprocess` env knob for CI / offline mode
-- `WorkerMode { Daemon, Inprocess }` enum with `worker_mode()` and `reset_worker_mode_for_tests()`
-- `recall_engine::query` dispatches on mode: Daemon → fail-loud RPC; Inprocess → skip RPC, use WarmEngine
-- `code_graph.rs` has no RPC path yet (TODO FUP-089 comment added)
-- `worker_mode.rs` integration tests (2/2) confirming both paths
-- AGENTS.md note about the escape hatch
+The fail-loud RPC default is live; the `PI_KNOWLEDGE_WORKER=inprocess`
+escape hatch preserves WarmEngine for offline/CI. After a 1-release bake-in
+period of the fail-loud default, delete:
+- WarmEngine struct + EngineState::Warm variant
+- `ensure_warm` chain in recall_engine.rs
+- ~12 WarmEngine-mocking unit tests (rewrite around RPC fixtures)
+- code_graph.rs in-process semantic index (FUP-089 TODO comment)
 
-Remaining (re-scoped):
-- Deleting in-process WarmEngine itself (~800 LOC) is deferred until
-  the RPC path has baked for 1 release. The W5 cutover here is the
-  *dispatch switch*; the actual engine code stays until FUP-089 close.
+Net code reduction: ~800 LOC. Replace with RPC-only path; keep the
+`PI_KNOWLEDGE_WORKER=inprocess` env knob meaning "spin up a sidecar
+daemon for this session" rather than "use in-process engine".
 
-** W6 — /memory TUI browser (unchanged)
+** W8 measurement run (~30-60 min once release built)
 
-4-tab panel (search / graph / recent / since) with subscribe-driven
-live refresh, /memory slash command, ambient Ctrl-M binding.
+The harness `scripts/perf/plan315-n10.sh` is correctness-fixed (W8.5
+gap-fix addressed all 9 HIGH findings: JSON shape, repo_handle threading,
+RSS sampler ordering, totals math, cold warm-up sessions, emit_gate N/A
+handling, threshold consistency, sustained python).
 
-Independent of W5; the W2+W3+W4 daemon already exposes everything the
-TUI needs.
+To produce real numbers:
+1. cargo build --release -p pi-natives -p pi-knowledge-worker
+2. bash scripts/perf/plan315-n10.sh
+3. Appears at !tasks/plans/plan-artifacts/PLAN-315/W8-perf-run-<epoch>.md
+4. Append the gate table to W8-perf.md
 
-Work involves investigating `packages/coding-agent/src/modes/` panel
-architecture (interactive-mode.ts, mode controllers) and a real
-keybinding integration. Estimated 6-10h.
+Five of seven gates are measured directly:
+- libpi_natives.so size ≤ 92.5 MB
+- per-session RSS attribution ≤ 100 MB
+- total RSS N=10 ≤ 1.55 GB
+- memory.search P99 ≤ 50 ms
+- cold daemon warm-up (12k symbols) ≤ 90 s
 
-** W8 — N=10 perf harness (unchanged)
+Two remain explicitly DEFERRED in both the harness and the methodology
+table:
 
-Multi-process orchestration test that measures the hard gates from
-PLAN-315 §perf:
-- libpi_natives.so (release) <= 92.5 MB
-- per-session RSS <= 100 MB
-- total RSS N=10 <= 1.55 GB
-- memory.search warm P99 <= 50 ms
-- cg_search warm P99 <= 60 ms
-- push event delivery <= 500 ms
-- cold daemon warm-up (12k symbols) <= 90 s
+** W8 push-delivery P99 bench binary (~50-80 LOC)
 
-Estimated 3-4h.
+Need a dedicated bench at `crates/pi-knowledge-worker/benches/push_latency.rs`
+that calls `publish_bench_event` in a loop (e.g. 50 iterations) and records
+emit-to-receive deltas via the subscribe channel. Compute P50/P95/P99.
+
+The existing `bench_payload_delivers_on_subscribed_channel` test in
+subscribe.rs only asserts arrival within 1s; not a percentile.
+
+** W8 cg_search corpus generator (~30-60 LOC bash)
+
+Extend `scripts/perf/plan315-n10.sh` to also generate `.rs` files per session
+(e.g. 12 files × 400 symbols each = 4800 code symbols total) and run the
+`cg_search` workload. The current harness only generates `.org` corpus.
 
 * Acceptance
 
 When this FUP closes:
-- DELIVERED: W5 cutover commit landed (PI_KNOWLEDGE_WORKER=inprocess, fail-loud mode dispatch, worker_mode.rs tests)
-- Remaining: in-process WarmEngine deletion deferred to after 1-release bake-in
-- /memory TUI panel live; manual smoke artifact recorded
-- N=10 perf harness commit landed with measured numbers
-- All six W*.5 review waves applied (HIGH-confidence findings only)
-- AGENTS.md + specs/org-graph-memory.md reflect final architecture
+- W5 erase commit lands; in-process WarmEngine deleted
+- W8 release-built harness has been run; numbers in W8-perf.md gate table
+- push_latency.rs bench binary lands with P99 numbers
+- cg_search gate has real measurement
+- PLAN-315 archived
 
 * Branch
 
 Work continues on `plan-315-complete` branch at worktree
-`/home/user/code/ora/spell-plan315`. See
-`!tasks/plans/plan-artifacts/PLAN-315/STATUS-v2.md` for the current
-delivery snapshot.
+`/home/user/code/ora/spell-plan315`. After all items above land, the
+branch can be merged back to main and the worktree removed.
