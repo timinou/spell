@@ -305,18 +305,35 @@ impl RecallEngineHandle {
 	/// to 0 — BM25 and the graph lane still serve recall. This preserves the
 	/// W5 "silently disabled" contract while keeping the underlying
 	/// `pi_knowledge_core::recall` strict about error propagation (W5.5 F1).
-	pub fn query(&self, query_args: RecallQuery) -> Result<Vec<RecallHit>, String> {
-		// PLAN-315 W2: fast path — if the daemon speaks protocol v2 with the
-		// knowledge surface, route over the socket. Falls back to the
-		// in-process WarmEngine on any RPC failure so behaviour is at-least-
-		// as-good as today.
-		if embedding_worker::knowledge_capable()
-			&& let Ok(hits) = self.query_via_rpc(&query_args)
-		{
-			return Ok(hits);
-		}
+ pub fn query(&self, query_args: RecallQuery) -> Result<Vec<RecallHit>, String> {
+ 		use embedding_worker::WorkerMode;
 
-		let mut state = self.state.lock();
+ 		// PLAN-315 W5: explicit PI_KNOWLEDGE_WORKER mode dispatch.
+ 		// - Daemon (default): route over the socket; fail-loud on any RPC
+ 		//   error — no silent fallback to in-process WarmEngine.
+ 		// - Inprocess: skip RPC entirely; use in-process WarmEngine directly
+ 		//   (preserves test/offline/CI behaviour).
+ 		match embedding_worker::worker_mode() {
+ 			WorkerMode::Daemon => {
+ 				if !embedding_worker::knowledge_capable() {
+ 					return Err(
+ 						"recall via daemon not available: daemon does not support protocol v2, \
+ 						  or no daemon is reachable \
+ 						  (set PI_KNOWLEDGE_WORKER=inprocess for offline)".to_string(),
+ 					);
+ 				}
+ 				return self.query_via_rpc(&query_args).map_err(|e| {
+ 					format!(
+ 						"recall via daemon failed (set PI_KNOWLEDGE_WORKER=inprocess for offline): {e}",
+ 					)
+ 				});
+ 			},
+ 			WorkerMode::Inprocess => {
+ 				// Skip RPC entirely — use in-process WarmEngine.
+ 			},
+ 		}
+
+ 		let mut state = self.state.lock();
 		self.ensure_warm(&mut state)?;
 		let warm = match state.as_ref() {
 			Some(w) => w,
@@ -822,41 +839,54 @@ mod tests {
 		assert_ne!(fp1.files, fp2.files, "size change must invalidate fingerprint");
 	}
 
-	struct EnvVarGuard {
-		key:     &'static str,
-		prior:   Option<std::ffi::OsString>,
-		_locked: std::sync::RwLockWriteGuard<'static, ()>,
-	}
+	
 
-	impl EnvVarGuard {
-		fn set(key: &'static str, value: &str) -> Self {
-			let locked = crate::embedding_worker::lock_test_env();
-			let prior = std::env::var_os(key);
-			// SAFETY: `locked` serialises env mutation across tests in this
-			// process.
-			unsafe { std::env::set_var(key, value) };
-			Self { key, prior, _locked: locked }
-		}
-	}
+ /// RAII guard that sets `PI_EMBEDDING_WORKER` to a nonexistent path AND
+ 	/// `PI_KNOWLEDGE_WORKER=inprocess` so the WarmEngine path (not RPC) is
+ 	/// exercised in tests. Restores both env vars and resets cached mode on drop.
+ 	struct NoWorkerFixture {
+ 		_locked:       std::sync::RwLockWriteGuard<'static, ()>,
+ 		prior_worker:  Option<std::ffi::OsString>,
+ 		prior_mode:    Option<std::ffi::OsString>,
+ 	}
 
-	impl Drop for EnvVarGuard {
-		fn drop(&mut self) {
-			// SAFETY: lock guard is still held until self is fully dropped.
-			unsafe {
-				match &self.prior {
-					Some(v) => std::env::set_var(self.key, v),
-					None => std::env::remove_var(self.key),
-				}
-			}
-		}
-	}
+ 	impl Drop for NoWorkerFixture {
+ 		fn drop(&mut self) {
+ 			// SAFETY: `_locked` is still held until `self` is fully dropped.
+ 			unsafe {
+ 				match &self.prior_worker {
+ 					Some(v) => std::env::set_var("PI_EMBEDDING_WORKER", v),
+ 					None => std::env::remove_var("PI_EMBEDDING_WORKER"),
+ 				}
+ 				match &self.prior_mode {
+ 					Some(v) => std::env::set_var("PI_KNOWLEDGE_WORKER", v),
+ 					None => std::env::remove_var("PI_KNOWLEDGE_WORKER"),
+ 				}
+ 			}
+ 			crate::embedding_worker::reset_worker_mode_for_tests();
+ 		}
+ 	}
 
-	fn force_no_worker(test_name: &'static str) -> EnvVarGuard {
-		EnvVarGuard::set(
-			"PI_EMBEDDING_WORKER",
-			&format!("/nonexistent/pi-knowledge-worker-{test_name}"),
-		)
-	}
+ 	/// Set the environment for a test that must NOT talk to a real worker process.
+ 	/// - Sets `PI_KNOWLEDGE_WORKER=inprocess` so `worker_mode()` returns
+ 	///   `Inprocess`, bypassing RPC dispatch (W5: fail-loud default).
+ 	/// - Sets `PI_EMBEDDING_WORKER` to a nonexistent path so `embed_batch()`
+ 	///   calls from the WarmEngine fail gracefully (vector lane disabled).
+ 	fn force_no_worker(test_name: &'static str) -> NoWorkerFixture {
+ 		let locked = crate::embedding_worker::lock_test_env();
+ 		let prior_worker = std::env::var_os("PI_EMBEDDING_WORKER");
+ 		let prior_mode = std::env::var_os("PI_KNOWLEDGE_WORKER");
+ 		// SAFETY: `locked` serialises env mutation across tests in this process.
+ 		unsafe {
+ 			std::env::set_var("PI_KNOWLEDGE_WORKER", "inprocess");
+ 			std::env::set_var(
+ 				"PI_EMBEDDING_WORKER",
+ 				&format!("/nonexistent/pi-knowledge-worker-{test_name}"),
+ 			);
+ 		}
+ 		crate::embedding_worker::reset_worker_mode_for_tests();
+ 		NoWorkerFixture { _locked: locked, prior_worker, prior_mode }
+ 	}
 
 	fn q(text: &str) -> RecallQuery {
 		RecallQuery {
