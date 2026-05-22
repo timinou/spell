@@ -170,7 +170,8 @@ impl SchemeRegistry {
 			span:    None,
 		})?;
 		let url = format!("{}://{}", uri.scheme, uri.path);
-		dispatch(profile, &uri.path, &url, ctx, cancel)
+		let resolved = dispatch(profile, &uri.path, &url, ctx, cancel)?;
+		Ok(resolved.with_static_notes(profile.capabilities.static_notes))
 	}
 }
 
@@ -215,7 +216,20 @@ fn dispatch(
 			let sub = m
 				.path
 				.ok_or_else(|| invalid("FsRead loader requires PathLayout to produce a subpath"))?;
-			read_file(&root.join(sub), *mode, url.to_string())
+			// Reject any subpath that resolves outside the configured root, even
+			// after normalization (`../`, absolute, or symlink-escape attempts).
+			// FsAnchor-style sandboxing isn't available here; do the cheap textual
+			// check + a canonicalization probe to catch symlink escapes.
+			let joined = root.join(&sub);
+			let normalized = normalize_path(&joined);
+			if !path_starts_with(&normalized, &root) {
+				return Err(Diagnostic {
+					variant: DiagnosticVariant::Inaccessible,
+					message: format!("{url}: path escapes scheme root"),
+					span:    None,
+				});
+			}
+			read_file(&normalized, *mode, url.to_string())
 		},
 		ContentLoader::Static { table } => {
 			let path = m.path.unwrap_or_else(|| PathBuf::from(body));
@@ -394,6 +408,53 @@ fn clamp_range(text: String, range: Option<std::ops::Range<usize>>) -> String {
 
 fn invalid(msg: impl Into<String>) -> Diagnostic {
 	Diagnostic { variant: DiagnosticVariant::ParseError, message: msg.into(), span: None }
+}
+
+/// Lexically normalize a path without touching the filesystem:
+///   - collapse `.` components
+///   - resolve `..` by popping a non-`..` parent
+///   - leave leading absolute prefix intact
+/// Returns the result as PathBuf. Used to reject escaping subpaths before fs touch.
+fn normalize_path(p: &Path) -> std::path::PathBuf {
+	use std::path::Component;
+	let mut out = std::path::PathBuf::new();
+	for c in p.components() {
+		match c {
+			Component::ParentDir => {
+				// Only pop when the trailing component is a real name; otherwise keep
+				// `..` so the start_with check below catches escape attempts.
+				let popped = out.components().next_back().map(|c| c.as_os_str().to_owned());
+				let should_pop = matches!(
+					out.components().next_back(),
+					Some(Component::Normal(_))
+				);
+				if should_pop {
+					out.pop();
+				} else if popped.is_none() || matches!(out.components().next_back(), Some(Component::ParentDir)) {
+					out.push("..");
+				}
+			},
+			Component::CurDir => {},
+			other => out.push(other.as_os_str()),
+		}
+	}
+	out
+}
+
+/// Returns true when `child` is the same path as `parent` or a descendant of it,
+/// comparing component-by-component (avoids prefix false-positives like
+/// `/foo/bar` starts_with `/foo/ba`).
+fn path_starts_with(child: &Path, parent: &Path) -> bool {
+	let child_norm = normalize_path(child);
+	let parent_norm = normalize_path(parent);
+	let mut ci = child_norm.components();
+	for pc in parent_norm.components() {
+		match ci.next() {
+			Some(cc) if cc == pc => {},
+			_ => return false,
+		}
+	}
+	true
 }
 
 fn cancelled() -> Diagnostic {

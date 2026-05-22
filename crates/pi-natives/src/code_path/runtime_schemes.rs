@@ -118,6 +118,7 @@ pub fn register_scheme_callback(
 			cache: CacheStrategy::Ttl(budget),
 			bash_expandable: opts.bash_expandable.unwrap_or(false),
 			callback_budget: Some(budget),
+			static_notes:    &[],
 		},
 	};
 	reg.insert(scheme, DynamicEntry { profile });

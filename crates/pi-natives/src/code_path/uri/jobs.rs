@@ -48,6 +48,7 @@ pub fn build(_ctx: Option<&SessionContext>) -> SchemeProfile {
 			cache:               CacheStrategy::None, // job state is live
 			bash_expandable:     false,
 			callback_budget:     None,
+			static_notes:        &[],
 		},
 	}
 }
