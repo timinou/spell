@@ -652,7 +652,54 @@ function buildMCPPromptCommands(manager: MCPManager): LoadedCustomCommand[] {
  * });
  * ```
  */
+// === STARTUP-DBG (BUG: blank screen after migration prompt). Disable with SPELL_STARTUP_DBG=0. ===
+const _dbgStartupT0_sdk = performance.now();
+function dbgStartup(step: string, ctx?: Record<string, unknown>): void {
+	if (process.env.SPELL_STARTUP_DBG !== "1") return;
+	try {
+		const elapsed = Math.round(performance.now() - _dbgStartupT0_sdk);
+		const ctxStr = ctx ? " " + JSON.stringify(ctx) : "";
+		process.stderr.write(`[STARTUP-DBG sdk +${elapsed}ms] ${step}${ctxStr}\n`);
+		logger.info(`startup-dbg sdk: ${step}`, { ...(ctx ?? {}), elapsedMs: elapsed });
+	} catch {}
+}
+// NOTE: inline timing — must NOT call logger.timeAsync/logger.time (those names were
+// globally replaced with dbgTime* above, which would create infinite recursion).
+function dbgTimeAsync<R, A extends unknown[]>(op: string, fn: (...args: A) => R, ...args: A): Promise<Awaited<R>> {
+	dbgStartup(`phase:start:${op}`);
+	const start = performance.now();
+	return Promise.resolve(fn(...args)).then(
+		r => {
+			const ms = Math.round(performance.now() - start);
+			logger.debug(`${op} done`, { duration: ms, op });
+			dbgStartup(`phase:done:${op}`, { ms });
+			return r as Awaited<R>;
+		},
+		e => {
+			const ms = Math.round(performance.now() - start);
+			dbgStartup(`phase:THREW:${op}`, { ms, error: e instanceof Error ? e.message : String(e) });
+			throw e;
+		},
+	);
+}
+function dbgTime<T, A extends unknown[]>(op: string, fn: (...args: A) => T, ...args: A): T {
+	dbgStartup(`phase:start:${op}`);
+	const start = performance.now();
+	try {
+		const r = fn(...args);
+		const ms = Math.round(performance.now() - start);
+		logger.debug(`${op} done`, { duration: ms, op });
+		dbgStartup(`phase:done:${op}`, { ms });
+		return r;
+	} catch (e) {
+		const ms = Math.round(performance.now() - start);
+		dbgStartup(`phase:THREW:${op}`, { ms, error: e instanceof Error ? e.message : String(e) });
+		throw e;
+	}
+}
+
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
+	dbgStartup("createAgentSession:enter");
 	const cwd = options.cwd ?? getProjectDir();
 	const agentDir = options.agentDir ?? getDefaultAgentDir();
 	const eventBus = options.eventBus ?? new EventBus();
@@ -660,20 +707,20 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	registerSshCleanup();
 
 	// Use provided or create AuthStorage and ModelRegistry
-	const { authStorage, modelRegistry } = await logger.timeAsync("discoverModels", async () => {
+	const { authStorage, modelRegistry } = await dbgTimeAsync("discoverModels", async () => {
 		const authStorage = options.authStorage ?? (await discoverAuthStorage(agentDir));
 		const providerConfigs = await loadMergedProviderConfigs(cwd, agentDir);
 		const modelRegistry = options.modelRegistry ?? new ModelRegistry(authStorage, providerConfigs);
 		return { authStorage, modelRegistry };
 	});
-	const spellcastingWarning = await logger.timeAsync("validateSpellcastingToken", () =>
+	const spellcastingWarning = await dbgTimeAsync("validateSpellcastingToken", () =>
 		validateSpellcastingToken(authStorage),
 	);
-	const settings = await logger.timeAsync(
+	const settings = await dbgTimeAsync(
 		"settings",
 		async () => options.settings ?? (await Settings.init({ cwd, agentDir })),
 	);
-	logger.time("initializeWithSettings", initializeWithSettings, settings);
+	dbgTime("initializeWithSettings", initializeWithSettings, settings);
 	if (!options.modelRegistry) {
 		modelRegistry.refreshInBackground();
 	}
@@ -703,7 +750,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const sessionManager =
 		options.sessionManager ??
-		logger.time("sessionManager", () =>
+		dbgTime("sessionManager", () =>
 			SessionManager.create(cwd, SessionManager.getDefaultSessionDir(cwd, agentDir)),
 		);
 	const sessionId = sessionManager.getSessionId();
@@ -723,7 +770,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	};
 
 	// Check if session has existing data to restore
-	const existingSession = logger.time("loadSession", () => sessionManager.buildSessionContext());
+	const existingSession = dbgTime("loadSession", () => sessionManager.buildSessionContext());
 	const hasExistingSession = existingSession.messages.length > 0;
 	const hasThinkingEntry = sessionManager.getBranch().some(entry => entry.type === "thinking_level_change");
 
@@ -788,7 +835,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		skills = options.skills;
 		skillWarnings = [];
 	} else {
-		const discovered = await logger.timeAsync("discoverSkills", async () =>
+		const discovered = await dbgTimeAsync("discoverSkills", async () =>
 			discoveredSkillsPromise ? await discoveredSkillsPromise : { skills: [], warnings: [] },
 		);
 		skills = discovered.skills;
@@ -796,7 +843,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	// Discover rules
-	const { ttsrManager, rulesResult, registeredTtsrRuleNames } = await logger.timeAsync(
+	const { ttsrManager, rulesResult, registeredTtsrRuleNames } = await dbgTimeAsync(
 		"discoverTtsrRules",
 		async () => {
 			const ttsrSettings = settings.getGroup("ttsr");
@@ -821,7 +868,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	);
 
 	// Discover and resolve mode configs
-	const modesResult = await logger.timeAsync("discoverModes", async () => {
+	const modesResult = await dbgTimeAsync("discoverModes", async () => {
 		const result = await loadCapability<ModeConfig>(modeConfigCapability.id, { cwd });
 		const allModes = new Map(result.items.map(m => [m.name, m]));
 		const resolvedConfigs = new Map<string, ResolvedModeConfig>();
@@ -836,7 +883,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	});
 
 	// Filter rules for the rulebook (non-TTSR, non-alwaysApply, with descriptions)
-	const rulebookRules = logger.time("filterRulebookRules", () =>
+	const rulebookRules = dbgTime("filterRulebookRules", () =>
 		rulesResult.items.filter((rule: Rule) => {
 			if (registeredTtsrRuleNames.has(rule.name)) return false;
 			if (rule.alwaysApply) return false;
@@ -845,11 +892,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}),
 	);
 
-	const domainPromptContext = await logger.timeAsync("loadDomainPromptContext", () =>
+	const domainPromptContext = await dbgTimeAsync("loadDomainPromptContext", () =>
 		loadDomainPromptContext(options.domainManifest, cwd),
 	);
 
-	const baseContextFiles = await logger.timeAsync(
+	const baseContextFiles = await dbgTimeAsync(
 		"discoverContextFiles",
 
 		async () => options.contextFiles ?? (await discoverContextFiles(cwd, agentDir)),
@@ -870,11 +917,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		raceWithTimeout("SYSTEM.md loading", loadSystemPromptFiles({ cwd }), null, 5000),
 	]);
 
-	const spellcastDiscovery = await logger.timeAsync("discoverSpellcastManifests", () =>
+	const spellcastDiscovery = await dbgTimeAsync("discoverSpellcastManifests", () =>
 		discoverSpellcastManifests(cwd),
 	);
 
-	const spellcastPublishState = await logger.timeAsync("loadSpellcastPublishState", () =>
+	const spellcastPublishState = await dbgTimeAsync("loadSpellcastPublishState", () =>
 		loadSpellcastPublishState(cwd),
 	);
 
@@ -1098,7 +1145,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	);
 
 	// Create built-in tools (already wrapped with meta notice formatting)
-	const builtinTools = await logger.timeAsync("createAllTools", () =>
+	const builtinTools = await dbgTimeAsync("createAllTools", () =>
 		createTools(toolSession, requestedBuiltInToolNames),
 	);
 
@@ -1107,7 +1154,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const enableMCP = options.enableMCP ?? true;
 	const customTools: CustomTool[] = [];
 	if (enableMCP) {
-		const mcpResult = await logger.timeAsync("discoverAndLoadMCPTools", () =>
+		const mcpResult = await dbgTimeAsync("discoverAndLoadMCPTools", () =>
 			discoverAndLoadMCPTools(cwd, {
 				onConnecting: serverNames => {
 					if (options.hasUI && serverNames.length > 0) {
@@ -1146,7 +1193,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	// Add Gemini image tools if GEMINI_API_KEY (or GOOGLE_API_KEY) is available
-	const geminiImageTools = await logger.timeAsync("getGeminiImageTools", getGeminiImageTools);
+	const geminiImageTools = await dbgTimeAsync("getGeminiImageTools", getGeminiImageTools);
 	if (geminiImageTools.length > 0) {
 		customTools.push(...(geminiImageTools as unknown as CustomTool[]));
 	}
@@ -1156,7 +1203,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	// Discover and load custom tools from .spell/tools/, .claude/tools/, etc.
 	const builtInToolNames = builtinTools.map(t => t.name);
-	const discoveredCustomTools = await logger.timeAsync(
+	const discoveredCustomTools = await dbgTimeAsync(
 		"discoverAndLoadCustomTools",
 		discoverAndLoadCustomTools,
 		[],
@@ -1181,7 +1228,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	let extensionsResult: LoadExtensionsResult;
 	if (options.disableExtensionDiscovery) {
 		const configuredPaths = options.additionalExtensionPaths ?? [];
-		extensionsResult = await logger.timeAsync("loadExtensions", loadExtensions, configuredPaths, cwd, eventBus);
+		extensionsResult = await dbgTimeAsync("loadExtensions", loadExtensions, configuredPaths, cwd, eventBus);
 		for (const { path, error } of extensionsResult.errors) {
 			logger.error("Failed to load extension", { path, error });
 		}
@@ -1191,7 +1238,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// Merge CLI extension paths with settings extension paths
 		const configuredPaths = [...(options.additionalExtensionPaths ?? []), ...(settings.get("extensions") ?? [])];
 		const disabledExtensionIds = settings.get("disabledExtensions") ?? [];
-		extensionsResult = await logger.timeAsync(
+		extensionsResult = await dbgTimeAsync(
 			"discoverAndLoadExtensions",
 			discoverAndLoadExtensions,
 			configuredPaths,
@@ -1272,7 +1319,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// Discover custom commands (TypeScript slash commands)
 	const customCommandsResult: CustomCommandsLoadResult = options.disableExtensionDiscovery
 		? { commands: [], errors: [] }
-		: await logger.timeAsync("discoverCustomCommands", loadCustomCommandsInternal, { cwd, agentDir });
+		: await dbgTimeAsync("discoverCustomCommands", loadCustomCommandsInternal, { cwd, agentDir });
 	if (!options.disableExtensionDiscovery) {
 		for (const { path, error } of customCommandsResult.errors) {
 			logger.error("Failed to load custom command", { path, error });
@@ -1354,7 +1401,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	if (!hasDeferrableTools) {
 		toolRegistry.delete("resolve");
 	} else if (!toolRegistry.has("resolve")) {
-		const resolveTool = await logger.timeAsync("createTools:resolve:session", HIDDEN_TOOLS.resolve, toolSession);
+		const resolveTool = await dbgTimeAsync("createTools:resolve:session", HIDDEN_TOOLS.resolve, toolSession);
 		if (resolveTool) {
 			toolRegistry.set(resolveTool.name, wrapToolWithMetaNotice(resolveTool));
 		}
@@ -1387,7 +1434,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const specializedToolNames = !hasExplicitToolNames
 			? toolNames.filter(name => getToolTier(name) === "specialized")
 			: [];
+		dbgStartup("sub:before:buildMemoryToolDeveloperInstructions");
 		const memoryInstructions = await buildMemoryToolDeveloperInstructions(agentDir, settings);
+		dbgStartup("sub:after:buildMemoryToolDeveloperInstructions");
 		const joinPromptSections = (...sections: Array<string | undefined>): string | undefined => {
 			const parts = sections.filter(
 				(section): section is string => typeof section === "string" && section.length > 0,
@@ -1416,18 +1465,22 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 
 		if (toolNames.includes("canvas") || toolNames.includes("puppeteer")) {
+			dbgStartup("sub:before:buildServicePromptSection");
 			try {
 				const serviceSection = await buildServicePromptSection();
+				dbgStartup("sub:after:buildServicePromptSection");
 				if (serviceSection) {
 					appendPromptSections.push(serviceSection);
 				}
-			} catch {
+			} catch (e) {
+				dbgStartup("sub:THREW:buildServicePromptSection", { error: e instanceof Error ? e.message : String(e) });
 				// Service registry not available — skip
 			}
 		}
 		const appendPrompt = joinPromptSections(domainPromptContext.systemPrompt, ...appendPromptSections);
 		const appendPromptWithoutDomain = joinPromptSections(...appendPromptSections);
 		const autoRosterEnabled = settings.get("todo.enabled") && settings.get("task.autoRoster");
+		dbgStartup("sub:before:buildSystemPromptInternal(default)");
 		const defaultPrompt = await buildSystemPromptInternal({
 			cwd,
 			skills,
@@ -1449,6 +1502,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			settings,
 			isSubagent: taskDepth > 0,
 		});
+		dbgStartup("sub:after:buildSystemPromptInternal(default)");
 
 		if (options.systemPrompt === undefined) {
 			return defaultPrompt;
@@ -1529,7 +1583,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 	}
 
-	const systemPrompt = await logger.timeAsync(
+	const systemPrompt = await dbgTimeAsync(
 		"buildSystemPrompt",
 		rebuildSystemPrompt,
 		initialToolNames,
@@ -1538,11 +1592,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const promptTemplates =
 		options.promptTemplates ??
-		(await logger.timeAsync("discoverPromptTemplates", discoverPromptTemplates, cwd, agentDir));
+		(await dbgTimeAsync("discoverPromptTemplates", discoverPromptTemplates, cwd, agentDir));
 	toolSession.promptTemplates = promptTemplates;
 
 	const slashCommands =
-		options.slashCommands ?? (await logger.timeAsync("discoverSlashCommands", discoverSlashCommands, cwd));
+		options.slashCommands ?? (await dbgTimeAsync("discoverSlashCommands", discoverSlashCommands, cwd));
 
 	// Create convertToLlm wrapper that filters images if blockImages is enabled (defense-in-depth)
 	const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
@@ -1577,7 +1631,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// Load and create secret obfuscator if secrets are enabled
 	let obfuscator: SecretObfuscator | undefined;
 	if (settings.get("secrets.enabled")) {
-		const fileEntries = await logger.timeAsync("loadSecrets", loadSecrets, cwd, agentDir);
+		const fileEntries = await dbgTimeAsync("loadSecrets", loadSecrets, cwd, agentDir);
 		const envEntries = collectEnvSecrets();
 		const allEntries = [...envEntries, ...fileEntries];
 		if (allEntries.length > 0) {
@@ -1769,7 +1823,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	if (model?.api === "openai-codex-responses") {
 		try {
-			await logger.timeAsync("prewarmCodexWebsocket", prewarmOpenAICodexResponses, model, {
+			await dbgTimeAsync("prewarmCodexWebsocket", prewarmOpenAICodexResponses, model, {
 				apiKey: await modelRegistry.getApiKey(model, sessionId),
 				sessionId,
 				preferWebsockets: preferOpenAICodexWebsockets,

@@ -172,6 +172,18 @@ export interface InteractiveModeOptions {
 	initialMessages?: string[];
 }
 
+// === STARTUP-DBG (BUG: blank screen after migration prompt). Disable with SPELL_STARTUP_DBG=0. ===
+const _dbgStartupT0_im = performance.now();
+function dbgStartup(step: string, ctx?: Record<string, unknown>): void {
+	if (process.env.SPELL_STARTUP_DBG !== "1") return;
+	try {
+		const elapsed = Math.round(performance.now() - _dbgStartupT0_im);
+		const ctxStr = ctx ? " " + JSON.stringify(ctx) : "";
+		process.stderr.write(`[STARTUP-DBG ix +${elapsed}ms] ${step}${ctxStr}\n`);
+		logger.info(`startup-dbg ix: ${step}`, { ...(ctx ?? {}), elapsedMs: elapsed });
+	} catch {}
+}
+
 export class InteractiveMode implements InteractiveModeContext {
 	session: AgentSession;
 	sessionManager: SessionManager;
@@ -421,9 +433,11 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async init(): Promise<void> {
+		dbgStartup("a:init:enter", { alreadyInitialized: this.isInitialized });
 		if (this.isInitialized) return;
 
 		this.keybindings = await logger.timeAsync("InteractiveMode.init:keybindings", () => KeybindingsManager.create());
+		dbgStartup("b:after:KeybindingsManager.create");
 
 		// Register session manager flush for signal handlers (SIGINT, SIGTERM, SIGHUP)
 		// On crash, write a crash marker entry before flushing so the JSONL records the abnormal exit.
@@ -457,9 +471,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			void this.#handleTerminalLost(reason);
 		});
 
+		dbgStartup("c:before:refreshSlashCommandState");
 		await logger.timeAsync("InteractiveMode.init:slashCommands", () =>
 			this.refreshSlashCommandState(getProjectDir()),
 		);
+		dbgStartup("c:after:refreshSlashCommandState");
 
 		// Register mode-derived slash commands
 		const modeConfigs = this.session.getAllModeConfigs();
@@ -475,6 +491,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const providerName = this.session.model?.provider ?? "Unknown";
 
 		// Get recent sessions
+		dbgStartup("d:before:getRecentSessions");
 		const recentSessions = await logger.timeAsync("InteractiveMode.init:recentSessions", () =>
 			getRecentSessions(this.sessionManager.getSessionDir()).then(sessions =>
 				sessions.map(s => ({
@@ -541,20 +558,28 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#inputController.setupKeyHandlers();
 		this.#inputController.setupEditorSubmitHandler();
 
+		dbgStartup("e:before:#loadTodoList");
 		// Load initial todos
 		await this.#loadTodoList();
+		dbgStartup("e:after:#loadTodoList");
 
+		dbgStartup("f:before:ui.start");
 		// Start the UI
 		this.ui.start();
+		dbgStartup("f:after:ui.start");
 		this.#syncEditorMaxHeight();
 		this.isInitialized = true;
+		dbgStartup("g:before:ui.requestRender(true) [post-init]");
 		this.ui.requestRender(true);
+		dbgStartup("g:after:ui.requestRender(true) [post-init]");
 
 		// Set initial terminal title (will be updated when session title is generated)
 		this.ui.terminal.setTitle("✦");
 
+		dbgStartup("h:before:initHooksAndCustomTools");
 		// Initialize hooks with TUI-based UI context
 		await this.initHooksAndCustomTools();
+		dbgStartup("h:after:initHooksAndCustomTools");
 
 		// Register audit suggest callback for popup bridge
 		this.session.setAuditSuggestCallback(async () => {
@@ -562,8 +587,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			return choice === "Run audit";
 		});
 
+		dbgStartup("i:before:#restoreModeFromSession");
 		// Restore mode from session (e.g. plan mode on resume)
 		await this.#restoreModeFromSession();
+		dbgStartup("i:after:#restoreModeFromSession");
 
 		// Subscribe to agent events
 		this.#subscribeToAgent();
@@ -664,6 +691,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Initial top border update
 		this.updateEditorTopBorder();
+		dbgStartup("z:init:complete");
 	}
 
 	/** Reload slash commands and autocomplete for the provided working directory. */

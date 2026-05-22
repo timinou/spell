@@ -1,0 +1,42 @@
+#+TITLE: handleInput state mutations bypass markDirty; W3 cache serves stale lines
+#+STATE: DOING
+#+SESSION_ID: 14ea14814559e822
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T15-17-13-109Z_14ea14814559e822.jsonl]]
+#+CUSTOM_ID: BUG-391-handleinput-state-mutations-bypass-markd
+
+* Initial Message
+
+do a deep, critical review of the work just done, and identify any sources of lag or undue TUI renders. the TUI stil feels a bit slow.
+
+* Symptoms
+
+1. ~spell -r~ session selector: arrow keys appear frozen; the right item IS selected on Enter (state mutates correctly), but no visual movement.
+2. Settings modal: same apparent freeze on arrow keys.
+3. Editor / Input paste: pasted content doesn't show until a subsequent keystroke.
+
+* Root cause
+
+PLAN-312 / FEAT-762 added a Container dirty-cache: ~Container.render~ short-circuits when ~#dirty === false~. Cache invalidation happens via ~markDirty()~ which propagates up the parent chain.
+
+Several stateful components have ~handleInput~ methods whose branches early-return BEFORE the ~#parent?.markDirty()~ call at the end:
+
+- SelectList.handleInput (up/down/page mutations skip markDirty)
+- SettingsList.handleInput (up/down + #activateItem mutations skip markDirty)
+- SessionList in session-selector.ts (no setParent / markDirty wiring at all)
+- Input.handleInput (cursor moves, deletes, kill, yank — all early-return before final markDirty)
+- Input.#handlePaste (no markDirty)
+- Editor.#handlePaste (early-returns from handleInput, never hits its tail markDirty)
+
+TUI.#handleInput calls ~requestRender()~ after the focused component runs, but Container.render returns cached lines because nothing flipped ~#dirty~ to true. The next *real* dirty propagation (e.g. typing a printable char) finally busts the cache and the deferred state surfaces.
+
+* Fix
+
+Wrap each affected handleInput in ~try { ... } finally { #parent?.markDirty() }~ so dirty propagation is unconditional, regardless of which branch is taken. For SessionList, also add ~setParent~ + ~#parent~ field.
+
+* Files
+
+- packages/tui/src/components/select-list.ts
+- packages/tui/src/components/settings-list.ts
+- packages/tui/src/components/input.ts
+- packages/tui/src/components/editor.ts (paste path only — char path already markDirty'd)
+- packages/coding-agent/src/modes/components/session-selector.ts (SessionList class)

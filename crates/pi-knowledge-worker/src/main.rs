@@ -14,6 +14,7 @@
 
 mod embedder_adapter;
 mod engine;
+mod lane_org;
 mod repo_cache;
 
 use std::{
