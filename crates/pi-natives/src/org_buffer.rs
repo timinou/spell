@@ -940,6 +940,26 @@ fn cmd_remember(options: &Value) -> Result<Value> {
 				.join(format!("{}.org", slug));
 			(file, id, slug)
 		},
+		"playbook" => {
+			let slug = make_slug(summary);
+			let id = format!("PB-{}", slug);
+			let file = repo_root
+				.join(".spell")
+				.join("memory")
+				.join("playbooks")
+				.join(format!("{}.org", slug));
+			(file, id, slug)
+		},
+		"decision" => {
+			let slug = make_slug(summary);
+			let id = format!("DEC-{}", slug);
+			let file = repo_root
+				.join(".spell")
+				.join("memory")
+				.join("decisions")
+				.join(format!("{}.org", slug));
+			(file, id, slug)
+		},
 		other => return Err(org_err(format!("Unknown kind: {other}"))),
 	};
 
@@ -1763,5 +1783,60 @@ mod tests {
 		let hit = json!({ "id": "X-1" });
 		let out = super::truncate_excerpt(hit.clone(), super::EXCERPT_CHAR_LIMIT);
 		assert_eq!(out, hit);
+	}
+
+	// cmd_remember: kind dispatch produces a slug-keyed id + file under the
+	// canonical per-kind directory. PLAN-310 W6.5 F2 extends the closed set
+	// from {episode, concept} to {episode, concept, playbook, decision}.
+
+	fn remember(repo: &std::path::Path, kind: &str, summary: &str) -> Value {
+		execute_org(json!({
+			"command": "remember",
+			"kind": kind,
+			"summary": summary,
+			"repoRoot": repo.to_string_lossy(),
+		}))
+		.expect("remember dispatch")
+	}
+
+	#[test]
+	fn remember_playbook_writes_slug_keyed_file_under_playbooks_dir() {
+		let dir = tempdir().expect("tempdir");
+		let result = remember(dir.path(), "playbook", "JWT Rotation Runbook");
+		assert_eq!(result["error"], json!(false), "remember playbook should succeed: {result}");
+		assert_eq!(result["output"]["id"], json!("PB-jwt-rotation-runbook"));
+		let file = result["output"]["file"].as_str().expect("file path str");
+		assert!(
+			file.contains(".spell/memory/playbooks/jwt-rotation-runbook.org"),
+			"playbook path: {file}"
+		);
+		let body = fs::read_to_string(file).expect("read playbook");
+		assert!(body.contains(":CUSTOM_ID: PB-jwt-rotation-runbook"));
+		assert!(body.contains(":KIND: playbook"));
+	}
+
+	#[test]
+	fn remember_decision_writes_slug_keyed_file_under_decisions_dir() {
+		let dir = tempdir().expect("tempdir");
+		let result = remember(dir.path(), "decision", "Adopt ES256 keys");
+		assert_eq!(result["error"], json!(false), "remember decision should succeed: {result}");
+		assert_eq!(result["output"]["id"], json!("DEC-adopt-es256-keys"));
+		let file = result["output"]["file"].as_str().expect("file path str");
+		assert!(
+			file.contains(".spell/memory/decisions/adopt-es256-keys.org"),
+			"decision path: {file}"
+		);
+		let body = fs::read_to_string(file).expect("read decision");
+		assert!(body.contains(":CUSTOM_ID: DEC-adopt-es256-keys"));
+		assert!(body.contains(":KIND: decision"));
+	}
+
+	#[test]
+	fn remember_unknown_kind_still_rejected() {
+		let dir = tempdir().expect("tempdir");
+		let result = remember(dir.path(), "recipe", "Banana bread");
+		assert_eq!(result["error"], json!(true));
+		let msg = result["output"].as_str().unwrap_or("");
+		assert!(msg.contains("Unknown kind: recipe"), "err msg: {msg}");
 	}
 }

@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { executeOrg } from "@oh-my-pi/pi-natives";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import { diffMemorySince } from "../tools/memory";
+import { diffMemorySince, dispatchMemoryAction } from "../tools/memory";
 import { validateRelativePath } from "./skill-protocol";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
 
@@ -217,27 +217,22 @@ export class MemoryProtocolHandler implements ProtocolHandler {
 			graphHops: parseNumberParam(sp.get("hops")),
 			limit: parseNumberParam(sp.get("limit")),
 			profile: sp.get("profile") ?? undefined,
-			includePersonal: sp.get("includePersonal") === "true" ? true : undefined,
+			includePersonal:
+				sp.get("include_personal") === "true" || sp.get("includePersonal") === "true" ? true : undefined,
 			repoRoot: this.#repoRoot(),
 		});
 		if (result.error) throw new Error(String(result.output));
 		return jsonResource(url, result.output);
 	}
 
-	#resolveItem(url: InternalUrl): InternalResource {
+	async #resolveItem(url: InternalUrl): Promise<InternalResource> {
 		const rawPathname = url.rawPathname ?? url.pathname;
 		const id = rawPathname && rawPathname !== "/" ? decodeURIComponent(rawPathname.slice(1)) : "";
 		if (!id) throw new Error("memory://item requires an id: memory://item/<id>");
-		// subgraph(hops=1) returns the focus node plus its 1-hop neighbours —
-		// the closest the native surface offers to a single-node fetch.
-		const result = executeOrg({
-			command: "subgraph",
-			root: id,
-			hops: 1,
-			repoRoot: this.#repoRoot(),
-		});
-		if (result.error) throw new Error(String(result.output));
-		return jsonResource(url, result.output);
+		// Reuse the tool dispatcher so the URL surface returns the same
+		// {node, neighbors, lineage} shape agents see via `memory({action:"about"})`.
+		const payload = await dispatchMemoryAction({ action: "about", id }, this.#repoRoot());
+		return jsonResource(url, payload);
 	}
 
 	async #resolveSince(url: InternalUrl): Promise<InternalResource> {
