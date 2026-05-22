@@ -257,9 +257,11 @@ pub fn forget(repo_root: &Path) {
 // ---------------------------------------------------------------------------
 
 pub struct RecallEngineHandle {
-	repo_root: PathBuf,
-	cache_dir: PathBuf,
-	state:     Mutex<EngineState>,
+	repo_root:  PathBuf,
+	cache_dir:  PathBuf,
+	state:      Mutex<EngineState>,
+	/// PLAN-315 W2: daemon-side repo handle cached after first `open`.
+	rpc_handle: Mutex<Option<String>>,
 }
 
 enum EngineState {
@@ -291,6 +293,7 @@ impl RecallEngineHandle {
 			repo_root,
 			cache_dir,
 			state: Mutex::new(EngineState::Cold),
+			rpc_handle: Mutex::new(None),
 		}
 	}
 
@@ -303,6 +306,16 @@ impl RecallEngineHandle {
 	/// W5 "silently disabled" contract while keeping the underlying
 	/// `pi_knowledge_core::recall` strict about error propagation (W5.5 F1).
 	pub fn query(&self, query_args: RecallQuery) -> Result<Vec<RecallHit>, String> {
+		// PLAN-315 W2: fast path — if the daemon speaks protocol v2 with the
+		// knowledge surface, route over the socket. Falls back to the
+		// in-process WarmEngine on any RPC failure so behaviour is at-least-
+		// as-good as today.
+		if embedding_worker::knowledge_capable()
+			&& let Ok(hits) = self.query_via_rpc(&query_args)
+		{
+			return Ok(hits);
+		}
+
 		let mut state = self.state.lock();
 		self.ensure_warm(&mut state)?;
 		let warm = match state.as_ref() {
@@ -329,6 +342,70 @@ impl RecallEngineHandle {
 			profiles: profiles(),
 		};
 		recall(effective_query, &ctx).map_err(|e| format!("recall: {e}"))
+	}
+
+	/// PLAN-315 W2 RPC dispatch. Opens the repo handle on the daemon on
+	/// first call (cached locally), then forwards `search`. Errors propagate
+	/// to the caller of `query`; caller falls through to in-process path.
+	fn query_via_rpc(&self, query_args: &RecallQuery) -> Result<Vec<RecallHit>, String> {
+		let handle = self.ensure_rpc_open()?;
+		let args = serde_json::json!({
+			"repo_handle": handle,
+			// Splat the RecallQuery fields at the top level (matches the
+			// daemon's `#[serde(flatten)] query: RecallQuery` shape).
+			"text": query_args.text,
+			"scope": query_args.scope,
+			"focus": query_args.focus,
+			"graph_hops": query_args.graph_hops,
+			"graph_kinds": query_args.graph_kinds,
+			"limit": query_args.limit,
+			"weights": query_args.weights,
+			"profile": query_args.profile,
+		});
+		let response = embedding_worker::knowledge_request("search", args)
+			.map_err(|e| format!("rpc search: {e}"))?;
+		if response.get("ok") != Some(&serde_json::Value::Bool(true)) {
+			let err = response
+				.get("error")
+				.and_then(serde_json::Value::as_str)
+				.unwrap_or("unknown daemon error");
+			return Err(format!("rpc search failed: {err}"));
+		}
+		let hits = response
+			.get("hits")
+			.cloned()
+			.unwrap_or(serde_json::Value::Array(vec![]));
+		serde_json::from_value::<Vec<RecallHit>>(hits)
+			.map_err(|e| format!("rpc search hit deserialise: {e}"))
+	}
+
+	fn ensure_rpc_open(&self) -> Result<String, String> {
+		let mut cached = self.rpc_handle.lock();
+		if let Some(h) = cached.as_ref() {
+			return Ok(h.clone());
+		}
+		let response = embedding_worker::knowledge_request(
+			"open",
+			serde_json::json!({
+				"repo_root": self.repo_root,
+				"lanes": ["org_memory"],
+			}),
+		)
+		.map_err(|e| format!("rpc open: {e}"))?;
+		if response.get("ok") != Some(&serde_json::Value::Bool(true)) {
+			let err = response
+				.get("error")
+				.and_then(serde_json::Value::as_str)
+				.unwrap_or("unknown daemon error");
+			return Err(format!("rpc open failed: {err}"));
+		}
+		let handle = response
+			.get("repo_handle")
+			.and_then(serde_json::Value::as_str)
+			.ok_or_else(|| "rpc open response missing repo_handle".to_string())?
+			.to_string();
+		*cached = Some(handle.clone());
+		Ok(handle)
 	}
 
 	fn ensure_warm(&self, state: &mut EngineState) -> Result<(), String> {

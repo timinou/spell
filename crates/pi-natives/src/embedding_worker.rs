@@ -94,12 +94,57 @@ enum WorkerCommand {
 	EmbedQuery { text: String },
 }
 
+/// Generic knowledge-protocol request body. Used for the PLAN-315
+/// open/close/stats/search/about/neighbors/since commands. Each variant
+/// is `(command_name, args_json)`; the wire frame is constructed by hand
+/// rather than via `Serialize` so the args can be an arbitrary `Value`.
+#[derive(Debug, Clone)]
+pub(crate) struct KnowledgeRequest {
+	pub(crate) command: &'static str,
+	pub(crate) args:    serde_json::Value,
+}
+
+impl Serialize for KnowledgeRequest {
+	fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+		use serde::ser::SerializeMap;
+		let args_obj = self.args.as_object();
+		let field_count = 1 + args_obj.map_or(0, serde_json::Map::len);
+		let mut map = serializer.serialize_map(Some(field_count))?;
+		map.serialize_entry("command", self.command)?;
+		if let Some(obj) = args_obj {
+			for (k, v) in obj {
+				map.serialize_entry(k, v)?;
+			}
+		}
+		map.end()
+	}
+}
+
 #[derive(Deserialize)]
 struct WorkerResponse {
 	ok:      bool,
 	error:   Option<String>,
 	vectors: Option<Vec<Vec<f32>>>,
 	vector:  Option<Vec<f32>>,
+}
+
+/// Daemon capabilities learned at `init` time. Cached on the transport so
+/// repeated `supports()` calls don't re-init. PLAN-315 W1 ships v=2; v=1
+/// is the pre-rename embedder daemon with embed_* only.
+#[derive(Debug, Default, Clone)]
+pub struct Capabilities {
+	pub protocol_version:   u32,
+	pub supported_commands: Vec<String>,
+}
+
+impl Capabilities {
+	pub fn supports(&self, cmd: &str) -> bool {
+		self.supported_commands.iter().any(|c| c == cmd)
+	}
+
+	pub fn knowledge_capable(&self) -> bool {
+		self.protocol_version >= 2 && self.supports("search")
+	}
 }
 
 /// One of two transport modes used by the client. `Subprocess` is the
@@ -121,6 +166,16 @@ impl WorkerTransport {
 		}
 	}
 
+	/// PLAN-315 W2: request a knowledge-protocol command, returning the raw
+	/// JSON response. Used by the search/about/neighbors/since dispatch path.
+	fn request_raw(&mut self, request: &KnowledgeRequest) -> Result<serde_json::Value> {
+		match self {
+			Self::Subprocess(worker) => worker.request_raw(request),
+			#[cfg(unix)]
+			Self::Socket(client) => client.request_raw(request),
+		}
+	}
+
 	fn stop(&mut self) {
 		match self {
 			Self::Subprocess(worker) => worker.stop(),
@@ -128,6 +183,70 @@ impl WorkerTransport {
 			Self::Socket(_) => { /* dropping the stream is enough */ },
 		}
 	}
+}
+
+/// Static capability cache. Populated on first successful `init` against
+/// the active transport; cleared by `reset_for_tests`.
+static CAPS: OnceLock<Mutex<Option<Capabilities>>> = OnceLock::new();
+
+fn caps_slot() -> &'static Mutex<Option<Capabilities>> {
+	CAPS.get_or_init(|| Mutex::new(None))
+}
+
+/// Return cached capabilities, performing `init` if necessary. Best-effort:
+/// on transport failure returns empty (v=0, no commands) so callers fall
+/// through to the in-process WarmEngine path.
+pub fn capabilities() -> Capabilities {
+	if let Ok(guard) = caps_slot().lock()
+		&& let Some(caps) = guard.as_ref()
+	{
+		return caps.clone();
+	}
+	let init_req = KnowledgeRequest { command: "init", args: serde_json::Value::Object(Default::default()) };
+	let caps = match with_worker(|worker| worker.request_raw(&init_req)) {
+		Ok(response) => parse_capabilities(&response),
+		Err(_) => Capabilities::default(),
+	};
+	if let Ok(mut guard) = caps_slot().lock() {
+		*guard = Some(caps.clone());
+	}
+	caps
+}
+
+/// Convenience: does the active transport speak protocol v2 with the
+/// knowledge surface? Memoised via `CAPS`.
+pub fn knowledge_capable() -> bool {
+	capabilities().knowledge_capable()
+}
+
+/// Issue a knowledge-protocol command and return the raw response object.
+/// Caller is responsible for checking the `ok` field and decoding
+/// command-specific payload fields.
+pub fn knowledge_request(
+	command: &'static str,
+	args: serde_json::Value,
+) -> Result<serde_json::Value> {
+	with_worker(|worker| worker.request_raw(&KnowledgeRequest { command, args }))
+}
+
+fn parse_capabilities(response: &serde_json::Value) -> Capabilities {
+	if response.get("ok") != Some(&serde_json::Value::Bool(true)) {
+		return Capabilities::default();
+	}
+	let protocol_version = response
+		.get("protocol_version")
+		.and_then(serde_json::Value::as_u64)
+		.unwrap_or(1) as u32;
+	let supported_commands = response
+		.get("supported_commands")
+		.and_then(serde_json::Value::as_array)
+		.map(|arr| {
+			arr.iter()
+				.filter_map(|v| v.as_str().map(str::to_owned))
+				.collect()
+		})
+		.unwrap_or_default();
+	Capabilities { protocol_version, supported_commands }
 }
 
 struct EmbeddingWorker {
@@ -197,6 +316,30 @@ impl EmbeddingWorker {
 		Ok(())
 	}
 
+	fn request_raw(&mut self, request: &KnowledgeRequest) -> Result<serde_json::Value> {
+		self.ensure_running()?;
+		serde_json::to_writer(&mut self.stdin, request)
+			.map_err(|error| worker_error(format!("failed to encode raw request: {error}")))?;
+		self.stdin
+			.write_all(b"\n")
+			.map_err(|error| worker_error(format!("failed to write raw request: {error}")))?;
+		self.stdin
+			.flush()
+			.map_err(|error| worker_error(format!("failed to flush raw request: {error}")))?;
+
+		let mut line = String::new();
+		let bytes = self
+			.stdout
+			.read_line(&mut line)
+			.map_err(|error| worker_error(format!("failed to read raw response: {error}")))?;
+		if bytes == 0 {
+			self.ensure_running()?;
+			return Err(worker_error("worker exited before sending a raw response"));
+		}
+		serde_json::from_str::<serde_json::Value>(&line)
+			.map_err(|error| worker_error(format!("received malformed raw response: {error}")))
+	}
+
 	fn stop(&mut self) {
 		let _ = self.child.kill();
 		let _ = self.child.wait();
@@ -263,6 +406,43 @@ impl SocketClient {
 		}
 		serde_json::from_str::<WorkerResponse>(&line)
 			.map_err(|error| worker_error(format!("received malformed daemon response: {error}")))
+	}
+
+	fn request_raw(&mut self, request: &KnowledgeRequest) -> Result<serde_json::Value> {
+		serde_json::to_writer(&mut self.writer, request).map_err(|error| {
+			worker_error(format!(
+				"failed to encode raw socket request to {}: {error}",
+				self.socket_path.display()
+			))
+		})?;
+		self.writer.write_all(b"\n").map_err(|error| {
+			worker_error(format!(
+				"failed to write raw socket request to {}: {error}",
+				self.socket_path.display()
+			))
+		})?;
+		self.writer.flush().map_err(|error| {
+			worker_error(format!(
+				"failed to flush raw socket request to {}: {error}",
+				self.socket_path.display()
+			))
+		})?;
+
+		let mut line = String::new();
+		let bytes = self.reader.read_line(&mut line).map_err(|error| {
+			worker_error(format!(
+				"failed to read raw socket response from {}: {error}",
+				self.socket_path.display()
+			))
+		})?;
+		if bytes == 0 {
+			return Err(worker_error(format!(
+				"daemon closed socket {} before sending a raw response",
+				self.socket_path.display()
+			)));
+		}
+		serde_json::from_str::<serde_json::Value>(&line)
+			.map_err(|error| worker_error(format!("received malformed raw daemon response: {error}")))
 	}
 }
 
@@ -564,13 +744,20 @@ fn loaded_addon_dir() -> Option<PathBuf> {
 	None
 }
 
-#[cfg(test)]
-pub(crate) fn reset_for_tests() {
+/// Reset the cached worker + capabilities. Used by tests + by callers
+/// that need to force re-acquisition after changing env vars. Safe to call
+/// from any thread; concurrent users block on the worker mutex.
+pub fn reset_for_tests() {
 	if let Some(slot) = WORKER.get()
 		&& let Ok(mut guard) = slot.lock()
 		&& let Some(mut worker) = guard.take()
 	{
 		worker.stop();
+	}
+	if let Some(slot) = CAPS.get()
+		&& let Ok(mut guard) = slot.lock()
+	{
+		*guard = None;
 	}
 }
 

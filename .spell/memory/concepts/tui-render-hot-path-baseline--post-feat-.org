@@ -1,0 +1,44 @@
+#+TITLE: tui-render-hot-path-baseline--post-feat-
+
+** ITEM TUI render hot-path baseline (post-FEAT-776)
+
+Microbench in packages/tui/test/render-microbench.test.ts (run with PI_BENCH=1).
+
+Baseline on Ryzen AI 7 350, after PLAN-312 + FEAT-776 + BUG-391:
+
+  steady-state render (200 cached):    ~0    ms    early-exit (no work)
+  one dirty leaf + tree walk:           0.10 ms    ✓ cheap
+  streaming Markdown token (50+1):      0.91 ms    ← dominant streaming cost
+  editor render (small input):          0.08 ms    ✓ cheap
+  editor render (2000 chars):           0.52 ms    ← keystroke cost on big input
+  diff loop (200 lines, 1 differ):      0.003ms    ✓ trivial
+
+Conclusions:
+- Idle CPU is effectively zero (early-exit working; spinner auto-release)
+- Render pipeline (walk + diff + write) is not the bottleneck
+- Streaming Markdown re-parse is the largest steady-state cost
+  - marked.lexer runs over the entire growing text each token
+  - At 50 tok/sec ≈ 45ms/sec CPU on Markdown alone
+- Editor layout cost is O(text-length); 2000 chars adds 0.5ms/keystroke
+
+Hard-to-fix without bigger refactors:
+- Incremental markdown parse (marked has no streaming/resumable mode)
+- Editor layout cache that survives cursor moves (needs split cursor overlay)
+
+Quick wins applied:
+- Loader → SpinnerClock (3acc856da)
+- Text/Markdown setText idempotent (3acc856da)
+- AssistantMessage rebuild skip when structure unchanged (3acc856da)
+- ToolExecution image persistence (3acc856da)
+- Spinner sentinel removes 12.5Hz renderer rebuilds (0d62c39e6)
+- handleInput dirty propagation (f6b783a40)
+- Spinner subscription auto-release on idle (11f8254ec)</body>
+<parameter name="distilled_from">["CON-plan-312-post-review-tui-lag-findings--a","FEAT-776-spinner-sentinel-decouple-tool-renderers","BUG-391-handleinput-state-mutations-bypass-markd"]
+:PROPERTIES:
+:CUSTOM_ID: CON-tui-render-hot-path-baseline--post-feat-
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T14:02:20Z
+:END:
+:RELATIONS:
+:END:
