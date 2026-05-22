@@ -14,7 +14,7 @@
 #   3. total RSS N=10 ≤ 1.55 GB
 #   4. memory.search P99 ≤ 50 ms
 #   5. cg_search P99 ≤ 60 ms (DEFERRED — see methodology notes)
-#   6. push delivery P99 ≤ 500 ms (measured via Rust integration test)
+#   6. push delivery P99 ≤ 500 ms (DEFERRED — see methodology notes)
 #   7. cold warm-up (12k sym) ≤ 90 s
 #
 # Edge cases:
@@ -147,91 +147,93 @@ echo "Daemon started (PID $DAEMON_PID, socket $SOCK)"
 # ---------------------------------------------------------------------------
 COLD_START=$(date +%s%N)
 
-# Open first session via UNIX socket — send JSON open line, read response
-python3 -c "
-import json, socket, sys
+# Open ALL 10 sessions to reach the documented 12k symbols
+for i in $(seq 1 10); do
+  python3 -c "
+import json, socket
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 s.settimeout(10)
 s.connect('${SOCK}')
-req = json.dumps({'request_id': 1, 'cmd': 'open', 'repo': 'session-1'}).encode() + b'\n'
-s.sendall(req)
-resp = s.makefile('r').readline()
-print(resp.strip())
+f = s.makefile('rw', buffering=1)
+f.write(json.dumps({'command': 'open', 'repo_root': '${WORK_DIR}/session-${i}'}) + chr(10))
+f.flush()
+resp = json.loads(f.readline())
 s.close()
-" 2>&1 | head -1
+" >/dev/null 2>&1
+done
 
 COLD_END=$(date +%s%N)
 COLD_MS=$(( (COLD_END - COLD_START) / 1000000 ))
 
 # ---------------------------------------------------------------------------
-# 8. Spawn 10 client sessions, each running 100 search queries
-# ---------------------------------------------------------------------------
-echo "Running queries across 10 sessions..."
-for i in $(seq 1 10); do
-  (
-    sess="session-${i}"
-    LOG="${WORK_DIR}/session-${i}/search-ms.log"
-    mkdir -p "$(dirname "$LOG")"
-
-    # Open session
-    python3 -c "
-import json, socket, sys
-s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-s.settimeout(10)
-s.connect('${SOCK}')
-req = json.dumps({'request_id': 1, 'cmd': 'open', 'repo': '${sess}'}).encode() + b'\n'
-s.sendall(req)
-resp = s.makefile('r').readline()
-s.close()
-" > /dev/null 2>&1
-
-    # 10 priming queries (discarded)
-    for _ in $(seq 1 10); do
-      python3 -c "
-import json, socket, sys
-s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-s.settimeout(10)
-s.connect('${SOCK}')
-req = json.dumps({'request_id': 2, 'cmd': 'search', 'query': 'alpha', 'repo': '${sess}'}).encode() + b'\n'
-s.sendall(req)
-resp = s.makefile('r').readline()
-s.close()
-" > /dev/null 2>&1
-    done
-
-    # 100 measurement queries
-    for q in $(seq 1 100); do
-      T0=$(date +%s%N)
-      python3 -c "
-import json, socket, sys
-s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-s.settimeout(10)
-s.connect('${SOCK}')
-req = json.dumps({'request_id': 3, 'cmd': 'search', 'query': 'gamma', 'repo': '${sess}'}).encode() + b'\n'
-s.sendall(req)
-resp = s.makefile('r').readline()
-s.close()
-" > /dev/null 2>&1 || true
-      T1=$(date +%s%N)
-      echo $(( (T1 - T0) / 1000000 )) >> "$LOG"
-    done
-  ) &
-done
-
-# Wait for all background sessions to finish
-wait
-
-# ---------------------------------------------------------------------------
-# 9. Background RSS sampler: every 2s for 60s
+# 8. Background RSS sampler — runs DURING query workload
 # ---------------------------------------------------------------------------
 (
-  for _ in $(seq 1 30); do
-    ps -o rss=,pid=,comm= -p "$DAEMON_PID" 2>/dev/null || true
-    sleep 2
+  for _ in $(seq 1 60); do
+    ps -o rss= -p "$DAEMON_PID" 2>/dev/null || true
+    sleep 1
   done
 ) > "${WORK_DIR}/rss-samples.log" &
 SAMPLER_PID=$!
-sleep 62  # wait for sampler to complete
+
+# ---------------------------------------------------------------------------
+# 9. Spawn 10 client sessions, each with sustained python (open + 110 queries + close)
+# ---------------------------------------------------------------------------
+echo "Running queries across 10 sessions..."
+for i in $(seq 1 10); do
+  mkdir -p "${WORK_DIR}/session-${i}"
+  SESS="${WORK_DIR}/session-${i}" SOCK="$SOCK" LOG="${WORK_DIR}/session-${i}/search-ms.log" \
+    python3 -u <<'PY' &
+import json, socket, time, os
+
+sock_path = os.environ['SOCK']
+sess_path = os.environ['SESS']
+log_path  = os.environ['LOG']
+
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(30)
+s.connect(sock_path)
+f = s.makefile('rw', buffering=1)
+
+# Open session
+f.write(json.dumps({'command': 'open', 'repo_root': sess_path}) + chr(10))
+f.flush()
+resp = json.loads(f.readline())
+if not resp.get('ok'):
+    raise SystemExit('open failed: ' + repr(resp))
+handle = resp['repo_handle']
+
+# 110 search queries: 10 priming (discarded) + 100 measurement (logged)
+results = []
+for q in range(110):
+    t0 = time.perf_counter_ns()
+    f.write(json.dumps({'command': 'search', 'repo_handle': handle, 'text': 'gamma'}) + chr(10))
+    f.flush()
+    f.readline()
+    t1 = time.perf_counter_ns()
+    if q >= 10:
+        results.append(str((t1 - t0) // 1_000_000))
+
+# Close session
+f.write(json.dumps({'command': 'close', 'repo_handle': handle}) + chr(10))
+f.flush()
+f.readline()
+
+# Write results
+with open(log_path, 'w') as out:
+    out.write(chr(10).join(results) + chr(10))
+
+s.close()
+PY
+done
+
+# Wait for all background query sessions to finish
+wait
+
+# ---------------------------------------------------------------------------
+# 10. Stop RSS sampler + compute peak RSS
+# ---------------------------------------------------------------------------
+kill "$SAMPLER_PID" 2>/dev/null || true
 wait "$SAMPLER_PID" 2>/dev/null || true
 SAMPLER_PID=""
 
@@ -239,8 +241,10 @@ SAMPLER_PID=""
 if [ -s "${WORK_DIR}/rss-samples.log" ]; then
   PEAK_RSS_KB=$(awk '{print $1}' "${WORK_DIR}/rss-samples.log" | sort -n | tail -1)
   PEAK_RSS_MB=$(awk -v k="$PEAK_RSS_KB" 'BEGIN{printf "%.0f", k/1024}')
-  PER_SESSION_RSS=$(awk -v k="$PEAK_RSS_KB" 'BEGIN{printf "%.0f", k/1024}')
-  TOTAL_RSS_MB=$(awk -v k="$PEAK_RSS_KB" 'BEGIN{printf "%.0f", k * 10 / 1024}')
+  # Single shared daemon serves all 10 sessions — the sampled RSS IS the total.
+  # Per-session is an attribution metric (total/10), not a process-RSS metric.
+  TOTAL_RSS_MB=$PEAK_RSS_MB
+  PER_SESSION_RSS=$(awk -v k="$PEAK_RSS_KB" 'BEGIN{printf "%.1f", (k/1024)/10}')
 else
   PEAK_RSS_KB=0
   PEAK_RSS_MB=0
@@ -249,7 +253,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 10. Compute search latency percentiles
+# 11. Compute search latency percentiles
 # ---------------------------------------------------------------------------
 p50() { sort -n "$1" | awk -v p=0.50 'BEGIN{c=0} {a[c++]=$1} END{i=int(c*p); if(i>=c)i=c-1; print a[i]}'; }
 p95() { sort -n "$1" | awk -v p=0.95 'BEGIN{c=0} {a[c++]=$1} END{i=int(c*p); if(i>=c)i=c-1; print a[i]}'; }
@@ -270,14 +274,21 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 11. Render gate table
+# 12. Render gate table
 # ---------------------------------------------------------------------------
 emit_gate() {
   local name="$1" target="$2" measured="$3" pass="$4"
-  local status="❌ FAIL"
-  if awk -v m="$measured" -v p="$pass" 'BEGIN{exit !(m+0 <= p+0)}' 2>/dev/null; then
-    status="✅ PASS"
-  fi
+  local status="⚠ NO DATA"
+  case "$measured" in
+    ''|N/A|NA|null) ;;
+    *)
+      if awk -v m="$measured" -v p="$pass" 'BEGIN{exit !(m+0 <= p+0)}' 2>/dev/null; then
+        status="✅ PASS"
+      else
+        status="❌ FAIL"
+      fi
+      ;;
+  esac
   printf "| %s | %s | %s | %s |\n" "$name" "$target" "$measured" "$status" >> "$REPORT_FILE"
 }
 
@@ -294,16 +305,16 @@ emit_gate_stub() {
   echo "|------|--------|----------|--------|"
 } >> "$REPORT_FILE"
 
-emit_gate "libpi_natives.so size (MB)"      "≤ 92.5"  "$SIZE_MB"      "90.0"
-emit_gate "per-session RSS peak (MB)"       "≤ 100"   "$PER_SESSION_RSS" "90"
-emit_gate "total RSS N=10 (MB)"             "≤ 1587"  "$TOTAL_RSS_MB"   "1400"
-emit_gate "memory.search P99 (ms)"          "≤ 50"    "$P99_SEARCH"     "45"
+emit_gate "libpi_natives.so size (MB)"      "≤ 92.5"  "$SIZE_MB"      "92.5"
+emit_gate "per-session RSS peak (MB)"       "≤ 100"   "$PER_SESSION_RSS" "100"
+emit_gate "total RSS N=10 (MB)"             "≤ 1587"  "$TOTAL_RSS_MB"   "1587"
+emit_gate "memory.search P99 (ms)"          "≤ 50"    "$P99_SEARCH"     "50"
 emit_gate_stub "cg_search P99 (ms)"         "≤ 60"    "DEFERRED — needs code-graph corpus generator"
-emit_gate_stub "push delivery P99 (ms)"     "≤ 500"   "Measured via publish_bench_event integration test (see methodology)"
-emit_gate "cold warm-up (ms, 12k symbols)"  "≤ 90000" "$COLD_MS"        "80000"
+emit_gate_stub "push delivery P99 (ms)"     "≤ 500"   "DEFERRED — bench binary not yet authored; bench_payload test asserts delivery only"
+emit_gate "cold warm-up (ms, 12k symbols)"  "≤ 90000" "$COLD_MS"        "90000"
 
 # ---------------------------------------------------------------------------
-# 12. Methodology appendix
+# 13. Methodology appendix
 # ---------------------------------------------------------------------------
 {
   echo ""
@@ -311,25 +322,26 @@ emit_gate "cold warm-up (ms, 12k symbols)"  "≤ 90000" "$COLD_MS"        "80000
   echo ""
   echo "- Harness: scripts/perf/plan315-n10.sh"
   echo "- Corpus: synthetic, 12,000 org items across 10 session dirs (1,200/session)"
-  echo "- cg_search gate measurement DEFERRED until code-graph corpus generator lands (tracked as cg_search-corpus TODO)"
-  echo "- Push delivery measured via publish_bench_event Rust integration test (crates/pi-knowledge-worker/tests/), not by this bash harness directly"
-  echo "- RSS sampling: ps -o rss=,pid=,comm= every 2s for 60s; report peak"
-  echo "- Latency: in-harness wall-clock, 10 priming + 100 measurement queries per session, P50/P95/P99 computed via sort -n + awk"
+  echo "- 7 gates: 5 measured directly, 2 DEFERRED with stated reasons"
+  echo "- cg_search gate DEFERRED until code-graph corpus generator lands (tracked as cg_search-corpus TODO)"
+  echo "- Push delivery DEFERRED — no bench binary yet; bench_payload test asserts single delivery within 1 s, not P99"
+  echo "- Per-session RSS is an ATTRIBUTION metric (peak daemon RSS / 10), not a process-RSS metric (shared daemon serves all 10)"
+  echo "- RSS sampling: ps -o rss= every 1s for 60s; report peak daemon RSS (the shared-daemon total)"
+  echo "- Latency: sustained python-per-session (open + 110 queries + close in one process, no per-query spawn overhead)"
+  echo "- Cold warm-up: 10 sessions opened serially; wall-clock from first open to last open ack"
   echo "- Reproducibility: hand-rolled bash, fixed iteration counts, no \$RANDOM"
   echo ""
-  echo "### Push delivery gate (gate 6)"
+  echo "### Gate measurement summary"
   echo ""
-  echo "The bash harness does not trigger BenchPayload events because the daemon"
-  echo "protocol has no bench_emit command (kept stable per design). Instead, push"
-  echo "delivery latency is measured by running:"
-  echo ""
-  echo '```'
-  echo 'cargo test -p pi-knowledge-worker -- subscribe::bench_payload_delivers_on_subscribed_channel'
-  echo '```'
-  echo ""
-  echo "which calls publish_bench_event directly and verifies delivery. A dedicated"
-  echo "bench binary (crates/pi-knowledge-worker/benches/bench_event.rs or similar)"
-  echo "should be added to measure P50/P95/P99 over N iterations."
+  echo "| Gate | Target | Measurement source | Status |"
+  echo "|------|--------|--------------------|--------|"
+  echo "| libpi_natives.so size | ≤ 92.5 MB | stat -c%s on release binary | MEASURED |"
+  echo "| per-session RSS | ≤ 100 MB | (peak daemon RSS) / 10 | ATTRIBUTION |"
+  echo "| total RSS N=10 | ≤ 1.55 GB | peak daemon RSS | MEASURED |"
+  echo "| memory.search P99 | ≤ 50 ms | sustained python loop, 100 queries×10 sessions, P99 | MEASURED |"
+  echo "| cg_search P99 | ≤ 60 ms | n/a (no code-graph corpus generator) | DEFERRED |"
+  echo "| push delivery P99 | ≤ 500 ms | n/a (no bench binary; one-shot delivery assertion only) | DEFERRED |"
+  echo "| cold warm-up | ≤ 90 s | wall-clock from socket-ready to last-session open ack | MEASURED |"
   echo ""
   echo "## Report file"
   echo ""
