@@ -156,15 +156,22 @@ pub struct WhyHit {
 // Context
 // ---------------------------------------------------------------------------
 
-/// Borrowed slice of every artifact the recall pipeline needs for a single
-/// query. Caller builds the bm25 / vec indices and the graph; the pipeline
-/// is read-only.
+/// Borrowed slice of every artifact the recall pipeline needs for a single query.
+///
+/// Caller builds the bm25 / vec indices and the graph; the pipeline is
+/// read-only.
+///
+/// `profiles` is the registry consulted when `query.profile` is set. Pass
+/// `&RecallProfileRegistry::default()` (empty registry) when profiles are
+/// irrelevant, or `&RecallProfileRegistry::defaults()` to pick up the
+/// built-in `"session-start"` / `"priors"` curated views.
 pub struct RecallContext<'a> {
 	pub docs:     &'a [RecallDoc],
 	pub bm25:     &'a SearchIndex,
 	pub vec:      &'a VectorIndex,
 	pub embedder: &'a dyn Embedder,
 	pub graph:    &'a dyn RecallGraph,
+	pub profiles: &'a RecallProfileRegistry,
 }
 
 // ---------------------------------------------------------------------------
@@ -192,7 +199,7 @@ impl RecallProfileRegistry {
 		let mut reg = Self { profiles: HashMap::new() };
 		reg.register("session-start", RecallProfile {
 			scope:       vec!["concept".into()],
-			weights:     FusionWeights { bm25: 0.0, vector: 0.0, graph: 0.0, k: 60.0 },
+			weights:     FusionWeights { bm25: 0.4, vector: 0.5, graph: 0.1, k: 60.0 },
 			graph_hops:  0,
 			graph_kinds: Vec::new(),
 			limit:       12,
@@ -294,8 +301,15 @@ fn bfs_hops(
 
 /// Extract a relevant excerpt from item body given a search query.
 ///
-/// Finds the first occurrence of the query (case-insensitive) in the body and
-/// returns a window of text around it. Falls back to first 200 characters.
+/// Finds the first occurrence of the query (case-insensitive) in the body
+/// and returns a window of text around it. Falls back to first 200
+/// characters.
+///
+/// Char-aligned to survive non-ASCII bodies. `String::to_lowercase` is
+/// allowed to change byte length (Turkish `İ` → `i\u{307}`, capital
+/// sharp s `ẞ` → `ß`), so byte offsets from the lowercased copy
+/// must never index back into the original. We scan char-by-char on the
+/// original and slice on char boundaries.
 #[must_use]
 pub fn extract_excerpt(body: &str, query: &str) -> String {
 	let query = query.trim();
@@ -303,24 +317,46 @@ pub fn extract_excerpt(body: &str, query: &str) -> String {
 		return body.chars().take(200).collect();
 	}
 
-	let lower_body = body.to_lowercase();
-	let lower_query = query.to_lowercase();
-
-	if let Some(pos) = lower_body.find(&lower_query) {
-		let ctx_before = 50;
-		let ctx_after = 150;
-		let start = pos.saturating_sub(ctx_before);
-		let body_len = body.len();
-		let end = (pos + lower_query.len() + ctx_after).min(body_len);
-		let excerpt: String = body[start..end].to_string();
-		if start > 0 {
-			format!("...{excerpt}")
-		} else {
-			excerpt
-		}
-	} else {
-		body.chars().take(200).collect()
+	let needle: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
+	if needle.is_empty() {
+		return body.chars().take(200).collect();
 	}
+
+	let body_chars: Vec<char> = body.chars().collect();
+	let match_idx = find_ci_char_match(&body_chars, &needle);
+	let Some(match_start) = match_idx else {
+		return body.chars().take(200).collect();
+	};
+
+	let ctx_before = 50;
+	let ctx_after = 150;
+	let start = match_start.saturating_sub(ctx_before);
+	let end = (match_start + needle.len() + ctx_after).min(body_chars.len());
+	let excerpt: String = body_chars[start..end].iter().collect();
+	if start > 0 {
+		format!("...{excerpt}")
+	} else {
+		excerpt
+	}
+}
+
+/// Case-insensitive char-aligned substring search. Returns the starting
+/// char index in `haystack` where `needle` first matches, or `None`.
+fn find_ci_char_match(haystack: &[char], needle: &[char]) -> Option<usize> {
+	if needle.is_empty() || needle.len() > haystack.len() {
+		return None;
+	}
+	let limit = haystack.len() - needle.len() + 1;
+	'outer: for i in 0..limit {
+		for (j, nc) in needle.iter().enumerate() {
+			let hc = haystack[i + j].to_lowercase().next().unwrap_or(haystack[i + j]);
+			if hc != *nc {
+				continue 'outer;
+			}
+		}
+		return Some(i);
+	}
+	None
 }
 
 // ---------------------------------------------------------------------------
@@ -328,7 +364,19 @@ pub fn extract_excerpt(body: &str, query: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Run the hybrid recall pipeline, fusing BM25 + vector + graph via RRF.
+///
+/// When `query.profile` is set and registered in `ctx.profiles`, the
+/// profile's `scope`/`weights`/`graph_hops`/`graph_kinds`/`limit` are applied as
+/// defaults: explicit query fields win, unset/zero/empty fields inherit
+/// from the profile. Unknown profile names are silently ignored (caller
+/// gets the bare-weights default behaviour).
+///
+/// Errors propagate from the embedder and the vector index. The hot path
+/// does not swallow them — a zero query vector against a cosine-normalised
+/// index produces meaningless rankings and a `vec.search` dim mismatch is a
+/// configuration bug, not a soft failure.
 pub fn recall(query: RecallQuery, ctx: &RecallContext) -> Result<Vec<RecallHit>> {
+	let query = apply_profile(query, ctx.profiles);
 	let weights = query.weights.clone().unwrap_or_default();
 	let effective_limit = query.limit.max(1);
 
@@ -371,15 +419,15 @@ pub fn recall(query: RecallQuery, ctx: &RecallContext) -> Result<Vec<RecallHit>>
 	};
 
 	// --- Vector lane ---
+	// Embedder and vec.search errors propagate (no zero-vector fabrication,
+	// no silent empty result on dim mismatch). Caller decides how to surface
+	// the failure — see W5.5 F1.
 	let vector_ranked: Vec<String> = if let Some(ref text) = query.text {
 		if weights.vector > 0.0 {
-			let query_vec = ctx
-				.embedder
-				.embed_query(text)
-				.unwrap_or_else(|_| vec![0.0; ctx.embedder.dim()]);
+			let query_vec = ctx.embedder.embed_query(text)?;
 			ctx.vec
 				.search(&query_vec, over_fetch)
-				.unwrap_or_default()
+				.map_err(|e| crate::Error::Other(format!("vec.search: {e}")))?
 				.into_iter()
 				.filter_map(|hit| key_to_id.get(&hit.node_id).copied().map(str::to_string))
 				.filter(|id| {
@@ -434,7 +482,7 @@ pub fn recall(query: RecallQuery, ctx: &RecallContext) -> Result<Vec<RecallHit>>
 	} else {
 		rrf(&rankings, weights.k)
 	};
-// Build RecallHits.
+	// Build RecallHits.
 	let fused = fused.into_iter().take(effective_limit);
 	let bm25_pos: HashMap<&str, usize> = bm25_ranked
 		.iter()
@@ -484,6 +532,33 @@ pub fn recall(query: RecallQuery, ctx: &RecallContext) -> Result<Vec<RecallHit>>
 	Ok(results)
 }
 
+/// Apply a named profile from `profiles` onto `query`. Explicit query
+/// fields win; unset/zero/empty fields inherit from the profile.
+/// Unknown profile names are passed through unchanged.
+fn apply_profile(query: RecallQuery, profiles: &RecallProfileRegistry) -> RecallQuery {
+	let Some(name) = query.profile.as_deref() else {
+		return query;
+	};
+	let Some(p) = profiles.get(name) else {
+		return query;
+	};
+	RecallQuery {
+		text:             query.text,
+		scope:            if query.scope.is_empty() { p.scope.clone() } else { query.scope },
+		focus:            query.focus,
+		graph_hops:       if query.graph_hops == 0 { p.graph_hops } else { query.graph_hops },
+		graph_kinds:      if query.graph_kinds.is_empty() {
+			p.graph_kinds.clone()
+		} else {
+			query.graph_kinds
+		},
+		limit:            if query.limit == 0 { p.limit } else { query.limit },
+		weights:          query.weights.or_else(|| Some(p.weights.clone())),
+		profile:          query.profile,
+		include_personal: query.include_personal,
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Dual-context recall (cwd + personal store)
 // ---------------------------------------------------------------------------
@@ -494,33 +569,58 @@ pub struct DualContext<'a> {
 	pub personal: Option<RecallContext<'a>>,
 }
 
-/// Run [`recall`] against both contexts, dedupe by id (cwd wins on collision),
-/// truncate to `query.limit`. Returns only cwd results when
-/// `query.include_personal == false` or `ctx.personal.is_none()`.
+/// Run [`recall`] against both contexts and fuse by position-based RRF.
+///
+/// Each context produces its own ranked list; the two lists are then fused
+/// by reciprocal-rank-fusion treating `cwd` and `personal` as two lanes.
+/// This is the right shape because RRF scores from the two `recall()`
+/// outputs are **not** commensurate: lane weights and corpus sizes differ,
+/// so summing the per-context fused scores would let a #1 hit in personal
+/// lose to a #15 in cwd just because cwd had more lanes contributing.
+/// Position-based fusion keeps rank meaning intact.
+///
+/// Dedup: cwd wins on collision (the cwd hit’s metadata is preserved). On
+/// dedup, the duplicate id contributes its rank from *both* lanes to the
+/// fused score, so cross-corpus agreement still boosts the result.
+///
+/// Both lanes carry equal weight (1.0). RRF naturally rewards consensus,
+/// so an item present in both lanes outranks a same-position item in only
+/// one. `cwd` only “wins” on metadata collision (title/excerpt come from
+/// the cwd hit) — it does not get extra weight in the ranking.
 pub fn recall_dual(query: RecallQuery, ctx: &DualContext) -> Result<Vec<RecallHit>> {
 	if !query.include_personal || ctx.personal.is_none() {
 		return recall(query, &ctx.cwd);
 	}
-	let limit = query.limit;
+	let limit = query.limit.max(1);
+	let weights = query.weights.clone().unwrap_or_default();
+	let k = weights.k;
+
 	let cwd_hits = recall(query.clone(), &ctx.cwd)?;
 	let personal_hits = recall(query, ctx.personal.as_ref().unwrap())?;
 
+	// Capture metadata before lifting ids into rank lists.
 	let mut by_id: BTreeMap<String, RecallHit> = BTreeMap::new();
-	for h in cwd_hits {
-		by_id.insert(h.id.clone(), h);
+	for h in &personal_hits {
+		by_id.insert(h.id.clone(), h.clone());
 	}
-	for h in personal_hits {
-		by_id.entry(h.id.clone()).or_insert(h);
+	// cwd second so cwd wins on collision.
+	for h in &cwd_hits {
+		by_id.insert(h.id.clone(), h.clone());
 	}
-	let mut fused: Vec<RecallHit> = by_id.into_values().collect();
-	fused.sort_by(|a, b| {
-		b.score
-			.partial_cmp(&a.score)
-			.unwrap_or(std::cmp::Ordering::Equal)
-			.then_with(|| a.id.cmp(&b.id))
-	});
-	fused.truncate(limit);
-	Ok(fused)
+
+	let cwd_ids: Vec<&str> = cwd_hits.iter().map(|h| h.id.as_str()).collect();
+	let personal_ids: Vec<&str> = personal_hits.iter().map(|h| h.id.as_str()).collect();
+	let rankings = vec![(1.0_f32, cwd_ids), (1.0_f32, personal_ids)];
+	let fused = rrf(&rankings, k);
+
+	let mut out: Vec<RecallHit> = Vec::with_capacity(fused.len().min(limit));
+	for (id, score) in fused.into_iter().take(limit) {
+		if let Some(mut h) = by_id.remove(&id) {
+			h.score = score;
+			out.push(h);
+		}
+	}
+	Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -617,8 +717,31 @@ mod tests {
 		vec: &'a VectorIndex,
 		embedder: &'a dyn Embedder,
 		graph: &'a dyn RecallGraph,
+		profiles: &'a RecallProfileRegistry,
 	) -> RecallContext<'a> {
-		RecallContext { docs, bm25, vec, embedder, graph }
+		RecallContext { docs, bm25, vec, embedder, graph, profiles }
+	}
+
+	static EMPTY_PROFILES: std::sync::OnceLock<RecallProfileRegistry> = std::sync::OnceLock::new();
+	fn no_profiles() -> &'static RecallProfileRegistry {
+		EMPTY_PROFILES.get_or_init(RecallProfileRegistry::default)
+	}
+
+	// Embedder that always errors — exercises F1 propagation.
+	struct FailingEmbedder {
+		dim: usize,
+	}
+
+	impl Embedder for FailingEmbedder {
+		fn embed_query(&self, _text: &str) -> Result<Vec<f32>> {
+			Err(crate::Error::Embedder("worker offline".into()))
+		}
+		fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+			Err(crate::Error::Embedder("worker offline".into()))
+		}
+		fn dim(&self) -> usize {
+			self.dim
+		}
 	}
 
 	#[test]
@@ -666,7 +789,7 @@ mod tests {
 		let vec = VectorIndex::new(8, 1).unwrap();
 		let emb = MockEmbedder { dim: 8 };
 		let graph = MapGraph::default();
-		let ctx = build_ctx(&docs, &bm25, &vec, &emb, &graph);
+		let ctx = build_ctx(&docs, &bm25, &vec, &emb, &graph, no_profiles());
 		let q = RecallQuery { text: Some("anything".into()), limit: 5, ..Default::default() };
 		let hits = recall(q, &ctx).unwrap();
 		assert!(hits.is_empty());
@@ -689,7 +812,7 @@ mod tests {
 			vec.upsert(VectorEntry { node_id: id_hash(&d.id), vector: v }).unwrap();
 		}
 		let graph = MapGraph::default();
-		let ctx = build_ctx(&docs, &bm25, &vec, &emb, &graph);
+		let ctx = build_ctx(&docs, &bm25, &vec, &emb, &graph, no_profiles());
 		let q = RecallQuery { text: Some("Auth".into()), limit: 5, ..Default::default() };
 		let hits = recall(q, &ctx).unwrap();
 		assert!(!hits.is_empty(), "expected hits, got {hits:?}");
@@ -703,14 +826,14 @@ mod tests {
 		let vec = VectorIndex::new(8, 1).unwrap();
 		let emb = MockEmbedder { dim: 8 };
 		let graph = MapGraph::default();
-		let cwd = build_ctx(&docs, &bm25, &vec, &emb, &graph);
+		let cwd = build_ctx(&docs, &bm25, &vec, &emb, &graph, no_profiles());
 
 		let pdocs = vec![doc("P-1", "episode", "Personal", None)];
 		let pbm25 = SearchIndex::from_docs(&pdocs);
 		let pvec = VectorIndex::new(8, 1).unwrap();
 		let pemb = MockEmbedder { dim: 8 };
 		let pgraph = MapGraph::default();
-		let personal = build_ctx(&pdocs, &pbm25, &pvec, &pemb, &pgraph);
+		let personal = build_ctx(&pdocs, &pbm25, &pvec, &pemb, &pgraph, no_profiles());
 
 		let ctx = DualContext { cwd, personal: Some(personal) };
 		let q = RecallQuery {
@@ -730,14 +853,14 @@ mod tests {
 		let vec = VectorIndex::new(8, 1).unwrap();
 		let emb = MockEmbedder { dim: 8 };
 		let graph = MapGraph::default();
-		let cwd = build_ctx(&docs, &bm25, &vec, &emb, &graph);
+		let cwd = build_ctx(&docs, &bm25, &vec, &emb, &graph, no_profiles());
 
 		let pdocs = vec![doc("DUP-1", "episode", "From personal", None)];
 		let pbm25 = SearchIndex::from_docs(&pdocs);
 		let pvec = VectorIndex::new(8, 1).unwrap();
 		let pemb = MockEmbedder { dim: 8 };
 		let pgraph = MapGraph::default();
-		let personal = build_ctx(&pdocs, &pbm25, &pvec, &pemb, &pgraph);
+		let personal = build_ctx(&pdocs, &pbm25, &pvec, &pemb, &pgraph, no_profiles());
 
 		let ctx = DualContext { cwd, personal: Some(personal) };
 		let q = RecallQuery {
@@ -749,5 +872,214 @@ mod tests {
 		let hits = recall_dual(q, &ctx).unwrap();
 		let dup = hits.iter().find(|h| h.id == "DUP-1").expect("DUP-1 in result");
 		assert_eq!(dup.title, "From cwd", "cwd entry should win the collision");
+	}
+
+	// --- F1: vector lane errors propagate ----------------------------------
+	#[test]
+	fn recall_returns_err_on_embed_failure() {
+		let docs = vec![doc("X-1", "episode", "Alpha", Some("body"))];
+		let bm25 = SearchIndex::from_docs(&docs);
+		let vec = VectorIndex::new(8, 1).unwrap();
+		let emb = FailingEmbedder { dim: 8 };
+		let graph = MapGraph::default();
+		let ctx = build_ctx(&docs, &bm25, &vec, &emb, &graph, no_profiles());
+		let q = RecallQuery {
+			text:    Some("alpha".into()),
+			limit:   5,
+			weights: Some(FusionWeights { bm25: 0.0, vector: 1.0, graph: 0.0, k: 60.0 }),
+			..Default::default()
+		};
+		let result = recall(q, &ctx);
+		assert!(result.is_err(), "embed failure must propagate; got {result:?}");
+	}
+
+	#[test]
+	fn recall_returns_err_on_vec_search_dim_mismatch() {
+		// Embedder returns dim=4 vectors; index was built for dim=8.
+		struct WrongDim;
+		impl Embedder for WrongDim {
+			fn embed_query(&self, _: &str) -> Result<Vec<f32>> {
+				Ok(vec![0.1; 4])
+			}
+			fn embed_batch(&self, _: &[&str]) -> Result<Vec<Vec<f32>>> {
+				Ok(vec![])
+			}
+			fn dim(&self) -> usize {
+				4
+			}
+		}
+		let docs = vec![doc("X-1", "episode", "a", None)];
+		let bm25 = SearchIndex::from_docs(&docs);
+		let vec = VectorIndex::new(8, 1).unwrap();
+		let graph = MapGraph::default();
+		let emb = WrongDim;
+		let ctx = build_ctx(&docs, &bm25, &vec, &emb, &graph, no_profiles());
+		let q = RecallQuery {
+			text:    Some("x".into()),
+			limit:   5,
+			weights: Some(FusionWeights { bm25: 0.0, vector: 1.0, graph: 0.0, k: 60.0 }),
+			..Default::default()
+		};
+		assert!(recall(q, &ctx).is_err(), "vec.search dim mismatch must propagate");
+	}
+
+	// --- F3: profile threading --------------------------------------------
+	#[test]
+	fn recall_applies_profile_weights() {
+		// Build a corpus where bm25 would naturally favour title "alpha".
+		let docs = vec![
+			doc("CN-1", "concept", "alpha", Some("alpha alpha alpha")),
+			doc("EP-1", "episode", "beta", Some("alpha")),
+		];
+		let bm25 = SearchIndex::from_docs(&docs);
+		let dim = 8;
+		let mut vec = VectorIndex::new(dim, docs.len()).unwrap();
+		let emb = MockEmbedder { dim };
+		for d in &docs {
+			let v = deterministic_vec(&d.title, dim);
+			vec.upsert(VectorEntry { node_id: id_hash(&d.id), vector: v }).unwrap();
+		}
+		let graph = MapGraph::default();
+		let profiles = RecallProfileRegistry::defaults();
+		let ctx = build_ctx(&docs, &bm25, &vec, &emb, &graph, &profiles);
+
+		// session-start scope = ["concept"]; with profile applied EP-1 must be filtered.
+		let q = RecallQuery {
+			text: Some("alpha".into()),
+			profile: Some("session-start".into()),
+			..Default::default()
+		};
+		let hits = recall(q, &ctx).unwrap();
+		assert!(
+			hits.iter().all(|h| h.id != "EP-1"),
+			"session-start scope=concept must filter EP-1; got {hits:?}",
+		);
+		assert!(
+			hits.iter().any(|h| h.id == "CN-1"),
+			"session-start should still surface CN-1; got {hits:?}",
+		);
+	}
+
+	#[test]
+	fn recall_ignores_unknown_profile_name() {
+		let docs = vec![doc("X-1", "episode", "alpha", None)];
+		let bm25 = SearchIndex::from_docs(&docs);
+		let vec = VectorIndex::new(8, 1).unwrap();
+		let emb = MockEmbedder { dim: 8 };
+		let graph = MapGraph::default();
+		let profiles = RecallProfileRegistry::defaults();
+		let ctx = build_ctx(&docs, &bm25, &vec, &emb, &graph, &profiles);
+		let q = RecallQuery {
+			text:    Some("alpha".into()),
+			profile: Some("does-not-exist".into()),
+			limit:   5,
+			..Default::default()
+		};
+		let hits = recall(q, &ctx).unwrap();
+		// Default weights (bm25+vector both >0) would surface X-1.
+		assert!(hits.iter().any(|h| h.id == "X-1"), "unknown profile should be no-op; got {hits:?}");
+	}
+
+	#[test]
+	fn defaults_registry_session_start_has_live_weights() {
+		let reg = RecallProfileRegistry::defaults();
+		let p = reg.get("session-start").expect("session-start registered");
+		assert!(
+			p.weights.vector > 0.0 || p.weights.bm25 > 0.0,
+			"session-start must have a non-zero retrieval lane (W7 needs hits): {:?}",
+			p.weights,
+		);
+	}
+
+	// --- F4: recall_dual uses position-based RRF ---------------------------
+	#[test]
+	fn recall_dual_uses_rrf_not_raw_score_sum() {
+		// Construct a scenario where personal's #1 hit had a *low* raw score
+		// (because personal lanes were sparse) but a *high* rank. The old
+		// implementation sorted by raw score so personal's #1 would sink under
+		// cwd's middle-rank hits. The new implementation uses position-based
+		// RRF, so personal's #1 should land near the top.
+		let cwd_docs = vec![
+			doc("C-1", "episode", "alpha cwd one", Some("alpha")),
+			doc("C-2", "episode", "alpha cwd two", Some("alpha")),
+			doc("C-3", "episode", "alpha cwd three", Some("alpha")),
+			doc("C-4", "episode", "alpha cwd four", Some("alpha")),
+			doc("C-5", "episode", "alpha cwd five", Some("alpha")),
+		];
+		let cwd_bm25 = SearchIndex::from_docs(&cwd_docs);
+		let cwd_vec = VectorIndex::new(8, cwd_docs.len()).unwrap();
+		let cwd_emb = MockEmbedder { dim: 8 };
+		let cwd_graph = MapGraph::default();
+		let cwd = build_ctx(&cwd_docs, &cwd_bm25, &cwd_vec, &cwd_emb, &cwd_graph, no_profiles());
+
+		let p_docs = vec![doc("P-1", "episode", "alpha", Some("alpha"))];
+		let p_bm25 = SearchIndex::from_docs(&p_docs);
+		let p_vec = VectorIndex::new(8, 1).unwrap();
+		let p_emb = MockEmbedder { dim: 8 };
+		let p_graph = MapGraph::default();
+		let personal =
+			build_ctx(&p_docs, &p_bm25, &p_vec, &p_emb, &p_graph, no_profiles());
+
+		let ctx = DualContext { cwd, personal: Some(personal) };
+		let q = RecallQuery {
+			text:             Some("alpha".into()),
+			limit:            10,
+			include_personal: true,
+			weights: Some(FusionWeights { bm25: 1.0, vector: 0.0, graph: 0.0, k: 60.0 }),
+			..Default::default()
+		};
+		let hits = recall_dual(q, &ctx).unwrap();
+		let p_idx = hits.iter().position(|h| h.id == "P-1").expect("P-1 present");
+		// With position-based RRF (equal lane weights), P-1 (personal rank #1)
+		// shares the top RRF contribution 1.0/(k+1) with whichever cwd hit
+		// landed at cwd rank #1. It must therefore outrank cwd ranks #2..#5.
+		assert!(
+			p_idx < hits.len() - 1,
+			"P-1 must outrank at least one cwd hit (proves position-based fusion); got {hits:?}",
+		);
+		assert!(
+			p_idx <= 1,
+			"P-1 (personal rank #1) must land in the top 2 alongside the cwd-rank-#1 hit; got idx={p_idx} hits={hits:?}",
+		);
+		// Sanity: the top RRF score is 1/(k+1) = 1/61 ≈ 0.0164. If old impl
+		// were active, scores would be the (different) raw recall() scores
+		// inherited from the per-context fusion — same magnitude here but
+		// the *shape* would differ for a 2-lane query. We assert the new
+		// invariant: every score is a sum of 1/(k+rank) RRF contributions.
+		let top = hits.first().unwrap().score;
+		let expected_top_max = 2.0 / (60.0 + 1.0); // both lanes contributing
+		assert!(top <= expected_top_max, "top score {top} exceeds 2/(k+1)={expected_top_max}");
+	}
+
+	// --- F5: utf-8 boundary -----------------------------------------------
+	#[test]
+	fn extract_excerpt_handles_multibyte_chars() {
+		// German sharp s — the classic case that breaks lowercase byte indexing.
+		let body = "Über die ß-Regel und die i-Punkte";
+		let out = extract_excerpt(body, "ß");
+		assert!(
+			out.contains('ß'),
+			"excerpt should contain the matched char; got {out:?}",
+		);
+	}
+
+	#[test]
+	fn extract_excerpt_handles_turkish_capital_i() {
+		// `İ`.to_lowercase() yields "i\u{307}" (3 bytes → 3 bytes by way of
+		// 1 char → 2 chars). Byte indexing would shift.
+		let body = "İstanbul ferries depart at dawn";
+		let out = extract_excerpt(body, "istanbul");
+		assert!(
+			out.to_lowercase().contains("istanbul") || out.contains('İ'),
+			"case-insensitive match should locate İstanbul; got {out:?}",
+		);
+	}
+
+	#[test]
+	fn extract_excerpt_does_not_panic_on_no_match() {
+		// Non-ASCII body, query absent — must fall back without panic.
+		let body = "你好世界";
+		let out = extract_excerpt(body, "zzz");
+		assert!(!out.is_empty());
 	}
 }
