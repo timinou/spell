@@ -33,9 +33,11 @@ impl MockCoordClient {
 			commit_called: std::sync::atomic::AtomicBool::new(false),
 		}
 	}
+
 	pub fn intent_called(&self) -> bool {
 		self.intent_called.load(std::sync::atomic::Ordering::SeqCst)
 	}
+
 	pub fn commit_called(&self) -> bool {
 		self.commit_called.load(std::sync::atomic::Ordering::SeqCst)
 	}
@@ -44,6 +46,7 @@ impl MockCoordClient {
 #[cfg(test)]
 impl CoordClient for MockCoordClient {
 	fn on_open(&self, _session: &str, _file: &std::path::Path, _revision: u64) {}
+
 	fn intent(
 		&self,
 		_session: &str,
@@ -51,9 +54,12 @@ impl CoordClient for MockCoordClient {
 		_code_paths: &[String],
 		_base_revision: u64,
 	) -> IntentResult {
-		self.intent_called.store(true, std::sync::atomic::Ordering::SeqCst);
+		self
+			.intent_called
+			.store(true, std::sync::atomic::Ordering::SeqCst);
 		IntentResult::Granted
 	}
+
 	fn commit(
 		&self,
 		_session: &str,
@@ -64,19 +70,24 @@ impl CoordClient for MockCoordClient {
 		_diff_hash: &str,
 		_byte_len: u64,
 	) -> CommitResult {
-		self.commit_called.store(true, std::sync::atomic::Ordering::SeqCst);
+		self
+			.commit_called
+			.store(true, std::sync::atomic::Ordering::SeqCst);
 		CommitResult::Ok
 	}
-	fn recent_peer_edits(&self, _file: &std::path::Path, _since_ms: u64, _limit: usize) -> Vec<PeerEdit> {
+
+	fn recent_peer_edits(
+		&self,
+		_file: &std::path::Path,
+		_since_ms: u64,
+		_limit: usize,
+	) -> Vec<PeerEdit> {
 		Vec::new()
 	}
+
 	fn peer_state(&self, _file: &std::path::Path) -> PeerState {
-		PeerState {
-			peers: Vec::new(),
-			recent_commits: Vec::new(),
-			latest_revision: None,
-		}
+		PeerState { peers: Vec::new(), recent_commits: Vec::new(), latest_revision: None }
 	}
+
 	fn on_close(&self, _session: &str, _file: &std::path::Path) {}
 }
-

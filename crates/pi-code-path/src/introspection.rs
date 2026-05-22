@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpKindInfo {
 	pub kind:            String,
-	pub family:          String,       // "symbol" | "file" | "css" | "heading" | "line"
-	pub target_shape:    String,       // "path" | "path::Symbol" | "css" | "heading"
+	pub family:          String, // "symbol" | "file" | "css" | "heading" | "line"
+	pub target_shape:    String, // "path" | "path::Symbol" | "css" | "heading"
 	pub required_fields: Vec<String>,
 	pub optional_fields: Vec<String>,
 }
@@ -94,13 +94,7 @@ pub fn list_op_kinds() -> Vec<OpKindInfo> {
 		op_with_required("filePrepend", "file", "path", &["content"]),
 		op_with_required("filePatch", "file", "path", &["diff"]),
 		op_with_fields("fileFindReplace", "file", "path", &["find", "content"], &["occurrence"]),
-		op_with_fields(
-			"fileRawTextReplace",
-			"file",
-			"path",
-			&["find", "content"],
-			&["occurrence"],
-		),
+		op_with_fields("fileRawTextReplace", "file", "path", &["find", "content"], &["occurrence"]),
 		// Line family
 		op_with_required("lineReplace", "line", "path", &["span", "content"]),
 		op_with_required("lineInsert", "line", "path", &["at", "content"]),
@@ -110,29 +104,15 @@ pub fn list_op_kinds() -> Vec<OpKindInfo> {
 		op_with_fields("symbolReplace", "symbol", "path::Symbol", &["content"], &["scope"]),
 		op_with_required("symbolRename", "symbol", "path::Symbol", &["newName"]),
 		op_with_required("symbolWrap", "symbol", "path::Symbol", &["content"]),
-		op_with_fields(
-			"symbolDelete",
-			"symbol",
-			"path::Symbol",
-			&[],
-			&["allowSiblingDelete"],
-		),
+		op_with_fields("symbolDelete", "symbol", "path::Symbol", &[], &["allowSiblingDelete"]),
 		op_with_required("symbolInsertBefore", "symbol", "path::Symbol", &["content"]),
 		op_with_required("symbolInsertAfter", "symbol", "path::Symbol", &["content"]),
-		op_with_fields(
-			"symbolFindReplace",
-			"symbol",
-			"path::Symbol",
-			&["find", "content"],
-			&["occurrence"],
-		),
-		op_with_fields(
-			"symbolRawTextReplace",
-			"symbol",
-			"path::Symbol",
-			&["find", "content"],
-			&["occurrence"],
-		),
+		op_with_fields("symbolFindReplace", "symbol", "path::Symbol", &["find", "content"], &[
+			"occurrence",
+		]),
+		op_with_fields("symbolRawTextReplace", "symbol", "path::Symbol", &["find", "content"], &[
+			"occurrence",
+		]),
 		op_with_required("symbolMove", "symbol", "path::Symbol", &["direction"]),
 		op_with_fields("symbolClone", "symbol", "path::Symbol", &[], &["renameTo"]),
 		op_with_required("symbolSplice", "symbol", "path::Symbol", &["mode"]),
@@ -233,8 +213,7 @@ pub fn list_edge_kinds() -> Vec<EdgeKindInfo> {
 		EdgeKindInfo {
 			symbol:      "def→".to_string(),
 			name:        "Definition".to_string(),
-			description:
-				"From a declaration to its references (set-valued)".to_string(),
+			description: "From a declaration to its references (set-valued)".to_string(),
 		},
 		EdgeKindInfo {
 			symbol:      "call→".to_string(),
@@ -249,8 +228,7 @@ pub fn list_edge_kinds() -> Vec<EdgeKindInfo> {
 		EdgeKindInfo {
 			symbol:      "bind→".to_string(),
 			name:        "Bind".to_string(),
-			description:
-				"From a use to its binding site (scope-local)".to_string(),
+			description: "From a use to its binding site (scope-local)".to_string(),
 		},
 	]
 }
@@ -282,8 +260,7 @@ pub fn list_diagnostic_variants() -> Vec<DiagnosticVariantInfo> {
 		DiagnosticVariantInfo {
 			variant:  "unknown_locator_scheme".to_string(),
 			severity: SEVERITY_ERROR.to_string(),
-			template:
-				"unknown locator scheme `{scheme}` — available: {available}".to_string(),
+			template: "unknown locator scheme `{scheme}` — available: {available}".to_string(),
 		},
 		DiagnosticVariantInfo {
 			variant:  "suffix_suggestion".to_string(),
@@ -298,15 +275,14 @@ pub fn list_diagnostic_variants() -> Vec<DiagnosticVariantInfo> {
 		DiagnosticVariantInfo {
 			variant:  "ambiguous_target".to_string(),
 			severity: SEVERITY_ERROR.to_string(),
-			template:
-				"ambiguous target: {count} nodes matched; use a more specific path or add predicates"
-					.to_string(),
+			template: "ambiguous target: {count} nodes matched; use a more specific path or add \
+			           predicates"
+				.to_string(),
 		},
 		DiagnosticVariantInfo {
 			variant:  "unsupported_operation".to_string(),
 			severity: SEVERITY_ERROR.to_string(),
-			template:
-				"unsupported operation: {detail}".to_string(),
+			template: "unsupported operation: {detail}".to_string(),
 		},
 		DiagnosticVariantInfo {
 			variant:  "missing_actions".to_string(),
@@ -316,8 +292,7 @@ pub fn list_diagnostic_variants() -> Vec<DiagnosticVariantInfo> {
 		DiagnosticVariantInfo {
 			variant:  "unsupported_action_for_resolver".to_string(),
 			severity: SEVERITY_ERROR.to_string(),
-			template:
-				"no resolver supports action `{action}` for target `{target}`".to_string(),
+			template: "no resolver supports action `{action}` for target `{target}`".to_string(),
 		},
 		DiagnosticVariantInfo {
 			variant:  "inaccessible".to_string(),
@@ -327,36 +302,34 @@ pub fn list_diagnostic_variants() -> Vec<DiagnosticVariantInfo> {
 		DiagnosticVariantInfo {
 			variant:  "encoding_fallback".to_string(),
 			severity: SEVERITY_WARNING.to_string(),
-			template:
-				"file is not valid UTF-8; using latin-1 lossy fallback".to_string(),
+			template: "file is not valid UTF-8; using latin-1 lossy fallback".to_string(),
 		},
 		DiagnosticVariantInfo {
 			variant:  "scheme_not_implemented".to_string(),
 			severity: SEVERITY_INFO.to_string(),
-			template:
-				"scheme `{scheme}` is recognised but not yet implemented in this release"
-					.to_string(),
+			template: "scheme `{scheme}` is recognised but not yet implemented in this release"
+				.to_string(),
 		},
 		DiagnosticVariantInfo {
 			variant:  "file_exists".to_string(),
 			severity: SEVERITY_ERROR.to_string(),
-			template:
-				"file `{path}` already exists; use `force: true` to overwrite / `create` to recreate"
-					.to_string(),
+			template: "file `{path}` already exists; use `force: true` to overwrite / `create` to \
+			           recreate"
+				.to_string(),
 		},
 		DiagnosticVariantInfo {
 			variant:  "stale_anchor".to_string(),
 			severity: SEVERITY_ERROR.to_string(),
-			template:
-				"anchor `{source}#{hash}` is stale — file has changed since read; re-read the file"
-					.to_string(),
+			template: "anchor `{source}#{hash}` is stale — file has changed since read; re-read the \
+			           file"
+				.to_string(),
 		},
 		DiagnosticVariantInfo {
 			variant:  "zero_byte_delete_blocked".to_string(),
 			severity: SEVERITY_ERROR.to_string(),
-			template:
-				"refusing to delete symbol {symbol} — the file would become zero bytes; use a bare-path target to remove the file instead"
-					.to_string(),
+			template: "refusing to delete symbol {symbol} — the file would become zero bytes; use a \
+			           bare-path target to remove the file instead"
+				.to_string(),
 		},
 		DiagnosticVariantInfo {
 			variant:  "cancelled".to_string(),
@@ -366,20 +339,17 @@ pub fn list_diagnostic_variants() -> Vec<DiagnosticVariantInfo> {
 		DiagnosticVariantInfo {
 			variant:  "range_bounds_inverted".to_string(),
 			severity: SEVERITY_ERROR.to_string(),
-			template:
-				"line range bounds inverted: start {start} > end {end}".to_string(),
+			template: "line range bounds inverted: start {start} > end {end}".to_string(),
 		},
 		DiagnosticVariantInfo {
 			variant:  "range_clamped".to_string(),
 			severity: SEVERITY_INFO.to_string(),
-			template:
-				"range bounds clamped to file extent ({lines} lines)".to_string(),
+			template: "range bounds clamped to file extent ({lines} lines)".to_string(),
 		},
 		DiagnosticVariantInfo {
 			variant:  "incompatible_target_shape".to_string(),
 			severity: SEVERITY_ERROR.to_string(),
-			template:
-				"incompatible target shape for `{op_kind}`: {detail}".to_string(),
+			template: "incompatible target shape for `{op_kind}`: {detail}".to_string(),
 		},
 	]
 }

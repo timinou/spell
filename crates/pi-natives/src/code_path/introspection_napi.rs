@@ -205,33 +205,35 @@ pub struct FieldSchemaDto {
 
 impl From<pi_code_path::OpSchema> for OpSchemaDto {
 	fn from(schema: pi_code_path::OpSchema) -> Self {
-		let target_family =
-			serde_json::to_value(&schema.target_family)
-				.expect("TargetFamily serialization")
-				.as_str()
-				.expect("TargetFamily is a string")
-				.to_string();
+		let target_family = serde_json::to_value(&schema.target_family)
+			.expect("TargetFamily serialization")
+			.as_str()
+			.expect("TargetFamily is a string")
+			.to_string();
 		OpSchemaDto {
-			kind:          schema.kind.to_string(),
+			kind: schema.kind.to_string(),
 			target_family,
-			fields:        schema.fields.into_iter().map(FieldSchemaDto::from).collect(),
-			description:   schema.description.to_string(),
+			fields: schema
+				.fields
+				.into_iter()
+				.map(FieldSchemaDto::from)
+				.collect(),
+			description: schema.description.to_string(),
 		}
 	}
 }
 
 impl From<pi_code_path::FieldSchema> for FieldSchemaDto {
 	fn from(field: pi_code_path::FieldSchema) -> Self {
-		let type_name =
-			serde_json::to_value(&field.type_name)
-				.expect("FieldType serialization")
-				.as_str()
-				.expect("FieldType is a string")
-				.to_string();
+		let type_name = serde_json::to_value(&field.type_name)
+			.expect("FieldType serialization")
+			.as_str()
+			.expect("FieldType is a string")
+			.to_string();
 		FieldSchemaDto {
-			name:        field.name.to_string(),
+			name: field.name.to_string(),
 			type_name,
-			required:    field.required,
+			required: field.required,
 			description: field.description.to_string(),
 		}
 	}
@@ -250,4 +252,3 @@ pub fn list_ops() -> Vec<OpSchemaDto> {
 		.map(OpSchemaDto::from)
 		.collect()
 }
-

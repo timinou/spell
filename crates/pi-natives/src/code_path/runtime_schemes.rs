@@ -57,11 +57,13 @@ pub fn snapshot_dynamic_profiles() -> Vec<(String, SchemeProfile)> {
 pub struct SchemeCallbackOptions {
 	/// Treat as fs-backed (codepath suffix forwarding). Default: false.
 	pub fs_backed:           Option<bool>,
-	/// `<uri>::<codepath-suffix>` supported. Implies `fs_backed`. Default: false.
+	/// `<uri>::<codepath-suffix>` supported. Implies `fs_backed`. Default:
+	/// false.
 	pub codepath_compatible: Option<bool>,
 	/// Default MIME type for results.
 	pub mime_hint:           Option<String>,
-	/// Whether brush should expand this scheme inside bash commands. Default: false.
+	/// Whether brush should expand this scheme inside bash commands. Default:
+	/// false.
 	pub bash_expandable:     Option<bool>,
 	/// Sync callback budget in ms. Default: 5000.
 	pub budget_ms:           Option<u32>,
@@ -79,9 +81,7 @@ pub fn register_scheme_callback(
 ) -> napi::Result<()> {
 	validate_scheme_name(&scheme).map_err(diag_to_napi)?;
 	if RESERVED_SCHEMES.contains(&scheme.as_str()) {
-		return Err(napi::Error::from_reason(format!(
-			"scheme '{scheme}' is reserved by the kernel"
-		)));
+		return Err(napi::Error::from_reason(format!("scheme '{scheme}' is reserved by the kernel")));
 	}
 	let mut reg = registry().lock().expect("runtime registry poisoned");
 	if reg.contains_key(&scheme) {
@@ -98,10 +98,11 @@ pub fn register_scheme_callback(
 		budget_ms:           None,
 	});
 	let budget = Duration::from_millis(opts.budget_ms.unwrap_or(5000) as u64);
-	let cb = Arc::new(JsTsfnCallback::new(callback, budget))
-		as Arc<dyn pi_code_path::SchemeCallback>;
+	let cb =
+		Arc::new(JsTsfnCallback::new(callback, budget)) as Arc<dyn pi_code_path::SchemeCallback>;
 	let mime_hint = opts.mime_hint.map(|s| -> &'static str {
-		// Leak: mime_hint stays for process lifetime; acceptable for a small set of MCP servers.
+		// Leak: mime_hint stays for process lifetime; acceptable for a small set of MCP
+		// servers.
 		Box::leak(s.into_boxed_str())
 	});
 	let profile = SchemeProfile {
@@ -111,12 +112,12 @@ pub fn register_scheme_callback(
 		layout:       PathLayout::Direct,
 		loader:       ContentLoader::Callback(cb),
 		capabilities: SchemeCapabilities {
-			fs_backed:           opts.fs_backed.unwrap_or(false),
+			fs_backed: opts.fs_backed.unwrap_or(false),
 			codepath_compatible: opts.codepath_compatible.unwrap_or(false),
 			mime_hint,
-			cache:               CacheStrategy::Ttl(budget),
-			bash_expandable:     opts.bash_expandable.unwrap_or(false),
-			callback_budget:     Some(budget),
+			cache: CacheStrategy::Ttl(budget),
+			bash_expandable: opts.bash_expandable.unwrap_or(false),
+			callback_budget: Some(budget),
 		},
 	};
 	reg.insert(scheme, DynamicEntry { profile });
@@ -143,7 +144,10 @@ pub fn list_registered_schemes() -> Vec<String> {
 /// Reset the runtime registry. Used by tests to isolate state between cases.
 #[napi]
 pub fn clear_runtime_schemes() {
-	registry().lock().expect("runtime registry poisoned").clear();
+	registry()
+		.lock()
+		.expect("runtime registry poisoned")
+		.clear();
 }
 
 fn diag_to_napi(d: Diagnostic) -> napi::Error {

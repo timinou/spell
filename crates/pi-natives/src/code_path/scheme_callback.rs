@@ -14,7 +14,10 @@ use std::{
 	time::Duration,
 };
 
-use napi::{Status, threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode}};
+use napi::{
+	Status,
+	threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode},
+};
 use napi_derive::napi;
 use pi_code_path::{
 	ResolvedContent, SchemeCallback, SessionContext,
@@ -96,17 +99,9 @@ impl SchemeCallback for JsTsfnCallback {
 }
 
 fn callback_err(msg: impl Into<String>) -> Diagnostic {
-	Diagnostic {
-		variant: DiagnosticVariant::ParseError,
-		message: msg.into(),
-		span:    None,
-	}
+	Diagnostic { variant: DiagnosticVariant::ParseError, message: msg.into(), span: None }
 }
 
 fn cancelled(msg: impl Into<String>) -> Diagnostic {
-	Diagnostic {
-		variant: DiagnosticVariant::Cancelled,
-		message: msg.into(),
-		span:    None,
-	}
+	Diagnostic { variant: DiagnosticVariant::Cancelled, message: msg.into(), span: None }
 }

@@ -94,15 +94,15 @@ pub struct ShellOptions {
 /// Options for running a shell command (internal, lifetime-free).
 struct ShellRunConfig {
 	/// Command string to execute in the shell.
-	command: String,
+	command:     String,
 	/// Working directory for the command.
-	cwd:     Option<String>,
+	cwd:         Option<String>,
 	/// Environment variables to apply for this command only.
-	env:     Option<HashMap<String, String>>,
+	env:         Option<HashMap<String, String>>,
 	/// PLAN-310: project root for SchemeRegistry-backed URI expansion.
-	root:    Option<String>,
+	root:        Option<String>,
 	/// PLAN-310: user home dir.
-	home:    Option<String>,
+	home:        Option<String>,
 	/// PLAN-310: per-session dir.
 	session_dir: Option<String>,
 }
@@ -111,20 +111,20 @@ struct ShellRunConfig {
 #[napi(object)]
 pub struct ShellRunOptions<'env> {
 	/// Command string to execute in the shell.
-	pub command:    String,
+	pub command:     String,
 	/// Working directory for the command.
-	pub cwd:        Option<String>,
+	pub cwd:         Option<String>,
 	/// Environment variables to apply for this command only.
-	pub env:        Option<HashMap<String, String>>,
+	pub env:         Option<HashMap<String, String>>,
 	/// Timeout in milliseconds before cancelling the command.
 	#[napi(js_name = "timeoutMs")]
-	pub timeout_ms: Option<u32>,
+	pub timeout_ms:  Option<u32>,
 	/// Abort signal for cancelling the operation.
-	pub signal:     Option<Unknown<'env>>,
+	pub signal:      Option<Unknown<'env>>,
 	/// PLAN-310 W5: project root for SchemeRegistry-backed URI expansion.
-	pub root:       Option<String>,
+	pub root:        Option<String>,
 	/// PLAN-310 W5: user home dir.
-	pub home:       Option<String>,
+	pub home:        Option<String>,
 	/// PLAN-310 W5: per-session dir.
 	#[napi(js_name = "sessionDir")]
 	pub session_dir: Option<String>,
@@ -187,11 +187,11 @@ impl Shell {
 		let config = self.config.clone();
 
 		let run_config = ShellRunConfig {
-			command: options.command,
-			cwd: options.cwd,
-			env: options.env,
-			root: options.root,
-			home: options.home,
+			command:     options.command,
+			cwd:         options.cwd,
+			env:         options.env,
+			root:        options.root,
+			home:        options.home,
 			session_dir: options.session_dir,
 		};
 
@@ -291,7 +291,8 @@ pub struct ShellExecuteOptions<'env> {
 	pub snapshot_path: Option<String>,
 	/// Abort signal for cancelling the operation.
 	pub signal:        Option<Unknown<'env>>,
-	/// PLAN-310 W5: project root for kernel SchemeRegistry (URI scheme expansion in bash).
+	/// PLAN-310 W5: project root for kernel SchemeRegistry (URI scheme expansion
+	/// in bash).
 	pub root:          Option<String>,
 	/// PLAN-310 W5: user home dir for UserRoot scheme templates.
 	pub home:          Option<String>,
@@ -327,11 +328,11 @@ pub fn execute_shell<'env>(
 	let config =
 		ShellConfig { session_env: options.session_env, snapshot_path: options.snapshot_path };
 	let run_config = ShellRunConfig {
-		command: options.command,
-		cwd: options.cwd,
-		env: options.env,
-		root: options.root,
-		home: options.home,
+		command:     options.command,
+		cwd:         options.cwd,
+		env:         options.env,
+		root:        options.root,
+		home:        options.home,
 		session_dir: options.session_dir,
 	};
 
@@ -587,9 +588,13 @@ async fn run_shell_command(
 	params.process_group_policy = ProcessGroupPolicy::NewProcessGroup;
 	params.set_cancel_token(cancel_token.clone());
 
-	// PLAN-310 W5: install scheme-aware word preprocessor when project root is known.
+	// PLAN-310 W5: install scheme-aware word preprocessor when project root is
+	// known.
 	if let Some(root) = options.root.as_deref() {
-		let home = options.home.clone().unwrap_or_else(|| std::env::var("HOME").unwrap_or_default());
+		let home = options
+			.home
+			.clone()
+			.unwrap_or_else(|| std::env::var("HOME").unwrap_or_default());
 		let mut session_ctx = pi_code_path::SessionContext::new(root, home);
 		if let Some(sd) = &options.session_dir {
 			session_ctx = session_ctx.with_session_dir(sd);

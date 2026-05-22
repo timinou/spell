@@ -308,7 +308,6 @@ impl fmt::Display for Axis {
 	}
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ActionContent {

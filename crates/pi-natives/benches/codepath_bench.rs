@@ -2,16 +2,17 @@
 //!
 //! Run: `cargo bench -p pi-natives --bench codepath_bench`
 //!
-//! 1. `grep_todo_spell_repo`   — grep "TODO" across ~3K .rs files   (budget 500ms p95)
-//! 2. `parse_codepath`         — parse 20 canonical paths × 50×     (budget 100µs each)
-//! 3. `get_500line_file`       — resolve `§line[10..20]` on 500L    (budget 10ms)
-//! 4. `resolve_50_symbols`     — resolve 50 symbols in a file       (budget 50ms total)
+//! 1. `grep_todo_spell_repo`   — grep "TODO" across ~3K .rs files   (budget
+//!    500ms p95)
+//! 2. `parse_codepath`         — parse 20 canonical paths × 50×     (budget
+//!    100µs each)
+//! 3. `get_500line_file`       — resolve `§line[10..20]` on 500L    (budget
+//!    10ms)
+//! 4. `resolve_50_symbols`     — resolve 50 symbols in a file       (budget
+//!    50ms total)
 //! 5. `traverse_edges`         — edge traversal (ignored: no graph)  (budget —)
 
-use std::{
-	path::PathBuf,
-	sync::Arc,
-};
+use std::{io::Write, path::PathBuf, sync::Arc};
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use ignore::WalkBuilder;
@@ -24,7 +25,6 @@ use pi_code_path::{
 use pi_natives::code_path::code_resolver::CodeResolverImpl;
 use tempfile::tempdir;
 use winnow::{Parser, token::take_while};
-use std::io::Write;
 
 // ── Constants ────────────────────────────────────────────────────
 
@@ -54,12 +54,7 @@ impl NameLexer for DotLexer {
 		}
 	}
 
-	fn matches(
-		&self,
-		_n: &NamePayload,
-		_node: tree_sitter::Node<'_>,
-		_src: &str,
-	) -> bool {
+	fn matches(&self, _n: &NamePayload, _node: tree_sitter::Node<'_>, _src: &str) -> bool {
 		false
 	}
 }
@@ -89,10 +84,8 @@ fn bench_grep_todo(c: &mut Criterion) {
 				};
 				if entry.path().extension().map_or(false, |e| e == "rs") {
 					if let Ok(content) = std::fs::read_to_string(entry.path()) {
-						let matching = content
-							.lines()
-							.filter(|line| line.contains("TODO"))
-							.count() as u64;
+						let matching =
+							content.lines().filter(|line| line.contains("TODO")).count() as u64;
 						count += matching;
 					}
 				}
@@ -168,12 +161,9 @@ fn bench_get_500line_file(c: &mut Criterion) {
 
 	// Query: §line[10..20] — structural axis by line number
 	let query = Query::single(Step {
-		axis: Some(Axis::Structural),
-		head: Head::NodeKind("line".to_string()),
-		predicates: vec![Predicate::Range {
-			start: Some(10),
-			end: Some(20),
-		}],
+		axis:       Some(Axis::Structural),
+		head:       Head::NodeKind("line".to_string()),
+		predicates: vec![Predicate::Range { start: Some(10), end: Some(20) }],
 	});
 
 	let cancel = CancellationToken::new();
@@ -214,20 +204,15 @@ fn bench_resolve_50_symbols(c: &mut Criterion) {
 
 	// Build 50 symbol queries
 	let symbol_names: Vec<String> = (0..25)
-		.flat_map(|i| {
-			vec![
-				format!("handler_{i}"),
-				format!("Config_{i}"),
-			]
-		})
+		.flat_map(|i| vec![format!("handler_{i}"), format!("Config_{i}")])
 		.collect();
 
 	c.bench_function("resolve_50_symbols", |b| {
 		b.iter(|| {
 			for name in &symbol_names {
 				let query = Query::single(Step {
-					axis: None,
-					head: Head::Name(NamePayload::Raw(name.clone())),
+					axis:       None,
+					head:       Head::Name(NamePayload::Raw(name.clone())),
 					predicates: vec![],
 				});
 				let result = resolver.resolve(&file_path, &query, None, &cancel);

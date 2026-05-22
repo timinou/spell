@@ -200,7 +200,6 @@ fn is_supported_file(file_path: &Path, explicit_lang: Option<&str>) -> bool {
 	resolve_language(None, file_path).is_ok()
 }
 
-
 fn parse_strictness(value: Option<&str>) -> Result<MatchStrictness> {
 	let Some(raw) = value.map(str::trim).filter(|v| !v.is_empty()) else {
 		return Ok(MatchStrictness::Smart);
@@ -311,7 +310,6 @@ fn compile_pattern(
 	Ok(compiled)
 }
 
-
 fn normalize_pattern_list(patterns: Option<Vec<String>>) -> Result<Vec<String>> {
 	let mut normalized = Vec::new();
 	let mut seen = BTreeSet::new();
@@ -331,7 +329,6 @@ fn normalize_pattern_list(patterns: Option<Vec<String>>) -> Result<Vec<String>> 
 	}
 	Ok(normalized)
 }
-
 
 struct CompiledFindPattern {
 	pattern:                String,
@@ -638,5 +635,4 @@ mod tests {
 		assert_eq!(resolve_supported_lang("cpp").ok(), Some(SupportLang::Cpp));
 		assert!(resolve_supported_lang("brainfuck").is_err());
 	}
-
 }

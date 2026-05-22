@@ -1,6 +1,11 @@
-//! `memory://<path>` → `<project_root>/.spell/memory/<path>`
+//! `memory://root[/<path>]` → `<project_root>/.spell/memory/[<path>|memory_summary.md]`
 //!
-//! `memory://root` resolves to `memory_summary.md` per TS-side convention.
+//! TS parity: matches `MemoryProtocolHandler` in
+//! `packages/coding-agent/src/internal-urls/memory-protocol.ts`.
+//!
+//! - `memory://root`         → `<root>/memory_summary.md`
+//! - `memory://root/foo.md`  → `<root>/foo.md`
+//! - Any other namespace rejected with diagnostic.
 
 use std::path::PathBuf;
 
@@ -13,7 +18,11 @@ pub fn build(_ctx: Option<&SessionContext>) -> SchemeProfile {
 	SchemeProfile {
 		scheme:       "memory",
 		root:         RootTemplate::ProjectRoot { rel: PathBuf::from(".spell/memory") },
-		layout:       PathLayout::Direct,
+		layout:       PathLayout::Namespaced {
+			namespace:        "root".to_string(),
+			default_file:     "memory_summary.md".to_string(),
+			subpath_allowed:  true,
+		},
 		loader:       ContentLoader::FsRead { mode: ReadMode::Utf8Text },
 		capabilities: SchemeCapabilities {
 			fs_backed:           true,

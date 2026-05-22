@@ -113,9 +113,7 @@ impl CacheStore {
 		// into the recall engine hot path (was masked for org_index and
 		// code_graph because their saves are infrequent and small).
 		bincode::serialize_into(&mut writer, entry)?;
-		writer
-			.flush()
-			.map_err(WorkspaceCacheError::Io)?;
+		writer.flush().map_err(WorkspaceCacheError::Io)?;
 		Ok(())
 	}
 

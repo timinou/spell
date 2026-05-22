@@ -82,10 +82,12 @@ pub fn parse_locator(input: &str) -> Result<Locator, Diagnostic> {
 /// 3. Otherwise no hint.
 fn hint_for_trailing(working: &str) -> &'static str {
 	if looks_like_dashed_range(working) {
-		return " — line-range predicate uses '..' not '-': try §line[A..B] (axis) or :A-B (shorthand, no brackets)";
+		return " — line-range predicate uses '..' not '-': try §line[A..B] (axis) or :A-B \
+		        (shorthand, no brackets)";
 	}
 	if working.contains(' ') || working.contains('*') || working.contains('"') {
-		return " — try backtick-quoting the symbol or use a structural axis like §export_statement[text~=\"...\"]";
+		return " — try backtick-quoting the symbol or use a structural axis like \
+		        §export_statement[text~=\"...\"]";
 	}
 	""
 }
@@ -1522,8 +1524,16 @@ mod tests {
 			"expected dashed-range hint, got: {}",
 			diag.message
 		);
-		assert!(diag.message.contains("[A..B]"), "hint should show corrected axis form: {}", diag.message);
-		assert!(diag.message.contains(":A-B"), "hint should mention shorthand alternative: {}", diag.message);
+		assert!(
+			diag.message.contains("[A..B]"),
+			"hint should show corrected axis form: {}",
+			diag.message
+		);
+		assert!(
+			diag.message.contains(":A-B"),
+			"hint should mention shorthand alternative: {}",
+			diag.message
+		);
 	}
 
 	#[test]
@@ -1539,7 +1549,8 @@ mod tests {
 
 	#[test]
 	fn valid_dotted_range_unchanged() {
-		// Regression: ensure the correct axis form still parses without producing the hint.
+		// Regression: ensure the correct axis form still parses without producing the
+		// hint.
 		let cp = parse_code_path("foo.ts::§line[85..180]", &DotLexer).unwrap();
 		assert!(cp.query.is_some());
 	}

@@ -17,11 +17,7 @@ fn diag_spanned(
 	start: usize,
 	end: usize,
 ) -> Diagnostic {
-	Diagnostic {
-		variant,
-		message: message.into(),
-		span: Some(Span { start, end }),
-	}
+	Diagnostic { variant, message: message.into(), span: Some(Span { start, end }) }
 }
 
 // ── Variant tests (no source) ─────────────────────────────────────
@@ -40,10 +36,7 @@ fn snapshot_file_not_found() {
 
 #[test]
 fn snapshot_artifact_not_found() {
-	let d = diag(
-		DiagnosticVariant::ArtifactNotFound,
-		"artifact `abc123` not found",
-	);
+	let d = diag(DiagnosticVariant::ArtifactNotFound, "artifact `abc123` not found");
 	insta::assert_snapshot!(d.render(None));
 }
 
@@ -61,10 +54,7 @@ fn snapshot_unknown_locator_scheme() {
 #[test]
 fn snapshot_suffix_suggestion() {
 	let d = diag(
-		DiagnosticVariant::SuffixSuggestion {
-			tried:      "foo".into(),
-			suggestion: "bar".into(),
-		},
+		DiagnosticVariant::SuffixSuggestion { tried: "foo".into(), suggestion: "bar".into() },
 		"no matches; did you mean `bar`?",
 	);
 	insta::assert_snapshot!(d.render(None));
@@ -78,19 +68,13 @@ fn snapshot_no_matches() {
 
 #[test]
 fn snapshot_ambiguous_target() {
-	let d = diag(
-		DiagnosticVariant::AmbiguousTarget { count: 5 },
-		"found 5 matching nodes",
-	);
+	let d = diag(DiagnosticVariant::AmbiguousTarget { count: 5 }, "found 5 matching nodes");
 	insta::assert_snapshot!(d.render(None));
 }
 
 #[test]
 fn snapshot_unsupported_operation() {
-	let d = diag(
-		DiagnosticVariant::UnsupportedOperation,
-		"delete not supported by this resolver",
-	);
+	let d = diag(DiagnosticVariant::UnsupportedOperation, "delete not supported by this resolver");
 	insta::assert_snapshot!(d.render(None));
 }
 
@@ -102,37 +86,26 @@ fn snapshot_missing_actions() {
 
 #[test]
 fn snapshot_unsupported_action_for_resolver() {
-	let d = diag(
-		DiagnosticVariant::UnsupportedActionForResolver,
-		"no resolver handles this action kind",
-	);
+	let d =
+		diag(DiagnosticVariant::UnsupportedActionForResolver, "no resolver handles this action kind");
 	insta::assert_snapshot!(d.render(None));
 }
 
 #[test]
 fn snapshot_inaccessible() {
-	let d = diag(
-		DiagnosticVariant::Inaccessible,
-		"permission denied: /root/secret",
-	);
+	let d = diag(DiagnosticVariant::Inaccessible, "permission denied: /root/secret");
 	insta::assert_snapshot!(d.render(None));
 }
 
 #[test]
 fn snapshot_encoding_fallback() {
-	let d = diag(
-		DiagnosticVariant::EncodingFallback,
-		"file is not UTF-8; using lossy fallback",
-	);
+	let d = diag(DiagnosticVariant::EncodingFallback, "file is not UTF-8; using lossy fallback");
 	insta::assert_snapshot!(d.render(None));
 }
 
 #[test]
 fn snapshot_scheme_not_implemented() {
-	let d = diag(
-		DiagnosticVariant::SchemeNotImplemented,
-		"scheme `ftp` is not implemented",
-	);
+	let d = diag(DiagnosticVariant::SchemeNotImplemented, "scheme `ftp` is not implemented");
 	insta::assert_snapshot!(d.render(None));
 }
 
@@ -144,19 +117,13 @@ fn snapshot_file_exists() {
 
 #[test]
 fn snapshot_stale_anchor() {
-	let d = diag(
-		DiagnosticVariant::StaleAnchor,
-		"anchor hash mismatch; file changed",
-	);
+	let d = diag(DiagnosticVariant::StaleAnchor, "anchor hash mismatch; file changed");
 	insta::assert_snapshot!(d.render(None));
 }
 
 #[test]
 fn snapshot_zero_byte_delete_blocked() {
-	let d = diag(
-		DiagnosticVariant::ZeroByteDeleteBlocked,
-		"delete would leave file at zero bytes",
-	);
+	let d = diag(DiagnosticVariant::ZeroByteDeleteBlocked, "delete would leave file at zero bytes");
 	insta::assert_snapshot!(d.render(None));
 }
 
@@ -168,19 +135,13 @@ fn snapshot_cancelled() {
 
 #[test]
 fn snapshot_range_bounds_inverted() {
-	let d = diag(
-		DiagnosticVariant::RangeBoundsInverted,
-		"range 10..5 has start > end",
-	);
+	let d = diag(DiagnosticVariant::RangeBoundsInverted, "range 10..5 has start > end");
 	insta::assert_snapshot!(d.render(None));
 }
 
 #[test]
 fn snapshot_range_clamped() {
-	let d = diag(
-		DiagnosticVariant::RangeClamped,
-		"range clamped to file bounds [0..100]",
-	);
+	let d = diag(DiagnosticVariant::RangeClamped, "range clamped to file bounds [0..100]");
 	insta::assert_snapshot!(d.render(None));
 }
 
