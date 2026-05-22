@@ -33,10 +33,20 @@ async function memory(call: Record<string, unknown>): Promise<unknown> {
 
 describe("PLAN-310 W10 — memory loop", () => {
 	test("T10.1 search returns episode by topic", async () => {
-		const hits = (await memory({ action: "search", text: "auth refactor jwt" })) as Array<{
+		// Test intent (per name): a topical query against scope="episode"
+		// must return at least one episode (EP-*). Without the scope filter
+		// the recall ranks concepts and episodes together and a CON- can
+		// outrank EP-* on body-term overlap, which is a valid recall
+		// outcome but not what this assertion is testing.
+		const hits = (await memory({
+			action: "search",
+			text: "auth refactor jwt",
+			scope: ["episode"],
+		})) as Array<{
 			id: string;
 			score: number;
 		}>;
+		expect(hits.length).toBeGreaterThan(0);
 		expect(hits[0].id).toMatch(/^EP-/);
 		expect(hits[0].score).toBeGreaterThan(0);
 	});
