@@ -1763,7 +1763,7 @@ pub(crate) fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 					if text_fallback {
 						return Err(json_err(
 							"Semantic structure is unavailable for fallback text buffers. Use \
-							 read/diff/replace_content/save/undo/redo instead.",
+							 read/diff/undo/redo instead.",
 						));
 					}
 					let file_target_id = file_target_id_for_path(&path, options);
@@ -1787,7 +1787,7 @@ pub(crate) fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 					if text_fallback {
 						return Err(json_err(
 							"Semantic navigation is unavailable for fallback text buffers. Use \
-							 read/diff/replace_content/save/undo/redo instead.",
+							 read/diff/undo/redo instead.",
 						));
 					}
 					if buffer.language().as_str() == "edn"

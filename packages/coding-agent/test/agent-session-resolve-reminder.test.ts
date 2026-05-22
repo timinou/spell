@@ -69,7 +69,7 @@ describe("AgentSession resolve reminder", () => {
 				if (streamCallCount === 1) {
 					pendingActionStore.push({
 						label: "AST Edit: 1 replacement in 1 file",
-						sourceToolName: "ast_edit",
+						sourceToolName: "edit",
 						files: [path.join(tempDir, "preview.ts")],
 						apply: async () => ({ content: [{ type: "text", text: "Applied" }] }),
 					});

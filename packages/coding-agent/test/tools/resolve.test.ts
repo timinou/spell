@@ -42,7 +42,7 @@ describe("ResolveTool", () => {
 		let rejectedReason: string | undefined;
 		pendingActionStore.push({
 			label: "AST Edit: 2 replacements in 1 file",
-			sourceToolName: "ast_edit",
+			sourceToolName: "edit",
 			files: [],
 			apply: async (_reason: string) => ({ content: [{ type: "text", text: "should not run" }] }),
 			reject: async (reason: string) => {
@@ -62,7 +62,7 @@ describe("ResolveTool", () => {
 		expect(result.details).toEqual({
 			action: "discard",
 			reason: "Preview changed wrong callsites",
-			sourceToolName: "ast_edit",
+			sourceToolName: "edit",
 			label: "AST Edit: 2 replacements in 1 file",
 			mutationState: "discarded",
 			persisted: false,
@@ -75,7 +75,7 @@ describe("ResolveTool", () => {
 		let appliedReason: string | undefined;
 		pendingActionStore.push({
 			label: "AST Edit: 1 replacement in 1 file",
-			sourceToolName: "ast_edit",
+			sourceToolName: "edit",
 			files: [],
 			apply: async reason => {
 				applied = true;
@@ -97,7 +97,7 @@ describe("ResolveTool", () => {
 		expect(result.details).toEqual({
 			action: "apply",
 			reason: "Preview is correct",
-			sourceToolName: "ast_edit",
+			sourceToolName: "edit",
 			label: "AST Edit: 1 replacement in 1 file",
 			mutationState: "applied",
 			persisted: true,
@@ -114,7 +114,7 @@ describe("ResolveTool", () => {
 		try {
 			pendingActionStore.push({
 				label: "AST Edit: 1 replacement in 1 file",
-				sourceToolName: "ast_edit",
+				sourceToolName: "edit",
 				files: ["/tmp/main.ts"],
 				invalidateManagedCodeBuffers: true,
 				apply: async () => ({ content: [{ type: "text", text: "Applied 1 replacement in 1 file." }] }),
@@ -173,7 +173,7 @@ describe("ResolveTool", () => {
 		const pendingActionStore = new PendingActionStore();
 		pendingActionStore.push({
 			label: "AST Edit: 1 replacement in 0 files",
-			sourceToolName: "ast_edit",
+			sourceToolName: "edit",
 			files: [],
 			invalidateManagedCodeBuffers: true,
 			apply: async () => ({ content: [{ type: "text", text: "Applied 1 replacement in 0 files." }] }),
@@ -200,7 +200,7 @@ describe("ResolveTool", () => {
 		const resolution = await applyPendingAction(
 			{
 				label: "Result-like payload",
-				sourceToolName: "ast_edit",
+				sourceToolName: "edit",
 				files: ["/tmp/main.ts"],
 				apply: async () => fakeResultLike,
 			},
@@ -220,7 +220,7 @@ describe("ResolveTool", () => {
 
 		pendingActionStore.push({
 			label: "First action",
-			sourceToolName: "ast_edit",
+			sourceToolName: "edit",
 			files: [],
 			apply: async (_reason: string) => {
 				firstApplied = true;
@@ -229,7 +229,7 @@ describe("ResolveTool", () => {
 		});
 		pendingActionStore.push({
 			label: "Second action",
-			sourceToolName: "ast_edit",
+			sourceToolName: "edit",
 			files: [],
 			apply: async () => {
 				secondApplied = true;
@@ -254,7 +254,7 @@ describe("ResolveTool", () => {
 		const pendingActionStore = new PendingActionStore();
 		pendingActionStore.push({
 			label: "Broken action",
-			sourceToolName: "ast_edit",
+			sourceToolName: "edit",
 			files: [],
 			apply: async () => {
 				throw new Error("apply failed");
@@ -281,7 +281,7 @@ it("renders a highlighted apply summary", async () => {
 			details: {
 				action: "apply",
 				reason: "All replacements are correct",
-				sourceToolName: "ast_edit",
+				sourceToolName: "edit",
 				label: "AST Edit: 2 replacements in 1 file",
 				mutationState: "applied",
 				persisted: true,
@@ -312,7 +312,7 @@ it("renders buffer invalidation provenance warnings", async () => {
 			details: {
 				action: "apply",
 				reason: "Disk write succeeded but close failed",
-				sourceToolName: "ast_edit",
+				sourceToolName: "edit",
 				label: "AST Edit: 1 replacement in 1 file",
 				mutationState: "applied",
 				persisted: true,
@@ -341,7 +341,7 @@ it("does not show persistence provenance for discarded previews", async () => {
 			details: {
 				action: "discard",
 				reason: "Preview changed wrong callsites",
-				sourceToolName: "ast_edit",
+				sourceToolName: "edit",
 				label: "AST Edit: 2 replacements in 1 file",
 				mutationState: "discarded",
 				persisted: false,
