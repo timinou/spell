@@ -3,13 +3,19 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const mockExecuteOrg = mock();
 const realNatives = await import("@oh-my-pi/pi-natives");
+const realExecuteOrg = realNatives.executeOrg;
+// Default to delegating to the real binding so sibling test files (running in
+// the same bun:test process) keep working when this module's mock leaks.
+const mockExecuteOrg = mock((opts: Parameters<typeof realExecuteOrg>[0]) => realExecuteOrg(opts));
 mock.module("@oh-my-pi/pi-natives", () => ({ ...realNatives, executeOrg: mockExecuteOrg }));
 
 const { InternalUrlRouter, MemoryProtocolHandler } = await import("../../src/internal-urls");
 
-beforeEach(() => mockExecuteOrg.mockReset());
+beforeEach(() => {
+	mockExecuteOrg.mockClear();
+	mockExecuteOrg.mockImplementation(opts => realExecuteOrg(opts));
+});
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-protocol-"));
@@ -173,19 +179,33 @@ describe("MemoryProtocolHandler URI forms", () => {
 		expect(args.hops).toBe(1);
 	});
 
-	it("memory://since/<ts> returns stub payload without calling executeOrg", async () => {
-		const router = new InternalUrlRouter();
-		router.register(
-			new MemoryProtocolHandler({
-				getMemoryRoot: () => "/tmp/p/.spell/memory",
-			}),
-		);
-		const res = await router.resolve("memory://since/2026-05-21T00:00:00Z");
-		expect(res.contentType).toBe("application/json");
-		const payload = JSON.parse(res.content) as { ts: string; note: string };
-		expect(payload.ts).toBe("2026-05-21T00:00:00Z");
-		expect(payload.note).toContain("not yet implemented");
-		expect(mockExecuteOrg).not.toHaveBeenCalled();
+	it("memory://since/<ts> returns real diff payload from disk scan", async () => {
+		await withTempDir(async tempDir => {
+			const conceptsDir = path.join(tempDir, ".spell", "memory", "concepts");
+			await fs.mkdir(conceptsDir, { recursive: true });
+			const file = path.join(conceptsDir, "alpha.org");
+			await Bun.write(file, ":CUSTOM_ID: CON-alpha\n");
+			await fs.utimes(file, new Date("2026-05-22T10:00:00Z"), new Date("2026-05-22T10:00:00Z"));
+
+			const router = new InternalUrlRouter();
+			router.register(
+				new MemoryProtocolHandler({
+					getMemoryRoot: () => path.join(tempDir, ".spell", "memory"),
+					getRepoRoot: () => tempDir,
+				}),
+			);
+			const res = await router.resolve("memory://since/2026-05-21T00:00:00Z");
+			expect(res.contentType).toBe("application/json");
+			const payload = JSON.parse(res.content) as {
+				ts: string;
+				note: string;
+				modified: Array<{ id: string }>;
+			};
+			expect(payload.ts).toBe("2026-05-21T00:00:00Z");
+			expect(payload.note).not.toContain("not yet implemented");
+			expect(payload.modified.map(m => m.id)).toContain("CON-alpha");
+			expect(mockExecuteOrg).not.toHaveBeenCalled();
+		});
 	});
 
 	it("memory://browse returns the TUI panel sentinel", async () => {

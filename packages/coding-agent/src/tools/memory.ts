@@ -12,6 +12,8 @@ import type {
 	AgentToolUpdateCallback,
 	RenderResultOptions,
 } from "@oh-my-pi/pi-agent-core";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { executeOrg } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
@@ -84,10 +86,18 @@ export type MemoryParams = Static<typeof memorySchema>;
 type MemoryAction = MemoryParams["action"];
 type MemoryDetails = { error?: boolean };
 
+/** Memory sub-directories scanned by `since`. */
+const SINCE_SCAN_DIRS = ["concepts", "episodes", "playbooks", "decisions"] as const;
+
 /**
- * Stub returned for `since` until executeOrg exposes the diff command (W7).
+ * Granularity note for `since` results. Filesystem mtime distinguishes
+ * touched-vs-untouched but cannot separate add-from-modify or detect deletes
+ * without a snapshot. W7 returns everything as `modified` and documents the
+ * deferral; finer-grained diffing lands when the recall engine persists a
+ * watermark/manifest.
  */
-const SINCE_STUB_NOTE = "since not yet implemented (PLAN-310 W7)";
+const SINCE_GRANULARITY_NOTE =
+	"granularity: file-mtime only; added/deleted deferred — see PLAN-310 W7";
 
 export class MemoryTool implements AgentTool<typeof memorySchema, MemoryDetails, Theme> {
 	readonly name = "memory";
@@ -244,14 +254,80 @@ export async function dispatchMemoryAction(params: MemoryParams, repoRoot: strin
 		}
 		case "since": {
 			if (!params.ts) throw new Error("memory.since requires `ts`");
-			// W6 stub — real diff lands with W7.
-			return { added: [], modified: [], deleted: [], note: SINCE_STUB_NOTE, ts: params.ts };
+			return await diffMemorySince(repoRoot, params.ts);
 		}
 		default: {
 			const exhaustive: never = params.action;
 			throw new Error(`Unknown memory action: ${String(exhaustive)}`);
 		}
 	}
+}
+
+/**
+ * Real `memory.since` implementation. Walks per-kind memory directories under
+ * `<repoRoot>/.spell/memory/<kind>/`, stats each `.org` file, and returns the
+ * ones with mtime strictly after `tsIso`.
+ *
+ * Returned as `modified`; add/delete granularity is deferred (see
+ * SINCE_GRANULARITY_NOTE). Future-timestamps and missing dirs yield an empty
+ * result, never an error.
+ */
+export async function diffMemorySince(
+	repoRoot: string,
+	tsIso: string,
+): Promise<{ added: unknown[]; modified: Array<{ id: string; file: string; mtime: string }>; deleted: unknown[]; ts: string; note: string }> {
+	const tsMs = Date.parse(tsIso);
+	if (!Number.isFinite(tsMs)) {
+		throw new Error(`memory.since: invalid timestamp: ${tsIso}`);
+	}
+	const memoryRoot = path.join(repoRoot, ".spell", "memory");
+	const modified: Array<{ id: string; file: string; mtime: string }> = [];
+	for (const sub of SINCE_SCAN_DIRS) {
+		const dir = path.join(memoryRoot, sub);
+		let entries: string[];
+		try {
+			entries = await fs.readdir(dir);
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+			throw err;
+		}
+		for (const name of entries) {
+			if (!name.endsWith(".org")) continue;
+			const file = path.join(dir, name);
+			let stat: { mtimeMs: number };
+			try {
+				stat = await fs.stat(file);
+			} catch (err) {
+				if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+				throw err;
+			}
+			if (stat.mtimeMs <= tsMs) continue;
+			const id = await extractFirstCustomId(file, sub, name);
+			modified.push({ id, file, mtime: new Date(stat.mtimeMs).toISOString() });
+		}
+	}
+	// Stable order: by id ascending.
+	modified.sort((a, b) => a.id.localeCompare(b.id));
+	return { added: [], modified, deleted: [], ts: tsIso, note: SINCE_GRANULARITY_NOTE };
+}
+
+const CUSTOM_ID_LINE_RE = /^\s*:CUSTOM_ID:\s+(\S+)\s*$/m;
+
+/**
+ * Extract the first `:CUSTOM_ID:` from an org file; fall back to a derived id
+ * shaped like `<KIND>-<filename-without-ext>` when the drawer is missing.
+ */
+async function extractFirstCustomId(file: string, kind: string, basename: string): Promise<string> {
+	try {
+		const text = await Bun.file(file).text();
+		const m = CUSTOM_ID_LINE_RE.exec(text);
+		if (m?.[1]) return m[1];
+	} catch {
+		// fall through to derived id
+	}
+	const stem = basename.endsWith(".org") ? basename.slice(0, -4) : basename;
+	const prefix = kind === "episodes" ? "EP" : kind === "concepts" ? "CON" : kind === "playbooks" ? "PB" : "DEC";
+	return `${prefix}-${stem}`;
 }
 
 interface MemoryCallPreview {

@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { executeOrg } from "@oh-my-pi/pi-natives";
 import { isEnoent } from "@oh-my-pi/pi-utils";
+import { diffMemorySince } from "../tools/memory";
 import { validateRelativePath } from "./skill-protocol";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
 
@@ -11,8 +12,6 @@ const SEARCH_NAMESPACE = "search";
 const ITEM_NAMESPACE = "item";
 const SINCE_NAMESPACE = "since";
 const BROWSE_NAMESPACE = "browse";
-
-const SINCE_STUB_NOTE = "since not yet implemented (PLAN-310 W7)";
 
 /**
  * Options for the memory:// URL protocol.
@@ -241,12 +240,12 @@ export class MemoryProtocolHandler implements ProtocolHandler {
 		return jsonResource(url, result.output);
 	}
 
-	#resolveSince(url: InternalUrl): InternalResource {
+	async #resolveSince(url: InternalUrl): Promise<InternalResource> {
 		const rawPathname = url.rawPathname ?? url.pathname;
 		const ts = rawPathname && rawPathname !== "/" ? decodeURIComponent(rawPathname.slice(1)) : "";
 		if (!ts) throw new Error("memory://since requires a timestamp: memory://since/<ISO8601>");
-		const payload = { ts, added: [], modified: [], deleted: [], note: SINCE_STUB_NOTE };
-		return jsonResource(url, payload, [SINCE_STUB_NOTE]);
+		const payload = await diffMemorySince(this.#repoRoot(), ts);
+		return jsonResource(url, payload, [payload.note]);
 	}
 
 	#resolveBrowse(url: InternalUrl): InternalResource {

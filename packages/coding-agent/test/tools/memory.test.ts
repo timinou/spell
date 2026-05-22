@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
-
-const mockExecuteOrg = mock();
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 
 const realNatives = await import("@oh-my-pi/pi-natives");
+const realExecuteOrg = realNatives.executeOrg;
+// Default to delegating to the real binding so sibling test files (running in
+// the same bun:test process) keep working when this module's mock leaks.
+const mockExecuteOrg = mock((opts: Parameters<typeof realExecuteOrg>[0]) => realExecuteOrg(opts));
 mock.module("@oh-my-pi/pi-natives", () => ({
 	...realNatives,
 	executeOrg: mockExecuteOrg,
@@ -28,7 +33,10 @@ function calls() {
 }
 
 beforeEach(() => {
-	mockExecuteOrg.mockReset();
+	// Clear call history + once-queued returns; preserve the real-binding fallback
+	// implementation so sibling test files keep working when this mock leaks.
+	mockExecuteOrg.mockClear();
+	mockExecuteOrg.mockImplementation(opts => realExecuteOrg(opts));
 });
 
 describe("dispatchMemoryAction", () => {
@@ -170,17 +178,74 @@ describe("dispatchMemoryAction", () => {
 		).rejects.toThrow("requires `from`, `to`, and `link_kind`");
 	});
 
-	it("since returns the W7 stub without calling executeOrg", async () => {
-		const out = (await dispatchMemoryAction(
-			{ action: "since", ts: "2026-05-21T00:00:00Z" },
-			repoRoot,
-		)) as { added: unknown[]; modified: unknown[]; deleted: unknown[]; note: string; ts: string };
-		expect(out.added).toEqual([]);
-		expect(out.modified).toEqual([]);
-		expect(out.deleted).toEqual([]);
-		expect(out.note).toContain("not yet implemented");
-		expect(out.ts).toBe("2026-05-21T00:00:00Z");
-		expect(mockExecuteOrg).not.toHaveBeenCalled();
+	it("since with empty memory dir returns no modified entries", async () => {
+		const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "mem-since-empty-"));
+		try {
+			const out = (await dispatchMemoryAction(
+				{ action: "since", ts: "2026-05-21T00:00:00Z" },
+				tmp,
+			)) as { added: unknown[]; modified: unknown[]; deleted: unknown[]; note: string; ts: string };
+			expect(out.added).toEqual([]);
+			expect(out.modified).toEqual([]);
+			expect(out.deleted).toEqual([]);
+			expect(out.note).toContain("PLAN-310 W7");
+			expect(out.ts).toBe("2026-05-21T00:00:00Z");
+			expect(mockExecuteOrg).not.toHaveBeenCalled();
+		} finally {
+			await fs.rm(tmp, { recursive: true, force: true });
+		}
+	});
+
+	it("since returns concepts modified after the timestamp", async () => {
+		const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "mem-since-real-"));
+		try {
+			const conceptsDir = path.join(tmp, ".spell", "memory", "concepts");
+			const episodesDir = path.join(tmp, ".spell", "memory", "episodes");
+			await fs.mkdir(conceptsDir, { recursive: true });
+			await fs.mkdir(episodesDir, { recursive: true });
+
+			// Older file (well before ts): should not appear.
+			const stale = path.join(conceptsDir, "stale.org");
+			await Bun.write(stale, "** ITEM Stale\n:PROPERTIES:\n:CUSTOM_ID: CON-stale\n:END:\n");
+			await fs.utimes(stale, new Date("2026-05-01T00:00:00Z"), new Date("2026-05-01T00:00:00Z"));
+
+			// Newer file: should appear.
+			const fresh = path.join(conceptsDir, "fresh.org");
+			await Bun.write(fresh, "** ITEM Fresh\n:PROPERTIES:\n:CUSTOM_ID: CON-fresh\n:END:\n");
+			await fs.utimes(fresh, new Date("2026-05-22T10:00:00Z"), new Date("2026-05-22T10:00:00Z"));
+
+			// File without :CUSTOM_ID:: id derived from filename.
+			const nodrawer = path.join(episodesDir, "2026-05-22.org");
+			await Bun.write(nodrawer, "#+TITLE: Episodes 2026-05-22\n");
+			await fs.utimes(nodrawer, new Date("2026-05-22T11:00:00Z"), new Date("2026-05-22T11:00:00Z"));
+
+			const out = (await dispatchMemoryAction(
+				{ action: "since", ts: "2026-05-21T00:00:00Z" },
+				tmp,
+			)) as { modified: Array<{ id: string; file: string; mtime: string }>; note: string };
+
+			expect(out.modified.map(m => m.id)).toEqual(["CON-fresh", "EP-2026-05-22"]);
+			expect(out.note).not.toContain("not yet implemented");
+			expect(mockExecuteOrg).not.toHaveBeenCalled();
+		} finally {
+			await fs.rm(tmp, { recursive: true, force: true });
+		}
+	});
+
+	it("since with future timestamp returns empty modified array", async () => {
+		const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "mem-since-future-"));
+		try {
+			const conceptsDir = path.join(tmp, ".spell", "memory", "concepts");
+			await fs.mkdir(conceptsDir, { recursive: true });
+			await Bun.write(path.join(conceptsDir, "x.org"), ":CUSTOM_ID: CON-x\n");
+			const out = (await dispatchMemoryAction(
+				{ action: "since", ts: "2099-01-01T00:00:00Z" },
+				tmp,
+			)) as { modified: unknown[] };
+			expect(out.modified).toEqual([]);
+		} finally {
+			await fs.rm(tmp, { recursive: true, force: true });
+		}
 	});
 
 	it("propagates native error.output as Error.message", async () => {

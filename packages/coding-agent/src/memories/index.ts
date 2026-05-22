@@ -5,7 +5,7 @@ import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { completeSimple, Effort, type Model } from "@oh-my-pi/pi-ai";
-import { serializeMemoryFile } from "@oh-my-pi/pi-org";
+import { executeOrg } from "@oh-my-pi/pi-natives";
 import { getAgentDbPath, getMemoriesDir, logger, parseJsonlLenient } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { parseModelString } from "../config/model-resolver";
@@ -15,6 +15,7 @@ import consolidationTemplate from "../prompts/memories/consolidation.md" with { 
 import readPathTemplate from "../prompts/memories/read-path.md" with { type: "text" };
 import stageOneInputTemplate from "../prompts/memories/stage_one_input.md" with { type: "text" };
 import stageOneSystemTemplate from "../prompts/memories/stage_one_system.md" with { type: "text" };
+import { renderSessionStartSummary } from "./projection";
 import type { AgentSession } from "../session/agent-session";
 import {
 	classifyContextPressure,
@@ -175,6 +176,12 @@ export function startMemoryStartupTask(options: {
 
 /**
  * Build memory usage instructions for prompt injection.
+ *
+ * Refreshes the deterministic session-start projection at
+ * `<cwd>/.spell/memory/cache/memory_summary.md` via `renderSessionStartSummary`
+ * (PLAN-310 W7), then uses that text. Falls back to the legacy agent-dir
+ * summary when the projection is empty or unavailable so existing consolidated
+ * memory still reaches the prompt during the transition.
  */
 export async function buildMemoryToolDeveloperInstructions(
 	agentDir: string,
@@ -182,24 +189,39 @@ export async function buildMemoryToolDeveloperInstructions(
 ): Promise<string | undefined> {
 	const cfg = loadMemoryConfig(settings);
 	if (!cfg.enabled) return undefined;
-	const memoryRoot = getMemoryRoot(agentDir, settings.getCwd());
-	const summaryPath = path.join(memoryRoot, "memory_summary.md");
+	const cwd = settings.getCwd();
 
-	let text: string;
-	try {
-		text = await Bun.file(summaryPath).text();
-	} catch {
-		return undefined;
-	}
-
-	const summary = text.trim();
+	let summary = await readSessionStartProjection(cwd);
+	if (!summary) summary = await readLegacyConsolidatedSummary(agentDir, cwd);
 	if (!summary) return undefined;
+
 	const truncated = truncateByApproxTokens(summary, cfg.summaryInjectionTokenLimit);
 	if (!truncated.trim()) return undefined;
-
 	return renderPromptTemplate(readPathTemplate, {
 		memory_summary: truncated,
 	});
+}
+
+async function readSessionStartProjection(cwd: string): Promise<string | undefined> {
+	try {
+		const rendered = (await renderSessionStartSummary(cwd)).trim();
+		return rendered.length > 0 ? rendered : undefined;
+	} catch (error) {
+		logger.debug("renderSessionStartSummary failed, falling back to legacy summary", {
+			error: String(error),
+		});
+		return undefined;
+	}
+}
+
+async function readLegacyConsolidatedSummary(agentDir: string, cwd: string): Promise<string | undefined> {
+	const summaryPath = path.join(getMemoryRoot(agentDir, cwd), "memory_summary.md");
+	try {
+		const text = (await Bun.file(summaryPath).text()).trim();
+		return text.length > 0 ? text : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 /**
@@ -519,7 +541,7 @@ async function runPhase2(options: {
 				apiKey: phase2ApiKey,
 				sourceSession: session.sessionManager.getSessionId() ?? "unknown",
 			});
-			await applyConsolidation(memoryRoot, consolidated);
+			await applyConsolidation(memoryRoot, cwd, consolidated);
 			if (heartbeatLostOwnership) {
 				throw new Error("Phase2 lease ownership lost before completion");
 			}
@@ -804,7 +826,11 @@ async function syncPhase2Artifacts(memoryRoot: string, outputs: Stage1OutputRow[
 }
 
 async function cleanupConsolidatedArtifacts(memoryRoot: string): Promise<void> {
+	// MEMORY.md / MEMORY.org were removed by PLAN-310 W7 (compaction now writes
+	// concepts through executeOrg(remember,...)). One-shot unlink keeps the
+	// directory clean across upgrades.
 	await fs.rm(path.join(memoryRoot, "MEMORY.md"), { force: true });
+	await fs.rm(path.join(memoryRoot, "MEMORY.org"), { force: true });
 	await fs.rm(path.join(memoryRoot, "memory_summary.md"), { force: true });
 	await fs.rm(path.join(memoryRoot, "skills"), { recursive: true, force: true });
 }
@@ -916,8 +942,10 @@ async function runConsolidationModel(options: {
 	return { memoryMd, memorySummary, skills, sourceSession, memoryEntries: schemaOutput.memory_entries };
 }
 
-async function applyConsolidation(
+/** @internal exported for PLAN-310 W7 compaction integration tests. */
+export async function applyConsolidation(
 	memoryRoot: string,
+	repoRoot: string,
 	consolidated: {
 		memoryMd: string;
 		memorySummary: string;
@@ -932,22 +960,28 @@ async function applyConsolidation(
 		}>;
 	},
 ): Promise<void> {
-	await Bun.write(path.join(memoryRoot, "MEMORY.md"), `${consolidated.memoryMd.trim()}\n`);
+	// `memory_summary.md` remains under the agent-dir memory root as a fallback
+	// for the prompt injection path (see buildMemoryToolDeveloperInstructions).
+	// MEMORY.md / MEMORY.org are no longer written by this pipeline: PLAN-310 W7
+	// pushes structured concept entries through `executeOrg(remember, ...)` so
+	// the recall engine sees them in `<cwd>/.spell/memory/concepts/<slug>.org`.
 	await Bun.write(path.join(memoryRoot, "memory_summary.md"), `${consolidated.memorySummary.trim()}\n`);
 
-	// Write MEMORY.org when the LLM provided structured memory_entries.
-	// TODO: implement incremental merge — currently overwrites on each consolidation.
-	if (consolidated.memoryEntries && consolidated.memoryEntries.length > 0) {
-		const orgEntries = consolidated.memoryEntries.map(e => ({
-			title: e.title,
-			confidence: e.confidence,
-			scope: e.scope,
-			sourceSession: consolidated.sourceSession,
-			tags: e.tags,
-			body: e.body,
-		}));
-		const orgContent = serializeMemoryFile(orgEntries, consolidated.sourceSession);
-		await Bun.write(path.join(memoryRoot, "MEMORY.org"), orgContent);
+	for (const entry of consolidated.memoryEntries ?? []) {
+		const summary = entry.body.trim().length > 0 ? `${entry.title}\n\n${entry.body}` : entry.title;
+		const result = executeOrg({
+			command: "remember",
+			kind: "concept",
+			summary,
+			distilledFrom: [consolidated.sourceSession],
+			repoRoot,
+		});
+		if (result.error) {
+			logger.warn("Phase2 memory.save failed", {
+				title: entry.title,
+				error: String(result.output),
+			});
+		}
 	}
 	const skillsDir = path.join(memoryRoot, "skills");
 	await fs.mkdir(skillsDir, { recursive: true });
