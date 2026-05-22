@@ -1,0 +1,25 @@
+#+TITLE: bincode-cache-oom-abort--with-limit---ma
+
+** ITEM bincode cache OOM-abort: with_limit + magic header + rebuild native
+
+Bincode (1.x) is positional and non-self-describing → any schema drift (new field, reorder) makes a stored field byte read as a length prefix. If those bytes spell out a large number (e.g. 0x2d3230302d445541 = "AUD-002-" LE = 3.25 EB), `Vec::with_capacity` triggers the global allocator's OOM handler → process abort, bypassing catch_unwind, killing the host bun process.
+
+Three-layer defence in pi-workspace-cache::CacheStore::load:
+1. PIWC magic at byte 0..4 — rejects legacy headerless files
+2. SCHEMA_VERSION at byte 4..8 — rejects valid-magic-old-version files
+3. bincode `with_limit(meta.len())` — rejects valid-header-corrupt-payload (catches the actual crash)
+
+Tests must exercise layer 3 explicitly. Tiny garbage payloads only hit cheap parse failures; the regression test must encode the catastrophic length prefix after a valid header.
+
+Critical gotcha: a fix to source has no effect until `pi_natives.dev.node` is rebuilt via `bun run dev:native` in packages/natives. Stale .dev.node will keep running pre-fix code even after commit + reload. Always check the .node mtime vs the fix commit time when a "fixed" crash recurs.
+
+Related: commit a2e15cd8f (initial fix), 1841f5212 (regression test pinning exact crash pattern).
+:PROPERTIES:
+:CUSTOM_ID: CON-bincode-cache-oom-abort--with-limit---ma
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T14:13:52Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: EP-2026-05-22-bincode-oom
+:END:
