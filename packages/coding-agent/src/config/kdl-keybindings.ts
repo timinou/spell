@@ -31,6 +31,7 @@ const APP_ACTION_CONFIG_TO_RUNTIME = {
 	"toggle-stt": "toggleSTT",
 	"toggle-user-pause": "toggleUserPause",
 	"subagent-viewer": "subagentViewer",
+	"open-memory-browser": "openMemoryBrowser",
 } as const;
 
 const APP_ACTION_RUNTIME_TO_CONFIG = Object.fromEntries(

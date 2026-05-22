@@ -1,0 +1,166 @@
+#+TITLE: pi-knowledge-worker — shared knowledge daemon, push-subscribe, both lanes, TUI + dual-recall
+#+STATE: DOING
+#+SESSION_ID: 14ea0d7add095343
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
+#+CUSTOM_ID: PLAN-315-pi-knowledge-worker-shared-knowledge-dae
+#+EFFORT: 60h
+#+LAYER: natives coding-agent tui
+#+PRIORITY: #A
+#+RISK: medium
+
+* Initial Message
+
+"Great review, great plan. […] I also would like a leaner FTS layer over pi-org with a shared user-level daemon."
+
+PLAN-310 deleted the heavy daemon (tantivy). PLAN-315 finishes the job: push the per-session WarmEngine into the embedder daemon, rename it, let many sessions share one knowledge plane the same way they already share one model.
+
+* Locked decisions (from this conversation)
+
+1. *Both lanes in one daemon* — org/memory AND code-graph live in =pi-knowledge-worker=. Two =RepoCache= shapes, one process, one socket.
+2. *Push-subscribe model* — daemon pushes =index_changed= events on a long-lived bidirectional socket. Enables /memory TUI live refresh + zero-staleness.
+3. *Lazy auto-spawn lifecycle* — extends the existing embedder daemon pattern (pidfile + 30-min idle exit). No systemd dependency.
+4. *Fold FUP-088* — W8 (TUI memory browser) and W9 (dual-recall) become trivial once the daemon is the truth. Both land in this plan.
+5. *Pre-flight flake fix* — BUG-390 stabilises =cargo test --workspace= before W0. Lands as its own commit before the plan starts.
+
+* Problem
+
+After PLAN-310:
+
+#+begin_example
+session N (× tens on a laptop)
+ ├─ pi-natives.so loaded (97.5 MB rlib, shared)
+ ├─ per-process RecallEngineHandle
+ │   └─ WarmEngine { items, docs, bm25, vec, graph }   ← ~30-60 MB per repo, per session
+ ├─ embedder subprocess connection
+ └─ embedding daemon (one per user, ~1.2 GB model)     ← already shared ✓
+#+end_example
+
+The vec lane is already shared via OS page cache (mmap'd =vectors.uidx=). BM25 + graph + items are *per-process duplicated*. 10 sessions on the same repo = 10 × WarmEngine.
+
+The TUI memory browser was deferred (FUP-088 W8) because it would need its own coding-agent shim to talk to the in-process recall engine. Dual-recall (FUP-088 W9) was deferred because wiring two WarmEngines per session doubles RSS. Both problems vanish if the WarmEngine moves out of the session.
+
+* Goal
+
+One =pi-knowledge-worker= daemon. Both org/memory + code-graph lanes resident. Sessions are thin clients over a unix socket. Push-subscribe enables live TUI + zero-staleness queries. Per-session RSS drops by ~75 MB; daemon's RSS is paid once per user.
+
+* Non-goals
+
+- *No protocol-v1 break.* =init=, =embed_batch=, =embed_query= preserved exactly. Old =pi-embedding-worker= binary symlink and =embed.sock= retained one release.
+- *No on-disk format break.* =~/.cache/spell/knowledge/<repo-hash>/= layout unchanged. No migration tool.
+- *No systemd dep.* Lazy auto-spawn + idle exit. Users who want resident: =KNOWLEDGE_IDLE_TTL_SECS=0=.
+- *No SQLite/Surreal/external DB.* Org files stay source of truth.
+- *No multi-host.* Single laptop, single user, single daemon.
+- *No editing from /memory panel.* Read-only browser.
+
+* Final daemon layout
+
+#+begin_src
+crates/
+├── pi-knowledge-worker/                 RENAMED from pi-embedding-worker
+│   ├── src/main.rs                       — socket + stdio modes + Subscribe upgrade
+│   ├── src/engine.rs                     — EmbeddingEngine (unchanged from PLAN-310)
+│   ├── src/repo_cache.rs                 NEW — LRU<repo_hash, RepoCache>
+│   ├── src/lane_org.rs                   NEW — wraps pi_knowledge_core::recall (W2)
+│   ├── src/lane_code.rs                  NEW — wraps pi-code-graph WarmEngine (W3)
+│   ├── src/subscribe.rs                  NEW — broadcast channel + heartbeat (W4)
+│   └── tests/{daemon,org_lane,code_lane,subscribe,dual_recall}.rs
+├── pi-knowledge-core/                   unchanged — already the shared lib
+├── pi-natives/
+│   ├── src/embedding_worker.rs           — extend WorkerTransport for new commands
+│   ├── src/knowledge_client.rs           NEW — Subscription handle, query dispatch
+│   ├── src/recall_engine.rs              — strip WarmEngine, become RPC client (W5)
+│   └── src/code_graph.rs                 — WarmEngine moves to daemon (W3)
+└── crates/pi-tui/src/panels/memory.rs    NEW — /memory 4-tab panel (W6)
+#+end_src
+
+Socket: =$XDG_RUNTIME_DIR/spell/knowledge.sock= (fallback bind: =embed.sock= for one release).
+Binary: =pi-knowledge-worker= (symlink: =pi-embedding-worker=).
+Env: =PI_KNOWLEDGE_WORKER= (fallback read: =PI_EMBEDDING_WORKER=).
+
+* Wave plan
+
+** Pre-flight — [[id:BUG-390-workspace-cargo-test-flake-diff-qualifie][BUG-390]]
+Test isolation: =lock_test_env= promoted + =RwLock<()>=; =buffer_registry= test serialised. ~60 LOC. Lands as its own commit. Gates PLAN-315 W0.
+
+** W0 — inventory + baseline
+- Sample N=10 concurrent-session RSS on current main; record as =W0-baseline.md=
+- Protocol-v2 design doc (frame format, error codes, version negotiation) → =W0-protocol.md=
+- Ingest topology audit: every notify watcher in workspace listed; confirm zero overlap
+- Tool-surface snapshot: BUILTIN_TOOLS hash before
+- 4 red loop tests targeting subscribe semantics (placed in =tests/perf/= and =tests/subscribe/=)
+
+** W1 — daemon rename + protocol_version=2 — [[id:FEAT-767-plan-315-w1-pi-embedding-worker-pi-knowl][FEAT-767]]
+Rename crate/binary/socket/env. Extend Command enum with =Open/Close/Stats=. =RepoCache= scaffold. Client transport reads =supports_knowledge=. No lane logic yet.
+
+** W1.5 — review + gap
+Reviewer pass on protocol surface, error mapping, version negotiation. Apply HIGH-confidence findings.
+
+** W2 — org/memory lane in daemon — [[id:FEAT-768-plan-315-w2-org-memory-lane-in-daemon-re][FEAT-768]]
+=RepoCache::OrgMemory= variant. =Search/About/Neighbors/Since= commands wired to =pi_knowledge_core::recall=. Client dispatch chooses RPC vs in-process via =supports_knowledge=. In-process fallback retained.
+
+** W2.5 — review + gap
+RPC vs in-process parity audit. Both paths must return identical results for the same query. Apply gaps.
+
+** W3 — code-graph lane in daemon — [[id:FEAT-769-plan-315-w3-code-graph-lane-in-daemon-re][FEAT-769]]
+=RepoCache::CodeGraph= variant. =CgSearch/CgDefinition/CgReferences/CgCallers= commands. =hybrid_search= orchestrator splits between in-process (fallback) and daemon. =vectors.uidx= mmap shared.
+
+** W3.5 — review + gap
+Tail-latency parity vs in-process baseline. Apply gaps.
+
+** W4 — push-subscribe — [[id:FEAT-770-plan-315-w4-push-subscribe-protocol-daem][FEAT-770]]
+Bidirectional streaming connection. =Subscribe= upgrade. Heartbeat. Backpressure. Broadcast channel under per-lane write lock. Daemon-side memory accounting.
+
+** W4.5 — review + gap
+Connection lifecycle audit: leaks, zombie subscribers, lag-drop semantics.
+
+** W5 — cutover — [[id:FEAT-771-plan-315-w5-drop-in-process-warmengine-c][FEAT-771]]
+Delete in-process WarmEngine for both lanes. RPC becomes the only normal path. =PI_KNOWLEDGE_WORKER=inprocess= escape for ~12 unit tests. Net -800 LOC.
+
+** W5.5 — review + gap
+Cutover audit: no orphan in-process code paths; CI exercises auto-spawn; fallback escape documented.
+
+** W6 — /memory TUI browser — [[id:FEAT-772-plan-315-w6-memory-tui-browser-folds-fup][FEAT-772]]
+4-tab panel. Subscribes for live refresh. Slash command + ambient Ctrl-M. Folds FUP-088 W8.
+
+** W6.5 — UX review + gap
+Manual smoke. Keyboard discoverability. Refresh-on-edit latency check.
+
+** W7 — dual-recall personal store — [[id:FEAT-773-plan-315-w7-dual-recall-personal-store-f][FEAT-773]]
+=include_personal=/=scope_personal_only= flags actually serve dual-recall via daemon. T10.7 RELATIONS-drawer fix included. T10.10 cross-repo loop test un-skipped. Folds FUP-088 W9.
+
+** W7.5 — review + gap
+Memory-loop tests all 11 green. Edge: shadow semantics when same id exists in both stores.
+
+** W8 — perf gates (N=10 sessions) — [[id:FEAT-774-plan-315-w8-perf-gates-n10-concurrent-se][FEAT-774]]
+Hard gates: =libpi_natives.so= ≤ 92.5 MB, per-session RSS ≤ 100 MB, total RSS ≤ 1.55 GB, search warm P99 ≤ 50ms, push delivery ≤ 500 ms, cold warm-up ≤ 90s.
+
+** W9 — docs + close — [[id:FEAT-775-plan-315-w9-docs-agents-md-update-plan-3][FEAT-775]]
+AGENTS.md, specs/org-graph-memory.md, CHANGELOG. PLAN-315 → DONE. FUP-088 → DONE. BUG-390 verify still green.
+
+* Critical path
+
+#+begin_example
+BUG-390 → W0 → W1 → W2 → W3 → W4 → W5 → W8 → W9
+                              ↘ W6 (parallel after W4)
+                              ↘ W7 (parallel after W2; depends on W4 for live updates)
+#+end_example
+
+Parallelism: W6 + W7 dispatch as soon as W4 lands. W8 perf gate gates W9 close.
+
+* Risks
+
+| risk | mitigation |
+|------|------------|
+| single daemon = SPOF | lazy auto-spawn covers crashes; pidfile guarantees one per user |
+| RPC tail latency adds 5-10ms | budgeted in W8 gate; mitigated by in-process fusion logic (network only for state access) |
+| many subscribers leak daemon memory | bounded broadcast channel + W4.5 lifecycle audit |
+| socket protocol version drift | =init= returns =protocol_version=; client refuses mismatch, falls back to in-process |
+| flake re-emerges at scale | BUG-390 + W5.5 audit guards CI |
+
+* Escape hatch
+
+In-process WarmEngine fallback retained through W4. Phase-4 deletion (W5) is the last cutover commit and is reversible by single =git revert=. =PI_KNOWLEDGE_WORKER=inprocess= env keeps an escape path indefinitely for one-off debugging.
+
+* Execution Manifest
+
+Generated post-creation via =org manifest planItemId=PLAN-315=.

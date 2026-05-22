@@ -368,6 +368,7 @@ mod tests {
 	use std::fs;
 
 	use super::*;
+	use crate::embedding_worker::lock_test_env_read;
 
 	fn node(locator: &str, kind: &str) -> NodeRef {
 		NodeRef {
@@ -419,6 +420,7 @@ mod tests {
 
 	#[test]
 	fn clean_tree_returns_empty() {
+		let _env_guard = lock_test_env_read();
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();
 		init_git_repo(&root);
@@ -438,6 +440,7 @@ mod tests {
 
 	#[test]
 	fn modified_file_returns_diff() {
+		let _env_guard = lock_test_env_read();
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();
 		init_git_repo(&root);
@@ -470,6 +473,7 @@ mod tests {
 
 	#[test]
 	fn new_file_shows_as_additions() {
+		let _env_guard = lock_test_env_read();
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();
 		init_git_repo(&root);
@@ -499,6 +503,7 @@ mod tests {
 
 	#[test]
 	fn deleted_file_shows_as_deletions() {
+		let _env_guard = lock_test_env_read();
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();
 		init_git_repo(&root);
@@ -522,6 +527,7 @@ mod tests {
 
 	#[test]
 	fn workspace_diff_returns_multi_file() {
+		let _env_guard = lock_test_env_read();
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();
 		init_git_repo(&root);
@@ -546,6 +552,7 @@ mod tests {
 
 	#[test]
 	fn diff_against_historical_rev() {
+		let _env_guard = lock_test_env_read();
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();
 		init_git_repo(&root);
@@ -569,6 +576,7 @@ mod tests {
 
 	#[test]
 	fn non_git_returns_unsupported() {
+		let _env_guard = lock_test_env_read();
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();
 		fs::write(root.join("f.txt"), "data\n").unwrap();
@@ -583,6 +591,7 @@ mod tests {
 
 	#[test]
 	fn diff_since_date_resolves_commit() {
+		let _env_guard = lock_test_env_read();
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();
 		init_git_repo(&root);

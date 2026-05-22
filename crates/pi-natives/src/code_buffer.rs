@@ -2174,9 +2174,22 @@ mod tests {
 	use std::{
 		fs,
 		path::PathBuf,
-		sync::Arc,
+		sync::{Arc, Mutex, MutexGuard, PoisonError},
 		time::{SystemTime, UNIX_EPOCH},
 	};
+
+	// `buffer_registry()` is a process-global singleton with an LRU
+	// watcher. Tests that assert post-edit registry membership must
+	// serialise against any other test that performs registry-mutating
+	// edits in the same test binary (otherwise an LRU eviction from a
+	// concurrent test can fail the membership assertion).
+	static BUFFER_REGISTRY_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+	fn lock_buffer_registry() -> MutexGuard<'static, ()> {
+		BUFFER_REGISTRY_TEST_LOCK
+			.lock()
+			.unwrap_or_else(PoisonError::into_inner)
+	}
 
 	use pi_code_engine::language::LanguageRegistry;
 	use serde_json::json;
@@ -2611,6 +2624,7 @@ mod tests {
 
 	#[test]
 	fn execute_code_buffer_inner_persisted_edit_preserves_undo_history() {
+		let _guard = lock_buffer_registry();
 		let path = temp_path("undo-redo-persisted.ts");
 		fs::write(&path, "export const value = 1;\n").expect("seed file");
 		let edit = execute_code_buffer_inner(&json!({ "command": "edit",

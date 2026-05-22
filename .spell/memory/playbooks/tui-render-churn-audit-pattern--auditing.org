@@ -1,0 +1,28 @@
+#+TITLE: tui-render-churn-audit-pattern--auditing
+
+** ITEM TUI render-churn audit pattern
+
+Auditing a TUI for steady-state CPU/lag — patterns to grep:
+
+1. `setInterval` callsites — every interval that calls `requestRender` is a tick driver. Migrate spinners to SpinnerClock. Tie subscription to mount/unmount (setParent lifecycle) so detached instances don't tick.
+
+2. `setText` / `setLines` / `setX` should always early-return when value unchanged. Each propagates dirty up the tree; a no-op call still busts ancestor caches.
+
+3. Component children-list mutations (clear+addChild) bust the parent Container's #cachedLines. Reconcile by comparing desired-vs-current child arrays by reference before mutating.
+
+4. Expensive resources (Image with sixel/kitty encoding, prerendered mermaid, etc.) must persist across redraws keyed by content identity. Recreating burns the per-instance cache.
+
+5. `requestRender(true)` (force) clears scrollback + viewport. Reserve for genuine mode/protocol transitions; never call from steady-state code.
+
+6. `Box`-style content-hash caches help when the produced output is bytewise identical even if the underlying components churn. But the components themselves still allocate every tick — costs CPU proportional to render-body complexity.
+
+Verification: write a perf-baselines test asserting render-counts (not wall-clock) for: idle, no-op coalescing, leaf cache survival across rerenders, bounded leaf rerenders under N chunk-stream updates.</body>
+<parameter name="distilled_from">["CON-plan-312-post-review-tui-lag-findings--a"]
+:PROPERTIES:
+:CUSTOM_ID: PB-tui-render-churn-audit-pattern--auditing
+:KIND: playbook
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T11:09:34Z
+:END:
+:RELATIONS:
+:END:

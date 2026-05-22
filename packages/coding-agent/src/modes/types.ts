@@ -190,6 +190,7 @@ export interface InteractiveModeContext {
 	showHookConfirm(title: string, message: string): Promise<boolean>;
 	showDebugSelector(): void;
 	showSubagentViewer(): void;
+	showMemoryBrowser(): void;
 
 	// Input handling
 	handleCtrlC(): void;

@@ -1,0 +1,51 @@
+#+TITLE: PLAN-315 W3 — code-graph lane in daemon (RepoCache::CodeGraph + symbol/vec hybrid search)
+#+STATE: ITEM
+#+SESSION_ID: 14ea0d7add095343
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
+#+CUSTOM_ID: FEAT-769-plan-315-w3-code-graph-lane-in-daemon-re
+#+LAYER: natives code-graph
+#+PLAN: PLAN-315
+#+PRIORITY: #A
+
+* Initial Message
+
+please investigate why the tests are flaky and investigate what is missing after finishing this report. I also would like a leaner FTS layer over pi-org with a shared user-level daemon. What would that look like? What would it enable?
+
+* Scope
+
+Move the =pi-code-graph::CodeGraph= warm state into the daemon. Sessions speak RPC for symbol/vec/hybrid queries.
+
+* Deliverables
+
+** Daemon side
+- =RepoCache::CodeGraph= variant: =symbols: SymbolTable, bm25: SearchIndex<Symbol>, vec: VectorIndex, graph: CallGraph= (same as current in-process state).
+- =Command::Open { lanes: [CodeGraph] }= warm-loads from =~/.cache/spell/code-graph/<repo-hash>/=.
+- New commands:
+  - =CgSearch { repo_handle, query, kind: Bm25|Vec|Hybrid, limit }=
+  - =CgDefinition { repo_handle, symbol_id }=
+  - =CgReferences { repo_handle, symbol_id }=
+  - =CgCallers { repo_handle, symbol_id }=
+- Indexer side-channel: =Command::CgIngest { repo_handle, file_changes }= for explicit re-index hints (e.g. on save from editor). The notify watcher handles the rest.
+
+** Client side
+- =pi-natives::code_graph::CodeGraphHandle= dispatch: socket-first, in-process fallback. The =Arc<VectorIndex>= path stays for the fallback; daemon path returns =Vec<SymbolHit>= over wire.
+- =pi-code-graph::hybrid::hybrid_search= split: pure-fn logic stays in =pi-knowledge-core::fusion=; the orchestrator either calls in-process state or emits =CgSearch{kind:Hybrid}=.
+
+** Migration carries
+- File extension =vectors.uidx= already cross-process mmap-safe (PLAN-310 W2.5 verified).
+- =workspace-vectors.fp= sidecar already retired (W2.25).
+- =bge-m3= 1024-dim already unified across both lanes.
+
+** Test matrix
+- Daemon: 3 new tests in =crates/pi-knowledge-worker/tests/code_lane.rs=.
+- pi-code-graph: existing hybrid_search tests parametrised over transports; the 67 W2 tests preserved.
+- E2E: =find { target: \"src/**/*.ts::§line[text~='TODO']\" }= flows still pass.
+
+* Non-goals
+- Push subscribe (W4)
+- Drop in-process fallback (W5)
+
+* Acceptance
+- =cargo test -p pi-code-graph -p pi-natives -p pi-knowledge-worker= green
+- Per-session RSS drops further: target -50 MB vs main (CodeGraph WarmEngine is the bigger of the two lanes)
+- Hybrid query latency: P99 ≤ 60ms warm (PLAN-310 baseline 50ms in-process + 10ms RPC budget)

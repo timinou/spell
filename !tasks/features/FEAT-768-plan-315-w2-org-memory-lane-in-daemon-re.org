@@ -1,0 +1,53 @@
+#+TITLE: PLAN-315 W2 — org/memory lane in daemon (RepoCache::OrgMemory + search/about/neighbors/since)
+#+STATE: ITEM
+#+SESSION_ID: 14ea0d7add095343
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
+#+CUSTOM_ID: FEAT-768-plan-315-w2-org-memory-lane-in-daemon-re
+#+LAYER: natives
+#+PLAN: PLAN-315
+#+PRIORITY: #A
+
+* Initial Message
+
+please investigate why the tests are flaky and investigate what is missing after finishing this report. I also would like a leaner FTS layer over pi-org with a shared user-level daemon. What would that look like? What would it enable?
+
+* Scope
+
+Move the =pi-natives::recall_engine::WarmEngine= (org/memory lane) into the daemon. Sessions speak RPC for search/about/neighbors/since.
+
+* Deliverables
+
+** Daemon side
+- =RepoCache::OrgMemory= variant: =items: Vec<OrgItem>, docs: Vec<RecallDoc>, bm25: SearchIndex, vec: VectorIndex, graph: TypedGraph= — identical shape to current =WarmEngine= but per-lane.
+- =Command::Open { lanes: [OrgMemory] }= warm-loads from =~/.cache/spell/knowledge/<repo-hash>/= (same on-disk layout, no migration).
+- New commands wired:
+  - =Search { repo_handle, text, scope, limit, profile, focus, hops, include_personal, scope_personal_only }=
+  - =About { repo_handle, id }=
+  - =Neighbors { repo_handle, focus, hops, kinds }=
+  - =Since { repo_handle, ts }=
+- Internally call =pi_knowledge_core::recall::{recall, recall_dual}= (re-exported).
+- Per-lane =RwLock=: queries take =read()=, ingest takes =write()=.
+- Ingest watcher: per repo, =pi_knowledge_core::ingest::watch_and_rebuild= (already exists from PLAN-310 W5). Fires under =write()=.
+
+** Client side
+- =pi-natives::recall_engine::RecallEngineHandle::query= dispatch:
+  - if =WorkerTransport::supports_knowledge= → emit =search= over socket
+  - else → in-process =WarmEngine= (current path, unchanged)
+- =memory.about/.neighbors/.since= NAPI shims emit corresponding commands.
+- Response shapes preserved (RecallHit, MemoryNode, NeighborsResult, SinceDiff).
+
+** Test matrix
+- Daemon: 3 new tests in =crates/pi-knowledge-worker/tests/org_lane.rs= (open warm; search basic; ingest debounce reflects new file).
+- Client: =recall_engine::tests= grows a transport-injectable harness; existing 8 tests parametrised over =Subprocess|Socket|InProcess=.
+- E2E: =tests/memory-loop.test.ts= reruns; previously red T10.7 + T10.10 fail-modes are not in this wave's scope (W7 dual-recall handles them).
+
+* Non-goals
+- Code-graph lane (W3)
+- Push subscribe (W4)
+- Drop in-process fallback (W5)
+
+* Acceptance
+- =cargo test -p pi-knowledge-worker -p pi-natives -p pi-knowledge-core= green
+- =bun test packages/coding-agent/test/tools/memory.test.ts= green (32/32 preserved)
+- Per-session RSS (memory tool only) drops measurably: open one session, =memory.search "X"=, sample RSS via =ps -o rss=. Target: -25 MB vs main (the WarmEngine moves out).
+- Cold-load latency on 12k-symbol corpus: daemon warms in < 90s; client first-query waits ≤ daemon warm time + 5ms RPC.

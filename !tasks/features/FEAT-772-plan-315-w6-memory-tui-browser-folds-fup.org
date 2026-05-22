@@ -1,0 +1,49 @@
+#+TITLE: PLAN-315 W6 — /memory TUI browser (folds FUP-088 W8)
+#+STATE: ITEM
+#+SESSION_ID: 14ea0d7add095343
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
+#+CUSTOM_ID: FEAT-772-plan-315-w6-memory-tui-browser-folds-fup
+#+LAYER: tui
+#+PLAN: PLAN-315
+#+PRIORITY: #B
+
+* Initial Message
+
+please investigate why the tests are flaky and investigate what is missing after finishing this report. I also would like a leaner FTS layer over pi-org with a shared user-level daemon. What would that look like? What would it enable?
+
+* Scope
+
+Slash command =/memory= + ambient Ctrl-M opens a 4-tab panel: search / graph / recent / since. Subscribes to daemon events for live refresh. Folds FUP-088 W8.
+
+* Deliverables
+
+** UI
+- =crates/pi-tui/src/panels/memory.rs= (or equivalent location in this workspace's TUI crate — locate during W6 W0 inventory)
+- 4 tabs:
+  - *Search*: query input → daemon =Search= → table of hits (id, kind, score, source/repo, excerpt)
+  - *Graph*: focus picker → daemon =Neighbors{hops:2}= → adjacency renderer (text-mode tree)
+  - *Recent*: =Since{ts: now-24h}= scrollable list
+  - *Since*: timestamp picker → diff payload
+- Keybindings: Tab cycles, =/= focuses search, =g= jumps to graph from a selected node, =q= or Esc closes.
+
+** Subscribe wiring
+- On panel open: subscribe to current-repo (lanes both) + personal (lane OrgMemory)
+- On =index_changed= event: re-issue last query if its tab is active; mark stale otherwise.
+
+** Slash command
+- =/memory= registered in slash-command registry → opens panel
+- Ambient =Ctrl-M= bound globally (configurable via existing keymap layer)
+
+** Test matrix
+- =crates/pi-tui/tests/memory_panel.rs=: 6 tests (open, search query renders rows, tab cycle, subscribe causes refresh, close cleans up subscription, ambient Ctrl-M)
+- Manual smoke documented in =!tasks/plans/plan-artifacts/PLAN-315/W6-tui-smoke.md=
+
+* Non-goals
+- Editing org files from the panel (read-only browser)
+- Cross-repo browsing UI beyond the personal-store flag (FUP if needed)
+
+* Acceptance
+- =cargo test -p pi-tui= green
+- =/memory= opens 4-tab panel
+- Modifying a tracked .org file → panel auto-refreshes within 1s (debounce + push)
+- Ambient Ctrl-M works regardless of current pane focus

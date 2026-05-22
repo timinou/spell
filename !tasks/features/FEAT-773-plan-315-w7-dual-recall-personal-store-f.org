@@ -1,0 +1,48 @@
+#+TITLE: PLAN-315 W7 — dual-recall personal store (folds FUP-088 W9 + closes T10.10)
+#+STATE: ITEM
+#+SESSION_ID: 14ea0d7add095343
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
+#+CUSTOM_ID: FEAT-773-plan-315-w7-dual-recall-personal-store-f
+#+LAYER: natives
+#+PLAN: PLAN-315
+#+PRIORITY: #A
+
+* Initial Message
+
+please investigate why the tests are flaky and investigate what is missing after finishing this report. I also would like a leaner FTS layer over pi-org with a shared user-level daemon. What would that look like? What would it enable?
+
+* Scope
+
+Wire the personal store as a second knowledge root inside the daemon. =memory.search{include_personal:true}= triggers dual recall; =memory.search{scope_personal_only:true}= queries only personal.
+
+Folds FUP-088 W9 and closes T10.10 cross-repo loop test.
+
+* Deliverables
+
+** Daemon
+- =Command::Open{lanes:[OrgMemory], include_personal: true}= warms two cache slots:
+  - =RepoCache::OrgMemory= for the workspace
+  - =RepoCache::OrgMemory= for =~/.spell/personal/= (using existing personal root layout from PLAN-310 W9)
+- =Search= command flags:
+  - =include_personal: bool= (default per profile, currently false) → union via =pi_knowledge_core::recall::recall_dual=
+  - =scope_personal_only: bool= → query personal slot only
+- =RecallHit.source: String= (already landed PLAN-310 W9 partial) carries =\"repo\"= | =\"personal\"=
+
+** Client
+- =memory.search= schema already accepts both flags (PLAN-310 W6.5). Now they actually do something.
+- =memory.save{kind: \"playbook\"}= already writes to personal store (W9 partial). Nothing to change client-side.
+
+** Loop test closure
+- =tests/memory-loop.test.ts= T10.10 (=cross-repo personal-store shadow=) un-skipped, expected green.
+- T10.7 (=RELATIONS drawer propagates into TypedGraph=) — fix the root cause in =pi_knowledge_core::ingest=: the org parser emits relations into =OrgItem.relations=, but =build_warm= drops them when constructing =TypedGraph=. ~30 LOC.
+
+** Tests
+- =crates/pi-knowledge-worker/tests/dual_recall.rs=: 3 tests (personal-only, dual union, shadow override)
+- =tests/memory-loop.test.ts= T10.7 + T10.10 green; full memory-loop is 11/11 green
+
+* Acceptance
+- =cargo test -p pi-knowledge-worker -p pi-knowledge-core= green
+- =bun test tests/memory-loop.test.ts= passes 11/11
+- =memory.search{include_personal:true}= returns hits from both lanes; hits carry =source: \"repo\"|\"personal\"=
+- =memory.search{scope_personal_only:true}= returns only =source: \"personal\"=
+- FUP-088 marked DONE

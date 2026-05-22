@@ -1,0 +1,64 @@
+#+TITLE: PLAN-315 W1 — pi-embedding-worker → pi-knowledge-worker, protocol_version=2, open/close/stats
+#+STATE: ITEM
+#+SESSION_ID: 14ea0d7add095343
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
+#+CUSTOM_ID: FEAT-767-plan-315-w1-pi-embedding-worker-pi-knowl
+#+LAYER: natives
+#+PLAN: PLAN-315
+#+PRIORITY: #A
+
+* Initial Message
+
+please investigate why the tests are flaky and investigate what is missing after finishing this report. I also would like a leaner FTS layer over pi-org with a shared user-level daemon. What would that look like? What would it enable?
+
+* Scope
+
+Rename =pi-embedding-worker= crate → =pi-knowledge-worker=. Preserve all current functionality (=init=, =embed_batch=, =embed_query=, daemon lifecycle, idle TTL, pidfile, drain on SIGTERM). Extend protocol with knowledge-layer command surface.
+
+* Deliverables
+
+** Crate rename
+- =crates/pi-embedding-worker/= → =crates/pi-knowledge-worker/=
+- Cargo workspace =members= updated
+- Binary name: =pi-knowledge-worker= (was =pi-embedding-worker=). Old name retained as alias symlink for one release.
+- Socket path: =$XDG_RUNTIME_DIR/spell/knowledge.sock= (was =embed.sock=). Old path retained as bind-second-socket fallback for one release.
+- ENV var: =PI_KNOWLEDGE_WORKER= (was =PI_EMBEDDING_WORKER=). Old name read as fallback.
+
+** Protocol v2
+=Command= enum extended (all existing variants kept):
+#+begin_src rust
+enum Command {
+    Init,
+    EmbedBatch { texts: Vec<String>, batch_size: Option<usize> },
+    EmbedQuery { text: String },
+    // NEW:
+    Open { repo_root: PathBuf, include_personal: bool, lanes: Vec<Lane> },
+    Close { repo_handle: String },
+    Stats { repo_handle: Option<String> }, // None → daemon-wide
+}
+
+enum Lane { OrgMemory, CodeGraph }
+#+end_src
+
+Init response now reports =protocol_version: 2= and =supported_commands: [...]=. Client uses this to choose RPC vs in-process path.
+
+** RepoCache scaffold
+=RepoCache<repo_hash> { lanes: HashMap<Lane, LaneState>, last_used: Instant, fingerprint, watcher }= — empty struct in W1, lanes populated by W2/W3.
+
+LRU eviction policy: =max_warm_repos= (env =KNOWLEDGE_MAX_WARM_REPOS=, default 8), =idle_ttl_repo= (env =KNOWLEDGE_IDLE_TTL_SECS=, default 1800).
+
+** Client adapter
+=pi-natives::embedding_worker::WorkerTransport= extended with =supports_knowledge: bool= (set from =init= response). =memory= NAPI dispatcher reads this; if true, route knowledge calls over socket; if false, in-process fallback (unchanged behaviour).
+
+* Non-goals
+- No lane logic yet (W2 + W3)
+- No subscribe (W4)
+- No deletion of in-process WarmEngine (W5)
+
+* Acceptance
+- =cargo test -p pi-knowledge-worker= green; 8 lifecycle tests preserved (rename only)
+- =cargo test --workspace= green (PRE-FLIGHT BUG-390 fixed first)
+- =pi-knowledge-worker --help= lists =--socket --pidfile --idle-secs --daemonize --max-warm-repos=
+- =init= command response carries =protocol_version: 2=
+- =open=/=close=/=stats= return =not_implemented_yet= (placeholder); test exercises round-trip serialisation
+- old =pi-embedding-worker= binary symlink + old socket path resolve to new daemon

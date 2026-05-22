@@ -1,0 +1,52 @@
+#+TITLE: PLAN-315 W8 — perf gates: N=10 concurrent-sessions RSS benchmark + tail-latency budgets
+#+STATE: ITEM
+#+SESSION_ID: 14ea0d7add095343
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
+#+CUSTOM_ID: FEAT-774-plan-315-w8-perf-gates-n10-concurrent-se
+#+LAYER: natives benchmarks
+#+PLAN: PLAN-315
+#+PRIORITY: #A
+
+* Initial Message
+
+please investigate why the tests are flaky and investigate what is missing after finishing this report. I also would like a leaner FTS layer over pi-org with a shared user-level daemon. What would that look like? What would it enable?
+
+* Scope
+
+Quantitative gates. Must be green before W9 close.
+
+* Methodology
+
+=tests/perf/n10-sessions.bun.ts= harness:
+1. Boot daemon (cold)
+2. Spawn 10 concurrent =bun packages/coding-agent/cli ...= sessions on different repos (synthetic 5k-symbol corpus generated)
+3. Each session runs: =memory.search "x"=, =find { target: "**/*.ts::§line[text~=\"TODO\"]" }=, edit cycle (5 edits), close.
+4. Sample =ps -o rss,pid,comm= every 2s for 60s. Sum across processes including daemon.
+5. Tail-latency: per-query P50/P95/P99 reported per command type.
+
+* Gates
+
+| metric | baseline (PLAN-310 close) | target | gate |
+|--------|---------------------------|--------|------|
+| =libpi_natives.so= | 97.5 MB | ≤ 92.5 MB | hard |
+| daemon RSS (warm, 10 repos) | n/a | ≤ 800 MB (model + indexes) | hard |
+| per-session RSS (warm) | ~180 MB | ≤ 100 MB | hard |
+| total RSS N=10 (sessions + daemon) | ~1.8 GB | ≤ 1.55 GB | hard |
+| =memory.search= warm P99 | n/a | ≤ 50 ms (incl 5ms RPC) | hard |
+| =memory.search= cold P99 | n/a | ≤ 200 ms | hard |
+| code-graph hybrid warm P99 | 50 ms in-proc | ≤ 60 ms (10ms RPC budget) | hard |
+| push event delivery | n/a | ≤ 500 ms (250 debounce + 250 fan-out) | hard |
+| cold daemon warm-up (12k symbols) | 90s | ≤ 90s | hard (no regression) |
+
+* Deliverables
+
+- Harness in =tests/perf/=
+- Markdown artifact =!tasks/plans/plan-artifacts/PLAN-315/W8-perf.md= with measured numbers + flame graphs (if a regression found)
+- If any hard gate fails: open BUG, fix, re-run before W9
+
+* Non-goals
+- Soak tests (>1 hr)
+- macOS metrics (Linux laptop reference platform)
+
+* Acceptance
+- All hard gates green; markdown committed
