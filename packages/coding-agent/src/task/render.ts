@@ -522,11 +522,10 @@ export function renderResult(
 	return {
 		render(width) {
 			const { expanded, isPartial, spinnerFrame } = options;
-			const hasher = new Hasher()
-				.bool(expanded)
-				.bool(isPartial)
-				.u32(spinnerFrame ?? 0)
-				.u32(width);
+			// spinnerFrame no longer mixed into cache key (FEAT-776): the spinner
+			// glyph is now a TUI-level post-process substitution, so cached lines
+			// stay valid across frames.
+			const hasher = new Hasher().bool(expanded).bool(isPartial).u32(width);
 			// Mix in a progress content signature so heartbeat-driven updates and
 			// in-place progress mutations actually invalidate the cached lines.
 			// Without this, the spinner frame is the only time-varying input the

@@ -311,7 +311,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.eventBus = eventBus;
 		this.sessionBridge = sessionBridge;
 
-		this.ui = new TUI(new ProcessTerminal(), settings.get("showHardwareCursor"));
+		this.ui = new TUI(new ProcessTerminal(), {
+			showHardwareCursor: settings.get("showHardwareCursor"),
+			spinnerFrames: theme.spinnerFrames,
+		});
 		this.ui.setClearOnShrink(settings.get("clearOnShrink"));
 		setMermaidRenderCallback(() => this.ui.requestRender());
 		this.chatContainer = new Container();
@@ -567,6 +570,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Set up theme file watcher
 		onThemeChange(() => {
+			this.ui.setSpinnerFrames(theme.spinnerFrames);
 			this.ui.invalidate();
 			this.updateEditorBorderColor();
 			this.ui.requestRender();
