@@ -9,6 +9,17 @@ This document is the source of truth for vocabulary, file layout, and crate
 boundaries. Each PLAN child item is self-contained, but disagreements
 between an item and this spec are resolved in favor of this spec.
 
+> **Shipped state (PLAN-310, 2026-05-22).** PLAN-290's v1 design (tantivy +
+> hnsw_rs + `pi-org-recall` + `pi-code-vectors`) was retired before it ever
+> shipped to users. The shipped substrate is `pi-knowledge-core` — one
+> shared crate carrying pure-Rust BM25, `usearch`-backed HNSW (mmap),
+> `petgraph` typed graphs, and an `bge-m3` embedder client. The agent
+> surface is the `memory` tool (7 actions). See **Shipped state** callouts
+> in each section below for the deltas; the unmarked sections (Vision,
+> Item kinds, Edge kinds, Memory pipeline cutover, Verification contracts)
+> still describe the live system. Items deferred post-W11 live under
+> `FUP-088`.
+
 ## Vision
 
 Org files remain the on-disk representation. They stay diffable, editable
@@ -17,6 +28,14 @@ maintains derived indexes (HNSW vectors + Tantivy BM25 + typed-edge graph)
 in `~/.cache/spell/recall/<repo-hash>/`, and broadcasts patch events over
 the existing `pi-edit-broker` Unix socket so QML/TUI/recall-cache
 subscribers see live updates.
+
+> **Shipped state.** Same vision; different machinery. Derived indexes live
+> in `~/.cache/spell/knowledge/<repo-hash>/` (not `recall/`) and are built
+> by `pi-knowledge-core`: pure-Rust BM25 (no Tantivy), `usearch` HNSW
+> (mmap-backed, cross-session readable, no `hnsw_rs`), `petgraph` typed
+> edges. Live patch broadcast via `pi-edit-broker` remains the design but
+> the recall-cache subscriber wiring is part of the W7.4 projection path
+> rather than a generic subscription bus.
 
 Memory becomes first-class org items: episodes (what happened) and concepts
 (distilled knowledge) with provenance edges back to source episodes and
@@ -43,6 +62,17 @@ prose blobs in `MEMORY.md`.
 ├── fts/                                              tantivy index dir
 └── vec.bin                                           hnswlib-rs dump
 ```
+
+> **Shipped state.** The derived-cache root is
+> `~/.cache/spell/knowledge/<repo-hash>/`, schema-stamped via `meta.bin`,
+> with `bm25.bin` (bincode `SearchIndex`), `graph.bin` (petgraph),
+> `vectors.uidx` (usearch mmap, multi-session readable), and `items.bin`
+> (parsed `OrgItem` / `CodeNode` payloads). The personal store lives at
+> `~/.cache/spell/knowledge/personal/`; the code-graph lane uses
+> `~/.cache/spell/knowledge/code/<hash>/` with the same schema. The
+> embedder owns `$XDG_RUNTIME_DIR/spell/embed.sock` plus an `embed.pid`
+> flock pidfile. Old `recall/` caches from PLAN-290 are discarded on
+> first run by the schema-stamp check (no migration tool, no rollback).
 
 ## Item kinds (`:KIND:` property)
 
@@ -117,6 +147,33 @@ crates/
     └── src/org_buffer.rs           + recall / remember / timeline / graph / link / subscribe ops
 ```
 
+> **Shipped state.** The crate map collapsed. `pi-org-recall` and
+> `pi-code-vectors` were deleted; one shared crate now serves both code-
+> intelligence and org/memory lanes:
+>
+> ```
+> crates/
+> ├── pi-knowledge-core/              NEW — single shared retrieval layer
+> │   ├── src/bm25.rs                 pure-Rust BTreeMap inverted index (k1=1.5, b=0.75)
+> │   ├── src/vec.rs                  usearch HNSW wrapper, mmap-backed .uidx
+> │   ├── src/graph.rs                petgraph wrapper: NodeKey, EdgeKind, BFS, path
+> │   ├── src/cache.rs                KnowledgeMeta + save_all atomic writer
+> │   ├── src/fusion.rs               RRF + lateral signals (recency, backlinks, confidence)
+> │   ├── src/ingest.rs               notify-driven incremental indexer
+> │   ├── src/embedder.rs             client to user-scoped pi-embedding-worker
+> │   └── src/recall.rs               hybrid pipeline (search + dual + recall)
+> ├── pi-code-graph/                  consumes pi-knowledge-core
+> ├── pi-org-engine/                  consumes pi-knowledge-core (KIND + RELATIONS parsing)
+> ├── pi-embedding-worker/            user-scoped daemon mode (XDG socket, flock pidfile, idle exit)
+> ├── pi-edit-broker/                 unchanged from PLAN-290 spec
+> └── pi-natives/                     dispatches `memory.*` ops via recall_engine
+> ```
+>
+> Retired in PLAN-310:
+> `crates/pi-org-recall/`, `crates/pi-code-vectors/`, `tantivy` (8 subcrates),
+> `hnsw_rs`. `libpi_natives.so` shrank by ~19 % (−22.8 MB) and the
+> `cargo tree -p pi-natives` edge count fell 30 %.
+
 ## Hybrid recall pipeline
 
 ```
@@ -134,6 +191,17 @@ RecallQuery { text?, scope?, focus?, graphHops?, graphKinds?, limit, weights }
                      Vec<RecallHit { id, kind, score, title, excerpt, why }>
 ```
 
+> **Shipped state.** Same fusion shape; the lanes are now
+> `pi_knowledge_core::bm25::SearchIndex::search` (pure-Rust BM25,
+> camelCase/snake_case tokenization, exact-match boost),
+> `usearch::Index::search` against the mmap'd `.uidx`, and
+> `pi_knowledge_core::graph::neighborhood` over the petgraph typed graph.
+> Embeddings come from the user-scoped `pi-embedding-worker` (`bge-m3`,
+> 1024-dim, one process per user across all sessions). RRF + lateral
+> signals live in `pi_knowledge_core::fusion`; the dual-recall personal
+> store union is wired through the schema but **dispatch is deferred to
+> FUP-088** — see W9 in the PLAN-310 manifest.
+
 ## New executeOrg ops
 
 | Op           | Input                                                           | Output                          |
@@ -149,6 +217,28 @@ RecallQuery { text?, scope?, focus?, graphHops?, graphKinds?, limit, weights }
 item, (b) creates relation edges in the same item, (c) optionally writes a
 referenced concept item in another file. It uses broker MultiIntent so
 multi-file remembers are atomic.
+
+> **Shipped state — Memory tool surface.** The `org recall / remember /
+> timeline / subgraph / link` subcommands were deleted from
+> `packages/org/src/tool.ts` in W5. The agent-facing surface is now the
+> top-level **`memory`** tool with 7 actions; `memory://` URIs resolve in
+> any prompt:
+>
+> | action       | does                                                       | key args                                                       |
+> |--------------|------------------------------------------------------------|----------------------------------------------------------------|
+> | `search`     | hybrid recall (BM25 + vector + graph) over tasks & memory  | `text`, `scope[]`, `focus`, `hops`, `limit`, `profile`, `include_personal`, `scope_personal_only` |
+> | `about`      | one node + 1-hop neighbours + distillation lineage         | `id` → `{ node, neighbors[], lineage[] }`                      |
+> | `neighbors`  | typed subgraph walk from a focus node                       | `focus` (or `id`), `hops`, `kinds[]`                          |
+> | `note`       | append an episode (in-flight observation, day-grouped)     | `text`, `about[]`, `involved[]`                                |
+> | `save`       | persist a concept / playbook / decision (distilled)        | `kind`, `title`, `body`, `distilled_from[]`, `relations[]`     |
+> | `link`       | add a typed edge between two items                          | `from`, `to`, `kind`                                          |
+> | `since`      | diff of memory state since a timestamp                      | `ts` (ISO-8601 or epoch-ms)                                   |
+>
+> URIs: `memory://search?…`, `memory://item/<id>`, `memory://since/<ts>`,
+> `memory://browse`, `memory://root`. The dispatch flows TS → `executeOrg`
+> NAPI → `recall_engine` → `pi-knowledge-core`. `memory.note` /
+> `memory.save` go through the broker for atomic multi-file writes when a
+> relation drawer crosses files.
 
 ## Live subscriptions
 
@@ -234,6 +324,29 @@ responsibility (rsync, git in `~/.spell/personal/.git`, or none).
   consumers are out of v1.
 - **Workflow audit as edges** — `:LOGBOOK:` drawer keeps being the audit
   source. `ACTION` edge kind is reserved for the next iteration.
+
+> **Shipped state — producers and deferrals (PLAN-310).**
+>
+> *Producers wired:* compaction (Stage 2 consolidator calls
+> `memory.save kind:concept`), task-completion (org item state → DONE
+> with non-trivial work writes a `memory.note` episode), and elective
+> (agent invokes `memory.note` / `memory.save` directly).
+> `renderSessionStartSummary` is live and writes
+> `<repo>/.spell/memory/cache/memory_summary.md` deterministically from
+> the recall projection.
+>
+> *Deferred to FUP-088:*
+> - **TUI memory browser** (`/memory` panel, ambient Ctrl-M) — schema is
+>   in place; the QML/TUI panel itself is the FUP.
+> - **Dual-recall personal store wiring** — `RecallHit.source` and the
+>   `include_personal` / `scope_personal_only` flags ship in the schema,
+>   but `recall_engine::query` needs to acquire the personal `WarmEngine`
+>   and call `recall_dual` instead of `recall`. Loop test T10.10 stays
+>   red until that lands.
+> - **`:RELATIONS:` drawer round-trip via `cmd_link`** and a few related
+>   T10.* loop gaps (T10.3, T10.5, T10.9, T10.11) — see
+>   `!tasks/plans/plan-artifacts/PLAN-310/W10-acceptance.md` for the
+>   root-cause breakdown.
 
 ## Verification (system-level)
 
