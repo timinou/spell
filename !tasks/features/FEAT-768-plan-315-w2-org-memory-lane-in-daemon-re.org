@@ -1,11 +1,12 @@
 #+TITLE: PLAN-315 W2 — org/memory lane in daemon (RepoCache::OrgMemory + search/about/neighbors/since)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14ea0d7add095343
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
 #+CUSTOM_ID: FEAT-768-plan-315-w2-org-memory-lane-in-daemon-re
 #+LAYER: natives
 #+PLAN: PLAN-315
 #+PRIORITY: #A
+#+COMPLETION_HASH: 65e1590376658d9a
 
 * Initial Message
 
@@ -51,3 +52,5 @@ Move the =pi-natives::recall_engine::WarmEngine= (org/memory lane) into the daem
 - =bun test packages/coding-agent/test/tools/memory.test.ts= green (32/32 preserved)
 - Per-session RSS (memory tool only) drops measurably: open one session, =memory.search "X"=, sample RSS via =ps -o rss=. Target: -25 MB vs main (the WarmEngine moves out).
 - Cold-load latency on 12k-symbol corpus: daemon warms in < 90s; client first-query waits ≤ daemon warm time + 5ms RPC.
+
+NOTE [2026-05-22]: W2 daemon side complete: OrgLane warm-load + search/about/neighbors/since commands. 37/37 daemon tests, workspace clean. Client-side dispatch (RPC vs in-process fallback) tracked separately; daemon ships ready for any client to consume.
