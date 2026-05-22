@@ -1,6 +1,7 @@
 import {
 	type Component,
 	Container,
+	type DirtyParent,
 	Input,
 	matchesKey,
 	padding,
@@ -21,8 +22,16 @@ class SessionList implements Component {
 	#filteredSessions: SessionInfo[] = [];
 	#selectedIndex: number = 0;
 	readonly #searchInput: Input;
+	#parent?: DirtyParent;
 	onSelect?: (sessionPath: string) => void;
 	onCancel?: () => void;
+
+	setParent(p: DirtyParent | undefined): void {
+		this.#parent = p;
+		// Forward parent reference to nested Input so its own dirty markings
+		// (cursor moves, typing, paste) reach our parent.
+		this.#searchInput?.setParent?.(p);
+	}
 	onExit: () => void = () => {};
 	#maxVisible: number = 5; // Max sessions visible (each session is 3 lines: msg + metadata + blank)
 
@@ -161,43 +170,49 @@ class SessionList implements Component {
 	}
 
 	handleInput(keyData: string): void {
-		// Up arrow
-		if (matchesKey(keyData, "up")) {
-			this.#selectedIndex = Math.max(0, this.#selectedIndex - 1);
-		}
-		// Down arrow
-		else if (matchesKey(keyData, "down")) {
-			this.#selectedIndex = Math.min(this.#filteredSessions.length - 1, this.#selectedIndex + 1);
-		}
-		// Page up - jump up by maxVisible items
-		else if (matchesKey(keyData, "pageUp")) {
-			this.#selectedIndex = Math.max(0, this.#selectedIndex - this.#maxVisible);
-		}
-		// Page down - jump down by maxVisible items
-		else if (matchesKey(keyData, "pageDown")) {
-			this.#selectedIndex = Math.min(this.#filteredSessions.length - 1, this.#selectedIndex + this.#maxVisible);
-		}
-		// Enter
-		else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
-			const selected = this.#filteredSessions[this.#selectedIndex];
-			if (selected && this.onSelect) {
-				this.onSelect(selected.path);
+		try {
+			// Up arrow
+			if (matchesKey(keyData, "up")) {
+				this.#selectedIndex = Math.max(0, this.#selectedIndex - 1);
 			}
-		}
-		// Escape - cancel
-		else if (matchesKey(keyData, "escape") || matchesKey(keyData, "esc")) {
-			if (this.onCancel) {
-				this.onCancel();
+			// Down arrow
+			else if (matchesKey(keyData, "down")) {
+				this.#selectedIndex = Math.min(this.#filteredSessions.length - 1, this.#selectedIndex + 1);
 			}
-		}
-		// Ctrl+C - exit
-		else if (matchesKey(keyData, "ctrl+c")) {
-			this.onExit();
-		}
-		// Pass everything else to search input
-		else {
-			this.#searchInput.handleInput(keyData);
-			this.#filterSessions(this.#searchInput.getValue());
+			// Page up - jump up by maxVisible items
+			else if (matchesKey(keyData, "pageUp")) {
+				this.#selectedIndex = Math.max(0, this.#selectedIndex - this.#maxVisible);
+			}
+			// Page down - jump down by maxVisible items
+			else if (matchesKey(keyData, "pageDown")) {
+				this.#selectedIndex = Math.min(this.#filteredSessions.length - 1, this.#selectedIndex + this.#maxVisible);
+			}
+			// Enter
+			else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
+				const selected = this.#filteredSessions[this.#selectedIndex];
+				if (selected && this.onSelect) {
+					this.onSelect(selected.path);
+				}
+			}
+			// Escape - cancel
+			else if (matchesKey(keyData, "escape") || matchesKey(keyData, "esc")) {
+				if (this.onCancel) {
+					this.onCancel();
+				}
+			}
+			// Ctrl+C - exit
+			else if (matchesKey(keyData, "ctrl+c")) {
+				this.onExit();
+			}
+			// Pass everything else to search input
+			else {
+				this.#searchInput.handleInput(keyData);
+				this.#filterSessions(this.#searchInput.getValue());
+			}
+		} finally {
+			// BUG-391: ensure dirty propagates for selection moves, search
+			// updates, etc. — the Container dirty-cache serves stale otherwise.
+			this.#parent?.markDirty();
 		}
 	}
 }
