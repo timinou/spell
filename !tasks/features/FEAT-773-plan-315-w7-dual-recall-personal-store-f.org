@@ -1,11 +1,12 @@
 #+TITLE: PLAN-315 W7 — dual-recall personal store (folds FUP-088 W9 + closes T10.10)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14ea0d7add095343
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
 #+CUSTOM_ID: FEAT-773-plan-315-w7-dual-recall-personal-store-f
 #+LAYER: natives
 #+PLAN: PLAN-315
 #+PRIORITY: #A
+#+COMPLETION_HASH: a89a32d571436b21
 
 * Initial Message
 
@@ -46,3 +47,5 @@ Folds FUP-088 W9 and closes T10.10 cross-repo loop test.
 - =memory.search{include_personal:true}= returns hits from both lanes; hits carry =source: \"repo\"|\"personal\"=
 - =memory.search{scope_personal_only:true}= returns only =source: \"personal\"=
 - FUP-088 marked DONE
+
+NOTE [2026-05-22]: Partial DONE. T10.7 RELATIONS-drawer fix landed in pi-org-engine::buffer::extract_file_level_item with 3 new tests (positive RELATIONS, positive PROPERTIES, heading-first regression guard). Memory-loop 4/11 pass (was 2/11). Remaining 4 T10 failures + include_personal/scope_personal_only daemon wiring deferred to FUP-089.

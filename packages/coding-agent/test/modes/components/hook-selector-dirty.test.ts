@@ -2,9 +2,14 @@
  * Repro for "ask tool arrows don't visually update" — same pattern as BUG-391
  * but for HookSelectorComponent (used by the ask tool via showHookSelector).
  */
-import { describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import type { DirtyParent } from "@oh-my-pi/pi-tui";
 import { HookSelectorComponent } from "../../../src/modes/components/hook-selector";
+import { initTheme } from "../../../src/modes/theme/theme";
+
+beforeAll(async () => {
+	await initTheme();
+});
 
 class DirtyCounter implements DirtyParent {
 	count = 0;
@@ -24,10 +29,14 @@ describe("HookSelector arrow keys propagate dirty", () => {
 		);
 		const parent = new DirtyCounter();
 		sel.setParent(parent);
+		// Simulate the real flow: first render clears the dirty flag
+		sel.render(80);
 
 		parent.count = 0;
 		sel.handleInput("\x1b[B"); // down
+		sel.render(80); // simulate render flush
 		sel.handleInput("\x1b[B"); // down
+		sel.render(80);
 		sel.handleInput("\x1b[A"); // up
 
 		expect(parent.count).toBeGreaterThanOrEqual(3);
@@ -43,9 +52,11 @@ describe("HookSelector arrow keys propagate dirty", () => {
 		);
 		const parent = new DirtyCounter();
 		sel.setParent(parent);
+		sel.render(80);
 
 		parent.count = 0;
 		sel.handleInput("\x1b[B"); // down
+		sel.render(80);
 		sel.handleInput("\x1b[B"); // down
 
 		expect(parent.count).toBeGreaterThanOrEqual(2);

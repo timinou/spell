@@ -1,5 +1,5 @@
 #+TITLE: pi-knowledge-worker — shared knowledge daemon, push-subscribe, both lanes, TUI + dual-recall
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14ea0d7add095343
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
 #+CUSTOM_ID: PLAN-315-pi-knowledge-worker-shared-knowledge-dae
@@ -7,6 +7,7 @@
 #+LAYER: natives coding-agent tui
 #+PRIORITY: #A
 #+RISK: medium
+#+COMPLETION_HASH: 88b0676e24a2548e
 
 * Initial Message
 
@@ -164,3 +165,5 @@ In-process WarmEngine fallback retained through W4. Phase-4 deletion (W5) is the
 * Execution Manifest
 
 Generated post-creation via =org manifest planItemId=PLAN-315=.
+
+NOTE [2026-05-22]: Closed DONE-DEVIATED. Shipped: pre-flight BUG-390, W0 docs, W1 protocol v2 (FEAT-767), W2 daemon + client dispatch (FEAT-768), W7 RELATIONS-drawer fix in pi-org-engine (FEAT-773 partial), W8 partial perf artifact. Deferred to FUP-089: W3 code-graph lane, W4 push-subscribe, W5 cutover, W6 TUI browser, W8 N=10 perf harness, 4 remaining T10 memory-loop failures. Test counts: pi-knowledge-worker 37/37, pi-natives 345/345 lib + 2/2 rpc_dispatch_parity, pi-org-engine 81/81 (was 78), pi-knowledge-core 91/91, memory-loop 4/11 pass (was 2/11), workspace cargo test exit-0.

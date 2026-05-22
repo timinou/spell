@@ -974,6 +974,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		? new AsyncJobManager({
 				maxRunningJobs: asyncMaxJobs,
 				jobTimeoutMs: asyncJobTimeoutMs,
+				eventBus,
 				onJobComplete: async (jobId, result, job) => {
 					if (!session) return;
 					const formattedResult = await formatAsyncResultForFollowUp(result);
