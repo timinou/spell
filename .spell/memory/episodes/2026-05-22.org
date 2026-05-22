@@ -24,3 +24,15 @@ Landed in commit 0d62c39e6. Tool-renderer body no longer runs at 12.5Hz. tui 346
 :RELATIONS:
 ABOUT: FEAT-776-spinner-sentinel-decouple-tool-renderers
 :END:
+** ITEM PLAN-315 W1 — pi-embedding-worker → pi-knowledge-worker, protocol_version=2, open/close/stats
+
+W1 landed. 21/21 pi-knowledge-worker tests; 354/354 pi-natives lib; init returns protocol_version=2; Open/Close/Stats round-trip via stdio. Client adapter (w1-client-adapter) deferred to W2 where it's needed in earnest — clients today still use embed_*; new commands have no in-process consumers yet.
+:PROPERTIES:
+:CUSTOM_ID: EP-ac60eab09ac6ddfe
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T12:32:30Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-767-plan-315-w1-pi-embedding-worker-pi-knowl
+:END:

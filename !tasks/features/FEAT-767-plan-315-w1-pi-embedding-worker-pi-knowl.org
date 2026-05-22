@@ -1,11 +1,12 @@
 #+TITLE: PLAN-315 W1 — pi-embedding-worker → pi-knowledge-worker, protocol_version=2, open/close/stats
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14ea0d7add095343
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
 #+CUSTOM_ID: FEAT-767-plan-315-w1-pi-embedding-worker-pi-knowl
 #+LAYER: natives
 #+PLAN: PLAN-315
 #+PRIORITY: #A
+#+COMPLETION_HASH: 5bbc2d5755bcac2b
 
 * Initial Message
 
@@ -62,3 +63,5 @@ LRU eviction policy: =max_warm_repos= (env =KNOWLEDGE_MAX_WARM_REPOS=, default 8
 - =init= command response carries =protocol_version: 2=
 - =open=/=close=/=stats= return =not_implemented_yet= (placeholder); test exercises round-trip serialisation
 - old =pi-embedding-worker= binary symlink + old socket path resolve to new daemon
+
+NOTE [2026-05-22]: W1 landed. 21/21 pi-knowledge-worker tests; 354/354 pi-natives lib; init returns protocol_version=2; Open/Close/Stats round-trip via stdio. Client adapter (w1-client-adapter) deferred to W2 where it's needed in earnest — clients today still use embed_*; new commands have no in-process consumers yet.
