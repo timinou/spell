@@ -268,7 +268,7 @@ pub enum ContentLoader {
 	/// Single-file read at the resolved path.
 	FsRead { mode: ReadMode },
 	/// Embedded compile-time table. Used by `pi://`.
-	Static { table: &'static phf::Map<&'static str, &'static [u8]> },
+	Static { table: &'static phf::Map<&'static str, &'static str> },
 	/// Indexed loader — body is an id, lookup produces (path, range).
 	Indexed { lookup: Arc<dyn IndexLookup> },
 	/// Callback escape hatch — JS-resident schemes.

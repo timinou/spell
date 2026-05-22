@@ -199,18 +199,15 @@ fn dispatch(
 		ContentLoader::Static { table } => {
 			let path = m.path.unwrap_or_else(|| PathBuf::from(body));
 			let key = path.to_string_lossy();
-			let bytes = table.get(key.as_ref()).ok_or_else(|| Diagnostic {
+			let text = table.get(key.as_ref()).ok_or_else(|| Diagnostic {
 				variant: DiagnosticVariant::FileNotFound,
 				message: format!("static entry not found: {url}"),
 				span:    None,
 			})?;
-			let text = std::str::from_utf8(bytes)
-				.map_err(|_| invalid("static entry is not utf-8"))?
-				.to_string();
 			Ok(ResolvedContent {
 				url: url.to_string(),
 				source_path: None,
-				content: Content::Text { value: text },
+				content: Content::Text { value: (*text).to_string() },
 				mime: profile.capabilities.mime_hint.map(String::from),
 				notes: vec![],
 				source_mtime: None,
