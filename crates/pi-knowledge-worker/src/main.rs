@@ -16,6 +16,7 @@ mod embedder_adapter;
 mod engine;
 mod lane_org;
 mod repo_cache;
+mod subscribe;
 
 use std::{
 	fs::{self, File, OpenOptions, Permissions},
@@ -131,6 +132,8 @@ fn supported_commands() -> &'static [&'static str] {
 		"about",
 		"neighbors",
 		"since",
+		"subscribe",
+		"unsubscribe",
 	]
 }
 
@@ -257,15 +260,48 @@ fn run_stdio_mode() {
 	let mut reader = stdin.lock();
 	let mut line = String::new();
 
+	// Stdio mode now supports subscribe + push events too. Same ConnState
+	// machinery as socket mode; writer thread serialises responses + events
+	// on stdout. This keeps the integration tests — which drive the daemon
+	// over stdio — able to exercise the full subscribe lifecycle.
+	let (out_tx, out_rx) = std::sync::mpsc::sync_channel(CONN_OUTBOX_DEPTH);
+	let conn = std::sync::Arc::new(ConnState {
+		subscriptions: std::sync::Mutex::new(std::collections::HashMap::new()),
+		out_tx:        out_tx.clone(),
+	});
+
+	let writer_handle = thread::spawn(move || {
+		let stdout = io::stdout();
+		let mut writer = stdout.lock();
+		while let Ok(frame) = out_rx.recv() {
+			let body = match &frame {
+				subscribe::Frame::Response { body } => body,
+				subscribe::Frame::Event { body } => body,
+			};
+			let Ok(bytes) = serde_json::to_vec(body) else {
+				continue;
+			};
+			if writer.write_all(&bytes).is_err()
+				|| writer.write_all(b"\n").is_err()
+				|| writer.flush().is_err()
+			{
+				break;
+			}
+		}
+	});
+
 	loop {
 		line.clear();
 		match reader.read_line(&mut line) {
 			Ok(0) => break,
 			Ok(_) => {
 				let trimmed = line.trim_end_matches(['\r', '\n']);
-				let response = process_line(trimmed);
-				if let Err(error) = write_stdio_response(&response) {
-					let _ = writeln!(io::stderr(), "failed to write response: {error}");
+				let body = process_line_with_conn(&conn, trimmed);
+				if conn
+					.out_tx
+					.send(subscribe::Frame::Response { body })
+					.is_err()
+				{
 					break;
 				}
 			},
@@ -275,6 +311,10 @@ fn run_stdio_mode() {
 			},
 		}
 	}
+
+	drop(out_tx);
+	drop(conn);
+	let _ = writer_handle.join();
 }
 
 // =====================================================================
@@ -405,6 +445,21 @@ fn redirect_stdio_to_devnull() {
 	let _ = nix::unistd::dup2(fd, 2);
 }
 
+/// Per-connection state for subscribe-capable sockets. Holds the active
+/// `SubscriptionToken`s (drop on connection close auto-deregisters) and
+/// the inbound→outbound sync channel.
+struct ConnState {
+	/// Active subscriptions on this connection. Map allows O(1) unsubscribe.
+	subscriptions: std::sync::Mutex<
+		std::collections::HashMap<subscribe::SubId, subscribe::SubscriptionToken>,
+	>,
+	/// Outbound sender shared between command handlers and event publishers.
+	out_tx:        std::sync::mpsc::SyncSender<subscribe::Frame>,
+}
+
+/// Bounded queue depth between command/event producers and the socket writer.
+const CONN_OUTBOX_DEPTH: usize = 256;
+
 fn handle_socket_conn(stream: UnixStream) {
 	INFLIGHT.fetch_add(1, Ordering::SeqCst);
 	let Ok(reader_stream) = stream.try_clone() else {
@@ -412,7 +467,41 @@ fn handle_socket_conn(stream: UnixStream) {
 		return;
 	};
 	let mut reader = BufReader::new(reader_stream);
-	let mut writer = stream;
+
+	// One bounded outbox per connection. Both the reader (for responses)
+	// and the EventRegistry sinks (for events) push into the same channel
+	// so the writer thread serialises wire order.
+	let (out_tx, out_rx) = std::sync::mpsc::sync_channel(CONN_OUTBOX_DEPTH);
+	let conn = std::sync::Arc::new(ConnState {
+		subscriptions: std::sync::Mutex::new(std::collections::HashMap::new()),
+		out_tx:        out_tx.clone(),
+	});
+
+	// Writer thread drains the outbox.
+	let writer_stream = stream;
+	let writer_handle = thread::spawn(move || {
+		let mut writer = writer_stream;
+		while let Ok(frame) = out_rx.recv() {
+			let body = match &frame {
+				subscribe::Frame::Response { body } => body,
+				subscribe::Frame::Event { body } => body,
+			};
+			let Ok(bytes) = serde_json::to_vec(body) else {
+				continue;
+			};
+			if writer.write_all(&bytes).is_err()
+				|| writer.write_all(b"\n").is_err()
+				|| writer.flush().is_err()
+			{
+				break;
+			}
+		}
+		// Out_rx closed (reader hung up) or write error → drop writer side.
+		let _ = writer.shutdown(std::net::Shutdown::Both);
+	});
+
+	// Reader loop processes commands. Subscribe/Unsubscribe are stateful
+	// against ConnState; everything else flows through `process_line`.
 	let mut line = String::new();
 	loop {
 		line.clear();
@@ -421,13 +510,11 @@ fn handle_socket_conn(stream: UnixStream) {
 			Ok(_) => {
 				let trimmed = line.trim_end_matches(['\r', '\n']);
 				LAST_REQUEST_AT.store(now_unix(), Ordering::SeqCst);
-				let response = process_line(trimmed);
-				let Ok(body) = serde_json::to_vec(&response) else {
-					break;
-				};
-				if writer.write_all(&body).is_err()
-					|| writer.write_all(b"\n").is_err()
-					|| writer.flush().is_err()
+				let response_body = process_line_with_conn(&conn, trimmed);
+				if conn
+					.out_tx
+					.send(subscribe::Frame::Response { body: response_body })
+					.is_err()
 				{
 					break;
 				}
@@ -436,7 +523,125 @@ fn handle_socket_conn(stream: UnixStream) {
 			Err(_) => break,
 		}
 	}
+
+	// Drop outbound sender so writer drains and exits.
+	drop(out_tx);
+	drop(conn);
+	let _ = writer_handle.join();
 	INFLIGHT.fetch_sub(1, Ordering::SeqCst);
+}
+
+/// Connection-aware command dispatch. Handles Subscribe / Unsubscribe
+/// (which mutate `ConnState`) directly; everything else delegates to
+/// `process_line`. Returns the response JSON body (without the `Response`
+/// envelope) so the caller can put it on the wire.
+fn process_line_with_conn(
+	conn: &std::sync::Arc<ConnState>,
+	line: &str,
+) -> serde_json::Value {
+	// Peek at the command name without consuming the full Command enum:
+	// Subscribe/Unsubscribe need access to ConnState which Command can't
+	// carry without polluting the dispatch type with non-Send state.
+	let parsed: Result<serde_json::Value, _> = serde_json::from_str(line);
+	let Ok(parsed) = parsed else {
+		return serde_json::to_value(Response::Err {
+			ok:    false,
+			error: format!("malformed JSON: {}", line.chars().take(80).collect::<String>()),
+		})
+		.unwrap_or(serde_json::Value::Null);
+	};
+	match parsed.get("command").and_then(|v| v.as_str()) {
+		Some("subscribe") => handle_subscribe(conn, &parsed),
+		Some("unsubscribe") => handle_unsubscribe(conn, &parsed),
+		_ => serde_json::to_value(process_line(line))
+			.unwrap_or(serde_json::Value::Null),
+	}
+}
+
+fn handle_subscribe(
+	conn: &std::sync::Arc<ConnState>,
+	request: &serde_json::Value,
+) -> serde_json::Value {
+	let repo_handle = match request.get("repo_handle").and_then(|v| v.as_str()) {
+		Some(s) => s.to_string(),
+		None => {
+			return serde_json::json!({
+				"ok": false,
+				"error": "subscribe requires repo_handle",
+			});
+		},
+	};
+	let lanes_value = request.get("lanes").cloned().unwrap_or(serde_json::json!([]));
+	let lanes: Vec<Lane> = match serde_json::from_value(lanes_value) {
+		Ok(v) => v,
+		Err(e) => {
+			return serde_json::json!({
+				"ok": false,
+				"error": format!("subscribe invalid lanes: {e}"),
+			});
+		},
+	};
+	if lanes.is_empty() {
+		return serde_json::json!({
+			"ok": false,
+			"error": "subscribe requires at least one lane",
+		});
+	};
+
+	let mut sub_ids = Vec::new();
+	for lane in &lanes {
+		let token = subscribe::registry()
+			.subscribe(&repo_handle, *lane, conn.out_tx.clone());
+		let sub_id = token.sub_id();
+		if let Ok(mut map) = conn.subscriptions.lock() {
+			map.insert(sub_id, token);
+		}
+		sub_ids.push(sub_id);
+	}
+
+	serde_json::json!({
+		"ok": true,
+		"subscription_ids": sub_ids,
+		"repo_handle": repo_handle,
+		"lanes": lanes,
+	})
+}
+
+fn handle_unsubscribe(
+	conn: &std::sync::Arc<ConnState>,
+	request: &serde_json::Value,
+) -> serde_json::Value {
+	let ids: Vec<u64> = match request.get("subscription_ids") {
+		Some(arr) => {
+			let Some(arr) = arr.as_array() else {
+				return serde_json::json!({
+					"ok": false,
+					"error": "subscription_ids must be an array",
+				});
+			};
+			arr.iter().filter_map(|v| v.as_u64()).collect()
+		},
+		None => match request.get("subscription_id").and_then(|v| v.as_u64()) {
+			Some(id) => vec![id],
+			None => Vec::new(),
+		},
+	};
+
+	let mut removed = 0u64;
+	if let Ok(mut map) = conn.subscriptions.lock() {
+		if ids.is_empty() {
+			// No ids → unsubscribe ALL of this connection's subscriptions.
+			removed = map.len() as u64;
+			map.clear();
+		} else {
+			for id in ids {
+				if map.remove(&id).is_some() {
+					removed += 1;
+				}
+			}
+		}
+	}
+	serde_json::json!({ "ok": true, "removed": removed })
 }
 
 fn accept_loop(listener: &UnixListener, idle_secs: u64) {

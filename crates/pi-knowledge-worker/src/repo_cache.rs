@@ -19,7 +19,7 @@ use std::{
 
 use serde_json::{Value, json};
 
-use crate::{Lane, lane_org::OrgLane};
+use crate::{Lane, lane_org::OrgLane, subscribe};
 
 /// FNV-1a 64-bit hash. Stable, no_std-compatible, no crypto guarantees.
 /// Matches PLAN-310 W1.5 F6 `pi_knowledge_core::cache::repo_hash`.
@@ -73,6 +73,8 @@ fn evict_lru(map: &mut HashMap<String, RepoSlot>) {
 			.map(|(handle, _)| handle.clone());
 		if let Some(handle) = victim {
 			map.remove(&handle);
+			// PLAN-315 W4: notify subscribers that this repo was evicted.
+			subscribe::publish_evicted(&handle, "idle_or_lru");
 		} else {
 			break;
 		}
@@ -124,8 +126,14 @@ pub fn open(
 	// Best-effort: a failure on one lane returns the per-lane error but
 	// leaves the slot registered so a retry doesn't have to re-establish.
 	if slot.lanes.contains(&Lane::OrgMemory) && slot.org_lane.is_none() {
+		let started = Instant::now();
 		match OrgLane::warm_load(&canonical) {
-			Ok(lane) => slot.org_lane = Some(lane),
+			Ok(lane) => {
+				slot.org_lane = Some(lane);
+				// PLAN-315 W4: notify subscribers that warm-load completed.
+				let elapsed_ms = started.elapsed().as_millis() as u64;
+				subscribe::publish_warm_completed(&handle, Lane::OrgMemory, elapsed_ms);
+			},
 			Err(e) => return Err(format!("warm-load org_memory lane: {e}")),
 		}
 	}
