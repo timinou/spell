@@ -82,6 +82,13 @@ pub mod code_path;
 // can reach `capabilities()`, `knowledge_request()`, and the Capabilities
 // type without going through NAPI.
 pub mod embedding_worker;
+
+// PLAN-315 W4 client-side push-subscribe handle. Lives next to
+// embedding_worker; opens its own socket connection (separate from the
+// shared request/response transport) and runs a background reader thread
+// that dispatches event frames to a user callback.
+#[cfg(unix)]
+pub mod knowledge_client;
 pub mod fd;
 pub mod fs_cache;
 pub mod glob;
