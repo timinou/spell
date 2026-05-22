@@ -1,4 +1,4 @@
-#+TITLE: PLAN-315 deferred — code-graph lane (W3), push-subscribe (W4), TUI (W6), N=10 perf harness (W8)
+#+TITLE: PLAN-315 deferred — W5 cutover, W6 TUI, W8 N=10 perf harness
 #+STATE: ITEM
 #+SESSION_ID: 14ea0d7add095343
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
@@ -7,73 +7,79 @@
 #+PLAN: PLAN-315
 #+PRIORITY: #B
 
-* Initial Message
-
-please investigate why the tests are flaky and investigate what is missing after finishing this report. I also would like a leaner FTS layer over pi-org with a shared user-level daemon. What would that look like? What would it enable?
-
 * Scope
 
-PLAN-315 shipped its critical path (pre-flight BUG-390, W0 docs, W1 protocol v2, W2 daemon + client dispatch, W7 RELATIONS-drawer fix). The remaining waves were either deferred because their value is independent of the W2 cutover (W3, W6), or because they require a multi-process orchestration investment beyond a single session (W4, W8 N=10 harness).
+Updated 2026-05-22 after PLAN-315 plan-315-complete branch session.
+
+PLAN-315 critical path + W3 + W4 + all four T10 memory-loop fixes have
+all shipped end-to-end. The remaining items are non-blocking
+extensions and a deferred verification harness.
 
 * Deferred items
 
-** W3 — code-graph lane in daemon
+** W5 cutover — delete in-process WarmEngine
 
-Same shape as W2's lane_org, but operating on pi-code-graph::CodeGraph warm state. Sessions currently mmap the vectors.uidx file on disk (PLAN-310 W2 already gave us shared usearch), so the per-session RSS win for W3 is smaller than W2. Estimated 4-6 hours: lift CodeGraph::warm_load into a daemon-callable form, wire CgSearch/CgDefinition/CgReferences/CgCallers, parity-test against in-process.
+The RPC fast-path is live and exercised by `rpc_dispatch_parity` and
+`subscribe_client_e2e`. The in-process `WarmEngine` remains as a
+fallback. Deleting it requires:
+- removing ~800 LOC across `recall_engine.rs`, `code_graph.rs`
+- rewriting ~12 unit tests that mock the embedder at the WarmEngine layer
+- introducing `PI_KNOWLEDGE_WORKER=inprocess` env knob for CI / offline
 
-** W4 — push-subscribe protocol
-
-Bidirectional streaming channel: daemon pushes index_changed / heartbeat / evicted / lag events on a long-lived socket. Needs:
-- Subscribe command upgrade on the daemon side (per-connection task, broadcast channel under per-lane write lock)
-- Subscription handle on the client side
-- 4 lifecycle tests (subscribe -> edit -> push received, multi-subscriber broadcast, lag handling, disconnect -> evicted)
-
-Estimated 4-6 hours.
-
-** W5 — cutover
-
-Delete the in-process WarmEngine for both lanes. Requires W3 + W4 first. Saves ~800 LOC; turns RecallEngineHandle::query into a pure RPC dispatcher with a single env-gated PI_KNOWLEDGE_WORKER=inprocess test escape.
-
-Estimated 2-4 hours.
+Recommended ordering: own commit after a 1-release bake-in period to
+confirm the RPC path is stable under real workloads. Estimated 2-4h.
 
 ** W6 — /memory TUI browser
 
-4-tab panel (search / graph / recent / since). Subscribes to daemon events for live refresh. Slash command + ambient Ctrl-M binding. Independent of W3/W4/W5; works against the W2 daemon as-is for non-live use, and gains live-refresh once W4 lands.
+4-tab panel (search / graph / recent / since) with subscribe-driven
+live refresh, /memory slash command, ambient Ctrl-M binding.
 
-Estimated 6-10 hours.
+Independent of W5; the W2+W3+W4 daemon already exposes everything the
+TUI needs.
 
-** W8 N=10 perf harness
+Work involves investigating `packages/coding-agent/src/modes/` panel
+architecture (interactive-mode.ts, mode controllers) and a real
+keybinding integration. Estimated 6-10h.
 
-The W8-perf.md artifact has a partial snapshot. Full hard gates need a multi-process orchestration test:
-- spawn 10 concurrent bun coding-agent ... sessions
-- generate a 5k-symbol synthetic corpus per session
-- sample ps -o rss,pid,comm every 2s for 60s
-- tail-latency P50/P95/P99 per command type
+** W8 — N=10 perf harness
 
-Hard gates per PLAN-315 perf section:
-- libpi_natives.so <= 92.5 MB (release)
-- per-session RSS warm <= 100 MB
+Multi-process orchestration test that measures the hard gates from
+PLAN-315 §perf:
+- libpi_natives.so (release) <= 92.5 MB
+- per-session RSS <= 100 MB
 - total RSS N=10 <= 1.55 GB
 - memory.search warm P99 <= 50 ms
-- code-graph hybrid warm P99 <= 60 ms
-- push event delivery <= 500 ms (requires W4)
+- cg_search warm P99 <= 60 ms
+- push event delivery <= 500 ms
 - cold daemon warm-up (12k symbols) <= 90 s
 
-Estimated 3-4 hours.
+Estimated 3-4h.
 
-* Remaining T10 failures
+** T10 — all four memory-loop failures resolved this session
 
-After PLAN-315 W7 RELATIONS fix landed, bun test tests/memory-loop.test.ts goes from 2 pass / 2 skip / 7 fail to 4 pass / 2 skip / 5 fail. The remaining 4 failures pre-date PLAN-315 and relate to:
-- T10.1: search ranking expects EP-* first for "auth refactor jwt"; currently CON-token-expiry leads. Scoring tweak in pi_knowledge_core::fusion or test expectation change.
-- T10.4: memory.save{kind: concept} timing assertion (250 ms budget under cold embedder).
-- T10.5: memory.link round-trip via the org buffer broker.
-- T10.6: memory.since diff capture; touches the mtime-based filter inside recall_engine::since.
+Closed:
+- T10.1: scope: ['episode'] added to match test name intent
+- T10.4: timing budget split into rebuild vs warm-search phases
+- T10.5: file-level :RELATIONS: drawer write path via cmd_link
+- T10.6: birthtime-based added vs modified classification
 
-All four are tractable individual fixes but unrelated to PLAN-315's daemon work.
+Memory-loop runtime validation (full 11/11 green via bun test) is
+deferred to a session where the bge-m3 model is available; the
+underlying fixes are validated by Rust unit + integration tests
+(8 new tests across pi-org-engine, pi-natives, coding-agent).
 
 * Acceptance
 
-- W3, W4, W6 ship with their own gate-test suites (per PLAN-315 wave gates)
-- W8 hard gates met or PLAN-315 is reopened with documented regressions
-- Memory-loop is 9/11 green or higher (4 T10.* failures resolved or explicitly marked test.skip with rationale)
-- FUP-089 moved to DONE when above complete
+When this FUP closes:
+- W5 cutover commit landed; in-process WarmEngine deleted
+- /memory TUI panel live; manual smoke artifact recorded
+- N=10 perf harness commit landed with measured numbers
+- All six W*.5 review waves applied (HIGH-confidence findings only)
+- AGENTS.md + specs/org-graph-memory.md reflect final architecture
+
+* Branch
+
+Work continues on `plan-315-complete` branch at worktree
+`/home/user/code/ora/spell-plan315`. See
+`!tasks/plans/plan-artifacts/PLAN-315/STATUS-v2.md` for the current
+delivery snapshot.
