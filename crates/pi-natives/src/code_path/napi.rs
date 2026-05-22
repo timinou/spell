@@ -173,7 +173,7 @@ fn map_edit_error_to_diagnostic(e: pi_code_engine::CodeEngineError) -> Diagnosti
 	diagnostic_to_dto(pi_code_path::types::Diagnostic {
 		variant,
 		message: e.to_string(),
-		span:    None,
+		span: None,
 	})
 }
 
@@ -182,12 +182,9 @@ fn map_edit_error_to_diagnostic(e: pi_code_engine::CodeEngineError) -> Diagnosti
 /// the current bytes (or mark "didn't exist"). Best-effort:
 /// unresolvable paths are skipped silently — the loop will surface
 /// them as runtime diagnostics.
-pub fn snapshot_targets(
-	ops: &[Op],
-	cp: &CodePath,
-	root: &std::path::Path,
-) -> Vec<FileSnapshot> {
-	let mut paths: std::collections::BTreeSet<std::path::PathBuf> = std::collections::BTreeSet::new();
+pub fn snapshot_targets(ops: &[Op], cp: &CodePath, root: &std::path::Path) -> Vec<FileSnapshot> {
+	let mut paths: std::collections::BTreeSet<std::path::PathBuf> =
+		std::collections::BTreeSet::new();
 
 	if let Some(p) = code_path_to_fs_path(cp, root) {
 		paths.insert(p);
@@ -198,10 +195,13 @@ pub fn snapshot_targets(
 		}
 	}
 
-	paths.into_iter().map(|path| {
-		let prior = std::fs::read(&path).ok();
-		FileSnapshot { path, prior }
-	}).collect()
+	paths
+		.into_iter()
+		.map(|path| {
+			let prior = std::fs::read(&path).ok();
+			FileSnapshot { path, prior }
+		})
+		.collect()
 }
 
 // ── Task options (owned, Send) ───────────────────────────────────
@@ -234,7 +234,11 @@ impl CodePathTaskOptions {
 	/// Per PLAN-310: threaded through every URI resolution path.
 	pub fn session_context(&self) -> Option<pi_code_path::SessionContext> {
 		let root = self.root.as_deref()?;
-		let home = self.home.clone().or_else(|| std::env::var("HOME").ok()).unwrap_or_default();
+		let home = self
+			.home
+			.clone()
+			.or_else(|| std::env::var("HOME").ok())
+			.unwrap_or_default();
 		let mut ctx = pi_code_path::SessionContext::new(root, home);
 		if let Some(dir) = &self.session_dir {
 			ctx = ctx.with_session_dir(dir);
@@ -450,7 +454,6 @@ pub fn execute_code_path_inner(
 
 	let pi_token = CancellationToken::new();
 
-
 	// ── Edit command branch ──────────────────────────────────────
 	if opts.command == "edit" {
 		use pi_code_engine::buffer::TextEdit;
@@ -488,13 +491,13 @@ pub fn execute_code_path_inner(
 					Ok(op) => parsed.push(op),
 					Err(e) => {
 						return Ok(vec![CodePathChunk {
-							nodes: vec![],
+							nodes:       vec![],
 							diagnostics: vec![DiagnosticDto {
 								variant: "parse_error".to_string(),
 								message: format!("invalid action JSON: {e}"),
 								span:    None,
 							}],
-							done:    true,
+							done:        true,
 						}]);
 					},
 				}
@@ -561,135 +564,140 @@ pub fn execute_code_path_inner(
 					.unwrap_or_default()
 				})
 				.collect();
-			let result = crate::buffer_registry()
-				.edit_transaction_with_delete(
-					opts.session_id.as_deref(),
-					&path,
-					&code_paths,
-					|buf| {
-						let mut group_outcomes = Vec::new();
-						let mut should_delete = false;
-						for op in &group_ops {
-							match op {
-								Op::FileCreate { target: _, content, force } => {
-									if path.exists() && !force {
-										return Err(pi_code_engine::CodeEngineError::Edit(format!(
-											"file already exists: {}",
-											path.display()
-										)));
-									}
-									let text = content.join("\n");
-									let current = buf.source();
-									if current != text {
-										buf.edit_batch(vec![TextEdit {
-											start_byte:   0,
-											old_end_byte: current.len(),
-											new_text:     text,
-										}])?;
-									}
-									group_outcomes.push(MutationOutcome {
-										edit_count:     1,
-										diff:           None,
-										created:        !path.exists(),
-										target_summary: Some(path.to_string_lossy().to_string()),
-									});
-								},
-								Op::FileWrite { target: _, content, force: _ } => {
-									let text = content.join("\n");
-									let current = buf.source();
-									if current != text {
-										buf.edit_batch(vec![TextEdit {
-											start_byte:   0,
-											old_end_byte: current.len(),
-											new_text:     text,
-										}])?;
-									}
-									group_outcomes.push(MutationOutcome {
-										edit_count:     1,
-										diff:           None,
-										created:        !path.exists(),
-										target_summary: Some(path.to_string_lossy().to_string()),
-									});
-								},
-								Op::FileDelete { target: _ } => {
-									if !path.exists() {
-										return Err(pi_code_engine::CodeEngineError::Edit(format!(
-											"file not found: {}",
-											path.display()
-										)));
-									}
-									let current = buf.source();
-									if !current.is_empty() {
-										buf.edit_batch(vec![TextEdit {
-											start_byte:   0,
-											old_end_byte: current.len(),
-											new_text:     String::new(),
-										}])?;
-									}
-									should_delete = true;
-									group_outcomes.push(MutationOutcome {
-										edit_count:     1,
-										diff:           None,
-										created:        false,
-										target_summary: Some(path.to_string_lossy().to_string()),
-									});
-								},
-								Op::FileAppend { .. }
-								| Op::FilePrepend { .. }
-								| Op::FilePatch { .. }
-								| Op::LineReplace { .. }
-								| Op::LineInsert { .. }
-								| Op::LineAppend { .. }
-								| Op::LinePrepend { .. } => {
-									let current = buf.source();
-									let (new_text, mut outcome) = match pi_code_path::dialects::text::mutation::apply_to_text(op, &current) {
+			let result = crate::buffer_registry().edit_transaction_with_delete(
+				opts.session_id.as_deref(),
+				&path,
+				&code_paths,
+				|buf| {
+					let mut group_outcomes = Vec::new();
+					let mut should_delete = false;
+					for op in &group_ops {
+						match op {
+							Op::FileCreate { target: _, content, force } => {
+								if path.exists() && !force {
+									return Err(pi_code_engine::CodeEngineError::Edit(format!(
+										"file already exists: {}",
+										path.display()
+									)));
+								}
+								let text = content.join("\n");
+								let current = buf.source();
+								if current != text {
+									buf.edit_batch(vec![TextEdit {
+										start_byte:   0,
+										old_end_byte: current.len(),
+										new_text:     text,
+									}])?;
+								}
+								group_outcomes.push(MutationOutcome {
+									edit_count:     1,
+									diff:           None,
+									created:        !path.exists(),
+									target_summary: Some(path.to_string_lossy().to_string()),
+								});
+							},
+							Op::FileWrite { target: _, content, force: _ } => {
+								let text = content.join("\n");
+								let current = buf.source();
+								if current != text {
+									buf.edit_batch(vec![TextEdit {
+										start_byte:   0,
+										old_end_byte: current.len(),
+										new_text:     text,
+									}])?;
+								}
+								group_outcomes.push(MutationOutcome {
+									edit_count:     1,
+									diff:           None,
+									created:        !path.exists(),
+									target_summary: Some(path.to_string_lossy().to_string()),
+								});
+							},
+							Op::FileDelete { target: _ } => {
+								if !path.exists() {
+									return Err(pi_code_engine::CodeEngineError::Edit(format!(
+										"file not found: {}",
+										path.display()
+									)));
+								}
+								let current = buf.source();
+								if !current.is_empty() {
+									buf.edit_batch(vec![TextEdit {
+										start_byte:   0,
+										old_end_byte: current.len(),
+										new_text:     String::new(),
+									}])?;
+								}
+								should_delete = true;
+								group_outcomes.push(MutationOutcome {
+									edit_count:     1,
+									diff:           None,
+									created:        false,
+									target_summary: Some(path.to_string_lossy().to_string()),
+								});
+							},
+							Op::FileAppend { .. }
+							| Op::FilePrepend { .. }
+							| Op::FilePatch { .. }
+							| Op::LineReplace { .. }
+							| Op::LineInsert { .. }
+							| Op::LineAppend { .. }
+							| Op::LinePrepend { .. } => {
+								let current = buf.source();
+								let (new_text, mut outcome) =
+									match pi_code_path::dialects::text::mutation::apply_to_text(op, &current)
+									{
 										Some(Ok(r)) => r,
-										Some(Err(d)) => return Err(pi_code_engine::CodeEngineError::Edit(d.message)),
-										None => return Err(pi_code_engine::CodeEngineError::Edit(
-											"text resolver does not support this op".to_string()
-										)),
+										Some(Err(d)) => {
+											return Err(pi_code_engine::CodeEngineError::Edit(d.message));
+										},
+										None => {
+											return Err(pi_code_engine::CodeEngineError::Edit(
+												"text resolver does not support this op".to_string(),
+											));
+										},
 									};
-									if current != new_text {
-										buf.edit_batch(vec![TextEdit {
-											start_byte:   0,
-											old_end_byte: current.len(),
-											new_text,
-										}])?;
-									}
-									outcome.target_summary = Some(path.to_string_lossy().to_string());
-									group_outcomes.push(outcome);
-								},
-								Op::CssRenameClassToken { .. }
-								| Op::CssRenameIdToken { .. }
-								| Op::CssRenameCustomProp { .. }
-								| Op::CssRemoveDeadStyle { .. } => {
-									let outcome = css_resolver
-										.apply_to_buffer(buf, op)
-										.map_err(|d| pi_code_engine::CodeEngineError::Edit(d.message))?;
-									group_outcomes.push(outcome);
-								},
-								Op::HeadingPromote { .. }
-								| Op::HeadingDemote { .. }
-								| Op::HeadingReplaceBlock { .. } => {
-									let outcome = heading_resolver
-										.apply_to_buffer(buf, op)
-										.map_err(|d| pi_code_engine::CodeEngineError::Edit(d.message))?;
-									group_outcomes.push(outcome);
-								},
-								_ => {
-									let action_json =
-    						crate::code_path::code_resolver::mutation::op_to_code_buffer_action(op);
-									let outcome = code_resolver_arc
-										.apply_to_buffer(buf, op.target_codepath(), &action_json)
-										.map_err(|d| pi_code_engine::CodeEngineError::Edit(d.message))?;
-									group_outcomes.push(outcome);
-								},
-							}
+								if current != new_text {
+									buf.edit_batch(vec![TextEdit {
+										start_byte: 0,
+										old_end_byte: current.len(),
+										new_text,
+									}])?;
+								}
+								outcome.target_summary = Some(path.to_string_lossy().to_string());
+								group_outcomes.push(outcome);
+							},
+							Op::CssRenameClassToken { .. }
+							| Op::CssRenameIdToken { .. }
+							| Op::CssRenameCustomProp { .. }
+							| Op::CssRemoveDeadStyle { .. } => {
+								let outcome = css_resolver
+									.apply_to_buffer(buf, op)
+									.map_err(|d| pi_code_engine::CodeEngineError::Edit(d.message))?;
+								group_outcomes.push(outcome);
+							},
+							Op::HeadingPromote { .. }
+							| Op::HeadingDemote { .. }
+							| Op::HeadingReplaceBlock { .. } => {
+								let outcome = heading_resolver
+									.apply_to_buffer(buf, op)
+									.map_err(|d| pi_code_engine::CodeEngineError::Edit(d.message))?;
+								group_outcomes.push(outcome);
+							},
+							_ => {
+								let action_json =
+									crate::code_path::code_resolver::mutation::op_to_code_buffer_action(op);
+								let outcome = code_resolver_arc
+									.apply_to_buffer(buf, op.target_codepath(), &action_json)
+									.map_err(|d| pi_code_engine::CodeEngineError::Edit(d.message))?;
+								group_outcomes.push(outcome);
+							},
 						}
-						Ok((group_outcomes, should_delete))
-					},
-				);
-		match result {
+					}
+					Ok((group_outcomes, should_delete))
+				},
+			);
+			match result {
 				Ok((_, group_outcomes)) => outcomes.extend(group_outcomes),
 				Err(e) => {
 					let mut diag = map_edit_error_to_diagnostic(e);
@@ -831,13 +839,28 @@ pub fn execute_code_path_inner(
 		},
 		Locator::Uri(uri) => {
 			// PLAN-310: dispatch via kernel SchemeRegistry.
-			let registry = crate::code_path::runtime_schemes::scheme_registry_for_session(session_ctx.as_ref());
+			let registry =
+				crate::code_path::runtime_schemes::scheme_registry_for_session(session_ctx.as_ref());
 			let cancel_tok = pi_code_path::resolver::traits::CancellationToken::new();
 			match registry.resolve(uri, session_ctx.as_ref(), &cancel_tok) {
 				Ok(resolved) => {
 					let mut metadata = HashMap::new();
 					if let Some(mime) = &resolved.mime {
 						metadata.insert("mime".into(), serde_json::Value::String(mime.clone()));
+					}
+					if !resolved.notes.is_empty() {
+						metadata.insert(
+							"notes".into(),
+							serde_json::Value::Array(
+								resolved.notes.iter().map(|n| serde_json::Value::String(n.clone())).collect(),
+							),
+						);
+					}
+					if let Some(p) = &resolved.source_path {
+						metadata.insert(
+							"source_path".into(),
+							serde_json::Value::String(p.display().to_string()),
+						);
 					}
 					let kind = format!("§{}", uri.scheme);
 					let node = pi_code_path::types::NodeRef {
@@ -849,10 +872,10 @@ pub fn execute_code_path_inner(
 						diagnostics: vec![],
 					};
 					vec![node]
-				}
+				},
 				Err(d) => {
 					return Err(Error::from_reason(d.message));
-				}
+				},
 			}
 		},
 	};
@@ -957,8 +980,7 @@ fn is_outline_qualifier(cp: &CodePath) -> bool {
 
 /// Check if the CodePath has a `#diff` qualifier (routes to diff_qualifier).
 fn is_diff_qualifier(cp: &CodePath) -> bool {
-	cp.query.is_none()
-		&& cp.qualifier.as_ref().is_some_and(|q| q.name == "diff")
+	cp.query.is_none() && cp.qualifier.as_ref().is_some_and(|q| q.name == "diff")
 }
 
 /// Convert an FsLocator to a relative path string for the diff qualifier.
@@ -1028,12 +1050,13 @@ pub fn get_registered_extensions() -> Result<Vec<String>> {
 mod tests {
 	use std::path::PathBuf;
 
-	use super::*;
 	use pi_code_path::{
 		ActionContent,
 		ast::{CodePath, FsLocator, FsSegment, Locator},
 		op::{FileTarget, Op},
 	};
+
+	use super::*;
 	fn opts(target: impl Into<String>) -> CodePathTaskOptions {
 		CodePathTaskOptions {
 			command:            "resolve".to_string(),
@@ -1094,8 +1117,8 @@ mod tests {
 			gitignore: None,
 			artifact_threshold: None,
 			session_id: None,
-			home:               None,
-			session_dir:        None,
+			home: None,
+			session_dir: None,
 		}
 	}
 	#[test]
@@ -1524,8 +1547,10 @@ mod tests {
 
 	#[test]
 	fn snapshot_targets_includes_all_op_paths() {
-		use pi_code_path::ast::{FsLocator, FsSegment, Locator};
-		use pi_code_path::op::FileTarget;
+		use pi_code_path::{
+			ast::{FsLocator, FsSegment, Locator},
+			op::FileTarget,
+		};
 
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path();
@@ -1567,7 +1592,10 @@ mod tests {
 		];
 
 		let snaps = snapshot_targets(&ops, &cp, root);
-		let paths: Vec<_> = snaps.iter().map(|s| s.path.file_name().unwrap().to_str().unwrap()).collect();
+		let paths: Vec<_> = snaps
+			.iter()
+			.map(|s| s.path.file_name().unwrap().to_str().unwrap())
+			.collect();
 		assert!(paths.contains(&"a.txt"));
 		assert!(paths.contains(&"b.txt"));
 	}
