@@ -142,6 +142,14 @@ pub struct RecallHit {
 	pub excerpt:         Option<String>,
 	pub path_from_focus: Option<Vec<String>>,
 	pub why:             WhyHit,
+	/// Origin store. `"repo"` for the cwd-rooted knowledge dir,
+	/// `"personal"` for `~/.spell/personal/`. PLAN-310 W9.
+	#[serde(default = "default_source")]
+	pub source:          String,
+}
+
+fn default_source() -> String {
+	"repo".to_string()
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -525,7 +533,7 @@ pub fn recall(query: RecallQuery, ctx: &RecallContext) -> Result<Vec<RecallHit>>
 				graph_hops_from_focus: graph_depths.get(id.as_str()).copied(),
 			};
 
-			RecallHit { id, kind, score, title, excerpt, path_from_focus: None, why }
+			RecallHit { id, kind, score, title, excerpt, path_from_focus: None, why, source: "repo".to_string() }
 		})
 		.collect();
 

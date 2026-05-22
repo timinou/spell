@@ -941,11 +941,17 @@ fn cmd_remember(options: &Value) -> Result<Value> {
 			(file, id, slug)
 		},
 		"playbook" => {
+			// PLAN-310 W9: playbooks live in the user-global personal store,
+			// not per-repo. Use HOME-rooted path so a playbook written from
+			// repo A is discoverable from repo B (with `include_personal:true`).
 			let slug = make_slug(summary);
 			let id = format!("PB-{}", slug);
-			let file = repo_root
+			let home = std::env::var("HOME")
+				.map(std::path::PathBuf::from)
+				.map_err(|_| org_err("HOME not set; cannot resolve personal store"))?;
+			let file = home
 				.join(".spell")
-				.join("memory")
+				.join("personal")
 				.join("playbooks")
 				.join(format!("{}.org", slug));
 			(file, id, slug)
@@ -1800,15 +1806,27 @@ mod tests {
 	}
 
 	#[test]
-	fn remember_playbook_writes_slug_keyed_file_under_playbooks_dir() {
-		let dir = tempdir().expect("tempdir");
-		let result = remember(dir.path(), "playbook", "JWT Rotation Runbook");
+	fn remember_playbook_writes_slug_keyed_file_under_personal_store() {
+		// PLAN-310 W9: playbook goes to $HOME/.spell/personal/playbooks/, not repo-local.
+		// Override HOME to a tempdir to avoid touching the developer's real ~.
+		let home_override = tempdir().expect("home tempdir");
+		let repo_dir = tempdir().expect("repo tempdir");
+		let prev_home = std::env::var("HOME").ok();
+		// SAFETY: tests in this module run on a single thread by virtue of the
+		// repository's `cargo test --jobs 1` default; HOME is restored below.
+		unsafe { std::env::set_var("HOME", home_override.path()); }
+		let result = remember(repo_dir.path(), "playbook", "JWT Rotation Runbook");
+		if let Some(prev) = prev_home {
+			unsafe { std::env::set_var("HOME", prev); }
+		} else {
+			unsafe { std::env::remove_var("HOME"); }
+		}
 		assert_eq!(result["error"], json!(false), "remember playbook should succeed: {result}");
 		assert_eq!(result["output"]["id"], json!("PB-jwt-rotation-runbook"));
 		let file = result["output"]["file"].as_str().expect("file path str");
 		assert!(
-			file.contains(".spell/memory/playbooks/jwt-rotation-runbook.org"),
-			"playbook path: {file}"
+			file.contains(".spell/personal/playbooks/jwt-rotation-runbook.org"),
+			"playbook path under personal store: {file}"
 		);
 		let body = fs::read_to_string(file).expect("read playbook");
 		assert!(body.contains(":CUSTOM_ID: PB-jwt-rotation-runbook"));
