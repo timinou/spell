@@ -9,12 +9,13 @@
 //! This module:
 //!
 //! * Holds one `RecallEngineHandle` per `(canonical_repo_root)` in a static
-//!   `OnceLock` map, keeping the in-memory `SearchIndex` (BM25), the
-//!   usearch `VectorIndex`, the typed graph, and parsed items alive for
-//!   the process lifetime.
-//! * Detects staleness by comparing a `pi_workspace_cache::WorkspaceFingerprint`
-//!   (per-file size + mtime + git HEAD) against the in-memory copy on every
-//!   query (~5 ms walk for 1870 files).
+//!   `OnceLock` map, keeping the in-memory `SearchIndex` (BM25), the usearch
+//!   `VectorIndex`, the typed graph, and parsed items alive for the process
+//!   lifetime.
+//! * Detects staleness by comparing a
+//!   `pi_workspace_cache::WorkspaceFingerprint` (per-file size + mtime + git
+//!   HEAD) against the in-memory copy on every query (~5 ms walk for 1870
+//!   files).
 //! * Persists the warm state to `{recall cache}/{repo_hash}/{engine.bin,
 //!   bm25.bin, vec.uidx}` so a Spell restart hits the warm path immediately
 //!   without rebuilding.
@@ -45,7 +46,9 @@ use pi_knowledge_core::{
 	bm25::SearchIndex,
 	cache::KnowledgeMeta,
 	ingest::purge_if_stale,
-	recall::{Embedder, RecallContext, RecallDoc, RecallHit, RecallProfileRegistry, RecallQuery, recall},
+	recall::{
+		Embedder, RecallContext, RecallDoc, RecallHit, RecallProfileRegistry, RecallQuery, recall,
+	},
 	vec::{VectorEntry, VectorIndex, id_hash},
 };
 use pi_org_engine::{
@@ -206,9 +209,7 @@ pub fn get_or_create(
 	}
 	let ttl = idle_ttl();
 	for idx in (0..map.len()).rev() {
-		if now.duration_since(map[idx].last_used) > ttl
-			&& Arc::strong_count(&map[idx].handle) == 1
-		{
+		if now.duration_since(map[idx].last_used) > ttl && Arc::strong_count(&map[idx].handle) == 1 {
 			let evicted = map.remove(idx);
 			engine_log!(
 				"TTL evicted {} (idle {:?} > {:?})",
@@ -240,6 +241,42 @@ pub fn get_or_create(
 pub fn query(repo_root: &Path, query_args: RecallQuery) -> Result<Vec<RecallHit>, String> {
 	let handle = get_or_create(repo_root, None)?;
 	handle.query(query_args)
+}
+
+/// Open the repo handle on the embedding daemon if reachable, returning
+/// the JSON open response (`{ repo_handle, warm, status, lanes, ... }`).
+/// Non-blocking on the daemon side since PLAN-316: a cold repo returns
+/// immediately with `status: "warming"`.
+///
+/// Returns `Ok(None)` when the daemon doesn't speak the knowledge
+/// protocol; callers treat that as "feature unavailable, skip silently".
+pub fn warm(repo_root: &Path) -> Result<Option<serde_json::Value>, String> {
+	// Use the *non-init* probe: a startup `warm` call must never pay the
+	// 5–30 s bge-m3 model-load cost just to discover whether the daemon
+	// speaks the knowledge protocol. If init hasn't happened yet, return
+	// `None` so callers treat the feature as unavailable.
+	if !matches!(embedding_worker::try_knowledge_capable(), Some(true)) {
+		return Ok(None);
+	}
+	let handle = get_or_create(repo_root, None)?;
+	handle.warm_via_rpc().map(Some)
+}
+
+/// Read the current warm-load progress for a repo. The result is the
+/// `org_lane` block of the daemon `stats` response: `{status, progress?,
+/// error?}` where `progress = {phase, done, total, started_ms}`.
+///
+/// Returns `Ok(None)` when the daemon is unreachable or the protocol
+/// doesn't speak knowledge — callers should treat that as "warm" so the
+/// UI doesn't latch on a stale spinner.
+pub fn progress(repo_root: &Path) -> Result<Option<serde_json::Value>, String> {
+	// Non-init probe — same rationale as `warm`. Surfacing progress in
+	// the TUI must never block startup on a model load.
+	if !matches!(embedding_worker::try_knowledge_capable(), Some(true)) {
+		return Ok(None);
+	}
+	let handle = get_or_create(repo_root, None)?;
+	handle.progress_via_rpc().map(Some)
 }
 
 /// Drop the cached engine for a repo root. Mostly useful in tests.
@@ -396,6 +433,62 @@ impl RecallEngineHandle {
 			.map_err(|e| format!("rpc search hit deserialise: {e}"))
 	}
 
+	/// Open the daemon-side repo handle without performing any search.
+	/// Returns the daemon's full open response so callers can read the
+	/// `status` field (`warming|warm`). Cached after first call.
+	fn warm_via_rpc(&self) -> Result<serde_json::Value, String> {
+		self.open_rpc_response()
+	}
+
+	/// Read the current `org_lane` payload from the daemon `stats`
+	/// response for this repo's handle. The lane state machine on the
+	/// daemon side (PLAN-316) guarantees this read does not contend with
+	/// the warm-load worker.
+	fn progress_via_rpc(&self) -> Result<serde_json::Value, String> {
+		let handle = self.ensure_rpc_open()?;
+		let response =
+			embedding_worker::knowledge_request("stats", serde_json::json!({ "repo_handle": handle }))
+				.map_err(|e| format!("rpc stats: {e}"))?;
+		if response.get("ok") != Some(&serde_json::Value::Bool(true)) {
+			let err = response
+				.get("error")
+				.and_then(serde_json::Value::as_str)
+				.unwrap_or("unknown daemon error");
+			return Err(format!("rpc stats failed: {err}"));
+		}
+		Ok(response
+			.get("org_lane")
+			.cloned()
+			.unwrap_or_else(|| serde_json::json!({ "status": "warm" })))
+	}
+
+	/// Issue an `open` RPC and return the full response object. Caches
+	/// the resulting `repo_handle` like `ensure_rpc_open` does.
+	fn open_rpc_response(&self) -> Result<serde_json::Value, String> {
+		let response = embedding_worker::knowledge_request(
+			"open",
+			serde_json::json!({
+				"repo_root": self.repo_root,
+				"lanes": ["org_memory"],
+			}),
+		)
+		.map_err(|e| format!("rpc open: {e}"))?;
+		if response.get("ok") != Some(&serde_json::Value::Bool(true)) {
+			let err = response
+				.get("error")
+				.and_then(serde_json::Value::as_str)
+				.unwrap_or("unknown daemon error");
+			return Err(format!("rpc open failed: {err}"));
+		}
+		if let Some(h) = response
+			.get("repo_handle")
+			.and_then(serde_json::Value::as_str)
+		{
+			*self.rpc_handle.lock() = Some(h.to_string());
+		}
+		Ok(response)
+	}
+
 	fn ensure_rpc_open(&self) -> Result<String, String> {
 		let mut cached = self.rpc_handle.lock();
 		if let Some(h) = cached.as_ref() {
@@ -505,7 +598,7 @@ impl RecallEngineHandle {
 			.map(|item| item.id.as_str())
 			.collect::<std::collections::HashSet<_>>()
 			.len();
-if bm25.doc_count() < unique_id_count {
+		if bm25.doc_count() < unique_id_count {
 			engine_log!(
 				"bm25/items mismatch (bm25={}, unique_ids={unique_id_count}); will rebuild",
 				bm25.doc_count(),
@@ -515,14 +608,7 @@ if bm25.doc_count() < unique_id_count {
 		let items: Vec<OrgItem> = entry.items.into_iter().map(OrgItem::from).collect();
 		let docs = project_docs(&items);
 		let graph = build_typed_graph(&items);
-		Some(WarmEngine {
-			fingerprint: entry.fingerprint,
-			items,
-			docs,
-			bm25,
-			vec,
-			graph,
-		})
+		Some(WarmEngine { fingerprint: entry.fingerprint, items, docs, bm25, vec, graph })
 	}
 
 	fn full_rebuild(&self, fingerprint: WorkspaceFingerprint) -> Result<WarmEngine, String> {
@@ -537,7 +623,12 @@ if bm25.doc_count() < unique_id_count {
 	fn save_warm(&self, warm: &WarmEngine) -> Result<(), String> {
 		let entry = EngineCacheEntry {
 			fingerprint: warm.fingerprint.clone(),
-			items:       warm.items.iter().cloned().map(PersistedOrgItem::from).collect(),
+			items:       warm
+				.items
+				.iter()
+				.cloned()
+				.map(PersistedOrgItem::from)
+				.collect(),
 		};
 		save_bincode(&self.cache_dir.join(ENGINE_CACHE_FILE), &entry)
 			.map_err(|e| format!("save engine.bin: {e}"))?;
@@ -616,7 +707,12 @@ fn scan_items(repo_root: &Path) -> Vec<OrgItem> {
 				continue;
 			};
 			let Ok(parsed) = pi_org_engine::buffer::extract_items_from_source(
-				&source, &[], "", "", &path_str, false,
+				&source,
+				&[],
+				"",
+				"",
+				&path_str,
+				false,
 			) else {
 				continue;
 			};
@@ -633,11 +729,7 @@ fn project_docs(items: &[OrgItem]) -> Vec<RecallDoc> {
 		.iter()
 		.map(|item| RecallDoc {
 			id:    item.id.clone(),
-			kind:  item
-				.properties
-				.get("KIND")
-				.cloned()
-				.unwrap_or_default(),
+			kind:  item.properties.get("KIND").cloned().unwrap_or_default(),
 			title: item.title.clone(),
 			body:  item.body.clone(),
 		})
@@ -661,8 +753,7 @@ fn walk_org_files(dir: &Path) -> Vec<PathBuf> {
 }
 
 fn build_vec_index(items: &[OrgItem]) -> Result<VectorIndex, String> {
-	let mut vec = VectorIndex::new(DIM, items.len().max(1))
-		.map_err(|e| format!("vec init: {e}"))?;
+	let mut vec = VectorIndex::new(DIM, items.len().max(1)).map_err(|e| format!("vec init: {e}"))?;
 	if items.is_empty() {
 		return Ok(vec);
 	}
@@ -889,11 +980,7 @@ mod tests {
  	}
 
 	fn q(text: &str) -> RecallQuery {
-		RecallQuery {
-			text: Some(text.into()),
-			limit: 10,
-			..Default::default()
-		}
+		RecallQuery { text: Some(text.into()), limit: 10, ..Default::default() }
 	}
 
 	#[test]
@@ -911,11 +998,7 @@ mod tests {
 
 		let canon = canonical_root(repo.path());
 		let expected = repo_cache_dir_at(&canon, cache.path()).join(BM25_CACHE_FILE);
-		assert!(
-			expected.is_file(),
-			"override bm25 file missing at {}",
-			expected.display(),
-		);
+		assert!(expected.is_file(), "override bm25 file missing at {}", expected.display(),);
 		forget(repo.path());
 	}
 
@@ -977,11 +1060,7 @@ mod tests {
 
 		let canon = canonical_root(repo.path());
 		let bm25_path = repo_cache_dir_at(&canon, cache.path()).join(BM25_CACHE_FILE);
-		assert!(
-			bm25_path.is_file(),
-			"precondition: bm25.bin must exist at {}",
-			bm25_path.display(),
-		);
+		assert!(bm25_path.is_file(), "precondition: bm25.bin must exist at {}", bm25_path.display(),);
 		fs::remove_file(&bm25_path).unwrap();
 
 		let hits = get_or_create(repo.path(), Some(cache.path()))
@@ -1032,11 +1111,7 @@ mod tests {
 		let _no_worker = force_no_worker("stale-fingerprint");
 		let repo = tempdir().unwrap();
 		let tasks = repo.path().join("!tasks");
-		write_item(
-			&tasks,
-			"D.org",
-			"* TODO D first\n:PROPERTIES:\n:CUSTOM_ID: D-1\n:END:\n",
-		);
+		write_item(&tasks, "D.org", "* TODO D first\n:PROPERTIES:\n:CUSTOM_ID: D-1\n:END:\n");
 		let cache = tempdir().unwrap();
 		let canon = canonical_root(repo.path());
 		let engine_bin = repo_cache_dir_at(&canon, cache.path()).join(ENGINE_CACHE_FILE);
@@ -1064,10 +1139,7 @@ mod tests {
 			"after edit, recall should surface new content; got {hits2:?}"
 		);
 		let mtime2 = fs::metadata(&engine_bin).unwrap().modified().unwrap();
-		assert!(
-			mtime2 > mtime1,
-			"engine.bin mtime should advance after stale-fingerprint rebuild"
-		);
+		assert!(mtime2 > mtime1, "engine.bin mtime should advance after stale-fingerprint rebuild");
 		forget(repo.path());
 	}
 
@@ -1078,7 +1150,9 @@ mod tests {
 		write_item(
 			&repo.path().join("!tasks"),
 			"F.org",
-			"* TODO F\n:PROPERTIES:\n:CUSTOM_ID: F-1\n:END:\n:RELATIONS:\nABOUT: G-1\nINVOLVED: H-1\n:END:\n* TODO G\n:PROPERTIES:\n:CUSTOM_ID: G-1\n:END:\n* TODO H\n:PROPERTIES:\n:CUSTOM_ID: H-1\n:END:\n",
+			"* TODO F\n:PROPERTIES:\n:CUSTOM_ID: F-1\n:END:\n:RELATIONS:\nABOUT: G-1\nINVOLVED: \
+			 H-1\n:END:\n* TODO G\n:PROPERTIES:\n:CUSTOM_ID: G-1\n:END:\n* TODO \
+			 H\n:PROPERTIES:\n:CUSTOM_ID: H-1\n:END:\n",
 		);
 		let cache = tempdir().unwrap();
 
@@ -1091,10 +1165,10 @@ mod tests {
 		let hits = get_or_create(repo.path(), Some(cache.path()))
 			.unwrap()
 			.query(RecallQuery {
-				text:       None,
-				focus:      Some("F-1".into()),
+				text: None,
+				focus: Some("F-1".into()),
 				graph_hops: 1,
-				limit:      10,
+				limit: 10,
 				..Default::default()
 			})
 			.unwrap();
@@ -1160,10 +1234,7 @@ mod tests {
 			.query(q("B"))
 			.unwrap();
 
-		assert!(
-			!engines_contains(repo_a.path()),
-			"A should have been TTL-evicted on B's miss"
-		);
+		assert!(!engines_contains(repo_a.path()), "A should have been TTL-evicted on B's miss");
 		assert!(engines_contains(repo_b.path()), "B should be cached");
 
 		forget(repo_a.path());
@@ -1190,11 +1261,7 @@ mod tests {
 
 		let held_a = get_or_create(repo_a.path(), Some(cache.path())).unwrap();
 		held_a.query(q("A")).unwrap();
-		assert_eq!(
-			Arc::strong_count(&held_a),
-			2,
-			"precondition: held_a + ENGINES = 2 strong refs"
-		);
+		assert_eq!(Arc::strong_count(&held_a), 2, "precondition: held_a + ENGINES = 2 strong refs");
 
 		std::thread::sleep(Duration::from_millis(100));
 
@@ -1297,14 +1364,9 @@ mod tests {
 			hits.iter().any(|h| h.id == "S-1"),
 			"after schema-bump invalidation, recall must still surface S-1; got {hits:?}",
 		);
-		assert!(
-			meta_path.is_file(),
-			"rebuild must re-persist meta.bin at {}",
-			meta_path.display(),
-		);
+		assert!(meta_path.is_file(), "rebuild must re-persist meta.bin at {}", meta_path.display(),);
 		// Verify the new meta has the current schema.
-		let fresh: KnowledgeMeta =
-			bincode::deserialize(&std::fs::read(&meta_path).unwrap()).unwrap();
+		let fresh: KnowledgeMeta = bincode::deserialize(&std::fs::read(&meta_path).unwrap()).unwrap();
 		assert_eq!(
 			fresh.schema_version,
 			pi_knowledge_core::cache::KNOWLEDGE_SCHEMA_VERSION,
@@ -1329,8 +1391,7 @@ mod tests {
 			.query(q("K"))
 			.unwrap();
 		let canon = canonical_root(repo.path());
-		let meta_path =
-			repo_cache_dir_at(&canon, cache.path()).join(META_CACHE_FILE);
+		let meta_path = repo_cache_dir_at(&canon, cache.path()).join(META_CACHE_FILE);
 
 		// Forge meta with a different embedder model.
 		let fp = compute_fingerprint(repo.path()).unwrap();
@@ -1361,10 +1422,7 @@ mod tests {
 		// surfaces all init errors as `Err(String)` and the empty-corpus
 		// fast-path returns a usable empty index without invoking the worker.
 		let result = build_vec_index(&[]);
-		assert!(
-			result.is_ok(),
-			"empty corpus must yield Ok, not panic; got {result:?}",
-		);
+		assert!(result.is_ok(), "empty corpus must yield Ok, not panic; got {result:?}",);
 		assert!(result.unwrap().is_empty());
 	}
 

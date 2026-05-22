@@ -10,6 +10,7 @@ import type { CanvasTaskManager } from "../orchestrators/canvas-task-manager";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
+import type { SubagentTracker } from "../task/subagent-tracker";
 import type { SingleResult } from "../task/types";
 import type { ExitPlanModeDetails } from "../tools";
 import type { TodoGroup, TodoItem } from "../tools/todo-write";
@@ -57,6 +58,7 @@ export interface InteractiveModeContext {
 	mcpManager?: MCPManager;
 	taskManager?: CanvasTaskManager;
 	eventBus?: EventBus;
+	subagentTracker?: SubagentTracker;
 	lspServers?: Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }>;
 
 	// State

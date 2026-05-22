@@ -1,0 +1,33 @@
+#+TITLE: sync NAPI bindings (executeCodeBuffer, executeOrg) block event loop and freeze TUI
+#+STATE: ITEM
+#+SESSION_ID: 14ea14814559e822
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T15-17-13-109Z_14ea14814559e822.jsonl]]
+#+CUSTOM_ID: BUG-393-sync-napi-bindings-executecodebuffer-exe
+
+* Initial Message
+
+do a deep, critical review of the work just done, and identify any sources of lag or undue TUI renders. the TUI stil feels a bit slow.
+
+* Symptom
+
+When a Rust-backed tool runs (edit, create, memory, get with certain
+qualifiers), the entire TUI interface hangs for the duration of the
+Rust call. Cursor doesn't blink, input is buffered, renders stall.
+
+* Root cause
+
+Two NAPI bindings are sync (return ~Result<Value>~ directly):
+- ~executeCodeBuffer~ (crates/pi-natives/src/code_buffer.rs:1874)
+- ~executeOrg~ (crates/pi-natives/src/org_buffer.rs:1361)
+
+A sync NAPI call holds the JS thread for its entire duration. For
+parsing/diff/format operations on non-trivial files, this can easily
+be 50-500ms — long enough to manifest as UI hang.
+
+In contrast, ~executeCodePath~ uses ~AsyncTask~ → runs on libuv's
+blocking thread pool → JS event loop free during the call.
+
+* Fix shape
+
+Convert both bindings to ~AsyncTask~ using crate::task::blocking pattern.
+Update 30+ callers from sync to await. Same pattern as executeCodePath.

@@ -605,6 +605,11 @@ export class AgentSession {
 		return this.#ttsrAbortPending;
 	}
 
+	/** Read-only handle to the session's async job manager (for viewers / status panels). */
+	getAsyncJobManager(): AsyncJobManager | undefined {
+		return this.#asyncJobManager;
+	}
+
 	getAsyncJobSnapshot(options?: { recentLimit?: number }): AsyncJobSnapshot | null {
 		if (!this.#asyncJobManager) return null;
 		const running = this.#asyncJobManager.getRunningJobs().map(job => ({

@@ -810,6 +810,8 @@ export class SelectorController {
 				eventBus: this.ctx.eventBus!,
 				ui: this.ctx.ui,
 				cwd: this.ctx.sessionManager.getCwd(),
+				subagentTracker: this.ctx.subagentTracker,
+				asyncJobManager: this.ctx.session.getAsyncJobManager(),
 				onClose: () => {
 					viewer.dispose();
 					done();

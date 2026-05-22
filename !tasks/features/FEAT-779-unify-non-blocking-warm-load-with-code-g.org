@@ -1,0 +1,49 @@
+#+TITLE: Unify non-blocking warm-load with code-graph lane and push-subscribe
+#+STATE: DONE
+#+SESSION_ID: 14eba61f2c6d091c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan315/2026-05-22T20-31-54-545Z_14eba61f2c6d091c.jsonl]]
+#+CUSTOM_ID: FEAT-779-unify-non-blocking-warm-load-with-code-g
+#+COMPLETION_HASH: ebbef2b95178e69c
+
+* Initial Message
+
+yo dude look at the current merge and what each does, then explain where the conflicts are. explain before you do anythign
+
+Merge PLAN-315 W3/W4 (code-graph lane + push-subscribe) with PLAN-316 (non-blocking warm-load) in repo_cache.rs.
+
+Currently both branches modify the same file incompatibly:
+- PLAN-316 adds OrgLaneState state machine (Cold→Warming→Warm|Error) with background worker, condvar, WarmProgress atomics
+- PLAN-315 W3 adds CodeLane (Option<CodeLane>) with synchronous warm-load
+- PLAN-315 W4 adds subscribe::publish_warm_completed / publish_evicted calls
+
+Unified design:
+1. RepoSlot carries org_state: Arc<OrgLaneState> (from 316) + code_lane: Arc<OnceLock<Result<CodeLane, String>>> (from 315 W3, async-ified)
+2. open() releases slots lock before any warm-load; both lanes spawn background workers
+3. subscribe events fire at finalization points (warm_completed for both lanes, evicted in evict_lru)
+4. with_org_lane (316, condvar-blocking) and with_code_lane (315 W3, OnceLock-blocking) coexist
+5. open_with_embedder test seam preserved (316); CodeGraph ignores embedder param
+
+See [[id:PLAN-315]] and [[id:PLAN-316]] for full context.
+
+NOTE [2026-05-22]: Merged PLAN-315 W3/W4 (code-graph lane + push-subscribe) with PLAN-316 (non-blocking warm-load).
+
+Resolved 3 conflict files:
+- .spell/memory/episodes/2026-05-22.org: kept all episodes from both sides
+- crates/pi-knowledge-worker/src/main.rs: kept HEAD's mod declarations, fixed imports
+- crates/pi-knowledge-worker/src/repo_cache.rs: unified design
+
+Unified repo_cache.rs design:
+- OrgLaneState (316) for org-memory: Cold→Warming→Warm|Error state machine, condvar, background worker
+- CodeLaneState (new) for code-graph: OnceLock-based, warming guard via Mutex<bool>, background worker
+- Both lanes release slots lock before warm-load
+- subscribe events fire at warm_completed (both lanes) and eviction points
+- with_org_lane + with_code_lane coexist, both check lane membership before blocking
+- open_with_embedder test seam preserved
+
+Test results: 62/62 passing (31 lib + 4 main_tests + 4 daemon + 15 protocol_v2 + 1 subscribe_e2e + 7 warm_progress)
+
+Bugs found and fixed during implementation:
+1. with_code_lane would hang forever via OnceLock::wait() when code_graph lane never opened
+2. with_org_lane had same hang-risk if org_memory lane never opened (condvar waits forever without notification)
+3. subscribe.rs module doc parsed as Rust doc-test (fixed with ```text fence)
+4. lib.rs needed lane_code + subscribe module exports for repo_cache imports

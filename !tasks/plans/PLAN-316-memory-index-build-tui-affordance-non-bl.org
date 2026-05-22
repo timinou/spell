@@ -1,0 +1,224 @@
+#+TITLE: Memory index build TUI affordance + non-blocking warm
+#+STATE: DONE
+#+SESSION_ID: 14eb4e97aabcb79a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-22T14-09-29-258Z_14eb4e97aabcb79a.jsonl]]
+#+CUSTOM_ID: PLAN-316-memory-index-build-tui-affordance-non-bl
+#+COMPLETION_HASH: a11a8c4ce4edc585
+
+* Initial Message
+
+/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-22T14-00-50-647Z_14eb4c9d35c8638c.jsonl
+ ID: 14eb4c9d35c8638c
+
+
+the memory call (search text:SubagentViewer hydrate tracker mount alt+j jobs) hung the whole thing for a while. why?
+
+* Initial Message
+The memory.search call hung for ~4 minutes on a cold cache. Daemon was building the recall warm state inline under the slots mutex; ~2700 .org files re-embedded sequentially. User wants:
+1. Non-blocking warm so the daemon doesn't freeze on cold first-call (TDD, thoroughly tested).
+2. Spinner suffix on memory tool calls when building.
+3. Status-line widget (core controller) showing background indexing is in progress.
+4. Eager warm on session_start so most sessions never see the spinner.
+
+* Scope
+
+In:
+- Refactor `crates/pi-knowledge-worker/src/repo_cache.rs` and `lane_org.rs` so `open` registers a slot in `Warming` state and schedules `warm_load` on a background thread; slots mutex is dropped during warm-load.
+- Add a per-slot `WarmProgress { phase: AtomicU8, done: AtomicUsize, total: AtomicUsize, started_at: SystemTime }` published from `lane_org::warm_load_with_progress`.
+- Extend `stats` JSON to include the slot's lane state + progress counters when warming.
+- Add a new lightweight daemon command (`recall_warm`) wired through `crates/pi-natives/src/recall_engine.rs` so a fire-and-forget warm can be triggered from session_start without blocking Node.
+- Surface progress to JS: add `recall_stats` command on the natives side returning `{ status, phase, done, total, started_ms }` for the active repo.
+- Add `MemoryStatusController` to `packages/coding-agent/src/modes/controllers/` that polls `recall_stats` every 2s and writes a hook status segment via `StatusLineComponent.setHookStatus("memory.indexing", …)`. Disposed on session_shutdown.
+- Update `packages/coding-agent/src/tools/memory.ts` to consult `recall_stats` before dispatching the actual call; emit `onUpdate({ content: [{ type: "text", text: "📚 indexing org memory… {done}/{total} ({phase})" }] })` if the daemon is still warming, then proceed.
+- Trigger eager warm in `AgentSession` startup (session_start hook) so first-call hangs are masked.
+
+Out:
+- Reworking the BM25/HNSW indexes themselves.
+- Changing the daemon protocol envelope or transport (still stdio + Unix socket).
+- Async-promoting the existing sync `executeOrg` NAPI for non-memory commands.
+- Cross-session "remember last warm fingerprint" cache invalidation tightening (already in PLAN-310/W5.5).
+
+Rationale:
+- `crates/pi-knowledge-worker/src/repo_cache.rs::open` currently holds `slots().lock()` for the entire `OrgLane::warm_load(...)`, which serialises all daemon work for the duration of a cold rebuild. This is the architectural reason `stats` cannot poll progress today.
+- `crates/pi-natives/src/recall_engine.rs::query_via_rpc` already routes via the daemon socket; once daemon-side state is unblocked, the existing route benefits automatically.
+- `packages/coding-agent/src/modes/components/status-line.ts::setHookStatus(key, text)` is the existing hook-status surface used by `caveman` extension; reusing it keeps the core widget consistent with established patterns.
+
+* Existing Patterns
+
+- `crates/pi-knowledge-worker/src/repo_cache.rs`
+  - `SLOTS: OnceLock<Mutex<HashMap<...>>>` already mediates per-repo slot lookup. The fix retains this map but stores a `LaneState` enum per slot so the slots lock can be released while `warm_load` runs on a worker thread.
+- `crates/pi-knowledge-worker/src/lane_org.rs::warm_load`
+  - Currently a single synchronous fn building `OrgLane`. Add a sibling `warm_load_with_progress(&Path, &WarmProgress)` that bumps atomics at scan/embed/index phase transitions. Keep the simple `warm_load` for callers that don't care.
+- `crates/pi-knowledge-worker/src/main.rs`
+  - `supported_commands()` already gates protocol features; add `recall_warm` and `recall_stats` (or extend existing `stats`) alongside the existing list.
+- `crates/pi-natives/src/recall_engine.rs::RecallEngineHandle`
+  - `ensure_rpc_open` caches the repo_handle. Add a sibling `progress(&self)` that calls `stats` over the socket and returns a typed `WarmProgress` snapshot. Tests cover the cache miss + warm-running paths.
+- `crates/pi-natives/src/org_buffer.rs::execute_org`
+  - Existing single-entry sync NAPI command dispatcher. Extend with `"recall_stats"` (returns progress) and `"recall_warm"` (fires the warm, returns immediately).
+- `packages/coding-agent/src/extensibility/extensions/caveman.ts`
+  - Reference pattern for `ctx.ui.setStatus(STATUS_KEY, text|undefined)` driving the status-line hook-status segment. Core controller will use the lower-level `StatusLineComponent.setHookStatus(...)` instead because it lives inside core, not behind the extension API.
+- `packages/coding-agent/src/modes/controllers/event-controller.ts`
+  - Sample controller wiring: constructor takes `InteractiveMode`, registers handlers/timers, exposes `dispose()`. Mirror this shape for `MemoryStatusController`.
+
+* Tests
+
+User/workflow coverage to enumerate first:
+1. `open` returns within < 50 ms for a 2.7k-org-file corpus, with the slot in `Warming` state.
+2. `stats` returns lane progress (phase + done/total) while a warm-load is in flight on the same repo handle.
+3. A concurrent `search` on a warming repo handle waits until warm completes and then returns hits (no deadlock, no panic).
+4. A second `open` on the same repo while warming returns the existing handle without spawning a duplicate worker.
+5. After warm completes, `stats.status` flips to `"warm"` and subsequent searches use the warm engine immediately.
+6. `recall_warm` from natives layer triggers daemon `open` and returns to caller within < 50 ms.
+7. `recall_stats` from natives layer reports `{ status: "warming", phase, done, total }` during warm.
+8. Memory tool `search` emits `onUpdate(...)` exactly once with the progress preamble when daemon is in `Warming`, then resolves normally.
+9. `MemoryStatusController` sets `memory.indexing` hook status while daemon is warming; clears it once status flips to warm.
+10. `AgentSession.start` fires `recall_warm` once per session and swallows errors silently (no crash, no duplicate triggers on reconnect).
+
+Concrete test files / scenarios:
+- `crates/pi-knowledge-worker/tests/warm_progress.rs` (new)
+  - cover workflows 1, 2, 3, 4, 5 against a temp repo with synthetic org items + an injected stub embedder (use existing `embedder_adapter::test_double` if available, else wire a feature-gated fake).
+- `crates/pi-natives/src/recall_engine.rs` test module
+  - cover workflows 6 and 7 with a spawned local daemon under `tempdir()` + injected `PI_EMBEDDING_WORKER_SOCKET`.
+- `packages/coding-agent/test/tools/memory.test.ts`
+  - cover workflow 8 by mocking `executeOrg` to return `{ status: "warming", … }` for `recall_stats` then resolve `recall` after a delay. Assert onUpdate fired with expected preamble.
+- `packages/coding-agent/test/modes/controllers/memory-status-controller.test.ts` (new)
+  - cover workflow 9 with a stubbed natives binding and a fake `StatusLineComponent` that records `setHookStatus` calls.
+- `packages/coding-agent/test/session/agent-session-warm.test.ts` (new) or extend an existing session-start test
+  - cover workflow 10 by mocking `executeOrg` and asserting one call per session, errors swallowed.
+
+Verification commands:
+- `cargo test -p pi-knowledge-worker`
+- `cargo test -p pi-natives recall_engine`
+- `bun test packages/coding-agent/test/tools/memory.test.ts packages/coding-agent/test/modes/controllers/memory-status-controller.test.ts`
+- `bun run --parallel check:ts check:rs`
+
+Test ordering: workflows 1–5 first (the foundational daemon change blocks every consumer). Then 6–7 (natives wrapper). Then 8–10 (TS surfaces).
+
+* Implementation
+
+** ITEM Daemon WarmProgress + LaneState + lock split (TDD) — [[id:FEAT-777-non-blocking-warm-load-on-pi-knowledge-w][FEAT-777]]
+:PROPERTIES:
+:CUSTOM_ID: memory-build-affordance::daemon-warm-progress
+:LAYER: test
+:END:
+- Files:
+  - `crates/pi-knowledge-worker/src/repo_cache.rs`
+  - `crates/pi-knowledge-worker/src/lane_org.rs`
+  - `crates/pi-knowledge-worker/tests/warm_progress.rs` (new)
+- Add `LaneState { Cold, Warming(Arc<WarmProgress>), Warm(Arc<OrgLane>) }`. Convert `RepoSlot.org_lane: Option<OrgLane>` into `RepoSlot.org_state: LaneState`. `open()` flow: acquire slots lock → match state → if Cold, insert Warming(progress), drop lock, `thread::spawn` warm-load with progress, re-acquire and install Warm(lane) → return immediately. `with_org_lane` waits on a Condvar (or shared `Arc<Mutex<LaneState>>`) until Warm and then borrows the lane.
+- Tests first: workflows 1–5 captured as failing tests in `tests/warm_progress.rs`.
+- Edge: if warm-load fails, the state must transition to a terminal `LaneError(String)` so subsequent searches see the failure deterministically rather than waiting forever.
+- Satisfies workflows: 1, 2, 3, 4, 5.
+
+** ITEM Thread progress through lane_org warm-load
+:PROPERTIES:
+:CUSTOM_ID: memory-build-affordance::lane-progress-callback
+:DEPENDS: memory-build-affordance::daemon-warm-progress
+:LAYER: infra
+:END:
+- Files:
+  - `crates/pi-knowledge-worker/src/lane_org.rs`
+- Add `pub fn warm_load_with_progress(repo_root: &Path, progress: &WarmProgress) -> Result<Self, String>` that:
+  - Phase 0 (scan): set `phase = scan`, set `total = expected_item_count`, increment `done` per scanned item.
+  - Phase 1 (embed): set `phase = embed`, total = items.len(); the underlying `build_vec_index` already iterates items and embeds — pass through a `&dyn Fn(usize)` so the callback advances `done`. If embedder rejects a batch, ensure `done` still advances to avoid the counter sticking.
+  - Phase 2 (index): set `phase = index`, leave counter at `total`.
+  - Phase 3 (done): set `phase = done`.
+- Keep the existing `warm_load(repo_root)` as a thin wrapper that constructs a throwaway `WarmProgress` and delegates.
+- Satisfies workflows: 2, 5.
+
+** ITEM Daemon protocol surface for warm + stats progress
+:PROPERTIES:
+:CUSTOM_ID: memory-build-affordance::daemon-protocol-surface
+:DEPENDS: memory-build-affordance::lane-progress-callback
+:LAYER: infra
+:END:
+- Files:
+  - `crates/pi-knowledge-worker/src/main.rs`
+- Reuse the existing `Open` and `Stats` commands; no new command names. `Stats` per-handle now also reports `{ lane_state: "cold|warming|warm|error", progress: { phase, done, total, started_ms } }` when the org lane is non-Warm.
+- Bump `PROTOCOL_VERSION` to 3 and extend `supported_commands` only if a new explicit "recall_warm" turns out to be necessary; default path is to reuse `Open` with non-blocking semantics.
+- Update `crates/pi-knowledge-worker/tests/protocol_v2.rs` (rename to `protocol_v3.rs`) to lock the new fields.
+- Satisfies workflows: 2, 5.
+
+** ITEM pi-natives RecallEngineHandle.progress + executeOrg routing
+:PROPERTIES:
+:CUSTOM_ID: memory-build-affordance::natives-progress-wrapper
+:DEPENDS: memory-build-affordance::daemon-protocol-surface
+:LAYER: infra
+:END:
+- Files:
+  - `crates/pi-natives/src/recall_engine.rs`
+  - `crates/pi-natives/src/org_buffer.rs`
+- Add `RecallEngineHandle::progress(&self) -> Result<WarmProgressSnapshot, String>` that calls the daemon `stats` command for the cached handle and decodes the JSON.
+- Add `WarmProgressSnapshot { status: WarmStatus, phase: Option<Phase>, done: usize, total: usize, started_ms: u64 }` serializable via serde.
+- Extend `execute_org_inner` with two new commands:
+  - `"recall_stats"` → returns the snapshot for the active repo root.
+  - `"recall_warm"` → triggers `get_or_create(...).query_via_rpc_warm_only(...)` (i.e. open the repo handle but skip search).
+- Cover with focused tests in `crates/pi-natives/src/recall_engine.rs` test module.
+- Satisfies workflows: 6, 7.
+
+** ITEM Memory tool onUpdate progress preamble
+:PROPERTIES:
+:CUSTOM_ID: memory-build-affordance::memory-tool-onupdate
+:DEPENDS: memory-build-affordance::natives-progress-wrapper
+:LAYER: ui
+:END:
+- Files:
+  - `packages/coding-agent/src/tools/memory.ts`
+  - `packages/coding-agent/test/tools/memory.test.ts`
+- Before the existing `dispatchMemoryAction` call, check `executeOrg({ command: "recall_stats" })`. If `status === "warming"`, call `_onUpdate?.({ content: [{ type: "text", text: "📚 indexing org memory… {done}/{total} ({phase})" }] })` once. Don't poll inside the tool because `executeOrg` is blocking on the Node thread — the status-line widget owns ongoing polling.
+- Tests: mock `executeOrg` to return `{ status: "warming", … }` for `recall_stats` and resolve `recall` afterwards; assert onUpdate fired with expected text.
+- Satisfies workflows: 8.
+
+** ITEM Core MemoryStatusController
+:PROPERTIES:
+:CUSTOM_ID: memory-build-affordance::status-controller
+:DEPENDS: memory-build-affordance::natives-progress-wrapper
+:LAYER: ui
+:END:
+- Files:
+  - `packages/coding-agent/src/modes/controllers/memory-status-controller.ts` (new)
+  - `packages/coding-agent/src/modes/interactive-mode.ts` (wire-in)
+  - `packages/coding-agent/test/modes/controllers/memory-status-controller.test.ts` (new)
+- Polls `executeOrg({command:"recall_stats"})` every 2s. While `status === "warming"`, sets `interactiveMode.statusLine.setHookStatus("memory.indexing", "📚 indexing N/M (phase)")`. When `status === "warm"`, clears the entry. `dispose()` clears the interval + hook status.
+- Disposed alongside other controllers in InteractiveMode shutdown path.
+- Tests: stub natives binding via DI, fake `StatusLineComponent`, assert correct setHookStatus calls.
+- Satisfies workflows: 9.
+
+** ITEM Eager warm on session_start
+:PROPERTIES:
+:CUSTOM_ID: memory-build-affordance::eager-warm
+:DEPENDS: memory-build-affordance::natives-progress-wrapper
+:LAYER: infra
+:END:
+- Files:
+  - `packages/coding-agent/src/session/agent-session.ts` (find the existing session_start hook point)
+  - `packages/coding-agent/test/session/agent-session-warm.test.ts` (new) or extend nearest equivalent
+- Fire `executeOrg({ command: "recall_warm", repoRoot: cwd })` once per session in the session_start path. Wrap in try/catch — errors are logged at debug, never thrown.
+- Test: mock executeOrg and assert exactly one call per session start; second start (new session) re-triggers once; errors are swallowed.
+- Satisfies workflows: 10.
+
+* Edge Cases
+
+- Daemon worker thread for warm-load panics → state transitions to `LaneError`; subsequent stats reports `status: "error"`; memory tool surfaces the error to the model rather than hanging.
+- Two `open` calls for the same repo land while the slot is `Warming` → the second call must return the same handle and NOT spawn a duplicate worker.
+- `stats` is called for a slot that is `Warming` → must respond in microseconds without acquiring the lane's heavy lock (use atomics, not Mutex<OrgLane> read).
+- `MemoryStatusController` running while the session uses a repo without any org memory → `recall_stats` returns `status: "warm", items: 0`; widget stays hidden.
+- Eager warm fires for a repo that has no .org files → daemon scan returns empty items; warm-load completes in ms; widget never shows.
+- Session running in an `--unsafe`/RPC mode without StatusLineComponent → controller no-ops gracefully (guard with `if (!statusLine) return`).
+- Memory tool calls during eager-warm: `recall_stats` shows warming, tool emits onUpdate, then waits for daemon to finish — exact behavior we want.
+
+* Acceptance Criteria
+
+- `cargo test -p pi-knowledge-worker` and `cargo test -p pi-natives recall_engine` pass with the new test modules.
+- `bun run --parallel check:ts check:rs` is clean.
+- Manual repro on this repo: opening a new session shows status-line "📚 indexing org memory… N/M (embed)" within 2 s; widget disappears once warm completes; first memory.search call returns quickly without the 4-minute hang.
+- No regression in existing memory tool tests (`packages/coding-agent/test/tools/memory.test.ts`) or daemon protocol tests.
+
+* Verification
+
+- `cargo test -p pi-knowledge-worker -p pi-natives`
+- `bun test packages/coding-agent/test/tools/memory.test.ts packages/coding-agent/test/modes/controllers/memory-status-controller.test.ts`
+- `bun run --parallel check:ts check:rs`
+- Manual: kill the running daemon (`kill $(cat $XDG_RUNTIME_DIR/spell/embed.pid)`) so cache is cold, restart spell in this repo, observe widget + spinner suffix, confirm first memory.search is fast (no 4-min wait).
+
+NOTE [2026-05-22]: Implementation landed. Daemon: non-blocking warm + progress atomics. pi-natives: `recall_warm` + `recall_stats` commands. memory tool: emits `📚 indexing N/M (phase)` preamble during warming. Eager warm in interactive/RPC/print session_start. Core MemoryStatusController publishes a status-line hook segment. Tests: 7 daemon integration, 6 memory tool, 7 controller, 345 pi-natives unit, 16 pi-knowledge-worker unit — all green. Pre-existing workspace-wide check:ts (166 err) and check:rs (~200 fmt) failures untouched.

@@ -1,7 +1,7 @@
 //! PLAN-315 W4 — push-subscribe machinery.
 //!
 //! Architecture:
-//! ```
+//! ```text
 //! Connection (one per accepted socket):
 //!   ├─ writer thread: drains `out_rx` → socket bytes
 //!   ├─ reader thread: reads commands, replies via `out_tx`

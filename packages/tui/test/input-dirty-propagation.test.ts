@@ -136,5 +136,21 @@ describe("BUG-391 dirty propagation", () => {
 
 			expect(parent.count).toBeGreaterThanOrEqual(2);
 		});
+
+		// Regression: BUG-391's CustomEditor.handleInput finally-block calls
+		// `this.markDirty()`. Without an `Editor.markDirty()` method, this threw
+		// `TypeError: this.markDirty is not a function` on every keystroke. The
+		// throw bubbled through `process.stdin.on('data', …)` and was re-emitted
+		// as a stdin `'error'` event, which the TUI's pty-loss detector (BUG-387)
+		// treated as terminal destruction and quit the session on first input.
+		it("exposes a public markDirty() that propagates to parent", () => {
+			const editor = new Editor({} as any);
+			const parent = new DirtyCounter();
+			editor.setParent(parent);
+
+			expect(typeof editor.markDirty).toBe("function");
+			editor.markDirty();
+			expect(parent.count).toBe(1);
+		});
 	});
 });
