@@ -59,7 +59,11 @@ const addonCandidates: CandidateAddon[] =
 				{ variant: "baseline", filename: `pi_natives.${platformTag}-baseline.node` },
 			]
 		: [{ variant: "default", filename: `pi_natives.${platformTag}.node` }];
-const workerCandidates = [`pi-embedding-worker${exeSuffix}`];
+const workerCandidates = [
+	`pi-knowledge-worker${exeSuffix}`,
+	// Legacy name (PLAN-315 rename); retained one release.
+	`pi-embedding-worker${exeSuffix}`,
+];
 
 const available: CandidateAddon[] = [];
 for (const candidate of addonCandidates) {

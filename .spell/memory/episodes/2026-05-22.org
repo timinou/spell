@@ -1,0 +1,26 @@
+#+TITLE: Episodes 2026-05-22
+
+** ITEM workspace cargo-test flake — diff_qualifier + workspace_cache + code_buffer race on HOME/buffer_registry
+
+5/5 consecutive cargo test --workspace runs green post-fix. Pre-flight closed; PLAN-315 W0 unblocked.
+:PROPERTIES:
+:CUSTOM_ID: EP-d23b8aeb268cef1c
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T11:52:28Z
+:END:
+:RELATIONS:
+ABOUT: BUG-390-workspace-cargo-test-flake-diff-qualifie
+:END:
+** ITEM spinner-sentinel: decouple tool renderers from spinner ticks
+
+Landed in commit 0d62c39e6. Tool-renderer body no longer runs at 12.5Hz. tui 346/0 (incl. new spinner-sentinel.test.ts 4/4), components 27/0, task 11/0. tsgo + biome clean.
+:PROPERTIES:
+:CUSTOM_ID: EP-66de1d114b12d8b4
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T12:06:58Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-776-spinner-sentinel-decouple-tool-renderers
+:END:

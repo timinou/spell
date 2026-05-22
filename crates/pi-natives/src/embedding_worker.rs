@@ -14,9 +14,23 @@ use std::{os::unix::net::UnixStream, thread};
 use napi::{Error, Result};
 use serde::{Deserialize, Serialize};
 
-const WORKER_ENV_VAR: &str = "PI_EMBEDDING_WORKER";
-/// Override for the user-scoped daemon socket. PLAN-310 W3.
-const WORKER_SOCKET_ENV_VAR: &str = "PI_EMBEDDING_WORKER_SOCKET";
+/// Primary client env var (PLAN-315). Falls back to `WORKER_ENV_VAR_LEGACY`.
+const WORKER_ENV_VAR: &str = "PI_KNOWLEDGE_WORKER";
+/// Legacy name retained for one release after PLAN-315 rename.
+const WORKER_ENV_VAR_LEGACY: &str = "PI_EMBEDDING_WORKER";
+/// Override for the user-scoped daemon socket (PLAN-315). Falls back to
+/// `WORKER_SOCKET_ENV_VAR_LEGACY`.
+const WORKER_SOCKET_ENV_VAR: &str = "PI_KNOWLEDGE_WORKER_SOCKET";
+const WORKER_SOCKET_ENV_VAR_LEGACY: &str = "PI_EMBEDDING_WORKER_SOCKET";
+
+/// Helper: read env var, preferring new name then legacy.
+fn read_worker_env() -> Option<std::ffi::OsString> {
+	env::var_os(WORKER_ENV_VAR).or_else(|| env::var_os(WORKER_ENV_VAR_LEGACY))
+}
+
+fn read_worker_socket_env() -> Option<std::ffi::OsString> {
+	env::var_os(WORKER_SOCKET_ENV_VAR).or_else(|| env::var_os(WORKER_SOCKET_ENV_VAR_LEGACY))
+}
 
 /// Identifier of the embedder model the worker is expected to use. Persisted
 /// in `KnowledgeMeta::embedder_model` so a model swap invalidates every
@@ -31,9 +45,13 @@ pub const EMBEDDER_DIM: usize = 1024;
 const WORKER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(windows)]
-const WORKER_BINARY_NAME: &str = "pi-embedding-worker.exe";
+const WORKER_BINARY_NAME: &str = "pi-knowledge-worker.exe";
+#[cfg(windows)]
+const WORKER_BINARY_NAME_LEGACY: &str = "pi-embedding-worker.exe";
 #[cfg(not(windows))]
-const WORKER_BINARY_NAME: &str = "pi-embedding-worker";
+const WORKER_BINARY_NAME: &str = "pi-knowledge-worker";
+#[cfg(not(windows))]
+const WORKER_BINARY_NAME_LEGACY: &str = "pi-embedding-worker";
 
 /// Maximum time we wait for a freshly-spawned daemon to bind its socket. After
 /// this we give up Path 2 and fall back to the in-process subprocess (Path 3).
@@ -309,7 +327,7 @@ fn with_worker<T>(f: impl FnOnce(&mut WorkerTransport) -> Result<T>) -> Result<T
 /// 4. Otherwise fall back to the in-process subprocess so the existing
 ///    behaviour still works (CI containers without `XDG_RUNTIME_DIR`, etc.).
 fn acquire() -> Result<WorkerTransport> {
-	if env::var_os(WORKER_ENV_VAR)
+	if read_worker_env()
 		.as_ref()
 		.is_some_and(|value| !value.is_empty())
 	{
@@ -342,17 +360,29 @@ fn acquire() -> Result<WorkerTransport> {
 ///   which is rare on Linux but happens inside minimal containers).
 #[cfg(unix)]
 fn default_socket_path() -> PathBuf {
-	if let Some(xdg) = env::var_os("XDG_RUNTIME_DIR").filter(|value| !value.is_empty()) {
-		return PathBuf::from(xdg).join("spell").join("embed.sock");
+	let base: PathBuf = if let Some(xdg) =
+		env::var_os("XDG_RUNTIME_DIR").filter(|value| !value.is_empty())
+	{
+		PathBuf::from(xdg).join("spell")
+	} else {
+		// SAFETY: `getuid` is always safe — it cannot fail and has no side effects.
+		let uid = unsafe { libc::getuid() };
+		PathBuf::from(format!("/tmp/spell-{uid}"))
+	};
+	let primary = base.join("knowledge.sock");
+	let legacy = base.join("embed.sock");
+	// If the legacy socket exists and the primary does not, prefer the
+	// legacy path (so a daemon spawned by an older client is reached).
+	// Otherwise the new primary name is canonical.
+	if !primary.exists() && legacy.exists() {
+		return legacy;
 	}
-	// SAFETY: `getuid` is always safe — it cannot fail and has no side effects.
-	let uid = unsafe { libc::getuid() };
-	PathBuf::from(format!("/tmp/spell-{uid}/embed.sock"))
+	primary
 }
 
 #[cfg(unix)]
 fn explicit_socket_or_default() -> PathBuf {
-	if let Some(value) = env::var_os(WORKER_SOCKET_ENV_VAR).filter(|value| !value.is_empty()) {
+	if let Some(value) = read_worker_socket_env().filter(|value| !value.is_empty()) {
 		return PathBuf::from(value);
 	}
 	default_socket_path()
@@ -406,8 +436,12 @@ fn expect_ok(response: WorkerResponse) -> Result<WorkerResponse> {
 
 fn resolve_worker_path() -> Result<PathBuf> {
 	if let Some(override_path) = env::var_os(WORKER_ENV_VAR).filter(|value| !value.is_empty()) {
-		let candidate = PathBuf::from(override_path);
-		return validate_override_path(candidate);
+		return validate_override_path(PathBuf::from(override_path), WORKER_ENV_VAR);
+	}
+	if let Some(override_path) =
+		env::var_os(WORKER_ENV_VAR_LEGACY).filter(|value| !value.is_empty())
+	{
+		return validate_override_path(PathBuf::from(override_path), WORKER_ENV_VAR_LEGACY);
 	}
 
 	let candidates = worker_candidates();
@@ -428,13 +462,13 @@ fn resolve_worker_path() -> Result<PathBuf> {
 	)))
 }
 
-fn validate_override_path(path: PathBuf) -> Result<PathBuf> {
+fn validate_override_path(path: PathBuf, env_var_source: &str) -> Result<PathBuf> {
 	if path.is_file() {
 		return Ok(path);
 	}
 	Err(worker_error(format!(
-		"{WORKER_ENV_VAR} points to {}, but that file does not exist. Ensure {WORKER_BINARY_NAME} \
-		 is installed alongside the native addon or update {WORKER_ENV_VAR}.",
+		"{env_var_source} points to {}, but that file does not exist. Ensure {WORKER_BINARY_NAME} \
+		 is installed alongside the native addon or update {env_var_source}.",
 		path.display()
 	)))
 }
@@ -448,18 +482,20 @@ fn worker_candidates() -> Vec<PathBuf> {
 		}
 	};
 
-	push(dev_native_dir().join(WORKER_BINARY_NAME));
-	if let Some(addon_dir) = loaded_addon_dir() {
-		push(addon_dir.join(WORKER_BINARY_NAME));
-	}
-	if let Some(exec_dir) = current_exe_dir() {
-		push(exec_dir.join(WORKER_BINARY_NAME));
-	}
-	if let Some(versioned_dir) = versioned_native_dir() {
-		push(versioned_dir.join(WORKER_BINARY_NAME));
-	}
-	if let Some(user_data_dir) = user_data_native_dir() {
-		push(user_data_dir.join(WORKER_BINARY_NAME));
+	for name in [WORKER_BINARY_NAME, WORKER_BINARY_NAME_LEGACY] {
+		push(dev_native_dir().join(name));
+		if let Some(addon_dir) = loaded_addon_dir() {
+			push(addon_dir.join(name));
+		}
+		if let Some(exec_dir) = current_exe_dir() {
+			push(exec_dir.join(name));
+		}
+		if let Some(versioned_dir) = versioned_native_dir() {
+			push(versioned_dir.join(name));
+		}
+		if let Some(user_data_dir) = user_data_native_dir() {
+			push(user_data_dir.join(name));
+		}
 	}
 	candidates
 }
@@ -670,25 +706,31 @@ mod socket_tests {
 	/// RAII wrapper that snapshots and restores all env vars the dispatcher
 	/// reads, plus serialises tests through `TEST_ENV_LOCK`.
 	struct SocketEnv {
-		_guard:          std::sync::RwLockWriteGuard<'static, ()>,
-		original_worker: Option<OsString>,
-		original_socket: Option<OsString>,
-		original_mode:   Option<OsString>,
-		original_state:  Option<OsString>,
+		_guard:                 std::sync::RwLockWriteGuard<'static, ()>,
+		original_worker:        Option<OsString>,
+		original_worker_legacy: Option<OsString>,
+		original_socket:        Option<OsString>,
+		original_socket_legacy: Option<OsString>,
+		original_mode:          Option<OsString>,
+		original_state:         Option<OsString>,
 	}
 
 	impl SocketEnv {
 		fn new() -> Self {
 			let guard = lock_test_env();
 			let original_worker = env::var_os(WORKER_ENV_VAR);
+			let original_worker_legacy = env::var_os(WORKER_ENV_VAR_LEGACY);
 			let original_socket = env::var_os(WORKER_SOCKET_ENV_VAR);
+			let original_socket_legacy = env::var_os(WORKER_SOCKET_ENV_VAR_LEGACY);
 			let original_mode = env::var_os("PI_TEST_EMBEDDING_WORKER_MODE");
 			let original_state = env::var_os("PI_TEST_EMBEDDING_WORKER_STATE_FILE");
 			// SAFETY: `lock_test_env()` above gates all parallel access to these
 			// process-wide env vars; no other thread observes the racy window.
 			unsafe {
 				env::remove_var(WORKER_ENV_VAR);
+				env::remove_var(WORKER_ENV_VAR_LEGACY);
 				env::remove_var(WORKER_SOCKET_ENV_VAR);
+				env::remove_var(WORKER_SOCKET_ENV_VAR_LEGACY);
 				env::remove_var("PI_TEST_EMBEDDING_WORKER_MODE");
 				env::remove_var("PI_TEST_EMBEDDING_WORKER_STATE_FILE");
 			}
@@ -696,7 +738,9 @@ mod socket_tests {
 			Self {
 				_guard: guard,
 				original_worker,
+				original_worker_legacy,
 				original_socket,
+				original_socket_legacy,
 				original_mode,
 				original_state,
 			}
@@ -724,7 +768,9 @@ mod socket_tests {
 			// concurrent reader can observe the restore window.
 			unsafe {
 				restore(WORKER_ENV_VAR, self.original_worker.as_ref());
+				restore(WORKER_ENV_VAR_LEGACY, self.original_worker_legacy.as_ref());
 				restore(WORKER_SOCKET_ENV_VAR, self.original_socket.as_ref());
+				restore(WORKER_SOCKET_ENV_VAR_LEGACY, self.original_socket_legacy.as_ref());
 				restore("PI_TEST_EMBEDDING_WORKER_MODE", self.original_mode.as_ref());
 				restore("PI_TEST_EMBEDDING_WORKER_STATE_FILE", self.original_state.as_ref());
 			}

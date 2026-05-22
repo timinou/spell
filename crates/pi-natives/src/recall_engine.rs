@@ -69,7 +69,7 @@ macro_rules! engine_log {
 	};
 }
 
-/// Embedding dimensionality used by `pi-embedding-worker` (BAAI/bge-m3).
+/// Embedding dimensionality used by `pi-knowledge-worker` (BAAI/bge-m3).
 const DIM: usize = 1024;
 
 /// Subdirectories of the repo that contribute org items to the recall index.
@@ -658,7 +658,7 @@ fn collect_fingerprints(
 // ---------------------------------------------------------------------------
 
 /// Bridges `pi_knowledge_core::recall::Embedder` to the in-process embedding
-/// worker. The worker (`pi-embedding-worker` subprocess / daemon) is shared
+/// worker. The worker (`pi-knowledge-worker` subprocess / daemon) is shared
 /// with `code_graph` and is spawned lazily.
 struct WorkerEmbedderAdapter;
 
@@ -777,7 +777,7 @@ mod tests {
 	fn force_no_worker(test_name: &'static str) -> EnvVarGuard {
 		EnvVarGuard::set(
 			"PI_EMBEDDING_WORKER",
-			&format!("/nonexistent/pi-embedding-worker-{test_name}"),
+			&format!("/nonexistent/pi-knowledge-worker-{test_name}"),
 		)
 	}
 

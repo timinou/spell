@@ -176,6 +176,11 @@ const profileDirs = targetRoots.flatMap(root => {
 
 const addonNames = ["libpi_natives.so", "libpi_natives.dylib", "pi_natives.dll", "libpi_natives.dll"];
 const workerNames = [
+	`pi-knowledge-worker${exeSuffix}`,
+	`pi_knowledge_worker${exeSuffix}`,
+	`pi-knowledge-worker`,
+	`pi_knowledge_worker`,
+	// Legacy names (PLAN-315 rename); retained one release.
 	`pi-embedding-worker${exeSuffix}`,
 	`pi_embedding_worker${exeSuffix}`,
 	`pi-embedding-worker`,
@@ -204,11 +209,11 @@ const taggedPath = isDev
 console.log(`Installing addon: ${taggedPath}`);
 await installBinary(sourcePath, taggedPath);
 
-console.log(`Building pi-embedding-worker for ${targetPlatform}-${targetArch}${isDev ? " (debug)" : ""}…`);
-const workerBuild = await buildCargoPackage("pi-embedding-worker");
+console.log(`Building pi-knowledge-worker for ${targetPlatform}-${targetArch}${isDev ? " (debug)" : ""}…`);
+const workerBuild = await buildCargoPackage("pi-knowledge-worker");
 if (workerBuild.exitCode !== 0) {
 	console.warn(
-		`Warning: cargo build -p pi-embedding-worker failed; addon install will continue.${workerBuild.stderr ? `\n${workerBuild.stderr}` : ""}`,
+		`Warning: cargo build -p pi-knowledge-worker failed; addon install will continue.${workerBuild.stderr ? `\n${workerBuild.stderr}` : ""}`,
 	);
 	console.log("Build complete.");
 	process.exit(0);
@@ -217,14 +222,25 @@ if (workerBuild.exitCode !== 0) {
 const workerSourcePath = await findBuiltBinary(profileDirs, workerNames);
 if (!workerSourcePath) {
 	console.warn(
-		`Warning: pi-embedding-worker built successfully, but no binary was found in:\n${profileDirs.map(d => `  - ${d}`).join("\n")}`,
+		`Warning: pi-knowledge-worker built successfully, but no binary was found in:\n${profileDirs.map(d => `  - ${d}`).join("\n")}`,
 	);
 	console.log("Build complete.");
 	process.exit(0);
 }
 
-const workerTaggedPath = path.join(nativeDir, `pi-embedding-worker${exeSuffix}`);
+const workerTaggedPath = path.join(nativeDir, `pi-knowledge-worker${exeSuffix}`);
 console.log(`Installing worker: ${workerTaggedPath}`);
 await installBinary(workerSourcePath, workerTaggedPath);
+
+// PLAN-315: also stage a legacy-name symlink so older clients that look
+// up `pi-embedding-worker` continue to find the same binary.
+const legacyWorkerPath = path.join(nativeDir, `pi-embedding-worker${exeSuffix}`);
+try {
+	await fs.unlink(legacyWorkerPath).catch(() => {});
+	await fs.symlink(`pi-knowledge-worker${exeSuffix}`, legacyWorkerPath);
+	console.log(`Linked legacy: ${legacyWorkerPath} → pi-knowledge-worker${exeSuffix}`);
+} catch (err) {
+	console.warn(`Warning: could not stage legacy worker symlink: ${err}`);
+}
 
 console.log("Build complete.");
