@@ -30,29 +30,29 @@ describe("evaluateWriteGuards contract", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("allows writes that grow a file", () => {
+	it("allows writes that grow a file", async () => {
 		const file = join(dir, "small.ts");
 		writeFileSync(file, "export const x = 1;\n");
-		expect(evaluateWriteGuards(file, bigParseableSource()).ok).toBe(true);
+		expect((await evaluateWriteGuards(file, bigParseableSource())).ok).toBe(true);
 	});
 
-	it("allows writes that shrink a file (refactor / dead-code removal)", () => {
+	it("allows writes that shrink a file (refactor / dead-code removal)", async () => {
 		const file = join(dir, "big.ts");
 		writeFileSync(file, bigParseableSource());
-		expect(evaluateWriteGuards(file, PARSEABLE_STUB).ok).toBe(true);
+		expect((await evaluateWriteGuards(file, PARSEABLE_STUB)).ok).toBe(true);
 	});
 
-	it("allows new-file writes (no original on disk)", () => {
-		expect(evaluateWriteGuards(join(dir, "new.ts"), PARSEABLE_STUB).ok).toBe(true);
+	it("allows new-file writes (no original on disk)", async () => {
+		expect((await evaluateWriteGuards(join(dir, "new.ts"), PARSEABLE_STUB)).ok).toBe(true);
 	});
 
-	it("ignores non-code-supported paths (text files are unguarded)", () => {
+	it("ignores non-code-supported paths (text files are unguarded)", async () => {
 		const file = join(dir, "README.txt");
 		writeFileSync(file, bigParseableSource());
-		expect(evaluateWriteGuards(file, PARSEABLE_STUB).ok).toBe(true);
+		expect((await evaluateWriteGuards(file, PARSEABLE_STUB)).ok).toBe(true);
 	});
 
-	it("force:true is a no-op on non-existent files", () => {
-		expect(evaluateWriteGuards(join(dir, "new.ts"), PARSEABLE_STUB, { force: true }).ok).toBe(true);
+	it("force:true is a no-op on non-existent files", async () => {
+		expect((await evaluateWriteGuards(join(dir, "new.ts"), PARSEABLE_STUB, { force: true })).ok).toBe(true);
 	});
 });

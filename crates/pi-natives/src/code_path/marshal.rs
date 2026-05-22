@@ -95,6 +95,7 @@ pub fn diagnostic_variant_to_string(v: &DiagnosticVariant) -> String {
 		DiagnosticVariant::RangeBoundsInverted => "range_bounds_inverted".to_string(),
 		DiagnosticVariant::RangeClamped => "range_clamped".to_string(),
 		DiagnosticVariant::IncompatibleTargetShape => "incompatible_target_shape".to_string(),
+		DiagnosticVariant::PeerConflict => "peer_conflict".to_string(),
 	}
 }
 

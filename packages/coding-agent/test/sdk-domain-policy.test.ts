@@ -18,7 +18,7 @@ function createDomainManifest(): SpellDomain {
 		systemPromptPath: "domain/growth/prompts/system.md",
 		contextFiles: ["domain/growth/prompts/context.md"],
 		tools: {
-			exclude: ["lsp", "ast_grep", "ast_edit", "code"],
+			exclude: ["lsp", "ast_grep", "code"],
 		},
 		panels: [],
 		workspaces: [],
@@ -62,7 +62,6 @@ describe("createAgentSession domain policy", () => {
 			expect(activeTools).toContain("read");
 			expect(activeTools).not.toContain("lsp");
 			expect(activeTools).not.toContain("ast_grep");
-			expect(activeTools).not.toContain("ast_edit");
 			expect(activeTools).not.toContain("code");
 		} finally {
 			await session.dispose();

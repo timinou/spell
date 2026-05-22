@@ -70,7 +70,7 @@ fn edn_node_for_path<'a>(buffer: &'a CodeBuffer, path: &str) -> Option<Node<'a>>
 	Some(node)
 }
 
-fn edn_resolved_symbol(buffer: &CodeBuffer, path: &str) -> Option<ResolvedSymbol> {
+pub(crate) fn edn_resolved_symbol(buffer: &CodeBuffer, path: &str) -> Option<ResolvedSymbol> {
 	let node = edn_node_for_path(buffer, path)?;
 	Some(ResolvedSymbol {
 		name:              path.to_string(),
@@ -216,7 +216,7 @@ fn required_path(options: &Value) -> Result<PathBuf> {
 		.ok_or_else(|| json_err("Missing required field: file"))?;
 	Ok(PathBuf::from(path))
 }
-fn get_profile(path: &Path, buffer_lang: &LanguageId) -> Result<LanguageProfile> {
+pub(crate) fn get_profile(path: &Path, buffer_lang: &LanguageId) -> Result<LanguageProfile> {
 	language_registry()
 		.get(buffer_lang)
 		.cloned()
@@ -247,7 +247,7 @@ fn navigate_action(value: Option<&str>) -> Result<NavigateAction> {
 	}
 }
 
-fn required_str<'a>(options: &'a Value, field: &str) -> Result<&'a str> {
+pub(crate) fn required_str<'a>(options: &'a Value, field: &str) -> Result<&'a str> {
 	options
 		.get(field)
 		.and_then(Value::as_str)
@@ -274,10 +274,6 @@ fn missing_session_id_err() -> Error {
 
 fn required_session_id(options: &Value) -> Result<&str> {
 	session_id(options).ok_or_else(missing_session_id_err)
-}
-
-fn command_requires_session(command: &str) -> bool {
-	matches!(command, "edit" | "replace_content" | "save")
 }
 
 fn coord_socket_path() -> PathBuf {
@@ -401,7 +397,7 @@ fn relativize_path(path: &Path, root: &Path) -> String {
 		.to_string()
 }
 
-fn parse_target_id(target_id: &str) -> Result<(String, Option<String>)> {
+pub(crate) fn parse_target_id(target_id: &str) -> Result<(String, Option<String>)> {
 	let Some((file_id, symbol_id)) = target_id.split_once("::") else {
 		if target_id.trim().is_empty() {
 			return Err(json_err("targetId must not be empty"));
@@ -426,10 +422,10 @@ struct TargetSummary {
 }
 
 #[derive(Debug)]
-struct PreparedEditOperation {
-	edits:  Vec<TextEdit>,
-	proof:  Option<ProcedureProof>,
-	action: String,
+pub(crate) struct PreparedEditOperation {
+	pub edits:  Vec<TextEdit>,
+	pub proof:  Option<ProcedureProof>,
+	pub action: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -658,7 +654,7 @@ fn workspace_root_for(path: &Path) -> PathBuf {
 	}
 }
 
-fn prove_dead_style(
+pub(crate) fn prove_dead_style(
 	path: &Path,
 	resolved: &ResolvedSymbol,
 ) -> std::result::Result<ProcedureProof, CodeEngineError> {
@@ -708,12 +704,12 @@ fn prove_dead_style(
 
 /// Dispatch a single edit operation (symbol-targeted or line-targeted).
 /// Dispatch a single edit operation (symbol-targeted or line-targeted).
-fn action_content(action: &Value) -> std::result::Result<&str, CodeEngineError> {
+pub(crate) fn action_content(action: &Value) -> std::result::Result<&str, CodeEngineError> {
 	required_str(action, "content").map_err(|error| CodeEngineError::Edit(error.to_string()))
 }
 
 /// FEAT-707: identifier shape check used by clone-with-rename.
-fn is_valid_identifier(s: &str) -> bool {
+pub(crate) fn is_valid_identifier(s: &str) -> bool {
 	let mut chars = s.chars();
 	let Some(first) = chars.next() else {
 		return false;
@@ -726,7 +722,7 @@ fn is_valid_identifier(s: &str) -> bool {
 
 /// FEAT-707: replace the first whole-word occurrence of `from` with `to`
 /// inside `text`. Used to rename the cloned declaration's identifier.
-fn rename_first_occurrence(text: &str, from: &str, to: &str) -> String {
+pub(crate) fn rename_first_occurrence(text: &str, from: &str, to: &str) -> String {
 	if from.is_empty() {
 		return text.to_string();
 	}
@@ -757,11 +753,11 @@ fn rename_first_occurrence(text: &str, from: &str, to: &str) -> String {
 	text.to_string()
 }
 
-fn action_find(action: &Value) -> std::result::Result<&str, CodeEngineError> {
+pub(crate) fn action_find(action: &Value) -> std::result::Result<&str, CodeEngineError> {
 	required_str(action, "find").map_err(|error| CodeEngineError::Edit(error.to_string()))
 }
 
-fn action_line(action: &Value, resolved: Option<&ResolvedSymbol>) -> usize {
+pub(crate) fn action_line(action: &Value, resolved: Option<&ResolvedSymbol>) -> usize {
 	action
 		.get("line")
 		.and_then(Value::as_u64)
@@ -778,14 +774,14 @@ fn action_line(action: &Value, resolved: Option<&ResolvedSymbol>) -> usize {
 		.unwrap_or(0)
 }
 
-fn action_allow_sibling_delete(action: &Value) -> bool {
+pub(crate) fn action_allow_sibling_delete(action: &Value) -> bool {
 	action
 		.get("allowSiblingDelete")
 		.and_then(Value::as_bool)
 		.unwrap_or(false)
 }
 
-fn action_occurrence(action: &Value) -> std::result::Result<Occurrence, CodeEngineError> {
+pub(crate) fn action_occurrence(action: &Value) -> std::result::Result<Occurrence, CodeEngineError> {
 	match action.get("occurrence") {
 		None | Some(Value::Null) => Ok(Occurrence::Unique),
 		Some(Value::String(value)) => match value.as_str() {
@@ -804,12 +800,12 @@ fn action_occurrence(action: &Value) -> std::result::Result<Occurrence, CodeEngi
 	}
 }
 
-fn action_within(resolved: Option<&ResolvedSymbol>) -> Option<(usize, usize)> {
+pub(crate) fn action_within(resolved: Option<&ResolvedSymbol>) -> Option<(usize, usize)> {
 	let symbol = resolved?;
 	Some((symbol.start_byte, symbol.end_byte))
 }
 
-fn range_for_action(kind: &str, resolved: &ResolvedSymbol) -> ByteRange {
+pub(crate) fn range_for_action(kind: &str, resolved: &ResolvedSymbol) -> ByteRange {
 	match kind {
 		"rename" => resolved.identifier_range,
 		"wrap" | "splice" | "move" | "clone" => resolved.statement_range,
@@ -817,20 +813,20 @@ fn range_for_action(kind: &str, resolved: &ResolvedSymbol) -> ByteRange {
 	}
 }
 
-fn statement_within(resolved: Option<&ResolvedSymbol>) -> Option<(usize, usize)> {
+pub(crate) fn statement_within(resolved: Option<&ResolvedSymbol>) -> Option<(usize, usize)> {
 	let symbol = resolved?;
 	Some((symbol.statement_range.start, symbol.statement_range.end))
 }
 
-fn action_column(action: &Value) -> usize {
+pub(crate) fn action_column(action: &Value) -> usize {
 	value_to_usize(action.get("column"), 0)
 }
 
-fn action_node_type(action: &Value) -> &str {
+pub(crate) fn action_node_type(action: &Value) -> &str {
 	action.get("nodeType").and_then(Value::as_str).unwrap_or("")
 }
 
-fn action_mode(action: &Value) -> SpliceMode {
+pub(crate) fn action_mode(action: &Value) -> SpliceMode {
 	match action.get("mode").and_then(Value::as_str).unwrap_or("self") {
 		"up" => SpliceMode::Up,
 		"down" => SpliceMode::Down,
@@ -838,7 +834,7 @@ fn action_mode(action: &Value) -> SpliceMode {
 	}
 }
 
-fn resolve_target_id(
+pub(crate) fn resolve_target_id(
 	buffer: &CodeBuffer,
 	profile: &LanguageProfile,
 	_path: &Path,
@@ -868,14 +864,14 @@ fn symbol_target_id(file_target_id: &str, symbol_path: &str) -> String {
 	format!("{file_target_id}::{symbol_path}")
 }
 
-fn target_range(buffer: &CodeBuffer, resolved: Option<&ResolvedSymbol>) -> (usize, usize) {
+pub(crate) fn target_range(buffer: &CodeBuffer, resolved: Option<&ResolvedSymbol>) -> (usize, usize) {
 	match resolved {
 		Some(symbol) => (symbol.start_byte, symbol.end_byte),
 		None => (0, buffer.source().len()),
 	}
 }
 
-fn would_leave_zero_bytes(buffer: &CodeBuffer, edits: &[TextEdit]) -> bool {
+pub(crate) fn would_leave_zero_bytes(buffer: &CodeBuffer, edits: &[TextEdit]) -> bool {
 	let mut result = buffer.source().to_string();
 	let mut sorted: Vec<_> = edits.iter().collect();
 	sorted.sort_by_key(|e| std::cmp::Reverse(e.start_byte));
@@ -884,7 +880,7 @@ fn would_leave_zero_bytes(buffer: &CodeBuffer, edits: &[TextEdit]) -> bool {
 	}
 	result.is_empty()
 }
-fn single_action(
+pub(crate) fn single_action(
 	buffer: &CodeBuffer,
 	profile: &LanguageProfile,
 	path: &Path,
@@ -1222,33 +1218,6 @@ fn execute_operation_node(
 	))
 }
 
-fn apply_operations_transactionally(
-	buffer: &mut CodeBuffer,
-	profile: &LanguageProfile,
-	path: &Path,
-	operations: &[Value],
-) -> std::result::Result<(Vec<TargetSummary>, usize, Option<ProcedureProof>), CodeEngineError> {
-	let before = buffer.source();
-	let mut staged = CodeBuffer::from_str(&before, buffer.language().clone(), language_registry())?;
-	let mut summaries = Vec::new();
-	let mut edit_count = 0_usize;
-	let mut last_proof = None;
-	for operation in operations {
-		let (summary, node_count, node_proof) =
-			execute_operation_node(&mut staged, profile, path, operation)?;
-		summaries.push(summary);
-		edit_count += node_count;
-		if node_proof.is_some() {
-			last_proof = node_proof;
-		}
-	}
-	buffer.edit_batch(vec![TextEdit {
-		start_byte:   0,
-		old_end_byte: before.len(),
-		new_text:     staged.source(),
-	}])?;
-	Ok((summaries, edit_count, last_proof))
-}
 
 /// Find the enclosing symbol for a given line in the outline.
 fn find_enclosing_symbol(entries: &[OutlineEntry], line: u32) -> Option<String> {
@@ -1639,213 +1608,12 @@ fn render_diff_hunk(hunk: pi_code_engine::diff::DiffHunk) -> Value {
 	json!({ "oldStart": hunk.old_start, "oldCount": hunk.old_count, "newStart": hunk.new_start, "newCount": hunk.new_count, "kind": format!("{:?}", hunk.kind), "content": hunk.content })
 }
 
-fn execute_edit_command(options: &Value, session_id: &str) -> Result<Value> {
-	let save_mode = edit_save_mode(options)?;
-	let requests = group_edit_requests(options)?;
-	let mut file_results = Vec::<EditFileResult>::new();
-	let mut success_count = 0_usize;
-	let mut failure_count = 0_usize;
-	let mut total_edit_count = 0_usize;
 
-	for request in requests {
-		let file = request.path.display().to_string();
-		let created = !request.path.exists();
-		let target_id = first_operation_target_id(&request.operations).to_string();
-		let buffer_handle = match buffer_registry().open_or_create(&request.path) {
-			Ok(buffer) => buffer,
-			Err(error) => {
-				failure_count += 1;
-				file_results.push(EditFileResult {
-					file,
-					status: "failed".into(),
-					version: None,
-					diff: None,
-					edit_count: None,
-					created,
-					targets: Vec::new(),
-					proof: None,
-					persisted: false,
-					dirty: false,
-					error: Some(napi_error_payload(engine_err(error))),
-				});
-				continue;
-			},
-		};
-		let profile = {
-			let buffer = buffer_handle.lock();
-			match get_profile(&request.path, buffer.language()) {
-				Ok(profile) => profile,
-				Err(error) => {
-					failure_count += 1;
-					file_results.push(EditFileResult {
-						file,
-						status: "failed".into(),
-						version: None,
-						diff: None,
-						edit_count: None,
-						created,
-						targets: Vec::new(),
-						proof: None,
-						persisted: false,
-						dirty: buffer.is_dirty(),
-						error: Some(napi_error_payload(error)),
-					});
-					continue;
-				},
-			}
-		};
-		if buffer_handle.lock().language().as_str() == "text" {
-			failure_count += 1;
-			file_results.push(EditFileResult {
-				file,
-				status: "failed".into(),
-				version: None,
-				diff: None,
-				edit_count: None,
-				created,
-				targets: Vec::new(),
-				proof: None,
-				persisted: false,
-				dirty: buffer_handle.lock().is_dirty(),
-				error: Some(json!({
-					"message": "Fallback text buffers do not support structured code edit operations. Use replace_content for whole-buffer writes.",
-				})),
-			});
-			continue;
-		}
-
-		if save_mode.persisted() {
-			let code_paths = operation_code_paths(&request.operations);
-			match buffer_registry().edit_transaction(
-				session_id,
-				&request.path,
-				&code_paths,
-				|buffer| {
-					let before = buffer.source();
-					let (targets, edit_count, proof) = apply_operations_transactionally(
-						buffer,
-						&profile,
-						&request.path,
-						&request.operations,
-					)?;
-					let diff = render_annotated_diff(buffer, &before, &profile);
-					Ok((targets, edit_count, proof, diff))
-				},
-			) {
-				Ok((transaction, (targets, edit_count, proof, diff))) => {
-					success_count += 1;
-					total_edit_count += edit_count;
-					file_results.push(EditFileResult {
-						file,
-						status: save_mode.success_status().into(),
-						version: Some(transaction.revision),
-						diff: Some(diff),
-						edit_count: Some(edit_count),
-						created,
-						targets,
-						proof,
-						persisted: true,
-						dirty: false,
-						error: None,
-					});
-				},
-				Err(error) => {
-					failure_count += 1;
-					file_results.push(EditFileResult {
-						file,
-						status: "failed".into(),
-						version: None,
-						diff: None,
-						edit_count: None,
-						created,
-						targets: Vec::new(),
-						proof: None,
-						persisted: false,
-						dirty: false,
-						error: Some(edit_error_payload(&target_id, error)),
-					});
-				},
-			}
-			continue;
-		}
-
-		let mut buffer = buffer_handle.lock();
-		let before = buffer.source();
-		match apply_operations_transactionally(
-			&mut buffer,
-			&profile,
-			&request.path,
-			&request.operations,
-		) {
-			Ok((targets, edit_count, proof)) => {
-				let diff = render_annotated_diff(&buffer, &before, &profile);
-				success_count += 1;
-				total_edit_count += edit_count;
-				file_results.push(EditFileResult {
-					file,
-					status: save_mode.success_status().into(),
-					version: Some(buffer.version()),
-					diff: Some(diff),
-					edit_count: Some(edit_count),
-					created,
-					targets,
-					proof,
-					persisted: false,
-					dirty: buffer.is_dirty(),
-					error: None,
-				});
-			},
-			Err(error) => {
-				failure_count += 1;
-				file_results.push(EditFileResult {
-					file,
-					status: "failed".into(),
-					version: None,
-					diff: None,
-					edit_count: None,
-					created,
-					targets: Vec::new(),
-					proof: None,
-					persisted: false,
-					dirty: buffer.is_dirty(),
-					error: Some(edit_error_payload(&target_id, error)),
-				});
-			},
-		}
-	}
-
-	let status = if failure_count == 0 {
-		save_mode.success_status()
-	} else if success_count == 0 {
-		"failed"
-	} else {
-		"partial"
-	};
-
-	Ok(json_response(
-		json!({
-			"status": status,
-			"saveMode": save_mode.as_str(),
-			"editCount": total_edit_count,
-			"successCount": success_count,
-			"failureCount": failure_count,
-			"fileResults": file_results,
-		}),
-		false,
-	))
-}
 pub(crate) fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 	let command = options
 		.get("command")
 		.and_then(Value::as_str)
 		.ok_or_else(|| json_err("Missing required field: command"))?;
-	if command_requires_session(command) {
-		required_session_id(options)?;
-	}
-	if command == "edit" {
-		return execute_edit_command(options, required_session_id(options)?);
-	}
-
 	match command {
 		"open" => {
 			let path = required_path(options)?;
@@ -1983,16 +1751,9 @@ pub(crate) fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 				false,
 			))
 		},
-		"outline" | "navigate" | "read" | "undo" | "redo" | "diff" | "replace_content" | "save" => {
+		"outline" | "navigate" | "read" | "undo" | "redo" | "diff" => {
 			let path = required_path(options)?;
-			let allow_missing = command == "replace_content";
-			let buffer = if allow_missing {
-				buffer_registry()
-					.open_or_create(&path)
-					.map_err(engine_err)?
-			} else {
-				buffer_registry().open(&path).map_err(engine_err)?
-			};
+			let buffer = buffer_registry().open(&path).map_err(engine_err)?;
 			let mut buffer = buffer.lock();
 			let profile = get_profile(&path, buffer.language())?;
 			let text_fallback = buffer.language().as_str() == "text";
@@ -2002,7 +1763,7 @@ pub(crate) fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 					if text_fallback {
 						return Err(json_err(
 							"Semantic structure is unavailable for fallback text buffers. Use \
-							 read/diff/replace_content/save/undo/redo instead.",
+							 read/diff/undo/redo instead.",
 						));
 					}
 					let file_target_id = file_target_id_for_path(&path, options);
@@ -2026,7 +1787,7 @@ pub(crate) fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 					if text_fallback {
 						return Err(json_err(
 							"Semantic navigation is unavailable for fallback text buffers. Use \
-							 read/diff/replace_content/save/undo/redo instead.",
+							 read/diff/undo/redo instead.",
 						));
 					}
 					if buffer.language().as_str() == "edn"
@@ -2103,49 +1864,6 @@ pub(crate) fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 					),
 					false,
 				)),
-				"replace_content" => {
-					let before = buffer.source();
-					let content = options
-						.get("content")
-						.and_then(Value::as_str)
-						.ok_or_else(|| json_err("Missing required field: content"))?;
-					buffer
-						.edit_batch(vec![TextEdit {
-							start_byte:   0,
-							old_end_byte: before.len(),
-							new_text:     content.to_string(),
-						}])
-						.map_err(engine_err)?;
-					let diff = render_annotated_diff(&buffer, &before, &profile);
-					Ok(json_response(
-						json!({ "version": buffer.version(), "diff": diff, "editCount": 1 }),
-						false,
-					))
-				},
-				"save" => {
-					let session_id = required_session_id(options)?;
-					let source = buffer.source();
-					let code_paths = buffer
-						.last_revision_summary()
-						.map(|summary| summary.code_paths)
-						.unwrap_or_default();
-					drop(buffer);
-					let (transaction, ()) = buffer_registry()
-						.edit_transaction(session_id, &path, &code_paths, |fresh| {
-							let before = fresh.source();
-							if before == source {
-								return Ok(());
-							}
-							fresh.edit_batch(vec![TextEdit {
-								start_byte:   0,
-								old_end_byte: before.len(),
-								new_text:     source.clone(),
-							}])?;
-							Ok(())
-						})
-						.map_err(engine_err)?;
-					Ok(json_response(json!({ "success": true, "version": transaction.revision }), false))
-				},
 				_ => unreachable!(),
 			}
 		},
@@ -2446,194 +2164,43 @@ mod tests {
 		}
 	}
 
-	#[test]
-	fn execute_code_buffer_inner_creates_missing_file_buffers() {
-		let path = temp_path("create-buffer.ts");
-		let edit = execute_code_buffer_inner(&json!({ "command": "edit",
-				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [{
-				"targetId": path.display().to_string(),
-				"actions": [{ "kind": "write", "content": "export const created = 1;\n" }]
-			}] }))
-		.expect("create edit");
-		assert_eq!(edit["error"], json!(false));
-		assert_eq!(edit["output"]["status"], json!("applied"));
-		assert_eq!(edit["output"]["successCount"], json!(1));
-		assert_eq!(edit["output"]["failureCount"], json!(0));
-		let file_result = find_file_result(&edit, &path);
-		assert_eq!(file_result["status"], json!("applied"));
-		assert_eq!(file_result["created"], json!(true));
-		assert_eq!(file_result["persisted"], json!(true));
-		assert_eq!(file_result["dirty"], json!(false));
-		assert_eq!(fs::read_to_string(&path).expect("saved file"), "export const created = 1;\n");
-	}
 
-	#[test]
-	fn execute_code_buffer_inner_accepts_create_with_empty_transport_defaults() {
-		let path = temp_path("create-buffer-transport.ts");
-		let edit = execute_code_buffer_inner(&json!({ "command": "edit",
-				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [{
-				"targetId": path.display().to_string(),
-				"actions": [{ "kind": "write", "content": "export const created = 1;\n" }]
-			}],
-			"symbol": "",
-			"patches": [],
-			"edits": [],
-			"mode": "",
-			"action": "",
-			"line": 0,
-			"column": 0,
-			"resolution": 0,
-			"offset": 0,
-			"limit": 0,
-			"depth": 0 }))
-		.expect("create edit with defaults");
-		assert_eq!(edit["error"], json!(false));
-		assert_eq!(edit["output"]["status"], json!("applied"));
-		assert_eq!(find_file_result(&edit, &path)["created"], json!(true));
-		assert_eq!(fs::read_to_string(&path).expect("saved file"), "export const created = 1;\n");
-	}
 
-	#[test]
-	fn execute_code_buffer_inner_ignores_empty_edits_for_top_level_operations() {
-		let path = temp_path("empty-edits-shadow.ts");
-		fs::write(&path, "export const original = 1;\n").expect("seed file");
-		let edit = execute_code_buffer_inner(&json!({ "command": "edit",
-				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "saveMode": "staged",
-			"operations": [{
-				"targetId": path.display().to_string(),
-				"actions": [{ "kind": "write", "content": "export const replaced = 2;\n" }]
-			}],
-			"edits": [] }))
-		.expect("staged edit");
-		assert_eq!(edit["error"], json!(false));
-		assert_eq!(edit["output"]["status"], json!("staged"));
-		let file_result = find_file_result(&edit, &path);
-		assert_eq!(file_result["status"], json!("staged"));
-		assert_eq!(file_result["persisted"], json!(false));
-		assert_eq!(file_result["dirty"], json!(true));
-		assert_eq!(
-			fs::read_to_string(&path).expect("unchanged file"),
-			"export const original = 1;\n"
-		);
-		let save = execute_code_buffer_inner(
-			&json!({ "command": "save", "sessionId": TEST_SESSION_ID, "file": path.display().to_string(), }),
-		)
-		.expect("save staged edit");
-		assert_eq!(save["error"], json!(false));
-		assert_eq!(fs::read_to_string(&path).expect("saved file"), "export const replaced = 2;\n");
-	}
 
-	#[test]
-	fn execute_code_buffer_inner_applies_multiple_files_per_request() {
-		let first = temp_path("multi-file-first.ts");
-		let second = temp_path("multi-file-second.ts");
-		fs::write(&first, "export const first = 1;\n").expect("seed first");
-		fs::write(&second, "export const second = 2;\n").expect("seed second");
-		let edit = execute_code_buffer_inner(&json!({ "command": "edit",
-				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [
-				{ "targetId": first.display().to_string(), "actions": [{ "kind": "write", "content": "export const first = 10;\n" }] },
-				{ "targetId": second.display().to_string(), "actions": [{ "kind": "write", "content": "export const second = 20;\n" }] }
-			] }))
-		.expect("multi-file edit");
-		assert_eq!(edit["error"], json!(false));
-		assert_eq!(edit["output"]["status"], json!("applied"));
-		assert_eq!(edit["output"]["successCount"], json!(2));
-		assert_eq!(edit["output"]["failureCount"], json!(0));
-		assert_eq!(find_file_result(&edit, &first)["status"], json!("applied"));
-		assert_eq!(find_file_result(&edit, &second)["status"], json!("applied"));
-		assert_eq!(fs::read_to_string(&first).expect("first saved"), "export const first = 10;\n");
-		assert_eq!(fs::read_to_string(&second).expect("second saved"), "export const second = 20;\n");
-	}
 
-	#[test]
-	fn execute_code_buffer_inner_reports_partial_multi_file_results() {
-		let first = temp_path("partial-first.ts");
-		let second = temp_path("partial-second.ts");
-		fs::write(&first, "export const first = 1;\n").expect("seed first");
-		fs::write(&second, "export function main() {\n  return oldCall();\n}\n")
-			.expect("seed second");
-		let edit = execute_code_buffer_inner(&json!({ "command": "edit",
-				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [
-				{ "targetId": first.display().to_string(), "actions": [{ "kind": "write", "content": "export const first = 3;\n" }] },
-				{ "targetId": format!("{}::missing", second.display()), "actions": [{ "kind": "findAndReplace", "find": "return oldCall();", "content": "return never();" }] }
-			] }))
-		.expect("partial edit");
-		assert_eq!(edit["error"], json!(false));
-		assert_eq!(edit["output"]["status"], json!("partial"));
-		assert_eq!(edit["output"]["successCount"], json!(1));
-		assert_eq!(edit["output"]["failureCount"], json!(1));
-		assert_eq!(find_file_result(&edit, &first)["status"], json!("applied"));
-		let second_result = find_file_result(&edit, &second);
-		assert_eq!(second_result["status"], json!("failed"));
-		assert!(
-			second_result["error"]["message"]
-				.as_str()
-				.expect("error message")
-				.contains("Symbol 'missing' not found")
-		);
-		assert_eq!(fs::read_to_string(&first).expect("first saved"), "export const first = 3;\n");
-		assert_eq!(
-			fs::read_to_string(&second).expect("second unchanged"),
-			"export function main() {\n  return oldCall();\n}\n"
-		);
-	}
 
-	#[test]
-	fn execute_code_buffer_inner_clears_failed_multi_edit_state() {
-		let path = temp_path("failed-multi-edit.ts");
-		fs::write(&path, "export function main() {\n  return oldCall();\n}\n").expect("seed file");
-		let failed = execute_code_buffer_inner(&json!({ "command": "edit",
-				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [{
-				"targetId": format!("{}::main", path.display()),
-				"actions": [{ "kind": "findAndReplace", "find": "return oldCall();", "content": "return newCall();" }],
-				"children": [{
-					"targetId": format!("{}::missing", path.display()),
-					"actions": [{ "kind": "findAndReplace", "find": "return oldCall();", "content": "return shouldNotApply();" }]
-				}]
-			}] }))
-		.expect("failed multi edit result");
-		assert_eq!(failed["error"], json!(false));
-		assert_eq!(failed["output"]["status"], json!("failed"));
-		assert_eq!(failed["output"]["failureCount"], json!(1));
-		let listed =
-			execute_code_buffer_inner(&json!({ "command": "list" })).expect("list after fail");
-		let retained = listed["output"]
-			.as_array()
-			.expect("buffer list")
-			.iter()
-			.find(|buffer| buffer["path"] == json!(path.display().to_string()));
-		assert!(
-			retained.is_none()
-				|| retained.is_some_and(
-					|buffer| buffer["dirty"] == json!(false) && buffer["version"] == json!(0)
-				),
-			"failed multi-edit should not leave a dirty staged buffer behind: {listed}",
-		);
-		let follow_up = execute_code_buffer_inner(&json!({ "command": "edit",
-				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [{
-				"targetId": format!("{}::main", path.display()),
-				"actions": [{ "kind": "findAndReplace", "find": "return oldCall();", "content": "return finalCall();" }]
-			}] }))
-		.expect("follow-up edit");
-		assert_eq!(follow_up["error"], json!(false));
-		assert_eq!(
-			fs::read_to_string(&path).expect("saved file"),
-			"export function main() {\n  return finalCall();\n}\n"
-		);
-	}
 
 	#[test]
 	fn execute_code_buffer_inner_persisted_edit_preserves_undo_history() {
 		let _guard = lock_buffer_registry();
 		let path = temp_path("undo-redo-persisted.ts");
 		fs::write(&path, "export const value = 1;\n").expect("seed file");
-		let edit = execute_code_buffer_inner(&json!({ "command": "edit",
-				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [{
-				"targetId": path.display().to_string(),
-				"actions": [{ "kind": "write", "content": "export const value = 2;\n" }]
-			}] }))
-		.expect("persisted edit");
-		assert_eq!(edit["error"], json!(false));
+		let edit = crate::code_path::napi::execute_code_path_inner(
+			crate::code_path::napi::CodePathTaskOptions {
+				command: "edit".to_string(),
+				target: path.file_name().unwrap().to_string_lossy().to_string(),
+				transaction: None,
+				limit: None,
+				head: None,
+				tail: None,
+				offset: None,
+				format: None,
+				root: path.parent().map(|p| p.to_string_lossy().to_string()),
+				actions: Some(serde_json::json!([
+					{"kind": "fileWrite", "content": "export const value = 2;\n"}
+				])),
+				manage: None,
+				gitignore: None,
+				artifact_threshold: None,
+				session_id: None,
+			},
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		assert_eq!(edit.len(), 1);
+		assert!(edit[0].done);
+		let diags: Vec<_> = edit.iter().flat_map(|c| c.diagnostics.iter()).collect();
+		assert!(diags.is_empty(), "{:?}", diags);
 		assert_eq!(fs::read_to_string(&path).expect("saved edit"), "export const value = 2;\n");
 		assert!(
 			buffer_registry().get(&path).is_some(),
@@ -2655,29 +2222,6 @@ mod tests {
 		assert_eq!(diff["output"].as_array().expect("hunks").len(), 1);
 	}
 
-	#[test]
-	fn execute_code_buffer_inner_accepts_qualified_clojure_target_and_raw_replace() {
-		let path = temp_path("qualified-clojure.clj");
-		fs::write(
-			&path,
-			"(ns app.core)\n(defn reject [candidate]\n  (throw (ex-info \"live effects are \
-			 prohibited\" {:candidate candidate})))\n",
-		)
-		.expect("seed clojure");
-		let edit = execute_code_buffer_inner(&json!({ "command": "edit",
-				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [{
-			"targetId": format!("{}::app.core/reject", path.display()),
-			"actions": [{ "kind": "rawTextReplace", "find": "live effects are prohibited", "content": "side effects are prohibited" }]
-		}] }))
-		.expect("qualified clojure edit");
-		assert_eq!(edit["error"], json!(false));
-		assert_eq!(edit["output"]["status"], json!("applied"));
-		assert!(
-			fs::read_to_string(&path)
-				.expect("saved clojure")
-				.contains("side effects are prohibited")
-		);
-	}
 
 	#[test]
 	fn edn_outline_read_and_edit_use_data_paths() {
@@ -2702,34 +2246,6 @@ mod tests {
 		}))
 		.expect("edn read");
 		assert_eq!(read["output"], json!("\"Dune\""));
-
-		let edit = execute_code_buffer_inner(&json!({ "command": "edit",
-				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [{
-			"targetId": format!("{}::[:books 0 :title]", path.display()),
-			"actions": [{ "kind": "write", "content": "\"Foundation\"" }]
-		}] }))
-		.expect("edn edit");
-		assert_eq!(edit["output"]["status"], json!("applied"));
-		assert!(
-			fs::read_to_string(&path)
-				.expect("saved edn")
-				.contains("\"Foundation\"")
-		);
-	}
-	#[test]
-	fn execute_code_buffer_inner_rejects_create_for_existing_file() {
-		let path = temp_path("existing-create.ts");
-		fs::write(&path, "export const existing = true;\n").expect("seed file");
-		let result = execute_code_buffer_inner(&json!({ "command": "edit",
-				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "file": path.display().to_string(),
-			"operation": "create",
-			"content": "export const created = 1;\n" }))
-		.expect_err("create rejection");
-		assert_eq!(
-			result.to_string(),
-			"GenericFailure, Legacy code edit fields are not accepted for command 'edit': file, \
-			 operation, content. Use only 'operations' with targetId/action nodes.",
-		);
 	}
 
 	#[test]
@@ -3081,15 +2597,6 @@ mod tests {
 		}))
 	}
 
-	#[test]
-	fn delete_via_kill_node_rejects_zero_byte_outcome() {
-		let result: Result<Value> = delete_via_dispatch("fn alone() {}\n", 1, "program");
-		assert!(result.is_ok());
-		let payload = result.unwrap();
-		let file_results = payload["output"]["fileResults"].as_array().unwrap();
-		let error_msg = file_results[0]["error"]["message"].as_str().unwrap();
-		assert!(error_msg.contains("zero"), "expected zero-byte hint, got: {error_msg}");
-	}
 
 	#[test]
 	fn delete_via_kill_node_allows_non_zero_byte_outcome() {

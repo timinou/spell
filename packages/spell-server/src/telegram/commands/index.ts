@@ -69,7 +69,6 @@ const MODE_TOOLS: Record<string, string[]> = {
 		"edit",
 		"write",
 		"bash",
-		"ast_edit",
 		"task",
 		"todo_write",
 		"emacs_code",

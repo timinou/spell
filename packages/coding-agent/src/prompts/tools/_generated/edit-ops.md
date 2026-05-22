@@ -7,7 +7,7 @@ symbol-scoped — target must be `<file>::Symbol`
   symbolMove             direction (required direction) — Move direction: up or down
   symbolRawTextReplace   find (required content) — Text pattern to search for · content (required content) — New file contents (string or string[]) · occurrence (optional occurrence) — Which match to replace: first, last, all, or 1-indexed N (default: all)
   symbolRename           newName (required identifier) — New name for the symbol
-  symbolReplace          scope (optional symScope) — Replacement scope: whole (default), body, or target · content (required content) — New file contents (string or string[])
+  symbolReplace          scope (optional symScope) — Replacement scope: whole (default), body (content MUST include outer braces { ... }), or target · content (required content) — New file contents (string or string[])
   symbolSplice           mode (required spliceMode) — Splice mode: self, up, or down
   symbolTranspose        column (required u32) — 1-indexed column to transpose to
   symbolWrap             content (required content) — New file contents (string or string[])

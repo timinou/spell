@@ -4,7 +4,7 @@
 //! variant, never silent success. Tests are organised in three tiers:
 //!
 //! 1. **Parse-level** — `parse_code_path` rejects syntactically invalid input.
-//! 2. **Op-level** — target constructors / `Op::from_legacy` reject shape mismatches.
+//! 2. **Op-level** — target constructors reject shape mismatches.
 //! 3. **Resolver-level** (mostly #[ignore]) — require wired resolvers not yet built.
 //!
 //! Mirrors `packages/coding-agent/test/codepath/negative.test.ts` at the kernel
@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use pi_code_path::{
-    Action, ActionContent, CodePath, CssTarget, DiagnosticVariant, FileTarget,
+    ActionContent, CodePath, CssTarget, DiagnosticVariant, FileTarget,
     FsLocator, FsSegment, HeadingTarget, Locator, Op, OpKind, Query, Step, Head, NamePayload,
     SymbolTarget, UriLocator,
     dialects::typescript::TsNameLexer,
@@ -284,85 +284,6 @@ fn file_target_rejects_qualifier() {
         err.message.contains("symbol") || err.message.contains("qualifier"),
         "message should mention symbol/qualifier: {}",
         err.message
-    );
-}
-
-/// Document current overload behavior:
-/// `fileFindReplace` on a `::Symbol` target dispatches to `SymbolFindReplace`.
-#[test]
-#[allow(deprecated)]
-fn from_legacy_filefindreplace_on_symbol_creates_symbol_op() {
-    let action = Action::FindAndReplace {
-        find:       ActionContent::Single("old".to_string()),
-        content:    ActionContent::Single("new".to_string()),
-        occurrence: None,
-    };
-    let op = Op::from_legacy(&action, &symbol_path()).unwrap();
-    assert_eq!(
-        op.kind(),
-        OpKind::SymbolFindReplace,
-        "find/replace on ::Symbol target currently dispatches to SymbolFindReplace (overload)"
-    );
-}
-
-/// Document that a bare-path target with a `Write` action creates `FileWrite`.
-#[test]
-#[allow(deprecated)]
-fn from_legacy_write_on_bare_path_creates_file_write() {
-    let action = Action::Write {
-        content: ActionContent::Single("new content".to_string()),
-        force:   false,
-    };
-    let op = Op::from_legacy(&action, &bare_file_path()).unwrap();
-    assert_eq!(op.kind(), OpKind::FileWrite);
-}
-
-/// Document that a `::Symbol` target with a `Write` action creates `SymbolReplace`.
-#[test]
-#[allow(deprecated)]
-fn from_legacy_write_on_symbol_path_creates_symbol_replace() {
-    let action = Action::Write {
-        content: ActionContent::Single("new content".to_string()),
-        force:   false,
-    };
-    let op = Op::from_legacy(&action, &symbol_path()).unwrap();
-    assert_eq!(op.kind(), OpKind::SymbolReplace);
-    match op {
-        Op::SymbolReplace { scope, .. } => assert_eq!(scope, pi_code_path::SymScope::Whole),
-        _ => panic!("expected SymbolReplace"),
-    }
-}
-
-/// Document that `Insert` without `pos` or `line` fails.
-#[test]
-#[allow(deprecated)]
-fn from_legacy_insert_without_pos_or_line_returns_parse_error() {
-    let action = Action::Insert {
-        pos:   None,
-        line:  None,
-        lines: ActionContent::Single("x".to_string()),
-    };
-    let result = Op::from_legacy(&action, &bare_file_path());
-    assert!(result.is_err());
-    assert_eq!(
-        result.unwrap_err().variant,
-        DiagnosticVariant::ParseError
-    );
-}
-
-/// `from_legacy` on a URI locator rejects via target constructors.
-#[test]
-#[allow(deprecated)]
-fn from_legacy_write_on_uri_returns_incompatible_target() {
-    let action = Action::Write {
-        content: ActionContent::Single("x".to_string()),
-        force:   false,
-    };
-    let result = Op::from_legacy(&action, &uri_path());
-    assert!(result.is_err());
-    assert_eq!(
-        result.unwrap_err().variant,
-        DiagnosticVariant::IncompatibleTargetShape
     );
 }
 

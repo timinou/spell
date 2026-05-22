@@ -1,5 +1,5 @@
 #+TITLE: TUI keeps spinning at ~70% CPU when controlling pty is destroyed
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14ea14814559e822
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T15-17-13-109Z_14ea14814559e822.jsonl]]
 #+CUSTOM_ID: BUG-387-tui-keeps-spinning-at-70-cpu-when-contro
@@ -60,3 +60,5 @@ Aggregate observed today: ~302% CPU across 22 spell processes; one zombie alone 
 * Related
 
 - Part of =PLAN-XXX-tui-responsiveness=.
+
+NOTE [2026-05-21]: Closed in commit aebeba56b. Implementation across 8 files: terminal.ts (listeners + onLost API + idempotent #onPtyLost + per-stream liveness reasons), postmortem.ts (Reason.TERMINAL_LOST + quitGracefully with 1.5s drain cap + short-circuit when stdout not writable), logger.ts (info export), types.ts (SubmittedUserInput discriminated union), interactive-mode.ts (onLost subscription + #handleTerminalLost), input-controller.ts (kind tagging), main.ts (loop break), and new terminal-pty-loss.test.ts. Reviewer pass surfaced 3 P0 (tsgo union narrowing) + 3 P2 (per-stream reason, listener detach in #onPtyLost, drain timeout) + 1 P3 (stdin 'error' handler) — all addressed pre-commit. tui 326/0, utils 93/0, scoped coding-agent 10/0. tsgo clean on all touched files; biome clean.
