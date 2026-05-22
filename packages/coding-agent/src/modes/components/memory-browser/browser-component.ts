@@ -114,6 +114,10 @@ export class MemoryBrowserComponent implements Component {
 		return this.#activeTab;
 	}
 
+	setActiveTab(tab: MemoryBrowserTab): void {
+		this.#switchTab(tab);
+	}
+
 	// -- Private helpers --
 
 	#switchTab(next: MemoryBrowserTab): void {
