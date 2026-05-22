@@ -26,6 +26,77 @@ import { renderStatusLine } from "../tui/status-line";
 import type { ToolSession } from ".";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "./render-utils";
 
+// Actions that *read* from the recall lane and therefore benefit from
+// surfacing daemon warm-load progress to the agent. Writes (note / save /
+// link) don't touch the lane on the read path, so they don't need it.
+const READ_ACTIONS = new Set<string>(["search", "about", "neighbors", "since"]);
+
+/** Shape of the `org_lane` payload returned by `executeOrg({command:'recall_stats'})`. */
+export interface MemoryProgressSnapshot {
+	status: "cold" | "warming" | "warm" | "error" | "unavailable";
+	progress?: {
+		phase: "cold" | "scan" | "embed" | "index" | "done";
+		done: number;
+		total: number;
+		started_ms: number;
+	};
+	error?: string;
+}
+
+/**
+ * Read the daemon's current warm-load state for `repoRoot`. Cheap: the
+ * daemon serves this from atomics without touching the warm-load worker
+ * thread (PLAN-316). Returns `{ status: "warm" }` when the daemon is
+ * unreachable so callers never latch on a stale spinner.
+ */
+export function peekMemoryProgress(repoRoot: string): MemoryProgressSnapshot {
+	try {
+		const result = executeOrg({ command: "recall_stats", repoRoot });
+		if (result.error) {
+			// Old daemon binaries that don't recognise the command, or any
+			// other RPC error. Treat as `unavailable` so callers skip rather
+			// than triggering the slow `init` path.
+			return { status: "unavailable" };
+		}
+		return (result.output as MemoryProgressSnapshot) ?? { status: "unavailable" };
+	} catch {
+		return { status: "unavailable" };
+	}
+}
+
+/**
+ * Best-effort eager warm of the daemon's recall lane for `repoRoot`.
+ *
+ * Skips silently when the daemon's capabilities haven't been probed yet
+ * (would otherwise trigger the 5–30 s bge-m3 model load and block
+ * session start). Effective when the daemon is already initialised, e.g.
+ * for the second `spell` invocation in the same daemon lifetime, or
+ * after the agent has issued at least one memory query.
+ *
+ * The non-blocking warm-load on the daemon side (PLAN-316) means the
+ * subsequent `open` returns in milliseconds; only the model load is the
+ * irreducible cost, and it only happens on an explicit user query.
+ */
+export function warmMemoryLane(repoRoot: string): void {
+	try {
+		executeOrg({ command: "recall_warm", repoRoot });
+	} catch (err) {
+		logger.debug("warmMemoryLane: ignored error", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
+}
+
+function emitProgressPreambleIfWarming(repoRoot: string, onUpdate: AgentToolUpdateCallback): void {
+	// Only emit when the daemon explicitly reports `warming`. `unavailable`
+	// / `unknown` / `warm` don't need a spinner preamble.
+	const snapshot = peekMemoryProgress(repoRoot);
+	if (snapshot.status !== "warming") return;
+	const { done = 0, total = 0, phase = "scan" } = snapshot.progress ?? {};
+	const suffix = total > 0 ? ` ${done}/${total} (${phase})` : ` (${phase})`;
+	onUpdate({ content: [{ type: "text", text: `📚 indexing org memory…${suffix}` }] });
+}
+
 /**
  * Canonical node kinds (mirrors `RecallKind` in `pi-knowledge-core::recall`).
  * Used by `scope`, `kind` (save), and `scope_personal_only`'s implicit filter.
@@ -191,11 +262,17 @@ export class MemoryTool implements AgentTool<typeof memorySchema, MemoryDetails,
 		_toolCallId: string,
 		params: MemoryParams,
 		_signal?: AbortSignal,
-		_onUpdate?: AgentToolUpdateCallback,
+		onUpdate?: AgentToolUpdateCallback,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult> {
 		const repoRoot = this.#session.cwd ?? getProjectDir();
 		try {
+			// Surface daemon warm-load progress before a read-side call so the
+			// user sees "indexing…" instead of a silent hang on the first call.
+			// Cheap: `recall_stats` reads atomics on the daemon side (PLAN-316).
+			if (READ_ACTIONS.has(params.action) && onUpdate) {
+				emitProgressPreambleIfWarming(repoRoot, onUpdate);
+			}
 			const output = await dispatchMemoryAction(params, repoRoot);
 			const text = formatMemoryResult(output, params.action);
 			return { content: [{ type: "text", text }] };

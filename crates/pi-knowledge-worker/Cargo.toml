@@ -6,6 +6,10 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[lib]
+name = "pi_knowledge_worker"
+path = "src/lib.rs"
+
 [[bin]]
 name = "pi-knowledge-worker"
 path = "src/main.rs"

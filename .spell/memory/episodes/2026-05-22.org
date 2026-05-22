@@ -84,3 +84,40 @@ Partial DONE. T10.7 RELATIONS-drawer fix landed in pi-org-engine::buffer::extrac
 :RELATIONS:
 ABOUT: FEAT-773-plan-315-w7-dual-recall-personal-store-f
 :END:
+** ITEM handleInput state mutations bypass markDirty; W3 cache serves stale lines
+
+Fixed in commit f6b783a40. Pattern: wrap each handleInput in try/finally with markDirty in finally. Added regression test in packages/tui/test/input-dirty-propagation.test.ts (6/6). All three reported symptoms (spell -r arrows, settings modal arrows, paste invisible) addressed by unconditional dirty propagation.
+Closed via two follow-up commits 37356527a + 6b91a5108. Round 1 fixed SelectList/SettingsList/Input/Editor/SessionList. Round 2 fixed HookSelector (ask tool) via Container.invalidate force-propagation, CustomEditor.handleInput try/finally, Editor.setBorderColor/setTopBorder propagating dirty, StatusLineComponent.invalidate propagating dirty. 8 new regression tests cover all four areas.
+:PROPERTIES:
+:CUSTOM_ID: EP-4a9eb9042157c249
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T14:41:16Z
+:END:
+:RELATIONS:
+ABOUT: BUG-391-handleinput-state-mutations-bypass-markd
+:END:
+** ITEM Non-blocking warm-load on pi-knowledge-worker daemon
+
+PLAN-316 W1 landed: `LaneState { Cold | Warming | Warm | Error }` with `WarmProgress` atomics, slots mutex no longer held during warm-load. 7 integration tests in `tests/warm_progress.rs`; existing repo_cache + protocol_v2 tests still pass.
+:PROPERTIES:
+:CUSTOM_ID: EP-c50f562f6d6faa2
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T15:13:06Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-777-non-blocking-warm-load-on-pi-knowledge-w
+:END:
+** ITEM Memory index build TUI affordance + non-blocking warm
+
+Implementation landed. Daemon: non-blocking warm + progress atomics. pi-natives: `recall_warm` + `recall_stats` commands. memory tool: emits `📚 indexing N/M (phase)` preamble during warming. Eager warm in interactive/RPC/print session_start. Core MemoryStatusController publishes a status-line hook segment. Tests: 7 daemon integration, 6 memory tool, 7 controller, 345 pi-natives unit, 16 pi-knowledge-worker unit — all green. Pre-existing workspace-wide check:ts (166 err) and check:rs (~200 fmt) failures untouched.
+:PROPERTIES:
+:CUSTOM_ID: EP-ffc57c585b30bd97
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T15:13:55Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-316-memory-index-build-tui-affordance-non-bl
+:END:

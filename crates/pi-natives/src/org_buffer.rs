@@ -12,6 +12,7 @@ use std::{
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+use pi_knowledge_core::recall::RecallQuery;
 use pi_org_engine::{
 	buffer::extract_items_from_source,
 	edge::EdgeKind,
@@ -23,7 +24,6 @@ use pi_org_engine::{
 	query::{self, QueryFilter},
 	section,
 };
-use pi_knowledge_core::recall::RecallQuery;
 use serde_json::{Value, json};
 
 use crate::{buffer_registry, org_index};
@@ -794,7 +794,10 @@ fn cmd_recall(options: &Value) -> Result<Value> {
 		.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
 	let query = RecallQuery {
-		text:             options.get("text").and_then(Value::as_str).map(String::from),
+		text:             options
+			.get("text")
+			.and_then(Value::as_str)
+			.map(String::from),
 		scope:            options
 			.get("scope")
 			.and_then(Value::as_array)
@@ -804,7 +807,10 @@ fn cmd_recall(options: &Value) -> Result<Value> {
 					.collect()
 			})
 			.unwrap_or_default(),
-		focus:            options.get("focus").and_then(Value::as_str).map(String::from),
+		focus:            options
+			.get("focus")
+			.and_then(Value::as_str)
+			.map(String::from),
 		graph_hops:       options
 			.get("graphHops")
 			.and_then(Value::as_u64)
@@ -819,9 +825,9 @@ fn cmd_recall(options: &Value) -> Result<Value> {
 			})
 			.unwrap_or_default(),
 		limit:            options.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize,
-		weights:          options
-			.get("weights")
-			.and_then(|w| serde_json::from_value::<pi_knowledge_core::recall::FusionWeights>(w.clone()).ok()),
+		weights:          options.get("weights").and_then(|w| {
+			serde_json::from_value::<pi_knowledge_core::recall::FusionWeights>(w.clone()).ok()
+		}),
 		profile:          options
 			.get("profile")
 			.and_then(Value::as_str)
@@ -861,6 +867,44 @@ fn truncate_excerpt(mut hit: Value, max_chars: usize) -> Value {
 		hit["excerpt"] = json!(truncated);
 	}
 	hit
+}
+
+/// PLAN-316 — fire-and-forget warm of the daemon-side recall lane.
+/// Returns immediately with the daemon's open response (containing the
+/// current `status`). Used by `AgentSession` startup to mask first-call
+/// hangs without blocking the session boot.
+fn cmd_recall_warm(options: &Value) -> Result<Value> {
+	let repo_root = options
+		.get("repoRoot")
+		.and_then(Value::as_str)
+		.map(PathBuf::from)
+		.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+	let response = crate::recall_engine::warm(&repo_root).map_err(org_err)?;
+	// `None` means daemon caps unprobed; skip rather than force init.
+	Ok(json_response(
+		response.unwrap_or_else(|| json!({ "status": "unavailable" })),
+		false,
+	))
+}
+
+/// PLAN-316 — read warm-load progress for the active repo without
+/// triggering an embedding query. Returns the `org_lane` payload
+/// (`{status, progress?, error?}`); falls back to `{status: "warm"}` when
+/// the daemon isn't reachable so callers never latch on a stale spinner.
+fn cmd_recall_stats(options: &Value) -> Result<Value> {
+	let repo_root = options
+		.get("repoRoot")
+		.and_then(Value::as_str)
+		.map(PathBuf::from)
+		.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+	let response = crate::recall_engine::progress(&repo_root).map_err(org_err)?;
+	// `None` here means the daemon hasn't been initialised yet — surface
+	// that as `unavailable` so callers can skip rather than triggering
+	// the slow `init` model-load path.
+	Ok(json_response(
+		response.unwrap_or_else(|| json!({ "status": "unavailable" })),
+		false,
+	))
 }
 
 fn cmd_remember(options: &Value) -> Result<Value> {
@@ -1313,6 +1357,8 @@ fn execute_org_inner(options: &Value) -> Result<Value> {
 		"orgIndexArchive" => cmd_org_index_archive(options),
 		"orgIndexValidatePlan" => cmd_org_index_validate_plan(options),
 		"recall" => cmd_recall(options),
+		"recall_warm" => cmd_recall_warm(options),
+		"recall_stats" => cmd_recall_stats(options),
 		"remember" => cmd_remember(options),
 		"timeline" => cmd_timeline(options),
 		"subgraph" => cmd_subgraph(options),
@@ -1817,12 +1863,18 @@ mod tests {
 		let repo_dir = tempdir().expect("repo tempdir");
 		let prev_home = std::env::var("HOME").ok();
 		// SAFETY: env lock above gates parallel access to HOME; restored on drop.
-		unsafe { std::env::set_var("HOME", home_override.path()); }
+		unsafe {
+			std::env::set_var("HOME", home_override.path());
+		}
 		let result = remember(repo_dir.path(), "playbook", "JWT Rotation Runbook");
 		if let Some(prev) = prev_home {
-			unsafe { std::env::set_var("HOME", prev); }
+			unsafe {
+				std::env::set_var("HOME", prev);
+			}
 		} else {
-			unsafe { std::env::remove_var("HOME"); }
+			unsafe {
+				std::env::remove_var("HOME");
+			}
 		}
 		assert_eq!(result["error"], json!(false), "remember playbook should succeed: {result}");
 		assert_eq!(result["output"]["id"], json!("PB-jwt-rotation-runbook"));

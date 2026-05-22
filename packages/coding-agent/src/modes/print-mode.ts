@@ -7,6 +7,7 @@
  */
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import type { AgentSession } from "../session/agent-session";
+import { warmMemoryLane } from "../tools/memory";
 
 /**
  * Options for print mode.
@@ -142,6 +143,8 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 		await extensionRunner.emit({
 			type: "session_start",
 		});
+		// PLAN-316: eager warm of the recall daemon. See extension-ui-controller.
+		warmMemoryLane(session.sessionManager.getCwd());
 	}
 
 	// Always subscribe to enable session persistence via _handleAgentEvent
