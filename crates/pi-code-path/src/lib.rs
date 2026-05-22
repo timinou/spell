@@ -22,6 +22,9 @@ pub mod parser;
 pub mod renderer;
 pub mod resolver;
 pub mod diagnostic_render;
+pub mod scheme;
+pub mod scheme_cache;
+pub mod scheme_dispatch;
 pub mod types;
 
 pub use ast::*;
@@ -35,4 +38,11 @@ pub use renderer::render_code_path;
 pub use resolver::traits::MutationResolver;
 pub use introspection::*;
 pub use op_schema::{FieldSchema, FieldType, OpSchema, TargetFamily};
+pub use scheme_cache::SchemeCache;
+pub use scheme_dispatch::{validate_scheme_name, SchemeRegistry, RESERVED_SCHEMES};
+pub use scheme::{
+	CacheKey, CacheStrategy, ContentLoader, FragmentEntry, IndexLookup, LayoutMatch, PathLayout,
+	ReadMode, ResolvedAddress, ResolvedContent, RootTemplate, SchemeCallback, SchemeCapabilities,
+	SchemeProfile, SessionContext, SynthReducer, SynthSpec,
+};
 pub use types::*;
