@@ -39,7 +39,7 @@ pub struct OrgLane {
 	pub repo_root:   PathBuf,
 	pub items:       Vec<OrgItem>,
 	pub docs:        Vec<RecallDoc>,
-	pub bm25:        SearchIndex<RecallDoc>,
+	pub bm25:        SearchIndex,
 	pub vec:         VectorIndex,
 	pub graph:       TypedGraph,
 	pub profiles:    RecallProfileRegistry,
@@ -88,7 +88,7 @@ impl OrgLane {
 			"title": item.title,
 			"kind": item.properties.get("KIND").cloned().unwrap_or_default(),
 			"body": item.body,
-			"file": item.file_path,
+			"file": item.file,
 		});
 		let neighbors_raw = self.graph.neighbors(id);
 		let mut neighbors_out: Vec<Value> = Vec::with_capacity(neighbors_raw.len());
@@ -122,8 +122,13 @@ impl OrgLane {
 
 	/// `neighbors(focus, hops, kinds)` — BFS expansion. `hops=0` returns just the focus.
 	pub fn neighbors(&self, focus: &str, hops: u8, kinds: &[String]) -> Result<Value, String> {
-		let kind_filter: Vec<EdgeKind> =
-			kinds.iter().filter_map(|s| s.parse::<EdgeKind>().ok()).collect();
+		// EdgeKind::parse never fails (unknown tokens become EdgeKind::Other),
+		// so we collect *known* kinds only; empty filter == accept-all.
+		let kind_filter: Vec<EdgeKind> = kinds
+			.iter()
+			.map(|s| EdgeKind::parse(s))
+			.filter(EdgeKind::is_known)
+			.collect();
 		let mut visited: Vec<String> = vec![focus.to_string()];
 		let mut frontier: Vec<String> = vec![focus.to_string()];
 		let mut edges: Vec<Value> = Vec::new();
@@ -172,7 +177,7 @@ impl OrgLane {
 		let cutoff_ms = ts.to_epoch_ms()?;
 		let mut items: Vec<Value> = Vec::new();
 		for item in &self.items {
-			let path = Path::new(&item.file_path);
+			let path = Path::new(&item.file);
 			let Ok(meta) = fs::metadata(path) else {
 				continue;
 			};
@@ -186,7 +191,7 @@ impl OrgLane {
 				items.push(json!({
 					"id": item.id,
 					"title": item.title,
-					"file": item.file_path,
+					"file": item.file,
 					"modified_ms": modified_ms,
 				}));
 			}
@@ -462,14 +467,26 @@ mod tests {
 
 	#[test]
 	fn iso8601_parses_zulu_timestamp() {
-		// 2026-05-22T00:00:00Z = 1779753600
+		// 2026-05-22T00:00:00Z = 1779408000 (verified via python3 datetime)
 		let ms = parse_iso8601_to_ms("2026-05-22T00:00:00Z").expect("parse");
-		assert_eq!(ms, 1779_753_600_000);
+		assert_eq!(ms, 1_779_408_000_000);
 	}
 
 	#[test]
 	fn iso8601_parses_with_milliseconds() {
 		let ms = parse_iso8601_to_ms("2026-05-22T00:00:00.123Z").expect("parse");
-		assert_eq!(ms, 1779_753_600_123);
+		assert_eq!(ms, 1_779_408_000_123);
+	}
+
+	#[test]
+	fn iso8601_handles_leap_year_boundary() {
+		// 2024 is leap (366 days); Mar 1 2024 = epoch 1709251200.
+		let ms = parse_iso8601_to_ms("2024-03-01T00:00:00Z").expect("parse");
+		assert_eq!(ms, 1_709_251_200_000);
+	}
+
+	#[test]
+	fn iso8601_rejects_pre_epoch_year() {
+		assert!(parse_iso8601_to_ms("1969-12-31T23:59:59Z").is_err());
 	}
 }

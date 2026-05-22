@@ -1,0 +1,46 @@
+#+TITLE: tui-handleinput-dirty-propagation-invari
+
+** ITEM TUI handleInput dirty propagation invariant
+
+Invariant: every Component.handleInput in a TUI with a Container dirty-cache MUST mark its parent dirty regardless of which branch handled the input. The Container cache (FEAT-762) returns stale lines otherwise.
+
+Pattern (apply to every stateful handleInput):
+
+  handleInput(data: string): void {
+    try {
+      // ...existing branches with early returns
+    } finally {
+      this.#parent?.markDirty();
+    }
+  }
+
+Equivalent: extract body to #handleInputInner and make handleInput a thin try/finally wrapper.
+
+Why not "mark dirty at each mutation site"?
+- Mutator helpers (#insertCharacter, etc.) are called from many paths; auditing every call site is fragile.
+- Some keystrokes don't mutate state but still need a re-render (cursor blink, focus changes downstream). Try/finally covers everything cheaply.
+- Cost: one markDirty per keystroke = chained boolean writes up the parent chain. Negligible.
+
+Why not "TUI.requestRender invalidates the whole tree"?
+- Defeats the per-Container cache that PLAN-312 introduced.
+- Markdown/Text leaves still rely on their own caches; only stale ancestors need busting.
+
+What this catches:
+- Arrow keys / page nav in SelectList, SettingsList, SessionList, custom list components
+- Cursor moves in Input / Editor
+- Paste in Input / Editor (bracketed-paste handler returns early)
+- Undo / kill / yank in any input-like component
+- jump-mode in Editor
+
+Test pattern (regression):
+- DirtyCounter implements DirtyParent
+- setParent(counter); count = 0; fire each handleInput branch; expect counter incremented at least once per call</body>
+<parameter name="distilled_from">["BUG-391-handleinput-state-mutations-bypass-markd"]
+:PROPERTIES:
+:CUSTOM_ID: PB-tui-handleinput-dirty-propagation-invari
+:KIND: playbook
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T13:51:38Z
+:END:
+:RELATIONS:
+:END:

@@ -55,7 +55,7 @@ use serde_json::{Value, json};
 
 static ENGINE: OnceLock<Mutex<Option<EmbeddingEngine>>> = OnceLock::new();
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 enum Command {
 	Init,
@@ -78,6 +78,29 @@ enum Command {
 	Stats {
 		#[serde(default)]
 		repo_handle: Option<String>,
+	},
+	/// PLAN-315 W2: org/memory search. Routes to
+	/// `pi_knowledge_core::recall::recall` over the warm lane state.
+	Search {
+		repo_handle: String,
+		#[serde(flatten)]
+		query:       pi_knowledge_core::recall::RecallQuery,
+	},
+	/// `about(id)` — node + 1-hop neighbors + distillation lineage.
+	About { repo_handle: String, id: String },
+	/// BFS expansion from a focus node.
+	Neighbors {
+		repo_handle: String,
+		focus:       String,
+		#[serde(default)]
+		hops:        u8,
+		#[serde(default)]
+		kinds:       Vec<String>,
+	},
+	/// Items modified since timestamp (ISO-8601 string or epoch ms).
+	Since {
+		repo_handle: String,
+		ts:          lane_org::SinceTimestamp,
 	},
 }
 
@@ -104,6 +127,10 @@ fn supported_commands() -> &'static [&'static str] {
 		"open",
 		"close",
 		"stats",
+		"search",
+		"about",
+		"neighbors",
+		"since",
 	]
 }
 
@@ -180,6 +207,21 @@ fn handle_command(command: Command) -> Response {
 		},
 		Command::Close { repo_handle } => repo_cache::close(&repo_handle),
 		Command::Stats { repo_handle } => repo_cache::stats(repo_handle.as_deref()),
+		Command::Search { repo_handle, query } => {
+			repo_cache::with_org_lane(&repo_handle, |lane| {
+				let hits = lane.search(query)?;
+				Ok(json!({ "hits": hits }))
+			})
+		},
+		Command::About { repo_handle, id } => {
+			repo_cache::with_org_lane(&repo_handle, |lane| lane.about(&id))
+		},
+		Command::Neighbors { repo_handle, focus, hops, kinds } => {
+			repo_cache::with_org_lane(&repo_handle, |lane| lane.neighbors(&focus, hops, &kinds))
+		},
+		Command::Since { repo_handle, ts } => {
+			repo_cache::with_org_lane(&repo_handle, |lane| lane.since(&ts))
+		},
 	})) {
 		Ok(Ok(data)) => Response::Ok { ok: true, data },
 		Ok(Err(error)) => Response::Err { ok: false, error },
@@ -545,7 +587,7 @@ mod tests {
 	#[test]
 	fn deserializes_init_command() {
 		let command: Command = serde_json::from_str(r#"{"command":"init"}"#).expect("command");
-		assert_eq!(command, Command::Init);
+		assert!(matches!(command, Command::Init));
 	}
 
 	#[test]
