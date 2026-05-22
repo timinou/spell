@@ -1,0 +1,94 @@
+#+TITLE: Kernel-side URI resolver as declarative SchemeProfile DSL
+#+STATE: ITEM
+#+SESSION_ID: 14dd802985b2a5f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan309/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
+#+CUSTOM_ID: PLAN-310-kernel-side-uri-resolver-as-declarative
+#+EFFORT: 5d
+#+LAYER: kernel
+#+PRIORITY: #A
+
+* Initial Message
+
+I want a deeper reflection around URI handling across the codebase, and prior art research in pi-mono (where we'll eventually rebase this codebase onto)
+
+* Scope
+Move URI scheme resolution from TS-side InternalUrlRouter into the kernel as a declarative SchemeProfile DSL (mirroring the existing language-dialect pattern). Reverses FEAT-721 single-owner direction now that PLAN-309 unified the edit path on the kernel; URI dispatch is the remaining asymmetry. Brush gains native URI awareness via word-expansion hook in the vendored brush-core crate; MCP servers advertise their URI schemes dynamically; canvas:// registers similarly. Net result: kernel owns all URI dispatch, TS becomes a thin callback provider for the 2 truly JS-resident schemes (canvas + per-server MCP).
+
+* Design (locked)
+
+** Four axes
+- Root        : ProjectRoot | SessionRoot | UserRoot | AbsoluteRoot | Virtual
+- Layout      : Direct | NamedDir { entry_file, subpath_allowed } | NamedFile { ext } | IdFragment { default, fragments } | Indexed
+- Loader      : FsRead { mode } | Static { table } | Indexed { lookup } | Callback(Arc<dyn SchemeCallback>)
+- Capabilities: fs_backed · codepath_compatible · cache · mime_hint · bash_expandable · callback_budget
+
+** Schemes covered declaratively (9)
+skill · rule · memory · agent · artifact · jobs · org · pi · local
+
+** Schemes via Callback escape hatch (2 families)
+canvas (single static registration)
+MCP servers (N dynamic registrations, one per advertised schemePrefix; auto-derived from sanitized server name when not declared)
+
+** json-query
+Not a scheme. Folded into kernel codepath qualifier grammar as #json:<jq-expr>.
+
+* Locked decisions
+- Registration via build.rs scanning crates/pi-natives/src/code_path/uri/ → static SCHEMES table (no inventory crate)
+- Brush integration: modify crates/brush-core-vendored directly (no upstream); add WordPreprocessor trait; hook expand_word_piece
+- TS tests: shadow-mode through phase 4; per-scheme migration with Rust integration test mirroring TS conformance test; fixtures reused
+- D1 callback execution: sync with per-scheme callback_budget + cancellation token
+- D2 caching: CacheStrategy { None | UntilMtimeChange | Ttl(Duration) }; per-session SchemeCache (~120 LoC)
+- D3 MCP routing: per-server scheme registration; no mcp:// wrapper; no catch-all
+- D4 brush: vendor-modification, comprehensive test matrix (9 cases minimum)
+- D5 session context: Option<&SessionContext> threaded through every kernel call signature
+- D6 org lookup: reuse pi-org-engine::locate::MultiRootIndex via IndexLookup trait; lazy + mtime cache
+- MCP collision policy: registration against reserved native scheme names is rejected with clear diagnostic; two servers wanting same scheme → second rejected
+
+* Execution Manifest
+
+** Wave 1 (foundation, additive, zero behavior change)
+Kernel types + dispatch + cache + build.rs + 5 simple profiles + sessionContext threading.
+
+** Wave 2 (callback bridge)
+SchemeCallback trait + JsTsfnCallback + NAPI registerSchemeCallback + name validation.
+
+** Wave 3 (rich profiles)
+agent / artifact / jobs / org (using pi-org-engine MultiRootIndex). Contract test parity.
+
+** Wave 4 (per-scheme TS cutover, shadow→primary)
+Tools (get/find/edit/create/canvas) check kernel first; per-scheme migration commits.
+
+** Wave 5 (brush vendor integration)
+WordPreprocessor trait in brush-core-vendored; expand_word_piece hook; SchemeWordPreprocessor; test matrix (9 cases); SPELL_PATCHES.md.
+
+** Wave 6 (MCP advertisement)
+scheme-callbacks.ts; advertiseMcpSchemes; sanitize derivation; collision detection; canvas callback; e2e.
+
+** Wave 7 (cleanup)
+Delete internal-urls/; delete legacy kernel uri/mod.rs vestige; fold json-query into kernel qualifier; update AGENTS.md; supersede FEAT-721; close BUG-388.
+
+Transitional review waves may be added between any of the above as gaps are discovered. BUGs/FEATs found during implementation are filed and fixed inline.
+
+* Tests
+- Rust unit tests per profile module
+- Rust integration test mirroring each TS conformance test
+- Brush test matrix (9 cases)
+- MCP/canvas e2e through Rust callback path
+- Codepath suffix forwarding for fs_backed schemes
+- Cache strategy correctness per scheme
+
+* Acceptance
+- All 12 URI schemes (9 declarative + canvas + N MCP-advertised) resolve through kernel SchemeRegistry
+- Zero TS-side URI resolution code remains (only the thin registration helper)
+- Brush handles URI tokens natively via WordPreprocessor; no TS regex pre-pass
+- Single source of truth for "where does this scheme map to fs/callback"
+- New scheme = add one file in crates/pi-natives/src/code_path/uri/
+- All existing TS tests either green (running through kernel) or deleted (functionality moved to Rust)
+- cargo test green across pi-code-path / pi-code-engine / pi-natives
+- bun test green across packages/coding-agent/
+- tsgo clean
+- bun run gen:op-schema + gen:prompts zero diff
+
+* Supersedes
+- [[id:FEAT-721-uri-handling-single-owner-cutover-js-int]] (FEAT-721 invariant reversed by this PLAN)
+- [[id:BUG-388-kernel-executecodepath-does-not-register]] (kernel URI dispatch now wired; resolves the bug)
