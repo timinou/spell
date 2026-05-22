@@ -1,5 +1,5 @@
 /**
- * Tests for the `timeline` org command.
+ * Tests for the native `timeline` org command.
  *
  * NOTE: Requires `bun --cwd=packages/natives run dev:native` after adding
  * the new native dispatch arms.
@@ -10,23 +10,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { executeOrg } from "@oh-my-pi/pi-natives";
-import { createOrgTool, type OrgToolDefinition } from "../src/tool";
 
 let tmpDir: string;
-let tool: OrgToolDefinition;
 
 beforeEach(async () => {
 	tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-org-timeline-"));
-	tool = createOrgTool(tmpDir, {
-		dirs: {
-			tasks: {
-				path: "tasks",
-				categories: { features: { prefix: "FEAT", path: "features" } },
-			},
-		},
-		todoKeywords: ["ITEM", "DOING", "DONE"],
-		requiredProperties: ["CUSTOM_ID"],
-	});
 });
 
 afterEach(async () => {
@@ -42,12 +30,17 @@ function skipIfNoNative(): boolean {
 	}
 }
 
+function timeline(args: Record<string, unknown>): Record<string, unknown> {
+	const result = executeOrg({ command: "timeline", repoRoot: tmpDir, ...args });
+	if (result.error) throw new Error(String(result.output));
+	return result.output as Record<string, unknown>;
+}
+
 describe("timeline ordered episodes", () => {
 	test("returns timeline entries with ABOUT relations", async () => {
 		if (skipIfNoNative()) return;
 
 		const target = "CON-oauth";
-		// Write a memory episode with an ABOUT relation pointing at CON-oauth
 		const episodesDir = path.join(tmpDir, ".spell/memory/episodes");
 		await fs.mkdir(episodesDir, { recursive: true });
 		await Bun.write(
@@ -66,10 +59,7 @@ describe("timeline ordered episodes", () => {
 			].join("\n"),
 		);
 
-		const result = (await tool.execute({
-			command: "timeline",
-			target,
-		})) as Record<string, unknown>;
+		const result = timeline({ target });
 
 		const entries = (result as { entries?: unknown[] }).entries ?? [];
 		expect(entries.length).toBeGreaterThanOrEqual(1);
@@ -99,10 +89,7 @@ describe("timeline no-target empty", () => {
 			].join("\n"),
 		);
 
-		const result = (await tool.execute({
-			command: "timeline",
-			target: "CON-nonexistent",
-		})) as Record<string, unknown>;
+		const result = timeline({ target: "CON-nonexistent" });
 
 		const entries = (result as { entries?: unknown[] }).entries ?? [];
 		expect(entries.length).toBe(0);

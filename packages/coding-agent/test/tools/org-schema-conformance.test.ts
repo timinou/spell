@@ -14,6 +14,8 @@ import { OrgTool } from "@oh-my-pi/pi-coding-agent/tools/org";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { Value } from "@sinclair/typebox/value";
 
+// Memory-graph subcommands (recall/remember/timeline/subgraph/link) moved to the
+// dedicated `memory` tool in PLAN-310 W6.
 const ALL_SUBCOMMANDS = [
 	"init",
 	"create",
@@ -30,11 +32,6 @@ const ALL_SUBCOMMANDS = [
 	"graph",
 	"archive",
 	"suboutline-add",
-	"recall",
-	"remember",
-	"timeline",
-	"subgraph",
-	"link",
 ];
 
 let tmpDir: string;
@@ -72,7 +69,7 @@ async function seedParentItem(id: string, title: string): Promise<string> {
 }
 
 describe("orgSchema command description", () => {
-	it("enumerates all 20 subcommands", async () => {
+	it("enumerates the remaining 15 org subcommands", async () => {
 		const tool = new OrgTool(createSession());
 		const desc = tool.description;
 		for (const cmd of ALL_SUBCOMMANDS) {
