@@ -114,9 +114,15 @@ pub enum Event {
 	Heartbeat { ts: u64 },
 	/// Backpressure marker — N events were dropped before this frame.
 	Lag { dropped: u64 },
+	/// Synthetic benchmark payload; emitted_at in epoch ms.
+	/// PLAN-315 W8 perf instrumentation. Never emitted during normal operation.
+	BenchPayload {
+		emitted_at_ms: u64,
+		payload_id:   u32,
+	},
 }
 
-/// Per-(repo_handle, lane) subscriber registry. Multiple connections may
+/// Per-(repo_handle, lane) subscriber registry.
 /// subscribe; the registry fans out each `publish` to every sink.
 #[derive(Default)]
 pub struct LaneEvents {
@@ -304,6 +310,21 @@ pub fn publish_evicted(repo: &str, reason: &str) {
 	}
 }
 
+/// PLAN-315 W8 perf instrumentation. Stamps current epoch-ms and emits a
+/// BenchPayload on the given (repo, lane) channel. Subscribers compute
+/// delivery latency = receipt_ms - emitted_at_ms.
+pub fn publish_bench_event(repo_handle: &str, lane: Lane, payload_id: u32) {
+	let emitted_at_ms = SystemTime::now()
+		.duration_since(UNIX_EPOCH)
+		.map(|d| d.as_millis() as u64)
+		.unwrap_or(0);
+	registry().publish(
+		repo_handle,
+		lane,
+		&Event::BenchPayload { emitted_at_ms, payload_id },
+	);
+}
+
 /// Spawn a heartbeat thread bound to `out_tx`. Stops when the receiver is
 /// dropped or when `should_stop` returns true.
 pub fn spawn_heartbeat(
@@ -488,5 +509,58 @@ mod tests {
 			}
 		}
 		assert!(saw_lag, "expected a lag frame after channel overflow; saw {saw_more_events} extra events");
+	}
+
+	#[test]
+	fn bench_payload_delivers_on_subscribed_channel() {
+		let registry = EventRegistry::new();
+		let (tx, rx) = sync_channel(SUB_CHANNEL_DEPTH);
+		let _token = registry.subscribe("fnv:bench", Lane::OrgMemory, tx);
+
+		let payload_id = 42u32;
+		let emitted_at_ms = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.map(|d| d.as_millis() as u64)
+			.unwrap_or(0);
+
+		registry.publish(
+			"fnv:bench",
+			Lane::OrgMemory,
+			&Event::BenchPayload { emitted_at_ms, payload_id },
+		);
+
+		let frame = rx.recv_timeout(Duration::from_secs(1)).expect("frame");
+		let Frame::Event { body } = frame else {
+			panic!("expected event frame");
+		};
+		assert_eq!(body["event"], "bench_payload");
+		assert_eq!(body["payload_id"].as_u64(), Some(payload_id as u64));
+		assert!(body["emitted_at_ms"].as_u64().unwrap_or(0) > 0);
+	}
+
+	#[test]
+	fn bench_payload_emitted_at_ms_within_recent() {
+		// Verify that emitted_at_ms is within 1 second of test-start time.
+		let registry = registry();
+		let (tx, rx) = sync_channel(SUB_CHANNEL_DEPTH);
+		let _token = registry.subscribe("fnv:ts", Lane::OrgMemory, tx);
+
+		let payload_id = 7u32;
+		publish_bench_event("fnv:ts", Lane::OrgMemory, payload_id);
+
+		let frame = rx.recv_timeout(Duration::from_secs(1)).expect("frame");
+		let Frame::Event { body } = frame else {
+			panic!("expected event frame");
+		};
+		let emitted = body["emitted_at_ms"].as_u64().unwrap_or(0);
+		assert!(emitted > 0, "emitted_at_ms should be non-zero");
+
+		// Should be within 1000ms of now (accounting for test execution delay)
+		let now = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.map(|d| d.as_millis() as u64)
+			.unwrap_or(0);
+		let delta = now.saturating_sub(emitted);
+		assert!(delta < 3000, "emitted_at_ms {emitted} too old vs now {now} (delta {delta}ms)");
 	}
 }
