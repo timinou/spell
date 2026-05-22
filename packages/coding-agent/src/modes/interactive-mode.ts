@@ -71,6 +71,7 @@ import type { ToolExecutionHandle } from "./components/tool-execution";
 import { WelcomeComponent } from "./components/welcome";
 import { BtwController } from "./controllers/btw-controller";
 import { CommandController } from "./controllers/command-controller";
+import { MemoryStatusController } from "./controllers/memory-status-controller";
 import { EventController } from "./controllers/event-controller";
 import { ExtensionUiController } from "./controllers/extension-ui-controller";
 import { InputController } from "./controllers/input-controller";
@@ -288,6 +289,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #extensionUiController: ExtensionUiController;
 	readonly #inputController: InputController;
 	readonly #intentionController: IntentionController;
+	readonly #memoryStatusController: MemoryStatusController;
 	#lastDerivedStatus: AgentStatus | null = null;
 	#intentionSubscriptionUnsub?: () => void;
 	readonly #selectorController: SelectorController;
@@ -411,6 +413,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#btwController = new BtwController(this);
 		this.#extensionUiController = new ExtensionUiController(this);
 		this.#eventController = new EventController(this);
+		this.#memoryStatusController = new MemoryStatusController(this);
 		this.#commandController = new CommandController(this);
 		this.#selectorController = new SelectorController(this);
 		this.#inputController = new InputController(this);
@@ -585,6 +588,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Initialize hooks with TUI-based UI context
 		await this.initHooksAndCustomTools();
 		dbgStartup("h:after:initHooksAndCustomTools");
+
+		// PLAN-316: begin polling the recall daemon for warm-load progress.
+		// Renders nothing while the daemon is warm/idle; surfaces a status
+		// segment when an ingest is in flight.
+		this.#memoryStatusController.start();
 
 		// Register audit suggest callback for popup bridge
 		this.session.setAuditSuggestCallback(async () => {
@@ -1742,6 +1750,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#btwController.dispose();
 		this.#intentionSubscriptionUnsub?.();
 		this.#intentionController.dispose();
+		this.#memoryStatusController.dispose();
 
 		// Emit shutdown event to hooks
 		await this.session.dispose();

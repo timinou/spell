@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { executeOrg } from "@oh-my-pi/pi-natives";
 import Handlebars from "handlebars";
 import sessionStartTemplate from "../prompts/memories/session-start.md.hbs" with { type: "text" };
+import { peekMemoryProgress } from "../tools/memory";
 import { resolveGraphMemoryRoot } from "./layout";
 
 const template = Handlebars.compile(sessionStartTemplate);
@@ -38,15 +39,37 @@ export async function renderSessionStartSummary(cwd: string): Promise<string> {
 		return "";
 	}
 	_dbg("renderSessionStartSummary:enter", { cwd });
-	_dbg("before:executeOrg recall");
-	const recallRes = executeOrg({
-		command: "recall",
-		profile: "session-start",
-		scope: ["concept"],
-		limit: 12,
-		repoRoot: cwd,
-	});
-	_dbg("after:executeOrg recall", { hasError: !!(recallRes as { error?: unknown })?.error });
+
+	// PLAN-316: if the recall daemon hasn't finished warming for this repo,
+	// skip the synchronous recall (would block startup for 1–4 min on a cold
+	// cache). The MemoryStatusController surfaces "indexing…" in the status
+	// line; next session-start will get hits. peekMemoryProgress is cheap
+	// (atomic read on the daemon) and falls back to "warm" when the daemon
+	// is unreachable so we never accidentally skip the recall.
+	// PLAN-316: skip the synchronous recall when:
+	//   - the daemon is mid-warm (`warming` / `cold`): would block until
+	//     warm-load finishes, 1–4 min on a cold corpus, and
+	//   - the daemon hasn't been initialised yet (`unavailable`): forcing
+	//     the recall here would load the bge-m3 model (5–30 s) just for
+	//     the projection. Defer that to the first user-initiated memory
+	//     call where the wait is expected and onUpdate keeps the TUI live.
+	const progress = peekMemoryProgress(cwd);
+	let recallRes: ReturnType<typeof executeOrg>;
+	const skipStatuses = new Set(["warming", "cold", "unavailable", "error"]);
+	if (skipStatuses.has(progress.status)) {
+		_dbg("skip:executeOrg recall", { progress });
+		recallRes = { error: false, output: { hits: [] } };
+	} else {
+		_dbg("before:executeOrg recall");
+		recallRes = executeOrg({
+			command: "recall",
+			profile: "session-start",
+			scope: ["concept"],
+			limit: 12,
+			repoRoot: cwd,
+		});
+		_dbg("after:executeOrg recall", { hasError: !!(recallRes as { error?: unknown })?.error });
+	}
 	_dbg("before:executeOrg query DOING/TODO");
 	const queryRes = executeOrg({
 		command: "query",

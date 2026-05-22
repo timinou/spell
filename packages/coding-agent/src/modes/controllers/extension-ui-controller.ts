@@ -11,6 +11,7 @@ import type {
 	ExtensionUIDialogOptions,
 	TerminalInputHandler,
 } from "../../extensibility/extensions";
+import { warmMemoryLane } from "../../tools/memory";
 import { HookEditorComponent } from "../../modes/components/hook-editor";
 import { HookInputComponent } from "../../modes/components/hook-input";
 import { HookSelectorComponent } from "../../modes/components/hook-selector";
@@ -255,6 +256,10 @@ export class ExtensionUiController {
 		await extensionRunner.emit({
 			type: "session_start",
 		});
+		// PLAN-316: kick off the recall daemon's warm-load in the background
+		// so the first memory.search of the session doesn't pay the cold
+		// rebuild cost. Non-blocking on the daemon side; errors swallowed.
+		warmMemoryLane(this.ctx.sessionManager.getCwd());
 	}
 
 	setHookWidget(key: string, content: unknown): void {

@@ -3,8 +3,8 @@
 //! Warm-load pipeline:
 //! 1. Scan `!tasks/` and `.spell/memory/` under `repo_root`
 //! 2. Parse each `.org` file via `pi_org_engine::extract_items_from_source`
-//! 3. Build `RecallDoc`s, `SearchIndex<OrgItem>` (BM25), `VectorIndex`
-//!    (usearch via DaemonEmbedder), `TypedGraph` (from RELATIONS drawer)
+//! 3. Build `RecallDoc`s, `SearchIndex<OrgItem>` (BM25), `VectorIndex` (usearch
+//!    via DaemonEmbedder), `TypedGraph` (from RELATIONS drawer)
 //! 4. Persist via `pi_knowledge_core::cache::save_all`
 //!
 //! Query path: hold a `pi_knowledge_core::recall::RecallContext` over the
@@ -13,6 +13,7 @@
 use std::{
 	fs,
 	path::{Path, PathBuf},
+	sync::atomic::{AtomicU8, AtomicUsize, Ordering},
 	time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -20,12 +21,15 @@ use pi_knowledge_core::{
 	bm25::SearchIndex,
 	graph::EdgeKind,
 	recall::{
-		RecallContext, RecallDoc, RecallGraph, RecallHit, RecallProfileRegistry, RecallQuery,
-		recall,
+		Embedder, RecallContext, RecallDoc, RecallGraph, RecallHit, RecallProfileRegistry,
+		RecallQuery, recall,
 	},
 	vec::{VectorEntry, VectorIndex},
 };
-use pi_org_engine::{OrgItem, graph::TypedGraph, graph::build_typed_graph};
+use pi_org_engine::{
+	OrgItem,
+	graph::{TypedGraph, build_typed_graph},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -34,25 +38,168 @@ use crate::embedder_adapter::DaemonEmbedder;
 const SCANNED_SUBDIRS: &[&str] = &["!tasks", ".spell/memory"];
 const EMBEDDER_DIM: usize = 1024;
 
+// ---------------------------------------------------------------------------
+// Warm-load progress
+// ---------------------------------------------------------------------------
+
+/// Phase of an in-flight warm-load. Encoded as `AtomicU8` so callers can
+/// snapshot progress without acquiring any heavy lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum WarmPhase {
+	Cold  = 0,
+	Scan  = 1,
+	Embed = 2,
+	Index = 3,
+	Done  = 4,
+}
+
+impl WarmPhase {
+	const fn from_u8(v: u8) -> Self {
+		match v {
+			1 => Self::Scan,
+			2 => Self::Embed,
+			3 => Self::Index,
+			4 => Self::Done,
+			_ => Self::Cold,
+		}
+	}
+
+	pub const fn as_str(self) -> &'static str {
+		match self {
+			Self::Cold => "cold",
+			Self::Scan => "scan",
+			Self::Embed => "embed",
+			Self::Index => "index",
+			Self::Done => "done",
+		}
+	}
+}
+
+/// Shared progress payload for a single warm-load run. The fields are
+/// independent atomics so a `stats` call can read them without blocking
+/// the worker thread building the lane.
+#[derive(Debug)]
+pub struct WarmProgress {
+	phase:         AtomicU8,
+	done:          AtomicUsize,
+	total:         AtomicUsize,
+	started_at_ms: u64,
+}
+
+impl WarmProgress {
+	pub fn new() -> Self {
+		Self {
+			phase:         AtomicU8::new(WarmPhase::Cold as u8),
+			done:          AtomicUsize::new(0),
+			total:         AtomicUsize::new(0),
+			started_at_ms: now_unix_ms(),
+		}
+	}
+
+	pub fn phase(&self) -> WarmPhase {
+		WarmPhase::from_u8(self.phase.load(Ordering::SeqCst))
+	}
+
+	pub fn done(&self) -> usize {
+		self.done.load(Ordering::SeqCst)
+	}
+
+	pub fn total(&self) -> usize {
+		self.total.load(Ordering::SeqCst)
+	}
+
+	pub const fn started_at_ms(&self) -> u64 {
+		self.started_at_ms
+	}
+
+	/// Compact JSON snapshot suitable for the `stats` daemon response.
+	pub fn snapshot(&self) -> Value {
+		json!({
+			"phase":      self.phase().as_str(),
+			"done":       self.done(),
+			"total":      self.total(),
+			"started_ms": self.started_at_ms,
+		})
+	}
+
+	fn enter(&self, phase: WarmPhase, total: usize) {
+		self.total.store(total, Ordering::SeqCst);
+		self.done.store(0, Ordering::SeqCst);
+		self.phase.store(phase as u8, Ordering::SeqCst);
+	}
+
+	fn bump_done(&self) {
+		self.done.fetch_add(1, Ordering::SeqCst);
+	}
+}
+
+impl Default for WarmProgress {
+	fn default() -> Self {
+		Self::new()
+	}
+}
+
+fn now_unix_ms() -> u64 {
+	SystemTime::now()
+		.duration_since(UNIX_EPOCH)
+		.map_or(0, |d| d.as_millis() as u64)
+}
+
 /// Warm state for the org/memory lane of one repo.
 pub struct OrgLane {
-	pub repo_root:   PathBuf,
-	pub items:       Vec<OrgItem>,
-	pub docs:        Vec<RecallDoc>,
-	pub bm25:        SearchIndex,
-	pub vec:         VectorIndex,
-	pub graph:       TypedGraph,
-	pub profiles:    RecallProfileRegistry,
-	pub last_built:  SystemTime,
+	pub repo_root:  PathBuf,
+	pub items:      Vec<OrgItem>,
+	pub docs:       Vec<RecallDoc>,
+	pub bm25:       SearchIndex,
+	pub vec:        VectorIndex,
+	pub graph:      TypedGraph,
+	pub profiles:   RecallProfileRegistry,
+	pub last_built: SystemTime,
 }
 
 impl OrgLane {
+	/// Convenience wrapper: warm-load with the global `DaemonEmbedder` and
+	/// a throwaway progress counter. Used by callers that don't surface
+	/// progress to the UI (legacy / test convenience).
 	pub fn warm_load(repo_root: &Path) -> Result<Self, String> {
+		let progress = WarmProgress::new();
+		Self::warm_load_with(repo_root, &progress, &DaemonEmbedder)
+	}
+
+	/// Warm-load the org-memory lane, publishing phase + per-item
+	/// progress to `progress` and routing embeddings through `embedder`.
+	/// The embedder is dyn-dispatched so daemon code can pass
+	/// `DaemonEmbedder` while tests pass a deterministic stub.
+	pub fn warm_load_with(
+		repo_root: &Path,
+		progress: &WarmProgress,
+		embedder: &dyn Embedder,
+	) -> Result<Self, String> {
+		// Phase 1 — scan.
+		progress.enter(WarmPhase::Scan, 0);
 		let items = scan_items(repo_root);
+		progress.total.store(items.len(), Ordering::SeqCst);
+		progress.done.store(items.len(), Ordering::SeqCst);
+
 		let docs = project_docs(&items);
+
+		// Phase 2 — embed.
+		progress.enter(WarmPhase::Embed, items.len());
+		let vec = build_vec_index_with(&items, embedder, progress)?;
+
+		// Phase 3 — index (BM25 + graph). Counts stay at `total` because
+		// these phases are fast (sub-second on typical corpora) and don't
+		// naturally chunk per-item.
+		progress.enter(WarmPhase::Index, items.len());
+		progress.done.store(items.len(), Ordering::SeqCst);
 		let bm25 = SearchIndex::from_docs(&docs);
-		let vec = build_vec_index(&items)?;
 		let graph = build_typed_graph(&items);
+
+		// Phase 4 — done.
+		progress.enter(WarmPhase::Done, items.len());
+		progress.done.store(items.len(), Ordering::SeqCst);
+
 		Ok(Self {
 			repo_root: repo_root.to_path_buf(),
 			items,
@@ -68,11 +215,11 @@ impl OrgLane {
 	pub fn search(&self, query: RecallQuery) -> Result<Vec<RecallHit>, String> {
 		let embedder = DaemonEmbedder;
 		let ctx = RecallContext {
-			docs: &self.docs,
-			bm25: &self.bm25,
-			vec: &self.vec,
+			docs:     &self.docs,
+			bm25:     &self.bm25,
+			vec:      &self.vec,
 			embedder: &embedder,
-			graph: &self.graph,
+			graph:    &self.graph,
 			profiles: &self.profiles,
 		};
 		recall(query, &ctx).map_err(|e| format!("recall: {e}"))
@@ -120,7 +267,8 @@ impl OrgLane {
 		}))
 	}
 
-	/// `neighbors(focus, hops, kinds)` — BFS expansion. `hops=0` returns just the focus.
+	/// `neighbors(focus, hops, kinds)` — BFS expansion. `hops=0` returns just
+	/// the focus.
 	pub fn neighbors(&self, focus: &str, hops: u8, kinds: &[String]) -> Result<Value, String> {
 		// EdgeKind::parse never fails (unknown tokens become EdgeKind::Other),
 		// so we collect *known* kinds only; empty filter == accept-all.
@@ -282,9 +430,9 @@ fn scan_items(repo_root: &Path) -> Vec<OrgItem> {
 			let Ok(source) = fs::read_to_string(&file) else {
 				continue;
 			};
-			let Ok(parsed) = pi_org_engine::extract_items_from_source(
-				&source, &[], "", "", &path_str, false,
-			) else {
+			let Ok(parsed) =
+				pi_org_engine::extract_items_from_source(&source, &[], "", "", &path_str, false)
+			else {
 				continue;
 			};
 			items.extend(parsed);
@@ -321,9 +469,13 @@ fn project_docs(items: &[OrgItem]) -> Vec<RecallDoc> {
 		.collect()
 }
 
-fn build_vec_index(items: &[OrgItem]) -> Result<VectorIndex, String> {
-	let mut vec = VectorIndex::new(EMBEDDER_DIM, items.len().max(1))
-		.map_err(|e| format!("vec init: {e}"))?;
+fn build_vec_index_with(
+	items: &[OrgItem],
+	embedder: &dyn Embedder,
+	progress: &WarmProgress,
+) -> Result<VectorIndex, String> {
+	let mut vec =
+		VectorIndex::new(EMBEDDER_DIM, items.len().max(1)).map_err(|e| format!("vec init: {e}"))?;
 	if items.is_empty() {
 		return Ok(vec);
 	}
@@ -335,19 +487,23 @@ fn build_vec_index(items: &[OrgItem]) -> Result<VectorIndex, String> {
 		})
 		.collect();
 	let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
-	let embedder = DaemonEmbedder;
-	match <DaemonEmbedder as pi_knowledge_core::recall::Embedder>::embed_batch(&embedder, &refs) {
+	match embedder.embed_batch(&refs) {
 		Ok(vectors) => {
 			for (idx, item) in items.iter().enumerate() {
-				let Some(v) = vectors.get(idx) else { continue };
-				let node_id = id_hash(&item.id);
-				if let Err(e) = vec.upsert(VectorEntry { node_id, vector: v.clone() }) {
-					eprintln!("vec upsert for {}: {e}", item.id);
+				if let Some(v) = vectors.get(idx) {
+					let node_id = id_hash(&item.id);
+					if let Err(e) = vec.upsert(VectorEntry { node_id, vector: v.clone() }) {
+						eprintln!("vec upsert for {}: {e}", item.id);
+					}
 				}
+				progress.bump_done();
 			}
 		},
 		Err(e) => {
+			// Embedder unavailable: vector lane remains empty. Advance the
+			// counter to `total` so observers don't see it stuck mid-phase.
 			eprintln!("daemon embedder unavailable; vector lane empty: {e}");
+			progress.done.store(items.len(), Ordering::SeqCst);
 		},
 	}
 	Ok(vec)
@@ -376,7 +532,9 @@ mod tests {
 	static LANE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 	fn lane_lock() -> MutexGuard<'static, ()> {
-		LANE_TEST_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+		LANE_TEST_LOCK
+			.lock()
+			.unwrap_or_else(PoisonError::into_inner)
 	}
 
 	fn seed_corpus(root: &Path) {
@@ -442,9 +600,7 @@ mod tests {
 		let tmp = TempDir::new().expect("tmp");
 		seed_corpus(tmp.path());
 		let lane = OrgLane::warm_load(tmp.path()).expect("warm");
-		let result = lane
-			.neighbors("CON-alpha", 0, &[])
-			.expect("neighbors");
+		let result = lane.neighbors("CON-alpha", 0, &[]).expect("neighbors");
 		let nodes = result["nodes"].as_array().expect("nodes");
 		assert_eq!(nodes.len(), 1);
 		assert_eq!(nodes[0]["id"], "CON-alpha");
@@ -458,9 +614,7 @@ mod tests {
 		seed_corpus(tmp.path());
 		let lane = OrgLane::warm_load(tmp.path()).expect("warm");
 		// Cutoff at epoch 0 → all items.
-		let result = lane
-			.since(&SinceTimestamp::Epoch(0))
-			.expect("since");
+		let result = lane.since(&SinceTimestamp::Epoch(0)).expect("since");
 		let items = result["items"].as_array().expect("items");
 		assert!(!items.is_empty());
 	}

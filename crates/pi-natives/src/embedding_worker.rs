@@ -219,6 +219,22 @@ pub fn knowledge_capable() -> bool {
 	capabilities().knowledge_capable()
 }
 
+/// Read the cached protocol capabilities without ever triggering the
+/// slow `init` RPC (which loads the bge-m3 model on the daemon, 5–30 s).
+///
+/// - `Some(true)` — already initialised and supports the knowledge surface.
+/// - `Some(false)` — already initialised and does not.
+/// - `None` — not initialised yet; caller should treat this as
+///   "unknown, skip" rather than force the load.
+///
+/// Use this for UI / status / startup probes. Use [`knowledge_capable`]
+/// only when you are about to issue a real recall query that justifies
+/// paying the init cost.
+pub fn try_knowledge_capable() -> Option<bool> {
+	let guard = caps_slot().lock().ok()?;
+	guard.as_ref().map(Capabilities::knowledge_capable)
+}
+
 /// Issue a knowledge-protocol command and return the raw response object.
 /// Caller is responsible for checking the `ok` field and decoding
 /// command-specific payload fields.

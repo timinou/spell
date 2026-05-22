@@ -3,7 +3,7 @@
 #+SESSION_ID: 14ea14814559e822
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T15-17-13-109Z_14ea14814559e822.jsonl]]
 #+CUSTOM_ID: BUG-391-handleinput-state-mutations-bypass-markd
-#+COMPLETION_HASH: 0c4be64541cb1149
+#+COMPLETION_HASH: 7191bd5631db241c
 
 * Initial Message
 
@@ -43,3 +43,5 @@ Wrap each affected handleInput in ~try { ... } finally { #parent?.markDirty() }~
 - packages/coding-agent/src/modes/components/session-selector.ts (SessionList class)
 
 NOTE [2026-05-22]: Fixed in commit f6b783a40. Pattern: wrap each handleInput in try/finally with markDirty in finally. Added regression test in packages/tui/test/input-dirty-propagation.test.ts (6/6). All three reported symptoms (spell -r arrows, settings modal arrows, paste invisible) addressed by unconditional dirty propagation.
+
+NOTE [2026-05-22]: Closed via two follow-up commits 37356527a + 6b91a5108. Round 1 fixed SelectList/SettingsList/Input/Editor/SessionList. Round 2 fixed HookSelector (ask tool) via Container.invalidate force-propagation, CustomEditor.handleInput try/finally, Editor.setBorderColor/setTopBorder propagating dirty, StatusLineComponent.invalidate propagating dirty. 8 new regression tests cover all four areas.

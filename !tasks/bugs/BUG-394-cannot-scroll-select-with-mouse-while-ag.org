@@ -1,0 +1,55 @@
+#+TITLE: cannot scroll/select with mouse while agent active; constant renders break terminal selection
+#+STATE: ITEM
+#+SESSION_ID: 14ea14814559e822
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T15-17-13-109Z_14ea14814559e822.jsonl]]
+#+CUSTOM_ID: BUG-394-cannot-scroll-select-with-mouse-while-ag
+
+* Initial Message
+
+do a deep, critical review of the work just done, and identify any sources of lag or undue TUI renders. the TUI stil feels a bit slow.
+
+* Symptom
+
+While the agent is actively streaming or running tools, mouse selection
+and scrollback are unusable. When paused, both work fine.
+
+* Root cause
+
+Not a mouse-capture issue — TUI doesn't enable ANY of the mouse modes
+(1000/1006/1015 etc.). The cause is that every render call writes ANSI
+sequences to the terminal:
+- `\x1b[?2026h` ... `\x1b[?2026l` (synchronized output begin/end)
+- Cursor positioning (`\x1b[NA`, `\x1b[NB`)
+- `\x1b[2K` (clear line)
+- Updated line content
+- `\r
+` (newlines)
+
+In most terminal emulators (Ghostty, kitty, alacritty, iTerm2), ANY
+write from the application clears the user's current mouse selection.
+At streaming rate (60Hz throttle, many actual renders per second
+during agent activity), the selection is reset before the user can
+finish making it.
+
+* Possible fixes
+
+A) Reduce render frequency when no user-perceptible change is needed.
+   The current setMinRenderInterval defaults to 16ms. During agent
+   activity but with no streaming/spinner activity, this could be
+   relaxed to 100-250ms with no UX cost.
+
+B) Add a "scroll mode" key (e.g. Ctrl+S) that pauses renders entirely
+   until the user exits scroll mode. Capture-and-release pattern used
+   by tmux, screen, ranger.
+
+C) Detect mouse selection start (xterm reports mouse-down events when
+   protocol enabled) and pause renders until release. Requires enabling
+   mouse capture which has its own UX cost.
+
+(B) is the cleanest user-facing fix. (A) is the safest backstop and
+should ship anyway. (C) requires a UX tradeoff.
+
+* Files
+
+- packages/tui/src/tui.ts (render throttle, scroll-mode hook)
+- packages/coding-agent/src/modes/interactive-mode.ts (key binding)

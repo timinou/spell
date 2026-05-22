@@ -1,0 +1,46 @@
+#+TITLE: Non-blocking warm-load on pi-knowledge-worker daemon
+#+STATE: DONE
+#+SESSION_ID: 14eb4e97aabcb79a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-22T14-09-29-258Z_14eb4e97aabcb79a.jsonl]]
+#+CUSTOM_ID: FEAT-777-non-blocking-warm-load-on-pi-knowledge-w
+#+LAYER: pi-knowledge-worker pi-natives
+#+COMPLETION_HASH: aaa11b60a6d77076
+
+* Initial Message
+
+/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-22T14-00-50-647Z_14eb4c9d35c8638c.jsonl
+ ID: 14eb4c9d35c8638c
+
+
+the memory call (search text:SubagentViewer hydrate tracker mount alt+j jobs) hung the whole thing for a while. why?
+
+* Scope
+Refactor `crates/pi-knowledge-worker/src/repo_cache.rs` so `Command::Open` returns immediately and runs `warm_load` on a background thread. Replace `RepoSlot.org_lane: Option<OrgLane>` with a `LaneState { Cold, Warming(Arc<WarmProgress>), Warm(Arc<OrgLane>), Error(String) }`. Drop the slots mutex before warm-load runs. `Command::Stats` reports warming progress without acquiring the warm-load critical section.
+
+* User workflows
+1. `Open` returns within ms even on a cold 2700-file corpus.
+2. `Stats` reflects progress (`phase`, `done`, `total`) while warm-load is running.
+3. Concurrent `Search` on a warming slot waits until warm completes, then returns hits.
+4. Second `Open` while warming returns existing handle, does not spawn duplicate worker.
+5. After warm completes, `Stats.status` flips to `warm`; subsequent searches use the warm engine.
+6. Warm-load panic transitions to terminal `Error` state — searches surface the error rather than hanging.
+
+* Tests
+- `crates/pi-knowledge-worker/tests/warm_progress.rs` (new) covers workflows 1–6 with synthetic org fixtures and a stub embedder.
+- Existing `tests/protocol_v2.rs` updated to the new stats payload.
+
+* Implementation
+- Replace `org_lane: Option<OrgLane>` with `org_state: Arc<Mutex<LaneState>>` (state Mutex is per-slot, separate from slots map mutex).
+- `open()` flow: lock slots → match state → if Cold, swap to Warming(progress), drop slots lock, `thread::spawn(warm_runner(progress, repo_root, state_handle))`, return immediately.
+- `with_org_lane()` waits on the per-slot Condvar until `Warm` or `Error`.
+- `stats()` reads atomic counters from `WarmProgress` without locking the lane.
+- `warm_runner` invokes `OrgLane::warm_load_with_progress(...)` from lane_org.rs, then publishes the result back into the per-slot state.
+
+* Acceptance Criteria
+- `cargo test -p pi-knowledge-worker` passes including new `warm_progress` test module.
+- Open + Stats + Search are non-blocking with respect to each other.
+- No deadlock in concurrent test scenarios.
+
+Tracks: [[id:PLAN-316-memory-index-build-tui-affordance-non-bl]]
+
+NOTE [2026-05-22]: PLAN-316 W1 landed: `LaneState { Cold | Warming | Warm | Error }` with `WarmProgress` atomics, slots mutex no longer held during warm-load. 7 integration tests in `tests/warm_progress.rs`; existing repo_cache + protocol_v2 tests still pass.
