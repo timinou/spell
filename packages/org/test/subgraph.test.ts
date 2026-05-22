@@ -1,5 +1,5 @@
 /**
- * Tests for the `subgraph` org command.
+ * Tests for the native `subgraph` org command.
  *
  * NOTE: Requires `bun --cwd=packages/natives run dev:native` after adding
  * the new native dispatch arms.
@@ -10,23 +10,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { executeOrg } from "@oh-my-pi/pi-natives";
-import { createOrgTool, type OrgToolDefinition } from "../src/tool";
 
 let tmpDir: string;
-let tool: OrgToolDefinition;
 
 beforeEach(async () => {
 	tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-org-subgraph-"));
-	tool = createOrgTool(tmpDir, {
-		dirs: {
-			tasks: {
-				path: "tasks",
-				categories: { features: { prefix: "FEAT", path: "features" } },
-			},
-		},
-		todoKeywords: ["ITEM", "DOING", "DONE"],
-		requiredProperties: ["CUSTOM_ID"],
-	});
 });
 
 afterEach(async () => {
@@ -40,6 +28,12 @@ function skipIfNoNative(): boolean {
 	} catch {
 		return true;
 	}
+}
+
+function subgraph(args: Record<string, unknown>): Record<string, unknown> {
+	const result = executeOrg({ command: "subgraph", repoRoot: tmpDir, ...args });
+	if (result.error) throw new Error(String(result.output));
+	return result.output as Record<string, unknown>;
 }
 
 describe("subgraph hops=1", () => {
@@ -74,16 +68,11 @@ describe("subgraph hops=1", () => {
 			].join("\n"),
 		);
 
-		const result = (await tool.execute({
-			command: "subgraph",
-			root: "CON-oauth",
-			hops: 1,
-		})) as Record<string, unknown>;
+		const result = subgraph({ root: "CON-oauth", hops: 1 });
 
 		const nodes = (result as { nodes?: unknown[] }).nodes ?? [];
 		const edges = (result as { edges?: unknown[] }).edges ?? [];
 
-		// Should include CON-oauth, CON-tokens (neighbor), but NOT CON-unrelated
 		const nodeIds = nodes.map((n: unknown) => (n as Record<string, unknown>).id);
 		expect(nodeIds).toContain("CON-oauth");
 		expect(nodeIds).toContain("CON-tokens");
@@ -134,21 +123,13 @@ describe("subgraph hops=2 with kind filter", () => {
 			].join("\n"),
 		);
 
-		const result = (await tool.execute({
-			command: "subgraph",
-			root: "CON-root",
-			hops: 2,
-			kinds: ["INVOLVED"],
-		})) as Record<string, unknown>;
+		const result = subgraph({ root: "CON-root", hops: 2, kinds: ["INVOLVED"] });
 
 		const nodeIds = ((result as { nodes?: Array<{ id: string }> }).nodes ?? []).map(n => n.id);
 		const edgeKinds = ((result as { edges?: Array<{ kind: string }> }).edges ?? []).map(e => e.kind);
 
-		// All edges should be INVOLVED
 		expect(edgeKinds.every((k: string) => k === "INVOLVED")).toBe(true);
-		// Should reach grandchild via 2 hops over INVOLVED edges
 		expect(nodeIds).toContain("CON-grandchild");
-		// CON-other is connected via ABOUT, not INVOLVED, so should be excluded
 		expect(nodeIds).not.toContain("CON-other");
 	});
 });

@@ -1,5 +1,5 @@
 /**
- * Tests for the `recall` org command.
+ * Tests for the native `recall` org command.
  *
  * NOTE: Requires `bun --cwd=packages/natives run dev:native` after adding
  * the new native dispatch arms. Without that, executeOrg will throw.
@@ -10,25 +10,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { executeOrg } from "@oh-my-pi/pi-natives";
-import { createOrgTool, type OrgToolDefinition } from "../src/tool";
-
-const TODO_KEYWORDS = ["ITEM", "DOING", "REVIEW", "DONE", "BLOCKED", "CANCELLED"];
 
 let tmpDir: string;
-let tool: OrgToolDefinition;
 
 beforeEach(async () => {
 	tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-org-recall-"));
-	tool = createOrgTool(tmpDir, {
-		dirs: {
-			tasks: {
-				path: "tasks",
-				categories: { features: { prefix: "FEAT", path: "features" } },
-			},
-		},
-		todoKeywords: TODO_KEYWORDS,
-		requiredProperties: ["CUSTOM_ID"],
-	});
 });
 
 afterEach(async () => {
@@ -51,11 +37,16 @@ function skipIfNoNative(): boolean {
 	}
 }
 
+function recall(args: Record<string, unknown>): Record<string, unknown> {
+	const result = executeOrg({ command: "recall", repoRoot: tmpDir, ...args });
+	if (result.error) throw new Error(String(result.output));
+	return result.output as Record<string, unknown>;
+}
+
 describe("recall happy path", () => {
 	test("returns hits from fts matching text", async () => {
 		if (skipIfNoNative()) return;
 
-		// Write fixture org files under !tasks
 		await writeFixture(
 			"!tasks/features",
 			"FEAT-001.org",
@@ -81,10 +72,7 @@ describe("recall happy path", () => {
 			].join("\n"),
 		);
 
-		const result = (await tool.execute({
-			command: "recall",
-			text: "OAuth2",
-		})) as Record<string, unknown>;
+		const result = recall({ text: "OAuth2" });
 
 		const hits = (result as { hits?: unknown[] }).hits ?? [];
 		expect(hits.length).toBeGreaterThanOrEqual(1);
@@ -111,11 +99,7 @@ describe("recall profile", () => {
 			].join("\n"),
 		);
 
-		const result = (await tool.execute({
-			command: "recall",
-			text: "authentication",
-			profile: "session-start",
-		})) as Record<string, unknown>;
+		const result = recall({ text: "authentication", profile: "session-start" });
 
 		const hits = (result as { hits?: unknown[] }).hits ?? [];
 		expect(Array.isArray(hits)).toBe(true);
@@ -139,20 +123,15 @@ describe("recall scope filter", () => {
 			].join("\n"),
 		);
 
-		const result = (await tool.execute({
-			command: "recall",
-			text: "OAuth2",
-			scope: ["concept"],
-		})) as Record<string, unknown>;
+		const result = recall({ text: "OAuth2", scope: ["concept"] });
 
 		const hits = (result as { hits?: unknown[] }).hits ?? [];
-		// The only item has kind=episode, scope=["concept"] should exclude it
 		expect(hits.length).toBe(0);
 	});
 });
 
 describe("recall empty result", () => {
-	test("returns empty hits when no match", async () => {
+	test("returns no FTS-ranked hits when no text match", async () => {
 		if (skipIfNoNative()) return;
 
 		await writeFixture(
@@ -168,12 +147,11 @@ describe("recall empty result", () => {
 			].join("\n"),
 		);
 
-		const result = (await tool.execute({
-			command: "recall",
-			text: "zzzzzzzzzzz",
-		})) as Record<string, unknown>;
+		const result = recall({ text: "zzzzzzzzzzz" });
 
-		const hits = (result as { hits?: unknown[] }).hits ?? [];
+		const hits = ((result as { hits?: Array<Record<string, unknown>> }).hits ?? []).filter(
+			h => (h.why as Record<string, unknown> | undefined)?.bm25_rank !== null,
+		);
 		expect(hits.length).toBe(0);
 	});
 });

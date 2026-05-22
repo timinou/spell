@@ -50,6 +50,7 @@ import { GoalsTool } from "./goals-tool";
 
 import { InspectImageTool } from "./inspect-image";
 import { ManageTool } from "./manage";
+import { MemoryTool } from "./memory";
 import { OrgTool } from "./org";
 import { wrapToolWithMetaNotice } from "./output-meta";
 
@@ -262,6 +263,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	await: AwaitTool.createIf,
 	todo_write: s => new TodoWriteTool(s),
 	org: s => new OrgTool(s),
+	memory: s => new MemoryTool(s),
 	fetch: s => new FetchTool(s),
 	web_search: s => new SearchTool(s),
 	search_tool_bm25: SearchToolBm25Tool.createIf,
@@ -305,6 +307,7 @@ export const TOOL_TIERS: Record<string, ToolTier> = {
 
 	todo_write: "standard",
 	org: "standard",
+	memory: "standard",
 	fetch: "standard",
 	web_search: "standard",
 	cancel_job: "standard",
