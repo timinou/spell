@@ -431,50 +431,52 @@ mod tests {
 		assert!(!path.exists(), "corrupt cache file should be deleted");
 		let _ = fs::remove_dir_all(dir);
 	}
-}
-/// Regression for the 2026-05-22 crash:
-///   'memory allocation of 3256718464018306369 bytes failed'
-/// triggered when a stale workspace.bin contained an `OrgIndex` whose
-/// first `String` length-prefix was actually the byte pattern `"AUD-002-"`
-/// (an org item ID). Read as little-endian u64 that's 0x2d3230302d445541
-/// = 3.25 EB, which the global allocator rejected → process abort,
-/// bypassing `catch_unwind` and killing the host bun process.
-///
-/// This test pins the worst-case shape: header looks valid (so neither
-/// the magic nor the version check rejects), then the first bincode
-/// length-prefix is the catastrophic value. `with_limit(file_size)` MUST
-/// turn this into `Err` (which becomes `Ok(None)` + file deletion), not
-/// an OOM-abort.
-#[test]
-fn load_returns_none_for_oversized_length_prefix() {
-	let dir = temp_dir("oversized-len-prefix");
-	let _ = fs::remove_dir_all(&dir);
-	fs::create_dir_all(&dir).expect("temp dir");
-	let store = CacheStore::new(&dir);
 
-	let path = store.entry_path("unit");
-	let mut data = Vec::new();
-	data.extend_from_slice(b"PIWC");
-	data.extend_from_slice(&TestEntry::SCHEMA_VERSION.to_le_bytes());
-	// Exact crash bytes: "AUD-002-" read as little-endian u64 length.
-	data.extend_from_slice(b"AUD-002-");
-	assert_eq!(
-		u64::from_le_bytes(b"AUD-002-".as_slice().try_into().unwrap()),
-		3_256_718_464_018_306_369_u64,
-		"sanity: this is the exact crash byte pattern",
-	);
-	// A bit of trailing data so file size is plausible but tiny.
-	data.extend_from_slice(&[0u8; 64]);
-	fs::write(&path, &data).expect("write");
+	/// Regression for the 2026-05-22 crash:
+	///   'memory allocation of 3256718464018306369 bytes failed'
+	/// triggered when a stale workspace.bin contained an `OrgIndex` whose
+	/// first `String` length-prefix was actually the byte pattern `"AUD-002-"`
+	/// (an org item ID). Read as little-endian u64 that's 0x2d3230302d445541
+	/// = 3.25 EB, which the global allocator rejected → process abort,
+	/// bypassing `catch_unwind` and killing the host bun process.
+	///
+	/// This test pins the worst-case shape: header looks valid (so neither
+	/// the magic nor the version check rejects), then the first bincode
+	/// length-prefix is the catastrophic value. `with_limit(file_size)` MUST
+	/// turn this into `Err` (which becomes `Ok(None)` + file deletion), not
+	/// an OOM-abort.
+	#[test]
+	fn load_returns_none_for_oversized_length_prefix() {
+		let _guard = test_lock();
+		let dir = temp_dir("oversized-len-prefix");
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).expect("temp dir");
+		let store = CacheStore::new(&dir);
 
-	// MUST NOT abort. Either `Ok(None)` (corrupt file deleted) or `Err`
-	// would both be acceptable behaviour from a safety standpoint — the
-	// contract this test pins is 'no SIGABRT'.
-	let loaded = store.load::<TestEntry>("unit");
-	assert!(
-		loaded.as_ref().is_ok_and(|opt| opt.is_none()),
-		"oversized length prefix must yield Ok(None), got {loaded:?}",
-	);
-	assert!(!path.exists(), "corrupt file must be cleaned up");
-	let _ = fs::remove_dir_all(dir);
+		let path = store.entry_path("unit");
+		let mut data = Vec::new();
+		data.extend_from_slice(b"PIWC");
+		data.extend_from_slice(&TestEntry::SCHEMA_VERSION.to_le_bytes());
+		// Exact crash bytes: "AUD-002-" read as little-endian u64 length.
+		data.extend_from_slice(b"AUD-002-");
+		assert_eq!(
+			u64::from_le_bytes(b"AUD-002-".as_slice().try_into().unwrap()),
+			3_256_718_464_018_306_369_u64,
+			"sanity: this is the exact crash byte pattern",
+		);
+		// A bit of trailing data so file size is plausible but tiny.
+		data.extend_from_slice(&[0u8; 64]);
+		fs::write(&path, &data).expect("write");
+
+		// MUST NOT abort. Either `Ok(None)` (corrupt file deleted) or `Err`
+		// would both be acceptable behaviour from a safety standpoint — the
+		// contract this test pins is 'no SIGABRT'.
+		let loaded = store.load::<TestEntry>("unit");
+		assert!(
+			loaded.as_ref().is_ok_and(|opt| opt.is_none()),
+			"oversized length prefix must yield Ok(None), got {loaded:?}",
+		);
+		assert!(!path.exists(), "corrupt file must be cleaned up");
+		let _ = fs::remove_dir_all(dir);
+	}
 }
