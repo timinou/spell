@@ -3893,6 +3893,7 @@ dependencies = [
  "fd-lock",
  "libc",
  "nix 0.29.0",
+ "pi-code-graph",
  "pi-knowledge-core",
  "pi-org-engine",
  "serde",
