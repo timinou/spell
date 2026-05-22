@@ -1,8 +1,9 @@
 #+TITLE: handleInput state mutations bypass markDirty; W3 cache serves stale lines
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14ea14814559e822
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T15-17-13-109Z_14ea14814559e822.jsonl]]
 #+CUSTOM_ID: BUG-391-handleinput-state-mutations-bypass-markd
+#+COMPLETION_HASH: 0c4be64541cb1149
 
 * Initial Message
 
@@ -40,3 +41,5 @@ Wrap each affected handleInput in ~try { ... } finally { #parent?.markDirty() }~
 - packages/tui/src/components/input.ts
 - packages/tui/src/components/editor.ts (paste path only — char path already markDirty'd)
 - packages/coding-agent/src/modes/components/session-selector.ts (SessionList class)
+
+NOTE [2026-05-22]: Fixed in commit f6b783a40. Pattern: wrap each handleInput in try/finally with markDirty in finally. Added regression test in packages/tui/test/input-dirty-propagation.test.ts (6/6). All three reported symptoms (spell -r arrows, settings modal arrows, paste invisible) addressed by unconditional dirty propagation.

@@ -36,3 +36,15 @@ W1 landed. 21/21 pi-knowledge-worker tests; 354/354 pi-natives lib; init returns
 :RELATIONS:
 ABOUT: FEAT-767-plan-315-w1-pi-embedding-worker-pi-knowl
 :END:
+** ITEM handleInput state mutations bypass markDirty; W3 cache serves stale lines
+
+Fixed in commit f6b783a40. Pattern: wrap each handleInput in try/finally with markDirty in finally. Added regression test in packages/tui/test/input-dirty-propagation.test.ts (6/6). All three reported symptoms (spell -r arrows, settings modal arrows, paste invisible) addressed by unconditional dirty propagation.
+:PROPERTIES:
+:CUSTOM_ID: EP-9d6a80d36afd5671
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T13:51:01Z
+:END:
+:RELATIONS:
+ABOUT: BUG-391-handleinput-state-mutations-bypass-markd
+:END:
