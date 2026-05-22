@@ -199,3 +199,30 @@ fn org_unknown_id_returns_not_found() {
 	let err = reg.resolve(&uri, Some(&ctx), &cancel).unwrap_err();
 	assert!(matches!(err.variant, pi_code_path::types::DiagnosticVariant::FileNotFound));
 }
+
+#[test]
+fn org_resolves_item_under_project_tasks() {
+	let project = TempDir::new().unwrap();
+	let cat_dir = project.path().join("!tasks/plans");
+	std::fs::create_dir_all(&cat_dir).unwrap();
+	let org_file = cat_dir.join("PLAN-cutover.org");
+	std::fs::write(
+		&org_file,
+		"* TODO Cutover plan\n:PROPERTIES:\n:CUSTOM_ID: PLAN-310\n:END:\n\nPlan body here.\n",
+	)
+	.unwrap();
+
+	let home = TempDir::new().unwrap();
+	let ctx = SessionContext::new(project.path(), home.path());
+	let reg = registry(Some(&ctx));
+	let uri = UriLocator { scheme: "org".into(), path: "PLAN-310".into() };
+	let cancel = CancellationToken::new();
+	let r = reg.resolve(&uri, Some(&ctx), &cancel).unwrap();
+	assert_eq!(r.source_path, Some(org_file));
+	assert!(
+		r.notes.iter().any(|n| n.contains("Cutover plan") && n.contains("PLAN-310")),
+		"expected title note, got: {:?}",
+		r.notes
+	);
+}
+

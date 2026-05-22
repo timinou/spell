@@ -254,13 +254,16 @@ fn dispatch(
 				.as_deref()
 				.ok_or_else(|| invalid("Indexed loader requires Indexed layout"))?;
 			let addr = lookup.lookup(id, ctx, cancel)?;
-			read_file_with_range(
+			let notes = addr.notes.clone();
+			let mut resolved = read_file_with_range(
 				&addr.path,
 				addr.range,
 				ReadMode::Utf8Text,
 				url.to_string(),
 				profile.capabilities.mime_hint,
-			)
+			)?;
+			resolved.notes.extend(notes);
+			Ok(resolved)
 		},
 		ContentLoader::Callback(cb) => {
 			let mut content = cb.resolve(body, ctx, cancel)?;
