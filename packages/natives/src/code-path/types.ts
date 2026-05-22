@@ -18,6 +18,10 @@ export interface CodePathOptions {
 	artifactThreshold?: number;
 	/** Honour .gitignore rules when resolving file targets (default: true). */
 	gitignore?: boolean;
+	/** PLAN-310: user home dir for UserRoot scheme templates (org://). */
+	home?: string;
+	/** PLAN-310: per-session dir for SessionRoot scheme templates (local, agent, etc.). */
+	sessionDir?: string;
 }
 
 export interface SpanDto {

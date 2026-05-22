@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { executeCodeBuffer, executeCodePath } from "@oh-my-pi/pi-natives";
 import { isCodeToolSupportedPath } from "./code-supported-files";
+import { sessionContextOpts } from "./codepath-session";
 
 export type WriteGuardCode = "WRITE_PARSE_REGRESSION";
 
@@ -38,6 +39,7 @@ async function probesAsStructurallyValid(
 	writeFileSync(probePath, initialContent);
 	try {
 		const chunks = await executeCodePath({
+			...sessionContextOpts(undefined),
 			command: "edit",
 			target: probePath,
 			actions: [{ kind: "fileWrite", content: nextContent, force: true }],
