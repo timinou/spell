@@ -1,14 +1,18 @@
-import type { TUI } from "../tui";
+import { spinnerClock } from "../spinner-clock";
+import type { DirtyParent, TUI } from "../tui";
 import { sliceByColumn, visibleWidth } from "../utils";
 import { Text } from "./text";
 
 /**
- * Loader component that updates every 80ms with spinning animation
+ * Loader component — spinning animation tied to the shared SpinnerClock.
+ *
+ * Subscribes only while attached to a parent so detached/queued loaders
+ * never drive renders. Visible width matches Text.
  */
 export class Loader extends Text {
 	#frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 	#currentFrame = 0;
-	#intervalId?: NodeJS.Timeout;
+	#unsubscribe?: () => void;
 	#ui: TUI | null = null;
 
 	constructor(
@@ -23,7 +27,18 @@ export class Loader extends Text {
 		if (spinnerFrames && spinnerFrames.length > 0) {
 			this.#frames = spinnerFrames;
 		}
+		// Paint the initial frame eagerly so first render shows the spinner.
+		this.#updateDisplay();
+		// Auto-start: matches legacy behaviour where Loader ticked immediately.
 		this.start();
+	}
+
+	override setParent(p: DirtyParent | undefined): void {
+		super.setParent(p);
+		if (p === undefined) {
+			// Detached → stop ticking. Re-attach via start() if needed.
+			this.#stopTicking();
+		}
 	}
 
 	render(width: number): string[] {
@@ -38,22 +53,27 @@ export class Loader extends Text {
 	}
 
 	start() {
-		this.#updateDisplay();
-		this.#intervalId = setInterval(() => {
+		if (this.#unsubscribe) return;
+		this.#unsubscribe = spinnerClock.subscribe(() => {
 			this.#currentFrame = (this.#currentFrame + 1) % this.#frames.length;
 			this.#updateDisplay();
-		}, 80);
-		this.#intervalId.unref?.();
+			this.#ui?.requestRender();
+		});
 	}
 
 	stop() {
-		if (this.#intervalId) {
-			clearInterval(this.#intervalId);
-			this.#intervalId = undefined;
+		this.#stopTicking();
+	}
+
+	#stopTicking() {
+		if (this.#unsubscribe) {
+			this.#unsubscribe();
+			this.#unsubscribe = undefined;
 		}
 	}
 
 	setMessage(message: string) {
+		if (this.message === message) return;
 		this.message = message;
 		this.#updateDisplay();
 	}
@@ -61,8 +81,5 @@ export class Loader extends Text {
 	#updateDisplay() {
 		const frame = this.#frames[this.#currentFrame];
 		this.setText(`${this.spinnerColorFn(frame)} ${this.messageColorFn(this.message)}`);
-		if (this.#ui) {
-			this.#ui.requestRender();
-		}
 	}
 }
