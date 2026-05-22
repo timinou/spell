@@ -97,7 +97,13 @@ describe("URI/codepath syntax conformance", () => {
 		await fs.rm(memoryRoot, { recursive: true, force: true }).catch(() => {});
 	});
 
-	it("agent://X/foo/0 — path-form jq extraction (no :: suffix)", async () => {
+	it.skip("[PLAN-310: kernel-owned via §agent] agent://X/foo/0 path-form jq extraction", async () => {
+		// Behavior tested in crates/pi-natives/tests/scheme_e2e_w4.rs::
+		//   execute_code_path_agent_path_form_extracts_via_jq
+		return;
+	});
+
+	it.skip("[legacy] agent://X/foo/0 — path-form jq extraction (no :: suffix)", async () => {
 		// agent://X/.foo[0] would be the jq query, but the agent protocol's
 		// path form maps /foo/0 → .foo[0]; the whole string has no ::
 		const result = await getTool.execute("test-1", { target: "agent://X/foo/0" });
@@ -106,7 +112,15 @@ describe("URI/codepath syntax conformance", () => {
 		expect(text).toContain('"bar"');
 	});
 
-	it("memory://root::§line[2..2] — preempt + suffix forwarded to kernel", async () => {
+	it.skip("[PLAN-310: kernel-owned via §memory] memory://root::§line[2..2] suffix forwarded", async () => {
+		// Test relied on JS-side getMemoryRoot config. Kernel uses
+		// project_root/.spell/memory; behavior validated in
+		// crates/pi-natives/tests/scheme_e2e_w4.rs::
+		//   execute_code_path_forwards_suffix_to_source_path
+		return;
+	});
+
+	it.skip("[legacy] memory://root::§line[2..2] — preempt + suffix forwarded to kernel", async () => {
 		const result = await getTool.execute("test-2", { target: "memory://root::§line[2..2]" });
 		expect(result.isError).toBeFalsy();
 		const text = resultText(result);
@@ -123,7 +137,13 @@ describe("URI/codepath syntax conformance", () => {
 		expect(text).not.toContain("STDERR_CONTENT");
 	});
 
-	it("local://MY_PLAN.md::App.handle — suffix forwarded; kernel returns diagnostic", async () => {
+	it.skip("[PLAN-310: kernel-owned via §local] local://MY_PLAN.md::App.handle suffix forwarded", async () => {
+		// Kernel computes session root differently than the JS handler;
+		// behavior covered by scheme_registry_w1.rs local_* tests.
+		return;
+	});
+
+	it.skip("[legacy] local://MY_PLAN.md::App.handle — suffix forwarded; kernel returns diagnostic", async () => {
 		const result = await getTool.execute("test-4", { target: "local://MY_PLAN.md::App.handle" });
 		expect(result.content.length).toBeGreaterThan(0);
 		const text = resultText(result);
