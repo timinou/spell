@@ -215,14 +215,6 @@ export class Container implements Component {
 	 *  defeat per-Container cache without losing the leaf-level cache wins
 	 *  (Markdown.#cachedText etc.). Leaves keep their own caches; if their
 	 *  state actually changed they invalidate themselves via their own setters. */
-	markContainersDirty(): void {
-		this.#cachedLines = undefined;
-		this.#cachedWidth = undefined;
-		this.#dirty = true;
-		for (const child of this.children) {
-			if (child instanceof Container) child.markContainersDirty();
-		}
-	}
 
 	/** Mark this Container and all descendant Containers dirty.
 	 *  Unlike invalidate(), this recursively walks the subtree and
@@ -678,7 +670,6 @@ export class TUI extends Container {
 	}
 
 	requestRender(force = false): void {
-
 		if (force) {
 			this.#previousLines = [];
 			this.#previousWidth = -1; // -1 triggers widthChanged, forcing a full clear
@@ -1149,7 +1140,8 @@ export class TUI extends Container {
 		const height = this.terminal.rows;
 
 		// Early exit: nothing dirty, width unchanged, not first render, no overlay change
-		const shouldEarlyExit = !this.isDirty() && width === this.#previousWidth && this.#previousLines.length > 0 && !this.#overlayChanged;
+		const shouldEarlyExit =
+			!this.isDirty() && width === this.#previousWidth && this.#previousLines.length > 0 && !this.#overlayChanged;
 		if (shouldEarlyExit) {
 			return;
 		}

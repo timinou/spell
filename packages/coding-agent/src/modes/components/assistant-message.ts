@@ -1,5 +1,5 @@
 import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
-import { Container, Image, ImageProtocol, Markdown, Spacer, TERMINAL, Text } from "@oh-my-pi/pi-tui";
+import { type Component, Container, Image, ImageProtocol, Markdown, Spacer, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import { formatNumber, logger } from "@oh-my-pi/pi-utils";
 import { settings } from "../../config/settings";
 import { hasPendingMermaid, prerenderMermaid } from "../../modes/theme/mermaid-cache";
@@ -319,38 +319,47 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	#rebuildChildrenArray(): void {
-		this.#contentContainer.clear();
+		// Build desired child list first; only mutate the container if it differs
+		// from the current children. Streaming tokens that touch an existing slot
+		// (setText on stable Markdown) keep the same desired list → no-op rebuild.
+		const desired: Component[] = [];
 
-		if (this.#leadingSpacer) {
-			this.#contentContainer.addChild(this.#leadingSpacer);
-		}
+		if (this.#leadingSpacer) desired.push(this.#leadingSpacer);
 
 		for (let i = 0; i < this.#slotsByIndex.length; i++) {
-			const slot = this.#slotsByIndex[i];
-			this.#contentContainer.addChild(slot.component);
+			desired.push(this.#slotsByIndex[i].component);
 			const trailing = this.#trailingSpacerAfterContent.get(i);
-			if (trailing) {
-				this.#contentContainer.addChild(trailing);
-			}
+			if (trailing) desired.push(trailing);
 		}
 
-		if (this.#toolImagesContainer) {
-			this.#contentContainer.addChild(this.#toolImagesContainer);
-		}
+		if (this.#toolImagesContainer) desired.push(this.#toolImagesContainer);
 
 		if (this.#abortMarker) {
-			this.#contentContainer.addChild(this.#abortMarker.spacer);
-			this.#contentContainer.addChild(this.#abortMarker.text);
+			desired.push(this.#abortMarker.spacer);
+			desired.push(this.#abortMarker.text);
 		}
-
 		if (this.#errorMarker) {
-			this.#contentContainer.addChild(this.#errorMarker.spacer);
-			this.#contentContainer.addChild(this.#errorMarker.text);
+			desired.push(this.#errorMarker.spacer);
+			desired.push(this.#errorMarker.text);
+		}
+		if (this.#usageMarker) {
+			desired.push(this.#usageMarker.spacer);
+			desired.push(this.#usageMarker.text);
 		}
 
-		if (this.#usageMarker) {
-			this.#contentContainer.addChild(this.#usageMarker.spacer);
-			this.#contentContainer.addChild(this.#usageMarker.text);
+		const current = this.#contentContainer.children;
+		if (current.length === desired.length) {
+			let match = true;
+			for (let i = 0; i < current.length; i++) {
+				if (current[i] !== desired[i]) {
+					match = false;
+					break;
+				}
+			}
+			if (match) return; // structure unchanged — leaf invalidations already propagated
 		}
+
+		this.#contentContainer.clear();
+		for (const child of desired) this.#contentContainer.addChild(child);
 	}
 }
