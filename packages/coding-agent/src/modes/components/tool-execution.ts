@@ -9,7 +9,6 @@ import {
 	ImageProtocol,
 	imageFallback,
 	Spacer,
-	spinnerClock,
 	TERMINAL,
 	Text,
 	type TUI,
@@ -106,11 +105,10 @@ export class ToolExecutionComponent extends Container {
 	#editDiffArgsKey?: string; // Track which args the preview is for
 	// Cached converted images for Kitty protocol (which requires PNG), keyed by index
 	#convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
-	// Spinner animation for partial task results
+	// Spinner state retained for #renderState ABI back-compat. Since FEAT-776
+	// the value is fixed at 0 — renderers emit SPINNER_MARKER and the TUI
+	// substitutes the live glyph at render time, so no per-tick state is needed.
 	#spinnerFrame = 0;
-	#spinnerUnsubscribe?: () => void;
-	// Track if args are still being streamed (for edit/write spinner)
-	#argsComplete = false;
 	#renderState: {
 		spinnerFrame: number;
 		expanded: boolean;
@@ -161,7 +159,6 @@ export class ToolExecutionComponent extends Container {
 
 	updateArgs(args: any, _toolCallId?: string): void {
 		this.#args = cloneToolArgs(args);
-		this.#updateSpinnerAnimation();
 		this.#updateDisplay();
 	}
 
@@ -170,8 +167,6 @@ export class ToolExecutionComponent extends Container {
 	 * This triggers diff computation for edit tool.
 	 */
 	setArgsComplete(_toolCallId?: string): void {
-		this.#argsComplete = true;
-		this.#updateSpinnerAnimation();
 		this.#maybeComputeEditDiff();
 	}
 
@@ -260,11 +255,6 @@ export class ToolExecutionComponent extends Container {
 	): void {
 		this.#result = result;
 		this.#isPartial = isPartial;
-		// When tool is complete, ensure args are marked complete so spinner stops
-		if (!isPartial) {
-			this.#argsComplete = true;
-		}
-		this.#updateSpinnerAnimation();
 		this.#updateDisplay();
 		// Convert non-PNG images to PNG for Kitty protocol (async)
 		this.#maybeConvertImagesForKitty();
@@ -318,39 +308,23 @@ export class ToolExecutionComponent extends Container {
 	/**
 	 * Start or stop spinner animation based on whether this is a partial task result.
 	 */
-	#updateSpinnerAnimation(): void {
-		// Spinner for: task tool with partial result, or edit/write while args streaming
-		const isStreamingArgs = !this.#argsComplete && (this.#toolName === "edit" || this.#toolName === "write");
-		const isBackgroundAsyncTask =
-			this.#toolName === "task" &&
-			(this.#result?.details as { async?: { state?: string } } | undefined)?.async?.state === "running";
-		const isPartialTask = this.#isPartial && this.#toolName === "task" && !isBackgroundAsyncTask;
-		const needsSpinner = isStreamingArgs || isPartialTask;
-		if (needsSpinner && !this.#spinnerUnsubscribe) {
-			this.#spinnerUnsubscribe = spinnerClock.subscribe(() => {
-				const frameCount = theme.spinnerFrames.length;
-				if (frameCount === 0) return;
-				this.#spinnerFrame = spinnerClock.frame % frameCount;
-				// Re-run renderCall/renderResult with the new spinner frame so cached
-				// child components reflect the change. updateDisplay clears +
-				// re-adds via addChild — dirty propagates up the parent chain.
-				this.#updateDisplay();
-				this.#ui.requestRender();
-			});
-		} else if (!needsSpinner && this.#spinnerUnsubscribe) {
-			this.#spinnerUnsubscribe();
-			this.#spinnerUnsubscribe = undefined;
-		}
-	}
+	/**
+	 * No-op since FEAT-776. Status icons now emit SPINNER_MARKER and the TUI
+	 * substitutes the current glyph at render time, so the renderer body does
+	 * not need to re-run per spinner tick. Real state changes (args / result /
+	 * expanded / isPartial) still drive #updateDisplay through their own
+	 * setters. Method retained as a stub for back-compat with call sites.
+	 */
 
 	/**
 	 * Stop spinner animation and cleanup resources.
 	 */
+	/**
+	 * Stop spinner animation. Since FEAT-776 the TUI owns the spinner clock
+	 * globally; this remains as a stable hook for callers.
+	 */
 	stopAnimation(): void {
-		if (this.#spinnerUnsubscribe) {
-			this.#spinnerUnsubscribe();
-			this.#spinnerUnsubscribe = undefined;
-		}
+		/* no-op since FEAT-776 */
 	}
 
 	setExpanded(expanded: boolean): void {

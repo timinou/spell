@@ -5,7 +5,7 @@
  * tool renderers to ensure a unified TUI experience.
  */
 import * as os from "node:os";
-import { type Ellipsis, truncateToWidth } from "@oh-my-pi/pi-tui";
+import { type Ellipsis, SPINNER_MARKER, truncateToWidth } from "@oh-my-pi/pi-tui";
 import { getIndentation, pluralize } from "@oh-my-pi/pi-utils";
 import type { Theme } from "../modes/theme/theme";
 
@@ -95,7 +95,7 @@ export { formatAge, formatBytes, formatCount, formatDuration, pluralize } from "
  * Get the appropriate status icon with color for a given state.
  * Standardizes status icon usage across all renderers.
  */
-export function formatStatusIcon(status: ToolUIStatus, theme: Theme, spinnerFrame?: number): string {
+export function formatStatusIcon(status: ToolUIStatus, theme: Theme, _spinnerFrame?: number): string {
 	switch (status) {
 		case "success":
 			return theme.styledSymbol("status.success", "success");
@@ -108,11 +108,10 @@ export function formatStatusIcon(status: ToolUIStatus, theme: Theme, spinnerFram
 		case "pending":
 			return theme.styledSymbol("status.pending", "muted");
 		case "running":
-			if (spinnerFrame !== undefined) {
-				const frames = theme.spinnerFrames;
-				return frames[spinnerFrame % frames.length];
-			}
-			return theme.styledSymbol("status.running", "accent");
+			// Emit zero-width sentinel; TUI substitutes with the current spinner
+			// glyph at render time (FEAT-776). The renderer body no longer has
+			// to be re-invoked on every spinner tick to animate.
+			return SPINNER_MARKER;
 		case "aborted":
 			return theme.styledSymbol("status.aborted", "error");
 	}

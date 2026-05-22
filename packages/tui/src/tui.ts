@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { getCrashLogPath, getDebugLogPath } from "@oh-my-pi/pi-utils";
 import { DevProfile, devProfile } from "./dev-profile";
 import { isKeyRelease, matchesKey } from "./keys";
+import { spinnerClock } from "./spinner-clock";
 import type { Terminal } from "./terminal";
 import { ImageProtocol, setCellDimensions, setTerminalImageProtocol, TERMINAL } from "./terminal-capabilities";
 import { extractSegments, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils";
@@ -83,6 +84,15 @@ export function isFocusable(component: Component | null): component is Component
  * TUI finds and strips this marker, then positions the hardware cursor there.
  */
 export const CURSOR_MARKER = "\x1b_pi:c\x07";
+
+/**
+ * Spinner marker — APC (Application Program Command) zero-width sentinel.
+ * Renderers emit this where they want the live spinner glyph. TUI substitutes
+ * it with the current frame at render time, so the renderer body itself does
+ * not need to run on every spinner tick. Frame source is the shared
+ * `spinnerClock`; the active glyph set is configured via `setSpinnerFrames`.
+ */
+export const SPINNER_MARKER = "\x1b_pi:spin\x07";
 
 export { visibleWidth };
 
@@ -309,6 +319,14 @@ export class TUI extends Container {
 	#stopped = false;
 	#overlayChanged = false;
 
+	// Spinner sentinel substitution (FEAT-776). Renderers emit SPINNER_MARKER;
+	// TUI subscribes to the shared SpinnerClock on first marker observed and
+	// rewrites it to the current glyph at output time. Subscription persists
+	// until stop() — cost is one 80ms timer + an O(lines) includes() check.
+	#spinnerFrames: string[] = [];
+	#spinnerGlyph: string = "";
+	#spinnerUnsubscribe?: () => void;
+
 	// Overlay stack for modal components rendered on top of base content
 	overlayStack: {
 		component: Component;
@@ -317,7 +335,10 @@ export class TUI extends Container {
 		hidden: boolean;
 	}[] = [];
 
-	constructor(terminal: Terminal, options?: boolean | { showHardwareCursor?: boolean; minRenderInterval?: number }) {
+	constructor(
+		terminal: Terminal,
+		options?: boolean | { showHardwareCursor?: boolean; minRenderInterval?: number; spinnerFrames?: string[] },
+	) {
 		super();
 		this.terminal = terminal;
 		if (typeof options === "boolean") {
@@ -329,6 +350,24 @@ export class TUI extends Container {
 				this.#showHardwareCursor = options.showHardwareCursor;
 			}
 			this.#minRenderInterval = options?.minRenderInterval ?? 16;
+			if (options?.spinnerFrames && options.spinnerFrames.length > 0) {
+				this.#spinnerFrames = options.spinnerFrames;
+				this.#spinnerGlyph = options.spinnerFrames[0];
+			}
+		}
+	}
+
+	/**
+	 * Update the active spinner glyph set. Safe to call at runtime when the
+	 * theme changes; existing subscription (if any) keeps ticking and just
+	 * picks the new glyph on the next frame.
+	 */
+	setSpinnerFrames(frames: string[]): void {
+		this.#spinnerFrames = frames;
+		if (frames.length > 0) {
+			this.#spinnerGlyph = frames[spinnerClock.frame % frames.length];
+		} else {
+			this.#spinnerGlyph = "";
 		}
 	}
 
@@ -633,6 +672,7 @@ export class TUI extends Container {
 
 	stop(): void {
 		this.#clearSixelProbeState();
+		this.#releaseSpinnerSubscription();
 		this.#stopped = true;
 		// Cancel pending throttle timer
 		if (this.#throttleTimer) {
@@ -653,6 +693,39 @@ export class TUI extends Container {
 
 		this.terminal.showCursor();
 		this.terminal.stop();
+	}
+
+	#ensureSpinnerSubscription(): void {
+		if (this.#spinnerUnsubscribe || this.#spinnerFrames.length === 0) return;
+		this.#spinnerUnsubscribe = spinnerClock.subscribe(() => {
+			const frames = this.#spinnerFrames;
+			if (frames.length === 0) return;
+			this.#spinnerGlyph = frames[spinnerClock.frame % frames.length];
+			this.requestRender();
+		});
+	}
+
+	#releaseSpinnerSubscription(): void {
+		if (this.#spinnerUnsubscribe) {
+			this.#spinnerUnsubscribe();
+			this.#spinnerUnsubscribe = undefined;
+		}
+	}
+
+	/**
+	 * Substitute SPINNER_MARKER occurrences with the current glyph. Returns
+	 * true if any line contained the marker (caller may then ensure the
+	 * spinner subscription is active).
+	 */
+	#substituteSpinnerMarkers(lines: string[]): boolean {
+		let found = false;
+		for (let i = 0; i < lines.length; i++) {
+			if (lines[i].includes(SPINNER_MARKER)) {
+				lines[i] = lines[i].replaceAll(SPINNER_MARKER, this.#spinnerGlyph);
+				found = true;
+			}
+		}
+		return found;
 	}
 
 	/**
@@ -1165,6 +1238,12 @@ export class TUI extends Container {
 
 		// Extract cursor position before applying line resets (marker must be found first)
 		const cursorPos = this.#extractCursorPosition(newLines, height);
+
+		// Substitute spinner sentinels in place. Auto-subscribes to spinnerClock
+		// on first marker observed so the renderer body never has to run on tick.
+		if (this.#substituteSpinnerMarkers(newLines)) {
+			this.#ensureSpinnerSubscription();
+		}
 
 		newLines = this.#applyLineResets(newLines);
 
