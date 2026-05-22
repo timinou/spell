@@ -20,6 +20,12 @@ pub fn replace_body(
 	content: &str,
 	policy: ReplacePolicy,
 ) -> Result<Vec<TextEdit>> {
+	// PLAN-309 H3-closure: scope:body requires braced content for brace-delimited
+	// languages. Without an explicit precondition the FEAT-702 structural-invariant
+	// guard does not fire when braceless content happens to parse leniently (e.g.
+	// `function f(): number return 2;`), silently corrupting the file. We gate on
+	// the original body's leading delimiter so non-brace languages (Elixir do/end
+	// blocks, etc.) keep working.
 	let body_start = resolved.body_start_byte.ok_or_else(|| {
 		CodeEngineError::Edit(format!(
 			"Symbol '{}' (kind: {}) has no body to replace",
@@ -34,7 +40,15 @@ pub fn replace_body(
 	})?;
 
 	let source = buffer.source();
-	let original_indent = first_line_indent(&source[body_start..body_end]);
+	let original_body = &source[body_start..body_end];
+	if original_body.trim_start().starts_with('{') && !content.trim_start().starts_with('{') {
+		let excerpt: String = content.chars().take(40).collect();
+		return Err(CodeEngineError::Edit(format!(
+			"scope:body content must be a braced block `{{ ... }}`; got `{excerpt}`. Wrap your \
+			 replacement in outer braces."
+		)));
+	}
+	let original_indent = first_line_indent(original_body);
 	let content_indent = first_line_indent(content);
 	let adjusted = adjust_indent(content, content_indent, original_indent);
 

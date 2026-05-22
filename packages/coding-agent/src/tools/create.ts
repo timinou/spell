@@ -118,6 +118,7 @@ export class CreateTool implements AgentTool<typeof createSchema> {
 			target: path.relative(sessionCwd, resolvedPath),
 			actions: [{ kind: "fileCreate", content, force: params.force ?? false }],
 			root: this.session.cwd,
+			sessionId: this.session.getSessionId?.()?.trim() || undefined,
 		});
 
 		const diagnostics = chunks.flatMap(c => c.diagnostics);

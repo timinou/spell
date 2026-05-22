@@ -474,9 +474,6 @@ pub fn execute_code_path_inner(
 			parsed
 		};
 
-		let _fs_resolver = FsResolver::new(root.clone());
-		let extractors = default_extractors();
-		let text_resolver = TextResolver::new(root.clone()).with_extractors(extractors);
 		let mut code_resolver = code_resolver::new()
 			.map_err(|d| Error::from_reason(d.message))?
 			.with_root(root.clone());
