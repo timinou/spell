@@ -17,6 +17,7 @@ export class MemorySinceTab implements TabPanel {
 	#onSelectItem: ((id: string) => void) | null = null;
 	#loadedOnce = false;
 	#disposed = false;
+	#refreshSeq = 0;
 
 	readonly title = "Since";
 
@@ -36,6 +37,7 @@ export class MemorySinceTab implements TabPanel {
 	}
 
 	async #refresh(): Promise<void> {
+		const seq = ++this.#refreshSeq;
 		this.#loading = true;
 		this.#error = null;
 		this.#onRequestRender();
@@ -44,7 +46,7 @@ export class MemorySinceTab implements TabPanel {
 			const ms = this.#window === "24h" ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
 			const ts = new Date(Date.now() - ms).toISOString();
 			const result = await memorySince(this.#repoRoot, ts);
-			if (this.#disposed) return;
+			if (this.#disposed || seq !== this.#refreshSeq) return;
 
 			this.#result = result;
 			this.#buildCombined(result);
@@ -53,7 +55,7 @@ export class MemorySinceTab implements TabPanel {
 			this.#loading = false;
 			this.#onRequestRender();
 		} catch (e) {
-			if (this.#disposed) return;
+			if (this.#disposed || seq !== this.#refreshSeq) return;
 			this.#error = String(e);
 			this.#loading = false;
 			this.#onRequestRender();

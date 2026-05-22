@@ -21,6 +21,8 @@ export interface TabPanel extends Component {
 	deactivate(): void;
 	/** Title shown in the tab strip. */
 	readonly title: string;
+	/** Optional cleanup on browser close. */
+	dispose?(): void;
 }
 
 export interface MemoryHit {

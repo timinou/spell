@@ -46,9 +46,8 @@ export class MemoryBrowserComponent implements Component {
 		}
 
 		// Delegate to active tab
-			const handler = this.#tabs[this.#activeTab].handleInput;
-			if (handler) handler(data);
-			this.#opts.onRequestRender();
+		this.#tabs[this.#activeTab].handleInput?.(data);
+		this.#opts.onRequestRender();
 	}
 
 	render(width: number): string[] {
@@ -105,8 +104,7 @@ export class MemoryBrowserComponent implements Component {
 		if (this.#disposed) return;
 		this.#disposed = true;
 		for (const tab of this.#tabs) {
-			const d = (tab as unknown as Record<string, unknown>).dispose;
-			if (typeof d === "function") (d as () => void)();
+			tab.dispose?.();
 		}
 	}
 
