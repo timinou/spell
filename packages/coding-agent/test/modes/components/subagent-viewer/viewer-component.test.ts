@@ -1,10 +1,55 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import type { AgentEvent } from "@oh-my-pi/pi-agent-core";
 import type { TUI } from "@oh-my-pi/pi-tui";
+import {
+	ASYNC_JOB_PROGRESS_CHANNEL,
+	type AsyncJob,
+	type AsyncJobManager,
+	type AsyncJobUpdate,
+} from "../../../../src/async";
+import { getThemeByName, setThemeInstance } from "../../../../src/modes/theme/theme";
 import { SubagentViewerComponent } from "../../../../src/modes/components/subagent-viewer/viewer-component";
+import { SubagentTracker } from "../../../../src/task/subagent-tracker";
 import type { AgentProgress } from "../../../../src/task/types";
 import { TASK_SUBAGENT_EVENT_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "../../../../src/task/types";
 import { EventBus } from "../../../../src/utils/event-bus";
+
+function makeAsyncJob(id: string, overrides: Partial<AsyncJob> = {}): AsyncJob {
+	return {
+		id,
+		type: "bash",
+		status: "running",
+		startTime: Date.now() - 1_000,
+		label: `job ${id}`,
+		abortController: new AbortController(),
+		promise: Promise.resolve(),
+		...overrides,
+	};
+}
+
+/** Strip the body padding rows; just keep the header line. */
+function headerOf(v: SubagentViewerComponent): string {
+	return v.render(80)[0] ?? "";
+}
+
+function makeAsyncJobManagerMock(initial: AsyncJob[]): { manager: AsyncJobManager; cancelled: string[] } {
+	const jobs = new Map(initial.map(job => [job.id, job]));
+	const cancelled: string[] = [];
+	const manager = {
+		getAllJobs: () => Array.from(jobs.values()),
+		getRunningJobs: () => Array.from(jobs.values()).filter(job => job.status === "running"),
+		getRecentJobs: () => [],
+		getJob: (id: string) => jobs.get(id),
+		cancel: (id: string) => {
+			const job = jobs.get(id);
+			if (!job || job.status !== "running") return false;
+			job.status = "cancelled";
+			cancelled.push(id);
+			return true;
+		},
+	} as unknown as AsyncJobManager;
+	return { manager, cancelled };
+}
 
 function createMockTui(): TUI {
 	return {
@@ -68,6 +113,11 @@ describe("SubagentViewerComponent", () => {
 	let renderRequested: boolean;
 	let viewer: SubagentViewerComponent;
 
+	beforeAll(async () => {
+		const defaultTheme = await getThemeByName("dark");
+		if (defaultTheme) setThemeInstance(defaultTheme);
+	});
+
 	beforeEach(() => {
 		eventBus = new EventBus();
 		ui = createMockTui();
@@ -90,11 +140,23 @@ describe("SubagentViewerComponent", () => {
 		viewer.dispose();
 	});
 
-	test("renders empty state when no agents", () => {
+	test("renders empty state when no jobs or agents", () => {
 		const lines = viewer.render(80);
 		expect(lines.length).toBeGreaterThan(0);
 		const joined = lines.join("\n");
-		expect(joined).toContain("No active agents");
+		expect(joined).toContain("No jobs or agents");
+	});
+
+	test("header reads 'Jobs & Agents' and shows counts", () => {
+		eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, {
+			index: 0,
+			agent: "task",
+			progress: makeProgress(0, { id: "Worker" }),
+		});
+		const joined = viewer.render(80).join("\n");
+		expect(joined).toContain("Jobs & Agents");
+		expect(joined).toContain("1 agent");
+		expect(joined).toContain("0 jobs");
 	});
 
 	test("renders header with agent info after progress update", () => {
@@ -106,7 +168,7 @@ describe("SubagentViewerComponent", () => {
 
 		const lines = viewer.render(80);
 		const joined = lines.join("\n");
-		expect(joined).toContain("Subagent Viewer");
+		expect(joined).toContain("Jobs & Agents");
 		expect(joined).toContain("ReadSchema");
 	});
 
@@ -307,6 +369,193 @@ describe("SubagentViewerComponent", () => {
 		expect(joined).not.toContain("agent 0 content");
 		// Should now show AgentB in header
 		expect(joined).toContain("AgentB");
+	});
+
+	test("hydrates from SubagentTracker on mount", () => {
+		const tracker = new SubagentTracker(eventBus, () => {});
+		eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, {
+			index: 9,
+			agent: "task",
+			progress: makeProgress(9, { id: "PreLaunched" }),
+		});
+
+		const hydrated = new SubagentViewerComponent({
+			eventBus: new EventBus(), // fresh bus → only hydration can populate
+			ui,
+			cwd: "/test",
+			onClose: () => {},
+			onRequestRender: () => {},
+			subagentTracker: tracker,
+		});
+
+		const joined = hydrated.render(80).join("\n");
+		expect(joined).toContain("PreLaunched");
+		hydrated.dispose();
+		tracker.dispose();
+	});
+
+	test("hydrates async jobs from AsyncJobManager on mount", () => {
+		const { manager } = makeAsyncJobManagerMock([
+			makeAsyncJob("bg_1", { label: "prebuilt async work" }),
+		]);
+		const hydrated = new SubagentViewerComponent({
+			eventBus: new EventBus(),
+			ui,
+			cwd: "/test",
+			onClose: () => {},
+			onRequestRender: () => {},
+			asyncJobManager: manager,
+		});
+
+		const joined = hydrated.render(80).join("\n");
+		expect(joined).toContain("prebuilt async work");
+		expect(joined).toContain("0 agents");
+		expect(joined).toContain("1 job");
+		hydrated.dispose();
+	});
+
+	test("async job updates from event bus appear in the list", () => {
+		const update: AsyncJobUpdate = {
+			reason: "registered",
+			job: {
+				id: "bg_42",
+				type: "bash",
+				status: "running",
+				label: "running curl",
+				startTime: Date.now(),
+			},
+		};
+		eventBus.emit(ASYNC_JOB_PROGRESS_CHANNEL, update);
+		const joined = viewer.render(80).join("\n");
+		expect(joined).toContain("running curl");
+		expect(joined).toContain("[bash]");
+	});
+
+	test("async progress is rendered in the body pane", () => {
+		eventBus.emit(ASYNC_JOB_PROGRESS_CHANNEL, {
+			reason: "progress",
+			job: {
+				id: "bg_7",
+				type: "bash",
+				status: "running",
+				label: "long bash",
+				startTime: Date.now() - 5_000,
+				latestProgress: { text: "step 3 of 5", updatedAt: Date.now() },
+			},
+		} satisfies AsyncJobUpdate);
+
+		const joined = viewer.render(80).join("\n");
+		expect(joined).toContain("Latest progress");
+		expect(joined).toContain("step 3 of 5");
+	});
+
+	test("`c` cancels the selected running async job", () => {
+		const { manager, cancelled } = makeAsyncJobManagerMock([
+			makeAsyncJob("bg_9", { label: "big task" }),
+		]);
+		const withCancel = new SubagentViewerComponent({
+			eventBus: new EventBus(),
+			ui,
+			cwd: "/test",
+			onClose: () => {},
+			onRequestRender: () => {},
+			asyncJobManager: manager,
+		});
+
+		withCancel.handleInput("c");
+		expect(cancelled).toEqual(["bg_9"]);
+		withCancel.dispose();
+	});
+
+	test("Tab cycles selection: subagent → async job → subagent", () => {
+		eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, {
+			index: 0,
+			agent: "task",
+			progress: makeProgress(0, { id: "AgentX" }),
+		});
+		eventBus.emit(ASYNC_JOB_PROGRESS_CHANNEL, {
+			reason: "registered",
+			job: {
+				id: "bg_100",
+				type: "bash",
+				status: "running",
+				label: "shell session",
+				startTime: Date.now(),
+			},
+		} satisfies AsyncJobUpdate);
+
+		// Initial: subagent is selected (it was added first via the subagent channel).
+		let header = headerOf(viewer);
+		expect(header).toContain("AgentX");
+		expect(header).not.toContain("bg_100");
+
+		// Tab once: async job should now be selected.
+		viewer.handleInput("\t");
+		header = headerOf(viewer);
+		expect(header).toContain("bg_100");
+		expect(header).not.toContain("AgentX");
+
+		// Tab again: wraps back to subagent.
+		viewer.handleInput("\t");
+		header = headerOf(viewer);
+		expect(header).toContain("AgentX");
+	});
+
+	test("Tab via real EventBus.enqueue path (mid-turn, no drain)", async () => {
+		// Mirror production: events are enqueued (Priority.P2) and only fire on drain().
+		const bus = new EventBus();
+		const tracker = new SubagentTracker(bus, () => {});
+		const { manager } = makeAsyncJobManagerMock([]);
+
+		const v = new SubagentViewerComponent({
+			eventBus: bus,
+			ui,
+			cwd: "/test",
+			onClose: () => {},
+			onRequestRender: () => {},
+			subagentTracker: tracker,
+			asyncJobManager: manager,
+		});
+
+		bus.enqueue(
+			TASK_SUBAGENT_PROGRESS_CHANNEL,
+			{ index: 0, agent: "task", progress: makeProgress(0, { id: "FirstAgent" }) },
+			/* Priority.P2 */ 2,
+			"task-progress-0",
+		);
+		bus.enqueue(
+			ASYNC_JOB_PROGRESS_CHANNEL,
+			{
+				reason: "registered",
+				job: {
+					id: "bg_live",
+					type: "bash",
+					status: "running",
+					label: "live job",
+					startTime: Date.now(),
+				},
+			} satisfies AsyncJobUpdate,
+			/* Priority.P2 */ 2,
+			"async-job-bg_live",
+		);
+
+		// User hits alt+j RIGHT NOW. No drain has happened. Both events sit in the queue.
+		// The viewer's own flush timer (250ms) MUST flush them so subscribers fire.
+		await new Promise(resolve => setTimeout(resolve, 300));
+		await bus.drain(); // belt-and-braces — ensure any racing async tasks complete.
+
+		let header = headerOf(v);
+		expect(header).toMatch(/FirstAgent|bg_live/);
+		v.handleInput("\t");
+		header = headerOf(v);
+		// After Tab, the *other* identifier must appear in the header.
+		const showsFirst = header.includes("FirstAgent");
+		const showsSecond = header.includes("bg_live");
+		expect(showsFirst || showsSecond).toBe(true);
+		expect(showsFirst && showsSecond).toBe(false);
+
+		v.dispose();
+		tracker.dispose();
 	});
 
 	test("forwards tool events to event handler", () => {
