@@ -113,3 +113,22 @@ sidecar is the cross-session architectural fix.
 - 54fef66f3 (strong-count invariant — must preserve)
 
 NOTE [2026-05-18]: Closed in commit 6c6adf3d8. ENGINES_CAP 4→1, IDLE_TTL=600s, sweep-on-miss with Arc::strong_count==1 guard. LruEntry struct replaces tuple. Test seam IDLE_TTL_OVERRIDE + IdleTtlGuard RAII. Two new tests pin behaviour: idle_ttl_evicts_unused_engine_on_next_miss, idle_ttl_skips_handles_held_by_inflight_queries. All 12 recall_engine tests green in 2.86s. Per-session peak RSS expected to drop by ~150–600 MB on sessions touching multiple repos; 10-min idle window frees the engine for sessions that pause. Cross-session multiplier (29× duplication) deferred to PLAN-309.
+
+* Closure update [2026-05-22] — PLAN-310 W3 closed the broader multiplier
+
+The =ENGINES_CAP=1= + idle TTL mitigation stays in place for the
+in-transition multi-handle path: it bounds the per-session damage to 1
+=RecallEngine= repo handle.
+
+The *cross-session* multiplier — N concurrent Spell sessions each owning a
+private embedder + fastembed model RSS (the original 5.9 GB aggregate that
+motivated this bug) — is closed by PLAN-310 W3: the embedder is now a
+single user-scoped =pi-embedding-worker= subprocess listening on
+=$XDG_RUNTIME_DIR/spell/embed.sock=, with the on-disk =usearch= =.uidx=
+mmap'd from every session. fastembed lives in the worker only, never in
+=pi-natives=.
+
+See [[id:PLAN-310-pi-knowledge-core-convergence-delete-tan]] § Completion
+for the metrics (=libpi_natives.so= −22.8 MB, tantivy + hnsw_rs gone).
+
+NOTE [2026-05-22]: Already DONE; appended PLAN-310 W3 closure cross-reference (broader N-session multiplier closed by user-scoped pi-embedding-worker).

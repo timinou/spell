@@ -1,5 +1,5 @@
 #+TITLE: pi-recall-daemon: cross-session shared recall engine + embedder
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14e6073129986fc8
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-18T11-45-07-750Z_14e6073129986fc8.jsonl]]
 #+CUSTOM_ID: PLAN-309-pi-recall-daemon-cross-session-shared-re
@@ -367,3 +367,20 @@ stays at 1, =Status= reports both clients.
 - =pi-edit-broker= — supervision pattern reused; code not modified.
 - =pi-embedding-worker= — child process consolidates into daemon
   under Phase 3.
+
+* Closure [2026-05-22] — superseded by PLAN-310 W3
+
+Closed deviated. No code from PLAN-309 landed.
+
+The design goal — *one embedder process per user, shared across all
+concurrent Spell sessions* — was achieved via the simpler Unix-socket
+lifecycle in =pi-embedding-worker= delivered by PLAN-310 W3: user-scoped
+daemon mode under =$XDG_RUNTIME_DIR/spell/embed.sock= with a flock-protected
+=embed.pid= pidfile and idle-exit. No JSON-RPC daemon crate, no IPC
+multiplexer, no =PI_RECALL_DAEMON= env switch — the on-disk usearch =.uidx=
+is mmap'd cross-session, so only the embedder process needs to be shared,
+and that's a 30-line socket+flock dance.
+
+See [[id:PLAN-310-pi-knowledge-core-convergence-delete-tan]] § Completion.
+
+NOTE [2026-05-22]: Closed deviated; superseded by PLAN-310 W3 user-scoped pi-embedding-worker. Design goal achieved without a daemon crate.

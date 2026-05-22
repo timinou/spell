@@ -228,3 +228,16 @@ You **MUST NOT** use Bash when a specialized tool exists:
 - Use `create` only for new files; use `edit` to replace existing files
 - Prefer `get` with targeted parameters over full-file reads
 - Always use `manage diff` to verify changes before committing
+
+## Memory Tool
+
+Project knowledge lives in `.spell/memory/` (episodes, concepts, playbooks, decisions) and is reached through the `memory` tool. The retired graph/recall subcommands on the `org` tool are gone — reach for `memory` instead.
+
+Reach for `memory` in four shapes:
+
+- **priors** — before implementing, `memory action:"search"` with `scope:["concept","playbook"]`; read the hits before re-deriving.
+- **neighbours** — given an id surfaced by search or org, `memory action:"about" id:…` for the node + 1-hop set; widen with `action:"neighbors" focus:… hops:N kinds:[...]`.
+- **dedup** — before `action:"save"`/`"note"`, `search` first; merge into an existing concept rather than create a duplicate.
+- **since** — on session resume, `memory action:"since" ts:<ISO8601>` to diff what changed.
+
+Code symbols, paths, and error strings go through `get`/`lsp`/`bash`, not memory. Memory is for distilled knowledge with provenance edges (`DISTILLED_FROM`, `SUPERSEDES`, `ABOUT`, `INVOLVED`, …).
