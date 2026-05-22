@@ -50,3 +50,38 @@ PLAN-315 ships without RSS regressions in the live binary surface. The
 formal N=10 perf gate is a separate harness investment (~3 hours) that
 adds no architectural risk; it is tracked in FUP-089 alongside W3 + W4
 + W6.
+
+---
+
+## Final gate report template (filled by `scripts/perf/plan315-n10.sh`)
+
+The orchestrator generates a timestamped report at
+`!tasks/plans/plan-artifacts/PLAN-315/W8-perf-run-<epoch>.md`. The template
+shape is:
+
+### Hardware
+- Kernel
+- CPU
+- RAM
+- Date
+
+### Gates (7)
+
+| Gate | Target | Measured | Status |
+|------|--------|----------|--------|
+| libpi_natives.so size | ≤ 92.5 MB | ... | ... |
+| per-session RSS | ≤ 100 MB | ... | ... |
+| total RSS N=10 | ≤ 1.55 GB | ... | ... |
+| memory.search P99 | ≤ 50 ms | ... | ... |
+| cg_search P99 | ≤ 60 ms | ... | ... |
+| push delivery P99 | ≤ 500 ms | ... | ... |
+| cold warm-up (12k sym) | ≤ 90 s | ... | ... |
+
+### Methodology notes
+- Harness: `scripts/perf/plan315-n10.sh`
+- Corpus: synthetic, 12,000 org items across 10 session dirs (1,200/session)
+- cg_search gate measurement DEFERRED until code-graph corpus generator lands (single-bullet bash addition; recorded as `cg_search-corpus` TODO)
+- Push delivery measured via `publish_bench_event` Rust integration test, not by the bash harness directly
+- RSS sampling: `ps -o rss=,pid=,comm=` every 2s for 60s; report peak
+- Latency: in-harness wall-clock, 10 priming + 100 measurement queries per session, P50/P95/P99 computed via `sort -n + awk`
+- Reproducibility: hand-rolled bash, fixed iteration counts, no `$RANDOM`
