@@ -20,6 +20,17 @@ import customSystemPromptTemplate from "./prompts/system/custom-system-prompt.md
 import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
 import { getGitToplevelSync } from "./session/git-baseline";
 
+// === STARTUP-DBG (BUG: blank screen after migration prompt). Disable with SPELL_STARTUP_DBG=0. ===
+const _dbgStartupT0_sp = performance.now();
+function dbgStartup(step: string, ctx?: Record<string, unknown>): void {
+	if (process.env.SPELL_STARTUP_DBG !== "1") return;
+	try {
+		const elapsed = Math.round(performance.now() - _dbgStartupT0_sp);
+		const ctxStr = ctx ? " " + JSON.stringify(ctx) : "";
+		process.stderr.write(`[STARTUP-DBG sp +${elapsed}ms] ${step}${ctxStr}\n`);
+	} catch {}
+}
+
 function firstNonEmpty(...values: (string | undefined | null)[]): string | null {
 	for (const value of values) {
 		const trimmed = value?.trim();
@@ -425,6 +436,7 @@ export interface BuildSystemPromptOptions {
 
 /** Build the system prompt with tools, guidelines, and context */
 export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}): Promise<SystemPromptBlock[]> {
+	dbgStartup("bsp:enter", { hasCustom: !!options.customPrompt, toolCount: options.toolNames?.length ?? options.tools?.size ?? -1 });
 	if ($env.NULL_PROMPT === "true") {
 		return [{ text: "", stable: true }];
 	}
@@ -454,10 +466,12 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const resolvedCwd = cwd ?? getProjectDir();
 	const resolvedEagerTasks = eagerTasks ?? (settings?.get("task.eager") as boolean | undefined) ?? false;
 
+	dbgStartup("bsp:before:resolvePromptInputs");
 	const [resolvedCustomPrompt, resolvedAppendPrompt] = await Promise.all([
 		resolvePromptInput(customPrompt, "system prompt"),
 		resolvePromptInput(appendSystemPrompt, "append system prompt"),
 	]);
+	dbgStartup("bsp:after:resolvePromptInputs");
 
 	const systemPromptCustomizationPromise: Promise<string | null> =
 		providedSystemPromptCustomization !== undefined
@@ -477,6 +491,12 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 				? loadSkills({ ...skillsSettings, cwd: resolvedCwd }).then(result => result.skills)
 				: Promise.resolve([]);
 
+	dbgStartup("bsp:before:Promise.all(prep races)", {
+		haveSysCustomization: providedSystemPromptCustomization !== undefined,
+		haveContextFiles: !!providedContextFiles,
+		haveAgentsMdSearch: providedAgentsMdSearch !== undefined,
+		haveSkills: providedSkills !== undefined,
+	});
 	const [systemPromptCustomization, contextFiles, agentsMdSearch, skills] = await Promise.all([
 		raceWithTimeout("system prompt files", systemPromptCustomizationPromise, null, SYSTEM_PROMPT_PREP_TIMEOUT_MS),
 		raceWithTimeout(
@@ -498,6 +518,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		),
 		raceWithTimeout("skills discovery", skillsPromise, providedSkills ?? [], SYSTEM_PROMPT_PREP_TIMEOUT_MS),
 	]);
+	dbgStartup("bsp:after:Promise.all(prep races)");
 
 	const date = new Date().toISOString().slice(0, 10);
 	const dateTime = date;
@@ -555,6 +576,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		description: tools?.get(name)?.description ?? "",
 	}));
 
+	dbgStartup("bsp:before:skill workspace match", { skillCount: skills.length, hasRead: !!tools?.has("read") });
 	const hasRead = tools?.has("read");
 	const filteredSkills = hasRead
 		? await Promise.all(
@@ -565,7 +587,10 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 					.map(({ skill }) => skill),
 			)
 		: [];
+	dbgStartup("bsp:after:skill workspace match", { filteredCount: filteredSkills.length });
+	dbgStartup("bsp:before:getEnvironmentInfo");
 	const environment = await logger.timeAsync("getEnvironmentInfo", getEnvironmentInfo);
+	dbgStartup("bsp:after:getEnvironmentInfo");
 	const data = {
 		systemPromptCustomization: systemPromptCustomization ?? "",
 		customPrompt: resolvedCustomPrompt,
@@ -593,10 +618,12 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		hasSpecializedTools: specializedToolNames.length > 0,
 		...cavemanPromptData,
 	};
+	dbgStartup("bsp:before:renderPromptTemplate");
 	const rendered = renderPromptTemplate(
 		resolvedCustomPrompt ? customSystemPromptTemplate : systemPromptTemplate,
 		data,
 	);
+	dbgStartup("bsp:after:renderPromptTemplate", { renderedLen: rendered.length });
 	const boundaryIndex = rendered.indexOf(CACHE_BOUNDARY_MARKER);
 	if (boundaryIndex === -1) {
 		return [{ text: rendered, stable: true }];

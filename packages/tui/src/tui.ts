@@ -13,6 +13,24 @@ import { extractSegments, sliceByColumn, sliceWithWidth, visibleWidth } from "./
 
 const SEGMENT_RESET = "\x1b[0m";
 
+// === STARTUP-DBG (BUG: blank screen after migration prompt). Disable with SPELL_STARTUP_DBG=0. ===
+const _dbgStartupT0_tui = performance.now();
+const _dbgStartupCounts = new Map<string, number>();
+function dbgStartup(step: string, ctx?: Record<string, unknown>, opts?: { firstOnly?: number; bucket?: string }): void {
+	if (process.env.SPELL_STARTUP_DBG !== "1") return;
+	if (opts?.firstOnly !== undefined) {
+		const key = opts.bucket ?? step;
+		const n = (_dbgStartupCounts.get(key) ?? 0) + 1;
+		_dbgStartupCounts.set(key, n);
+		if (n > opts.firstOnly) return;
+	}
+	try {
+		const elapsed = Math.round(performance.now() - _dbgStartupT0_tui);
+		const ctxStr = ctx ? " " + JSON.stringify(ctx) : "";
+		process.stderr.write(`[STARTUP-DBG tui +${elapsed}ms] ${step}${ctxStr}\n`);
+	} catch {}
+}
+
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;
 
@@ -512,15 +530,21 @@ export class TUI extends Container {
 	}
 
 	start(): void {
+		dbgStartup("α:TUI.start:enter", { minRenderInterval: this.#minRenderInterval });
 		this.#stopped = false;
 		this.terminal.start(
 			data => this.#handleInput(data),
 			() => this.requestRender(),
 		);
+		dbgStartup("β:after:terminal.start");
 		this.terminal.hideCursor();
+		dbgStartup("γ:after:hideCursor");
 		this.#querySixelSupport();
+		dbgStartup("δ:after:querySixelSupport");
 		this.#queryCellSize();
+		dbgStartup("ε:after:queryCellSize");
 		this.requestRender(true);
+		dbgStartup("ζ:TUI.start:exit");
 	}
 
 	addInputListener(listener: InputListener): () => void {
@@ -743,6 +767,17 @@ export class TUI extends Container {
 	}
 
 	requestRender(force = false): void {
+		dbgStartup(
+			"req:requestRender:enter",
+			{
+				force,
+				pending: this.#renderRequested,
+				hasThrottle: !!this.#throttleTimer,
+				interval: this.#minRenderInterval,
+				stopped: this.#stopped,
+			},
+			{ firstOnly: 8, bucket: "requestRender" },
+		);
 		if (force) {
 			this.#previousLines = [];
 			this.#previousWidth = -1; // -1 triggers widthChanged, forcing a full clear
@@ -762,18 +797,28 @@ export class TUI extends Container {
 
 		if (force || this.#minRenderInterval <= 0) {
 			// No throttle: schedule after I/O callbacks
-			setImmediate(() => this.#executeRender());
+			dbgStartup("req:schedule:setImmediate(force-or-no-throttle)", { force }, { firstOnly: 6, bucket: "reqSched" });
+			setImmediate(() => {
+				dbgStartup("req:setImmediate:fired", undefined, { firstOnly: 6, bucket: "reqFire" });
+				this.#executeRender();
+			});
 			return;
 		}
 
 		const elapsed = performance.now() - this.#lastRenderTime;
 		if (elapsed >= this.#minRenderInterval) {
 			// Enough time since last render: schedule after I/O callbacks
-			setImmediate(() => this.#executeRender());
+			dbgStartup("req:schedule:setImmediate(elapsed-ok)", { elapsed }, { firstOnly: 6, bucket: "reqSched" });
+			setImmediate(() => {
+				dbgStartup("req:setImmediate:fired", undefined, { firstOnly: 6, bucket: "reqFire" });
+				this.#executeRender();
+			});
 		} else {
 			// Throttle: wait for remaining interval
 			const remaining = this.#minRenderInterval - elapsed;
+			dbgStartup("req:schedule:setTimeout(throttle)", { remaining }, { firstOnly: 6, bucket: "reqSched" });
 			this.#throttleTimer = setTimeout(() => {
+				dbgStartup("req:throttleTimer:fired", undefined, { firstOnly: 6, bucket: "reqFire" });
 				this.#throttleTimer = undefined;
 				this.#executeRender();
 			}, remaining);
@@ -781,6 +826,7 @@ export class TUI extends Container {
 	}
 
 	#executeRender(): void {
+		dbgStartup("exec:#executeRender:enter", { stopped: this.#stopped }, { firstOnly: 6, bucket: "exec" });
 		this.#renderRequested = false;
 		this.#lastRenderTime = performance.now();
 		if (DevProfile.enabled) {
@@ -791,9 +837,11 @@ export class TUI extends Container {
 				frameMs: performance.now() - start,
 				linesChanged: Math.abs(this.#previousLines.length - beforeLines),
 			});
+			dbgStartup("exec:#executeRender:exit (devProfile path)", undefined, { firstOnly: 6, bucket: "execExit" });
 			return;
 		}
 		this.#doRender();
+		dbgStartup("exec:#executeRender:exit", { lineCount: this.#previousLines.length }, { firstOnly: 6, bucket: "execExit" });
 	}
 
 	#handleInput(data: string): void {

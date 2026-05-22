@@ -44,6 +44,20 @@ import { resolvePromptInput } from "./system-prompt";
 import { getChangelogPath, getNewEntries, parseChangelog } from "./utils/changelog";
 import type { EventBus } from "./utils/event-bus";
 
+// === STARTUP-DBG (BUG: blank screen after migration prompt) ===
+// Mirror to stderr (visible during hang) + logger.info (file fallback).
+// Disable with SPELL_STARTUP_DBG=0. Remove once root cause is found.
+const _dbgStartupT0 = performance.now();
+function dbgStartup(step: string, ctx?: Record<string, unknown>): void {
+	if (process.env.SPELL_STARTUP_DBG !== "1") return;
+	try {
+		const elapsed = Math.round(performance.now() - _dbgStartupT0);
+		const ctxStr = ctx ? " " + JSON.stringify(ctx) : "";
+		process.stderr.write(`[STARTUP-DBG main +${elapsed}ms] ${step}${ctxStr}\n`);
+		logger.info(`startup-dbg main: ${step}`, { ...(ctx ?? {}), elapsedMs: elapsed });
+	} catch {}
+}
+
 async function checkForNewVersion(currentVersion: string): Promise<string | undefined> {
 	try {
 		const response = await fetch("https://registry.npmjs.org/@oh-my-pi/pi-coding-agent/latest");
@@ -125,8 +139,10 @@ async function runInteractiveMode(
 	initialMessage?: string,
 	initialImages?: ImageContent[],
 ): Promise<void> {
+	dbgStartup("F:runInteractiveMode:enter");
 	let sessionBridge: SessionBridgeClient | undefined;
 	try {
+		dbgStartup("F:before:bridgeClient.connect");
 		const cwd = session.sessionManager.getCwd();
 		const bridgeClient = new SessionBridgeClient({
 			sessionId: session.sessionId || `tui-${process.pid}`,
@@ -137,10 +153,14 @@ async function runInteractiveMode(
 			projectName: path.basename(cwd),
 		});
 		const connected = await bridgeClient.connect();
+		dbgStartup("F:after:bridgeClient.connect", { connected });
 		if (connected) {
 			sessionBridge = bridgeClient;
 		}
-	} catch {}
+	} catch (err) {
+		dbgStartup("F:bridgeClient.connect:threw", { error: err instanceof Error ? err.message : String(err) });
+	}
+	dbgStartup("G:before:new InteractiveMode");
 	const mode = new InteractiveMode(
 		session,
 		version,
@@ -152,8 +172,11 @@ async function runInteractiveMode(
 		eventBus,
 		sessionBridge,
 	);
+	dbgStartup("G:after:new InteractiveMode");
 
+	dbgStartup("H:before:mode.init");
 	await mode.init();
+	dbgStartup("H:after:mode.init");
 
 	versionCheckPromise
 		.then(newVersion => {
@@ -163,7 +186,9 @@ async function runInteractiveMode(
 		})
 		.catch(() => {});
 
+	dbgStartup("I:before:renderInitialMessages");
 	mode.renderInitialMessages();
+	dbgStartup("I:after:renderInitialMessages");
 
 	for (const notify of notifs) {
 		if (!notify) {
@@ -196,6 +221,7 @@ async function runInteractiveMode(
 		}
 	}
 
+	dbgStartup("J:entering:getUserInput loop");
 	while (true) {
 		const input = await mode.getUserInput();
 		if (input.kind === "terminal-lost") break;
@@ -593,6 +619,7 @@ async function buildSessionOptions(
 }
 
 export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<void> {
+	dbgStartup("A:runRootCommand:enter", { mode: parsed.mode, hasResume: parsed.resume !== undefined, hasContinue: !!parsed.continue });
 	logger.startTiming();
 
 	// Initialize theme early with defaults (CLI commands need symbols)
@@ -744,8 +771,10 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 
 	void notifyRecoverableCrashedSessions(parsedArgs);
 
+	dbgStartup("B:before:createSessionManager");
 	// Create session manager based on CLI flags
 	let sessionManager = await logger.timeAsync("createSessionManager", () => createSessionManager(parsedArgs, cwd));
+	dbgStartup("B:after:createSessionManager", { hasSessionManager: !!sessionManager });
 
 	// Handle --resume (no value): show session picker
 	if (parsedArgs.resume === true) {
@@ -764,9 +793,11 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		sessionManager = await SessionManager.open(selectedPath);
 	}
 
+	dbgStartup("C:before:buildSessionOptions");
 	const { options: sessionOptions } = await logger.timeAsync("buildSessionOptions", () =>
 		buildSessionOptions(parsedArgs, scopedModels, sessionManager, modelRegistry, domainManifest),
 	);
+	dbgStartup("C:after:buildSessionOptions");
 	sessionOptions.authStorage = authStorage;
 	sessionOptions.modelRegistry = modelRegistry;
 	sessionOptions.hasUI = hasUiSurface;
@@ -795,7 +826,12 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		eventBus,
 		orchestratorManager,
 		taskManager,
-	} = await logger.timeAsync("createAgentSession", () => createAgentSession(sessionOptions));
+	} = await (async () => {
+		dbgStartup("D:before:createAgentSession");
+		const r = await logger.timeAsync("createAgentSession", () => createAgentSession(sessionOptions));
+		dbgStartup("D:after:createAgentSession");
+		return r;
+	})();
 	if (parsedArgs.apiKey && !sessionOptions.model && session.model) {
 		authStorage.setRuntimeApiKey(session.model.provider, parsedArgs.apiKey);
 	}
@@ -935,6 +971,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		}
 
 		logger.endTiming();
+		dbgStartup("E:before:runInteractiveMode");
 		await runInteractiveMode(
 			session,
 			VERSION,
