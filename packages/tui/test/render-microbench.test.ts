@@ -4,8 +4,8 @@
  * when run with PI_BENCH=1, and assert structural invariants otherwise.
  */
 import { describe, expect, it } from "bun:test";
-import { Container, Markdown, TUI } from "@oh-my-pi/pi-tui";
-import { defaultMarkdownTheme } from "./test-themes";
+import { Container, Editor, Markdown, TUI } from "@oh-my-pi/pi-tui";
+import { defaultEditorTheme, defaultMarkdownTheme } from "./test-themes";
 import { VirtualTerminal } from "./virtual-terminal";
 
 const BENCH = process.env.PI_BENCH === "1";
@@ -13,7 +13,7 @@ const BENCH = process.env.PI_BENCH === "1";
 function buildChatContainer(messageCount: number): Container {
 	const root = new Container();
 	for (let i = 0; i < messageCount; i++) {
-		const md = new Markdown(defaultMarkdownTheme);
+		const md = new Markdown("", 0, 0, defaultMarkdownTheme);
 		md.setText(
 			`# Message ${i}\n\nHello world, this is message **${i}** with some _formatting_.\n\n- bullet a\n- bullet b\n- bullet c\n\n\`\`\`ts\nconst x = ${i};\n\`\`\``,
 		);
@@ -65,6 +65,63 @@ describe("render microbench", () => {
 		// (loose bounds; assertions only fail if catastrophic regression)
 		expect(perIter).toBeLessThan(10);
 		expect(perDirty).toBeLessThan(50);
+	});
+
+	it("streaming: token-by-token Markdown.setText (worst case)", () => {
+		const term = new VirtualTerminal(120, 40);
+		const tui = new TUI(term, { minRenderInterval: 0 });
+		const chat = new Container();
+		for (let i = 0; i < 50; i++) {
+			const md = new Markdown("", 0, 0, defaultMarkdownTheme);
+			md.setText(`Message ${i}: lorem ipsum dolor sit amet, **consectetur** adipiscing elit.`);
+			chat.addChild(md);
+		}
+		const streaming = new Markdown("", 0, 0, defaultMarkdownTheme);
+		chat.addChild(streaming);
+		tui.addChild(chat);
+		tui.start();
+		tui.render(120);
+
+		const chunks = Array.from({ length: 200 }, (_, i) =>
+			`This is streamed token #${i} with some **formatting** and \`code\` snippets.\n`.repeat(Math.min(i + 1, 20)),
+		);
+
+		let idx = 0;
+		const perIter = bench("streaming token (50 cached + 1 grows)", chunks.length, () => {
+			streaming.setText(chunks[idx++ % chunks.length]);
+			tui.render(120);
+		});
+
+		tui.stop();
+		expect(perIter).toBeLessThan(50);
+	});
+
+	it("editor: render with growing input", () => {
+		const term = new VirtualTerminal(120, 40);
+		const tui = new TUI(term, { minRenderInterval: 0 });
+		const editor = new Editor(defaultEditorTheme);
+		tui.addChild(editor);
+		tui.start();
+
+		editor.setText("Line 1\n".repeat(10));
+		tui.render(120);
+
+		const perIter = bench("editor render (small)", 100, () => {
+			editor.handleInput("a");
+			tui.render(120);
+		});
+
+		editor.setText("x".repeat(2000));
+		tui.render(120);
+
+		const perIterBig = bench("editor render (2000 chars)", 100, () => {
+			editor.handleInput("a");
+			tui.render(120);
+		});
+
+		tui.stop();
+		expect(perIter).toBeLessThan(20);
+		expect(perIterBig).toBeLessThan(50);
 	});
 
 	it("string diff cost: previousLines vs newLines comparison", () => {
