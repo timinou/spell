@@ -19,7 +19,8 @@ import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
  * Order of entry mirrors PLAN-310 cutover order: simplest schemes first.
  */
 export const KERNEL_OWNED_SCHEMES: ReadonlySet<string> = new Set<string>([
-	// populated per cutover commit; see PLAN-310 Phase 2
+	// PLAN-310 Phase 2 cutover order — simplest schemes first.
+	"pi", // embedded markdown docs (Static loader)
 ]);
 
 /**
