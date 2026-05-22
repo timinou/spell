@@ -108,3 +108,14 @@ W4 push-subscribe delivered end-to-end. Daemon: subscribe.rs module (EventRegist
 :RELATIONS:
 ABOUT: FEAT-770-plan-315-w4-push-subscribe-protocol-daem
 :END:
+** ITEM PLAN-315 autonomous second session 2026-05-22: shipped W5 (PI_KNOWLEDGE_WORKER mode, fail-loud RPC default — FEAT-771), W6 (/memory TUI browser with Alt+M panel, 4 tabs, 534 LOC across 8 new files — FEAT-774), W8 (N=10 perf harness scaffolding + BenchPayload event variant + publish_bench_event helper). Ran W*.5 review+gap-fix waves on W5/W6/W8 — surfaced 12 HIGH findings in total (1 doc lie in W5, 2 P1 this-binding bugs + 1 P2 race in W6, 9 HIGH harness bugs in W8 including wrong JSON keys, RSS sampler ordering, totals math). All HIGH findings fixed in dedicated gap-fix commits. Three key architectural decisions ratified: Alt+M not Ctrl+M (Ctrl+M = \\r byte conflict with Enter); shared-daemon RSS attribution (per-session = total/N); sustained python per session for latency measurement (per-query python3 -c spawn cost dwarfs 50ms gate). 21 commits on plan-315-complete branch at /home/user/code/ora/spell-plan315. All package tests green: pi-knowledge-worker 52/52, pi-natives 349 lib + integration, pi-knowledge-core 91/91, pi-org-engine 81/81. FUP-089 reduced to W5-erase + W8-measurement-run + push_latency.rs bench binary.
+:PROPERTIES:
+:CUSTOM_ID: EP-1233920b90754e27
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T17:33:38Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-315-pi-knowledge-worker-shared-knowledge-dae
+ABOUT: FUP-089-plan-315-deferred-code-graph-lane-w3-pus
+:END:
