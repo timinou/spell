@@ -1,0 +1,39 @@
+#+TITLE: searchAnthropic drops OAuth Authorization header on web-search requests
+#+STATE: ITEM
+#+SESSION_ID: 14dd802985b2a5f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
+#+CUSTOM_ID: BUG-381-searchanthropic-drops-oauth-authorizatio
+
+* Initial Message
+
+Investigate how you'd fold in PLAN-304 into the next swarm waves deeply. I want super super clean code
+
+## Symptom
+
+Test `searchAnthropic headers > includes web-search beta header and sends OAuth token in Authorization mode` fails:
+- Expected: `Bearer sk-ant-oat-test`
+- Received: `undefined`
+
+The `anthropic-beta` header check (web-search beta flag) is not the failing assertion; the `authorization` header presence/value is.
+
+## Location
+
+`packages/coding-agent/test/tools/web-search-anthropic.test.ts:128`
+
+Probably an issue in `packages/ai/src/providers/anthropic.ts` (header assembly path for the web-search flow).
+
+## Scope
+
+Not PLAN-306/308 related. From a different session's auth-provider work.
+
+## Severity
+
+P1 — Anthropic web search via OAuth is broken in this state.
+
+## Recommended fix scope
+
+Trace request header assembly in `packages/ai/src/providers/anthropic.ts`. Likely a 5-line fix once the conditional that drops the Bearer header in OAuth mode is identified.
+
+## Test to keep green after fix
+
+`packages/coding-agent/test/tools/web-search-anthropic.test.ts`

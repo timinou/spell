@@ -48,3 +48,23 @@ watch_and_rebuild already supports multi-root; just lacks an explicit test. ~30 
 ** Why deferred
 
 PLAN-310's measurable wins are shipped: tantivy + hnsw_rs gone (-22 MB .so), pi-org-recall + pi-code-vectors deleted, one user-scoped embedder daemon, memory tool live, producers wired, session-start projection live. Remaining work is polish (TUI) and feature completeness (dual-recall).
+
+** Workspace test-isolation flake (pre-existing)
+
+`cargo test --workspace` is flaky under parallel execution:
+- pi-natives::code_buffer::tests::execute_code_buffer_inner_persisted_edit_preserves_undo_history
+- pi-natives::code_path::diff_qualifier::tests (clean_tree / modified_file / workspace_diff / diff_against_historical_rev)
+- pi-workspace-cache::tests::status_tracks_missing_fresh_and_file_drift
+
+Different test fails each run; all pass when run via `cargo test -p <crate>` alone.
+Root cause: shared resources (process HOME env, cwd, temp file races) across tests
+that don't take the embedding_worker::lock_test_env() mutex.
+
+Fix: add the env lock to diff_qualifier git invocations + workspace_cache tests
+that race on temp file writes. PLAN-310 W11 commit a45370d55 fixed the playbook
+test's HOME mutation; this FUP item covers the remaining tests.
+
+Impact: blocks `cargo test --workspace` exit-0 verification of PLAN-310 W2/W2.5/W5/W11
+gates via the todo_write gate machinery. Substantive work passes 354/354 in pi-natives,
+91/91 in pi-knowledge-core, 106/106 in pi-org-engine, 8/8 in pi-embedding-worker when
+run independently.
