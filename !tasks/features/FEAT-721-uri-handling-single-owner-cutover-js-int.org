@@ -45,3 +45,5 @@ One stack per resource kind: kernel for filesystem + code structure (paths, glob
 
 ** Subsumed BUGs
 BUG-350..357 cluster (jobs/mcp/memory/pi/local/skill/rule/agent/artifact rust handler rot) closed by FEAT-722 + FEAT-724 deletion.
+
+NOTE [2026-05-22]: SUPERSEDED by PLAN-310 (2026-05-22). PLAN-310 reverses the single-owner direction: kernel SchemeRegistry now owns URI dispatch via declarative SchemeProfile DSL; TS-side becomes a thin callback provider for canvas + MCP-advertised schemes only. The 'one stack per resource kind' invariant is preserved but inverted — kernel handles fs-backed URIs natively, TS callbacks handle JS-resident schemes (canvas, MCP).

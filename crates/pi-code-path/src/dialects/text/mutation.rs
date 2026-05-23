@@ -144,7 +144,10 @@ fn make_diff(old: &str, new: &str) -> Option<String> {
 
 /// Pure in-memory text transformation without disk I/O.
 /// Returns `None` if this op is not a text mutation handled by this resolver.
-pub fn apply_to_text(op: &Op, source: &str) -> Option<Result<(String, MutationOutcome), Diagnostic>> {
+pub fn apply_to_text(
+	op: &Op,
+	source: &str,
+) -> Option<Result<(String, MutationOutcome), Diagnostic>> {
 	match op {
 		Op::FileAppend { content, .. } => {
 			let mut lines = text_to_lines(source);
@@ -153,9 +156,9 @@ pub fn apply_to_text(op: &Op, source: &str) -> Option<Result<(String, MutationOu
 			let new_text = lines_to_text(&lines);
 			let diff = make_diff(source, &new_text);
 			Some(Ok((new_text, MutationOutcome {
-				edit_count:     if diff.is_some() { 1 } else { 0 },
+				edit_count: if diff.is_some() { 1 } else { 0 },
 				diff,
-				created:        false,
+				created: false,
 				target_summary: None,
 			})))
 		},
@@ -165,28 +168,32 @@ pub fn apply_to_text(op: &Op, source: &str) -> Option<Result<(String, MutationOu
 			let new_text = lines_to_text(&prepended);
 			let diff = make_diff(source, &new_text);
 			Some(Ok((new_text, MutationOutcome {
-				edit_count:     if diff.is_some() { 1 } else { 0 },
+				edit_count: if diff.is_some() { 1 } else { 0 },
 				diff,
-				created:        false,
+				created: false,
 				target_summary: None,
 			})))
 		},
 		Op::FilePatch { diff, .. } => {
 			let patch = match diffy::Patch::from_str(diff) {
 				Ok(p) => p,
-				Err(e) => return Some(Err(Diagnostic {
-					variant: DiagnosticVariant::ParseError,
-					message: format!("invalid diff format: {e}"),
-					span:    None,
-				})),
+				Err(e) => {
+					return Some(Err(Diagnostic {
+						variant: DiagnosticVariant::ParseError,
+						message: format!("invalid diff format: {e}"),
+						span:    None,
+					}));
+				},
 			};
 			let new_text = match diffy::apply(source, &patch) {
 				Ok(n) => n,
-				Err(e) => return Some(Err(Diagnostic {
-					variant: DiagnosticVariant::ParseError,
-					message: format!("failed to apply patch: {e}"),
-					span:    None,
-				})),
+				Err(e) => {
+					return Some(Err(Diagnostic {
+						variant: DiagnosticVariant::ParseError,
+						message: format!("failed to apply patch: {e}"),
+						span:    None,
+					}));
+				},
 			};
 			let diff_out = make_diff(source, &new_text);
 			Some(Ok((new_text, MutationOutcome {
@@ -212,7 +219,9 @@ pub fn apply_to_text(op: &Op, source: &str) -> Option<Result<(String, MutationOu
 			let file_lines = text_to_lines(source);
 			let replacement_lines: Vec<String> = content.lines();
 			let start_idx = start_line.saturating_sub(1);
-			let end_idx = end_line.saturating_sub(1).min(file_lines.len().saturating_sub(1));
+			let end_idx = end_line
+				.saturating_sub(1)
+				.min(file_lines.len().saturating_sub(1));
 			let mut new_lines = file_lines.clone();
 			for _ in start_idx..=end_idx {
 				if start_idx < new_lines.len() {
@@ -233,9 +242,9 @@ pub fn apply_to_text(op: &Op, source: &str) -> Option<Result<(String, MutationOu
 			}
 			let diff = make_diff(source, &new_text);
 			Some(Ok((new_text, MutationOutcome {
-				edit_count:     1,
+				edit_count: 1,
 				diff,
-				created:        false,
+				created: false,
 				target_summary: None,
 			})))
 		},
@@ -276,9 +285,9 @@ pub fn apply_to_text(op: &Op, source: &str) -> Option<Result<(String, MutationOu
 			}
 			let diff = make_diff(source, &new_text);
 			Some(Ok((new_text, MutationOutcome {
-				edit_count:     1,
+				edit_count: 1,
 				diff,
-				created:        false,
+				created: false,
 				target_summary: None,
 			})))
 		},
@@ -309,9 +318,9 @@ pub fn apply_to_text(op: &Op, source: &str) -> Option<Result<(String, MutationOu
 			}
 			let diff = make_diff(source, &new_text);
 			Some(Ok((new_text, MutationOutcome {
-				edit_count:     1,
+				edit_count: 1,
 				diff,
-				created:        false,
+				created: false,
 				target_summary: None,
 			})))
 		},
@@ -342,9 +351,9 @@ pub fn apply_to_text(op: &Op, source: &str) -> Option<Result<(String, MutationOu
 			}
 			let diff = make_diff(source, &new_text);
 			Some(Ok((new_text, MutationOutcome {
-				edit_count:     1,
+				edit_count: 1,
 				diff,
-				created:        false,
+				created: false,
 				target_summary: None,
 			})))
 		},

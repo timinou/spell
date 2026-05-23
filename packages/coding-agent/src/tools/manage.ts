@@ -10,6 +10,7 @@ import type { ManageParams } from "./codepath-types";
 import { manageSchema } from "./codepath-types";
 import { replaceTabs } from "./render-utils";
 import { type DetailsWithMeta, toolResult } from "./tool-result";
+import { sessionContextOpts } from "./codepath-session";
 
 type ManageToolResultDetails = DetailsWithMeta & {
 	command?: string;
@@ -32,6 +33,7 @@ export class ManageTool implements AgentTool<typeof manageSchema> {
 		// `index` triggers background code-graph indexing; edge resolvers
 		// emit CODE_GRAPH_NOT_INITIALISED until it completes.
 		const chunks = await executeCodePath({
+			...sessionContextOpts(undefined),
 			command: "manage",
 			manage: params.command,
 			target: params.file ?? "",

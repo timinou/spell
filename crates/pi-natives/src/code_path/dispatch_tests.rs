@@ -24,6 +24,8 @@ fn opts(target: impl Into<String>) -> CodePathTaskOptions {
 		artifact_threshold: None,
 		gitignore:          None,
 		session_id:         None,
+		home:               None,
+		session_dir:        None,
 	}
 }
 
@@ -43,6 +45,8 @@ fn opts_with_root(target: impl Into<String>, root: std::path::PathBuf) -> CodePa
 		artifact_threshold: None,
 		gitignore:          None,
 		session_id:         None,
+		home:               None,
+		session_dir:        None,
 	}
 }
 

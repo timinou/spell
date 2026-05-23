@@ -58,7 +58,9 @@ impl HeadingResolver {
 			| Op::HeadingReplaceBlock { target, .. } => target,
 			_ => unreachable!(),
 		};
-		self.inner.apply_to_buffer(buffer, target.as_codepath(), &action_json)
+		self
+			.inner
+			.apply_to_buffer(buffer, target.as_codepath(), &action_json)
 	}
 }
 

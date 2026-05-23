@@ -706,10 +706,7 @@ mod tests {
 	fn line_predicate_literal_invalid_utf8_no_panic() {
 		// `\xC3\x28` is an invalid UTF-8 sequence.
 		let content: &[u8] = b"hello \xC3\x28 world\nsecond line\n";
-		let nodes = line_steps(
-			content,
-			&step(vec![Predicate::LiteralMatch("world".to_string())]),
-		);
+		let nodes = line_steps(content, &step(vec![Predicate::LiteralMatch("world".to_string())]));
 		assert_eq!(nodes.len(), 1);
 		assert!(matches!(
 			&nodes[0].content,
@@ -724,12 +721,10 @@ mod tests {
 		// where a single shared `from_utf8_lossy` would split a `ÿfd`.
 		let mut content: Vec<u8> = Vec::new();
 		content.extend_from_slice(b"prefix\n");
-		content.extend_from_slice(&[0x84, 0xFE, 0xC0, 0x80, 0xFF]);
+		content.extend_from_slice(&[0x84, 0xfe, 0xc0, 0x80, 0xff]);
 		content.extend_from_slice(b"\nsuffix\n");
-		let nodes = line_steps(
-			&content,
-			&step(vec![Predicate::Range { start: Some(1), end: Some(3) }]),
-		);
+		let nodes =
+			line_steps(&content, &step(vec![Predicate::Range { start: Some(1), end: Some(3) }]));
 		assert_eq!(nodes.len(), 1);
 		// Round-trips through lossy decoding; must not panic.
 		assert!(slice_body(&nodes[0]).contains("prefix"));
@@ -741,7 +736,7 @@ mod tests {
 		let mut content: Vec<u8> = Vec::new();
 		for _ in 0..3 {
 			content.extend_from_slice(b"ok line\n");
-			content.extend_from_slice(&[0xC3, 0x28, b'\n']);
+			content.extend_from_slice(&[0xc3, 0x28, b'\n']);
 		}
 		let nodes = chunk_steps(&content, &step(vec![]));
 		assert!(!nodes.is_empty());

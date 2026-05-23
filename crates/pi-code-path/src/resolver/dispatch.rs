@@ -10,7 +10,6 @@ use crate::{
 	ast::{CodePath, Locator},
 	resolver::traits::{
 		CancellationToken, CodeResolver, EdgeResolver, FormatExtractor, FsAnchorContext,
-		SchemeHandler,
 	},
 	types::{Diagnostic, DiagnosticVariant, NodeRef},
 };
@@ -19,7 +18,6 @@ use crate::{
 pub struct ResolveContext {
 	pub fs_anchor:     Arc<dyn FsAnchorContext>,
 	pub extractors:    Vec<Arc<dyn FormatExtractor>>,
-	pub schemes:       HashMap<String, Arc<dyn SchemeHandler>>,
 	pub code_resolver: Option<Arc<dyn CodeResolver>>,
 	pub edge_resolver: Option<Arc<dyn EdgeResolver>>,
 	pub cancel:        CancellationToken,
@@ -88,7 +86,6 @@ mod tests {
 		ResolveContext {
 			fs_anchor:     Arc::new(NoopFsAnchor),
 			extractors:    vec![],
-			schemes:       HashMap::new(),
 			code_resolver: None,
 			edge_resolver: None,
 			cancel:        CancellationToken::new(),

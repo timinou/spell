@@ -1,8 +1,9 @@
 #+TITLE: Kernel executeCodePath does not register URI scheme resolvers (memory/skill/artifact/agent)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14dd802985b2a5f1
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan309/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
 #+CUSTOM_ID: BUG-388-kernel-executecodepath-does-not-register
+#+COMPLETION_HASH: 3c5386310b899b9f
 
 * Initial Message
 
@@ -62,3 +63,5 @@ If pursuing Option B (recommended):
 - Delete `uri_scheme_tests` module from `crates/pi-natives/tests/code_path_e2e.rs`
 - Delete the `Locator::Uri` arm from napi.rs dispatch with a `Diagnostic::unsupported` for clarity
 - Document in `packages/coding-agent/src/internal-urls/index.ts` that URI dispatch is TS-side by design
+
+NOTE [2026-05-22]: Closed by PLAN-310: kernel SchemeRegistry now resolves all URI schemes natively via declarative SchemeProfile DSL. The Locator::Uri rejection branch in napi.rs:805 is replaced with kernel-side resolution + NodeRef wrapping. Tests previously ignored in code_path_e2e.rs::uri_scheme_tests:: now exercise the real dispatch path through W4 e2e tests and W1 integration tests.

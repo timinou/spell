@@ -154,9 +154,7 @@ impl CacheStore {
 		// Pass `&mut writer` so we retain ownership and can explicitly flush.
 		// `BufWriter::drop` swallows flush errors silently.
 		bincode::serialize_into(&mut writer, entry)?;
-		writer
-			.flush()
-			.map_err(WorkspaceCacheError::Io)?;
+		writer.flush().map_err(WorkspaceCacheError::Io)?;
 		Ok(())
 	}
 
