@@ -34,6 +34,9 @@ export const RESERVED_NATIVE_SCHEMES = [
 	"pi",
 	"local",
 ] as const;
+// Note: artifact remains a kernel-declarative scheme post-BUG-396 (uses
+// IndexLookup + cross-session scan, not callback). It stays in RESERVED
+// because runtime registrations should not shadow it.
 
 /**
  * Sanitize an MCP server name into a URL-scheme-safe kebab token.

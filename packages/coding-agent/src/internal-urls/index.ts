@@ -22,7 +22,7 @@
 
 export * from "../swarm/uri-protocol";
 export * from "./agent-protocol";
-export * from "./artifact-protocol";
+// artifact:// is kernel-owned via IndexLookup (PLAN-310 BUG-396)
 export * from "./canvas-protocol";
 // jobs scheme is kernel-owned via callback bridge (PLAN-310 BUG-395)
 export * from "./json-query";

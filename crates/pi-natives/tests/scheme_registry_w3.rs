@@ -62,24 +62,9 @@ fn agent_requires_session_dir() {
 
 // ── artifact:// ──────────────────────────────────────────────────
 
-#[test]
-fn artifact_resolves_multi_segment_body() {
-	let dir = TempDir::new().unwrap();
-	let target = dir.path().join(".spell/sessions/abc123/reviewer/get/3.txt");
-	std::fs::create_dir_all(target.parent().unwrap()).unwrap();
-	std::fs::write(&target, "artifact content\n").unwrap();
-
-	let ctx = SessionContext::new(dir.path(), "/home/u");
-	let reg = registry(Some(&ctx));
-	let uri = UriLocator { scheme: "artifact".into(), path: "abc123/reviewer/get/3.txt".into() };
-	let cancel = CancellationToken::new();
-	let r = reg.resolve(&uri, Some(&ctx), &cancel).unwrap();
-	assert_eq!(r.source_path, Some(target));
-	match &r.content {
-		Content::Text { value } => assert!(value.contains("artifact content")),
-		_ => panic!("expected Text"),
-	}
-}
+// PLAN-310 BUG-396: artifact:// moved to UserRoot + IndexLookup
+// (mtime-cached cross-session scan). Tests moved to
+// crates/pi-natives/tests/scheme_artifact_index.rs.
 
 // ── jobs:// ──────────────────────────────────────────────────────
 

@@ -212,3 +212,63 @@ describe("callback bridge end-to-end", () => {
 		}
 	});
 });
+
+describe("artifact:// declarative IndexLookup (BUG-396)", () => {
+	it("resolves cross-session via mtime-cached index", async () => {
+		const homeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "art-e2e-"));
+		try {
+			// Build a session dir matching the regex suffix convention:
+			//   <home>/.spell/agent/sessions/<project>/<name>_<hex-id>/<agent>/<tool>/<file>
+			const sessionDir = path.join(homeRoot, ".spell/agent/sessions/proj1/work_abc123def");
+			const artifact = path.join(sessionDir, "main/bash/3.txt");
+			await fs.mkdir(path.dirname(artifact), { recursive: true });
+			await fs.writeFile(artifact, "command output line\n");
+
+			const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "art-proj-"));
+			try {
+				const chunks = await executeCodePath({
+					command: "get",
+					target: "artifact://abc123def/main/bash/3.txt",
+					root: projectRoot,
+					home: homeRoot,
+				});
+				const node = chunks.flatMap(c => c.nodes).find(n => n.kind === "§artifact");
+				expect(node).toBeDefined();
+				expect(node?.content?.value).toContain("command output");
+				expect(node?.metadata?.source_path).toBe(artifact);
+			} finally {
+				await fs.rm(projectRoot, { recursive: true, force: true });
+			}
+		} finally {
+			await fs.rm(homeRoot, { recursive: true, force: true });
+		}
+	});
+
+	it("emits Binary artifact note for image extensions", async () => {
+		const homeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "art-bin-"));
+		try {
+			const sessionDir = path.join(homeRoot, ".spell/agent/sessions/p/s_deadbeef");
+			const png = path.join(sessionDir, "main/bash/5.png");
+			await fs.mkdir(path.dirname(png), { recursive: true });
+			await fs.writeFile(png, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+			const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "art-bin-proj-"));
+			try {
+				const chunks = await executeCodePath({
+					command: "get",
+					target: "artifact://deadbeef/main/bash/5.png",
+					root: projectRoot,
+					home: homeRoot,
+				});
+				const node = chunks.flatMap(c => c.nodes).find(n => n.kind === "§artifact");
+				const notes = (node?.metadata?.notes ?? []) as string[];
+				expect(notes.some(n => n.includes("Binary artifact") && n.includes("png"))).toBe(true);
+			} finally {
+				await fs.rm(projectRoot, { recursive: true, force: true });
+			}
+		} finally {
+			await fs.rm(homeRoot, { recursive: true, force: true });
+		}
+	});
+});
+
