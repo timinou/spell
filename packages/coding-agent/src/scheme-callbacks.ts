@@ -69,6 +69,14 @@ export interface SchemeResolveResult {
 	content: string;
 	mime?: string;
 	notes?: string[];
+	/**
+	 * Absolute filesystem path backing this resolution, when applicable. Set
+	 * when a callback resolves to on-disk content (e.g. skill:// after looking
+	 * up the skill's baseDir + sub-path). Enables codepath suffix forwarding
+	 * and brush bash expansion. Leave undefined for purely in-memory data
+	 * (jobs://, swarm task://, virtual MCP resources).
+	 */
+	sourcePath?: string;
 }
 
 export interface AdvertiseError {

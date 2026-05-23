@@ -27,14 +27,19 @@ use pi_code_path::{
 
 /// JS-facing return payload from a runtime scheme callback.
 ///
-/// TS callbacks return `{ url, content, mime?, notes? }`. The kernel converts
-/// this into a `ResolvedContent` for the registry.
+/// TS callbacks return `{ url, content, mime?, notes?, sourcePath? }`. The
+/// kernel converts this into a `ResolvedContent` for the registry.
+///
+/// `source_path` enables codepath suffix forwarding and brush bash expansion
+/// for hybrid schemes (e.g. skill://) where the data is JS-resident at
+/// discovery time but ultimately backed by a filesystem path.
 #[napi(object)]
 pub struct JsResolvedContent {
-	pub url:     String,
-	pub content: String,
-	pub mime:    Option<String>,
-	pub notes:   Option<Vec<String>>,
+	pub url:         String,
+	pub content:     String,
+	pub mime:        Option<String>,
+	pub notes:       Option<Vec<String>>,
+	pub source_path: Option<String>,
 }
 
 /// `SchemeCallback` impl that routes through a JS `ThreadsafeFunction`.
@@ -81,7 +86,7 @@ impl SchemeCallback for JsTsfnCallback {
 		match rx.recv_timeout(self.budget) {
 			Ok(Ok(payload)) => Ok(ResolvedContent {
 				url:          payload.url,
-				source_path:  None,
+				source_path:  payload.source_path.map(std::path::PathBuf::from),
 				content:      Content::Text { value: payload.content },
 				mime:         payload.mime,
 				notes:        payload.notes.unwrap_or_default(),

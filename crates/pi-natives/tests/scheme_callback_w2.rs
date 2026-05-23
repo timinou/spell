@@ -130,3 +130,66 @@ fn registry_for_session_merges_static_and_dynamic() {
 	assert!(names.contains(&"skill".to_string()));
 	assert!(names.contains(&"custom-svc".to_string()));
 }
+
+// ── Wave 1: callback source_path passthrough ─────────────────────
+
+struct FsBackedCallback {
+	source_path: std::path::PathBuf,
+	content:     String,
+}
+
+impl SchemeCallback for FsBackedCallback {
+	fn resolve(
+		&self,
+		body: &str,
+		_ctx: Option<&SessionContext>,
+		_cancel: &CancellationToken,
+	) -> Result<ResolvedContent, Diagnostic> {
+		Ok(ResolvedContent {
+			url:          format!("fsback://{body}"),
+			source_path:  Some(self.source_path.clone()),
+			content:      Content::Text { value: self.content.clone() },
+			mime:         Some("text/plain".into()),
+			notes:        vec![],
+			source_mtime: None,
+		})
+	}
+}
+
+#[test]
+fn callback_can_emit_source_path() {
+	// When a callback profile returns source_path, the kernel surfaces it on
+	// the ResolvedContent so downstream consumers (codepath suffix forwarding,
+	// brush expansion) can use it.
+	let dir = tempfile::TempDir::new().unwrap();
+	let file = dir.path().join("x.txt");
+	std::fs::write(&file, "on-disk content").unwrap();
+
+	let mut reg = SchemeRegistry::new();
+	reg.register_dynamic_profile(SchemeProfile {
+		scheme:       "fsback",
+		root:         RootTemplate::Virtual,
+		layout:       PathLayout::Direct,
+		loader:       ContentLoader::Callback(Arc::new(FsBackedCallback {
+			source_path: file.clone(),
+			content:     "on-disk content".into(),
+		})),
+		capabilities: SchemeCapabilities {
+			fs_backed:           true,
+			codepath_compatible: true,
+			mime_hint:           Some("text/plain"),
+			cache:               CacheStrategy::None,
+			bash_expandable:     true,
+			callback_budget:     Some(Duration::from_secs(5)),
+			static_notes:        &[],
+		},
+	})
+	.unwrap();
+
+	let uri = UriLocator { scheme: "fsback".into(), path: "my-item".into() };
+	let cancel = CancellationToken::new();
+	let r = reg.resolve(&uri, None, &cancel).unwrap();
+	assert_eq!(r.source_path, Some(file));
+	assert_eq!(r.mime, Some("text/plain".into()));
+}
+
