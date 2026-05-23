@@ -92,7 +92,7 @@ impl SchemeCallback for JsTsfnCallback {
 				notes:        payload.notes.unwrap_or_default(),
 				source_mtime: None,
 			}),
-			Ok(Err(msg)) => Err(callback_err(format!("scheme callback failed: {msg}"))),
+			Ok(Err(msg)) => Err(callback_err(sanitize_js_reason(&msg))),
 			Err(mpsc::RecvTimeoutError::Timeout) => {
 				Err(cancelled(format!("callback budget {:?} exceeded", self.budget)))
 			},
@@ -106,7 +106,53 @@ impl SchemeCallback for JsTsfnCallback {
 fn callback_err(msg: impl Into<String>) -> Diagnostic {
 	Diagnostic { variant: DiagnosticVariant::ParseError, message: msg.into(), span: None }
 }
-
+/// JS thrown errors arrive with the message duplicated, prefixed `Error:`,
+/// and a multi-line stack trace appended. Strip the noise so the user-facing
+/// diagnostic is just the first informative line.
+///
+/// Input shapes seen in the wild:
+///   `"Error: skill not found\nError: skill not found\n    at resolveSkill ..."`
+///   `"skill not found\n    at resolveSkill (/path/...)"`
+fn sanitize_js_reason(raw: &str) -> String {
+	// First non-empty line, sans "Error: " prefix, sans "at <fn> (...)" suffix.
+	let first = raw
+		.lines()
+		.map(|l| l.trim())
+		.find(|l| !l.is_empty() && !l.starts_with("at "))
+		.unwrap_or(raw);
+	let trimmed = first.strip_prefix("Error: ").unwrap_or(first);
+	trimmed.to_string()
+}
 fn cancelled(msg: impl Into<String>) -> Diagnostic {
 	Diagnostic { variant: DiagnosticVariant::Cancelled, message: msg.into(), span: None }
 }
+
+
+#[cfg(test)]
+mod sanitize_tests {
+	use super::sanitize_js_reason;
+
+	#[test]
+	fn strips_error_prefix_and_stack() {
+		let input = "Error: skill not found\nError: skill not found\n    at resolveSkill (/path/to/scheme-bootstrap.ts:126:23)";
+		assert_eq!(sanitize_js_reason(input), "skill not found");
+	}
+
+	#[test]
+	fn handles_plain_message() {
+		assert_eq!(sanitize_js_reason("simple message"), "simple message");
+	}
+
+	#[test]
+	fn handles_message_with_only_stack() {
+		let input = "skill not found\n    at resolveSkill (/path)";
+		assert_eq!(sanitize_js_reason(input), "skill not found");
+	}
+
+	#[test]
+	fn handles_leading_whitespace_stack() {
+		let input = "\n  Error: foo\n    at fn (/p)";
+		assert_eq!(sanitize_js_reason(input), "foo");
+	}
+}
+
