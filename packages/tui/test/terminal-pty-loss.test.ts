@@ -5,6 +5,12 @@ const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isT
 const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 const stdinSetRawModeDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "setRawMode");
 
+function ioError(code: string, message?: string): Error & { code: string } {
+	const err = new Error(message ?? code) as Error & { code: string };
+	err.code = code;
+	return err;
+}
+
 function restoreProperty(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {
 	if (descriptor) {
 		Object.defineProperty(target, key, descriptor);
@@ -53,7 +59,7 @@ describe("ProcessTerminal pty-loss detection", () => {
 		const { terminal, reasons } = setupTerminal();
 		terminal.onLost(reason => reasons.push(reason));
 
-		process.stdout.emit("error", new Error("EIO"));
+		process.stdout.emit("error", ioError("EIO"));
 		await Bun.sleep(0);
 
 		expect(reasons).toEqual(["stdout-error"]);
@@ -112,7 +118,7 @@ describe("ProcessTerminal pty-loss detection", () => {
 		const { terminal, reasons } = setupTerminal();
 		terminal.onLost(reason => reasons.push(reason));
 
-		process.stdout.emit("error", new Error("EIO"));
+		process.stdout.emit("error", ioError("EIO"));
 		process.stdin.emit("end");
 		await Bun.sleep(0);
 
@@ -126,7 +132,7 @@ describe("ProcessTerminal pty-loss detection", () => {
 		terminal.stop();
 
 		try {
-			process.stdout.emit("error", new Error("EIO"));
+			process.stdout.emit("error", ioError("EIO"));
 		} catch {
 			/* process.stdout throws when no error listeners are registered */
 		}
@@ -135,11 +141,76 @@ describe("ProcessTerminal pty-loss detection", () => {
 		expect(reasons).toEqual([]);
 	});
 
+	// Regression: a synchronous throw in a stdin `'data'` listener is re-emitted
+	// as `'error'` on the stream. Before this gate, those bubbled into
+	// #onPtyLost("stdin-error") and exited the session cleanly with no crash
+	// report (this is exactly how the BUG-391 markDirge TypeError manifested).
+	it("ignores non-fatal stdin errors (TypeError) and rethrows uncaught", async () => {
+		const { terminal, reasons } = setupTerminal();
+		terminal.onLost(reason => reasons.push(reason));
+
+		const caught: unknown[] = [];
+		const handler = (err: unknown) => caught.push(err);
+		// Suppress the test runner's uncaughtException policy for this assertion
+		// window — our handler is the ONLY listener so we can read the routed err.
+		const prior = process.listeners("uncaughtException");
+		for (const l of prior) process.off("uncaughtException", l as never);
+		process.on("uncaughtException", handler);
+		try {
+			const err = new TypeError("this.markDirty is not a function");
+			process.stdin.emit("error", err);
+			await Bun.sleep(0);
+
+			expect(reasons).toEqual([]);
+			expect(caught).toHaveLength(1);
+			expect(caught[0]).toBe(err);
+		} finally {
+			process.off("uncaughtException", handler);
+			for (const l of prior) process.on("uncaughtException", l as never);
+			terminal.stop();
+		}
+	});
+
+	it("ignores non-fatal stdout errors (no code) and rethrows uncaught", async () => {
+		const { terminal, reasons } = setupTerminal();
+		terminal.onLost(reason => reasons.push(reason));
+
+		const caught: unknown[] = [];
+		const handler = (err: unknown) => caught.push(err);
+		const prior = process.listeners("uncaughtException");
+		for (const l of prior) process.off("uncaughtException", l as never);
+		process.on("uncaughtException", handler);
+		try {
+			const err = new Error("some downstream bug, not IO");
+			process.stdout.emit("error", err);
+			await Bun.sleep(0);
+
+			expect(reasons).toEqual([]);
+			expect(caught).toHaveLength(1);
+			expect(caught[0]).toBe(err);
+		} finally {
+			process.off("uncaughtException", handler);
+			for (const l of prior) process.on("uncaughtException", l as never);
+			terminal.stop();
+		}
+	});
+
+	it("treats stdin EBADF / EPIPE as pty-loss", async () => {
+		const { terminal, reasons } = setupTerminal();
+		terminal.onLost(reason => reasons.push(reason));
+
+		process.stdin.emit("error", ioError("EBADF"));
+		await Bun.sleep(0);
+
+		expect(reasons).toEqual(["stdin-error"]);
+		terminal.stop();
+	});
+
 	it("safeWrite is no-op after onPtyLost", async () => {
 		const { terminal, writes } = setupTerminal();
 		const beforeCount = writes.length;
 
-		process.stdout.emit("error", new Error("EIO"));
+		process.stdout.emit("error", ioError("EIO"));
 		await Bun.sleep(0);
 
 		terminal.write("should-not-write");
