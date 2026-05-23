@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import { validateRelativePath } from "./skill-protocol";
+import { validateRelativePath } from "./path-validation";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
 
 const DEFAULT_MEMORY_FILE = "memory_summary.md";
@@ -53,7 +53,7 @@ export function resolveMemoryUrlToPath(url: InternalUrl, memoryRoot: string): st
 	}
 
 	try {
-		validateRelativePath(relativePath);
+		validateRelativePath(relativePath, "memory");
 	} catch (error) {
 		throw toMemoryValidationError(error);
 	}
