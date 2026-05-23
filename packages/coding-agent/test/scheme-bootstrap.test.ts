@@ -61,7 +61,7 @@ describe("resolveRule (BUG-393)", () => {
 	});
 
 	it("throws on empty body", () => {
-		expect(() => resolveRule({ getRules: () => [] }, "")).toThrow(/requires a rule name/);
+		expect(() => resolveRule({ getRules: () => [] }, "")).toThrow(/rule name is required/);
 	});
 });
 
@@ -119,7 +119,7 @@ describe("resolveSkill (BUG-394)", () => {
 	});
 
 	it("throws on empty body", () => {
-		expect(() => resolveSkill({ getSkills: () => [] }, "")).toThrow(/requires a skill name/);
+		expect(() => resolveSkill({ getSkills: () => [] }, "")).toThrow(/skill name is required/);
 	});
 });
 

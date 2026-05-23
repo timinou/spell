@@ -96,12 +96,12 @@ export function resolveRule(
 	providers: Pick<CallbackSchemeProviders, "getRules">,
 	body: string,
 ): { url: string; content: string; mime: string; notes?: string[]; sourcePath?: string } {
-	if (!body) throw new Error("rule:// URL requires a rule name");
+	if (!body) throw new Error("a rule name is required");
 	const rules = providers.getRules();
 	const rule = rules.find(r => r.name === body);
 	if (!rule) {
 		const available = rules.map(r => r.name).join(", ") || "(none)";
-		throw new Error(`rule:// rule '${body}' not found. Available: ${available}`);
+		throw new Error(`rule '${body}' not found. Available: ${available}`);
 	}
 	const notes: string[] = [];
 	// Surface source-of-truth when not the default; lets the agent prefer
@@ -123,14 +123,14 @@ export function resolveSkill(
 	providers: { getSkills: () => Skill[] | readonly Skill[] },
 	body: string,
 ): { url: string; content: string; mime: string; sourcePath?: string } {
-	if (!body) throw new Error("skill:// URL requires a skill name");
+	if (!body) throw new Error("a skill name is required");
 	const skills = providers.getSkills();
 	const [skillName, ...subParts] = body.split("/");
 	const sub = subParts.join("/");
 	const skill = skills.find(s => s.name === skillName);
 	if (!skill) {
 		const available = skills.map(s => s.name).join(", ") || "(none)";
-		throw new Error(`skill:// skill '${skillName}' not found. Available: ${available}`);
+		throw new Error(`skill '${skillName}' not found. Available: ${available}`);
 	}
 	const baseDir = skill.baseDir;
 	const resolved = sub ? path.resolve(baseDir, sub) : skill.filePath;
@@ -138,10 +138,10 @@ export function resolveSkill(
 	// Traversal defense (mirrors kernel local profile's path_starts_with).
 	const baseResolved = path.resolve(baseDir);
 	if (resolved !== baseResolved && !resolved.startsWith(`${baseResolved}${path.sep}`)) {
-		throw new Error(`skill:// sub-path '${sub}' escapes skill baseDir`);
+		throw new Error(`sub-path '${sub}' escapes skill baseDir`);
 	}
 	if (sub && !SAFE_RELATIVE_RE.test(sub)) {
-		throw new Error(`skill:// sub-path contains disallowed characters: ${sub}`);
+		throw new Error(`sub-path contains disallowed characters: ${sub}`);
 	}
 
 	// Sync read: napi ThreadsafeFunction expects sync return; the kernel blocks
