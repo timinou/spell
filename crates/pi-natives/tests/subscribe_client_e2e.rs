@@ -141,8 +141,12 @@ fn subscribe_receives_warm_completed_event_end_to_end() {
 		}),
 	);
 
-	// Allow up to 2 seconds for the event to propagate.
-	let deadline = std::time::Instant::now() + Duration::from_secs(2);
+	// Allow up to 30 seconds for the event to propagate. PLAN-316 made the
+	// warm path async, so this deadline now covers cold bge-m3 model load
+	// (~3-5 s from disk; longer on first download) and the embed+publish
+	// pipeline. Pre-316 the warm was synchronous inside `open`, hiding the
+	// model-load cost behind the open() RTT.
+	let deadline = std::time::Instant::now() + Duration::from_secs(30);
 	while std::time::Instant::now() < deadline {
 		if counter.load(Ordering::SeqCst) > 0 {
 			break;
