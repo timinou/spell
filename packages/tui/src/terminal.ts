@@ -15,6 +15,48 @@ let terminalEverStarted = false;
 
 const STD_INPUT_HANDLE = -10;
 const ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
+
+/**
+ * errno-style codes that unambiguously mean the underlying stdio file
+ * descriptor is gone or unusable. Any other `'error'` event on stdin/stdout
+ * is most likely a synchronous throw from a `'data'` listener that Node/Bun
+ * re-emitted on the stream — we must NOT mistake those for PTY death (see
+ * BUG-391/BUG-387 interaction).
+ */
+const FATAL_IO_ERROR_CODES: ReadonlySet<string> = new Set([
+	"EIO",
+	"EPIPE",
+	"EBADF",
+	"ENOTCONN",
+	"ECONNRESET",
+	"ESHUTDOWN",
+]);
+
+function isFatalIoError(err: unknown): boolean {
+	if (!err || typeof err !== "object") return false;
+	const code = (err as { code?: unknown }).code;
+	return typeof code === "string" && FATAL_IO_ERROR_CODES.has(code);
+}
+
+/**
+ * Surface a non-IO stream error as an uncaught exception so the postmortem
+ * crash reporter sees it instead of silently treating it as "terminal lost"
+ * and exiting 0. We use `process.emit('uncaughtException', …)` rather than
+ * a microtask `throw` so the rethrow is observable in unit tests without
+ * tripping the test runner's own uncaught-error policy on a synthetic throw.
+ */
+function rethrowAsUncaught(err: unknown): void {
+	const toEmit = err instanceof Error ? err : new Error(String(err ?? "unknown stream error"));
+	if (process.listenerCount("uncaughtException") > 0) {
+		process.emit("uncaughtException", toEmit, "uncaughtException");
+		return;
+	}
+	// No listener installed yet (e.g. very early in startup): fall back to a
+	// genuine throw so we don't lose the error entirely.
+	queueMicrotask(() => {
+		throw toEmit;
+	});
+}
 /**
  * Emergency terminal restore - call this from signal/crash handlers
  * Resets terminal state without requiring access to the ProcessTerminal instance
@@ -143,8 +185,31 @@ export class ProcessTerminal implements Terminal {
 	#mode2031Active = false;
 	#mode2031DebounceTimer?: Timer;
 
-	#onStdoutError = () => this.#onPtyLost("stdout-error");
-	#onStdinError = () => this.#onPtyLost("stdin-error");
+	#onStdoutError = (err?: unknown) => {
+		if (isFatalIoError(err)) {
+			this.#onPtyLost("stdout-error");
+			return;
+		}
+		// Likely a thrown error from a downstream 'data'/write callback that
+		// Node/Bun re-emitted on the stream. Surface it via uncaughtException
+		// so the crash reporter records a real stack instead of a silent exit.
+		logger.warn("terminal stdout error (non-fatal io)", {
+			code: (err as { code?: string } | undefined)?.code,
+			message: (err as { message?: string } | undefined)?.message,
+		});
+		rethrowAsUncaught(err);
+	};
+	#onStdinError = (err?: unknown) => {
+		if (isFatalIoError(err)) {
+			this.#onPtyLost("stdin-error");
+			return;
+		}
+		logger.warn("terminal stdin error (non-fatal io)", {
+			code: (err as { code?: string } | undefined)?.code,
+			message: (err as { message?: string } | undefined)?.message,
+		});
+		rethrowAsUncaught(err);
+	};
 	#onStdinEnd = () => this.#onPtyLost("stdin-end");
 	#onStdinClose = () => this.#onPtyLost("stdin-close");
 
