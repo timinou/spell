@@ -3,7 +3,7 @@ import * as path from "node:path";
 import type { Skill } from "../extensibility/skills";
 import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls";
 import { KERNEL_OWNED_SCHEMES, RouterDelegateToKernel } from "../internal-urls/router";
-import { validateRelativePath } from "../internal-urls/skill-protocol";
+import { validateRelativePath } from "../internal-urls/path-validation";
 import type { InternalResource } from "../internal-urls/types";
 import { ToolError } from "./tool-errors";
 

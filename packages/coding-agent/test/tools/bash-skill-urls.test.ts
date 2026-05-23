@@ -151,34 +151,9 @@ describe("expandSkillUrls", () => {
 });
 
 describe("expandInternalUrls", () => {
-	it.skip("[PLAN-310 cutover] expands skill/agent/artifact/memory/rule URLs in one command", async () => {
-		// All schemes in the original test are now kernel-owned except artifact.
-		// Bash-side expansion now passes through to brush WordPreprocessor for
-		// kernel-owned schemes. This composite test is replaced by per-scheme
-		// tests above.
-		return;
-	});
-
-	it.skip("[legacy] expands skill/agent/artifact/memory/rule URLs in one command", async () => {
-		const skills = [createSkill("valid-skill", "/tmp/skills/valid-skill")];
-		const router = createInternalRouter({
-			"artifact://12": { sourcePath: "/tmp/artifacts/12.bash.log" },
-			"agent://reviewer_0": { sourcePath: "/tmp/session/reviewer_0.md" },
-			"memory://root/memory_summary.md": { sourcePath: "/tmp/memories/memory_summary.md" },
-			"rule://rs-no-unwrap": { sourcePath: "/tmp/rules/rs-no-unwrap.md" },
-		});
-		const command =
-			"cat agent://reviewer_0 artifact://12 memory://root/memory_summary.md rule://rs-no-unwrap skill://valid-skill/scripts/init.py";
-		const expectedSkillPath = path.join(skills[0].baseDir, "scripts/init.py");
-
-		// PLAN-310 cutover: agent:// and memory:// are kernel-owned and pass
-		// through TS pre-pass unchanged — brush WordPreprocessor in the kernel
-		// shell exec handles them. artifact:// and rule:// remain JS-routed
-		// (BUG-393/394/396). skill:// + local:// special-cased here.
-		await expect(expandInternalUrls(command, { skills, internalRouter: router })).resolves.toBe(
-			`cat ${shellEscape("agent://reviewer_0")} ${shellEscape("/tmp/artifacts/12.bash.log")} ${shellEscape("memory://root/memory_summary.md")} ${shellEscape("/tmp/rules/rs-no-unwrap.md")} ${shellEscape(expectedSkillPath)}`,
-		);
-	});
+	// PLAN-310: composite skill/agent/artifact/memory/rule expansion test
+	// removed — all schemes except artifact are kernel-owned and pass through
+	// to brush WordPreprocessor. Per-scheme tests cover the contract.
 
 	it("expands quoted non-skill URLs and shell-escapes quotes in paths", async () => {
 		const router = createInternalRouter({
@@ -225,13 +200,6 @@ describe("expandInternalUrls", () => {
 		);
 	});
 
-	it.skip("[PLAN-310: kernel-owned via §rule] throws when internal router resolves URL without sourcePath", async () => {
-		// rule is now kernel-owned via callback bridge (BUG-393); bash pre-pass
-		// passes the URL through to brush which calls the kernel. The legacy
-		// 'no sourcePath' error path is replaced by the callback's own error
-		// surface.
-		return;
-	});
 
 	it("surfaces resolver errors with actionable context (for JS-routed schemes)", async () => {
 		// PLAN-310: memory:// is kernel-owned and passes through; use a still-JS-routed

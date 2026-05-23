@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import { validateRelativePath } from "./skill-protocol";
+import { validateRelativePath } from "./path-validation";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
 
 export interface LocalProtocolOptions {
@@ -118,7 +118,7 @@ function extractRelativePath(url: InternalUrl): string {
 		throw new Error(`Invalid URL encoding in local:// path: ${url.href}`);
 	}
 	try {
-		validateRelativePath(decoded);
+		validateRelativePath(decoded, "local");
 	} catch (error) {
 		throw toLocalValidationError(error);
 	}
