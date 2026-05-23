@@ -849,7 +849,31 @@ pub fn execute_code_path_inner(
 			let registry =
 				crate::code_path::runtime_schemes::scheme_registry_for_session(session_ctx.as_ref());
 			let cancel_tok = pi_code_path::resolver::traits::CancellationToken::new();
-			match registry.resolve(uri, session_ctx.as_ref(), &cancel_tok) {
+
+			// PLAN-310 BUG-395 fix: callback-loader schemes can opt into having the
+			// kernel fold non-special qualifiers (anything other than #json/#stat/
+			// #tree/#raw/#listing/#diff) back into the URI body as `#<name>[:<args>]`
+			// so the callback sees the full RFC-3986 fragment. Static fs-backed
+			// profiles get the unmodified URI — their qualifiers are codepath ops
+			// to apply post-resolution, not part of the identifier.
+			let resolve_uri = match &cp.qualifier {
+				Some(q) if registry.scheme_uses_callback_loader(&uri.scheme)
+					&& !matches!(q.name.as_str(),
+						"json" | "stat" | "tree" | "raw" | "listing" | "diff")
+				=> {
+					let mut p = uri.path.clone();
+					p.push('#');
+					p.push_str(&q.name);
+					if let Some(args) = &q.args {
+						p.push(':');
+						p.push_str(args);
+					}
+					pi_code_path::ast::UriLocator { scheme: uri.scheme.clone(), path: p }
+				}
+				_ => uri.clone(),
+			};
+
+			match registry.resolve(&resolve_uri, session_ctx.as_ref(), &cancel_tok) {
 				Ok(resolved) => {
 					// PLAN-310 Block C: `#json:<jq-expr>` qualifier applies a jq subset
 					// to the resolved content (works on both fs-backed and virtual

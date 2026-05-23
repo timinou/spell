@@ -804,7 +804,16 @@ describe("GetTool", () => {
 	});
 
 	describe("FEAT-815: JS-preferred scheme preempt", () => {
-		it("resolves jobs://<id> via internal router instead of kernel", async () => {
+		it.skip("[PLAN-310: kernel-owned via §jobs] resolves jobs://<id> via kernel callback bridge", async () => {
+			// jobs is now kernel-owned via callback bridge (BUG-395); router
+			// throws RouterDelegateToKernel; kernel resolves through the
+			// AsyncJobManager-bridged callback registered at session init.
+			// End-to-end behavior is covered by
+			//   packages/coding-agent/test/scheme-bridge-e2e.test.ts::jobs
+			return;
+		});
+
+		it.skip("[legacy] resolves jobs://<id> via internal router instead of kernel", async () => {
 			const { AsyncJobManager } = await import("@oh-my-pi/pi-coding-agent/async");
 			const { InternalUrlRouter, JobsProtocolHandler } = await import("@oh-my-pi/pi-coding-agent/internal-urls");
 

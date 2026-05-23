@@ -69,9 +69,15 @@ export function listLanguageDialects(): LanguageDialectInfo[] {
 }
 
 // PLAN-310: dynamic scheme registration helpers.
+//
+// Callbacks MUST return synchronously — the underlying napi
+// ThreadsafeFunction calls back into JS from a kernel worker thread and
+// blocks on an mpsc channel for the return value. Async returns (Promise)
+// fail napi-rs field deserialization. For naturally-async I/O, prefer
+// sync variants (fs.readFileSync) inside callbacks.
 export function registerSchemeCallback(
 	scheme: string,
-	callback: (body: string) => Promise<{ url: string; content: string; mime?: string; notes?: string[] }>,
+	callback: (body: string) => { url: string; content: string; mime?: string; notes?: string[]; sourcePath?: string },
 	options?: import("./types").SchemeCallbackOptions,
 ): void {
 	native.registerSchemeCallback(scheme, (err: Error | null, body: string) => {

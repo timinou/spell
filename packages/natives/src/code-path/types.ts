@@ -113,12 +113,18 @@ export interface LanguageDialectInfo {
 }
 
 
-/** PLAN-310: result returned by a JS callback registered with registerSchemeCallback. */
+/**
+ * PLAN-310: result returned by a JS callback registered with
+ * registerSchemeCallback. Note: `sourcePath` enables codepath suffix
+ * forwarding and brush bash expansion for hybrid (JS-discovered, fs-backed)
+ * schemes like skill://. Leave undefined for purely virtual data.
+ */
 export interface JsResolvedContent {
 	url: string;
 	content: string;
 	mime?: string;
 	notes?: string[];
+	sourcePath?: string;
 }
 
 /** PLAN-310: options for registerSchemeCallback. */
@@ -143,7 +149,7 @@ declare module "../bindings" {
 		listLanguageDialects(): LanguageDialectInfo[];
 		listOps(): OpSchemaDto[];
 		// PLAN-310: dynamic scheme registration via TSFn callback.
-		registerSchemeCallback(scheme: string, callback: (err: Error | null, body: string) => JsResolvedContent | Promise<JsResolvedContent>, options?: SchemeCallbackOptions): void;
+		registerSchemeCallback(scheme: string, callback: (err: Error | null, body: string) => JsResolvedContent, options?: SchemeCallbackOptions): void;
 		unregisterSchemeCallback(scheme: string): boolean;
 		listRegisteredSchemes(): string[];
 		clearRuntimeSchemes(): void;

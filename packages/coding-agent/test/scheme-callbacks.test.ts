@@ -37,9 +37,9 @@ describe("deriveSchemeFromServerName", () => {
 });
 
 describe("RESERVED_NATIVE_SCHEMES coverage", () => {
-	it("contains exactly the 9 kernel-owned schemes", () => {
+	it("contains the 6 declarative kernel schemes (rule/skill/jobs are dynamic post-PLAN-310)", () => {
 		expect([...RESERVED_NATIVE_SCHEMES].sort()).toEqual(
-			["agent", "artifact", "jobs", "local", "memory", "org", "pi", "rule", "skill"].sort(),
+			["agent", "artifact", "local", "memory", "org", "pi"].sort(),
 		);
 	});
 });
@@ -49,10 +49,12 @@ describe("registerScheme", () => {
 		clearRuntimeSchemes();
 	});
 
-	const noopResolve = async (body: string) => ({ url: `test://${body}`, content: "ok" });
+	const noopResolve = (body: string) => ({ url: `test://${body}`, content: "ok" });
 
 	it("rejects reserved native names", () => {
-		const err = registerScheme("skill", noopResolve);
+		// PLAN-310 cutover: skill/rule/jobs no longer reserved (now dynamic
+		// themselves). memory is still a kernel-declarative scheme.
+		const err = registerScheme("memory", noopResolve);
 		expect(err).not.toBeNull();
 		expect(err?.reason).toContain("reserved");
 	});
