@@ -803,94 +803,11 @@ describe("GetTool", () => {
 		});
 	});
 
-	describe("FEAT-815: JS-preferred scheme preempt", () => {
-		it("resolves jobs://<id> via internal router instead of kernel", async () => {
-			const { AsyncJobManager } = await import("@oh-my-pi/pi-coding-agent/async");
-			const { InternalUrlRouter, JobsProtocolHandler } = await import("@oh-my-pi/pi-coding-agent/internal-urls");
-
-			const manager = new AsyncJobManager({ onJobComplete: async () => {} });
-			const jobId = manager.register("bash", "echo hi", async () => "hello world", { id: "9-Feat238" });
-			// Wait for the job's promise to resolve so the result is recorded.
-			const job = manager.getJob(jobId);
-			await job?.promise;
-
-			const router = new InternalUrlRouter();
-			router.register(new JobsProtocolHandler({ getAsyncJobManager: () => manager }));
-
-			// The kernel must NOT be consulted — the JS preempt owns this scheme.
-			const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([]);
-
-			const tool = new GetTool(createSession({ internalRouter: router }));
-			const result = await tool.execute("t", { target: "jobs://9-Feat238" });
-
-			const text = getText(result);
-			expect(text).toContain("# Job 9-Feat238");
-			expect(text).toContain("hello world");
-			expect(spy).not.toHaveBeenCalled();
-		});
-
-		it("resolves memory:// via JS router and forwards codepath suffix to kernel on sourcePath", async () => {
-			const { InternalUrlRouter, MemoryProtocolHandler } = await import("@oh-my-pi/pi-coding-agent/internal-urls");
-
-			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-feat815-memory");
-			await fs.mkdir(tmp, { recursive: true });
-			await fs.writeFile(nodePath.join(tmp, "memory_summary.md"), "# Memory\nline two\n", "utf-8");
-			try {
-				const router = new InternalUrlRouter();
-				router.register(new MemoryProtocolHandler({ getMemoryRoot: () => tmp }));
-
-				// Without codepath suffix: JS resolves directly, kernel untouched.
-				const kernelSpy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([]);
-				const tool = new GetTool(createSession({ internalRouter: router }));
-				const plain = await tool.execute("t", { target: "memory://root" });
-				expect(getText(plain)).toContain("# Memory");
-				expect(kernelSpy).not.toHaveBeenCalled();
-			} finally {
-				await fs.rm(tmp, { recursive: true });
-			}
-		});
-
-		it("forwards codepath suffix on memory:// to kernel using resolved sourcePath", async () => {
-			const { InternalUrlRouter, MemoryProtocolHandler } = await import("@oh-my-pi/pi-coding-agent/internal-urls");
-
-			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-feat815-memory-cp");
-			await fs.mkdir(tmp, { recursive: true });
-			const summary = nodePath.join(tmp, "memory_summary.md");
-			await fs.writeFile(summary, "alpha\nbeta\ngamma\n", "utf-8");
-			try {
-				const router = new InternalUrlRouter();
-				router.register(new MemoryProtocolHandler({ getMemoryRoot: () => tmp }));
-
-				const kernelSpy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
-					makeChunk([{ locator: summary, kind: "file", content: { text: "beta\n" } }]),
-				]);
-				const tool = new GetTool(createSession({ internalRouter: router }));
-				const sliced = await tool.execute("t", { target: "memory://root::§line[2..2]" });
-				expect(getText(sliced)).toContain("beta");
-				// Kernel was invoked, but with the resolved filesystem sourcePath +
-				// suffix — not the original URI.
-				expect(kernelSpy).toHaveBeenCalledWith(
-					expect.objectContaining({ target: `${nodePath.relative(process.cwd(), summary)}::§line[2..2]` }),
-				);
-			} finally {
-				await fs.rm(tmp, { recursive: true });
-			}
-		});
-
-		it("notes that codepath qualifiers on virtual resources are ignored (pi://)", async () => {
-			const { InternalUrlRouter, PiProtocolHandler } = await import("@oh-my-pi/pi-coding-agent/internal-urls");
-			const router = new InternalUrlRouter();
-			router.register(new PiProtocolHandler());
-
-			const kernelSpy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([]);
-			const tool = new GetTool(createSession({ internalRouter: router }));
-			// pi:// returns a virtual sourcePath — the kernel must not be consulted
-			// for the codepath suffix; instead the response includes a [note].
-			const result = await tool.execute("t", { target: "pi://nonexistent.md::§line[1..2]" });
-			expect(getText(result)).toContain("[§error] pi://nonexistent.md::§line[1..2]");
-			expect(kernelSpy).not.toHaveBeenCalled();
-		});
-	});
+	// FEAT-815 "JS-preferred scheme preempt" block removed by PLAN-310. All
+	// schemes it covered (jobs, memory, pi) are kernel-owned; behavior is
+	// covered by Rust integration tests in crates/pi-natives/tests/:
+	//   scheme_e2e_w4.rs        — forwards-suffix + pi-virtual
+	//   scheme-bridge-e2e.test  — jobs callback bridge (TS-side)
 
 	it("falls through to kernel for unknown scheme", async () => {
 		const { InternalUrlRouter } = await import("@oh-my-pi/pi-coding-agent/internal-urls");

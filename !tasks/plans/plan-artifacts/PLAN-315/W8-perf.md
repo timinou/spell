@@ -50,3 +50,53 @@ PLAN-315 ships without RSS regressions in the live binary surface. The
 formal N=10 perf gate is a separate harness investment (~3 hours) that
 adds no architectural risk; it is tracked in FUP-089 alongside W3 + W4
 + W6.
+
+---
+
+## Final gate report template (filled by `scripts/perf/plan315-n10.sh`)
+
+The orchestrator generates a timestamped report at
+`!tasks/plans/plan-artifacts/PLAN-315/W8-perf-run-<epoch>.md`. The template
+shape is:
+
+### Hardware
+- Kernel
+- CPU
+- RAM
+- Date
+
+### Gates (7)
+
+| Gate | Target | Measured | Status |
+|------|--------|----------|--------|
+| libpi_natives.so size | ≤ 92.5 MB | ... | ... |
+| per-session RSS | ≤ 100 MB | ... | ... |
+| total RSS N=10 | ≤ 1.55 GB | ... | ... |
+| memory.search P99 | ≤ 50 ms | ... | ... |
+| cg_search P99 | ≤ 60 ms | ... | ... |
+| push delivery P99 | ≤ 500 ms | ... | ... |
+| cold warm-up (12k sym) | ≤ 90 s | ... | ... |
+
+### Methodology notes
+- Harness: `scripts/perf/plan315-n10.sh`
+- Corpus: synthetic, 12,000 org items across 10 session dirs (1,200/session)
+- 7 gates: 5 measured directly, 2 DEFERRED with stated reasons
+- cg_search gate DEFERRED until code-graph corpus generator lands (tracked as cg_search-corpus TODO)
+- Push delivery DEFERRED — no bench binary yet; bench_payload test asserts single delivery within 1 s, not P99 latency
+- Per-session RSS is an ATTRIBUTION metric (peak daemon RSS / 10), not a process-RSS metric (shared daemon serves all 10)
+- RSS sampling: `ps -o rss=` every 1s for 60s; report peak daemon RSS (the shared-daemon total)
+- Latency: sustained python-per-session (open + 110 queries + close in one process, no per-query spawn overhead)
+- Cold warm-up: 10 sessions opened serially; wall-clock from first open to last open ack
+- Reproducibility: hand-rolled bash, fixed iteration counts, no `$RANDOM`
+
+### Gate measurement summary
+
+| Gate | Target | Measurement source | Status |
+|------|--------|--------------------|--------|
+| libpi_natives.so size | ≤ 92.5 MB | stat -c%s on release binary | MEASURED |
+| per-session RSS | ≤ 100 MB | (peak daemon RSS) / 10 | ATTRIBUTION |
+| total RSS N=10 | ≤ 1.55 GB | peak daemon RSS | MEASURED |
+| memory.search P99 | ≤ 50 ms | sustained python loop, 100 queries×10 sessions, P99 | MEASURED |
+| cg_search P99 | ≤ 60 ms | n/a (no code-graph corpus generator) | DEFERRED |
+| push delivery P99 | ≤ 500 ms | n/a (no bench binary; one-shot delivery assertion only) | DEFERRED |
+| cold warm-up | ≤ 90 s | wall-clock from socket-ready to last-session open ack | MEASURED |

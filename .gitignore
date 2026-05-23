@@ -80,3 +80,4 @@ packages/coding-agent/.spell/edit-history.jsonl
 
 # Huggingface model cache populated by pi-embedding-worker (jina-v2-base-code, ~600MB)
 .fastembed_cache/
+spell-session-*.html

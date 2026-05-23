@@ -1,0 +1,33 @@
+#+TITLE: Cutover jobs scheme to kernel via callback bridge
+#+STATE: ITEM
+#+SESSION_ID: 14dd802985b2a5f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan309/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
+#+CUSTOM_ID: BUG-395-cutover-jobs-scheme-to-kernel-via-callba
+#+LAYER: kernel
+#+PLAN: PLAN-310
+
+* Initial Message
+
+please explain. what the deferred items are about and what the difficulty is and what it would enable. explain deeply, show the plan and how you would implement it
+
+Same shape as BUG-393 / BUG-394. The jobs scheme is purely in-memory.
+
+The TS JobsProtocolHandler queries AsyncJobManager.getAllJobs() and getJob(id). All job state (status, resultText, errorText, startTime, label, type) lives as JS object fields — there is no disk persistence.
+
+The kernel jobs.rs profile assumes disk-backed state at .spell/jobs/{id}/status.txt|result.txt|error.txt|stderr.txt|progress.txt and would never resolve anything against the current AsyncJobManager (which never writes to disk).
+
+Two options:
+
+(A) Persist AsyncJobManager state to .spell/jobs/<id>/ on every status transition. Kernel jobs.rs profile resolves against fs. Pro: declarative profile, cacheable, brush-expandable. Con: every job creates several small files; disk I/O on every status change; race window between TS update and kernel read.
+
+(B) Convert jobs scheme to dynamic callback. Move jobs out of RESERVED_NATIVE_SCHEMES into dynamic registration. AsyncJobManager registers a callback at construction time that maps scheme body to live JS state. Pro: zero disk I/O, immediate consistency. Con: not brush-expandable from outside agent process; callback bridge overhead per lookup.
+
+Recommendation: (B). Job state is intrinsically ephemeral and only meaningful while the AsyncJobManager is alive. Persisting it just to give the kernel something to read is the wrong shape.
+
+Implementation:
+1. Remove jobs from RESERVED_NATIVE_SCHEMES.
+2. Delete crates/pi-natives/src/code_path/uri/jobs.rs.
+3. In AsyncJobManager constructor, call registerScheme that maps body to job lookup + format (mirroring jobs-protocol.ts list/get logic + format helpers).
+4. Add to KERNEL_OWNED_SCHEMES via dynamic callback bridge.
+
+Acceptance: jobs URLs resolve to the same Markdown summaries as today, including #status / #result / #error / #stderr / #progress fragments; passes the existing TS test cases moved into a Rust callback integration test.

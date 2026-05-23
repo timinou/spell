@@ -676,7 +676,16 @@ impl<'a> WordExpander<'a> {
     ) -> Result<Expansion, error::Error> {
         let expansion: Expansion = match word_piece {
             brush_parser::word::WordPiece::Text(s) => {
-                Expansion::from(ExpansionPiece::Splittable(s))
+                // PLAN-310: hook for external word preprocessing (URI schemes).
+                if let Some(pre) = self.params.word_preprocessor.as_ref() {
+                    if let Some(expanded) = pre.preprocess(&s) {
+                        Expansion::from(ExpansionPiece::Unsplittable(expanded))
+                    } else {
+                        Expansion::from(ExpansionPiece::Splittable(s))
+                    }
+                } else {
+                    Expansion::from(ExpansionPiece::Splittable(s))
+                }
             }
             brush_parser::word::WordPiece::SingleQuotedText(s) => {
                 Expansion::from(ExpansionPiece::Unsplittable(s))

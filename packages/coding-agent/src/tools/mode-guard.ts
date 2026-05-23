@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { resolveLocalUrlToPath } from "../internal-urls";
+import { localUrlToPath } from "./local-path";
 import type { ActiveModeState } from "../plan-mode/state";
 import { isAuditMode, isPlanMode, isUserMode } from "../plan-mode/state";
 import type { ToolSession } from ".";
@@ -10,7 +10,7 @@ const LOCAL_URL_PREFIX = "local://";
 
 export function resolvePlanPath(session: ToolSession, targetPath: string): string {
 	if (targetPath.startsWith(LOCAL_URL_PREFIX)) {
-		return resolveLocalUrlToPath(targetPath, {
+		return localUrlToPath(targetPath, {
 			getArtifactsDir: session.getArtifactsDir,
 			getSessionId: session.getSessionId,
 		});

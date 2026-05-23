@@ -13,26 +13,37 @@
 //! - `renderer`: AST → canonical text (round-trip)
 
 pub mod ast;
+pub mod diagnostic_render;
 pub mod dialect;
 pub mod dialects;
-pub mod op_schema;
 pub mod introspection;
+pub mod jq_subset;
 pub mod op;
+pub mod op_schema;
 pub mod parser;
 pub mod renderer;
 pub mod resolver;
-pub mod diagnostic_render;
+pub mod scheme;
+pub mod scheme_cache;
+pub mod scheme_dispatch;
 pub mod types;
 
 pub use ast::*;
 pub use dialect::*;
+pub use introspection::*;
 pub use op::{
 	CssTarget, FileTarget, HeadingTarget, Identifier, LineAnchor, LineAt, LineSpan, Op, OpKind,
 	SymScope, SymbolTarget,
 };
+pub use op_schema::{FieldSchema, FieldType, OpSchema, TargetFamily};
 pub use parser::{parse_code_path, parse_locator};
 pub use renderer::render_code_path;
 pub use resolver::traits::MutationResolver;
-pub use introspection::*;
-pub use op_schema::{FieldSchema, FieldType, OpSchema, TargetFamily};
+pub use scheme::{
+	CacheKey, CacheStrategy, ContentLoader, FragmentEntry, IndexLookup, LayoutMatch, PathLayout,
+	ReadMode, ResolvedAddress, ResolvedContent, RootTemplate, SchemeCallback, SchemeCapabilities,
+	SchemeProfile, SessionContext, SynthReducer, SynthSpec,
+};
+pub use scheme_cache::SchemeCache;
+pub use scheme_dispatch::{RESERVED_SCHEMES, SchemeRegistry, validate_scheme_name};
 pub use types::*;

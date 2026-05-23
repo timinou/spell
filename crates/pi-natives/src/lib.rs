@@ -77,11 +77,19 @@ pub mod clipboard;
 pub mod code_buffer;
 pub mod code_graph;
 pub mod code_path;
-// `embedding_worker` is the client-side transport to pi-knowledge-worker.
-// PLAN-315 W2 promoted this to `pub` so integration tests + future crates
-// can reach `capabilities()`, `knowledge_request()`, and the Capabilities
-// type without going through NAPI.
+// PLAN-315 W2: client-side transport to pi-knowledge-worker.
+// Promoted to `pub` so integration tests + future crates can reach
+// `capabilities()`, `knowledge_request()`, and the Capabilities type
+// without going through NAPI.
 pub mod embedding_worker;
+
+// PLAN-315 W4: client-side push-subscribe handle.
+#[cfg(unix)]
+pub mod knowledge_client;
+
+// PLAN-310: kernel-side scheme exec — bash URI pre-processing
+// and CodePath execution for kernel-owned schemes.
+pub mod exec;
 pub mod fd;
 pub mod fs_cache;
 pub mod glob;
@@ -94,11 +102,11 @@ pub mod keys;
 pub mod language;
 pub mod org_buffer;
 pub mod org_index;
-pub mod recall_engine;
 pub mod prof;
 pub mod projfs_overlay;
 pub mod ps;
 pub mod pty;
+pub mod recall_engine;
 pub mod shell;
 pub mod task;
 pub mod text;

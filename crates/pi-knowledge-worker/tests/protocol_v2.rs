@@ -324,3 +324,122 @@ fn init_response_lists_new_commands_in_supported_commands() {
 		assert!(names.contains(&"since"), "since in {names:?}");
 	}
 }
+
+#[test]
+fn cg_search_returns_hits_after_open_code_graph() {
+	let dir = unique_dir("cg-search");
+	let src = dir.join("src");
+	std::fs::create_dir_all(&src).expect("mk src");
+	std::fs::write(
+		src.join("foo.ts"),
+		"export function helloAlphaCg() { return 42; }\n",
+	)
+	.expect("write");
+
+	let opened = round_trip(json!({
+		"command": "open",
+		"repo_root": dir.to_string_lossy(),
+		"lanes": ["code_graph"],
+	}));
+	assert_eq!(opened["ok"], true, "open code_graph: {opened}");
+	let handle = opened["repo_handle"].as_str().expect("handle").to_string();
+
+	let seq = round_trip_sequence(&[
+		json!({
+			"command": "open",
+			"repo_root": dir.to_string_lossy(),
+			"lanes": ["code_graph"],
+		}),
+		json!({
+			"command": "cg_search",
+			"repo_handle": &handle,
+			"query": "helloAlphaCg",
+			"limit": 5,
+		}),
+	]);
+	let response = &seq[1];
+	assert_eq!(response["ok"], true, "cg_search: {response}");
+	let hits = response["hits"].as_array().expect("hits array");
+	assert!(!hits.is_empty(), "expected helloAlphaCg hits: {hits:?}");
+
+	let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn cg_definition_returns_null_for_unknown_symbol() {
+	let dir = unique_dir("cg-def-unknown");
+	let src = dir.join("src");
+	std::fs::create_dir_all(&src).expect("mk src");
+	std::fs::write(src.join("foo.ts"), "export function x() {}\n").expect("write");
+
+	let opened = round_trip(json!({
+		"command": "open",
+		"repo_root": dir.to_string_lossy(),
+		"lanes": ["code_graph"],
+	}));
+	let handle = opened["repo_handle"].as_str().expect("handle").to_string();
+
+	let seq = round_trip_sequence(&[
+		json!({
+			"command": "open",
+			"repo_root": dir.to_string_lossy(),
+			"lanes": ["code_graph"],
+		}),
+		json!({
+			"command": "cg_definition",
+			"repo_handle": &handle,
+			"query": "nonexistentSymbolXYZ",
+		}),
+	]);
+	let response = &seq[1];
+	assert_eq!(response["ok"], true);
+	assert_eq!(response["context"], serde_json::Value::Null);
+
+	let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn cg_search_against_unopened_code_lane_errors() {
+	// Open with org_memory only; cg_search should report 'code_graph lane
+	// not opened'.
+	let dir = unique_dir("cg-unopened");
+	let mem = dir.join(".spell/memory/concepts");
+	std::fs::create_dir_all(&mem).expect("mk");
+	std::fs::write(
+		mem.join("a.org"),
+		"* CON-a\n:PROPERTIES:\n:CUSTOM_ID: CON-a\n:KIND: concept\n:END:\n",
+	)
+	.expect("seed");
+
+	let opened = round_trip(json!({
+		"command": "open",
+		"repo_root": dir.to_string_lossy(),
+		"lanes": ["org_memory"],
+	}));
+	let handle = opened["repo_handle"].as_str().expect("handle").to_string();
+
+	let seq = round_trip_sequence(&[
+		json!({
+			"command": "open",
+			"repo_root": dir.to_string_lossy(),
+			"lanes": ["org_memory"],
+		}),
+		json!({
+			"command": "cg_search",
+			"repo_handle": &handle,
+			"query": "anything",
+		}),
+	]);
+	let response = &seq[1];
+	assert_eq!(response["ok"], false);
+	assert!(
+		response["error"]
+			.as_str()
+			.unwrap_or("")
+			.contains("code_graph lane not opened"),
+		"error: {response}"
+	);
+
+	let _ = std::fs::remove_dir_all(&dir);
+}
+

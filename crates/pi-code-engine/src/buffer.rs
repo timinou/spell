@@ -358,8 +358,7 @@ fn peer_edits_since_revision(
 	Ok(journal_entries_for(path, 64)?
 		.into_iter()
 		.filter(|entry| {
-			entry.revision > base_revision
-				&& session_id.map_or(true, |sid| entry.session_id != sid)
+			entry.revision > base_revision && session_id.map_or(true, |sid| entry.session_id != sid)
 		})
 		.map(|entry| peer_edit_from_entry(&entry))
 		.collect())
@@ -610,7 +609,11 @@ impl BufferRegistry {
 						.intent(sid, &key, target_code_paths, base_revision)
 					{
 						crate::coord::IntentResult::Granted => {},
-						crate::coord::IntentResult::Conflict { peer_session, code_path, peer_intent_ts } => {
+						crate::coord::IntentResult::Conflict {
+							peer_session,
+							code_path,
+							peer_intent_ts,
+						} => {
 							return Err(CodeEngineError::PeerConflict {
 								session: peer_session,
 								path: key.clone(),
@@ -1114,9 +1117,9 @@ impl CodeBuffer {
 						.map(|e| e.new_text.chars().take(40).collect())
 						.unwrap_or_default();
 					return Err(CodeEngineError::Edit(format!(
-						"Edit batch would leave the buffer structurally invalid (new content starts with: \
-						 `{excerpt}`). If replacing a body, content must include outer braces {{ ... }}. \
-						 Re-anchor the target or include an explicit separator."
+						"Edit batch would leave the buffer structurally invalid (new content starts \
+						 with: `{excerpt}`). If replacing a body, content must include outer braces {{ \
+						 ... }}. Re-anchor the target or include an explicit separator."
 					)));
 				}
 			}
@@ -2093,110 +2096,106 @@ mod tests {
 			CodeEngineError::LockTimeout { path: error_path, .. } => assert_eq!(error_path, path),
 			other => panic!("expected lock timeout, got {other:?}"),
 		}
- 	lock_thread.join().expect("lock thread join");
- 	}
+		lock_thread.join().expect("lock thread join");
+	}
 
- 	#[test]
- 	fn edit_transaction_with_session_invokes_broker() {
- 		let path = temp_path("edit-broker.ts");
- 		std::fs::write(&path, "export const value = 1;\n").expect("write");
- 		let client = Arc::new(crate::coord::MockCoordClient::new());
- 		let reg = BufferRegistry::new_with_coord(registry(), None, client.clone());
- 		let (outcome, ()) = reg
- 			.edit_transaction(Some("s1"), &path, &["::value".into()], |buf| {
- 				buf.edit(TextEdit {
- 					start_byte:   0,
- 					old_end_byte: buf.source().len(),
- 					new_text:     "export const value = 2;\n".into(),
- 				})?;
- 				Ok(())
- 			})
- 			.expect("commit");
- 		assert!(outcome.revision > 0);
- 		assert!(client.intent_called());
- 		assert!(client.commit_called());
- 	}
+	#[test]
+	fn edit_transaction_with_session_invokes_broker() {
+		let path = temp_path("edit-broker.ts");
+		std::fs::write(&path, "export const value = 1;\n").expect("write");
+		let client = Arc::new(crate::coord::MockCoordClient::new());
+		let reg = BufferRegistry::new_with_coord(registry(), None, client.clone());
+		let (outcome, ()) = reg
+			.edit_transaction(Some("s1"), &path, &["::value".into()], |buf| {
+				buf.edit(TextEdit {
+					start_byte:   0,
+					old_end_byte: buf.source().len(),
+					new_text:     "export const value = 2;\n".into(),
+				})?;
+				Ok(())
+			})
+			.expect("commit");
+		assert!(outcome.revision > 0);
+		assert!(client.intent_called());
+		assert!(client.commit_called());
+	}
 
- 	#[test]
- 	fn edit_transaction_no_session_skips_broker() {
- 		let path = temp_path("edit-no-broker.ts");
- 		std::fs::write(&path, "export const value = 1;\n").expect("write");
- 		let client = Arc::new(crate::coord::MockCoordClient::new());
- 		let reg = BufferRegistry::new_with_coord(registry(), None, client.clone());
- 		let (outcome, ()) = reg
- 			.edit_transaction(None::<&str>, &path, &["::value".into()], |buf| {
- 				buf.edit(TextEdit {
- 					start_byte:   0,
- 					old_end_byte: buf.source().len(),
- 					new_text:     "export const value = 2;\n".into(),
- 				})?;
- 				Ok(())
- 			})
- 			.expect("commit");
- 		assert!(!client.intent_called());
- 		assert!(!client.commit_called());
- 	}
+	#[test]
+	fn edit_transaction_no_session_skips_broker() {
+		let path = temp_path("edit-no-broker.ts");
+		std::fs::write(&path, "export const value = 1;\n").expect("write");
+		let client = Arc::new(crate::coord::MockCoordClient::new());
+		let reg = BufferRegistry::new_with_coord(registry(), None, client.clone());
+		let (outcome, ()) = reg
+			.edit_transaction(None::<&str>, &path, &["::value".into()], |buf| {
+				buf.edit(TextEdit {
+					start_byte:   0,
+					old_end_byte: buf.source().len(),
+					new_text:     "export const value = 2;\n".into(),
+				})?;
+				Ok(())
+			})
+			.expect("commit");
+		assert!(!client.intent_called());
+		assert!(!client.commit_called());
+	}
 
- 	#[test]
- 	fn edit_transaction_no_session_writes_atomically() {
- 		let path = temp_path("edit-no-session-write.ts");
- 		std::fs::write(&path, "old\n").expect("write");
- 		let reg = BufferRegistry::new(registry());
- 		reg.edit_transaction(None::<&str>, &path, &[], |buf| {
- 			buf.edit(TextEdit {
- 				start_byte:   0,
- 				old_end_byte: buf.source().len(),
- 				new_text:     "new\n".into(),
- 			})?;
- 			Ok(())
- 		})
- 		.expect("commit");
- 		assert_eq!(
- 			std::fs::read_to_string(&path).expect("read"),
- 			"new\n"
- 		);
- 	}
+	#[test]
+	fn edit_transaction_no_session_writes_atomically() {
+		let path = temp_path("edit-no-session-write.ts");
+		std::fs::write(&path, "old\n").expect("write");
+		let reg = BufferRegistry::new(registry());
+		reg.edit_transaction(None::<&str>, &path, &[], |buf| {
+			buf.edit(TextEdit {
+				start_byte:   0,
+				old_end_byte: buf.source().len(),
+				new_text:     "new\n".into(),
+			})?;
+			Ok(())
+		})
+		.expect("commit");
+		assert_eq!(std::fs::read_to_string(&path).expect("read"), "new\n");
+	}
 
- 	#[test]
- 	fn edit_transaction_no_session_skips_journal() {
- 		let path = temp_path("edit-no-session-journal.ts");
- 		std::fs::write(&path, "a\n").expect("write");
- 		let reg = BufferRegistry::new(registry());
- 		reg.edit_transaction(None::<&str>, &path, &[], |buf| {
- 			buf.edit(TextEdit {
- 				start_byte:   0,
- 				old_end_byte: buf.source().len(),
- 				new_text:     "b\n".into(),
- 			})?;
- 			Ok(())
- 		})
- 		.expect("commit");
- 		let root = workspace_root_for(&path);
- 		let journal_path = journal_path_for(&default_journal_root(), &root, &path);
- 		let entries = JournalReader::tail(&journal_path, 1).unwrap_or_default();
- 		assert!(entries.is_empty(), "no session = no journal entry");
- 	}
+	#[test]
+	fn edit_transaction_no_session_skips_journal() {
+		let path = temp_path("edit-no-session-journal.ts");
+		std::fs::write(&path, "a\n").expect("write");
+		let reg = BufferRegistry::new(registry());
+		reg.edit_transaction(None::<&str>, &path, &[], |buf| {
+			buf.edit(TextEdit {
+				start_byte:   0,
+				old_end_byte: buf.source().len(),
+				new_text:     "b\n".into(),
+			})?;
+			Ok(())
+		})
+		.expect("commit");
+		let root = workspace_root_for(&path);
+		let journal_path = journal_path_for(&default_journal_root(), &root, &path);
+		let entries = JournalReader::tail(&journal_path, 1).unwrap_or_default();
+		assert!(entries.is_empty(), "no session = no journal entry");
+	}
 
- 	#[test]
- 	fn edit_transaction_no_session_skips_edit_recorder() {
- 		use std::sync::atomic::{AtomicBool, Ordering};
- 		let path = temp_path("edit-no-session-recorder.ts");
- 		std::fs::write(&path, "a\n").expect("write");
- 		let called = Arc::new(AtomicBool::new(false));
- 		let c2 = called.clone();
- 		let reg = BufferRegistry::new(registry())
- 			.with_edit_recorder(Arc::new(move |_r| {
- 				c2.store(true, Ordering::SeqCst);
- 			}));
- 		reg.edit_transaction(None::<&str>, &path, &[], |buf| {
- 			buf.edit(TextEdit {
- 				start_byte:   0,
- 				old_end_byte: buf.source().len(),
- 				new_text:     "b\n".into(),
- 			})?;
- 			Ok(())
- 		})
- 		.expect("commit");
- 		assert!(!called.load(Ordering::SeqCst), "no session = no recorder call");
- 	}
- }
+	#[test]
+	fn edit_transaction_no_session_skips_edit_recorder() {
+		use std::sync::atomic::{AtomicBool, Ordering};
+		let path = temp_path("edit-no-session-recorder.ts");
+		std::fs::write(&path, "a\n").expect("write");
+		let called = Arc::new(AtomicBool::new(false));
+		let c2 = called.clone();
+		let reg = BufferRegistry::new(registry()).with_edit_recorder(Arc::new(move |_r| {
+			c2.store(true, Ordering::SeqCst);
+		}));
+		reg.edit_transaction(None::<&str>, &path, &[], |buf| {
+			buf.edit(TextEdit {
+				start_byte:   0,
+				old_end_byte: buf.source().len(),
+				new_text:     "b\n".into(),
+			})?;
+			Ok(())
+		})
+		.expect("commit");
+		assert!(!called.load(Ordering::SeqCst), "no session = no recorder call");
+	}
+}

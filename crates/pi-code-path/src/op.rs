@@ -2,8 +2,10 @@
 //! Replaces flat Action enum's stringly-typed dispatch with per-variant
 //! target newtypes.
 
-use serde::de::{self, Deserializer};
-use serde::{Deserialize, Serialize};
+use serde::{
+	Deserialize, Serialize,
+	de::{self, Deserializer},
+};
 use strum::EnumIter;
 
 use crate::{
@@ -102,7 +104,8 @@ impl SymbolTarget {
 			return Err(Diagnostic {
 				variant: DiagnosticVariant::IncompatibleTargetShape,
 				message: format!(
-					"symbolTarget requires `::Symbol` query segment — add `::Name` to target `{}` (or use a file-scoped action kind on a bare path)",
+					"symbolTarget requires `::Symbol` query segment — add `::Name` to target `{}` (or \
+					 use a file-scoped action kind on a bare path)",
 					locator_hint(&cp.locator),
 				),
 				span:    None,
@@ -111,7 +114,9 @@ impl SymbolTarget {
 		if !matches!(cp.locator, Locator::Fs(_)) {
 			return Err(Diagnostic {
 				variant: DiagnosticVariant::IncompatibleTargetShape,
-				message: "symbolTarget requires an FsLocator (file path) — URI targets are not editable here".to_string(),
+				message: "symbolTarget requires an FsLocator (file path) — URI targets are not \
+				          editable here"
+					.to_string(),
 				span:    None,
 			});
 		}
@@ -173,7 +178,6 @@ impl HeadingTarget {
 	}
 }
 
-
 // ── Custom Deserialize: validate invariants via Target::new ───────
 
 impl<'de> Deserialize<'de> for FileTarget {
@@ -199,7 +203,6 @@ impl<'de> Deserialize<'de> for CssTarget {
 
 impl<'de> Deserialize<'de> for HeadingTarget {
 	fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-
 		let cp = CodePath::deserialize(d)?;
 		HeadingTarget::new(cp).map_err(|diag| de::Error::custom(diag.message))
 	}
@@ -522,5 +525,4 @@ impl Op {
 			Op::HeadingReplaceBlock { target, .. } => &target.0,
 		}
 	}
-
 }

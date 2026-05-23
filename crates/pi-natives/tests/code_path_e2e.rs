@@ -34,6 +34,8 @@ fn opts_with_root(target: impl Into<String>, root: PathBuf) -> CodePathTaskOptio
 		gitignore:          None,
 		artifact_threshold: None,
 		session_id:         Some("e2e-test-session".into()),
+		home:               None,
+		session_dir:        None,
 	}
 }
 

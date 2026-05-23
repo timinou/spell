@@ -1,3 +1,54 @@
+
+/// Execution mode for the knowledge daemon dispatch path.
+///
+/// - `Daemon`: route recall queries over the Unix socket to the
+///   user-scoped `pi-knowledge-worker`; fail-loud on RPC errors.
+/// - `Inprocess`: bypass the daemon entirely; use the in-process
+///   `WarmEngine` directly (useful for CI, offline, and tests).
+///
+/// Set via `PI_KNOWLEDGE_WORKER=inprocess` (case-insensitive).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkerMode {
+	Daemon,
+	Inprocess,
+}
+
+static WORKER_MODE: OnceLock<Mutex<Option<WorkerMode>>> = OnceLock::new();
+
+/// Return the resolved worker mode. Reads `PI_KNOWLEDGE_WORKER` from env
+/// once at first call; subsequent calls return the cached value. Defaults
+/// to [`WorkerMode::Daemon`].
+pub fn worker_mode() -> WorkerMode {
+	let slot = WORKER_MODE.get_or_init(|| Mutex::new(None));
+	let mut guard = slot.lock().expect("worker mode mutex poisoned");
+	*guard.get_or_insert_with(read_worker_mode_from_env)
+}
+
+/// Re-read `PI_KNOWLEDGE_WORKER` from env on the next call to
+/// [`worker_mode()`]. This is NOT thread-safe with respect to concurrent
+/// [`worker_mode()`] callers that already resolved — intended for test
+/// teardown where no concurrent access exists.
+pub fn reset_worker_mode_for_tests() {
+	if let Some(slot) = WORKER_MODE.get()
+		&& let Ok(mut guard) = slot.lock()
+	{
+		*guard = None;
+	}
+}
+
+fn read_worker_mode_from_env() -> WorkerMode {
+	match env::var("PI_KNOWLEDGE_WORKER") {
+		Ok(v) if v.eq_ignore_ascii_case("inprocess") => WorkerMode::Inprocess,
+		Ok(v) => {
+			eprintln!(
+				"[pi-natives] warning: unknown PI_KNOWLEDGE_WORKER value \"{v}\", expected \"inprocess\" or a binary path; defaulting to worker mode Daemon"
+			);
+			WorkerMode::Daemon
+		},
+		Err(_) => WorkerMode::Daemon,
+	}
+}
+
 use std::{
 	collections::HashSet,
 	env, fs,
@@ -25,7 +76,12 @@ const WORKER_SOCKET_ENV_VAR_LEGACY: &str = "PI_EMBEDDING_WORKER_SOCKET";
 
 /// Helper: read env var, preferring new name then legacy.
 fn read_worker_env() -> Option<std::ffi::OsString> {
-	env::var_os(WORKER_ENV_VAR).or_else(|| env::var_os(WORKER_ENV_VAR_LEGACY))
+	let val = env::var_os(WORKER_ENV_VAR).or_else(|| env::var_os(WORKER_ENV_VAR_LEGACY));
+	// "inprocess" is a mode signal, not a binary path — fall through to legacy.
+	if val.as_deref().is_some_and(|v| v.eq_ignore_ascii_case("inprocess")) {
+		return env::var_os(WORKER_ENV_VAR_LEGACY);
+	}
+	val
 }
 
 fn read_worker_socket_env() -> Option<std::ffi::OsString> {
@@ -631,7 +687,10 @@ fn expect_ok(response: WorkerResponse) -> Result<WorkerResponse> {
 }
 
 fn resolve_worker_path() -> Result<PathBuf> {
-	if let Some(override_path) = env::var_os(WORKER_ENV_VAR).filter(|value| !value.is_empty()) {
+	if let Some(override_path) = env::var_os(WORKER_ENV_VAR)
+		.filter(|value| !value.is_empty())
+		.filter(|value| !value.eq_ignore_ascii_case("inprocess"))
+	{
 		return validate_override_path(PathBuf::from(override_path), WORKER_ENV_VAR);
 	}
 	if let Some(override_path) =

@@ -1,0 +1,25 @@
+#+TITLE: Cutover rule scheme to kernel — multi-source discovery
+#+STATE: ITEM
+#+SESSION_ID: 14dd802985b2a5f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan309/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
+#+CUSTOM_ID: BUG-393-cutover-rule-scheme-to-kernel-multi-sour
+#+LAYER: kernel
+#+PLAN: PLAN-310
+
+* Initial Message
+
+please explain. what the deferred items are about and what the difficulty is and what it would enable. explain deeply, show the plan and how you would implement it
+
+Multi-source parity gap.
+
+The TS RuleProtocolHandler aggregates rules from .spell/rules, .cursor/rules (.mdc with frontmatter), .windsurf/rules, .clinerules, and AGENTS.md. The kernel rule.rs profile uses NamedFile extension md against .spell/rules/, matching only the builtin source.
+
+Recommended approach: callback profile (D6-style dynamic registration). Discovery is inherently dynamic (extensions can add sources at runtime), so a callback fits the lifetime model better than declarative multi-root.
+
+Implementation:
+1. Remove rule from RESERVED_NATIVE_SCHEMES in scheme-callbacks.ts.
+2. Delete crates/pi-natives/src/code_path/uri/rule.rs.
+3. In sdk.ts session bootstrap, after rule discovery completes, registerScheme that maps body → rule lookup against the in-memory Rule cache.
+4. Add to KERNEL_OWNED_SCHEMES via the dynamic callback bridge.
+
+Acceptance: rule scheme works for rules from any discovery source; bash expansion resolves via brush; agent get tool resolves.

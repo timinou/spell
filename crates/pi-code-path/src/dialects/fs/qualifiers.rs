@@ -186,10 +186,10 @@ fn resolve_tree(
 
 		results.push(NodeRef {
 			locator: path.to_string_lossy().to_string(),
-			range:   0..size as usize,
+			range: 0..size as usize,
 			kind,
-			content:     None,
-			metadata:    HashMap::new(),
+			content: None,
+			metadata: HashMap::new(),
 			diagnostics,
 		});
 
@@ -455,10 +455,7 @@ mod tests {
 		fs::create_dir(root.join("keep")).unwrap();
 		fs::write(root.join("keep/real.txt"), "x").unwrap();
 		// Dangling symlink pointing at a path that does not exist.
-		std::os::unix::fs::symlink(
-			root.join("nope/target"),
-			root.join("keep/broken"),
-		).unwrap();
+		std::os::unix::fs::symlink(root.join("nope/target"), root.join("keep/broken")).unwrap();
 
 		let n = node("", "§dir");
 		let qual = Qualifier { name: "tree".to_string(), args: None };
@@ -481,9 +478,6 @@ mod tests {
 			.iter()
 			.find(|n| n.locator.ends_with("keep/broken"))
 			.expect("dangling entry must appear in the result set");
-		assert!(
-			!broken.diagnostics.is_empty(),
-			"dangling entry must carry a per-node diagnostic"
-		);
+		assert!(!broken.diagnostics.is_empty(), "dangling entry must carry a per-node diagnostic");
 	}
 }

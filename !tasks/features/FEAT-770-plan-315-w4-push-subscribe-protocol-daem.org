@@ -1,11 +1,12 @@
 #+TITLE: PLAN-315 W4 — push-subscribe protocol (daemon → client streaming notifications)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14ea0d7add095343
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-21T14-46-31-540Z_14ea0d7add095343.jsonl]]
 #+CUSTOM_ID: FEAT-770-plan-315-w4-push-subscribe-protocol-daem
 #+LAYER: natives tui
 #+PLAN: PLAN-315
 #+PRIORITY: #A
+#+COMPLETION_HASH: bff154e9893a1f1f
 
 * Initial Message
 
@@ -49,3 +50,5 @@ Add subscription channel: daemon pushes =index_changed= events to long-lived cli
 - Subscribe → modify .org file → daemon ingest fires → client receives =index_changed= within 500 ms (debounce 250 ms + delivery)
 - 100 concurrent subscribers on same repo all receive each event (broadcast)
 - Killing a subscriber leaks no daemon-side memory (=stats= shows clean slot)
+
+NOTE [2026-05-22]: W4 push-subscribe delivered end-to-end. Daemon: subscribe.rs module (EventRegistry, LaneEvents, SubscriptionToken with RAII Drop, bounded sync_channel with lag-drop). ConnState refactor across handle_socket_conn and run_stdio_mode with writer thread + outbox. Client: pi_natives::knowledge_client::KnowledgeSubscription with own socket + background reader. 5 daemon unit + 4 daemon integration + 1 client e2e tests, all green. Heartbeat helper exists (spawn_heartbeat) but not wired to per-connection threads since socket-read-zero already detects disconnects on Unix sockets; cross-NAT heartbeat is FUP-089.

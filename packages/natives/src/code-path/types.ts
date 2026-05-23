@@ -18,6 +18,10 @@ export interface CodePathOptions {
 	artifactThreshold?: number;
 	/** Honour .gitignore rules when resolving file targets (default: true). */
 	gitignore?: boolean;
+	/** PLAN-310: user home dir for UserRoot scheme templates (org://). */
+	home?: string;
+	/** PLAN-310: per-session dir for SessionRoot scheme templates (local, agent, etc.). */
+	sessionDir?: string;
 }
 
 export interface SpanDto {
@@ -108,6 +112,30 @@ export interface LanguageDialectInfo {
 	capabilities: string[];
 }
 
+
+/**
+ * PLAN-310: result returned by a JS callback registered with
+ * registerSchemeCallback. Note: `sourcePath` enables codepath suffix
+ * forwarding and brush bash expansion for hybrid (JS-discovered, fs-backed)
+ * schemes like skill://. Leave undefined for purely virtual data.
+ */
+export interface JsResolvedContent {
+	url: string;
+	content: string;
+	mime?: string;
+	notes?: string[];
+	sourcePath?: string;
+}
+
+/** PLAN-310: options for registerSchemeCallback. */
+export interface SchemeCallbackOptions {
+	fsBacked?: boolean;
+	codepathCompatible?: boolean;
+	mimeHint?: string;
+	bashExpandable?: boolean;
+	budgetMs?: number;
+}
+
 declare module "../bindings" {
 	interface NativeBindings {
 		executeCodePath(options: CodePathOptions): Promise<CodePathChunk[]>;
@@ -120,5 +148,10 @@ declare module "../bindings" {
 		listDiagnosticVariants(): DiagnosticVariantInfo[];
 		listLanguageDialects(): LanguageDialectInfo[];
 		listOps(): OpSchemaDto[];
+		// PLAN-310: dynamic scheme registration via TSFn callback.
+		registerSchemeCallback(scheme: string, callback: (err: Error | null, body: string) => JsResolvedContent, options?: SchemeCallbackOptions): void;
+		unregisterSchemeCallback(scheme: string): boolean;
+		listRegisteredSchemes(): string[];
+		clearRuntimeSchemes(): void;
 	}
 }

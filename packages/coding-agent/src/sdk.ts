@@ -17,6 +17,7 @@ import { $env, getAgentDbPath, getAgentDir, getProjectDir, logger, postmortem } 
 import chalk from "chalk";
 import { AsyncJobManager } from "./async";
 import { loadCapability } from "./capability";
+import { setupCallbackSchemes } from "./scheme-bootstrap";
 import { type ModeConfig, modeConfigCapability, type ResolvedModeConfig } from "./capability/mode";
 import { type Rule, ruleCapability } from "./capability/rule";
 import { ModelRegistry } from "./config/model-registry";
@@ -64,18 +65,17 @@ import { loadSkills as loadSkillsInternal, type Skill, type SkillWarning } from 
 import { type FileSlashCommand, loadSlashCommands as loadSlashCommandsInternal } from "./extensibility/slash-commands";
 import {
 	AgentProtocolHandler,
-	ArtifactProtocolHandler,
+
 	CanvasProtocolHandler,
 	createTaskUriProtocolHandlers,
 	InternalUrlRouter,
-	JobsProtocolHandler,
+
 	LocalProtocolHandler,
 	McpProtocolHandler,
 	MemoryProtocolHandler,
 	OrgProtocolHandler,
 	PiProtocolHandler,
-	RuleProtocolHandler,
-	SkillProtocolHandler,
+
 } from "./internal-urls";
 
 import { LoopManager } from "./loop/loop-manager";
@@ -1097,7 +1097,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const internalRouter = new InternalUrlRouter();
 	const getArtifactsDir = () => sessionManager.getArtifactsDir();
 	internalRouter.register(new AgentProtocolHandler({ getArtifactsDir }));
-	internalRouter.register(new ArtifactProtocolHandler({ getArtifactsDir }));
+	// PLAN-310 BUG-396: artifact:// is kernel-owned via Indexed loader
+	// (UserRoot + mtime-cached cross-session scan).
 	internalRouter.register(
 		new MemoryProtocolHandler({
 			getMemoryRoot: () => getMemoryRoot(agentDir, settings.getCwd()),
@@ -1109,18 +1110,20 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getSessionId: () => sessionManager.getSessionId(),
 		}),
 	);
-	internalRouter.register(
-		new SkillProtocolHandler({
-			getSkills: () => skills,
-		}),
-	);
-	internalRouter.register(
-		new RuleProtocolHandler({
-			getRules: () => rulebookRules,
-		}),
-	);
 	internalRouter.register(new PiProtocolHandler());
-	internalRouter.register(new JobsProtocolHandler({ getAsyncJobManager: () => asyncJobManager }));
+
+	// PLAN-310 BUG-393/394/395: rule, skill, jobs are kernel-owned via dynamic
+	// callback registration. registerScheme bridges the kernel SchemeRegistry
+	// back to this process's in-memory state (session.rules, session.skills,
+	// asyncJobManager) via the JsTsfnCallback bridge.
+	const callbackSchemeErrors = setupCallbackSchemes({
+		getRules:            () => rulebookRules as readonly Rule[],
+		getSkills:           () => skills as readonly Skill[],
+		getAsyncJobManager:  () => asyncJobManager,
+	});
+	for (const e of callbackSchemeErrors) {
+		logger.warn(`URI scheme '${e.scheme}' registration failed: ${e.reason}`);
+	}
 	internalRouter.register(new McpProtocolHandler({ getMcpManager: () => mcpManager }));
 	for (const handler of createTaskUriProtocolHandlers({ getCurrentSessionId: () => sessionManager.getSessionId() })) {
 		internalRouter.register(handler);

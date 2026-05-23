@@ -1234,6 +1234,76 @@ fn cmd_link(options: &Value) -> Result<Value> {
 	let mut new_lines = lines.clone();
 	let mut _found_at: Option<usize> = None;
 
+	// PLAN-315 T10.5: file-level case. Many .spell/memory fixtures have the
+	// CUSTOM_ID on a `#+CUSTOM_ID:` frontmatter line (file-level item) rather
+	// than inside a heading's :PROPERTIES: drawer. Detect that case first and
+	// route to the file-level RELATIONS drawer between frontmatter and the
+	// first heading. If frontmatter doesn't match, fall through to the
+	// heading-based state machine below.
+	let file_level_id_match = lines.iter().any(|l| {
+		let trimmed = l.trim();
+		if !trimmed.starts_with("#+CUSTOM_ID:") {
+			return false;
+		}
+		// `#+CUSTOM_ID: <value>` — split once on `:` to peel off the keyword;
+		// the remainder (trimmed) is the value.
+		trimmed
+			.split_once(':')
+			.is_some_and(|(_, rest)| rest.trim() == from)
+	});
+	if file_level_id_match {
+		let edge_line = format!("{}: {}", edge_kind.token(), to);
+		// Find first heading line (start of body); RELATIONS drawer lives
+		// before that. If no heading exists, append at EOF.
+		let first_heading_idx = new_lines.iter().position(|l| l.starts_with('*'));
+		let preamble_end = first_heading_idx.unwrap_or(new_lines.len());
+		let preamble = &new_lines[..preamble_end];
+
+		// Locate existing :RELATIONS: ... :END: drawer in the preamble.
+		let drawer_start = preamble.iter().position(|l| l.trim() == ":RELATIONS:");
+		if let Some(start) = drawer_start {
+			// Find matching :END: AFTER the :RELATIONS: line.
+			let end_idx = (start + 1..preamble_end)
+				.find(|&i| new_lines[i].trim() == ":END:")
+				.ok_or_else(|| {
+					org_err(format!("file-level :RELATIONS: drawer missing :END: in {}", file_path.display()))
+				})?;
+			// Idempotent: if edge already there, no-op.
+			for i in (start + 1)..end_idx {
+				if new_lines[i].trim() == edge_line {
+					let revision = epoch_millis();
+					return Ok(json_response(
+						json!({
+							"revision": revision,
+							"file": file_path.to_string_lossy().to_string(),
+						}),
+						false,
+					));
+				}
+			}
+			new_lines.insert(end_idx, edge_line);
+		} else {
+			// No existing drawer — create one at end of preamble.
+			let insert_at = preamble_end;
+			new_lines.insert(insert_at, ":RELATIONS:".to_string());
+			new_lines.insert(insert_at + 1, edge_line);
+			new_lines.insert(insert_at + 2, ":END:".to_string());
+		}
+
+		let new_contents = new_lines.join("\n") + "\n";
+		fs::write(&file_path, &new_contents)
+			.map_err(|e| org_err(format!("write {}: {e}", file_path.display())))?;
+
+		let revision = epoch_millis();
+		return Ok(json_response(
+			json!({
+				"revision": revision,
+				"file": file_path.to_string_lossy().to_string(),
+			}),
+			false,
+		));
+	}
+
 	#[derive(PartialEq)]
 	enum State {
 		Seeking,
@@ -1911,5 +1981,84 @@ mod tests {
 		assert_eq!(result["error"], json!(true));
 		let msg = result["output"].as_str().unwrap_or("");
 		assert!(msg.contains("Unknown kind: recipe"), "err msg: {msg}");
+	}
+
+	/// PLAN-315 T10.5 — cmd_link must support file-level CUSTOM_IDs
+	/// (`#+CUSTOM_ID:` frontmatter form), not just heading-based items.
+	#[test]
+	fn link_file_level_creates_relations_drawer_when_absent() {
+		let dir = tempdir().expect("tempdir");
+		let ep_path = dir.path().join("EP-test-discovery.org");
+		fs::write(
+			&ep_path,
+			"#+TITLE: Test\n#+CUSTOM_ID: EP-test-discovery\n#+KIND: episode\n\n* Body\nfoo\n",
+		)
+		.expect("seed ep");
+
+		let result = execute_org(json!({
+			"command": "link",
+			"from": "EP-test-discovery",
+			"to": "CON-foo",
+			"kind": "ABOUT",
+			"repoRoot": dir.path().to_string_lossy(),
+		}))
+		.expect("link");
+		assert_eq!(result["error"], json!(false), "link: {result}");
+
+		let content = fs::read_to_string(&ep_path).expect("reread");
+		assert!(content.contains(":RELATIONS:"), "drawer added: {content}");
+		assert!(content.contains("ABOUT: CON-foo"), "edge written: {content}");
+	}
+
+	#[test]
+	fn link_file_level_appends_to_existing_drawer() {
+		let dir = tempdir().expect("tempdir");
+		let ep_path = dir.path().join("EP-test-drawer.org");
+		fs::write(
+			&ep_path,
+			"#+TITLE: Test\n#+CUSTOM_ID: EP-test-drawer\n#+KIND: episode\n\n:RELATIONS:\nABOUT: CON-existing\n:END:\n\n* Body\nfoo\n",
+		)
+		.expect("seed ep");
+
+		let result = execute_org(json!({
+			"command": "link",
+			"from": "EP-test-drawer",
+			"to": "CON-new",
+			"kind": "INVOLVED",
+			"repoRoot": dir.path().to_string_lossy(),
+		}))
+		.expect("link");
+		assert_eq!(result["error"], json!(false), "link: {result}");
+
+		let content = fs::read_to_string(&ep_path).expect("reread");
+		assert!(content.contains("ABOUT: CON-existing"), "original retained");
+		assert!(content.contains("INVOLVED: CON-new"), "new edge added: {content}");
+	}
+
+	#[test]
+	fn link_file_level_is_idempotent() {
+		let dir = tempdir().expect("tempdir");
+		let ep_path = dir.path().join("EP-idem.org");
+		fs::write(
+			&ep_path,
+			"#+TITLE: Test\n#+CUSTOM_ID: EP-idem\n#+KIND: episode\n\n:RELATIONS:\nABOUT: CON-foo\n:END:\n\n* Body\n",
+		)
+		.expect("seed ep");
+
+		let args = json!({
+			"command": "link",
+			"from": "EP-idem",
+			"to": "CON-foo",
+			"kind": "ABOUT",
+			"repoRoot": dir.path().to_string_lossy(),
+		});
+		let r1 = execute_org(args.clone()).expect("link1");
+		let r2 = execute_org(args).expect("link2");
+		assert_eq!(r1["error"], json!(false));
+		assert_eq!(r2["error"], json!(false));
+
+		let content = fs::read_to_string(&ep_path).expect("reread");
+		let count = content.matches("ABOUT: CON-foo").count();
+		assert_eq!(count, 1, "edge appears exactly once: {content}");
 	}
 }

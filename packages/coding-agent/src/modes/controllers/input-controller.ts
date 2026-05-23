@@ -82,6 +82,7 @@ export class InputController {
 		this.ctx.editor.onCtrlP = () => this.cycleRoleModel();
 		this.ctx.editor.onShiftCtrlP = () => this.cycleRoleModel({ temporary: true });
 		this.ctx.editor.onAltP = () => this.ctx.showModelSelector({ temporaryOnly: true });
+		this.ctx.editor.onAltM = () => this.ctx.showMemoryBrowser();
 
 		// Global debug handler on TUI (works regardless of focus)
 		this.ctx.ui.onDebug = () => this.ctx.showDebugSelector();
