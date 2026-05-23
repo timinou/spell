@@ -22,6 +22,7 @@ fn test_registry() -> (Arc<SchemeRegistry>, tempfile::TempDir) {
 	let mut reg = SchemeRegistry::new();
 	reg.register_dynamic_profile(SchemeProfile {
 		scheme:       "tfile",
+		usage:        "tfile://<file>",
 		root:         RootTemplate::AbsoluteRoot { path: dir.path().to_path_buf() },
 		layout:       PathLayout::Direct,
 		loader:       ContentLoader::FsRead { mode: ReadMode::Utf8Text },
@@ -36,6 +37,7 @@ fn test_registry() -> (Arc<SchemeRegistry>, tempfile::TempDir) {
 	.unwrap();
 	reg.register_dynamic_profile(SchemeProfile {
 		scheme:       "tvirt",
+		usage:        "tvirt://<x>",
 		root:         RootTemplate::Virtual,
 		layout:       PathLayout::Direct,
 		loader:       ContentLoader::Static { table: &phf::phf_map! { "x" => "data" } },

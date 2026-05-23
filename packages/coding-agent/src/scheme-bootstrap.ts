@@ -56,6 +56,7 @@ export function setupCallbackSchemes(providers: CallbackSchemeProviders): Scheme
 		mimeHint: "text/markdown",
 		bashExpandable: false,
 		budgetMs: RULE_BUDGET_MS,
+		usage: "rule://<name>",
 	});
 	if (ruleErr) errors.push(ruleErr);
 
@@ -65,6 +66,7 @@ export function setupCallbackSchemes(providers: CallbackSchemeProviders): Scheme
 		mimeHint: "text/markdown",
 		bashExpandable: true,
 		budgetMs: SKILL_BUDGET_MS,
+		usage: "skill://<name>[/<subpath>]",
 	});
 	if (skillErr) errors.push(skillErr);
 
@@ -74,6 +76,7 @@ export function setupCallbackSchemes(providers: CallbackSchemeProviders): Scheme
 		mimeHint: "text/markdown",
 		bashExpandable: false,
 		budgetMs: JOBS_BUDGET_MS,
+		usage: "jobs://[<id>[#status|#result|#error|#progress]]",
 	});
 	if (jobsErr) errors.push(jobsErr);
 

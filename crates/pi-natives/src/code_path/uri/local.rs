@@ -12,6 +12,7 @@ use pi_code_path::{
 pub fn build(_ctx: Option<&SessionContext>) -> SchemeProfile {
 	SchemeProfile {
 		scheme:       "local",
+		usage:        "local://<filename>",
 		root:         RootTemplate::SessionRoot { rel: PathBuf::from("local") },
 		layout:       PathLayout::Direct,
 		loader:       ContentLoader::FsRead { mode: ReadMode::Auto },

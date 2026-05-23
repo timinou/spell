@@ -152,22 +152,22 @@ impl IndexLookup for ArtifactIndex {
 		let mut parts = body.splitn(4, '/');
 		let session_id = parts.next().filter(|s| !s.is_empty()).ok_or_else(|| Diagnostic {
 			variant: DiagnosticVariant::ParseError,
-			message: "artifact:// path must start with session id".into(),
+			message: "body must be '<session-id>/<agent>/<tool>/<filename>'".into(),
 			span:    None,
 		})?;
 		let agent = parts.next().ok_or_else(|| Diagnostic {
 			variant: DiagnosticVariant::ParseError,
-			message: "artifact:// path needs <session-id>/<agent>/<tool>/<filename>".into(),
+			message: "body must be '<session-id>/<agent>/<tool>/<filename>'".into(),
 			span:    None,
 		})?;
 		let tool = parts.next().ok_or_else(|| Diagnostic {
 			variant: DiagnosticVariant::ParseError,
-			message: "artifact:// path needs <session-id>/<agent>/<tool>/<filename>".into(),
+			message: "body must be '<session-id>/<agent>/<tool>/<filename>'".into(),
 			span:    None,
 		})?;
 		let filename = parts.next().ok_or_else(|| Diagnostic {
 			variant: DiagnosticVariant::ParseError,
-			message: "artifact:// path needs <session-id>/<agent>/<tool>/<filename>".into(),
+			message: "body must be '<session-id>/<agent>/<tool>/<filename>'".into(),
 			span:    None,
 		})?;
 
@@ -193,6 +193,7 @@ impl IndexLookup for ArtifactIndex {
 pub fn build(_ctx: Option<&SessionContext>) -> SchemeProfile {
 	SchemeProfile {
 		scheme:       "artifact",
+		usage:        "artifact://<session-id>/<agent>/<tool>/<n>.<ext>",
 		root:         RootTemplate::Virtual,
 		layout:       PathLayout::Indexed,
 		loader:       ContentLoader::Indexed {

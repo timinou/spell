@@ -14,6 +14,7 @@ use pi_code_path::{
 pub fn build(_ctx: Option<&SessionContext>) -> SchemeProfile {
 	SchemeProfile {
 		scheme:       "agent",
+		usage:        "agent://<id>",
 		root:         RootTemplate::SessionRoot { rel: PathBuf::from("") },
 		layout:       PathLayout::NamedFile { extension: "md".into() },
 		loader:       ContentLoader::FsRead { mode: ReadMode::Utf8Text },

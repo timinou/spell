@@ -39,6 +39,7 @@ impl SchemeCallback for FakeCallback {
 fn build_dynamic_profile(name: &'static str, response: &str) -> SchemeProfile {
 	SchemeProfile {
 		scheme:       name,
+		usage:        "<test>://<body>",
 		root:         RootTemplate::Virtual,
 		layout:       PathLayout::Direct,
 		loader:       ContentLoader::Callback(Arc::new(FakeCallback {
@@ -170,6 +171,7 @@ fn callback_can_emit_source_path() {
 	let mut reg = SchemeRegistry::new();
 	reg.register_dynamic_profile(SchemeProfile {
 		scheme:       "fsback",
+		usage:        "fsback://<id>",
 		root:         RootTemplate::Virtual,
 		layout:       PathLayout::Direct,
 		loader:       ContentLoader::Callback(Arc::new(FsBackedCallback {
@@ -249,6 +251,7 @@ fn rule_callback_resolves_with_source_path() {
 	let mut reg = SchemeRegistry::new();
 	reg.register_dynamic_profile(SchemeProfile {
 		scheme:       "rule",
+		usage:        "rule://<name>",
 		root:         RootTemplate::Virtual,
 		layout:       PathLayout::Direct,
 		loader:       ContentLoader::Callback(Arc::new(RuleCallback {

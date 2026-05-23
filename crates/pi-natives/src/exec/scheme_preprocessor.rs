@@ -111,6 +111,7 @@ mod tests {
 		// virtual scheme — bash_expandable: false
 		reg.register_dynamic_profile(SchemeProfile {
 			scheme:       "virtual-svc",
+			usage:        "virtual-svc://<x>",
 			root:         RootTemplate::Virtual,
 			layout:       PathLayout::Direct,
 			loader:       ContentLoader::Static { table: &phf::phf_map! { "x" => "data" } },
@@ -139,6 +140,7 @@ mod tests {
 		let mut reg = SchemeRegistry::new();
 		reg.register_dynamic_profile(SchemeProfile {
 			scheme:       "tfile",
+			usage:        "tfile://<file>",
 			root:         RootTemplate::AbsoluteRoot { path: dir.path().to_path_buf() },
 			layout:       PathLayout::Direct,
 			loader:       ContentLoader::FsRead { mode: ReadMode::Utf8Text },

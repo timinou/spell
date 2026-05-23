@@ -71,6 +71,13 @@ export interface SchemeRegistrationOptions {
 	bashExpandable?: boolean;
 	/** Sync callback budget in milliseconds. Default 5000. */
 	budgetMs?: number;
+	/**
+	 * Canonical URI form shown to users in error diagnostics, e.g. `"rule://<name>"`.
+	 * When the kernel emits a parse/lookup error for this scheme it appends
+	 * `(usage: <this>)` so users see the exact shape they should have typed.
+	 * Default: `<scheme>://<body>`.
+	 */
+	usage?: string;
 }
 
 export interface SchemeResolveResult {
