@@ -364,6 +364,11 @@ fn render_status(root: &Path, builder: &CodeGraphBuilder) -> napi::Result<CodeGr
 }
 
 /// Build the semantic vector index from the code graph.
+// TODO(FUP-089): `code_graph` has no daemon RPC path yet — the semantic
+// index is always built in-process via `embedding_worker::embed_batch`.
+// When code-graph queries are routed through the daemon (W3 hybrid lane),
+// a `WorkerMode` dispatch block similar to `recall_engine::query` must be
+// added here and in the `search` branch of `run_code_graph`.
 fn build_semantic_index(graph: &CodeGraph, cache: &CacheStore) -> napi::Result<usize> {
 	let chunks = pi_code_graph::extract_chunks(graph.persisted(), 30)
 		.map_err(|e| Error::from_reason(format!("Chunking failed: {e}")))?;

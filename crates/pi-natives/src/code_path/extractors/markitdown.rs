@@ -195,7 +195,9 @@ mod tests {
 			timeout_secs: 5,
 			binary:       "/nonexistent/bin/markitdown".to_string(),
 		};
-		let err = e.extract(b"fake pdf bytes", &CancellationToken::new()).unwrap_err();
+		let err = e
+			.extract(b"fake pdf bytes", &CancellationToken::new())
+			.unwrap_err();
 		assert!(matches!(err.variant, DiagnosticVariant::ParseError));
 		assert!(err.message.contains("markitdown not found"));
 		assert!(err.message.contains("uv tool install markitdown"));

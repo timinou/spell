@@ -1,0 +1,39 @@
+#+TITLE: Cutover artifact scheme to kernel — UserRoot + cross-session index
+#+STATE: ITEM
+#+SESSION_ID: 14dd802985b2a5f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan309/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
+#+CUSTOM_ID: BUG-396-cutover-artifact-scheme-to-kernel-userro
+#+LAYER: kernel
+#+PLAN: PLAN-310
+
+* Initial Message
+
+please explain. what the deferred items are about and what the difficulty is and what it would enable. explain deeply, show the plan and how you would implement it
+
+The kernel artifact.rs profile uses ProjectRoot with rel=.spell/sessions and PathLayout::Direct. The TS ArtifactProtocolHandler uses getSessionsDir() which is ~/.spell/agent/sessions/ (UserRoot, NOT ProjectRoot), AND does cross-project session lookup via a regex-suffix index on dir names matching SESSION_ROOT_NAME_RE = /_([0-9a-f]+)$/i.
+
+Two parity gaps:
+
+1. Wrong root: ProjectRoot vs UserRoot. Quick fix: change RootTemplate to UserRoot { rel: ".spell/agent/sessions" }.
+
+2. Cross-session lookup. Given artifact://<sessionId>/<agent>/<tool>/<file>, kernel must scan <sessions>/<project>/ to find a dir whose name suffix matches sessionId. Requires an IndexLookup impl.
+
+Implementation:
+1. Update artifact.rs:
+   - RootTemplate::UserRoot { rel: ".spell/agent/sessions" }
+   - Replace ContentLoader::FsRead with ContentLoader::Indexed
+   - PathLayout::Indexed (body opaque to layout, lookup handles parsing)
+2. Add crates/pi-natives/src/code_path/uri/artifact_index.rs implementing IndexLookup. Logic:
+   - Parse body as <sessionId>/<agent>/<tool>/<file>
+   - Read sessions root, iterate project dirs
+   - For each project dir, iterate child dirs looking for name matching /_<sessionId>$/i
+   - On match, return path: <project>/<match>/<agent>/<tool>/<file>
+   - With small mtime-cached index for repeat lookups
+
+Acceptance:
+- artifact://<live-session>/<agent>/main/get/0.txt resolves to the right file regardless of project
+- Binary extensions (.png/.pdf/.jpg etc.) emit "Binary artifact" note via SchemeCapabilities.static_notes is not enough (note is conditional on extension) — needs per-resolution notes (FUP-2)
+- Legacy artifact://<numeric-id> form still works via current-session fallback
+- Existing artifact-protocol.test.ts cases pass via Rust equivalent
+
+Blocked by: nothing technical, but consumer wiring for runtime callbacks should land first to verify the pattern.

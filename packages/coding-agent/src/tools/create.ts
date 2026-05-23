@@ -17,6 +17,7 @@ import { enforceModeWrite } from "./mode-guard";
 import { resolveCwdRelativePath } from "./path-resolution";
 import { replaceTabs } from "./render-utils";
 import { type DetailsWithMeta, toolResult } from "./tool-result";
+import { sessionContextOpts } from "./codepath-session";
 
 type CreateToolResultDetails = DetailsWithMeta & {
 	path?: string;
@@ -114,6 +115,7 @@ export class CreateTool implements AgentTool<typeof createSchema> {
 
 		// Delegate to kernel via unified executeCodePath edit surface.
 		const chunks = await executeCodePath({
+			...sessionContextOpts(this.session ?? null),
 			command: "edit",
 			target: path.relative(sessionCwd, resolvedPath),
 			actions: [{ kind: "fileCreate", content, force: params.force ?? false }],

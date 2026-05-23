@@ -20,6 +20,7 @@ export class CustomEditor extends Editor {
 	onQuestionMark?: () => void;
 	onCapsLock?: () => void;
 	onAltP?: () => void;
+	onAltM?: () => void;
 	/** Called when Alt+Shift+C is pressed to copy prompt to clipboard. */
 	onCopyPrompt?: () => void;
 	/** Called when Ctrl+V is pressed. Returns true if handled (image found), false to fall through to text paste. */
@@ -98,6 +99,12 @@ export class CustomEditor extends Editor {
 		// Intercept Ctrl+T for thinking block visibility toggle
 		if (matchesKey(data, "ctrl+t") && this.onCtrlT) {
 			this.onCtrlT();
+			return;
+		}
+
+		// Intercept Alt+M for memory browser
+		if (matchesKey(data, "alt+m") && this.onAltM) {
+			this.onAltM();
 			return;
 		}
 

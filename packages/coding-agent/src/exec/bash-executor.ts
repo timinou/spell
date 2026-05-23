@@ -24,6 +24,12 @@ export interface BashExecutorOptions {
 	artifactPath?: string;
 	artifactUri?: string;
 	spillPolicy?: SpillPolicy;
+	/** PLAN-310 W5: project root for kernel-side URI scheme expansion in bash. */
+	schemeRoot?: string;
+	/** PLAN-310 W5: user home for UserRoot scheme templates. */
+	schemeHome?: string;
+	/** PLAN-310 W5: session dir for SessionRoot scheme templates. */
+	schemeSessionDir?: string;
 }
 
 export interface BashResult {
@@ -158,6 +164,9 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 						snapshotPath: snapshotPath ?? undefined,
 						timeoutMs: options?.timeout,
 						signal: runAbortController.signal,
+						root: options?.schemeRoot,
+						home: options?.schemeHome,
+						sessionDir: options?.schemeSessionDir,
 					},
 					chunk => {
 						enqueueChunk(chunk);

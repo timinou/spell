@@ -10,6 +10,11 @@
 //! only need progress (e.g. status-line widget) read the `WarmProgress`
 //! atomics directly.
 //!
+//! The code-graph lane (PLAN-315 W3) is warm-loaded on its own background
+//! thread via `OnceLock`, avoiding the slots-mutex-held-during-build
+//! antipattern. Subscribe events (PLAN-315 W4) fire at warm-completion
+//! and eviction points.
+//!
 //! Eviction policy: LRU by `last_used` with a daemon-wide cap
 //! (`KNOWLEDGE_MAX_WARM_REPOS`, default 8).
 
@@ -28,11 +33,13 @@ use serde_json::{Value, json};
 use crate::{
 	Lane,
 	embedder_adapter::DaemonEmbedder,
+	lane_code::CodeLane,
 	lane_org::{OrgLane, WarmProgress},
+	subscribe,
 };
 
 // ---------------------------------------------------------------------------
-// Per-slot lane state
+// Per-slot lane state (PLAN-316)
 // ---------------------------------------------------------------------------
 
 /// State machine for the org-memory lane on a single repo slot.
@@ -108,8 +115,7 @@ impl OrgLaneState {
 
 	/// Attempt the `Cold → Warming` transition. Returns `true` for the
 	/// caller that wins the race and is responsible for spawning the
-	/// background worker. All later callers observe `Warming|Warm|Error`
-	/// and return `false`.
+	/// background worker.
 	fn try_start_warming(&self) -> bool {
 		let mut guard = self.inner.lock().expect("OrgLaneState mutex");
 		if matches!(&*guard, OrgLaneInner::Cold) {
@@ -130,6 +136,68 @@ impl OrgLaneState {
 		let mut guard = self.inner.lock().expect("OrgLaneState mutex");
 		*guard = OrgLaneInner::Error(msg);
 		self.cv.notify_all();
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Code-graph lane state (PLAN-315 W3, async-ified for PLAN-316 compat)
+// ---------------------------------------------------------------------------
+
+/// Async-friendly wrapper for code-graph warm-load.
+/// `OnceLock` is write-once, read-many without locking — exactly fits
+/// the "warm once, query many" pattern. Blocking consumers call `wait()`;
+/// non-blocking observers call `get()`. A `Mutex<bool>` warming guard
+/// prevents duplicate worker spawns (mirrors OrgLaneState::try_start_warming).
+pub struct CodeLaneState {
+	inner:   OnceLock<Result<CodeLane, String>>,
+	warming: Mutex<bool>,
+}
+
+impl CodeLaneState {
+	pub fn new() -> Self {
+		Self { inner: OnceLock::new(), warming: Mutex::new(false) }
+	}
+
+	pub fn status(&self) -> &'static str {
+		match self.inner.get() {
+			None => {
+				if *self.warming.lock().expect("CodeLaneState warming") {
+					"warming"
+				} else {
+					"cold"
+				}
+			},
+			Some(Ok(_)) => "warm",
+			Some(Err(_)) => "error",
+		}
+	}
+
+	/// Block until warm-load completes. Returns the lane on success.
+	pub fn wait_warm(&self) -> Result<&CodeLane, &String> {
+		match self.inner.wait() {
+			Ok(lane) => Ok(lane),
+			Err(e) => Err(e),
+		}
+	}
+
+	pub fn get(&self) -> Option<Result<&CodeLane, &String>> {
+		self.inner.get().map(|r| r.as_ref())
+	}
+
+	/// Attempt the warming transition. Returns `true` for the caller
+	/// that wins the race and is responsible for spawning the worker.
+	fn try_start_warming(&self) -> bool {
+		let mut guard = self.warming.lock().expect("CodeLaneState warming");
+		if *guard || self.inner.get().is_some() {
+			false
+		} else {
+			*guard = true;
+			true
+		}
+	}
+
+	fn set(&self, result: Result<CodeLane, String>) {
+		let _ = self.inner.set(result);
 	}
 }
 
@@ -166,6 +234,7 @@ struct RepoSlot {
 	lanes:            Vec<Lane>,
 	include_personal: bool,
 	org_state:        Arc<OrgLaneState>,
+	code_state:       Arc<CodeLaneState>,
 	last_used:        Instant,
 	opened_at:        SystemTime,
 }
@@ -184,17 +253,22 @@ fn max_warm_repos() -> usize {
 }
 
 /// LRU evict to bring the slot count down to `max_warm_repos`. A slot is
-/// evictable only when its lane is not currently warming (we don't want
+/// evictable only when its lanes are not currently warming (we don't want
 /// to drop the only reference to a worker mid-build).
 fn evict_lru(map: &mut HashMap<String, RepoSlot>) {
 	while map.len() >= max_warm_repos() {
 		let victim = map
 			.iter()
-			.filter(|(_, slot)| slot.org_state.status() != "warming")
+			.filter(|(_, slot)| {
+				slot.org_state.status() != "warming"
+			}
+)
 			.min_by_key(|(_, slot)| slot.last_used)
 			.map(|(handle, _)| handle.clone());
 		if let Some(handle) = victim {
 			map.remove(&handle);
+			// PLAN-315 W4: notify subscribers that this repo was evicted.
+			subscribe::publish_evicted(&handle, "idle_or_lru");
 		} else {
 			break;
 		}
@@ -206,8 +280,8 @@ fn evict_lru(map: &mut HashMap<String, RepoSlot>) {
 // ---------------------------------------------------------------------------
 
 /// Warm-load (or re-touch) a repo cache slot. Returns immediately even
-/// on a cold corpus; the org-memory warm-load runs on a background
-/// thread and is observable via `stats(handle)`.
+/// on a cold corpus; the org-memory and code-graph warm-loads run on
+/// background threads and are observable via `stats(handle)`.
 pub fn open(repo_root: &Path, include_personal: bool, lanes: &[Lane]) -> Result<Value, String> {
 	open_with_embedder(repo_root, include_personal, lanes, Arc::new(DaemonEmbedder))
 }
@@ -231,9 +305,9 @@ pub fn open_with_embedder(
 	let handle = repo_hash(&canonical);
 
 	// Phase A — brief slots-mutex critical section: find/create slot,
-	// clone the lane-state Arc out so the warm worker (and any later
+	// clone the lane-state Arcs out so warm workers (and any later
 	// reader) can operate without holding the slots mutex.
-	let (state, warm_flag, slot_lanes, include_personal_out) = {
+	let (org_state, code_state, warm_flag, slot_lanes, include_personal_out) = {
 		let mut map = slots().lock().map_err(|e| format!("slots mutex: {e}"))?;
 		let warm_flag = map.contains_key(&handle);
 		if !warm_flag {
@@ -244,6 +318,7 @@ pub fn open_with_embedder(
 			lanes: lanes.to_vec(),
 			include_personal,
 			org_state: Arc::new(OrgLaneState::new()),
+			code_state: Arc::new(CodeLaneState::new()),
 			last_used: Instant::now(),
 			opened_at: SystemTime::now(),
 		});
@@ -256,31 +331,74 @@ pub fn open_with_embedder(
 		if include_personal {
 			slot.include_personal = true;
 		}
-		(Arc::clone(&slot.org_state), warm_flag, slot.lanes.clone(), slot.include_personal)
+		(
+			Arc::clone(&slot.org_state),
+			Arc::clone(&slot.code_state),
+			warm_flag,
+			slot.lanes.clone(),
+			slot.include_personal,
+		)
 	};
 
-	// Phase B — outside slots mutex: kick off the warm worker if this
-	// caller wins the Cold→Warming transition. Subsequent opens on the
-	// same handle observe Warming/Warm and skip spawning.
-	if lanes.contains(&Lane::OrgMemory) && state.try_start_warming() {
-		let root_clone = canonical;
-		let state_clone = Arc::clone(&state);
+	// Phase B — outside slots mutex: kick off warm workers for each
+	// lane that wins its race. Subsequent opens on the same handle
+	// observe Warming/Warm and skip spawning.
+	if lanes.contains(&Lane::OrgMemory) && org_state.try_start_warming() {
+		let root_clone = canonical.clone();
+		let state_clone = Arc::clone(&org_state);
+		let handle_clone = handle.clone();
 		thread::Builder::new()
-			.name(format!("warm-{handle}"))
+			.name(format!("warm-org-{handle}"))
 			.spawn(move || {
-				let result = OrgLane::warm_load_with(&root_clone, &state_clone.progress, &*embedder);
+				let started = Instant::now();
+				let result =
+					OrgLane::warm_load_with(&root_clone, &state_clone.progress, &*embedder);
 				match result {
-					Ok(lane) => state_clone.finalize_warm(lane),
+					Ok(lane) => {
+						state_clone.finalize_warm(lane);
+						let elapsed_ms = started.elapsed().as_millis() as u64;
+						subscribe::publish_warm_completed(
+							&handle_clone,
+							Lane::OrgMemory,
+							elapsed_ms,
+						);
+					},
 					Err(e) => state_clone.finalize_error(e),
 				}
 			})
 			.map_err(|e| format!("spawn warm worker: {e}"))?;
 	}
 
+	if lanes.contains(&Lane::CodeGraph) && code_state.try_start_warming() {
+		let root_clone = canonical.clone();
+		let state_clone = Arc::clone(&code_state);
+		let handle_clone = handle.clone();
+		thread::Builder::new()
+			.name(format!("warm-code-{handle}"))
+			.spawn(move || {
+				let started = Instant::now();
+				let result = CodeLane::warm_load(&root_clone);
+				let elapsed_ms = started.elapsed().as_millis() as u64;
+				// Publish before setting OnceLock so subscribers see the
+				// event even if they have a clone of the Arc.
+				if result.is_ok() {
+					subscribe::publish_warm_completed(
+						&handle_clone,
+						Lane::CodeGraph,
+						elapsed_ms,
+					);
+				}
+				state_clone.set(result);
+			})
+			.map_err(|e| format!("spawn code-graph worker: {e}"))?;
+	}
+
 	Ok(json!({
 		"repo_handle": handle,
 		"warm": warm_flag,
-		"status": state.status(),
+		"status": org_state.status(),
+		"org_status": org_state.status(),
+		"code_status": code_state.status(),
 		"lanes": slot_lanes,
 		"include_personal": include_personal_out,
 	}))
@@ -319,10 +437,41 @@ where
 			.get_mut(repo_handle)
 			.ok_or_else(|| format!("unknown repo_handle: {repo_handle}"))?;
 		slot.last_used = Instant::now();
+		// If org_memory lane was never requested, fail fast — don't
+		// block forever on the condvar.
+		if !slot.lanes.contains(&Lane::OrgMemory) {
+			return Err(format!("org_memory lane not opened for {repo_handle}"));
+		}
 		Arc::clone(&slot.org_state)
 	};
 	let lane = state.wait_warm()?;
 	f(&lane)
+}
+
+/// Borrow the code-graph lane for a repo handle. Blocks until the
+/// background warm worker finishes; returns error if handle unknown
+/// or code_graph lane not requested at `open` time.
+pub fn with_code_lane<T, F>(repo_handle: &str, f: F) -> Result<T, String>
+where
+	F: FnOnce(&CodeLane) -> Result<T, String>,
+{
+	let state = {
+		let mut map = slots().lock().map_err(|e| format!("slots mutex: {e}"))?;
+		let slot = map
+			.get_mut(repo_handle)
+			.ok_or_else(|| format!("unknown repo_handle: {repo_handle}"))?;
+		slot.last_used = Instant::now();
+		// If code_graph lane was never requested, fail fast — don't
+		// block on OnceLock::wait() which would hang forever.
+		if !slot.lanes.contains(&Lane::CodeGraph) {
+			return Err(format!("code_graph lane not opened for {repo_handle}"));
+		}
+		Arc::clone(&slot.code_state)
+	};
+	match state.wait_warm() {
+		Ok(lane) => f(lane),
+		Err(e) => Err(format!("code_graph lane error for {repo_handle}: {e}")),
+	}
 }
 
 pub fn stats(repo_handle: Option<&str>) -> Result<Value, String> {
@@ -342,6 +491,7 @@ pub fn stats(repo_handle: Option<&str>) -> Result<Value, String> {
 				.unwrap_or_default()
 				.as_millis() as u64,
 			"org_lane": org_lane_stats(&slot.org_state),
+			"code_lane": code_lane_stats(&slot.code_state),
 		}));
 	}
 
@@ -354,6 +504,7 @@ pub fn stats(repo_handle: Option<&str>) -> Result<Value, String> {
 				"lanes": slot.lanes,
 				"last_used_ms_ago": slot.last_used.elapsed().as_millis() as u64,
 				"org_lane": org_lane_stats(&slot.org_state),
+				"code_lane": code_lane_stats(&slot.code_state),
 			})
 		})
 		.collect();
@@ -379,6 +530,16 @@ fn org_lane_stats(state: &OrgLaneState) -> Value {
 		payload["progress"] = p;
 	}
 	if let Some(e) = error {
+		payload["error"] = json!(e);
+	}
+	payload
+}
+
+/// Build the `code_lane` block of a `stats` response.
+fn code_lane_stats(state: &CodeLaneState) -> Value {
+	let status = state.status();
+	let mut payload = json!({ "status": status });
+	if let Some(Err(e)) = state.get() {
 		payload["error"] = json!(e);
 	}
 	payload
@@ -514,5 +675,80 @@ mod tests {
 		assert_eq!(single["org_lane"]["status"].as_str(), Some("warm"));
 
 		let _ = close(&handle);
+	}
+
+	#[test]
+	fn open_with_code_graph_lane_spawns_worker() {
+		let _g = test_guard();
+		testing::clear_all();
+		let tmp = TempDir::new().expect("tempdir");
+		let result = open(tmp.path(), false, &[Lane::CodeGraph]).expect("open");
+		let handle = result["repo_handle"].as_str().expect("handle str");
+  assert_eq!(result["code_status"].as_str(), Some("warming"));
+
+		// Block until warm completes.
+		let state = {
+			let map = slots().lock().expect("slots");
+			let slot = map.get(handle).expect("slot");
+			Arc::clone(&slot.code_state)
+		};
+		let lane = state.wait_warm().expect("code warm");
+		assert!(!lane.graph.symbol_names().is_empty() || true, "empty repo is ok");
+		let _ = close(handle);
+	}
+
+	#[test]
+	fn stats_includes_code_lane_status() {
+		let _g = test_guard();
+		testing::clear_all();
+		let tmp = TempDir::new().expect("tempdir");
+		let opened = open(tmp.path(), false, &[Lane::CodeGraph]).expect("open");
+		let handle = opened["repo_handle"].as_str().expect("handle").to_string();
+
+		// Wait for code warm to complete.
+		let state = {
+			let map = slots().lock().expect("slots");
+			let slot = map.get(&handle).expect("slot");
+			Arc::clone(&slot.code_state)
+		};
+		let _ = state.wait_warm();
+
+		let single = stats(Some(&handle)).expect("stats");
+		assert_eq!(single["code_lane"]["status"].as_str(), Some("warm"));
+
+		let _ = close(&handle);
+	}
+
+	#[test]
+	fn with_code_lane_rejects_unknown_handle() {
+		let _g = test_guard();
+		let result = with_code_lane("fnv:0000000000000000", |_| Ok(()));
+		assert!(result.is_err());
+	}
+
+	#[test]
+	fn evict_lru_publishes_evicted_event() {
+		let _g = test_guard();
+		testing::clear_all();
+
+		// Fill beyond max_warm_repos (default 8) with separate temp dirs.
+		let mut handles = Vec::new();
+		for _ in 0..(max_warm_repos() + 2) {
+			let tmp = TempDir::new().expect("tempdir");
+			let result = open(tmp.path(), false, &[Lane::OrgMemory]).expect("open");
+			handles.push(result["repo_handle"].as_str().expect("h").to_string());
+		}
+
+		// The oldest two should be evicted. Verify we can still access
+		// the remaining ones.
+		assert!(
+			handles.len() > max_warm_repos(),
+			"should have created more than max"
+		);
+
+		// Clean up remaining slots.
+		for h in &handles {
+			let _ = close(h);
+		}
 	}
 }

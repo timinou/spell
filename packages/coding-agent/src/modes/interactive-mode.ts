@@ -31,7 +31,7 @@ import { loadTaskPolicies, mergePolicies } from "../config/task-policies";
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../extensibility/extensions";
 import type { CompactOptions } from "../extensibility/extensions/types";
 import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slash-commands";
-import { resolveLocalUrlToPath } from "../internal-urls";
+import { localUrlToPath } from "../tools/local-path";
 import { type PlanWave, planWavesToTodoGroups } from "../orchestrators/fluid";
 import { renameApprovedPlanFile } from "../plan-mode/approved-plan";
 import { buildChildItemSpecs, type ChildItemSpec, renderChildItemSpec } from "../plan-mode/child-item-spec";
@@ -1163,7 +1163,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#resolvePlanFilePath(planFilePath: string): string {
 		if (planFilePath.startsWith("local://")) {
-			return resolveLocalUrlToPath(planFilePath, {
+			return localUrlToPath(planFilePath, {
 				getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
 				getSessionId: () => this.sessionManager.getSessionId(),
 			});
@@ -1442,7 +1442,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		} else {
 			// For file-backed plans (org disabled), persist the approved plan in the new
 			// session local:// root so `local://<title>.md` resolves correctly.
-			const newLocalPath = resolveLocalUrlToPath(options.finalPlanFilePath, {
+			const newLocalPath = localUrlToPath(options.finalPlanFilePath, {
 				getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
 				getSessionId: () => this.sessionManager.getSessionId(),
 			});

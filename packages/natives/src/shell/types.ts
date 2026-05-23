@@ -52,6 +52,12 @@ export interface ShellExecuteOptions extends Cancellable {
 	sessionEnv?: Record<string, string>;
 	/** Optional snapshot path to source for bash sessions. */
 	snapshotPath?: string;
+	/** PLAN-310: project root for kernel SchemeRegistry URI expansion. */
+	root?: string;
+	/** PLAN-310: user home dir. */
+	home?: string;
+	/** PLAN-310: per-session dir. */
+	sessionDir?: string;
 }
 
 /**

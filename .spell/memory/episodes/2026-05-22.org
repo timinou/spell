@@ -1,5 +1,6 @@
 #+TITLE: Episodes 2026-05-22
 
+
 ** ITEM workspace cargo-test flake — diff_qualifier + workspace_cache + code_buffer race on HOME/buffer_registry
 
 5/5 consecutive cargo test --workspace runs green post-fix. Pre-flight closed; PLAN-315 W0 unblocked.
@@ -120,4 +121,64 @@ Implementation landed. Daemon: non-blocking warm + progress atomics. pi-natives:
 :END:
 :RELATIONS:
 ABOUT: PLAN-316-memory-index-build-tui-affordance-non-bl
+:END:
+** ITEM PLAN-315 W3 — code-graph lane in daemon (RepoCache::CodeGraph + symbol/vec hybrid search)
+
+W3 code-graph lane delivered. lane_code.rs wraps pi_code_graph::CodeGraph; CgSearch/CgDefinition/CgReferences/CgCallers commands wired via repo_cache::with_code_lane; 7 new tests. Daemon BM25-only inside cg_search to avoid embedder cold-load; vector-hybrid dispatch reserved for FUP-089. RPC client-side dispatch deferred to W5 cutover wave (FUP-089) where code-graph in-process WarmEngine is replaced; for now the in-process path remains canonical.
+:PROPERTIES:
+:CUSTOM_ID: EP-eed57b7fa557a112
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T16:11:17Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-769-plan-315-w3-code-graph-lane-in-daemon-re
+:END:
+** ITEM PLAN-315 W4 — push-subscribe protocol (daemon → client streaming notifications)
+
+W4 push-subscribe delivered end-to-end. Daemon: subscribe.rs module (EventRegistry, LaneEvents, SubscriptionToken with RAII Drop, bounded sync_channel with lag-drop). ConnState refactor across handle_socket_conn and run_stdio_mode with writer thread + outbox. Client: pi_natives::knowledge_client::KnowledgeSubscription with own socket + background reader. 5 daemon unit + 4 daemon integration + 1 client e2e tests, all green. Heartbeat helper exists (spawn_heartbeat) but not wired to per-connection threads since socket-read-zero already detects disconnects on Unix sockets; cross-NAT heartbeat is FUP-089.
+:PROPERTIES:
+:CUSTOM_ID: EP-2b9fc3aaaf897b3b
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T16:11:52Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-770-plan-315-w4-push-subscribe-protocol-daem
+:END:
+** ITEM PLAN-315 autonomous second session 2026-05-22: shipped W5 (PI_KNOWLEDGE_WORKER mode, fail-loud RPC default — FEAT-771), W6 (/memory TUI browser with Alt+M panel, 4 tabs, 534 LOC across 8 new files — FEAT-774), W8 (N=10 perf harness scaffolding + BenchPayload event variant + publish_bench_event helper). Ran W*.5 review+gap-fix waves on W5/W6/W8 — surfaced 12 HIGH findings in total (1 doc lie in W5, 2 P1 this-binding bugs + 1 P2 race in W6, 9 HIGH harness bugs in W8 including wrong JSON keys, RSS sampler ordering, totals math). All HIGH findings fixed in dedicated gap-fix commits. Three key architectural decisions ratified: Alt+M not Ctrl+M (Ctrl+M = \r byte conflict with Enter); shared-daemon RSS attribution (per-session = total/N); sustained python per session for latency measurement (per-query python3 -c spawn cost dwarfs 50ms gate). 21 commits on plan-315-complete branch at /home/user/code/ora/spell-plan315. All package tests green: pi-knowledge-worker 52/52, pi-natives 349 lib + integration, pi-knowledge-core 91/91, pi-org-engine 81/81. FUP-089 reduced to W5-erase + W8-measurement-run + push_latency.rs bench binary.
+:PROPERTIES:
+:CUSTOM_ID: EP-1233920b90754e27
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T17:33:38Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-315-pi-knowledge-worker-shared-knowledge-dae
+ABOUT: FUP-089-plan-315-deferred-code-graph-lane-w3-pus
+:END:
+** ITEM Unify non-blocking warm-load with code-graph lane and push-subscribe
+
+Merged PLAN-315 W3/W4 (code-graph lane + push-subscribe) with PLAN-316 (non-blocking warm-load).
+:PROPERTIES:
+:CUSTOM_ID: EP-9415ed7116b63f1b
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T21:39:24Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-779-unify-non-blocking-warm-load-with-code-g
+
+** ITEM Kernel executeCodePath does not register URI scheme resolvers (memory/skill/artifact/agent)
+
+Closed by PLAN-310: kernel SchemeRegistry now resolves all URI schemes natively via declarative SchemeProfile DSL. The Locator::Uri rejection branch in napi.rs:805 is replaced with kernel-side resolution + NodeRef wrapping. Tests previously ignored in code_path_e2e.rs::uri_scheme_tests:: now exercise the real dispatch path through W4 e2e tests and W1 integration tests.
+:PROPERTIES:
+:CUSTOM_ID: EP-f342cbc1ea76192c
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T16:14:47Z
+:END:
+:RELATIONS:
+ABOUT: BUG-388-kernel-executecodepath-does-not-register
+
 :END:

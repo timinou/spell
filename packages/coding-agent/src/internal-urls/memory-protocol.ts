@@ -1,17 +1,11 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { executeOrg } from "@oh-my-pi/pi-natives";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import { diffMemorySince, dispatchMemoryAction } from "../tools/memory";
-import { validateRelativePath } from "./skill-protocol";
+import { validateRelativePath } from "./path-validation";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
 
 const DEFAULT_MEMORY_FILE = "memory_summary.md";
-const ROOT_NAMESPACE = "root";
-const SEARCH_NAMESPACE = "search";
-const ITEM_NAMESPACE = "item";
-const SINCE_NAMESPACE = "since";
-const BROWSE_NAMESPACE = "browse";
+const MEMORY_NAMESPACE = "root";
 
 /**
  * Options for the memory:// URL protocol.
@@ -21,12 +15,6 @@ export interface MemoryProtocolOptions {
 	 * Returns the absolute path to the current project's memory root.
 	 */
 	getMemoryRoot: () => string;
-	/**
-	 * Returns the absolute repo root used as `repoRoot` for executeOrg memory
-	 * commands. Defaults to the memory root's parent's parent (i.e. project
-	 * root inferred from `<project>/.spell/memory`).
-	 */
-	getRepoRoot?: () => string;
 }
 
 function ensureWithinRoot(targetPath: string, rootPath: string): void {
@@ -42,17 +30,14 @@ function toMemoryValidationError(error: unknown): Error {
 
 /**
  * Resolve a memory:// URL to an absolute filesystem path under memory root.
- * Only valid for `memory://root` and `memory://root/<path>` URLs.
  */
 export function resolveMemoryUrlToPath(url: InternalUrl, memoryRoot: string): string {
 	const namespace = url.rawHost || url.hostname;
 	if (!namespace) {
 		throw new Error("memory:// URL requires a namespace: memory://root");
 	}
-	if (namespace !== ROOT_NAMESPACE) {
-		throw new Error(
-			`Unknown memory namespace: ${namespace}. Supported: ${ROOT_NAMESPACE}, ${SEARCH_NAMESPACE}, ${ITEM_NAMESPACE}, ${SINCE_NAMESPACE}, ${BROWSE_NAMESPACE}`,
-		);
+	if (namespace !== MEMORY_NAMESPACE) {
+		throw new Error(`Unknown memory namespace: ${namespace}. Supported: ${MEMORY_NAMESPACE}`);
 	}
 
 	const rawPathname = url.rawPathname ?? url.pathname;
@@ -68,7 +53,7 @@ export function resolveMemoryUrlToPath(url: InternalUrl, memoryRoot: string): st
 	}
 
 	try {
-		validateRelativePath(relativePath);
+		validateRelativePath(relativePath, "memory");
 	} catch (error) {
 		throw toMemoryValidationError(error);
 	}
@@ -76,42 +61,12 @@ export function resolveMemoryUrlToPath(url: InternalUrl, memoryRoot: string): st
 	return path.resolve(memoryRoot, relativePath);
 }
 
-function parseScopeParam(raw: string | null): string[] | undefined {
-	if (!raw) return undefined;
-	const parts = raw
-		.split(",")
-		.map(s => s.trim())
-		.filter(Boolean);
-	return parts.length > 0 ? parts : undefined;
-}
-
-function parseNumberParam(raw: string | null): number | undefined {
-	if (raw === null) return undefined;
-	const n = Number(raw);
-	return Number.isFinite(n) ? n : undefined;
-}
-
-function jsonResource(url: InternalUrl, payload: unknown, notes: readonly string[] = []): InternalResource {
-	const content = JSON.stringify(payload, null, 2);
-	return {
-		url: url.href,
-		content,
-		contentType: "application/json",
-		size: Buffer.byteLength(content, "utf-8"),
-		notes,
-	};
-}
-
 /**
  * Protocol handler for memory:// URLs.
  *
  * URL forms:
- * - `memory://root`                — memory_summary.md
- * - `memory://root/<path>`         — relative file under memory root
- * - `memory://search?text=…&scope=…&limit=…&focus=…&hops=…&profile=…` — recall hits (JSON)
- * - `memory://item/<id>`           — single node body (JSON)
- * - `memory://since/<ISO8601>`     — diff payload (stub until W7)
- * - `memory://browse`              — TUI panel hint (W8)
+ * - memory://root - Reads memory_summary.md
+ * - memory://root/<path> - Reads a relative file under memory root
  */
 export class MemoryProtocolHandler implements ProtocolHandler {
 	readonly scheme = "memory";
@@ -119,33 +74,6 @@ export class MemoryProtocolHandler implements ProtocolHandler {
 	constructor(private readonly options: MemoryProtocolOptions) {}
 
 	async resolve(url: InternalUrl): Promise<InternalResource> {
-		const namespace = (url.rawHost || url.hostname || "").toLowerCase();
-		switch (namespace) {
-			case ROOT_NAMESPACE:
-				return this.#resolveRoot(url);
-			case SEARCH_NAMESPACE:
-				return this.#resolveSearch(url);
-			case ITEM_NAMESPACE:
-				return this.#resolveItem(url);
-			case SINCE_NAMESPACE:
-				return this.#resolveSince(url);
-			case BROWSE_NAMESPACE:
-				return this.#resolveBrowse(url);
-			default:
-				throw new Error(
-					`Unknown memory namespace: ${namespace || "(empty)"}. Supported: ${ROOT_NAMESPACE}, ${SEARCH_NAMESPACE}, ${ITEM_NAMESPACE}, ${SINCE_NAMESPACE}, ${BROWSE_NAMESPACE}`,
-				);
-		}
-	}
-
-	#repoRoot(): string {
-		if (this.options.getRepoRoot) return path.resolve(this.options.getRepoRoot());
-		// Infer from `<project>/.spell/memory` → `<project>`.
-		const memoryRoot = path.resolve(this.options.getMemoryRoot());
-		return path.dirname(path.dirname(memoryRoot));
-	}
-
-	async #resolveRoot(url: InternalUrl): Promise<InternalResource> {
 		const memoryRoot = path.resolve(this.options.getMemoryRoot());
 		let resolvedRoot: string;
 		try {
@@ -167,7 +95,9 @@ export class MemoryProtocolHandler implements ProtocolHandler {
 			const realParent = await fs.realpath(parentDir);
 			ensureWithinRoot(realParent, resolvedRoot);
 		} catch (error) {
-			if (!isEnoent(error)) throw error;
+			if (!isEnoent(error)) {
+				throw error;
+			}
 		}
 
 		let realTargetPath: string;
@@ -200,54 +130,5 @@ export class MemoryProtocolHandler implements ProtocolHandler {
 			sourcePath: realTargetPath,
 			notes: [],
 		};
-	}
-
-	#resolveSearch(url: InternalUrl): InternalResource {
-		const sp = url.searchParams;
-		const text = sp.get("text") ?? undefined;
-		const focus = sp.get("focus") ?? undefined;
-		if (!text && !focus) {
-			throw new Error("memory://search requires `text` or `focus` query param");
-		}
-		const result = executeOrg({
-			command: "recall",
-			text,
-			focus,
-			scope: parseScopeParam(sp.get("scope")),
-			graphHops: parseNumberParam(sp.get("hops")),
-			limit: parseNumberParam(sp.get("limit")),
-			profile: sp.get("profile") ?? undefined,
-			includePersonal:
-				sp.get("include_personal") === "true" || sp.get("includePersonal") === "true" ? true : undefined,
-			repoRoot: this.#repoRoot(),
-		});
-		if (result.error) throw new Error(String(result.output));
-		return jsonResource(url, result.output);
-	}
-
-	async #resolveItem(url: InternalUrl): Promise<InternalResource> {
-		const rawPathname = url.rawPathname ?? url.pathname;
-		const id = rawPathname && rawPathname !== "/" ? decodeURIComponent(rawPathname.slice(1)) : "";
-		if (!id) throw new Error("memory://item requires an id: memory://item/<id>");
-		// Reuse the tool dispatcher so the URL surface returns the same
-		// {node, neighbors, lineage} shape agents see via `memory({action:"about"})`.
-		const payload = await dispatchMemoryAction({ action: "about", id }, this.#repoRoot());
-		return jsonResource(url, payload);
-	}
-
-	async #resolveSince(url: InternalUrl): Promise<InternalResource> {
-		const rawPathname = url.rawPathname ?? url.pathname;
-		const ts = rawPathname && rawPathname !== "/" ? decodeURIComponent(rawPathname.slice(1)) : "";
-		if (!ts) throw new Error("memory://since requires a timestamp: memory://since/<ISO8601>");
-		const payload = await diffMemorySince(this.#repoRoot(), ts);
-		return jsonResource(url, payload, [payload.note]);
-	}
-
-	#resolveBrowse(url: InternalUrl): InternalResource {
-		const payload = {
-			browse: true,
-			hint: "Open TUI panel via /memory slash command",
-		};
-		return jsonResource(url, payload, ["Open TUI panel via /memory slash command"]);
 	}
 }

@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import { validateRelativePath } from "./skill-protocol";
+import { validateRelativePath } from "./path-validation";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
 
 export interface CanvasProtocolOptions {
@@ -88,7 +88,7 @@ function getRelativePath(url: InternalUrl, namespace: CanvasNamespace): string {
 	}
 
 	try {
-		validateRelativePath(relativePath);
+		validateRelativePath(relativePath, "canvas");
 	} catch (error) {
 		throw toCanvasValidationError(error);
 	}

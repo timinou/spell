@@ -13,8 +13,8 @@
 use std::{error::Error, fmt};
 
 use miette::{
-	Diagnostic as MietteDiagnostic, GraphicalReportHandler, GraphicalTheme,
-	LabeledSpan, NamedSource, Severity, SourceCode, SourceSpan,
+	Diagnostic as MietteDiagnostic, GraphicalReportHandler, GraphicalTheme, LabeledSpan,
+	NamedSource, Severity, SourceCode, SourceSpan,
 };
 
 use crate::types::{Diagnostic, DiagnosticVariant, Span};
@@ -65,10 +65,8 @@ impl MietteDiagnostic for DiagReport {
 
 	fn labels(&self) -> Option<Box<dyn Iterator<Item = LabeledSpan> + '_>> {
 		self.span.map(|sp| {
-			Box::new(std::iter::once(LabeledSpan::new_with_span(
-				Some("here".into()),
-				sp,
-			))) as Box<dyn Iterator<Item = LabeledSpan>>
+			Box::new(std::iter::once(LabeledSpan::new_with_span(Some("here".into()), sp)))
+				as Box<dyn Iterator<Item = LabeledSpan>>
 		})
 	}
 }
@@ -81,39 +79,31 @@ fn variant_info(variant: &DiagnosticVariant) -> (String, String, Severity) {
 			"Check the CodePath syntax; see the specification for valid grammar".into(),
 			Severity::Error,
 		),
-		DiagnosticVariant::FileNotFound => (
-			"E_FILE_NOT_FOUND".into(),
-			"Check the path and permissions".into(),
-			Severity::Error,
-		),
+		DiagnosticVariant::FileNotFound => {
+			("E_FILE_NOT_FOUND".into(), "Check the path and permissions".into(), Severity::Error)
+		},
 		DiagnosticVariant::ArtifactNotFound => (
 			"E_ARTIFACT_NOT_FOUND".into(),
 			"The artifact may have expired or been deleted".into(),
 			Severity::Error,
 		),
 		DiagnosticVariant::UnknownLocatorScheme { available } => {
-			let help = format!(
-				"Unknown scheme. Available schemes: {}",
-				available.join(", ")
-			);
+			let help = format!("Unknown scheme. Available schemes: {}", available.join(", "));
 			("E_UNKNOWN_LOCATOR_SCHEME".into(), help, Severity::Error)
-		}
+		},
 		DiagnosticVariant::SuffixSuggestion { tried, suggestion } => {
-			let help =
-				format!("Did you mean `{suggestion}` instead of `{tried}`?");
+			let help = format!("Did you mean `{suggestion}` instead of `{tried}`?");
 			("E_SUFFIX_SUGGESTION".into(), help, Severity::Warning)
-		}
+		},
 		DiagnosticVariant::NoMatches => (
 			"E_NO_MATCHES".into(),
 			"The path resolved to zero results; try broadening the query".into(),
 			Severity::Warning,
 		),
 		DiagnosticVariant::AmbiguousTarget { count } => {
-			let help = format!(
-				"Use a more specific path to narrow results; found {count} matches"
-			);
+			let help = format!("Use a more specific path to narrow results; found {count} matches");
 			("E_AMBIGUOUS_TARGET".into(), help, Severity::Error)
-		}
+		},
 		DiagnosticVariant::UnsupportedOperation => (
 			"E_UNSUPPORTED_OPERATION".into(),
 			"This resolver does not support the requested operation".into(),
@@ -136,9 +126,7 @@ fn variant_info(variant: &DiagnosticVariant) -> (String, String, Severity) {
 		),
 		DiagnosticVariant::EncodingFallback => (
 			"E_ENCODING_FALLBACK".into(),
-			"File is not valid UTF-8; contents were read with a lossy \
-			 encoding fallback"
-				.into(),
+			"File is not valid UTF-8; contents were read with a lossy encoding fallback".into(),
 			Severity::Warning,
 		),
 		DiagnosticVariant::SchemeNotImplemented => (
@@ -153,15 +141,12 @@ fn variant_info(variant: &DiagnosticVariant) -> (String, String, Severity) {
 		),
 		DiagnosticVariant::StaleAnchor => (
 			"E_STALE_ANCHOR".into(),
-			"The file has changed since the anchor was read; re-read and retry"
-				.into(),
+			"The file has changed since the anchor was read; re-read and retry".into(),
 			Severity::Error,
 		),
 		DiagnosticVariant::ZeroByteDeleteBlocked => (
 			"E_ZERO_BYTE_DELETE_BLOCKED".into(),
-			"Use a bare-path target to remove the file instead of a zero-byte \
-			 delete"
-				.into(),
+			"Use a bare-path target to remove the file instead of a zero-byte delete".into(),
 			Severity::Warning,
 		),
 		DiagnosticVariant::Cancelled => (
@@ -171,9 +156,7 @@ fn variant_info(variant: &DiagnosticVariant) -> (String, String, Severity) {
 		),
 		DiagnosticVariant::RangeBoundsInverted => (
 			"E_RANGE_BOUNDS_INVERTED".into(),
-			"The start of the range is greater than the end (e.g. [10..5]); \
-			 swap the bounds"
-				.into(),
+			"The start of the range is greater than the end (e.g. [10..5]); swap the bounds".into(),
 			Severity::Error,
 		),
 		DiagnosticVariant::RangeClamped => (
@@ -183,13 +166,13 @@ fn variant_info(variant: &DiagnosticVariant) -> (String, String, Severity) {
 		),
 		DiagnosticVariant::IncompatibleTargetShape => (
 			"E_INCOMPATIBLE_TARGET_SHAPE".into(),
-			"The target shape is incompatible with the requested Op family"
-				.into(),
+			"The target shape is incompatible with the requested Op family".into(),
 			Severity::Error,
 		),
 		DiagnosticVariant::PeerConflict => (
 			"E_PEER_CONFLICT".into(),
-			"Another session holds an active intent on the target; retry after the peer releases its lock"
+			"Another session holds an active intent on the target; retry after the peer releases its \
+			 lock"
 				.into(),
 			Severity::Error,
 		),
@@ -211,17 +194,18 @@ pub fn render_diagnostic(diag: &Diagnostic, source: Option<&str>) -> String {
 	});
 
 	let report = DiagReport {
-		message:  diag.message.clone(),
+		message: diag.message.clone(),
 		code,
 		help,
 		severity,
-		source:   named_source,
+		source: named_source,
 		span,
 	};
 
 	let mut output = String::new();
 	let handler = GraphicalReportHandler::new_themed(GraphicalTheme::unicode_nocolor());
-	// render_report only fails if the fmt::Write impl (String) errors, which it won't.
+	// render_report only fails if the fmt::Write impl (String) errors, which it
+	// won't.
 	handler.render_report(&mut output, &report).unwrap();
 	output
 }
@@ -245,11 +229,7 @@ mod tests {
 		start: usize,
 		end: usize,
 	) -> Diagnostic {
-		Diagnostic {
-			variant,
-			message: message.into(),
-			span: Some(Span { start, end }),
-		}
+		Diagnostic { variant, message: message.into(), span: Some(Span { start, end }) }
 	}
 
 	// ── No-source tests (1 per variant) ───────────────────────────
@@ -270,10 +250,7 @@ mod tests {
 
 	#[test]
 	fn render_artifact_not_found() {
-		let d = diag(
-			DiagnosticVariant::ArtifactNotFound,
-			"artifact `abc123` not found",
-		);
+		let d = diag(DiagnosticVariant::ArtifactNotFound, "artifact `abc123` not found");
 		let out = d.render(None);
 		assert!(out.contains("E_ARTIFACT_NOT_FOUND"), "output:\n{out}");
 	}
@@ -294,10 +271,7 @@ mod tests {
 	#[test]
 	fn render_suffix_suggestion() {
 		let d = diag(
-			DiagnosticVariant::SuffixSuggestion {
-				tried:      "foo".into(),
-				suggestion: "bar".into(),
-			},
+			DiagnosticVariant::SuffixSuggestion { tried: "foo".into(), suggestion: "bar".into() },
 			"no matches; did you mean `bar`?",
 		);
 		let out = d.render(None);
@@ -314,10 +288,7 @@ mod tests {
 
 	#[test]
 	fn render_ambiguous_target() {
-		let d = diag(
-			DiagnosticVariant::AmbiguousTarget { count: 5 },
-			"found 5 matching nodes",
-		);
+		let d = diag(DiagnosticVariant::AmbiguousTarget { count: 5 }, "found 5 matching nodes");
 		let out = d.render(None);
 		assert!(out.contains("E_AMBIGUOUS_TARGET"), "output:\n{out}");
 		assert!(out.contains("5"), "count absent:\n{out}");
@@ -325,20 +296,15 @@ mod tests {
 
 	#[test]
 	fn render_unsupported_operation() {
-		let d = diag(
-			DiagnosticVariant::UnsupportedOperation,
-			"delete not supported by this resolver",
-		);
+		let d =
+			diag(DiagnosticVariant::UnsupportedOperation, "delete not supported by this resolver");
 		let out = d.render(None);
 		assert!(out.contains("E_UNSUPPORTED_OPERATION"), "output:\n{out}");
 	}
 
 	#[test]
 	fn render_missing_actions() {
-		let d = diag(
-			DiagnosticVariant::MissingActions,
-			"no actions provided",
-		);
+		let d = diag(DiagnosticVariant::MissingActions, "no actions provided");
 		let out = d.render(None);
 		assert!(out.contains("E_MISSING_ACTIONS"), "output:\n{out}");
 	}
@@ -350,98 +316,69 @@ mod tests {
 			"no resolver handles this action kind",
 		);
 		let out = d.render(None);
-		assert!(
-			out.contains("E_UNSUPPORTED_ACTION_FOR_RESOLVER"),
-			"output:\n{out}"
-		);
+		assert!(out.contains("E_UNSUPPORTED_ACTION_FOR_RESOLVER"), "output:\n{out}");
 	}
 
 	#[test]
 	fn render_inaccessible() {
-		let d = diag(
-			DiagnosticVariant::Inaccessible,
-			"permission denied: /root/secret",
-		);
+		let d = diag(DiagnosticVariant::Inaccessible, "permission denied: /root/secret");
 		let out = d.render(None);
 		assert!(out.contains("E_INACCESSIBLE"), "output:\n{out}");
 	}
 
 	#[test]
 	fn render_encoding_fallback() {
-		let d = diag(
-			DiagnosticVariant::EncodingFallback,
-			"file is not UTF-8; using lossy fallback",
-		);
+		let d = diag(DiagnosticVariant::EncodingFallback, "file is not UTF-8; using lossy fallback");
 		let out = d.render(None);
 		assert!(out.contains("E_ENCODING_FALLBACK"), "output:\n{out}");
 	}
 
 	#[test]
 	fn render_scheme_not_implemented() {
-		let d = diag(
-			DiagnosticVariant::SchemeNotImplemented,
-			"scheme `ftp` is not implemented",
-		);
+		let d = diag(DiagnosticVariant::SchemeNotImplemented, "scheme `ftp` is not implemented");
 		let out = d.render(None);
 		assert!(out.contains("E_SCHEME_NOT_IMPLEMENTED"), "output:\n{out}");
 	}
 
 	#[test]
 	fn render_file_exists() {
-		let d = diag(
-			DiagnosticVariant::FileExists,
-			"target `out.txt` already exists",
-		);
+		let d = diag(DiagnosticVariant::FileExists, "target `out.txt` already exists");
 		let out = d.render(None);
 		assert!(out.contains("E_FILE_EXISTS"), "output:\n{out}");
 	}
 
 	#[test]
 	fn render_stale_anchor() {
-		let d = diag(
-			DiagnosticVariant::StaleAnchor,
-			"anchor hash mismatch; file changed",
-		);
+		let d = diag(DiagnosticVariant::StaleAnchor, "anchor hash mismatch; file changed");
 		let out = d.render(None);
 		assert!(out.contains("E_STALE_ANCHOR"), "output:\n{out}");
 	}
 
 	#[test]
 	fn render_zero_byte_delete_blocked() {
-		let d = diag(
-			DiagnosticVariant::ZeroByteDeleteBlocked,
-			"delete would leave file at zero bytes",
-		);
+		let d =
+			diag(DiagnosticVariant::ZeroByteDeleteBlocked, "delete would leave file at zero bytes");
 		let out = d.render(None);
 		assert!(out.contains("E_ZERO_BYTE_DELETE_BLOCKED"), "output:\n{out}");
 	}
 
 	#[test]
 	fn render_cancelled() {
-		let d = diag(
-			DiagnosticVariant::Cancelled,
-			"operation cancelled by user",
-		);
+		let d = diag(DiagnosticVariant::Cancelled, "operation cancelled by user");
 		let out = d.render(None);
 		assert!(out.contains("E_CANCELLED"), "output:\n{out}");
 	}
 
 	#[test]
 	fn render_range_bounds_inverted() {
-		let d = diag(
-			DiagnosticVariant::RangeBoundsInverted,
-			"range 10..5 has start > end",
-		);
+		let d = diag(DiagnosticVariant::RangeBoundsInverted, "range 10..5 has start > end");
 		let out = d.render(None);
 		assert!(out.contains("E_RANGE_BOUNDS_INVERTED"), "output:\n{out}");
 	}
 
 	#[test]
 	fn render_range_clamped() {
-		let d = diag(
-			DiagnosticVariant::RangeClamped,
-			"range clamped to file bounds [0..100]",
-		);
+		let d = diag(DiagnosticVariant::RangeClamped, "range clamped to file bounds [0..100]");
 		let out = d.render(None);
 		assert!(out.contains("E_RANGE_CLAMPED"), "output:\n{out}");
 	}
@@ -453,22 +390,14 @@ mod tests {
 			"cannot apply symbolReplace to a line target",
 		);
 		let out = d.render(None);
-		assert!(
-			out.contains("E_INCOMPATIBLE_TARGET_SHAPE"),
-			"output:\n{out}"
-		);
+		assert!(out.contains("E_INCOMPATIBLE_TARGET_SHAPE"), "output:\n{out}");
 	}
 
 	// ── Source + span rendering ───────────────────────────────────
 
 	#[test]
 	fn render_with_source_span() {
-		let d = diag_spanned(
-			DiagnosticVariant::ParseError,
-			"unexpected token at position 5",
-			5,
-			6,
-		);
+		let d = diag_spanned(DiagnosticVariant::ParseError, "unexpected token at position 5", 5, 6);
 		let out = d.render(Some("hello @world"));
 		assert!(out.contains("E_PARSE_ERROR"), "output:\n{out}");
 		// The source line should appear in the output.

@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -491,6 +492,9 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					artifactPath,
 					artifactUri,
 					spillPolicy,
+					schemeRoot: this.session.cwd,
+					schemeHome: os.homedir(),
+					schemeSessionDir: this.session.getArtifactsDir?.() ?? undefined,
 					onChunk: chunk => {
 						tailBuffer.append(chunk);
 						if (onUpdate) {

@@ -7,8 +7,8 @@
 //! build until a match arm is added here.
 //!
 //! # Design decisions (PLAN-308 D-2, D-3)
-//! - NAPI carries STRUCTURED METADATA (not JSON Schema). Each language
-//!   renders schema natively.
+//! - NAPI carries STRUCTURED METADATA (not JSON Schema). Each language renders
+//!   schema natively.
 //! - 12-case `FieldType` enum mediates the FFI.
 //! - Source of truth: hand-written match. No macro magic.
 
@@ -119,8 +119,8 @@ fn heading_target_field() -> FieldSchema {
 
 fn content_field(required: bool) -> FieldSchema {
 	FieldSchema {
-		name:        "content",
-		type_name:   FieldType::Content,
+		name: "content",
+		type_name: FieldType::Content,
 		required,
 		description: "New file contents (string or string[])",
 	}
@@ -128,8 +128,8 @@ fn content_field(required: bool) -> FieldSchema {
 
 fn find_field(required: bool) -> FieldSchema {
 	FieldSchema {
-		name:        "find",
-		type_name:   FieldType::Content,
+		name: "find",
+		type_name: FieldType::Content,
 		required,
 		description: "Text pattern to search for",
 	}
@@ -167,7 +167,8 @@ fn scope_field() -> FieldSchema {
 		name:        "scope",
 		type_name:   FieldType::SymScope,
 		required:    false,
-		description: "Replacement scope: whole (default), body (content MUST include outer braces { ... }), or target",
+		description: "Replacement scope: whole (default), body (content MUST include outer braces { \
+		              ... }), or target",
 	}
 }
 
@@ -248,7 +249,8 @@ fn allow_sibling_delete_field() -> FieldSchema {
 		name:        "allowSiblingDelete",
 		type_name:   FieldType::Bool,
 		required:    false,
-		description: "Allow deleting sibling symbols when removing the last declaration (default: false)",
+		description: "Allow deleting sibling symbols when removing the last declaration (default: \
+		              false)",
 	}
 }
 
@@ -326,13 +328,24 @@ impl Op {
 			OpKind::FileFindReplace => OpSchema {
 				kind:          "fileFindReplace",
 				target_family: TargetFamily::File,
-				fields:        vec![target_field(), find_field(true), content_field(true), occurrence_field()],
-				description:   "Find-and-replace within a file using structural matching (tree-sitter aware)",
+				fields:        vec![
+					target_field(),
+					find_field(true),
+					content_field(true),
+					occurrence_field(),
+				],
+				description:   "Find-and-replace within a file using structural matching (tree-sitter \
+				                aware)",
 			},
 			OpKind::FileRawTextReplace => OpSchema {
 				kind:          "fileRawTextReplace",
 				target_family: TargetFamily::File,
-				fields:        vec![target_field(), find_field(true), content_field(true), occurrence_field()],
+				fields:        vec![
+					target_field(),
+					find_field(true),
+					content_field(true),
+					occurrence_field(),
+				],
 				description:   "Find-and-replace within a file using raw text matching",
 			},
 
@@ -402,13 +415,23 @@ impl Op {
 			OpKind::SymbolFindReplace => OpSchema {
 				kind:          "symbolFindReplace",
 				target_family: TargetFamily::Symbol,
-				fields:        vec![symbol_target_field(), find_field(true), content_field(true), occurrence_field()],
+				fields:        vec![
+					symbol_target_field(),
+					find_field(true),
+					content_field(true),
+					occurrence_field(),
+				],
 				description:   "Find-and-replace within a symbol using structural matching",
 			},
 			OpKind::SymbolRawTextReplace => OpSchema {
 				kind:          "symbolRawTextReplace",
 				target_family: TargetFamily::Symbol,
-				fields:        vec![symbol_target_field(), find_field(true), content_field(true), occurrence_field()],
+				fields:        vec![
+					symbol_target_field(),
+					find_field(true),
+					content_field(true),
+					occurrence_field(),
+				],
 				description:   "Find-and-replace within a symbol using raw text matching",
 			},
 			OpKind::SymbolMove => OpSchema {
@@ -487,8 +510,9 @@ impl Op {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use strum::IntoEnumIterator;
+
+	use super::*;
 
 	#[test]
 	fn all_schemas_count_matches_op_kind_count() {
@@ -537,11 +561,7 @@ mod tests {
 				k if k.starts_with("heading") => TargetFamily::Heading,
 				_ => panic!("unknown prefix in {}", s.kind),
 			};
-			assert_eq!(
-				s.target_family, expected,
-				"family mismatch for {}",
-				s.kind
-			);
+			assert_eq!(s.target_family, expected, "family mismatch for {}", s.kind);
 		}
 	}
 

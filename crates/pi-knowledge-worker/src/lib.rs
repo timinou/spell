@@ -11,8 +11,10 @@
 
 pub mod embedder_adapter;
 pub mod engine;
+pub mod lane_code;
 pub mod lane_org;
 pub mod repo_cache;
+pub mod subscribe;
 
 use std::sync::{Mutex, OnceLock};
 

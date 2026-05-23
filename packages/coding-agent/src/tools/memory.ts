@@ -522,7 +522,7 @@ export async function diffMemorySince(
 	repoRoot: string,
 	tsIso: string,
 ): Promise<{
-	added: unknown[];
+	added: Array<{ id: string; file: string; mtime: string }>;
 	modified: Array<{ id: string; file: string; mtime: string }>;
 	deleted: unknown[];
 	ts: string;
@@ -533,6 +533,7 @@ export async function diffMemorySince(
 		throw new Error(`memory.since: invalid timestamp: ${tsIso}`);
 	}
 	const memoryRoot = path.join(repoRoot, ".spell", "memory");
+	const added: Array<{ id: string; file: string; mtime: string }> = [];
 	const modified: Array<{ id: string; file: string; mtime: string }> = [];
 	for (const sub of SINCE_SCAN_DIRS) {
 		const dir = path.join(memoryRoot, sub);
@@ -546,7 +547,7 @@ export async function diffMemorySince(
 		for (const name of entries) {
 			if (!name.endsWith(".org")) continue;
 			const file = path.join(dir, name);
-			let stat: { mtimeMs: number };
+			let stat: { mtimeMs: number; birthtimeMs: number };
 			try {
 				stat = await fs.stat(file);
 			} catch (err) {
@@ -555,12 +556,27 @@ export async function diffMemorySince(
 			}
 			if (stat.mtimeMs <= tsMs) continue;
 			const id = await extractFirstCustomId(file, sub, name);
-			modified.push({ id, file, mtime: new Date(stat.mtimeMs).toISOString() });
+			const entry = { id, file, mtime: new Date(stat.mtimeMs).toISOString() };
+			// PLAN-315 W7 (T10.6 fix): distinguish newly-created from
+			// modified-after-creation files via birthtime. A file whose
+			// birthtime postdates the cutoff is `added`; otherwise it
+			// existed before and was mutated → `modified`.
+			//
+			// birthtimeMs is 0 on filesystems that don't support birthtime;
+			// fall back to mtime-based classification (treat as modified) so
+			// behaviour stays close to pre-fix on unsupported FS.
+			const createdAfter = stat.birthtimeMs > 0 && stat.birthtimeMs > tsMs;
+			if (createdAfter) {
+				added.push(entry);
+			} else {
+				modified.push(entry);
+			}
 		}
 	}
 	// Stable order: by id ascending.
+	added.sort((a, b) => a.id.localeCompare(b.id));
 	modified.sort((a, b) => a.id.localeCompare(b.id));
-	return { added: [], modified, deleted: [], ts: tsIso, note: SINCE_GRANULARITY_NOTE };
+	return { added, modified, deleted: [], ts: tsIso, note: SINCE_GRANULARITY_NOTE };
 }
 
 const CUSTOM_ID_LINE_RE = /^\s*:CUSTOM_ID:\s+(\S+)\s*$/m;

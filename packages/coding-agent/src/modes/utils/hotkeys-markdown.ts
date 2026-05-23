@@ -47,6 +47,7 @@ export function buildHotkeysMarkdown(bindings: HotkeysMarkdownBindings): string 
 		`| \`${expandToolsKey}\` | Toggle tool output expansion |`,
 		`| \`${subagentViewerKey}\` | View running subagents |`,
 		"| `Ctrl+T` | Toggle todo list expansion |",
+		"| `Alt+M` | Open the memory browser |",
 		"| `Ctrl+G` | Edit message in external editor |",
 		`| \`${sttKey}\` | Toggle speech-to-text recording |`,
 		"| `#` | Open prompt actions |",
