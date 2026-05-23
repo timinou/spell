@@ -163,7 +163,10 @@ pub fn build(_ctx: Option<&SessionContext>) -> SchemeProfile {
 		scheme:       "org",
 		root:         RootTemplate::Virtual,
 		layout:       PathLayout::Indexed,
-		loader:       ContentLoader::Indexed { lookup: Arc::new(OrgIdLookup::default()) },
+		loader:       ContentLoader::Indexed {
+			lookup:    Arc::new(OrgIdLookup::default()),
+			read_mode: pi_code_path::ReadMode::Utf8Text,
+		},
 		capabilities: SchemeCapabilities {
 			fs_backed:           true,
 			codepath_compatible: true,

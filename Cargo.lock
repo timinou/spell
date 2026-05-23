@@ -4112,6 +4112,7 @@ dependencies = [
  "pi-workspace-cache",
  "portable-pty",
  "rayon",
+ "regex",
  "ropey",
  "scraper",
  "serde",

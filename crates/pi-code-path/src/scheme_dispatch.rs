@@ -265,7 +265,7 @@ fn dispatch(
 				source_mtime: None,
 			})
 		},
-		ContentLoader::Indexed { lookup } => {
+		ContentLoader::Indexed { lookup, read_mode } => {
 			let id = m
 				.id
 				.as_deref()
@@ -275,7 +275,7 @@ fn dispatch(
 			let mut resolved = read_file_with_range(
 				&addr.path,
 				addr.range,
-				ReadMode::Utf8Text,
+				*read_mode,
 				url.to_string(),
 				profile.capabilities.mime_hint,
 			)?;
@@ -607,8 +607,10 @@ mod tests {
 			}
 		}
 		let mut reg = SchemeRegistry::new();
+		// PLAN-310: skill is no longer reserved (moved to callback). Use
+		// memory which is still kernel-declarative.
 		let err = reg
-			.register_callback("skill".into(), Arc::new(DummyCb), Default::default())
+			.register_callback("memory".into(), Arc::new(DummyCb), Default::default())
 			.unwrap_err();
 		assert!(err.message.contains("reserved"));
 	}

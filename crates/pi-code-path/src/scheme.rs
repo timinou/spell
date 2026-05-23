@@ -285,7 +285,10 @@ pub enum ContentLoader {
 	/// Embedded compile-time table. Used by `pi://`.
 	Static { table: &'static phf::Map<&'static str, &'static str> },
 	/// Indexed loader — body is an id, lookup produces (path, range).
-	Indexed { lookup: Arc<dyn IndexLookup> },
+	/// `read_mode` controls binary handling: `Utf8Text` for known-text
+	/// indices (org), `Auto` for indices that may resolve to binary
+	/// content (artifact images/pdfs).
+	Indexed { lookup: Arc<dyn IndexLookup>, read_mode: ReadMode },
 	/// Callback escape hatch — JS-resident schemes.
 	Callback(Arc<dyn SchemeCallback>),
 }

@@ -65,7 +65,7 @@ import { loadSkills as loadSkillsInternal, type Skill, type SkillWarning } from 
 import { type FileSlashCommand, loadSlashCommands as loadSlashCommandsInternal } from "./extensibility/slash-commands";
 import {
 	AgentProtocolHandler,
-	ArtifactProtocolHandler,
+
 	CanvasProtocolHandler,
 	createTaskUriProtocolHandlers,
 	InternalUrlRouter,
@@ -1049,7 +1049,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const internalRouter = new InternalUrlRouter();
 	const getArtifactsDir = () => sessionManager.getArtifactsDir();
 	internalRouter.register(new AgentProtocolHandler({ getArtifactsDir }));
-	internalRouter.register(new ArtifactProtocolHandler({ getArtifactsDir }));
+	// PLAN-310 BUG-396: artifact:// is kernel-owned via Indexed loader
+	// (UserRoot + mtime-cached cross-session scan).
 	internalRouter.register(
 		new MemoryProtocolHandler({
 			getMemoryRoot: () => getMemoryRoot(agentDir, settings.getCwd()),

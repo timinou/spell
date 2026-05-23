@@ -29,7 +29,7 @@ function makeSkill(name: string, p: string, _content: string): Skill {
 		filePath: p,
 		baseDir: path.dirname(p),
 		source: "native",
-		_source: { providerId: "native", sourcePath: p, displayPath: p } as Skill["_source"],
+		_source: { providerId: "native", sourcePath: p, displayPath: p } as unknown as Skill["_source"],
 	};
 }
 
