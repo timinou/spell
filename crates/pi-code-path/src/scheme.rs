@@ -187,16 +187,19 @@ impl PathLayout {
 	pub fn parse(&self, body: &str) -> Result<LayoutMatch, Diagnostic> {
 		match self {
 			Self::Direct => {
+				if body.is_empty() {
+					return Err(layout_err("a path is required"));
+				}
 				Ok(LayoutMatch { path: Some(PathBuf::from(body)), fragment: None, id: None })
 			},
 
 			Self::NamedDir { entry_file, subpath_allowed } => {
 				if body.is_empty() {
-					return Err(layout_err("NamedDir requires a name"));
+					return Err(layout_err("a name is required"));
 				}
 				let (name, rest) = body.split_once('/').unwrap_or((body, ""));
 				if name.is_empty() {
-					return Err(layout_err("NamedDir name must not be empty"));
+					return Err(layout_err("name must not be empty"));
 				}
 				let mut p = PathBuf::from(name);
 				if rest.is_empty() {
@@ -204,7 +207,7 @@ impl PathLayout {
 				} else if *subpath_allowed {
 					p.push(rest);
 				} else {
-					return Err(layout_err("subpath not allowed for this scheme"));
+					return Err(layout_err("subpaths are not allowed"));
 				}
 				Ok(LayoutMatch { path: Some(p), fragment: None, id: None })
 			},
@@ -212,13 +215,13 @@ impl PathLayout {
 			Self::Namespaced { namespace, default_file, subpath_allowed } => {
 				if body.is_empty() {
 					return Err(layout_err(&format!(
-						"Namespaced layout requires '{namespace}' namespace: {namespace}://[/subpath]"
+						"missing namespace (expected '{namespace}')"
 					)));
 				}
 				let (ns, rest) = body.split_once('/').unwrap_or((body, ""));
 				if ns != namespace {
 					return Err(layout_err(&format!(
-						"unknown namespace '{ns}'; supported: {namespace}"
+						"unknown namespace '{ns}' (expected '{namespace}')"
 					)));
 				}
 				let p = if rest.is_empty() {
@@ -226,14 +229,17 @@ impl PathLayout {
 				} else if *subpath_allowed {
 					PathBuf::from(rest)
 				} else {
-					return Err(layout_err("subpath not allowed for this scheme"));
+					return Err(layout_err("subpaths are not allowed"));
 				};
 				Ok(LayoutMatch { path: Some(p), fragment: None, id: None })
 			},
 
 			Self::NamedFile { extension } => {
-				if body.is_empty() || body.contains('/') {
-					return Err(layout_err("NamedFile expects a bare name"));
+				if body.is_empty() {
+					return Err(layout_err("an id is required"));
+				}
+				if body.contains('/') {
+					return Err(layout_err("id must not contain '/'"));
 				}
 				Ok(LayoutMatch {
 					path:     Some(PathBuf::from(format!("{body}.{extension}"))),
@@ -247,7 +253,7 @@ impl PathLayout {
 					.split_once('#')
 					.map_or((body, None), |(i, f)| (i, Some(f.to_string())));
 				if id.is_empty() {
-					return Err(layout_err("IdFragment requires an id"));
+					return Err(layout_err("an id is required"));
 				}
 				Ok(LayoutMatch {
 					path: None, // loader resolves via SynthSpec / FragmentEntry::File
@@ -257,6 +263,9 @@ impl PathLayout {
 			},
 
 			Self::Indexed => {
+				if body.is_empty() {
+					return Err(layout_err("an id is required"));
+				}
 				Ok(LayoutMatch { path: None, fragment: None, id: Some(body.to_string()) })
 			},
 		}
@@ -383,6 +392,10 @@ pub struct SchemeCapabilities {
 #[derive(Clone, Debug)]
 pub struct SchemeProfile {
 	pub scheme:       &'static str,
+	/// Canonical URI form shown in diagnostics, e.g. `"memory://root[/<subpath>]"`.
+	/// Surfaced when the body is missing or malformed so users see the expected
+	/// shape rather than internal layout enum variants.
+	pub usage:        &'static str,
 	pub root:         RootTemplate,
 	pub layout:       PathLayout,
 	pub loader:       ContentLoader,

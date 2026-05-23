@@ -17,6 +17,7 @@ use pi_code_path::{
 pub fn build(_ctx: Option<&SessionContext>) -> SchemeProfile {
 	SchemeProfile {
 		scheme:       "memory",
+		usage:        "memory://root[/<subpath>]",
 		root:         RootTemplate::ProjectRoot { rel: PathBuf::from(".spell/memory") },
 		layout:       PathLayout::Namespaced {
 			namespace:        "root".to_string(),

@@ -134,6 +134,8 @@ export interface SchemeCallbackOptions {
 	mimeHint?: string;
 	bashExpandable?: boolean;
 	budgetMs?: number;
+	/** Canonical URI form shown in error diagnostics. Default `<scheme>://<body>`. */
+	usage?: string;
 }
 
 declare module "../bindings" {

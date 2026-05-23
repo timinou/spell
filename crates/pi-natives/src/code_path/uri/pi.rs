@@ -19,6 +19,7 @@ include!(concat!(env!("OUT_DIR"), "/pi_docs_index.rs"));
 pub fn build(_ctx: Option<&SessionContext>) -> SchemeProfile {
 	SchemeProfile {
 		scheme:       "pi",
+		usage:        "pi://<filename>.md",
 		root:         RootTemplate::Virtual,
 		layout:       PathLayout::Direct,
 		loader:       ContentLoader::Static { table: &EMBEDDED_DOCS },

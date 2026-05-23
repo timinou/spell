@@ -114,8 +114,10 @@ impl SchemeRegistry {
 				"scheme '{scheme}' already registered; unregister first to override"
 			)));
 		}
+		let usage_buf = format!("{scheme}://<body>");
 		let profile = SchemeProfile {
 			scheme: Box::leak(scheme.clone().into_boxed_str()),
+			usage: Box::leak(usage_buf.into_boxed_str()),
 			root: crate::scheme::RootTemplate::Virtual,
 			layout: PathLayout::Direct,
 			loader: ContentLoader::Callback(callback),
@@ -210,7 +212,7 @@ fn dispatch(
 		return Err(cancelled());
 	}
 
-	let m = profile.layout.parse(body)?;
+	let m = profile.layout.parse(body).map_err(|d| with_usage(d, profile))?;
 	let root = profile.root.resolve(ctx)?;
 
 	// IdFragment owns its own dispatch path — bypasses ContentLoader.
@@ -253,7 +255,10 @@ fn dispatch(
 			let key = path.to_string_lossy();
 			let text = table.get(key.as_ref()).ok_or_else(|| Diagnostic {
 				variant: DiagnosticVariant::FileNotFound,
-				message: format!("static entry not found: {url}"),
+				message: format!(
+					"{url}: no embedded doc named '{key}' (usage: {})",
+					profile.usage
+				),
 				span:    None,
 			})?;
 			Ok(ResolvedContent {
@@ -270,7 +275,7 @@ fn dispatch(
 				.id
 				.as_deref()
 				.ok_or_else(|| invalid("Indexed loader requires Indexed layout"))?;
-			let addr = lookup.lookup(id, ctx, cancel)?;
+			let addr = lookup.lookup(id, ctx, cancel).map_err(|d| with_usage(d, profile))?;
 			let notes = addr.notes.clone();
 			let mut resolved = read_file_with_range(
 				&addr.path,
@@ -283,7 +288,7 @@ fn dispatch(
 			Ok(resolved)
 		},
 		ContentLoader::Callback(cb) => {
-			let mut content = cb.resolve(body, ctx, cancel)?;
+			let mut content = cb.resolve(body, ctx, cancel).map_err(|d| with_usage(d, profile))?;
 			if content.url.is_empty() {
 				content.url = url.to_string();
 			}
@@ -429,7 +434,20 @@ fn clamp_range(text: String, range: Option<std::ops::Range<usize>>) -> String {
 fn invalid(msg: impl Into<String>) -> Diagnostic {
 	Diagnostic { variant: DiagnosticVariant::ParseError, message: msg.into(), span: None }
 }
-
+/// Decorate a layout-parse diagnostic with the scheme name + canonical usage
+/// hint, so users see `agent://: an id is required (usage: agent://<id>)`
+/// instead of a raw `"NamedFile expects a bare name"`.
+fn with_usage(mut d: Diagnostic, profile: &SchemeProfile) -> Diagnostic {
+	d.message = if profile.usage.is_empty() {
+		format!("{}://: {}", profile.scheme, d.message)
+	} else {
+		format!(
+			"{}://: {} (usage: {})",
+			profile.scheme, d.message, profile.usage
+		)
+	};
+	d
+}
 /// Lexically normalize a path without touching the filesystem:
 ///   - collapse `.` components
 ///   - resolve `..` by popping a non-`..` parent
@@ -519,6 +537,7 @@ mod tests {
 	fn skill_profile(_ctx: Option<&SessionContext>) -> SchemeProfile {
 		SchemeProfile {
 			scheme:       "skill",
+			usage:        "skill://<name>[/<subpath>]",
 			root:         RootTemplate::ProjectRoot { rel: ".spell/skills".into() },
 			layout:       PathLayout::NamedDir {
 				entry_file:      "SKILL.md".into(),
@@ -625,6 +644,7 @@ mod tests {
 
 		let jobs_profile = SchemeProfile {
 			scheme:       "jobs",
+			usage:        "jobs://<id>[#<fragment>]",
 			root:         RootTemplate::ProjectRoot { rel: ".spell/jobs".into() },
 			layout:       PathLayout::IdFragment {
 				default:   FragmentEntry::Synth(SynthSpec {

@@ -67,6 +67,9 @@ pub struct SchemeCallbackOptions {
 	pub bash_expandable:     Option<bool>,
 	/// Sync callback budget in ms. Default: 5000.
 	pub budget_ms:           Option<u32>,
+	/// Canonical URI form shown in error diagnostics. Default: `<scheme>://<body>`.
+	/// Pass something like `"rule://<name>"` to give users an exact shape to copy.
+	pub usage:               Option<String>,
 }
 
 /// Register a runtime URI scheme backed by a JS callback.
@@ -96,6 +99,7 @@ pub fn register_scheme_callback(
 		mime_hint:           None,
 		bash_expandable:     None,
 		budget_ms:           None,
+		usage:               None,
 	});
 	let budget = Duration::from_millis(opts.budget_ms.unwrap_or(5000) as u64);
 	let cb =
@@ -105,9 +109,12 @@ pub fn register_scheme_callback(
 		// servers.
 		Box::leak(s.into_boxed_str())
 	});
+	let usage_str = opts.usage.unwrap_or_else(|| format!("{scheme}://<body>"));
+	let usage = Box::leak(usage_str.into_boxed_str());
 	let profile = SchemeProfile {
 		// Box::leak so &'static str outlives the call. One leak per registration.
 		scheme:       Box::leak(scheme.clone().into_boxed_str()),
+		usage,
 		root:         RootTemplate::Virtual,
 		layout:       PathLayout::Direct,
 		loader:       ContentLoader::Callback(cb),

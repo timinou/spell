@@ -117,7 +117,7 @@ impl IndexLookup for OrgIdLookup {
 		let index = self.get_or_build(ctx)?;
 		let (_scope, path) = index.resolve(body).ok_or_else(|| Diagnostic {
 			variant: DiagnosticVariant::FileNotFound,
-			message: format!("org item not found: org://{body}"),
+			message: format!("no item with CUSTOM_ID '{body}'"),
 			span:    None,
 		})?;
 		let path = path.to_path_buf();
@@ -161,6 +161,7 @@ fn find_item_range_and_title(
 pub fn build(_ctx: Option<&SessionContext>) -> SchemeProfile {
 	SchemeProfile {
 		scheme:       "org",
+		usage:        "org://<CUSTOM_ID>",
 		root:         RootTemplate::Virtual,
 		layout:       PathLayout::Indexed,
 		loader:       ContentLoader::Indexed {
