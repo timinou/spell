@@ -2,7 +2,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { Skill } from "../extensibility/skills";
 import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls";
-import { validateRelativePath } from "../internal-urls/skill-protocol";
+import { KERNEL_OWNED_SCHEMES, RouterDelegateToKernel } from "../internal-urls/router";
+import { validateRelativePath } from "../internal-urls/path-validation";
 import type { InternalResource } from "../internal-urls/types";
 import { ToolError } from "./tool-errors";
 
@@ -141,6 +142,14 @@ async function resolveInternalUrlToPath(
 		return resolvedLocalPath;
 	}
 
+	// PLAN-310 cutover: kernel-owned schemes are handled by the brush
+	// WordPreprocessor hook in the kernel-side shell exec (see
+	// crates/brush-core-vendored). The TS pre-pass returns the URL unchanged
+	// so brush sees it and dispatches to SchemeRegistry.
+	if (KERNEL_OWNED_SCHEMES.has(scheme)) {
+		return url;
+	}
+
 	if (!internalRouter || !internalRouter.canHandle(url)) {
 		throw new ToolError(
 			`Cannot resolve ${scheme}:// URL in bash command: ${url}\n` +
@@ -152,6 +161,11 @@ async function resolveInternalUrlToPath(
 	try {
 		resource = await internalRouter.resolve(url);
 	} catch (error) {
+		if (error instanceof RouterDelegateToKernel) {
+			// Defensive: should have been caught by KERNEL_OWNED_SCHEMES check above,
+			// but the router may delegate for additional reasons in the future.
+			return url;
+		}
 		const message = error instanceof Error ? error.message : String(error);
 		throw new ToolError(`Failed to resolve ${scheme}:// URL in bash command: ${url}\n${message}`);
 	}

@@ -5,8 +5,8 @@
 //! expectations.
 
 use pi_code_path::introspection::{
-	list_diagnostic_variants, list_edge_kinds, list_op_kinds, list_qualifiers,
 	DIAGNOSTIC_VARIANT_COUNT_MIN, EDGE_KIND_COUNT, OP_KIND_COUNT, QUALIFIER_COUNT_MIN,
+	list_diagnostic_variants, list_edge_kinds, list_op_kinds, list_qualifiers,
 };
 
 #[test]

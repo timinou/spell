@@ -6,15 +6,17 @@ import { executeCodePath } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { InternalUrlRouter } from "../internal-urls";
+import { RouterDelegateToKernel } from "../internal-urls/router";
 import type { Theme } from "../modes/theme/theme";
 import getDescription from "../prompts/tools/get.md" with { type: "text" };
 import { renderCodeCell } from "../tui";
 import { type CodePathFormatMode, formatCodePathResult } from "./codepath-result";
-import type { GetParams } from "./codepath-types";
+import type { CodePathChunk, GetParams, NodeRefDto } from "./codepath-types";
 import { getSchema } from "./codepath-types";
 import type { ToolSession } from "./index";
 import { replaceTabs } from "./render-utils";
 import { type DetailsWithMeta, toolResult } from "./tool-result";
+import { sessionContextOpts } from "./codepath-session";
 
 type GetToolResultDetails = DetailsWithMeta & {
 	format?: string;
@@ -36,6 +38,41 @@ function classifyBareTarget(target: string): "bare-plain" | "qualified" | "other
 	if (/[*?[]/.test(target)) return "other";
 	if (target.includes("#")) return "qualified";
 	return "bare-plain";
+}
+
+/**
+ * PLAN-310: extract a single kernel-resolved §<scheme> node from a CodePath
+ * result, if present. The kernel SchemeRegistry emits one such NodeRef per
+ * successful URI resolution; the JS handler shape (notes prefix + content +
+ * sourceInternal) is rebuilt by `renderSchemeNode` below.
+ */
+// §kinds emitted by fs/text/outline dialects — NOT URI-scheme nodes.
+const NON_SCHEME_NODE_KINDS = new Set([
+	"§file", "§dir", "§symlink", "§outline",
+	"§line", "§match", "§stat", "§tree",
+	"§empty", "§error", "§raw", "§listing",
+]);
+
+function extractSchemeNode(chunks: CodePathChunk[]): NodeRefDto | null {
+	const nodes = chunks.flatMap(c => c.nodes);
+	if (nodes.length !== 1) return null;
+	const node = nodes[0];
+	if (typeof node.kind !== "string" || !node.kind.startsWith("§") || node.kind.length < 2) return null;
+	if (NON_SCHEME_NODE_KINDS.has(node.kind)) return null;
+	return node;
+}
+
+function renderSchemeNode(node: NodeRefDto, params: GetParams, target: string): AgentToolResult {
+	const content = node.content;
+	const body = content?.kind === "text" ? content.value : (content as { text?: string; value?: string } | undefined)?.text ?? (content as { value?: string } | undefined)?.value ?? "";
+	const meta = (node.metadata ?? {}) as Record<string, unknown>;
+	const notes = Array.isArray(meta.notes) ? (meta.notes as string[]) : [];
+	const notePrefix = notes.length ? `${notes.map(n => `[note] ${n}`).join("\n")}\n` : "";
+	const text = `${notePrefix}${body || `[§empty] ${target}`}`;
+	return toolResult<GetToolResultDetails>({ format: params.format, target })
+		.text(text)
+		.sourceInternal(node.locator)
+		.done();
 }
 
 /**
@@ -300,6 +337,7 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		}
 
 		const chunks = await executeCodePath({
+			...sessionContextOpts(this.session ?? null),
 			command: "get",
 			target,
 
@@ -308,6 +346,15 @@ export class GetTool implements AgentTool<typeof getSchema> {
 			gitignore: params.gitignore,
 			abortSignal: signal,
 		});
+
+		// PLAN-310 cutover: kernel-resolved URI scheme nodes (kind="§<scheme>")
+		// render with the legacy JS-handler shape: optional notes prefix +
+		// content body + sourceInternal(url). This bypasses the buildNodeList
+		// `[§kind]` label so the result is shape-equivalent to the JS path.
+		const schemeNode = extractSchemeNode(chunks);
+		if (schemeNode) {
+			return renderSchemeNode(schemeNode, params, target);
+		}
 
 		const result = formatCodePathResult(chunks, {
 			format: (params.format as CodePathFormatMode) ?? "node-list",
@@ -393,6 +440,10 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		try {
 			resource = await router.resolve(uriBase);
 		} catch (error) {
+			// PLAN-310 cutover: the router throws RouterDelegateToKernel for schemes
+			// in KERNEL_OWNED_SCHEMES. Falling through to executeCodePath lets the
+			// kernel SchemeRegistry handle resolution.
+			if (error instanceof RouterDelegateToKernel) return null;
 			const message = error instanceof Error ? error.message : String(error);
 			return toolResult<GetToolResultDetails>({ format: params.format, target, error: message })
 				.text(`[§error] ${target}\n  ${message}`)
@@ -416,6 +467,7 @@ export class GetTool implements AgentTool<typeof getSchema> {
 				}
 			}
 			const chunks = await executeCodePath({
+				...sessionContextOpts(this.session ?? null),
 				command: "get",
 				target: effectiveTarget,
 				format: params.format,

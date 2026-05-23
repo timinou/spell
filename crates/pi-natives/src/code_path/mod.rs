@@ -7,29 +7,30 @@
 //! pi-code-graph).
 
 pub mod abort;
-pub mod diff_qualifier;
 pub mod code_resolver;
 pub mod css_resolver;
 pub mod dialect_registry;
+pub mod diff_qualifier;
 pub mod edge_resolver;
 pub mod edit_history;
 pub mod extractors;
 pub mod heading_resolver;
-pub mod introspection_napi;
 pub mod image_pipeline;
+pub mod introspection_napi;
 pub mod manage;
 pub mod marshal;
 pub mod napi;
+pub mod runtime_schemes;
+pub mod scheme_callback;
 pub mod uri;
 
 #[cfg(test)]
 mod dispatch_tests;
 #[cfg(test)]
-mod manage_tests;
+mod language_matrix_tests;
 #[cfg(test)]
-mod routing_tests;
+mod manage_tests;
 #[cfg(test)]
 mod op_matrix_tests;
 #[cfg(test)]
-mod language_matrix_tests;
-
+mod routing_tests;

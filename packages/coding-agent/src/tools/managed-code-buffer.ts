@@ -2,6 +2,7 @@ import * as nodePath from "node:path";
 import * as piNatives from "@oh-my-pi/pi-natives";
 import { executeCodePath } from "@oh-my-pi/pi-natives";
 import type { SessionIdSource } from "../session/edit-coordinator";
+import { sessionContextOpts } from "./codepath-session";
 
 function resolveSessionId(session: SessionIdSource): string | undefined {
 	return session.getSessionId?.()?.trim() || undefined;
@@ -77,6 +78,7 @@ export async function applyManagedBufferContent(
 	const sessionId = resolveSessionId(options.session);
 	const root = nodePath.dirname(file);
 	const chunks = await executeCodePath({
+		...sessionContextOpts(undefined),
 		command: "edit",
 		target: nodePath.basename(file),
 		actions: [{ kind: "fileWrite", content, force: true }],

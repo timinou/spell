@@ -781,7 +781,9 @@ pub(crate) fn action_allow_sibling_delete(action: &Value) -> bool {
 		.unwrap_or(false)
 }
 
-pub(crate) fn action_occurrence(action: &Value) -> std::result::Result<Occurrence, CodeEngineError> {
+pub(crate) fn action_occurrence(
+	action: &Value,
+) -> std::result::Result<Occurrence, CodeEngineError> {
 	match action.get("occurrence") {
 		None | Some(Value::Null) => Ok(Occurrence::Unique),
 		Some(Value::String(value)) => match value.as_str() {
@@ -864,7 +866,10 @@ fn symbol_target_id(file_target_id: &str, symbol_path: &str) -> String {
 	format!("{file_target_id}::{symbol_path}")
 }
 
-pub(crate) fn target_range(buffer: &CodeBuffer, resolved: Option<&ResolvedSymbol>) -> (usize, usize) {
+pub(crate) fn target_range(
+	buffer: &CodeBuffer,
+	resolved: Option<&ResolvedSymbol>,
+) -> (usize, usize) {
 	match resolved {
 		Some(symbol) => (symbol.start_byte, symbol.end_byte),
 		None => (0, buffer.source().len()),
@@ -1217,7 +1222,6 @@ fn execute_operation_node(
 		last_proof,
 	))
 }
-
 
 /// Find the enclosing symbol for a given line in the outline.
 fn find_enclosing_symbol(entries: &[OutlineEntry], line: u32) -> Option<String> {
@@ -1607,7 +1611,6 @@ fn render_navigate_result(
 fn render_diff_hunk(hunk: pi_code_engine::diff::DiffHunk) -> Value {
 	json!({ "oldStart": hunk.old_start, "oldCount": hunk.old_count, "newStart": hunk.new_start, "newCount": hunk.new_count, "kind": format!("{:?}", hunk.kind), "content": hunk.content })
 }
-
 
 pub(crate) fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 	let command = options
@@ -2164,12 +2167,6 @@ mod tests {
 		}
 	}
 
-
-
-
-
-
-
 	#[test]
 	fn execute_code_buffer_inner_persisted_edit_preserves_undo_history() {
 		let _guard = lock_buffer_registry();
@@ -2177,22 +2174,24 @@ mod tests {
 		fs::write(&path, "export const value = 1;\n").expect("seed file");
 		let edit = crate::code_path::napi::execute_code_path_inner(
 			crate::code_path::napi::CodePathTaskOptions {
-				command: "edit".to_string(),
-				target: path.file_name().unwrap().to_string_lossy().to_string(),
-				transaction: None,
-				limit: None,
-				head: None,
-				tail: None,
-				offset: None,
-				format: None,
-				root: path.parent().map(|p| p.to_string_lossy().to_string()),
-				actions: Some(serde_json::json!([
+				command:            "edit".to_string(),
+				target:             path.file_name().unwrap().to_string_lossy().to_string(),
+				transaction:        None,
+				limit:              None,
+				head:               None,
+				tail:               None,
+				offset:             None,
+				format:             None,
+				root:               path.parent().map(|p| p.to_string_lossy().to_string()),
+				actions:            Some(serde_json::json!([
 					{"kind": "fileWrite", "content": "export const value = 2;\n"}
 				])),
-				manage: None,
-				gitignore: None,
+				manage:             None,
+				gitignore:          None,
 				artifact_threshold: None,
-				session_id: None,
+				session_id:         None,
+				home:               None,
+				session_dir:        None,
 			},
 			crate::task::CancelToken::default(),
 		)
@@ -2221,7 +2220,6 @@ mod tests {
 		assert_eq!(diff["error"], json!(false));
 		assert_eq!(diff["output"].as_array().expect("hunks").len(), 1);
 	}
-
 
 	#[test]
 	fn edn_outline_read_and_edit_use_data_paths() {
@@ -2596,7 +2594,6 @@ mod tests {
 			}]
 		}))
 	}
-
 
 	#[test]
 	fn delete_via_kill_node_allows_non_zero_byte_outcome() {

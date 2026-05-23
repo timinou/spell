@@ -22,6 +22,8 @@ fn manage_opts(subcommand: &str, target: &str, root: PathBuf) -> CodePathTaskOpt
 		artifact_threshold: None,
 		gitignore:          None,
 		session_id:         None,
+		home:               None,
+		session_dir:        None,
 	}
 }
 

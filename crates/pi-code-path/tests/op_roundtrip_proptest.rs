@@ -2,8 +2,7 @@
 //! Ensures serde `tag = "kind", rename_all = "camelCase"` + field-level
 //! renames produce JSON that TS codegen can emit and Rust can consume.
 
-use pi_code_path::op::*;
-use pi_code_path::ast::*;
+use pi_code_path::{ast::*, op::*};
 use serde_json;
 use strum::IntoEnumIterator;
 
@@ -47,9 +46,7 @@ fn sample_op(kind: OpKind) -> Op {
 			content: ActionContent::Multi(vec!["a".into(), "b".into()]),
 			force:   false,
 		},
-		OpKind::FileDelete => Op::FileDelete {
-			target: FileTarget::new(bare).unwrap(),
-		},
+		OpKind::FileDelete => Op::FileDelete { target: FileTarget::new(bare).unwrap() },
 		OpKind::FileAppend => Op::FileAppend {
 			target:  FileTarget::new(bare).unwrap(),
 			content: ActionContent::Single("appended".into()),
@@ -136,21 +133,18 @@ fn sample_op(kind: OpKind) -> Op {
 			content:    ActionContent::Multi(vec!["new1".into(), "new2".into()]),
 			occurrence: None,
 		},
-		OpKind::SymbolMove => Op::SymbolMove {
-			target:    SymbolTarget::new(sym).unwrap(),
-			direction: Direction::Down,
+		OpKind::SymbolMove => {
+			Op::SymbolMove { target: SymbolTarget::new(sym).unwrap(), direction: Direction::Down }
 		},
 		OpKind::SymbolClone => Op::SymbolClone {
 			target:    SymbolTarget::new(sym).unwrap(),
 			rename_to: Some(Identifier("Cloned".into())),
 		},
-		OpKind::SymbolSplice => Op::SymbolSplice {
-			target: SymbolTarget::new(sym).unwrap(),
-			mode:   SpliceMode::OnlySelf,
+		OpKind::SymbolSplice => {
+			Op::SymbolSplice { target: SymbolTarget::new(sym).unwrap(), mode: SpliceMode::OnlySelf }
 		},
-		OpKind::SymbolTranspose => Op::SymbolTranspose {
-			target: SymbolTarget::new(sym).unwrap(),
-			column: 3,
+		OpKind::SymbolTranspose => {
+			Op::SymbolTranspose { target: SymbolTarget::new(sym).unwrap(), column: 3 }
 		},
 
 		OpKind::CssRenameClassToken => Op::CssRenameClassToken {
@@ -168,16 +162,12 @@ fn sample_op(kind: OpKind) -> Op {
 			find:    "--old".into(),
 			replace: "--new".into(),
 		},
-		OpKind::CssRemoveDeadStyle => Op::CssRemoveDeadStyle {
-			target: CssTarget::new(bare).unwrap(),
+		OpKind::CssRemoveDeadStyle => {
+			Op::CssRemoveDeadStyle { target: CssTarget::new(bare).unwrap() }
 		},
 
-		OpKind::HeadingPromote => Op::HeadingPromote {
-			target: HeadingTarget::new(bare).unwrap(),
-		},
-		OpKind::HeadingDemote => Op::HeadingDemote {
-			target: HeadingTarget::new(bare).unwrap(),
-		},
+		OpKind::HeadingPromote => Op::HeadingPromote { target: HeadingTarget::new(bare).unwrap() },
+		OpKind::HeadingDemote => Op::HeadingDemote { target: HeadingTarget::new(bare).unwrap() },
 		OpKind::HeadingReplaceBlock => Op::HeadingReplaceBlock {
 			target:  HeadingTarget::new(bare).unwrap(),
 			content: ActionContent::Multi(vec!["new".into(), "block".into()]),
@@ -189,16 +179,12 @@ fn sample_op(kind: OpKind) -> Op {
 fn all_op_kinds_roundtrip() {
 	for kind in OpKind::iter() {
 		let op = sample_op(kind);
-		let json = serde_json::to_string(&op)
-			.unwrap_or_else(|e| panic!("serialize {kind:?}: {e}"));
+		let json = serde_json::to_string(&op).unwrap_or_else(|e| panic!("serialize {kind:?}: {e}"));
 
 		let deserialized: Op = serde_json::from_str(&json)
 			.unwrap_or_else(|e| panic!("deserialize {kind:?}: {e}\nJSON: {json}"));
 
-		assert_eq!(
-			op, deserialized,
-			"round-trip mismatch for {kind:?}\nJSON: {json}",
-		);
+		assert_eq!(op, deserialized, "round-trip mismatch for {kind:?}\nJSON: {json}",);
 	}
 }
 
@@ -241,10 +227,7 @@ fn occurrence_index_roundtrip() {
 #[test]
 fn symbol_clone_no_rename_roundtrip() {
 	let sym = symbol_code_path();
-	let op = Op::SymbolClone {
-		target:    SymbolTarget::new(sym).unwrap(),
-		rename_to: None,
-	};
+	let op = Op::SymbolClone { target: SymbolTarget::new(sym).unwrap(), rename_to: None };
 	let json = serde_json::to_string(&op).unwrap();
 	let back: Op = serde_json::from_str(&json).unwrap();
 	assert_eq!(op, back);
@@ -263,7 +246,10 @@ fn symbol_delete_no_sibling_roundtrip() {
 	let back: Op = serde_json::from_str(&json).unwrap();
 	assert_eq!(op, back);
 	// allow_sibling_delete: false serializes (serde default)
-	assert!(json.contains("allowSiblingDelete"), "allowSiblingDelete should be present in JSON: {json}");
+	assert!(
+		json.contains("allowSiblingDelete"),
+		"allowSiblingDelete should be present in JSON: {json}"
+	);
 }
 
 #[test]
@@ -286,8 +272,6 @@ fn op_tag_field_is_camelcase() {
 	};
 	let json2 = serde_json::to_string(&rename).unwrap();
 	let parsed2: serde_json::Value = serde_json::from_str(&json2).unwrap();
-	assert!(parsed2.get("newName").is_some(),
-		"newName field should exist in JSON: {json2}");
-	assert!(parsed2.get("new_name").is_none(),
-		"new_name (snake) should NOT exist in JSON: {json2}");
+	assert!(parsed2.get("newName").is_some(), "newName field should exist in JSON: {json2}");
+	assert!(parsed2.get("new_name").is_none(), "new_name (snake) should NOT exist in JSON: {json2}");
 }

@@ -71,10 +71,7 @@ fn open_returns_disk_content_when_disk_changes_without_watcher_event() {
 
 	let buf = reg.open(&path).expect("re-open");
 	let src = buf.lock().source();
-	assert!(
-		src.contains("v2"),
-		"BUG-374: open() must return disk-fresh content; got {src:?}"
-	);
+	assert!(src.contains("v2"), "BUG-374: open() must return disk-fresh content; got {src:?}");
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -161,6 +158,7 @@ fn open_returns_disk_content_when_watcher_dirty_flag_was_suppressed() {
 	let src = buf.lock().source();
 	assert!(
 		src.contains("v2"),
-		"BUG-374: open() must reload from disk even when watcher dirty flag is suppressed; got {src:?}"
+		"BUG-374: open() must reload from disk even when watcher dirty flag is suppressed; got \
+		 {src:?}"
 	);
 }

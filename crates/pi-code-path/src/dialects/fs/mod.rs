@@ -247,9 +247,12 @@ mod tests {
 		};
 
 		let resolver = FsResolver::new(root.clone());
-		let a = resolver.resolve(&with_slash, &CancellationToken::new())
+		let a = resolver
+			.resolve(&with_slash, &CancellationToken::new())
 			.expect("trailing slash + #tree must not error on an existing dir");
-		let b = resolver.resolve(&without_slash, &CancellationToken::new()).expect("control");
+		let b = resolver
+			.resolve(&without_slash, &CancellationToken::new())
+			.expect("control");
 		assert_eq!(
 			a.len(),
 			b.len(),
@@ -289,7 +292,10 @@ mod tests {
 		assert!(
 			!nodes.iter().any(|n| n.kind == "§not-found"),
 			"§not-found from suffix fallback must not appear with a qualifier; got: {:?}",
-			nodes.iter().map(|n| (&n.kind, &n.locator)).collect::<Vec<_>>()
+			nodes
+				.iter()
+				.map(|n| (&n.kind, &n.locator))
+				.collect::<Vec<_>>()
 		);
 	}
 
@@ -337,18 +343,13 @@ mod tests {
 		fs::write(root.join("src/a.rs"), "").unwrap();
 
 		let cp = CodePath {
-			locator:   Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal(".".to_string())],
-			}),
+			locator:   Locator::Fs(FsLocator { segments: vec![FsSegment::Literal(".".to_string())] }),
 			query:     None,
 			qualifier: None,
 		};
 		let resolver = FsResolver::new(root);
 		let nodes = resolver.resolve(&cp, &CancellationToken::new()).unwrap();
-		assert!(
-			!nodes.is_empty(),
-			"`.` must resolve to the walker root, got empty result"
-		);
+		assert!(!nodes.is_empty(), "`.` must resolve to the walker root, got empty result");
 	}
 
 	#[test]
@@ -360,17 +361,16 @@ mod tests {
 		fs::write(root.join("src/a.rs"), "").unwrap();
 
 		let cp = CodePath {
-			locator:   Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal(".".to_string())],
-			}),
+			locator:   Locator::Fs(FsLocator { segments: vec![FsSegment::Literal(".".to_string())] }),
 			query:     None,
 			qualifier: Some(Qualifier { name: "tree".to_string(), args: None }),
 		};
 		let resolver = FsResolver::new(root);
 		let nodes = resolver.resolve(&cp, &CancellationToken::new()).unwrap();
 		assert!(
-			nodes.iter().any(|n| n.locator.ends_with("src/a.rs")
-				|| n.locator == "src/a.rs"),
+			nodes
+				.iter()
+				.any(|n| n.locator.ends_with("src/a.rs") || n.locator == "src/a.rs"),
 			"`.#tree` must include nested entries, got: {:?}",
 			nodes.iter().map(|n| &n.locator).collect::<Vec<_>>()
 		);
@@ -398,7 +398,9 @@ mod tests {
 		let resolver = FsResolver::new(root);
 		let nodes = resolver.resolve(&cp, &CancellationToken::new()).unwrap();
 		assert!(
-			nodes.iter().any(|n| n.locator.ends_with("src") || n.locator == "src"),
+			nodes
+				.iter()
+				.any(|n| n.locator.ends_with("src") || n.locator == "src"),
 			"`./src` must resolve like `src`, got: {:?}",
 			nodes.iter().map(|n| &n.locator).collect::<Vec<_>>()
 		);

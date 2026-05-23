@@ -50,7 +50,10 @@ impl NameLexer for DummyLexer {
 /// open it without depending on cwd. FEAT-689.
 /// Qualifiers are rejected because the code_buffer `resolve_symbol`
 /// surface only understands simple symbol names.
-pub(crate) fn build_target_id(path: &CodePath, root: Option<&std::path::Path>) -> Result<String, Diagnostic> {
+pub(crate) fn build_target_id(
+	path: &CodePath,
+	root: Option<&std::path::Path>,
+) -> Result<String, Diagnostic> {
 	if path.qualifier.is_some() {
 		return Err(Diagnostic {
 			variant: DiagnosticVariant::UnsupportedOperation,
@@ -295,24 +298,24 @@ impl CodeResolverImpl {
 			message: "buffer has no path".into(),
 			span:    None,
 		})?;
-		let profile = crate::code_buffer::get_profile(path, buffer.language())
-			.map_err(|e| Diagnostic {
+		let profile =
+			crate::code_buffer::get_profile(path, buffer.language()).map_err(|e| Diagnostic {
 				variant: DiagnosticVariant::Inaccessible,
 				message: e.to_string(),
 				span:    None,
 			})?;
-		let prepared = crate::code_buffer::single_action(buffer, &profile, path, &target_id, action_json)
-			.map_err(|e| Diagnostic {
-				variant: DiagnosticVariant::UnsupportedOperation,
-				message: e.to_string(),
-				span:    None,
-			})?;
-		buffer.edit_batch(prepared.edits)
-			.map_err(|e| Diagnostic {
-				variant: DiagnosticVariant::UnsupportedOperation,
-				message: e.to_string(),
-				span:    None,
-			})?;
+		let prepared =
+			crate::code_buffer::single_action(buffer, &profile, path, &target_id, action_json)
+				.map_err(|e| Diagnostic {
+					variant: DiagnosticVariant::UnsupportedOperation,
+					message: e.to_string(),
+					span:    None,
+				})?;
+		buffer.edit_batch(prepared.edits).map_err(|e| Diagnostic {
+			variant: DiagnosticVariant::UnsupportedOperation,
+			message: e.to_string(),
+			span:    None,
+		})?;
 		Ok(MutationOutcome {
 			edit_count:     1,
 			diff:           None,
@@ -335,7 +338,11 @@ impl CodeResolverImpl {
 		let path = if path.is_absolute() {
 			path.to_path_buf()
 		} else {
-			self.root.as_deref().unwrap_or(std::path::Path::new(".")).join(path)
+			self
+				.root
+				.as_deref()
+				.unwrap_or(std::path::Path::new("."))
+				.join(path)
 		};
 
 		let code_paths = vec![target_id];
@@ -343,7 +350,8 @@ impl CodeResolverImpl {
 
 		let (_, outcome) = crate::buffer_registry()
 			.edit_transaction(Some(session_id), &path, &code_paths, |buffer| {
-				self.apply_to_buffer(buffer, target, action_json)
+				self
+					.apply_to_buffer(buffer, target, action_json)
 					.map_err(|d| pi_code_engine::CodeEngineError::Edit(d.message))
 			})
 			.map_err(|e| Diagnostic {
@@ -378,8 +386,7 @@ impl MutationResolver for CodeResolverImpl {
 				let action_json = op_to_code_buffer_action(op);
 				Some(self.apply_via_code_buffer(target.as_codepath(), &action_json))
 			},
-			Op::FileFindReplace { target, .. }
-			| Op::FileRawTextReplace { target, .. } => {
+			Op::FileFindReplace { target, .. } | Op::FileRawTextReplace { target, .. } => {
 				let action_json = op_to_code_buffer_action(op);
 				Some(self.apply_via_code_buffer(target.as_codepath(), &action_json))
 			},
@@ -448,25 +455,19 @@ mod tests {
 
 	#[test]
 	fn op_symbol_replace_whole_routes_through_code_resolver() {
-		// The original PLAN-304 motivating bug: edit { target: "a.ts::Foo", kind: "write" }
-		// returned "no resolver supports action Write". With Op enum + typed dispatch
-		// this must now succeed.
+		// The original PLAN-304 motivating bug: edit { target: "a.ts::Foo", kind:
+		// "write" } returned "no resolver supports action Write". With Op enum +
+		// typed dispatch this must now succeed.
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();
-		std::fs::write(
-			root.join("a.ts"),
-			"function oldName() { return 1; }\n",
-		)
-		.unwrap();
+		std::fs::write(root.join("a.ts"), "function oldName() { return 1; }\n").unwrap();
 
 		let cp = ts_symbol_path(&root.join("a.ts"), "oldName");
 		let target = SymbolTarget::new(cp).unwrap();
 		let op = Op::SymbolReplace {
 			target,
 			scope: SymScope::Whole,
-			content: ActionContent::Single(
-				"function newName() { return 2; }".into(),
-			),
+			content: ActionContent::Single("function newName() { return 2; }".into()),
 		};
 
 		let resolver = ts_resolver();

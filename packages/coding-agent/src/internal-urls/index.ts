@@ -22,9 +22,9 @@
 
 export * from "../swarm/uri-protocol";
 export * from "./agent-protocol";
-export * from "./artifact-protocol";
+// artifact:// is kernel-owned via IndexLookup (PLAN-310 BUG-396)
 export * from "./canvas-protocol";
-export * from "./jobs-protocol";
+// jobs scheme is kernel-owned via callback bridge (PLAN-310 BUG-395)
 export * from "./json-query";
 export * from "./local-protocol";
 export * from "./mcp-protocol";
@@ -32,6 +32,6 @@ export * from "./memory-protocol";
 export * from "./org-protocol";
 export * from "./pi-protocol";
 export * from "./router";
-export * from "./rule-protocol";
-export * from "./skill-protocol";
+// rule + skill schemes are kernel-owned via callback bridges
+// (PLAN-310 BUG-393, BUG-394)
 export type * from "./types";

@@ -1,5 +1,6 @@
 #+TITLE: Episodes 2026-05-22
 
+
 ** ITEM workspace cargo-test flake — diff_qualifier + workspace_cache + code_buffer race on HOME/buffer_registry
 
 5/5 consecutive cargo test --workspace runs green post-fix. Pre-flight closed; PLAN-315 W0 unblocked.
@@ -167,4 +168,17 @@ Merged PLAN-315 W3/W4 (code-graph lane + push-subscribe) with PLAN-316 (non-bloc
 :END:
 :RELATIONS:
 ABOUT: FEAT-779-unify-non-blocking-warm-load-with-code-g
+
+** ITEM Kernel executeCodePath does not register URI scheme resolvers (memory/skill/artifact/agent)
+
+Closed by PLAN-310: kernel SchemeRegistry now resolves all URI schemes natively via declarative SchemeProfile DSL. The Locator::Uri rejection branch in napi.rs:805 is replaced with kernel-side resolution + NodeRef wrapping. Tests previously ignored in code_path_e2e.rs::uri_scheme_tests:: now exercise the real dispatch path through W4 e2e tests and W1 integration tests.
+:PROPERTIES:
+:CUSTOM_ID: EP-f342cbc1ea76192c
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-22T16:14:47Z
+:END:
+:RELATIONS:
+ABOUT: BUG-388-kernel-executecodepath-does-not-register
+
 :END:
