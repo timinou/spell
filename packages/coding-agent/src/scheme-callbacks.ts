@@ -17,13 +17,19 @@ import {
 	unregisterSchemeCallback,
 } from "@oh-my-pi/pi-natives";
 
+/**
+ * Schemes the kernel reserves (declarative profiles in
+ * crates/pi-natives/src/code_path/uri/). Dynamic registration via
+ * `registerScheme` rejects these names; MCP servers and runtime
+ * helpers must pick a non-conflicting schemePrefix.
+ *
+ * PLAN-310 cutover moved rule, skill, jobs to dynamic registration
+ * (callback profiles); they're no longer in this list.
+ */
 export const RESERVED_NATIVE_SCHEMES = [
-	"skill",
-	"rule",
 	"memory",
 	"agent",
 	"artifact",
-	"jobs",
 	"org",
 	"pi",
 	"local",
@@ -88,10 +94,16 @@ export interface AdvertiseError {
  * Register a scheme handler. Validates against reserved native names and
  * already-registered dynamic schemes. Returns null on success, AdvertiseError
  * on rejection (callers can collect to surface diagnostics in batch).
+ *
+ * The resolver MUST return synchronously (or be wrapped to do so). The
+ * underlying napi ThreadsafeFunction expects a direct SchemeResolveResult; a
+ * Promise return value is treated as the value itself and fails field
+ * deserialization on the kernel side. For naturally-async work, do the I/O
+ * synchronously via fs.readFileSync or maintain a JS-side cache.
  */
 export function registerScheme(
 	scheme: string,
-	resolve: (body: string) => Promise<SchemeResolveResult>,
+	resolve: (body: string) => SchemeResolveResult,
 	options?: SchemeRegistrationOptions,
 ): AdvertiseError | null {
 	if (RESERVED_NATIVE_SCHEMES.includes(scheme as (typeof RESERVED_NATIVE_SCHEMES)[number])) {

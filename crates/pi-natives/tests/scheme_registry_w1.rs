@@ -17,56 +17,22 @@ fn registry(ctx: Option<&SessionContext>) -> SchemeRegistry {
 fn auto_registry_contains_w1_profiles() {
 	let reg = registry(None);
 	let names = reg.known_schemes();
-	for expected in ["skill", "rule", "memory", "local", "pi"] {
+	// PLAN-310 BUG-393/394/395: skill, rule, jobs removed from declarative
+	// registry; now wired dynamically via registerScheme at session start.
+	for expected in ["memory", "local", "pi"] {
 		assert!(names.contains(&expected.to_string()), "missing {expected}");
 	}
-}
-
-#[test]
-fn skill_resolves() {
-	let dir = TempDir::new().unwrap();
-	let skill_md = dir.path().join(".spell/skills/canvas/SKILL.md");
-	std::fs::create_dir_all(skill_md.parent().unwrap()).unwrap();
-	std::fs::write(&skill_md, "# canvas skill\n").unwrap();
-	let ctx = SessionContext::new(dir.path(), "/home/u");
-	let reg = registry(Some(&ctx));
-	let uri = UriLocator { scheme: "skill".into(), path: "canvas".into() };
-	let cancel = CancellationToken::new();
-	let r = reg.resolve(&uri, Some(&ctx), &cancel).unwrap();
-	assert_eq!(r.source_path, Some(skill_md));
-	match &r.content {
-		Content::Text { value } => assert!(value.contains("canvas skill")),
-		_ => panic!("expected Text"),
+	for unexpected in ["skill", "rule", "jobs"] {
+		assert!(
+			!names.contains(&unexpected.to_string()),
+			"{unexpected} should no longer be a static profile"
+		);
 	}
 }
 
-#[test]
-fn skill_subpath_resolves() {
-	let dir = TempDir::new().unwrap();
-	let target = dir.path().join(".spell/skills/canvas/scripts/init.py");
-	std::fs::create_dir_all(target.parent().unwrap()).unwrap();
-	std::fs::write(&target, "print('hi')\n").unwrap();
-	let ctx = SessionContext::new(dir.path(), "/home/u");
-	let reg = registry(Some(&ctx));
-	let uri = UriLocator { scheme: "skill".into(), path: "canvas/scripts/init.py".into() };
-	let cancel = CancellationToken::new();
-	let r = reg.resolve(&uri, Some(&ctx), &cancel).unwrap();
-	assert_eq!(r.source_path, Some(target));
-}
-
-#[test]
-fn rule_resolves_with_ext_appended() {
-	let dir = TempDir::new().unwrap();
-	let rule_md = dir.path().join(".spell/rules/canvas-activation.md");
-	std::fs::create_dir_all(rule_md.parent().unwrap()).unwrap();
-	std::fs::write(&rule_md, "# canvas activation rule\n").unwrap();
-	let ctx = SessionContext::new(dir.path(), "/home/u");
-	let reg = registry(Some(&ctx));
-	let uri = UriLocator { scheme: "rule".into(), path: "canvas-activation".into() };
-	let cancel = CancellationToken::new();
-	let r = reg.resolve(&uri, Some(&ctx), &cancel).unwrap();
-	assert_eq!(r.source_path, Some(rule_md));
-}
+// PLAN-310 BUG-393/394: skill:// and rule:// moved to dynamic callback
+// registration. See scheme_callback_w2.rs::rule_callback_resolves_with_source_path
+// for the equivalent test against the callback profile shape.
 
 #[test]
 fn memory_resolves_root() {
@@ -146,10 +112,11 @@ fn unknown_scheme_returns_diagnostic() {
 #[test]
 fn missing_file_returns_filenotfound() {
 	let dir = TempDir::new().unwrap();
-	std::fs::create_dir_all(dir.path().join(".spell/skills")).unwrap();
+	std::fs::create_dir_all(dir.path().join(".spell/memory")).unwrap();
 	let ctx = SessionContext::new(dir.path(), "/home/u");
 	let reg = registry(Some(&ctx));
-	let uri = UriLocator { scheme: "skill".into(), path: "nonexistent".into() };
+	// PLAN-310: use memory:// (kernel-owned) instead of skill:// (now dynamic).
+	let uri = UriLocator { scheme: "memory".into(), path: "root/nonexistent.md".into() };
 	let cancel = CancellationToken::new();
 	let err = reg.resolve(&uri, Some(&ctx), &cancel).unwrap_err();
 	assert!(matches!(err.variant, pi_code_path::types::DiagnosticVariant::FileNotFound));

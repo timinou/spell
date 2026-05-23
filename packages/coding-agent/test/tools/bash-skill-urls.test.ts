@@ -151,7 +151,15 @@ describe("expandSkillUrls", () => {
 });
 
 describe("expandInternalUrls", () => {
-	it("expands skill/agent/artifact/memory/rule URLs in one command", async () => {
+	it.skip("[PLAN-310 cutover] expands skill/agent/artifact/memory/rule URLs in one command", async () => {
+		// All schemes in the original test are now kernel-owned except artifact.
+		// Bash-side expansion now passes through to brush WordPreprocessor for
+		// kernel-owned schemes. This composite test is replaced by per-scheme
+		// tests above.
+		return;
+	});
+
+	it.skip("[legacy] expands skill/agent/artifact/memory/rule URLs in one command", async () => {
 		const skills = [createSkill("valid-skill", "/tmp/skills/valid-skill")];
 		const router = createInternalRouter({
 			"artifact://12": { sourcePath: "/tmp/artifacts/12.bash.log" },
@@ -217,13 +225,12 @@ describe("expandInternalUrls", () => {
 		);
 	});
 
-	it("throws when internal router resolves URL without sourcePath", async () => {
-		const router = createInternalRouter({
-			"rule://my-rule": {},
-		});
-		await expect(expandInternalUrls("cat rule://my-rule", { skills: [], internalRouter: router })).rejects.toThrow(
-			"rule:// URL resolved without a filesystem path",
-		);
+	it.skip("[PLAN-310: kernel-owned via §rule] throws when internal router resolves URL without sourcePath", async () => {
+		// rule is now kernel-owned via callback bridge (BUG-393); bash pre-pass
+		// passes the URL through to brush which calls the kernel. The legacy
+		// 'no sourcePath' error path is replaced by the callback's own error
+		// surface.
+		return;
 	});
 
 	it("surfaces resolver errors with actionable context (for JS-routed schemes)", async () => {

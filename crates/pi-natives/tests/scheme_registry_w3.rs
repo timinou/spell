@@ -17,9 +17,15 @@ fn registry(ctx: Option<&SessionContext>) -> SchemeRegistry {
 fn w3_profiles_present() {
 	let reg = registry(None);
 	let names = reg.known_schemes();
-	for expected in ["agent", "artifact", "jobs", "org"] {
+	// PLAN-310 BUG-395: jobs:// is no longer a static profile (moved to
+	// dynamic callback registration via AsyncJobManager at session start).
+	for expected in ["agent", "artifact", "org"] {
 		assert!(names.contains(&expected.to_string()), "missing {expected}");
 	}
+	assert!(
+		!names.contains(&"jobs".to_string()),
+		"jobs should be dynamic-only post BUG-395"
+	);
 }
 
 // ── agent:// ─────────────────────────────────────────────────────
@@ -77,6 +83,7 @@ fn artifact_resolves_multi_segment_body() {
 
 // ── jobs:// ──────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 fn setup_job(root: &PathBuf, id: &str) {
 	let job_dir = root.join(".spell/jobs").join(id);
 	std::fs::create_dir_all(&job_dir).unwrap();
@@ -87,74 +94,12 @@ fn setup_job(root: &PathBuf, id: &str) {
 }
 
 #[test]
-fn jobs_default_synthesizes_summary() {
-	let dir = TempDir::new().unwrap();
-	let root = dir.path().to_path_buf();
-	setup_job(&root, "job-1");
-
-	let ctx = SessionContext::new(&root, "/home/u");
-	let reg = registry(Some(&ctx));
-	let uri = UriLocator { scheme: "jobs".into(), path: "job-1".into() };
-	let cancel = CancellationToken::new();
-	let r = reg.resolve(&uri, Some(&ctx), &cancel).unwrap();
-	match &r.content {
-		Content::Text { value } => {
-			assert!(value.contains("status: running"));
-			assert!(value.contains("result: 42"));
-			assert!(value.contains("progress: 75%"));
-		},
-		_ => panic!("expected Text"),
-	}
-}
-
-#[test]
-fn jobs_fragment_selects_single_file() {
-	let dir = TempDir::new().unwrap();
-	let root = dir.path().to_path_buf();
-	setup_job(&root, "job-2");
-
-	let ctx = SessionContext::new(&root, "/home/u");
-	let reg = registry(Some(&ctx));
-	let uri = UriLocator { scheme: "jobs".into(), path: "job-2#status".into() };
-	let cancel = CancellationToken::new();
-	let r = reg.resolve(&uri, Some(&ctx), &cancel).unwrap();
-	match &r.content {
-		Content::Text { value } => assert_eq!(value, "running"),
-		_ => panic!("expected Text"),
-	}
-}
-
-#[test]
-fn jobs_unknown_fragment_falls_back_to_default() {
-	let dir = TempDir::new().unwrap();
-	let root = dir.path().to_path_buf();
-	setup_job(&root, "job-3");
-
-	let ctx = SessionContext::new(&root, "/home/u");
-	let reg = registry(Some(&ctx));
-	let uri = UriLocator { scheme: "jobs".into(), path: "job-3#unknown".into() };
-	let cancel = CancellationToken::new();
-	let r = reg.resolve(&uri, Some(&ctx), &cancel).unwrap();
-	match &r.content {
-		Content::Text { value } => {
-			// Falls back to default Synth
-			assert!(value.contains("status:"));
-		},
-		_ => panic!("expected Text"),
-	}
-}
-
-#[test]
-fn jobs_unknown_id_returns_not_found() {
-	let dir = TempDir::new().unwrap();
-	std::fs::create_dir_all(dir.path().join(".spell/jobs")).unwrap();
-	let ctx = SessionContext::new(dir.path(), "/home/u");
-	let reg = registry(Some(&ctx));
-	let uri = UriLocator { scheme: "jobs".into(), path: "no-such-job".into() };
-	let cancel = CancellationToken::new();
-	let err = reg.resolve(&uri, Some(&ctx), &cancel).unwrap_err();
-	assert!(matches!(err.variant, pi_code_path::types::DiagnosticVariant::FileNotFound));
-}
+// PLAN-310 BUG-395: jobs:// moved to dynamic callback registration. Tests
+// previously covering static-profile resolution (jobs_default_synthesizes_
+// summary, jobs_fragment_selects_single_file, jobs_unknown_fragment_falls_
+// back_to_default, jobs_unknown_id_returns_not_found) were removed; the new
+// behavior is tested via the bun-test integration of AsyncJobManager.
+// registerScheme.
 
 // ── org:// ───────────────────────────────────────────────────────
 

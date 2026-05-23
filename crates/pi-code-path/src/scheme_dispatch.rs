@@ -27,8 +27,25 @@ use crate::{
 };
 
 /// Schemes the kernel reserves; runtime registrations must not collide.
+///
+/// PLAN-310 cutover: schemes that have moved to dynamic registration
+/// (callback profile) are explicitly NOT in this list — the agent runtime
+/// is responsible for calling `registerScheme` at session start.
+/// Currently dynamic: rule (BUG-393), skill (BUG-394), jobs (BUG-395).
 pub const RESERVED_SCHEMES: &[&str] =
-	&["skill", "rule", "memory", "agent", "artifact", "jobs", "org", "pi", "local"];
+	&["memory", "agent", "artifact", "org", "pi", "local"];
+
+impl SchemeRegistry {
+	/// Returns true if the scheme is registered AND uses a Callback loader.
+	/// Used by the URI dispatch outer layer to decide whether to fold the
+	/// codepath qualifier back into the URI body as a `#fragment`.
+	pub fn scheme_uses_callback_loader(&self, scheme: &str) -> bool {
+		match self.lookup(scheme) {
+			Some(p) => matches!(p.loader, ContentLoader::Callback(_)),
+			None => false,
+		}
+	}
+}
 
 pub struct SchemeRegistry {
 	profiles: HashMap<&'static str, SchemeProfile>,

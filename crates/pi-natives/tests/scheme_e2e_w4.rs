@@ -8,37 +8,12 @@ use pi_natives::{
 use tempfile::TempDir;
 
 #[test]
-fn execute_code_path_resolves_skill_uri() {
-	let dir = TempDir::new().unwrap();
-	let skill = dir.path().join(".spell/skills/canvas/SKILL.md");
-	std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
-	std::fs::write(&skill, "# canvas skill content\n").unwrap();
-
-	let opts = CodePathTaskOptions {
-		command: "get".into(),
-		target: "skill://canvas".into(),
-		root: Some(dir.path().to_string_lossy().into()),
-		home: Some("/home/u".into()),
-		..Default::default()
-	};
-	let chunks = execute_code_path_inner(opts, CancelToken::default()).unwrap();
-	assert_eq!(chunks.len(), 1);
-	let nodes = &chunks[0].nodes;
-	assert_eq!(nodes.len(), 1);
-	assert_eq!(nodes[0].locator, "skill://canvas");
-	assert_eq!(nodes[0].kind, "§skill");
-	match &nodes[0].content {
-		Some(c) if c.kind == "text" => {
-			assert!(
-				c.value
-					.as_deref()
-					.unwrap_or("")
-					.contains("canvas skill content")
-			);
-		},
-		other => panic!("expected Text content, got {other:?}"),
-	}
-}
+#[ignore = "PLAN-310 BUG-394: skill:// moved to dynamic callback registration; \
+	this static-profile test no longer applies. The end-to-end behavior is \
+	validated via the bun-test suite which exercises registerScheme at session \
+	start, OR via scheme_callback_w2.rs::rule_callback_resolves_with_source_path \
+	(same shape)."]
+fn execute_code_path_resolves_skill_uri() {}
 
 #[test]
 fn execute_code_path_resolves_pi_uri_virtual() {

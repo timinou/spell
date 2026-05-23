@@ -25,6 +25,9 @@ export const KERNEL_OWNED_SCHEMES: ReadonlySet<string> = new Set<string>([
 	"local",  // <session_dir>/local/<path> (Direct layout, fs-backed, write-path note)
 	"org",    // <project>/!tasks/* + <home>/.org/* via MultiRootIndex (Indexed layout)
 	"agent",  // <session_dir>/<id>.md (NamedFile, fs-backed); path-form rewrites to #json:
+	"rule",   // BUG-393: dynamic callback bridges to session.rules in-memory aggregate
+	"skill",  // BUG-394: dynamic callback bridges to session.skills + sub-path fs read
+	"jobs",   // BUG-395: dynamic callback bridges to AsyncJobManager state
 ]);
 
 /**
