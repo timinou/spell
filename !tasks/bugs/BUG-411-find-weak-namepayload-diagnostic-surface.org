@@ -1,5 +1,5 @@
 #+TITLE: find: weak NamePayload diagnostic surfaces as error even when results are valid
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14edc1bec5a09a49
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
 #+CUSTOM_ID: BUG-411-find-weak-namepayload-diagnostic-surface
