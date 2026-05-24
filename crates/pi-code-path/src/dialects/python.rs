@@ -441,6 +441,16 @@ pub fn python_dialect() -> LanguageDialect {
 			// TODO: type→/inherits→/override→ deferred until EdgeKind extension
 			set
 		},
+		kind_aliases: std::collections::HashMap::from([
+			("function", vec!["function_definition"]),
+			("method", vec!["function_definition"]),
+			("class", vec!["class_definition"]),
+			("call", vec!["call"]),
+			("import", vec!["import_statement", "import_from_statement"]),
+			("binding", vec!["assignment", "named_expression"]),
+			("identifier", vec!["identifier"]),
+			("decl", vec!["function_definition", "class_definition", "assignment"]),
+		]),
 	}
 }
 

@@ -329,6 +329,7 @@ pub fn html_dialect() -> LanguageDialect {
 			},
 		],
 		edge_kinds: EdgeKindSet::default(),
+		kind_aliases: std::collections::HashMap::new(),
 	}
 }
 

@@ -396,6 +396,7 @@ pub fn haskell_dialect() -> LanguageDialect {
 			},
 		],
 		edge_kinds: EdgeKindSet::default(),
+		kind_aliases: std::collections::HashMap::new(),
 	}
 }
 
