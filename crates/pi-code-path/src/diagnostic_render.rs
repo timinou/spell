@@ -176,6 +176,11 @@ fn variant_info(variant: &DiagnosticVariant) -> (String, String, Severity) {
 				.into(),
 			Severity::Error,
 		),
+		DiagnosticVariant::Informational => (
+			"I_INFORMATIONAL".into(),
+			"Informational note; query succeeded".into(),
+			Severity::Advice,
+		),
 	}
 }
 

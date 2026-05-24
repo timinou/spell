@@ -281,6 +281,18 @@ fn content_to_string(content: &ActionContent) -> String {
 
 // ── CodeResolverImpl methods ─────────────────────────────────────
 
+/// BUG-410 (PLAN-318 W0): unwrap `CodeEngineError::Edit(s)` to its raw
+/// inner string, avoiding the `edit error: ` prefix that Display would
+/// add. When the inner Diagnostic gets re-wrapped into another
+/// `CodeEngineError::Edit` higher up the stack, Display prepends the
+/// prefix exactly once. Without this, the prefix is added twice.
+fn edit_err_message(e: &pi_code_engine::CodeEngineError) -> String {
+	match e {
+		pi_code_engine::CodeEngineError::Edit(s) => s.clone(),
+		other => other.to_string(),
+	}
+}
+
 impl CodeResolverImpl {
 	/// Shared helper for code_buffer-based mutations.
 	///
@@ -308,12 +320,12 @@ impl CodeResolverImpl {
 			crate::code_buffer::single_action(buffer, &profile, path, &target_id, action_json)
 				.map_err(|e| Diagnostic {
 					variant: DiagnosticVariant::UnsupportedOperation,
-					message: e.to_string(),
+					message: edit_err_message(&e),
 					span:    None,
 				})?;
 		buffer.edit_batch(prepared.edits).map_err(|e| Diagnostic {
 			variant: DiagnosticVariant::UnsupportedOperation,
-			message: e.to_string(),
+			message: edit_err_message(&e),
 			span:    None,
 		})?;
 		Ok(MutationOutcome {

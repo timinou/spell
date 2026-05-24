@@ -93,7 +93,7 @@ fn glob_prefix_fallback_with_diagnostic() {
 	let has_diag = chunks.iter().any(|c| {
 		c.diagnostics
 			.iter()
-			.any(|d| d.message.contains("weak NamePayload parse"))
+			.any(|d| d.message.contains("glob path prefix"))
 	});
 	assert!(has_diag, "expected fallback diagnostic for glob prefix");
 }

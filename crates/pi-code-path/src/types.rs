@@ -123,6 +123,11 @@ pub enum DiagnosticVariant {
 	IncompatibleTargetShape,
 	/// Another session holds an active intent on the target.
 	PeerConflict,
+	/// BUG-411 (PLAN-318 W0): informational diagnostic — the query was
+	/// processed correctly but the kernel wants to surface a contextual
+	/// note (e.g. fallback lexer used, recipe hint). Renderer suppresses
+	/// these when at least one node is returned.
+	Informational,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
