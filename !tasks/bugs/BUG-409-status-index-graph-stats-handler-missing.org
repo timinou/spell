@@ -1,9 +1,10 @@
 #+TITLE: status index: graph_stats handler missing, command always reports unavailable
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14edc1bec5a09a49
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
 #+CUSTOM_ID: BUG-409-status-index-graph-stats-handler-missing
 #+LAYER: pi-natives
+#+COMPLETION_HASH: 07f59c4d7f78d64b
 
 * Initial Message
 
@@ -56,3 +57,5 @@ Out:
 
 - =cargo test -p pi-natives manage::index=
 - Manual: =find { target: ".../some.rs::Foo def→§call_expression" }= then =status { command: "index" }= shows populated counts.
+
+NOTE [2026-05-24]: Closed by PLAN-318 W1 commits e1ec5cf73 + cd42558dc. graph_stats handler now lives in crates/pi-natives/src/code_buffer.rs and reports {warm, file_count, symbol_count, edge_count, built_at_ms} from the workspace CodeGraph cache.
