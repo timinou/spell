@@ -1,5 +1,5 @@
 #+TITLE: edit: substring fallback silently rewrites mid-identifier matches
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14edc1bec5a09a49
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
 #+CUSTOM_ID: BUG-412-edit-substring-fallback-silently-rewrite
