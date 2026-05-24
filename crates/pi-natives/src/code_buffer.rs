@@ -1734,6 +1734,48 @@ pub(crate) fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 			let path = coord_status_probe_path(options);
 			Ok(json_response(coord_status_output(&path), false))
 		},
+		"graph_stats" => {
+			// BUG-409 (PLAN-318 W1): expose the workspace CodeGraph cache state.
+			// Returns `{warm: bool, ...stats}` from the code_graph_cache module.
+			// Lazy: doesn't trigger a build — only peeks. To populate the cache,
+			// run any `def→`/`ref→`/`call→`/`import→` query first.
+			let root = options
+				.get("root")
+				.and_then(Value::as_str)
+				.map(std::path::PathBuf::from)
+				.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
+			if let Some(entry) = crate::code_graph_cache::peek(&root) {
+				let stats = entry.graph.stats();
+				let built_at_ms = entry
+					.built_at
+					.duration_since(std::time::UNIX_EPOCH)
+					.map(|d| d.as_millis() as u64)
+					.unwrap_or(0);
+				Ok(json_response(
+					json!({
+						"available": true,
+						"warm": true,
+						"root": root.display().to_string(),
+						"file_count": stats.file_count,
+						"symbol_count": stats.symbol_count,
+						"edge_count": stats.edge_count,
+						"built_at_ms": built_at_ms,
+					}),
+					false,
+				))
+			} else {
+				Ok(json_response(
+					json!({
+						"available": true,
+						"warm": false,
+						"root": root.display().to_string(),
+      "reason": "no edge query has triggered build yet; run e.g. \
+      						            `find { target: \"path::Sym def\u{2192}\u{a7}call_expression\" }`"
+					}),
+					false,
+				))
+			}
+		},
 		"coord_peer_activity" => {
 			let path = required_path(options)?;
 			let since_ms = options.get("sinceMs").and_then(Value::as_u64).unwrap_or(0);
