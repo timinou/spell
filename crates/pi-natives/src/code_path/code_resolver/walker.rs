@@ -439,7 +439,17 @@ fn head_matches(head: &Head, node: Node<'_>, src: &str, dialect: &LanguageDialec
 			}
 			false
 		},
-		Head::NodeKind(kind) => node.kind() == kind.as_str(),
+		Head::NodeKind(kind) => {
+			// BUG-413 (PLAN-318 W0): raw tree-sitter kind match first (no-regression);
+			// fall back to dialect kind_aliases for universal `§function`/`§method`/etc.
+			if node.kind() == kind.as_str() {
+				return true;
+			}
+			if let Some(raw_kinds) = dialect.kind_aliases.get(kind.as_str()) {
+				return raw_kinds.iter().any(|&rk| node.kind() == rk);
+			}
+			false
+		},
 		Head::AnchorName(name) => dialect
 			.anchors
 			.iter()

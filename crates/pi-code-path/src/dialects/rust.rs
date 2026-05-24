@@ -644,6 +644,16 @@ pub fn rust_dialect() -> LanguageDialect {
 			},
 		],
 		edge_kinds: EdgeKindSet::default(),
+		kind_aliases: std::collections::HashMap::from([
+			("function", vec!["function_item", "function_signature_item"]),
+			("method", vec!["function_item"]),
+			("class", vec!["struct_item", "enum_item", "union_item", "trait_item"]),
+			("call", vec!["call_expression", "macro_invocation"]),
+			("import", vec!["use_declaration", "extern_crate_declaration"]),
+			("binding", vec!["let_declaration", "const_item", "static_item"]),
+			("identifier", vec!["identifier", "type_identifier", "field_identifier"]),
+			("decl", vec!["function_item", "struct_item", "enum_item", "trait_item", "impl_item", "mod_item", "use_declaration"]),
+		]),
 	}
 }
 

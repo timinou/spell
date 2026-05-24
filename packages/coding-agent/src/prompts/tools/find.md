@@ -20,6 +20,12 @@ target ::= Locator (Query)? (Qualifier)?
 | diff                | `foo.ts#diff`  ·  `#diff` (workspace)       |
 | symbol              | `foo.ts::Bar.method`                        |
 | symbol body         | `foo.ts::Bar.method#body`                   |
+| any function        | `foo.ts::§function` (universal alias)        |
+| any method          | `foo.ts::§method`                            |
+| any class           | `foo.ts::§class`                             |
+| any call            | `foo.ts::§call`                              |
+| any import          | `foo.ts::§import`                            |
+| raw TS kind         | `foo.ts::§function_declaration` (per-lang)   |
 | callers             | `foo.ts::Bar.method def→`                   |
 | definition          | `foo.ts::useX ref→`                         |
 | recent              | `src/**/*.ts::§file[mtime>2026-05-01]`     |

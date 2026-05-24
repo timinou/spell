@@ -739,5 +739,15 @@ pub fn typescript_dialect() -> LanguageDialect {
 			// TODO: type→ and jsx-prop→ edges deferred until EdgeKind extension
 			k
 		},
+		kind_aliases: std::collections::HashMap::from([
+			("function", vec!["function_declaration", "function_expression", "arrow_function", "function_signature", "method_definition"]),
+			("method", vec!["method_definition", "method_signature", "abstract_method_signature"]),
+			("class", vec!["class_declaration", "abstract_class_declaration"]),
+			("call", vec!["call_expression", "new_expression"]),
+			("import", vec!["import_statement"]),
+			("binding", vec!["variable_declarator", "lexical_declaration"]),
+			("identifier", vec!["identifier", "property_identifier", "type_identifier"]),
+			("decl", vec!["function_declaration", "class_declaration", "interface_declaration", "type_alias_declaration", "enum_declaration", "lexical_declaration"]),
+		]),
 	}
 }

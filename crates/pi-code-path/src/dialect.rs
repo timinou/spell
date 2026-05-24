@@ -101,6 +101,15 @@ pub struct LanguageDialect {
 	pub anchors:    Vec<AnchorPattern>,
 	pub qualifiers: Vec<QualifierSpec>,
 	pub edge_kinds: EdgeKindSet,
+	/// BUG-413 (PLAN-318 W0): universal `§kind` alias → list of raw tree-sitter
+	/// kinds for this dialect. Recipe `::§function` resolves cross-language
+	/// via this map; raw kinds (e.g. `::§function_declaration` in TS) still
+	/// work directly without going through this map.
+	///
+	/// Canonical alias set: `function`, `method`, `class`, `decl`, `call`,
+	/// `import`, `binding`, `identifier`. Dialects may extend (e.g.
+	/// Rust `trait`, Python `decorator`) or omit aliases they don't have.
+	pub kind_aliases: std::collections::HashMap<&'static str, Vec<&'static str>>,
 }
 
 impl std::fmt::Debug for LanguageDialect {

@@ -363,6 +363,7 @@ pub fn css_dialect() -> LanguageDialect {
 			// extension
 			set
 		},
+		kind_aliases: std::collections::HashMap::new(),
 	}
 }
 

@@ -545,6 +545,16 @@ pub fn go_dialect() -> LanguageDialect {
 			},
 		],
 		edge_kinds: EdgeKindSet::default(),
+		kind_aliases: std::collections::HashMap::from([
+			("function", vec!["function_declaration", "func_literal"]),
+			("method", vec!["method_declaration"]),
+			("class", vec!["type_declaration"]),
+			("call", vec!["call_expression"]),
+			("import", vec!["import_declaration", "import_spec"]),
+			("binding", vec!["var_declaration", "const_declaration", "short_var_declaration"]),
+			("identifier", vec!["identifier", "field_identifier", "type_identifier"]),
+			("decl", vec!["function_declaration", "method_declaration", "type_declaration", "var_declaration", "const_declaration"]),
+		]),
 	}
 }
 
