@@ -1,0 +1,72 @@
+#+TITLE: pi-code-graph: type-aware reference / call resolution for polymorphic dispatch
+#+STATE: ITEM
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: FUP-090-pi-code-graph-type-aware-reference-call
+#+LAYER: pi-code-graph
+
+* Initial Message
+
+try to use those affordances again and tell me what's still not working/not ergonomic
+
+* Initial Message
+
+PLAN-318 W1-W5 wires pi-code-graph as the production backend for =def→/ref→/call→/import→/implements→= edges via static tree-sitter extraction. This covers ≥95% of agent queries — lexically-accurate references, definitions, call edges, imports, and explicit =impl Trait for T= / =class C implements I= relationships.
+
+The 5% it cannot do without type inference:
+
+- =foo.bar()= where =foo: SomeInterface=. Static analysis returns ALL lexical =bar= candidates across all implementors (over-broad). LSP/type-checker narrows to the actually-reachable implementations.
+- Generic instantiation precision: =Vec<i32>::push= vs =Vec<String>::push= treated as same symbol.
+- Method dispatch through trait objects (=Box<dyn Trait>=).
+- TypeScript structural-typing reference narrowing.
+
+This FUP scopes a future *type-aware* layer inside =pi-code-graph= (NOT an LSP bridge — staying static, per direction).
+
+* Design Space (open — needs design pass before implementation)
+
+Three plausible approaches, each with different cost / accuracy:
+
+** A. Lightweight per-language type-propagation pass
+Build a partial type-flow pass on top of the existing graph extractor. For each =call_expression=, walk back the receiver's =binding= edges; if the binding is annotated (TS), use the annotation; if =let x = new Foo()=, use the constructor; otherwise leave =Any=. Narrow polymorphic dispatch to receivers whose type is concrete.
+
+Pros: stays in =pi-code-graph=, no external dependency.
+Cons: re-implements a subset of TS/Rust type inference per language. Diminishing returns.
+
+** B. Embed an actual type-checker as a library
+- Rust: =rustc_analysis= bindings (unstable), or a TS-based partial inference.
+- TypeScript: =@typescript/vfs= + =typescript= compiler API run in-process.
+- Python: =pyright= as a library (LSP server detachable).
+
+Pros: matches LSP precision without the LSP socket layer.
+Cons: massive dep surface, slow cold start, license complications.
+
+** C. Hybrid: static graph + on-demand type narrow
+Keep static graph as primary. Add a =narrow_with_types= post-pass that calls a per-language type oracle only for queries explicitly tagged =[type_aware=true]= predicate. Type oracle pluggable: option A for fast cases, option B when precision matters.
+
+Pros: pay-for-what-you-use. Most queries stay fast.
+Cons: two code paths to maintain.
+
+Recommendation: C, with A as the default oracle.
+
+* Workflows (when picked up)
+
+1. =find { target: "src/foo.ts::Foo.bar def→[type_aware=true]" }= returns only the references where the receiver's type can be statically narrowed to =Foo= (not arbitrary class.bar).
+2. Generic instantiation: =Vec<i32>::push= callers don't include =Vec<String>::push= callers.
+3. Trait objects: =Box<dyn Trait>::method= calls narrow to the impls actually instantiated in the workspace.
+4. Type oracle reports confidence levels (=high= = annotation-based, =medium= = inferred, =low= = best-guess); agent can filter by confidence.
+
+* Out of Scope
+
+- Live type-error diagnostics (separate FUP: type-checker inside pi-code-graph).
+- LSP bridge (explicitly rejected per design direction).
+- Cross-package type resolution for non-local deps (defer).
+
+* Acceptance (future)
+
+- Polymorphic dispatch queries return narrowed results when type info is available.
+- Falls back to lexical (PLAN-318 W1 behavior) when types unavailable.
+- Type-oracle adds <50ms median to edge queries.
+
+* Status
+
+[2026-05-24] Deferred during PLAN-318 design. Implementation requires a design pass to choose A/B/C and define the oracle plug-point. Do not start until PLAN-318 W1-W5 lands and there is real demand for type-aware queries.

@@ -19,13 +19,12 @@
 use std::{
 	collections::HashMap,
 	ops::Range,
-	path::{Path, PathBuf},
+	path::PathBuf,
 	sync::Arc,
 	time::{Duration, Instant, SystemTime},
 };
 
 use crate::{
-	ast::UriLocator,
 	resolver::traits::CancellationToken,
 	types::{Content, Diagnostic, DiagnosticVariant},
 };

@@ -21,24 +21,24 @@ afterEach(async () => {
 	await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
-function skipIfNoNative(): boolean {
+async function skipIfNoNative(): Promise<boolean> {
 	try {
-		executeOrg({ command: "recall", text: "x" });
+		await executeOrg({ command: "recall", text: "x" });
 		return false;
 	} catch {
 		return true;
 	}
 }
 
-function timeline(args: Record<string, unknown>): Record<string, unknown> {
-	const result = executeOrg({ command: "timeline", repoRoot: tmpDir, ...args });
+async function timeline(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+	const result = await executeOrg({ command: "timeline", repoRoot: tmpDir, ...args });
 	if (result.error) throw new Error(String(result.output));
 	return result.output as Record<string, unknown>;
 }
 
 describe("timeline ordered episodes", () => {
 	test("returns timeline entries with ABOUT relations", async () => {
-		if (skipIfNoNative()) return;
+  if (await skipIfNoNative()) return;
 
 		const target = "CON-oauth";
 		const episodesDir = path.join(tmpDir, ".spell/memory/episodes");
@@ -59,7 +59,7 @@ describe("timeline ordered episodes", () => {
 			].join("\n"),
 		);
 
-		const result = timeline({ target });
+		const result = await timeline({ target });
 
 		const entries = (result as { entries?: unknown[] }).entries ?? [];
 		expect(entries.length).toBeGreaterThanOrEqual(1);
@@ -70,7 +70,7 @@ describe("timeline ordered episodes", () => {
 
 describe("timeline no-target empty", () => {
 	test("returns empty entries when target not in relations", async () => {
-		if (skipIfNoNative()) return;
+  if (await skipIfNoNative()) return;
 
 		const episodesDir = path.join(tmpDir, ".spell/memory/episodes");
 		await fs.mkdir(episodesDir, { recursive: true });
@@ -89,7 +89,7 @@ describe("timeline no-target empty", () => {
 			].join("\n"),
 		);
 
-		const result = timeline({ target: "CON-nonexistent" });
+		const result = await timeline({ target: "CON-nonexistent" });
 
 		const entries = (result as { entries?: unknown[] }).entries ?? [];
 		expect(entries.length).toBe(0);

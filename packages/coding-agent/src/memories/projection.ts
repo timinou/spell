@@ -53,15 +53,15 @@ export async function renderSessionStartSummary(cwd: string): Promise<string> {
 	//     the recall here would load the bge-m3 model (5–30 s) just for
 	//     the projection. Defer that to the first user-initiated memory
 	//     call where the wait is expected and onUpdate keeps the TUI live.
-	const progress = peekMemoryProgress(cwd);
-	let recallRes: ReturnType<typeof executeOrg>;
+	const progress = await peekMemoryProgress(cwd);
+	let recallRes: Awaited<ReturnType<typeof executeOrg>>;
 	const skipStatuses = new Set(["warming", "cold", "unavailable", "error"]);
 	if (skipStatuses.has(progress.status)) {
 		_dbg("skip:executeOrg recall", { progress });
 		recallRes = { error: false, output: { hits: [] } };
 	} else {
 		_dbg("before:executeOrg recall");
-		recallRes = executeOrg({
+		recallRes = await executeOrg({
 			command: "recall",
 			profile: "session-start",
 			scope: ["concept"],
@@ -71,7 +71,7 @@ export async function renderSessionStartSummary(cwd: string): Promise<string> {
 		_dbg("after:executeOrg recall", { hasError: !!(recallRes as { error?: unknown })?.error });
 	}
 	_dbg("before:executeOrg query DOING/TODO");
-	const queryRes = executeOrg({
+	const queryRes = await executeOrg({
 		command: "query",
 		todoKeywords: ["DOING", "TODO"],
 		limit: 5,
@@ -79,7 +79,7 @@ export async function renderSessionStartSummary(cwd: string): Promise<string> {
 	});
 	_dbg("after:executeOrg query DOING/TODO");
 	_dbg("before:executeOrg query episode");
-	const recentRes = executeOrg({
+	const recentRes = await executeOrg({
 		command: "query",
 		kind: "episode",
 		limit: 3,

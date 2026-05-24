@@ -204,3 +204,158 @@ fn registered_extensions_includes_ts_and_py() {
 	assert!(exts.contains(&"ts".to_string()));
 	assert!(exts.contains(&"py".to_string()));
 }
+
+
+// ─────────────────────────────────────────────────────────────────
+// PLAN-318 W0 / BUG-411: informational diagnostic for glob FS prefix
+// must be suppressed when the query head is a NodeKind / FieldName /
+// AnchorName (the name lexer is not used), and the variant must NOT
+// read as `unsupported_operation`.
+// ─────────────────────────────────────────────────────────────────
+
+#[test]
+fn glob_prefix_with_nodekind_query_suppresses_diagnostic() {
+	let dir = tempfile::tempdir().unwrap();
+	let root = dir.path().to_path_buf();
+	std::fs::write(root.join("a.ts"), b"function Foo() {}\n").unwrap();
+
+	let chunks = execute_code_path_inner(
+		opts_with_root("*.ts::§function_declaration", root),
+		CancelToken::default(),
+	)
+	.unwrap();
+
+	let diags: Vec<_> = chunks
+		.iter()
+		.flat_map(|c| c.diagnostics.iter())
+		.collect();
+
+	assert!(
+		!diags
+			.iter()
+			.any(|d| d.message.contains("NamePayload") || d.message.contains("DotLexer")),
+		"glob+NodeKind query must not emit name-lexer fallback diagnostic; got: {:?}",
+		diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+	);
+}
+
+#[test]
+fn glob_prefix_with_name_query_emits_informational_not_unsupported() {
+	let dir = tempfile::tempdir().unwrap();
+	let root = dir.path().to_path_buf();
+	std::fs::write(root.join("a.ts"), b"function Foo() {}\n").unwrap();
+
+	let chunks =
+		execute_code_path_inner(opts_with_root("*.ts::Foo", root), CancelToken::default()).unwrap();
+
+	let diags: Vec<_> = chunks
+		.iter()
+		.flat_map(|c| c.diagnostics.iter())
+		.collect();
+
+	// Must emit *some* fallback diagnostic for Name-head queries (the lexer
+	// choice actually matters here), but the variant must be `informational`
+	// (not `unsupported_operation`), and the wording must avoid internal jargon
+	// like `NamePayload` / `DotLexer`.
+	let relevant: Vec<_> = diags
+		.iter()
+		.filter(|d| d.message.to_lowercase().contains("name") || d.message.to_lowercase().contains("lexer"))
+		.collect();
+	assert!(!relevant.is_empty(), "expected a name-lexer fallback hint for Name-head query");
+	for d in &relevant {
+		assert_ne!(
+			d.variant, "unsupported_operation",
+			"name-lexer fallback hint must not be classified as unsupported_operation; got variant={} msg={}",
+			d.variant, d.message
+		);
+		assert!(
+			!d.message.contains("NamePayload") && !d.message.contains("DotLexer"),
+			"wording must avoid internal jargon; got: {}",
+			d.message
+		);
+	}
+}
+
+
+
+// BUG-410 (PLAN-318 W0): end-to-end edit error must have exactly one prefix.
+#[test]
+fn edit_diagnostic_has_single_prefix_end_to_end() {
+	let dir = tempfile::tempdir().unwrap();
+	let root = dir.path().to_path_buf();
+	// Create a file with content that won't match the find string.
+	std::fs::write(root.join("target.ts"), b"const a = 1;\n").unwrap();
+
+	let mut opts = opts_with_root("target.ts", root);
+	opts.command = "edit".to_string();
+	opts.actions = Some(serde_json::json!([{
+		"kind": "fileFindReplace",
+		"find": "missing_token_xyz",
+		"content": "x"
+	}]));
+
+	let chunks = execute_code_path_inner(opts, CancelToken::default()).unwrap();
+	let diags: Vec<_> = chunks.iter().flat_map(|c| c.diagnostics.iter()).collect();
+
+	assert!(!diags.is_empty(), "expected at least one diagnostic for failing edit");
+	for d in &diags {
+		let n = d.message.matches("edit error:").count();
+		assert!(
+			n <= 1,
+			"diagnostic message must not contain doubled `edit error:` prefix; got {n} in: {}",
+			d.message
+		);
+	}
+}
+
+
+
+// BUG-405 (PLAN-318 W0): end-to-end — invalid glob in `find` target must
+// return zero file nodes plus a diagnostic naming the invalid pattern, NOT
+// fall through to an unfiltered workspace walk.
+#[test]
+fn invalid_glob_predicate_lookalike_zero_results_with_diagnostic() {
+	let dir = tempfile::tempdir().unwrap();
+	let root = dir.path().to_path_buf();
+	std::fs::create_dir_all(root.join("src")).unwrap();
+	std::fs::write(root.join("src/a.ts"), b"").unwrap();
+	std::fs::write(root.join("src/b.ts"), b"").unwrap();
+
+	// The predicate-lookalike `[mtime>2026-05-20]` is parsed as a glob
+	// CharClass; globset rejects the invalid range `2-0` -> 6-0 etc.
+	let chunks = execute_code_path_inner(
+		opts_with_root("src/*.ts[mtime>2026-05-20]", root),
+		CancelToken::default(),
+	)
+	.unwrap();
+
+	let file_nodes: Vec<_> = chunks
+		.iter()
+		.flat_map(|c| c.nodes.iter())
+		.filter(|n| n.kind == "§file" || n.kind == "§dir")
+		.collect();
+	let diags: Vec<_> = chunks
+		.iter()
+		.flat_map(|c| c.diagnostics.iter())
+		.collect();
+
+	assert!(
+		file_nodes.is_empty(),
+		"invalid glob must not return file/dir matches; got {} nodes",
+		file_nodes.len()
+	);
+	// Diagnostic may surface either in chunk.diagnostics or as a §not-found
+	// node's own diagnostics. Allow either path.
+	let node_diag_mentions_glob = chunks
+		.iter()
+		.flat_map(|c| c.nodes.iter())
+		.flat_map(|n| n.diagnostics.iter())
+		.any(|d| d.message.to_lowercase().contains("glob"));
+	let chunk_diag_mentions_glob =
+		diags.iter().any(|d| d.message.to_lowercase().contains("glob"));
+	assert!(
+		node_diag_mentions_glob || chunk_diag_mentions_glob,
+		"expected a diagnostic naming the invalid glob somewhere"
+	);
+}
+

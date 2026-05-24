@@ -21,26 +21,26 @@ afterEach(async () => {
 	await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
-function skipIfNoNative(): boolean {
+async function skipIfNoNative(): Promise<boolean> {
 	try {
-		executeOrg({ command: "recall", text: "x" });
+		await executeOrg({ command: "recall", text: "x" });
 		return false;
 	} catch {
 		return true;
 	}
 }
 
-function remember(args: Record<string, unknown>): Record<string, unknown> {
-	const result = executeOrg({ command: "remember", repoRoot: tmpDir, ...args });
+async function remember(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+	const result = await executeOrg({ command: "remember", repoRoot: tmpDir, ...args });
 	if (result.error) throw new Error(String(result.output));
 	return result.output as Record<string, unknown>;
 }
 
 describe("remember episode", () => {
 	test("writes an episode file under .spell/memory/episodes", async () => {
-		if (skipIfNoNative()) return;
+  if (await skipIfNoNative()) return;
 
-		const result = remember({
+		const result = await remember({
 			kind: "episode",
 			summary: "Debugged auth flow edge case",
 			involves: ["FEAT-001", "FEAT-002"],
@@ -55,9 +55,9 @@ describe("remember episode", () => {
 
 describe("remember concept", () => {
 	test("writes a concept file under .spell/memory/concepts", async () => {
-		if (skipIfNoNative()) return;
+  if (await skipIfNoNative()) return;
 
-		const result = remember({
+		const result = await remember({
 			kind: "concept",
 			summary: "JWT Token Validation",
 			about: ["CON-001"],
@@ -71,10 +71,10 @@ describe("remember concept", () => {
 
 describe("remember idempotent append", () => {
 	test("appends to existing day file without duplicating header", async () => {
-		if (skipIfNoNative()) return;
+  if (await skipIfNoNative()) return;
 
-		const r1 = remember({ kind: "episode", summary: "First episode today" });
-		const r2 = remember({ kind: "episode", summary: "Second episode today" });
+		const r1 = await remember({ kind: "episode", summary: "First episode today" });
+		const r2 = await remember({ kind: "episode", summary: "Second episode today" });
 
 		expect(typeof r1.id).toBe("string");
 		expect(typeof r2.id).toBe("string");

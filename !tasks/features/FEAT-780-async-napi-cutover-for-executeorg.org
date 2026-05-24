@@ -1,0 +1,292 @@
+#+TITLE: Async-NAPI cutover for executeOrg
+#+STATE: DONE
+#+SESSION_ID: 14eb4e97aabcb79a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-22T14-09-29-258Z_14eb4e97aabcb79a.jsonl]]
+#+CUSTOM_ID: FEAT-780-async-napi-cutover-for-executeorg
+#+DEPENDS: BUG-397-synchronous-executeorg-napi-freezes-node
+#+EFFORT: 4h
+#+LAYER: pi-natives coding-agent pi-org
+#+SESSION_ID: 14eb4e97aabcb79a
+#+COMPLETION_HASH: 8aeb341036677f70
+
+* Initial Message
+
+can you test now? i merged it all to main, so please try out these new features
+
+* Initial Message
+
+Convert =executeOrg= from a synchronous NAPI function (blocks Node main
+thread) to =task::Async<Value>= (runs on libuv worker pool, returns
+=Promise= to JS). Fixes [[id:BUG-397-synchronous-executeorg-napi-freezes-node][BUG-397]] and unlocks live status-line
+widget polling during memory recall, animated tool spinners, working
+Ctrl-C cancellation, and concurrent agent tool calls.
+
+* Scope
+
+In:
+- =crates/pi-natives/src/org_buffer.rs= — sig change from
+  =pub fn execute_org(options: Value) -> Result<Value>= to
+  =pub fn execute_org(options: Value, signal: Option<AbortSignal>) -> task::Async<Value>=.
+  Wrap body in =task::blocking("executeOrg", ct, ...)=.
+- =packages/natives/src/org-buffer/{index.ts,types.ts}= — return type
+  flips to =Promise<OrgBufferResult>=.
+- All call sites in =packages/coding-agent/src= (~17 calls in 4 files)
+  and =packages/org/src= (~28 calls in 3 files): insert =await=.
+- Test mocks: wrap =mockReturnValueOnce(...)= returns in
+  =Promise.resolve(...)= where needed.
+- =MemoryStatusController.poll= — add =#inFlight= guard so a slow poll
+  cannot pile up concurrent calls.
+
+Out:
+- Daemon-side cancellation (=recall_engine::query= doesn't yet have a
+  cancel point). First cut: =AbortSignal= aborts the JS await; daemon
+  keeps embedding until done.
+- Reducing the embed cost itself (separate concern, see FEAT-779).
+- Concurrent execution semantics review beyond a grep for
+  =executeOrg(...);\s*executeOrg(...)= ordering assumptions.
+
+* Existing Patterns
+
+- =crates/pi-natives/src/task.rs:303= =blocking()= — canonical helper
+  used by every other heavy NAPI surface.
+- =crates/pi-natives/src/grep.rs:1237=, =ast.rs:414=, =glob.rs:237=,
+  =code_path/napi.rs:380=, =code_graph.rs:49=, =fd.rs:252=,
+  =html.rs:29=, =image.rs:97=, =clipboard.rs:66= — reference
+  implementations of the =task::Async<T>= pattern.
+- =task::CancelToken::new(timeout_ms, signal)= — already wires through
+  =AbortSignal= and an optional timeout.
+
+* Call-site inventory
+
+| File                                                                                  | Calls | Notes                                |
+|---------------------------------------------------------------------------------------+-------+--------------------------------------|
+| packages/org/src/tool.ts                                                              |    19 | all inside async fn                  |
+| packages/coding-agent/src/tools/memory.ts                                              |     9 | all inside async fn                  |
+| packages/org/src/native-ops.ts                                                        |     7 | already async wrappers               |
+| packages/coding-agent/src/memories/projection.ts                                       |     4 | already async                        |
+| packages/coding-agent/src/memories/index.ts                                            |     3 | already async                        |
+| packages/org/src/org-parse.ts                                                         |     2 | verify caller async-ness             |
+| packages/natives/src/org-buffer/index.ts                                              |     2 | re-export shim — sig flip            |
+| packages/coding-agent/src/modes/controllers/memory-status-controller.ts                |     1 | sync poll cb — wrap with =void=      |
+| packages/natives/src/org-buffer/types.ts                                              |     1 | type-only update                     |
+
+Total: 48 mechanical edits across 9 files.
+
+* Tests
+
+TDD workflows to lock first:
+
+** Rust: =task::Async= return shape
+
+- =crates/pi-natives/src/org_buffer.rs= test module:
+  - assert =execute_org()= compiles with =Option<AbortSignal>= second
+    arg and returns =AsyncTask<Blocking<Value>>= (type-level test).
+  - assert inner =execute_org_inner= and =execute_org_catching= are
+    unchanged contractually (preserve panic-capture behaviour).
+
+** Bun: Promise semantics
+
+- =packages/natives/src/org-buffer/types.ts= — type test: the exported
+  =executeOrg= has signature
+  =(options) => Promise<OrgBufferResult>=.
+- New test =packages/coding-agent/test/tools/memory-async.test.ts=:
+  1. =executeOrg= returns a Promise.
+  2. =await executeOrg({command: "recall_stats", repoRoot})= resolves
+     with a =MemoryProgressSnapshot=.
+  3. =setInterval(fn, 10)= fires =N= times during a slow mocked
+     =executeOrg= await (proves event loop stays free).
+  4. Two concurrent =await Promise.all([executeOrg(a), executeOrg(b)])=
+     both resolve and don't deadlock.
+
+** Bun: status widget ticks during a real cold recall
+
+- =packages/coding-agent/test/modes/controllers/memory-status-controller-async.test.ts=
+  - mock the daemon to return a slow-warming recall_stats (10 ms
+    increments simulating progress)
+  - start a parallel =executeOrg({command: "recall"})= via the async
+    path
+  - assert =setIntervalFn= fires =N= times during the wait and the
+    widget renders progress frames
+
+** Bun: call-site migration verification
+
+- All existing tests in
+  =packages/coding-agent/test/tools/memory.test.ts= and
+  =packages/org/test/= must pass with the async surface.
+
+* Implementation
+
+** ITEM Add type-level Rust test asserting Async<Value> return
+:PROPERTIES:
+:CUSTOM_ID: FEAT-ASYNC-EXECUTEORG::rust-type-test
+:LAYER: test
+:END:
+- File: =crates/pi-natives/src/org_buffer.rs= test module
+- Add a =fn _type_check()= that destructures =execute_org(Value::Null, None)=
+  into =task::Async<Value>=. Compile-only check.
+
+** ITEM Add Bun promise/async tests against current sync surface (failing)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-ASYNC-EXECUTEORG::bun-async-tests
+:LAYER: test
+:DEPENDS: FEAT-ASYNC-EXECUTEORG::rust-type-test
+:END:
+- File: =packages/coding-agent/test/tools/memory-async.test.ts= (new)
+- Tests #1–4 from "Bun: Promise semantics" above.
+- Will fail until the cutover lands (drives TDD).
+
+** ITEM Add widget-during-recall integration test (failing)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-ASYNC-EXECUTEORG::widget-test
+:LAYER: test
+:DEPENDS: FEAT-ASYNC-EXECUTEORG::bun-async-tests
+:END:
+- File: =packages/coding-agent/test/modes/controllers/memory-status-controller-async.test.ts= (new)
+- Mock-driven; proves the event loop is free.
+
+** ITEM Cut over Rust executeOrg to task::Async
+:PROPERTIES:
+:CUSTOM_ID: FEAT-ASYNC-EXECUTEORG::rust-cutover
+:LAYER: infra
+:DEPENDS: FEAT-ASYNC-EXECUTEORG::widget-test
+:END:
+- File: =crates/pi-natives/src/org_buffer.rs=
+- Change signature + wrap body in =task::blocking("executeOrg", ct, ...)=.
+- Keep =execute_org_inner= and =execute_org_catching= unchanged.
+
+** ITEM Update TS facade types
+:PROPERTIES:
+:CUSTOM_ID: FEAT-ASYNC-EXECUTEORG::ts-types
+:LAYER: infra
+:DEPENDS: FEAT-ASYNC-EXECUTEORG::rust-cutover
+:END:
+- Files: =packages/natives/src/org-buffer/{types.ts,index.ts}=
+- Return type → =Promise<OrgBufferResult>=.
+
+** ITEM Migrate call sites in pi-org (parallelisable)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-ASYNC-EXECUTEORG::migrate-pi-org
+:LAYER: infra
+:DEPENDS: FEAT-ASYNC-EXECUTEORG::ts-types
+:END:
+- Files: =packages/org/src/{tool.ts,native-ops.ts,org-parse.ts}=
+- Mechanical: insert =await=. Confirm enclosing fn is =async=.
+
+** ITEM Migrate call sites in coding-agent (parallelisable)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-ASYNC-EXECUTEORG::migrate-coding-agent
+:LAYER: infra
+:DEPENDS: FEAT-ASYNC-EXECUTEORG::ts-types
+:END:
+- Files: =packages/coding-agent/src/tools/memory.ts=,
+  =packages/coding-agent/src/memories/{projection.ts,index.ts}=,
+  =packages/coding-agent/src/modes/controllers/memory-status-controller.ts=
+- Insert =await=; controller poll callback wraps with =void= so the
+  =setInterval= signature stays =() => void=.
+
+** ITEM Add poll #inFlight guard
+:PROPERTIES:
+:CUSTOM_ID: FEAT-ASYNC-EXECUTEORG::poll-guard
+:LAYER: infra
+:DEPENDS: FEAT-ASYNC-EXECUTEORG::migrate-coding-agent
+:END:
+- File: =packages/coding-agent/src/modes/controllers/memory-status-controller.ts=
+- Add =#inFlight= boolean; skip a poll if the previous one hasn't
+  resolved. Prevents pile-up if a poll ever takes > intervalMs.
+
+** ITEM Update test mocks for Promise returns
+:PROPERTIES:
+:CUSTOM_ID: FEAT-ASYNC-EXECUTEORG::update-mocks
+:LAYER: test
+:DEPENDS: FEAT-ASYNC-EXECUTEORG::poll-guard
+:END:
+- Files: =packages/coding-agent/test/tools/memory.test.ts=,
+  =packages/coding-agent/test/modes/controllers/memory-status-controller.test.ts=,
+  any other test mocking =executeOrg=.
+- Wrap =mockReturnValueOnce(...)= in =Promise.resolve(...)= where the
+  test relies on the sync→async switch.
+
+** ITEM Rebuild native, run full test surface, manual repro
+:PROPERTIES:
+:CUSTOM_ID: FEAT-ASYNC-EXECUTEORG::verify
+:LAYER: infra
+:DEPENDS: FEAT-ASYNC-EXECUTEORG::update-mocks
+:END:
+- =cd packages/natives && bun run dev:native= — deploy fresh binary
+- =bun test packages/coding-agent/test/ packages/org/test/=
+- =cargo test -p pi-natives -p pi-knowledge-worker=
+- Manual: kill daemon, start fresh =spell=, issue =memory.search= on
+  cold corpus. Verify widget ticks during embed, spinner animates,
+  keyboard stays live.
+
+* Edge Cases
+
+- =peekMemoryProgress= is called from sync contexts (widget poll
+  callback). After the cutover it becomes async; the poll callback
+  wraps with =void= and the controller's =#lastStatus= dedup absorbs
+  any out-of-order results.
+- Two consecutive sync calls in source order (e.g.
+  =executeOrg(opts1); executeOrg(opts2);=) now race on libuv. The
+  daemon's =with_worker= mutex serializes wire-level access, so RPC
+  stays ordered, but JS-side ordering assumptions must be reviewed.
+  Grep for the pattern; none found in current repo.
+- =AbortSignal= cancellation: =task::run_blocking= checks the cancel
+  token at boundaries, but inside the closure we run
+  =execute_org_catching= which doesn't currently expose cancel points.
+  First cut: abort propagates back to JS, daemon may keep working.
+  Acceptable per Scope/Out.
+- Panic capture: =execute_org_catching= preserves the existing
+  =catch_unwind=-based panic-to-error mapping. Verify it still works
+  inside =task::blocking= (it should — the closure runs on a worker
+  thread that catch_unwind covers).
+- =result.error= shape unchanged: =OrgBufferResult= JSON layout doesn't
+  change; only the wrapping =Promise= does. All result-shape tests
+  remain valid.
+
+* Acceptance Criteria
+
+- =executeOrg= returns =Promise<OrgBufferResult>= from JS.
+- =MemoryStatusController= renders progress frames during a real cold
+  recall (verified via test + manual repro).
+- All 48 call sites migrated to =await=; no =executeOrg(...)= without
+  =await= remains in =packages/=.
+- =bun test= and =cargo test= surfaces pass.
+- BUG-397 closes.
+
+* Verification
+
+- =cargo test -p pi-natives org_buffer=
+- =cargo test -p pi-knowledge-worker=
+- =bun test packages/coding-agent/test/=
+- =bun test packages/org/test/=
+- =cd packages/natives && bun run dev:native=
+- Manual: cold-recall TUI check (widget ticks, spinner animates).
+
+* Related
+
+- Fixes [[id:BUG-397-synchronous-executeorg-napi-freezes-node][BUG-397]]
+- Builds on [[id:PLAN-316][PLAN-316 memory index build TUI affordance]]
+- Independent of [[id:FEAT-779][FEAT-779 unify non-blocking warm-load]]
+- Unblocks: concurrent agent tool calls; live Ctrl-C cancellation;
+  true eager =warmMemoryLane= at session_start.
+
+* Cross-references [auto-linked]
+
+- Closes: [[id:BUG-397-synchronous-executeorg-napi-freezes-node][BUG-397 Synchronous executeOrg NAPI freezes Node event loop during recall]]
+
+NOTE [2026-05-23]: Cutover complete. Surface:
+- crates/pi-natives/src/org_buffer.rs: execute_org returns task::Async<OrgValue>; OrgValue newtype impls ToNapiValue + TypeName so serde_json::Value flows through the async wrapper.
+- packages/natives/src/org-buffer/{types.ts,index.ts}: executeOrg returns Promise<OrgBufferResult>; optional AbortSignal.
+- 48 call sites migrated across 9 files (pi-org/tool.ts:19, native-ops.ts:7, org-parse.ts:2; coding-agent/tools/memory.ts:9 + helpers, memories/projection.ts:4, memories/index.ts:1, modes/controllers/memory-status-controller.ts:1; agent-session.ts, interactive-mode.ts via orgToMarkdown transitive callers).
+- MemoryStatusController.poll() async + #inFlight guard.
+- Tests: 5 new (memory-async.test.ts, memory-status-controller-async.test.ts) + 5 pi-org test helpers async-fied.
+
+TDD verification chain:
+- Red: memory-async test 1 (isThenable=false), test 3 (0 setInterval ticks); widget test (sawEmbed=false)
+- Green after cutover: all 5 new tests pass; widget renders progress frames through tight executeOrg loop.
+
+Manual: 33 setInterval ticks / 9612 real executeOrg calls in 200ms — proves Node event loop stays free.
+
+Follow-up tracked separately:
+- True daemon-side cancellation in recall_engine::query (currently AbortSignal aborts JS await only)
+- warmMemoryLane could now genuinely pre-warm via async dispatch (deferred — needs daemon to be initialised first regardless)

@@ -13,7 +13,7 @@ interface ReadOrgFileOptions {
 }
 
 export async function readOrgFile(opts: ReadOrgFileOptions): Promise<OrgItem[]> {
-	const result = executeOrg({
+	const result = await executeOrg({
 		command: "parse",
 		file: opts.filePath,
 		category: opts.category,
@@ -67,7 +67,7 @@ export async function findItemById(
 	todoKeywords: string[],
 ): Promise<OrgItem | undefined> {
 	const root = categoryDirs.find(category => category.root)?.root ?? process.cwd();
-	const result = executeOrg({
+	const result = await executeOrg({
 		command: "orgIndexResolve",
 		root,
 		categories: categoryDirs.map(category => ({
@@ -90,7 +90,7 @@ export async function appendItemToFile(
 	state: string,
 	session?: OrgSessionContext,
 ): Promise<string> {
-	const result = executeOrg({
+	const result = await executeOrg({
 		command: "createItem",
 		file: filePath,
 		id: params.id,
@@ -113,7 +113,7 @@ export async function updateItemStateInFile(
 	todoKeywords: string[],
 	note?: string,
 ): Promise<boolean> {
-	const result = executeOrg({
+	const result = await executeOrg({
 		command: "updateItem",
 		file: filePath,
 		id: customId,
@@ -139,7 +139,7 @@ export async function updateItemBodyInFile(
 	newBody: string | null,
 	todoKeywords: string[],
 ): Promise<boolean> {
-	const result = executeOrg({ command: "updateItem", file: filePath, id: customId, body: newBody, todoKeywords });
+	const result = await executeOrg({ command: "updateItem", file: filePath, id: customId, body: newBody, todoKeywords });
 	if (result.error) {
 		logger.warn("updateItemBodyInFile: native error", {
 			id: customId,
@@ -157,7 +157,7 @@ export async function appendToItemBodyInFile(
 	text: string,
 	todoKeywords: string[],
 ): Promise<boolean> {
-	const result = executeOrg({ command: "updateItem", file: filePath, id: customId, append: text, todoKeywords });
+	const result = await executeOrg({ command: "updateItem", file: filePath, id: customId, append: text, todoKeywords });
 	if (result.error) {
 		logger.warn("appendToItemBodyInFile: native error", {
 			id: customId,
@@ -176,7 +176,7 @@ export async function setPropertyInFile(
 	value: string,
 	todoKeywords: string[] = [],
 ): Promise<boolean> {
-	const result = executeOrg({ command: "setProperty", file: filePath, id: customId, property, value, todoKeywords });
+	const result = await executeOrg({ command: "setProperty", file: filePath, id: customId, property, value, todoKeywords });
 	return !result.error;
 }
 

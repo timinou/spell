@@ -22,7 +22,7 @@ target ::= Locator (Query)? (Qualifier)?
 | symbol body         | `foo.ts::Bar.method#body`                   |
 | callers             | `foo.ts::Bar.method def→`                   |
 | definition          | `foo.ts::useX ref→`                         |
-| recent              | `src/**/*.ts[mtime>2026-05-01]`             |
+| recent              | `src/**/*.ts::§file[mtime>2026-05-01]`     |
 | uri                 | `memory://root` · `artifact://…` · `skill://…` |
 </recipes>
 

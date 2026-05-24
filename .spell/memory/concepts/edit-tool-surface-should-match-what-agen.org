@@ -1,0 +1,71 @@
+#+TITLE: edit-tool-surface-should-match-what-agen
+
+** ITEM edit-tool surface should match what agents naturally write
+
+## Observation (PLAN-317)
+
+Surface-area mismatch between tool schemas and what agents naturally write
+produces silent fail loops. Concrete evidence from 945 edit calls across
+120 sessions:
+
+- 86% of `lineReplace` failed because the schema required `LINE#HASH`
+  string anchors but agents passed `[start,end]`, `"a-b"`, `"a..b"`, or
+  `{line,column}`. Error message ("replace requires at least one anchor")
+  did not name the expected shape. Agents iterated random shapes 2–3 times,
+  then fell back to bash/python heredocs.
+
+- Schema-declared parameters (`edit.root`) that were not wired into the
+  implementation produced silent path-resolution failures that cascaded
+  into empty buffers and "find text not found" diagnostics with empty
+  preview blocks.
+
+## Pattern
+
+1. *If a parameter is in the schema, it must be threaded end-to-end.*
+   Stub params are worse than absent params — agents pass them in good
+   faith and silently mis-direct.
+
+2. *Error messages must name the expected shape.* "missing anchor" did
+   not help; "expected {start: number}, got [10,15]" would have.
+
+3. *Fail loud on empty scopes.* "find text not found" + empty preview is
+   indistinguishable from "find text was wrong" — but the actual cause is
+   "buffer is 0 bytes, probably wrong file". Branch the diagnostic on
+   `scope.is_empty()` and name the path.
+
+4. *Stale-anchor protection is only worth its UX cost if used.* LINE#HASH
+   anchors (FEAT-705) added 2-char content hashes to every read line and
+   required them on every line edit. Zero successful `lineReplace` calls
+   in the corpus depended on the hash; agents copied numbers and stripped
+   the suffix. The protection was never used; the cost was 86% failure on
+   line-targeted ops.
+
+## Forensic playbook
+
+Treat session JSONL as the ground truth for tool-surface design:
+
+```
+jq -r '.message.content[]? | select(.type=="toolCall") | .arguments' \
+  ~/.spell/agent/sessions/.../*.jsonl
+```
+
+Mine for:
+- shape distributions of every parameter agents actually send
+- failure-then-fallback chains (edit-error → bash python heredoc)
+- error-message first-lines that recur and don't name a fix
+
+Outcome: schema + diagnostics designed around observed behavior, not the
+designer's mental model of "right usage".
+:PROPERTIES:
+:CUSTOM_ID: CON-edit-tool-surface-should-match-what-agen
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-24T13:18:23Z
+:END:
+:RELATIONS:
+INVOLVED: PLAN-317-edit-tool-reliability-root-threading-fai
+INVOLVED: BUG-401-edit-params-root-silently-ignored-resolv
+INVOLVED: BUG-402-empty-scope-preview-hides-missing-empty
+INVOLVED: BUG-403-edit-lacks-pre-flight-fs-exists-for-non
+INVOLVED: BUG-404-simplify-line-addressing-drop-linehash-a
+:END:

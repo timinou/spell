@@ -1,5 +1,5 @@
 #+TITLE: empty scope_preview hides missing/empty-file root cause
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14edc1bec5a09a49
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
 #+CUSTOM_ID: BUG-402-empty-scope-preview-hides-missing-empty
@@ -8,6 +8,7 @@
 #+PRIORITY: #A
 #+SESSION_ID: 14edc1bec5a09a49
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+COMPLETION_HASH: bc0142c6505310d9
 
 * Initial Message
 
@@ -85,3 +86,5 @@ clear "no match in full file" marker instead of the truncated dump.
 
 ~20 min. 1 branch in =apply_patches_with_matcher= + 1 test + ensure
 =buffer.path()= is accessible (it is).
+
+NOTE [2026-05-24]: Fixed in commit 4879100e3 (PLAN-317). crates/pi-code-engine/src/edit/patch.rs::apply_patches_with_matcher branches on `scope_text.is_empty()` before scope_preview, emitting "scope is empty — buffer at <path> is 0 bytes (file may be missing, freshly created, or resolved to the wrong path). Verify the file exists before retrying." Green: edit::patch::tests::find_in_empty_buffer_returns_clear_diagnostic.

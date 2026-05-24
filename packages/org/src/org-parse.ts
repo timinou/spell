@@ -9,13 +9,13 @@ export interface OrgHeading {
 	children: OrgHeading[];
 }
 
-export function orgToMarkdown(org: string): string {
-	const result = executeOrg({ command: "toMarkdown", source: org });
+export async function orgToMarkdown(org: string): Promise<string> {
+	const result = await executeOrg({ command: "toMarkdown", source: org });
 	return (result.output as { markdown: string }).markdown;
 }
 
-export function orgToPlainText(org: string): string {
-	const result = executeOrg({ command: "toPlainText", source: org });
+export async function orgToPlainText(org: string): Promise<string> {
+	const result = await executeOrg({ command: "toPlainText", source: org });
 	return (result.output as { text: string }).text;
 }
 

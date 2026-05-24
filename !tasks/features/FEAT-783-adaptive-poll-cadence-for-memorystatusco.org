@@ -1,0 +1,61 @@
+#+TITLE: adaptive poll cadence for MemoryStatusController during warm
+#+STATE: CANCELLED
+#+SESSION_ID: 14eb4e97aabcb79a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-22T14-09-29-258Z_14eb4e97aabcb79a.jsonl]]
+#+CUSTOM_ID: FEAT-783-adaptive-poll-cadence-for-memorystatusco
+
+* Initial Message
+
+1. Daemon-side cancellation in recall_engine::query — currently AbortSignal aborts only the JS await; daemon work continues.
+ 2. Eager warmMemoryLane at session_start could now genuinely pre-warm via async dispatch — still requires daemon to be initialised first, so
+ user's first recall still pays the bge-m3 model load.
+
+
+
+yeah file them and tell me how hard it would be to actually implement them. anything else in terms of improvements?
+
+Status widget polls `peekMemoryProgress` every 5s. Now that operations
+are non-blocking (FEAT-780), the 5s cadence is the only reason the
+progress bar lags behind warm transitions. During `warming` state,
+drop to ~250ms so the user sees real-time progress (files indexed /
+total). Fall back to 5s in `warm` / `idle` to avoid waste.
+
+** Targets
+
+- `packages/coding-agent/src/modes/controllers/memory-status-controller.ts`
+  - introduce `#cadenceForStatus(status)` returning 250ms (warming) /
+    5000ms (warm|idle|unavailable)
+  - reschedule the next poll based on the *current* snapshot status
+    (not a fixed `setInterval`)
+
+** Constraints
+
+- Replace `setInterval` with `setTimeout` recursive scheduling so the
+  cadence can change per-tick.
+- `#inFlight` guard from FEAT-780 still applies — never double-poll.
+- Test: state transitions warming → warm flip the cadence back to 5s
+  on the first warm tick.
+
+** Acceptance
+
+- Visible: cold session start, warming progress updates every ~250ms
+  in the status line until completion, then quiesces.
+- Existing controller tests still pass.
+- Idle CPU cost in warm state unchanged (still ~1 peek per 5s).
+
+** Note on supersession
+
+FEAT-783 (push-based progress via subscribe) supersedes this if
+adopted. File this anyway as a small stopgap; if FEAT-783 lands
+first, mark this WONTFIX.
+
+** Difficulty
+
+~30 min. Mostly a poll-loop refactor + one test.
+
+** Related
+
+- FEAT-780 (unblocker)
+- FEAT-783 (this feature's supersession path)
+
+NOTE [2026-05-24]: Superseded by FEAT-784 (push-based status via knowledge daemon subscribe). Push-driven refresh removes the latency motivation for adaptive cadence — the controller now re-polls within ~50ms of any daemon-side state change instead of paying up to 5s of polling lag. Polling stays at 2s as a fallback for daemon-down sessions; that's already responsive enough when push is unavailable because in that case the daemon isn't producing useful state transitions anyway.

@@ -1,0 +1,59 @@
+#+TITLE: find: weak NamePayload diagnostic surfaces as error even when results are valid
+#+STATE: ITEM
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: BUG-407-find-weak-namepayload-diagnostic-surface
+
+* Initial Message
+
+try to use those affordances again and tell me what's still not working/not ergonomic
+
+* Initial Message
+
+=find { target: "**/*.md::§line[text~=\"LINE#HASH\"]" }= returns valid results plus a confusing trailing block:
+
+#+begin_example
+...results...
+
+Diagnostics:
+[unsupported_operation] weak NamePayload parse: glob FS prefix uses generic DotLexer
+#+end_example
+
+Agents read "unsupported_operation" as a hard error and fall back to bash grep — exactly the anti-pattern PLAN-317 was supposed to eliminate.
+
+* Root Cause
+
+=crates/pi-natives/src/code_path/napi.rs:360-369= emits this diagnostic whenever an FS prefix contains glob magic before =::=. The diagnostic is *informational* (fallback to generic name lexer is correct), but its variant (=UnsupportedOperation=) and wording read as error.
+
+The diagnostic is also redundant when the query head is a =NodeKind=, =FieldName=, or =AnchorName= — the name lexer is never used in those cases.
+
+* Scope
+
+In:
+- =crates/pi-natives/src/code_path/napi.rs= — reword + demote variant + suppress when the head doesn't use the name lexer.
+- New =DiagnosticVariant::Informational= in =crates/pi-code-path/src/types.rs=.
+- Renderer in =packages/coding-agent/src/tools/codepath-result.ts= — suppress =Informational= diagnostics when at least one node is returned; surface only on zero-result queries.
+
+Out:
+- Changing the lexer fallback behavior itself.
+- Reworking the parser's glob/predicate boundary detection (covered by BUG-405).
+
+* Tests
+
+1. =crates/pi-natives/src/code_path/dispatch_tests.rs::glob_prefix_with_nodekind_query_suppresses_diagnostic= — =**/*.ts::§function_declaration= → no diagnostic.
+2. =glob_prefix_with_name_query_emits_informational= — =**/*.ts::useFoo= → emits =Informational= variant.
+3. =informational_diagnostic_suppressed_when_results_present= — renderer hides info diags when nodes ≠ [].
+4. =informational_diagnostic_shown_on_zero_results= — renderer surfaces info diags when nodes = [].
+5. =packages/coding-agent/test/tools/codepath-result.test.ts= — TS-side rendering parity.
+
+* Acceptance
+
+- Informational diagnostics never appear as =unsupported_operation=.
+- Renderer hides them when results are valid.
+- Wording: =using generic name lexer because the FS prefix contains glob chars; language-specific symbol matching disabled for this query= (or similar — no jargon).
+
+* Verification
+
+- =cargo test -p pi-natives dispatch_tests=
+- =bun test packages/coding-agent/test/tools/codepath-result.test.ts=
+- Manual: rerun the trigger query, confirm clean output.

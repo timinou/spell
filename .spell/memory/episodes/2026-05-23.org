@@ -1,0 +1,26 @@
+#+TITLE: Episodes 2026-05-23
+
+** ITEM Synchronous executeOrg NAPI freezes Node event loop during recall
+
+Fixed by FEAT-780. Manual verification: 33 setInterval ticks during 9612 real executeOrg calls in 200ms; pre-cutover would be 0 ticks. Test surface: 358 pi-natives + 7 warm_progress + 22 org_buffer + 272/273 TS green (1 pre-existing recall flake on HEAD, 3/4 of its sibling tests now pass after the migration).
+:PROPERTIES:
+:CUSTOM_ID: EP-bdf5cf3959876f6f
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-23T20:47:47Z
+:END:
+:RELATIONS:
+ABOUT: BUG-397-synchronous-executeorg-napi-freezes-node
+:END:
+** ITEM Async-NAPI cutover for executeOrg
+
+Cutover complete. Surface:
+:PROPERTIES:
+:CUSTOM_ID: EP-76057e9cd832d7ad
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-23T20:48:18Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-780-async-napi-cutover-for-executeorg
+:END:

@@ -17,7 +17,7 @@ use std::{
 	time::Duration,
 };
 
-use napi::{Status, threadsafe_function::ThreadsafeFunction};
+use napi::threadsafe_function::ThreadsafeFunction;
 use napi_derive::napi;
 use pi_code_path::{
 	CacheStrategy, ContentLoader, PathLayout, RootTemplate, SchemeCapabilities, SchemeProfile,

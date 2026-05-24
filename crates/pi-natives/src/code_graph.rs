@@ -775,7 +775,6 @@ mod tests {
 		ffi::OsString,
 		fs,
 		path::{Path, PathBuf},
-		sync::MutexGuard,
 	};
 
 	use super::*;

@@ -1,0 +1,110 @@
+#+TITLE: Episodes 2026-05-24
+
+** ITEM peekMemoryProgress sync branch dead post-FEAT-780
+
+Dropped union → Promise-only in MemoryStatusControllerDeps.peek + #peek field. Test mock helpers async-ified (5 sites). 53/53 controller + memory tests green; tsc clean on touched files.
+:PROPERTIES:
+:CUSTOM_ID: EP-8febd75abcd58100
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-24T11:34:09Z
+:END:
+:RELATIONS:
+ABOUT: BUG-398-peekmemoryprogress-sync-branch-dead-post
+:END:
+** ITEM cargo warnings cleanup across pi-code-path dialects
+
+Workspace unused-import/variable warnings: 30 → 0. cargo fix auto-handled ~14; manual cleanup for 16 nested-mod re-imports + dead test imports. Touched files: crates/pi-code-path/{dialects/text/qualifiers.rs, resolver/projection.rs, ...}, crates/pi-natives/{code_path/napi.rs, runtime_schemes.rs, code_path/code_resolver/walker.rs, code_graph.rs, embedding_worker.rs, code_path/language_matrix_tests.rs}, crates/pi-knowledge-worker/tests/daemon.rs, crates/pi-org-engine/tests/graph_typed.rs, crates/pi-code-engine/src/buffer.rs, crates/pi-edit-broker/tests/{multi_commit.rs, common/mod.rs}. Tests still green: pi-natives 358, pi-code-path 427.
+:PROPERTIES:
+:CUSTOM_ID: EP-92a460bec266e67a
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-24T11:34:59Z
+:END:
+:RELATIONS:
+ABOUT: BUG-399-cargo-warnings-cleanup-across-pi-code-pa
+:END:
+** ITEM memory-loop W10 tests leak fixture state across runs
+
+Switched memory-loop.test.ts to per-test temp corpus via beforeEach/afterEach with fs.mkdtemp + fs.cp(CANONICAL_CORPUS, tmpDir, recursive). All references to MEM_DIR now go through memDir() helper that reads from activeCorpus. Two consecutive runs → 0 leaked files in working tree. Canonical fixtures untouched.
+:PROPERTIES:
+:CUSTOM_ID: EP-e3cf01b8a85afe8d
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-24T11:35:46Z
+:END:
+:RELATIONS:
+ABOUT: BUG-400-memory-loop-w10-tests-leak-fixture-state
+:END:
+** ITEM push-based memory status via knowledge daemon subscribe
+
+Push-as-poll-kick design: subscribe surfaces events that immediately trigger poll(); polling stays as source of truth. Daemon-down → silent fallback to poll-only.
+:PROPERTIES:
+:CUSTOM_ID: EP-24d10962c27fbed0
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-24T11:36:42Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-784-push-based-memory-status-via-knowledge-d
+:END:
+** ITEM edit.params.root silently ignored — resolves against session.cwd
+
+Fixed in commit 4879100e3 (PLAN-317). edit.ts now threads `params.root ?? session.cwd` as `effectiveCwd` into both `resolveCwdRelativePath` and `#executeStructural`. Green: packages/coding-agent/test/tools/edit-root-threading.test.ts (3 tests).
+:PROPERTIES:
+:CUSTOM_ID: EP-7928be1579585b1a
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-24T13:16:22Z
+:END:
+:RELATIONS:
+ABOUT: BUG-401-edit-params-root-silently-ignored-resolv
+:END:
+** ITEM empty scope_preview hides missing/empty-file root cause
+
+Fixed in commit 4879100e3 (PLAN-317). crates/pi-code-engine/src/edit/patch.rs::apply_patches_with_matcher branches on `scope_text.is_empty()` before scope_preview, emitting "scope is empty — buffer at <path> is 0 bytes (file may be missing, freshly created, or resolved to the wrong path). Verify the file exists before retrying." Green: edit::patch::tests::find_in_empty_buffer_returns_clear_diagnostic.
+:PROPERTIES:
+:CUSTOM_ID: EP-ca0395125b48be41
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-24T13:16:43Z
+:END:
+:RELATIONS:
+ABOUT: BUG-402-empty-scope-preview-hides-missing-empty
+:END:
+** ITEM edit lacks pre-flight fs.exists for non-creation ops
+
+Fixed in commit 4879100e3 (PLAN-317). edit.ts::#executeStructural now does pre-flight `fs.exists(filePart)` (after stripping `::Symbol`) for the 27 mutating op kinds and fast-fails with `{error: "file_not_found", text: "File not found at resolved path: …"}`. Green: packages/coding-agent/test/tools/edit-preflight-missing.test.ts (4 tests).
+:PROPERTIES:
+:CUSTOM_ID: EP-9c180b10d6ee8a98
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-24T13:17:06Z
+:END:
+:RELATIONS:
+ABOUT: BUG-403-edit-lacks-pre-flight-fs-exists-for-non
+:END:
+** ITEM simplify line addressing — drop LINE#HASH anchors, accept raw line numbers
+
+Fixed in commit 4879100e3 (PLAN-317). LineAnchor → newtype `LineAnchor(u32)` with `#[serde(transparent)]`; LineAt now `{side, line: u32}`; TS schemas (`lineAnchorSchema`, `lineSpanSchema`, `lineAtSchema`) all numeric. Deleted: `text/anchor.rs`, `compute_line_hash`, `verify_anchor_in_text`, hashline dispatch in edit.ts, `prompts/tools/hashline.md`, LINE#ID rendering in dialects/text/{mod,axes}.rs. Updated prompts (edit.md, get.md, grep.md, code-migration.md, system-prompt.md). Green: edit-line-numeric.test.ts (6 tests). 78/0 across edit.test.ts + edit-matrix + wave-j-edge-cases.
+:PROPERTIES:
+:CUSTOM_ID: EP-493a513db527ce52
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-24T13:17:32Z
+:END:
+:RELATIONS:
+ABOUT: BUG-404-simplify-line-addressing-drop-linehash-a
+:END:
+** ITEM edit-tool reliability — root threading, fail-loud diagnostics, simplified line addressing
+
+Shipped in commit 4879100e3. All four BUGs closed. Test impact: coding-agent suite 129 fail → 79 fail (50 net fixes, 0 regressions); cargo --workspace clean. Followup-worthy: prune dead `patch/hashline.ts` machinery (still imported by patch/diff.ts, code-result.ts, tool-execution.ts, prompt-templates.ts but no agent-reachable code paths after this cutover).
+:PROPERTIES:
+:CUSTOM_ID: EP-afd6d60f3720a12d
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-24T13:17:55Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-317-edit-tool-reliability-root-threading-fai
+:END:

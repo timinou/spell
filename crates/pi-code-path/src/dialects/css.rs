@@ -12,7 +12,7 @@ use tree_sitter::Node;
 use crate::{
 	ast::NamePayload,
 	dialect::{
-		AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierResolver, QualifierSpec,
+		AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierSpec,
 	},
 };
 

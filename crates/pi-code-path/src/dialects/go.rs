@@ -3,7 +3,7 @@
 //! Per `specs/code-graph/code-path-dialects/04-go.md`. Names use `.` separator
 //! with `(*Type).Method` and `(Type).Method` receiver-method form.
 
-use std::{ops::Range, sync::Arc};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tree_sitter::Node;
@@ -12,7 +12,7 @@ use winnow::{Parser, token::take_while};
 use crate::{
 	ast::NamePayload,
 	dialect::{
-		AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierResolver, QualifierSpec,
+		AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierSpec,
 	},
 };
 

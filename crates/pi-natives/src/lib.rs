@@ -87,6 +87,11 @@ pub mod embedding_worker;
 #[cfg(unix)]
 pub mod knowledge_client;
 
+// FEAT-784: NAPI wrapper around KnowledgeSubscription for the
+// MemoryStatusController push-update path.
+#[cfg(unix)]
+pub mod knowledge_napi;
+
 // PLAN-310: kernel-side scheme exec — bash URI pre-processing
 // and CodePath execution for kernel-owned schemes.
 pub mod exec;

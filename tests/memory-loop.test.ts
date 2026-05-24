@@ -1,25 +1,31 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
 // PLAN-310 W10: stub wired to the real memory tool via dispatchMemoryAction.
-// The corpus at tests/fixtures/memory-corpus/ is used as a synthetic 'repo' root
-// by setting its parent as a repo with a .spell/memory directory layout.
+// The corpus at tests/fixtures/memory-corpus/ is the canonical (read-only)
+// source. Each test gets its own writable copy under os.tmpdir() to keep
+// write-mutating tests (link/save/note) from leaking into the working tree
+// and contaminating later runs. (BUG-400)
 import { dispatchMemoryAction, type MemoryParams } from "../packages/coding-agent/src/tools/memory";
 
-const CORPUS = path.resolve(import.meta.dir, "./fixtures/memory-corpus");
+const CANONICAL_CORPUS = path.resolve(import.meta.dir, "./fixtures/memory-corpus");
 
-const MEM_DIR = path.join(CORPUS, ".spell", "memory");
+/** Per-test active corpus root. Set in beforeEach; cleaned in afterEach. */
+let activeCorpus: string;
+
+/** Per-test memory dir, derived from `activeCorpus`. */
+function memDir(): string {
+	return path.join(activeCorpus, ".spell", "memory");
+}
 
 /**
- * Drive the real memory tool. The corpus directory acts as the repoRoot;
- * the recall engine reads from .spell/memory/{episodes,concepts,actors,entities}.
- * For convenience, unwrap the {hits} envelope so tests can assert on arrays.
+ * Drive the real memory tool against the per-test corpus copy. Search
+ * returns `{hits, action, count}`; tests want the flat array, so unwrap.
  */
 async function memory(call: Record<string, unknown>): Promise<unknown> {
-	const result = await dispatchMemoryAction(call as unknown as MemoryParams, CORPUS);
-	// Search returns {hits, action, count}; tests expect the flat array.
+	const result = await dispatchMemoryAction(call as unknown as MemoryParams, activeCorpus);
 	if (
 		result
 		&& typeof result === "object"
@@ -32,6 +38,14 @@ async function memory(call: Record<string, unknown>): Promise<unknown> {
 }
 
 describe("PLAN-310 W10 — memory loop", () => {
+	beforeEach(async () => {
+		activeCorpus = await fs.mkdtemp(path.join(os.tmpdir(), "spell-memory-loop-"));
+		await fs.cp(CANONICAL_CORPUS, activeCorpus, { recursive: true });
+	});
+
+	afterEach(async () => {
+		await fs.rm(activeCorpus, { recursive: true, force: true });
+	});
 	test("T10.1 search returns episode by topic", async () => {
 		// Test intent (per name): a topical query against scope="episode"
 		// must return at least one episode (EP-*). Without the scope filter
@@ -75,7 +89,7 @@ describe("PLAN-310 W10 — memory loop", () => {
 			title: "Test concept",
 			body: "A test concept body for indexing.",
 		});
-		const expectedFile = path.join(MEM_DIR, "concepts", "CON-test-concept.org");
+		const expectedFile = path.join(memDir(), "concepts", "CON-test-concept.org");
 		const stat = await fs.stat(expectedFile);
 		expect(stat.isFile()).toBe(true);
 
@@ -115,7 +129,7 @@ describe("PLAN-310 W10 — memory loop", () => {
 		};
 		expect(about.neighbors.some((n) => n.id === "CON-auth-flow" && n.kind === "ABOUT")).toBe(true);
 
-		const filePath = path.join(MEM_DIR, "episodes", "EP-2026-05-15-auth-discovery.org");
+		const filePath = path.join(memDir(), "episodes", "EP-2026-05-15-auth-discovery.org");
 		const content = await fs.readFile(filePath, "utf8");
 		expect(content).toContain(":RELATIONS:");
 		expect(content).toContain("CON-auth-flow");
@@ -218,7 +232,7 @@ describe("PLAN-310 W10 — memory loop", () => {
 		expect(step3).toBeDefined();
 		for (const id of [topHit, linkedConcept]) {
 			const fixturePath = path.join(
-				MEM_DIR,
+				memDir(),
 				id.startsWith("EP-") ? "episodes" : "concepts",
 				`${id}.org`,
 			);

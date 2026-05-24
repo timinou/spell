@@ -1,0 +1,53 @@
+#+TITLE: cargo warnings cleanup across pi-code-path dialects
+#+STATE: DONE
+#+SESSION_ID: 14eb4e97aabcb79a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-22T14-09-29-258Z_14eb4e97aabcb79a.jsonl]]
+#+CUSTOM_ID: BUG-399-cargo-warnings-cleanup-across-pi-code-pa
+#+COMPLETION_HASH: 00ee81e9809546ce
+
+* Initial Message
+
+1. Daemon-side cancellation in recall_engine::query — currently AbortSignal aborts only the JS await; daemon work continues.
+ 2. Eager warmMemoryLane at session_start could now genuinely pre-warm via async dispatch — still requires daemon to be initialised first, so
+ user's first recall still pays the bge-m3 model load.
+
+
+
+yeah file them and tell me how hard it would be to actually implement them. anything else in terms of improvements?
+
+~16 unused-import warnings across pi-code-path dialects (css, go,
+haskell, html, …) and 1 unused-variable in pi-natives walker. None
+are correctness issues; all flagged by `rustc` build, not clippy.
+
+** Inventory
+
+- `crates/pi-code-path/src/dialects/*.rs`:
+  - `unused import: QualifierResolver` (most dialects)
+  - `unused import: ops::Range` (go, haskell, html, …)
+  - `unused import: Path` (fs/walker.rs)
+- `crates/pi-natives/src/code_path/code_resolver/walker.rs:78`:
+  - `unused variable: bytes_len`
+
+** Fix shape
+
+- Delete the imports / variable.
+- If `QualifierResolver` is intended to be re-exported through these
+  dialect modules, leave it but switch to `pub use` to silence the
+  warning AND make the intent explicit.
+
+** Acceptance
+
+- `cargo build -p pi-natives --tests 2>&1 | grep "warning: unused"` →
+  empty.
+- No new warnings introduced.
+- No behavior change.
+
+** Difficulty
+
+~15-30 min. Mechanical.
+
+** Related
+
+- Surfaced incidentally during FEAT-780 verification.
+
+NOTE [2026-05-24]: Workspace unused-import/variable warnings: 30 → 0. cargo fix auto-handled ~14; manual cleanup for 16 nested-mod re-imports + dead test imports. Touched files: crates/pi-code-path/{dialects/text/qualifiers.rs, resolver/projection.rs, ...}, crates/pi-natives/{code_path/napi.rs, runtime_schemes.rs, code_path/code_resolver/walker.rs, code_graph.rs, embedding_worker.rs, code_path/language_matrix_tests.rs}, crates/pi-knowledge-worker/tests/daemon.rs, crates/pi-org-engine/tests/graph_typed.rs, crates/pi-code-engine/src/buffer.rs, crates/pi-edit-broker/tests/{multi_commit.rs, common/mod.rs}. Tests still green: pi-natives 358, pi-code-path 427.

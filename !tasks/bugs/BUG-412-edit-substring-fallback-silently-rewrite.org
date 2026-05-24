@@ -1,0 +1,63 @@
+#+TITLE: edit: substring fallback silently rewrites mid-identifier matches
+#+STATE: DOING
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: BUG-412-edit-substring-fallback-silently-rewrite
+#+LAYER: pi-code-engine pi-natives coding-agent
+
+* Initial Message
+
+try to use those affordances again and tell me what's still not working/not ergonomic
+
+* Initial Message
+
+=edit { fileFindReplace, find: "Var", content: "VAR" }= against source =const longVariableName = 1;= silently produced =const longVARiableName = 1;= — substring match landed inside an identifier with no warning. Output read =Updated /tmp/foo.ts (1 edit(s))= — agent has no way to know the match was unsafe.
+
+* Root Cause
+
+=crates/pi-code-engine/src/edit/patch.rs:240-244=:
+#+begin_src rust
+if results.is_empty() && needle_lines.len() == 1 {
+    return find_raw_text(haystack, needle);   // unanchored haystack.match_indices()
+}
+#+end_src
+
+When the indent-insensitive line-by-line match fails AND the needle is single-line, fall through to raw substring search. =find_raw_text= uses =haystack.match_indices(needle)= — no word boundary, no warning when match crosses identifier boundaries.
+
+* Scope (C + E from design discussion)
+
+In:
+- =crates/pi-code-engine/src/edit/patch.rs= — when the substring-fallback path matches inside an identifier (preceded/followed by identifier-continuation chars), refuse with a structured error showing match preview + =force: true= opt-in.
+- =crates/pi-code-engine/src/edit/patch.rs::Patch= — add =force: bool= field for explicit substring opt-in.
+- Identifier-continuation predicate: Unicode-aware default (=char::is_alphanumeric() || c == '_'=), with per-dialect override hook on =LanguageProfile= so CSS can accept =-= mid-token, Lisp =+!?=, etc.
+- =crates/pi-code-engine/src/edit/patch.rs= — always include matched-region echo in success output: =Updated /path (1 edit). Matched: "<±15 chars context>".= Apply to all =find_*= ops, not just fallback path.
+- =crates/pi-natives/src/code_buffer.rs= — thread =force= flag through =parse_patches=.
+- =packages/coding-agent/src/tools/codepath-op-schema.generated.ts= and =codepath-primitives.ts= — add =force?: boolean= to find/replace action schemas.
+- =packages/coding-agent/src/prompts/tools/edit.md= — document the refusal + =force= opt-in.
+
+Out:
+- Changing the multi-line indent-strip behavior (works correctly).
+- Removing the substring fallback entirely (it's useful for legitimate fragment edits; just needs guard).
+
+* Tests
+
+1. =crates/pi-code-engine/src/edit/patch.rs::tests::substring_match_inside_identifier_refused= — =find: "Var"= against =longVariableName= → refusal error.
+2. =substring_match_inside_identifier_force_succeeds= — same input with =force: true= → applies.
+3. =substring_match_word_boundary_succeeds= — =find: "foo"= against =foo();= → matches without =force= (word-boundary clean).
+4. =substring_match_unicode_identifier_refused= — =find: "naïv"= against =naïveImpl= → refusal (Unicode alphanumeric).
+5. =substring_match_css_hyphen_continuation= — =find: "primary"= against =--primary-color= → refusal when dialect is CSS (=-= is identifier-continuation in CSS).
+6. =success_output_echoes_matched_region= — successful edit returns matched-region context in the result text.
+7. =multiline_indent_strip_unaffected= — existing multi-line indent-tolerant matching still works.
+
+* Acceptance
+
+- Mid-identifier substring matches refuse with actionable error + =force= opt-in.
+- Successful edits echo matched region (±15 chars context).
+- CSS hyphen / Lisp =!?= dialects honor their own identifier rules.
+- Multi-line / indent-stripped matching unaffected.
+
+* Verification
+
+- =cargo test -p pi-code-engine edit::patch=
+- =bun test packages/coding-agent/test/tools/edit.test.ts=
+- Manual repro of the =Var= → =longVariableName= case, confirm refusal.

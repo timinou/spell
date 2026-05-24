@@ -2,41 +2,41 @@ import { describe, expect, test } from "bun:test";
 import { extractOrgKeywords, orgToMarkdown, orgToPlainText, parseOrgHeadings } from "../src/org-parse";
 
 describe("orgToMarkdown", () => {
-	test("converts headings", () => {
-		const result = orgToMarkdown("* H1\n** H2");
+	test("converts headings", async () => {
+		const result = await orgToMarkdown("* H1\n** H2");
 		expect(result).toContain("H1");
 		expect(result).toContain("H2");
 	});
 
-	test("converts src blocks", () => {
+	test("converts src blocks", async () => {
 		const org = "#+begin_src typescript\nconst x = 1;\n#+end_src";
-		const result = orgToMarkdown(org);
+		const result = await orgToMarkdown(org);
 		expect(result).toContain("const x = 1;");
 		expect(result).toContain("```");
 	});
 
-	test("handles empty string", () => {
-		expect(orgToMarkdown("").trim()).toBe("");
+	test("handles empty string", async () => {
+		expect((await orgToMarkdown("")).trim()).toBe("");
 	});
 
-	test("PROPERTIES drawer does not produce garbage", () => {
+	test("PROPERTIES drawer does not produce garbage", async () => {
 		const org = "* My Heading\n:PROPERTIES:\n:CUSTOM_ID: test-123\n:END:\nBody text here";
-		const result = orgToMarkdown(org);
+		const result = await orgToMarkdown(org);
 		expect(result).toContain("Body text here");
 		expect(typeof result).toBe("string");
 	});
 });
 
 describe("orgToPlainText", () => {
-	test("strips markup", () => {
-		const result = orgToPlainText("* Heading\nSome text");
+	test("strips markup", async () => {
+		const result = await orgToPlainText("* Heading\nSome text");
 		expect(result).toContain("Heading");
 		expect(typeof result).toBe("string");
 		expect(result.length).toBeGreaterThan(0);
 	});
 
-	test("handles empty string", () => {
-		expect(orgToPlainText("").trim()).toBe("");
+	test("handles empty string", async () => {
+		expect((await orgToPlainText("")).trim()).toBe("");
 	});
 });
 

@@ -1,0 +1,59 @@
+#+TITLE: status index: graph_stats handler missing, command always reports unavailable
+#+STATE: ITEM
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: BUG-406-status-index-graph-stats-handler-missing
+
+* Initial Message
+
+try to use those affordances again and tell me what's still not working/not ergonomic
+
+* Initial Message
+
+=status { command: "index" }= returns:
+#+begin_example
+{ "available": false, "message": "Unknown command: graph_stats" }
+#+end_example
+
+The agent has no way to check whether the code graph is warm before issuing =def→= / =ref→= / =call→= queries.
+
+* Root Cause
+
+=crates/pi-natives/src/code_path/manage.rs:234-237=:
+#+begin_src rust
+let payload = dispatch(json!({
+    "command": "graph_stats",
+    "root": root.display().to_string(),
+})).unwrap_or_else(|err| json!({ "available": false, "message": err }));
+#+end_src
+
+=code_buffer.rs::execute_code_buffer_inner= match arms (lines 1640-1740) cover =open/close/reload/watcherStatus/lockStatus/list/languages/coord_status/coord_peer_activity=. No =graph_stats= arm exists. Dead since the call site was added.
+
+Compounding: =EdgeResolverImpl::new= has zero production call sites (5 = =#[cfg(test)]= only). =resolver/dispatch.rs::DispatchEngine= explicitly documents itself as a stub. So there's also no live =CodeGraph= to stat — fixing the handler requires PLAN-318 W1 (graph wiring) to land first.
+
+* Scope
+
+In:
+- =crates/pi-natives/src/code_buffer.rs= — add =graph_stats= command arm that returns the cached =CodeGraph::stats()= (PRE-REQ: workspace-scoped =Arc<CodeGraph>= cache from PLAN-318 W1).
+- =crates/pi-natives/src/code_path/manage.rs= — return shape: =​{warm, file_count, symbol_count, edge_count, language_counts, last_built_at}= when warm, =​{warm: false, reason}= when cold.
+
+Out:
+- Building the graph eagerly. Lazy build is W1's job.
+- Eager =status index build= subcommand (defer to FUP if real need surfaces).
+
+* Tests
+
+1. =crates/pi-natives/src/code_path/manage_tests.rs::index_handler_returns_cold_when_no_query= — fresh process, no edge query yet → =​{warm: false}=.
+2. =index_handler_returns_stats_when_warm= — trigger one =def→= query, then =status index= returns populated stats.
+3. =index_handler_survives_handler_rebuild= — after watcher invalidation, stats reflect rebuilt graph.
+
+* Acceptance
+
+- =status { command: "index" }= never returns "Unknown command".
+- Cold and warm states are clearly distinguished and machine-parsable.
+- Stats reflect the actual workspace graph state.
+
+* Verification
+
+- =cargo test -p pi-natives manage::index=
+- Manual: =find { target: ".../some.rs::Foo def→§call_expression" }= then =status { command: "index" }= shows populated counts.

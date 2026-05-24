@@ -21,24 +21,24 @@ afterEach(async () => {
 	await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
-function skipIfNoNative(): boolean {
+async function skipIfNoNative(): Promise<boolean> {
 	try {
-		executeOrg({ command: "recall", text: "x" });
+		await executeOrg({ command: "recall", text: "x" });
 		return false;
 	} catch {
 		return true;
 	}
 }
 
-function subgraph(args: Record<string, unknown>): Record<string, unknown> {
-	const result = executeOrg({ command: "subgraph", repoRoot: tmpDir, ...args });
+async function subgraph(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+	const result = await executeOrg({ command: "subgraph", repoRoot: tmpDir, ...args });
 	if (result.error) throw new Error(String(result.output));
 	return result.output as Record<string, unknown>;
 }
 
 describe("subgraph hops=1", () => {
 	test("returns immediate neighbors", async () => {
-		if (skipIfNoNative()) return;
+  if (await skipIfNoNative()) return;
 
 		const memoryDir = path.join(tmpDir, ".spell/memory");
 		await fs.mkdir(path.join(memoryDir, "concepts"), { recursive: true });
@@ -68,7 +68,7 @@ describe("subgraph hops=1", () => {
 			].join("\n"),
 		);
 
-		const result = subgraph({ root: "CON-oauth", hops: 1 });
+		const result = await subgraph({ root: "CON-oauth", hops: 1 });
 
 		const nodes = (result as { nodes?: unknown[] }).nodes ?? [];
 		const edges = (result as { edges?: unknown[] }).edges ?? [];
@@ -83,7 +83,7 @@ describe("subgraph hops=1", () => {
 
 describe("subgraph hops=2 with kind filter", () => {
 	test("filters edges by kind", async () => {
-		if (skipIfNoNative()) return;
+  if (await skipIfNoNative()) return;
 
 		const memoryDir = path.join(tmpDir, ".spell/memory");
 		await fs.mkdir(path.join(memoryDir, "concepts"), { recursive: true });
@@ -123,7 +123,7 @@ describe("subgraph hops=2 with kind filter", () => {
 			].join("\n"),
 		);
 
-		const result = subgraph({ root: "CON-root", hops: 2, kinds: ["INVOLVED"] });
+		const result = await subgraph({ root: "CON-root", hops: 2, kinds: ["INVOLVED"] });
 
 		const nodeIds = ((result as { nodes?: Array<{ id: string }> }).nodes ?? []).map(n => n.id);
 		const edgeKinds = ((result as { edges?: Array<{ kind: string }> }).edges ?? []).map(e => e.kind);

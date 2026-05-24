@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use pi_code_path::{
 	ActionContent, CodePath, CssTarget, DiagnosticVariant, FileTarget, FsLocator, FsSegment, Head,
-	HeadingTarget, Locator, NamePayload, Op, OpKind, Query, Step, SymbolTarget, UriLocator,
+	HeadingTarget, Locator, NamePayload, Op, Query, Step, SymbolTarget, UriLocator,
 	dialects::typescript::TsNameLexer,
 	parse_code_path,
 	resolver::{

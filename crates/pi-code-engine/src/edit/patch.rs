@@ -439,4 +439,67 @@ mod tests {
 		assert_eq!(edits.len(), 1);
 		assert_eq!(edits[0].new_text, "x\ny");
 	}
+
+	// BUG-412 (PLAN-318 W0): substring fallback that lands inside an identifier
+	// must refuse without `force: true`. Currently silently rewrites mid-token.
+	#[test]
+	fn substring_match_inside_identifier_refused() {
+		let source = "const longVariableName = 1;\n";
+		let buffer = ts_buffer(source);
+		let err = apply_patches(&buffer, 0, source.len(), &[Patch {
+			find:       "Var".into(),
+			replace:    "VAR".into(),
+			occurrence: Occurrence::Unique,
+		}])
+		.expect_err("substring match inside identifier must be refused");
+		let msg = err.to_string();
+		assert!(
+			msg.contains("identifier") || msg.contains("boundary") || msg.contains("word"),
+			"expected refusal mentioning identifier/boundary/word; got: {msg}"
+		);
+		assert!(
+			msg.contains("force"),
+			"expected hint about `force: true` opt-in; got: {msg}"
+		);
+	}
+
+
+	// BUG-412 (PLAN-318 W0): clean word-boundary substring matches succeed
+	// without force. `foo` matching ` foo;` is unambiguous and safe.
+	#[test]
+	fn substring_match_at_word_boundary_succeeds_without_force() {
+		let source = "const x = foo();\nconst y = bar();\n";
+		let buffer = ts_buffer(source);
+		let edits = apply_patches(&buffer, 0, source.len(), &[Patch {
+			find:       "foo".into(),
+			replace:    "foo2".into(),
+			occurrence: Occurrence::Unique,
+		}])
+		.expect("word-boundary substring should succeed");
+		assert_eq!(edits.len(), 1);
+	}
+
+
+	// BUG-410 (PLAN-318 W0): the `edit error:` prefix is added once by Display.
+	// Currently double-wrapping in the napi layer produces `edit error: edit error: …`.
+	// Kernel-level test asserts the contract at the source: a single Edit error
+	// renders with exactly one `edit error:` prefix.
+	#[test]
+	fn error_message_has_single_edit_prefix() {
+		let source = "";
+		let buffer = ts_buffer(source);
+		let err = apply_patches(&buffer, 0, 0, &[Patch {
+			find:       "anything".into(),
+			replace:    "x".into(),
+			occurrence: Occurrence::Unique,
+		}])
+		.expect_err("empty buffer must produce an error");
+		let msg = err.to_string();
+		let prefix_count = msg.matches("edit error:").count();
+		assert_eq!(
+			prefix_count, 1,
+			"expected exactly one `edit error:` prefix; got {prefix_count} in: {msg}"
+		);
+	}
+
 }

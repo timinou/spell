@@ -2126,7 +2126,7 @@ mod tests {
 		std::fs::write(&path, "export const value = 1;\n").expect("write");
 		let client = Arc::new(crate::coord::MockCoordClient::new());
 		let reg = BufferRegistry::new_with_coord(registry(), None, client.clone());
-		let (outcome, ()) = reg
+		let (_outcome, ()) = reg
 			.edit_transaction(None::<&str>, &path, &["::value".into()], |buf| {
 				buf.edit(TextEdit {
 					start_byte:   0,

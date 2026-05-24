@@ -161,7 +161,7 @@ interface ReadOrgFileOptions {
 }
 
 async function readOrgFile(opts: ReadOrgFileOptions): Promise<OrgItem[]> {
-	const result = executeOrg({
+	const result = await executeOrg({
 		command: "parse",
 		file: opts.filePath,
 		category: opts.category,
@@ -255,7 +255,7 @@ async function initCategoryDir(categoryAbsPath: string, prefix: string, todoKeyw
 }
 
 async function fetchItems(ctx: OrgContext, id: string, includeBody = true): Promise<OrgItem[]> {
-	const result = executeOrg({
+	const result = await executeOrg({
 		command: "orgIndexResolve",
 		root: ctx.projectRoot,
 		categories: indexCategories(ctx),
@@ -279,10 +279,10 @@ function indexCategories(ctx: OrgContext): Array<{ absPath: string; name: string
 	}));
 }
 
-function indexedList(
+async function indexedList(
 	ctx: OrgContext,
 	args: { includeBody?: boolean; category?: string | string[]; level?: number },
-): OrgItem[] {
+): Promise<OrgItem[]> {
 	const categories = indexCategories(ctx);
 	const categoryFilter =
 		args.category === undefined ? undefined : Array.isArray(args.category) ? args.category : [args.category];
@@ -290,7 +290,7 @@ function indexedList(
 		category: categoryFilter,
 		level: args.level,
 	};
-	const result = executeOrg({
+	const result = await executeOrg({
 		command: "orgIndexList",
 		root: ctx.projectRoot,
 		categories,
@@ -364,7 +364,7 @@ async function cmdCreate(
 		const filePath = path.join(cat.absPath, fileName);
 		const rewriteResult = args.body === undefined ? undefined : rewriteSubOutlineIds(id, args.body);
 		const rewrittenBody = rewriteResult?.body;
-		const result = executeOrg({
+		const result = await executeOrg({
 			command: "createItem",
 			file: filePath,
 			id,
@@ -430,7 +430,7 @@ async function cmdQuery(
 	if (parsed.priority && !filter.priority) merged.priority = parsed.priority;
 	if (parsed.layer && !filter.layer) merged.layer = parsed.layer;
 	if (parsed.agent && !filter.agent) merged.agent = parsed.agent;
-	const allItems = indexedList(ctx, {
+	const allItems = await indexedList(ctx, {
 		includeBody: filter.includeBody ?? false,
 		category: targetCats.map(cat => cat.name),
 		level: 0,
@@ -482,9 +482,9 @@ async function cmdUpdate(
 		const body = args.body ?? args.append ?? "";
 		const rewrittenBody = rewriteSubOutlineIds(args.id, body).body;
 		const trySectionUpdate = async (filePath: string): Promise<Record<string, unknown> | null> => {
-			let result: ReturnType<typeof executeOrg>;
+   let result: Awaited<ReturnType<typeof executeOrg>>;
 			try {
-				result = executeOrg({
+				result = await executeOrg({
 					command: "editSection",
 					file: filePath,
 					id: args.id,
@@ -540,9 +540,9 @@ async function cmdUpdate(
 	const rewrittenBody = args.body === undefined ? undefined : rewriteSubOutlineIds(args.id, args.body).body;
 	const rewrittenAppend = args.append === undefined ? undefined : rewriteSubOutlineIds(args.id, args.append).body;
 	const tryUpdate = async (filePath: string): Promise<Record<string, unknown> | null> => {
-		let result: ReturnType<typeof executeOrg>;
+  let result: Awaited<ReturnType<typeof executeOrg>>;
 		try {
-			result = executeOrg({
+			result = await executeOrg({
 				command: "updateItem",
 				file: filePath,
 				id: args.id,
@@ -608,7 +608,7 @@ async function emitCompletionEpisode(ctx: OrgContext, id: string, _filePath: str
 	if (item.properties.COMPLETION_HASH === hash) return;
 
 	const summary = `${item.title}\n\n${completionText}`;
-	const result = executeOrg({
+	const result = await executeOrg({
 		command: "remember",
 		kind: "episode",
 		summary,
@@ -622,7 +622,7 @@ async function emitCompletionEpisode(ctx: OrgContext, id: string, _filePath: str
 	// completion text) skip cleanly. Best-effort: a failure here does not
 	// invalidate the episode we just wrote.
 	try {
-		executeOrg({
+		await executeOrg({
 			command: "setProperty",
 			file: item.file,
 			id: item.id,
@@ -692,9 +692,9 @@ async function cmdSet(
 	},
 ): Promise<unknown> {
 	const trySet = async (filePath: string): Promise<Record<string, unknown> | null> => {
-		let result: ReturnType<typeof executeOrg>;
+  let result: Awaited<ReturnType<typeof executeOrg>>;
 		try {
-			result = executeOrg({
+			result = await executeOrg({
 				command: "setProperty",
 				file: filePath,
 				id: args.id,
@@ -738,9 +738,9 @@ async function cmdNote(
 	args: { id: string; note: string; file?: string; includeBody?: boolean },
 ): Promise<unknown> {
 	const tryNote = async (filePath: string): Promise<Record<string, unknown> | null> => {
-		let result: ReturnType<typeof executeOrg>;
+  let result: Awaited<ReturnType<typeof executeOrg>>;
 		try {
-			result = executeOrg({
+			result = await executeOrg({
 				command: "appendNote",
 				file: filePath,
 				id: args.id,
@@ -813,7 +813,7 @@ async function cmdDelete(ctx: OrgContext, args: { id: string; file?: string }): 
 	return { success: true, id: item.id, file: item.file, deleted: true };
 }
 async function cmdDashboard(ctx: OrgContext): Promise<unknown> {
-	const result = executeOrg({
+	const result = await executeOrg({
 		command: "orgIndexDashboard",
 		root: ctx.projectRoot,
 		categories: indexCategories(ctx),
@@ -871,7 +871,7 @@ async function cmdSuboutlineAdd(
 	const block = buildSuboutlineBlock(args);
 	const append = `${parentBody.trim().length > 0 ? "\n\n" : ""}${block}`;
 	const result = await createCategoryMutex.withLock(parentItem.file, async () =>
-		executeOrg({
+		await executeOrg({
 			command: "updateItem",
 			file: parentItem.file,
 			id: parentItem.id,
@@ -892,7 +892,7 @@ async function cmdValidate(ctx: OrgContext, args: { category?: string; file?: st
 	const targets = args.category ? categories.filter(c => c.name === args.category) : categories;
 	const issues: ValidationIssue[] = [];
 	for (const cat of targets) {
-		const items = indexedList(ctx, { category: cat.name, includeBody: false });
+		const items = await indexedList(ctx, { category: cat.name, includeBody: false });
 		for (const item of items) {
 			for (const prop of REQUIRED_PROPERTIES)
 				if (!item.properties[prop])
@@ -928,7 +928,7 @@ async function collectItems(ctx: OrgContext, args: { file?: string; category?: s
 	const targets = args.category
 		? categories.filter(cat => cat.name === args.category || cat.prefix === args.category).map(cat => cat.name)
 		: undefined;
-	const items = indexedList(ctx, { category: targets, includeBody: false });
+	const items = await indexedList(ctx, { category: targets, includeBody: false });
 	return args.file ? items.filter(item => item.file === args.file) : items;
 }
 
@@ -952,7 +952,7 @@ async function collectPlanWaveItems(
 		seenItems.add(key);
 		items.push(item);
 	};
-	const indexedItems = indexedList(ctx, { includeBody: false });
+	const indexedItems = await indexedList(ctx, { includeBody: false });
 	for (const linkedId of linkedIds) {
 		const subOutline = parseSubOutlineId(linkedId);
 		if (subOutline) {
@@ -996,7 +996,7 @@ async function writeManifestSection(
 ): Promise<{ success: true } | { error: true; message: string }> {
 	const body = manifestSectionBody(manifest);
 	try {
-		const replaceResult = executeOrg({
+		const replaceResult = await executeOrg({
 			command: "editSection",
 			file: planItem.file,
 			id: planItemId,
@@ -1017,7 +1017,7 @@ async function writeManifestSection(
 	}
 
 	try {
-		const appendResult = executeOrg({
+		const appendResult = await executeOrg({
 			command: "updateItem",
 			file: planItem.file,
 			id: planItemId,
@@ -1118,7 +1118,7 @@ async function cmdWave(
 				plan_item_id: args.planItemId,
 			};
 		}
-		const raw = executeOrg({ command: "computeWaves", items: collected.items, doneStates: ["DONE"] });
+		const raw = await executeOrg({ command: "computeWaves", items: collected.items, doneStates: ["DONE"] });
 		if (raw.error) return raw.output;
 		const output = requireComputedWaveResult(raw.output);
 		if ("error" in output) return output;
@@ -1142,7 +1142,7 @@ async function cmdWave(
 	}
 
 	const items = await collectItems(ctx, args);
-	const raw = executeOrg({
+	const raw = await executeOrg({
 		command: args.manifest ? "computeWaves" : "nextWave",
 		items,
 		doneStates: ["DONE"],
@@ -1168,12 +1168,12 @@ async function cmdWave(
 
 async function cmdGraph(ctx: OrgContext, args: { file?: string; category?: string }): Promise<unknown> {
 	const items = await collectItems(ctx, args);
-	const raw = executeOrg({ command: "graph", items });
+	const raw = await executeOrg({ command: "graph", items });
 	return raw.output;
 }
 
 async function cmdArchive(ctx: OrgContext, args: { category?: string }): Promise<unknown> {
-	const result = executeOrg({
+	const result = await executeOrg({
 		command: "orgIndexArchive",
 		root: ctx.projectRoot,
 		categories: indexCategories(ctx),

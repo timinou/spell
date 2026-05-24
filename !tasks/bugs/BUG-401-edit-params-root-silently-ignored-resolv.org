@@ -1,5 +1,5 @@
 #+TITLE: edit.params.root silently ignored — resolves against session.cwd
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14edc1bec5a09a49
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
 #+CUSTOM_ID: BUG-401-edit-params-root-silently-ignored-resolv
@@ -8,6 +8,7 @@
 #+PRIORITY: #A
 #+SESSION_ID: 14edc1bec5a09a49
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+COMPLETION_HASH: b99a5b8a62bab041
 
 * Initial Message
 
@@ -84,3 +85,5 @@ must be inside the sandbox root or the call rejects.
 * Difficulty
 
 ~30 min. 5-line fix + 1 test. Self-contained, no kernel changes.
+
+NOTE [2026-05-24]: Fixed in commit 4879100e3 (PLAN-317). edit.ts now threads `params.root ?? session.cwd` as `effectiveCwd` into both `resolveCwdRelativePath` and `#executeStructural`. Green: packages/coding-agent/test/tools/edit-root-threading.test.ts (3 tests).

@@ -4,7 +4,7 @@
 //! heading text (possibly quoted with `"…"` to embed spaces) or list-item
 //! positions (`item.3.subitem.5`).
 
-use std::{ops::Range, sync::Arc};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tree_sitter::Node;
@@ -13,7 +13,7 @@ use winnow::{Parser, token::take_while};
 use crate::{
 	ast::NamePayload,
 	dialect::{
-		AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierResolver, QualifierSpec,
+		AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierSpec,
 	},
 };
 
@@ -207,7 +207,7 @@ mod qualifiers {
 	use crate::{
 		dialect::QualifierResolver,
 		dialects::mdorg::{
-			first_child_kind, has_descendant_kind, heading_child, heading_text_node, match_kind,
+			first_child_kind, heading_child, heading_text_node, match_kind,
 		},
 	};
 

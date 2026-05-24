@@ -1,0 +1,87 @@
+#+TITLE: daemon-side cancellation in recall_engine::query
+#+STATE: ITEM
+#+SESSION_ID: 14eb4e97aabcb79a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-22T14-09-29-258Z_14eb4e97aabcb79a.jsonl]]
+#+CUSTOM_ID: FEAT-781-daemon-side-cancellation-in-recall-engin
+
+* Initial Message
+
+1. Daemon-side cancellation in recall_engine::query — currently AbortSignal aborts only the JS await; daemon work continues.
+ 2. Eager warmMemoryLane at session_start could now genuinely pre-warm via async dispatch — still requires daemon to be initialised first, so
+ user's first recall still pays the bge-m3 model load.
+
+
+
+yeah file them and tell me how hard it would be to actually implement them. anything else in terms of improvements?
+
+FEAT-780 wired AbortSignal through `task::blocking` so the JS await
+aborts cleanly, but the daemon RPC continues to completion — the agent
+detaches but bge-m3 embedding + vector scan keep burning CPU/GPU until
+done. Wasted work, and a cancelled-then-immediately-reissued query
+serializes behind the dead one.
+
+** Current shape
+
+- `task::blocking("executeOrg", ct, work)` — `ct` is checked only between
+  yield points inside the blocking closure; the inner call is a single
+  blocking line-delimited JSON write+read against
+  `$XDG_RUNTIME_DIR/spell/knowledge.sock` (see
+  `pi_natives::embedding_worker::with_worker`).
+- Daemon's `with_worker` mutex serializes wire-level RPC, so a stuck slow
+  query holds the lock and other recall calls queue behind it.
+- Recall engine: `crates/pi-knowledge-worker/src/recall_engine.rs` —
+  query loop walks FTS hits + vector neighbours; the embed step is a
+  candle-core forward pass on bge-m3, atomic per call.
+
+** Sketch
+
+- Protocol bump v2 → v3: add `request_id: u64` to every request frame,
+  add `cancel { request_id }` command. Backwards-compat: missing id ⇒
+  daemon synthesises one; cancel for unknown id ⇒ no-op + ack.
+- Daemon: per-connection request registry `HashMap<u64, CancellationToken>`;
+  inject into `recall_engine::query` + `embed_query`.
+- Embed loop: check `ct.is_cancelled()` between batches (cancel latency
+  ≈ one batch ≈ 10-50ms — single forward pass is atomic and bge-m3
+  doesn't expose mid-pass hooks).
+- Vector scan + FTS: check between candidate windows.
+- Client: on AbortSignal fire, send `cancel { request_id }` on a
+  side-channel (don't block on the pending response socket) — needs a
+  second writer half or a dedicated cancel socket.
+
+** Why not single connection cancel
+
+The natural impulse "just close the socket on abort" is wrong: daemon
+holds a `with_worker` mutex for the whole RPC; killing the socket leaves
+the daemon thread running and the mutex held until the recall returns
+naturally. Cancel must flow through a different channel.
+
+** Acceptance
+
+- AbortController fired mid-recall → daemon worker thread sees cancel
+  within ~50ms (one embed batch).
+- Sibling queries on the same daemon are not blocked.
+- Cancellation is best-effort; no panic, no leaked state, no leaked
+  cache slots.
+- Wire-protocol regression test: v2 client still talks to v3 daemon.
+
+** Difficulty
+
+Medium-high. ~1-2 days.
+
+Hard parts:
+- Side-channel cancel without breaking the existing single-socket model
+  (might be cleaner to multiplex by request_id and let response order
+  differ from request order — but that's a bigger refactor).
+- Wire-protocol versioning discipline.
+- Test plumbing: need a deterministic slow embed mock.
+
+Soft parts:
+- `task::blocking` already supports `ct`; just thread it deeper.
+- candle-core inference loop already checks `Result` between ops.
+
+** Related
+
+- BUG-397 (root cause this fixes the daemon side of)
+- FEAT-780 (the JS-side cutover that made this gap visible)
+- PLAN-315 knowledge daemon W4 push-subscribe (precedent for protocol
+  bump + per-request bookkeeping)

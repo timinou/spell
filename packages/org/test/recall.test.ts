@@ -28,24 +28,24 @@ async function writeFixture(subdir: string, file: string, content: string): Prom
 	return p;
 }
 
-function skipIfNoNative(): boolean {
+async function skipIfNoNative(): Promise<boolean> {
 	try {
-		executeOrg({ command: "recall", text: "x" });
+		await executeOrg({ command: "recall", text: "x" });
 		return false;
 	} catch {
 		return true;
 	}
 }
 
-function recall(args: Record<string, unknown>): Record<string, unknown> {
-	const result = executeOrg({ command: "recall", repoRoot: tmpDir, ...args });
+async function recall(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+	const result = await executeOrg({ command: "recall", repoRoot: tmpDir, ...args });
 	if (result.error) throw new Error(String(result.output));
 	return result.output as Record<string, unknown>;
 }
 
 describe("recall happy path", () => {
 	test("returns hits from fts matching text", async () => {
-		if (skipIfNoNative()) return;
+  if (await skipIfNoNative()) return;
 
 		await writeFixture(
 			"!tasks/features",
@@ -72,7 +72,7 @@ describe("recall happy path", () => {
 			].join("\n"),
 		);
 
-		const result = recall({ text: "OAuth2" });
+		const result = await recall({ text: "OAuth2" });
 
 		const hits = (result as { hits?: unknown[] }).hits ?? [];
 		expect(hits.length).toBeGreaterThanOrEqual(1);
@@ -84,7 +84,7 @@ describe("recall happy path", () => {
 
 describe("recall profile", () => {
 	test("uses profile parameter", async () => {
-		if (skipIfNoNative()) return;
+  if (await skipIfNoNative()) return;
 
 		await writeFixture(
 			"!tasks/features",
@@ -99,7 +99,7 @@ describe("recall profile", () => {
 			].join("\n"),
 		);
 
-		const result = recall({ text: "authentication", profile: "session-start" });
+		const result = await recall({ text: "authentication", profile: "session-start" });
 
 		const hits = (result as { hits?: unknown[] }).hits ?? [];
 		expect(Array.isArray(hits)).toBe(true);
@@ -108,7 +108,7 @@ describe("recall profile", () => {
 
 describe("recall scope filter", () => {
 	test("filters by scope", async () => {
-		if (skipIfNoNative()) return;
+  if (await skipIfNoNative()) return;
 
 		await writeFixture(
 			"!tasks/features",
@@ -123,7 +123,7 @@ describe("recall scope filter", () => {
 			].join("\n"),
 		);
 
-		const result = recall({ text: "OAuth2", scope: ["concept"] });
+		const result = await recall({ text: "OAuth2", scope: ["concept"] });
 
 		const hits = (result as { hits?: unknown[] }).hits ?? [];
 		expect(hits.length).toBe(0);
@@ -132,7 +132,7 @@ describe("recall scope filter", () => {
 
 describe("recall empty result", () => {
 	test("returns no FTS-ranked hits when no text match", async () => {
-		if (skipIfNoNative()) return;
+  if (await skipIfNoNative()) return;
 
 		await writeFixture(
 			"!tasks/features",
@@ -147,7 +147,7 @@ describe("recall empty result", () => {
 			].join("\n"),
 		);
 
-		const result = recall({ text: "zzzzzzzzzzz" });
+		const result = await recall({ text: "zzzzzzzzzzz" });
 
 		const hits = ((result as { hits?: Array<Record<string, unknown>> }).hits ?? []).filter(
 			h => (h.why as Record<string, unknown> | undefined)?.bm25_rank !== null,

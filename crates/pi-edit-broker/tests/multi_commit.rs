@@ -3,8 +3,7 @@ mod common;
 use std::{path::PathBuf, time::Duration};
 
 use common::{TestBroker, TestClient};
-use pi_edit_broker::{ClientMessage, FileCommit, FileIntent, ServerMessage, state::now_ms};
-use tokio::time::sleep;
+use pi_edit_broker::{ClientMessage, FileCommit, FileIntent, ServerMessage};
 
 /// 5. MultiCommit atomically records all files.
 #[tokio::test]

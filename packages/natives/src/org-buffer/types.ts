@@ -108,6 +108,11 @@ export interface OrgBufferResult {
 
 declare module "../bindings" {
 	interface NativeBindings {
-		executeOrg(options: OrgBufferOptions): OrgBufferResult;
+		/**
+		 * FEAT-780: async-NAPI cutover. `executeOrg` returns a Promise so
+		 * the Node event loop stays free during long daemon calls (recall,
+		 * query, remember). All callers MUST `await`.
+		 */
+		executeOrg(options: OrgBufferOptions, signal?: AbortSignal): Promise<OrgBufferResult>;
 	}
 }

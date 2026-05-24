@@ -1,0 +1,72 @@
+#+TITLE: memory-loop W10 tests leak fixture state across runs
+#+STATE: DONE
+#+SESSION_ID: 14eb4e97aabcb79a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-22T14-09-29-258Z_14eb4e97aabcb79a.jsonl]]
+#+CUSTOM_ID: BUG-400-memory-loop-w10-tests-leak-fixture-state
+#+COMPLETION_HASH: 1bc874eb4f1d8066
+
+* Initial Message
+
+1. Daemon-side cancellation in recall_engine::query — currently AbortSignal aborts only the JS await; daemon work continues.
+ 2. Eager warmMemoryLane at session_start could now genuinely pre-warm via async dispatch — still requires daemon to be initialised first, so
+ user's first recall still pays the bge-m3 model load.
+
+
+
+yeah file them and tell me how hard it would be to actually implement them. anything else in terms of improvements?
+
+`tests/memory-loop.test.ts` (PLAN-310 W10) writes into the real
+fixture tree `tests/fixtures/memory-corpus/.spell/memory/{concepts,episodes}/`
+during execution. No `afterAll` cleanup. Concretely, files left behind
+between runs include:
+
+- `concepts/since-test.org`
+- `concepts/test-concept--a-test-concept-body-for-in.org`
+- `episodes/EP-2026-05-15-auth-discovery.org`
+- `episodes/2026-05-{today}.org`
+
+** Consequences
+
+1. First clean checkout: `bun test tests/memory-loop.test.ts` →
+   tests have known-good baseline, some pass.
+2. Second run (state leaked): subset of assertions now collide with
+   pre-existing state; failure mode differs run-to-run.
+3. `git stash` cycles fail with "files would be overwritten by merge"
+   because the leaked files are untracked.
+4. CI is presumably immune (fresh checkout each time), so this hides.
+
+** Targets
+
+- `tests/memory-loop.test.ts`
+  - per-test temp dir, OR a global beforeAll/afterAll that cleans the
+    leaked filenames
+- Prefer temp dir: each test gets its own corpus root passed via the
+  memory tool's `repoRoot` parameter (already supported).
+
+** Acceptance
+
+- `bun test tests/memory-loop.test.ts` twice in a row → identical
+  pass/fail counts.
+- `git status` after a test run shows zero new files under
+  `tests/fixtures/memory-corpus/.spell/memory/`.
+- The shared corpus tree (`CON-auth-flow`, `CON-jwt`,
+  `CON-token-expiry`, `CON-vendor-coordination`) remains intact — only
+  test-generated content gets cleaned.
+
+** Difficulty
+
+~1h. Soft because:
+- memory tool already supports per-call `repoRoot`
+- `bun:test` has standard `afterAll` hook
+- the fixture root is small and well-bounded
+
+Sharp edges:
+- T10.4-style tests that exercise the warm-cache fast path may need
+  warm pre-seeding to be moved into beforeAll for the temp corpus.
+
+** Related
+
+- Surfaced during FEAT-780 verification (`git stash -u` clashes).
+- PLAN-310 W10 (the original test suite this belongs to).
+
+NOTE [2026-05-24]: Switched memory-loop.test.ts to per-test temp corpus via beforeEach/afterEach with fs.mkdtemp + fs.cp(CANONICAL_CORPUS, tmpDir, recursive). All references to MEM_DIR now go through memDir() helper that reads from activeCorpus. Two consecutive runs → 0 leaked files in working tree. Canonical fixtures untouched.

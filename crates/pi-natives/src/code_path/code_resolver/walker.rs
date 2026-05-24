@@ -75,7 +75,6 @@ impl CodeResolver for CodeResolverImpl {
 			span:    None,
 		})?;
 
-		let bytes_len = bytes.len();
 		let src = match String::from_utf8(bytes) {
 			Ok(s) => s,
 			Err(e) => {

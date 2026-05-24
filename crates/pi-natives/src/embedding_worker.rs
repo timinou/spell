@@ -838,7 +838,7 @@ pub fn reset_for_tests() {
 
 #[cfg(test)]
 mod tests {
-	use std::{ffi::OsString, path::Path, sync::MutexGuard};
+	use std::{ffi::OsString, path::Path};
 
 	use super::*;
 
@@ -959,7 +959,6 @@ mod socket_tests {
 		io::{BufRead, BufReader, Write},
 		os::unix::net::UnixListener,
 		path::PathBuf,
-		sync::MutexGuard,
 		thread::{self, JoinHandle},
 	};
 

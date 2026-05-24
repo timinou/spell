@@ -1,5 +1,5 @@
 #+TITLE: edit-tool reliability — root threading, fail-loud diagnostics, simplified line addressing
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14edc1bec5a09a49
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
 #+CUSTOM_ID: PLAN-317-edit-tool-reliability-root-threading-fai
@@ -9,6 +9,7 @@
 #+RISK: low
 #+SESSION_ID: 14edc1bec5a09a49
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+COMPLETION_HASH: 7b4585ded3850fb5
 
 * Initial Message
 
@@ -199,3 +200,5 @@ Gate: all green; no remaining =LINE#HASH= references anywhere except in
 - [[id:BUG-402-empty-scope-preview-hides-missing-empty][BUG-402]]
 - [[id:BUG-403-edit-lacks-pre-flight-fs-exists-for-non][BUG-403]]
 - [[id:BUG-404-simplify-line-addressing-drop-linehash-a][BUG-404]]
+
+NOTE [2026-05-24]: Shipped in commit 4879100e3. All four BUGs closed. Test impact: coding-agent suite 129 fail → 79 fail (50 net fixes, 0 regressions); cargo --workspace clean. Followup-worthy: prune dead `patch/hashline.ts` machinery (still imported by patch/diff.ts, code-result.ts, tool-execution.ts, prompt-templates.ts but no agent-reachable code paths after this cutover).

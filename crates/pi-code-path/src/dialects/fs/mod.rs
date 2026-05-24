@@ -57,11 +57,37 @@ impl Resolver for FsResolver {
 		let opts = WalkOpts { hidden: true, gitignore: true, root: self.root.clone() };
 		let results = walk(loc, &opts, cancel);
 		let mut nodes: Vec<NodeRef> = Vec::with_capacity(results.len());
+		let mut pattern_diagnostics: Vec<Diagnostic> = Vec::new();
 		for r in results {
 			match r {
 				Ok(n) => nodes.push(n),
-				Err(_d) => continue, // per-entry diagnostics swallowed at this layer
+				Err(d) => {
+					// BUG-405 (PLAN-318 W0): permission-denied and per-file walk errors
+					// stay swallowed (noisy, not actionable per-entry). Pattern-level
+					// errors (invalid glob, unbalanced brace, etc.) MUST propagate so
+					// the caller sees why the walk returned nothing instead of
+					// silently falling through to suffix fallback.
+					if d.message.contains("invalid glob") {
+						pattern_diagnostics.push(d);
+					}
+				},
 			}
+		}
+		if !pattern_diagnostics.is_empty() && nodes.is_empty() {
+			// BUG-405 (PLAN-318 W0): emit pattern-level diagnostics on a sentinel
+			// §invalid-pattern node so callers see them in the chunk output
+			// instead of an abrupt tool-level Err. Skip suffix-fallback —
+			// searching for a basename containing the invalid CharClass is noise.
+			let input = super::fs::suffix_fallback::fs_locator_to_string(loc);
+			nodes.push(NodeRef {
+				locator:     input,
+				range:       0..0,
+				kind:        "§invalid-pattern".into(),
+				content:     None,
+				metadata:    HashMap::new(),
+				diagnostics: pattern_diagnostics,
+			});
+			return Ok(nodes);
 		}
 		// Suffix fallback if no matches and the locator is plain.
 		if nodes.is_empty() {

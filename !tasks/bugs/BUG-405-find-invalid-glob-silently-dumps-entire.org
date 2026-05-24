@@ -1,0 +1,67 @@
+#+TITLE: find: invalid glob silently dumps entire workspace tree
+#+STATE: DOING
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: BUG-405-find-invalid-glob-silently-dumps-entire
+#+LAYER: pi-code-path
+
+* Initial Message
+
+try to use those affordances again and tell me what's still not working/not ergonomic
+
+* Initial Message
+
+Dogfooding the post-PLAN-317 find tool. =find { target: "packages/coding-agent/src/tools/**/*.ts[mtime>2026-05-20]" }= returned 20 997 lines covering the entire repo, ignoring both the path prefix AND the mtime predicate. Removing the predicate scopes correctly to 167 lines.
+
+* Root Cause
+
+=crates/pi-code-path/src/dialects/fs/walker.rs:135-148=:
+
+#+begin_src rust
+fn build_globset(pattern: &str) -> Option<globset::GlobSet> {
+    if pattern.is_empty() || pattern == "**" { return None; }
+    match globset::Glob::new(pattern) {
+        Ok(glob) => builder.add(glob),
+        Err(_)   => return None,        // ← compile-failure conflated with "no filter"
+    }
+    builder.build().ok()
+}
+
+// caller (walk):
+if let Some(ref gs) = globset { if !gs.is_match(rel) { continue; } }
+// None ⇒ no filter ⇒ emit every file
+#+end_src
+
+Trigger: parser at =crates/pi-code-path/src/parser.rs:660-669= silently accepts trailing =[...]= as a glob CharClass when no =::= prefix separates predicate from glob. =*.ts[mtime>2026-05-20]= becomes locator segments =[…, Literal(".ts"), CharClass(['m','t','i','m','e','>','2','0','2','6','-','0','5','-','2','0'])]=. globset rejects this synthetic class → =None= → unfiltered walk.
+
+* Scope
+
+In:
+- =crates/pi-code-path/src/dialects/fs/walker.rs= — distinguish "no filter" from "invalid pattern".
+- =crates/pi-code-path/src/parser.rs= — emit a diagnostic when a trailing =[…]= segment looks like a predicate (contains =>=, =<=, ===, =~=, or starts with predicate-keyword =mtime|size|count|text|name|ext|lang|depth|empty|multiline|len|startsWith|endsWith=) suggesting =::§file[…]=.
+- =packages/coding-agent/src/prompts/tools/find.md= — fix the misleading recipe =src/**/*.ts[mtime>2026-05-01]= → =src/**/*.ts::§file[mtime>2026-05-01]=.
+
+Out:
+- Adding new predicate vocabulary.
+- Restructuring globset compilation.
+
+* Tests
+
+1. =crates/pi-code-path/src/dialects/fs/walker.rs::tests::glob_invalid_pattern_zero_matches_not_unfiltered= — input =*.ts[mtime>X]=, assert walker returns empty vec and emits a diagnostic naming the invalid pattern.
+2. =glob_with_charclass_lookalike= — valid =src/*.{ts,js}= and =src/[abc]/= still filter correctly.
+3. =glob_empty_pattern_unfiltered= — empty / =**= patterns keep the legacy "no filter" semantics.
+4. =crates/pi-code-path/src/parser.rs::tests::predicate_lookalike_emits_hint= — =*.ts[mtime>...]= parses to a CharClass but emits a diagnostic suggesting =::§file[…]=.
+5. End-to-end via =crates/pi-natives/src/code_path/dispatch_tests.rs= — assert =find { target: "**/*.ts[mtime>2026-05-20]" }= returns =[]= + diagnostic, not workspace dump.
+
+* Acceptance
+
+- Invalid glob patterns yield zero results plus an actionable diagnostic.
+- Recipe in =find.md= uses =::§file[…]= form.
+- No legacy "no filter" walks ever fire from an invalid pattern.
+
+* Verification
+
+- =cargo test -p pi-code-path walker=
+- =cargo test -p pi-code-path parser::predicate=
+- =cargo test -p pi-natives code_path::dispatch_tests=
+- Manual repro of the original 20k-line fan-out, confirm empty result + hint diagnostic.

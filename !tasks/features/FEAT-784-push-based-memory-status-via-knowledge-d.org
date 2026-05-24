@@ -1,0 +1,101 @@
+#+TITLE: push-based memory status via knowledge daemon subscribe
+#+STATE: DONE
+#+SESSION_ID: 14eb4e97aabcb79a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-22T14-09-29-258Z_14eb4e97aabcb79a.jsonl]]
+#+CUSTOM_ID: FEAT-784-push-based-memory-status-via-knowledge-d
+#+COMPLETION_HASH: a89e6978ade04c8d
+
+* Initial Message
+
+1. Daemon-side cancellation in recall_engine::query — currently AbortSignal aborts only the JS await; daemon work continues.
+ 2. Eager warmMemoryLane at session_start could now genuinely pre-warm via async dispatch — still requires daemon to be initialised first, so
+ user's first recall still pays the bge-m3 model load.
+
+
+
+yeah file them and tell me how hard it would be to actually implement them. anything else in terms of improvements?
+
+PLAN-315 W4 already added a `subscribe { repo_handle, lanes }` channel
+to the knowledge daemon that pushes `index_changed`, `warm_completed`,
+`evicted`, `heartbeat`, and `lag` event frames. `MemoryStatusController`
+currently polls `peekMemoryProgress` instead of consuming this push
+channel, so it pays one RPC round-trip every poll interval and lags
+behind real state by up to a full poll period.
+
+** Targets
+
+- `packages/coding-agent/src/modes/controllers/memory-status-controller.ts`
+  - subscribe at `start()`; unsubscribe at `stop()`
+  - on `warm_completed` → re-render with `warm` status
+  - on `index_changed` → re-render with current progress (delta-fold)
+  - on `evicted` → re-render with `unavailable`
+  - on `lag` → log + fall back to a one-shot peek to resync
+- New thin client helper in `packages/coding-agent/src/tools/memory.ts`
+  (or `packages/natives/src/knowledge/subscribe.ts`) that wraps the
+  underlying `KnowledgeSubscription` (already exists in
+  `pi_natives::knowledge_client`).
+
+** Constraints
+
+- Subscription lifecycle MUST match controller lifecycle. Drop on
+  controller dispose, on session re-init, on cwd change.
+- One subscription per (session, repo_handle). Multi-window / multi-cwd
+  sessions need dedup keyed on repo_handle.
+- Failure to subscribe (daemon down, capability missing) MUST fall back
+  to polling silently — no error in the status line.
+- Backpressure: subscription channel is `sync_channel(256)` with
+  oldest-drop + `lag` event. On `lag`, the controller MUST resync via
+  one-shot peek before resuming event-driven updates.
+
+** Acceptance
+
+- Cold session: status line transitions warming → warm within ~50ms of
+  the daemon's `warm_completed` push (vs up to 5s under polling).
+- Daemon kill mid-session: subscription error surfaces as fallback to
+  poll-mode within 1 reconnect attempt.
+- No double-update flicker (push + scheduled poll both firing).
+- Subscription teardown leaves no leaked thread, no lingering
+  `SubscriptionToken`, no socket fd in `lsof`.
+
+** Difficulty
+
+~3h. Soft because:
+- daemon side already implemented (PLAN-315 W4)
+- `KnowledgeSubscription` already exists in `pi_natives::knowledge_client`
+- protocol frames already defined
+
+Sharp edges:
+- lifecycle correctness across session re-init / cwd change
+- fallback path when daemon doesn't support subscribe (older daemon)
+- avoiding the double-source-of-truth flicker between push and one
+  remaining poll
+
+** Supersedes
+
+FEAT-783 (adaptive poll cadence — becomes redundant if push works
+end-to-end). Mark FEAT-783 WONTFIX once this lands.
+
+** Related
+
+- PLAN-315 (knowledge daemon W4 push channel)
+- FEAT-780 (made polling cheap enough that this is now a quality-of-life
+  win rather than a CPU-saving fix)
+
+NOTE [2026-05-24]: Push-as-poll-kick design: subscribe surfaces events that immediately trigger poll(); polling stays as source of truth. Daemon-down → silent fallback to poll-only.
+
+Surface:
+- crates/pi-natives/src/knowledge_napi.rs (new): NAPI wrapper around KnowledgeSubscription with process-global registry + atomic id. Throws on daemon-down; idempotent unsubscribe.
+- packages/natives/src/knowledge/{index,types,handle}.ts (new): TS facade with `subscribeKnowledge` (never throws — returns {error}), `repoHandle` (FNV-1a 64 matching daemon's repo_cache::repo_hash), KnowledgeEvent type.
+- packages/coding-agent/src/modes/controllers/memory-status-controller.ts: `subscribe` dep added (test seam); start() opens subscription, event handler kicks poll(); dispose() unsubscribes.
+
+Tests:
+- 3 new in memory-status-controller-subscribe.test.ts: push event triggers immediate poll without waiting for interval; subscribe failure falls back to polling silently; dispose unsubscribes only once.
+
+Verification:
+- 86/86 controller + memory + memories tests green.
+- cargo 358/358 pi-natives lib tests green.
+- FNV round-trip verified rust↔ts (both produce fnv:3fd04aa5a3ec6f01 for the spell repo root).
+- Smoke against live daemon: subscribe ok, dispose clean, no events in 300ms quiet window (expected — heartbeat is 120s).
+- Daemon-down smoke (PI_KNOWLEDGE_WORKER_SOCKET=/nonexistent/sock): error surfaced cleanly, no throw, dispose clean.
+
+Supersedes FEAT-783 (adaptive poll cadence) — closing that as WONTFIX since push-driven refresh removes the need.
