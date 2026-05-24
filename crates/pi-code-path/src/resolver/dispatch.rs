@@ -4,7 +4,7 @@
 //! Currently a stub: FS branch executes a closure-stub; URI/Edge emit
 //! diagnostics until PROJ-066/067 wire concrete impls.
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use crate::{
 	ast::{CodePath, Locator},

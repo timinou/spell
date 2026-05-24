@@ -46,12 +46,16 @@ export interface MemoryProgressSnapshot {
 /**
  * Read the daemon's current warm-load state for `repoRoot`. Cheap: the
  * daemon serves this from atomics without touching the warm-load worker
- * thread (PLAN-316). Returns `{ status: "warm" }` when the daemon is
- * unreachable so callers never latch on a stale spinner.
+ * thread (PLAN-316). FEAT-780: now async because `executeOrg` is async;
+ * the underlying daemon call is still sub-ms.
+ *
+ * Returns `{ status: "unavailable" }` when the daemon is unreachable so
+ * callers never latch on a stale spinner and never trigger the slow
+ * `init` path during startup probes.
  */
-export function peekMemoryProgress(repoRoot: string): MemoryProgressSnapshot {
+export async function peekMemoryProgress(repoRoot: string): Promise<MemoryProgressSnapshot> {
 	try {
-		const result = executeOrg({ command: "recall_stats", repoRoot });
+		const result = await executeOrg({ command: "recall_stats", repoRoot });
 		if (result.error) {
 			// Old daemon binaries that don't recognise the command, or any
 			// other RPC error. Treat as `unavailable` so callers skip rather
@@ -78,19 +82,23 @@ export function peekMemoryProgress(repoRoot: string): MemoryProgressSnapshot {
  * irreducible cost, and it only happens on an explicit user query.
  */
 export function warmMemoryLane(repoRoot: string): void {
-	try {
-		executeOrg({ command: "recall_warm", repoRoot });
-	} catch (err) {
+	// FEAT-780: fire-and-forget. The Promise is intentionally not awaited
+	// so callers can keep their sync surface; warm is best-effort and any
+	// failure is logged-and-swallowed.
+	executeOrg({ command: "recall_warm", repoRoot }).catch((err: unknown) => {
 		logger.debug("warmMemoryLane: ignored error", {
 			error: err instanceof Error ? err.message : String(err),
 		});
-	}
+	});
 }
 
-function emitProgressPreambleIfWarming(repoRoot: string, onUpdate: AgentToolUpdateCallback): void {
+async function emitProgressPreambleIfWarming(
+	repoRoot: string,
+	onUpdate: AgentToolUpdateCallback,
+): Promise<void> {
 	// Only emit when the daemon explicitly reports `warming`. `unavailable`
 	// / `unknown` / `warm` don't need a spinner preamble.
-	const snapshot = peekMemoryProgress(repoRoot);
+	const snapshot = await peekMemoryProgress(repoRoot);
 	if (snapshot.status !== "warming") return;
 	const { done = 0, total = 0, phase = "scan" } = snapshot.progress ?? {};
 	const suffix = total > 0 ? ` ${done}/${total} (${phase})` : ` (${phase})`;
@@ -271,7 +279,7 @@ export class MemoryTool implements AgentTool<typeof memorySchema, MemoryDetails,
 			// user sees "indexing…" instead of a silent hang on the first call.
 			// Cheap: `recall_stats` reads atomics on the daemon side (PLAN-316).
 			if (READ_ACTIONS.has(params.action) && onUpdate) {
-				emitProgressPreambleIfWarming(repoRoot, onUpdate);
+				await emitProgressPreambleIfWarming(repoRoot, onUpdate);
 			}
 			const output = await dispatchMemoryAction(params, repoRoot);
 			const text = formatMemoryResult(output, params.action);
@@ -326,7 +334,7 @@ export async function dispatchMemoryAction(params: MemoryParams, repoRoot: strin
 	logger.debug("memory.dispatch", digestMemoryArgs(params));
 	switch (params.action) {
 		case "search": {
-			const result = executeOrg({
+			const result = await executeOrg({
 				command: "recall",
 				text: params.text,
 				scope: params.scope,
@@ -345,7 +353,7 @@ export async function dispatchMemoryAction(params: MemoryParams, repoRoot: strin
 			if (!focusId) throw new Error("memory.about requires `id`");
 			// subgraph(hops=1) is the cheapest single-node fetch the native
 			// surface offers; we then narrow it to {node, neighbors[], lineage[]}.
-			const result = executeOrg({
+			const result = await executeOrg({
 				command: "subgraph",
 				root: focusId,
 				hops: 1,
@@ -357,7 +365,7 @@ export async function dispatchMemoryAction(params: MemoryParams, repoRoot: strin
 		case "neighbors": {
 			const focusId = params.focus ?? params.id;
 			if (!focusId) throw new Error("memory.neighbors requires `focus` or `id`");
-			const result = executeOrg({
+			const result = await executeOrg({
 				command: "subgraph",
 				root: focusId,
 				hops: params.hops ?? 1,
@@ -369,7 +377,7 @@ export async function dispatchMemoryAction(params: MemoryParams, repoRoot: strin
 		}
 		case "note": {
 			if (!params.text) throw new Error("memory.note requires `text`");
-			const result = executeOrg({
+			const result = await executeOrg({
 				command: "remember",
 				kind: "episode",
 				summary: params.text,
@@ -391,7 +399,7 @@ export async function dispatchMemoryAction(params: MemoryParams, repoRoot: strin
 			// Merge top-level `about`/`involved` shorthand with `relations[]` entries.
 			const aboutEdges = mergeEdgeLists(params.about, relationAbout);
 			const involvesEdges = mergeEdgeLists(params.involved, relationInvolved);
-			const result = executeOrg({
+			const result = await executeOrg({
 				command: "remember",
 				kind: params.kind,
 				summary,
@@ -409,7 +417,7 @@ export async function dispatchMemoryAction(params: MemoryParams, repoRoot: strin
 			if (!params.from || !params.to || !params.kind) {
 				throw new Error("memory.link requires `from`, `to`, and `kind`");
 			}
-			const result = executeOrg({
+			const result = await executeOrg({
 				command: "link",
 				from: params.from,
 				to: params.to,

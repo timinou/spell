@@ -1,0 +1,132 @@
+#+TITLE: find/edit affordance hardening + production code-graph wiring
+#+STATE: ITEM
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: PLAN-318-find-edit-affordance-hardening-productio
+
+* Initial Message
+
+try to use those affordances again and tell me what's still not working/not ergonomic
+
+* Initial Message
+
+PLAN-317 (just shipped) fixed the most visible affordance failures around edit. Post-ship dogfood surfaced six more, plus the discovery that =EdgeResolverImpl= has zero production call sites — =def→= / =ref→= / =call→= syntax parses but the kernel's =DispatchEngine::dispatch= is documented as a stub. Agents fall back to bash for code navigation.
+
+This plan:
+1. Fixes the W0 affordance bugs (BUG-405 / 410 / 411 / 412 / 413).
+2. Wires =pi-code-graph= as the production backend for edge queries (the missing 95%).
+3. Augments =pi-code-graph= per-language extractors so it covers what was historically LSP territory (implementations, module paths, re-exports, written signatures).
+4. Closes BUG-409 (status index) as a natural consequence of #2.
+
+Explicitly NOT in scope: LSP bridge (rejected in favor of maximal pi-code-graph development). Type-aware reference resolution and inferred-type hover are deferred to FUP-090 / FUP-091 with explicit design-pass requirements.
+
+* Scope
+
+In:
+- =crates/pi-code-path=: parser/walker glob+predicate hardening, diagnostic re-classification, =§kind= alias layer.
+- =crates/pi-code-engine=: patch substring-fallback word-boundary refusal, single-prefix error contract.
+- =crates/pi-natives=: =EdgeResolverImpl= production wiring, workspace-scoped =CodeGraph= cache with watcher invalidation, =graph_stats= handler, =EditFailure= sum-type for error propagation, kind-alias dispatch.
+- =crates/pi-code-graph=: extractor enhancements — Implements/Inherits/Dispatches edges, module-path resolution (tsconfig, Cargo, Python), written-signature capture in =SymbolNode.detail=, re-export following.
+- =packages/coding-agent=: schemas, prompts, recipe corrections in =find.md=, =Informational= diagnostic suppression in renderer.
+
+Out:
+- LSP integration of any kind (deferred indefinitely; FUPs cover the rare residual cases).
+- Type inference (FUP-090).
+- Inferred-type hover (FUP-091).
+- Live diagnostics from a type checker.
+
+Rationale: dogfood after PLAN-317 showed that empty result patterns and bash-fallback patterns were caused by ~5 distinct ergonomic bugs and one missing-implementation (=EdgeResolverImpl= never instantiated in production). Fixing the bugs without wiring the graph would leave =def→= permanently dead. Wiring the graph without the bugs would surface the bugs more visibly. Bundle.
+
+* Linked Items
+
+** Bugs (W0)
+- [[id:BUG-405-find-invalid-glob-silently-dumps-entire]] — glob+predicate fan-out
+- [[id:BUG-410-edit-error-messages-show-doubled-edit-er]] — doubled error prefix
+- [[id:BUG-411-find-weak-namepayload-diagnostic-surface]] — info diag rendered as error
+- [[id:BUG-412-edit-substring-fallback-silently-rewrite]] — substring footgun
+- [[id:BUG-413-find-kind-only-accepts-raw-tree-sitter-g]] — §kind alias layer
+
+** Bugs (downstream of graph wiring)
+- [[id:BUG-409-status-index-graph-stats-handler-missing]] — status index dead until cache exists
+
+** Deferred (FUPs)
+- [[id:FUP-090-pi-code-graph-type-aware-reference-call]] — polymorphic dispatch precision
+- [[id:FUP-091-pi-code-graph-inferred-type-hover-via-em]] — inferred-type hover
+
+* Wave Manifest (high-level — full DAG in todo roster)
+
+#+begin_example
+W0   ┐ Affordance bugs (parallel)
+     ├─ BUG-405 glob filter         ─┐
+     ├─ BUG-411 info diag rendering ─┤  all independent
+     ├─ BUG-412 substring + force   ─┤  ship together
+     ├─ BUG-413 §kind aliases       ─┤
+     └─ BUG-410 EditFailure refactor┘
+W0r  └─ reviewer pass → gap-fix wave (W0g) if needed
+
+W1   ┐ Production graph wiring
+     ├─ Workspace CodeGraph cache + Arc + OnceLock
+     ├─ Watcher invalidation hook
+     ├─ EdgeResolverImpl wired into napi.rs query path
+     └─ BUG-409 graph_stats handler
+W1r  └─ reviewer pass (thread safety, cache eviction, memory)
+W1g  └─ gap-fix wave for reviewer findings
+
+W2   ┐ Implements / Inherits / Dispatches extraction
+     ├─ Extend EngineProfileExtractor edge types
+     ├─ TS extractor: implements + extends
+     ├─ Rust extractor: impl Trait + trait inheritance
+     ├─ Python extractor: class inheritance + ABC.register
+     └─ Per-language extractor tests
+W2r  └─ reviewer (extractor edge cases — diamond inheritance, mixins)
+W2g  └─ gap-fix
+
+W3   ┐ Module-path resolution
+     ├─ tsconfig.json paths/baseUrl parser
+     ├─ Cargo workspace member graph
+     ├─ Python __init__.py / sys.path resolution
+     └─ Cross-language ImportResolver consolidation
+W3r  └─ reviewer
+W3g  └─ gap-fix
+
+W4   ┐ #hover qualifier (written signatures only)
+     ├─ Extract signature text into SymbolNode.detail
+     ├─ #hover qualifier in kernel
+     └─ Per-language detail formatting
+W4r  └─ reviewer
+
+W5   ┐ Re-export following
+     ├─ TS: export * from / export { x } from
+     ├─ Rust: pub use chain
+     └─ EdgeResolver transparent traversal
+W5r  └─ reviewer
+
+W6   ┐ Sweep
+     ├─ Drop lsp tool from default surface (where pi-code-graph covers)
+     ├─ Regenerate find.md / edit.md recipes
+     ├─ Auto-generate symbol-kinds.md per language
+     ├─ Memory concept saved
+     └─ Final cargo test --workspace + bun check
+#+end_example
+
+* Acceptance
+
+- All 6 W0 bugs closed; verified by their own gate tests.
+- =find { target: "path::Sym def→§call_expression" }= returns live references in production (TS, Rust, Python).
+- =status { command: "index" }= reports populated stats after first edge query.
+- =find { target: "src/**/*.ts::§function" }= and =find { target: "src/**/*.rs::§function" }= return analogous results (universal aliases).
+- =find { target: "path::Sym #hover" }= returns extracted signature text.
+- All =§kind= queries respect tree-sitter raw kinds AND universal aliases.
+- =cargo test --workspace= → 0 failed.
+- Coding-agent suite: no regressions vs current 79-fail baseline; net new passes from the W0 schema fixes.
+- Memory: =CON-edit-affordance-completeness= updated with the dogfood evidence + post-fix verification.
+
+* Verification
+
+Per-wave gates listed in todo roster. Plan-level final gate:
+- =cargo test --workspace=
+- =bun test packages/coding-agent/=
+- =bun run --cwd packages/coding-agent check= (TS-only files: edit.ts, find.ts, codepath-*.ts, status.ts must be 0-error)
+- Manual: rerun dogfood probes from the discovery session, confirm green.
+
+Reviewer wave between each phase is a hard gate — no skipping. Mid-stream BUG/FEAT filing is expected and welcome (filed against this plan, fixed in the next gap-fix wave).

@@ -19,12 +19,15 @@ const { Settings } = await import("@oh-my-pi/pi-coding-agent/config/settings");
 import { Value } from "@sinclair/typebox/value";
 import type { ToolSession } from "../../src/tools";
 
-function ok<T>(output: T): { error: false; output: T } {
-	return { error: false, output };
+// FEAT-780: executeOrg is async now. These helpers wrap the response
+// shape in `Promise.resolve` so each `mockReturnValueOnce(ok(...))`
+// drives the mock to return a thenable that matches the real binding.
+function ok<T>(output: T): Promise<{ error: false; output: T }> {
+	return Promise.resolve({ error: false, output });
 }
 
-function err(message: string): { error: true; output: string } {
-	return { error: true, output: message };
+function err(message: string): Promise<{ error: true; output: string }> {
+	return Promise.resolve({ error: true, output: message });
 }
 
 function calls() {
@@ -240,11 +243,16 @@ describe("dispatchMemoryAction", () => {
 			await fs.utimes(nodrawer, new Date("2026-05-22T11:00:00Z"), new Date("2026-05-22T11:00:00Z"));
 
 			const out = (await dispatchMemoryAction({ action: "since", ts: "2026-05-21T00:00:00Z" }, tmp)) as {
+				added: Array<{ id: string; file: string; mtime: string }>;
 				modified: Array<{ id: string; file: string; mtime: string }>;
 				note: string;
 			};
 
-			expect(out.modified.map(m => m.id)).toEqual(["CON-fresh", "EP-2026-05-22"]);
+			// PLAN-315 T10.6: files freshly written by the test have a current
+			// birthtime that postdates `ts`, so they classify as `added`, not
+			// `modified`. The union of both is the set of touched ids.
+			const touched = [...out.added, ...out.modified].map(m => m.id).sort();
+			expect(touched).toEqual(["CON-fresh", "EP-2026-05-22"]);
 			expect(out.note).not.toContain("not yet implemented");
 			expect(mockExecuteOrg).not.toHaveBeenCalled();
 		} finally {
@@ -361,11 +369,11 @@ const { MemoryTool: _MemoryToolUnused, peekMemoryProgress, warmMemoryLane } = aw
 void _MemoryToolUnused;
 
 describe("peekMemoryProgress", () => {
-	it("returns the org_lane snapshot when the daemon reports warming", () => {
+	it("returns the org_lane snapshot when the daemon reports warming", async () => {
 		mockExecuteOrg.mockReturnValueOnce(
 			ok({ status: "warming", progress: { phase: "embed", done: 12, total: 40, started_ms: 1 } }),
 		);
-		const snap = peekMemoryProgress("/tmp/repo");
+		const snap = await peekMemoryProgress("/tmp/repo");
 		expect(snap.status).toBe("warming");
 		expect(snap.progress?.done).toBe(12);
 		expect(snap.progress?.total).toBe(40);
@@ -376,29 +384,38 @@ describe("peekMemoryProgress", () => {
 		expect(args.repoRoot).toBe("/tmp/repo");
 	});
 
-	it("treats error / throw as 'unavailable' so we never force the slow init", () => {
+	it("treats error / throw as 'unavailable' so we never force the slow init", async () => {
 		mockExecuteOrg.mockReturnValueOnce(err("daemon unreachable"));
-		expect(peekMemoryProgress("/tmp/repo").status).toBe("unavailable");
+		expect((await peekMemoryProgress("/tmp/repo")).status).toBe("unavailable");
 
 		mockExecuteOrg.mockImplementationOnce(() => {
 			throw new Error("native panic");
 		});
-		expect(peekMemoryProgress("/tmp/repo").status).toBe("unavailable");
+		expect((await peekMemoryProgress("/tmp/repo")).status).toBe("unavailable");
 	});
 });
 
 describe("warmMemoryLane", () => {
-	it("fires executeOrg(recall_warm) once and ignores errors", () => {
+	it("fires executeOrg(recall_warm) once and ignores errors", async () => {
 		mockExecuteOrg.mockReturnValueOnce(ok({ status: "warming" }));
 		warmMemoryLane("/tmp/repo");
 		const [args] = calls();
 		expect(args.command).toBe("recall_warm");
 		expect(args.repoRoot).toBe("/tmp/repo");
 
-		mockExecuteOrg.mockImplementationOnce(() => {
-			throw new Error("socket missing");
-		});
+		// FEAT-780: executeOrg is async now. A failure surfaces as a
+		// rejected Promise; warmMemoryLane's .catch() swallows it.
+		// Construct the rejection lazily inside the mock impl so the
+		// Promise's .catch handler is attached in the same microtask
+		// and Bun's unhandled-rejection detector stays quiet.
+		mockExecuteOrg.mockImplementationOnce(
+			() => Promise.reject(new Error("socket missing")) as ReturnType<typeof realExecuteOrg>,
+		);
 		expect(() => warmMemoryLane("/tmp/repo")).not.toThrow();
+		// Yield to the microtask queue so the .catch() runs before the
+		// test exits and Bun doesn't flag unhandled rejection.
+		await Promise.resolve();
+		await Promise.resolve();
 	});
 });
 

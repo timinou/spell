@@ -17,6 +17,7 @@ import "./clipboard/types";
 import "./code-graph/types";
 import "./code-buffer/types";
 import "./org-buffer/types";
+import "./knowledge/types";
 import "./glob/types";
 import "./grep/types";
 import "./highlight/types";

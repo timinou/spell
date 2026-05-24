@@ -40,6 +40,18 @@ function snap(
 	return progress ? { status, progress } : { status };
 }
 
+/**
+ * FEAT-780: `poll()` is async now (peek is async). Tests that drive
+ * polls synchronously via `intervalCallbacks[0]?.()` must yield to the
+ * microtask queue between ticks so the async body resolves before the
+ * next assertion. `flushPolls()` is a small helper that yields a few
+ * microtask rounds — enough to clear the chain `peek → renderText →
+ * setHookStatus`.
+ */
+async function flushPolls(): Promise<void> {
+	for (let i = 0; i < 4; i++) await Promise.resolve();
+}
+
 describe("MemoryStatusController", () => {
 	let intervalCallbacks: Array<() => void>;
 	let intervalIds: number[];
@@ -75,7 +87,7 @@ describe("MemoryStatusController", () => {
 	it("renders nothing on first poll when daemon is warm", () => {
 		const { ctx, statusEvents } = makeCtx();
 		const controller = new MemoryStatusController(ctx, {
-			peek: () => snap("warm"),
+			peek: async () => snap("warm"),
 			setIntervalFn: fakeSetInterval,
 			clearIntervalFn: fakeClearInterval,
 		});
@@ -86,21 +98,22 @@ describe("MemoryStatusController", () => {
 		controller.dispose();
 	});
 
-	it("publishes 'indexing N/M (phase)' while daemon is warming", () => {
+	it("publishes 'indexing N/M (phase)' while daemon is warming", async () => {
 		const { ctx, statusEvents } = makeCtx();
 		const controller = new MemoryStatusController(ctx, {
-			peek: () => snap("warming", { phase: "embed", done: 17, total: 40, started_ms: 0 }),
+			peek: async () => snap("warming", { phase: "embed", done: 17, total: 40, started_ms: 0 }),
 			setIntervalFn: fakeSetInterval,
 			clearIntervalFn: fakeClearInterval,
 		});
 		controller.start();
+		await flushPolls();
 		expect(statusEvents).toHaveLength(1);
 		expect(statusEvents[0].key).toBe(MemoryStatusController.STATUS_KEY);
 		expect(statusEvents[0].text).toContain("indexing 17/40 (embed)");
 		controller.dispose();
 	});
 
-	it("transitions warming→warm clears the segment", () => {
+	it("transitions warming→warm clears the segment", async () => {
 		const { ctx, statusEvents } = makeCtx();
 		const states: MemoryProgressSnapshot[] = [
 			snap("warming", { phase: "scan", done: 0, total: 10, started_ms: 0 }),
@@ -109,15 +122,18 @@ describe("MemoryStatusController", () => {
 		];
 		let i = 0;
 		const controller = new MemoryStatusController(ctx, {
-			peek: () => states[Math.min(i, states.length - 1)],
+			peek: async () => states[Math.min(i, states.length - 1)],
 			setIntervalFn: fakeSetInterval,
 			clearIntervalFn: fakeClearInterval,
 		});
 		controller.start(); // poll 0
+		await flushPolls();
 		i = 1;
 		intervalCallbacks[0]?.(); // poll 1
+		await flushPolls();
 		i = 2;
 		intervalCallbacks[0]?.(); // poll 2
+		await flushPolls();
 
 		expect(statusEvents.map(e => e.text)).toEqual([
 			expect.stringContaining("0/10 (scan)") as unknown as string,
@@ -127,17 +143,20 @@ describe("MemoryStatusController", () => {
 		controller.dispose();
 	});
 
-	it("does not re-emit when the rendered text hasn't changed", () => {
+	it("does not re-emit when the rendered text hasn't changed", async () => {
 		const { ctx, statusEvents } = makeCtx();
 		const stable = snap("warming", { phase: "embed", done: 3, total: 10, started_ms: 0 });
 		const controller = new MemoryStatusController(ctx, {
-			peek: () => stable,
+			peek: async () => stable,
 			setIntervalFn: fakeSetInterval,
 			clearIntervalFn: fakeClearInterval,
 		});
 		controller.start();
+		await flushPolls();
 		intervalCallbacks[0]?.();
+		await flushPolls();
 		intervalCallbacks[0]?.();
+		await flushPolls();
 		expect(statusEvents).toHaveLength(1); // de-duped
 		controller.dispose();
 	});
@@ -145,7 +164,7 @@ describe("MemoryStatusController", () => {
 	it("dispose clears the segment if it was visible and stops polling", () => {
 		const { ctx, statusEvents } = makeCtx();
 		const controller = new MemoryStatusController(ctx, {
-			peek: () => snap("warming", { phase: "embed", done: 1, total: 10, started_ms: 0 }),
+			peek: async () => snap("warming", { phase: "embed", done: 1, total: 10, started_ms: 0 }),
 			setIntervalFn: fakeSetInterval,
 			clearIntervalFn: fakeClearInterval,
 		});
@@ -159,7 +178,7 @@ describe("MemoryStatusController", () => {
 	it("start() is idempotent", () => {
 		const { ctx } = makeCtx();
 		const controller = new MemoryStatusController(ctx, {
-			peek: () => snap("warm"),
+			peek: async () => snap("warm"),
 			setIntervalFn: fakeSetInterval,
 			clearIntervalFn: fakeClearInterval,
 		});
@@ -173,7 +192,7 @@ describe("MemoryStatusController", () => {
 		for (const status of ["error", "unavailable", "cold"] as const) {
 			const { ctx, statusEvents } = makeCtx();
 			const controller = new MemoryStatusController(ctx, {
-				peek: () => snap(status),
+				peek: async () => snap(status),
 				setIntervalFn: fakeSetInterval,
 				clearIntervalFn: fakeClearInterval,
 			});

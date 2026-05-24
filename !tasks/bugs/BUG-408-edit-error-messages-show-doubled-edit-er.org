@@ -1,0 +1,56 @@
+#+TITLE: edit: error messages show doubled "edit error: edit error:" prefix
+#+STATE: ITEM
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: BUG-408-edit-error-messages-show-doubled-edit-er
+
+* Initial Message
+
+try to use those affordances again and tell me what's still not working/not ergonomic
+
+* Initial Message
+
+#+begin_example
+edit error: edit error: Patch 1: scope is empty — buffer at /tmp/foo.ts is 0 bytes ...
+#+end_example
+
+Cosmetic but symptomatic of a sloppy error-propagation contract. Suggests the message is being wrapped twice in =CodeEngineError::Edit=.
+
+* Root Cause Chain (precise)
+
+1. =crates/pi-code-engine/src/edit/patch.rs:84-100= returns =CodeEngineError::Edit("Patch 1: scope is empty …")=. Display impl in =error.rs:23= renders as =edit error: Patch 1: …=.
+2. =crates/pi-natives/src/code_path/code_resolver/mutation.rs:311-318= catches via =.map_err(|e| Diagnostic { message: e.to_string(), … })=. =e.to_string()= prepends =edit error: =.
+3. =crates/pi-natives/src/code_path/napi.rs:697-698= re-wraps: =.map_err(|d| CodeEngineError::Edit(d.message))=. =d.message= already starts with =edit error: =.
+4. Downstream =map_edit_error_to_diagnostic(e)= → =e.to_string()= → =edit error: edit error: Patch 1: …=.
+
+Two layers, both adding the prefix via Display.
+
+* Scope (strategic refactor, per design decision)
+
+In:
+- =crates/pi-natives/src/code_path/code_resolver/mutation.rs::apply_to_buffer= — change return type from =Result<MutationOutcome, Diagnostic>= to keep =Diagnostic= as-is BUT thread the raw cause without =to_string()= round-trip.
+- =crates/pi-natives/src/code_path/napi.rs::execute_code_path_inner= edit branch — the =_ => …= arm: introduce sum-type error =enum EditFailure { Engine(CodeEngineError), Diag(Diagnostic) }= so the =edit_transaction= closure propagates either kind without re-wrapping.
+- =crates/pi-natives/src/code_path/napi.rs::map_edit_error_to_diagnostic= — accept =EditFailure=.
+
+Out:
+- Changing =CodeEngineError= Display.
+- Reworking the kernel patch error paths.
+
+* Tests
+
+1. =crates/pi-code-engine/src/edit/patch.rs::tests::error_message_has_single_edit_prefix= — apply_patches on empty buffer, assert =err.to_string().matches("edit error:").count() == 1=.
+2. =crates/pi-natives/src/code_path/dispatch_tests.rs::edit_diagnostic_has_single_prefix= — end-to-end via =execute_code_path_inner=, assert returned diagnostic message has no doubled prefix.
+3. =edit_via_codepath_preserves_diagnostic_variant= — confirm refactor doesn't lose the variant (PeerConflict still distinguishable from generic edit error).
+4. Coverage for non-Edit error kinds (=PeerConflict=, =ExternalModification=, =LockTimeout=) — confirm they still surface correctly through =EditFailure=.
+
+* Acceptance
+
+- No doubled prefix in any edit error path.
+- =PeerConflict= still surfaces as its own variant (not collapsed into generic Edit).
+- Single source of truth for the =edit error:= prefix (Display impl only).
+
+* Verification
+
+- =cargo test -p pi-code-engine edit::patch::tests::error_message_has_single_edit_prefix=
+- =cargo test -p pi-natives dispatch_tests::edit_diagnostic=
+- Manual repro on empty file, confirm single prefix.

@@ -1,0 +1,49 @@
+#+TITLE: peekMemoryProgress sync branch dead post-FEAT-780
+#+STATE: DONE
+#+SESSION_ID: 14eb4e97aabcb79a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-22T14-09-29-258Z_14eb4e97aabcb79a.jsonl]]
+#+CUSTOM_ID: BUG-398-peekmemoryprogress-sync-branch-dead-post
+#+COMPLETION_HASH: e6c3b3fe7f0b4dca
+
+* Initial Message
+
+1. Daemon-side cancellation in recall_engine::query — currently AbortSignal aborts only the JS await; daemon work continues.
+ 2. Eager warmMemoryLane at session_start could now genuinely pre-warm via async dispatch — still requires daemon to be initialised first, so
+ user's first recall still pays the bge-m3 model load.
+
+
+
+yeah file them and tell me how hard it would be to actually implement them. anything else in terms of improvements?
+
+FEAT-780 made `executeOrg` async, so `peekMemoryProgress` is now
+always `Promise<MemoryProgressSnapshot>`. The union
+`MemoryProgressSnapshot | Promise<MemoryProgressSnapshot>` in
+`MemoryStatusController` is dead and forces unnecessary `await
+Promise.resolve(x)` patterns in tests.
+
+** Targets
+
+- `packages/coding-agent/src/modes/controllers/memory-status-controller.ts`
+  - peek field type: drop the bare-snapshot side of the union
+  - `poll()` body: simplify; no more sync-fallback branch
+- `packages/coding-agent/src/tools/memory.ts`
+  - `peekMemoryProgress` return type is already `Promise<…>`; confirm
+    no caller still depends on the sync union shape
+
+** Acceptance
+
+- `peekMemoryProgress` typed as `() => Promise<MemoryProgressSnapshot>`
+- `MemoryStatusController` peek field is `() => Promise<MemoryProgressSnapshot>`
+- `bun run check:ts` clean
+- Existing controller tests still pass without the `flushPolls()`
+  4×`await Promise.resolve()` dance
+
+** Difficulty
+
+~15 min. Pure cleanup, no behavior change.
+
+** Related
+
+- FEAT-780 (the cutover that left this branch dead)
+
+NOTE [2026-05-24]: Dropped union → Promise-only in MemoryStatusControllerDeps.peek + #peek field. Test mock helpers async-ified (5 sites). 53/53 controller + memory tests green; tsc clean on touched files.

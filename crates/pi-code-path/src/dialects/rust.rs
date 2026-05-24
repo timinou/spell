@@ -8,7 +8,7 @@
 //! Payload shape: `RustName { segments: Vec<RustSegment> }`. Encoded as
 //! `NamePayload::Raw(rendered)` per kernel-wide convention.
 
-use std::{ops::Range, sync::Arc};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tree_sitter::Node;
@@ -17,7 +17,7 @@ use winnow::{Parser, token::take_while};
 use crate::{
 	ast::NamePayload,
 	dialect::{
-		AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierResolver, QualifierSpec,
+		AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierSpec,
 	},
 };
 

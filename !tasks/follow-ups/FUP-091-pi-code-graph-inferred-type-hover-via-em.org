@@ -1,0 +1,75 @@
+#+TITLE: pi-code-graph: inferred-type hover via embedded mini type-checker
+#+STATE: ITEM
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: FUP-091-pi-code-graph-inferred-type-hover-via-em
+#+LAYER: pi-code-graph
+
+* Initial Message
+
+try to use those affordances again and tell me what's still not working/not ergonomic
+
+* Initial Message
+
+PLAN-318 W4 adds the =#hover= qualifier returning *written* signature text from =SymbolNode.detail= (extracted by tree-sitter from declaration sites). Example output for TypeScript:
+
+#+begin_example
+function processItems(items: Item[], opts?: Options): Promise<Result>
+#+end_example
+
+What it CANNOT do without type inference:
+
+#+begin_example
+const result = computeValue();        // result: <unknown>
+//   ^ hover                          // LSP would show: result: Promise<string>
+#+end_example
+
+This FUP scopes adding inferred-type rendering inside =pi-code-graph= (NOT an LSP bridge — staying static, per direction).
+
+* Design Space (open — needs design pass before implementation)
+
+** A. Mini type-checker per language
+Build a minimal forward-inference pass: literal types, function-return-type propagation, simple generics. Skip union narrowing, control-flow refinement, conditional types.
+
+Pros: stays static, fast.
+Cons: per-language re-implementation; never matches a real type-checker.
+
+** B. Embed compiler-as-library
+- TypeScript: =@typescript/vfs= + bundled =typescript= for partial inference on a synthetic =Program=.
+- Rust: =rust-analyzer= internal crates (not stable API), or =rustc_private=.
+- Python: =pyright= core extracted.
+
+Pros: matches LSP precision.
+Cons: huge deps, slow cold start, version churn.
+
+** C. Hybrid annotation-first
+Default to written types (W4 behavior). Add =#hover_inferred= qualifier that opts into the mini type-checker for that query only.
+
+Recommendation: C, mini-checker is option A scoped tight.
+
+* Workflows (when picked up)
+
+1. =find { target: "src/foo.ts::result #hover_inferred" }= returns inferred type for unannotated locals.
+2. Return-type inference for arrow functions without annotation.
+3. Generic instantiation in hover: =Array<string>= not =Array<T>=.
+4. Confidence level surfaced: =annotation= (W4) vs =inferred-strong= (forward-flow) vs =inferred-weak= (literal-only).
+
+* Out of Scope
+
+- Type-error diagnostics (separate concern).
+- Full type-checking (use compiler).
+- LSP bridge.
+
+* Dependencies
+
+- PLAN-318 W4 (=#hover= qualifier and =SymbolNode.detail= extraction) must land first.
+- Type-aware reference resolution FUP shares infrastructure (they likely both depend on a per-language =TypeOracle= trait inside =pi-code-graph=).
+
+* Status
+
+[2026-05-24] Deferred during PLAN-318 design. Implementation requires:
+1. Design pass choosing A/B/C.
+2. Real demand from agents (the written-type hover from W4 may be sufficient for ≥90% of cases).
+3. Defining the =TypeOracle= trait that both this FUP and the type-aware-refs FUP would share.
+
+Do not start until PLAN-318 W4 ships and there is evidence agents need inferred types beyond written signatures.

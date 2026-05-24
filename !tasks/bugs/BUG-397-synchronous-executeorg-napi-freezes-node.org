@@ -1,0 +1,128 @@
+#+TITLE: Synchronous executeOrg NAPI freezes Node event loop during recall
+#+STATE: DONE
+#+SESSION_ID: 14eb4e97aabcb79a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-22T14-09-29-258Z_14eb4e97aabcb79a.jsonl]]
+#+CUSTOM_ID: BUG-397-synchronous-executeorg-napi-freezes-node
+#+EFFORT: 30m_repro
+#+LAYER: pi-natives coding-agent
+#+SESSION_ID: 14eb4e97aabcb79a
+#+COMPLETION_HASH: f074eb5d1796e877
+
+* Initial Message
+
+can you test now? i merged it all to main, so please try out these new features
+
+* Initial Message
+
+Captured during PLAN-316 verification. User-visible symptom of the structural defect that FEAT-async-executeOrg fixes.
+
+* Reproduction
+
+1. Kill any running =pi-knowledge-worker= daemon and remove =/run/user/$UID/spell/{embed.pid,knowledge.sock}=.
+2. Start a fresh =spell= session in a repo with a populated =.spell/memory= corpus (≥1000 .org files).
+3. Issue =memory.search= via the agent surface.
+
+Observed:
+- One =📚 indexing org memory… 0/N (scan)= status line lands.
+- TUI freezes for the duration of bge-m3 init + cold corpus embed (~30 s – 4 min depending on corpus size).
+- Tool-call spinner glyph (=⠋⠙⠹…=) stops animating.
+- Keyboard input is buffered but not processed; Ctrl-C does not interrupt.
+- =MemoryStatusController= 2 s poll callbacks never fire during the wait.
+- Status line is stuck on whatever was rendered immediately before the call.
+
+Expected:
+- TUI stays responsive throughout the recall.
+- Status-line widget updates every 2 s with current =org_lane= progress.
+- Tool-call spinner animates.
+- Ctrl-C reaches the abort handler.
+
+* Root Cause
+
+=executeOrg= is declared as a synchronous NAPI function at
+=crates/pi-natives/src/org_buffer.rs:1477=:
+
+#+begin_src rust
+#[napi(js_name = "executeOrg")]
+pub fn execute_org(options: Value) -> Result<Value> {
+    Ok(execute_org_catching(&options, execute_org_inner))
+}
+#+end_src
+
+NAPI registers this as a sync JS function. The native body runs on the
+Node main thread, so during the ~4 min cold recall the event loop is
+fully blocked: no timer callbacks, no I/O, no render frames, no signal
+handlers.
+
+Every other heavy NAPI surface in =pi-natives= already uses
+=task::run_blocking= (libuv worker pool) and returns =task::Async<T>=:
+=grep=, =ast_grep=, =fuzzy_find=, =glob=, =read_image_from_clipboard=,
+=execute_code_path=, =execute_code_graph=, =html=, =image=. =executeOrg=
+is the outlier.
+
+PLAN-316 mitigates the *startup* path (=peekMemoryProgress= now never
+forces =init=), but the underlying freeze surface remains for any real
+=recall= / =query= / =remember= call that actually waits on the daemon.
+
+* Scope
+
+In:
+- Capture and reproduce the freeze deterministically.
+- Document the call sites that block (currently =recall=, =query=,
+  =remember=, =graph=, =timeline=, =subgraph=, =link=, =parse=).
+- Block on [[id:FEAT-ASYNC-EXECUTEORG][async-executeOrg]] for the structural fix.
+- Verify post-fix: status widget polls during a real cold recall, Ctrl-C
+  cancels mid-flight, tool spinner animates.
+
+Out:
+- Optimising the daemon-side embed work (separate concern; see
+  FEAT-779).
+- Concurrent agent tool calls (downstream win, not the freeze fix).
+
+* Existing Patterns
+
+- =crates/pi-natives/src/task.rs:303= =blocking()= helper — drops onto
+  libuv worker pool, returns =AsyncTask<Blocking<T>>=, supports
+  =AbortSignal= cancellation.
+- =crates/pi-natives/src/grep.rs:1237=, =ast.rs:414=, =glob.rs:237= —
+  reference implementations.
+
+* Tests
+
+User-visible workflows that must lock in after the fix:
+1. =memory.search= on a cold corpus: TUI stays responsive,
+   =MemoryStatusController= shows live progress, spinner animates.
+2. Ctrl-C during a slow recall aborts the JS-side await (daemon may
+   keep working; that's acceptable for first cut).
+3. Concurrent =executeOrg= calls (e.g. parallel agent tool calls) don't
+   deadlock or interleave incorrectly.
+
+Locking tests:
+- Rust: existing tests in =org_buffer.rs= still pass after sig change.
+- Bun: a TUI integration test that mocks a slow =executeOrg= and
+  asserts =setInterval= callbacks fire during the await.
+
+* Acceptance Criteria
+
+- =executeOrg= no longer blocks the Node event loop.
+- =MemoryStatusController= shows progress ticks every 2 s during a
+  real cold recall.
+- Ctrl-C reaches the abort path during a recall.
+- All existing tests pass with =await=-modified call sites.
+
+* Verification
+
+- Targeted: =bun test packages/coding-agent/test/tools/memory.test.ts=
+- Targeted: =cargo test -p pi-natives org_buffer=
+- Manual repro on a cold corpus — observe widget ticking during embed.
+
+* Related
+
+- Fixed by [[id:FEAT-ASYNC-EXECUTEORG][FEAT-async-executeOrg]]
+- Related to [[id:PLAN-316][PLAN-316 memory index build TUI affordance]]
+- Independent of [[id:FEAT-779][FEAT-779 non-blocking warm-load]]
+
+* Cross-references [auto-linked]
+
+- Structural fix: [[id:FEAT-780-async-napi-cutover-for-executeorg][FEAT-780 async-NAPI cutover for executeOrg]]
+
+NOTE [2026-05-23]: Fixed by FEAT-780. Manual verification: 33 setInterval ticks during 9612 real executeOrg calls in 200ms; pre-cutover would be 0 ticks. Test surface: 358 pi-natives + 7 warm_progress + 22 org_buffer + 272/273 TS green (1 pre-existing recall flake on HEAD, 3/4 of its sibling tests now pass after the migration).

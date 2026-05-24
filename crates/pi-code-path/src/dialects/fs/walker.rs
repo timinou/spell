@@ -1,6 +1,6 @@
 use std::{
 	collections::HashMap,
-	path::{Path, PathBuf},
+	path::PathBuf,
 };
 
 use ignore::WalkBuilder;
@@ -46,10 +46,25 @@ pub fn walk(
 		builder.add_custom_ignore_filename(".gitignore");
 	}
 
-	let globset = build_globset(&pattern);
+	let mut results: Vec<Result<NodeRef, Diagnostic>> = Vec::new();
+	let globset = match build_globset(&pattern) {
+		Ok(gs) => gs,
+		Err(msg) => {
+			// BUG-405 (PLAN-318 W0): invalid glob compile MUST surface as a
+			// diagnostic + zero matches, not as an unfiltered walk. Most common
+			// trigger is `*.ts[mtime>...]` (predicate-lookalike CharClass).
+			results.push(Err(Diagnostic {
+				variant: DiagnosticVariant::ParseError,
+				message: format!(
+					"{msg} \u{2014} predicate brackets need a `::\u{a7}file[...]` axis, e.g. \
+					 `*.ts::\u{a7}file[mtime>2026-05-01]`"
+				),
+				span:    None,
+			}));
+			return results;
+		},
+	};
 	let negative_globsets = build_negative_globsets(loc);
-
-	let mut results = Vec::new();
 	let mut count = 0;
 
 	for entry in builder.build() {
@@ -121,18 +136,27 @@ pub fn walk(
 	results
 }
 
-fn build_globset(pattern: &str) -> Option<globset::GlobSet> {
+/// Compile a glob pattern into a [`globset::GlobSet`].
+///
+/// Returns:
+/// - `Ok(None)` for empty or pure-`**` patterns (no filter applied).
+/// - `Ok(Some(gs))` for valid compiled patterns.
+/// - `Err(msg)` when the pattern is non-empty but globset rejects it.
+///   The caller MUST treat this as zero matches + diagnostic; legacy
+///   behaviour was to treat compile failure as "no filter" which produced
+///   pathological unfiltered walks (BUG-405).
+fn build_globset(pattern: &str) -> Result<Option<globset::GlobSet>, String> {
 	if pattern.is_empty() || pattern == "**" {
-		return None;
+		return Ok(None);
 	}
 	let mut builder = globset::GlobSetBuilder::new();
 	match globset::Glob::new(pattern) {
 		Ok(glob) => {
 			builder.add(glob);
 		},
-		Err(_) => return None,
+		Err(e) => return Err(format!("invalid glob pattern `{pattern}`: {e}")),
 	}
-	builder.build().ok()
+	builder.build().map(Some).map_err(|e| format!("invalid glob pattern `{pattern}`: {e}"))
 }
 fn build_negative_globsets(loc: &FsLocator) -> Vec<globset::GlobSet> {
 	let segments = if loc.segments.len() == 1 {
@@ -190,7 +214,7 @@ fn build_negative_globsets(loc: &FsLocator) -> Vec<globset::GlobSet> {
 						},
 					}
 				}
-				if let Some(gs) = build_globset(&pattern) {
+				if let Ok(Some(gs)) = build_globset(&pattern) {
 					result.push(gs);
 				}
 			}
@@ -368,4 +392,43 @@ mod tests {
 		let nodes: Vec<_> = results.into_iter().filter_map(|r| r.ok()).collect();
 		assert!(nodes.len() < 250);
 	}
+
+	// BUG-405 (PLAN-318 W0): invalid glob (predicate-lookalike that globset rejects)
+	// must yield zero matches + diagnostic, NOT fall through to unfiltered walk.
+	#[test]
+	fn glob_invalid_pattern_returns_empty_with_diagnostic() {
+		let (_dir, root) = make_walker_root();
+		// Mimics parser output for `*.ts[mtime>2026-05-20]`:
+		// `*` + `.ts` + CharClass([m,t,i,m,e,>,2,0,2,6,-,0,5,-,2,0]).
+		// CharClass contains invalid ranges `2-0` and `5-2`, so globset rejects.
+		let loc = FsLocator {
+			segments: vec![
+				FsSegment::Star,
+				FsSegment::Literal(".ts".to_string()),
+				FsSegment::CharClass(vec![
+					'm', 't', 'i', 'm', 'e', '>', '2', '0', '2', '6', '-', '0', '5', '-', '2', '0',
+				]),
+			],
+		};
+		let opts = WalkOpts { hidden: true, gitignore: true, root };
+		let results = walk(&loc, &opts, &CancellationToken::new());
+
+		let nodes: Vec<_> = results.iter().filter_map(|r| r.as_ref().ok()).collect();
+		let diags: Vec<_> = results.iter().filter_map(|r| r.as_ref().err()).collect();
+
+		assert!(
+			nodes.is_empty(),
+			"invalid glob must not return any matches; got {} nodes: {:?}",
+			nodes.len(),
+			nodes.iter().take(5).map(|n| &n.locator).collect::<Vec<_>>(),
+		);
+		assert!(
+			diags.iter().any(|d| d.message.to_lowercase().contains("glob")
+				&& (d.message.contains("invalid") || d.message.contains("compile"))),
+			"expected a diagnostic naming the invalid glob; got: {:?}",
+			diags.iter().map(|d| &d.message).collect::<Vec<_>>(),
+		);
+	}
+
 }
+

@@ -2247,7 +2247,7 @@ export class AgentSession {
 
 		const content = renderPromptTemplate(planModeReferencePrompt, {
 			planFilePath,
-			planContent: orgToMarkdown(planContent),
+			planContent: await orgToMarkdown(planContent),
 		});
 
 		this.#planReferenceSent = true;

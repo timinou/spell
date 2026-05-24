@@ -8,16 +8,16 @@ import type { OrgComputeWavesOutput } from "../src/org-buffer/types";
 const require_ = createRequire(import.meta.url);
 const nativesDir = path.join(import.meta.dir, "..", "native");
 const native = require_(path.join(nativesDir, "pi_natives.dev.node")) as {
-	executeOrg(options: Record<string, unknown>): { output: unknown; error: boolean };
+	executeOrg(options: Record<string, unknown>): Promise<{ output: unknown; error: boolean }>;
 };
 
-function executeOrg(options: Record<string, unknown>): { output: unknown; error: boolean } {
+function executeOrg(options: Record<string, unknown>): Promise<{ output: unknown; error: boolean }> {
 	return native.executeOrg(options);
 }
 
 describe("executeOrg NAPI bridge", () => {
-	it("parses org source into items", () => {
-		const result = executeOrg({
+	it("parses org source into items", async () => {
+		const result = await executeOrg({
 			command: "parse",
 			source: `* DOING My Task
 :PROPERTIES:
@@ -40,8 +40,8 @@ Body text.
 		expect(output.items[0].level).toBe(1);
 	});
 
-	it("parses items with body when includeBody is true", () => {
-		const result = executeOrg({
+	it("parses items with body when includeBody is true", async () => {
+		const result = await executeOrg({
 			command: "parse",
 			source: `* DOING Task
 :PROPERTIES:
@@ -58,7 +58,7 @@ Body content here.
 		expect(output.items[0].body).toContain("Body content here.");
 	});
 
-	it("filters items by todo state", () => {
+	it("filters items by todo state", async () => {
 		const source = `* DOING Task A
 :PROPERTIES:
 :CUSTOM_ID: T-A
@@ -74,7 +74,7 @@ Body content here.
 :CUSTOM_ID: T-C
 :END:
 `;
-		const result = executeOrg({
+		const result = await executeOrg({
 			command: "query",
 			source,
 			todoKeywords: ["DOING", "DONE"],
@@ -85,7 +85,7 @@ Body content here.
 		expect(output.total).toBe(2);
 	});
 
-	it("computes dependency graph from items", () => {
+	it("computes dependency graph from items", async () => {
 		const source = `* ITEM Task A
 :PROPERTIES:
 :CUSTOM_ID: T-A
@@ -97,7 +97,7 @@ Body content here.
 :BLOCKERS: T-A
 :END:
 `;
-		const result = executeOrg({
+		const result = await executeOrg({
 			command: "graph",
 			source,
 			todoKeywords: ["ITEM", "DONE"],
@@ -109,7 +109,7 @@ Body content here.
 		expect(output.cycles).toHaveLength(0);
 	});
 
-	it("computes wave layers for items", () => {
+	it("computes wave layers for items", async () => {
 		const source = `* ITEM Task A
 :PROPERTIES:
 :CUSTOM_ID: T-A
@@ -127,7 +127,7 @@ Body content here.
 :BLOCKERS: T-B
 :END:
 `;
-		const result = executeOrg({
+		const result = await executeOrg({
 			command: "computeWaves",
 			source,
 			todoKeywords: ["ITEM", "DONE"],
@@ -147,10 +147,10 @@ Body content here.
 		]);
 	});
 
-	it("deserializes TS-shaped items without byte_range (BUG-218 regression)", () => {
+	it("deserializes TS-shaped items without byte_range (BUG-218 regression)", async () => {
 		// Items shaped like TS would construct them: no byte_range, clocks, or children fields.
 		// Before BUG-218 fix, these would silently fail to deserialize, producing empty results.
-		const result = executeOrg({
+		const result = await executeOrg({
 			command: "computeWaves",
 			items: [
 				{
@@ -182,7 +182,7 @@ Body content here.
 		expect(output.waves.length).toBeGreaterThanOrEqual(2);
 	});
 
-	it("computes next actionable wave", () => {
+	it("computes next actionable wave", async () => {
 		const source = `* DONE Task A
 :PROPERTIES:
 :CUSTOM_ID: T-A
@@ -194,7 +194,7 @@ Body content here.
 :BLOCKERS: T-A
 :END:
 `;
-		const result = executeOrg({
+		const result = await executeOrg({
 			command: "nextWave",
 			source,
 			todoKeywords: ["ITEM", "DONE"],
@@ -205,7 +205,7 @@ Body content here.
 		expect(output.items.length).toBeGreaterThanOrEqual(1);
 	});
 
-	it("finds connected components", () => {
+	it("finds connected components", async () => {
 		const source = `* ITEM Task A
 :PROPERTIES:
 :CUSTOM_ID: T-A
@@ -222,7 +222,7 @@ Body content here.
 :CUSTOM_ID: T-C
 :END:
 `;
-		const result = executeOrg({
+		const result = await executeOrg({
 			command: "connectedComponents",
 			source,
 			todoKeywords: ["ITEM", "DONE"],
@@ -233,7 +233,7 @@ Body content here.
 		expect(output.components.length).toBeGreaterThanOrEqual(2);
 	});
 
-	it("replaces section content", () => {
+	it("replaces section content", async () => {
 		const source = `* DOING Task
 :PROPERTIES:
 :CUSTOM_ID: T-001
@@ -245,7 +245,7 @@ Old content.
 ** Implementation
 Code here.
 `;
-		const result = executeOrg({
+		const result = await executeOrg({
 			command: "editSection",
 			source,
 			section: "Context",
@@ -261,7 +261,7 @@ Code here.
 		expect(output.source).toContain("** Implementation");
 	});
 
-	it("appends to section content", () => {
+	it("appends to section content", async () => {
 		const source = `* DOING Task
 :PROPERTIES:
 :CUSTOM_ID: T-001
@@ -273,7 +273,7 @@ Existing.
 ** Implementation
 Code.
 `;
-		const result = executeOrg({
+		const result = await executeOrg({
 			command: "editSection",
 			source,
 			section: "Context",
@@ -288,8 +288,8 @@ Code.
 		expect(output.source).toContain("Appended.");
 	});
 
-	it("converts org to markdown", () => {
-		const result = executeOrg({
+	it("converts org to markdown", async () => {
+		const result = await executeOrg({
 			command: "toMarkdown",
 			source: "* Heading\n\n#+begin_src rust\nfn main() {}\n#+end_src\n",
 		});
@@ -299,8 +299,8 @@ Code.
 		expect(output.markdown).toContain("```rust");
 	});
 
-	it("converts org to plain text", () => {
-		const result = executeOrg({
+	it("converts org to plain text", async () => {
+		const result = await executeOrg({
 			command: "toPlainText",
 			source: "* Heading\nBody text.\n",
 		});
@@ -310,13 +310,13 @@ Code.
 		expect(output.text).toContain("Body text.");
 	});
 
-	it("returns error for unknown command", () => {
-		const result = executeOrg({ command: "bogus" });
+	it("returns error for unknown command", async () => {
+		const result = await executeOrg({ command: "bogus" });
 		expect(result.error).toBe(true);
 	});
 
-	it("returns error when source is missing for parse", () => {
-		const result = executeOrg({ command: "parse" });
+	it("returns error when source is missing for parse", async () => {
+		const result = await executeOrg({ command: "parse" });
 
 		expect(result).toEqual({ output: "GenericFailure, Missing required field: file", error: true });
 	});

@@ -329,10 +329,10 @@ mod tests {
 
 // ── Anchors and qualifiers ──────────────────────────────────────
 
-use std::{ops::Range, sync::Arc};
+use std::sync::Arc;
 
 use crate::dialect::{
-	AnchorPattern, EdgeKindSet, LanguageDialect, QualifierResolver, QualifierSpec,
+	AnchorPattern, EdgeKindSet, LanguageDialect, QualifierSpec,
 };
 
 mod qualifiers {
@@ -544,7 +544,7 @@ fn has_descendant_if_with_return(node: tree_sitter::Node<'_>) -> bool {
 		if n.kind() == "if_statement" {
 			// Check if the consequence (first named child after condition) contains return
 			let mut cursor = n.walk();
-			let mut found_condition = false;
+			let found_condition = false;
 			for child in n.children(&mut cursor) {
 				if found_condition && child.is_named() {
 					if has_descendant_kind(child, "return_statement") {

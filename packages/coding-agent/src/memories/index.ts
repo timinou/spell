@@ -969,7 +969,7 @@ export async function applyConsolidation(
 
 	for (const entry of consolidated.memoryEntries ?? []) {
 		const summary = entry.body.trim().length > 0 ? `${entry.title}\n\n${entry.body}` : entry.title;
-		const result = executeOrg({
+		const result = await executeOrg({
 			command: "remember",
 			kind: "concept",
 			summary,

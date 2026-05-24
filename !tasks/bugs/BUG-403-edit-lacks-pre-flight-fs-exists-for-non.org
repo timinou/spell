@@ -1,5 +1,5 @@
 #+TITLE: edit lacks pre-flight fs.exists for non-creation ops
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14edc1bec5a09a49
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
 #+CUSTOM_ID: BUG-403-edit-lacks-pre-flight-fs-exists-for-non
@@ -8,6 +8,7 @@
 #+PRIORITY: #B
 #+SESSION_ID: 14edc1bec5a09a49
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+COMPLETION_HASH: 40cfa2bcca1fc31e
 
 * Initial Message
 
@@ -77,3 +78,5 @@ and empty-scope is explicit, this is the third layer of defence.
 
 - BUG-401 (root.params ignored — causes missing-file resolution)
 - BUG-402 (empty scope diagnostic — masks this)
+
+NOTE [2026-05-24]: Fixed in commit 4879100e3 (PLAN-317). edit.ts::#executeStructural now does pre-flight `fs.exists(filePart)` (after stripping `::Symbol`) for the 27 mutating op kinds and fast-fails with `{error: "file_not_found", text: "File not found at resolved path: …"}`. Green: packages/coding-agent/test/tools/edit-preflight-missing.test.ts (4 tests).

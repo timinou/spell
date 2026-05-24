@@ -111,7 +111,7 @@ mod tests {
 
 	use super::*;
 	use crate::{
-		ast::{Head, NamePayload},
+		ast::NamePayload,
 		dialect::NameLexer,
 		parser::parse_code_path,
 		renderer::render_code_path,

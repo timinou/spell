@@ -49,7 +49,7 @@ impl TestBroker {
 	}
 
 	/// Start with full custom options.
-	pub async fn start_with(grace: Duration, socket_path: PathBuf, opts: BrokerOptions) -> Self {
+	pub async fn start_with(_grace: Duration, socket_path: PathBuf, opts: BrokerOptions) -> Self {
 		let handle = tokio::spawn(async move {
 			run_server(opts).await.expect("broker exits cleanly");
 		});

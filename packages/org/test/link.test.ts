@@ -21,24 +21,24 @@ afterEach(async () => {
 	await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
-function skipIfNoNative(): boolean {
+async function skipIfNoNative(): Promise<boolean> {
 	try {
-		executeOrg({ command: "recall", text: "x" });
+		await executeOrg({ command: "recall", text: "x" });
 		return false;
 	} catch {
 		return true;
 	}
 }
 
-function link(args: Record<string, unknown>): Record<string, unknown> {
-	const result = executeOrg({ command: "link", repoRoot: tmpDir, ...args });
+async function link(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+	const result = await executeOrg({ command: "link", repoRoot: tmpDir, ...args });
 	if (result.error) throw new Error(String(result.output));
 	return result.output as Record<string, unknown>;
 }
 
 describe("link appends edge", () => {
 	test("adds a RELATIONS edge to the source item file", async () => {
-		if (skipIfNoNative()) return;
+  if (await skipIfNoNative()) return;
 
 		const tasksDir = path.join(tmpDir, "!tasks", "features");
 		await fs.mkdir(tasksDir, { recursive: true });
@@ -51,7 +51,7 @@ describe("link appends edge", () => {
 			["* ITEM Feature Two", ":PROPERTIES:", ":CUSTOM_ID: FEAT-002", ":END:"].join("\n"),
 		);
 
-		const result = link({ from: "FEAT-001", to: "FEAT-002", kind: "INVOLVED" });
+		const result = await link({ from: "FEAT-001", to: "FEAT-002", kind: "INVOLVED" });
 
 		expect(typeof result.revision).toBe("number");
 		expect(typeof result.file).toBe("string");
@@ -61,7 +61,7 @@ describe("link appends edge", () => {
 
 describe("link idempotent", () => {
 	test("does not add duplicate edges", async () => {
-		if (skipIfNoNative()) return;
+  if (await skipIfNoNative()) return;
 
 		const tasksDir = path.join(tmpDir, "!tasks", "features");
 		await fs.mkdir(tasksDir, { recursive: true });
@@ -82,7 +82,7 @@ describe("link idempotent", () => {
 			["* ITEM Feature Four", ":PROPERTIES:", ":CUSTOM_ID: FEAT-004", ":END:"].join("\n"),
 		);
 
-		const result = link({ from: "FEAT-003", to: "FEAT-004", kind: "INVOLVED" });
+		const result = await link({ from: "FEAT-003", to: "FEAT-004", kind: "INVOLVED" });
 
 		expect(typeof result.revision).toBe("number");
 		expect(typeof result.file).toBe("string");

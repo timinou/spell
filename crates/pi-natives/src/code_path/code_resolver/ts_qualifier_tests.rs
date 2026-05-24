@@ -234,6 +234,7 @@ fn anchor_module_side_effect_filter() {
 	assert!(matched_text.contains("console.log"), "expected console.log, got: {}", matched_text);
 }
 
+
 // Helper trait for tests to extract text from Content
 trait ContentValue {
 	fn value(&self) -> &str;

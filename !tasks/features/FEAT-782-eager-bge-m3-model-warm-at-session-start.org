@@ -1,0 +1,83 @@
+#+TITLE: eager bge-m3 model warm at session_start
+#+STATE: ITEM
+#+SESSION_ID: 14eb4e97aabcb79a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-22T14-09-29-258Z_14eb4e97aabcb79a.jsonl]]
+#+CUSTOM_ID: FEAT-782-eager-bge-m3-model-warm-at-session-start
+
+* Initial Message
+
+1. Daemon-side cancellation in recall_engine::query — currently AbortSignal aborts only the JS await; daemon work continues.
+ 2. Eager warmMemoryLane at session_start could now genuinely pre-warm via async dispatch — still requires daemon to be initialised first, so
+ user's first recall still pays the bge-m3 model load.
+
+
+
+yeah file them and tell me how hard it would be to actually implement them. anything else in terms of improvements?
+
+FEAT-780 unlocked non-blocking executeOrg, so we can finally pre-warm
+the knowledge lane during session bootstrap without freezing the TUI.
+First user-triggered `memory.search` still pays the 200-300s cold
+embed cost on a fresh 2727-file repo because bge-m3 model load is lazy
+inside the daemon.
+
+** Current shape
+
+- `tools/memory.ts::warmMemoryLane()` — sync void wrapper; under the
+  hood now async (FEAT-780). Currently called from
+  `MemoryStatusController.start()` after first peek shows `unavailable`.
+- Daemon `open` opens the repo cache (FTS table + vector index handles)
+  but does NOT load the bge-m3 model. Model load deferred to first
+  `embed_query` / `embed_batch` call (`pi_knowledge_worker::embedder::ensure_loaded`).
+- Cold-embed cost on 2727 files: ~280s wall — bge-m3 model load
+  (~5-10s GPU/CPU) + first batch indexing.
+
+** Why eager warm wins post-FEAT-780
+
+Pre-FEAT-780 we couldn't kick warm at session_start because the synchronous
+NAPI froze the event loop and made the bootstrap feel hung. Now warm
+is genuinely fire-and-forget: status widget renders progress, agent
+accepts input, manual `memory.search` queues behind the warm cleanly.
+
+** Sketch
+
+- New daemon command `warm { repo_handle }`: calls existing `open` →
+  triggers `ensure_loaded` on the embedder → returns immediately;
+  warmCompleted event arrives via existing W4 push-subscribe channel
+  (`warm_completed` already in protocol).
+- Client: dispatch `warm` from `agent-session.ts` bootstrap right after
+  cwd is known; wire result to `MemoryStatusController` via the
+  existing `setHookStatus` surface.
+- Optional: warm a single sentinel embed ("hello") to flush the first
+  candle forward-pass cost too — adds ~5s but removes the spike from
+  the user's first real query.
+
+** Acceptance
+
+- Session bootstrap shows "warming memory" affordance within 100ms.
+- First user-triggered `memory.search` after warm completes returns in
+  RPC latency (~10-100ms), not 280s.
+- Repos with no `.spell/` cache fall back gracefully (skip warm).
+- Warm failure does not block session start.
+
+** Difficulty
+
+Low-medium. ~half day.
+
+Soft parts:
+- `warmMemoryLane` already exists; just needs to be called earlier.
+- W4 `warm_completed` event already in protocol.
+- Status widget already handles transitions.
+- Async dispatch already works (FEAT-780).
+
+Sharp edges:
+- `ensure_loaded` is currently behind a lazy lock with no progress
+  reporting; needs minimal callback or polling stat to drive the
+  status widget during the first ~10s.
+- Need to avoid warming N-times for N-window sessions / multi-cwd
+  invocations.
+
+** Related
+
+- FEAT-780 (the unblocker)
+- PLAN-315 (knowledge daemon architecture)
+- PLAN-316 (status widget + warm affordance scaffolding)

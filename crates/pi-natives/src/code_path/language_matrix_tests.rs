@@ -27,8 +27,7 @@ use std::sync::Arc;
 use pi_code_engine::language::LanguageRegistry;
 use pi_code_path::{
 	ast::{ActionContent, CodePath, FsLocator, FsSegment, Head, Locator, NamePayload, Query, Step},
-	dialects::{css::CssNameLexer, mdorg::MdNameLexer, typescript::TsNameLexer},
-	op::{CssTarget, HeadingTarget, Identifier, Op, SymScope, SymbolTarget},
+	op::{CssTarget, HeadingTarget, Identifier, Op, SymbolTarget},
 	resolver::traits::{CancellationToken, MutationResolver},
 };
 
@@ -146,8 +145,6 @@ fn run_case(
 // ── TypeScript ────────────────────────────────────────────────────
 
 mod typescript {
-	use pi_code_path::op::{Identifier, SymScope};
-
 	use super::*;
 
 	#[test]
@@ -431,7 +428,7 @@ mod css {
 // ── HTML ──────────────────────────────────────────────────────────
 
 mod html {
-	use pi_code_path::op::{Identifier, SymScope};
+	use pi_code_path::op::SymScope;
 
 	use super::*;
 

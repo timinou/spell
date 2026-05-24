@@ -1351,12 +1351,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
-	#renderPlanPreview(planContent: string): void {
+	async #renderPlanPreview(planContent: string): Promise<void> {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new DynamicBorder());
 		this.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "Plan Review")), 1, 1));
 		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Markdown(orgToMarkdown(planContent), 1, 1, getMarkdownTheme()));
+		this.chatContainer.addChild(new Markdown(await orgToMarkdown(planContent), 1, 1, getMarkdownTheme()));
 		this.chatContainer.addChild(new DynamicBorder());
 		this.ui.requestRender();
 	}
@@ -1502,7 +1502,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			childItems: preparedChildItems.length > 0 ? preparedChildItems : undefined,
 			omittedCount: options.childItemsOmittedCount ?? 0,
 			totalCount: preparedChildItems.length + (options.childItemsOmittedCount ?? 0),
-			planContent: orgToMarkdown(planContent),
+			planContent: await orgToMarkdown(planContent),
 			finalPlanFilePath: planReferencePath,
 			orgItemId: approvedOrgItemId,
 			orgItemArtifactsDir: approvedOrgItemArtifactsDir,
@@ -1614,7 +1614,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 
-		this.#renderPlanPreview(planContent);
+		await this.#renderPlanPreview(planContent);
 		const selectorOptions = ["Approve and execute", "Refine plan", "Stay in plan mode"];
 		if (this.planModeUltraplan) {
 			selectorOptions.splice(1, 0, "Review with Momus");

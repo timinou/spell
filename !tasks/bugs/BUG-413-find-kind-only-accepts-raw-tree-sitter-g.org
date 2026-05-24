@@ -1,0 +1,92 @@
+#+TITLE: find: §kind only accepts raw tree-sitter grammar names, blocks cross-language queries
+#+STATE: DOING
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: BUG-413-find-kind-only-accepts-raw-tree-sitter-g
+#+LAYER: pi-code-path pi-natives coding-agent
+
+* Initial Message
+
+try to use those affordances again and tell me what's still not working/not ergonomic
+
+* Initial Message
+
+Documented recipe =foo.ts::§symbol= and predicate =[kind="method"]= both return no-match. The kernel actually requires raw tree-sitter grammar kind names — =§function_declaration= (TS), =§function_item= (Rust), =§function_definition= (Python). Cross-language queries are impossible; agents must know per-language grammar vocabulary.
+
+* Root Cause
+
+=crates/pi-natives/src/code_path/code_resolver/walker.rs:442=:
+#+begin_src rust
+Head::NodeKind(kind) => node.kind() == kind.as_str(),
+#+end_src
+
+Direct tree-sitter =node.kind()= equality. No alias layer, no per-dialect translation.
+
+* Scope (option C + alias set ii: tree-sitter buckets)
+
+In:
+- =crates/pi-code-path/src/dialect.rs= — add =LanguageDialect::kind_aliases: HashMap<&'static str, Vec<&'static str>>= mapping universal alias → raw TS kinds for that language.
+- =crates/pi-natives/src/code_path/code_resolver/walker.rs::head_matches= — when =Head::NodeKind(k)= doesn't match the raw kind, consult =dialect.kind_aliases.get(k)= and check membership.
+- Per-dialect alias maps (one =const= per dialect): typescript, rust, python, go, clojure, elixir, haskell, html, css. Universal aliases: =function, method, class, decl, call, import, binding, identifier=.
+- Raw kinds still accepted as first-class (option C: both work).
+- =packages/coding-agent/src/prompts/tools/find.md= — replace =::§symbol[kind="method"]= recipe with =::§method= (works in all supported languages).
+- Auto-generate =packages/coding-agent/src/prompts/tools/_generated/symbol-kinds.md= listing per-language raw kinds for the long-tail queries.
+
+Out:
+- Adding per-language symbol-axis predicates beyond =kind= aliases (e.g. =[exported]=, =[async]= — defer to FUP).
+- =§decl= as a super-kind that matches any declaration — defer until alias coverage proves it's needed.
+
+* Per-Dialect Alias Map (draft)
+
+#+begin_example
+TypeScript:
+  function → [function_declaration, function_expression, arrow_function, function_signature]
+  method   → [method_definition, method_signature, abstract_method_signature]
+  class    → [class_declaration, class, abstract_class_declaration]
+  call     → [call_expression, new_expression]
+  import   → [import_statement]
+  binding  → [variable_declarator, lexical_declaration]
+  identifier → [identifier, property_identifier, type_identifier]
+
+Rust:
+  function → [function_item, function_signature_item]
+  method   → [function_item]                  // method_ness via impl-ancestor predicate
+  class    → [struct_item, enum_item, union_item, trait_item]
+  call     → [call_expression, macro_invocation]
+  import   → [use_declaration, extern_crate_declaration]
+  binding  → [let_declaration, const_item, static_item]
+  identifier → [identifier, type_identifier, field_identifier]
+
+Python:
+  function → [function_definition]
+  method   → [function_definition]            // method_ness via class-ancestor predicate
+  class    → [class_definition]
+  call     → [call]
+  import   → [import_statement, import_from_statement]
+  binding  → [assignment, named_expression]
+  identifier → [identifier]
+#+end_example
+
+(Full table generated from each dialect at build time in W3 of PLAN-318.)
+
+* Tests
+
+1. =crates/pi-natives/src/code_path/code_resolver/qualifier_tests.rs::alias_method_matches_ts_method_definition= — TS file =::§method= returns method_definition nodes.
+2. =alias_method_matches_python_function_inside_class= — Python =::§method= returns function_definition nodes whose ancestor is class_definition.
+3. =alias_function_matches_arrow_in_ts= — TS arrow function via =::§function=.
+4. =raw_kind_still_matches= — =::§function_declaration= still works (no regression).
+5. =unknown_alias_emits_diagnostic= — =::§frobnicate= → diagnostic "unknown kind alias for typescript; available: [...]".
+6. Per-dialect tests for each alias in =ts_qualifier_tests.rs= / =py_qualifier_tests.rs= / =hs_qualifier_tests.rs= / etc.
+
+* Acceptance
+
+- =::§function= / =::§method= / =::§class= / =::§call= / =::§import= / =::§binding= / =::§identifier= / =::§decl= work cross-language.
+- Raw tree-sitter kinds still accepted.
+- Unknown aliases produce a diagnostic naming valid aliases for the file's language.
+- =find.md= recipe table uses universal aliases.
+
+* Verification
+
+- =cargo test -p pi-natives code_resolver=
+- =bun test packages/coding-agent/test/tools/find-alias.test.ts=
+- Manual: =find { target: "src/**/*.ts::§function" }=, =find { target: "src/**/*.rs::§function" }= — both return analogous results.

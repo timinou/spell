@@ -26,7 +26,7 @@ use pi_org_engine::{
 };
 use serde_json::{Value, json};
 
-use crate::{buffer_registry, org_index};
+use crate::{buffer_registry, org_index, task};
 
 fn org_err(message: impl Into<String>) -> napi::Error {
 	napi::Error::from_reason(message.into())
@@ -1474,9 +1474,52 @@ where
 	}
 }
 
-#[napi(js_name = "executeOrg")]
-pub fn execute_org(options: Value) -> Result<Value> {
-	Ok(execute_org_catching(&options, execute_org_inner))
+/// Thin newtype around `serde_json::Value` so we can flow it through
+/// `task::Async<T>`.
+///
+/// `task::blocking` requires `T: ToNapiValue + TypeName + Send + 'static`.
+/// napi 3 ships `ToNapiValue for serde_json::Value` (via the `serde-json`
+/// feature) but not `TypeName`, which the `#[napi]` macro needs to
+/// generate the `.d.ts` for the async return position. Defining
+/// `OrgValue` locally lets us add both impls without orphan-rule pain,
+/// and the JS side never sees the wrapper — it gets the inner JSON
+/// object verbatim.
+pub struct OrgValue(pub Value);
+
+impl ToNapiValue for OrgValue {
+	unsafe fn to_napi_value(env: sys::napi_env, val: Self) -> Result<sys::napi_value> {
+		unsafe { Value::to_napi_value(env, val.0) }
+	}
+}
+
+impl TypeName for OrgValue {
+	fn type_name() -> &'static str {
+		"OrgBufferResult"
+	}
+
+	fn value_type() -> napi::ValueType {
+		napi::ValueType::Object
+	}
+}
+
+/// FEAT-780: async-NAPI cutover. `executeOrg` now runs on libuv's worker
+/// pool so the Node event loop stays free during long-running daemon
+/// calls (recall, query, remember). Returns `Promise<OrgBufferResult>`
+/// to JS.
+///
+/// `signal` is an optional `AbortSignal` from the JS side. Cancellation
+/// is honoured at task::blocking boundaries; the daemon-side work
+/// itself does not yet have cancel points, so an abort propagates back
+/// to JS while the daemon may continue (acceptable for first cut).
+#[napi(
+	js_name = "executeOrg",
+	ts_return_type = "Promise<import('./org-buffer/types').OrgBufferResult>"
+)]
+pub fn execute_org(options: Value, signal: Option<Unknown>) -> task::Async<OrgValue> {
+	let ct = task::CancelToken::new(None, signal);
+	task::blocking("executeOrg", ct, move |_ct| {
+		Ok(OrgValue(execute_org_catching(&options, execute_org_inner)))
+	})
 }
 
 #[cfg(test)]
@@ -1487,6 +1530,14 @@ mod tests {
 	use tempfile::tempdir;
 
 	use super::*;
+
+	/// FEAT-780: tests want the synchronous `Result<Value>` shape from
+	/// the legacy `execute_org` surface, not the async `task::Async`
+	/// wrapper. Delegate to `execute_org_inner` (the actual command
+	/// dispatch) for in-process tests.
+	fn execute_org(options: Value) -> Result<Value> {
+		Ok(execute_org_catching(&options, execute_org_inner))
+	}
 
 	#[test]
 	fn org_external_write_parse_reloads_overwrite() {

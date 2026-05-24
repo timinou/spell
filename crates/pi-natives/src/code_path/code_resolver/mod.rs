@@ -16,6 +16,11 @@ mod mdorg_qualifier_tests;
 mod py_qualifier_tests;
 #[cfg(test)]
 mod qualifier_tests;
+// NOTE: ts_qualifier_tests.rs is orphan (pre-existing failures unrelated to
+// PLAN-318; tracked separately). Universal-alias tests for TS live in
+// `kind_alias_tests.rs` to stay isolated.
+#[cfg(test)]
+mod kind_alias_tests;
 use std::sync::Arc;
 
 use pi_code_engine::language::LanguageRegistry;

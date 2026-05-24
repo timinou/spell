@@ -5,7 +5,6 @@ use pi_natives::{
 	code_path::napi::{CodePathTaskOptions, execute_code_path_inner},
 	task::CancelToken,
 };
-use tempfile::TempDir;
 
 #[test]
 #[ignore = "PLAN-310 BUG-394: skill:// moved to dynamic callback registration; \

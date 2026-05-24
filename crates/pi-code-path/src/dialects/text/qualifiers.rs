@@ -3,7 +3,7 @@
 //! `#raw`, `#bytes`, `#text`, `#match`, `#captures[N]`, `#lines[a..b]`,
 //! `#image`, `#thumbnail[N]`.
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use super::axes::line_steps;
 use crate::{
@@ -376,6 +376,8 @@ fn decode_text(content: &[u8]) -> (String, Option<Diagnostic>) {
 
 #[cfg(test)]
 mod tests {
+	use std::collections::HashMap;
+
 	use super::*;
 
 	#[test]

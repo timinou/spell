@@ -1,5 +1,5 @@
 #+TITLE: simplify line addressing — drop LINE#HASH anchors, accept raw line numbers
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14edc1bec5a09a49
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
 #+CUSTOM_ID: BUG-404-simplify-line-addressing-drop-linehash-a
@@ -8,6 +8,7 @@
 #+PRIORITY: #A
 #+SESSION_ID: 14edc1bec5a09a49
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+COMPLETION_HASH: 1fa9d12129d0c5c2
 
 * Initial Message
 
@@ -143,3 +144,7 @@ rejects unknown string shape with a clear =Expected number, got string=.
 Subsumes the originally-proposed fixes #4 (=lineReplace= error message)
 and #5 (=lineSpanSchema= numeric fallback) — full removal is simpler than
 either partial fix.
+
+NOTE [2026-05-24]: Fixed in commit 4879100e3 (PLAN-317). LineAnchor → newtype `LineAnchor(u32)` with `#[serde(transparent)]`; LineAt now `{side, line: u32}`; TS schemas (`lineAnchorSchema`, `lineSpanSchema`, `lineAtSchema`) all numeric. Deleted: `text/anchor.rs`, `compute_line_hash`, `verify_anchor_in_text`, hashline dispatch in edit.ts, `prompts/tools/hashline.md`, LINE#ID rendering in dialects/text/{mod,axes}.rs. Updated prompts (edit.md, get.md, grep.md, code-migration.md, system-prompt.md). Green: edit-line-numeric.test.ts (6 tests). 78/0 across edit.test.ts + edit-matrix + wave-j-edge-cases.
+
+Internal patch/hashline.ts machinery retained as dead-code (no agent-reachable call site after edit.ts cutover); flagged for prune in follow-up since removing it cascades into a wide cleanup of patch/diff.ts, patch/index.ts hashlineEditSchema, tool-execution.ts computeHashlineDiff, and code-result.ts diff previewer (renaming buildCompactHashlineDiffPreview).

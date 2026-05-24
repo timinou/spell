@@ -6,7 +6,7 @@
 //! The parsed payload is preserved verbatim (`HtmlName.raw`); semantic
 //! interpretation is deferred to the resolver layer (PROJ-066).
 
-use std::{ops::Range, sync::Arc};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tree_sitter::Node;
@@ -14,7 +14,7 @@ use tree_sitter::Node;
 use crate::{
 	ast::NamePayload,
 	dialect::{
-		AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierResolver, QualifierSpec,
+		AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierSpec,
 	},
 };
 

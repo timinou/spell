@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use pi_org_engine::{
 	edge::EdgeKind,
-	graph::{TypedEdge, TypedGraphNode, build_typed_graph, neighborhood, path, timeline},
+	graph::{TypedGraphNode, build_typed_graph, neighborhood, path, timeline},
 	item::OrgItem,
 };
 

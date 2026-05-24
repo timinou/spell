@@ -16,10 +16,10 @@ if (!releaseBinary) {
 }
 
 const native = require_(path.join(nativesDir, releaseBinary)) as {
-	executeOrg(options: Record<string, unknown>): { output: unknown; error: boolean };
+	executeOrg(options: Record<string, unknown>): Promise<{ output: unknown; error: boolean }>;
 };
 
-function executeOrg(options: Record<string, unknown>): { output: unknown; error: boolean } {
+function executeOrg(options: Record<string, unknown>): Promise<{ output: unknown; error: boolean }> {
 	return native.executeOrg(options);
 }
 
@@ -34,9 +34,9 @@ afterEach(async () => {
 });
 
 describe("executeOrg release addon parity", () => {
-	it("supports createItem", () => {
+	it("supports createItem", async () => {
 		const filePath = path.join(tempDir, "created.org");
-		const result = executeOrg({
+		const result = await executeOrg({
 			command: "createItem",
 			file: filePath,
 			id: "BUG-001",
@@ -51,7 +51,7 @@ describe("executeOrg release addon parity", () => {
 	it("supports file-based parse", async () => {
 		const filePath = path.join(tempDir, "parse.org");
 		await fsp.writeFile(filePath, "* ITEM Parse me\n:PROPERTIES:\n:CUSTOM_ID: BUG-002\n:END:\n\nBody\n");
-		const result = executeOrg({ command: "parse", file: filePath, todoKeywords: ["ITEM", "DONE"] });
+		const result = await executeOrg({ command: "parse", file: filePath, todoKeywords: ["ITEM", "DONE"] });
 		expect(result.error).toBe(false);
 		const output = result.output as { items: Array<{ id: string; title: string }> };
 		expect(output.items).toHaveLength(1);
