@@ -181,18 +181,17 @@ describe("Wave J: edge cases", () => {
     		expect(text).toContain("@@@"); // diagnostic includes the offending excerpt
 	});
 
-	it("lineInsert with at:{side:'after', anchor:'LINE#HASH'} inserts multiline content correctly", async () => {
+	it("lineInsert with at:{side:'after', line:N} inserts multiline content correctly", async () => {
 		const file = path.join(tmpDir, "anchored.txt");
 		const initial = "alpha\nbeta\ngamma\n";
 		await fs.writeFile(file, initial);
-		const anchor = `2#${computeLineHash(2, "beta")}`;
 
 		const tool = new CodepathEditTool(makeSession(tmpDir));
 		const result = await tool.execute("t", {
 			operations: [
 				{
 					target: file,
-					action: { kind: "lineInsert", at: { side: "after", anchor }, content: ["one", "two"] },
+					action: { kind: "lineInsert", at: { side: "after", line: 2 }, content: ["one", "two"] },
 				},
 			],
 		});

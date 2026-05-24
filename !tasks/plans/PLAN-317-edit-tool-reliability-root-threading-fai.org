@@ -1,0 +1,201 @@
+#+TITLE: edit-tool reliability — root threading, fail-loud diagnostics, simplified line addressing
+#+STATE: ITEM
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: PLAN-317-edit-tool-reliability-root-threading-fai
+#+EFFORT: 5h
+#+LAYER: code-path code-engine coding-agent prompts
+#+PRIORITY: #A
+#+RISK: low
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+
+* Initial Message
+
+many Edit errors have "Scope preview: " empty. THen the sessions end up using python to edit code, which is horrendous. Can you look at the session jsonl using jq and tell me where the codepath + edit tools fail, and when the sessions have to rely on bash for things that should be code editing? investigate please, thanks.
+
+* Problem
+
+Forensic on 945 =edit= calls across 120 recent sessions:
+
+| op kind         | err rate | dominant cause                           |
+|-----------------+----------+------------------------------------------|
+| =lineReplace=     | 86%      | =span= shape ≠ =LINE#HASH= anchors           |
+| =replace= legacy  | 78%      | missing =pos/end= anchors                  |
+| =fileFindReplace= | 0.5%     | empty Scope preview hiding missing file  |
+
+The empty-Scope-preview chain (BUG-401 → BUG-402) caused the worst
+documented regression in the corpus: =FixBug373= sub-agent burnt 60+
+=bash + python3 -c= calls and introduced two syntax bugs after 4
+consecutive edit failures on a non-existent path.
+
+The =LINE#HASH= anchor mechanism (FEAT-705) is unused — agents pass raw
+line numbers, get a useless error, and either fall back to
+=fileFindReplace= (best case) or =bash heredocs= (regression case).
+
+* Goal
+
+Fail loud, accept what agents naturally write, delete the unused
+machinery.
+
+1. =edit { root }= honoured end-to-end.
+2. Empty-scope error explains the actual cause.
+3. Missing-file fast-fail before kernel dispatch.
+4. =lineReplace/lineInsert/lineAppend/linePrepend= take raw line numbers.
+5. All =LINE#HASH= anchor code, schema, prompts, tests deleted.
+
+* Non-goals
+
+- *No new staleness mechanism.* Optimistic edits are acceptable.
+- *No back-compat for =LINE#HASH= strings.* Schema rejects them cleanly.
+- *No kernel buffer-registry changes.* Existing =edit_transaction= flow
+  preserved.
+- *No prompt rewrite beyond removing LINE#HASH guidance.*
+- *No FEAT-705 audit / reasoning preservation.* The mechanism existed,
+  it's deleted, that's the record.
+
+* Layout
+
+#+begin_src
+crates/pi-code-path/src/
+├── op.rs                                 LineAnchor: struct → u32 alias
+├── dialects/text/
+│   ├── anchor.rs                         DELETE
+│   ├── mod.rs                            drop anchor in line render
+│   ├── axes.rs                           drop anchor in line render
+│   └── mutation.rs                       drop verify_anchor_in_text
+crates/pi-code-engine/src/edit/
+└── patch.rs                              empty-scope branch (BUG-402)
+
+packages/coding-agent/src/
+├── tools/
+│   ├── codepath-primitives.ts            schemas → numeric
+│   ├── codepath-op-schema.generated.ts   regen
+│   ├── codepath-types.ts                 unchanged
+│   ├── codepath-result.ts                drop LINE#ID rendering
+│   └── edit.ts                           thread root, pre-flight exists, drop hashline
+├── patch/
+│   ├── hashline.ts                       DELETE
+│   ├── diff.ts                           drop buildCompactHashlineDiffPreview
+│   └── index.ts                          drop hashline exports
+└── prompts/
+    ├── system/system-prompt.md           drop LINE#ID
+    ├── tools/edit.md                     rewrite line-op section
+    ├── tools/get.md                      drop LINE#ID
+    ├── tools/grep.md                     drop LINE#ID
+    ├── tools/hashline.md                 DELETE
+    ├── tools/code-migration.md           drop
+    └── tools/_generated/edit-ops.md      regen
+#+end_src
+
+* Execution Manifest
+
+Each wave is TDD: red test first, fix, green. Within a wave, tasks
+parallel-safe by filesDeps.
+
+** W0 — Failing test scaffolding (red baseline)
+
+- [[id:BUG-401-edit-params-root-silently-ignored-resolv][BUG-401]] :: =edit-root-threading.test.ts= — assert =edit({root,target:rel})= uses root, fails today.
+- [[id:BUG-402-empty-scope-preview-hides-missing-empty][BUG-402]] :: =patch.rs::find_in_empty_buffer_returns_clear_diagnostic= — asserts new message text, fails today.
+- [[id:BUG-403-edit-lacks-pre-flight-fs-exists-for-non][BUG-403]] :: =edit-preflight-missing-file.test.ts= — asserts fast-fail message, fails today.
+- [[id:BUG-404-simplify-line-addressing-drop-linehash-a][BUG-404]] :: =lineReplace_accepts_numeric_span_inclusive= — asserts new schema, fails today.
+
+Gate: all four tests fail with informative messages. None pass yet.
+
+** W1 — Kernel: LineAnchor → u32, delete anchor.rs (BUG-404 part 1)
+
+Files:
+- =crates/pi-code-path/src/op.rs= — =LineAnchor= struct → newtype =LineAnchor(u32)= (or type alias); =LineSpan= / =LineAt= shapes preserved sans =hash=
+- =crates/pi-code-path/src/dialects/text/anchor.rs= — DELETE
+- =crates/pi-code-path/src/dialects/text/mod.rs= — drop =line_anchor_id= use; render plain =N: <text>=
+- =crates/pi-code-path/src/dialects/text/axes.rs= — same
+- =crates/pi-code-path/src/dialects/text/mutation.rs= — drop =verify_anchor_in_text=; LineSpan range applies directly
+- =crates/pi-code-path/tests/op_roundtrip_proptest.rs= — strip =hash=
+- =crates/pi-natives/src/code_path/op_matrix_tests.rs= — strip =hash=
+
+Gate: =cargo test -p pi-code-path -p pi-natives= green.
+
+** W1.5 — Kernel: empty-scope diagnostic (BUG-402)
+
+File: =crates/pi-code-engine/src/edit/patch.rs=
+
+Add empty-scope branch in =apply_patches_with_matcher= before
+=scope_preview= call. New diagnostic mentions =buffer.path()= and
+suggests verifying file existence.
+
+Gate: =cargo test -p pi-code-engine edit::patch= green; new test from W0 passes.
+
+** W2 — TS schema + result rendering (BUG-404 part 2)
+
+Files:
+- =packages/coding-agent/src/tools/codepath-primitives.ts= — schemas to numeric
+- =packages/coding-agent/src/tools/codepath-op-schema.generated.ts= — regen via existing script if present, else manual edit
+- =packages/coding-agent/src/tools/codepath-result.ts= — drop =LINE#ID= prefix in =formatCodePathResult=
+
+Gate: =bun run --workspace @oh-my-pi/coding-agent check:ts= green; W0 lineReplace test now compiles.
+
+** W3 — edit.ts: thread root + pre-flight + simplify line ops
+
+Files:
+- =packages/coding-agent/src/tools/edit.ts= — three changes:
+  1. (BUG-401) effective cwd = =params.root ?? session.cwd=, threaded into =resolveCwdRelativePath= and =executeStructural=
+  2. (BUG-403) pre-flight =fs.exists= guard in =#executeStructural= for mutating kinds
+  3. (BUG-404) =resolveEditAnchors= / =#executeLineId= simplified — numeric =pos/end/span/at.line=, no anchor parsing
+
+Gate: W0 root-threading + pre-flight + lineReplace tests all pass.
+
+** W4 — Delete hashline machinery + patch utilities (BUG-404 part 3)
+
+Files:
+- =packages/coding-agent/src/patch/hashline.ts= — DELETE
+- =packages/coding-agent/src/patch/index.ts= — drop hashline exports + =HashlineMismatchError= re-export
+- =packages/coding-agent/src/patch/diff.ts= — drop =buildCompactHashlineDiffPreview=
+- =packages/coding-agent/test/core/hashline.test.ts= — DELETE
+- =packages/coding-agent/test/codepath-result.test.ts= — drop LINE#ID assertions
+- =packages/coding-agent/test/edit.test.ts= — rewrite line-op cases numeric
+- =packages/coding-agent/test/codepath/wave-j-edge-cases.test.ts= — drop hashline coverage
+- =packages/coding-agent/test/codepath/prompt-snapshots.test.ts= — regen
+
+Gate: =bun test packages/coding-agent= green. Zero remaining =LINE#=
+references under =packages/coding-agent/src/=.
+
+** W5 — Prompts (BUG-404 part 4)
+
+Files:
+- =packages/coding-agent/src/prompts/tools/hashline.md= — DELETE
+- =packages/coding-agent/src/prompts/tools/edit.md= — line-op section rewritten
+- =packages/coding-agent/src/prompts/tools/get.md= — drop LINE#ID
+- =packages/coding-agent/src/prompts/tools/grep.md= — drop LINE#ID
+- =packages/coding-agent/src/prompts/tools/code-migration.md= — drop / update
+- =packages/coding-agent/src/prompts/system/system-prompt.md= — drop LINE#ID
+- =packages/coding-agent/src/prompts/tools/_generated/edit-ops.md= — regen
+
+Gate: =rg "LINE#" packages/coding-agent/src/= returns zero hits.
+
+** W6 — Full sweep + verify
+
+- =cargo test --workspace=
+- =bun test --workspaces=
+- =bun run --parallel check:ts check:rs=
+- =bun run --parallel lint:ts lint:rs=
+- Manual smoke: 5 line-op variations from observed bash-fallback chains.
+
+Gate: all green; no remaining =LINE#HASH= references anywhere except in
+=CHANGELOG.md=, =!tasks/=, and migration breadcrumbs.
+
+* Risk surface
+
+- *Test snapshot churn* — =prompt-snapshots.test.ts= and any
+  golden-file tests embedding =LINE#ID= will need regen.
+- *In-flight session resumes* — if an old session's pending edit
+  references =LINE#XY=, replay fails. Acceptable: the call would have
+  failed anyway under the old schema for 86% of cases.
+- *External callers* — none known; =LineAnchor= is not exported
+  beyond the workspace.
+
+* Related
+
+- [[id:BUG-401-edit-params-root-silently-ignored-resolv][BUG-401]]
+- [[id:BUG-402-empty-scope-preview-hides-missing-empty][BUG-402]]
+- [[id:BUG-403-edit-lacks-pre-flight-fs-exists-for-non][BUG-403]]
+- [[id:BUG-404-simplify-line-addressing-drop-linehash-a][BUG-404]]

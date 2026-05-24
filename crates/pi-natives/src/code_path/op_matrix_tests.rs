@@ -65,21 +65,6 @@ fn build_target_heading(_root: &Path, name: &str, sym: &str) -> HeadingTarget {
 	HeadingTarget::new(cp).unwrap()
 }
 
-/// Inline FNV-1a hash computation (mirrors
-/// pi-code-path::dialects::text::mutation::compute_line_hash).
-fn compute_line_hash(_idx: usize, line: &str) -> String {
-	let normalized = line.replace('\r', "").trim_end().to_string();
-	let mut hash: u64 = 0xcbf29ce484222325; // FNV offset basis
-	for byte in normalized.bytes() {
-		hash ^= byte as u64;
-		hash = hash.wrapping_mul(0x100000001b3); // FNV prime
-	}
-	let alphabet = b"ZPMQVRWSNKTXJBYH";
-	let high = ((hash >> 4) & 0x0f) as usize;
-	let low = (hash & 0x0f) as usize;
-	format!("{}{}", alphabet[high] as char, alphabet[low] as char)
-}
-
 /// (op_kind, fixture_builder, expected_unimpl)
 type Fixture = (OpKind, fn(&Path) -> Op, bool);
 
@@ -153,55 +138,39 @@ fn fixtures() -> Vec<Fixture> {
 		// LineReplace/Insert/Append/Prepend require valid hashes
 		(
 			OpKind::LineReplace,
-			|_r| {
-				let line1 = "function foo(a, b) { const x = 1; return x; }";
-				let h = compute_line_hash(1, line1);
-				Op::LineReplace {
-					target:  build_target_file(_r, "a.ts"),
-					span:    LineSpan { start: LineAnchor { line: 1, hash: h }, end: None },
-					content: ActionContent::Single(
-						"function foo(a, b) { const y = 99; return y; }".into(),
-					),
-				}
+			|_r| Op::LineReplace {
+				target:  build_target_file(_r, "a.ts"),
+				span:    LineSpan { start: LineAnchor(1), end: None },
+				content: ActionContent::Single(
+					"function foo(a, b) { const y = 99; return y; }".into(),
+				),
 			},
 			false,
 		),
 		(
 			OpKind::LineInsert,
-			|_r| {
-				let line1 = "function foo(a, b) { const x = 1; return x; }";
-				let h = compute_line_hash(1, line1);
-				Op::LineInsert {
-					target:  build_target_file(_r, "a.ts"),
-					at:      LineAt::Before { anchor: LineAnchor { line: 1, hash: h } },
-					content: ActionContent::Single("// new\n".into()),
-				}
+			|_r| Op::LineInsert {
+				target:  build_target_file(_r, "a.ts"),
+				at:      LineAt::Before { line: LineAnchor(1) },
+				content: ActionContent::Single("// new\n".into()),
 			},
 			false,
 		),
 		(
 			OpKind::LineAppend,
-			|_r| {
-				let line1 = "function foo(a, b) { const x = 1; return x; }";
-				let h = compute_line_hash(1, line1);
-				Op::LineAppend {
-					target:  build_target_file(_r, "a.ts"),
-					at:      LineAnchor { line: 1, hash: h },
-					content: ActionContent::Single("// added\n".into()),
-				}
+			|_r| Op::LineAppend {
+				target:  build_target_file(_r, "a.ts"),
+				at:      LineAnchor(1),
+				content: ActionContent::Single("// added\n".into()),
 			},
 			false,
 		),
 		(
 			OpKind::LinePrepend,
-			|_r| {
-				let line1 = "function foo(a, b) { const x = 1; return x; }";
-				let h = compute_line_hash(1, line1);
-				Op::LinePrepend {
-					target:  build_target_file(_r, "a.ts"),
-					at:      LineAnchor { line: 1, hash: h },
-					content: ActionContent::Single("// prefix\n".into()),
-				}
+			|_r| Op::LinePrepend {
+				target:  build_target_file(_r, "a.ts"),
+				at:      LineAnchor(1),
+				content: ActionContent::Single("// prefix\n".into()),
 			},
 			false,
 		),

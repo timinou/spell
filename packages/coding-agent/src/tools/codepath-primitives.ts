@@ -24,9 +24,11 @@ export const occurrenceSchema = Type.Union([
 export const directionSchema = Type.Union([Type.Literal("up"), Type.Literal("down")]);
 export const spliceModeSchema = Type.Union([Type.Literal("self"), Type.Literal("up"), Type.Literal("down")]);
 
-export const lineAnchorSchema = Type.String({
-	pattern: "^\\d+#.+$",
-	description: "LINE#HASH anchor copied from get output (e.g. '42#ZP')",
+// 1-indexed line numbers. PLAN-317 removed the LINE#HASH staleness
+// mechanism; line ops are now optimistic on raw line numbers.
+export const lineAnchorSchema = Type.Integer({
+	minimum: 1,
+	description: "1-indexed line number (e.g. 42)",
 });
 
 export const lineSpanSchema = Type.Object({
@@ -35,7 +37,7 @@ export const lineSpanSchema = Type.Object({
 });
 
 export const lineAtSchema = Type.Union([
-	Type.Object({ side: Type.Literal("before"), anchor: lineAnchorSchema }),
-	Type.Object({ side: Type.Literal("after"), anchor: lineAnchorSchema }),
+	Type.Object({ side: Type.Literal("before"), line: lineAnchorSchema }),
+	Type.Object({ side: Type.Literal("after"), line: lineAnchorSchema }),
 ]);
 

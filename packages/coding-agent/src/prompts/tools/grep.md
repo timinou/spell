@@ -14,7 +14,7 @@ Searches files with regex matching built on ripgrep, plus repo-local semantic lo
 </instruction>
 
 <output>
-- Raw-text output stays CID prefixed: `LINE#ID:content`.
+- Raw-text output prefixes each line with its 1-indexed line number: `LINE:content`.
 - Semantic output is summarized with model-visible `targetId` lines for one-hop follow-up into `code read` or `code edit`.
 </output>
 

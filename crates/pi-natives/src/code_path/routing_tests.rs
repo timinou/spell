@@ -154,7 +154,7 @@ fn md_text_axis_line_query_returns_line() {
 	assert_eq!(nodes.len(), 1, "expected exactly one line node");
 	assert_eq!(nodes[0].kind, "§line", "expected §line from TextResolver");
 	assert!(
-		nodes[0].locator.contains("<line 10#"),
+		nodes[0].locator.contains("<line 10>"),
 		"expected locator to reference line 10, got: {}",
 		nodes[0].locator
 	);

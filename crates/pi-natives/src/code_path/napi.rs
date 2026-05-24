@@ -17,7 +17,7 @@ use pi_code_path::{
 	op::Op,
 	parser::parse_code_path,
 	renderer::render_code_path,
-	resolver::{CancellationToken, CodeResolver, MutationResolver, Resolver},
+	resolver::{CancellationToken, CodeResolver, Resolver},
 	types::{Diagnostic, DiagnosticVariant, NodeRef},
 };
 use winnow::{Parser, token::take_while};
@@ -464,7 +464,6 @@ pub fn execute_code_path_inner(
 	// ── Edit command branch ──────────────────────────────────────
 	if opts.command == "edit" {
 		use pi_code_engine::buffer::TextEdit;
-		use pi_code_path::ast::Locator;
 
 		let raw_actions: Vec<serde_json::Value> = match opts.actions {
 			Some(v) => serde_json::from_value(v)
@@ -1185,11 +1184,7 @@ pub fn get_registered_extensions() -> Result<Vec<String>> {
 mod tests {
 	use std::path::PathBuf;
 
-	use pi_code_path::{
-		ActionContent,
-		ast::{CodePath, FsLocator, FsSegment, Locator},
-		op::{FileTarget, Op},
-	};
+	use pi_code_path::{ActionContent, ast::CodePath};
 
 	use super::*;
 	fn opts(target: impl Into<String>) -> CodePathTaskOptions {
@@ -1320,17 +1315,17 @@ mod tests {
 		assert!(
 			nodes
 				.iter()
-				.any(|n| n.locator.contains("a.txt") && n.locator.contains("<line 2#"))
+				.any(|n| n.locator.contains("a.txt") && n.locator.contains("<line 2>"))
 		);
 		assert!(
 			nodes
 				.iter()
-				.any(|n| n.locator.contains("a.txt") && n.locator.contains("<line 3#"))
+				.any(|n| n.locator.contains("a.txt") && n.locator.contains("<line 3>"))
 		);
 		assert!(
 			nodes
 				.iter()
-				.any(|n| n.locator.contains("b.txt") && n.locator.contains("<line 2#"))
+				.any(|n| n.locator.contains("b.txt") && n.locator.contains("<line 2>"))
 		);
 	}
 

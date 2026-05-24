@@ -1,0 +1,86 @@
+#+TITLE: edit.params.root silently ignored — resolves against session.cwd
+#+STATE: ITEM
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: BUG-401-edit-params-root-silently-ignored-resolv
+#+EFFORT: 30m
+#+LAYER: coding-agent
+#+PRIORITY: #A
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+
+* Initial Message
+
+many Edit errors have "Scope preview: " empty. THen the sessions end up using python to edit code, which is horrendous. Can you look at the session jsonl using jq and tell me where the codepath + edit tools fail, and when the sessions have to rely on bash for things that should be code editing? investigate please, thanks.
+
+* Symptom
+
+Agents pass =edit { root: "/abs/path", operations:[{target:"rel.ts", ...}] }=
+expecting =target= to resolve against the supplied root. It silently does not.
+=resolveCwdRelativePath= is called with =session.cwd= and the user-supplied
+=params.root= is dropped on the floor. The kernel then opens a wrong (or
+non-existent) path → empty buffer → "Scope preview: " empty (see BUG-402).
+
+* Repro
+
+#+begin_src
+edit { root: "/tmp/",
+       operations:[{ target:"test_scope.ts",
+                     action:{ kind:"fileFindReplace", find:"function isInsideRoot",
+                              content:"REPLACED" }}] }
+→ edit error: Patch 1: find text not found in scope. Scope preview:    ← empty
+#+end_src
+
+Same call with =target: "/tmp/test_scope.ts"= (absolute) succeeds.
+
+* Root cause
+
+=packages/coding-agent/src/tools/edit.ts:208,353-358=
+
+#+begin_src ts
+const resolved = resolveCwdRelativePath(sessionCwd, op.target, { mode: "file" });
+// ...
+const chunks = await executeCodePath({
+  target: nodePath.relative(this.session.cwd, targetPath),
+  root: this.session.cwd,    // ← params.root never threaded here
+  ...
+});
+#+end_src
+
+=editSchema.root= is declared (=packages/coding-agent/src/tools/codepath-types.ts:172=)
+but never consulted; the schema documents the parameter as live.
+
+* Evidence
+
+7-step failure chain in [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-16T11-14-31-013Z_14e36d0179617e04/2-FixBug373.jsonl]] (FixBug373 sub-agent):
+agent passed =root: "/home/user/code/ora/spell/packages/coding-agent/src/tools"= +
+=target:"get.ts"=, got 4 consecutive "Scope preview: " empty errors, gave up
+and switched to =python3 -c= heredocs that introduced 2 syntax regressions
+requiring more bash to fix.
+
+* Fix
+
+Thread =params.root= into both path resolution and the kernel call:
+
+#+begin_src ts
+const effectiveCwd = params.root
+  ? nodePath.isAbsolute(params.root) ? params.root : nodePath.resolve(sessionCwd, params.root)
+  : sessionCwd;
+const resolved = resolveCwdRelativePath(effectiveCwd, op.target, { mode: "file" });
+// ...
+root: effectiveCwd,
+target: nodePath.relative(effectiveCwd, targetPath),
+#+end_src
+
+Sandbox / =enforcePathWrite= still gates against =sessionCwd= — =params.root=
+must be inside the sandbox root or the call rejects.
+
+* Verification
+
+- =bun test packages/coding-agent/test/edit.test.ts= — add =edit_root_param_resolves_target_against_root=
+- =bun test packages/coding-agent/test/tools/edit-matrix.test.ts= — keep green
+- Manual: =edit { root: "/tmp", target: "x.ts", action: {kind:"fileFindReplace", ...} }= on a real /tmp/x.ts succeeds
+
+* Difficulty
+
+~30 min. 5-line fix + 1 test. Self-contained, no kernel changes.

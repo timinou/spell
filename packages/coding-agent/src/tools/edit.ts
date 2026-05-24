@@ -6,18 +6,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import type { FileSystem, PatchInput } from "../patch";
-import {
-	applyHashlineEdits,
-	applyPatch,
-	buildCompactHashlineDiffPreview,
-	detectLineEnding,
-	HashlineMismatchError,
-	normalizeToLF,
-	parseTag,
-	restoreLineEndings,
-	stripBom,
-} from "../patch";
-import { generateDiffString } from "../patch/diff";
+import { applyPatch } from "../patch";
 import editDescription from "../prompts/tools/edit.md" with { type: "text" };
 import { enforcePathWrite } from "../sandbox";
 import { renderCodeCell } from "../tui";
@@ -43,15 +32,47 @@ type EditToolResultDetails = DetailsWithMeta & {
 	firstChangedLine?: number;
 };
 
-type Anchor = { line: number; hash: string };
-type HashlineEdit =
-	| { op: "replace"; pos: Anchor; end?: Anchor; lines: string[] }
-	| { op: "append"; pos?: Anchor; lines: string[] }
-	| { op: "prepend"; pos?: Anchor; lines: string[] };
 
 function normalizeLines(value: string | string[] | null | undefined): string | undefined {
 	if (value === undefined || value === null) return undefined;
 	return typeof value === "string" ? value : value.join("\n");
+}
+
+// BUG-403: kinds that REQUIRE the target file to exist before applying.
+// Excludes fileCreate (creates the file) and the anchorless fileAppend /
+// filePrepend variants (those create on absence, handled separately).
+const MUTATING_KINDS = new Set([
+	"fileWrite",
+	"fileDelete",
+	"filePatch",
+	"fileFindReplace",
+	"fileRawTextReplace",
+	"symbolReplace",
+	"symbolRename",
+	"symbolWrap",
+	"symbolDelete",
+	"symbolInsertBefore",
+	"symbolInsertAfter",
+	"symbolFindReplace",
+	"symbolRawTextReplace",
+	"symbolMove",
+	"symbolClone",
+	"symbolSplice",
+	"symbolTranspose",
+	"lineReplace",
+	"lineInsert",
+	"lineAppend",
+	"linePrepend",
+	"headingPromote",
+	"headingDemote",
+	"headingReplaceBlock",
+	"cssRenameClassToken",
+	"cssRenameIdToken",
+	"cssRenameCustomProp",
+	"cssRemoveDeadStyle",
+]);
+function isMutatingKind(kind: string | undefined): boolean {
+	return kind !== undefined && MUTATING_KINDS.has(kind);
 }
 
 function isErrorResult(result: AgentToolResult): boolean {
@@ -60,78 +81,6 @@ function isErrorResult(result: AgentToolResult): boolean {
 	return details?.error !== undefined;
 }
 
-function parseHashlineAnchor(raw: string, field: "pos" | "end", editIndex: number): Anchor {
-	try {
-		return parseTag(raw);
-	} catch (_error) {
-		throw new Error(
-			`Invalid line reference "${raw}" in edit ${editIndex} (${field}). Expected format "LINE#ID" (e.g. "5#QW").`,
-		);
-	}
-}
-
-function resolveEditAnchors(action: any, editIndex: number): HashlineEdit[] {
-	// Accept Op-style shapes (span: {start, end} for lineReplace; at: anchor | {side, anchor})
-	// alongside legacy flat pos/end. The line-anchor dispatch is TS-local; the kernel side
-	// has its own Op::Line* variants. PLAN-308 normalizes both wire shapes here.
-	if (action.span && typeof action.span === "object") {
-		action = { ...action, pos: action.span.start ?? action.pos, end: action.span.end ?? action.end };
-	}
-	if (action.at !== undefined && action.pos === undefined) {
-		if (typeof action.at === "string") {
-			action = { ...action, pos: action.at };
-		} else if (action.at && typeof action.at === "object") {
-			action = { ...action, pos: action.at.anchor };
-		}
-	}
-	// Op uses `content`; legacy used `lines`. Read either.
-	const lines = normalizeLines(action.lines ?? action.content);
-	const contentLines = lines === undefined ? [] : lines.split("\n");
-	// Map both legacy and new kind names to internal op verbs.
-	const kind = action.kind as string | undefined;
-	const atSide = (action.at && typeof action.at === "object") ? action.at.side : undefined;
-	const op: "append" | "prepend" | "replace" =
-		kind === "append" || kind === "fileAppend" || kind === "lineAppend"
-			? "append"
-			: kind === "prepend" || kind === "filePrepend" || kind === "linePrepend"
-				? "prepend"
-				: kind === "insertBefore"
-					? "prepend"
-					: kind === "insertAfter"
-						? "append"
-						: kind === "lineInsert"
-							? (atSide === "after" ? "append" : "prepend")
-							: "replace";
-	const pos = action.pos !== undefined ? parseHashlineAnchor(action.pos, "pos", editIndex) : undefined;
-	const end = action.end !== undefined ? parseHashlineAnchor(action.end, "end", editIndex) : undefined;
-
-	switch (op) {
-		case "replace": {
-			if (pos && end) {
-				return [{ op: "replace", pos, end, lines: contentLines }];
-			} else if (pos || end) {
-				const singleAnchor = pos || end!;
-				if (contentLines.length > 1) {
-					throw new Error(
-						`Edit ${editIndex}: single anchor (${action.pos ? "pos" : "end"}) replaces exactly one line, but ${contentLines.length} lines were provided.`,
-					);
-				}
-				return [{ op: "replace", pos: singleAnchor, lines: contentLines }];
-			} else {
-				throw new Error(`Edit ${editIndex}: replace requires at least one anchor (pos or end).`);
-			}
-		}
-		case "append": {
-			return [{ op: "append", pos: pos ?? end, lines: contentLines }];
-		}
-		case "prepend": {
-			return [{ op: "prepend", pos: end ?? pos, lines: contentLines }];
-		}
-		default: {
-			return [{ op: "replace", pos: pos ?? end ?? { line: 0, hash: "" }, lines: contentLines }];
-		}
-	}
-}
 
 class SimpleFileSystem implements FileSystem {
 	async exists(path: string): Promise<boolean> {
@@ -171,6 +120,16 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult> {
 		const sessionCwd = this.session.cwd;
+		// BUG-401: `params.root` is the agent-supplied resolution root. Falls
+		// back to `session.cwd`. Always absolute (resolved against sessionCwd
+		// when relative). Threaded into both fs path resolution and the
+		// kernel call's `root` so the two stay in lockstep.
+		const effectiveCwd =
+			params.root && params.root.length > 0
+				? nodePath.isAbsolute(params.root)
+					? params.root
+					: nodePath.resolve(sessionCwd, params.root)
+				: sessionCwd;
 		const transactionMode: "best-effort" | "strict" = params.transaction ?? "best-effort";
 
 		// History ops (undo/redo): dispatch via kernel manage subcommand and short-circuit.
@@ -211,7 +170,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
   const ops = params.operations
   			.map((op, i) => {
   				if (!op) return null;
-  				const resolved = resolveCwdRelativePath(sessionCwd, op.target, { mode: "file" });
+  				const resolved = resolveCwdRelativePath(effectiveCwd, op.target, { mode: "file" });
   				return { i, op, targetPath: resolved.path, resolved };
   			})
   			.filter(
@@ -272,18 +231,21 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
   			// Route by Op kind
   			const opKind = (action as any).kind;
   			if (opKind === "filePatch") {
-  				result = await this.#executePatch(targetPath, (action as any).diff!, signal);
-  			} else if (
-  				opKind === "lineReplace" ||
-  				opKind === "lineAppend" ||
-  				opKind === "linePrepend" ||
-  				(opKind === "lineInsert" && (action as any).at !== undefined) ||
-  				((opKind === "fileAppend" || opKind === "filePrepend") && !(action as any).pos && !(action as any).end)
-  			) {
-  				result = await this.#executeLineId(targetPath, action, i + 1, idempotent);
-  			} else {
-  				result = await this.#executeStructural(targetPath, action, signal);
-  			}
+   			result = await this.#executePatch(targetPath, (action as any).diff!, signal);
+   			} else if (
+   				(opKind === "fileAppend" || opKind === "filePrepend") &&
+   				!(action as any).pos &&
+   				!(action as any).end &&
+   				!(await fs.exists(targetPath))
+   			) {
+   				// File-create shortcut: anchorless fileAppend/filePrepend on a
+   				// missing file becomes a creation. Single-shot, no kernel round-trip.
+   				result = await this.#executeLineId(targetPath, action, i + 1, idempotent);
+   			} else {
+   				// All other ops — including numeric-anchor line ops since
+   				// PLAN-317 — route through the kernel's TextResolver.
+   				result = await this.#executeStructural(targetPath, action, effectiveCwd, signal);
+   			}
 
   			if (isErrorResult(result)) {
   				result.isError = true;
@@ -347,15 +309,39 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 	async #executeStructural(
 		targetPath: string,
 		action: any,
+		effectiveCwd: string,
 		_signal?: AbortSignal,
 	): Promise<AgentToolResult> {
+		// BUG-403: pre-flight existence check for mutating ops. The kernel
+		// happily opens a missing path as an empty buffer, then surfaces a
+		// misleading "find text not found" (BUG-402). Fail loud with the
+		// resolved path so the agent fixes the target, not the find string.
+		// Strip any ::Symbol suffix before the stat — symbol targets address
+		// declarations inside a file that itself must exist.
+		const sepIdx = targetPath.indexOf("::");
+		const filePart = sepIdx === -1 ? targetPath : targetPath.slice(0, sepIdx);
+		if (isMutatingKind(action.kind) && !(await fs.exists(filePart))) {
+			const rel = nodePath.relative(effectiveCwd, filePart) || filePart;
+			const result = toolResult<EditToolResultDetails>({
+				target: rel,
+				action: action.kind,
+				error: "file_not_found",
+			})
+				.text(
+					`File not found at resolved path: ${filePart}. ` +
+						`Verify the path with \`find\` or use \`{kind: "fileCreate"}\` to create it.`,
+				)
+				.done();
+			result.isError = true;
+			return result;
+		}
 		// Delegate structural ops to the unified executeCodePath edit surface.
 		const chunks = await executeCodePath({
 			...sessionContextOpts(this.session ?? null),
 			command: "edit",
-			target: nodePath.relative(this.session.cwd, targetPath),
+			target: nodePath.relative(effectiveCwd, targetPath),
 			actions: [action],
-			root: this.session.cwd,
+			root: effectiveCwd,
 			sessionId: this.session.getSessionId?.()?.trim() || undefined,
 		});
 
@@ -363,7 +349,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		if (diagnostics.length > 0) {
 			const diag = diagnostics[0]!;
 			return toolResult<EditToolResultDetails>({
-				target: nodePath.relative(this.session.cwd, targetPath),
+				target: nodePath.relative(effectiveCwd, targetPath),
 				action: action.kind,
 				error: diag.variant,
 			})
@@ -383,106 +369,32 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 				? `Created ${targetPath}`
 				: `Updated ${targetPath} (${editCount} edit(s))`;
 		return toolResult<EditToolResultDetails>({
-			target: nodePath.relative(this.session.cwd, targetPath),
+			target: nodePath.relative(effectiveCwd, targetPath),
 			action: action.kind,
 		})
 			.text(summary)
 			.done();
 	}
 
+	/**
+	 * Anchorless fileAppend / filePrepend on a missing file becomes a
+	 * single-shot file creation. PLAN-317 removed the hashline-anchor
+	 * dispatch — every other line op goes through #executeStructural.
+	 */
 	async #executeLineId(
 		targetPath: string,
 		action: any,
-		editIndex: number,
-		idempotent: boolean,
+		_editIndex: number,
+		_idempotent: boolean,
 	): Promise<AgentToolResult> {
-		const exists = await fs.exists(targetPath);
-		if (!exists) {
-			// File creation via anchorless append/prepend
-			if ((action.kind === "fileAppend" || action.kind === "filePrepend") && !action.pos && !action.end) {
- 			const body = normalizeLines(action.content) ?? "";
-				await fs.mkdir(nodePath.dirname(targetPath), { recursive: true });
-				await fs.writeFile(targetPath, body, "utf-8");
-				return toolResult<EditToolResultDetails>({
-					target: nodePath.relative(this.session.cwd, targetPath),
-					op: "create",
-				})
-					.text(`Created ${targetPath}`)
-					.done();
-			}
-			throw new Error(`File not found: ${targetPath}`);
-		}
-
-		// Existing-file anchorless append/prepend → delegate to kernel TextResolver
-		// (EOF append / BOF prepend native semantics). #executeLineId only handles
-		// LINE#ID anchor edits; without an anchor, kernel does the right thing.
-		if ((action.kind === "fileAppend" || action.kind === "filePrepend") && !action.pos && !action.end && action.at === undefined) {
-			return await this.#executeStructural(targetPath, action);
-		}
-
-		const anchorEdits = resolveEditAnchors(action, editIndex);
-		const rawContent = await fs.readFile(targetPath, "utf-8");
-		const { bom, text } = stripBom(rawContent);
-		const originalEnding = detectLineEnding(text);
-		const originalNormalized = normalizeToLF(text);
-
-		let normalizedText = originalNormalized;
-		let firstChangedLine: number | undefined;
-		let warnings: string[] | undefined;
-
-		try {
-			const anchorResult = applyHashlineEdits(normalizedText, anchorEdits);
-			normalizedText = anchorResult.lines;
-			firstChangedLine = anchorResult.firstChangedLine;
-			warnings = anchorResult.warnings;
-		} catch (err) {
-			if (err instanceof HashlineMismatchError) {
-				const diag = HashlineMismatchError.formatMessage(err.mismatches, err.fileLines);
-				return toolResult<EditToolResultDetails>({
-					target: nodePath.relative(this.session.cwd, targetPath),
-					error: "stale_anchor",
-				})
-					.text(diag)
-					.done();
-			}
-			throw err;
-		}
-
-		if (originalNormalized === normalizedText) {
-			if (!idempotent) {
-				return toolResult<EditToolResultDetails>({
-					target: nodePath.relative(this.session.cwd, targetPath),
-					noop: true,
-				})
-					.text(
-						`No changes made to ${targetPath}. The edits produced identical content. Retry with idempotent=true only when an intentional no-op is acceptable.`,
-					)
-					.done();
-			}
-			return toolResult<EditToolResultDetails>({
-				target: nodePath.relative(this.session.cwd, targetPath),
-				noop: true,
-				idempotent: true,
-			})
-				.text(`No changes (idempotent).`)
-				.done();
-		}
-
-		const finalContent = bom + restoreLineEndings(normalizedText, originalEnding);
-		await fs.writeFile(targetPath, finalContent, "utf-8");
-
-		const diffResult = generateDiffString(originalNormalized, normalizedText);
-		const preview = buildCompactHashlineDiffPreview(diffResult.diff);
-		const summaryLine = `Changes: +${preview.addedLines} -${preview.removedLines}`;
-		const warningsBlock = warnings?.length ? `\n\nWarnings:\n${warnings.join("\n")}` : "";
-		const previewBlock = preview.preview ? `\n\nDiff preview:\n${preview.preview}` : "";
-
+		const body = normalizeLines(action.content) ?? "";
+		await fs.mkdir(nodePath.dirname(targetPath), { recursive: true });
+		await fs.writeFile(targetPath, body, "utf-8");
 		return toolResult<EditToolResultDetails>({
 			target: nodePath.relative(this.session.cwd, targetPath),
-			diff: diffResult.diff,
-			firstChangedLine: firstChangedLine ?? diffResult.firstChangedLine,
+			op: "create",
 		})
-			.text(`Updated ${targetPath}\n${summaryLine}${previewBlock}${warningsBlock}`)
+			.text(`Created ${targetPath}`)
 			.done();
 	}
 

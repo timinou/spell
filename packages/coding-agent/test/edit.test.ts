@@ -65,6 +65,11 @@ describe("CodepathEditTool", () => {
 	beforeEach(async () => {
 		try {
 			await fs.mkdir(tmpDir, { recursive: true });
+			// Stub fixture used by mock-only structural dispatch tests.
+			// PLAN-317 BUG-403 added a pre-flight existence check; tests that
+			// only verify call shape (not real edits) still need the target to
+			// exist on disk.
+			await writeFile(path.join(tmpDir, "src/example.ts"), "function oldName() {}\n");
 		} catch {}
 	});
 
@@ -77,20 +82,19 @@ describe("CodepathEditTool", () => {
 		} catch {}
 	});
 
-	it("performs LINE#ID replace", async () => {
+	it("performs lineReplace with a numeric anchor", async () => {
 		const file = path.join(tmpDir, "lineid.txt");
 		await writeFile(file, "alpha\nbeta\ngamma\n");
-		const h2 = computeLineHash(2, "beta");
 		const tool = new CodepathEditTool(createSession());
 		const result = await tool.execute("t", {
 			operations: [
 				{
 					target: file,
-					action: { kind: "lineReplace", span: { start: `2#${h2}` }, content: ["delta"] },
+					action: { kind: "lineReplace", span: { start: 2 }, content: ["delta"] },
 				},
 			],
 		});
-		expect(getText(result)).toContain("Updated");
+		expect((result as any).isError ?? false).toBe(false);
 		const content = await fs.readFile(file, "utf-8");
 		expect(content).toBe("alpha\ndelta\ngamma\n");
 	});
@@ -150,6 +154,7 @@ describe("CodepathEditTool", () => {
 	});
 
 	it("dispatches structural rename to executeCodePath", async () => {
+		await writeFile(path.join(tmpDir, "src/example.ts"), "function oldName() {}\n");
 		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue(mockEditResult());
 		const tool = new CodepathEditTool(createSession());
 		await tool.execute("t", {
@@ -171,6 +176,7 @@ describe("CodepathEditTool", () => {
 	});
 
 	it("surfaces structural edit errors from executeCodePath", async () => {
+		await writeFile(path.join(tmpDir, "src/example.ts"), "function oldName() {}\n");
 		spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 			{
 				nodes: [],
@@ -208,38 +214,24 @@ describe("CodepathEditTool", () => {
 		expect(content).toContain("line alpha");
 	});
 
-	it("rejects noop edit without idempotent flag", async () => {
+	// PLAN-317: numeric line ops route through the kernel TextResolver, which
+	// reports `editCount: 0` on a no-op rather than the TS-side
+	// "No changes\nidempotent=true" rejection. The idempotent flag was a
+	// hashline-mode convenience; numeric line ops succeed silently on no-op.
+	it("lineReplace with identical content writes no change", async () => {
 		const file = path.join(tmpDir, "noop.txt");
 		await writeFile(file, "same\n");
-		const h1 = computeLineHash(1, "same");
 		const tool = new CodepathEditTool(createSession());
 		const result = await tool.execute("t", {
 			operations: [
 				{
 					target: file,
-					action: { kind: "lineReplace", span: { start: `1#${h1}` }, content: ["same"] },
+					action: { kind: "lineReplace", span: { start: 1 }, content: ["same"] },
 				},
 			],
 		});
-		expect(getText(result)).toContain("No changes");
-		expect(getText(result)).toContain("idempotent=true");
-	});
-
-	it("accepts noop edit with idempotent flag", async () => {
-		const file = path.join(tmpDir, "noop-ok.txt");
-		await writeFile(file, "same\n");
-		const h1 = computeLineHash(1, "same");
-		const tool = new CodepathEditTool(createSession());
-		const result = await tool.execute("t", {
-			operations: [
-				{
-					target: file,
-					action: { kind: "lineReplace", span: { start: `1#${h1}` }, content: ["same"] },
-					idempotent: true,
-				},
-			],
-		});
-		expect(getText(result)).toContain("No changes (idempotent)");
+		expect((result as any).isError ?? false).toBe(false);
+		expect(await fs.readFile(file, "utf-8")).toBe("same\n");
 	});
 
 	it("passes occurrence first to structural action", async () => {
@@ -302,19 +294,22 @@ describe("CodepathEditTool", () => {
 		expect(call.actions[0].occurrence).toBe(3);
 	});
 
-	it("returns stale anchor diagnostic for mismatched hash", async () => {
-		const file = path.join(tmpDir, "stale.txt");
+	// PLAN-317: LINE#HASH anchors deleted. The kernel now rejects string
+	// anchors at the schema layer ("expected u32") — staleness detection is
+	// gone, replaced by optimistic edits against raw line numbers.
+	it("rejects legacy LINE#HASH string anchors", async () => {
+		const file = path.join(tmpDir, "legacy.txt");
 		await writeFile(file, "alpha\nbeta\ngamma\n");
 		const tool = new CodepathEditTool(createSession());
 		const result = await tool.execute("t", {
 			operations: [
 				{
 					target: file,
-					action: { kind: "lineReplace", span: { start: "2#ZZ" }, content: ["delta"] },
+					action: { kind: "lineReplace", span: { start: "2#ZZ" } as any, content: ["delta"] },
 				},
 			],
 		});
-		expect(getText(result)).toContain("changed");
+		expect((result as any).isError).toBe(true);
 	});
 
 	it("is registered in createTools", async () => {
@@ -327,6 +322,7 @@ describe("action passthrough", () => {
 	beforeEach(async () => {
 		try {
 			await fs.mkdir(tmpDir, { recursive: true });
+			await writeFile(path.join(tmpDir, "src/example.ts"), "class Foo {}\n");
 		} catch {}
 	});
 	afterEach(async () => {
@@ -415,29 +411,28 @@ describe("BUG-341 zero-byte guard and routing", () => {
 		expect(content).not.toContain("export const X");
 	});
 
-	test("insertBefore with LINE#ID anchor inserts before that line", async () => {
+	test("insertBefore with numeric line inserts before that line", async () => {
 		const file = await tempFile(`alpha\nbeta\ngamma\n`);
-		const tag = computeLineHash(2, "beta");
 		const result = await edit({
-			operations: [{ target: file, action: { kind: "lineInsert", at: { side: "before", anchor: `2#${tag}` }, content: ["INSERTED"] } }],
+			operations: [{ target: file, action: { kind: "lineInsert", at: { side: "before", line: 2 }, content: ["INSERTED"] } }],
 		});
-		expect(getText(result)).not.toContain("changed");
+		expect((result as any).isError ?? false).toBe(false);
 		expect(await fs.readFile(file, "utf8")).toBe("alpha\nINSERTED\nbeta\ngamma\n");
 	});
 
-	test("insertAfter with LINE#ID inserts after that line", async () => {
+	test("insertAfter with numeric line inserts after that line", async () => {
 		const file = await tempFile(`a\nb\nc\n`);
-		const tag = computeLineHash(2, "b");
-		await edit({ operations: [{ target: file, action: { kind: "lineInsert", at: { side: "after", anchor: `2#${tag}` }, content: ["X"] } }] });
+		await edit({ operations: [{ target: file, action: { kind: "lineInsert", at: { side: "after", line: 2 }, content: ["X"] } }] });
 		expect(await fs.readFile(file, "utf8")).toBe("a\nb\nX\nc\n");
 	});
 
-	test("insertBefore with stale LINE#ID returns hash-mismatch diagnostic", async () => {
+	// PLAN-317: legacy `2#XX` anchors rejected by schema with `expected u32`.
+	test("insertBefore with legacy LINE#HASH string is rejected", async () => {
 		const file = await tempFile(`alpha\nbeta\ngamma\n`);
 		const result = await edit({
-			operations: [{ target: file, action: { kind: "lineInsert", at: { side: "before", anchor: "2#XX" }, content: ["X"] } }],
+			operations: [{ target: file, action: { kind: "lineInsert", at: { side: "before", anchor: "2#XX" } as any, content: ["X"] } }],
 		});
-		expect(getText(result)).toContain("changed since last read");
+		expect((result as any).isError).toBe(true);
 	});
 });
 

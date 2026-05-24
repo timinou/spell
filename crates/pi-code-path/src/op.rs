@@ -224,26 +224,39 @@ impl Default for SymScope {
 	}
 }
 
-/// LINE#ID anchor for line-based edits.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LineAnchor {
-	pub line: u32,
-	pub hash: String,
+/// 1-indexed line number for line-based edits.
+///
+/// Wraps `u32` as a newtype so callers and serde see a bare integer
+/// while keeping room for line-arithmetic methods if needed later.
+/// Previously carried a content hash for staleness detection (FEAT-705);
+/// that mechanism is removed in PLAN-317 — agents pass plain line
+/// numbers and accept optimistic edits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct LineAnchor(pub u32);
+
+impl LineAnchor {
+	/// 1-indexed line number this anchor refers to.
+	pub fn line(self) -> u32 {
+		self.0
+	}
 }
 
-/// A span from one LineAnchor to optionally another.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// An inclusive span of 1-indexed line numbers.
+///
+/// `end` defaults to `start` when omitted, addressing a single line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LineSpan {
 	pub start: LineAnchor,
 	pub end:   Option<LineAnchor>,
 }
 
-/// Where to insert relative to a line anchor.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Where to insert relative to a 1-indexed line number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "side", rename_all = "lowercase")]
 pub enum LineAt {
-	Before { anchor: LineAnchor },
-	After { anchor: LineAnchor },
+	Before { line: LineAnchor },
+	After { line: LineAnchor },
 }
 
 /// A valid identifier for renaming.

@@ -74,25 +74,22 @@ fn sample_op(kind: OpKind) -> Op {
 
 		OpKind::LineReplace => Op::LineReplace {
 			target:  FileTarget::new(bare).unwrap(),
-			span:    LineSpan {
-				start: LineAnchor { line: 5, hash: "AB".into() },
-				end:   Some(LineAnchor { line: 10, hash: "CD".into() }),
-			},
+			span:    LineSpan { start: LineAnchor(5), end: Some(LineAnchor(10)) },
 			content: ActionContent::Single("replacement".into()),
 		},
 		OpKind::LineInsert => Op::LineInsert {
 			target:  FileTarget::new(bare).unwrap(),
-			at:      LineAt::Before { anchor: LineAnchor { line: 3, hash: "EF".into() } },
+			at:      LineAt::Before { line: LineAnchor(3) },
 			content: ActionContent::Multi(vec!["x".into(), "y".into()]),
 		},
 		OpKind::LineAppend => Op::LineAppend {
 			target:  FileTarget::new(bare).unwrap(),
-			at:      LineAnchor { line: 7, hash: "GH".into() },
+			at:      LineAnchor(7),
 			content: ActionContent::Single("tail".into()),
 		},
 		OpKind::LinePrepend => Op::LinePrepend {
 			target:  FileTarget::new(bare).unwrap(),
-			at:      LineAnchor { line: 1, hash: "IJ".into() },
+			at:      LineAnchor(1),
 			content: ActionContent::Single("head".into()),
 		},
 

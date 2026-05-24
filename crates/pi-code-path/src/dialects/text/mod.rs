@@ -2,7 +2,6 @@
 //!
 //! Operates on opaque bytes with structural axes (`§line`, `§chunk`, `§para`).
 
-pub mod anchor;
 pub mod axes;
 pub mod line_index;
 pub mod mutation;
@@ -13,7 +12,6 @@ pub mod stream;
 
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
-use self::anchor::line_anchor_id;
 use super::fs::anchors::DefaultFsAnchorContext;
 use crate::{
 	ast::{CodePath, Combinator, Head, Locator, Predicate, Step},
@@ -284,12 +282,10 @@ fn expand_context(
 		for ln in start_line..=end_line {
 			let range = idx.line_range(ln, content.len()).unwrap_or(0..0);
 			let line_text = text[range.clone()].to_string();
-			let anchor = line_anchor_id(line_text.trim_end_matches(['\n', '\r']));
 			let mut metadata = HashMap::new();
-			metadata.insert("anchorId".to_string(), serde_json::Value::String(anchor.clone()));
 			metadata.insert("line".to_string(), serde_json::Value::Number(ln.into()));
 			let ctx_node = NodeRef {
-				locator: format!("{}::<line {ln}#{anchor}>", path_str),
+				locator: format!("{}::<line {ln}>", path_str),
 				range,
 				kind: "§line".to_string(),
 				content: Some(Content::Text { value: line_text }),
@@ -320,9 +316,9 @@ fn context_count(step: &Step) -> usize {
 fn parse_line_num(locator: &str) -> Option<usize> {
 	let s = locator.strip_prefix("<line ")?;
 	let s = s.strip_suffix(">")?;
-	// New format: `<line N#ID>`. Backwards-compat: bare `<line N>` still parses.
-	let number_part = s.split('#').next()?;
-	number_part.parse().ok()
+	// Plain `<line N>` since PLAN-317 dropped LINE#ID anchors; tolerate a
+	// stray `#suffix` from older callers/snapshots.
+	s.split('#').next()?.parse().ok()
 }
 
 #[cfg(test)]
@@ -393,8 +389,8 @@ mod tests {
 		let cp = parse_code_path(r#"a.txt::§line[text~="ba."]"#, &DummyLexer).unwrap();
 		let nodes = resolver.resolve(&cp, &CancellationToken::new()).unwrap();
 		assert_eq!(nodes.len(), 2);
-		assert!(nodes[0].locator.contains("<line 2#"));
-		assert!(nodes[1].locator.contains("<line 3#"));
+		assert!(nodes[0].locator.contains("<line 2>"));
+		assert!(nodes[1].locator.contains("<line 3>"));
 	}
 
 	#[test]
@@ -440,9 +436,9 @@ mod tests {
 		// match line 2 + 2 trailing context lines (3,4) = 3 total
 		assert_eq!(nodes.len(), 3);
 		let locs: Vec<_> = nodes.iter().map(|n| n.locator.clone()).collect();
-		assert!(locs.iter().any(|l| l.contains("<line 2#")));
-		assert!(locs.iter().any(|l| l.contains("<line 3#")));
-		assert!(locs.iter().any(|l| l.contains("<line 4#")));
+		assert!(locs.iter().any(|l| l.contains("<line 2>")));
+		assert!(locs.iter().any(|l| l.contains("<line 3>")));
+		assert!(locs.iter().any(|l| l.contains("<line 4>")));
 	}
 
 	#[test]
@@ -474,9 +470,9 @@ mod tests {
 		// match line 4 + 2 leading context lines (2,3) = 3 total
 		assert_eq!(nodes.len(), 3);
 		let locs: Vec<_> = nodes.iter().map(|n| n.locator.clone()).collect();
-		assert!(locs.iter().any(|l| l.contains("<line 2#")));
-		assert!(locs.iter().any(|l| l.contains("<line 3#")));
-		assert!(locs.iter().any(|l| l.contains("<line 4#")));
+		assert!(locs.iter().any(|l| l.contains("<line 2>")));
+		assert!(locs.iter().any(|l| l.contains("<line 3>")));
+		assert!(locs.iter().any(|l| l.contains("<line 4>")));
 	}
 
 	#[test]

@@ -31,10 +31,10 @@ file-scoped — target is `<file>`
   fileWrite            content (required content) — New file contents (string or string[]) · force (optional bool) — Overwrite if exists (default: false)
 
 line-scoped — target is `<file>`
-  lineAppend    at (required lineAnchor) — Line anchor (LINE#ID from a previous read) · content (required content) — New file contents (string or string[])
-  lineInsert    at (required lineAt) — 1-indexed line number to insert at · content (required content) — New file contents (string or string[])
-  linePrepend   at (required lineAnchor) — Line anchor (LINE#ID from a previous read) · content (required content) — New file contents (string or string[])
-  lineReplace   span (required lineSpan) — Line span in `a..b` format (1-indexed, inclusive) · content (required content) — New file contents (string or string[])
+  lineAppend    at (required lineAnchor) — 1-indexed line number · content (required content) — New file contents (string or string[])
+  lineInsert    at (required lineAt) — Insertion point: {side: 'before' | 'after', line: <1-indexed>} · content (required content) — New file contents (string or string[])
+  linePrepend   at (required lineAnchor) — 1-indexed line number · content (required content) — New file contents (string or string[])
+  lineReplace   span (required lineSpan) — Inclusive line range: {start, end?} (1-indexed) · content (required content) — New file contents (string or string[])
 
 heading/css — Markdown/Org/CSS specific
   headingDemote        

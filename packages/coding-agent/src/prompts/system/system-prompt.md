@@ -202,7 +202,7 @@ Pick the right tool for the job:
 {{#has tools "edit"}}`edit` for source files and source-file edits; {{/has}}`find` for files, symbols, search, and directories; {{#has tools "create"}}`create` for new files.{{/has}}
 {{/ifAny}}
 {{#has tools "edit"}}
-**Edit tool**: For source files with tree-sitter support, prefer structural actions (`write`, `findAndReplace`, etc.) over LINE#ID or patch mode.
+**Edit tool**: For source files with tree-sitter support, prefer structural actions (`symbolReplace`, `fileFindReplace`, etc.) over numeric line ops or patch mode.
 {{/has}}
 
 {{#has tools "lsp"}}
