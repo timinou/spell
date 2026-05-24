@@ -356,9 +356,17 @@ fn select_lexer(target: &str) -> (NameLexerWrapper, Vec<Diagnostic>) {
 	}
 
 	if prefix.chars().any(|c| matches!(c, '*' | '?' | '[' | '{')) {
+		// BUG-411 (PLAN-318 W0): informational — a glob prefix means the kernel
+		// cannot pick a language-specific name lexer (it doesn't know which
+		// extension the query will land on). Symbol-name matching falls back
+		// to a generic lexer. NodeKind / FieldName / AnchorName heads are
+		// unaffected; we filter this diagnostic out for non-Name heads in
+		// `execute_code_path_inner` (post-parse).
 		diagnostics.push(Diagnostic {
-			variant: DiagnosticVariant::UnsupportedOperation,
-			message: "weak NamePayload parse: glob FS prefix uses generic DotLexer".to_string(),
+			variant: DiagnosticVariant::Informational,
+			message: "glob path prefix means language-specific symbol-name matching is \
+			          disabled for this query; this only affects `::SymbolName` style heads, \
+			          not `::§kind` / `::¶anchor` / `::field:` axes".to_string(),
 			span:    None,
 		});
 		return (
@@ -444,6 +452,26 @@ pub fn execute_code_path_inner(
 
 	let (lexer, parse_diagnostics) = select_lexer(&opts.target);
 	let mut cp = parse_code_path(&opts.target, &lexer).map_err(|d| Error::from_reason(d.message))?;
+
+	// BUG-411 (PLAN-318 W0): suppress the glob-prefix informational diagnostic
+	// when the query head isn't `Head::Name` — the name lexer choice doesn't
+	// affect NodeKind / FieldName / AnchorName resolution.
+	let parse_diagnostics: Vec<_> = {
+		use pi_code_path::ast::Head;
+		let head_is_name = cp
+			.query
+			.as_ref()
+			.map(|q| matches!(q.head.head, Head::Name(_)))
+			.unwrap_or(false);
+		parse_diagnostics
+			.into_iter()
+			.filter(|d| {
+				let is_glob_lexer_hint = matches!(d.variant, DiagnosticVariant::Informational)
+					&& d.message.contains("glob path prefix");
+				if is_glob_lexer_hint { head_is_name } else { true }
+			})
+			.collect()
+	};
 
 	// Projection is applied as post-processing on the resolver result,
 	// not as query predicates. Predicates within a step are AND-ed,
@@ -725,15 +753,7 @@ pub fn execute_code_path_inner(
 		if !parse_diagnostics.is_empty() {
 			chunk
 				.diagnostics
-				.extend(parse_diagnostics.into_iter().map(|d| {
-					DiagnosticDto {
-						variant: "unsupported_operation".to_string(),
-						message: d.message,
-						span:    d
-							.span
-							.map(|s| SpanDto { start: s.start as u32, end: s.end as u32 }),
-					}
-				}));
+				.extend(parse_diagnostics.into_iter().map(crate::code_path::marshal::diagnostic_to_dto));
 		}
 		return Ok(vec![chunk]);
 	}
@@ -1060,13 +1080,7 @@ pub fn execute_code_path_inner(
 	if !parse_diagnostics.is_empty() {
 		let dtos: Vec<DiagnosticDto> = parse_diagnostics
 			.into_iter()
-			.map(|d| DiagnosticDto {
-				variant: "unsupported_operation".to_string(),
-				message: d.message,
-				span:    d
-					.span
-					.map(|s| SpanDto { start: s.start as u32, end: s.end as u32 }),
-			})
+			.map(crate::code_path::marshal::diagnostic_to_dto)
 			.collect();
 		if let Some(first) = chunks.first_mut() {
 			first.diagnostics.extend(dtos);
