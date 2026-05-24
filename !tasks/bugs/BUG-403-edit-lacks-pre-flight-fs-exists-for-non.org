@@ -1,0 +1,79 @@
+#+TITLE: edit lacks pre-flight fs.exists for non-creation ops
+#+STATE: ITEM
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: BUG-403-edit-lacks-pre-flight-fs-exists-for-non
+#+EFFORT: 30m
+#+LAYER: coding-agent
+#+PRIORITY: #B
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+
+* Initial Message
+
+many Edit errors have "Scope preview: " empty. THen the sessions end up using python to edit code, which is horrendous. Can you look at the session jsonl using jq and tell me where the codepath + edit tools fail, and when the sessions have to rely on bash for things that should be code editing? investigate please, thanks.
+
+* Symptom
+
+Calling =edit= against a missing path with a *mutating* op
+(=fileFindReplace=, =fileRawTextReplace=, =symbolReplace=, etc.) does not
+fast-fail. Instead the kernel creates an empty buffer and the patch
+attempts a no-op edit, producing the misleading "find text not found"
+diagnostic (BUG-402) or — worse — a silent "0 edits, file created with
+empty content" outcome.
+
+* Root cause
+
+=packages/coding-agent/src/tools/edit.ts::#executeStructural= passes the
+target straight to =executeCodePath= without checking that the file
+exists on disk. The kernel's =edit_transaction=
+(=crates/pi-code-engine/src/buffer.rs:631=) branches on =key.exists()=
+and calls =CodeBuffer::create= for missing files — perfect for
+=fileCreate=, wrong for everything else.
+
+=#executeLineId= already has the existence guard
+(=packages/coding-agent/src/tools/edit.ts:393-410=) but =#executeStructural=
+doesn't.
+
+* Fix
+
+Symmetric pre-flight in =#executeStructural=:
+
+#+begin_src ts
+const MUTATING_KINDS = new Set([
+  "fileFindReplace", "fileRawTextReplace", "fileWrite", "fileDelete",
+  "fileAppend", "filePrepend", "filePatch",
+  "symbolReplace", "symbolRename", "symbolWrap", "symbolDelete",
+  "symbolInsertBefore", "symbolInsertAfter",
+  "symbolFindReplace", "symbolRawTextReplace",
+  "symbolMove", "symbolClone", "symbolSplice", "symbolTranspose",
+  "lineReplace", "lineInsert", "lineAppend", "linePrepend",
+  "headingPromote", "headingDemote", "headingReplaceBlock",
+  "cssRenameClassToken", "cssRenameIdToken", "cssRenameCustomProp",
+  "cssRemoveDeadStyle",
+]);
+if (MUTATING_KINDS.has(action.kind) && !(await fs.exists(targetPath))) {
+  return toolResult({ target, error: "file_not_found" })
+    .text(`File not found at resolved path: ${targetPath}. ` +
+          `Verify the file exists (use \`find\`) or use kind:"fileCreate" to create it.`)
+    .done();
+}
+#+end_src
+
+Skip =fileCreate=, =fileAppend=/=filePrepend= without anchor (those
+intentionally create missing files via =#executeLineId=).
+
+* Verification
+
+- =bun test packages/coding-agent/test/edit.test.ts= — add =fileFindReplace_missing_file_fast_fails=
+- Existing positive matrix stays green.
+
+* Difficulty
+
+~30 min. Ships behind BUG-401 and BUG-402 — once root resolves correctly
+and empty-scope is explicit, this is the third layer of defence.
+
+* Related
+
+- BUG-401 (root.params ignored — causes missing-file resolution)
+- BUG-402 (empty scope diagnostic — masks this)

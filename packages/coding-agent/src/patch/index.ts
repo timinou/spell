@@ -21,7 +21,7 @@ import {
 	type WritethroughCallback,
 	writethroughNoop,
 } from "../lsp";
-import hashlineDescription from "../prompts/tools/hashline.md" with { type: "text" };
+
 import patchDescription from "../prompts/tools/patch.md" with { type: "text" };
 import replaceDescription from "../prompts/tools/replace.md" with { type: "text" };
 import { enforcePathWrite } from "../sandbox";

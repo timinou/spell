@@ -1,0 +1,145 @@
+#+TITLE: simplify line addressing — drop LINE#HASH anchors, accept raw line numbers
+#+STATE: ITEM
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: BUG-404-simplify-line-addressing-drop-linehash-a
+#+EFFORT: 4h
+#+LAYER: code-path coding-agent prompts
+#+PRIORITY: #A
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+
+* Initial Message
+
+many Edit errors have "Scope preview: " empty. THen the sessions end up using python to edit code, which is horrendous. Can you look at the session jsonl using jq and tell me where the codepath + edit tools fail, and when the sessions have to rely on bash for things that should be code editing? investigate please, thanks.
+
+* Symptom
+
+=lineReplace= / =lineInsert= / =lineAppend= / =linePrepend= fail 12/14 in
+the corpus (86% error rate). Top error:
+=Edit 1: replace requires at least one anchor (pos or end).=
+
+Agents pass =span= in any of these shapes — all rejected:
+
+#+begin_example
+"span": [48, 68]                                          (array of numbers)
+"span": "603-603"                                         (string)
+"span": "351..422"                                        (CodePath slice)
+"span": {"start":{"line":1030,"column":1},"end":{...}}    (LSP-style)
+#+end_example
+
+What the schema *requires*: =LINE#HASH= base32 anchor strings copied
+from a prior =find/get= output (=lineAnchorSchema.pattern = "^\\d+#.+$"=).
+
+* Root cause
+
+FEAT-705 added 2-char content-hash anchors to every emitted line and
+required them on every line-targeted edit, so that drifted line numbers
+fail loudly via =AnchorMismatch=. In practice:
+
+1. Agents see =LINE#XY= in =find= output but mentally throw away the =#XY=
+   suffix because line numbers feel natural.
+2. The schema description ("LINE#HASH anchor copied from get output")
+   is too terse — agents don't connect "anchor" with the suffix.
+3. The error message "replace requires at least one anchor" does not
+   explain the expected format — agents iterate randomly.
+4. Net: line-targeted ops are effectively unusable; agents fall back to
+   =fileFindReplace= (good) or =bash + sed/python= (bad — 12 fallback
+   chains in the corpus).
+
+The staleness protection LINE#HASH provides is *not justified by use*:
+in 945 edit calls, no successful =lineReplace= depended on the hash for
+correctness — every working case would have worked with a raw line
+number too.
+
+* Decision
+
+Drop LINE#HASH anchors entirely. =lineSpanSchema=, =lineAnchorSchema=,
+=lineAtSchema= become raw 1-indexed line numbers.
+
+#+begin_src ts
+// after
+export const lineAnchorSchema = Type.Number({ minimum: 1, description: "1-indexed line number" });
+export const lineSpanSchema = Type.Object({
+  start: Type.Number({ minimum: 1, description: "1-indexed start line" }),
+  end:   Type.Optional(Type.Number({ minimum: 1, description: "1-indexed end line (inclusive)" })),
+});
+export const lineAtSchema = Type.Object({
+  side: Type.Union([Type.Literal("before"), Type.Literal("after")]),
+  line: Type.Number({ minimum: 1 }),
+});
+#+end_src
+
+Staleness: optimistic. If users want guarded edits, they use symbol
+targets (which are content-addressed) or =fileFindReplace= (which is
+content-addressed by =find=).
+
+* Surface area to delete
+
+** Rust kernel
+- =crates/pi-code-path/src/dialects/text/anchor.rs= — DELETE
+- =crates/pi-code-path/src/dialects/text/mod.rs:287= — drop anchor in line render
+- =crates/pi-code-path/src/dialects/text/axes.rs:47= — drop anchor in axes render
+- =crates/pi-code-path/src/dialects/text/mutation.rs= — drop =verify_anchor_in_text=, simplify =LineAnchor= consumers
+- =crates/pi-code-path/src/op.rs:229-247= — =LineAnchor { line, hash }= → =LineAnchor(u32)=, =LineSpan= keeps shape, =LineAt= drops anchor wrapping
+
+** TS schema + dispatch
+- =packages/coding-agent/src/tools/codepath-primitives.ts:27-43= — schemas above
+- =packages/coding-agent/src/tools/codepath-op-schema.generated.ts= — regen
+- =packages/coding-agent/src/tools/edit.ts::resolveEditAnchors,#executeLineId,parseHashlineAnchor= — drop anchor parsing, accept numbers
+- =packages/coding-agent/src/patch/hashline.ts= — DELETE
+- =packages/coding-agent/src/patch/index.ts= — drop hashline exports
+- =packages/coding-agent/src/patch/diff.ts= — drop =buildCompactHashlineDiffPreview=
+- =packages/coding-agent/src/tools/codepath-result.ts= — drop =LINE#ID= rendering in =get= output
+
+** Prompts
+- =packages/coding-agent/src/prompts/tools/hashline.md= — DELETE
+- =packages/coding-agent/src/prompts/tools/edit.md= — rewrite line-op section
+- =packages/coding-agent/src/prompts/tools/get.md= — drop LINE#ID mentions
+- =packages/coding-agent/src/prompts/tools/code-migration.md= — drop
+- =packages/coding-agent/src/prompts/tools/grep.md= — drop
+- =packages/coding-agent/src/prompts/system/system-prompt.md= — drop
+- =packages/coding-agent/src/prompts/tools/_generated/edit-ops.md= — regen
+
+** Tests to rewrite/delete
+- =packages/coding-agent/test/core/hashline.test.ts= — DELETE (or convert to numeric-anchor tests)
+- =packages/coding-agent/test/codepath-result.test.ts= — drop LINE#ID assertions
+- =packages/coding-agent/test/edit.test.ts= — rewrite line-op cases with numeric spans
+- =packages/coding-agent/test/codepath/wave-j-edge-cases.test.ts= — drop hashline coverage
+- =packages/coding-agent/test/codepath/prompt-snapshots.test.ts= — regen
+- =crates/pi-code-path/src/dialects/text/anchor.rs::tests= — delete with file
+- =crates/pi-code-path/src/dialects/text/mutation.rs::tests= — drop hash assertions
+- =crates/pi-code-path/tests/op_roundtrip_proptest.rs= — strip hash field
+- =crates/pi-natives/src/code_path/op_matrix_tests.rs= — strip hash field
+
+* Verification
+
+- =cargo test -p pi-code-path -p pi-code-engine -p pi-natives=
+- =bun test packages/coding-agent=
+- Manual loop:
+  #+begin_example
+  edit { operations:[{
+    target:"foo.ts",
+    action:{ kind:"lineReplace", span:{start:10, end:15}, content:"..." }}] }
+  #+end_example
+  Succeeds.
+
+* Difficulty
+
+~4 hours, mechanical but broad. Best executed in waves:
+
+1. Kernel: types + dialect/text gut (no hash anywhere) — atomic
+2. TS schema regen + edit.ts simplification — depends on (1) for type compat
+3. Prompts + result rendering — independent of (1)/(2) once shapes settled
+4. Test rewrite — final pass
+
+Risk: low. Removal of a never-used feature. No on-disk format affected.
+The single back-compat concern is in-flight session transcripts that
+reference =LINE#XY= — those break gracefully because the new schema
+rejects unknown string shape with a clear =Expected number, got string=.
+
+* Subsumes / supersedes
+
+Subsumes the originally-proposed fixes #4 (=lineReplace= error message)
+and #5 (=lineSpanSchema= numeric fallback) — full removal is simpler than
+either partial fix.

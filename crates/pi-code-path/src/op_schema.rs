@@ -177,7 +177,7 @@ fn span_field() -> FieldSchema {
 		name:        "span",
 		type_name:   FieldType::LineSpan,
 		required:    true,
-		description: "Line span in `a..b` format (1-indexed, inclusive)",
+		description: "Inclusive line range: {start, end?} (1-indexed)",
 	}
 }
 
@@ -186,7 +186,7 @@ fn at_field() -> FieldSchema {
 		name:        "at",
 		type_name:   FieldType::LineAt,
 		required:    true,
-		description: "1-indexed line number to insert at",
+		description: "Insertion point: {side: 'before' | 'after', line: <1-indexed>}",
 	}
 }
 
@@ -195,7 +195,7 @@ fn line_anchor_field() -> FieldSchema {
 		name:        "at",
 		type_name:   FieldType::LineAnchor,
 		required:    true,
-		description: "Line anchor (LINE#ID from a previous read)",
+		description: "1-indexed line number",
 	}
 }
 

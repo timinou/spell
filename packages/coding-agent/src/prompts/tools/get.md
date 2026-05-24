@@ -9,7 +9,7 @@ slice    `"foo.ts:50"` head N · `":-50"` tail N · `":80-130"` range · `":80-"
 symbol   `"foo.ts::Class.method"`            → body
          `"foo.ts::Class.method:±5"`         → body ±5
 grep     `"**/*.ts::§line[text~=\"TODO\"]"`    → regex ∀ files
-line     `"foo.ts::§line[42]"`               → 1 line + LINE#ID anchor
+line     `"foo.ts::§line[42]"`               → 1 line at 1-indexed line 42
 meta     `"foo.ts#stat"`                     → size · mtime · lineCount
 uri      `"artifact://<session>/<agent>/<tool>/<n>.<ext>"`  ∀ sessions
          `memory://` · `skill://` · `agent://` · `rule://` · `local://` · `pi://`
@@ -20,7 +20,7 @@ uri      `"artifact://<session>/<agent>/<tool>/<n>.<ext>"`  ∀ sessions
 - symbol slice: bare digits = abs file lines (`Sym:80-90`); `±` = rel to symbol bounds (`Sym:±5`).
 - code     → symbol path > line slice
 - xfile re → glob + `§line[text~="…"]` > multi-grep
-- anchors  → `LINE#ID` from fresh `get` → consumed by `edit`. ✗ fabricate.
+
 - budget   → 25k tok (`tools.getSpillThreshold`). ≤ budget inline · > budget → artifact + tail.
 </rules>
 

@@ -39,22 +39,21 @@ fn resolve_target_path(root: &Path, path: &CodePath) -> Result<PathBuf, Diagnost
 	Ok(target)
 }
 
-/// Compute a 2-character hash for a line.
+/// Bounds-check a 1-indexed line number against the file's line count.
 ///
-/// TODO: Cross-language parity with TS `computeLineHash` in `hashline.ts`.
-/// The TS side uses Bun's xxHash32 with a custom nibble alphabet; this Rust
-/// implementation uses a simple FNV-1a truncation until a parity test is added.
-pub(crate) fn compute_line_hash(_idx: usize, line: &str) -> String {
-	let normalized = line.replace('\r', "").trim_end().to_string();
-	let mut hash: u64 = 0xcbf29ce484222325; // FNV offset basis
-	for byte in normalized.bytes() {
-		hash ^= byte as u64;
-		hash = hash.wrapping_mul(0x100000001b3);
+/// Returns the validated 1-indexed line, or a diagnostic naming the
+/// actual file length so the caller can re-read with fresh numbers.
+fn check_line_in_text(text: &str, line: u32) -> Result<usize, Diagnostic> {
+	let count = text_to_lines(text).len();
+	let line = line as usize;
+	if line == 0 || line > count.max(1) {
+		return Err(Diagnostic {
+			variant: DiagnosticVariant::ParseError,
+			message: format!("line {line} out of range (file has {count} line(s))"),
+			span:    None,
+		});
 	}
-	let alphabet = b"ZPMQVRWSNKTXJBYH";
-	let high = ((hash >> 4) & 0x0f) as usize;
-	let low = (hash & 0x0f) as usize;
-	format!("{}{}", alphabet[high] as char, alphabet[low] as char)
+	Ok(line)
 }
 
 fn text_to_lines(text: &str) -> Vec<String> {
@@ -73,46 +72,6 @@ fn lines_to_text(lines: &[String]) -> String {
 	text
 }
 
-fn verify_anchor_in_text(text: &str, pos: &str) -> Result<usize, Diagnostic> {
-	let parts: Vec<&str> = pos.split('#').collect();
-	if parts.len() != 2 {
-		return Err(Diagnostic {
-			variant: DiagnosticVariant::ParseError,
-			message: format!("invalid anchor format: {pos}"),
-			span:    None,
-		});
-	}
-	let line_num: usize = parts[0].parse().map_err(|_| Diagnostic {
-		variant: DiagnosticVariant::ParseError,
-		message: format!("invalid line number in anchor: {pos}"),
-		span:    None,
-	})?;
-	let expected_hash = parts[1];
-
-	let lines: Vec<&str> = text.split('\n').collect();
-	let line_idx = line_num.saturating_sub(1);
-	let actual_line = lines.get(line_idx).unwrap_or(&"");
-	let actual_hash = compute_line_hash(line_num, actual_line);
-	if actual_hash != expected_hash {
-		return Err(Diagnostic {
-			variant: DiagnosticVariant::StaleAnchor,
-			message: format!(
-				"anchor hash mismatch at line {line_num}: expected {expected_hash}, got {actual_hash}"
-			),
-			span:    None,
-		});
-	}
-	Ok(line_num)
-}
-
-fn verify_anchor(path: &Path, pos: &str) -> Result<usize, Diagnostic> {
-	let text = std::fs::read_to_string(path).map_err(|e| Diagnostic {
-		variant: DiagnosticVariant::Inaccessible,
-		message: format!("cannot read file for anchor verification: {e}"),
-		span:    None,
-	})?;
-	verify_anchor_in_text(&text, pos)
-}
 
 fn read_file(path: &Path) -> Result<(String, Vec<String>), Diagnostic> {
 	let text = std::fs::read_to_string(path).map_err(|e| Diagnostic {
@@ -204,17 +163,16 @@ pub fn apply_to_text(
 			})))
 		},
 		Op::LineReplace { span, content, .. } => {
-			let start_line = match verify_anchor_in_text(
-				source,
-				&format!("{}#{}", span.start.line, span.start.hash),
-			) {
+			let start_line = match check_line_in_text(source, span.start.line()) {
 				Ok(n) => n,
 				Err(e) => return Some(Err(e)),
 			};
-			let end_line = if let Some(ref end_anchor) = span.end {
-				end_anchor.line as usize
-			} else {
-				start_line
+			let end_line = match span.end {
+				Some(end) => match check_line_in_text(source, end.line()) {
+					Ok(n) => n,
+					Err(e) => return Some(Err(e)),
+				},
+				None => start_line,
 			};
 			let file_lines = text_to_lines(source);
 			let replacement_lines: Vec<String> = content.lines();
@@ -250,17 +208,13 @@ pub fn apply_to_text(
 		},
 		Op::LineInsert { at, content, .. } => {
 			let line_num = match at {
-				LineAt::Before { anchor } => {
-					match verify_anchor_in_text(source, &format!("{}#{}", anchor.line, anchor.hash)) {
-						Ok(n) => n,
-						Err(e) => return Some(Err(e)),
-					}
+				LineAt::Before { line } => match check_line_in_text(source, line.line()) {
+					Ok(n) => n,
+					Err(e) => return Some(Err(e)),
 				},
-				LineAt::After { anchor } => {
-					match verify_anchor_in_text(source, &format!("{}#{}", anchor.line, anchor.hash)) {
-						Ok(n) => n + 1,
-						Err(e) => return Some(Err(e)),
-					}
+				LineAt::After { line } => match check_line_in_text(source, line.line()) {
+					Ok(n) => n + 1,
+					Err(e) => return Some(Err(e)),
 				},
 			};
 			let old = source.to_string();
@@ -292,7 +246,7 @@ pub fn apply_to_text(
 			})))
 		},
 		Op::LineAppend { at, content, .. } => {
-			let line_num = match verify_anchor_in_text(source, &format!("{}#{}", at.line, at.hash)) {
+			let line_num = match check_line_in_text(source, at.line()) {
 				Ok(n) => n + 1,
 				Err(e) => return Some(Err(e)),
 			};
@@ -325,7 +279,7 @@ pub fn apply_to_text(
 			})))
 		},
 		Op::LinePrepend { at, content, .. } => {
-			let line_num = match verify_anchor_in_text(source, &format!("{}#{}", at.line, at.hash)) {
+			let line_num = match check_line_in_text(source, at.line()) {
 				Ok(n) => n,
 				Err(e) => return Some(Err(e)),
 			};
@@ -403,7 +357,7 @@ impl MutationResolver for super::TextResolver {
 
 #[cfg(test)]
 mod tests {
-	use super::{super::TextResolver, compute_line_hash};
+	use super::super::TextResolver;
 	use crate::{
 		ast::{ActionContent, CodePath, FsLocator, FsSegment, Locator},
 		op::{FileTarget, LineAnchor, LineAt, LineSpan, Op},
@@ -467,10 +421,9 @@ mod tests {
 		std::fs::write(root.join("a.txt"), "foo\nbar\nbaz\n").unwrap();
 		let resolver = TextResolver::new(root.clone());
 		let target = bare_file_target("a.txt");
-		let hash = compute_line_hash(2, "bar");
 		let op = Op::LineReplace {
 			target,
-			span: LineSpan { start: LineAnchor { line: 2, hash }, end: None },
+			span: LineSpan { start: LineAnchor(2), end: None },
 			content: ActionContent::Single("qux".to_string()),
 		};
 		let outcome = resolver
@@ -483,7 +436,7 @@ mod tests {
 	}
 
 	#[test]
-	fn replace_stale_hash() {
+	fn replace_line_out_of_range_reports_clearly() {
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();
 		std::fs::write(root.join("a.txt"), "foo\nbar\nbaz\n").unwrap();
@@ -491,14 +444,16 @@ mod tests {
 		let target = bare_file_target("a.txt");
 		let op = Op::LineReplace {
 			target,
-			span: LineSpan { start: LineAnchor { line: 2, hash: "ZZ".to_string() }, end: None },
+			span: LineSpan { start: LineAnchor(99), end: None },
 			content: ActionContent::Single("qux".to_string()),
 		};
 		let err = resolver
 			.try_apply(&op, &CancellationToken::new())
 			.expect("should return Some")
 			.unwrap_err();
-		assert!(matches!(err.variant, DiagnosticVariant::StaleAnchor));
+		assert!(matches!(err.variant, DiagnosticVariant::ParseError));
+		assert!(err.message.contains("line 99") && err.message.contains("3 line"),
+			"expected helpful out-of-range diagnostic, got: {}", err.message);
 	}
 
 	#[test]
@@ -526,10 +481,9 @@ mod tests {
 		std::fs::write(root.join("a.txt"), "foo\nbar\n").unwrap();
 		let resolver = TextResolver::new(root.clone());
 		let target = bare_file_target("a.txt");
-		let hash = compute_line_hash(2, "bar");
 		let op = Op::LineInsert {
 			target,
-			at: LineAt::Before { anchor: LineAnchor { line: 2, hash } },
+			at: LineAt::Before { line: LineAnchor(2) },
 			content: ActionContent::Single("inserted".to_string()),
 		};
 		let outcome = resolver
@@ -548,10 +502,9 @@ mod tests {
 		std::fs::write(root.join("a.txt"), "foo\nbar\n").unwrap();
 		let resolver = TextResolver::new(root.clone());
 		let target = bare_file_target("a.txt");
-		let hash = compute_line_hash(1, "foo");
 		let op = Op::LineInsert {
 			target,
-			at: LineAt::After { anchor: LineAnchor { line: 1, hash } },
+			at: LineAt::After { line: LineAnchor(1) },
 			content: ActionContent::Single("inserted".to_string()),
 		};
 		let outcome = resolver

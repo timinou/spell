@@ -31,8 +31,8 @@ On cutover the seven standalone tools (`find`, `read`, `grep`, `ast-grep`, `ast-
 |`ast-grep { pat, sel }`|(use has-descendant)|`**/*.ts::§node[.$sel]`|
 |**AST Edit**|||
 |`ast-edit { ops: [{pat, out}] }`|`edit { operations: [{ target: "**/*.ts", action: { kind: "findAndReplace", find: pat, content: out } }] }`|—|
-|**Edit (legacy hashline)**|||
-|`edit foo.txt replace pos=10 end=12 lines=["…"]`|`edit { operations: [{ target: "foo.txt::§line[10..12]", action: { kind: "replace", content: "…" } }] }`|`foo.txt::§line[10..12]`|
+|**Edit (line ops)**|||
+|`edit foo.txt replace pos=10 end=12 lines=["…"]`|`edit { operations: [{ target: "foo.txt", action: { kind: "lineReplace", span: { start: 10, end: 12 }, content: "…" } }] }`|`foo.txt`|
 |`edit { input: "--- a/foo.ts\n+++ …" }`|`edit { operations: [{ target: "foo.ts", action: { kind: "patch", diff: "…" } }] }`|—|
 |**Write**|||
 |`write foo.ts content`|`create { path: "foo.ts", content: "…" }`|—|
@@ -47,7 +47,7 @@ On cutover the seven standalone tools (`find`, `read`, `grep`, `ast-grep`, `ast-
 - **Projection options**: `head`, `tail`, `offset`, `limit` replace separate pagination params.
 - **Format control**: `format` parameter replaces per-tool output modes.
 - **Occurrence selectors**: `first`, `last`, `all`, `N` replace ambiguous multi-match behavior.
-- **LINE#ID anchors**: Replace legacy hashline `pos`/`end` with stable CID anchors from `get` output.
+- **Line anchors**: line ops take plain 1-indexed line numbers (PLAN-317 removed the content-hash stale-anchor mechanism).
 - **Edge axis**: Replaces semantic grep mode and `context`/`impact`/`flow`/`deps` commands.
 
 Cross-reference: `specs/code-graph/code-path.md` §D, `code-path-extensions.md` §5.

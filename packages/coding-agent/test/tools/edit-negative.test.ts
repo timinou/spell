@@ -50,9 +50,13 @@ describe("PLAN-304 negative-shape rejection", () => {
 		["unknown kind", { kind: "writeFile", target: "a.ts" }],
 		["legacy write (unmapped)", { kind: "write", target: "a.ts", content: "x" }],
 
-		// Invalid line anchor format
+		// Invalid line anchor format (string, not integer)
 		["lineReplace bad anchor", { kind: "lineReplace", target: "a.ts", span: { start: "42" }, content: "x" }],
+		["lineReplace LINE#HASH legacy", { kind: "lineReplace", target: "a.ts", span: { start: "42#AB" }, content: "x" }],
 		["lineAppend bad anchor", { kind: "lineAppend", target: "a.ts", at: "42", content: "x" }],
+		["lineAppend LINE#HASH legacy", { kind: "lineAppend", target: "a.ts", at: "42#AB", content: "x" }],
+		["lineInsert at.anchor (renamed to line)", { kind: "lineInsert", target: "a.ts", at: { side: "before", anchor: 42 }, content: "x" }],
+		["lineReplace span.start zero", { kind: "lineReplace", target: "a.ts", span: { start: 0 }, content: "x" }],
 
 		// Type mismatches
 		["content=number", { kind: "fileWrite", target: "a.ts", content: 42 }],
@@ -82,12 +86,23 @@ describe("PLAN-304 negative-shape rejection", () => {
 		).toBe(true);
 	});
 
-	test("accepts lineReplace with valid span", () => {
+	test("accepts lineReplace with valid numeric span", () => {
 		expect(
 			Value.Check(editOpSchema, {
 				kind: "lineReplace",
 				target: "a.ts",
-				span: { start: "42#AB" },
+				span: { start: 42 },
+				content: "x",
+			}),
+		).toBe(true);
+	});
+
+	test("accepts lineReplace with numeric range", () => {
+		expect(
+			Value.Check(editOpSchema, {
+				kind: "lineReplace",
+				target: "a.ts",
+				span: { start: 10, end: 20 },
 				content: "x",
 			}),
 		).toBe(true);
@@ -98,7 +113,7 @@ describe("PLAN-304 negative-shape rejection", () => {
 			Value.Check(editOpSchema, {
 				kind: "lineInsert",
 				target: "a.ts",
-				at: { side: "before", anchor: "42#AB" },
+				at: { side: "before", line: 42 },
 				content: "x",
 			}),
 		).toBe(true);

@@ -1,0 +1,87 @@
+#+TITLE: empty scope_preview hides missing/empty-file root cause
+#+STATE: ITEM
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: BUG-402-empty-scope-preview-hides-missing-empty
+#+EFFORT: 20m
+#+LAYER: code-engine
+#+PRIORITY: #A
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+
+* Initial Message
+
+many Edit errors have "Scope preview: " empty. THen the sessions end up using python to edit code, which is horrendous. Can you look at the session jsonl using jq and tell me where the codepath + edit tools fail, and when the sessions have to rely on bash for things that should be code editing? investigate please, thanks.
+
+* Symptom
+
+When =findAndReplace= / =fileFindReplace= / =rawTextReplace= is dispatched
+against a non-existent (or zero-byte) file, the error reads:
+
+#+begin_example
+edit error: Patch 1: find text not found in scope. Scope preview:
+                                                                  ↑ empty
+#+end_example
+
+The =find= text is genuinely "not in scope" because the buffer is empty,
+but the message implies the file was loaded and searched — agents then
+re-encode their =find=, retry, and eventually fall back to =bash= /
+=python3 -c= edits.
+
+* Root cause
+
+=crates/pi-code-engine/src/edit/patch.rs:73-83=
+
+#+begin_src rust
+let matches = match mode { ... };
+if matches.is_empty() {
+    let preview = scope_preview(scope_text, 20);   // ← empty if buffer empty
+    return Err(CodeEngineError::Edit(format!(
+        "Patch {}: find text not found in scope. Scope preview:
+{}",
+        idx + 1, preview,
+    )));
+}
+#+end_src
+
+=scope_preview= happily returns "" when =scope_text= is "". No branch for
+"scope is empty → this is probably the wrong file."
+
+Upstream BUG-401 makes this trigger frequently, but the misleading
+diagnostic exists independently.
+
+* Evidence
+
+4 truly-empty Scope preview cases in =FixBug373= sub-agent; 30 more cases
+with =Scope preview:= dumping the entire file (also unhelpful — separate
+follow-up).
+
+* Fix
+
+In =apply_patches_with_matcher=, branch before scope_preview:
+
+#+begin_src rust
+if scope_text.is_empty() {
+    return Err(CodeEngineError::Edit(format!(
+        "Patch {}: scope is empty — buffer at {} is 0 bytes \
+         (file may be missing, freshly created, or the wrong path resolved). \
+         Verify the file exists with `find` before retrying.",
+        idx + 1,
+        buffer.path().map(|p| p.display().to_string()).unwrap_or_else(|| "<no path>".into()),
+    )));
+}
+#+end_src
+
+Optionally trim the all-file dump case: if =matches.is_empty()= and
+=scope_text.lines().count() > 40=, show first 10 + last 5 lines with a
+clear "no match in full file" marker instead of the truncated dump.
+
+* Verification
+
+- =cargo test -p pi-code-engine edit::patch::tests::scope_preview_empty_buffer= (new test)
+- Repro: =cargo test -p pi-code-engine edit::patch::tests::find_in_empty_buffer_returns_clear_diagnostic=
+
+* Difficulty
+
+~20 min. 1 branch in =apply_patches_with_matcher= + 1 test + ensure
+=buffer.path()= is accessible (it is).

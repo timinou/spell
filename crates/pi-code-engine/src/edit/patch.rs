@@ -74,6 +74,22 @@ fn apply_patches_with_matcher(
 			MatchMode::RawText => find_raw_text(scope_text, &patch.find),
 		};
 		if matches.is_empty() {
+			// BUG-402: an empty scope means the buffer itself is empty —
+			// almost always a missing-file / wrong-path issue. Name the
+			// actual cause instead of the misleading "text not found" line
+			// followed by an empty preview.
+			if scope_text.is_empty() {
+				let path_hint = buffer
+					.path()
+					.map(|p| p.display().to_string())
+					.unwrap_or_else(|| "<no path>".to_string());
+				return Err(CodeEngineError::Edit(format!(
+					"Patch {}: scope is empty — buffer at {path_hint} is 0 bytes \
+					 (file may be missing, freshly created, or resolved to the wrong path). \
+					 Verify the file exists before retrying.",
+					idx + 1,
+				)));
+			}
 			let preview = scope_preview(scope_text, 20);
 			return Err(CodeEngineError::Edit(format!(
 				"Patch {}: find text not found in scope. Scope preview:\n{}",
@@ -382,6 +398,33 @@ mod tests {
 		assert_eq!(edits.len(), 1);
 		assert_eq!(edits[0].new_text, "side effects are prohibited");
 	}
+	/// BUG-402 / PLAN-317 W0 — red test.
+	///
+	/// When the scope is empty (e.g. an empty buffer, or a wrong path
+	/// that the kernel created as a fresh empty file), the diagnostic
+	/// must name the actual cause and the path, not the misleading
+	/// "find text not found in scope. Scope preview:\n" with an empty
+	/// preview that wastes the agent's next turn.
+	#[test]
+	fn find_in_empty_buffer_returns_clear_diagnostic() {
+		let buffer = ts_buffer("");
+		let err = apply_patches(&buffer, 0, 0, &[Patch {
+			find:       "anything".into(),
+			replace:    "X".into(),
+			occurrence: Occurrence::Unique,
+		}])
+		.expect_err("empty scope must error");
+		let msg = err.to_string();
+		assert!(
+			msg.contains("scope is empty") || msg.contains("empty buffer"),
+			"expected explicit empty-scope diagnostic, got: {msg}"
+		);
+		assert!(
+			!msg.ends_with("Scope preview:\n") && !msg.ends_with("Scope preview:"),
+			"must not degrade into the empty Scope preview message: {msg}"
+		);
+	}
+
 
 	#[test]
 	fn apply_raw_text_patches_preserves_replacement_bytes() {
