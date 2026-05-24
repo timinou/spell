@@ -1,5 +1,5 @@
 #+TITLE: find: §kind only accepts raw tree-sitter grammar names, blocks cross-language queries
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14edc1bec5a09a49
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
 #+CUSTOM_ID: BUG-413-find-kind-only-accepts-raw-tree-sitter-g
