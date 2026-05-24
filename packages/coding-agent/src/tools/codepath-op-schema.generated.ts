@@ -75,6 +75,12 @@ export const fileFindReplaceOp = Type.Object(
 		find: contentSchema,
 		content: contentSchema,
 		occurrence: Type.Optional(occurrenceSchema),
+		force: Type.Optional(
+			Type.Boolean({
+				description:
+					"Allow substring matches that land inside an identifier (word-boundary violated). Default false; refusal asks for a longer needle. Pass true only when the partial-token match is intentional.",
+			}),
+		),
 	},
 	{
 		additionalProperties: false,
@@ -88,6 +94,12 @@ export const fileRawTextReplaceOp = Type.Object(
 		find: contentSchema,
 		content: contentSchema,
 		occurrence: Type.Optional(occurrenceSchema),
+		force: Type.Optional(
+			Type.Boolean({
+				description:
+					"Allow substring matches that land inside an identifier (word-boundary violated). Default false. Same semantics as fileFindReplace.force.",
+			}),
+		),
 	},
 	{ additionalProperties: false, description: "Find-and-replace within a file using raw text matching" },
 );
