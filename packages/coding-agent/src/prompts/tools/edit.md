@@ -66,4 +66,5 @@ history — no target, dispatched alone (not mixed with other ops)
 - edits commit immediately. undo/redo via this tool.
 - batches: best-effort (default — keep applied, skip failing) or strict (snapshot, rollback on any failure)
 - prefer symbol targets over file targets for surgical edits — diffs review better
+- `fileFindReplace` / `fileRawTextReplace`: substring matches that land inside an identifier (no word-boundary) are **refused** with a preview. To bypass: pass `force: true` in the action. Default behavior favors safety: prefer a longer needle that includes the surrounding boundary.
 </rules>

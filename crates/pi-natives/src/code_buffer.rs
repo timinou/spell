@@ -801,7 +801,12 @@ pub(crate) fn action_occurrence(
 		Some(_) => Err(CodeEngineError::Edit("invalid occurrence value".into())),
 	}
 }
-
+pub(crate) fn action_force(action: &Value) -> bool {
+	action
+		.get("force")
+		.and_then(Value::as_bool)
+		.unwrap_or(false)
+}
 pub(crate) fn action_within(resolved: Option<&ResolvedSymbol>) -> Option<(usize, usize)> {
 	let symbol = resolved?;
 	Some((symbol.start_byte, symbol.end_byte))
@@ -943,11 +948,12 @@ pub(crate) fn single_action(
 		"findAndReplace" => {
 			let (start_byte, end_byte) = target_range(buffer, resolved.as_ref());
 			PreparedEditOperation {
-				edits:  apply_patches(buffer, start_byte, end_byte, &[Patch {
-					find:       action_find(action)?.to_string(),
-					replace:    action_content(action)?.to_string(),
-					occurrence: action_occurrence(action)?,
-				}])?,
+ 			edits:  apply_patches(buffer, start_byte, end_byte, &[Patch {
+ 				find:       action_find(action)?.to_string(),
+ 				replace:    action_content(action)?.to_string(),
+ 				occurrence: action_occurrence(action)?,
+ 				force:      action_force(action),
+ 			}])?,
 				proof:  None,
 				action: action_kind.to_string(),
 			}
@@ -955,11 +961,12 @@ pub(crate) fn single_action(
 		"rawTextReplace" => {
 			let (start_byte, end_byte) = target_range(buffer, resolved.as_ref());
 			PreparedEditOperation {
-				edits:  apply_raw_text_patches(buffer, start_byte, end_byte, &[Patch {
-					find:       action_find(action)?.to_string(),
-					replace:    action_content(action)?.to_string(),
-					occurrence: action_occurrence(action)?,
-				}])?,
+ 			edits:  apply_raw_text_patches(buffer, start_byte, end_byte, &[Patch {
+ 				find:       action_find(action)?.to_string(),
+ 				replace:    action_content(action)?.to_string(),
+ 				occurrence: action_occurrence(action)?,
+ 				force:      action_force(action),
+ 			}])?,
 				proof:  None,
 				action: action_kind.to_string(),
 			}
@@ -2031,6 +2038,8 @@ mod tests {
 					find:       find.to_string(),
 					replace:    replace.to_string(),
 					occurrence: Occurrence::Unique,
+
+					force:      false,
 				})
 			})
 			.collect()

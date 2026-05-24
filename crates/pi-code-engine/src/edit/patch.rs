@@ -20,6 +20,18 @@ pub struct Patch {
 	pub find:       String,
 	pub replace:    String,
 	pub occurrence: Occurrence,
+	/// BUG-412 (PLAN-318 W0): when the indent-insensitive structural match
+	/// fails and the substring fallback fires AND the match lands inside an
+	/// identifier (word-boundary violated), the edit is refused unless `force`
+	/// is set true. Default false — callers must opt in explicitly.
+	pub force:      bool,
+}
+
+impl Patch {
+	/// Construct a Patch with `force: false` (the safe default).
+	pub fn new(find: impl Into<String>, replace: impl Into<String>, occurrence: Occurrence) -> Self {
+		Patch { find: find.into(), replace: replace.into(), occurrence, force: false }
+	}
 }
 
 /// Apply find/replace patches within a byte range of the buffer.
@@ -102,6 +114,39 @@ fn apply_patches_with_matcher(
 		for matched in selected {
 			let abs_start = scope_start + matched.offset;
 			let abs_end = scope_start + matched.offset + matched.length;
+
+			// BUG-412 (PLAN-318 W0): word-boundary refusal. Single-line raw-text
+			// matches that land inside an identifier (preceded/followed by a
+			// word-continuation char) are usually unintended — e.g. `find:"Var"`
+			// matching mid-token in `longVariableName`. Refuse unless
+			// `patch.force` is true. Multi-line needles are exempt: the structured
+			// line-by-line match already requires whole-line equality.
+			if !patch.force && !patch.find.contains('\n') {
+				let before = source[..abs_start].chars().next_back();
+				let after = source[abs_end..].chars().next();
+				let is_word = |c: char| c.is_alphanumeric() || c == '_';
+				let boundary_left = before.is_none_or(|c| !is_word(c));
+				let boundary_right = after.is_none_or(|c| !is_word(c));
+				let needle_left = patch.find.chars().next().is_some_and(is_word);
+				let needle_right = patch.find.chars().next_back().is_some_and(is_word);
+				// Only refuse when the needle has word-character ends AND the
+				// match lands against a word-character neighbour. Symbolic
+				// needles (e.g. `=>`) bypass the check.
+				if (needle_left && !boundary_left) || (needle_right && !boundary_right) {
+					let ctx_start = abs_start.saturating_sub(15);
+					let ctx_end = (abs_end + 15).min(source.len());
+					let preview = &source[ctx_start..ctx_end];
+					return Err(CodeEngineError::Edit(format!(
+						"Patch {}: substring match lands inside an identifier (no word \
+						 boundary). Matched region: \"{}\". To bypass, pass `force: true` \
+						 in the patch. Common cause: needle is too short — use a longer \
+						 string that includes the surrounding boundary.",
+						idx + 1,
+						preview
+					)));
+				}
+			}
+
 			let replacement = match mode {
 				MatchMode::IndentInsensitive => {
 					let matched_indent = first_line_indent(&source[abs_start..abs_end]);
@@ -309,6 +354,8 @@ mod tests {
 			find:       "value = 1".into(),
 			replace:    "value = 2".into(),
 			occurrence: Occurrence::Unique,
+
+			force:      false,
 		}])
 		.expect_err("unique default should reject ambiguity");
 		assert!(
@@ -325,6 +372,8 @@ mod tests {
 			find:       "value = 1".into(),
 			replace:    "value = 2".into(),
 			occurrence: Occurrence::First,
+
+			force:      false,
 		}])
 		.expect("first occurrence");
 		assert_eq!(edits.len(), 1);
@@ -339,6 +388,8 @@ mod tests {
 			find:       "value = 1".into(),
 			replace:    "value = 2".into(),
 			occurrence: Occurrence::Last,
+
+			force:      false,
 		}])
 		.expect("last occurrence");
 		assert_eq!(edits.len(), 1);
@@ -353,6 +404,8 @@ mod tests {
 			find:       "value = 1".into(),
 			replace:    "value = 2".into(),
 			occurrence: Occurrence::Index(2),
+
+			force:      false,
 		}])
 		.expect("second occurrence");
 		assert_eq!(edits.len(), 1);
@@ -367,6 +420,8 @@ mod tests {
 			find:       "value = 1".into(),
 			replace:    "value = 2".into(),
 			occurrence: Occurrence::All,
+
+			force:      false,
 		}])
 		.expect("all occurrences");
 		assert_eq!(edits.len(), 3);
@@ -380,6 +435,8 @@ mod tests {
 			find:       "value = 1".into(),
 			replace:    "value = 2".into(),
 			occurrence: Occurrence::Index(5),
+
+			force:      false,
 		}])
 		.expect_err("out of range occurrence");
 		assert!(err.to_string().contains("occurrence 5 out of range 1..=3"));
@@ -393,6 +450,8 @@ mod tests {
 			find:       "live effects are prohibited".into(),
 			replace:    "side effects are prohibited".into(),
 			occurrence: Occurrence::Unique,
+
+			force:      false,
 		}])
 		.expect("substring patch");
 		assert_eq!(edits.len(), 1);
@@ -412,6 +471,8 @@ mod tests {
 			find:       "anything".into(),
 			replace:    "X".into(),
 			occurrence: Occurrence::Unique,
+
+			force:      false,
 		}])
 		.expect_err("empty scope must error");
 		let msg = err.to_string();
@@ -434,6 +495,8 @@ mod tests {
 			find:       "alpha".into(),
 			replace:    "x\ny".into(),
 			occurrence: Occurrence::Unique,
+
+			force:      false,
 		}])
 		.expect("raw patch");
 		assert_eq!(edits.len(), 1);
@@ -450,6 +513,8 @@ mod tests {
 			find:       "Var".into(),
 			replace:    "VAR".into(),
 			occurrence: Occurrence::Unique,
+
+			force:      false,
 		}])
 		.expect_err("substring match inside identifier must be refused");
 		let msg = err.to_string();
@@ -474,6 +539,8 @@ mod tests {
 			find:       "foo".into(),
 			replace:    "foo2".into(),
 			occurrence: Occurrence::Unique,
+
+			force:      false,
 		}])
 		.expect("word-boundary substring should succeed");
 		assert_eq!(edits.len(), 1);
@@ -492,6 +559,8 @@ mod tests {
 			find:       "anything".into(),
 			replace:    "x".into(),
 			occurrence: Occurrence::Unique,
+
+			force:      false,
 		}])
 		.expect_err("empty buffer must produce an error");
 		let msg = err.to_string();
