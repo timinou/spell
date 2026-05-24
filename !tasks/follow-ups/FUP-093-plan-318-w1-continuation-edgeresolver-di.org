@@ -1,0 +1,86 @@
+#+TITLE: PLAN-318 W1+ continuation: EdgeResolver dispatch + W2-W6
+#+STATE: ITEM
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: FUP-093-plan-318-w1-continuation-edgeresolver-di
+
+* Initial Message
+
+try to use those affordances again and tell me what's still not working/not ergonomic
+
+* Initial Message
+
+PLAN-318 W0 (all 5 BUGs) + W1 cache/watcher-api/graph_stats shipped. The remaining W1 task (edge-resolver dispatch in napi.rs) plus W2-W6 are deferred to a follow-on session.
+
+* Status at deferral
+
+** Shipped this session
+- BUG-405/410/411/412/413 fixed and closed.
+- BUG-409 (status index) fixed and closed via W1 cache + graph_stats handler.
+- crates/pi-natives/src/code_graph_cache.rs (7 tests, 0 failed)
+- graph_stats handler in code_buffer.rs (responds warm/cold + cache stats)
+- invalidate_for_file API surface for watcher integration
+
+** Not shipped
+- W1-edge-resolver-wire: napi.rs::execute_code_path_inner doesn't yet detect
+  Edge combinators in cp.query and route to EdgeResolverImpl. The resolver
+  exists (crates/pi-natives/src/code_path/edge_resolver/mod.rs) but is only
+  instantiated in tests. To complete: add Edge-combinator detection in
+  execute_code_path_inner, build EdgeResolverImpl from
+  code_graph_cache::get_or_build_graph(root), dispatch to resolve_edge,
+  convert results to NodeRefDtos.
+- W1-watcher subscription: invalidate_for_file API exists; needs to subscribe
+  to pi-code-engine's existing watcher event stream. See FUP-092.
+- W1r reviewer + W1g gap-fix.
+- W2 (Implements/Inherits/Dispatches extraction).
+- W3 (tsconfig/Cargo/Python module-path resolution).
+- W4 (#hover qualifier).
+- W5 (re-export following).
+- W6 (sweep + lsp tool trim).
+
+* Scope (when resumed)
+
+Wave-by-wave per PLAN-318 manifest. The first task on resume:
+
+** W1-edge-resolver-wire (specific design)
+
+#+begin_src rust
+// In crates/pi-natives/src/code_path/napi.rs::execute_code_path_inner,
+// after parsing cp:
+
+use pi_code_path::ast::Combinator;
+
+let has_edge = cp.query.as_ref().is_some_and(|q| {
+    q.tail.iter().any(|(c, _)| matches!(c, Combinator::Edge(_)))
+});
+
+if has_edge {
+    let graph = crate::code_graph_cache::get_or_build_graph(&root)
+        .map_err(|e| Error::from_reason(e.to_string()))?;
+    let resolver = crate::code_path::edge_resolver::EdgeResolverImpl::new(graph);
+    // ... dispatch query through resolver ...
+    return Ok(/* chunks from resolver */);
+}
+#+end_src
+
+** Trailing-step semantics
+
+`foo.ts::Bar.method def\u2192` (no following step) should be equivalent to
+`foo.ts::Bar.method def\u2192\u00a7*` (return all referrers regardless of kind).
+Implementation: in parser or resolver, default missing-tail-after-Edge to
+NodeKind('*').
+
+* Acceptance
+
+- =find { target: "path::Sym def\u2192\u00a7call_expression" }= returns live
+  callers in production (TS, Rust, Python via pi-code-graph).
+- =status { command: "index" }= reflects populated stats after the first
+  edge query.
+- W6 sweep removes lsp tool from default surface where pi-code-graph covers.
+
+* References
+
+- PLAN-318 org item
+- FUP-090 (type-aware refs)
+- FUP-091 (inferred-type hover)
+- FUP-092 (watcher subscription wiring)
