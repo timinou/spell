@@ -21,3 +21,4 @@ Auditor: `reviewer` subagent · 'agent://0-W0rReview'
 
 ## Recommendation
 Proceed to W1.
+<!-- PLAN-318 W1 graph_stats handler shipped -->

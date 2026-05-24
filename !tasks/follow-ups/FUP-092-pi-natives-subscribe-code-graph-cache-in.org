@@ -1,0 +1,34 @@
+#+TITLE: pi-natives: subscribe code_graph_cache invalidation to pi-code-engine watcher
+#+STATE: ITEM
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: FUP-092-pi-natives-subscribe-code-graph-cache-in
+
+* Initial Message
+
+try to use those affordances again and tell me what's still not working/not ergonomic
+
+* Initial Message
+
+PLAN-318 W1 added `code_graph_cache::invalidate_for_file(path)` as the API surface
+for watcher-driven invalidation. The actual subscription (calling
+invalidate_for_file on every save/edit/external-change event from the
+pi-code-engine watcher) is not yet wired.
+
+Today: cache stays warm across edits. Next `find { def\u2192 }` returns
+results based on the cached graph state at first-query time. Manual
+invalidation via the API works; automatic invalidation does not.
+
+* Scope
+
+- pi-natives subscribes to pi-code-engine's existing watcher event stream.
+- On each event, route the affected path through `invalidate_for_file`.
+- Bounded channel to absorb burst edits; drop oldest with diagnostic on
+  overflow (matches existing knowledge-worker push-subscribe pattern).
+- No eager rebuild \u2014 the existing lazy build on next query is the right
+  default to avoid livelock during active editing.
+
+* Acceptance
+
+- Edit a file under a warm workspace; next edge query reflects the change.
+- Tests in pi-natives/tests/code_graph_cache_e2e.rs verify roundtrip.

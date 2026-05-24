@@ -108,3 +108,15 @@ Shipped in commit 4879100e3. All four BUGs closed. Test impact: coding-agent sui
 :RELATIONS:
 ABOUT: PLAN-317-edit-tool-reliability-root-threading-fai
 :END:
+** ITEM status index: graph_stats handler missing, command always reports unavailable
+
+Closed by PLAN-318 W1 commits e1ec5cf73 + cd42558dc. graph_stats handler now lives in crates/pi-natives/src/code_buffer.rs and reports {warm, file_count, symbol_count, edge_count, built_at_ms} from the workspace CodeGraph cache.
+:PROPERTIES:
+:CUSTOM_ID: EP-5faea19e15702c2
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-24T19:54:09Z
+:END:
+:RELATIONS:
+ABOUT: BUG-409-status-index-graph-stats-handler-missing
+:END:
