@@ -999,6 +999,41 @@ export class Runner implements AgentTool<typeof schema> {
 		let _ = fs::remove_dir_all(root);
 	}
 
+
+	#[test]
+	fn typescript_resolver_honours_tsconfig_paths() {
+		// PLAN-318 W3: `import { Foo } from '@app/foo'` resolves via
+		// tsconfig.json's paths mapping. The oxc_resolver under the hood
+		// reads tsconfig automatically when options.tsconfig is set.
+		let root = new_temp_project("pi-code-graph-ts-tsconfig");
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(root.join("src/app")).expect("mk app dir");
+		fs::write(
+			root.join("tsconfig.json"),
+			"{\n  \"compilerOptions\": {\n    \"baseUrl\": \".\",\n    \"paths\": { \"@app/*\": [\"src/app/*\"] }\n  }\n}\n",
+		)
+		.expect("tsconfig");
+		fs::write(root.join("src/app/foo.ts"), "export const Foo = 1;\n").expect("foo");
+		fs::write(
+			root.join("caller.ts"),
+			"import { Foo } from '@app/foo';\nexport const x = Foo;\n",
+		)
+		.expect("caller");
+		let resolved = TypeScriptImportResolver
+			.resolve(ResolveRequest {
+				project_root: &root,
+				from_file:    Path::new("caller.ts"),
+				specifier:    "@app/foo",
+			})
+			.expect("resolver should succeed");
+		assert_eq!(
+			resolved,
+			Some(PathBuf::from("src/app/foo.ts")),
+			"resolved={resolved:?}"
+		);
+		let _ = fs::remove_dir_all(root);
+	}
+
 	#[test]
 	fn typescript_resolver_falls_back_when_resolver_panics() {
 		let root = new_temp_project("pi-code-graph-ts-panic-fallback");

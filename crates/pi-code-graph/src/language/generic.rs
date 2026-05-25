@@ -1016,12 +1016,153 @@ fn resolve_rust_import(request: ResolveRequest<'_>) -> Option<PathBuf> {
 				base = base.parent().map(Path::to_path_buf).unwrap_or(base);
 			}
 		}
+	} else if let Some(member_src) = cargo_workspace_member_src(request.project_root, segments[0]) {
+		// PLAN-318 W3: workspace-aware import resolution.
+		// `use spell_kernel::Foo` against a Cargo workspace root resolves
+		// to crates/spell-kernel/src/Foo.rs (or sibling pattern). Earlier
+		// code only looked at project_root/src/<crate>/... which never
+		// matched workspace members.
+		base = member_src;
+		segments.remove(0);
 	}
 	if segments.is_empty() {
 		return None;
+		// Bare workspace-member crate name (e.g. `use spell_kernel;`) is rare;
+		// fall through.
 	}
 	let candidates = rust_candidate_paths(base, &segments);
 	resolve_candidates(request.project_root, candidates)
+}
+
+/// PLAN-318 W3: locate a Cargo workspace member's `src/` directory by package
+/// name. Walks project_root/Cargo.toml's `[workspace] members` glob list,
+/// reads each member's Cargo.toml, and returns the src/ of the member whose
+/// `[package].name` matches `crate_name` (with `_`<→`-` normalisation, since
+/// `use foo_bar` imports a crate named either "foo_bar" or "foo-bar").
+///
+/// Results are cached per project_root to avoid re-walking the workspace on
+/// every import. The cache lives for the process lifetime; in a long-running
+/// daemon this could be invalidated on Cargo.toml change, but for now the
+/// graph rebuild loop already handles freshness.
+fn cargo_workspace_member_src(project_root: &Path, crate_name: &str) -> Option<PathBuf> {
+	use std::sync::OnceLock;
+	static CACHE: OnceLock<std::sync::Mutex<std::collections::HashMap<PathBuf, std::collections::HashMap<String, PathBuf>>>> = OnceLock::new();
+	let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+	let root_key = project_root.to_path_buf();
+	{
+		let guard = cache.lock().ok()?;
+		if let Some(map) = guard.get(&root_key) {
+			return map.get(crate_name).cloned().or_else(|| {
+				// Try with hyphen swap: `foo_bar` <-> `foo-bar`.
+				let swapped = swap_underscore_hyphen(crate_name);
+				map.get(&swapped).cloned()
+			});
+		}
+	}
+
+	// Build the cache for this root.
+	let map = build_cargo_member_map(project_root).unwrap_or_default();
+	let hit = map.get(crate_name).cloned().or_else(|| {
+		let swapped = swap_underscore_hyphen(crate_name);
+		map.get(&swapped).cloned()
+	});
+	if let Ok(mut guard) = cache.lock() {
+		guard.insert(root_key, map);
+	}
+	hit
+}
+
+fn swap_underscore_hyphen(s: &str) -> String {
+	if s.contains('_') {
+		s.replace('_', "-")
+	} else if s.contains('-') {
+		s.replace('-', "_")
+	} else {
+		s.to_string()
+	}
+}
+
+fn build_cargo_member_map(
+	project_root: &Path,
+) -> Option<std::collections::HashMap<String, PathBuf>> {
+	let cargo_toml = project_root.join("Cargo.toml");
+	let content = std::fs::read_to_string(&cargo_toml).ok()?;
+	// Bare TOML parsing without a TOML crate: look for [workspace] then
+	// `members = […]` array. Members are usually globs like "crates/*".
+	let members = parse_workspace_members(&content)?;
+	let mut map = std::collections::HashMap::new();
+	for member_glob in members {
+		// Expand single-level wildcard (the common case: "crates/*").
+		let members_paths = if let Some(prefix) = member_glob.strip_suffix("/*") {
+			let dir = project_root.join(prefix);
+			std::fs::read_dir(&dir)
+				.ok()?
+				.filter_map(|entry| entry.ok())
+				.filter(|entry| entry.file_type().map(|t| t.is_dir()).unwrap_or(false))
+				.map(|entry| entry.path())
+				.collect::<Vec<_>>()
+		} else {
+			vec![project_root.join(&member_glob)]
+		};
+		for member_path in members_paths {
+			let member_cargo = member_path.join("Cargo.toml");
+			let Ok(content) = std::fs::read_to_string(&member_cargo) else {
+				continue;
+			};
+			if let Some(name) = parse_package_name(&content) {
+				map.insert(name, member_path.join("src"));
+			}
+		}
+	}
+	Some(map)
+}
+
+/// Extract `members = […]` strings from a workspace Cargo.toml.
+fn parse_workspace_members(content: &str) -> Option<Vec<String>> {
+	let ws_idx = content.find("[workspace]")?;
+	let after = &content[ws_idx..];
+	let members_idx = after.find("members")?;
+	let from_members = &after[members_idx..];
+	let bracket_start = from_members.find('[')?;
+	let bracket_end = from_members[bracket_start..].find(']')?;
+	let list_str = &from_members[bracket_start + 1..bracket_start + bracket_end];
+	let members = list_str
+		.split(',')
+		.filter_map(|tok| {
+			let trimmed = tok.trim().trim_matches('"').trim();
+			if trimmed.is_empty() {
+				None
+			} else {
+				Some(trimmed.to_string())
+			}
+		})
+		.collect::<Vec<_>>();
+	if members.is_empty() { None } else { Some(members) }
+}
+
+/// Extract `name = "..."` from a package Cargo.toml `[package]` section.
+fn parse_package_name(content: &str) -> Option<String> {
+	let pkg_idx = content.find("[package]")?;
+	let after = &content[pkg_idx..];
+	// Stop at next section.
+	let section_end = after[1..]
+		.find("\n[")
+		.map(|i| i + 1)
+		.unwrap_or(after.len());
+	let pkg_section = &after[..section_end];
+	for line in pkg_section.lines() {
+		let line = line.trim();
+		if let Some(rest) = line.strip_prefix("name") {
+			let rest = rest.trim_start();
+			if let Some(rest) = rest.strip_prefix('=') {
+				let val = rest.trim().trim_matches('"').trim();
+				if !val.is_empty() {
+					return Some(val.to_string());
+				}
+			}
+		}
+	}
+	None
 }
 
 fn current_rust_module_dir(project_root: &Path, from_file: &Path) -> PathBuf {
@@ -1177,6 +1318,105 @@ mod tests {
 		assert_eq!(file.imports[1].specifier, "pkg.core");
 		assert_eq!(file.imports[1].bindings[0].local_name, "core");
 	}
+
+	#[test]
+	fn rust_resolver_uses_cargo_workspace_member_src() {
+		// PLAN-318 W3: `use member_crate::Foo` from inside a Cargo workspace
+		// resolves to crates/member-crate/src/Foo.rs (with `_`<->`-` swap).
+		use std::fs;
+		let root = std::env::temp_dir().join(format!("plan318-w3-cargo-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(root.join("crates/foo-bar/src")).expect("mk member src");
+		fs::create_dir_all(root.join("crates/consumer/src")).expect("mk consumer src");
+		fs::write(
+			root.join("Cargo.toml"),
+			"[workspace]\nmembers = [\"crates/*\"]\n",
+		)
+		.expect("workspace toml");
+		fs::write(
+			root.join("crates/foo-bar/Cargo.toml"),
+			"[package]\nname = \"foo-bar\"\nversion = \"0.1.0\"\n",
+		)
+		.expect("foo-bar toml");
+		fs::write(root.join("crates/foo-bar/src/lib.rs"), "pub fn ping() {}\n").expect("lib");
+		fs::write(root.join("crates/foo-bar/src/ping.rs"), "pub fn ping() {}\n").expect("ping mod");
+		fs::write(
+			root.join("crates/consumer/Cargo.toml"),
+			"[package]\nname = \"consumer\"\nversion = \"0.1.0\"\n",
+		)
+		.expect("consumer toml");
+		let from_file = PathBuf::from("crates/consumer/src/main.rs");
+		let resolver = EngineProfileImportResolver::new(SupportedLanguage::new("rust"));
+		let resolved = resolver
+			.resolve(ResolveRequest {
+				project_root: &root,
+				from_file:    &from_file,
+				specifier:    "foo_bar::ping",
+			})
+			.expect("resolve must not error");
+		assert_eq!(
+			resolved,
+			Some(PathBuf::from("crates/foo-bar/src/ping.rs")),
+			"resolved={resolved:?}"
+		);
+		// The `ping.rs` doesn't exist; the resolver should fall through to
+		// none rather than blindly accept a non-existent path. Our candidate
+		// list includes lib.rs as a fallback so this should still find it
+		// IF segments collapses to empty. With specifier `foo_bar::ping`,
+		// segments after consuming `foo_bar` is `[ping]`, so candidates are
+		// `crates/foo-bar/src/ping.rs` and `crates/foo-bar/src/ping/mod.rs`.
+		// Neither exists → None. Document expected None to keep this honest:
+		let resolved_nonexistent = resolver
+			.resolve(ResolveRequest {
+				project_root: &root,
+				from_file:    &from_file,
+				specifier:    "foo_bar::missing",
+			})
+			.expect("resolve must not error");
+		assert!(resolved_nonexistent.is_none());
+		let _ = fs::remove_dir_all(&root);
+	}
+
+
+	#[test]
+	fn python_resolver_finds_package_init() {
+		// PLAN-318 W3: `from pkg import thing` resolves to pkg/__init__.py.
+		use std::fs;
+		let root = std::env::temp_dir().join(format!("plan318-w3-py-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(root.join("pkg/sub")).expect("mk pkg/sub");
+		fs::write(root.join("pkg/__init__.py"), "").expect("pkg init");
+		fs::write(root.join("pkg/sub/__init__.py"), "").expect("sub init");
+		fs::write(root.join("pkg/sub/mod.py"), "def x(): pass\n").expect("mod.py");
+		fs::write(root.join("main.py"), "").expect("caller");
+		let resolver = EngineProfileImportResolver::new(SupportedLanguage::new("python"));
+		let via_init = resolver
+			.resolve(ResolveRequest {
+				project_root: &root,
+				from_file:    &PathBuf::from("main.py"),
+				specifier:    "pkg",
+			})
+			.expect("resolve must not error");
+		assert_eq!(via_init, Some(PathBuf::from("pkg/__init__.py")));
+		let via_subinit = resolver
+			.resolve(ResolveRequest {
+				project_root: &root,
+				from_file:    &PathBuf::from("main.py"),
+				specifier:    "pkg.sub",
+			})
+			.expect("resolve must not error");
+		assert_eq!(via_subinit, Some(PathBuf::from("pkg/sub/__init__.py")));
+		let via_module = resolver
+			.resolve(ResolveRequest {
+				project_root: &root,
+				from_file:    &PathBuf::from("main.py"),
+				specifier:    "pkg.sub.mod",
+			})
+			.expect("resolve must not error");
+		assert_eq!(via_module, Some(PathBuf::from("pkg/sub/mod.py")));
+		let _ = fs::remove_dir_all(&root);
+	}
+
 
 	#[test]
 	fn generic_typst_extractor_uses_base_names_for_callable_lets() {
