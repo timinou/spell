@@ -419,6 +419,11 @@ fn collect_rust_heritage(source: &str, root: Node<'_>, out: &mut Vec<ExtractedRe
 }
 
 /// Python: `class X(Base, ABC)` → X Inherits each superclass.
+///
+/// W2g (review F1/F2): the `superclasses` field is an `argument_list` so it
+/// can hold `keyword_argument` (e.g. `metaclass=ABCMeta`), `list_splat`
+/// (`*bases`), and `dictionary_splat` (`**kwargs`) in addition to base
+/// expressions. Earlier code's catch-all recursion misread those as bases.
 fn collect_python_heritage(source: &str, root: Node<'_>, out: &mut Vec<ExtractedReference>) {
 	if root.kind() != "class_definition" {
 		return;
@@ -428,6 +433,14 @@ fn collect_python_heritage(source: &str, root: Node<'_>, out: &mut Vec<Extracted
 	};
 	let mut cursor = superclasses.walk();
 	for child in superclasses.named_children(&mut cursor) {
+		// Skip non-base children: keyword args (metaclass=Meta, PEP-487
+		// init_subclass kwargs), splats, and dictionary splats.
+		if matches!(
+			child.kind(),
+			"keyword_argument" | "list_splat" | "dictionary_splat" | "parenthesized_list_splat"
+		) {
+			continue;
+		}
 		let name = extract_type_name(source, child);
 		if !name.is_empty() {
 			out.push(ExtractedReference {
@@ -440,6 +453,10 @@ fn collect_python_heritage(source: &str, root: Node<'_>, out: &mut Vec<Extracted
 
 /// Extract the leading identifier text from a type-ish node, walking through
 /// generic_type / scoped_type_identifier wrappers to find the base name.
+///
+/// W2g (review F2): Python `attribute` nodes (e.g. `abc.ABC`) need the
+/// `attribute` field, not the `object` field. Earlier code's `named_child(0)`
+/// fallback returned the object (`abc`) and lost the actual base name.
 fn extract_type_name(source: &str, node: Node<'_>) -> String {
 	match node.kind() {
 		"type_identifier" | "identifier" | "primitive_type" => node_text(source, node).unwrap_or_default().to_string(),
@@ -450,6 +467,12 @@ fn extract_type_name(source: &str, node: Node<'_>) -> String {
 				.map(|c| extract_type_name(source, c))
 				.unwrap_or_default()
 		},
+		// Python dotted base: `abc.ABC` → prefer the `attribute` field name
+		// over the `object` field (which would yield the module/parent).
+		"attribute" => node
+			.child_by_field_name("attribute")
+			.map(|c| extract_type_name(source, c))
+			.unwrap_or_default(),
 		_ => node
 			.named_child(0)
 			.map(|c| extract_type_name(source, c))
@@ -1040,8 +1063,6 @@ fn resolve_rust_import(request: ResolveRequest<'_>) -> Option<PathBuf> {
 	}
 	if segments.is_empty() {
 		return None;
-		// Bare workspace-member crate name (e.g. `use spell_kernel;`) is rare;
-		// fall through.
 	}
 	let candidates = rust_candidate_paths(base, &segments);
 	resolve_candidates(request.project_root, candidates)
@@ -1103,14 +1124,32 @@ fn build_cargo_member_map(
 	// Bare TOML parsing without a TOML crate: look for [workspace] then
 	// `members = […]` array. Members are usually globs like "crates/*".
 	let members = parse_workspace_members(&content)?;
+	let excluded = parse_workspace_exclude(&content);
+	// Look up [workspace.package] name as fallback for member crates that
+	// declare `name.workspace = true` (Cargo 1.64+ workspace inheritance).
+	let workspace_pkg_name = parse_workspace_package_name(&content);
 	let mut map = std::collections::HashMap::new();
 	for member_glob in members {
-		// Expand single-level wildcard (the common case: "crates/*").
-		let members_paths = if let Some(prefix) = member_glob.strip_suffix("/*") {
+		// PLAN-318 W3g (F4): expand both `/*` and `/**` wildcards. The `/**`
+		// form is Cargo's recursive expansion; we treat it identically to
+		// `/*` here (one level deep) because Cargo's own discovery is
+		// one-level for most workspace layouts and recursive expansion
+		// rarely targets new package boundaries.
+		let members_paths = if let Some(prefix) = member_glob
+			.strip_suffix("/**")
+			.or_else(|| member_glob.strip_suffix("/*"))
+		{
 			let dir = project_root.join(prefix);
-			std::fs::read_dir(&dir)
-				.ok()?
-				.filter_map(|entry| entry.ok())
+			// PLAN-318 W3g (F1): if this glob's directory is missing
+			// (typo, gitignored, conditional submodule), CONTINUE rather
+			// than aborting the entire map. Earlier `read_dir(&dir).ok()?`
+			// would short-circuit the function to None and silently
+			// disable workspace resolution for the rest of the daemon's
+			// life.
+			let Ok(rd) = std::fs::read_dir(&dir) else {
+				continue;
+			};
+			rd.filter_map(|entry| entry.ok())
 				.filter(|entry| entry.file_type().map(|t| t.is_dir()).unwrap_or(false))
 				.map(|entry| entry.path())
 				.collect::<Vec<_>>()
@@ -1118,11 +1157,25 @@ fn build_cargo_member_map(
 			vec![project_root.join(&member_glob)]
 		};
 		for member_path in members_paths {
+			// PLAN-318 W3g (F6): honour [workspace] exclude list.
+			if excluded.iter().any(|ex| {
+				member_path.ends_with(ex) || member_path == project_root.join(ex)
+			}) {
+				continue;
+			}
 			let member_cargo = member_path.join("Cargo.toml");
 			let Ok(content) = std::fs::read_to_string(&member_cargo) else {
 				continue;
 			};
-			if let Some(name) = parse_package_name(&content) {
+			// PLAN-318 W3g (F3): support `name.workspace = true` inheritance.
+			let name = parse_package_name(&content).or_else(|| {
+				if package_name_inherited_from_workspace(&content) {
+					workspace_pkg_name.clone()
+				} else {
+					None
+				}
+			});
+			if let Some(name) = name {
 				map.insert(name, member_path.join("src"));
 			}
 		}
@@ -1131,44 +1184,86 @@ fn build_cargo_member_map(
 }
 
 /// Extract `members = […]` strings from a workspace Cargo.toml.
+///
+/// PLAN-318 W3g (F2/F7): line-oriented scan so we don't confuse
+/// `default-members` for `members`, and strip both single- and double-quoted
+/// list elements.
 fn parse_workspace_members(content: &str) -> Option<Vec<String>> {
-	let ws_idx = content.find("[workspace]")?;
-	let after = &content[ws_idx..];
-	let members_idx = after.find("members")?;
-	let from_members = &after[members_idx..];
-	let bracket_start = from_members.find('[')?;
-	let bracket_end = from_members[bracket_start..].find(']')?;
-	let list_str = &from_members[bracket_start + 1..bracket_start + bracket_end];
-	let members = list_str
-		.split(',')
-		.filter_map(|tok| {
-			let trimmed = tok.trim().trim_matches('"').trim();
-			if trimmed.is_empty() {
-				None
-			} else {
-				Some(trimmed.to_string())
-			}
-		})
-		.collect::<Vec<_>>();
-	if members.is_empty() { None } else { Some(members) }
+	extract_workspace_array(content, "members")
 }
 
-/// Extract `name = "..."` from a package Cargo.toml `[package]` section.
-fn parse_package_name(content: &str) -> Option<String> {
-	let pkg_idx = content.find("[package]")?;
-	let after = &content[pkg_idx..];
-	// Stop at next section.
-	let section_end = after[1..]
-		.find("\n[")
-		.map(|i| i + 1)
-		.unwrap_or(after.len());
-	let pkg_section = &after[..section_end];
-	for line in pkg_section.lines() {
-		let line = line.trim();
-		if let Some(rest) = line.strip_prefix("name") {
+/// W3g (F6): extract `[workspace] exclude = […]` list. Empty when absent.
+fn parse_workspace_exclude(content: &str) -> Vec<String> {
+	extract_workspace_array(content, "exclude").unwrap_or_default()
+}
+
+/// W3g (F3): read `[workspace.package] name = "..."` (workspace-inherited
+/// package name). Returned when a member crate declares
+/// `name.workspace = true`.
+fn parse_workspace_package_name(content: &str) -> Option<String> {
+	let (_idx, section) = find_section(content, "[workspace.package]")?;
+	scan_string_assignment(section, "name")
+}
+
+/// Returns true when the package section declares `name.workspace = true`
+/// or `name = { workspace = true }`.
+fn package_name_inherited_from_workspace(content: &str) -> bool {
+	let Some((_, section)) = find_section(content, "[package]") else {
+		return false;
+	};
+	for line in section.lines() {
+		let line = strip_toml_comment(line).trim();
+		if let Some(rest) = line.strip_prefix("name")
+			&& let Some(rest) = rest.trim_start().strip_prefix('.')
+			&& rest.trim_start().starts_with("workspace")
+		{
+			return true;
+		}
+		if line.starts_with("name")
+			&& line.contains("workspace")
+			&& line.contains("true")
+		{
+			return true;
+		}
+	}
+	false
+}
+
+/// Locate a TOML section by header. Returns the section body bounded by the
+/// next `[...]` line (or EOF).
+fn find_section<'a>(content: &'a str, header: &str) -> Option<(usize, &'a str)> {
+	let idx = content.find(header)?;
+	let after = &content[idx + header.len()..];
+	// Skip to end of header line.
+	let body_start = after.find('\n').map(|i| i + 1).unwrap_or(after.len());
+	let body = &after[body_start..];
+	// Find next `[...]` section header.
+	let end = body
+		.lines()
+		.scan(0usize, |off, line| {
+			let at = *off;
+			*off += line.len() + 1;
+			Some((at, line))
+		})
+		.find(|(_, line)| line.trim_start().starts_with('['))
+		.map(|(at, _)| at)
+		.unwrap_or(body.len());
+	Some((idx, &body[..end]))
+}
+
+/// Scan a section for `KEY = "value"` or `KEY = 'value'`. Returns the first
+/// match. Ignores trailing comments.
+fn scan_string_assignment(section: &str, key: &str) -> Option<String> {
+	for line in section.lines() {
+		let line = strip_toml_comment(line).trim();
+		if let Some(rest) = line.strip_prefix(key) {
 			let rest = rest.trim_start();
 			if let Some(rest) = rest.strip_prefix('=') {
-				let val = rest.trim().trim_matches('"').trim();
+				let val = rest.trim();
+				let val = val
+					.strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+					.or_else(|| val.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+					.unwrap_or(val);
 				if !val.is_empty() {
 					return Some(val.to_string());
 				}
@@ -1176,6 +1271,66 @@ fn parse_package_name(content: &str) -> Option<String> {
 		}
 	}
 	None
+}
+
+/// W3g (F2/F7): scan the `[workspace]` section for an array assignment like
+/// `KEY = ["a", "b", ...]`. Handles multi-line arrays, single- and
+/// double-quoted strings, comments, and trailing commas. Returns `None` when
+/// the key is absent.
+fn extract_workspace_array(content: &str, key: &str) -> Option<Vec<String>> {
+	let (_idx, section) = find_section(content, "[workspace]")?;
+	// Find the line that starts with `KEY` (left-trimmed) and has `=`.
+	let mut chars_consumed = 0usize;
+	let mut bracket_pos: Option<usize> = None;
+	for line in section.lines() {
+		let stripped = strip_toml_comment(line);
+		let trimmed = stripped.trim_start();
+		if trimmed.starts_with(key) {
+			let after_key = trimmed[key.len()..].trim_start();
+			if after_key.starts_with('=') {
+				// Locate `[` (may be same line or subsequent lines).
+				if let Some(rel) = section[chars_consumed..].find('[') {
+					bracket_pos = Some(chars_consumed + rel);
+					break;
+				}
+			}
+		}
+		chars_consumed += line.len() + 1;
+	}
+	let bracket_start = bracket_pos?;
+	let bracket_end = section[bracket_start..].find(']')?;
+	let list_str = &section[bracket_start + 1..bracket_start + bracket_end];
+	let members = list_str
+		.lines()
+		.flat_map(|line| {
+			strip_toml_comment(line)
+				.split(',')
+				.map(|s| s.to_string())
+				.collect::<Vec<_>>()
+		})
+		.filter_map(|tok| {
+			let trimmed = tok.trim();
+			let unquoted = trimmed
+				.strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+				.or_else(|| trimmed.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+				.unwrap_or(trimmed);
+			if unquoted.is_empty() { None } else { Some(unquoted.to_string()) }
+		})
+		.collect::<Vec<_>>();
+	if members.is_empty() { None } else { Some(members) }
+}
+
+fn strip_toml_comment(line: &str) -> &str {
+	line.split_once('#').map(|(l, _)| l).unwrap_or(line)
+}
+
+/// Extract `name = "..."` (or `name = '...'`) from a package Cargo.toml
+/// `[package]` section. Returns None when the key is absent or expressed via
+/// workspace inheritance (`name.workspace = true`) — the caller handles that
+/// fallback in build_cargo_member_map.
+fn parse_package_name(content: &str) -> Option<String> {
+	let (_idx, section) = find_section(content, "[package]")?;
+	scan_string_assignment(section, "name")
 }
 
 fn current_rust_module_dir(project_root: &Path, from_file: &Path) -> PathBuf {
@@ -1573,6 +1728,74 @@ mod tests {
 	}
 
 	#[test]
+	fn w3g_default_members_does_not_collide_with_members() {
+		let toml = r#"[workspace]
+default-members = ["crates/cli"]
+members = ["crates/*", "tools/*"]
+"#;
+		let members = parse_workspace_members(toml).expect("members parsed");
+		assert_eq!(members, vec!["crates/*".to_string(), "tools/*".to_string()]);
+	}
+
+	#[test]
+	fn w3g_members_handles_single_quotes_and_comments() {
+		let toml = r#"[workspace]
+# this is a comment about members
+members = [
+    'crates/foo', # foo crate
+    "crates/bar",
+]
+"#;
+		let members = parse_workspace_members(toml).expect("members parsed");
+		assert_eq!(members, vec!["crates/foo".to_string(), "crates/bar".to_string()]);
+	}
+
+	#[test]
+	fn w3g_missing_glob_dir_does_not_abort_whole_map() {
+		use std::fs;
+		let root = std::env::temp_dir().join(format!("w3g-missing-glob-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(root.join("crates/alpha/src")).expect("alpha");
+		fs::write(
+			root.join("Cargo.toml"),
+			"[workspace]\nmembers = [\"crates/*\", \"tools/*\"]\n",
+		)
+		.expect("workspace toml");
+		fs::write(
+			root.join("crates/alpha/Cargo.toml"),
+			"[package]\nname = \"alpha\"\nversion = \"0.1.0\"\n",
+		)
+		.expect("alpha toml");
+		fs::write(root.join("crates/alpha/src/lib.rs"), "pub fn x() {}\n").expect("alpha lib");
+		// `tools/` glob has no matching directory — must not nuke the map.
+		let map = build_cargo_member_map(&root).expect("map built");
+		assert!(map.contains_key("alpha"), "alpha must be present despite missing tools/; got {map:?}");
+		let _ = fs::remove_dir_all(&root);
+	}
+
+	#[test]
+	fn w3g_name_workspace_true_falls_back_to_workspace_package() {
+		use std::fs;
+		let root = std::env::temp_dir().join(format!("w3g-namews-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(root.join("crates/alpha/src")).expect("alpha");
+		fs::write(
+			root.join("Cargo.toml"),
+			"[workspace]\nmembers = [\"crates/*\"]\n[workspace.package]\nname = \"alpha\"\n",
+		)
+		.expect("workspace toml");
+		fs::write(
+			root.join("crates/alpha/Cargo.toml"),
+			"[package]\nname.workspace = true\nversion = \"0.1.0\"\n",
+		)
+		.expect("alpha toml inherits name");
+		fs::write(root.join("crates/alpha/src/lib.rs"), "\n").expect("alpha lib");
+		let map = build_cargo_member_map(&root).expect("map built");
+		assert!(map.contains_key("alpha"), "workspace-inherited name must register; got {map:?}");
+		let _ = fs::remove_dir_all(&root);
+	}
+
+	#[test]
 	fn rust_impl_trait_emits_implements_edge() {
 		// PLAN-318 W2: `impl Trait for Type` should yield an Implements edge
 		// from the impl block. Inherent impls (`impl Type { … }`) must not.
@@ -1632,5 +1855,56 @@ mod tests {
 			x_refs
 		);
 	}
+
+	#[test]
+	fn python_class_metaclass_kwarg_is_not_inherits() {
+		// PLAN-318 W2g (F1): `class X(Base, metaclass=ABCMeta):` must NOT
+		// emit Inherits→"metaclass". Only the positional Base is inherited.
+		let extractor =
+			EngineProfileExtractor::new(SupportedLanguage::new("python"), engine_registry());
+		let file = extractor
+			.extract(
+				Path::new("pkg/x.py"),
+				"class Base:\n    pass\nclass ABCMeta:\n    pass\nclass X(Base, metaclass=ABCMeta):\n    pass\n",
+			)
+			.expect("python extraction");
+		let x = file.symbols.iter().find(|s| s.name == "X").expect("X symbol");
+		assert!(
+			x.references.iter().any(|r| r.target_name == "Base" && r.edge_kind == EdgeKind::Inherits),
+			"Base should be Inherits; got {:?}",
+			x.references
+		);
+		assert!(
+			!x.references.iter().any(|r| r.target_name == "metaclass" && r.edge_kind == EdgeKind::Inherits),
+			"`metaclass` keyword must not be emitted as a base (Inherits); got {:?}",
+			x.references
+		);
+	}
+
+	#[test]
+	fn python_class_dotted_base_extracts_attribute_name() {
+		// PLAN-318 W2g (F2): `class Concrete(abc.ABC):` should emit
+		// Inherits→"ABC" (the attribute name), not "abc" (the module).
+		let extractor =
+			EngineProfileExtractor::new(SupportedLanguage::new("python"), engine_registry());
+		let file = extractor
+			.extract(
+				Path::new("pkg/x.py"),
+				"import abc\nclass Concrete(abc.ABC):\n    pass\n",
+			)
+			.expect("python extraction");
+		let concrete = file.symbols.iter().find(|s| s.name == "Concrete").expect("Concrete");
+		assert!(
+			concrete.references.iter().any(|r| r.target_name == "ABC" && r.edge_kind == EdgeKind::Inherits),
+			"expected Inherits→ABC; got {:?}",
+			concrete.references
+		);
+		assert!(
+			!concrete.references.iter().any(|r| r.target_name == "abc" && r.edge_kind == EdgeKind::Inherits),
+			"module name 'abc' must not be emitted as Inherits; got {:?}",
+			concrete.references
+		);
+	}
+
 
 }

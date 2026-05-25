@@ -172,6 +172,16 @@ impl EdgeResolverImpl {
 		if !matches!(kernel_kind, KernelEdgeKind::Def) {
 			return results;
 		}
+		// PLAN-318 W1g: def→ semantically means "all sites that reference
+		// this definition". Different extractors use different edge kinds for
+		// the same semantic relationship: tree-sitter dialects record concrete
+		// call expressions as Calls, while textual references show up as
+		// References. Both must be surfaced under def→.
+		for caller in self.neighbors(node, GraphEdgeKind::Calls, incoming) {
+			if !results.contains(&caller) {
+				results.push(caller);
+			}
+		}
 		// For def→: identify the file that defines this symbol, then walk
 		// Aliases edges (incoming) to that file = files that re-export it.
 		// Each re-exporter file becomes an additional referrer.
@@ -180,8 +190,6 @@ impl EdgeResolverImpl {
 				if !results.contains(&reexporter) {
 					results.push(reexporter);
 				}
-				// One more hop: anyone who imports the re-exporter sees the
-				// symbol too, but we cap at depth-1 here to avoid blow-up.
 			}
 		}
 		results
@@ -304,7 +312,15 @@ impl EdgeResolver for EdgeResolverImpl {
 
 				let mut next_level = Vec::new();
 				for node in &current_level {
-					for neighbor in self.neighbors(*node, graph_kind, is_incoming) {
+					// PLAN-318 W5g: depth>1 branch must follow re-exports too,
+					// otherwise a caller passing depth≥2 loses re-export
+					// transparency. Use the same helper as depth==1.
+					for neighbor in self.neighbours_with_reexport(
+						*node,
+						graph_kind,
+						is_incoming,
+						kernel_kind_for_reexport.clone(),
+					) {
 						if visited.insert(neighbor) {
 							if let Some(node_ref) = self.nodes.get(&neighbor).cloned() {
 								results.push(node_ref);

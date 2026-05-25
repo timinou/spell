@@ -41,14 +41,39 @@ fn execute(target: &str) -> Vec<CodePathChunk> {
 	execute_code_path_inner(opts(target), CancelToken::default()).unwrap()
 }
 
+fn has_file_not_found(chunks: &[CodePathChunk]) -> bool {
+	chunks.iter().any(|c| {
+		c.diagnostics
+			.iter()
+			.any(|d| d.variant.eq_ignore_ascii_case("FileNotFound"))
+	})
+}
+
+fn locators(chunks: &[CodePathChunk]) -> Vec<String> {
+	chunks
+		.iter()
+		.flat_map(|c| c.nodes.iter().map(|n| n.locator.clone()))
+		.collect()
+}
+
 #[test]
-fn def_arrow_on_reexported_class_smoke_does_not_panic() {
-	// Smoke: querying def→ on the re-exported class works end-to-end. The
-	// re-export Aliases edge is created during indexing; the dispatcher
-	// builds the graph + follows the chain. We don't assert specific
-	// referrers here because the fixture has no actual consumer file —
-	// the test exists to catch regressions in graph construction and
-	// the EdgeResolver's re-export hop logic.
+fn def_arrow_on_reexported_class_surfaces_consumer_through_reexport() {
+	// PLAN-318 W5g: real assertion. ToolThing is defined in tool_target.ts
+	// and re-exported by reexport_root.ts; reexport_consumer.ts imports
+	// ToolThing through reexport_root.ts. Without the Aliases-edge hop,
+	// def→ on ToolThing wouldn't surface reexport_consumer (its binding
+	// references reexport_root, not the symbol). With the hop, the
+	// re-exporter file itself (reexport_root.ts) shows up as a referrer.
 	let chunks = execute("tool_target.ts::ToolThing def\u{2192}");
 	assert!(!chunks.is_empty(), "must return at least one chunk");
+	assert!(
+		!has_file_not_found(&chunks),
+		"def→ on re-exported symbol must not FileNotFound; got diags: {:?}",
+		chunks.iter().flat_map(|c| c.diagnostics.iter().map(|d| d.message.clone())).collect::<Vec<_>>()
+	);
+	let locs = locators(&chunks);
+	assert!(
+		locs.iter().any(|l| l.contains("reexport_root.ts") || l.contains("reexport_consumer.ts")),
+		"expected re-exporter or consumer to surface as referrer; got locators: {locs:?}"
+	);
 }
