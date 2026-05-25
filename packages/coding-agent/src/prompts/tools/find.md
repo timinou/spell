@@ -4,8 +4,8 @@ target ::= Locator (Query)? (Qualifier)?
   Locator   path · glob · uri://
   Query     ::Sym  · ::§kind  · ::¶anchor  · ::field:  · A combinator B
   Pred      [N] [a..b] [text~="re"] [attr=val] [size>1M] [mtime>2026-01-01]
-  Combinator  / // ^ ^^ << >> ref→ def→ call→ import→ bind→ | & −
-  Qualifier   #body #sig #stat #tree #diff #listing #raw
+  Combinator  / // ^ ^^ << >> ref→ def→ call→ import→ bind→ implements→ inherits→ dispatches→ | & −
+  Qualifier   #body #sig #stat #tree #diff #listing #raw #hover
 
 <recipes>
 | want                | target                                      |
@@ -26,8 +26,12 @@ target ::= Locator (Query)? (Qualifier)?
 | any call            | `foo.ts::§call`                              |
 | any import          | `foo.ts::§import`                            |
 | raw TS kind         | `foo.ts::§function_declaration` (per-lang)   |
-| callers             | `foo.ts::Bar.method def→`                   |
+| callers             | `foo.ts::Bar.method def→`  (trailing → ≡ …def→§*) |
+| filter callers      | `foo.ts::Bar.method def→§call_expression` |
 | definition          | `foo.ts::useX ref→`                         |
+| implementers        | `foo.ts::IThing implements→`               |
+| base types          | `foo.py::Cls inherits→`                    |
+| signature           | `foo.ts::Bar.method#hover`                  |
 | recent              | `src/**/*.ts::§file[mtime>2026-05-01]`     |
 | uri                 | `memory://root` · `artifact://…` · `skill://…` |
 </recipes>
@@ -55,9 +59,12 @@ target ::= Locator (Query)? (Qualifier)?
 |---|---|---|
 | bind→ | Bind | From a use to its binding site (scope-local) |
 | call→ | Call | From a call site to the callee |
-| def→ | Definition | From a declaration to its references (set-valued) |
+| def→ | Definition | From a declaration to its references (set-valued). Trailing `→` is sugar for `…def→§*`. Follows re-export chains. |
 | import→ | Import | From an imported name to the source module |
 | ref→ | Reference | Follow a reference to its definition |
+| implements→ | Implements | From a type to the interface/trait it implements (TS `implements`, Rust `impl Trait for X`) |
+| inherits→ | Inherits | From a type to its base type (TS `extends`, Python `class X(Base)`) |
+| dispatches→ | Dispatches | From a polymorphic call site to candidate dispatch targets |
 <!-- @end -->
 
 <rules>

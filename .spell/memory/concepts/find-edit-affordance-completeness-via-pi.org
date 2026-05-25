@@ -1,0 +1,91 @@
+#+TITLE: find-edit-affordance-completeness-via-pi
+
+** ITEM find/edit affordance completeness via pi-code-graph
+
+PLAN-318 shipped (W0-W6) the structural surface that lets `find` answer
+semantic questions without bouncing through `lsp`.
+
+## What works now
+
+### Affordance fixes (W0)
+- Invalid glob → 0 results + diagnostic (no longer dumps workspace)
+- mid-identifier substring → refused unless `force: true`
+- `§function/§method/§class/§call/§import` universal aliases work per-dialect
+- Informational diagnostic variant suppresses noise when results present
+- Single-prefix edit error contract (no doubled "Edit error: Edit error:")
+
+### Graph queries (W1)
+- `Arc<CodeGraph>` workspace cache (code_graph_cache.rs)
+- `invalidate_for_file` API for watcher (subscription wiring: FUP-092)
+- `graph_stats` manage handler returns live cache state
+- napi.rs edge dispatch: when query chain has `Edge` combinator, prefix
+  resolves via code resolver → EdgeResolverImpl walks graph → results
+  filtered by trailing step (`§*` default if absent)
+
+### Trailing-step semantics (W1)
+- Parser: `...def→` (no tail step) synthesizes `§*` tail. Earlier
+  behavior silently dropped the edge combinator.
+
+### New edge kinds (W2)
+- `implements→` `inherits→` `dispatches→` added to kernel EdgeKind.
+- TS: extends vs implements properly differentiated (was conflated).
+- Rust: `impl Trait for X` → Implements (inherent impls excluded).
+- Python: `class X(Base, Mixin)` → Inherits per superclass.
+
+### Module-path resolution (W3)
+- TS: tsconfig paths/baseUrl already wired via oxc_resolver (locked
+  via test).
+- Rust: Cargo workspace member resolution. `use foo_bar::X` resolves
+  through `[workspace] members` glob, reads each member's `[package]
+  name`. `_<->-` swap handled. Per-process cache.
+- Python: `__init__.py` package resolution covered by
+  resolve_python_import.
+
+### Universal #hover qualifier (W4)
+- `find { target: "foo.ts::compute#hover" }` returns the signature line
+  (truncated at `{` / newline / `=>`). Dialect-independent: walker
+  special-cases `q.name == "hover"` before per-dialect dispatch.
+
+### Re-export chain following (W5)
+- ExtractedImport.is_reexport: tracked by extractors.
+  - TS: `export ... from` sets it
+  - Rust generic: `pub use foo::X` sets it
+- Indexer: re-exports emit additional Aliases edge.
+- EdgeResolverImpl::neighbours_with_reexport: for `def→`, also include
+  files that have Aliases edges to the symbol's defining file (one
+  hop, bounded).
+
+### LSP demoted (W6)
+- `lsp` tool moved from `core` to `specialized` tier. Remains
+  available for type-aware queries and live diagnostics (FUP-090/091
+  for type-checker integration inside pi-code-graph).
+
+## Still gaps (FUPs)
+- FUP-090 type-aware ref resolution (polymorphic dispatch precision)
+- FUP-091 inferred-type hover
+- FUP-092 watcher subscription wiring (API exists; subscriber hook
+  to pi-code-engine watcher pending)
+- Clojure/Elixir polymorphic Dispatches extraction (needs
+  defprotocol/defimpl/extend-type reasoning)
+- Multi-edge chain support in dispatcher (currently single Edge
+  consumes rest of chain)
+
+## Key files
+- Parser: crates/pi-code-path/src/parser.rs::parse_query (trailing edge)
+- Kernel edges: crates/pi-code-path/src/ast.rs::EdgeKind
+- Edge dispatch: crates/pi-natives/src/code_path/edge_dispatch.rs
+- Edge resolver: crates/pi-natives/src/code_path/edge_resolver/mod.rs
+- Cache: crates/pi-natives/src/code_graph_cache.rs
+- TS heritage split: crates/pi-code-graph/src/language/typescript.rs
+- Rust impl+Cargo workspace: crates/pi-code-graph/src/language/generic.rs
+- Indexer Aliases edge: crates/pi-code-graph/src/indexer.rs
+- Universal #hover: crates/pi-natives/src/code_path/code_resolver/walker.rs
+:PROPERTIES:
+:CUSTOM_ID: CON-find-edit-affordance-completeness-via-pi
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-25T12:31:43Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: PLAN-318
+:END:
