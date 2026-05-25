@@ -1126,6 +1126,7 @@ mod tests {
 							local_name:    "callee".into(),
 						}],
 						is_type_only: false,
+						is_reexport:  false,
 					}],
 					vec![ExtractedReference {
 						target_name: "callee".into(),
@@ -1140,6 +1141,7 @@ mod tests {
 							local_name:    "type_only".into(),
 						}],
 						is_type_only: true,
+						is_reexport:  false,
 					}],
 					Vec::new(),
 				),

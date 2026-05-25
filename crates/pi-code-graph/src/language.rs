@@ -78,6 +78,10 @@ pub struct ExtractedImport {
 	pub specifier:    String,
 	pub bindings:     Vec<ExtractedImportBinding>,
 	pub is_type_only: bool,
+	/// PLAN-318 W5: this import is itself a re-export (`export ... from`,
+	/// `pub use ...`). Used by the EdgeResolver's `def→` walk to follow
+	/// re-export chains transitively.
+	pub is_reexport:  bool,
 }
 
 #[derive(Debug, Clone)]

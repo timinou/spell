@@ -137,6 +137,7 @@ fn extract_elixir_file(path: &Path, source: &str) -> Result<ExtractedFile> {
 				specifier:    full_name.clone(),
 				bindings:     vec![ExtractedImportBinding { imported_name: full_name, local_name }],
 				is_type_only: false,
+				is_reexport:  false,
 			});
 		}
 

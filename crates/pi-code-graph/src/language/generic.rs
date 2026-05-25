@@ -216,14 +216,23 @@ fn generic_import(
 			.and_then(|specifier| node_text(source, specifier))
 			.map(trim_delimiters)?
 	};
-	Some(ExtractedImport { specifier, bindings: Vec::new(), is_type_only: pattern.is_type_only })
+ Some(ExtractedImport { specifier, bindings: Vec::new(), is_type_only: pattern.is_type_only, is_reexport: false })
 }
 
 fn rust_imports(node: Node<'_>, source: &str) -> Vec<ExtractedImport> {
 	let text = node_text(source, node).unwrap_or_default();
 	let mut raw = text.trim();
+	// PLAN-318 W5: `pub use foo::Bar` is a re-export. Strip the visibility
+	// keyword(s) (`pub`, `pub(crate)`, `pub(super)`, `pub(in path)`) and
+	// remember whether we did.
+	let is_reexport = raw.starts_with("pub");
 	if let Some(stripped) = raw.strip_prefix("pub ") {
 		raw = stripped.trim_start();
+	} else if raw.starts_with("pub(") {
+		// `pub(crate) use ...` / `pub(super) use ...` / `pub(in path) use ...`
+		if let Some(close) = raw.find(')') {
+			raw = raw[close + 1..].trim_start();
+		}
 	}
 	let Some(stripped) = raw.strip_prefix("use ") else {
 		return Vec::new();
@@ -243,7 +252,7 @@ fn rust_imports(node: Node<'_>, source: &str) -> Vec<ExtractedImport> {
 				Some(ExtractedImportBinding { imported_name, local_name })
 			})
 			.collect::<Vec<_>>();
-		return vec![ExtractedImport { specifier, bindings, is_type_only: false }];
+  return vec![ExtractedImport { specifier, bindings, is_type_only: false, is_reexport }];
 	}
 	let (path_without_alias, alias) = split_alias(stripped);
 	if path_without_alias.ends_with("::*") {
@@ -251,6 +260,7 @@ fn rust_imports(node: Node<'_>, source: &str) -> Vec<ExtractedImport> {
 			specifier:    path_without_alias.trim_end_matches("::*").to_string(),
 			bindings:     Vec::new(),
 			is_type_only: false,
+			is_reexport,
 		}];
 	}
 	let imported_name = path_without_alias
@@ -265,6 +275,7 @@ fn rust_imports(node: Node<'_>, source: &str) -> Vec<ExtractedImport> {
 			local_name:    alias.unwrap_or(imported_name),
 		}],
 		is_type_only: false,
+		is_reexport,
 	}]
 }
 
@@ -292,6 +303,7 @@ fn python_imports(node: Node<'_>, source: &str) -> Vec<ExtractedImport> {
 						local_name:    alias.unwrap_or(imported_name),
 					}],
 					is_type_only: false,
+					is_reexport:  false,
 				})
 			})
 			.collect();
@@ -320,6 +332,7 @@ fn python_imports(node: Node<'_>, source: &str) -> Vec<ExtractedImport> {
 		specifier: module_specifier.trim().to_string(),
 		bindings,
 		is_type_only: false,
+		is_reexport:  false,
 	}]
 }
 
