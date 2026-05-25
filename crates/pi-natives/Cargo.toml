@@ -141,6 +141,10 @@ criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3"
 strum = { version = "0.26", features = ["derive"] }
 filetime = "0.2"
+# tree-sitter language crates for unified_tests — versions match pi-code-engine
+# to avoid multiple-crate conflicts in the shared dep graph
+tree-sitter-typescript = "0.23"
+tree-sitter-elixir = "0.3"
 
 [[bench]]
 name = "codepath_bench"
