@@ -194,15 +194,19 @@ fn to_graph_locator(start: &NodeRef, root: &std::path::Path) -> NodeRef {
 		.get("line")
 		.and_then(|v| v.as_u64())
 		.unwrap_or(0);
-	// Use absolute path (pi-code-graph stores absolute paths from canonicalized
-	// root walk).
+	// PLAN-318 W1g (F1): pi-code-graph stores symbols by path RELATIVE to the
+	// workspace root (see pi-code-graph/src/indexer.rs setting
+	// SymbolNode.file = relative_path). Earlier code emitted absolute paths
+	// here which never matched any indexed symbol — every edge query silently
+	// returned empty + a swallowed FileNotFound diagnostic. Strip root.
 	let abs = if std::path::Path::new(&start.locator).is_absolute() {
 		PathBuf::from(&start.locator)
 	} else {
 		root.join(&start.locator)
 	};
+	let rel = abs.strip_prefix(root).map(|p| p.to_path_buf()).unwrap_or(abs);
 	let mut copy = start.clone();
-	copy.locator = format!("{}:{}", abs.display(), line);
+	copy.locator = format!("{}:{}", rel.display(), line);
 	copy
 }
 
