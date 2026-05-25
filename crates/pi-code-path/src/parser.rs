@@ -245,6 +245,17 @@ fn parse_query<N: NameLexer>(input: &mut &str, name_lexer: &N) -> ModalResult<Qu
 			Ok(c) => match parse_step(input, name_lexer) {
 				Ok(s) => chain.push((c, s)),
 				Err(_) => {
+					// PLAN-318 W1 trailing-step semantics: `…def→` (no tail step)
+					// is sugar for `…def→§*` — return all neighbours regardless
+					// of kind. For non-Edge combinators, rollback as before.
+					if let Combinator::Edge(_) = c {
+						chain.push((c, Step {
+							axis:       Some(Axis::Structural),
+							head:       Head::NodeKind("*".to_string()),
+							predicates: Vec::new(),
+						}));
+						break;
+					}
 					*input = snapshot;
 					break;
 				},
@@ -1770,5 +1781,43 @@ mod tests {
 		{
 			rt(form);
 		}
+	}
+}
+#[cfg(test)]
+mod trailing_edge_tests {
+	use super::tests::DotLexer;
+	use super::*;
+
+	#[test]
+	fn trailing_def_arrow_synthesizes_star_step() {
+		let cp = parse_code_path("foo.ts::Bar def→", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert_eq!(q.chain.len(), 1, "trailing def→ should produce one tail step, not zero");
+		assert!(matches!(q.chain[0].0, Combinator::Edge(EdgeKind::Def)));
+		assert!(matches!(q.chain[0].1.head, Head::NodeKind(ref s) if s == "*"));
+	}
+
+	#[test]
+	fn trailing_call_arrow_synthesizes_star_step() {
+		let cp = parse_code_path("foo.ts::Bar call→", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert_eq!(q.chain.len(), 1);
+		assert!(matches!(q.chain[0].0, Combinator::Edge(EdgeKind::Call)));
+	}
+
+	#[test]
+	fn trailing_non_edge_still_rolls_back() {
+		// Non-edge combinators must still roll back when no step follows;
+		// trailing `/` or `//` should not produce a phantom step.
+		let cp = parse_code_path("foo.ts::Bar", &DotLexer).unwrap();
+		assert_eq!(cp.query.unwrap().chain.len(), 0);
+	}
+
+	#[test]
+	fn explicit_trailing_step_preserved() {
+		let cp = parse_code_path("foo.ts::Bar def→§call_expression", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert_eq!(q.chain.len(), 1);
+		assert!(matches!(q.chain[0].1.head, Head::NodeKind(ref s) if s == "call_expression"));
 	}
 }

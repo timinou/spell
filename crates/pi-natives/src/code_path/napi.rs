@@ -23,7 +23,7 @@ use pi_code_path::{
 use winnow::{Parser, token::take_while};
 
 use super::{
-	code_resolver, css_resolver, dialect_registry, diff_qualifier,
+	code_resolver, css_resolver, dialect_registry, diff_qualifier, edge_dispatch,
 	extractors::default_extractors,
 	heading_resolver,
 	marshal::{ARTIFACT_THRESHOLD, diagnostic_to_dto, mutation_outcome_to_dto, nodes_to_dtos},
@@ -756,6 +756,33 @@ pub fn execute_code_path_inner(
 				.extend(parse_diagnostics.into_iter().map(crate::code_path::marshal::diagnostic_to_dto));
 		}
 		return Ok(vec![chunk]);
+	}
+
+	// ── Edge dispatch (PLAN-318 W1) ──────────────────────────────
+	// When the query chain contains an Edge combinator (ref→/def→/call→/
+	// import→/bind→), resolve the prefix as a normal symbol query, then
+	// walk the cached pi-code-graph to produce the edge's neighbours.
+	if let Some(edge_pos) = cp
+		.query
+		.as_ref()
+		.and_then(|q| q.chain.iter().position(|(c, _)| matches!(c, pi_code_path::ast::Combinator::Edge(_))))
+	{
+		if let Locator::Fs(_) = &cp.locator {
+			return edge_dispatch::resolve(
+				cp,
+				edge_pos,
+				root,
+				opts.gitignore,
+				opts.artifact_threshold,
+				opts.head,
+				opts.tail,
+				opts.offset,
+				opts.limit,
+				parse_diagnostics,
+				&pi_token,
+				&cancel_token,
+			);
+		}
 	}
 
 	// ── Query path (default) ─────────────────────────────────────
