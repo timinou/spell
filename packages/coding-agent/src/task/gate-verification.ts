@@ -90,7 +90,16 @@ export function matchesGateCmd(gateCmd: string, executions: TrackedBashExecution
 	return executions.some(execution => {
 		if (execution.exitCode !== 0) return false;
 		const executionCwd = execution.cwd ? path.resolve(execution.cwd) : resolveCommandCwd(execution.command, cwd);
-		return normalizeCommand(execution.command) === normalizedGateCmd && executionCwd === expectedCwd;
+		const normalizedExecution = normalizeCommand(execution.command);
+		// Prefix match so that shell pipes (| tail -5), redirects (2>&1),
+		// and extra arguments (--verbose) appended to the gate command
+		// still count as satisfying the gate. The trailing-space boundary
+		// prevents "cargo test -p foo" from matching "cargo test -p foobar".
+		return (
+			(normalizedExecution === normalizedGateCmd ||
+				normalizedExecution.startsWith(normalizedGateCmd + " ")) &&
+			executionCwd === expectedCwd
+		);
 	});
 }
 

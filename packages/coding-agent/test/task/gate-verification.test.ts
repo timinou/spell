@@ -93,9 +93,44 @@ describe("gate verification", () => {
 			expect(matchesGateCmd("bun test", executions, "/app")).toBe(true);
 		});
 
-		it("returns false when only a substring matches", () => {
+		it("matches prefix with extra arguments", () => {
 			const executions: TrackedBashExecution[] = [{ command: "bun test foo.ts", exitCode: 0, cwd: "/app" }];
-			expect(matchesGateCmd("bun test", executions, "/app")).toBe(false);
+			expect(matchesGateCmd("bun test", executions, "/app")).toBe(true);
+		});
+
+		it("matches when gateCmd is followed by a shell pipe", () => {
+			const executions: TrackedBashExecution[] = [
+				{ command: "bun test | tail -5", exitCode: 0, cwd: "/app" },
+			];
+			expect(matchesGateCmd("bun test", executions, "/app")).toBe(true);
+		});
+
+		it("matches when gateCmd is followed by a redirect", () => {
+			const executions: TrackedBashExecution[] = [
+				{ command: "bun test 2>&1", exitCode: 0, cwd: "/app" },
+			];
+			expect(matchesGateCmd("bun test", executions, "/app")).toBe(true);
+		});
+
+		it("matches gateCmd with pipe and redirect combined", () => {
+			const executions: TrackedBashExecution[] = [
+				{ command: "cd /app && cargo test -p pi-code-engine watcher 2>&1 | tail -5", exitCode: 0, cwd: "/app" },
+			];
+			expect(matchesGateCmd("cargo test -p pi-code-engine watcher", executions, "/app")).toBe(true);
+		});
+
+		it("matches gateCmd with extra flags", () => {
+			const executions: TrackedBashExecution[] = [
+				{ command: "cargo test --workspace --verbose", exitCode: 0, cwd: "/app" },
+			];
+			expect(matchesGateCmd("cargo test --workspace", executions, "/app")).toBe(true);
+		});
+
+		it("returns false when gateCmd is a substring inside a word", () => {
+			const executions: TrackedBashExecution[] = [
+				{ command: "cargo test -p foobar", exitCode: 0, cwd: "/app" },
+			];
+			expect(matchesGateCmd("cargo test -p foo", executions, "/app")).toBe(false);
 		});
 
 		it("returns false when the cwd does not match", () => {
