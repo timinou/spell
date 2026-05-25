@@ -169,6 +169,12 @@ impl CodeGraphBuilder {
 				};
 				if let Some(&to_index) = file_nodes.get(&target) {
 					graph.add_edge(from_index, to_index, file_edge);
+					// PLAN-318 W5: re-exports (e.g. `export * from`, `pub use`)
+					// get an additional Aliases edge so the EdgeResolver can
+					// follow re-export chains transitively when resolving def→.
+					if import.is_reexport {
+						graph.add_edge(from_index, to_index, EdgeKind::Aliases);
+					}
 					for ExtractedImportBinding { imported_name, local_name } in &import.bindings {
 						import_bindings
 							.entry(path.clone())
@@ -506,6 +512,7 @@ mod tests {
 									local_name:    "calleeAlias".into(),
 								}],
 								is_type_only: false,
+								is_reexport:  false,
 							}],
 							vec![ExtractedReference {
 								target_name: "calleeAlias".into(),
@@ -520,6 +527,7 @@ mod tests {
 									local_name:    "calleeAlias".into(),
 								}],
 								is_type_only: true,
+								is_reexport:  false,
 							}],
 							Vec::new(),
 						),

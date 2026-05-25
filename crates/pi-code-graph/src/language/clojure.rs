@@ -170,7 +170,7 @@ fn extract_namespace(source: &str) -> Option<NamespaceInfo> {
 					.to_string(),
 			});
 		}
-		imports.push(ExtractedImport { specifier, bindings, is_type_only: false });
+  imports.push(ExtractedImport { specifier, bindings, is_type_only: false, is_reexport: false });
 	}
 	Some(NamespaceInfo { name, imports, aliases, refers })
 }

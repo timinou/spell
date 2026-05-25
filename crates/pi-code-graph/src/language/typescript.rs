@@ -195,10 +195,13 @@ fn parse_export_statement(
 			let bindings = named_child(node, "export_clause")
 				.map(|clause| collect_export_bindings(clause, source))
 				.unwrap_or_default();
+			// PLAN-318 W5: `export ... from` IS a re-export; the import path
+			// is being re-published from this module.
 			imports.push(ExtractedImport {
 				specifier,
 				bindings,
 				is_type_only: node_text(node, source).starts_with("export type"),
+				is_reexport:  true,
 			});
 		}
 	}
@@ -400,6 +403,7 @@ fn parse_import_statement(node: Node<'_>, source: &str) -> Result<Option<Extract
 			specifier,
 			bindings: vec![ExtractedImportBinding { imported_name: "default".into(), local_name }],
 			is_type_only: false,
+			is_reexport: false,
 		}));
 	}
 	let Some(source_node) = node.child_by_field_name("source") else {
@@ -416,6 +420,7 @@ fn parse_import_statement(node: Node<'_>, source: &str) -> Result<Option<Extract
 		specifier,
 		bindings,
 		is_type_only: node_text(node, source).starts_with("import type"),
+		is_reexport: false,
 	}))
 }
 

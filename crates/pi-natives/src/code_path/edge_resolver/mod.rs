@@ -154,6 +154,50 @@ impl EdgeResolverImpl {
 		}
 	}
 
+	/// PLAN-318 W5: like [`neighbors`], plus one hop of re-export chain
+	/// following for `def→` queries. When `kind == References` and we're
+	/// looking incoming (i.e. "who references this symbol?"), also include
+	/// any file that has an `Aliases` edge to the starting symbol's file.
+	/// Those files are re-exporters whose downstream consumers would
+	/// otherwise be invisible — their bindings reference the re-export
+	/// module, not the original symbol.
+	fn neighbours_with_reexport(
+		&self,
+		node: usize,
+		kind: GraphEdgeKind,
+		incoming: bool,
+		kernel_kind: KernelEdgeKind,
+	) -> Vec<usize> {
+		let mut results = self.neighbors(node, kind, incoming);
+		if !matches!(kernel_kind, KernelEdgeKind::Def) {
+			return results;
+		}
+		// For def→: identify the file that defines this symbol, then walk
+		// Aliases edges (incoming) to that file = files that re-export it.
+		// Each re-exporter file becomes an additional referrer.
+		if let Some(file_node) = self.symbol_defining_file(node) {
+			for reexporter in self.neighbors(file_node, GraphEdgeKind::Aliases, true) {
+				if !results.contains(&reexporter) {
+					results.push(reexporter);
+				}
+				// One more hop: anyone who imports the re-exporter sees the
+				// symbol too, but we cap at depth-1 here to avoid blow-up.
+			}
+		}
+		results
+	}
+
+	/// Find the file node that defines `symbol_node` by walking the incoming
+	/// Defines edge. Returns None for non-symbol nodes or unrooted symbols.
+	fn symbol_defining_file(&self, symbol_node: usize) -> Option<usize> {
+		self
+			.incoming
+			.get(&symbol_node)?
+			.iter()
+			.find(|(_, k)| *k == GraphEdgeKind::Defines)
+			.map(|(n, _)| *n)
+	}
+
 	/// Return the neighbours of `node` that are connected by `kind` in the
 	/// requested direction.
 	fn neighbors(&self, node: usize, kind: GraphEdgeKind, incoming: bool) -> Vec<usize> {
@@ -211,6 +255,7 @@ impl EdgeResolver for EdgeResolverImpl {
 			});
 		};
 
+		let kernel_kind_for_reexport = kind.clone();
 		let Some((graph_kind, is_incoming)) = Self::to_graph_edge(kind) else {
 			return Err(Diagnostic {
 				variant: DiagnosticVariant::UnsupportedOperation,
@@ -229,7 +274,8 @@ impl EdgeResolver for EdgeResolverImpl {
 		visited.insert(start);
 
 		if max_depth == 1 {
-			for neighbor in self.neighbors(start, graph_kind, is_incoming) {
+			let neighbour_set = self.neighbours_with_reexport(start, graph_kind, is_incoming, kernel_kind_for_reexport);
+			for neighbor in neighbour_set {
 				if cancel.is_cancelled() {
 					return Err(Diagnostic {
 						variant: DiagnosticVariant::Cancelled,
