@@ -145,6 +145,12 @@ impl EdgeResolverImpl {
 			KernelEdgeKind::Import => Some((GraphEdgeKind::Imports, false)),
 			// bind→ : scope-local, not in graph
 			KernelEdgeKind::Bind => None,
+			// implements→ : from type to interface/trait → outgoing Implements
+			KernelEdgeKind::Implements => Some((GraphEdgeKind::Implements, false)),
+			// inherits→ : from type to base type → outgoing Inherits
+			KernelEdgeKind::Inherits => Some((GraphEdgeKind::Inherits, false)),
+			// dispatches→ : polymorphic call → outgoing Dispatches
+			KernelEdgeKind::Dispatches => Some((GraphEdgeKind::Dispatches, false)),
 		}
 	}
 

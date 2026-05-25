@@ -360,8 +360,88 @@ fn collect_references_for_symbol(
 		return Vec::new();
 	};
 	let mut references = Vec::new();
+	// PLAN-318 W2: per-language heritage edges (Inherits / Implements).
+	// The generic extractor's reference scan only emits References; richer
+	// graph edges come from this dedicated pass.
+	collect_heritage_for_symbol(profile, source, root, &mut references);
 	collect_references(profile, source, root, root, name_range, &mut references);
 	dedupe_references(references)
+}
+
+/// PLAN-318 W2: extract per-language heritage edges. Rust: `impl Trait for X`
+/// emits Implements. Python: `class X(Base)` emits Inherits. Other languages
+/// are no-ops here — their heritage either flows through the generic
+/// reference scan or has its own dedicated extractor.
+fn collect_heritage_for_symbol(
+	profile: &LanguageProfile,
+	source: &str,
+	root: Node<'_>,
+	out: &mut Vec<ExtractedReference>,
+) {
+	match profile.id.as_str() {
+		"rust" => collect_rust_heritage(source, root, out),
+		"python" => collect_python_heritage(source, root, out),
+		_ => {},
+	}
+}
+
+/// Rust: `impl Trait for Type` → Type Implements Trait. The declaration node
+/// for a Rust impl block is `impl_item`; the trait being implemented sits in
+/// the `trait` field, and the receiver type in the `type` field.
+fn collect_rust_heritage(source: &str, root: Node<'_>, out: &mut Vec<ExtractedReference>) {
+	if root.kind() != "impl_item" {
+		return;
+	}
+	let Some(trait_node) = root.child_by_field_name("trait") else {
+		// Inherent impl (e.g. `impl Runner { ... }`) — no Implements edge.
+		return;
+	};
+	let trait_name = extract_type_name(source, trait_node);
+	if !trait_name.is_empty() {
+		out.push(ExtractedReference {
+			target_name: trait_name,
+			edge_kind:   EdgeKind::Implements,
+		});
+	}
+}
+
+/// Python: `class X(Base, ABC)` → X Inherits each superclass.
+fn collect_python_heritage(source: &str, root: Node<'_>, out: &mut Vec<ExtractedReference>) {
+	if root.kind() != "class_definition" {
+		return;
+	}
+	let Some(superclasses) = root.child_by_field_name("superclasses") else {
+		return;
+	};
+	let mut cursor = superclasses.walk();
+	for child in superclasses.named_children(&mut cursor) {
+		let name = extract_type_name(source, child);
+		if !name.is_empty() {
+			out.push(ExtractedReference {
+				target_name: name,
+				edge_kind:   EdgeKind::Inherits,
+			});
+		}
+	}
+}
+
+/// Extract the leading identifier text from a type-ish node, walking through
+/// generic_type / scoped_type_identifier wrappers to find the base name.
+fn extract_type_name(source: &str, node: Node<'_>) -> String {
+	match node.kind() {
+		"type_identifier" | "identifier" | "primitive_type" => node_text(source, node).unwrap_or_default().to_string(),
+		"generic_type" | "scoped_type_identifier" | "scoped_identifier" => {
+			node
+				.child_by_field_name("name")
+				.or_else(|| node.named_child(0))
+				.map(|c| extract_type_name(source, c))
+				.unwrap_or_default()
+		},
+		_ => node
+			.named_child(0)
+			.map(|c| extract_type_name(source, c))
+			.unwrap_or_default(),
+	}
 }
 
 fn collect_references(
@@ -1238,4 +1318,66 @@ mod tests {
 		assert_eq!(languages, expected);
 		let _ = fs::remove_dir_all(root);
 	}
+
+	#[test]
+	fn rust_impl_trait_emits_implements_edge() {
+		// PLAN-318 W2: `impl Trait for Type` should yield an Implements edge
+		// from the impl block. Inherent impls (`impl Type { … }`) must not.
+		let extractor =
+			EngineProfileExtractor::new(SupportedLanguage::new("rust"), engine_registry());
+		let file = extractor
+			.extract(
+				Path::new("src/lib.rs"),
+				"pub trait Tool {}\npub struct Runner;\nimpl Tool for Runner {}\nimpl Runner { fn new() -> Self { Self } }\n",
+			)
+			.expect("rust extraction should succeed");
+		let all_refs: Vec<_> = file
+			.symbols
+			.iter()
+			.flat_map(|s| s.references.iter())
+			.collect();
+		assert!(
+			all_refs
+				.iter()
+				.any(|r| r.target_name == "Tool" && r.edge_kind == EdgeKind::Implements),
+			"expected `impl Tool for Runner` to yield Tool/Implements; got {:?}",
+			all_refs
+		);
+	}
+
+	#[test]
+	fn python_class_superclass_emits_inherits_edge() {
+		// PLAN-318 W2: `class X(Base)` yields Base/Inherits.
+		let extractor =
+			EngineProfileExtractor::new(SupportedLanguage::new("python"), engine_registry());
+		let file = extractor
+			.extract(
+				Path::new("pkg/x.py"),
+				"class Base:\n    pass\nclass Mixin:\n    pass\nclass X(Base, Mixin):\n    pass\n",
+			)
+			.expect("python extraction should succeed");
+		let x_refs: Vec<_> = file
+			.symbols
+			.iter()
+			.find(|s| s.name == "X")
+			.expect("X symbol")
+			.references
+			.iter()
+			.collect();
+		assert!(
+			x_refs
+				.iter()
+				.any(|r| r.target_name == "Base" && r.edge_kind == EdgeKind::Inherits),
+			"expected Base/Inherits; got {:?}",
+			x_refs
+		);
+		assert!(
+			x_refs
+				.iter()
+				.any(|r| r.target_name == "Mixin" && r.edge_kind == EdgeKind::Inherits),
+			"expected Mixin/Inherits; got {:?}",
+			x_refs
+		);
+	}
+
 }

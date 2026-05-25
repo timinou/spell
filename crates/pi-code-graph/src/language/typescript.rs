@@ -530,23 +530,33 @@ fn collect_references(node: Node<'_>, source: &str) -> Vec<ExtractedReference> {
 fn collect_heritage_references(node: Node<'_>, source: &str) -> Vec<ExtractedReference> {
 	let mut refs = Vec::new();
 	visit_named(node, &mut |child| {
-		if !matches!(child.kind(), "extends_clause" | "implements_clause" | "extends_type_clause") {
-			return;
-		}
+		// PLAN-318 W2: differentiate `extends` (Inherits) from `implements`
+		// (Implements). Earlier code conflated both into Inherits, making it
+		// impossible to ask "who implements this interface?" via the graph.
+		let edge_for_clause = match child.kind() {
+			"extends_clause" | "extends_type_clause" => EdgeKind::Inherits,
+			"implements_clause" => EdgeKind::Implements,
+			_ => return,
+		};
 		let mut clause_cursor = child.walk();
 		for clause_child in child.named_children(&mut clause_cursor) {
-			collect_heritage_from_type(clause_child, source, &mut refs);
+			collect_heritage_from_type(clause_child, source, &mut refs, edge_for_clause);
 		}
 	});
 	dedupe_references(refs)
 }
 
-fn collect_heritage_from_type(node: Node<'_>, source: &str, refs: &mut Vec<ExtractedReference>) {
+fn collect_heritage_from_type(
+	node: Node<'_>,
+	source: &str,
+	refs: &mut Vec<ExtractedReference>,
+	edge: EdgeKind,
+) {
 	match node.kind() {
 		"type_identifier" | "identifier" | "nested_type_identifier" => {
 			let target_name = node_text(node, source);
 			if !target_name.is_empty() {
-				refs.push(ExtractedReference { target_name, edge_kind: EdgeKind::Inherits });
+				refs.push(ExtractedReference { target_name, edge_kind: edge });
 			}
 		},
 		"type_arguments" | "type_parameters" => {
@@ -560,13 +570,13 @@ fn collect_heritage_from_type(node: Node<'_>, source: &str, refs: &mut Vec<Extra
 		"generic_type" => {
 			let mut cursor = node.walk();
 			for child in node.named_children(&mut cursor) {
-				collect_heritage_from_type(child, source, refs);
+				collect_heritage_from_type(child, source, refs, edge);
 			}
 		},
 		_ => {
 			let mut cursor = node.walk();
 			for child in node.named_children(&mut cursor) {
-				collect_heritage_from_type(child, source, refs);
+				collect_heritage_from_type(child, source, refs, edge);
 			}
 		},
 	}
@@ -791,10 +801,12 @@ export class Runner implements AgentTool<typeof schema> {
 					.iter()
 					.any(|reference| reference.target_name == "beta")
 		}));
+		// PLAN-318 W2: `implements AgentTool<…>` now produces an
+		// Implements edge (not Inherits, which is reserved for `extends`).
 		assert!(file.symbols.iter().any(|symbol| {
 			symbol.name == "Runner"
 				&& symbol.references.iter().any(|reference| {
-					reference.target_name == "AgentTool" && reference.edge_kind == EdgeKind::Inherits
+					reference.target_name == "AgentTool" && reference.edge_kind == EdgeKind::Implements
 				})
 		}));
 	}
@@ -827,6 +839,32 @@ export class Runner implements AgentTool<typeof schema> {
 	}
 
 	#[test]
+	fn implements_clause_emits_implements_edge_not_inherits() {
+		// PLAN-318 W2: `class Foo implements I` must emit Implements,
+		// not Inherits. Inherits is reserved for `extends`.
+		let extractor = TypeScriptExtractor;
+		let file = extractor
+			.extract(
+				Path::new("impl.ts"),
+				r#"export class Foo implements IThing, JThing {}"#,
+			)
+			.expect("extract should succeed");
+		let foo = file
+			.symbols
+			.iter()
+			.find(|s| s.name == "Foo")
+			.expect("Foo symbol should exist");
+		assert!(foo.references.iter().any(|r| r.target_name == "IThing"
+			&& r.edge_kind == EdgeKind::Implements));
+		assert!(foo.references.iter().any(|r| r.target_name == "JThing"
+			&& r.edge_kind == EdgeKind::Implements));
+		assert!(
+			!foo.references.iter().any(|r| r.edge_kind == EdgeKind::Inherits),
+			"implements must not emit Inherits"
+		);
+	}
+
+	#[test]
 	fn heritage_distinguishes_base_from_type_param() {
 		let extractor = TypeScriptExtractor;
 		let file = extractor
@@ -847,8 +885,9 @@ export class Runner implements AgentTool<typeof schema> {
 		assert!(foo.references.iter().any(|reference| {
 			reference.target_name == "Bar" && reference.edge_kind == EdgeKind::Inherits
 		}));
+		// PLAN-318 W2: implements clause → Implements (not Inherits).
 		assert!(foo.references.iter().any(|reference| {
-			reference.target_name == "Qux" && reference.edge_kind == EdgeKind::Inherits
+			reference.target_name == "Qux" && reference.edge_kind == EdgeKind::Implements
 		}));
 		assert!(foo.references.iter().any(|reference| {
 			reference.target_name == "Baz" && reference.edge_kind == EdgeKind::TypeParameterOf

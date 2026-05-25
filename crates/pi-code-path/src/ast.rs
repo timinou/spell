@@ -225,6 +225,12 @@ pub enum EdgeKind {
 	Import,
 	/// bind→ — from a use to its binding site (scope-local).
 	Bind,
+	/// implements→ — PLAN-318 W2: from a type to the interface/trait it implements.
+	Implements,
+	/// inherits→ — PLAN-318 W2: from a type to its base type.
+	Inherits,
+	/// dispatches→ — PLAN-318 W2: from a polymorphic call site to candidate dispatch targets.
+	Dispatches,
 }
 
 // ── NodeSet ───────────────────────────────────────────────────────
@@ -277,6 +283,9 @@ impl fmt::Display for EdgeKind {
 			EdgeKind::Call => write!(f, "call→"),
 			EdgeKind::Import => write!(f, "import→"),
 			EdgeKind::Bind => write!(f, "bind→"),
+			EdgeKind::Implements => write!(f, "implements→"),
+			EdgeKind::Inherits => write!(f, "inherits→"),
+			EdgeKind::Dispatches => write!(f, "dispatches→"),
 		}
 	}
 }

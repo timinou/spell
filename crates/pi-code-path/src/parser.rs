@@ -727,7 +727,12 @@ fn tokenise_segment(seg: &str) -> Result<Vec<FsSegment>, ()> {
 	Ok(out)
 }
 fn edge_kind_p(input: &mut &str) -> ModalResult<EdgeKind> {
+	// PLAN-318 W2: order matters — longer prefixes first so `implements`
+	// isn't accidentally matched as `imp`+`lements`.
 	alt((
+		"implements".value(EdgeKind::Implements),
+		"inherits".value(EdgeKind::Inherits),
+		"dispatches".value(EdgeKind::Dispatches),
 		"import".value(EdgeKind::Import),
 		"call".value(EdgeKind::Call),
 		"bind".value(EdgeKind::Bind),
@@ -1819,5 +1824,33 @@ mod trailing_edge_tests {
 		let q = cp.query.unwrap();
 		assert_eq!(q.chain.len(), 1);
 		assert!(matches!(q.chain[0].1.head, Head::NodeKind(ref s) if s == "call_expression"));
+	}
+}
+#[cfg(test)]
+mod heritage_edge_tests {
+	use super::tests::DotLexer;
+	use super::*;
+
+	#[test]
+	fn implements_arrow_parses() {
+		let cp = parse_code_path("foo.ts::Foo implements→IThing", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert!(matches!(q.chain[0].0, Combinator::Edge(EdgeKind::Implements)));
+	}
+
+	#[test]
+	fn inherits_arrow_parses() {
+		let cp = parse_code_path("foo.py::X inherits→Base", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert!(matches!(q.chain[0].0, Combinator::Edge(EdgeKind::Inherits)));
+	}
+
+	#[test]
+	fn dispatches_arrow_parses() {
+		let cp = parse_code_path("foo.clj::greet dispatches→", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert!(matches!(q.chain[0].0, Combinator::Edge(EdgeKind::Dispatches)));
+		// Trailing-edge sugar still applies.
+		assert!(matches!(q.chain[0].1.head, Head::NodeKind(ref s) if s == "*"));
 	}
 }
