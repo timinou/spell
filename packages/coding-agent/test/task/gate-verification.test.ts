@@ -126,11 +126,101 @@ describe("gate verification", () => {
 			expect(matchesGateCmd("cargo test --workspace", executions, "/app")).toBe(true);
 		});
 
-		it("returns false when gateCmd is a substring inside a word", () => {
+		// -- positive: edge cases --
+
+		it("matches shell wrapper with pipe and redirect", () => {
+			const executions: TrackedBashExecution[] = [
+				{ command: 'sh -c "cargo test -p foo 2>&1 | tail -5"', exitCode: 0, cwd: "/app" },
+			];
+			expect(matchesGateCmd("cargo test -p foo", executions, "/app")).toBe(true);
+		});
+
+		it("matches when followed by && chain", () => {
+			const executions: TrackedBashExecution[] = [
+				{ command: "cargo test -p foo && echo done", exitCode: 0, cwd: "/app" },
+			];
+			expect(matchesGateCmd("cargo test -p foo", executions, "/app")).toBe(true);
+		});
+
+		it("matches background operator", () => {
+			const executions: TrackedBashExecution[] = [
+				{ command: "cargo test &", exitCode: 0, cwd: "/app" },
+			];
+			expect(matchesGateCmd("cargo test", executions, "/app")).toBe(true);
+		});
+
+		it("matches env assignments with pipe", () => {
+			const executions: TrackedBashExecution[] = [
+				{ command: "CI=1 RUST_BACKTRACE=1 cargo test | tail -5", exitCode: 0, cwd: "/app" },
+			];
+			expect(matchesGateCmd("cargo test", executions, "/app")).toBe(true);
+		});
+
+		it("matches when execution appends output redirect to file", () => {
+			const executions: TrackedBashExecution[] = [
+				{ command: "bun test > test-output.log", exitCode: 0, cwd: "/app" },
+			];
+			expect(matchesGateCmd("bun test", executions, "/app")).toBe(true);
+		});
+
+		it("matches heredoc appended after command", () => {
+			const executions: TrackedBashExecution[] = [
+				{ command: "cat <<'EOF'\nsome content\nEOF", exitCode: 0, cwd: "/app" },
+			];
+			expect(matchesGateCmd("cat", executions, "/app")).toBe(true);
+		});
+
+		// -- negative: boundary enforcement --
+
+		it("returns false when gateCmd is a substring inside a word (boundary guard)", () => {
 			const executions: TrackedBashExecution[] = [
 				{ command: "cargo test -p foobar", exitCode: 0, cwd: "/app" },
 			];
 			expect(matchesGateCmd("cargo test -p foo", executions, "/app")).toBe(false);
+		});
+
+		it("returns false when gateCmd is more specific than execution", () => {
+			const executions: TrackedBashExecution[] = [
+				{ command: "bun test", exitCode: 0, cwd: "/app" },
+			];
+			expect(matchesGateCmd("bun test --verbose", executions, "/app")).toBe(false);
+		});
+
+		it("returns false when execution is a prefix of the gate (run too little)", () => {
+			const executions: TrackedBashExecution[] = [
+				{ command: "cargo test", exitCode: 0, cwd: "/app" },
+			];
+			expect(matchesGateCmd("cargo test --workspace", executions, "/app")).toBe(false);
+		});
+
+		it("returns false for semicolon without space boundary", () => {
+			const executions: TrackedBashExecution[] = [
+				{ command: "bun test;echo done", exitCode: 0, cwd: "/app" },
+			];
+			expect(matchesGateCmd("bun test", executions, "/app")).toBe(false);
+		});
+
+		it("returns false when gateCmd is empty", () => {
+			const executions: TrackedBashExecution[] = [
+				{ command: "bun test", exitCode: 0, cwd: "/app" },
+			];
+			expect(matchesGateCmd("", executions, "/app")).toBe(false);
+		});
+
+		it("returns false when gateCmd is whitespace only", () => {
+			const executions: TrackedBashExecution[] = [
+				{ command: "bun test", exitCode: 0, cwd: "/app" },
+			];
+			expect(matchesGateCmd("   ", executions, "/app")).toBe(false);
+		});
+
+		it("returns false when gateCmd equals execution plus extra content", () => {
+			// Gate asks for 'bun test --verbose', agent ran 'bun test'.
+			// Execution can't be a prefix of the gate — the gate is the floor.
+			const executions: TrackedBashExecution[] = [
+				{ command: "bun test", exitCode: 0, cwd: "/app" },
+			];
+			expect(matchesGateCmd("bun test file.ts", executions, "/app")).toBe(false);
 		});
 
 		it("returns false when the cwd does not match", () => {
