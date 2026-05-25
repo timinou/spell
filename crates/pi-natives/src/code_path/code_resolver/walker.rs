@@ -147,12 +147,19 @@ impl CodeResolver for CodeResolverImpl {
 		let locator = file.to_string_lossy().into_owned();
 		let mut results = Vec::with_capacity(nodes.len());
 		for node in nodes {
+			let mut metadata = HashMap::new();
+			// PLAN-318 W1: expose 1-indexed line so the edge dispatcher can
+			// find this symbol in pi-code-graph (which keys symbols by file+line).
+			metadata.insert(
+				"line".to_string(),
+				serde_json::Value::Number(((node.start_position().row + 1) as u64).into()),
+			);
 			let mut nref = NodeRef {
 				locator:     locator.clone(),
 				range:       node.start_byte()..node.end_byte(),
 				kind:        format!("§{}", node.kind()),
 				content:     None,
-				metadata:    HashMap::new(),
+				metadata,
 				diagnostics: Vec::new(),
 			};
 			// FEAT-718: Apply SymbolSlice (when present) BEFORE the qualifier so

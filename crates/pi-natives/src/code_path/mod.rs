@@ -11,6 +11,7 @@ pub mod code_resolver;
 pub mod css_resolver;
 pub mod dialect_registry;
 pub mod diff_qualifier;
+pub mod edge_dispatch;
 pub mod edge_resolver;
 pub mod edit_history;
 pub mod extractors;
