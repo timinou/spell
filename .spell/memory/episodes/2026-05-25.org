@@ -42,3 +42,15 @@ Design decision: callback over bounded channel. invalidate_for_file is O(1) Dash
 INVOLVED: FUP-092-pi-natives-subscribe-code-graph-cache-in
 INVOLVED: BUG-414-code-graph-cache-not-invalidated-on-file
 :END:
+** ITEM Gate verification fails when agent appends pipes/redirects to gateCmd — exact match too strict
+
+Fixed in e659bb8a2. matchesGateCmd now uses prefix match (startsWith) with trailing-space boundary instead of exact equality. Shell pipes, redirects, and extra flags appended to the gate command now satisfy verification. 49/49 gate-verification tests pass.
+:PROPERTIES:
+:CUSTOM_ID: EP-ef4c341ff8284d1a
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-25T19:28:39Z
+:END:
+:RELATIONS:
+ABOUT: BUG-415-gate-verification-fails-when-agent-appen
+:END:

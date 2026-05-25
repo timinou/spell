@@ -1,8 +1,9 @@
 #+TITLE: Gate verification fails when agent appends pipes/redirects to gateCmd — exact match too strict
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14ef6cf0fbb4ee3b
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-25T18-56-00-494Z_14ef6cf0fbb4ee3b.jsonl]]
 #+CUSTOM_ID: BUG-415-gate-verification-fails-when-agent-appen
+#+COMPLETION_HASH: 8d3133fb361f0a84
 
 * Initial Message
 
@@ -65,3 +66,5 @@ Risk: `cargo test -p foo` could prefix-match `cargo test -p foobar`. Mitigated b
 
 - `packages/coding-agent/src/task/gate-verification.ts::matchesGateCmd` (line 85-94)
 - Test: `packages/coding-agent/test/task/gate-verification.test.ts` (update/add prefix-match cases)
+
+NOTE [2026-05-25]: Fixed in e659bb8a2. matchesGateCmd now uses prefix match (startsWith) with trailing-space boundary instead of exact equality. Shell pipes, redirects, and extra flags appended to the gate command now satisfy verification. 49/49 gate-verification tests pass.
