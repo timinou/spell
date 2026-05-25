@@ -27,6 +27,7 @@ pub mod scheme;
 pub mod scheme_cache;
 pub mod scheme_dispatch;
 pub mod types;
+pub mod template;
 
 pub use ast::*;
 pub use dialect::*;
