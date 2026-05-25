@@ -1,0 +1,274 @@
+#+TITLE: SemanticBackend foundation + Expert LSP pilot for code-graph
+#+STATE: ITEM
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: PLAN-319-semanticbackend-foundation-expert-lsp-pi
+
+* Initial Message
+
+ok now please explain what spell can do w.r.t. the find/get/edit/create actions and how pi-code-* supports it, especially pi-code-graph, in the context of what you did, and what you were able to achieve
+
+* Initial Message
+
+continue PLAN-318 trajectory: the lexical graph is production-grade.
+agents still reach for =lsp= for inferred-type hover, type-aware
+reference narrowing, and diagnostics. goal: completely remove the
+=lsp= tool by absorbing its few genuine type-inference capabilities
+into pi-code-graph as a configurable backend layer, without
+duplicating any of what tree-sitter already does fast and
+multi-language.
+
+* Scope
+
+In:
+- =crates/pi-knowledge-core::bm25=: add incremental ={add,remove,upsert,upsert_batch}_doc=
+  API + tombstone storage; bump =SCHEMA_VERSION 0→1=. exquisitely designed
+  per I1-I10 invariant suite.
+- =crates/pi-code-graph=:
+  - delete =src/search.rs= (duplicate of pi-knowledge-core::bm25); port unique
+    test coverage (=bm25_prefers_exact_symbol_match=) as integration test.
+  - new =src/semantic/= module tree: trait =SemanticBackend=,
+    =AnnotationSemanticBackend= (reads =SymbolNode.detail=),
+    =CompositeSemanticBackend= (dispatch by file ext),
+    =LspSemanticBackend= (=src/semantic/lsp/=: client, registry, sync,
+    diagnostics, warmup).
+  - =async-lsp= + =lsp-types= + =kdl= deps.
+- =crates/pi-natives::code_path::type_resolver/=: new module wiring
+  =#hover_inferred= / =#type_definition= / =#signature= / =#inlay= /
+  =#diagnostics= qualifiers + =[type_aware]= / =[severity=…]= /
+  =[source=semantic|graph|both]= predicates.
+- =crates/pi-natives::code_path::edge_resolver/=: gain optional
+  narrow-via-backend hop on =[type_aware]=.
+- KDL config: single =semantic {}= umbrella block covering cache, BM25
+  toggles, per-language LSP wiring, and =server {}= definitions.
+- live pilot: Expert v0.1.0-rc.6 against =~/code/ora/monorepo/apps/agentmaker=.
+- watcher subscription wiring is delivered as a byproduct of buffer-sync
+  (single event stream feeds both LSP =didChange= and
+  =code_graph_cache::invalidate_for_file=). closes FUP-092.
+
+Out:
+- TS-side nuke of =packages/coding-agent/src/lsp/=. deferred to PLAN-321 after
+  multi-language coverage exists.
+- non-Elixir LSP wiring (vtsls, rust-analyzer, pyrefly, etc.). deferred to
+  PLAN-320 batches.
+- vendored backends (ra_ap_ide, clang-rs, pyrefly-as-library). abandoned per
+  directive — LSP-spawn only.
+- bin format v2 (rkyv/tantivy/fst/memmap). current pi-workspace-cache primitive
+  is sufficient.
+- additional pi-code-graph extractor work beyond what PLAN-318 already shipped
+  (clojure/elixir Dispatches, etc. → existing FUPs).
+
+Rationale: PLAN-318 proved the lexical graph + #hover written-sig path is
+ergonomic for ≥95% of agent queries. The residual 5% (inferred types,
+narrowing) needs a real type system, which only LSP servers reliably provide
+in Rust today. Hiding LSPs behind a =SemanticBackend= trait keeps the agent's
+=find=/=edit=/=get=/=create= surface unified — the =lsp= tool stops competing
+with =find=, and degrades gracefully when no LSP is configured. Pilot on
+Expert+Elixir first because Elixir LSPs need expert per-project setup
+(=mix.exs= root, dialyzer flags, env vars, warmup hooks), making it the
+strongest exercise of the KDL config surface.
+
+* Linked Items
+
+** Closed by this plan
+- [[id:FUP-092-pi-natives-subscribe-code-graph-cache-in]] — watcher sync absorbed into LSP buffer-sync event stream.
+- [[id:FUP-093-plan-318-w1-continuation-edgeresolver-di]] — fully delivered by PLAN-318 (close on landing).
+
+** Sequenced after this plan
+- [[id:FUP-090-pi-code-graph-type-aware-reference-call]] — type-aware references implemented as side effect of W3 =[type_aware]= predicate wiring.
+- [[id:FUP-091-pi-code-graph-inferred-type-hover-via-em]] — inferred hover implemented as W3 =#hover_inferred= qualifier.
+
+** Sequenced before
+- PLAN-318 closed. All pi-code-graph extractor work this plan depends on is shipped.
+
+
+** Sequenced after this plan (separate FUPs with full scope captured)
+- [[id:FUP-094-multi-language-semanticbackend-lsp-wirin]] — multi-language LSP wiring batches (TS, Rust, Python, HTML/CSS, JS, Go, C/C++, Ruby, Swift, Kotlin, Lua, Nix, Haskell, Java, Clojure). Reuses all of PLAN-319's infrastructure; one batch per language.
+- [[id:FUP-095-remove-lsp-tool-from-coding-agent-hard-n]] — hard-delete =packages/coding-agent/src/lsp/= and all =lsp.*= references. Gated on FUP-094 landing TS+Rust+Python coverage.
+
+* Design Decisions
+
+- *Name*: =semantic= as KDL block + module path. Covers the whole pi-code-graph
+  surface (tree-sitter extractors + LSP-backed inference are both "semantic"
+  sources of code understanding). No KDL-level separation between graph
+  options and inference options.
+- *Trait shape*: =SemanticBackend= (role-suffix avoids =Semantic= reading
+  oddly as a noun in trait-object positions).
+- *Crate placement*: =pi-code-graph::semantic/=. No new crate. LSP client code
+  lives under =pi-code-graph::semantic::lsp/=.
+- *BM25 home*: =pi-knowledge-core::bm25= (one BM25 rule). Incremental API
+  added there benefits org/memory too. =pi-code-graph::search.rs= deleted.
+- *Persistence*: =pi-workspace-cache::CacheStore= primitive reused. Schema
+  version bumped to handle the tombstone-bearing =SearchIndex= shape.
+- *Vendored backends*: abandoned. LSP-spawn only.
+- *Expert only*: PLAN-319 wires exactly one LSP (Expert for Elixir).
+  Multi-language fans out in PLAN-320.
+
+* Wave Manifest
+
+#+begin_example
+W0   ┐ BM25 dedup + incremental + Semantic foundation              3-5 days
+     ├─ pi-knowledge-core::bm25: incremental API (I1-I10 tests)
+     ├─ pi-workspace-cache: SCHEMA_VERSION 0→1
+     ├─ pi-code-graph: delete search.rs, port unique tests
+     ├─ pi-code-graph::semantic: trait + AnnotationSemanticBackend
+     └─ CompositeSemanticBackend dispatcher
+W0r  └─ reviewer pass (BM25 invariants, cache compat)
+W0g  └─ gap-fix
+
+W1   ┐ pi-code-graph::semantic::lsp client + lifecycle             1.5 weeks
+     ├─ async-lsp + lsp-types deps
+     ├─ spawn / initialize / initialized / shutdown
+     ├─ per-server LRU + idle TTL (mirrors knowledge-worker repo_cache)
+     ├─ buffer-sync wired to code_buffer events
+     │   (closes FUP-092 as byproduct — single event stream)
+     ├─ request multiplex + capability discovery
+     └─ health: backoff restart, stderr capture
+W1r  └─ reviewer (lifecycle, concurrency, sync correctness)
+W1g  └─ gap-fix
+
+W2   ┐ KDL config + Expert pilot on agentmaker                     1 week
+     ├─ semantic{} block parser (language + server + warmup + env)
+     ├─ config layering (.spell/config.kdl → ~/.spell → defaults.kdl)
+     ├─ install-hint surfacing (Informational diag on missing server)
+     └─ live test against ~/code/ora/monorepo/apps/agentmaker:
+         · #hover_inferred on unannotated function
+         · #type_definition for a struct field
+         · #diagnostics on deliberate type error
+         · #signature at call site
+W2r  └─ reviewer (KDL roundtrip, agentmaker fixture coverage)
+W2g  └─ gap-fix
+
+W3   ┐ CodePath grammar + dispatch                                 4-5 days
+     ├─ parser: #hover_inferred · #type_definition · #signature
+     │         #inlay · #diagnostics
+     ├─ parser: [type_aware] · [severity=…] · [source=semantic|graph|both]
+     ├─ pi-natives::code_path::type_resolver
+     ├─ edge_resolver narrow-via-backend on [type_aware]
+     └─ docs: find.md + system-prompt.md updated
+W3r  └─ reviewer (grammar correctness, dispatch edge cases)
+W3g  └─ gap-fix
+
+W4   ┐ Final reviewer pass + close                                 3-5 days
+     ├─ 5-subagent review of W0-W3 per PLAN-318 protocol
+     ├─ findings → .spell/agent/w{0..3}r-findings-real.md
+     ├─ W{0..3}g gap fixes applied
+     ├─ final workspace test gate
+     ├─ memory concept: pi-code-graph-semantic-backend-layer
+     └─ PLAN-319 close commit
+#+end_example
+
+* BM25 Incremental API (W0 design lock-in)
+
+#+begin_src rust
+impl SearchIndex {
+    // bulk (unchanged signature)
+    pub fn from_docs<D: Document>(docs: &[D]) -> Self;
+
+    // incremental
+    pub fn add_doc<D: Document>(&mut self, doc: D) -> Result<(), IndexError>;
+    pub fn remove_doc(&mut self, id: &str) -> bool;
+    pub fn upsert_doc<D: Document>(&mut self, doc: D);
+    pub fn upsert_batch<I, D>(&mut self, docs: I)
+        where I: IntoIterator<Item = D>, D: Document;
+
+    // maintenance
+    pub fn compact(&mut self);
+    pub fn len(&self) -> usize;
+}
+#+end_src
+
+** Invariants (test suite)
+
+| I1  | =add(D) + remove(D.id)= ≡ pre-state                             |
+| I2  | =remove(id)= purges id-unique terms from inverted index         |
+| I3  | =from_docs(corpus)= ≡ =empty.upsert_batch(corpus)=              |
+| I4  | =upsert_batch(xs)= ≡ loop of =upsert_doc=                       |
+| I5  | =total_tokens = Σ live doc tokens=, avg recomputed correctly    |
+| I6  | =term_doc_freq[t] = \|{d: t ∈ d.tokens, d live}\|=              |
+| I7  | bincode roundtrip preserves tombstones + id_to_index            |
+| I8  | =compact()= preserves search results bit-identically            |
+| I9  | incremental scores ≡ rebuild scores (load-bearing parity test)  |
+| I10 | =add_doc= on duplicate id is hard error (caller must upsert)    |
+
+* KDL Schema (W2 design lock-in)
+
+#+begin_src kdl
+semantic {
+    cache-dir ".spell/graph"
+    idle-ttl-secs 1800
+    max-warm-servers 6
+    request-timeout-ms 5000
+    sync-debounce-ms 50
+    bm25 { incremental #true }
+
+    language "elixir" { lsp "expert" }
+    language "*" { }
+
+    server "expert" {
+        command "expert"
+        args "--stdio"
+        file-types ".ex" ".exs" ".heex" ".eex"
+        root-markers "mix.exs" "mix.lock"
+        env { MIX_ENV "dev" }
+        warmup {
+            check-marker "_build/"
+            run "mix deps.get" timeout-secs 120
+            run "mix compile"  timeout-secs 300
+        }
+        install-hint "Install Expert: https://github.com/elixir-lang/expert"
+    }
+}
+#+end_src
+
+* CodePath DSL Additions (W3 design lock-in)
+
+#+begin_example
+Qualifier  ::= … existing …
+            | #hover_inferred
+            | #type_definition
+            | #signature
+            | #inlay
+            | #diagnostics
+
+Predicate  ::= …
+            | [type_aware]                          (sugar for [type_aware=true])
+            | [type_aware=true|false]
+            | [severity=error|warning|info|hint]
+            | [source=semantic|graph|both]         (default both)
+#+end_example
+
+* Acceptance
+
+- =cargo test --workspace= → 0 failed.
+- =pi-code-graph/src/search.rs= deleted; pi-knowledge-core::bm25 tests cover
+  every behaviour formerly tested in pi-code-graph.
+- BM25 invariants I1-I10 all green; I9 (parity vs rebuild) green.
+- Against =~/code/ora/monorepo/apps/agentmaker= with Expert configured:
+  - =find { lib/agentmaker/foo.ex::handle_event #hover_inferred }= returns inferred return type, not =Unknown=.
+  - =find { lib/agentmaker/foo.ex::result #type_definition }= returns declaration site of the type.
+  - =find { lib/agentmaker/**/*.ex #diagnostics }= returns compile errors when present, empty when clean.
+  - =find { lib/agentmaker/foo.ex::handle_call def→[type_aware] }= narrows polymorphic GenServer dispatch.
+- Without Expert installed: =AnnotationSemanticBackend= returns
+  =Confidence::Annotated= for written sigs, =Unknown= otherwise; no crashes;
+  Informational diagnostic surfaces install-hint.
+- KDL roundtrip: =semantic {}= and =server {}= blocks parse + re-emit
+  identically.
+- FUP-092 closed (watcher-driven cache invalidation wired via LSP buffer-sync).
+- Memory concept saved: =pi-code-graph-semantic-backend-layer=.
+- Reviewer wave findings addressed; no high-severity items at close.
+
+* Verification
+
+Per-wave gates encoded in todo roster.
+
+Plan-level final gate:
+- =cargo test --workspace=
+- =cargo test -p pi-knowledge-core bm25=
+- =cargo test -p pi-code-graph semantic=
+- =bun test packages/coding-agent/=
+- =bun run --cwd packages/coding-agent check=
+- live Expert pilot: 4 acceptance probes against agentmaker green.
+
+Reviewer wave between each phase is a hard gate. Mid-stream BUG/FUP filing
+expected and welcome.

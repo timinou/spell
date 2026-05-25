@@ -1,0 +1,213 @@
+#+TITLE: Multi-language SemanticBackend LSP wiring (TS, Rust, Python, HTML/CSS, JS, rest)
+#+STATE: ITEM
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: FUP-094-multi-language-semanticbackend-lsp-wirin
+#+LAYER: pi-code-graph
+
+* Initial Message
+
+ok now please explain what spell can do w.r.t. the find/get/edit/create actions and how pi-code-* supports it, especially pi-code-graph, in the context of what you did, and what you were able to achieve
+
+* Initial Message
+
+Sequenced after [[id:PLAN-319-semanticbackend-foundation-expert-lsp-pi]]. PLAN-319 builds the
+=SemanticBackend= trait, the =LspSemanticBackend= client + lifecycle, the
+=semantic {}= KDL umbrella, and the CodePath grammar additions
+(=#hover_inferred= / =#type_definition= / =#signature= / =#inlay= /
+=#diagnostics= / =[type_aware]=). It wires *exactly one* LSP: Expert for
+Elixir, piloted against =~/code/ora/monorepo/apps/agentmaker=.
+
+This FUP captures the multi-language fan-out that follows. Each language
+is a self-contained batch reusing all of PLAN-319's infrastructure;
+batches can land in parallel once PLAN-319 W4 closes.
+
+DO NOT START until PLAN-319 closes. The infrastructure churn during W0-W4
+will invalidate batch work-in-progress.
+
+* Scope
+
+In:
+- KDL =server {}= definitions for each language's LSP.
+- per-language =language "<lang>" { lsp "<server>" }= wiring.
+- per-language oracle integration tests (3-5 fixtures each).
+- per-language static extractor gaps closed (any FUP-044 deltas).
+- live pilot against a representative project per language (see fixtures below).
+
+Out:
+- TS-side nuke of =packages/coding-agent/src/lsp/= (sequenced as separate FUP).
+- New =SemanticBackend= implementations beyond =LspSemanticBackend=
+  (vendored backends abandoned per PLAN-319 directive).
+- New CodePath grammar (already shipped in PLAN-319 W3).
+- New KDL schema (already locked in PLAN-319 W2).
+
+* Language Priority Order
+
+Per user directive (2026-05-25):
+
+#+begin_example
+1. Elixir         (Expert)              — PILOTED in PLAN-319, this FUP fans out
+2. TypeScript     (vtsls)               — highest agent demand
+3. Rust           (rust-analyzer)       — dogfood: spell itself is Rust
+4. Python         (pyrefly)             — production-stable, 1.0.0
+5. HTML           (vscode-html-language-server)
+6. CSS            (vscode-css-language-server)
+7. JavaScript     (vtsls — shared with TS, no new server)
+8. rest:
+   - Go          (gopls)
+   - C/C++       (clangd)
+   - Ruby        (ruby-lsp → solargraph fallback)
+   - Swift       (sourcekit-lsp)
+   - Kotlin      (kotlin-lsp)
+   - Lua         (lua-language-server)
+   - Nix         (nixd → nil fallback)
+   - Haskell     (hls)
+   - Java        (jdtls)
+   - Clojure     (clojure-lsp)
+#+end_example
+
+Each batch independent; reviewer wave per batch.
+
+* KDL Server Definitions (drafts — confirm at implementation time)
+
+#+begin_src kdl
+semantic {
+    language "typescript" { lsp "vtsls" }
+    language "javascript" { lsp "vtsls" }
+    language "rust"       { lsp "rust-analyzer" }
+    language "python"     { lsp "pyrefly" }
+    language "html"       { lsp "vscode-html-language-server" }
+    language "css"        { lsp "vscode-css-language-server" }
+    language "go"         { lsp "gopls" }
+    language "cpp"        { lsp "clangd" }
+    language "c"          { lsp "clangd" }
+    language "ruby"       { lsp "ruby-lsp" }
+    language "swift"      { lsp "sourcekit-lsp" }
+    language "kotlin"     { lsp "kotlin-lsp" }
+    language "lua"        { lsp "lua-language-server" }
+    language "nix"        { lsp "nixd" }
+    language "haskell"    { lsp "hls" }
+    language "java"       { lsp "jdtls" }
+    language "clojure"    { lsp "clojure-lsp" }
+    language "*" { }
+
+    server "vtsls" {
+        command "vtsls"
+        args "--stdio"
+        file-types ".ts" ".tsx" ".js" ".jsx" ".mjs" ".cjs"
+        root-markers "tsconfig.json" "package.json" "jsconfig.json"
+        install-hint "npm i -g @vtsls/language-server"
+    }
+
+    server "rust-analyzer" {
+        command "rust-analyzer"
+        file-types ".rs"
+        root-markers "Cargo.toml" "rust-project.json"
+        init-options { check-on-save #true }
+        install-hint "rustup component add rust-analyzer"
+    }
+
+    server "pyrefly" {
+        command "pyrefly"
+        args "lsp"
+        file-types ".py" ".pyi"
+        root-markers "pyproject.toml" "pyrefly.toml"
+        install-hint "pip install pyrefly"
+    }
+
+    server "vscode-html-language-server" {
+        command "vscode-html-language-server"
+        args "--stdio"
+        file-types ".html" ".htm"
+        root-markers "package.json" ".git"
+    }
+
+    server "vscode-css-language-server" {
+        command "vscode-css-language-server"
+        args "--stdio"
+        file-types ".css" ".scss" ".sass" ".less"
+        root-markers "package.json" ".git"
+    }
+
+    server "gopls" {
+        command "gopls"
+        args "serve"
+        file-types ".go" ".mod" ".sum"
+        root-markers "go.mod" "go.work" "go.sum"
+    }
+
+    server "clangd" {
+        command "clangd"
+        args "--background-index" "--clang-tidy"
+        file-types ".c" ".cpp" ".cc" ".cxx" ".h" ".hpp" ".hxx" ".m" ".mm"
+        root-markers "compile_commands.json" "CMakeLists.txt" ".clangd"
+    }
+
+    // … remaining server blocks: see packages/coding-agent/src/lsp/defaults.json
+    //    in current TS codebase as starting reference for command/args/markers.
+    //    DELETE that defaults.json as part of PLAN-321 nuke.
+}
+#+end_src
+
+* Per-Batch Acceptance
+
+Each batch (W<n>) must satisfy:
+- =server "<name>" {}= block parses + roundtrips in KDL tests.
+- 3-5 oracle integration tests against fixture project:
+  · =#hover_inferred= returns inferred type for unannotated symbol
+  · =#type_definition= returns declaration site
+  · =#diagnostics= returns expected errors on a deliberately broken file
+  · =#signature= returns param info at a call site
+  · =[type_aware]= narrows polymorphic dispatch (when language has it)
+- AnnotationSemanticBackend fallback verified when server binary absent
+  (install-hint surfaces correctly).
+- Buffer-sync round-trip: edit file via =edit= tool → next =#hover_inferred=
+  query reflects the change (no manual invalidation).
+- Per-language static extractor gaps from FUP-044 closed if relevant.
+
+* Suggested Fixture Projects
+
+| Language     | Fixture                                                           |
+| TypeScript   | =packages/coding-agent= (spell itself)                            |
+| Rust         | =crates/pi-code-graph= (spell itself)                             |
+| Python       | TBD — any pyproject.toml project in =~/code=                       |
+| HTML/CSS     | TBD — any static-site fixture                                     |
+| JavaScript   | TBD — package.json without tsconfig                               |
+| Go           | TBD                                                               |
+| C/C++        | TBD — must have compile_commands.json                             |
+| (rest)       | TBD per batch                                                     |
+
+Pin actual fixtures at implementation time; the rule is "real project with
+genuine compile errors and complex types," not contrived minimal examples.
+
+* Cross-Cutting Risks
+
+- *Server install ergonomics*: not all servers ship as single binaries.
+  jdtls, kotlin-lsp need JVM; sourcekit-lsp needs Swift toolchain.
+  Install-hints must be platform-aware. Consider per-OS hint variants.
+- *Cold start cost*: rust-analyzer (~10s), jdtls (~10s), clangd needs
+  =compile_commands.json= or is degraded. Mitigation: warmup blocks,
+  AnnotationSemanticBackend fallback during warmup.
+- *Memory footprint*: 5 LSPs warm ≈ 2GB RAM. The =max-warm-servers 6=
+  cap + LRU eviction in PLAN-319 W1 handles this, but verify on real
+  multi-language workspaces.
+- *Capability variance*: some servers don't implement =textDocument/inlayHint=
+  or partial =workspace/symbol=. Capability discovery from =initialize=
+  response gates feature use per PLAN-319 W2; verify each new server.
+- *Multi-language workspaces*: a TS+Python+Go monorepo will spawn 3 LSPs.
+  Confirm LRU keeps the hot ones warm and evicts cold ones.
+
+* Sequencing within this FUP
+
+When ready to start:
+1. Land batches in priority order; each batch can be a separate commit/PR.
+2. Reviewer subagent per batch (PLAN-318 protocol — real reviewers,
+   not self-review).
+3. After all batches land, prerequisite for the TS-side nuke FUP.
+
+* References
+
+- [[id:PLAN-319-semanticbackend-foundation-expert-lsp-pi]] — required predecessor
+- =packages/coding-agent/src/lsp/defaults.json= — current LSP server definitions
+  to mine for command/args/markers (delete in PLAN-321 nuke)
+- [[id:FUP-044-additional-language-profiles-go-java-c-r]] — overlapping static-extractor work

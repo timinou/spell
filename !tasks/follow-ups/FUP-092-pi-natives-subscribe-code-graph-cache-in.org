@@ -4,6 +4,7 @@
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
 #+CUSTOM_ID: FUP-092-pi-natives-subscribe-code-graph-cache-in
 #+COMPLETION_HASH: 34a1d7f6fc0c5ab7
+#+LAYER: pi-natives
 
 * Initial Message
 

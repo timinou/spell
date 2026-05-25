@@ -4,6 +4,7 @@
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
 #+CUSTOM_ID: FUP-093-plan-318-w1-continuation-edgeresolver-di
 #+COMPLETION_HASH: 09154fb0ea3465e0
+#+LAYER: pi-natives
 
 * Initial Message
 
