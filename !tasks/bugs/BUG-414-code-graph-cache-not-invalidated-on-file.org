@@ -1,0 +1,40 @@
+#+TITLE: code-graph cache not invalidated on filesystem change — edge queries return stale results across edits
+#+STATE: ITEM
+#+SESSION_ID: 14ef6cf0fbb4ee3b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-25T18-56-00-494Z_14ef6cf0fbb4ee3b.jsonl]]
+#+CUSTOM_ID: BUG-414-code-graph-cache-not-invalidated-on-file
+
+:RELATIONS:
+DERIVED_FROM: FUP-092-pi-natives-subscribe-code-graph-cache-in
+:END:
+* Initial Message
+
+ok now please explain what spell can do w.r.t. the find/get/edit/create actions and how pi-code-* supports it, especially pi-code-graph, in the context of what you did, and what you were able to achieve
+
+PLAN-318 W1 shipped the production code-graph cache (crates/pi-natives/src/code_graph_cache.rs) with invalidate_for_file(path) API surface, but nobody calls it. The FileWatcher (crates/pi-code-engine/src/watcher.rs) detects filesystem changes and marks buffers stale, but has no subscriber API for downstream consumers.
+
+# Impact
+
+Every edge query (def→ / ref→ / call→ / import→ / implements→ / inherits→) returns results from the graph as it was at first-query time. Edits, saves, git operations, and external tool writes are invisible until the process restarts or the cache is manually invalidated.
+
+# Reproduction
+
+1. Open a workspace with TypeScript files
+2. find { src/foo.ts::SomeFn def→ } — returns callers
+3. Add a new caller in src/bar.ts, save
+4. find { src/foo.ts::SomeFn def→ } — missing the new caller (graph built before edit)
+
+# Fix
+
+- Add subscriber callback to FileWatcher (on_change method)
+- pi-natives registers invalidate_for_file as a callback on init
+- E2E test: external write → verify cache is cold → rebuild returns fresh graph
+
+# Blocked by
+
+Nothing. invalidate_for_file + FileWatcher event loop both exist and are tested independently. Only the bridge is missing.
+
+# Related
+
+- FUP-092 (spec)
+- PLAN-318 W1 (original cache + watcher API delivery)

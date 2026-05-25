@@ -45,9 +45,17 @@ pub(crate) fn buffer_registry() -> &'static BufferRegistry {
 	static BUFFER_REGISTRY: OnceLock<BufferRegistry> = OnceLock::new();
 	BUFFER_REGISTRY.get_or_init(|| {
 		let endpoint = BrokerEndpoint::default_for("napi".into());
+		let watcher = FileWatcher::new().ok();
+		// BUG-414: subscribe code_graph_cache invalidation to filesystem
+		// changes so edge queries reflect the current state of the repo.
+		if let Some(ref w) = watcher {
+			w.on_change(Box::new(|path| {
+				crate::code_graph_cache::invalidate_for_file(path);
+			}));
+		}
 		let registry = BufferRegistry::new_with_coord(
 			language_registry(),
-			FileWatcher::new().ok(),
+			watcher,
 			Arc::new(SocketCoordClient::new(endpoint)),
 		);
 		let recorder = Arc::new(|record: pi_code_engine::buffer::EditRecord| {
