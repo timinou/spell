@@ -165,7 +165,10 @@ impl SearchIndex {
 	}
 
 	/// Bulk upsert. Empty documents are silently skipped (matches `from_docs`
-	/// policy); duplicate ids within `docs` cause the last occurrence to win.
+	/// policy). Duplicate ids within `docs` cause the **last non-empty**
+	/// occurrence to win — an empty trailing entry for an id does NOT
+	/// remove a preceding non-empty one (consistent with `upsert_doc`
+	/// returning `Err(EmptyDocument)` without mutating existing state).
 	pub fn upsert_batch<I, D>(&mut self, docs: I)
 	where
 		I: IntoIterator<Item = D>,
@@ -649,6 +652,74 @@ mod tests {
 			.sum();
 		assert_eq!(idx.total_tokens, expected_total);
 		assert_eq!(idx.live_count, 2);
+	}
+
+	/// W0g (P2): upsert_doc must preserve term_doc_freq invariant when
+	/// replacing a doc whose old token set overlaps the new one.
+	#[test]
+	fn i6_upsert_preserves_term_freq_when_tokens_overlap() {
+		let mut idx = SearchIndex::default();
+		idx.add_doc(doc("a", "alpha beta gamma")).unwrap();
+		idx.add_doc(doc("b", "alpha delta")).unwrap();
+		// Pre-state: alpha:2, beta:1, gamma:1, delta:1.
+		assert_eq!(idx.term_doc_freq.get("alpha"), Some(&2));
+		assert_eq!(idx.term_doc_freq.get("beta"), Some(&1));
+
+		// Replace 'a' with text dropping 'beta' and 'gamma', keeping 'alpha', adding 'epsilon'.
+		idx.upsert_doc(doc("a", "alpha epsilon")).unwrap();
+
+		// 'alpha' df unchanged (still in both docs).
+		// 'beta', 'gamma' purged (were id-unique to 'a').
+		// 'epsilon' added (df=1).
+		// 'delta' unchanged.
+		assert_eq!(idx.term_doc_freq.get("alpha"), Some(&2));
+		assert!(!idx.term_doc_freq.contains_key("beta"));
+		assert!(!idx.term_doc_freq.contains_key("gamma"));
+		assert_eq!(idx.term_doc_freq.get("epsilon"), Some(&1));
+		assert_eq!(idx.term_doc_freq.get("delta"), Some(&1));
+
+		// Cross-check: rebuild from scratch and compare.
+		let expected = SearchIndex::from_docs(&[
+			doc("a", "alpha epsilon"),
+			doc("b", "alpha delta"),
+		]);
+		assert_eq!(idx.term_doc_freq, expected.term_doc_freq);
+	}
+
+	/// W0g (P2): compact() leaves term_doc_freq, total_tokens, live_count
+	/// untouched (it only rearranges slots in `docs`).
+	#[test]
+	fn i6_compact_preserves_term_freq_and_counters() {
+		let mut idx = SearchIndex::default();
+		for i in 0..5 {
+			idx.add_doc(doc(&format!("d{i}"), &format!("label{i} shared"))).unwrap();
+		}
+		idx.remove_doc("d1");
+		idx.remove_doc("d3");
+		let df_before = idx.term_doc_freq.clone();
+		let tokens_before = idx.total_tokens;
+		let live_before = idx.live_count;
+
+		idx.compact();
+
+		assert_eq!(idx.term_doc_freq, df_before);
+		assert_eq!(idx.total_tokens, tokens_before);
+		assert_eq!(idx.live_count, live_before);
+	}
+
+	/// W0g (P2): upsert_batch's documented "last non-empty wins" contract.
+	/// An empty final occurrence for an id MUST preserve the prior non-empty
+	/// value (does NOT silently remove the existing doc).
+	#[test]
+	fn upsert_batch_empty_trailing_preserves_prior_non_empty() {
+		let mut idx = SearchIndex::default();
+		idx.upsert_batch(vec![
+			doc("a", "first version"),
+			doc("a", "   "),  // empty after tokenize — should not remove 'a'
+		]);
+		let hits = idx.search("first", 5);
+		assert_eq!(hits.first().map(|h| h.doc_id.as_str()), Some("a"));
+		assert_eq!(idx.doc_count(), 1);
 	}
 
 	/// I6 — `term_doc_freq[t] == |{d live : t ∈ d.tokens}|` after mass ops.

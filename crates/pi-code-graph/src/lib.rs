@@ -37,7 +37,7 @@ pub use pi_knowledge_core::bm25::SearchIndex;
 pub use semantic::{
 	AnnotationSemanticBackend, Capabilities as SemanticCapabilities, CompositeSemanticBackend,
 	Confidence, Diagnostic as SemanticDiagnostic, InferResult, InlayHint, InlayKind, LineRange,
-	Location as SemanticLocation, SemanticBackend, Severity as DiagnosticSeverity, SignatureInfo,
-	TypeRepr, TypeSource,
+	Location as SemanticLocation, RenameError, SemanticBackend,
+	Severity as DiagnosticSeverity, SignatureInfo, TextEdit, TypeRepr, TypeSource, WorkspaceEdit,
 };
 pub use store::GraphStore;

@@ -41,10 +41,19 @@ pub use composite::CompositeSemanticBackend;
 
 /// A provider of semantic-level answers about code at a given position.
 ///
-/// All methods take a coordinate (`file`, 1-indexed `line`, 0-indexed
-/// UTF-16 `col` per LSP convention) and return whatever the backend can
-/// resolve — or [`Confidence::Unknown`] when it can't. No method panics or
-/// returns `Err` on a "don't know"; missing capability is data, not failure.
+/// ## Coordinate convention
+///
+/// All methods take `(file, line, col)` where both `line` and `col` are
+/// **1-indexed bytes** — matching `SymbolNode::line/column` as populated by
+/// the tree-sitter extractors. LSP-backed backends ([`lsp::LspSemanticBackend`])
+/// convert to LSP's 0-indexed UTF-16 positions at their boundary; agent-facing
+/// callers do not see the difference.
+///
+/// ## "Don't know" is data, not failure
+///
+/// No method panics or returns `Err` on a "don't know". Missing capability
+/// returns [`Confidence::Unknown`] / `None` / empty `Vec` — the caller
+/// composes fallbacks via [`CompositeSemanticBackend`].
 pub trait SemanticBackend: Send + Sync {
 	/// Static capability advertisement. Populated from the configured KDL
 	/// block or (for LSP backends) from the server's `initialize` response.
@@ -87,6 +96,40 @@ pub trait SemanticBackend: Send + Sync {
 	fn diagnostics(&self, _file: &Path) -> Vec<Diagnostic> {
 		Vec::new()
 	}
+
+	/// Compute the cross-file edit set for renaming a symbol at
+	/// `(file, line, col)` to `new_name`. Drives
+	/// `edit { ::S symbolRename newName=… }` in its semantic-aware form
+	/// (cf. PLAN-320 W4 — the lexical rename via `def→` edges is the
+	/// fallback path when no backend implements this).
+	///
+	/// Returns [`RenameError::Unsupported`] by default; backends that can
+	/// perform type-aware rename override this.
+	fn rename_preview(
+		&self,
+		_file: &Path,
+		_line: u32,
+		_col: u32,
+		_new_name: &str,
+	) -> Result<WorkspaceEdit, RenameError> {
+		Err(RenameError::Unsupported)
+	}
+
+	/// Find references narrowed by receiver type — the type-aware
+	/// counterpart to lexical `def→`. For `foo.bar()` where
+	/// `foo: SomeInterface`, returns only the reference sites where the
+	/// receiver's static type matches `receiver_filter`.
+	///
+	/// `receiver_filter = None` requests all references (equivalent to
+	/// the lexical edge). Default impl returns an empty Vec; backends
+	/// that implement type-aware narrowing override this.
+	fn references_narrowed(
+		&self,
+		_symbol: &Location,
+		_receiver_filter: Option<&TypeRepr>,
+	) -> Vec<Location> {
+		Vec::new()
+	}
 }
 
 // ── Capabilities ─────────────────────────────────────────────────────
@@ -101,6 +144,8 @@ pub struct Capabilities {
 	pub inlay_hints:       bool,
 	pub narrow_dispatch:   bool,
 	pub diagnostics:       bool,
+	pub rename:            bool,
+	pub references_narrowed: bool,
 }
 
 // ── Infer / Confidence ───────────────────────────────────────────────
@@ -126,8 +171,25 @@ impl InferResult {
 		}
 	}
 
+	/// Construct a known result. Panics in debug builds if `confidence ==
+	/// Unknown` to enforce the invariant that `Unknown` implies an empty
+	/// `repr` — use [`InferResult::unknown`] for that case.
+	pub fn known(repr: TypeRepr, confidence: Confidence, source: TypeSource) -> Self {
+		debug_assert!(
+			!matches!(confidence, Confidence::Unknown),
+			"InferResult::known called with Confidence::Unknown; use ::unknown()",
+		);
+		Self { repr, confidence, source }
+	}
+
+	/// True iff this result carries no useful information. Verifies
+	/// **both** `confidence == Unknown` **and** `repr` is empty, so a
+	/// future caller that builds an `InferResult` directly with
+	/// `confidence: Unknown, repr: Text("…")` doesn't get a false positive
+	/// that drops useful data on the [`CompositeSemanticBackend`] fallback
+	/// path.
 	pub fn is_unknown(&self) -> bool {
-		matches!(self.confidence, Confidence::Unknown)
+		matches!(self.confidence, Confidence::Unknown) && matches!(self.repr, TypeRepr::Empty)
 	}
 }
 
@@ -178,27 +240,45 @@ pub enum TypeSource {
 
 // ── Location ─────────────────────────────────────────────────────────
 
-/// A point or range in source. `line` is 1-indexed; `col` is 0-indexed
-/// (matches LSP). When `end_line` is `None`, the location is a single
-/// point at `(line, col)`.
+/// A point or range in source. `line` and `col` are **1-indexed bytes**
+/// (matches `SymbolNode::line/column` populated by the tree-sitter
+/// extractors). LSP-backed backends convert to LSP's 0-indexed UTF-16 at
+/// their boundary.
+///
+/// `end` is `Some((line, col))` for a range; `None` for a single point at
+/// `(line, col)`. Combined into a single `Option<(u32, u32)>` so the
+/// invariant "end_line and end_col agree on presence" is enforced by the
+/// type system.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Location {
-	pub file:     PathBuf,
-	pub line:     u32,
-	pub col:      u32,
-	pub end_line: Option<u32>,
-	pub end_col:  Option<u32>,
+	pub file: PathBuf,
+	pub line: u32,
+	pub col:  u32,
+	pub end:  Option<(u32, u32)>,
 }
 
 impl Location {
 	pub fn point(file: impl Into<PathBuf>, line: u32, col: u32) -> Self {
+		Self { file: file.into(), line, col, end: None }
+	}
+
+	pub fn range(
+		file: impl Into<PathBuf>,
+		(start_line, start_col): (u32, u32),
+		(end_line, end_col): (u32, u32),
+	) -> Self {
 		Self {
 			file: file.into(),
-			line,
-			col,
-			end_line: None,
-			end_col: None,
+			line: start_line,
+			col:  start_col,
+			end:  Some((end_line, end_col)),
 		}
+	}
+
+	/// `(end_line, end_col)` if this is a range; otherwise `(line, col)`
+	/// (the start is also the end of a point).
+	pub fn end_or_point(&self) -> (u32, u32) {
+		self.end.unwrap_or((self.line, self.col))
 	}
 }
 
@@ -257,6 +337,41 @@ pub enum InlayKind {
 	Parameter,
 }
 
+// ── Rename ────────────────────────────────────────────────────────────
+
+/// A workspace-wide edit set produced by a rename operation. Each entry
+/// is one contiguous text replacement at `Location`; multiple entries can
+/// target the same file (atomic across the workspace).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceEdit {
+	pub edits: Vec<TextEdit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextEdit {
+	pub location: Location,
+	pub new_text: String,
+}
+
+/// Why a rename couldn't be computed. Distinct from "no occurrences":
+/// returning `Ok(WorkspaceEdit { edits: vec![] })` indicates the symbol
+/// resolved but has no rewrite sites; `RenameError` indicates the rename
+/// can't be attempted at all (capability missing / symbol unresolvable /
+/// new name invalid for the language).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RenameError {
+	/// Backend doesn't implement type-aware rename. Callers fall back to
+	/// the lexical edit path (PLAN-320 W4).
+	Unsupported,
+	/// No symbol resolved at `(file, line, col)`.
+	NoSymbol,
+	/// The proposed `new_name` is not a valid identifier in this language
+	/// (e.g. reserved word, illegal character, conflicting binding).
+	InvalidName { reason: String },
+	/// Backend was reachable but returned an error during computation.
+	BackendError(String),
+}
+
 // ── Unit tests ───────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -294,8 +409,64 @@ mod tests {
 		let p = Location::point("foo.rs", 10, 5);
 		assert_eq!(p.line, 10);
 		assert_eq!(p.col, 5);
-		assert!(p.end_line.is_none());
-		assert!(p.end_col.is_none());
+		assert!(p.end.is_none());
+		assert_eq!(p.end_or_point(), (10, 5));
+	}
+
+	/// W0g (P2): `Location::range` is the only path that sets `end`, so the
+	/// type system enforces that end-line and end-col agree on presence.
+	#[test]
+	fn location_range_carries_both_end_fields() {
+		let r = Location::range("foo.rs", (1, 0), (3, 10));
+		assert_eq!(r.line, 1);
+		assert_eq!(r.col, 0);
+		assert_eq!(r.end, Some((3, 10)));
+		assert_eq!(r.end_or_point(), (3, 10));
+	}
+
+	/// W0g (P2): `is_unknown` now checks BOTH confidence AND empty repr,
+	/// preventing CompositeSemanticBackend from dropping a meaningful
+	/// `Text("…")` result whose `Confidence::Unknown` was set by a backend bug.
+	#[test]
+	fn is_unknown_requires_both_confidence_and_empty_repr() {
+		let hand_built = InferResult {
+			repr:       TypeRepr::text("meaningful"),
+			confidence: Confidence::Unknown,
+			source:     TypeSource::ForwardFlow,
+		};
+		assert!(!hand_built.is_unknown(), "non-empty repr must NOT be considered unknown");
+
+		let canonical = InferResult::unknown();
+		assert!(canonical.is_unknown());
+	}
+
+	/// W0g (P1+P2): `RenameError::Unsupported` is the default for backends
+	/// that don't implement type-aware rename. The variant exists so W3 can
+	/// distinguish "no symbol" from "capability missing".
+	#[test]
+	fn rename_error_variants_are_distinct() {
+		assert_ne!(RenameError::Unsupported, RenameError::NoSymbol);
+		assert_ne!(
+			RenameError::Unsupported,
+			RenameError::InvalidName { reason: "x".into() },
+		);
+	}
+
+	/// W0g (P1): default trait impls for the new methods return the right
+	/// "don't know" signal so backends inheriting them never accidentally
+	/// promise capabilities they don't have.
+	#[test]
+	fn default_trait_impls_return_unsupported_or_empty() {
+		struct NoOp;
+		impl SemanticBackend for NoOp {
+			fn capabilities(&self) -> Capabilities { Capabilities::default() }
+			fn type_at(&self, _f: &Path, _l: u32, _c: u32) -> InferResult { InferResult::unknown() }
+		}
+		let backend = NoOp;
+		let result = backend.rename_preview(Path::new("a"), 1, 1, "foo");
+		assert_eq!(result, Err(RenameError::Unsupported));
+		let refs = backend.references_narrowed(&Location::point("a", 1, 1), None);
+		assert!(refs.is_empty());
 	}
 
 	#[test]
