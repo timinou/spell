@@ -1,8 +1,9 @@
 #+TITLE: PLAN-318 W1+ continuation: EdgeResolver dispatch + W2-W6
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14edc1bec5a09a49
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
 #+CUSTOM_ID: FUP-093-plan-318-w1-continuation-edgeresolver-di
+#+COMPLETION_HASH: 09154fb0ea3465e0
 
 * Initial Message
 
@@ -84,3 +85,5 @@ NodeKind('*').
 - FUP-090 (type-aware refs)
 - FUP-091 (inferred-type hover)
 - FUP-092 (watcher subscription wiring)
+
+NOTE [2026-05-25]: All deferred work (W1-edge-resolver-wire through W6-sweep) shipped in PLAN-318 cycle. 39/39 todo items verified, 63/63 test binaries green, all gates satisfied. This FUP served as the resume-token for the PLAN-318 session; it is now fully delivered.

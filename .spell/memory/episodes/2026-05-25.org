@@ -1,0 +1,14 @@
+#+TITLE: Episodes 2026-05-25
+
+** ITEM PLAN-318 W1+ continuation: EdgeResolver dispatch + W2-W6
+
+All deferred work (W1-edge-resolver-wire through W6-sweep) shipped in PLAN-318 cycle. 39/39 todo items verified, 63/63 test binaries green, all gates satisfied. This FUP served as the resume-token for the PLAN-318 session; it is now fully delivered.
+:PROPERTIES:
+:CUSTOM_ID: EP-c89ff973b6ba8f32
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-25T18:58:20Z
+:END:
+:RELATIONS:
+ABOUT: FUP-093-plan-318-w1-continuation-edgeresolver-di
+:END:
