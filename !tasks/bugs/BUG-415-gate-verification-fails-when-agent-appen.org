@@ -1,0 +1,67 @@
+#+TITLE: Gate verification fails when agent appends pipes/redirects to gateCmd — exact match too strict
+#+STATE: ITEM
+#+SESSION_ID: 14ef6cf0fbb4ee3b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-25T18-56-00-494Z_14ef6cf0fbb4ee3b.jsonl]]
+#+CUSTOM_ID: BUG-415-gate-verification-fails-when-agent-appen
+
+* Initial Message
+
+ok now please explain what spell can do w.r.t. the find/get/edit/create actions and how pi-code-* supports it, especially pi-code-graph, in the context of what you did, and what you were able to achieve
+
+# Symptom
+
+`matchesGateCmd` rejects a verified gate when the agent runs the correct command but appends shell pipes (`| tail -5`), redirects (`2>&1`), or post-processing. The verifier reports "No successful execution matched the gate command" even when the core command ran and passed.
+
+# Reproduction
+
+1. Create a todo with `gateCmd: "cargo test -p pi-code-engine watcher"`
+2. Agent runs: `cd /home/user/code/ora/spell && cargo test -p pi-code-engine watcher 2>&1 | tail -5` (exit 0)
+3. Agent calls `verifyDirectWorkCompletions` with verified=true
+4. Result: "Gate Verification Failed — No successful execution matched the gate command"
+
+# Root cause
+
+`matchesGateCmd` in `packages/coding-agent/src/task/gate-verification.ts` does exact string equality after normalization:
+
+```ts
+return normalizeCommand(execution.command) === normalizedGateCmd && executionCwd === expectedCwd;
+```
+
+`normalizeCommand` strips `cd` / `env` / `sh -c` prefixes via `extractCommandPreamble`, but does NOT strip:
+- Shell pipes: `| tail -5`, `| head -20`
+- Redirects: `2>&1`, `>/dev/null`, `>>log.txt`
+- Extra CLI flags: `--verbose`, `-- --nocapture`
+
+Result: `"cargo test -p pi-code-engine watcher" !== "cargo test -p pi-code-engine watcher 2>&1 | tail -5"` → false.
+
+# Concrete trace (BUG-414 session)
+
+```
+gateCmd:   "cargo test -p pi-code-engine watcher"
+execution: "cd /home/user/code/ora/spell && cargo test -p pi-code-engine watcher 2>&1 | tail -5"
+normalize(gateCmd):   "cargo test -p pi-code-engine watcher"
+normalize(execution): "cargo test -p pi-code-engine watcher 2>&1 | tail -5"   ← cd stripped, pipes kept
+```
+
+# Fix
+
+Change `matchesGateCmd` from exact match to prefix match. The simplest approach:
+
+```ts
+const normExec = normalizeCommand(execution.command);
+return (normExec === normalizedGateCmd || normExec.startsWith(normalizedGateCmd + " ")) 
+    && executionCwd === expectedCwd;
+```
+
+This handles `| tail`, `2>&1`, extra args, etc. without needing to parse shell pipe/redirect grammar.
+
+Risk: `cargo test -p foo` could prefix-match `cargo test -p foobar`. Mitigated by:
+- `startsWith(foo + " ")` requires a shell-token boundary after the gate command
+- Test filter names end at natural word boundaries in practice
+- cwd matching also required
+- exitCode must be 0
+
+# Affected code
+
+- `packages/coding-agent/src/task/gate-verification.ts::matchesGateCmd` (line 85-94)
+- Test: `packages/coding-agent/test/task/gate-verification.test.ts` (update/add prefix-match cases)

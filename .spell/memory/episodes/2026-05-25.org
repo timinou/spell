@@ -12,3 +12,33 @@ All deferred work (W1-edge-resolver-wire through W6-sweep) shipped in PLAN-318 c
 :RELATIONS:
 ABOUT: FUP-093-plan-318-w1-continuation-edgeresolver-di
 :END:
+** ITEM pi-natives: subscribe code_graph_cache invalidation to pi-code-engine watcher
+
+Shipped as BUG-414. FileWatcher now exposes on_change() subscriber API; pi-natives registers invalidate_for_file on init. External writes → watcher fires → cache invalidated → next edge query rebuilds fresh graph. 2 unit tests + 4 e2e tests.
+:PROPERTIES:
+:CUSTOM_ID: EP-690652595c78fc28
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-25T19:14:14Z
+:END:
+:RELATIONS:
+ABOUT: FUP-092-pi-natives-subscribe-code-graph-cache-in
+:END:
+** ITEM BUG-414 fixed: code_graph_cache was never invalidated on filesystem changes — edge queries returned stale results from the first-build graph. Root cause: FileWatcher had no subscriber API; invalidate_for_file existed but nobody called it.
+
+Fix (3 files, commit 11e3a7bb3):
+1. watcher.rs: +subscribers field + on_change() + dispatch in handle_event (catch_unwind guarded)
+2. lib.rs: watcher.on_change(Box::new(|p| code_graph_cache::invalidate_for_file(p))) on buffer_registry init
+3. code_graph_cache_e2e.rs: 4 tests (write→invalidate→rebuild, multi-cycle, unrelated path)
+
+Design decision: callback over bounded channel. invalidate_for_file is O(1) DashMap retain, 1 subscriber, no overflow risk — simpler than a crossbeam channel + background thread.
+:PROPERTIES:
+:CUSTOM_ID: EP-140de7c099a9151a
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-25T19:14:46Z
+:END:
+:RELATIONS:
+INVOLVED: FUP-092-pi-natives-subscribe-code-graph-cache-in
+INVOLVED: BUG-414-code-graph-cache-not-invalidated-on-file
+:END:

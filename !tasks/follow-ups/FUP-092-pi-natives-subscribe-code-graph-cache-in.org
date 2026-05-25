@@ -1,8 +1,9 @@
 #+TITLE: pi-natives: subscribe code_graph_cache invalidation to pi-code-engine watcher
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14edc1bec5a09a49
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
 #+CUSTOM_ID: FUP-092-pi-natives-subscribe-code-graph-cache-in
+#+COMPLETION_HASH: 34a1d7f6fc0c5ab7
 
 * Initial Message
 
@@ -32,3 +33,5 @@ invalidation via the API works; automatic invalidation does not.
 
 - Edit a file under a warm workspace; next edge query reflects the change.
 - Tests in pi-natives/tests/code_graph_cache_e2e.rs verify roundtrip.
+
+NOTE [2026-05-25]: Shipped as BUG-414. FileWatcher now exposes on_change() subscriber API; pi-natives registers invalidate_for_file on init. External writes → watcher fires → cache invalidated → next edge query rebuilds fresh graph. 2 unit tests + 4 e2e tests.
