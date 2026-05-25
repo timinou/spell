@@ -28,14 +28,6 @@ fn action_replace(content: &str) -> UnifiedAction {
 	}
 }
 
-fn action_replace_body(content: &str) -> UnifiedAction {
-	UnifiedAction::Replace {
-		content: ActionContent::Single(content.to_string()),
-		find:    None,
-		place:   None,
-	}
-}
-
 fn action_rename(new_name: &str) -> UnifiedAction {
 	UnifiedAction::Rename { content: Identifier(new_name.to_string()) }
 }
@@ -81,7 +73,7 @@ fn assert_unified_edit(
 	let cp = pi_code_path::parser::parse_code_path(target_str, &lexer)
 		.unwrap_or_else(|e| panic!("failed to parse target '{target_str}': {}", e.message));
 
-	let outcome = apply_unified(&cp, action, &resolver)
+	let _outcome = apply_unified(&cp, action, &resolver)
 		.unwrap_or_else(|e| panic!(
 			"edit failed for {lang}/{target_str}: {e}\nfixture:\n{fixture}"
 		));
@@ -168,7 +160,7 @@ fn ts_delete() {
 	let registry = Arc::new(LanguageRegistry::with_builtins().unwrap());
 	let resolver = CodeResolverImpl::new(registry).with_root(root.clone());
 	let cp = parse("test.ts::dead");
-	let outcome = apply_unified(&cp, &action_delete(), &resolver).unwrap();
+	let _outcome = apply_unified(&cp, &action_delete(), &resolver).unwrap();
 	let actual = std::fs::read_to_string(&path).unwrap();
 	// After delete, remaining function should be in output
 	assert!(actual.contains("alive"), "expected 'alive' in output, got: {actual}");
