@@ -16,7 +16,15 @@ use serde::{Deserialize, Serialize};
 
 /// Increment when the persisted cache shape changes in a non-backwards-compatible way.
 /// W5 ingest checks this on load and discards the cache dir if it doesn't match.
-pub const KNOWLEDGE_SCHEMA_VERSION: u32 = 1;
+///
+/// History:
+/// - v1: initial KnowledgeMeta-gated shape.
+/// - v2 (PLAN-319 W0): `pi-knowledge-core::bm25::SearchIndex` switched to
+///   tombstone-bearing `Vec<Option<SearchDocument>>` storage + new
+///   `id_to_index` / `total_tokens` / `live_count` fields. Old bm25.bin
+///   blobs are not decode-compatible; the meta check rejects them before
+///   the bincode load is attempted.
+pub const KNOWLEDGE_SCHEMA_VERSION: u32 = 2;
 
 /// Lightweight metadata entry stored alongside the heavy bin files (bm25.bin,
 /// graph.bin, vectors.uidx, items.bin). The W5 ingest module reads this first
@@ -217,8 +225,27 @@ mod tests {
 		assert_eq!(
 			meta.status_against(&fp, "", 0),
 			CacheStatus::Stale {
-				reason: "schema version 0 != current 1".into(),
+				reason: format!("schema version 0 != current {KNOWLEDGE_SCHEMA_VERSION}"),
 			},
+		);
+	}
+
+	/// PLAN-319 W0 regression: persisted caches written with the pre-incremental
+	/// `SearchIndex` shape (schema v1) MUST be rejected before bm25.bin is
+	/// decoded, because the new tombstone-bearing `Vec<Option<SearchDocument>>`
+	/// shape is not bincode-decode-compatible with the v1 `Vec<SearchDocument>`.
+	#[test]
+	fn knowledge_meta_status_rejects_v1_caches() {
+		assert_eq!(KNOWLEDGE_SCHEMA_VERSION, 2, "expected v2 after PLAN-319 W0");
+		let fp = dummy_fingerprint();
+		let mut stale = KnowledgeMeta::new(fp.clone());
+		stale.schema_version = 1; // pre-PLAN-319 cache shape
+		assert_eq!(
+			stale.status_against(&fp, "", 0),
+			CacheStatus::Stale {
+				reason: "schema version 1 != current 2".into(),
+			},
+			"v1 caches must be rejected so bm25.bin is never decoded against the new shape",
 		);
 	}
 
