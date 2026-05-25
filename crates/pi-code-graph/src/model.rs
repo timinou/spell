@@ -3,7 +3,9 @@ use std::{collections::BTreeMap, path::PathBuf};
 use petgraph::{Directed, stable_graph::StableGraph, visit::IntoEdgeReferences};
 use serde::{Deserialize, Serialize};
 
-use crate::search::SearchIndex;
+use pi_knowledge_core::bm25::SearchIndex;
+
+use crate::bm25_adapter;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileNode {
@@ -112,12 +114,19 @@ pub struct CodeGraph {
 
 impl CodeGraph {
 	pub fn new(persisted: PersistedCodeGraph) -> Self {
-		let search_index = SearchIndex::build(&persisted);
+		let search_index = bm25_adapter::build_search_index(&persisted);
 		Self {
 			persisted,
 			search_index,
 			vector_index: None,
 		}
+	}
+
+	/// Run a BM25 query and map results back to graph-aware `SearchHit`s.
+	/// Replaces the deleted `pi-code-graph::search::SearchIndex::search` —
+	/// the underlying engine is now `pi-knowledge-core::bm25`.
+	pub fn bm25_search(&self, query: &str, limit: usize) -> Vec<bm25_adapter::SearchHit> {
+		bm25_adapter::bm25_search_adapted(&self.persisted, &self.search_index, query, limit)
 	}
 
 	pub const fn persisted(&self) -> &PersistedCodeGraph {
@@ -170,7 +179,7 @@ impl CodeGraph {
 		persisted: PersistedCodeGraph,
 		vectors: pi_knowledge_core::vec::VectorIndex,
 	) -> Self {
-		let search_index = SearchIndex::build(&persisted);
+		let search_index = bm25_adapter::build_search_index(&persisted);
 		Self { persisted, search_index, vector_index: Some(std::sync::Arc::new(vectors)) }
 	}
 

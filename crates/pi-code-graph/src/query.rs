@@ -158,7 +158,7 @@ impl CodeGraph {
 	) -> Vec<GraphSearchMatch> {
 		// When vectors are available, use hybrid search.
 		if let (Some(vector_index), Some(qv)) = (self.vector_index(), query_vector) {
-			let bm25_hits = self.search_index().search(query, limit * 2);
+			let bm25_hits = self.bm25_search(query, limit * 2);
 			let vector_hits = vector_index.search(qv, limit * 2).unwrap_or_default();
 			let hybrid = crate::hybrid::reciprocal_rank_fusion(&bm25_hits, &vector_hits, self, limit);
 			let graph = self.graph();
@@ -174,8 +174,7 @@ impl CodeGraph {
 		// Fallback: BM25 only.
 		let graph = self.graph();
 		self
-			.search_index()
-			.search(query, limit)
+			.bm25_search(query, limit)
 			.into_iter()
 			.filter_map(|hit| {
 				let node_index = graph.from_index(hit.node_index);

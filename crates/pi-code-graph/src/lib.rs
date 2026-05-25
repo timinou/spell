@@ -1,3 +1,4 @@
+pub mod bm25_adapter;
 pub mod cache;
 pub mod chunking;
 pub mod error;
@@ -6,7 +7,7 @@ pub mod indexer;
 pub mod language;
 pub mod model;
 pub mod query;
-pub mod search;
+pub mod semantic;
 pub mod store;
 
 pub use cache::{CacheStatus, CacheStore, FileFingerprint, GraphCacheEntry, GraphFingerprint};
@@ -31,5 +32,12 @@ pub use query::{
 	GraphFlowResult, GraphImpactResult, GraphNodeSummary, GraphSearchMatch, GraphStatus,
 	GraphSymbolsResult, GraphTraversalLevel,
 };
-pub use search::{SearchHit, SearchIndex};
+pub use bm25_adapter::SearchHit;
+pub use pi_knowledge_core::bm25::SearchIndex;
+pub use semantic::{
+	AnnotationSemanticBackend, Capabilities as SemanticCapabilities, CompositeSemanticBackend,
+	Confidence, Diagnostic as SemanticDiagnostic, InferResult, InlayHint, InlayKind, LineRange,
+	Location as SemanticLocation, SemanticBackend, Severity as DiagnosticSeverity, SignatureInfo,
+	TypeRepr, TypeSource,
+};
 pub use store::GraphStore;

@@ -10,8 +10,8 @@ use petgraph::{
 };
 
 use crate::{
+	bm25_adapter::SearchHit,
 	model::{CodeGraph, EdgeKind, GraphNode},
-	search::SearchHit,
 };
 
 /// Reciprocal Rank Fusion constant. k=60 is the standard value from
