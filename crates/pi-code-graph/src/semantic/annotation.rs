@@ -42,51 +42,78 @@ impl AnnotationSemanticBackend {
 		Self { graph }
 	}
 
-	/// Walk the graph for a Symbol node whose file matches and whose
-	/// line spans `line`. Returns the closest-matching symbol (tightest
-	/// line match wins). `O(N)` over the graph node set; fine for the
-	/// current scale, can be indexed later.
-	fn symbol_at(&self, file: &Path, line: u32) -> Option<&SymbolNode> {
-		let mut best: Option<&SymbolNode> = None;
-		let mut best_distance: u32 = u32::MAX;
+	/// Walk the graph for a Symbol node whose file matches `(line, col)`.
+	///
+	/// Resolution priority:
+	/// 1. Exact line match — if multiple symbols share `line`, the one with
+	///    `column` nearest to `col` wins (col tiebreak).
+	/// 2. Otherwise the nearest preceding symbol (closest `sym.line <= line`),
+	///    representing the symbol whose body the position falls into.
+	///
+	/// Path matching: direct PathBuf equality first; on mismatch falls back
+	/// to canonicalised comparison so absolute-vs-relative-vs-symlink variants
+	/// converge.
+	///
+	/// `O(N)` over the graph node set; can be indexed later.
+	fn symbol_at(&self, file: &Path, line: u32, col: u32) -> Option<&SymbolNode> {
+		let canonical_query = canonicalise_path(file);
+		let mut exact_line: Option<&SymbolNode> = None;
+		let mut exact_line_col_distance: u32 = u32::MAX;
+		let mut best_preceding: Option<&SymbolNode> = None;
+		let mut best_line_distance: u32 = u32::MAX;
 		for node in self.graph.graph().node_weights() {
 			let GraphNode::Symbol(sym) = node else { continue };
-			if sym.file != file {
+			if !file_matches(&sym.file, file, canonical_query.as_deref()) {
 				continue;
 			}
-			// Exact-line match wins immediately.
 			if sym.line == line {
-				return Some(sym);
+				let col_distance = sym.column.abs_diff(col);
+				if col_distance < exact_line_col_distance {
+					exact_line_col_distance = col_distance;
+					exact_line = Some(sym);
+				}
+				continue;
 			}
-			// Otherwise track the nearest preceding symbol (closest above
-			// the queried line) — that's the symbol whose body the
-			// position falls into, in practice.
 			if sym.line <= line {
-				let distance = line - sym.line;
-				if distance < best_distance {
-					best_distance = distance;
-					best = Some(sym);
+				let line_distance = line - sym.line;
+				if line_distance < best_line_distance {
+					best_line_distance = line_distance;
+					best_preceding = Some(sym);
 				}
 			}
 		}
-		best
+		exact_line.or(best_preceding)
 	}
+}
+
+/// Returns true when `sym_file` refers to the same file as `query_file`.
+///
+/// Cheap path: direct PathBuf equality. Slow path (only on mismatch):
+/// canonicalise both sides and compare — catches absolute-vs-relative,
+/// symlink, and trailing-slash variants. Failing canonicalisation falls
+/// through to the original mismatch (treats the file as not-our-target,
+/// which is the safe default).
+fn file_matches(sym_file: &Path, query_file: &Path, canonical_query: Option<&Path>) -> bool {
+	if sym_file == query_file {
+		return true;
+	}
+	let Some(canonical_query) = canonical_query else {
+		return false;
+	};
+	canonicalise_path(sym_file).as_deref() == Some(canonical_query)
+}
+
+fn canonicalise_path(path: &Path) -> Option<std::path::PathBuf> {
+	std::fs::canonicalize(path).ok()
 }
 
 impl SemanticBackend for AnnotationSemanticBackend {
 	fn capabilities(&self) -> Capabilities {
-		Capabilities {
-			inferred_hover:  false,
-			type_definition: false,
-			signature:       false,
-			inlay_hints:     false,
-			narrow_dispatch: false,
-			diagnostics:     false,
-		}
+		Capabilities::default()
 	}
 
-	fn type_at(&self, file: &Path, line: u32, _col: u32) -> InferResult {
-		let Some(sym) = self.symbol_at(file, line) else {
+	fn type_at(&self, file: &Path, line: u32, col: u32) -> InferResult {
+		let Some(sym) = self.symbol_at(file, line, col) else {
 			return InferResult::unknown();
 		};
 		let Some(detail) = sym.detail.as_deref() else {
@@ -208,13 +235,55 @@ mod tests {
 	#[test]
 	fn capabilities_are_all_false_for_annotation() {
 		let backend = AnnotationSemanticBackend::new(build_test_graph());
-		let c = backend.capabilities();
-		assert!(!c.inferred_hover);
-		assert!(!c.type_definition);
-		assert!(!c.signature);
-		assert!(!c.inlay_hints);
-		assert!(!c.narrow_dispatch);
-		assert!(!c.diagnostics);
+		assert_eq!(backend.capabilities(), Capabilities::default());
+	}
+
+	/// W0g (P1): column tiebreak when multiple symbols share a line.
+	/// Builds a graph with two symbols on line 5 at columns 4 and 20.
+	/// Queries at col 5 (near col 4) must resolve to the first; queries at
+	/// col 19 (near col 20) must resolve to the second.
+	#[test]
+	fn symbol_at_uses_col_as_tiebreak_for_same_line_symbols() {
+		let mut graph: StableGraph<GraphNode, EdgeKind> = StableGraph::new();
+		graph.add_node(GraphNode::File(FileNode {
+			path:     PathBuf::from("src/multi.rs"),
+			language: "rust".into(),
+		}));
+		graph.add_node(GraphNode::Symbol(SymbolNode {
+			name:           "a".into(),
+			qualified_name: "src/multi.rs::a".into(),
+			file:           PathBuf::from("src/multi.rs"),
+			kind:           SymbolKind::Variable,
+			exported:       false,
+			line:           5,
+			column:         4,
+			detail:         Some("a: i32".into()),
+		}));
+		graph.add_node(GraphNode::Symbol(SymbolNode {
+			name:           "b".into(),
+			qualified_name: "src/multi.rs::b".into(),
+			file:           PathBuf::from("src/multi.rs"),
+			kind:           SymbolKind::Variable,
+			exported:       false,
+			line:           5,
+			column:         20,
+			detail:         Some("b: &str".into()),
+		}));
+		let backend = AnnotationSemanticBackend::new(Arc::new(CodeGraph::from(
+			PersistedCodeGraph {
+				root:            PathBuf::from("."),
+				graph,
+				stats:           GraphStats::default(),
+				generated_at_ms: 0,
+				git_head:        None,
+			},
+		)));
+
+		let near_a = backend.type_at(&PathBuf::from("src/multi.rs"), 5, 5);
+		assert_eq!(near_a.repr.as_str(), "a: i32");
+
+		let near_b = backend.type_at(&PathBuf::from("src/multi.rs"), 5, 19);
+		assert_eq!(near_b.repr.as_str(), "b: &str");
 	}
 
 	#[test]

@@ -13,7 +13,7 @@ use std::{collections::HashMap, path::Path, sync::Arc};
 
 use crate::semantic::{
 	annotation::AnnotationSemanticBackend, Capabilities, Diagnostic, InferResult, InlayHint,
-	LineRange, Location, SemanticBackend, SignatureInfo,
+	LineRange, Location, RenameError, SemanticBackend, SignatureInfo, WorkspaceEdit,
 };
 
 /// Dispatches `SemanticBackend` calls per-file by extension.
@@ -38,17 +38,27 @@ impl CompositeSemanticBackend {
 	/// Register an LSP-backed (or any other) backend for one or more file
 	/// extensions. Extensions are normalised: lowercased, leading `.`
 	/// stripped. Last writer wins for a given extension.
+	///
+	/// Returns the extensions whose registration **silently overwrote** a
+	/// previous binding — callers (KDL config loader, W2) should surface
+	/// these as a warning Informational diagnostic so a user who configured
+	/// two LSPs for `.ts` learns about it.
 	pub fn register_lsp(
 		&mut self,
 		extensions: impl IntoIterator<Item = impl Into<String>>,
 		backend: Arc<dyn SemanticBackend>,
-	) {
+	) -> Vec<String> {
+		let mut overwritten = Vec::new();
 		for ext in extensions {
 			let key = normalise_ext(&ext.into());
-			if !key.is_empty() {
-				self.by_ext.insert(key, backend.clone());
+			if key.is_empty() {
+				continue;
+			}
+			if self.by_ext.insert(key.clone(), backend.clone()).is_some() {
+				overwritten.push(key);
 			}
 		}
+		overwritten
 	}
 
 	/// Resolve the backend that should service queries for `file`. Falls
@@ -85,6 +95,8 @@ impl SemanticBackend for CompositeSemanticBackend {
 			caps.inlay_hints |= c.inlay_hints;
 			caps.narrow_dispatch |= c.narrow_dispatch;
 			caps.diagnostics |= c.diagnostics;
+			caps.rename |= c.rename;
+			caps.references_narrowed |= c.references_narrowed;
 		}
 		caps
 	}
@@ -94,6 +106,15 @@ impl SemanticBackend for CompositeSemanticBackend {
 		let primary = backend.type_at(file, line, col);
 		// LSP-backed answers always win; fall back to Annotation when the
 		// picked backend returns Unknown AND it isn't already the default.
+		//
+		// Identity check uses `Arc::as_ptr` followed by `*const ()` cast to
+		// strip the trait-object vtable: two `Arc<dyn SemanticBackend>`
+		// pointing at the same allocation give the same data-pointer even
+		// when their vtables differ. `std::ptr::addr_eq` ignores metadata
+		// (intended for this exact case per std docs). The cast chain looks
+		// magical but is the documented idiom — a refactor that boxes
+		// `self.default` differently must preserve the Arc allocation
+		// identity for this guard to keep working.
 		if primary.is_unknown() && !std::ptr::addr_eq(
 			Arc::as_ptr(&backend) as *const (),
 			Arc::as_ptr(&self.default) as *const (),
@@ -122,6 +143,24 @@ impl SemanticBackend for CompositeSemanticBackend {
 
 	fn diagnostics(&self, file: &Path) -> Vec<Diagnostic> {
 		self.pick(file).diagnostics(file)
+	}
+
+	fn rename_preview(
+		&self,
+		file: &Path,
+		line: u32,
+		col: u32,
+		new_name: &str,
+	) -> Result<WorkspaceEdit, RenameError> {
+		self.pick(file).rename_preview(file, line, col, new_name)
+	}
+
+	fn references_narrowed(
+		&self,
+		symbol: &Location,
+		receiver_filter: Option<&crate::semantic::TypeRepr>,
+	) -> Vec<Location> {
+		self.pick(&symbol.file).references_narrowed(symbol, receiver_filter)
 	}
 }
 
@@ -165,7 +204,7 @@ mod tests {
 	fn dispatches_by_extension() {
 		let default = Arc::new(AnnotationSemanticBackend::new(empty_graph()));
 		let mut composite = CompositeSemanticBackend::new(default);
-		composite.register_lsp(
+		let overwritten = composite.register_lsp(
 			[".rs"],
 			Arc::new(FixedBackend {
 				fixed: InferResult {
@@ -175,6 +214,7 @@ mod tests {
 				},
 			}),
 		);
+		assert!(overwritten.is_empty(), "first registration has no prior");
 
 		// .rs file routes to the LSP backend.
 		let r = composite.type_at(&PathBuf::from("src/foo.rs"), 1, 0);
@@ -191,7 +231,7 @@ mod tests {
 	fn extension_normalisation_handles_dot_prefix_and_case() {
 		let default = Arc::new(AnnotationSemanticBackend::new(empty_graph()));
 		let mut composite = CompositeSemanticBackend::new(default);
-		composite.register_lsp(
+		let _ = composite.register_lsp(
 			["RS", ".Ex", "heex"], // mixed dot-prefix + case
 			Arc::new(FixedBackend {
 				fixed: InferResult {
@@ -225,7 +265,7 @@ mod tests {
 		}
 		let default = Arc::new(AnnotationSemanticBackend::new(empty_graph()));
 		let mut composite = CompositeSemanticBackend::new(default);
-		composite.register_lsp(["rs"], Arc::new(UnknownBackend));
+		let _ = composite.register_lsp(["rs"], Arc::new(UnknownBackend));
 		// Composite returns Unknown — but we exercise the fallback branch.
 		let r = composite.type_at(&PathBuf::from("a.rs"), 1, 0);
 		assert!(r.is_unknown());
@@ -240,7 +280,7 @@ mod tests {
 		assert!(!composite.capabilities().inferred_hover);
 
 		// Register a backend that does inferred_hover.
-		composite.register_lsp(
+		let _ = composite.register_lsp(
 			["rs"],
 			Arc::new(FixedBackend {
 				fixed: InferResult::unknown(),
@@ -260,5 +300,24 @@ mod tests {
 		// Empty graph, no extension → returns Unknown via Annotation.
 		let r = composite.type_at(&PathBuf::from("README"), 1, 0);
 		assert!(r.is_unknown());
+	}
+
+	/// W0g (P3): `register_lsp` returns the list of extensions whose prior
+	/// binding it silently overwrote. KDL config loader (W2) surfaces these
+	/// as an Informational diagnostic.
+	#[test]
+	fn register_lsp_reports_overwritten_extensions() {
+		let default = Arc::new(AnnotationSemanticBackend::new(empty_graph()));
+		let mut composite = CompositeSemanticBackend::new(default);
+		let backend_a: Arc<dyn SemanticBackend> = Arc::new(FixedBackend {
+			fixed: InferResult::unknown(),
+		});
+		let backend_b: Arc<dyn SemanticBackend> = Arc::new(FixedBackend {
+			fixed: InferResult::unknown(),
+		});
+
+		assert!(composite.register_lsp(["rs", "ts"], backend_a).is_empty());
+		let overwritten = composite.register_lsp(["ts", "py"], backend_b);
+		assert_eq!(overwritten, vec!["ts".to_string()]);
 	}
 }
