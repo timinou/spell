@@ -205,10 +205,26 @@ Pick the right tool for the job:
 **Edit tool**: For source files with tree-sitter support, prefer structural actions (`symbolReplace`, `fileFindReplace`, etc.) over numeric line ops or patch mode.
 {{/has}}
 
-{{#has tools "lsp"}}
-### LSP knows; text search guesses
+### Graph queries via `find`
 
-Semantic questions **MUST** be answered with `lsp` — definitions, types, implementations, references. Text search guesses; LSP knows.
+Semantic navigation **MUST** flow through `find` graph edges, not grep:
+- `find { target: "foo.ts::Bar.method def→" }` — who calls / references this?
+- `find { target: "foo.ts::useX ref→" }` — follow a reference to its definition
+- `find { target: "foo.ts::IThing implements→" }` — who implements this interface?
+- `find { target: "foo.py::Cls inherits→" }` — base types
+- `find { target: "foo.ts::Bar.method#hover" }` — written signature line
+
+These walk pi-code-graph (real cross-file analysis) and follow re-export
+chains. Trailing `→` (no tail step) is sugar for `…→§*`.
+
+{{#has tools "lsp"}}
+### LSP for type-aware + diagnostics only
+
+For type-aware questions that pi-code-graph doesn't yet cover
+(polymorphic dispatch precision, inferred-type hover, live
+diagnostics) use `lsp`. For routine def/ref/call/implements/inherits
+navigation prefer `find` — it's faster, doesn't require an LSP
+server, and covers more languages.
 {{/has}}
 
 {{#has tools "edit"}}

@@ -296,7 +296,12 @@ export const TOOL_TIERS: Record<string, ToolTier> = {
 	// Core — always loaded, essential for any task
 
 	bash: "core",
-	lsp: "core",
+	// PLAN-318 W6: lsp demoted from core to specialized. pi-code-graph
+	// + find/code-path tools cover ≥95% of agent navigation needs
+	// (def→ / ref→ / call→ / import→ / implements→ / inherits→ / hover).
+	// LSP remains available for type-aware queries and live
+	// diagnostics (FUP-090 / FUP-091).
+	lsp: "specialized",
 
 	task: "core",
 	ask: "core",
