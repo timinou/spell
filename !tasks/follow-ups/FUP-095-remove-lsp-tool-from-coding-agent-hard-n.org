@@ -1,0 +1,167 @@
+#+TITLE: Remove lsp tool from coding-agent (hard nuke of packages/coding-agent/src/lsp/)
+#+STATE: ITEM
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: FUP-095-remove-lsp-tool-from-coding-agent-hard-n
+#+LAYER: coding-agent
+
+* Initial Message
+
+ok now please explain what spell can do w.r.t. the find/get/edit/create actions and how pi-code-* supports it, especially pi-code-graph, in the context of what you did, and what you were able to achieve
+
+* Initial Message
+
+Final step of the =lsp= tool elimination arc:
+- [[id:PLAN-318]] hardened pi-code-graph as production lexical backend.
+- [[id:PLAN-319-semanticbackend-foundation-expert-lsp-pi]] builds
+  =SemanticBackend= layer + Expert (Elixir) pilot.
+- Sequenced multi-language FUP fans out LSP wiring for the rest.
+- *This FUP* hard-deletes the TS-side =lsp= tool surface.
+
+Cutover constraint: do NOT execute this FUP until the multi-language FUP has
+landed at least TypeScript + Rust + Python coverage in SemanticBackend.
+Anything less risks landing users without LSP-backed features mid-PR.
+
+* Scope
+
+In:
+- Hard-delete =packages/coding-agent/src/lsp/= entire directory (~5700 LOC).
+- Hard-delete =packages/coding-agent/src/prompts/tools/lsp.md=.
+- Remove =lsp.*= settings from =src/config/settings-schema.ts= (4 entries:
+  =lsp.enabled=, =lsp.formatOnWrite=, =lsp.diagnosticsOnWrite=,
+  =lsp.diagnosticsOnEdit=).
+- Remove =lsp.*= mappings from =src/config/kdl-settings-map.ts=.
+- Remove =lsp= tool registration from =src/tools/index.ts:418,430=.
+- Remove =lsp= from every tool-allowlist across the codebase:
+  · =src/task/index.ts:1332= (planModeTools)
+  · =src/orchestrators/canvas-task-manager.ts:31= (DEFAULT_TOOLS)
+  · =src/orchestrators/canvas-orchestrator.ts:123=
+  · =src/modes/fluid-mode.ts:622=
+  · =src/session/spill-policy.ts:52=
+- Drop the =lsp.diagnosticsOnWrite= hook from =src/sdk.ts:1849=.
+- Drop the =lsp.diagnostics= call from =src/cursor.ts:212=.
+- Drop =--lsp= flag from =src/cli/args.ts=.
+- Drop LSP startup wiring from =src/main.ts=.
+- Update tests that mock LSP responses: delete or rewrite as
+  SemanticBackend integration tests.
+- Update =find.md= / =edit.md= / =system-prompt.md=:
+  · drop any LSP-tool references
+  · ensure agents reach for =find { ::S #hover_inferred }= etc., not =lsp=
+- Save memory concept: =lsp-tool-replaced-by-semantic-backend=, distilled
+  from PLAN-319 + multi-language FUP + this FUP.
+
+Out:
+- Any new SemanticBackend implementation work (covered by predecessor FUPs).
+- KDL config schema changes (locked in PLAN-319).
+
+* Prerequisites (hard gate)
+
+Must be satisfied before starting:
+- [ ] PLAN-319 closed.
+- [ ] Multi-language FUP has landed TS (vtsls) + Rust (rust-analyzer) + Python
+  (pyrefly) coverage at minimum.
+- [ ] All 3 languages have passing oracle integration tests.
+- [ ] Reviewer subagent confirms no regression in =find=/=edit= coverage.
+
+If any prerequisite is missing, file a FUP for the gap and stop.
+
+* Migration Map
+
+| Old =lsp.*= action       | New surface                                     |
+| =lsp.definition=         | =find { ::S ref→ }= (pi-code-graph, already)    |
+| =lsp.references=         | =find { ::S def→ }= (pi-code-graph, already)    |
+| =lsp.implementation=     | =find { ::I implements→ }= (already)            |
+| =lsp.symbols=            | =find { ::§* }= / =find { ::§class }= (already) |
+| =lsp.hover= (written)    | =find { ::S #hover }= (already, W4 of 318)      |
+| =lsp.hover= (inferred)   | =find { ::S #hover_inferred }= (PLAN-319 W3)    |
+| =lsp.type_definition=    | =find { ::S #type_definition }= (PLAN-319 W3)   |
+| =lsp.diagnostics=        | =find { glob #diagnostics }= (PLAN-319 W3)      |
+| =lsp.rename=             | =edit { ::S symbolRename newName=… }= cross-file (existing edit + def→ traversal) |
+| =lsp.code_actions=       | DROPPED — IDE-only, agents never used productively |
+| =lsp.status=             | DROPPED — LSP server lifecycle is internal      |
+| =lsp.reload=             | DROPPED — same                                  |
+| =lsp.formatOnWrite=      | DROPPED — bash to =cargo fmt= / =prettier= / etc |
+| =lsp.diagnosticsOnEdit=  | DROPPED — querying =#diagnostics= is on-demand  |
+
+* File-by-File Removal Checklist
+
+#+begin_example
+DELETE:
+  packages/coding-agent/src/lsp/                    (entire dir)
+  packages/coding-agent/src/prompts/tools/lsp.md
+
+EDIT (remove lsp references):
+  packages/coding-agent/src/sdk.ts                  :1849
+  packages/coding-agent/src/main.ts
+  packages/coding-agent/src/cursor.ts               :212
+  packages/coding-agent/src/system-prompt.ts
+  packages/coding-agent/src/cli/args.ts
+  packages/coding-agent/src/tools/index.ts          :418, :430
+  packages/coding-agent/src/tools/tool-timeouts.ts
+  packages/coding-agent/src/tools/context-pressure-policy.ts
+  packages/coding-agent/src/task/index.ts           :1332
+  packages/coding-agent/src/task/executor.ts
+  packages/coding-agent/src/session/spill-policy.ts :52
+  packages/coding-agent/src/orchestrators/canvas-task-manager.ts :31
+  packages/coding-agent/src/orchestrators/canvas-orchestrator.ts :123
+  packages/coding-agent/src/modes/fluid-mode.ts     :622
+  packages/coding-agent/src/modes/interactive-mode.ts
+  packages/coding-agent/src/modes/types.ts
+  packages/coding-agent/src/modes/components/welcome.ts
+  packages/coding-agent/src/modes/controllers/command-controller.ts
+  packages/coding-agent/src/commands/launch-common.ts
+  packages/coding-agent/src/patch/index.ts
+  packages/coding-agent/src/patch/shared.ts
+  packages/coding-agent/src/config/settings-schema.ts :995-1030
+  packages/coding-agent/src/config/kdl-settings-map.ts :459-470
+
+UPDATE DOCS:
+  packages/coding-agent/src/prompts/tools/find.md
+  packages/coding-agent/src/prompts/tools/edit.md
+  packages/coding-agent/src/prompts/system/system-prompt.md
+
+TESTS:
+  packages/coding-agent/test/**/*lsp*               (delete or rewrite)
+#+end_example
+
+The above is computed from the 2026-05-25 codebase snapshot; re-run
+=rg -l lsp packages/coding-agent --type ts= at implementation time
+in case more references accumulate.
+
+* Acceptance
+
+- =bun run --cwd packages/coding-agent check= → 0 errors.
+- =rg -n "lsp" packages/coding-agent/src= returns only:
+  · vendor/dependency mentions (allowed)
+  · comments referencing the historical removal (allowed)
+  No live =lsp= tool code remains.
+- All existing =find=/=edit= recipes continue working.
+- Agents transparently get inferred hover / type-defs / diagnostics
+  via the SemanticBackend layer with zero tool-surface change.
+- Reviewer subagent confirms no orphan references.
+- Memory concept saved + linked to PLAN-318 / PLAN-319.
+
+* Verification
+
+#+begin_example
+bun run --cwd packages/coding-agent check
+bun test packages/coding-agent/
+cargo test --workspace
+rg -n "lsp" packages/coding-agent/src | head -50    # eyeball: no live code
+#+end_example
+
+* Rollback Plan
+
+If nuke causes user regression:
+- =git revert= the nuke commit (single atomic commit required).
+- The =packages/coding-agent/src/lsp/= directory comes back; users have
+  the old =lsp= tool plus the new SemanticBackend layer side-by-side.
+- File a BUG describing the regression; address in a gap-fix wave.
+
+This is why the nuke MUST be a single atomic commit, not piecewise.
+
+* References
+
+- [[id:PLAN-319-semanticbackend-foundation-expert-lsp-pi]] — foundation
+- =packages/coding-agent/src/lsp/= (delete target)
+- =packages/coding-agent/src/prompts/tools/lsp.md= (delete target)
