@@ -168,6 +168,24 @@ impl CodeResolver for CodeResolverImpl {
 				apply_symbol_slice(&mut nref, &node, &src, s_start, s_end, relative);
 			}
 			if let Some(q) = _qualifier {
+				// PLAN-318 W4: universal #hover qualifier returns the symbol's
+				// written signature — the declaration's text up to the first
+				// brace, fat arrow, or end of line. Dialect-independent: an
+				// agent shouldn't need to know whether a Rust fn or a TS method
+				// uses #sig or #signature or #header.
+				if q.name == "hover" {
+					let decl_text = &src[node.start_byte()..node.end_byte()];
+					let sig_end = decl_text
+						.find(|c: char| c == '{' || c == '\n')
+						.or_else(|| decl_text.find("=>"))
+						.unwrap_or(decl_text.len());
+					let sig = decl_text[..sig_end].trim_end().to_string();
+					let sig_start = node.start_byte();
+					nref.range = sig_start..sig_start + sig.len();
+					nref.content = Some(pi_code_path::types::Content::Text { value: sig });
+					results.push(nref);
+					continue;
+				}
 				if let Some(qspec) = dialect.qualifiers.iter().find(|qs| qs.name == q.name) {
 					if qspec.applies_to.iter().any(|k| k == node.kind()) {
 						if let Some(byte_range) = qspec.resolve.resolve(node, &src, q.args.as_deref()) {
