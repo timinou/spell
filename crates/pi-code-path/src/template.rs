@@ -377,8 +377,8 @@ fn consume_uppercase_token(
 ) -> String {
 	let mut name = String::new();
 	name.push(first);
- while let Some(c) = chars.peek().copied() {
- 		if c.is_ascii_uppercase() || c.is_ascii_digit() {
+	while let Some(c) = chars.peek().copied() {
+		if c.is_ascii_uppercase() || c.is_ascii_digit() {
 			chars.next();
 			name.push(c);
 		} else {
