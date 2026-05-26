@@ -1044,6 +1044,64 @@ mod tests {
 		assert_eq!(cp.qualifier.as_ref().unwrap().name, "body");
 	}
 
+	/// PLAN-319 W3: the new semantic qualifiers parse for free via the
+	/// existing `#<ident>` grammar. Resolvers (`pi-natives::code_path::
+	/// type_resolver`) dispatch on the name.
+	#[test]
+	fn parse_w3_semantic_qualifiers_round_trip() {
+		for (input, expected) in [
+			("src/foo.ex::handle_event#hover_inferred", "hover_inferred"),
+			("src/foo.ex::result#type_definition", "type_definition"),
+			("src/foo.ex::call_site#signature", "signature"),
+			("src/foo.ex::region#inlay", "inlay"),
+			("src/foo.ex::file#diagnostics", "diagnostics"),
+		] {
+			let cp = parse_code_path(input, &DotLexer)
+				.unwrap_or_else(|e| panic!("parse failed for {input}: {e:?}"));
+			assert_eq!(
+				cp.qualifier.as_ref().expect("qualifier present").name,
+				expected,
+				"{input}"
+			);
+		}
+	}
+
+	/// PLAN-319 W3: `[type_aware]` is a bare flag predicate.
+	#[test]
+	fn parse_w3_type_aware_predicate() {
+		let cp = parse_code_path("src/foo.ex::handle_call[type_aware]", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert!(
+			q.head.predicates
+				.iter()
+				.any(|p| matches!(p, Predicate::Flag(s) if s == "type_aware")),
+			"type_aware flag predicate present"
+		);
+	}
+
+	/// PLAN-319 W3: `[severity=error]` and `[source=semantic]` are attribute
+	/// predicates that consumers (#diagnostics resolver) post-filter on.
+	#[test]
+	fn parse_w3_severity_and_source_predicates() {
+		let cp = parse_code_path(
+			"src/foo.ex::file[severity=error][source=semantic]#diagnostics",
+			&DotLexer,
+		)
+		.unwrap();
+		let q = cp.query.unwrap();
+		let attrs: Vec<_> = q
+			.head
+			.predicates
+			.iter()
+			.filter_map(|p| match p {
+				Predicate::Attribute { name, value } => Some((name.as_str(), value.as_str())),
+				_ => None,
+			})
+			.collect();
+		assert!(attrs.contains(&("severity", "error")), "severity attr present: {attrs:?}");
+		assert!(attrs.contains(&("source", "semantic")), "source attr present: {attrs:?}");
+	}
+
 	#[test]
 	fn parse_node_kind_axis() {
 		let cp = parse_code_path("src/api.ts::§function", &DotLexer).unwrap();
