@@ -168,21 +168,10 @@ impl CodeResolver for CodeResolverImpl {
 				apply_symbol_slice(&mut nref, &node, &src, s_start, s_end, relative);
 			}
 			if let Some(q) = _qualifier {
-				// PLAN-318 W4: universal #hover qualifier returns the symbol's
-				// written signature — the declaration's text up to the first
-				// brace, fat arrow, or end of line. Dialect-independent: an
-				// agent shouldn't need to know whether a Rust fn or a TS method
-				// uses #sig or #signature or #header.
-				if q.name == "hover" {
-					let decl_text = &src[node.start_byte()..node.end_byte()];
-					let sig_end = hover_signature_end(decl_text);
-					let sig = decl_text[..sig_end].trim_end().to_string();
-					let sig_start = node.start_byte();
-					nref.range = sig_start..sig_start + sig.len();
-					nref.content = Some(pi_code_path::types::Content::Text { value: sig });
-					results.push(nref);
-					continue;
-				}
+				// FUP-099 (FUP-LIVE): #hover, #signature, #type_definition,
+				// #inlay, #diagnostics are routed via semantic_dispatch at the
+				// napi layer BEFORE reaching the walker. The walker only sees
+				// dialect-registered (text/code) qualifiers from here on.
 				if let Some(qspec) = dialect.qualifiers.iter().find(|qs| qs.name == q.name) {
 					if qspec.applies_to.iter().any(|k| k == node.kind()) {
 						if let Some(byte_range) = qspec.resolve.resolve(node, &src, q.args.as_deref()) {
@@ -239,127 +228,11 @@ impl CodeResolver for CodeResolverImpl {
 /// - Relative (`relative=true`): result = lines `sym.first + start .. sym.last
 ///   + end`, each clamped to `[1, file.line_count]`.
 /// - Open ends (None) substitute the symbol's own bound for that side.
-/// PLAN-318 W4g: find the end of a declaration's written signature.
 ///
-/// Rules:
-/// 1. Walk byte-by-byte tracking nesting of `(`, `[`, and `<`. Brace-depth
-///    counting is intentionally restricted to those three openers so that
-///    `<T = { ... }>` (generic param defaults) and `{ key: 1 }` defaults
-///    don't terminate the scan early when the signature itself contains a
-///    body opener nested inside parameters.
-/// 2. At depth 0, the signature ends at the first `{`, `=>`, or `;` —
-///    these mark the boundary between signature and body in C-like
-///    grammars (TS/JS/Rust/Java/Go/C++/Python type-hinted defs).
-/// 3. We do NOT use `\n` as a hard cutoff: real signatures often wrap
-///    across multiple lines (long parameter lists). Falling back to the
-///    full text is acceptable when no opener appears.
-/// 4. String and comment skipping: handle `"..."`, `'...'`, `//...` to
-///    EOL, and `/* ... */`. Backticks (TS template literals) are also
-///    handled.
-fn hover_signature_end(decl_text: &str) -> usize {
-	let bytes = decl_text.as_bytes();
-	let mut i = 0usize;
-	let mut depth: i32 = 0;
-	while i < bytes.len() {
-		let b = bytes[i];
-		match b {
-			b'(' | b'[' | b'<' => {
-				depth += 1;
-				i += 1;
-			},
-			b')' | b']' | b'>' => {
-				depth -= 1;
-				i += 1;
-			},
-			b'{' if depth == 0 => return i,
-			b';' if depth == 0 => return i,
-			b'=' if depth == 0
-				&& i + 1 < bytes.len()
-				&& bytes[i + 1] == b'>' =>
-			{
-				return i;
-			},
-			b'"' | b'\'' | b'`' => {
-				let quote = b;
-				i += 1;
-				while i < bytes.len() && bytes[i] != quote {
-					if bytes[i] == b'\\' && i + 1 < bytes.len() {
-						i += 2;
-					} else {
-						i += 1;
-					}
-				}
-				if i < bytes.len() {
-					i += 1;
-				}
-			},
-			b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
-				while i < bytes.len() && bytes[i] != b'\n' {
-					i += 1;
-				}
-			},
-			b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
-				i += 2;
-				while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-					i += 1;
-				}
-				if i + 1 < bytes.len() {
-					i += 2;
-				}
-			},
-			_ => i += 1,
-		}
-	}
-	decl_text.len()
-}
-
-#[cfg(test)]
-mod hover_signature_tests {
-	use super::hover_signature_end;
-
-	fn end_at<'a>(input: &'a str) -> &'a str {
-		let end = hover_signature_end(input);
-		&input[..end]
-	}
-
-	#[test]
-	fn multi_line_function_signature_kept_intact() {
-		let input = "function foo(\n  x: number,\n  y: number,\n): number {\n  return x + y;\n}";
-		assert_eq!(end_at(input).trim_end(), "function foo(\n  x: number,\n  y: number,\n): number");
-	}
-
-	#[test]
-	fn object_literal_in_default_does_not_cut_signature() {
-		let input = "function f(opts = { a: 1 }): void {}";
-		assert_eq!(end_at(input).trim_end(), "function f(opts = { a: 1 }): void");
-	}
-
-	#[test]
-	fn generic_default_with_object_does_not_cut() {
-		let input = "function g<T = { k: 1 }>(x: T): T {}";
-		assert_eq!(end_at(input).trim_end(), "function g<T = { k: 1 }>(x: T): T");
-	}
-
-	#[test]
-	fn fat_arrow_terminates() {
-		let input = "const f = (x: number) => x + 1";
-		assert_eq!(end_at(input).trim_end(), "const f = (x: number)");
-	}
-
-	#[test]
-	fn semicolon_terminates_for_decl_only_signatures() {
-		let input = "function abstractFoo(x: number): void;";
-		assert_eq!(end_at(input).trim_end(), "function abstractFoo(x: number): void");
-	}
-
-	#[test]
-	fn no_body_falls_back_to_full_text() {
-		let input = "function plain(x: number): void";
-		assert_eq!(end_at(input), input);
-	}
-}
-
-
+/// FUP-099 (FUP-LIVE) removed the `hover_signature_end` helper that used
+/// to power the walker's text-based `#hover` path; `#hover` now flows
+/// through `semantic_dispatch` → `AnnotationSemanticBackend` (which uses
+/// `EngineProfileExtractor::signature_snippet` for the same purpose).
 fn apply_symbol_slice(
 	nref: &mut NodeRef,
 	node: &Node<'_>,

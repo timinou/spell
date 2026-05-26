@@ -14,7 +14,9 @@ semantic {
     // Per-language wiring. Tree-sitter extractors are always on (no toggle);
     // an optional `lsp "<name>"` reference enables type-inference for that
     // language via the SemanticBackend layer.
-    language "elixir" { lsp "expert" }
+    language "elixir"     { lsp "expert" }
+    language "rust"       { lsp "rust-analyzer" }
+    language "typescript" { lsp "typescript-language-server" }
     // Catch-all: no LSP, AnnotationSemanticBackend only.
     language "*" { }
 
@@ -34,4 +36,24 @@ semantic {
 
         install-hint "Install Expert: https://github.com/elixir-lang/expert"
     }
+
+    server "rust-analyzer" {
+        command "rust-analyzer"
+        file-types ".rs"
+        root-markers "Cargo.toml" "Cargo.lock"
+        request-timeout-secs 10
+
+        install-hint "Install rust-analyzer: https://rust-analyzer.github.io/"
+    }
+
+    server "typescript-language-server" {
+        command "typescript-language-server"
+        args "--stdio"
+        file-types ".ts" ".tsx" ".mts" ".cts" ".js" ".jsx" ".mjs" ".cjs"
+        root-markers "package.json" "tsconfig.json" "jsconfig.json"
+        request-timeout-secs 10
+
+        install-hint "Install via: npm install -g typescript-language-server typescript"
+    }
 }
+

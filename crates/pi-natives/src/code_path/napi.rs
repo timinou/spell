@@ -27,6 +27,7 @@ use super::{
 	extractors::default_extractors,
 	heading_resolver,
 	marshal::{ARTIFACT_THRESHOLD, diagnostic_to_dto, mutation_outcome_to_dto, nodes_to_dtos},
+	semantic_dispatch,
 };
 use crate::task::CancelToken;
 
@@ -788,7 +789,15 @@ pub fn execute_code_path_inner(
 	// ── Query path (default) ─────────────────────────────────────
 	let mut nodes = match &cp.locator {
 		Locator::Fs(_) => {
-			if is_text_qualifier_only(&cp) {
+			if semantic_dispatch::is_semantic_dispatch(&cp) {
+				// FUP-099 (FUP-LIVE): #hover / #signature / #type_definition /
+				// #inlay / #diagnostics (and the deprecated #hover_inferred)
+				// dispatch via the per-workspace CompositeSemanticBackend
+				// before any of the text/symbol/diff/outline paths claim the
+				// qualifier. Mutual exclusion with text qualifiers is by name:
+				// no semantic qualifier collides with the text/fs qualifier set.
+				semantic_dispatch::resolve(&cp, &root, &pi_token, &cancel_token)?
+			} else if is_text_qualifier_only(&cp) {
 				// FEAT-689 / B2,B10: bare-file + content qualifier (#raw,
 				// #bytes, #lines, #text, #match, #image) routes to the
 				// TextResolver, not the FsResolver. Without this branch
