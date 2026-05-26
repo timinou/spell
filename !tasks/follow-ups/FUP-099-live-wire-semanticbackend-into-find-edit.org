@@ -1,0 +1,93 @@
+#+TITLE: LIVE: wire SemanticBackend into find/edit dispatch path
+#+STATE: ITEM
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: FUP-099-live-wire-semanticbackend-into-find-edit
+#+DISTILLED_FROM: FUP-098
+#+EFFORT: L
+#+LAYER: core
+#+PRIORITY: #A
+
+* Initial Message
+
+try out the new merged features and tell me what works/doesn't, then show me how you'd go about an elegant implementation of FUP-094..096 given what you understand about this
+
+* Goal
+
+Wire =pi-natives::code_path::type_resolver::dispatch= into the live find/edit path so semantic qualifiers (=#hover=, =#signature=, =#type_definition=, =#inlay=, =#diagnostics=) reach the SemanticBackend layer instead of returning "unknown qualifier" or text-only signatures.
+
+PLAN-319 W3 shipped the dispatch as a library with **zero call sites outside its own tests** (verified 2026-05-26 against HEAD =827429c24=). FUP-LIVE lights it up.
+
+* Scope
+
+Full scope doc lives at: =!tasks/follow-ups/FUP-LIVE-scope.md=
+
+Summary of touch points (~580 LOC net):
+
+| # | file                                              | LOC  | what                                             |
+|---|---------------------------------------------------|------|--------------------------------------------------|
+| 1 | =pi-natives::semantic_cache= (NEW)                | ~80  | per-workspace SemanticBackend cache              |
+| 2 | =pi-natives::code_path::semantic_dispatch= (NEW)  | ~150 | semantic qualifier dispatch at napi.rs entry     |
+| 3 | format helpers (in semantic_dispatch)              | ~80  | TypeResolverOutcome → NodeRef                    |
+| 4 | =walker.rs= delete =#hover= text-only path         | -25  | covered by AnnotationSemanticBackend             |
+| 5 | (none — LspClient is sync by design)              | 0    | accept blocking LSP requests on find path        |
+| 6 | =code_buffer= → DocumentSync                       | ~30  | mid-edit file sync                               |
+| 7 | =tests/semantic_live_e2e.rs= (NEW)                 | ~200 | integration tests per qualifier                  |
+| 8 | =defaults.kdl= add rust/typescript                 | ~25  | enables Rust + TS for tests                      |
+| napi.rs | inject semantic dispatch branch              | ~10  | mirror is_diff_qualifier routing                 |
+
+** Sequenced implementation
+
+1. =semantic_cache.rs= + unit tests (1h)
+2. =semantic_dispatch::resolve= + position resolution (2h)
+3. =format_outcome= + per-variant formatters (1h)
+4. napi.rs branch injection (30m)
+5. integration tests (1h)
+6. spot-check AnnotationSemanticBackend::type_at \u2014 ✓ verified, populates from extractor detail (no-op)
+7. walker.rs =#hover= deletion (30m)
+8. defaults.kdl rust/typescript stanzas (30m)
+9. smart-merge integration test with real LSP (30m, =#[ignore]= gated)
+10. M-6 buffer-sync wiring (1h)
+11. reviewer wave (1h)
+12. gap fixes + commit (1.5h)
+
+**Total: ~12h focused work, 2-3 days conservatively.**
+
+* Acceptance
+
+1. =find { ::Sym#hover }= returns smart-merged hover
+2. =find { ::Sym#hover [source=graph] }= returns graph-only with label
+3. =find { ::Sym#hover [source=semantic] }= returns LSP-only with label
+4. =find { ::Sym#hover_inferred }= returns =[§deprecated]= with replacement hint
+5. =find { ::Sym#signature }= returns LSP signature
+6. =find { ::Sym#type_definition }= returns type declaration site
+7. =find { ::Sym#inlay }= returns inlay hints
+8. =find { foo.rs#diagnostics }= returns LSP diagnostics
+9. =find { foo.rs#diagnostics [severity=error] }= filters severity
+10. Smart-merge integration test passes when rust-analyzer is on PATH
+
+* Risks (with mitigations)
+
+1. AnnotationSemanticBackend::type_at quality \u2014 ✓ verified
+2. Symbol position from CodePath \u2014 walker already does line, needs column. ~10 LOC fix in walker metadata.
+3. LSP root detection for monorepos \u2014 accept v1 imprecision
+4. Concurrent first-query \u2014 DashMap.entry collapses; acceptable
+5. Mid-edit file sync \u2014 M-6 must wire to same event stream as code_graph_cache::invalidate
+6. Sandbox CI no-LSP \u2014 =#[ignore]= or =which=-gating
+
+* Distilled from
+
+- FUP-098 dispatch precursor investigation (discovery of dormant dispatch)
+- PLAN-319 W3 (built the library)
+- =CON-semanticbackend-dispatch-is-unwired-in-p= memory concept
+
+* Blocks
+
+- FUP-094 (multi-language LSP wiring) — becomes mechanical after this
+- FUP-095 (TS lsp tool deletion) — gated on FUP-094 batch 1
+- Full agent semantic-aware workflow
+
+* Does NOT block
+
+- FUP-098 reduced (F-3 + F-9) — independent mechanical fixes
+- FUP-099 (Rust import bindings for graph references) — independent

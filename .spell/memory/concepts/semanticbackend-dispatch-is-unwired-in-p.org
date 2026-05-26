@@ -1,0 +1,45 @@
+#+TITLE: semanticbackend-dispatch-is-unwired-in-p
+
+** ITEM SemanticBackend dispatch is unwired in pi-natives walker (PLAN-319 dormant library)
+
+PLAN-319 W3 shipped `crates/pi-natives/src/code_path/type_resolver.rs` containing the entire semantic dispatch surface — `dispatch()`, `dispatch_hover()`, `is_semantic_qualifier()`, `SourceSelector`, `SemanticPredicates`, `TypeResolverOutcome` — but this module has **zero call sites outside its own tests**.
+
+The find tool's walker (`crates/pi-natives/src/code_path/code_resolver/walker.rs`) still handles qualifiers via the legacy dialect-qualifier table:
+
+- `#hover` is special-cased to a text-based signature extraction (walker.rs:163-185, uses `hover_signature_end`), bypassing SemanticBackend entirely
+- `#signature`, `#type_definition`, `#inlay`, `#diagnostics`, `#hover_inferred` → all return `"unknown qualifier"` diagnostic
+- `[source=graph|semantic|both]` predicates parse correctly (as `Predicate::Attribute`) but are never consulted
+
+Verification:
+```
+$ grep -rln "type_resolver::dispatch" crates/pi-natives/src/
+(no output)
+$ grep -rln "SemanticBackend\|CompositeSemanticBackend\|hover_dual" crates/pi-natives/src/
+crates/pi-natives/src/code_path/type_resolver.rs   ← itself only
+```
+
+This is the missing FUP-LIVE work from the PLAN-319 critical path:
+> FUP-LIVE (1 day) — NAPI SemanticConfig + session-init Composite injection
+
+FUP-LIVE was sketched as "1 day" but realistically needs:
+1. Per-workspace `SemanticBackend` cache (parallel to `code_graph_cache.rs`)
+2. KDL `semantic {}` config loader on session init
+3. `CompositeSemanticBackend` instantiation with Expert / rust-analyzer spawn
+4. Walker integration: `if is_semantic_qualifier(q.name) { dispatch via type_resolver }`
+5. `TypeResolverOutcome` → `NodeRef` formatting
+
+The five FUP-098 findings (F-1.5, F-2, F-5, F-6, F-1 escape hatches) are NOT independent — they're all symptoms of FUP-LIVE not being done. Only F-3 (edit ordering), F-9 (whitespace), and F-4 (Rust import binding extraction) are independent.
+
+Discovery surface during empirical testing 2026-05-26 against HEAD `827429c24`. Sequenced critical path needs recut: FUP-098 (F-3+F-9 only) → FUP-099 (F-4 graph edges) → FUP-LIVE (semantic dispatch wiring) → FUP-094 (multi-language). 
+
+The original "5 weeks total" estimate stands but the unblocking item moves from "1 day FUP-LIVE" to "2-3 days FUP-LIVE" since the wiring is more involved than the original sketch implied.
+:PROPERTIES:
+:CUSTOM_ID: CON-semanticbackend-dispatch-is-unwired-in-p
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-26T17:35:50Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: FUP-098-dispatch-precursor-for-fup-094-predicate
+DISTILLED_FROM: PLAN-319-semanticbackend-foundation-expert-lsp-pi
+:END:

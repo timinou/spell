@@ -1,0 +1,167 @@
+#+TITLE: dispatch precursor for FUP-094: predicate parser + graph edges + LSP-route qualifiers
+#+STATE: ITEM
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: FUP-098-dispatch-precursor-for-fup-094-predicate
+#+EFFORT: M
+#+LAYER: core
+#+PRIORITY: #A
+
+* Initial Message
+
+try out the new merged features and tell me what works/doesn't, then show me how you'd go about an elegant implementation of FUP-094..096 given what you understand about this
+
+* Why
+
+FUP-097 shipped the smart-merge semantics for =#hover=, but exercising the merged surface in a fresh session surfaced six functional gaps that collectively block FUP-094 fan-out. Not architectural disagreements — unwired or out-of-order pieces in the dispatch path. Fix them together as a precursor wave before fanning out languages.
+
+If we skip this and start FUP-094, we ship 15 languages onto a router whose escape hatches don't parse, whose graph edges don't return hits, and whose LSP qualifiers silently return =[§empty]=. The fan-out becomes uncommittable because no per-language test can prove the dispatch reached the LSP.
+
+* Findings (empirical, gathered against HEAD = 827429c24)
+
+| id   | symptom                                                                                              |
+|------|------------------------------------------------------------------------------------------------------|
+| F-1  | =[source=graph]= / =[source=semantic]= / =[type_aware]= predicates: "unexpected trailing input"      |
+| F-2  | =#hover_inferred= returns =[§empty]= instead of =[§deprecated]= hint                                 |
+| F-3  | Edit with read-only qualifier emits generic "qualifiers not yet supported for mutation targetId"      |
+| F-4  | =def→= / =ref→= / =implements→= return =[§no-results]= on warm 103k-edge index                         |
+| F-5  | =#diagnostics= rejected as "unknown qualifier"                                                       |
+| F-6  | =#signature= / =#type_definition= / =#inlay= return =[§empty]= even with rust-analyzer active        |
+
+F-4 is the largest unknown. F-1/F-2/F-3/F-5 are mechanical. F-6 is one dispatch row per qualifier.
+
+* Scope
+
+** Target files (probable)
+- =crates/pi-code-path/src/parser.rs= — predicate grammar; =#diagnostics= qualifier; whitespace tolerance
+- =crates/pi-code-path/src/unified.rs= — reorder =TargetShape::classify= before generic mutation rejection
+- =crates/pi-natives/src/code_path/type_resolver.rs= — deprecated outcome for =#hover_inferred=; LSP dispatch rows for =#signature= / =#type_definition= / =#inlay= / =#diagnostics=
+- =crates/pi-code-graph/src/resolver.rs= — F-4 root cause investigation
+- =packages/coding-agent/src/prompts/tools/find.md= — only if grammar rules change
+
+** Non-goals
+- No new languages (FUP-094)
+- No =lsp= tool removal (FUP-095)
+- No new qualifiers beyond ones already documented in find.md
+
+* Acceptance
+
+1. =find { ::Sym#hover [source=graph] }= parses + graph-only result with =[source: graph]= label
+2. =find { ::Sym#hover [source=semantic] }= parses + semantic-only result with =[source: semantic]= label
+3. =find { ::Sym#hover_inferred }= returns =[§deprecated] use #hover= with no semantic data attached
+4. =edit { ::Sym#hover }= returns =SemanticReadOnly= diagnostic with =#sig= / =#body= hint — NOT generic "qualifiers not yet supported"
+5. =find { ::SemanticBackend def→ }= returns hits (composite/annotation/lsp impls)
+6. =find { ::SemanticBackend implements→ }= returns hits
+7. =find { <path>#diagnostics }= parses (returns =[§empty]= if none — NOT "unknown qualifier")
+8. =find { ::Sym#signature }= returns LSP signature for Rust against rust-analyzer
+9. =find { ::Sym#type_definition }= returns type definition site for Rust
+10. =find { ::Sym#inlay }= returns inlay hints when available
+
+Each acceptance bullet has a corresponding integration test. F-4 gets a regression test against a fixture.
+
+* Reviewer wave
+
+After all six fixes land, three parallel reviewers:
+- =RevParser= — predicate grammar correctness, whitespace, error messages
+- =RevDispatch= — type_resolver dispatch matrix completeness, qualifier ordering in unified.rs
+- =RevGraphEdges= — F-4 fix root cause, edge resolver correctness, symbol-key materialisation invariants
+
+* Why this isn't just "more FUP-097"
+
+FUP-097 was about merge semantics (HoverOutcome + merge_hover). This is about surrounding plumbing the merge semantics assume: predicate parsing, qualifier registration, edit-side classification ordering, graph-edge resolution. Dispatch concerns, not semantic-merge concerns.
+
+* Blocks
+
+- FUP-094 (multi-language LSP wiring) — depends on F-4 + F-6
+- FUP-095 (lsp tool deletion) — depends on FUP-094 batch 1
+
+* Distilled from
+
+Empirical session 2026-05-26 against HEAD =827429c24=. Findings written up in conversation; this org item is canonical.
+
+* DISCOVERY: SemanticBackend is dormant (2026-05-26)
+
+Empirical investigation of the live ``find`` surface against HEAD =827429c24= revealed the findings are symptoms of a single underlying gap, not six independent gaps. The actual root cause:
+
+** =type_resolver= module has ZERO call sites outside its own tests.
+
+#+begin_src
+$ grep -rln "type_resolver::dispatch" crates/pi-natives/src/
+(no output)
+
+$ grep -rln "SemanticBackend\|CompositeSemanticBackend\|hover_dual" crates/pi-natives/src/
+crates/pi-natives/src/code_path/type_resolver.rs   ← only itself
+#+end_src
+
+PLAN-319 W3 built ``type_resolver::dispatch``, ``dispatch_hover``, ``SourceSelector``, ``HoverDual``, ``HoverOutcome``, the full smart-merge — and shipped it as a library nobody calls. The walker (``code_path/code_resolver/walker.rs``) still uses the *old* text-based ``#hover`` path:
+
+#+begin_src rust
+// walker.rs:163-185
+if q.name == "hover" {
+    let decl_text = &src[node.start_byte()..node.end_byte()];
+    let sig_end = hover_signature_end(decl_text);
+    // ...text-only signature extraction, no SemanticBackend
+}
+#+end_src
+
+For any other qualifier (``#signature``, ``#type_definition``, ``#inlay``, ``#diagnostics``):
+
+#+begin_src rust
+// walker.rs:218
+nref.diagnostics.push(Diagnostic {
+    variant: DiagnosticVariant::UnsupportedOperation,
+    message: format!("unknown qualifier '{}'", q.name),
+    span:    None,
+});
+#+end_src
+
+So the live behaviour is:
+- ``#hover`` → text-based signature (no smart-merge, no LSP)
+- ``#signature`` → 'unknown qualifier'
+- ``#type_definition`` → 'unknown qualifier'
+- ``#inlay`` → 'unknown qualifier'
+- ``#diagnostics`` → 'unknown qualifier' (file-level: FsResolver also rejects)
+- ``#hover_inferred`` → 'unknown qualifier' (silent because walker emits the diagnostic but the calling code suppresses it on missing qualifier? — that's a separate path; net: `[§empty]`)
+- ``[source=graph|semantic|both]`` → parses (as Predicate::Attribute) but **never consulted** because dispatch isn't called
+
+** This is FUP-LIVE, not FUP-098
+
+The critical-path doc named the missing wave ``FUP-LIVE``:
+#+begin_quote
+2. FUP-LIVE (1 day) — NAPI SemanticConfig + session-init Composite injection
+#+end_quote
+
+FUP-LIVE was sketched as a 1-day deliverable. Realistically:
+
+1. Per-workspace SemanticBackend cache (parallel to ``code_graph_cache.rs``)
+2. KDL config loader (``semantic { … }`` block) reads on session init
+3. CompositeSemanticBackend instantiated; Expert/rust-analyzer spawn on first query
+4. Walker integration: ``if is_semantic_qualifier(q.name) { dispatch via type_resolver }``
+5. ``Outcome → NodeRef`` formatting
+6. F-4 (graph edges) becomes a separate concern, addressable post-FUP-LIVE
+
+** Recut of FUP-098
+
+The six F-* findings are NOT precursor-wave material. They are visible symptoms of FUP-LIVE not having been done. Concretely:
+
+| finding              | actual cause                                                                                | resolved by       |
+|----------------------+---------------------------------------------------------------------------------------------+-------------------|
+| F-1 predicates parse | actually work in parser; only fail with whitespace                                          | F-9               |
+| F-1.5 source ignored | dispatch not wired; ``[source=…]`` parses but unconsulted                                   | FUP-LIVE          |
+| F-2 #hover_inferred  | walker emits 'unknown qualifier'; type_resolver knows about it but isn't called             | FUP-LIVE          |
+| F-3 edit ordering    | small, independent fix in ``unified.rs`` reorder                                            | this FUP          |
+| F-4 graph edges      | engine_profile import bindings missing for Rust → references unresolved cross-file          | separate          |
+| F-5 #diagnostics     | rejected by FsResolver / walker because not in dialect.qualifiers; would route via dispatch | FUP-LIVE          |
+| F-6 LSP quals empty  | dispatch not wired; #signature/#type_definition/#inlay never reach SemanticBackend          | FUP-LIVE          |
+| F-9 whitespace       | qualifier rule doesn't accept leading whitespace                                            | this FUP          |
+
+** Revised plan
+
+Scope FUP-098 down to F-3 + F-9 (the two genuinely-precursor fixes) plus filing FUP-LIVE properly and FUP-99 (F-4 Rust import bindings):
+
+- FUP-098 (½ day) — F-3 (edit reorder) + F-9 (whitespace tolerance). Mechanical.
+- FUP-099 (new, 1 day) — F-4. Rust import binding extraction in EngineProfileExtractor (or workspace-wide name-fallback as defensive fallback)
+- FUP-LIVE (new, 2-3 days) — Wire ``type_resolver::dispatch`` into walker.rs + per-workspace SemanticBackend cache + KDL config. Resolves F-1.5, F-2, F-5, F-6 in one pass.
+- FUP-094 (existing, gated on FUP-LIVE + FUP-099) — multi-language LSP wiring becomes mechanical once FUP-LIVE lights up Rust.
+
+This sequencing reflects the actual dependency graph, not the optimistic original.
