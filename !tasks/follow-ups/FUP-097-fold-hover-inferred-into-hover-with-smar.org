@@ -1,11 +1,12 @@
 #+TITLE: Fold #hover_inferred into #hover with smart-merge dispatch
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14edc1bec5a09a49
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan-319/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
 #+CUSTOM_ID: FUP-097-fold-hover-inferred-into-hover-with-smar
 #+EFFORT: S
 #+LAYER: core
 #+PRIORITY: #B
+#+COMPLETION_HASH: 3447204aad144d7e
 
 * Initial Message
 
@@ -119,3 +120,5 @@ This is fine (different tools). But the find-side semantics need to be unified b
 - FUP-096 (batch glob, sibling): [[id:FUP-096-batch-glob-operations-for-unified-edit-s]]
 - FUP-094 (multi-language LSP, downstream): [[id:FUP-094-multi-language-lsp-wiring]]
 - Memory concept: CON-pi-code-graph-semantic-backend-layer--pl
+
+NOTE [2026-05-26]: Shipped on plan-319-semantic-backend commit 341be0d75. Smart-merge implemented via HoverDual + merge_hover + Composite::hover_dual override. Defensive: TargetShape::SemanticReadOnly rejects read-only quals from edit dispatch. All 1257 workspace tests green; 280 pi-natives code_path tests green.

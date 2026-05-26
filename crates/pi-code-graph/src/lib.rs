@@ -35,11 +35,13 @@ pub use query::{
 pub use bm25_adapter::SearchHit;
 pub use pi_knowledge_core::bm25::SearchIndex;
 pub use semantic::{
-	lsp::{LspClient, LspRegistry, LspSemanticBackend, ServerSpec},
-	merge_hover, normalise_for_compare, AnnotationSemanticBackend,
+	classify_hover_dual, lsp::{LspClient, LspRegistry, LspSemanticBackend, ServerSpec},
+	merge_hover, AnnotationSemanticBackend,
 	Capabilities as SemanticCapabilities, CompositeSemanticBackend, Confidence,
 	Diagnostic as SemanticDiagnostic, HoverDual, HoverOutcome, HoverSource, InferResult,
 	InlayHint, InlayKind, LineRange, Location as SemanticLocation, RenameError, SemanticBackend,
 	Severity as DiagnosticSeverity, SignatureInfo, TextEdit, TypeRepr, TypeSource, WorkspaceEdit,
 };
+// normalise_for_compare stays module-internal (FUP-097 reviewer DOC-5):
+// the only callers are merge_hover (same module) and its tests.
 pub use store::GraphStore;

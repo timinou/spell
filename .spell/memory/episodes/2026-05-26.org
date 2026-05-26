@@ -24,3 +24,15 @@ Closed as part of plan-319-semantic-backend merge (fc38471a4). All 6 waves shipp
 :RELATIONS:
 ABOUT: PLAN-320-unified-edit-surface-three-verb-agent-er
 :END:
+** ITEM Fold #hover_inferred into #hover with smart-merge dispatch
+
+Shipped on plan-319-semantic-backend commit 341be0d75. Smart-merge implemented via HoverDual + merge_hover + Composite::hover_dual override. Defensive: TargetShape::SemanticReadOnly rejects read-only quals from edit dispatch. All 1257 workspace tests green; 280 pi-natives code_path tests green.
+:PROPERTIES:
+:CUSTOM_ID: EP-7da0bc8fa6e79065
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-26T16:11:51Z
+:END:
+:RELATIONS:
+ABOUT: FUP-097-fold-hover-inferred-into-hover-with-smar
+:END:

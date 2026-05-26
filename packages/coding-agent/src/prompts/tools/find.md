@@ -102,7 +102,8 @@ ignore the written annotation.
 The deprecated `#hover_inferred` qualifier was folded into
 `#hover [source=semantic]` (FUP-097).
 
-Read-only semantic qualifiers (`#hover_inferred`, `#type_definition`,
-`#type_def`, `#signature`, `#inlay`, `#diagnostics`) cannot be used as
-`edit` targets — they describe a *view* of code, not a region. Use
-`find { … #qual }` to inspect.
+Read-only semantic qualifiers (`#hover`, `#type_definition`, `#type_def`,
+`#signature`, `#inlay`, `#diagnostics`) cannot be used as `edit` targets
+— they describe a *view* of code, not a region. For editing, use `#body`
+or `#sig` to scope to the body or signature region of a symbol. Use
+`find { target: "… #qual" }` to inspect any of the read-only views.
