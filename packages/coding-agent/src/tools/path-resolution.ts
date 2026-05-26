@@ -150,6 +150,22 @@ export function resolveCwdRelativePath(
 	const dup = detectCwdPrefixDuplication(cwd, suppliedPath);
 	if (!dup) {
 		const abs = path.resolve(cwd, suppliedPath);
+		// When cwd is nested inside a project (e.g. cwd=packages/coding-agent),
+		// agents pass paths relative to the project/git root. The cwd-relative
+		// resolution produces a path that doesn't exist. Walk up from cwd to
+		// find the nearest ancestor containing the target path.
+		const exists = options.exists ?? defaultExists;
+		if (!exists(abs) && !exists(path.dirname(abs))) {
+			const projectPath = resolveFromProjectRoot(cwd, suppliedPath, exists);
+			if (projectPath) {
+				return {
+					path: projectPath,
+					relative: path.relative(cwd, projectPath) || suppliedPath,
+					decision: "project-root",
+					warning: null,
+				};
+			}
+		}
 		return { path: abs, relative: suppliedPath, decision: "no-overlap", warning: null };
 	}
 
@@ -199,6 +215,30 @@ export function resolveCwdRelativePath(
 			`Tool paths resolve from cwd (${cwd}), not from project / git root. ` +
 			`Pass "${dup.strippedPath}" next time to avoid this warning.`,
 	};
+}
+
+/**
+ * Walk up from `cwd` toward the filesystem root, looking for a directory
+ * that contains `suppliedPath`. Returns the first match (up to 4 levels up),
+ * or null. Used when the cwd-relative path doesn't exist on disk — the agent
+ * likely passed a project-root-relative path.
+ */
+function resolveFromProjectRoot(
+	cwd: string,
+	suppliedPath: string,
+	exists: (p: string) => boolean,
+): string | null {
+	let dir = cwd;
+	for (let i = 0; i < 4; i++) {
+		const candidate = path.resolve(dir, suppliedPath);
+		if (exists(candidate) || exists(path.dirname(candidate))) {
+			return candidate;
+		}
+		const parent = path.dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
+	}
+	return null;
 }
 
 // Lazy fs import to keep the pure detector cheap to import in non-fs contexts.

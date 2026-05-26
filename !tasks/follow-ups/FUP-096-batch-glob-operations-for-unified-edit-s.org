@@ -1,0 +1,27 @@
+#+TITLE: Batch glob operations for unified edit surface
+#+STATE: ITEM
+#+SESSION_ID: 14f06e130acc5dc2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-unified-edit/2026-05-26T13-39-26-379Z_14f06e130acc5dc2.jsonl]]
+#+CUSTOM_ID: FUP-096-batch-glob-operations-for-unified-edit-s
+#+LAYER: core
+
+* Initial Message
+
+dude. look at the ast-grep and ast-edit tools, if they still exist, then review the Rust ecosystem for tools that are natively integrated to tree-sitter for these kinds of needs, on top of analysing the way that pi-code-graph works and is integrated to pi-edit-broker to enable advanced and fast AST edits. How would you implement it and how would you create a foolproof TDD integration and how would you surface these as natural extensions to the CodePath find/get/edit/create tools?
+
+PLAN-320 deferred item #5: batch glob operations for the unified edit surface.
+
+When a CodePath target is a glob (e.g. `src/**/*.ts :: oldName`), the edit dispatch should expand it to a file list and apply the same op to each file.
+
+**Missing infrastructure:**
+- `Op::Clone` — Op variants contain non-Clone fields (SymbolTarget wraps CodePath which wraps query trees)
+- `Op::set_target_codepath()` — no setter for replacing the CodePath in an Op
+- `render_fs_locator()` — no function to convert FsLocator segments back to a glob string
+- `match_glob_in_root()` — no function to walk a directory with a GlobSet and return matching file paths
+
+**Implementation plan:**
+- `FsLocator::render()` — join segments back to a path string
+- `Op::clone()` — derive Clone for Op and all its contained types
+- `Op::with_target()` — builder-style setter returning a new Op with replaced target
+- `glob_util::match_in_dir(glob_set, root) -> Vec<PathBuf>` — walk directory, return matches
+- Wire into `napi.rs:581` — before `file_groups` construction, for glob targets, expand to file list

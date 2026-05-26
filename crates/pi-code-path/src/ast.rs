@@ -41,7 +41,13 @@ pub enum Locator {
 pub struct FsLocator {
 	pub segments: Vec<FsSegment>,
 }
-
+impl FsLocator {
+	/// True when the locator contains glob segments (Star, DoubleStar, Question,
+	/// CharClass, or Brace).
+	pub fn is_glob(&self) -> bool {
+		self.segments.iter().any(|seg| matches!(seg, FsSegment::Star | FsSegment::DoubleStar | FsSegment::Question | FsSegment::CharClass(_) | FsSegment::Brace { .. }))
+	}
+}
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FsSegment {
 	Literal(String),

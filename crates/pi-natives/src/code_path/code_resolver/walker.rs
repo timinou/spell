@@ -471,7 +471,7 @@ fn collect_descendants<'a>(node: Node<'a>, out: &mut Vec<Node<'a>>) {
 	}
 }
 
-fn evaluate_query<'a>(
+pub(crate) fn evaluate_query<'a>(
 	query: &Query,
 	starting_nodes: Vec<Node<'a>>,
 	src: &'a str,

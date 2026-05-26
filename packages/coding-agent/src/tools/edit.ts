@@ -42,6 +42,11 @@ function normalizeLines(value: string | string[] | null | undefined): string | u
 // Excludes fileCreate (creates the file) and the anchorless fileAppend /
 // filePrepend variants (those create on absence, handled separately).
 const MUTATING_KINDS = new Set([
+	// Unified 3-verb surface (PLAN-320)
+	"replace",
+	"rename",
+	"delete",
+	// Legacy OpKind taxonomy
 	"fileWrite",
 	"fileDelete",
 	"filePatch",
@@ -312,30 +317,10 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		effectiveCwd: string,
 		_signal?: AbortSignal,
 	): Promise<AgentToolResult> {
-		// BUG-403: pre-flight existence check for mutating ops. The kernel
-		// happily opens a missing path as an empty buffer, then surfaces a
-		// misleading "find text not found" (BUG-402). Fail loud with the
-		// resolved path so the agent fixes the target, not the find string.
-		// Strip any ::Symbol suffix before the stat — symbol targets address
-		// declarations inside a file that itself must exist.
-		const sepIdx = targetPath.indexOf("::");
-		const filePart = sepIdx === -1 ? targetPath : targetPath.slice(0, sepIdx);
-		if (isMutatingKind(action.kind) && !(await fs.exists(filePart))) {
-			const rel = nodePath.relative(effectiveCwd, filePart) || filePart;
-			const result = toolResult<EditToolResultDetails>({
-				target: rel,
-				action: action.kind,
-				error: "file_not_found",
-			})
-				.text(
-					`File not found at resolved path: ${filePart}. ` +
-						`Verify the path with \`find\` or use \`{kind: "fileCreate"}\` to create it.`,
-				)
-				.done();
-			result.isError = true;
-			return result;
-		}
-		// Delegate structural ops to the unified executeCodePath edit surface.
+		// Delegate structural ops to the NAPI edit surface.
+		// The Rust layer (CodeBuffer::open / CodePath resolver) handles
+		// file existence checks with proper diagnostics — no need for a
+		// TS-layer pre-flight gate that duplicates this logic.
 		const chunks = await executeCodePath({
 			...sessionContextOpts(this.session ?? null),
 			command: "edit",
@@ -348,12 +333,16 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		const diagnostics = chunks.flatMap(c => c.diagnostics);
 		if (diagnostics.length > 0) {
 			const diag = diagnostics[0]!;
+			let text = diag.message;
+			if (diag.hint) {
+				text += `\n  = hint: ${diag.hint}`;
+			}
 			return toolResult<EditToolResultDetails>({
 				target: nodePath.relative(effectiveCwd, targetPath),
 				action: action.kind,
 				error: diag.variant,
 			})
-				.text(diag.message)
+				.text(text)
 				.done();
 		}
 
