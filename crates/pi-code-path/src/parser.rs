@@ -1044,17 +1044,23 @@ mod tests {
 		assert_eq!(cp.qualifier.as_ref().unwrap().name, "body");
 	}
 
-	/// PLAN-319 W3: the new semantic qualifiers parse for free via the
+	/// PLAN-319 W3 / FUP-097: semantic qualifiers parse for free via the
 	/// existing `#<ident>` grammar. Resolvers (`pi-natives::code_path::
-	/// type_resolver`) dispatch on the name.
+	/// type_resolver`) dispatch on the name. `#hover_inferred` was folded
+	/// into `#hover [source=semantic]` (FUP-097); the parser still accepts
+	/// the literal (open-ended grammar) but the resolver returns a
+	/// Deprecated outcome with a replacement hint.
 	#[test]
 	fn parse_w3_semantic_qualifiers_round_trip() {
 		for (input, expected) in [
-			("src/foo.ex::handle_event#hover_inferred", "hover_inferred"),
+			("src/foo.ex::handle_event#hover", "hover"),
 			("src/foo.ex::result#type_definition", "type_definition"),
 			("src/foo.ex::call_site#signature", "signature"),
 			("src/foo.ex::region#inlay", "inlay"),
 			("src/foo.ex::file#diagnostics", "diagnostics"),
+			// FUP-097: deprecated but parser still admits the token; dispatch
+			// surfaces the replacement hint at the resolver layer.
+			("src/foo.ex::handle_event#hover_inferred", "hover_inferred"),
 		] {
 			let cp = parse_code_path(input, &DotLexer)
 				.unwrap_or_else(|e| panic!("parse failed for {input}: {e:?}"));

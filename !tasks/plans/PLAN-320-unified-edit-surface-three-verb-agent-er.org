@@ -1,11 +1,12 @@
 #+TITLE: Unified Edit Surface — Three-Verb Agent Ergonomics for AST Editing
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14ef753190520473
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-25T19-32-03-777Z_14ef753190520473.jsonl]]
 #+CUSTOM_ID: PLAN-320-unified-edit-surface-three-verb-agent-er
 #+EFFORT: XL
 #+LAYER: core
 #+PRIORITY: #A
+#+COMPLETION_HASH: 06d0176ddbd4ebd3
 
 * Initial Message
 
@@ -87,3 +88,5 @@ See design doc for full rationale, multi-language test matrix (9 languages, 72+ 
 ** Tests
 - Snapshot tests for hint-format output
 - Every diagnostic variant has a friendly hint message
+
+NOTE [2026-05-26]: Closed as part of plan-319-semantic-backend merge (fc38471a4). All 6 waves shipped on feat/unified-edit-surface and landed on plan-319-semantic-backend. Test counts: 487 pi-code-path, 275 pi-natives code_path including new unified_tests. Sibling FUP-096 (batch glob ops) deferred. Branch ownership transferred to plan-319-semantic-backend owner.

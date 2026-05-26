@@ -1,29 +1,42 @@
 //! Type-aware CodePath qualifier dispatch.
 //!
-//! Routes the PLAN-319 W3 qualifiers to [`pi_code_graph::SemanticBackend`]:
+//! Routes semantic CodePath qualifiers to [`pi_code_graph::SemanticBackend`]:
 //!
-//! - `#hover_inferred` → `backend.type_at(file, line, col)`
-//! - `#type_definition` (alias `#type_def`) → `backend.type_definition_of(file, line, col)`
-//! - `#signature` → `backend.signature_at(file, line, col)`
+//! - `#hover` → smart merge of written (graph) + inferred (LSP) via
+//!   [`pi_code_graph::merge_hover`]. Default `[source=both]`; escape
+//!   hatches `[source=graph]` and `[source=semantic]`.
+//! - `#type_definition` (alias `#type_def`) → `backend.type_definition_of`
+//! - `#signature` → `backend.signature_at`
 //! - `#inlay` → `backend.inlay_hints(file, range)`
 //! - `#diagnostics` → `backend.diagnostics(file)` filtered by
-//!   the `[severity=…]` and `[source=…]` predicates
+//!   the `[severity=…]` predicate
 //!
-//! ## Source filtering
+//! ## Hover smart-merge (FUP-097)
 //!
-//! The `[source=…]` predicate gates which backends contribute to the
-//! result set:
+//! `#hover` consults BOTH the graph-side Annotation backend and the
+//! per-extension LSP backend independently via
+//! [`SemanticBackend::hover_dual`], then merges via
+//! [`pi_code_graph::merge_hover`]:
 //!
-//! - `source=semantic` (default for these qualifiers) — only the
-//!   SemanticBackend is consulted.
-//! - `source=graph` — [`dispatch`] returns
-//!   [`TypeResolverOutcome::RedirectedToGraph`] so the caller can route
-//!   to the tree-sitter analog (e.g. `#hover` for `#hover_inferred`).
-//! - `source=both` — SemanticBackend is consulted AND the caller is told
-//!   to ALSO query the graph-side analog. The dispatcher returns the
-//!   semantic result wrapped in a flag indicating both should be merged
-//!   by the caller (which holds the graph resolvers). The merge policy
-//!   — semantic wins on conflict — lives outside this module.
+//! - **Agreed** — both produce equal repr (normalised whitespace): render one
+//! - **Single** — only one half present: render with `[source: graph|semantic]`
+//! - **Disagreed** — both differ: render both, labelled
+//! - **None** — neither answered: `NotFound`
+//!
+//! The `[source=…]` predicate on `#hover` overrides the smart-merge:
+//!
+//! - `[source=graph]` — query Annotation half only (skips LSP cost)
+//! - `[source=semantic]` — query LSP half only (skips written sig)
+//! - `[source=both]` (default) — smart merge above
+//!
+//! For non-hover semantic qualifiers there is no tree-sitter analog;
+//! `[source=…]` predicates are silently ignored on those.
+//!
+//! ## Deprecation
+//!
+//! `#hover_inferred` (W3 introduction) was folded into `#hover` per
+//! FUP-097. Calls to `#hover_inferred` return
+//! [`TypeResolverOutcome::Deprecated`] with a replacement hint.
 //!
 //! This module is the SEAM between the agent-facing CodePath grammar and
 //! the LSP-or-Annotation backend layer. It deliberately knows nothing
@@ -33,8 +46,9 @@
 use std::path::Path;
 
 use pi_code_graph::{
-	Confidence, DiagnosticSeverity, InferResult, InlayHint, LineRange,
-	SemanticBackend, SemanticDiagnostic, SemanticLocation, SignatureInfo, TypeRepr,
+	merge_hover, Confidence, DiagnosticSeverity, HoverDual, HoverOutcome, HoverSource,
+	InferResult, InlayHint, LineRange, SemanticBackend, SemanticDiagnostic, SemanticLocation,
+	SignatureInfo, TypeRepr,
 };
 use pi_code_path::ast::{Predicate, Qualifier};
 
@@ -43,8 +57,10 @@ use pi_code_path::ast::{Predicate, Qualifier};
 /// CodePath `NodeRefDto` chunks.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeResolverOutcome {
-	/// `#hover_inferred` — `InferResult` for a position.
-	Hover(InferResult),
+	/// `#hover` — the smart-merge of written (graph) + inferred (LSP).
+	/// Single rendered string with optional source label — see
+	/// [`HoverOutcome`].
+	Hover(HoverOutcome),
 	/// `#type_definition` (or its alias `#type_def`) — the declaration-site
 	/// of the type of the symbol at `(file, line, col)`. `None` when
 	/// unresolvable.
@@ -59,62 +75,84 @@ pub enum TypeResolverOutcome {
 	/// The qualifier name was unknown to this resolver. Caller falls back
 	/// to the lexical / tree-sitter path with no special handling.
 	NotASemanticQualifier,
-	/// W3g (P2 fix): the qualifier IS semantic but `[source=graph]` was
-	/// requested. Caller should run the tree-sitter analog of this
-	/// qualifier (e.g. `#hover` for `#hover_inferred`). The variant carries
-	/// the *original* semantic qualifier name so the caller can pick the
-	/// right analog.
-	RedirectedToGraph { semantic_qualifier: String },
-	/// W3g (P1 disclosure): `[source=both]` was requested. The semantic
-	/// answer is included; the caller MUST also run the tree-sitter analog
-	/// and merge results (semantic wins on conflict). Wraps the semantic
-	/// outcome plus the original qualifier name so the caller knows what
-	/// to merge with.
-	BothMerged { semantic: Box<TypeResolverOutcome>, semantic_qualifier: String },
+	/// FUP-097: the qualifier is deprecated. `name` is the deprecated
+	/// qualifier (e.g. `"hover_inferred"`); `replacement` is the
+	/// canonical form the agent should use (e.g. `"hover"` or
+	/// `"hover [source=semantic]"`). Callers MUST surface this as a
+	/// diagnostic to the agent.
+	Deprecated { name: String, replacement: String },
 }
 
 /// Map of qualifier name → recogniser. Public so call sites can ask
 /// "is this a qualifier that needs semantic dispatch?" without paying
 /// the dispatch cost.
+///
+/// `#hover` is admitted post-FUP-097: it dispatches through the same
+/// smart-merge path as the deprecated `#hover_inferred` did.
 pub fn is_semantic_qualifier(name: &str) -> bool {
 	matches!(
 		name,
-		"hover_inferred" | "type_definition" | "type_def" | "signature" | "inlay" | "diagnostics"
+		"hover" | "type_definition" | "type_def" | "signature" | "inlay" | "diagnostics"
 	)
+}
+
+/// FUP-097: qualifiers that the W3 grammar accepted but have since been
+/// folded into [`is_semantic_qualifier`] or removed. Dispatched as
+/// [`TypeResolverOutcome::Deprecated`] with a friendly replacement hint.
+pub fn deprecated_qualifier_replacement(name: &str) -> Option<&'static str> {
+	match name {
+		"hover_inferred" => Some("hover [source=semantic]"),
+		_ => None,
+	}
 }
 
 /// Predicate extraction: pull the named-attribute predicates out of a
 /// `Query.head.predicates` slice into typed values the resolver can
 /// reason about without re-parsing strings.
+///
+/// `source` is `Option<SourceSelector>` because the appropriate default
+/// is per-qualifier: `#hover` defaults to `Both` (smart merge);
+/// `#type_definition` / `#signature` / `#inlay` / `#diagnostics` default
+/// to `Semantic` (no graph analog). Callers resolve via
+/// [`SourceSelector::or_default`].
 pub struct SemanticPredicates {
-	pub source:   SourceSelector,
+	pub source:   Option<SourceSelector>,
 	pub severity: Option<DiagnosticSeverity>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceSelector {
-	/// `[source=semantic]` (default for the semantic qualifiers).
+	/// `[source=semantic]` — only the SemanticBackend is consulted.
 	Semantic,
-	/// `[source=graph]` — caller falls back to the tree-sitter path.
+	/// `[source=graph]` — only the graph-side (tree-sitter / annotation)
+	/// answer is used.
 	Graph,
-	/// `[source=both]` — both consulted; semantic answer wins on tie.
+	/// `[source=both]` — both consulted; merge policy is qualifier-specific
+	/// (smart-merge for `#hover` via [`pi_code_graph::merge_hover`]).
 	Both,
+}
+
+impl SourceSelector {
+	/// Parse the value of `[source=…]`; unrecognised values return `None`
+	/// so the caller can fall back to its per-qualifier default.
+	pub fn parse(value: &str) -> Option<Self> {
+		match value {
+			"graph" => Some(Self::Graph),
+			"semantic" => Some(Self::Semantic),
+			"both" => Some(Self::Both),
+			_ => None,
+		}
+	}
 }
 
 impl SemanticPredicates {
 	pub fn extract(preds: &[Predicate]) -> Self {
-		let mut source = SourceSelector::Semantic;
+		let mut source = None;
 		let mut severity = None;
 		for p in preds {
 			if let Predicate::Attribute { name, value } = p {
 				match name.as_str() {
-					"source" => {
-						source = match value.as_str() {
-							"graph" => SourceSelector::Graph,
-							"both" => SourceSelector::Both,
-							_ => SourceSelector::Semantic,
-						};
-					},
+					"source" => source = SourceSelector::parse(value),
 					"severity" => severity = parse_severity(value),
 					_ => {},
 				}
@@ -151,23 +189,24 @@ pub fn dispatch(
 ) -> TypeResolverOutcome {
 	let sp = SemanticPredicates::extract(predicates);
 
-	// Unknown qualifier first — short-circuit before any backend or source
-	// reasoning so 'source=graph + unknown_qualifier' doesn't get mislabelled
-	// as a graph-redirect.
+	// FUP-097: deprecated qualifiers (e.g. `#hover_inferred`) before any
+	// other reasoning — the agent should learn the canonical replacement.
+	if let Some(replacement) = deprecated_qualifier_replacement(&qualifier.name) {
+		return TypeResolverOutcome::Deprecated {
+			name: qualifier.name.clone(),
+			replacement: replacement.to_string(),
+		};
+	}
+
+	// Unknown qualifier: caller falls back to the lexical / tree-sitter path.
 	if !is_semantic_qualifier(&qualifier.name) {
 		return TypeResolverOutcome::NotASemanticQualifier;
 	}
 
-	// `[source=graph]` short-circuit: surface the qualifier name so the
-	// caller can pick the right tree-sitter analog (W3g P2 fix).
-	if matches!(sp.source, SourceSelector::Graph) {
-		return TypeResolverOutcome::RedirectedToGraph {
-			semantic_qualifier: qualifier.name.clone(),
-		};
-	}
-
-	let semantic = match qualifier.name.as_str() {
-		"hover_inferred" => TypeResolverOutcome::Hover(backend.type_at(file, line, col)),
+	match qualifier.name.as_str() {
+		// FUP-097: smart-merge dispatch. Default = Both (merge); escape
+		// hatches via `[source=…]`.
+		"hover" => dispatch_hover(backend, sp.source.unwrap_or(SourceSelector::Both), file, line, col),
 		"type_definition" | "type_def" => {
 			TypeResolverOutcome::TypeDefinition(backend.type_definition_of(file, line, col))
 		},
@@ -184,18 +223,29 @@ pub fn dispatch(
 			TypeResolverOutcome::Diagnostics(diags)
 		},
 		_ => unreachable!("is_semantic_qualifier admits exactly these names"),
-	};
-
-	// W3g (P1 fix): `[source=both]` wraps the semantic outcome so the
-	// caller knows to also run the tree-sitter analog and merge results.
-	if matches!(sp.source, SourceSelector::Both) {
-		return TypeResolverOutcome::BothMerged {
-			semantic: Box::new(semantic),
-			semantic_qualifier: qualifier.name.clone(),
-		};
 	}
+}
 
-	semantic
+/// `#hover` smart-merge dispatch (FUP-097).
+///
+/// `source=both` (default): query both halves via [`SemanticBackend::hover_dual`],
+/// merge via [`pi_code_graph::merge_hover`].
+/// `source=graph`: take only `dual.written` (Annotation half).
+/// `source=semantic`: take only `dual.inferred` (LSP half).
+fn dispatch_hover(
+	backend: &dyn SemanticBackend,
+	source: SourceSelector,
+	file: &Path,
+	line: u32,
+	col: u32,
+) -> TypeResolverOutcome {
+	let dual = backend.hover_dual(file, line, col);
+	let filtered = match source {
+		SourceSelector::Graph => HoverDual { written: dual.written, inferred: None },
+		SourceSelector::Semantic => HoverDual { written: None, inferred: dual.inferred },
+		SourceSelector::Both => dual,
+	};
+	TypeResolverOutcome::Hover(merge_hover(filtered))
 }
 
 /// Test whether the `[type_aware]` flag is present in a predicate set.
@@ -237,7 +287,7 @@ fn parse_inlay_range(predicates: &[Predicate]) -> Option<LineRange> {
 /// string the agent can read directly.
 pub fn outcome_to_summary(outcome: &TypeResolverOutcome) -> String {
 	match outcome {
-		TypeResolverOutcome::Hover(infer) => format_infer(infer),
+		TypeResolverOutcome::Hover(hover) => format_hover(hover),
 		TypeResolverOutcome::TypeDefinition(loc) => match loc {
 			Some(l) => format!("{}:{}:{}", l.file.display(), l.line, l.col),
 			None => "unknown".into(),
@@ -276,30 +326,34 @@ pub fn outcome_to_summary(outcome: &TypeResolverOutcome) -> String {
 			out
 		},
 		TypeResolverOutcome::NotASemanticQualifier => String::new(),
-		TypeResolverOutcome::RedirectedToGraph { semantic_qualifier } => {
-			format!("<redirected to graph: #{semantic_qualifier}>")
-		},
-		TypeResolverOutcome::BothMerged { semantic, semantic_qualifier } => {
-			format!(
-				"{}\n<also query graph analog of #{semantic_qualifier}>",
-				outcome_to_summary(semantic)
-			)
+		TypeResolverOutcome::Deprecated { name, replacement } => {
+			format!("deprecated qualifier #{name} — use `#{replacement}` instead")
 		},
 	}
 }
 
-fn format_infer(infer: &InferResult) -> String {
-	let prefix = match infer.confidence {
-		Confidence::Annotated => "",
-		Confidence::Inferred => "~",
-		Confidence::Heuristic => "?",
-		Confidence::Unknown => return "unknown".into(),
-	};
-	let body = match &infer.repr {
-		TypeRepr::Empty => return "unknown".into(),
-		TypeRepr::Text(s) => s.as_str(),
-	};
-	format!("{prefix}{body}")
+/// Render a [`HoverOutcome`] to the human-readable string the agent sees.
+///
+/// `Agreed` — just the repr, no source noise.
+/// `Single { Graph }` — `<repr> [source: graph]`
+/// `Single { Semantic }` — `<repr> [source: semantic]`
+/// `Disagreed` — two lines, `written: ...` and `inferred: ...`
+/// `None` — `"unknown"`
+pub fn format_hover(hover: &HoverOutcome) -> String {
+	match hover {
+		HoverOutcome::Agreed { repr } => repr.clone(),
+		HoverOutcome::Single { repr, source } => {
+			let label = match source {
+				HoverSource::Graph => "graph",
+				HoverSource::Semantic => "semantic",
+			};
+			format!("{repr} [source: {label}]")
+		},
+		HoverOutcome::Disagreed { written, inferred } => {
+			format!("written:  {written}\ninferred: {inferred}")
+		},
+		HoverOutcome::None => "unknown".into(),
+	}
 }
 
 #[cfg(test)]
@@ -312,8 +366,13 @@ mod tests {
 
 	/// Test double: implements SemanticBackend with fixed-shape outputs so
 	/// we can verify dispatch routing without spawning a real LSP.
+	///
+	/// `hover_dual_override` lets tests set both halves independently —
+	/// when `None`, the trait default impl runs (classify-by-confidence on
+	/// `type_at`).
 	struct StubBackend {
 		hover: InferResult,
+		hover_dual_override: Option<HoverDual>,
 		type_def: Option<SemanticLocation>,
 		sig: Option<SignatureInfo>,
 		inlay: Vec<InlayHint>,
@@ -325,6 +384,7 @@ mod tests {
 		fn new() -> Self {
 			Self {
 				hover: InferResult::known(TypeRepr::text("Foo"), Confidence::Inferred, TypeSource::ForwardFlow),
+				hover_dual_override: None,
 				type_def: Some(SemanticLocation::point("/tmp/types.rs", 10, 1)),
 				sig: None,
 				inlay: vec![],
@@ -332,11 +392,29 @@ mod tests {
 				last_inlay_range: std::sync::Mutex::new(None),
 			}
 		}
+
+		fn with_dual(mut self, dual: HoverDual) -> Self {
+			self.hover_dual_override = Some(dual);
+			self
+		}
 	}
 
 	impl SemanticBackend for StubBackend {
 		fn capabilities(&self) -> Capabilities { Capabilities::default() }
 		fn type_at(&self, _f: &Path, _l: u32, _c: u32) -> InferResult { self.hover.clone() }
+		fn hover_dual(&self, file: &Path, line: u32, col: u32) -> HoverDual {
+			if let Some(d) = &self.hover_dual_override {
+				return d.clone();
+			}
+			// Fall through to default impl: classify the single `type_at`.
+			let r = self.type_at(file, line, col);
+			if r.is_unknown() { return HoverDual::empty(); }
+			match r.confidence {
+				Confidence::Annotated => HoverDual { written: Some(r), inferred: None },
+				Confidence::Inferred | Confidence::Heuristic => HoverDual { written: None, inferred: Some(r) },
+				Confidence::Unknown => HoverDual::empty(),
+			}
+		}
 		fn type_definition_of(&self, _f: &Path, _l: u32, _c: u32) -> Option<SemanticLocation> { self.type_def.clone() }
 		fn signature_at(&self, _f: &Path, _l: u32, _c: u32) -> Option<SignatureInfo> { self.sig.clone() }
 		fn inlay_hints(&self, _f: &Path, range: Option<LineRange>) -> Vec<InlayHint> {
@@ -344,6 +422,16 @@ mod tests {
 			self.inlay.clone()
 		}
 		fn diagnostics(&self, _f: &Path) -> Vec<SemanticDiagnostic> { self.diag.clone() }
+	}
+
+	/// Helper: build an InferResult for the written half of a HoverDual.
+	fn written(text: &str) -> InferResult {
+		InferResult::known(TypeRepr::text(text), Confidence::Annotated, TypeSource::Annotation)
+	}
+
+	/// Helper: build an InferResult for the inferred half.
+	fn inferred(text: &str) -> InferResult {
+		InferResult::known(TypeRepr::text(text), Confidence::Inferred, TypeSource::ForwardFlow)
 	}
 
 	fn qual(name: &str) -> Qualifier {
@@ -356,26 +444,139 @@ mod tests {
 
 	#[test]
 	fn is_semantic_qualifier_recognises_w3_set() {
-		assert!(is_semantic_qualifier("hover_inferred"));
+		// FUP-097: #hover replaces #hover_inferred via smart-merge.
+		assert!(is_semantic_qualifier("hover"));
 		assert!(is_semantic_qualifier("type_definition"));
 		assert!(is_semantic_qualifier("type_def"));
 		assert!(is_semantic_qualifier("signature"));
 		assert!(is_semantic_qualifier("inlay"));
 		assert!(is_semantic_qualifier("diagnostics"));
+		// hover_inferred deprecated, NOT in the active semantic set.
+		assert!(!is_semantic_qualifier("hover_inferred"));
 		assert!(!is_semantic_qualifier("body"));
-		assert!(!is_semantic_qualifier("hover")); // written-sig is graph-side
 	}
 
 	#[test]
-	fn dispatch_hover_inferred_routes_to_type_at() {
+	fn deprecated_qualifier_returns_replacement_hint() {
 		let stub = StubBackend::new();
 		let out = dispatch(&stub, &qual("hover_inferred"), &[], &file(), 1, 1);
 		match out {
-			TypeResolverOutcome::Hover(infer) => {
-				assert_eq!(infer.repr.as_str(), "Foo");
-				assert_eq!(infer.confidence, Confidence::Inferred);
+			TypeResolverOutcome::Deprecated { name, replacement } => {
+				assert_eq!(name, "hover_inferred");
+				assert_eq!(replacement, "hover [source=semantic]");
 			},
-			other => panic!("expected Hover, got {other:?}"),
+			other => panic!("expected Deprecated, got {other:?}"),
+		}
+	}
+
+	/// FUP-097 case A: both halves agree under normalisation - Agreed, no source label.
+	#[test]
+	fn hover_merge_agreed_collapses_to_one_repr() {
+		let stub = StubBackend::new().with_dual(HoverDual {
+			written: Some(written("fn foo(x: i32) -> bool")),
+			inferred: Some(inferred("fn foo(x: i32) -> bool")),
+		});
+		let out = dispatch(&stub, &qual("hover"), &[], &file(), 1, 1);
+		match out {
+			TypeResolverOutcome::Hover(HoverOutcome::Agreed { repr }) => {
+				assert_eq!(repr, "fn foo(x: i32) -> bool");
+			},
+			other => panic!("expected Agreed, got {other:?}"),
+		}
+	}
+
+	/// FUP-097 case B: only written present - Single { Graph }.
+	#[test]
+	fn hover_merge_single_graph_when_only_written() {
+		let stub = StubBackend::new().with_dual(HoverDual {
+			written: Some(written("&str")),
+			inferred: None,
+		});
+		let out = dispatch(&stub, &qual("hover"), &[], &file(), 1, 1);
+		match out {
+			TypeResolverOutcome::Hover(HoverOutcome::Single { repr, source }) => {
+				assert_eq!(repr, "&str");
+				assert_eq!(source, HoverSource::Graph);
+			},
+			other => panic!("expected Single Graph, got {other:?}"),
+		}
+	}
+
+	/// FUP-097 case C: only inferred present - Single { Semantic }.
+	#[test]
+	fn hover_merge_single_semantic_when_only_inferred() {
+		let stub = StubBackend::new().with_dual(HoverDual {
+			written: None,
+			inferred: Some(inferred("User { id: i32 }")),
+		});
+		let out = dispatch(&stub, &qual("hover"), &[], &file(), 1, 1);
+		match out {
+			TypeResolverOutcome::Hover(HoverOutcome::Single { repr, source }) => {
+				assert_eq!(repr, "User { id: i32 }");
+				assert_eq!(source, HoverSource::Semantic);
+			},
+			other => panic!("expected Single Semantic, got {other:?}"),
+		}
+	}
+
+	/// FUP-097 case D: both differ after normalisation - Disagreed, both labelled.
+	#[test]
+	fn hover_merge_disagreed_renders_both() {
+		let stub = StubBackend::new().with_dual(HoverDual {
+			written: Some(written("any")),
+			inferred: Some(inferred("User { id: i32 }")),
+		});
+		let out = dispatch(&stub, &qual("hover"), &[], &file(), 1, 1);
+		match out {
+			TypeResolverOutcome::Hover(HoverOutcome::Disagreed { written, inferred }) => {
+				assert_eq!(written, "any");
+				assert_eq!(inferred, "User { id: i32 }");
+			},
+			other => panic!("expected Disagreed, got {other:?}"),
+		}
+	}
+
+	/// FUP-097 case E: neither half present - HoverOutcome::None.
+	#[test]
+	fn hover_merge_none_when_neither_half() {
+		let stub = StubBackend::new().with_dual(HoverDual::empty());
+		let out = dispatch(&stub, &qual("hover"), &[], &file(), 1, 1);
+		assert_eq!(out, TypeResolverOutcome::Hover(HoverOutcome::None));
+	}
+
+	/// FUP-097: [source=graph] takes only the written half.
+	#[test]
+	fn hover_source_graph_uses_only_written() {
+		let stub = StubBackend::new().with_dual(HoverDual {
+			written: Some(written("any")),
+			inferred: Some(inferred("User")),
+		});
+		let preds = vec![Predicate::Attribute { name: "source".into(), value: "graph".into() }];
+		let out = dispatch(&stub, &qual("hover"), &preds, &file(), 1, 1);
+		match out {
+			TypeResolverOutcome::Hover(HoverOutcome::Single { repr, source }) => {
+				assert_eq!(repr, "any");
+				assert_eq!(source, HoverSource::Graph);
+			},
+			other => panic!("expected Single Graph from source=graph, got {other:?}"),
+		}
+	}
+
+	/// FUP-097: [source=semantic] takes only the inferred half.
+	#[test]
+	fn hover_source_semantic_uses_only_inferred() {
+		let stub = StubBackend::new().with_dual(HoverDual {
+			written: Some(written("any")),
+			inferred: Some(inferred("User")),
+		});
+		let preds = vec![Predicate::Attribute { name: "source".into(), value: "semantic".into() }];
+		let out = dispatch(&stub, &qual("hover"), &preds, &file(), 1, 1);
+		match out {
+			TypeResolverOutcome::Hover(HoverOutcome::Single { repr, source }) => {
+				assert_eq!(repr, "User");
+				assert_eq!(source, HoverSource::Semantic);
+			},
+			other => panic!("expected Single Semantic from source=semantic, got {other:?}"),
 		}
 	}
 
@@ -430,52 +631,15 @@ mod tests {
 		}
 	}
 
+	/// FUP-097: unknown qualifier (no semantic match, no deprecation) returns
+	/// `NotASemanticQualifier` so the caller falls back to its tree-sitter
+	/// path. The `[source=...]` predicate is irrelevant for unknown names.
 	#[test]
-	fn dispatch_source_graph_returns_redirected_carrying_qualifier_name() {
-		// W3g (P2) regression: distinguishes 'redirected to graph' from
-		// 'unknown qualifier'. Caller needs the semantic-qualifier name to
-		// pick the right tree-sitter analog.
-		let stub = StubBackend::new();
-		let preds = vec![Predicate::Attribute { name: "source".into(), value: "graph".into() }];
-		let out = dispatch(&stub, &qual("hover_inferred"), &preds, &file(), 1, 1);
-		match out {
-			TypeResolverOutcome::RedirectedToGraph { semantic_qualifier } => {
-				assert_eq!(semantic_qualifier, "hover_inferred");
-			},
-			other => panic!("expected RedirectedToGraph, got {other:?}"),
-		}
-	}
-
-	/// W3g (P2) regression: unknown qualifier returns the original
-	/// NotASemanticQualifier variant, NOT RedirectedToGraph, regardless of
-	/// the [source=...] predicate.
-	#[test]
-	fn dispatch_unknown_qualifier_with_source_graph_is_not_redirect() {
+	fn dispatch_unknown_qualifier_with_source_graph_is_not_semantic() {
 		let stub = StubBackend::new();
 		let preds = vec![Predicate::Attribute { name: "source".into(), value: "graph".into() }];
 		let out = dispatch(&stub, &qual("body"), &preds, &file(), 1, 1);
 		assert_eq!(out, TypeResolverOutcome::NotASemanticQualifier);
-	}
-
-	/// W3g (P1) regression: `[source=both]` wraps the semantic outcome
-	/// in BothMerged so the caller knows to also run the graph analog.
-	#[test]
-	fn dispatch_source_both_wraps_semantic_outcome_for_merge() {
-		let stub = StubBackend::new();
-		let preds = vec![Predicate::Attribute { name: "source".into(), value: "both".into() }];
-		let out = dispatch(&stub, &qual("hover_inferred"), &preds, &file(), 1, 1);
-		match out {
-			TypeResolverOutcome::BothMerged { semantic, semantic_qualifier } => {
-				assert_eq!(semantic_qualifier, "hover_inferred");
-				match *semantic {
-					TypeResolverOutcome::Hover(infer) => {
-						assert_eq!(infer.repr.as_str(), "Foo");
-					},
-					other => panic!("expected Hover inside BothMerged, got {other:?}"),
-				}
-			},
-			other => panic!("expected BothMerged, got {other:?}"),
-		}
 	}
 
 	#[test]
@@ -555,12 +719,38 @@ mod tests {
 	}
 
 	#[test]
-	fn outcome_to_summary_formats_each_variant() {
-		let stub = StubBackend::new();
-		let hover = dispatch(&stub, &qual("hover_inferred"), &[], &file(), 1, 1);
-		assert_eq!(outcome_to_summary(&hover), "~Foo", "Inferred prefix '~'");
+	fn outcome_to_summary_formats_each_hover_variant() {
+		let agreed = TypeResolverOutcome::Hover(HoverOutcome::Agreed { repr: "i32".into() });
+		assert_eq!(outcome_to_summary(&agreed), "i32");
 
-		let unknown = TypeResolverOutcome::Hover(InferResult::unknown());
-		assert_eq!(outcome_to_summary(&unknown), "unknown");
+		let single_graph = TypeResolverOutcome::Hover(HoverOutcome::Single {
+			repr: "i32".into(),
+			source: HoverSource::Graph,
+		});
+		assert_eq!(outcome_to_summary(&single_graph), "i32 [source: graph]");
+
+		let single_semantic = TypeResolverOutcome::Hover(HoverOutcome::Single {
+			repr: "User".into(),
+			source: HoverSource::Semantic,
+		});
+		assert_eq!(outcome_to_summary(&single_semantic), "User [source: semantic]");
+
+		let disagreed = TypeResolverOutcome::Hover(HoverOutcome::Disagreed {
+			written: "any".into(),
+			inferred: "User".into(),
+		});
+		assert_eq!(outcome_to_summary(&disagreed), "written:  any\ninferred: User");
+
+		let none = TypeResolverOutcome::Hover(HoverOutcome::None);
+		assert_eq!(outcome_to_summary(&none), "unknown");
+
+		let deprecated = TypeResolverOutcome::Deprecated {
+			name: "hover_inferred".into(),
+			replacement: "hover [source=semantic]".into(),
+		};
+		assert_eq!(
+			outcome_to_summary(&deprecated),
+			"deprecated qualifier #hover_inferred \u{2014} use `#hover [source=semantic]` instead"
+		);
 	}
 }

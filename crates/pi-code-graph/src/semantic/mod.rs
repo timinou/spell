@@ -62,8 +62,34 @@ pub trait SemanticBackend: Send + Sync {
 	fn capabilities(&self) -> Capabilities;
 
 	/// Inferred or written type at `(file, line, col)`. Drives
-	/// `find { ::S #hover_inferred }` and `find { ::S #hover }`.
+	/// `find { ::S #hover }` (via the [`hover_dual`](Self::hover_dual)
+	/// smart-merge path).
 	fn type_at(&self, file: &Path, line: u32, col: u32) -> InferResult;
+
+	/// Return *both* hover halves — written (graph) and inferred (LSP) —
+	/// for the smart-merge implementation behind `find { ::S #hover }`.
+	///
+	/// Default impl classifies the single [`type_at`](Self::type_at)
+	/// result by [`Confidence`]: `Annotated` populates the `written`
+	/// slot; `Inferred` / `Heuristic` populates the `inferred` slot;
+	/// `Unknown` populates neither. [`CompositeSemanticBackend`]
+	/// overrides to query the graph-side Annotation backend AND the
+	/// per-extension LSP backend independently, giving the merge both
+	/// halves regardless of which one the composite would normally
+	/// pick.
+	fn hover_dual(&self, file: &Path, line: u32, col: u32) -> HoverDual {
+		let r = self.type_at(file, line, col);
+		if r.is_unknown() {
+			return HoverDual::empty();
+		}
+		match r.confidence {
+			Confidence::Annotated => HoverDual { written: Some(r), inferred: None },
+			Confidence::Inferred | Confidence::Heuristic => {
+				HoverDual { written: None, inferred: Some(r) }
+			},
+			Confidence::Unknown => HoverDual::empty(),
+		}
+	}
 
 	/// Where is the type of the symbol at `(file, line, col)` declared?
 	/// Drives `find { ::S #type_definition }`. Returns `None` when the
@@ -374,6 +400,115 @@ pub enum RenameError {
 	BackendError(String),
 }
 
+// ── Hover smart-merge (FUP-097) ──────────────────────────────────────
+
+/// Where a hover repr came from. Surfaced to the agent when the merge
+/// rule can't collapse both sides into one answer (cases B/C/D).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HoverSource {
+	/// Read from `SymbolNode::detail` via [`AnnotationSemanticBackend`].
+	Graph,
+	/// Inferred by an LSP server via [`lsp::LspSemanticBackend`].
+	Semantic,
+}
+
+/// Both halves of a hover query — populated independently by the
+/// graph-side (Annotation) and semantic-side (LSP) backends.
+///
+/// Returned by [`SemanticBackend::hover_dual`]; consumed by
+/// [`merge_hover`]. `written` is whichever non-`Unknown` answer the
+/// Annotation backend produces (always queried); `inferred` is whichever
+/// non-`Unknown` answer the per-extension LSP backend produces (queried
+/// only when registered for the file's extension).
+#[derive(Debug, Clone, PartialEq)]
+pub struct HoverDual {
+	pub written:  Option<InferResult>,
+	pub inferred: Option<InferResult>,
+}
+
+impl HoverDual {
+	pub fn empty() -> Self {
+		Self { written: None, inferred: None }
+	}
+
+	/// True when both halves are absent — caller should surface NotFound.
+	pub fn is_empty(&self) -> bool {
+		self.written.is_none() && self.inferred.is_none()
+	}
+}
+
+/// Result of merging both hover halves under the smart-merge rules
+/// from FUP-097.
+///
+/// | written          | inferred         | output                       |
+/// |------------------|------------------|------------------------------|
+/// | Some(x)          | Some(x)          | `Agreed { repr: x }`         |
+/// | Some(x)          | None             | `Single { x, source: Graph }` |
+/// | None             | Some(y)          | `Single { y, source: Semantic }` |
+/// | Some(x), Some(y) | x ≠ y normalised | `Disagreed { written, inferred }` |
+/// | None             | None             | `None`                       |
+#[derive(Debug, Clone, PartialEq)]
+pub enum HoverOutcome {
+	/// Both backends agreed (after normalisation). One `repr` rendered
+	/// without a source label — the clean common case.
+	Agreed { repr: String },
+	/// Only one backend produced an answer; the source is surfaced so the
+	/// agent knows whether to trust the written annotation vs the inferred
+	/// type.
+	Single { repr: String, source: HoverSource },
+	/// Both backends produced answers that differ after normalisation. Both
+	/// are rendered, labelled so the agent can compare written vs inferred.
+	Disagreed { written: String, inferred: String },
+	/// Neither backend had an answer.
+	None,
+}
+
+/// Merge written and inferred hover halves per the FUP-097 smart-merge
+/// rule. "Agreement" is normalised-whitespace equality — see
+/// [`normalise_for_compare`].
+///
+/// Empty / Unknown halves are treated as `None` before comparison so the
+/// merge rule doesn't see them as values.
+pub fn merge_hover(dual: HoverDual) -> HoverOutcome {
+	let written = dual.written.filter(|r| !r.is_unknown()).map(|r| r.repr.as_str().to_string());
+	let inferred = dual.inferred.filter(|r| !r.is_unknown()).map(|r| r.repr.as_str().to_string());
+
+	match (written, inferred) {
+		(None, None) => HoverOutcome::None,
+		(Some(w), None) => HoverOutcome::Single { repr: w, source: HoverSource::Graph },
+		(None, Some(i)) => HoverOutcome::Single { repr: i, source: HoverSource::Semantic },
+		(Some(w), Some(i)) => {
+			if normalise_for_compare(&w) == normalise_for_compare(&i) {
+				HoverOutcome::Agreed { repr: w }
+			} else {
+				HoverOutcome::Disagreed { written: w, inferred: i }
+			}
+		},
+	}
+}
+
+/// Compare-key for hover merge: collapse internal whitespace runs to a
+/// single space, trim, strip a trailing semicolon. Conservative — does
+/// not touch identifiers or punctuation, so `fn foo(x)` and `fn foo (x)`
+/// remain unequal (don't collapse around parens).
+pub fn normalise_for_compare(s: &str) -> String {
+	let trimmed = s.trim().trim_end_matches(';').trim_end();
+	let mut out = String::with_capacity(trimmed.len());
+	let mut prev_ws = false;
+	for ch in trimmed.chars() {
+		if ch.is_whitespace() {
+			if !prev_ws {
+				out.push(' ');
+			}
+			prev_ws = true;
+		} else {
+			out.push(ch);
+			prev_ws = false;
+		}
+	}
+	out
+}
+
 // ── Unit tests ───────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -404,6 +539,146 @@ mod tests {
 		assert!(!c.inlay_hints);
 		assert!(!c.narrow_dispatch);
 		assert!(!c.diagnostics);
+	}
+
+	// ── FUP-097: merge_hover + normalise_for_compare ──────────────────
+
+	fn written(s: &str) -> InferResult {
+		InferResult::known(TypeRepr::text(s), Confidence::Annotated, TypeSource::Annotation)
+	}
+
+	fn inferred(s: &str) -> InferResult {
+		InferResult::known(TypeRepr::text(s), Confidence::Inferred, TypeSource::ForwardFlow)
+	}
+
+	#[test]
+	fn merge_none_when_both_empty() {
+		assert_eq!(merge_hover(HoverDual::empty()), HoverOutcome::None);
+	}
+
+	#[test]
+	fn merge_treats_unknown_as_absent() {
+		let dual = HoverDual {
+			written: Some(InferResult::unknown()),
+			inferred: Some(InferResult::unknown()),
+		};
+		assert_eq!(merge_hover(dual), HoverOutcome::None);
+	}
+
+	#[test]
+	fn merge_agreed_when_reprs_match() {
+		let dual = HoverDual {
+			written: Some(written("fn foo(x: i32) -> bool")),
+			inferred: Some(inferred("fn foo(x: i32) -> bool")),
+		};
+		match merge_hover(dual) {
+			HoverOutcome::Agreed { repr } => assert_eq!(repr, "fn foo(x: i32) -> bool"),
+			other => panic!("expected Agreed, got {other:?}"),
+		}
+	}
+
+	#[test]
+	fn merge_agreed_when_reprs_differ_only_in_whitespace() {
+		// "fn  foo" vs "fn foo" — normaliser collapses runs of whitespace.
+		let dual = HoverDual {
+			written: Some(written("fn  foo  (x: i32)")),
+			inferred: Some(inferred("fn foo (x: i32)")),
+		};
+		match merge_hover(dual) {
+			HoverOutcome::Agreed { repr } => {
+				// The kept repr is the written half (we render that).
+				assert_eq!(repr, "fn  foo  (x: i32)");
+			},
+			other => panic!("expected Agreed under whitespace normalisation, got {other:?}"),
+		}
+	}
+
+	#[test]
+	fn merge_disagreed_when_structurally_different() {
+		// `fn foo(x)` vs `fn foo (x)` — paren spacing matters: the normaliser
+		// collapses only runs of whitespace, so adjacent token boundaries
+		// still differ. Verifies the merge doesn't go too aggressive.
+		let dual = HoverDual {
+			written: Some(written("any")),
+			inferred: Some(inferred("User { id: i32 }")),
+		};
+		match merge_hover(dual) {
+			HoverOutcome::Disagreed { written, inferred } => {
+				assert_eq!(written, "any");
+				assert_eq!(inferred, "User { id: i32 }");
+			},
+			other => panic!("expected Disagreed, got {other:?}"),
+		}
+	}
+
+	#[test]
+	fn merge_single_graph_when_only_written() {
+		let dual = HoverDual {
+			written: Some(written("&str")),
+			inferred: None,
+		};
+		assert_eq!(
+			merge_hover(dual),
+			HoverOutcome::Single { repr: "&str".into(), source: HoverSource::Graph },
+		);
+	}
+
+	#[test]
+	fn merge_single_semantic_when_only_inferred() {
+		let dual = HoverDual {
+			written: None,
+			inferred: Some(inferred("User")),
+		};
+		assert_eq!(
+			merge_hover(dual),
+			HoverOutcome::Single { repr: "User".into(), source: HoverSource::Semantic },
+		);
+	}
+
+	#[test]
+	fn normalise_collapses_whitespace_runs() {
+		assert_eq!(normalise_for_compare("fn  foo"), "fn foo");
+		assert_eq!(normalise_for_compare("\t\tfn  foo\n"), "fn foo");
+		assert_eq!(normalise_for_compare("a    b    c"), "a b c");
+	}
+
+	#[test]
+	fn normalise_strips_trailing_semicolon() {
+		assert_eq!(normalise_for_compare("fn foo;"), "fn foo");
+		assert_eq!(normalise_for_compare("fn foo ;"), "fn foo");
+	}
+
+	#[test]
+	fn normalise_preserves_paren_adjacency() {
+		// `foo(x)` and `foo (x)` must NOT collapse to equal.
+		assert_ne!(
+			normalise_for_compare("fn foo(x)"),
+			normalise_for_compare("fn foo (x)"),
+		);
+	}
+
+	#[test]
+	fn hover_dual_default_classifies_by_confidence() {
+		struct B(InferResult);
+		impl SemanticBackend for B {
+			fn capabilities(&self) -> Capabilities { Capabilities::default() }
+			fn type_at(&self, _f: &std::path::Path, _l: u32, _c: u32) -> InferResult { self.0.clone() }
+		}
+
+		// Annotated → written slot.
+		let b = B(written("x"));
+		let dual = b.hover_dual(std::path::Path::new("a"), 1, 1);
+		assert!(dual.written.is_some() && dual.inferred.is_none());
+
+		// Inferred → inferred slot.
+		let b = B(inferred("y"));
+		let dual = b.hover_dual(std::path::Path::new("a"), 1, 1);
+		assert!(dual.written.is_none() && dual.inferred.is_some());
+
+		// Unknown → both None.
+		let b = B(InferResult::unknown());
+		let dual = b.hover_dual(std::path::Path::new("a"), 1, 1);
+		assert!(dual.is_empty());
 	}
 
 	#[test]
@@ -480,3 +755,4 @@ mod tests {
 		assert_ne!(Confidence::Heuristic, Confidence::Unknown);
 	}
 }
+

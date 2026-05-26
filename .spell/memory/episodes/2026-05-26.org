@@ -12,3 +12,15 @@ All 4 waves (W0 BM25/Semantic, W1 LSP client, W2 KDL config, W3 grammar+dispatch
 :RELATIONS:
 ABOUT: PLAN-319-semanticbackend-foundation-expert-lsp-pi
 :END:
+** ITEM Unified Edit Surface — Three-Verb Agent Ergonomics for AST Editing
+
+Closed as part of plan-319-semantic-backend merge (fc38471a4). All 6 waves shipped on feat/unified-edit-surface and landed on plan-319-semantic-backend. Test counts: 487 pi-code-path, 275 pi-natives code_path including new unified_tests. Sibling FUP-096 (batch glob ops) deferred. Branch ownership transferred to plan-319-semantic-backend owner.
+:PROPERTIES:
+:CUSTOM_ID: EP-cdc7c3858da542b6
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-26T15:52:10Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-320-unified-edit-surface-three-verb-agent-er
+:END:

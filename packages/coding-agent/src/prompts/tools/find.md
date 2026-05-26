@@ -6,8 +6,8 @@ target ::= Locator (Query)? (Qualifier)?
   Pred      [N] [a..b] [text~="re"] [attr=val] [size>1M] [mtime>2026-01-01]
             [type_aware] [severity=error|warning|info|hint] [source=graph|semantic|both]
   Combinator  / // ^ ^^ << >> ref→ def→ call→ import→ bind→ implements→ inherits→ dispatches→ | & −
-  Qualifier   #body #sig #stat #tree #diff #listing #raw #hover
-              #hover_inferred #type_definition #signature #inlay #diagnostics
+  Qualifier   #body #sig #stat #tree #diff #listing #raw
+              #hover #type_definition #signature #inlay #diagnostics
 
 <recipes>
 | want                | target                                      |
@@ -33,14 +33,14 @@ target ::= Locator (Query)? (Qualifier)?
 | definition          | `foo.ts::useX ref→`                         |
 | implementers        | `foo.ts::IThing implements→`               |
 | base types          | `foo.py::Cls inherits→`                    |
-| signature (written) | `foo.ts::Bar.method#hover`                  |
-| signature (inferred)| `foo.ts::Bar.method#hover_inferred`         |
+| signature / type    | `foo.ts::Bar.method#hover` (smart-merge: see below) |
+| graph-only signature| `foo.ts::Bar.method#hover [source=graph]`   |
+| LSP-only inferred   | `foo.ts::x#hover [source=semantic]`         |
 | type of expression  | `foo.ts::x#type_definition`                 |
 | callable signature  | `foo.ts::handler#signature`                 |
 | inlay hints         | `foo.ts::handler#inlay`                     |
 | diagnostics         | `src/**/*.ex#diagnostics [severity=error]`  |
 | type-narrowed callers | `foo.ts::Bar.method def→ [type_aware]`     |
-| force tree-sitter   | `foo.ts::x#hover [source=graph]`            |
 | recent              | `src/**/*.ts::§file[mtime>2026-05-01]`     |
 | uri                 | `memory://root` · `artifact://…` · `skill://…` |
 </recipes>
@@ -81,3 +81,28 @@ target ::= Locator (Query)? (Qualifier)?
 - errors render at kernel via miette — read & retry
 - globs ✗ slice  ·  uri ✗ query  ·  graph edges (def→/ref→/call→/import→/bind→) need `status index` ready
 </rules>
+
+## `#hover` smart-merge
+
+`#hover` consults BOTH the graph-side (tree-sitter written signature) AND
+the semantic-side (LSP inferred type) backends, then merges:
+
+| graph result    | LSP result    | output                                |
+|-----------------|---------------|---------------------------------------|
+| `x`             | `x`           | `x`                                   |
+| `x`             | —             | `x [source: graph]`                   |
+| —               | `y`           | `y [source: semantic]`                |
+| `x`             | `y` (≠)       | `written:  x` / `inferred: y`         |
+| —               | —             | `unknown`                             |
+
+Default behaviour is `[source=both]` (smart-merge). Use `[source=graph]`
+to skip the LSP query (cost-sensitive paths) or `[source=semantic]` to
+ignore the written annotation.
+
+The deprecated `#hover_inferred` qualifier was folded into
+`#hover [source=semantic]` (FUP-097).
+
+Read-only semantic qualifiers (`#hover_inferred`, `#type_definition`,
+`#type_def`, `#signature`, `#inlay`, `#diagnostics`) cannot be used as
+`edit` targets — they describe a *view* of code, not a region. Use
+`find { … #qual }` to inspect.
