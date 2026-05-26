@@ -1,8 +1,9 @@
 #+TITLE: SemanticBackend foundation + Expert LSP pilot for code-graph
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14edc1bec5a09a49
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
 #+CUSTOM_ID: PLAN-319-semanticbackend-foundation-expert-lsp-pi
+#+COMPLETION_HASH: 9f944cfd2a689dfd
 
 * Initial Message
 
@@ -272,3 +273,5 @@ Plan-level final gate:
 
 Reviewer wave between each phase is a hard gate. Mid-stream BUG/FUP filing
 expected and welcome.
+
+NOTE [2026-05-26]: All 4 waves (W0 BM25/Semantic, W1 LSP client, W2 KDL config, W3 grammar+dispatch) shipped with 4 reviewer waves + 4 gap-fix waves. 8 reviewer subagents, 29 findings, 0 P0, 7 P1 (all fixed), 14 P2 (all addressed), 8 P3 (deferred to FUPs). ~165 new tests. Final commit: 5fa170fa4 on branch plan-319-semantic-backend. Memory concept: CON-pi-code-graph-semantic-backend-layer--pl. FUPs closed by side-effects: FUP-090/091/092. FUPs sequenced after: FUP-094/095.

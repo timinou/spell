@@ -1,0 +1,121 @@
+#+TITLE: Fold #hover_inferred into #hover with smart-merge dispatch
+#+STATE: ITEM
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan-319/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: FUP-097-fold-hover-inferred-into-hover-with-smar
+#+EFFORT: S
+#+LAYER: core
+#+PRIORITY: #B
+
+* Initial Message
+
+ok great, amazing! please explain what this plan achieved and what we can now do with it that we couldn't do before
+
+* Initial Message
+
+PLAN-319 shipped `#hover` (tree-sitter written sig via AnnotationSemanticBackend) and `#hover_inferred` (LSP-resolved type via LspSemanticBackend) as two separate qualifiers. UX feedback: this is taxonomy leak — the agent has to know which qualifier maps to which backend.
+
+Fold both into a single `#hover` qualifier that does a smart merge.
+
+* Behavior matrix
+
+| written (graph)  | inferred (lsp)   | output                                |
+|------------------|------------------|---------------------------------------|
+| Some(x)          | Some(x)          | x  (no source label — clean agreement) |
+| Some(x)          | None             | x  [source: graph]                    |
+| None             | Some(y)          | y  [source: semantic]                 |
+| Some(x)          | Some(y), x ≠ y   | written: x 
+ inferred: y             |
+| None             | None             | NotFound                              |
+
+NB: "agree" = normalised-whitespace equality. Conservative — if in doubt, show both.
+
+* CodePath surface
+
+Before:
+- `find { foo.ex::handler #hover }`           → graph-only
+- `find { foo.ex::handler #hover_inferred }`  → lsp-only
+
+After:
+- `find { foo.ex::handler #hover }`                   → smart merge
+- `find { foo.ex::handler #hover [source=graph] }`    → graph-only (cost escape hatch)
+- `find { foo.ex::handler #hover [source=semantic] }` → lsp-only
+
+`#hover_inferred` qualifier is hard-removed (no callers — qualifier shipped in PLAN-319 W3, was never wired to the agent prompt).
+
+* Why now
+
+PLAN-320 introduced #hover as edit-scope alias (#sig) at unified.rs:104-106. After the PLAN-319+320 merge, #hover has dual semantics:
+- find  → "show me the type/signature"
+- edit  → "operate on the signature scope"
+
+This is fine (different tools). But the find-side semantics need to be unified before FUP-094 wires multi-language LSP; otherwise we ship 15 languages with two-qualifier taxonomy.
+
+* Scope
+
+** Target
+- crates/pi-code-graph/src/semantic/mod.rs — HoverOutcome enum + merge_hover helper + normalise_for_compare
+- crates/pi-natives/src/code_path/type_resolver.rs — dispatch both backends under #hover; respect [source=…] filter; convert HoverOutcome to NodeRefDto
+- crates/pi-code-path/src/parser.rs — drop #hover_inferred parser test or convert to rejection test
+- crates/pi-natives/src/code_path/code_resolver/walker.rs — leverage existing hover_signature_end helper from PLAN-320 for written-side extraction consistency
+- crates/pi-code-path/src/unified.rs — reject semantic qualifiers explicitly (defensive: change line 106 fallback to diagnostic instead of swallow into TargetShape::Symbol)
+- packages/coding-agent/src/prompts/tools/find.md — remove #hover_inferred row, add merge note under #hover
+
+** Change
+
+1. HoverOutcome enum in pi-code-graph::semantic::mod
+   - Agreed { repr: String }
+   - Single { repr: String, source: HoverSource }
+   - Disagreed { written: String, inferred: String }
+   - HoverSource ∈ { Graph, Semantic }
+
+2. merge_hover(written: Option<HoverInfo>, inferred: Option<HoverInfo>) -> HoverOutcome
+   - Normalise both reprs (trim, collapse whitespace, strip trailing semicolon)
+   - Compare normalised; if equal → Agreed
+   - If exactly one Some → Single
+   - If both Some but different → Disagreed
+   - If both None → return None (caller emits NotFound)
+
+3. type_resolver dispatch
+   - On #hover qualifier:
+     - Read [source=…] predicate; default = Both
+     - If source=graph: call AnnotationSemanticBackend only
+     - If source=semantic: call LspSemanticBackend only
+     - If source=both (default): call BOTH via Composite (or directly both)
+   - Wrap result in HoverOutcome via merge_hover
+   - Format Outcome → NodeRefDto with optional source label
+
+4. Defensive: in pi-code-path::unified::TargetShape::classify, line 106 fallback for unknown qualifiers should return a diagnostic for read-only semantic qualifiers (#hover_inferred, #diagnostics, #type_definition, #signature, #inlay), not silently fall into TargetShape::Symbol.
+
+** Edge Cases
+- Both backends returning empty string → treat as None
+- "Agree" normalisation must NOT cross structural boundaries (don't collapse "fn foo(x)" with "fn foo (x)" but DO collapse "fn  foo" with "fn foo")
+- Annotation backend returns the written sig from SymbolNode::detail; for languages without LSP, source=semantic should return Single { source: Graph } (fallthrough not error)
+- Disagreed case: order is (written, inferred), never inferred-first
+- For symbols without an LSP server (no file-type match in CompositeSemanticBackend), source=both returns Single { Graph }
+
+** Acceptance
+- 5 unit tests in type_resolver: cases A (agree), B (graph only), C (semantic only), D (disagree), E (neither)
+- parser test: `foo.ts::Sym #hover_inferred` produces parse-error (or aliases to `#hover [source=semantic]` — decide during impl)
+- unified.rs test: `edit { target: "foo.ts::sym#hover_inferred", action: { kind: "replace", content: "..." } }` returns IncompatibleTargetShape diagnostic
+- find.md updated: one #hover row in qualifier table, plus a paragraph explaining source labels
+- cargo test --workspace --exclude pi-natives green
+- cargo test -p pi-natives type_resolver green
+
+* Effort
+
+~320 LOC. Half a day. Single commit. Reviewer wave after.
+
+* Sequenced relative to other FUPs
+
+- BLOCKS: FUP-094 batch 1 (would prefer to ship multi-language LSP with one #hover qualifier)
+- BLOCKED BY: PLAN-319 (CON-pi-code-graph-semantic-backend-layer--pl) — DONE
+- BLOCKED BY: PLAN-320 merge — DONE in commit fc38471a4
+
+* References
+
+- PLAN-319: [[id:PLAN-319-semanticbackend-foundation-expert-lsp-pi]]
+- PLAN-320: [[id:PLAN-320-unified-edit-surface-three-verb-agent-er]]
+- FUP-096 (batch glob, sibling): [[id:FUP-096-batch-glob-operations-for-unified-edit-s]]
+- FUP-094 (multi-language LSP, downstream): [[id:FUP-094-multi-language-lsp-wiring]]
+- Memory concept: CON-pi-code-graph-semantic-backend-layer--pl

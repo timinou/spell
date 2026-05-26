@@ -4,8 +4,10 @@ target ::= Locator (Query)? (Qualifier)?
   Locator   path · glob · uri://
   Query     ::Sym  · ::§kind  · ::¶anchor  · ::field:  · A combinator B
   Pred      [N] [a..b] [text~="re"] [attr=val] [size>1M] [mtime>2026-01-01]
+            [type_aware] [severity=error|warning|info|hint] [source=graph|semantic|both]
   Combinator  / // ^ ^^ << >> ref→ def→ call→ import→ bind→ implements→ inherits→ dispatches→ | & −
   Qualifier   #body #sig #stat #tree #diff #listing #raw #hover
+              #hover_inferred #type_definition #signature #inlay #diagnostics
 
 <recipes>
 | want                | target                                      |
@@ -31,7 +33,14 @@ target ::= Locator (Query)? (Qualifier)?
 | definition          | `foo.ts::useX ref→`                         |
 | implementers        | `foo.ts::IThing implements→`               |
 | base types          | `foo.py::Cls inherits→`                    |
-| signature           | `foo.ts::Bar.method#hover`                  |
+| signature (written) | `foo.ts::Bar.method#hover`                  |
+| signature (inferred)| `foo.ts::Bar.method#hover_inferred`         |
+| type of expression  | `foo.ts::x#type_definition`                 |
+| callable signature  | `foo.ts::handler#signature`                 |
+| inlay hints         | `foo.ts::handler#inlay`                     |
+| diagnostics         | `src/**/*.ex#diagnostics [severity=error]`  |
+| type-narrowed callers | `foo.ts::Bar.method def→ [type_aware]`     |
+| force tree-sitter   | `foo.ts::x#hover [source=graph]`            |
 | recent              | `src/**/*.ts::§file[mtime>2026-05-01]`     |
 | uri                 | `memory://root` · `artifact://…` · `skill://…` |
 </recipes>
