@@ -22,6 +22,7 @@
 use std::{
 	collections::HashMap,
 	io::{BufRead, BufReader, Read as _, Write},
+	path::Path,
 	process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio},
 	sync::{
 		atomic::{AtomicU64, Ordering},
@@ -117,6 +118,11 @@ pub struct LspClient {
 	capabilities:    OnceLock<ServerCapabilities>,
 	server_name:     String,
 	request_timeout: Duration,
+	/// FUP-100: per-path document version tracking. Drives didOpen on first
+	/// touch and didChange on subsequent edits. The version monotonically
+	/// increments for the lifetime of the client, per path; the LSP spec
+	/// requires this for didChange to be a valid notification.
+	doc_sync:        Arc<super::sync::DocumentSync>,
 	_reader:         Mutex<Option<JoinHandle<()>>>,
 	_stderr:         Mutex<Option<JoinHandle<()>>>,
 }
@@ -173,6 +179,7 @@ impl LspClient {
 			capabilities:    OnceLock::new(),
 			server_name:     server_name.clone(),
 			request_timeout,
+			doc_sync:        Arc::new(super::sync::DocumentSync::new()),
 			_reader:         Mutex::new(Some(reader_thread)),
 			_stderr:         Mutex::new(Some(stderr_thread)),
 		});
@@ -254,6 +261,59 @@ impl LspClient {
 			Err(_) => return,
 		};
 		let _ = self.write_frame(&body);
+	}
+
+	/// FUP-100: Ensure the LSP has been told about `path` via
+	/// `textDocument/didOpen` carrying `text`. Idempotent — a second call
+	/// with the same path is treated as a `didChange` so the LSP sees the
+	/// latest content. Call this from any path-based request hook BEFORE
+	/// issuing the request; the LSP returns empty hover/signature/etc when
+	/// the document is unknown.
+	///
+	/// `language_id` is the LSP language identifier ("rust", "typescript",
+	/// …) usually sourced from the `LanguageBackendConfig::language` KDL
+	/// field.
+	pub fn ensure_opened(&self, path: &Path, language_id: &str, text: &str) {
+		self.doc_sync.handle(
+			self,
+			super::sync::BufferEvent::Opened {
+				path:        path.to_path_buf(),
+				language_id: language_id.to_string(),
+				text:        text.to_string(),
+			},
+		);
+	}
+
+	/// FUP-100: notify the LSP that an already-open document changed. If
+	/// `path` hasn't been opened yet, `DocumentSync` records an implicit
+	/// open + logs a warning to stderr (protocol-violation hint).
+	pub fn notify_changed(&self, path: &Path, text: &str) {
+		self.doc_sync.handle(
+			self,
+			super::sync::BufferEvent::Changed { path: path.to_path_buf(), text: text.to_string() },
+		);
+	}
+
+	/// FUP-100: notify the LSP that the document was saved to disk. Some
+	/// LSPs run validators only on save (clangd, gopls).
+	pub fn notify_saved(&self, path: &Path) {
+		self.doc_sync.handle(
+			self,
+			super::sync::BufferEvent::Saved { path: path.to_path_buf() },
+		);
+	}
+
+	pub fn notify_closed(&self, path: &Path) {
+		self.doc_sync.handle(
+			self,
+			super::sync::BufferEvent::Closed { path: path.to_path_buf() },
+		);
+	}
+
+	/// True if `path` has been opened on this client (didOpen seen, no
+	/// matching didClose). Diagnostic helper.
+	pub fn is_open(&self, path: &Path) -> bool {
+		self.doc_sync.is_open(path)
 	}
 
 	pub fn diagnostics_for(&self, uri: &Url) -> Vec<SemanticDiagnostic> {

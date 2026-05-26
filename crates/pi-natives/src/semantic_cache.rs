@@ -124,7 +124,12 @@ pub fn get_or_build(root: &Path) -> Result<Arc<CompositeSemanticBackend>, Semant
 		};
 		match registry.get_or_spawn(&canon, server_name) {
 			Ok(client) => {
-				let backend = Arc::new(LspSemanticBackend::new(client));
+				// FUP-100: pass language_id so the backend can ensure_opened()
+				// before each LSP request. Without this, the LSP returns empty
+				// hover/signature/etc until the document is opened.
+				let backend = Arc::new(
+					LspSemanticBackend::with_language_id(client, &lb.language),
+				);
 				let exts = spec.file_extensions.clone();
 				composite.register_lsp(exts, backend);
 			},
@@ -186,6 +191,45 @@ pub fn peek(root: &Path) -> Option<CachedSemantic> {
 /// Number of warm workspace backends. Diagnostic helper.
 pub fn warm_count() -> usize {
 	backends().len()
+}
+
+/// FUP-100: notify all warm LSP clients whose workspace contains `file`
+/// that the file's content has changed. Translates to one
+/// `textDocument/didChange` per affected LSP via
+/// [`LspClient::notify_changed`].
+///
+/// Callers: the `code_buffer` commit path — same callsite that fires
+/// `code_graph_cache::invalidate_for_file` — ensuring single-source-of-
+/// truth for buffer events across the graph + semantic layers.
+///
+/// Returns the number of `(workspace, server)` pairs notified. Zero is
+/// normal (no warm semantic cache for that root, or no LSP registered
+/// for the file's extension); callers should not treat it as an error.
+pub fn notify_buffer_change(file: &Path, text: &str) -> usize {
+	let Ok(canon_file) = std::fs::canonicalize(file) else {
+		return 0;
+	};
+	let mut notified = 0usize;
+	for entry in backends().iter() {
+		let (root, cached) = (entry.key(), entry.value());
+		if !canon_file.starts_with(root) {
+			continue;
+		}
+		for (_server_name, client) in cached.registry.iter_warm_for(root) {
+			// Only notify clients that have already opened this path. A
+			// client that hasn't seen the file yet doesn't need a
+			// didChange — the next semantic query will fire didOpen with
+			// the on-disk read; if that read races with our in-memory
+			// text, the next notify_buffer_change wins via version
+			// monotonicity.
+			if !client.is_open(&canon_file) {
+				continue;
+			}
+			client.notify_changed(&canon_file, text);
+			notified += 1;
+		}
+	}
+	notified
 }
 
 #[cfg(test)]

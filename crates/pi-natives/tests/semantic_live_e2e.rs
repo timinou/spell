@@ -257,3 +257,70 @@ fn missing_file_for_semantic_qualifier_returns_error() {
 	let result = execute_code_path_inner(opts(dir.path(), &target), CancelToken::default());
 	assert!(result.is_err(), "missing file must surface as Err");
 }
+
+// ── FUP-100: buffer-sync (didOpen on first query + didChange on edit) ──
+
+#[test]
+#[ignore = "requires rust-analyzer in PATH"]
+fn ensure_synced_fires_didopen_on_first_hover() {
+	if !cmd_exists("rust-analyzer") {
+		eprintln!("rust-analyzer not installed; skipping didOpen test");
+		return;
+	}
+	let dir = make_ws();
+	let file_path = dir.path().join("src/lib.rs").canonicalize().unwrap();
+
+	// First query — ensure_synced fires didOpen.
+	let target = format!("{}/src/lib.rs::add#hover", dir.path().display());
+	let _ = execute(dir.path(), &target);
+
+	// Verify the LSP client now considers the file open.
+	let cache = pi_natives::semantic_cache::peek(dir.path())
+		.expect("semantic cache must be warm after hover");
+	let warm_clients = cache.registry.iter_warm_all();
+	// At least one warm client must be open on the file. (Other clients
+	// for other languages have no business with this .rs file and stay
+	// unaware — file_types filter at the cache layer.)
+	let ra = warm_clients
+		.iter()
+		.find(|(_, name, _)| name == "rust-analyzer");
+	if let Some((_, _, client)) = ra {
+		assert!(
+			client.is_open(&file_path),
+			"rust-analyzer client should report file open after first #hover"
+		);
+	} else {
+		eprintln!("rust-analyzer not warm in this run (spawn may have failed); skipping");
+	}
+}
+
+#[test]
+fn notify_buffer_change_returns_zero_when_no_warm_lsp() {
+	// Sanity: notifying a file with no warm semantic cache returns 0,
+	// not an error. Verifies the no-op contract for buffer commits in
+	// projects where the LSP hasn't been spawned yet.
+	let dir = make_ws();
+	let file_path = dir.path().join("src/lib.rs");
+	let notified =
+		pi_natives::semantic_cache::notify_buffer_change(&file_path, "new content");
+	assert_eq!(notified, 0, "no warm cache, no notification");
+}
+
+#[test]
+fn notify_buffer_change_skips_files_not_yet_opened_by_lsp() {
+	// After get_or_build warms the cache, the LSP exists but no query
+	// has opened any file yet. notify_buffer_change must NOT pre-emptively
+	// fire didChange before didOpen (a protocol violation per LSP spec).
+	let dir = make_ws();
+	let _ = pi_natives::semantic_cache::get_or_build(dir.path())
+		.expect("semantic cache build");
+	let file_path = dir.path().join("src/lib.rs");
+	let notified =
+		pi_natives::semantic_cache::notify_buffer_change(&file_path, "new content");
+	assert_eq!(
+		notified, 0,
+		"warm LSP that hasn't seen the file must not receive didChange"
+	);
+	pi_natives::semantic_cache::invalidate(dir.path());
+}
+

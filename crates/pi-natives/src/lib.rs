@@ -48,9 +48,15 @@ pub(crate) fn buffer_registry() -> &'static BufferRegistry {
 		let watcher = FileWatcher::new().ok();
 		// BUG-414: subscribe code_graph_cache invalidation to filesystem
 		// changes so edge queries reflect the current state of the repo.
+		// FUP-100: also invalidate the semantic cache — external file
+		// changes (build scripts, branch switches, etc.) need to tear down
+		// the per-workspace LSP so the next semantic query respawns with
+		// fresh state. This is heavy but correct; the lighter-weight
+		// EditRecorder path below fires didChange without tearing down.
 		if let Some(ref w) = watcher {
 			w.on_change(Box::new(|path| {
 				crate::code_graph_cache::invalidate_for_file(path);
+				crate::semantic_cache::invalidate_for_file(path);
 			}));
 		}
 		let registry = BufferRegistry::new_with_coord(
@@ -59,6 +65,13 @@ pub(crate) fn buffer_registry() -> &'static BufferRegistry {
 			Arc::new(SocketCoordClient::new(endpoint)),
 		);
 		let recorder = Arc::new(|record: pi_code_engine::buffer::EditRecord| {
+			// FUP-100: agent-driven edit → didChange to every warm LSP that
+			// has this file open. Light-weight: no respawn, just a version
+			// bump + content delta on the existing client. The next
+			// `#hover` / `#signature` query against the file sees the new
+			// text without re-reading disk.
+			crate::semantic_cache::notify_buffer_change(&record.file, &record.after);
+
 			let root = pi_code_engine::workspace_root_for(&record.file);
 			let path = root.join(".spell").join("edit-history.jsonl");
 			let history = crate::code_path::edit_history::JsonlHistory::new(path);
