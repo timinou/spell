@@ -88,7 +88,21 @@ impl DocumentSync {
 		};
 		let version = {
 			let mut versions = self.versions.lock().unwrap();
-			let v = versions.entry(path.to_path_buf()).or_insert(0);
+			// W1g (P2): LSP spec requires didChange to reference a doc opened
+			// via didOpen. If we haven't seen this path before, treat the event
+			// as the initial open by recording version 1 — the caller is
+			// nonetheless expected to feed didOpen first. We log via dropping
+			// to stderr to surface the protocol-violation hint to operators.
+			let entry = versions.entry(path.to_path_buf());
+			let inserted_fresh = matches!(entry, std::collections::hash_map::Entry::Vacant(_));
+			let v = entry.or_insert(0);
+			if inserted_fresh {
+				eprintln!(
+					"[lsp:{}] warning: didChange before didOpen for {} — implicit open",
+					client.server_name(),
+					path.display(),
+				);
+			}
 			*v += 1;
 			*v
 		};

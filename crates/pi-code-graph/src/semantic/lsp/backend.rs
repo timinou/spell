@@ -189,6 +189,49 @@ impl SemanticBackend for LspSemanticBackend {
 		diagnostics_for_path(&self.client, file)
 	}
 
+	/// W1g (P1): implement references_narrowed via LSP textDocument/references.
+	///
+	/// `receiver_filter` is currently a stub: when `None`, returns the full
+	/// LSP reference list (this is the common case). When `Some`, returns an
+	/// empty Vec — honest fallback until type-aware filter is wired in a
+	/// future iteration. The capability bit advertises that the backend can
+	/// answer the question, not that it implements the filter.
+	fn references_narrowed(
+		&self,
+		symbol: &Location,
+		receiver_filter: Option<&TypeRepr>,
+	) -> Vec<Location> {
+		if !self.caps.references_narrowed {
+			return Vec::new();
+		}
+		if receiver_filter.is_some() {
+			return Vec::new();
+		}
+		let Ok(uri) = lsp_types::Url::from_file_path(&symbol.file) else {
+			return Vec::new();
+		};
+		let params = lsp_types::ReferenceParams {
+			text_document_position: TextDocumentPositionParams {
+				text_document: TextDocumentIdentifier { uri },
+				position: semantic_to_lsp_position(symbol.line, symbol.col),
+			},
+			work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),
+			partial_result_params: lsp_types::PartialResultParams::default(),
+			context: lsp_types::ReferenceContext { include_declaration: false },
+		};
+		let Ok(Some(refs)) = self.client.request::<lsp_types::request::References>(params) else {
+			return Vec::new();
+		};
+		refs.into_iter()
+			.map(|loc| Location {
+				file: lsp_uri_to_pathbuf(&loc.uri),
+				line: loc.range.start.line + 1,
+				col:  loc.range.start.character + 1,
+				end:  Some((loc.range.end.line + 1, loc.range.end.character + 1)),
+			})
+			.collect()
+	}
+
 	fn rename_preview(
 		&self,
 		file: &Path,
@@ -266,24 +309,75 @@ fn first_location_response(resp: lsp_types::GotoDefinitionResponse) -> Option<Lo
 	})
 }
 
+/// W1g (P1) fix: handle BOTH `changes` (legacy LSP format) AND
+/// `document_changes` (newer format used by rust-analyzer, vtsls, gopls).
+/// Without this, modern servers silently produce empty rename edits.
 fn convert_workspace_edit(edit: lsp_types::WorkspaceEdit) -> WorkspaceEdit {
 	let mut edits = Vec::new();
+
+	// Legacy `changes: HashMap<Uri, Vec<TextEdit>>`.
 	if let Some(changes) = edit.changes {
 		for (uri, text_edits) in changes {
+			let file = lsp_uri_to_pathbuf(&uri);
 			for te in text_edits {
-				edits.push(TextEdit {
-					location: Location {
-						file: lsp_uri_to_pathbuf(&uri),
-						line: te.range.start.line + 1,
-						col:  te.range.start.character + 1,
-						end:  Some((te.range.end.line + 1, te.range.end.character + 1)),
-					},
-					new_text: te.new_text,
-				});
+				edits.push(text_edit_to_semantic(&file, te));
 			}
 		}
 	}
+
+	// Newer `document_changes` — either Edits or Operations.
+	if let Some(doc_changes) = edit.document_changes {
+		match doc_changes {
+			lsp_types::DocumentChanges::Edits(text_doc_edits) => {
+				for tde in text_doc_edits {
+					let file = lsp_uri_to_pathbuf(&tde.text_document.uri);
+					for edit_op in tde.edits {
+						if let Some(te) = annotated_text_edit_to_text_edit(edit_op) {
+							edits.push(text_edit_to_semantic(&file, te));
+						}
+					}
+				}
+			},
+			lsp_types::DocumentChanges::Operations(ops) => {
+				for op in ops {
+					// Only TextDocumentEdit variants are renames-as-edits.
+					// CreateFile / RenameFile / DeleteFile are out of scope here;
+					// rename_preview shouldn't be producing them.
+					if let lsp_types::DocumentChangeOperation::Edit(tde) = op {
+						let file = lsp_uri_to_pathbuf(&tde.text_document.uri);
+						for edit_op in tde.edits {
+							if let Some(te) = annotated_text_edit_to_text_edit(edit_op) {
+								edits.push(text_edit_to_semantic(&file, te));
+							}
+						}
+					}
+				}
+			},
+		}
+	}
+
 	WorkspaceEdit { edits }
+}
+
+fn text_edit_to_semantic(file: &Path, te: lsp_types::TextEdit) -> TextEdit {
+	TextEdit {
+		location: Location {
+			file: file.to_path_buf(),
+			line: te.range.start.line + 1,
+			col:  te.range.start.character + 1,
+			end:  Some((te.range.end.line + 1, te.range.end.character + 1)),
+		},
+		new_text: te.new_text,
+	}
+}
+
+fn annotated_text_edit_to_text_edit(
+	edit: lsp_types::OneOf<lsp_types::TextEdit, lsp_types::AnnotatedTextEdit>,
+) -> Option<lsp_types::TextEdit> {
+	match edit {
+		lsp_types::OneOf::Left(te) => Some(te),
+		lsp_types::OneOf::Right(ate) => Some(ate.text_edit),
+	}
 }
 
 fn derive_capabilities(lsp_caps: &lsp_types::ServerCapabilities) -> Capabilities {
@@ -291,8 +385,10 @@ fn derive_capabilities(lsp_caps: &lsp_types::ServerCapabilities) -> Capabilities
 	let has_type_def = lsp_caps.type_definition_provider.is_some();
 	let has_signature = lsp_caps.signature_help_provider.is_some();
 	let has_inlay = lsp_caps.inlay_hint_provider.is_some();
-	let has_diag = lsp_caps.diagnostic_provider.is_some()
-		|| lsp_caps.text_document_sync.is_some(); // many servers push diagnostics on sync
+	// W1g (P2): diagnostic capability requires the explicit diagnostic_provider
+	// advertisement. textDocument/sync was a false-positive proxy (many servers
+	// advertise sync but don't push diagnostics).
+	let has_diag = lsp_caps.diagnostic_provider.is_some();
 	let has_rename = match &lsp_caps.rename_provider {
 		Some(lsp_types::OneOf::Left(true)) => true,
 		Some(lsp_types::OneOf::Right(_)) => true,
@@ -304,9 +400,16 @@ fn derive_capabilities(lsp_caps: &lsp_types::ServerCapabilities) -> Capabilities
 		type_definition:     has_type_def,
 		signature:           has_signature,
 		inlay_hints:         has_inlay,
-		narrow_dispatch:     has_refs, // refs is the building block for narrowing
+		// W1g (P1): LspSemanticBackend uses the default trait impl for
+		// narrow_dispatch (returns candidates unchanged — no real narrowing).
+		// Setting this `true` would be lying about capability; leave `false`
+		// until a future iteration implements actual type-based narrowing.
+		narrow_dispatch:     false,
 		diagnostics:         has_diag,
 		rename:              has_rename,
+		// References-narrowed is implemented below: returns full LSP refs when
+		// `receiver_filter` is None, empty when Some (filter is a stub). Cap
+		// is honest about "has any answer" — the filter case is documented.
 		references_narrowed: has_refs,
 	}
 }
@@ -400,5 +503,111 @@ mod tests {
 		let out = convert_workspace_edit(we);
 		assert_eq!(out.edits.len(), 1);
 		assert_eq!(out.edits[0].new_text, "new");
+	}
+
+	/// W1g (P1 regression): the newer `document_changes: Edits` format used by
+	/// rust-analyzer / vtsls must produce the same TextEdit output as the
+	/// legacy `changes` map.
+	#[test]
+	fn convert_workspace_edit_handles_document_changes_edits_variant() {
+		let uri = lsp_types::Url::parse("file:///tmp/foo.rs").unwrap();
+		let tde = lsp_types::TextDocumentEdit {
+			text_document: lsp_types::OptionalVersionedTextDocumentIdentifier {
+				uri:     uri.clone(),
+				version: Some(1),
+			},
+			edits: vec![lsp_types::OneOf::Left(lsp_types::TextEdit {
+				range:    lsp_types::Range {
+					start: lsp_types::Position { line: 4, character: 2 },
+					end:   lsp_types::Position { line: 4, character: 7 },
+				},
+				new_text: "renamed".into(),
+			})],
+		};
+		let we = lsp_types::WorkspaceEdit {
+			changes:            None,
+			document_changes:   Some(lsp_types::DocumentChanges::Edits(vec![tde])),
+			change_annotations: None,
+		};
+		let out = convert_workspace_edit(we);
+		assert_eq!(out.edits.len(), 1, "document_changes::Edits must emit edits");
+		let e = &out.edits[0];
+		assert_eq!(e.new_text, "renamed");
+		assert_eq!(e.location.line, 5);
+		assert_eq!(e.location.col, 3);
+		assert_eq!(e.location.end, Some((5, 8)));
+	}
+
+	/// W1g (P1 regression): `document_changes: Operations` with an Edit variant
+	/// emits TextEdits; other operations (Create/Rename/Delete) are skipped.
+	#[test]
+	fn convert_workspace_edit_handles_document_changes_operations_variant() {
+		let uri = lsp_types::Url::parse("file:///tmp/foo.rs").unwrap();
+		let tde = lsp_types::TextDocumentEdit {
+			text_document: lsp_types::OptionalVersionedTextDocumentIdentifier {
+				uri:     uri.clone(),
+				version: None,
+			},
+			edits: vec![lsp_types::OneOf::Left(lsp_types::TextEdit {
+				range:    lsp_types::Range::default(),
+				new_text: "from-ops".into(),
+			})],
+		};
+		let ops = vec![
+			lsp_types::DocumentChangeOperation::Edit(tde),
+			lsp_types::DocumentChangeOperation::Op(lsp_types::ResourceOp::Delete(
+				lsp_types::DeleteFile { uri, options: None },
+			)),
+		];
+		let we = lsp_types::WorkspaceEdit {
+			changes:            None,
+			document_changes:   Some(lsp_types::DocumentChanges::Operations(ops)),
+			change_annotations: None,
+		};
+		let out = convert_workspace_edit(we);
+		assert_eq!(
+			out.edits.len(),
+			1,
+			"only the Edit variant emits a TextEdit; Delete is skipped"
+		);
+		assert_eq!(out.edits[0].new_text, "from-ops");
+	}
+
+	/// W1g (P1 regression): derive_capabilities must not lie about capabilities
+	/// the backend doesn't implement.
+	#[test]
+	fn derive_capabilities_does_not_claim_unimplemented_features() {
+		let mut lsp = lsp_types::ServerCapabilities::default();
+		lsp.references_provider = Some(lsp_types::OneOf::Left(true));
+		let caps = derive_capabilities(&lsp);
+		assert!(
+			!caps.narrow_dispatch,
+			"narrow_dispatch is the default trait impl (pass-through); cap must be false"
+		);
+		assert!(
+			caps.references_narrowed,
+			"references_narrowed IS implemented (LSP textDocument/references)"
+		);
+	}
+
+	/// W1g (P2 regression): diagnostics cap requires explicit
+	/// diagnostic_provider, not the looser "sync implies diagnostics" proxy.
+	#[test]
+	fn derive_capabilities_diagnostics_requires_explicit_provider() {
+		let mut lsp = lsp_types::ServerCapabilities::default();
+		lsp.text_document_sync = Some(lsp_types::TextDocumentSyncCapability::Kind(
+			lsp_types::TextDocumentSyncKind::FULL,
+		));
+		let caps = derive_capabilities(&lsp);
+		assert!(
+			!caps.diagnostics,
+			"sync alone is not a diagnostics advertisement"
+		);
+
+		lsp.diagnostic_provider = Some(lsp_types::DiagnosticServerCapabilities::Options(
+			lsp_types::DiagnosticOptions::default(),
+		));
+		let caps = derive_capabilities(&lsp);
+		assert!(caps.diagnostics, "explicit diagnostic_provider unlocks the cap");
 	}
 }

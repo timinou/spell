@@ -202,6 +202,11 @@ impl LspClient {
 		R::Params: Serialize,
 		R::Result: for<'de> Deserialize<'de>,
 	{
+		// W1g (P2): serialize params BEFORE registering the pending entry so a
+		// serde failure can't orphan an mpsc::Sender in `pending`.
+		let params_value =
+			serde_json::to_value(params).map_err(|e| LspClientError::Serde(e.to_string()))?;
+
 		let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 		let (tx, rx) = mpsc::channel();
 		self.pending.lock().unwrap().insert(id, tx);
@@ -210,15 +215,23 @@ impl LspClient {
 			jsonrpc: "2.0",
 			id,
 			method: R::METHOD,
-			params: serde_json::to_value(params)
-				.map_err(|e| LspClientError::Serde(e.to_string()))?,
+			params: params_value,
 		})
 		.map_err(|e| LspClientError::Serde(e.to_string()))?;
-		self.write_frame(&body)?;
+		// On write failure remove the orphan-pending entry before returning.
+		if let Err(e) = self.write_frame(&body) {
+			self.pending.lock().unwrap().remove(&id);
+			return Err(e);
+		}
 
-		let response = rx
-			.recv_timeout(self.request_timeout)
-			.map_err(|_| LspClientError::Timeout)?;
+		let response = match rx.recv_timeout(self.request_timeout) {
+			Ok(r) => r,
+			Err(_) => {
+				// Timeout: scrub the orphan-pending entry so it doesn't leak.
+				self.pending.lock().unwrap().remove(&id);
+				return Err(LspClientError::Timeout);
+			},
+		};
 		let value = response?;
 		serde_json::from_value::<R::Result>(value)
 			.map_err(|e| LspClientError::Serde(e.to_string()))
@@ -373,6 +386,12 @@ enum ReadFrameError {
 	Protocol(String),
 }
 
+/// Hard cap on an inbound LSP frame size: 50 MiB. The LSP spec sets no
+/// limit, but realistic hover/diagnostic/symbol payloads are bounded.
+/// Without a cap, a buggy / malicious server sending a multi-GB
+/// `Content-Length` triggers OOM-abort. W1g (P2) defensive fix.
+const MAX_FRAME_BYTES: usize = 50 * 1024 * 1024;
+
 fn read_frame<R: BufRead>(reader: &mut R) -> Result<Vec<u8>, ReadFrameError> {
 	let mut content_length: Option<usize> = None;
 	loop {
@@ -394,6 +413,11 @@ fn read_frame<R: BufRead>(reader: &mut R) -> Result<Vec<u8>, ReadFrameError> {
 	}
 	let len = content_length
 		.ok_or_else(|| ReadFrameError::Protocol("missing Content-Length".into()))?;
+	if len > MAX_FRAME_BYTES {
+		return Err(ReadFrameError::Protocol(format!(
+			"frame size {len} exceeds cap {MAX_FRAME_BYTES}"
+		)));
+	}
 	let mut buf = vec![0u8; len];
 	reader.read_exact(&mut buf).map_err(ReadFrameError::Io)?;
 	Ok(buf)
