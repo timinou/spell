@@ -31,6 +31,7 @@
 
 pub mod annotation;
 pub mod composite;
+pub mod config;
 pub mod lsp;
 
 use std::path::{Path, PathBuf};

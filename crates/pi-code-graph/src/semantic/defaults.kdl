@@ -1,0 +1,37 @@
+// PLAN-319 W2 — bundled defaults for the `semantic {}` config block.
+// Resolved precedence: <project>/.spell/config.kdl > ~/.spell/config.kdl > this file.
+
+semantic {
+    idle-ttl-secs       1800
+    max-warm-servers       6
+    request-timeout-ms  5000
+    sync-debounce-ms      50
+
+    bm25 {
+        incremental #true
+    }
+
+    // Per-language wiring. Tree-sitter extractors are always on (no toggle);
+    // an optional `lsp "<name>"` reference enables type-inference for that
+    // language via the SemanticBackend layer.
+    language "elixir" { lsp "expert" }
+    // Catch-all: no LSP, AnnotationSemanticBackend only.
+    language "*" { }
+
+    // ── Server definitions ──────────────────────────────────────────
+    // Referenced by `language "<lang>" { lsp "<server>" }` blocks above.
+
+    server "expert" {
+        command "expert"
+        args "--stdio"
+        file-types ".ex" ".exs" ".heex" ".eex"
+        root-markers "mix.exs" "mix.lock"
+        request-timeout-secs 10
+
+        env {
+            MIX_ENV "dev"
+        }
+
+        install-hint "Install Expert: https://github.com/elixir-lang/expert"
+    }
+}
