@@ -23,28 +23,61 @@ use serde_json::Value;
 use crate::semantic::lsp::ServerSpec;
 
 /// Top-level parsed configuration.
-#[derive(Debug, Clone)]
+///
+/// **Scalar fields are `Option<T>`** so [`merge`](Self::merge) can
+/// distinguish "explicitly set to default" from "absent in this layer."
+/// Without that distinction, a higher-priority layer that omits e.g.
+/// `max-warm-servers` would silently clobber the lower layer's explicit
+/// value with the Rust default. (W2g P1 fix.)
+///
+/// Call [`resolve`](Self::resolve) on the merged config to fill `None`s
+/// with their compile-time defaults before passing to the registry.
+#[derive(Debug, Clone, Default)]
 pub struct SemanticConfig {
-	pub idle_ttl:           Duration,
-	pub max_warm_servers:   usize,
-	pub request_timeout:    Duration,
-	pub sync_debounce:      Duration,
-	pub bm25_incremental:   bool,
+	pub idle_ttl:           Option<Duration>,
+	pub max_warm_servers:   Option<usize>,
+	pub request_timeout:    Option<Duration>,
+	pub sync_debounce:      Option<Duration>,
+	pub bm25_incremental:   Option<bool>,
 	pub language_backends:  HashMap<String, LanguageBackendConfig>,
 	pub server_specs:       HashMap<String, ServerSpec>,
 }
 
-impl Default for SemanticConfig {
-	fn default() -> Self {
-		Self {
-			idle_ttl:           Duration::from_secs(1800),
-			max_warm_servers:   6,
-			request_timeout:    Duration::from_secs(5),
-			sync_debounce:      Duration::from_millis(50),
-			bm25_incremental:   true,
-			language_backends:  HashMap::new(),
-			server_specs:       HashMap::new(),
-		}
+impl SemanticConfig {
+	/// Compile-time defaults for the scalar fields. Used by
+	/// [`resolve`](Self::resolve) and the field accessors.
+	pub const DEFAULT_IDLE_TTL: Duration = Duration::from_secs(1800);
+	pub const DEFAULT_MAX_WARM_SERVERS: usize = 6;
+	pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+	pub const DEFAULT_SYNC_DEBOUNCE: Duration = Duration::from_millis(50);
+	pub const DEFAULT_BM25_INCREMENTAL: bool = true;
+
+	/// Resolved getters: return the configured value, or the compile-time
+	/// default if the field is `None`.
+	pub fn idle_ttl(&self) -> Duration {
+		self.idle_ttl.unwrap_or(Self::DEFAULT_IDLE_TTL)
+	}
+	pub fn max_warm_servers(&self) -> usize {
+		self.max_warm_servers.unwrap_or(Self::DEFAULT_MAX_WARM_SERVERS)
+	}
+	pub fn request_timeout(&self) -> Duration {
+		self.request_timeout.unwrap_or(Self::DEFAULT_REQUEST_TIMEOUT)
+	}
+	pub fn sync_debounce(&self) -> Duration {
+		self.sync_debounce.unwrap_or(Self::DEFAULT_SYNC_DEBOUNCE)
+	}
+	pub fn bm25_incremental(&self) -> bool {
+		self.bm25_incremental.unwrap_or(Self::DEFAULT_BM25_INCREMENTAL)
+	}
+
+	/// Fill all `None` scalars with their compile-time defaults. Idempotent.
+	pub fn resolve(mut self) -> Self {
+		self.idle_ttl = Some(self.idle_ttl());
+		self.max_warm_servers = Some(self.max_warm_servers());
+		self.request_timeout = Some(self.request_timeout());
+		self.sync_debounce = Some(self.sync_debounce());
+		self.bm25_incremental = Some(self.bm25_incremental());
+		self
 	}
 }
 
@@ -102,10 +135,10 @@ impl SemanticConfig {
 		};
 		for node in children.nodes() {
 			match node.name().value() {
-				"idle-ttl-secs"       => cfg.idle_ttl        = Duration::from_secs(read_u64(node)?),
-				"max-warm-servers"    => cfg.max_warm_servers = read_u64(node)? as usize,
-				"request-timeout-ms"  => cfg.request_timeout = Duration::from_millis(read_u64(node)?),
-				"sync-debounce-ms"    => cfg.sync_debounce   = Duration::from_millis(read_u64(node)?),
+				"idle-ttl-secs"       => cfg.idle_ttl        = Some(Duration::from_secs(read_u64(node)?)),
+				"max-warm-servers"    => cfg.max_warm_servers = Some(read_u64(node)? as usize),
+				"request-timeout-ms"  => cfg.request_timeout = Some(Duration::from_millis(read_u64(node)?)),
+				"sync-debounce-ms"    => cfg.sync_debounce   = Some(Duration::from_millis(read_u64(node)?)),
 				"bm25" => parse_bm25(node, &mut cfg)?,
 				"language" => parse_language(node, &mut cfg)?,
 				"server" => parse_server(node, &mut cfg)?,
@@ -137,16 +170,19 @@ impl SemanticConfig {
 		Ok(())
 	}
 
-	/// Merge `higher` on top of `lower`. Scalar settings on `higher` always
-	/// win (no notion of "unset"); per-language and per-server entries from
-	/// `higher` replace those of the same name in `lower`.
+	/// Merge `higher` on top of `lower`.
+	///
+	/// **W2g (P1) semantic:** scalars use `Some`-wins (`higher.or(lower)`)
+	/// so an unset scalar in `higher` preserves `lower`'s value. Per-language
+	/// and per-server entries from `higher` replace those of the same name
+	/// in `lower`; unmentioned entries in `higher` are inherited from `lower`.
 	pub fn merge(higher: Self, mut lower: Self) -> Self {
-		// Scalars: higher wins.
-		lower.idle_ttl = higher.idle_ttl;
-		lower.max_warm_servers = higher.max_warm_servers;
-		lower.request_timeout = higher.request_timeout;
-		lower.sync_debounce = higher.sync_debounce;
-		lower.bm25_incremental = higher.bm25_incremental;
+		// Scalars: Some-wins. Higher overrides only when explicitly set.
+		lower.idle_ttl = higher.idle_ttl.or(lower.idle_ttl);
+		lower.max_warm_servers = higher.max_warm_servers.or(lower.max_warm_servers);
+		lower.request_timeout = higher.request_timeout.or(lower.request_timeout);
+		lower.sync_debounce = higher.sync_debounce.or(lower.sync_debounce);
+		lower.bm25_incremental = higher.bm25_incremental.or(lower.bm25_incremental);
 		// Per-language: higher's entries override lower's same-keyed entries.
 		for (k, v) in higher.language_backends {
 			lower.language_backends.insert(k, v);
@@ -177,7 +213,9 @@ impl SemanticConfig {
 		}
 
 		config.validate()?;
-		Ok(config)
+		// Final step: resolve any still-None scalars to their compile-time
+		// defaults so consumers don't have to thread Option<T> through.
+		Ok(config.resolve())
 	}
 }
 
@@ -187,7 +225,7 @@ fn parse_bm25(node: &KdlNode, cfg: &mut SemanticConfig) -> Result<(), ConfigErro
 	if let Some(children) = node.children() {
 		for child in children.nodes() {
 			if child.name().value() == "incremental" {
-				cfg.bm25_incremental = read_bool(child)?;
+				cfg.bm25_incremental = Some(read_bool(child)?);
 			}
 		}
 	}
@@ -294,14 +332,20 @@ fn parse_server(node: &KdlNode, cfg: &mut SemanticConfig) -> Result<(), ConfigEr
 
 // ── KdlValue helpers ────────────────────────────────────────────────
 
+/// W2g (P2): distinguish "entry missing" from "entry present but wrong type."
+/// Old code conflated them via `and_then(...).ok_or(MissingField)`, misleading
+/// users when a value like `lsp 42` produced a "missing required field" error.
 fn read_positional_string(node: &KdlNode, field: &str) -> Result<String, ConfigError> {
-	node.entries()
-		.first()
-		.and_then(|e| e.value().as_string().map(String::from))
-		.ok_or_else(|| ConfigError::MissingField {
+	let Some(entry) = node.entries().first() else {
+		return Err(ConfigError::MissingField {
 			node:  node.name().value().to_string(),
 			field: field.into(),
-		})
+		});
+	};
+	entry.value().as_string().map(String::from).ok_or_else(|| ConfigError::BadValue {
+		node:    node.name().value().to_string(),
+		message: format!("field `{field}` expected string, got {:?}", entry.value()),
+	})
 }
 
 fn read_u64(node: &KdlNode) -> Result<u64, ConfigError> {
@@ -329,7 +373,20 @@ fn read_bool(node: &KdlNode) -> Result<bool, ConfigError> {
 
 /// Convert a KdlNode's children to a serde_json::Value (for opaque
 /// init-options pass-through). Mirrors a minimal subset of KDL → JSON.
+///
+/// W2g (P2): depth-limited at MAX_JSON_DEPTH (64). Deeper nesting truncates
+/// to `Value::Null` rather than overflowing the stack — defensive against
+/// malicious or accidentally pathological KDL input.
+const MAX_JSON_DEPTH: usize = 64;
+
 fn node_to_json_value(node: &KdlNode) -> Value {
+	node_to_json_value_inner(node, 0)
+}
+
+fn node_to_json_value_inner(node: &KdlNode, depth: usize) -> Value {
+	if depth >= MAX_JSON_DEPTH {
+		return Value::Null;
+	}
 	let Some(children) = node.children() else {
 		return Value::Null;
 	};
@@ -337,7 +394,7 @@ fn node_to_json_value(node: &KdlNode) -> Value {
 	for child in children.nodes() {
 		let key = child.name().value().to_string();
 		let value = if child.children().is_some() {
-			node_to_json_value(child)
+			node_to_json_value_inner(child, depth + 1)
 		} else if let Some(entry) = child.entries().first() {
 			kdl_value_to_json(entry.value())
 		} else {
@@ -390,8 +447,10 @@ semantic {
 	#[test]
 	fn parse_returns_default_for_empty_document() {
 		let cfg = SemanticConfig::parse("").expect("empty parses");
-		assert_eq!(cfg.max_warm_servers, 6);
-		assert!(cfg.bm25_incremental);
+		// Unset scalars resolve to compile-time defaults via the accessors.
+		assert_eq!(cfg.max_warm_servers(), SemanticConfig::DEFAULT_MAX_WARM_SERVERS);
+		assert!(cfg.bm25_incremental());
+		assert!(cfg.max_warm_servers.is_none(), "unset stays None");
 		assert!(cfg.language_backends.is_empty());
 		assert!(cfg.server_specs.is_empty());
 	}
@@ -405,11 +464,11 @@ semantic {
 	#[test]
 	fn parse_sample_extracts_scalars() {
 		let cfg = SemanticConfig::parse(SAMPLE_KDL).expect("parses");
-		assert_eq!(cfg.idle_ttl, Duration::from_secs(3600));
-		assert_eq!(cfg.max_warm_servers, 4);
-		assert_eq!(cfg.request_timeout, Duration::from_millis(10_000));
-		assert_eq!(cfg.sync_debounce, Duration::from_millis(100));
-		assert!(!cfg.bm25_incremental);
+		assert_eq!(cfg.idle_ttl(), Duration::from_secs(3600));
+		assert_eq!(cfg.max_warm_servers(), 4);
+		assert_eq!(cfg.request_timeout(), Duration::from_millis(10_000));
+		assert_eq!(cfg.sync_debounce(), Duration::from_millis(100));
+		assert!(!cfg.bm25_incremental());
 	}
 
 	#[test]
@@ -493,14 +552,33 @@ semantic {
 	#[test]
 	fn merge_higher_priority_overrides_scalar_settings() {
 		let mut lower = SemanticConfig::default();
-		lower.max_warm_servers = 6;
+		lower.max_warm_servers = Some(6);
 		let mut higher = SemanticConfig::default();
-		higher.max_warm_servers = 2;
-		higher.request_timeout = Duration::from_secs(99);
+		higher.max_warm_servers = Some(2);
+		higher.request_timeout = Some(Duration::from_secs(99));
 
 		let merged = SemanticConfig::merge(higher, lower);
-		assert_eq!(merged.max_warm_servers, 2);
-		assert_eq!(merged.request_timeout, Duration::from_secs(99));
+		assert_eq!(merged.max_warm_servers(), 2);
+		assert_eq!(merged.request_timeout(), Duration::from_secs(99));
+	}
+
+	/// W2g (P1 regression): `merge` must NOT overwrite a lower-layer's
+	/// explicit scalar with a higher-layer's unset (None). Higher's None
+	/// preserves lower's value.
+	#[test]
+	fn merge_higher_unset_preserves_lower_explicit_scalar() {
+		let mut lower = SemanticConfig::default();
+		lower.max_warm_servers = Some(10);
+		lower.request_timeout = Some(Duration::from_secs(42));
+		let higher = SemanticConfig::default(); // all None
+
+		let merged = SemanticConfig::merge(higher, lower);
+		assert_eq!(
+			merged.max_warm_servers(),
+			10,
+			"lower's explicit 10 must survive higher's None"
+		);
+		assert_eq!(merged.request_timeout(), Duration::from_secs(42));
 	}
 
 	#[test]
@@ -573,7 +651,7 @@ semantic {
 			unsafe { std::env::set_var("HOME", h); }
 		}
 		let cfg = result.expect("layered load");
-		assert_eq!(cfg.max_warm_servers, 2, "project override wins");
+		assert_eq!(cfg.max_warm_servers(), 2, "project override wins");
 		assert_eq!(
 			cfg.server_specs.get("expert").unwrap().command,
 			"my-expert",
@@ -581,6 +659,65 @@ semantic {
 		);
 		// Language wiring inherited from defaults since override didn't redefine.
 		assert!(cfg.language_backends.contains_key("elixir"));
+		// Scalars NOT mentioned in project config inherit defaults (W2g P1 fix).
+		assert_eq!(
+			cfg.request_timeout(),
+			Duration::from_millis(5000),
+			"unmentioned scalar inherits from defaults.kdl (not clobbered)"
+		);
+	}
+
+	/// W2g (P2 regression): `read_positional_string` reports a `BadValue`
+	/// (not `MissingField`) when an entry exists but has the wrong type.
+	#[test]
+	fn parse_reports_type_error_when_value_is_not_string() {
+		let bad = r#"
+            semantic {
+                language "rust" { lsp 42 }
+                server "x" { command "x" }
+            }
+        "#;
+		let err = SemanticConfig::parse(bad).unwrap_err();
+		match err {
+			ConfigError::BadValue { node, message } => {
+				assert_eq!(node, "lsp");
+				assert!(message.contains("expected string"), "got: {message}");
+			},
+			other => panic!("expected BadValue, got {other:?}"),
+		}
+	}
+
+	/// W2g (P2 fix verification): `node_to_json_value` enforces
+	/// `MAX_JSON_DEPTH = 64`. Direct depth tests aren't run here because the
+	/// `kdl` crate's own recursive-descent parser overflows the 2 MiB test
+	/// thread stack at depths well below 64 — the limiting factor is the
+	/// upstream parser, not our converter. The defensive cap stays in code as
+	/// a paper-trail / safety net for if KDL gets an iterative parser in a
+	/// future version.
+	#[test]
+	fn max_json_depth_constant_is_set() {
+		assert_eq!(MAX_JSON_DEPTH, 64, "defensive cap stays at the documented value");
+	}
+
+	/// W2g (P1 regression): `load_layered` post-resolve produces concrete
+	/// (non-None) scalars so downstream consumers don't see `Option<T>`.
+	#[test]
+	fn load_layered_resolves_all_scalars_to_some() {
+		let temp = tempfile::tempdir().unwrap();
+		let old_home = std::env::var_os("HOME");
+		unsafe {
+			std::env::set_var("HOME", temp.path());
+		}
+		let result = SemanticConfig::load_layered(temp.path());
+		if let Some(h) = old_home {
+			unsafe { std::env::set_var("HOME", h); }
+		}
+		let cfg = result.expect("defaults load");
+		assert!(cfg.idle_ttl.is_some(), "resolve filled idle_ttl");
+		assert!(cfg.max_warm_servers.is_some());
+		assert!(cfg.request_timeout.is_some());
+		assert!(cfg.sync_debounce.is_some());
+		assert!(cfg.bm25_incremental.is_some());
 	}
 
 	#[test]
@@ -614,11 +751,13 @@ semantic {
 
 	impl PartialEq for SemanticConfig {
 		fn eq(&self, other: &Self) -> bool {
-			self.idle_ttl == other.idle_ttl
-				&& self.max_warm_servers == other.max_warm_servers
-				&& self.request_timeout == other.request_timeout
-				&& self.sync_debounce == other.sync_debounce
-				&& self.bm25_incremental == other.bm25_incremental
+			// Compare via resolved accessors so tests don't have to know about
+			// the Option<T> internal representation.
+			self.idle_ttl() == other.idle_ttl()
+				&& self.max_warm_servers() == other.max_warm_servers()
+				&& self.request_timeout() == other.request_timeout()
+				&& self.sync_debounce() == other.sync_debounce()
+				&& self.bm25_incremental() == other.bm25_incremental()
 				&& self.language_backends == other.language_backends
 				&& self.server_specs.keys().collect::<std::collections::BTreeSet<_>>()
 					== other.server_specs.keys().collect::<std::collections::BTreeSet<_>>()
