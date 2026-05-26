@@ -212,7 +212,7 @@ Semantic navigation **MUST** flow through `find` graph edges, not grep:
 - `find { target: "foo.ts::useX ref→" }` — follow a reference to its definition
 - `find { target: "foo.ts::IThing implements→" }` — who implements this interface?
 - `find { target: "foo.py::Cls inherits→" }` — base types
-- `find { target: "foo.ts::Bar.method#hover" }` — written signature line
+- `find { target: "foo.ts::Bar.method#hover" }` — signature / type via smart-merge of tree-sitter (written) and LSP (inferred); add `[source=graph|semantic]` to pick one half
 
 These walk pi-code-graph (real cross-file analysis) and follow re-export
 chains. Trailing `→` (no tail step) is sugar for `…→§*`.

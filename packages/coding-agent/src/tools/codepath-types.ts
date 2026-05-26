@@ -138,7 +138,7 @@ export const editOperationSchema = Type.Recursive(This =>
 		{
 			target: Type.String({
 				description:
-					"Stable edit target ID: '<file>' for file roots or '<file>::Symbol.member' for declarations. Multi-word symbols may be backtick-quoted, e.g. foo.ts::`export * from \"./json\"`",
+					"Stable edit target ID: '<file>' for file roots or '<file>::Symbol.member' for declarations. Multi-word symbols may be backtick-quoted, e.g. foo.ts::`export * from \"./json\"`. Scope qualifiers `#body` / `#sig` are valid edit targets; read-only semantic qualifiers (`#hover`, `#hover_inferred`, `#type_definition`, `#type_def`, `#signature`, `#inlay`, `#diagnostics`) are rejected with IncompatibleTargetShape — use `find` for inspection.",
 			}),
 			action: Type.Union([
 				Type.Omit(editOpSchema, ["target"]),

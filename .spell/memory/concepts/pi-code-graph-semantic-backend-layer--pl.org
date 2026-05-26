@@ -12,7 +12,7 @@ stays unified.
 ## Architecture
 
 ```
-agent calls find { ::Sym #hover_inferred }
+agent calls find { ::Sym #hover }   ; smart-merge (FUP-097)
   ↓
 pi-natives::code_path::type_resolver::dispatch
   ↓  picks workspace's CompositeSemanticBackend (file-ext routing)
@@ -48,7 +48,7 @@ Total: ~4200 LOC new + ~250 LOC deleted.
 1. **Tree-sitter for static, LSP for type inference.** All lexical work
    (def→/ref→/call→/import→/implements→/inherits→/dispatches→/#hover-written
    /§symbols) stays in pi-code-graph. LSP only fills genuine type-inference
-   gaps (#hover_inferred / #type_definition / [type_aware] / #diagnostics /
+   gaps (#hover smart-merge / #type_definition / [type_aware] / #diagnostics /
    #signature / #inlay).
 2. **Synchronous LSP client.** The SemanticBackend trait is sync. An async
    client would force `block_on` everywhere and force tokio into a crate
@@ -88,7 +88,7 @@ All P1s fixed in gap waves; most P2s addressed.
   having TS + Rust + Python coverage).
 - FUP-090: type-aware references — partly delivered via [type_aware]
   predicate wiring in W3; full polymorphic narrowing depends on FUP-094.
-- FUP-091: inferred-type hover — delivered as #hover_inferred qualifier.
+- FUP-091: inferred-type hover — delivered as #hover qualifier (smart-merge of written + inferred per FUP-097; #hover_inferred deprecated).
 - FUP-092: watcher → cache invalidation — absorbed by W1 buffer-sync.
 
 ## Verification
@@ -106,3 +106,18 @@ Reviewer wave coverage: 4 (one per wave). 0 P0s ever.
 DISTILLED_FROM: PLAN-319-semanticbackend-foundation-expert-lsp-pi
 DISTILLED_FROM: PLAN-318-find-edit-affordance-hardening-productio
 :END:
+
+
+* FUP-097 addendum
+
+The two-qualifier taxonomy (#hover for written, #hover_inferred for inferred) was folded into a single #hover with smart-merge dispatch. Behaviour:
+
+- Both backends agree (post-normalisation) → render once, no source label
+- Only one backend has data → render with [source: graph|semantic] label
+- Both differ → render both, labelled written / inferred
+- Neither has data → NotFound
+
+Escape hatches: `#hover [source=graph]` / `[source=semantic]` / `[source=both]` (default).
+
+Defensive: `pi-code-path::unified::TargetShape::SemanticReadOnly` rejects #hover, #hover_inferred, #type_definition, #type_def, #signature, #inlay, #diagnostics from edit dispatch with hints pointing at #body / #sig (for editing) or `find { target: "… #qual" }` (for reading).
+

@@ -60,6 +60,14 @@ pub enum TemplateErrorVariant {
 
 impl TemplateError {
 	fn pos_out_of_range(requested: usize, available: usize) -> Self {
+		// FUP-097 reviewer UE-2: when $LAST itself failed because the node
+		// has 0 named children, recommending $LAST again is circular. Only
+		// suggest $MATCH in that case.
+		let hint = if available == 0 {
+			"Use $MATCH for the full matched text — this node has no named children."
+		} else {
+			"Use $MATCH for the full matched text, or $LAST for the last child."
+		};
 		TemplateError {
 			variant: TemplateErrorVariant::PositionOutOfRange { requested, available },
 			message: format!(
@@ -68,9 +76,7 @@ impl TemplateError {
 				available,
 				if available == 1 { "" } else { "ren" }
 			),
-			hint:    Some(
-				"Use $MATCH for the full matched text, or $LAST for the last child.".into(),
-			),
+			hint:    Some(hint.into()),
 		}
 	}
 

@@ -96,31 +96,56 @@ pub enum TargetShape {
 ///
 /// `#hover` and `#sig` are intentionally NOT in this set: they describe
 /// the signature region of a symbol, which IS a valid edit scope.
+/// FUP-097 reviewer UE-4: shared guard that turns a `SemanticReadOnly`
+/// target shape into a typed diagnostic. Used by all three dispatch fns
+/// (replace / rename / delete) so the rejection message stays in sync.
+fn reject_if_read_only(shape: TargetShape, action: &str) -> Result<(), Diagnostic> {
+	if let TargetShape::SemanticReadOnly { qualifier } = shape {
+		return Err(read_only_semantic_diagnostic(action, qualifier));
+	}
+	Ok(())
+}
+
 /// Construct an [`IncompatibleTargetShape`] diagnostic for an attempt to
 /// edit a read-only semantic qualifier (FUP-097). The hint points the
-/// agent at `find { … #qual }` for inspection.
+/// agent at the canonical `find { target: "…" }` shape it should use
+/// instead.
 fn read_only_semantic_diagnostic(action: &str, qualifier: &str) -> Diagnostic {
+	let suggestion = if qualifier == "hover" {
+		"Use `#sig` for the signature scope or `#body` for the body."
+	} else {
+		""
+	};
 	Diagnostic {
 		variant: DiagnosticVariant::IncompatibleTargetShape,
 		message: format!(
 			"cannot {action} a target with `#{qualifier}` — it is a read-only \
-semantic view, not a region of code. Use `find {{ … #{qualifier} }}` to \
-inspect it."
+semantic view, not a region of code. Use \
+`find {{ target: \"…#{qualifier}\" }}` to inspect it.{}",
+			if suggestion.is_empty() { String::new() } else { format!(" {suggestion}") }
 		),
 		span: None,
 	}
 }
 
-fn read_only_semantic_qualifier(name: &str) -> Option<&'static str> {
-	match name {
-		"hover_inferred" => Some("hover_inferred"),
-		"type_definition" => Some("type_definition"),
-		"type_def" => Some("type_def"),
-		"signature" => Some("signature"),
-		"inlay" => Some("inlay"),
-		"diagnostics" => Some("diagnostics"),
-		_ => None,
-	}
+/// FUP-097: qualifiers that describe a *view* of code (read-only) rather
+/// than a region of code that can be replaced. Used by
+/// [`TargetShape::classify`] to reject edit attempts against them.
+///
+/// `#hover` is in this set post-FUP-097: it's now a smart-merge display
+/// (`HoverOutcome`), not a code region. Agents wanting to replace a
+/// signature use `#sig` explicitly. `#body` covers the body scope.
+fn is_read_only_semantic_qualifier(name: &str) -> bool {
+	matches!(
+		name,
+		"hover"
+			| "hover_inferred"
+			| "type_definition"
+			| "type_def"
+			| "signature"
+			| "inlay"
+			| "diagnostics"
+	)
 }
 
 // ── Shape detection ───────────────────────────────────────────────
@@ -142,12 +167,24 @@ impl TargetShape {
 			(false, true, Some("body")) => TargetShape::SymbolBody,
 			(false, true, Some("sig")) => TargetShape::SymbolSig,
 			// FUP-097: read-only semantic qualifiers are NOT valid edit targets.
-			(false, true, Some(name)) if read_only_semantic_qualifier(name).is_some() => {
-				TargetShape::SemanticReadOnly {
-					qualifier: read_only_semantic_qualifier(name).unwrap(),
-				}
+			// Single lookup avoids the double-call pattern from the original draft.
+			(false, true, Some(name)) if is_read_only_semantic_qualifier(name) => {
+				// SAFETY: `is_read_only_semantic_qualifier(name)` returned true,
+				// so `name` is one of the static literals in that match. Find
+				// the &'static str variant for use in diagnostics.
+				let qualifier = match name {
+					"hover" => "hover",
+					"hover_inferred" => "hover_inferred",
+					"type_definition" => "type_definition",
+					"type_def" => "type_def",
+					"signature" => "signature",
+					"inlay" => "inlay",
+					"diagnostics" => "diagnostics",
+					_ => unreachable!("is_read_only_semantic_qualifier admits exactly these"),
+				};
+				TargetShape::SemanticReadOnly { qualifier }
 			},
-			(false, true, Some(_)) => TargetShape::Symbol, // other qualifiers: still symbol (e.g. #hover, #raw)
+			(false, true, Some(_)) => TargetShape::Symbol, // other qualifiers (e.g. #raw) treated as whole-symbol
 			// Non-glob, no query
 			(false, false, None) => TargetShape::File,
 			(false, false, _) => TargetShape::Unknown,
@@ -216,9 +253,7 @@ fn dispatch_replace(
 	find: &Option<ActionContent>,
 	place: &Option<Place>,
 ) -> Result<Op, Diagnostic> {
-	if let TargetShape::SemanticReadOnly { qualifier } = shape {
-		return Err(read_only_semantic_diagnostic("replace", qualifier));
-	}
+	reject_if_read_only(shape, "replace")?;
 
 	// Symbol-scoped with find: find-and-replace within the symbol
 	if find.is_some() && matches!(shape, TargetShape::Symbol | TargetShape::SymbolBody | TargetShape::SymbolSig) {
@@ -338,9 +373,7 @@ fn dispatch_rename(
 	shape: TargetShape,
 	new_name: &Identifier,
 ) -> Result<Op, Diagnostic> {
-	if let TargetShape::SemanticReadOnly { qualifier } = shape {
-		return Err(read_only_semantic_diagnostic("rename", qualifier));
-	}
+	reject_if_read_only(shape, "rename")?;
 	match shape {
 		TargetShape::Symbol
 		| TargetShape::SymbolBody
@@ -367,9 +400,7 @@ fn dispatch_delete(
 	cp: &CodePath,
 	shape: TargetShape,
 ) -> Result<Op, Diagnostic> {
-	if let TargetShape::SemanticReadOnly { qualifier } = shape {
-		return Err(read_only_semantic_diagnostic("delete", qualifier));
-	}
+	reject_if_read_only(shape, "delete")?;
 	match shape {
 		TargetShape::Symbol
 		| TargetShape::SymbolBody
@@ -512,13 +543,33 @@ mod tests {
 		assert!(err.message.contains("#diagnostics"));
 	}
 
-	// FUP-097 anti-regression: #hover and #sig stay edit-allowed because
-	// they describe the *signature region* (whole symbol minus body).
+	// FUP-097 reviewer UE-1: #hover is now a read-only smart-merge display
+	// (HoverOutcome), NOT a code region. Edit dispatch rejects it with a
+	// hint pointing at #sig or #body for explicit scope.
 	#[test]
-	fn hover_qualifier_stays_edit_allowed() {
-		// #hover lands in the catch-all symbol branch (the dispatch decides
-		// what to do with it from there).
-		assert_eq!(classify("foo.ts :: bar#hover"), TargetShape::Symbol);
+	fn hover_qualifier_rejected_from_edit_with_sig_hint() {
+		match classify("foo.ts :: bar#hover") {
+			TargetShape::SemanticReadOnly { qualifier } => assert_eq!(qualifier, "hover"),
+			other => panic!("expected SemanticReadOnly(hover), got {other:?}"),
+		}
+		let err = dispatch(
+			"foo.ts :: bar#hover",
+			UnifiedAction::Replace { content: sc("x"), find: None, place: None },
+		).expect_err("edit on #hover must reject");
+		assert!(err.message.contains("#sig"), "hint must point at #sig: {}", err.message);
+		assert!(err.message.contains("#body"), "hint must point at #body: {}", err.message);
+	}
+
+	// FUP-097 reviewer UE-5: the diagnostic uses the canonical
+	// `find { target: "…" }` shape, not the ambiguous shorthand.
+	#[test]
+	fn read_only_diagnostic_uses_canonical_find_target_syntax() {
+		let err = dispatch(
+			"foo.ts :: bar#diagnostics",
+			UnifiedAction::Replace { content: sc("x"), find: None, place: None },
+		).expect_err("read-only qualifier must reject");
+		assert!(err.message.contains("target:"),
+			"diagnostic should use `find {{ target: \"…\" }}` syntax: {}", err.message);
 	}
 
 	#[test]

@@ -78,17 +78,7 @@ pub trait SemanticBackend: Send + Sync {
 	/// halves regardless of which one the composite would normally
 	/// pick.
 	fn hover_dual(&self, file: &Path, line: u32, col: u32) -> HoverDual {
-		let r = self.type_at(file, line, col);
-		if r.is_unknown() {
-			return HoverDual::empty();
-		}
-		match r.confidence {
-			Confidence::Annotated => HoverDual { written: Some(r), inferred: None },
-			Confidence::Inferred | Confidence::Heuristic => {
-				HoverDual { written: None, inferred: Some(r) }
-			},
-			Confidence::Unknown => HoverDual::empty(),
-		}
+		classify_hover_dual(self.type_at(file, line, col))
 	}
 
 	/// Where is the type of the symbol at `(file, line, col)` declared?
@@ -431,9 +421,53 @@ impl HoverDual {
 		Self { written: None, inferred: None }
 	}
 
+	/// Slot-contract-enforcing constructor: `written` must carry
+	/// [`Confidence::Annotated`], `inferred` must carry
+	/// [`Confidence::Inferred`] or [`Confidence::Heuristic`]. Empty halves
+	/// (`None` or `Unknown`-confidence) are always permitted. Violations
+	/// `debug_assert!` in dev builds; release builds accept silently to
+	/// avoid panicking on a backend that mis-labels its provenance.
+	///
+	/// Most call sites should use [`classify_hover_dual`] which derives the
+	/// slot from a single `InferResult`'s confidence — same effect, no
+	/// invariant policing required.
+	pub fn new(written: Option<InferResult>, inferred: Option<InferResult>) -> Self {
+		debug_assert!(
+			written.as_ref().is_none_or(|r| matches!(r.confidence, Confidence::Annotated | Confidence::Unknown)),
+			"HoverDual.written slot must carry Confidence::Annotated (or Unknown), got {:?}",
+			written.as_ref().map(|r| r.confidence),
+		);
+		debug_assert!(
+			inferred.as_ref().is_none_or(|r| matches!(r.confidence, Confidence::Inferred | Confidence::Heuristic | Confidence::Unknown)),
+			"HoverDual.inferred slot must carry Confidence::Inferred/Heuristic (or Unknown), got {:?}",
+			inferred.as_ref().map(|r| r.confidence),
+		);
+		Self { written, inferred }
+	}
+
 	/// True when both halves are absent — caller should surface NotFound.
 	pub fn is_empty(&self) -> bool {
 		self.written.is_none() && self.inferred.is_none()
+	}
+}
+
+/// Classify a single [`InferResult`] into a [`HoverDual`] based on its
+/// [`Confidence`]. Shared by the trait default [`SemanticBackend::hover_dual`]
+/// and any backend that uses a single `type_at` to populate both slots.
+///
+/// - `Annotated` → `written` slot
+/// - `Inferred` / `Heuristic` → `inferred` slot
+/// - `Unknown` → empty
+pub fn classify_hover_dual(result: InferResult) -> HoverDual {
+	if result.is_unknown() {
+		return HoverDual::empty();
+	}
+	match result.confidence {
+		Confidence::Annotated => HoverDual { written: Some(result), inferred: None },
+		Confidence::Inferred | Confidence::Heuristic => {
+			HoverDual { written: None, inferred: Some(result) }
+		},
+		Confidence::Unknown => HoverDual::empty(),
 	}
 }
 
@@ -488,11 +522,14 @@ pub fn merge_hover(dual: HoverDual) -> HoverOutcome {
 }
 
 /// Compare-key for hover merge: collapse internal whitespace runs to a
-/// single space, trim, strip a trailing semicolon. Conservative — does
-/// not touch identifiers or punctuation, so `fn foo(x)` and `fn foo (x)`
-/// remain unequal (don't collapse around parens).
+/// single space, trim, strip a trailing semicolon and / or comma.
+/// Conservative — does not touch identifiers or punctuation, so
+/// `fn foo(x)` and `fn foo (x)` remain unequal (don't collapse around
+/// parens). Trailing-comma strip handles `(T, U,)` vs `(T, U)` and the
+/// Python `Tuple[int, str,]` idiom: semantically identical types that
+/// would otherwise normalise to false Disagreed.
 pub fn normalise_for_compare(s: &str) -> String {
-	let trimmed = s.trim().trim_end_matches(';').trim_end();
+	let trimmed = s.trim().trim_end_matches(';').trim_end_matches(',').trim_end();
 	let mut out = String::with_capacity(trimmed.len());
 	let mut prev_ws = false;
 	for ch in trimmed.chars() {

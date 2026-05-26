@@ -25,8 +25,11 @@
 //!
 //! The `[source=…]` predicate on `#hover` overrides the smart-merge:
 //!
-//! - `[source=graph]` — query Annotation half only (skips LSP cost)
-//! - `[source=semantic]` — query LSP half only (skips written sig)
+//! - `[source=graph]` — use only the written (Annotation) half. Note the
+//!   LSP query is still issued by [`CompositeSemanticBackend::hover_dual`];
+//!   only the merged output is graph-only. (Future optimisation: thread
+//!   the source selector through the trait method to skip the LSP probe.)
+//! - `[source=semantic]` — use only the inferred (LSP) half
 //! - `[source=both]` (default) — smart merge above
 //!
 //! For non-hover semantic qualifiers there is no tree-sitter analog;
@@ -46,9 +49,9 @@
 use std::path::Path;
 
 use pi_code_graph::{
-	merge_hover, Confidence, DiagnosticSeverity, HoverDual, HoverOutcome, HoverSource,
-	InferResult, InlayHint, LineRange, SemanticBackend, SemanticDiagnostic, SemanticLocation,
-	SignatureInfo, TypeRepr,
+	classify_hover_dual, merge_hover, Confidence, DiagnosticSeverity, HoverDual, HoverOutcome,
+	HoverSource, InferResult, InlayHint, LineRange, SemanticBackend, SemanticDiagnostic,
+	SemanticLocation, SignatureInfo, TypeRepr,
 };
 use pi_code_path::ast::{Predicate, Qualifier};
 
@@ -114,7 +117,7 @@ pub fn deprecated_qualifier_replacement(name: &str) -> Option<&'static str> {
 /// is per-qualifier: `#hover` defaults to `Both` (smart merge);
 /// `#type_definition` / `#signature` / `#inlay` / `#diagnostics` default
 /// to `Semantic` (no graph analog). Callers resolve via
-/// [`SourceSelector::or_default`].
+/// `sp.source.unwrap_or(SourceSelector::…)` at the dispatch site.
 pub struct SemanticPredicates {
 	pub source:   Option<SourceSelector>,
 	pub severity: Option<DiagnosticSeverity>,
@@ -222,7 +225,11 @@ pub fn dispatch(
 			}
 			TypeResolverOutcome::Diagnostics(diags)
 		},
-		_ => unreachable!("is_semantic_qualifier admits exactly these names"),
+		// FUP-097 reviewer TR-3: degrade rather than panic if a future
+		// qualifier is added to `is_semantic_qualifier` without a match
+		// arm. Caller falls back to the lexical path — same as a true
+		// unknown qualifier.
+		_ => TypeResolverOutcome::NotASemanticQualifier,
 	}
 }
 
@@ -406,14 +413,10 @@ mod tests {
 			if let Some(d) = &self.hover_dual_override {
 				return d.clone();
 			}
-			// Fall through to default impl: classify the single `type_at`.
-			let r = self.type_at(file, line, col);
-			if r.is_unknown() { return HoverDual::empty(); }
-			match r.confidence {
-				Confidence::Annotated => HoverDual { written: Some(r), inferred: None },
-				Confidence::Inferred | Confidence::Heuristic => HoverDual { written: None, inferred: Some(r) },
-				Confidence::Unknown => HoverDual::empty(),
-			}
+			// Same logic as the trait default — routed through the shared
+			// free fn so a future Confidence variant doesn't silently drift
+			// between the two implementations (FUP-097 reviewer SEM-3).
+			classify_hover_dual(self.type_at(file, line, col))
 		}
 		fn type_definition_of(&self, _f: &Path, _l: u32, _c: u32) -> Option<SemanticLocation> { self.type_def.clone() }
 		fn signature_at(&self, _f: &Path, _l: u32, _c: u32) -> Option<SignatureInfo> { self.sig.clone() }

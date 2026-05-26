@@ -7,6 +7,14 @@ target ::= `<file>`  (file-scoped)
        ·  `<file>::<Symbol>#body|#sig`  (scoped)
        ·  `<glob>`  (multi-file)
 
+**Read-only qualifiers** (`#hover` / `#hover_inferred` / `#type_definition` /
+`#type_def` / `#signature` / `#inlay` / `#diagnostics`) are NOT valid edit
+targets — they describe a *view* of code (smart-merge type display,
+diagnostics, etc.), not a code region. The kernel rejects them with
+`IncompatibleTargetShape` and a hint pointing at `#body` / `#sig` (for
+editing a scope) or `find { target: "…" }` (for reading the view).
+Query `find` for inspection; use `edit` only with `#body` / `#sig`.
+
 ## Cheat Sheet
 
 | want | target | action |
