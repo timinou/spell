@@ -73,7 +73,6 @@ impl ServerSpec {
 #[derive(Clone)]
 struct WarmSlot {
 	client:        Arc<LspClient>,
-	workspace:     PathBuf,
 	last_accessed: Instant,
 }
 
@@ -111,9 +110,19 @@ impl LspRegistry {
 		self.specs.lock().unwrap().get(name).cloned()
 	}
 
-	/// Get-or-spawn the LSP client for `(workspace, server_name)`. Promotes
-	/// the slot's last-accessed timestamp; evicts the LRU slot if the warm
-	/// cap is reached.
+	/// Get-or-spawn the LSP client for `(workspace_root, server_name)`.
+	///
+	/// **Key normalisation (W1g P1 fix):** the caller's `workspace` path may
+	/// be any sub-path of the actual project root; we run `spec.detect_root`
+	/// first and key the slot on the resolved root. This makes two callers
+	/// from `/proj/lib` and `/proj/src` share the same LSP slot for the same
+	/// `/proj` project.
+	///
+	/// **Concurrency (W1g P2 fix):** the lookup-spawn-insert cycle is
+	/// serialised under `self.slots`'s Mutex, eliminating the prior TOCTOU
+	/// double-spawn race. The spawn itself happens under the lock; this is
+	/// acceptable because LSP spawns are bounded by `max-warm-servers`
+	/// (default 6) and the slow-path is rare (cold start, not query path).
 	///
 	/// Returns `Err(SpawnFailed)` carrying the install-hint when the server
 	/// binary is missing.
@@ -122,19 +131,18 @@ impl LspRegistry {
 		workspace: &std::path::Path,
 		server_name: &str,
 	) -> Result<Arc<LspClient>, LspClientError> {
-		let key = (workspace.to_path_buf(), server_name.to_string());
-		{
-			let mut slots = self.slots.lock().unwrap();
-			if let Some(slot) = slots.get_mut(&key) {
-				slot.last_accessed = Instant::now();
-				return Ok(slot.client.clone());
-			}
-		}
-
 		let spec = self
 			.lookup_spec(server_name)
 			.ok_or_else(|| LspClientError::SpawnFailed(format!("no spec for {server_name}")))?;
 		let workspace_root = spec.detect_root(workspace);
+		let key = (workspace_root.clone(), server_name.to_string());
+
+		let mut slots = self.slots.lock().unwrap();
+		if let Some(slot) = slots.get_mut(&key) {
+			slot.last_accessed = Instant::now();
+			return Ok(slot.client.clone());
+		}
+
 		let root_uri = Url::from_file_path(&workspace_root)
 			.map_err(|()| LspClientError::SpawnFailed("non-absolute workspace path".into()))?;
 		let args: Vec<&str> = spec.args.iter().map(String::as_str).collect();
@@ -148,7 +156,6 @@ impl LspRegistry {
 			spec.request_timeout,
 		)?;
 
-		let mut slots = self.slots.lock().unwrap();
 		// Evict LRU if at cap.
 		if slots.len() >= self.max_warm_servers {
 			if let Some(victim_key) = self.pick_lru_victim(&slots) {
@@ -156,18 +163,30 @@ impl LspRegistry {
 			}
 		}
 		slots.insert(
-			key.clone(),
-			WarmSlot {
-				client:        client.clone(),
-				workspace:     workspace_root,
-				last_accessed: Instant::now(),
-			},
+			key,
+			WarmSlot { client: client.clone(), last_accessed: Instant::now() },
 		);
 		Ok(client)
 	}
 
+	/// Test-only helper: insert a pre-built client without spawning a real
+	/// process. Used by the eviction tests to exercise the LRU path.
+	#[cfg(test)]
+	pub(super) fn test_insert_slot(&self, key: (PathBuf, String), client: Arc<LspClient>) {
+		self.slots
+			.lock()
+			.unwrap()
+			.insert(key, WarmSlot { client, last_accessed: Instant::now() });
+	}
+
 	/// Evict slots whose `last_accessed` is older than `idle_ttl`. Safe to
 	/// call from a background sweeper or any caller's hot path.
+	///
+	/// **TOCTOU caveat (W1r-W1g P2):** snapshot-then-remove can drop a slot
+	/// whose `last_accessed` was bumped concurrently by `get_or_spawn`
+	/// between snapshot and removal. Worst case is a gratuitous re-spawn on
+	/// the next access — acceptable trade-off for not holding the lock
+	/// across the entire scan.
 	pub fn evict_idle(&self) -> usize {
 		let now = Instant::now();
 		let mut slots = self.slots.lock().unwrap();

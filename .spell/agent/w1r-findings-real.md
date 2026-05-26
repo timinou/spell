@@ -195,3 +195,273 @@ re-confirmed via `cargo test -p pi-natives --test edge_dispatch_e2e`.
 The only uncertainty is whether a path-normalisation layer elsewhere
 implicitly relativises before `find_node_index` runs — exhaustive grep over
 `pi-natives/src/code_path/` and `pi-code-graph/src/` finds none.
+
+---
+
+# W1R-1: Client + Diagnostics (PLAN-319 W1, commit 0ba7261a0)
+
+## Files reviewed
+- crates/pi-code-graph/src/semantic/lsp/client.rs (582 LOC)
+- crates/pi-code-graph/src/semantic/lsp/diagnostics.rs (42 LOC)
+- crates/pi-code-graph/src/semantic/lsp/backend.rs (context only)
+- crates/pi-code-graph/src/semantic/mod.rs (type definitions)
+
+## Verdict: correct with two P2 findings
+
+The client is well-structured. The synchronous-over-threads design is coherent,
+the JSON-RPC framing is correct for the LSP base protocol, and the Drop impl
+has no deadlock potential. Two findings below; neither blocks merge.
+
+## Findings
+
+### F1 [P2] Orphaned pending entries on parameter serialization failure
+- file: crates/pi-code-graph/src/semantic/lsp/client.rs:205-215
+- severity: P2
+- `request()` inserts `tx` into `self.pending` (line 209) *before* the
+  fallible `serde_json::to_value(params)` call (line 213). If parameter
+  serialization fails, `?` returns early with `LspClientError::Serde`, but
+  the `mpsc::Sender` remains in the `pending` HashMap.
+- The request was never written to the pipe, so the reader thread will never
+  receive a matching response → entry is permanently orphaned. Accumulates
+  with each serialization failure.
+- Standard `lsp-types` params always serialize successfully, but the trait
+  bound `R::Params: Serialize` admits custom types — maps with non-string
+  keys cause `serde_json::to_value` to fail.
+- fix: move the `pending.insert()` call to after serialization succeeds, or
+  add a `self.pending.lock().unwrap().remove(&id);` on the error path:
+
+```suggestion
+    let body = serde_json::to_value(JsonRpcRequest {
+        jsonrpc: "2.0",
+        id,
+        method: R::METHOD,
+        params: serde_json::to_value(params)
+            .map_err(|e| LspClientError::Serde(e.to_string()))?,
+    })
+    .map_err(|e| LspClientError::Serde(e.to_string()))?;
+    // Insert only after serialization succeeds:
+    let (tx, rx) = mpsc::channel();
+    self.pending.lock().unwrap().insert(id, tx);
+    self.write_frame(&body)?;
+```
+
+### F2 [P2] Missing Content-Length bound in read_frame allows OOM allocation
+- file: crates/pi-code-graph/src/semantic/lsp/client.rs:393-395
+- severity: P2
+- `read_frame` parses `Content-Length: N` and unconditionally allocates
+  `vec![0u8; len]` with no upper bound. A buggy or malicious LSP server
+  sending `Content-Length: 18446744073709551615` causes either the OOM
+  killer to terminate the process or a panic from allocation failure.
+- The LSP spec does not define a maximum frame size, but realistic payloads
+  are bounded (~1 MB for hover, ~10 MB for large workspace/symbol results).
+- fix: enforce a maximum frame size (e.g., 10 MB):
+
+```suggestion
+    const MAX_FRAME_SIZE: usize = 10 * 1024 * 1024;
+    let len = content_length
+        .ok_or_else(|| ReadFrameError::Protocol("missing Content-Length".into()))?;
+    if len > MAX_FRAME_SIZE {
+        return Err(ReadFrameError::Protocol(
+            format!("Content-Length {len} exceeds maximum {MAX_FRAME_SIZE}")
+        ));
+    }
+    let mut buf = vec![0u8; len];
+```
+
+## Scrutiny points — verified correct
+
+|#|Question|Verdict|Why|
+|---|---|---|---|
+|1|read_frame CRLF handling|✓ correct|`read_line` + `trim_end_matches(['\r', '\n'])` handles CRLF and bare LF. Missing Content-Length returns Protocol error (not silent).|
+|2|Reader thread termination|✓ correct|`Eof` and `Io` errors both break the loop; thread joins cleanly. Orphaned pending entries are resolved by recv_timeout on the request side.|
+|3|Timeout orphans in pending|✓ bounded|Response eventually arrives → reader removes entry. Only permanently orphaned if reader thread dies before response (rare, bounded to inflight requests at crash time). F1 addresses the serialization-failure variant.|
+|4|write_frame stdin Mutex blocking|✓ intentional|Serialized writes prevent frame interleaving on the pipe. Correct for synchronous client.|
+|5|shutdown() response type|✓ correct|lsp-types 0.95.1: `Shutdown::Result = ()`. `serde_json::from_value::<()>(Value::Null)` succeeds.|
+|6|process_id narrowing|✓ safe|lsp-types 0.95.1 defines `process_id: Option<u32>`, not `Option<i32>`. Matches `std::process::id() -> u32`. No narrowing.|
+|7|capabilities() before handshake|✓ impossible|`spawn()` calls `capabilities.set()` before returning `Arc<LspClient>` to caller. No race window.|
+|8|Drop deadlock potential|✓ none|Lock order: `shutdown()` acquires `pending`+`stdin` (releases both before recv_timeout block), `Drop` acquires `child` only after shutdown returns. Reader thread acquires `pending`+`diagnostics` only. No cycle.|
+|9|stderr eprintln! spam|N/A design|Intentional — forwards server stderr to host process. Chatty servers are noisy, but this is the standard LSP client pattern (cf. rust-analyzer, vscode-languageclient).|
+|10|lsp_uri_to_pathbuf fallback|✓ best-effort|`uri::to_file_path()` handles `file://` correctly. Non-`file:` URIs produce non-fs paths — callers should guard but the fallback is explicit.|
+|11|path_to_uri(None) for relative|✓ correct|`Url::from_file_path` correctly rejects relative paths per RFC 8089. Caller returns empty Vec — silent no-op is acceptable for a "no diagnostics" answer.|
+
+## Test coverage assessment
+
+Unit tests cover:
+- read_frame: basic header, multiple headers, EOF (3 tests)
+- value_as_u64: number, string, null (1 test)
+- convert_lsp_diagnostics: 1-indexing, source fallback (2 tests)
+
+**Gap**: No test for `read_frame` with:
+- Missing Content-Length → Protocol error
+- Content-Length with leading/trailing whitespace (e.g., `" 7 "`)
+- Content-Length with non-numeric value (e.g., `"abc"`)
+- LF-only line endings (`\n\n` instead of `\r\n\r\n`)
+
+These are low-risk — the parsing logic is simple and the happy-path tests validate the framing contract. Integration testing against real LSP servers (planned for W3) would catch wire-format edge cases more effectively than unit tests.
+
+## Confidence
+0.88 — the client follows the LSP base protocol correctly. Both findings are defensive-programming gaps, not logic errors. No crash, deadlock, or data-corruption paths found in the request/response cycle. The `Drop` impl is sound. Diagnostics.rs has no bugs (it's a thin wrapper).
+
+
+---
+
+# W1R-2: Registry + Sync (PLAN-319 W1, commit 0ba7261a0)
+
+## Files reviewed
+- crates/pi-code-graph/src/semantic/lsp/registry.rs (276 LOC)
+- crates/pi-code-graph/src/semantic/lsp/sync.rs (195 LOC)
+- crates/pi-code-graph/src/semantic/lsp/client.rs (context: spawn/drop/capabilities)
+- crates/pi-code-graph/src/semantic/lsp/backend.rs (context: derive_capabilities)
+- crates/pi-code-graph/src/semantic/lsp/diagnostics.rs (context: path_to_uri)
+
+## Verdict: correct with one P1 and four P2 findings
+
+The P1 key-collision bug means any workspace with subdirectory-based callers
+will spawn duplicate LSP processes for the same project. All other issues are
+defensive-programming gaps or test coverage gaps; none block merge but all
+deserve attention before W2 wiring.
+
+## Findings
+
+### F1 [P1] get_or_spawn uses caller workspace path as key instead of detected root, spawning duplicate LSP processes
+- file: crates/pi-code-graph/src/semantic/lsp/registry.rs:127-153
+- severity: P1 (blocking for W2 wiring)
+- `get_or_spawn` constructs `key = (workspace, server_name)` from the caller's
+  raw workspace path (line 127), then calls `spec.detect_root(workspace)` to
+  find the actual project root (line 141). The LSP server spawns with
+  `root_uri` set to the detected root. However, the slot is inserted (line
+  156-162) with the original raw workspace as key, not the detected root.
+- Two callers in different subdirectories of the same project (e.g.
+  `/proj/lib` and `/proj/src`) both detect the same root (e.g. `/proj` via
+  `mix.exs`) but produce different keys → both miss the cache → two separate
+  LSP processes are spawned for the same project, each consuming significant
+  RAM (rust-analyzer ~500 MB, Expert ~200 MB). At cap=6, a workspace with 3
+  subdirectories could spawn 3 copies of the same server.
+- No external callers exist yet (W2 work), so this hasn't manifested in
+  production — but any W2 wiring that passes per-file workspaces will hit it.
+- fix: two options — simplest is to use `workspace_root` (post-detect_root)
+  as the key component, which requires reordering: lookup spec and detect root
+  before the cache check. Alternatively, keep the raw workspace key but add a
+  secondary normalisation map `workspace → root` to avoid the spec lookup on
+  cache hit.
+
+```suggestion
+    let spec = self.lookup_spec(server_name)
+        .ok_or_else(|| LspClientError::SpawnFailed(format!("no spec for {server_name}")))?;
+    let workspace_root = spec.detect_root(workspace);
+    let key = (workspace_root.clone(), server_name.to_string());
+    // Now check cache with root-based key...
+```
+
+### F2 [P2] TOCTOU double-spawn race in get_or_spawn wastes LSP process on concurrent miss
+- file: crates/pi-code-graph/src/semantic/lsp/registry.rs:127-162
+- `get_or_spawn` releases the slots lock between the miss check (line 132-136)
+  and the insert (line 154-162). Two concurrent calls for the same key both
+  see the miss, both spawn an LSP process, then both insert. The second insert
+  overwrites the first `WarmSlot`; the first `Arc<LspClient>` drops, killing
+  the first process via `LspClient::drop` (shutdown+kill+wait). Result: wasted
+  process spawn and immediate kill. At cap=6 and single-user agent workloads
+  the probability is low, but LSP servers are heavyweight.
+- fix: hold the slots lock across the miss check and insert, or use an
+  `entry().or_insert_with()` pattern that spawns under the lock. Spawn latency
+  (~100-500 ms) is tolerable under a registry lock since only cold-path
+  callers block.
+
+### F3 [P2] send_change emits didChange without prior didOpen for unknown paths — LSP protocol violation
+- file: crates/pi-code-graph/src/semantic/lsp/sync.rs:85-103
+- `send_change` uses `versions.entry(path).or_insert(0)` (line 93). If called
+  without a prior `send_open` — e.g. if the upstream event stream emits
+  `BufferEvent::Changed` before `BufferEvent::Opened` — the version starts at
+  0→1 and a `textDocument/didChange` notification is sent for a document the
+  server has never seen. The LSP spec (3.17) states that `didChange` must
+  reference a document previously opened via `didOpen`. No guard enforces the
+  invariant.
+- The `send_open` idempotency path (repeat open → downgrade to change) is
+  correct, but the inverse (change before open) is unprotected. The upstream
+  event source is not yet implemented (W2), so this depends on the contract
+  between the event stream and DocumentSync.
+- fix: in `send_change`, check `versions.contains_key(path)`; if absent,
+  either no-op (silently drop) or auto-issue `send_open` first with an empty
+  text to register the document, then proceed with the change. The no-op
+  approach is simpler and makes the invariant explicit.
+
+```suggestion
+    let mut versions = self.versions.lock().unwrap();
+    if !versions.contains_key(path) {
+        // No prior didOpen — drop the change to avoid protocol violation.
+        return;
+    }
+    let v = versions.get_mut(path).unwrap();
+    *v += 1;
+    let version = *v;
+    drop(versions);
+```
+
+### F4 [P2] registry_evict_idle_drops_expired_slots test is a no-op — eviction path untested
+- file: crates/pi-code-graph/src/semantic/lsp/registry.rs:265-272
+- The test `registry_evict_idle_drops_expired_slots` creates an empty registry
+  (no slots inserted), asserts `warm_count()==0`, asserts `evict_idle()==0`.
+  No slots are inserted, so no eviction occurs. The comment says "We can't
+  actually spawn an LSP here" — but eviction doesn't require an LSP process.
+- A `#[cfg(test)]` helper to insert mock `WarmSlot` values into `reg.slots`
+  (with a known-old `last_accessed`) would let the test verify actual eviction
+  and cover `pick_lru_victim`. Both functions currently have zero coverage.
+- fix: add a `#[cfg(test)]` constructor or `pub(crate)` visibility for
+  `WarmSlot` so tests can populate the slot map directly.
+
+### F5 [P3] WarmSlot.workspace field is written but never read — dead code
+- file: crates/pi-code-graph/src/semantic/lsp/registry.rs:88-92
+- `WarmSlot.workspace` is set during `get_or_spawn` insertion (line 159:
+  `workspace: workspace_root`) but never read anywhere in the codebase. No
+  method returns it, no eviction logic uses it, and `WarmSlot` is private.
+  Appears vestigial from an earlier design where slots tracked their detected
+  root separately. Remove the field or add a read path.
+
+### F6 [P3] DocumentSync::reset() invariant "call only after server restart" is unenforced
+- file: crates/pi-code-graph/src/semantic/lsp/sync.rs:131-134
+- `reset()` clears all version state without sending `didClose` notifications
+  to the LSP server. The doc comment says "call on server restart" — correct
+  for that case: a restarted server has no open documents. But if `reset()` is
+  ever called without a corresponding server restart (e.g. test helper,
+  reconnection scenario), the server still tracks the documents as open and
+  future `didChange` notifications reference unknown documents.
+- fix: rename to `reset_after_restart` or add `debug_assert!` documentation
+  to make the contract explicit. No runtime change needed.
+
+### F7 [P2] evict_idle TOCTOU — slot can be removed after concurrent get_or_spawn bumps last_accessed
+- file: crates/pi-code-graph/src/semantic/lsp/registry.rs:182-196
+- `evict_idle` snapshots stale keys into a `Vec` (line 186-190), then
+  iterates and removes (line 192-194). A concurrent `get_or_spawn` can bump
+  `last_accessed` on a "stale" slot between the snapshot and removal. The slot
+  is removed anyway, forcing a re-spawn on the next access. No resource leak
+  (Arc Drop cleans up the killed process), but the user experiences a
+  gratuitous re-spawn + re-initialize delay on the next query. Acceptable
+  trade-off for TTL eviction — standard LRU-TTL behavior — but the method
+  comment should note this as a known race.
+
+## Scrutiny points — verified correct
+
+| # | Question | Verdict | Why |
+|---|---|---|---|
+| 4 | detect_root with from='/' | ✓ correct | `is_dir() → true`, cursor walks `/` (no markers), `parent()=None`, returns `/`. Bounded. |
+| 5 | detect_root from file at root | ✓ correct | `/foo.rs` → `parent()=Some("/")`, same as above. Bounded. |
+| 7 | send_open re-open after close | ✓ correct | `send_close` removes from versions map. Next `send_open` sees miss → fresh `didOpen` with version=1. |
+| 9 | path_to_uri silently drops non-absolute | ✓ design | Same pattern as `diagnostics.rs::path_to_uri`. Caller contract: only absolute paths. W1R-1 already validated this. |
+| 10 | reset() with server restart | ✓ documented | Doc comment says "call on server restart." F6 captures the unenforced invariant. |
+| 11 | LRU eviction O(n) iteration | ✓ acceptable | O(n) at cap=6 (6 iterations). trivially fast. Not worth a BTreeMap migration. |
+| 12 | install_hint vs install-hint KDL | ✓ forward-ref | W2 work noted. Struct uses underscores; KDL uses hyphens; config layer handles conversion. |
+
+## Coverage gaps
+1. `registry_evict_idle_drops_expired_slots` is a no-op — no eviction path tested (F4).
+2. `pick_lru_victim` has zero test coverage — only exercised by the no-op test above.
+3. `DocumentSync::send_open` idempotency (repeat open → change) is untested.
+4. `DocumentSync::send_change` cold-start path (`or_insert(0)`) is untested.
+5. No test for `get_or_spawn` with the same workspace+server key twice (cache-hit path).
+6. No test for LRU eviction when `slots.len() >= max_warm_servers`.
+
+## Confidence
+0.90 — The P1 key collision is provable from static analysis of the key
+construction vs. root detection. No external callers of `get_or_spawn` exist
+yet (confirmed via grep), so it hasn't manifested. The P2 findings are
+defensive gaps, not logic errors — the code is correct for the single-threaded
+path. The `evict_idle` and `pick_lru_victim` logic is correct but untested.
