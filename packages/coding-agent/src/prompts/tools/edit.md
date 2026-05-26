@@ -1,70 +1,52 @@
-Apply Op to target. Symbol-first. Auto-persists.
+Apply Op to target. Symbol-first. Auto-persists. 3 verbs: `replace`, `rename`, `delete`.
 
 call ::= edit { operations: [{ target, action: { kind, …fields } }] }
 
-target ::= `<file>`  (file-scoped Ops)
-       ·  `<file>::<Symbol>`  (symbol-scoped Ops)
+target ::= `<file>`  (file-scoped)
+       ·  `<file>::<Symbol>`  (symbol-scoped)
+       ·  `<file>::<Symbol>#body|#sig`  (scoped)
+       ·  `<glob>`  (multi-file)
 
-<!-- @generated:edit-ops -->
-symbol-scoped — target must be `<file>::Symbol`
-  symbolClone            renameTo (optional identifier) — Clone destination symbol name (optional)
-  symbolDelete           allowSiblingDelete (optional bool) — Allow deleting sibling symbols when removing the last declaration (default: false)
-  symbolFindReplace      find (required content) — Text pattern to search for · content (required content) — New file contents (string or string[]) · occurrence (optional occurrence) — Which match to replace: first, last, all, or 1-indexed N (default: all)
-  symbolInsertAfter      content (required content) — New file contents (string or string[])
-  symbolInsertBefore     content (required content) — New file contents (string or string[])
-  symbolMove             direction (required direction) — Move direction: up or down
-  symbolRawTextReplace   find (required content) — Text pattern to search for · content (required content) — New file contents (string or string[]) · occurrence (optional occurrence) — Which match to replace: first, last, all, or 1-indexed N (default: all)
-  symbolRename           newName (required identifier) — New name for the symbol
-  symbolReplace          scope (optional symScope) — Replacement scope: whole (default), body (content MUST include outer braces { ... }), or target · content (required content) — New file contents (string or string[])
-  symbolSplice           mode (required spliceMode) — Splice mode: self, up, or down
-  symbolTranspose        column (required u32) — 1-indexed column to transpose to
-  symbolWrap             content (required content) — New file contents (string or string[])
+## Cheat Sheet
 
-file-scoped — target is `<file>`
-  fileAppend           content (required content) — New file contents (string or string[])
-  fileCreate           content (required content) — New file contents (string or string[]) · force (optional bool) — Overwrite if exists (default: false)
-  fileDelete          
-  fileFindReplace      find (required content) — Text pattern to search for · content (required content) — New file contents (string or string[]) · occurrence (optional occurrence) — Which match to replace: first, last, all, or 1-indexed N (default: all)
-  filePatch            diff (required diff) — Unified diff string to apply
-  filePrepend          content (required content) — New file contents (string or string[])
-  fileRawTextReplace   find (required content) — Text pattern to search for · content (required content) — New file contents (string or string[]) · occurrence (optional occurrence) — Which match to replace: first, last, all, or 1-indexed N (default: all)
-  fileWrite            content (required content) — New file contents (string or string[]) · force (optional bool) — Overwrite if exists (default: false)
+| want | target | action |
+|------|--------|--------|
+| rewrite whole function | `"file.ts :: foo"` | `{ kind: "replace", content: "function foo() { … }" }` |
+| change function body | `"file.ts :: foo#body"` | `{ kind: "replace", content: "return 42;" }` |
+| change signature only | `"file.ts :: foo#sig"` | `{ kind: "replace", content: "function foo(x: number)" }` |
+| rename everywhere | `"**/*.ts :: oldName"` | `{ kind: "rename", content: "newName" }` |
+| wrap in try/catch | `"file.ts :: risky"` | `{ kind: "replace", content: "try { $BODY } catch(e) { throw new SafeError(e); }" }` |
+| add annotation above | `"file.ts :: func"` | `{ kind: "replace", content: "@deprecated\n$DECL" }` |
+| replace pattern in file | `"file.ts"` | `{ kind: "replace", find: "old", content: "new" }` |
+| structural replace across files (find nodes matching a CodePath query, replace their content with template) | `"src/**/*.ts :: §call_expression[name=console.log]"` | `{ kind: "replace", content: "logger.info($1)" }` |
+| prepend to file | `"file.ts"` | `{ kind: "replace", place: "start", content: "// @ts-check\n" }` |
+| append to file | `"file.ts"` | `{ kind: "replace", place: "end", content: "\n// footer" }` |
+| overwrite file | `"file.ts"` | `{ kind: "replace", content: "export const X = 1;" }` |
+| delete dead symbol | `"file.ts :: deadFunc"` | `{ kind: "delete" }` |
+| delete file | `"file.ts"` | `{ kind: "delete" }` |
 
-line-scoped — target is `<file>`
-  lineAppend    at (required lineAnchor) — 1-indexed line number · content (required content) — New file contents (string or string[])
-  lineInsert    at (required lineAt) — Insertion point: {side: 'before' | 'after', line: <1-indexed>} · content (required content) — New file contents (string or string[])
-  linePrepend   at (required lineAnchor) — 1-indexed line number · content (required content) — New file contents (string or string[])
-  lineReplace   span (required lineSpan) — Inclusive line range: {start, end?} (1-indexed) · content (required content) — New file contents (string or string[])
+## Template Variables
 
-heading/css — Markdown/Org/CSS specific
-  headingDemote        
-  headingPromote       
-  headingReplaceBlock   content (required content) — New file contents (string or string[])
-  cssRemoveDeadStyle   
-  cssRenameClassToken   find (required identifier) — CSS class/id/custom-property token to find · replace (required identifier) — Replacement token
-  cssRenameCustomProp   find (required identifier) — CSS class/id/custom-property token to find · replace (required identifier) — Replacement token
-  cssRenameIdToken      find (required identifier) — CSS class/id/custom-property token to find · replace (required identifier) — Replacement token
+In `content`, `$VAR` placeholders are substituted with values from the matched AST node.
 
-history — no target, dispatched alone (not mixed with other ops)
-  undo · redo
-<!-- @end -->
+| var | resolves to |
+|-----|------------|
+| `$1` — `$9` | Nth named child of the matched node |
+| `$0` | Full matched text (alias `$MATCH`) |
+| `$LAST` | Last named child |
+| `$BODY` | Body text of a declaration (stripped of delimiters) |
+| `$NAME` | Name field of a declaration |
+| `$SIG` | Signature — everything before the body |
+| `$DECL` | Full declaration text (alias `$MATCH`) |
+| `$MATCH` | Full text of the matched node |
 
-<patterns>
-| want                          | call                                                                |
-|-------------------------------|---------------------------------------------------------------------|
-| insert after fn               | `target: "foo.ts::handleX"  action: { kind: "symbolInsertAfter", content: "…" }` |
-| rename + update callers       | loop: `find { ::X def→ }` → `edit` each call site                   |
-| rewrite test count            | `target: "foo.rs"  action: { kind: "fileFindReplace", find: "29", content: "31" }` |
-| rewrite block                 | `target: "foo.ts::Bar.method"  action: { kind: "symbolReplace", content: "…" }`   |
-| revert last                   | `action: { kind: "undo" }`                                          |
-| atomic multi-file             | `operations: [...]  transaction: "strict"` (all-or-nothing rollback) |
-</patterns>
+Escape literal `$` with `$$`. JS template syntax `${…}` passes through unchanged.
 
 <rules>
-- target shape ↔ Op family: kernel returns IncompatibleTargetShape if mismatched (e.g. `symbolReplace` with bare path)
-- occurrence ∈ { first, last, all, N } · default = unique-or-fail
-- edits commit immediately. undo/redo via this tool.
-- batches: best-effort (default — keep applied, skip failing) or strict (snapshot, rollback on any failure)
+- target shape determines mechanism: kernel dispatches to symbol/file/line/heading/CSS resolver automatically
+- `find` field on `replace` triggers structural find-and-replace within each matched node
+- `place: "start"|"end"` on file target controls prepend/append
+- edits commit immediately; undo/redo via `action: { kind: "undo" }` dispatched alone
+- batches: best-effort (default) or `transaction: "strict"` (snapshot, rollback on failure)
 - prefer symbol targets over file targets for surgical edits — diffs review better
-- `fileFindReplace` / `fileRawTextReplace`: substring matches that land inside an identifier (no word-boundary) are **refused** with a preview. To bypass: pass `force: true` in the action. Default behavior favors safety: prefer a longer needle that includes the surrounding boundary.
 </rules>

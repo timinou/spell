@@ -1,0 +1,89 @@
+#+TITLE: Unified Edit Surface — Three-Verb Agent Ergonomics for AST Editing
+#+STATE: ITEM
+#+SESSION_ID: 14ef753190520473
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-25T19-32-03-777Z_14ef753190520473.jsonl]]
+#+CUSTOM_ID: PLAN-320-unified-edit-surface-three-verb-agent-er
+#+EFFORT: XL
+#+LAYER: core
+#+PRIORITY: #A
+
+* Initial Message
+
+dude. look at the ast-grep and ast-edit tools, if they still exist, then review the Rust ecosystem for tools that are natively integrated to tree-sitter for these kinds of needs, on top of analysing the way that pi-code-graph works and is integrated to pi-edit-broker to enable advanced and fast AST edits. How would you implement it and how would you create a foolproof TDD integration and how would you surface these as natural extensions to the CodePath find/get/edit/create tools?
+
+Design doc: [[file:specs/code-graph/unified-edit-surface.md]]
+
+Replace the 30-variant OpKind taxonomy with a 3-verb agent surface (replace, rename, delete) that maps intent to mechanism through the target CodePath shape. Absorb ast-grep's pattern→rewrite into a natural find/replace paradigm with positional template variables ($1, $BODY, $NAME) instead of meta-programming capture syntax.
+
+See design doc for full rationale, multi-language test matrix (9 languages, 72+ tests), Elixir multi-clause dispatch coverage, dollar-sign literal handling, and error hint templates.
+
+* Wave 1: Template Expansion Engine
+* Wave 2: Unified Action → Op Dispatch
+* Wave 3: Per-Language Fixtures & End-to-End Tests
+* Wave 4: Agent Tool Surface Update
+* Wave 5: Legacy Op Deprecation
+* Wave 6: Hint Integration
+
+* Wave 1: Template Expansion Engine
+** Target
+- crates/pi-code-path/src/template.rs
+- Template parser: $1, $2, $LAST, $BODY, $NAME, $SIG, $DECL, $MATCH
+- Escape rules: $$ → literal $, $non-uppercase → literal, ${ → pass-through
+- Node-based variable resolution: extract body, name field, signature from tree-sitter node
+- Language-appropriate body extraction: {} for C-like, do/end for Elixir, indented for Python
+** Tests
+- All template variables resolve correctly per language
+- $ in source never captured incorrectly
+- Unknown template variable → diagnostic with suggestions
+- $BODY on non-declaration node → diagnostic
+
+* Wave 2: Unified Action → Op Dispatch
+** Target
+- crates/pi-code-path/src/unified.rs — unified_op_from_action()
+- TargetShape enum derived from CodePath query
+- Every target shape × action kind mapped to correct internal Op variant
+- The 30-variant OpKind taxonomy becomes implementation detail
+** Tests
+- Every target shape has dispatcher for replace/rename/delete
+- Mismatched action/target → diagnostic with hint
+- Adding new OpKind without updating dispatch → compile error (exhaustive match)
+
+* Wave 3: Per-Language Fixtures & End-to-End Tests
+** Target
+- crates/pi-natives/src/code_path/fixtures/{ts,rs,py,go,ex,html,css,md,org}/ — fixture files
+- crates/pi-natives/src/code_path/unified_tests.rs — test matrix
+- Assert harness: apply edit, verify output, verify re-parse
+** Tests (~72 total)
+- Core: replace(body, whole, find), rename, delete, dollar literal, wrap $BODY, prepend $DECL per language
+- Elixir deep: multi-clause dispatch, guards, defmacro, defp, defguard, defdelegate, heex
+- Template: $BODY across all block syntaxes, $SIG with generics/guards/overloads
+- Parse verification after every edit
+
+* Wave 4: Agent Tool Surface Update
+** Target
+- packages/coding-agent/src/prompts/tools/edit.md — cheat sheet pattern table
+- packages/coding-agent/src/tools/edit.ts — unified action dispatch in TS bridge
+- packages/coding-agent/src/tools/codepath-types.ts — UnifiedAction schema
+** Tests
+- edit.md renders correctly in prompt snapshots
+- UnifiedAction schema validates in TS tests
+- Tool output renders hints after errors
+
+* Wave 5: Legacy Op Deprecation
+** Target
+- Mark internal Op variants as #[doc(hidden)]
+- Remove direct exposure of OpKind in NAPI surface
+- Keep tests passing against internal dispatch
+** Tests
+- op_matrix_tests still covers all OpKind variants
+- unified dispatch covers all target shapes
+
+* Wave 6: Hint Integration
+** Target
+- Diagnostic hints wired into formatCodePathResult
+- Tool output renders "Did you mean?" after no_matches
+- Tool output renders "Did you mean?" after qualifier_not_applicable
+- Tool output suggests find queries for debugging
+** Tests
+- Snapshot tests for hint-format output
+- Every diagnostic variant has a friendly hint message

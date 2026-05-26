@@ -36,3 +36,8 @@ phf = { version = "0.13", features = ["macros"] }
 tempfile = "3"
 proptest = "1"
 insta = { version = "1", features = ["yaml"] }
+tree-sitter-typescript = "0.23"
+tree-sitter-rust = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-go = "0.23"
+tree-sitter-elixir = "0.3"
