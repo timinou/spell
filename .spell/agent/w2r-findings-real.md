@@ -1,93 +1,125 @@
-# W2 Review — implements→ / inherits→ / dispatches→ edges
+# W2 Review Findings: config.rs + defaults.kdl
 
-Commit reviewed: `7b0f6ecba` (PLAN-318 W2).
+Review of commit `796f53dbc` on branch `plan-319-semantic-backend`.
+13 tests pass. 5 findings below.
 
-## Files reviewed
+---
 
-- `crates/pi-code-path/src/ast.rs` — `EdgeKind` variants + `Display` impl
-- `crates/pi-code-path/src/parser.rs` — `edge_kind_p`, trailing-edge synthesis, new heritage_edge_tests
-- `crates/pi-code-graph/src/language/typescript.rs` — `collect_heritage_references`, `collect_heritage_from_type` (edge param threading)
-- `crates/pi-code-graph/src/language/generic.rs` — `collect_heritage_for_symbol`, `collect_rust_heritage`, `collect_python_heritage`, `extract_type_name`
-- `crates/pi-natives/src/code_path/edge_resolver/mod.rs` — `to_graph_edge` mapping for new kinds
-- `crates/pi-code-graph/src/model.rs` — confirmed `GraphEdgeKind::{Implements, Inherits, Dispatches}` pre-existing
+## [P1] merge() unconditionally overwrites scalars with defaults, clobbering user-configured values
 
-## Verdict: **needs-fix**
+**File:** `crates/pi-code-graph/src/semantic/config.rs:148-163`
 
-Wiring (parser, resolver mapping, TS edge differentiation, Rust impl extraction) is correct. Python heritage extraction over-extracts and mis-extracts due to a naive `extract_type_name` fallback. Two real bugs ship Inherits edges with wrong / nonsense targets.
+**Bug:** When a higher-priority layer's KDL doesn't mention a scalar (e.g. `max-warm-servers`), `parse()` populates it from `SemanticConfig::default()`. `merge()` then unconditionally overwrites the lower layer's explicitly configured value with this default.
 
-## Findings
+**Trigger:**
+```
+Defaults:  bm25 { incremental #true }          → bm25_incremental = true
+User:      bm25 { incremental #false }         → bm25_incremental = false
+Project:   semantic { max-warm-servers 2 }     → bm25_incremental = true (Rust default, NOT in KDL!)
+```
 
-### F1. Python `metaclass=` and other class-keyword args emit phantom `Inherits` edges  [MEDIUM]
+**load_layered trace:**
+```
+config = defaults()                              → bm25_incremental = true
+config = merge(user_cfg, config)                 → bm25_incremental = false  ✓
+config = merge(project_cfg, config)              → bm25_incremental = true   ✗ BUG
+```
 
-`collect_python_heritage` walks `superclasses.named_children()` and calls `extract_type_name` on every child. In tree-sitter-python the `superclasses` field is an `argument_list`, whose grammar accepts `keyword_argument` (`metaclass=Meta`), `list_splat` (`*bases`), and `dictionary_splat` (`**kwargs`) in addition to plain expressions.
+The project config's unmentioned `bm25_incremental` starts as Rust default (true) from `parse()`, then `merge()` unconditionally overwrites the merged value — clobbering the user's explicit `false` setting.
 
-For a `keyword_argument` node, `extract_type_name` hits the `_` fallback at `generic.rs:458-461` and recurses into `named_child(0)`. tree-sitter's `keyword_argument` grammar is `seq(field('name', identifier), '=', field('value', expression))`, so `named_child(0)` is the **keyword name**, not the value. Result: `class X(Base, metaclass=ABCMeta): …` emits `Inherits → "Base"` (correct) **and** `Inherits → "metaclass"` (phantom).
+**Affected fields:** idle_ttl, max_warm_servers, request_timeout, sync_debounce, bm25_incremental.
 
-This is common in modern Python (`metaclass=ABCMeta`, `metaclass=ProtocolMeta`, PEP-487 init_subclass kwargs). It pollutes the graph and breaks `who Inherits I?` queries with bogus `metaclass` results.
+**Root cause:** `merge()` has no notion of "not set" — it treats all scalars as always-present. The `parse()` → `Self::default()` pattern means unmentioned KDL fields carry Rust defaults that leak through merge.
 
-- File: `crates/pi-code-graph/src/language/generic.rs:418-438` (loop) + `:445-461` (`extract_type_name` `_` arm)
-- Fix sketch: in `collect_python_heritage`, skip child kinds that aren't positional base expressions:
-  ```rust
-  for child in superclasses.named_children(&mut cursor) {
-      match child.kind() {
-          "keyword_argument" | "list_splat" | "dictionary_splat"
-          | "parenthesized_list_splat" => continue,
-          _ => {}
-      }
-      let name = extract_type_name(source, child);
-      …
-  }
-  ```
+**Suggested fix:** Track which scalars were explicitly parsed (e.g. a bitmask or `Option<T>` internally), and in `merge()`, only overwrite when `higher` explicitly set the value.
 
-### F2. Python module-qualified bases (`class X(abc.ABC)`) yield wrong target name  [MEDIUM]
+---
 
-`abc.ABC` parses as a tree-sitter `attribute` node with fields `object` (`abc`) and `attribute` (`ABC`). `extract_type_name`'s `_` arm recurses into `named_child(0)`, which is the **object** (`abc`). Result: `class C(abc.ABC)` emits `Inherits → "abc"` instead of `"ABC"` (or `"abc.ABC"`).
+## [P2] read_positional_string reports "missing required field" when value exists but has wrong type
 
-This is the dominant Python convention for ABCs and stdlib bases (`abc.ABC`, `collections.OrderedDict`, `enum.IntEnum`, `typing.Protocol`). Every such class produces a useless edge plus loses the real base, so `inherits→` queries silently miss.
+**File:** `crates/pi-code-graph/src/semantic/config.rs:298-305`
 
-- File: `crates/pi-code-graph/src/language/generic.rs:445-461`
-- Fix sketch: add an `attribute` arm that prefers the `attribute` field (or returns the full dotted path):
-  ```rust
-  "attribute" => node
-      .child_by_field_name("attribute")
-      .map(|c| extract_type_name(source, c))
-      .unwrap_or_default(),
-  ```
-  And for `subscript` (`Generic[T]`) consider returning the leading value.
+**Bug:** When a KDL entry has a non-string value (e.g. `lsp 42`), `read_positional_string` returns `MissingField` instead of a type-mismatch error. The entry IS present; the error message misleads.
 
-### F3. `EdgeResolverImpl::to_graph_edge` — no test asserts new kernel→graph mapping  [LOW / coverage]
+```rust
+fn read_positional_string(node: &KdlNode, field: &str) -> Result<String, ConfigError> {
+    node.entries()
+        .first()
+        .and_then(|e| e.value().as_string().map(String::from))
+        .ok_or_else(|| ConfigError::MissingField {  // ← wrong: not missing, wrong type
+            node:  node.name().value().to_string(),
+            field: field.into(),
+        })
+}
+```
 
-The three new arms map `KernelEdgeKind::{Implements, Inherits, Dispatches}` to the graph variants and are syntactically correct, but `crates/pi-natives` has no `to_graph_edge` round-trip test. A future refactor that drops a variant would compile (it's `Option`-returning) and silently regress to "no results" for those kernel queries.
+For `lsp 42`: `as_string()` returns None → returns `MissingField { node: "lsp", field: "lsp" }` → displays as `node 'lsp' missing required field 'lsp'`.
 
-- File: `crates/pi-natives/src/code_path/edge_resolver/mod.rs:138-155`
-- Fix sketch: add a small table-driven test that asserts each `KernelEdgeKind` maps to the expected `(GraphEdgeKind, incoming)` pair (including `Bind → None`).
+**Suggested fix:** Split into two arms — check for presence first, then check type. Return `BadValue` for type mismatches.
 
-### F4. `dispatches→` is wired through the kernel but no extractor emits `Dispatches`  [LOW / contract gap]
+```rust
+fn read_positional_string(node: &KdlNode, field: &str) -> Result<String, ConfigError> {
+    let entry = node.entries().first().ok_or_else(|| ConfigError::MissingField {
+        node: node.name().value().to_string(),
+        field: field.into(),
+    })?;
+    entry.value().as_string().map(String::from).ok_or_else(|| ConfigError::BadValue {
+        node: node.name().value().to_string(),
+        message: format!("expected string for `{field}`, got {:?}", entry.value()),
+    })
+}
+```
 
-The commit message explicitly defers Clojure/Elixir Dispatches extraction. Kernel parser, resolver and `to_graph_edge` all support it, so `…dispatches→` queries succeed but always return zero results. That is acceptable as an interim contract, but there is no test or comment surfacing this to callers — operators will read it as "no dispatchers found" rather than "no extractor emits this yet". Consider either:
-- A `#[ignore]` integration test that documents the empty result, or
-- A user-visible diagnostic from `EdgeResolverImpl` when traversing a known-empty edge class.
+---
 
-Not a blocker for W2 since the deferral is explicit in the commit message.
+## [P2] node_to_json_value has unbounded recursion — stack overflow on deeply nested init-options
 
-## Non-issues investigated
+**File:** `crates/pi-code-graph/src/semantic/config.rs:337-354`
 
-- **Parser ordering** (`implements` before `import`): the comment is defensive — `winnow`'s literal tag parser is all-or-nothing, so ordering doesn't actually matter for these disjoint literals. Behavior is correct either way.
-- **TS `collect_heritage_from_type` recursion**: every branch (`type_identifier`, `generic_type`, `_`) threads the `edge` parameter correctly; the `type_arguments`/`type_parameters` arm deliberately emits `TypeParameterOf` (intentional, unchanged by W2).
-- **Rust inherent impl skip**: `child_by_field_name("trait")` returning `None` for `impl Runner { … }` correctly short-circuits before pushing any edge — verified against tree-sitter-rust grammar.
-- **Rust scoped/generic trait names** (`impl crate::module::Trait<T> for X`): `extract_type_name` resolves correctly via `scoped_type_identifier.name` and `generic_type.named_child(0)`. tree-sitter-rust's `generic_type` exposes the base under the `type` field, which is the first named child, so the `or_else(named_child(0))` fallback works.
-- **TS `extends_type_clause` (interface extends)**: still routed to `Inherits`. Matches prior semantics; existing `heritage_distinguishes_base_from_type_param` test continues to assert the split.
+**Bug:** Recursive descent with no depth limit. A deeply nested `init-options` block can overflow the stack at runtime.
 
-## Coverage gaps
+While user config is trusted input, this is a denial-of-service vector.
 
-1. No test for Python `class X(Base, metaclass=Meta)` (would catch F1).
-2. No test for Python `class X(abc.ABC)` or any dotted base (would catch F2).
-3. No test for Python `class X(*bases)` splat / `**kwargs` (F1 variant).
-4. No test for Rust `impl !Send for X` (negative impl) — currently still produces `Implements → Send`, may or may not be desired.
-5. No `EdgeResolverImpl::to_graph_edge` table test (F3).
-6. No end-to-end test (parse `implements→` → resolve → graph hit) in pi-natives.
-7. No regression test that `extends` and `implements` simultaneously on the same class produce both edges with the right kinds (the existing `heritage_distinguishes_base_from_type_param` covers it for class but not interface).
+**Fix:** Add a depth counter with a limit (e.g. 64), returning `Value::Null` or an error on overflow.
 
-## Confidence
+---
 
-0.85 — F1 and F2 are mechanically reproducible from the diff and the upstream tree-sitter grammar; only unverified by a runtime repro. F3/F4 are advisory.
+## [P3] node_to_json_value drops positional entries when node has both entries and children
+
+**File:** `crates/pi-code-graph/src/semantic/config.rs:342-348`
+
+**Bug:** KDL allows nodes with both positional entries and child blocks (`cargo "rust" { allFeatures #false }`). The code checks `child.children().is_some()` first → true → recurses without inspecting `child.entries()`. The positional entry `"rust"` is silently dropped.
+
+Result: `{"allFeatures": false}` instead of preserving `"rust"`.
+
+Unlikely in typical LSP init-options but represents silent data loss.
+
+---
+
+## [P3] kdl_value_to_json silently truncates KDL integers from i128 to i64
+
+**File:** `crates/pi-code-graph/src/semantic/config.rs:359`
+
+**Bug:** `KdlValue::Integer(i)` stores `i128`. `*i as i64` silently truncates for values outside i64 range, producing incorrect JSON.
+
+Low impact (LSP config rarely uses such values) but lossy with no warning.
+
+---
+
+## Areas NOT flagging as bugs
+
+| Concern | Verdict |
+|---|---|
+| parse_server partial-state on error | ✓ Correct — `insert` happens AFTER `command.is_empty()` check (line 288), not before. |
+| validate cross-file server-ref removal | ✓ Correct — removing lsp ref from language handles the case. Can't delete server keys from lower layers, but that's a missing feature (explicit deletion mechanism), not a bug. |
+| defaults.kdl panic at startup | ✓ By design — docstring explicitly says "Infallible — a panic here indicates a bug in the bundled defaults file." Compile-time bundled, tests verify. |
+| KDL injection / ReDoS | ✓ KDL parser is not regex-based. No ReDoS vector. |
+| KDL parse error Debug format | ✓ Minor — `{e:?}` includes line/col info, arguably more useful than Display. |
+| read_u64 negative reject | ✓ Correct — `i128::try_from(i)` returns Err for negatives. |
+| env var name validity | ✓ KDL identifiers allow `[A-Za-z_-]` starts. Hyphens work in Unix env vars (unusual but valid). Defaults only use `[A-Za-z_]` names. |
+| HOME vs XDG_CONFIG_HOME | ✓ Deliberate — `~/.spell/` matches tool conventions (like `.ssh`, `.docker`). Not XDG but intentional. |
+| Test env::set_var race | ✓ Acknowledged via `unsafe` blocks. Low-probability test-only issue. |
+| PartialEq key-only comparison | ✓ Only used in `parse_returns_default_when_no_semantic_block` where both sides have empty maps. Harmless. |
+| Unicode box-drawing in comments | ✓ KDL `//` comments accept any characters. |
+| Env var ordering determinism | ✓ `KdlDocument` uses `Vec` internally; iteration is document-order (deterministic). |
+| Dead imports (PathBuf, _dirs_dep) | P3 — compiler warnings, not functional bugs. |
