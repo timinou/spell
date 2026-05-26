@@ -83,6 +83,44 @@ pub enum TargetShape {
 	Css,
 	/// Unknown / unsupported shape.
 	Unknown,
+	/// FUP-097: target carries a read-only semantic qualifier (e.g.
+	/// `#hover_inferred`, `#type_definition`, `#signature`, `#inlay`,
+	/// `#diagnostics`). Edit dispatch rejects these explicitly rather than
+	/// silently treating them as whole-symbol replacements.
+	SemanticReadOnly { qualifier: &'static str },
+}
+
+/// Qualifiers that describe a *view* of code (read-only) rather than a
+/// region of code that can be replaced. Used by [`TargetShape::classify`]
+/// to reject edit attempts against them.
+///
+/// `#hover` and `#sig` are intentionally NOT in this set: they describe
+/// the signature region of a symbol, which IS a valid edit scope.
+/// Construct an [`IncompatibleTargetShape`] diagnostic for an attempt to
+/// edit a read-only semantic qualifier (FUP-097). The hint points the
+/// agent at `find { … #qual }` for inspection.
+fn read_only_semantic_diagnostic(action: &str, qualifier: &str) -> Diagnostic {
+	Diagnostic {
+		variant: DiagnosticVariant::IncompatibleTargetShape,
+		message: format!(
+			"cannot {action} a target with `#{qualifier}` — it is a read-only \
+semantic view, not a region of code. Use `find {{ … #{qualifier} }}` to \
+inspect it."
+		),
+		span: None,
+	}
+}
+
+fn read_only_semantic_qualifier(name: &str) -> Option<&'static str> {
+	match name {
+		"hover_inferred" => Some("hover_inferred"),
+		"type_definition" => Some("type_definition"),
+		"type_def" => Some("type_def"),
+		"signature" => Some("signature"),
+		"inlay" => Some("inlay"),
+		"diagnostics" => Some("diagnostics"),
+		_ => None,
+	}
 }
 
 // ── Shape detection ───────────────────────────────────────────────
@@ -103,7 +141,13 @@ impl TargetShape {
 			(false, true, None) => TargetShape::Symbol,
 			(false, true, Some("body")) => TargetShape::SymbolBody,
 			(false, true, Some("sig")) => TargetShape::SymbolSig,
-			(false, true, Some(_)) => TargetShape::Symbol, // other qualifiers: still symbol
+			// FUP-097: read-only semantic qualifiers are NOT valid edit targets.
+			(false, true, Some(name)) if read_only_semantic_qualifier(name).is_some() => {
+				TargetShape::SemanticReadOnly {
+					qualifier: read_only_semantic_qualifier(name).unwrap(),
+				}
+			},
+			(false, true, Some(_)) => TargetShape::Symbol, // other qualifiers: still symbol (e.g. #hover, #raw)
 			// Non-glob, no query
 			(false, false, None) => TargetShape::File,
 			(false, false, _) => TargetShape::Unknown,
@@ -172,6 +216,10 @@ fn dispatch_replace(
 	find: &Option<ActionContent>,
 	place: &Option<Place>,
 ) -> Result<Op, Diagnostic> {
+	if let TargetShape::SemanticReadOnly { qualifier } = shape {
+		return Err(read_only_semantic_diagnostic("replace", qualifier));
+	}
+
 	// Symbol-scoped with find: find-and-replace within the symbol
 	if find.is_some() && matches!(shape, TargetShape::Symbol | TargetShape::SymbolBody | TargetShape::SymbolSig) {
 		let target = SymbolTarget::new(cp.clone())?;
@@ -290,6 +338,9 @@ fn dispatch_rename(
 	shape: TargetShape,
 	new_name: &Identifier,
 ) -> Result<Op, Diagnostic> {
+	if let TargetShape::SemanticReadOnly { qualifier } = shape {
+		return Err(read_only_semantic_diagnostic("rename", qualifier));
+	}
 	match shape {
 		TargetShape::Symbol
 		| TargetShape::SymbolBody
@@ -316,6 +367,9 @@ fn dispatch_delete(
 	cp: &CodePath,
 	shape: TargetShape,
 ) -> Result<Op, Diagnostic> {
+	if let TargetShape::SemanticReadOnly { qualifier } = shape {
+		return Err(read_only_semantic_diagnostic("delete", qualifier));
+	}
 	match shape {
 		TargetShape::Symbol
 		| TargetShape::SymbolBody
@@ -405,6 +459,66 @@ mod tests {
 	#[test]
 	fn classifies_symbol_sig() {
 		assert_eq!(classify("foo.ts :: bar#sig"), TargetShape::SymbolSig);
+	}
+
+	// FUP-097: read-only semantic qualifiers classify as SemanticReadOnly.
+	#[test]
+	fn classifies_semantic_read_only_qualifiers() {
+		for (target, expected) in [
+			("foo.ts :: bar#hover_inferred", "hover_inferred"),
+			("foo.ts :: bar#type_definition", "type_definition"),
+			("foo.ts :: bar#type_def", "type_def"),
+			("foo.ts :: bar#signature", "signature"),
+			("foo.ts :: bar#inlay", "inlay"),
+			("foo.ts :: bar#diagnostics", "diagnostics"),
+		] {
+			match classify(target) {
+				TargetShape::SemanticReadOnly { qualifier } => assert_eq!(qualifier, expected),
+				other => panic!("{target} → expected SemanticReadOnly({expected}), got {other:?}"),
+			}
+		}
+	}
+
+	// FUP-097: edit dispatch rejects semantic read-only qualifiers with a
+	// friendly hint pointing at `find { … #qual }`.
+	#[test]
+	fn replace_on_read_only_qualifier_returns_diagnostic_with_hint() {
+		let err = dispatch(
+			"foo.ts :: bar#hover_inferred",
+			UnifiedAction::Replace { content: sc("x"), find: None, place: None },
+		).expect_err("read-only qualifier must reject");
+		assert!(matches!(err.variant, DiagnosticVariant::IncompatibleTargetShape));
+		assert!(err.message.contains("#hover_inferred"), "hint must mention qualifier: {}", err.message);
+		assert!(err.message.contains("find"), "hint must redirect to find: {}", err.message);
+	}
+
+	#[test]
+	fn rename_on_read_only_qualifier_returns_diagnostic() {
+		let err = dispatch(
+			"foo.ts :: bar#type_definition",
+			UnifiedAction::Rename { content: Identifier("baz".into()) },
+		).expect_err("rename on read-only qualifier must reject");
+		assert!(matches!(err.variant, DiagnosticVariant::IncompatibleTargetShape));
+		assert!(err.message.contains("#type_definition"));
+	}
+
+	#[test]
+	fn delete_on_read_only_qualifier_returns_diagnostic() {
+		let err = dispatch(
+			"foo.ts :: bar#diagnostics",
+			UnifiedAction::Delete,
+		).expect_err("delete on read-only qualifier must reject");
+		assert!(matches!(err.variant, DiagnosticVariant::IncompatibleTargetShape));
+		assert!(err.message.contains("#diagnostics"));
+	}
+
+	// FUP-097 anti-regression: #hover and #sig stay edit-allowed because
+	// they describe the *signature region* (whole symbol minus body).
+	#[test]
+	fn hover_qualifier_stays_edit_allowed() {
+		// #hover lands in the catch-all symbol branch (the dispatch decides
+		// what to do with it from there).
+		assert_eq!(classify("foo.ts :: bar#hover"), TargetShape::Symbol);
 	}
 
 	#[test]

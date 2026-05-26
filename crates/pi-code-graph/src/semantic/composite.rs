@@ -12,8 +12,8 @@
 use std::{collections::HashMap, path::Path, sync::Arc};
 
 use crate::semantic::{
-	annotation::AnnotationSemanticBackend, Capabilities, Diagnostic, InferResult, InlayHint,
-	LineRange, Location, RenameError, SemanticBackend, SignatureInfo, WorkspaceEdit,
+	annotation::AnnotationSemanticBackend, Capabilities, Diagnostic, HoverDual, InferResult,
+	InlayHint, LineRange, Location, RenameError, SemanticBackend, SignatureInfo, WorkspaceEdit,
 };
 
 /// Dispatches `SemanticBackend` calls per-file by extension.
@@ -126,6 +126,49 @@ impl SemanticBackend for CompositeSemanticBackend {
 
 	fn type_definition_of(&self, file: &Path, line: u32, col: u32) -> Option<Location> {
 		self.pick(file).type_definition_of(file, line, col)
+	}
+
+	/// Composite override: queries the Annotation backend (always) AND the
+	/// per-extension backend (if registered and distinct from the default)
+	/// independently, populating both slots of [`HoverDual`].
+	///
+	/// Each slot only gets populated if the corresponding backend produced
+	/// a non-Unknown answer with the expected confidence kind: Annotation
+	/// fills `written` only for `Confidence::Annotated`; the per-extension
+	/// backend fills `inferred` only for `Confidence::Inferred` or
+	/// `Confidence::Heuristic`. A backend returning the "wrong" kind
+	/// (e.g. Annotation returning `Inferred`) is treated as data not fit
+	/// for that slot — silently dropped rather than mis-routed. This
+	/// preserves the merge semantics: written and inferred mean what they
+	/// say, regardless of which backend an unusual capability surfaces.
+	fn hover_dual(&self, file: &Path, line: u32, col: u32) -> HoverDual {
+		let picked = self.pick(file);
+		let picked_is_default = std::ptr::addr_eq(
+			Arc::as_ptr(&picked) as *const (),
+			Arc::as_ptr(&self.default) as *const (),
+		);
+
+		let annotation_result = self.default.type_at(file, line, col);
+		let written = if matches!(annotation_result.confidence,
+			crate::semantic::Confidence::Annotated) {
+			Some(annotation_result)
+		} else {
+			None
+		};
+
+		let inferred = if picked_is_default {
+			None
+		} else {
+			let lsp_result = picked.type_at(file, line, col);
+			if matches!(lsp_result.confidence,
+				crate::semantic::Confidence::Inferred | crate::semantic::Confidence::Heuristic) {
+				Some(lsp_result)
+			} else {
+				None
+			}
+		};
+
+		HoverDual { written, inferred }
 	}
 
 	fn signature_at(&self, file: &Path, line: u32, col: u32) -> Option<SignatureInfo> {
