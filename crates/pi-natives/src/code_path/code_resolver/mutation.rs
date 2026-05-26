@@ -4,14 +4,19 @@
 //! Delegates structural edits to the existing `execute_code_buffer_inner`
 //! machinery in `crate::code_buffer`.
 
+use std::path::PathBuf;
+
+use pi_code_engine::buffer::TextEdit;
 use pi_code_path::{
 	ast::{
-		ActionContent, CodePath, Direction, MutationOutcome, NamePayload, Occurrence, SpliceMode,
+		ActionContent, CodePath, Direction, MutationOutcome, NamePayload, Occurrence, Qualifier,
+		SpliceMode,
 	},
 	dialect::NameLexer,
 	op::{Op, SymScope},
 	renderer::render_code_path,
 	resolver::traits::{CancellationToken, MutationResolver},
+	template::expand_template,
 	types::{Diagnostic, DiagnosticVariant},
 };
 use serde_json::{Value, json};
@@ -49,7 +54,6 @@ impl NameLexer for DummyLexer {
 /// file portion is absolutised so the legacy `code_buffer::execute` can
 /// open it without depending on cwd. FEAT-689.
 /// Qualifiers are rejected because the code_buffer `resolve_symbol`
-/// surface only understands simple symbol names.
 pub(crate) fn build_target_id(
 	path: &CodePath,
 	root: Option<&std::path::Path>,
@@ -63,8 +67,20 @@ pub(crate) fn build_target_id(
 	}
 	let rendered = render_code_path(path, &DummyLexer).replace(" :: ", "::");
 	let Some((file_part, sym_part)) = rendered.split_once("::") else {
-		// No symbol component — absolutise the whole rendered path if
-		// possible.
+		return Ok(absolutise(&rendered, root));
+	};
+	let abs_file = absolutise(file_part, root);
+	Ok(format!("{abs_file}::{sym_part}"))
+}
+
+/// Like `build_target_id` but accepts qualifiers (#body, #sig).
+/// Used by `apply_via_code_buffer` for the builder path.
+fn build_target_id_allow_qualifiers(
+	path: &CodePath,
+	root: Option<&std::path::Path>,
+) -> Result<String, Diagnostic> {
+	let rendered = render_code_path(path, &DummyLexer).replace(" :: ", "::");
+	let Some((file_part, sym_part)) = rendered.split_once("::") else {
 		return Ok(absolutise(&rendered, root));
 	};
 	let abs_file = absolutise(file_part, root);
@@ -294,16 +310,220 @@ fn edit_err_message(e: &pi_code_engine::CodeEngineError) -> String {
 }
 
 impl CodeResolverImpl {
+	/// Resolve a CodePath target to a scoped TextEdit, bypassing the legacy
+	/// `build_target_id → resolve_symbol → single_action` chain.
+	///
+	/// Supports qualifiers (#body, #sig) for scoped edits and template
+	/// expansion ($BODY, $NAME, $MATCH) in content strings.
+	pub(crate) fn resolve_mutation_edit(
+		&self,
+		target: &CodePath,
+		action_json: &Value,
+	) -> Result<(PathBuf, TextEdit, String), Diagnostic> {
+		let file_path = self.codepath_fs_path(target)?;
+		let profile = self.registry.match_path(&file_path)
+			.ok_or_else(|| Diagnostic {
+				variant: DiagnosticVariant::NoMatches,
+				message: format!("no language profile for: {}", file_path.display()),
+				span: None,
+			})?;
+
+		let source = std::fs::read_to_string(&file_path).map_err(|e| Diagnostic {
+			variant: DiagnosticVariant::Inaccessible,
+			message: format!("read error: {e}"),
+			span: None,
+		})?;
+
+		let mut parser = tree_sitter::Parser::new();
+		parser.set_language(&profile.ts_language).map_err(|e| Diagnostic {
+			variant: DiagnosticVariant::ParseError,
+			message: format!("tree-sitter error: {e}"),
+			span: None,
+		})?;
+		let tree = parser.parse(&source, None).ok_or_else(|| Diagnostic {
+			variant: DiagnosticVariant::ParseError,
+			message: "parse failed".into(),
+			span: None,
+		})?;
+
+		// Resolve the CodePath query to a tree-sitter node
+		let query = target.query.as_ref().ok_or_else(|| Diagnostic {
+			variant: DiagnosticVariant::NoMatches,
+			message: "edit target must have a symbol query (e.g. `::Name`)".into(),
+			span: None,
+		})?;
+
+		let dialect = profile.dialect.as_ref().ok_or_else(|| Diagnostic {
+			variant: DiagnosticVariant::UnsupportedOperation,
+			message: "no dialect for language".into(),
+			span: None,
+		})?;
+		let cancel = CancellationToken::new();
+		let root = tree.root_node();
+		let nodes = super::walker::evaluate_query(query, vec![root], &source, dialect, &cancel);
+		let node = nodes.first().ok_or_else(|| Diagnostic {
+			variant: DiagnosticVariant::NoMatches,
+			message: "symbol not found".into(),
+			span: None,
+		})?;
+
+		// Scope byte range by qualifier (#body, #sig)
+		let qualifier_name = target.qualifier.as_ref().map(|q| q.name.as_str());
+		let kind = action_json.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+
+		// For rename: only replace the name field, not the whole symbol
+		let (byte_range, content) = if kind == "rename" {
+			let name_node = node.child_by_field_name("name")
+				.or_else(|| node.child_by_field_name("declarator"))
+				.ok_or_else(|| Diagnostic {
+					variant: DiagnosticVariant::UnsupportedOperation,
+					message: format!("node '{}' has no name field for rename", node.kind()),
+					span: None,
+				})?;
+			// op_to_code_buffer_action puts the new name in "content" for rename
+			let new_name = action_json.get("content").and_then(|v| v.as_str())
+				.or_else(|| action_json.get("newName").and_then(|v| v.as_str()))
+				.unwrap_or("");
+			(name_node.start_byte()..name_node.end_byte(), new_name.to_string())
+		} else if kind == "delete" {
+			let range = self.scope_byte_range(&source, *node, qualifier_name)?;
+			(range, String::new())
+		} else {
+			let range = self.scope_byte_range(&source, *node, qualifier_name)?;
+			let content = self.resolve_content(action_json, kind, *node, &source)?;
+			(range, content)
+		};
+
+		let edit = TextEdit {
+			start_byte:   byte_range.start,
+			old_end_byte: byte_range.end,
+			new_text:     content,
+		};
+
+		let target_id = format!("{}::{}", file_path.display(), render_code_path(target, &DummyLexer).replace(" :: ", "::"));
+		Ok((file_path, edit, target_id))
+	}
+
+	/// Compute the scoped byte range for a resolved node.
+	fn scope_byte_range(
+		&self,
+		_source: &str,
+		node: tree_sitter::Node<'_>,
+		qualifier: Option<&str>,
+	) -> Result<std::ops::Range<usize>, Diagnostic> {
+		match qualifier {
+			Some("body") => {
+				let body = node.child_by_field_name("body")
+					.or_else(|| node.child_by_field_name("do_block"))
+					.ok_or_else(|| Diagnostic {
+						variant: DiagnosticVariant::UnsupportedOperation,
+						message: format!("node '{}' has no body field", node.kind()),
+						span: None,
+					})?;
+				Ok(body.start_byte()..body.end_byte())
+			}
+			Some("sig") => {
+				let body = node.child_by_field_name("body")
+					.or_else(|| node.child_by_field_name("do_block"))
+					.ok_or_else(|| Diagnostic {
+						variant: DiagnosticVariant::UnsupportedOperation,
+						message: format!("node '{}' has no body field for $SIG", node.kind()),
+						span: None,
+					})?;
+				Ok(node.start_byte()..body.start_byte())
+			}
+			_ => Ok(node.start_byte()..node.end_byte()),
+		}
+	}
+
+	/// Build the content string for the edit, expanding template variables
+	/// if the content contains $VARS placeholders.
+	fn resolve_content(
+		&self,
+		action_json: &Value,
+		kind: &str,
+		node: tree_sitter::Node<'_>,
+		source: &str,
+	) -> Result<String, Diagnostic> {
+		let raw_content = action_json.get("content").and_then(|v| v.as_str());
+		match raw_content {
+			Some(c) if c.contains('$') => {
+				expand_template(c, node, source).map_err(|e| Diagnostic {
+					variant: DiagnosticVariant::ParseError,
+					message: e.message,
+					span: None,
+				})
+			}
+			Some(c) => Ok(c.to_string()),
+			None if kind == "rename" => {
+				Ok(action_json.get("newName").and_then(|v| v.as_str()).unwrap_or("").to_string())
+			}
+			None if kind == "delete" => Ok(String::new()),
+			None => Err(Diagnostic {
+				variant: DiagnosticVariant::ParseError,
+				message: "edit action requires content or newName".into(),
+				span: None,
+			}),
+		}
+	}
+
+	/// Derive the filesystem path from a CodePath's FsLocator.
+	fn codepath_fs_path(&self, target: &CodePath) -> Result<PathBuf, Diagnostic> {
+		let target_id = build_target_id(target, self.root.as_deref())?;
+		let (file_part, _) = target_id.split_once("::").unwrap_or((&target_id, ""));
+		let path = std::path::Path::new(file_part);
+		Ok(if path.is_absolute() {
+			path.to_path_buf()
+		} else {
+			self.root.as_deref().unwrap_or(std::path::Path::new(".")).join(path)
+		})
+	}
 	/// Shared helper for code_buffer-based mutations.
 	///
-	/// Wave 2: extracted from old `apply` to enable reuse by CssResolver
-	/// and HeadingResolver.
+	/// Uses the new CodePath resolver path (resolve_mutation_edit) for
+	/// symbol-scoped ops; falls back to the legacy single_action path
+	/// for ops that don't have a query.
 	pub(crate) fn apply_to_buffer(
 		&self,
 		buffer: &mut pi_code_engine::buffer::CodeBuffer,
 		target: &CodePath,
 		action_json: &Value,
 	) -> Result<MutationOutcome, Diagnostic> {
+		// Symbol-scoped ops with a query: use the new resolver path
+		// for the core 3 verbs (replace, rename, delete) when the file
+		// has a code dialect. Languages without a dialect (HTML, CSS,
+		// Markdown) and ops other than these 3 stay on the legacy path.
+		let kind = action_json.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+		let use_builder = matches!(kind, "write" | "rename" | "delete");
+		// Check if the file is a code language (has a dialect).
+		// Non-code languages (HTML/CSS/MD/Org) use the legacy path.
+		let is_code_lang = match &target.locator {
+			pi_code_path::ast::Locator::Fs(fs) => {
+				fs.segments.last().and_then(|seg| {
+					if let pi_code_path::ast::FsSegment::Literal(s) = seg {
+						let ext = std::path::Path::new(s).extension()?.to_str()?;
+						Some(!matches!(ext, "html" | "htm" | "css" | "scss" | "less" | "md" | "markdown" | "org"))
+					} else { None }
+				}).unwrap_or(true)
+			}
+			_ => true,
+		};
+		if target.query.is_some() && use_builder && is_code_lang {
+			let (_path, edit, target_id) = self.resolve_mutation_edit(target, action_json)?;
+			buffer.edit_batch(vec![edit]).map_err(|e| Diagnostic {
+				variant: DiagnosticVariant::UnsupportedOperation,
+				message: edit_err_message(&e),
+				span: None,
+			})?;
+			return Ok(MutationOutcome {
+				edit_count:     1,
+				diff:           None,
+				created:        false,
+				target_summary: Some(target_id),
+			});
+		}
+
+		// Legacy path for non-symbol ops (FileCreate, FileWrite, etc.)
 		let target_id = build_target_id(target, self.root.as_deref())?;
 		let path = buffer.path().ok_or_else(|| Diagnostic {
 			variant: DiagnosticVariant::IncompatibleTargetShape,
@@ -344,7 +564,9 @@ impl CodeResolverImpl {
 		target: &CodePath,
 		action_json: &Value,
 	) -> Result<MutationOutcome, Diagnostic> {
-		let target_id = build_target_id(target, self.root.as_deref())?;
+		// Build target_id but skip qualifier rejection — apply_to_buffer
+		// handles qualifiers in the builder path when applicable.
+		let target_id = build_target_id_allow_qualifiers(target, self.root.as_deref())?;
 		let (file_part, _) = target_id.split_once("::").unwrap_or((&target_id, ""));
 		let path = std::path::Path::new(file_part);
 		let path = if path.is_absolute() {

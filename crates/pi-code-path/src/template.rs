@@ -331,7 +331,7 @@ fn expand_named(
 /// - C-like: `{ ... }` → strip first `{` and last `}`
 /// - Elixir: `do ... end` → strip `do` prefix and `end` suffix
 /// - Python: indented block → already just statements
-fn strip_body_delimiters<'a>(body_node: Node<'_>, body_text: &'a str) -> &'a str {
+pub fn strip_body_delimiters<'a>(body_node: Node<'_>, body_text: &'a str) -> &'a str {
 	let text = body_text.trim();
 	let kind = body_node.kind();
 
