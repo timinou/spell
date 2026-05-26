@@ -1,0 +1,108 @@
+#+TITLE: pi-code-graph-semantic-backend-layer--pl
+
+** ITEM pi-code-graph semantic backend layer (PLAN-319)
+
+## What
+
+`pi-code-graph::semantic` — configurable LSP-backed layer for the type-inference
+capabilities that tree-sitter can't statically compute. Hides LSP servers behind
+a `SemanticBackend` trait so the agent's `find`/`edit`/`get`/`create` surface
+stays unified.
+
+## Architecture
+
+```
+agent calls find { ::Sym #hover_inferred }
+  ↓
+pi-natives::code_path::type_resolver::dispatch
+  ↓  picks workspace's CompositeSemanticBackend (file-ext routing)
+  ↓
+pi-code-graph::semantic::SemanticBackend trait
+  ↓
+either:
+  • AnnotationSemanticBackend (reads SymbolNode::detail, written sigs)
+  • LspSemanticBackend (spawns expert/vtsls/rust-analyzer/etc., JSON-RPC)
+```
+
+## Components (PLAN-319 W0-W3 deliverables)
+
+| Wave | Component | Crate | LOC |
+|------|-----------|-------|-----|
+| W0 | BM25 incremental API (add/remove/upsert/compact + I1-I10 invariants) | pi-knowledge-core::bm25 | +~250 |
+| W0 | `pi-code-graph::search.rs` deleted (was a near-duplicate of bm25) | pi-code-graph | -252 |
+| W0 | `bm25_adapter` (graph-aware wrapper, doc_id = node_index.to_string()) | pi-code-graph | +200 |
+| W0 | `SemanticBackend` trait + `AnnotationSemanticBackend` + `CompositeSemanticBackend` | pi-code-graph::semantic | +700 |
+| W1 | LSP JSON-RPC client (sync, Content-Length frames, 50MB cap) | pi-code-graph::semantic::lsp::client | 600 |
+| W1 | Per-server LRU registry (workspace-root key normalisation) | pi-code-graph::semantic::lsp::registry | 290 |
+| W1 | Buffer sync (didOpen/didChange/didSave/didClose with version tracking) | pi-code-graph::semantic::lsp::sync | 200 |
+| W1 | LspSemanticBackend (hover / typeDef / refs / signature / inlay / rename / diagnostics) | pi-code-graph::semantic::lsp::backend | 500 |
+| W2 | KDL config parser + layered loader (project > user > defaults) | pi-code-graph::semantic::config | 650 |
+| W2 | `defaults.kdl` with Expert wired for Elixir | pi-code-graph::semantic | 37 |
+| W3 | type_resolver dispatch (qualifier + predicate handling) | pi-natives::code_path::type_resolver | 540 |
+| W3 | Parser round-trip tests for new qualifiers (no AST changes needed) | pi-code-path | +3 tests |
+
+Total: ~4200 LOC new + ~250 LOC deleted.
+
+## Design rules
+
+1. **Tree-sitter for static, LSP for type inference.** All lexical work
+   (def→/ref→/call→/import→/implements→/inherits→/dispatches→/#hover-written
+   /§symbols) stays in pi-code-graph. LSP only fills genuine type-inference
+   gaps (#hover_inferred / #type_definition / [type_aware] / #diagnostics /
+   #signature / #inlay).
+2. **Synchronous LSP client.** The SemanticBackend trait is sync. An async
+   client would force `block_on` everywhere and force tokio into a crate
+   that doesn't need it.
+3. **One BM25.** pi-knowledge-core::bm25 is the home; pi-code-graph and
+   pi-org-engine consume it. No tantivy/fst/mmap proliferation.
+4. **One umbrella config.** All pi-code-graph options (cache + BM25 + LSP
+   wiring) live under a single `semantic {}` KDL block.
+5. **Coordinates: 1-indexed line+col throughout.** Matches SymbolNode.
+   LSP conversion happens AT the LSP boundary (semantic_to_lsp_position).
+6. **Capability honesty.** `derive_capabilities` from LSP initialize result
+   must not claim narrow_dispatch=true if LspSemanticBackend uses the
+   default trait impl (W1g P1 fix).
+7. **Layered config = Some-wins merge.** Scalars are Option<T>; merge
+   takes higher.or(lower); load_layered resolves any still-None to
+   compile-time defaults at the end (W2g P1 fix).
+
+## Reviewer wave catches (cumulative)
+
+| Wave | P0 | P1 | P2 | P3 |
+|------|----|----|----|----|
+| W0r | 0 | 2 (col-aware symbol_at, missing trait methods) | 6 | 3 |
+| W1r | 0 | 3 (registry key, capability lies, document_changes) | 5 | 2 |
+| W2r | 0 | 1 (merge clobbers scalars) | 2 | 2 |
+| W3r | 0 | 1 (source=both stub) | 1 | 1 |
+| **total** | **0** | **7** | **14** | **8** |
+
+All P1s fixed in gap waves; most P2s addressed.
+
+## Sequenced after PLAN-319
+
+- FUP-094: multi-language LSP wiring batches (vtsls, rust-analyzer, pyrefly,
+  vscode-html-language-server, vscode-css-language-server, gopls, clangd,
+  ruby-lsp, sourcekit-lsp, kotlin-lsp, lua-language-server, nixd, hls,
+  jdtls, clojure-lsp).
+- FUP-095: hard-delete packages/coding-agent/src/lsp/ (gated on FUP-094
+  having TS + Rust + Python coverage).
+- FUP-090: type-aware references — partly delivered via [type_aware]
+  predicate wiring in W3; full polymorphic narrowing depends on FUP-094.
+- FUP-091: inferred-type hover — delivered as #hover_inferred qualifier.
+- FUP-092: watcher → cache invalidation — absorbed by W1 buffer-sync.
+
+## Verification
+
+Final: 12 commits on branch plan-319-semantic-backend; ~150 new tests
+across pi-knowledge-core / pi-code-graph / pi-natives / pi-code-path.
+Reviewer wave coverage: 4 (one per wave). 0 P0s ever.
+:PROPERTIES:
+:CUSTOM_ID: CON-pi-code-graph-semantic-backend-layer--pl
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-26T12:31:41Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: PLAN-319-semanticbackend-foundation-expert-lsp-pi
+DISTILLED_FROM: PLAN-318-find-edit-affordance-hardening-productio
+:END:
