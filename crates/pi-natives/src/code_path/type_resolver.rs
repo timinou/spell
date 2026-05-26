@@ -3,7 +3,7 @@
 //! Routes the PLAN-319 W3 qualifiers to [`pi_code_graph::SemanticBackend`]:
 //!
 //! - `#hover_inferred` → `backend.type_at(file, line, col)`
-//! - `#type_definition` → `backend.type_definition_of(file, line, col)`
+//! - `#type_definition` (alias `#type_def`) → `backend.type_definition_of(file, line, col)`
 //! - `#signature` → `backend.signature_at(file, line, col)`
 //! - `#inlay` → `backend.inlay_hints(file, range)`
 //! - `#diagnostics` → `backend.diagnostics(file)` filtered by
@@ -16,10 +16,14 @@
 //!
 //! - `source=semantic` (default for these qualifiers) — only the
 //!   SemanticBackend is consulted.
-//! - `source=graph` — no SemanticBackend call; the qualifier reverts to
-//!   its tree-sitter counterpart (e.g. `#hover` for `#hover_inferred`).
-//! - `source=both` — both consulted; the SemanticBackend answer wins on
-//!   conflict, with the graph answer surfaced as a secondary chunk.
+//! - `source=graph` — [`dispatch`] returns
+//!   [`TypeResolverOutcome::RedirectedToGraph`] so the caller can route
+//!   to the tree-sitter analog (e.g. `#hover` for `#hover_inferred`).
+//! - `source=both` — SemanticBackend is consulted AND the caller is told
+//!   to ALSO query the graph-side analog. The dispatcher returns the
+//!   semantic result wrapped in a flag indicating both should be merged
+//!   by the caller (which holds the graph resolvers). The merge policy
+//!   — semantic wins on conflict — lives outside this module.
 //!
 //! This module is the SEAM between the agent-facing CodePath grammar and
 //! the LSP-or-Annotation backend layer. It deliberately knows nothing
@@ -41,8 +45,9 @@ use pi_code_path::ast::{Predicate, Qualifier};
 pub enum TypeResolverOutcome {
 	/// `#hover_inferred` — `InferResult` for a position.
 	Hover(InferResult),
-	/// `#type_definition` — the declaration-site of the type of the
-	/// symbol at `(file, line, col)`. `None` when unresolvable.
+	/// `#type_definition` (or its alias `#type_def`) — the declaration-site
+	/// of the type of the symbol at `(file, line, col)`. `None` when
+	/// unresolvable.
 	TypeDefinition(Option<SemanticLocation>),
 	/// `#signature` — signature help at a call site.
 	Signature(Option<SignatureInfo>),
@@ -51,9 +56,21 @@ pub enum TypeResolverOutcome {
 	/// `#diagnostics` — push-cached diagnostics for the file, filtered
 	/// by `[severity=…]` if present.
 	Diagnostics(Vec<SemanticDiagnostic>),
-	/// The qualifier name is unknown to this resolver — caller falls
-	/// back to the lexical/tree-sitter path.
+	/// The qualifier name was unknown to this resolver. Caller falls back
+	/// to the lexical / tree-sitter path with no special handling.
 	NotASemanticQualifier,
+	/// W3g (P2 fix): the qualifier IS semantic but `[source=graph]` was
+	/// requested. Caller should run the tree-sitter analog of this
+	/// qualifier (e.g. `#hover` for `#hover_inferred`). The variant carries
+	/// the *original* semantic qualifier name so the caller can pick the
+	/// right analog.
+	RedirectedToGraph { semantic_qualifier: String },
+	/// W3g (P1 disclosure): `[source=both]` was requested. The semantic
+	/// answer is included; the caller MUST also run the tree-sitter analog
+	/// and merge results (semantic wins on conflict). Wraps the semantic
+	/// outcome plus the original qualifier name so the caller knows what
+	/// to merge with.
+	BothMerged { semantic: Box<TypeResolverOutcome>, semantic_qualifier: String },
 }
 
 /// Map of qualifier name → recogniser. Public so call sites can ask
@@ -134,12 +151,22 @@ pub fn dispatch(
 ) -> TypeResolverOutcome {
 	let sp = SemanticPredicates::extract(predicates);
 
-	// `[source=graph]` short-circuits: caller's tree-sitter path handles it.
-	if matches!(sp.source, SourceSelector::Graph) {
+	// Unknown qualifier first — short-circuit before any backend or source
+	// reasoning so 'source=graph + unknown_qualifier' doesn't get mislabelled
+	// as a graph-redirect.
+	if !is_semantic_qualifier(&qualifier.name) {
 		return TypeResolverOutcome::NotASemanticQualifier;
 	}
 
-	match qualifier.name.as_str() {
+	// `[source=graph]` short-circuit: surface the qualifier name so the
+	// caller can pick the right tree-sitter analog (W3g P2 fix).
+	if matches!(sp.source, SourceSelector::Graph) {
+		return TypeResolverOutcome::RedirectedToGraph {
+			semantic_qualifier: qualifier.name.clone(),
+		};
+	}
+
+	let semantic = match qualifier.name.as_str() {
 		"hover_inferred" => TypeResolverOutcome::Hover(backend.type_at(file, line, col)),
 		"type_definition" | "type_def" => {
 			TypeResolverOutcome::TypeDefinition(backend.type_definition_of(file, line, col))
@@ -156,8 +183,19 @@ pub fn dispatch(
 			}
 			TypeResolverOutcome::Diagnostics(diags)
 		},
-		_ => TypeResolverOutcome::NotASemanticQualifier,
+		_ => unreachable!("is_semantic_qualifier admits exactly these names"),
+	};
+
+	// W3g (P1 fix): `[source=both]` wraps the semantic outcome so the
+	// caller knows to also run the tree-sitter analog and merge results.
+	if matches!(sp.source, SourceSelector::Both) {
+		return TypeResolverOutcome::BothMerged {
+			semantic: Box::new(semantic),
+			semantic_qualifier: qualifier.name.clone(),
+		};
 	}
+
+	semantic
 }
 
 /// Test whether the `[type_aware]` flag is present in a predicate set.
@@ -238,6 +276,15 @@ pub fn outcome_to_summary(outcome: &TypeResolverOutcome) -> String {
 			out
 		},
 		TypeResolverOutcome::NotASemanticQualifier => String::new(),
+		TypeResolverOutcome::RedirectedToGraph { semantic_qualifier } => {
+			format!("<redirected to graph: #{semantic_qualifier}>")
+		},
+		TypeResolverOutcome::BothMerged { semantic, semantic_qualifier } => {
+			format!(
+				"{}\n<also query graph analog of #{semantic_qualifier}>",
+				outcome_to_summary(semantic)
+			)
+		},
 	}
 }
 
@@ -384,11 +431,51 @@ mod tests {
 	}
 
 	#[test]
-	fn dispatch_source_graph_short_circuits_to_lexical_fallback() {
+	fn dispatch_source_graph_returns_redirected_carrying_qualifier_name() {
+		// W3g (P2) regression: distinguishes 'redirected to graph' from
+		// 'unknown qualifier'. Caller needs the semantic-qualifier name to
+		// pick the right tree-sitter analog.
 		let stub = StubBackend::new();
 		let preds = vec![Predicate::Attribute { name: "source".into(), value: "graph".into() }];
 		let out = dispatch(&stub, &qual("hover_inferred"), &preds, &file(), 1, 1);
+		match out {
+			TypeResolverOutcome::RedirectedToGraph { semantic_qualifier } => {
+				assert_eq!(semantic_qualifier, "hover_inferred");
+			},
+			other => panic!("expected RedirectedToGraph, got {other:?}"),
+		}
+	}
+
+	/// W3g (P2) regression: unknown qualifier returns the original
+	/// NotASemanticQualifier variant, NOT RedirectedToGraph, regardless of
+	/// the [source=...] predicate.
+	#[test]
+	fn dispatch_unknown_qualifier_with_source_graph_is_not_redirect() {
+		let stub = StubBackend::new();
+		let preds = vec![Predicate::Attribute { name: "source".into(), value: "graph".into() }];
+		let out = dispatch(&stub, &qual("body"), &preds, &file(), 1, 1);
 		assert_eq!(out, TypeResolverOutcome::NotASemanticQualifier);
+	}
+
+	/// W3g (P1) regression: `[source=both]` wraps the semantic outcome
+	/// in BothMerged so the caller knows to also run the graph analog.
+	#[test]
+	fn dispatch_source_both_wraps_semantic_outcome_for_merge() {
+		let stub = StubBackend::new();
+		let preds = vec![Predicate::Attribute { name: "source".into(), value: "both".into() }];
+		let out = dispatch(&stub, &qual("hover_inferred"), &preds, &file(), 1, 1);
+		match out {
+			TypeResolverOutcome::BothMerged { semantic, semantic_qualifier } => {
+				assert_eq!(semantic_qualifier, "hover_inferred");
+				match *semantic {
+					TypeResolverOutcome::Hover(infer) => {
+						assert_eq!(infer.repr.as_str(), "Foo");
+					},
+					other => panic!("expected Hover inside BothMerged, got {other:?}"),
+				}
+			},
+			other => panic!("expected BothMerged, got {other:?}"),
+		}
 	}
 
 	#[test]
