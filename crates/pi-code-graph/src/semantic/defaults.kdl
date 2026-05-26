@@ -14,9 +14,27 @@ semantic {
     // Per-language wiring. Tree-sitter extractors are always on (no toggle);
     // an optional `lsp "<name>"` reference enables type-inference for that
     // language via the SemanticBackend layer.
+    //
+    // FUP-094: 17 languages out of the box. Adding a new language is one
+    // KDL stanza here + one `server "<name>"` block below. Zero Rust code
+    // changes.
     language "elixir"     { lsp "expert" }
     language "rust"       { lsp "rust-analyzer" }
     language "typescript" { lsp "typescript-language-server" }
+    language "python"     { lsp "pyright-langserver" }
+    language "go"         { lsp "gopls" }
+    language "ruby"       { lsp "ruby-lsp" }
+    language "css"        { lsp "vscode-css-language-server" }
+    language "html"       { lsp "vscode-html-language-server" }
+    language "c"          { lsp "clangd" }
+    language "cpp"        { lsp "clangd" }
+    language "swift"      { lsp "sourcekit-lsp" }
+    language "kotlin"     { lsp "kotlin-language-server" }
+    language "lua"        { lsp "lua-language-server" }
+    language "nix"        { lsp "nil" }
+    language "haskell"    { lsp "haskell-language-server-wrapper" }
+    language "java"       { lsp "jdtls" }
+    language "clojure"    { lsp "clojure-lsp" }
     // Catch-all: no LSP, AnnotationSemanticBackend only.
     language "*" { }
 
@@ -54,6 +72,136 @@ semantic {
         request-timeout-secs 10
 
         install-hint "Install via: npm install -g typescript-language-server typescript"
+    }
+
+    // ── FUP-094 batch 1: Python ──────────────────────────────────
+
+    server "pyright-langserver" {
+        command "pyright-langserver"
+        args "--stdio"
+        file-types ".py" ".pyi"
+        root-markers "pyproject.toml" "setup.py" "setup.cfg" "requirements.txt" "Pipfile" "poetry.lock"
+        request-timeout-secs 10
+
+        install-hint "Install via: npm install -g pyright"
+    }
+
+    // ── FUP-094 batch 2: Go, Ruby, CSS, HTML ─────────────────────
+
+    server "gopls" {
+        command "gopls"
+        file-types ".go"
+        root-markers "go.mod" "go.sum"
+        request-timeout-secs 10
+
+        install-hint "Install via: go install golang.org/x/tools/gopls@latest"
+    }
+
+    server "ruby-lsp" {
+        command "ruby-lsp"
+        file-types ".rb" ".rake" ".gemspec"
+        root-markers "Gemfile" "Gemfile.lock" ".ruby-version"
+        request-timeout-secs 10
+
+        install-hint "Install via: gem install ruby-lsp"
+    }
+
+    server "vscode-css-language-server" {
+        command "vscode-css-language-server"
+        args "--stdio"
+        file-types ".css" ".scss" ".sass" ".less"
+        root-markers "package.json"
+        request-timeout-secs 10
+
+        install-hint "Install via: npm install -g vscode-langservers-extracted"
+    }
+
+    server "vscode-html-language-server" {
+        command "vscode-html-language-server"
+        args "--stdio"
+        file-types ".html" ".htm" ".xhtml"
+        root-markers "package.json"
+        request-timeout-secs 10
+
+        install-hint "Install via: npm install -g vscode-langservers-extracted"
+    }
+
+    // ── FUP-094 batch 3: C, C++, Swift, Kotlin ───────────────────
+
+    server "clangd" {
+        command "clangd"
+        args "--background-index"
+        file-types ".c" ".h" ".cc" ".cpp" ".cxx" ".hpp" ".hxx" ".m" ".mm"
+        root-markers "compile_commands.json" ".clangd" "CMakeLists.txt" "Makefile" "meson.build"
+        request-timeout-secs 15
+
+        install-hint "Install via: apt install clangd / brew install llvm / pacman -S clang"
+    }
+
+    server "sourcekit-lsp" {
+        command "sourcekit-lsp"
+        file-types ".swift"
+        root-markers "Package.swift" ".xcodeproj" ".xcworkspace"
+        request-timeout-secs 15
+
+        install-hint "Ships with Swift toolchain: https://swift.org/install"
+    }
+
+    server "kotlin-language-server" {
+        command "kotlin-language-server"
+        file-types ".kt" ".kts"
+        root-markers "build.gradle" "build.gradle.kts" "pom.xml" "settings.gradle" "settings.gradle.kts"
+        request-timeout-secs 15
+
+        install-hint "Install via: https://github.com/fwcd/kotlin-language-server"
+    }
+
+    // ── FUP-094 batch 4: Lua, Nix, Haskell, Java, Clojure ────────
+
+    server "lua-language-server" {
+        command "lua-language-server"
+        file-types ".lua"
+        root-markers ".luarc.json" ".luarc.jsonc" "stylua.toml" "selene.toml" "selene.yml"
+        request-timeout-secs 10
+
+        install-hint "Install via: brew install lua-language-server / cargo install lua-language-server"
+    }
+
+    server "nil" {
+        command "nil"
+        file-types ".nix"
+        root-markers "flake.nix" "default.nix" "shell.nix"
+        request-timeout-secs 10
+
+        install-hint "Install via: nix profile install github:oxalica/nil"
+    }
+
+    server "haskell-language-server-wrapper" {
+        command "haskell-language-server-wrapper"
+        args "--lsp"
+        file-types ".hs" ".lhs"
+        root-markers "cabal.project" "stack.yaml" "hie.yaml" "package.yaml"
+        request-timeout-secs 30
+
+        install-hint "Install via: ghcup install hls"
+    }
+
+    server "jdtls" {
+        command "jdtls"
+        file-types ".java"
+        root-markers "pom.xml" "build.gradle" "build.gradle.kts" "settings.gradle" ".project"
+        request-timeout-secs 30
+
+        install-hint "Install via: brew install jdtls / https://github.com/eclipse-jdtls/eclipse.jdt.ls"
+    }
+
+    server "clojure-lsp" {
+        command "clojure-lsp"
+        file-types ".clj" ".cljs" ".cljc" ".edn"
+        root-markers "deps.edn" "project.clj" "shadow-cljs.edn" "bb.edn"
+        request-timeout-secs 15
+
+        install-hint "Install via: brew install clojure-lsp/brew/clojure-lsp-native"
     }
 }
 

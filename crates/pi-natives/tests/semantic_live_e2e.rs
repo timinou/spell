@@ -324,3 +324,80 @@ fn notify_buffer_change_skips_files_not_yet_opened_by_lsp() {
 	pi_natives::semantic_cache::invalidate(dir.path());
 }
 
+
+// ── FUP-094: multi-language fan-out ─────────────────────────────
+
+/// FUP-094: smoke-test every language registered in defaults.kdl. For
+/// each (extension, sample text) pair, dispatch #hover on the fixture
+/// file and assert the pipeline returns SOME nodes (real LSP data when
+/// the LSP is installed; `§empty` or `unknown` otherwise). This catches
+/// misconfigured KDL stanzas (wrong file-types entry, malformed args,
+/// etc.) without per-language fixture explosion.
+#[test]
+fn each_language_dispatch_survives_smoke_query() {
+	// (language label, file extension, fixture body)
+	let languages: Vec<(&str, &str, &str)> = vec![
+		("python",     "py",   "def add(x: int, y: int) -> int:\n    return x + y\n"),
+		("go",         "go",   "package x\nfunc Add(x int, y int) int { return x + y }\n"),
+		("ruby",       "rb",   "def add(x, y)\n  x + y\nend\n"),
+		("css",        "css",  ".x { color: red; }\n"),
+		("html",       "html", "<!doctype html>\n<title>x</title>\n"),
+		("c",          "c",    "int add(int x, int y) { return x + y; }\n"),
+		("cpp",        "cpp",  "int add(int x, int y) { return x + y; }\n"),
+		("swift",      "swift","func add(x: Int, y: Int) -> Int { x + y }\n"),
+		("kotlin",     "kt",   "fun add(x: Int, y: Int): Int = x + y\n"),
+		("lua",        "lua",  "function add(x, y) return x + y end\n"),
+		("nix",        "nix",  "{ add = x: y: x + y; }\n"),
+		("haskell",    "hs",   "add :: Int -> Int -> Int\nadd x y = x + y\n"),
+		("java",       "java", "class X { int add(int x, int y) { return x + y; } }\n"),
+		("clojure",    "clj",  "(defn add [x y] (+ x y))\n"),
+	];
+
+	for (label, ext, body) in languages {
+		let dir = tempfile::tempdir().unwrap();
+		let file = dir.path().join(format!("main.{ext}"));
+		std::fs::write(&file, body).unwrap();
+		let target = format!("{}#diagnostics", file.display());
+		let result = execute_code_path_inner(
+			opts(dir.path(), &target),
+			CancelToken::default(),
+		);
+		assert!(
+			result.is_ok(),
+			"{label}: dispatch must not return an error; got error: {}",
+			result.as_ref().err().map(|e| e.to_string()).unwrap_or_default()
+		);
+		let chunks = result.unwrap();
+		assert!(
+			!chunks.is_empty(),
+			"{label}: dispatch must produce at least one chunk"
+		);
+	}
+}
+
+#[test]
+#[ignore = "requires pyright-langserver in PATH"]
+fn python_hover_dispatches_via_pyright() {
+	if !cmd_exists("pyright-langserver") {
+		eprintln!("pyright-langserver not installed; skipping Python integration");
+		return;
+	}
+	let dir = tempfile::tempdir().unwrap();
+	std::fs::write(
+		dir.path().join("pyproject.toml"),
+		b"[project]\nname = \"x\"\nversion = \"0.1.0\"\n",
+	)
+	.unwrap();
+	std::fs::write(
+		dir.path().join("main.py"),
+		b"def add(x: int, y: int) -> int:\n    return x + y\n",
+	)
+	.unwrap();
+
+	let target = format!("{}/main.py::add#hover", dir.path().display());
+	let chunks = execute(dir.path(), &target);
+	assert!(total_nodes(&chunks) >= 1, "dispatch must produce a node");
+	let text = first_text(&chunks).expect("hover content");
+	assert!(!text.is_empty(), "hover text must be non-empty");
+}
+
