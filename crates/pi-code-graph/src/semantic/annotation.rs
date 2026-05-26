@@ -21,7 +21,7 @@
 //!   `LspSemanticBackend`.
 
 use std::{
-	path::Path,
+	path::{Path, PathBuf},
 	sync::Arc,
 };
 
@@ -32,14 +32,31 @@ use crate::{
 
 /// Default backend: reads written signatures from `SymbolNode::detail`.
 /// Holds an `Arc<CodeGraph>` so multiple call sites share one snapshot.
+///
+/// `workspace_root`, when set, lets [`file_matches`] strip the workspace
+/// prefix from absolute query paths before comparing against the
+/// graph's relative `SymbolNode::file`. Without this, a query for
+/// `/abs/path/to/ws/src/foo.rs` never matches the graph's
+/// `src/foo.rs` entry (since `fs::canonicalize` runs against CWD, not
+/// against the workspace).
 #[derive(Debug, Clone)]
 pub struct AnnotationSemanticBackend {
-	graph: Arc<CodeGraph>,
+	graph:          Arc<CodeGraph>,
+	workspace_root: Option<PathBuf>,
 }
 
 impl AnnotationSemanticBackend {
 	pub fn new(graph: Arc<CodeGraph>) -> Self {
-		Self { graph }
+		Self { graph, workspace_root: None }
+	}
+
+	/// FUP-099: attach a workspace root so absolute query paths can be
+	/// stripped to relative form before matching against the graph's
+	/// `SymbolNode::file` (which the indexer stores relative to the
+	/// workspace per `indexer.rs:123`).
+	pub fn with_workspace_root(mut self, root: impl Into<PathBuf>) -> Self {
+		self.workspace_root = Some(root.into());
+		self
 	}
 
 	/// Walk the graph for a Symbol node whose file matches `(line, col)`.
@@ -56,6 +73,14 @@ impl AnnotationSemanticBackend {
 	///
 	/// `O(N)` over the graph node set; can be indexed later.
 	fn symbol_at(&self, file: &Path, line: u32, col: u32) -> Option<&SymbolNode> {
+		// FUP-099: try the workspace-relative form first if the backend
+		// was given a root. Absolute query paths (typical when callers
+		// pass `root.join(rel)`) won't match the graph's relative
+		// `SymbolNode::file` entries any other way.
+		let relative_query: Option<&Path> = self
+			.workspace_root
+			.as_deref()
+			.and_then(|root| file.strip_prefix(root).ok());
 		let canonical_query = canonicalise_path(file);
 		let mut exact_line: Option<&SymbolNode> = None;
 		let mut exact_line_col_distance: u32 = u32::MAX;
@@ -63,7 +88,7 @@ impl AnnotationSemanticBackend {
 		let mut best_line_distance: u32 = u32::MAX;
 		for node in self.graph.graph().node_weights() {
 			let GraphNode::Symbol(sym) = node else { continue };
-			if !file_matches(&sym.file, file, canonical_query.as_deref()) {
+			if !file_matches(&sym.file, file, canonical_query.as_deref(), relative_query) {
 				continue;
 			}
 			if sym.line == line {
@@ -93,9 +118,23 @@ impl AnnotationSemanticBackend {
 /// symlink, and trailing-slash variants. Failing canonicalisation falls
 /// through to the original mismatch (treats the file as not-our-target,
 /// which is the safe default).
-fn file_matches(sym_file: &Path, query_file: &Path, canonical_query: Option<&Path>) -> bool {
+fn file_matches(
+	sym_file: &Path,
+	query_file: &Path,
+	canonical_query: Option<&Path>,
+	relative_query: Option<&Path>,
+) -> bool {
 	if sym_file == query_file {
 		return true;
+	}
+	// FUP-099: workspace-relative match. The indexer stores
+	// `SymbolNode::file` as a path relative to the workspace root
+	// (`indexer.rs:123`); when the query path is absolute under that
+	// root, the prefix-stripped form matches directly.
+	if let Some(rel) = relative_query {
+		if sym_file == rel {
+			return true;
+		}
 	}
 	let Some(canonical_query) = canonical_query else {
 		return false;
@@ -105,6 +144,22 @@ fn file_matches(sym_file: &Path, query_file: &Path, canonical_query: Option<&Pat
 
 fn canonicalise_path(path: &Path) -> Option<std::path::PathBuf> {
 	std::fs::canonicalize(path).ok()
+}
+
+/// Strip a trailing body-opener token (`{`, `=>`, `;`) and any
+/// surrounding whitespace from a written signature snippet.
+///
+/// Extractors that capture text up to (and sometimes including) the
+/// body-start brace produce strings like `"fn foo() -> i32 {"`; the
+/// `#hover` contract wants only the signature.
+fn strip_body_opener(s: &str) -> &str {
+	let mut out = s.trim_end();
+	if out.ends_with('{') || out.ends_with(';') {
+		out = out[..out.len() - 1].trim_end();
+	} else if out.ends_with("=>") {
+		out = out[..out.len() - 2].trim_end();
+	}
+	out
 }
 
 impl SemanticBackend for AnnotationSemanticBackend {
@@ -119,7 +174,14 @@ impl SemanticBackend for AnnotationSemanticBackend {
 		let Some(detail) = sym.detail.as_deref() else {
 			return InferResult::unknown();
 		};
-		let trimmed = detail.trim();
+		// FUP-099: strip trailing body-opener tokens (`{`, `=>`, `;`) and
+		// surrounding whitespace. Some extractors include the body-start
+		// brace in their captured signature snippet (e.g.
+		// `EngineProfileExtractor::signature_snippet` returns text up to
+		// the body-start byte, which lands on or just after `{`). The
+		// `#hover` contract is "written signature", not signature + body
+		// opener.
+		let trimmed = strip_body_opener(detail.trim());
 		if trimmed.is_empty() {
 			return InferResult::unknown();
 		}
@@ -133,6 +195,44 @@ impl SemanticBackend for AnnotationSemanticBackend {
 	// `type_definition_of`, `signature_at`, `inlay_hints`,
 	// `narrow_dispatch`, `diagnostics` all inherit the default
 	// "unknown / empty" impls from the trait. Annotation can't answer.
+}
+
+#[cfg(test)]
+mod helper_tests {
+	use super::strip_body_opener;
+
+	#[test]
+	fn strips_trailing_brace() {
+		assert_eq!(strip_body_opener("fn foo() -> i32 {"), "fn foo() -> i32");
+	}
+
+	#[test]
+	fn strips_trailing_semicolon() {
+		assert_eq!(strip_body_opener("function abstractFoo(x: number): void;"), "function abstractFoo(x: number): void");
+	}
+
+	#[test]
+	fn strips_trailing_arrow() {
+		assert_eq!(strip_body_opener("const f = (x: number) =>"), "const f = (x: number)");
+	}
+
+	#[test]
+	fn leaves_signature_without_body_opener_intact() {
+		assert_eq!(strip_body_opener("function plain(x: number): void"), "function plain(x: number): void");
+	}
+
+	#[test]
+	fn trims_trailing_whitespace_only() {
+		// strip_body_opener's contract: trim_end only. Leading whitespace
+		// is the caller's responsibility (call sites pre-trim via
+		// `detail.trim()`).
+		assert_eq!(strip_body_opener("  fn foo()  "), "  fn foo()");
+	}
+
+	#[test]
+	fn returns_empty_for_just_brace() {
+		assert_eq!(strip_body_opener("{"), "");
+	}
 }
 
 #[cfg(test)]

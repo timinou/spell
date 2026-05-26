@@ -23,6 +23,7 @@ pub mod marshal;
 pub mod napi;
 pub mod runtime_schemes;
 pub mod scheme_callback;
+pub mod semantic_dispatch;
 pub mod type_resolver;
 pub mod uri;
 

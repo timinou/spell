@@ -86,6 +86,7 @@ pub mod code_buffer;
 pub mod code_graph;
 pub mod code_graph_cache;
 pub mod code_path;
+pub mod semantic_cache;
 // PLAN-315 W2: client-side transport to pi-knowledge-worker.
 // Promoted to `pub` so integration tests + future crates can reach
 // `capabilities()`, `knowledge_request()`, and the Capabilities type
