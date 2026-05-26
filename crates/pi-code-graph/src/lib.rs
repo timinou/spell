@@ -35,6 +35,7 @@ pub use query::{
 pub use bm25_adapter::SearchHit;
 pub use pi_knowledge_core::bm25::SearchIndex;
 pub use semantic::{
+	lsp::{LspClient, LspRegistry, LspSemanticBackend, ServerSpec},
 	AnnotationSemanticBackend, Capabilities as SemanticCapabilities, CompositeSemanticBackend,
 	Confidence, Diagnostic as SemanticDiagnostic, InferResult, InlayHint, InlayKind, LineRange,
 	Location as SemanticLocation, RenameError, SemanticBackend,
