@@ -312,30 +312,10 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		effectiveCwd: string,
 		_signal?: AbortSignal,
 	): Promise<AgentToolResult> {
-		// BUG-403: pre-flight existence check for mutating ops. The kernel
-		// happily opens a missing path as an empty buffer, then surfaces a
-		// misleading "find text not found" (BUG-402). Fail loud with the
-		// resolved path so the agent fixes the target, not the find string.
-		// Strip any ::Symbol suffix before the stat — symbol targets address
-		// declarations inside a file that itself must exist.
-		const sepIdx = targetPath.indexOf("::");
-		const filePart = sepIdx === -1 ? targetPath : targetPath.slice(0, sepIdx);
-		if (isMutatingKind(action.kind) && !(await fs.exists(filePart))) {
-			const rel = nodePath.relative(effectiveCwd, filePart) || filePart;
-			const result = toolResult<EditToolResultDetails>({
-				target: rel,
-				action: action.kind,
-				error: "file_not_found",
-			})
-				.text(
-					`File not found at resolved path: ${filePart}. ` +
-						`Verify the path with \`find\` or use \`{kind: "fileCreate"}\` to create it.`,
-				)
-				.done();
-			result.isError = true;
-			return result;
-		}
-		// Delegate structural ops to the unified executeCodePath edit surface.
+		// Delegate structural ops to the NAPI edit surface.
+		// The Rust layer (CodeBuffer::open / CodePath resolver) handles
+		// file existence checks with proper diagnostics — no need for a
+		// TS-layer pre-flight gate that duplicates this logic.
 		const chunks = await executeCodePath({
 			...sessionContextOpts(this.session ?? null),
 			command: "edit",
