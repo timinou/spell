@@ -42,6 +42,11 @@ function normalizeLines(value: string | string[] | null | undefined): string | u
 // Excludes fileCreate (creates the file) and the anchorless fileAppend /
 // filePrepend variants (those create on absence, handled separately).
 const MUTATING_KINDS = new Set([
+	// Unified 3-verb surface (PLAN-320)
+	"replace",
+	"rename",
+	"delete",
+	// Legacy OpKind taxonomy
 	"fileWrite",
 	"fileDelete",
 	"filePatch",
@@ -328,12 +333,16 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		const diagnostics = chunks.flatMap(c => c.diagnostics);
 		if (diagnostics.length > 0) {
 			const diag = diagnostics[0]!;
+			let text = diag.message;
+			if (diag.hint) {
+				text += `\n  = hint: ${diag.hint}`;
+			}
 			return toolResult<EditToolResultDetails>({
 				target: nodePath.relative(effectiveCwd, targetPath),
 				action: action.kind,
 				error: diag.variant,
 			})
-				.text(diag.message)
+				.text(text)
 				.done();
 		}
 

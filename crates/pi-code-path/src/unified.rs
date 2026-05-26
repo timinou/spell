@@ -18,10 +18,14 @@
 //! | CSS selector         | CssRename*              | error           | CssRemoveDeadStyle |
 //! | File (append/prepend) | FileAppend/FilePrepend  | error           | error              |
 
+use std::path::Path;
+
+
+use crate::dialect::NameLexer;
 use crate::{
-	ast::{ActionContent, CodePath, Locator},
+	ast::{ActionContent, CodePath, FsSegment, Locator},
 	op::{
-		FileTarget, Identifier, Op,
+		CssTarget, FileTarget, HeadingTarget, Identifier, Op,
 		SymScope, SymbolTarget,
 	},
 	types::{Diagnostic, DiagnosticVariant},
@@ -104,6 +108,35 @@ impl TargetShape {
 			(false, false, None) => TargetShape::File,
 			(false, false, _) => TargetShape::Unknown,
 		}
+	}
+}
+
+// ── Dialect-aware lexer ───────────────────────────────────────────
+
+/// Detect the NameLexer for a file path based on extension.
+pub fn lexer_for_path(path: &Path) -> Box<dyn NameLexer> {
+	match path.extension().and_then(|e| e.to_str()) {
+		Some("ts") | Some("tsx") | Some("mts") | Some("cts") =>
+			Box::new(crate::dialects::typescript::TsNameLexer),
+		Some("rs") =>
+			Box::new(crate::dialects::rust::RustNameLexer),
+		Some("py") | Some("pyi") =>
+			Box::new(crate::dialects::python::PyNameLexer),
+		Some("go") =>
+			Box::new(crate::dialects::go::GoNameLexer),
+		Some("ex") | Some("exs") | Some("heex") =>
+			Box::new(crate::dialects::elixir::ExNameLexer),
+		Some("hs") =>
+			Box::new(crate::dialects::haskell::HsNameLexer),
+		Some("html") | Some("htm") =>
+			Box::new(crate::dialects::html::HtmlNameLexer),
+		Some("css") | Some("scss") | Some("less") =>
+			Box::new(crate::dialects::css::CssNameLexer),
+		Some("md") | Some("markdown") =>
+			Box::new(crate::dialects::mdorg::MdNameLexer),
+		Some("org") =>
+			Box::new(crate::dialects::mdorg::MdNameLexer),
+		_ => Box::new(crate::dialects::typescript::TsNameLexer),
 	}
 }
 
@@ -226,6 +259,21 @@ fn dispatch_replace(
 				occurrence: None,
 			})
 		}
+		(TargetShape::Heading, None) => {
+			let target = HeadingTarget::new(cp.clone())?;
+			Ok(Op::HeadingReplaceBlock {
+				target,
+				content: content.clone(),
+			})
+		}
+		(TargetShape::Css, None) => {
+			let target = CssTarget::new(cp.clone())?;
+			Ok(Op::CssRenameClassToken {
+				target,
+				find: String::new(),
+				replace: content_to_string(content),
+			})
+		}
 		_ => Err(Diagnostic {
 			variant: DiagnosticVariant::IncompatibleTargetShape,
 			message: format!(
@@ -301,6 +349,15 @@ fn dispatch_delete(
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
+
+// ── Helpers ───────────────────────────────────────────────────────
+
+fn content_to_string(content: &ActionContent) -> String {
+	match content {
+		ActionContent::Single(s) => s.clone(),
+		ActionContent::Multi(v) => v.join("\n"),
+	}
+}
 
 // ── Tests ─────────────────────────────────────────────────────────
 
