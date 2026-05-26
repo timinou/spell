@@ -24,19 +24,36 @@ use crate::semantic::{
 /// `SemanticBackend` impl that routes through one [`LspClient`] instance.
 /// Held in an `Arc` for sharing across `CompositeSemanticBackend` slots.
 pub struct LspSemanticBackend {
-	client:    Arc<LspClient>,
-	caps:      Capabilities,
+	client:      Arc<LspClient>,
+	caps:        Capabilities,
+	/// FUP-100: the LSP `languageId` for didOpen, sourced from KDL
+	/// `language "<id>" { lsp "<server>" }` config. Falls back to
+	/// `"plaintext"` when constructed via the legacy ctor.
+	language_id: String,
 }
 
 impl LspSemanticBackend {
+	/// Legacy ctor — retained for tests that don't care about didOpen.
+	/// Uses `"plaintext"` as the language ID; the LSP may reject hover
+	/// requests for documents it considers untyped.
 	pub fn new(client: Arc<LspClient>) -> Self {
+		Self::with_language_id(client, "plaintext")
+	}
+
+	/// Construct with an explicit LSP `languageId`. Production callers go
+	/// via this path; the KDL config's `language` field is the source.
+	pub fn with_language_id(client: Arc<LspClient>, language_id: impl Into<String>) -> Self {
 		let lsp_caps = client.capabilities();
 		let caps = derive_capabilities(&lsp_caps);
-		Self { client, caps }
+		Self { client, caps, language_id: language_id.into() }
 	}
 
 	pub fn client(&self) -> &Arc<LspClient> {
 		&self.client
+	}
+
+	pub fn language_id(&self) -> &str {
+		&self.language_id
 	}
 
 	fn doc_position(&self, file: &Path, line: u32, col: u32) -> Option<TextDocumentPositionParams> {
@@ -45,6 +62,22 @@ impl LspSemanticBackend {
 			text_document: TextDocumentIdentifier { uri },
 			position:      semantic_to_lsp_position(line, col),
 		})
+	}
+
+	/// FUP-100: ensure the LSP has been told about `file` via
+	/// `textDocument/didOpen`. Reads file contents from disk on first
+	/// open; subsequent calls no-op (DocumentSync is idempotent). Buffer
+	/// edits update the LSP via `notify_buffer_change` from
+	/// `semantic_cache`, not via this method.
+	fn ensure_synced(&self, file: &Path) {
+		if self.client.is_open(file) {
+			return;
+		}
+		// Read from disk so the LSP at least sees the persisted text.
+		// Dirty-buffer state lands later via the code_buffer →
+		// notify_buffer_change channel.
+		let text = std::fs::read_to_string(file).unwrap_or_default();
+		self.client.ensure_opened(file, &self.language_id, &text);
 	}
 }
 
@@ -57,6 +90,7 @@ impl SemanticBackend for LspSemanticBackend {
 		if !self.caps.inferred_hover {
 			return InferResult::unknown();
 		}
+		self.ensure_synced(file);
 		let Some(params) = self.doc_position(file, line, col) else {
 			return InferResult::unknown();
 		};
@@ -79,6 +113,7 @@ impl SemanticBackend for LspSemanticBackend {
 		if !self.caps.type_definition {
 			return None;
 		}
+		self.ensure_synced(file);
 		let params = self.doc_position(file, line, col)?;
 		let goto_params = lsp_types::request::GotoTypeDefinitionParams {
 			text_document_position_params: params,
@@ -96,6 +131,7 @@ impl SemanticBackend for LspSemanticBackend {
 		if !self.caps.signature {
 			return None;
 		}
+		self.ensure_synced(file);
 		let params = self.doc_position(file, line, col)?;
 		let sh = lsp_types::SignatureHelpParams {
 			context: None,
@@ -138,6 +174,7 @@ impl SemanticBackend for LspSemanticBackend {
 		if !self.caps.inlay_hints {
 			return Vec::new();
 		}
+		self.ensure_synced(file);
 		let Ok(uri) = lsp_types::Url::from_file_path(file) else {
 			return Vec::new();
 		};
@@ -186,6 +223,7 @@ impl SemanticBackend for LspSemanticBackend {
 	}
 
 	fn diagnostics(&self, file: &Path) -> Vec<Diagnostic> {
+		self.ensure_synced(file);
 		diagnostics_for_path(&self.client, file)
 	}
 

@@ -169,6 +169,36 @@ impl LspRegistry {
 		Ok(client)
 	}
 
+	/// FUP-100: Iterate warm clients for `workspace`. Returns each
+	/// `(server_name, Arc<LspClient>)` whose root contains or equals
+	/// `workspace`. Used by `semantic_cache::notify_buffer_change` to
+	/// route didChange notifications to every LSP that might have the
+	/// file open.
+	///
+	/// Cloning the `Arc<LspClient>` here is cheap (refcount bump). We
+	/// collect into a Vec so the caller can drop the slot-lock before
+	/// invoking any client method.
+	pub fn iter_warm_for(&self, workspace: &std::path::Path) -> Vec<(String, Arc<LspClient>)> {
+		let slots = self.slots.lock().unwrap();
+		slots
+			.iter()
+			.filter(|((root, _), _)| workspace.starts_with(root) || root.as_path() == workspace)
+			.map(|((_, name), slot)| (name.clone(), slot.client.clone()))
+			.collect()
+	}
+
+	/// Iterate all warm `(workspace_root, server_name, Arc<LspClient>)`
+	/// entries regardless of workspace. Used by tests + diagnostic
+	/// reporting (`semantic_cache::warm_count`).
+	pub fn iter_warm_all(&self) -> Vec<(PathBuf, String, Arc<LspClient>)> {
+		self.slots
+			.lock()
+			.unwrap()
+			.iter()
+			.map(|((root, name), slot)| (root.clone(), name.clone(), slot.client.clone()))
+			.collect()
+	}
+
 	/// Test-only helper: insert a pre-built client without spawning a real
 	/// process. Used by the eviction tests to exercise the LRU path.
 	#[cfg(test)]
