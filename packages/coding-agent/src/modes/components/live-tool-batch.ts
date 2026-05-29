@@ -1,4 +1,4 @@
-import { Container, type DirtyParent, SPINNER_MARKER } from "@oh-my-pi/pi-tui";
+import { Container, SPINNER_MARKER } from "@oh-my-pi/pi-tui";
 import { theme } from "../../modes/theme/theme";
 import { formatStatusIcon, truncateToWidth } from "../../tools/render-utils";
 import type { ToolExecutionComponent, ToolExecutionHandle } from "./tool-execution";
@@ -154,27 +154,23 @@ export class LiveToolBatchComponent extends Container implements ToolExecutionHa
 	}
 
 	#invalidateSelf(): void {
-		this.#selfDirty = true;
-		this.#cacheLines = undefined;
-		this.markDirty();
+		this.invalidate();
 	}
 
-	// Child invalidations route through markDirty (not invalidate); clear our own
-	// cache here so a cell's spinner tick / status change forces a recompute.
+	// `render()` is overridden and never resets the base Container `#dirty` flag,
+	// so `Container.markDirty()`'s `if (#dirty) return` guard would permanently
+	// swallow upward propagation after the first dirtying (BUG-391 stuck-dirty
+	// hazard). `Container.invalidate()` unconditionally calls `#parent.markDirty()`,
+	// so route both our own invalidations AND child-driven `markDirty()` (spinner
+	// ticks, partial updates bubbling up from cell components) through it.
 	override markDirty(): void {
-		this.#selfDirty = true;
-		this.#cacheLines = undefined;
-		super.markDirty();
+		this.invalidate();
 	}
 
 	override invalidate(): void {
 		this.#selfDirty = true;
 		this.#cacheLines = undefined;
 		super.invalidate();
-	}
-
-	override setParent(parent: DirtyParent | undefined): void {
-		super.setParent(parent);
 	}
 
 	override render(width: number): string[] {
