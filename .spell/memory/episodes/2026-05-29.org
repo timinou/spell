@@ -12,3 +12,14 @@ Shipped on worktree branch fup-095-nuke-lsp-tool, commit d737baa81. 63 files, +5
 :RELATIONS:
 ABOUT: FUP-095-remove-lsp-tool-from-coding-agent-hard-n
 :END:
+** ITEM Merged fup-099-live-semantic-dispatch into fup-095-nuke-lsp-tool (merge commit 60ed46e31; only org-doc additions, no source conflicts beyond FUP-095.org doc text). Triple-checked the new find/edit semantic paradigm that replaces the deleted lsp tool: pi-code-graph 162 pass (def→/ref→/call→/implements→/inherits→ graph edges), pi-natives lib 283 pass, edge_dispatch_e2e 3 pass (full napi string path for graph edges), semantic_live_e2e 21 (18 pass incl. symbol-target hover/signature/type_def/inlay/diagnostics; 3 external-LSP-gated also pass under real rust-analyzer via --ignored). Added full_napi_entry test module (commit a1f3c8d52) driving raw CodePath STRINGS (src/lib.rs::add#hover [source=graph], #diagnostics, #hover_inferred) through resolve_code_path_for_test to close the last gap — the string-parse→napi→dispatch→backend chain. Teeth-verified: disabling the napi semantic branch flips all 3 RED, restore→byte-identical→green. IMPORTANT ENV NOTE: this harness session's loaded pi_natives.node is an OLD pre-FUP-099 binary (symlinked from main spell, built 02:13) so proxy_find #signature returns 'unknown qualifier' / #hover returns body — that reflects the running harness, NOT the merged code; cargo tests (which build the actual source) are the authoritative proof. TS nuke integrity post-merge: 0 orphans, src/lsp deleted, find.md documents full semantic recipe surface.
+:PROPERTIES:
+:CUSTOM_ID: EP-bd80a85633b4ada0
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T11:37:16Z
+:END:
+:RELATIONS:
+INVOLVED: FUP-095-remove-lsp-tool-from-coding-agent-hard-n
+INVOLVED: CON-lsp-tool-replaced-by-find-edit-semantic-
+:END:
