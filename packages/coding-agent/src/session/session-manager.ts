@@ -51,6 +51,7 @@ import {
 } from "./messages";
 import type { SessionStorage, SessionStorageWriter } from "./session-storage";
 import { FileSessionStorage, MemorySessionStorage } from "./session-storage";
+import { repairUnpairedToolCalls } from "./transcript-repair";
 
 export const CURRENT_SESSION_VERSION = 3;
 
@@ -657,7 +658,11 @@ export function buildSessionContext(
 		}
 	}
 
-	return { messages, thinkingLevel, serviceTier, models, injectedTtsrRules, mode, modeData };
+	// Repair transcripts killed mid-tool-execution: any assistant toolCall with
+	// no persisted toolResult gets a synthetic aborted result so tool_use/
+	// tool_result pairing holds on resume and no cell replays as pending.
+	const { messages: repairedMessages } = repairUnpairedToolCalls(messages);
+	return { messages: repairedMessages, thinkingLevel, serviceTier, models, injectedTtsrRules, mode, modeData };
 }
 
 /**

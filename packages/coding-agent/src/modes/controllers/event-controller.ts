@@ -1,6 +1,7 @@
 import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
 import { getAnthropicStreamIdleTimeoutMs, type ImageContent } from "@oh-my-pi/pi-ai";
 import { Loader, TERMINAL, Text } from "@oh-my-pi/pi-tui";
+import { logger } from "@oh-my-pi/pi-utils";
 import { settings } from "../../config/settings";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { ReadToolGroupComponent } from "../../modes/components/read-tool-group";
@@ -8,6 +9,7 @@ import { TodoReminderComponent } from "../../modes/components/todo-reminder";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { TtsrNotificationComponent } from "../../modes/components/ttsr-notification";
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
+import { finalizeOrphanPendingTools } from "../../modes/utils/finalize-pending-tools";
 import type { InteractiveModeContext, TodoGroup } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { formatAssistantToolCallFailureMessage } from "../../session/tool-call-diagnostics";
@@ -198,7 +200,30 @@ export class EventController {
 		});
 	}
 
+	/**
+	 * Subscriber-boundary guard for the agent event bus.
+	 *
+	 * Registered as an async listener via {@link subscribeToAgent}. `AgentSession#emit`
+	 * invokes listeners WITHOUT awaiting them, so any rejection escaping this method
+	 * reaches the global `unhandledRejection` handler, which writes a crash report and
+	 * calls `process.exit(1)` (see pi-utils/postmortem). A UI event-handling fault
+	 * (missing import, renderer typo, bad component state) must degrade to a logged
+	 * warning and a dropped frame — it must never tear down a live session, least of
+	 * all at `agent_end`, where it would also swallow the turn's final paint. All
+	 * dispatch lives in {@link #dispatchEvent}; this wrapper is the single catch-all.
+	 */
 	async handleEvent(event: AgentSessionEvent): Promise<void> {
+		try {
+			await this.#dispatchEvent(event);
+		} catch (err) {
+			logger.error("EventController.handleEvent failed; dropping frame to keep session alive", {
+				eventType: event.type,
+				err,
+			});
+		}
+	}
+
+	async #dispatchEvent(event: AgentSessionEvent): Promise<void> {
 		if (!this.ctx.isInitialized) {
 			await this.ctx.init();
 		}
@@ -575,11 +600,10 @@ export class EventController {
 					this.ctx.streamingMessage = undefined;
 				}
 				await this.ctx.flushPendingModelSwitch();
-				for (const toolCallId of Array.from(this.ctx.pendingTools.keys())) {
-					if (!this.#backgroundToolCallIds.has(toolCallId)) {
-						this.ctx.pendingTools.delete(toolCallId);
-					}
-				}
+				// Finalize any tool cell still pending at turn end (e.g. an aborted /
+				// killed call whose tool_execution_end never arrived). Dropping the
+				// tracking entry without finalizing would freeze the cell as pending.
+				finalizeOrphanPendingTools(this.ctx.pendingTools, this.#backgroundToolCallIds);
 				this.#backgroundToolCallIds = new Set(
 					Array.from(this.#backgroundToolCallIds).filter(toolCallId => this.ctx.pendingTools.has(toolCallId)),
 				);
