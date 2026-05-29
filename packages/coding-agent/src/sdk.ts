@@ -141,7 +141,7 @@ import {
 	type CanvasWindowEventsPayload,
 } from "./tools/canvas";
 import { ToolContextStore } from "./tools/context";
-import { getGeminiImageTools } from "./tools/gemini-image";
+import { getImageGenerationToolsWithRegistry } from "./tools/image-generation";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
 import { PendingActionStore } from "./tools/pending-action";
 import { EventBus } from "./utils/event-bus";
@@ -743,7 +743,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	const imageProvider = settings.get("providers.image");
-	if (imageProvider === "auto" || imageProvider === "gemini" || imageProvider === "openrouter") {
+	if (
+		imageProvider === "auto" ||
+		imageProvider === "openai-codex" ||
+		imageProvider === "gemini" ||
+		imageProvider === "openrouter"
+	) {
 		setPreferredImageProvider(imageProvider);
 	}
 	// providers.anthropicStreamIdleTimeoutMs removed in kdl-config cutover
@@ -1196,10 +1201,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 	}
 
-	// Add Gemini image tools if GEMINI_API_KEY (or GOOGLE_API_KEY) is available
-	const geminiImageTools = await dbgTimeAsync("getGeminiImageTools", getGeminiImageTools);
-	if (geminiImageTools.length > 0) {
-		customTools.push(...(geminiImageTools as unknown as CustomTool[]));
+	// Register the image-generation tool if any image provider is reachable.
+	// Auth resolution priority: Antigravity OAuth, Codex/ChatGPT OAuth, OpenRouter, Gemini env keys.
+	const imageGenerationTools = await dbgTimeAsync("getImageGenerationTools", () =>
+		getImageGenerationToolsWithRegistry(modelRegistry),
+	);
+	if (imageGenerationTools.length > 0) {
+		customTools.push(...(imageGenerationTools as unknown as CustomTool[]));
 	}
 
 	// Add web search tools

@@ -1,0 +1,52 @@
+#+TITLE: Port RenderIntent scrollback-preserving renderer from upstream
+#+STATE: DONE
+#+SESSION_ID: 14f40fe39be379c1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-29T09-21-51-727Z_14f40fe39be379c1.jsonl]]
+#+CUSTOM_ID: PLAN-321-port-renderintent-scrollback-preserving
+#+COMPLETION_HASH: ab8092de59aef04a
+
+* Initial Message
+
+my friend. Why is it that, when tasks are running, I get scrolled back down at the next refresh? It's very annoying. If you find other issues along the way, please explain them to me
+
+Fixes [[id:BUG-418-tui-snaps-transcript-to-bottom-and-wipes]].
+
+* Goal
+Stop the main-chat TUI from erasing terminal scrollback and snapping to the bottom on forced/width/focus redraws, by porting upstream's ~RenderIntent~ renderer. Keep our local additions (spinner-clock, dev-profile, SPINNER_MARKER).
+
+Non-goal: the emulator follow-on-output during content growth (external; document the ghostty ~scroll-to-bottom~ workaround for users).
+
+* Background (verified)
+- Defect line: ~packages/tui/src/tui.ts~ ~fullRender(clear)~ → ~\x1b[3J\x1b[2J\x1b[H~ (current ~tui.ts:1322~). ~\x1b[3J~ wipes scrollback; the helper reprints the full transcript, so the wipe is load-bearing (downgrade duplicates content ×4, proven).
+- Upstream solved it: ~fullRender~ replaced by a ~RenderIntent~ union + per-intent ~#emit*~ methods; ~\x1b[3J~ emitted only for ~sessionReplace~/~historyRebuild~ and only when ~!isMultiplexerSession()~. ~requestRender(force, { clearScrollback })~ adds opt-in wipe; default forced redraw now repaints viewport only (~viewportRepaint~), preserving history.
+- Size: upstream ~tui.ts~ 1719 lines vs ours 1622. Upstream imports ~$flag~ from pi-utils (we lack it; upstream ~packages/utils/src/env.ts:165~) and does NOT contain ~spinner-clock~/~dev-profile~/~SPINNER_MARKER~ (ours does — must be merged in, not dropped).
+
+* RenderIntent surface to port
+~noop | initial | sessionReplace | historyRebuild | viewportRepaint{appendFrom?} | shrink | diff{firstChanged,lastChanged,appendedLines}~, chosen by ~#planRender(...)~; emitted by ~#emitFullPaint / #emitViewportRepaint / #emitAppendTail / #emitShrink / #emitDiff~. New state: ~#previousHeight~, ~#scrollbackHighWater~, ~#suppressNextSuffixScroll~, ~#hasEverRendered~, ~#clearScrollbackOnNextRender~. New helpers: ~isMultiplexerSession()~ (TMUX/STY/ZELLIJ), ~isTermuxSession()~.
+
+* Caller audit (clearScrollback opt-in)
+Existing ~requestRender(true)~ sites must default to NO scrollback wipe; only genuine session-replace (e.g. ~/clear~, session switch) passes ~{ clearScrollback: true }~. Sites to review:
+- ~packages/niri/src/controller.ts:205,215~ (focus image suppress/restore) → must NOT wipe.
+- ~packages/coding-agent/src/modes/interactive-mode.ts:348,581,1759~ → audit each; post-init/theme = no wipe.
+- ~packages/coding-agent/src/modes/controllers/input-controller.ts:348~, ~modes/components/hook-editor.ts:98~ → no wipe.
+- Session-clear paths (~chatContainer.clear()~ + redraw, ~command-controller~/~selector-controller~ ~/clear~) → opt into wipe.
+
+* Acceptance
+1. Forced redraw / width change / niri focus-change mid-task preserves terminal scrollback (no ~\x1b[3J~) and does not duplicate the transcript.
+2. ~/clear~ (or equivalent session-replace) still wipes scrollback as before.
+3. Multiplexer (TMUX/STY/ZELLIJ) and Termux paths take the hostile-safe branches.
+4. Spinner ticks remain in-place (no regression of spinner-clock / SPINNER_MARKER substitution).
+5. ~bun test packages/tui/test/overlay-scroll.test.ts~ and ~render-*.test.ts~ pass; new regression test asserts a forced redraw keeps a unique marker count == 1 in scrollback and that ~{clearScrollback:true}~ still clears.
+6. ~bun run --parallel check:ts~ clean for tui + coding-agent + niri.
+
+* Execution waves
+** Wave 1 — pi-utils $flag
+Add ~$flag(name, def=false)~ to ~packages/utils/src/env.ts~ (port upstream env.ts:165) + export. Boolean env reader used by ported tui.
+** Wave 2 — tui.ts RenderIntent core
+Port ~RenderIntent~ type, ~#planRender~, ~#emit*~ methods, new fields, ~isMultiplexerSession/isTermuxSession~, ~RenderRequestOptions~, ~requestRender(force, options)~. Merge-preserve local ~spinnerClock~ subscription, ~SPINNER_MARKER~ substitution, ~dev-profile~ usage. Replace ~fullRender~ + the monolithic ~#doRender~ tail.
+** Wave 3 — caller audit + niri
+Update ~requestRender~ callers per audit; ensure niri focus path and post-init do not pass ~clearScrollback~; wire session-clear paths to opt in.
+** Wave 4 — tests + docs
+Regression test in ~packages/tui/test/~ (forced-redraw scrollback uniqueness + clearScrollback-still-clears + multiplexer branch). Document ghostty ~scroll-to-bottom~ user workaround in the relevant docs/troubleshooting note.
+
+NOTE [2026-05-29]: All 4 waves complete. tui.ts RenderIntent renderer grafted (preserving spinner-clock/SPINNER_MARKER/dev-profile); $flag added to pi-utils; caller audit (no caller needs wipe — clearScrollback API reserved for /clear); regression test + docs. Verify: tui 363 pass 0 fail, tui typecheck clean. coding-agent's 62 errors pre-exist at HEAD (unrelated WIP).

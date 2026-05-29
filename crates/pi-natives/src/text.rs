@@ -628,6 +628,18 @@ fn break_long_word(
 			continue;
 		}
 
+		// Lone/invalid ESC byte — push through and advance.
+		// Every sibling function (truncate_to_width, slice_with_width_impl,
+		// extract_segments_impl, visible_width_u16_up_to, update_state_from_text,
+		// token_is_whitespace, split_into_tokens_with_ansi) handles this case;
+		// without this fallback, binary data (e.g. latin-1 encoded PNG via
+		// get tool) triggers a non-terminating loop.
+		if word[i] == ESC {
+			current_line.push(ESC);
+			i += 1;
+			continue;
+		}
+
 		let start = i;
 		let mut is_ascii = true;
 		while i < word.len() && word[i] != ESC {
@@ -1449,5 +1461,32 @@ mod tests {
 			assert!(line_text.contains("38;5;196"));
 			assert!(line_text.contains("48;5;236"));
 		}
+	}
+
+	#[test]
+	fn test_wrap_does_not_hang_on_lone_esc() {
+		// Regression: break_long_word had no fallback for lone/invalid ESC
+		// bytes, causing a non-terminating loop on binary data (e.g. latin-1
+		// encoded PNG returned by the get tool).
+		let mut long = String::with_capacity(408);
+		for _ in 0..200 {
+			long.push('a');
+		}
+		long.push('\x1b'); // lone ESC in binary data
+		for _ in 0..200 {
+			long.push('b');
+		}
+		let data = to_u16(&long);
+		// Wrap at very narrow width to force break_long_word path.
+		let lines = wrap_text_with_ansi_impl(&data, 10, DEFAULT_TAB_WIDTH);
+		// Must produce output without hanging.
+		assert!(lines.len() > 0);
+		// The lone ESC should be carried through (not silently stripped).
+		let joined: String = lines
+			.iter()
+			.map(|l| String::from_utf16_lossy(l))
+			.collect::<Vec<_>>()
+			.join("\n");
+		assert!(joined.contains("\x1b"), "lone ESC must survive in output");
 	}
 }

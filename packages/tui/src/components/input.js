@@ -24,6 +24,7 @@ export class Input {
     }
     #value;
     #cursor; // Cursor position in the value
+    #parent;
     // Bracketed paste mode buffering
     #pasteHandler;
     // Kill ring for Emacs-style kill/yank operations
@@ -31,120 +32,130 @@ export class Input {
     #lastAction;
     // Undo support
     #undoStack;
+    setParent(p) {
+        this.#parent = p;
+    }
     getValue() {
         return this.#value;
     }
     setValue(value) {
         this.#value = value;
-        this.#cursor = Math.min(this.#cursor, value.length);
+        this.#cursor = value.length;
+        this.#parent?.markDirty();
     }
     handleInput(data) {
-        // Handle bracketed paste mode
-        const paste = this.#pasteHandler.process(data);
-        if (paste.handled) {
-            if (paste.pasteContent !== undefined) {
-                this.#handlePaste(paste.pasteContent);
-                if (paste.remaining.length > 0) {
-                    this.handleInput(paste.remaining);
+        try {
+            // Handle bracketed paste mode
+            const paste = this.#pasteHandler.process(data);
+            if (paste.handled) {
+                if (paste.pasteContent !== undefined) {
+                    this.#handlePaste(paste.pasteContent);
+                    if (paste.remaining.length > 0) {
+                        this.handleInput(paste.remaining);
+                    }
                 }
+                return;
             }
-            return;
-        }
-        const kb = getEditorKeybindings();
-        // Escape/Cancel
-        if (kb.matches(data, "selectCancel")) {
-            if (this.onEscape)
-                this.onEscape();
-            return;
-        }
-        // Undo
-        if (kb.matches(data, "undo")) {
-            this.#undo();
-            return;
-        }
-        // Submit
-        if (kb.matches(data, "submit") || data === "\n") {
-            if (this.onSubmit)
-                this.onSubmit(this.#value);
-            return;
-        }
-        // Deletion
-        if (kb.matches(data, "deleteCharBackward")) {
-            this.#handleBackspace();
-            return;
-        }
-        if (kb.matches(data, "deleteCharForward")) {
-            this.#handleForwardDelete();
-            return;
-        }
-        if (kb.matches(data, "deleteWordBackward")) {
-            this.#deleteWordBackwards();
-            return;
-        }
-        if (kb.matches(data, "deleteWordForward")) {
-            this.#deleteWordForward();
-            return;
-        }
-        if (kb.matches(data, "deleteToLineStart")) {
-            this.#deleteToLineStart();
-            return;
-        }
-        if (kb.matches(data, "deleteToLineEnd")) {
-            this.#deleteToLineEnd();
-            return;
-        }
-        // Kill ring actions
-        if (kb.matches(data, "yank")) {
-            this.#yank();
-            return;
-        }
-        if (kb.matches(data, "yankPop")) {
-            this.#yankPop();
-            return;
-        }
-        // Cursor movement
-        if (kb.matches(data, "cursorLeft")) {
-            this.#lastAction = null;
-            if (this.#cursor > 0) {
-                const beforeCursor = this.#value.slice(0, this.#cursor);
-                const graphemes = [...segmenter.segment(beforeCursor)];
-                const lastGrapheme = graphemes[graphemes.length - 1];
-                this.#cursor -= lastGrapheme ? lastGrapheme.segment.length : 1;
+            const kb = getEditorKeybindings();
+            // Escape/Cancel
+            if (kb.matches(data, "selectCancel")) {
+                if (this.onEscape)
+                    this.onEscape();
+                return;
             }
-            return;
-        }
-        if (kb.matches(data, "cursorRight")) {
-            this.#lastAction = null;
-            if (this.#cursor < this.#value.length) {
-                const afterCursor = this.#value.slice(this.#cursor);
-                const graphemes = [...segmenter.segment(afterCursor)];
-                const firstGrapheme = graphemes[0];
-                this.#cursor += firstGrapheme ? firstGrapheme.segment.length : 1;
+            // Undo
+            if (kb.matches(data, "undo")) {
+                this.#undo();
+                return;
             }
-            return;
+            // Submit
+            if (kb.matches(data, "submit") || data === "\n") {
+                if (this.onSubmit)
+                    this.onSubmit(this.#value);
+                return;
+            }
+            // Deletion
+            if (kb.matches(data, "deleteCharBackward")) {
+                this.#handleBackspace();
+                return;
+            }
+            if (kb.matches(data, "deleteCharForward")) {
+                this.#handleForwardDelete();
+                return;
+            }
+            if (kb.matches(data, "deleteWordBackward")) {
+                this.#deleteWordBackwards();
+                return;
+            }
+            if (kb.matches(data, "deleteWordForward")) {
+                this.#deleteWordForward();
+                return;
+            }
+            if (kb.matches(data, "deleteToLineStart")) {
+                this.#deleteToLineStart();
+                return;
+            }
+            if (kb.matches(data, "deleteToLineEnd")) {
+                this.#deleteToLineEnd();
+                return;
+            }
+            // Kill ring actions
+            if (kb.matches(data, "yank")) {
+                this.#yank();
+                return;
+            }
+            if (kb.matches(data, "yankPop")) {
+                this.#yankPop();
+                return;
+            }
+            // Cursor movement
+            if (kb.matches(data, "cursorLeft")) {
+                this.#lastAction = null;
+                if (this.#cursor > 0) {
+                    const beforeCursor = this.#value.slice(0, this.#cursor);
+                    const graphemes = [...segmenter.segment(beforeCursor)];
+                    const lastGrapheme = graphemes[graphemes.length - 1];
+                    this.#cursor -= lastGrapheme ? lastGrapheme.segment.length : 1;
+                }
+                return;
+            }
+            if (kb.matches(data, "cursorRight")) {
+                this.#lastAction = null;
+                if (this.#cursor < this.#value.length) {
+                    const afterCursor = this.#value.slice(this.#cursor);
+                    const graphemes = [...segmenter.segment(afterCursor)];
+                    const firstGrapheme = graphemes[0];
+                    this.#cursor += firstGrapheme ? firstGrapheme.segment.length : 1;
+                }
+                return;
+            }
+            if (kb.matches(data, "cursorLineStart")) {
+                this.#lastAction = null;
+                this.#cursor = 0;
+                return;
+            }
+            if (kb.matches(data, "cursorLineEnd")) {
+                this.#lastAction = null;
+                this.#cursor = this.#value.length;
+                return;
+            }
+            if (kb.matches(data, "cursorWordLeft")) {
+                this.#moveWordBackwards();
+                return;
+            }
+            if (kb.matches(data, "cursorWordRight")) {
+                this.#moveWordForwards();
+                return;
+            }
+            // Regular character input, including Kitty CSI-u text-producing sequences.
+            const printableText = extractPrintableText(data);
+            if (printableText) {
+                this.#insertCharacter(printableText);
+            }
         }
-        if (kb.matches(data, "cursorLineStart")) {
-            this.#lastAction = null;
-            this.#cursor = 0;
-            return;
-        }
-        if (kb.matches(data, "cursorLineEnd")) {
-            this.#lastAction = null;
-            this.#cursor = this.#value.length;
-            return;
-        }
-        if (kb.matches(data, "cursorWordLeft")) {
-            this.#moveWordBackwards();
-            return;
-        }
-        if (kb.matches(data, "cursorWordRight")) {
-            this.#moveWordForwards();
-            return;
-        }
-        // Regular character input, including Kitty CSI-u text-producing sequences.
-        const printableText = extractPrintableText(data);
-        if (printableText) {
-            this.#insertCharacter(printableText);
+        finally {
+            // BUG-391: every keystroke must propagate dirty regardless of branch.
+            this.#parent?.markDirty();
         }
     }
     #insertCharacter(text) {

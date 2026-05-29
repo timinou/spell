@@ -1,4 +1,4 @@
-import type { Component } from "../tui";
+import type { Component, DirtyParent } from "../tui";
 /** Tab definition */
 export interface Tab {
     /** Unique identifier for the tab */
@@ -32,6 +32,7 @@ export interface TabBarTheme {
  */
 export declare class TabBar implements Component {
     #private;
+    setParent(p: DirtyParent | undefined): void;
     /** Callback fired when the active tab changes */
     onTabChange?: (tab: Tab, index: number) => void;
     constructor(label: string, tabs: Tab[], theme: TabBarTheme, initialIndex?: number);

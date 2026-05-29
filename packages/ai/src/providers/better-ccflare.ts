@@ -319,6 +319,11 @@ export const streamBetterCcflare: StreamFunction<"anthropic-messages"> = (
 										partial: output,
 									});
 								} else if (block.type === "thinking") {
+									// Orphan guard: a signature with no body means the relay
+									// forwarded signature_delta but not thinking_delta. That
+									// signature can never validate against empty text, so discard
+									// it rather than persist a block the API later rejects.
+									if (block.thinking.length === 0) block.thinkingSignature = "";
 									stream.push({
 										type: "thinking_end",
 										contentIndex: index,

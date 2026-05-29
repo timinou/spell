@@ -13,6 +13,46 @@ let terminalEverStarted = false;
 const STD_INPUT_HANDLE = -10;
 const ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
 /**
+ * errno-style codes that unambiguously mean the underlying stdio file
+ * descriptor is gone or unusable. Any other `'error'` event on stdin/stdout
+ * is most likely a synchronous throw from a `'data'` listener that Node/Bun
+ * re-emitted on the stream — we must NOT mistake those for PTY death (see
+ * BUG-391/BUG-387 interaction).
+ */
+const FATAL_IO_ERROR_CODES = new Set([
+    "EIO",
+    "EPIPE",
+    "EBADF",
+    "ENOTCONN",
+    "ECONNRESET",
+    "ESHUTDOWN",
+]);
+function isFatalIoError(err) {
+    if (!err || typeof err !== "object")
+        return false;
+    const code = err.code;
+    return typeof code === "string" && FATAL_IO_ERROR_CODES.has(code);
+}
+/**
+ * Surface a non-IO stream error as an uncaught exception so the postmortem
+ * crash reporter sees it instead of silently treating it as "terminal lost"
+ * and exiting 0. We use `process.emit('uncaughtException', …)` rather than
+ * a microtask `throw` so the rethrow is observable in unit tests without
+ * tripping the test runner's own uncaught-error policy on a synthetic throw.
+ */
+function rethrowAsUncaught(err) {
+    const toEmit = err instanceof Error ? err : new Error(String(err ?? "unknown stream error"));
+    if (process.listenerCount("uncaughtException") > 0) {
+        process.emit("uncaughtException", toEmit, "uncaughtException");
+        return;
+    }
+    // No listener installed yet (e.g. very early in startup): fall back to a
+    // genuine throw so we don't lose the error entirely.
+    queueMicrotask(() => {
+        throw toEmit;
+    });
+}
+/**
  * Emergency terminal restore - call this from signal/crash handlers
  * Resets terminal state without requiring access to the ProcessTerminal instance
  */
@@ -56,14 +96,45 @@ export class ProcessTerminal {
     #writeLogPath = $env.PI_TUI_WRITE_LOG || "";
     #windowsVTInputRestore;
     #appearanceCallbacks = [];
+    #focusCallbacks = [];
+    #focused = true;
+    #lossCallbacks = [];
     #appearance;
     #osc11Pending = false;
     #osc11QueryQueued = false;
     #osc11ResponseBuffer = "";
     #pendingDa1Sentinels = 0;
     #osc11PollTimer;
+    #livenessTimer;
     #mode2031Active = false;
     #mode2031DebounceTimer;
+    #onStdoutError = (err) => {
+        if (isFatalIoError(err)) {
+            this.#onPtyLost("stdout-error");
+            return;
+        }
+        // Likely a thrown error from a downstream 'data'/write callback that
+        // Node/Bun re-emitted on the stream. Surface it via uncaughtException
+        // so the crash reporter records a real stack instead of a silent exit.
+        logger.warn("terminal stdout error (non-fatal io)", {
+            code: err?.code,
+            message: err?.message,
+        });
+        rethrowAsUncaught(err);
+    };
+    #onStdinError = (err) => {
+        if (isFatalIoError(err)) {
+            this.#onPtyLost("stdin-error");
+            return;
+        }
+        logger.warn("terminal stdin error (non-fatal io)", {
+            code: err?.code,
+            message: err?.message,
+        });
+        rethrowAsUncaught(err);
+    };
+    #onStdinEnd = () => this.#onPtyLost("stdin-end");
+    #onStdinClose = () => this.#onPtyLost("stdin-close");
     get kittyProtocolActive() {
         return this.#kittyProtocolActive;
     }
@@ -72,6 +143,60 @@ export class ProcessTerminal {
     }
     onAppearanceChange(callback) {
         this.#appearanceCallbacks.push(callback);
+    }
+    onLost(callback) {
+        this.#lossCallbacks.push(callback);
+        return () => {
+            const index = this.#lossCallbacks.indexOf(callback);
+            if (index >= 0) {
+                this.#lossCallbacks.splice(index, 1);
+            }
+        };
+    }
+    onFocusChange(callback) {
+        this.#focusCallbacks.push(callback);
+        return () => {
+            const idx = this.#focusCallbacks.indexOf(callback);
+            if (idx >= 0) {
+                this.#focusCallbacks.splice(idx, 1);
+            }
+        };
+    }
+    #onPtyLost(reason) {
+        if (this.#dead)
+            return;
+        this.#dead = true;
+        this.#stopOsc11Poll();
+        this.#stopLivenessTimer();
+        logger.info("terminal lost", { reason });
+        for (const cb of [...this.#lossCallbacks]) {
+            try {
+                cb(reason);
+            }
+            catch {
+                /* ignore callback errors */
+            }
+        }
+        process.stdout.removeListener("error", this.#onStdoutError);
+        process.stdin.removeListener("error", this.#onStdinError);
+        process.stdin.removeListener("end", this.#onStdinEnd);
+        process.stdin.removeListener("close", this.#onStdinClose);
+    }
+    /**
+     * Liveness check: detect when the controlling pty has been destroyed by
+     * checking whether stdout/stdin are still usable. Called from the OSC 11
+     * poll interval so we piggy-back on the existing 2s cadence.
+     */
+    #checkPtyLiveness() {
+        if (!process.stdout.writable) {
+            this.#onPtyLost("stdout-unwritable");
+            return false;
+        }
+        if (!process.stdin.readable) {
+            this.#onPtyLost("stdin-unreadable");
+            return false;
+        }
+        return true;
     }
     start(onInput, onResize) {
         this.#inputHandler = onInput;
@@ -114,9 +239,22 @@ export class ProcessTerminal {
         // When the terminal reports a change, we re-query OSC 11 to get the
         // actual background color (following Neovim convention) with 100ms debounce.
         this.#safeWrite("\x1b[?2031h");
+        // Enable focus event reporting (CSI 1004h). Terminal sends \x1b[I on
+        // focus-in and \x1b[O on focus-out. Used by TUI to throttle rendering
+        // when the terminal window is not visible (niri overview switching,
+        // minimized, other workspace, etc.).
+        this.#safeWrite("\x1b[?1004h");
         // Start periodic OSC 11 re-query for terminals without Mode 2031
         // (Warp, Alacritty, WezTerm, iTerm2). Self-disables once Mode 2031 fires.
         this.#startOsc11Poll();
+        // Detect controlling-pty destruction asynchronously. When the parent
+        // shell or SSH session dies, stdout will emit 'error' (often EIO) and
+        // stdin will emit 'end' or 'close'. These are the only reliable signals
+        // because there is no portable SIGWINCH-like notification for pty loss.
+        process.stdout.on("error", this.#onStdoutError);
+        process.stdin.on("error", this.#onStdinError);
+        process.stdin.on("end", this.#onStdinEnd);
+        process.stdin.on("close", this.#onStdinClose);
     }
     /**
      * On Windows, add ENABLE_VIRTUAL_TERMINAL_INPUT to the stdin console mode
@@ -250,6 +388,22 @@ export class ProcessTerminal {
                     return;
                 }
             }
+            // Focus events: \x1b[I (focus-in), \x1b[O (focus-out). Sent by
+            // terminal when CSI 1004h is active. Fire callbacks; swallow event
+            // (do not forward to input handler since it's not a user keystroke).
+            if (sequence === "\x1b[I" || sequence === "\x1b[O") {
+                const focused = sequence === "\x1b[I";
+                if (focused !== this.#focused) {
+                    this.#focused = focused;
+                    for (const cb of [...this.#focusCallbacks]) {
+                        try {
+                            cb(focused);
+                        }
+                        catch { /* swallow */ }
+                    }
+                }
+                return;
+            }
             // Mode 2031 change notification: re-query OSC 11 with 100ms debounce
             // (Neovim convention — coalesces rapid notifications during transitions)
             const appearanceMatch = sequence.match(appearanceDsrPattern);
@@ -311,6 +465,10 @@ export class ProcessTerminal {
      * Handles 1-, 2-, 3-, and 4-digit XParseColor hex components.
      */
     #handleOsc11Response(rHex, gHex, bHex) {
+        // First valid reply means we have an answer; the periodic re-query is no
+        // longer needed for THIS appearance. Mode 2031 push events (and SIGWINCH-
+        // driven explicit queries) still trigger fresh queries on changes.
+        this.#stopOsc11Poll();
         const normalize = (hex) => {
             const value = parseInt(hex, 16);
             if (Number.isNaN(value))
@@ -343,14 +501,37 @@ export class ProcessTerminal {
                 this.#stopOsc11Poll();
                 return;
             }
+            if (!this.#checkPtyLiveness())
+                return;
             this.#queryBackgroundColor();
         }, 2_000);
-        this.#osc11PollTimer.unref();
+        this.#osc11PollTimer.unref?.();
+        // Separate liveness probe — must keep running even after OSC11 poll
+        // self-disables on first valid reply. This is what detects pty death
+        // when the user has accepted the background-color answer.
+        this.#startLivenessTimer();
     }
     #stopOsc11Poll() {
         if (this.#osc11PollTimer) {
             clearInterval(this.#osc11PollTimer);
             this.#osc11PollTimer = undefined;
+        }
+    }
+    #startLivenessTimer() {
+        this.#stopLivenessTimer();
+        this.#livenessTimer = setInterval(() => {
+            if (this.#dead) {
+                this.#stopLivenessTimer();
+                return;
+            }
+            this.#checkPtyLiveness();
+        }, 2_000);
+        this.#livenessTimer.unref?.();
+    }
+    #stopLivenessTimer() {
+        if (this.#livenessTimer) {
+            clearInterval(this.#livenessTimer);
+            this.#livenessTimer = undefined;
         }
     }
     /**
@@ -374,6 +555,7 @@ export class ProcessTerminal {
             this.#safeWrite("\x1b[>4;2m");
             this.#modifyOtherKeysActive = true;
         }, 150);
+        this.#modifyOtherKeysTimeout.unref?.();
     }
     async drainInput(maxMs = 1000, idleMs = 50) {
         if (this.#kittyProtocolActive) {
@@ -424,12 +606,16 @@ export class ProcessTerminal {
         this.#safeWrite("\x1b[?2004l");
         // Disable Mode 2031 appearance change notifications
         this.#safeWrite("\x1b[?2031l");
+        // Disable focus event reporting
+        this.#safeWrite("\x1b[?1004l");
         this.#stopOsc11Poll();
+        this.#stopLivenessTimer();
         if (this.#mode2031DebounceTimer) {
             clearTimeout(this.#mode2031DebounceTimer);
             this.#mode2031DebounceTimer = undefined;
         }
         this.#appearanceCallbacks = [];
+        this.#lossCallbacks = [];
         this.#osc11Pending = false;
         this.#osc11QueryQueued = false;
         this.#osc11ResponseBuffer = "";
@@ -466,6 +652,10 @@ export class ProcessTerminal {
             process.stdout.removeListener("resize", this.#resizeHandler);
             this.#resizeHandler = undefined;
         }
+        process.stdout.removeListener("error", this.#onStdoutError);
+        process.stdin.removeListener("error", this.#onStdinError);
+        process.stdin.removeListener("end", this.#onStdinEnd);
+        process.stdin.removeListener("close", this.#onStdinClose);
         // Pause stdin to prevent any buffered input (e.g., Ctrl+D) from being
         // re-interpreted after raw mode is disabled. This fixes a race condition
         // where Ctrl+D could close the parent shell over SSH.

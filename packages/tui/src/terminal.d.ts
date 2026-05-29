@@ -32,6 +32,22 @@ export interface Terminal {
      * Fires when the detected appearance changes, including the initial detection.
      */
     onAppearanceChange(callback: (appearance: TerminalAppearance) => void): void;
+    /**
+     * Register a callback for when the controlling pty is destroyed.
+     * The callback receives a reason string (e.g. 'stdout-error').
+     * Returns an unsubscribe function.
+     */
+    onLost(callback: (reason: string) => void): () => void;
+    /**
+     * Register a callback for terminal focus changes.
+     * Uses CSI 1004h (focus tracking) to detect when the terminal window
+     * gains or loses focus. The callback receives `true` for focus-in,
+     * `false` for focus-out. Returns an unsubscribe function.
+     *
+     * Niri overview / window-manager workspace switches fire focus-out;
+     * consumers may throttle rendering when unfocused.
+     */
+    onFocusChange(callback: (focused: boolean) => void): () => void;
     /** The last detected terminal appearance, or undefined if not yet known. */
     get appearance(): TerminalAppearance | undefined;
 }
@@ -43,6 +59,8 @@ export declare class ProcessTerminal implements Terminal {
     get kittyProtocolActive(): boolean;
     get appearance(): TerminalAppearance | undefined;
     onAppearanceChange(callback: (appearance: TerminalAppearance) => void): void;
+    onLost(callback: (reason: string) => void): () => void;
+    onFocusChange(callback: (focused: boolean) => void): () => void;
     start(onInput: (data: string) => void, onResize: () => void): void;
     drainInput(maxMs?: number, idleMs?: number): Promise<void>;
     stop(): void;

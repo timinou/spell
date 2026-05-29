@@ -1,0 +1,32 @@
+#+TITLE: Unify image-generation KDL parsing into parseSpellKdl
+#+STATE: ITEM
+#+SESSION_ID: 14f322efaf856a7b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-28T16-06-35-966Z_14f322efaf856a7b.jsonl]]
+#+CUSTOM_ID: FUP-102-unify-image-generation-kdl-parsing-into
+
+* Initial Message
+
+also, default aspect should be desktop, and it should be tunable through the tool call. Also, schemas should be modifiable directly from spell.kdl
+
+## Context
+`tools/image-generation/schema-loader.ts::loadImageSchemas` reads the three spell.kdl tiers (user/project/local) DIRECTLY to extract `image-generation { schema … / disable … }` override blocks, instead of flowing through `config/spell-kdl.ts::parseSpellKdl` like every other top-level block (agents, modes, providers).
+
+Chosen deliberately during bring-up to keep the feature self-contained (zero plumbing through sdk.ts). Consequence: `image-generation` is the lone config block invisible to the central parser (hits `parseSpellKdl`'s `default: break`), and spell.kdl is parsed a second time per session.
+
+## Task (do once the codebase's KDL handling has settled)
+Unify into the house pattern:
+1. `config/spell-kdl.ts`: add `case "image-generation"` in `parseSpellKdl`'s dispatch switch; capture the raw override nodes.
+2. Store them as a typed field on `SpellProjectConfig` (e.g. `imageGeneration?: Node[]`).
+3. Merge across tiers in `mergeSpellConfigs` (concat, preserve precedence order).
+4. Thread the merged nodes to the tool factory and pass via the EXISTING `LoadImageSchemasOptions.overrideTiers` option — `loadImageSchemas` needs no signature change; it already accepts pre-parsed tiers for exactly this hand-off (used by tests today).
+5. Drop the direct tier-file reads (`readTierBlocks` + the `getUserKdlPath/getProjectKdlPath/getLocalKdlPath` fallback) from schema-loader.ts.
+
+## Acceptance
+- `image-generation` discoverable in `parseSpellKdl` alongside agents/modes/providers.
+- spell.kdl parsed once per session (no 2nd read in schema-loader).
+- Existing `test/tools/image-schema-loader.test.ts` merge cases still pass unchanged (they drive `overrideTiers` directly).
+
+## Pointers
+- Loader: `packages/coding-agent/src/tools/image-generation/schema-loader.ts` (see in-code REFACTOR note on `loadImageSchemas`).
+- Central parser + merge: `packages/coding-agent/src/config/spell-kdl.ts` (`parseSpellKdl`, `mergeSpellConfigs`).
+- Precedent blocks: `parseProvidersBlock`, `parseModeBlocks`, `parseAgentsBlock`.

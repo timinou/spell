@@ -1,0 +1,27 @@
+#+TITLE: bash-tool-batch-serialization-from-share
+
+** ITEM Bash tool batch serialization from shared cwd-stateful Shell
+
+SYMPTOM: parallel bash tool calls in one assistant message appear stuck "pending" for tens of seconds then deliver all results at once (burst); plus nondeterministic ENOENT on relative paths (e.g. "whatsapp.ex: No such file") where an identical command in the same batch sometimes works. Model degrades to echo hello/alive/ping health-probes because its own calls aren't returning.
+
+ROOT CAUSE (two coupled, one shared object):
+1. bash tool declared concurrency="exclusive" (packages/coding-agent/src/tools/bash.ts). The agent-loop scheduler (packages/agent/src/agent-loop.ts:651-664) makes each exclusive task wait on [lastExclusive, ...sharedTasks] and become the next lastExclusive -> a STRICT SERIAL CHAIN. One slow `mix test`/compile head-of-line-blocks every later bash+edit in the batch. (Verified via session 14f4860f1cf30daa batch 0b8bb74d: result deltas +46.6s/+28.9s/+17s then tail bursts in ~400ms.)
+2. WHY it was exclusive: all sync bash calls shared ONE native Shell keyed by sessionId alone (bash-executor.ts shellSessions Map + buildSessionKey). `cd ../../` in one command mutated that shell's cwd, leaking into concurrent siblings. exclusive was the blunt cwd-leak guard, at the cost of all parallelism.
+
+NATIVE LAYER (crates/pi-natives/src/shell.rs): Shell.run serialises on session.lock().await (TokioMutex), so a shared Shell also can't truly parallelise even if the scheduler allowed it. Both run_shell_session (persistent) and run_shell_oneshot (ephemeral) funnel through run_shell_command. The persistent Shell.run TS branch DROPPED root/home/sessionDir (scheme word-preprocessor) -> skill:// URI expansion silently broken on that path; the oneshot executeShell forwards them.
+
+FIX (design A, commit 3641a86fc): persistence is now OPT-IN via sessionKey in executeBash. Provided -> persistent Shell reused (interactive !shell, which legitimately wants cd/export to persist). Absent -> fresh ephemeral oneshot per call. The bash TOOL stopped passing sessionKey (it was passing getSessionId()) so each tool call is hermetic; bash concurrency exclusive->shared. Net: parallel tool batch is isolated (no cwd leak) AND concurrent (no shared mutex). Bonus: decouples tool bash from interactive !shell (user !cd no longer leaks into agent bash) and activates skill:// expansion on the tool path.
+
+GOTCHAS: tool bash was passing sessionKey=getSessionId() at bash.ts:~488 -> would have defeated the gate; must remove. async-job path uses unique key `${sessionId}:async:${jobId}` (no contention) - left as-is. brokenShellSessions.add is guarded by `if (shellSession)` so ephemeral skips it; shellSessions.delete on never-inserted key is a harmless no-op.
+
+The LiveToolBatchComponent (event-controller batching UI) was a band-aid that only re-skinned the display of secretly-serialized calls; it does not fix the race and is less necessary after this fix.
+
+PROCESS NOTE: while debugging this, issuing multiple tool calls in one block (parallel) repeatedly hung/aborted - the agent is itself subject to the same batch contention. Debug serially (one tool call per turn) when investigating tool-execution races.
+:PROPERTIES:
+:CUSTOM_ID: CON-bash-tool-batch-serialization-from-share
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T22:36:50Z
+:END:
+:RELATIONS:
+:END:

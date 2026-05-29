@@ -151,7 +151,7 @@ describe("TUI terminal-state regressions", () => {
 	});
 
 	describe("resize + viewport behavior", () => {
-		it("clears preexisting shell rows on startup and resize redraw", async () => {
+		it("clears stale shell rows from viewport but preserves them in scrollback on startup/resize", async () => {
 			const term = new VirtualTerminal(50, 5);
 			term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\nshell-4\r\n");
 			await settle(term);
@@ -167,8 +167,10 @@ describe("TUI terminal-state regressions", () => {
 				term.resize(49, 5);
 				await settle(term);
 
-				const buffer = term.getScrollBuffer().join("\n");
-				expect(buffer.includes("shell-")).toBeFalsy();
+				// Stale shell rows must not remain in the live viewport...
+				expect(term.getViewport().join("\n").includes("shell-")).toBeFalsy();
+				// ...but terminal scrollback history is preserved (no \x1b[3J wipe).
+				expect(term.getScrollBuffer().join("\n").includes("shell-0")).toBeTruthy();
 			} finally {
 				tui.stop();
 			}

@@ -1,0 +1,11 @@
+#+TITLE: harness-get-bash-hang-root-cause--break-
+
+** ITEM Harness get/bash hang root cause: break_long_word infinite loop on trailing lone ESC + stale native binary
+:PROPERTIES:
+:CUSTOM_ID: CON-harness-get-bash-hang-root-cause--break-
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T22:51:11Z
+:END:
+:RELATIONS:
+:END:

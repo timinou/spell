@@ -24,6 +24,7 @@ export var Reason;
     Reason["UNCAUGHT_EXCEPTION"] = "uncaught_exception";
     Reason["UNHANDLED_REJECTION"] = "unhandled_rejection";
     Reason["MANUAL"] = "manual";
+    Reason["TERMINAL_LOST"] = "terminal_lost";
 })(Reason || (Reason = {}));
 // Internal list of active cleanup callbacks (in registration order)
 const callbackList = [];
@@ -342,5 +343,26 @@ export async function quit(code = 0) {
         await Promise.race([promise, Bun.sleep(5000)]);
     }
     process.exit(code);
+}
+/**
+ * Runs cleanup callbacks for a specific reason and exits gracefully.
+ * Used for non-signal shutdown paths (e.g. terminal pty loss).
+ */
+export async function quitGracefully(reason) {
+    await runCleanup(reason);
+    if (!isMainThread) {
+        return;
+    }
+    if (process.stdout.writableLength > 0) {
+        if (!process.stdout.writable) {
+            // stdout is not writable — cannot drain, skip wait
+        }
+        else {
+            const { promise, resolve } = Promise.withResolvers();
+            process.stdout.once("drain", resolve);
+            await Promise.race([promise, Bun.sleep(1500)]);
+        }
+    }
+    process.exit(0);
 }
 //# sourceMappingURL=postmortem.js.map

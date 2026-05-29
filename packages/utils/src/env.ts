@@ -82,3 +82,15 @@ export function $pickenv(...keys: string[]): string | undefined {
 	}
 	return undefined;
 }
+
+/**
+ * Reads a boolean-like environment variable. Truthy values: 1, Y, TRUE, YES,
+ * ON (case-insensitive). Anything else (including unset) returns `def`.
+ */
+const TRUTHY: Record<string, boolean> = { "1": true, Y: true, TRUE: true, YES: true, ON: true };
+export function $flag(name: string, def = false): boolean {
+	const value = $env[name];
+	if (!value) return def;
+	return TRUTHY[value.trim().toUpperCase()] === true;
+}
+

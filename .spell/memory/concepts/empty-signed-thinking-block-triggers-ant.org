@@ -1,0 +1,19 @@
+#+TITLE: empty-signed-thinking-block-triggers-ant
+
+** ITEM Empty signed thinking block triggers Anthropic 400
+
+Symptom: `messages.N.content.M: thinking/redacted_thinking blocks in the latest assistant message cannot be modified` (HTTP 400).
+
+Root cause: an assistant turn carries a `thinking` block with empty body (`thinking:""`) but a real `thinkingSignature`. The signature is an HMAC over the original thinking text; empty body ≠ signed content → Anthropic rejects. Only the *latest* assistant message is signature-validated, so prior empty-signed turns pass silently and the failure surfaces only on the most recent turn.
+
+Capture cause: upstream relays (OAuth Claude / better-ccflare proxy at localhost:8080) forward `signature_delta` but not `thinking_delta`, so the stream accumulator in anthropic.ts (`block.thinking += delta`) stays empty while the signature fills in. Persisted as `{type:thinking, thinking:"", thinkingSignature:<sig>}`.
+
+Fix: in `convertAnthropicMessages` (packages/ai/src/providers/anthropic.ts), the `hasSignedThinking` branch emitted the signed block verbatim even when body was empty. Added guard `if (block.thinking.length === 0) continue;` — an empty signed thinking block can never validate, so drop it. Invariant: never emit a thinking block with empty text. Regression test in anthropic-thinking-immutability.test.ts.
+:PROPERTIES:
+:CUSTOM_ID: CON-empty-signed-thinking-block-triggers-ant
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T09:44:28Z
+:END:
+:RELATIONS:
+:END:

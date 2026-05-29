@@ -24,8 +24,13 @@ export class SettingsList {
             item.currentValue = newValue;
         }
     }
+    #parent;
+    setParent(p) {
+        this.#parent = p;
+    }
     invalidate() {
         this.#submenuComponent?.invalidate?.();
+        this.#parent?.markDirty();
     }
     render(width) {
         // If submenu is active, render it instead
@@ -83,24 +88,30 @@ export class SettingsList {
         return lines;
     }
     handleInput(data) {
-        // If submenu is active, delegate all input to it
-        // The submenu's onCancel (triggered by escape) will call done() which closes it
-        if (this.#submenuComponent) {
-            this.#submenuComponent.handleInput?.(data);
-            return;
+        try {
+            // If submenu is active, delegate all input to it
+            // The submenu's onCancel (triggered by escape) will call done() which closes it
+            if (this.#submenuComponent) {
+                this.#submenuComponent.handleInput?.(data);
+                return;
+            }
+            // Main list input handling
+            if (matchesKey(data, "up")) {
+                this.#selectedIndex = this.#selectedIndex === 0 ? this.#items.length - 1 : this.#selectedIndex - 1;
+            }
+            else if (matchesKey(data, "down")) {
+                this.#selectedIndex = this.#selectedIndex === this.#items.length - 1 ? 0 : this.#selectedIndex + 1;
+            }
+            else if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n" || data === " ") {
+                this.#activateItem();
+            }
+            else if (matchesKey(data, "escape") || matchesKey(data, "esc") || matchesKey(data, "ctrl+c")) {
+                this.#onCancel();
+            }
         }
-        // Main list input handling
-        if (matchesKey(data, "up")) {
-            this.#selectedIndex = this.#selectedIndex === 0 ? this.#items.length - 1 : this.#selectedIndex - 1;
-        }
-        else if (matchesKey(data, "down")) {
-            this.#selectedIndex = this.#selectedIndex === this.#items.length - 1 ? 0 : this.#selectedIndex + 1;
-        }
-        else if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n" || data === " ") {
-            this.#activateItem();
-        }
-        else if (matchesKey(data, "escape") || matchesKey(data, "esc") || matchesKey(data, "ctrl+c")) {
-            this.#onCancel();
+        finally {
+            // BUG-391: dirty must propagate even when only #selectedIndex changed.
+            this.#parent?.markDirty();
         }
     }
     #activateItem() {

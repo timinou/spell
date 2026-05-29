@@ -1,10 +1,12 @@
-import type { Component } from "../tui";
+import type { Component, DirtyParent } from "../tui";
 /**
  * Box component - a container that applies padding and background to all children
  */
-export declare class Box implements Component {
+export declare class Box implements Component, DirtyParent {
     #private;
     children: Component[];
+    setParent(p: DirtyParent | undefined): void;
+    markDirty(): void;
     constructor(paddingX?: number, paddingY?: number, bgFn?: (text: string) => string);
     addChild(component: Component): void;
     removeChild(component: Component): void;

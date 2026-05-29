@@ -1,0 +1,28 @@
+#+TITLE: cross-file-reference-resolution-works-fo
+
+** ITEM cross-file reference resolution works for engine-profile languages
+
+CORRECTS the prior probe that claimed EngineProfileExtractor doesn't populate import_bindings for Rust.
+
+pi-code-graph resolve_reference_target (crates/pi-code-graph/src/indexer.rs) resolves cross-file references via 5 strategies:
+- S1: exact (from_file, name) — same-file
+- S2: unique_symbol_match_in_file — same-file fuzzy
+- S3: namespace.member via import_bindings — cross-file
+- S4: import_bindings[name] — cross-file
+- S5 (NEW, F-4a): workspace-unique name fallback — exactly-one workspace match, else no edge. Precomputed via build_workspace_name_index (O(symbols) once, O(log n) lookup).
+
+Rust's precise path (S3/S4) ALREADY WORKS: rust_imports extracts use-decls (incl {a,b} lists + `as` aliases), resolve_rust_import + rust_module_candidates map crate::a::b to on-disk files (requires candidate.exists() — so needs a REAL module layout, not a synthetic fixture), and the builder loop wires resolved bindings into ImportBindingMap.
+
+Why the prior probe saw "0 References edges": it measured SemanticBackend graph-presence on a fixture lacking on-disk module files, so resolve_rust_import's candidate.exists() checks all failed → fell to the Cargo.toml sentinel → no usable binding. NOT a missing-implementation problem.
+
+Regression guard: indexer.rs tests rust_use_binding_resolves_ambiguous_cross_file_reference (precise binding picks 1 of 2 ambiguous `render` defs) + rust_bare_call_without_use_does_not_resolve_ambiguous_name (no use → 0 edges). Teeth verified by temp-breaking the binding loop.
+:PROPERTIES:
+:CUSTOM_ID: CON-cross-file-reference-resolution-works-fo
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T09:57:55Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: FUP-101-f-4-resolved-cross-file-reference-resoluti
+DISTILLED_FROM: FUP-098-dispatch-precursor-for-fup-094-predicate
+:END:

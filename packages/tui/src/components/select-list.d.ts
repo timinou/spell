@@ -1,5 +1,5 @@
 import type { SymbolTheme } from "../symbols";
-import type { Component } from "../tui";
+import type { Component, DirtyParent } from "../tui";
 export interface SelectItem {
     value: string;
     label: string;
@@ -20,6 +20,7 @@ export declare class SelectList implements Component {
     private readonly items;
     private readonly maxVisible;
     private readonly theme;
+    setParent(p: DirtyParent | undefined): void;
     onSelect?: (item: SelectItem) => void;
     onCancel?: () => void;
     onSelectionChange?: (item: SelectItem) => void;

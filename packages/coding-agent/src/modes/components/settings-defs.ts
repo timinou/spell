@@ -313,7 +313,12 @@ const OPTION_PROVIDERS: Partial<Record<SettingPath, OptionProvider>> = {
 		{ value: "grep", label: "grep.app", description: "Uses Vercel grep.app public code search" },
 	],
 	"providers.image": [
-		{ value: "auto", label: "Auto", description: "Priority: OpenRouter > Gemini" },
+		{ value: "auto", label: "Auto", description: "Priority: Antigravity > ChatGPT (Codex) > OpenRouter > Gemini" },
+		{
+			value: "openai-codex",
+			label: "ChatGPT (Codex)",
+			description: "Uses ChatGPT Plus/Pro subscription via gpt-image-2 (3-5x normal turn cost)",
+		},
 		{ value: "gemini", label: "Gemini", description: "Requires GEMINI_API_KEY" },
 		{ value: "openrouter", label: "OpenRouter", description: "Requires OPENROUTER_API_KEY" },
 	],

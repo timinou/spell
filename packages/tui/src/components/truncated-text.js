@@ -11,8 +11,12 @@ export class TruncatedText {
         this.#paddingX = paddingX;
         this.#paddingY = paddingY;
     }
+    #parent;
+    setParent(p) {
+        this.#parent = p;
+    }
     invalidate() {
-        // No cached state to invalidate currently
+        this.#parent?.markDirty();
     }
     render(width) {
         const result = [];

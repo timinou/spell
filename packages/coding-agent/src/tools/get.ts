@@ -9,7 +9,7 @@ import type { InternalUrlRouter } from "../internal-urls";
 import { RouterDelegateToKernel } from "../internal-urls/router";
 import type { Theme } from "../modes/theme/theme";
 import getDescription from "../prompts/tools/get.md" with { type: "text" };
-import { renderCodeCell, renderStatusLine } from "../tui";
+import { renderCodeCell, renderStatusLine, truncateToWidth } from "../tui";
 import { type CodePathFormatMode, formatCodePathResult } from "./codepath-result";
 import { sessionContextOpts } from "./codepath-session";
 import type { CodePathChunk, GetParams, NodeRefDto } from "./codepath-types";
@@ -312,16 +312,25 @@ export function renderCodePathCall(
 	theme: unknown,
 ): Component {
 	const uiTheme = theme as Theme;
-	const line = renderStatusLine(
-		{
-			icon: options.isPartial ? "pending" : "success",
-			spinnerFrame: options.spinnerFrame,
-			title: verb,
-			description: query ? truncateQuery(query) : undefined,
+	return {
+		// Width-aware: the fixed CODEPATH_HEADER_MAX query budget does not account
+		// for the icon + verb + separator prefix, so a near-budget query can still
+		// overflow a narrow terminal. Compose the full status line, then truncate
+		// to the real terminal width (ANSI-preserving) to guarantee it fits.
+		render: (width: number) => {
+			const line = renderStatusLine(
+				{
+					icon: options.isPartial ? "pending" : "success",
+					spinnerFrame: options.spinnerFrame,
+					title: verb,
+					description: query ? truncateQuery(query) : undefined,
+				},
+				uiTheme,
+			);
+			return [width > 0 ? truncateToWidth(line, width) : line];
 		},
-		uiTheme,
-	);
-	return { render: () => [line], invalidate: () => {} };
+		invalidate: () => {},
+	};
 }
 
 /** Resolved-state code cell: verb + CodePath in the header, counts in meta. */

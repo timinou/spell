@@ -15,12 +15,14 @@ export * from "./components/spacer";
 export * from "./components/tab-bar";
 export * from "./components/text";
 export * from "./components/truncated-text";
+export * from "./dev-profile";
 // Fuzzy matching
 export * from "./fuzzy";
 // Keybindings
 export * from "./keybindings";
 // Kitty keyboard protocol helpers
 export * from "./keys";
+export * from "./spinner-clock";
 // Mermaid diagram support
 // Input buffering for batch splitting
 export * from "./stdin-buffer";

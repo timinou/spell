@@ -1,0 +1,25 @@
+#+TITLE: interleaved-tool-result-corruption-from-
+
+** ITEM Interleaved tool_result corruption from intentionSummary on needs_input
+
+SYMPTOM: Anthropic 400 "messages.N.content.M: unexpected tool_use_id in tool_result blocks: toolu_... Each tool_result must have a corresponding tool_use in previous message." Session can't resume.
+
+ROOT CAUSE: When an `ask`/needs_input (or pending_approval) blocking event fires while a multi-tool assistant batch is still streaming results, IntentionController.#fireBriefing (packages/coding-agent/src/modes/controllers/intention-controller.ts) calls sessionManager.appendCustomMessageEntry(INTENTION_SUMMARY_MESSAGE_TYPE,...). appendCustomMessageEntry parents the new custom_message onto the CURRENT LEAF (#leafId), which mid-batch is a tool_result. The next sibling tool_result then parents onto the intentionSummary node. Result: the parentId chain interleaves a non-result node BETWEEN tool_results of one batch. convertToLlm (order-preserving map: custom_message -> user) then splits the tool_result run with a user message -> trailing results become orphans (no matching tool_use in prev msg) -> provider 400.
+
+Diagnostic: walk parentId chain in the .jsonl; find a non-"message" node (type:custom_message, customType:intentionSummary, details.superseded often true) whose parent is a toolResult AND whose child is a toolResult. That mid-run splice is the unique offender. (intentionSummaries that parent a toolResult but whose child is an assistant are end-of-run = harmless.)
+
+MANUAL REPAIR of a corrupted .jsonl: drop the phantom node line; re-parent its toolResult child onto the phantom's parent (the preceding toolResult). Verify by re-assembling the chain: 0 orphan + 0 duplicate tool_results.
+
+CODE FIX (the real cure): added hoistInterleavedToolResults(messages: Message[]) in packages/coding-agent/src/session/messages.ts, called as the final pass of convertToLlm. It scans each tool_result run and hoists any non-result message found INSIDE the run (i.e. another result follows it before the next assistant) to immediately AFTER the run; messages that legitimately trail a completed run are untouched. Provider-agnostic, self-heals already-corrupted sessions on load. Proven against pre-surgery backups: agentmaker session orphans 21->0, fup095 session 2->0.
+
+RELATED BUT DISTINCT: transcript-repair.ts::repairUnpairedToolCalls (BUG-420) handles the inverse — assistant toolCall with NO result after hard kill (inserts synthetic aborted result), wired at session-manager.ts buildSessionContext. Two complementary layers of the same tool-pairing invariant.
+
+POSSIBLE DEEPER FIX (not done): make appendCustomMessageEntry / IntentionController refuse to splice into a mid-batch leaf — append after the batch completes, or mark the node as non-chain display-only. The convertToLlm hoist is the robust backstop regardless.
+:PROPERTIES:
+:CUSTOM_ID: CON-interleaved-tool-result-corruption-from-
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T10:55:11Z
+:END:
+:RELATIONS:
+:END:

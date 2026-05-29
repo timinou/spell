@@ -246,12 +246,6 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	deferrable?: boolean;
 	/** If true, tool execution ignores abort signals (runs to completion) */
 	nonAbortable?: boolean;
-	/**
-	 * Concurrency mode for tool scheduling when multiple calls are in one turn.
-	 * - "shared": can run alongside other shared tools (default)
-	 * - "exclusive": runs alone; other tools wait until it finishes
-	 */
-	concurrency?: "shared" | "exclusive";
 	/** If true, argument validation errors are non-fatal: raw args are passed to execute() instead of returning an error to the LLM. */
 	lenientArgValidation?: boolean;
 	/**

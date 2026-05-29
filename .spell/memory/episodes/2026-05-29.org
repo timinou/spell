@@ -1,0 +1,155 @@
+#+TITLE: Episodes 2026-05-29
+
+** ITEM TUI: surface CodePath + metadata for find/get/create tools
+
+code-cell metaParts; shared renderCodePathCall/Cell; find/get/create renderCall + mergeCallAndResult; "Get" leak fixed; create shows path+bytes; tool-execution dedup fallback. Touched files type/biome clean. Repo-wide check:ts red is pre-existing unrelated WIP.
+:PROPERTIES:
+:CUSTOM_ID: EP-688dd27050164b5
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T10:01:51Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-787-tui-surface-codepath-metadata-for-find-g
+:END:
+** ITEM CodePath result match grouping by file (ripgrep heading shape)
+
+ripgrep heading grouping in codepath-result.ts (renderMatchGroups). Golden tests updated; 14 green.
+:PROPERTIES:
+:CUSTOM_ID: EP-85210d4511ede690
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T10:01:51Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-785-codepath-result-match-grouping-by-file-r
+:END:
+** ITEM CodePath result stats (node/match/file counts) surfaced to details
+
+CodePathStats threaded into details at both call sites; unit tests green.
+:PROPERTIES:
+:CUSTOM_ID: EP-393486cb07ba73f
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T10:02:03Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-786-codepath-result-stats-node-match-file-co
+:END:
+** ITEM TUI scroll-snap-to-bottom during tasks investigation. Root causes (verified via xterm-headless write-capture probes): (1) in-place spinner ticks emit CR+CLR-LINE only, 0 newlines → preserve scroll. (2) content growth emits \r\n per appended line → emulator follows. (3) fullRender(true) emits \x1b[3J\x1b[2J\x1b[H → ERASES scrollback + reprints whole transcript → snaps to bottom AND loses history. Naive 3J→2J downgrade is WRONG: proven to quadruple transcript in scrollback (MARK-0 ×4, 40→142 lines). User on niri+ghostty switching focus mid-task → niri controller.ts:205,215 calls requestRender(true) on image suppress/restore → triggers 3J path. ghostty discussion #10456 confirms emulator-policy half (their fix: scroll-to-bottom config; iTerm pauses follow during manual scroll). UPSTREAM can1357/oh-my-pi already solved history-loss: tui.ts refactored to RenderIntent union (noop/initial/sessionReplace/historyRebuild/viewportRepaint/shrink/diff), 3J gated behind clearScrollback option (default off, multiplexer-aware via isMultiplexerSession TMUX/STY/ZELLIJ). Port delta: upstream tui.ts 1719 vs ours 1622; ours has spinner-clock+dev-profile+SPINNER_MARKER that upstream lacks (must preserve); we lack $flag in pi-utils (upstream env.ts:165).
+:PROPERTIES:
+:CUSTOM_ID: EP-aadf69aa8cc1f19c
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T10:14:51Z
+:END:
+:RELATIONS:
+ABOUT: packages/tui/src/tui.ts
+:END:
+** ITEM Session transcript leaves toolCalls unpaired after hard process kill
+
+Fixed via repairUnpairedToolCalls (packages/coding-agent/src/session/transcript-repair.ts), wired into buildSessionContext return in session-manager.ts so every loaded session is self-consistent. Pure fn, mirrors createAbortedToolResult shape. Tests: packages/coding-agent/test/session/transcript-repair.test.ts (6 pass). Validated against 902 real local sessions: 25 had orphan toolCalls (27 total), all 27 repaired → 0 unpaired remaining. Session suite 67/0, no regressions.
+:PROPERTIES:
+:CUSTOM_ID: EP-6dc422fb49901c32
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T10:57:48Z
+:END:
+:RELATIONS:
+ABOUT: BUG-420-session-transcript-leaves-toolcalls-unpa
+:END:
+** ITEM Pending tool cells never finalize on agent_end sweep and history replay
+
+Fixed via shared helper finalizeOrphanPendingTools (packages/coding-agent/src/modes/utils/finalize-pending-tools.ts). Wired into both sites: event-controller.ts agent_end sweep + ui-helpers.ts replay tail. Added ToolExecutionComponent.isPending getter. Tests: packages/coding-agent/test/modes/finalize-pending-tools.test.ts (6 pass). Background/async cells preserved; non-background orphans finalized to an error cell ("Interrupted (no result recorded)").
+:PROPERTIES:
+:CUSTOM_ID: EP-d4b861cf7b646a3c
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T10:57:48Z
+:END:
+:RELATIONS:
+ABOUT: BUG-419-pending-tool-cells-never-finalize-on-age
+:END:
+** ITEM TUI snaps transcript to bottom and wipes scrollback during tasks
+
+Fixed via PLAN-321 RenderIntent port. Forced redraws (resize/focus/post-init) now preserve scrollback; \x1b[3J gated behind clearScrollback opt-in, multiplexer-aware. tui suite 363 pass 0 fail. Emulator follow-on-output documented (ghostty scroll-to-bottom workaround).
+:PROPERTIES:
+:CUSTOM_ID: EP-5a97b7d8a1ac21e
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T11:17:37Z
+:END:
+:RELATIONS:
+ABOUT: BUG-418-tui-snaps-transcript-to-bottom-and-wipes
+:END:
+** ITEM Port RenderIntent scrollback-preserving renderer from upstream
+
+All 4 waves complete. tui.ts RenderIntent renderer grafted (preserving spinner-clock/SPINNER_MARKER/dev-profile); $flag added to pi-utils; caller audit (no caller needs wipe — clearScrollback API reserved for /clear); regression test + docs. Verify: tui 363 pass 0 fail, tui typecheck clean. coding-agent's 62 errors pre-exist at HEAD (unrelated WIP).
+:PROPERTIES:
+:CUSTOM_ID: EP-eae25dcda11fd2c3
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T11:18:01Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-321-port-renderintent-scrollback-preserving
+:END:
+** ITEM Diagnosis: tool cells "stuck pending" in live TUI = stale NATIVE terminal scrollback. Root: a ToolExecutionComponent created pending (status.pending "⏳") that scrolls ABOVE the viewport before its result arrives is frozen-pending in the terminal's native scrollback. Its later tool_execution_end → updateResult only mutates the in-memory #previousLines + repaints the VISIBLE viewport (planRender: offscreen edit → viewportRepaint; emitDiff scroll commits top rows to native scrollback). You cannot edit a row the terminal already scrolled into native scrollback in place. Manifests for LARGE PARALLEL (shared-concurrency) batches (session 14f48ced had batches of 77/59/35/29 toolCalls): all cells created pending at message-stream time, scroll off before execution finishes. Sequential/small calls finalize while still in viewport → scroll off correctly (explains user's "async vs sync"). EXPOSED TODAY by PLAN-321 (RenderIntent port): it replaced fullRender (\x1b[3J clear + full transcript reprint on every forced redraw) with viewportRepaint; the old periodic full reprint had been HEALING stale scrollback rows as a side effect. BUG-419/420 (orphan finalize + transcript repair) and BUG-418/PLAN-321 (stop scrollback wipe) were the 3 prior attempts; none address in-flight scroll-off staleness. Transcript on disk is fully paired (392/392); path-walk replay shows only the 1 live in-flight orphan — so this is a live-render bug, not a model/pairing bug. Hard constraint: native scrollback is immutable once scrolled; correct fix = never commit unstable (pending) rows to scrollback (keep live region in viewport until finalized), which for batches > viewport height requires collapsing parallel tool cells into a bounded group (cf ReadToolGroupComponent).
+:PROPERTIES:
+:CUSTOM_ID: EP-ea896827f9f522fa
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T20:36:23Z
+:END:
+:RELATIONS:
+ABOUT: packages/tui/src/tui.ts
+ABOUT: BUG-419-pending-tool-cells-never-finalize-on-age
+ABOUT: PLAN-321-port-renderintent-scrollback-preserving
+:END:
+** ITEM PROVEN via xterm-headless (VirtualTerminal, height 6): a row mutated AFTER it scrolled into native terminal scrollback is NOT updated — "PENDING-cell" survives in getScrollBuffer(), "DONE-cell" update lost. Confirms tool cells stuck pending = stale native scrollback rows. Big parallel batches (session 14f48ced: batches of 59/77/87 mixed bash/get/find/edit/puppeteer/org) stream ALL cells pending during message_update, overflow viewport, scroll pending rows into immutable scrollback before tool_execution_end results arrive. Small (1-3) batches finalize while still in viewport → scroll off correctly ⇒ user's "async vs sync" perception. Fix chosen (option 1): LiveToolBatchComponent — bound a parallel batch's rendered height while pending (compact progress view) so it stays in viewport; expand to full per-cell output only after ALL cells finalize (safe to scroll off). Group masquerades as ToolExecutionHandle keyed by toolCallId so event-controller pendingTools routing (updateResult/updateArgs/setArgsComplete by id) works unchanged; only cell-creation sites (message_update + tool_execution_start) route into the group instead of chatContainer. Replay (ui-helpers) untouched: replayed batches are all-finalized → render full = visually identical. agent-loop runs all batch tools to completion before next assistant msg → group is always bottom content at finalize → expansion appends safely (no historyRebuild snap).
+:PROPERTIES:
+:CUSTOM_ID: EP-146d7ca29f0c89d8
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T21:28:47Z
+:END:
+:RELATIONS:
+ABOUT: packages/tui/src/tui.ts
+ABOUT: packages/coding-agent/src/modes/controllers/event-controller.ts
+:END:
+** ITEM LIVE E2E verification of LiveToolBatchComponent fix: wrote packages/coding-agent/test/modes/live-batch-integration.test.ts driving the REAL EventController on a real TUI + xterm VirtualTerminal through a 40-call mixed sync/async batch (every 5th async/background) with background jobs completing OUT OF ORDER via tool_execution_update(details.async.state=completed). Asserts: no cell frozen pending/running in native scrollback while batch pending; all 40 pendingTools entries multiplex to ONE group handle; background calls survive agent_end sweep (finalizeOrphanPendingTools preserves #backgroundToolCallIds); pendingTools fully drains after async completions; pure-sync >viewport batch regression case. 2 pass.
+
+SECOND BUG found+fixed while building the faithful harness: EventController#updateWorkingMessageFromPartialToolArgs was CALLED at 2 sites (the streaming "until intent available, show tool-argument byte progress" fallback, ~lines 349 & 451) but NEVER DEFINED anywhere in the repo (verified: 0 defs across all git history via pickaxe). Every message_update frame for a toolCall whose _i intent field had not yet streamed hit the fallback → threw 'TypeError: this.#updateWorkingMessageFromPartialToolArgs is not a function' → swallowed by the handleEvent subscriber-boundary guard as a DROPPED FRAME. So early streaming frames of large batches were silently lost, compounding the frozen-pending perception. Implemented the method: byte-progress 'toolName (NB)' while #lastIntent unset, no-op once intent resolved. Committed abc1234 on branch fup-099-live-semantic-dispatch.
+
+HARNESS BUG NOTED (user-confirmed): the `get` tool and any bash output containing the long literal identifier 'updateWorkingMessageFromPartialToolArgs' truncate/hang the result rendering. Workaround: read via python to a /tmp file with the identifier string-replaced to a short alias, then cat. Avoid `get` for these files; use bash+python.
+
+Pre-existing unrelated failures in packages/coding-agent/test/modes/ (confirmed failing at fb596064e before any of this work, DO NOT attribute to these fixes): 6x AgentDashboard 'wave-2: effective rule surfacing' + 1x 'InteractiveMode plan approval todo details' (sessionManager.getEntries is not a function). Full modes suite after fix: 268 pass / 7 fail (same 7).
+:PROPERTIES:
+:CUSTOM_ID: EP-df6cdbcacb65d225
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T22:14:48Z
+:END:
+:RELATIONS:
+ABOUT: packages/coding-agent/src/modes/controllers/event-controller.ts
+ABOUT: CON-pending-tool-cells-stuck---stale-native-
+:END:
+** ITEM CORRECTION to EP-df6cdbcacb65d225 (that episode is WRONG, disregard): EventController#updateWorkingMessageFromPartialToolArgs is NOT missing — it has existed since c5323baf1 (2026-04-02) at event-controller.ts:~156. My earlier "missing method" conclusion was a FALSE POSITIVE caused by the harness `get`/bash-truncation bug on the long identifier string. I wrongly added a duplicate definition → "already declared" transpile break → committed broken code (68a8f6547) → then RESET --soft and fully reverted; event-controller.ts is now byte-identical to HEAD (verified via diff). No production code in event-controller was changed by this whole episode.
+
+REAL second bug found+fixed (commit c8e4a4f4d): LiveToolBatchComponent had a stuck-dirty propagation bug. It overrides render() but never resets the base Container #dirty flag, so after the first dirtying, Container.markDirty()'s `if(this.#dirty) return` guard permanently swallowed upward propagation (the BUG-391 hazard, documented in Container.invalidate() comment). LIVE EFFECT: once the compact group painted, later result/spinner updates bubbling up from child cell components never reached the TUI root → group froze on its compact "N running" summary even after all tools finished — recreating the stuck-pending symptom one layer up. FIX: route both markDirty() and invalidate() through Container.invalidate() (which unconditionally calls #parent.markDirty()). Removed unused DirtyParent import.
+
+WHY UNIT TESTS MISSED IT: live-tool-batch.test.ts calls component.render() directly, bypassing TUI dirty propagation. Only a real-TUI integration test caught it. Wrote packages/coding-agent/test/modes/live-batch-integration.test.ts: drives the REAL EventController on real TUI+VirtualTerminal through 40-call mixed sync/async batch with background jobs completing OUT OF ORDER (tool_execution_end state=running → later tool_execution_update state=completed). Asserts: no cell frozen above viewport in native scrollback; 40 ids → 1 group handle; background calls survive agent_end sweep; pendingTools drains to 0; compact "more ·"/"running" gone after expansion. 3 integration + 6 unit = 9 pass. Modes suite 271 pass / 7 fail (7 pre-existing: AgentDashboard rule-surfacing + plan-approval getEntries, fail at fb596064e).
+
+HARNESS BUGS confirmed this session (report to user): (1) `get` tool hangs/aborts on certain reads; switched to bash+python entirely. (2) bash output rendering truncates/mangles lines containing the long literal 'updateWorkingMessageFromPartialToolArgs' — must string-replace to a short alias before printing. These caused the false-positive above; high-cost lesson: NEVER conclude "symbol undefined" from a truncated grep — verify with python regex count of DEFS vs USES.
+
+TEST HARNESS requirement learned: the real EventController reads settings.get(...) when building tool cells; integration tests MUST call `await Settings.init({inMemory:true})` in beforeAll or every message_update throws "Settings not initialized" (swallowed by handleEvent guard → cells silently never created → misleading 0-size pendingTools).
+:PROPERTIES:
+:CUSTOM_ID: EP-732a900ca047ed36
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T22:23:27Z
+:END:
+:RELATIONS:
+ABOUT: packages/coding-agent/src/modes/components/live-tool-batch.ts
+ABOUT: CON-pending-tool-cells-stuck---stale-native-
+:END:

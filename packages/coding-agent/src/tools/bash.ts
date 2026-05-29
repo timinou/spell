@@ -229,11 +229,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	readonly label = "Bash";
 	readonly description: string;
 	readonly parameters: BashToolSchema;
-	// Each bash call now runs in its own ephemeral shell (see bash-executor:
-	// persistence is opt-in via sessionKey, which the tool no longer passes), so
-	// there is no shared cwd/env to corrupt — a parallel batch is safe to run
-	// concurrently instead of being serialised.
-	readonly concurrency = "shared";
+
 	readonly strict = true;
 	readonly #asyncEnabled: boolean;
 

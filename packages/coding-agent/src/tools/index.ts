@@ -96,7 +96,7 @@ export * from "./exit-plan-mode";
 export * from "./fetch";
 
 export * from "./gateway";
-export * from "./gemini-image";
+export * from "./image-generation";
 export * from "./get";
 export * from "./goals-tool";
 
