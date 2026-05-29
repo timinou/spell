@@ -1,0 +1,43 @@
+#+TITLE: CodePath result stats (node/match/file counts) surfaced to details
+#+STATE: DONE
+#+SESSION_ID: 14f4129ed0955529
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-29T09-33-47-714Z_14f4129ed0955529.jsonl]]
+#+CUSTOM_ID: FEAT-786-codepath-result-stats-node-match-file-co
+#+COMPLETION_HASH: fe687b372ea3dd5c
+
+* Initial Message
+
+How would you improve the Get, Find, and Create tools'
+1. TUI? I want to see the CodePath and other useful information
+2. Output to the LLM? right now it seems like file paths are getting rewritten at every line hit
+
+* Problem
+`formatCodePathResult` computes the full node set but returns only `{text, meta,
+images}`. The TUI renderers for get/find/create have no count data to show, and
+`details` carries no quantitative summary. The model and the TUI both lose "how
+much came back".
+
+* Goal
+Extend `formatCodePathResult` to also return `stats: { nodeCount, matchCount,
+fileCount }` (computed post-limit), and thread these into the tool result
+`details` so the TUI renderer can build a meta line.
+
+* Scope
+- `codepath-result.ts`: add `stats` to `CodePathResult`; compute nodeCount
+  (post-limit nodes.length), matchCount (isMatchShapeNode count), fileCount
+  (distinct `formatLocator(node).path`).
+- `get.ts`: extend `GetToolResultDetails` with `nodeCount? matchCount?
+  fileCount?`; populate from `result.stats` in both the main path and the
+  internal-router codepath-suffix path.
+
+* Non-goals
+- No change to `text` output (that is the grouping FEAT).
+- No behavioural change to limits/meta.
+
+* Acceptance
+- `formatCodePathResult(...).stats` returns correct counts for mixed/match/file
+  node sets (unit test).
+- `GetTool.execute` result `details` carries the counts.
+- `bun test packages/coding-agent/test/codepath-result.test.ts get.test.ts` green.
+
+NOTE [2026-05-29]: CodePathStats threaded into details at both call sites; unit tests green.

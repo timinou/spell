@@ -7,9 +7,10 @@ import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import createDescription from "../prompts/tools/create.md" with { type: "text" };
 import { enforcePathWrite } from "../sandbox";
-import { renderCodeCell } from "../tui";
+import { renderCodeCell, renderStatusLine } from "../tui";
 import type { ToolSession } from ".";
 import { isCodeToolSupportedPath } from "./code-supported-files";
+import { sessionContextOpts } from "./codepath-session";
 import type { CreateParams } from "./codepath-types";
 import { createSchema } from "./codepath-types";
 import { evaluateWriteGuards } from "./managed-buffer-guards";
@@ -17,7 +18,6 @@ import { enforceModeWrite } from "./mode-guard";
 import { resolveCwdRelativePath } from "./path-resolution";
 import { replaceTabs } from "./render-utils";
 import { type DetailsWithMeta, toolResult } from "./tool-result";
-import { sessionContextOpts } from "./codepath-session";
 
 type CreateToolResultDetails = DetailsWithMeta & {
 	path?: string;
@@ -33,6 +33,8 @@ export class CreateTool implements AgentTool<typeof createSchema> {
 	readonly description = createDescription;
 	readonly parameters = createSchema;
 	readonly lenientArgValidation = true;
+	// FEAT-787: pending shows the target path; result shows the cell.
+	readonly mergeCallAndResult = true;
 
 	constructor(private readonly session: ToolSession) {}
 
@@ -102,7 +104,7 @@ export class CreateTool implements AgentTool<typeof createSchema> {
 		// caller deliberately wants to replace a large file with a tiny
 		// one. Parse-regression guard stays on either way.
 		if (params.force && isCodeToolSupportedPath(resolvedPath)) {
-   const guard = await evaluateWriteGuards(resolvedPath, content, { force: params.force === true });
+			const guard = await evaluateWriteGuards(resolvedPath, content, { force: params.force === true });
 			if ("ok" in guard && guard.ok === false) {
 				return toolResult<CreateToolResultDetails>({ path: params.path, error: guard.code })
 					.text(guard.detail)
@@ -147,8 +149,24 @@ export class CreateTool implements AgentTool<typeof createSchema> {
 			.done();
 	}
 
+	renderCall(args: unknown, options: RenderResultOptions, theme: unknown): Component {
+		const uiTheme = theme as Theme;
+		const createPath = (args as CreateParams | undefined)?.path;
+		const line = renderStatusLine(
+			{
+				icon: options.isPartial ? "pending" : "success",
+				spinnerFrame: options.spinnerFrame,
+				title: this.label,
+				description: createPath,
+			},
+			uiTheme,
+		);
+		return { render: () => [line], invalidate: () => {} };
+	}
+
 	renderResult(result: AgentToolResult, options: RenderResultOptions, theme: unknown): Component {
 		const uiTheme = theme as Theme;
+		const details = result.details as CreateToolResultDetails | undefined;
 		const text = result.content
 			.filter(c => c.type === "text")
 			.map(c => (c as { text?: string }).text ?? "")
@@ -156,14 +174,20 @@ export class CreateTool implements AgentTool<typeof createSchema> {
 		const sanitized = replaceTabs(text);
 		const maxChars = 2_000;
 		const truncated = sanitized.length > maxChars ? `${sanitized.slice(0, maxChars)}\n...truncated` : sanitized;
+		const createPath = details?.path;
+		const title = createPath ? `${this.label}  ${createPath}` : this.label;
+		const metaParts: string[] = [];
+		if (typeof details?.bytes === "number") metaParts.push(`${details.bytes} B`);
+		if (details?.exists && !details?.created) metaParts.push("exists");
 		return {
 			render: (width: number) =>
 				renderCodeCell(
 					{
 						code: truncated,
 						language: "text",
-						title: "Create",
-						status: "complete",
+						title,
+						metaParts,
+						status: result.isError ? "error" : "complete",
 						expanded: options.expanded,
 						width,
 					},

@@ -365,21 +365,28 @@ export class ToolExecutionComponent extends Container {
 			this.#contentBox.clear();
 
 			// Render call component
+			// When mergeCallAndResult is set and a result has arrived, shouldRenderCall
+			// is false: the result renderer owns the header, so we must NOT emit the
+			// fallback bold label (that produced a duplicate title above the result
+			// cell). The fallback is only for the case where we intend to render a
+			// call but the tool lacks renderCall.
 			const shouldRenderCall = !this.#result || !mergeCallAndResult;
-			if (shouldRenderCall && tool.renderCall) {
-				try {
-					const callComponent = tool.renderCall(this.#getCallArgsForRender(), this.#renderState, theme);
-					if (callComponent) {
-						this.#contentBox.addChild(ensureInvalidate(callComponent));
+			if (shouldRenderCall) {
+				if (tool.renderCall) {
+					try {
+						const callComponent = tool.renderCall(this.#getCallArgsForRender(), this.#renderState, theme);
+						if (callComponent) {
+							this.#contentBox.addChild(ensureInvalidate(callComponent));
+						}
+					} catch (err) {
+						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
+						// Fall back to default on error
+						this.#contentBox.addChild(new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0));
 					}
-				} catch (err) {
-					logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });
-					// Fall back to default on error
+				} else {
+					// No custom renderCall, show tool name
 					this.#contentBox.addChild(new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0));
 				}
-			} else {
-				// No custom renderCall, show tool name
-				this.#contentBox.addChild(new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0));
 			}
 
 			// Render result component if we have a result

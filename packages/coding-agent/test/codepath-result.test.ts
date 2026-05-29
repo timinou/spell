@@ -100,42 +100,41 @@ describe("buildNodeList grep shape (FEAT-719)", () => {
 		});
 	}
 
-	// W5a: §line[text~=...] renders as `path:line:  content` per match, no LOC#ID block.
-	it("W5a: text-match renders grep -n shape without LINE#ID anchor", () => {
+	// W5a (FEAT-785): single text-match renders as a one-file heading group,
+	// path on a heading line, hit indented beneath. No LINE#ID anchor.
+	it("W5a: text-match renders ripgrep heading shape without LINE#ID anchor", () => {
 		const node = matchLine("src/foo.ts", 42, "AB", "  const cached = useState(initial);");
 		const out = formatNodes([node]);
-		expect(out).toBe("src/foo.ts:42:    const cached = useState(initial);");
+		expect(out).toBe("src/foo.ts\n  42:    const cached = useState(initial);");
 		expect(out).not.toContain("#AB");
 		expect(out).not.toContain("[\u00a7line]");
 	});
 
-	// W5b: multiple matches sorted ascending by line, joined newline-only (no blank gap).
-	it("W5b: multiple matches sorted by line, joined by newline", () => {
+	// W5b (FEAT-785): multiple matches in one file share a single heading, rows
+	// sorted ascending by line and indented beneath.
+	it("W5b: multiple matches in one file share one heading, sorted by line", () => {
 		const nodes = [
 			matchLine("src/foo.ts", 58, "CD", "\tconst [_, setX] = useState(0);"),
 			matchLine("src/foo.ts", 42, "AB", "\tconst cached = useState(initial);"),
 		];
 		const out = formatNodes(nodes);
-		const lines = out.split("\n");
-		expect(lines).toEqual([
-			"src/foo.ts:42:  \tconst cached = useState(initial);",
-			"src/foo.ts:58:  \tconst [_, setX] = useState(0);",
+		expect(out.split("\n")).toEqual([
+			"src/foo.ts",
+			"  42:  \tconst cached = useState(initial);",
+			"  58:  \tconst [_, setX] = useState(0);",
 		]);
 	});
 
-	// W5c: glob — group/sort by file path then line; each row keeps `path:line:  content`.
-	it("W5c: glob matches sort by file then line", () => {
+	// W5c (FEAT-785): glob — one heading block per file, files ordered by path,
+	// lines ascending within; blocks separated by a blank line.
+	it("W5c: glob matches group per file, files sorted by path", () => {
 		const nodes = [
 			matchLine("src/b.ts", 3, "M3", "todo"),
 			matchLine("src/a.ts", 7, "M1", "todo seven"),
 			matchLine("src/a.ts", 2, "M2", "todo two"),
 		];
 		const out = formatNodes(nodes);
-		expect(out.split("\n")).toEqual([
-			"src/a.ts:2:  todo two",
-			"src/a.ts:7:  todo seven",
-			"src/b.ts:3:  todo",
-		]);
+		expect(out).toBe(["src/a.ts", "  2:  todo two", "  7:  todo seven", "", "src/b.ts", "  3:  todo"].join("\n"));
 	});
 
 	// W5d: §line[N] (no shape metadata) keeps LINE#ID block (regression).
@@ -163,14 +162,14 @@ describe("buildNodeList grep shape (FEAT-719)", () => {
 		const out = formatNodes([node]);
 		expect(out).toContain("line three\nline four\nline five");
 		expect(out).toContain("[\u00a7line]");
-		expect(out).not.toMatch(/^src\/foo\.ts:3:  /);
+		expect(out).not.toMatch(/^src\/foo\.ts:3: {2}/);
 	});
 
 	// Edge case: matched line containing colons stays verbatim after the separator.
 	it("matched line containing colons preserves rest verbatim", () => {
 		const node = matchLine("src/foo.ts", 10, "ZZ", "  url: 'http://x.y'; port: 80");
 		const out = formatNodes([node]);
-		expect(out).toBe("src/foo.ts:10:    url: 'http://x.y'; port: 80");
+		expect(out).toBe("src/foo.ts\n  10:    url: 'http://x.y'; port: 80");
 	});
 
 	// Mixed shapes in one stream: match-shape block and ordinal block don't interleave.
@@ -183,8 +182,8 @@ describe("buildNodeList grep shape (FEAT-719)", () => {
 		});
 		const m = matchLine("src/foo.ts", 7, "AB", "foo todo");
 		const out = formatNodes([m, ordinal]);
-		// Match block flushed first (in order encountered), then ordinal.
-		expect(out).toBe("src/foo.ts:7:  foo todo\n\nsrc/foo.ts:1#QQ  [\u00a7line]\nfirst");
+		// Match block (heading group) flushed first, then ordinal LINE#ID block.
+		expect(out).toBe("src/foo.ts\n  7:  foo todo\n\nsrc/foo.ts:1#QQ  [\u00a7line]\nfirst");
 	});
 
 	// Acceptance: 10 matches in 1000-line file < 1KB.
@@ -194,5 +193,44 @@ describe("buildNodeList grep shape (FEAT-719)", () => {
 		);
 		const out = formatNodes(nodes);
 		expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(1024);
+	});
+});
+
+describe("computeStats (FEAT-786)", () => {
+	function matchNode(path: string, line: number, body: string): NodeRefDto {
+		return makeNode({
+			locator: `${path}::<line ${line}#ZZ>`,
+			kind: "\u00a7line",
+			content: { kind: "text", value: body },
+			metadata: { shape: "match", line },
+		});
+	}
+
+	it("counts nodes, matches, and distinct files", () => {
+		const chunks: CodePathChunk[] = [
+			{
+				nodes: [
+					matchNode("src/a.ts", 2, "todo"),
+					matchNode("src/a.ts", 7, "todo"),
+					matchNode("src/b.ts", 3, "todo"),
+				],
+				diagnostics: [],
+				done: true,
+			},
+		];
+		const { stats } = formatCodePathResult(chunks, { format: "node-list" });
+		expect(stats).toEqual({ nodeCount: 3, matchCount: 3, fileCount: 2 });
+	});
+
+	it("matchCount excludes non-match nodes; fileCount dedupes", () => {
+		const chunks: CodePathChunk[] = [
+			{
+				nodes: [makeNode({ locator: "src/a.ts", kind: "\u00a7file" }), matchNode("src/a.ts", 9, "todo")],
+				diagnostics: [],
+				done: true,
+			},
+		];
+		const { stats } = formatCodePathResult(chunks, { format: "node-list" });
+		expect(stats).toEqual({ nodeCount: 2, matchCount: 1, fileCount: 1 });
 	});
 });
