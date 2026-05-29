@@ -12,6 +12,7 @@ import { IntentionSummaryMessageComponent } from "../../modes/components/intenti
 import { ReadToolGroupComponent } from "../../modes/components/read-tool-group";
 import { SkillMessageComponent } from "../../modes/components/skill-message";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
+import { finalizeOrphanPendingTools } from "./finalize-pending-tools";
 import { UserMessageComponent } from "../../modes/components/user-message";
 import { theme } from "../../modes/theme/theme";
 import type { CompactionQueuedMessage, InteractiveModeContext } from "../../modes/types";
@@ -372,6 +373,11 @@ export class UiHelpers {
 			this.ctx.addMessageToChat(message, options);
 		}
 
+		// Finalize any tool cell whose toolCall had no matching toolResult in the
+		// transcript (e.g. a session killed mid-run). Without this they replay as
+		// permanently pending. No background calls are live on a freshly loaded
+		// session, so every leftover is an orphan.
+		finalizeOrphanPendingTools(this.ctx.pendingTools, new Set());
 		this.ctx.pendingTools.clear();
 		this.ctx.ui.requestRender();
 	}

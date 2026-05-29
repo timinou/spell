@@ -229,15 +229,81 @@ export function createCustomMessage(
 }
 
 /**
+ * Enforce the tool-call/tool-result contiguity invariant required by LLM
+ * provider APIs: a tool_use block MUST be immediately followed by the
+ * tool_result blocks that answer it, with nothing in between.
+ *
+ * Reactive entries (e.g. the intention-summary briefing fired on a
+ * `needs_input` / `pending_approval` blocking event) can be persisted into the
+ * session graph *between* two tool results of a single assistant batch — the
+ * blocking event fires while sibling tools are still streaming their results.
+ * Order-preserving conversion then splits the tool_result run with a non-result
+ * message, leaving the trailing results orphaned (no matching tool_use in the
+ * previous message) → provider rejects with a 4xx.
+ *
+ * This pass is order-preserving except that any non-tool-result message found
+ * *inside* a tool_result run is hoisted to immediately after the run. A message
+ * is "inside" the run only when another tool_result follows it before the next
+ * assistant message; messages that legitimately trail a completed run are left
+ * untouched. Self-heals already-corrupted sessions on load and is
+ * provider-agnostic.
+ */
+export function hoistInterleavedToolResults(messages: Message[]): Message[] {
+	const out: Message[] = [];
+	let i = 0;
+	while (i < messages.length) {
+		if (messages[i].role !== "toolResult") {
+			out.push(messages[i]);
+			i++;
+			continue;
+		}
+		// Start of a tool_result run. Collect results; defer any non-result
+		// message that is itself followed by a further result (i.e. interleaved).
+		const run: Message[] = [];
+		const deferred: Message[] = [];
+		let j = i;
+		while (j < messages.length) {
+			if (messages[j].role === "toolResult") {
+				run.push(messages[j]);
+				j++;
+				continue;
+			}
+			// Peek ahead across consecutive non-result, non-assistant messages.
+			let k = j;
+			const pending: Message[] = [];
+			while (k < messages.length && messages[k].role !== "toolResult" && messages[k].role !== "assistant") {
+				pending.push(messages[k]);
+				k++;
+			}
+			if (k < messages.length && messages[k].role === "toolResult") {
+				// Interleaved inside the run — hoist these out, keep consuming results.
+				deferred.push(...pending);
+				j = k;
+				continue;
+			}
+			// Run is over (hit an assistant message or end of list).
+			break;
+		}
+		out.push(...run, ...deferred);
+		i = j;
+	}
+	return out;
+}
+
+/**
  * Transform AgentMessages (including custom types) to LLM-compatible Messages.
  *
  * This is used by:
  * - Agent's transormToLlm option (for prompt calls and queued messages)
  * - Compaction's generateSummary (for summarization)
  * - Custom extensions and tools
+ *
+ * The final pass enforces the tool-call/tool-result contiguity invariant via
+ * {@link hoistInterleavedToolResults}, self-healing sessions whose tool_result
+ * runs were split by a reactive entry (e.g. an intention-summary briefing).
  */
 export function convertToLlm(messages: AgentMessage[]): Message[] {
-	return messages
+	const converted = messages
 		.map((m): Message | undefined => {
 			switch (m.role) {
 				case "bashExecution":
@@ -327,5 +393,6 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 					return undefined;
 			}
 		})
-		.filter(m => m !== undefined);
+		.filter((m): m is Message => m !== undefined);
+	return hoistInterleavedToolResults(converted);
 }
