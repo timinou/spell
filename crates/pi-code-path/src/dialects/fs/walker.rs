@@ -1,9 +1,10 @@
 use std::{
 	collections::HashMap,
 	path::PathBuf,
+	sync::{Arc, Mutex},
 };
 
-use ignore::WalkBuilder;
+use ignore::{WalkBuilder, WalkState};
 
 use crate::{
 	ast::{FsLocator, FsSegment},
@@ -65,75 +66,86 @@ pub fn walk(
 		},
 	};
 	let negative_globsets = build_negative_globsets(loc);
-	let mut count = 0;
 
-	for entry in builder.build() {
-		count += 1;
-		if count % 100 == 0 && cancel.is_cancelled() {
-			break;
-		}
+	// Parallel walk: `WalkBuilder::build_parallel` drives a per-thread visitor
+	// closure. Cross-file order becomes nondeterministic, but `find` results are
+	// set-valued downstream (TextResolver re-groups by file). Diagnostics are
+	// preserved in the same Vec for caller compatibility.
+	let collector: Arc<Mutex<Vec<Result<NodeRef, Diagnostic>>>> =
+		Arc::new(Mutex::new(results));
+	let globset = Arc::new(globset);
+	let negative_globsets = Arc::new(negative_globsets);
+	let root = Arc::new(opts.root.clone());
 
-		match entry {
-			Ok(ent) => {
-				let path = ent.path();
-				let rel = match path.strip_prefix(&opts.root) {
-					Ok(r) => r,
-					Err(_) => continue,
-				};
-				let rel_str = rel.to_string_lossy().to_string();
-
-				if let Some(ref gs) = globset {
-					if !gs.is_match(rel) {
-						continue;
+	builder.build_parallel().run(|| {
+		let collector = Arc::clone(&collector);
+		let globset = Arc::clone(&globset);
+		let negative_globsets = Arc::clone(&negative_globsets);
+		let root = Arc::clone(&root);
+		let cancel = cancel.clone();
+		Box::new(move |entry| {
+			// Relaxed AtomicBool load is ~1ns; cheap enough to check every entry.
+			if cancel.is_cancelled() {
+				return WalkState::Quit;
+			}
+			match entry {
+				Ok(ent) => {
+					let path = ent.path();
+					let Ok(rel) = path.strip_prefix(root.as_path()) else {
+						return WalkState::Continue;
+					};
+					if let Some(ref gs) = *globset {
+						if !gs.is_match(rel) {
+							return WalkState::Continue;
+						}
 					}
-				}
-				if negative_globsets.iter().any(|ngs| ngs.is_match(rel)) {
-					continue;
-				}
+					if negative_globsets.iter().any(|ngs| ngs.is_match(rel)) {
+						return WalkState::Continue;
+					}
+					let rel_str = rel.to_string_lossy().to_string();
+					let (kind, size) = match ent.file_type() {
+						Some(ft) if ft.is_dir() => ("§dir".to_string(), 0u64),
+						Some(ft) if ft.is_symlink() => ("§symlink".to_string(), 0u64),
+						_ => {
+							let sz = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+							("§file".to_string(), sz)
+						},
+					};
+					collector.lock().unwrap().push(Ok(NodeRef {
+						locator: rel_str,
+						range: 0..size as usize,
+						kind,
+						content: None,
+						metadata: HashMap::new(),
+						diagnostics: Vec::new(),
+					}));
+				},
+				Err(err) => {
+					let path = err.to_string();
+					let is_perm = err
+						.io_error()
+						.map(|e| e.kind() == std::io::ErrorKind::PermissionDenied)
+						.unwrap_or(false);
+					let msg = if is_perm {
+						format!("permission denied: {path}")
+					} else {
+						format!("walk error: {path}: {err}")
+					};
+					collector.lock().unwrap().push(Err(Diagnostic {
+						variant: DiagnosticVariant::ParseError,
+						message: msg,
+						span:    None,
+					}));
+				},
+			}
+			WalkState::Continue
+		})
+	});
 
-				let (kind, size) = match ent.file_type() {
-					Some(ft) if ft.is_dir() => ("§dir".to_string(), 0u64),
-					Some(ft) if ft.is_symlink() => ("§symlink".to_string(), 0u64),
-					_ => {
-						let sz = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-						("§file".to_string(), sz)
-					},
-				};
-
-				let range = 0..size as usize;
-
-				results.push(Ok(NodeRef {
-					locator: rel_str,
-					range,
-					kind,
-					content: None,
-					metadata: HashMap::new(),
-					diagnostics: Vec::new(),
-				}));
-			},
-			Err(err) => {
-				// `ignore::Error` doesn't expose the path uniformly across variants;
-				// stringify the error which already includes path context.
-				let path = err.to_string();
-				let is_perm = err
-					.io_error()
-					.map(|e| e.kind() == std::io::ErrorKind::PermissionDenied)
-					.unwrap_or(false);
-				let msg = if is_perm {
-					format!("permission denied: {path}")
-				} else {
-					format!("walk error: {path}: {err}")
-				};
-				results.push(Err(Diagnostic {
-					variant: DiagnosticVariant::ParseError,
-					message: msg,
-					span:    None,
-				}));
-			},
-		}
-	}
-
-	results
+	Arc::try_unwrap(collector)
+		.unwrap_or_else(|arc| Mutex::new(std::mem::take(&mut *arc.lock().unwrap())))
+		.into_inner()
+		.unwrap()
 }
 
 /// Compile a glob pattern into a [`globset::GlobSet`].

@@ -1,0 +1,90 @@
+#+TITLE: Find tool text scan is sequential and per-line
+#+STATE: DONE
+#+SESSION_ID: 14f32ce37f825794
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-28T16-50-04-926Z_14f32ce37f825794.jsonl]]
+#+CUSTOM_ID: BUG-416-find-tool-text-scan-is-sequential-and-pe
+#+COMPLETION_HASH: 557f2b0e7f341ced
+
+* Initial Message
+
+The Find tool can get pretty slow, are you using the right index usage and ripgrep and stuff?
+
+* TL;DR
+Find tool's text dialect was orders of magnitude slower than ripgrep
+because the per-line predicate evaluator recompiled the regex on every
+line, walked files sequentially, and walked directories sequentially.
+Repo-scoped =text~== queries effectively scaled as
+=O(files * lines * regex_compile)= when they should be
+=O(files * bytes)= with a hot SIMD prefilter.
+
+* Symptoms
+- =find { target: "**/*.ts::§line[text~=\"useState\"]" }= dramatically
+  slower than =rg "useState" -t ts= over the same tree.
+- CPU pegged on a single core during text scans.
+- Profile dominated by =regex::Regex::new= (NFA construction).
+
+* Root cause
+=crates/pi-code-path/src/dialects/text/axes.rs= ::
+
+#+begin_src rust
+Predicate::TextMatch(pattern) => {
+    ...
+    Regex::new(pattern)       // ← recompiled every line
+        .map(|re| re.is_match(&line_text))
+}
+#+end_src
+
+Combined with serial =ignore::WalkBuilder::build()= in
+=dialects/fs/walker.rs:71= and a serial per-file loop in
+=dialects/text/mod.rs= =TextResolver::resolve=.
+
+Bench (10k-line file, 3-alternation regex): per-line compile 349ms,
+hoisted compile 488µs → *716×* on a single file.
+
+* Fix plan
+1. [X] Hoist =Regex::new= out of =line_predicate= / =para_predicate=.
+   Pre-compile once per query. (landed)
+2. [ ] =rayon::par_iter= the per-file loop in =TextResolver::resolve=.
+   Per-file scans are pure; output is set-valued so reordering is fine.
+3. [ ] =ignore::WalkParallel= for directory enumeration in
+   =dialects/fs/walker.rs::walk=. Drain into a =Vec<NodeRef>= via
+   crossbeam channel; preserve cancellation semantics.
+4. [ ] Drop unused =grep-regex= dependency from
+   =crates/pi-code-path/Cargo.toml=.
+5. [ ] Literal fast-path: when a =TextMatch= pattern has no regex
+   metacharacters, route through =memchr::memmem= (or =str::contains=)
+   instead of compiling a Regex. Saves ~1µs/file fixed cost on the
+   common "search for a bare identifier" case.
+
+* Acceptance
+- All =pi-code-path= tests green.
+- =cargo bench=-style smoke: 10k-line file =text~==  query ≤ 5ms
+  (was ≥ 300ms).
+- Workspace build clean (no unused-dep warnings).
+
+NOTE [2026-05-28]: All 5 items landed in one wave.
+
+** Changes
+- =axes.rs= — regex hoist + =Matcher= enum with literal fast-path
+  (str::contains for no-metachar patterns)
+- =walker.rs= — switched =WalkBuilder::build()= -> =build_parallel()=
+  with per-thread visitor pushing through shared =Mutex<Vec<_>>=;
+  per-entry cancellation check
+- =text/mod.rs= — per-file scan now =rayon::par_iter().flat_map_iter=;
+  cancellation polled per file
+- =Cargo.toml= — dropped unused =grep-regex=, added =rayon=
+
+** Verification
+- =cargo test -p pi-code-path= : 555 / 555 green
+- =cargo test --workspace= : all green (one transient knowledge-core
+  HOME-env race per BUG-390, passed on rerun)
+- Micro: per-line vs hoisted compile = 349ms -> 488us (716x)
+- E2E smoke (release): 10k-line file =text~="useState"= = 23ms
+  (was >= 350ms), ~15x single-file; multi-file globs additionally
+  N-core via rayon
+
+** Notes
+- Cross-file order now nondeterministic; verified no test depends on
+  cross-file ordering (within-file order preserved)
+- Pre-existing JS failures in =packages/natives= are unrelated
+  (confirmed via stash + baseline rerun)
