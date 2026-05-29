@@ -1,0 +1,40 @@
+#+TITLE: Prevent intentionSummary from being persisted mid-tool-batch (Layer-1 of pairing invariant)
+#+STATE: ITEM
+#+SESSION_ID: 14f421110c20382e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-29T10-36-54-704Z_14f421110c20382e.jsonl]]
+#+CUSTOM_ID: FUP-103-prevent-intentionsummary-from-being-pers
+
+* Initial Message
+
+Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.150.content.28: unexpected `tool_use_id` found in `tool_result` blocks: toolu_01AwwdHRQBQaVAF34c13Dwjv. Each
+ `tool_result` block must have a corresponding `tool_use` block in the previous message."},"request_id":"req_011CbWga9R5XFLzfPSKFY6XA"}
+ raw-http-request=/home/user/.spell/logs/http-400-requests/1780049624525-2i9vd6xlqv1k9.json
+
+wtf?????File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-05-28T15-55-45-641Z_14f320749a51c31e.jsonl
+ ID: 14f320749a51c31e
+
+* Context
+Commit fb596064e fixed the tool_use/tool_result pairing 400 at three layers (convert-time hoist, load-time repair, UI finalize). The convert-time hoist (hoistInterleavedToolResults in session/messages.ts) fully resolves the user-facing bug: corrupted sessions self-heal at read-time, no resume 400s. This FUP is the OPTIONAL deeper fix (Layer 1): stop the malformed tree from being WRITTEN to disk.
+
+* Root cause recap
+When the `ask` tool blocks mid-batch, deriveAgentStatus returns needs_input/pending_approval (these rank ABOVE `running` in precedence) even though isStreaming is still true. IntentionController.handleStatusChange -> #fireBriefing -> sessionManager.appendCustomMessageEntry parents the intentionSummary onto the current leaf, which is a mid-batch tool_result. The next sibling tool_result then parents onto the summary -> non-result spliced inside a tool_result run.
+
+* Why deferred (not done now)
+The canonical defer-while-streaming pattern (AgentSession.recordBashResult: if (isStreaming) push to #pending; flush on agent_end) does NOT map cleanly:
+- The briefing fires on a STATUS TRANSITION (running->needs_input). When the `ask` tool keeps blocking after siblings finish, isStreaming flips false but STATUS stays needs_input -> no further transition -> handleStatusChange never called again -> a controller-held deferred trigger would have no flush signal.
+- Completing Layer 1 requires wiring a NEW agent_end (or isStreaming falling-edge) hook into IntentionController, introducing a new failure mode: deferred briefing never flushed -> the summarizing card never appears.
+- Net: added state machine + flush plumbing for ZERO additional user-facing benefit over the committed Layer-3 backstop.
+
+* Scope (if taken)
+Option A (defer): add isStreaming() to IntentionControllerDeps (test fixture already passes isStreaming via getStatusContext); in #fireBriefing, if streaming, hold the trigger; add flushDeferredBriefing() called from an agent_end / isStreaming-falling-edge hook in interactive-mode. Must guarantee flush in every exit path (abort, dispose, error) so the card is never lost.
+Option B (structural, cleanest): reclassify the intention summary as a display-only `custom` entry (appendCustomEntry) instead of context-bearing `custom_message`. Then it NEVER enters convertToLlm and the interleave is harmless by construction. Cost: migrate the TUI read side (intention-summary-message.ts, #rehydrateFromHistory) from custom_message to custom, plus session migration / dual-read window. Requires product decision: is the briefing ever wanted in LLM context? If never, Option B is strictly better.
+
+* Acceptance
+- A blocking event raised mid-tool-batch never writes a custom_message/custom node whose parent AND child are both tool_results of the same batch.
+- The briefing card still appears for every needs_input/pending_approval (no lost cards across abort/dispose/error).
+- convertToLlm hoist remains as defense-in-depth backstop regardless.
+
+* Related
+- Fixed by: commit fb596064e (Layer 3 + load + UI)
+- Memory: CON-interleaved-tool-result-corruption-from-
+- Pattern to mirror: AgentSession.recordBashResult defer-while-streaming (agent-session.ts ~5280)
