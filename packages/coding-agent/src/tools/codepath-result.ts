@@ -10,10 +10,25 @@ export interface CodePathResultOptions {
 	headLimit?: number;
 }
 
+/**
+ * FEAT-786: quantitative summary of a CodePath result, computed post-limit.
+ * Surfaced into tool `details` so the TUI renderer can build a meta line
+ * ("N files · M matches") without re-parsing the rendered text.
+ */
+export interface CodePathStats {
+	/** Total nodes after limit application. */
+	nodeCount: number;
+	/** Subset that are grep match-shape §line nodes. */
+	matchCount: number;
+	/** Distinct file paths across all nodes. */
+	fileCount: number;
+}
+
 export interface CodePathResult {
 	text: string;
 	meta?: ReturnType<typeof outputMeta>["get"] extends () => infer R ? R : never;
 	images: Array<{ data: string; mimeType: string; text?: string; skipImageBlock?: boolean }>;
+	stats: CodePathStats;
 }
 
 function formatLocator(locator: string): {
@@ -80,7 +95,7 @@ function localFormatBytes(bytes: number): string {
 function formatStatMetadata(node: NodeRefDto): string | null {
 	// FEAT-709: surface size + mtime on §file/§dir/§symlink stat results
 	// so `get(target:"…#stat")` is informative instead of bare-path.
- if (!["§file", "§dir", "§symlink", "§outline"].includes(node.kind)) return null;
+	if (!["§file", "§dir", "§symlink", "§outline"].includes(node.kind)) return null;
 	const meta = (node.metadata ?? {}) as Record<string, unknown>;
 	const sizeRaw = meta.size;
 	const mtimeRaw = meta.mtime;
@@ -137,16 +152,49 @@ function isMatchShapeNode(node: NodeRefDto): boolean {
 	return (node.metadata as Record<string, unknown> | undefined)?.shape === "match";
 }
 
-function renderMatchLine(node: NodeRefDto): string {
-	// FEAT-719: predicate-matched §line nodes render as `path:line:  content`
-	// (grep -n shape). LINE#ID anchor is intentionally omitted — anchor lookup
-	// is the ordinal form `§line[N]`. The line number stays machine-parsable so
-	// `edit` can still resolve the line.
+interface MatchRow {
+	path: string;
+	line: number | undefined;
+	content: string;
+}
+
+function matchRow(node: NodeRefDto): MatchRow {
 	const { path, line } = formatLocator(node.locator);
 	const raw = getNodeText(node) ?? "";
-	const content = raw.replace(/\r?\n$/, "");
-	const loc = path !== undefined && line !== undefined ? `${path}:${line}` : (path ?? node.locator);
-	return `${loc}:  ${content}`;
+	return {
+		path: path ?? node.locator,
+		line,
+		content: raw.replace(/\r?\n$/, ""),
+	};
+}
+
+/**
+ * FEAT-785: render predicate-matched §line nodes in ripgrep `--heading` shape —
+ * each file path emitted once as a heading, hits indented beneath as
+ * `  <line>:  <content>`. Replaces the FEAT-719 per-row `path:line:  content`
+ * shape that re-emitted the full path on every hit (N matches → N path repeats).
+ *
+ * Pure grouping: single-hit files also get a heading so the model parses one
+ * shape (heading = bare `^\S` line; hit = `^  <digits>:`). The line number
+ * stays machine-parsable so `edit` can recompose `path::§line[N]`; the path
+ * lives in the heading. LINE#ID anchors are intentionally omitted — anchor
+ * lookup is the ordinal form `§line[N]`.
+ */
+function renderMatchGroups(nodes: NodeRefDto[]): string {
+	const rows = nodes.map(matchRow);
+	const blocks: string[] = [];
+	let i = 0;
+	while (i < rows.length) {
+		const path = rows[i].path;
+		const lines = [path];
+		while (i < rows.length && rows[i].path === path) {
+			const { line, content } = rows[i];
+			lines.push(line !== undefined ? `  ${line}:  ${content}` : `  ${content}`);
+			i++;
+		}
+		blocks.push(lines.join("\n"));
+	}
+	return blocks.join("\n\n");
 }
 
 function compareMatchNodes(a: NodeRefDto, b: NodeRefDto): number {
@@ -167,7 +215,7 @@ function buildNodeList(nodes: NodeRefDto[]): string {
 	const flushMatches = () => {
 		if (matchBuf.length === 0) return;
 		const sorted = [...matchBuf].sort(compareMatchNodes);
-		out.push(sorted.map(renderMatchLine).join("\n"));
+		out.push(renderMatchGroups(sorted));
 		matchBuf = [];
 	};
 	for (const node of nodes) {
@@ -250,7 +298,9 @@ function buildFsListing(nodes: NodeRefDto[]): string {
 	return lines.join("\n");
 }
 
-function extractImages(nodes: NodeRefDto[]): Array<{ data: string; mimeType: string; text?: string; skipImageBlock?: boolean }> {
+function extractImages(
+	nodes: NodeRefDto[],
+): Array<{ data: string; mimeType: string; text?: string; skipImageBlock?: boolean }> {
 	const images: Array<{ data: string; mimeType: string; text?: string; skipImageBlock?: boolean }> = [];
 	for (const node of nodes) {
 		const content = node.content;
@@ -314,19 +364,20 @@ export function formatCodePathResult(chunks: CodePathChunk[], options: CodePathR
 		case "fs-listing":
 			text = buildFsListing(nodes);
 			break;
- 	default:
- 			// Auto-promote to fs-listing only when format is unset (not explicit).
- 			if (options.format === undefined && allFsNodes(nodes)) {
- 				text = buildFsListing(nodes);
- 			} else {
- 				text = buildNodeList(nodes);
- 			}
- 			break;
+		default:
+			// Auto-promote to fs-listing only when format is unset (not explicit).
+			if (options.format === undefined && allFsNodes(nodes)) {
+				text = buildFsListing(nodes);
+			} else {
+				text = buildNodeList(nodes);
+			}
+			break;
 	}
 
 	// Degenerate-result hint: single dir node suggests recursive/depth.
 	if (nodes.length === 1 && nodes[0].kind === "dir" && text === `${nodes[0].locator}/`) {
-		text += "\n\n(hint: single directory marker — use recursive: true or depth for recursive listing, or content: false to suppress)";
+		text +=
+			"\n\n(hint: single directory marker — use recursive: true or depth for recursive listing, or content: false to suppress)";
 	}
 
 	// Empty directory placeholder.
@@ -350,5 +401,17 @@ export function formatCodePathResult(chunks: CodePathChunk[], options: CodePathR
 		text,
 		meta: metaBuilder.get(),
 		images: extractImages(nodes),
+		stats: computeStats(nodes),
 	};
+}
+
+function computeStats(nodes: NodeRefDto[]): CodePathStats {
+	const paths = new Set<string>();
+	let matchCount = 0;
+	for (const node of nodes) {
+		if (isMatchShapeNode(node)) matchCount++;
+		const { path } = formatLocator(node.locator);
+		paths.add(path ?? node.locator);
+	}
+	return { nodeCount: nodes.length, matchCount, fileCount: paths.size };
 }

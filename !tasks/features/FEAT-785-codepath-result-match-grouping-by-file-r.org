@@ -1,0 +1,66 @@
+#+TITLE: CodePath result match grouping by file (ripgrep heading shape)
+#+STATE: DONE
+#+SESSION_ID: 14f4129ed0955529
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-29T09-33-47-714Z_14f4129ed0955529.jsonl]]
+#+CUSTOM_ID: FEAT-785-codepath-result-match-grouping-by-file-r
+#+COMPLETION_HASH: 7696bd69890e7ca4
+
+* Initial Message
+
+How would you improve the Get, Find, and Create tools'
+1. TUI? I want to see the CodePath and other useful information
+2. Output to the LLM? right now it seems like file paths are getting rewritten at every line hit
+
+* Problem
+`codepath-result.ts#renderMatchLine` emits the full file path on *every* grep
+hit (`path:line:  content`). N matches in one file → N path repetitions. On wide
+results the repeated 40–60 char repo path dominates token cost and hurts
+readability for the model.
+
+`buildNodeList` already sorts match-shape §line nodes by `(path, line)` and
+batches them contiguously — the grouping structure exists but isn't exploited.
+
+* Goal
+Adopt ripgrep `--heading` shape: emit each file path once as a heading, then
+indented line-numbered hits beneath it.
+
+#+begin_src
+src/a.ts
+  2:  todo two
+  7:  todo seven
+
+src/b.ts
+  3:  todo
+#+end_src
+
+* Contract decisions
+- *Pure grouping* (not hybrid): single-hit files also get a heading. One shape =
+  one parse rule for the model. Cost is +1 line per single-hit file; trivial vs
+  the path-noise win and worth the consistency.
+- Row form: `  <line>:  <content>` (2-space indent + line + `:` + 2 spaces +
+  verbatim content). Body whitespace preserved as today.
+- Line number stays machine-parsable (`^\s*(\d+):`) so the model can recompose
+  `path::§line[N]` for edit. Path lives in the heading.
+- Blocks separated by blank line; heading is a bare path line (`^\S`).
+- Non-match §line nodes (ordinal `§line[N]`, slice `shape:"slice"`) keep their
+  existing LINE#ID / single-body rendering — only `shape:"match"` nodes regroup.
+
+* Scope
+- `packages/coding-agent/src/tools/codepath-result.ts`: rewrite the match flush
+  in `buildNodeList` (`flushMatches`) to group sorted matchBuf by path; replace
+  `renderMatchLine` per-row path with heading + indented rows.
+
+* Tests to update (current golden assertions pin per-line path)
+- `packages/coding-agent/test/codepath-result.test.ts` →
+  `describe("buildNodeList grep shape (FEAT-719)")`: W5a, W5b, W5c, the
+  "matched line containing colons", "mixed match + ordinal", and "byte-count"
+  cases all assert `path:line:` and must move to the grouped contract.
+- `get.test.ts` grep test is loose (`.toContain("TODO")`) — unaffected.
+
+* Acceptance
+- 10 matches in one file render path once; byte-count test still ≤ 1KB (tighter).
+- Cross-file results group per file, files ordered by path, lines ascending.
+- Ordinal/slice §line regression cases unchanged.
+- `bun test packages/coding-agent/test/codepath-result.test.ts` green.
+
+NOTE [2026-05-29]: ripgrep heading grouping in codepath-result.ts (renderMatchGroups). Golden tests updated; 14 green.

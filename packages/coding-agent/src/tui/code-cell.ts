@@ -26,6 +26,11 @@ export interface CodeCellOptions {
 	codeMaxLines?: number;
 	expanded?: boolean;
 	width: number;
+	/**
+	 * FEAT-787: extra dim header annotations (format mode, file/match counts,
+	 * truncation badges) joined after the title with the dot separator.
+	 */
+	metaParts?: string[];
 }
 
 function getState(status?: CodeCellOptions["status"]): State | undefined {
@@ -66,6 +71,10 @@ function formatHeader(options: CodeCellOptions, theme: Theme): { title: string; 
 	const headerTitle = parts.length > 0 ? parts.join(" ") : theme.fg("toolTitle", "Code");
 
 	const metaParts: string[] = [];
+	for (const part of options.metaParts ?? []) {
+		const trimmed = part.trim();
+		if (trimmed.length > 0) metaParts.push(theme.fg("dim", trimmed));
+	}
 	if (duration !== undefined) {
 		metaParts.push(theme.fg("dim", `(${formatDuration(duration)})`));
 	}

@@ -17,10 +17,11 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+
 import findDescription from "../prompts/tools/find.md" with { type: "text" };
 import type { FindParams } from "./codepath-types";
 import { findSchema } from "./codepath-types";
-import { GetTool } from "./get";
+import { GetTool, renderCodePathCall, renderCodePathCell } from "./get";
 import type { ToolSession } from "./index";
 
 export class FindTool implements AgentTool<typeof findSchema> {
@@ -29,6 +30,9 @@ export class FindTool implements AgentTool<typeof findSchema> {
 	readonly description = findDescription;
 	readonly parameters = findSchema;
 	readonly lenientArgValidation = true;
+	// FEAT-787: render via the shared CodePath helpers with the *find* label so
+	// the TUI shows "Find <target>" instead of leaking GetTool's "Get" title.
+	readonly mergeCallAndResult = true;
 
 	private readonly delegate: GetTool;
 	private readonly session?: ToolSession;
@@ -59,7 +63,12 @@ export class FindTool implements AgentTool<typeof findSchema> {
 		);
 	}
 
+	renderCall(args: unknown, options: RenderResultOptions, theme: unknown): Component {
+		const target = (args as FindParams | undefined)?.target;
+		return renderCodePathCall(this.label, target, options, theme);
+	}
+
 	renderResult(result: AgentToolResult, options: RenderResultOptions, theme: unknown): Component {
-		return this.delegate.renderResult(result, options, theme);
+		return renderCodePathCell(this.label, result, options, theme);
 	}
 }

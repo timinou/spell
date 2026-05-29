@@ -9,19 +9,23 @@ import type { InternalUrlRouter } from "../internal-urls";
 import { RouterDelegateToKernel } from "../internal-urls/router";
 import type { Theme } from "../modes/theme/theme";
 import getDescription from "../prompts/tools/get.md" with { type: "text" };
-import { renderCodeCell } from "../tui";
+import { renderCodeCell, renderStatusLine } from "../tui";
 import { type CodePathFormatMode, formatCodePathResult } from "./codepath-result";
+import { sessionContextOpts } from "./codepath-session";
 import type { CodePathChunk, GetParams, NodeRefDto } from "./codepath-types";
 import { getSchema } from "./codepath-types";
 import type { ToolSession } from "./index";
 import { replaceTabs } from "./render-utils";
 import { type DetailsWithMeta, toolResult } from "./tool-result";
-import { sessionContextOpts } from "./codepath-session";
 
 type GetToolResultDetails = DetailsWithMeta & {
 	format?: string;
 	target?: string;
 	error?: string;
+	// FEAT-786: quantitative summary surfaced for the TUI meta line.
+	nodeCount?: number;
+	matchCount?: number;
+	fileCount?: number;
 };
 
 /**
@@ -48,9 +52,18 @@ function classifyBareTarget(target: string): "bare-plain" | "qualified" | "other
  */
 // §kinds emitted by fs/text/outline dialects — NOT URI-scheme nodes.
 const NON_SCHEME_NODE_KINDS = new Set([
-	"§file", "§dir", "§symlink", "§outline",
-	"§line", "§match", "§stat", "§tree",
-	"§empty", "§error", "§raw", "§listing",
+	"§file",
+	"§dir",
+	"§symlink",
+	"§outline",
+	"§line",
+	"§match",
+	"§stat",
+	"§tree",
+	"§empty",
+	"§error",
+	"§raw",
+	"§listing",
 ]);
 
 function extractSchemeNode(chunks: CodePathChunk[]): NodeRefDto | null {
@@ -64,7 +77,12 @@ function extractSchemeNode(chunks: CodePathChunk[]): NodeRefDto | null {
 
 function renderSchemeNode(node: NodeRefDto, params: GetParams, target: string): AgentToolResult {
 	const content = node.content;
-	const body = content?.kind === "text" ? content.value : (content as { text?: string; value?: string } | undefined)?.text ?? (content as { value?: string } | undefined)?.value ?? "";
+	const body =
+		content?.kind === "text"
+			? content.value
+			: ((content as { text?: string; value?: string } | undefined)?.text ??
+				(content as { value?: string } | undefined)?.value ??
+				"");
 	const meta = (node.metadata ?? {}) as Record<string, unknown>;
 	const notes = Array.isArray(meta.notes) ? (meta.notes as string[]) : [];
 	const notePrefix = notes.length ? `${notes.map(n => `[note] ${n}`).join("\n")}\n` : "";
@@ -242,12 +260,117 @@ function splitCodepath(target: string): { uriBase: string; codepathSuffix: strin
 		: { uriBase: target.slice(0, idx), codepathSuffix: target.slice(idx) };
 }
 
+/**
+ * FEAT-787: shared CodePath render surface for find/get/create.
+ *
+ * The TUI previously showed only the bold tool label — the CodePath `target`
+ * (the one piece of state describing what the call does) was invisible, and the
+ * result cell used a hardcoded "Get" title that leaked onto `find`. These
+ * helpers render the CodePath in both the pending (renderCall) and resolved
+ * (renderResult) states, with a metadata line (format · counts · caps).
+ */
+export interface CodePathRenderDetails extends DetailsWithMeta {
+	format?: string;
+	target?: string;
+	nodeCount?: number;
+	matchCount?: number;
+	fileCount?: number;
+}
+
+const CODEPATH_HEADER_MAX = 96;
+
+function truncateQuery(query: string): string {
+	const flat = query.replace(/\s+/g, " ").trim();
+	return flat.length > CODEPATH_HEADER_MAX ? `${flat.slice(0, CODEPATH_HEADER_MAX - 1)}\u2026` : flat;
+}
+
+function pluralize(n: number, one: string, many: string): string {
+	return `${n} ${n === 1 ? one : many}`;
+}
+
+function codePathMetaParts(details: CodePathRenderDetails | undefined): string[] {
+	if (!details) return [];
+	const parts: string[] = [];
+	if (details.format && details.format !== "node-list") parts.push(details.format);
+	if (typeof details.fileCount === "number" && details.fileCount > 0) {
+		parts.push(pluralize(details.fileCount, "file", "files"));
+	}
+	if (typeof details.matchCount === "number" && details.matchCount > 0) {
+		parts.push(pluralize(details.matchCount, "match", "matches"));
+	}
+	const limits = details.meta?.limits;
+	if (limits?.resultLimit) parts.push("\u29f7 result-capped");
+	if (limits?.headLimit) parts.push("\u29f7 head-capped");
+	return parts;
+}
+
+/** Pending-state status line: tool verb + the CodePath query. */
+export function renderCodePathCall(
+	verb: string,
+	query: string | undefined,
+	options: RenderResultOptions,
+	theme: unknown,
+): Component {
+	const uiTheme = theme as Theme;
+	const line = renderStatusLine(
+		{
+			icon: options.isPartial ? "pending" : "success",
+			spinnerFrame: options.spinnerFrame,
+			title: verb,
+			description: query ? truncateQuery(query) : undefined,
+		},
+		uiTheme,
+	);
+	return { render: () => [line], invalidate: () => {} };
+}
+
+/** Resolved-state code cell: verb + CodePath in the header, counts in meta. */
+export function renderCodePathCell(
+	verb: string,
+	result: AgentToolResult,
+	options: RenderResultOptions,
+	theme: unknown,
+): Component {
+	const uiTheme = theme as Theme;
+	const details = result.details as CodePathRenderDetails | undefined;
+	const text = prettifyDidYouMean(
+		result.content
+			.filter(c => c.type === "text")
+			.map(c => (c as { text?: string }).text ?? "")
+			.join("\n"),
+	);
+	const sanitized = replaceTabs(text);
+	const maxChars = 2_000;
+	const truncated = sanitized.length > maxChars ? `${sanitized.slice(0, maxChars)}\n...truncated` : sanitized;
+	const query = details?.target;
+	const title = query ? `${verb}  ${truncateQuery(query)}` : verb;
+	return {
+		render: (width: number) =>
+			renderCodeCell(
+				{
+					code: truncated,
+					language: "text",
+					title,
+					metaParts: codePathMetaParts(details),
+					status: result.isError ? "error" : "complete",
+					expanded: options.expanded,
+					width,
+				},
+				uiTheme,
+			),
+		invalidate: () => {},
+	};
+}
+
 export class GetTool implements AgentTool<typeof getSchema> {
 	readonly name = "get";
 	readonly label = "Get";
 	readonly description = getDescription;
 	readonly parameters = getSchema;
 	readonly lenientArgValidation = true;
+	// FEAT-787: pending shows the CodePath via renderCall; result shows the cell
+	// (mergeCallAndResult suppresses the call line once the result arrives).
+	readonly mergeCallAndResult = true;
 
 	constructor(private readonly session?: ToolSession) {}
 
@@ -390,7 +513,13 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		}
 
 		const text = prettifyDidYouMean(displayText);
-		const builder = toolResult<GetToolResultDetails>({ format: params.format }).text(text);
+		const builder = toolResult<GetToolResultDetails>({
+			format: params.format,
+			target: params.target,
+			nodeCount: result.stats.nodeCount,
+			matchCount: result.stats.matchCount,
+			fileCount: result.stats.fileCount,
+		}).text(text);
 		if (result.meta) {
 			builder.limits({
 				resultLimit: result.meta.limits?.resultLimit?.reached,
@@ -478,7 +607,13 @@ export class GetTool implements AgentTool<typeof getSchema> {
 			const rendered = formatCodePathResult(chunks, {
 				format: (params.format as CodePathFormatMode) ?? "node-list",
 			});
-			return toolResult<GetToolResultDetails>({ format: params.format, target })
+			return toolResult<GetToolResultDetails>({
+				format: params.format,
+				target,
+				nodeCount: rendered.stats.nodeCount,
+				matchCount: rendered.stats.matchCount,
+				fileCount: rendered.stats.fileCount,
+			})
 				.text(notePrefix + (rendered.text?.trim() || `[§empty] ${target}`))
 				.sourceInternal(resource.url ?? target)
 				.done();
@@ -496,31 +631,12 @@ export class GetTool implements AgentTool<typeof getSchema> {
 			.done();
 	}
 
+	renderCall(args: unknown, options: RenderResultOptions, theme: unknown): Component {
+		const target = (args as GetParams | undefined)?.target;
+		return renderCodePathCall(this.label, target, options, theme);
+	}
+
 	renderResult(result: AgentToolResult, options: RenderResultOptions, theme: unknown): Component {
-		const uiTheme = theme as Theme;
-		const text = prettifyDidYouMean(
-			result.content
-				.filter(c => c.type === "text")
-				.map(c => (c as { text?: string }).text ?? "")
-				.join("\n"),
-		);
-		const sanitized = replaceTabs(text);
-		const maxChars = 2_000;
-		const truncated = sanitized.length > maxChars ? `${sanitized.slice(0, maxChars)}\n...truncated` : sanitized;
-		return {
-			render: (width: number) =>
-				renderCodeCell(
-					{
-						code: truncated,
-						language: "text",
-						title: "Get",
-						status: "complete",
-						expanded: options.expanded,
-						width,
-					},
-					uiTheme,
-				),
-			invalidate: () => {},
-		};
+		return renderCodePathCell(this.label, result, options, theme);
 	}
 }

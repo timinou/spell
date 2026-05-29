@@ -1,0 +1,61 @@
+#+TITLE: TUI: surface CodePath + metadata for find/get/create tools
+#+STATE: DONE
+#+SESSION_ID: 14f4129ed0955529
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-29T09-33-47-714Z_14f4129ed0955529.jsonl]]
+#+CUSTOM_ID: FEAT-787-tui-surface-codepath-metadata-for-find-g
+#+COMPLETION_HASH: 4eb9074cfa378d11
+
+* Initial Message
+
+How would you improve the Get, Find, and Create tools'
+1. TUI? I want to see the CodePath and other useful information
+2. Output to the LLM? right now it seems like file paths are getting rewritten at every line hit
+
+* Problem
+find/get/create register `renderResult` only, never `renderCall`. In
+`tool-execution.ts#updateDisplay` the custom-tool branch then falls to "No
+custom renderCall, show tool name" → the TUI shows only the bold label
+("Find"/"Get"/"Create"). The CodePath `target` — the one thing that says what
+the call does — is never rendered.
+
+Worse: `renderResult` calls `renderCodeCell({ title: "Get" })` with a *hardcoded*
+title, and FindTool delegates renderResult to GetTool → a `find` call renders
+titled "Get". Computed metadata (limits, target, format, counts) is dropped.
+
+* Goal
+1. Show the CodePath in the TUI (pending + result).
+2. Correct, dynamic titles per tool (no "Get" leak on find).
+3. Surface result metadata: format mode, file/match counts, limit-capped badges,
+   resolved source path/uri.
+
+* Design
+- Add `mergeCallAndResult = true` to find/get/create so:
+  - pending (no result) → `renderCall` shows a status line: title=label,
+    description=target (CodePath) / path.
+  - result present → only `renderResult` (carries CodePath in header).
+- Extract a shared `renderCodePathCell(result, options, theme, { title })`
+  helper used by GetTool *and* FindTool, each passing its own verb. CreateTool
+  keeps its own (path + bytes badge).
+- Header carries CodePath + meta: extend `CodeCellOptions` with `metaParts?:
+  string[]` merged into the header meta in `formatHeader`. Build metaParts from
+  `details`: format mode, `${fileCount} files`, `${matchCount} matches`,
+  capped badges from `meta.limits.{resultLimit,headLimit}`, source path/uri.
+- Depends on the stats FEAT for counts in `details`.
+
+* Scope
+- `tui/code-cell.ts`: `CodeCellOptions.metaParts`; merge in `formatHeader`.
+- `get.ts`: shared `renderCodePathCell`; `renderResult` reads details for
+  title=`Get  <target>` + metaParts; add `renderCall`; `mergeCallAndResult`.
+- `find.ts`: own `renderResult` (title "Find") + `renderCall` +
+  `mergeCallAndResult`; stop leaking GetTool's "Get" title.
+- `create.ts`: `renderCall` (path), title "Create", bytes badge;
+  `mergeCallAndResult`.
+
+* Acceptance
+- A `find` call renders titled "Find" with the CodePath visible while pending
+  and in the result header.
+- Result header shows format + counts; truncation shows a capped badge.
+- No regression in existing get/create render behaviour (manual TUI check +
+  `bun run check:ts`).
+
+NOTE [2026-05-29]: code-cell metaParts; shared renderCodePathCall/Cell; find/get/create renderCall + mergeCallAndResult; "Get" leak fixed; create shows path+bytes; tool-execution dedup fallback. Touched files type/biome clean. Repo-wide check:ts red is pre-existing unrelated WIP.

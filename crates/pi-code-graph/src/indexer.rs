@@ -931,6 +931,117 @@ mod tests {
 		let _ = fs::remove_dir_all(root);
 	}
 
+	/// Count References edges whose BOTH endpoints are Symbol nodes. This
+	/// excludes the file-level import edges that `mod x;` declarations create,
+	/// isolating symbol-to-symbol reference resolution (the F-4b outcome).
+	fn count_symbol_references(graph: &CodeGraph) -> usize {
+		use petgraph::visit::{EdgeRef, IntoEdgeReferences};
+		let g = graph.graph();
+		g.edge_references()
+			.filter(|edge| *edge.weight() == EdgeKind::References)
+			.filter(|edge| {
+				matches!(g.node_weight(edge.source()), Some(GraphNode::Symbol(_)))
+					&& matches!(g.node_weight(edge.target()), Some(GraphNode::Symbol(_)))
+			})
+			.count()
+	}
+
+	// --- F-4b: precise Rust import-binding resolution (S3/S4), end-to-end
+	// through the real EngineProfileExtractor + EngineProfileImportResolver.
+	// The referenced name `render` is DELIBERATELY ambiguous workspace-wide
+	// (two definitions) so the S5 unique-name fallback CANNOT resolve it —
+	// only the precise `use crate::widget::render` binding can pick the right
+	// target. This is the litmus test that engine-profile cross-file binding
+	// resolution actually works, not just the unique-name safety net.
+	#[test]
+	fn rust_use_binding_resolves_ambiguous_cross_file_reference() {
+		let root = std::env::temp_dir()
+			.join(format!("pi-code-graph-rust-binding-{}", std::process::id()));
+		let cache_dir = root.join("cache");
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(root.join("src")).expect("src dir should be created");
+		fs::write(
+			root.join("Cargo.toml"),
+			"[package]\nname = \"fixture\"\nversion = \"0.0.0\"\n",
+		)
+		.expect("Cargo.toml should be written");
+		// lib.rs imports render from the widget module specifically.
+		fs::write(
+			root.join("src/lib.rs"),
+			"mod widget;\nmod decoy;\nuse crate::widget::render;\npub fn run() { render(); }\n",
+		)
+		.expect("lib.rs should be written");
+		fs::write(root.join("src/widget.rs"), "pub fn render() {}\n")
+			.expect("widget.rs should be written");
+		// Decoy: a SECOND `render`, making the bare name ambiguous workspace-wide.
+		fs::write(root.join("src/decoy.rs"), "pub fn render() {}\n")
+			.expect("decoy.rs should be written");
+
+		let registry = LanguageRegistry::new().with_defaults().expect("defaults should register");
+		let builder = CodeGraphBuilder::new(registry, CacheStore::new(cache_dir));
+		let outcome = builder
+			.build(&BuildGraphOptions::new(&root))
+			.expect("build should succeed");
+
+		// The engine-profile extractor classifies a bare-identifier call
+		// `render()` as a References edge (the Calls kind is reserved for
+		// method/qualified-call syntax). What F-4b proves is that the cross-file
+		// reference RESOLVES to exactly one target via the `use` binding (S4),
+		// even though `render` is defined in two files. Exactly one References
+		// edge among symbol nodes is the litmus.
+		assert_eq!(
+			count_symbol_references(&outcome.graph),
+			1,
+			"`use crate::widget::render` binding must resolve the ambiguous reference \
+			 to exactly one cross-file target"
+		);
+		let _ = fs::remove_dir_all(root);
+	}
+
+	// Negative control: same ambiguous `render`, but NO `use` import. The bare
+	// call cannot bind precisely (S3/S4 need a binding) and S5 refuses the
+	// ambiguous name — so NO edge must form. Guards against an over-eager
+	// fallback silently linking to an arbitrary `render`.
+	#[test]
+	fn rust_bare_call_without_use_does_not_resolve_ambiguous_name() {
+		let root = std::env::temp_dir()
+			.join(format!("pi-code-graph-rust-nobind-{}", std::process::id()));
+		let cache_dir = root.join("cache");
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(root.join("src")).expect("src dir should be created");
+		fs::write(
+			root.join("Cargo.toml"),
+			"[package]\nname = \"fixture\"\nversion = \"0.0.0\"\n",
+		)
+		.expect("Cargo.toml should be written");
+		fs::write(
+			root.join("src/lib.rs"),
+			"mod widget;\nmod decoy;\npub fn run() { render(); }\n",
+		)
+		.expect("lib.rs should be written");
+		fs::write(root.join("src/widget.rs"), "pub fn render() {}\n")
+			.expect("widget.rs should be written");
+		fs::write(root.join("src/decoy.rs"), "pub fn render() {}\n")
+			.expect("decoy.rs should be written");
+
+		let registry = LanguageRegistry::new().with_defaults().expect("defaults should register");
+		let builder = CodeGraphBuilder::new(registry, CacheStore::new(cache_dir));
+		let outcome = builder
+			.build(&BuildGraphOptions::new(&root))
+			.expect("build should succeed");
+
+		// No `use` → no binding (S3/S4 miss) and S5 refuses the ambiguous name,
+		// so the reference must resolve to ZERO symbol targets. Asserting on
+		// symbol-to-symbol References edges (not the file-level import edges the
+		// `mod` decls create) isolates the resolution outcome we care about.
+		assert_eq!(
+			count_symbol_references(&outcome.graph),
+			0,
+			"ambiguous bare `render()` with no import must NOT resolve to any target"
+		);
+		let _ = fs::remove_dir_all(root);
+	}
+
 	#[test]
 	fn builder_cache_status_ignores_spell_sources() {
 		let root =
