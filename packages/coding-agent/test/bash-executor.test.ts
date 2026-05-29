@@ -363,4 +363,62 @@ describe("executeBash", () => {
 		// If process was killed (not orphaned), marker should NOT exist
 		expect(fs.existsSync(marker)).toBe(false);
 	});
+
+	// --- Ephemeral isolation + concurrency (bash-concurrency cutover) -------
+	//
+	// The bash *tool* omits sessionKey, so each call runs in a fresh shell.
+	// This guarantees (a) state does not leak across calls, (b) parallel calls
+	// with different cwd are isolated, and (c) a slow call cannot head-of-line
+	// block a fast sibling. The interactive `!`-shell still opts into
+	// persistence by passing sessionKey.
+
+	it("does not persist exported vars across calls without sessionKey (ephemeral)", async () => {
+		if (process.platform === "win32") return;
+		await executeBash("export PI_EPHEMERAL_VAR=leaked", { cwd: tempDir, timeout: 5000 });
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: bash variable expansion
+		const second = await executeBash("echo ${PI_EPHEMERAL_VAR:-unset}", { cwd: tempDir, timeout: 5000 });
+		expect(second.output.trim()).toBe("unset");
+	});
+
+	it("does not persist cd across calls without sessionKey (ephemeral)", async () => {
+		if (process.platform === "win32") return;
+		const sub = path.join(tempDir, "sub");
+		fs.mkdirSync(sub);
+		await executeBash("cd sub", { cwd: tempDir, timeout: 5000 });
+		const after = await executeBash("pwd", { cwd: tempDir, timeout: 5000 });
+		expect(after.output.trim()).toBe(fs.realpathSync(tempDir));
+	});
+
+	it("isolates cwd between concurrent ephemeral calls", async () => {
+		if (process.platform === "win32") return;
+		const a = path.join(tempDir, "a");
+		const b = path.join(tempDir, "b");
+		fs.mkdirSync(a);
+		fs.mkdirSync(b);
+		const [ra, rb] = await Promise.all([
+			executeBash("sleep 0.2; pwd", { cwd: a, timeout: 5000 }),
+			executeBash("pwd", { cwd: b, timeout: 5000 }),
+		]);
+		expect(ra.output.trim()).toBe(fs.realpathSync(a));
+		expect(rb.output.trim()).toBe(fs.realpathSync(b));
+	});
+
+	it("runs concurrent ephemeral calls in parallel (no head-of-line blocking)", async () => {
+		if (process.platform === "win32") return;
+		const start = Date.now();
+		await Promise.all([
+			executeBash("sleep 0.6", { cwd: tempDir, timeout: 5000 }),
+			executeBash("sleep 0.6", { cwd: tempDir, timeout: 5000 }),
+		]);
+		const elapsed = Date.now() - start;
+		expect(elapsed).toBeLessThan(1100);
+	});
+
+	it("still persists state across calls WITH sessionKey (interactive shell)", async () => {
+		if (process.platform === "win32") return;
+		const sessionKey = "ephemeral-test-persistent";
+		await executeBash("export PI_PERSIST_VAR=kept", { cwd: tempDir, timeout: 5000, sessionKey });
+		const second = await executeBash("echo $PI_PERSIST_VAR", { cwd: tempDir, timeout: 5000, sessionKey });
+		expect(second.output.trim()).toBe("kept");
+	});
 });

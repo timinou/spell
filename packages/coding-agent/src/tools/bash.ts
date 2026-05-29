@@ -229,7 +229,11 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	readonly label = "Bash";
 	readonly description: string;
 	readonly parameters: BashToolSchema;
-	readonly concurrency = "exclusive";
+	// Each bash call now runs in its own ephemeral shell (see bash-executor:
+	// persistence is opt-in via sessionKey, which the tool no longer passes), so
+	// there is no shared cwd/env to corrupt — a parallel batch is safe to run
+	// concurrently instead of being serialised.
+	readonly concurrency = "shared";
 	readonly strict = true;
 	readonly #asyncEnabled: boolean;
 
@@ -485,7 +489,9 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				})
 			: await executeBash(command, {
 					cwd: commandCwd,
-					sessionKey: this.session.getSessionId?.() ?? undefined,
+					// No sessionKey: the bash tool runs each call in a fresh ephemeral
+					// shell so a parallel batch is isolated (cwd cannot leak between
+					// siblings) and concurrent (no shared-Shell mutex serialising it).
 					timeout: timeoutMs,
 					signal,
 					env: resolvedEnv,

@@ -100,14 +100,24 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		};
 	}
 
+	// Persistence is opt-in via `sessionKey`. Callers that want shell state
+	// (cwd / exported vars) to survive across calls — the interactive `!`-shell —
+	// pass a stable key and reuse one long-lived `Shell`. Callers that omit it —
+	// the bash *tool* — get a fresh ephemeral session per call via the oneshot
+	// `executeShell` path below. This is what lets a parallel tool batch run with
+	// true isolation (no cwd leaking between siblings) and concurrency (no shared
+	// `Shell` mutex serialising the batch). The oneshot path is also the only one
+	// that forwards scheme args (root/home/sessionDir), so tool bash gets skill://
+	// URI expansion for free.
+	const persistent = options?.sessionKey !== undefined;
 	const sessionKey = buildSessionKey(shell, prefix, snapshotPath, shellEnv, options?.sessionKey);
-	const persistentSessionBroken = brokenShellSessions.has(sessionKey);
+	const persistentSessionBroken = persistent && brokenShellSessions.has(sessionKey);
 	if (persistentSessionBroken) {
 		shellSessions.delete(sessionKey);
 	}
 
-	let shellSession = persistentSessionBroken ? undefined : shellSessions.get(sessionKey);
-	if (!shellSession && !persistentSessionBroken) {
+	let shellSession = persistent && !persistentSessionBroken ? shellSessions.get(sessionKey) : undefined;
+	if (persistent && !shellSession && !persistentSessionBroken) {
 		shellSession = new Shell({ sessionEnv: shellEnv, snapshotPath: snapshotPath ?? undefined });
 		shellSessions.set(sessionKey, shellSession);
 	}
