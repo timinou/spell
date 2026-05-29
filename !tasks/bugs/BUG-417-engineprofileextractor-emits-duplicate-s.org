@@ -1,0 +1,54 @@
+#+TITLE: EngineProfileExtractor emits duplicate symbol node for pub fn (Rust)
+#+STATE: ITEM
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: BUG-417-engineprofileextractor-emits-duplicate-s
+#+LAYER: pi-code-graph
+#+PRIORITY: #C
+
+* Initial Message
+
+why is F-4 distinct?
+
+* Symptom
+
+Building a graph over a Rust =src/lib.rs= containing =pub fn run() { ... }=
+yields TWO =src/lib.rs::run= symbol nodes. Observed via debug dump in
+=indexer.rs= F-4b test work:
+
+#+begin_example
+symbols = ["src/lib.rs::run", "src/decoy.rs::render", "src/widget.rs::render", "src/lib.rs::run"]
+#+end_example
+
+=run= appears twice; =render= (a plain =pub fn= in another file) appears
+once each. Difference: =run= is in a file that also has =mod widget; mod
+decoy;= preceding it.
+
+* Suspected cause
+
+=collect_symbol_entry= (crates/pi-code-graph/src/language/generic.rs:125)
+handles =export_statement= by recursing into children with
+=inherited_exported = true=, then the top-level walk also visits the same
+declaration directly. For Rust, =pub fn= may be reached by both the
+visibility-wrapper path and the direct declaration path, double-emitting.
+
+Needs confirmation: is it =pub= visibility, or the presence of =mod=
+items shifting named-child iteration?
+
+* Impact
+
+- Inflated =symbol_count= stats.
+- Potential duplicate edges / double-counting in =def→= results.
+- Did NOT affect F-4b edge-count tests (they assert Calls edge count, which
+  was unaffected), so latent until now.
+
+* Repro
+
+Add to indexer tests: build graph over =pub fn run() {}= in a file with
+=mod x;= decls, assert =symbol_names()= has exactly one =::run=.
+
+* Fix sketch
+
+Dedup in =collect_symbol_entry= (track visited node ids) OR fix the
+export/visibility wrapper recursion so a declaration is emitted exactly
+once. Add regression test asserting symbol uniqueness.
