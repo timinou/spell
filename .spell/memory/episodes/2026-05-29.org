@@ -1,0 +1,14 @@
+#+TITLE: Episodes 2026-05-29
+
+** ITEM Remove lsp tool from coding-agent (hard nuke of packages/coding-agent/src/lsp/)
+
+Shipped on worktree branch fup-095-nuke-lsp-tool, commit d737baa81. 63 files, +58/-6977. Reviewer 0.98 confidence CLEAN. Key finding: the lsp/ subsystem was already dead-code on the live edit/write path (writethrough/diagnostics had zero call sites) — removal was pure excision + settings/allowlist/UI cleanup, not a risky behavioural cutover. tsgo baseline-parity (42 pre-existing, 0 new). Guard test 33/0.
+:PROPERTIES:
+:CUSTOM_ID: EP-e4b481cae3e34a63
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T11:20:21Z
+:END:
+:RELATIONS:
+ABOUT: FUP-095-remove-lsp-tool-from-coding-agent-hard-n
+:END:
