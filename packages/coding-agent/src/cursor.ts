@@ -206,14 +206,6 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 		return toolResultMessage;
 	}
 
-	async diagnostics(args: Parameters<NonNullable<ICursorExecHandlers["diagnostics"]>>[0]) {
-		const toolCallId = decodeToolCallId(args.toolCallId);
-		const toolResultMessage = await executeTool(this.options, "lsp", toolCallId, {
-			action: "diagnostics",
-			file: args.path,
-		});
-		return toolResultMessage;
-	}
 
 	async mcp(call: CursorMcpCall) {
 		const toolName = call.toolName || call.name;

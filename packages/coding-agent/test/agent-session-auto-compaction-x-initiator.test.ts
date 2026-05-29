@@ -136,7 +136,6 @@ describe("AgentSession compaction Copilot initiator attribution", () => {
 			promptTemplates: [],
 			slashCommands: [],
 			enableMCP: false,
-			enableLsp: false,
 			taskDepth,
 		});
 		sessions.push(session);

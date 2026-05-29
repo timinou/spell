@@ -217,13 +217,6 @@ describe("parseArgs", () => {
 		});
 	});
 
-	describe("--no-lsp flag", () => {
-		test("parses --no-lsp flag", () => {
-			const result = parseArgs(["--no-lsp"]);
-			expect(result.noLsp).toBe(true);
-		});
-	});
-
 	describe("--sandbox-policy flag", () => {
 		test("parses --sandbox-policy path", () => {
 			const result = parseArgs(["--sandbox-policy", "sandbox-policy.json"]);

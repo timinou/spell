@@ -13,7 +13,7 @@ import type {
 } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 
-import { formatGroupedDiagnosticMessages } from "../lsp/utils";
+
 import type { Theme } from "../modes/theme/theme";
 import { getInlineSpillBudget, resolveToolSpillPolicy, shouldSpillText } from "../session/spill-policy";
 import { type OutputSummary, type TruncationResult, truncateTail } from "../session/streaming-output";
@@ -47,13 +47,6 @@ export type SourceMeta =
 	| { type: "url"; value: string }
 	| { type: "internal"; value: string };
 
-/**
- * LSP diagnostic info (for edit/write tools).
- */
-export interface DiagnosticMeta {
-	summary: string;
-	messages: string[];
-}
 
 /**
  * Limit-specific notices.
@@ -71,7 +64,7 @@ export interface LimitsMeta {
 export interface OutputMeta {
 	truncation?: TruncationMeta;
 	source?: SourceMeta;
-	diagnostics?: DiagnosticMeta;
+
 	limits?: LimitsMeta;
 }
 
@@ -308,12 +301,6 @@ export class OutputMetaBuilder {
 		return this;
 	}
 
-	/** Add LSP diagnostics. No-op if no messages. */
-	diagnostics(summary: string, messages: string[]): this {
-		if (messages.length === 0) return this;
-		this.#meta.diagnostics = { summary, messages };
-		return this;
-	}
 
 	/** Get the built OutputMeta, or undefined if empty. */
 	get(): OutputMeta | undefined {
@@ -399,15 +386,8 @@ export function formatOutputNotice(meta: OutputMeta | undefined): string {
 		parts.push(`Some lines truncated to ${meta.limits.columnTruncated.maxColumn} chars`);
 	}
 
-	// Diagnostics
-	let diagnosticsNotice = "";
-	if (meta.diagnostics && meta.diagnostics.messages.length > 0) {
-		const d = meta.diagnostics;
-		diagnosticsNotice = `\n\nLSP Diagnostics (${d.summary}):\n${formatGroupedDiagnosticMessages(d.messages)}`;
-	}
-
 	const notice = parts.length ? `\n\n[${parts.join(". ")}]` : "";
-	return notice + diagnosticsNotice;
+	return notice;
 }
 
 /**

@@ -130,7 +130,6 @@ describe("runSubprocess submit_result reminders", () => {
 		settings: Settings.isolated({ "todo.enabled": true }),
 		authStorage: {} as unknown as AuthStorage,
 		modelRegistry: { refresh: async () => {} } as unknown as import("../../src/config/model-registry").ModelRegistry,
-		enableLsp: false,
 	};
 
 	it("requests submit_result injection for subagent sessions", async () => {

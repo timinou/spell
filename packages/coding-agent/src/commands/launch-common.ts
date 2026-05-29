@@ -66,9 +66,7 @@ export const baseLaunchFlags = {
 	"no-tools": Flags.boolean({
 		description: "Disable all built-in tools",
 	}),
-	"no-lsp": Flags.boolean({
-		description: "Disable LSP tools, formatting, and diagnostics",
-	}),
+
 	"no-pty": Flags.boolean({
 		description: "Disable PTY-based interactive bash execution",
 	}),

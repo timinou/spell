@@ -1329,7 +1329,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const renderedPlanModeSubagentPrompt = renderPromptTemplate(planModeSubagentPrompt, {
 			allowedFolders: planModeAllowedFolders.length > 0 ? planModeAllowedFolders : undefined,
 		});
-		const planModeTools = ["read", "grep", "find", "ls", "lsp", "fetch", "web_search", "org"];
+		const planModeTools = ["read", "grep", "find", "ls", "fetch", "web_search", "org"];
 		if (planModeAllowedFolders.length > 0) {
 			planModeTools.push("write", "edit");
 		}
@@ -1622,7 +1622,6 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						persistArtifacts: !!artifactsDir,
 						artifactsDir: effectiveArtifactsDir,
 						contextFile: contextFilePath,
-						enableLsp: false,
 						signal: runSignal,
 						eventBus: this.session.eventBus,
 						onProgress: updateProgress,
@@ -1676,7 +1675,6 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						persistArtifacts: !!artifactsDir,
 						artifactsDir: effectiveArtifactsDir,
 						contextFile: contextFilePath,
-						enableLsp: false,
 						signal: runSignal,
 						eventBus: this.session.eventBus,
 						onProgress: updateProgress,

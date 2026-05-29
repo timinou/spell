@@ -132,7 +132,6 @@ async function runInteractiveMode(
 	versionCheckPromise: Promise<string | undefined>,
 	initialMessages: string[],
 	setExtensionUIContext: (uiContext: ExtensionUIContext, hasUI: boolean) => void,
-	lspServers: Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }> | undefined,
 	mcpManager: import("./mcp").MCPManager | undefined,
 	taskManager: import("./orchestrators/canvas-task-manager").CanvasTaskManager | undefined,
 	eventBus: EventBus | undefined,
@@ -166,7 +165,6 @@ async function runInteractiveMode(
 		version,
 		changelogMarkdown,
 		setExtensionUIContext,
-		lspServers,
 		mcpManager,
 		taskManager,
 		eventBus,
@@ -583,9 +581,6 @@ async function buildSessionOptions(
 		options.toolNames = parsed.tools;
 	}
 
-	if (parsed.noLsp) {
-		options.enableLsp = false;
-	}
 
 	if (parsed.sandboxPolicy) {
 		options.sandboxPolicy = parsed.sandboxPolicy;
@@ -821,7 +816,6 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		modelFallbackMessage,
 		spellcastReport,
 		spellcastingWarning,
-		lspServers,
 		mcpManager,
 		eventBus,
 		orchestratorManager,
@@ -980,7 +974,6 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 			versionCheckPromise,
 			parsedArgs.messages,
 			setToolUIContext,
-			lspServers,
 			mcpManager,
 			taskManager,
 			eventBus,

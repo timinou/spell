@@ -29,7 +29,7 @@ let find: FindTool;
 
 beforeEach(async () => {
 	tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "replay-"));
-	const session = { cwd: tmpDir, hasUI: false, enableLsp: false } as ToolSession;
+	const session = { cwd: tmpDir, hasUI: false } as ToolSession;
 	find = new FindTool(session);
 });
 afterEach(async () => {

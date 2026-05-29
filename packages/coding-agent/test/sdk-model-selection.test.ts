@@ -61,7 +61,6 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			promptTemplates: [],
 			slashCommands: [],
 			enableMCP: false,
-			enableLsp: false,
 			modelPattern,
 		};
 	}

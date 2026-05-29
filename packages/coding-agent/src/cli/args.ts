@@ -34,7 +34,7 @@ export interface Args {
 	models?: string[];
 	tools?: string[];
 	noTools?: boolean;
-	noLsp?: boolean;
+
 	noPty?: boolean;
 	hooks?: string[];
 	extensions?: string[];
@@ -150,8 +150,6 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.models = args[++i].split(",").map(s => s.trim());
 		} else if (arg === "--no-tools") {
 			result.noTools = true;
-		} else if (arg === "--no-lsp") {
-			result.noLsp = true;
 		} else if (arg === "--no-pty") {
 			result.noPty = true;
 		} else if (arg === "--sandbox-policy" && i + 1 < args.length) {
@@ -302,7 +300,7 @@ ${chalk.bold("Available Tools (default-enabled unless noted):")}
   write         - Write files (creates/overwrites)
   grep          - Search file contents
   find          - Find files by glob pattern
-  lsp           - Language server protocol (code intelligence)
+
   inspect_image - Analyze images with a vision model
   browser       - Browser automation (Puppeteer)
   task          - Launch sub-agents for parallel tasks

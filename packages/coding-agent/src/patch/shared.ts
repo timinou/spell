@@ -5,12 +5,11 @@ import type { ToolCallContext } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import type { FileDiagnosticsResult } from "../lsp";
+
 import { renderDiff as renderDiffColored } from "../modes/components/diff";
 import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
 import type { OutputMeta } from "../tools/output-meta";
 import {
-	formatDiagnostics,
 	formatDiffStats,
 	formatErrorMessage,
 	formatExpandHint,
@@ -55,8 +54,7 @@ export interface EditToolDetails {
 	diff: string;
 	/** Line number of the first change in the new file (for editor navigation) */
 	firstChangedLine?: number;
-	/** Diagnostic result (if available) */
-	diagnostics?: FileDiagnosticsResult;
+
 	/** Operation type (patch mode only) */
 	op?: Operation;
 	/** New path after move/rename (patch mode only) */
@@ -345,12 +343,6 @@ export const editToolRenderer = {
 					}
 				}
 
-				// Show LSP diagnostics if available
-				if (result.details?.diagnostics) {
-					text += formatDiagnostics(result.details.diagnostics, expanded, uiTheme, (fp: string) =>
-						uiTheme.getLangIcon(getLanguageFromPath(fp)),
-					);
-				}
 				if (result.details?.bufferInvalidationError) {
 					text += `\n${uiTheme.fg("warning", replaceTabs(result.details.bufferInvalidationError))}`;
 				}

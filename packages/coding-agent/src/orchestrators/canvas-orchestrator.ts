@@ -120,7 +120,7 @@ export class CanvasOrchestratorManager {
 			description: `Scoped orchestrator for window ${windowId}`,
 			systemPrompt,
 			source: "bundled",
-			tools: tools ?? ["read", "grep", "find", "lsp", "escalate"],
+			tools: tools ?? ["read", "grep", "find", "escalate"],
 		};
 
 		const assignment = `Scope: ${scope}${context ? `\n\nContext: ${JSON.stringify(context)}` : ""}`;

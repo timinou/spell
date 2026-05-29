@@ -5,7 +5,7 @@
  */
 import type { Component } from "@oh-my-pi/pi-tui";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { lspToolRenderer } from "../lsp/render";
+
 import type { Theme } from "../modes/theme/theme";
 import { editToolRenderer } from "../patch";
 import { taskToolRenderer } from "../task/render";
@@ -44,7 +44,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	calc: calculatorToolRenderer as ToolRenderer,
 	edit: editToolRenderer as ToolRenderer,
 
-	lsp: lspToolRenderer as ToolRenderer,
+
 
 	inspect_image: inspectImageToolRenderer as ToolRenderer,
 

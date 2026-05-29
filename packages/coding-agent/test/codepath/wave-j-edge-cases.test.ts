@@ -28,7 +28,6 @@ function makeSession(tmpDir: string, sandboxPolicy?: ToolSession["sandboxPolicy"
 	return {
 		cwd: tmpDir,
 		hasUI: false,
-		enableLsp: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
 		settings: Settings.isolated(),

@@ -21,7 +21,7 @@ let edit: CodepathEditTool;
 
 beforeEach(async () => {
 	tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "negative-"));
-	const session = { cwd: tmpDir, hasUI: false, enableLsp: false } as ToolSession;
+	const session = { cwd: tmpDir, hasUI: false } as ToolSession;
 	find = new FindTool(session);
 	edit = new CodepathEditTool(session);
 });

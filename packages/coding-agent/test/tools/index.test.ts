@@ -25,7 +25,6 @@ function createTestSession(overrides: Partial<ToolSession> = {}): ToolSession {
 
 function createSettingsWithOverrides(overrides: Partial<Record<SettingPath, unknown>> = {}): Settings {
 	return Settings.isolated({
-		"lsp.formatOnWrite": true,
 		"bashInterceptor.enabled": true,
 		...overrides,
 	});
@@ -62,7 +61,10 @@ describe("createTools", () => {
 		expect(names).toContain("edit");
 		expect(names).toContain("create");
 
-		expect(names).toContain("lsp");
+		// FUP-095: the lsp tool was removed; its surface is covered by find
+		// (#hover/#signature/#type_definition/#diagnostics, def→/ref→) and
+		// edit (symbolRename).
+		expect(names).not.toContain("lsp");
 
 		expect(names).toContain("task");
 		expect(names).toContain("todo_write");
@@ -72,20 +74,13 @@ describe("createTools", () => {
 		expect(names).not.toContain("autonomy_state");
 	});
 
-	it("excludes lsp tool when session disables LSP", async () => {
-		const session = createTestSession({ enableLsp: false });
+	it("never registers the removed lsp tool, even if requested (FUP-095)", async () => {
+		const session = createTestSession();
 		const tools = await createTools(session, ["get", "lsp", "create"]);
 		const names = tools.map(t => t.name);
 
+		// `lsp` is silently dropped from the requested subset; it no longer exists.
 		expect(names).toEqual(["get", "create", "exit_plan_mode"]);
-	});
-
-	it("excludes lsp tool when disabled", async () => {
-		const session = createTestSession({ enableLsp: false });
-		const tools = await createTools(session);
-		const names = tools.map(t => t.name);
-
-		expect(names).not.toContain("lsp");
 	});
 
 	it("respects requested tool subset", async () => {
@@ -228,7 +223,7 @@ describe("TOOL_TIERS", () => {
 	});
 
 	it("assigns core tier to essential tools", () => {
-		const coreTier: string[] = ["bash", "lsp", "task", "ask"];
+		const coreTier: string[] = ["bash", "task", "ask"];
 		for (const name of coreTier) {
 			expect(getToolTier(name)).toBe("core");
 		}

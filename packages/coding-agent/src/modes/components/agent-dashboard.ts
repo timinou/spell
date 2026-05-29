@@ -637,7 +637,7 @@ export class AgentDashboard extends Container {
 			model: selectedModel,
 			systemPrompt,
 			hasUI: false,
-			enableLsp: false,
+
 			enableMCP: false,
 			disableExtensionDiscovery: true,
 			toolNames: ["__none__"],
