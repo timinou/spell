@@ -1,0 +1,82 @@
+#+TITLE: F-4 resolved: cross-file reference resolution for engine-profile langs
+#+STATE: DONE
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: FUP-101-f-4-resolved-cross-file-reference-resolu
+#+EFFORT: S
+#+LAYER: pi-code-graph
+#+PRIORITY: #B
+
+* Initial Message
+
+why is F-4 distinct?
+
+* Outcome
+
+Closes the F-4 finding from FUP-098 (cross-file def/ref/call edges
+silently empty for engine-profile languages). Split into two parts; both
+landed on =fup-099-live-semantic-dispatch=.
+
+** F-4a (commit 6d9d50ff5): workspace-unique name fallback (S5)
+
+=resolve_reference_target= gained a final strategy S5: after same-file
+(S1/S2) and import-binding (S3/S4) miss, if exactly ONE symbol in the
+whole workspace bears the target name, link to it. Ambiguity yields no
+edge. =build_workspace_name_index= precomputes the unique-name map once
+per build (O(symbols)), so S5 is O(log n) per unresolved reference.
+
+This gives every tree-sitter language usable def/ref edges offline for
+the common case of a workspace-unique target, even with empty import
+bindings.
+
+** F-4b (commit a1b2c3d4e): the premise was WRONG -- precise path already works
+
+The F-4 finding claimed Rust does not populate import_bindings and
+needed ~200 LOC per language. *Empirically false.* =rust_imports= +
+=resolve_rust_import= + =rust_module_candidates= + the builder's
+ImportBindingMap population loop are all present and functional. The
+real gap was the absence of any END-TO-END test through the real
+extractor + builder.
+
+Added two regression-guard tests (real 4-file Rust crate fixture with an
+*ambiguous* =render= so S5 cannot mask the result):
+- =rust_use_binding_resolves_ambiguous_cross_file_reference= -> exactly 1 edge
+- =rust_bare_call_without_use_does_not_resolve_ambiguous_name= -> 0 edges
+
+Teeth verified: temp-breaking the binding-insertion loop flips the
+positive test RED while the negative stays GREEN.
+
+* Tests
+
+pi-code-graph: 161 lib (+4 across F-4a/F-4b) + 17 + 5 integration, all green.
+pi-natives code_path lib: 283. edge_dispatch_e2e: 3.
+
+* Correction to prior memory
+
+The discovery concept
+=.spell/memory/concepts/semanticbackend-dispatch-is-unwired-in-p.org=
+noted "zero References edges materialised because EngineProfileExtractor
+doesn't populate import_bindings for Rust". That conclusion conflated
+the SemanticBackend graph-presence probe with general cross-file
+resolution. General =use crate::x::y= resolution works; the prior probe
+likely measured a fixture without on-disk module files (resolver
+requires real paths via =candidate.exists()=).
+
+* Remaining
+
+Other engine-profile languages (Go, Ruby, etc.) inherit S5 for free.
+Whether each has a precise resolver like Rust's =resolve_rust_import= is
+a per-language question, but no longer blocking: S5 covers the
+binding-less case workspace-wide-uniquely.
+
+* Correction (post-commit)
+
+First F-4b test draft asserted =EdgeKind::Calls= and failed (0 != 1). Root
+cause via probe: the engine profile classifies a bare-identifier call
+=render()= as =EdgeKind::References=, not =Calls= (Calls is reserved for
+method/qualified call syntax). The impl was correct all along; the test
+assertion was wrong. Fixed via a =count_symbol_references= helper that
+counts symbol->symbol References edges (excluding file-level import edges
+from =mod= decls). Teeth re-verified after correction. Commits squashed via
+=--amend=; final F-4b commit is tests-only, build region byte-identical to
+F-4a baseline.
