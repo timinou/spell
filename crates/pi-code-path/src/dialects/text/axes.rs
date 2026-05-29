@@ -7,6 +7,48 @@ use std::{borrow::Cow, collections::HashMap, ops::Range};
 use regex::Regex;
 
 use super::{line_index::LineIndex, para_index::ParaIndex};
+
+/// Pre-compiled text-match predicate. `Literal` short-circuits regex
+/// machinery for patterns with no metacharacters — the common case for
+/// identifier searches. The compiled `Regex` already prefilters via
+/// aho-corasick on ≥1.5, but `str::contains` avoids the fixed compile cost
+/// (≈1µs/file) and a small per-match dispatch overhead.
+enum Matcher {
+	Literal(String),
+	Regex(Regex),
+	Invalid,
+}
+
+impl Matcher {
+	fn from_pattern(pat: &str) -> Self {
+		let is_literal = !pat.is_empty()
+			&& pat.bytes().all(|b| {
+				!matches!(
+					b,
+					b'.' | b'^'
+						| b'$' | b'*' | b'+'
+						| b'?' | b'(' | b')'
+						| b'[' | b']' | b'{'
+						| b'}' | b'|' | b'\\'
+				)
+			});
+		if is_literal {
+			return Matcher::Literal(pat.to_string());
+		}
+		match Regex::new(pat) {
+			Ok(re) => Matcher::Regex(re),
+			Err(_) => Matcher::Invalid,
+		}
+	}
+
+	fn is_match(&self, hay: &str) -> bool {
+		match self {
+			Matcher::Literal(lit) => hay.contains(lit.as_str()),
+			Matcher::Regex(re) => re.is_match(hay),
+			Matcher::Invalid => false,
+		}
+	}
+}
 use crate::{
 	ast::{CompareOp, Predicate, Step},
 	types::{Content, Diagnostic, DiagnosticVariant, NodeRef},
@@ -33,10 +75,22 @@ pub fn line_steps(content: &[u8], step: &Step) -> Vec<NodeRef> {
 		return vec![build_line_slice(content, &line_index, start, end)];
 	}
 
+	// Pre-compile regex predicates once per query. Per-line `Regex::new`
+	// dominated cost on `text~=` scans (compile ≈ 1000× match).
+	let compiled: Vec<Option<Matcher>> = step
+		.predicates
+		.iter()
+		.map(|p| match p {
+			Predicate::TextMatch(pat) => Some(Matcher::from_pattern(pat)),
+			_ => None,
+		})
+		.collect();
+
 	let mut selected: Vec<usize> = (1..=line_index.line_count()).collect();
 
-	for pred in &step.predicates {
-		selected.retain(|ln| line_predicate(pred, *ln, content, &line_index));
+	for (i, pred) in step.predicates.iter().enumerate() {
+		let m = compiled[i].as_ref();
+		selected.retain(|ln| line_predicate(pred, m, *ln, content, &line_index));
 	}
 
 	selected
@@ -155,6 +209,7 @@ fn slice_node(
 
 fn line_predicate(
 	pred: &Predicate,
+	compiled: Option<&Matcher>,
 	line_num: usize,
 	content: &[u8],
 	line_index: &LineIndex,
@@ -176,14 +231,13 @@ fn line_predicate(
 			let target = if *n < 0 { count + *n + 1 } else { *n };
 			(line_num as isize) == target
 		},
-		Predicate::TextMatch(pattern) => {
+		Predicate::TextMatch(_) => {
+			let Some(m) = compiled else { return false };
 			let range = line_index
 				.line_range(line_num, content.len())
 				.unwrap_or(0..0);
 			let line_text = slice_lossy(content, range);
-			Regex::new(pattern)
-				.map(|re| re.is_match(&line_text))
-				.unwrap_or(false)
+			m.is_match(&line_text)
 		},
 		Predicate::LiteralMatch(lit) => {
 			let range = line_index
@@ -223,10 +277,22 @@ fn line_predicate(
 /// Apply a `§para` step to `content`.
 pub fn para_steps(content: &[u8], step: &Step) -> Vec<NodeRef> {
 	let para_index = ParaIndex::build(content);
+
+	// Pre-compile regex predicates once per query (see line_steps).
+	let compiled: Vec<Option<Matcher>> = step
+		.predicates
+		.iter()
+		.map(|p| match p {
+			Predicate::TextMatch(pat) => Some(Matcher::from_pattern(pat)),
+			_ => None,
+		})
+		.collect();
+
 	let mut selected: Vec<usize> = (1..=para_index.para_count()).collect();
 
-	for pred in &step.predicates {
-		selected.retain(|pn| para_predicate(pred, *pn, content, &para_index));
+	for (i, pred) in step.predicates.iter().enumerate() {
+		let m = compiled[i].as_ref();
+		selected.retain(|pn| para_predicate(pred, m, *pn, content, &para_index));
 	}
 
 	selected
@@ -248,6 +314,7 @@ pub fn para_steps(content: &[u8], step: &Step) -> Vec<NodeRef> {
 
 fn para_predicate(
 	pred: &Predicate,
+	compiled: Option<&Matcher>,
 	para_num: usize,
 	content: &[u8],
 	para_index: &ParaIndex,
@@ -269,14 +336,13 @@ fn para_predicate(
 			let target = if *n < 0 { count + *n + 1 } else { *n };
 			(para_num as isize) == target
 		},
-		Predicate::TextMatch(pattern) => {
+		Predicate::TextMatch(_) => {
+			let Some(m) = compiled else { return false };
 			let range = para_index
 				.para_range(para_num, content.len())
 				.unwrap_or(0..0);
 			let para_text = slice_lossy(content, range);
-			Regex::new(pattern)
-				.map(|re| re.is_match(&para_text))
-				.unwrap_or(false)
+			m.is_match(&para_text)
 		},
 		Predicate::LiteralMatch(lit) => {
 			let range = para_index

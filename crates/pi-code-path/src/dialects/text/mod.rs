@@ -12,6 +12,8 @@ pub mod stream;
 
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
+use rayon::prelude::*;
+
 use super::fs::anchors::DefaultFsAnchorContext;
 use crate::{
 	ast::{CodePath, Combinator, Head, Locator, Predicate, Step},
@@ -125,17 +127,20 @@ impl Resolver for TextResolver {
 			},
 		};
 
-		// Apply head step to every file.
+		// Apply head step to every file in parallel. Per-file scans are pure
+		// (no shared state), and the output set is already unordered downstream
+		// (callers re-group by file locator). We use rayon's thread pool to
+		// saturate cores on multi-file globs; cancellation is polled per file.
 		let head_step = &query.head;
-		let mut nodes = Vec::new();
-		for path in &file_paths {
-			if cancel.is_cancelled() {
-				break;
-			}
-			let content = match std::fs::read(path) {
-				Ok(c) => c,
-				Err(e) => {
-					nodes.push(NodeRef {
+		let nodes: Vec<NodeRef> = file_paths
+			.par_iter()
+			.flat_map_iter(|path| {
+				if cancel.is_cancelled() {
+					return Vec::new().into_iter();
+				}
+				match std::fs::read(path) {
+					Ok(content) => apply_step(&content, head_step, path).into_iter(),
+					Err(e) => vec![NodeRef {
 						locator:     path.to_string_lossy().to_string(),
 						range:       0..0,
 						kind:        "§file".to_string(),
@@ -146,13 +151,12 @@ impl Resolver for TextResolver {
 							message: format!("cannot read file: {e}"),
 							span:    None,
 						}],
-					});
-					continue;
-				},
-			};
-			let mut file_nodes = apply_step(&content, head_step, path);
-			nodes.append(&mut file_nodes);
-		}
+					}]
+					.into_iter(),
+				}
+			})
+			.collect();
+		let mut nodes = nodes;
 
 		// Process combinator chain.
 		for (combinator, step) in &query.chain {
