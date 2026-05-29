@@ -190,24 +190,26 @@ impl CodeGraphBuilder {
 			}
 		}
 
-		for (symbol_index, references) in symbol_refs {
-			let from_index = graph.from_index(symbol_index);
-			let from_file = match graph.node_weight(from_index) {
-				Some(GraphNode::Symbol(symbol)) => symbol.file.clone(),
-				_ => continue,
-			};
-			for reference in references {
-				if let Some(to_index) = resolve_reference_target(
-					&graph,
-					&symbol_nodes,
-					&import_bindings,
-					&from_file,
-					&reference.target_name,
-				) {
-					graph.add_edge(from_index, to_index, reference.edge_kind);
-				}
-			}
-		}
+ 	let workspace_name_index = build_workspace_name_index(&graph, &symbol_nodes);
+ 		for (symbol_index, references) in symbol_refs {
+ 			let from_index = graph.from_index(symbol_index);
+ 			let from_file = match graph.node_weight(from_index) {
+ 				Some(GraphNode::Symbol(symbol)) => symbol.file.clone(),
+ 				_ => continue,
+ 			};
+ 			for reference in references {
+ 				if let Some(to_index) = resolve_reference_target(
+ 					&graph,
+ 					&symbol_nodes,
+ 					&import_bindings,
+ 					&workspace_name_index,
+ 					&from_file,
+ 					&reference.target_name,
+ 				) {
+ 					graph.add_edge(from_index, to_index, reference.edge_kind);
+ 				}
+ 			}
+ 		}
 
 		for (from_index, to_index) in collect_style_edges(&graph) {
 			graph.add_edge(from_index, to_index, EdgeKind::Styles);
@@ -238,6 +240,7 @@ fn resolve_reference_target(
 	graph: &StableGraph<GraphNode, EdgeKind>,
 	symbol_nodes: &BTreeMap<(PathBuf, String), petgraph::stable_graph::NodeIndex>,
 	import_bindings: &ImportBindingMap,
+	workspace_name_index: &BTreeMap<String, petgraph::stable_graph::NodeIndex>,
 	from_file: &Path,
 	target_name: &str,
 ) -> Option<petgraph::stable_graph::NodeIndex> {
@@ -264,12 +267,47 @@ fn resolve_reference_target(
 			return Some(target_index);
 		}
 	}
-	import_bindings
+	if let Some(target_index) = import_bindings
 		.get(from_file)
 		.and_then(|bindings| bindings.get(target_name))
 		.and_then(|(target_file, imported_name)| {
 			unique_symbol_match_in_file(graph, symbol_nodes, target_file, imported_name)
-		})
+		}) {
+		return Some(target_index);
+	}
+	// S5: workspace-unique fallback. Engine-profile languages (Rust, Python,
+	// Go, …) do not yet populate import_bindings, so S3/S4 always miss for
+	// their cross-file references. As a last resort, if exactly ONE symbol in
+	// the whole workspace bears the target name, link to it. Ambiguity (0 or
+	// ≥2 matches) yields no edge — a missing edge is safer than a wrong one.
+	// The index is precomputed once per build (O(symbols)); this lookup is O(log n).
+	workspace_name_index.get(target_name).copied()
+}
+
+/// Build the S5 workspace-unique name index: `name → NodeIndex` containing only
+/// names that are unique across the entire workspace. Names borne by two or
+/// more symbols are omitted, so a lookup hit guarantees an unambiguous target.
+/// Computed once per graph build to keep S5 resolution O(log n) per reference
+/// rather than O(symbols) per reference.
+fn build_workspace_name_index(
+	graph: &StableGraph<GraphNode, EdgeKind>,
+	symbol_nodes: &BTreeMap<(PathBuf, String), petgraph::stable_graph::NodeIndex>,
+) -> BTreeMap<String, petgraph::stable_graph::NodeIndex> {
+	let mut unique: BTreeMap<String, petgraph::stable_graph::NodeIndex> = BTreeMap::new();
+	let mut ambiguous: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+	for &index in symbol_nodes.values() {
+		if let Some(GraphNode::Symbol(symbol)) = graph.node_weight(index) {
+			if ambiguous.contains(&symbol.name) {
+				continue;
+			}
+			if unique.remove(&symbol.name).is_some() {
+				ambiguous.insert(symbol.name.clone());
+			} else {
+				unique.insert(symbol.name.clone(), index);
+			}
+		}
+	}
+	unique
 }
 
 fn unique_symbol_match_in_file(
@@ -502,6 +540,125 @@ mod tests {
 					],
 					imports:  Vec::new(),
 				},
+				// S5 fixtures: bare-name reference to a symbol in ANOTHER file with
+				// NO import binding (engine_profile languages do not populate
+				// import_bindings). S1–S4 all miss; only the workspace-unique
+				// fallback can resolve these.
+				"xref_caller" => ExtractedFile {
+					path:     path.to_path_buf(),
+					language: self.language(),
+					symbols:  vec![ExtractedSymbol {
+						name:           "xref_caller".into(),
+						qualified_name: format!("{}::xref_caller", path.display()),
+						kind:           SymbolKind::Function,
+						exported:       true,
+						line:           1,
+						column:         1,
+						detail:         None,
+						references:     vec![ExtractedReference {
+							target_name: "lonely_target".into(),
+							edge_kind:   EdgeKind::Calls,
+						}],
+					}],
+					imports:  Vec::new(),
+				},
+				"xref_target" => ExtractedFile {
+					path:     path.to_path_buf(),
+					language: self.language(),
+					symbols:  vec![ExtractedSymbol {
+						name:           "lonely_target".into(),
+						qualified_name: format!("{}::lonely_target", path.display()),
+						kind:           SymbolKind::Function,
+						exported:       true,
+						line:           1,
+						column:         1,
+						detail:         None,
+						references:     Vec::new(),
+					}],
+					imports:  Vec::new(),
+				},
+				// Same bare-name reference, but TWO definitions in two other files
+				// → ambiguous → S5 must NOT create an edge.
+				"ambig_caller" => ExtractedFile {
+					path:     path.to_path_buf(),
+					language: self.language(),
+					symbols:  vec![ExtractedSymbol {
+						name:           "ambig_caller".into(),
+						qualified_name: format!("{}::ambig_caller", path.display()),
+						kind:           SymbolKind::Function,
+						exported:       true,
+						line:           1,
+						column:         1,
+						detail:         None,
+						references:     vec![ExtractedReference {
+							target_name: "ambig_target".into(),
+							edge_kind:   EdgeKind::Calls,
+						}],
+					}],
+					imports:  Vec::new(),
+				},
+				"ambig_a" | "ambig_b" => ExtractedFile {
+					path:     path.to_path_buf(),
+					language: self.language(),
+					symbols:  vec![ExtractedSymbol {
+						name:           "ambig_target".into(),
+						qualified_name: format!("{}::ambig_target", path.display()),
+						kind:           SymbolKind::Function,
+						exported:       true,
+						line:           1,
+						column:         1,
+						detail:         None,
+						references:     Vec::new(),
+					}],
+					imports:  Vec::new(),
+				},
+				// Same-file shadow: a local `shadowed` plus a remote `shadowed`.
+				// S2 (same-file unique) must win over S5; edge stays intra-file.
+				"shadow_local" => ExtractedFile {
+					path:     path.to_path_buf(),
+					language: self.language(),
+					symbols:  vec![
+						ExtractedSymbol {
+							name:           "shadow_caller".into(),
+							qualified_name: format!("{}::shadow_caller", path.display()),
+							kind:           SymbolKind::Function,
+							exported:       true,
+							line:           1,
+							column:         1,
+							detail:         None,
+							references:     vec![ExtractedReference {
+								target_name: "shadowed".into(),
+								edge_kind:   EdgeKind::Calls,
+							}],
+						},
+						ExtractedSymbol {
+							name:           "shadowed".into(),
+							qualified_name: format!("{}::shadowed", path.display()),
+							kind:           SymbolKind::Function,
+							exported:       true,
+							line:           2,
+							column:         1,
+							detail:         None,
+							references:     Vec::new(),
+						},
+					],
+					imports:  Vec::new(),
+				},
+				"shadow_remote" => ExtractedFile {
+					path:     path.to_path_buf(),
+					language: self.language(),
+					symbols:  vec![ExtractedSymbol {
+						name:           "shadowed".into(),
+						qualified_name: format!("{}::shadowed", path.display()),
+						kind:           SymbolKind::Function,
+						exported:       true,
+						line:           1,
+						column:         1,
+						detail:         None,
+						references:     Vec::new(),
+					}],
+					imports:  Vec::new(),
+				},
 				_ => {
 					let (imports, references) = match name {
 						"caller" => (
@@ -675,6 +832,102 @@ mod tests {
 			.expect("build should succeed");
 
 		assert_eq!(outcome.graph.count_edges(EdgeKind::Calls), 1);
+		let _ = fs::remove_dir_all(root);
+	}
+
+	// --- F-4a: workspace-unique cross-file fallback (S5) ---
+
+	#[test]
+	fn resolves_workspace_unique_cross_file_reference() {
+		let root = std::env::temp_dir()
+			.join(format!("pi-code-graph-xref-unique-{}", std::process::id()));
+		let cache_dir = root.join("cache");
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(&root).expect("temp dir should be created");
+		fs::write(root.join("xref_caller.fake"), "xref_caller")
+			.expect("caller fixture should be written");
+		fs::write(root.join("xref_target.fake"), "xref_target")
+			.expect("target fixture should be written");
+
+		let mut registry = LanguageRegistry::new();
+		registry
+			.register(Arc::new(FakeExtractor), Arc::new(FakeResolver))
+			.expect("registration should succeed");
+		let builder = CodeGraphBuilder::new(registry, CacheStore::new(cache_dir));
+		let outcome = builder
+			.build(&BuildGraphOptions::new(&root))
+			.expect("build should succeed");
+
+		// Bare-name ref across files, no import binding: only S5 can link it.
+		assert_eq!(
+			outcome.graph.count_edges(EdgeKind::Calls),
+			1,
+			"workspace-unique target must resolve cross-file via S5 fallback"
+		);
+		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn skips_ambiguous_cross_file_name() {
+		let root = std::env::temp_dir()
+			.join(format!("pi-code-graph-xref-ambig-{}", std::process::id()));
+		let cache_dir = root.join("cache");
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(&root).expect("temp dir should be created");
+		fs::write(root.join("ambig_caller.fake"), "ambig_caller")
+			.expect("caller fixture should be written");
+		fs::write(root.join("ambig_a.fake"), "ambig_a")
+			.expect("ambig_a fixture should be written");
+		fs::write(root.join("ambig_b.fake"), "ambig_b")
+			.expect("ambig_b fixture should be written");
+
+		let mut registry = LanguageRegistry::new();
+		registry
+			.register(Arc::new(FakeExtractor), Arc::new(FakeResolver))
+			.expect("registration should succeed");
+		let builder = CodeGraphBuilder::new(registry, CacheStore::new(cache_dir));
+		let outcome = builder
+			.build(&BuildGraphOptions::new(&root))
+			.expect("build should succeed");
+
+		// Two defs of the same name → ambiguous → no false edge.
+		assert_eq!(
+			outcome.graph.count_edges(EdgeKind::Calls),
+			0,
+			"ambiguous workspace name must NOT create an edge (silence > wrong edge)"
+		);
+		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn prefers_same_file_over_workspace_fallback() {
+		let root = std::env::temp_dir()
+			.join(format!("pi-code-graph-xref-shadow-{}", std::process::id()));
+		let cache_dir = root.join("cache");
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(&root).expect("temp dir should be created");
+		fs::write(root.join("shadow_local.fake"), "shadow_local")
+			.expect("local fixture should be written");
+		fs::write(root.join("shadow_remote.fake"), "shadow_remote")
+			.expect("remote fixture should be written");
+
+		let mut registry = LanguageRegistry::new();
+		registry
+			.register(Arc::new(FakeExtractor), Arc::new(FakeResolver))
+			.expect("registration should succeed");
+		let builder = CodeGraphBuilder::new(registry, CacheStore::new(cache_dir));
+		let outcome = builder
+			.build(&BuildGraphOptions::new(&root))
+			.expect("build should succeed");
+
+		// `shadowed` exists locally AND remotely. S2 (same-file unique) must win,
+		// so the edge is intra-file and there is exactly ONE Calls edge — not two,
+		// and not an ambiguity-induced zero.
+		assert_eq!(
+			outcome.graph.count_edges(EdgeKind::Calls),
+			1,
+			"same-file resolution (S2) must take precedence over workspace fallback (S5)"
+		);
 		let _ = fs::remove_dir_all(root);
 	}
 
