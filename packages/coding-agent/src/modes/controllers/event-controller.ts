@@ -10,6 +10,7 @@ import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { TtsrNotificationComponent } from "../../modes/components/ttsr-notification";
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import { finalizeOrphanPendingTools } from "../../modes/utils/finalize-pending-tools";
+import { LiveToolBatchComponent } from "../../modes/components/live-tool-batch";
 import type { InteractiveModeContext, TodoGroup } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { formatAssistantToolCallFailureMessage } from "../../session/tool-call-diagnostics";
@@ -55,6 +56,7 @@ export function formatStreamIdleStatus(snapshot: StreamIdleStatusSnapshot): stri
 }
 export class EventController {
 	#lastReadGroup: ReadToolGroupComponent | undefined = undefined;
+	#currentBatchGroup: LiveToolBatchComponent | undefined = undefined;
 	#lastThinkingCount = 0;
 	#renderedCustomMessages = new Set<string>();
 	#lastIntent: string | undefined = undefined;
@@ -71,8 +73,30 @@ export class EventController {
 		this.#lastReadGroup = undefined;
 	}
 
+	#resetBatchGroup(): void {
+		this.#currentBatchGroup = undefined;
+	}
+
+	/**
+	 * Lazily create the per-assistant-message tool batch group and add it to the
+	 * chat once. Non-read tool cells of the same streaming message route into
+	 * this group so a large parallel batch stays bounded in the viewport while
+	 * pending (see {@link LiveToolBatchComponent}).
+	 */
+	#ensureBatchGroup(): LiveToolBatchComponent {
+		if (!this.#currentBatchGroup) {
+			this.#resetReadGroup();
+			this.ctx.chatContainer.addChild(new Text("", 0, 0));
+			const group = new LiveToolBatchComponent();
+			group.setExpanded(this.ctx.toolOutputExpanded);
+			this.ctx.chatContainer.addChild(group);
+			this.#currentBatchGroup = group;
+		}
+		return this.#currentBatchGroup;
+	}
 	#getReadGroup(): ReadToolGroupComponent {
 		if (!this.#lastReadGroup) {
+			this.#resetBatchGroup();
 			this.ctx.chatContainer.addChild(new Text("", 0, 0));
 			const group = new ReadToolGroupComponent();
 			group.setExpanded(this.ctx.toolOutputExpanded);
@@ -236,6 +260,7 @@ export class EventController {
 			case "agent_start":
 				this.#stopStreamIdleStatus();
 				this.#lastIntent = undefined;
+				this.#resetBatchGroup();
 				this.#readToolCallArgs.clear();
 				this.#lastWorkingMessage = undefined;
 				this.#readToolCallAssistantComponents.clear();
@@ -292,6 +317,7 @@ export class EventController {
 					this.#lastIntent = undefined;
 					this.#lastThinkingCount = 0;
 					this.#resetReadGroup();
+					this.#resetBatchGroup();
 					this.ctx.streamingComponent = new AssistantMessageComponent(undefined, this.ctx.hideThinkingBlock);
 					this.ctx.streamingMessage = event.message;
 					this.ctx.chatContainer.addChild(this.ctx.streamingComponent);
@@ -336,8 +362,6 @@ export class EventController {
 								? { ...content.arguments, __partialJson: content.partialJson }
 								: content.arguments;
 						if (!this.ctx.pendingTools.has(content.id)) {
-							this.#resetReadGroup();
-							this.ctx.chatContainer.addChild(new Text("", 0, 0));
 							const tool = this.ctx.session.getToolByName(content.name);
 							const component = new ToolExecutionComponent(
 								content.name,
@@ -352,8 +376,9 @@ export class EventController {
 								this.ctx.sessionManager.getCwd(),
 							);
 							component.setExpanded(this.ctx.toolOutputExpanded);
-							this.ctx.chatContainer.addChild(component);
-							this.ctx.pendingTools.set(content.id, component);
+							const group = this.#ensureBatchGroup();
+							group.addCell(content.id, content.name, renderArgs, component);
+							this.ctx.pendingTools.set(content.id, group);
 						} else {
 							const component = this.ctx.pendingTools.get(content.id);
 							if (component) {
@@ -449,7 +474,6 @@ export class EventController {
 						break;
 					}
 
-					this.#resetReadGroup();
 					const tool = this.ctx.session.getToolByName(event.toolName);
 					const component = new ToolExecutionComponent(
 						event.toolName,
@@ -464,8 +488,9 @@ export class EventController {
 						this.ctx.sessionManager.getCwd(),
 					);
 					component.setExpanded(this.ctx.toolOutputExpanded);
-					this.ctx.chatContainer.addChild(component);
-					this.ctx.pendingTools.set(event.toolCallId, component);
+					const group = this.#ensureBatchGroup();
+					group.addCell(event.toolCallId, event.toolName, event.args, component);
+					this.ctx.pendingTools.set(event.toolCallId, group);
 					this.ctx.ui.requestRender();
 				}
 				break;
