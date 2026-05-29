@@ -9,6 +9,10 @@ function sanitizeSingleLine(text) {
 export class SelectList {
     #filteredItems;
     #selectedIndex = 0;
+    #parent;
+    setParent(p) {
+        this.#parent = p;
+    }
     constructor(items, maxVisible, theme) {
         this.items = items;
         this.maxVisible = maxVisible;
@@ -19,12 +23,14 @@ export class SelectList {
         this.#filteredItems = this.items.filter(item => item.value.toLowerCase().startsWith(filter.toLowerCase()));
         // Reset selection when filter changes
         this.#selectedIndex = 0;
+        this.#parent?.markDirty();
     }
     setSelectedIndex(index) {
         this.#selectedIndex = Math.max(0, Math.min(index, this.#filteredItems.length - 1));
+        this.#parent?.markDirty();
     }
     invalidate() {
-        // No cached state to invalidate currently
+        this.#parent?.markDirty();
     }
     render(width) {
         const lines = [];
@@ -114,40 +120,47 @@ export class SelectList {
         return lines;
     }
     handleInput(keyData) {
-        if (this.#filteredItems.length === 0)
-            return;
-        // Up arrow - wrap to bottom when at top
-        if (matchesKey(keyData, "up")) {
-            this.#selectedIndex = this.#selectedIndex === 0 ? this.#filteredItems.length - 1 : this.#selectedIndex - 1;
-            this.#notifySelectionChange();
-        }
-        // Down arrow - wrap to top when at bottom
-        else if (matchesKey(keyData, "down")) {
-            this.#selectedIndex = this.#selectedIndex === this.#filteredItems.length - 1 ? 0 : this.#selectedIndex + 1;
-            this.#notifySelectionChange();
-        }
-        // PageUp - jump up by one visible page
-        else if (matchesKey(keyData, "pageUp")) {
-            this.#selectedIndex = Math.max(0, this.#selectedIndex - this.maxVisible);
-            this.#notifySelectionChange();
-        }
-        // PageDown - jump down by one visible page
-        else if (matchesKey(keyData, "pageDown")) {
-            this.#selectedIndex = Math.min(this.#filteredItems.length - 1, this.#selectedIndex + this.maxVisible);
-            this.#notifySelectionChange();
-        }
-        // Enter
-        else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
-            const selectedItem = this.#filteredItems[this.#selectedIndex];
-            if (selectedItem && this.onSelect) {
-                this.onSelect(selectedItem);
+        try {
+            if (this.#filteredItems.length === 0)
+                return;
+            // Up arrow - wrap to bottom when at top
+            if (matchesKey(keyData, "up")) {
+                this.#selectedIndex = this.#selectedIndex === 0 ? this.#filteredItems.length - 1 : this.#selectedIndex - 1;
+                this.#notifySelectionChange();
+            }
+            // Down arrow - wrap to top when at bottom
+            else if (matchesKey(keyData, "down")) {
+                this.#selectedIndex = this.#selectedIndex === this.#filteredItems.length - 1 ? 0 : this.#selectedIndex + 1;
+                this.#notifySelectionChange();
+            }
+            // PageUp - jump up by one visible page
+            else if (matchesKey(keyData, "pageUp")) {
+                this.#selectedIndex = Math.max(0, this.#selectedIndex - this.maxVisible);
+                this.#notifySelectionChange();
+            }
+            // PageDown - jump down by one visible page
+            else if (matchesKey(keyData, "pageDown")) {
+                this.#selectedIndex = Math.min(this.#filteredItems.length - 1, this.#selectedIndex + this.maxVisible);
+                this.#notifySelectionChange();
+            }
+            // Enter
+            else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
+                const selectedItem = this.#filteredItems[this.#selectedIndex];
+                if (selectedItem && this.onSelect) {
+                    this.onSelect(selectedItem);
+                }
+            }
+            // Escape or Ctrl+C
+            else if (matchesKey(keyData, "escape") || matchesKey(keyData, "esc") || matchesKey(keyData, "ctrl+c")) {
+                if (this.onCancel) {
+                    this.onCancel();
+                }
             }
         }
-        // Escape or Ctrl+C
-        else if (matchesKey(keyData, "escape") || matchesKey(keyData, "esc") || matchesKey(keyData, "ctrl+c")) {
-            if (this.onCancel) {
-                this.onCancel();
-            }
+        finally {
+            // BUG-391: ensure dirty propagates regardless of which branch ran.
+            // The Container dirty-cache (FEAT-762) serves stale lines otherwise.
+            this.#parent?.markDirty();
         }
     }
     #notifySelectionChange() {

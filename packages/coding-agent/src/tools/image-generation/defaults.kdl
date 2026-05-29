@@ -1,0 +1,75 @@
+// Bundled image-generation schemas. Each `schema "<name>"` defines one tool.
+//
+// TWO AUDIENCES — never conflated:
+//   instructions """…"""   → the prompt for the LLM agent that CALLS the tool
+//                            (rendered as the tool description: when/how to call)
+//   <slot> arg0            → field name (becomes a tool parameter key)
+//   <slot> arg1            → param description the LLM reads to fill a value
+//   <slot> + prefix/label  → assembly rules → the prompt SENT TO the image model
+//
+// Nothing here is literally "the image prompt": that string is ASSEMBLED at
+// runtime from the field values the LLM supplied (see prompt-assembly.ts).
+//
+// Slots (closed set — node name is dispatched, unknown names are rejected):
+//   core     → joined with ", " into the lead sentence
+//   sentence → its own sentence; optional `prefix="Label:"` prepended
+//   section  → a "\n\n<label>: <value>" block; `label="…"` sets the heading
+//
+// Common params (aspect_ratio · image_size · input · changes) are injected by
+// the tool builder, not declared here — they are provider-level, not vocabulary.
+// `aspect-ratio "<v>"` sets the per-schema default; a per-call arg always wins.
+// `label "<v>"` overrides the display label (default: tool name → PascalCase).
+//
+// Override or extend from spell.kdl via an `image-generation { … }` block.
+// Resolved precedence: ./.local/spell.kdl > ./spell.kdl > ~/.config/spell/spell.kdl > this file.
+
+schema "cinematic" {
+    tool         "generate_image"
+    aspect-ratio "1:1"
+
+    core     "subject" "Main subject with key descriptors (e.g., 'A stoic robot barista with glowing blue optics', 'A weathered lighthouse on a rocky cliff')." required=#true
+    core     "action"  "What the subject is doing (e.g., 'pouring latte art', 'standing against crashing waves')."
+    core     "scene"   "Location or environment (e.g., 'in a futuristic café on Mars', 'during a violent thunderstorm at dusk')."
+
+    sentence "composition" "Camera angle, framing, depth of field (e.g., 'low-angle close-up, shallow depth of field', 'wide establishing shot')."
+    sentence "lighting"    "Lighting setup and mood (e.g., 'warm rim lighting', 'golden hour backlight', 'hard noon shadows')."
+    sentence "style"       "Artistic style, mood, color grading, camera (e.g., 'film noir mood, cinematic color grading', 'Studio Ghibli watercolor', 'photorealistic')."
+
+    section  "text" #"Text to render in image with specs: exact wording in quotes, font style, color, placement (e.g., 'Headline "URBAN EXPLORER" in bold white sans-serif at top center')."# label="Text"
+
+    instructions """
+        Generates or edits images using the configured image provider (ChatGPT Codex `gpt-image-2` by default; falls back to Gemini, OpenRouter, or Antigravity).
+
+        <instructions>
+        - You **MUST** provide a single detailed `subject` prompt for image generation or editing.
+        - When using multiple `input`, you **SHOULD** describe each image's role directly in `subject`, e.g. `Image 1` for composition reference, `Image 2` for lighting reference, `Image 3` for background.
+        - For text: you **SHOULD** add "sharp, legible, correctly spelled" for important text; keep text short
+        </instructions>
+        """
+}
+
+schema "ui-screen" {
+    tool         "generate_ui_screen"
+    aspect-ratio "16:9"
+
+    core     "screen" "Screen purpose and primary content (e.g., 'Onboarding step 2: phone verification', 'Dashboard with revenue chart and recent activity')." required=#true
+
+    sentence "platform"     "Target platform and form factor (e.g., 'iOS mobile 393×852', 'desktop web 1440×900', 'tablet portrait')." prefix="Platform:"
+    sentence "layout"       "Layout pattern: nav, sections, hierarchy (e.g., 'top app bar + scrollable list + FAB', 'sidebar + content grid')." prefix="Layout:"
+    sentence "state"        "Screen state depicted: empty, loaded, loading, error, success." prefix="State:"
+    sentence "interactions" "Highlighted affordances: focused field, hovered button, pressed state, badges, notifications." prefix="Interactions:"
+
+    section  "components" "Key UI components with their content (e.g., 'header with avatar, search bar, 3 product cards with price')." label="Components"
+    section  "tokens"     "Visual tokens: color palette, typography scale, spacing, radii, elevation." label="Design tokens"
+
+    instructions """
+        Generates a high-fidelity UI-screen mockup using the configured image provider (ChatGPT Codex `gpt-image-2` by default; falls back to Gemini, OpenRouter, or Antigravity).
+
+        <instructions>
+        - You **MUST** describe the `screen` purpose and its primary content.
+        - You **SHOULD** specify `platform`, `layout`, and `state` for an accurate, realistic mockup.
+        - List concrete `components` and `tokens` (palette, type scale) so the result is build-ready.
+        - For UI text labels: keep them short, and add "sharp, legible, correctly spelled".
+        </instructions>
+        """
+}

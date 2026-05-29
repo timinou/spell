@@ -1,0 +1,26 @@
+#+TITLE: pending-tool-cells-stuck---stale-native-
+
+** ITEM Pending tool cells stuck = stale native scrollback rows from large parallel batches
+
+SYMPTOM: in a live TUI session many tool cells show pending (⏳/bare title) forever though the session continues; small/sequential calls look fine. User frames it as "async vs sync".
+
+ROOT CAUSE (proven via xterm-headless VirtualTerminal, height 6): the TUI (packages/tui/src/tui.ts) keeps the full transcript in #previousLines and diff-paints the viewport. Rows that scroll ABOVE the viewport are committed to the terminal's NATIVE scrollback, which is IMMUTABLE — a later in-place edit of such a row is silently dropped (test: mutate row 0 to "DONE" after it scrolled off → scrollback still shows "PENDING", DONE lost). A large parallel tool batch (session 14f48ced: batches of 59/77/87 mixed bash/get/find/edit/puppeteer/org) streams ALL cells pending at message_update time; the batch overflows the viewport and the top pending cells scroll into scrollback BEFORE their tool_execution_end results arrive → frozen pending. Small batches (1-3) finalize while still in the viewport → scroll off already-finalized. Transcript on disk is fully paired (392/392); path-walk replay yields only the 1 live in-flight orphan → this is a LIVE RENDER bug, not a model/pairing bug.
+
+WHY NOW: PLAN-321 (RenderIntent port) replaced fullRender (\x1b[3J clear + full transcript reprint on every forced redraw) with viewportRepaint. The old periodic full reprint had been incidentally HEALING stale scrollback rows; removing it exposed the latent staleness. Prior 3 same-day attempts (BUG-419 finalizeOrphanPendingTools, BUG-420 repairUnpairedToolCalls, BUG-418/PLAN-321 scrollback-wipe gating) addressed orphan/replay/wipe — none touch in-flight scroll-off.
+
+FIX (chosen): LiveToolBatchComponent (packages/coding-agent/src/modes/components/live-tool-batch.ts). Implements ToolExecutionHandle keyed by toolCallId; event-controller routes non-read cells of one assistant message into one group (pendingTools.set(id, group)) via #ensureBatchGroup at both creation sites (message_update + tool_execution_start); #resetBatchGroup on agent_start + assistant message_start; #getReadGroup resets batch group (and vice-versa) to keep interleaved read/non-read ordering. While size>=COMPACT_THRESHOLD(6) AND any cell pending → render a height-bounded compact summary (header + ≤COMPACT_MAX_ROWS(8) status rows + footer) so the live region stays in the viewport. Once ALL cells resolve → pass-through concat of child ToolExecutionComponent renders = byte-identical to history replay (ui-helpers.renderSessionContext untouched). agent-loop runs all batch tools before the next assistant message, so the group is bottom content at finalize → expansion appends safely (no historyRebuild snap, no BUG-418 regression). Tests: packages/coding-agent/test/modes/live-tool-batch.test.ts (8 pass incl. xterm "pending rows never reach scrollback").
+
+KEY INVARIANT for future TUI work: never commit an UNSTABLE (still-mutating) row to native scrollback — once it scrolls off you cannot repaint it. Keep mutating regions viewport-anchored until finalized.
+:PROPERTIES:
+:CUSTOM_ID: CON-pending-tool-cells-stuck---stale-native-
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T21:44:55Z
+:END:
+:RELATIONS:
+ABOUT: packages/tui/src/tui.ts
+ABOUT: BUG-419-pending-tool-cells-never-finalize-on-age
+ABOUT: PLAN-321-port-renderintent-scrollback-preserving
+DISTILLED_FROM: EP-146d7ca29f0c89d8
+DISTILLED_FROM: EP-ea896827f9f522fa
+:END:

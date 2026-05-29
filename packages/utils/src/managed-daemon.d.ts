@@ -27,6 +27,8 @@ export interface ManagedDaemon {
     readonly pid: number;
     /** True when the daemon process is alive and socket exists. */
     isAlive(): boolean;
+    /** Check whether the socket still exists (lightweight) or has a live listener (deep). */
+    probe(deep?: boolean): Promise<boolean>;
     /** Graceful stop: stopCommand → SIGTERM → SIGKILL. Removes socket. Deregisters postmortem. */
     stop(): Promise<void>;
 }

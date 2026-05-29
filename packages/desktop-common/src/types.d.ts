@@ -4,7 +4,7 @@ export type AgentStatus = "idle" | "running" | "needs_input" | "user_paused" | "
 export interface TodoItemView {
     id: string;
     content: string;
-    status: "pending" | "in_progress" | "completed" | "abandoned";
+    status: "pending" | "in_progress" | "completed" | "abandoned" | "failed" | "gate_failed";
     blockers?: string[];
     gateCommit?: boolean;
     gateArtifact?: string;
@@ -12,6 +12,7 @@ export interface TodoItemView {
     gateLlm?: string;
     verifyCmd?: string;
     orgItemId?: string;
+    childPhases?: TodoPhaseView[];
 }
 /** Minimal snapshot of a todo phase visible to desktop overlays. */
 export interface TodoPhaseView {
@@ -23,11 +24,12 @@ export interface TodoPhaseView {
 export interface TodoItemSnapshot {
     id: string;
     content: string;
-    status: "pending" | "in_progress" | "completed" | "abandoned";
+    status: "pending" | "in_progress" | "completed" | "abandoned" | "failed" | "gate_failed";
     blocked: boolean;
     blockerLabels?: string[];
     gateBadges?: string[];
     orgItemId?: string;
+    childPhases?: TodoPhaseSnapshot[];
 }
 /** Snapshot of a single todo phase for overlay rendering. */
 export interface TodoPhaseSnapshot {
@@ -52,5 +54,9 @@ export interface SessionStatusFile {
     projectName: string;
     sessionTitle: string;
     updatedAt: number;
+    sessionId?: string;
+    sessionFile?: string;
+    cwd?: string;
+    workspaceName?: string | null;
 }
 //# sourceMappingURL=types.d.ts.map

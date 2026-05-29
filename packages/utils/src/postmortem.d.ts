@@ -6,7 +6,8 @@ export declare enum Reason {
     SIGHUP = "sighup",// SIGHUP
     UNCAUGHT_EXCEPTION = "uncaught_exception",// Fatal exception
     UNHANDLED_REJECTION = "unhandled_rejection",// Unhandled promise rejection
-    MANUAL = "manual"
+    MANUAL = "manual",// Manual cleanup (not triggered by process)
+    TERMINAL_LOST = "terminal_lost"
 }
 export interface CrashSessionContext {
     session: {
@@ -41,4 +42,9 @@ export declare function cleanup(): Promise<void>;
  * In workers: runs cleanup only (process.exit would kill entire process).
  */
 export declare function quit(code?: number): Promise<void>;
+/**
+ * Runs cleanup callbacks for a specific reason and exits gracefully.
+ * Used for non-signal shutdown paths (e.g. terminal pty loss).
+ */
+export declare function quitGracefully(reason: Reason): Promise<void>;
 //# sourceMappingURL=postmortem.d.ts.map

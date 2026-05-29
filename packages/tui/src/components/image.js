@@ -7,6 +7,10 @@ export class Image {
     #options;
     #cachedLines;
     #cachedWidth;
+    #parent;
+    setParent(p) {
+        this.#parent = p;
+    }
     constructor(base64Data, mimeType, theme, options = {}, dimensions) {
         this.#base64Data = base64Data;
         this.#mimeType = mimeType;
@@ -17,6 +21,7 @@ export class Image {
     invalidate() {
         this.#cachedLines = undefined;
         this.#cachedWidth = undefined;
+        this.#parent?.markDirty();
     }
     render(width) {
         if (this.#cachedLines && this.#cachedWidth === width) {

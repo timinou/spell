@@ -644,23 +644,19 @@ async function executeToolCalls(
 		await checkSteering();
 	};
 
-	let lastExclusive: Promise<void> = Promise.resolve();
-	let sharedTasks: Promise<void>[] = [];
-	const tasks: Promise<void>[] = [];
-
-	for (let index = 0; index < records.length; index++) {
-		const record = records[index];
-		const concurrency = record.tool?.concurrency ?? "shared";
-		const start = concurrency === "exclusive" ? Promise.all([lastExclusive, ...sharedTasks]) : lastExclusive;
-		const task = start.then(() => runTool(record, index));
-		tasks.push(task);
-		if (concurrency === "exclusive") {
-			lastExclusive = task;
-			sharedTasks = [];
-		} else {
-			sharedTasks.push(task);
-		}
-	}
+	// Tool concurrency model:
+	// All tool calls in a batch run concurrently. Tools that need consistency
+	// own their own serialization at the layer that has the real invariant:
+	//   - edit  → kernel per-file fd_lock + in-memory buffer Mutex (pi-code-engine)
+	//   - todo_write → per-session queueTodoMutation chain
+	//   - bash  → ephemeral per-call shell (no shared cwd/env to corrupt)
+	//   - ssh   → stateless per-call remote exec (cwd baked per command) over a
+	//             concurrency-safe ControlMaster mux
+	// The loop deliberately does NOT encode per-tool exclusion: doing so leaked
+	// tool-specific consistency rules into the generic scheduler and, worse, the
+	// previous `exclusive` implementation made any such call a whole-batch barrier
+	// that serialised the entire parallel batch.
+	const tasks = records.map((_, index) => runTool(records[index], index));
 
 	await Promise.allSettled(tasks);
 

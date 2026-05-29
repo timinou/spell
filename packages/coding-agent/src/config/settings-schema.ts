@@ -1568,12 +1568,13 @@ export const SETTINGS_SCHEMA = {
 
 	"providers.image": {
 		type: "enum",
-		values: ["auto", "gemini", "openrouter"] as const,
-		default: "auto",
+		values: ["auto", "openai-codex", "gemini", "openrouter"] as const,
+		default: "openai-codex",
 		ui: {
 			tab: "providers",
 			label: "Image Provider",
-			description: "Provider for image generation tool",
+			description:
+				"Provider for the image generation tool. Defaults to ChatGPT Codex (gpt-image-2) — falls back to other providers if no Codex login.",
 			submenu: true,
 		},
 	},

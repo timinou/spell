@@ -1,0 +1,48 @@
+#+TITLE: Follow-up: sanitizeText before wrapTextWithAnsi in TUI message rendering
+#+STATE: ITEM
+#+SESSION_ID: 14f4b525127f2560
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-29T21-23-52-521Z_14f4b525127f2560.jsonl]]
+#+CUSTOM_ID: FUP-104-follow-up-sanitizetext-before-wraptextwi
+
+* Initial Message
+
+┌─── ✔ Bash ────────────────────────────────────────────────────────────────────────────────────────┐
+ │ $ cd /tmp/atlas_viz                                                                               │
+ │ google-chrome-stable --headless --disable-gpu --no-sandbox \                                      │
+ │   --hide-scrollbars --force-device-scale-factor=2 \                                               │
+ │   --window-size=820,640 \                                                                         │
+ │   --virtual-time-budget=2500 \                                                                    │
+ │   --screenshot=/tmp/atlas_viz/atlas_highlight.png \                                               │
+ │   "file:///tmp/atlas_viz/harness.html" 2>&1 | tail -5                                             │
+ │ echo "---"                                                                                        │
+ │ ls -la /tmp/atlas_viz/atlas_highlight.png 2>&1                                                    │
+ ├─── Output ────────────────────────────────────────────────────────────────────────────────────────┤
+ │ 75657 bytes written to file /tmp/atlas_viz/atlas_highlight.png                                    │
+ │ ---                                                                                               │
+ │ -rw-r--r-- 1 user user 75657 May 29 21:07 /tmp/atlas_viz/atlas_highlight.png                      │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+ Let me view it:
+
+
+ ⏳ Get
+
+
+ ⠼ get args 0B (esc to interrupt)
+
+
+^^ this is a session that got stuck. WHY???? find it in the session logs and find why
+
+Deferred from bugfix: binary-as-text get toolResult hanging spell.
+
+## Context
+Root cause was infinite loop in `break_long_word` (crates/pi-natives/src/text.rs:618) when binary data containing lone ESC bytes reaches `wrapTextWithAnsi`. Fixed with lone-ESC fallback arm + regression test.
+
+## Remaining work
+Add defense-in-depth: route inline tool-result text through `sanitizeText` (strips ESC + C0/C1 controls + DEL) before passing to `wrapTextWithAnsi` in the TUI message-render path. This prevents:
+- Terminal display corruption from control characters in binary data
+- Future infinite-loop risks if similar gaps exist in other wrap consumers
+
+## Target
+`packages/coding-agent/src/tui/code-cell.ts` — `renderCodeCell` function, add `sanitizeText()` call on code before `highlightCode`.

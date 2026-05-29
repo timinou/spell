@@ -1,0 +1,14 @@
+#+TITLE: Episodes 2026-05-28
+
+** ITEM Find tool text scan is sequential and per-line
+
+All 5 items landed in one wave.
+:PROPERTIES:
+:CUSTOM_ID: EP-4d01bc54cf5defdb
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-28T17:36:16Z
+:END:
+:RELATIONS:
+ABOUT: BUG-416-find-tool-text-scan-is-sequential-and-pe
+:END:

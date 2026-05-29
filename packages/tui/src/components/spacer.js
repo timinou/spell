@@ -3,14 +3,19 @@
  */
 export class Spacer {
     #lines;
+    #parent;
     constructor(lines = 1) {
         this.#lines = lines;
     }
+    setParent(p) {
+        this.#parent = p;
+    }
     setLines(lines) {
         this.#lines = lines;
+        this.#parent?.markDirty();
     }
     invalidate() {
-        // No cached state to invalidate currently
+        this.#parent?.markDirty();
     }
     render(_width) {
         const result = [];

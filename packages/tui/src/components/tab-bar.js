@@ -28,6 +28,10 @@ export class TabBar {
     #activeIndex = 0;
     #theme;
     #label;
+    #parent;
+    setParent(p) {
+        this.#parent = p;
+    }
     constructor(label, tabs, theme, initialIndex = 0) {
         this.#label = label;
         this.#tabs = tabs;
@@ -48,6 +52,7 @@ export class TabBar {
         if (newIndex !== this.#activeIndex) {
             this.#activeIndex = newIndex;
             this.onTabChange?.(this.#tabs[this.#activeIndex], this.#activeIndex);
+            this.#parent?.markDirty();
         }
     }
     /** Move to the next tab (wraps to first tab after last) */
@@ -59,7 +64,7 @@ export class TabBar {
         this.setActiveIndex((this.#activeIndex - 1 + this.#tabs.length) % this.#tabs.length);
     }
     invalidate() {
-        // No cached state to invalidate
+        this.#parent?.markDirty();
     }
     /**
      * Handle keyboard input for tab navigation.

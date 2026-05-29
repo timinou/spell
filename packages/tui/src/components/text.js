@@ -11,6 +11,10 @@ export class Text {
     #cachedText;
     #cachedWidth;
     #cachedLines;
+    #parent;
+    setParent(p) {
+        this.#parent = p;
+    }
     constructor(text = "", paddingX = 1, paddingY = 1, customBgFn) {
         this.#text = text;
         this.#paddingX = paddingX;
@@ -21,21 +25,20 @@ export class Text {
         return this.#text;
     }
     setText(text) {
+        if (this.#text === text)
+            return;
         this.#text = text;
-        this.#cachedText = undefined;
-        this.#cachedWidth = undefined;
-        this.#cachedLines = undefined;
+        this.invalidate();
     }
     setCustomBgFn(customBgFn) {
         this.#customBgFn = customBgFn;
-        this.#cachedText = undefined;
-        this.#cachedWidth = undefined;
-        this.#cachedLines = undefined;
+        this.invalidate();
     }
     invalidate() {
         this.#cachedText = undefined;
         this.#cachedWidth = undefined;
         this.#cachedLines = undefined;
+        this.#parent?.markDirty();
     }
     render(width) {
         // Check cache

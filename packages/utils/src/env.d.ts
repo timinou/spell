@@ -19,4 +19,5 @@ export declare const $env: Record<string, string>;
  * @returns The first environment variable value, or undefined if no value is found.
  */
 export declare function $pickenv(...keys: string[]): string | undefined;
+export declare function $flag(name: string, def?: boolean): boolean;
 //# sourceMappingURL=env.d.ts.map

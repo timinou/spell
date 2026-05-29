@@ -1,6 +1,6 @@
 import type { AutocompleteProvider } from "../autocomplete";
 import type { SymbolTheme } from "../symbols";
-import { type Component, type Focusable } from "../tui";
+import { type Component, type DirtyParent, type Focusable } from "../tui";
 import { type SelectListTheme } from "./select-list";
 export interface EditorTheme {
     borderColor: (str: string) => string;
@@ -38,6 +38,20 @@ export declare class Editor implements Component, Focusable {
     onChange?: (text: string) => void;
     onAutocompleteCancel?: () => void;
     disableSubmit: boolean;
+    setParent(p: DirtyParent | undefined): void;
+    /**
+     * Propagate a dirty-cache signal up the parent chain.
+     *
+     * Public surface so subclasses (e.g. `CustomEditor`) can mark dirty
+     * from their `handleInput` wrapper without reaching into the private
+     * `#parent` field. Without this method, BUG-391's `try/finally` wrapper
+     * threw `TypeError: this.markDirty is not a function` on every keystroke;
+     * the throw bubbled through the `process.stdin` 'data' listener and was
+     * re-emitted as a stdin `'error'` event, which the TUI's pty-loss
+     * detector (BUG-387) treated as terminal destruction and gracefully shut
+     * the session down on the user's very first input.
+     */
+    markDirty(): void;
     constructor(theme: EditorTheme);
     setAutocompleteProvider(provider: AutocompleteProvider): void;
     /**
@@ -45,6 +59,12 @@ export declare class Editor implements Component, Focusable {
      * Pass undefined to use the default plain border.
      */
     setTopBorder(content: EditorTopBorder | undefined): void;
+    /**
+     * Update the editor border color and propagate dirty so the parent
+     * Container's cache (FEAT-762) is invalidated. Prefer this over direct
+     * `editor.borderColor = ...` assignment (which is silent).
+     */
+    setBorderColor(fn: (str: string) => string): void;
     /**
      * Get the available width for top border content given a total terminal width.
      * Accounts for the border characters and horizontal padding.

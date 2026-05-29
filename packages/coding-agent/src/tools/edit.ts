@@ -113,7 +113,6 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 	readonly description = editDescription;
 	readonly parameters = editSchema;
 	readonly lenientArgValidation = true;
-	readonly concurrency = "exclusive";
 
 	constructor(private readonly session: ToolSession) {}
 

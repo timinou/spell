@@ -1,12 +1,16 @@
+import { spinnerClock } from "../spinner-clock";
 import { sliceByColumn, visibleWidth } from "../utils";
 import { Text } from "./text";
 /**
- * Loader component that updates every 80ms with spinning animation
+ * Loader component — spinning animation tied to the shared SpinnerClock.
+ *
+ * Subscribes only while attached to a parent so detached/queued loaders
+ * never drive renders. Visible width matches Text.
  */
 export class Loader extends Text {
     #frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     #currentFrame = 0;
-    #intervalId;
+    #unsubscribe;
     #ui = null;
     constructor(ui, spinnerColorFn, messageColorFn, message = "Loading...", spinnerFrames) {
         super("", 1, 0);
@@ -17,7 +21,17 @@ export class Loader extends Text {
         if (spinnerFrames && spinnerFrames.length > 0) {
             this.#frames = spinnerFrames;
         }
+        // Paint the initial frame eagerly so first render shows the spinner.
+        this.#updateDisplay();
+        // Auto-start: matches legacy behaviour where Loader ticked immediately.
         this.start();
+    }
+    setParent(p) {
+        super.setParent(p);
+        if (p === undefined) {
+            // Detached → stop ticking. Re-attach via start() if needed.
+            this.#stopTicking();
+        }
     }
     render(width) {
         const lines = ["", ...super.render(width)];
@@ -30,28 +44,32 @@ export class Loader extends Text {
         return lines;
     }
     start() {
-        this.#updateDisplay();
-        this.#intervalId = setInterval(() => {
+        if (this.#unsubscribe)
+            return;
+        this.#unsubscribe = spinnerClock.subscribe(() => {
             this.#currentFrame = (this.#currentFrame + 1) % this.#frames.length;
             this.#updateDisplay();
-        }, 80);
+            this.#ui?.requestRender();
+        });
     }
     stop() {
-        if (this.#intervalId) {
-            clearInterval(this.#intervalId);
-            this.#intervalId = undefined;
+        this.#stopTicking();
+    }
+    #stopTicking() {
+        if (this.#unsubscribe) {
+            this.#unsubscribe();
+            this.#unsubscribe = undefined;
         }
     }
     setMessage(message) {
+        if (this.message === message)
+            return;
         this.message = message;
         this.#updateDisplay();
     }
     #updateDisplay() {
         const frame = this.#frames[this.#currentFrame];
         this.setText(`${this.spinnerColorFn(frame)} ${this.messageColorFn(this.message)}`);
-        if (this.#ui) {
-            this.#ui.requestRender();
-        }
     }
 }
 //# sourceMappingURL=loader.js.map

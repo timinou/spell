@@ -123,7 +123,7 @@ function isAnthropicApiBaseUrl(baseUrl?: string): boolean {
 }
 
 export function isAnthropicAdaptiveOnlyModel(model: Model<"anthropic-messages">): boolean {
-	return model.id === "claude-opus-4-7";
+	return model.id === "claude-opus-4-7" || model.id === "claude-opus-4-8";
 }
 
 export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<string, string> {
@@ -855,6 +855,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 										partial: output,
 									});
 								} else if (block.type === "thinking") {
+									// Orphan guard: a signature with no body means the relay
+									// forwarded signature_delta but not thinking_delta. That
+									// signature can never validate against empty text, so discard
+									// it rather than persist a block the API later rejects.
+									if (block.thinking.length === 0) block.thinkingSignature = "";
 									stream.push({
 										type: "thinking_end",
 										contentIndex: index,
@@ -1572,6 +1577,12 @@ export function convertAnthropicMessages(
 							});
 							continue;
 						}
+						// A signed thinking block with empty text can never validate:
+						// the signature is an HMAC over the original thinking content,
+						// so an empty body is rejected as a "modified" block (400) on the
+						// latest assistant turn. Happens when an upstream relay forwards
+						// signature_delta without thinking_delta. Drop it rather than emit.
+						if (block.thinking.length === 0) continue;
 						blocks.push({
 							type: "thinking",
 							thinking: block.thinking,

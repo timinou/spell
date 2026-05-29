@@ -7,8 +7,16 @@ export class Box {
     #paddingX;
     #paddingY;
     #bgFn;
+    #parent;
     // Cache for rendered output
     #cached;
+    setParent(p) {
+        this.#parent = p;
+    }
+    markDirty() {
+        this.#cached = undefined;
+        this.#parent?.markDirty();
+    }
     constructor(paddingX = 1, paddingY = 1, bgFn) {
         this.children = [];
         this.#paddingX = paddingX;
@@ -17,18 +25,23 @@ export class Box {
     }
     addChild(component) {
         this.children.push(component);
-        this.#invalidateCache();
+        component.setParent?.(this);
+        this.markDirty();
     }
     removeChild(component) {
         const index = this.children.indexOf(component);
         if (index !== -1) {
             this.children.splice(index, 1);
-            this.#invalidateCache();
+            component.setParent?.(undefined);
+            this.markDirty();
         }
     }
     clear() {
+        for (const child of this.children) {
+            child.setParent?.(undefined);
+        }
         this.children = [];
-        this.#invalidateCache();
+        this.markDirty();
     }
     setBgFn(bgFn) {
         this.#bgFn = bgFn;
@@ -58,6 +71,7 @@ export class Box {
         for (const child of this.children) {
             child.invalidate?.();
         }
+        this.#parent?.markDirty();
     }
     render(width) {
         if (this.children.length === 0) {

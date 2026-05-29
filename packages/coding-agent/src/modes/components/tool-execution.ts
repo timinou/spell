@@ -157,6 +157,14 @@ export class ToolExecutionComponent extends Container {
 		this.#updateDisplay();
 	}
 
+	/**
+	 * True while the cell has no terminal result yet (renders as "pending").
+	 * A partial/streaming result still counts as pending until finalized.
+	 */
+	get isPending(): boolean {
+		return this.#result === undefined || this.#isPartial;
+	}
+
 	updateArgs(args: any, _toolCallId?: string): void {
 		this.#args = cloneToolArgs(args);
 		this.#updateDisplay();

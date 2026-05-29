@@ -106,6 +106,19 @@ export function warn(message, context) {
     }
 }
 /**
+ * Log an info message.
+ * @param message - The message to log.
+ * @param context - The context to log.
+ */
+export function info(message, context) {
+    try {
+        winstonLogger.info(message, context);
+    }
+    catch {
+        // Silently ignore logging failures
+    }
+}
+/**
  * Log a debug message.
  * @param message - The message to log.
  * @param context - The context to log.

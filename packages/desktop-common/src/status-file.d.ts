@@ -1,15 +1,22 @@
 import type { AgentStatus, SessionStatusFile } from "./types";
+interface SessionRecoveryInfo {
+    sessionId: string;
+    sessionFile: string;
+    cwd: string;
+}
 /** Default directory for session status files. */
 export declare const STATUS_DIR: string;
 /**
  * Writes the current session status to a JSON file in STATUS_DIR.
- * Deduplicates writes — only writes when the status or session title changes.
+ * Deduplicates writes — only writes when the status, session title, or recovery metadata changes.
  */
 export declare class StatusFileWriter {
     #private;
     constructor(statusDir?: string);
     /** Set the window ID. Must be called before write(). */
     setWindowId(id: number | string): void;
+    setSessionInfo(info: SessionRecoveryInfo): void;
+    setWorkspaceName(name: string | null): void;
     get windowId(): number | string | null;
     /** Ensure the status directory exists. */
     ensureDir(): Promise<void>;
@@ -30,5 +37,10 @@ export declare class StatusFileReader {
     constructor(statusDir?: string);
     /** Read all valid, non-stale session status files. */
     readAll(): Promise<SessionStatusFile[]>;
+    /** Read stale status files for crashed sessions without cleaning them up. */
+    readCrashed(): Promise<SessionStatusFile[]>;
+    /** Remove dead-PID status files that are missing recovery metadata and cannot be resumed. */
+    cleanStale(): Promise<number>;
 }
+export {};
 //# sourceMappingURL=status-file.d.ts.map

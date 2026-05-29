@@ -74,4 +74,15 @@ export function $pickenv(...keys) {
     }
     return undefined;
 }
+/**
+ * Reads a boolean-like environment variable. Truthy values: 1, Y, TRUE, YES,
+ * ON (case-insensitive). Anything else (including unset) returns `def`.
+ */
+const TRUTHY = { "1": true, Y: true, TRUE: true, YES: true, ON: true };
+export function $flag(name, def = false) {
+    const value = $env[name];
+    if (!value)
+        return def;
+    return TRUTHY[value.trim().toUpperCase()] === true;
+}
 //# sourceMappingURL=env.js.map
