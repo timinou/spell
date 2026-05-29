@@ -165,3 +165,69 @@ This is why the nuke MUST be a single atomic commit, not piecewise.
 - [[id:PLAN-319-semanticbackend-foundation-expert-lsp-pi]] — foundation
 - =packages/coding-agent/src/lsp/= (delete target)
 - =packages/coding-agent/src/prompts/tools/lsp.md= (delete target)
+
+* Execution Plan (worktree, 2026-05-29)
+
+Prerequisites now satisfied:
+- PLAN-319 closed; FUP-099 made SemanticBackend dispatch live.
+- FUP-100 wired buffer-sync (didOpen/didChange).
+- FUP-094/FUP-100 fan-out: 17 languages incl. TS + Rust + Python.
+- F-4a (S5 workspace-unique fallback) + F-4b (cross-file binding guard)
+  landed: =find { ::S def→ / ref→ }= now resolves offline for every
+  engine-profile language. This is the floor FUP-095 requires.
+
+Isolation: executing in worktree =/home/user/code/ora/spell-fup095= on
+branch =fup-095-nuke-lsp-tool= (off =fup-099-live-semantic-dispatch=
+HEAD =e8d3178aa=). Rationale: the parent tree carries a paused
+image-generation workstream with uncommitted edits to =sdk.ts=,
+=tools/index.ts=, =settings-schema.ts= — three files FUP-095 must edit.
+A worktree starts clean from HEAD, eliminating all collisions.
+
+** Subsystem reality (measured)
+
+- =packages/coding-agent/src/lsp/= = 5687 LOC.
+- =LspTool= (the tool) consumers: =tools/index.ts= only (+ self).
+- NON-tool consumers of the =lsp/= subsystem that need rewiring, not
+  just deletion:
+  - =patch/index.ts= + =patch/shared.ts= — import =FileDiagnosticsResult=
+    and format/diagnostics helpers (formatOnWrite path).
+  - =tools/renderers.ts= — LSP result rendering.
+  - =index.ts= — public re-export surface.
+- 27 src files reference =lsp= in some form; 22 test files.
+
+** Cutover steps (single atomic commit)
+
+1. Delete =src/lsp/= + =src/prompts/tools/lsp.md=.
+2. Remove =LspTool= registration + =enableLsp= plumbing from
+   =tools/index.ts=, =sdk.ts=.
+3. Remove =lsp.*= settings (4) from =settings-schema.ts= +
+   =kdl-settings-map.ts=.
+4. Rewire non-tool consumers:
+   - =patch/=: replace LSP formatOnWrite/diagnostics with bash
+     =cargo fmt= / =prettier= invocation OR drop (per FUP migration map:
+     formatOnWrite DROPPED, diagnostics on-demand via =#diagnostics=).
+   - =tools/renderers.ts=: drop LSP renderer branch.
+   - =index.ts=: drop =export * from "../lsp"=.
+5. Strip =lsp= from all tool-allowlists (task, orchestrators, fluid-mode,
+   spill-policy, etc. — see File-by-File Removal Checklist above).
+6. Drop =--lsp= CLI flag, =warmupLspServers= startup wiring from main.ts.
+7. *Port tests to new architecture*: rewrite =test/**/*lsp*= +
+   =lsp-regressions.test.ts= as SemanticBackend integration tests
+   exercising =find { ::S #hover | #signature | #type_definition |
+   #diagnostics }= and =find { ::S def→ / ref→ }=. Delete tests for
+   DROPPED actions (code_actions, status, reload, formatOnWrite).
+8. New-architecture features that may be needed to preserve parity:
+   - rename across files: ensure =edit { ::S symbolRename }= + def→
+     traversal covers what =lsp.rename= did. If a gap exists, file FUP.
+   - diagnostics-on-write ergonomics: optional post-edit =#diagnostics=
+     surfacing (was =lsp.diagnosticsOnEdit=). Evaluate; likely DROP.
+
+** Acceptance
+
+- =bun run --cwd packages/coding-agent check= → 0 errors.
+- =rg -n "lsp" packages/coding-agent/src= → only historical comments.
+- All find/edit recipes work; ported semantic tests green.
+- =cargo test --workspace= green.
+- Reviewer subagent: no orphan refs, no parity regression.
+- Single atomic commit (rollback = one revert).
+- Memory concept =lsp-tool-replaced-by-semantic-backend= saved + linked.
