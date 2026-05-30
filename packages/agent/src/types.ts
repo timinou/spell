@@ -148,6 +148,32 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	getToolChoice?: () => ToolChoice | undefined;
 
 	/**
+	 * Mid-stream early-dispatch policy for tools declaring `executionMode:
+	 * "parallel"` (the default for everything except ask / await /
+	 * cancel_job / exit_plan_mode / browser).
+	 *
+	 * Default `"enforce"`. When a parallel tool's `toolcall_end` event fires
+	 * mid-stream, the harness invokes `tool.execute(...)` IMMEDIATELY — the
+	 * resulting promise runs concurrently with the rest of the assistant
+	 * stream. `executeToolCalls` later observes the dispatch via an internal
+	 * `eagerDispatch` map and awaits each pending promise in source order
+	 * instead of re-running the tool.
+	 *
+	 * Concretely: an async bash job emitted as the first of 30 tool calls
+	 * begins executing while the model is still emitting tool blocks 2..30.
+	 * Without this, real work waits for the whole stream to drain.
+	 *
+	 * Sequential tools are never early-dispatched — they are batch-barrier
+	 * tools (their `executionMode: "sequential"` declaration carries that
+	 * semantic) and the `sequentialToolStreamBarrier` policy cuts the stream
+	 * at their `toolcall_end` instead.
+	 *
+	 * `"off"` restores the prior behaviour (all tools execute strictly after
+	 * `streamAssistantResponse` returns). Used for diagnostics and A/B.
+	 */
+	earlyDispatchParallelTools?: "enforce" | "off";
+
+	/**
 	 * Mid-stream barrier policy for tools declaring `executionMode: "sequential"`.
 	 *
 	 * Default `"enforce"`. When the streamed assistant message emits a
