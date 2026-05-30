@@ -14,7 +14,7 @@
 
 import * as fs from "node:fs/promises";
 import { YAML } from "bun";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import { KDL_SETTINGS_MAP } from "../config/kdl-settings-map";
 import { writeKdlSettings } from "../config/kdl-writer";
 import { loadKdlSettings } from "../config/kdl-reader";

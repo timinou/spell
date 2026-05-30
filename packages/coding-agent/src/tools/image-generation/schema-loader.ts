@@ -24,7 +24,7 @@
  */
 
 import { type Document, type Node, parse } from "@bgotink/kdl";
-import { getLocalKdlPath, getProjectDir, getProjectKdlPath, getUserKdlPath, logger } from "@oh-my-pi/pi-utils";
+import { getLocalKdlPath, getProjectDir, getProjectKdlPath, getUserKdlPath, logger } from "@spell/pi-utils";
 
 import { getBooleanProperty, getStringArgument, getStringProperty } from "../../config/kdl-helpers";
 import defaultsKdl from "./defaults.kdl" with { type: "text" };

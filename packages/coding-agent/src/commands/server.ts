@@ -1,10 +1,10 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
-import { Command, Flags } from "@oh-my-pi/pi-utils/cli";
-import { loadConfig } from "@oh-my-pi/spell-server/config/loader";
-import { startSpellServer } from "@oh-my-pi/spell-server/server";
+import { isEnoent, logger } from "@spell/pi-utils";
+import { Command, Flags } from "@spell/pi-utils/cli";
+import { loadConfig } from "@spell/spell-server/config/loader";
+import { startSpellServer } from "@spell/spell-server/server";
 
 export default class Server extends Command {
 	static description = "Start the spell autonomy server";

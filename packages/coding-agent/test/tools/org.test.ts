@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { OrgTool } from "@oh-my-pi/pi-coding-agent/tools/org";
-import { sanitizeText } from "@oh-my-pi/pi-natives";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import { getThemeByName } from "@spell/pi-coding-agent/modes/theme/theme";
+import type { ToolSession } from "@spell/pi-coding-agent/tools";
+import { OrgTool } from "@spell/pi-coding-agent/tools/org";
+import { sanitizeText } from "@spell/pi-natives";
 import { Value } from "@sinclair/typebox/value";
 
 function createSession(): ToolSession {

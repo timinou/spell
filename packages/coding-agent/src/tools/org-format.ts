@@ -5,7 +5,7 @@
  * query results never blow up the LLM context window.
  */
 
-import type { OrgItem } from "@oh-my-pi/pi-org";
+import type { OrgItem } from "@spell/pi-org";
 
 // ---------------------------------------------------------------------------
 // Budget constants (~20k token target = ~80KB)

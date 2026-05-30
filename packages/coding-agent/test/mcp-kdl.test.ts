@@ -12,8 +12,8 @@ import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { _resetSettingsForTest, Settings } from "@spell/pi-coding-agent/config/settings";
+import { Snowflake } from "@spell/pi-utils";
 
 let tmp: string;
 let agentDir: string;
@@ -121,11 +121,11 @@ describe("mcp.servers ← spell.kdl", () => {
 describe("GATE 2.5 regressions", () => {
 	it("[P1] same-name cross-tier: project-tier wins over user-tier", async () => {
 		// Force capability registration by importing discovery providers.
-		await import("@oh-my-pi/pi-coding-agent/discovery/builtin");
+		await import("@spell/pi-coding-agent/discovery/builtin");
 		const { reset: resetCapabilityCache, loadCapability } = await import(
-			"@oh-my-pi/pi-coding-agent/discovery"
+			"@spell/pi-coding-agent/discovery"
 		);
-		const { mcpCapability } = await import("@oh-my-pi/pi-coding-agent/capability/mcp");
+		const { mcpCapability } = await import("@spell/pi-coding-agent/capability/mcp");
 
 		const s = await Settings.init(opts());
 		s.set("mcp.servers" as never, { shared: { type: "stdio", command: "user-version" } } as never, "user");

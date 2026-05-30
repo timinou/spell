@@ -1,4 +1,4 @@
-import { sanitizeText, wrapTextWithAnsi } from "@oh-my-pi/pi-natives";
+import { sanitizeText, wrapTextWithAnsi } from "@spell/pi-natives";
 import { replaceTabs, truncateToWidth } from "../tools/render-utils";
 
 export function formatDebugLogLine(line: string, maxWidth: number): string {

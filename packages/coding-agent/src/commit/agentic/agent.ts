@@ -1,6 +1,6 @@
-import { INTENT_FIELD, type ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Api, Model } from "@oh-my-pi/pi-ai";
-import { Markdown } from "@oh-my-pi/pi-tui";
+import { INTENT_FIELD, type ThinkingLevel } from "@spell/pi-agent-core";
+import type { Api, Model } from "@spell/pi-ai";
+import { Markdown } from "@spell/pi-tui";
 import chalk from "chalk";
 import type { ControlledGit } from "../../commit/git";
 import typesDescriptionPrompt from "../../commit/prompts/types-description.md" with { type: "text" };

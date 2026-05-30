@@ -17,8 +17,8 @@ import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { _resetSettingsForTest, Settings } from "@spell/pi-coding-agent/config/settings";
+import { Snowflake } from "@spell/pi-utils";
 
 let testDir: string;
 let agentDir: string;

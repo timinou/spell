@@ -1,8 +1,8 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { TERMINAL, truncateToWidth } from "@oh-my-pi/pi-tui";
-import { formatCost, formatDuration, formatNumber, getProjectDir, relativePathWithinRoot } from "@oh-my-pi/pi-utils";
+import { ThinkingLevel } from "@spell/pi-agent-core";
+import { TERMINAL, truncateToWidth } from "@spell/pi-tui";
+import { formatCost, formatDuration, formatNumber, getProjectDir, relativePathWithinRoot } from "@spell/pi-utils";
 import { theme } from "../../../modes/theme/theme";
 import { coordStatus, openCodeBufferPaths, recentPeerActivity } from "../../../session/edit-coordinator";
 import { replaceTabs, shortenPath } from "../../../tools/render-utils";

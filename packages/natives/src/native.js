@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $env, getNativesDir, logger } from "@oh-my-pi/pi-utils";
+import { $env, getNativesDir, logger } from "@spell/pi-utils";
 import packageJson from "../package.json";
 import { embeddedAddon } from "./embedded-addon";
 import "./appearance/types";
@@ -243,7 +243,7 @@ function loadNative() {
     }
     else {
         helpMessage =
-            "If installed via npm/bun, try reinstalling: bun install @oh-my-pi/pi-natives\n" +
+            "If installed via npm/bun, try reinstalling: bun install @spell/pi-natives\n" +
                 "If developing locally, build with: bun --cwd=packages/natives run build:native\n" +
                 "Optional x64 variants: TARGET_VARIANT=baseline|modern bun --cwd=packages/natives run build:native";
     }

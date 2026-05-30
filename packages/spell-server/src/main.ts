@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import { loadConfig } from "./config/loader";
 import { startSpellServer } from "./server";
 

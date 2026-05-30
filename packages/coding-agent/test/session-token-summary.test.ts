@@ -3,7 +3,7 @@ import {
 	formatExitTokenSummary,
 	formatSubtaskExitSummary,
 	formatTokenCount,
-} from "@oh-my-pi/pi-coding-agent/session/token-summary";
+} from "@spell/pi-coding-agent/session/token-summary";
 
 describe("formatTokenCount", () => {
 	test("formats zero", () => {

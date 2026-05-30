@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { GoalExecutionController } from "../../executor/goal-executor";
 import type { AutonomyManifest, ManifestGoal } from "../../manifest/types";
 import { verifyBearerToken, verifyHmac } from "../auth";

@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { isEnoent, parseEnvFile } from "@oh-my-pi/pi-utils";
+import { isEnoent, parseEnvFile } from "@spell/pi-utils";
 import { createBuiltinActionRegistry } from "../actions";
 import type { ActionRegistry } from "../actions/registry";
 import { loadManifestFromFile } from "../manifest/import-resolver";

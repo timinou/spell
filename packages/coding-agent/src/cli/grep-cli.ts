@@ -4,8 +4,8 @@
  * Handles `spell grep` subcommand for testing grep tool on Windows.
  */
 import * as path from "node:path";
-import { grep } from "@oh-my-pi/pi-natives";
-import { APP_NAME } from "@oh-my-pi/pi-utils";
+import { grep } from "@spell/pi-natives";
+import { APP_NAME } from "@spell/pi-utils";
 import chalk from "chalk";
 
 export interface GrepCommandArgs {

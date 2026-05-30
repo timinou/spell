@@ -1,5 +1,5 @@
 #+TITLE: TUI freezes mid-stream and catches up only at message_end (Opus 4.8 tool-heavy turns)
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14f5aa3ae1ce24f4
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-30T15-14-40-135Z_14f5aa3ae1ce24f4.jsonl]]
 #+CUSTOM_ID: BUG-421-tui-freezes-mid-stream-and-catches-up-on
@@ -243,3 +243,52 @@ Recommend Option 1.
 
 - BUG-422 (filed) — =Footer.invalidate()= same dirty-propagation hazard family. Distinct from this symptom but came up during the audit.
 - Audit pending on =ToolExecutionComponent= / =ReadToolGroupComponent= dirty propagation for candidate B; deferred until candidate A is ruled in or out live.
+
+* Completion [2026-05-30 — session 14f5aa3ae1ce24f4]
+
+Landed in commit =de6c306056ba6cc047d3e3eaa93d47d41ae761da= on branch =fup-099-live-semantic-dispatch=.
+
+** Fix shape: Option 1 from the triage update
+
+Extracted the (focused, streaming) → throttle decision into =packages/coding-agent/src/modes/focus-render-throttle.ts= as a pure class with one method per signal and an =applyInterval= sink. Wired it in =interactive-mode.ts= via:
+
+- existing =terminal.onFocusChange= subscriber → =setFocused(focused)=
+- new =session.subscribe= filter on =agent_start= / =agent_end= → =setStreaming(true|false)=
+
+Decision table the throttle implements:
+
+| focused | streaming | interval          |
+|---------+-----------+-------------------|
+| true    | *         | focusedInterval   |
+| false   | true      | focusedInterval   |
+| false   | false     | unfocusedInterval |
+
+Idle CPU/battery savings (FEAT-358) preserved: as soon as =agent_end= fires while still unfocused, the 500ms interval restores.
+
+** Files
+
+- =packages/coding-agent/src/modes/focus-render-throttle.ts= (new, 93 lines)
+- =packages/coding-agent/test/modes/focus-render-throttle.test.ts= (new, 165 lines, 12 tests)
+- =packages/coding-agent/src/modes/interactive-mode.ts= (wiring; 27 line diff)
+
+** Verification
+
+- =bun test packages/coding-agent/test/modes/focus-render-throttle.test.ts= → 12/12.
+- =bun run check= (tsgo) → clean on changed files (pre-existing errors in unrelated tests untouched).
+- Existing tests still green except for 7 pre-existing failures confirmed via =git stash= bisect — none introduced by this change.
+
+** Implementation notes worth keeping
+
+- Construction does NOT call =applyInterval=. The caller already created the TUI with its own default; an apply on construction would be noise. =#lastApplied= dedupe ensures no spurious calls on idempotent state transitions.
+- The clamp =unfocusedInterval = max(focusedInterval, unfocusedInterval)= sits in the throttle constructor — if a caller (or settings override) ever picks a smaller unfocused, we silently raise it. Observable through =currentInterval= getter (used by tests).
+- Multiple focus toggles during a single stream stay at focusedInterval — verified by the "multiple focus toggles during a single stream" test. The streaming signal pins the responsive interval; focus chatter has no effect.
+
+** Why this is not a regression of FEAT-358
+
+FEAT-358 saved CPU/battery for IDLE unfocused terminals (background omp running with nothing happening). This fix preserves that exact case (idle + unfocused = 500ms) and only changes ACTIVE + unfocused, which is the case the operator actually cares about.
+
+** Followup
+
+- BUG-422 (filed) — =Footer.invalidate()= dirty-propagation hazard. Separate fix.
+- Live verification with =PI_TUI_PROFILE=1= during a real Opus 4.8 turn still recommended as a sanity check, but synthetic repro and unit tests are conclusive at this layer.
+- Async tool launch timing (user's next question this session) — investigating separately; not bundled into this BUG.

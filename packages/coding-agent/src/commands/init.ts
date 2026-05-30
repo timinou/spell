@@ -1,4 +1,4 @@
-import { Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { Command, Flags } from "@spell/pi-utils/cli";
 import { type InitCommandArgs, runInitCommand } from "../cli/init-cli";
 
 export default class Init extends Command {

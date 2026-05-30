@@ -1,8 +1,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { executeCodePath } from "@oh-my-pi/pi-natives";
-import type { Component } from "@oh-my-pi/pi-tui";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@spell/pi-agent-core";
+import { executeCodePath } from "@spell/pi-natives";
+import type { Component } from "@spell/pi-tui";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import createDescription from "../prompts/tools/create.md" with { type: "text" };

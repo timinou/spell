@@ -4,8 +4,8 @@
  * Discovers, connects to, and manages MCP servers.
  * Handles tool loading and lifecycle.
  */
-import { GatewayClient } from "@oh-my-pi/pi-gateway";
-import { logger } from "@oh-my-pi/pi-utils";
+import { GatewayClient } from "@spell/pi-gateway";
+import { logger } from "@spell/pi-utils";
 import type { TSchema } from "@sinclair/typebox";
 import type { SourceMeta } from "../capability/types";
 import { resolveConfigValue } from "../config/resolve-config-value";

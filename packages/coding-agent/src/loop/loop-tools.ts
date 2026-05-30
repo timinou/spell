@@ -4,8 +4,8 @@ import type {
 	AgentToolResult,
 	AgentToolUpdateCallback,
 	RenderResultOptions,
-} from "@oh-my-pi/pi-agent-core";
-import { Text } from "@oh-my-pi/pi-tui";
+} from "@spell/pi-agent-core";
+import { Text } from "@spell/pi-tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import type { Theme } from "../modes/theme/theme";

@@ -1,6 +1,6 @@
-import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Usage } from "@oh-my-pi/pi-ai";
-import { $env } from "@oh-my-pi/pi-utils";
+import type { ThinkingLevel } from "@spell/pi-agent-core";
+import type { Usage } from "@spell/pi-ai";
+import { $env } from "@spell/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import type { TodoGroup } from "../tools/todo-write";
 import type { BatchImplicitBlocker } from "./batch-scheduler";

@@ -12,7 +12,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { listOps } from "@oh-my-pi/pi-natives";
+import { listOps } from "@spell/pi-natives";
 
 // ── FieldType → TypeBox-primitive mapping ──
 // identifier = inline Type.String until promoted to codepath-types primitive

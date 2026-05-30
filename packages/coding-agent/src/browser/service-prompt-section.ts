@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import { ServiceRegistry } from "./service-registry";
 
 export async function buildServicePromptSection(registryPath?: string): Promise<string | null> {

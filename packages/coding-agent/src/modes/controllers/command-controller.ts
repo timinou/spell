@@ -8,10 +8,10 @@ import {
 	type ToolCall,
 	type UsageLimit,
 	type UsageReport,
-} from "@oh-my-pi/pi-ai";
-import { copyToClipboard } from "@oh-my-pi/pi-natives";
-import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@oh-my-pi/pi-tui";
-import { formatDuration, Snowflake, setProjectDir } from "@oh-my-pi/pi-utils";
+} from "@spell/pi-ai";
+import { copyToClipboard } from "@spell/pi-natives";
+import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@spell/pi-tui";
+import { formatDuration, Snowflake, setProjectDir } from "@spell/pi-utils";
 import { $ } from "bun";
 import { reset as resetCapabilities } from "../../capability";
 import { loadCustomShare } from "../../export/custom-share";

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, ToolResultMessage } from "@oh-my-pi/pi-ai";
+import type { AgentMessage } from "@spell/pi-agent-core";
+import type { AssistantMessage, ToolResultMessage } from "@spell/pi-ai";
 import { repairUnpairedToolCalls } from "../../src/session/transcript-repair";
 
 function assistantWithToolCalls(...ids: string[]): AssistantMessage {

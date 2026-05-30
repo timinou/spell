@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { CreateTool, createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import * as nativesModule from "@oh-my-pi/pi-natives";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import { CreateTool, createTools, type ToolSession } from "@spell/pi-coding-agent/tools";
+import * as nativesModule from "@spell/pi-natives";
 
 const tmpDir = path.join(process.cwd(), "packages/coding-agent/test/tmp-create");
 

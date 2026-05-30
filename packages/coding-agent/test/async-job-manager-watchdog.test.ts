@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
+import { AsyncJobManager } from "@spell/pi-coding-agent/async/job-manager";
 
 describe("AsyncJobManager watchdog", () => {
 	test("watchdog fires when run() never resolves and never reports progress", async () => {

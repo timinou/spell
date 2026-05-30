@@ -1,4 +1,4 @@
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@spell/pi-utils";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 

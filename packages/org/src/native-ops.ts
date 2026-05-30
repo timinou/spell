@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { executeOrg } from "@oh-my-pi/pi-natives";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { executeOrg } from "@spell/pi-natives";
+import { isEnoent, logger } from "@spell/pi-utils";
 import type { MemoryEntry, OrgCreateParams, OrgItem, OrgSessionContext } from "./types";
 
 interface ReadOrgFileOptions {

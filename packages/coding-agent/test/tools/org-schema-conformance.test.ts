@@ -9,9 +9,9 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { OrgTool } from "@oh-my-pi/pi-coding-agent/tools/org";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import { OrgTool } from "@spell/pi-coding-agent/tools/org";
+import type { ToolSession } from "@spell/pi-coding-agent/tools";
 import { Value } from "@sinclair/typebox/value";
 
 // Memory-graph subcommands (recall/remember/timeline/subgraph/link) moved to the

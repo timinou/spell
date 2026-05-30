@@ -1,5 +1,5 @@
 import * as fs from "node:fs/promises";
-import { formatBytes } from "@oh-my-pi/pi-utils";
+import { formatBytes } from "@spell/pi-utils";
 import { resolveReadPath } from "../tools/path-utils";
 import { formatDimensionNote, resizeImage } from "./image-resize";
 import { detectSupportedImageMimeTypeFromFile } from "./mime";

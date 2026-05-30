@@ -1,5 +1,5 @@
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { type MermaidAsciiRenderOptions, renderMermaidAscii } from "@oh-my-pi/pi-utils";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@spell/pi-agent-core";
+import { type MermaidAsciiRenderOptions, renderMermaidAscii } from "@spell/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import renderMermaidDescription from "../prompts/tools/render-mermaid.md" with { type: "text" };

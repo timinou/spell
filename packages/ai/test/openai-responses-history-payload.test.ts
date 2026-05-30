@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
-import { streamOpenAICodexResponses } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
-import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import type { Context, Model } from "@oh-my-pi/pi-ai/types";
+import { getBundledModel } from "@spell/pi-ai/models";
+import { streamOpenAICodexResponses } from "@spell/pi-ai/providers/openai-codex-responses";
+import { streamOpenAIResponses } from "@spell/pi-ai/providers/openai-responses";
+import type { Context, Model } from "@spell/pi-ai/types";
 import { createOpenAIResponsesHistoryPayload } from "../src/utils";
 
 function createAbortedSignal(): AbortSignal {

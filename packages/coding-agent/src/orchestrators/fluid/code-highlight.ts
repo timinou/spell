@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import { createHighlighter, type Highlighter } from "shiki";
 
 const HIGHLIGHT_THEME = "github-dark";

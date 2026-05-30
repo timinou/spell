@@ -1,6 +1,6 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@spell/pi-utils";
 import type { BridgeState, ChatSession } from "./bridge-types";
 
 const STATE_FILE_PATH = path.join(os.homedir(), ".spell", "telegram-state.json");

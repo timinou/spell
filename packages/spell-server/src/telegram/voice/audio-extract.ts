@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 
 export function isFfmpegAvailable(): boolean {
 	return Bun.which("ffmpeg") !== null;

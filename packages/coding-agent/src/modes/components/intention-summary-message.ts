@@ -1,4 +1,4 @@
-import { Box, Spacer, Text } from "@oh-my-pi/pi-tui";
+import { Box, Spacer, Text } from "@spell/pi-tui";
 import { theme } from "../../modes/theme/theme";
 import type { CustomMessage, IntentionSummaryDetails } from "../../session/messages";
 

@@ -1,4 +1,4 @@
-import { getProjectDir } from "@oh-my-pi/pi-utils";
+import { getProjectDir } from "@spell/pi-utils";
 import { BracketedPasteHandler } from "../bracketed-paste";
 import { getEditorKeybindings } from "../keybindings";
 import { extractPrintableText, matchesKey } from "../keys";

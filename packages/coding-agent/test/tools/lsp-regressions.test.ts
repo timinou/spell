@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { RenderResultOptions } from "@oh-my-pi/pi-agent-core";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import * as lspClientModule from "@oh-my-pi/pi-coding-agent/lsp/client";
-import * as lspConfigModule from "@oh-my-pi/pi-coding-agent/lsp/config";
-import { LspTool } from "@oh-my-pi/pi-coding-agent/lsp/index";
-import * as lspmuxModule from "@oh-my-pi/pi-coding-agent/lsp/lspmux";
-import { renderCall, renderResult } from "@oh-my-pi/pi-coding-agent/lsp/render";
-import type { CodeAction, SymbolInformation } from "@oh-my-pi/pi-coding-agent/lsp/types";
+import type { RenderResultOptions } from "@spell/pi-agent-core";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import * as lspClientModule from "@spell/pi-coding-agent/lsp/client";
+import * as lspConfigModule from "@spell/pi-coding-agent/lsp/config";
+import { LspTool } from "@spell/pi-coding-agent/lsp/index";
+import * as lspmuxModule from "@spell/pi-coding-agent/lsp/lspmux";
+import { renderCall, renderResult } from "@spell/pi-coding-agent/lsp/render";
+import type { CodeAction, SymbolInformation } from "@spell/pi-coding-agent/lsp/types";
 import {
 	applyCodeAction,
 	collectGlobMatches,
@@ -16,12 +16,12 @@ import {
 	filterWorkspaceSymbols,
 	hasGlobPattern,
 	resolveSymbolColumn,
-} from "@oh-my-pi/pi-coding-agent/lsp/utils";
-import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { clampTimeout } from "@oh-my-pi/pi-coding-agent/tools/tool-timeouts";
-import { sanitizeText } from "@oh-my-pi/pi-natives";
-import { TempDir } from "@oh-my-pi/pi-utils";
+} from "@spell/pi-coding-agent/lsp/utils";
+import { getThemeByName } from "@spell/pi-coding-agent/modes/theme/theme";
+import type { ToolSession } from "@spell/pi-coding-agent/tools";
+import { clampTimeout } from "@spell/pi-coding-agent/tools/tool-timeouts";
+import { sanitizeText } from "@spell/pi-natives";
+import { TempDir } from "@spell/pi-utils";
 
 describe("lsp regressions", () => {
 	afterEach(() => {

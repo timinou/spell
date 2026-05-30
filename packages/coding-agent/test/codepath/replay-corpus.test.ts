@@ -21,8 +21,8 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { FindTool } from "@oh-my-pi/pi-coding-agent/tools/find";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { FindTool } from "@spell/pi-coding-agent/tools/find";
+import type { ToolSession } from "@spell/pi-coding-agent/tools";
 
 let tmpDir: string;
 let find: FindTool;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { SessionStatusFile } from "@oh-my-pi/pi-desktop-common";
+import type { SessionStatusFile } from "@spell/pi-desktop-common";
 import { SessionService } from "../src/session-service";
 
 class FakeReader {

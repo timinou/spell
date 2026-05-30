@@ -1,4 +1,4 @@
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent } from "@spell/pi-utils";
 import { hashTaskContent } from "../hash";
 
 export type DriftSnapshot = Record<string, string>;

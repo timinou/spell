@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import { type GoalScheduleEntry, GoalScheduler } from "../../src/scheduler";
 
 function createEntry(overrides: Partial<GoalScheduleEntry> = {}): GoalScheduleEntry {

@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { isEnoent, toError } from "@oh-my-pi/pi-utils";
+import { isEnoent, toError } from "@spell/pi-utils";
 
 export interface SessionStorageStat {
 	size: number;

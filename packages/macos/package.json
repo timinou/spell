@@ -1,6 +1,6 @@
 {
 	"type": "module",
-	"name": "@oh-my-pi/pi-macos",
+	"name": "@spell/pi-macos",
 	"version": "0.1.0",
 	"description": "macOS desktop integration for spell (menu bar, overlay, Hammerspoon)",
 	"main": "./src/index.ts",
@@ -9,9 +9,9 @@
 		"check": "tsgo -p tsconfig.json"
 	},
 	"dependencies": {
-		"@oh-my-pi/pi-desktop-common": "workspace:*",
-		"@oh-my-pi/pi-qml": "workspace:*",
-		"@oh-my-pi/pi-utils": "workspace:*"
+		"@spell/pi-desktop-common": "workspace:*",
+		"@spell/pi-qml": "workspace:*",
+		"@spell/pi-utils": "workspace:*"
 	},
 	"devDependencies": {
 		"@types/bun": "^1.3"

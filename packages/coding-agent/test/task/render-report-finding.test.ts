@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
-import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { INTENT_FIELD } from "@spell/pi-agent-core";
+import { getThemeByName } from "@spell/pi-coding-agent/modes/theme/theme";
 import { EventController } from "../../src/modes/controllers/event-controller";
 import { taskToolRenderer } from "../../src/task/render";
 import type { TaskToolDetails } from "../../src/task/types";

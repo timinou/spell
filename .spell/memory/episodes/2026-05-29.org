@@ -153,3 +153,22 @@ TEST HARNESS requirement learned: the real EventController reads settings.get(..
 ABOUT: packages/coding-agent/src/modes/components/live-tool-batch.ts
 ABOUT: CON-pending-tool-cells-stuck---stale-native-
 :END:
+** ITEM HARNESS BUG ROOT CAUSES — fully diagnosed empirically.
+
+BUG #1 (get/bash "hang"): TWO compounding causes.
+(a) ALGORITHM: crates/pi-natives/src/text.rs `break_long_word` (called by wrap_text_with_ansi → wrap_single_line for the TUI codepath cell renderer renderCodePathCall in coding-agent/src/tools/get.ts) had NO fallback for a lone/invalid ESC byte (0x1b). Trace: outer `if word[i]==ESC && let Some(seq)=ansi_seq_len_u16(...)` fails for lone ESC (ansi_seq_len returns None when pos+1>=len OR final byte not in valid arm); then `let start=i; while i<len && word[i]!=ESC {i+=1}` never advances because word[i] IS ESC → i frozen → infinite loop. Triggered when a LONG word (visible width > wrap width, forcing break_long_word) contains/ends-with a lone ESC — e.g. latin-1-encoded PNG bytes or binary data surfaced via the get tool, or any near-binary content. Confirmed: wrapTextWithAnsi("X".repeat(400)+ESC, 8, 4) hangs (exit 124); pure ASCII "X".repeat(400) returns fine. The in-flight fix adds `if word[i]==ESC { current_line.push(ESC); i+=1; continue; }` fallback — verified correct via pure-Rust cargo test (9 text::tests pass, incl. trailing-ESC at widths 1/4/8/80).
+(b) DEPLOYMENT (the real reason the running harness STILL hangs): bun resolves `@oh-my-pi/pi-natives` NOT to the workspace packages/natives (v13.12.8) but to the bun install cache published package: ~/.local/share/reflex/bun/install/cache/@oh-my-pi/pi-natives@15.5.13@@@1/native/ (confirmed via import.meta.resolve → file:///.../15.5.13/native/index.js). That cached 15.5.13 modern .node (built 22:58) contains the PRE-FIX break_long_word and HANGS on the trailing-ESC input (verified by dlopen'ing it directly: exit 124). So rebuilding packages/natives dev.node / target/debug libpi_natives.so has ZERO effect on the harness — nothing loads them. Sentinel proof: an eprintln/fs::write injected into wrap_text_with_ansi napi entry was NEVER written when bun called wrapTextWithAnsi, despite dev.node being byte-identical (md5) to my fresh build → conclusive that a different binary is loaded. FIX REQUIRED: publish/refresh the cached pi-natives package (bump version + rebuild the published modern/baseline .node with the ESC fix), or repoint the harness module resolution at the workspace build. The source fix alone is insufficient until the loaded (cached/published) binary carries it.
+
+BUG #2 (long-identifier "mangling"): DISPROVEN as a string-handling bug. truncateToWidth / wrapTextWithAnsi pass the literal 'updateWorkingMessageFromPartialToolArgs' through fully intact (verified: intact=true). The earlier garbled reads were actually (i) normal artifact spill truncation ([Output truncated - N tokens]) on large outputs, and (ii) my own malformed grep (`grep -nE "^\t#..."` → shell ate the backslash → "stray \ before t" warning + wrong output). No native bug. Lesson: never infer "symbol undefined/mangled" from truncated tool output — verify with python regex DEFS-vs-USES counts.
+
+Earlier false-positive (the "missing #updateWorkingMessageFromPartialToolArgs" episode EP-df6cdbcacb65d225) was caused by exactly bug #2's truncation. That method exists since c5323baf1.
+:PROPERTIES:
+:CUSTOM_ID: EP-959e01d2e29da9c2
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T23:00:09Z
+:END:
+:RELATIONS:
+ABOUT: crates/pi-natives/src/text.rs
+ABOUT: packages/coding-agent/src/tools/get.ts
+:END:

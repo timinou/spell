@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { CreateTool } from "@oh-my-pi/pi-coding-agent/tools";
+import { CreateTool } from "@spell/pi-coding-agent/tools";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 

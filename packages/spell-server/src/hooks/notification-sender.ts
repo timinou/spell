@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import { InputFile } from "grammy";
 import type { ChannelsConfig } from "../config/types";
 import { enforceCaptionBudget } from "../telegram/caption-budget";

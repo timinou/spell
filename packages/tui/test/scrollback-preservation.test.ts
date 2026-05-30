@@ -13,7 +13,7 @@
  *   2. requestRender(true, { clearScrollback })  -> scrollback wiped (session replace)
  */
 import { describe, expect, it } from "bun:test";
-import { type Component, type Container, TUI } from "@oh-my-pi/pi-tui";
+import { type Component, type Container, TUI } from "@spell/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 class MutableLines implements Component {

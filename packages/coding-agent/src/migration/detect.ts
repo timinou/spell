@@ -7,7 +7,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getAgentDir, getProjectAgentDir, getProjectKdlPath, getUserKdlPath, isEnoent } from "@oh-my-pi/pi-utils";
+import { getAgentDir, getProjectAgentDir, getProjectKdlPath, getUserKdlPath, isEnoent } from "@spell/pi-utils";
 
 /** Format of a legacy source file. */
 export type LegacyFormat = "kdl" | "yaml" | "json";

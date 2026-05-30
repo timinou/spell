@@ -1,6 +1,6 @@
-import type { Api, Model } from "@oh-my-pi/pi-ai";
-import type { AgentStatus, AgentStatusContext } from "@oh-my-pi/pi-desktop-common";
-import { deriveAgentStatus } from "@oh-my-pi/pi-desktop-common";
+import type { Api, Model } from "@spell/pi-ai";
+import type { AgentStatus, AgentStatusContext } from "@spell/pi-desktop-common";
+import { deriveAgentStatus } from "@spell/pi-desktop-common";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
 import {

@@ -24,7 +24,7 @@ import {
 	type AgentTool,
 	INTENT_FIELD,
 	ThinkingLevel,
-} from "@oh-my-pi/pi-agent-core";
+} from "@spell/pi-agent-core";
 import type {
 	AssistantMessage,
 	Effort,
@@ -41,7 +41,7 @@ import type {
 	ToolChoice,
 	Usage,
 	UsageReport,
-} from "@oh-my-pi/pi-ai";
+} from "@spell/pi-ai";
 import {
 	calculateRateLimitBackoffMs,
 	getSupportedEfforts,
@@ -49,9 +49,9 @@ import {
 	modelsAreEqual,
 	parseRateLimitReason,
 	systemPromptText,
-} from "@oh-my-pi/pi-ai";
-import { orgToMarkdown, resolveCategories } from "@oh-my-pi/pi-org";
-import { abortableSleep, getAgentDbPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
+} from "@spell/pi-ai";
+import { orgToMarkdown, resolveCategories } from "@spell/pi-org";
+import { abortableSleep, getAgentDbPath, isEnoent, logger } from "@spell/pi-utils";
 import type { AsyncJob, AsyncJobManager } from "../async";
 import type { ResolvedModeConfig } from "../capability/mode";
 import type { Rule } from "../capability/rule";

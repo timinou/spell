@@ -1,4 +1,4 @@
-import { logger, ptree } from "@oh-my-pi/pi-utils";
+import { logger, ptree } from "@spell/pi-utils";
 import { getRetainedSpillBudget, resolveToolSpillPolicy, type SpillPolicy } from "../session/spill-policy";
 import { OutputSink } from "../session/streaming-output";
 import { buildRemoteCommand, ensureConnection, ensureHostInfo, type SSHConnectionTarget } from "./connection-manager";

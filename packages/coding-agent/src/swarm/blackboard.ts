@@ -1,6 +1,6 @@
 import * as path from "node:path";
-import type { OrgConfig } from "@oh-my-pi/pi-org";
-import { appendItemToFile, readCategory } from "@oh-my-pi/pi-org";
+import type { OrgConfig } from "@spell/pi-org";
+import { appendItemToFile, readCategory } from "@spell/pi-org";
 
 import { EventBus } from "../utils/event-bus";
 import type { SwarmEventMap } from "../utils/typed-event-map";

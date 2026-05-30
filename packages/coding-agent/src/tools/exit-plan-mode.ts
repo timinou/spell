@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@spell/pi-agent-core";
+import { isEnoent } from "@spell/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import { resolveLayerFromProperties } from "../config/task-policies";
@@ -105,6 +105,10 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 	readonly description: string;
 	readonly parameters = exitPlanModeSchema;
 	readonly strict = true;
+	// Swaps the session mode and tool set; subsequent tool calls in the batch
+	// would otherwise execute under an inconsistent tool registry. Sequential
+	// pins this to a clean before/after boundary.
+	readonly executionMode = "sequential" as const;
 
 	constructor(private readonly session: ToolSession) {
 		this.description = renderPromptTemplate(exitPlanModeDescription);

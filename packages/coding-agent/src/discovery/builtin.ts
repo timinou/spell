@@ -5,7 +5,7 @@
  */
 
 import * as path from "node:path";
-import { logger, tryParseJson } from "@oh-my-pi/pi-utils";
+import { logger, tryParseJson } from "@spell/pi-utils";
 
 import { registerProvider } from "../capability";
 import { type ContextFile, contextFileCapability } from "../capability/context-file";

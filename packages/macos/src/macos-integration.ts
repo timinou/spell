@@ -1,7 +1,7 @@
 import * as path from "node:path";
-import type { SessionStatusFile } from "@oh-my-pi/pi-desktop-common";
-import type { QmlBridge } from "@oh-my-pi/pi-qml";
-import { logger } from "@oh-my-pi/pi-utils";
+import type { SessionStatusFile } from "@spell/pi-desktop-common";
+import type { QmlBridge } from "@spell/pi-qml";
+import { logger } from "@spell/pi-utils";
 import { $ } from "bun";
 import type { MacOSConfig } from "./config";
 import { loadConfig } from "./config";

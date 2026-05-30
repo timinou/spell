@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "bun:test";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { GoalResult } from "../../src/executor";
 import { type HookContext, HookDispatcher, type HookExecutor } from "../../src/hooks";
 import type { HookTarget, ManifestHookConfig } from "../../src/manifest";

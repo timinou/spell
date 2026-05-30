@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import type { AgentTool } from "@oh-my-pi/pi-agent-core";
-import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { Model } from "@oh-my-pi/pi-ai";
+import type { AgentTool } from "@spell/pi-agent-core";
+import { Agent } from "@spell/pi-agent-core";
+import type { Model } from "@spell/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { Settings } from "../src/config/settings";
 import type { CustomTool } from "../src/extensibility/custom-tools/types";

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { OrgItem } from "@oh-my-pi/pi-org";
+import type { OrgItem } from "@spell/pi-org";
 import { formatOrgQueryResult, renderItemOrg } from "../src/tools/org-format";
 
 // ---------------------------------------------------------------------------

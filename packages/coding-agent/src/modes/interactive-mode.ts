@@ -4,12 +4,12 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { type Agent, type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@oh-my-pi/pi-ai";
-import { type AgentStatus, type AgentStatusContext, deriveAgentStatus } from "@oh-my-pi/pi-desktop-common";
-import { NiriOverviewController } from "@oh-my-pi/pi-niri";
-import { appendItemToFile, generateId, orgToMarkdown, resolveCategories } from "@oh-my-pi/pi-org";
-import type { Component, OverlayHandle, SlashCommand } from "@oh-my-pi/pi-tui";
+import { type Agent, type AgentMessage, ThinkingLevel } from "@spell/pi-agent-core";
+import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@spell/pi-ai";
+import { type AgentStatus, type AgentStatusContext, deriveAgentStatus } from "@spell/pi-desktop-common";
+import { NiriOverviewController } from "@spell/pi-niri";
+import { appendItemToFile, generateId, orgToMarkdown, resolveCategories } from "@spell/pi-org";
+import type { Component, OverlayHandle, SlashCommand } from "@spell/pi-tui";
 import {
 	Container,
 	Loader,
@@ -21,8 +21,8 @@ import {
 	TUI,
 	truncateToWidth,
 	visibleWidth,
-} from "@oh-my-pi/pi-tui";
-import { APP_NAME, getProjectDir, hsvToRgb, isEnoent, logger, postmortem } from "@oh-my-pi/pi-utils";
+} from "@spell/pi-tui";
+import { APP_NAME, getProjectDir, hsvToRgb, isEnoent, logger, postmortem } from "@spell/pi-utils";
 import chalk from "chalk";
 import { KeybindingsManager } from "../config/keybindings";
 import { renderPromptTemplate } from "../config/prompt-templates";

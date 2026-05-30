@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { executeCodeBuffer, executeCodePath } from "@oh-my-pi/pi-natives";
+import { executeCodeBuffer, executeCodePath } from "@spell/pi-natives";
 import { isCodeToolSupportedPath } from "./code-supported-files";
 import { sessionContextOpts } from "./codepath-session";
 

@@ -3,8 +3,8 @@
  * materializes canonical wave-based todos, and streams live output to QML panels.
  */
 import * as path from "node:path";
-import { isDisplayAvailable, QmlBridge } from "@oh-my-pi/pi-qml";
-import { logger } from "@oh-my-pi/pi-utils";
+import { isDisplayAvailable, QmlBridge } from "@spell/pi-qml";
+import { logger } from "@spell/pi-utils";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import { Settings } from "../config/settings";
 import type { CanvasOrchestratorManager } from "../orchestrators/canvas-orchestrator";

@@ -4,7 +4,7 @@
  * Pre-fix chain:
  *   1. BUG-391 added a `try/finally` wrapper to `CustomEditor.handleInput`
  *      that calls `this.markDirty()` in the finally branch.
- *   2. `Editor` (its base class in `@oh-my-pi/pi-tui`) had no public
+ *   2. `Editor` (its base class in `@spell/pi-tui`) had no public
  *      `markDirty()` method — only the private `this.#parent?.markDirty()`
  *      pattern at internal call sites.
  *   3. Every keystroke therefore threw
@@ -23,7 +23,7 @@
  * `markDirty` contract fails here rather than as an opaque clean shutdown.
  */
 import { describe, expect, it } from "bun:test";
-import type { DirtyParent } from "@oh-my-pi/pi-tui";
+import type { DirtyParent } from "@spell/pi-tui";
 import { CustomEditor } from "../../../src/modes/components/custom-editor";
 
 class DirtyCounter implements DirtyParent {

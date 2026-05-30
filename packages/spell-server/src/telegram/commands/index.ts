@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { OperatorActionHandler } from "../../http/routes/operator-actions";
 import type { SocketSessionRegistry } from "../../socket";
 import type { AuthContext } from "../bot/auth";

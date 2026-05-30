@@ -2,7 +2,7 @@ import {
 	type CodeCoordPeerActivity,
 	type CodeCoordStatus,
 	executeCodeBuffer,
-} from "@oh-my-pi/pi-natives";
+} from "@spell/pi-natives";
 
 export interface SessionIdSource {
 	getSessionId?: () => string | null | undefined;

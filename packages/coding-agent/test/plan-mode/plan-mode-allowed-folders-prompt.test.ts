@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { renderPromptTemplate } from "@oh-my-pi/pi-coding-agent/config/prompt-templates";
-import planModeActivePrompt from "@oh-my-pi/pi-coding-agent/prompts/system/plan-mode-active.md" with { type: "text" };
-import planModeSubagentPrompt from "@oh-my-pi/pi-coding-agent/prompts/system/plan-mode-subagent.md" with {
+import { renderPromptTemplate } from "@spell/pi-coding-agent/config/prompt-templates";
+import planModeActivePrompt from "@spell/pi-coding-agent/prompts/system/plan-mode-active.md" with { type: "text" };
+import planModeSubagentPrompt from "@spell/pi-coding-agent/prompts/system/plan-mode-subagent.md" with {
 	type: "text",
 };
 

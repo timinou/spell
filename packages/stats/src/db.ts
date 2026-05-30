@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
-import { getConfigRootDir, getStatsDbPath } from "@oh-my-pi/pi-utils";
+import { getConfigRootDir, getStatsDbPath } from "@spell/pi-utils";
 import type {
 	AggregatedStats,
 	FolderStats,

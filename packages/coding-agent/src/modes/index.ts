@@ -1,5 +1,5 @@
-import { emergencyTerminalRestore } from "@oh-my-pi/pi-tui";
-import { postmortem } from "@oh-my-pi/pi-utils";
+import { emergencyTerminalRestore } from "@spell/pi-tui";
+import { postmortem } from "@spell/pi-utils";
 
 export * from "./browse-mode";
 export * from "./fluid-mode";

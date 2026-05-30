@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
-import { hookFetch } from "@oh-my-pi/pi-utils";
+import { hookFetch } from "@spell/pi-utils";
 import type { VoiceConfig } from "../../src/config/types";
 import type { RpcClient } from "../../src/rpc/rpc-client";
 import type { AuthContext } from "../../src/telegram/bot/auth";

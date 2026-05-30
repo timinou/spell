@@ -3,7 +3,7 @@
  *
  * Handles connection initialization, tool listing, and tool calling.
  */
-import { logger, withTimeout } from "@oh-my-pi/pi-utils";
+import { logger, withTimeout } from "@spell/pi-utils";
 import { createHttpTransport } from "./transports/http";
 import { createStdioTransport } from "./transports/stdio";
 import type {

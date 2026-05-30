@@ -1,5 +1,5 @@
-import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Effort } from "@oh-my-pi/pi-ai";
+import type { ThinkingLevel } from "@spell/pi-agent-core";
+import type { Effort } from "@spell/pi-ai";
 import {
 	Container,
 	matchesKey,
@@ -11,7 +11,7 @@ import {
 	type Tab,
 	TabBar,
 	Text,
-} from "@oh-my-pi/pi-tui";
+} from "@spell/pi-tui";
 import { type SettingPath, settings, type WriteTier } from "../../config/settings";
 import type {
 	SettingTab,

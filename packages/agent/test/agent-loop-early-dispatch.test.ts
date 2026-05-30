@@ -23,7 +23,7 @@
  * helper pattern is reused.
  */
 import { describe, expect, it } from "bun:test";
-import { agentLoop } from "@oh-my-pi/pi-agent-core/agent-loop";
+import { agentLoop } from "@spell/pi-agent-core/agent-loop";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -31,9 +31,9 @@ import type {
 	AgentMessage,
 	AgentTool,
 	StreamFn,
-} from "@oh-my-pi/pi-agent-core/types";
-import type { AssistantMessage, AssistantMessageEvent, Message, Model, UserMessage } from "@oh-my-pi/pi-ai";
-import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+} from "@spell/pi-agent-core/types";
+import type { AssistantMessage, AssistantMessageEvent, Message, Model, UserMessage } from "@spell/pi-ai";
+import { AssistantMessageEventStream } from "@spell/pi-ai/utils/event-stream";
 import { Type } from "@sinclair/typebox";
 
 // ──────────────────────────────────────────────────────────────────────────────

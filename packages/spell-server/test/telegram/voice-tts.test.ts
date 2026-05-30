@@ -1,5 +1,5 @@
 import { describe, expect, it, mock, vi } from "bun:test";
-import { hookFetch, logger } from "@oh-my-pi/pi-utils";
+import { hookFetch, logger } from "@spell/pi-utils";
 import { createTtsProvider } from "../../src/telegram/voice";
 import { DeepgramTtsProvider } from "../../src/telegram/voice/providers/deepgram-tts";
 import { ElevenLabsTtsProvider } from "../../src/telegram/voice/providers/elevenlabs-tts";

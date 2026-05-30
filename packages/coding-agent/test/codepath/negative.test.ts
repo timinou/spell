@@ -10,10 +10,10 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { FindTool } from "@oh-my-pi/pi-coding-agent/tools/find";
-import { CodepathEditTool } from "@oh-my-pi/pi-coding-agent/tools/edit";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import { FindTool } from "@spell/pi-coding-agent/tools/find";
+import { CodepathEditTool } from "@spell/pi-coding-agent/tools/edit";
+import type { ToolSession } from "@spell/pi-coding-agent/tools";
+import type { AgentToolResult } from "@spell/pi-agent-core";
 
 let tmpDir: string;
 let find: FindTool;

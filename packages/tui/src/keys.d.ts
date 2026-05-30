@@ -17,7 +17,7 @@
  * - setKittyProtocolActive(active) - Set global Kitty protocol state
  * - isKittyProtocolActive() - Query global Kitty protocol state
  */
-import { type KeyEventType } from "@oh-my-pi/pi-natives";
+import { type KeyEventType } from "@spell/pi-natives";
 /**
  * Set the global Kitty keyboard protocol state.
  * Called by ProcessTerminal after detecting protocol support.

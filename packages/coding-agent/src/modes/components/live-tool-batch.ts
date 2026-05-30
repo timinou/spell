@@ -1,4 +1,4 @@
-import { Container, SPINNER_MARKER } from "@oh-my-pi/pi-tui";
+import { Container, SPINNER_MARKER } from "@spell/pi-tui";
 import { theme } from "../../modes/theme/theme";
 import { formatStatusIcon, truncateToWidth } from "../../tools/render-utils";
 import type { ToolExecutionComponent, ToolExecutionHandle } from "./tool-execution";
@@ -91,6 +91,22 @@ export class LiveToolBatchComponent extends Container implements ToolExecutionHa
 
 	get size(): number {
 		return this.#entries.length;
+	}
+
+	/**
+	 * Remove a cell from the group entirely. Used by the event controller to
+	 * reap ghost cells whose toolCallId vanished from the streaming partial
+	 * message (e.g. provider stream-retry that wiped its content blocks).
+	 * Returns true if the cell existed and was removed.
+	 */
+	removeCell(id: string): boolean {
+		const entry = this.#byId.get(id);
+		if (!entry) return false;
+		this.removeChild(entry.cell);
+		this.#entries = this.#entries.filter(e => e.id !== id);
+		this.#byId.delete(id);
+		this.#invalidateSelf();
+		return true;
 	}
 
 	updateArgs(args: unknown, toolCallId?: string): void {

@@ -7,25 +7,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 
 import * as path from "node:path";
 
-import { Agent } from "@oh-my-pi/pi-agent-core";
+import { Agent } from "@spell/pi-agent-core";
 
-import { getBundledModel, type ToolResultMessage } from "@oh-my-pi/pi-ai";
+import { getBundledModel, type ToolResultMessage } from "@spell/pi-ai";
 
-import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { AssistantMessageEventStream } from "@spell/pi-ai/utils/event-stream";
 
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { ModelRegistry } from "@spell/pi-coding-agent/config/model-registry";
 
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
 
-import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentSession } from "@spell/pi-coding-agent/session/agent-session";
 
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { AuthStorage } from "@spell/pi-coding-agent/session/auth-storage";
 
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { SessionManager } from "@spell/pi-coding-agent/session/session-manager";
 
-import type { TodoGroup } from "@oh-my-pi/pi-coding-agent/tools/todo-write";
+import type { TodoGroup } from "@spell/pi-coding-agent/tools/todo-write";
 
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { TempDir } from "@spell/pi-utils";
 
 class MockAssistantStream extends AssistantMessageEventStream {}
 

@@ -2,16 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
-import { type AssistantMessage, getBundledModel } from "@oh-my-pi/pi-ai";
-import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { PendingActionStore } from "@oh-my-pi/pi-coding-agent/tools/pending-action";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { Agent } from "@spell/pi-agent-core";
+import { type AssistantMessage, getBundledModel } from "@spell/pi-ai";
+import { AssistantMessageEventStream } from "@spell/pi-ai/utils/event-stream";
+import { ModelRegistry } from "@spell/pi-coding-agent/config/model-registry";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import { AgentSession } from "@spell/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@spell/pi-coding-agent/session/auth-storage";
+import { SessionManager } from "@spell/pi-coding-agent/session/session-manager";
+import { PendingActionStore } from "@spell/pi-coding-agent/tools/pending-action";
+import { Snowflake } from "@spell/pi-utils";
 
 class MockAssistantStream extends AssistantMessageEventStream {}
 

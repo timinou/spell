@@ -8,9 +8,9 @@
  */
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
-import { probeSocket } from "@oh-my-pi/pi-utils/managed-daemon";
-import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
+import { isEnoent, logger } from "@spell/pi-utils";
+import { probeSocket } from "@spell/pi-utils/managed-daemon";
+import * as postmortem from "@spell/pi-utils/postmortem";
 import { ProcessManager } from "./process-manager";
 import {
 	type GatewayRequest,

@@ -3,7 +3,7 @@
  * but for HookSelectorComponent (used by the ask tool via showHookSelector).
  */
 import { beforeAll, describe, expect, it } from "bun:test";
-import type { DirtyParent } from "@oh-my-pi/pi-tui";
+import type { DirtyParent } from "@spell/pi-tui";
 import { HookSelectorComponent } from "../../../src/modes/components/hook-selector";
 import { initTheme } from "../../../src/modes/theme/theme";
 

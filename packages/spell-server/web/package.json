@@ -1,5 +1,5 @@
 {
-	"name": "@oh-my-pi/spell-server-web",
+	"name": "@spell/spell-server-web",
 	"private": true,
 	"type": "module",
 	"version": "0.1.0",

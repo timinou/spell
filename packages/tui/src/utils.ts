@@ -1,7 +1,7 @@
-import { sliceWithWidth } from "@oh-my-pi/pi-natives";
-import { getDefaultTabWidth, getIndentation } from "@oh-my-pi/pi-utils";
+import { sliceWithWidth } from "@spell/pi-natives";
+import { getDefaultTabWidth, getIndentation } from "@spell/pi-utils";
 
-export { Ellipsis, extractSegments, sliceWithWidth, truncateToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-natives";
+export { Ellipsis, extractSegments, sliceWithWidth, truncateToWidth, wrapTextWithAnsi } from "@spell/pi-natives";
 
 // Pre-allocated space buffer for padding
 const SPACE_BUFFER = " ".repeat(512);

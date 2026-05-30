@@ -1,4 +1,4 @@
-import { type AssistantMessage, formatToolCallStreamDiagnosticMessage } from "@oh-my-pi/pi-ai";
+import { type AssistantMessage, formatToolCallStreamDiagnosticMessage } from "@spell/pi-ai";
 
 const RETRY_ATTEMPT_PREFIX_REGEX = /^(Attempt|Final attempt) \d+\/\d+ failed(?:; retrying\.|\.) /;
 

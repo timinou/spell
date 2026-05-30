@@ -1,4 +1,4 @@
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent } from "@spell/pi-utils";
 
 /**
  * The native org parser currently surfaces missing files through NAPI as a

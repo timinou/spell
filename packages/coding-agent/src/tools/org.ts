@@ -1,5 +1,5 @@
 /**
- * Org tool adapter — wraps the @oh-my-pi/pi-org tool for use in coding-agent.
+ * Org tool adapter — wraps the @spell/pi-org tool for use in coding-agent.
  *
  * Reads org config from settings + project-local .spell/config.yml, resolves
  * categories relative to the project root.
@@ -10,12 +10,12 @@ import type {
 	AgentToolResult,
 	AgentToolUpdateCallback,
 	RenderResultOptions,
-} from "@oh-my-pi/pi-agent-core";
-import type { OrgConfig, OrgItem, OrgToolDefinition } from "@oh-my-pi/pi-org";
-import { createOrgTool, DEFAULT_ORG_CONFIG } from "@oh-my-pi/pi-org";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { Text } from "@oh-my-pi/pi-tui";
-import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
+} from "@spell/pi-agent-core";
+import type { OrgConfig, OrgItem, OrgToolDefinition } from "@spell/pi-org";
+import { createOrgTool, DEFAULT_ORG_CONFIG } from "@spell/pi-org";
+import type { Component } from "@spell/pi-tui";
+import { Text } from "@spell/pi-tui";
+import { getProjectDir, logger } from "@spell/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import type { Theme } from "../modes/theme/theme";
 import { validatePlanItem } from "../plan-mode/plan-validation";

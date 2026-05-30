@@ -1,5 +1,5 @@
-import type { WindowInfo, WindowState } from "@oh-my-pi/pi-qml";
-import { logger } from "@oh-my-pi/pi-utils";
+import type { WindowInfo, WindowState } from "@spell/pi-qml";
+import { logger } from "@spell/pi-utils";
 import type { ClientPanelMessage, ServerPanelMessage } from "./protocol";
 
 export interface RemoteLaunchOptions {

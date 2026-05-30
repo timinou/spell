@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, mock, vi } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@spell/pi-ai";
 import {
 	generateIntentionSummary,
 	parseIntentionSummaryResponse,
@@ -8,7 +8,7 @@ import {
 
 const completeSimpleMock = vi.fn();
 
-mock.module("@oh-my-pi/pi-ai", () => ({
+mock.module("@spell/pi-ai", () => ({
 	completeSimple: completeSimpleMock,
 }));
 

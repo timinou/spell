@@ -1,6 +1,6 @@
-import type { AgentStatus, SessionStatusFile } from "@oh-my-pi/pi-desktop-common";
-import { StatusFileReader } from "@oh-my-pi/pi-desktop-common";
-import { logger } from "@oh-my-pi/pi-utils";
+import type { AgentStatus, SessionStatusFile } from "@spell/pi-desktop-common";
+import { StatusFileReader } from "@spell/pi-desktop-common";
+import { logger } from "@spell/pi-utils";
 
 interface StatusReader {
 	readAll(): Promise<SessionStatusFile[]>;

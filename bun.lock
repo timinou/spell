@@ -15,11 +15,11 @@
       },
     },
     "packages/agent": {
-      "name": "@oh-my-pi/pi-agent-core",
+      "name": "@spell/pi-agent-core",
       "version": "13.12.8",
       "dependencies": {
-        "@oh-my-pi/pi-ai": "workspace:*",
-        "@oh-my-pi/pi-utils": "workspace:*",
+        "@spell/pi-ai": "workspace:*",
+        "@spell/pi-utils": "workspace:*",
       },
       "devDependencies": {
         "@sinclair/typebox": "^0.34",
@@ -27,7 +27,7 @@
       },
     },
     "packages/ai": {
-      "name": "@oh-my-pi/pi-ai",
+      "name": "@spell/pi-ai",
       "version": "13.12.8",
       "bin": {
         "pi-ai": "./src/cli.ts",
@@ -37,9 +37,9 @@
         "@aws-sdk/client-bedrock-runtime": "^3",
         "@bufbuild/protobuf": "^2.11",
         "@google/genai": "^1.43",
-        "@oh-my-pi/pi-utils": "workspace:*",
         "@sinclair/typebox": "^0.34",
         "@smithy/node-http-handler": "^4.4",
+        "@spell/pi-utils": "workspace:*",
         "ajv": "^8.18",
         "ajv-formats": "^3.0",
         "openai": "^6.25",
@@ -51,7 +51,7 @@
       },
     },
     "packages/coding-agent": {
-      "name": "@oh-my-pi/pi-coding-agent",
+      "name": "@spell/pi-coding-agent",
       "version": "13.12.8",
       "bin": {
         "spell": "src/cli.ts",
@@ -59,19 +59,20 @@
       "dependencies": {
         "@bgotink/kdl": "^0.4",
         "@mozilla/readability": "^0.6",
-        "@oh-my-pi/pi-agent-core": "workspace:*",
-        "@oh-my-pi/pi-ai": "workspace:*",
-        "@oh-my-pi/pi-gateway": "workspace:*",
-        "@oh-my-pi/pi-natives": "workspace:*",
-        "@oh-my-pi/pi-niri": "workspace:*",
-        "@oh-my-pi/pi-org": "workspace:*",
-        "@oh-my-pi/pi-qml": "workspace:*",
-        "@oh-my-pi/pi-qml-remote": "workspace:*",
-        "@oh-my-pi/pi-tui": "workspace:*",
-        "@oh-my-pi/pi-utils": "workspace:*",
-        "@oh-my-pi/spell-server": "workspace:*",
-        "@oh-my-pi/spell-stats": "workspace:*",
         "@sinclair/typebox": "^0.34",
+        "@spell/pi-agent-core": "workspace:*",
+        "@spell/pi-ai": "workspace:*",
+        "@spell/pi-desktop-common": "workspace:*",
+        "@spell/pi-gateway": "workspace:*",
+        "@spell/pi-natives": "workspace:*",
+        "@spell/pi-niri": "workspace:*",
+        "@spell/pi-org": "workspace:*",
+        "@spell/pi-qml": "workspace:*",
+        "@spell/pi-qml-remote": "workspace:*",
+        "@spell/pi-tui": "workspace:*",
+        "@spell/pi-utils": "workspace:*",
+        "@spell/spell-server": "workspace:*",
+        "@spell/spell-stats": "workspace:*",
         "@xterm/headless": "^6.0",
         "ajv": "^8.18",
         "chalk": "^5.6",
@@ -86,94 +87,94 @@
       },
     },
     "packages/desktop-common": {
-      "name": "@oh-my-pi/pi-desktop-common",
+      "name": "@spell/pi-desktop-common",
       "version": "0.1.0",
       "dependencies": {
-        "@oh-my-pi/pi-utils": "workspace:*",
+        "@spell/pi-utils": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "^1.3",
       },
     },
     "packages/gateway": {
-      "name": "@oh-my-pi/pi-gateway",
+      "name": "@spell/pi-gateway",
       "version": "0.1.0",
       "dependencies": {
-        "@oh-my-pi/pi-utils": "workspace:*",
+        "@spell/pi-utils": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "^1.3",
       },
     },
     "packages/macos": {
-      "name": "@oh-my-pi/pi-macos",
+      "name": "@spell/pi-macos",
       "version": "0.1.0",
       "dependencies": {
-        "@oh-my-pi/pi-desktop-common": "workspace:*",
-        "@oh-my-pi/pi-qml": "workspace:*",
-        "@oh-my-pi/pi-utils": "workspace:*",
+        "@spell/pi-desktop-common": "workspace:*",
+        "@spell/pi-qml": "workspace:*",
+        "@spell/pi-utils": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "^1.3",
       },
     },
     "packages/natives": {
-      "name": "@oh-my-pi/pi-natives",
+      "name": "@spell/pi-natives",
       "version": "13.12.8",
       "dependencies": {
-        "@oh-my-pi/pi-utils": "workspace:*",
+        "@spell/pi-utils": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "^1.3",
       },
     },
     "packages/niri": {
-      "name": "@oh-my-pi/pi-niri",
+      "name": "@spell/pi-niri",
       "version": "0.1.0",
       "dependencies": {
-        "@oh-my-pi/pi-desktop-common": "workspace:*",
-        "@oh-my-pi/pi-tui": "workspace:*",
-        "@oh-my-pi/pi-utils": "workspace:*",
+        "@spell/pi-desktop-common": "workspace:*",
+        "@spell/pi-tui": "workspace:*",
+        "@spell/pi-utils": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "^1.3",
       },
     },
     "packages/org": {
-      "name": "@oh-my-pi/pi-org",
+      "name": "@spell/pi-org",
       "version": "13.10.1",
       "dependencies": {
-        "@oh-my-pi/pi-natives": "workspace:*",
-        "@oh-my-pi/pi-utils": "workspace:*",
         "@sinclair/typebox": "^0.34",
+        "@spell/pi-natives": "workspace:*",
+        "@spell/pi-utils": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "^1.3",
       },
     },
     "packages/qml": {
-      "name": "@oh-my-pi/pi-qml",
+      "name": "@spell/pi-qml",
       "version": "0.1.0",
       "dependencies": {
-        "@oh-my-pi/pi-utils": "workspace:*",
+        "@spell/pi-utils": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "^1.3",
       },
     },
     "packages/qml-remote": {
-      "name": "@oh-my-pi/pi-qml-remote",
+      "name": "@spell/pi-qml-remote",
       "version": "0.1.0",
       "dependencies": {
-        "@oh-my-pi/pi-qml": "workspace:*",
-        "@oh-my-pi/pi-utils": "workspace:*",
+        "@spell/pi-qml": "workspace:*",
+        "@spell/pi-utils": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "^1.3",
       },
     },
     "packages/react-edit-benchmark": {
-      "name": "@oh-my-pi/react-edit-benchmark",
+      "name": "@spell/react-edit-benchmark",
       "version": "0.0.1",
       "bin": {
         "react-edit-benchmark": "src/index.ts",
@@ -183,9 +184,11 @@
         "@babel/parser": "^7.29",
         "@babel/traverse": "^7.29",
         "@babel/types": "^7.29",
-        "@oh-my-pi/pi-agent-core": "workspace:*",
-        "@oh-my-pi/pi-coding-agent": "workspace:*",
-        "@oh-my-pi/pi-utils": "workspace:*",
+        "@spell/pi-agent-core": "workspace:*",
+        "@spell/pi-ai": "workspace:*",
+        "@spell/pi-coding-agent": "workspace:*",
+        "@spell/pi-tui": "workspace:*",
+        "@spell/pi-utils": "workspace:*",
         "diff": "^8.0",
         "prettier": "^3.8",
         "regexp-tree": "^0.1",
@@ -197,25 +200,28 @@
       },
     },
     "packages/spell-deploy": {
-      "name": "@oh-my-pi/spell-deploy",
+      "name": "@spell/spell-deploy",
       "version": "0.1.0",
+      "bin": {
+        "spell-deploy": "./src/cli/main.ts",
+      },
       "dependencies": {
         "@bgotink/kdl": "^0.4",
-        "@oh-my-pi/pi-utils": "workspace:*",
+        "@spell/pi-utils": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "^1.3",
       },
     },
     "packages/spell-server": {
-      "name": "@oh-my-pi/spell-server",
+      "name": "@spell/spell-server",
       "version": "0.1.0",
       "bin": {
         "spell-server": "./src/main.ts",
       },
       "dependencies": {
         "@bgotink/kdl": "^0.4",
-        "@oh-my-pi/pi-utils": "workspace:*",
+        "@spell/pi-utils": "workspace:*",
         "croner": "^9.0",
         "grammy": "^1.35",
         "handlebars": "4.7.9",
@@ -227,13 +233,13 @@
       },
     },
     "packages/spell-team-chat": {
-      "name": "@oh-my-pi/spell-team-chat",
+      "name": "@spell/spell-team-chat",
       "version": "0.1.0",
       "bin": {
         "spell-team-chat": "./bin/spell-team-chat.ts",
       },
       "dependencies": {
-        "@oh-my-pi/spell-server": "workspace:*",
+        "@spell/spell-server": "workspace:*",
       },
       "devDependencies": {
         "@sveltejs/vite-plugin-svelte": "^5.0.3",
@@ -246,14 +252,14 @@
       },
     },
     "packages/stats": {
-      "name": "@oh-my-pi/spell-stats",
+      "name": "@spell/spell-stats",
       "version": "13.12.8",
       "bin": {
         "spell-stats": "./src/index.ts",
       },
       "dependencies": {
-        "@oh-my-pi/pi-ai": "workspace:*",
-        "@oh-my-pi/pi-utils": "workspace:*",
+        "@spell/pi-ai": "workspace:*",
+        "@spell/pi-utils": "workspace:*",
         "@tailwindcss/node": "^4.2",
         "chart.js": "^4.5",
         "date-fns": "^4.1",
@@ -271,27 +277,28 @@
       },
     },
     "packages/swarm-extension": {
-      "name": "@oh-my-pi/swarm-extension",
+      "name": "@spell/swarm-extension",
       "version": "13.12.8",
       "bin": {
         "spell-swarm": "src/cli.ts",
       },
       "dependencies": {
         "@bgotink/kdl": "^0.4",
+        "@spell/pi-utils": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "^1.3",
       },
       "peerDependencies": {
-        "@oh-my-pi/pi-coding-agent": "^13",
+        "@spell/pi-coding-agent": "workspace:*",
       },
     },
     "packages/tui": {
-      "name": "@oh-my-pi/pi-tui",
+      "name": "@spell/pi-tui",
       "version": "13.12.8",
       "dependencies": {
-        "@oh-my-pi/pi-natives": "workspace:*",
-        "@oh-my-pi/pi-utils": "workspace:*",
+        "@spell/pi-natives": "workspace:*",
+        "@spell/pi-utils": "workspace:*",
         "marked": "^17.0",
       },
       "devDependencies": {
@@ -300,7 +307,7 @@
       },
     },
     "packages/utils": {
-      "name": "@oh-my-pi/pi-utils",
+      "name": "@spell/pi-utils",
       "version": "13.12.8",
       "dependencies": {
         "beautiful-mermaid": "^1.1",
@@ -308,6 +315,7 @@
         "winston-daily-rotate-file": "^5.0",
       },
       "devDependencies": {
+        "@spell/pi-natives": "workspace:*",
         "@types/bun": "^1.3",
       },
     },
@@ -503,44 +511,6 @@
 
     "@mozilla/readability": ["@mozilla/readability@0.6.0", "", {}, "sha512-juG5VWh4qAivzTAeMzvY9xs9HY5rAcr2E4I7tiSSCokRFi7XIZCAu92ZkSTsIj1OPceCifL3cpfteP3pDT9/QQ=="],
 
-    "@oh-my-pi/pi-agent-core": ["@oh-my-pi/pi-agent-core@workspace:packages/agent"],
-
-    "@oh-my-pi/pi-ai": ["@oh-my-pi/pi-ai@workspace:packages/ai"],
-
-    "@oh-my-pi/pi-coding-agent": ["@oh-my-pi/pi-coding-agent@workspace:packages/coding-agent"],
-
-    "@oh-my-pi/pi-desktop-common": ["@oh-my-pi/pi-desktop-common@workspace:packages/desktop-common"],
-
-    "@oh-my-pi/pi-gateway": ["@oh-my-pi/pi-gateway@workspace:packages/gateway"],
-
-    "@oh-my-pi/pi-macos": ["@oh-my-pi/pi-macos@workspace:packages/macos"],
-
-    "@oh-my-pi/pi-natives": ["@oh-my-pi/pi-natives@workspace:packages/natives"],
-
-    "@oh-my-pi/pi-niri": ["@oh-my-pi/pi-niri@workspace:packages/niri"],
-
-    "@oh-my-pi/pi-org": ["@oh-my-pi/pi-org@workspace:packages/org"],
-
-    "@oh-my-pi/pi-qml": ["@oh-my-pi/pi-qml@workspace:packages/qml"],
-
-    "@oh-my-pi/pi-qml-remote": ["@oh-my-pi/pi-qml-remote@workspace:packages/qml-remote"],
-
-    "@oh-my-pi/pi-tui": ["@oh-my-pi/pi-tui@workspace:packages/tui"],
-
-    "@oh-my-pi/pi-utils": ["@oh-my-pi/pi-utils@workspace:packages/utils"],
-
-    "@oh-my-pi/react-edit-benchmark": ["@oh-my-pi/react-edit-benchmark@workspace:packages/react-edit-benchmark"],
-
-    "@oh-my-pi/spell-deploy": ["@oh-my-pi/spell-deploy@workspace:packages/spell-deploy"],
-
-    "@oh-my-pi/spell-server": ["@oh-my-pi/spell-server@workspace:packages/spell-server"],
-
-    "@oh-my-pi/spell-stats": ["@oh-my-pi/spell-stats@workspace:packages/stats"],
-
-    "@oh-my-pi/spell-team-chat": ["@oh-my-pi/spell-team-chat@workspace:packages/spell-team-chat"],
-
-    "@oh-my-pi/swarm-extension": ["@oh-my-pi/swarm-extension@workspace:packages/swarm-extension"],
-
     "@pkgjs/parseargs": ["@pkgjs/parseargs@0.11.0", "", {}, "sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg=="],
 
     "@protobufjs/aspromise": ["@protobufjs/aspromise@1.1.2", "", {}, "sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ=="],
@@ -724,6 +694,44 @@
     "@smithy/uuid": ["@smithy/uuid@1.1.2", "", { "dependencies": { "tslib": "^2.6.2" } }, "sha512-O/IEdcCUKkubz60tFbGA7ceITTAJsty+lBjNoorP4Z6XRqaFb/OjQjZODophEcuq68nKm6/0r+6/lLQ+XVpk8g=="],
 
     "@so-ric/colorspace": ["@so-ric/colorspace@1.1.6", "", { "dependencies": { "color": "^5.0.2", "text-hex": "1.0.x" } }, "sha512-/KiKkpHNOBgkFJwu9sh48LkHSMYGyuTcSFK/qMBdnOAlrRJzRSXAOFB5qwzaVQuDl8wAvHVMkaASQDReTahxuw=="],
+
+    "@spell/pi-agent-core": ["@spell/pi-agent-core@workspace:packages/agent"],
+
+    "@spell/pi-ai": ["@spell/pi-ai@workspace:packages/ai"],
+
+    "@spell/pi-coding-agent": ["@spell/pi-coding-agent@workspace:packages/coding-agent"],
+
+    "@spell/pi-desktop-common": ["@spell/pi-desktop-common@workspace:packages/desktop-common"],
+
+    "@spell/pi-gateway": ["@spell/pi-gateway@workspace:packages/gateway"],
+
+    "@spell/pi-macos": ["@spell/pi-macos@workspace:packages/macos"],
+
+    "@spell/pi-natives": ["@spell/pi-natives@workspace:packages/natives"],
+
+    "@spell/pi-niri": ["@spell/pi-niri@workspace:packages/niri"],
+
+    "@spell/pi-org": ["@spell/pi-org@workspace:packages/org"],
+
+    "@spell/pi-qml": ["@spell/pi-qml@workspace:packages/qml"],
+
+    "@spell/pi-qml-remote": ["@spell/pi-qml-remote@workspace:packages/qml-remote"],
+
+    "@spell/pi-tui": ["@spell/pi-tui@workspace:packages/tui"],
+
+    "@spell/pi-utils": ["@spell/pi-utils@workspace:packages/utils"],
+
+    "@spell/react-edit-benchmark": ["@spell/react-edit-benchmark@workspace:packages/react-edit-benchmark"],
+
+    "@spell/spell-deploy": ["@spell/spell-deploy@workspace:packages/spell-deploy"],
+
+    "@spell/spell-server": ["@spell/spell-server@workspace:packages/spell-server"],
+
+    "@spell/spell-stats": ["@spell/spell-stats@workspace:packages/stats"],
+
+    "@spell/spell-team-chat": ["@spell/spell-team-chat@workspace:packages/spell-team-chat"],
+
+    "@spell/swarm-extension": ["@spell/swarm-extension@workspace:packages/swarm-extension"],
 
     "@sveltejs/acorn-typescript": ["@sveltejs/acorn-typescript@1.0.9", "", { "peerDependencies": { "acorn": "^8.9.0" } }, "sha512-lVJX6qEgs/4DOcRTpo56tmKzVPtoWAaVbL4hfO7t7NVwl9AAXzQR6cihesW1BmNMPl+bK6dreu2sOKBP2Q9CIA=="],
 

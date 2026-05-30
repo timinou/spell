@@ -1,9 +1,9 @@
-import { getImageDimensions, TERMINAL } from "@oh-my-pi/pi-tui";
-import { Image } from "@oh-my-pi/pi-tui/components/image";
-import { Spacer } from "@oh-my-pi/pi-tui/components/spacer";
-import { Text } from "@oh-my-pi/pi-tui/components/text";
-import { ProcessTerminal } from "@oh-my-pi/pi-tui/terminal";
-import { TUI } from "@oh-my-pi/pi-tui/tui";
+import { getImageDimensions, TERMINAL } from "@spell/pi-tui";
+import { Image } from "@spell/pi-tui/components/image";
+import { Spacer } from "@spell/pi-tui/components/spacer";
+import { Text } from "@spell/pi-tui/components/text";
+import { ProcessTerminal } from "@spell/pi-tui/terminal";
+import { TUI } from "@spell/pi-tui/tui";
 
 const testImagePath = Bun.argv[2] || "/tmp/test-image.png";
 

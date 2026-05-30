@@ -1,10 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { WindowInfo } from "@oh-my-pi/pi-qml";
-import { bridgeBinaryPath, isBridgeAvailable, QmlBridge } from "@oh-my-pi/pi-qml";
-import type { RemoteQmlBridge } from "@oh-my-pi/pi-qml-remote";
-import { logger } from "@oh-my-pi/pi-utils";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@spell/pi-agent-core";
+import type { WindowInfo } from "@spell/pi-qml";
+import { bridgeBinaryPath, isBridgeAvailable, QmlBridge } from "@spell/pi-qml";
+import type { RemoteQmlBridge } from "@spell/pi-qml-remote";
+import { logger } from "@spell/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import type { ServiceCommand } from "../browser/service-protocol";
 import { isServiceCommand } from "../browser/service-protocol";

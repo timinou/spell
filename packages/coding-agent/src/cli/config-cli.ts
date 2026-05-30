@@ -5,7 +5,7 @@
  * Uses the settings schema as the source of truth for available settings.
  */
 
-import { APP_NAME, getAgentDir } from "@oh-my-pi/pi-utils";
+import { APP_NAME, getAgentDir } from "@spell/pi-utils";
 import chalk from "chalk";
 import {
 	getDefault,
@@ -428,7 +428,7 @@ ${chalk.bold("Boolean Values:")}
 // =============================================================================
 
 async function handleShow(_flags: { json?: boolean }): Promise<void> {
-	const { getUserKdlPath, getLocalKdlPath, getProjectKdlPath } = await import("@oh-my-pi/pi-utils");
+	const { getUserKdlPath, getLocalKdlPath, getProjectKdlPath } = await import("@spell/pi-utils");
 	const { default: fs } = await import("node:fs/promises");
 
 	const tiers: Array<{ name: string; path: string }> = [

@@ -1,4 +1,4 @@
-export { bridgeBinaryPath, isBridgeAvailable, isDisplayAvailable, QmlBridge } from "@oh-my-pi/pi-qml";
+export { bridgeBinaryPath, isBridgeAvailable, isDisplayAvailable, QmlBridge } from "@spell/pi-qml";
 
 import { HookEditorComponent, HookInputComponent, HookSelectorComponent } from "./modes/components";
 
@@ -6,11 +6,11 @@ import { HookEditorComponent, HookInputComponent, HookSelectorComponent } from "
 
 // TypeBox helper for string enums (convenience for custom tools)
 // Re-export from pi-ai which uses the correct enum-based schema format
-export { StringEnum } from "@oh-my-pi/pi-ai";
+export { StringEnum } from "@spell/pi-ai";
 // Re-export TUI components for custom tool rendering
-export { Container, Markdown, Spacer, Text } from "@oh-my-pi/pi-tui";
+export { Container, Markdown, Spacer, Text } from "@spell/pi-tui";
 // Logging
-export { getAgentDir, logger, VERSION } from "@oh-my-pi/pi-utils";
+export { getAgentDir, logger, VERSION } from "@spell/pi-utils";
 export * from "./config/keybindings";
 export * from "./config/model-registry";
 export type * from "./config/project-detection";

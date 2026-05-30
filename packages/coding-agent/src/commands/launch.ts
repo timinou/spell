@@ -2,7 +2,7 @@
  * Root command for the coding agent CLI.
  */
 
-import { Command } from "@oh-my-pi/pi-utils/cli";
+import { Command } from "@spell/pi-utils/cli";
 import { parseArgs } from "../cli/args";
 import { runRootCommand } from "../main";
 import { launchExamples, launchFlags, launchMessageArgs } from "./launch-common";

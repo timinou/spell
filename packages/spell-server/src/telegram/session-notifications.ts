@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import * as path from "node:path";
 import type { TelegramChannelConfig } from "../config/types";
 import type { NotificationSender } from "../hooks/notification-sender";

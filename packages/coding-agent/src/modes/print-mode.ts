@@ -5,7 +5,7 @@
  * - `spell -p "prompt"` - text output
  * - `spell --mode json "prompt"` - JSON event stream
  */
-import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent } from "@spell/pi-ai";
 import type { AgentSession } from "../session/agent-session";
 import { warmMemoryLane } from "../tools/memory";
 

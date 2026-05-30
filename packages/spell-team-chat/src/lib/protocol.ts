@@ -1,5 +1,5 @@
 /**
- * Wire types mirroring `@oh-my-pi/spell-server/web/ws/protocol`.
+ * Wire types mirroring `@spell/spell-server/web/ws/protocol`.
  * Kept hand-rolled here to avoid pulling the full server package into the
  * browser bundle. When the server types drift, update both sides together.
  */

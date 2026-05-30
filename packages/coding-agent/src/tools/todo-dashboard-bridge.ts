@@ -6,7 +6,7 @@
  * gate toggle control messages from QML.
  */
 
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { EventBus } from "../utils/event-bus";
 import type { TodoGroup } from "./todo-write";
 import { hasGate, isTaskBlocked } from "./todo-write";

@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import type { ToolResultMessage } from "@oh-my-pi/pi-ai";
+import type { ToolResultMessage } from "@spell/pi-ai";
 
 export type ContextPressureCategory =
 	| "precision"

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { renderPromptTemplate } from "@oh-my-pi/pi-coding-agent/config/prompt-templates";
-import planModeApprovedPrompt from "@oh-my-pi/pi-coding-agent/prompts/system/plan-mode-approved.md" with {
+import { renderPromptTemplate } from "@spell/pi-coding-agent/config/prompt-templates";
+import planModeApprovedPrompt from "@spell/pi-coding-agent/prompts/system/plan-mode-approved.md" with {
 	type: "text",
 };
 

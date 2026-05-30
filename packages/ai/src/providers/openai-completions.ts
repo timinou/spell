@@ -1,4 +1,4 @@
-import { $env } from "@oh-my-pi/pi-utils";
+import { $env } from "@spell/pi-utils";
 import OpenAI from "openai";
 import type {
 	ChatCompletionAssistantMessageParam,

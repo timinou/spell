@@ -1,4 +1,4 @@
-# @oh-my-pi/spell-stats
+# @spell/spell-stats
 
 Local observability dashboard for AI usage statistics.
 
@@ -41,7 +41,7 @@ spell stats --json
 ### Programmatic
 
 ```typescript
-import { getDashboardStats, syncAllSessions } from "@oh-my-pi/spell-stats";
+import { getDashboardStats, syncAllSessions } from "@spell/spell-stats";
 
 // Sync session logs to database
 const { processed, files } = await syncAllSessions();

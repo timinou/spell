@@ -1,18 +1,18 @@
 {
 	"type": "module",
-	"name": "@oh-my-pi/pi-org",
+	"name": "@spell/pi-org",
 	"version": "13.10.1",
 	"description": "Org-mode project management system for Pi",
-	"homepage": "https://github.com/can1357/oh-my-pi",
+	"homepage": "https://github.com/timinou/spell",
 	"author": "Can Boluk",
 	"license": "GPL-3.0-only",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/can1357/oh-my-pi.git",
+		"url": "git+https://github.com/timinou/spell.git",
 		"directory": "packages/org"
 	},
 	"bugs": {
-		"url": "https://github.com/can1357/oh-my-pi/issues"
+		"url": "https://github.com/timinou/spell/issues"
 	},
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",
@@ -22,8 +22,8 @@
 		"test": "bun test"
 	},
 	"dependencies": {
-		"@oh-my-pi/pi-natives": "workspace:*",
-		"@oh-my-pi/pi-utils": "workspace:*",
+		"@spell/pi-natives": "workspace:*",
+		"@spell/pi-utils": "workspace:*",
 		"@sinclair/typebox": "^0.34"
 	},
 	"devDependencies": {

@@ -1,4 +1,4 @@
-import { extractIdLinks, parseSubOutlineId } from "@oh-my-pi/pi-org";
+import { extractIdLinks, parseSubOutlineId } from "@spell/pi-org";
 import type { Settings } from "../config/settings";
 import { buildDependencyGraph, parseOrgDependProperties } from "../loop/ingestion/org-depend";
 import { resolvePlanItem } from "./org-plan";

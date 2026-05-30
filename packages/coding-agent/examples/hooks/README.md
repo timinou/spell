@@ -34,7 +34,7 @@ cp permission-gate.ts ~/.spell/agent/hooks/
 See [docs/hooks.md](../../docs/hooks.md) for full documentation.
 
 ```typescript
-import type { HookAPI } from "@oh-my-pi/pi-coding-agent/hooks";
+import type { HookAPI } from "@spell/pi-coding-agent/hooks";
 
 export default function (pi: HookAPI) {
 	// Subscribe to events

@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { type Node, parse } from "@bgotink/kdl";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@spell/pi-utils";
 import { resolveEnvString } from "./env-resolver";
 import type {
 	SummarizeConfig,

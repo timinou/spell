@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { SessionBridgeClient } from "./client";
 import type { BlockingEventPayload, EventResponsePayload } from "./types";
 

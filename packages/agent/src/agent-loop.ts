@@ -9,8 +9,8 @@ import {
 	streamSimple,
 	type ToolResultMessage,
 	validateToolArguments,
-} from "@oh-my-pi/pi-ai";
-import { logger } from "@oh-my-pi/pi-utils";
+} from "@spell/pi-ai";
+import { logger } from "@spell/pi-utils";
 import type {
 	AgentContext,
 	AgentEvent,

@@ -7,7 +7,7 @@ import {
 	computeHashlineDiff,
 	DEFAULT_FUZZY_THRESHOLD,
 	findMatch,
-} from "@oh-my-pi/pi-coding-agent/patch";
+} from "@spell/pi-coding-agent/patch";
 
 describe("findMatch", () => {
 	describe("exact matching", () => {

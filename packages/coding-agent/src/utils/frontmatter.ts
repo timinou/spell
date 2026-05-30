@@ -1,6 +1,6 @@
 import type { Document, Node } from "@bgotink/kdl";
 import { parse as parseKdl } from "@bgotink/kdl";
-import { logger, truncate } from "@oh-my-pi/pi-utils";
+import { logger, truncate } from "@spell/pi-utils";
 import { YAML } from "bun";
 
 function stripHtmlComments(content: string): string {

@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import { Bot, type Context, type MiddlewareFn } from "grammy";
 import type { OperatorActionHandler } from "../../http/routes/operator-actions";
 import type { RpcEvent } from "../../rpc/types";

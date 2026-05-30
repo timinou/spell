@@ -12,8 +12,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import { getThemeByName } from "@spell/pi-coding-agent/modes/theme/theme";
 import type { ToolSession } from "../../src/tools";
 import type { FormatSummaryOptions, TodoGroup, TodoItem, TodoStatus } from "../../src/tools/todo-write";
 import {

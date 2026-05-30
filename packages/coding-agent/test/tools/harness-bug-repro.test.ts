@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { evaluateWriteGuards } from "@oh-my-pi/pi-coding-agent/tools/managed-buffer-guards";
+import { evaluateWriteGuards } from "@spell/pi-coding-agent/tools/managed-buffer-guards";
 
 function bigParseableSource() {
 	const lines: string[] = [];

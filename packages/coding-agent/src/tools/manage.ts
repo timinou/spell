@@ -1,6 +1,6 @@
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { executeCodePath } from "@oh-my-pi/pi-natives";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@spell/pi-agent-core";
+import type { Component } from "@spell/pi-tui";
+import { executeCodePath } from "@spell/pi-natives";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import manageDescription from "../prompts/tools/manage.md" with { type: "text" };

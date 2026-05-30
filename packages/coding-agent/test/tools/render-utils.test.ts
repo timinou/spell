@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { dedupeParseErrors, formatParseErrors } from "@oh-my-pi/pi-coding-agent/tools/render-utils";
+import { dedupeParseErrors, formatParseErrors } from "@spell/pi-coding-agent/tools/render-utils";
 
 describe("parse error formatting", () => {
 	it("deduplicates parse errors while preserving order", () => {

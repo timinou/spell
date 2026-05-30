@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@spell/pi-utils";
 import type { ServiceEntry, ServiceRegistryFile } from "./types";
 
 const DEFAULT_REGISTRY_PATH = path.join(os.homedir(), ".spell", "browser", "services.json");

@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { BridgeState, ChatSession } from "../rpc/bridge-types";
 import { RpcClient } from "../rpc/rpc-client";
 import { loadBridgeState, saveBridgeState } from "../rpc/state";

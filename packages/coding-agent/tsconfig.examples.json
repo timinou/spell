@@ -3,10 +3,10 @@
 	"compilerOptions": {
 		"noEmit": true,
 		"paths": {
-			"@oh-my-pi/pi-coding-agent": ["./src/index.ts"],
-			"@oh-my-pi/pi-coding-agent/hooks": ["./src/extensibility/hooks/index.ts"],
-			"@oh-my-pi/pi-tui": ["../tui/src/index.ts"],
-			"@oh-my-pi/pi-ai": ["../ai/src/index.ts"],
+			"@spell/pi-coding-agent": ["./src/index.ts"],
+			"@spell/pi-coding-agent/hooks": ["./src/extensibility/hooks/index.ts"],
+			"@spell/pi-tui": ["../tui/src/index.ts"],
+			"@spell/pi-ai": ["../ai/src/index.ts"],
 			"@sinclair/typebox": ["../../node_modules/@sinclair/typebox"]
 		},
 		"skipLibCheck": true

@@ -1,13 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { type AssistantMessage, createToolCallStreamDiagnostic } from "@oh-my-pi/pi-ai";
+import { type AssistantMessage, createToolCallStreamDiagnostic } from "@spell/pi-ai";
 import {
 	loadEntriesFromFile,
 	SessionManager,
 	type SessionMessageEntry,
-} from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { getBlobsDir, TempDir } from "@oh-my-pi/pi-utils";
+} from "@spell/pi-coding-agent/session/session-manager";
+import { getBlobsDir, TempDir } from "@spell/pi-utils";
 
 function isAssistantSessionEntry(entry: unknown): entry is SessionMessageEntry & { message: AssistantMessage } {
 	return (

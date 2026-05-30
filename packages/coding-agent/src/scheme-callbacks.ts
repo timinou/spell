@@ -15,7 +15,7 @@ import {
 	listRegisteredSchemes,
 	registerSchemeCallback,
 	unregisterSchemeCallback,
-} from "@oh-my-pi/pi-natives";
+} from "@spell/pi-natives";
 
 /**
  * Schemes the kernel reserves (declarative profiles in

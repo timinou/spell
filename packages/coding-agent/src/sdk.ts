@@ -8,12 +8,12 @@ import {
 	type AgentToolResult,
 	INTENT_FIELD,
 	type ThinkingLevel,
-} from "@oh-my-pi/pi-agent-core";
-import type { Message, Model, SystemPromptBlock } from "@oh-my-pi/pi-ai";
-import { prewarmOpenAICodexResponses } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
-import { GatewayClient } from "@oh-my-pi/pi-gateway";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { $env, getAgentDbPath, getAgentDir, getProjectDir, logger, postmortem } from "@oh-my-pi/pi-utils";
+} from "@spell/pi-agent-core";
+import type { Message, Model, SystemPromptBlock } from "@spell/pi-ai";
+import { prewarmOpenAICodexResponses } from "@spell/pi-ai/providers/openai-codex-responses";
+import { GatewayClient } from "@spell/pi-gateway";
+import type { Component } from "@spell/pi-tui";
+import { $env, getAgentDbPath, getAgentDir, getProjectDir, logger, postmortem } from "@spell/pi-utils";
 import chalk from "chalk";
 import { AsyncJobManager } from "./async";
 import { loadCapability } from "./capability";
@@ -630,7 +630,7 @@ function buildMCPPromptCommands(manager: MCPManager): LoadedCustomCommand[] {
  * const { session } = await createAgentSession();
  *
  * // With explicit model
- * import { getModel } from '@oh-my-pi/pi-ai';
+ * import { getModel } from '@spell/pi-ai';
  * const { session } = await createAgentSession({
  *   model: getModel('anthropic', 'claude-opus-4-5'),
  *   thinkingLevel: 'high',

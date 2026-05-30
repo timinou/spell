@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
-import { type AssistantMessage, createToolCallStreamDiagnostic } from "@oh-my-pi/pi-ai";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { Agent } from "@spell/pi-agent-core";
+import { type AssistantMessage, createToolCallStreamDiagnostic } from "@spell/pi-ai";
+import { getBundledModel } from "@spell/pi-ai/models";
+import { TempDir } from "@spell/pi-utils";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import { AgentSession } from "../src/session/agent-session";

@@ -1,4 +1,4 @@
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@spell/pi-utils";
 import type { FileSink, Subprocess } from "bun";
 import type { BridgeRpcCommand, ImageContentRef, RpcEvent, RpcSpawnOptions } from "./types";
 

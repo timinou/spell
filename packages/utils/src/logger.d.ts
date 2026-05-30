@@ -6,7 +6,7 @@
  *
  * @example
  * ```typescript
- * import { logger } from "@oh-my-pi/pi-utils";
+ * import { logger } from "@spell/pi-utils";
  *
  * logger.error("MCP request failed", { url, method });
  * logger.warn("Theme file invalid, using fallback", { path });

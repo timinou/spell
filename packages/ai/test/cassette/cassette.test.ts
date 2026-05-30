@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { cassetteFetch } from "@oh-my-pi/pi-ai/cassette";
+import { cassetteFetch } from "@spell/pi-ai/cassette";
 
 async function tmpDir(): Promise<string> {
 	const dir = path.join(import.meta.dir, ".tmp-cassettes", `${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -113,7 +113,7 @@ describe("cassette", () => {
 	});
 
 	it("fingerprint stability", async () => {
-		const { defaultFingerprint } = await import("@oh-my-pi/pi-ai/cassette/match");
+		const { defaultFingerprint } = await import("@spell/pi-ai/cassette/match");
 
 		const req1 = new Request("http://example.com/api", {
 			method: "POST",

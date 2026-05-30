@@ -10,7 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import type { KnowledgeEvent } from "@oh-my-pi/pi-natives";
+import type { KnowledgeEvent } from "@spell/pi-natives";
 import { MemoryStatusController } from "../../../src/modes/controllers/memory-status-controller";
 import type { MemoryProgressSnapshot } from "../../../src/tools/memory";
 import type { InteractiveModeContext } from "../../../src/modes/types";

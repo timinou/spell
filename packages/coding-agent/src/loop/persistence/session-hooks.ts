@@ -1,5 +1,5 @@
 import * as fs from "node:fs/promises";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent } from "@spell/pi-utils";
 import type { LoopSnapshot } from "../types";
 import { loadLoopState } from "./checkpoint";
 import { readLoopEvents, replayLoopEvents } from "./event-log";

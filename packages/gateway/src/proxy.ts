@@ -9,7 +9,7 @@
  * - WebSocket upgrade passthrough
  * - Proper error responses (400, 404, 502, 503, 504)
  */
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { Server } from "bun";
 import type { ProcessManager } from "./process-manager";
 import type { GatewayRegistry } from "./registry";

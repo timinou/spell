@@ -1,9 +1,9 @@
 import * as path from "node:path";
-import type { AgentStatusContext, SnapshotContext, TodoPhaseView } from "@oh-my-pi/pi-desktop-common";
-import { buildOverviewSnapshot, deriveAgentStatus, StatusFileWriter } from "@oh-my-pi/pi-desktop-common";
-import type { ImageProtocol, OverlayHandle } from "@oh-my-pi/pi-tui";
-import { clearImagePlacements, setTerminalImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
-import { logger } from "@oh-my-pi/pi-utils";
+import type { AgentStatusContext, SnapshotContext, TodoPhaseView } from "@spell/pi-desktop-common";
+import { buildOverviewSnapshot, deriveAgentStatus, StatusFileWriter } from "@spell/pi-desktop-common";
+import type { ImageProtocol, OverlayHandle } from "@spell/pi-tui";
+import { clearImagePlacements, setTerminalImageProtocol, TERMINAL } from "@spell/pi-tui";
+import { logger } from "@spell/pi-utils";
 import { withLargerFont } from "./font-scaling";
 import { NiriEventStream } from "./ipc";
 import { queryFocusedWorkspace, queryNiriFocusedWindowId } from "./niri-query";
@@ -17,7 +17,7 @@ export type { TodoItemSnapshot, TodoPhaseSnapshot };
 /**
  * Minimal interface that the interactive mode must satisfy to drive the
  * Niri overview controller. Using a narrow interface keeps the niri package
- * free of a hard dependency on @oh-my-pi/pi-coding-agent.
+ * free of a hard dependency on @spell/pi-coding-agent.
  */
 export interface NiriOverviewContext {
 	/** TUI instance — used to show/hide the overlay. */

@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { parse } from "@bgotink/kdl";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent } from "@spell/pi-utils";
 import { createBuiltinActionRegistry } from "../actions";
 import type { ActionRegistry } from "../actions/registry";
 import { type ParseManifestOptions, parseManifestModuleDocument } from "./parser";

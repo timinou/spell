@@ -17,7 +17,7 @@
  * missing ones.
  */
 import { describe, expect, it } from "bun:test";
-import { FocusRenderThrottle } from "@oh-my-pi/pi-coding-agent/modes/focus-render-throttle";
+import { FocusRenderThrottle } from "@spell/pi-coding-agent/modes/focus-render-throttle";
 
 interface Probe {
 	throttle: FocusRenderThrottle;

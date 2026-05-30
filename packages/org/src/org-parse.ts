@@ -1,4 +1,4 @@
-import { executeOrg } from "@oh-my-pi/pi-natives";
+import { executeOrg } from "@spell/pi-natives";
 
 export interface OrgHeading {
 	level: number;

@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@spell/pi-utils";
 
 export type ProjectLanguage = "typescript" | "javascript" | "rust" | "python" | "go" | "unknown";
 

@@ -1,6 +1,6 @@
 # Spell Web Dashboard
 
-The web dashboard ships inside `@oh-my-pi/spell-server`. It surfaces a single
+The web dashboard ships inside `@spell/spell-server`. It surfaces a single
 HTTP/WS endpoint at `/web/*` so a small group of authenticated humans can
 drive `spell-server` and its sessions from a browser.
 

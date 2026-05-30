@@ -1,17 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { type Component, TUI } from "@oh-my-pi/pi-tui";
+import { type Component, TUI } from "@spell/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 class StaticComponent implements Component {
 	#lines: string[];
 	#renderCount = 0;
-	#parent?: import("@oh-my-pi/pi-tui").Container;
+	#parent?: import("@spell/pi-tui").Container;
 
 	constructor(lines: string[]) {
 		this.#lines = [...lines];
 	}
 
-	setParent(p: import("@oh-my-pi/pi-tui").Container | undefined): void {
+	setParent(p: import("@spell/pi-tui").Container | undefined): void {
 		this.#parent = p;
 	}
 

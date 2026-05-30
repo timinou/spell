@@ -2,7 +2,7 @@
  * Markdown report generator for edit benchmark results.
  */
 
-import { formatDuration, formatPercent, truncate } from "@oh-my-pi/pi-utils";
+import { formatDuration, formatPercent, truncate } from "@spell/pi-utils";
 import type { BenchmarkResult, TaskResult } from "./runner";
 
 function getStatusEmoji(successRate: number, runsPerTask: number): string {

@@ -5,7 +5,7 @@
  * Each log entry includes process.pid for traceability.
  */
 import * as fs from "node:fs";
-import { RingBuffer } from "@oh-my-pi/pi-utils/ring";
+import { RingBuffer } from "@spell/pi-utils/ring";
 import winston from "winston";
 import DailyRotateFile from "winston-daily-rotate-file";
 import { getLogsDir } from "./dirs";

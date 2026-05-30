@@ -1,11 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import type { Message, ToolResultMessage } from "@oh-my-pi/pi-ai";
+import type { Message, ToolResultMessage } from "@spell/pi-ai";
 import {
 	buildIntentionSummaryContent,
 	hoistInterleavedToolResults,
 	INTENTION_SUMMARY_MESSAGE_TYPE,
 	type IntentionSummaryDetails,
-} from "@oh-my-pi/pi-coding-agent/session/messages";
+} from "@spell/pi-coding-agent/session/messages";
 
 // Minimal Message factories for pairing-invariant tests.
 function toolResult(id: string): ToolResultMessage {

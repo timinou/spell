@@ -1,5 +1,5 @@
 import { Anthropic } from "@anthropic-ai/sdk";
-import { abortableSleep } from "@oh-my-pi/pi-utils";
+import { abortableSleep } from "@spell/pi-utils";
 import { calculateCost } from "../models";
 import { getEnvApiKey } from "../stream";
 import type {

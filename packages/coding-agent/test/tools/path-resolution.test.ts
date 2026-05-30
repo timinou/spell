@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	detectCwdPrefixDuplication,
 	formatCwdPrefixDuplicationMessage,
-} from "@oh-my-pi/pi-coding-agent/tools/path-resolution";
+} from "@spell/pi-coding-agent/tools/path-resolution";
 
 describe("detectCwdPrefixDuplication", () => {
 	it("detects single-segment overlap", () => {
@@ -75,7 +75,7 @@ describe("formatCwdPrefixDuplicationMessage", () => {
 	});
 });
 
-import { resolveCwdRelativePath } from "@oh-my-pi/pi-coding-agent/tools/path-resolution";
+import { resolveCwdRelativePath } from "@spell/pi-coding-agent/tools/path-resolution";
 
 describe("resolveCwdRelativePath", () => {
 	const cwd = "/proj/apps/foo";

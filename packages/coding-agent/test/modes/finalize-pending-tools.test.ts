@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import type { TUI } from "@oh-my-pi/pi-tui";
+import type { TUI } from "@spell/pi-tui";
 import { ToolExecutionComponent } from "../../src/modes/components/tool-execution";
 import { initTheme } from "../../src/modes/theme/theme";
 

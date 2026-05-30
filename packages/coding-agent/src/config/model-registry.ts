@@ -23,8 +23,8 @@ import {
 	type ThinkingConfig,
 	unregisterCustomApis,
 	unregisterOAuthProviders,
-} from "@oh-my-pi/pi-ai";
-import { isRecord, logger } from "@oh-my-pi/pi-utils";
+} from "@spell/pi-ai";
+import { isRecord, logger } from "@spell/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import type { ConfigError } from "../config";
 import type { ThemeColor } from "../modes/theme/theme";

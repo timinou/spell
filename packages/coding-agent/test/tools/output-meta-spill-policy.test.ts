@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { AgentTool, AgentToolContext, AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import type { AgentTool, AgentToolContext, AgentToolResult } from "@spell/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { Settings } from "../../src/config/settings";
 import { wrapToolWithMetaNotice } from "../../src/tools/output-meta";

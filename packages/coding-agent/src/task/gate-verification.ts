@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent } from "@spell/pi-utils";
 import { $ } from "bun";
 
 export type GateType = "gateCmd" | "gateCommit" | "gateArtifact";

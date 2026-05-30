@@ -16,10 +16,10 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import * as ai from "@oh-my-pi/pi-ai";
-import { Effort } from "@oh-my-pi/pi-ai";
-import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import * as ai from "@spell/pi-ai";
+import { Effort } from "@spell/pi-ai";
+import { _resetSettingsForTest, Settings } from "@spell/pi-coding-agent/config/settings";
+import { Snowflake } from "@spell/pi-utils";
 
 let testDir: string;
 let agentDir: string;

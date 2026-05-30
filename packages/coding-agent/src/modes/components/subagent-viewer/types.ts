@@ -1,4 +1,4 @@
-import type { Container, TUI } from "@oh-my-pi/pi-tui";
+import type { Container, TUI } from "@spell/pi-tui";
 
 export interface SubagentViewerContext {
 	chatContainer: Container;

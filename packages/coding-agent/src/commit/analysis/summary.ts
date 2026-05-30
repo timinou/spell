@@ -1,6 +1,6 @@
-import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
-import { completeSimple, validateToolCall } from "@oh-my-pi/pi-ai";
+import type { ThinkingLevel } from "@spell/pi-agent-core";
+import type { Api, AssistantMessage, Model } from "@spell/pi-ai";
+import { completeSimple, validateToolCall } from "@spell/pi-ai";
 import { Type } from "@sinclair/typebox";
 import summarySystemPrompt from "../../commit/prompts/summary-system.md" with { type: "text" };
 import summaryUserPrompt from "../../commit/prompts/summary-user.md" with { type: "text" };

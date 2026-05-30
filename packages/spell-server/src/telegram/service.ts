@@ -1,6 +1,6 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import { Bot } from "grammy";
 import { TelegramNotificationSender } from "../hooks/notification-sender";
 import type { OperatorActionHandler } from "../http/routes/operator-actions";

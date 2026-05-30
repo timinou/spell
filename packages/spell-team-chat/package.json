@@ -1,10 +1,10 @@
 {
 	"type": "module",
-	"name": "@oh-my-pi/spell-team-chat",
+	"name": "@spell/spell-team-chat",
 	"version": "0.1.0",
 	"private": true,
 	"description": "Spell Team Chat \u2014 multiplayer Svelte UI served by spell-server",
-	"homepage": "https://github.com/can1357/oh-my-pi",
+	"homepage": "https://github.com/timinou/spell",
 	"license": "GPL-3.0-only",
 	"bin": {
 		"spell-team-chat": "./bin/spell-team-chat.ts"
@@ -20,7 +20,7 @@
 		"test:e2e": "bun test test/e2e/ --timeout 120000"
 	},
 	"dependencies": {
-		"@oh-my-pi/spell-server": "workspace:*"
+		"@spell/spell-server": "workspace:*"
 	},
 	"devDependencies": {
 		"@sveltejs/vite-plugin-svelte": "^5.0.3",

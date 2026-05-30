@@ -5,9 +5,9 @@
  * task execution in the terminal UI.
  */
 import path from "node:path";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { Text } from "@oh-my-pi/pi-tui";
-import { formatCost, formatNumber } from "@oh-my-pi/pi-utils";
+import type { Component } from "@spell/pi-tui";
+import { Text } from "@spell/pi-tui";
+import { formatCost, formatNumber } from "@spell/pi-utils";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import {

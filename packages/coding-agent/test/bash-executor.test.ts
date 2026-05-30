@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { executeBash } from "@oh-my-pi/pi-coding-agent/exec/bash-executor";
-import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-coding-agent/session/streaming-output";
-import * as shellSnapshot from "@oh-my-pi/pi-coding-agent/utils/shell-snapshot";
+import { _resetSettingsForTest, Settings } from "@spell/pi-coding-agent/config/settings";
+import { executeBash } from "@spell/pi-coding-agent/exec/bash-executor";
+import { DEFAULT_MAX_BYTES } from "@spell/pi-coding-agent/session/streaming-output";
+import * as shellSnapshot from "@spell/pi-coding-agent/utils/shell-snapshot";
 
 function makeTempDir(): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), "spell-bash-exec-"));

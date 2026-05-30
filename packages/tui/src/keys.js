@@ -17,7 +17,7 @@
  * - setKittyProtocolActive(active) - Set global Kitty protocol state
  * - isKittyProtocolActive() - Query global Kitty protocol state
  */
-import { matchesKey as matchesKeyNative, parseKey as parseKeyNative, parseKittySequence as parseKittySequenceNative, } from "@oh-my-pi/pi-natives";
+import { matchesKey as matchesKeyNative, parseKey as parseKeyNative, parseKittySequence as parseKittySequenceNative, } from "@spell/pi-natives";
 // =============================================================================
 // Global Kitty Protocol State
 // =============================================================================

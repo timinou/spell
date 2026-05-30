@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { AgentMessage } from "@spell/pi-agent-core";
 import {
 	type ImageContent,
 	isToolCallStreamDiagnostic,
@@ -12,9 +12,9 @@ import {
 	type TextContent,
 	type ToolCallStreamDiagnostic,
 	type Usage,
-} from "@oh-my-pi/pi-ai";
-import { validateImage } from "@oh-my-pi/pi-ai/image-validation";
-import { getTerminalId } from "@oh-my-pi/pi-tui";
+} from "@spell/pi-ai";
+import { validateImage } from "@spell/pi-ai/image-validation";
+import { getTerminalId } from "@spell/pi-tui";
 import {
 	getBlobsDir,
 	getAgentDir as getDefaultAgentDir,
@@ -28,7 +28,7 @@ import {
 	resolveEquivalentPath,
 	Snowflake,
 	toError,
-} from "@oh-my-pi/pi-utils";
+} from "@spell/pi-utils";
 import { ArtifactManager, type ArtifactRef } from "./artifacts";
 import {
 	type BlobPutResult,

@@ -1,16 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
-import { type AssistantMessage, systemPromptText } from "@oh-my-pi/pi-ai";
-import { getBundledModel } from "@oh-my-pi/pi-ai/models";
-import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { ExtensionRunner, loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
-import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { Agent } from "@spell/pi-agent-core";
+import { type AssistantMessage, systemPromptText } from "@spell/pi-ai";
+import { getBundledModel } from "@spell/pi-ai/models";
+import { AssistantMessageEventStream } from "@spell/pi-ai/utils/event-stream";
+import { ModelRegistry } from "@spell/pi-coding-agent/config/model-registry";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import { ExtensionRunner, loadExtensions } from "@spell/pi-coding-agent/extensibility/extensions";
+import { AgentSession, type AgentSessionEvent } from "@spell/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@spell/pi-coding-agent/session/auth-storage";
+import { SessionManager } from "@spell/pi-coding-agent/session/session-manager";
+import { TempDir } from "@spell/pi-utils";
 
 class MockAssistantStream extends AssistantMessageEventStream {}
 
