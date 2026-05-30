@@ -1,0 +1,28 @@
+#+TITLE: tui-freeze-when-terminal-unfocused-durin
+
+** ITEM tui-freeze-when-terminal-unfocused-during-stream
+
+Live triage (session =14f5aa3ae1ce24f4=) identified focus-tracking interaction as the most likely cause of the "TUI doesn't update mid-stream but catches up at end" symptom.
+
+=packages/coding-agent/src/modes/interactive-mode.ts:472-476= subscribes to terminal focus changes via CSI 1004h: on focus-out it sets =setMinRenderInterval(500)=. A 200-event stream over 2 seconds at 500ms throttle produces only ~4 renders. With model output naturally bursty (text chunks then quiet), those few renders cluster near the end of the assistant turn — exactly matching the operator perception "nothing → all at once at end."
+
+Synthetic repro confirmed in =/tmp/repro-unfocused.ts= during the same session: 200 events × 10ms gap with throttle=500ms → 4 renders fired. Same chain with throttle=16ms → ~140 renders.
+
+Live triggers (untested but plausible):
+1. User switches workspace mid-stream → focus-out → throttle pegs at 500ms for the rest of the stream
+2. Compositor / multiplexer drops the focus-in event (ghostty + niri, tmux pane switch)
+3. SSH terminal forwarding strips focus events
+
+Not yet patched. Recommended fix: plumb "isStreaming" from AgentSession to the focus throttle subscriber so unfocused throttle stays at focusedInterval while a stream is active, falling back to 500ms only when truly idle.
+
+Sibling hazard found during audit: =Footer.invalidate()= skips parent markDirty (filed BUG-422). Same family as the LiveToolBatch fix in commit =07c179a97= and BUG-391 root pattern.
+
+Filed as BUG-421. FEAT-788 (stream barrier) is NOT a fix — it changes which events are emitted, not how the TUI consumes them.
+:PROPERTIES:
+:CUSTOM_ID: CON-tui-freeze-when-terminal-unfocused-durin
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-30T16:52:05Z
+:END:
+:RELATIONS:
+:END:

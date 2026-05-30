@@ -67,6 +67,7 @@ import type { HookInputComponent } from "./components/hook-input";
 import type { HookSelectorComponent } from "./components/hook-selector";
 import { PlanModeOverlay } from "./components/plan-mode-overlay";
 import { StatusLineComponent } from "./components/status-line";
+import { FocusRenderThrottle } from "./focus-render-throttle";
 import type { ToolExecutionHandle } from "./components/tool-execution";
 import { WelcomeComponent } from "./components/welcome";
 import { BtwController } from "./controllers/btw-controller";
@@ -257,6 +258,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#cleanupUnsubscribe?: () => void;
 	#terminalLostUnsubscribe?: () => void;
 	#terminalFocusUnsubscribe?: () => void;
+	#focusThrottleSessionUnsub?: () => void;
+	#focusRenderThrottle?: FocusRenderThrottle;
 	#terminalLostHandled = false;
 	readonly #version: string;
 	readonly #changelogMarkdown: string | undefined;
@@ -467,12 +470,27 @@ export class InteractiveMode implements InteractiveModeContext {
 		// parent shell exits). This is an orderly shutdown path parallel to SIGHUP.
 		// Focus-aware render throttle: when the terminal window loses focus
 		// (niri overview, minimize, switch workspace), drop render rate to
-		// once per 500ms. Restores on focus regain. Reduces output buffering
-		// pressure and CPU usage when invisible.
+		// once per 500ms when IDLE. During an active stream we keep the
+		// focused interval to avoid the "TUI freezes mid-stream then catches
+		// up at end" symptom — BUG-421. The derived state (focused, streaming)
+		// → desired interval lives in FocusRenderThrottle (pure logic, unit
+		// tested in focus-render-throttle.test.ts).
 		const focusedInterval = this.ui.minRenderInterval;
 		const unfocusedInterval = Math.max(focusedInterval, 500);
+		this.#focusRenderThrottle = new FocusRenderThrottle({
+			focusedInterval,
+			unfocusedInterval,
+			applyInterval: ms => this.ui.setMinRenderInterval(ms),
+		});
 		this.#terminalFocusUnsubscribe = this.ui.terminal.onFocusChange(focused => {
-			this.ui.setMinRenderInterval(focused ? focusedInterval : unfocusedInterval);
+			this.#focusRenderThrottle?.setFocused(focused);
+		});
+		this.#focusThrottleSessionUnsub = this.session.subscribe(event => {
+			if (event.type === "agent_start") {
+				this.#focusRenderThrottle?.setStreaming(true);
+			} else if (event.type === "agent_end") {
+				this.#focusRenderThrottle?.setStreaming(false);
+			}
 		});
 
 		this.#terminalLostUnsubscribe = this.ui.terminal.onLost(reason => {
@@ -1729,6 +1747,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (this.#terminalFocusUnsubscribe) {
 			this.#terminalFocusUnsubscribe();
+		}
+		if (this.#focusThrottleSessionUnsub) {
+			this.#focusThrottleSessionUnsub();
+			this.#focusThrottleSessionUnsub = undefined;
 		}
 		this.#intentionSubscriptionUnsub?.();
 		this.#intentionController.dispose();
