@@ -1,0 +1,245 @@
+#+TITLE: TUI freezes mid-stream and catches up only at message_end (Opus 4.8 tool-heavy turns)
+#+STATE: DOING
+#+SESSION_ID: 14f5aa3ae1ce24f4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-30T15-14-40-135Z_14f5aa3ae1ce24f4.jsonl]]
+#+CUSTOM_ID: BUG-421-tui-freezes-mid-stream-and-catches-up-on
+
+* Initial Message
+
+please look at the recent Tool block and the recent sessions that used opus 4.8 and tell me why there are still so many tools that get queued... think afresh
+
+* Initial Message
+
+[user, session 14f5aa3ae1ce24f4]:
+"hmm the latest sessions seem to have a problem updating the TUI but then once the stream is done I do see the chat responses. will this work [FEAT-788 stream barrier] fix this?"
+
+→ separate symptom from FEAT-788. Stream barrier only changes which events are EMITTED; this is about the TUI not REPAINTING during a stream that is still going.
+
+* Symptom
+
+During a long Opus 4.8 assistant turn (high tool count, long text), the TUI does not visibly update mid-stream. The chat response, text, tool cells all appear in one paint at or near =message_end=. Reproduced anecdotally across "latest sessions" by the user.
+
+Not the same as BUG-419 (pending cells never finalize): cells DO finalize here — they just appear all at once at the end of the turn instead of streaming.
+
+* Investigation so far
+
+** Event-chain analysis
+
+provider AssistantMessageEventStream (50ms throttle on deltas)
+  → for await in =streamAssistantResponse=
+  → =stream.push(message_update)= into agent-loop EventStream
+  → for await in =agent.ts= → SYNC =#emit= → SYNC listener
+  → =AgentSession.#handleAgentEvent= (async)
+    → await =#emitExtensionEvent= (microtask hop)
+    → SYNC =#emit= → SYNC listener
+    → =EventController.handleEvent= (async)
+      → await =#dispatchEvent= (microtask hop)
+      → switch case =message_update= → =ctx.ui.requestRender()=
+        → =setImmediate(executeRender)=
+
+** Synthetic repros run from this session
+
+1. Pure event-loop repro (200 events arriving synchronously in one I/O batch): only 1 setImmediate fires (gated by =#renderRequested=). Confirms gating behaviour but is not the live shape.
+
+2. Realistic-cadence repro (200 events × 50ms throttle window): 20 renders fire, distributed across the window. **Renders keep up.** So the basic chain alone does NOT reproduce the symptom.
+
+3. Slow-render repro (60ms render time, back-to-back events): 200 renders fire serially, ~60ms each. **No render skipping, no batch-to-end collapse.**
+
+∴ event-chain + render-loop alone are not enough to cause the symptom. There must be specific live conditions that combine.
+
+** Live candidates (ranked by suspicion)
+
+*** A. CSI 1004h focus-tracking sets =minRenderInterval = 500ms= and never restores
+
+=packages/coding-agent/src/modes/interactive-mode.ts:472-476=:
+
+#+begin_src ts
+const focusedInterval = this.ui.minRenderInterval; // captured at init
+const unfocusedInterval = Math.max(focusedInterval, 500);
+this.#terminalFocusUnsubscribe = this.ui.terminal.onFocusChange(focused => {
+    this.ui.setMinRenderInterval(focused ? focusedInterval : unfocusedInterval);
+});
+#+end_src
+
+Focus-out (=\x1b[O=) sets throttle to 500ms. Focus-in (=\x1b[I=) restores it. If the user is on a workspace switcher (niri overview, tmux popup, swallowed by another app) and a stream is in flight, OR if the terminal sends focus-out but never focus-in (Wayland edge cases, multiplexer focus-loss without focus-regain), the throttle stays at 500ms for the whole stream — exactly matching "no updates mid-stream, everything paints at the end."
+
+User on ghostty 1.3.2 + niri-style WM is a plausible host for this.
+
+Test: =PI_DISABLE_FOCUS_TRACKING=1= (no such env exists yet — we'd need to add a guard) OR manually verify with =stty -echo; printf '\x1b[O'= to force focus-out and observe.
+
+*** B. Component-level dirty propagation hazard outside LiveToolBatch
+
+Commit =07c179a97= fixed exactly this class of bug in =LiveToolBatchComponent= (BUG-391 follow-up). The fix routes invalidations through =Container.invalidate()= which unconditionally calls =#parent.markDirty()=.
+
+Audit found other components overriding render or invalidate without proper propagation:
+- =packages/coding-agent/src/modes/components/footer.ts::invalidate()= only clears its cached branch, never calls =super.invalidate()= or =#parent?.markDirty()=. (Filed as separate BUG — different scope, not the streaming symptom.)
+
+Audit pending for the chat path:
+- =AssistantMessageComponent= → calls =super.invalidate()= ✓
+- =Markdown= setText → calls =#parent?.markDirty()= ✓
+- =ToolExecutionComponent= → not audited yet (see tool-execution.ts:348)
+- =ReadToolGroupComponent= → not audited
+- =LiveToolBatchComponent= → fixed in 07c179a97
+
+If any cell or group in the chat tree has a stuck-dirty hazard, the parent =chatContainer= stops getting re-marked after the first paint of the burst, so subsequent setImmediates fire but =Container.render()= short-circuits via the =if (!#dirty && cached) return cached= cache path. Effect: paints are scheduled and execute but emit the SAME output as the previous frame. Visually identical to "no update". Then at =message_end= something forces a full invalidate (e.g. =setUsageInfo=, =setExpanded=) → real repaint.
+
+*** C. AssistantMessageEventStream throttle interacting with very fast burst
+
+=packages/ai/src/utils/event-stream.ts:140-180=: deltas batch with #throttleMs = 50. The flush timer uses =setTimeout(...).unref?.()=. If the event loop has unref'd timers but no other work, they SHOULD still fire. But if the agent-side promise chain is awaiting a long async (e.g. =syncContextBeforeModelCall=, =extensionRunner.emit=), the flush MIGHT be delayed past expectation. Low confidence — defaults look correct.
+
+*** D. ExtensionRunner.emit blocking
+
+If any loaded extension's handler is slow on =message_update=, it adds latency per event. =#emitExtensionEvent= awaits =this.#extensionRunner.emit(event)= which iterates handlers sequentially. With high event rate, accumulated latency could starve the render scheduler. Low confidence without knowing the user's loaded extensions, but worth measuring.
+
+** Why is FEAT-788 NOT a fix
+
+FEAT-788 only changes WHICH events the agent loop emits (it cuts the stream early at sequential toolcall_end). The TUI repaint cadence during the events that ARE emitted is unchanged. So FEAT-788 may *reduce frequency* of the symptom (shorter streams less likely to land in a focus-loss window), but it does not address the root cause.
+
+* Scope
+
+In:
+- Root-cause identification across A/B/C/D candidates above.
+- Reproduction harness driving the real EventController + real TUI through a high-event-rate burst, measuring render fires per second.
+- Once root cause confirmed: targeted fix (likely (A) or (B)) plus regression test.
+
+Out:
+- General TUI rendering rewrites.
+- Cell-creation timing changes (covered in FEAT-788 non-goals).
+- Provider-side throttle tuning.
+
+* Existing patterns
+
+- =packages/tui/src/tui.ts::requestRender= is the central dispatch point. =#renderRequested= flag gates double-scheduling; =#executeRender= resets it.
+- =packages/tui/src/tui.ts::Container.render= is the cache-and-bail path. If a stuck-dirty bug prevents =#parent.markDirty()= from firing, =Container.render= returns cached lines and the screen appears frozen.
+- =packages/tui/src/dev-profile.ts= already exists (FEAT-758). =PI_TUI_PROFILE=1= writes per-frame JSONL with frameMs to =/tmp/spell-tui-profile-<pid>.jsonl=. **Confirmed lever** — reproduce the symptom with profiling on, then read the file to see whether frames are firing.
+- Commit =07c179a97= is the canonical fix shape for stuck-dirty bugs.
+
+* Tests
+
+To be written once root cause is confirmed. Likely candidates:
+
+1. Live-tool-batch-style integration test for =AssistantMessageComponent= + =ToolExecutionComponent= dirty propagation under a 200-event burst. Assert =markDirty= propagates to TUI root after every event.
+2. Focus-tracking regression test (if A confirmed): mock terminal sends focus-out then a burst; assert render rate hits its throttled cadence; then focus-in; assert restored.
+
+* Implementation
+
+** ITEM Confirm root cause with live PI_TUI_PROFILE capture
+:PROPERTIES:
+:LAYER: investigation
+:END:
+- Repro the user's session shape (Opus 4.8, tool-heavy turn) with =PI_TUI_PROFILE=1=.
+- Compare frame cadence against burst duration. If renders fire only at the start and end of the burst, candidate A or B. If renders fire at the slow 500ms cadence throughout, candidate A. If renders fire normally but cells don't change, candidate B.
+
+** ITEM If candidate A: prove or rule out focus-tracking lock-out
+:PROPERTIES:
+:LAYER: investigation
+:DEPENDS: BUG-421-tui-freezes-mid-stream-and-catches-up-on::prev
+:END:
+- Add temporary logging to =onFocusChange= subscriber.
+- Disable focus tracking via env knob: skip =\x1b[?1004h= when =PI_DISABLE_FOCUS_TRACKING=1=.
+- Re-run repro with knob set; if symptom disappears, root cause confirmed.
+- Possible fixes: (i) increase =unfocusedInterval= ceiling but emit a "still streaming" hint, (ii) restore focused interval on any user input while unfocused.
+
+** ITEM If candidate B: audit dirty propagation in chat-path components
+:PROPERTIES:
+:LAYER: investigation
+:DEPENDS: BUG-421-tui-freezes-mid-stream-and-catches-up-on::ITEM BUG-421-tui-freezes-mid-stream-and-catches-up-on::Confirm BUG-421-tui-freezes-mid-stream-and-catches-up-on::root BUG-421-tui-freezes-mid-stream-and-catches-up-on::cause BUG-421-tui-freezes-mid-stream-and-catches-up-on::with BUG-421-tui-freezes-mid-stream-and-catches-up-on::live BUG-421-tui-freezes-mid-stream-and-catches-up-on::PI_TUI_PROFILE BUG-421-tui-freezes-mid-stream-and-catches-up-on::capture
+:END:
+- Components to audit: =ToolExecutionComponent=, =ReadToolGroupComponent=, =BashExecutionComponent=, =HookMessageComponent=.
+- For each: confirm =invalidate()= calls =super.invalidate()= (or =#parent?.markDirty()= directly), AND any =render()= override resets =#dirty= properly (the BUG-391 hazard pattern).
+
+** ITEM Fix + regression test
+:PROPERTIES:
+:LAYER: tui
+:DEPENDS: BUG-421-tui-freezes-mid-stream-and-catches-up-on::prev
+:END:
+- Targeted fix at the identified site.
+- Add live-burst integration test mirroring =live-batch-integration.test.ts= (07c179a97) for whichever component or subsystem turned out broken.
+
+* Edge cases
+
+- Niri / sway / tmux focus events: not all multiplexers proxy CSI 1004h consistently. Some send focus-out without focus-in; some never send either.
+- SSH sessions: focus tracking over SSH depends on the local terminal forwarding. Behavior varies.
+- Background mode (=/background=): sets =setMinRenderInterval(focused ? focusedInterval : unfocusedInterval)= but ALSO disables foreground rendering entirely. Unrelated but worth keeping in mind during audit.
+- Auto-compaction / retry mid-stream: these emit synthetic message_end + new message_start. Render scheduling around those boundaries needs to keep working.
+
+* Acceptance criteria
+
+- During an Opus 4.8 tool-heavy assistant turn (≥30 tool calls, ≥1s stream duration), the TUI repaints at least every 100ms — verified via =PI_TUI_PROFILE= JSONL.
+- The user's anecdotal "stream freezes then catches up at end" symptom no longer reproduces.
+- A regression test (focus-aware or dirty-propagation, depending on root cause) locks the fix in.
+
+* Verification
+
+- =PI_TUI_PROFILE=1 bun packages/coding-agent/src/main.ts=, drive an Opus 4.8 long turn, inspect =/tmp/spell-tui-profile-*.jsonl=.
+- Targeted test added in implementation step.
+- Manual check: stream a 30-tool turn; confirm cells appear progressively.
+
+* Related
+
+- FEAT-788 — stream barrier (parallel, but not a fix for this).
+- BUG-419 / BUG-420 — pending cells & transcript pairing (separate, already addressed).
+- Commit 07c179a97 — LiveToolBatch dirty propagation fix (same hazard family).
+- BUG-391 — stuck-dirty propagation root pattern.
+
+* Status
+
+Triage in progress as of 2026-05-30 session 14f5aa3ae1ce24f4. Root cause not yet confirmed live. Filing this BUG so subsequent sessions can pick up from here.
+
+* Update [2026-05-30 — same session, mid-triage]
+
+** Synthetic repro of candidate A confirms the shape
+
+=/tmp/repro-unfocused.ts= (in this session) runs the same event-loop chain as the real harness with =MIN_INTERVAL = 500ms= (the unfocused throttle). Results on a 2.2-second stream emitting 200 events:
+
+#+begin_example
+UNFOCUSED throttle (500ms):
+  stream duration: 2222ms
+  events scheduled: 5
+  renders fired: 4
+  effective fps: 1.8
+  → user perceives ~4 updates across a 2.2s stream
+  → if last render lands AT or NEAR end (likely), it looks like "all at once at end"
+#+end_example
+
+200 update events → only 4 paints. With 500ms inter-render gap, the *temporal alignment* of those 4 paints near the end of bursty model output (large text chunks then quiet) makes "stuck at start, fully painted at end" the dominant operator-perceived behaviour.
+
+The same repro at =MIN_INTERVAL = 16ms= (focused) fires ~140 renders across the same 200 events — fully smooth.
+
+∴ Candidate A is the most likely root cause. The remaining open question is whether the live terminal actually drops focus during the user's reproduction. Three live triggers:
+
+1. User switches workspace / app while stream is running. CSI 1004h focus-out fires → throttle = 500ms for rest of stream until focus-in.
+2. Wayland/X edge: terminal sends focus-out without later focus-in if compositor doesn't deliver the focus-in event before the user looks back. Ghostty + niri + a niri-overview switch is a known pattern.
+3. Multiplexer focus opacity: tmux / zellij don't always proxy CSI 1004h correctly. Some send focus-out on pane switch but never focus-in.
+
+** Why I am NOT yet patching
+
+Three reasons:
+- The fix may be more nuanced than "remove unfocused throttle." 500ms is intentional (FEAT-358 / focus-aware throttle was added to save CPU/battery when invisible). Naïve removal regresses that case.
+- Need to verify with live capture (=PI_TUI_PROFILE=1=) that the throttle is actually pegged at 500ms during a user-reported freeze, not at 16ms-with-stuck-dirty (candidate B).
+- The fix should preserve the throttle intent but ensure visible streams paint reasonably even when "unfocused" — e.g. allow setImmediate-rate up to some cap during active streams, fall back to 500ms only when truly idle.
+
+** Suggested fix shape (for the implementation session)
+
+Option 1 — restore focused interval whenever an agent stream is active:
+- Plumb a "isStreaming" signal from =AgentSession= to the focus-throttle subscriber.
+- =unfocusedInterval = isStreaming ? focusedInterval : 500=.
+- Pro: zero perceptual cost during streams; preserves idle savings.
+- Con: minor plumbing across module boundaries.
+
+Option 2 — cap unfocused throttle at 100ms instead of 500ms:
+- Single number change.
+- Pro: trivial.
+- Con: gives back ~5x CPU savings, less aligned with original intent.
+
+Option 3 — fire a forced render every K events regardless of throttle:
+- Counter inside =requestRender=; every N=10 calls bypass throttle.
+- Pro: caps perceived freeze to a bounded number of events.
+- Con: complicates the throttle contract; harder to reason about.
+
+Recommend Option 1.
+
+** Followups not pursued this session
+
+- BUG-422 (filed) — =Footer.invalidate()= same dirty-propagation hazard family. Distinct from this symptom but came up during the audit.
+- Audit pending on =ToolExecutionComponent= / =ReadToolGroupComponent= dirty propagation for candidate B; deferred until candidate A is ruled in or out live.

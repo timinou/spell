@@ -1,0 +1,27 @@
+#+TITLE: stream-barrier-at-sequential-toolcall-en
+
+** ITEM stream-barrier-at-sequential-toolcall-end
+
+Mid-stream cut policy for the agent loop. When a streaming assistant message emits =toolcall_end= for a tool declaring =executionMode: "sequential"= (=ask=, =await=, =cancel_job=, =exit_plan_mode=, =browser=), =streamAssistantResponse= trims content to the barrier inclusive, forces =stopReason: "toolUse"=, aborts the upstream provider stream, and lets =executeToolCalls= + next-turn carry real context forward.
+
+Rationale: autoregressive models cannot observe a tool_result mid-message, so any tokens generated past a state barrier reason against fictitious state. Other harnesses (=pi-mono=, =forks/pi=) do not implement this — they drain the SSE then dispatch. We do because Opus 4.8's habit of stuffing 50+ tool calls + speculative narration into one turn makes the cost visible.
+
+Implementation lives in =packages/agent/src/agent-loop.ts::streamAssistantResponse= toolcall_end branch. Config knob =AgentLoopConfig.sequentialToolStreamBarrier?: "enforce" | "off"=, default =enforce=.
+
+Key invariants:
+- Cut at =toolcall_end=, not =toolcall_start= — content blocks stream strictly in order, so the barrier event is the only clean cut point (no torn block, no missing args).
+- Compose =barrierAbort= with caller signal via =AbortSignal.any= so user-cancel and barrier-cut remain distinguishable at the provider boundary.
+- Strip =partialJson= and =index= from kept blocks; otherwise trimmed message carries provider-internal residue through history.
+- Unknown tool (=context.tools= miss) fails open: no cut. Preserves correctness when tool was resolved via =resolveUnknownTool=.
+
+Tests: =packages/agent/test/agent-loop-stream-barrier.test.ts= (10 cases). Macrotask =setTimeout(0)= backpressure between scripted events is required for the abort-observation assertion; =Promise.resolve()= is not enough because the scripted-stream IIFE would drain its event list within microtasks before the consumer ran.
+
+Filed as FEAT-788. Originating session =14f5aa3ae1ce24f4=.
+:PROPERTIES:
+:CUSTOM_ID: CON-stream-barrier-at-sequential-toolcall-en
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-30T16:23:12Z
+:END:
+:RELATIONS:
+:END:
