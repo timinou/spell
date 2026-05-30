@@ -6,7 +6,33 @@
 			"style": {
 				"noNonNullAssertion": "off",
 				"useConst": "error",
-				"useNodejsImportProtocol": "off"
+				"useNodejsImportProtocol": "off",
+				"noRestrictedImports": {
+					"level": "error",
+					"options": {
+						"paths": {
+							"@oh-my-pi/pi-agent-core": "Hard fork: use @spell/pi-agent-core. See packages/utils/test/no-upstream-references.test.ts for context.",
+							"@oh-my-pi/pi-ai": "Hard fork: use @spell/pi-ai.",
+							"@oh-my-pi/pi-coding-agent": "Hard fork: use @spell/pi-coding-agent.",
+							"@oh-my-pi/pi-desktop-common": "Hard fork: use @spell/pi-desktop-common.",
+							"@oh-my-pi/pi-gateway": "Hard fork: use @spell/pi-gateway.",
+							"@oh-my-pi/pi-macos": "Hard fork: use @spell/pi-macos.",
+							"@oh-my-pi/pi-natives": "Hard fork: use @spell/pi-natives.",
+							"@oh-my-pi/pi-niri": "Hard fork: use @spell/pi-niri.",
+							"@oh-my-pi/pi-org": "Hard fork: use @spell/pi-org.",
+							"@oh-my-pi/pi-qml": "Hard fork: use @spell/pi-qml.",
+							"@oh-my-pi/pi-qml-remote": "Hard fork: use @spell/pi-qml-remote.",
+							"@oh-my-pi/pi-tui": "Hard fork: use @spell/pi-tui.",
+							"@oh-my-pi/pi-utils": "Hard fork: use @spell/pi-utils.",
+							"@oh-my-pi/spell-deploy": "Hard fork: use @spell/spell-deploy.",
+							"@oh-my-pi/spell-server": "Hard fork: use @spell/spell-server.",
+							"@oh-my-pi/spell-team-chat": "Hard fork: use @spell/spell-team-chat.",
+							"@oh-my-pi/spell-stats": "Hard fork: use @spell/spell-stats.",
+							"@oh-my-pi/swarm-extension": "Hard fork: use @spell/swarm-extension.",
+							"@oh-my-pi/react-edit-benchmark": "Hard fork: use @spell/react-edit-benchmark."
+						}
+					}
+				}
 			},
 			"suspicious": {
 				"noExplicitAny": "off",

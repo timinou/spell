@@ -224,6 +224,58 @@ function maybeExtractEmbeddedWorker(errors: string[]): string | null {
 	);
 }
 
+/**
+ * Assert that the resolved native binary path belongs to a trusted source.
+ *
+ * After the hard fork to @spell/* (commit ed7ed0a7b), no upstream cache can shadow
+ * our workspace by package name. But the loader's candidate list also
+ * includes `userDataDir` and `versionedDir`, which point at machine-wide
+ * locations a stale or rogue binary could land in. This guard makes the
+ * runtime trust boundary explicit:
+ *
+ *   - dev mode (PI_DEV or not compiled): only accept candidates under the
+ *     workspace nativeDir, the exec dir (release sidecar), or the
+ *     versioned dir matching THIS packageVersion. Reject loudly otherwise.
+ *   - compiled mode: only accept versionedDir (matching version) or the
+ *     baseReleaseCandidates that ship next to the binary. Same: reject
+ *     anything else loudly.
+ *
+ * The check is structural — it doesn't open the file, doesn't compare
+ * hashes; it asserts the resolution endpoint is one this build is willing
+ * to trust. If a future loader change starts considering a new candidate
+ * directory, this guard forces an explicit update.
+ *
+ * Tagged BUG-424 follow-up: empirically a stale bun cache (pre-fork) loaded
+ * a pre-fix break_long_word; the rename made that impossible by name, this
+ * guard makes it impossible by path.
+ */
+function assertTrustedNativePath(candidatePath: string): void {
+	const resolved = path.resolve(candidatePath);
+	const trusted = [
+		// Workspace `packages/natives/native/` — the dev source of truth.
+		path.resolve(nativeDir),
+		// Exec dir release sidecar — the compiled binary's installed location.
+		path.resolve(execDir),
+		// Versioned data dir matching THIS packageVersion — compiled binaries
+		// extract their embedded addon here.
+		path.resolve(versionedDir),
+		// User data dir — compiled binary fallback when versionedDir extraction
+		// fails. User-writable; trusted only because compiled mode controls
+		// what gets written here at extract time.
+		path.resolve(userDataDir),
+	];
+	const isTrusted = trusted.some(prefix => resolved === prefix || resolved.startsWith(`${prefix}${path.sep}`));
+	if (!isTrusted) {
+		throw new Error(
+			`pi-natives refusing to load addon from untrusted path: ${resolved}\n` +
+				`Trusted prefixes:\n${trusted.map(p => `  ${p}`).join("\n")}\n` +
+				`This guard exists because a stale or rogue native binary on disk can silently\n` +
+				`introduce wrong behaviour. If this is a legitimate new candidate directory,\n` +
+				`update assertTrustedNativePath in packages/natives/src/native.ts.`,
+		);
+	}
+}
+
 function loadNative(): NativeBindings {
 	const errors: string[] = [];
 	logger.time("native:maybeExtractEmbeddedWorker", () => maybeExtractEmbeddedWorker(errors));
@@ -231,6 +283,7 @@ function loadNative(): NativeBindings {
 	const runtimeCandidates = embeddedCandidate ? [embeddedCandidate, ...dedupedCandidates] : dedupedCandidates;
 	for (const candidate of runtimeCandidates) {
 		try {
+			assertTrustedNativePath(candidate);
 			const bindings = logger.time(`native:loadNative:require:${path.basename(candidate)}`, () =>
 				require(candidate),
 			) as NativeBindings;
