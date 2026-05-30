@@ -1,0 +1,29 @@
+#+TITLE: break-long-word-lone-esc-infinite-loop--
+
+** ITEM break-long-word-lone-esc-infinite-loop
+
+=crates/pi-natives/src/text.rs::break_long_word= had no fallback for lone/invalid ESC bytes (=0x1b=). Triggered by long words (visible width > wrap width) containing binary data, e.g. latin-1 encoded PNG bytes surfaced via the =get= tool and rendered through =renderCodePathCall= in =packages/coding-agent/src/tools/get.ts=.
+
+Root cause: outer =if word[i]==ESC && let Some(seq)=ansi_seq_len_u16(...)= fails for lone ESC; inner =while i<len && word[i]!=ESC {i+=1}= never advances because =word[i]= IS ESC. Infinite loop, harness hang.
+
+Fix at =text.rs:638-642=: explicit lone-ESC fallback that pushes the byte through and advances =i+=1=. Every sibling function (=truncate_to_width=, =slice_with_width_impl=, =extract_segments_impl=, =visible_width_u16_up_to=, =update_state_from_text=, =token_is_whitespace=, =split_into_tokens_with_ansi=) already handled this case \u2014 =break_long_word= was the outlier.
+
+Regression tests:
+- Rust: =text::tests::test_wrap_does_not_hang_on_lone_esc= (9/9 text tests green).
+- TS sanitiser: =packages/natives/test/text-wrap-sanitizer.test.ts= (9/9 cases).
+
+Deployment topology gotcha (BUG #1b of EP-959e01d2e29da9c2): when investigating "the fix doesn't take", check which =.node= binary is actually loaded via:
+- =import.meta.resolve("@oh-my-pi/pi-natives")=
+- =packages/natives/src/native.ts= candidate order: =pi_natives.dev.node= \u2192 modern \u2192 baseline \u2192 versioned dir
+- Spell's =bin/spell= symlinks to global pi-coding-agent, which symlinks to workspace; resolution starts from the SCRIPT directory, not =cwd=.
+- A stale bun install cache (=~/.local/share/reflex/bun/install/cache/@oh-my-pi/pi-natives@<ver>@@@1/native/=) can ship pre-fix binaries; refresh by rebuilding the published .node files.
+
+Filed as BUG-424. Originating user episode =EP-959e01d2e29da9c2=.
+:PROPERTIES:
+:CUSTOM_ID: CON-break-long-word-lone-esc-infinite-loop--
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-30T19:15:13Z
+:END:
+:RELATIONS:
+:END:
