@@ -1,0 +1,172 @@
+#+TITLE: Async tools don't launch until stream ends — work starts only after the whole assistant message is received
+#+STATE: ITEM
+#+SESSION_ID: 14f5aa3ae1ce24f4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-30T15-14-40-135Z_14f5aa3ae1ce24f4.jsonl]]
+#+CUSTOM_ID: BUG-423-async-tools-dont-launch-until-stream-end
+
+* Initial Message
+
+please look at the recent Tool block and the recent sessions that used opus 4.8 and tell me why there are still so many tools that get queued... think afresh
+
+* Initial Message
+
+[user, session 14f5aa3ae1ce24f4]:
+"I think another issue (maybe it's been fixed) is that when it's async, works seems to only start when the stream has stopped. is that true? or are async calls launched actually async?"
+
+* Symptom
+
+User reports that even an "async" bash call (=async: true=) appears to only start executing once the assistant message has finished streaming. Latency from "model emits the tool_use block" to "background job actually begins doing work" includes the whole tail of the streamed assistant turn (further text, more tool blocks, thinking content, etc.).
+
+* Confirmed: this is the current behaviour
+
+=packages/agent/src/agent-loop.ts::runLoop= (lines 248-274):
+
+#+begin_src ts
+const message = await streamAssistantResponse(currentContext, config, signal, stream, streamFn);
+newMessages.push(message);
+...
+const toolCalls = message.content.filter(c => c.type === "toolCall");
+if (hasMoreToolCalls) {
+    const toolExecution = await executeToolCalls(...);
+}
+#+end_src
+
+The whole assistant message is streamed to completion (or barrier-cut, post FEAT-788) BEFORE =executeToolCalls= ever runs. Even for tools declaring async behaviour internally, the harness can't dispatch them until the model's assistant turn ends.
+
+The =bash= tool's async branch (=packages/coding-agent/src/tools/bash.ts:409-466=):
+- Returns a synchronous "Background job started" result the moment its =execute()= is called.
+- Registers the actual long-running work as a callback in =AsyncJobManager= which runs it on a separate scheduler.
+- BUT =execute()= itself is only invoked from inside =executeToolCalls=, which only runs post-stream.
+
+∴ "Async" tools are async in the sense that they don't block the agent loop on completion — they DO block on the stream finishing first. The user's intuition is correct.
+
+* Why this matters
+
+For a tool-heavy turn (Opus 4.8 often emits 30-100 tool calls in one message), the model can take many seconds to finish streaming all of them. If the first tool is an async background bash like a build or test, that build does NOT start while the model is still emitting tool 7-100's args. The operator is waiting on:
+
+  (stream-emission-time) + (build-time)
+
+instead of:
+
+  max(stream-emission-time, build-time)
+
+For a 60-second build emitted early in a 5-second stream, that's a 5s preventable latency. Cheap. For a 30-second stream where build is async, 30s of build is wasted on stream wait.
+
+This compounds the FEAT-788 stream-barrier symptom: the barrier cuts at the first sequential tool, but everything before it still streams to completion before dispatch starts.
+
+* Reference harnesses
+
+Surveyed during the same session:
+- =pi-mono/packages/agent/src/agent-loop.ts= — same architecture, same constraint.
+- =forks/pi/packages/agent/src/agent-loop.ts= — same.
+- opencode — same.
+
+None dispatch tools mid-stream. Same opportunity-cost as FEAT-788's stream barrier was: nobody fixed it because nobody noticed.
+
+* Goal
+
+Dispatch parallel-mode tools as soon as their =toolcall_end= event fires, instead of waiting for the whole assistant message. Sequential-mode tools continue to wait for the stream (the FEAT-788 barrier already handles that case — those tools cut the stream and become a batch boundary).
+
+Concretely: in =streamAssistantResponse='s =toolcall_end= branch, if the tool is registered AND =tool.executionMode !== "sequential"=, fire =tool_execution_start= and begin =tool.execute()= immediately. The result is collected by the time the stream finishes; =executeToolCalls= then sees it already-completed.
+
+* Existing patterns
+
+- FEAT-788 barrier (=packages/agent/src/agent-loop.ts::streamAssistantResponse=) already inspects each =toolcall_end= and looks up the tool by name; the early-dispatch decision can piggyback on the same lookup.
+- =AsyncJobManager= (=packages/coding-agent/src/async/job-manager.ts=) is the dispatch sink the bash async branch uses; no changes needed there.
+- =executeToolCalls= currently iterates =records= and runs each. To preserve its contract, we'd need a path that says "this record's result is already set — skip execute, just emit the result message and continue."
+- =stream.push("tool_execution_start" / "tool_execution_update" / "tool_execution_end")= are the visible events the TUI consumes. Already work mid-stream — they go through the same SYNC =#emit= chain as message_update events.
+
+* Edge cases
+
+- Tool whose args were partially streamed but never completed (=toolcall_end= never fires) — same as today, dispatch waits.
+- Tool not in =context.tools= (=resolveUnknownTool= path) — current code defers resolution; early dispatch would need to defer too or fail open.
+- Tool args fail validation — early dispatch would surface the error mid-stream as a =tool_execution_end= with error. Strictly better than today (where it surfaces at batch dispatch).
+- Tool with =intent= field — the post-stream intent-extraction step strips =__intent= from args. Early dispatch would need the same pass.
+- Sequential tools — never early-dispatched (FEAT-788 barrier cuts at them anyway).
+- Tool callbacks fire =onProgress= / =reportProgress=; these turn into =tool_execution_update= events. Already non-blocking via the SYNC emit chain.
+- Interrupt handling (=interruptMode: "wait"=) — currently checked between sequentially-executed tools. Early-dispatched parallel tools would need the same check between their dispatch and the next stream event. Today there are no parallel-tool interrupt checks mid-batch either, so this is no regression.
+- The result-emission order: today, parallel tools emit results when =Promise.allSettled= resolves; the assistant-message turn_end carries them. Early dispatch needs to ensure the same ordering — emit results in =records= order, not in completion order, to keep the API's tool_use/tool_result pairing stable.
+- Per-tool concurrency: the bash tool spins up an ephemeral subprocess per call; concurrent dispatches are safe. =edit= uses kernel per-file locks; safe. =todo_write= uses a per-session mutation chain; safe. Everything in the parallel set already supports being called concurrently from the post-stream batch — early dispatch just shifts the timing earlier.
+
+* Tests
+
+TDD order. All live in =packages/agent/test/=.
+
+1. =packages/agent/test/agent-loop-early-dispatch.test.ts= (new):
+
+   - **early-dispatch-fires-tool-execution-start-mid-stream**: scripted stream emits =[toolcall_end(bash, async=true), text..., toolcall_end(bash, async=false)]=. Assert =tool_execution_start= for the first bash fires BEFORE the text deltas of the middle segment. Today it fires AFTER =message_end=.
+   - **early-dispatch-preserves-result-order**: parallel tools complete out of order; assert =tool_execution_end= and =message_end(toolResult)= events arrive in source order.
+   - **early-dispatch-skips-sequential-tools**: scripted stream emits =[toolcall_end(bash), toolcall_end(await), toolcall_end(bash2)]= with await sequential. Assert bash starts early, await is dispatched only after stream cut, bash2 never dispatches (FEAT-788 barrier).
+   - **early-dispatch-respects-disable-knob**: same scenario with =earlyDispatchParallelTools: "off"= — all dispatches happen post-stream as today.
+   - **early-dispatch-tool-error-surfaces-cleanly**: tool whose execute throws — assert error result is queued and emitted at the normal batch-dispatch site, not duplicated.
+   - **early-dispatch-validation-failure**: invalid args at early dispatch — assert single error result, no double-emit.
+
+* Implementation sketch
+
+** ITEM Add config knob: =earlyDispatchParallelTools=
+:PROPERTIES:
+:LAYER: agent
+:END:
+=packages/agent/src/types.ts= — =earlyDispatchParallelTools?: "enforce" | "off"= on =AgentLoopConfig=. Default =enforce=.
+
+** ITEM Lift tool-dispatch primitive out of =executeToolCalls=
+:PROPERTIES:
+:LAYER: agent
+:DEPENDS: BUG-423-async-tools-dont-launch-until-stream-end::prev
+:END:
+Extract the per-record execute+emit logic (the =runTool= closure inside =executeToolCalls=) into a reusable function that can be called either eagerly from =streamAssistantResponse= OR from =executeToolCalls=. The record state (=started=, =result=, =resultEmitted=) already supports skip-if-already-emitted via =resultEmitted= guard.
+
+** ITEM Hook early dispatch in =streamAssistantResponse=
+:PROPERTIES:
+:LAYER: agent
+:DEPENDS: BUG-423-async-tools-dont-launch-until-stream-end::prev
+:END:
+In the same =case "toolcall_end":= branch FEAT-788 added the barrier to:
+
+#+begin_src ts
+const tool = context.tools?.find(t => t.name === event.toolCall.name);
+if (tool && tool.executionMode !== "sequential" && earlyDispatchEnabled) {
+    // Fire-and-forget — the result will be collected by executeToolCalls later.
+    // Need a side-channel back to executeToolCalls to mark this toolCall.id
+    // as already-running so it doesn't get re-dispatched.
+    eagerDispatchRegistry.set(event.toolCall.id, runTool(buildRecordFor(event.toolCall)));
+}
+#+end_src
+
+When =executeToolCalls= later runs, it picks up the in-flight promises via the registry and =await=s them in source order, only kicking off any record whose id is NOT in the registry.
+
+** ITEM Tests + verify
+:PROPERTIES:
+:LAYER: test
+:DEPENDS: BUG-423-async-tools-dont-launch-until-stream-end::prev
+:END:
+
+* Acceptance criteria
+
+- An async bash call emitted early in a tool-heavy stream begins doing real work before the next tool block finishes streaming.
+- For a stream emitting 10 parallel async bash calls over 3 seconds, total time-to-first-stdout drops from ~3s to ~few-ms-per-call.
+- Sequential tools (ask, await, cancel_job, exit_plan_mode, browser) continue to use FEAT-788's barrier — never early-dispatched.
+- No regression in the existing =executeToolCalls= ordering / pairing guarantees.
+- =earlyDispatchParallelTools= defaults to enforce; off-mode restores today's behaviour exactly.
+
+* Verification
+
+- =bun test packages/agent/test/agent-loop-early-dispatch.test.ts=
+- =bun test packages/agent/test/= (regression)
+- Manual: emit a 10-bash-async parallel batch in a live session; measure stdout-first-byte time.
+
+* Non-goals
+
+- Reordering tool results (the API requires tool_use/tool_result pairing in source order).
+- Early-dispatching sequential tools — FEAT-788's barrier semantics already prohibit it.
+- TUI cell-creation timing (user de-prioritised; previously noted as non-goal in FEAT-788).
+
+* Related
+
+- FEAT-788 — stream barrier. Adjacent: both branches live in the same =toolcall_end= switch case.
+- BUG-421 — TUI freeze (different layer; fixed in commit =de6c306056=).
+- =packages/coding-agent/src/tools/bash.ts:409= — the canonical async tool that motivates this fix.
+
+* Status
+
+Filed during triage session =14f5aa3ae1ce24f4= after user question. Symptom CONFIRMED — current behaviour blocks async tool dispatch on stream completion. Not yet fixed; should reuse the FEAT-788 toolcall_end hook point.
