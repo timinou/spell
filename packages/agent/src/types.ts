@@ -146,6 +146,29 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * When set and returns a value, overrides the static `toolChoice`.
 	 */
 	getToolChoice?: () => ToolChoice | undefined;
+
+	/**
+	 * Mid-stream barrier policy for tools declaring `executionMode: "sequential"`.
+	 *
+	 * Default `"enforce"`. When the streamed assistant message emits a
+	 * `toolcall_end` for a tool whose definition has `executionMode: "sequential"`,
+	 * the harness CUTS the SSE at that point: it trims the assistant message to
+	 * end at the barrier tool inclusive, marks it `stopReason: "toolUse"`, best-
+	 * effort aborts the upstream stream, and lets the normal
+	 * `executeToolCalls` → next-turn cycle continue with real `tool_result`
+	 * context.
+	 *
+	 * This enforces a property the autoregressive model cannot enforce for
+	 * itself: don't generate tokens about a state you don't yet have (a tool
+	 * result, a user answer, a job completion). Without this, a model that emits
+	 * `[bash(echo ok1), await, bash(echo ok2)]` in one turn produces `ok2`'s args
+	 * before any await result exists, then waits through the whole sequential
+	 * batch before getting a chance to revise.
+	 *
+	 * `"off"` exists for diagnostics and regression testing. Production code
+	 * should leave it at the default.
+	 */
+	sequentialToolStreamBarrier?: "enforce" | "off";
 }
 
 export interface ToolCallContext {
@@ -246,6 +269,22 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	deferrable?: boolean;
 	/** If true, tool execution ignores abort signals (runs to completion) */
 	nonAbortable?: boolean;
+	/**
+	 * Per-tool execution mode override.
+	 * - "sequential": this tool requires that no sibling tool calls in the same
+	 *   assistant batch run concurrently with it. The whole batch is executed
+	 *   serially, in assistant source order, when any tool sets this mode.
+	 * - "parallel" (default): this tool can run alongside its siblings.
+	 *
+	 * Use "sequential" only for tools whose semantics REQUIRE batch-wide
+	 * exclusivity: blocking on user input (e.g. ask), mutating the agent's tool
+	 * set or mode (e.g. exit_plan_mode), or being a sync point for siblings
+	 * (e.g. await on an async job that another sibling might also touch).
+	 * Tools that have an internal consistency invariant (file locks, per-session
+	 * mutexes, ephemeral subprocesses) MUST own their serialization at the layer
+	 * that holds the invariant — do not lift it to "sequential".
+	 */
+	executionMode?: "sequential" | "parallel";
 	/** If true, argument validation errors are non-fatal: raw args are passed to execute() instead of returning an error to the LLM. */
 	lenientArgValidation?: boolean;
 	/**
