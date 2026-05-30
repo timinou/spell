@@ -1,12 +1,12 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { type Component, type Container, TUI, type TUI as TUIType } from "@oh-my-pi/pi-tui";
-import { VirtualTerminal } from "@oh-my-pi/pi-tui/../test/virtual-terminal";
-import { ToolExecutionComponent } from "../../src/modes/components/tool-execution";
+import { type Component, type Container, TUI, type TUI as TUIType } from "@spell/pi-tui";
+import { VirtualTerminal } from "@spell/pi-tui/../test/virtual-terminal";
 import {
 	COMPACT_MAX_ROWS,
 	COMPACT_THRESHOLD,
 	LiveToolBatchComponent,
 } from "../../src/modes/components/live-tool-batch";
+import { ToolExecutionComponent } from "../../src/modes/components/tool-execution";
 import { initTheme } from "../../src/modes/theme/theme";
 
 const stubTui = { requestRender: () => {} } as unknown as TUIType;
@@ -54,6 +54,45 @@ describe("LiveToolBatchComponent dispatch", () => {
 	});
 });
 
+describe("LiveToolBatchComponent removeCell", () => {
+	test("removes the cell, updates size, and detaches the child", () => {
+		const group = new LiveToolBatchComponent();
+		const ids = fillBatch(group, 3);
+		expect(group.size).toBe(3);
+
+		const removed = group.removeCell(ids[1]);
+		expect(removed).toBe(true);
+		expect(group.size).toBe(2);
+		expect(group.has(ids[1])).toBe(false);
+		expect(group.has(ids[0])).toBe(true);
+		expect(group.has(ids[2])).toBe(true);
+	});
+
+	test("returns false for an unknown id (no throw, no side effect)", () => {
+		const group = new LiveToolBatchComponent();
+		fillBatch(group, 2);
+		expect(group.removeCell("nope")).toBe(false);
+		expect(group.size).toBe(2);
+	});
+
+	test("removing the last pending cell flips compact view (was: locked compact)", () => {
+		// A batch above threshold with one pending cell stays compact; removing
+		// that pending cell makes `#allResolved` true and switches to full view.
+		const group = new LiveToolBatchComponent();
+		const ids = fillBatch(group, COMPACT_THRESHOLD);
+		for (let i = 0; i < ids.length - 1; i++) finalize(group, ids[i]);
+		// One pending cell remains => still compact.
+		const beforeRemove = group.render(80).join("\n");
+		expect(beforeRemove).toMatch(/Tools/);
+
+		expect(group.removeCell(ids[ids.length - 1])).toBe(true);
+		const afterRemove = group.render(80).join("\n");
+		// Compact summary header is gone; full pass-through render of N-1 cells
+		// stays attached.
+		expect(afterRemove).not.toContain("Tools (");
+	});
+});
+
 describe("LiveToolBatchComponent compact vs full", () => {
 	test("small batch (< threshold) renders full pass-through even while pending", () => {
 		const group = new LiveToolBatchComponent();
@@ -62,7 +101,7 @@ describe("LiveToolBatchComponent compact vs full", () => {
 
 		// Full render == concat of each cell's own render (pending cells included).
 		const groupLines = group.render(80);
-		let expected: string[] = [];
+		const expected: string[] = [];
 		// Re-create equivalent standalone cells to compare shape height-wise:
 		// the group must not collapse a sub-threshold batch.
 		const standaloneHeight = ids.reduce((acc, _id, i) => acc + makeCellHeight(small, i), 0);

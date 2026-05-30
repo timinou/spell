@@ -1,7 +1,7 @@
 import type { Document, Node } from "@bgotink/kdl";
 import { parse } from "@bgotink/kdl";
 
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@spell/pi-utils";
 
 import {
 	readAllowedFolders,

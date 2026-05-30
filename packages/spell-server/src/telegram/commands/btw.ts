@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import { RpcClient } from "../../rpc/rpc-client";
 import type { RpcEvent, RpcSpawnOptions } from "../../rpc/types";
 import type { AuthContext } from "../bot/auth";

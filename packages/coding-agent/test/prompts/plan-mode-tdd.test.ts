@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { renderPromptTemplate } from "@oh-my-pi/pi-coding-agent/config/prompt-templates";
-import planModeActivePrompt from "@oh-my-pi/pi-coding-agent/prompts/system/plan-mode-active.md" with { type: "text" };
+import { renderPromptTemplate } from "@spell/pi-coding-agent/config/prompt-templates";
+import planModeActivePrompt from "@spell/pi-coding-agent/prompts/system/plan-mode-active.md" with { type: "text" };
 
 function renderUltraplanPrompt(): string {
 	return renderPromptTemplate(planModeActivePrompt, {

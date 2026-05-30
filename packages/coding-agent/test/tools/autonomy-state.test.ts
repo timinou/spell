@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { BUILTIN_TOOLS, createTools, HIDDEN_TOOLS, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { AutonomyStateStore } from "@oh-my-pi/pi-coding-agent/tools/autonomy-state";
-import { AutonomyStateTool } from "@oh-my-pi/pi-coding-agent/tools/autonomy-state/tool";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import { BUILTIN_TOOLS, createTools, HIDDEN_TOOLS, type ToolSession } from "@spell/pi-coding-agent/tools";
+import { AutonomyStateStore } from "@spell/pi-coding-agent/tools/autonomy-state";
+import { AutonomyStateTool } from "@spell/pi-coding-agent/tools/autonomy-state/tool";
 
 function createSession(cwd: string): ToolSession {
 	return {

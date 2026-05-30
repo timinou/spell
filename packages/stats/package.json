@@ -1,18 +1,18 @@
 {
 	"type": "module",
-	"name": "@oh-my-pi/spell-stats",
+	"name": "@spell/spell-stats",
 	"version": "13.12.8",
 	"description": "Local observability dashboard for pi AI usage statistics",
-	"homepage": "https://github.com/can1357/oh-my-pi",
+	"homepage": "https://github.com/timinou/spell",
 	"author": "Can Boluk",
 	"license": "GPL-3.0-only",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/can1357/oh-my-pi.git",
+		"url": "git+https://github.com/timinou/spell.git",
 		"directory": "packages/stats"
 	},
 	"bugs": {
-		"url": "https://github.com/can1357/oh-my-pi/issues"
+		"url": "https://github.com/timinou/spell/issues"
 	},
 	"keywords": [
 		"ai",
@@ -33,8 +33,8 @@
 		"build": "bun run build.ts"
 	},
 	"dependencies": {
-		"@oh-my-pi/pi-ai": "workspace:*",
-		"@oh-my-pi/pi-utils": "workspace:*",
+		"@spell/pi-ai": "workspace:*",
+		"@spell/pi-utils": "workspace:*",
 		"@tailwindcss/node": "^4.2",
 		"chart.js": "^4.5",
 		"date-fns": "^4.1",

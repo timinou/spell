@@ -1,4 +1,4 @@
-import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@spell/pi-agent-core";
 import { type Static, Type } from "@sinclair/typebox";
 import type { ToolSession } from ".";
 import type { SpellSurfaceClientOptions } from "./goals-tool";

@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { Server, ServerWebSocket } from "bun";
 import type { ClientPanelMessage } from "./protocol";
 import { RemoteQmlBridge } from "./remote-bridge";

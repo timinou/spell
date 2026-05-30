@@ -5,9 +5,9 @@
  * 3. Correct filter classification — bookkeeping entries hidden in default mode
  */
 import { beforeAll, describe, expect, it } from "bun:test";
-import { TreeSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tree-selector";
-import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { TreeSelectorComponent } from "@spell/pi-coding-agent/modes/components/tree-selector";
+import { getThemeByName, setThemeInstance } from "@spell/pi-coding-agent/modes/theme/theme";
+import { SessionManager } from "@spell/pi-coding-agent/session/session-manager";
 import { assistantMsg, userMsg } from "./utilities";
 
 beforeAll(async () => {

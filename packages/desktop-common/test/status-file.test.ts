@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import { StatusFileReader, StatusFileWriter } from "../src/status-file";
 
 const TEST_DIR = path.join(os.tmpdir(), `spell-test-status-${process.pid}`);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { type Component, Container, TUI } from "@oh-my-pi/pi-tui";
+import { type Component, Container, TUI } from "@spell/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 class CountingComponent implements Component {

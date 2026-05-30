@@ -16,9 +16,9 @@ import {
 	renderTemplate,
 	resolvePredecessorResultsContext,
 	resolveVerificationContext,
-} from "@oh-my-pi/pi-coding-agent/task/template";
+} from "@spell/pi-coding-agent/task/template";
 
-import type { TodoGroup, TodoItem } from "@oh-my-pi/pi-coding-agent/tools/todo-write";
+import type { TodoGroup, TodoItem } from "@spell/pi-coding-agent/tools/todo-write";
 
 function makeTask(overrides: Partial<TodoItem> & { id: string; content: string }): TodoItem {
 	return { status: "in_progress", ...overrides };

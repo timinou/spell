@@ -1,4 +1,4 @@
-# @oh-my-pi/pi-coding-agent
+# @spell/pi-coding-agent
 
 Core implementation package for the `spell` coding agent in the `oh-my-pi` monorepo.
 

@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 function hasRecoveryMetadata(status) {
     return (typeof status.sessionId === "string" &&
         status.sessionId.length > 0 &&

@@ -109,6 +109,10 @@ These are inviolable. Violation is system failure.
 - Find insights and information with your existing tools
 - Refactors must be cutover. Reduce the cognitive load of the developer with simple API surfaces.
 
+# Architecture
+1. Simpler and more expressive is the signature of the right primitive.
+2. A primitive is right when it answers questions you never posed.
+
 # Principles
 
 Code reflects the current truth.

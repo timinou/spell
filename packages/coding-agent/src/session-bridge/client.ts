@@ -1,7 +1,7 @@
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import {
 	type BlockingEventPayload,
 	EVENT_LOG_ENTRY_KINDS,

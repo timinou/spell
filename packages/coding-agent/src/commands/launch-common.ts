@@ -1,6 +1,6 @@
-import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
-import { APP_NAME } from "@oh-my-pi/pi-utils";
-import { Args, Flags } from "@oh-my-pi/pi-utils/cli";
+import { THINKING_EFFORTS } from "@spell/pi-ai";
+import { APP_NAME } from "@spell/pi-utils";
+import { Args, Flags } from "@spell/pi-utils/cli";
 
 export const launchMessageArgs = {
 	messages: Args.string({

@@ -1,4 +1,4 @@
-import { copyToClipboard, sanitizeText } from "@oh-my-pi/pi-natives";
+import { copyToClipboard, sanitizeText } from "@spell/pi-natives";
 import {
 	type Component,
 	extractPrintableText,
@@ -6,7 +6,7 @@ import {
 	padding,
 	truncateToWidth,
 	visibleWidth,
-} from "@oh-my-pi/pi-tui";
+} from "@spell/pi-tui";
 import { theme } from "../modes/theme/theme";
 import { replaceTabs } from "../tools/render-utils";
 import {

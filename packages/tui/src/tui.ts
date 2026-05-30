@@ -3,7 +3,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getDebugLogPath } from "@oh-my-pi/pi-utils";
+import { getDebugLogPath } from "@spell/pi-utils";
 import { DevProfile, devProfile } from "./dev-profile";
 import { isKeyRelease, matchesKey } from "./keys";
 import { spinnerClock } from "./spinner-clock";

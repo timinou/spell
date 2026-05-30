@@ -1,11 +1,11 @@
 import { describe, expect, it } from "bun:test";
 
-import { assembleImagePrompt } from "@oh-my-pi/pi-coding-agent/tools/image-generation/prompt-assembly";
+import { assembleImagePrompt } from "@spell/pi-coding-agent/tools/image-generation/prompt-assembly";
 import {
 	type ImageSchema,
 	loadImageSchemas,
 	parseOverrideBlocks,
-} from "@oh-my-pi/pi-coding-agent/tools/image-generation/schema-loader";
+} from "@spell/pi-coding-agent/tools/image-generation/schema-loader";
 
 /** Load with explicit override tiers (no filesystem). */
 function load(...tiers: string[][]): Promise<ImageSchema[]> {

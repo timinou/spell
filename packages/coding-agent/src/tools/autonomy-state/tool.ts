@@ -1,5 +1,5 @@
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { logger } from "@oh-my-pi/pi-utils";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@spell/pi-agent-core";
+import { logger } from "@spell/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import type { ToolSession } from "..";
 import { ToolError } from "../tool-errors";

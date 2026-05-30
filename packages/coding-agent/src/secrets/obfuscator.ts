@@ -1,4 +1,4 @@
-import type { Message, TextContent } from "@oh-my-pi/pi-ai";
+import type { Message, TextContent } from "@spell/pi-ai";
 import { compileSecretRegex } from "./regex";
 
 // ═══════════════════════════════════════════════════════════════════════════

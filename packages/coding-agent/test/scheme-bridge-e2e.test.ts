@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { clearRuntimeSchemes, executeCodePath } from "@oh-my-pi/pi-natives";
+import { clearRuntimeSchemes, executeCodePath } from "@spell/pi-natives";
 import type { AsyncJobManager } from "../src/async/job-manager";
 import type { Rule } from "../src/capability/rule";
 import type { Skill } from "../src/extensibility/skills";

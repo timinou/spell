@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@spell/pi-agent-core";
+import { isEnoent } from "@spell/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import sendFileDescription from "../prompts/tools/send-file.md" with { type: "text" };
 import type { ToolSession } from "./index";

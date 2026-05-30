@@ -5,7 +5,7 @@
  * glyph at render time so the renderer body never runs per spinner tick.
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { type Component, type Container, SPINNER_MARKER, spinnerClock, TUI } from "@oh-my-pi/pi-tui";
+import { type Component, type Container, SPINNER_MARKER, spinnerClock, TUI } from "@spell/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 class MarkerLeaf implements Component {

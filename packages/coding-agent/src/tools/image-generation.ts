@@ -1,8 +1,8 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { getAntigravityHeaders, getEnvApiKey, StringEnum } from "@oh-my-pi/pi-ai";
-import { $env, isEnoent, logger, ptree, readSseJson, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
+import type { AgentToolResult } from "@spell/pi-agent-core";
+import { getAntigravityHeaders, getEnvApiKey, StringEnum } from "@spell/pi-ai";
+import { $env, isEnoent, logger, ptree, readSseJson, Snowflake, untilAborted } from "@spell/pi-utils";
 import type { Static, TSchema } from "@sinclair/typebox";
 import type { ModelRegistry } from "../config/model-registry";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";

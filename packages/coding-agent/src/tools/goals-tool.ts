@@ -1,9 +1,9 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { isEnoent } from "@oh-my-pi/pi-utils";
-import { loadConfig } from "@oh-my-pi/spell-server/config/loader";
+import type { AgentTool, AgentToolResult } from "@spell/pi-agent-core";
+import { isEnoent } from "@spell/pi-utils";
+import { loadConfig } from "@spell/spell-server/config/loader";
 import { type Static, Type } from "@sinclair/typebox";
 import type { ToolSession } from ".";
 import { toolResult } from "./tool-result";

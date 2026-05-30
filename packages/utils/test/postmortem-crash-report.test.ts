@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getReportsDir, postmortem } from "@oh-my-pi/pi-utils";
+import { getReportsDir, postmortem } from "@spell/pi-utils";
 
 describe("writeCrashReport", () => {
 	it("accepts SIGHUP reason and writes a valid crash report", () => {

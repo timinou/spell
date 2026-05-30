@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { createTools, GetTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { formatCodePathResult } from "@oh-my-pi/pi-coding-agent/tools/codepath-result";
-import * as nativesModule from "@oh-my-pi/pi-natives";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import { createTools, GetTool, type ToolSession } from "@spell/pi-coding-agent/tools";
+import { formatCodePathResult } from "@spell/pi-coding-agent/tools/codepath-result";
+import * as nativesModule from "@spell/pi-natives";
 
 function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
@@ -753,7 +753,7 @@ describe("GetTool", () => {
 	describe("FEAT-720: schema removed pagination fields", () => {
 		it("getSchema rejects head, tail, offset, limit (additionalProperties: false)", async () => {
 			const { Value } = await import("@sinclair/typebox/value");
-			const { getSchema } = await import("@oh-my-pi/pi-coding-agent/tools/codepath-types");
+			const { getSchema } = await import("@spell/pi-coding-agent/tools/codepath-types");
 			expect(Value.Check(getSchema, { target: "x" })).toBe(true);
 			expect(Value.Check(getSchema, { target: "x", head: 5 })).toBe(false);
 			expect(Value.Check(getSchema, { target: "x", tail: 5 })).toBe(false);
@@ -810,7 +810,7 @@ describe("GetTool", () => {
 	//   scheme-bridge-e2e.test  — jobs callback bridge (TS-side)
 
 	it("falls through to kernel for unknown scheme", async () => {
-		const { InternalUrlRouter } = await import("@oh-my-pi/pi-coding-agent/internal-urls");
+		const { InternalUrlRouter } = await import("@spell/pi-coding-agent/internal-urls");
 		const router = new InternalUrlRouter();
 		// nope:// is not registered, so router.canHandle returns false.
 
@@ -825,7 +825,7 @@ describe("GetTool", () => {
 		expect(getText(result)).toContain("Unknown locator scheme");
 	});
 	it("surfaces resource.notes as [note] lines in output", async () => {
-		const { InternalUrlRouter } = await import("@oh-my-pi/pi-coding-agent/internal-urls");
+		const { InternalUrlRouter } = await import("@spell/pi-coding-agent/internal-urls");
 		const router = new InternalUrlRouter();
 		router.register({
 			scheme: "stub",
@@ -1013,7 +1013,7 @@ describe("FEAT-816: absolute targets self-root", () => {
 		await fs.mkdir(outsideRoot, { recursive: true });
 		await fs.writeFile(nodePath.join(outsideRoot, "listed.txt"), "", "utf-8");
 		try {
-			const { FindTool } = await import("@oh-my-pi/pi-coding-agent/tools");
+			const { FindTool } = await import("@spell/pi-coding-agent/tools");
 			const findTool = new FindTool();
 			const result = await findTool.execute("t", { target: outsideRoot });
 			const text = getText(result);
@@ -1032,7 +1032,7 @@ describe("FEAT-816: absolute targets self-root", () => {
 		await fs.mkdir(outsideRoot, { recursive: true });
 		await fs.writeFile(nodePath.join(outsideRoot, "anchored.txt"), "", "utf-8");
 		try {
-			const { FindTool } = await import("@oh-my-pi/pi-coding-agent/tools");
+			const { FindTool } = await import("@spell/pi-coding-agent/tools");
 			const findTool = new FindTool(createSession({ cwd: process.cwd() }));
 			const result = await findTool.execute("t", { target: outsideRoot });
 			const text = getText(result);
@@ -1047,7 +1047,7 @@ describe("FEAT-816: absolute targets self-root", () => {
 		// The auto-root opt-out for absolute targets must NOT regress
 		// the relative-path case: relative targets still resolve against
 		// session.cwd, not process.cwd().
-		const { FindTool } = await import("@oh-my-pi/pi-coding-agent/tools");
+		const { FindTool } = await import("@spell/pi-coding-agent/tools");
 		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([makeChunk([])]);
 		const findTool = new FindTool(createSession({ cwd: "/tmp" }));
 		await findTool.execute("t", { target: "relative/path.ts" });

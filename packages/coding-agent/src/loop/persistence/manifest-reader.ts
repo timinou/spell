@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent } from "@spell/pi-utils";
 import type { TicketState } from "../contracts";
 import { GATE_TRIGGERS, TICKET_STATES } from "../contracts";
 import type { LoopGateConfig, ManifestSnapshot, ManifestTicket } from "../types";

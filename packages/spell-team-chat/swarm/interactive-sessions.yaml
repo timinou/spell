@@ -24,14 +24,14 @@ swarm:
     # WAVE 1 — Cassette infrastructure
     # ============================================================
     # Goal: deterministic LLM responses in tests. Record once, replay forever.
-    # Output of wave: a `cassetteFetch(realFetch, opts)` factory in @oh-my-pi/ai
+    # Output of wave: a `cassetteFetch(realFetch, opts)` factory in @spell/ai
     # that can be injected into provider HTTP paths. Anthropic SSE captured
     # chunk-by-chunk, replayed with fast-forward timing.
 
     cassette_core:
       role: ai-test-infra
       task: |
-        Implement a fetch-level cassette middleware in @oh-my-pi/ai.
+        Implement a fetch-level cassette middleware in @spell/ai.
 
         ## Target files (new)
         - packages/ai/src/cassette/index.ts        — public API: `cassetteFetch`, `CassetteOptions`, `CassetteMode`

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { hookFetch } from "@oh-my-pi/pi-utils";
+import { hookFetch } from "@spell/pi-utils";
 import {
 	executeCodeSearch,
 	searchCodeWithGrep,

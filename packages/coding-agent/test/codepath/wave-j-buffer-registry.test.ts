@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { executeCodeBuffer, executeCodePath } from "@oh-my-pi/pi-natives";
+import { executeCodeBuffer, executeCodePath } from "@spell/pi-natives";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";

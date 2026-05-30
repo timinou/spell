@@ -1,8 +1,8 @@
 import * as path from "node:path";
-import type { AgentState } from "@oh-my-pi/pi-agent-core";
-import type { SystemPrompt } from "@oh-my-pi/pi-ai";
-import { systemPromptText } from "@oh-my-pi/pi-ai";
-import { APP_NAME, isEnoent } from "@oh-my-pi/pi-utils";
+import type { AgentState } from "@spell/pi-agent-core";
+import type { SystemPrompt } from "@spell/pi-ai";
+import { systemPromptText } from "@spell/pi-ai";
+import { APP_NAME, isEnoent } from "@spell/pi-utils";
 import { getResolvedThemeColors, getThemeExportColors } from "../../modes/theme/theme";
 import { type SessionEntry, type SessionHeader, SessionManager } from "../../session/session-manager";
 // Pre-generated template (created by scripts/generate-template.ts at publish time)

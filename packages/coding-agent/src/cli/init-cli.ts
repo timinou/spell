@@ -1,6 +1,6 @@
 import * as path from "node:path";
 
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent } from "@spell/pi-utils";
 import chalk from "chalk";
 
 import { type DetectedProject, detectProject, type ProjectLanguage } from "../config/project-detection";

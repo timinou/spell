@@ -25,7 +25,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { executeOrg } from "@oh-my-pi/pi-natives";
+import { executeOrg } from "@spell/pi-natives";
 
 describe("executeOrg async-NAPI cutover (FEAT-780) — real binding", () => {
 	it("returns a thenable Promise (not a plain value)", () => {

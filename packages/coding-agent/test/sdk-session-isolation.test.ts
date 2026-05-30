@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
-import { getSessionsDir, Snowflake } from "@oh-my-pi/pi-utils";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import { createAgentSession } from "@spell/pi-coding-agent/sdk";
+import { getSessionsDir, Snowflake } from "@spell/pi-utils";
 
 describe("createAgentSession session storage isolation", () => {
 	const tempDirs: string[] = [];

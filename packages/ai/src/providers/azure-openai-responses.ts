@@ -1,4 +1,4 @@
-import { $env, abortableSleep } from "@oh-my-pi/pi-utils";
+import { $env, abortableSleep } from "@spell/pi-utils";
 import { AzureOpenAI } from "openai";
 import type {
 	Tool as OpenAITool,

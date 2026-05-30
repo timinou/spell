@@ -1,4 +1,4 @@
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@spell/pi-utils";
 import { Value } from "@sinclair/typebox/value";
 import { type IterationCheckpoint, IterationCheckpointSchema } from "../contracts";
 import type { LoopSnapshot } from "../types";

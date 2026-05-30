@@ -2,7 +2,7 @@
  * PLAN-310 W6: scheme-callbacks helpers.
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { clearRuntimeSchemes, listRegisteredSchemes } from "@oh-my-pi/pi-natives";
+import { clearRuntimeSchemes, listRegisteredSchemes } from "@spell/pi-natives";
 import {
 	RESERVED_NATIVE_SCHEMES,
 	deriveSchemeFromServerName,

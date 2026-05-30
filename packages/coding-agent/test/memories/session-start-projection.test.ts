@@ -2,7 +2,7 @@
  * Integration: renderSessionStartSummary writes a deterministic
  * memory_summary.md projection at `<cwd>/.spell/memory/cache/`. PLAN-310 W7.
  *
- * Uses the real `@oh-my-pi/pi-natives` binding against an empty memory store
+ * Uses the real `@spell/pi-natives` binding against an empty memory store
  * so the projection runs end-to-end without leaking module mocks into sibling
  * tests in the same bun process.
  */

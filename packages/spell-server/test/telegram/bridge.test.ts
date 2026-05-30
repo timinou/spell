@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { hookFetch } from "@oh-my-pi/pi-utils";
+import { hookFetch } from "@spell/pi-utils";
 import type { RpcClient } from "../../src/rpc/rpc-client";
 import type { AssistantEvent, ImageContentRef, RpcEvent } from "../../src/rpc/types";
 import type { AuthContext } from "../../src/telegram/bot/auth";

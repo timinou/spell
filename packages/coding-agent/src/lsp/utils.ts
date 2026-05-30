@@ -1,7 +1,7 @@
-export { truncate } from "@oh-my-pi/pi-utils";
+export { truncate } from "@spell/pi-utils";
 
 import path from "node:path";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent } from "@spell/pi-utils";
 import { type Theme, theme } from "../modes/theme/theme";
 import type {
 	CodeAction,

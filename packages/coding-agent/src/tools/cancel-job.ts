@@ -1,4 +1,4 @@
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@spell/pi-agent-core";
 import { type Static, Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import cancelJobDescription from "../prompts/tools/cancel-job.md" with { type: "text" };
@@ -21,6 +21,10 @@ export class CancelJobTool implements AgentTool<typeof cancelJobSchema, CancelJo
 	readonly description: string;
 	readonly parameters = cancelJobSchema;
 	readonly strict = true;
+	// Mutates async-job-manager state. A sibling `await` on the same id, or
+	// another cancel_job in the same batch, must observe a stable view. Lifted
+	// to sequential so the loop, not the manager, owns the batch-wide order.
+	readonly executionMode = "sequential" as const;
 
 	constructor(private readonly session: ToolSession) {
 		this.description = renderPromptTemplate(cancelJobDescription);

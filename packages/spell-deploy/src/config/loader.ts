@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent } from "@spell/pi-utils";
 import { parseSyncConfig } from "./sync-parser";
 import type { SyncConfig } from "./types";
 

@@ -12,8 +12,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createOrgTool } from "@oh-my-pi/pi-org";
-import type { OrgConfig } from "@oh-my-pi/pi-org/types";
+import { createOrgTool } from "@spell/pi-org";
+import type { OrgConfig } from "@spell/pi-org/types";
 
 const TODO_KEYWORDS = ["ITEM", "DOING", "REVIEW", "DONE", "BLOCKED", "CANCELLED"];
 

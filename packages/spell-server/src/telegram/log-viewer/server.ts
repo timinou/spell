@@ -1,4 +1,4 @@
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@spell/pi-utils";
 import type { ChatSession } from "../../rpc/bridge-types";
 import type { TelegramBridgeConfig } from "../types";
 import { renderSessionHtml, renderSessionListHtml } from "./renderer";

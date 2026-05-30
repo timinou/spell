@@ -1,5 +1,5 @@
 #+TITLE: Stream barrier on sequential tools — cut SSE at toolcall_end of ask/await/cancel_job/exit_plan_mode/browser
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14f5aa3ae1ce24f4
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-30T15-14-40-135Z_14f5aa3ae1ce24f4.jsonl]]
 #+CUSTOM_ID: FEAT-788-stream-barrier-on-sequential-tools-cut-s
@@ -177,3 +177,30 @@ Files:
 - Originating session: =14f5aa3ae1ce24f4= (this conversation).
 - Prior diagnostic work on perceived tool queueing: session =14f412079fc64f65= (→ BUG-419, BUG-420 — UI-layer ghost cells, separate concern).
 - Reference harnesses surveyed: =~/code/ora/pi-mono/packages/agent/src/agent-loop.ts=, =~/code/ora/forks/pi/packages/agent/src/agent-loop.ts= — neither implements this.
+
+* Completion [2026-05-30]
+
+Landed in commit =03161e6e8ec2bcf7d4b8fc0fc28e5342272754db= on branch =fup-099-live-semantic-dispatch=.
+
+Files touched:
+- =packages/agent/src/types.ts= — added =sequentialToolStreamBarrier?: "enforce" | "off"= to =AgentLoopConfig=, default =enforce=.
+- =packages/agent/src/agent-loop.ts::streamAssistantResponse= — composed barrier =AbortController= with caller signal via =AbortSignal.any=, split =toolcall_end= out of the shared switch case, added barrier cut: trim content to barrier inclusive, force =stopReason: "toolUse"=, emit single =message_end=, abort upstream signal, return finalMessage.
+- =packages/agent/test/agent-loop-stream-barrier.test.ts= (new, 582 lines) — 10 tests covering: cut-on-end · upstream-abort · first-sequential-wins-when-multiple · off-mode-passthrough · parallel-only-passthrough · first-block-cut · unknown-tool-fail-open · single-message_end · 2-turn-integration · prefix-only-execution.
+
+Verification:
+- =bun test packages/agent/test/agent-loop-stream-barrier.test.ts= → 10/10 green.
+- =bun test packages/agent/test/= → 43/43 green (full package suite, no regression).
+- =bun run check= (=tsgo -p tsconfig.json= for =packages/agent=) → clean.
+
+Implementation notes worth keeping:
+- The kept-content blocks are deep-cloned with =partialJson= and =index= residue stripped, mirroring the existing cleanup the Anthropic provider runs on its error path (=packages/ai/src/providers/anthropic.ts:957=). Otherwise the trimmed message would round-trip through history / =convertToLlm= carrying provider-internal fields.
+- The barrier =AbortController= is separate from the caller's =signal= and composed via =AbortSignal.any([signal, barrierAbort.signal])=. This keeps "user cancellation" and "barrier cut" distinguishable at the provider boundary without expanding the public signal contract.
+- The unknown-tool case (toolcall_end for a name not in =context.tools=) fails open: no cut. This preserves correctness when a tool was resolved via =resolveUnknownTool= and isn't in the static set at this moment; the existing dispatch-time error handling owns that case.
+- Test backpressure required a macrotask =setTimeout(0)= yield between scripted events (not just =Promise.resolve()=) so the consumer's =for await= had a real chance to drain the incoming event and trip the barrier abort before the next event was queued. The "abort observed" assertion subscribes to the signal directly to avoid timing on the IIFE's next macrotask slice.
+
+Non-goals deferred:
+- TUI cell-creation timing in =event-controller.ts= (user de-prioritised — "I don't care about (1)").
+- Mid-stream ghost-cell reaping on retry boundary (user wants a "cooler fix" — pending its own FEAT once the barrier reduces ghost-cell incidence enough to characterise the remaining cases).
+
+Sibling concern surfaced mid-session:
+- User reported "latest sessions seem to have a problem updating the TUI but then once the stream is done I do see the chat responses." That symptom is orthogonal to this barrier (the barrier only changes which events get emitted, not how the TUI consumes them). Likely candidates: render debounce starvation, =LiveToolBatchComponent= dirty propagation, =AssistantMessageEventStream= delta throttling. To be triaged as a separate BUG.

@@ -1,7 +1,7 @@
 import * as path from "node:path";
-import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Api, Model } from "@oh-my-pi/pi-ai";
-import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
+import type { ThinkingLevel } from "@spell/pi-agent-core";
+import type { Api, Model } from "@spell/pi-ai";
+import { getProjectDir, logger } from "@spell/pi-utils";
 import { ModelRegistry } from "../config/model-registry";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import { Settings } from "../config/settings";

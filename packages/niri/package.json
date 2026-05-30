@@ -1,18 +1,18 @@
 {
 	"type": "module",
-	"name": "@oh-my-pi/pi-niri",
+	"name": "@spell/pi-niri",
 	"version": "0.1.0",
 	"description": "Niri compositor IPC client and overview overlay for pi",
-	"homepage": "https://github.com/can1357/oh-my-pi",
+	"homepage": "https://github.com/timinou/spell",
 	"author": "Can Boluk",
 	"license": "GPL-3.0-only",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/can1357/oh-my-pi.git",
+		"url": "git+https://github.com/timinou/spell.git",
 		"directory": "packages/niri"
 	},
 	"bugs": {
-		"url": "https://github.com/can1357/oh-my-pi/issues"
+		"url": "https://github.com/timinou/spell/issues"
 	},
 	"keywords": [
 		"niri",
@@ -26,9 +26,9 @@
 		"check": "tsgo -p tsconfig.json"
 	},
 	"dependencies": {
-		"@oh-my-pi/pi-desktop-common": "workspace:*",
-		"@oh-my-pi/pi-tui": "workspace:*",
-		"@oh-my-pi/pi-utils": "workspace:*"
+		"@spell/pi-desktop-common": "workspace:*",
+		"@spell/pi-tui": "workspace:*",
+		"@spell/pi-utils": "workspace:*"
 	},
 	"devDependencies": {
 		"@types/bun": "^1.3"

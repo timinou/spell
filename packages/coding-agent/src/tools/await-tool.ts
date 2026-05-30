@@ -1,4 +1,4 @@
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@spell/pi-agent-core";
 import { type Static, Type } from "@sinclair/typebox";
 import type { AsyncJob } from "../async";
 import { renderPromptTemplate } from "../config/prompt-templates";
@@ -49,6 +49,11 @@ export class AwaitTool implements AgentTool<typeof awaitSchema, AwaitToolDetails
 	readonly description: string;
 	readonly parameters = awaitSchema;
 	readonly strict = true;
+	// Sync point: waits for an async job to finalize. Racing it against siblings
+	// in the same batch (e.g. another await, a cancel_job, or a tool that may
+	// register a new job) yields ill-defined behaviour. Sequential ensures it
+	// only runs against a settled job-manager state.
+	readonly executionMode = "sequential" as const;
 
 	constructor(private readonly session: ToolSession) {
 		this.description = renderPromptTemplate(awaitDescription);

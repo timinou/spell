@@ -9,7 +9,7 @@ import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { Snowflake } from "@spell/pi-utils";
 
 let tmp: string;
 
@@ -24,12 +24,12 @@ afterEach(() => {
 
 describe("config doctor: detect.ts dynamic import contract", () => {
 	it("detectLegacyConfig is importable from the migration module", async () => {
-		const mod = await import("@oh-my-pi/pi-coding-agent/migration/detect");
+		const mod = await import("@spell/pi-coding-agent/migration/detect");
 		expect(typeof mod.detectLegacyConfig).toBe("function");
 	});
 
 	it("returns empty findings for a clean directory", async () => {
-		const { detectLegacyConfig } = await import("@oh-my-pi/pi-coding-agent/migration/detect");
+		const { detectLegacyConfig } = await import("@spell/pi-coding-agent/migration/detect");
 		const projectDir = path.join(tmp, "project");
 		const agentDir = path.join(tmp, ".spell", "agent");
 		fs.mkdirSync(projectDir, { recursive: true });
@@ -45,7 +45,7 @@ describe("config doctor: detect.ts dynamic import contract", () => {
 	});
 
 	it("flags every magic-file location when populated", async () => {
-		const { detectLegacyConfig } = await import("@oh-my-pi/pi-coding-agent/migration/detect");
+		const { detectLegacyConfig } = await import("@spell/pi-coding-agent/migration/detect");
 		const projectDir = path.join(tmp, "project");
 		const agentDir = path.join(tmp, ".spell", "agent");
 		fs.mkdirSync(agentDir, { recursive: true });

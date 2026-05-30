@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { executeCodeBuffer } from "@oh-my-pi/pi-natives";
+import { executeCodeBuffer } from "@spell/pi-natives";
 
 const FALLBACK_SEMANTIC_EXTENSIONS = new Set([
 	"ts",

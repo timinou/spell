@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent } from "@spell/pi-utils";
 import type { SpellDomain } from "../../../../domain/growth/src/types";
 
 /** Re-export so callers can reference the type without reaching into domain/growth directly. */

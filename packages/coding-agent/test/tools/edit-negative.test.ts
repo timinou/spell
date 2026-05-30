@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Value } from "@sinclair/typebox/value";
-import { editOpSchema } from "@oh-my-pi/pi-coding-agent/tools/codepath-types";
+import { editOpSchema } from "@spell/pi-coding-agent/tools/codepath-types";
 
 /**
  * PLAN-304 negative-shape rejection tests

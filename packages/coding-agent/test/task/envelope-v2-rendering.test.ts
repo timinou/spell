@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { getThemeByName } from "@spell/pi-coding-agent/modes/theme/theme";
 import { taskToolRenderer } from "../../src/task/render";
 import { SubagentTracker } from "../../src/task/subagent-tracker";
 import type { SingleResult, SubagentOutcome, TaskToolDetails } from "../../src/task/types";

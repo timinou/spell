@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { TabBarTheme } from "@oh-my-pi/pi-tui";
-import { getProjectDir, isEnoent } from "@oh-my-pi/pi-utils";
+import type { TabBarTheme } from "@spell/pi-tui";
+import { getProjectDir, isEnoent } from "@spell/pi-utils";
 import { theme } from "./theme/theme";
 
 // ═══════════════════════════════════════════════════════════════════════════

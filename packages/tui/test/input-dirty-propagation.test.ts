@@ -6,8 +6,8 @@
  * historically skipped markDirty: SelectList, SettingsList, Input, Editor.
  */
 import { describe, expect, it } from "bun:test";
-import type { DirtyParent } from "@oh-my-pi/pi-tui";
-import { Editor, Input, SelectList, SettingsList } from "@oh-my-pi/pi-tui";
+import type { DirtyParent } from "@spell/pi-tui";
+import { Editor, Input, SelectList, SettingsList } from "@spell/pi-tui";
 
 class DirtyCounter implements DirtyParent {
 	count = 0;

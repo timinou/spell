@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { OutputSink } from "@oh-my-pi/pi-coding-agent/session/streaming-output";
+import { OutputSink } from "@spell/pi-coding-agent/session/streaming-output";
 
 describe("OutputSink spill policy", () => {
 	it("spills once the line threshold is exceeded", async () => {

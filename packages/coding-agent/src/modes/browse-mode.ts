@@ -1,6 +1,6 @@
 import * as path from "node:path";
-import { QmlBridge } from "@oh-my-pi/pi-qml";
-import { logger } from "@oh-my-pi/pi-utils";
+import { QmlBridge } from "@spell/pi-qml";
+import { logger } from "@spell/pi-utils";
 import type { CanvasOrchestratorManager } from "../orchestrators/canvas-orchestrator";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { EventBus } from "../utils/event-bus";

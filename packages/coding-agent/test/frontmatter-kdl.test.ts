@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { parseFrontmatter } from "@oh-my-pi/pi-coding-agent/utils/frontmatter";
+import { parseFrontmatter } from "@spell/pi-coding-agent/utils/frontmatter";
 
 describe("frontmatter parser: dual-mode KDL + YAML", () => {
 	it("parses ---kdl block with kebab-case keys to camelCase JS keys", () => {

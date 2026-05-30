@@ -12,8 +12,8 @@
  * them visually pending forever.
  */
 import { beforeAll, describe, expect, test } from "bun:test";
-import { type Component, type Container, TUI } from "@oh-my-pi/pi-tui";
-import { VirtualTerminal } from "@oh-my-pi/pi-tui/../test/virtual-terminal";
+import { type Component, type Container, TUI } from "@spell/pi-tui";
+import { VirtualTerminal } from "@spell/pi-tui/../test/virtual-terminal";
 import { Settings } from "../../src/config/settings";
 import { EventController } from "../../src/modes/controllers/event-controller";
 import type { ToolExecutionHandle } from "../../src/modes/components/tool-execution";

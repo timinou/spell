@@ -1,4 +1,4 @@
-import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
+import type { AutocompleteItem } from "@spell/pi-tui";
 import { slashCommandCapability } from "../capability/slash-command";
 import {
 	appendInlineArgsFallback,

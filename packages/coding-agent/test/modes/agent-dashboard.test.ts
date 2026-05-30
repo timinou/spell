@@ -17,9 +17,9 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AgentDashboard } from "@oh-my-pi/pi-coding-agent/modes/components/agent-dashboard";
-import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import { AgentDashboard } from "@spell/pi-coding-agent/modes/components/agent-dashboard";
+import { getThemeByName, setThemeInstance } from "@spell/pi-coding-agent/modes/theme/theme";
 
 const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
 

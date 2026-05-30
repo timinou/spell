@@ -9,7 +9,7 @@ export type {
 	DiagnosticDto,
 	NodeRefDto,
 	SpanDto,
-} from "@oh-my-pi/pi-natives";
+} from "@spell/pi-natives";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Shared action schema (used by edit and create)

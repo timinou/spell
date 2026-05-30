@@ -1,5 +1,5 @@
-import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { executeCodeBuffer } from "@oh-my-pi/pi-natives";
+import type { AgentToolResult } from "@spell/pi-agent-core";
+import { executeCodeBuffer } from "@spell/pi-natives";
 
 import { ToolError } from "./tool-errors";
 

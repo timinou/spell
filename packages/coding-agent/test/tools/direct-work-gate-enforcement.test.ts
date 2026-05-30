@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
 import type { GitBaseline, GitBaselineDiff } from "../../src/session/git-baseline";
 import type { ToolSession } from "../../src/tools";
 import { type TodoGroup, TodoWriteTool } from "../../src/tools/todo-write";

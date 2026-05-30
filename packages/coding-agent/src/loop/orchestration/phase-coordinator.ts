@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { HandoffArtifact, LoopRole } from "../contracts";
 import { buildIterationPrompt, buildManifestPromptContext, buildReflectionPrompt } from "../prompt-builder";
 import type { LoopSnapshot } from "../types";

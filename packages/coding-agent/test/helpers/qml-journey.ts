@@ -10,7 +10,7 @@ import {
 	QmlTestHarness,
 	type QueryItem,
 	type QuerySelector,
-} from "@oh-my-pi/pi-qml";
+} from "@spell/pi-qml";
 
 const QML_ROOT = path.resolve(import.meta.dir, "../../src/modes/qml");
 

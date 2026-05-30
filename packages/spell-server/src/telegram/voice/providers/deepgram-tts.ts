@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { TtsConfig } from "../../../config/types";
 import type { TtsProvider, TtsResult } from "../tts";
 import { truncateForTts } from "../tts-utils";

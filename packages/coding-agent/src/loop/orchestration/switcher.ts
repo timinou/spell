@@ -1,4 +1,4 @@
-import type { Model } from "@oh-my-pi/pi-ai";
+import type { Model } from "@spell/pi-ai";
 import { validateLoopPrerequisites } from "../../config/loop-prerequisites";
 import type { LoopRole } from "../contracts";
 

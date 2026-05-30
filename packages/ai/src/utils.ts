@@ -1,4 +1,4 @@
-import { $env } from "@oh-my-pi/pi-utils";
+import { $env } from "@spell/pi-utils";
 import type {
 	CacheRetention,
 	OpenAIResponsesHistoryPayload,
@@ -7,7 +7,7 @@ import type {
 	SystemPromptBlock,
 } from "./types";
 
-export { isRecord } from "@oh-my-pi/pi-utils";
+export { isRecord } from "@spell/pi-utils";
 export * from "./utils/tool-call-diagnostics";
 
 export function toNumber(value: unknown): number | undefined {

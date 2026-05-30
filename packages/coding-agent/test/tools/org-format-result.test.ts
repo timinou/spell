@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { formatOrgResult, memoizeOrgResult } from "@oh-my-pi/pi-coding-agent/tools/org";
-import type { OrgItem } from "@oh-my-pi/pi-org";
+import { formatOrgResult, memoizeOrgResult } from "@spell/pi-coding-agent/tools/org";
+import type { OrgItem } from "@spell/pi-org";
 
 function createItem(overrides: Partial<OrgItem> = {}): OrgItem {
 	return {

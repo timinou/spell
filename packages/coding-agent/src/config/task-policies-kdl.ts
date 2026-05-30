@@ -1,6 +1,6 @@
 import type { Document, Node } from "@bgotink/kdl";
 import { parse } from "@bgotink/kdl";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import { getBooleanArgument, getStringArgument, getStringProperty } from "./kdl-helpers";
 import type { LayerDefinition, TaskPolicy, TaskPolicyConfig, TaskPolicyGates } from "./task-policies";
 

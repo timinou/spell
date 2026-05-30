@@ -12,8 +12,8 @@
  * cycle with image-generation.ts (which imports this module).
  */
 
-import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { StringEnum } from "@oh-my-pi/pi-ai";
+import type { AgentToolResult } from "@spell/pi-agent-core";
+import { StringEnum } from "@spell/pi-ai";
 import { type Static, type TSchema, Type } from "@sinclair/typebox";
 
 import { renderPromptTemplate } from "../../config/prompt-templates";

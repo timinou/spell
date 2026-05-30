@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { MCPOAuthFlow } from "@oh-my-pi/pi-coding-agent/mcp/oauth-flow";
-import { hookFetch } from "@oh-my-pi/pi-utils";
+import { MCPOAuthFlow } from "@spell/pi-coding-agent/mcp/oauth-flow";
+import { hookFetch } from "@spell/pi-utils";
 
 describe("mcp oauth flow", () => {
 	it("uses Codex client name for dynamic client registration", async () => {

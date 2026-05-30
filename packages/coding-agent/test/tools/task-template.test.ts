@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { sectionSeparator } from "@oh-my-pi/pi-coding-agent/config/prompt-templates";
-import { renderTemplate } from "@oh-my-pi/pi-coding-agent/task/template";
+import { sectionSeparator } from "@spell/pi-coding-agent/config/prompt-templates";
+import { renderTemplate } from "@spell/pi-coding-agent/task/template";
 
 describe("renderTemplate", () => {
 	test("returns assignment as task when no context", () => {

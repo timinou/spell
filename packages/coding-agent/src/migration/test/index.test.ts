@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Readable, Writable } from "node:stream";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { Snowflake } from "@spell/pi-utils";
 import { maybeRunMigration } from "../index";
 
 let tmpRoot: string;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CANVAS_DISPLAY_REQUIRED_MESSAGE, formatUnknownCanvasMessage } from "@oh-my-pi/pi-coding-agent/main";
+import { CANVAS_DISPLAY_REQUIRED_MESSAGE, formatUnknownCanvasMessage } from "@spell/pi-coding-agent/main";
 
 describe("canvas CLI messages", () => {
 	test("display guard message explains required environment variables", () => {

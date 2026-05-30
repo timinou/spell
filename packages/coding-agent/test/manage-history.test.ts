@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { executeCodePath } from "@oh-my-pi/pi-natives";
+import { executeCodePath } from "@spell/pi-natives";
 
 const tmpDir = path.join(process.cwd(), "packages/coding-agent/test/tmp-manage-history");
 const historyFile = path.join(process.cwd(), ".spell", "edit-history.jsonl");

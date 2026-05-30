@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
-import { Container, Image, Markdown, Spacer, Text } from "@oh-my-pi/pi-tui";
+import type { AssistantMessage, Usage } from "@spell/pi-ai";
+import { Container, Image, Markdown, Spacer, Text } from "@spell/pi-tui";
 import { _resetSettingsForTest, Settings, settings } from "../../../src/config/settings";
 import { AssistantMessageComponent } from "../../../src/modes/components/assistant-message";
 import { initTheme } from "../../../src/modes/theme/theme";

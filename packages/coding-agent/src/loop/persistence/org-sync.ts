@@ -1,4 +1,4 @@
-import { DEFAULT_TODO_KEYWORDS, readOrgFile } from "@oh-my-pi/pi-org";
+import { DEFAULT_TODO_KEYWORDS, readOrgFile } from "@spell/pi-org";
 import type { LoopSnapshot } from "../types";
 
 function mapLoopStateToOrgState(state: LoopSnapshot["state"]): string {

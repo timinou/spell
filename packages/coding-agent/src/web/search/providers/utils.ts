@@ -1,4 +1,4 @@
-import { getAgentDbPath } from "@oh-my-pi/pi-utils";
+import { getAgentDbPath } from "@spell/pi-utils";
 import { AgentStorage } from "../../../session/agent-storage";
 
 /**

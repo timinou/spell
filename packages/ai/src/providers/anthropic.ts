@@ -8,7 +8,7 @@ import type {
 	MessageCreateParamsStreaming,
 	MessageParam,
 } from "@anthropic-ai/sdk/resources/messages";
-import { $env, abortableSleep, isEnoent } from "@oh-my-pi/pi-utils";
+import { $env, isEnoent } from "@spell/pi-utils";
 import { type CassetteMode, cassetteFetch } from "../cassette";
 import { buildImageDropMarker, validateImage } from "../image-validation";
 import { mapEffortToAnthropicAdaptiveEffort } from "../model-thinking";
@@ -37,8 +37,6 @@ import type {
 import {
 	appendToolCallStreamDiagnostic,
 	classifyAssistantStreamInterruption,
-	getToolCallStreamMaxRetries,
-	getToolCallStreamRetryDelayMs,
 	hasActiveToolArgumentStreaming,
 	isAnthropicOAuthToken,
 	normalizeToolCallId,
@@ -709,15 +707,24 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			) & { index: number };
 			const blocks = output.content as Block[];
 			stream.push({ type: "start", partial: output });
-			// Retry loop for transient errors from the stream.
-			// Rate-limit/overload: only before content starts (safe to restart).
-			// Truncated JSON: also after content starts (partial response is unusable).
+			// Single-attempt streaming. Transient stalls / rate-limit / overload
+			// errors are thrown to the consumer; turn-level retry is owned by the
+			// session layer (see AgentSession#isRetryableErrorMessage which already
+			// matches /stream stall|overloaded|rate.?limit|429|5xx|.../i). The old
+			// in-provider do-while retry rebuilt `client.messages.stream(...)` from
+			// scratch on each iteration — same cost as a session-level retry — but
+			// also wiped `output.content` while the outer event stream had already
+			// shipped `message_update` events containing the now-dead tool_use ids.
+			// New ids from the retry then registered new tool cells in the UI while
+			// the old ones sat forever pending ("Tools (72) · 0 done · 72 running").
+			// Matching upstream pi-mono's contract (stalls = hard error, agent
+			// retries the whole turn with fresh ids) keeps the LiveToolBatch panel
+			// honest and lets the session layer apply unified retry policy across
+			// transient classes. See PB-* note in commit msg.
 			const streamIdleTimeoutMs = getAnthropicStreamIdleTimeoutMs();
 			const toolArgumentIdleTimeoutMs = getToolArgumentStreamIdleTimeoutMs(streamIdleTimeoutMs);
-			let providerRetryAttempt = 0;
-			let started = false;
-			let lastStallPartialJsonBytes: number | undefined;
-			do {
+			const providerRetryAttempt = 0;
+			{
 				const requestAbortController = new AbortController();
 				const requestSignal = options?.signal
 					? AbortSignal.any([options.signal, requestAbortController.signal])
@@ -736,7 +743,6 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 						onIdle: () => requestAbortController.abort(),
 						tickle,
 					})) {
-						started = true;
 						if (event.type === "message_start") {
 							// Capture initial token usage from message_start event
 							// This ensures we have input token counts even if the stream is aborted early
@@ -912,7 +918,6 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					if (output.stopReason === "aborted" || output.stopReason === "error") {
 						throw new Error("An unknown error occurred");
 					}
-					break; // Stream completed successfully
 				} catch (streamError) {
 					const idleTimeoutMs = hasActiveToolArgumentStreaming(output)
 						? toolArgumentIdleTimeoutMs
@@ -929,42 +934,15 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					if (stallDiagnostic) {
 						appendToolCallStreamDiagnostic(output, stallDiagnostic);
 					}
+					// Graceful recovery: the model completed all tool_use blocks but the
+					// SDK didn't see the trailing message_stop. The output is usable as-is.
 					if (stallDiagnostic?.state === "completed_tool_call_missing_trailing_stop") {
 						output.stopReason = "toolUse";
-						break;
+					} else {
+						throw stallDiagnostic ? new ToolCallStreamDiagnosticError(stallDiagnostic) : streamError;
 					}
-					const finalStreamError = stallDiagnostic
-						? new ToolCallStreamDiagnosticError(stallDiagnostic)
-						: streamError;
-					const isTransient =
-						isTransientStreamParseError(streamError) || stallDiagnostic?.state === "stalled_incomplete_tool_args";
-					if (stallDiagnostic?.state === "stalled_incomplete_tool_args") {
-						if (
-							stallDiagnostic.rawPartialJsonBytes !== undefined &&
-							stallDiagnostic.rawPartialJsonBytes <= (lastStallPartialJsonBytes ?? -1)
-						) {
-							throw finalStreamError;
-						}
-						lastStallPartialJsonBytes = stallDiagnostic.rawPartialJsonBytes;
-					}
-					if (
-						options?.signal?.aborted ||
-						providerRetryAttempt >= getToolCallStreamMaxRetries() ||
-						(stallDiagnostic !== undefined && !isTransient) ||
-						(stallDiagnostic === undefined && !isTransient && firstTokenTime !== undefined) ||
-						(stallDiagnostic === undefined && !isTransient && !isProviderRetryableError(streamError))
-					) {
-						throw finalStreamError;
-					}
-					providerRetryAttempt++;
-					await abortableSleep(getToolCallStreamRetryDelayMs(providerRetryAttempt), options?.signal);
-					// Reset output state for clean retry
-					output.content.length = 0;
-					output.stopReason = "stop";
-					firstTokenTime = undefined;
-					started = false;
 				}
-			} while (!started);
+			}
 
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;

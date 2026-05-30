@@ -1,18 +1,18 @@
 {
 	"type": "module",
-	"name": "@oh-my-pi/spell-server",
+	"name": "@spell/spell-server",
 	"version": "0.1.0",
 	"description": "Spell autonomy server with scheduling, hooks, and HTTP dashboard",
-	"homepage": "https://github.com/can1357/oh-my-pi",
+	"homepage": "https://github.com/timinou/spell",
 	"author": "Can Boluk",
 	"license": "GPL-3.0-only",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/can1357/oh-my-pi.git",
+		"url": "git+https://github.com/timinou/spell.git",
 		"directory": "packages/spell-server"
 	},
 	"bugs": {
-		"url": "https://github.com/can1357/oh-my-pi/issues"
+		"url": "https://github.com/timinou/spell/issues"
 	},
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",
@@ -27,7 +27,7 @@
 	},
 	"dependencies": {
 		"@bgotink/kdl": "^0.4",
-		"@oh-my-pi/pi-utils": "workspace:*",
+		"@spell/pi-utils": "workspace:*",
 		"croner": "^9.0",
 		"grammy": "^1.35",
 		"handlebars": "4.7.9",

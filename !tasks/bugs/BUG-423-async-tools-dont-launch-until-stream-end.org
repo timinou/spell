@@ -1,5 +1,5 @@
 #+TITLE: Async tools don't launch until stream ends — work starts only after the whole assistant message is received
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14f5aa3ae1ce24f4
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-30T15-14-40-135Z_14f5aa3ae1ce24f4.jsonl]]
 #+CUSTOM_ID: BUG-423-async-tools-dont-launch-until-stream-end
@@ -170,3 +170,60 @@ When =executeToolCalls= later runs, it picks up the in-flight promises via the r
 * Status
 
 Filed during triage session =14f5aa3ae1ce24f4= after user question. Symptom CONFIRMED — current behaviour blocks async tool dispatch on stream completion. Not yet fixed; should reuse the FEAT-788 toolcall_end hook point.
+
+* Completion [2026-05-30 \u2014 session 14f5aa3ae1ce24f4]
+
+Landed in commit =b527c271ad007e34246845a6cff083f1664df71a= on branch =fup-099-live-semantic-dispatch=.
+
+** Files
+
+- =packages/agent/src/types.ts= \u2014 added =earlyDispatchParallelTools?: "enforce" | "off"= on =AgentLoopConfig=, default =enforce=, TSDoc explaining the trade-off.
+- =packages/agent/src/agent-loop.ts= \u2014 added =EagerDispatchEntry= / =EagerDispatchMap= types; threaded a per-turn map through =runLoop= \u2192 =streamAssistantResponse= + =executeToolCalls=; extended the =toolcall_end= switch case (right between the existing FEAT-788 barrier check) to classify the tool and kick off =tool.execute()= as a fire-and-forget Promise stored in the map; short-circuited =runTool= when its toolCallId is already in the map (await the existing promise + emit via the existing channels, no double-execute).
+- =packages/agent/test/agent-loop-early-dispatch.test.ts= (new, 8 focused TDD cases).
+- =packages/agent/test/agent-loop-early-dispatch.property.test.ts= (new, seeded PRNG + 8 invariants + 50 scenarios per invariant suite by default).
+
+** Verification
+
+- =bun test packages/agent/test/agent-loop-early-dispatch.test.ts= \u2192 8/8.
+- =bun test packages/agent/test/agent-loop-early-dispatch.property.test.ts= \u2192 150/150 at default, =PROP_RUNS=200= \u2192 600/600.
+- =bun test packages/agent/test/= \u2192 201/201 (full package suite, no regression in FEAT-788 barrier or pre-existing execution-mode tests).
+- =bun run check= (=tsgo=) \u2192 clean. =packages/coding-agent= continues to type-check (consumes =AgentLoopConfig= transitively).
+
+** Implementation notes worth keeping
+
+- The eager-dispatch promise wraps tool errors into =isError: true= results instead of throwing back through the IIFE. This means the awaited side never sees a rejection and the existing error-emission channels in =executeToolCalls= work unchanged.
+- =record.started = true= flips before =emitToolResult= is called so the duplicate =tool_execution_start= path is correctly suppressed (=emitToolResult= already checks =record.started= to decide whether to fire it).
+- Signal: early-dispatched tools receive the OUTER signal only (caller's), not the steering-controller signal. The steering controller is created inside =executeToolCalls=, after the early-dispatch path has already kicked off. This is a conscious trade-off: =interruptMode: "immediate"= can no longer interrupt an already-running early-dispatched tool mid-execution. The signal still aborts pending operations though, and steering messages still take effect for any tool that hasn't started yet. If we later need exact parity, hoist the steering controller up to =runLoop=.
+- =getToolContext= is called with =batchId: =eager_<toolCallId>=, index: 0, total: 1= for early-dispatched tools \u2014 they're not part of the batch yet at dispatch time. The post-stream =executeToolCalls= still computes the real batch metadata, but it never calls =execute()= for eager-dispatched tools (short-circuit), so the eager-side batch metadata is the only one the tool sees. Acceptable: =getToolContext= is informational/diagnostic, not contractual.
+
+** Discovery during TDD (worth preserving for future test authors)
+
+=AssistantMessage.content= is MUTATED through streaming \u2014 every =message_update= event carries a shared reference to the same content array. A test that reads =events[N].message.content= after the stream completes sees the FINAL state, not the snapshot at index N. The test caught it: a "tool#2 first appears in content" predicate matched the very first =message_update= because by test-read time the array contained tool#2.
+
+The stable per-event payload is the =assistantMessageEvent= sub-field on =message_update= events. It carries =toolcall_start= / =toolcall_end= / =text_delta= etc. with the immutable per-event data the consumer saw in real time. Tests asserting "what was the stream state at this point" must use this sub-field. The pattern is documented inline in =agent-loop-early-dispatch.test.ts=.
+
+** Property-test invariants
+
+| ID  | Invariant                                                        |
+|-----+------------------------------------------------------------------|
+| I1  | no duplicate tool_execution_end per toolCallId                   |
+| I2  | every trimmed toolCall yields a tool_result                      |
+| I3  | tool_result count \u2264 toolCall count                                |
+| I4  | barrier cut respected (trimmed message ends at sequential incl.) |
+| I5  | enforce-mode + gap \u21d2 tool started before next toolcall_end       |
+| I6  | enforce vs off agree on the executed-id SET                      |
+| I7  | tool_result content/error matches producing tool                 |
+| I8  | agent_end always emitted                                         |
+
+I6 is the principled one \u2014 it proves the policy change is backwards-compatible in terms of WHICH tools end up running. I5 is the value-prop \u2014 it proves the timing actually moves earlier.
+
+** Followup considerations
+
+- If steering-during-stream becomes important, hoist the steering controller to =runLoop= scope and thread it through both =streamAssistantResponse= and =executeToolCalls= so early-dispatched tools share the abort source. Documented but not done.
+- Live measurement: a tool-heavy turn with one 60s background bash as the first tool now starts that build immediately. Worth manually verifying with a real session to confirm operator-perceptible improvement.
+
+** Related
+
+- FEAT-788 \u2014 stream barrier. The eager-dispatch branch sits adjacent to the barrier branch in the same =toolcall_end= switch case. Barrier handles sequential tools; eager dispatch handles parallel tools. They are orthogonal.
+- BUG-421 \u2014 TUI freeze (different layer; fixed in commit =de6c306056=).
+- =packages/coding-agent/src/tools/bash.ts:409= \u2014 the canonical async tool that motivated this fix.

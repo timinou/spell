@@ -1,9 +1,9 @@
 /**
  * Manage the Spell HTTPS gateway daemon and services.
  */
-import { ensureCerts, findMkcert, GatewayClient, PATHS } from "@oh-my-pi/pi-gateway";
-import { logger } from "@oh-my-pi/pi-utils";
-import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { ensureCerts, findMkcert, GatewayClient, PATHS } from "@spell/pi-gateway";
+import { logger } from "@spell/pi-utils";
+import { Args, Command, Flags } from "@spell/pi-utils/cli";
 import { $ } from "bun";
 
 const SUBCOMMANDS = ["init", "start", "stop", "status", "list", "add", "remove"] as const;

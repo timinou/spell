@@ -1,4 +1,4 @@
-import { matchesKey, padding, truncateToWidth } from "@oh-my-pi/pi-tui";
+import { matchesKey, padding, truncateToWidth } from "@spell/pi-tui";
 import { memorySince } from "./actions.js";
 import type { TabPanel } from "./types.js";
 

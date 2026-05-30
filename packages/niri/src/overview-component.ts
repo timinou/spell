@@ -1,6 +1,6 @@
-import { STATUS_COLOR_PALETTE } from "@oh-my-pi/pi-desktop-common";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { applyBackgroundToLine, padding, sliceByColumn, visibleWidth } from "@oh-my-pi/pi-tui";
+import { STATUS_COLOR_PALETTE } from "@spell/pi-desktop-common";
+import type { Component } from "@spell/pi-tui";
+import { applyBackgroundToLine, padding, sliceByColumn, visibleWidth } from "@spell/pi-tui";
 import type { AgentStatus, OverviewSnapshot, TodoItemSnapshot, TodoPhaseSnapshot } from "./types";
 
 // ─── Color tables ────────────────────────────────────────────────────────────

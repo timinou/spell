@@ -2,7 +2,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Node } from "@bgotink/kdl";
 import { parse } from "@bgotink/kdl";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import { parseEnvReference, resolveEnvValue } from "./env-resolver";
 import type { SpellServerConfig, WebConfig } from "./types";
 

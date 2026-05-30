@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import { validateLoopPrerequisites } from "../config/loop-prerequisites";
 import type { EventBus } from "../utils/event-bus";
 import { DEFAULT_LOOP_DEPTH_LIMIT } from "./constants";

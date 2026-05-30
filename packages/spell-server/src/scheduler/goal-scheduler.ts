@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import { Cron } from "croner";
 import type { GoalScheduleEntry, ScheduledGoalInfo } from "./types";
 

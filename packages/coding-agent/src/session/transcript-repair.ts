@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, ToolResultMessage } from "@oh-my-pi/pi-ai";
+import type { AgentMessage } from "@spell/pi-agent-core";
+import type { AssistantMessage, ToolResultMessage } from "@spell/pi-ai";
 
 /**
  * Repair a loaded transcript so every assistant `toolCall` has a matching

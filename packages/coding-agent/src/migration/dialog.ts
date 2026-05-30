@@ -10,7 +10,7 @@
  */
 
 import * as readline from "node:readline/promises";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { Finding } from "./detect";
 
 export type DialogAnswer = "yes" | "no" | "skip-forever" | "diff";

@@ -4,7 +4,7 @@ import {
 	padding,
 	truncateToWidth,
 	visibleWidth,
-} from "@oh-my-pi/pi-tui";
+} from "@spell/pi-tui";
 import { MemoryBrowserTab, type MemoryBrowserOptions, type TabPanel } from "./types.js";
 
 const PANEL_MIN_HEIGHT = 20;

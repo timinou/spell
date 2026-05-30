@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { Snowflake } from "@spell/pi-utils";
 import type { Finding } from "../detect";
 import { backupSuffix, flattenToSettingsMap, translateFinding } from "../translate";
 

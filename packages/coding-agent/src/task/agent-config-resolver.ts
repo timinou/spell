@@ -1,4 +1,4 @@
-import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { ThinkingLevel } from "@spell/pi-agent-core";
 import { type AgentRule, type AgentRuleConflict, matchAgentRules } from "../config/agents-kdl";
 import { resolveConfiguredModelPatterns } from "../config/model-resolver";
 import type { Settings } from "../config/settings";

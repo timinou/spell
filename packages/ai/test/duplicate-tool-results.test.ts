@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
-import type { AssistantMessage, DeveloperMessage, Model, ToolCall, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
+import { transformMessages } from "@spell/pi-ai/providers/transform-messages";
+import type { AssistantMessage, DeveloperMessage, Model, ToolCall, ToolResultMessage } from "@spell/pi-ai/types";
 
 /**
  * Regression test for: "each tool_use must have a single result. Found multiple tool_result blocks with id"

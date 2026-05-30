@@ -1,5 +1,5 @@
-import { encodeSixel } from "@oh-my-pi/pi-natives";
-import { $env } from "@oh-my-pi/pi-utils";
+import { encodeSixel } from "@spell/pi-natives";
+import { $env } from "@spell/pi-utils";
 export var ImageProtocol;
 (function (ImageProtocol) {
     ImageProtocol["Kitty"] = "\u001B_G";

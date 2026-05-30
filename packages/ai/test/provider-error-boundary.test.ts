@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import type { AssistantMessage, AssistantMessageEvent, Model } from "@oh-my-pi/pi-ai/types";
-import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
-import { pushFallbackError } from "@oh-my-pi/pi-ai/utils/provider-error-boundary";
+import type { AssistantMessage, AssistantMessageEvent, Model } from "@spell/pi-ai/types";
+import { AssistantMessageEventStream } from "@spell/pi-ai/utils/event-stream";
+import { pushFallbackError } from "@spell/pi-ai/utils/provider-error-boundary";
 
 function createTestModel(): Model<"openai-responses"> {
 	return {

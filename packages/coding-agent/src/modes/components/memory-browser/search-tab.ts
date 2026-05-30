@@ -3,7 +3,7 @@ import {
 	padding,
 	truncateToWidth,
 	visibleWidth,
-} from "@oh-my-pi/pi-tui";
+} from "@spell/pi-tui";
 import { memorySearch } from "./actions.js";
 import type { MemoryHit, TabPanel } from "./types.js";
 

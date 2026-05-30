@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { Context } from "grammy";
 import type { VoiceConfig } from "../../config/types";
 import type { RpcClient } from "../../rpc/rpc-client";

@@ -286,50 +286,48 @@ describe("Anthropic provider idle timeout regression", () => {
 		expect(createdStreams).toHaveLength(1);
 	});
 
-	it("retries an incomplete stalled tool call instead of surfacing a partial write", async () => {
+	it("surfaces an incomplete stalled tool call as a retryable stream error", async () => {
+		// Contract change (Layer B of the ghost-cell fix):
+		//
+		// The provider used to transparently retry a stalled tool_use stream by
+		// wiping `output.content` and looping over a fresh `client.messages.stream`
+		// call. That had the same wall-clock + cost shape as a session-level retry
+		// (the SDK opens a new request either way) but it leaked NEW tool_use ids
+		// into a stream that the agent loop had already shipped events for — the
+		// outer event-controller materialised cells against the dead ids, the
+		// retry registered new ones, and the dead cells sat pending forever
+		// ("Tools (72) · 0 done · 72 running").
+		//
+		// The new contract matches upstream pi-mono: a stall is a hard error.
+		// AgentSession#isRetryableErrorMessage already matches /stream stall/i
+		// and retries the whole turn with fresh ids and natural prompt-cache reuse.
 		Bun.env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = "10";
 		Bun.env.PI_TOOL_ARGUMENT_STREAM_IDLE_TIMEOUT_MS = "10";
-		configureStreamSequence([
-			{
-				events: buildToolUseEvents({
-					toolName: "write",
-					partialJson: '{"path":"specs/markdown-code-engine-integration.md"}',
-					closeToolBlock: false,
-					includeTerminalMessage: false,
-				}),
-				stallAfterEvents: true,
-			},
-			{
-				events: buildToolUseEvents({
-					toolName: "write",
-					partialJson: '{"path":"specs/markdown-code-engine-integration.md","content":"draft"}',
-					includeTerminalMessage: true,
-				}),
-			},
-		]);
+		configureStream(
+			buildToolUseEvents({
+				toolName: "write",
+				partialJson: '{"path":"specs/markdown-code-engine-integration.md"}',
+				closeToolBlock: false,
+				includeTerminalMessage: false,
+			}),
+			{ stallAfterEvents: true },
+		);
 
 		const response = streamAnthropic(model, context, { apiKey: "test-key" });
 		const eventTypes = await collectEventTypes(response);
 		const result = await response.result();
-		const toolCall = result.content.find(block => block.type === "toolCall");
 		const diagnostics = result.streamDiagnostics ?? [];
 
-		expect(createdStreams).toHaveLength(2);
+		// Exactly ONE upstream stream opened — no in-provider retry.
+		expect(createdStreams).toHaveLength(1);
 		expect(createdStreams[0]?.abortCount).toBe(1);
-		expect(createdStreams[0]?.returnCount).toBe(1);
-		expect(createdStreams[1]?.abortCount).toBe(0);
-		expect(eventTypes).toContain("toolcall_end");
-		expect(eventTypes.at(-1)).toBe("done");
-		expect(result.stopReason).toBe("toolUse");
-		expect(diagnostics.map(diagnostic => diagnostic.state)).toContain("stalled_incomplete_tool_args");
-		if (toolCall?.type !== "toolCall") {
-			throw new Error("Expected recovered write tool call after provider retry");
-		}
-		expect(toolCall.name).toBe("write");
-		expect(toolCall.arguments).toEqual({
-			path: "specs/markdown-code-engine-integration.md",
-			content: "draft",
-		});
+
+		// Hard error surfaced to the consumer; tool ids never re-emitted with
+		// fresh values.
+		expect(eventTypes.at(-1)).toBe("error");
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toMatch(/stalled while streaming incomplete tool arguments|stream stall/i);
+		expect(diagnostics.map(d => d.state)).toContain("stalled_incomplete_tool_args");
 	});
 
 	it("recovers a completed tool call when Anthropic stalls before trailing stop events", async () => {

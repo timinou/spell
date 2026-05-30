@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { ThinkingLevel } from "@spell/pi-agent-core";
 import type { AgentRule, AgentRuleConflict } from "../../src/config/agents-kdl";
 import { matchSelector, parseAgentSelector, selectorSpecificity } from "../../src/config/agents-kdl";
 import { Settings } from "../../src/config/settings";

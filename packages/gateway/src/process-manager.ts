@@ -4,9 +4,9 @@
  * Each ManagedBackend tracks a single child process for a gateway service.
  * Exponential backoff between restart attempts (100ms, 200ms, 400ms, ..., cap 30s).
  */
-import { logger } from "@oh-my-pi/pi-utils";
-import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
-import { isPidRunning, terminate } from "@oh-my-pi/pi-utils/procmgr";
+import { logger } from "@spell/pi-utils";
+import * as postmortem from "@spell/pi-utils/postmortem";
+import { isPidRunning, terminate } from "@spell/pi-utils/procmgr";
 import type { Subprocess } from "bun";
 import type { ManagedProcessConfig } from "./protocol";
 

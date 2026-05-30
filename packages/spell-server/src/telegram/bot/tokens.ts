@@ -1,7 +1,7 @@
 import * as crypto from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@spell/pi-utils";
 import type { TempToken } from "../../rpc/bridge-types";
 
 const DEFAULT_EXPIRY_MS = 24 * 60 * 60 * 1000;

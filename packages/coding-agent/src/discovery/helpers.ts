@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { FileType, glob } from "@oh-my-pi/pi-natives";
-import { extractOrgKeywords } from "@oh-my-pi/pi-org";
-import { CONFIG_DIR_NAME, getConfigDirName, tryParseJson } from "@oh-my-pi/pi-utils";
+import type { ThinkingLevel } from "@spell/pi-agent-core";
+import { FileType, glob } from "@spell/pi-natives";
+import { extractOrgKeywords } from "@spell/pi-org";
+import { CONFIG_DIR_NAME, getConfigDirName, tryParseJson } from "@spell/pi-utils";
 import { readFile } from "../capability/fs";
 import { parseRuleConditionAndScope, type Rule, type RuleFrontmatter } from "../capability/rule";
 import type { Skill, SkillFrontmatter } from "../capability/skill";

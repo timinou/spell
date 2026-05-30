@@ -23,7 +23,7 @@ import {
 	postmortem,
 	procmgr,
 	setDefaultTabWidth,
-} from "@oh-my-pi/pi-utils";
+} from "@spell/pi-utils";
 import type { ModelRole } from "../config/model-registry";
 import { isLightTheme, setAutoThemeMapping, setColorBlindMode, setSymbolPreset } from "../modes/theme/theme";
 import { type EditMode, normalizeEditMode } from "../patch";

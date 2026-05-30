@@ -8,7 +8,7 @@
  * matching `layer` value.
  */
 
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@spell/pi-utils";
 import { loadSpellKdl } from "./spell-kdl";
 import { parseTaskPoliciesKdl } from "./task-policies-kdl";
 

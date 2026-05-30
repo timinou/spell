@@ -12,7 +12,7 @@ import type {
 	Tool,
 	ToolChoice,
 	ToolResultMessage,
-} from "@oh-my-pi/pi-ai";
+} from "@spell/pi-ai";
 import type { Static, TSchema } from "@sinclair/typebox";
 
 /** Stream function - can return sync or Promise for async config lookup */
@@ -210,7 +210,7 @@ export interface ToolCallContext {
  *
  * @example
  * ```typescript
- * declare module "@oh-my-pi/agent" {
+ * declare module "@spell/agent" {
  *   interface CustomAgentMessages {
  *     artifact: ArtifactMessage;
  *     notification: NotificationMessage;

@@ -662,7 +662,7 @@ Hook locations:
 - CLI: `--hook <path>`
 
 ```typescript
-import type { HookAPI } from "@oh-my-pi/pi-coding-agent/hooks";
+import type { HookAPI } from "@spell/pi-coding-agent/hooks";
 
 export default function (omp: HookAPI) {
 	omp.on("tool_call", async (event, ctx) => {
@@ -694,7 +694,7 @@ Auto-discovered locations:
 
 ```typescript
 import { Type } from "@sinclair/typebox";
-import type { CustomToolFactory } from "@oh-my-pi/pi-coding-agent";
+import type { CustomToolFactory } from "@spell/pi-coding-agent";
 const factory: CustomToolFactory = () => ({
 	name: "greet",
 	label: "Greeting",
@@ -875,7 +875,7 @@ For adding new tools, see [Custom Tools](#custom-tools).
 For embedding spell in Node.js/TypeScript applications, use the SDK:
 
 ```typescript
-import { ModelRegistry, SessionManager, createAgentSession, discoverAuthStorage } from "@oh-my-pi/pi-coding-agent";
+import { ModelRegistry, SessionManager, createAgentSession, discoverAuthStorage } from "@spell/pi-coding-agent";
 const authStorage = await discoverAuthStorage();
 const modelRegistry = new ModelRegistry(authStorage);
 await modelRegistry.refresh();

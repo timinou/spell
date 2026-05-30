@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { ServerWebSocket } from "bun";
 import type { WebIdentity } from "../../http/types";
 import type { ArtifactCreatedEvent } from "../artifacts/types";

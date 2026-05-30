@@ -1,4 +1,4 @@
-import { Command } from "@oh-my-pi/pi-utils/cli";
+import { Command } from "@spell/pi-utils/cli";
 import { runDomainEntryCommand } from "./domain-entry";
 import { baseLaunchFlags, launchMessageArgs } from "./launch-common";
 

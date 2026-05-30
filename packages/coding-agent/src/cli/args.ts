@@ -2,8 +2,8 @@
  * CLI argument parsing and help display
  */
 import * as path from "node:path";
-import { type Effort, THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
-import { APP_NAME, CONFIG_DIR_NAME, logger } from "@oh-my-pi/pi-utils";
+import { type Effort, THINKING_EFFORTS } from "@spell/pi-ai";
+import { APP_NAME, CONFIG_DIR_NAME, logger } from "@spell/pi-utils";
 import chalk from "chalk";
 import type { SandboxPolicy } from "../sandbox";
 import { parseEffort } from "../thinking";

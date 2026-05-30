@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
+import { parseArgs } from "@spell/pi-coding-agent/cli/args";
 
 describe("parseArgs --canvas", () => {
 	test("defaults to fluid when --canvas has no value", () => {

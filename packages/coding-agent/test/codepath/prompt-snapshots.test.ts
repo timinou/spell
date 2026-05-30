@@ -10,7 +10,7 @@
 // reversion to legacy prose).
 
 import { describe, expect, test } from "bun:test";
-import { listEdgeKinds, listOps, listQualifiers, listDiagnosticVariants } from "@oh-my-pi/pi-natives";
+import { listEdgeKinds, listOps, listQualifiers, listDiagnosticVariants } from "@spell/pi-natives";
 import * as fs from "node:fs";
 import * as path from "node:path";
 

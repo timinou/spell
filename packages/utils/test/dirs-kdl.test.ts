@@ -14,7 +14,7 @@ import {
 	getLocalKdlPath,
 	getProjectKdlPath,
 	getUserKdlPath,
-} from "@oh-my-pi/pi-utils/dirs";
+} from "@spell/pi-utils/dirs";
 
 const ORIGINAL_ENV = {
 	XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,

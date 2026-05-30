@@ -16,7 +16,7 @@ import {
 	getRegisteredExtensions,
 	parseCodePath,
 	renderCodePath,
-} from "@oh-my-pi/pi-natives";
+} from "@spell/pi-natives";
 
 describe("NAPI bridge integrity", () => {
 	let tmpDir: string;

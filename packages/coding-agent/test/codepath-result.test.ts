@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { formatCodePathResult } from "@oh-my-pi/pi-coding-agent/tools/codepath-result";
-import type { CodePathChunk, NodeRefDto } from "@oh-my-pi/pi-coding-agent/tools/codepath-types";
+import { formatCodePathResult } from "@spell/pi-coding-agent/tools/codepath-result";
+import type { CodePathChunk, NodeRefDto } from "@spell/pi-coding-agent/tools/codepath-types";
 
 function makeNode(opts: Partial<NodeRefDto>): NodeRefDto {
 	return {

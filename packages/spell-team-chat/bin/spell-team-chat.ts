@@ -32,7 +32,7 @@ function resolveServerEntry(): string {
 		if (existsSync(c)) return c;
 	}
 	console.error(
-		"[spell-team-chat] could not find @oh-my-pi/spell-server entry. Install it as a sibling package.",
+		"[spell-team-chat] could not find @spell/spell-server entry. Install it as a sibling package.",
 	);
 	process.exit(1);
 }

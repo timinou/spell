@@ -1,4 +1,4 @@
-import { formatDuration } from "@oh-my-pi/pi-utils";
+import { formatDuration } from "@spell/pi-utils";
 import type { AgentRetryState } from "./types";
 
 export function formatRetryStatus(retry: AgentRetryState): string {

@@ -10,10 +10,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createInterface } from "node:readline/promises";
-import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { StatusFileReader } from "@oh-my-pi/pi-desktop-common";
-import { isDisplayAvailable } from "@oh-my-pi/pi-qml";
-import { $env, getAgentDir, getProjectDir, logger, postmortem, setProjectDir, VERSION } from "@oh-my-pi/pi-utils";
+import type { ImageContent } from "@spell/pi-ai";
+import { StatusFileReader } from "@spell/pi-desktop-common";
+import { isDisplayAvailable } from "@spell/pi-qml";
+import { $env, getAgentDir, getProjectDir, logger, postmortem, setProjectDir, VERSION } from "@spell/pi-utils";
 import chalk from "chalk";
 import type { Args } from "./cli/args";
 import { loadSandboxPolicy } from "./cli/args";
@@ -60,7 +60,7 @@ function dbgStartup(step: string, ctx?: Record<string, unknown>): void {
 
 async function checkForNewVersion(currentVersion: string): Promise<string | undefined> {
 	try {
-		const response = await fetch("https://registry.npmjs.org/@oh-my-pi/pi-coding-agent/latest");
+		const response = await fetch("https://registry.npmjs.org/@spell/pi-coding-agent/latest");
 		if (!response.ok) return undefined;
 
 		const data = (await response.json()) as { version?: string };

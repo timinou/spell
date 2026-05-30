@@ -1,4 +1,4 @@
-import type { WindowInfo } from "@oh-my-pi/pi-qml";
+import type { WindowInfo } from "@spell/pi-qml";
 import { classifyBrowserPayload } from "./canvas-browser-protocol";
 
 export type EventClassification = "silent" | "loud";

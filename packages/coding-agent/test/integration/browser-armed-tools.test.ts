@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { isBridgeAvailable, QmlProcess } from "@oh-my-pi/pi-qml";
+import { isBridgeAvailable, QmlProcess } from "@spell/pi-qml";
 import { BrowserJourney } from "../helpers/browser-journey";
 
 const BROWSER_QML = path.resolve(import.meta.dir, "../../src/modes/qml/canvas/BrowserWindow.qml");

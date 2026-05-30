@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseChannelsConfig, resolveChannelsBotToken } from "../../src/config/channels-parser";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 
 const tempDirs = new Set<string>();
 

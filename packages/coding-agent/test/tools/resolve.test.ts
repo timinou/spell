@@ -1,11 +1,11 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { applyPendingAction, PendingActionStore } from "@oh-my-pi/pi-coding-agent/tools/pending-action";
-import { ResolveTool, resolveToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/resolve";
-import * as nativesModule from "@oh-my-pi/pi-natives";
-import { sanitizeText } from "@oh-my-pi/pi-natives";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import { getThemeByName } from "@spell/pi-coding-agent/modes/theme/theme";
+import type { ToolSession } from "@spell/pi-coding-agent/tools";
+import { applyPendingAction, PendingActionStore } from "@spell/pi-coding-agent/tools/pending-action";
+import { ResolveTool, resolveToolRenderer } from "@spell/pi-coding-agent/tools/resolve";
+import * as nativesModule from "@spell/pi-natives";
+import { sanitizeText } from "@spell/pi-natives";
 
 function createSession(pendingActionStore?: PendingActionStore, overrides: Partial<ToolSession> = {}): ToolSession {
 	return {

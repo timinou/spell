@@ -14,8 +14,8 @@ import {
 	TERMINAL_STATES,
 	updateItemBodyInFile,
 	updateItemStateInFile,
-} from "@oh-my-pi/pi-org";
-import { logger } from "@oh-my-pi/pi-utils";
+} from "@spell/pi-org";
+import { logger } from "@spell/pi-utils";
 import type { Settings } from "../config/settings";
 
 export interface OrgPlanRef {

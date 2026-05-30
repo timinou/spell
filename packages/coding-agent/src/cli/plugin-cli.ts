@@ -4,7 +4,7 @@
  * Handles `spell plugin <command>` subcommands for plugin lifecycle management.
  */
 
-import { APP_NAME } from "@oh-my-pi/pi-utils";
+import { APP_NAME } from "@spell/pi-utils";
 import chalk from "chalk";
 import { PluginManager, parseSettingValue, validateSetting } from "../extensibility/plugins";
 import { theme } from "../modes/theme/theme";
@@ -157,10 +157,10 @@ async function handleInstall(
 	if (packages.length === 0) {
 		console.error(chalk.red(`Usage: ${APP_NAME} plugin install <package[@version]>[features] ...`));
 		console.error(chalk.dim("Examples:"));
-		console.error(chalk.dim(`  ${APP_NAME} plugin install @oh-my-pi/exa`));
-		console.error(chalk.dim(`  ${APP_NAME} plugin install @oh-my-pi/exa[search,websets]`));
-		console.error(chalk.dim(`  ${APP_NAME} plugin install @oh-my-pi/exa[*]  # all features`));
-		console.error(chalk.dim(`  ${APP_NAME} plugin install @oh-my-pi/exa[]   # no optional features`));
+		console.error(chalk.dim(`  ${APP_NAME} plugin install @spell/exa`));
+		console.error(chalk.dim(`  ${APP_NAME} plugin install @spell/exa[search,websets]`));
+		console.error(chalk.dim(`  ${APP_NAME} plugin install @spell/exa[*]  # all features`));
+		console.error(chalk.dim(`  ${APP_NAME} plugin install @spell/exa[]   # no optional features`));
 		process.exit(1);
 	}
 
@@ -652,7 +652,7 @@ ${chalk.bold("Options:")}
   -l, --local  Use project-local overrides
 
 ${chalk.bold("Examples:")}
-  ${APP_NAME} plugin install @oh-my-pi/exa[search]
+  ${APP_NAME} plugin install @spell/exa[search]
   ${APP_NAME} plugin list --json
   ${APP_NAME} plugin features my-plugin --enable search,web
   ${APP_NAME} plugin config set my-plugin apiKey sk-xxx

@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@spell/pi-utils";
 import { InputFile } from "grammy";
 import type { VoiceReplyMode } from "../../config/types";
 import type { AssistantEvent, FileDelivery, RpcAssistantMessage, RpcEvent } from "../../rpc/types";
