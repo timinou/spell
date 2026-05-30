@@ -356,11 +356,22 @@ async function streamAssistantResponse(
 		(config.getApiKey ? await config.getApiKey(config.model.provider) : undefined) || config.apiKey;
 
 	const dynamicToolChoice = config.getToolChoice?.();
+
+	// Stream-barrier abort controller — separate from the user/turn signal so we
+	// can cut the SSE on a sequential toolcall_end without conflating with user
+	// cancellation. Compose with the caller's signal so either source aborts the
+	// upstream stream.
+	const barrierAbort = new AbortController();
+	const providerSignal = signal
+		? AbortSignal.any([signal, barrierAbort.signal])
+		: barrierAbort.signal;
+	const barrierEnabled = (config.sequentialToolStreamBarrier ?? "enforce") === "enforce";
+
 	const response = await streamFunction(config.model, llmContext, {
 		...config,
 		apiKey: resolvedApiKey,
 		toolChoice: dynamicToolChoice ?? config.toolChoice,
-		signal,
+		signal: providerSignal,
 	});
 
 	let partialMessage: AssistantMessage | null = null;
@@ -416,6 +427,17 @@ async function streamAssistantResponse(
 			case "thinking_end":
 			case "toolcall_start":
 			case "toolcall_delta":
+				if (partialMessage) {
+					partialMessage = event.partial;
+					context.messages[context.messages.length - 1] = partialMessage;
+					stream.push({
+						type: "message_update",
+						assistantMessageEvent: event,
+						message: { ...partialMessage },
+					});
+				}
+				break;
+
 			case "toolcall_end":
 				if (partialMessage) {
 					partialMessage = event.partial;
@@ -425,6 +447,54 @@ async function streamAssistantResponse(
 						assistantMessageEvent: event,
 						message: { ...partialMessage },
 					});
+
+					// Stream barrier: if this tool declares executionMode "sequential"
+					// (ask / await / cancel_job / exit_plan_mode / browser), cut the SSE
+					// at this block. The model can't see the tool's result mid-stream so
+					// anything it generates past this point reasons against fictitious
+					// state. We close the turn here, executeToolCalls runs the trimmed
+					// batch, and the next assistant turn starts with real context.
+					if (barrierEnabled) {
+						const barrierTool = context.tools?.find(t => t.name === event.toolCall.name);
+						const trimmedMessage = partialMessage;
+						if (barrierTool?.executionMode === "sequential") {
+							const barrierIndex = trimmedMessage.content.findIndex(
+								c => c.type === "toolCall" && c.id === event.toolCall.id,
+							);
+							if (barrierIndex >= 0) {
+								type ContentBlock = (typeof trimmedMessage.content)[number];
+								const keptContent: ContentBlock[] = trimmedMessage.content
+									.slice(0, barrierIndex + 1)
+									.map(block => {
+										// Strip provider streaming residue from kept blocks so
+										// the trimmed message round-trips cleanly through
+										// history / convertToLlm. Mirrors the cleanup the
+										// Anthropic provider already runs on its error path.
+										const clean: Record<string, unknown> = { ...(block as object) };
+										delete clean.partialJson;
+										delete clean.index;
+										return clean as unknown as ContentBlock;
+									});
+								const finalMessage: AssistantMessage = {
+									...trimmedMessage,
+									content: keptContent,
+									stopReason: "toolUse",
+								};
+								if (addedPartial) {
+									context.messages[context.messages.length - 1] = finalMessage;
+								} else {
+									context.messages.push(finalMessage);
+									stream.push({ type: "message_start", message: { ...finalMessage } });
+								}
+								stream.push({ type: "message_end", message: finalMessage });
+								// Best-effort cancel the upstream provider stream. The
+								// provider's for-await consumer should observe `signal.aborted`
+								// at its next iteration and exit cleanly.
+								barrierAbort.abort();
+								return finalMessage;
+							}
+						}
+					}
 				}
 				break;
 
@@ -645,20 +715,34 @@ async function executeToolCalls(
 	};
 
 	// Tool concurrency model:
-	// All tool calls in a batch run concurrently. Tools that need consistency
-	// own their own serialization at the layer that has the real invariant:
-	//   - edit  → kernel per-file fd_lock + in-memory buffer Mutex (pi-code-engine)
+	//
+	// Tools that have an INTERNAL consistency invariant (file locks, per-session
+	// mutexes, ephemeral subprocesses) own their serialization at the layer that
+	// holds the invariant. Examples that DO NOT lift the invariant here:
+	//   - edit       → kernel per-file fd_lock + in-memory buffer Mutex
 	//   - todo_write → per-session queueTodoMutation chain
-	//   - bash  → ephemeral per-call shell (no shared cwd/env to corrupt)
-	//   - ssh   → stateless per-call remote exec (cwd baked per command) over a
-	//             concurrency-safe ControlMaster mux
-	// The loop deliberately does NOT encode per-tool exclusion: doing so leaked
-	// tool-specific consistency rules into the generic scheduler and, worse, the
-	// previous `exclusive` implementation made any such call a whole-batch barrier
-	// that serialised the entire parallel batch.
-	const tasks = records.map((_, index) => runTool(records[index], index));
+	//   - bash       → ephemeral per-call shell (no shared cwd/env to corrupt)
+	//   - ssh        → stateless per-call remote exec over concurrency-safe mux
+	//
+	// Tools whose semantics REQUIRE batch-wide exclusivity — blocking on user
+	// input, mutating the agent's tool set/mode, or acting as a sync point for
+	// siblings in the SAME batch — declare `executionMode: "sequential"` on the
+	// tool definition. When any tool in the current batch declares it, the
+	// whole batch executes serially in assistant source order. This is the only
+	// concurrency knob: one boolean per tool, one decision per batch. We do not
+	// re-introduce wave scheduling — that previously turned every gated tool
+	// into a whole-batch barrier and tangled invariants across layers.
+	const wantsSequential = records.some(record => record.tool?.executionMode === "sequential");
 
-	await Promise.allSettled(tasks);
+	if (wantsSequential) {
+		for (let index = 0; index < records.length; index++) {
+			if (interruptState.triggered) break;
+			await runTool(records[index], index);
+		}
+	} else {
+		const tasks = records.map((_, index) => runTool(records[index], index));
+		await Promise.allSettled(tasks);
+	}
 
 	for (const record of records) {
 		if (!record.toolResultMessage) {

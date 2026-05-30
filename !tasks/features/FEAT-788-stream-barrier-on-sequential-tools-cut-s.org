@@ -1,0 +1,179 @@
+#+TITLE: Stream barrier on sequential tools — cut SSE at toolcall_end of ask/await/cancel_job/exit_plan_mode/browser
+#+STATE: ITEM
+#+SESSION_ID: 14f5aa3ae1ce24f4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-30T15-14-40-135Z_14f5aa3ae1ce24f4.jsonl]]
+#+CUSTOM_ID: FEAT-788-stream-barrier-on-sequential-tools-cut-s
+
+* Initial Message
+
+please look at the recent Tool block and the recent sessions that used opus 4.8 and tell me why there are still so many tools that get queued... think afresh
+
+* Initial Message
+
+I think the issue is with tools like 'await' where the stream on the opus side is still going and keeps sending things like 'echo ok2' which is weird. I still think your stream and event management is weird
+
+[user follow-up] A: yes, default on all five sequential tool. You'll have to add a BUG/FEAT kind of thing to reify the PR. TDD
+
+* Problem
+
+The Anthropic streaming contract is one assistant message ≡ one atomic tool batch. The model can't see a =tool_result= mid-message, so it stuffs its entire plan into one turn: =[text, bash(echo ok1), await, bash(echo ok2), bash(ok3)…]=. Tools execute only *after* =streamAssistantResponse= consumes the whole SSE.
+
+Today's =packages/agent/src/agent-loop.ts::streamAssistantResponse= drains the stream to completion. Then =executeToolCalls= runs the batch. If any tool declares =executionMode: "sequential"= (=ask=, =await=, =cancel_job=, =exit_plan_mode=, =browser=), the *whole batch* serializes in source order. The model has already burned tokens speculating about state it can't possibly know (e.g. =echo ok2= after =await= without seeing await's result).
+
+Net effects:
+- Wasted output tokens (model babbles past a state barrier)
+- Confused operator UX (pending cells appear for tools whose args were generated before barrier state existed)
+- Stale model assumptions (the post-barrier text/thinking is reasoning against a fictitious state)
+
+Reference harnesses surveyed (=pi-mono= =packages/agent/src/agent-loop.ts=, =forks/pi=, opencode): none implement a stream barrier. They all drain the SSE then split into sequential/parallel batches. The opportunity is genuinely uncontested.
+
+* Goal
+
+When the streamed assistant message emits =toolcall_end= for a tool whose definition declares =executionMode: "sequential"=, *cut the SSE at that point*:
+- close the assistant message with =stopReason: "toolUse"=
+- keep only content up to and including the barrier tool block
+- abort the upstream SSE (best-effort)
+- let =runLoop= execute the trimmed batch and continue with a fresh assistant turn that carries real tool_result context
+
+This enforces a property the autoregressive model cannot enforce itself: *don't generate tokens about a state you don't yet have*.
+
+* Existing Patterns
+
+- =packages/agent/src/agent-loop.ts::streamAssistantResponse= owns the SSE consumer loop. The new behavior lives here, in the switch on =event.type=, branch =toolcall_end=.
+- =packages/agent/src/types.ts::ToolExecutionMode= already defines =sequential | parallel=. Five tools opt in: =packages/coding-agent/src/tools/{ask,await-tool,cancel-job,exit-plan-mode,browser}.ts=.
+- =packages/agent/src/agent-loop.ts::executeToolCalls= already partitions sequential vs parallel batches at the =records.some(r => r.tool?.executionMode === "sequential")= site. After the cut, the trimmed message hits this exact path — no scheduler change needed.
+- =packages/ai/src/types.ts::AssistantMessageEvent= defines the event shape; =toolcall_end= carries =toolCall= with completed =arguments=. Anthropic content blocks stream strictly in order (=content_block_start= → deltas → =content_block_stop=), so cutting at =toolcall_end= leaves a clean, completable message.
+- =packages/ai/src/providers/anthropic.ts:725+= already uses an internal =AbortController= (=requestAbortController=) for idle-timeout aborts. The barrier reuses the same pattern: signal cancellation propagates to the SSE.
+- =packages/coding-agent/src/session/agent-session.ts= TTSR mechanism (=#handleAgentEvent= ~line 693) shows the abort+inject pattern for stream interruption, but uses =agent.abort()= which sets =stopReason: "aborted"=. The barrier path is cleaner: it sets =stopReason: "toolUse"= directly, no abort fakery.
+
+* User Workflows
+
+1. Model emits =[thinking, bash(ok1), await, bash(ok2)]= in one turn. Barrier cuts at await's =toolcall_end=. Resulting assistant message contains =[thinking, bash(ok1), await]= with =stopReason: "toolUse"=. Tools execute sequentially. Next turn the model sees await's actual result and decides whether =bash(ok2)= still makes sense.
+2. Model emits =[text, ask("Should I proceed?"), bash(do_thing)]=. Barrier cuts at ask's =toolcall_end=. =bash(do_thing)= is *never executed* — it was speculation about the user's answer. Next turn proceeds with the real answer.
+3. Two sequential tools in same turn: =[await(jobA), await(jobB)]=. Barrier fires at first =toolcall_end= (=await(jobA)=). Trimmed message contains only =[await(jobA)]=. =await(jobB)= will be re-emitted in the next turn if still relevant.
+4. Sequential tool is first content block: cut immediately, single-tool batch executes, normal continuation. No regression.
+5. Network mid-stream stall during a barrier tool's args: =toolcall_end= never arrives → barrier never triggers → existing stall-retry path handles it normally.
+6. Pure-parallel batch (no sequential tool): no =toolcall_end= for a sequential tool fires → full stream consumed as today. Zero behavioral change.
+7. Setting =sequentialToolStreamBarrier: "off"=: opt-out for diagnostics / regression testing.
+
+* Tests
+
+TDD order. All tests live in =packages/agent/test/=.
+
+1. =packages/agent/test/agent-loop-stream-barrier.test.ts= (new):
+   - **barrier-fires-at-sequential-toolcall-end**: synthetic stream emits =[text_*, toolcall_start(bash), toolcall_delta…, toolcall_end(bash), toolcall_start(await), toolcall_end(await), toolcall_start(bash2), toolcall_end(bash2), done]=. With =await= declared =sequential=, returned message has content =[text, bash, await]= only, =stopReason: "toolUse"=. =bash2= absent.
+   - **barrier-aborts-upstream-stream**: assert the stream's =AbortController= (or equivalent cancellation channel) was triggered after the barrier cut. Provider SDK calls beyond the cut should not be observed.
+   - **barrier-respects-last-sequential-block**: stream =[await1, text, await2, bash]= → cut at await2's toolcall_end → content =[await1, text, await2]=. Both await calls present.
+   - **barrier-no-trigger-when-disabled**: same stream with =sequentialToolStreamBarrier: "off"= returns full content, =stopReason: "toolUse"=, all four blocks intact.
+   - **barrier-no-trigger-for-parallel-only-tools**: stream =[bash, bash, bash, find]= (none sequential) → full content, no cut.
+   - **barrier-first-block-cut**: =[await, bash, bash]= → content =[await]=.
+   - **barrier-tool-not-in-registry**: stream emits toolcall_end for a name not present in =context.tools= → no cut (can't classify), full stream consumed. Document as fail-open.
+   - **barrier-emits-message-end-once**: assert exactly one =message_end= event in the stream output.
+   - **barrier-event-shape**: assert the cut =message_update= sequence is identical to what a model emitting only the trimmed content would produce (no torn block, no orphaned partial).
+
+2. =packages/agent/test/agent-loop-execution-mode.test.ts= (existing) regression: existing tests must continue to pass — the barrier only fires *during streaming*, not at post-stream batch dispatch.
+
+3. =packages/agent/test/= integration: run =runLoop= over a synthetic stream + tool registry; assert (a) trimmed batch executed sequentially, (b) next iteration of the outer loop produces a fresh =streamAssistantResponse= call (the harness continues normally).
+
+* Implementation
+
+** ITEM Add config knob: =sequentialToolStreamBarrier=
+:PROPERTIES:
+:LAYER: agent
+:END:
+Files:
+- =packages/agent/src/types.ts= — add =sequentialToolStreamBarrier?: "enforce" | "off"= to =AgentLoopConfig=. Default behavior is =enforce=. Document in TSDoc that this is the recommended setting and =off= exists only for diagnostics.
+
+** ITEM Add streamBarrier tests (TDD: red)
+:PROPERTIES:
+:LAYER: test
+:DEPENDS: FEAT-788-stream-barrier-on-sequential-tools-cut-s::prev
+:END:
+Files:
+- =packages/agent/test/agent-loop-stream-barrier.test.ts= (new) — implement all workflow tests listed above. They MUST fail before implementation lands.
+
+Helpers needed:
+- A controllable fake =StreamFn= that yields a configurable sequence of =AssistantMessageEvent= values from an async iterator.
+- A minimal =AgentTool= factory (reuse =makeTool= from =agent-loop-execution-mode.test.ts=) that lets each tool declare =executionMode=.
+- A spy on the fake stream's downstream consumer to confirm cancellation propagates.
+
+** ITEM Implement stream barrier in =streamAssistantResponse=
+:PROPERTIES:
+:LAYER: agent
+:DEPENDS: FEAT-788-stream-barrier-on-sequential-tools-cut-s::prev
+:END:
+Files:
+- =packages/agent/src/agent-loop.ts= — extend the =case "toolcall_end":= branch in =streamAssistantResponse=. After updating =partialMessage= and pushing the standard =message_update= event:
+  1. If config.sequentialToolStreamBarrier === "off", continue.
+  2. Look up =context.tools?.find(t => t.name === event.toolCall.name)=.
+  3. If =tool?.executionMode !== "sequential"=, continue.
+  4. Compute =barrierIndex = partialMessage.content.findIndex(c => c.type === "toolCall" && c.id === event.toolCall.id)=.
+  5. Build =finalMessage = { ...partialMessage, content: partialMessage.content.slice(0, barrierIndex + 1), stopReason: "toolUse" }= with =timestamp: partialMessage.timestamp ?? Date.now()=.
+  6. =context.messages[context.messages.length - 1] = finalMessage=.
+  7. Best-effort cancel the upstream SSE: =if (typeof (response as any).controller?.abort === "function") (response as any).controller.abort()=. If the stream type exposes a cancellation handle (audit =StreamFn='s return type), thread it through cleanly rather than via =any=.
+  8. =stream.push({ type: "message_end", message: finalMessage })=.
+  9. =return finalMessage=.
+
+Edge cases to handle inside this branch:
+- =partialJson= residue on the barrier tool block: strip =partialJson= and =index= from kept content blocks (mirror the existing =catch (error)= handler at line ~957 of =packages/ai/src/providers/anthropic.ts= that already does =delete block.partialJson=).
+- =partialMessage= is null (shouldn't happen post-toolcall_start, but defensively guard).
+- Multiple sequential tools: =findIndex= naturally finds the current event's tool; we cut at the *current* sequential tool, which the loop already iterated past for prior sequential tools. Acceptable — each successive barrier shortens the suffix further; in practice the first sequential tool triggers the cut.
+
+** ITEM Verify barrier with full =runLoop= integration
+:PROPERTIES:
+:LAYER: test
+:DEPENDS: FEAT-788-stream-barrier-on-sequential-tools-cut-s::prev
+:END:
+Files:
+- =packages/agent/test/agent-loop-stream-barrier.test.ts= (extend) — drive =runLoop= end-to-end with a 2-turn scenario:
+  - Turn 1: stream =[bash(ok1), await, bash(ok2)]=, barrier cuts, trimmed batch executes sequentially, =bash(ok1)= produces "ok1", =await= produces a synthetic await result.
+  - Turn 2: stream =[bash(ok3)]=, normal completion.
+  - Assert =streamFn= was called exactly twice, no =bash(ok2)= was ever dispatched.
+
+** ITEM Documentation
+:PROPERTIES:
+:LAYER: docs
+:DEPENDS: FEAT-788-stream-barrier-on-sequential-tools-cut-s::prev
+:END:
+Files:
+- =packages/agent/src/agent-loop.ts= — module-level JSDoc explaining the barrier policy, the rationale (state-barrier semantics of =executionMode: "sequential"=), and the opt-out.
+- =memory.save= concept titled "stream-barrier-at-sequential-toolcall-end" with =DISTILLED_FROM= edges to this FEAT and the originating session.
+
+* Edge Cases
+
+- **Provider stream-retry mid-block**: Anthropic provider wipes content on transient stall (=packages/ai/src/providers/anthropic.ts= comment at line 710+). Post-retry the consumer sees fresh =content_block_start= events. The barrier only fires on =toolcall_end= for blocks present *now*, so it cannot trigger on a wiped/dead id. Safe.
+- **=interruptMode: "wait"= steering**: orthogonal — steering check runs after each tool, not during stream. Unaffected.
+- **Token billing**: provider charges for output generated before abort. Acceptable; net savings come from not paying for *next* batches of stale post-barrier tokens.
+- **Lost thinking blocks after the barrier**: model's chain-of-thought after the barrier was reasoning against fictitious state. Discarding it is the *point* — keeping it would corrupt future-turn context.
+- **=ttsr= interaction**: TTSR's =agent.abort()= also enters =streamAssistantResponse='s signal-aborted branch. The barrier check runs *before* the signal check inside the toolcall_end branch, but if TTSR aborts during stream the signal-check inside the loop top wins. No conflict.
+- **Subagent sessions**: same code path, same behavior. Subagents inherit =sequentialToolStreamBarrier= via =AgentLoopConfig=.
+- **Tool resolved via =resolveUnknownTool=**: =context.tools= may not contain the tool definition mid-stream. The lookup misses → fail open (no barrier). Acceptable: deferred-tier tools are uncommon, and this preserves correctness over over-aggressive cutting.
+
+* Acceptance Criteria
+
+- =sequentialToolStreamBarrier= defaults to =enforce= and is documented on =AgentLoopConfig=.
+- All workflow tests in =packages/agent/test/agent-loop-stream-barrier.test.ts= pass.
+- Pre-existing =packages/agent/test/agent-loop-execution-mode.test.ts= continues to pass without modification.
+- Streaming a sequence containing a sequential tool produces an assistant message whose content ends at the sequential tool inclusive, with =stopReason: "toolUse"=.
+- Best-effort SSE cancellation is observable in the test harness (provider SDK call count proves the stream was cut).
+- =runLoop= integration test demonstrates the trimmed batch executes and the next turn proceeds normally.
+
+* Verification
+
+- =bun test packages/agent/test/agent-loop-stream-barrier.test.ts= — green.
+- =bun test packages/agent/test/agent-loop-execution-mode.test.ts= — green (regression).
+- =bun test packages/agent/test/= — full agent package suite green.
+- =bun run --parallel check:ts= — types clean across the new config field.
+- Manual repro: live session in opus 4.8 with =[bash(echo ok1), await, bash(echo ok2)]= pattern; observe only =[ok1, await]= run, model gets next turn to decide =ok2=.
+
+* Non-goals
+
+- Cell creation timing in the TUI (=event-controller.ts= materializing components on =content_block_start=). User explicitly de-prioritized in this round.
+- Mid-stream ghost-cell reaping on retry boundary (item (3) in the original conversation). User wants a "cooler fix" — left for a follow-up FEAT once barrier behavior is established and we can measure how often ghost cells survive it.
+- Changes to other harness layers (event-controller, LiveToolBatch, session-manager). The barrier is purely an agent-loop concern.
+
+* Related
+
+- Originating session: =14f5aa3ae1ce24f4= (this conversation).
+- Prior diagnostic work on perceived tool queueing: session =14f412079fc64f65= (→ BUG-419, BUG-420 — UI-layer ghost cells, separate concern).
+- Reference harnesses surveyed: =~/code/ora/pi-mono/packages/agent/src/agent-loop.ts=, =~/code/ora/forks/pi/packages/agent/src/agent-loop.ts= — neither implements this.
