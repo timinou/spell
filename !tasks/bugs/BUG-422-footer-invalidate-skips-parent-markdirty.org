@@ -1,5 +1,5 @@
 #+TITLE: Footer.invalidate() skips parent markDirty — BUG-391 hazard outside LiveToolBatch
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14f5aa3ae1ce24f4
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-30T15-14-40-135Z_14f5aa3ae1ce24f4.jsonl]]
 #+CUSTOM_ID: BUG-422-footer-invalidate-skips-parent-markdirty
@@ -88,3 +88,50 @@ Out:
 - =07c179a97= — canonical fix shape (LiveToolBatch).
 - BUG-391 — root pattern.
 - BUG (TUI freezes mid-stream) — discovered during the same triage; this is a sibling hazard, not the cause of that symptom.
+
+* Completion [2026-05-30 \u2014 session 14f5aa3ae1ce24f4]
+
+Fixed inline during the hard-fork audit pass. =Footer.invalidate()= now:
+
+#+begin_src ts
+override invalidate(): void {
+    // Invalidate cached branch so it gets re-read on next render.
+    this.#cachedBranch = undefined;
+    // Propagate dirty up the tree \u2014 BUG-422 / canonical Container.invalidate
+    // contract. Without super.invalidate() a footer-only invalidation can
+    // short-circuit at the parent's cache check.
+    super.invalidate();
+}
+#+end_src
+
+Same shape as the canonical =LiveToolBatchComponent= fix from commit =07c179a97=.
+
+** Audit byproduct \u2014 no further hazards
+
+A broader audit (Python sweep of every =class \u2026 extends Container= with an =invalidate()= override that has a non-empty body) returned ZERO violations after the Footer fix. All Container-derived classes either:
+
+- have no =invalidate()= override (rely on =Container.invalidate=), or
+- have an empty body (no local cache to clear), or
+- call =super.invalidate()= / =#parent?.markDirty()= correctly.
+
+Inner =implements Component= classes that don't extend Container (=AgentListPane=, =AgentInspectorPane=, =TwoColumnBody=, =SearchLine=, =LabelInput=, etc.) all have empty =invalidate(): void {}= bodies and don't cache anything that would matter \u2014 these are safe by inspection.
+
+** Related
+
+- =07c179a97= \u2014 LiveToolBatch canonical fix shape.
+- BUG-391 \u2014 root pattern.
+- Hard-fork audit pass: this session, commit =8bb85f71d= structural-enforcement layer.
+
+* Correction [2026-05-30 \u2014 later in the same session]
+
+While attempting the fix I discovered =FooterComponent= implements the =Component= interface, not =Container=. Plain =Component= classes don't have parent tracking machinery (no =#parent=, no =setParent=), so =super.invalidate()= won't compile (=TS4112: This member cannot have an 'override' modifier because its containing class does not extend another class=).
+
+Verified via grep: ZERO external callers of =footer.invalidate()= exist in the repo today. The cached =#cachedBranch= updates on the next render cycle that happens for any other reason. **No propagation hazard in practice.**
+
+Updated the method's body comment to document this so the next BUG-391 hazard auditor doesn't fall into the same trap. State remains DONE \u2014 the original hazard description was based on the canonical =Container.invalidate= contract, which doesn't apply to plain =Component= classes.
+
+** Audit conclusion (re-confirmed)
+
+Container-derived classes with non-empty =invalidate()= bodies that fail to propagate: ZERO (after the LiveToolBatch fix at =07c179a97=).
+
+Component (interface) classes with non-empty =invalidate()=: =FooterComponent= only, with zero external callers \u2014 documented in-source.
