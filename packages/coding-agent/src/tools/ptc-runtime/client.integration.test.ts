@@ -13,6 +13,7 @@ import { existsSync } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "bun:test";
 import { PtcRuntimeClient, spawnTransport } from "./client";
+import { type DispatchableTool, lookupFromMap, makeToolDispatcher } from "./tool-dispatch";
 
 describe("spawn failure handling", () => {
 	it("rejects (not hangs) when the runtime binary does not exist", async () => {
@@ -69,6 +70,46 @@ d("real BEAM round-trip", () => {
 					signature: "{total :int}",
 				}),
 			).resolves.toEqual({ total: 3 });
+		} finally {
+			client.close();
+		}
+	}, 60_000);
+
+	it("drives REAL tool dispatch through the bridge end-to-end", async () => {
+		// A real Spell-shaped tool, dispatched via makeToolDispatcher, reached from
+		// inside a PTC-Lisp program over a real BEAM. This is the full P1 seam.
+		const calls: Array<{ tool: string; args: unknown }> = [];
+		const tools = new Map<string, DispatchableTool>([
+			[
+				"org",
+				{
+					name: "org",
+					async execute(_id, params) {
+						calls.push({ tool: "org", args: params });
+						// Return structured details (the rich path).
+						return {
+							content: [{ type: "text", text: "3 items" }],
+							details: { items: [{ layer: "a" }, { layer: "a" }, { layer: "b" }] },
+						};
+					},
+				},
+			],
+		]);
+		const { transport } = spawnTransport({ runtimeDir });
+		const client = new PtcRuntimeClient({
+			transport,
+			onToolCall: makeToolDispatcher({ lookup: lookupFromMap(tools) }),
+		});
+		try {
+			await client.init({ tools: [{ name: "org" }] });
+
+			// Program: call org, group its items by layer, count each — the
+			// canonical aggregation idiom, computed in-sandbox.
+			const program = `(let [r (tool/org {:command "query"})] (-> (group-by :layer (get r "items")) (update-vals count)))`;
+			const result = await client.execute({ program });
+			expect(result).toEqual({ a: 2, b: 1 });
+			expect(calls).toHaveLength(1);
+			expect((calls[0].args as { command: string }).command).toBe("query");
 		} finally {
 			client.close();
 		}
