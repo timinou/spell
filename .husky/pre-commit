@@ -1,4 +1,4 @@
-detect-secrets-hook --baseline .secrets.baseline $(git diff --cached --name-only)
+detect-secrets-hook --baseline .secrets.baseline --exclude-files .secrets.baseline $(git diff --cached --name-only)
 
 # Reject stale lockfile: if any package.json changed, bun.lock must too
 staged=$(git diff --cached --name-only)
