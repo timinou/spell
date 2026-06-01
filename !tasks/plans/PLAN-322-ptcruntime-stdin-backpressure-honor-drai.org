@@ -1,0 +1,15 @@
+#+TITLE: PtcRuntime stdin backpressure: honor drain before sustained writes
+#+STATE: ITEM
+#+SESSION_ID: 14f61cc9d0fec7b6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-fup095/2026-05-30T23-35-10-915Z_14f61cc9d0fec7b6.jsonl]]
+#+CUSTOM_ID: PLAN-322-ptcruntime-stdin-backpressure-honor-drai
+
+* Initial Message
+
+Ok I moved you to the session that had already started the LSP tool deletion thing. Please get your bearings and let's draft a new tool called 'execute' or 'process' (your choice, or another verb word) that is an interface for the V1. I am fine with read and write for the tool/call bridge auth scope, you just need to define a good system as an FUP (fully explained with ocntext in the file, with places to do the improvement so it's easy).
+
+the test suite should use plenty of hypothesis, property, and fuzz testing to make sure things like the examples of where ptcrunner shines all work, and that edge cases are werll done.
+you can make P0' the verification that it all works well
+show me your full work manifest with your process methodology, before I validate and let you go off (. main thread for architectural work, reviewer swarms in between implementation phases to surface, file, and fix/implement any BUG or FEAT that you found (mid-flight). Be thorough, you have unlimited time budget.
+
+FEAT from Review Gate 0 (P3). spawnTransport.writeLine ignores child.stdin.write() return value. Under heavy reentrant tool_call reply volume (pmap fan-out + large tool results), the OS pipe buffer can fill; write returns false and Node queues in unbounded user-space memory until 'drain'. Frames are not dropped/corrupted (ordered buffering), so correctness holds. Fix: track writable=false on write, queue + flush on 'drain'. File: packages/coding-agent/src/tools/ptc-runtime/client.ts ~L301. Defer until load testing shows it matters.
