@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import * as ai from "@oh-my-pi/pi-ai";
+import * as ai from "@spell/pi-ai";
 import { validatePlanSemantic } from "../../src/orchestrators/fluid/plan-validator";
 import type { FluidPlan } from "../../src/orchestrators/fluid/types";
 import type { AgentSession } from "../../src/session/agent-session";

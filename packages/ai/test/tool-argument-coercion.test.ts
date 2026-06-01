@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import type { Tool, ToolCall } from "@oh-my-pi/pi-ai/types";
-import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
+import type { Tool, ToolCall } from "@spell/pi-ai/types";
+import { validateToolArguments } from "@spell/pi-ai/utils/validation";
 import { Type } from "@sinclair/typebox";
 
 describe("Tool argument coercion", () => {

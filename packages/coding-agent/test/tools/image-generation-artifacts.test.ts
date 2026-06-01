@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { saveImageAsArtifact } from "@oh-my-pi/pi-coding-agent/tools/image-generation";
+import { saveImageAsArtifact } from "@spell/pi-coding-agent/tools/image-generation";
 
 const tempDirs: string[] = [];
 

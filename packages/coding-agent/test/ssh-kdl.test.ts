@@ -13,8 +13,8 @@ import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { _resetSettingsForTest, Settings } from "@spell/pi-coding-agent/config/settings";
+import { Snowflake } from "@spell/pi-utils";
 
 let tmp: string;
 let agentDir: string;
@@ -120,11 +120,11 @@ describe("ssh.hosts ← spell.kdl", () => {
 
 describe("SSH per-tier precedence (same-name collision)", () => {
 	it("project-tier wins over user-tier; warning emitted", async () => {
-		await import("@oh-my-pi/pi-coding-agent/discovery/ssh");
+		await import("@spell/pi-coding-agent/discovery/ssh");
 		const { reset: resetCapabilityCache, loadCapability } = await import(
-			"@oh-my-pi/pi-coding-agent/discovery"
+			"@spell/pi-coding-agent/discovery"
 		);
-		const { sshCapability } = await import("@oh-my-pi/pi-coding-agent/capability/ssh");
+		const { sshCapability } = await import("@spell/pi-coding-agent/capability/ssh");
 
 		const s = await Settings.init(opts());
 		s.set("ssh.hosts" as never, { shared: { host: "user.host" } } as never, "user");

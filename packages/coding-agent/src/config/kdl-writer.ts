@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Document, format, type Node, parse } from "@bgotink/kdl";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent } from "@spell/pi-utils";
 
 import { withFileLock } from "./file-lock";
 import {

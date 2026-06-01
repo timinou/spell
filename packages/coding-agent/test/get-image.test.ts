@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { GetTool } from "@oh-my-pi/pi-coding-agent/tools";
-import * as nativesModule from "@oh-my-pi/pi-natives";
+import { GetTool } from "@spell/pi-coding-agent/tools";
+import * as nativesModule from "@spell/pi-natives";
 
 function createSession(): any {
 	return {

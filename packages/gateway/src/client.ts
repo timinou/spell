@@ -8,7 +8,7 @@
  * - All control plane RPCs as typed methods
  */
 import * as net from "node:net";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import {
 	type GatewayRequest,
 	type GatewayResponse,

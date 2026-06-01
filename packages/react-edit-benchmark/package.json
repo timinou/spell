@@ -1,14 +1,14 @@
 {
 	"type": "module",
 	"private": true,
-	"name": "@oh-my-pi/react-edit-benchmark",
+	"name": "@spell/react-edit-benchmark",
 	"version": "0.0.1",
 	"description": "Edit benchmark suite using React source code mutations",
 	"author": "Can Boluk",
 	"license": "GPL-3.0-only",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/can1357/oh-my-pi.git",
+		"url": "git+https://github.com/timinou/spell.git",
 		"directory": "packages/react-edit-benchmark"
 	},
 	"main": "./src/index.ts",
@@ -25,9 +25,11 @@
 		"@babel/parser": "^7.29",
 		"@babel/traverse": "^7.29",
 		"@babel/types": "^7.29",
-		"@oh-my-pi/pi-agent-core": "workspace:*",
-		"@oh-my-pi/pi-coding-agent": "workspace:*",
-		"@oh-my-pi/pi-utils": "workspace:*",
+		"@spell/pi-agent-core": "workspace:*",
+		"@spell/pi-ai": "workspace:*",
+		"@spell/pi-coding-agent": "workspace:*",
+		"@spell/pi-tui": "workspace:*",
+		"@spell/pi-utils": "workspace:*",
 		"diff": "^8.0",
 		"prettier": "^3.8",
 		"regexp-tree": "^0.1"

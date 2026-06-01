@@ -9,8 +9,8 @@ import {
 	streamSimple,
 	type ToolResultMessage,
 	validateToolArguments,
-} from "@oh-my-pi/pi-ai";
-import { logger } from "@oh-my-pi/pi-utils";
+} from "@spell/pi-ai";
+import { logger } from "@spell/pi-utils";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -202,6 +202,29 @@ function extractIntent(args: Record<string, unknown>): { intent?: string; stripp
 }
 
 /**
+ * Mid-stream eager dispatch entry — BUG-423.
+ *
+ * When a parallel-mode tool's `toolcall_end` event fires inside
+ * `streamAssistantResponse`, we kick off `tool.execute(...)` right then. The
+ * in-flight promise (plus the bookkeeping `executeToolCalls` needs to skip
+ * re-execution) lands in a per-turn map keyed by `toolCallId`. The post-stream
+ * batch dispatch later picks the entry up, awaits its result, and emits the
+ * `tool_execution_end` + `tool_result` events in source order.
+ *
+ * `started: true` suppresses the duplicate `tool_execution_start` that
+ * `runTool` would otherwise emit. `intent` and `args` are pre-extracted here
+ * because we already had to call `extractIntent` to invoke `tool.execute`
+ * cleanly; mirroring that in `runTool` would either duplicate work or skew
+ * the recorded args.
+ */
+interface EagerDispatchEntry {
+	promise: Promise<{ result: AgentToolResult<any>; isError: boolean }>;
+	args: Record<string, unknown>;
+	intent?: string;
+}
+type EagerDispatchMap = Map<string, EagerDispatchEntry>;
+
+/**
  * Main loop logic shared by agentLoop and agentLoopContinue.
  */
 async function runLoop(
@@ -245,8 +268,20 @@ async function runLoop(
 				await config.syncContextBeforeModelCall(currentContext);
 			}
 
+			// Eager-dispatch map for this turn. Parallel tools whose `toolcall_end`
+			// fires inside `streamAssistantResponse` land here as in-flight promises;
+			// `executeToolCalls` picks them up via the same map. BUG-423.
+			const eagerDispatch: EagerDispatchMap = new Map();
+
 			// Stream assistant response
-			const message = await streamAssistantResponse(currentContext, config, signal, stream, streamFn);
+			const message = await streamAssistantResponse(
+				currentContext,
+				config,
+				signal,
+				stream,
+				streamFn,
+				eagerDispatch,
+			);
 			newMessages.push(message);
 
 			if (message.stopReason === "error" || message.stopReason === "aborted") {
@@ -284,6 +319,7 @@ async function runLoop(
 					config.transformToolCallArguments,
 					config.intentTracing,
 					config.resolveUnknownTool,
+					eagerDispatch,
 				);
 				toolResults.push(...toolExecution.toolResults);
 				steeringAfterTools = toolExecution.steeringMessages ?? null;
@@ -331,6 +367,7 @@ async function streamAssistantResponse(
 	signal: AbortSignal | undefined,
 	stream: EventStream<AgentEvent, AgentMessage[]>,
 	streamFn?: StreamFn,
+	eagerDispatch?: EagerDispatchMap,
 ): Promise<AssistantMessage> {
 	// Apply context transform if configured (AgentMessage[] → AgentMessage[])
 	let messages = context.messages;
@@ -356,11 +393,22 @@ async function streamAssistantResponse(
 		(config.getApiKey ? await config.getApiKey(config.model.provider) : undefined) || config.apiKey;
 
 	const dynamicToolChoice = config.getToolChoice?.();
+
+	// Stream-barrier abort controller — separate from the user/turn signal so we
+	// can cut the SSE on a sequential toolcall_end without conflating with user
+	// cancellation. Compose with the caller's signal so either source aborts the
+	// upstream stream.
+	const barrierAbort = new AbortController();
+	const providerSignal = signal
+		? AbortSignal.any([signal, barrierAbort.signal])
+		: barrierAbort.signal;
+	const barrierEnabled = (config.sequentialToolStreamBarrier ?? "enforce") === "enforce";
+
 	const response = await streamFunction(config.model, llmContext, {
 		...config,
 		apiKey: resolvedApiKey,
 		toolChoice: dynamicToolChoice ?? config.toolChoice,
-		signal,
+		signal: providerSignal,
 	});
 
 	let partialMessage: AssistantMessage | null = null;
@@ -416,6 +464,17 @@ async function streamAssistantResponse(
 			case "thinking_end":
 			case "toolcall_start":
 			case "toolcall_delta":
+				if (partialMessage) {
+					partialMessage = event.partial;
+					context.messages[context.messages.length - 1] = partialMessage;
+					stream.push({
+						type: "message_update",
+						assistantMessageEvent: event,
+						message: { ...partialMessage },
+					});
+				}
+				break;
+
 			case "toolcall_end":
 				if (partialMessage) {
 					partialMessage = event.partial;
@@ -425,6 +484,142 @@ async function streamAssistantResponse(
 						assistantMessageEvent: event,
 						message: { ...partialMessage },
 					});
+
+					// Eager dispatch for parallel tools (BUG-423). The tool starts
+					// executing the moment its args are complete, alongside the rest
+					// of the streaming assistant message. Sequential tools fall through
+					// to the barrier branch below and never reach this path. Unknown
+					// tools (not in context.tools) fail open here — their error result
+					// is produced post-stream by `executeToolCalls`.
+					const earlyDispatchEnabled =
+						(config.earlyDispatchParallelTools ?? "enforce") === "enforce";
+					if (earlyDispatchEnabled && eagerDispatch) {
+						const tool = context.tools?.find(t => t.name === event.toolCall.name);
+						if (tool && tool.executionMode !== "sequential" && !eagerDispatch.has(event.toolCall.id)) {
+							const rawArgs = event.toolCall.arguments as Record<string, unknown>;
+							let args = rawArgs;
+							let intent: string | undefined;
+							if (config.intentTracing) {
+								const extracted = extractIntent(rawArgs);
+								args = extracted.strippedArgs;
+								intent = extracted.intent;
+							}
+							// Emit tool_execution_start now so downstream UI can mount the
+							// cell, mirroring `executeToolCalls.runTool`'s contract. The
+							// matching tool_execution_end is emitted by executeToolCalls
+							// once it awaits this entry's promise — keeping the source-
+							// ordered tool_use/tool_result pairing the API requires.
+							stream.push({
+								type: "tool_execution_start",
+								toolCallId: event.toolCall.id,
+								toolName: event.toolCall.name,
+								args,
+								intent,
+							});
+							// Build the execute() invocation. Validation, transform, and
+							// intent handling mirror `runTool`. Errors get captured as
+							// `{ result, isError: true }` so executeToolCalls can emit
+							// them through its normal channels without re-running the tool.
+							const toolCallForExec = { ...event.toolCall, arguments: args };
+							const promise = (async (): Promise<{ result: AgentToolResult<any>; isError: boolean }> => {
+								try {
+									let effectiveArgs: Record<string, unknown>;
+									try {
+										effectiveArgs = validateToolArguments(tool, toolCallForExec);
+									} catch (validationError) {
+										if (tool.lenientArgValidation) {
+											effectiveArgs = args;
+										} else {
+											throw validationError;
+										}
+									}
+									const toolContext = config.getToolContext
+										? config.getToolContext({
+												batchId: `eager_${event.toolCall.id}`,
+												index: 0,
+												total: 1,
+												toolCalls: [{ id: event.toolCall.id, name: event.toolCall.name }],
+										})
+										: undefined;
+									const result = await tool.execute(
+										event.toolCall.id,
+										config.transformToolCallArguments
+											? config.transformToolCallArguments(effectiveArgs, event.toolCall.name)
+											: effectiveArgs,
+										tool.nonAbortable ? undefined : signal,
+										partialResult => {
+											stream.push({
+												type: "tool_execution_update",
+												toolCallId: event.toolCall.id,
+												toolName: event.toolCall.name,
+												args,
+												partialResult,
+											});
+										},
+										toolContext,
+									);
+									return { result, isError: false };
+								} catch (err) {
+									return {
+										result: {
+											content: [{ type: "text", text: err instanceof Error ? err.message : String(err) }],
+											details: {},
+										},
+										isError: true,
+									};
+								}
+							})();
+							eagerDispatch.set(event.toolCall.id, { promise, args, intent });
+						}
+					}
+
+					// Stream barrier: if this tool declares executionMode "sequential"
+					// (ask / await / cancel_job / exit_plan_mode / browser), cut the SSE
+					// at this block. The model can't see the tool's result mid-stream so
+					// anything it generates past this point reasons against fictitious
+					// state. We close the turn here, executeToolCalls runs the trimmed
+					// batch, and the next assistant turn starts with real context.
+					if (barrierEnabled) {
+						const barrierTool = context.tools?.find(t => t.name === event.toolCall.name);
+						const trimmedMessage = partialMessage;
+						if (barrierTool?.executionMode === "sequential") {
+							const barrierIndex = trimmedMessage.content.findIndex(
+								c => c.type === "toolCall" && c.id === event.toolCall.id,
+							);
+							if (barrierIndex >= 0) {
+								type ContentBlock = (typeof trimmedMessage.content)[number];
+								const keptContent: ContentBlock[] = trimmedMessage.content
+									.slice(0, barrierIndex + 1)
+									.map(block => {
+										// Strip provider streaming residue from kept blocks so
+										// the trimmed message round-trips cleanly through
+										// history / convertToLlm. Mirrors the cleanup the
+										// Anthropic provider already runs on its error path.
+										const clean: Record<string, unknown> = { ...(block as object) };
+										delete clean.partialJson;
+										delete clean.index;
+										return clean as unknown as ContentBlock;
+									});
+								const finalMessage: AssistantMessage = {
+									...trimmedMessage,
+									content: keptContent,
+									stopReason: "toolUse",
+								};
+								if (addedPartial) {
+									context.messages[context.messages.length - 1] = finalMessage;
+								} else {
+									context.messages.push(finalMessage);
+									stream.push({ type: "message_start", message: { ...finalMessage } });
+								}
+								stream.push({ type: "message_end", message: finalMessage });
+								// Best-effort cancel the upstream provider stream. The
+								// provider's for-await consumer should observe `signal.aborted`
+								// at its next iteration and exit cleanly.
+								barrierAbort.abort();
+								return finalMessage;
+							}
+						}
+					}
 				}
 				break;
 
@@ -462,6 +657,7 @@ async function executeToolCalls(
 	transformToolCallArguments?: AgentLoopConfig["transformToolCallArguments"],
 	intentTracing?: AgentLoopConfig["intentTracing"],
 	resolveUnknownTool?: AgentLoopConfig["resolveUnknownTool"],
+	eagerDispatch?: EagerDispatchMap,
 ): Promise<{ toolResults: ToolResultMessage[]; steeringMessages?: AgentMessage[] }> {
 	type ToolCallContent = Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
 	const toolCalls = assistantMessage.content.filter((c): c is ToolCallContent => c.type === "toolCall");
@@ -568,6 +764,26 @@ async function executeToolCalls(
 		}
 
 		const { toolCall, tool } = record;
+
+		// Eager-dispatch consumer (BUG-423). When `streamAssistantResponse`
+		// kicked off this tool mid-stream, the entry holds the in-flight
+		// promise plus the pre-extracted intent / args. We await its result
+		// and emit through the normal channels, suppressing the duplicate
+		// tool_execution_start (which already fired at dispatch time) by
+		// flipping `record.started` before `emitToolResult` checks it.
+		const eagerEntry = eagerDispatch?.get(toolCall.id);
+		if (eagerEntry) {
+			record.args = eagerEntry.args;
+			if (eagerEntry.intent) {
+				toolCall.intent = eagerEntry.intent;
+			}
+			record.started = true; // suppress duplicate tool_execution_start in emitToolResult
+			const { result, isError } = await eagerEntry.promise;
+			emitToolResult(record, result, isError);
+			await checkSteering();
+			return;
+		}
+
 		let argsForExecution = toolCall.arguments as Record<string, unknown>;
 		if (intentTracing) {
 			const { intent, strippedArgs } = extractIntent(toolCall.arguments);
@@ -644,25 +860,35 @@ async function executeToolCalls(
 		await checkSteering();
 	};
 
-	let lastExclusive: Promise<void> = Promise.resolve();
-	let sharedTasks: Promise<void>[] = [];
-	const tasks: Promise<void>[] = [];
+	// Tool concurrency model:
+	//
+	// Tools that have an INTERNAL consistency invariant (file locks, per-session
+	// mutexes, ephemeral subprocesses) own their serialization at the layer that
+	// holds the invariant. Examples that DO NOT lift the invariant here:
+	//   - edit       → kernel per-file fd_lock + in-memory buffer Mutex
+	//   - todo_write → per-session queueTodoMutation chain
+	//   - bash       → ephemeral per-call shell (no shared cwd/env to corrupt)
+	//   - ssh        → stateless per-call remote exec over concurrency-safe mux
+	//
+	// Tools whose semantics REQUIRE batch-wide exclusivity — blocking on user
+	// input, mutating the agent's tool set/mode, or acting as a sync point for
+	// siblings in the SAME batch — declare `executionMode: "sequential"` on the
+	// tool definition. When any tool in the current batch declares it, the
+	// whole batch executes serially in assistant source order. This is the only
+	// concurrency knob: one boolean per tool, one decision per batch. We do not
+	// re-introduce wave scheduling — that previously turned every gated tool
+	// into a whole-batch barrier and tangled invariants across layers.
+	const wantsSequential = records.some(record => record.tool?.executionMode === "sequential");
 
-	for (let index = 0; index < records.length; index++) {
-		const record = records[index];
-		const concurrency = record.tool?.concurrency ?? "shared";
-		const start = concurrency === "exclusive" ? Promise.all([lastExclusive, ...sharedTasks]) : lastExclusive;
-		const task = start.then(() => runTool(record, index));
-		tasks.push(task);
-		if (concurrency === "exclusive") {
-			lastExclusive = task;
-			sharedTasks = [];
-		} else {
-			sharedTasks.push(task);
+	if (wantsSequential) {
+		for (let index = 0; index < records.length; index++) {
+			if (interruptState.triggered) break;
+			await runTool(records[index], index);
 		}
+	} else {
+		const tasks = records.map((_, index) => runTool(records[index], index));
+		await Promise.allSettled(tasks);
 	}
-
-	await Promise.allSettled(tasks);
 
 	for (const record of records) {
 		if (!record.toolResultMessage) {

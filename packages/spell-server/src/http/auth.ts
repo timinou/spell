@@ -1,5 +1,5 @@
 import * as crypto from "node:crypto";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { WebConfig } from "../config/types";
 import type { ServerConfig, WebIdentity } from "./types";
 

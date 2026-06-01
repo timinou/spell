@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from "bun:test";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import * as orgModule from "@oh-my-pi/pi-org";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import * as orgModule from "@spell/pi-org";
 import type { ToolSession } from "../../src/tools";
 import { type TodoGroup, TodoWriteTool } from "../../src/tools/todo-write";
 

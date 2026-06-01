@@ -9,7 +9,7 @@ import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { Snowflake } from "@spell/pi-utils";
 import { detectLegacyConfig } from "../detect";
 
 let tmpRoot: string;

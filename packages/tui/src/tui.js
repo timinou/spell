@@ -3,11 +3,33 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getCrashLogPath, getDebugLogPath } from "@oh-my-pi/pi-utils";
+import { getDebugLogPath } from "@spell/pi-utils";
+import { DevProfile, devProfile } from "./dev-profile";
 import { isKeyRelease, matchesKey } from "./keys";
+import { spinnerClock } from "./spinner-clock";
 import { ImageProtocol, setCellDimensions, setTerminalImageProtocol, TERMINAL } from "./terminal-capabilities";
-import { extractSegments, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils";
+import { extractSegments, sliceByColumn, sliceWithWidth, truncateToWidth, visibleWidth } from "./utils";
 const SEGMENT_RESET = "\x1b[0m";
+// === STARTUP-DBG (BUG: blank screen after migration prompt). Disable with SPELL_STARTUP_DBG=0. ===
+const _dbgStartupT0_tui = performance.now();
+const _dbgStartupCounts = new Map();
+function dbgStartup(step, ctx, opts) {
+    if (process.env.SPELL_STARTUP_DBG !== "1")
+        return;
+    if (opts?.firstOnly !== undefined) {
+        const key = opts.bucket ?? step;
+        const n = (_dbgStartupCounts.get(key) ?? 0) + 1;
+        _dbgStartupCounts.set(key, n);
+        if (n > opts.firstOnly)
+            return;
+    }
+    try {
+        const elapsed = Math.round(performance.now() - _dbgStartupT0_tui);
+        const ctxStr = ctx ? " " + JSON.stringify(ctx) : "";
+        process.stderr.write(`[STARTUP-DBG tui +${elapsed}ms] ${step}${ctxStr}\n`);
+    }
+    catch { }
+}
 /** Type guard to check if a component implements Focusable */
 export function isFocusable(component) {
     return component !== null && "focused" in component;
@@ -19,6 +41,14 @@ export function isFocusable(component) {
  * TUI finds and strips this marker, then positions the hardware cursor there.
  */
 export const CURSOR_MARKER = "\x1b_pi:c\x07";
+/**
+ * Spinner marker — APC (Application Program Command) zero-width sentinel.
+ * Renderers emit this where they want the live spinner glyph. TUI substitutes
+ * it with the current frame at render time, so the renderer body itself does
+ * not need to run on every spinner tick. Frame source is the shared
+ * `spinnerClock`; the active glyph set is configured via `setSpinnerFrames`.
+ */
+export const SPINNER_MARKER = "\x1b_pi:spin\x07";
 export { visibleWidth };
 /** Parse a SizeValue into absolute value given a reference size */
 function parseSizeValue(value, referenceSize) {
@@ -39,42 +69,118 @@ function parseSizeValue(value, referenceSize) {
 export class Container {
     constructor() {
         this.children = [];
+        this.#dirty = true;
+    }
+    #dirty;
+    #cachedLines;
+    #cachedWidth;
+    #parent;
+    setParent(p) {
+        if (p === this)
+            throw new Error("Container cannot be its own parent");
+        this.#parent = p;
+    }
+    markDirty() {
+        if (this.#dirty)
+            return;
+        this.#dirty = true;
+        this.#parent?.markDirty();
+    }
+    isDirty() {
+        return this.#dirty;
+    }
+    /** Mark this Container and every descendant Container dirty WITHOUT
+     *  invalidating leaf-component caches. Used by TUI.requestRender to
+     *  defeat per-Container cache without losing the leaf-level cache wins
+     *  (Markdown.#cachedText etc.). Leaves keep their own caches; if their
+     *  state actually changed they invalidate themselves via their own setters. */
+    /** Mark this Container and all descendant Containers dirty.
+     *  Unlike invalidate(), this recursively walks the subtree and
+     *  also calls Component.invalidate() on leaf components. */
+    markTreeDirty() {
+        this.invalidate();
+        for (const child of this.children) {
+            if (child instanceof Container) {
+                child.markTreeDirty();
+            }
+            else {
+                child.invalidate?.();
+            }
+        }
     }
     addChild(component) {
         this.children.push(component);
+        component.setParent?.(this);
+        this.markDirty();
     }
     removeChild(component) {
         const index = this.children.indexOf(component);
         if (index !== -1) {
             this.children.splice(index, 1);
+            component.setParent?.(undefined);
+            this.markDirty();
         }
     }
     clear() {
+        for (const child of this.children) {
+            child.setParent?.(undefined);
+        }
         this.children = [];
+        this.markDirty();
     }
     invalidate() {
-        for (const child of this.children) {
-            child.invalidate?.();
-        }
+        this.#cachedLines = undefined;
+        this.#cachedWidth = undefined;
+        // Explicit invalidation must propagate to parent even if we are already
+        // dirty. Subclasses that override render() (e.g. OutlinedList) never
+        // reset #dirty back to false, which would otherwise leave markDirty
+        // permanently short-circuited. Bypass the optimisation by calling parent
+        // markDirty directly. BUG-391 follow-up.
+        this.#dirty = true;
+        this.#parent?.markDirty();
     }
     render(width) {
         width = Math.max(1, width);
+        if (!this.#dirty && this.#cachedWidth === width && this.#cachedLines) {
+            return this.#cachedLines;
+        }
+        const snapshot = [...this.children];
         const lines = [];
-        for (const child of this.children) {
+        for (const child of snapshot) {
             lines.push(...child.render(width));
         }
+        this.#cachedLines = lines;
+        this.#cachedWidth = width;
+        this.#dirty = false;
         return lines;
     }
 }
-/**
- * TUI - Main class for managing terminal UI with differential rendering
- */
+function isTermuxSession() {
+    return Boolean(process.env.TERMUX_VERSION);
+}
+/** Detect terminal multiplexers where scrollback clearing and height-change redraws are hostile. */
+function isMultiplexerSession() {
+    return Boolean(process.env.TMUX || process.env.STY || process.env.ZELLIJ);
+}
 export class TUI extends Container {
     #previousLines;
     #previousWidth;
+    #previousHeight;
+    // Highest count of content rows pushed into terminal scrollback above the
+    // visible viewport. Detects shrink-across-viewport-boundary frames where the
+    // new transcript would re-expose rows already committed to history.
+    #scrollbackHighWater;
+    // Set after a clear+full replay so the next insert-above-suffix frame does
+    // not scroll replayed live chrome (status/editor) into fresh history.
+    #suppressNextSuffixScroll;
+    #hasEverRendered;
+    #clearScrollbackOnNextRender;
     #focusedComponent;
     #inputListeners;
     #renderRequested;
+    #lastRenderTime;
+    #minRenderInterval;
+    #throttleTimer;
     #cursorRow; // Logical cursor row (end of rendered content)
     #hardwareCursorRow; // Actual terminal cursor row (may differ due to IME positioning)
     #viewportTopRow; // Content row currently mapped to screen row 0
@@ -90,13 +196,33 @@ export class TUI extends Container {
     #maxLinesRendered; // High-water line count used for clear-on-shrink policy
     #fullRedrawCount;
     #stopped;
-    constructor(terminal, showHardwareCursor) {
+    #overlayChanged;
+    // Spinner sentinel substitution (FEAT-776). Renderers emit SPINNER_MARKER;
+    // TUI subscribes to the shared SpinnerClock on first marker observed and
+    // rewrites it to the current glyph at output time. Subscription persists
+    // until stop() — cost is one 80ms timer + an O(lines) includes() check.
+    #spinnerFrames;
+    #spinnerGlyph;
+    #spinnerUnsubscribe;
+    #spinnerIdleRenders;
+    constructor(terminal, options) {
         super();
         this.#previousLines = [];
         this.#previousWidth = 0;
+        this.#previousHeight = 0;
+        // Highest count of content rows pushed into terminal scrollback above the
+        // visible viewport. Detects shrink-across-viewport-boundary frames where the
+        // new transcript would re-expose rows already committed to history.
+        this.#scrollbackHighWater = 0;
+        // Set after a clear+full replay so the next insert-above-suffix frame does
+        // not scroll replayed live chrome (status/editor) into fresh history.
+        this.#suppressNextSuffixScroll = false;
+        this.#hasEverRendered = false;
+        this.#clearScrollbackOnNextRender = false;
         this.#focusedComponent = null;
         this.#inputListeners = new Set();
         this.#renderRequested = false;
+        this.#lastRenderTime = 0;
         this.#cursorRow = 0; // Logical cursor row (end of rendered content)
         this.#hardwareCursorRow = 0; // Actual terminal cursor row (may differ due to IME positioning)
         this.#viewportTopRow = 0; // Content row currently mapped to screen row 0
@@ -110,11 +236,45 @@ export class TUI extends Container {
         this.#maxLinesRendered = 0; // High-water line count used for clear-on-shrink policy
         this.#fullRedrawCount = 0;
         this.#stopped = false;
+        this.#overlayChanged = false;
+        // Spinner sentinel substitution (FEAT-776). Renderers emit SPINNER_MARKER;
+        // TUI subscribes to the shared SpinnerClock on first marker observed and
+        // rewrites it to the current glyph at output time. Subscription persists
+        // until stop() — cost is one 80ms timer + an O(lines) includes() check.
+        this.#spinnerFrames = [];
+        this.#spinnerGlyph = "";
+        this.#spinnerIdleRenders = 0;
         // Overlay stack for modal components rendered on top of base content
         this.overlayStack = [];
         this.terminal = terminal;
-        if (showHardwareCursor !== undefined) {
-            this.#showHardwareCursor = showHardwareCursor;
+        if (typeof options === "boolean") {
+            // Backward compat: constructor(terminal, showHardwareCursor)
+            this.#showHardwareCursor = options;
+            this.#minRenderInterval = 16;
+        }
+        else {
+            if (options?.showHardwareCursor !== undefined) {
+                this.#showHardwareCursor = options.showHardwareCursor;
+            }
+            this.#minRenderInterval = options?.minRenderInterval ?? 16;
+            if (options?.spinnerFrames && options.spinnerFrames.length > 0) {
+                this.#spinnerFrames = options.spinnerFrames;
+                this.#spinnerGlyph = options.spinnerFrames[0];
+            }
+        }
+    }
+    /**
+     * Update the active spinner glyph set. Safe to call at runtime when the
+     * theme changes; existing subscription (if any) keeps ticking and just
+     * picks the new glyph on the next frame.
+     */
+    setSpinnerFrames(frames) {
+        this.#spinnerFrames = frames;
+        if (frames.length > 0) {
+            this.#spinnerGlyph = frames[spinnerClock.frame % frames.length];
+        }
+        else {
+            this.#spinnerGlyph = "";
         }
     }
     get fullRedraws() {
@@ -166,6 +326,7 @@ export class TUI extends Container {
             this.setFocus(component);
         }
         this.terminal.hideCursor();
+        this.#overlayChanged = true;
         this.requestRender();
         // Return handle for controlling this overlay
         return {
@@ -180,6 +341,7 @@ export class TUI extends Container {
                     }
                     if (this.overlayStack.length === 0)
                         this.terminal.hideCursor();
+                    this.#overlayChanged = true;
                     this.requestRender();
                 }
             },
@@ -201,6 +363,7 @@ export class TUI extends Container {
                         this.setFocus(component);
                     }
                 }
+                this.#overlayChanged = true;
                 this.requestRender();
             },
             isHidden: () => entry.hidden,
@@ -216,6 +379,7 @@ export class TUI extends Container {
         this.setFocus(topVisible?.component ?? overlay.preFocus);
         if (this.overlayStack.length === 0)
             this.terminal.hideCursor();
+        this.#overlayChanged = true;
         this.requestRender();
     }
     /** Check if there are any visible overlays */
@@ -247,12 +411,18 @@ export class TUI extends Container {
             overlay.component.invalidate?.();
     }
     start() {
+        dbgStartup("α:TUI.start:enter", { minRenderInterval: this.#minRenderInterval });
         this.#stopped = false;
         this.terminal.start(data => this.#handleInput(data), () => this.requestRender());
+        dbgStartup("β:after:terminal.start");
         this.terminal.hideCursor();
+        dbgStartup("γ:after:hideCursor");
         this.#querySixelSupport();
+        dbgStartup("δ:after:querySixelSupport");
         this.#queryCellSize();
+        dbgStartup("ε:after:queryCellSize");
         this.requestRender(true);
+        dbgStartup("ζ:TUI.start:exit");
     }
     addInputListener(listener) {
         this.#inputListeners.add(listener);
@@ -397,7 +567,13 @@ export class TUI extends Container {
     }
     stop() {
         this.#clearSixelProbeState();
+        this.#releaseSpinnerSubscription();
         this.#stopped = true;
+        // Cancel pending throttle timer
+        if (this.#throttleTimer) {
+            clearTimeout(this.#throttleTimer);
+            this.#throttleTimer = undefined;
+        }
         // Move cursor to the end of the content to prevent overwriting/artifacts on exit
         if (this.#previousLines.length > 0) {
             const targetRow = this.#previousLines.length; // Line after the last content
@@ -413,22 +589,124 @@ export class TUI extends Container {
         this.terminal.showCursor();
         this.terminal.stop();
     }
-    requestRender(force = false) {
+    #ensureSpinnerSubscription() {
+        if (this.#spinnerUnsubscribe || this.#spinnerFrames.length === 0)
+            return;
+        this.#spinnerUnsubscribe = spinnerClock.subscribe(() => {
+            const frames = this.#spinnerFrames;
+            if (frames.length === 0)
+                return;
+            this.#spinnerGlyph = frames[spinnerClock.frame % frames.length];
+            this.requestRender();
+        });
+    }
+    #releaseSpinnerSubscription() {
+        if (this.#spinnerUnsubscribe) {
+            this.#spinnerUnsubscribe();
+            this.#spinnerUnsubscribe = undefined;
+        }
+        this.#spinnerIdleRenders = 0;
+    }
+    /**
+     * Substitute SPINNER_MARKER occurrences with the current glyph. Returns
+     * true if any line contained the marker (caller may then ensure the
+     * spinner subscription is active).
+     */
+    #substituteSpinnerMarkers(lines) {
+        let found = false;
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].includes(SPINNER_MARKER)) {
+                lines[i] = lines[i].replaceAll(SPINNER_MARKER, this.#spinnerGlyph);
+                found = true;
+            }
+        }
+        return found;
+    }
+    /**
+     * Set the minimum interval (ms) between renders. Used by consumers to
+     * throttle rendering when the terminal is not visible (e.g. niri
+     * overview, terminal unfocused). 0 disables throttling.
+     */
+    setMinRenderInterval(ms) {
+        this.#minRenderInterval = Math.max(0, ms);
+    }
+    /** Current minimum render interval (ms). */
+    get minRenderInterval() {
+        return this.#minRenderInterval;
+    }
+    requestRender(force = false, options) {
+        dbgStartup("req:requestRender:enter", {
+            force,
+            pending: this.#renderRequested,
+            hasThrottle: !!this.#throttleTimer,
+            interval: this.#minRenderInterval,
+            stopped: this.#stopped,
+        }, { firstOnly: 8, bucket: "requestRender" });
         if (force) {
+            this.#clearScrollbackOnNextRender ||= options?.clearScrollback === true;
             this.#previousLines = [];
             this.#previousWidth = -1; // -1 triggers widthChanged, forcing a full clear
+            this.#previousHeight = -1; // -1 triggers heightChanged, forcing a full clear
             this.#cursorRow = 0;
             this.#hardwareCursorRow = 0;
             this.#viewportTopRow = 0;
             this.#maxLinesRendered = 0;
+            // Cancel pending throttle timer — force takes priority
+            if (this.#throttleTimer) {
+                clearTimeout(this.#throttleTimer);
+                this.#throttleTimer = undefined;
+            }
+            this.#renderRequested = false;
         }
         if (this.#renderRequested)
             return;
         this.#renderRequested = true;
-        process.nextTick(() => {
-            this.#renderRequested = false;
+        if (force || this.#minRenderInterval <= 0) {
+            // No throttle: schedule after I/O callbacks
+            dbgStartup("req:schedule:setImmediate(force-or-no-throttle)", { force }, { firstOnly: 6, bucket: "reqSched" });
+            setImmediate(() => {
+                dbgStartup("req:setImmediate:fired", undefined, { firstOnly: 6, bucket: "reqFire" });
+                this.#executeRender();
+            });
+            return;
+        }
+        const elapsed = performance.now() - this.#lastRenderTime;
+        if (elapsed >= this.#minRenderInterval) {
+            // Enough time since last render: schedule after I/O callbacks
+            dbgStartup("req:schedule:setImmediate(elapsed-ok)", { elapsed }, { firstOnly: 6, bucket: "reqSched" });
+            setImmediate(() => {
+                dbgStartup("req:setImmediate:fired", undefined, { firstOnly: 6, bucket: "reqFire" });
+                this.#executeRender();
+            });
+        }
+        else {
+            // Throttle: wait for remaining interval
+            const remaining = this.#minRenderInterval - elapsed;
+            dbgStartup("req:schedule:setTimeout(throttle)", { remaining }, { firstOnly: 6, bucket: "reqSched" });
+            this.#throttleTimer = setTimeout(() => {
+                dbgStartup("req:throttleTimer:fired", undefined, { firstOnly: 6, bucket: "reqFire" });
+                this.#throttleTimer = undefined;
+                this.#executeRender();
+            }, remaining);
+        }
+    }
+    #executeRender() {
+        dbgStartup("exec:#executeRender:enter", { stopped: this.#stopped }, { firstOnly: 6, bucket: "exec" });
+        this.#renderRequested = false;
+        this.#lastRenderTime = performance.now();
+        if (DevProfile.enabled) {
+            const start = performance.now();
+            const beforeLines = this.#previousLines.length;
             this.#doRender();
-        });
+            devProfile.recordFrame({
+                frameMs: performance.now() - start,
+                linesChanged: Math.abs(this.#previousLines.length - beforeLines),
+            });
+            dbgStartup("exec:#executeRender:exit (devProfile path)", undefined, { firstOnly: 6, bucket: "execExit" });
+            return;
+        }
+        this.#doRender();
+        dbgStartup("exec:#executeRender:exit", { lineCount: this.#previousLines.length }, { firstOnly: 6, bucket: "execExit" });
     }
     #handleInput(data) {
         if (this.#inputListeners.size > 0) {
@@ -788,86 +1066,183 @@ export class TUI extends Container {
         }
         return null;
     }
+    /**
+     * Render one frame. Composes the frame, substitutes spinner glyphs,
+     * classifies the intent via {@link #planRender}, and delegates to the
+     * matching emitter. Each emitter owns its bytes and ends with {@link #commit},
+     * the single state-transition point.
+     */
     #doRender() {
         if (this.#stopped)
             return;
         const width = this.terminal.columns;
         const height = this.terminal.rows;
-        let viewportTop = Math.max(0, this.#maxLinesRendered - height);
-        let prevViewportTop = this.#viewportTopRow;
-        let hardwareCursorRow = this.#hardwareCursorRow;
-        const computeLineDiff = (targetRow) => {
-            const currentScreenRow = hardwareCursorRow - prevViewportTop;
-            const targetScreenRow = targetRow - viewportTop;
-            return targetScreenRow - currentScreenRow;
-        };
-        // Render all components to get new lines
-        let newLines = this.render(width);
-        // Composite overlays into the rendered lines (before differential compare)
+        // 1. Compose the frame.
+        let lines = this.render(width);
         if (this.overlayStack.length > 0) {
-            newLines = this.#compositeOverlays(newLines, width, height);
+            lines = this.#compositeOverlays(lines, width, height);
         }
         // Extract cursor position before applying line resets (marker must be found first)
-        const cursorPos = this.#extractCursorPosition(newLines, height);
-        newLines = this.#applyLineResets(newLines);
-        // Width changed - need full re-render (line wrapping changes)
-        const widthChanged = this.#previousWidth !== 0 && this.#previousWidth !== width;
-        // Helper to clear scrollback and viewport and render all new lines
-        const fullRender = (clear) => {
-            this.#fullRedrawCount += 1;
-            let buffer = "\x1b[?2026h"; // Begin synchronized output
-            if (clear)
-                buffer += "\x1b[3J\x1b[2J\x1b[H"; // Clear scrollback, screen, and home
-            for (let i = 0; i < newLines.length; i++) {
-                if (i > 0)
-                    buffer += "\r\n";
-                buffer += newLines[i];
-            }
-            buffer += "\x1b[?2026l"; // End synchronized output
-            this.terminal.write(buffer);
-            this.#cursorRow = Math.max(0, newLines.length - 1);
-            this.#hardwareCursorRow = this.#cursorRow;
-            // Reset max lines when clearing, otherwise track growth
-            if (clear) {
-                this.#maxLinesRendered = newLines.length;
-            }
-            else {
-                this.#maxLinesRendered = Math.max(this.#maxLinesRendered, newLines.length);
-            }
-            this.#viewportTopRow = Math.max(0, this.#maxLinesRendered - height);
-            this.#positionHardwareCursor(cursorPos, newLines.length);
-            this.#previousLines = newLines;
-            this.#previousWidth = width;
-        };
-        const debugRedraw = process.env.PI_DEBUG_REDRAW === "1";
-        const logRedraw = (reason) => {
-            if (!debugRedraw)
+        const cursorPos = this.#extractCursorPosition(lines, height);
+        // Substitute spinner sentinels in place. Subscribes to spinnerClock when
+        // at least one marker is rendered; auto-releases once two consecutive
+        // renders observe no marker so the 80ms tick doesn't run forever. Runs
+        // before diffing so a glyph change is detected as a one-line diff.
+        if (this.#substituteSpinnerMarkers(lines)) {
+            this.#spinnerIdleRenders = 0;
+            this.#ensureSpinnerSubscription();
+        }
+        else if (this.#spinnerUnsubscribe) {
+            this.#spinnerIdleRenders += 1;
+            if (this.#spinnerIdleRenders >= 2)
+                this.#releaseSpinnerSubscription();
+        }
+        lines = this.#applyLineResets(lines);
+        // 2. Capture transition + pre-render state before any emitter runs.
+        const prevViewportTop = this.#viewportTopRow;
+        const prevHardwareCursorRow = this.#hardwareCursorRow;
+        const widthChanged = this.#previousWidth > 0 && this.#previousWidth !== width;
+        const heightChanged = this.#previousHeight > 0 && this.#previousHeight !== height;
+        // 3. Classify intent.
+        const intent = this.#planRender(lines, widthChanged, heightChanged, prevViewportTop, height);
+        this.#logRedraw(intent, lines.length, height);
+        // 4. Execute.
+        switch (intent.kind) {
+            case "noop":
+                this.#writeCursorPosition(cursorPos, lines.length);
+                this.#viewportTopRow = Math.max(0, this.#maxLinesRendered - height);
+                this.#previousWidth = width;
+                this.#previousHeight = height;
                 return;
-            const logPath = getDebugLogPath();
-            const msg = `[${new Date().toISOString()}] fullRender: ${reason} (prev=${this.#previousLines.length}, new=${newLines.length}, height=${height})\n`;
-            fs.appendFileSync(logPath, msg);
-        };
-        // First render - just output everything without clearing (assumes clean screen)
-        if (this.#previousLines.length === 0 && !widthChanged) {
-            logRedraw("first render");
-            fullRender(false);
-            return;
+            case "initial":
+                this.#emitFullPaint(lines, width, height, cursorPos, { clearViewport: true, clearScrollback: false });
+                this.#hasEverRendered = true;
+                return;
+            case "sessionReplace":
+                this.#clearScrollbackOnNextRender = false;
+                this.#emitFullPaint(lines, width, height, cursorPos, {
+                    clearViewport: true,
+                    clearScrollback: !isMultiplexerSession(),
+                });
+                return;
+            case "historyRebuild":
+                this.#emitFullPaint(lines, width, height, cursorPos, {
+                    clearViewport: true,
+                    clearScrollback: !isMultiplexerSession(),
+                });
+                return;
+            case "viewportRepaint":
+                if (intent.appendFrom !== undefined) {
+                    this.#emitAppendTail(lines, intent.appendFrom, height, prevViewportTop, prevHardwareCursorRow);
+                }
+                this.#emitViewportRepaint(lines, width, height, cursorPos);
+                return;
+            case "shrink":
+                this.#emitShrink(lines, width, height, cursorPos, prevHardwareCursorRow, prevViewportTop);
+                return;
+            case "diff":
+                this.#emitDiff(lines, width, height, cursorPos, intent.firstChanged, intent.lastChanged, intent.appendedLines, prevViewportTop, prevHardwareCursorRow);
+                return;
         }
-        // Width changed - full re-render (line wrapping changes)
+    }
+    /**
+     * Map the current frame onto a single render intent. Order matters: forced
+     * resets and session replacement short-circuit before any diff work, and
+     * width-changed-with-offscreen edits route to `historyRebuild` so terminal
+     * scrollback receives the new geometry.
+     */
+    #planRender(newLines, widthChanged, heightChanged, prevViewportTop, height) {
+        // Initial paint after start(): scrollback must keep its prior shell
+        // content, but the viewport must be cleared so stale rows do not bleed
+        // into the new UI.
+        if (!this.#hasEverRendered)
+            return { kind: "initial" };
+        // Caller opted into a scrollback wipe via requestRender(true, { clearScrollback: true }).
+        if (this.#clearScrollbackOnNextRender)
+            return { kind: "sessionReplace" };
+        // Forced reset (requestRender(true)) without scrollback wipe: previous
+        // lines were dropped, so no diff is possible. Repaint visible rows only
+        // — emitting the transcript here would duplicate it into scrollback.
+        if (this.#previousLines.length === 0)
+            return { kind: "viewportRepaint" };
+        const diff = this.#diffLines(newLines);
+        // Shrink-across-viewport-boundary: if a shrink would place the new
+        // viewport above rows already committed to terminal scrollback, those
+        // rows would appear twice when the user scrolls back. A clear+replay
+        // keeps the current transcript scrollable while dropping stale history.
+        const naturalViewportTop = Math.max(0, newLines.length - height);
+        if (diff.firstChanged !== -1 &&
+            newLines.length < this.#previousLines.length &&
+            naturalViewportTop < this.#scrollbackHighWater &&
+            !isMultiplexerSession()) {
+            return { kind: "historyRebuild" };
+        }
+        const suppressSuffixScroll = this.#suppressNextSuffixScroll;
+        this.#suppressNextSuffixScroll = false;
+        if (suppressSuffixScroll &&
+            diff.appendedLines &&
+            diff.firstChanged < this.#previousLines.length &&
+            !isMultiplexerSession()) {
+            return { kind: "viewportRepaint" };
+        }
+        if (diff.firstChanged === -1) {
+            // Content unchanged. Width change still alters wrapping geometry;
+            // height change shifts the visible window. Either needs a repaint
+            // (outside hostile environments).
+            if (widthChanged)
+                return { kind: "viewportRepaint" };
+            if (heightChanged && !isTermuxSession() && !isMultiplexerSession())
+                return { kind: "viewportRepaint" };
+            return { kind: "noop" };
+        }
+        // Width changes alter wrapping for the whole transcript. Offscreen
+        // edits need a history rebuild so terminal scrollback receives the
+        // new geometry; pure appends fall through to the diff path so the
+        // append handler scrolls them into scrollback correctly.
         if (widthChanged) {
-            logRedraw(`width changed (${this.#previousWidth} -> ${width})`);
-            fullRender(true);
-            return;
+            if (diff.firstChanged < prevViewportTop)
+                return { kind: "historyRebuild" };
+            const pureAppend = diff.appendedLines && diff.firstChanged === this.#previousLines.length;
+            if (!pureAppend)
+                return { kind: "viewportRepaint" };
         }
-        // Content shrunk below the working area and no overlays - re-render to clear empty rows
-        // (overlays need the padding, so only do this when no overlays are active)
-        // Configurable via setClearOnShrink() or PI_CLEAR_ON_SHRINK=0 env var
-        if (this.#clearOnShrink && newLines.length < this.#maxLinesRendered && this.overlayStack.length === 0) {
-            logRedraw(`clearOnShrink (maxLinesRendered=${this.#maxLinesRendered})`);
-            fullRender(true);
-            return;
+        const contentGrew = newLines.length > this.#previousLines.length;
+        // Height changes shift the visible window. Repaint when content didn't
+        // grow, but skip in Termux (software keyboard toggles height) and inside
+        // multiplexers (panes manage their own redraws).
+        if (heightChanged && !contentGrew && !isTermuxSession() && !isMultiplexerSession()) {
+            return { kind: "viewportRepaint" };
         }
-        // Find first and last changed lines
+        // Configurable shrink-clear: opt-in path that repaints to wipe rows the
+        // diff path would leave behind.
+        if (this.#clearOnShrink && newLines.length < this.#previousLines.length && this.overlayStack.length === 0) {
+            return { kind: "viewportRepaint" };
+        }
+        // Pure trailing shrink: all changed indices live past the new tail.
+        if (diff.firstChanged >= newLines.length) {
+            return { kind: "shrink" };
+        }
+        // Offscreen edit: viewport repaint corrects the shifted rows. If new
+        // rows also appended in the same frame, emit them as scrollback growth
+        // first so streaming output is not lost from terminal history.
+        if (diff.firstChanged < prevViewportTop) {
+            const appendFrom = diff.appendedLines ? this.#findAppendedTailStart(newLines) : undefined;
+            return { kind: "viewportRepaint", appendFrom };
+        }
+        return {
+            kind: "diff",
+            firstChanged: diff.firstChanged,
+            lastChanged: diff.lastChanged,
+            appendedLines: diff.appendedLines,
+        };
+    }
+    /**
+     * Two-pointer diff over `#previousLines` and `newLines`. `firstChanged` is
+     * `-1` when the two are identical; otherwise it is the first differing
+     * index. Trailing appends are normalized so `lastChanged` always ends at the
+     * last row that needs to be touched.
+     */
+    #diffLines(newLines) {
         let firstChanged = -1;
         let lastChanged = -1;
         const maxLines = Math.max(newLines.length, this.#previousLines.length);
@@ -875,229 +1250,373 @@ export class TUI extends Container {
             const oldLine = i < this.#previousLines.length ? this.#previousLines[i] : "";
             const newLine = i < newLines.length ? newLines[i] : "";
             if (oldLine !== newLine) {
-                if (firstChanged === -1) {
+                if (firstChanged === -1)
                     firstChanged = i;
-                }
                 lastChanged = i;
             }
         }
         const appendedLines = newLines.length > this.#previousLines.length;
         if (appendedLines) {
-            if (firstChanged === -1) {
+            if (firstChanged === -1)
                 firstChanged = this.#previousLines.length;
-            }
             lastChanged = newLines.length - 1;
         }
+        return { firstChanged, lastChanged, appendedLines };
+    }
+    /**
+     * Locate the longest suffix of `#previousLines` that appears in `newLines`.
+     * The returned index is the first row past that suffix — the rows that are
+     * "new appends" relative to the unchanged tail. Used to push streaming
+     * output into scrollback even when an offscreen edit also moved rows.
+     */
+    #findAppendedTailStart(newLines) {
+        if (this.#previousLines.length === 0)
+            return newLines.length;
+        const previousLast = this.#previousLines[this.#previousLines.length - 1];
+        let bestEnd = -1;
+        let bestLength = 0;
+        for (let end = newLines.length - 1; end >= 0; end--) {
+            if (newLines[end] !== previousLast)
+                continue;
+            let length = 1;
+            while (length < this.#previousLines.length &&
+                end - length >= 0 &&
+                this.#previousLines[this.#previousLines.length - 1 - length] === newLines[end - length]) {
+                length += 1;
+            }
+            if (length > bestLength) {
+                bestLength = length;
+                bestEnd = end;
+            }
+        }
+        return bestEnd === -1 ? newLines.length : bestEnd + 1;
+    }
+    /**
+     * Truncate a line to the visible viewport width. Image lines are left
+     * alone, narrow lines pass through unchanged. Truncation re-appends
+     * SEGMENT_RESET so SGR state does not leak across rows when truncateToWidth
+     * drops the trailing reset appended by {@link #applyLineResets}.
+     */
+    #fitLineToWidth(line, width) {
+        if (TERMINAL.isImageLine(line))
+            return line;
+        if (visibleWidth(line) <= width)
+            return line;
+        return truncateToWidth(line, width, 2 /* Ellipsis.Omit */) + SEGMENT_RESET;
+    }
+    /**
+     * Single state-transition point. Every emitter calls this exactly once at
+     * the end so cursor/viewport/scrollback accounting stays consistent.
+     */
+    #commit(lines, width, height, viewportTop, hardwareCursorRow) {
+        this.#previousLines = lines;
+        this.#previousWidth = width;
+        this.#previousHeight = height;
+        this.#cursorRow = Math.max(0, lines.length - 1);
+        this.#viewportTopRow = viewportTop;
+        this.#hardwareCursorRow = hardwareCursorRow;
+    }
+    /**
+     * Clear the viewport (optionally scrollback) and emit the full transcript.
+     * Backs `initial`, `sessionReplace`, and `historyRebuild` intents.
+     */
+    #emitFullPaint(lines, width, height, cursorPos, options) {
+        this.#fullRedrawCount += 1;
+        let buffer = "\x1b[?2026h";
+        if (options.clearViewport) {
+            buffer += options.clearScrollback ? "\x1b[2J\x1b[H\x1b[3J" : "\x1b[2J\x1b[H";
+        }
+        for (let i = 0; i < lines.length; i++) {
+            if (i > 0)
+                buffer += "\r\n";
+            buffer += lines[i];
+        }
+        const finalRow = Math.max(0, lines.length - 1);
+        const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, finalRow);
+        buffer += seq;
+        buffer += "\x1b[?2026l";
+        this.terminal.write(buffer);
+        this.#maxLinesRendered = options.clearViewport ? lines.length : Math.max(this.#maxLinesRendered, lines.length);
+        if (options.clearScrollback) {
+            this.#scrollbackHighWater = 0;
+            this.#suppressNextSuffixScroll = lines.length > height;
+        }
+        const pushedNow = Math.max(0, lines.length - height);
+        if (pushedNow > this.#scrollbackHighWater) {
+            this.#scrollbackHighWater = pushedNow;
+        }
+        this.#commit(lines, width, height, Math.max(0, this.#maxLinesRendered - height), toRow);
+    }
+    /**
+     * Rewrite the visible viewport in place. Cursor home, clear each row,
+     * emit the bottom-anchored slice of `lines`. No scrollback growth.
+     */
+    #emitViewportRepaint(lines, width, height, cursorPos) {
+        this.#fullRedrawCount += 1;
+        const viewportTop = Math.max(0, lines.length - height);
+        let buffer = "\x1b[?2026h\x1b[H";
+        for (let screenRow = 0; screenRow < height; screenRow++) {
+            if (screenRow > 0)
+                buffer += "\r\n";
+            buffer += "\x1b[2K";
+            const line = lines[viewportTop + screenRow] ?? "";
+            buffer += this.#fitLineToWidth(line, width);
+        }
+        // The loop unconditionally writes `height` rows from screen row 0, so the
+        // hardware cursor lands at screen row `height - 1` regardless of how many
+        // of those rows held actual content. Tracking it as `lines.length - 1`
+        // when the content is shorter than the viewport makes the relative
+        // `rowDelta` math in `#cursorControlSequence` underestimate the upward
+        // move and the IME cursor stays pinned to the viewport bottom on
+        // height-grow resizes.
+        const finalRow = viewportTop + height - 1;
+        const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, finalRow);
+        buffer += seq;
+        buffer += "\x1b[?2026l";
+        this.terminal.write(buffer);
+        this.#maxLinesRendered = lines.length;
+        this.#commit(lines, width, height, viewportTop, toRow);
+    }
+    /**
+     * Push the appended tail into terminal scrollback by `\r\n`-ing past the
+     * previous viewport bottom. Used as a prefix to {@link #emitViewportRepaint}
+     * when an offscreen edit and an append land in the same frame; does not
+     * call {@link #commit} (the following repaint owns final state).
+     */
+    #emitAppendTail(lines, start, height, prevViewportTop, prevHardwareCursorRow) {
+        if (start >= lines.length)
+            return;
+        let buffer = "\x1b[?2026h";
+        // Clamp tracked cursor to the visible viewport bottom — terminals clamp
+        // on resize, so a prior frame may have committed a row that no longer
+        // exists. Without this the scroll math points outside the viewport.
+        const clampedCursor = Math.min(prevHardwareCursorRow, prevViewportTop + height - 1);
+        const currentScreenRow = Math.max(0, Math.min(height - 1, clampedCursor - prevViewportTop));
+        const moveToBottom = height - 1 - currentScreenRow;
+        if (moveToBottom > 0)
+            buffer += `\x1b[${moveToBottom}B`;
+        for (let i = start; i < lines.length; i++) {
+            buffer += "\r\n";
+            buffer += lines[i];
+        }
+        buffer += "\x1b[?2026l";
+        this.terminal.write(buffer);
+        const pushedNow = Math.max(0, lines.length - height);
+        if (pushedNow > this.#scrollbackHighWater) {
+            this.#scrollbackHighWater = pushedNow;
+        }
+    }
+    /**
+     * Trailing-shrink: prior content shared a prefix with the new content; the
+     * extra rows below the new tail need to be cleared without scrolling. Falls
+     * back to {@link #emitViewportRepaint} when more rows must be cleared than
+     * fit on screen.
+     */
+    #emitShrink(lines, width, height, cursorPos, prevHardwareCursorRow, prevViewportTop) {
+        const extraLines = this.#previousLines.length - lines.length;
+        if (extraLines <= 0) {
+            this.#commit(lines, width, height, Math.max(0, lines.length - height), prevHardwareCursorRow);
+            this.#maxLinesRendered = lines.length;
+            return;
+        }
+        if (extraLines > height) {
+            this.#emitViewportRepaint(lines, width, height, cursorPos);
+            return;
+        }
+        const viewportTop = Math.max(0, this.#maxLinesRendered - height);
+        const targetRow = Math.max(0, lines.length - 1);
+        let buffer = "\x1b[?2026h";
+        const clampedCursor = Math.min(prevHardwareCursorRow, prevViewportTop + height - 1);
+        const currentScreenRow = clampedCursor - prevViewportTop;
+        const targetScreenRow = targetRow - viewportTop;
+        const lineDiff = targetScreenRow - currentScreenRow;
+        if (lineDiff > 0)
+            buffer += `\x1b[${lineDiff}B`;
+        else if (lineDiff < 0)
+            buffer += `\x1b[${-lineDiff}A`;
+        buffer += "\r";
+        const clearStartOffset = lines.length > 0 ? 1 : 0;
+        if (clearStartOffset > 0) {
+            buffer += `\x1b[${clearStartOffset}B`;
+        }
+        for (let i = 0; i < extraLines; i++) {
+            buffer += "\r\x1b[2K";
+            if (i < extraLines - 1)
+                buffer += "\x1b[1B";
+        }
+        const moveUp = extraLines - 1 + clearStartOffset;
+        if (moveUp > 0) {
+            buffer += `\x1b[${moveUp}A`;
+        }
+        const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, targetRow);
+        buffer += seq;
+        buffer += "\x1b[?2026l";
+        this.terminal.write(buffer);
+        this.#maxLinesRendered = lines.length;
+        this.#commit(lines, width, height, Math.max(0, lines.length - height), toRow);
+    }
+    /**
+     * Differential rewrite from `firstChanged` through `lastChanged`. Handles
+     * three sub-shapes: pure append below the prior viewport (scroll + write),
+     * in-place replace of visible rows, and replace-plus-trailing-shrink (clear
+     * extras after writing). Cursor math is local to this method.
+     */
+    #emitDiff(lines, width, height, cursorPos, firstChanged, lastChanged, appendedLines, prevViewportTop, prevHardwareCursorRow) {
+        let viewportTop = Math.max(0, this.#maxLinesRendered - height);
+        let activeViewportTop = prevViewportTop;
+        // Terminals clamp the hardware cursor to the visible viewport on resize.
+        // If our tracked row is past the viewport bottom, the real cursor was
+        // clamped; clamp our tracking to match so relative moves land correctly.
+        let hardwareCursorRow = Math.min(prevHardwareCursorRow, activeViewportTop + height - 1);
         const appendStart = appendedLines && firstChanged === this.#previousLines.length && firstChanged > 0;
-        // No changes - but still need to update hardware cursor position if it moved
-        if (firstChanged === -1) {
-            this.#positionHardwareCursor(cursorPos, newLines.length);
-            this.#viewportTopRow = Math.max(0, this.#maxLinesRendered - height);
-            return;
-        }
-        // All changes are in deleted lines (nothing to render, just clear)
-        if (firstChanged >= newLines.length) {
-            if (this.#previousLines.length > newLines.length) {
-                let buffer = "\x1b[?2026h";
-                // Move to end of new content (clamp to 0 for empty content)
-                const targetRow = Math.max(0, newLines.length - 1);
-                const lineDiff = computeLineDiff(targetRow);
-                if (lineDiff > 0)
-                    buffer += `\x1b[${lineDiff}B`;
-                else if (lineDiff < 0)
-                    buffer += `\x1b[${-lineDiff}A`;
-                buffer += "\r";
-                // Clear extra lines without scrolling
-                const extraLines = this.#previousLines.length - newLines.length;
-                if (extraLines > height) {
-                    logRedraw(`extraLines > height (${extraLines} > ${height})`);
-                    fullRender(true);
-                    return;
-                }
-                const clearStartOffset = newLines.length > 0 && extraLines > 0 ? 1 : 0;
-                if (clearStartOffset > 0) {
-                    buffer += `\x1b[${clearStartOffset}B`;
-                }
-                for (let i = 0; i < extraLines; i++) {
-                    buffer += "\r\x1b[2K";
-                    if (i < extraLines - 1)
-                        buffer += "\x1b[1B";
-                }
-                const moveUp = extraLines - 1 + clearStartOffset;
-                if (moveUp > 0) {
-                    buffer += `\x1b[${moveUp}A`;
-                }
-                buffer += "\x1b[?2026l";
-                this.terminal.write(buffer);
-                this.#cursorRow = targetRow;
-                this.#hardwareCursorRow = targetRow;
-            }
-            this.#positionHardwareCursor(cursorPos, newLines.length);
-            this.#previousLines = newLines;
-            this.#previousWidth = width;
-            this.#viewportTopRow = Math.max(0, this.#maxLinesRendered - height);
-            return;
-        }
-        // Check if firstChanged is above what was previously visible
-        // Use previousLines.length (not maxLinesRendered) to avoid false positives after content shrinks
-        const previousContentViewportTop = Math.max(0, this.#previousLines.length - height);
-        if (firstChanged < previousContentViewportTop) {
-            // First change is above previous viewport - need full re-render
-            logRedraw(`firstChanged < viewportTop (${firstChanged} < ${previousContentViewportTop})`);
-            fullRender(true);
-            return;
-        }
-        // Render from first changed line to end
-        // Build buffer with all updates wrapped in synchronized output
-        let buffer = "\x1b[?2026h"; // Begin synchronized output
-        const prevViewportBottom = prevViewportTop + height - 1;
         const moveTargetRow = appendStart ? firstChanged - 1 : firstChanged;
+        let buffer = "\x1b[?2026h";
+        // Scroll-down branch: target row is past the bottom of the previous
+        // viewport (a pure append). Emit `\r\n`s so the terminal pushes the
+        // existing viewport into scrollback before we start writing.
+        const prevViewportBottom = activeViewportTop + height - 1;
         if (moveTargetRow > prevViewportBottom) {
-            const currentScreenRow = Math.max(0, Math.min(height - 1, hardwareCursorRow - prevViewportTop));
+            const currentScreenRow = Math.max(0, Math.min(height - 1, hardwareCursorRow - activeViewportTop));
             const moveToBottom = height - 1 - currentScreenRow;
-            if (moveToBottom > 0) {
+            if (moveToBottom > 0)
                 buffer += `\x1b[${moveToBottom}B`;
-            }
             const scroll = moveTargetRow - prevViewportBottom;
             buffer += "\r\n".repeat(scroll);
-            prevViewportTop += scroll;
+            activeViewportTop += scroll;
             viewportTop += scroll;
             hardwareCursorRow = moveTargetRow;
         }
-        // Move cursor to first changed line (use hardwareCursorRow for actual position)
-        const lineDiff = computeLineDiff(moveTargetRow);
-        if (lineDiff > 0) {
-            buffer += `\x1b[${lineDiff}B`; // Move down
-        }
-        else if (lineDiff < 0) {
-            buffer += `\x1b[${-lineDiff}A`; // Move up
-        }
-        buffer += appendStart ? "\r\n" : "\r"; // Move to column 0
-        // Only render changed lines (firstChanged to lastChanged), not all lines to end
-        // This reduces flicker when only a single line changes (e.g., spinner animation)
-        const renderEnd = Math.min(lastChanged, newLines.length - 1);
+        // Position cursor at the row we need to start writing from.
+        const currentScreenRow = hardwareCursorRow - activeViewportTop;
+        const targetScreenRow = moveTargetRow - viewportTop;
+        const lineDiff = targetScreenRow - currentScreenRow;
+        if (lineDiff > 0)
+            buffer += `\x1b[${lineDiff}B`;
+        else if (lineDiff < 0)
+            buffer += `\x1b[${-lineDiff}A`;
+        buffer += appendStart ? "\r\n" : "\r";
+        // Repaint only firstChanged..lastChanged, not all rows to the end.
+        // This bounds flicker for single-row updates (e.g. spinner ticks).
+        const renderEnd = Math.min(lastChanged, lines.length - 1);
         for (let i = firstChanged; i <= renderEnd; i++) {
             if (i > firstChanged)
                 buffer += "\r\n";
-            buffer += "\x1b[2K"; // Clear current line
-            const line = newLines[i];
-            const isImage = TERMINAL.isImageLine(line);
-            if (!isImage && visibleWidth(line) > width) {
-                // Log all lines to crash file for debugging
-                const crashLogPath = getCrashLogPath();
-                const crashData = [
-                    `Crash at ${new Date().toISOString()}`,
-                    `Terminal width: ${width}`,
-                    `Line ${i} visible width: ${visibleWidth(line)}`,
-                    "",
-                    "=== All rendered lines ===",
-                    ...newLines.map((l, idx) => `[${idx}] (w=${visibleWidth(l)}) ${l}`),
-                    "",
-                ].join("\n");
-                fs.mkdirSync(path.dirname(crashLogPath), { recursive: true });
-                fs.writeFileSync(crashLogPath, crashData);
-                // Clean up terminal state before throwing
-                this.stop();
-                const errorMsg = [
-                    `Rendered line ${i} exceeds terminal width (${visibleWidth(line)} > ${width}).`,
-                    "",
-                    "This is likely caused by a custom TUI component not truncating its output.",
-                    "Use visibleWidth() to measure and truncateToWidth() to truncate lines.",
-                    "",
-                    `Debug log written to: ${crashLogPath}`,
-                ].join("\n");
-                throw new Error(errorMsg);
-            }
-            buffer += line;
+            buffer += "\x1b[2K";
+            buffer += this.#fitLineToWidth(lines[i], width);
         }
-        // Track where cursor ended up after rendering
+        // If the prior frame was taller, clear the trailing rows.
         let finalCursorRow = renderEnd;
-        // If we had more lines before, clear them and move cursor back
-        if (this.#previousLines.length > newLines.length) {
-            // Move to end of new content first if we stopped before it
-            if (renderEnd < newLines.length - 1) {
-                const moveDown = newLines.length - 1 - renderEnd;
+        if (this.#previousLines.length > lines.length) {
+            if (renderEnd < lines.length - 1) {
+                const moveDown = lines.length - 1 - renderEnd;
                 buffer += `\x1b[${moveDown}B`;
-                finalCursorRow = newLines.length - 1;
+                finalCursorRow = lines.length - 1;
             }
-            const extraLines = this.#previousLines.length - newLines.length;
-            for (let i = newLines.length; i < this.#previousLines.length; i++) {
+            const extraLines = this.#previousLines.length - lines.length;
+            for (let i = lines.length; i < this.#previousLines.length; i++) {
                 buffer += "\r\n\x1b[2K";
             }
-            // Move cursor back to end of new content
             buffer += `\x1b[${extraLines}A`;
         }
-        buffer += "\x1b[?2026l"; // End synchronized output
-        if (process.env.PI_TUI_DEBUG === "1") {
-            const debugDir = "/tmp/tui";
-            fs.mkdirSync(debugDir, { recursive: true });
-            const debugPath = path.join(debugDir, `render-${Date.now()}-${Math.random().toString(36).slice(2)}.log`);
-            const debugData = [
-                `firstChanged: ${firstChanged}`,
-                `viewportTop: ${viewportTop}`,
-                `cursorRow: ${this.#cursorRow}`,
-                `height: ${height}`,
-                `lineDiff: ${lineDiff}`,
-                `hardwareCursorRow: ${hardwareCursorRow}`,
-                `renderEnd: ${renderEnd}`,
-                `finalCursorRow: ${finalCursorRow}`,
-                `cursorPos: ${JSON.stringify(cursorPos)}`,
-                `newLines.length: ${newLines.length}`,
-                `previousLines.length: ${this.#previousLines.length}`,
-                "",
-                "=== newLines ===",
-                JSON.stringify(newLines, null, 2),
-                "",
-                "=== previousLines ===",
-                JSON.stringify(this.#previousLines, null, 2),
-                "",
-                "=== buffer ===",
-                JSON.stringify(buffer),
-            ].join("\n");
-            fs.writeFileSync(debugPath, debugData);
-        }
-        // Write entire buffer at once
+        const { seq, toRow } = this.#cursorControlSequence(cursorPos, lines.length, finalCursorRow);
+        buffer += seq;
+        buffer += "\x1b[?2026l";
+        this.#writeDiffDebug(lines, firstChanged, viewportTop, height, lineDiff, hardwareCursorRow, renderEnd, finalCursorRow, cursorPos, toRow, buffer);
         this.terminal.write(buffer);
-        // Track cursor position for next render
-        // cursorRow tracks end of content (for viewport calculation)
-        // hardwareCursorRow tracks actual terminal cursor position (for movement)
-        this.#cursorRow = Math.max(0, newLines.length - 1);
-        this.#hardwareCursorRow = finalCursorRow;
-        // Track terminal's working area (grows but doesn't shrink unless cleared)
-        this.#maxLinesRendered = Math.max(this.#maxLinesRendered, newLines.length);
-        this.#viewportTopRow = Math.max(0, this.#maxLinesRendered - height);
-        // Position hardware cursor for IME
-        this.#positionHardwareCursor(cursorPos, newLines.length);
-        this.#previousLines = newLines;
-        this.#previousWidth = width;
+        this.#maxLinesRendered = lines.length;
+        if (lines.length > this.#previousLines.length) {
+            const pushedNow = Math.max(0, lines.length - height);
+            if (pushedNow > this.#scrollbackHighWater) {
+                this.#scrollbackHighWater = pushedNow;
+            }
+        }
+        this.#commit(lines, width, height, Math.max(0, lines.length - height), toRow);
+    }
+    /** Optional intent log under PI_DEBUG_REDRAW. */
+    #logRedraw(intent, newLength, height) {
+        if (process.env.PI_DEBUG_REDRAW !== "1")
+            return;
+        const detail = intent.kind === "diff"
+            ? `${intent.kind}(first=${intent.firstChanged}, last=${intent.lastChanged}, appended=${intent.appendedLines})`
+            : intent.kind === "viewportRepaint" && intent.appendFrom !== undefined
+                ? `${intent.kind}(appendFrom=${intent.appendFrom})`
+                : intent.kind;
+        const msg = `[${new Date().toISOString()}] render: ${detail} (prev=${this.#previousLines.length}, new=${newLength}, height=${height})\n`;
+        fs.appendFileSync(getDebugLogPath(), msg);
+    }
+    /** Optional per-render dump under PI_TUI_DEBUG; isolated so #emitDiff stays readable. */
+    #writeDiffDebug(lines, firstChanged, viewportTop, height, lineDiff, hardwareCursorRow, renderEnd, finalCursorRow, cursorPos, toRow, buffer) {
+        if (process.env.PI_TUI_DEBUG !== "1")
+            return;
+        const debugDir = "/tmp/tui";
+        fs.mkdirSync(debugDir, { recursive: true });
+        const debugPath = path.join(debugDir, `render-${Date.now()}-${Math.random().toString(36).slice(2)}.log`);
+        const debugData = [
+            `firstChanged: ${firstChanged}`,
+            `viewportTop: ${viewportTop}`,
+            `cursorRow: ${this.#cursorRow}`,
+            `height: ${height}`,
+            `lineDiff: ${lineDiff}`,
+            `hardwareCursorRow: ${hardwareCursorRow}`,
+            `hardwareCursorRow (post): ${toRow}`,
+            `renderEnd: ${renderEnd}`,
+            `finalCursorRow: ${finalCursorRow}`,
+            `cursorPos: ${JSON.stringify(cursorPos)}`,
+            `newLines.length: ${lines.length}`,
+            `previousLines.length: ${this.#previousLines.length}`,
+            "",
+            "=== newLines ===",
+            JSON.stringify(lines, null, 2),
+            "",
+            "=== previousLines ===",
+            JSON.stringify(this.#previousLines, null, 2),
+            "",
+            "=== buffer ===",
+            JSON.stringify(buffer),
+        ].join("\n");
+        fs.writeFileSync(debugPath, debugData);
     }
     /**
-     * Position the hardware cursor for IME candidate window.
-     * @param cursorPos The cursor position extracted from rendered output, or null
-     * @param totalLines Total number of rendered lines
+     * Build cursor control sequences to position the hardware cursor for the IME
+     * candidate window. Returns escape sequences and the resulting cursor row for
+     * the caller to update `#hardwareCursorRow`. The sequences should be appended
+     * into the caller's own synchronized output block to avoid a flicker between
+     * content and cursor frames.
      */
-    #positionHardwareCursor(cursorPos, totalLines) {
-        if (!cursorPos || totalLines <= 0) {
-            this.terminal.hideCursor();
-            return;
-        }
+    #cursorControlSequence(cursorPos, totalLines, fromRow) {
+        // No IME target or no content — hide cursor regardless of preference
+        if (!cursorPos || totalLines <= 0)
+            return { seq: "\x1b[?25l", toRow: fromRow };
         // Clamp cursor position to valid range
         const targetRow = Math.max(0, Math.min(cursorPos.row, totalLines - 1));
         const targetCol = Math.max(0, cursorPos.col);
         // Move cursor from current position to target
-        const rowDelta = targetRow - this.#hardwareCursorRow;
-        let buffer = "";
+        const rowDelta = targetRow - fromRow;
+        let seq = "";
         if (rowDelta > 0) {
-            buffer += `\x1b[${rowDelta}B`; // Move down
+            seq += `\x1b[${rowDelta}B`; // Move down
         }
         else if (rowDelta < 0) {
-            buffer += `\x1b[${-rowDelta}A`; // Move up
+            seq += `\x1b[${-rowDelta}A`; // Move up
         }
         // Move to absolute column (1-indexed)
-        buffer += `\x1b[${targetCol + 1}G`;
-        buffer += this.#showHardwareCursor ? "\x1b[?25h" : "\x1b[?25l";
-        this.terminal.write(`\x1b[?2026h${buffer}\x1b[?2026l`);
-        this.#hardwareCursorRow = targetRow;
+        seq += `\x1b[${targetCol + 1}G`;
+        seq += this.#showHardwareCursor ? "\x1b[?25h" : "\x1b[?25l";
+        return { seq, toRow: targetRow };
+    }
+    /**
+     * Write the hardware cursor position to the terminal as a standalone
+     * synchronized output block. Use when there is no surrounding render buffer
+     * to embed the sequences into.
+     */
+    #writeCursorPosition(cursorPos, totalLines) {
+        if (!cursorPos || totalLines <= 0) {
+            this.terminal.hideCursor();
+            return;
+        }
+        const { seq, toRow } = this.#cursorControlSequence(cursorPos, totalLines, this.#hardwareCursorRow);
+        this.#hardwareCursorRow = toRow;
+        this.terminal.write(`\x1b[?2026h${seq}\x1b[?2026l`);
     }
 }
 //# sourceMappingURL=tui.js.map

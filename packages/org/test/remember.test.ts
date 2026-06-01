@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { executeOrg } from "@oh-my-pi/pi-natives";
+import { executeOrg } from "@spell/pi-natives";
 
 let tmpDir: string;
 

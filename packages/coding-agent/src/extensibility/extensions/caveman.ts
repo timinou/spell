@@ -1,5 +1,5 @@
-import { Container, type SettingItem, SettingsList, type SettingsListTheme, Spacer, Text } from "@oh-my-pi/pi-tui";
-import { logger } from "@oh-my-pi/pi-utils";
+import { Container, type SettingItem, SettingsList, type SettingsListTheme, Spacer, Text } from "@spell/pi-tui";
+import { logger } from "@spell/pi-utils";
 import type { Settings, SettingValue } from "../../config/settings";
 import { DynamicBorder } from "../../modes/components/dynamic-border";
 import type { Theme } from "../../modes/theme/theme";

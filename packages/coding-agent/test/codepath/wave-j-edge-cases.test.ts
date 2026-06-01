@@ -15,14 +15,14 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { executeCodePath } from "@oh-my-pi/pi-natives";
+import { executeCodePath } from "@spell/pi-natives";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { computeLineHash } from "@oh-my-pi/pi-coding-agent/patch";
-import { CodepathEditTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import { computeLineHash } from "@spell/pi-coding-agent/patch";
+import { CodepathEditTool, type ToolSession } from "@spell/pi-coding-agent/tools";
+import type { AgentToolResult } from "@spell/pi-agent-core";
 
 function makeSession(tmpDir: string, sandboxPolicy?: ToolSession["sandboxPolicy"]): ToolSession {
 	return {

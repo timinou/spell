@@ -1,5 +1,5 @@
-import { getOAuthProviders } from "@oh-my-pi/pi-ai";
-import { logger } from "@oh-my-pi/pi-utils";
+import { getOAuthProviders } from "@spell/pi-ai";
+import { logger } from "@spell/pi-utils";
 import type { ResolvedModeConfig } from "../capability/mode";
 import type { SettingPath, SettingValue } from "../config/settings";
 import { settings } from "../config/settings";

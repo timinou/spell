@@ -1,0 +1,69 @@
+#+TITLE: hard-fork-from-oh-my-pi-rename-to-spell-
+
+** ITEM hard-fork-from-oh-my-pi-rename-to-spell-scope
+
+Spell hard-forked from upstream =@oh-my-pi/*= npm scope to =@spell/*= on 2026-05-30.
+
+Rationale: BUG-424 (lone-ESC infinite loop in =break_long_word=) surfaced that bun's install cache for =@oh-my-pi/pi-natives@<version>= could shadow our workspace at any resolution boundary. Source-code fixes had no effect on running spell instances when bun resolved imports to a cached published binary instead of the workspace.
+
+The structural fix is name divorce: if our packages don't share a scope with upstream, the cache cannot shadow them by name.
+
+** Topology after rename
+
+| upstream scope          | spell scope            |
+|-------------------------|------------------------|
+| @oh-my-pi/pi-natives    | @spell/pi-natives      |
+| @oh-my-pi/pi-coding-agent | @spell/pi-coding-agent |
+| @oh-my-pi/pi-ai          | @spell/pi-ai           |
+| ... (19 packages total)  | ...                    |
+
+URLs: =github.com/can1357/oh-my-pi= \u2192 =github.com/timinou/spell=.
+
+** Three layers of structural enforcement
+
+1. =packages/natives/src/native.ts::assertTrustedNativePath= \u2014 rejects any candidate binary path outside {nativeDir, execDir, versionedDir, userDataDir} at load time.
+2. =packages/utils/test/no-upstream-references.test.ts= \u2014 repo-wide CI test that fails if any file outside the historical-record allowlist contains =@oh-my-pi/=.
+3. =biome.json::noRestrictedImports= \u2014 every =@oh-my-pi/<pkg>= import literal is a lint error with a targeted "use @spell/<pkg>" message.
+
+** Phantom-dep fixes surfaced
+
+The rename exposed three packages with imports they didn't declare (bun's cache had been auto-resolving them silently):
+
+- =@spell/pi-coding-agent=: + =@spell/pi-desktop-common=
+- =@spell/react-edit-benchmark=: + =@spell/pi-ai=, =@spell/pi-tui=
+- =@spell/swarm-extension=: + =@spell/pi-utils=
+- =@spell/pi-utils= (devDep): + =@spell/pi-natives= (test-only)
+
+** Commits
+
+- =ed7ed0a7b= \u2014 fork: rename npm scope (atomic, 1133 files)
+- =8bb85f71d= \u2014 fork: structural enforcement (loader guard + test + biome rule)
+- =38064e3d1= \u2014 BUG-422 audit + Footer documentation
+
+** Allowed surfaces
+
+Historical / migration mentions of =@oh-my-pi= remain legal in:
+- =.spell/memory/= (concepts, episodes \u2014 immutable history)
+- =!tasks/= (org bugs/features that describe the rename itself)
+- =packages/*/CHANGELOG.md= (migration notes)
+- =biome.json= (declares the forbidden list by literal)
+- =packages/utils/test/no-upstream-references.test.ts= (the enforcement test itself)
+
+** Operational footprint
+
+Global symlinks were updated:
+- =~/.local/share/reflex/bun/install/global/node_modules/@oh-my-pi/*= \u2192 deleted
+- =~/.local/share/reflex/bun/install/global/node_modules/@spell/{pi-ai, pi-coding-agent, pi-natives}= \u2192 created
+- =~/.local/share/reflex/bun/bin/spell= \u2192 retargeted to =@spell/pi-coding-agent/src/cli.ts=
+- =~/.local/share/reflex/bun/bin/omp= \u2192 removed (legacy bun symlink; standalone =~/.local/bin/omp= preserved)
+
+Verified: =spell --help= in =~/code/ora/concept= works; =import.meta.resolve("@spell/pi-natives")= from the global pi-coding-agent script resolves to workspace =packages/natives/src/index.ts=.
+:PROPERTIES:
+:CUSTOM_ID: DEC-hard-fork-from-oh-my-pi-rename-to-spell-
+:KIND: decision
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-30T20:32:31Z
+:END:
+:RELATIONS:
+SUPERSEDES: CON-break-long-word-lone-esc-infinite-loop--
+:END:

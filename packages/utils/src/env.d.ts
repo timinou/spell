@@ -8,7 +8,7 @@ export declare function parseEnvFile(filePath: string): Record<string, string>;
 /**
  * Intentional re-export of Bun.env.
  *
- * All users should import this env module (import { $env } from "@oh-my-pi/pi-utils")
+ * All users should import this env module (import { $env } from "@spell/pi-utils")
  * before using environment variables. This ensures that .env files have been loaded and
  * overrides (project, home) have been applied, so $env always reflects the correct values.
  */
@@ -19,4 +19,5 @@ export declare const $env: Record<string, string>;
  * @returns The first environment variable value, or undefined if no value is found.
  */
 export declare function $pickenv(...keys: string[]): string | undefined;
+export declare function $flag(name: string, def?: boolean): boolean;
 //# sourceMappingURL=env.d.ts.map

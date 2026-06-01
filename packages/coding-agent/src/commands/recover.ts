@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { type SessionStatusFile, STATUS_DIR, StatusFileReader } from "@oh-my-pi/pi-desktop-common";
-import { Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { type SessionStatusFile, STATUS_DIR, StatusFileReader } from "@spell/pi-desktop-common";
+import { Command, Flags } from "@spell/pi-utils/cli";
 
 interface RecoverableStatusSession extends SessionStatusFile {
 	sessionId: string;

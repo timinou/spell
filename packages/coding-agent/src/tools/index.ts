@@ -1,6 +1,6 @@
-import type { AgentTool } from "@oh-my-pi/pi-agent-core";
-import type { GatewayClient } from "@oh-my-pi/pi-gateway";
-import { logger } from "@oh-my-pi/pi-utils";
+import type { AgentTool } from "@spell/pi-agent-core";
+import type { GatewayClient } from "@spell/pi-gateway";
+import { logger } from "@spell/pi-utils";
 import type { AsyncJobManager } from "../async";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
@@ -96,7 +96,7 @@ export * from "./exit-plan-mode";
 export * from "./fetch";
 
 export * from "./gateway";
-export * from "./gemini-image";
+export * from "./image-generation";
 export * from "./get";
 export * from "./goals-tool";
 
@@ -216,7 +216,7 @@ export interface ToolSession {
 	setCheckpointState?: (state: CheckpointState | null) => void;
 	/** Dedicated org-mode daemon lifecycle manager for org MCP callers. */
 	/** Active QML remote server; when set, CanvasTool routes panels to the Android client. */
-	qmlRemoteServer?: import("@oh-my-pi/pi-qml-remote").QmlRemoteServer;
+	qmlRemoteServer?: import("@spell/pi-qml-remote").QmlRemoteServer;
 	/** Loop orchestration manager for loop tools, slash commands, and dashboards. */
 	loopManager?: LoopManager;
 	/** Canvas orchestrator manager for canvas-backed QML windows. */

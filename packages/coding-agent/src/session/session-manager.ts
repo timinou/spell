@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { AgentMessage } from "@spell/pi-agent-core";
 import {
 	type ImageContent,
 	isToolCallStreamDiagnostic,
@@ -12,9 +12,9 @@ import {
 	type TextContent,
 	type ToolCallStreamDiagnostic,
 	type Usage,
-} from "@oh-my-pi/pi-ai";
-import { validateImage } from "@oh-my-pi/pi-ai/image-validation";
-import { getTerminalId } from "@oh-my-pi/pi-tui";
+} from "@spell/pi-ai";
+import { validateImage } from "@spell/pi-ai/image-validation";
+import { getTerminalId } from "@spell/pi-tui";
 import {
 	getBlobsDir,
 	getAgentDir as getDefaultAgentDir,
@@ -28,7 +28,7 @@ import {
 	resolveEquivalentPath,
 	Snowflake,
 	toError,
-} from "@oh-my-pi/pi-utils";
+} from "@spell/pi-utils";
 import { ArtifactManager, type ArtifactRef } from "./artifacts";
 import {
 	type BlobPutResult,
@@ -51,6 +51,7 @@ import {
 } from "./messages";
 import type { SessionStorage, SessionStorageWriter } from "./session-storage";
 import { FileSessionStorage, MemorySessionStorage } from "./session-storage";
+import { repairUnpairedToolCalls } from "./transcript-repair";
 
 export const CURRENT_SESSION_VERSION = 3;
 
@@ -657,7 +658,11 @@ export function buildSessionContext(
 		}
 	}
 
-	return { messages, thinkingLevel, serviceTier, models, injectedTtsrRules, mode, modeData };
+	// Repair transcripts killed mid-tool-execution: any assistant toolCall with
+	// no persisted toolResult gets a synthetic aborted result so tool_use/
+	// tool_result pairing holds on resume and no cell replays as pending.
+	const { messages: repairedMessages } = repairUnpairedToolCalls(messages);
+	return { messages: repairedMessages, thinkingLevel, serviceTier, models, injectedTtsrRules, mode, modeData };
 }
 
 /**

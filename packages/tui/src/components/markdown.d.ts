@@ -1,5 +1,5 @@
 import type { SymbolTheme } from "../symbols";
-import type { Component } from "../tui";
+import type { Component, DirtyParent } from "../tui";
 /**
  * Default text styling for markdown content.
  * Applied to all text unless overridden by markdown formatting.
@@ -48,6 +48,7 @@ export interface MarkdownTheme {
 }
 export declare class Markdown implements Component {
     #private;
+    setParent(p: DirtyParent | undefined): void;
     constructor(text: string, paddingX: number, paddingY: number, theme: MarkdownTheme, defaultTextStyle?: DefaultTextStyle, codeBlockIndent?: number);
     setText(text: string): void;
     invalidate(): void;

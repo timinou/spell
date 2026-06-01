@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { GoalExecutionController } from "../executor/goal-executor";
 import type { AutonomyManifest } from "../manifest/types";
 import type { GoalScheduler } from "../scheduler/goal-scheduler";

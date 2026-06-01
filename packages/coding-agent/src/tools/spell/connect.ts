@@ -1,7 +1,7 @@
-import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
-import { isBridgeAvailable, QmlBridge } from "@oh-my-pi/pi-qml";
-import { QmlRemoteServer } from "@oh-my-pi/pi-qml-remote";
-import { logger } from "@oh-my-pi/pi-utils";
+import type { AgentToolContext } from "@spell/pi-agent-core";
+import { isBridgeAvailable, QmlBridge } from "@spell/pi-qml";
+import { QmlRemoteServer } from "@spell/pi-qml-remote";
+import { logger } from "@spell/pi-utils";
 import type { ToolSession } from "..";
 import { ToolError } from "../tool-errors";
 import {

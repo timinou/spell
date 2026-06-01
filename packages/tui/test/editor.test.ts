@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
-import { CombinedAutocompleteProvider } from "@oh-my-pi/pi-tui/autocomplete";
-import { Editor } from "@oh-my-pi/pi-tui/components/editor";
-import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { CombinedAutocompleteProvider } from "@spell/pi-tui/autocomplete";
+import { Editor } from "@spell/pi-tui/components/editor";
+import { visibleWidth } from "@spell/pi-tui/utils";
 import { defaultEditorTheme } from "./test-themes";
 
 describe("Editor component", () => {

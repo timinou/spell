@@ -6,6 +6,14 @@ type InputListenerResult = {
 } | undefined;
 type InputListener = (data: string) => InputListenerResult;
 /**
+ * Minimal interface for anything that can serve as a parent for dirty propagation.
+ * Containers implement this directly; Box and other Container-like wrappers can
+ * implement it too without needing to inherit from Container.
+ */
+export interface DirtyParent {
+    markDirty(): void;
+}
+/**
  * Component interface - all components must implement this
  */
 export interface Component {
@@ -20,15 +28,21 @@ export interface Component {
      */
     handleInput?(data: string): void;
     /**
+     * Optional invalidate hook — clear any internal cache + signal that the
+     * component needs re-rendering. Should call #parent.markDirty() if a parent
+     * has been set, to propagate dirty up the tree.
+     */
+    invalidate?(): void;
+    /**
+     * Optional parent assignment — set by addChild / clear / removeChild on
+     * Container and Container-like (Box). Enables upward dirty propagation.
+     */
+    setParent?(parent: DirtyParent | undefined): void;
+    /**
      * If true, component receives key release events (Kitty protocol).
      * Default is false - release events are filtered out.
      */
     wantsKeyRelease?: boolean;
-    /**
-     * Invalidate any cached rendering state.
-     * Called when theme changes or when component needs to re-render from scratch.
-     */
-    invalidate(): void;
 }
 /**
  * Interface for components that can receive focus and display a hardware cursor.
@@ -49,6 +63,14 @@ export declare function isFocusable(component: Component | null): component is C
  * TUI finds and strips this marker, then positions the hardware cursor there.
  */
 export declare const CURSOR_MARKER = "\u001B_pi:c\u0007";
+/**
+ * Spinner marker — APC (Application Program Command) zero-width sentinel.
+ * Renderers emit this where they want the live spinner glyph. TUI substitutes
+ * it with the current frame at render time, so the renderer body itself does
+ * not need to run on every spinner tick. Frame source is the shared
+ * `spinnerClock`; the active glyph set is configured via `setSpinnerFrames`.
+ */
+export declare const SPINNER_MARKER = "\u001B_pi:spin\u0007";
 export { visibleWidth };
 /**
  * Anchor position for overlays
@@ -114,7 +136,20 @@ export interface OverlayHandle {
  * Container - a component that contains other components
  */
 export declare class Container implements Component {
+    #private;
     children: Component[];
+    setParent(p: DirtyParent | undefined): void;
+    markDirty(): void;
+    isDirty(): boolean;
+    /** Mark this Container and every descendant Container dirty WITHOUT
+     *  invalidating leaf-component caches. Used by TUI.requestRender to
+     *  defeat per-Container cache without losing the leaf-level cache wins
+     *  (Markdown.#cachedText etc.). Leaves keep their own caches; if their
+     *  state actually changed they invalidate themselves via their own setters. */
+    /** Mark this Container and all descendant Containers dirty.
+     *  Unlike invalidate(), this recursively walks the subtree and
+     *  also calls Component.invalidate() on leaf components. */
+    markTreeDirty(): void;
     addChild(component: Component): void;
     removeChild(component: Component): void;
     clear(): void;
@@ -122,8 +157,15 @@ export declare class Container implements Component {
     render(width: number): string[];
 }
 /**
- * TUI - Main class for managing terminal UI with differential rendering
+ * Options for {@link TUI.requestRender}.
  */
+export interface RenderRequestOptions {
+    /** When paired with a forced render, also wipe terminal scrollback (a true
+     * session replace, e.g. /clear). Honored outside multiplexers. Default off:
+     * forced redraws preserve scrollback so the user's history survives resize,
+     * focus changes, and post-init repaints. */
+    clearScrollback?: boolean;
+}
 export declare class TUI extends Container {
     #private;
     terminal: Terminal;
@@ -135,7 +177,17 @@ export declare class TUI extends Container {
         preFocus: Component | null;
         hidden: boolean;
     }[];
-    constructor(terminal: Terminal, showHardwareCursor?: boolean);
+    constructor(terminal: Terminal, options?: boolean | {
+        showHardwareCursor?: boolean;
+        minRenderInterval?: number;
+        spinnerFrames?: string[];
+    });
+    /**
+     * Update the active spinner glyph set. Safe to call at runtime when the
+     * theme changes; existing subscription (if any) keeps ticking and just
+     * picks the new glyph on the next frame.
+     */
+    setSpinnerFrames(frames: string[]): void;
     get fullRedraws(): number;
     getShowHardwareCursor(): boolean;
     setShowHardwareCursor(enabled: boolean): void;
@@ -161,6 +213,14 @@ export declare class TUI extends Container {
     addInputListener(listener: InputListener): () => void;
     removeInputListener(listener: InputListener): void;
     stop(): void;
-    requestRender(force?: boolean): void;
+    /**
+     * Set the minimum interval (ms) between renders. Used by consumers to
+     * throttle rendering when the terminal is not visible (e.g. niri
+     * overview, terminal unfocused). 0 disables throttling.
+     */
+    setMinRenderInterval(ms: number): void;
+    /** Current minimum render interval (ms). */
+    get minRenderInterval(): number;
+    requestRender(force?: boolean, options?: RenderRequestOptions): void;
 }
 //# sourceMappingURL=tui.d.ts.map

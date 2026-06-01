@@ -1,0 +1,56 @@
+#+TITLE: Session transcript leaves toolCalls unpaired after hard process kill
+#+STATE: DONE
+#+SESSION_ID: 14f412079fc64f65
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-29T09-31-12-895Z_14f412079fc64f65.jsonl]]
+#+CUSTOM_ID: BUG-420-session-transcript-leaves-toolcalls-unpa
+#+COMPLETION_HASH: f583eca5c9bd8d54
+
+* Initial Message
+
+I think that when the model sends several tool calls at the same time in the same thread, they seem to be queued and not asynchronous, which makes it much slower. Am I right? Please investigate and report back
+
+* Symptom
+After a hard process kill mid-tool-execution (reboot/crash/SIGKILL/OOM), the session JSONL contains an assistant message with a =toolCall= but no corresponding =toolResult=. This breaks the =tool_use= / =tool_result= pairing invariant the model API requires, and is the durable source of phantom-pending UI cells (see BUG-419).
+
+* Evidence
+Session =14edc1bec5a09a49=, line 2145: a =task= toolCall (5 reviewer subagents) with NO toolResult. Next record (line 2146) is a user message "retry; my computer had to reboot". The process died before the result line was written. A transcript scan found exactly 1 unpaired toolCall — this one — and 0 persisted "Skipped due to queued user message" results, confirming skip/abort results are not always durably written.
+
+* Root Cause
+- =packages/agent/src/agent-loop.ts= =createAbortedToolResult= backfills pairing, but only fires when the *running process* observes =stopReason: "aborted"|"error"=. A hard kill never reaches that path.
+- There is NO load-time reconciliation: nothing scans loaded messages for assistant =toolCall=s lacking a matching =toolResult= and appends a synthetic aborted result. (Searched session-manager / agent-session: no =sanitize/repair/ensurePaired/backfill= pass exists.)
+
+* Scope
+In:
+- On session load (and/or before the next model call resumes a loaded session), detect assistant =toolCall=s with no matching =toolResult= and append a synthetic terminal =toolResult= (isError: true, "Tool execution interrupted; no result recorded") preserving order so pairing holds.
+- Mirror the content shape of =createAbortedToolResult= so the API-pairing invariant is satisfied on resume.
+
+Out:
+- UI finalize fix (BUG-419) — sibling.
+- Persisting steering-skip results at emit time (possible follow-up; this bug covers load-time repair which also covers that gap).
+
+* Existing Patterns
+- =packages/agent/src/agent-loop.ts::createAbortedToolResult= — canonical synthetic toolResult shape; reuse its content/role/details structure.
+- Session load path in =packages/coding-agent/src/session/= (agent-session.ts / session-manager.ts) — locate where messages are read from disk into the in-memory message list; the repair pass belongs immediately after deserialization, before they are handed to the UI replay (ui-helpers) or the agent loop.
+
+* Tests
+1. Load a synthetic message list: assistant{toolCall A} followed by user message (no toolResult for A) → after repair, a toolResult for A exists immediately after the assistant message, isError true, ordering preserved.
+2. Already-paired transcript → repair is a no-op (no duplicate results).
+3. Multiple unpaired toolCalls in one assistant message → each gets its own synthetic result, all before the next non-result message.
+4. Background/async toolCall semantics: do not fabricate results for calls whose result legitimately arrives later within the same persisted session (only repair when truly terminal / end-of-transcript).
+
+Concrete test file:
+- =packages/coding-agent/test/session/transcript-pairing-repair.test.ts= (new), or =packages/agent/test/= if the repair lives in the agent package.
+
+* Acceptance Criteria
+- A loaded session with an unpaired =toolCall= is repaired so every assistant toolCall has a following toolResult.
+- Resuming such a session does not error on the model-API pairing requirement.
+- Well-formed transcripts are unchanged (no duplicate/siphoned results).
+
+* Verification
+- =bun test= for the new repair test.
+- Manual: resume session =14edc1bec5a09a49= and confirm no pairing error; the line-2145 task is paired with a synthetic interrupted result.
+
+* Related
+- UI symptom + immediate fix: BUG-419.
+
+NOTE [2026-05-29]: Fixed via repairUnpairedToolCalls (packages/coding-agent/src/session/transcript-repair.ts), wired into buildSessionContext return in session-manager.ts so every loaded session is self-consistent. Pure fn, mirrors createAbortedToolResult shape. Tests: packages/coding-agent/test/session/transcript-repair.test.ts (6 pass). Validated against 902 real local sessions: 25 had orphan toolCalls (27 total), all 27 repaired → 0 unpaired remaining. Session suite 67/0, no regressions.

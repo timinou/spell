@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { EventChannel, EventMap, EventPayload } from "./typed-event-map";
 
 /** Priority levels for event dispatch. */

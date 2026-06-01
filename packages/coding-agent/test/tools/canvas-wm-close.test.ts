@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isBridgeAvailable, QmlProcess } from "@oh-my-pi/pi-qml";
+import { isBridgeAvailable, QmlProcess } from "@spell/pi-qml";
 
 const SIMPLE_QML = `
 import QtQuick 2.15

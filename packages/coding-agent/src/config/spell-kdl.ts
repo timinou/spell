@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { Document, format, parse } from "@bgotink/kdl";
-import { getAgentDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { getAgentDir, isEnoent, logger } from "@spell/pi-utils";
 
 import type { ModeConfig, ModeConfigFrontmatter, ModeConfigSections } from "../capability/mode";
 import { createSourceMeta } from "../discovery/helpers";

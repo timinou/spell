@@ -24,6 +24,10 @@ export class Markdown {
     #cachedText;
     #cachedWidth;
     #cachedLines;
+    #parent;
+    setParent(p) {
+        this.#parent = p;
+    }
     constructor(text, paddingX, paddingY, theme, defaultTextStyle, codeBlockIndent = 2) {
         this.#text = text;
         this.#paddingX = paddingX;
@@ -33,6 +37,8 @@ export class Markdown {
         this.#codeBlockIndent = Math.max(0, Math.floor(codeBlockIndent));
     }
     setText(text) {
+        if (this.#text === text)
+            return;
         this.#text = text;
         this.invalidate();
     }
@@ -40,6 +46,7 @@ export class Markdown {
         this.#cachedText = undefined;
         this.#cachedWidth = undefined;
         this.#cachedLines = undefined;
+        this.#parent?.markDirty();
     }
     render(width) {
         // Check cache

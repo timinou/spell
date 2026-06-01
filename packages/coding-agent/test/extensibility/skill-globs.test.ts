@@ -2,8 +2,8 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { loadSkillsFromDir, type Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
-import { buildSystemPrompt } from "@oh-my-pi/pi-coding-agent/system-prompt";
+import { loadSkillsFromDir, type Skill } from "@spell/pi-coding-agent/extensibility/skills";
+import { buildSystemPrompt } from "@spell/pi-coding-agent/system-prompt";
 
 const readTool = new Map([
 	[

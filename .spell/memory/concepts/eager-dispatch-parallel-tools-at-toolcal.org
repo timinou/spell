@@ -1,0 +1,29 @@
+#+TITLE: eager-dispatch-parallel-tools-at-toolcal
+
+** ITEM eager-dispatch-parallel-tools-at-toolcall-end
+
+Mid-stream early dispatch for parallel-mode tools in the agent loop \u2014 BUG-423.
+
+When a parallel-mode tool's =toolcall_end= event fires inside =streamAssistantResponse=, the harness invokes =tool.execute(...)= IMMEDIATELY. The in-flight promise runs concurrently with the rest of the assistant stream. A per-turn =EagerDispatchMap= keyed by =toolCallId= bridges the producer (=streamAssistantResponse=) and the consumer (=executeToolCalls.runTool=): the consumer awaits the existing promise instead of re-running.
+
+Sits adjacent to FEAT-788 stream barrier in the same =toolcall_end= switch case. Barrier handles sequential tools (cut the stream); eager dispatch handles parallel tools (start running immediately). Orthogonal.
+
+Effect: a 60-second background bash emitted as the first of 30 tool calls now starts at its =toolcall_end= instead of waiting for the full stream to drain. Net latency on a tool-heavy turn drops from =stream + work= to =max(stream, work)=.
+
+Config knob =AgentLoopConfig.earlyDispatchParallelTools?: "enforce" | "off"=, default =enforce=. Off restores prior behaviour for diagnostics.
+
+Critical implementation detail: =AssistantMessage.content= is MUTATED through streaming. =message_update.message.content= is a shared reference; reading it after the stream completes shows the FINAL state, not the snapshot at the event's index. Tests asserting "stream state at this event" must use the immutable =message_update.assistantMessageEvent= sub-field.
+
+Property-test invariants (8 total, full list in BUG-423 \u00a7Property-test invariants):
+- I6 \u2014 enforce vs off agree on the executed-id SET (proves backwards compatibility)
+- I5 \u2014 enforce + scripted gap \u21d2 tool started before next toolcall_end (proves the value-prop)
+
+Filed and resolved in commit =b527c271ad007e34246845a6cff083f1664df71a=. Originating session =14f5aa3ae1ce24f4=.
+:PROPERTIES:
+:CUSTOM_ID: CON-eager-dispatch-parallel-tools-at-toolcal
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-30T18:13:35Z
+:END:
+:RELATIONS:
+:END:

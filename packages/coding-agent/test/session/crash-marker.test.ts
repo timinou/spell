@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { TempDir } from "@spell/pi-utils";
 import { SessionManager } from "../../src/session/session-manager";
 
 describe("appendCrashMarker", () => {

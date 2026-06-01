@@ -21,8 +21,8 @@ import type {
 	AgentToolContext,
 	AgentToolResult,
 	AgentToolUpdateCallback,
-} from "@oh-my-pi/pi-agent-core";
-import type { Component } from "@oh-my-pi/pi-tui";
+} from "@spell/pi-agent-core";
+import type { Component } from "@spell/pi-tui";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import statusDescription from "../prompts/tools/status.md" with { type: "text" };
 import type { StatusParams } from "./codepath-types";

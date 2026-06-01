@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { computeLineHash } from "@oh-my-pi/pi-coding-agent/patch";
-import { CodepathEditTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import { computeLineHash } from "@spell/pi-coding-agent/patch";
+import { CodepathEditTool, type ToolSession } from "@spell/pi-coding-agent/tools";
 
 /**
  * PLAN-304 Op matrix — every kind succeeds against real tempfs

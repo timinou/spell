@@ -1,7 +1,7 @@
 /**
  * ANSI-aware text utilities powered by native bindings.
  */
-import { getDefaultTabWidth } from "@oh-my-pi/pi-utils";
+import { getDefaultTabWidth } from "@spell/pi-utils";
 import { native } from "../native";
 /**
  * Truncate text to fit within a maximum visible width, adding ellipsis if needed.

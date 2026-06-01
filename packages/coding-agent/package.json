@@ -1,9 +1,9 @@
 {
 	"type": "module",
-	"name": "@oh-my-pi/pi-coding-agent",
+	"name": "@spell/pi-coding-agent",
 	"version": "13.12.8",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
-	"homepage": "https://github.com/can1357/oh-my-pi",
+	"homepage": "https://github.com/timinou/spell",
 	"author": "Can Boluk",
 	"contributors": [
 		"Mario Zechner"
@@ -11,11 +11,11 @@
 	"license": "GPL-3.0-only",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/can1357/oh-my-pi.git",
+		"url": "git+https://github.com/timinou/spell.git",
 		"directory": "packages/coding-agent"
 	},
 	"bugs": {
-		"url": "https://github.com/can1357/oh-my-pi/issues"
+		"url": "https://github.com/timinou/spell/issues"
 	},
 	"keywords": [
 		"coding-agent",
@@ -45,18 +45,19 @@
 	"dependencies": {
 		"@mozilla/readability": "^0.6",
 		"@bgotink/kdl": "^0.4",
-		"@oh-my-pi/pi-agent-core": "workspace:*",
-		"@oh-my-pi/pi-ai": "workspace:*",
-		"@oh-my-pi/pi-gateway": "workspace:*",
-		"@oh-my-pi/pi-natives": "workspace:*",
-		"@oh-my-pi/pi-niri": "workspace:*",
-		"@oh-my-pi/pi-org": "workspace:*",
-		"@oh-my-pi/pi-qml": "workspace:*",
-		"@oh-my-pi/pi-qml-remote": "workspace:*",
-		"@oh-my-pi/pi-tui": "workspace:*",
-		"@oh-my-pi/pi-utils": "workspace:*",
-		"@oh-my-pi/spell-stats": "workspace:*",
-		"@oh-my-pi/spell-server": "workspace:*",
+		"@spell/pi-agent-core": "workspace:*",
+		"@spell/pi-ai": "workspace:*",
+		"@spell/pi-desktop-common": "workspace:*",
+		"@spell/pi-gateway": "workspace:*",
+		"@spell/pi-natives": "workspace:*",
+		"@spell/pi-niri": "workspace:*",
+		"@spell/pi-org": "workspace:*",
+		"@spell/pi-qml": "workspace:*",
+		"@spell/pi-qml-remote": "workspace:*",
+		"@spell/pi-tui": "workspace:*",
+		"@spell/pi-utils": "workspace:*",
+		"@spell/spell-stats": "workspace:*",
+		"@spell/spell-server": "workspace:*",
 		"@sinclair/typebox": "^0.34",
 		"@xterm/headless": "^6.0",
 		"ajv": "^8.18",
@@ -429,6 +430,10 @@
 		"./tools": {
 			"types": "./src/tools/index.ts",
 			"import": "./src/tools/index.ts"
+		},
+		"./tools/autonomy-state": {
+			"types": "./src/tools/autonomy-state/index.ts",
+			"import": "./src/tools/autonomy-state/index.ts"
 		},
 		"./tools/*": {
 			"types": "./src/tools/*.ts",

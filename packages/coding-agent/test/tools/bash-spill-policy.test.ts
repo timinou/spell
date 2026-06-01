@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
-import { wrapToolWithMetaNotice } from "@oh-my-pi/pi-coding-agent/tools/output-meta";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import type { ToolSession } from "@spell/pi-coding-agent/tools";
+import { BashTool } from "@spell/pi-coding-agent/tools/bash";
+import { wrapToolWithMetaNotice } from "@spell/pi-coding-agent/tools/output-meta";
 
 let artifactCounter = 0;
 

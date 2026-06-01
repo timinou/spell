@@ -1,8 +1,8 @@
-import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { getOAuthProviders, type OAuthProvider } from "@oh-my-pi/pi-ai";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { Input, Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
-import { getAgentDbPath, getProjectDir } from "@oh-my-pi/pi-utils";
+import { ThinkingLevel } from "@spell/pi-agent-core";
+import { getOAuthProviders, type OAuthProvider } from "@spell/pi-ai";
+import type { Component } from "@spell/pi-tui";
+import { Input, Loader, Spacer, Text } from "@spell/pi-tui";
+import { getAgentDbPath, getProjectDir } from "@spell/pi-utils";
 import { MODEL_ROLES } from "../../config/model-registry";
 import { settings, type WriteTier } from "../../config/settings";
 import { DebugSelectorComponent } from "../../debug";
@@ -376,7 +376,12 @@ export class SelectorController {
 				}
 				break;
 			case "providers.image":
-				if (value === "auto" || value === "gemini" || value === "openrouter") {
+				if (
+					value === "auto" ||
+					value === "openai-codex" ||
+					value === "gemini" ||
+					value === "openrouter"
+				) {
 					setPreferredImageProvider(value);
 				}
 				break;

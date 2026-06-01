@@ -1,0 +1,30 @@
+#+TITLE: TUI snaps transcript to bottom and wipes scrollback during tasks
+#+STATE: DONE
+#+SESSION_ID: 14f40fe39be379c1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-29T09-21-51-727Z_14f40fe39be379c1.jsonl]]
+#+CUSTOM_ID: BUG-418-tui-snaps-transcript-to-bottom-and-wipes
+#+LAYER: tui
+#+COMPLETION_HASH: 3e6cc456c972e4fb
+
+* Initial Message
+
+my friend. Why is it that, when tasks are running, I get scrolled back down at the next refresh? It's very annoying. If you find other issues along the way, please explain them to me
+
+* Symptom
+While a task/agent runs, scrolling up in the main terminal chat snaps back to the bottom on the next refresh; on resize/focus-change the prior scrollback is also erased.
+
+* Root cause (verified via xterm-headless write-capture)
+- In-place spinner ticks emit ~CR + CLR-LINE~ only (0 newlines) → preserve scroll. NOT the cause.
+- Content growth emits ~\r
+~ per appended line → emulator follows output. Emulator policy.
+- ~fullRender(true)~ emits ~\x1b[3J\x1b[2J\x1b[H~ → ERASES scrollback then reprints the whole transcript → snaps to bottom AND destroys history.
+- Triggered by ~requestRender(true)~: width change, post-init, and on niri the image-suppress/restore path (~packages/niri/src/controller.ts:205,215~) fires on window-focus changes mid-task.
+
+* Constraints proven
+- Naive ~\x1b[3J~ → ~\x1b[2J~ downgrade is WRONG: probe showed transcript quadruples in scrollback (MARK-0 ×4, 40→142 lines), because ~fullRender~ reprints the entire transcript and relies on the wipe to avoid duplication.
+- Emulator-policy half (follow-on-output) is confirmed external: ghostty discussion #10456 — fix is their ~scroll-to-bottom~ config; iTerm pauses follow during manual scroll.
+
+* Fix
+Port upstream (~can1357/oh-my-pi~) ~RenderIntent~ refactor that gates scrollback wipe behind an explicit, multiplexer-aware ~clearScrollback~ option. See PLAN.
+
+NOTE [2026-05-29]: Fixed via PLAN-321 RenderIntent port. Forced redraws (resize/focus/post-init) now preserve scrollback; \x1b[3J gated behind clearScrollback opt-in, multiplexer-aware. tui suite 363 pass 0 fail. Emulator follow-on-output documented (ghostty scroll-to-bottom workaround).

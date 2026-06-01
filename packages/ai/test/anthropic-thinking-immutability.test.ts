@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { convertAnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic";
-import type { AssistantMessage, Model, UserMessage } from "@oh-my-pi/pi-ai/types";
+import { convertAnthropicMessages } from "@spell/pi-ai/providers/anthropic";
+import type { AssistantMessage, Model, UserMessage } from "@spell/pi-ai/types";
 
 const model: Model<"anthropic-messages"> = {
 	api: "anthropic-messages",
@@ -53,6 +53,42 @@ describe("Anthropic thinking replay immutability", () => {
 			{ type: "thinking", thinking: `analysis ${malformed}`, signature: "sig_thinking" },
 			{ type: "text", text: `text ${malformed.toWellFormed()}` },
 			{ type: "tool_use", id: "toolu_123", name: "read", input: { path: "README.md", _i: "Reading file" } },
+		]);
+	});
+
+	it("drops signed thinking blocks whose body was never captured", () => {
+		// Upstream relays (e.g. OAuth Claude proxies) sometimes forward
+		// signature_delta without thinking_delta, leaving an empty body paired
+		// with a real signature. Replaying that verbatim trips Anthropic's
+		// "thinking blocks cannot be modified" 400 on the latest assistant turn.
+		const user: UserMessage = { role: "user", content: "continue", timestamp: Date.now() };
+		const assistant: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "", thinkingSignature: "sig_empty" },
+				{ type: "text", text: "answer" },
+				{ type: "toolCall", id: "toolu_9", name: "read", arguments: { path: "x", _i: "Reading" } },
+			],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
+
+		const params = convertAnthropicMessages([user, assistant], model, false);
+		const assistantParam = params.find(message => message.role === "assistant");
+		expect(assistantParam?.content).toEqual([
+			{ type: "text", text: "answer" },
+			{ type: "tool_use", id: "toolu_9", name: "read", input: { path: "x", _i: "Reading" } },
 		]);
 	});
 });

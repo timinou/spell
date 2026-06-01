@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@oh-my-pi/pi-agent-core";
+import type { AgentEvent } from "@spell/pi-agent-core";
 import {
 	type Component,
 	Container,
@@ -7,8 +7,8 @@ import {
 	type TUI,
 	truncateToWidth,
 	visibleWidth,
-} from "@oh-my-pi/pi-tui";
-import { formatCost, formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
+} from "@spell/pi-tui";
+import { formatCost, formatDuration, formatNumber } from "@spell/pi-utils";
 import {
 	ASYNC_JOB_PROGRESS_CHANNEL,
 	type AsyncJobManager,

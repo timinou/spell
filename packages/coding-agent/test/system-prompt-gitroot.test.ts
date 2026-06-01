@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
-import { renderPromptTemplate } from "@oh-my-pi/pi-coding-agent/config/prompt-templates";
+import { renderPromptTemplate } from "@spell/pi-coding-agent/config/prompt-templates";
 
 describe("gitRoot warning", () => {
 	test("renders when gitRoot differs from cwd", async () => {

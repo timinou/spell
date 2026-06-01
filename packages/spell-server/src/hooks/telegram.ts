@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { GoalResult } from "../executor/types";
 import type { TelegramHook } from "../manifest/types";
 import { NoopNotificationSender, type NotificationSender } from "./notification-sender";

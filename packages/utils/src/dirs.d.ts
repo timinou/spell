@@ -38,6 +38,33 @@ export declare function setAgentDir(dir: string): void;
 export declare function getAgentDir(): string;
 /** Get the project-local config directory (.spell). */
 export declare function getProjectAgentDir(cwd?: string): string;
+/**
+ * Path to the user-tier spell.kdl.
+ *
+ * - PI_USER_KDL env var overrides everything (absolute path expected).
+ * - Otherwise: $XDG_CONFIG_HOME/spell/spell.kdl, falling back to
+ *   ~/.config/spell/spell.kdl.
+ *
+ * Decoupled from getAgentDir() on purpose: ~/.spell/ remains the home for
+ * runtime state (sessions/plugins/logs/etc.); user *config* moves to the
+ * XDG-compliant location.
+ */
+export declare function getUserKdlPath(): string;
+/** Path to the committed project-tier spell.kdl. */
+export declare function getProjectKdlPath(cwd?: string): string;
+/**
+ * Path to the gitignored machine-local-tier spell.kdl.
+ *
+ * <cwd>/.local/spell.kdl — intended to be excluded from VCS and to hold
+ * per-machine overrides (paths, credentials, personal preferences).
+ */
+export declare function getLocalKdlPath(cwd?: string): string;
+/**
+ * Legacy user-tier KDL location (~/.spell/spell.kdl), pre-XDG cutover.
+ * The one-shot migrator reads this and writes forward to getUserKdlPath().
+ * Safe to delete once the migration directory is removed.
+ */
+export declare function getLegacyUserKdlPath(): string;
 /** Get the reports directory (~/.spell/reports). */
 export declare function getReportsDir(): string;
 /** Get the logs directory (~/.spell/logs). */

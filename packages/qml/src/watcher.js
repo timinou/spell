@@ -1,5 +1,5 @@
 import * as fs from "node:fs";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 /**
  * Watches QML files for changes and calls a callback on modification.
  * Uses native fs.watch; debounces by 150ms to avoid double-firing.

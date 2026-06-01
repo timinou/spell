@@ -1,5 +1,5 @@
-import type { AgentEvent } from "@oh-my-pi/pi-agent-core";
-import { Text } from "@oh-my-pi/pi-tui";
+import type { AgentEvent } from "@spell/pi-agent-core";
+import { Text } from "@spell/pi-tui";
 import { settings } from "../../../config/settings";
 import { AssistantMessageComponent } from "../assistant-message";
 import { ReadToolGroupComponent } from "../read-tool-group";

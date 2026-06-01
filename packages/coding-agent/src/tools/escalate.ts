@@ -1,4 +1,4 @@
-import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@spell/pi-agent-core";
 import { type Static, Type } from "@sinclair/typebox";
 import type { OutputMeta } from "./output-meta";
 import { toolResult } from "./tool-result";

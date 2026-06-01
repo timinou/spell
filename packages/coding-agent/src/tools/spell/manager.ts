@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { APP_NAME, getProjectDir, getToolsDir, logger } from "@oh-my-pi/pi-utils";
+import { APP_NAME, getProjectDir, getToolsDir, logger } from "@spell/pi-utils";
 
 const SPELL_REPO = "timinou/spell";
 const SPELL_ASSET = "spell-arm64-v8a.apk";

@@ -10,9 +10,9 @@
  * (e.g. the Phoenix inspector's "Quick Fix" button).
  */
 
-import type { QmlBridge } from "@oh-my-pi/pi-qml";
-import type { RemoteQmlBridge } from "@oh-my-pi/pi-qml-remote";
-import { logger } from "@oh-my-pi/pi-utils";
+import type { QmlBridge } from "@spell/pi-qml";
+import type { RemoteQmlBridge } from "@spell/pi-qml-remote";
+import { logger } from "@spell/pi-utils";
 import {
 	type AgentDefinition,
 	type AgentProgress,

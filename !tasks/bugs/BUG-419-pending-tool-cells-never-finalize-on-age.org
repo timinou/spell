@@ -1,0 +1,76 @@
+#+TITLE: Pending tool cells never finalize on agent_end sweep and history replay
+#+STATE: DONE
+#+SESSION_ID: 14f412079fc64f65
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-29T09-31-12-895Z_14f412079fc64f65.jsonl]]
+#+CUSTOM_ID: BUG-419-pending-tool-cells-never-finalize-on-age
+#+COMPLETION_HASH: 834f27ed8a0e5909
+
+* Initial Message
+
+I think that when the model sends several tool calls at the same time in the same thread, they seem to be queued and not asynchronous, which makes it much slower. Am I right? Please investigate and report back
+
+* Symptom
+In a live session the TUI shows tool cells stuck in *pending* state (bare title, no result icon, no output) even though the session is actively running and later tool calls complete. Reloading a session shows the same phantom-pending cells permanently.
+
+* Root Cause
+A tool cell renders pending iff its =ToolExecutionComponent= never receives =updateResult(result, /*isPartial=*/false)=. Two cleanup paths drop the =pendingTools= entry *without finalizing the component*:
+
+1. Live path — =packages/coding-agent/src/modes/controllers/event-controller.ts= =agent_end= case (~line 578):
+#+begin_src ts
+for (const toolCallId of Array.from(this.ctx.pendingTools.keys())) {
+    if (!this.#backgroundToolCallIds.has(toolCallId)) {
+        this.ctx.pendingTools.delete(toolCallId);   // deletes tracking, never finalizes
+    }
+}
+#+end_src
+The component object stays a child of =chatContainer= frozen with =#result === undefined=, so =#formatToolExecution()= returns only the title line (=if (!this.#result) return ...=). Visually pending forever.
+
+2. Replay path — =packages/coding-agent/src/modes/utils/ui-helpers.ts= history render, trailing =this.ctx.pendingTools.clear()= (~line 375). A =toolCall= with no matching =toolResult= is added to =pendingTools= (and a cell to the container), the match loop only finalizes cells that *have* a result, and =clear()= discards the rest without =updateResult=. Ghost pending cell on every reload.
+
+* Trigger
+An assistant =toolCall= with no persisted =toolResult=. Produced by:
+- Hard process kill mid-execution (reboot / crash / SIGKILL / OOM) — observed in session =14edc1bec5a09a49= line 2145 (a =task= call orphaned by "my computer had to reboot").
+- Steering-skip results (="Skipped due to queued user message"=) are streamed to the UI but appear *not persisted* to JSONL (0 occurrences in the transcript scan), so on reload those skipped cells also lack a =toolResult=.
+- A batch of =exclusive= tools (bash/edit) interrupted mid-run leaves *all not-yet-run* calls in that assistant message unpaired at once → a whole cluster of pending cells.
+
+* Scope
+In:
+- Finalize lingering =pendingTools= components instead of silently dropping them, at BOTH sites (=agent_end= sweep + replay tail).
+- Genuinely-still-running background tool calls (=#backgroundToolCallIds=) must be left untouched.
+- A terminal =updateResult({ isError: true, content: [{type:"text", text:"Interrupted (no result recorded)"}] }, false, id)= so the cell flips out of pending.
+
+Out:
+- The durable transcript-pairing repair (separate bug; see Related). This bug is the UI-only immediate fix.
+- Any change to =exclusive= concurrency scheduling.
+
+* Existing Patterns
+- =event-controller.ts= already finalizes on error stop in =message_end= (=hasErrorStop && toolFailureMessage= branch) via =component.updateResult(..., false, id)= then =pendingTools.delete=. Mirror that shape in the sweep.
+- =ui-helpers.ts= already calls =component.updateResult(message, false, ...)= when a matching =toolResult= exists; the fix is to also finalize the *unmatched* leftovers before =clear()=.
+- =ToolExecutionComponent.updateResult= (=packages/coding-agent/src/modes/components/tool-execution.ts=) and =ReadToolGroupComponent.updateResult= both accept the terminal call.
+
+* Tests
+1. =agent_end= with a pendingTools entry that never got =tool_execution_end= → after handling, the component has a (error) result and is no longer pending; background-running entries are preserved.
+2. History replay of a transcript containing an assistant =toolCall= with NO matching =toolResult= → no cell remains in pending state (all components finalized).
+3. Normal paired toolCall/toolResult still renders the real result (no regression).
+4. Steering-skipped toolResult that IS present still renders normally.
+
+Concrete test file:
+- =packages/coding-agent/test/modes/event-controller-pending-finalize.test.ts= (new) or extend existing event-controller / ui-helpers tests.
+
+* Acceptance Criteria
+- No tool cell remains visually pending after =agent_end= for non-background calls.
+- Reloading a session with an unpaired =toolCall= shows that cell as finalized (interrupted/error), not pending.
+- Paired calls and background-running calls are unaffected.
+- =bun test= for the new/updated UI tests passes.
+
+* Verification
+- =bun test packages/coding-agent/test/modes/=
+- Manual: load session =14edc1bec5a09a49=; confirm the line-2145 orphan task cell renders interrupted, not pending.
+
+* Related
+- Durable fix: load-time transcript pairing repair (sibling BUG).
+
+* Link
+Sibling durable fix: [[id:BUG-420-session-transcript-leaves-toolcalls-unpa]]
+
+NOTE [2026-05-29]: Fixed via shared helper finalizeOrphanPendingTools (packages/coding-agent/src/modes/utils/finalize-pending-tools.ts). Wired into both sites: event-controller.ts agent_end sweep + ui-helpers.ts replay tail. Added ToolExecutionComponent.isPending getter. Tests: packages/coding-agent/test/modes/finalize-pending-tools.test.ts (6 pass). Background/async cells preserved; non-background orphans finalized to an error cell ("Interrupted (no result recorded)").

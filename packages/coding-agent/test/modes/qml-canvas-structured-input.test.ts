@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { isBridgeAvailable, QmlTestHarness } from "@oh-my-pi/pi-qml";
+import { isBridgeAvailable, QmlTestHarness } from "@spell/pi-qml";
 
 const HARNESS_QML = path.resolve(import.meta.dir, "../../src/modes/qml/canvas/CanvasTestHarness.qml");
 

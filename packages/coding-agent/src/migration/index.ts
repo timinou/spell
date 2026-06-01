@@ -31,7 +31,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getUserKdlPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { getUserKdlPath, isEnoent, logger } from "@spell/pi-utils";
 import { detectLegacyConfig, type Finding } from "./detect";
 import { runMigrationDialog } from "./dialog";
 import { translateFinding, type TranslateResult } from "./translate";

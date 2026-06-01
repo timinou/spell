@@ -5,8 +5,8 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { executeOrg } from "@oh-my-pi/pi-natives";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { executeOrg } from "@spell/pi-natives";
+import { isEnoent, logger } from "@spell/pi-utils";
 import { findCategory, resolveCategories } from "./categories";
 import { generateId } from "./id-generator";
 import { extractIdLinks, parseSubOutlineId } from "./id-links";

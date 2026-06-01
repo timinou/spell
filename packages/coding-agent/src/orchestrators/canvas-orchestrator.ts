@@ -6,9 +6,9 @@
  * window closes, the orchestrator is aborted.
  */
 
-import type { QmlBridge } from "@oh-my-pi/pi-qml";
-import type { RemoteQmlBridge } from "@oh-my-pi/pi-qml-remote";
-import { logger } from "@oh-my-pi/pi-utils";
+import type { QmlBridge } from "@spell/pi-qml";
+import type { RemoteQmlBridge } from "@spell/pi-qml-remote";
+import { logger } from "@spell/pi-utils";
 import { Value } from "@sinclair/typebox/value";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import type { CustomTool } from "../extensibility/custom-tools/types";

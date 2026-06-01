@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyManagedBufferContent } from "@oh-my-pi/pi-coding-agent/tools/managed-code-buffer";
-import * as piNatives from "@oh-my-pi/pi-natives";
+import { applyManagedBufferContent } from "@spell/pi-coding-agent/tools/managed-code-buffer";
+import * as piNatives from "@spell/pi-natives";
 
 type ExecuteCodeBufferOptions = Parameters<typeof piNatives.executeCodeBuffer>[0];
 type ExecuteCodeBufferResult = ReturnType<typeof piNatives.executeCodeBuffer>;

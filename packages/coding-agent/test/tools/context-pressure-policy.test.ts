@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { ToolResultMessage } from "@oh-my-pi/pi-ai";
+import type { ToolResultMessage } from "@spell/pi-ai";
 import { convertToLlm } from "../../src/session/messages";
 import { classifyContextPressure, createMemorySafeToolResult } from "../../src/tools/context-pressure-policy";
 

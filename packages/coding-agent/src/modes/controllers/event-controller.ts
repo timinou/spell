@@ -1,14 +1,18 @@
-import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
-import { getAnthropicStreamIdleTimeoutMs, type ImageContent } from "@oh-my-pi/pi-ai";
-import { Loader, TERMINAL, Text } from "@oh-my-pi/pi-tui";
+import { INTENT_FIELD } from "@spell/pi-agent-core";
+import { getAnthropicStreamIdleTimeoutMs, type ImageContent } from "@spell/pi-ai";
+import { Loader, TERMINAL, Text } from "@spell/pi-tui";
+import { logger } from "@spell/pi-utils";
 import { settings } from "../../config/settings";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
+import { LiveToolBatchComponent } from "../../modes/components/live-tool-batch";
 import { ReadToolGroupComponent } from "../../modes/components/read-tool-group";
 import { TodoReminderComponent } from "../../modes/components/todo-reminder";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { TtsrNotificationComponent } from "../../modes/components/ttsr-notification";
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoGroup } from "../../modes/types";
+import { finalizeOrphanPendingTools } from "../../modes/utils/finalize-pending-tools";
+import { reapGhostStreamingCells } from "../../modes/utils/reap-ghost-streaming-cells";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { formatAssistantToolCallFailureMessage } from "../../session/tool-call-diagnostics";
 import type { ExitPlanModeDetails } from "../../tools";
@@ -53,11 +57,20 @@ export function formatStreamIdleStatus(snapshot: StreamIdleStatusSnapshot): stri
 }
 export class EventController {
 	#lastReadGroup: ReadToolGroupComponent | undefined = undefined;
+	#currentBatchGroup: LiveToolBatchComponent | undefined = undefined;
 	#lastThinkingCount = 0;
 	#renderedCustomMessages = new Set<string>();
 	#lastIntent: string | undefined = undefined;
 	#lastWorkingMessage: string | undefined = undefined;
 	#backgroundToolCallIds = new Set<string>();
+	/**
+	 * Tool call ids materialised into cells for the assistant message that is
+	 * currently streaming. Reset on every assistant `message_start`. The set is
+	 * the authoritative "cells we created from THIS stream" — used by the ghost
+	 * reaper to drop cells whose ids vanished from the partial message after a
+	 * provider stream retry (see {@link #reapGhostStreamingCells}).
+	 */
+	#streamingToolCallIds = new Set<string>();
 	#readToolCallArgs = new Map<string, Record<string, unknown>>();
 	#readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
 	#lastAssistantComponent: AssistantMessageComponent | undefined = undefined;
@@ -69,8 +82,30 @@ export class EventController {
 		this.#lastReadGroup = undefined;
 	}
 
+	#resetBatchGroup(): void {
+		this.#currentBatchGroup = undefined;
+	}
+
+	/**
+	 * Lazily create the per-assistant-message tool batch group and add it to the
+	 * chat once. Non-read tool cells of the same streaming message route into
+	 * this group so a large parallel batch stays bounded in the viewport while
+	 * pending (see {@link LiveToolBatchComponent}).
+	 */
+	#ensureBatchGroup(): LiveToolBatchComponent {
+		if (!this.#currentBatchGroup) {
+			this.#resetReadGroup();
+			this.ctx.chatContainer.addChild(new Text("", 0, 0));
+			const group = new LiveToolBatchComponent();
+			group.setExpanded(this.ctx.toolOutputExpanded);
+			this.ctx.chatContainer.addChild(group);
+			this.#currentBatchGroup = group;
+		}
+		return this.#currentBatchGroup;
+	}
 	#getReadGroup(): ReadToolGroupComponent {
 		if (!this.#lastReadGroup) {
+			this.#resetBatchGroup();
 			this.ctx.chatContainer.addChild(new Text("", 0, 0));
 			const group = new ReadToolGroupComponent();
 			group.setExpanded(this.ctx.toolOutputExpanded);
@@ -198,7 +233,46 @@ export class EventController {
 		});
 	}
 
+	/**
+	 * Delegate to the standalone {@link reapGhostStreamingCells} helper so the
+	 * reaping logic is unit-testable without driving the full event-controller.
+	 */
+	#reapGhostStreamingCells(liveIds: ReadonlySet<string>): void {
+		const result = reapGhostStreamingCells(
+			this.ctx.pendingTools,
+			this.#streamingToolCallIds,
+			this.#backgroundToolCallIds,
+			liveIds,
+		);
+		if (result.reaped.length > 0) {
+			this.ctx.ui.requestRender();
+		}
+	}
+
+	/**
+	 * Subscriber-boundary guard for the agent event bus.
+	 *
+	 * Registered as an async listener via {@link subscribeToAgent}. `AgentSession#emit`
+	 * invokes listeners WITHOUT awaiting them, so any rejection escaping this method
+	 * reaches the global `unhandledRejection` handler, which writes a crash report and
+	 * calls `process.exit(1)` (see pi-utils/postmortem). A UI event-handling fault
+	 * (missing import, renderer typo, bad component state) must degrade to a logged
+	 * warning and a dropped frame — it must never tear down a live session, least of
+	 * all at `agent_end`, where it would also swallow the turn's final paint. All
+	 * dispatch lives in {@link #dispatchEvent}; this wrapper is the single catch-all.
+	 */
 	async handleEvent(event: AgentSessionEvent): Promise<void> {
+		try {
+			await this.#dispatchEvent(event);
+		} catch (err) {
+			logger.error("EventController.handleEvent failed; dropping frame to keep session alive", {
+				eventType: event.type,
+				err,
+			});
+		}
+	}
+
+	async #dispatchEvent(event: AgentSessionEvent): Promise<void> {
 		if (!this.ctx.isInitialized) {
 			await this.ctx.init();
 		}
@@ -211,6 +285,7 @@ export class EventController {
 			case "agent_start":
 				this.#stopStreamIdleStatus();
 				this.#lastIntent = undefined;
+				this.#resetBatchGroup();
 				this.#readToolCallArgs.clear();
 				this.#lastWorkingMessage = undefined;
 				this.#readToolCallAssistantComponents.clear();
@@ -266,7 +341,9 @@ export class EventController {
 					this.#stopStreamIdleStatus();
 					this.#lastIntent = undefined;
 					this.#lastThinkingCount = 0;
+					this.#streamingToolCallIds.clear();
 					this.#resetReadGroup();
+					this.#resetBatchGroup();
 					this.ctx.streamingComponent = new AssistantMessageComponent(undefined, this.ctx.hideThinkingBlock);
 					this.ctx.streamingMessage = event.message;
 					this.ctx.chatContainer.addChild(this.ctx.streamingComponent);
@@ -291,6 +368,7 @@ export class EventController {
 
 					for (const content of this.ctx.streamingMessage.content) {
 						if (content.type !== "toolCall") continue;
+						this.#streamingToolCallIds.add(content.id);
 						if (content.name === "read") {
 							this.#trackReadToolCall(content.id, content.arguments);
 							const component = this.ctx.pendingTools.get(content.id);
@@ -311,8 +389,6 @@ export class EventController {
 								? { ...content.arguments, __partialJson: content.partialJson }
 								: content.arguments;
 						if (!this.ctx.pendingTools.has(content.id)) {
-							this.#resetReadGroup();
-							this.ctx.chatContainer.addChild(new Text("", 0, 0));
 							const tool = this.ctx.session.getToolByName(content.name);
 							const component = new ToolExecutionComponent(
 								content.name,
@@ -327,8 +403,9 @@ export class EventController {
 								this.ctx.sessionManager.getCwd(),
 							);
 							component.setExpanded(this.ctx.toolOutputExpanded);
-							this.ctx.chatContainer.addChild(component);
-							this.ctx.pendingTools.set(content.id, component);
+							const group = this.#ensureBatchGroup();
+							group.addCell(content.id, content.name, renderArgs, component);
+							this.ctx.pendingTools.set(content.id, group);
 						} else {
 							const component = this.ctx.pendingTools.get(content.id);
 							if (component) {
@@ -336,6 +413,22 @@ export class EventController {
 							}
 						}
 					}
+
+					// Reap ghost cells: ids we created for this streaming message but
+					// that are no longer present in the partial. This happens when the
+					// AI provider transparently retries a stalled SSE stream and wipes
+					// `output.content` (Opus 4.8 hits this path much more than 4.7). The
+					// retry re-emits content blocks with fresh ids, so the cells we
+					// created for the dead ids would otherwise sit pending forever —
+					// `tool_execution_start` never fires for them because the executor
+					// only sees the final, post-retry content set. Finalize them as
+					// errored "interrupted" so the operator sees a stable result row
+					// and the LiveToolBatch counter reflects reality.
+					const liveIds = new Set<string>();
+					for (const content of this.ctx.streamingMessage.content) {
+						if (content.type === "toolCall") liveIds.add(content.id);
+					}
+					this.#reapGhostStreamingCells(liveIds);
 
 					// Prefer intent once available; until then, show streamed tool-argument byte progress.
 					for (const content of this.ctx.streamingMessage.content) {
@@ -401,6 +494,7 @@ export class EventController {
 					this.#lastAssistantComponent.setUsageInfo(event.message.usage);
 					this.ctx.streamingComponent = undefined;
 					this.ctx.streamingMessage = undefined;
+					this.#streamingToolCallIds.clear();
 					this.ctx.statusLine.invalidate();
 					this.ctx.updateEditorTopBorder();
 				}
@@ -424,7 +518,6 @@ export class EventController {
 						break;
 					}
 
-					this.#resetReadGroup();
 					const tool = this.ctx.session.getToolByName(event.toolName);
 					const component = new ToolExecutionComponent(
 						event.toolName,
@@ -439,8 +532,9 @@ export class EventController {
 						this.ctx.sessionManager.getCwd(),
 					);
 					component.setExpanded(this.ctx.toolOutputExpanded);
-					this.ctx.chatContainer.addChild(component);
-					this.ctx.pendingTools.set(event.toolCallId, component);
+					const group = this.#ensureBatchGroup();
+					group.addCell(event.toolCallId, event.toolName, event.args, component);
+					this.ctx.pendingTools.set(event.toolCallId, group);
 					this.ctx.ui.requestRender();
 				}
 				break;
@@ -575,11 +669,10 @@ export class EventController {
 					this.ctx.streamingMessage = undefined;
 				}
 				await this.ctx.flushPendingModelSwitch();
-				for (const toolCallId of Array.from(this.ctx.pendingTools.keys())) {
-					if (!this.#backgroundToolCallIds.has(toolCallId)) {
-						this.ctx.pendingTools.delete(toolCallId);
-					}
-				}
+				// Finalize any tool cell still pending at turn end (e.g. an aborted /
+				// killed call whose tool_execution_end never arrived). Dropping the
+				// tracking entry without finalizing would freeze the cell as pending.
+				finalizeOrphanPendingTools(this.ctx.pendingTools, this.#backgroundToolCallIds);
 				this.#backgroundToolCallIds = new Set(
 					Array.from(this.#backgroundToolCallIds).filter(toolCallId => this.ctx.pendingTools.has(toolCallId)),
 				);

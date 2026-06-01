@@ -1,4 +1,4 @@
-import { parseJsonlLenient } from "@oh-my-pi/pi-utils";
+import { parseJsonlLenient } from "@spell/pi-utils";
 import type { ChatSession } from "../../rpc/bridge-types";
 import { summarizeToolPartialResult } from "../tool-progress";
 import { escapeHtmlAttr } from "../utils";

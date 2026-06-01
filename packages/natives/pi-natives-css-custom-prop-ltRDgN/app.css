@@ -1,0 +1,1 @@
+:root { --accent: red; color: var(--accent); background: var(--accent, blue); }

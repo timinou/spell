@@ -1,5 +1,5 @@
 import { describe, expect, it, mock } from "bun:test";
-import { hookFetch } from "@oh-my-pi/pi-utils";
+import { hookFetch } from "@spell/pi-utils";
 import { createSttProvider } from "../../src/telegram/voice";
 import { DeepgramSttProvider } from "../../src/telegram/voice/providers/deepgram-stt";
 import { OpenAiSttProvider } from "../../src/telegram/voice/providers/openai-stt";

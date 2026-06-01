@@ -8,7 +8,7 @@ import {
 	getProjectDir,
 	isEnoent,
 	logger,
-} from "@oh-my-pi/pi-utils";
+} from "@spell/pi-utils";
 import type { TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import { Ajv, type ErrorObject, type ValidateFunction } from "ajv";

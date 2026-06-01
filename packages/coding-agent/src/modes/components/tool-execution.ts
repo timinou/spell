@@ -1,5 +1,5 @@
-import type { AgentTool } from "@oh-my-pi/pi-agent-core";
-import { sanitizeText } from "@oh-my-pi/pi-natives";
+import type { AgentTool } from "@spell/pi-agent-core";
+import { sanitizeText } from "@spell/pi-natives";
 import {
 	Box,
 	type Component,
@@ -12,8 +12,8 @@ import {
 	TERMINAL,
 	Text,
 	type TUI,
-} from "@oh-my-pi/pi-tui";
-import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
+} from "@spell/pi-tui";
+import { getProjectDir, logger } from "@spell/pi-utils";
 import type { Theme } from "../../modes/theme/theme";
 import { theme } from "../../modes/theme/theme";
 import { computeEditDiff, computeHashlineDiff, computePatchDiff, type DiffError, type DiffResult } from "../../patch";
@@ -155,6 +155,14 @@ export class ToolExecutionComponent extends Container {
 		}
 
 		this.#updateDisplay();
+	}
+
+	/**
+	 * True while the cell has no terminal result yet (renders as "pending").
+	 * A partial/streaming result still counts as pending until finalized.
+	 */
+	get isPending(): boolean {
+		return this.#result === undefined || this.#isPartial;
 	}
 
 	updateArgs(args: any, _toolCallId?: string): void {

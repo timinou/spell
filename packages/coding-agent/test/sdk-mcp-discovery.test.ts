@@ -2,12 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getBundledModel } from "@oh-my-pi/pi-ai";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { CustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
-import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { getBundledModel } from "@spell/pi-ai";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import type { CustomTool } from "@spell/pi-coding-agent/extensibility/custom-tools/types";
+import { createAgentSession } from "@spell/pi-coding-agent/sdk";
+import { SessionManager } from "@spell/pi-coding-agent/session/session-manager";
+import { Snowflake } from "@spell/pi-utils";
 import { Type } from "@sinclair/typebox";
 
 function createMcpCustomTool(name: string, serverName: string, mcpToolName: string): CustomTool {

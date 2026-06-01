@@ -16,4 +16,4 @@ export type {
 	OverviewSnapshot,
 	TodoItemSnapshot,
 	TodoPhaseSnapshot,
-} from "@oh-my-pi/pi-desktop-common";
+} from "@spell/pi-desktop-common";

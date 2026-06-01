@@ -3,7 +3,7 @@ import {
 	createCodeToolError,
 	formatCodeToolContent,
 	normalizeCodeBufferSuccess,
-} from "@oh-my-pi/pi-coding-agent/tools/code-result";
+} from "@spell/pi-coding-agent/tools/code-result";
 
 describe("code tool result contract", () => {
 	it("normalizes outline payloads into compact semantic summaries", () => {

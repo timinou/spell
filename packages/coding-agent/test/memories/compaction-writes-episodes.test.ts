@@ -3,7 +3,7 @@
  * entries through `executeOrg(remember, kind=concept, ...)` instead of the
  * legacy MEMORY.md / MEMORY.org blobs. PLAN-310 W7.
  *
- * Uses the real `@oh-my-pi/pi-natives` binding end-to-end so the test exercises
+ * Uses the real `@spell/pi-natives` binding end-to-end so the test exercises
  * the same code path the production consolidation step takes; module-level
  * mocking would leak into sibling tests in the same bun process.
  */

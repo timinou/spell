@@ -3,7 +3,7 @@
  *
  * Handles `spell browser cleanup` for removing orphaned WebEngine profiles.
  */
-import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { Args, Command, Flags } from "@spell/pi-utils/cli";
 import { cleanupProfiles } from "../browser/browser-cleanup";
 
 export default class Browser extends Command {

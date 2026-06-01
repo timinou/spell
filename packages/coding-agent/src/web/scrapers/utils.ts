@@ -1,4 +1,4 @@
-import { isRecord, ptree, TempDir } from "@oh-my-pi/pi-utils";
+import { isRecord, ptree, TempDir } from "@spell/pi-utils";
 
 export { isRecord };
 

@@ -3,8 +3,8 @@
  * forwards agent events to QML, and dispatches QML user actions to the session.
  */
 import * as path from "node:path";
-import { QmlBridge } from "@oh-my-pi/pi-qml";
-import { logger } from "@oh-my-pi/pi-utils";
+import { QmlBridge } from "@spell/pi-qml";
+import { logger } from "@spell/pi-utils";
 import { resolveDomainPath, type SpellDomain } from "../domain/loader";
 import type { CanvasOrchestratorManager } from "../orchestrators/canvas-orchestrator";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";

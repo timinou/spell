@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { RunMetadata } from "./types";
 
 const LARGE_VALUE_WARN_BYTES = 100_000;

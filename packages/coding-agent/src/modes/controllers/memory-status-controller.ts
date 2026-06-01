@@ -12,7 +12,7 @@
  * PLAN-316.
  */
 
-import { type KnowledgeEvent, repoHandle, subscribeKnowledge } from "@oh-my-pi/pi-natives";
+import { type KnowledgeEvent, repoHandle, subscribeKnowledge } from "@spell/pi-natives";
 
 import type { InteractiveModeContext } from "../types";
 import { type MemoryProgressSnapshot, peekMemoryProgress } from "../../tools/memory";

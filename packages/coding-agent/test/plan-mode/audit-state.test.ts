@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { DEFAULT_ORG_CONFIG } from "@oh-my-pi/pi-org";
+import { DEFAULT_ORG_CONFIG } from "@spell/pi-org";
 import type { AuditState } from "../../src/plan-mode/audit-state";
 import { isAuditClean } from "../../src/plan-mode/audit-state";
 

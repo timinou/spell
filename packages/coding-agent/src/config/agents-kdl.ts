@@ -1,6 +1,6 @@
 import type { Node } from "@bgotink/kdl";
-import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { logger } from "@oh-my-pi/pi-utils";
+import type { ThinkingLevel } from "@spell/pi-agent-core";
+import { logger } from "@spell/pi-utils";
 import { parseThinkingLevel } from "../thinking";
 import { getBooleanProperty, getChildNode, getChildNodes, getStringArgument, getStringArguments } from "./kdl-helpers";
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, mock, vi } from "bun:test";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { AuthContext } from "../../src/telegram/bot/auth";
 import {
 	ResponseStreamer,

@@ -1,0 +1,137 @@
+#+TITLE: Footer.invalidate() skips parent markDirty — BUG-391 hazard outside LiveToolBatch
+#+STATE: DONE
+#+SESSION_ID: 14f5aa3ae1ce24f4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-30T15-14-40-135Z_14f5aa3ae1ce24f4.jsonl]]
+#+CUSTOM_ID: BUG-422-footer-invalidate-skips-parent-markdirty
+
+* Initial Message
+
+please look at the recent Tool block and the recent sessions that used opus 4.8 and tell me why there are still so many tools that get queued... think afresh
+
+* Initial Message
+
+Noticed during triage of TUI mid-stream freeze (session =14f5aa3ae1ce24f4=). Same hazard family as =07c179a97= (LiveToolBatch dirty propagation) and BUG-391 (stuck-dirty root pattern).
+
+* Symptom
+
+=packages/coding-agent/src/modes/components/footer.ts::invalidate()= only clears its own cached branch state:
+
+#+begin_src ts
+invalidate(): void {
+    // Invalidate cached branch so it gets re-read on next render
+    this.#cachedBranch = undefined;
+}
+#+end_src
+
+It does NOT call =super.invalidate()= (which is =Container.invalidate()=) and does NOT call =this.#parent?.markDirty()=. Effect: when an external trigger fires =footer.invalidate()=, the dirty bit is reset on the Footer itself, but the parent container never gets notified — so on the next render the parent's cache short-circuits and the footer's new branch value never reaches the screen.
+
+In practice the footer is in the editor area, repainted on most events anyway, so the bug is mostly masked. But it is a latent stuck-dirty hazard of exactly the same shape as the LiveToolBatch one that was fixed in =07c179a97=, and it WILL surface if anything ever calls =footer.invalidate()= without an accompanying parent invalidation.
+
+* Scope
+
+In:
+- Fix =Footer.invalidate()= to call =super.invalidate()= (which propagates =#parent?.markDirty()=) — or call =this.#parent?.markDirty()= directly.
+- Add a unit test that calls =invalidate()= and asserts =markDirty= reaches the parent.
+
+Out:
+- Other dirty-propagation hazards (separate audit, tracked under the TUI-freeze investigation BUG).
+- Footer rendering changes.
+- The actual cache-clearing logic — that part is correct.
+
+* Existing patterns
+
+- =packages/tui/src/tui.ts::Container.invalidate()= is the canonical "explicit invalidation must propagate to parent even if we are already dirty" path (see the FEAT-391 comment in =tui.ts:280-294=).
+- =packages/coding-agent/src/modes/components/status-line.ts::invalidate()= is a correct example: clears its own caches AND calls =this.#parent?.markDirty()=.
+- =07c179a97= "fix(coding-agent): LiveToolBatch dirty propagation" demonstrates the canonical fix and includes a live integration test as the regression lock.
+
+* Tests
+
+1. =packages/coding-agent/test/modes/components/footer.test.ts= (new or extend existing):
+   - Mount a Footer under a parent Container; spy on parent.markDirty.
+   - Call =footer.invalidate()=.
+   - Assert =parent.markDirty= was called.
+
+* Implementation
+
+** ITEM Write regression test
+:PROPERTIES:
+:LAYER: test
+:END:
+
+** ITEM Fix Footer.invalidate
+:PROPERTIES:
+:LAYER: tui
+:DEPENDS: BUG-422-footer-invalidate-skips-parent-markdirty::prev
+:END:
+- Option 1: change body to =super.invalidate(); this.#cachedBranch = undefined;=
+- Option 2: keep cache clear inline and add =this.#parent?.markDirty()=.
+- Prefer Option 1 — same canonical shape as =LiveToolBatchComponent= post-=07c179a97= and =Markdown=.
+
+* Edge cases
+
+- The cache clear must happen BEFORE the parent is notified, so the parent's next render sees fresh state. Both options preserve this order.
+- =setExpanded= / =setUsageInfo= adjacent on other components mutate state then call =updateContent= or =invalidate=. Footer has no such pattern — its only state is the cached branch — so no additional call sites need updating.
+
+* Acceptance criteria
+
+- Calling =footer.invalidate()= triggers a parent markDirty.
+- Existing footer rendering tests continue to pass.
+- The fix matches the canonical Container.invalidate shape.
+
+* Verification
+
+- =bun test packages/coding-agent/test/modes/components/footer.test.ts=
+- Visual smoke: switch git branch in a watched repo, confirm footer updates.
+
+* Related
+
+- =07c179a97= — canonical fix shape (LiveToolBatch).
+- BUG-391 — root pattern.
+- BUG (TUI freezes mid-stream) — discovered during the same triage; this is a sibling hazard, not the cause of that symptom.
+
+* Completion [2026-05-30 \u2014 session 14f5aa3ae1ce24f4]
+
+Fixed inline during the hard-fork audit pass. =Footer.invalidate()= now:
+
+#+begin_src ts
+override invalidate(): void {
+    // Invalidate cached branch so it gets re-read on next render.
+    this.#cachedBranch = undefined;
+    // Propagate dirty up the tree \u2014 BUG-422 / canonical Container.invalidate
+    // contract. Without super.invalidate() a footer-only invalidation can
+    // short-circuit at the parent's cache check.
+    super.invalidate();
+}
+#+end_src
+
+Same shape as the canonical =LiveToolBatchComponent= fix from commit =07c179a97=.
+
+** Audit byproduct \u2014 no further hazards
+
+A broader audit (Python sweep of every =class \u2026 extends Container= with an =invalidate()= override that has a non-empty body) returned ZERO violations after the Footer fix. All Container-derived classes either:
+
+- have no =invalidate()= override (rely on =Container.invalidate=), or
+- have an empty body (no local cache to clear), or
+- call =super.invalidate()= / =#parent?.markDirty()= correctly.
+
+Inner =implements Component= classes that don't extend Container (=AgentListPane=, =AgentInspectorPane=, =TwoColumnBody=, =SearchLine=, =LabelInput=, etc.) all have empty =invalidate(): void {}= bodies and don't cache anything that would matter \u2014 these are safe by inspection.
+
+** Related
+
+- =07c179a97= \u2014 LiveToolBatch canonical fix shape.
+- BUG-391 \u2014 root pattern.
+- Hard-fork audit pass: this session, commit =8bb85f71d= structural-enforcement layer.
+
+* Correction [2026-05-30 \u2014 later in the same session]
+
+While attempting the fix I discovered =FooterComponent= implements the =Component= interface, not =Container=. Plain =Component= classes don't have parent tracking machinery (no =#parent=, no =setParent=), so =super.invalidate()= won't compile (=TS4112: This member cannot have an 'override' modifier because its containing class does not extend another class=).
+
+Verified via grep: ZERO external callers of =footer.invalidate()= exist in the repo today. The cached =#cachedBranch= updates on the next render cycle that happens for any other reason. **No propagation hazard in practice.**
+
+Updated the method's body comment to document this so the next BUG-391 hazard auditor doesn't fall into the same trap. State remains DONE \u2014 the original hazard description was based on the canonical =Container.invalidate= contract, which doesn't apply to plain =Component= classes.
+
+** Audit conclusion (re-confirmed)
+
+Container-derived classes with non-empty =invalidate()= bodies that fail to propagate: ZERO (after the LiveToolBatch fix at =07c179a97=).
+
+Component (interface) classes with non-empty =invalidate()=: =FooterComponent= only, with zero external callers \u2014 documented in-source.

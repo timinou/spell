@@ -1,6 +1,6 @@
-import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
-import { completeSimple, validateToolCall } from "@oh-my-pi/pi-ai";
+import type { ThinkingLevel } from "@spell/pi-agent-core";
+import type { Api, AssistantMessage, Model } from "@spell/pi-ai";
+import { completeSimple, validateToolCall } from "@spell/pi-ai";
 import { type TSchema, Type } from "@sinclair/typebox";
 import changelogSystemPrompt from "../../commit/prompts/changelog-system.md" with { type: "text" };
 import changelogUserPrompt from "../../commit/prompts/changelog-user.md" with { type: "text" };

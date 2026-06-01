@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { ManifestAction } from "../actions";
 import type { AutonomyManifest, ManifestGoal, ManifestSetup } from "../manifest/types";
 import type { RpcClient, RpcEvent } from "../rpc";

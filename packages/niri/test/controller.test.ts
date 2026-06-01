@@ -17,7 +17,7 @@
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 
-import { ImageProtocol, setTerminalImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
+import { ImageProtocol, setTerminalImageProtocol, TERMINAL } from "@spell/pi-tui";
 
 import type { NiriOverviewContext } from "../src/controller";
 

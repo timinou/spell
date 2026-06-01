@@ -21,7 +21,7 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 
 ## Org Logic: Native-First Policy
 
-Org-mode parsing, querying, and graph algorithms run natively via `pi-org-engine` in `@oh-my-pi/pi-natives`.
+Org-mode parsing, querying, and graph algorithms run natively via `pi-org-engine` in `@spell/pi-natives`.
 - Canonical tool: `executeOrg` NAPI dispatch (`parse`, `query`, `graph`, `computeWaves`, `nextWave`, `editSection`, `toMarkdown`).
 - No Emacs dependency; the org tool runs without Emacs, socat, or other external processes.
 - Writes stay in TypeScript; `org-writer.ts` handles file mutations and the native engine stays read-only.

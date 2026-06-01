@@ -7,12 +7,16 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $env, getNativesDir, logger } from "@oh-my-pi/pi-utils";
+import { $env, getNativesDir, logger } from "@spell/pi-utils";
 import packageJson from "../package.json";
 import { embeddedAddon } from "./embedded-addon";
 import "./appearance/types";
 import "./ast/types";
 import "./clipboard/types";
+import "./code-graph/types";
+import "./code-buffer/types";
+import "./org-buffer/types";
+import "./knowledge/types";
 import "./glob/types";
 import "./grep/types";
 import "./highlight/types";
@@ -25,6 +29,8 @@ import "./pty/types";
 import "./shell/types";
 import "./text/types";
 import "./work/types";
+import "./typst-surface/types";
+import "./code-path/types";
 const require = createRequire(import.meta.url);
 const platformTag = `${process.platform}-${process.arch}`;
 const packageVersion = packageJson.version;
@@ -53,7 +59,11 @@ const compiledCandidates = addonFilenames.flatMap(filename => [
     path.join(userDataDir, filename),
 ]);
 const releaseCandidates = isCompiledBinary ? [...compiledCandidates, ...baseReleaseCandidates] : baseReleaseCandidates;
-const candidates = $env.PI_DEV ? [...debugCandidates, ...releaseCandidates] : releaseCandidates;
+const candidates = !isCompiledBinary
+    ? [...debugCandidates, ...releaseCandidates]
+    : $env.PI_DEV
+        ? [...debugCandidates, ...releaseCandidates]
+        : releaseCandidates;
 const dedupedCandidates = [...new Set(candidates)];
 function runCommand(command, args) {
     const cmdLine = `${command} '${args.join(" ")}'`;
@@ -140,6 +150,34 @@ function selectEmbeddedAddonFile() {
     }
     return embeddedAddon.files.find(file => file.variant === "baseline") ?? null;
 }
+function selectEmbeddedWorkerFile() {
+    if (!embeddedAddon?.worker)
+        return null;
+    return embeddedAddon.worker;
+}
+function maybeExtractEmbeddedFile(targetPath, sourcePath, description, errors) {
+    try {
+        fs.mkdirSync(versionedDir, { recursive: true });
+    }
+    catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        errors.push(`${description} dir: ${message}`);
+        return null;
+    }
+    if (fs.existsSync(targetPath)) {
+        return targetPath;
+    }
+    try {
+        const buffer = fs.readFileSync(sourcePath);
+        fs.writeFileSync(targetPath, buffer);
+        return targetPath;
+    }
+    catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        errors.push(`${description} write (${path.basename(targetPath)}): ${message}`);
+        return null;
+    }
+}
 function maybeExtractEmbeddedAddon(errors) {
     if (!isCompiledBinary || !embeddedAddon)
         return null;
@@ -148,31 +186,21 @@ function maybeExtractEmbeddedAddon(errors) {
     const selectedEmbeddedFile = selectEmbeddedAddonFile();
     if (!selectedEmbeddedFile)
         return null;
-    const targetPath = path.join(versionedDir, selectedEmbeddedFile.filename);
-    try {
-        fs.mkdirSync(versionedDir, { recursive: true });
-    }
-    catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        errors.push(`embedded addon dir: ${message}`);
+    return maybeExtractEmbeddedFile(path.join(versionedDir, selectedEmbeddedFile.filename), selectedEmbeddedFile.filePath, "embedded addon", errors);
+}
+function maybeExtractEmbeddedWorker(errors) {
+    if (!isCompiledBinary || !embeddedAddon?.worker)
         return null;
-    }
-    if (fs.existsSync(targetPath)) {
-        return targetPath;
-    }
-    try {
-        const buffer = fs.readFileSync(selectedEmbeddedFile.filePath);
-        fs.writeFileSync(targetPath, buffer);
-        return targetPath;
-    }
-    catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        errors.push(`embedded addon write (${selectedEmbeddedFile.filename}): ${message}`);
+    if (embeddedAddon.platformTag !== platformTag || embeddedAddon.version !== packageVersion)
         return null;
-    }
+    const selectedEmbeddedWorker = selectEmbeddedWorkerFile();
+    if (!selectedEmbeddedWorker)
+        return null;
+    return maybeExtractEmbeddedFile(path.join(versionedDir, selectedEmbeddedWorker.filename), selectedEmbeddedWorker.filePath, "embedded worker", errors);
 }
 function loadNative() {
     const errors = [];
+    logger.time("native:maybeExtractEmbeddedWorker", () => maybeExtractEmbeddedWorker(errors));
     const embeddedCandidate = logger.time("native:maybeExtractEmbeddedAddon", () => maybeExtractEmbeddedAddon(errors));
     const runtimeCandidates = embeddedCandidate ? [embeddedCandidate, ...dedupedCandidates] : dedupedCandidates;
     for (const candidate of runtimeCandidates) {
@@ -192,7 +220,6 @@ function loadNative() {
             errors.push(`${candidate}: ${message}`);
         }
     }
-    // Check if this is an unsupported platform
     if (!SUPPORTED_PLATFORMS.includes(platformTag)) {
         throw new Error(`Unsupported platform: ${platformTag}\n` +
             `Supported platforms: ${SUPPORTED_PLATFORMS.join(", ")}\n` +
@@ -202,6 +229,7 @@ function loadNative() {
     let helpMessage;
     if (isCompiledBinary) {
         const expectedPaths = addonFilenames.map(filename => `  ${path.join(versionedDir, filename)}`).join("\n");
+        const workerHint = embeddedAddon?.worker ? `  ${path.join(versionedDir, embeddedAddon.worker.filename)}` : null;
         const downloadHints = addonFilenames
             .map(filename => {
             const downloadUrl = `https://github.com/can1357/oh-my-pi/releases/latest/download/${filename}`;
@@ -210,12 +238,12 @@ function loadNative() {
         })
             .join("\n");
         helpMessage =
-            `The compiled binary should extract one of:\n${expectedPaths}\n\n` +
+            `The compiled binary should extract one of:\n${expectedPaths}${workerHint ? `\n\nAnd the embedding worker at:\n${workerHint}` : ""}\n\n` +
                 `If missing, delete ${versionedDir} and re-run, or download manually:\n${downloadHints}`;
     }
     else {
         helpMessage =
-            "If installed via npm/bun, try reinstalling: bun install @oh-my-pi/pi-natives\n" +
+            "If installed via npm/bun, try reinstalling: bun install @spell/pi-natives\n" +
                 "If developing locally, build with: bun --cwd=packages/natives run build:native\n" +
                 "Optional x64 variants: TARGET_VARIANT=baseline|modern bun --cwd=packages/natives run build:native";
     }
@@ -247,6 +275,11 @@ function validateNative(bindings, source) {
     checkFn("extractSegments");
     checkFn("matchesKittySequence");
     checkFn("executeShell");
+    checkFn("executeCodePath");
+    checkFn("parseCodePath");
+    checkFn("renderCodePath");
+    checkFn("executeCodeGraph");
+    checkFn("executeCodeBuffer");
     checkFn("PtySession");
     checkFn("Shell");
     checkFn("parseKey");
@@ -259,7 +292,6 @@ function validateNative(bindings, source) {
     checkFn("getWorkProfile");
     checkFn("invalidateFsScanCache");
     checkFn("astGrep");
-    checkFn("astEdit");
     checkFn("detectMacOSAppearance");
     checkFn("MacAppearanceObserver");
     checkFn("projfsOverlayProbe");
@@ -271,4 +303,56 @@ function validateNative(bindings, source) {
     }
 }
 export const native = logger.time("native:loadNative", () => loadNative());
+function collectTrackedSources(root, out) {
+    const entries = fs.readdirSync(root, { withFileTypes: true });
+    for (const entry of entries) {
+        const fullPath = path.join(root, entry.name);
+        if (entry.isDirectory()) {
+            if (entry.name === "target")
+                continue;
+            collectTrackedSources(fullPath, out);
+            continue;
+        }
+        if (entry.name === "Cargo.toml" || entry.name === "build.rs" || fullPath.endsWith(".rs")) {
+            out.push(fullPath);
+        }
+    }
+}
+export function checkStaleness(binaryPath, cratesDir) {
+    if (!fs.existsSync(binaryPath) || !fs.existsSync(cratesDir)) {
+        return null;
+    }
+    const sourceFiles = [];
+    collectTrackedSources(cratesDir, sourceFiles);
+    if (sourceFiles.length === 0) {
+        return null;
+    }
+    let newestSourceFile = sourceFiles[0];
+    let newestSourceMtimeMs = fs.statSync(newestSourceFile).mtimeMs;
+    for (const sourceFile of sourceFiles.slice(1)) {
+        const sourceMtimeMs = fs.statSync(sourceFile).mtimeMs;
+        if (sourceMtimeMs > newestSourceMtimeMs) {
+            newestSourceFile = sourceFile;
+            newestSourceMtimeMs = sourceMtimeMs;
+        }
+    }
+    const binaryMtimeMs = fs.statSync(binaryPath).mtimeMs;
+    return {
+        stale: newestSourceMtimeMs > binaryMtimeMs,
+        newestSourceFile,
+        binaryPath,
+        newestSourceMtimeMs,
+        binaryMtimeMs,
+    };
+}
+export function checkNativeStaleness(cratesDir) {
+    if (!process.env.PI_DEV) {
+        return null;
+    }
+    const binaryPath = dedupedCandidates.find(candidate => fs.existsSync(candidate));
+    if (!binaryPath) {
+        return null;
+    }
+    return checkStaleness(binaryPath, cratesDir);
+}
 //# sourceMappingURL=native.js.map

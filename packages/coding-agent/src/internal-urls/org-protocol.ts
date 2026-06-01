@@ -8,7 +8,7 @@
  * - org://ITEM-ID — reads the body of the specified org item
  */
 
-import { findItemById, resolveCategories } from "@oh-my-pi/pi-org";
+import { findItemById, resolveCategories } from "@spell/pi-org";
 import type { Settings } from "../config/settings";
 import { buildOrgConfig } from "../plan-mode/org-plan";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";

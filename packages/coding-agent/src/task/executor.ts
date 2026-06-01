@@ -4,9 +4,9 @@
  * Runs each subagent on the main thread and forwards AgentEvents for progress tracking.
  */
 import path from "node:path";
-import type { AgentEvent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { type SystemPromptBlock, systemPromptText } from "@oh-my-pi/pi-ai";
-import { logger, untilAborted } from "@oh-my-pi/pi-utils";
+import type { AgentEvent, ThinkingLevel } from "@spell/pi-agent-core";
+import { type SystemPromptBlock, systemPromptText } from "@spell/pi-ai";
+import { logger, untilAborted } from "@spell/pi-utils";
 import type { TSchema } from "@sinclair/typebox";
 import Ajv, { type ValidateFunction } from "ajv";
 import { ModelRegistry } from "../config/model-registry";

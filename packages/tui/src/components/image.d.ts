@@ -1,5 +1,5 @@
 import { type ImageDimensions } from "../terminal-capabilities";
-import type { Component } from "../tui";
+import type { Component, DirtyParent } from "../tui";
 export interface ImageTheme {
     fallbackColor: (str: string) => string;
 }
@@ -10,6 +10,7 @@ export interface ImageOptions {
 }
 export declare class Image implements Component {
     #private;
+    setParent(p: DirtyParent | undefined): void;
     constructor(base64Data: string, mimeType: string, theme: ImageTheme, options?: ImageOptions, dimensions?: ImageDimensions);
     invalidate(): void;
     render(width: number): string[];

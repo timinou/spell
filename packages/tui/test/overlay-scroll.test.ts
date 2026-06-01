@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { type Component, CURSOR_MARKER, TUI } from "@oh-my-pi/pi-tui";
+import { type Component, CURSOR_MARKER, TUI } from "@spell/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
 class LineComponent implements Component {
@@ -19,13 +19,13 @@ class LineComponent implements Component {
 
 class MutableContentComponent implements Component {
 	#lines: string[];
-	#parent?: import("@oh-my-pi/pi-tui").Container;
+	#parent?: import("@spell/pi-tui").Container;
 
 	constructor(lines: string[]) {
 		this.#lines = [...lines];
 	}
 
-	setParent(p: import("@oh-my-pi/pi-tui").Container | undefined): void {
+	setParent(p: import("@spell/pi-tui").Container | undefined): void {
 		this.#parent = p;
 	}
 
@@ -115,7 +115,7 @@ describe("TUI overlays", () => {
 		expect(term.getScrollBuffer().length).toBeLessThan(200);
 	});
 
-	it("clears preexisting terminal scrollback on startup full redraw", async () => {
+	it("preserves preexisting terminal scrollback on startup resize redraw", async () => {
 		const term = new VirtualTerminal(40, 4);
 		term.write("shell-0\r\nshell-1\r\nshell-2\r\nshell-3\r\nshell-4\r\n");
 		await term.flush();
@@ -131,7 +131,7 @@ describe("TUI overlays", () => {
 		await settle(term);
 
 		const scrollback = term.getScrollBuffer().join("\n");
-		expect(scrollback.includes("shell-0")).toBeFalsy();
+		expect(scrollback.includes("shell-0")).toBeTruthy();
 
 		tui.stop();
 	});
@@ -228,7 +228,7 @@ describe("TUI overlays", () => {
 			term.resize(39, 4);
 			await settle(term);
 			const scrollback = term.getScrollBuffer().join("\n");
-			expect(scrollback.includes("shell-0")).toBeFalsy();
+			expect(scrollback.includes("shell-0")).toBeTruthy();
 		} finally {
 			tui.stop();
 		}

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { createTools, ManageTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import * as nativesModule from "@oh-my-pi/pi-natives";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import { createTools, ManageTool, type ToolSession } from "@spell/pi-coding-agent/tools";
+import * as nativesModule from "@spell/pi-natives";
 
 function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
 	return {

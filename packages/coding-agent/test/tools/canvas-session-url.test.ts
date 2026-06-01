@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isBridgeAvailable } from "@oh-my-pi/pi-qml";
+import { isBridgeAvailable } from "@spell/pi-qml";
 import { Settings } from "../../src/config/settings";
 import { CanvasProtocolHandler, InternalUrlRouter } from "../../src/internal-urls";
 import type { ToolSession } from "../../src/tools";

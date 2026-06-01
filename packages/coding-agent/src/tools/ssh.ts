@@ -1,6 +1,6 @@
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { Text } from "@oh-my-pi/pi-tui";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@spell/pi-agent-core";
+import type { Component } from "@spell/pi-tui";
+import { Text } from "@spell/pi-tui";
 import { type Static, Type } from "@sinclair/typebox";
 import type { SSHHost } from "../capability/ssh";
 import { sshCapability } from "../capability/ssh";
@@ -125,7 +125,6 @@ export class SshTool implements AgentTool<typeof sshSchema, SSHToolDetails> {
 	readonly name = "ssh";
 	readonly label = "SSH";
 	readonly parameters = sshSchema;
-	readonly concurrency = "exclusive";
 	readonly strict = true;
 
 	readonly #allowedHosts: Set<string>;

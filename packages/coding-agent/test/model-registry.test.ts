@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Effort, type OpenAICompat, type ThinkingConfig } from "@oh-my-pi/pi-ai";
-import { kNoAuth, MODEL_ROLES, ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { hookFetch, Snowflake } from "@oh-my-pi/pi-utils";
+import { Effort, type OpenAICompat, type ThinkingConfig } from "@spell/pi-ai";
+import { kNoAuth, MODEL_ROLES, ModelRegistry } from "@spell/pi-coding-agent/config/model-registry";
+import { AuthStorage } from "@spell/pi-coding-agent/session/auth-storage";
+import { hookFetch, Snowflake } from "@spell/pi-utils";
 
 describe("ModelRegistry", () => {
 	let tempDir: string;

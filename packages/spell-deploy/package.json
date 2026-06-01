@@ -1,14 +1,14 @@
 {
 	"type": "module",
-	"name": "@oh-my-pi/spell-deploy",
+	"name": "@spell/spell-deploy",
 	"version": "0.1.0",
 	"description": "Remote deployment and sync for spell-server",
-	"homepage": "https://github.com/can1357/oh-my-pi",
+	"homepage": "https://github.com/timinou/spell",
 	"author": "Can Boluk",
 	"license": "GPL-3.0-only",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/can1357/oh-my-pi.git",
+		"url": "git+https://github.com/timinou/spell.git",
 		"directory": "packages/spell-deploy"
 	},
 	"main": "./src/index.ts",
@@ -22,7 +22,7 @@
 	},
 	"dependencies": {
 		"@bgotink/kdl": "^0.4",
-		"@oh-my-pi/pi-utils": "workspace:*"
+		"@spell/pi-utils": "workspace:*"
 	},
 	"devDependencies": {
 		"@types/bun": "^1.3"

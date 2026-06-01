@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { isBridgeAvailable, QmlTestHarness } from "@oh-my-pi/pi-qml";
+import { isBridgeAvailable, QmlTestHarness } from "@spell/pi-qml";
 
 // The test harness QML must be co-located with ChatPanel.qml so the ".." SpellUI import resolves.
 const HARNESS_QML = path.resolve(import.meta.dir, "../../src/modes/qml/panels/ChatPanelTestHarness.qml");

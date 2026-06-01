@@ -1,5 +1,5 @@
-import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { ImageFormat, PhotonImage, SamplingFilter } from "@oh-my-pi/pi-natives";
+import type { ImageContent } from "@spell/pi-ai";
+import { ImageFormat, PhotonImage, SamplingFilter } from "@spell/pi-natives";
 
 export interface ImageResizeOptions {
 	maxWidth?: number; // Default: 2000

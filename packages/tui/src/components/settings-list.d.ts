@@ -1,4 +1,4 @@
-import type { Component } from "../tui";
+import type { Component, DirtyParent } from "../tui";
 export interface SettingItem {
     /** Unique identifier for this setting */
     id: string;
@@ -25,6 +25,7 @@ export declare class SettingsList implements Component {
     constructor(items: SettingItem[], maxVisible: number, theme: SettingsListTheme, onChange: (id: string, newValue: string) => void, onCancel: () => void);
     /** Update an item's currentValue */
     updateValue(id: string, newValue: string): void;
+    setParent(p: DirtyParent | undefined): void;
     invalidate(): void;
     render(width: number): string[];
     handleInput(data: string): void;

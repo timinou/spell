@@ -1,9 +1,9 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import { Readability } from "@mozilla/readability";
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { StringEnum } from "@oh-my-pi/pi-ai";
-import { getPuppeteerDir, logger, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@spell/pi-agent-core";
+import { StringEnum } from "@spell/pi-ai";
+import { getPuppeteerDir, logger, Snowflake, untilAborted } from "@spell/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { type HTMLElement, parseHTML } from "linkedom";
 import type {
@@ -500,6 +500,15 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 	readonly description: string;
 	readonly parameters = browserSchema;
 	readonly strict = true;
+	// All calls share a single Page + CDPSession + elementCache (see private
+	// fields below). Puppeteer's CDP transport has no async-safe interleaving on
+	// a single Page: parallel observe/click/evaluate/goto would race on
+	// element-id resolution (cache rewritten mid-resolve), navigation lifecycle
+	// (goto's load racing screenshot's query), and CDP request ordering.
+	// Sequential mode pins the whole batch to source order so the model's
+	// observe → click_id → wait_for_selector chain stays coherent within one
+	// assistant turn.
+	readonly executionMode = "sequential" as const;
 	#browser: Browser | null = null;
 	#page: Page | null = null;
 	#currentHeadless: boolean | null = null;

@@ -73,13 +73,26 @@ pub(crate) fn build_target_id(
 	Ok(format!("{abs_file}::{sym_part}"))
 }
 
-/// Like `build_target_id` but accepts qualifiers (#body, #sig).
-/// Used by `apply_via_code_buffer` for the builder path.
+/// Like `build_target_id` but tolerates a body/sig qualifier on the path.
+///
+/// The qualifier (`foo#body`) is *dropped* from the rendered target_id: the
+/// scope it names is extracted separately and threaded into the action's
+/// `scope` field, so `resolve_symbol` must see the bare `file::Symbol` to
+/// match the declaration. Rendering `foo#body` verbatim would make the symbol
+/// lookup fail with "Symbol 'foo#body' not found".
+pub(crate) fn build_target_id_lenient(
+	path: &CodePath,
+	root: Option<&std::path::Path>,
+) -> String {
+	build_target_id_allow_qualifiers(path, root).unwrap_or_default()
+}
+
 fn build_target_id_allow_qualifiers(
 	path: &CodePath,
 	root: Option<&std::path::Path>,
 ) -> Result<String, Diagnostic> {
-	let rendered = render_code_path(path, &DummyLexer).replace(" :: ", "::");
+	let bare = CodePath { qualifier: None, ..path.clone() };
+	let rendered = render_code_path(&bare, &DummyLexer).replace(" :: ", "::");
 	let Some((file_part, sym_part)) = rendered.split_once("::") else {
 		return Ok(absolutise(&rendered, root));
 	};
@@ -309,6 +322,7 @@ fn edit_err_message(e: &pi_code_engine::CodeEngineError) -> String {
 	}
 }
 
+
 impl CodeResolverImpl {
 	/// Resolve a CodePath target to a scoped TextEdit, bypassing the legacy
 	/// `build_target_id → resolve_symbol → single_action` chain.
@@ -328,10 +342,13 @@ impl CodeResolverImpl {
 				span: None,
 			})?;
 
-		let source = std::fs::read_to_string(&file_path).map_err(|e| Diagnostic {
-			variant: DiagnosticVariant::Inaccessible,
-			message: format!("read error: {e}"),
-			span: None,
+		let source = std::fs::read_to_string(&file_path).map_err(|e| {
+			let message = if e.kind() == std::io::ErrorKind::NotFound {
+				format!("file not found: {} (create it before a symbol edit)", file_path.display())
+			} else {
+				format!("read error: {e}")
+			};
+			Diagnostic { variant: DiagnosticVariant::Inaccessible, message, span: None }
 		})?;
 
 		let mut parser = tree_sitter::Parser::new();
@@ -361,14 +378,27 @@ impl CodeResolverImpl {
 		let cancel = CancellationToken::new();
 		let root = tree.root_node();
 		let nodes = super::walker::evaluate_query(query, vec![root], &source, dialect, &cancel);
-		let node = nodes.first().ok_or_else(|| Diagnostic {
-			variant: DiagnosticVariant::NoMatches,
-			message: "symbol not found".into(),
-			span: None,
-		})?;
+		// Selection must be deterministic and target the *specific* declaration.
+		// A name query can match both an inner declaration and an enclosing
+		// wrapper (e.g. TS `export function foo` yields both `function_declaration`
+		// and `export_statement`). `nodes.first()` ordered by tree-sitter node id
+		// (a pointer) is nondeterministic and may pick the wrapper, which has no
+		// `name` field (rename fails) and a span that includes the `export`
+		// keyword (whole-replace double-prefixes). Prefer the narrowest span; for
+		// equal spans, the earliest start.
+		let node = nodes
+			.iter()
+			.min_by_key(|n| (n.end_byte() - n.start_byte(), n.start_byte()))
+			.ok_or_else(|| Diagnostic {
+				variant: DiagnosticVariant::NoMatches,
+				message: "symbol not found".into(),
+				span: None,
+			})?;
 
-		// Scope byte range by qualifier (#body, #sig)
-		let qualifier_name = target.qualifier.as_ref().map(|q| q.name.as_str());
+		// This builder path handles only whole-declaration writes, renames, and
+		// deletes. Body/sig-scoped writes are intercepted upstream in
+		// `apply_to_buffer` and routed to the legacy `single_action` path, which
+		// resolves the declaration node and applies the proven `replace_body`.
 		let kind = action_json.get("kind").and_then(|v| v.as_str()).unwrap_or("");
 
 		// For rename: only replace the name field, not the whole symbol
@@ -386,12 +416,10 @@ impl CodeResolverImpl {
 				.unwrap_or("");
 			(name_node.start_byte()..name_node.end_byte(), new_name.to_string())
 		} else if kind == "delete" {
-			let range = self.scope_byte_range(&source, *node, qualifier_name)?;
-			(range, String::new())
+			(node.start_byte()..node.end_byte(), String::new())
 		} else {
-			let range = self.scope_byte_range(&source, *node, qualifier_name)?;
 			let content = self.resolve_content(action_json, kind, *node, &source)?;
-			(range, content)
+			(node.start_byte()..node.end_byte(), content)
 		};
 
 		let edit = TextEdit {
@@ -404,37 +432,7 @@ impl CodeResolverImpl {
 		Ok((file_path, edit, target_id))
 	}
 
-	/// Compute the scoped byte range for a resolved node.
-	fn scope_byte_range(
-		&self,
-		_source: &str,
-		node: tree_sitter::Node<'_>,
-		qualifier: Option<&str>,
-	) -> Result<std::ops::Range<usize>, Diagnostic> {
-		match qualifier {
-			Some("body") => {
-				let body = node.child_by_field_name("body")
-					.or_else(|| node.child_by_field_name("do_block"))
-					.ok_or_else(|| Diagnostic {
-						variant: DiagnosticVariant::UnsupportedOperation,
-						message: format!("node '{}' has no body field", node.kind()),
-						span: None,
-					})?;
-				Ok(body.start_byte()..body.end_byte())
-			}
-			Some("sig") => {
-				let body = node.child_by_field_name("body")
-					.or_else(|| node.child_by_field_name("do_block"))
-					.ok_or_else(|| Diagnostic {
-						variant: DiagnosticVariant::UnsupportedOperation,
-						message: format!("node '{}' has no body field for $SIG", node.kind()),
-						span: None,
-					})?;
-				Ok(node.start_byte()..body.start_byte())
-			}
-			_ => Ok(node.start_byte()..node.end_byte()),
-		}
-	}
+
 
 	/// Build the content string for the edit, expanding template variables
 	/// if the content contains $VARS placeholders.
@@ -494,7 +492,29 @@ impl CodeResolverImpl {
 		// has a code dialect. Languages without a dialect (HTML, CSS,
 		// Markdown) and ops other than these 3 stay on the legacy path.
 		let kind = action_json.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-		let use_builder = matches!(kind, "write" | "rename" | "delete");
+		// Body/sig-scoped writes route to the legacy `single_action` path, which
+		// resolves the *declaration* node via `resolve_symbol` and applies the
+		// proven `replace_body` (brace/do-end precondition + re-indent +
+		// sibling-deletion guard). The builder path's `nodes.first()` selection is
+		// unsafe for scoped writes: a name like Elixir `::fix` matches the inner
+		// identifier *and* the enclosing `def` call, and a TS `export function foo`
+		// matches the `export_statement` wrapper — picking the wrong node silently
+		// corrupts the file (BUG: body spliced inline, delimiters orphaned).
+		// Scope may arrive via the action `scope` field (`{scope:"body"}`) or the
+		// CodePath qualifier (`foo#body`); normalise to one source of truth.
+		let scope = action_json
+			.get("scope")
+			.and_then(|v| v.as_str())
+			.filter(|s| matches!(*s, "body" | "sig"))
+			.or_else(|| {
+				target
+					.qualifier
+					.as_ref()
+					.map(|q| q.name.as_str())
+					.filter(|s| matches!(*s, "body" | "sig"))
+			});
+		let scoped_write = kind == "write" && scope.is_some();
+		let use_builder = matches!(kind, "write" | "rename" | "delete") && !scoped_write;
 		// Check if the file is a code language (has a dialect).
 		// Non-code languages (HTML/CSS/MD/Org) use the legacy path.
 		let is_code_lang = match &target.locator {
@@ -523,8 +543,18 @@ impl CodeResolverImpl {
 			});
 		}
 
-		// Legacy path for non-symbol ops (FileCreate, FileWrite, etc.)
-		let target_id = build_target_id(target, self.root.as_deref())?;
+		// Legacy path for non-symbol ops (FileCreate, FileWrite, etc.) and for
+		// body/sig-scoped writes. The qualifier (if any) was consumed into `scope`
+		// above; render the target_id without it and inject `scope` into the
+		// action so `single_action` resolves the declaration and applies
+		// `replace_body`.
+		let target_id = build_target_id_allow_qualifiers(target, self.root.as_deref())?;
+		let scoped_action = scoped_write.then(|| {
+			let mut obj = action_json.as_object().cloned().unwrap_or_default();
+			obj.insert("scope".to_string(), Value::String(scope.unwrap().to_string()));
+			Value::Object(obj)
+		});
+		let action_json = scoped_action.as_ref().unwrap_or(action_json);
 		let path = buffer.path().ok_or_else(|| Diagnostic {
 			variant: DiagnosticVariant::IncompatibleTargetShape,
 			message: "buffer has no path".into(),
@@ -662,6 +692,71 @@ mod tests {
 			})),
 			qualifier: None,
 		}
+	}
+
+	fn elixir_resolver() -> CodeResolverImpl {
+		ts_resolver()
+	}
+
+	fn symbol_path_ext(file: &std::path::Path, symbol: &str) -> CodePath {
+		CodePath {
+			locator:   Locator::Fs(FsLocator {
+				segments: vec![FsSegment::Literal(file.display().to_string())],
+			}),
+			query:     Some(Query::single(Step {
+				axis:       None,
+				head:       Head::Name(NamePayload::Raw(symbol.into())),
+				predicates: vec![],
+			})),
+			qualifier: None,
+		}
+	}
+
+	#[test]
+	fn replace_body_ts_scoped_keeps_signature() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("a.ts");
+		std::fs::write(&path, "export function foo(x) {\n  return x + 1;\n}\n").unwrap();
+		let cp = symbol_path_ext(&path, "foo");
+		let target = SymbolTarget::new(cp).unwrap();
+		let op = Op::SymbolReplace {
+			target,
+			scope: SymScope::Body,
+			content: ActionContent::Single("{\n  return x * 2;\n}".into()),
+		};
+		let resolver = ts_resolver();
+		let resolver = CodeResolverImpl { root: Some(dir.path().to_path_buf()), ..resolver };
+		let result = resolver.try_apply(&op, &CancellationToken::new());
+		assert!(matches!(result, Some(Ok(_))), "body replace failed: {result:?}");
+		let src = std::fs::read_to_string(&path).unwrap();
+		assert!(src.contains("export function foo(x)"), "signature preserved: {src}");
+		assert!(src.contains("return x * 2"), "body replaced: {src}");
+	}
+
+	#[test]
+	fn replace_body_elixir_do_block_keeps_signature() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("e.ex");
+		std::fs::write(
+			&path,
+			"defmodule M do\n  def fix(ast, _opts) do\n    a = ast\n    a\n  end\nend\n",
+		)
+		.unwrap();
+		let cp = symbol_path_ext(&path, "M.fix");
+		let target = SymbolTarget::new(cp).unwrap();
+		let op = Op::SymbolReplace {
+			target,
+			scope: SymScope::Body,
+			content: ActionContent::Single("do\n    result = compute(ast)\n    result\n  end".into()),
+		};
+		let resolver = elixir_resolver();
+		let resolver = CodeResolverImpl { root: Some(dir.path().to_path_buf()), ..resolver };
+		let result = resolver.try_apply(&op, &CancellationToken::new());
+		assert!(matches!(result, Some(Ok(_))), "elixir body replace failed: {result:?}");
+		let src = std::fs::read_to_string(&path).unwrap();
+		assert!(src.contains("def fix(ast, _opts) do"), "signature + do preserved: {src}");
+		assert!(src.contains("compute(ast)"), "body replaced: {src}");
+		assert!(!src.contains("a = ast"), "old body gone: {src}");
 	}
 
 	#[test]

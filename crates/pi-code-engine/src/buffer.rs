@@ -779,59 +779,6 @@ impl BufferRegistry {
 	}
 }
 
-/// FEAT-702: report whether the post-edit tree introduces structural
-/// errors at or around the edit sites. Used by `edit_batch` to scope
-/// the validity gate to the actual neighbourhood of the change — an
-/// error elsewhere in the file pre-existed and isn't ours to reject.
-///
-/// Strategy:
-/// 1. For each edit, compute an "affected range" that includes the insertion
-///    plus one character of context on each side (so a pure deletion still has
-///    a non-empty checking window).
-/// 2. Walk the tree to find any error/missing node that overlaps any affected
-///    range.
-/// 3. If found, reject. Otherwise accept.
-fn errors_intersect_ranges(tree: &tree_sitter::Tree, ranges: &[(usize, usize)]) -> bool {
-	if ranges.is_empty() {
-		return tree.root_node().has_error();
-	}
-	let total_bytes = tree.root_node().end_byte();
-	// Expand each range by 1 byte on each side, clamped, so deletions
-	// still have a non-empty window for the intersection check.
-	let expanded: Vec<(usize, usize)> = ranges
-		.iter()
-		.map(|(s, e)| {
-			let start = s.saturating_sub(1);
-			let end = (*e + 1).min(total_bytes.max(*e + 1));
-			(start, end.max(start + 1))
-		})
-		.collect();
-	let mut cursor = tree.walk();
-	let mut stack: Vec<tree_sitter::Node<'_>> = vec![tree.root_node()];
-	while let Some(node) = stack.pop() {
-		if !node.has_error() && !node.is_missing() {
-			continue;
-		}
-		let is_self_error = node.is_error() || node.is_missing();
-		if is_self_error {
-			let s = node.start_byte();
-			let e = node.end_byte();
-			let overlaps = expanded.iter().any(|(rs, re)| !(e <= *rs || s >= *re));
-			if overlaps {
-				return true;
-			}
-		}
-		if node.has_error() {
-			for child in node.children(&mut cursor) {
-				if child.has_error() || child.is_missing() {
-					stack.push(child);
-				}
-			}
-		}
-	}
-	false
-}
-
 impl CodeBuffer {
 	pub fn open(path: &Path, registry: Arc<LanguageRegistry>) -> Result<Self> {
 		let metadata = fs::metadata(path)?;
@@ -1094,6 +1041,8 @@ impl CodeBuffer {
 			results.push(result);
 		}
 		if !original_had_error && self.tree.root_node().has_error() {
+			// Incremental edits can leave tree-sitter in a partially-reparsed
+			// state; reparse from scratch before judging validity.
 			self.tree = match Self::parse(&mut self.parser, &self.rope, None) {
 				Ok(tree) => tree,
 				Err(error) => {
@@ -1101,27 +1050,26 @@ impl CodeBuffer {
 					return Err(error);
 				},
 			};
-			// FEAT-702: scope the validity check to the edited regions.
-			// If parse errors landed entirely outside the edit ranges,
-			// they pre-existed structurally and shouldn't block the
-			// wrap. If any error falls inside an edit range, reject.
+			// The original parsed cleanly, so any error now is ours. Reject
+			// whole-file rather than scoping to the edit neighbourhood:
+			// tree-sitter error recovery routinely relocates the ERROR node
+			// *outside* the literal edit span (e.g. replacing a function body
+			// with braceless content orphans the enclosing `export`/`do`,
+			// surfacing the error one token earlier). A neighbourhood-scoped
+			// check silently lets such corruption through. This mirrors the
+			// single-edit path's whole-file gate.
 			if self.tree.root_node().has_error() {
-				let edit_ranges: Vec<(usize, usize)> = all_forwards
-					.iter()
-					.map(|e| (e.start_byte, e.start_byte + e.new_text.len()))
-					.collect();
-				if errors_intersect_ranges(&self.tree, &edit_ranges) {
-					restore(self);
-					let excerpt: String = all_forwards
-						.first()
-						.map(|e| e.new_text.chars().take(40).collect())
-						.unwrap_or_default();
-					return Err(CodeEngineError::Edit(format!(
-						"Edit batch would leave the buffer structurally invalid (new content starts \
-						 with: `{excerpt}`). If replacing a body, content must include outer braces {{ \
-						 ... }}. Re-anchor the target or include an explicit separator."
-					)));
-				}
+				restore(self);
+				let excerpt: String = all_forwards
+					.first()
+					.map(|e| e.new_text.chars().take(40).collect())
+					.unwrap_or_default();
+				return Err(CodeEngineError::Edit(format!(
+					"Edit would leave the buffer structurally invalid (new content starts with: \
+					 `{excerpt}`). If replacing a body, the content must form a complete block \
+					 (include the `{{ ... }}` / `do ... end` delimiters). Re-anchor the target or \
+					 include an explicit separator."
+				)));
 			}
 		}
 		if !all_forwards.is_empty() {

@@ -1,5 +1,5 @@
 import * as net from "node:net";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { NiriEvent } from "./types";
 
 /** Callback invoked for each decoded Niri IPC event */

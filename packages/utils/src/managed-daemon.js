@@ -74,7 +74,7 @@ const DEFAULT_STARTUP_TIMEOUT_MS = 30_000;
  * `--fg-daemon` for Emacs, or equivalent for other daemons.
  */
 export async function startDaemon(config) {
-    const { name, command, socketPath, stopCommand, healthIntervalMs = DEFAULT_HEALTH_INTERVAL_MS, startupTimeoutMs = DEFAULT_STARTUP_TIMEOUT_MS, env, cwd, logStderr = true, onCrash, } = config;
+    const { name, command, socketPath, stopCommand, healthIntervalMs: _healthIntervalMs = DEFAULT_HEALTH_INTERVAL_MS, startupTimeoutMs = DEFAULT_STARTUP_TIMEOUT_MS, env, cwd, logStderr = true, onCrash, } = config;
     // Spawn the daemon process in foreground mode.
     const proc = Bun.spawn(command, {
         stdio: ["ignore", "ignore", logStderr ? "pipe" : "ignore"],
@@ -103,35 +103,13 @@ export async function startDaemon(config) {
     // --- Mutable state ---
     let alive = true;
     let stopped = false;
-    let healthTimer;
     let cancelPostmortem;
-    // Health check timer.
-    if (healthIntervalMs > 0) {
-        healthTimer = setInterval(async () => {
-            try {
-                await fs.access(socketPath);
-            }
-            catch {
-                logger.warn(`[managed-daemon] Socket disappeared — daemon may have crashed`, { name, socketPath });
-                alive = false;
-                if (healthTimer)
-                    clearInterval(healthTimer);
-                healthTimer = undefined;
-                onCrash?.();
-            }
-        }, healthIntervalMs);
-        healthTimer.unref();
-    }
     // Postmortem registration — so signals and exit clean up the daemon.
     cancelPostmortem = postmortem.register(name, reason => {
         if (stopped)
             return;
         stopped = true;
         alive = false;
-        if (healthTimer) {
-            clearInterval(healthTimer);
-            healthTimer = undefined;
-        }
         // In EXIT context, only synchronous operations are safe.
         // proc.kill() is our best effort.
         if (reason === postmortem.Reason.EXIT) {
@@ -159,11 +137,6 @@ export async function startDaemon(config) {
         // Deregister postmortem so we don't double-dispose.
         cancelPostmortem?.();
         cancelPostmortem = undefined;
-        // Clear health timer.
-        if (healthTimer) {
-            clearInterval(healthTimer);
-            healthTimer = undefined;
-        }
         logger.debug(`[managed-daemon] Stopping daemon`, { name });
         // 1. Graceful stop via stopCommand.
         if (stopCommand && stopCommand.length > 0) {
@@ -207,6 +180,22 @@ export async function startDaemon(config) {
         pid: proc.pid,
         isAlive() {
             return alive;
+        },
+        async probe(deep = false) {
+            if (!alive)
+                return false;
+            try {
+                await fs.access(socketPath);
+            }
+            catch {
+                logger.warn(`[managed-daemon] Socket disappeared — daemon may have crashed`, { name, socketPath });
+                alive = false;
+                onCrash?.();
+                return false;
+            }
+            if (!deep)
+                return true;
+            return probeSocket(socketPath, 1000);
         },
         stop,
     };

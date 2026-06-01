@@ -1,16 +1,16 @@
 import * as async_hooks from "node:async_hooks";
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { StringEnum } from "@oh-my-pi/pi-ai";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@spell/pi-agent-core";
+import { StringEnum } from "@spell/pi-ai";
 import {
 	DEFAULT_ORG_CONFIG,
 	findItemById,
 	resolveCategories,
 	updateItemStateInFile,
 	writeJournal,
-} from "@oh-my-pi/pi-org";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { Text } from "@oh-my-pi/pi-tui";
-import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
+} from "@spell/pi-org";
+import type { Component } from "@spell/pi-tui";
+import { Text } from "@spell/pi-tui";
+import { getProjectDir, logger } from "@spell/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import chalk from "chalk";
 import { renderPromptTemplate } from "../config/prompt-templates";
@@ -1560,7 +1560,6 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 	readonly label = "Todo Write";
 	readonly description: string;
 	readonly parameters = todoWriteSchema;
-	readonly concurrency = "exclusive";
 	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {

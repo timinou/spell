@@ -1,5 +1,5 @@
-import * as ai from "@oh-my-pi/pi-ai";
-import { logger } from "@oh-my-pi/pi-utils";
+import * as ai from "@spell/pi-ai";
+import { logger } from "@spell/pi-utils";
 import { renderPromptTemplate } from "../../config/prompt-templates";
 import fluidPlanValidatorPrompt from "../../prompts/agents/fluid-plan-validator.md" with { type: "text" };
 import type { AgentSession } from "../../session/agent-session";

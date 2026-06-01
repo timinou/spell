@@ -14,8 +14,8 @@
  * REMOVE_AT_WAVE_11: the GetTool delegation is a transitional shim.
  */
 
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { Component } from "@oh-my-pi/pi-tui";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@spell/pi-agent-core";
+import type { Component } from "@spell/pi-tui";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 
 import findDescription from "../prompts/tools/find.md" with { type: "text" };

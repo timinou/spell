@@ -62,7 +62,7 @@ for (const file of [projectEnv, agentEnv, piEnv, homeEnv]) {
 /**
  * Intentional re-export of Bun.env.
  *
- * All users should import this env module (import { $env } from "@oh-my-pi/pi-utils")
+ * All users should import this env module (import { $env } from "@spell/pi-utils")
  * before using environment variables. This ensures that .env files have been loaded and
  * overrides (project, home) have been applied, so $env always reflects the correct values.
  */
@@ -82,3 +82,15 @@ export function $pickenv(...keys: string[]): string | undefined {
 	}
 	return undefined;
 }
+
+/**
+ * Reads a boolean-like environment variable. Truthy values: 1, Y, TRUE, YES,
+ * ON (case-insensitive). Anything else (including unset) returns `def`.
+ */
+const TRUTHY: Record<string, boolean> = { "1": true, Y: true, TRUE: true, YES: true, ON: true };
+export function $flag(name: string, def = false): boolean {
+	const value = $env[name];
+	if (!value) return def;
+	return TRUTHY[value.trim().toUpperCase()] === true;
+}
+

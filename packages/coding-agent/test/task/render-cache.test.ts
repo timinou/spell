@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { getThemeByName } from "@spell/pi-coding-agent/modes/theme/theme";
 import { renderResult } from "../../src/task/render";
 import type { AgentProgress, TaskToolDetails } from "../../src/task/types";
 

@@ -592,11 +592,14 @@ pub fn execute_code_path_inner(
 			let code_paths: Vec<String> = group_ops
 				.iter()
 				.map(|op| {
-					crate::code_path::code_resolver::mutation::build_target_id(
+					// Tolerate body/sig qualifiers here: this string is only a
+					// registry/lock key, and a `foo#body` target is valid for
+					// scoped writes. The strict variant rejects qualifiers, which
+					// would yield an empty key via unwrap_or_default.
+					crate::code_path::code_resolver::mutation::build_target_id_lenient(
 						op.target_codepath(),
 						Some(&root),
 					)
-					.unwrap_or_default()
 				})
 				.collect();
 			let result = crate::buffer_registry().edit_transaction_with_delete(

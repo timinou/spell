@@ -1,11 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { renderPromptTemplate } from "@oh-my-pi/pi-coding-agent/config/prompt-templates";
-import eagerTodoPrompt from "@oh-my-pi/pi-coding-agent/prompts/system/eager-todo.md" with { type: "text" };
-import planModeApprovedPrompt from "@oh-my-pi/pi-coding-agent/prompts/system/plan-mode-approved.md" with {
+import { renderPromptTemplate } from "@spell/pi-coding-agent/config/prompt-templates";
+import eagerTodoPrompt from "@spell/pi-coding-agent/prompts/system/eager-todo.md" with { type: "text" };
+import planModeApprovedPrompt from "@spell/pi-coding-agent/prompts/system/plan-mode-approved.md" with {
 	type: "text",
 };
-import taskPrompt from "@oh-my-pi/pi-coding-agent/prompts/tools/task.md" with { type: "text" };
-import todoWritePrompt from "@oh-my-pi/pi-coding-agent/prompts/tools/todo-write.md" with { type: "text" };
+import taskPrompt from "@spell/pi-coding-agent/prompts/tools/task.md" with { type: "text" };
+import todoWritePrompt from "@spell/pi-coding-agent/prompts/tools/todo-write.md" with { type: "text" };
 
 describe("auto-roster prompt wiring", () => {
 	it("renders task prompt with auto-roster guidance when enabled", () => {

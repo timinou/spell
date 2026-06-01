@@ -1,7 +1,7 @@
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { LoadedConfig } from "./config/loader";
 import type { TelegramChannelConfig } from "./config/types";
 import { cleanupStaleSandboxPolicies, GoalExecutionController } from "./executor";

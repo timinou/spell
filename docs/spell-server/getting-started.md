@@ -25,7 +25,7 @@ You can run Spell Server from the monorepo during development or add the package
 Install it as a dependency:
 
 ```bash
-bun add @oh-my-pi/spell-server
+bun add @spell/spell-server
 ```
 
 The package exposes a `spell-server` binary in `package.json`, and the package start script runs `bun run src/main.ts`. During local monorepo development, the common pattern is to run the entrypoint directly with Bun:

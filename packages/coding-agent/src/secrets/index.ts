@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import { settings } from "../config/settings";
 import type { SecretEntry } from "./obfuscator";
 import { compileSecretRegex } from "./regex";

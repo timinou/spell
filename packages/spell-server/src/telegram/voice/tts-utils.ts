@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 
 /**
  * Truncate text to a provider's input limit, appending "..." when truncated.

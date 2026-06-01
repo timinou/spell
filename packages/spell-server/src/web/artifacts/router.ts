@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import { verifyWebToken } from "../../http/auth";
 import { verifySignedUrl } from "./signed-url";
 import type { ArtifactRequestDeps } from "./types";

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import type { RenderResultOptions } from "@oh-my-pi/pi-agent-core";
-import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { bashToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/bash";
-import { sanitizeText } from "@oh-my-pi/pi-natives";
-import { ImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
+import type { RenderResultOptions } from "@spell/pi-agent-core";
+import { getThemeByName } from "@spell/pi-coding-agent/modes/theme/theme";
+import { bashToolRenderer } from "@spell/pi-coding-agent/tools/bash";
+import { sanitizeText } from "@spell/pi-natives";
+import { ImageProtocol, TERMINAL } from "@spell/pi-tui";
 
 type MutableTerminalInfo = {
 	imageProtocol: ImageProtocol | null;

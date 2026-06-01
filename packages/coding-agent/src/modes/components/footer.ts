@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
-import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { type Component, padding, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
-import { formatNumber, getProjectDir } from "@oh-my-pi/pi-utils";
+import { ThinkingLevel } from "@spell/pi-agent-core";
+import { type Component, padding, truncateToWidth, visibleWidth } from "@spell/pi-tui";
+import { formatNumber, getProjectDir } from "@spell/pi-utils";
 import { theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
 import { shortenPath } from "../../tools/render-utils";
@@ -84,7 +84,13 @@ export class FooterComponent implements Component {
 	}
 
 	invalidate(): void {
-		// Invalidate cached branch so it gets re-read on next render
+		// Invalidate cached branch so it gets re-read on next render. Footer
+		// implements the Component interface (no parent tracking), so we cannot
+		// propagate dirty up the tree from here — callers that invalidate the
+		// footer must also invalidate the enclosing Container if a repaint is
+		// required. Today there are zero external callers of this method; the
+		// cached branch updates on the next render cycle that happens for any
+		// reason. BUG-422 audit: confirmed no propagation hazard in practice.
 		this.#cachedBranch = undefined;
 	}
 

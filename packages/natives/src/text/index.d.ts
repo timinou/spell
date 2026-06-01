@@ -1,7 +1,7 @@
 /**
  * ANSI-aware text utilities powered by native bindings.
  */
-import { Ellipsis, type ExtractSegmentsResult, type SliceWithWidthResult } from "@oh-my-pi/pi-natives";
+import { Ellipsis, type ExtractSegmentsResult, type SliceWithWidthResult } from "@spell/pi-natives";
 export type { ExtractSegmentsResult, SliceWithWidthResult } from "./types";
 export { Ellipsis } from "./types";
 /**

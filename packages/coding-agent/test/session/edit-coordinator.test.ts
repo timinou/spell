@@ -1,6 +1,6 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { coordStatus } from "@oh-my-pi/pi-coding-agent/session/edit-coordinator";
-import * as nativesModule from "@oh-my-pi/pi-natives";
+import { coordStatus } from "@spell/pi-coding-agent/session/edit-coordinator";
+import * as nativesModule from "@spell/pi-natives";
 
 describe("edit coordinator", () => {
 	it("returns coord status summaries", () => {

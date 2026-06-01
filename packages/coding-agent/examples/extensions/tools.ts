@@ -8,9 +8,9 @@
  * 1. Copy this file to ~/.spell/agent/extensions/ (legacy: ~/.pi/agent/extensions/) or your project's .spell/extensions/
  * 2. Use /tools to open the tool selector
  */
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { getSettingsListTheme } from "@oh-my-pi/pi-coding-agent";
-import { Container, type SettingItem, SettingsList } from "@oh-my-pi/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@spell/pi-coding-agent";
+import { getSettingsListTheme } from "@spell/pi-coding-agent";
+import { Container, type SettingItem, SettingsList } from "@spell/pi-tui";
 
 // State persisted to session
 interface ToolsState {

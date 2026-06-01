@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { BridgeEvent, WindowInfo, WindowState } from "./protocol";
 import { QmlProcess } from "./qml-process";
 import { QmlWatcher } from "./watcher";

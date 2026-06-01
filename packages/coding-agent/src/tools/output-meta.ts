@@ -10,8 +10,8 @@ import type {
 	AgentToolExecFn,
 	AgentToolResult,
 	AgentToolUpdateCallback,
-} from "@oh-my-pi/pi-agent-core";
-import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
+} from "@spell/pi-agent-core";
+import type { ImageContent, TextContent } from "@spell/pi-ai";
 
 
 import type { Theme } from "../modes/theme/theme";

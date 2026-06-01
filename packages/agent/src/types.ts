@@ -12,7 +12,7 @@ import type {
 	Tool,
 	ToolChoice,
 	ToolResultMessage,
-} from "@oh-my-pi/pi-ai";
+} from "@spell/pi-ai";
 import type { Static, TSchema } from "@sinclair/typebox";
 
 /** Stream function - can return sync or Promise for async config lookup */
@@ -146,6 +146,55 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * When set and returns a value, overrides the static `toolChoice`.
 	 */
 	getToolChoice?: () => ToolChoice | undefined;
+
+	/**
+	 * Mid-stream early-dispatch policy for tools declaring `executionMode:
+	 * "parallel"` (the default for everything except ask / await /
+	 * cancel_job / exit_plan_mode / browser).
+	 *
+	 * Default `"enforce"`. When a parallel tool's `toolcall_end` event fires
+	 * mid-stream, the harness invokes `tool.execute(...)` IMMEDIATELY — the
+	 * resulting promise runs concurrently with the rest of the assistant
+	 * stream. `executeToolCalls` later observes the dispatch via an internal
+	 * `eagerDispatch` map and awaits each pending promise in source order
+	 * instead of re-running the tool.
+	 *
+	 * Concretely: an async bash job emitted as the first of 30 tool calls
+	 * begins executing while the model is still emitting tool blocks 2..30.
+	 * Without this, real work waits for the whole stream to drain.
+	 *
+	 * Sequential tools are never early-dispatched — they are batch-barrier
+	 * tools (their `executionMode: "sequential"` declaration carries that
+	 * semantic) and the `sequentialToolStreamBarrier` policy cuts the stream
+	 * at their `toolcall_end` instead.
+	 *
+	 * `"off"` restores the prior behaviour (all tools execute strictly after
+	 * `streamAssistantResponse` returns). Used for diagnostics and A/B.
+	 */
+	earlyDispatchParallelTools?: "enforce" | "off";
+
+	/**
+	 * Mid-stream barrier policy for tools declaring `executionMode: "sequential"`.
+	 *
+	 * Default `"enforce"`. When the streamed assistant message emits a
+	 * `toolcall_end` for a tool whose definition has `executionMode: "sequential"`,
+	 * the harness CUTS the SSE at that point: it trims the assistant message to
+	 * end at the barrier tool inclusive, marks it `stopReason: "toolUse"`, best-
+	 * effort aborts the upstream stream, and lets the normal
+	 * `executeToolCalls` → next-turn cycle continue with real `tool_result`
+	 * context.
+	 *
+	 * This enforces a property the autoregressive model cannot enforce for
+	 * itself: don't generate tokens about a state you don't yet have (a tool
+	 * result, a user answer, a job completion). Without this, a model that emits
+	 * `[bash(echo ok1), await, bash(echo ok2)]` in one turn produces `ok2`'s args
+	 * before any await result exists, then waits through the whole sequential
+	 * batch before getting a chance to revise.
+	 *
+	 * `"off"` exists for diagnostics and regression testing. Production code
+	 * should leave it at the default.
+	 */
+	sequentialToolStreamBarrier?: "enforce" | "off";
 }
 
 export interface ToolCallContext {
@@ -161,7 +210,7 @@ export interface ToolCallContext {
  *
  * @example
  * ```typescript
- * declare module "@oh-my-pi/agent" {
+ * declare module "@spell/agent" {
  *   interface CustomAgentMessages {
  *     artifact: ArtifactMessage;
  *     notification: NotificationMessage;
@@ -247,11 +296,21 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	/** If true, tool execution ignores abort signals (runs to completion) */
 	nonAbortable?: boolean;
 	/**
-	 * Concurrency mode for tool scheduling when multiple calls are in one turn.
-	 * - "shared": can run alongside other shared tools (default)
-	 * - "exclusive": runs alone; other tools wait until it finishes
+	 * Per-tool execution mode override.
+	 * - "sequential": this tool requires that no sibling tool calls in the same
+	 *   assistant batch run concurrently with it. The whole batch is executed
+	 *   serially, in assistant source order, when any tool sets this mode.
+	 * - "parallel" (default): this tool can run alongside its siblings.
+	 *
+	 * Use "sequential" only for tools whose semantics REQUIRE batch-wide
+	 * exclusivity: blocking on user input (e.g. ask), mutating the agent's tool
+	 * set or mode (e.g. exit_plan_mode), or being a sync point for siblings
+	 * (e.g. await on an async job that another sibling might also touch).
+	 * Tools that have an internal consistency invariant (file locks, per-session
+	 * mutexes, ephemeral subprocesses) MUST own their serialization at the layer
+	 * that holds the invariant — do not lift it to "sequential".
 	 */
-	concurrency?: "shared" | "exclusive";
+	executionMode?: "sequential" | "parallel";
 	/** If true, argument validation errors are non-fatal: raw args are passed to execute() instead of returning an error to the LLM. */
 	lenientArgValidation?: boolean;
 	/**

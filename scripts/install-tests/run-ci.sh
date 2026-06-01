@@ -89,13 +89,13 @@ mkdir -p "$TARBALL_APP_DIR"
 	node -e "
 		const pkg = JSON.parse(require('fs').readFileSync('package.json', 'utf8'));
 		pkg.overrides = {
-			'@oh-my-pi/pi-utils': '$utils_tgz',
-			'@oh-my-pi/pi-natives': '$natives_tgz',
-			'@oh-my-pi/pi-ai': '$ai_tgz',
-			'@oh-my-pi/pi-agent-core': '$agent_tgz',
-			'@oh-my-pi/pi-tui': '$tui_tgz',
-			'@oh-my-pi/spell-stats': '$stats_tgz',
-			'@oh-my-pi/pi-coding-agent': '$coding_agent_tgz'
+			'@spell/pi-utils': '$utils_tgz',
+			'@spell/pi-natives': '$natives_tgz',
+			'@spell/pi-ai': '$ai_tgz',
+			'@spell/pi-agent-core': '$agent_tgz',
+			'@spell/pi-tui': '$tui_tgz',
+			'@spell/spell-stats': '$stats_tgz',
+			'@spell/pi-coding-agent': '$coding_agent_tgz'
 		};
 		require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2));
 	"

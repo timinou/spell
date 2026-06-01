@@ -19,7 +19,7 @@ The runtime has two layers:
 
 If your extension/tool can run in non-interactive mode, guard with `ctx.hasUI` / `pi.hasUI`.
 
-## Core component contract (`@oh-my-pi/pi-tui`)
+## Core component contract (`@spell/pi-tui`)
 
 `packages/tui/src/tui.ts` defines:
 
@@ -54,7 +54,7 @@ Your `render(width)` output must be terminal-safe:
 Minimal pattern:
 
 ```ts
-import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
+import { replaceTabs, truncateToWidth } from "@spell/pi-tui";
 
 render(width: number): string[] {
   return this.lines.map(line => truncateToWidth(replaceTabs(line), width));
@@ -177,9 +177,9 @@ return loader;
 ## Realistic custom component example (extension command)
 
 ```ts
-import type { Component } from "@oh-my-pi/pi-tui";
-import { SelectList, matchesKey, replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
-import { getSelectListTheme, type ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import type { Component } from "@spell/pi-tui";
+import { SelectList, matchesKey, replaceTabs, truncateToWidth } from "@spell/pi-tui";
+import { getSelectListTheme, type ExtensionAPI } from "@spell/pi-coding-agent";
 
 class Picker implements Component {
   list: SelectList;
@@ -247,3 +247,47 @@ export default function extension(pi: ExtensionAPI): void {
 - `packages/coding-agent/src/extensibility/custom-tools/types.ts` — custom tool execute/render contracts.
 - `packages/coding-agent/src/modes/components/tool-execution.ts` — mounting `renderCall`/`renderResult` components and partial-state options.
 - `packages/coding-agent/src/tools/context.ts` — tool UI context propagation (`hasUI`, `ui`).
+
+## Rendering model & scrollback preservation
+
+The TUI renders **inline** into the terminal's normal screen (no alternate
+screen). It keeps a live region at the bottom and lets old content scroll
+naturally into the terminal's own scrollback. `#doRender` classifies each frame
+into a `RenderIntent` and delegates to a dedicated emitter:
+
+| intent | when | scrollback |
+|---|---|---|
+| `initial` | first paint after `start()` | viewport cleared, **history kept** |
+| `diff` | normal content change / append | grows naturally, history kept |
+| `viewportRepaint` | forced reset, width/height change, offscreen edit | in-place repaint, history kept |
+| `shrink` | trailing rows dropped | extras cleared inline, history kept |
+| `historyRebuild` | width change with offscreen edits | viewport + scrollback cleared so history rewraps |
+| `sessionReplace` | explicit `requestRender(true, { clearScrollback: true })` | viewport + scrollback wiped |
+
+**Key rule:** a forced redraw — `requestRender(true)` — does **not** erase
+terminal scrollback by default. It repaints the viewport only, so a window
+resize, focus change (niri image suppress/restore), or post-init repaint never
+destroys the user's history. The destructive `\x1b[3J` (erase-scrollback) is
+emitted **only** for `sessionReplace`/`historyRebuild`, and never inside a
+multiplexer (`TMUX`/`STY`/`ZELLIJ`). To wipe history on purpose (a true session
+replace, e.g. a future `/clear`), pass `requestRender(true, { clearScrollback: true })`.
+
+See `BUG-418` / `PLAN-321` and `packages/tui/test/scrollback-preservation.test.ts`.
+
+### Troubleshooting: terminal jumps to the bottom while a task runs
+
+The TUI no longer wipes history on redraw, but the **terminal emulator's own
+"scroll-to-bottom on output" policy** still pulls the viewport down whenever the
+live region grows (streaming output) while you have manually scrolled up. This
+is emulator behavior, not something the inline renderer can suppress on the
+normal screen.
+
+- **Ghostty:** set `scroll-to-bottom = never` (or the value matching your
+  version) in `~/.config/ghostty/config` to pause follow-on-output while you are
+  scrolled up — the iTerm-style behavior. See
+  <https://ghostty.org/docs/config/reference#scroll-to-bottom> and discussion
+  [#10456](https://github.com/ghostty-org/ghostty/discussions/10456).
+- For reading long task output in-app, use the live task/subagent overlay, which
+  owns its own viewport with `j/k` · `PgUp/PgDn` · `g/G` navigation and an
+  `autoFollow` toggle.
+

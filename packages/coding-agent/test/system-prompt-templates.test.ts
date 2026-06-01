@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
-import { renderPromptTemplate, type TemplateContext } from "@oh-my-pi/pi-coding-agent/config/prompt-templates";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { renderPromptTemplate, type TemplateContext } from "@spell/pi-coding-agent/config/prompt-templates";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
 import Handlebars from "handlebars";
 import { buildSystemPrompt } from "../src/system-prompt";
 

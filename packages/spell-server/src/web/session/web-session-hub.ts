@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { BridgeRpcCommand, RpcClient, RpcEvent, RpcResponseEvent } from "../../rpc";
 import type { SessionManager } from "../../session/session-manager";
 import type { BaseSpawnOptions } from "../../session/types";

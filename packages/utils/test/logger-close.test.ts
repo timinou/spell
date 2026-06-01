@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 
 describe("logger.close", () => {
 	it("resolves without error and is idempotent", async () => {

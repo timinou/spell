@@ -6,7 +6,7 @@
  *
  * @example
  * ```typescript
- * import { logger } from "@oh-my-pi/pi-utils";
+ * import { logger } from "@spell/pi-utils";
  *
  * logger.error("MCP request failed", { url, method });
  * logger.warn("Theme file invalid, using fallback", { path });
@@ -16,6 +16,7 @@
 export interface Logger {
     error(message: string, context?: Record<string, unknown>): void;
     warn(message: string, context?: Record<string, unknown>): void;
+    info(message: string, context?: Record<string, unknown>): void;
     debug(message: string, context?: Record<string, unknown>): void;
     setStderrDebugEnabled(enabled: boolean): void;
     time<T>(op: string, fn: () => T): T;
@@ -39,6 +40,12 @@ export declare function error(message: string, context?: Record<string, unknown>
  * @param context - The context to log.
  */
 export declare function warn(message: string, context?: Record<string, unknown>): void;
+/**
+ * Log an info message.
+ * @param message - The message to log.
+ * @param context - The context to log.
+ */
+export declare function info(message: string, context?: Record<string, unknown>): void;
 /**
  * Log a debug message.
  * @param message - The message to log.

@@ -1,4 +1,4 @@
-export { Ellipsis, extractSegments, sliceWithWidth, truncateToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-natives";
+export { Ellipsis, extractSegments, sliceWithWidth, truncateToWidth, wrapTextWithAnsi } from "@spell/pi-natives";
 export declare function replaceTabs(text: string): string;
 /**
  * Returns a string of n spaces. Uses a pre-allocated buffer for efficiency.

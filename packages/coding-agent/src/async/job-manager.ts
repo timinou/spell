@@ -1,4 +1,4 @@
-import { logger, Snowflake } from "@oh-my-pi/pi-utils";
+import { logger, Snowflake } from "@spell/pi-utils";
 import type { SubagentOutcome } from "../task/types";
 import type { EventBus } from "../utils/event-bus";
 import { Priority } from "../utils/event-bus";

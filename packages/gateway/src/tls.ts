@@ -5,7 +5,7 @@
  * Certificates are stored at ~/.spell/gateway/tls/.
  */
 import * as fs from "node:fs/promises";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import { $ } from "bun";
 import { PATHS } from "./protocol";
 

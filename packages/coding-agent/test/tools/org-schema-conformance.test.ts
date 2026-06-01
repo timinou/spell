@@ -9,9 +9,9 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { OrgTool } from "@oh-my-pi/pi-coding-agent/tools/org";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import { OrgTool } from "@spell/pi-coding-agent/tools/org";
+import type { ToolSession } from "@spell/pi-coding-agent/tools";
 import { Value } from "@sinclair/typebox/value";
 
 // Memory-graph subcommands (recall/remember/timeline/subgraph/link) moved to the
@@ -39,8 +39,8 @@ let tmpDir: string;
 beforeEach(async () => {
 	tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-org-schema-"));
 	// Seed default category dirs so createOrgTool can resolve categories
-	await fs.mkdir(path.join(tmpDir, "tasks", "plans"), { recursive: true });
-	await fs.mkdir(path.join(tmpDir, "tasks", "projects"), { recursive: true });
+	await fs.mkdir(path.join(tmpDir, "!tasks", "plans"), { recursive: true });
+	await fs.mkdir(path.join(tmpDir, "!tasks", "projects"), { recursive: true });
 });
 
 afterEach(async () => {
@@ -60,7 +60,7 @@ function createSession(): ToolSession {
 }
 
 async function seedParentItem(id: string, title: string): Promise<string> {
-	const dir = path.join(tmpDir, "tasks", "projects");
+	const dir = path.join(tmpDir, "!tasks", "projects");
 	await fs.mkdir(dir, { recursive: true });
 	const filePath = path.join(dir, `${id}.org`);
 	const content = `#+TITLE: ${title}\n#+STATE: ITEM\n#+CUSTOM_ID: ${id}\n\n* Scope\nBody\n`;
@@ -125,17 +125,15 @@ describe("suboutline-add end-to-end", () => {
 			slug: "wire-types",
 			title: "Wire types",
 		} as any);
-
 		const text = result.content
 			.filter(c => c.type === "text")
 			.map(c => (c as { text: string }).text)
 			.join("");
-		const parsed = JSON.parse(text) as Record<string, unknown>;
 
-		expect(parsed.error).toBeUndefined();
-		expect(parsed.success).toBe(true);
-		expect(parsed.suboutlineId).toBe("PROJ-NNN-parent::wire-types");
-
+		// formatOrgResult emits human-readable text (not JSON): `success\nsuboutline_id: …`
+		expect(text).toContain("success");
+		expect(text).toContain("suboutline_id: PROJ-NNN-parent::wire-types");
+		expect(text).not.toContain("error:");
 		await tool.dispose();
 	});
 });

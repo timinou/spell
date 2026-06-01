@@ -23,7 +23,7 @@ import {
 	listEdgeKinds,
 	listDiagnosticVariants,
 	listLanguageDialects,
-} from "@oh-my-pi/pi-natives";
+} from "@spell/pi-natives";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 

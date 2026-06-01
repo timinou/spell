@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { approvePlanItem, completePlanItem } from "@oh-my-pi/pi-coding-agent/plan-mode/org-plan";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import { approvePlanItem, completePlanItem } from "@spell/pi-coding-agent/plan-mode/org-plan";
 
 describe("approvePlanItem", () => {
 	let tmpDir: string;

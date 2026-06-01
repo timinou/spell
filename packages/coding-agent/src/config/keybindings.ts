@@ -8,9 +8,9 @@ import {
 	type KeyId,
 	matchesKey,
 	setEditorKeybindings,
-} from "@oh-my-pi/pi-tui";
+} from "@spell/pi-tui";
 
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@spell/pi-utils";
 
 import { parseKeybindingsBlock, resolveKeybindingRuntimeAction } from "./kdl-keybindings";
 

@@ -1,9 +1,9 @@
 /**
  * Shared utilities for edit tool TUI rendering.
  */
-import type { ToolCallContext } from "@oh-my-pi/pi-agent-core";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { Text } from "@oh-my-pi/pi-tui";
+import type { ToolCallContext } from "@spell/pi-agent-core";
+import type { Component } from "@spell/pi-tui";
+import { Text } from "@spell/pi-tui";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 
 import { renderDiff as renderDiffColored } from "../modes/components/diff";

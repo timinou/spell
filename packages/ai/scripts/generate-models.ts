@@ -4,12 +4,13 @@
 const COPILOT_PREMIUM_MULTIPLIERS: Record<string, number> = {
 	"github-copilot/claude-haiku-4.5": 0.33,
 	"github-copilot/claude-opus-4.6": 3,
+	"github-copilot/claude-opus-4.8": 3,
 	"github-copilot/gpt-4o": 0,
 	"github-copilot/grok-code-fast-1": 0.25,
 };
 
 import * as path from "node:path";
-import { $env } from "@oh-my-pi/pi-utils";
+import { $env } from "@spell/pi-utils";
 import { AuthCredentialStore } from "../src/auth-storage";
 import { createModelManager } from "../src/model-manager";
 import {

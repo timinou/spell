@@ -44,7 +44,7 @@ spell-team-chat --config-dir ~/.spell
                  │ /web/artifacts/<id>/<agent>/<tool>/<file>?sig=…
                  ▼
 ┌─────────────────────────────────────┐
-│  @oh-my-pi/spell-server             │
+│  @spell/spell-server             │
 │  • WebSocket protocol (existing)    │
 │  • Session registry (~/.spell/...)  │
 │  • Artifact router + signed URLs    │
@@ -58,7 +58,7 @@ spell-team-chat --config-dir ~/.spell
 ## How the SPA is served
 
 `spell-team-chat` sets `SPELL_WEB_DIST=$package/dist` and execs
-`@oh-my-pi/spell-server`. The server's `resolveSpellWebDist()` honors that env
+`@spell/spell-server`. The server's `resolveSpellWebDist()` honors that env
 var ahead of the bundled React dashboard.
 
 ## File map

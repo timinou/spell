@@ -1,18 +1,18 @@
 {
 	"type": "module",
-	"name": "@oh-my-pi/pi-gateway",
+	"name": "@spell/pi-gateway",
 	"version": "0.1.0",
 	"description": "Local reverse proxy and service gateway for Spell",
-	"homepage": "https://github.com/can1357/oh-my-pi",
+	"homepage": "https://github.com/timinou/spell",
 	"author": "Can Boluk",
 	"license": "GPL-3.0-only",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/can1357/oh-my-pi.git",
+		"url": "git+https://github.com/timinou/spell.git",
 		"directory": "packages/gateway"
 	},
 	"bugs": {
-		"url": "https://github.com/can1357/oh-my-pi/issues"
+		"url": "https://github.com/timinou/spell/issues"
 	},
 	"keywords": [
 		"gateway",
@@ -28,7 +28,7 @@
 		"test": "bun test"
 	},
 	"dependencies": {
-		"@oh-my-pi/pi-utils": "workspace:*"
+		"@spell/pi-utils": "workspace:*"
 	},
 	"devDependencies": {
 		"@types/bun": "^1.3"

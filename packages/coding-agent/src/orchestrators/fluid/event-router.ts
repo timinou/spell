@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import { type EventBus, Priority } from "../../utils/event-bus";
 import { highlightFluidCode } from "./code-highlight";
 import { FLUID_EVENT_CHANNEL, type FluidEvent } from "./types";

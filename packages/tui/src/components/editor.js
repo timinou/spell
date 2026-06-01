@@ -1,4 +1,4 @@
-import { getProjectDir } from "@oh-my-pi/pi-utils";
+import { getProjectDir } from "@spell/pi-utils";
 import { BracketedPasteHandler } from "../bracketed-paste";
 import { getEditorKeybindings } from "../keybindings";
 import { extractPrintableText, matchesKey } from "../keys";
@@ -231,6 +231,7 @@ export class Editor {
     #state;
     #theme;
     #useTerminalCursor;
+    #parent;
     // Store last layout width for cursor navigation
     #lastLayoutWidth;
     #paddingXOverride;
@@ -266,6 +267,24 @@ export class Editor {
     #autocompleteTimeout;
     // Custom top border (for status line integration)
     #topBorderContent;
+    setParent(p) {
+        this.#parent = p;
+    }
+    /**
+     * Propagate a dirty-cache signal up the parent chain.
+     *
+     * Public surface so subclasses (e.g. `CustomEditor`) can mark dirty
+     * from their `handleInput` wrapper without reaching into the private
+     * `#parent` field. Without this method, BUG-391's `try/finally` wrapper
+     * threw `TypeError: this.markDirty is not a function` on every keystroke;
+     * the throw bubbled through the `process.stdin` 'data' listener and was
+     * re-emitted as a stdin `'error'` event, which the TUI's pty-loss
+     * detector (BUG-387) treated as terminal destruction and gracefully shut
+     * the session down on the user's very first input.
+     */
+    markDirty() {
+        this.#parent?.markDirty();
+    }
     constructor(theme) {
         this.#state = {
             lines: [""],
@@ -312,7 +331,21 @@ export class Editor {
      * Pass undefined to use the default plain border.
      */
     setTopBorder(content) {
+        if (this.#topBorderContent === content)
+            return;
         this.#topBorderContent = content;
+        this.#parent?.markDirty();
+    }
+    /**
+     * Update the editor border color and propagate dirty so the parent
+     * Container's cache (FEAT-762) is invalidated. Prefer this over direct
+     * `editor.borderColor = ...` assignment (which is silent).
+     */
+    setBorderColor(fn) {
+        if (this.borderColor === fn)
+            return;
+        this.borderColor = fn;
+        this.#parent?.markDirty();
     }
     /**
      * Get the available width for top border content given a total terminal width.
@@ -541,7 +574,7 @@ export class Editor {
                 }
                 else if (this.cursorOverride) {
                     // Cursor override replaces the normal end-of-text cursor glyph
-                    const overrideWidth = this.cursorOverrideWidth ?? 1;
+                    const overrideWidth = this.cursorOverrideWidth ?? visibleWidth(this.cursorOverride);
                     if (inlineHint) {
                         const availWidth = Math.max(0, lineContentWidth - displayWidth - overrideWidth);
                         const hintText = hintStyle(truncateToWidth(inlineHint, availWidth));
@@ -595,6 +628,17 @@ export class Editor {
         return result;
     }
     handleInput(data) {
+        try {
+            this.#handleInputInner(data);
+        }
+        finally {
+            // BUG-391: ensure dirty propagates regardless of which inner branch
+            // took an early return. The Container dirty-cache (FEAT-762) would
+            // otherwise serve stale lines (paste/cursor-jump/etc).
+            this.#parent?.markDirty();
+        }
+    }
+    #handleInputInner(data) {
         const kb = getEditorKeybindings();
         // Handle character jump mode (awaiting next character to jump to)
         if (this.#jumpMode !== null) {
@@ -900,6 +944,7 @@ export class Editor {
                 this.#insertCharacter(printableText);
             }
         }
+        // markDirty is now handled by the handleInput wrapper (BUG-391).
     }
     #layoutText(contentWidth) {
         const layoutLines = [];
@@ -1010,15 +1055,19 @@ export class Editor {
     }
     moveToLineStart() {
         this.#moveToLineStart();
+        this.#parent?.markDirty();
     }
     moveToLineEnd() {
         this.#moveToLineEnd();
+        this.#parent?.markDirty();
     }
     moveToMessageStart() {
         this.#moveToMessageStart();
+        this.#parent?.markDirty();
     }
     moveToMessageEnd() {
         this.#moveToMessageEnd();
+        this.#parent?.markDirty();
     }
     /**
      * Undo the last meaningful edit while ignoring transient text that is still present at the cursor.
@@ -1027,12 +1076,14 @@ export class Editor {
     undoPastTransientText(transientText) {
         if (transientText.length === 0) {
             this.#applyUndo();
+            this.#parent?.markDirty();
             return;
         }
         const currentLine = this.#state.lines[this.#state.cursorLine] || "";
         const transientStartCol = this.#state.cursorCol - transientText.length;
         if (transientStartCol < 0 || currentLine.slice(transientStartCol, this.#state.cursorCol) !== transientText) {
             this.#applyUndo();
+            this.#parent?.markDirty();
             return;
         }
         const beforeTransient = currentLine.slice(0, transientStartCol);
@@ -1054,14 +1105,17 @@ export class Editor {
             if (this.onChange) {
                 this.onChange(this.getText());
             }
+            this.#parent?.markDirty();
             return;
         }
         this.#applyUndo();
+        this.#parent?.markDirty();
     }
     setText(text) {
         this.#historyIndex = -1; // Exit history browsing mode
         this.#resetKillSequence();
         this.#setTextInternal(text);
+        this.#parent?.markDirty();
     }
     #exitHistoryForEditing() {
         if (this.#historyIndex === -1)
@@ -1079,6 +1133,7 @@ export class Editor {
         this.#resetKillSequence();
         this.#recordUndoState();
         const line = this.#state.lines[this.#state.cursorLine] || "";
+        this.#parent?.markDirty();
         const before = line.slice(0, this.#state.cursorCol);
         const after = line.slice(this.#state.cursorCol);
         this.#state.lines[this.#state.cursorLine] = before + text + after;
@@ -2009,6 +2064,7 @@ export class Editor {
             this.#updateAutocomplete();
             this.#autocompleteTimeout = undefined;
         }, 100);
+        this.#autocompleteTimeout.unref?.();
     }
     #clearAutocompleteTimeout() {
         if (this.#autocompleteTimeout) {

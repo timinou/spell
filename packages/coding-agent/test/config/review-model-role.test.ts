@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@spell/pi-ai";
 import { validateLoopPrerequisites } from "../../src/config/loop-prerequisites";
 import { MODEL_ROLE_IDS } from "../../src/config/model-registry";
 import { expandRoleAlias, resolveModelRoleValue } from "../../src/config/model-resolver";

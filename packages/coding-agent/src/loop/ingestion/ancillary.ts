@@ -1,4 +1,4 @@
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent } from "@spell/pi-utils";
 
 export async function findMissingGuidelineDomains(cwd: string, domains: string[]): Promise<string[]> {
 	const missing: string[] = [];

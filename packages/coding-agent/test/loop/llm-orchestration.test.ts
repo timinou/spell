@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@spell/pi-ai";
 import type { LoopRole } from "../../src/loop/contracts";
 import { PhaseCoordinator } from "../../src/loop/orchestration/phase-coordinator";
 import { LlmSwitcher } from "../../src/loop/orchestration/switcher";

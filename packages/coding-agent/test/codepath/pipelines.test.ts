@@ -1,10 +1,10 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { FindTool } from "@oh-my-pi/pi-coding-agent/tools/find";
-import { CodepathEditTool } from "@oh-my-pi/pi-coding-agent/tools/edit";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import { FindTool } from "@spell/pi-coding-agent/tools/find";
+import { CodepathEditTool } from "@spell/pi-coding-agent/tools/edit";
+import type { ToolSession } from "@spell/pi-coding-agent/tools";
 
 let tmpDir: string;
 let find: FindTool;

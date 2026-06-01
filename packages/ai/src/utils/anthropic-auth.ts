@@ -8,7 +8,7 @@
  *   4. API key credentials in ~/.spell/agent/agent.db
  *   5. Generic Anthropic fallback (ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL)
  */
-import { $env, getAgentDbPath } from "@oh-my-pi/pi-utils";
+import { $env, getAgentDbPath } from "@spell/pi-utils";
 import { type AuthCredential, AuthCredentialStore } from "../auth-storage";
 import { buildAnthropicHeaders as buildProviderAnthropicHeaders } from "../providers/anthropic";
 import { getEnvApiKey } from "../stream";

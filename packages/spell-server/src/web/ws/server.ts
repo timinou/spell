@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import type { Server, WebSocketHandler } from "bun";
 import type { SpellServerConfig } from "../../config/types";
 import { verifyWebToken } from "../../http/auth";

@@ -1,10 +1,10 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { ImageProtocol, TERMINAL, Text } from "@oh-my-pi/pi-tui";
-import { $env, getProjectDir, isEnoent } from "@oh-my-pi/pi-utils";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@spell/pi-agent-core";
+import type { Component } from "@spell/pi-tui";
+import { ImageProtocol, TERMINAL, Text } from "@spell/pi-tui";
+import { $env, getProjectDir, isEnoent } from "@spell/pi-utils";
 import { Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import { type BashResult, executeBash } from "../exec/bash-executor";
@@ -229,7 +229,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	readonly label = "Bash";
 	readonly description: string;
 	readonly parameters: BashToolSchema;
-	readonly concurrency = "exclusive";
+
 	readonly strict = true;
 	readonly #asyncEnabled: boolean;
 
@@ -485,7 +485,9 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				})
 			: await executeBash(command, {
 					cwd: commandCwd,
-					sessionKey: this.session.getSessionId?.() ?? undefined,
+					// No sessionKey: the bash tool runs each call in a fresh ephemeral
+					// shell so a parallel batch is isolated (cwd cannot leak between
+					// siblings) and concurrent (no shared-Shell mutex serialising it).
 					timeout: timeoutMs,
 					signal,
 					env: resolvedEnv,

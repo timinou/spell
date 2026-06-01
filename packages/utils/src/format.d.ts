@@ -16,7 +16,7 @@ export declare function formatNumber(n: number): string;
 export declare function formatBytes(bytes: number): string;
 /**
  * Truncate a string to maxLen characters, appending an ellipsis if truncated.
- * For display-width-aware truncation (terminals), use truncateToWidth from @oh-my-pi/pi-tui.
+ * For display-width-aware truncation (terminals), use truncateToWidth from @spell/pi-tui.
  */
 export declare function truncate(str: string, maxLen: number, ellipsis?: string): string;
 /**

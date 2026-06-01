@@ -1,5 +1,5 @@
-import { APP_NAME } from "@oh-my-pi/pi-utils";
-import { Args, Command } from "@oh-my-pi/pi-utils/cli";
+import { APP_NAME } from "@spell/pi-utils";
+import { Args, Command } from "@spell/pi-utils/cli";
 import { runDomainEntryCommand } from "./domain-entry";
 import { baseLaunchFlags, launchMessageArgs } from "./launch-common";
 

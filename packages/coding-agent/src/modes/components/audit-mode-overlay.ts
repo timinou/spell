@@ -1,5 +1,5 @@
-import type { Component } from "@oh-my-pi/pi-tui";
-import { visibleWidth } from "@oh-my-pi/pi-tui";
+import type { Component } from "@spell/pi-tui";
+import { visibleWidth } from "@spell/pi-tui";
 import { theme } from "../theme/theme";
 
 /**

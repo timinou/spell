@@ -1,6 +1,6 @@
 import * as nodePath from "node:path";
-import * as piNatives from "@oh-my-pi/pi-natives";
-import { executeCodePath } from "@oh-my-pi/pi-natives";
+import * as piNatives from "@spell/pi-natives";
+import { executeCodePath } from "@spell/pi-natives";
 import type { SessionIdSource } from "../session/edit-coordinator";
 import { sessionContextOpts } from "./codepath-session";
 

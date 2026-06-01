@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { truncateForPersistence } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { truncateForPersistence } from "@spell/pi-coding-agent/session/session-manager";
 
 /**
  * Minimal BlobStore stub — returns a deterministic blob:sha256: ref for any input.

@@ -3,18 +3,18 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const realNatives = await import("@oh-my-pi/pi-natives");
+const realNatives = await import("@spell/pi-natives");
 const realExecuteOrg = realNatives.executeOrg;
 // Default to delegating to the real binding so sibling test files (running in
 // the same bun:test process) keep working when this module's mock leaks.
 const mockExecuteOrg = mock((opts: Parameters<typeof realExecuteOrg>[0]) => realExecuteOrg(opts));
-mock.module("@oh-my-pi/pi-natives", () => ({
+mock.module("@spell/pi-natives", () => ({
 	...realNatives,
 	executeOrg: mockExecuteOrg,
 }));
 
 const { dispatchMemoryAction, formatMemoryResult, MemoryTool, memorySchema } = await import("../../src/tools/memory");
-const { Settings } = await import("@oh-my-pi/pi-coding-agent/config/settings");
+const { Settings } = await import("@spell/pi-coding-agent/config/settings");
 
 import { Value } from "@sinclair/typebox/value";
 import type { ToolSession } from "../../src/tools";

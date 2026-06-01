@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@spell/pi-utils";
 import Handlebars from "handlebars";
 import type { WebIdentity } from "../../http/types";
 import type { AutonomyManifest } from "../../manifest/types";

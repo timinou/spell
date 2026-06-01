@@ -17,7 +17,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { executeOrg } from "@oh-my-pi/pi-natives";
+import { executeOrg } from "@spell/pi-natives";
 
 import { MemoryStatusController } from "../../../src/modes/controllers/memory-status-controller";
 import type { MemoryProgressSnapshot } from "../../../src/tools/memory";

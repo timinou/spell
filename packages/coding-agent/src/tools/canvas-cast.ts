@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@spell/pi-agent-core";
 import { type Static, Type } from "@sinclair/typebox";
 import canvasCastDescription from "../prompts/tools/canvas-cast.md" with { type: "text" };
 import { getSpellcastingServerUrl } from "../spellcast/config";

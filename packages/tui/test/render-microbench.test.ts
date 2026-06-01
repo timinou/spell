@@ -4,7 +4,7 @@
  * when run with PI_BENCH=1, and assert structural invariants otherwise.
  */
 import { describe, expect, it } from "bun:test";
-import { Container, Editor, Markdown, TUI } from "@oh-my-pi/pi-tui";
+import { Container, Editor, Markdown, TUI } from "@spell/pi-tui";
 import { defaultEditorTheme, defaultMarkdownTheme } from "./test-themes";
 import { VirtualTerminal } from "./virtual-terminal";
 

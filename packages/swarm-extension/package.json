@@ -1,18 +1,18 @@
 {
 	"type": "module",
-	"name": "@oh-my-pi/swarm-extension",
+	"name": "@spell/swarm-extension",
 	"version": "13.12.8",
 	"description": "Swarm orchestration extension for spell",
-	"homepage": "https://github.com/can1357/oh-my-pi",
+	"homepage": "https://github.com/timinou/spell",
 	"author": "Derek Rynd",
 	"license": "GPL-3.0-only",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/can1357/oh-my-pi.git",
+		"url": "git+https://github.com/timinou/spell.git",
 		"directory": "packages/swarm-extension"
 	},
 	"bugs": {
-		"url": "https://github.com/can1357/oh-my-pi/issues"
+		"url": "https://github.com/timinou/spell/issues"
 	},
 	"keywords": [
 		"swarm",
@@ -27,13 +27,14 @@
 		"check": "tsgo -p tsconfig.json"
 	},
 	"dependencies": {
-		"@bgotink/kdl": "^0.4"
+		"@bgotink/kdl": "^0.4",
+		"@spell/pi-utils": "workspace:*"
 	},
 	"devDependencies": {
 		"@types/bun": "^1.3"
 	},
 	"peerDependencies": {
-		"@oh-my-pi/pi-coding-agent": "^13"
+		"@spell/pi-coding-agent": "workspace:*"
 	},
 	"engines": {
 		"bun": ">=1.3.7"

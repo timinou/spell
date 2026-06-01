@@ -6,7 +6,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@spell/pi-utils";
 import { isValidAlias, PATHS, type ServiceConfig, type ServiceEntry, type ServiceStatus } from "./protocol";
 
 export interface RegistryFile {

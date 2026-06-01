@@ -1,5 +1,5 @@
-import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Api, Model } from "@oh-my-pi/pi-ai";
+import type { ThinkingLevel } from "@spell/pi-agent-core";
+import type { Api, Model } from "@spell/pi-ai";
 import { MODEL_ROLE_IDS } from "../config/model-registry";
 import { parseModelPattern, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";

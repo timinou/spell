@@ -1,4 +1,4 @@
-import { type Component, Container, matchesKey, Spacer, Text, truncateToWidth } from "@oh-my-pi/pi-tui";
+import { type Component, Container, matchesKey, Spacer, Text, truncateToWidth } from "@spell/pi-tui";
 import { theme } from "../../modes/theme/theme";
 import { DynamicBorder } from "./dynamic-border";
 

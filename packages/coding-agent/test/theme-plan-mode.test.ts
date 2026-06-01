@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getAvailableThemes, getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { getAvailableThemes, getThemeByName } from "@spell/pi-coding-agent/modes/theme/theme";
 
 const themeDir = path.resolve(fileURLToPath(import.meta.url), "../../src/modes/theme");
 

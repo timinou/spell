@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import type { AgentEvent } from "@oh-my-pi/pi-agent-core";
-import type { TUI } from "@oh-my-pi/pi-tui";
+import type { AgentEvent } from "@spell/pi-agent-core";
+import type { TUI } from "@spell/pi-tui";
 import {
 	ASYNC_JOB_PROGRESS_CHANNEL,
 	type AsyncJob,

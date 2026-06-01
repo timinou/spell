@@ -15,10 +15,10 @@
  *   - Questions may time out and auto-select the recommended option (configurable, disabled in plan mode)
  */
 
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { TERMINAL, Text } from "@oh-my-pi/pi-tui";
-import { untilAborted } from "@oh-my-pi/pi-utils";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@spell/pi-agent-core";
+import type { Component } from "@spell/pi-tui";
+import { TERMINAL, Text } from "@spell/pi-tui";
+import { untilAborted } from "@spell/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -385,6 +385,10 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	readonly description: string;
 	readonly parameters = askSchema;
 	readonly strict = true;
+	// Blocks on user input; must not race with sibling tool calls competing for
+	// the same render / focus surface in the live TUI. Sequential mode guarantees
+	// the operator sees and answers the ask before any other call in the batch.
+	readonly executionMode = "sequential" as const;
 
 	constructor(private readonly session: ToolSession) {
 		this.description = renderPromptTemplate(askDescription);

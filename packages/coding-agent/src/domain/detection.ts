@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { parse } from "@bgotink/kdl";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@spell/pi-utils";
 
 import { parseSpellKdl } from "../config/spell-kdl";
 

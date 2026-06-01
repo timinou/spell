@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
-import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
-import { setAnthropicStreamIdleTimeoutOverrideMs } from "@oh-my-pi/pi-ai";
+import { INTENT_FIELD } from "@spell/pi-agent-core";
+import { setAnthropicStreamIdleTimeoutOverrideMs } from "@spell/pi-ai";
 import {
 	EventController,
 	STREAM_IDLE_STATUS_GRACE_MS,

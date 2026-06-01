@@ -12,8 +12,8 @@ import {
 	buildAnthropicUrl,
 	findAnthropicAuth,
 	stripClaudeToolPrefix,
-} from "@oh-my-pi/pi-ai";
-import { $env } from "@oh-my-pi/pi-utils";
+} from "@spell/pi-ai";
+import { $env } from "@spell/pi-utils";
 import type {
 	AnthropicApiResponse,
 	AnthropicCitation,

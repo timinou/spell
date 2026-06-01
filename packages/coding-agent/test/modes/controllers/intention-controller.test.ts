@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AgentStatus, AgentStatusContext } from "@oh-my-pi/pi-desktop-common";
+import type { AgentStatus, AgentStatusContext } from "@spell/pi-desktop-common";
 import { IntentionController, type IntentionControllerDeps } from "../../../src/modes/controllers/intention-controller";
 import {
 	buildIntentionSummaryContent,

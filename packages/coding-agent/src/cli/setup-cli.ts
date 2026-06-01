@@ -5,7 +5,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { APP_NAME } from "@oh-my-pi/pi-utils";
+import { APP_NAME } from "@spell/pi-utils";
 import chalk from "chalk";
 import spellHammerspoonLua from "../../../macos/hammerspoon/spell.lua" with { type: "text" };
 import { theme } from "../modes/theme/theme";

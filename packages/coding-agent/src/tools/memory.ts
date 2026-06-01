@@ -14,11 +14,11 @@ import type {
 	AgentToolResult,
 	AgentToolUpdateCallback,
 	RenderResultOptions,
-} from "@oh-my-pi/pi-agent-core";
-import { executeOrg } from "@oh-my-pi/pi-natives";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { Text } from "@oh-my-pi/pi-tui";
-import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
+} from "@spell/pi-agent-core";
+import { executeOrg } from "@spell/pi-natives";
+import type { Component } from "@spell/pi-tui";
+import { Text } from "@spell/pi-tui";
+import { getProjectDir, logger } from "@spell/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import type { Theme } from "../modes/theme/theme";
 import memoryDescription from "../prompts/tools/memory.md" with { type: "text" };
