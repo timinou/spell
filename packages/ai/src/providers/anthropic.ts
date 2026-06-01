@@ -167,9 +167,8 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 		"X-App": "cli",
 	};
 
-	// Localhost proxies: send X-Api-Key for OAuth passthrough (proxy detects Claude CLI UA)
-	// OAuth tokens to non-Anthropic URLs get Bearer; standard gets x-api-key
-	if (oauthToken && options.baseUrl && !isAnthropicApiBaseUrl(options.baseUrl)) {
+	// OAuth tokens and non-Anthropic bases use Bearer auth; standard Anthropic API uses x-api-key
+	if (oauthToken || !isAnthropicApiBaseUrl(options.baseUrl)) {
 		headers.Authorization = `Bearer ${options.apiKey}`;
 	} else {
 		headers["X-Api-Key"] = options.apiKey;

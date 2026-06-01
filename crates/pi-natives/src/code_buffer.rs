@@ -920,6 +920,23 @@ pub(crate) fn single_action(
 					proof:  None,
 					action: action_kind.to_string(),
 				},
+				(Some(symbol), Some("sig")) => {
+					let body_start = symbol.body_start_byte.ok_or_else(|| {
+						CodeEngineError::Edit(format!(
+							"Symbol '{}' (kind: {}) has no body; cannot scope to signature",
+							symbol.name, symbol.kind
+						))
+					})?;
+					PreparedEditOperation {
+						edits:  vec![TextEdit {
+							start_byte:   symbol.start_byte,
+							old_end_byte: body_start,
+							new_text:     content.to_string(),
+						}],
+						proof:  None,
+						action: action_kind.to_string(),
+					}
+				},
 				(Some(symbol), _) => PreparedEditOperation {
 					edits:  vec![TextEdit {
 						start_byte:   symbol.start_byte,
@@ -929,10 +946,10 @@ pub(crate) fn single_action(
 					proof:  None,
 					action: action_kind.to_string(),
 				},
-				(None, Some("body")) => {
-					return Err(CodeEngineError::Edit(
-						"write scope 'body' requires a declaration targetId, not a file targetId".into(),
-					));
+				(None, Some(scope @ ("body" | "sig"))) => {
+					return Err(CodeEngineError::Edit(format!(
+						"write scope '{scope}' requires a declaration targetId, not a file targetId"
+					)));
 				},
 				(None, _) => PreparedEditOperation {
 					edits:  vec![TextEdit {

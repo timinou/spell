@@ -230,6 +230,34 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 
   			const action = op.action;
   			const idempotent = op.idempotent ?? params.idempotent ?? false;
+  			const opKindPre = (action as any).kind as string | undefined;
+
+  			// BUG-403: ops that mutate an existing file must fail loud and early
+  			// when the target is missing, rather than degrading into a confusing
+  			// downstream diagnostic (e.g. "scope is empty — buffer is 0 bytes").
+  			// Anchorless fileAppend/filePrepend create-on-absence and are handled
+  			// below; fileCreate is excluded from MUTATING_KINDS.
+  			const isAnchorlessCreate =
+  				(opKindPre === "fileAppend" || opKindPre === "filePrepend") &&
+  				!(action as any).pos &&
+  				!(action as any).end;
+  			// targetPath may carry a `::Symbol` query and/or `#body` qualifier;
+  			// existence is a property of the file part only.
+  			const filePart = targetPath.split("::")[0]!.split("#")[0]!;
+  			if (isMutatingKind(opKindPre) && !isAnchorlessCreate && !(await fs.exists(filePart))) {
+  				const result = toolResult<EditToolResultDetails>({
+  					target: op.target,
+  					action: opKindPre,
+  					error: "file_not_found",
+  				})
+  					.text(`file not found: ${op.target} (create it before editing)`)
+  					.done();
+  				result.isError = true;
+  				results.push(result);
+  				failedOpIndex = i + 1;
+  				for (let j = i + 1; j < params.operations.length; j++) skippedOpIndices.push(j + 1);
+  				break;
+  			}
 
   			let result: AgentToolResult;
   			// Route by Op kind

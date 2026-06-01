@@ -431,6 +431,10 @@
 			"types": "./src/tools/index.ts",
 			"import": "./src/tools/index.ts"
 		},
+		"./tools/autonomy-state": {
+			"types": "./src/tools/autonomy-state/index.ts",
+			"import": "./src/tools/autonomy-state/index.ts"
+		},
 		"./tools/*": {
 			"types": "./src/tools/*.ts",
 			"import": "./src/tools/*.ts"
