@@ -31,7 +31,7 @@ P0' LSP completeness in pi-code-graph ← independent prereq, gates P5's lsp too
                                          ▼
                                    P5 (tool surface → NIF) ──► P6 (subagents on BEAM)
                                          ▲
-        P0' (pi-code-graph LSP completeness) ──┘  gates ONLY the lsp tool slice of P5
+        P0' (MERGE fup-095-nuke-lsp-tool) ─────┘  gates ONLY the lsp tool slice of P5
 ```
 
 Critical path to the maximalist goal ("remove ALL task execution"):
@@ -86,17 +86,22 @@ Proves     clean-core + safe-boundary + concurrency hypotheses that ALL of P5/P6
 Exit       3 gates green + audit says core is clean (or lists exactly what to extract)
 ```
 
-## P0' — pi-code-graph LSP completeness (independent prereq)
+## P0' — MERGE `fup-095-nuke-lsp-tool` (independent prereq, ALREADY BUILT)
 
-Today the rich `lsp` tool (rename, code_actions, implementation) still runs through
-TS clients that spawn servers (5,687 LOC, live `Bun.spawn`). Hover/diag/def/ref are
-already Rust-owned. Before the `lsp` tool can migrate (P5), its rich actions must
-move into pi-code-graph.
+The work is DONE on branch `fup-095-nuke-lsp-tool` (FUP-095, STATE: DONE). It
+**deletes the entire TS `lsp/` tree** (~9,000 LOC: `index.ts` −1672, `client.ts`
+−876, `utils.ts` −807, `render.ts` −679, `config.ts`, `defaults.json`, all clients)
+and replaces it with the Rust `SemanticBackend` wired into find/edit dispatch
+(`semantic_dispatch.rs`, `semantic_cache.rs`, `semantic_live_e2e.rs`). The `lsp`
+tool is NUKED, not migrated — semantics already flow through find/edit qualifiers
+(`#hover`, `#diagnostics`, def→/ref→). So there is NO pi-code-graph build work
+remaining for this prereq; it is purely a branch merge.
 
 ```
-Value      independent of BEAM — consolidates semantic ownership in Rust regardless
-Risk       medium — refactor of a live tool; needs parity tests vs current TS behavior
+Value      consolidates ALL semantic ownership in Rust; removes 9k LOC of TS
+Risk       low — work complete + tested on branch; risk is merge/rebase only
 Gates      ONLY the lsp slice of P5; everything else in P5 proceeds without it
+Action     MERGE fup-095-nuke-lsp-tool (track FUP-102 tsgo gate as the open follow-up)
 ```
 
 ## P4 — BEAM orchestrator: goals lane (thin OTP, TS still executes)
@@ -123,7 +128,7 @@ With P3 green, migrate tools to their BEAM homes (per `01-vision.md` table):
 pure-kernel (find/edit/parse/render/code-graph) → rustler NIF over shared per-node kernel
 bash                                             → BEAM Port
 network (fetch/web_search)                       → Finch/Req
-lsp (rich)                                       → Rust concern via pi-code-graph (needs P0')
+lsp (rich)                                       → ALREADY find/edit semantic surface (post fup-095 merge)
 compute/policy                                   → PtcRunner (already native from P1)
 ```
 
@@ -143,9 +148,10 @@ heartbeat) are deleted; OTP supervision + GenServer state replace them.
 ```
 Value      "remove ALL task execution from this codebase" — by RELOCATING the seam
            (TS↔Rust → BEAM↔Rust), not by deleting capability
-Nuance     short in-process subagents only win if NIF kernel-sharing beats the BEAM
-           process cost; measure before forcing 100%. The vision permits "all" because
-           rustler restores kernel-sharing per node — but verify per workload.
+Win        "all" is justified independent of per-workload NIF benchmarks: offloading
+           ALL task-concurrency management (the schedulers/DAG/retry/backoff/heartbeat)
+           to OTP supervision is itself the win. rustler kernel-sharing per node is
+           additive gravy, not the gating justification.
 Risk       high — concurrency at scale; lock-liveness under many agents per node
 Exit       a multi-subagent task runs entirely under OTP; TS schedulers removed;
            distribution (multi-node) demonstrable as the capstone
@@ -159,7 +165,7 @@ Exit       a multi-subagent task runs entirely under OTP; TS schedulers removed;
 P1  gated by: nothing                         → START NOW (V1)
 P2  gated by: nothing                         → parallel with P1
 P3  gated by: nothing (needs kernel access)   → parallel; derisks P5/P6
-P0' gated by: nothing                         → parallel; gates only P5.lsp
+P0' gated by: nothing (work DONE on branch)   → MERGE early; gates only P5.lsp
 P4  gated by: P2 (headless seam)              → after P2
 P5  gated by: P3 GREEN (+ P0' for lsp slice)  → after P3
 P6  gated by: P5                              → last
@@ -175,8 +181,8 @@ NIF blast radius       a real regression in failure semantics (node-wide vs proc
 lock liveness          new responsibility BEAM must own; P3 gate #3
 scope creep            P5/P6 are quarters of work; P1 must deliver value ALONE so the
                        effort is justified incrementally, not all-or-nothing
-LSP drift              P0' is easy to forget; it silently blocks a P5 slice — tracked
-                       as an independent prereq so it can start early
+LSP drift              none — fup-095 already replaced the lsp tool with find/edit
+                       semantics; prereq is a MERGE, tracked so it lands early
 ```
 
 ## Recommended immediate next actions

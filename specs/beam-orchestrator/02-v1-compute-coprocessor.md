@@ -153,7 +153,8 @@ OUT · NO OTP supervision tree / orchestrator (that is WS-B)
     · NO rustler NIFs (bridge uses existing executors; NIF is WS-B Phase 2)
     · NO subagents-as-BEAM-processes
     · NO dispatch-policy-as-Lisp wired to a live scheduler (design only, in vision)
-    · NO LSP migration (gated on pi-code-graph completeness, see roadmap)
+    · NO LSP migration needed — fup-095 already replaced the lsp tool with the
+      Rust find/edit semantic surface; prereq is a branch merge, not new work
 ```
 
 ## Acceptance (definition of done for V1)
