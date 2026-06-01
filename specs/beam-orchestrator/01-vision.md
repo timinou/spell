@@ -3,7 +3,8 @@
 **Date**: 2026-05-30
 **Status**: Brainstorm → vision. Not a commitment; a destination to reason toward.
 **Companions**: `00-evidence-bash-usage.md` (why), `02-v1-compute-coprocessor.md`
-(what to build first), `03-roadmap.md` (how to get from here to there).
+(what to build first), `03-roadmap.md` (how to get from here to there),
+`04-where-ptcrunner-shines.md` (worked example programs).
 
 ---
 
@@ -97,11 +98,12 @@ Tool homes after the move (most tools get a *better* home than TS):
 ```
 pure-kernel   find · edit · parse · render · code-graph   → rustler NIF over shared kernel
 process-spawn bash                                         → BEAM Port (better supervision than child_process)
-external-proc lsp (rich actions)                           → stays Rust concern (pi-code-graph), NIF marshals
-                                                             ⚠ PREREQUISITE: finish moving rename/code_actions/
-                                                               implementation into pi-code-graph; today the rich
-                                                               `lsp` TOOL still runs via TS clients (5,687 LOC,
-                                                               live Bun.spawn). Hover/diag/def/ref already Rust.
+external-proc lsp (rich actions)                           → ALREADY a Rust concern. FUP-095 (branch
+                                                             `fup-095-nuke-lsp-tool`, STATE: DONE) DELETES the
+                                                             entire TS lsp/ tree (~9,000 LOC) and replaces it with
+                                                             the Rust SemanticBackend wired into find/edit. The
+                                                             `lsp` tool is NUKED, not migrated. Prereq for this
+                                                             slice = MERGE that branch, no new work.
 network       fetch · web_search                           → Finch/Req in Elixir (trivial, better backpressure)
 llm-backed    task · oracle · plan (subagents)             → these BECOME the supervised processes, not tools
 compute       org/memory aggregation, dispatch policy      → PtcRunner (WS-A) — already BEAM-native
@@ -163,6 +165,9 @@ clean-core + safe-boundary + concurrency hypotheses that the whole of WS-B rests
   to us is the *substrate pattern* (OTP supervisor driving headless agents over a
   protocol), not its application. Spell already has the headless surface
   (`coding-agent/src/modes/rpc/`, JSON-lines stdin/stdout — the app-server analog).
+- Subscriptions (knowledge push-frames, task EventBus) are consumed at the Elixir
+  HOST boundary and snapshotted into PtcRunner `context`. PTC-Lisp programs stay
+  synchronous/sandboxed — they never subscribe. This is by design, not a gap.
 - Not running coding agents *inside* PtcRunner. PTC-Lisp has no fs/net/shell by
   construction; it is a compute language, never an agent host.
 - Not writing core scheduling in Lisp. Infra stays typed Elixir.
