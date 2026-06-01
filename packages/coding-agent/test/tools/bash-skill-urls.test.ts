@@ -155,12 +155,14 @@ describe("expandInternalUrls", () => {
 	// removed — all schemes except artifact are kernel-owned and pass through
 	// to brush WordPreprocessor. Per-scheme tests cover the contract.
 
-	it("expands quoted non-skill URLs and shell-escapes quotes in paths", async () => {
+	it("passes artifact:// URLs through unchanged (BUG-396: kernel-owned)", async () => {
 		const router = createInternalRouter({
 			"artifact://7": { sourcePath: "/tmp/artifacts/with'quote.log" },
 		});
+		// artifact:// is kernel-owned: TS pre-pass is a no-op; brush in the kernel
+		// resolves the URL via SchemeRegistry just before running. Router is ignored.
 		await expect(expandInternalUrls('cat "artifact://7"', { skills: [], internalRouter: router })).resolves.toBe(
-			`cat ${shellEscape("/tmp/artifacts/with'quote.log")}`,
+			`cat ${shellEscape("artifact://7")}`,
 		);
 	});
 
@@ -194,21 +196,21 @@ describe("expandInternalUrls", () => {
 		);
 	});
 
-	it("throws when non-skill URL is used without an internal router", async () => {
-		await expect(expandInternalUrls("cat artifact://1", { skills: [] })).rejects.toThrow(
-			"Cannot resolve artifact:// URL in bash command",
+	it("throws when JS-routed URL is used without an internal router", async () => {
+		await expect(expandInternalUrls("cat plan://1", { skills: [] })).rejects.toThrow(
+			"Cannot resolve plan:// URL in bash command",
 		);
 	});
 
 
 	it("surfaces resolver errors with actionable context (for JS-routed schemes)", async () => {
-		// PLAN-310: memory:// is kernel-owned and passes through; use a still-JS-routed
-		// scheme (artifact://) to validate error surfacing.
+		// PLAN-310 / BUG-396: artifact:// is now kernel-owned; use plan:// as the
+		// still-JS-routed scheme to validate error surfacing.
 		const router = createInternalRouter({
-			"artifact://missing": { error: "Artifact not found" },
+			"plan://missing": { error: "Artifact not found" },
 		});
 		await expect(
-			expandInternalUrls("cat artifact://missing", { skills: [], internalRouter: router }),
-		).rejects.toThrow("Failed to resolve artifact:// URL in bash command");
+			expandInternalUrls("cat plan://missing", { skills: [], internalRouter: router }),
+		).rejects.toThrow("Failed to resolve plan:// URL in bash command");
 	});
 });

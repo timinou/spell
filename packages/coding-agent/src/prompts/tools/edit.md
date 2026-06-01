@@ -15,13 +15,22 @@ diagnostics, etc.), not a code region. The kernel rejects them with
 editing a scope) or `find { target: "…" }` (for reading the view).
 Query `find` for inspection; use `edit` only with `#body` / `#sig`.
 
+**Body/sig scope is delimiter-inclusive.** `#body` (or `{scope:"body"}`)
+replaces the *entire* body span a `find …#body` read returns, including the
+block delimiters: braces for C-likes (`{ … }`), `do … end` for Elixir. Your
+`content` must therefore include those delimiters — a braceless body is
+rejected (and reverted) by the post-edit parse gate, never written. `#sig`
+replaces the signature up to (not including) the body. Both accept either the
+`foo#body` qualifier or the `{scope:"body"|"sig"}` action field; they are
+equivalent.
+
 ## Cheat Sheet
 
 | want | target | action |
 |------|--------|--------|
 | rewrite whole function | `"file.ts :: foo"` | `{ kind: "replace", content: "function foo() { … }" }` |
-| change function body | `"file.ts :: foo#body"` | `{ kind: "replace", content: "return 42;" }` |
-| change signature only | `"file.ts :: foo#sig"` | `{ kind: "replace", content: "function foo(x: number)" }` |
+| change function body | `"file.ts :: foo#body"` | `{ kind: "replace", content: "{ return 42; }" }` |
+| change signature only | `"file.ts :: foo#sig"` | `{ kind: "replace", content: "function foo(x: number) " }` |
 | rename everywhere | `"**/*.ts :: oldName"` | `{ kind: "rename", content: "newName" }` |
 | wrap in try/catch | `"file.ts :: risky"` | `{ kind: "replace", content: "try { $BODY } catch(e) { throw new SafeError(e); }" }` |
 | add annotation above | `"file.ts :: func"` | `{ kind: "replace", content: "@deprecated\n$DECL" }` |

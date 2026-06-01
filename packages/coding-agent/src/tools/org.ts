@@ -27,7 +27,7 @@ import { replaceTabs, shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "./r
 const orgSchema = Type.Object({
 	command: Type.String({
 		description:
-			"Subcommand: init | create | query | get | update | delete | note | set | validate | validate-plan | dashboard | wave | graph | archive",
+			"Subcommand: init | create | query | get | update | delete | note | set | validate | validate-plan | dashboard | wave | graph | archive | suboutline-add",
 	}),
 	title: Type.Optional(Type.String({ description: "Item title (create, or update to rename)" })),
 	category: Type.Optional(
@@ -73,6 +73,9 @@ const orgSchema = Type.Object({
 	note: Type.Optional(Type.String({ description: "Dated note text (note cmd, or appended on state change)" })),
 	property: Type.Optional(Type.String({ description: "Property name (set)" })),
 	value: Type.Optional(Type.String({ description: "Property value (set)" })),
+	parentId: Type.Optional(Type.String({ description: "Parent CUSTOM_ID for suboutline-add" })),
+	slug: Type.Optional(Type.String({ description: "Stable slug for the sub-heading" })),
+	depends: Type.Optional(Type.Array(Type.String(), { description: "Sub-outline dependency IDs" })),
 });
 
 type OrgParams = Static<typeof orgSchema>;
@@ -250,6 +253,11 @@ function buildOrgCallPreview(args: Record<string, unknown>): OrgCallPreview {
 		case "init":
 			pushMeta(meta, "category", args.category, TRUNCATE_LENGTHS.SHORT);
 			break;
+		case "suboutline-add":
+			pushMeta(meta, "parentId", args.parentId, TRUNCATE_LENGTHS.SHORT);
+			pushMeta(meta, "slug", args.slug, TRUNCATE_LENGTHS.SHORT);
+			pushMeta(meta, "title", args.title);
+			break;
 		case "dashboard":
 		case "wave":
 		case "graph":
@@ -408,6 +416,7 @@ export function formatOrgResult(result: unknown, params?: Pick<OrgParams, "comma
 		if (typeof record.state === "string") parts.push(`state: ${record.state}`);
 		if (typeof record.category === "string") parts.push(`category: ${record.category}`);
 		if (typeof record.bodyLength === "number") parts.push(`body_length: ${record.bodyLength}`);
+		if (typeof record.suboutlineId === "string") parts.push(`suboutline_id: ${record.suboutlineId}`);
 		return parts.join("\n");
 	}
 	if (record && "error" in record)

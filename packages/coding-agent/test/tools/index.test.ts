@@ -228,7 +228,7 @@ describe("TOOL_TIERS", () => {
 	});
 
 	it("assigns core tier to essential tools", () => {
-		const coreTier: string[] = ["bash", "lsp", "task", "ask"];
+  const coreTier: string[] = ["bash", "task", "ask"]; // lsp demoted in PLAN-318 W6
 		for (const name of coreTier) {
 			expect(getToolTier(name)).toBe("core");
 		}
@@ -241,8 +241,8 @@ describe("TOOL_TIERS", () => {
 	});
 
 	it("assigns specialized tier to deferred tools", () => {
-		// gateway/loop_* dropped in PLAN-306 W11.4.d (BUILTIN_TOOLS commit 2f6958d7a)
-		const specialized: string[] = ["canvas", "browser", "calc"];
+  // gateway/loop_* dropped in PLAN-306 W11.4.d (BUILTIN_TOOLS commit 2f6958d7a)
+  		const specialized: string[] = ["canvas", "browser", "calc", "lsp"]; // lsp demoted in PLAN-318 W6
 		for (const name of specialized) {
 			expect(getToolTier(name)).toBe("specialized");
 		}
