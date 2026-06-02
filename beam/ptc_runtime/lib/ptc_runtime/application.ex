@@ -35,7 +35,23 @@ defmodule PtcRuntime.Application do
 
   # In :test we do not auto-start the stdio peer (it would consume the test
   # runner's stdio). Tests drive Peer with an injected IO transport.
+  #
+  # Resource caps (PLAN-323) are tunable via env so an operator can tighten the
+  # runtime without a rebuild; absent/invalid → the Peer's defaults (concurrent
+  # ceiling 8; worker caps fall through to ptc_runner's own defaults).
   defp peer_opts do
     [autostart: @autostart]
+    |> put_env_int(:max_concurrent_executes, "PTC_MAX_CONCURRENT_EXECUTES")
+    |> put_env_int(:max_parallel_workers, "PTC_MAX_PARALLEL_WORKERS")
+    |> put_env_int(:worker_max_heap, "PTC_WORKER_MAX_HEAP")
+  end
+
+  defp put_env_int(opts, key, env_name) do
+    with value when is_binary(value) <- System.get_env(env_name),
+         {n, ""} when n > 0 <- Integer.parse(value) do
+      Keyword.put(opts, key, n)
+    else
+      _ -> opts
+    end
   end
 end

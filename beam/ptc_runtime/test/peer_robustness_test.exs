@@ -140,4 +140,93 @@ defmodule PtcRuntime.PeerRobustnessTest do
       assert Process.alive?(peer)
     end
   end
+
+  describe "PLAN-323: per-execute resource caps thread into ptc_runner" do
+    test "a configured worker_max_heap caps each pmap worker's heap" do
+      # With a tiny worker heap, a pmap that allocates must fail memory_exceeded
+      # rather than run unbounded — proving the cap reaches PtcRunner.Lisp.run.
+      peer = H.start(self(), worker_max_heap: 500)
+      init!(peer)
+
+      H.send_frame(peer, %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "execute",
+        "params" => %{"program" => ~S|(pmap (fn [x] (* x x)) [1 2 3 4])|, "timeout_ms" => 2_000}
+      })
+
+      assert %{"id" => 1, "error" => %{"data" => %{"reason" => "memory_exceeded"}}} =
+               H.recv(3_000)
+
+      assert Process.alive?(peer)
+    end
+
+    test "a configured max_parallel_workers caps aggregate parallel workers" do
+      # max_parallel_workers=1 lets a flat pmap run but fails NESTED pmap with
+      # parallel_capacity_exceeded — proving the cap reaches the run.
+      peer = H.start(self(), max_parallel_workers: 1)
+      init!(peer)
+
+      H.send_frame(peer, %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "execute",
+        "params" => %{
+          "program" => ~S|(pmap (fn [x] (pmap (fn [y] y) [x x])) [1 2 3])|,
+          "timeout_ms" => 2_000
+        }
+      })
+
+      assert %{"id" => 1, "error" => %{"data" => %{"reason" => "parallel_capacity_exceeded"}}} =
+               H.recv(3_000)
+
+      assert Process.alive?(peer)
+    end
+  end
+
+  describe "PLAN-323: concurrent-execute admission ceiling" do
+    test "rejects an execute beyond the concurrent ceiling, accepts again after one drains" do
+      # Ceiling of 1: while one execute is in flight (blocked on a tool_call we
+      # withhold), a second execute is rejected with a clean, retryable error
+      # rather than spawning an unbounded N×80MB worker set.
+      peer = H.start(self(), max_concurrent_executes: 1)
+      init!(peer, %{"tools" => [%{"name" => "slow"}]})
+
+      # Execute #1 calls a tool; we withhold the response so it stays in flight.
+      H.send_frame(peer, %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "execute",
+        "params" => %{"program" => ~S|(tool/slow {})|}
+      })
+
+      assert %{"method" => "tool_call", "id" => tc1} = H.recv()
+
+      # Execute #2 arrives while #1 occupies the only slot → rejected.
+      H.send_frame(peer, %{
+        "jsonrpc" => "2.0",
+        "id" => 2,
+        "method" => "execute",
+        "params" => %{"program" => ~S|(+ 1 1)|}
+      })
+
+      assert %{"id" => 2, "error" => %{"code" => code, "message" => msg}} = H.recv(2_000)
+      assert code == -32_004
+      assert msg =~ "concurrent"
+
+      # Drain #1 by responding to its tool_call.
+      H.send_frame(peer, %{"jsonrpc" => "2.0", "id" => tc1, "result" => "ok"})
+      assert %{"id" => 1, "result" => "ok"} = H.recv(2_000)
+
+      # Slot freed → a new execute is admitted.
+      H.send_frame(peer, %{
+        "jsonrpc" => "2.0",
+        "id" => 3,
+        "method" => "execute",
+        "params" => %{"program" => ~S|(+ 2 2)|}
+      })
+
+      assert %{"id" => 3, "result" => 4} = H.recv(2_000)
+    end
+  end
 end

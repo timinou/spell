@@ -11,8 +11,13 @@ defmodule PtcRuntime.PeerHarness do
 
   alias PtcRuntime.Peer
 
-  @doc "Start a Peer wired to forward outbound frames to `dest` (default: self)."
-  def start(dest \\ self()) do
+  @doc """
+  Start a Peer wired to forward outbound frames to `dest` (default: self).
+
+  `opts` are merged into `Peer.start_link/1`, so tests can inject resource
+  config (`:max_parallel_workers`, `:worker_max_heap`, `:max_concurrent_executes`).
+  """
+  def start(dest \\ self(), opts \\ []) do
     writer = fn iodata ->
       iodata
       |> IO.iodata_to_binary()
@@ -24,7 +29,9 @@ defmodule PtcRuntime.PeerHarness do
       :ok
     end
 
-    {:ok, peer} = Peer.start_link(writer: writer, autostart: false, name: nil)
+    {:ok, peer} =
+      Peer.start_link(Keyword.merge([writer: writer, autostart: false, name: nil], opts))
+
     peer
   end
 

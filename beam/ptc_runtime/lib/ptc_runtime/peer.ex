@@ -67,6 +67,14 @@ defmodule PtcRuntime.Peer do
   @code_internal_error -32_603
   @code_not_initialized -32_001
   @code_execute_failed -32_002
+  @code_capacity_exceeded -32_004
+
+  # Default ceiling on executes running concurrently on this one runtime
+  # (PLAN-323). Each execute can spawn up to `max_parallel_workers` pmap workers
+  # at ~`worker_max_heap` each, so unbounded concurrency is an OOM vector. The
+  # ceiling bounds aggregate live heap to roughly
+  # `max_concurrent_executes * max_parallel_workers * worker_max_heap`.
+  @default_max_concurrent_executes 8
 
   # How long a single tool_call may wait for Node before the worker gives up.
   # Generous: Node may itself be doing slow IO (bash, network).
@@ -85,7 +93,12 @@ defmodule PtcRuntime.Peer do
               callers: %{},
               next_id: 1,
               # execute procs in flight: monitor ref → request id
-              tasks: %{}
+              tasks: %{},
+              # PLAN-323 resource caps (nil → ptc_runner defaults), threaded into
+              # every PtcRunner.Lisp.run; and the concurrent-execute admission ceiling.
+              worker_max_heap: nil,
+              max_parallel_workers: nil,
+              max_concurrent_executes: nil
   end
 
   # -------------------------------------------------------------------------
@@ -126,7 +139,14 @@ defmodule PtcRuntime.Peer do
 
     if autostart, do: start_reader(self())
 
-    {:ok, %State{writer: writer}}
+    {:ok,
+     %State{
+       writer: writer,
+       worker_max_heap: Keyword.get(opts, :worker_max_heap),
+       max_parallel_workers: Keyword.get(opts, :max_parallel_workers),
+       max_concurrent_executes:
+         Keyword.get(opts, :max_concurrent_executes, @default_max_concurrent_executes)
+     }}
   end
 
   @impl true
@@ -294,20 +314,39 @@ defmodule PtcRuntime.Peer do
   end
 
   defp handle_request("execute", id, params, %State{} = st) do
-    program = Map.get(params, "program", "")
-    peer = self()
-    # Rebind the tools map for THIS execute so every reentrant tool_call carries
-    # this execute's id (PLAN-324). The init-time `st.tools` (exec_id nil) is
-    # only used for the names probe; real calls run under an id-bound map.
-    exec_tools = Bridge.build_tools(st.catalog || %{}, peer, id)
-    run_opts = execute_opts(params, exec_tools)
+    # Admission control (PLAN-323): cap executes running concurrently on this one
+    # runtime. Each in-flight execute can hold up to `max_parallel_workers`
+    # pmap workers; without a ceiling, N concurrent executes = N×worst-case heap,
+    # an OOM vector on a long-lived session. Over the ceiling → a clean,
+    # retryable error (the program never spawns), not a silent resource blowup.
+    if map_size(st.tasks) >= st.max_concurrent_executes do
+      write(
+        st,
+        error_frame(
+          id,
+          @code_capacity_exceeded,
+          "too many concurrent executes (ceiling #{st.max_concurrent_executes}); retry when one completes",
+          %{"reason" => "concurrent_capacity_exceeded"}
+        )
+      )
 
-    {_pid, ref} =
-      spawn_monitor(fn ->
-        send(peer, {:execute_done, id, run_program(program, run_opts)})
-      end)
+      st
+    else
+      program = Map.get(params, "program", "")
+      peer = self()
+      # Rebind the tools map for THIS execute so every reentrant tool_call carries
+      # this execute's id (PLAN-324). The init-time `st.tools` (exec_id nil) is
+      # only used for the names probe; real calls run under an id-bound map.
+      exec_tools = Bridge.build_tools(st.catalog || %{}, peer, id)
+      run_opts = execute_opts(params, exec_tools, st)
 
-    %{st | tasks: Map.put(st.tasks, ref, id)}
+      {_pid, ref} =
+        spawn_monitor(fn ->
+          send(peer, {:execute_done, id, run_program(program, run_opts)})
+        end)
+
+      %{st | tasks: Map.put(st.tasks, ref, id)}
+    end
   end
 
   defp handle_request(method, id, _params, %State{} = st) do
@@ -373,12 +412,16 @@ defmodule PtcRuntime.Peer do
 
   # Translate execute params into PtcRunner.Lisp.run/2 options. Caps are clamped
   # to defensible ceilings; the program cannot ask for unbounded wall time.
-  defp execute_opts(params, tools) do
+  defp execute_opts(params, tools, %State{} = st) do
     timeout = params |> Map.get("timeout_ms", 1_000) |> clamp(1, 30_000)
 
     [tools: tools, timeout: timeout, caller: :in_process_v1]
     |> maybe_put(:context, Map.get(params, "context"))
     |> maybe_put(:signature, Map.get(params, "signature"))
+    # Per-session resource caps (PLAN-323). nil → ptc_runner defaults
+    # (max_parallel_workers 8, worker_max_heap = sandbox max_heap).
+    |> maybe_put(:worker_max_heap, st.worker_max_heap)
+    |> maybe_put(:max_parallel_workers, st.max_parallel_workers)
   end
 
   defp maybe_put(opts, _k, nil), do: opts
