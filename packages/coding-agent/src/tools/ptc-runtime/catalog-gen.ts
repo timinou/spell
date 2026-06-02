@@ -91,12 +91,28 @@ export function schemaToSignature(schema: TSchema | undefined): string {
 
 	const required = new Set(obj.required ?? []);
 	const params = Object.entries(obj.properties).map(([key, prop]) => {
-		const ty = ptcType(prop);
-		const opt = required.has(key) ? "" : "?";
-		return `${key} ${ty}${opt}`;
+		return `${key} ${ptcParam(prop, required.has(key))}`;
 	});
 
 	return `(${params.join(", ")}) -> :any`;
+}
+
+/**
+ * Render a single parameter's type, honoring optionality.
+ *
+ * ptc_runner's signature grammar only attaches the optional `?` suffix to
+ * PRIMITIVE type keywords (`:string?`, `:int?`, `:map?` — `:map` is a keyword).
+ * The LIST combinator `[:t]` has no optional form, so `[:t]?` is a parse error
+ * (verified empirically against ptc_runner 0.11). For an optional list field we
+ * therefore emit `:any?` — a valid optional primitive — trading the element-type
+ * hint for a parseable signature (Review Gate 2, P1).
+ */
+export function ptcParam(node: JsonSchema, requiredField: boolean): string {
+	const ty = ptcType(node);
+	if (requiredField) return ty;
+	// Optional + list → the grammar can't express it; fall back to :any?.
+	if (ty.startsWith("[")) return ":any?";
+	return `${ty}?`;
 }
 
 /** Minimal JSON-Schema shape we introspect (TypeBox output is a superset). */

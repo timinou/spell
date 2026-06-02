@@ -63,6 +63,17 @@ describe("schemaToSignature", () => {
 		expect(schemaToSignature(schema)).toBe("(items [:string], opts :map?) -> :any");
 	});
 
+	it("renders an OPTIONAL array as :any? (the grammar has no optional list form)", () => {
+		// ptc_runner rejects `[:t]?` — verified empirically (Review Gate 2, P1).
+		const schema = Type.Object({ tasks: Type.Optional(Type.Array(Type.String())) });
+		expect(schemaToSignature(schema)).toBe("(tasks :any?) -> :any");
+	});
+
+	it("keeps a REQUIRED array as [:t]", () => {
+		const schema = Type.Object({ tasks: Type.Array(Type.String()) });
+		expect(schemaToSignature(schema)).toBe("(tasks [:string]) -> :any");
+	});
+
 	it("returns nullary signature for absent/non-object schemas", () => {
 		expect(schemaToSignature(undefined)).toBe("() -> :any");
 		expect(schemaToSignature(Type.String())).toBe("() -> :any");
@@ -101,6 +112,7 @@ describe("effectOf", () => {
 		expect(effectOf("bash")).toBe("exec");
 		expect(effectOf("fetch")).toBe("network");
 		expect(effectOf("calc")).toBe("pure");
+		expect(effectOf("memory")).toBe("write"); // note/save/link mutate — tagged at max
 		expect(effectOf("totally_unknown")).toBe("exec");
 	});
 });

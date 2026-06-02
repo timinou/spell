@@ -9,3 +9,12 @@
 :END:
 :RELATIONS:
 :END:
+** ITEM Review Gate 2 (PtcRuntime catalog) outcome. P1 FIXED: optional-array fields emitted [:t]? which ptc_runner's signature grammar REJECTS (verified empirically: PARSE-FAIL). The :list_type combinator has no optional form (only primitives + :map keyword take ?). FIX: ptcParam() emits :any? for optional lists. Added catalog-signatures.integration.test.ts that validates EVERY generated signature against the real BEAM parser (would have caught this). P1 FIXED: memory tool under-tagged read but note/save/link WRITE the store → security under-tag (read-only policy would allow writes). FIX: memory→write (max-effect convention, matches org). P2 FIXED: EFFECT_ORDER ladder contradicted effectAllowed set; a ladder can't express {pure,read,write} (allow write deny exec) since the default V1 policy needs set semantics. FIX: removed ladder, renamed ALL_EFFECTS, documented flat-SET contract for P3 gate. Lesson: signatures/grammars must be validated against the REAL parser, not assumed — and effect taxonomies are flat sets not ladders (privilege isn't linearly ordered: exec and network are orthogonal, not 'more than' write). 64 tests green.
+:PROPERTIES:
+:CUSTOM_ID: EP-77683d9105509092
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-02T00:16:16Z
+:END:
+:RELATIONS:
+:END:

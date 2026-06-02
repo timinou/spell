@@ -35,8 +35,23 @@
 
 export type EffectTag = "pure" | "read" | "write" | "exec" | "network";
 
-/** Privilege order — index = ascending privilege. */
-export const EFFECT_ORDER: readonly EffectTag[] = ["pure", "read", "write", "exec", "network"];
+/** All effect tags, for enumeration (NOT a privilege ordering — see below). */
+export const ALL_EFFECTS: readonly EffectTag[] = ["pure", "read", "write", "exec", "network"];
+
+/**
+ * Effects are a FLAT SET, not a privilege ladder (Review Gate 2, P2).
+ *
+ * A policy is an allowlist of effects; the gate checks set membership
+ * (`effectAllowed`). There is deliberately NO ordering: `exec` and `network`
+ * are NOT "more than" `write`, and you cannot grant a ceiling that implies the
+ * ones below it. This matters because the default V1 policy is `{pure, read,
+ * write}` — which must allow writes while denying `exec` and `network`. On a
+ * ladder (`write < exec < network`) you could not express that; as a set you
+ * simply omit `exec`/`network`. The P3 gate MUST use set membership.
+ *
+ * `pure` is implicitly always allowed (a pure program touches no tool effect),
+ * but it appears in the set for completeness.
+ */
 
 /**
  * The canonical tool→effect table. The KEY is the tool's registered name.
@@ -53,7 +68,7 @@ export const TOOL_EFFECTS: Readonly<Record<string, EffectTag>> = {
 	find: "read",
 	get: "read",
 	status: "read",
-	memory: "read", // search/about/neighbors; note/save are write — see nuance below
+	memory: "write", // search/about/neighbors are read; note/save/link WRITE → tag at max
 	resolve: "read",
 
 	// write — mutate repo / project / org state
