@@ -1,9 +1,10 @@
 /**
  * Tool wrappers for extensions.
  */
+
+import type { Static, TSchema } from "@sinclair/typebox";
 import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@spell/pi-agent-core";
 import type { ImageContent, TextContent } from "@spell/pi-ai";
-import type { Static, TSchema } from "@sinclair/typebox";
 import type { Theme } from "../../modes/theme/theme";
 import { applyToolProxy } from "../tool-proxy";
 import type { ExtensionRunner } from "./runner";
@@ -132,7 +133,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		}
 
 		// Execute the actual tool
-		let result: { content: any; details?: TDetails };
+		let result: { content: any; details?: TDetails; data: unknown };
 		let executionError: Error | undefined;
 
 		try {
@@ -142,6 +143,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			result = {
 				content: [{ type: "text", text: executionError.message }],
 				details: undefined as TDetails,
+				data: null,
 			};
 		}
 
@@ -169,15 +171,16 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 					throw new Error(errorText);
 				}
 				if (resultResult.isError === false && executionError) {
-					// Extension clears the error - return success
-					return { content: modifiedContent, details: modifiedDetails };
+					// Extension clears the error - return success. Propagate the wrapped
+					// tool's payload channel (FEAT-789); a cleared error has no payload.
+					return { content: modifiedContent, details: modifiedDetails, data: result.data ?? null };
 				}
 
 				// Error status unchanged, but content/details may be modified
 				if (executionError) {
 					throw executionError;
 				}
-				return { content: modifiedContent, details: modifiedDetails };
+				return { content: modifiedContent, details: modifiedDetails, data: result.data ?? null };
 			}
 		}
 

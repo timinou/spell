@@ -19,7 +19,8 @@ function fakeTool(name: string): DispatchableTool {
 	return {
 		name,
 		async execute() {
-			return { content: [{ type: "text", text: "ran" }] } as AgentToolResult;
+			// `data` is the machine-payload channel resultToValue reads (FEAT-789).
+			return { content: [{ type: "text", text: "ran" }], data: "ran" } as AgentToolResult;
 		},
 	};
 }

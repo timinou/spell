@@ -176,10 +176,11 @@ export class SshTool implements AgentTool<typeof sshSchema, SSHToolDetails> {
 			onChunk: chunk => {
 				tailBuffer.append(chunk);
 				if (onUpdate) {
-					onUpdate({
-						content: [{ type: "text", text: tailBuffer.text() }],
-						details: {},
-					});
+     onUpdate({
+     						content: [{ type: "text", text: tailBuffer.text() }],
+     						details: {},
+     						data: null,
+     					});
 				}
 			},
 		});

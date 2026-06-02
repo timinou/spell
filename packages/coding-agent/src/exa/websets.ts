@@ -28,19 +28,22 @@ function createWebsetTool(
 					return {
 						content: [{ type: "text" as const, text: "Error: EXA_API_KEY not found" }],
 						details: { error: "EXA_API_KEY not found", toolName: name },
+						data: null,
 					};
 				}
 				const result = await callWebsetsTool(apiKey, mcpToolName, params as Record<string, unknown>);
 				return {
 					content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
 					details: { raw: result, toolName: name },
-				};
+					data: result,
+					};
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				return {
 					content: [{ type: "text" as const, text: `Error: ${message}` }],
 					details: { error: message, toolName: name },
-				};
+					data: null,
+					};
 			}
 		},
 	};

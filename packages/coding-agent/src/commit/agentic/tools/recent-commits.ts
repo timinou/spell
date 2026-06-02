@@ -75,6 +75,7 @@ export function createRecentCommitsTool(git: ControlledGit): CustomTool<typeof r
 			return {
 				content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
 				details: payload,
+				data: payload,
 			};
 		},
 	};

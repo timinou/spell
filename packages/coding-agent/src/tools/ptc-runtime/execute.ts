@@ -32,6 +32,7 @@ import type { ToolSession } from "../index";
 import { generateToolCatalog } from "./catalog-gen";
 import { buildSessionToolProvider } from "./catalog-session";
 import { type Catalog, PtcRuntimeClient, PtcRuntimeError, spawnTransport } from "./client";
+import { isMapOfSignature, parseMapSignature, validateMapValue } from "./map-signature";
 import { allowedTools, type CapabilityPolicy, DEFAULT_POLICY } from "./policy";
 import { makeToolDispatcher, type ToolProvider } from "./tool-dispatch";
 
@@ -82,15 +83,24 @@ export class ExecuteTool implements AgentTool<typeof executeSchema, ExecuteToolD
 		const started = Date.now();
 		try {
 			const client = await this.ensureClient(context);
+			// F2: ptc_runner's grammar can't express a homogeneous map-of signature
+			// ({:string :int}) — the natural shape of group-by/frequencies output. When
+			// the signature uses that dialect, WITHHOLD it from ptc_runner (it would
+			// reject the grammar) and validate the returned value Spell-side instead.
+			const mapOf = params.signature && isMapOfSignature(params.signature) ? params.signature : undefined;
+			const nativeSignature = mapOf ? undefined : params.signature;
+
 			const value = await client.execute({
 				program: params.program,
 				context: params.context,
-				signature: params.signature,
+				signature: nativeSignature,
 				timeoutMs: params.timeout_ms,
 				// Per-execute signal: the client composes it with its own teardown
 				// signal and threads it into THIS execute's tool_calls only (PLAN-324).
 				signal,
 			});
+
+			if (mapOf) validateAgainstMapSignature(value, mapOf);
 
 			return {
 				content: [{ type: "text", text: renderValue(value) }],
@@ -186,6 +196,32 @@ export class ExecuteTool implements AgentTool<typeof executeSchema, ExecuteToolD
 	 */
 	private defaultProvider(): ToolProvider {
 		return buildSessionToolProvider(this.session);
+	}
+}
+
+// ----- map-of signature validation (F2) -----
+
+/**
+ * Validate a returned value against a Spell-dialect map-of signature. Throws a
+ * PtcRuntimeError-shaped error on mismatch so it renders through the same
+ * `(parse_error)`/`(validation)` channel as a native signature failure.
+ */
+function validateAgainstMapSignature(value: unknown, signature: string): void {
+	const parsed = parseMapSignature(signature);
+	if (!parsed.ok) {
+		throw new PtcRuntimeError({
+			code: -32602,
+			message: `invalid map-of signature: ${parsed.error}`,
+			data: { reason: "parse_error" },
+		});
+	}
+	const mismatch = validateMapValue(value, parsed.type);
+	if (mismatch) {
+		throw new PtcRuntimeError({
+			code: -32602,
+			message: `return value does not match signature '${signature}': ${mismatch}`,
+			data: { reason: "validation" },
+		});
 	}
 }
 

@@ -44,10 +44,10 @@ describe("ResolveTool", () => {
 			label: "AST Edit: 2 replacements in 1 file",
 			sourceToolName: "edit",
 			files: [],
-			apply: async (_reason: string) => ({ content: [{ type: "text", text: "should not run" }] }),
+   apply: async (_reason: string) => ({ content: [{ type: "text", text: "should not run" }], data: null }),
 			reject: async (reason: string) => {
 				rejectedReason = reason;
-				return { content: [{ type: "text", text: "Rejected pending preview." }] };
+    return { content: [{ type: "text", text: "Rejected pending preview." }], data: null };
 			},
 		});
 		const tool = new ResolveTool(createSession(pendingActionStore));
@@ -80,7 +80,7 @@ describe("ResolveTool", () => {
 			apply: async reason => {
 				applied = true;
 				appliedReason = reason;
-				return { content: [{ type: "text", text: "Applied 1 replacement in 1 file." }] };
+    return { content: [{ type: "text", text: "Applied 1 replacement in 1 file." }], data: null };
 			},
 		});
 
@@ -117,7 +117,7 @@ describe("ResolveTool", () => {
 				sourceToolName: "edit",
 				files: ["/tmp/main.ts"],
 				invalidateManagedCodeBuffers: true,
-				apply: async () => ({ content: [{ type: "text", text: "Applied 1 replacement in 1 file." }] }),
+    apply: async () => ({ content: [{ type: "text", text: "Applied 1 replacement in 1 file." }], data: null }),
 			});
 			const tool = new ResolveTool(createSession(pendingActionStore));
 			const result = await tool.execute("call-apply-degraded", {
@@ -151,7 +151,7 @@ describe("ResolveTool", () => {
 				label: "Custom preview",
 				sourceToolName: "custom_tool",
 				files: ["/tmp/main.ts"],
-				apply: async () => ({ content: [{ type: "text", text: "Applied custom preview." }] }),
+    apply: async () => ({ content: [{ type: "text", text: "Applied custom preview." }], data: null }),
 			});
 			const tool = new ResolveTool(createSession(pendingActionStore));
 			const result = await tool.execute("call-apply-custom", {
@@ -176,7 +176,7 @@ describe("ResolveTool", () => {
 			sourceToolName: "edit",
 			files: [],
 			invalidateManagedCodeBuffers: true,
-			apply: async () => ({ content: [{ type: "text", text: "Applied 1 replacement in 0 files." }] }),
+   apply: async () => ({ content: [{ type: "text", text: "Applied 1 replacement in 0 files." }], data: null }),
 		});
 		const tool = new ResolveTool(createSession(pendingActionStore));
 		const result = await tool.execute("call-apply-empty-files", {
@@ -224,7 +224,7 @@ describe("ResolveTool", () => {
 			files: [],
 			apply: async (_reason: string) => {
 				firstApplied = true;
-				return { content: [{ type: "text", text: "first" }] };
+    return { content: [{ type: "text", text: "first" }], data: null };
 			},
 		});
 		pendingActionStore.push({
@@ -233,7 +233,7 @@ describe("ResolveTool", () => {
 			files: [],
 			apply: async () => {
 				secondApplied = true;
-				return { content: [{ type: "text", text: "second" }] };
+    return { content: [{ type: "text", text: "second" }], data: null };
 			},
 		});
 

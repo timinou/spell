@@ -296,12 +296,14 @@ export async function executeCodeSearch(
 		return {
 			content: [{ type: "text", text: formatCodeSearchForLlm(response) }],
 			details: { provider: response.provider, response },
+			data: response,
 		};
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		return {
 			content: [{ type: "text", text: `Error: ${message}` }],
 			details: { provider: preferredCodeSearchProvider, error: message },
+			data: null,
 		};
 	}
 }

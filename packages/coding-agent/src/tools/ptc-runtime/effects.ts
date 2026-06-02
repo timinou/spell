@@ -94,9 +94,54 @@ export const TOOL_EFFECTS: Readonly<Record<string, EffectTag>> = {
  * `network` are orthogonal; `exec` is chosen as the safe default because it is
  * the boundary the default read+write policy denies.)
  */
-export function effectOf(toolName: string): EffectTag {
-	return TOOL_EFFECTS[toolName] ?? "exec";
+export function effectOf(toolName: string, args?: Record<string, unknown>): EffectTag {
+	const base = TOOL_EFFECTS[toolName] ?? "exec";
+	// Sub-command refinement: a tool tagged at its HIGHEST effect (conservative
+	// default) can resolve to a LOWER effect for a read-only sub-command, so a
+	// read-only policy admits `org query` while still denying `org set`. Refinement
+	// only ever RELAXES from the static max — it can never escalate above it.
+	if (args) {
+		const refined = refineEffect(toolName, args);
+		if (refined) return refined;
+	}
+	return base;
 }
+
+/**
+ * Sub-command effect resolver: tools whose effect depends on an argument.
+ * Returns a refined (lower) effect for a known read-only sub-command, or null to
+ * fall back to the static (highest) tag. Only READ-side sub-commands are listed
+ * — anything unlisted keeps the conservative max, so refinement is never an
+ * accidental escalation.
+ */
+function refineEffect(toolName: string, args: Record<string, unknown>): EffectTag | null {
+	switch (toolName) {
+		case "org": {
+			const cmd = typeof args.command === "string" ? args.command : undefined;
+			return cmd && ORG_READ_COMMANDS.has(cmd) ? "read" : null;
+		}
+		case "memory": {
+			const action = typeof args.action === "string" ? args.action : undefined;
+			return action && MEMORY_READ_ACTIONS.has(action) ? "read" : null;
+		}
+		default:
+			return null;
+	}
+}
+
+/** `org` sub-commands that only READ project state. */
+const ORG_READ_COMMANDS: ReadonlySet<string> = new Set([
+	"query",
+	"get",
+	"dashboard",
+	"wave",
+	"graph",
+	"validate",
+	"validate-plan",
+]);
+
+/** `memory` actions that only READ the knowledge graph. */
+const MEMORY_READ_ACTIONS: ReadonlySet<string> = new Set(["search", "about", "neighbors", "since"]);
 
 /** True if `effect` is permitted by an allowlist of effects. */
 export function effectAllowed(effect: EffectTag, allowed: ReadonlySet<EffectTag>): boolean {

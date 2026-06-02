@@ -131,16 +131,17 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 				lastApprovedPlan.itemId === params.itemId &&
 				lastApprovedPlan.finalPlanFilePath === finalPlanFilePath
 			) {
-				return {
-					content: [{ type: "text", text: "Plan already approved." }],
-					details: {
-						planFilePath: lastApprovedPlan.finalPlanFilePath,
-						planExists: true,
-						title: lastApprovedPlan.title,
-						finalPlanFilePath: lastApprovedPlan.finalPlanFilePath,
-						itemId: lastApprovedPlan.itemId,
-					},
-				};
+    return {
+    				content: [{ type: "text", text: "Plan already approved." }],
+    				details: {
+    					planFilePath: lastApprovedPlan.finalPlanFilePath,
+    					planExists: true,
+    					title: lastApprovedPlan.title,
+    					finalPlanFilePath: lastApprovedPlan.finalPlanFilePath,
+    					itemId: lastApprovedPlan.itemId,
+    				},
+    				data: null,
+    			};
 			}
 			throw new ToolError("Plan mode is not active.");
 		}
@@ -197,27 +198,28 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 					}
 				}
 			}
-			return {
-				content: [
-					{
-						type: "text",
-						text: `Plan ready for approval (${childItemIds.length} linked child items${waves ? `, ${waves.length} waves` : ""}).`,
-					},
-				],
-				details: {
-					planFilePath: state.planFilePath,
-					planExists: true,
-					title: normalized.title,
-					finalPlanFilePath,
-					itemId: params.itemId,
-					orgItemFile: item.file,
-					planContent: item.body,
-					childItemIds,
-					childItems: childItemSpecs.items,
-					childItemsOmittedCount: childItemSpecs.omittedCount,
-					waves,
-				},
-			};
+   return {
+   			content: [
+   				{
+   					type: "text",
+   					text: `Plan ready for approval (${childItemIds.length} linked child items${waves ? `, ${waves.length} waves` : ""}).`,
+   				},
+   			],
+   			details: {
+   				planFilePath: state.planFilePath,
+   				planExists: true,
+   				title: normalized.title,
+   				finalPlanFilePath,
+   				itemId: params.itemId,
+   				orgItemFile: item.file,
+   				planContent: item.body,
+   				childItemIds,
+   				childItems: childItemSpecs.items,
+   				childItemsOmittedCount: childItemSpecs.omittedCount,
+   				waves,
+   			},
+   			data: null,
+   		};
 		}
 
 		let planExists = false;
@@ -236,14 +238,15 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 			);
 		}
 
-		return {
-			content: [{ type: "text", text: "Plan ready for approval." }],
-			details: {
-				planFilePath: state.planFilePath,
-				planExists,
-				title: normalized.title,
-				finalPlanFilePath,
-			},
-		};
+  return {
+  			content: [{ type: "text", text: "Plan ready for approval." }],
+  			details: {
+  				planFilePath: state.planFilePath,
+  				planExists,
+  				title: normalized.title,
+  				finalPlanFilePath,
+  			},
+  			data: null,
+  		};
 	}
 }

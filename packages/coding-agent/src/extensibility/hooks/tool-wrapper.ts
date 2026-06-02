@@ -1,8 +1,9 @@
 /**
  * Tool wrapper - wraps tools with hook callbacks for interception.
  */
-import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@spell/pi-agent-core";
+
 import type { Static, TSchema } from "@sinclair/typebox";
+import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@spell/pi-agent-core";
 import { applyToolProxy } from "../tool-proxy";
 import type { HookRunner } from "./runner";
 import type { ToolCallEventResult, ToolResultEventResult } from "./types";
@@ -83,6 +84,9 @@ export class HookToolWrapper<TParameters extends TSchema = TSchema, TDetails = u
 					return {
 						content: resultResult.content ?? result.content,
 						details: (resultResult.details ?? result.details) as TDetails,
+						// Propagate the wrapped tool's payload channel (FEAT-789); hooks
+						// modify display/render, not the machine payload.
+						data: result.data,
 					};
 				}
 			}

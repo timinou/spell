@@ -455,14 +455,15 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				},
 				{
 					onProgress: (text, details) => {
-						onUpdate?.({ content: [{ type: "text", text }], details: details ?? {} });
+      onUpdate?.({ content: [{ type: "text", text }], details: details ?? {}, data: null });
 					},
 				},
 			);
-			return {
-				content: [{ type: "text", text: `Background job ${jobId} started: ${label}` }],
-				details: { async: { state: "running", jobId, type: "bash" }, lenientSpill: lenientSpill || undefined },
-			};
+   return {
+   				content: [{ type: "text", text: `Background job ${jobId} started: ${label}` }],
+   				details: { async: { state: "running", jobId, type: "bash" }, lenientSpill: lenientSpill || undefined },
+   				data: null,
+   			};
 		}
 
 		// Track output for streaming updates (tail only)
@@ -500,10 +501,11 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					onChunk: chunk => {
 						tailBuffer.append(chunk);
 						if (onUpdate) {
-							onUpdate({
-								content: [{ type: "text", text: tailBuffer.text() }],
-								details: { lenientSpill: lenientSpill || undefined },
-							});
+       onUpdate({
+       							content: [{ type: "text", text: tailBuffer.text() }],
+       							details: { lenientSpill: lenientSpill || undefined },
+       							data: null,
+       						});
 						}
 					},
 				});

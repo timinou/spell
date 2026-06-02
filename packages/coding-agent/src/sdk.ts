@@ -2003,7 +2003,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		if (!text) {
 			throw new Error("Tidewave returned no text content.");
 		}
-		return { content: [{ type: "text", text }], details: { fallback: "tidewave-http", mcpUrl } };
+		return { content: [{ type: "text", text }], details: { fallback: "tidewave-http", mcpUrl }, data: null };
 	};
 
 	// Wire QML armed tool invocations: short-circuit tool execution without an agent turn.
@@ -2036,6 +2036,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return {
 					content: [{ type: "text", text: invokeError }],
 					details: { fallback: "tidewave-http", error: invokeError },
+					data: null,
 				} satisfies AgentToolResult<unknown>;
 			});
 			if (fallbackResult) {
@@ -2064,7 +2065,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				);
 			} catch (err) {
 				invokeError = err instanceof Error ? err.message : String(err);
-				result = { content: [{ type: "text", text: invokeError }], details: {} };
+				result = { content: [{ type: "text", text: invokeError }], details: {}, data: null };
 			}
 		}
 

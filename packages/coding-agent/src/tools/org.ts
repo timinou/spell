@@ -4,6 +4,8 @@
  * Reads org config from settings + project-local .spell/config.yml, resolves
  * categories relative to the project root.
  */
+
+import { type Static, Type } from "@sinclair/typebox";
 import type {
 	AgentTool,
 	AgentToolContext,
@@ -16,7 +18,6 @@ import { createOrgTool, DEFAULT_ORG_CONFIG } from "@spell/pi-org";
 import type { Component } from "@spell/pi-tui";
 import { Text } from "@spell/pi-tui";
 import { getProjectDir, logger } from "@spell/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
 import type { Theme } from "../modes/theme/theme";
 import { validatePlanItem } from "../plan-mode/plan-validation";
 import { renderStatusLine } from "../tui/status-line";
@@ -140,13 +141,16 @@ export class OrgTool implements AgentTool<typeof orgSchema, OrgToolDetails, Them
 				result !== null &&
 				"error" in result &&
 				(result as Record<string, unknown>).error === true;
-			return { content: [{ type: "text", text }], details: isError ? { error: true } : undefined };
+			// FEAT-789: machine payload — the raw structured org result (items, graph,
+			// waves, …) so a program reads typed data instead of re-parsing `text`.
+			return { content: [{ type: "text", text }], details: isError ? { error: true } : undefined, data: result };
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			logger.error("org tool error", { error: msg });
 			return {
 				content: [{ type: "text", text: JSON.stringify({ error: true, message: msg }) }],
 				details: { error: true },
+				data: null,
 			};
 		}
 	}

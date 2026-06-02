@@ -1641,15 +1641,16 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 			const extraNotices = [...waveSnapshotNotices, ...orgLifecycleNotices];
 			const text = extraNotices.length > 0 ? `${summary}\n${extraNotices.join("\n")}` : summary;
 
-			return {
-				content: [
-					{
-						type: "text",
-						text,
-					},
-				],
-				details: { groups: updated.groups, storage },
-			};
+   return {
+   			content: [
+   				{
+   					type: "text",
+   					text,
+   				},
+   			],
+   			details: { groups: updated.groups, storage },
+   			data: { groups: updated.groups, storage },
+   		};
 		});
 	}
 }

@@ -126,7 +126,7 @@ function buildEditTool(): AgentTool {
 		description: "",
 		parameters: schema,
 		async execute() {
-			return { content: [{ type: "text", text: "ok" }] };
+   return { content: [{ type: "text", text: "ok" }], data: null };
 		},
 	};
 }

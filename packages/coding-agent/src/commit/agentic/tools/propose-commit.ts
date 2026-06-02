@@ -119,6 +119,7 @@ export function createProposeCommitTool(
 			return {
 				content: [{ type: "text", text }],
 				details: response,
+				data: response,
 			};
 		},
 	};

@@ -200,10 +200,11 @@ export class SearchToolBm25Tool implements AgentTool<typeof searchToolBm25Schema
 			tools: ranked.map(result => formatMatch(result.tool, result.score)),
 		};
 
-		return {
-			content: [{ type: "text", text: buildSearchToolBm25Content(details) }],
-			details,
-		};
+  return {
+  			content: [{ type: "text", text: buildSearchToolBm25Content(details) }],
+  			details,
+  			data: details,
+  		};
 	}
 }
 

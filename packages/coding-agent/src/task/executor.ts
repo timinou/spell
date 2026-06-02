@@ -566,6 +566,7 @@ function createMCPProxyTools(mcpManager: MCPManager): CustomTool<TSchema>[] {
 								: { type: "text" as const, text: JSON.stringify(item) },
 						),
 						details: { serverName, mcpToolName, isError: result.isError },
+						data: null,
 					};
 				} catch (error) {
 					if (error instanceof ToolAbortError) {
@@ -579,6 +580,7 @@ function createMCPProxyTools(mcpManager: MCPManager): CustomTool<TSchema>[] {
 							},
 						],
 						details: { serverName, mcpToolName, isError: true },
+						data: null,
 					};
 				}
 			},

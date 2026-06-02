@@ -29,6 +29,29 @@ export interface CodePathResult {
 	meta?: ReturnType<typeof outputMeta>["get"] extends () => infer R ? R : never;
 	images: Array<{ data: string; mimeType: string; text?: string; skipImageBlock?: boolean }>;
 	stats: CodePathStats;
+	/**
+	 * Machine PAYLOAD projection of the result nodes (FEAT-789 `data` channel).
+	 * A flat, JSON-clean list a programmatic consumer (the `execute` coprocessor)
+	 * can read directly — locator, kind, resolved path/line, and node text —
+	 * instead of re-parsing the rendered `text`. This is what makes `get`/`find`
+	 * programmatically readable (file content + grep hits), not just a render
+	 * summary.
+	 */
+	data: CodePathNodeData[];
+}
+
+/** One node in the machine payload projection (FEAT-789). */
+export interface CodePathNodeData {
+	/** Raw kernel locator (e.g. `src/foo.ts:42#A1`). */
+	locator: string;
+	/** Node kind (`§file`, `§line`, `§function`, …). */
+	kind: string;
+	/** Resolved file path, when the locator encodes one. */
+	path?: string;
+	/** 1-indexed line, when the locator encodes one. */
+	line?: number;
+	/** Node text/content when present (file slice, grep line, symbol body). */
+	text?: string;
 }
 
 function formatLocator(locator: string): {
@@ -402,7 +425,25 @@ export function formatCodePathResult(chunks: CodePathChunk[], options: CodePathR
 		meta: metaBuilder.get(),
 		images: extractImages(nodes),
 		stats: computeStats(nodes),
+		data: projectNodeData(nodes),
 	};
+}
+
+/**
+ * Project result nodes into the machine PAYLOAD shape (FEAT-789 `data`).
+ * Flat, JSON-clean, post-limit — mirrors exactly what the renderer saw so a
+ * program reads the same node set the model sees, minus the formatting.
+ */
+function projectNodeData(nodes: NodeRefDto[]): CodePathNodeData[] {
+	return nodes.map(node => {
+		const { path, line } = formatLocator(node.locator);
+		const text = getNodeText(node);
+		const out: CodePathNodeData = { locator: node.locator, kind: node.kind };
+		if (path !== undefined) out.path = path;
+		if (line !== undefined) out.line = line;
+		if (text !== undefined) out.text = text;
+		return out;
+	});
 }
 
 function computeStats(nodes: NodeRefDto[]): CodePathStats {

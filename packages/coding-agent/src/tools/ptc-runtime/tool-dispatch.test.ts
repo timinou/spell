@@ -19,7 +19,7 @@ import {
 const anyEffect = { policy: PERMISSIVE_POLICY };
 
 function textResult(text: string): AgentToolResult {
-	return { content: [{ type: "text", text }] };
+	return { content: [{ type: "text", text }], data: null };
 }
 
 /** A fake tool that records calls and returns a fixed result. */
@@ -33,50 +33,52 @@ function fakeTool(name: string, result: AgentToolResult | ((args: unknown) => Ag
 }
 
 describe("resultToValue", () => {
-	it("returns structured details verbatim when present", () => {
-		const r: AgentToolResult = { content: [{ type: "text", text: "ignored" }], details: { items: [1, 2, 3] } };
+	it("returns data verbatim when present", () => {
+		const r: AgentToolResult = { content: [{ type: "text", text: "ignored" }], details: { items: [1, 2, 3] }, data: { items: [1, 2, 3] } };
 		expect(resultToValue(r)).toEqual({ items: [1, 2, 3] });
 	});
 
-	it("joins text blocks when no details", () => {
+	it("returns data when present", () => {
 		const r: AgentToolResult = {
 			content: [
 				{ type: "text", text: "a" },
 				{ type: "text", text: "b" },
 			],
+			data: "ab",
 		};
 		expect(resultToValue(r)).toBe("ab");
 	});
 
 	it("throws on isError, surfacing the text", () => {
-		const r: AgentToolResult = { content: [{ type: "text", text: "boom" }], isError: true };
+		const r: AgentToolResult = { content: [{ type: "text", text: "boom" }], isError: true, data: null };
 		expect(() => resultToValue(r)).toThrow(/boom/);
 	});
 
-	it("returns an image marker when only images are present", () => {
+	it("returns null when only images and no data", () => {
 		const r: AgentToolResult = {
 			content: [
 				{ type: "image", data: "xxx", mimeType: "image/png" },
 				{ type: "image", data: "yyy", mimeType: "image/png" },
 			],
+			data: null,
 		};
-		expect(resultToValue(r)).toEqual({ _images: 2 });
+		expect(resultToValue(r)).toBeNull();
 	});
 
-	it("prefers details even when isError is false and text exists", () => {
-		const r: AgentToolResult = { content: [{ type: "text", text: "t" }], details: 42 };
+	it("returns data even when text exists", () => {
+		const r: AgentToolResult = { content: [{ type: "text", text: "t" }], details: 42, data: 42 };
 		expect(resultToValue(r)).toBe(42);
 	});
 
-	it("handles empty content as empty string", () => {
-		expect(resultToValue({ content: [] })).toBe("");
+	it("returns null for empty content when no data", () => {
+		expect(resultToValue({ content: [], data: null })).toBeNull();
 	});
 });
 
 describe("makeToolDispatcher", () => {
 	it("resolves, executes, and returns the converted value", async () => {
 		const tools = new Map<string, DispatchableTool>([
-			["org", fakeTool("org", { content: [], details: { open: 5 } })],
+			["org", fakeTool("org", { content: [], details: { open: 5 }, data: { open: 5 } })],
 		]);
 		const dispatch = makeToolDispatcher({ lookup: lookupFromMap(tools), ...anyEffect });
 		await expect(dispatch({ tool: "org", args: { command: "query" } })).resolves.toEqual({ open: 5 });
@@ -108,7 +110,7 @@ describe("makeToolDispatcher", () => {
 
 	it("propagates tool errors as thrown errors (sandbox surfaces them)", async () => {
 		const tools = new Map<string, DispatchableTool>([
-			["bad", fakeTool("bad", { content: [{ type: "text", text: "kaboom" }], isError: true })],
+			["bad", fakeTool("bad", { content: [{ type: "text", text: "kaboom" }], isError: true, data: null })],
 		]);
 		const dispatch = makeToolDispatcher({ lookup: lookupFromMap(tools), ...anyEffect });
 		await expect(dispatch({ tool: "bad", args: {} })).rejects.toThrow(/kaboom/);

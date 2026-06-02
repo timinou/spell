@@ -1,8 +1,8 @@
+import { type Static, Type } from "@sinclair/typebox";
 import type { AgentTool, AgentToolResult } from "@spell/pi-agent-core";
 import type { Component } from "@spell/pi-tui";
 import { Text } from "@spell/pi-tui";
 import { untilAborted } from "@spell/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
@@ -421,6 +421,8 @@ export class CalculatorTool implements AgentTool<typeof calculatorSchema, Calcul
 			return {
 				content: [{ type: "text", text: outputText }],
 				details: { results },
+				// FEAT-789: machine payload — the computed results a program reads.
+				data: results,
 			};
 		});
 	}

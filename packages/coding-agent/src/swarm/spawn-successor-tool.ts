@@ -61,6 +61,7 @@ export function createSpawnSuccessorTool<TNode extends SwarmNodeLike>(
 			return {
 				content: [{ type: "text", text: nodeUri }],
 				details: { nodeUri, deps },
+				data: null,
 			};
 		},
 	};

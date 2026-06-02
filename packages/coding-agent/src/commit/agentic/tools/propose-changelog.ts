@@ -133,6 +133,7 @@ export function createProposeChangelogTool(
 			return {
 				content: [{ type: "text", text: JSON.stringify(response, null, 2) }],
 				details: response,
+				data: response,
 			};
 		},
 	};

@@ -61,6 +61,7 @@ export function createHandoffTool(
 			return {
 				content: [{ type: "text", text: `Recorded handoff at ${entry.file}` }],
 				details: { entryId: entry.id, runId: entry.runId, file: entry.file, target: params.target ?? null },
+				data: null,
 			};
 		},
 	};

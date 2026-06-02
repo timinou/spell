@@ -12,6 +12,7 @@ export class ToolResultBuilder<TDetails extends DetailsWithMeta> {
 	#details: TDetails;
 	#meta = outputMeta();
 	#content: ToolContent = [];
+	#data: unknown = null;
 	#isError = false;
 
 	constructor(details?: TDetails) {
@@ -25,6 +26,16 @@ export class ToolResultBuilder<TDetails extends DetailsWithMeta> {
 
 	content(content: ToolContent): this {
 		this.#content = content;
+		return this;
+	}
+
+	/**
+	 * Set the machine PAYLOAD channel — the structured value a programmatic
+	 * consumer (e.g. the `execute` coprocessor) reads. Distinct from `content`
+	 * (display) and `details` (render hint). Defaults to `null` when unset.
+	 */
+	data(value: unknown): this {
+		this.#data = value;
 		return this;
 	}
 
@@ -63,7 +74,6 @@ export class ToolResultBuilder<TDetails extends DetailsWithMeta> {
 		return this;
 	}
 
-
 	error(flag = true): this {
 		this.#isError = flag;
 		return this;
@@ -79,6 +89,7 @@ export class ToolResultBuilder<TDetails extends DetailsWithMeta> {
 		const result: AgentToolResult<TDetails> = {
 			content: this.#content,
 			details: hasDetails ? this.#details : undefined,
+			data: this.#data,
 		};
 		if (this.#isError) result.isError = true;
 		return result;

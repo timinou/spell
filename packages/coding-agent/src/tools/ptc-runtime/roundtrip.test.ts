@@ -61,9 +61,9 @@ d("execute round-trip", () => {
 				"nums",
 				{
 					name: "nums",
-					async execute() {
-						return { content: [], details: [1, 2, 3, 4, 5] };
-					},
+     async execute() {
+     						return { content: [], details: [1, 2, 3, 4, 5], data: [1, 2, 3, 4, 5] };
+     					},
 				},
 			],
 		]);

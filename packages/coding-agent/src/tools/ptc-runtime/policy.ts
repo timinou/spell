@@ -76,8 +76,10 @@ export class PolicyDeniedError extends Error {
  * Check whether a tool is permitted under a policy. Returns the resolved effect
  * (for logging) or throws `PolicyDeniedError`.
  */
-export function enforcePolicy(toolName: string, policy: CapabilityPolicy): EffectTag {
-	const effect = effectOf(toolName);
+export function enforcePolicy(toolName: string, policy: CapabilityPolicy, args?: Record<string, unknown>): EffectTag {
+	// Pass args so sub-command effects resolve per-call (e.g. `org query` → read
+	// even though `org` is statically tagged `write`).
+	const effect = effectOf(toolName, args);
 	if (!policy.allowed.has(effect)) {
 		throw new PolicyDeniedError(toolName, effect, policy.name);
 	}

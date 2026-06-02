@@ -102,7 +102,7 @@ export function makeToolDispatcher(opts: DispatchOptions): ToolCallHandler {
 
 		// Enforce the capability policy BEFORE running the tool. A denied effect
 		// throws PolicyDeniedError, surfaced to the program as a tool error.
-		enforcePolicy(tool, policy);
+		enforcePolicy(tool, policy, args);
 
 		// Compose the per-call signal (the originating execute's, supplied by the
 		// client) with any dispatch-level signal, so the tool aborts when EITHER
@@ -117,28 +117,23 @@ export function makeToolDispatcher(opts: DispatchOptions): ToolCallHandler {
 
 /**
  * Convert an `AgentToolResult` into a value a PTC-Lisp program can consume.
+ *
+ * The `data` channel is the SOLE machine payload (required + total on every
+ * tool result). A program reads structured data here — never `content` (the
+ * human-facing display channel) or `details` (the TUI render hint). This makes
+ * the conversion total: every tool is programmatically readable, not just the
+ * handful that historically happened to put structured values in `details`.
+ *
+ * `null` is a valid, meaningful payload (the tool ran but produced no value),
+ * so it is returned verbatim.
+ *
  * Exported for direct testing.
  */
 export function resultToValue(result: AgentToolResult): unknown {
 	if (result.isError) {
 		throw new Error(textOf(result) || "tool returned an error");
 	}
-
-	// Structured details are the richest machine-shaped value when present.
-	if (result.details !== undefined && result.details !== null) {
-		return result.details;
-	}
-
-	const text = textOf(result);
-	const imageCount = (result.content ?? []).filter(c => c.type === "image").length;
-
-	// If the result is *only* images, hand back a marker the program can branch
-	// on rather than an empty string.
-	if (text === "" && imageCount > 0) {
-		return { _images: imageCount };
-	}
-
-	return text;
+	return result.data ?? null;
 }
 
 /** Concatenate all text blocks of a result. */

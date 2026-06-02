@@ -19,7 +19,7 @@ function createMcpCustomTool(name: string, serverName: string, mcpToolName: stri
 		mcpToolName,
 		parameters: Type.Object({ query: Type.String() }),
 		async execute() {
-			return { content: [{ type: "text", text: `${name} executed` }] };
+   return { content: [{ type: "text", text: `${name} executed` }], data: null };
 		},
 	} as CustomTool;
 }

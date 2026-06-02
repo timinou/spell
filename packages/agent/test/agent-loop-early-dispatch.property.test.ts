@@ -221,7 +221,7 @@ function makeTool(spec: ToolSpec, trace: ExecutionTrace[], traceStart: { current
 				throw new Error(spec.throws);
 			}
 			trace.push({ id, name: spec.name, at: traceNow(), phase: "end" });
-			return { content: [{ type: "text", text: spec.resultText }], details: {} };
+			return { content: [{ type: "text", text: spec.resultText }], details: {}, data: null };
 		},
 	};
 	if (spec.executionMode) {

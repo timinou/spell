@@ -68,7 +68,7 @@ export class LoopPrepareTool implements AgentTool<typeof loopPrepareSchema, { er
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<{ error?: boolean }>> {
 		if (!this.#session.loopManager) {
-			return { content: [{ type: "text", text: "Loop manager unavailable" }], details: { error: true } };
+			return { content: [{ type: "text", text: "Loop manager unavailable" }], details: { error: true }, data: null };
 		}
 		const loop = await this.#session.loopManager.prepare({
 			name: params.name,
@@ -83,7 +83,7 @@ export class LoopPrepareTool implements AgentTool<typeof loopPrepareSchema, { er
 			result.warning =
 				"Git repository unavailable; git features (checkpoints, drift detection, worktrees) are disabled.";
 		}
-		return { content: [{ type: "text", text: JSON.stringify(result) }] };
+		return { content: [{ type: "text", text: JSON.stringify(result) }], data: result };
 	}
 
 	renderResult(result: AgentToolResult) {
@@ -115,15 +115,16 @@ export class LoopLaunchTool implements AgentTool<typeof loopLaunchSchema, { erro
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<{ error?: boolean }>> {
 		if (!this.#session.loopManager) {
-			return { content: [{ type: "text", text: "Loop manager unavailable" }], details: { error: true } };
+			return { content: [{ type: "text", text: "Loop manager unavailable" }], details: { error: true }, data: null };
 		}
 		try {
 			const loop = await this.#session.loopManager.launch(params.loopId);
-			return { content: [{ type: "text", text: JSON.stringify({ loopId: loop.id, state: loop.state }) }] };
+			return { content: [{ type: "text", text: JSON.stringify({ loopId: loop.id, state: loop.state }) }], data: { loopId: loop.id, state: loop.state } };
 		} catch (err) {
 			return {
 				content: [{ type: "text", text: err instanceof Error ? err.message : String(err) }],
 				details: { error: true },
+				data: null,
 			};
 		}
 	}
@@ -157,7 +158,7 @@ export class LoopDoneTool implements AgentTool<typeof loopDoneSchema, { error?: 
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<{ error?: boolean }>> {
 		if (!this.#session.loopManager) {
-			return { content: [{ type: "text", text: "Loop manager unavailable" }], details: { error: true } };
+			return { content: [{ type: "text", text: "Loop manager unavailable" }], details: { error: true }, data: null };
 		}
 		const loop = await this.#session.loopManager.markDone(params.loopId, {
 			summary: params.summary,
@@ -168,7 +169,7 @@ export class LoopDoneTool implements AgentTool<typeof loopDoneSchema, { error?: 
 			completedTickets: params.completedTickets,
 			activeTickets: params.activeTickets,
 		});
-		return { content: [{ type: "text", text: JSON.stringify({ loopId: loop.id, state: loop.state }) }] };
+		return { content: [{ type: "text", text: JSON.stringify({ loopId: loop.id, state: loop.state }) }], data: { loopId: loop.id, state: loop.state } };
 	}
 
 	renderResult(result: AgentToolResult) {

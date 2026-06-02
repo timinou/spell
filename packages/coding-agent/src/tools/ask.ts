@@ -414,10 +414,11 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	): Promise<AgentToolResult<AskToolDetails>> {
 		// Headless fallback
 		if (!context?.hasUI || !context.ui) {
-			return {
-				content: [{ type: "text" as const, text: "Error: User prompt requires interactive mode" }],
-				details: {},
-			};
+   return {
+   			content: [{ type: "text" as const, text: "Error: User prompt requires interactive mode" }],
+   			details: {},
+   			data: null,
+   		};
 		}
 
 		const extensionUi = context.ui;
@@ -437,10 +438,11 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 		this.#sendAskNotification();
 
 		if (params.questions.length === 0) {
-			return {
-				content: [{ type: "text" as const, text: "Error: questions must not be empty" }],
-				details: {},
-			};
+   return {
+   			content: [{ type: "text" as const, text: "Error: questions must not be empty" }],
+   			details: {},
+   			data: null,
+   		};
 		}
 
 		const askQuestion = async (
@@ -498,7 +500,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 				responseText = "User cancelled the selection";
 			}
 
-			return { content: [{ type: "text" as const, text: responseText }], details };
+   return { content: [{ type: "text" as const, text: responseText }], details, data: null };
 		}
 
 		const resultsByIndex: Array<QuestionResult | undefined> = Array.from({ length: params.questions.length });
@@ -558,7 +560,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 		const responseLines = results.map(formatQuestionResult);
 		const responseText = `User answers:\n${responseLines.join("\n")}`;
 
-		return { content: [{ type: "text" as const, text: responseText }], details };
+  return { content: [{ type: "text" as const, text: responseText }], details, data: null };
 	}
 }
 

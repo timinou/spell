@@ -32,7 +32,7 @@ function createBasicTool(name: string, label: string): AgentTool {
 		parameters: schema,
 		strict: true,
 		async execute() {
-			return { content: [{ type: "text", text: `${name} executed` }] };
+   return { content: [{ type: "text", text: `${name} executed` }], data: null };
 		},
 	};
 }
@@ -54,7 +54,7 @@ function createMcpTool(
 		mcpServerName: serverName,
 		mcpToolName,
 		async execute() {
-			return { content: [{ type: "text", text: `${name} executed` }] };
+   return { content: [{ type: "text", text: `${name} executed` }], data: null };
 		},
 	} as AgentTool;
 }
@@ -73,7 +73,7 @@ function createMcpCustomTool(
 		description,
 		parameters: Type.Object(properties),
 		async execute() {
-			return { content: [{ type: "text", text: `${name} executed` }] };
+   return { content: [{ type: "text", text: `${name} executed` }], data: null };
 		},
 	};
 }

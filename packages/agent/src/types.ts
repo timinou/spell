@@ -1,3 +1,4 @@
+import type { Static, TSchema } from "@sinclair/typebox";
 import type {
 	AssistantMessageEvent,
 	AssistantMessageEventStream,
@@ -13,7 +14,6 @@ import type {
 	ToolChoice,
 	ToolResultMessage,
 } from "@spell/pi-ai";
-import type { Static, TSchema } from "@sinclair/typebox";
 
 /** Stream function - can return sync or Promise for async config lookup */
 export type StreamFn = (
@@ -244,11 +244,19 @@ export interface AgentState {
 	error?: string;
 }
 
-export interface AgentToolResult<T = any, _TInput = unknown> {
-	// Content blocks supporting text and images
+export interface AgentToolResult<T = any, _TInput = unknown, D = unknown> {
+	// Content blocks supporting text and images — the DISPLAY channel (human-facing,
+	// rendered to the model as text/image blocks).
 	content: (TextContent | ImageContent)[];
-	// Details to be displayed in a UI or logged
+	// Details to be displayed in a UI or logged — the RENDER-HINT channel (TUI meta
+	// lines, stats); never the machine payload.
 	details?: T;
+	// The machine PAYLOAD channel: the structured value a programmatic consumer
+	// (e.g. the `execute` coprocessor) reads. Required and total — every tool emits
+	// it; use `null` when the tool has no payload (purely interactive/side-effecting).
+	// Distinct from `content` (display) and `details` (render hint) so each field has
+	// exactly one job.
+	data: D;
 	// True when the tool surfaced an error to the model. Aggregators can read this
 	// to short-circuit subsequent operations or roll back transactional batches.
 	isError?: boolean;

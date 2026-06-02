@@ -180,14 +180,16 @@ export function createGitFileDiffTool(
 			const { result, truncatedFiles } = processDiffs(params.files, diffs);
 			const output = result || "(no diff)";
 
+			const details = {
+				files: params.files,
+				staged,
+				truncatedFiles: truncatedFiles.length > 0 ? truncatedFiles : undefined,
+				cacheHits: params.files.length - uncachedFiles.length,
+			}
 			return {
 				content: [{ type: "text", text: output }],
-				details: {
-					files: params.files,
-					staged,
-					truncatedFiles: truncatedFiles.length > 0 ? truncatedFiles : undefined,
-					cacheHits: params.files.length - uncachedFiles.length,
-				},
+				details,
+				data: details,
 			};
 		},
 	};

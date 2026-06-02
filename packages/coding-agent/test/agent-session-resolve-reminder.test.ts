@@ -71,7 +71,7 @@ describe("AgentSession resolve reminder", () => {
 						label: "AST Edit: 1 replacement in 1 file",
 						sourceToolName: "edit",
 						files: [path.join(tempDir, "preview.ts")],
-						apply: async () => ({ content: [{ type: "text", text: "Applied" }] }),
+      apply: async () => ({ content: [{ type: "text", text: "Applied" }], data: null }),
 					});
 				}
 				const stream = new MockAssistantStream();

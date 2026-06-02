@@ -145,7 +145,7 @@ function formatForLLM(response: SearchResponse): string {
 async function executeSearch(
 	_toolCallId: string,
 	params: SearchQueryParams,
-): Promise<{ content: Array<{ type: "text"; text: string }>; details: SearchRenderDetails }> {
+): Promise<{ content: Array<{ type: "text"; text: string }>; details: SearchRenderDetails; data: SearchResponse | null }> {
 	const providers =
 		params.provider && params.provider !== "auto"
 			? (await getSearchProvider(params.provider).isAvailable())
@@ -157,6 +157,7 @@ async function executeSearch(
 		return {
 			content: [{ type: "text" as const, text: `Error: ${message}` }],
 			details: { response: { provider: "none", sources: [] }, error: message },
+			data: null,
 		};
 	}
 
@@ -181,6 +182,7 @@ async function executeSearch(
 			return {
 				content: [{ type: "text" as const, text }],
 				details: { response },
+				data: response,
 			};
 		} catch (error) {
 			lastError = error;
@@ -196,6 +198,7 @@ async function executeSearch(
 	return {
 		content: [{ type: "text" as const, text: `Error: ${message}` }],
 		details: { response: { provider: lastProvider.id, sources: [] }, error: message },
+		data: null,
 	};
 }
 
@@ -232,7 +235,8 @@ export class SearchTool implements AgentTool<typeof webSearchSchema, SearchRende
 		_onUpdate?: AgentToolUpdateCallback<SearchRenderDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<SearchRenderDetails>> {
-		return executeSearch(_toolCallId, params);
+		const result = await executeSearch(_toolCallId, params);
+		return { ...result, data: result.details.response };
 	}
 }
 

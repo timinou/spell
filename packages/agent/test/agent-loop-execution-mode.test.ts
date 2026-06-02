@@ -91,7 +91,7 @@ function makeTool(opts: TrackedToolOptions): AgentTool<any, any> {
 				throw opts.throw;
 			}
 			opts.trace.push(`end:${opts.name}`);
-			return { content: [{ type: "text", text: opts.name }], details: {} };
+			return { content: [{ type: "text", text: opts.name }], details: {}, data: null };
 		},
 	};
 	if (opts.executionMode) {

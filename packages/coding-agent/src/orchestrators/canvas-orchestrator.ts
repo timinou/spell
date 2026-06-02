@@ -158,10 +158,11 @@ export class CanvasOrchestratorManager {
 						result.textPreview || JSON.stringify(result.structuredResult ?? null, null, 2) || "No output.";
 					return {
 						content: [{ type: "text", text: `Escalation completed.\n\n${resultText}` }],
+						data: null,
 					};
 				} catch (err) {
 					if (ac.signal.aborted) {
-						return { content: [{ type: "text", text: "Escalation cancelled — window was closed." }] };
+						return { content: [{ type: "text", text: "Escalation cancelled — window was closed." }], data: null };
 					}
 					return {
 						content: [
@@ -170,6 +171,7 @@ export class CanvasOrchestratorManager {
 								text: `Escalation failed: ${err instanceof Error ? err.message : String(err)}`,
 							},
 						],
+						data: null,
 					};
 				}
 			},

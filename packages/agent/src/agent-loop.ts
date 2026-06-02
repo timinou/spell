@@ -564,6 +564,7 @@ async function streamAssistantResponse(
 										result: {
 											content: [{ type: "text", text: err instanceof Error ? err.message : String(err) }],
 											details: {},
+											data: null,
 										},
 										isError: true,
 									};
@@ -846,6 +847,7 @@ async function executeToolCalls(
 			result = {
 				content: [{ type: "text", text: e instanceof Error ? e.message : String(e) }],
 				details: {},
+				data: null,
 			};
 			isError = true;
 		}
@@ -904,6 +906,7 @@ function createSkippedToolResult(): AgentToolResult<any> {
 	return {
 		content: [{ type: "text", text: "Skipped due to queued user message." }],
 		details: {},
+		data: null,
 	};
 }
 
@@ -921,6 +924,7 @@ function createAbortedToolResult(
 	const result: AgentToolResult<any> = {
 		content: [{ type: "text", text: errorMessage ? `${message}: ${errorMessage}` : `${message}.` }],
 		details: {},
+		data: null,
 	};
 
 	stream.push({

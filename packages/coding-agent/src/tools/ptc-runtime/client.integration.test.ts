@@ -88,10 +88,11 @@ d("real BEAM round-trip", () => {
 					async execute(_id, params) {
 						calls.push({ tool: "org", args: params });
 						// Return structured details (the rich path).
-						return {
-							content: [{ type: "text", text: "3 items" }],
-							details: { items: [{ layer: "a" }, { layer: "a" }, { layer: "b" }] },
-						};
+      return {
+      						content: [{ type: "text", text: "3 items" }],
+      						details: { items: [{ layer: "a" }, { layer: "a" }, { layer: "b" }] },
+      						data: { items: [{ layer: "a" }, { layer: "a" }, { layer: "b" }] },
+      					};
 					},
 				},
 			],

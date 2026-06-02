@@ -33,7 +33,7 @@ function dataTool(name: string, details: unknown): DispatchableTool {
 	return {
 		name,
 		async execute() {
-			return { content: [], details } as AgentToolResult;
+			return { content: [], details, data: details } as AgentToolResult;
 		},
 	};
 }

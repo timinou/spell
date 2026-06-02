@@ -74,10 +74,11 @@ export class AwaitTool implements AgentTool<typeof awaitSchema, AwaitToolDetails
 		const awaitInvocationTime = Date.now();
 		const manager = this.session.asyncJobManager;
 		if (!manager) {
-			return {
-				content: [{ type: "text", text: "Async execution is disabled; no background jobs to poll." }],
-				details: { jobs: [] },
-			};
+   return {
+   			content: [{ type: "text", text: "Async execution is disabled; no background jobs to poll." }],
+   			details: { jobs: [] },
+   			data: null,
+   		};
 		}
 
 		const requestedIds = params.jobs;
@@ -91,10 +92,11 @@ export class AwaitTool implements AgentTool<typeof awaitSchema, AwaitToolDetails
 			const message = requestedIds?.length
 				? `No matching jobs found for IDs: ${requestedIds.join(", ")}`
 				: "No running background jobs to wait for.";
-			return {
-				content: [{ type: "text", text: message }],
-				details: { jobs: [] },
-			};
+   return {
+   			content: [{ type: "text", text: message }],
+   			details: { jobs: [] },
+   			data: null,
+   		};
 		}
 
 		// Capture initial watched IDs before any auto-promotion can happen
@@ -219,9 +221,10 @@ export class AwaitTool implements AgentTool<typeof awaitSchema, AwaitToolDetails
 			}
 		}
 
-		return {
-			content: [{ type: "text", text: lines.join("\n") }],
-			details: { jobs: jobResults },
-		};
+  return {
+  		content: [{ type: "text", text: lines.join("\n") }],
+  		details: { jobs: jobResults },
+  		data: { jobs: jobResults },
+  	};
 	}
 }

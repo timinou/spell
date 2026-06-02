@@ -44,55 +44,60 @@ export class CancelJobTool implements AgentTool<typeof cancelJobSchema, CancelJo
 	): Promise<AgentToolResult<CancelJobToolDetails>> {
 		const manager = this.session.asyncJobManager;
 		if (!manager) {
-			return {
-				content: [
-					{ type: "text", text: "Async execution is disabled; no background jobs are available to cancel." },
-				],
-				details: {
-					status: "not_found",
-					jobId: params.job_id,
-				},
-			};
+   return {
+   			content: [
+   				{ type: "text", text: "Async execution is disabled; no background jobs are available to cancel." },
+   			],
+   			details: {
+   				status: "not_found",
+   				jobId: params.job_id,
+   			},
+   			data: null,
+   		};
 		}
 
 		const existing = manager.getJob(params.job_id);
 		if (!existing) {
-			return {
-				content: [{ type: "text", text: `Background job not found: ${params.job_id}` }],
-				details: {
-					status: "not_found",
-					jobId: params.job_id,
-				},
-			};
+   return {
+   			content: [{ type: "text", text: `Background job not found: ${params.job_id}` }],
+   			details: {
+   				status: "not_found",
+   				jobId: params.job_id,
+   			},
+   			data: null,
+   		};
 		}
 
 		if (existing.status !== "running") {
-			return {
-				content: [{ type: "text", text: `Background job ${params.job_id} is already ${existing.status}.` }],
-				details: {
-					status: "already_completed",
-					jobId: params.job_id,
-				},
-			};
+   return {
+   			content: [{ type: "text", text: `Background job ${params.job_id} is already ${existing.status}.` }],
+   			details: {
+   				status: "already_completed",
+   				jobId: params.job_id,
+   			},
+   			data: null,
+   		};
 		}
 
 		const cancelled = manager.cancel(params.job_id);
 		if (!cancelled) {
-			return {
-				content: [{ type: "text", text: `Background job ${params.job_id} is already completed.` }],
-				details: {
-					status: "already_completed",
-					jobId: params.job_id,
-				},
-			};
+   return {
+   			content: [{ type: "text", text: `Background job ${params.job_id} is already completed.` }],
+   			details: {
+   				status: "already_completed",
+   				jobId: params.job_id,
+   			},
+   			data: null,
+   		};
 		}
 
-		return {
-			content: [{ type: "text", text: `Cancelled background job ${params.job_id}.` }],
-			details: {
-				status: "cancelled",
-				jobId: params.job_id,
-			},
-		};
+  return {
+  			content: [{ type: "text", text: `Cancelled background job ${params.job_id}.` }],
+  			details: {
+  				status: "cancelled",
+  				jobId: params.job_id,
+  			},
+  			data: null,
+  		};
 	}
 }

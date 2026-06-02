@@ -195,10 +195,11 @@ export class SubmitResultTool implements AgentTool<TSchema, SubmitResultDetails>
 				: schemaValidationOverridden
 					? `Result submitted (schema validation overridden after ${this.#schemaValidationFailures} failed attempt(s)).`
 					: "Result submitted.";
-		return {
-			content: [{ type: "text", text: responseText }],
-			details: { data, status, error: errorMessage },
-		};
+  return {
+  			content: [{ type: "text", text: responseText }],
+  			details: { data, status, error: errorMessage },
+  			data: { data, status, error: errorMessage },
+  		};
 	}
 }
 

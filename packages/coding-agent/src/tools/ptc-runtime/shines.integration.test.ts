@@ -30,7 +30,8 @@ function tool(name: string, fn: (args: Record<string, unknown>) => unknown): Dis
 	return {
 		name,
 		async execute(_id, params) {
-			return { content: [], details: fn(params as Record<string, unknown>) } as AgentToolResult;
+			const data = fn(params as Record<string, unknown>);
+			return { content: [], details: data, data } as AgentToolResult;
 		},
 	};
 }
