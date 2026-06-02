@@ -32,6 +32,7 @@
 	},
 	"scripts": {
 		"check": "tsgo -p tsconfig.json",
+		"check:catalog": "bun run src/tools/ptc-runtime/catalog-check.ts",
 		"format-prompts": "bun scripts/format-prompts.ts",
 		"generate-docs-index": "bun scripts/generate-docs-index.ts",
 		"prepack": "bun scripts/generate-docs-index.ts",
