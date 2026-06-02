@@ -1,5 +1,5 @@
 #+TITLE: AgentToolResult.data machine-payload channel for execute coprocessor
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14f9728a933b8bac
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-fup095/2026-06-02T13-45-17-133Z_14f9728a933b8bac.jsonl]]
 #+CUSTOM_ID: FEAT-789-agenttoolresult-data-machine-payload-cha
@@ -38,3 +38,5 @@ Orthogonal to the four hardening items (324 abort, 323 ceiling, 322 backpressure
 
 ## Risk
 `data` is REQUIRED on the interface. A partial application (field added, tools not migrated) breaks resultToValue (returns null) and fails ~20 ptc-runtime tests — exactly what was caught. Land as a complete cutover with the builder defaulting data:null so untouched tools stay valid, then migrate high-value tools (find/get/org/memory) to emit real payloads.
+
+NOTE [2026-06-02]: Adopting salvaged patches as foundation (convergent with independent re-derivation). types.ts + tool-result.ts applied; resultToValue rewritten to result.data ?? null. Proceeding with full cutover: per-tool data population + test migration + F2-F5.

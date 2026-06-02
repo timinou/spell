@@ -27,3 +27,12 @@
 :END:
 :RELATIONS:
 :END:
+** ITEM FEAT-789 F5 (settled pmap): the chosen "Spell-side injected prelude" approach is INFEASIBLE. ptc_runner 0.11 functions.exs marks `try`/`catch` as status :not_relevant ("Exception handling is not supported") and (try ...) is a negative test (:unbound_var) — so a prelude defining (psettled coll f) via try cannot exist. Separately, pmap's worker DOES catch per-element ToolExecutionError into {:error,{:pmap_error}}, but collect_parallel_results (eval.ex:1154) short-circuits the whole batch on first error → all-or-nothing is enforced INSIDE the vendored dep. Both levers (exception handling, settled-collect) live in ptc_runner, not Spell. ∴ F5 requires either bumping/forking ptc_runner (add psettled builtin + non-short-circuit collect) or accepting current all-or-nothing pmap. Not solvable Spell-side without the dep.
+:PROPERTIES:
+:CUSTOM_ID: EP-a1ce56881a1a3779
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-02T15:06:55Z
+:END:
+:RELATIONS:
+:END:

@@ -1,0 +1,34 @@
+#+TITLE: Settled pmap in ptc_runner (per-element {:ok|:err}, no batch short-circuit)
+#+STATE: ITEM
+#+SESSION_ID: 14f97016a8963a0b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-fup095/2026-06-02T13-34-34-146Z_14f97016a8963a0b.jsonl]]
+#+CUSTOM_ID: FEAT-790-settled-pmap-in-ptc-runner-per-element-o
+
+* Initial Message
+
+can you try out the execute tool?
+
+* Initial Message
+
+Split out of FEAT-789 (F5). Deferred because it cannot be solved Spell-side.
+
+## Problem
+`execute` coprocessor programs that fan out with `pmap` over N tool calls lose ALL results if one element errors — the batch is all-or-nothing. There is no durable fan-out (Promise.allSettled equivalent) for a program that calls 6 tools where #4 fails.
+
+## Why it's not Spell-side (investigated under FEAT-789)
+Both required levers live in the vendored `ptc_runner` 0.11 Hex dep, not Spell:
+1. A Spell-injected Lisp prelude defining `(psettled coll f)` would need `try`/`catch`, but ptc_runner's `priv/functions.exs` marks `try` as `status: :not_relevant` ("Exception handling is not supported"), and `(try …)` is a negative test (`:unbound_var`). No exception primitive exists to catch per-element failure.
+2. `pmap`'s worker already catches per-element `ToolExecutionError` into `{:error, {:pmap_error, …}}`, BUT `PtcRunner.Lisp.Eval.collect_parallel_results/5` (lib/ptc_runner/lisp/eval.ex:~1154) returns `{:error, reason}` on the FIRST errored element — short-circuiting the whole batch. That collect logic is inside the dep.
+
+## Scope (the real fix)
+In `deps/ptc_runner` (requires a Hex version bump or maintained fork):
+- Add a `psettled` builtin (or a `pmap` option/variant) that returns a per-element result list `[{:ok val} | {:err reason}]` instead of short-circuiting.
+- OR change `collect_parallel_results` to support a non-short-circuit mode surfaced to a new builtin, leaving `pmap` semantics unchanged for back-compat.
+- Spell side: once available, document the idiom in `prompts/tools/execute.md` and add a roundtrip test (one element errors, batch survives, others return).
+
+## Acceptance
+A program `(psettled (fn [x] (tool/maybe-fail {:n x})) coll)` returns a list where failed elements are `{:err …}` and the rest `{:ok …}`; the batch never throws on a single element error.
+
+## Links
+- Parent: [[id:FEAT-789-agenttoolresult-data-machine-payload-cha]] (F1-F4 shipped; F5 split here)
+- Dep: ptc_runner 0.11 (beam/ptc_runtime/mix.exs)
