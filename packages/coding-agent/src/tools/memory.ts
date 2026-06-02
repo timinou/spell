@@ -8,6 +8,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { type Static, Type } from "@sinclair/typebox";
 import type {
 	AgentTool,
 	AgentToolContext,
@@ -19,7 +20,6 @@ import { executeOrg } from "@spell/pi-natives";
 import type { Component } from "@spell/pi-tui";
 import { Text } from "@spell/pi-tui";
 import { getProjectDir, logger } from "@spell/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
 import type { Theme } from "../modes/theme/theme";
 import memoryDescription from "../prompts/tools/memory.md" with { type: "text" };
 import { renderStatusLine } from "../tui/status-line";
@@ -92,17 +92,14 @@ export function warmMemoryLane(repoRoot: string): void {
 	});
 }
 
-async function emitProgressPreambleIfWarming(
-	repoRoot: string,
-	onUpdate: AgentToolUpdateCallback,
-): Promise<void> {
+async function emitProgressPreambleIfWarming(repoRoot: string, onUpdate: AgentToolUpdateCallback): Promise<void> {
 	// Only emit when the daemon explicitly reports `warming`. `unavailable`
 	// / `unknown` / `warm` don't need a spinner preamble.
 	const snapshot = await peekMemoryProgress(repoRoot);
 	if (snapshot.status !== "warming") return;
 	const { done = 0, total = 0, phase = "scan" } = snapshot.progress ?? {};
 	const suffix = total > 0 ? ` ${done}/${total} (${phase})` : ` (${phase})`;
-	onUpdate({ content: [{ type: "text", text: `📚 indexing org memory…${suffix}` }] });
+	onUpdate({ content: [{ type: "text", text: `📚 indexing org memory…${suffix}` }], data: null });
 }
 
 /**
@@ -283,13 +280,16 @@ export class MemoryTool implements AgentTool<typeof memorySchema, MemoryDetails,
 			}
 			const output = await dispatchMemoryAction(params, repoRoot);
 			const text = formatMemoryResult(output, params.action);
-			return { content: [{ type: "text", text }] };
+			// FEAT-789: machine payload — the structured recall result (hits, nodes,
+			// edges) so a program reads typed data instead of re-parsing `text`.
+			return { content: [{ type: "text", text }], data: output };
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			logger.error("memory tool error", { error: msg, action: params.action });
 			return {
 				content: [{ type: "text", text: JSON.stringify({ error: true, message: msg }) }],
 				details: { error: true },
+				data: null,
 			};
 		}
 	}

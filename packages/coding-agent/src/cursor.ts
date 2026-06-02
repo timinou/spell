@@ -39,6 +39,7 @@ function buildToolErrorResult(message: string, details: Record<string, unknown> 
 	return {
 		content: [{ type: "text", text: message }],
 		details,
+		data: null,
 	};
 }
 
@@ -114,7 +115,7 @@ async function executeDelete(options: CursorExecBridgeOptions, pathArg: string, 
 
 		const sizeText = fileStat.size ? ` (${fileStat.size} bytes)` : "";
 		const message = `Deleted ${pathArg}${sizeText}`;
-		result = { content: [{ type: "text", text: message }], details: {} };
+		result = { content: [{ type: "text", text: message }], details: {}, data: null };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		result = buildToolErrorResult(message);
@@ -206,14 +207,6 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 		return toolResultMessage;
 	}
 
-	async diagnostics(args: Parameters<NonNullable<ICursorExecHandlers["diagnostics"]>>[0]) {
-		const toolCallId = decodeToolCallId(args.toolCallId);
-		const toolResultMessage = await executeTool(this.options, "lsp", toolCallId, {
-			action: "diagnostics",
-			file: args.path,
-		});
-		return toolResultMessage;
-	}
 
 	async mcp(call: CursorMcpCall) {
 		const toolName = call.toolName || call.name;

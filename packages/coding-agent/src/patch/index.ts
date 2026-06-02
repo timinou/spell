@@ -8,19 +8,13 @@
  *
  * The mode is determined by the `edit.mode` setting.
  */
-import * as fs from "node:fs/promises";
+
 import * as nodePath from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@spell/pi-agent-core";
 import { StringEnum } from "@spell/pi-ai";
 import { type Static, Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
-import {
-	createLspWritethrough,
-	type FileDiagnosticsResult,
-	flushLspWritethroughBatch,
-	type WritethroughCallback,
-	writethroughNoop,
-} from "../lsp";
+
 
 import patchDescription from "../prompts/tools/patch.md" with { type: "text" };
 import replaceDescription from "../prompts/tools/replace.md" with { type: "text" };
@@ -57,7 +51,7 @@ import {
 import { detectLineEnding, normalizeToLF, restoreLineEndings, stripBom } from "./normalize";
 import { type EditToolDetails, getLspBatchRequest } from "./shared";
 // Internal imports
-import type { FileSystem, Operation, PatchInput } from "./types";
+
 import { EditMatchError } from "./types";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -280,89 +274,6 @@ function parseHashlineAnchor(raw: string, field: "pos" | "end", editIndex: numbe
 	}
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// LSP FileSystem for patch mode
-// ═══════════════════════════════════════════════════════════════════════════
-
-class LspFileSystem implements FileSystem {
-	#lastDiagnostics: FileDiagnosticsResult | undefined;
-	#fileCache: Record<string, Bun.BunFile> = {};
-
-	constructor(
-		private readonly writethrough: (
-			dst: string,
-			content: string,
-			signal?: AbortSignal,
-			file?: import("bun").BunFile,
-			batch?: { id: string; flush: boolean },
-		) => Promise<FileDiagnosticsResult | undefined>,
-		private readonly signal?: AbortSignal,
-		private readonly batchRequest?: { id: string; flush: boolean },
-	) {}
-
-	#getFile(path: string): Bun.BunFile {
-		if (this.#fileCache[path]) {
-			return this.#fileCache[path];
-		}
-		const file = Bun.file(path);
-		this.#fileCache[path] = file;
-		return file;
-	}
-
-	async exists(path: string): Promise<boolean> {
-		return this.#getFile(path).exists();
-	}
-
-	async read(path: string): Promise<string> {
-		return this.#getFile(path).text();
-	}
-
-	async readBinary(path: string): Promise<Uint8Array> {
-		const buffer = await this.#getFile(path).arrayBuffer();
-		return new Uint8Array(buffer);
-	}
-
-	async write(path: string, content: string): Promise<void> {
-		const file = this.#getFile(path);
-		const result = await this.writethrough(path, content, this.signal, file, this.batchRequest);
-		if (result) {
-			this.#lastDiagnostics = result;
-		}
-	}
-
-	async delete(path: string): Promise<void> {
-		await this.#getFile(path).unlink();
-	}
-
-	async mkdir(path: string): Promise<void> {
-		await fs.mkdir(path, { recursive: true });
-	}
-
-	getDiagnostics(): FileDiagnosticsResult | undefined {
-		return this.#lastDiagnostics;
-	}
-}
-
-function mergeDiagnosticsWithWarnings(
-	diagnostics: FileDiagnosticsResult | undefined,
-	warnings: string[],
-): FileDiagnosticsResult | undefined {
-	if (warnings.length === 0) return diagnostics;
-	const warningMessages = warnings.map(warning => `patch: ${warning}`);
-	if (!diagnostics) {
-		return {
-			server: "patch",
-			messages: warningMessages,
-			summary: `Patch warnings: ${warnings.length}`,
-			errored: false,
-		};
-	}
-	return {
-		...diagnostics,
-		messages: [...warningMessages, ...diagnostics.messages],
-		summary: `${diagnostics.summary}; Patch warnings: ${warnings.length}`,
-	};
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Tool Class

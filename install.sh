@@ -48,22 +48,26 @@ header "Checking system dependencies"
 install_system_deps() {
   case "$OS" in
     arch)
-      ok "Installing base-devel git curl cmake emacs via pacman (sudo required)"
-      sudo pacman -S --needed --noconfirm base-devel git curl cmake emacs
+      ok "Installing base-devel git curl cmake emacs elixir via pacman (sudo required)"
+      sudo pacman -S --needed --noconfirm base-devel git curl cmake emacs elixir
       ;;
     ubuntu)
-      ok "Installing build-essential git curl cmake emacs via apt (sudo required)"
+      ok "Installing build-essential git curl cmake emacs elixir erlang via apt (sudo required)"
       sudo apt-get update -qq
-      sudo apt-get install -y build-essential git curl cmake pkg-config libssl-dev emacs
+      sudo apt-get install -y build-essential git curl cmake pkg-config libssl-dev emacs elixir erlang
       ;;
     macos)
       if ! xcode-select -p &>/dev/null; then
         die "Xcode Command Line Tools required. Run: xcode-select --install  then re-run this script."
       fi
       ok "Xcode CLT present"
-      # Emacs on macOS via Homebrew (installed later in the Qt step if brew is present)
-      # We install it explicitly here using brew if available, otherwise defer to the Qt step.
-      :  # handled in Qt section where brew is already set up
+      if ! command -v brew &>/dev/null; then
+        ok "Installing Homebrew"
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+        [ -f /opt/homebrew/bin/brew ] && eval "$(/opt/homebrew/bin/brew shellenv)"
+      fi
+      ok "Installing elixir via Homebrew"
+      brew install elixir
       ;;
   esac
 }
@@ -198,6 +202,14 @@ bun --cwd=packages/qml run build:bridge
 
 ok "Linking spell CLI"
 bun run install:dev
+
+ok "Building BEAM PTC-Lisp runtime (requires Elixir)"
+cd "$DEST/beam/ptc_runtime"
+mix local.hex --force
+mix deps.get
+mix compile
+cd "$DEST"
+
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""

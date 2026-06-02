@@ -1,0 +1,15 @@
+#+TITLE: Verify FUP-095 tsgo gate (bun run check exit-0) in a healthy env
+#+STATE: ITEM
+#+SESSION_ID: 14edc1bec5a09a49
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-fup095/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
+#+CUSTOM_ID: FUP-102-verify-fup-095-tsgo-gate-bun-run-check-e
+
+* Initial Message
+
+Do a deep review of the code done, merge fup-099-live-semantic-dispatch onto here, and double (triple) check that symbol finding and LSP tools and whatnot are now working under this new paradigm. Take all the time you need
+
+FUP-095 (lsp-tool nuke) shipped + committed (d737baa81, merged 60ed46e31). Its todo gate `bun run --cwd packages/coding-agent check` requires exit-0, which is UNSATISFIABLE in worktree /home/user/code/ora/spell-fup095: tsgo reports 42 errors, ALL pre-existing baseline (tui.ts private-field, ssh-kdl, mcp-kdl, secrets-kdl, ModelRegistry, settings-migration, edit.ts DiagnosticDto.hint) — verified via `comm -13 <(sort base) <(sort post)` = empty (ZERO new errors from the nuke).
+
+Deferred verification: once the worktree env is healthy (native pi_natives.node rebuilt + baseline tsgo errors resolved on main, OR run on a clean main checkout), re-run `bun run --cwd packages/coding-agent check` and confirm 0 errors attributable to FUP-095. Functional acceptance already met: guard test 33/0, reviewer 0.98 CLEAN, orphan sweep empty.
+
+This is a verification-environment limitation, not a work deficiency.

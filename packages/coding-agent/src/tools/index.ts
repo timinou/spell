@@ -11,7 +11,7 @@ import type { InternalUrlRouter } from "../internal-urls";
 import type { LoopManager } from "../loop/loop-manager";
 // REMOVED_PLAN_306_W11: Loop tools had zero session usage in W0-3 replay corpus
 // import { LoopDoneTool, LoopLaunchTool, LoopPrepareTool } from "../loop/loop-tools";
-import { LspTool } from "../lsp";
+
 import type { DiscoverableMCPSearchIndex, DiscoverableMCPTool } from "../mcp/discoverable-tool-metadata";
 import type { CanvasOrchestratorManager } from "../orchestrators/canvas-orchestrator";
 import type { CanvasTaskManager } from "../orchestrators/canvas-task-manager";
@@ -40,26 +40,24 @@ import { CreateTool } from "./create";
 import { CodepathEditTool } from "./edit";
 import { ExitPlanModeTool } from "./exit-plan-mode";
 import { FetchTool } from "./fetch";
-
 // REMOVED_PLAN_306_W11: Zero session usage in W0-3 replay corpus
 // import { GatewayTool } from "./gateway";
 import { FindTool } from "./find";
 import { GetTool } from "./get";
-import { StatusTool } from "./status";
 import { GoalsTool } from "./goals-tool";
-
 import { InspectImageTool } from "./inspect-image";
 import { ManageTool } from "./manage";
 import { MemoryTool } from "./memory";
 import { OrgTool } from "./org";
 import { wrapToolWithMetaNotice } from "./output-meta";
-
+import { ExecuteTool } from "./ptc-runtime/execute";
 import { RenderMermaidTool } from "./render-mermaid";
 import { ResolveTool } from "./resolve";
 import { reportFindingTool } from "./review";
 import { SearchToolBm25Tool } from "./search-tool-bm25";
 import { SendFileTool } from "./send-file";
 import { loadSshTool } from "./ssh";
+import { StatusTool } from "./status";
 import { SubmitResultTool } from "./submit-result";
 import { type TodoGroup, TodoWriteTool } from "./todo-write";
 
@@ -68,7 +66,7 @@ import { type TodoGroup, TodoWriteTool } from "./todo-write";
 export * from "../exa";
 export type * from "../exa/types";
 export * from "../loop/loop-tools";
-export * from "../lsp";
+
 export * from "../patch";
 export * from "../sandbox";
 export * from "../session/streaming-output";
@@ -94,24 +92,21 @@ export * from "./create";
 export * from "./edit";
 export * from "./exit-plan-mode";
 export * from "./fetch";
-
+export * from "./find";
 export * from "./gateway";
-export * from "./image-generation";
 export * from "./get";
 export * from "./goals-tool";
-
+export * from "./image-generation";
 export * from "./inspect-image";
 export * from "./manage";
-export * from "./find";
-export * from "./status";
 export * from "./pending-action";
-
 export * from "./render-mermaid";
 export * from "./resolve";
 export * from "./review";
 export * from "./search-tool-bm25";
 export * from "./send-file";
 export * from "./ssh";
+export * from "./status";
 export * from "./submit-result";
 export * from "./todo-write";
 
@@ -139,8 +134,7 @@ export interface ToolSession {
 	skills?: Skill[];
 	/** Pre-loaded prompt templates */
 	promptTemplates?: PromptTemplate[];
-	/** Whether LSP integrations are enabled */
-	enableLsp?: boolean;
+
 	/** Optional sandbox policy constraining file writes and bash commands */
 	sandboxPolicy?: SandboxPolicy;
 	/** Whether the edit tool is available in this session (controls hashline output) */
@@ -252,8 +246,6 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	calc: s => new CalculatorTool(s),
 	ssh: loadSshTool,
 
-	lsp: LspTool.createIf,
-
 	inspect_image: s => new InspectImageTool(s),
 	browser: s => new BrowserTool(s),
 	checkpoint: CheckpointTool.createIf,
@@ -288,6 +280,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	manage: () => new ManageTool(), // legacy alias — REMOVE_AT_WAVE_11 (replaced by `status`)
 	create: s => new CreateTool(s),
 	edit: s => new CodepathEditTool(s),
+	execute: s => new ExecuteTool(s),
 };
 
 export type ToolTier = "core" | "standard" | "specialized";
@@ -296,12 +289,6 @@ export const TOOL_TIERS: Record<string, ToolTier> = {
 	// Core — always loaded, essential for any task
 
 	bash: "core",
-	// PLAN-318 W6: lsp demoted from core to specialized. pi-code-graph
-	// + find/code-path tools cover ≥95% of agent navigation needs
-	// (def→ / ref→ / call→ / import→ / implements→ / inherits→ / hover).
-	// LSP remains available for type-aware queries and live
-	// diagnostics (FUP-090 / FUP-091).
-	lsp: "specialized",
 
 	task: "core",
 	ask: "core",
@@ -387,7 +374,6 @@ export type ToolName = keyof typeof BUILTIN_TOOLS;
  */
 export async function createTools(session: ToolSession, toolNames?: string[]): Promise<Tool[]> {
 	const includeSubmitResult = session.requireSubmitResultTool === true;
-	const enableLsp = session.enableLsp ?? true;
 	const requestedTools =
 		toolNames && toolNames.length > 0 ? [...new Set(toolNames.map(name => name.toLowerCase()))] : undefined;
 	if (requestedTools && !requestedTools.includes("exit_plan_mode")) {
@@ -415,7 +401,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "org" && inPlanMode) return true;
 		if (name === "org") return !!session.settings.get("org.enabled");
 		if (name === "todo_write" && inPlanMode) return true;
-		if (name === "lsp") return enableLsp;
 
 		if (name === "todo_write") return session.settings.get("todo.enabled");
 		if (name === "find") return session.settings.get("find.enabled");
@@ -427,7 +412,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "fetch") return session.settings.get("fetch.enabled");
 		if (name === "web_search") return session.settings.get("web_search.enabled");
 		if (name === "search_tool_bm25") return session.settings.get("mcp.discoveryMode");
-		if (name === "lsp") return session.settings.get("lsp.enabled");
 		if (name === "calc") return session.settings.get("calc.enabled");
 		if (name === "browser") return session.settings.get("browser.enabled");
 		if (name === "checkpoint" || name === "rewind") return session.settings.get("checkpoint.enabled");

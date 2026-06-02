@@ -154,14 +154,15 @@ export class InspectImageTool implements AgentTool<typeof inspectImageSchema, In
 			throw new ToolError("inspect_image model returned no text output.");
 		}
 
-		return {
-			content: [{ type: "text", text }],
-			details: {
-				model: `${model.provider}/${model.id}`,
-				imagePath: imageInput.resolvedPath,
-				mimeType: imageInput.mimeType,
-			},
-		};
+  return {
+  			content: [{ type: "text", text }],
+  			details: {
+  				model: `${model.provider}/${model.id}`,
+  				imagePath: imageInput.resolvedPath,
+  				mimeType: imageInput.mimeType,
+  			},
+  			data: null,
+  		};
 	}
 }
 

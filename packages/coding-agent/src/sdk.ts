@@ -130,7 +130,7 @@ import {
 	setPreferredSearchProvider,
 	type Tool,
 	type ToolSession,
-	warmupLspServers,
+
 } from "./tools";
 import {
 	CANVAS_AGENT_CHANNEL,
@@ -209,8 +209,7 @@ export interface CreateAgentSessionOptions {
 	/** Enable MCP server discovery from .mcp.json files. Default: true */
 	enableMCP?: boolean;
 
-	/** Enable LSP integration (tool, formatting, diagnostics, warmup). Default: true */
-	enableLsp?: boolean;
+
 	/** Optional sandbox policy constraining file writes and bash commands for this session */
 	sandboxPolicy?: import("./sandbox").SandboxPolicy;
 	/** Skip Python kernel availability check and prelude warmup */
@@ -255,8 +254,7 @@ export interface CreateAgentSessionResult {
 	spellcastReport?: string;
 	/** Warning emitted when stored spellcasting auth is invalid or unreachable */
 	spellcastingWarning?: string;
-	/** LSP servers that were warmed up at startup */
-	lspServers?: Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }>;
+
 	/** EventBus instance for inter-module communication */
 	eventBus?: EventBus;
 	/** Canvas orchestrator manager (undefined if no canvas support) */
@@ -949,7 +947,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	let agent: Agent;
 	let session: AgentSession;
 
-	const enableLsp = options.enableLsp ?? true;
+
 	const asyncEnabled = settings.get("async.enabled");
 	const asyncMaxJobs = Math.min(100, Math.max(1, settings.get("async.maxJobs") ?? 100));
 	const asyncJobTimeoutMs = Math.max(0, settings.get("async.jobTimeoutMs") ?? 1_500_000);
@@ -1028,7 +1026,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			return sessionManager.getCwd();
 		},
 		hasUI: options.hasUI ?? false,
-		enableLsp,
+
 		sandboxPolicy: options.sandboxPolicy,
 		hasEditTool: requestedBuiltInToolNames.includes("edit"),
 
@@ -1853,22 +1851,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// Warm up LSP servers (connects to detected servers)
 	// LSP servers are warmed up in background — don't block session creation.
 	// Tools use lazy getOrCreateClient, so they work before warmup completes.
-	const lspServers: CreateAgentSessionResult["lspServers"] = [];
-	if (enableLsp && settings.get("lsp.diagnosticsOnWrite")) {
-		warmupLspServers(cwd, {
-			onConnecting: serverNames => {
-				if (options.hasUI && serverNames.length > 0) {
-					process.stderr.write(chalk.gray(`Starting LSP servers: ${serverNames.join(", ")}…\n`));
-				}
-			},
-		})
-			.then(result => {
-				lspServers.push(...result.servers);
-			})
-			.catch(error => {
-				logger.warn("LSP server warmup failed", { cwd, error: String(error) });
-			});
-	}
+
 
 	toolSession.dispose = async () => {
 		if (toolSession.qmlRemoteServer) {
@@ -2020,7 +2003,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		if (!text) {
 			throw new Error("Tidewave returned no text content.");
 		}
-		return { content: [{ type: "text", text }], details: { fallback: "tidewave-http", mcpUrl } };
+		return { content: [{ type: "text", text }], details: { fallback: "tidewave-http", mcpUrl }, data: null };
 	};
 
 	// Wire QML armed tool invocations: short-circuit tool execution without an agent turn.
@@ -2053,6 +2036,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return {
 					content: [{ type: "text", text: invokeError }],
 					details: { fallback: "tidewave-http", error: invokeError },
+					data: null,
 				} satisfies AgentToolResult<unknown>;
 			});
 			if (fallbackResult) {
@@ -2081,7 +2065,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				);
 			} catch (err) {
 				invokeError = err instanceof Error ? err.message : String(err);
-				result = { content: [{ type: "text", text: invokeError }], details: {} };
+				result = { content: [{ type: "text", text: invokeError }], details: {}, data: null };
 			}
 		}
 
@@ -2223,7 +2207,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		spellcastReport,
 		spellcastingWarning: spellcastingWarning ?? undefined,
 
-		lspServers,
+
 
 		eventBus,
 

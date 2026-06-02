@@ -619,7 +619,7 @@ async function runPlanningAgent(
 		description: "Decomposes user intent into a DAG of agent tasks",
 		systemPrompt,
 		source: "bundled",
-		tools: fastPlan ? [] : ["read", "grep", "find", "lsp"],
+		tools: fastPlan ? [] : ["read", "grep", "find"],
 	};
 
 	const planningTask = critique

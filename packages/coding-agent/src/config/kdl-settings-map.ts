@@ -456,20 +456,7 @@ export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> =
 		propertyName: "simple-ls",
 	},
 
-	"lsp.enabled": { block: "tools", nodePath: "lsp", accessor: "property", propertyName: "enabled" },
-	"lsp.formatOnWrite": { block: "tools", nodePath: "lsp", accessor: "property", propertyName: "format-on-write" },
-	"lsp.diagnosticsOnWrite": {
-		block: "tools",
-		nodePath: "lsp",
-		accessor: "property",
-		propertyName: "diagnostics-on-write",
-	},
-	"lsp.diagnosticsOnEdit": {
-		block: "tools",
-		nodePath: "lsp",
-		accessor: "property",
-		propertyName: "diagnostics-on-edit",
-	},
+
 	"todo.enabled": { block: "tools", nodePath: "todo", accessor: "property", propertyName: "enabled" },
 	"todo.reminders": { block: "tools", nodePath: "todo", accessor: "property", propertyName: "reminders" },
 	"todo.reminders.max": { block: "tools", nodePath: "todo", accessor: "property", propertyName: "reminders-max" },

@@ -1,9 +1,10 @@
 #+TITLE: Remove lsp tool from coding-agent (hard nuke of packages/coding-agent/src/lsp/)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14edc1bec5a09a49
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-24T11-49-33-591Z_14edc1bec5a09a49.jsonl]]
 #+CUSTOM_ID: FUP-095-remove-lsp-tool-from-coding-agent-hard-n
 #+LAYER: coding-agent
+#+COMPLETION_HASH: 47e835bed13de144
 
 * Initial Message
 
@@ -166,6 +167,7 @@ This is why the nuke MUST be a single atomic commit, not piecewise.
 - =packages/coding-agent/src/lsp/= (delete target)
 - =packages/coding-agent/src/prompts/tools/lsp.md= (delete target)
 
+
 * Execution Plan (worktree, 2026-05-29)
 
 Prerequisites now satisfied:
@@ -231,3 +233,5 @@ A worktree starts clean from HEAD, eliminating all collisions.
 - Reviewer subagent: no orphan refs, no parity regression.
 - Single atomic commit (rollback = one revert).
 - Memory concept =lsp-tool-replaced-by-semantic-backend= saved + linked.
+
+NOTE [2026-05-29]: Shipped on worktree branch fup-095-nuke-lsp-tool, commit d737baa81 (merged via 3e6820aae). 63 files, +58/-6977. Reviewer 0.98 confidence CLEAN. Key finding: the lsp/ subsystem was already dead-code on the live edit/write path (writethrough/diagnostics had zero call sites) — removal was pure excision + settings/allowlist/UI cleanup, not a risky behavioural cutover. tsgo baseline-parity (42 pre-existing, 0 new). Guard test 33/0.

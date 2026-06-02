@@ -201,6 +201,13 @@ export type MCPContent = MCPTextContent | MCPImageContent | MCPResourceContent;
 export interface MCPToolCallResult {
 	content: MCPContent[];
 	isError?: boolean;
+	/**
+	 * MCP spec `structuredContent`: the tool's machine-readable result payload
+	 * (https://modelcontextprotocol.io/specification — tools/call result). When a
+	 * server provides it, Spell surfaces it on the `data` channel so a
+	 * programmatic consumer reads typed data instead of re-parsing `content`.
+	 */
+	structuredContent?: unknown;
 }
 
 // =============================================================================

@@ -292,7 +292,7 @@ describe("Agent", () => {
 			description: "Beta tool",
 			parameters: toolSchema,
 			async execute(_toolCallId, params) {
-				return { content: [{ type: "text", text: `beta:${params.value}` }], details: { value: params.value } };
+    return { content: [{ type: "text", text: `beta:${params.value}` }], details: { value: params.value }, data: null };
 			},
 		};
 		const alphaTool: AgentTool<typeof toolSchema, Details> = {
@@ -301,7 +301,7 @@ describe("Agent", () => {
 			description: "Alpha tool",
 			parameters: toolSchema,
 			async execute(_toolCallId, params) {
-				return { content: [{ type: "text", text: `alpha:${params.value}` }], details: { value: params.value } };
+    return { content: [{ type: "text", text: `alpha:${params.value}` }], details: { value: params.value }, data: null };
 			},
 		};
 
@@ -363,7 +363,7 @@ describe("Agent", () => {
 			description: "Beta tool",
 			parameters: toolSchema,
 			async execute(_toolCallId, params) {
-				return { content: [{ type: "text", text: `beta:${params.value}` }], details: { value: params.value } };
+    return { content: [{ type: "text", text: `beta:${params.value}` }], details: { value: params.value }, data: null };
 			},
 		};
 		const alphaTool: AgentTool<typeof toolSchema, Details> = {
@@ -372,7 +372,7 @@ describe("Agent", () => {
 			description: "Alpha tool",
 			parameters: toolSchema,
 			async execute(_toolCallId, params) {
-				return { content: [{ type: "text", text: `alpha:${params.value}` }], details: { value: params.value } };
+    return { content: [{ type: "text", text: `alpha:${params.value}` }], details: { value: params.value }, data: null };
 			},
 		};
 

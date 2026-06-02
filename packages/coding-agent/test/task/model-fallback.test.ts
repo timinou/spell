@@ -128,7 +128,6 @@ describe("runSubprocess delegated model fallback", () => {
 			refresh: async () => {},
 			getAvailable: () => [anthropicModel, openaiModel],
 		} as unknown as import("../../src/config/model-registry").ModelRegistry,
-		enableLsp: false,
 		outputSchema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
 	};
 

@@ -33,17 +33,20 @@ export function createGitHunkTool(git: ControlledGit): CustomTool<typeof gitHunk
 				return {
 					content: [{ type: "text", text: "Binary file diff; no hunks available." }],
 					details: { file: params.file, staged, hunks: [] },
+					data: { file: params.file, staged, hunks: [] },
 				};
 			}
 			const selected = selectHunks(fileHunks, params.hunks);
 			const text = selected.length ? selected.map(hunk => hunk.content).join("\n\n") : "(no matching hunks)";
+			const details = {
+				file: params.file,
+				staged,
+				hunks: selected,
+			}
 			return {
 				content: [{ type: "text", text }],
-				details: {
-					file: params.file,
-					staged,
-					hunks: selected,
-				},
+				details,
+				data: details,
 			};
 		},
 	};

@@ -58,9 +58,10 @@ export class RenderMermaidTool implements AgentTool<typeof renderMermaidSchema, 
 		}
 
 		const artifactLine = artifact?.uri ? `\n\nSaved artifact: ${artifact.uri}` : "";
-		return {
-			content: [{ type: "text", text: `${ascii}${artifactLine}` }],
-			details: { artifactUri: artifact?.uri },
-		};
+  return {
+  			content: [{ type: "text", text: `${ascii}${artifactLine}` }],
+  			details: { artifactUri: artifact?.uri },
+  			data: null,
+  		};
 	}
 }

@@ -197,7 +197,7 @@ If the task may involve external systems, SaaS APIs, chat, tickets, databases, d
 ## Precedence
 {{#ifAny (includes tools "python") (includes tools "bash")}}
 Pick the right tool for the job:
-1. **Structural**: {{#has tools "edit"}}`edit` (source files — tree-sitter read/outline/edit/change), {{/has}}{{#has tools "lsp"}}`lsp` (semantic queries){{/has}}
+1. **Structural**: {{#has tools "edit"}}`edit` (source files — tree-sitter read/outline/edit/change){{/has}}
 2. **Discovery**: `find` (CodePath: paths, globs, symbols, slices, qualifiers, URI schemes)
 3. **Creation**: {{#has tools "create"}}`create` (new files){{/has}}
 4. **Management**: `status` (kernel observability: languages, index, watcherStatus, lockStatus)
@@ -221,15 +221,15 @@ Semantic navigation **MUST** flow through `find` graph edges, not grep:
 These walk pi-code-graph (real cross-file analysis) and follow re-export
 chains. Trailing `→` (no tail step) is sugar for `…→§*`.
 
-{{#has tools "lsp"}}
-### LSP for type-aware + diagnostics only
+### Type-aware queries + diagnostics via `find`
 
-For type-aware questions that pi-code-graph doesn't yet cover
+Type-aware questions that pi-code-graph doesn't cover lexically
 (polymorphic dispatch precision, inferred-type hover, live
-diagnostics) use `lsp`. For routine def/ref/call/implements/inherits
-navigation prefer `find` — it's faster, doesn't require an LSP
-server, and covers more languages.
-{{/has}}
+diagnostics) flow through `find` semantic qualifiers — `#hover`,
+`#signature`, `#type_definition`, `#inlay`, `#diagnostics` — which
+dispatch to the per-workspace SemanticBackend (LSP under the hood).
+For routine def/ref/call/implements/inherits navigation prefer the
+graph edges — faster, offline, every tree-sitter language.
 
 {{#has tools "edit"}}
 ### Edit tool for source files

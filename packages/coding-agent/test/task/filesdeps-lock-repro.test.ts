@@ -45,7 +45,6 @@ function createSession(
 	return {
 		cwd: tempDir,
 		hasUI: false,
-		enableLsp: false,
 		getSessionFile: () => path.join(tempDir, "session.jsonl"),
 		getSessionSpawns: () => "*",
 		getCompactContext: () => undefined,

@@ -1,0 +1,48 @@
+#+TITLE: Expose execute sandbox max-heap as kdl setting + per-call thread
+#+STATE: ITEM
+#+SESSION_ID: 14f9a29f12b3c7dc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-fup095/2026-06-02T17-15-21-034Z_14f9a29f12b3c7dc.jsonl]]
+#+CUSTOM_ID: FEAT-791-expose-execute-sandbox-max-heap-as-kdl-s
+
+* Initial Message
+
+can you try out the execute tool?
+
+* Initial Message
+
+The `execute` PTC-Lisp sandbox heap ceiling is hardcoded; large legitimate `data` payloads (FEAT-789) hit `memory_exceeded: heap limit 10000000 bytes` with no operator knob to raise it.
+
+## Root cause
+ptc_runner caps sandbox heap at `@default_max_n 1_250_000` words (~10MB) — `deps/ptc_runner/lib/ptc_runner/sandbox.ex`. It is configurable per-run via the `max_n` opt and app env `:default_max_n`, but the Spell side threads NEITHER: the run frame (packages/coding-agent/src/tools/ptc-runtime/client.ts:185) sends only `{program, context, signature, timeout_ms}` — no `max_n`. So the 10MB default is effectively fixed.
+
+## Fix (pure plumbing — no dep change; ptc_runner already accepts max_n)
+1. kdl setting under the existing `tools` (or a new `execute`) block in spell.kdl:
+   #+begin_src kdl
+   tools {
+     // execute max-heap-mb=10
+   }
+   #+end_src
+   Default 10 (preserves current behavior). Parse in packages/coding-agent/src/config/settings.ts alongside other tools-block scalars.
+2. Thread into ExecuteTool (src/tools/ptc-runtime/execute.ts): read setting, optionally allow a per-call `max_heap_mb` param (bounded, like timeout_ms's 1..30000 clamp).
+3. Add to the client run frame (client.ts:185) next to timeout_ms:
+   #+begin_src ts
+   max_n: Math.floor((maxHeapMb * 1024 * 1024) / 8), // 1 BEAM word = 8 bytes
+   #+end_src
+4. peer.ex `execute` handler → pass `max_n:` into `PtcRunner.Lisp.run(.., max_n: ...)`.
+
+## Relationship to BUG-426
+Independent. BUG-426 stops dashboard from emitting bloat in the first place (the right default); this item lifts the ceiling so a program that LEGITIMATELY pulls a large dataset isn't capped at a hardcoded 10MB. Ship both: lean payloads by default + operator-tunable headroom.
+
+## Edge cases
+- Clamp to a sane max (e.g. 256MB) so a typo can't exhaust the host.
+- Words vs bytes: ptc_runner `max_n` is in WORDS (8 bytes each); the error reports `max_n * 8` bytes. Convert at the boundary, document the unit in the kdl comment.
+- Per-call param must not exceed the kdl ceiling (setting = max, param = request within it).
+
+## Scope
+- spell.kdl (comment example), packages/coding-agent/src/config/settings.ts
+- packages/coding-agent/src/tools/ptc-runtime/execute.ts + client.ts (run frame)
+- beam/ptc_runtime/lib/ptc_runtime/peer.ex (execute handler → max_n)
+- test: setting raises ceiling; per-call param clamps to setting; default unchanged at ~10MB
+
+## Acceptance
+`tools { execute max-heap-mb=64 }` lets an execute program build a ~64MB `data` value without memory_exceeded; absent the setting, default stays ~10MB.

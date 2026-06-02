@@ -147,6 +147,7 @@ export const reportFindingTool: AgentTool<typeof ReportFindingParams, ReportFind
 				},
 			],
 			details: { title, body, priority, confidence, file_path, line_start, line_end },
+			data: { title, body, priority, confidence, file_path, line_start, line_end },
 		};
 	},
 

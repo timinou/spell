@@ -9,7 +9,7 @@ export interface CalculateResult extends AgentToolResult<undefined> {
 export function calculate(expression: string): CalculateResult {
 	try {
 		const result = new Function(`return ${expression}`)();
-		return { content: [{ type: "text", text: `${expression} = ${result}` }], details: undefined };
+		return { content: [{ type: "text", text: `${expression} = ${result}` }], details: undefined, data: result };
 	} catch (e: any) {
 		throw new Error(e.message || String(e));
 	}

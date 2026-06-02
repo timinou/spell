@@ -243,6 +243,7 @@ describe("agentLoop with AgentMessage", () => {
 				return {
 					content: [{ type: "text", text: `echoed: ${params.value}` }],
 					details: { value: params.value },
+					data: null,
 				};
 			},
 		};
@@ -313,6 +314,7 @@ describe("agentLoop with AgentMessage", () => {
 				return {
 					content: [{ type: "text", text: `echoed: ${params.value}` }],
 					details: { value: params.value },
+					data: null,
 				};
 			},
 		};
@@ -385,6 +387,7 @@ describe("agentLoop with AgentMessage", () => {
 				return {
 					content: [{ type: "text", text: `echoed: ${params.value}` }],
 					details: { value: params.value },
+					data: null,
 				};
 			},
 		};
@@ -480,6 +483,7 @@ describe("agentLoop with AgentMessage", () => {
 				return {
 					content: [{ type: "text", text: `echoed: ${params.value}` }],
 					details: { value: params.value },
+					data: null,
 				};
 			},
 		};
@@ -634,6 +638,7 @@ describe("agentLoop with AgentMessage", () => {
 				return {
 					content: [{ type: "text", text: `ok:${params.value}` }],
 					details: { value: params.value },
+					data: null,
 				};
 			},
 		};
@@ -742,6 +747,7 @@ it("refreshes tools and system prompt between same-turn model calls", async () =
 			return {
 				content: [{ type: "text", text: `beta:${params.value}` }],
 				details: { value: params.value },
+				data: null,
 			};
 		},
 	};
@@ -756,6 +762,7 @@ it("refreshes tools and system prompt between same-turn model calls", async () =
 			return {
 				content: [{ type: "text", text: `alpha:${params.value}` }],
 				details: { value: params.value },
+				data: null,
 			};
 		},
 	};

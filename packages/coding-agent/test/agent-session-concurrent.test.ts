@@ -530,7 +530,7 @@ describe("AgentSession TTSR resume gate", () => {
 			execute: async () => {
 				await Bun.sleep(100);
 				toolExecutionFinished = true;
-				return { content: [{ type: "text" as const, text: "edit applied" }] };
+    return { content: [{ type: "text" as const, text: "edit applied" }], data: null };
 			},
 		};
 

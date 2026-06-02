@@ -59,7 +59,7 @@ export interface InteractiveModeContext {
 	taskManager?: CanvasTaskManager;
 	eventBus?: EventBus;
 	subagentTracker?: SubagentTracker;
-	lspServers?: Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }>;
+
 
 	// State
 	isInitialized: boolean;

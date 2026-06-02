@@ -65,7 +65,7 @@ export async function runCommitAgentSession(input: CommitAgentInput): Promise<Co
 		thinkingLevel: input.thinkingLevel,
 		systemPrompt,
 		customTools: tools,
-		enableLsp: false,
+
 		enableMCP: false,
 		hasUI: false,
 		spawns,

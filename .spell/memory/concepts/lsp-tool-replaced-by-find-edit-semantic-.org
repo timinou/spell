@@ -1,0 +1,29 @@
+#+TITLE: lsp-tool-replaced-by-find-edit-semantic-
+
+** ITEM lsp tool replaced by find/edit semantic backend
+
+FUP-095 (commit d737baa81 on branch fup-095-nuke-lsp-tool) hard-removed the coding-agent `lsp` tool + its ~5687-LOC packages/coding-agent/src/lsp/ subsystem.
+
+Replacement surface (all live after PLAN-319 + FUP-099/100/094):
+- lsp.definition/references/implementation -> find { ::S def→ / ref→ / implements→ }
+- lsp.hover -> find { ::S #hover [source=graph|semantic] } (smart-merge)
+- lsp.type_definition -> find { ::S #type_definition }
+- lsp.diagnostics -> find { glob #diagnostics [severity=…] }
+- lsp.rename -> edit { ::S symbolRename }
+- DROPPED: code_actions, status, reload, formatOnWrite, diagnosticsOnWrite, diagnosticsOnEdit
+
+KEY DISCOVERY: by the time of removal the lsp/ subsystem was ALREADY dead-code on the live edit/write path. LspFileSystem, createLspWritethrough, flushLspWritethroughBatch, mergeDiagnosticsWithWarnings had ZERO call sites (only import statements in patch/index.ts). edit.ts `c.diagnostics` is pi-natives codepath-chunk diagnostics, NOT lsp. So the nuke was a pure dead-code excision plus settings/allowlist/UI-panel cleanup — low risk despite 63 files / -6977 LOC.
+
+Touch points beyond the subsystem: tools/index.ts (BUILTIN_TOOLS + TOOL_TIERS + isToolAllowed), sdk.ts (enableLsp/lspServers/warmupLspServers/lsp.diagnosticsOnWrite), output-meta.ts (DiagnosticMeta + .diagnostics() builder), tool-result.ts delegate, renderers.ts (lspToolRenderer), settings-schema.ts + kdl-settings-map.ts (4 lsp.* keys), allowlists (task/index planModeTools, canvas-orchestrator, canvas-task-manager, fluid-mode, spill-policy), cli/args.ts (--no-lsp), launch-common.ts, main.ts, cursor.ts, interactive-mode + welcome + command-controller + types (LSP-servers welcome panel), system-prompt.md ({{#has tools "lsp"}} branches), docs/sdk.md.
+
+Verification pattern for TS deletions in degraded worktree env: bun-test runtime was broken (native addon + workspace-link), so the deterministic gate was tsgo (`bun run --cwd packages/coding-agent check`) compared via `comm -13` against a clean main checkout to separate pre-existing baseline errors (42) from newly-introduced (0). Guard test (tools/index.test.ts asserts lsp never registered) ran via bun test after symlinking pi_natives.*.node + replicating node_modules/@oh-my-pi/* workspace symlinks from the main checkout.
+:PROPERTIES:
+:CUSTOM_ID: CON-lsp-tool-replaced-by-find-edit-semantic-
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-05-29T11:20:02Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: FUP-095-remove-lsp-tool-from-coding-agent-hard-n
+DISTILLED_FROM: CON-cross-file-reference-resolution-works-fo
+:END:

@@ -528,7 +528,10 @@ export class GetTool implements AgentTool<typeof getSchema> {
 			nodeCount: result.stats.nodeCount,
 			matchCount: result.stats.matchCount,
 			fileCount: result.stats.fileCount,
-		}).text(text);
+		})
+			.text(text)
+			// FEAT-789: machine payload — structured node list, not just render stats.
+			.data(result.data);
 		if (result.meta) {
 			builder.limits({
 				resultLimit: result.meta.limits?.resultLimit?.reached,
@@ -624,6 +627,7 @@ export class GetTool implements AgentTool<typeof getSchema> {
 				fileCount: rendered.stats.fileCount,
 			})
 				.text(notePrefix + (rendered.text?.trim() || `[§empty] ${target}`))
+				.data(rendered.data)
 				.sourceInternal(resource.url ?? target)
 				.done();
 		}

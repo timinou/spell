@@ -801,6 +801,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			return {
 				content: [{ type: "text", text: `Invalid tasks: ${taskPayloadValidationError}` }],
 				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
+				data: null,
 			};
 		}
 		const selectedAgent = this.#discoveredAgents.find(agent => agent.name === params.agent);
@@ -817,6 +818,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						},
 					],
 					details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
+					data: null,
 				};
 			}
 		}
@@ -833,12 +835,14 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			return {
 				content: [{ type: "text", text: `Invalid tasks: ${taskValidationError}` }],
 				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
+				data: null,
 			};
 		}
 		if (asyncEnabled && selectedAgent?.blocking !== true && !this.session.asyncJobManager) {
 			return {
 				content: [{ type: "text", text: "Async execution is enabled but no async job manager is available." }],
 				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
+				data: null,
 			};
 		}
 		const preDispatchParams = { ...resolvedParams, tasks: rawTasksForDispatch };
@@ -884,6 +888,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			return {
 				content: [{ type: "text", text: `Invalid task blockers: ${message}` }],
 				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
+				data: null,
 			};
 		}
 		const implicitBlockerNote = buildImplicitBlockerNote(batchGraph.implicitBlockers, this.session.cwd);
@@ -951,6 +956,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			onUpdate?.({
 				content: [{ type: "text", text: `${implicitBlockerNote}${text}` }],
 				details: buildAsyncDetails(state, primaryJobId),
+				data: null,
 			});
 		};
 
@@ -1174,7 +1180,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 								const progressDetails =
 									(details as TaskToolDetails | undefined) ??
 									buildAsyncDetails("running", startedJobs[0]?.jobId ?? label);
-								onUpdate?.({ content: [{ type: "text", text }], details: progressDetails });
+								onUpdate?.({ content: [{ type: "text", text }], details: progressDetails, data: null });
 							},
 						},
 					);
@@ -1219,6 +1225,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					{ projectAgentsDir: null, results: [], totalDurationMs: 0, progress: getProgressSnapshot() },
 					batchGraph.implicitBlockers,
 				),
+				data: null,
 			};
 		}
 
@@ -1253,6 +1260,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				},
 				batchGraph.implicitBlockers,
 			),
+			data: null,
 		};
 	}
 
@@ -1313,6 +1321,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					results: [],
 					totalDurationMs: 0,
 				},
+				data: null,
 			};
 		}
 
@@ -1329,7 +1338,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const renderedPlanModeSubagentPrompt = renderPromptTemplate(planModeSubagentPrompt, {
 			allowedFolders: planModeAllowedFolders.length > 0 ? planModeAllowedFolders : undefined,
 		});
-		const planModeTools = ["read", "grep", "find", "ls", "lsp", "fetch", "web_search", "org"];
+		const planModeTools = ["read", "grep", "find", "ls", "fetch", "web_search", "org"];
 		if (planModeAllowedFolders.length > 0) {
 			planModeTools.push("write", "edit");
 		}
@@ -1369,6 +1378,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					results: [],
 					totalDurationMs: 0,
 				},
+				data: null,
 			};
 		}
 
@@ -1392,6 +1402,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					results: [],
 					totalDurationMs: 0,
 				},
+				data: null,
 			};
 		}
 
@@ -1405,6 +1416,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					results: [],
 					totalDurationMs: 0,
 				},
+				data: null,
 			};
 		}
 
@@ -1428,6 +1440,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						results: [],
 						totalDurationMs: Date.now() - startTime,
 					},
+					data: null,
 				};
 			}
 		}
@@ -1452,6 +1465,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					results: [],
 					totalDurationMs: Date.now() - startTime,
 				},
+				data: null,
 			};
 		}
 
@@ -1476,6 +1490,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					totalDurationMs: Date.now() - startTime,
 					progress,
 				},
+				data: null,
 			});
 		};
 
@@ -1494,6 +1509,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						results: [],
 						totalDurationMs: Date.now() - startTime,
 					},
+					data: null,
 				};
 			}
 
@@ -1515,6 +1531,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						results: [],
 						totalDurationMs: Date.now() - startTime,
 					},
+					data: null,
 				};
 			}
 
@@ -1622,7 +1639,6 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						persistArtifacts: !!artifactsDir,
 						artifactsDir: effectiveArtifactsDir,
 						contextFile: contextFilePath,
-						enableLsp: false,
 						signal: runSignal,
 						eventBus: this.session.eventBus,
 						onProgress: updateProgress,
@@ -1676,7 +1692,6 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						persistArtifacts: !!artifactsDir,
 						artifactsDir: effectiveArtifactsDir,
 						contextFile: contextFilePath,
-						enableLsp: false,
 						signal: runSignal,
 						eventBus: this.session.eventBus,
 						onProgress: updateProgress,
@@ -2059,6 +2074,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					},
 					syncBatchGraph.implicitBlockers,
 				),
+				data: results, // FEAT-789: aggregated subagent results
 			};
 		} catch (err) {
 			return {
@@ -2068,6 +2084,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					results: [],
 					totalDurationMs: Date.now() - startTime,
 				},
+				data: null,
 			};
 		}
 	}

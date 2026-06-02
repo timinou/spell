@@ -991,46 +991,6 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	// LSP
-	"lsp.enabled": {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "editing",
-			label: "LSP",
-			description: "Enable the lsp tool for language server protocol",
-		},
-	},
-
-	"lsp.formatOnWrite": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "editing",
-			label: "Format on Write",
-			description: "Automatically format code files using LSP after writing",
-		},
-	},
-
-	"lsp.diagnosticsOnWrite": {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "editing",
-			label: "Diagnostics on Write",
-			description: "Return LSP diagnostics after writing code files",
-		},
-	},
-
-	"lsp.diagnosticsOnEdit": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "editing",
-			label: "Diagnostics on Edit",
-			description: "Return LSP diagnostics after editing code files",
-		},
-	},
 
 	// Bash interceptor
 	"bashInterceptor.enabled": {

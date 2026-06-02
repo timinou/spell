@@ -7,11 +7,6 @@ export interface RecentSession {
 	timeAgo: string;
 }
 
-export interface LspServerInfo {
-	name: string;
-	status: "ready" | "error" | "connecting";
-	fileTypes: string[];
-}
 
 /**
  * Premium welcome screen with block-based Spell logo and two-column layout.
@@ -22,7 +17,6 @@ export class WelcomeComponent implements Component {
 		private modelName: string,
 		private providerName: string,
 		private recentSessions: RecentSession[] = [],
-		private lspServers: LspServerInfo[] = [],
 	) {}
 
 	invalidate(): void {}
@@ -36,9 +30,6 @@ export class WelcomeComponent implements Component {
 		this.recentSessions = sessions;
 	}
 
-	setLspServers(servers: LspServerInfo[]): void {
-		this.lspServers = servers;
-	}
 
 	render(termWidth: number): string[] {
 		// Box dimensions - responsive with max width and small-terminal support
@@ -101,22 +92,6 @@ export class WelcomeComponent implements Component {
 			}
 		}
 
-		// LSP servers content
-		const lspLines: string[] = [];
-		if (this.lspServers.length === 0) {
-			lspLines.push(` ${theme.fg("dim", "No LSP servers")}`);
-		} else {
-			for (const server of this.lspServers) {
-				const icon =
-					server.status === "ready"
-						? theme.styledSymbol("status.success", "success")
-						: server.status === "connecting"
-							? theme.styledSymbol("status.disabled", "warning")
-							: theme.styledSymbol("status.error", "error");
-				const exts = server.fileTypes.slice(0, 3).join(" ");
-				lspLines.push(` ${icon} ${theme.fg("muted", server.name)} ${theme.fg("dim", exts)}`);
-			}
-		}
 
 		// Right column
 		const rightLines = [
@@ -125,9 +100,6 @@ export class WelcomeComponent implements Component {
 			` ${theme.fg("dim", "#")}${theme.fg("muted", " for prompt actions")}`,
 			` ${theme.fg("dim", "/")}${theme.fg("muted", " for commands")}`,
 			` ${theme.fg("dim", "!")}${theme.fg("muted", " to run bash")}`,
-			separator,
-			` ${theme.bold(theme.fg("accent", "LSP Servers"))}`,
-			...lspLines,
 			separator,
 			` ${theme.bold(theme.fg("accent", "Recent sessions"))}`,
 			...sessionLines,

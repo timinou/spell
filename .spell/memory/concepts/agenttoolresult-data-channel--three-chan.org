@@ -1,0 +1,31 @@
+#+TITLE: agenttoolresult-data-channel--three-chan
+
+** ITEM AgentToolResult data channel (three-channel tool contract)
+
+AgentToolResult has THREE single-purpose channels, each one job:
+- content = DISPLAY (human/model-facing text+image blocks)
+- details = RENDER-HINT (TUI meta lines, stats; e.g. CodePathStats nodeCount/fileCount)
+- data = PAYLOAD (required+total; the structured value a programmatic consumer reads)
+
+Why: the `execute` PTC-Lisp coprocessor is the first consumer that reads tools as an API, not as text. Before it, every consumer was the model reading content text, so `details` was a casual render bag and the real payload lived in content text blocks. That made get/find programmatically unreadable from execute (resultToValue's old heuristic preferred details, which for get/find was just {nodeCount,...} render stats). The fix: a dedicated required `data` field; resultToValue becomes total `result.data ?? null`.
+
+Cutover mechanics that worked:
+- Make the field REQUIRED on the cross-package type (packages/agent/src/types.ts, 3rd generic D=unknown) so the compiler enumerates every construction site (TS2741). ~60 files.
+- ToolResultBuilder defaults #data=null + .data() setter → all builder-based sites (155) satisfied free; only raw object-literal returns need hand-edits.
+- Rule: structured result → data=that value; interactive/control/error/onUpdate-partial → data:null; NEVER copy content text into data.
+- External boundary (MCP/extension/hook wrappers) SYNTHESIZES data (MCP: structuredContent ?? content) so 3rd-party authors are unaffected by the required field.
+- Channel separation auto-solves dedup leakage: org sets data:result (raw) while the dedup optimization only rewrites the text channel → the "Repeat of previous" placeholder can never reach a program.
+
+Verification: tsgo data-missing count is the precise cutover progress meter. Net type errors must not increase vs baseline (was 85→83 here).
+
+Gotcha: `bun check:ts` runs biome FIRST and short-circuits on pre-existing format issues, so tsgo never runs under it on a dirty branch — run `node_modules/.bin/tsgo -p tsconfig.json` directly to see type errors. Never raw `tsc` (wrong toolchain, chokes on tsconfig).
+:PROPERTIES:
+:CUSTOM_ID: CON-agenttoolresult-data-channel--three-chan
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-02T16:20:25Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: EP-a1ce56881a1a3779
+DISTILLED_FROM: FEAT-789-agenttoolresult-data-machine-payload-cha
+:END:

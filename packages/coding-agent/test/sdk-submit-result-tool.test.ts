@@ -35,7 +35,6 @@ describe("createAgentSession submit_result activation", () => {
 			promptTemplates: [],
 			slashCommands: [],
 			enableMCP: false,
-			enableLsp: false,
 			toolNames: ["read", "todo_write"],
 			requireSubmitResultTool: true,
 		});
@@ -60,7 +59,6 @@ describe("createAgentSession submit_result activation", () => {
 			promptTemplates: [],
 			slashCommands: [],
 			enableMCP: false,
-			enableLsp: false,
 			requireSubmitResultTool: true,
 		});
 

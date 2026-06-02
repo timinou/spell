@@ -9,3 +9,30 @@
 :END:
 :RELATIONS:
 :END:
+** ITEM PTC `execute` tool build: verified ptc_runner v0.11.0 contract from Hex source. Low-level API = PtcRunner.Lisp.run(source, tools: %{"name"=>arity1_fn}, context:, signature:, timeout:, max_heap:, max_parallel_workers:) -> {:ok|:error, %Step{return,fail,usage}}. Tools are arity-1 Elixir fns taking STRING-KEYED maps; PTC-Lisp calls them as (tool/find {:target "..."}) kebab-case. NO tool/call wrapper, NO :value unwrap, map-vals does NOT exist (use update-vals). The existing specs/beam-orchestrator/04-where-ptcrunner-shines.md examples are INVENTED syntax and must be rewritten as real PTC-Lisp (becomes golden tests). Bridge = bidirectional reentrant JSON-RPC over stdio: Node spawns BEAM, BEAM issues concurrent tool_call callbacks (pmap bounded by max_parallel_workers=8) Node services by id. SOTA packaging = Burrito (single binary bundling ERTS). HAZARD: found erl_crash.dump in worktree = prior boot died with io:put_chars(standard_error) 'device does not exist' — headless BEAM stderr must be wired or stdio peer dies on boot. Decisions: tool name=execute, location=top-level beam/, lifecycle=long-lived-per-session+respawn, dev=mix run now / Burrito Phase0b. Working in worktree /home/user/code/ora/spell-fup095 branch feat-ptc-execute-tool (kernel edits resolve here, NOT cwd spell/).
+:PROPERTIES:
+:CUSTOM_ID: EP-631cee73aab73359
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-01T23:06:38Z
+:END:
+:RELATIONS:
+:END:
+** ITEM PTC-Lisp verified-syntax corrections (smoke-tested in beam/ptc_runtime against ptc_runner 0.11.0). update-vals is (map, fn) → MUST use thread-first -> not thread-last ->>. Correct group-count idiom: (-> (group-by :layer data/items) (update-vals count)). frequencies works: (frequencies (map :layer data/items)). pmap over tool callbacks WORKS: (pmap (fn [x] (tool/sq {:n x})) [1 2 3 4]) — this is the BEAM bounded-concurrency seam. Infinite loops hit :loop_limit_exceeded (1000 iters) BEFORE wall :timeout; both return {:error, %Step{fail: %{reason, message}}} and BEAM survives. Signatures return STRING-keyed maps: run(src, signature: "{total :int}") → %{"total"=>3}. data/<key> reads from context map. Tool fns are arity-1 string-keyed-map. These corrections drive the P4 golden rewrite of 04-where-ptcrunner-shines.md.
+:PROPERTIES:
+:CUSTOM_ID: EP-99f9caf1cd5ff9db
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-01T23:10:01Z
+:END:
+:RELATIONS:
+:END:
+** ITEM Review Gate 0 (PtcRuntime P0) findings + fixes. P0 (CRITICAL, reviewer-verified empirically): PtcRuntime.Logger used Logger.remove_backend(:console) which is a NO-OP on Elixir 1.15+ — the OTP :default logger_std_h writes to STDOUT, corrupting the JSON-RPC protocol stream. FIX: :logger.remove_handler(:default) + add file handler first. Verified: stdout stays clean after Logger.error. P1: non-encodable execute return (e.g. (fn [x] x) closure) crashed the long-lived Peer via Jason.encode raise → all session state lost. FIX: ensure_encodable/1 inside rescued execute proc downgrades to unencodable_return error. P1: spawnTransport only wired 'close' not 'error' → mix/binary absent emits 'error' (ENOENT) → uncaught crash + init() hangs forever. FIX: child.on('error') routes into fireClose path. P2: tool_call timeout/worker-death leaked pending entries on long-lived Peer. FIX: Process.monitor(caller_pid), drop pending on caller :DOWN. All 4 fixed + regression tested (11 Elixir, 22 TS green). Deferred P3 backpressure → PLAN-322. Lesson: 'stderr hazard handled' claims MUST be empirically verified on the actual Elixir version — deprecated no-op APIs silently fail.
+:PROPERTIES:
+:CUSTOM_ID: EP-81bb9ea47c35614f
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-01T23:39:37Z
+:END:
+:RELATIONS:
+:END:

@@ -137,7 +137,7 @@ describe("AgentSession eager todo enforcement", () => {
 			label: "Bash",
 			description: "Mock bash tool",
 			parameters: Type.Object({}),
-			execute: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
+   execute: async () => ({ content: [{ type: "text" as const, text: "ok" }], data: null }),
 		};
 
 		const agent = new Agent({

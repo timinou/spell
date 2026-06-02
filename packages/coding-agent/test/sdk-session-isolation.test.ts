@@ -32,7 +32,6 @@ describe("createAgentSession session storage isolation", () => {
 			promptTemplates: [],
 			slashCommands: [],
 			enableMCP: false,
-			enableLsp: false,
 		});
 
 		try {

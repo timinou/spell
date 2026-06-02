@@ -271,9 +271,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#planModeOverlayHandle: OverlayHandle | undefined;
 	#auditOverlay: AuditModeOverlay | undefined;
 	#auditOverlayHandle: OverlayHandle | undefined;
-	readonly lspServers:
-		| Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }>
-		| undefined = undefined;
+
 	mcpManager?: import("../mcp").MCPManager;
 	taskManager?: import("../orchestrators/canvas-task-manager").CanvasTaskManager;
 	eventBus?: EventBus;
@@ -311,9 +309,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		version: string,
 		changelogMarkdown: string | undefined = undefined,
 		setToolUIContext: (uiContext: ExtensionUIContext, hasUI: boolean) => void = () => {},
-		lspServers:
-			| Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }>
-			| undefined = undefined,
 		mcpManager?: import("../mcp").MCPManager,
 		taskManager?: import("../orchestrators/canvas-task-manager").CanvasTaskManager,
 		eventBus?: EventBus,
@@ -327,7 +322,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#version = version;
 		this.#changelogMarkdown = changelogMarkdown;
 		this.#toolUiContextSetter = setToolUIContext;
-		this.lspServers = lspServers;
 		this.mcpManager = mcpManager;
 		this.taskManager = taskManager;
 		this.eventBus = eventBus;
@@ -527,19 +521,12 @@ export class InteractiveMode implements InteractiveModeContext {
 			),
 		);
 
-		// Convert LSP servers to welcome format
-		const lspServerInfo =
-			this.lspServers?.map(s => ({
-				name: s.name,
-				status: s.status as "ready" | "error" | "connecting",
-				fileTypes: s.fileTypes,
-			})) ?? [];
 
 		const startupQuiet = settings.get("startup.quiet");
 
 		if (!startupQuiet) {
 			// Add welcome header
-			const welcome = new WelcomeComponent(this.#version, modelName, providerName, recentSessions, lspServerInfo);
+			const welcome = new WelcomeComponent(this.#version, modelName, providerName, recentSessions);
 
 			// Setup UI layout
 			this.ui.addChild(new Spacer(1));

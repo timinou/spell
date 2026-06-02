@@ -244,6 +244,7 @@ export class MCPWrappedTool implements CustomTool<TSchema, ExaRenderDetails> {
 				return {
 					content: [{ type: "text" as const, text: "Error: EXA_API_KEY required for Websets tools" }],
 					details: { error: "EXA_API_KEY required for Websets tools", toolName: this.config.name },
+					data: null,
 				};
 			}
 
@@ -256,18 +257,21 @@ export class MCPWrappedTool implements CustomTool<TSchema, ExaRenderDetails> {
 				return {
 					content: [{ type: "text" as const, text: formatted }],
 					details: { response, toolName: this.config.name },
+					data: response,
 				};
 			}
 
 			return {
 				content: [{ type: "text" as const, text: JSON.stringify(response, null, 2) }],
 				details: { raw: response, toolName: this.config.name },
+				data: response,
 			};
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			return {
 				content: [{ type: "text" as const, text: `Error: ${message}` }],
 				details: { error: message, toolName: this.config.name },
+				data: null,
 			};
 		}
 	}

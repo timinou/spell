@@ -3,9 +3,10 @@
  *
  * Converts MCP tool definitions to CustomTool format for the agent.
  */
+
+import type { TSchema } from "@sinclair/typebox";
 import type { AgentToolUpdateCallback } from "@spell/pi-agent-core";
 import { sanitizeSchemaForMCP } from "@spell/pi-ai/utils/schema";
-import type { TSchema } from "@sinclair/typebox";
 import type { SourceMeta } from "../capability/types";
 import type {
 	CustomTool,
@@ -17,7 +18,7 @@ import type { Theme } from "../modes/theme/theme";
 import { ToolAbortError, throwIfAborted } from "../tools/tool-errors";
 import { callTool } from "./client";
 import { renderMCPCall, renderMCPResult } from "./render";
-import type { MCPContent, MCPServerConnection, MCPToolDefinition } from "./types";
+import type { MCPContent, MCPServerConnection, MCPToolCallResult, MCPToolDefinition } from "./types";
 
 function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
 	if (!signal) return promise;
@@ -50,6 +51,17 @@ export interface MCPToolDetails {
 	/** Provider display name (e.g., "Claude Code", "MCP Config") */
 	providerName?: string;
 }
+/**
+ * Synthesize the `data` PAYLOAD channel for an MCP result (FEAT-789). Prefer the
+ * spec's `structuredContent` (the server's machine result); fall back to the raw
+ * content array so a program still gets typed data, not a pre-joined string.
+ * This keeps external MCP authors unaffected by the required `data` field — Spell
+ * fills it at the boundary.
+ */
+function synthesizeMCPData(result: MCPToolCallResult): unknown {
+	return result.structuredContent ?? result.content;
+}
+
 /**
  * Format MCP content for LLM consumption.
  */
@@ -192,12 +204,14 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 				return {
 					content: [{ type: "text", text: `Error: ${text}` }],
 					details,
+					data: null,
 				};
 			}
 
 			return {
 				content: [{ type: "text", text }],
 				details,
+				data: synthesizeMCPData(result),
 			};
 		} catch (error) {
 			if (error instanceof ToolAbortError) {
@@ -219,6 +233,7 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 					provider: this.connection._source?.provider,
 					providerName: this.connection._source?.providerName,
 				},
+				data: null,
 			};
 		}
 	}
@@ -300,12 +315,14 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 				return {
 					content: [{ type: "text", text: `Error: ${text}` }],
 					details,
+					data: null,
 				};
 			}
 
 			return {
 				content: [{ type: "text", text }],
 				details,
+				data: synthesizeMCPData(result),
 			};
 		} catch (error) {
 			if (error instanceof ToolAbortError) {
@@ -327,6 +344,7 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 					provider: this.#fallbackProvider,
 					providerName: this.#fallbackProviderName,
 				},
+				data: null,
 			};
 		}
 	}

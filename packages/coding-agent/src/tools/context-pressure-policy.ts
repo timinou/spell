@@ -204,14 +204,14 @@ function classifyRead(input: ContextPressureInput): ContextPressureMeta | undefi
 			followUp: [],
 		});
 	}
-	const followUp = ["Prefer code/lsp or read with offset/limit for exact lines."];
+	const followUp = ["Prefer find/get with offset/limit for exact lines."];
 	return buildMeta({
 		category: "source-exploration",
 		presentation: "summary-first",
 		persistence: "summary-only",
 		reason: "Untargeted source/test reads behave like raw repo browsing and inflate fresh input.",
 		summary: buildSummary({
-			sentence: `Read source-like file ${describePath(rawPath)} without explicit range. Use code/lsp or precise follow-up instead of exploratory browsing.`,
+			sentence: `Read source-like file ${describePath(rawPath)} without explicit range. Use find/get or precise follow-up instead of exploratory browsing.`,
 			followUp,
 			artifactUri,
 		}),

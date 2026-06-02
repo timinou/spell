@@ -106,6 +106,7 @@ function makeTool(opts: TestToolOptions): AgentTool<any, any> {
 			return {
 				content: [{ type: "text", text: opts.resultText ?? opts.name }],
 				details: {},
+				data: null,
 			};
 		},
 	};

@@ -19,7 +19,7 @@ function createMcpCustomTool(name: string, serverName: string, mcpToolName: stri
 		mcpToolName,
 		parameters: Type.Object({ query: Type.String() }),
 		async execute() {
-			return { content: [{ type: "text", text: `${name} executed` }] };
+   return { content: [{ type: "text", text: `${name} executed` }], data: null };
 		},
 	} as CustomTool;
 }
@@ -51,7 +51,6 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			promptTemplates: [],
 			slashCommands: [],
 			enableMCP: false,
-			enableLsp: false,
 			toolNames: ["read"],
 			customTools: [createMcpCustomTool("mcp_github_create_issue", "github", "create_issue")],
 		});
@@ -73,7 +72,6 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			promptTemplates: [],
 			slashCommands: [],
 			enableMCP: false,
-			enableLsp: false,
 			toolNames: ["read", "mcp_github_create_issue", "search_tool_bm25"],
 			customTools: [
 				createMcpCustomTool("mcp_github_create_issue", "github", "create_issue"),
@@ -106,7 +104,6 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			promptTemplates: [],
 			slashCommands: [],
 			enableMCP: false,
-			enableLsp: false,
 			toolNames: ["read", "search_tool_bm25"],
 			customTools: [createMcpCustomTool("mcp_github_create_issue", "github", "create_issue")],
 		});

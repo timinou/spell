@@ -147,7 +147,6 @@ describe("runSubprocess tool call budget", () => {
 		id: "subagent-tool-budget",
 		authStorage: {} as unknown as AuthStorage,
 		modelRegistry: { refresh: async () => {} } as unknown as import("../../src/config/model-registry").ModelRegistry,
-		enableLsp: false,
 	};
 
 	it("aborts when tool count exceeds budget and still accepts submit_result reminder recovery", async () => {

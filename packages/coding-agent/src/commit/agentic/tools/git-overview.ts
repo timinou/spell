@@ -78,6 +78,7 @@ export function createGitOverviewTool(
 			return {
 				content: [{ type: "text", text: JSON.stringify(snapshot, null, 2) }],
 				details: snapshot,
+				data: snapshot,
 			};
 		},
 	};

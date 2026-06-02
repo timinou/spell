@@ -389,6 +389,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 			action: action.kind,
 		})
 			.text(summary)
+			.data({ diff, editCount, created })
 			.done();
 	}
 
@@ -445,6 +446,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 			diff: change.newContent,
 		})
 			.text(text)
+			.data({ type: change.type, path: change.path, newPath: change.newPath, warnings: result.warnings })
 			.done();
 	}
 

@@ -185,7 +185,6 @@ export interface ExecutorOptions {
 	outputSchema?: unknown;
 	/** Parent task recursion depth (0 = top-level, 1 = first child, etc.) */
 	taskDepth?: number;
-	enableLsp?: boolean;
 	signal?: AbortSignal;
 	onProgress?: (progress: AgentProgress) => void;
 	sessionFile?: string | null;
@@ -567,6 +566,7 @@ function createMCPProxyTools(mcpManager: MCPManager): CustomTool<TSchema>[] {
 								: { type: "text" as const, text: JSON.stringify(item) },
 						),
 						details: { serverName, mcpToolName, isError: result.isError },
+						data: null,
 					};
 				} catch (error) {
 					if (error instanceof ToolAbortError) {
@@ -580,6 +580,7 @@ function createMCPProxyTools(mcpManager: MCPManager): CustomTool<TSchema>[] {
 							},
 						],
 						details: { serverName, mcpToolName, isError: true },
+						data: null,
 					};
 				}
 			},
@@ -689,7 +690,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		modelOverride,
 		thinkingLevel,
 		outputSchema,
-		enableLsp,
 		signal,
 		onProgress,
 	} = options;
@@ -796,7 +796,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				? "*"
 				: agent.spawns.join(",");
 
-	const lspEnabled = enableLsp ?? true;
+
 
 	const outputChunks: string[] = [];
 	const finalOutputChunks: string[] = [];
@@ -1437,7 +1437,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 							spawns: spawnsEnv,
 							taskDepth: childDepth,
 							parentTaskPrefix: id,
-							enableLsp: lspEnabled,
+
 							sandboxPolicy: effectiveSandboxPolicy,
 
 							enableMCP,

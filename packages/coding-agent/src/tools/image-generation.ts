@@ -821,6 +821,7 @@ export async function runImageGeneration(
 						responseText,
 						usage: parsed.usage,
 					},
+					data: null,
 				};
 			}
 
@@ -837,6 +838,7 @@ export async function runImageGeneration(
 					responseText,
 					usage: parsed.usage,
 				},
+				data: null,
 			};
 		}
 
@@ -886,6 +888,7 @@ export async function runImageGeneration(
 						responseText: result.responseText,
 						usage: result.usage,
 					},
+					data: null,
 				};
 			}
 
@@ -902,6 +905,7 @@ export async function runImageGeneration(
 					responseText: result.responseText,
 					usage: result.usage,
 				},
+				data: null,
 			};
 		}
 
@@ -960,6 +964,7 @@ export async function runImageGeneration(
 						images: [],
 						responseText,
 					},
+					data: null,
 				};
 			}
 
@@ -975,6 +980,7 @@ export async function runImageGeneration(
 					images: inlineImages,
 					responseText,
 				},
+				data: null,
 			};
 		}
 
@@ -1050,6 +1056,7 @@ export async function runImageGeneration(
 					promptFeedback: data.promptFeedback,
 					usage: data.usageMetadata,
 				},
+				data: null,
 			};
 		}
 
@@ -1067,6 +1074,7 @@ export async function runImageGeneration(
 				promptFeedback: data.promptFeedback,
 				usage: data.usageMetadata,
 			},
+			data: null,
 		};
 	});
 }

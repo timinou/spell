@@ -63,7 +63,6 @@ If omitted, it resolves:
 - skills/context files/prompt templates/slash commands/extensions/custom TS commands
 - built-in tools via `createTools(...)`
 - MCP tools (enabled by default)
-- LSP integration (enabled by default)
 
 ### Required vs optional inputs
 
@@ -289,7 +288,6 @@ type CreateAgentSessionResult = {
 	setToolUIContext: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
 	mcpManager?: MCPManager;
 	modelFallbackMessage?: string;
-	lspServers?: Array<{ name: string; status: "ready" | "error"; fileTypes: string[]; error?: string }>;
 };
 ```
 
@@ -322,7 +320,6 @@ const { session } = await createAgentSession({
 	sessionManager: SessionManager.inMemory(),
 	toolNames: ["read", "grep", "find", "edit", "write"],
 	enableMCP: false,
-	enableLsp: true,
 });
 
 session.subscribe(event => {

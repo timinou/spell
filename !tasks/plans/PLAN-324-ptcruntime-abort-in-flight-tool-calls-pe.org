@@ -1,0 +1,28 @@
+#+TITLE: PtcRuntime: abort in-flight tool_calls + per-execute signal + BEAM respawn
+#+STATE: DONE
+#+SESSION_ID: 14f61cc9d0fec7b6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-fup095/2026-05-30T23-35-10-915Z_14f61cc9d0fec7b6.jsonl]]
+#+CUSTOM_ID: PLAN-324-ptcruntime-abort-in-flight-tool-calls-pe
+
+* Initial Message
+
+Ok I moved you to the session that had already started the LSP tool deletion thing. Please get your bearings and let's draft a new tool called 'execute' or 'process' (your choice, or another verb word) that is an interface for the V1. I am fine with read and write for the tool/call bridge auth scope, you just need to define a good system as an FUP (fully explained with ocntext in the file, with places to do the improvement so it's easy).
+
+the test suite should use plenty of hypothesis, property, and fuzz testing to make sure things like the examples of where ptcrunner shines all work, and that edge cases are werll done.
+you can make P0' the verification that it all works well
+show me your full work manifest with your process methodology, before I validate and let you go off (. main thread for architectural work, reviewer swarms in between implementation phases to surface, file, and fix/implement any BUG or FEAT that you found (mid-flight). Be thorough, you have unlimited time budget.
+
+FEAT from Review Gate 1 (P2/P3, lifecycle/abort cluster). Best addressed together when P3 wires the execute AbortSignal.
+
+(1) P2: in-flight inbound tool_calls not aborted when transport closes. On BEAM death mid-execute, onClosed rejects Node pending (init/execute) but does NOT abort tool_call handlers already awaiting onToolCall (real Spell tools: find/bash/network). They run to completion pointlessly; respondResult/error then no-op on closed guard. Leak proportional to max_parallel_workers. Fix: client owns an AbortController, aborted in onClosed/close(), composed with the execute signal into makeToolDispatcher. Files: client.ts onClosed/close (~L254-266), tool-dispatch.ts (~L82).
+
+(2) P3: shared dispatcher signal will cross-abort concurrent executes. makeToolDispatcher closes over ONE opts.signal threaded into every tool; Peer runs multiple executes concurrently funneling through one dispatcher. Aborting execute-1 would abort execute-2/3's in-flight tool_calls. Fix: carry an execute-scoped id through tool_call params so the dispatcher selects the correct per-execute signal. Files: tool-dispatch.ts (~L75-82), client.ts, peer.ex (thread execute id into tool_call params).
+
+(3) P3: no Node-side BEAM respawn after OS-process death. Docstring says 'crash -> respawn' but only close()/onClosed() exist; OTP :one_for_one only restarts the Peer WITHIN a live BEAM. Whole-VM death has no Node recovery; client becomes permanently closed. Either build respawn at the P3 execute-tool lifecycle layer OR soften the docstring. NOTE: the Peer-supervisor-restart (in-VM) case is already handled by the re-init handshake fix (client replays init on -32001).
+
+Sequencing: do (1)+(2) when P3 wires abort; (3) when P3 execute tool owns client lifecycle.
+
+* Resolution
+
+DONE (commit b37eed620). Execute-scoped id is the cancellation primitive: bridge/peer build the tools map per-execute capturing the execute id; tool_call frames carry exec_id. Client owns ownAbort (aborted on close/exit), registers each execute's caller signal in execSignals by id, composes AbortSignal.any([ownAbort, perExecute]) per tool_call — (1) in-flight tool work aborts on teardown, (2) one execute's cancellation never cross-aborts another. (3) respawn: client.closed getter + ExecuteTool respawns a dead client. Tests: per-execute abort + isolation + closed getter + exec_id frame + respawn lifecycle. Reviewer: correct (race-free, no leak, no Peer-crash, single-flight respawn). NB: surfaced + reconciled a concurrent FEAT-789 data-channel cutover mid-flight (filed, not folded into PLAN commits).
+

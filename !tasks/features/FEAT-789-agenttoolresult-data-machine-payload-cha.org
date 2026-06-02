@@ -1,0 +1,42 @@
+#+TITLE: AgentToolResult.data machine-payload channel for execute coprocessor
+#+STATE: DONE
+#+SESSION_ID: 14f9728a933b8bac
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-fup095/2026-06-02T13-45-17-133Z_14f9728a933b8bac.jsonl]]
+#+CUSTOM_ID: FEAT-789-agenttoolresult-data-machine-payload-cha
+
+* Initial Message
+
+Explain PLAN-322 and PLAN-323 and PLAN-324 and PLAN-325 so I understand the benefits of each
+
+Discovered mid-flight during PLAN-324 work: a half-applied "data channel" refactor sat uncommitted in the worktree (packages/agent/src/types.ts + packages/coding-agent/src/tools/tool-result.ts) plus a matching resultToValue rewrite that had leaked into an early PLAN-324 commit. It was reverted out of the PLAN work to keep those commits atomic and focused, and preserved for proper completion here.
+
+## What it is (and why it's right)
+AgentToolResult currently overloads two fields:
+- content = DISPLAY channel (human/model-facing text+image blocks)
+- details = RENDER-HINT channel (TUI meta lines, stats)
+
+A programmatic consumer (the `execute` PTC-Lisp coprocessor) currently reads structured data via resultToValue's heuristic: prefer `details`, else join `content` text, else an `_images` marker. That heuristic is fragile — it only works for the handful of tools that happen to put a machine-shaped value in `details`, and conflates render hints with payload.
+
+The refactor adds a third, single-purpose field:
+- data: D = the machine PAYLOAD channel, required + total (every tool emits it; `null` when purely interactive/side-effecting).
+
+Then resultToValue becomes total and unambiguous: `return result.data ?? null`.
+
+## Why it's a FEAT, not part of any PLAN-32x
+Orthogonal to the four hardening items (324 abort, 323 ceiling, 322 backpressure, 325 paging). It touches the cross-package tool contract and EVERY tool + tool test, so it must be its own cutover, not smuggled into a hardening commit.
+
+## Scope to complete
+1. packages/agent/src/types.ts: add `D = unknown` param + required `data: D` field (patch saved).
+2. packages/coding-agent/src/tools/tool-result.ts: ToolResultBuilder #data + .data() setter + build() emits it (patch saved).
+3. resultToValue (tool-dispatch.ts): switch to `result.data ?? null` AND update tool-dispatch.test.ts expectations (the 6 resultToValue cases currently assert details/text/_images behavior).
+4. Cutover: every tool that returns AgentToolResult must now set `data` (required field → compile error otherwise). Either populate per-tool OR make build paths default `data: null` and migrate incrementally. Update all tool tests that construct AgentToolResult literals (many add `data` or rely on the builder).
+5. execute coprocessor: once tools emit `data`, the bridge reads the clean payload; drop the `_images`/text-join heuristic.
+
+## Salvaged patches
+- specs/beam-orchestrator/_salvage/data-channel-uncommitted.patch (types.ts + tool-result.ts, git-apply-able)
+- specs/beam-orchestrator/_salvage/data-channel-refactor.patch (includes the resultToValue variant for reference)
+
+## Risk
+`data` is REQUIRED on the interface. A partial application (field added, tools not migrated) breaks resultToValue (returns null) and fails ~20 ptc-runtime tests — exactly what was caught. Land as a complete cutover with the builder defaulting data:null so untouched tools stay valid, then migrate high-value tools (find/get/org/memory) to emit real payloads.
+
+NOTE [2026-06-02]: Adopting salvaged patches as foundation (convergent with independent re-derivation). types.ts + tool-result.ts applied; resultToValue rewritten to result.data ?? null. Proceeding with full cutover: per-tool data population + test migration + F2-F5.

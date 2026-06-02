@@ -40,7 +40,6 @@ function createSession(cwd: string): ToolSession {
 	return {
 		cwd,
 		hasUI: false,
-		enableLsp: false,
 		getSessionFile: () => path.join(cwd, "session.jsonl"),
 		getSessionSpawns: () => "*",
 		getCompactContext: () => undefined,
