@@ -13,6 +13,7 @@ import { existsSync } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "bun:test";
 import { PtcRuntimeClient, spawnTransport } from "./client";
+import { PERMISSIVE_POLICY } from "./policy";
 import { type DispatchableTool, lookupFromMap, makeToolDispatcher } from "./tool-dispatch";
 
 describe("spawn failure handling", () => {
@@ -98,7 +99,7 @@ d("real BEAM round-trip", () => {
 		const { transport } = spawnTransport({ runtimeDir });
 		const client = new PtcRuntimeClient({
 			transport,
-			onToolCall: makeToolDispatcher({ lookup: lookupFromMap(tools) }),
+			onToolCall: makeToolDispatcher({ lookup: lookupFromMap(tools), policy: PERMISSIVE_POLICY }),
 		});
 		try {
 			await client.init({ tools: [{ name: "org" }] });

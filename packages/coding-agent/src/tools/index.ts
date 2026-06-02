@@ -38,6 +38,7 @@ import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
 
 import { CreateTool } from "./create";
 import { CodepathEditTool } from "./edit";
+import { ExecuteTool } from "./ptc-runtime/execute";
 import { ExitPlanModeTool } from "./exit-plan-mode";
 import { FetchTool } from "./fetch";
 
@@ -286,6 +287,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	manage: () => new ManageTool(), // legacy alias — REMOVE_AT_WAVE_11 (replaced by `status`)
 	create: s => new CreateTool(s),
 	edit: s => new CodepathEditTool(s),
+	execute: s => new ExecuteTool(s),
 };
 
 export type ToolTier = "core" | "standard" | "specialized";

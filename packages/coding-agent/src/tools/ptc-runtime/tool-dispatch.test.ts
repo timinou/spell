@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "bun:test";
 import type { AgentToolResult } from "@spell/pi-agent-core";
+import { PERMISSIVE_POLICY } from "./policy";
 import {
 	DEFAULT_DENYLIST,
 	type DispatchableTool,
@@ -12,6 +13,10 @@ import {
 	resultToValue,
 	ToolNotAvailableError,
 } from "./tool-dispatch";
+
+// Dispatcher mechanics tests use a permissive policy; the read+write DEFAULT
+// policy + effect tags are exercised in policy.test.ts.
+const anyEffect = { policy: PERMISSIVE_POLICY };
 
 function textResult(text: string): AgentToolResult {
 	return { content: [{ type: "text", text }] };
@@ -66,7 +71,7 @@ describe("resultToValue", () => {
 describe("makeToolDispatcher", () => {
 	it("resolves, executes, and returns the converted value", async () => {
 		const tools = new Map<string, DispatchableTool>([["org", fakeTool("org", { content: [], details: { open: 5 } })]]);
-		const dispatch = makeToolDispatcher({ lookup: lookupFromMap(tools) });
+		const dispatch = makeToolDispatcher({ lookup: lookupFromMap(tools), ...anyEffect });
 		await expect(dispatch({ tool: "org", args: { command: "query" } })).resolves.toEqual({ open: 5 });
 	});
 
@@ -84,13 +89,13 @@ describe("makeToolDispatcher", () => {
 				},
 			],
 		]);
-		const dispatch = makeToolDispatcher({ lookup: lookupFromMap(tools) });
+		const dispatch = makeToolDispatcher({ lookup: lookupFromMap(tools), ...anyEffect });
 		await dispatch({ tool: "echo", args: { a: 1, b: "two" } });
 		expect(seen).toEqual({ a: 1, b: "two" });
 	});
 
 	it("throws ToolNotAvailableError for unknown tools", async () => {
-		const dispatch = makeToolDispatcher({ lookup: () => undefined });
+		const dispatch = makeToolDispatcher({ lookup: () => undefined, ...anyEffect });
 		await expect(dispatch({ tool: "nope", args: {} })).rejects.toBeInstanceOf(ToolNotAvailableError);
 	});
 
@@ -98,7 +103,7 @@ describe("makeToolDispatcher", () => {
 		const tools = new Map<string, DispatchableTool>([
 			["bad", fakeTool("bad", { content: [{ type: "text", text: "kaboom" }], isError: true })],
 		]);
-		const dispatch = makeToolDispatcher({ lookup: lookupFromMap(tools) });
+		const dispatch = makeToolDispatcher({ lookup: lookupFromMap(tools), ...anyEffect });
 		await expect(dispatch({ tool: "bad", args: {} })).rejects.toThrow(/kaboom/);
 	});
 
@@ -116,7 +121,7 @@ describe("makeToolDispatcher", () => {
 				},
 			],
 		]);
-		const dispatch = makeToolDispatcher({ lookup: lookupFromMap(tools), idPrefix: "x" });
+		const dispatch = makeToolDispatcher({ lookup: lookupFromMap(tools), idPrefix: "x", ...anyEffect });
 		await dispatch({ tool: "t", args: {} });
 		await dispatch({ tool: "t", args: {} });
 		expect(ids).toHaveLength(2);

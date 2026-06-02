@@ -31,7 +31,9 @@
  */
 
 import type { AgentToolContext, AgentToolResult } from "@spell/pi-agent-core";
+import type { CatalogTool } from "./catalog-gen";
 import type { ToolCallHandler, ToolCallRequest } from "./client";
+import { type CapabilityPolicy, DEFAULT_POLICY, enforcePolicy } from "./policy";
 
 /** Minimal shape of a runnable tool (structural subset of AgentTool). */
 export interface DispatchableTool {
@@ -48,8 +50,22 @@ export interface DispatchableTool {
 /** Resolve a tool by name, or `undefined` if absent/denied. */
 export type ToolLookup = (name: string) => DispatchableTool | undefined;
 
+/**
+ * Supplies the catalog + lookup the `execute` tool needs. Defined here (a
+ * neutral module) so `execute.ts` and `catalog-session.ts` share one type
+ * without an import cycle.
+ */
+export interface ToolProvider {
+	/** Catalog entries (name + parameters) for signature/effect generation. */
+	catalogTools(): CatalogTool[];
+	/** Resolve a runnable tool instance by name. */
+	lookup(name: string): DispatchableTool | undefined;
+}
+
 export interface DispatchOptions {
 	lookup: ToolLookup;
+	/** Capability policy enforced before each tool runs (default: read+write). */
+	policy?: CapabilityPolicy;
 	/** Abort signal threaded into every tool execute (the execute call's signal). */
 	signal?: AbortSignal;
 	/** Context threaded into every tool execute. */
@@ -73,10 +89,15 @@ export class ToolNotAvailableError extends Error {
 export function makeToolDispatcher(opts: DispatchOptions): ToolCallHandler {
 	let seq = 0;
 	const prefix = opts.idPrefix ?? "ptc";
+	const policy = opts.policy ?? DEFAULT_POLICY;
 
 	return async ({ tool, args }: ToolCallRequest): Promise<unknown> => {
 		const instance = opts.lookup(tool);
 		if (!instance) throw new ToolNotAvailableError(tool);
+
+		// Enforce the capability policy BEFORE running the tool. A denied effect
+		// throws PolicyDeniedError, surfaced to the program as a tool error.
+		enforcePolicy(tool, policy);
 
 		const toolCallId = `${prefix}-${tool}-${seq++}`;
 		const result = await instance.execute(toolCallId, args, opts.signal, undefined, opts.context);

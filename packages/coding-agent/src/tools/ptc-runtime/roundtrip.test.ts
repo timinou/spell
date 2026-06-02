@@ -13,6 +13,7 @@ import { existsSync } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "bun:test";
 import { PtcRuntimeClient, PtcRuntimeError, spawnTransport } from "./client";
+import { PERMISSIVE_POLICY } from "./policy";
 import { type DispatchableTool, lookupFromMap, makeToolDispatcher } from "./tool-dispatch";
 
 const runtimeDir = path.resolve(import.meta.dirname, "..", "..", "..", "..", "..", "beam", "ptc_runtime");
@@ -21,7 +22,10 @@ const d = runnable ? describe : describe.skip;
 
 function client(tools: Map<string, DispatchableTool> = new Map()) {
 	const { transport } = spawnTransport({ runtimeDir });
-	return new PtcRuntimeClient({ transport, onToolCall: makeToolDispatcher({ lookup: lookupFromMap(tools) }) });
+	return new PtcRuntimeClient({
+		transport,
+		onToolCall: makeToolDispatcher({ lookup: lookupFromMap(tools), policy: PERMISSIVE_POLICY }),
+	});
 }
 
 d("execute round-trip", () => {
