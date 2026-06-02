@@ -143,6 +143,14 @@ describe("lookupFromMap denylist", () => {
 		}
 	});
 
+	it("structurally denies agent-state / escalation tools (Review Gate 3, P2)", () => {
+		// These must be denied independent of effect tag / policy, because they
+		// re-enter the agent loop, mutate session state, or could self-escalate.
+		for (const name of ["approvals", "checkpoint", "rewind", "cancel_job", "await", "goals", "canvas", "canvas_cast"]) {
+			expect(DEFAULT_DENYLIST.has(name)).toBe(true);
+		}
+	});
+
 	it("allows a custom denylist", () => {
 		const tools = new Map<string, DispatchableTool>([["bash", fakeTool("bash", textResult("x"))]]);
 		const lookup = lookupFromMap(tools, new Set(["bash"]));

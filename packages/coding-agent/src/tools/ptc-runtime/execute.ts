@@ -138,7 +138,12 @@ export class ExecuteTool implements AgentTool<typeof executeSchema, ExecuteToolD
 		const client = new PtcRuntimeClient({
 			transport,
 			onToolCall: makeToolDispatcher({
-				lookup: name => (permitted.has(name) ? provider.lookup(name) : undefined),
+				// Resolve the instance UNCONDITIONALLY; enforcePolicy (inside the
+				// dispatcher) is the independent second gate. The catalog pre-filter
+				// (above) and this dispatch check derive from the same policy but run
+				// at different layers, so a denied tool is caught even if it somehow
+				// leaked into the advertised catalog (Review Gate 3, P3).
+				lookup: name => provider.lookup(name),
 				policy: this.policy,
 				signal,
 				context,
@@ -161,10 +166,21 @@ export class ExecuteTool implements AgentTool<typeof executeSchema, ExecuteToolD
 
 // ----- value / error rendering -----
 
-/** Render a program's return value as text for the model. */
+/**
+ * Max serialized result size handed back to the model. The tool's purpose is
+ * "one small value"; a buggy/over-broad program (e.g. returning an
+ * un-aggregated list) must not flood the turn (Review Gate 3, P3). Programs
+ * that need more should aggregate further or use a signature.
+ */
+const MAX_RESULT_BYTES = 16_384;
+
+/** Render a program's return value as text for the model, capped in size. */
 function renderValue(value: unknown): string {
-	if (typeof value === "string") return value;
-	return JSON.stringify(value, null, 2);
+	const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+	if (text.length <= MAX_RESULT_BYTES) return text;
+	const head = text.slice(0, MAX_RESULT_BYTES);
+	return `${head}\n\n[truncated: ${text.length} bytes total, showing first ${MAX_RESULT_BYTES}. ` +
+		`Aggregate further in the program or use a signature to return a smaller value.]`;
 }
 
 /** Render an execute failure as an actionable message. */

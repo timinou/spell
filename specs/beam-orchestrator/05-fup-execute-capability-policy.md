@@ -110,6 +110,12 @@ helper in `policy.ts` mapping `"read-only" | "read-write" | "all"` → the value
 ### EP-2 · Human-in-the-loop for exec/network via the approvals tool
 
 **Where**: `tool-dispatch.ts` `enforcePolicy` call site.
+**Status update (Review Gate 3)**: defense-in-depth is now genuine — the
+execute.ts lookup resolves instances unconditionally and `enforcePolicy` is the
+independent dispatch gate (previously the lookup pre-filtered on the same
+`permitted` set, making the re-check dead code). The catalog pre-filter and the
+dispatch gate are still both policy-derived but run at different layers.
+
 **Now**: a denied effect throws immediately.
 **Do**: when an effect is denied *but escalatable*, route through Spell's existing
 `approvals` tool (see `tools/approvals-tool.ts`) for a one-shot human grant rather
@@ -147,11 +153,15 @@ deferred so V1 doesn't touch every tool.
 **Now**: `execute` is denylisted (no direct recursion), but a program could call
 `task`, whose sub-agent could call `execute` (transitive recursion); and there is
 no global heap/worker ceiling across concurrent executes.
-**Do**: either keep `task`-class tools denied for programs (current state, since
-`task` is `exec` and denied by default — so this is *already mitigated* under the
-default policy) **or**, if `exec` is ever allowed, thread a depth counter through
+**Status update (Review Gate 3)**: agent-state / escalation tools (`approvals`,
+`checkpoint`, `rewind`, `cancel_job`, `await`, `goals`, `canvas`, `canvas_cast`)
+are now in `DEFAULT_DENYLIST` — structurally off-limits to programs regardless of
+effect tag or policy. `task` remains `exec` (denied by default policy) but is NOT
+yet structurally denylisted (it's a legitimate tool to expose under a permissive
+policy).
+**Do**: if `exec` is ever allowed, thread a depth counter through
 `execute → tool_call → execute` and a session-global worker ceiling into
-`execute_opts`. Revisit when EP-1/EP-2 widen the policy.
+`execute_opts` (PLAN-323). Revisit when EP-1/EP-2 widen the policy.
 
 ### EP-6 · Abort propagation + per-execute signal
 

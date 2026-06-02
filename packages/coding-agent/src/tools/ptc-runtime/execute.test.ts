@@ -93,6 +93,19 @@ d("ExecuteTool (real BEAM, injected provider)", () => {
 		}
 	}, 60_000);
 
+	it("caps an over-large result to bound context flood (Review Gate 3, P3)", async () => {
+		const tool = new ExecuteTool(undefined, { policy: PERMISSIVE_POLICY, provider: provider([]) });
+		try {
+			// Build a large string in-sandbox (well over the 16KB cap).
+			const r = await tool.execute("c7", { program: '(join "" (map (fn [_] "x") (range 40000)))' });
+			const text = (r.content[0] as { text: string }).text;
+			expect(text.length).toBeLessThan(20_000);
+			expect(text).toContain("[truncated:");
+		} finally {
+			await tool.dispose();
+		}
+	}, 60_000);
+
 	it("signature-validates the return", async () => {
 		const tool = new ExecuteTool(undefined, { policy: PERMISSIVE_POLICY, provider: provider([]) });
 		try {

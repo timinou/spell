@@ -153,11 +153,30 @@ export function lookupFromMap(
 	return (name: string) => (denied.has(name) ? undefined : tools.get(name));
 }
 
-/** Tools that must never be callable from inside a PTC-Lisp program. */
+/**
+ * Tools that must never be callable from inside a PTC-Lisp program.
+ *
+ * This is a STRUCTURAL guarantee (Review Gate 3, P2): these tools are denied
+ * regardless of effect tag or policy, because they re-enter the agent loop,
+ * block on humans, mutate session state, or could self-escalate. Do NOT rely on
+ * the `effectOf` exec-default to keep them out — a future maintainer tagging one
+ * `read`/`write` would otherwise make it instantly program-callable. Denylisting
+ * here makes the guarantee independent of the policy.
+ */
 export const DEFAULT_DENYLIST: ReadonlySet<string> = new Set([
+	// recursion / completion / interactive
 	"execute", // no recursion into the coprocessor
 	"ask", // interactive — would deadlock the sandbox
 	"exit_plan_mode", // mutates agent mode
 	"resolve", // deferred-action resolution is an agent-loop concern
 	"submit_result", // completion signal, not a data tool
+	// agent-state / escalation — structurally off-limits to programs
+	"approvals", // could self-grant a capability
+	"checkpoint", // mutates session history
+	"rewind", // rewrites session history
+	"cancel_job", // cancels sibling work
+	"await", // blocks on async jobs (sync point)
+	"goals", // out-of-process goal scheduling
+	"canvas", // UI surface
+	"canvas_cast", // UI surface
 ]);

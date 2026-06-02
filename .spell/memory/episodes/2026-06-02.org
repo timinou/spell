@@ -18,3 +18,12 @@
 :END:
 :RELATIONS:
 :END:
+** ITEM Review Gate 3 (PtcRuntime execute tool + policy) outcome. Reviewer verdict: NO active policy bypass — bash/task(exec)/fetch/web_search(network) correctly denied; name/case/whitespace confusion all resolve to deny-by-default exec. All 4 execute.md prompt examples EMPIRICALLY RUN correctly under real ptc_runner 0.11.0 (reviewer ran them). FIXED: P2 structural denylist — added approvals/checkpoint/rewind/cancel_job/await/goals/canvas/canvas_cast to DEFAULT_DENYLIST (were safe only via exec-default accident; now structural, independent of effect tag — prevents future maintainer from tagging one read/write and opening escalation e.g. program self-granting via approvals or rewriting history via rewind). P3 defense-in-depth was illusory (lookup pre-filtered on same permitted set as enforcePolicy → re-check dead) — FIXED: execute.ts lookup now resolves unconditionally, enforcePolicy is the genuine independent gate. P3 result flood — FIXED: renderValue caps at 16KB MAX_RESULT_BYTES with truncation marker (PLAN-325 for future paged/artifact return). 81 tests green. Lesson: 'not program-callable' must be a STRUCTURAL guarantee (denylist), never an emergent property of a default — defaults drift.
+:PROPERTIES:
+:CUSTOM_ID: EP-f1473456f4ec288f
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-02T00:42:40Z
+:END:
+:RELATIONS:
+:END:

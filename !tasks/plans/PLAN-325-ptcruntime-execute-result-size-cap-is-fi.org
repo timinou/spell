@@ -1,0 +1,15 @@
+#+TITLE: PtcRuntime execute: result size cap is fixed; consider streaming/paged returns
+#+STATE: ITEM
+#+SESSION_ID: 14f61cc9d0fec7b6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-fup095/2026-05-30T23-35-10-915Z_14f61cc9d0fec7b6.jsonl]]
+#+CUSTOM_ID: PLAN-325-ptcruntime-execute-result-size-cap-is-fi
+
+* Initial Message
+
+Ok I moved you to the session that had already started the LSP tool deletion thing. Please get your bearings and let's draft a new tool called 'execute' or 'process' (your choice, or another verb word) that is an interface for the V1. I am fine with read and write for the tool/call bridge auth scope, you just need to define a good system as an FUP (fully explained with ocntext in the file, with places to do the improvement so it's easy).
+
+the test suite should use plenty of hypothesis, property, and fuzz testing to make sure things like the examples of where ptcrunner shines all work, and that edge cases are werll done.
+you can make P0' the verification that it all works well
+show me your full work manifest with your process methodology, before I validate and let you go off (. main thread for architectural work, reviewer swarms in between implementation phases to surface, file, and fix/implement any BUG or FEAT that you found (mid-flight). Be thorough, you have unlimited time budget.
+
+FEAT (low priority) from Review Gate 3. V1 caps execute renderValue at 16KB with a truncation marker (shipped). Future: for legitimately large structured results a program wants to return, consider a paged/streaming return or an artifact:// handoff (write the value to an artifact, return the URI) instead of truncation. Only if real usage shows truncation is hit on legitimate (not buggy) programs. File: packages/coding-agent/src/tools/ptc-runtime/execute.ts renderValue (MAX_RESULT_BYTES).
