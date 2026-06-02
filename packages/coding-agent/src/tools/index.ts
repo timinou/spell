@@ -38,29 +38,26 @@ import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
 
 import { CreateTool } from "./create";
 import { CodepathEditTool } from "./edit";
-import { ExecuteTool } from "./ptc-runtime/execute";
 import { ExitPlanModeTool } from "./exit-plan-mode";
 import { FetchTool } from "./fetch";
-
 // REMOVED_PLAN_306_W11: Zero session usage in W0-3 replay corpus
 // import { GatewayTool } from "./gateway";
 import { FindTool } from "./find";
 import { GetTool } from "./get";
-import { StatusTool } from "./status";
 import { GoalsTool } from "./goals-tool";
-
 import { InspectImageTool } from "./inspect-image";
 import { ManageTool } from "./manage";
 import { MemoryTool } from "./memory";
 import { OrgTool } from "./org";
 import { wrapToolWithMetaNotice } from "./output-meta";
-
+import { ExecuteTool } from "./ptc-runtime/execute";
 import { RenderMermaidTool } from "./render-mermaid";
 import { ResolveTool } from "./resolve";
 import { reportFindingTool } from "./review";
 import { SearchToolBm25Tool } from "./search-tool-bm25";
 import { SendFileTool } from "./send-file";
 import { loadSshTool } from "./ssh";
+import { StatusTool } from "./status";
 import { SubmitResultTool } from "./submit-result";
 import { type TodoGroup, TodoWriteTool } from "./todo-write";
 
@@ -95,24 +92,21 @@ export * from "./create";
 export * from "./edit";
 export * from "./exit-plan-mode";
 export * from "./fetch";
-
+export * from "./find";
 export * from "./gateway";
-export * from "./image-generation";
 export * from "./get";
 export * from "./goals-tool";
-
+export * from "./image-generation";
 export * from "./inspect-image";
 export * from "./manage";
-export * from "./find";
-export * from "./status";
 export * from "./pending-action";
-
 export * from "./render-mermaid";
 export * from "./resolve";
 export * from "./review";
 export * from "./search-tool-bm25";
 export * from "./send-file";
 export * from "./ssh";
+export * from "./status";
 export * from "./submit-result";
 export * from "./todo-write";
 
@@ -251,7 +245,6 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 
 	calc: s => new CalculatorTool(s),
 	ssh: loadSshTool,
-
 
 	inspect_image: s => new InspectImageTool(s),
 	browser: s => new BrowserTool(s),
