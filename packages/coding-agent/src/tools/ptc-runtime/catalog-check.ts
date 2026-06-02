@@ -17,8 +17,8 @@
  */
 
 import { BUILTIN_TOOLS, HIDDEN_TOOLS } from "../index";
-import { DEFAULT_DENYLIST } from "./tool-dispatch";
 import { TOOL_EFFECTS } from "./effects";
+import { DEFAULT_DENYLIST } from "./tool-dispatch";
 
 /** All registered tool names (builtin + hidden). */
 const ALL_TOOL_NAMES = new Set<string>([...Object.keys(BUILTIN_TOOLS), ...Object.keys(HIDDEN_TOOLS)]);
@@ -92,7 +92,6 @@ export function runCatalogCheck(): { ok: boolean; report: string } {
 // CLI entrypoint.
 if (import.meta.main) {
 	const { ok, report } = runCatalogCheck();
-	// biome-ignore lint/suspicious/noConsole: CLI gate output
-	console.log(report);
+	process.stdout.write(`${report}\n`);
 	process.exit(ok ? 0 : 1);
 }

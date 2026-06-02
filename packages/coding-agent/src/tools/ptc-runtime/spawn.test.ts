@@ -7,7 +7,6 @@ import { burritoBinaryPath, resolveSpawn } from "./spawn";
 
 const RUNTIME = "/repo/beam/ptc_runtime";
 const never = () => false;
-const always = () => true;
 
 describe("resolveSpawn", () => {
 	it("prefers PTC_RUNTIME_BIN override", () => {
@@ -47,9 +46,7 @@ describe("resolveSpawn", () => {
 	});
 
 	it("throws a clear error when nothing resolves", () => {
-		expect(() => resolveSpawn({ runtimeDir: RUNTIME, env: {}, exists: never })).toThrow(
-			/no spawn path resolved/,
-		);
+		expect(() => resolveSpawn({ runtimeDir: RUNTIME, env: {}, exists: never })).toThrow(/no spawn path resolved/);
 	});
 
 	it("always forwards a diagnostic log dir", () => {

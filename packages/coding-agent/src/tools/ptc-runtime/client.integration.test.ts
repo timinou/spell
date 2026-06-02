@@ -8,10 +8,10 @@
  * force-run locally: ensure `cd beam/ptc_runtime && mix deps.get` has run.
  */
 
+import { describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
-import { describe, expect, it } from "bun:test";
 import { PtcRuntimeClient, spawnTransport } from "./client";
 import { PERMISSIVE_POLICY } from "./policy";
 import { type DispatchableTool, lookupFromMap, makeToolDispatcher } from "./tool-dispatch";
@@ -59,9 +59,9 @@ d("real BEAM round-trip", () => {
 			await expect(client.execute({ program: "(tool/sq {:n 9})" })).resolves.toBe(81);
 
 			// pmap fan-out: many concurrent tool_calls over the wire.
-			await expect(
-				client.execute({ program: "(pmap (fn [x] (tool/sq {:n x})) [1 2 3 4])" }),
-			).resolves.toEqual([1, 4, 9, 16]);
+			await expect(client.execute({ program: "(pmap (fn [x] (tool/sq {:n x})) [1 2 3 4])" })).resolves.toEqual([
+				1, 4, 9, 16,
+			]);
 
 			// Signature-validated structured return.
 			await expect(
@@ -122,9 +122,7 @@ d("real BEAM round-trip", () => {
 		try {
 			await client.init({ tools: [] });
 			// Loop-limit / timeout → rejects, BEAM survives.
-			await expect(
-				client.execute({ program: "(loop [i 0] (recur (inc i)))", timeoutMs: 200 }),
-			).rejects.toThrow();
+			await expect(client.execute({ program: "(loop [i 0] (recur (inc i)))", timeoutMs: 200 })).rejects.toThrow();
 			// Still usable afterwards.
 			await expect(client.execute({ program: "(* 6 7)" })).resolves.toBe(42);
 		} finally {

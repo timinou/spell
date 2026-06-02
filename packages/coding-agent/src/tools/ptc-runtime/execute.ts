@@ -25,14 +25,14 @@
  * the bridge re-checks at dispatch time (defense in depth).
  */
 
-import type { AgentTool, AgentToolContext, AgentToolResult } from "@spell/pi-agent-core";
 import { type Static, Type } from "@sinclair/typebox";
+import type { AgentTool, AgentToolContext, AgentToolResult } from "@spell/pi-agent-core";
 import executeDescription from "../../prompts/tools/execute.md" with { type: "text" };
 import type { ToolSession } from "../index";
-import { type Catalog, PtcRuntimeClient, PtcRuntimeError, spawnTransport } from "./client";
 import { generateToolCatalog } from "./catalog-gen";
 import { buildSessionToolProvider } from "./catalog-session";
-import { type CapabilityPolicy, DEFAULT_POLICY, allowedTools } from "./policy";
+import { type Catalog, PtcRuntimeClient, PtcRuntimeError, spawnTransport } from "./client";
+import { allowedTools, type CapabilityPolicy, DEFAULT_POLICY } from "./policy";
 import { makeToolDispatcher, type ToolProvider } from "./tool-dispatch";
 
 export const executeSchema = Type.Object({
@@ -42,12 +42,8 @@ export const executeSchema = Type.Object({
 			description: "Data bound under data/<key> inside the program.",
 		}),
 	),
-	signature: Type.Optional(
-		Type.String({ description: "Optional PTC-Lisp return signature, e.g. '{total :int}'." }),
-	),
-	timeout_ms: Type.Optional(
-		Type.Integer({ description: "Wall-clock cap in ms (1..30000, default 1000)." }),
-	),
+	signature: Type.Optional(Type.String({ description: "Optional PTC-Lisp return signature, e.g. '{total :int}'." })),
+	timeout_ms: Type.Optional(Type.Integer({ description: "Wall-clock cap in ms (1..30000, default 1000)." })),
 });
 
 export type ExecuteParams = Static<typeof executeSchema>;
@@ -129,7 +125,12 @@ export class ExecuteTool implements AgentTool<typeof executeSchema, ExecuteToolD
 
 		// Advertise only policy-permitted tools to the runtime (pre-filter); the
 		// dispatcher re-checks at call time (defense in depth).
-		const permitted = new Set(allowedTools(catalogTools.map(t => t.name), this.policy));
+		const permitted = new Set(
+			allowedTools(
+				catalogTools.map(t => t.name),
+				this.policy,
+			),
+		);
 		const catalog: Catalog = {
 			tools: catalogTools.filter(t => permitted.has(t.name)),
 		};
@@ -179,8 +180,10 @@ function renderValue(value: unknown): string {
 	const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
 	if (text.length <= MAX_RESULT_BYTES) return text;
 	const head = text.slice(0, MAX_RESULT_BYTES);
-	return `${head}\n\n[truncated: ${text.length} bytes total, showing first ${MAX_RESULT_BYTES}. ` +
-		`Aggregate further in the program or use a signature to return a smaller value.]`;
+	return (
+		`${head}\n\n[truncated: ${text.length} bytes total, showing first ${MAX_RESULT_BYTES}. ` +
+		`Aggregate further in the program or use a signature to return a smaller value.]`
+	);
 }
 
 /** Render an execute failure as an actionable message. */

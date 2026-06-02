@@ -5,10 +5,10 @@
  * dispose lifecycle.
  */
 
+import { describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
-import { describe, expect, it } from "bun:test";
 import { Type } from "@sinclair/typebox";
 import type { AgentToolResult } from "@spell/pi-agent-core";
 import { ExecuteTool } from "./execute";
@@ -16,23 +16,26 @@ import { DEFAULT_POLICY, PERMISSIVE_POLICY } from "./policy";
 import type { DispatchableTool, ToolProvider } from "./tool-dispatch";
 
 const runtimeDir = path.resolve(import.meta.dirname, "..", "..", "..", "..", "..", "beam", "ptc_runtime");
-const runnable = spawnSync("mix", ["--version"], { stdio: "ignore" }).status === 0 && existsSync(path.join(runtimeDir, "_build"));
+const runnable =
+	spawnSync("mix", ["--version"], { stdio: "ignore" }).status === 0 && existsSync(path.join(runtimeDir, "_build"));
 const d = runnable ? describe : describe.skip;
 
 /** A provider exposing a couple of fake tools with chosen names. */
 function provider(tools: DispatchableTool[]): ToolProvider {
 	const map = new Map(tools.map(t => [t.name, t]));
 	return {
-		catalogTools: () =>
-			tools.map(t => ({ name: t.name, parameters: Type.Object({}) })),
+		catalogTools: () => tools.map(t => ({ name: t.name, parameters: Type.Object({}) })),
 		lookup: name => map.get(name),
 	};
 }
 
 function dataTool(name: string, details: unknown): DispatchableTool {
-	return { name, async execute() {
-		return { content: [], details } as AgentToolResult;
-	} };
+	return {
+		name,
+		async execute() {
+			return { content: [], details } as AgentToolResult;
+		},
+	};
 }
 
 d("ExecuteTool (real BEAM, injected provider)", () => {

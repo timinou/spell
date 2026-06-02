@@ -12,16 +12,17 @@
  * Skipped when the runtime isn't built.
  */
 
+import { describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
-import { describe, expect, it } from "bun:test";
 import { Type } from "@sinclair/typebox";
-import { PtcRuntimeClient, PtcRuntimeError, spawnTransport } from "./client";
 import { type CatalogTool, generateToolCatalog } from "./catalog-gen";
+import { PtcRuntimeClient, PtcRuntimeError, spawnTransport } from "./client";
 
 const runtimeDir = path.resolve(import.meta.dirname, "..", "..", "..", "..", "..", "beam", "ptc_runtime");
-const runnable = spawnSync("mix", ["--version"], { stdio: "ignore" }).status === 0 && existsSync(path.join(runtimeDir, "_build"));
+const runnable =
+	spawnSync("mix", ["--version"], { stdio: "ignore" }).status === 0 && existsSync(path.join(runtimeDir, "_build"));
 const d = runnable ? describe : describe.skip;
 
 // A representative cross-section of real Spell tool parameter shapes, including
@@ -69,10 +70,9 @@ d("generated signatures parse under real ptc_runner", () => {
 				} catch (e) {
 					if (e instanceof PtcRuntimeError) {
 						const reason = (e.data as { reason?: string } | undefined)?.reason;
-						expect(
-							reason,
-							`signature for '${entry.name}' did not parse: ${entry.signature}`,
-						).not.toBe("parse_error");
+						expect(reason, `signature for '${entry.name}' did not parse: ${entry.signature}`).not.toBe(
+							"parse_error",
+						);
 					} else {
 						throw e;
 					}

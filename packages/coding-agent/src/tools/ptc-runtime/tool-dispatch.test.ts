@@ -39,7 +39,12 @@ describe("resultToValue", () => {
 	});
 
 	it("joins text blocks when no details", () => {
-		const r: AgentToolResult = { content: [{ type: "text", text: "a" }, { type: "text", text: "b" }] };
+		const r: AgentToolResult = {
+			content: [
+				{ type: "text", text: "a" },
+				{ type: "text", text: "b" },
+			],
+		};
 		expect(resultToValue(r)).toBe("ab");
 	});
 
@@ -70,7 +75,9 @@ describe("resultToValue", () => {
 
 describe("makeToolDispatcher", () => {
 	it("resolves, executes, and returns the converted value", async () => {
-		const tools = new Map<string, DispatchableTool>([["org", fakeTool("org", { content: [], details: { open: 5 } })]]);
+		const tools = new Map<string, DispatchableTool>([
+			["org", fakeTool("org", { content: [], details: { open: 5 } })],
+		]);
 		const dispatch = makeToolDispatcher({ lookup: lookupFromMap(tools), ...anyEffect });
 		await expect(dispatch({ tool: "org", args: { command: "query" } })).resolves.toEqual({ open: 5 });
 	});
@@ -146,7 +153,16 @@ describe("lookupFromMap denylist", () => {
 	it("structurally denies agent-state / escalation tools (Review Gate 3, P2)", () => {
 		// These must be denied independent of effect tag / policy, because they
 		// re-enter the agent loop, mutate session state, or could self-escalate.
-		for (const name of ["approvals", "checkpoint", "rewind", "cancel_job", "await", "goals", "canvas", "canvas_cast"]) {
+		for (const name of [
+			"approvals",
+			"checkpoint",
+			"rewind",
+			"cancel_job",
+			"await",
+			"goals",
+			"canvas",
+			"canvas_cast",
+		]) {
 			expect(DEFAULT_DENYLIST.has(name)).toBe(true);
 		}
 	});

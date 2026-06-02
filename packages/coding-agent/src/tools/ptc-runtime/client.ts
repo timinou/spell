@@ -29,7 +29,7 @@
  */
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { type SpawnPlan, resolveSpawn, type ResolveSpawnOptions } from "./spawn";
+import { type ResolveSpawnOptions, resolveSpawn, type SpawnPlan } from "./spawn";
 
 // ============================================================================
 // Protocol frame types
@@ -274,9 +274,7 @@ export class PtcRuntimeClient {
 	private onClosed(info: { code: number | null; signal: string | null }): void {
 		if (this.closed) return;
 		this.closed = true;
-		this.closeReason = new Error(
-			`PtcRuntime exited (code=${info.code ?? "null"}, signal=${info.signal ?? "null"})`,
-		);
+		this.closeReason = new Error(`PtcRuntime exited (code=${info.code ?? "null"}, signal=${info.signal ?? "null"})`);
 		this.rejectAllPending(this.closeReason);
 	}
 
@@ -324,9 +322,8 @@ export function spawnTransport(opts: ResolveSpawnOptions = {}): { transport: Tra
 	child.stdout.setEncoding("utf8");
 	child.stdout.on("data", (chunk: string) => {
 		buffer += chunk;
-		let nl: number;
 		// Drain complete lines; keep the partial tail buffered.
-		while ((nl = buffer.indexOf("\n")) >= 0) {
+		for (let nl = buffer.indexOf("\n"); nl >= 0; nl = buffer.indexOf("\n")) {
 			const line = buffer.slice(0, nl);
 			buffer = buffer.slice(nl + 1);
 			if (lineCb && line.length > 0) lineCb(line);

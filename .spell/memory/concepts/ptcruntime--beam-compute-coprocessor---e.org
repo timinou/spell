@@ -1,0 +1,27 @@
+#+TITLE: ptcruntime--beam-compute-coprocessor---e
+
+** ITEM PtcRuntime: BEAM compute coprocessor + execute tool (V1)
+
+Spell's `execute` tool runs sandboxed PTC-Lisp (ptc_runner 0.11) programs in a long-lived per-session BEAM, bridging tool calls back to real Spell tools. Architecture (all in worktree spell-fup095, branch feat-ptc-execute-tool, top-level beam/ptc_runtime + packages/coding-agent/src/tools/ptc-runtime/):
+
+SEAM: bidirectional JSON-RPC 2.0 NDJSON over stdio. Node PtcRuntimeClient spawns BEAM (spawn.ts: PTC_RUNTIME_BIN→burrito→mix run chain), sends init{catalog}+execute{program,context,signature,timeout_ms}. BEAM Peer (GenServer) runs PtcRunner.Lisp.run in a spawned proc (non-blocking so it services reentrant tool_call responses). When program hits (tool/find {...}), BEAM issues reentrant tool_call request; Node tool-dispatch.ts resolves real tool, runs execute(), converts AgentToolResult→PTC value (details>text, isError→throw), replies. pmap fan-out = concurrent tool_calls bounded by max_parallel_workers=8.
+
+CATALOG: catalog-gen.ts derives PTC signatures from TypeBox parameters (totality, optional-list→:any? since [:t]? unparseable). effects.ts = flat-SET capability taxonomy (pure|read|write|exec|network, NOT a ladder). catalog-check.ts (check:catalog) forces explicit effect tag per builtin.
+
+POLICY: policy.ts gate, DEFAULT=read+write (deny exec/network). Enforced at dispatch (genuine defense-in-depth) + catalog pre-filter. DEFAULT_DENYLIST structurally blocks execute/ask/exit_plan_mode/resolve/submit_result + approvals/checkpoint/rewind/cancel_job/await/goals/canvas (escalation, independent of tag). FUP 05-fup-execute-capability-policy.md has 6 extension points.
+
+KEY LESSONS: (1) verify stderr/grammar/effect claims EMPIRICALLY on the real Elixir version — Logger.remove_backend is a no-op on 1.15+, [:t]? doesn't parse, dedupe-by/map-vals don't exist. (2) guard ALL JSON encode paths (return AND args) — reviews find symmetric twins. (3) 'not program-callable' must be structural (denylist), never an emergent default. (4) effects are flat sets not ladders. Tests: 17 Elixir (incl StreamData sandbox-escape-impossible) + 98 TS (incl 10 golden shines examples + 1789 property assertions). Commits 6e1...→ on feat-ptc-execute-tool. Deferred: PLAN-322 backpressure, 323 concurrent-heap+recursion, 324 abort+respawn, 325 result-paging.
+:PROPERTIES:
+:CUSTOM_ID: CON-ptcruntime--beam-compute-coprocessor---e
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-02T00:53:09Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: EP-631cee73aab73359
+DISTILLED_FROM: EP-99f9caf1cd5ff9db
+DISTILLED_FROM: EP-81bb9ea47c35614f
+DISTILLED_FROM: EP-76d9ba3ef7f7d671
+DISTILLED_FROM: EP-77683d9105509092
+DISTILLED_FROM: EP-f1473456f4ec288f
+:END:

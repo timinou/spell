@@ -8,16 +8,17 @@
  * execute contract specifically.
  */
 
+import { describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
-import { describe, expect, it } from "bun:test";
 import { PtcRuntimeClient, PtcRuntimeError, spawnTransport } from "./client";
 import { PERMISSIVE_POLICY } from "./policy";
 import { type DispatchableTool, lookupFromMap, makeToolDispatcher } from "./tool-dispatch";
 
 const runtimeDir = path.resolve(import.meta.dirname, "..", "..", "..", "..", "..", "beam", "ptc_runtime");
-const runnable = spawnSync("mix", ["--version"], { stdio: "ignore" }).status === 0 && existsSync(path.join(runtimeDir, "_build"));
+const runnable =
+	spawnSync("mix", ["--version"], { stdio: "ignore" }).status === 0 && existsSync(path.join(runtimeDir, "_build"));
 const d = runnable ? describe : describe.skip;
 
 function client(tools: Map<string, DispatchableTool> = new Map()) {
@@ -44,7 +45,7 @@ d("execute round-trip", () => {
 		try {
 			await c.init({ tools: [] });
 			const r = await c.execute({
-				program: '(let [xs data/xs] {:n (count xs) :sum (reduce + 0 xs)})',
+				program: "(let [xs data/xs] {:n (count xs) :sum (reduce + 0 xs)})",
 				context: { xs: [10, 20, 30] },
 				signature: "{n :int, sum :int}",
 			});
@@ -56,9 +57,15 @@ d("execute round-trip", () => {
 
 	it("tool callback value flows into the program", async () => {
 		const tools = new Map<string, DispatchableTool>([
-			["nums", { name: "nums", async execute() {
-				return { content: [], details: [1, 2, 3, 4, 5] };
-			} }],
+			[
+				"nums",
+				{
+					name: "nums",
+					async execute() {
+						return { content: [], details: [1, 2, 3, 4, 5] };
+					},
+				},
+			],
 		]);
 		const c = client(tools);
 		try {

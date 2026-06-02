@@ -16,9 +16,12 @@ import {
 import { type DispatchableTool, lookupFromMap, makeToolDispatcher } from "./tool-dispatch";
 
 function fakeTool(name: string): DispatchableTool {
-	return { name, async execute() {
-		return { content: [{ type: "text", text: "ran" }] } as AgentToolResult;
-	} };
+	return {
+		name,
+		async execute() {
+			return { content: [{ type: "text", text: "ran" }] } as AgentToolResult;
+		},
+	};
 }
 
 describe("enforcePolicy", () => {

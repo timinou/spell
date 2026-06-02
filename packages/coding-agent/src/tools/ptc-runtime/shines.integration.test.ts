@@ -11,17 +11,18 @@
  * Skipped when the runtime isn't built.
  */
 
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import type { AgentToolResult } from "@spell/pi-agent-core";
 import { PtcRuntimeClient, spawnTransport } from "./client";
 import { PERMISSIVE_POLICY } from "./policy";
 import { type DispatchableTool, lookupFromMap, makeToolDispatcher } from "./tool-dispatch";
 
 const runtimeDir = path.resolve(import.meta.dirname, "..", "..", "..", "..", "..", "beam", "ptc_runtime");
-const runnable = spawnSync("mix", ["--version"], { stdio: "ignore" }).status === 0 && existsSync(path.join(runtimeDir, "_build"));
+const runnable =
+	spawnSync("mix", ["--version"], { stdio: "ignore" }).status === 0 && existsSync(path.join(runtimeDir, "_build"));
 const d = runnable ? describe : describe.skip;
 
 /** A tool returning fixed structured details. */
@@ -55,16 +56,27 @@ const TOOLS = new Map<string, DispatchableTool>([
 	["org", tool("org", () => ({ items: ORG_ITEMS }))],
 	["find", tool("find", () => ({ hits: TODO_HITS }))],
 	["bash", tool("bash", () => ({ stdout: GIT_AUTHORS, exit: 0 }))],
-	["memory", tool("memory", () => ({
-		hits: [
-			{ id: "C1", title: "lock liveness", score: 0.9 },
-			{ id: "C2", title: "lock liveness", score: 0.7 }, // dup title
-			{ id: "C3", title: "warm kernel", score: 0.8 },
-		],
-	}))],
+	[
+		"memory",
+		tool("memory", () => ({
+			hits: [
+				{ id: "C1", title: "lock liveness", score: 0.9 },
+				{ id: "C2", title: "lock liveness", score: 0.7 }, // dup title
+				{ id: "C3", title: "warm kernel", score: 0.8 },
+			],
+		})),
+	],
 	["files", tool("files", () => ({ files: ["a.test.ts", "b.ts", "c.test.ts"] }))],
 	["du", tool("du", () => ({ rows: [{ bytes: 100 }, { bytes: 250 }, { bytes: 50 }] }))],
-	["ci", tool("ci", () => ({ runs: [{ id: "K-1", pass: true }, { id: "K-2", pass: false }] }))],
+	[
+		"ci",
+		tool("ci", () => ({
+			runs: [
+				{ id: "K-1", pass: true },
+				{ id: "K-2", pass: false },
+			],
+		})),
+	],
 ]);
 
 let client: PtcRuntimeClient;
