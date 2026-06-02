@@ -116,6 +116,24 @@ defmodule PtcRuntime.PeerTest do
       assert %{"id" => 10, "result" => %{"echoed" => "hi"}} = H.recv()
     end
 
+    test "a tool_call frame carries the originating execute's exec_id (PLAN-324)", %{peer: peer} do
+      H.send_frame(peer, %{
+        "jsonrpc" => "2.0",
+        "id" => 42,
+        "method" => "execute",
+        "params" => %{"program" => ~S|(tool/echo {:msg "hi"})|}
+      })
+
+      tc = H.recv()
+      assert %{"method" => "tool_call", "id" => tc_id, "params" => p} = tc
+      # The reentrant tool_call must identify which execute it belongs to so the
+      # Node dispatcher can select the correct per-execute abort signal.
+      assert p["exec_id"] == 42
+
+      H.send_frame(peer, %{"jsonrpc" => "2.0", "id" => tc_id, "result" => %{"echoed" => "hi"}})
+      assert %{"id" => 42, "result" => %{"echoed" => "hi"}} = H.recv()
+    end
+
     test "pmap fan-out issues concurrent tool_calls, all serviced", %{peer: peer} do
       H.send_frame(peer, %{
         "jsonrpc" => "2.0",

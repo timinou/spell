@@ -105,9 +105,10 @@ defmodule PtcRuntime.Peer do
   the tool's result value, or raises so the PTC-Lisp runtime surfaces a tool
   error (caught by the sandbox; never crashes the node).
   """
-  @spec tool_call(GenServer.server(), String.t(), map()) :: term()
-  def tool_call(server \\ __MODULE__, tool, args) when is_binary(tool) and is_map(args) do
-    case GenServer.call(server, {:tool_call, tool, args}, @tool_call_timeout) do
+  @spec tool_call(GenServer.server(), String.t(), map(), term()) :: term()
+  def tool_call(server \\ __MODULE__, tool, args, exec_id \\ nil)
+      when is_binary(tool) and is_map(args) do
+    case GenServer.call(server, {:tool_call, tool, args, exec_id}, @tool_call_timeout) do
       {:ok, value} -> value
       {:error, %{"message" => msg}} -> raise "tool #{tool} failed: #{msg}"
       {:error, other} -> raise "tool #{tool} failed: #{inspect(other)}"
@@ -129,14 +130,22 @@ defmodule PtcRuntime.Peer do
   end
 
   @impl true
-  def handle_call({:tool_call, tool, args}, {caller_pid, _tag} = from, %State{} = st) do
+  def handle_call({:tool_call, tool, args, exec_id}, {caller_pid, _tag} = from, %State{} = st) do
     id = st.next_id
+
+    # `exec_id` identifies the originating execute so Node can select the
+    # correct per-execute abort signal (PLAN-324). Omitted when nil so the
+    # wire stays clean for callers that don't carry one.
+    call_params = %{"tool" => tool, "args" => args}
+
+    call_params =
+      if exec_id == nil, do: call_params, else: Map.put(call_params, "exec_id", exec_id)
 
     frame = %{
       "jsonrpc" => "2.0",
       "id" => id,
       "method" => "tool_call",
-      "params" => %{"tool" => tool, "args" => args}
+      "params" => call_params
     }
 
     # A program can pass a non-encodable term as a tool arg, e.g.
@@ -286,8 +295,12 @@ defmodule PtcRuntime.Peer do
 
   defp handle_request("execute", id, params, %State{} = st) do
     program = Map.get(params, "program", "")
-    run_opts = execute_opts(params, st.tools)
     peer = self()
+    # Rebind the tools map for THIS execute so every reentrant tool_call carries
+    # this execute's id (PLAN-324). The init-time `st.tools` (exec_id nil) is
+    # only used for the names probe; real calls run under an id-bound map.
+    exec_tools = Bridge.build_tools(st.catalog || %{}, peer, id)
+    run_opts = execute_opts(params, exec_tools)
 
     {_pid, ref} =
       spawn_monitor(fn ->

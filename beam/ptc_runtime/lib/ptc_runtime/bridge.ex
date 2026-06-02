@@ -38,14 +38,14 @@ defmodule PtcRuntime.Bridge do
   `peer` is the Peer server the tool callbacks route through (passed explicitly
   so tests can inject a stub).
   """
-  @spec build_tools(map(), GenServer.server()) :: %{optional(String.t()) => function()}
-  def build_tools(catalog, peer) do
+  @spec build_tools(map(), GenServer.server(), term()) :: %{optional(String.t()) => function()}
+  def build_tools(catalog, peer, exec_id \\ nil) do
     catalog
     |> Map.get("tools", [])
     |> Enum.reduce(%{}, fn entry, acc ->
       case tool_name(entry) do
         nil -> acc
-        name -> Map.put(acc, name, make_callback(name, peer))
+        name -> Map.put(acc, name, make_callback(name, peer, exec_id))
       end
     end)
   end
@@ -55,9 +55,12 @@ defmodule PtcRuntime.Bridge do
   def tool_names(tools), do: tools |> Map.keys() |> Enum.sort()
 
   # Each tool is an arity-1 fn taking a string-keyed arg map (PtcRunner contract)
-  # and routing to Node. The closure captures the tool name + peer.
-  defp make_callback(name, peer) do
-    fn args when is_map(args) -> Peer.tool_call(peer, name, args) end
+  # and routing to Node. The closure captures the tool name + peer + the
+  # originating execute's id, so the reentrant tool_call frame can identify
+  # which execute it belongs to (Node selects the matching per-execute abort
+  # signal). `exec_id` is nil only for the init-time names probe (no calls run).
+  defp make_callback(name, peer, exec_id) do
+    fn args when is_map(args) -> Peer.tool_call(peer, name, args, exec_id) end
   end
 
   defp tool_name(%{"name" => name}) when is_binary(name) and name != "", do: name

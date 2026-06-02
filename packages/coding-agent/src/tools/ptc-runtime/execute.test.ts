@@ -109,6 +109,23 @@ d("ExecuteTool (real BEAM, injected provider)", () => {
 		}
 	}, 60_000);
 
+	it("lazily re-inits a fresh runtime after dispose (PLAN-324 respawn lifecycle)", async () => {
+		const tool = new ExecuteTool(undefined, { policy: PERMISSIVE_POLICY, provider: provider([]) });
+		try {
+			const a = await tool.execute("r1", { program: "(+ 1 1)" });
+			expect(a.content[0]).toMatchObject({ text: "2" });
+			// Tear the runtime down, then execute again: the tool must transparently
+			// spawn a fresh runtime rather than fail on the disposed client. (The
+			// closed-client respawn predicate itself is unit-covered by client.closed.)
+			await tool.dispose();
+			const b = await tool.execute("r2", { program: "(* 7 6)" });
+			expect(b.isError).toBeFalsy();
+			expect(b.content[0]).toMatchObject({ text: "42" });
+		} finally {
+			await tool.dispose();
+		}
+	}, 60_000);
+
 	it("signature-validates the return", async () => {
 		const tool = new ExecuteTool(undefined, { policy: PERMISSIVE_POLICY, provider: provider([]) });
 		try {

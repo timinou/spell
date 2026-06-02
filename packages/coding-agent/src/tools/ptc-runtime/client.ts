@@ -66,8 +66,15 @@ export interface ToolCallRequest {
 	args: Record<string, unknown>;
 }
 
-/** Services a BEAM-originated tool_call; resolves with the tool's value. */
-export type ToolCallHandler = (req: ToolCallRequest) => Promise<unknown>;
+/**
+ * Services a BEAM-originated tool_call; resolves with the tool's value.
+ *
+ * `signal` aborts when EITHER the runtime tears down (client close / process
+ * exit) OR the originating execute's signal fires — composed per-call so one
+ * execute's cancellation never aborts another's in-flight tool_calls
+ * (PLAN-324).
+ */
+export type ToolCallHandler = (req: ToolCallRequest, signal?: AbortSignal) => Promise<unknown>;
 
 /** Parameters for an `execute` request. */
 export interface ExecuteParams {
@@ -75,6 +82,8 @@ export interface ExecuteParams {
 	context?: Record<string, unknown>;
 	signature?: string;
 	timeoutMs?: number;
+	/** Aborts the tool_calls this execute issues (composed with the client signal). */
+	signal?: AbortSignal;
 }
 
 /** Catalog handed to the runtime at `init`. */
@@ -130,8 +139,15 @@ export class PtcRuntimeClient {
 
 	private nextId = 1;
 	private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
-	private closed = false;
+	private _closed = false;
 	private closeReason: Error | null = null;
+	// Aborts when the runtime tears down (close / process exit); composed into
+	// every tool_call signal so in-flight tool work stops promptly (PLAN-324).
+	private readonly ownAbort = new AbortController();
+	// execute request id → that execute's caller signal, so a reentrant tool_call
+	// can be composed with the SIGNAL OF ITS OWN EXECUTE — never cross-aborting a
+	// sibling concurrent execute (PLAN-324).
+	private readonly execSignals = new Map<number, AbortSignal>();
 	// Last catalog sent at init, retained so we can transparently replay `init`
 	// if the BEAM-side Peer is supervisor-restarted (loses its initialized
 	// state) without the OS process dying (Review Gate 1, P2).
@@ -153,15 +169,33 @@ export class PtcRuntimeClient {
 		return { tools: result.tools ?? [] };
 	}
 
+	/** True once the runtime has closed (process exit or `close()`). */
+	get closed(): boolean {
+		return this._closed;
+	}
+
 	/** Run a PTC-Lisp program; resolve with its (signature-validated) value. */
 	async execute(params: ExecuteParams): Promise<unknown> {
-		const send = (): Promise<unknown> =>
-			this.request("execute", {
+		const send = (): Promise<unknown> => {
+			const id = this.nextId;
+			// Register the per-execute signal under the id we are about to allocate
+			// so inbound tool_calls tagged with this exec_id compose against it.
+			if (params.signal) this.execSignals.set(id, params.signal);
+			const p = this.request("execute", {
 				program: params.program,
 				context: params.context,
 				signature: params.signature,
 				timeout_ms: params.timeoutMs,
 			});
+			// Fire-and-forget cleanup: deregister the per-execute signal once this
+			// execute settles. Done off the awaited chain so it adds no microtask
+			// hop to callers (preserves the re-init retry frame ordering).
+			void p.then(
+				() => this.execSignals.delete(id),
+				() => this.execSignals.delete(id),
+			);
+			return p;
+		};
 
 		try {
 			return await send();
@@ -179,9 +213,10 @@ export class PtcRuntimeClient {
 
 	/** Terminate the runtime and reject all in-flight requests. */
 	close(): void {
-		if (this.closed) return;
-		this.closed = true;
+		if (this._closed) return;
+		this._closed = true;
 		this.closeReason ??= new Error("PtcRuntime client closed");
+		this.ownAbort.abort(this.closeReason);
 		this.rejectAllPending(this.closeReason);
 		this.transport.close();
 	}
@@ -189,7 +224,7 @@ export class PtcRuntimeClient {
 	// ----- outbound request/response correlation -----
 
 	private request(method: string, params: unknown): Promise<unknown> {
-		if (this.closed) {
+		if (this._closed) {
 			return Promise.reject(this.closeReason ?? new Error("PtcRuntime client closed"));
 		}
 		const id = this.nextId++;
@@ -244,7 +279,7 @@ export class PtcRuntimeClient {
 			return;
 		}
 
-		const params = (frame.params ?? {}) as Partial<ToolCallRequest>;
+		const params = (frame.params ?? {}) as Partial<ToolCallRequest> & { exec_id?: number };
 		const tool = params.tool;
 		if (typeof tool !== "string") {
 			this.respondError(frame.id, -32602, "tool_call missing 'tool'");
@@ -252,29 +287,42 @@ export class PtcRuntimeClient {
 		}
 
 		try {
-			const value = await this.onToolCall({ tool, args: params.args ?? {} });
+			const value = await this.onToolCall({ tool, args: params.args ?? {} }, this.toolCallSignal(params.exec_id));
 			this.respondResult(frame.id, value);
 		} catch (e) {
 			this.respondError(frame.id, -32000, e instanceof Error ? e.message : String(e));
 		}
 	}
 
+	/**
+	 * Compose the abort signal handed to a tool_call handler: the client-wide
+	 * teardown signal, plus (when the frame names one) the originating execute's
+	 * signal. Using the per-execute signal — not a single shared one — is what
+	 * keeps one execute's cancellation from aborting another's tool work
+	 * (PLAN-324).
+	 */
+	private toolCallSignal(execId: number | undefined): AbortSignal {
+		const perExec = execId !== undefined ? this.execSignals.get(execId) : undefined;
+		return perExec ? AbortSignal.any([this.ownAbort.signal, perExec]) : this.ownAbort.signal;
+	}
+
 	private respondResult(id: number, result: unknown): void {
-		if (this.closed) return;
+		if (this._closed) return;
 		this.transport.writeLine(JSON.stringify({ jsonrpc: "2.0", id, result }));
 	}
 
 	private respondError(id: number, code: number, message: string): void {
-		if (this.closed) return;
+		if (this._closed) return;
 		this.transport.writeLine(JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } }));
 	}
 
 	// ----- lifecycle -----
 
 	private onClosed(info: { code: number | null; signal: string | null }): void {
-		if (this.closed) return;
-		this.closed = true;
+		if (this._closed) return;
+		this._closed = true;
 		this.closeReason = new Error(`PtcRuntime exited (code=${info.code ?? "null"}, signal=${info.signal ?? "null"})`);
+		this.ownAbort.abort(this.closeReason);
 		this.rejectAllPending(this.closeReason);
 	}
 

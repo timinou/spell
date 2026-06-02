@@ -173,3 +173,55 @@ describe("lookupFromMap denylist", () => {
 		expect(lookup("bash")).toBeUndefined();
 	});
 });
+
+describe("per-execute signal threading (PLAN-324)", () => {
+	it("passes the per-call signal from the client to the tool execute", async () => {
+		let seen: AbortSignal | undefined;
+		const tools = new Map<string, DispatchableTool>([
+			[
+				"t",
+				{
+					name: "t",
+					async execute(_id, _params, signal) {
+						seen = signal;
+						return textResult("ok");
+					},
+				},
+			],
+		]);
+		const dispatch = makeToolDispatcher({ lookup: lookupFromMap(tools), ...anyEffect });
+		const perCall = new AbortController();
+		await dispatch({ tool: "t", args: {} }, perCall.signal);
+		expect(seen).toBeDefined();
+		perCall.abort();
+		expect(seen?.aborted).toBe(true);
+	});
+
+	it("composes the dispatch-level signal with the per-call signal (either aborts)", async () => {
+		let seen: AbortSignal | undefined;
+		const tools = new Map<string, DispatchableTool>([
+			[
+				"t",
+				{
+					name: "t",
+					async execute(_id, _params, signal) {
+						seen = signal;
+						return textResult("ok");
+					},
+				},
+			],
+		]);
+		const dispatchLevel = new AbortController();
+		const dispatch = makeToolDispatcher({ lookup: lookupFromMap(tools), signal: dispatchLevel.signal, ...anyEffect });
+		await dispatch({ tool: "t", args: {} }, new AbortController().signal);
+		expect(seen?.aborted).toBe(false);
+		dispatchLevel.abort();
+		expect(seen?.aborted).toBe(true);
+	});
+});
+
+describe("task is structurally denylisted (PLAN-323 transitive recursion)", () => {
+	it("denies 'task' — a program cannot spawn subagents that re-enter execute", () => {
+		expect(DEFAULT_DENYLIST.has("task")).toBe(true);
+	});
+});

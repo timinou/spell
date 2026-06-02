@@ -17,10 +17,18 @@ defmodule PtcRuntime.PeerPropertyTest do
   @moduletag :property
 
   defp init!(peer, catalog \\ %{}) do
-    H.send_frame(peer, %{"jsonrpc" => "2.0", "id" => 0, "method" => "init", "params" => %{"catalog" => catalog}})
+    H.send_frame(peer, %{
+      "jsonrpc" => "2.0",
+      "id" => 0,
+      "method" => "init",
+      "params" => %{"catalog" => catalog}
+    })
+
     # Drain any leading frames (e.g. a parse-error from prior garbage) until the
     # init result with id 0 arrives.
-    {frame, _} = H.recv_until(fn f -> Map.get(f, "id") == 0 and Map.has_key?(f, "result") end, 2_000)
+    {frame, _} =
+      H.recv_until(fn f -> Map.get(f, "id") == 0 and Map.has_key?(f, "result") end, 2_000)
+
     frame
   end
 
@@ -29,7 +37,13 @@ defmodule PtcRuntime.PeerPropertyTest do
   defp json_value(depth \\ 3)
 
   defp json_value(0) do
-    one_of([integer(), boolean(), string(:printable), constant(nil), float(min: -1.0e6, max: 1.0e6)])
+    one_of([
+      integer(),
+      boolean(),
+      string(:printable),
+      constant(nil),
+      float(min: -1.0e6, max: 1.0e6)
+    ])
   end
 
   defp json_value(depth) do
@@ -121,7 +135,12 @@ defmodule PtcRuntime.PeerPropertyTest do
       # leading parse-error frame; drain frames until we see our execute result.
       init!(peer)
 
-      H.send_frame(peer, %{"jsonrpc" => "2.0", "id" => 1, "method" => "execute", "params" => %{"program" => "(+ 2 2)"}})
+      H.send_frame(peer, %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "execute",
+        "params" => %{"program" => "(+ 2 2)"}
+      })
 
       {frame, _drained} =
         H.recv_until(fn f -> Map.get(f, "id") == 1 and Map.has_key?(f, "result") end, 2_000)

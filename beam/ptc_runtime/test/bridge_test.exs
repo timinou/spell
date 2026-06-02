@@ -39,7 +39,7 @@ defmodule PtcRuntime.BridgeTest do
     end
 
     test "a wired callback routes through the given peer" do
-      # The callback should GenServer.call the peer with {:tool_call, name, args}.
+      # The callback should GenServer.call the peer with {:tool_call, name, args, exec_id}.
       # We stand in as the peer process and assert the message shape, replying so
       # the callback returns.
       tools = Bridge.build_tools(%{"tools" => [%{"name" => "echo"}]}, self())
@@ -47,7 +47,7 @@ defmodule PtcRuntime.BridgeTest do
 
       task = Task.async(fn -> cb.(%{"msg" => "hi"}) end)
 
-      assert_receive {:"$gen_call", from, {:tool_call, "echo", %{"msg" => "hi"}}}, 1_000
+      assert_receive {:"$gen_call", from, {:tool_call, "echo", %{"msg" => "hi"}, _exec_id}}, 1_000
       GenServer.reply(from, {:ok, %{"echoed" => "hi"}})
 
       assert Task.await(task) == %{"echoed" => "hi"}
@@ -60,7 +60,7 @@ defmodule PtcRuntime.BridgeTest do
       # Run the callback in an unlinked process so its raise doesn't fail the
       # test; capture the crash and assert the tool error surfaced.
       {pid, ref} = spawn_monitor(fn -> cb.(%{}) end)
-      assert_receive {:"$gen_call", from, {:tool_call, "boom", %{}}}, 1_000
+      assert_receive {:"$gen_call", from, {:tool_call, "boom", %{}, _exec_id}}, 1_000
       GenServer.reply(from, {:error, %{"message" => "nope"}})
 
       assert_receive {:DOWN, ^ref, :process, ^pid, reason}, 1_000

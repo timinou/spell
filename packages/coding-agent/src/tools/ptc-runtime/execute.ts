@@ -81,22 +81,28 @@ export class ExecuteTool implements AgentTool<typeof executeSchema, ExecuteToolD
 	): Promise<AgentToolResult> {
 		const started = Date.now();
 		try {
-			const client = await this.ensureClient(signal, context);
+			const client = await this.ensureClient(context);
 			const value = await client.execute({
 				program: params.program,
 				context: params.context,
 				signature: params.signature,
 				timeoutMs: params.timeout_ms,
+				// Per-execute signal: the client composes it with its own teardown
+				// signal and threads it into THIS execute's tool_calls only (PLAN-324).
+				signal,
 			});
 
 			return {
 				content: [{ type: "text", text: renderValue(value) }],
 				details: { program: params.program, signature: params.signature, durationMs: Date.now() - started },
+				// The program's return value IS the payload — the whole point of execute.
+				data: value,
 			};
 		} catch (e) {
 			return {
 				content: [{ type: "text", text: renderError(e) }],
 				details: { program: params.program, signature: params.signature, durationMs: Date.now() - started },
+				data: null,
 				isError: true,
 			};
 		}
@@ -110,16 +116,30 @@ export class ExecuteTool implements AgentTool<typeof executeSchema, ExecuteToolD
 
 	// ----- lifecycle -----
 
-	private async ensureClient(signal?: AbortSignal, context?: AgentToolContext): Promise<PtcRuntimeClient> {
+	private async ensureClient(context?: AgentToolContext): Promise<PtcRuntimeClient> {
+		// Respawn a dead runtime: if the OS process exited (whole-VM death, not a
+		// supervisor-restartable Peer crash), the client is permanently closed.
+		// Drop it so the next execute spawns a fresh runtime (PLAN-324).
+		if (this.client?.closed) {
+			this.client = null;
+			this.initPromise = null;
+		}
 		if (this.client) return this.client;
 		// Single-flight init: concurrent executes share one spawn.
-		if (!this.initPromise) this.initPromise = this.spawn(signal, context);
-		await this.initPromise;
+		if (!this.initPromise) this.initPromise = this.spawn(context);
+		try {
+			await this.initPromise;
+		} catch (e) {
+			// A failed spawn must not poison every future execute with a cached
+			// rejected promise; clear it so the next call retries.
+			this.initPromise = null;
+			throw e;
+		}
 		if (!this.client) throw new Error("PtcRuntime client failed to initialize");
 		return this.client;
 	}
 
-	private async spawn(signal?: AbortSignal, context?: AgentToolContext): Promise<void> {
+	private async spawn(context?: AgentToolContext): Promise<void> {
 		const provider = this.provider ?? this.defaultProvider();
 		const catalogTools = generateToolCatalog(provider.catalogTools());
 
@@ -146,7 +166,11 @@ export class ExecuteTool implements AgentTool<typeof executeSchema, ExecuteToolD
 				// leaked into the advertised catalog (Review Gate 3, P3).
 				lookup: name => provider.lookup(name),
 				policy: this.policy,
-				signal,
+				// No dispatch-level signal: the long-lived runtime is shared across
+				// many executes, so per-call signals (supplied by the client per
+				// tool_call, scoped to the originating execute) are the correct and
+				// ONLY abort source. A spawn-time signal here would be the first
+				// execute's — wrong for every later one (PLAN-324).
 				context,
 			}),
 		});

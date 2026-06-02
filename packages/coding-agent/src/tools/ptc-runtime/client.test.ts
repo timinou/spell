@@ -252,3 +252,72 @@ describe("lifecycle", () => {
 		void client;
 	});
 });
+
+describe("per-execute abort signal (PLAN-324)", () => {
+	it("hands the tool_call handler a signal that aborts when the process exits", async () => {
+		let seen: AbortSignal | undefined;
+		const { client, t } = mk(async (_req, signal) => {
+			seen = signal;
+			return new Promise<unknown>(() => {}); // never resolves
+		});
+		client.execute({ program: "(tool/x {})" }).catch(() => {}); // rejects on exit; expected
+		t.emit({ jsonrpc: "2.0", id: 1, method: "tool_call", params: { tool: "x", args: {} } });
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(seen).toBeDefined();
+		expect(seen?.aborted).toBe(false);
+		t.exit(1, null);
+		expect(seen?.aborted).toBe(true);
+		void client;
+	});
+
+	it("isolates concurrent executes — aborting one execute does not abort another's tool_call", async () => {
+		const signals = new Map<number, AbortSignal>();
+		const { client, t } = mk(async (req, signal) => {
+			// The client always supplies a signal; capture it to prove isolation.
+			if (signal) signals.set((req.args as { tag: number }).tag, signal);
+			return new Promise<unknown>(() => {}); // never resolves
+		});
+		const a = new AbortController();
+		const b = new AbortController();
+		client.execute({ program: "(tool/x {:tag 1})", signal: a.signal }).catch(() => {});
+		const execIdA = t.last().id as number;
+		client.execute({ program: "(tool/x {:tag 2})", signal: b.signal }).catch(() => {});
+		const execIdB = t.last().id as number;
+
+		t.emit({
+			jsonrpc: "2.0",
+			id: 901,
+			method: "tool_call",
+			params: { tool: "x", args: { tag: 1 }, exec_id: execIdA },
+		});
+		t.emit({
+			jsonrpc: "2.0",
+			id: 902,
+			method: "tool_call",
+			params: { tool: "x", args: { tag: 2 }, exec_id: execIdB },
+		});
+		await Promise.resolve();
+		await Promise.resolve();
+
+		a.abort();
+		expect(signals.get(1)?.aborted).toBe(true);
+		expect(signals.get(2)?.aborted).toBe(false);
+		void client;
+	});
+});
+
+describe("closed getter (PLAN-324 respawn predicate)", () => {
+	it("is false before exit and true after the process exits", () => {
+		const { client, t } = mk();
+		expect(client.closed).toBe(false);
+		t.exit(1, null);
+		expect(client.closed).toBe(true);
+	});
+
+	it("is true after close()", () => {
+		const { client } = mk();
+		client.close();
+		expect(client.closed).toBe(true);
+	});
+});

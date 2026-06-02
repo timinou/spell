@@ -7,7 +7,13 @@ defmodule PtcRuntime.PeerRobustnessTest do
   alias PtcRuntime.PeerHarness, as: H
 
   defp init!(peer, catalog \\ %{}) do
-    H.send_frame(peer, %{"jsonrpc" => "2.0", "id" => 0, "method" => "init", "params" => %{"catalog" => catalog}})
+    H.send_frame(peer, %{
+      "jsonrpc" => "2.0",
+      "id" => 0,
+      "method" => "init",
+      "params" => %{"catalog" => catalog}
+    })
+
     assert %{"id" => 0, "result" => _} = H.recv()
   end
 
@@ -28,7 +34,14 @@ defmodule PtcRuntime.PeerRobustnessTest do
 
       # Peer is alive and still serves subsequent executes.
       assert Process.alive?(peer)
-      H.send_frame(peer, %{"jsonrpc" => "2.0", "id" => 2, "method" => "execute", "params" => %{"program" => "(+ 2 3)"}})
+
+      H.send_frame(peer, %{
+        "jsonrpc" => "2.0",
+        "id" => 2,
+        "method" => "execute",
+        "params" => %{"program" => "(+ 2 3)"}
+      })
+
       assert %{"id" => 2, "result" => 5} = H.recv()
     end
   end
@@ -92,7 +105,13 @@ defmodule PtcRuntime.PeerRobustnessTest do
       assert Process.alive?(peer)
 
       # Runtime still serves normal work.
-      H.send_frame(peer, %{"jsonrpc" => "2.0", "id" => 2, "method" => "execute", "params" => %{"program" => "(+ 1 1)"}})
+      H.send_frame(peer, %{
+        "jsonrpc" => "2.0",
+        "id" => 2,
+        "method" => "execute",
+        "params" => %{"program" => "(+ 1 1)"}
+      })
+
       assert %{"id" => 2, "result" => 2} = H.recv()
     end
   end

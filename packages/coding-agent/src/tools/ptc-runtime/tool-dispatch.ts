@@ -66,7 +66,12 @@ export interface DispatchOptions {
 	lookup: ToolLookup;
 	/** Capability policy enforced before each tool runs (default: read+write). */
 	policy?: CapabilityPolicy;
-	/** Abort signal threaded into every tool execute (the execute call's signal). */
+	/**
+	 * Dispatch-level abort signal, composed with the per-call signal the client
+	 * supplies for each tool_call. Use for a whole-dispatcher kill switch; the
+	 * per-execute signal (passed to the returned handler) is the precise one
+	 * (PLAN-324).
+	 */
 	signal?: AbortSignal;
 	/** Context threaded into every tool execute. */
 	context?: AgentToolContext;
@@ -91,7 +96,7 @@ export function makeToolDispatcher(opts: DispatchOptions): ToolCallHandler {
 	const prefix = opts.idPrefix ?? "ptc";
 	const policy = opts.policy ?? DEFAULT_POLICY;
 
-	return async ({ tool, args }: ToolCallRequest): Promise<unknown> => {
+	return async ({ tool, args }: ToolCallRequest, signal?: AbortSignal): Promise<unknown> => {
 		const instance = opts.lookup(tool);
 		if (!instance) throw new ToolNotAvailableError(tool);
 
@@ -99,8 +104,13 @@ export function makeToolDispatcher(opts: DispatchOptions): ToolCallHandler {
 		// throws PolicyDeniedError, surfaced to the program as a tool error.
 		enforcePolicy(tool, policy);
 
+		// Compose the per-call signal (the originating execute's, supplied by the
+		// client) with any dispatch-level signal, so the tool aborts when EITHER
+		// fires — without one execute's cancellation reaching another (PLAN-324).
+		const effective = opts.signal && signal ? AbortSignal.any([opts.signal, signal]) : (signal ?? opts.signal);
+
 		const toolCallId = `${prefix}-${tool}-${seq++}`;
-		const result = await instance.execute(toolCallId, args, opts.signal, undefined, opts.context);
+		const result = await instance.execute(toolCallId, args, effective, undefined, opts.context);
 		return resultToValue(result);
 	};
 }
@@ -166,6 +176,7 @@ export function lookupFromMap(
 export const DEFAULT_DENYLIST: ReadonlySet<string> = new Set([
 	// recursion / completion / interactive
 	"execute", // no recursion into the coprocessor
+	"task", // spawns subagents that could transitively re-enter execute (PLAN-323)
 	"ask", // interactive — would deadlock the sandbox
 	"exit_plan_mode", // mutates agent mode
 	"resolve", // deferred-action resolution is an agent-loop concern
