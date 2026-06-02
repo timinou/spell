@@ -1,0 +1,53 @@
+#+TITLE: org dashboard data channel embeds full item bodies, OOMs execute sandbox
+#+STATE: ITEM
+#+SESSION_ID: 14f9a29f12b3c7dc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-fup095/2026-06-02T17-15-21-034Z_14f9a29f12b3c7dc.jsonl]]
+#+CUSTOM_ID: BUG-426-org-dashboard-data-channel-embeds-full-i
+
+* Initial Message
+
+can you try out the execute tool?
+
+* Initial Message
+
+Found pressure-testing FEAT-789. `(tool/org {:command "dashboard"})` inside `execute` fails with `memory_exceeded: heap limit 10000000 bytes exceeded`.
+
+## Root cause
+`crates/pi-natives/src/org_index.rs::dashboard()` pushes FULL `OrgItem` clones into `inProgress` and `blocked`:
+#+begin_src rust
+if item.state == "DOING" || item.state == "REVIEW" { in_progress.push((*item).clone()); }
+if item.state == "BLOCKED" { blocked.push((*item).clone()); }
+#+end_src
+Each `OrgItem` carries `body: Option<String>` — the entire org text under the heading. The `OrgDashboard` type (packages/org/src/types.ts:138) declares `inProgress: OrgItem[]` / `blocked: OrgItem[]` accordingly.
+
+Pre-FEAT-789 this was harmless: the tool's `data` was a small rendered string, and `text` (display) is a metrics summary. FEAT-789 made `data = raw result` (org.ts sets `data: result`), so the full untrimmed `OrgItem[]` with all bodies now materializes in the sandbox → bodies × active items > 10MB heap.
+
+Dashboard is the SOLE violator of the list-command convention: `query`/`graph`/`wave` all default `includeBody: false` (tool.ts:170,298,434). A dashboard is metrics + actionable identity, never content.
+
+## Fix (native-side, the general fix)
+Trim items to a body-less ref where they're built in `org_index.rs::dashboard()`:
+#+begin_src rust
+fn dashboard_ref(item: &OrgItem) -> Value {
+    json!({ "id": item.id, "title": item.title, "state": item.state,
+            "category": item.category, "file": item.file, "line": item.line,
+            "priority": item.properties.get("PRIORITY") }) // NO body, NO children
+}
+// in_progress / blocked: Vec<Value> of refs
+#+end_src
+Then update `OrgDashboard.inProgress/blocked` in packages/org/src/types.ts to a new `OrgDashboardItemRef[]`. Shrinks the wire payload for EVERY consumer (TUI render, data channel, any caller) — body was dead weight in the dashboard DTO all along; the renderer only uses metrics + id/title.
+
+Why native over a TS projection: the body has no reader in the dashboard path, so trimming at the source makes the lean shape the single truth and avoids paying NAPI serialization for bodies that get discarded. A TS-only projection (project before `data:` in org.ts) is an acceptable stopgap if the native rebuild is out of scope, but leaves the bloated DTO type for other callers to trip on.
+
+NOT a fix: "project inside the program" — the OOM happens when the value materializes in the sandbox, BEFORE a program's `(get …)` can trim it; and it makes every author know dashboard is a landmine.
+
+## General principle (applies to FEAT-789 broadly)
+List/summary commands project to refs; only `get` returns full bodies. Dashboard should obey the same `includeBody: false` default the other list commands already honor.
+
+## Scope
+- crates/pi-natives/src/org_index.rs (dashboard fn) + native rebuild
+- packages/org/src/types.ts (OrgDashboard.inProgress/blocked → OrgDashboardItemRef[])
+- regression: dashboard data payload contains no `body` key; bounded size
+- relizes alongside the execute max-heap kdl setting (sibling item) which independently lifts the hardcoded ceiling
+
+## Acceptance
+`(tool/org {:command "dashboard"})` returns a bounded, body-less metrics payload from inside `execute` without memory_exceeded; dashboard items expose id/title/state/category/file/line/priority.

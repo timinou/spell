@@ -1,0 +1,45 @@
+#+TITLE: execute: non-ASCII tool args corrupted (§ → Â§) by latin1 BEAM stdio read
+#+STATE: ITEM
+#+SESSION_ID: 14f9a29f12b3c7dc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-fup095/2026-06-02T17-15-21-034Z_14f9a29f12b3c7dc.jsonl]]
+#+CUSTOM_ID: BUG-425-execute-non-ascii-tool-args-corrupted-by
+
+* Initial Message
+
+can you try out the execute tool?
+
+* Initial Message
+
+Found while pressure-testing FEAT-789. Any non-ASCII byte in an `execute` tool-call argument is mojibake'd crossing the JS→BEAM boundary, which silently breaks the entire CodePath structural/grep surface from inside a program.
+
+## Repro
+#+begin_src clojure
+(tool/find {:target "foo.ts::§function"})
+;; → tool error: unexpected trailing input: "Â§function"
+#+end_src
+`§` (U+00A7, UTF-8 bytes 0xC2 0xA7) arrives at the kernel as `Â§` (those two bytes each decoded as a separate latin1 codepoint). ∴ `::§line[text~="…"]`, `::§function`, `::§class`, every structural/grep axis is UNREACHABLE from `execute` — exactly half the reason to read `find`/`get` programmatically (FEAT-789).
+
+## Root cause
+`beam/ptc_runtime/lib/ptc_runtime/peer.ex:478` `reader_loop/1`:
+#+begin_src elixir
+case IO.read(:stdio, :line) do
+  ...
+  data when is_binary(data) -> ...
+#+end_src
+`IO.read(:stdio, :line)` reads in the default (latin1) `:stdio` encoding. The JS transport writes UTF-8 (`client.ts:234` `writeLine(JSON.stringify(frame))` → `child.stdin.write(chunk)`, utf8). So each UTF-8 continuation byte is decoded as an individual codepoint → mojibake. The reverse path is fine because JS sets `child.stdout.setEncoding("utf8")` (client.ts:426).
+
+## Fix
+Force the BEAM stdio reader to binary/UTF-8. Two options:
+1. Read raw bytes and decode UTF-8 explicitly: replace `IO.read(:stdio, :line)` with a binary read (`:io.get_line` on a binary stdio, or set `:io.setopts(:standard_io, encoding: :latin1)` + treat as raw bytes and `:unicode.characters_to_binary/1`). Cleanest: switch the reader to a raw `:stdio` in binary mode and split on `
+` bytes — the frame is already UTF-8 JSON, so pass the raw binary straight to `Jason.decode/1` (which expects UTF-8 binary).
+2. At process boot, `:io.setopts(:standard_io, encoding: :latin1)` and read raw bytes (latin1 = identity byte read), then `Jason.decode/1` on the raw binary (Jason wants UTF-8 bytes, which is exactly what the wire carries).
+
+Option 2 is the minimal, robust fix: latin1 `:stdio` is a transparent byte pipe; Jason then decodes the UTF-8 binary correctly. Add a regression: round-trip a program whose tool arg contains `§`, an emoji, and a CJK char through `peer` and assert the kernel receives the exact bytes.
+
+## Scope
+- beam/ptc_runtime/lib/ptc_runtime/peer.ex (reader_loop + boot setopts)
+- test: peer round-trip with non-ASCII tool args
+- NB: if peer.ex is vendored from ptc_runner, this may need the same upstream/fork path as FEAT-790; verify whether peer.ex is Spell-owned (beam/ptc_runtime) or dep-owned.
+
+## Acceptance
+`(tool/find {:target "x.ts::§function"})` resolves the structural axis from inside `execute`; non-ASCII tool args (§, emoji, CJK) reach the kernel byte-exact.

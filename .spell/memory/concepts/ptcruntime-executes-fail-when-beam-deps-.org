@@ -1,0 +1,35 @@
+#+TITLE: ptcruntime-executes-fail-when-beam-deps-
+
+** ITEM PtcRuntime executes fail when beam deps not compiled
+
+The `execute` tool's PTC-Lisp BEAM runtime depends on Hex packages (ptc_runner, jason, nimble_parsec, telemetry, stream_data) being fetched and compiled in `beam/ptc_runtime/`. When they are missing, `mix run --no-halt` exits immediately with code 1, and the Node-side transport reports `PtcRuntime exited (code=1, signal=null)`.
+
+## Detection
+- Every execute call fails in ~500ms with the same error, even `42`
+- No log files appear in `PTC_RUNTIME_LOG_DIR` — the runtime never reaches Logger
+- Manual `mix run --no-halt` in the beam dir also fails with code 1
+- `ls beam/ptc_runtime/deps/` is empty, `_build/dev/lib/` is empty
+
+## Fix
+```bash
+cd beam/ptc_runtime
+mix local.hex --force
+mix deps.get
+mix compile
+```
+
+## Prevention
+Added to `install.sh`:
+- System dependencies now include `elixir` (pacman/apt/brew)
+- `mix local.hex --force && mix deps.get && mix compile` runs during install
+
+## Note
+Two repos on disk — the active `~/.local/share/reflex/bun/bin/spell` symlink chain resolves to `/home/user/code/ora/spell/`, NOT `spell-fup095/`. Always check the actual module resolution path with `readlink -f $(which spell)`.
+:PROPERTIES:
+:CUSTOM_ID: CON-ptcruntime-executes-fail-when-beam-deps-
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-02T17:57:50Z
+:END:
+:RELATIONS:
+:END:
