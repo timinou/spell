@@ -1,234 +1,191 @@
-# Where PtcRunner Shines: Worked Examples from Spell's Real Query Patterns
+# Where PtcRunner Shines: Worked Examples (verified, runnable)
 
-**Date**: 2026-05-30
-**Source**: idiom frequencies mined from `~/.spell/agent/sessions/**` (see `00-evidence`)
-**Premise**: with PtcRunner's aggregator/tool surface, a single PTC-Lisp program can
-mix **bash commands**, **Spell tools** (find/edit/org/memory), and **MCP tools** —
-computing the answer where the data sits instead of dragging it through context.
+**Date**: 2026-06-02 (rewritten from invented syntax to verified PTC-Lisp)
+**Source**: every program here is the oracle in
+`packages/coding-agent/src/tools/ptc-runtime/shines.integration.test.ts`, run
+against a real `ptc_runner` BEAM. If you edit a program here, update that test
+(and vice-versa) — they must stay identical.
+**Premise**: with the `execute` tool, one PTC-Lisp program can mix **Spell
+tools** (find/org/memory/…), **bash** output, and **MCP tools** — computing the
+answer where the data sits instead of dragging it through context.
 
----
-
-## The mixing model
-
-PtcRunner programs call effects through one mediated builtin per source. The
-sandbox stays pure; the host performs the effect and returns a value:
-
-```clojure
-(tool/call  {:tool "find"   :args {...}})   ; → Spell native tool (NIF in WS-B, bridge in V1)
-(tool/call  {:tool "bash"   :args {:command "..."}})  ; → Spell bash executor (effect, mediated)
-(tool/mcp-call {:server "..." :tool "..." :args {...}}) ; → any mounted MCP server
-(:value ...)                                 ; unwrap the mediated result
-```
-
-So a program is a **typed pipeline over heterogeneous tools**. The model writes the
-orchestration once; intermediate payloads never enter the context window.
-
-> Notation below: `;; today` = the Bash idiom agents actually emit (with its measured
-> frequency), `;; ptc` = the PtcRunner program that replaces it.
+> ⚠ The earlier draft of this doc used `(tool/call {:tool …})`, `:value`
+> unwrapping, and `map-vals` — **none of which exist** in PTC-Lisp. The forms
+> below are the corrected, empirically-verified syntax.
 
 ---
 
-## 1. Count-and-group (idiom: `rg|wc` 1,007× · `rg -c` 91× · `sort|uniq` 319×)
+## The real calling convention
 
-```bash
-;; today — three calls, model sums in its head, often wrong
-rg -c "TODO" src/**/*.rs | awk -F: '{s+=$2} END{print s}'
-```
 ```clojure
-;; ptc — exact, one program, returns the number AND the hot files
-(let [hits (:value (tool/call {:tool "find"
-                               :args {:target "src/**/*.rs::§line[text~=\"TODO\"]"}}))]
+(tool/find {:target "src/**/*.rs"})    ; tool called kebab-case, string-keyed map arg
+                                        ; → the tool's structured result (a map/list)
+(get (tool/org {:command "query"}) "items")   ; results are STRING-keyed
+```
+
+No `tool/call` wrapper, no `:value` unwrap. A tool call *is* a value. Aggregate
+with `group-by` + `update-vals` (thread-FIRST `->`), `frequencies`, `reduce`,
+`sort-by`, `filter`, `map`.
+
+---
+
+## 1. Count + group (replaces `rg -c … | awk`)
+
+```clojure
+(let [hits (get (tool/find {:target "src/**/*.rs"}) "hits")]
   {:total (count hits)
-   :by-file (->> hits (group-by :file) (map-vals count)
-                 (sort-by val >) (take 5))})
+   :by-file (update-vals (group-by (fn [h] (get h "file")) hits) count)})
+;; → {"total" 3 "by-file" {"src/a.rs" 2 "src/b.rs" 1}}
 ```
-Wins: the count is *computed*, not eyeballed; the per-file breakdown is free; raw
-match lines never hit context.
 
-## 2. find | xargs fan-out (idiom: 7,479×)
+Count is *computed*; the per-file breakdown is free; raw lines never hit context.
 
-```bash
-;; today — fan out, then the model reads each result back into context
-find . -name '*.test.ts' | xargs grep -l 'skip(' | head -20
-```
+## 2. Fan-out filter (replaces `find … | xargs grep -l | head`)
+
 ```clojure
-;; ptc — fan-out + filter + shape, one answer back
-(->> (:value (tool/call {:tool "find" :args {:target "**/*.test.ts"}}))
-     (map :file)
-     (filter (fn [f]
-               (-> (tool/call {:tool "find"
-                               :args {:target (str f "::§line[text~=\"skip(\"]")}})
-                   :value seq)))
+(->> (get (tool/files {}) "files")
+     (filter (fn [x] (re-find #"test" x)))
      (take 20))
+;; → ["a.test.ts" "c.test.ts"]
 ```
-Wins: the N inner reads stay in the sandbox; only the final file list returns.
 
-## 3. git log post-processing (idiom: 3,485×)
+## 3. git log post-processing — bash for I/O, Lisp for the reduce
 
-```bash
-;; today — model parses log text by eye to answer "who churned auth/ lately"
-git log --since=2.weeks --pretty='%an' -- packages/auth | sort | uniq -c | sort -rn
-```
 ```clojure
-;; ptc — bash provides raw lines; PTC-Lisp does the aggregation deterministically
-(->> (:value (tool/call {:tool "bash"
-                         :args {:command "git log --since=2.weeks --pretty=%an -- packages/auth"}}))
-     :stdout
-     (#(clojure.string/split-lines %))
-     (remove empty?)
-     frequencies
-     (sort-by val >))
-;; → [["alice" 14] ["bob" 6] ...]  — bash for I/O, Lisp for the math
+(->> (get (tool/bash {:command "git log --pretty=%an"}) "stdout")
+     (#(split % "\n"))
+     (filter (fn [s] (not (empty? s))))
+     frequencies)
+;; → {"alice" 3 "bob" 2 "carol" 1}
 ```
-This is the canonical **mix**: bash is the right tool to *get* git data; PTC-Lisp is
+
+The canonical **mix**: `bash` is the right tool to *get* git data; PTC-Lisp is
 the right tool to *reduce* it. Today both happen in shell + the model's head.
+(`bash` is `exec` — denied under the default policy; run it directly, or use a
+permissive policy. See the capability-policy FUP.)
 
-## 4. awk column math (idiom: 2,279×)
+## 4. Numeric aggregate (replaces `du … | awk '{s+=$1}'`)
 
-```bash
-;; today — awk arithmetic the model can't verify, over tool output
-du -sb packages/*/dist | awk '{s+=$1} END{print s/1048576 " MB"}'
-```
 ```clojure
-;; ptc
-(let [lines (-> (tool/call {:tool "bash" :args {:command "du -sb packages/*/dist"}})
-                :value :stdout clojure.string/split-lines)]
-  (->> lines
-       (map #(-> % (clojure.string/split #"\t") first Long/parseLong))
-       (reduce + 0)
-       (#(/ % 1048576.0))
-       (format "%.1f MB")))
+(reduce + 0 (map (fn [r] (get r "bytes")) (get (tool/du {}) "rows")))
+;; → 400
 ```
 
-## 5. bash for-loops (idiom: 2,232×) — the procedural smell
+## 5. Declarative replacement for a bash `for` loop
 
-```bash
-;; today — imperative loop, results scroll past, model re-reads
-for p in packages/*/; do echo "$p: $(find $p/src -name '*.ts' | wc -l)"; done
-```
 ```clojure
-;; ptc — declarative, sorted, capped
-(->> (:value (tool/call {:tool "bash" :args {:command "ls -d packages/*/"}}))
-     :stdout clojure.string/split-lines (remove empty?)
-     (map (fn [p]
-            [p (count (:value (tool/call {:tool "find"
-                                          :args {:target (str p "src/**/*.ts")}})))]))
+(->> (get (tool/org {:command "query"}) "items")
+     (group-by (fn [it] (get it "layer")))
+     (#(map (fn [[k g]] [k (count g)]) %))
      (sort-by second >))
+;; → [["kernel" 3] ["ui" 2]]
 ```
 
-## 6. Org dashboard rollup (Spell tool, not bash — pure context-saver)
+## 6. Org dashboard rollup (pure context-saver)
 
 ```clojure
-;; today: agent runs `org query`, pulls 200 items into context, counts by eye
-(->> (:value (tool/call {:tool "org" :args {:command "query" :query "todo:DOING"}}))
-     (group-by #(get % "layer"))
-     (map-vals (fn [g] {:open   (count g)
-                        :hi-pri (count (filter #(= 1 (get % "priority")) g))
-                        :blocked (count (filter #(seq (get % "blocked-by")) g))})))
-;; → {"kernel" {:open 12 :hi-pri 4 :blocked 3} ...}  — ~40 tokens, not 200 items
+(update-vals
+  (group-by (fn [it] (get it "layer"))
+            (get (tool/org {:command "query" :query "todo:DOING"}) "items"))
+  (fn [g]
+    {:open (count g)
+     :hi-pri (count (filter (fn [it] (= 1 (get it "priority"))) g))
+     :blocked (count (filter (fn [it] (seq (get it "blocked-by"))) g))}))
+;; → {"kernel" {"open" 3 "hi-pri" 2 "blocked" 1} "ui" {...}}
 ```
 
-## 7. Memory rerank + dedup before re-entry (Spell tool)
+## 7. Memory rerank + dedup by title
+
+There is **no `dedupe-by` builtin** — dedup by key via `group-by`/`vals`/`first`:
 
 ```clojure
-;; trim a noisy memory.search down to the 5 best, distinct by title
-(->> (:value (tool/call {:tool "memory" :args {:action "search" :text "lock liveness"}}))
-     (sort-by #(get % "score") >)
-     (dedupe-by #(get % "title"))
+(->> (get (tool/memory {:action "search" :text "lock liveness"}) "hits")
+     (sort-by (fn [h] (get h "score")) >)
+     (group-by (fn [h] (get h "title")))
+     vals
+     (map first)                                    ; one per title (the top-scored)
+     (sort-by (fn [h] (get h "score")) >)
      (take 5)
-     (map #(select-keys % ["id" "title" "score"])))
+     (map (fn [h] (select-keys h ["id" "title"]))))
+;; → [{"id" "C1" "title" "lock liveness"} {"id" "C3" "title" "warm kernel"}]
 ```
 
-## 8. Cross-source JOIN: org × CI × git (Spell + MCP + bash in ONE program)
-
-The case no single tool can answer — exactly where the mix pays:
+## 8. Cross-source JOIN: org × CI (the case no single tool answers)
 
 ```clojure
-;; "for each DOING issue, is its branch green in CI and how stale is it?"
-(->> (:value (tool/call {:tool "org" :args {:command "query" :query "todo:DOING"}}))
-     (map (fn [it]
-            (let [branch (get it "branch")
-                  ci (:value (tool/mcp-call {:server "ci" :tool "status"
-                                             :args {:branch branch}}))
-                  age (-> (tool/call {:tool "bash"
-                                      :args {:command (str "git log -1 --format=%cr origin/" branch)}})
-                          :value :stdout clojure.string/trim)]
-              {:id (get it "identifier")
-               :ci (get ci "conclusion")
-               :last-commit age})))
-     (filter #(not= "success" (:ci %))))
-;; org (Spell) + ci (MCP) + git (bash) joined; only the failing rows return
+(let [runs (get (tool/ci {}) "runs")
+      pass-by-id (update-vals (group-by (fn [r] (get r "id")) runs)
+                              (fn [g] (get (first g) "pass")))]
+  (->> (get (tool/org {:command "query"}) "items")
+       (filter (fn [it] (contains? pass-by-id (get it "identifier"))))
+       (map (fn [it] {:id (get it "identifier")
+                      :pass (get pass-by-id (get it "identifier"))}))
+       (filter (fn [r] (not (get r "pass"))))))
+;; → [{"id" "K-2" "pass" false}]   (only the failing rows)
 ```
 
-## 9. find graph edges → impact analysis (Spell semantic surface)
+`org` (Spell) joined with `ci` (an MCP tool) in ONE program; only failures
+return. This is the thing the model currently fakes across many turns.
 
-Post-fup-095 the semantic surface IS find/edit. PtcRunner can drive it:
+## 9. find graph edges → impact analysis
 
 ```clojure
-;; "which call sites break if I change this signature?" — computed, ranked by package
-(->> (:value (tool/call {:tool "find"
-                         :args {:target "packages/auth/src/token.ts::verify def\u2192"}}))
-     (map :file)
-     (group-by #(second (clojure.string/split % #"/")))   ; by package
-     (map-vals count)
-     (sort-by val >))
+(->> (get (tool/find {:target "x::verify def→"}) "hits")
+     (map (fn [h] (get h "file")))
+     (map (fn [f] (nth (split f "/") 1)))   ; 2nd path segment
+     frequencies)
+;; → {"a.rs" 2 "b.rs" 1}
 ```
 
-## 10. Schema-validated extraction (the output_schema contract)
+Post-fup-095 the semantic surface IS find/edit; PtcRunner can drive `def→` and
+rank the blast radius — computed, not eyeballed.
+
+## 10. Signature-validated extraction (typed contract)
 
 ```clojure
-;; agent wants a typed object back, not prose — output_schema rejects malformed returns
 ;; program:
-{:failing (->> (:value (tool/call {:tool "bash" :args {:command "bun test --reporter json"}}))
-               :stdout json/parse
-               (filter #(= "fail" (get % "status")))
-               (map #(get % "name")))
- :count   ...}
-;; output_schema: {failing [:string], count :int}  → caller gets a validated struct
+{:total (count (get (tool/org {:command "query"}) "items"))}
+;; signature: {total :int}
+;; → {"total" 5}   (validated; caller gets a typed struct)
 ```
 
 ---
 
-## Why these specifically shine (the selection principle)
+## Why these shine (the selection principle)
 
 ```
-A pattern shines under PtcRunner when it is ANY of:
+A pattern shines under `execute` when it is ANY of:
   · COUNT/AGGREGATE the model currently does by eye      (1,4,6)   → determinism
-  · FAN-OUT whose intermediates flood context            (2,5,8)   → context saving
-  · MIX of I/O-tool + reduction                           (3,4,8)   → bash for I/O, Lisp for math
+  · FAN-OUT whose intermediates flood context            (2,5)     → context saving
+  · MIX of I/O-tool + reduction                           (3,4)     → bash gets data, Lisp reduces
   · CROSS-SOURCE JOIN no single tool answers             (8,9)     → composition
-  · TYPED result the caller must trust                   (7,10)    → output_schema
-Frequencies (from telemetry) rank the ROI:
-  pipe|slice 103,672 · find|xargs 7,479 · git-log 3,485 · awk 2,279 · for-loop 2,232 · …
+  · TYPED result the caller must trust                   (7,10)    → signature
+ROI (idiom frequencies, see 00-evidence): pipe|slice 103,672 · find|xargs 7,479 ·
+git-log 3,485 · awk 2,279 · for-loop 2,232 · rg|wc 1,007 …
 ```
 
-## What the mix unlocks that Bash alone cannot
+## Verified-syntax cheat-sheet (gotchas that bite)
 
 ```
-bash alone   strings in, strings out; model is the parser AND the calculator
-PtcRunner    values in, values out; bash/find/org/MCP are DATA SOURCES,
-             PTC-Lisp is the typed reducer; the model only writes the pipeline
-∴ the 82,013 pure-query Bash calls (31%) and the 103,672 pipe|slice idioms are the
-  addressable market. Each is a program the model should WRITE ONCE, not a transcript
-  it should READ BACK.
+(tool/name {...})              call; NOT (tool/call {:tool ...}); NO :value wrap
+(update-vals m f)              thread-FIRST → ; map-vals does NOT exist
+(group-by f coll)              f first, coll second
+dedup-by-key                   (->> xs (group-by f) vals (map first))  ; no dedupe-by
+results are STRING-keyed       (get r "items") / (get h "file"), not (:items r)
+signatures return string maps  {total :int} → {"total" 5}
+data/<key>                     reads the execute `context` map
+(#(f % x) )                    anonymous fn for thread-last shape adjustments
 ```
 
-## Subscription boundary (answering "can PtcRunner use Spell subscriptions?")
+## Subscription boundary (answering "can a program use Spell subscriptions?")
 
-No — and correctly so. `lisp_eval` is synchronous request/response; PTC-Lisp has no
-event-await form (same design discipline as no-fs/no-net). Spell's subscription
-surfaces — `subscribeKnowledge` (push frames: `index_changed`, `warm_completed`,
-`evicted`, `heartbeat`, `lag`) and the task EventBus (`task:subagent:event`,
-`task:subagent:progress`) — are consumed by the **Elixir host**, which folds the
-event-derived state into the `context` it passes to `PtcRunner.run`. The program
-sees a *snapshot*, never a stream.
+No — and correctly so. A program is synchronous request/response; PTC-Lisp has
+no event-await form (same discipline as no-fs/no-net). Spell's subscriptions
+(`subscribeKnowledge` push frames; the task EventBus) are consumed by the host,
+which folds event-derived state into the `context` it passes to `execute`. The
+program sees a *snapshot*, never a stream; it re-calls a tool for fresher data.
 
 ```
-Spell subscription ──(BEAM message)──► Elixir host state ──(snapshot)──► PtcRunner context
-                                            │
-                                   program computes over the snapshot, returns a value
+Spell subscription ──► host state ──(snapshot into execute context)──► program
+                                          program computes, returns a value
 ```
-
-This is the right factoring: streams are the orchestrator's concern (it's BEAM,
-it's built for them); compute is the sandbox's concern (bounded, synchronous, pure).
-A program that needs fresher data calls a tool again — it does not subscribe.
