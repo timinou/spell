@@ -28,6 +28,7 @@
 import { type Static, Type } from "@sinclair/typebox";
 import type { AgentTool, AgentToolContext, AgentToolResult } from "@spell/pi-agent-core";
 import executeDescription from "../../prompts/tools/execute.md" with { type: "text" };
+import type { ArtifactRef } from "../../session/artifacts";
 import type { ToolSession } from "../index";
 import { generateToolCatalog } from "./catalog-gen";
 import { buildSessionToolProvider } from "./catalog-session";
@@ -49,10 +50,23 @@ export const executeSchema = Type.Object({
 
 export type ExecuteParams = Static<typeof executeSchema>;
 
+/**
+ * Persists a large result to session-scoped artifact storage (PLAN-325).
+ * Mirrors `SessionManager.saveArtifact`; returns the artifact ref or undefined
+ * when the session is not persisted.
+ */
+export type SaveArtifact = (
+	content: string | Uint8Array,
+	toolType: string,
+	extension?: string,
+) => Promise<ArtifactRef | undefined>;
+
 export interface ExecuteToolDetails {
 	program: string;
 	signature?: string;
 	durationMs?: number;
+	/** Set when an over-large result was handed off to an artifact (PLAN-325). */
+	artifactUri?: string;
 }
 
 export class ExecuteTool implements AgentTool<typeof executeSchema, ExecuteToolDetails> {
@@ -64,13 +78,21 @@ export class ExecuteTool implements AgentTool<typeof executeSchema, ExecuteToolD
 	private readonly session?: ToolSession;
 	private readonly policy: CapabilityPolicy;
 	private readonly provider?: ToolProvider;
+	private readonly saveArtifact?: SaveArtifact;
 	private client: PtcRuntimeClient | null = null;
 	private initPromise: Promise<void> | null = null;
 
-	constructor(session?: ToolSession, opts?: { policy?: CapabilityPolicy; provider?: ToolProvider }) {
+	constructor(
+		session?: ToolSession,
+		opts?: { policy?: CapabilityPolicy; provider?: ToolProvider; saveArtifact?: SaveArtifact },
+	) {
 		this.session = session;
 		this.policy = opts?.policy ?? DEFAULT_POLICY;
 		this.provider = opts?.provider;
+		// Default the artifact sink to one built from the session's output-artifact
+		// allocator, so an over-large result is handed off rather than truncated when
+		// running in a persisted session (PLAN-325).
+		this.saveArtifact = opts?.saveArtifact ?? defaultSaveArtifact(session);
 	}
 
 	async execute(
@@ -102,9 +124,15 @@ export class ExecuteTool implements AgentTool<typeof executeSchema, ExecuteToolD
 
 			if (mapOf) validateAgainstMapSignature(value, mapOf);
 
+			const rendered = await this.#renderResult(value);
 			return {
-				content: [{ type: "text", text: renderValue(value) }],
-				details: { program: params.program, signature: params.signature, durationMs: Date.now() - started },
+				content: [{ type: "text", text: rendered.text }],
+				details: {
+					program: params.program,
+					signature: params.signature,
+					durationMs: Date.now() - started,
+					...(rendered.artifactUri ? { artifactUri: rendered.artifactUri } : {}),
+				},
 				// The program's return value IS the payload — the whole point of execute.
 				data: value,
 			};
@@ -122,6 +150,40 @@ export class ExecuteTool implements AgentTool<typeof executeSchema, ExecuteToolD
 		this.client?.close();
 		this.client = null;
 		this.initPromise = null;
+	}
+
+	/**
+	 * Render a return value for the model, capped in size (PLAN-325).
+	 *
+	 * Small results render inline. An over-large result is handed off to an
+	 * artifact (full value preserved, programmatically retrievable via the URI)
+	 * and the model sees a bounded head preview + the `artifact://` URI instead of
+	 * a flooded turn. When no artifact sink is available (unpersisted session) it
+	 * degrades to the in-line truncation marker.
+	 */
+	async #renderResult(value: unknown): Promise<{ text: string; artifactUri?: string }> {
+		const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+		if (text.length <= MAX_RESULT_BYTES) return { text };
+
+		const head = text.slice(0, MAX_RESULT_BYTES);
+		if (this.saveArtifact) {
+			try {
+				const ext = typeof value === "string" ? "txt" : "json";
+				const ref = await this.saveArtifact(text, "execute", ext);
+				if (ref) {
+					return {
+						artifactUri: ref.uri,
+						text:
+							`${head}\n\n[result is ${text.length} bytes; full value saved to ${ref.uri} ` +
+							`(showing first ${MAX_RESULT_BYTES}). Read that artifact for the rest, ` +
+							`or aggregate further / use a signature to return a smaller value.]`,
+					};
+				}
+			} catch {
+				// Artifact write failed (e.g. unpersisted session) → fall through to truncation.
+			}
+		}
+		return { text: truncationMarker(head, text.length) };
 	}
 
 	// ----- lifecycle -----
@@ -225,6 +287,22 @@ function validateAgainstMapSignature(value: unknown, signature: string): void {
 	}
 }
 
+/**
+ * Build a SaveArtifact from a session's output-artifact allocator (alloc path +
+ * write the bytes). Returns undefined when the session can't persist artifacts,
+ * so the caller falls back to in-line truncation.
+ */
+function defaultSaveArtifact(session?: ToolSession): SaveArtifact | undefined {
+	if (!session?.allocateOutputArtifact) return undefined;
+	const alloc = session.allocateOutputArtifact.bind(session);
+	return async (content, toolType, extension) => {
+		const ref = await alloc(toolType, extension);
+		if (!ref) return undefined;
+		await Bun.write(ref.path, content);
+		return ref;
+	};
+}
+
 // ----- value / error rendering -----
 
 /**
@@ -235,13 +313,10 @@ function validateAgainstMapSignature(value: unknown, signature: string): void {
  */
 const MAX_RESULT_BYTES = 16_384;
 
-/** Render a program's return value as text for the model, capped in size. */
-function renderValue(value: unknown): string {
-	const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
-	if (text.length <= MAX_RESULT_BYTES) return text;
-	const head = text.slice(0, MAX_RESULT_BYTES);
+/** The in-line truncation marker used when no artifact sink is available. */
+function truncationMarker(head: string, totalBytes: number): string {
 	return (
-		`${head}\n\n[truncated: ${text.length} bytes total, showing first ${MAX_RESULT_BYTES}. ` +
+		`${head}\n\n[truncated: ${totalBytes} bytes total, showing first ${MAX_RESULT_BYTES}. ` +
 		`Aggregate further in the program or use a signature to return a smaller value.]`
 	);
 }

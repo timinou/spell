@@ -109,6 +109,46 @@ d("ExecuteTool (real BEAM, injected provider)", () => {
 		}
 	}, 60_000);
 
+	it("hands a large result to an artifact and returns its URI + preview (PLAN-325)", async () => {
+		let saved: { content: string; toolType: string } | undefined;
+		const saveArtifact = async (content: string | Uint8Array, toolType: string) => {
+			saved = { content: typeof content === "string" ? content : Buffer.from(content).toString(), toolType };
+			return { id: "7", uri: "artifact://sess/main/execute/7.json", path: "/tmp/7.json" };
+		};
+		const tool = new ExecuteTool(undefined, {
+			policy: PERMISSIVE_POLICY,
+			provider: provider([]),
+			saveArtifact,
+		});
+		try {
+			const r = await tool.execute("c8", { program: '(join "" (map (fn [_] "x") (range 40000)))' });
+			const text = (r.content[0] as { text: string }).text;
+			// The full value went to the artifact …
+			expect(saved).toBeDefined();
+			expect(saved?.content.length).toBeGreaterThanOrEqual(40_000);
+			expect(saved?.toolType).toBe("execute");
+			// … and the model sees the URI + a bounded preview, not the whole blob.
+			expect(text).toContain("artifact://sess/main/execute/7.json");
+			expect(text.length).toBeLessThan(20_000);
+			// details carries the artifact ref for programmatic consumers.
+			expect((r.details as { artifactUri?: string }).artifactUri).toBe("artifact://sess/main/execute/7.json");
+		} finally {
+			await tool.dispose();
+		}
+	}, 60_000);
+
+	it("falls back to truncation when no artifact sink is available (PLAN-325)", async () => {
+		const tool = new ExecuteTool(undefined, { policy: PERMISSIVE_POLICY, provider: provider([]) });
+		try {
+			const r = await tool.execute("c9", { program: '(join "" (map (fn [_] "x") (range 40000)))' });
+			const text = (r.content[0] as { text: string }).text;
+			expect(text).toContain("[truncated:");
+			expect(text).not.toContain("artifact://");
+		} finally {
+			await tool.dispose();
+		}
+	}, 60_000);
+
 	it("lazily re-inits a fresh runtime after dispose (PLAN-324 respawn lifecycle)", async () => {
 		const tool = new ExecuteTool(undefined, { policy: PERMISSIVE_POLICY, provider: provider([]) });
 		try {

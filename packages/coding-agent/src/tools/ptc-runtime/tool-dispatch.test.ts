@@ -34,7 +34,11 @@ function fakeTool(name: string, result: AgentToolResult | ((args: unknown) => Ag
 
 describe("resultToValue", () => {
 	it("returns data verbatim when present", () => {
-		const r: AgentToolResult = { content: [{ type: "text", text: "ignored" }], details: { items: [1, 2, 3] }, data: { items: [1, 2, 3] } };
+		const r: AgentToolResult = {
+			content: [{ type: "text", text: "ignored" }],
+			details: { items: [1, 2, 3] },
+			data: { items: [1, 2, 3] },
+		};
 		expect(resultToValue(r)).toEqual({ items: [1, 2, 3] });
 	});
 
