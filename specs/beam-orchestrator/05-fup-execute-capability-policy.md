@@ -162,6 +162,13 @@ policy).
 **Do**: if `exec` is ever allowed, thread a depth counter through
 `execute → tool_call → execute` and a session-global worker ceiling into
 `execute_opts` (PLAN-323). Revisit when EP-1/EP-2 widen the policy.
+**RESOLVED (PLAN-323, commits b37eed620 + 128ee18a6)**: `task` is now in
+`DEFAULT_DENYLIST` (transitive-recursion block). A concurrent-execute admission
+ceiling (`max_concurrent_executes`, default 8) + per-worker caps
+(`max_parallel_workers`, `worker_max_heap`) are threaded into `execute_opts`,
+env-tunable via `PTC_*`. Over the ceiling → `-32004 concurrent_capacity_exceeded`.
+A per-call re-entrancy DEPTH counter (vs the flat concurrency ceiling) is still
+open should `exec`/`task` ever be allow-listed — file as a FEAT then.
 
 ### EP-6 · Abort propagation + per-execute signal
 
@@ -171,6 +178,12 @@ dispatcher shares one signal across concurrent executes.
 **Do**: give the client an owned `AbortController` (abort on close), and carry an
 execute-scoped id through `tool_call` params so the dispatcher selects the right
 per-execute signal. Do this when abort is wired end-to-end.
+**RESOLVED (PLAN-324, commit b37eed620)**: the client owns `ownAbort` (aborted on
+close/exit); `tool_call` frames carry `exec_id`; the client composes
+`AbortSignal.any([ownAbort, perExecute])` per call so teardown aborts in-flight
+tool work AND one execute's cancellation never cross-aborts another. `client.closed`
++ ExecuteTool respawn cover whole-VM death (the in-VM Peer-restart case was already
+handled by the re-init handshake).
 
 ---
 

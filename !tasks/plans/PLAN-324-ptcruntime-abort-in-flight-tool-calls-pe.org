@@ -1,5 +1,5 @@
 #+TITLE: PtcRuntime: abort in-flight tool_calls + per-execute signal + BEAM respawn
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14f61cc9d0fec7b6
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-fup095/2026-05-30T23-35-10-915Z_14f61cc9d0fec7b6.jsonl]]
 #+CUSTOM_ID: PLAN-324-ptcruntime-abort-in-flight-tool-calls-pe
@@ -21,3 +21,8 @@ FEAT from Review Gate 1 (P2/P3, lifecycle/abort cluster). Best addressed togethe
 (3) P3: no Node-side BEAM respawn after OS-process death. Docstring says 'crash -> respawn' but only close()/onClosed() exist; OTP :one_for_one only restarts the Peer WITHIN a live BEAM. Whole-VM death has no Node recovery; client becomes permanently closed. Either build respawn at the P3 execute-tool lifecycle layer OR soften the docstring. NOTE: the Peer-supervisor-restart (in-VM) case is already handled by the re-init handshake fix (client replays init on -32001).
 
 Sequencing: do (1)+(2) when P3 wires abort; (3) when P3 execute tool owns client lifecycle.
+
+* Resolution
+
+DONE (commit b37eed620). Execute-scoped id is the cancellation primitive: bridge/peer build the tools map per-execute capturing the execute id; tool_call frames carry exec_id. Client owns ownAbort (aborted on close/exit), registers each execute's caller signal in execSignals by id, composes AbortSignal.any([ownAbort, perExecute]) per tool_call — (1) in-flight tool work aborts on teardown, (2) one execute's cancellation never cross-aborts another. (3) respawn: client.closed getter + ExecuteTool respawns a dead client. Tests: per-execute abort + isolation + closed getter + exec_id frame + respawn lifecycle. Reviewer: correct (race-free, no leak, no Peer-crash, single-flight respawn). NB: surfaced + reconciled a concurrent FEAT-789 data-channel cutover mid-flight (filed, not folded into PLAN commits).
+

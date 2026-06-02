@@ -1,5 +1,5 @@
 #+TITLE: PtcRuntime execute: result size cap is fixed; consider streaming/paged returns
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14f61cc9d0fec7b6
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-fup095/2026-05-30T23-35-10-915Z_14f61cc9d0fec7b6.jsonl]]
 #+CUSTOM_ID: PLAN-325-ptcruntime-execute-result-size-cap-is-fi
@@ -13,3 +13,8 @@ you can make P0' the verification that it all works well
 show me your full work manifest with your process methodology, before I validate and let you go off (. main thread for architectural work, reviewer swarms in between implementation phases to surface, file, and fix/implement any BUG or FEAT that you found (mid-flight). Be thorough, you have unlimited time budget.
 
 FEAT (low priority) from Review Gate 3. V1 caps execute renderValue at 16KB with a truncation marker (shipped). Future: for legitimately large structured results a program wants to return, consider a paged/streaming return or an artifact:// handoff (write the value to an artifact, return the URI) instead of truncation. Only if real usage shows truncation is hit on legitimate (not buggy) programs. File: packages/coding-agent/src/tools/ptc-runtime/execute.ts renderValue (MAX_RESULT_BYTES).
+
+* Resolution
+
+DONE (commit 01ed60ffc). #renderResult: ≤16KB inline; oversize + artifact sink → write FULL value to an 'execute' artifact, return bounded head preview + artifact:// URI (details.artifactUri for programmatic consumers); no sink / write failure → truncation marker fallback. SaveArtifact sink defaults from session.allocateOutputArtifact + Bun.write; injectable for tests. data: value still carries the full payload (signature path unaffected). 3 result-size tests (cap, handoff, fallback). Reviewer: correct (full value written, URI surfaced, graceful degrade, no broken-URI on failure).
+

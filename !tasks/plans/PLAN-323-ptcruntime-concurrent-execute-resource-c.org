@@ -1,5 +1,5 @@
 #+TITLE: PtcRuntime: concurrent-execute resource ceiling + re-entrancy depth guard
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14f61cc9d0fec7b6
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-fup095/2026-05-30T23-35-10-915Z_14f61cc9d0fec7b6.jsonl]]
 #+CUSTOM_ID: PLAN-323-ptcruntime-concurrent-execute-resource-c
@@ -19,3 +19,8 @@ FEAT from Review Gate 1 (P2, two related findings).
 (B) Denylist blocks direct `execute` recursion but not transitive via `task`. A program can (tool/task {...}); the sub-agent can invoke `execute`, re-entering the coprocessor. No depth guard. Fix: add task-class tools to DEFAULT_DENYLIST for PtcRuntime programs, OR thread a re-entrancy depth counter through execute->tool_call->execute and reject beyond a bound. File: packages/coding-agent/src/tools/ptc-runtime/tool-dispatch.ts DEFAULT_DENYLIST.
 
 Both are P2 (resource exhaustion under adversarial/heavy programs; happy-path tests don't exercise). Address in P3 (policy) or a dedicated hardening pass. Note: P3 policy gate (effect allowlist) partially mitigates (B) if task is exec-tagged and exec is gated off by default.
+
+* Resolution
+
+DONE. 323-B (task in DEFAULT_DENYLIST, transitive-recursion block) shipped in commit b37eed620. 323-A (commit 128ee18a6): State carries worker_max_heap/max_parallel_workers/max_concurrent_executes; execute_opts threads worker caps into PtcRunner.Lisp.run (nil→ptc_runner defaults); handle_request(execute) admission gate rejects -32004 reason=concurrent_capacity_exceeded at the ceiling (default 8) without spawning; caps env-tunable via PTC_MAX_CONCURRENT_EXECUTES/PTC_MAX_PARALLEL_WORKERS/PTC_WORKER_MAX_HEAP. 3 robustness tests (worker_max_heap→memory_exceeded, max_parallel_workers→parallel_capacity_exceeded, admission reject+readmit). Reviewer: correct (counter can't leak/stick, off-by-one-correct, no raise-in-Peer).
+
