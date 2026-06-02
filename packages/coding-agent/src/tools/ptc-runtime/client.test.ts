@@ -106,6 +106,42 @@ describe("execute", () => {
 	});
 });
 
+describe("re-init handshake (Review Gate 1, P2)", () => {
+	it("replays init and retries when a previously-initialized runtime reports not-initialized", async () => {
+		const { client, t } = mk();
+
+		// Initial init.
+		const initP = client.init({ tools: [{ name: "x" }] });
+		t.emit({ jsonrpc: "2.0", id: t.last().id, result: { ok: true, tools: ["x"] } });
+		await initP;
+
+		// First execute hits a supervisor-restarted Peer → not_initialized.
+		const execP = client.execute({ program: "(+ 1 1)" });
+		const firstExecId = t.last().id;
+		t.emit({ jsonrpc: "2.0", id: firstExecId, error: { code: -32001, message: "not initialized" } });
+		await Promise.resolve();
+
+		// Client should transparently replay init...
+		const replayInit = t.last();
+		expect(replayInit.method).toBe("init");
+		t.emit({ jsonrpc: "2.0", id: replayInit.id, result: { ok: true, tools: ["x"] } });
+		await Promise.resolve();
+
+		// ...then retry the execute.
+		const retryExec = t.last();
+		expect(retryExec.method).toBe("execute");
+		t.emit({ jsonrpc: "2.0", id: retryExec.id, result: 2 });
+		await expect(execP).resolves.toBe(2);
+	});
+
+	it("does not retry when never initialized", async () => {
+		const { client, t } = mk();
+		const p = client.execute({ program: "(+ 1 1)" });
+		t.emit({ jsonrpc: "2.0", id: t.last().id, error: { code: -32001, message: "not initialized" } });
+		await expect(p).rejects.toBeInstanceOf(PtcRuntimeError);
+	});
+});
+
 describe("reentrant tool_call", () => {
 	it("services a BEAM-originated tool_call and replies with the result", async () => {
 		const calls: Array<{ tool: string; args: unknown }> = [];

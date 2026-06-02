@@ -1,0 +1,11 @@
+#+TITLE: Episodes 2026-06-02
+
+** ITEM Review Gate 1 (PtcRuntime seam) outcome. Validated safe: cross-execute tool_call correlation (single GenServer serializes next_id, replies pinned to stored `from` by unique id); respondResult JSON.stringify throw IS caught (inside handleInboundRequest try); no orphaned beam.smp (mix/elixir/erl exec into beam.smp as single PID, SIGTERM reaches it). FIXED NOW: P1 non-encodable tool_call ARGS crash Peer — symmetric to P0 return-value bug; made write/2 non-raising (Jason.encode_to_iodata + error frame). P2 re-init handshake — Peer supervisor-restart loses init state, BEAM OS-proc survives so Node onClose never fires; FIX: client retains lastCatalog, replays init on -32001 then retries execute once. Regression tested (17 Elixir, 43 TS). FILED to org: PLAN-323 (concurrent-execute heap ceiling + task transitive-recursion depth guard), PLAN-324 (abort in-flight tool_calls on close + per-execute signal correlation + whole-BEAM respawn — do when P3 wires abort). PLAN-322 (stdin backpressure). Pattern: each review gate finds the SYMMETRIC twin of prior-gate bugs — guard ALL encode paths, not just the one that bit.
+:PROPERTIES:
+:CUSTOM_ID: EP-76d9ba3ef7f7d671
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-02T00:03:57Z
+:END:
+:RELATIONS:
+:END:

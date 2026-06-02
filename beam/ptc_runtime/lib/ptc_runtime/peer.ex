@@ -139,19 +139,27 @@ defmodule PtcRuntime.Peer do
       "params" => %{"tool" => tool, "args" => args}
     }
 
-    write(st, frame)
+    # A program can pass a non-encodable term as a tool arg, e.g.
+    # `(tool/find {:f (fn [x] x)})`. Encoding the frame must NOT raise inside
+    # this GenServer (it would crash the only long-lived process). `write/2` is
+    # non-raising; on encode failure we reply to the worker with a tool error
+    # and never touch the wire (Review Gate 1, P1 — symmetric to the
+    # return-value guard).
+    case write(st, frame) do
+      :ok ->
+        mref = Process.monitor(caller_pid)
 
-    # Monitor the calling worker so a timed-out / crashed worker cannot leave a
-    # dangling `pending` entry on this long-lived process (Review Gate 0, P2).
-    mref = Process.monitor(caller_pid)
+        {:noreply,
+         %{
+           st
+           | next_id: id + 1,
+             pending: Map.put(st.pending, id, {from, mref}),
+             callers: Map.put(st.callers, mref, id)
+         }}
 
-    {:noreply,
-     %{
-       st
-       | next_id: id + 1,
-         pending: Map.put(st.pending, id, {from, mref}),
-         callers: Map.put(st.callers, mref, id)
-     }}
+      {:error, _} ->
+        {:reply, {:error, %{"message" => "tool args are not serializable"}}, st}
+    end
   end
 
   # Inbound frame from the reader (or a test).
@@ -386,9 +394,18 @@ defmodule PtcRuntime.Peer do
     %{"jsonrpc" => "2.0", "id" => id, "error" => err}
   end
 
+  # Non-raising frame write. Returns `{:error, reason}` if the frame cannot be
+  # JSON-encoded so callers can degrade gracefully instead of crashing the Peer.
   defp write(%State{writer: writer}, frame) do
-    writer.([Jason.encode_to_iodata!(frame), ?\n])
-    :ok
+    case Jason.encode_to_iodata(frame) do
+      {:ok, iodata} ->
+        writer.([iodata, ?\n])
+        :ok
+
+      {:error, reason} ->
+        Logger.error("frame encode failed: #{inspect(reason)}")
+        {:error, reason}
+    end
   end
 
   defp default_writer(iodata), do: IO.binwrite(:stdio, iodata)

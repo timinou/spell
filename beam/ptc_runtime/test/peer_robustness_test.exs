@@ -73,6 +73,30 @@ defmodule PtcRuntime.PeerRobustnessTest do
     end
   end
 
+  describe "P1 (gate 1): non-encodable tool_call args do not crash the Peer" do
+    test "a program passing a closure as a tool arg gets a tool error, peer survives" do
+      peer = H.start()
+      init!(peer, %{"tools" => [%{"name" => "sink"}]})
+
+      # The program passes a function as a tool arg. The outbound tool_call
+      # frame cannot be JSON-encoded; the Peer must reply a tool error to the
+      # worker (surfaced as an execute error) WITHOUT crashing.
+      H.send_frame(peer, %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "execute",
+        "params" => %{"program" => ~S|(tool/sink {:f (fn [x] x)})|}
+      })
+
+      assert %{"id" => 1, "error" => _} = H.recv(2_000)
+      assert Process.alive?(peer)
+
+      # Runtime still serves normal work.
+      H.send_frame(peer, %{"jsonrpc" => "2.0", "id" => 2, "method" => "execute", "params" => %{"program" => "(+ 1 1)"}})
+      assert %{"id" => 2, "result" => 2} = H.recv()
+    end
+  end
+
   describe "framing robustness" do
     test "a JSON string containing escaped newlines survives round-trip" do
       peer = H.start()

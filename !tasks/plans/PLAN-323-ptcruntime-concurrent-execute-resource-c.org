@@ -1,0 +1,21 @@
+#+TITLE: PtcRuntime: concurrent-execute resource ceiling + re-entrancy depth guard
+#+STATE: ITEM
+#+SESSION_ID: 14f61cc9d0fec7b6
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-fup095/2026-05-30T23-35-10-915Z_14f61cc9d0fec7b6.jsonl]]
+#+CUSTOM_ID: PLAN-323-ptcruntime-concurrent-execute-resource-c
+
+* Initial Message
+
+Ok I moved you to the session that had already started the LSP tool deletion thing. Please get your bearings and let's draft a new tool called 'execute' or 'process' (your choice, or another verb word) that is an interface for the V1. I am fine with read and write for the tool/call bridge auth scope, you just need to define a good system as an FUP (fully explained with ocntext in the file, with places to do the improvement so it's easy).
+
+the test suite should use plenty of hypothesis, property, and fuzz testing to make sure things like the examples of where ptcrunner shines all work, and that edge cases are werll done.
+you can make P0' the verification that it all works well
+show me your full work manifest with your process methodology, before I validate and let you go off (. main thread for architectural work, reviewer swarms in between implementation phases to surface, file, and fix/implement any BUG or FEAT that you found (mid-flight). Be thorough, you have unlimited time budget.
+
+FEAT from Review Gate 1 (P2, two related findings).
+
+(A) No global heap/worker ceiling across concurrent executes. peer.ex execute_opts/2 sets only :tools/:timeout/:caller; each execute uses ptc_runner defaults (8 workers x ~10MB ~80MB). Peer spawns a non-blocking proc per execute, so N concurrent executes = N*80MB, unbounded. On a long-lived session this is an OOM vector. Fix: thread a session-global worker/heap ceiling OR a concurrent-execute admission limit into execute_opts. File: beam/ptc_runtime/lib/ptc_runtime/peer.ex execute_opts.
+
+(B) Denylist blocks direct `execute` recursion but not transitive via `task`. A program can (tool/task {...}); the sub-agent can invoke `execute`, re-entering the coprocessor. No depth guard. Fix: add task-class tools to DEFAULT_DENYLIST for PtcRuntime programs, OR thread a re-entrancy depth counter through execute->tool_call->execute and reject beyond a bound. File: packages/coding-agent/src/tools/ptc-runtime/tool-dispatch.ts DEFAULT_DENYLIST.
+
+Both are P2 (resource exhaustion under adversarial/heavy programs; happy-path tests don't exercise). Address in P3 (policy) or a dedicated hardening pass. Note: P3 policy gate (effect allowlist) partially mitigates (B) if task is exec-tagged and exec is gated off by default.

@@ -55,6 +55,9 @@ export interface JsonRpcError {
 	data?: unknown;
 }
 
+/** Mirror of the BEAM peer's @code_not_initialized. */
+const CODE_NOT_INITIALIZED = -32001;
+
 type InboundFrame = (RequestFrame | ResponseFrame) & Record<string, unknown>;
 
 /** A reentrant tool_call from the BEAM. */
@@ -127,9 +130,12 @@ export class PtcRuntimeClient {
 
 	private nextId = 1;
 	private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
-	private buffer = "";
 	private closed = false;
 	private closeReason: Error | null = null;
+	// Last catalog sent at init, retained so we can transparently replay `init`
+	// if the BEAM-side Peer is supervisor-restarted (loses its initialized
+	// state) without the OS process dying (Review Gate 1, P2).
+	private lastCatalog: Catalog | null = null;
 
 	constructor(opts: PtcRuntimeClientOptions) {
 		this.transport = opts.transport;
@@ -142,18 +148,33 @@ export class PtcRuntimeClient {
 
 	/** Hydrate the runtime with the tool + provider catalog. */
 	async init(catalog: Catalog): Promise<{ tools: string[] }> {
+		this.lastCatalog = catalog;
 		const result = (await this.request("init", { catalog })) as { tools?: string[] };
 		return { tools: result.tools ?? [] };
 	}
 
 	/** Run a PTC-Lisp program; resolve with its (signature-validated) value. */
 	async execute(params: ExecuteParams): Promise<unknown> {
-		return this.request("execute", {
-			program: params.program,
-			context: params.context,
-			signature: params.signature,
-			timeout_ms: params.timeoutMs,
-		});
+		const send = (): Promise<unknown> =>
+			this.request("execute", {
+				program: params.program,
+				context: params.context,
+				signature: params.signature,
+				timeout_ms: params.timeoutMs,
+			});
+
+		try {
+			return await send();
+		} catch (e) {
+			// The Peer may have been supervisor-restarted, losing its init state.
+			// If we've initialized before and the runtime reports not-initialized,
+			// replay init once and retry transparently (Review Gate 1, P2).
+			if (e instanceof PtcRuntimeError && e.code === CODE_NOT_INITIALIZED && this.lastCatalog) {
+				await this.request("init", { catalog: this.lastCatalog });
+				return send();
+			}
+			throw e;
+		}
 	}
 
 	/** Terminate the runtime and reject all in-flight requests. */
