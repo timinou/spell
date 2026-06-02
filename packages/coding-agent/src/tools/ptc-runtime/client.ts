@@ -333,6 +333,62 @@ export class PtcRuntimeClient {
 }
 
 // ============================================================================
+// Backpressure-aware line writer
+// ============================================================================
+
+/** The minimal writable surface a backpressured writer needs (a subset of
+ * Node's stream.Writable: `write` returns false when the buffer is full, and
+ * a `drain` event fires when it empties). */
+export interface WritableSink {
+	/** Write a chunk; returns false when the internal buffer is full. */
+	write(chunk: string): boolean;
+	/** Register the drain observer (fired when the buffer empties). */
+	onDrain(cb: () => void): void;
+}
+
+/**
+ * Build a `writeLine(line)` that honors stream backpressure (PLAN-322).
+ *
+ * `child.stdin.write()` returns false when the OS pipe buffer is full; ignoring
+ * it makes Node buffer in UNBOUNDED user-space memory. Under heavy reentrant
+ * tool_call replies (pmap fan-out + large results) that can balloon RAM. Here we
+ * stop writing once the sink signals backpressure, QUEUE subsequent lines in
+ * order, and flush them on `drain`. Frames are never dropped or reordered —
+ * strict FIFO. The queue is still in-memory (true bounded backpressure to the
+ * producer is a future step, FUP), but writes now self-regulate to the pipe's
+ * pace instead of being fired blindly.
+ */
+export function createBackpressuredWriter(sink: WritableSink): (line: string) => void {
+	const queue: string[] = [];
+	let blocked = false;
+
+	const flush = (): void => {
+		blocked = false;
+		while (queue.length > 0) {
+			const chunk = queue.shift() as string;
+			if (!sink.write(chunk)) {
+				// Filled again mid-flush: stop, wait for the next drain.
+				blocked = true;
+				return;
+			}
+		}
+	};
+
+	sink.onDrain(flush);
+
+	return (line: string): void => {
+		const chunk = `${line}\n`;
+		// While blocked, everything queues to preserve order (an un-blocked write
+		// must never jump ahead of queued frames).
+		if (blocked || queue.length > 0) {
+			queue.push(chunk);
+			return;
+		}
+		if (!sink.write(chunk)) blocked = true;
+	};
+}
+
+// ============================================================================
 // Process-backed transport
 // ============================================================================
 
@@ -378,10 +434,15 @@ export function spawnTransport(opts: ResolveSpawnOptions = {}): { transport: Tra
 		}
 	});
 
+	// Honor stdin backpressure: queue + flush on drain instead of blindly
+	// buffering when the pipe fills (PLAN-322).
+	const writeLine = createBackpressuredWriter({
+		write: chunk => child.stdin.write(chunk),
+		onDrain: cb => child.stdin.on("drain", cb),
+	});
+
 	const transport: Transport = {
-		writeLine(line: string): void {
-			child.stdin.write(`${line}\n`);
-		},
+		writeLine,
 		onLine(cb): void {
 			lineCb = cb;
 		},
