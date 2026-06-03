@@ -516,7 +516,8 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 	#userAgentOverride: UserAgentOverride | null = null;
 	#elementIdCounter = 0;
 	readonly #elementCache = new Map<number, ElementHandle>();
-	readonly #patchedClients = new WeakSet<object>();
+ readonly #patchedClients = new WeakSet<object>();
+ 	#retrying = false;
 
 	constructor(private readonly session: ToolSession) {
 		this.description = renderPromptTemplate(browserDescription, {});
@@ -524,16 +525,27 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 
 	async #closeBrowser(): Promise<void> {
 		await this.#clearElementCache();
-		if (this.#page && !this.#page.isClosed()) {
-			await this.#page.close();
-		}
+		const page = this.#page;
+		const browser = this.#browser;
+		// Null out state eagerly so concurrent callers see a clean slate
 		this.#page = null;
-		if (this.#browser?.connected) {
-			await this.#browser.close();
-		}
 		this.#browser = null;
 		this.#browserSession = null;
 		this.#userAgentOverride = null;
+		try {
+			if (page && !page.isClosed()) {
+				await page.close();
+			}
+		} catch {
+			// Chrome may already be dead — swallow
+		}
+		try {
+			if (browser?.connected) {
+				await browser.close();
+			}
+		} catch {
+			// Chrome may already be dead — swallow
+		}
 	}
 
 	async dispose(): Promise<void> {
@@ -583,6 +595,15 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 			args: launchArgs,
 			ignoreDefaultArgs: [...STEALTH_IGNORE_DEFAULT_ARGS],
 		});
+		// Listen for external Chrome death (kill, OOM, crash) — eagerly
+		// null out state so #ensurePage knows to re-launch.
+		this.#browser.on("disconnected", () => {
+			logger.debug("Browser disconnected externally — clearing state for auto-recovery");
+			this.#page = null;
+			this.#browser = null;
+			this.#browserSession = null;
+			this.#userAgentOverride = null;
+		});
 		this.#page = await this.#browser.newPage();
 		await this.#applyStealthPatches(this.#page);
 		if (this.#currentHeadless || params?.viewport) {
@@ -596,18 +617,34 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 		if (this.#currentHeadless !== null && this.#currentHeadless !== desiredHeadless) {
 			return this.#resetBrowser(params);
 		}
-		if (this.#page && !this.#page.isClosed()) {
-			return this.#page;
+		// Fast path: browser + page look alive
+		if (this.#page && !this.#page.isClosed() && this.#browser?.connected) {
+			// Health-check: a dead Chrome can pass the sync flags above.
+			// A cheap evaluate catches protocol/frame errors early.
+			try {
+				await this.#page.evaluate(() => true);
+				return this.#page;
+			} catch {
+				logger.debug("Browser page health-check failed — resetting browser");
+				return this.#resetBrowser(params);
+			}
 		}
-		if (!this.#browser || !this.#browser.isConnected()) {
+		// Browser gone (external kill, disconnect event, etc.) — relaunch
+		if (!this.#browser || !this.#browser.connected) {
 			return this.#resetBrowser(params);
 		}
-		this.#page = await this.#browser.newPage();
-		await this.#applyStealthPatches(this.#page);
-		if (this.#currentHeadless || params?.viewport) {
-			await this.#applyViewport(this.#page, params?.viewport);
+		// Browser alive but page closed — open a new tab
+		try {
+			this.#page = await this.#browser.newPage();
+			await this.#applyStealthPatches(this.#page);
+			if (this.#currentHeadless || params?.viewport) {
+				await this.#applyViewport(this.#page, params?.viewport);
+			}
+			return this.#page;
+		} catch {
+			// newPage can also fail if browser died between the check and here
+			return this.#resetBrowser(params);
 		}
-		return this.#page;
 	}
 
 	async #applyViewport(page: Page, viewport?: BrowserParams["viewport"]): Promise<void> {
@@ -996,6 +1033,19 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 				document.head.removeChild(iframe);})();`);
 	}
 
+	static #isDeadBrowserError(error: unknown): boolean {
+ 	if (!(error instanceof Error)) return false;
+ 	const msg = error.message;
+ 	return (
+ 		msg.includes("detached Frame") ||
+ 		msg.includes("Connection closed") ||
+ 		msg.includes("Protocol error") ||
+ 		msg.includes("Target closed") ||
+ 		msg.includes("Session closed") ||
+ 		msg.includes("Browser has disconnected") ||
+ 		msg.includes("not a function") && msg.includes("send")
+ 	);
+ }
 	async execute(
 		_toolCallId: string,
 		params: BrowserParams,
@@ -1461,6 +1511,30 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 			if (error instanceof ToolAbortError) throw error;
 			if (error instanceof Error && error.name === "AbortError") {
 				throw new ToolAbortError();
+			}
+			// Auto-recover from dead-browser errors: reset and retry once.
+			// Don't retry open/close (already reset), or element-cache
+			// actions (click_id/type_id/fill_id) since cache is wiped.
+			if (
+				!this.#retrying &&
+				BrowserTool.#isDeadBrowserError(error) &&
+				params.action !== "open" &&
+				params.action !== "close" &&
+				params.action !== "click_id" &&
+				params.action !== "type_id" &&
+				params.action !== "fill_id"
+			) {
+				logger.warn("Browser died externally \u2014 resetting and retrying", {
+					action: params.action,
+					error: error instanceof Error ? error.message : String(error),
+				});
+				await this.#closeBrowser();
+				this.#retrying = true;
+				try {
+					return await this.execute(_toolCallId, params, signal, _onUpdate, _ctx);
+				} finally {
+					this.#retrying = false;
+				}
 			}
 			throw error;
 		}
