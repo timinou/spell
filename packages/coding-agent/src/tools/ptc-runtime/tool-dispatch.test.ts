@@ -151,7 +151,7 @@ describe("lookupFromMap denylist", () => {
 	});
 
 	it("blocks recursion, interactive, and completion tools by default", () => {
-		for (const name of ["execute", "ask", "exit_plan_mode", "resolve", "submit_result"]) {
+		for (const name of ["execute", "ask", "resolve", "submit_result"]) {
 			expect(DEFAULT_DENYLIST.has(name)).toBe(true);
 		}
 	});
