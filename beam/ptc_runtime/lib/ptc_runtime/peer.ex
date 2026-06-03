@@ -76,6 +76,10 @@ defmodule PtcRuntime.Peer do
   # `max_concurrent_executes * max_parallel_workers * worker_max_heap`.
   @default_max_concurrent_executes 8
 
+
+  # Default sandbox max heap in words (50 MB / 8 bytes-per-word).
+  # Overridable per-session via the Peer start_link :max_heap opt.
+  @default_max_heap 6_250_000
   # How long a single tool_call may wait for Node before the worker gives up.
   # Generous: Node may itself be doing slow IO (bash, network).
   @tool_call_timeout 120_000
@@ -96,6 +100,7 @@ defmodule PtcRuntime.Peer do
               tasks: %{},
               # PLAN-323 resource caps (nil → ptc_runner defaults), threaded into
               # every PtcRunner.Lisp.run; and the concurrent-execute admission ceiling.
+              max_heap: nil,
               worker_max_heap: nil,
               max_parallel_workers: nil,
               max_concurrent_executes: nil
@@ -142,6 +147,7 @@ defmodule PtcRuntime.Peer do
     {:ok,
      %State{
        writer: writer,
+       max_heap: Keyword.get(opts, :max_heap, @default_max_heap),
        worker_max_heap: Keyword.get(opts, :worker_max_heap),
        max_parallel_workers: Keyword.get(opts, :max_parallel_workers),
        max_concurrent_executes:
@@ -418,8 +424,8 @@ defmodule PtcRuntime.Peer do
     [tools: tools, timeout: timeout, caller: :in_process_v1]
     |> maybe_put(:context, Map.get(params, "context"))
     |> maybe_put(:signature, Map.get(params, "signature"))
-    # Per-session resource caps (PLAN-323). nil → ptc_runner defaults
-    # (max_parallel_workers 8, worker_max_heap = sandbox max_heap).
+    # (max_parallel_workers 8, max_heap = 6_250_000 words ~50MB).
+    |> maybe_put(:max_heap, st.max_heap)
     |> maybe_put(:worker_max_heap, st.worker_max_heap)
     |> maybe_put(:max_parallel_workers, st.max_parallel_workers)
   end

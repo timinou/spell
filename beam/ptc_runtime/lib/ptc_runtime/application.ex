@@ -41,6 +41,7 @@ defmodule PtcRuntime.Application do
   # ceiling 8; worker caps fall through to ptc_runner's own defaults).
   defp peer_opts do
     [autostart: @autostart]
+    |> put_env_int(:max_heap, "PTC_MAX_HEAP")
     |> put_env_int(:max_concurrent_executes, "PTC_MAX_CONCURRENT_EXECUTES")
     |> put_env_int(:max_parallel_workers, "PTC_MAX_PARALLEL_WORKERS")
     |> put_env_int(:worker_max_heap, "PTC_WORKER_MAX_HEAP")
