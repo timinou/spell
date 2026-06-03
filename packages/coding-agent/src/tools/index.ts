@@ -376,9 +376,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const includeSubmitResult = session.requireSubmitResultTool === true;
 	const requestedTools =
 		toolNames && toolNames.length > 0 ? [...new Set(toolNames.map(name => name.toLowerCase()))] : undefined;
-	if (requestedTools && !requestedTools.includes("exit_plan_mode")) {
-		requestedTools.push("exit_plan_mode");
-	}
 
 	// Auto-include AST counterparts when their text-based sibling is present
 	if (requestedTools) {

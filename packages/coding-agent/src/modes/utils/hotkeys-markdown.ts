@@ -1,6 +1,5 @@
 export interface HotkeysMarkdownBindings {
 	expandToolsKey: string;
-	planModeKey: string;
 	sttKey: string;
 	copyLineKey: string;
 	copyPromptKey: string;
@@ -8,7 +7,7 @@ export interface HotkeysMarkdownBindings {
 }
 
 export function buildHotkeysMarkdown(bindings: HotkeysMarkdownBindings): string {
-	const { expandToolsKey, planModeKey, sttKey, copyLineKey, copyPromptKey, subagentViewerKey } = bindings;
+	const { expandToolsKey, sttKey, copyLineKey, copyPromptKey, subagentViewerKey } = bindings;
 	return [
 		"**Navigation**",
 		"| Key | Action |",
@@ -42,7 +41,7 @@ export function buildHotkeysMarkdown(bindings: HotkeysMarkdownBindings): string 
 		"| `Shift+Ctrl+P` | Cycle role models (temporary) |",
 		"| `Alt+P` | Select model (temporary) |",
 		"| `Ctrl+L` | Select model (set roles) |",
-		`| \`${planModeKey}\` | Toggle plan mode |`,
+
 		"| `Ctrl+R` | Search prompt history |",
 		`| \`${expandToolsKey}\` | Toggle tool output expansion |`,
 		`| \`${subagentViewerKey}\` | View running subagents |`,

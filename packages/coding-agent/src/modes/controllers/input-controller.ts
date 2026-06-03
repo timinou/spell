@@ -112,10 +112,6 @@ export class InputController {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.handleDequeue());
 		}
 
-		const planModeKeys = this.ctx.keybindings.getKeys("togglePlanMode");
-		for (const key of planModeKeys) {
-			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handlePlanModeCommand());
-		}
 
 		for (const key of this.ctx.keybindings.getKeys("newSession")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.handleClearCommand());

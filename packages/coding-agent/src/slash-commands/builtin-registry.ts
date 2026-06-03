@@ -82,36 +82,6 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		},
 	},
 	{
-		name: "plan",
-		description: "Toggle plan mode (agent plans before executing)",
-		inlineHint: "[prompt]",
-		allowArgs: true,
-		handle: async (command, runtime) => {
-			await runtime.ctx.handlePlanModeCommand(command.args || undefined);
-			runtime.ctx.editor.setText("");
-		},
-	},
-	{
-		name: "ultraplan",
-		description: "Toggle ultraplan mode (plan mode with Metis gap analysis and optional Momus review)",
-		inlineHint: "[prompt]",
-		allowArgs: true,
-		handle: async (command, runtime) => {
-			await runtime.ctx.handlePlanModeCommand(command.args || undefined, { ultraplan: true });
-			runtime.ctx.editor.setText("");
-		},
-	},
-	{
-		name: "design",
-		description: "Enter design plan mode (UI/UX planning with Aphrodite/Athena quality gates)",
-		inlineHint: "[prompt]",
-		allowArgs: true,
-		handle: async (command, runtime) => {
-			await runtime.ctx.handlePlanModeCommand(command.args || undefined, { flavor: "design" });
-			runtime.ctx.editor.setText("");
-		},
-	},
-	{
 		name: "audit",
 		description: "Run an implementation audit (checks for polish, hardening, and improvement opportunities)",
 		handle: async (_command, runtime) => {

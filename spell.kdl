@@ -85,7 +85,7 @@ keybindings {
 	// cycle-model-forward "ctrl+p"
 	// cycle-model-backward "shift+ctrl+p"
 	// select-model "ctrl+l"
-	// toggle-plan-mode "alt+shift+p"
+
 	// history-search "ctrl+r"
 	// expand-tools "ctrl+o"
 	// toggle-thinking "ctrl+t"
@@ -120,12 +120,7 @@ policy "ui-quality" layer="ui" {
     gate-commit #true
     gate-cmd "bun run --workspaces --if-present --parallel test"
 }
-plan-mode {
-	allowed-folders {
-		folder "domain/growth/specs/" description="You can write/edit if you find an inconsistency or if you need to write specs ahead of implementing them. All updates and writes should be validated by me in the details before you edit."
-		folder "specs/" description="Any specs that you deem important to keep as reference across sessions"
-	}
-}
+
 
 // ── Roles ── verb-titled, KDL-native. command → titlebar + /slash.
 //    context-policy: carry = re-inject every turn · fresh = once on activation
