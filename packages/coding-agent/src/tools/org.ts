@@ -19,7 +19,7 @@ import type { Component } from "@spell/pi-tui";
 import { Text } from "@spell/pi-tui";
 import { getProjectDir, logger } from "@spell/pi-utils";
 import type { Theme } from "../modes/theme/theme";
-import { validatePlanItem } from "../plan-mode/plan-validation";
+import { validatePlanItem } from "../org/plan-validation";
 import { renderStatusLine } from "../tui/status-line";
 import type { ToolSession } from ".";
 import { classifyContextPressure } from "./context-pressure-policy";

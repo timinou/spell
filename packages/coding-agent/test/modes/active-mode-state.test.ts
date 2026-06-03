@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ResolvedModeConfig } from "../../src/capability/mode";
 import type { SourceMeta } from "../../src/capability/types";
-import type { AuditState } from "../../src/plan-mode/audit-state";
+import type { AuditState } from "../../src/modes/audit-state";
 import {
 	type ActiveModeState,
 	isAuditMode,
@@ -9,7 +9,7 @@ import {
 	isUserMode,
 	type PlanModeState,
 	type UserModeState,
-} from "../../src/plan-mode/state";
+} from "../../src/modes/mode-state";
 import type { ToolSession } from "../../src/tools";
 import { enforceModeWrite } from "../../src/tools/mode-guard";
 

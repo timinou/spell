@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import type { AuditState } from "../../src/plan-mode/audit-state";
-import { isAuditClean } from "../../src/plan-mode/audit-state";
+import type { AuditState } from "../../src/modes/audit-state";
+import { isAuditClean } from "../../src/modes/audit-state";
 
 /**
  * These tests verify the audit detection state machine contract used by AgentSession.

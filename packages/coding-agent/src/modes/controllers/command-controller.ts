@@ -23,7 +23,7 @@ import { DynamicBorder } from "../../modes/components/dynamic-border";
 import { getMarkdownTheme, getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
 import { buildHotkeysMarkdown } from "../../modes/utils/hotkeys-markdown";
-import { listPlanSnapshots } from "../../orchestrators/fluid/wave-snapshot";
+import { listPlanSnapshots } from "../../tools/wave-snapshot";
 import type { AsyncJobSnapshotItem } from "../../session/agent-session";
 import type { AuthStorage } from "../../session/auth-storage";
 import { outputMeta } from "../../tools/output-meta";

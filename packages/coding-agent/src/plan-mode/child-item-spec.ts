@@ -1,5 +1,5 @@
 import { safeTruncateUtf8 } from "../utils/safe-truncate-utf8";
-import type { ResolvedPlanChildItem } from "./plan-validation";
+import type { ResolvedPlanChildItem } from "../org/plan-validation";
 
 export interface ChildItemSpec {
 	id: string;

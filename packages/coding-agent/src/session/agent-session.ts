@@ -102,10 +102,10 @@ import {
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
 import { normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../patch";
 import { listPlanModeAllowedFolders } from "../plan-mode/allowed-folders";
-import type { AuditState } from "../plan-mode/audit-state";
-import { isAuditClean } from "../plan-mode/audit-state";
-import { buildOrgConfig, resolvePlanItem } from "../plan-mode/org-plan";
-import type { ActiveModeState, PlanModeState, UserModeState } from "../plan-mode/state";
+import type { AuditState } from "../modes/audit-state";
+import { isAuditClean } from "../modes/audit-state";
+import { buildOrgConfig, resolvePlanItem } from "../org/org-plan";
+import type { ActiveModeState, PlanModeState, UserModeState } from "../modes/mode-state";
 import autoHandoffThresholdFocusPrompt from "../prompts/system/auto-handoff-threshold-focus.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
 import handoffDocumentPrompt from "../prompts/system/handoff-document.md" with { type: "text" };

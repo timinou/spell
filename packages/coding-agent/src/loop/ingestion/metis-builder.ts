@@ -1,5 +1,5 @@
-import type { DependencyGraph, OrgDependProperties } from "./org-depend";
-import { buildDependencyGraph } from "./org-depend";
+import type { DependencyGraph, OrgDependProperties } from "../../org/org-depend";
+import { buildDependencyGraph } from "../../org/org-depend";
 import type { ParsedSpecFile } from "./parser";
 
 export interface MetisInput {

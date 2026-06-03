@@ -16,7 +16,7 @@ import type { DiscoverableMCPSearchIndex, DiscoverableMCPTool } from "../mcp/dis
 import type { CanvasOrchestratorManager } from "../orchestrators/canvas-orchestrator";
 import type { CanvasTaskManager } from "../orchestrators/canvas-task-manager";
 
-import type { ActiveModeState, PlanModeState } from "../plan-mode/state";
+import type { ActiveModeState, PlanModeState } from "../modes/mode-state";
 import type { SandboxPolicy } from "../sandbox";
 import type { ArtifactRef } from "../session/artifacts";
 import { TaskTool } from "../task";

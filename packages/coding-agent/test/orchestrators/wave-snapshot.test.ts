@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { $ } from "bun";
 
-import { createWaveSnapshot, listPlanSnapshots } from "../../src/orchestrators/fluid/wave-snapshot";
+import { createWaveSnapshot, listPlanSnapshots } from "../../src/tools/wave-snapshot";
 
 async function initRepo(): Promise<string> {
 	const dir = await mkdtemp(path.join(os.tmpdir(), "wave-snapshot-"));

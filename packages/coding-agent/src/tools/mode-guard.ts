@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { localUrlToPath } from "./local-path";
-import type { ActiveModeState } from "../plan-mode/state";
-import { isAuditMode, isPlanMode, isUserMode } from "../plan-mode/state";
+import type { ActiveModeState } from "../modes/mode-state";
+import { isAuditMode, isPlanMode, isUserMode } from "../modes/mode-state";
 import type { ToolSession } from ".";
 import { expandTilde, resolveToCwd } from "./path-utils";
 import { ToolError } from "./tool-errors";

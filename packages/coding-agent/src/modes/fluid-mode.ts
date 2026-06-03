@@ -12,7 +12,7 @@ import { FluidEventRouter, materializeFluidPlanToTodos, validatePlan } from "../
 import { fluidPlanSchema } from "../orchestrators/fluid/plan-schema";
 import type { AgentRuntime, FluidEvent, FluidPlan } from "../orchestrators/fluid/types";
 import { FLUID_EVENT_CHANNEL } from "../orchestrators/fluid/types";
-import { buildOrgConfig } from "../plan-mode/org-plan";
+import { buildOrgConfig } from "../org/org-plan";
 import fluidPlannerPrompt from "../prompts/agents/fluid-planner.md" with { type: "text" };
 import fluidPlannerRetryPrompt from "../prompts/agents/fluid-planner-retry.md" with { type: "text" };
 import executionPromptTemplate from "../prompts/system/plan-mode-approved.md" with { type: "text" };

@@ -1,5 +1,5 @@
 import type { ManifestSnapshot } from "../types";
-import type { DependencyGraph } from "./org-depend";
+import type { DependencyGraph } from "../../org/org-depend";
 
 export interface MomusInput {
 	manifestSummary: {

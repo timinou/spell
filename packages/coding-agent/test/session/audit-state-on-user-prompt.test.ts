@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { AuditState } from "../../src/plan-mode/audit-state";
+import type { AuditState } from "../../src/modes/audit-state";
 
 /**
  * These tests verify the audit state reset contract introduced in the prompt() method.

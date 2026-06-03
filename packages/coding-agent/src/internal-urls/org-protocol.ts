@@ -10,7 +10,7 @@
 
 import { findItemById, resolveCategories } from "@spell/pi-org";
 import type { Settings } from "../config/settings";
-import { buildOrgConfig } from "../plan-mode/org-plan";
+import { buildOrgConfig } from "../org/org-plan";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
 
 export interface OrgProtocolOptions {

@@ -1,4 +1,4 @@
-import type { DependencyGraph } from "../ingestion/org-depend";
+import type { DependencyGraph } from "../../org/org-depend";
 import type { ManifestSnapshot, ManifestTicket } from "../types";
 
 const MAX_ID_LENGTH = 40;
