@@ -1744,15 +1744,6 @@ export const SETTINGS_SCHEMA = {
 	"thinkingBudgets.medium": { type: "number", default: 8192 },
 
 	"thinkingBudgets.high": { type: "number", default: 16384 },
-
-	// ────────────────────────────────────────────────────────────────────────
-	// Fluid canvas
-	// ────────────────────────────────────────────────────────────────────────
-	"fluid.concurrency": { type: "number", default: 5 },
-
-	"fluid.fastPlan": { type: "boolean", default: false },
-
-	"fluid.debug": { type: "boolean", default: false },
 } as const;
 
 // ═══════════════════════════════════════════════════════════════════════════

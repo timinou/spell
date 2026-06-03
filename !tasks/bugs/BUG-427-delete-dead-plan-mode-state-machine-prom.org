@@ -1,0 +1,62 @@
+#+TITLE: Retire plan-mode + fluid + autonomous-loop; keep grouped/gated todos
+#+STATE: ITEM
+#+SESSION_ID: 14fa8e00912a893c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-03T10-23-44-708Z_14fa8e00912a893c.jsonl]]
+#+CUSTOM_ID: BUG-427-delete-dead-plan-mode-state-machine-prom
+
+Cutover already shipped (commits f2257961c, fdfc0b692): KDL-native roles live; plan-mode entry points removed. This item tracks deletion of the now-dead subsystems, staged so each build stays green.
+
+* Evidence (corpus: 14,609 sessions, jq schema → grep aggregation)
+| feature              | all-time | recent-30d (of 3,873) | verdict |
+|----------------------|----------|-----------------------|---------|
+| grouped/gated todos  | 3,068    | 1,508  (39%)          | KEEP    |
+| gateCmd/gateArtifact | 1,853    | —                     | KEEP    |
+| exit_plan_mode       | 1,106    | 36  (0.9%)            | DELETE  |
+| fluid (FluidPlan)    | 562      | 23 → all code-reads   | DELETE  |
+| LoopRole handoff     | 0        | 0                     | DELETE  |
+
+- `fromRole`/`toRole`/`currentRole` = 0 executions ALL-TIME → autonomous loop never ran a single phase handoff.
+- fluid "usage" = spell self-dev reading orchestrators/fluid/* source, not feature runs.
+- `tools/index.ts:12` already notes "Loop tools had zero session usage in W0-3 replay corpus" (prior dev stubbed loop tools; lifecycle left wired).
+
+* Decisions (owner)
+- Loop: ABANDONED → delete.
+- wave-snapshot (/plan-snapshot, 104 sess): KEEP.
+- grouped/gated todos: KEEP (core).
+
+* MUST-KEEP — extract before deleting
+These live in to-be-deleted dirs but feed surviving features:
+- =orchestrators/fluid/plan-to-todos.ts= (planWavesToTodoGroups) ← interactive-mode todo materialization
+- =orchestrators/fluid/wave-snapshot.ts= (createWaveSnapshot, listPlanSnapshots) ← todo-write + command-controller; wave-snapshot KEPT
+- =orchestrators/fluid/types.ts= (PlanWave) ← shared type
+- =loop/ingestion/org-depend.ts= (parseOrgDependProperties, buildDependencyGraph) ← plan-validation + loop/tui/manifest-display
+→ move to neutral home (e.g. =tools/wave-todos.ts=, =org/org-depend.ts=) FIRST, then delete the shells.
+
+* Stage 1 — plan-mode core (interactive entry already cut)
+- interactive-mode.ts: handlePlanModeCommand, #enterPlanMode, #exitPlanMode, handleExitPlanModeTool, isPlanLike branch (~132 ref-LOC)
+- agent-session.ts: #buildPlanModeMessage, #buildPlanReferenceMessage, plan-mode state + getPlanModeState (~49)
+- modes/types.ts, event-controller.ts call sites
+- tools/exit-plan-mode.ts (252 LOC) + tools/index.ts registry + ptc tool-dispatch denylist
+- plan-mode/{state.ts→keep only isUserMode/isAuditMode→move to capability/mode, approved-plan, org-plan→extract buildOrgConfig, child-item-spec, plan-validation, allowed-folders}
+- Gate: tsgo baseline 83; bun test test/config test/modes green
+
+* Stage 2 — prompts + myth agents
+- prompts/system/plan-mode-{active,approved,reference,subagent,uiux,tool-decision}.md + plan-audit.md (~655 LOC)
+- prompts/agents/{metis,daedalus,momus,aphrodite,athena}.md (467 LOC) + imports in agent-session/task/index
+- NOT loop/ingestion/{metis,momus}-builder.ts (different subsystem — dies with loop in Stage 4)
+
+* Stage 3 — fluid canvas runtime
+- modes/fluid-mode.ts (218) + main.ts --canvas fluid route + modes/index.ts export
+- orchestrators/fluid/{dag,event-router,code-highlight}.ts (~456) + fluid-planner*.md
+- KEEP (extracted): plan-to-todos, wave-snapshot, types, plan-schema, plan-validator as needed by todos
+
+* Stage 4 — autonomous loop (~5,228 LOC, 0 usage)
+- whole packages/coding-agent/src/loop/ EXCEPT extracted ingestion/org-depend.ts
+- sdk.ts: new LoopManager() + restoreFromDisk + wiring (~6 sites)
+- agent-session.ts: loopManager field, getLoopManager, manifest-building injection
+- slash-commands/builtin-registry.ts: /loop command group
+- tools/index.ts: loopManager field + commented loop-tools re-export
+- Gate per stage: tsgo at-or-below baseline; full bun test green
+
+* Net
+~plan-mode 2,200 + fluid 900 + myth 467 + loop 5,000 ≈ 8,500 LOC removed; ~4 symbol-extractions guard the kept grouped-todo + wave-snapshot features.

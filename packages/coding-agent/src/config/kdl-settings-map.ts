@@ -628,9 +628,7 @@ export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> =
 	},
 
 	// ── Fluid ────────────────────────────────────────────────────────────
-	"fluid.concurrency": { block: "tasks", nodePath: "fluid", accessor: "property", propertyName: "concurrency" },
-	"fluid.fastPlan": { block: "tasks", nodePath: "fluid", accessor: "property", propertyName: "fast-plan" },
-	"fluid.debug": { block: "tasks", nodePath: "fluid", accessor: "property", propertyName: "debug" },
+
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

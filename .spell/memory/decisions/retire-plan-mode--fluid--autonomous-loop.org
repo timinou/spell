@@ -1,0 +1,27 @@
+#+TITLE: retire-plan-mode--fluid--autonomous-loop
+
+** ITEM Retire plan-mode, fluid, autonomous-loop; keep grouped/gated todos
+
+Corpus mining of 14,609 sessions (~/.spell/agent/sessions/*.jsonl; schema: content[].type=="toolCall", .name/.arguments) drove these decisions:
+
+KEEP: grouped/gated todos (todo_write with groups/phases/gateCmd) — 1,508 of 3,873 recent sessions = 39%. Core workflow. wave-snapshot (/plan-snapshot) KEPT by owner despite marginal 104-session usage.
+
+DELETE (evidence-backed dead code):
+- plan-mode: exit_plan_mode 0.9% recent and falling. Replaced by KDL-native roles.
+- fluid canvas (--canvas fluid): 562 FluidPlan hits were spell-self-dev source reads, ~0 real adoption.
+- autonomous LoopRole loop (loop/, ~5,228 LOC): fromRole/toRole/currentRole = 0 executions ALL-TIME. Never ran a phase handoff. tools/index.ts:12 already noted "Loop tools had zero session usage."
+
+Replacement: roles = KDL `mode` blocks in spell.kdl (orchestrate/discover/challenge/design), prose inline via multiline strings, injected per context-policy (carry/fresh) by AgentSession.#buildUserModeMessage. No markdown sidecar.
+
+Extraction constraint before deletion: planWavesToTodoGroups (orchestrators/fluid/plan-to-todos.ts), createWaveSnapshot (wave-snapshot.ts), PlanWave (types.ts), org-depend.ts (loop/ingestion) feed SURVIVING features — must move to neutral homes first. Full plan in BUG-427.
+
+Method note: jq-per-file over 14k files times out; prefilter with `grep -rl` then aggregate. Disambiguate word-matches ('fluid','wave','loop' in prose/source) from feature signals (toolCall .name, fromRole, FluidPlan-in-toolCall-context) and add recency (find -newermt).
+:PROPERTIES:
+:CUSTOM_ID: DEC-retire-plan-mode--fluid--autonomous-loop
+:KIND: decision
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-03T17:37:23Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: BUG-427-delete-dead-plan-mode-state-machine-prom
+:END:

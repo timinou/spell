@@ -32,7 +32,7 @@ import { resolveStartupRoute } from "./domain/startup";
 import { exportFromFile } from "./export/html";
 import type { ExtensionUIContext } from "./extensibility/extensions/types";
 import { InteractiveMode, runBrowseMode, runPrintMode, runQmlMode, runRpcMode } from "./modes";
-import { runFluidMode } from "./modes/fluid-mode";
+
 import { initTheme, stopThemeWatcher } from "./modes/theme/theme";
 import type { SubmittedUserInput } from "./modes/types";
 import browseFindingsPrompt from "./prompts/agents/browse-findings.md" with { type: "text" };
@@ -96,7 +96,7 @@ export const CANVAS_DISPLAY_REQUIRED_MESSAGE =
 	"--canvas requires a graphical display (DISPLAY or WAYLAND_DISPLAY must be set)";
 
 export function formatUnknownCanvasMessage(canvasName: string): string {
-	return `Unknown canvas: ${canvasName}. Available: chat, fluid, browse. Use: spell --canvas [chat|fluid|browse] [options] [message]`;
+	return `Unknown canvas: ${canvasName}. Available: chat, browse. Use: spell --canvas [chat|browse] [options] [message]`;
 }
 
 export async function submitInteractiveInput(
@@ -909,17 +909,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 			await launchQmlSurface();
 			return;
 		}
-		if (canvasName === "fluid") {
-			await runFluidMode(session, {
-				initialMessage: initialMessage ?? parsedArgs.messages[0],
-				eventBus,
-				orchestratorManager,
-			});
-			await session.dispose();
-			stopThemeWatcher();
-			await postmortem.quit(0);
-			return;
-		}
+
 		if (canvasName === "browse") {
 			await runBrowseMode(session, {
 				initialMessage: initialMessage ?? parsedArgs.messages[0],

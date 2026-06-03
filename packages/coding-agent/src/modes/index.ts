@@ -2,7 +2,6 @@ import { emergencyTerminalRestore } from "@spell/pi-tui";
 import { postmortem } from "@spell/pi-utils";
 
 export * from "./browse-mode";
-export * from "./fluid-mode";
 /**
  * Run modes for the coding agent.
  */
