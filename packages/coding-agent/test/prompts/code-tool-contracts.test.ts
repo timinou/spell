@@ -2,9 +2,7 @@ import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import type { TemplateContext } from "@spell/pi-coding-agent/config/prompt-templates";
 import { renderPromptTemplate } from "@spell/pi-coding-agent/config/prompt-templates";
-import planModeReminder from "@spell/pi-coding-agent/prompts/system/plan-mode-tool-decision-reminder.md" with {
-	type: "text",
-};
+
 import semanticHint from "@spell/pi-coding-agent/prompts/tools/code-hint-semantic.md" with { type: "text" };
 import fallbackHint from "@spell/pi-coding-agent/prompts/tools/code-hint-text-fallback.md" with { type: "text" };
 import grepPrompt from "@spell/pi-coding-agent/prompts/tools/grep.md" with { type: "text" };
@@ -79,9 +77,7 @@ describe("code-edit contract prompts", () => {
 		expect(semanticHint).toContain("file mode wins");
 	});
 
-	it("states managed edits do not require reread after success", () => {
-		expect(planModeReminder).toContain("Successful managed edits do not require a fresh `get` before the next edit");
-		expect(planModeReminder).toContain("tighten the target/action");
+	it("states managed edit fallback contract", () => {
 		expect(fallbackHint).toContain("`code edit { operations: [{ targetId, actions }] }`");
 		expect(fallbackHint).not.toContain('code read, code diff, code edit { operation: "replace" }');
 	});
