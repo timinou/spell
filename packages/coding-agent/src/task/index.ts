@@ -23,8 +23,7 @@ import type { ToolSession } from "..";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import { loadSpellKdl, loadUserSpellKdl } from "../config/spell-kdl";
 import type { Theme } from "../modes/theme/theme";
-import { listPlanModeAllowedFolders } from "../plan-mode/allowed-folders";
-import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
+
 import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "text" };
 import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: "text" };
 import { isCodeToolSupportedPath } from "../tools/code-supported-files";
@@ -1333,23 +1332,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			userRules: userConfig?.agents?.rules ?? [],
 		};
 
-		const planModeState = this.session.getPlanModeState?.();
-		const planModeAllowedFolders = listPlanModeAllowedFolders(this.session.settings.get("planMode.allowedFolders"));
-		const renderedPlanModeSubagentPrompt = renderPromptTemplate(planModeSubagentPrompt, {
-			allowedFolders: planModeAllowedFolders.length > 0 ? planModeAllowedFolders : undefined,
-		});
-		const planModeTools = ["read", "grep", "find", "ls", "fetch", "web_search", "org"];
-		if (planModeAllowedFolders.length > 0) {
-			planModeTools.push("write", "edit");
-		}
-		const effectiveAgent: typeof agent = planModeState?.enabled
-			? {
-					...agent,
-					systemPrompt: `${renderedPlanModeSubagentPrompt}\n\n${agent.systemPrompt}`,
-					tools: planModeTools,
-					spawns: undefined,
-				}
-			: agent;
+		const effectiveAgent = agent;
 
 		// Resolve effective agent config (unified precedence: per-call > kdl rules > settings > frontmatter)
 		const effectiveConfig = resolveAgentEffectiveConfig({

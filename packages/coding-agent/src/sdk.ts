@@ -17,7 +17,6 @@ import { $env, getAgentDbPath, getAgentDir, getProjectDir, logger, postmortem } 
 import chalk from "chalk";
 import { AsyncJobManager } from "./async";
 import { loadCapability } from "./capability";
-import { setupCallbackSchemes } from "./scheme-bootstrap";
 import { type ModeConfig, modeConfigCapability, type ResolvedModeConfig } from "./capability/mode";
 import { type Rule, ruleCapability } from "./capability/rule";
 import { ModelRegistry } from "./config/model-registry";
@@ -30,6 +29,7 @@ import {
 import { Settings, type SkillsSettings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
 import { resolveModeConfig } from "./discovery/mode-helpers";
+import { setupCallbackSchemes } from "./scheme-bootstrap";
 import "./discovery";
 import { buildServicePromptSection } from "./browser/service-prompt-section";
 import { resolveConfigValue } from "./config/resolve-config-value";
@@ -65,17 +65,14 @@ import { loadSkills as loadSkillsInternal, type Skill, type SkillWarning } from 
 import { type FileSlashCommand, loadSlashCommands as loadSlashCommandsInternal } from "./extensibility/slash-commands";
 import {
 	AgentProtocolHandler,
-
 	CanvasProtocolHandler,
 	createTaskUriProtocolHandlers,
 	InternalUrlRouter,
-
 	LocalProtocolHandler,
 	McpProtocolHandler,
 	MemoryProtocolHandler,
 	OrgProtocolHandler,
 	PiProtocolHandler,
-
 } from "./internal-urls";
 
 import { LoopManager } from "./loop/loop-manager";
@@ -130,7 +127,6 @@ import {
 	setPreferredSearchProvider,
 	type Tool,
 	type ToolSession,
-
 } from "./tools";
 import {
 	CANVAS_AGENT_CHANNEL,
@@ -208,7 +204,6 @@ export interface CreateAgentSessionOptions {
 
 	/** Enable MCP server discovery from .mcp.json files. Default: true */
 	enableMCP?: boolean;
-
 
 	/** Optional sandbox policy constraining file writes and bash commands for this session */
 	sandboxPolicy?: import("./sandbox").SandboxPolicy;
@@ -753,9 +748,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const sessionManager =
 		options.sessionManager ??
-		dbgTime("sessionManager", () =>
-			SessionManager.create(cwd, SessionManager.getDefaultSessionDir(cwd, agentDir)),
-		);
+		dbgTime("sessionManager", () => SessionManager.create(cwd, SessionManager.getDefaultSessionDir(cwd, agentDir)));
 	const sessionId = sessionManager.getSessionId();
 	const modelApiKeyAvailability = new Map<string, boolean>();
 	const getModelAvailabilityKey = (candidate: Model): string =>
@@ -846,29 +839,26 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	// Discover rules
-	const { ttsrManager, rulesResult, registeredTtsrRuleNames } = await dbgTimeAsync(
-		"discoverTtsrRules",
-		async () => {
-			const ttsrSettings = settings.getGroup("ttsr");
-			const ttsrManager = new TtsrManager(ttsrSettings);
-			const rulesResult =
-				options.rules !== undefined
-					? { items: options.rules, warnings: undefined }
-					: await loadCapability<Rule>(ruleCapability.id, { cwd });
-			const registeredTtsrRuleNames = new Set<string>();
-			for (const rule of rulesResult.items) {
-				if (rule.condition && rule.condition.length > 0) {
-					if (ttsrManager.addRule(rule)) {
-						registeredTtsrRuleNames.add(rule.name);
-					}
+	const { ttsrManager, rulesResult, registeredTtsrRuleNames } = await dbgTimeAsync("discoverTtsrRules", async () => {
+		const ttsrSettings = settings.getGroup("ttsr");
+		const ttsrManager = new TtsrManager(ttsrSettings);
+		const rulesResult =
+			options.rules !== undefined
+				? { items: options.rules, warnings: undefined }
+				: await loadCapability<Rule>(ruleCapability.id, { cwd });
+		const registeredTtsrRuleNames = new Set<string>();
+		for (const rule of rulesResult.items) {
+			if (rule.condition && rule.condition.length > 0) {
+				if (ttsrManager.addRule(rule)) {
+					registeredTtsrRuleNames.add(rule.name);
 				}
 			}
-			if (existingSession.injectedTtsrRules.length > 0) {
-				ttsrManager.restoreInjected(existingSession.injectedTtsrRules);
-			}
-			return { ttsrManager, rulesResult, registeredTtsrRuleNames };
-		},
-	);
+		}
+		if (existingSession.injectedTtsrRules.length > 0) {
+			ttsrManager.restoreInjected(existingSession.injectedTtsrRules);
+		}
+		return { ttsrManager, rulesResult, registeredTtsrRuleNames };
+	});
 
 	// Discover and resolve mode configs
 	const modesResult = await dbgTimeAsync("discoverModes", async () => {
@@ -920,13 +910,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		raceWithTimeout("SYSTEM.md loading", loadSystemPromptFiles({ cwd }), null, 5000),
 	]);
 
-	const spellcastDiscovery = await dbgTimeAsync("discoverSpellcastManifests", () =>
-		discoverSpellcastManifests(cwd),
-	);
+	const spellcastDiscovery = await dbgTimeAsync("discoverSpellcastManifests", () => discoverSpellcastManifests(cwd));
 
-	const spellcastPublishState = await dbgTimeAsync("loadSpellcastPublishState", () =>
-		loadSpellcastPublishState(cwd),
-	);
+	const spellcastPublishState = await dbgTimeAsync("loadSpellcastPublishState", () => loadSpellcastPublishState(cwd));
 
 	const spellcastSessionContext: SpellcastSessionContext = {
 		discovery: spellcastDiscovery,
@@ -946,7 +932,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	let agent: Agent;
 	let session: AgentSession;
-
 
 	const asyncEnabled = settings.get("async.enabled");
 	const asyncMaxJobs = Math.min(100, Math.max(1, settings.get("async.maxJobs") ?? 100));
@@ -1049,7 +1034,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (model) return formatModelString(model);
 			return undefined;
 		},
-		getPlanModeState: () => session?.getPlanModeState(),
 		getActiveModeState: () => session?.getActiveModeState(),
 		isAgentIdle: () => !session.isStreaming,
 		getCompactContext: () => session.formatCompactContext(),
@@ -1082,9 +1066,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				if (cached !== undefined) return cached;
 				const modeState = session?.getActiveModeState();
 				let modePolicies: TaskPolicy[] | undefined;
-				if (modeState?.type === "plan" && modeState.modeConfigName) {
-					modePolicies = session?.getModeConfig(modeState.modeConfigName)?.frontmatter?.taskPolicies;
-				} else if (modeState?.type === "user") {
+				if (modeState?.type === "user") {
 					modePolicies = modeState.config?.frontmatter?.taskPolicies;
 				}
 				cached = mergePolicies(projectTaskPolicies, modePolicies).policies;
@@ -1120,9 +1102,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// back to this process's in-memory state (session.rules, session.skills,
 	// asyncJobManager) via the JsTsfnCallback bridge.
 	const callbackSchemeErrors = setupCallbackSchemes({
-		getRules:            () => rulebookRules as readonly Rule[],
-		getSkills:           () => skills as readonly Skill[],
-		getAsyncJobManager:  () => asyncJobManager,
+		getRules: () => rulebookRules as readonly Rule[],
+		getSkills: () => skills as readonly Skill[],
+		getAsyncJobManager: () => asyncJobManager,
 	});
 	for (const e of callbackSchemeErrors) {
 		logger.warn(`URI scheme '${e.scheme}' registration failed: ${e.reason}`);
@@ -1152,9 +1134,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	);
 
 	// Create built-in tools (already wrapped with meta notice formatting)
-	const builtinTools = await dbgTimeAsync("createAllTools", () =>
-		createTools(toolSession, requestedBuiltInToolNames),
-	);
+	const builtinTools = await dbgTimeAsync("createAllTools", () => createTools(toolSession, requestedBuiltInToolNames));
 
 	// Discover MCP tools from .mcp.json files
 	let mcpManager: MCPManager | undefined;
@@ -1593,12 +1573,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 	}
 
-	const systemPrompt = await dbgTimeAsync(
-		"buildSystemPrompt",
-		rebuildSystemPrompt,
-		initialToolNames,
-		toolRegistry,
-	);
+	const systemPrompt = await dbgTimeAsync("buildSystemPrompt", rebuildSystemPrompt, initialToolNames, toolRegistry);
 
 	const promptTemplates =
 		options.promptTemplates ??
@@ -1851,7 +1826,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// Warm up LSP servers (connects to detected servers)
 	// LSP servers are warmed up in background — don't block session creation.
 	// Tools use lazy getOrCreateClient, so they work before warmup completes.
-
 
 	toolSession.dispose = async () => {
 		if (toolSession.qmlRemoteServer) {
@@ -2206,8 +2180,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		spellcastSessionContext,
 		spellcastReport,
 		spellcastingWarning: spellcastingWarning ?? undefined,
-
-
 
 		eventBus,
 

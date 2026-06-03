@@ -45,7 +45,6 @@ function createSession(tempDir: string, taskDepth: number, settings: Settings): 
 		getSessionFile: () => path.join(tempDir, "session.jsonl"),
 		getSessionSpawns: () => "*",
 		getCompactContext: () => undefined,
-		getPlanModeState: () => undefined,
 		getActiveModelString: () => undefined,
 		getModelString: () => undefined,
 		getArtifactsDir: () => path.join(tempDir, "artifacts"),

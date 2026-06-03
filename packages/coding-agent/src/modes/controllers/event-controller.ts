@@ -15,7 +15,7 @@ import { finalizeOrphanPendingTools } from "../../modes/utils/finalize-pending-t
 import { reapGhostStreamingCells } from "../../modes/utils/reap-ghost-streaming-cells";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { formatAssistantToolCallFailureMessage } from "../../session/tool-call-diagnostics";
-import type { ExitPlanModeDetails } from "../../tools";
+
 import { formatBytes } from "../../tools/render-utils";
 
 export const STREAM_IDLE_STATUS_GRACE_MS = 5_000;
@@ -647,12 +647,7 @@ export class EventController {
 						`Todo update failed${textContent ? `: ${textContent}` : ". Progress may be stale until todo_write succeeds."}`,
 					);
 				}
-				if (event.toolName === "exit_plan_mode" && !event.isError) {
-					const details = event.result.details as ExitPlanModeDetails | undefined;
-					if (details) {
-						await this.ctx.handleExitPlanModeTool(details);
-					}
-				}
+
 				break;
 			}
 

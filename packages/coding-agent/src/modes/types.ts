@@ -12,7 +12,7 @@ import type { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import type { SubagentTracker } from "../task/subagent-tracker";
 import type { SingleResult } from "../task/types";
-import type { ExitPlanModeDetails } from "../tools";
+
 import type { TodoGroup, TodoItem } from "../tools/todo-write";
 import type { EventBus } from "../utils/event-bus";
 import type { AssistantMessageComponent } from "./components/assistant-message";
@@ -67,8 +67,6 @@ export interface InteractiveModeContext {
 	isBashMode: boolean;
 	toolOutputExpanded: boolean;
 	todoExpanded: boolean;
-	planModeEnabled: boolean;
-	planModePlanFilePath?: string;
 	hideThinkingBlock: boolean;
 	pendingImages: ImageContent[];
 	compactionQueuedMessages: CompactionQueuedMessage[];
@@ -211,9 +209,7 @@ export interface InteractiveModeContext {
 	toggleThinkingBlockVisibility(): void;
 	openExternalEditor(): void;
 	registerExtensionShortcuts(): void;
-	handlePlanModeCommand(initialPrompt?: string, options?: { ultraplan?: boolean; flavor?: "design" }): Promise<void>;
 	handleModeCommand(modeName: string, prompt?: string): Promise<void>;
-	handleExitPlanModeTool(details: ExitPlanModeDetails): Promise<void>;
 	handleAuditCommand(): Promise<void>;
 	handleAuditEscalation(auditContent: string): Promise<void>;
 	showAuditOverlay(): void;

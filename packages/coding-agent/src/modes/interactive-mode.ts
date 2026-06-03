@@ -8,7 +8,7 @@ import { type Agent, type AgentMessage, ThinkingLevel } from "@spell/pi-agent-co
 import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@spell/pi-ai";
 import { type AgentStatus, type AgentStatusContext, deriveAgentStatus } from "@spell/pi-desktop-common";
 import { NiriOverviewController } from "@spell/pi-niri";
-import { appendItemToFile, generateId, orgToMarkdown, resolveCategories } from "@spell/pi-org";
+import { appendItemToFile, generateId, resolveCategories } from "@spell/pi-org";
 import type { Component, OverlayHandle, SlashCommand } from "@spell/pi-tui";
 import {
 	Container,
@@ -22,36 +22,27 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@spell/pi-tui";
-import { APP_NAME, getProjectDir, hsvToRgb, isEnoent, logger, postmortem } from "@spell/pi-utils";
+import { APP_NAME, getProjectDir, hsvToRgb, logger, postmortem } from "@spell/pi-utils";
 import chalk from "chalk";
 import { KeybindingsManager } from "../config/keybindings";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import { type Settings, settings } from "../config/settings";
-import { loadTaskPolicies, mergePolicies } from "../config/task-policies";
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../extensibility/extensions";
 import type { CompactOptions } from "../extensibility/extensions/types";
 import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slash-commands";
-import { localUrlToPath } from "../tools/local-path";
-import { type PlanWave, planWavesToTodoGroups } from "../orchestrators/fluid";
-import { renameApprovedPlanFile } from "../plan-mode/approved-plan";
-import { buildChildItemSpecs, type ChildItemSpec, renderChildItemSpec } from "../plan-mode/child-item-spec";
-import { approvePlanItem, buildOrgConfig, type OrgPlanRef } from "../org/org-plan";
-import { validatePlanItem } from "../org/plan-validation";
+import { buildOrgConfig } from "../org/org-plan";
 import type { UserModeState } from "./mode-state";
-import planAuditPrompt from "../prompts/system/plan-audit.md" with { type: "text" };
-import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
+import auditPrompt from "../prompts/system/audit.md" with { type: "text" };
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import { getRecentSessions } from "../session/session-manager";
 import { formatExitTokenSummary, formatSubtaskExitSummary } from "../session/token-summary";
 import type { SessionBridgeClient } from "../session-bridge/client";
-import { raceWithBridge } from "../session-bridge/race";
 import { getModeCommandDefs, registerModeCommands } from "../slash-commands/builtin-registry";
 import { STTController, type SttState } from "../stt";
 import { SubagentTracker } from "../task/subagent-tracker";
 import type { SingleResult } from "../task/types";
-import type { ExitPlanModeDetails } from "../tools";
 import { replaceTabs, TRUNCATE_LENGTHS } from "../tools/render-utils";
 import { isDelegatedTask } from "../tools/todo-write";
 import type { EventBus } from "../utils/event-bus";
@@ -65,7 +56,6 @@ import { DynamicBorder } from "./components/dynamic-border";
 import type { HookEditorComponent } from "./components/hook-editor";
 import type { HookInputComponent } from "./components/hook-input";
 import type { HookSelectorComponent } from "./components/hook-selector";
-import { PlanModeOverlay } from "./components/plan-mode-overlay";
 import { StatusLineComponent } from "./components/status-line";
 import { FocusRenderThrottle } from "./focus-render-throttle";
 import type { ToolExecutionHandle } from "./components/tool-execution";
@@ -98,34 +88,6 @@ import { UiHelpers } from "./utils/ui-helpers";
  * Extract key design decisions from an approved plan's text for design-history.jsonl.
  * Uses simple regex matching on the structured Design Direction Brief sections.
  */
-function extractDesignBriefEntry(planContent: string): {
-	ts: string;
-	direction: string;
-	fonts: string[];
-	palette: string;
-	memorable: string;
-} {
-	const direction =
-		/aesthetic direction[:\s]+([^\n]+)/i.exec(planContent)?.[1]?.trim() ??
-		/direction[:\s]+([^\n]+)/i.exec(planContent)?.[1]?.trim() ??
-		"unknown";
-	const typographyMatch = /typography[:\s]+([^\n]+)/i.exec(planContent);
-	const fonts = typographyMatch
-		? typographyMatch[1]
-				.split(/[+,]|\band\b/i)
-				.map(f => f.trim())
-				.filter(Boolean)
-		: [];
-	const palette =
-		/color strategy[:\s]+([^\n]+)/i.exec(planContent)?.[1]?.trim() ??
-		/palette[:\s]+([^\n]+)/i.exec(planContent)?.[1]?.trim() ??
-		"";
-	const memorable =
-		/memorability test[:\s]+([^\n]+)/i.exec(planContent)?.[1]?.trim() ??
-		/memorable[:\s]+([^\n]+)/i.exec(planContent)?.[1]?.trim() ??
-		"";
-	return { ts: new Date().toISOString(), direction, fonts, palette, memorable };
-}
 
 const EDITOR_MAX_HEIGHT_MIN = 6;
 const EDITOR_MAX_HEIGHT_MAX = 18;
@@ -209,14 +171,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	isBashMode = false;
 	toolOutputExpanded = false;
 	todoExpanded = false;
-	planModeEnabled = false;
-	planModePaused = false;
-	planModePlanFilePath: string | undefined = undefined;
-	planModeUltraplan = false;
-	planModeFlavor: "design" | undefined = undefined;
 	#auditDepth = 0;
 	#auditMaxDepth = 2;
-	#isAuditEscalation = false;
 	todoGroups: TodoGroup[] = [];
 	hideThinkingBlock = false;
 	pendingImages: ImageContent[] = [];
@@ -263,12 +219,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#terminalLostHandled = false;
 	readonly #version: string;
 	readonly #changelogMarkdown: string | undefined;
-	#planModePreviousTools: string[] | undefined;
-	#planModePreviousModel: Model | undefined;
 	#pendingModelSwitch: Model | undefined;
-	#planModeHasEntered = false;
-	#planModeOverlay: PlanModeOverlay | undefined;
-	#planModeOverlayHandle: OverlayHandle | undefined;
 	#auditOverlay: AuditModeOverlay | undefined;
 	#auditOverlayHandle: OverlayHandle | undefined;
 
@@ -689,11 +640,8 @@ export class InteractiveMode implements InteractiveModeContext {
 						listener();
 					});
 				},
-				onOverviewChanged(isOpen, bg, resetBg) {
-					if (ctx.#planModeOverlay) {
-						ctx.#planModeOverlay.setBackground(isOpen ? (bg ?? null) : null, isOpen ? (resetBg ?? null) : null);
-						ctx.ui.requestRender();
-					}
+				onOverviewChanged(_isOpen, _bg, _resetBg) {
+					// No-op: plan mode overlay removed
 				},
 			});
 		}
@@ -825,9 +773,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	updateEditorBorderColor(): void {
 		let fn: (s: string) => string;
-		if (this.planModeEnabled) {
-			fn = theme.getPlanModeBorderColor();
-		} else if (this.isBashMode) {
+		if (this.isBashMode) {
 			fn = theme.getBashModeBorderColor();
 		} else {
 			const level = this.session.thinkingLevel ?? ThinkingLevel.Off;
@@ -840,32 +786,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
-	#showPlanModeOverlay(ultraplan: boolean, paused: boolean): void {
-		if (!this.#planModeOverlay) {
-			this.#planModeOverlay = new PlanModeOverlay(ultraplan, paused);
-		} else {
-			this.#planModeOverlay.update(ultraplan, paused);
-		}
-		if (!this.#planModeOverlayHandle) {
-			const w = this.#planModeOverlay.measuredWidth();
-			this.#planModeOverlayHandle = this.ui.showOverlay(this.#planModeOverlay, {
-				anchor: "top-right",
-				width: w,
-				margin: 1,
-				focusable: false,
-				layer: 1,
-			});
-		}
-		this.#planModeOverlayHandle.setHidden(false);
-	}
 
-	#hidePlanModeOverlay(): void {
-		if (this.#planModeOverlayHandle) {
-			this.#planModeOverlayHandle.hide();
-			this.#planModeOverlayHandle = undefined;
-			this.#planModeOverlay = undefined;
-		}
-	}
 
 	showAuditOverlay(): void {
 		if (!this.#auditOverlay) {
@@ -901,10 +822,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async handleAuditCommand(): Promise<void> {
-		if (this.planModeEnabled) {
-			this.showWarning("Cannot audit during plan mode.");
-			return;
-		}
 		if (this.session.getAuditState().active) {
 			this.showWarning("Audit already in progress.");
 			return;
@@ -915,7 +832,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.session.setAuditState({ type: "audit", pending: false, active: true });
 		this.showAuditOverlay();
-		const prompt = renderPromptTemplate(planAuditPrompt, {
+		const prompt = renderPromptTemplate(auditPrompt, {
 			auditDepth: this.#auditDepth,
 			maxDepth: this.#auditMaxDepth,
 		});
@@ -929,7 +846,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		this.#auditDepth++;
-		this.#isAuditEscalation = true;
 
 		// Create audit org item referencing the source plan
 		const sourceRef = this.session.getAuditState().sourceRef;
@@ -942,7 +858,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			? `Implement these audit recommendations from ${auditItemRef}:\n\n${auditContent}`
 			: `Implement these audit recommendations:\n\n${auditContent}`;
 
-		await this.handlePlanModeCommand(prompt);
+		await this.session.prompt(prompt, { synthetic: true });
 	}
 
 	async #createAuditItem(findings: string, sourceRef?: string): Promise<string> {
@@ -1162,54 +1078,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#renderTodoList();
 	}
 
-	async #getPlanFilePath(): Promise<string> {
-		return "local://PLAN.md";
-	}
 
-	#resolvePlanFilePath(planFilePath: string): string {
-		if (planFilePath.startsWith("local://")) {
-			return localUrlToPath(planFilePath, {
-				getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-				getSessionId: () => this.sessionManager.getSessionId(),
-			});
-		}
-		return path.resolve(this.sessionManager.getCwd(), planFilePath);
-	}
 
-	#updatePlanModeStatus(): void {
-		const status =
-			this.planModeEnabled || this.planModePaused
-				? {
-						enabled: this.planModeEnabled,
-						paused: this.planModePaused,
-						ultraplan: this.planModeUltraplan,
-					}
-				: undefined;
-		this.statusLine.setPlanModeStatus(status);
-		this.updateEditorTopBorder();
-		this.ui.requestRender();
-	}
 
-	async #applyPlanModeModel(): Promise<void> {
-		const planModel = this.session.resolveRoleModel("plan");
-		if (!planModel) return;
-		const currentModel = this.session.model;
-		if (currentModel && currentModel.provider === planModel.provider && currentModel.id === planModel.id) {
-			return;
-		}
-		this.#planModePreviousModel = currentModel;
-		if (this.session.isStreaming) {
-			this.#pendingModelSwitch = planModel;
-			return;
-		}
-		try {
-			await this.session.setModelTemporary(planModel);
-		} catch (error) {
-			this.showWarning(
-				`Failed to switch to plan model for plan mode: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		}
-	}
 
 	/** Apply any deferred model switch after the current stream ends. */
 	async flushPendingModelSwitch(): Promise<void> {
@@ -1229,299 +1100,15 @@ export class InteractiveMode implements InteractiveModeContext {
 	async #restoreModeFromSession(): Promise<void> {
 		const sessionContext = this.sessionManager.buildSessionContext();
 		if (sessionContext.mode === "plan") {
-			const planFilePath = sessionContext.modeData?.planFilePath as string | undefined;
-			const ultraplan = sessionContext.modeData?.ultraplan as boolean | undefined;
-			const flavor = sessionContext.modeData?.flavor as "design" | undefined;
-			const modeConfigName = sessionContext.modeData?.modeConfigName as string | undefined;
-			await this.#enterPlanMode({ planFilePath, ultraplan, flavor, modeConfigName });
-		} else if (sessionContext.mode === "plan_paused") {
-			this.planModePaused = true;
-			this.#planModeHasEntered = true;
-			this.#updatePlanModeStatus();
 		}
 	}
 
-	async #enterPlanMode(options?: {
-		planFilePath?: string;
-		workflow?: "parallel" | "iterative";
-		ultraplan?: boolean;
-		flavor?: "design";
-		modeConfigName?: string;
-	}): Promise<void> {
-		if (this.planModeEnabled) {
-			return;
-		}
 
-		this.planModePaused = false;
 
-		const planFilePath = options?.planFilePath ?? (await this.#getPlanFilePath());
-		const previousTools = this.session.getActiveToolNames();
-		const hasExitTool = this.session.getToolByName("exit_plan_mode") !== undefined;
-		const planTools = [...previousTools];
-		if (hasExitTool) planTools.push("exit_plan_mode");
-		// Plan mode mandates org — ensure it's in the active set even if org.enabled is off
-		if (this.session.getToolByName("org") && !previousTools.includes("org")) planTools.push("org");
-		const uniquePlanTools = [...new Set(planTools)];
 
-		this.#planModePreviousTools = previousTools;
-		this.planModePlanFilePath = planFilePath;
-		this.planModeEnabled = true;
 
-		await this.session.setActiveToolsByName(uniquePlanTools);
-		this.session.setPlanModeState({
-			type: "plan",
-			enabled: true,
-			planFilePath,
-			workflow: options?.workflow ?? "parallel",
-			reentry: this.#planModeHasEntered,
-			ultraplan: options?.ultraplan ?? false,
-			flavor: options?.flavor,
-			modeConfigName: options?.modeConfigName,
-		});
-		if (this.session.isStreaming) {
-			await this.session.sendPlanModeContext({ deliverAs: "steer" });
-		}
-		this.#planModeHasEntered = true;
-		await this.#applyPlanModeModel();
-		this.planModeUltraplan = options?.ultraplan ?? false;
-		this.planModeFlavor = options?.flavor;
-		this.#updatePlanModeStatus();
-		this.sessionManager.appendModeChange("plan", {
-			planFilePath,
-			ultraplan: options?.ultraplan,
-			flavor: options?.flavor,
-			modeConfigName: options?.modeConfigName,
-		});
-		this.updateEditorBorderColor();
-		this.#showPlanModeOverlay(options?.ultraplan ?? false, false);
-		this.showStatus(
-			options?.ultraplan
-				? "Ultraplan mode enabled."
-				: options?.flavor === "design"
-					? "Design plan mode enabled."
-					: "Plan mode enabled.",
-		);
-	}
 
-	async #exitPlanMode(options?: { silent?: boolean; paused?: boolean }): Promise<void> {
-		if (!this.planModeEnabled) {
-			return;
-		}
-
-		const previousTools = this.#planModePreviousTools;
-		if (previousTools && previousTools.length > 0) {
-			await this.session.setActiveToolsByName(previousTools);
-		}
-		if (this.#planModePreviousModel) {
-			if (this.session.isStreaming) {
-				this.#pendingModelSwitch = this.#planModePreviousModel;
-			} else {
-				await this.session.setModelTemporary(this.#planModePreviousModel);
-			}
-		}
-
-		this.session.setPlanModeState(undefined);
-		this.planModeEnabled = false;
-		this.planModePaused = options?.paused ?? false;
-		this.planModePlanFilePath = undefined;
-		this.planModeFlavor = undefined;
-		this.#planModePreviousTools = undefined;
-		this.#planModePreviousModel = undefined;
-		this.#updatePlanModeStatus();
-		const paused = options?.paused ?? false;
-		this.sessionManager.appendModeChange(paused ? "plan_paused" : "none");
-		this.updateEditorBorderColor();
-		if (paused) {
-			// Keep overlay but flip to paused label
-			this.#planModeOverlay?.update(this.planModeUltraplan, true);
-			this.ui.requestRender();
-		} else {
-			this.#hidePlanModeOverlay();
-		}
-		if (!options?.silent) {
-			this.showStatus(paused ? "Plan mode paused." : "Plan mode disabled.");
-		}
-		this.#niriListener?.();
-	}
-
-	async #readPlanFile(planFilePath: string): Promise<string | null> {
-		const resolvedPath = this.#resolvePlanFilePath(planFilePath);
-		try {
-			return await Bun.file(resolvedPath).text();
-		} catch (error) {
-			if (isEnoent(error)) {
-				return null;
-			}
-			throw error;
-		}
-	}
-
-	async #renderPlanPreview(planContent: string): Promise<void> {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new DynamicBorder());
-		this.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "Plan Review")), 1, 1));
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Markdown(await orgToMarkdown(planContent), 1, 1, getMarkdownTheme()));
-		this.chatContainer.addChild(new DynamicBorder());
-		this.ui.requestRender();
-	}
-
-	/** Extract text from the first user-attributed message in the current session. */
-	#getFirstUserMessageText(): string {
-		for (const msg of this.session.messages) {
-			if (msg.role !== "user" || msg.attribution !== "user") continue;
-			const { content } = msg;
-			if (typeof content === "string") return content;
-			if (Array.isArray(content)) {
-				return content
-					.filter((b): b is { type: "text"; text: string } => b.type === "text")
-					.map(b => b.text)
-					.join(" ");
-			}
-		}
-		return "";
-	}
-
-	async #approvePlan(
-		planContent: string,
-		options: {
-			planFilePath: string;
-			finalPlanFilePath: string;
-			orgItem?: { id: string; file: string };
-			waves?: PlanWave[];
-			childItems?: ChildItemSpec[];
-			childItemsOmittedCount?: number;
-		},
-	): Promise<void> {
-		const orgPlanItem: OrgPlanRef | null = options.orgItem ?? null;
-		// Only rename the markdown plan file for file-backed plans.
-		if (!orgPlanItem) {
-			await renameApprovedPlanFile({
-				planFilePath: options.planFilePath,
-				finalPlanFilePath: options.finalPlanFilePath,
-				getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-				getSessionId: () => this.sessionManager.getSessionId(),
-			});
-		}
-		const previousTools = this.#planModePreviousTools ?? this.session.getActiveToolNames();
-		// Append design history entry when approving a design-flavored plan
-		if (this.planModeFlavor === "design") {
-			try {
-				const historyPath = path.join(this.sessionManager.getCwd(), ".spell", "design-history.jsonl");
-				const entry = extractDesignBriefEntry(planContent);
-				const existing = await Bun.file(historyPath)
-					.text()
-					.catch(() => "");
-				await Bun.write(historyPath, `${existing + JSON.stringify(entry)}\n`);
-			} catch {
-				// Non-fatal
-			}
-		}
-		// Capture transcript path before session rotation — fallback for non-org plans.
-		const fallbackTranscriptPath = this.sessionManager.getSessionFile() ?? undefined;
-		await this.#exitPlanMode({ silent: true, paused: false });
-		await this.handleClearCommand();
-		let approvedOrgItemId = "";
-		let approvedOrgItemArtifactsDir: string | undefined;
-		let planReferencePath = options.finalPlanFilePath;
-		let planningTranscriptPath = fallbackTranscriptPath;
-		if (orgPlanItem) {
-			const approved = await approvePlanItem(
-				this.settings,
-				this.sessionManager.getCwd(),
-				orgPlanItem,
-				this.#getFirstUserMessageText() || undefined,
-			);
-			if (!approved) {
-				throw new Error("Failed to approve org PLAN item.");
-			}
-			approvedOrgItemId = approved.id;
-			planningTranscriptPath = approved.transcriptPath ?? fallbackTranscriptPath;
-			const orgItemArtifactsDir = path.join(path.dirname(orgPlanItem.file), "plan-artifacts", approved.id);
-			const relativeOrgItemArtifactsDir = path.relative(this.sessionManager.getCwd(), orgItemArtifactsDir);
-			approvedOrgItemArtifactsDir =
-				relativeOrgItemArtifactsDir && !relativeOrgItemArtifactsDir.startsWith("..")
-					? relativeOrgItemArtifactsDir
-					: orgItemArtifactsDir;
-			planReferencePath = `org://${approved.id}`;
-		} else {
-			// For file-backed plans (org disabled), persist the approved plan in the new
-			// session local:// root so `local://<title>.md` resolves correctly.
-			const newLocalPath = localUrlToPath(options.finalPlanFilePath, {
-				getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-				getSessionId: () => this.sessionManager.getSessionId(),
-			});
-			await Bun.write(newLocalPath, planContent);
-		}
-		if (previousTools.length > 0) {
-			await this.session.setActiveToolsByName(previousTools);
-		}
-		this.session.setPlanReferencePath(planReferencePath);
-		this.session.recordLastApprovedPlan?.({
-			itemId: orgPlanItem?.id,
-			title: path.basename(options.finalPlanFilePath).replace(/\.[^.]+$/, ""),
-			finalPlanFilePath: options.finalPlanFilePath,
-		});
-		this.session.markPlanReferenceSent();
-		// Set audit state: auto for ultraplan, suggest for regular plan
-		if (!this.#isAuditEscalation || this.#auditDepth < this.#auditMaxDepth) {
-			this.session.setAuditState({
-				type: "audit",
-				pending: this.planModeUltraplan ? "auto" : "suggest",
-				active: false,
-				sourceRef: planReferencePath,
-				auditDepth: this.#auditDepth,
-				maxDepth: this.#auditMaxDepth,
-			});
-		} else {
-			this.session.setAuditState({ type: "audit", pending: false, active: false });
-		}
-		// Reset depth for non-audit approvals
-		if (!this.#isAuditEscalation) {
-			this.#auditDepth = 0;
-		}
-		this.#isAuditEscalation = false;
-
-		const planState = this.session.getPlanModeState();
-		const modeConfig = planState?.modeConfigName ? this.session.getModeConfig(planState.modeConfigName) : undefined;
-		const projectPolicies = await loadTaskPolicies(this.sessionManager.getCwd());
-		const mergedPolicies = mergePolicies(projectPolicies, modeConfig?.frontmatter.taskPolicies);
-		const hasTaskPolicies = mergedPolicies.policies.length > 0 || Object.keys(mergedPolicies.layers).length > 0;
-
-		let autoInitialized = false;
-		if ((options.waves?.length ?? 0) > 0) {
-			const childBodiesById = new Map((options.childItems ?? []).map(childItem => [childItem.id, childItem.body]));
-			const groups = planWavesToTodoGroups(options.waves ?? [], {
-				planItemId: approvedOrgItemId || undefined,
-				childBodiesById,
-				todoDetailsMaxBytes: this.settings.get("plan.injectedTodoDetailsMaxBytes") as number,
-			});
-			if (groups.length > 0) {
-				this.session.setTodoGroups(groups, { reset: true });
-				autoInitialized = true;
-			}
-		}
-
-		const preparedChildItems = (options.childItems ?? []).map(renderChildItemSpec);
-		const prompt = renderPromptTemplate(planModeApprovedPrompt, {
-			childItems: preparedChildItems.length > 0 ? preparedChildItems : undefined,
-			omittedCount: options.childItemsOmittedCount ?? 0,
-			totalCount: preparedChildItems.length + (options.childItemsOmittedCount ?? 0),
-			planContent: await orgToMarkdown(planContent),
-			finalPlanFilePath: planReferencePath,
-			orgItemId: approvedOrgItemId,
-			orgItemArtifactsDir: approvedOrgItemArtifactsDir,
-			planningTranscriptPath,
-			waves: autoInitialized ? undefined : options.waves,
-			modeExecutionInstructions: modeConfig?.sections.instructions,
-			autoInitialized,
-			taskPolicies: hasTaskPolicies ? mergedPolicies : undefined,
-			taskPolicyList: hasTaskPolicies ? mergedPolicies.policies : undefined,
-		});
-		await this.session.prompt(prompt, { synthetic: true });
-	}
-
-	async handleModeCommand(modeName: string, prompt?: string): Promise<void> {
+	async handleModeCommand(modeName: string, _prompt?: string): Promise<void> {
 		const config = this.session.getModeConfig(modeName);
 		if (!config) {
 			this.showStatus(`Mode "${modeName}" not found.`);
@@ -1529,19 +1116,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		const { extendsChain, frontmatter } = config;
-		const isPlanLike = extendsChain.includes("plan") || extendsChain.includes("ultraplan");
 		const isAuditLike = extendsChain.includes("audit");
 
-		if (isPlanLike) {
-			const isUltra = extendsChain.includes("ultraplan") || frontmatter.extends === "ultraplan";
-			const isDesign = frontmatter.extends === "design" || extendsChain.includes("design");
-			await this.handlePlanModeCommand(prompt, {
-				ultraplan: isUltra || undefined,
-				flavor: isDesign ? "design" : undefined,
-				modeConfigName: config.name,
-			});
-			// Note: plan-like modes use their own tool restriction mechanism (exit_plan_mode handling)
-		} else if (isAuditLike) {
+		if (isAuditLike) {
 			// Audit-extending modes: delegate to audit lifecycle
 			// TODO(FEAT-126): Full audit mode activation with modeConfig
 			this.showStatus(`Audit-extending mode "${config.name}" not yet supported.`);
@@ -1573,139 +1150,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
-	async handlePlanModeCommand(
-		initialPrompt?: string,
-		options?: { ultraplan?: boolean; flavor?: "design"; modeConfigName?: string },
-	): Promise<void> {
-		if (this.planModeEnabled) {
-			const confirmed = await this.showHookConfirm(
-				"Exit plan mode?",
-				"This exits plan mode without approving a plan.",
-			);
-			if (!confirmed) return;
-			await this.#exitPlanMode({ paused: true });
-			return;
-		}
-		await this.#enterPlanMode({
-			ultraplan: options?.ultraplan,
-			flavor: options?.flavor,
-			modeConfigName: options?.modeConfigName,
-		});
-		if (initialPrompt && this.onInputCallback) {
-			this.onInputCallback(this.startPendingSubmission({ text: initialPrompt }));
-		}
-	}
 
-	async handleExitPlanModeTool(details: ExitPlanModeDetails): Promise<void> {
-		if (!this.planModeEnabled) {
-			this.showWarning("Plan mode is not active.");
-			return;
-		}
-
-		// Abort the agent to prevent it from continuing (e.g., calling exit_plan_mode
-		// again) while the popup is showing. The event listener fires asynchronously
-		// (agent's #emit is fire-and-forget), so without this the model sees "Plan
-		// ready for approval." and immediately calls exit_plan_mode in a loop.
-		await this.session.abort();
-
-		// Org-backed plan: content comes from the resolved item body.
-		// File-backed plan (org disabled): read from the plan file.
-		const planFilePath = details.planFilePath || this.planModePlanFilePath || (await this.#getPlanFilePath());
-		this.planModePlanFilePath = planFilePath;
-		const planContent =
-			details.planContent !== undefined ? details.planContent : await this.#readPlanFile(planFilePath);
-		if (!planContent) {
-			this.showError("Plan has no content.");
-			return;
-		}
-
-		await this.#renderPlanPreview(planContent);
-		const selectorOptions = ["Approve and execute", "Refine plan", "Stay in plan mode"];
-		if (this.planModeUltraplan) {
-			selectorOptions.splice(1, 0, "Review with Momus");
-		} else if (this.planModeFlavor === "design") {
-			selectorOptions.splice(1, 0, "Review with Athena");
-		}
-		this.isPendingApproval = true;
-		this.#niriListener?.();
-		const { value: choice } = await raceWithBridge(
-			this.showHookSelector("Plan mode - next step", selectorOptions),
-			this.sessionBridge,
-			{
-				kind: "plan_approval",
-				title: details.title ?? "Plan",
-				itemId: details.itemId ?? "",
-				planSummary: planContent.slice(0, 2000),
-				selectorOptions,
-			},
-			response => {
-				if (response.kind === "plan_approval") {
-					return response.selectedOption;
-				}
-				return undefined;
-			},
-		);
-		this.isPendingApproval = false;
-		this.#niriListener?.();
-
-		if (choice === "Approve and execute") {
-			const finalPlanFilePath = details.finalPlanFilePath || planFilePath;
-			try {
-				const orgItem =
-					details.itemId && details.orgItemFile ? { id: details.itemId, file: details.orgItemFile } : undefined;
-				await this.#approvePlan(planContent, {
-					planFilePath,
-					finalPlanFilePath,
-					orgItem,
-					waves: details.waves,
-					childItems: details.childItems,
-					childItemsOmittedCount: details.childItemsOmittedCount,
-				});
-			} catch (error) {
-				this.showError(
-					`Failed to finalize approved plan: ${error instanceof Error ? error.message : String(error)}`,
-				);
-			}
-			return;
-		}
-		if (choice === "Review with Momus") {
-			await this.#enterPlanMode({ ultraplan: true });
-			let combinedPlanContent = planContent;
-			if (details.itemId) {
-				const validation = await validatePlanItem(this.settings, this.sessionManager.getCwd(), details.itemId);
-				if (validation) {
-					const { items } = buildChildItemSpecs(validation.resolvedChildren, validation.childItemIds, {
-						perChildMaxBytes: Number.MAX_SAFE_INTEGER,
-						globalMaxBytes: Number.MAX_SAFE_INTEGER,
-					});
-					const childBodies = items.map(childItem => {
-						const titleSuffix = childItem.title ? ` - ${childItem.title}` : "";
-						return `## ${childItem.id}${titleSuffix}\n\n${childItem.body}`;
-					});
-					if (childBodies.length > 0) {
-						combinedPlanContent = `${planContent}\n\n---\n\n# Linked Child Items\n\n${childBodies.join("\n\n")}`;
-					}
-				}
-			}
-			await this.session.prompt(`Run Momus review on this plan and address any issues:\n\n${combinedPlanContent}`, {
-				synthetic: true,
-			});
-			return;
-		}
-		if (choice === "Review with Athena") {
-			await this.#enterPlanMode({ flavor: "design" });
-			await this.session.prompt(`Run Athena review on this plan and address any issues:\n\n${planContent}`, {
-				synthetic: true,
-			});
-			return;
-		}
-		if (choice === "Refine plan") {
-			const refinement = await this.showHookInput("What should be refined?");
-			if (refinement) {
-				this.editor.setText(refinement);
-			}
-		}
-	}
 
 	stop(): void {
 		if (this.loadingAnimation) {

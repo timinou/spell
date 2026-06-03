@@ -79,7 +79,7 @@ describe("goals tool client", () => {
 		Bun.env.SPELL_SERVER_PASSWORD = "secret"; // pragma: allowlist secret
 
 		const tools = await createTools(createSession(), ["goals"]);
-		expect(tools.map(tool => tool.name)).toEqual(["goals", "exit_plan_mode"]);
+		expect(tools.map(tool => tool.name)).toEqual(["goals"]);
 
 		const goalsTool = tools.find(tool => tool.name === "goals");
 		if (!goalsTool) throw new Error("Missing goals tool");
@@ -95,6 +95,6 @@ describe("goals tool client", () => {
 		delete Bun.env.SPELL_SERVER_PASSWORD;
 
 		const tools = await createTools(createSession(), ["goals"]);
-		expect(tools.map(tool => tool.name)).toEqual(["exit_plan_mode"]);
+		expect(tools.map(tool => tool.name)).toEqual([]);
 	});
 });

@@ -50,7 +50,7 @@ import {
 	parseRateLimitReason,
 	systemPromptText,
 } from "@spell/pi-ai";
-import { orgToMarkdown, resolveCategories } from "@spell/pi-org";
+
 import { abortableSleep, getAgentDbPath, isEnoent, logger } from "@spell/pi-utils";
 import type { AsyncJob, AsyncJobManager } from "../async";
 import type { ResolvedModeConfig } from "../capability/mode";
@@ -59,7 +59,7 @@ import { MODEL_ROLE_IDS, type ModelRegistry, type ModelRole } from "../config/mo
 import { extractExplicitThinkingSelector, parseModelString, resolveModelRoleValue } from "../config/model-resolver";
 import { expandPromptTemplate, type PromptTemplate, renderPromptTemplate } from "../config/prompt-templates";
 import type { Settings, SkillsSettings } from "../config/settings";
-import { loadTaskPolicies, mergePolicies } from "../config/task-policies";
+
 import { type BashResult, executeBash as executeBashCommand } from "../exec/bash-executor";
 import { exportSessionToHtml } from "../export/html";
 import type { TtsrManager, TtsrMatchContext } from "../export/ttsr";
@@ -89,7 +89,6 @@ import { ExtensionToolWrapper } from "../extensibility/extensions/wrapper";
 import type { HookCommandContext } from "../extensibility/hooks/types";
 import type { Skill, SkillWarning } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
-import { localUrlToPath } from "../tools/local-path";
 import type { LoopManager } from "../loop/loop-manager";
 import manifestBuildingPrompt from "../loop/prompts/manifest-building-active.md" with { type: "text" };
 import {
@@ -99,29 +98,23 @@ import {
 	type DiscoverableMCPTool,
 	isMCPToolName,
 } from "../mcp/discoverable-tool-metadata";
-import { getCurrentThemeName, theme } from "../modes/theme/theme";
-import { normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../patch";
-import { listPlanModeAllowedFolders } from "../plan-mode/allowed-folders";
 import type { AuditState } from "../modes/audit-state";
 import { isAuditClean } from "../modes/audit-state";
-import { buildOrgConfig, resolvePlanItem } from "../org/org-plan";
-import type { ActiveModeState, PlanModeState, UserModeState } from "../modes/mode-state";
+import type { ActiveModeState, UserModeState } from "../modes/mode-state";
+import { getCurrentThemeName, theme } from "../modes/theme/theme";
+
+import { normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../patch";
+import auditPrompt from "../prompts/system/audit.md" with { type: "text" };
 import autoHandoffThresholdFocusPrompt from "../prompts/system/auto-handoff-threshold-focus.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
 import handoffDocumentPrompt from "../prompts/system/handoff-document.md" with { type: "text" };
-import planAuditPrompt from "../prompts/system/plan-audit.md" with { type: "text" };
-import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
-import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" with { type: "text" };
-import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool-decision-reminder.md" with {
-	type: "text",
-};
-import planModeUiuxPrompt from "../prompts/system/plan-mode-uiux.md" with { type: "text" };
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import type { TrackedBashExecution } from "../task/gate-verification";
 import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
 import { compactToolDescription, getToolTier } from "../tools";
 import type { CheckpointState } from "../tools/checkpoint";
+
 import { outputMeta } from "../tools/output-meta";
 import { resolveToCwd } from "../tools/path-utils";
 import type { PendingActionStore } from "../tools/pending-action";
@@ -343,22 +336,6 @@ function collectBlockerRefs(groups: TodoGroup[]): Set<string> {
 	return refs;
 }
 
-function describePlanChildCategory(name: string): string {
-	switch (name) {
-		case "projects":
-			return "Multi-feature infrastructure work";
-		case "features":
-			return "Single feature additions";
-		case "bugs":
-			return "Bug fixes";
-		case "followups":
-			return "Post-plan action items and deferred work";
-		case "audits":
-			return "Post-implementation audit findings and remediation plans";
-		default:
-			return name;
-	}
-}
 
 const noOpUIContext: ExtensionUIContext = {
 	select: async (_title, _options, _dialogOptions) => undefined,
@@ -415,10 +392,6 @@ export class AgentSession {
 	#followUpMessages: string[] = [];
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	#pendingNextTurnMessages: CustomMessage[] = [];
-	#planModeState: PlanModeState | undefined;
-	#planReferenceSent = false;
-	#planReferencePath = "local://PLAN.md";
-	#lastApprovedPlan: { itemId?: string; title: string; finalPlanFilePath: string } | undefined;
 
 	// Audit state
 	#auditState: AuditState = { type: "audit", pending: false, active: false };
@@ -932,7 +905,11 @@ export class AgentSession {
 			}
 
 			// BUG-369: non-retryable error while a retry chain is live should end the chain
-			if (!this.#isRetryableError(msg) && msg.stopReason === "error" && (this.#retryAttempt > 0 || this.#retryPromise)) {
+			if (
+				!this.#isRetryableError(msg) &&
+				msg.stopReason === "error" &&
+				(this.#retryAttempt > 0 || this.#retryPromise)
+			) {
 				await this.#forceEndRetryChain({
 					finalError: formatAssistantToolCallFailureMessage(msg) ?? msg.errorMessage ?? "Unknown error",
 				});
@@ -954,7 +931,10 @@ export class AgentSession {
 			if (hasToolCalls) {
 				if (this.#retryPromise) {
 					await this.#forceEndRetryChain({
-						finalError: formatAssistantToolCallFailureMessage(msg) ?? msg.errorMessage ?? "Retry chain interrupted: tool-calls present",
+						finalError:
+							formatAssistantToolCallFailureMessage(msg) ??
+							msg.errorMessage ??
+							"Retry chain interrupted: tool-calls present",
 					});
 				}
 				return;
@@ -2085,15 +2065,8 @@ export class AgentSession {
 		return this.#scopedModels;
 	}
 
-	/** Prompt templates */
-	getPlanModeState(): PlanModeState | undefined {
-		return this.#planModeState;
-	}
-
 	getActiveModeState(): ActiveModeState | undefined {
-		// Plan mode is always the outermost mode — highest priority
-		if (this.#planModeState?.enabled) return this.#planModeState;
-		// User mode next
+		// User mode first
 		if (this.#userModeState?.enabled) return this.#userModeState;
 		// Active audit mode
 		if (this.#auditState.active) return this.#auditState;
@@ -2107,30 +2080,6 @@ export class AgentSession {
 
 	getUserModeState(): UserModeState | undefined {
 		return this.#userModeState;
-	}
-
-	setPlanModeState(state: PlanModeState | undefined): void {
-		this.#planModeState = state;
-		if (state?.enabled) {
-			this.#planReferenceSent = false;
-			this.#planReferencePath = state.planFilePath;
-		}
-	}
-
-	recordLastApprovedPlan(plan: { itemId?: string; title: string; finalPlanFilePath: string }): void {
-		this.#lastApprovedPlan = plan;
-	}
-
-	getLastApprovedPlan(): { itemId?: string; title: string; finalPlanFilePath: string } | undefined {
-		return this.#lastApprovedPlan;
-	}
-
-	markPlanReferenceSent(): void {
-		this.#planReferenceSent = true;
-	}
-
-	setPlanReferencePath(path: string): void {
-		this.#planReferencePath = path;
 	}
 
 	getAuditState(): AuditState {
@@ -2158,23 +2107,6 @@ export class AgentSession {
 		if (!state) {
 			this.#pendingRewindReport = undefined;
 		}
-	}
-
-	/**
-	 * Inject the plan mode context message into the conversation history.
-	 */
-	async sendPlanModeContext(options?: { deliverAs?: "steer" | "followUp" | "nextTurn" }): Promise<void> {
-		const message = await this.#buildPlanModeMessage();
-		if (!message) return;
-		await this.sendCustomMessage(
-			{
-				customType: message.customType,
-				content: message.content,
-				display: message.display,
-				details: message.details,
-			},
-			options ? { deliverAs: options.deliverAs } : undefined,
-		);
 	}
 
 	resolveRoleModel(role: ModelRole): Model | undefined {
@@ -2216,174 +2148,6 @@ export class AgentSession {
 	// =========================================================================
 	// Prompting
 	// =========================================================================
-
-	/**
-	 * Build a plan mode message.
-	 * Returns null if plan mode is not enabled.
-	 * @returns The plan mode message, or null if plan mode is not enabled.
-	 */
-	async #buildPlanReferenceMessage(): Promise<CustomMessage | null> {
-		if (this.#planModeState?.enabled) return null;
-		if (this.#planReferenceSent) return null;
-
-		const planFilePath = this.#planReferencePath;
-		let planContent: string;
-		if (planFilePath.startsWith("org://")) {
-			// Resolve via org infrastructure: read the item body directly.
-			const itemId = planFilePath.slice("org://".length);
-			const item = await resolvePlanItem(this.settings, this.sessionManager.getCwd(), itemId);
-			if (!item) return null;
-			planContent = item.body;
-		} else {
-			// File-backed plan: resolve local:// to filesystem path and read.
-			const resolvedPlanPath = localUrlToPath(planFilePath, {
-				getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-				getSessionId: () => this.sessionManager.getSessionId(),
-			});
-			try {
-				planContent = await Bun.file(resolvedPlanPath).text();
-			} catch (error) {
-				if (isEnoent(error)) return null;
-				throw error;
-			}
-		}
-
-		const content = renderPromptTemplate(planModeReferencePrompt, {
-			planFilePath,
-			planContent: await orgToMarkdown(planContent),
-		});
-
-		this.#planReferenceSent = true;
-
-		return {
-			role: "custom",
-			customType: "plan-mode-reference",
-			content,
-			display: false,
-			attribution: "agent",
-			timestamp: Date.now(),
-		};
-	}
-
-	async #buildPlanModeMessage(): Promise<CustomMessage | null> {
-		const state = this.#planModeState;
-		if (!state?.enabled) return null;
-		const sessionPlanUrl = "local://PLAN.md";
-		const resolvedPlanPath = state.planFilePath.startsWith("local://")
-			? localUrlToPath(state.planFilePath, {
-					getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-					getSessionId: () => this.sessionManager.getSessionId(),
-				})
-			: resolveToCwd(state.planFilePath, this.sessionManager.getCwd());
-		const resolvedSessionPlan = localUrlToPath(sessionPlanUrl, {
-			getArtifactsDir: () => this.sessionManager.getArtifactsDir(),
-			getSessionId: () => this.sessionManager.getSessionId(),
-		});
-		const displayPlanPath =
-			state.planFilePath.startsWith("local://") || resolvedPlanPath !== resolvedSessionPlan
-				? state.planFilePath
-				: sessionPlanUrl;
-
-		const planExists = fs.existsSync(resolvedPlanPath);
-		const orgEnabled = (this.settings.get("org.enabled") as boolean | undefined) ?? false;
-		const allowedFolders = listPlanModeAllowedFolders(this.settings.get("planMode.allowedFolders"));
-		let planCategory = "plans";
-		let childCategories: Array<{ name: string; prefix: string; description: string }> = [];
-		if (orgEnabled) {
-			const config = buildOrgConfig(this.settings);
-			const categories = resolveCategories(config, this.sessionManager.getCwd());
-			const plansCategory = categories.find(category => category.name === "plans" || category.prefix === "PLAN");
-			if (plansCategory) {
-				planCategory = plansCategory.name;
-			}
-			childCategories = categories
-				.filter(category => !["plans", "drafts", "sessions", "audits"].includes(category.name))
-				.map(category => ({
-					name: category.name,
-					prefix: category.prefix,
-					description: describePlanChildCategory(category.name),
-				}));
-		}
-		// Read design history for anti-convergence injection when in design flavor
-		let designHistory = "";
-		if (state.flavor === "design") {
-			try {
-				const historyPath = path.join(this.sessionManager.getCwd(), ".spell", "design-history.jsonl");
-				const raw = await Bun.file(historyPath).text();
-				const entries = Bun.JSONL.parse(raw) as Array<{
-					ts: string;
-					direction: string;
-					fonts?: string[];
-					palette?: string;
-					memorable?: string;
-				}>;
-				const last5 = entries.slice(-5);
-				if (last5.length > 0) {
-					designHistory = last5
-						.map(e => {
-							const parts = [e.direction];
-							if (e.fonts?.length) parts.push(e.fonts.join(" + "));
-							if (e.palette) parts.push(e.palette);
-							if (e.memorable) parts.push(`"${e.memorable}"`);
-							return `- [${e.ts.slice(0, 10)}] ${parts.join(", ")}`;
-						})
-						.join("\n");
-				}
-			} catch {
-				// No history file yet — fine
-			}
-		}
-		// Mode todo.phases are consumed by the agent via prompt instructions.
-		// Wave-derived phases take precedence over todo.phases when plan has waves.
-		const modeConfig = state.modeConfigName ? this.getModeConfig(state.modeConfigName) : undefined;
-		const projectPolicies = await loadTaskPolicies(this.sessionManager.getCwd());
-		const mergedPolicies = mergePolicies(projectPolicies, modeConfig?.frontmatter.taskPolicies);
-		const hasTaskPolicies = mergedPolicies.policies.length > 0 || Object.keys(mergedPolicies.layers).length > 0;
-		const rawOrgTodoKeywords = this.settings.get("org.todoKeywords") as readonly string[] | string[] | undefined;
-		const planInitState = rawOrgTodoKeywords && rawOrgTodoKeywords.length > 0 ? rawOrgTodoKeywords[0] : "ITEM";
-		const content = renderPromptTemplate(planModeActivePrompt, {
-			planFilePath: displayPlanPath,
-			planExists,
-			taskPolicies: hasTaskPolicies ? mergedPolicies : undefined,
-			taskPolicyLayers: hasTaskPolicies ? mergedPolicies.layers : undefined,
-			taskPolicyList: hasTaskPolicies ? mergedPolicies.policies : undefined,
-			askToolName: "ask",
-			writeToolName: "write",
-			editToolName: "edit",
-			exitToolName: "exit_plan_mode",
-			reentry: state.reentry ?? false,
-			iterative: state.workflow === "iterative",
-			orgEnabled,
-			planInitState,
-			planCategory,
-			childCategories,
-			allowedFolders: allowedFolders.length > 0 ? allowedFolders : undefined,
-			ultraplan: state.ultraplan ?? false,
-			designFlavor: state.flavor === "design",
-			designHistory,
-			planModeUiuxPrompt,
-			modeContext: modeConfig?.sections.context,
-			modeInstructions: modeConfig?.sections.instructions,
-			// Gate toggles
-			gateMetisDisabled: modeConfig?.frontmatter.gates?.metis === false,
-			gateDaedalusDisabled: modeConfig?.frontmatter.gates?.daedalus === false,
-			gateMomusDisabled: modeConfig?.frontmatter.gates?.momus === false,
-			// Custom decomposition
-			customDecomposition: (modeConfig?.frontmatter.decomposition?.requiredSections?.length ?? 0) > 0,
-			customDecompositionSections: modeConfig?.frontmatter.decomposition?.requiredSections,
-			// Execution instructions (for approved prompt)
-			modeExecutionInstructions: modeConfig?.sections.instructions,
-		});
-
-		return {
-			role: "custom",
-			customType: "plan-mode-context",
-			content,
-			display: false,
-			attribution: "agent",
-			timestamp: Date.now(),
-		};
-	}
 
 	/**
 	 * Build the per-turn role-context message for an active standalone user mode.
@@ -2499,9 +2263,6 @@ export class AgentSession {
 				this.#nextToolChoiceOverride = undefined;
 			}
 		}
-		if (!options?.synthetic) {
-			await this.#enforcePlanModeToolDecision();
-		}
 	}
 
 	async promptCustomMessage<T = unknown>(
@@ -2580,14 +2341,6 @@ export class AgentSession {
 
 			// Build messages array (session context, eager todo prelude, then active prompt message)
 			const messages: AgentMessage[] = [];
-			const planReferenceMessage = await this.#buildPlanReferenceMessage?.();
-			if (planReferenceMessage) {
-				messages.push(planReferenceMessage);
-			}
-			const planModeMessage = await this.#buildPlanModeMessage();
-			if (planModeMessage) {
-				messages.push(planModeMessage);
-			}
 			const userModeMessage = this.#buildUserModeMessage();
 			if (userModeMessage) {
 				messages.push(userModeMessage);
@@ -3223,8 +2976,6 @@ export class AgentSession {
 		this.sessionManager.appendServiceTierChange(this.serviceTier ?? null);
 
 		this.#todoReminderCount = 0;
-		this.#planReferenceSent = false;
-		this.#planReferencePath = "local://PLAN.md";
 		this.#reconnectToAgent();
 
 		// Emit session_switch event with reason "new" to hooks
@@ -4109,62 +3860,6 @@ export class AgentSession {
 		this.#checkpointState = undefined;
 		this.#pendingRewindReport = undefined;
 	}
-	async #enforcePlanModeToolDecision(): Promise<void> {
-		if (!this.#planModeState?.enabled) {
-			return;
-		}
-		const assistantMessage = this.#findLastAssistantMessage();
-		if (!assistantMessage) {
-			return;
-		}
-		if (assistantMessage.stopReason === "error" || assistantMessage.stopReason === "aborted") {
-			return;
-		}
-
-		const calledRequiredTool = assistantMessage.content.some(
-			content => content.type === "toolCall" && (content.name === "ask" || content.name === "exit_plan_mode"),
-		);
-		if (calledRequiredTool) {
-			return;
-		}
-
-		const askTool = this.#toolRegistry.get("ask");
-		if (!askTool) {
-			logger.warn("Plan mode enforcement skipped because ask tool is unavailable", {
-				activeToolNames: this.agent.state.tools.map(tool => tool.name),
-			});
-			return;
-		}
-
-		// Keep all plan mode tools available — the bug was restricting to only ask/exit_plan_mode,
-		// which trapped the model after an ask call completed and the loop continued.
-		// toolChoice: "required" forces a tool call; the reminder prompt guides which one.
-		const forcedTools = [...this.agent.state.tools];
-		if (!forcedTools.some(t => t.name === "ask")) {
-			forcedTools.push(askTool);
-		}
-		const exitPlanModeTool = this.#toolRegistry.get("exit_plan_mode");
-		if (exitPlanModeTool && !forcedTools.some(t => t.name === "exit_plan_mode")) {
-			forcedTools.push(exitPlanModeTool);
-		}
-
-		const reminder = renderPromptTemplate(planModeToolDecisionReminderPrompt, {
-			askToolName: "ask",
-			exitToolName: "exit_plan_mode",
-		});
-
-		const previousTools = this.agent.state.tools;
-		this.agent.setTools(forcedTools);
-		try {
-			await this.prompt(reminder, {
-				synthetic: true,
-				expandPromptTemplates: false,
-				toolChoice: "required",
-			});
-		} finally {
-			this.agent.setTools(previousTools);
-		}
-	}
 
 	#createEagerTodoPrelude(): { message: AgentMessage; toolChoice: ToolChoice } | undefined {
 		const eagerTodosEnabled = this.settings.get("todo.eager");
@@ -4173,9 +3868,6 @@ export class AgentSession {
 			return undefined;
 		}
 
-		if (this.#planModeState?.enabled) {
-			return undefined;
-		}
 		if (this.getTodoGroups().length > 0) {
 			return undefined;
 		}
@@ -4334,10 +4026,9 @@ export class AgentSession {
 	 * Inject the audit prompt as a developer message and schedule agent continuation.
 	 */
 	#injectAuditPrompt(): void {
-		const state = this.#planModeState;
-		const modeConfig = state?.modeConfigName ? this.getModeConfig(state.modeConfigName) : undefined;
+		const modeConfig = this.#userModeState?.name ? this.getModeConfig(this.#userModeState.name) : undefined;
 		const auditConfig = modeConfig?.frontmatter.audit;
-		const rendered = renderPromptTemplate(planAuditPrompt, {
+		const rendered = renderPromptTemplate(auditPrompt, {
 			auditDepth: this.#auditState.auditDepth,
 			maxDepth: auditConfig?.maxDepth ?? this.#auditState.maxDepth,
 			sourceRef: this.#auditState.sourceRef,

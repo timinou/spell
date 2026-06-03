@@ -15,11 +15,11 @@
  *   - Questions may time out and auto-select the recommended option (configurable, disabled in plan mode)
  */
 
+import { type Static, Type } from "@sinclair/typebox";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@spell/pi-agent-core";
 import type { Component } from "@spell/pi-tui";
 import { TERMINAL, Text } from "@spell/pi-tui";
 import { untilAborted } from "@spell/pi-utils";
-import { type Static, Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { type Theme, theme } from "../modes/theme/theme";
@@ -414,11 +414,11 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	): Promise<AgentToolResult<AskToolDetails>> {
 		// Headless fallback
 		if (!context?.hasUI || !context.ui) {
-   return {
-   			content: [{ type: "text" as const, text: "Error: User prompt requires interactive mode" }],
-   			details: {},
-   			data: null,
-   		};
+			return {
+				content: [{ type: "text" as const, text: "Error: User prompt requires interactive mode" }],
+				details: {},
+				data: null,
+			};
 		}
 
 		const extensionUi = context.ui;
@@ -427,22 +427,19 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 			input: (prompt, initialValue, dialogOptions) => extensionUi.input(prompt, initialValue, dialogOptions),
 		};
 
-		// Determine timeout based on settings and plan mode
-		const planModeEnabled = this.session.getPlanModeState?.()?.enabled ?? false;
 		// Settings.get("ask.timeout") returns seconds (0 = disabled), convert to ms
 		const timeoutSeconds = this.session.settings.get("ask.timeout");
-		const settingsTimeout = timeoutSeconds === 0 ? null : timeoutSeconds * 1000;
-		const timeout = planModeEnabled ? null : settingsTimeout;
+		const timeout = timeoutSeconds === 0 ? null : timeoutSeconds * 1000;
 
 		// Send notification if waiting and not suppressed
 		this.#sendAskNotification();
 
 		if (params.questions.length === 0) {
-   return {
-   			content: [{ type: "text" as const, text: "Error: questions must not be empty" }],
-   			details: {},
-   			data: null,
-   		};
+			return {
+				content: [{ type: "text" as const, text: "Error: questions must not be empty" }],
+				details: {},
+				data: null,
+			};
 		}
 
 		const askQuestion = async (
@@ -500,7 +497,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 				responseText = "User cancelled the selection";
 			}
 
-   return { content: [{ type: "text" as const, text: responseText }], details, data: null };
+			return { content: [{ type: "text" as const, text: responseText }], details, data: null };
 		}
 
 		const resultsByIndex: Array<QuestionResult | undefined> = Array.from({ length: params.questions.length });
@@ -560,7 +557,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 		const responseLines = results.map(formatQuestionResult);
 		const responseText = `User answers:\n${responseLines.join("\n")}`;
 
-  return { content: [{ type: "text" as const, text: responseText }], details, data: null };
+		return { content: [{ type: "text" as const, text: responseText }], details, data: null };
 	}
 }
 

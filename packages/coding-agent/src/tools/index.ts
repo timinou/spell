@@ -13,10 +13,9 @@ import type { LoopManager } from "../loop/loop-manager";
 // import { LoopDoneTool, LoopLaunchTool, LoopPrepareTool } from "../loop/loop-tools";
 
 import type { DiscoverableMCPSearchIndex, DiscoverableMCPTool } from "../mcp/discoverable-tool-metadata";
+import type { ActiveModeState } from "../modes/mode-state";
 import type { CanvasOrchestratorManager } from "../orchestrators/canvas-orchestrator";
 import type { CanvasTaskManager } from "../orchestrators/canvas-task-manager";
-
-import type { ActiveModeState, PlanModeState } from "../modes/mode-state";
 import type { SandboxPolicy } from "../sandbox";
 import type { ArtifactRef } from "../session/artifacts";
 import { TaskTool } from "../task";
@@ -38,7 +37,7 @@ import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
 
 import { CreateTool } from "./create";
 import { CodepathEditTool } from "./edit";
-import { ExitPlanModeTool } from "./exit-plan-mode";
+
 import { FetchTool } from "./fetch";
 // REMOVED_PLAN_306_W11: Zero session usage in W0-3 replay corpus
 // import { GatewayTool } from "./gateway";
@@ -90,7 +89,7 @@ export * from "./codepath-types";
 export * from "./context-pressure-policy";
 export * from "./create";
 export * from "./edit";
-export * from "./exit-plan-mode";
+
 export * from "./fetch";
 export * from "./find";
 export * from "./gateway";
@@ -179,8 +178,7 @@ export interface ToolSession {
 	asyncJobManager?: AsyncJobManager;
 	/** Settings instance for passing to subagents */
 	settings: Settings;
-	/** Plan mode state (if active) @deprecated Use getActiveModeState */
-	getPlanModeState?: () => PlanModeState | undefined;
+
 	/** Last plan approved in this session, if any. */
 	getLastApprovedPlan?: () => { itemId?: string; title: string; finalPlanFilePath: string } | undefined;
 	/** Active mode state (plan, audit, or user-defined) */
@@ -335,6 +333,7 @@ export const TOOL_TIERS: Record<string, ToolTier> = {
 	// gateway: "specialized",
 	search_tool_bm25: "specialized",
 	send_file: "specialized",
+	execute: "specialized",
 };
 
 /** Get the tool tier, defaulting to "standard" for unknown tools (e.g. MCP tools). */
@@ -363,7 +362,7 @@ export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
 	autonomy_state: AutonomyStateTool.createIf,
 	submit_result: s => new SubmitResultTool(s),
 	report_finding: () => reportFindingTool,
-	exit_plan_mode: s => new ExitPlanModeTool(s),
+
 	resolve: s => new ResolveTool(s),
 };
 
@@ -392,13 +391,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		...HIDDEN_TOOLS,
 	};
 	const isToolAllowed = (name: string) => {
-		const inPlanMode = session.getPlanModeState?.()?.enabled === true;
-		// Plan mode mandates org and todo_write in its context prompt — force them on
-		// regardless of settings toggles so the instructions are satisfiable.
-		if (name === "org" && inPlanMode) return true;
 		if (name === "org") return !!session.settings.get("org.enabled");
-		if (name === "todo_write" && inPlanMode) return true;
-
 		if (name === "todo_write") return session.settings.get("todo.enabled");
 		if (name === "find") return session.settings.get("find.enabled");
 		if (name === "grep") return session.settings.get("grep.enabled");
@@ -430,7 +423,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			: [
 					...Object.entries(BUILTIN_TOOLS).filter(([name]) => isToolAllowed(name)),
 					...(includeSubmitResult ? ([["submit_result", HIDDEN_TOOLS.submit_result]] as const) : []),
-					...([["exit_plan_mode", HIDDEN_TOOLS.exit_plan_mode]] as const),
 				];
 
 	const baseResults = await Promise.all(

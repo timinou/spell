@@ -58,7 +58,6 @@ function createSession(
 		getSessionFile: () => path.join(tempDir, "session.jsonl"),
 		getSessionSpawns: () => "*",
 		getCompactContext: () => undefined,
-		getPlanModeState: () => undefined,
 		getActiveModelString: () => undefined,
 		getModelString: () => undefined,
 		getArtifactsDir: () => path.join(tempDir, "artifacts"),

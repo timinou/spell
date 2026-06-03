@@ -75,7 +75,6 @@ describe("createTools", () => {
     expect(names).toContain("todo_write");
     expect(names).toContain("fetch");
     expect(names).toContain("web_search");
-    expect(names).toContain("exit_plan_mode");
     expect(names).not.toContain("autonomy_state");
   });
 
@@ -85,7 +84,7 @@ describe("createTools", () => {
     const names = tools.map((t) => t.name);
 
     // `lsp` is silently dropped from the requested subset; it no longer exists.
-    expect(names).toEqual(["get", "create", "exit_plan_mode"]);
+    expect(names).toEqual(["get", "create"]);
   });
 
   it("respects requested tool subset", async () => {
@@ -93,7 +92,7 @@ describe("createTools", () => {
     const tools = await createTools(session, ["get", "create"]);
     const names = tools.map((t) => t.name);
 
-    expect(names).toEqual(["get", "create", "exit_plan_mode"]);
+    expect(names).toEqual(["get", "create"]);
   });
 
   it("lowercases requested tool subset", async () => {
@@ -101,7 +100,7 @@ describe("createTools", () => {
     const tools = await createTools(session, ["Get", "Create"]);
     const names = tools.map((t) => t.name);
 
-    expect(names).toEqual(["get", "create", "exit_plan_mode"]);
+    expect(names).toEqual(["get", "create"]);
   });
 
   it("includes hidden tools when explicitly requested", async () => {
@@ -109,7 +108,7 @@ describe("createTools", () => {
     const tools = await createTools(session, ["report_finding"]);
     const names = tools.map((t) => t.name);
 
-    expect(names).toEqual(["report_finding", "exit_plan_mode"]);
+    expect(names).toEqual(["report_finding"]);
   });
 
   it("includes submit_result tool when required", async () => {
@@ -212,7 +211,6 @@ describe("createTools", () => {
   it("HIDDEN_TOOLS contains explicit-only tools", () => {
     expect(Object.keys(HIDDEN_TOOLS).sort()).toEqual([
       "autonomy_state",
-      "exit_plan_mode",
       "report_finding",
       "resolve",
       "submit_result",

@@ -43,7 +43,6 @@ function createSession(cwd: string): ToolSession {
 		getSessionFile: () => path.join(cwd, "session.jsonl"),
 		getSessionSpawns: () => "*",
 		getCompactContext: () => undefined,
-		getPlanModeState: () => undefined,
 		getActiveModelString: () => undefined,
 		getModelString: () => undefined,
 		getArtifactsDir: () => path.join(cwd, "artifacts"),

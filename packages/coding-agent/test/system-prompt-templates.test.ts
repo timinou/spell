@@ -183,40 +183,6 @@ describe("system Handlebars prompt templates", () => {
 		expect(rendered).toContain("On runtime impediments:");
 	});
 
-	test("plan-mode-active standard mode includes sub-outline body standard and org wave guidance", async () => {
-		const templatePath = path.join(systemPromptsDir, "plan-mode-active.md");
-		const template = await Bun.file(templatePath).text();
-		const rendered = renderPromptTemplate(template, {
-			...baseRenderContext,
-			orgEnabled: true,
-			planCategory: "plans",
-			childCategories: [{ name: "features", prefix: "FEAT", description: "Feature items" }],
-			exitToolName: "exit_plan_mode",
-			askToolName: "task",
-			askPolicies: false,
-			allowedFolders: undefined,
-			customDecomposition: false,
-			customDecompositionSections: undefined,
-			ultraplan: false,
-			modeContext: "",
-			modeInstructions: "",
-			taskPolicyLayers: {},
-			taskPolicyList: [],
-			reentry: false,
-			iterative: false,
-			designFlavor: false,
-			askPolicyEnabled: false,
-			tools: [...(baseRenderContext.tools as string[]), "code"],
-		});
-
-		expect(rendered).toContain(":CUSTOM_ID: FEAT-001::define-types");
-		expect(rendered).toContain("FILE-LEVEL-ID::suboutline-id");
-		expect(rendered).toContain("run `org wave`");
-		expect(rendered).toContain(":wave:` headings");
-		expect(rendered).toContain("file-level and subfeature-level DAG sections");
-		expect(rendered).toContain("DAG headings are context only");
-		expect(rendered).toContain("edge `from` depends on `to`");
-	});
 
 	test("system-prompt renders eager task guidance from default settings", async () => {
 		const templatePath = path.join(systemPromptsDir, "system-prompt.md");

@@ -66,7 +66,7 @@ describe("approvals tool client", () => {
 		Bun.env.SPELL_SERVER_PASSWORD = "secret"; // pragma: allowlist secret
 
 		const tools = await createTools(createSession(), ["approvals"]);
-		expect(tools.map(tool => tool.name)).toEqual(["approvals", "exit_plan_mode"]);
+		expect(tools.map(tool => tool.name)).toEqual(["approvals"]);
 
 		const approvalsTool = tools.find(tool => tool.name === "approvals");
 		if (!approvalsTool) throw new Error("Missing approvals tool");

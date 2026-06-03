@@ -147,7 +147,7 @@ function textOf(result: AgentToolResult): string {
 /**
  * Build a denylist-aware lookup from a map of instantiated tools.
  *
- * `denied` names (e.g. `execute`, `ask`, `exit_plan_mode`) are never resolvable
+ * `denied` names (e.g. `execute`, `ask`, `resolve`) are never resolvable
  * from inside a program — preventing recursion and interactive deadlocks. The
  * capability-policy gate (P3) layers effect-based filtering on top of this.
  */
@@ -173,7 +173,6 @@ export const DEFAULT_DENYLIST: ReadonlySet<string> = new Set([
 	"execute", // no recursion into the coprocessor
 	"task", // spawns subagents that could transitively re-enter execute (PLAN-323)
 	"ask", // interactive — would deadlock the sandbox
-	"exit_plan_mode", // mutates agent mode
 	"resolve", // deferred-action resolution is an agent-loop concern
 	"submit_result", // completion signal, not a data tool
 	// agent-state / escalation — structurally off-limits to programs
