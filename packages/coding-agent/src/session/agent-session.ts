@@ -89,8 +89,7 @@ import { ExtensionToolWrapper } from "../extensibility/extensions/wrapper";
 import type { HookCommandContext } from "../extensibility/hooks/types";
 import type { Skill, SkillWarning } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
-import type { LoopManager } from "../loop/loop-manager";
-import manifestBuildingPrompt from "../loop/prompts/manifest-building-active.md" with { type: "text" };
+
 import {
 	buildDiscoverableMCPSearchIndex,
 	collectDiscoverableMCPTools,
@@ -245,7 +244,7 @@ export interface AgentSessionConfig {
 	/** ToolSession for session-owned resource cleanup */
 	toolSession?: { dispose?(): Promise<void> | void };
 	/** Loop orchestration manager for slash commands, tools, and dashboards */
-	loopManager?: LoopManager;
+
 	/** Task recursion depth; >0 means this session is a delegated subagent. */
 	taskDepth?: number;
 }
@@ -484,7 +483,7 @@ export class AgentSession {
 	#obfuscator: SecretObfuscator | undefined;
 	#pendingActionStore: PendingActionStore | undefined;
 	#toolSession?: { dispose?(): Promise<void> | void; softReset?(): Promise<void> | void };
-	#loopManager: LoopManager | undefined;
+
 	#checkpointState: CheckpointState | undefined = undefined;
 	#pendingRewindReport: string | undefined = undefined;
 	#promptGeneration = 0;
@@ -522,7 +521,7 @@ export class AgentSession {
 		this.agent.providerSessionState = this.#providerSessionState;
 		this.#pendingActionStore = config.pendingActionStore;
 		this.#toolSession = config.toolSession;
-		this.#loopManager = config.loopManager;
+
 		this.#unsubscribePendingActionPush = this.#pendingActionStore?.subscribePush(action => {
 			if (this.settings.get("edit.previewResolvePolicy") !== "explicit") return;
 			const reminderText = [
@@ -2094,9 +2093,6 @@ export class AgentSession {
 		this.#auditSuggestCallback = cb;
 	}
 
-	getLoopManager(): LoopManager | undefined {
-		return this.#loopManager;
-	}
 
 	getCheckpointState(): CheckpointState | undefined {
 		return this.#checkpointState;
@@ -2403,23 +2399,6 @@ export class AgentSession {
 				}
 			}
 
-			// Inject manifest-building prompt when a loop is in manifest_building state
-			if (this.#loopManager) {
-				const loops = this.#loopManager.listSnapshots();
-				const building = loops.find(l => l.state === "manifest_building");
-				if (building) {
-					const rendered = renderPromptTemplate(manifestBuildingPrompt, {
-						loopId: building.id,
-						loopName: building.name,
-						specPaths: building.specPaths,
-						domainNames: building.domainNames,
-					});
-					const current = this.agent.state.systemPrompt;
-					this.agent.setSystemPrompt(
-						`${typeof current === "string" ? current : (systemPromptText(current) ?? "")}\n\n${rendered}`,
-					);
-				}
-			}
 
 			// Bail out if a newer abort/prompt cycle has started since we began setup
 			if (this.#promptGeneration !== generation) {

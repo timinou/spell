@@ -271,18 +271,6 @@ export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> =
 		accessor: "property",
 		propertyName: "enabled",
 	},
-	"loop.autoApproveEnabled": {
-		block: "interaction",
-		nodePath: "loop",
-		accessor: "property",
-		propertyName: "auto-approve",
-	},
-	"loop.autoApproveTimeoutMs": {
-		block: "interaction",
-		nodePath: "loop",
-		accessor: "property",
-		propertyName: "auto-approve-timeout-ms",
-	},
 
 	// ── Editing ──────────────────────────────────────────────────────────
 	"edit.mode": { block: "interaction", nodePath: "editing.mode", accessor: "argument" },

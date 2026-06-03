@@ -235,40 +235,6 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 			runtime.ctx.editor.setText("");
 		},
 	},
-	{
-		name: "loop",
-		description: "Manage Spell loop workflows",
-		subcommands: [
-			{ name: "start", description: "Start a loop", usage: "<name>" },
-			{ name: "pause", description: "Pause a loop", usage: "<id>" },
-			{ name: "resume", description: "Resume a loop", usage: "<id>" },
-			{ name: "status", description: "Show loop status", usage: "[id]" },
-			{ name: "list", description: "List loops" },
-			{ name: "kill", description: "Kill a loop tree", usage: "<id>" },
-			{ name: "approve", description: "Approve a pending human gate", usage: "<loopId> <gateId>" },
-			{ name: "reject", description: "Reject a pending human gate", usage: "<loopId> <gateId>" },
-		],
-		allowArgs: true,
-		handle: async (command, runtime) => {
-			const manager = runtime.ctx.session.getLoopManager();
-			if (!manager) {
-				runtime.ctx.showWarning("Loop manager unavailable in this session.");
-				runtime.ctx.editor.setText("");
-				return;
-			}
-			const args = command.args.trim();
-			const result = await manager.handleCommand(
-				args ? (args.split(/\s+/)[0] ?? "status") : "status",
-				args ? args.split(/\s+/).slice(1) : [],
-			);
-			if (result.ok) {
-				runtime.ctx.showStatus(result.message);
-			} else {
-				runtime.ctx.showWarning(result.message);
-			}
-			runtime.ctx.editor.setText("");
-		},
-	},
 
 	{
 		name: "gui",

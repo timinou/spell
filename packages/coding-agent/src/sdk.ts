@@ -75,7 +75,7 @@ import {
 	PiProtocolHandler,
 } from "./internal-urls";
 
-import { LoopManager } from "./loop/loop-manager";
+
 import { discoverAndLoadMCPTools, type MCPManager, type MCPToolsLoadResult } from "./mcp";
 import {
 	collectDiscoverableMCPTools,
@@ -256,8 +256,6 @@ export interface CreateAgentSessionResult {
 	orchestratorManager?: CanvasOrchestratorManager;
 	/** Canvas task manager for dispatching task subagents from QML windows. */
 	taskManager?: CanvasTaskManager;
-	/** Loop orchestration manager for loop lifecycle, gates, and dashboards. */
-	loopManager?: LoopManager;
 }
 
 // Re-exports
@@ -989,17 +987,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const pendingActionStore = new PendingActionStore();
 
-	const loopManager = new LoopManager({
-		cwd,
-		settings,
-		eventBus,
-		roleResolver: {
-			getCurrentModel: () => session?.model ?? model,
-			getPlanModel: () => session?.resolveRoleModel("plan"),
-			getReviewModel: () => session?.resolveRoleModel("review"),
-			getSettings: () => settings,
-		},
-	});
 
 	const gatewayClient = taskDepth === 0 ? new GatewayClient({ autoSpawn: false }) : undefined;
 
@@ -1058,7 +1045,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		modelRegistry,
 		asyncJobManager,
 		pendingActionStore,
-		loopManager,
 		gatewayClient,
 		getResolvedTaskPolicies: (() => {
 			let cached: TaskPolicy[] | undefined;
@@ -1776,7 +1762,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		asyncJobManager,
 		pendingActionStore,
 		toolSession,
-		loopManager,
 		taskDepth,
 	});
 
@@ -1786,7 +1771,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	for (const warning of modesResult.warnings) {
 		logger.warn(warning);
 	}
-	await loopManager.restoreFromDisk();
+
 
 	postmortem.registerSessionContext(() => {
 		const activeModel = session.model ?? model;
@@ -2186,7 +2171,5 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		orchestratorManager,
 
 		taskManager,
-
-		loopManager,
 	};
 }

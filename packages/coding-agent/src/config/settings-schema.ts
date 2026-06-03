@@ -323,26 +323,6 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"loop.autoApproveEnabled": {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "tools",
-			label: "Loop Auto-Approve",
-			description: "Automatically approve human gates after timeout",
-		},
-	},
-
-	"loop.autoApproveTimeoutMs": {
-		type: "number",
-		default: 300000,
-		ui: {
-			tab: "tools",
-			label: "Auto-Approve Timeout (ms)",
-			description: "Milliseconds before human gates are auto-approved (0 = disabled)",
-			submenu: true,
-		},
-	},
 
 	"statusLine.showHookStatus": {
 		type: "boolean",

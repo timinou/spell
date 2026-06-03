@@ -8,9 +8,9 @@ import type { TaskPolicy } from "../config/task-policies";
 import type { Skill } from "../extensibility/skills";
 import type { InternalUrlRouter } from "../internal-urls";
 
-import type { LoopManager } from "../loop/loop-manager";
+
 // REMOVED_PLAN_306_W11: Loop tools had zero session usage in W0-3 replay corpus
-// import { LoopDoneTool, LoopLaunchTool, LoopPrepareTool } from "../loop/loop-tools";
+
 
 import type { DiscoverableMCPSearchIndex, DiscoverableMCPTool } from "../mcp/discoverable-tool-metadata";
 import type { ActiveModeState } from "../modes/mode-state";
@@ -64,7 +64,7 @@ import { type TodoGroup, TodoWriteTool } from "./todo-write";
 
 export * from "../exa";
 export type * from "../exa/types";
-export * from "../loop/loop-tools";
+
 
 export * from "../patch";
 export * from "../sandbox";
@@ -210,8 +210,7 @@ export interface ToolSession {
 	/** Dedicated org-mode daemon lifecycle manager for org MCP callers. */
 	/** Active QML remote server; when set, CanvasTool routes panels to the Android client. */
 	qmlRemoteServer?: import("@spell/pi-qml-remote").QmlRemoteServer;
-	/** Loop orchestration manager for loop tools, slash commands, and dashboards. */
-	loopManager?: LoopManager;
+
 	/** Canvas orchestrator manager for canvas-backed QML windows. */
 	orchestratorManager?: CanvasOrchestratorManager;
 	/** Canvas task manager for canvas-backed QML windows. */
@@ -263,14 +262,6 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	send_file: s => new SendFileTool(s),
 	canvas: s => new CanvasTool(s),
 	canvas_cast: CanvasCastTool.createIf,
-	// REMOVED_PLAN_306_W11: Zero session usage in W0-3 replay corpus
-	// loop_prepare: s => (s.loopManager ? new LoopPrepareTool(s) : null),
-	// REMOVED_PLAN_306_W11: Zero session usage in W0-3 replay corpus
-	// loop_launch: s => (s.loopManager ? new LoopLaunchTool(s) : null),
-	// REMOVED_PLAN_306_W11: Zero session usage in W0-3 replay corpus
-	// loop_done: s => (s.loopManager ? new LoopDoneTool(s) : null),
-	// REMOVED_PLAN_306_W11: Zero session usage in W0-3 replay corpus
-	// gateway: GatewayTool.createIf,
 	// Generic code-path tools (coexistence wave; override legacy registrations)
 	find: s => new FindTool(s),
 	status: () => new StatusTool(),
@@ -323,14 +314,6 @@ export const TOOL_TIERS: Record<string, ToolTier> = {
 	checkpoint: "specialized",
 	rewind: "specialized",
 	calc: "specialized",
-	// REMOVED_PLAN_306_W11: Zero session usage in W0-3 replay corpus
-	// loop_prepare: "specialized",
-	// REMOVED_PLAN_306_W11: Zero session usage in W0-3 replay corpus
-	// loop_launch: "specialized",
-	// REMOVED_PLAN_306_W11: Zero session usage in W0-3 replay corpus
-	// loop_done: "specialized",
-	// REMOVED_PLAN_306_W11: Zero session usage in W0-3 replay corpus
-	// gateway: "specialized",
 	search_tool_bm25: "specialized",
 	send_file: "specialized",
 	execute: "specialized",
