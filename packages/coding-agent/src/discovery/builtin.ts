@@ -37,6 +37,7 @@ import {
 	scanSkillsFromDir,
 } from "./helpers";
 import { parseModeConfigSections } from "./mode-helpers";
+import { loadSpellKdl, loadUserSpellKdl, spellKdlModesToModeConfigs } from "../config/spell-kdl";
 
 const PROVIDER_ID = "native";
 const DISPLAY_NAME = "Spell";
@@ -896,7 +897,36 @@ async function loadModes(ctx: LoadContext): Promise<LoadResult<ModeConfig>> {
 	const builtinModesDir = path.resolve(import.meta.dir, "../modes/builtins");
 	await scanModesDir(builtinModesDir, "user", items, warnings);
 
+	// KDL-native `mode` blocks from spell.kdl (project + user). Roles are defined
+	// entirely in KDL — prose lives inline, no markdown sidecar.
+	await scanSpellKdlModes(ctx, items, warnings);
+
 	return { items, warnings };
+}
+
+async function scanSpellKdlModes(ctx: LoadContext, items: ModeConfig[], warnings: string[]): Promise<void> {
+	const projectKdlPath = path.join(ctx.cwd, "spell.kdl");
+	const [userConfig, projectConfig] = await Promise.all([loadUserSpellKdl(), loadSpellKdl(ctx.cwd)]);
+	const userKdlPath = path.join(ctx.home, "spell.kdl");
+	// User-level first so project-level modes override on key collision (later wins in registry merge).
+	if (userConfig?.modes?.length) {
+		const { items: userItems, warnings: userWarnings } = await spellKdlModesToModeConfigs(
+			userConfig.modes,
+			userKdlPath,
+			ctx.home,
+		);
+		items.push(...userItems.map(item => ({ ...item, level: "user" as const })));
+		warnings.push(...userWarnings);
+	}
+	if (projectConfig?.modes?.length) {
+		const { items: projectItems, warnings: projectWarnings } = await spellKdlModesToModeConfigs(
+			projectConfig.modes,
+			projectKdlPath,
+			ctx.cwd,
+		);
+		items.push(...projectItems);
+		warnings.push(...projectWarnings);
+	}
 }
 
 async function scanModesDir(

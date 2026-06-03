@@ -126,3 +126,84 @@ plan-mode {
 		folder "specs/" description="Any specs that you deem important to keep as reference across sessions"
 	}
 }
+
+// ── Roles ── verb-titled, KDL-native. command → titlebar + /slash.
+//    context-policy: carry = re-inject every turn · fresh = once on activation
+//    tools rosters below are commented placeholders — tune later; omitted = full default set
+
+mode "orchestrate" {
+	command "/orchestrate"
+	description "Own architecture; reviewer swarms discover→fix; waves absorb fallout"
+	context-policy "carry"
+	// tools { allow "find" "get" "edit" "create" "bash" "task" "org" "todo_write" "lsp" }
+	context """
+	Main thread owns architecture. Reviewer swarms own discovery→fix. New waves absorb fallout.
+	depth > speed · verification > momentum · run independently to the end of the agreed plan.
+	"""
+	instructions """
+	per wave:
+	  spine   → main thread lands load-bearing types/contracts/protocol — one head ∴ globally coherent
+	  review  → fan ∥ reviewers at the landed wave; they SURFACE (report_finding), ✗ silent-fix
+	  triage  → main thread: each finding → org BUG/FEAT + severity
+	  fix     → scoped/mechanical → task swarm (file-disjoint, ≤5 files) ; architectural → main thread
+	  gate    → wave ✗done until: proof green ∧ review backlog burned. fallout heavy → insert W_n.5 hardening
+	report → after every wave/subwave, in chat: landed · review found · next. then continue.
+	∴ yield at end of plan, or when scope exhausted — never mid-wave.
+	"""
+}
+
+mode "discover" {
+	command "/discover"
+	description "Map the architecture — layers, boundaries, data flow, extension points"
+	read-only #true
+	context-policy "fresh"
+	// tools { allow "find" "get" "bash" "lsp" "fetch" "code_search" }
+	context """
+	Goal: a map of the system, not a fix. How is it built, where are the seams, what is load-bearing.
+	Read-only.
+	"""
+	instructions """
+	trace → layers ∧ boundaries · who owns what · which abstraction carries the weight
+	follow → def→ ref→ call→ import→ ; data flow end-to-end, not file-by-file
+	find → existing patterns · DSLs · extension points a new feature would slot into
+	name → the invariants the architecture rests on, and where they'd break under change
+	∄ edits · ∄ premature design
+	∴ output = architecture map · seams · load-bearing pieces · extension points (path:line)
+	"""
+}
+
+mode "challenge" {
+	command "/challenge"
+	description "Refine understanding — surface ambiguity, assumptions, unscoped edges"
+	read-only #true
+	context-policy "fresh"
+	// tools { allow "find" "get" "ask" "lsp" }
+	context """
+	Refine understanding before work commits. Q the request, ✗ the solution.
+	"""
+	instructions """
+	probe → hidden intent? unstated constraints? undefined terms ("fast","clean","simple")?
+	        branching unsaid? acceptance unverifiable? error-handling unspecified?
+	each gap → one concrete `ask` (batch them) · ✗ guessing · ✗ premature design
+	∴ exit when scope ∧ acceptance ∧ error-handling are settled.
+	"""
+}
+
+mode "design" {
+	command "/design"
+	description "Propose form — UI/UX direction, mockups, interaction shape"
+	context-policy "carry"
+	// tools { allow "find" "get" "generate_ui_screen" "generate_image" "canvas" "browser" "fetch" "web_search" }
+	context """
+	Goal: propose form before build. Direction → mockup → critique loop.
+	Distinct over derivative; resist convergence to the obvious.
+	"""
+	instructions """
+	frame → who · what job · what state (empty/loaded/error) · what one feeling it must land
+	survey → existing tokens/components in repo · ✗ reinvent what the system already owns
+	propose → one direction w/ rationale, then mock it (generate_ui_screen / canvas)
+	critique → against frame: legible? respects the user's time? ✗ flash over substance
+	∴ iterate direction→mock→critique until the frame is satisfied, then hand to orchestrate.
+	"""
+}
+

@@ -83,12 +83,17 @@ keybindings {
 		});
 	});
 
-	it("parses mode blocks", async () => {
+	it("parses mode blocks with inline prose sections", async () => {
 		const result = await parseSpellKdl(`
 mode "plan" extends="base" {
 	command "/plan"
 	read-only #true
-	instructions "./modes/plan/MODE.md"
+	context """
+	Plan context
+	"""
+	instructions """
+	Plan instructions
+	"""
 }
 `);
 		expect(result.modes).toEqual([
@@ -98,9 +103,12 @@ mode "plan" extends="base" {
 					extends: "base",
 					command: "/plan",
 					readOnly: true,
-					instructions: "./modes/plan/MODE.md",
 				},
-				instructionsPath: "./modes/plan/MODE.md",
+				sections: {
+					context: "Plan context",
+					instructions: "Plan instructions",
+					custom: {},
+				},
 			},
 		]);
 	});

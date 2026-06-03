@@ -426,6 +426,8 @@ export class AgentSession {
 
 	#modeStack: ActiveModeState[] = [];
 	#userModeState: UserModeState | undefined;
+	/** For `context-policy "fresh"`: true once the role prose has been injected this activation. */
+	#userModeContextSent = false;
 
 	// Compaction state
 	#compactionAbortController: AbortController | undefined = undefined;
@@ -2100,6 +2102,7 @@ export class AgentSession {
 
 	setUserModeState(state: UserModeState | undefined): void {
 		this.#userModeState = state;
+		this.#userModeContextSent = false;
 	}
 
 	getUserModeState(): UserModeState | undefined {
@@ -2383,6 +2386,37 @@ export class AgentSession {
 	}
 
 	/**
+	 * Build the per-turn role-context message for an active standalone user mode.
+	 * The prose is authored inline in the KDL `mode` block (sections context /
+	 * instructions / focus-areas) — no markdown sidecar, no template rendering.
+	 *
+	 * `context-policy` controls cadence: `"carry"` (default) re-injects every turn
+	 * to keep the role salient; `"fresh"` injects once per activation.
+	 */
+	#buildUserModeMessage(): CustomMessage | null {
+		const state = this.#userModeState;
+		if (!state?.enabled) return null;
+		const policy = state.config.frontmatter.contextPolicy;
+		const once = policy === "fresh";
+		if (once && this.#userModeContextSent) return null;
+		const { context, instructions, focusAreas } = state.config.sections;
+		const content = [context, instructions, focusAreas]
+			.map(section => section?.trim())
+			.filter((section): section is string => !!section)
+			.join("\n\n");
+		if (!content) return null;
+		this.#userModeContextSent = true;
+		return {
+			role: "custom",
+			customType: "role-context",
+			content,
+			display: false,
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
+	}
+
+	/**
 	 * Send a prompt to the agent.
 	 * - Handles extension commands (registered via pi.registerCommand) immediately, even during streaming
 	 * - Expands file-based prompt templates by default
@@ -2553,6 +2587,10 @@ export class AgentSession {
 			const planModeMessage = await this.#buildPlanModeMessage();
 			if (planModeMessage) {
 				messages.push(planModeMessage);
+			}
+			const userModeMessage = this.#buildUserModeMessage();
+			if (userModeMessage) {
+				messages.push(userModeMessage);
 			}
 			if (options?.prependMessages) {
 				messages.push(...options.prependMessages);

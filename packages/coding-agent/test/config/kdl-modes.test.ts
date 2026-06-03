@@ -8,13 +8,22 @@ import { parseModeBlocks } from "../../src/config/kdl-modes";
 import { parseSpellKdl, spellKdlModesToModeConfigs } from "../../src/config/spell-kdl";
 
 describe("parseModeBlocks", () => {
-	it("parses a single mode with all fields", () => {
+	it("parses a single mode with all fields and inline prose sections", () => {
 		const doc = parse(`
 mode "plan" extends="base" {
 	command "/plan"
+	description "Plan mode"
 	read-only #true
 	context-policy "fresh"
-	instructions "./modes/plan/MODE.md"
+	context """
+	Plan context
+	"""
+	instructions """
+	Plan instructions
+	"""
+	focus-areas """
+	Plan focus
+	"""
 	tools {
 		allow "read" "grep"
 		deny "write"
@@ -33,21 +42,26 @@ mode "plan" extends="base" {
 				config: {
 					extends: "base",
 					command: "/plan",
+					description: "Plan mode",
 					readOnly: true,
 					contextPolicy: "fresh",
-					instructions: "./modes/plan/MODE.md",
 					tools: { allow: ["read", "grep"], deny: ["write"] },
 					categories: ["features", "bugs"],
 					gates: { decomposition: true, allowEdits: false },
 				},
-				instructionsPath: "./modes/plan/MODE.md",
+				sections: {
+					context: "Plan context",
+					instructions: "Plan instructions",
+					focusAreas: "Plan focus",
+					custom: {},
+				},
 			},
 		]);
 	});
 
 	it("parses a minimal mode", () => {
 		const doc = parse('mode "base"');
-		expect(parseModeBlocks(doc)).toEqual([{ name: "base", config: {}, instructionsPath: undefined }]);
+		expect(parseModeBlocks(doc)).toEqual([{ name: "base", config: {}, sections: { custom: {} } }]);
 	});
 
 	it("parses tools allow list", () => {
@@ -79,29 +93,23 @@ mode "review" { command "/review" }
 		expect(parseModeBlocks(doc)).toEqual([]);
 	});
 
-	it("adapts spell.kdl mode blocks into runtime mode configs with instruction file sections", async () => {
+	it("adapts spell.kdl mode blocks into runtime mode configs with inline prose sections", async () => {
 		const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "spell-kdl-modes-"));
 		try {
-			await Bun.write(
-				path.join(projectDir, "plan.md"),
-				`---kdl
-name "ignored"
-description "Loaded from instructions file"
----
-## Context
-Project plan context
-
-## Instructions
-Project plan instructions`,
-			);
 			const parsed = await parseSpellKdl(
 				`mode "plan" extends="base" {
 	command "/plan"
+	description "Inline plan"
 	read-only #true
 	tools {
 		allow "read" "grep"
 	}
-	instructions "./plan.md"
+	context """
+	Project plan context
+	"""
+	instructions """
+	Project plan instructions
+	"""
 }`,
 				projectDir,
 			);
@@ -118,7 +126,7 @@ Project plan instructions`,
 			expect(result.items[0]).toMatchObject({
 				name: "plan",
 				frontmatter: {
-					description: "Loaded from instructions file",
+					description: "Inline plan",
 					extends: "base",
 					command: "/plan",
 					readOnly: true,

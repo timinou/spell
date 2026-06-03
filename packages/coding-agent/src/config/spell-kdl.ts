@@ -2,9 +2,9 @@ import * as path from "node:path";
 import { Document, format, parse } from "@bgotink/kdl";
 import { getAgentDir, isEnoent, logger } from "@spell/pi-utils";
 
-import type { ModeConfig, ModeConfigFrontmatter, ModeConfigSections } from "../capability/mode";
+import type { ModeConfig, ModeConfigFrontmatter } from "../capability/mode";
 import { createSourceMeta } from "../discovery/helpers";
-import { deepMergeFrontmatter, parseModeConfig } from "../discovery/mode-helpers";
+
 import { resolveTemplate } from "../templates";
 import { type AgentRulesConfig, parseAgentsBlock } from "./agents-kdl";
 import { getStringArgument } from "./kdl-helpers";
@@ -101,43 +101,8 @@ function mergeSpellConfigs(base: SpellProjectConfig, override: SpellProjectConfi
 	};
 }
 
-function createEmptyModeSections(): ModeConfigSections {
-	return { custom: {} };
-}
-
 function getModeFrontmatter(block: ParsedModeBlock): ModeConfigFrontmatter {
-	const { instructions: _instructions, ...frontmatter } = block.config as ModeConfigFrontmatter & {
-		instructions?: string;
-	};
-	return frontmatter;
-}
-
-async function loadModeInstructions(
-	block: ParsedModeBlock,
-	projectDir: string,
-	_sourcePath: string,
-): Promise<{ frontmatter: ModeConfigFrontmatter; sections: ModeConfigSections; warnings: string[] }> {
-	if (!block.instructionsPath) {
-		return { frontmatter: {}, sections: createEmptyModeSections(), warnings: [] };
-	}
-
-	const resolvedPath = path.resolve(projectDir, block.instructionsPath);
-	try {
-		const content = await Bun.file(resolvedPath).text();
-		const parsed = parseModeConfig(content, resolvedPath);
-		return { frontmatter: parsed.frontmatter, sections: parsed.sections, warnings: [] };
-	} catch (error) {
-		const detail = error instanceof Error ? error.message : String(error);
-		return {
-			frontmatter: {},
-			sections: createEmptyModeSections(),
-			warnings: [
-				isEnoent(error)
-					? `Mode "${block.name}": instructions file not found at ${resolvedPath}`
-					: `Mode "${block.name}": failed to load instructions from ${resolvedPath}: ${detail}`,
-			],
-		};
-	}
+	return block.config as ModeConfigFrontmatter;
 }
 
 function validateSpellModeFrontmatter(
@@ -165,15 +130,13 @@ function validateSpellModeFrontmatter(
 export async function spellKdlModesToModeConfigs(
 	blocks: ParsedModeBlock[],
 	sourcePath: string,
-	projectDir: string,
+	_projectDir: string,
 	sourceId = "spell.kdl",
 ): Promise<{ items: ModeConfig[]; warnings: string[] }> {
 	const items: ModeConfig[] = [];
 	const warnings: string[] = [];
 	for (const block of blocks) {
-		const loaded = await loadModeInstructions(block, projectDir, sourcePath);
-		warnings.push(...loaded.warnings);
-		const frontmatter = deepMergeFrontmatter(loaded.frontmatter, getModeFrontmatter(block));
+		const frontmatter = getModeFrontmatter(block);
 		const warning = validateSpellModeFrontmatter(frontmatter, sourcePath, block.name);
 		if (warning) {
 			warnings.push(warning);
@@ -183,7 +146,7 @@ export async function spellKdlModesToModeConfigs(
 			name: block.name,
 			path: sourcePath,
 			frontmatter,
-			sections: loaded.sections,
+			sections: block.sections,
 			level: "project",
 			_source: createSourceMeta(sourceId, sourcePath, "project"),
 		});

@@ -1,6 +1,6 @@
 import type { Document, Node } from "@bgotink/kdl";
 
-import type { ModeConfigFrontmatter } from "../capability/mode";
+import type { ModeConfigFrontmatter, ModeConfigSections } from "../capability/mode";
 import {
 	getBooleanArgument,
 	getChildNode,
@@ -12,7 +12,8 @@ import {
 export interface ParsedModeBlock {
 	name: string;
 	config: Record<string, unknown>;
-	instructionsPath?: string;
+	/** Prose sections authored inline in the KDL block (context/instructions/focus-areas). */
+	sections: ModeConfigSections;
 }
 
 function toCamelCase(name: string): string {
@@ -51,6 +52,10 @@ function parseModeNode(node: Node): ParsedModeBlock | undefined {
 	const command = commandNode ? getStringArgument(commandNode) : undefined;
 	if (command !== undefined) config.command = command;
 
+	const descriptionNode = getChildNode(node, "description");
+	const description = descriptionNode ? getStringArgument(descriptionNode) : undefined;
+	if (description !== undefined) config.description = description;
+
 	const readOnlyNode = getChildNode(node, "read-only");
 	const readOnly = readOnlyNode ? getBooleanArgument(readOnlyNode) : undefined;
 	if (readOnly !== undefined) config.readOnly = readOnly;
@@ -59,9 +64,17 @@ function parseModeNode(node: Node): ParsedModeBlock | undefined {
 	const contextPolicy = contextPolicyNode ? getStringArgument(contextPolicyNode) : undefined;
 	if (contextPolicy !== undefined) config.contextPolicy = contextPolicy;
 
+	// Prose lives inline in the KDL block (multiline `"""..."""` strings). No markdown sidecar.
+	const sections: ModeConfigSections = { custom: {} };
+	const contextNode = getChildNode(node, "context");
+	const contextText = contextNode ? getStringArgument(contextNode) : undefined;
+	if (contextText !== undefined) sections.context = contextText.trimEnd();
 	const instructionsNode = getChildNode(node, "instructions");
-	const instructionsPath = instructionsNode ? getStringArgument(instructionsNode) : undefined;
-	if (instructionsPath !== undefined) config.instructions = instructionsPath;
+	const instructionsText = instructionsNode ? getStringArgument(instructionsNode) : undefined;
+	if (instructionsText !== undefined) sections.instructions = instructionsText.trimEnd();
+	const focusAreasNode = getChildNode(node, "focus-areas");
+	const focusAreasText = focusAreasNode ? getStringArgument(focusAreasNode) : undefined;
+	if (focusAreasText !== undefined) sections.focusAreas = focusAreasText.trimEnd();
 
 	const toolsNode = getChildNode(node, "tools");
 	const tools = toolsNode ? parseToolsNode(toolsNode) : undefined;
@@ -77,7 +90,7 @@ function parseModeNode(node: Node): ParsedModeBlock | undefined {
 	const gates = gatesNode ? parseGatesNode(gatesNode) : undefined;
 	if (gates) config.gates = gates;
 
-	return { name, config, instructionsPath };
+	return { name, config, sections };
 }
 
 export function parseModeBlocks(doc: Document): ParsedModeBlock[] {
