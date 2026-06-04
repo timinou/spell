@@ -1,0 +1,42 @@
+#+TITLE: Remote injection prefix semantics (!bash, . / c continue)
+#+STATE: ITEM
+#+SESSION_ID: 14fbf5dd98cd8683
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-spell--remote-2/2026-06-04T12-36-00-739Z_14fbf5dd98cd8683.jsonl]]
+#+CUSTOM_ID: FUP-105-remote-injection-prefix-semantics-bash-c
+
+* Initial Message
+
+You are in a repo that I would like you to use as a free reign to build a server that I can use to control **all** my sessions as long as one server is open in the computer.
+
+You need to look at ../spell-remote-example, this is where the config will live.
+
+I would like a web interface that is easy to use. For now, don't think about permissions and auth; we will end up just using Firezone for making a local network.
+
+The web interface should contain everything needed to steer the control of all existing sessions on this computer. If I send a message from that interface to a running session, it needs to act as if I had sent it from the Terminal. You are free to experiment with whatever architecture makes sense, although the idea of interconnected sessions that know each other through sockets is what makes most sense to me.
+
+I am going for lunch, so you will have to do a deep deep deep exploration on your own, build a wave manifest alongside FEAT and BUG recorded in a PLAN in waves (use the org tool), create mockups using GenerateUIScreen (for desktop and for mobile), and go through all the architectural challenges as you go. Once that is done and settled, write the org files and start work by yourself, continuing all the way to the final delivery. To help you out, use the main thread to do architectural work, and subtasks only for mechanical work. Use reviewer swarms in between waves to check your work, and surface, file, and fix/implement ANY and ALL FEAT/BUG that you find. Check-in in chat, showing what's going on, what's been done, and what you're going to do, so that I can read the whole conversation when I come back.
+
+Go for it, godspeed!
+
+Surfaced by R1 reviewer swarm on [[id:PLAN-326-remote-control-server-steer-all-local-se]].
+
+* Decision (W1)
+
+=InteractiveMode.injectRemoteInput= routes remote text straight through =session.prompt=, which
+handles =/slash= + extension commands but NOT the terminal-only prefixes the input-controller
+intercepts: =!cmd= / =!!cmd= (run bash), bare =.= / =c= (empty continue).
+
+This is INTENTIONAL for W1: a remote operator should not be able to execute arbitrary shell on
+the host by prefixing =!=. So an injected =!ls= is sent as literal prompt text, not executed.
+
+* Open question
+
+Decide the long-term contract:
+- Keep prompt-only (current) — safest; document in web composer help text.
+- Allow =.=/=c= continue (harmless) but never =!bash=.
+- Gate =!bash= behind an explicit per-session "allow remote shell" toggle.
+
+* Acceptance (when picked up)
+
+- Explicit, documented behavior for each prefix from a remote sender.
+- If shell is ever allowed remotely, it is opt-in and visible in the UI.

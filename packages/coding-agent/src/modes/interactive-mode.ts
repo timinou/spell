@@ -47,7 +47,7 @@ import { replaceTabs, TRUNCATE_LENGTHS } from "../tools/render-utils";
 import { isDelegatedTask } from "../tools/todo-write";
 import type { EventBus } from "../utils/event-bus";
 import type { BlockingEventLike } from "../utils/intention-summarizer";
-import { setTerminalTitle } from "../utils/title-generator";
+import { generateSessionTitle, setTerminalTitle } from "../utils/title-generator";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import { AuditModeOverlay } from "./components/audit-mode-overlay";
 import type { BashExecutionComponent } from "./components/bash-execution";
@@ -1417,20 +1417,60 @@ export class InteractiveMode implements InteractiveModeContext {
 			// is armed, drive submission through the identical terminal path so the
 			// optimistic user message + loop continuation match a keystroke exactly.
 			if (this.onInputCallback) {
+				// Parity with input-controller normal submission: flush pending bash
+				// components to chat and generate a session title on the first message.
+				this.flushPendingBashComponents();
+				this.#maybeGenerateTitleForFirstMessage(text);
 				this.editor.addToHistory(text);
+				// startPendingSubmission clears the editor; a remote injection is
+				// independent of the local editor buffer, so snapshot + restore any
+				// half-typed local input the user has not yet submitted.
+				const editorSnapshot = this.editor.getText();
 				const submission = this.startPendingSubmission({ text });
 				this.onInputCallback(submission);
+				if (editorSnapshot.trim().length > 0) {
+					this.editor.setText(editorSnapshot);
+					this.updateEditorBorderColor();
+					this.ui.requestRender();
+				}
 				return { accepted: true };
 			}
 
 			// No armed callback (e.g. busy between turns): fall back to prompt().
+			// Fire-and-forget so the ack reflects ACCEPTANCE, not turn completion
+			// (awaiting would resolve only after the whole turn, tripping the
+			// server's inject-ack timeout and reporting a false failure).
 			this.editor.addToHistory(text);
-			await this.session.prompt(text);
+			void this.session.prompt(text).catch(error => {
+				logger.warn("remote inject prompt failed", {
+					sessionId: this.session.sessionId,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			});
 			this.ui.requestRender();
 			return { accepted: true };
 		} catch (error) {
 			return { accepted: false, reason: error instanceof Error ? error.message : String(error) };
 		}
+	}
+
+	/**
+	 * Mirror input-controller's first-message title generation so a session whose
+	 * very first turn arrives via remote injection still gets an auto-title.
+	 */
+	#maybeGenerateTitleForFirstMessage(text: string): void {
+		const hasUserMessages = this.session.messages.some((m: AgentMessage) => m.role === "user");
+		if (hasUserMessages || this.sessionManager.getSessionName() || process.env.PI_NO_TITLE) {
+			return;
+		}
+		generateSessionTitle(text, this.session.modelRegistry, this.settings, this.session.sessionId, this.session.model)
+			.then(async title => {
+				if (title) {
+					await this.sessionManager.setSessionName(title);
+					setTerminalTitle(`✦: ${title}`);
+				}
+			})
+			.catch(() => {});
 	}
 
 	flushCompactionQueue(options?: { willRetry?: boolean }): Promise<void> {

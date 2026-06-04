@@ -15,6 +15,7 @@ export interface InjectResult {
 }
 
 interface PendingInject {
+	sessionId: string;
 	resolve: (result: InjectResult) => void;
 	timer: ReturnType<typeof setTimeout>;
 }
@@ -147,9 +148,8 @@ export class SocketSessionRegistry {
 			return;
 		}
 		this.#recentLog.delete(sessionId);
-		const prefix = `${sessionId}-inject-`;
 		for (const [injectId, pending] of this.#pendingInjects) {
-			if (injectId.startsWith(prefix)) {
+			if (pending.sessionId === sessionId) {
 				this.#pendingInjects.delete(injectId);
 				clearTimeout(pending.timer);
 				pending.resolve({ accepted: false, reason: "deregistered" });
@@ -276,7 +276,7 @@ export class SocketSessionRegistry {
 		if (timer && "unref" in timer) {
 			(timer as NodeJS.Timeout).unref();
 		}
-		this.#pendingInjects.set(injectId, { resolve, timer });
+		this.#pendingInjects.set(injectId, { sessionId, resolve, timer });
 
 		try {
 			entry.connection.write(`${JSON.stringify(message)}\n`);
