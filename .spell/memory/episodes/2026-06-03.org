@@ -1,0 +1,24 @@
+#+TITLE: Episodes 2026-06-03
+
+** ITEM Retire plan-mode + fluid + autonomous-loop; keep grouped/gated todos
+
+Executed in full across 6 commits (386ba8f53..968f4a961): 272 files, -20,052 LOC net. Stage 0 extractions (org-plan/plan-validation/org-depend→src/org/, wave-snapshot→tools/, mode-state/audit-state→modes/) guarded kept features. Stages 1-4 deleted plan-mode state machine + exit tool, plan/myth prompts, fluid canvas runtime, autonomous loop subsystem. tsgo held at baseline 83 after every stage. Full suite: 91 unique failures, all pre-existing (ModelRegistry/AgentDashboard/language+prompt snapshots); zero in plan-mode/fluid/loop or extracted org modules. KEPT: grouped/gated todos, wave-snapshot (/plan-snapshot), validate-plan org subcommand, audit mode, plan subagent. NOTE residual inert config (planMode.allowedFolders setting) left intentionally — settings-key removal w/ migration/compat tests is separate scope; mode-config-guide.md doc still references old plan/ultraplan examples (pi:// doc, non-blocking).
+:PROPERTIES:
+:CUSTOM_ID: EP-c4f0a10e3184b776
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-03T20:14:04Z
+:END:
+:RELATIONS:
+ABOUT: BUG-427-delete-dead-plan-mode-state-machine-prom
+:END:
+** ITEM Completed BUG-427: retired plan-mode + fluid canvas + autonomous-loop from Spell coding-agent. 6 commits, -20,052 LOC net across 272 files. Staged: extractions first (org-plan/plan-validation/org-depend→src/org/, wave-snapshot→tools/, mode-state/audit-state→modes/) to guard kept features, then delete plan-mode core/prompts/fluid/loop. tsgo baseline 83 held every stage; full suite 91 pre-existing failures, zero in deleted/extracted areas. Roles (KDL user modes) fully replace plan-mode. A subagent dispatched for the interactive-mode deletion completed the edits but its final report hit an auth error — verified+integrated manually. Method: per-stage tsgo diff against baseline (comm -23), grep prefilter for dead refs, biome for unused imports. Kept inert planMode.allowedFolders setting (migration/compat scope).
+:PROPERTIES:
+:CUSTOM_ID: EP-c52ca2799858f58
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-03T20:14:23Z
+:END:
+:RELATIONS:
+INVOLVED: BUG-427-delete-dead-plan-mode-state-machine-prom
+:END:
