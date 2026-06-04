@@ -181,7 +181,9 @@ export class WebSubsystem {
 				}
 			}
 			if (segments.length === 5 && segments[4] === "artifacts" && request.method === "GET") {
-				const root = this.#deps.hub.getSessionRoot(sessionId);
+				// Spawned sessions resolve via the hub; external (terminal) sessions
+				// report their artifacts dir at register time (registry.sessionRoot).
+				const root = this.#deps.hub.getSessionRoot(sessionId) ?? this.#deps.registry.getSession(sessionId)?.sessionRoot;
 				if (!root) return jsonResponse({ artifacts: [] });
 				const artifacts = await listArtifactsInRoot(sessionId, root);
 				return jsonResponse({ artifacts });
