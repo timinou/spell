@@ -17,6 +17,13 @@ const EVENT_LOG_TEXT_MAX = 256;
 const DEFAULT_SOCKET_RELATIVE_PATH = ".spell/server.sock";
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000] as const;
+/**
+ * Backoff schedule for the persistent supervisor. Unlike the legacy
+ * capped retry, the supervisor never gives up while the session lives — a
+ * server can be started (or restarted) at any time and every TUI must
+ * (re)register. The last value repeats indefinitely.
+ */
+const SUPERVISE_DELAYS_MS = [500, 1_000, 2_000, 4_000, 8_000, 15_000] as const;
 
 type PendingEvent = {
 	resolve: (payload: EventResponsePayload | null) => void;
@@ -65,6 +72,9 @@ export class SessionBridgeClient {
 	#reconnectAttempts = 0;
 	readonly #maxReconnectAttempts = 3;
 	#disposed = false;
+	#supervising = false;
+	#superviseTimer: NodeJS.Timeout | undefined;
+	#superviseAttempts = 0;
 	#buffer = "";
 	#eventIdCounter = 0;
 	#connectInFlight: Promise<boolean> | null = null;
@@ -217,9 +227,57 @@ export class SessionBridgeClient {
 		return this.#connected;
 	}
 
+	/**
+	 * Begin supervising the connection: connect now, and keep (re)connecting
+	 * forever with backoff until disposed. This is what makes "one server
+	 * controls all sessions" hold regardless of start order or server restarts —
+	 * a TUI started before the server, or surviving a server restart, will
+	 * register as soon as the socket becomes available again.
+	 *
+	 * Returns the result of the FIRST connection attempt so callers can log
+	 * initial reachability; the background loop continues regardless.
+	 */
+	async start(): Promise<boolean> {
+		if (this.#disposed) return false;
+		this.#supervising = true;
+		const connected = await this.connect();
+		if (!connected && !this.#disposed) {
+			this.#scheduleSupervise();
+		}
+		return connected;
+	}
+
+	#scheduleSupervise(): void {
+		if (this.#disposed || !this.#supervising || this.#connected || this.#superviseTimer) {
+			return;
+		}
+		const idx = Math.min(this.#superviseAttempts, SUPERVISE_DELAYS_MS.length - 1);
+		const delayMs = SUPERVISE_DELAYS_MS[idx];
+		this.#superviseAttempts += 1;
+		this.#superviseTimer = setTimeout(() => {
+			this.#superviseTimer = undefined;
+			if (this.#disposed || this.#connected) return;
+			void this.connect().then(connected => {
+				if (connected) {
+					this.#superviseAttempts = 0;
+				} else {
+					this.#scheduleSupervise();
+				}
+			});
+		}, delayMs);
+		if (this.#superviseTimer && typeof this.#superviseTimer.unref === "function") {
+			this.#superviseTimer.unref();
+		}
+	}
+
 	dispose(): void {
 		if (this.#disposed) return;
 		this.#disposed = true;
+		this.#supervising = false;
+		if (this.#superviseTimer) {
+			clearTimeout(this.#superviseTimer);
+			this.#superviseTimer = undefined;
+		}
 		this.#stopHeartbeat();
 		this.#resolveAllPendingEvents(null);
 
@@ -268,7 +326,15 @@ export class SessionBridgeClient {
 			if (wasConnected) {
 				logger.debug("Session bridge disconnected", { hadError, sessionId: this.#options.sessionId });
 			}
-			void this.#attemptReconnect();
+			// When supervising (the steady-state mode), keep trying forever so a
+			// server restart re-registers this session. Otherwise fall back to the
+			// legacy capped retry.
+			if (this.#supervising) {
+				this.#superviseAttempts = 0;
+				this.#scheduleSupervise();
+			} else {
+				void this.#attemptReconnect();
+			}
 		});
 
 		socket.on("error", error => {

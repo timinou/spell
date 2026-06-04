@@ -141,7 +141,7 @@ async function runInteractiveMode(
 	dbgStartup("F:runInteractiveMode:enter");
 	let sessionBridge: SessionBridgeClient | undefined;
 	try {
-		dbgStartup("F:before:bridgeClient.connect");
+		dbgStartup("F:before:bridgeClient.start");
 		const cwd = session.sessionManager.getCwd();
 		const bridgeClient = new SessionBridgeClient({
 			sessionId: session.sessionId || `tui-${process.pid}`,
@@ -151,13 +151,15 @@ async function runInteractiveMode(
 			startedAt: Date.now(),
 			projectName: path.basename(cwd),
 		});
-		const connected = await bridgeClient.connect();
-		dbgStartup("F:after:bridgeClient.connect", { connected });
-		if (connected) {
-			sessionBridge = bridgeClient;
-		}
+		// Keep the bridge REGARDLESS of initial reachability and supervise the
+		// connection: the control server may be started (or restarted) after this
+		// TUI, and we must register whenever it becomes available. The bridge is a
+		// no-op while disconnected (sends are dropped) and re-registers on connect.
+		sessionBridge = bridgeClient;
+		const connected = await bridgeClient.start();
+		dbgStartup("F:after:bridgeClient.start", { connected });
 	} catch (err) {
-		dbgStartup("F:bridgeClient.connect:threw", { error: err instanceof Error ? err.message : String(err) });
+		dbgStartup("F:bridgeClient.start:threw", { error: err instanceof Error ? err.message : String(err) });
 	}
 	dbgStartup("G:before:new InteractiveMode");
 	const mode = new InteractiveMode(
