@@ -1,8 +1,9 @@
 #+TITLE: Web UI: unified steer composer + external transcript
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14fbf5dd98cd8683
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-spell--remote-2/2026-06-04T12-36-00-739Z_14fbf5dd98cd8683.jsonl]]
 #+CUSTOM_ID: FEAT-796-web-ui-unified-steer-composer-external-t
+#+COMPLETION_HASH: 30c64ff12d9c6575
 
 * Initial Message
 
@@ -77,3 +78,5 @@ their transcript. Match the approved desktop mockup.
 - =bun --cwd packages/spell-server/web test= (if configured) or =bun run check:ts=
 - =bun --cwd packages/spell-server run build:web=
 - Manual full loop.
+
+NOTE [2026-06-04]: Landed + R3 reviewed. Steer/Follow-up/Auto composer for external, transcript renderer, status badges, BlockingEventCard. R3 P2 fixed (clear-on-resolve notify), P3 keys fixed. Web build green.

@@ -34,7 +34,15 @@ function Shell() {
 	const templates = useTemplates();
 	const toasts = useToasts();
 	const [pickedTemplate, setPickedTemplate] = useState<ManifestTemplate | null>(null);
+	const [menuOpen, setMenuOpen] = useState(false);
 	const selected = sessions.selected ? sessions.sessions.get(sessions.selected) ?? null : null;
+
+	// On mobile the sidebar is a drawer; selecting a session closes it so the
+	// detail view takes over the viewport.
+	const selectedId = sessions.selected;
+	useEffect(() => {
+		setMenuOpen(false);
+	}, [selectedId]);
 
 	useEffect(() => {
 		if (!token) return;
@@ -278,7 +286,7 @@ function Shell() {
 	}, [selected, subscribeRpcEvents, submitPrompt, abort, answerBlockingEvent, runBash, mintUrl, loadArtifacts]);
 
 	return (
-		<div className="shell">
+		<div className={`shell${menuOpen ? " menu-open" : ""}`}>
 			<aside className="sidebar">
 				<header>
 					<h1>Spell</h1>
@@ -288,7 +296,17 @@ function Shell() {
 				</header>
 				<SessionList />
 			</aside>
-			{sessionDetail}
+			{/* Mobile-only: scrim closes the session drawer. */}
+			<div className="drawer-scrim" onClick={() => setMenuOpen(false)} aria-hidden="true" />
+			<div className="main-wrap">
+				<div className="mobile-topbar">
+					<button className="btn icon" onClick={() => setMenuOpen(o => !o)} aria-label="Toggle sessions">
+						☰
+					</button>
+					<span className="mobile-title">{selected ? selected.projectName : "Spell"}</span>
+				</div>
+				{sessionDetail}
+			</div>
 			<CommandBar onPickTemplate={onPickTemplate} onKillSession={onKillSession} />
 			{pickedTemplate && (
 				<TemplateRunnerModal

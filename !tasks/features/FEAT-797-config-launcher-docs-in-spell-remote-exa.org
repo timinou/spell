@@ -1,8 +1,9 @@
 #+TITLE: Config + launcher + docs in spell-remote-example
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14fbf5dd98cd8683
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-spell--remote-2/2026-06-04T12-36-00-739Z_14fbf5dd98cd8683.jsonl]]
 #+CUSTOM_ID: FEAT-797-config-launcher-docs-in-spell-remote-exa
+#+COMPLETION_HASH: 183c69ac86fa80ff
 
 * Initial Message
 
@@ -56,3 +57,5 @@ NB: this dir is OUTSIDE the repo (=/home/user/code/ora/spell-remote-example=); e
 
 - Manual: follow README verbatim; the loop works.
 - =spell server -c /home/user/code/ora/spell-remote-example/config= boots without error.
+
+NOTE [2026-06-04]: Done: web token block in server.kdl, SPELL_WEB_TOKEN env, launcher points at config dir + prints URL + builds web bundle, README quickstart. Verified config loads (web token 'me', socket ~/.spell/server.sock).

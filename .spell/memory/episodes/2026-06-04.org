@@ -57,3 +57,27 @@ Landed + R2 reviewed clean (1 P3 fixed: resubscribe backfill guard). Types synce
 :RELATIONS:
 ABOUT: FEAT-795-live-transcript-mirror-for-external-sess
 :END:
+** ITEM Web UI: unified steer composer + external transcript
+
+Landed + R3 reviewed. Steer/Follow-up/Auto composer for external, transcript renderer, status badges, BlockingEventCard. R3 P2 fixed (clear-on-resolve notify), P3 keys fixed. Web build green.
+:PROPERTIES:
+:CUSTOM_ID: EP-ebf665dc54cd313a
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-04T14:25:02Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-796-web-ui-unified-steer-composer-external-t
+:END:
+** ITEM Config + launcher + docs in spell-remote-example
+
+Done: web token block in server.kdl, SPELL_WEB_TOKEN env, launcher points at config dir + prints URL + builds web bundle, README quickstart. Verified config loads (web token 'me', socket ~/.spell/server.sock).
+:PROPERTIES:
+:CUSTOM_ID: EP-9214038bfc6d692c
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-04T14:27:13Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-797-config-launcher-docs-in-spell-remote-exa
+:END:

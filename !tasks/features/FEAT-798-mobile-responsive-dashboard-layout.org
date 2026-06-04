@@ -1,5 +1,5 @@
 #+TITLE: Mobile-responsive dashboard layout
-#+STATE: ITEM
+#+STATE: DOING
 #+SESSION_ID: 14fbf5dd98cd8683
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-spell--remote-2/2026-06-04T12-36-00-739Z_14fbf5dd98cd8683.jsonl]]
 #+CUSTOM_ID: FEAT-798-mobile-responsive-dashboard-layout
