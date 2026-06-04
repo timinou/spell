@@ -280,12 +280,16 @@ export class WebSubsystem {
 					return;
 				}
 				case "subscribe": {
+					// Only backfill the transcript when `events` is newly added to this
+					// connection's subscription, so a redundant resubscribe does not
+					// replay (and duplicate) the ring buffer on the operator's view.
+					const eventsAlreadySubscribed = connection.wants(msg.sessionId, "events");
 					connection.subscribe(msg.sessionId, msg.channels as Channel[], msg.artifactExt);
 					if (msg.channels.includes("events")) {
 						// Backfill the recent terminal transcript so a freshly-opened web
 						// session shows context immediately, then stream live updates.
 						const entry = this.#deps.registry.getSession(msg.sessionId);
-						if (entry?.kind === "external") {
+						if (!eventsAlreadySubscribed && entry?.kind === "external") {
 							for (const recent of this.#deps.registry.getRecentLog(msg.sessionId)) {
 								connection.send({ type: "external_event_log", sessionId: msg.sessionId, entry: recent });
 							}
