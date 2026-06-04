@@ -9,3 +9,39 @@
 :END:
 :RELATIONS:
 :END:
+** ITEM Bidirectional socket: inject_input + inject_ack frames
+
+W1 landed + R1 reviewed. Types synced both packages; guard updated; tests in socket integration.
+:PROPERTIES:
+:CUSTOM_ID: EP-db8ec6ccecf7421a
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-04T13:28:53Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-792-bidirectional-socket-inject-input-inject
+:END:
+** ITEM Client receive + TUI injection of remote input
+
+Landed + R1 hardened: idle parity (bash flush, title gen, editor snapshot), fire-and-forget fallback. Tests: inject-input-client.test.ts.
+:PROPERTIES:
+:CUSTOM_ID: EP-cc280125c3b0a7b3
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-04T13:29:06Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-793-client-receive-tui-injection-of-remote-i
+:END:
+** ITEM Registry + ws/hub route prompt to external sessions
+
+Landed + R1: deregister equality cleanup. Types in sync confirmed by reviewer. Tests: socket integration round-trip.
+:PROPERTIES:
+:CUSTOM_ID: EP-ab7b774b2b72479e
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-04T13:29:07Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-794-registry-ws-hub-route-prompt-to-external
+:END:

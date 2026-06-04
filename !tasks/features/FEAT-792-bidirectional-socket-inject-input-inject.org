@@ -1,8 +1,9 @@
 #+TITLE: Bidirectional socket: inject_input + inject_ack frames
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14fbf5dd98cd8683
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-spell--remote-2/2026-06-04T12-36-00-739Z_14fbf5dd98cd8683.jsonl]]
 #+CUSTOM_ID: FEAT-792-bidirectional-socket-inject-input-inject
+#+COMPLETION_HASH: 08d1318a860e42da
 
 * Initial Message
 
@@ -75,3 +76,5 @@ Add to =SocketClientMessage= union and to =SOCKET_CLIENT_MESSAGE_TYPES= set + =i
 
 - =bun run check:ts=
 - =bun --cwd packages/spell-server test=
+
+NOTE [2026-06-04]: W1 landed + R1 reviewed. Types synced both packages; guard updated; tests in socket integration.

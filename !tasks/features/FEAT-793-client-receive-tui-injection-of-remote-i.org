@@ -1,8 +1,9 @@
 #+TITLE: Client receive + TUI injection of remote input
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14fbf5dd98cd8683
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-spell--remote-2/2026-06-04T12-36-00-739Z_14fbf5dd98cd8683.jsonl]]
 #+CUSTOM_ID: FEAT-793-client-receive-tui-injection-of-remote-i
+#+COMPLETION_HASH: 533d9f68f29b0df3
 
 * Initial Message
 
@@ -79,3 +80,5 @@ user turn — identical to typing it in the terminal.
 - =bun --cwd packages/coding-agent test session-bridge=
 - =bun run check:ts=
 - Manual once FEAT-794 lands (full loop).
+
+NOTE [2026-06-04]: Landed + R1 hardened: idle parity (bash flush, title gen, editor snapshot), fire-and-forget fallback. Tests: inject-input-client.test.ts.

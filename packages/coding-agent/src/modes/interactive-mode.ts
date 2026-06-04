@@ -215,6 +215,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#terminalLostUnsubscribe?: () => void;
 	#terminalFocusUnsubscribe?: () => void;
 	#focusThrottleSessionUnsub?: () => void;
+	#bridgeEventLogUnsub?: () => void;
 	#focusRenderThrottle?: FocusRenderThrottle;
 	#terminalLostHandled = false;
 	readonly #version: string;
@@ -533,6 +534,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		dbgStartup("f:after:ui.start");
 		this.#syncEditorMaxHeight();
 		this.isInitialized = true;
+		this.#setupBridgeEventLog();
 		dbgStartup("g:before:ui.requestRender(true) [post-init]");
 		this.ui.requestRender(true);
 		dbgStartup("g:after:ui.requestRender(true) [post-init]");
@@ -1187,6 +1189,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#intentionSubscriptionUnsub?.();
 		this.#intentionController.dispose();
 		this.#niriController?.destroy();
+		this.#bridgeEventLogUnsub?.();
+		this.#bridgeEventLogUnsub = undefined;
 		this.sessionBridge?.dispose();
 		this.sessionBridge = undefined;
 		if (this.isInitialized) {
@@ -1452,6 +1456,56 @@ export class InteractiveMode implements InteractiveModeContext {
 		} catch (error) {
 			return { accepted: false, reason: error instanceof Error ? error.message : String(error) };
 		}
+	}
+
+	/**
+	 * Forward a compact summary of this session's activity to the control server
+	 * so a remote operator's web transcript mirrors the terminal. Only active
+	 * when the session is bridge-connected to the user's own server. Text is
+	 * clipped by the client; the registry keeps a bounded ring buffer.
+	 */
+	#setupBridgeEventLog(): void {
+		const bridge = this.sessionBridge;
+		if (!bridge) return;
+		bridge.enableEventLog();
+		this.#bridgeEventLogUnsub = this.session.subscribe(event => {
+			switch (event.type) {
+				case "turn_start":
+					bridge.emitEventLog({ kind: "turn_start", ts: Date.now() });
+					return;
+				case "turn_end":
+					bridge.emitEventLog({ kind: "turn_end", ts: Date.now() });
+					return;
+				case "tool_execution_start":
+					bridge.emitEventLog({
+						kind: "tool_call",
+						ts: Date.now(),
+						toolName: event.toolName,
+						text: event.intent,
+					});
+					return;
+				case "tool_execution_end":
+					bridge.emitEventLog({
+						kind: "tool_result",
+						ts: Date.now(),
+						toolName: event.toolName,
+						meta: event.isError ? { isError: true } : undefined,
+					});
+					return;
+				case "message_end": {
+					const message = event.message;
+					if (!message) return;
+					const text = extractMessageText(message);
+					if (!text) return;
+					if (message.role === "user" && message.attribution === "user") {
+						bridge.emitEventLog({ kind: "user_message", ts: Date.now(), text });
+					} else if (message.role === "assistant") {
+						bridge.emitEventLog({ kind: "assistant_text", ts: Date.now(), text });
+					}
+					return;
+				}
+			}
+		});
 	}
 
 	/**
@@ -1981,3 +2035,27 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#eventController.subscribeToAgent();
 	}
 }
+
+/**
+ * Pull a plain-text summary out of a session message for the remote transcript
+ * mirror. Returns undefined when the message carries no renderable text (e.g.
+ * an assistant turn that is purely tool calls / thinking).
+ */
+function extractMessageText(message: AgentMessage): string | undefined {
+	const content = (message as { content?: unknown }).content;
+	if (typeof content === "string") {
+		const trimmed = content.trim();
+		return trimmed.length > 0 ? trimmed : undefined;
+	}
+	if (!Array.isArray(content)) return undefined;
+	const parts: string[] = [];
+	for (const block of content) {
+		if (block && typeof block === "object" && (block as { type?: unknown }).type === "text") {
+			const text = (block as { text?: unknown }).text;
+			if (typeof text === "string" && text.trim().length > 0) parts.push(text.trim());
+		}
+	}
+	const joined = parts.join("\n").trim();
+	return joined.length > 0 ? joined : undefined;
+}
+

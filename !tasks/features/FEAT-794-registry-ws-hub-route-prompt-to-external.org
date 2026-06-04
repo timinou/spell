@@ -1,8 +1,9 @@
 #+TITLE: Registry + ws/hub route prompt to external sessions
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14fbf5dd98cd8683
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-spell--remote-2/2026-06-04T12-36-00-739Z_14fbf5dd98cd8683.jsonl]]
 #+CUSTOM_ID: FEAT-794-registry-ws-hub-route-prompt-to-external
+#+COMPLETION_HASH: 5e98e7875b99ab45
 
 * Initial Message
 
@@ -82,3 +83,5 @@ socket, instead of =WebSessionHub.send()= throwing "not steerable".
 - =bun --cwd packages/spell-server test=
 - =bun run check:ts=
 - Manual end-to-end with FEAT-793.
+
+NOTE [2026-06-04]: Landed + R1: deregister equality cleanup. Types in sync confirmed by reviewer. Tests: socket integration round-trip.

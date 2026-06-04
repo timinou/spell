@@ -281,7 +281,17 @@ export class WebSubsystem {
 				}
 				case "subscribe": {
 					connection.subscribe(msg.sessionId, msg.channels as Channel[], msg.artifactExt);
-					if (msg.channels.includes("events")) this.#tapEvents(connection, msg.sessionId);
+					if (msg.channels.includes("events")) {
+						// Backfill the recent terminal transcript so a freshly-opened web
+						// session shows context immediately, then stream live updates.
+						const entry = this.#deps.registry.getSession(msg.sessionId);
+						if (entry?.kind === "external") {
+							for (const recent of this.#deps.registry.getRecentLog(msg.sessionId)) {
+								connection.send({ type: "external_event_log", sessionId: msg.sessionId, entry: recent });
+							}
+						}
+						this.#tapEvents(connection, msg.sessionId);
+					}
 					if (msg.channels.includes("debug")) this.#tapStderr(connection, msg.sessionId);
 					return;
 				}

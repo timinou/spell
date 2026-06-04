@@ -69,6 +69,7 @@ export class SessionBridgeClient {
 	#eventIdCounter = 0;
 	#connectInFlight: Promise<boolean> | null = null;
 	#injectHandler: InjectInputHandler | undefined;
+	#eventLogEnabled = false;
 
 	constructor(options: SessionBridgeOptions) {
 		this.#options = options;
@@ -179,7 +180,17 @@ export class SessionBridgeClient {
 		});
 	}
 
+	/**
+	 * Turn on summary event forwarding at runtime (used when an interactive
+	 * session connects to the user's own control server and wants its terminal
+	 * activity mirrored to the web transcript).
+	 */
+	enableEventLog(): void {
+		this.#eventLogEnabled = true;
+	}
+
 	#isEventLogEnabled(): boolean {
+		if (this.#eventLogEnabled) return true;
 		if (this.#options.eventLog === true) return true;
 		return process.env.SPELL_BRIDGE_EVENT_LOG === "1";
 	}

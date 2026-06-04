@@ -110,13 +110,23 @@ export interface InjectAckSocketClientMessage extends SocketMessageBase {
 	reason?: string;
 }
 
-export type EventLogEntryKind = "turn_start" | "turn_end" | "tool_call" | "assistant_text" | "plan_decision" | "error";
+export type EventLogEntryKind =
+	| "turn_start"
+	| "turn_end"
+	| "tool_call"
+	| "tool_result"
+	| "assistant_text"
+	| "user_message"
+	| "plan_decision"
+	| "error";
 
 export const EVENT_LOG_ENTRY_KINDS: ReadonlySet<EventLogEntryKind> = new Set([
 	"turn_start",
 	"turn_end",
 	"tool_call",
+	"tool_result",
 	"assistant_text",
+	"user_message",
 	"plan_decision",
 	"error",
 ]);

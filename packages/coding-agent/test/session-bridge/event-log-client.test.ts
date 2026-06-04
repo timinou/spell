@@ -123,6 +123,25 @@ describe("SessionBridgeClient emitEventLog", () => {
 		client.dispose();
 	});
 
+	it("enableEventLog() activates emission at runtime", async () => {
+		const client = makeClient();
+		await client.connect();
+		// Off by default.
+		client.emitEventLog({ kind: "turn_start", ts: 1 });
+		await Bun.sleep(20);
+		expect(bridge.receivedLines.filter(l => l.includes('"event_log"'))).toHaveLength(0);
+		// Turn on, then emit again.
+		client.enableEventLog();
+		client.emitEventLog({ kind: "user_message", ts: 2, text: "hello from web" });
+		client.emitEventLog({ kind: "tool_result", ts: 3, toolName: "bash" });
+		await Bun.sleep(20);
+		const lines = bridge.receivedLines.filter(l => l.includes('"event_log"'));
+		expect(lines).toHaveLength(2);
+		expect(lines.some(l => l.includes('"user_message"'))).toBe(true);
+		expect(lines.some(l => l.includes('"tool_result"'))).toBe(true);
+		client.dispose();
+	});
+
 	it("truncates assistant_text to 256 characters", async () => {
 		const client = makeClient({ eventLog: true });
 		await client.connect();
