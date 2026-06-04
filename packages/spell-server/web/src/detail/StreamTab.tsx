@@ -24,12 +24,19 @@ export function StreamTab(props: StreamTabProps) {
 	const [deliverAs, setDeliverAs] = useState<DeliverAs>("auto");
 	const isExternal = session.kind === "external";
 
+	// Number of `session.logs` entries already painted to the terminal. Lets the
+	// follow-up effect append only NEW external (event_log) entries as they
+	// arrive, instead of only painting the backfilled tail at mount.
+	const writtenLogCount = useRef(0);
+
 	useEffect(() => {
 		if (!hostRef.current) return;
 		const term = makeTerminal();
 		termRef.current = term;
 		const detach = attachTerminal(term, hostRef.current);
-		for (const entry of session.logs) term.term.write(renderEventLogEntry(entry));
+		const initial = session.logs;
+		for (const entry of initial) term.term.write(renderEventLogEntry(entry));
+		writtenLogCount.current = initial.length;
 		const unsub = subscribeRpcEvents(session.sessionId, evt => {
 			if (!termRef.current) return;
 			term.term.write(renderRpcEvent(evt as Parameters<typeof renderRpcEvent>[0]));
@@ -38,9 +45,28 @@ export function StreamTab(props: StreamTabProps) {
 			unsub();
 			detach();
 			term.dispose();
+			writtenLogCount.current = 0;
 			termRef.current = null;
 		};
 	}, [session.sessionId]);
+
+	// Paint live external (event_log) entries as they append to session.logs.
+	// rpc_event (spawned) entries paint via the subscription above and do not
+	// touch session.logs, so this only fires for external transcript mirroring.
+	useEffect(() => {
+		const term = termRef.current;
+		if (!term) return;
+		const logs = session.logs;
+		if (logs.length < writtenLogCount.current) {
+			// Buffer was trimmed/reset; avoid re-painting from a stale offset.
+			writtenLogCount.current = logs.length;
+			return;
+		}
+		for (let i = writtenLogCount.current; i < logs.length; i++) {
+			term.term.write(renderEventLogEntry(logs[i]));
+		}
+		writtenLogCount.current = logs.length;
+	}, [session.logs]);
 
 	async function send() {
 		if (!submitPrompt || draft.trim().length === 0) return;

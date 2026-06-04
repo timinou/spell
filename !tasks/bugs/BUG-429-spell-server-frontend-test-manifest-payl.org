@@ -1,9 +1,8 @@
-#+TITLE: Mobile-responsive dashboard layout
-#+STATE: DONE
+#+TITLE: spell-server frontend.test manifest payload omits toolModules
+#+STATE: ITEM
 #+SESSION_ID: 14fbf5dd98cd8683
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-spell--remote-2/2026-06-04T12-36-00-739Z_14fbf5dd98cd8683.jsonl]]
-#+CUSTOM_ID: FEAT-798-mobile-responsive-dashboard-layout
-#+COMPLETION_HASH: ecd5abacf71289ad
+#+CUSTOM_ID: BUG-429-spell-server-frontend-test-manifest-payl
 
 * Initial Message
 
@@ -19,44 +18,31 @@ I am going for lunch, so you will have to do a deep deep deep exploration on you
 
 Go for it, godspeed!
 
-:PROPERTIES:
-:DEPENDS: FEAT-798-mobile-responsive-dashboard-layout::FEAT-796-web-ui-unified-steer-composer-external-t
-:END:
+Discovered (pre-existing, NOT introduced by PLAN-326) during the final test gate.
 
-Part of [[id:PLAN-326-remote-control-server-steer-all-local-se]] — Wave 5.
+* Problem
 
-* Scope
+=packages/spell-server/test/http/frontend.test.ts:136= "returns a json-safe manifest payload
+from the api" fails: expected manifest payload includes =toolModules: []= but the API response
+omits the =toolModules= key (Expected - 2 / Received + 0 around the =toolModules= / =version=
+fields).
 
-Make the dashboard usable on a phone, matching the mobile mockup.
+Confirmed pre-existing: checking out the test + src at commit =88ac5b653= (immediately before the
+PLAN-326 work) reproduces the same single failure. So this is unrelated drift between the manifest
+serializer/API payload and the test fixture, not a regression from the remote-control feature.
 
-** Layout (=web/src/styles/global.css= + App.tsx/SessionDetail.tsx)
-- Below ~720px: collapse the 3-pane shell to single column.
-- Session list becomes a slide-in drawer (hamburger in top app bar).
-- Session detail fills the screen; sticky bottom composer above the iOS home indicator.
-- Blocking-event answer card floats prominently above composer with >=44px tap targets.
-- Right panel (Artifacts/State/Debug) becomes a bottom sheet or tab row.
+* Likely cause
 
-** Touch ergonomics
-- Steer/Follow-up segmented control, mic button placeholder (voice is a later FUP), circular Send.
-- Larger fonts, 12px card radii per mockup tokens.
+The manifest API route (=packages/spell-server/src/http/routes/...= or the manifest serializer in
+=src/manifest/serializer.ts= / =import-resolver.ts=) stopped emitting =toolModules= in the
+json-safe payload, or the test fixture was not updated when the field was added/removed.
 
-* Existing patterns
+* Fix
 
-- Pure CSS + the existing component tree; avoid a second mobile codebase (one responsive shell).
-
-* Edge cases
-
-- Rotate / resize → reflow without losing selected session.
-- Long transcripts → smooth scroll; composer stays pinned.
-
-* Acceptance
-
-- On a 393px-wide viewport the full steer loop is usable; matches mobile mockup structure.
-- No desktop regression at >=1024px.
+Reconcile the API manifest payload with the test expectation: either include =toolModules= in the
+serialized payload (if it should be exposed) or update the test fixture (if intentionally dropped).
 
 * Verification
 
-- Manual: Chrome devtools iPhone viewport, run the loop.
-- =bun --cwd packages/spell-server run build:web= clean.
-
-NOTE [2026-06-04]: Single-column <=720px, slide-in drawer + scrim, mobile topbar/hamburger, sticky safe-area composer, 44px targets. Build green; login render verified via screenshot.
+- =bun --cwd packages/spell-server test test/http/frontend.test.ts= green.
+- Full =bun --cwd packages/spell-server test= back to all-pass.

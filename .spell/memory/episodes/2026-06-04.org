@@ -81,3 +81,15 @@ Done: web token block in server.kdl, SPELL_WEB_TOKEN env, launcher points at con
 :RELATIONS:
 ABOUT: FEAT-797-config-launcher-docs-in-spell-remote-exa
 :END:
+** ITEM Mobile-responsive dashboard layout
+
+Single-column <=720px, slide-in drawer + scrim, mobile topbar/hamburger, sticky safe-area composer, 44px targets. Build green; login render verified via screenshot.
+:PROPERTIES:
+:CUSTOM_ID: EP-82edadc7c5eb7f6a
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-04T14:30:27Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-798-mobile-responsive-dashboard-layout
+:END:
