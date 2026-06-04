@@ -89,6 +89,13 @@ function Shell() {
 						sessions.pushLog(sessionId, entry);
 						break;
 					}
+					case "blocking_event": {
+						sessions.setBlockingEvent(
+							msg.sessionId as string,
+							msg.payload as import("./api/client").BlockingEventPayload,
+						);
+						break;
+					}
 					case "artifact_created": {
 						const sessionId = msg.sessionId as string;
 						const event = msg.artifact as { uri: string; agent: string; tool: string; filename: string; ext: string; sizeBytes: number };
@@ -170,22 +177,34 @@ function Shell() {
 		return `c${correlationIdRef.current}`;
 	}
 
-	const submitPrompt = useCallback(async (sessionId: string, message: string) => {
-		const cid = nextCid();
-		const { promise, resolve } = Promise.withResolvers<unknown>();
-		pendingResponses.current.set(cid, resolve);
-		wsRef.current?.send({
-			type: "rpc",
-			sessionId,
-			command: { type: "prompt", message },
-			correlationId: cid,
-		});
-		await promise;
-	}, []);
+	const submitPrompt = useCallback(
+		async (sessionId: string, message: string, deliverAs?: "steer" | "followUp" | "auto") => {
+			const cid = nextCid();
+			const { promise, resolve } = Promise.withResolvers<unknown>();
+			pendingResponses.current.set(cid, resolve);
+			wsRef.current?.send({
+				type: "rpc",
+				sessionId,
+				command: { type: "prompt", message },
+				deliverAs,
+				correlationId: cid,
+			});
+			await promise;
+		},
+		[],
+	);
 
 	const abort = useCallback(async (sessionId: string) => {
 		wsRef.current?.send({ type: "rpc", sessionId, command: { type: "abort" } });
 	}, []);
+
+	const answerBlockingEvent = useCallback(
+		(sessionId: string, eventId: string, payload: import("./api/client").EventResponsePayload) => {
+			wsRef.current?.send({ type: "answer_blocking_event", sessionId, eventId, payload });
+			sessions.setBlockingEvent(sessionId, undefined);
+		},
+		[sessions],
+	);
 
 	const runBash = useCallback(async () => {
 		// RPC bash is not exposed as a top-level command in BridgeRpcCommand v1;
@@ -246,12 +265,13 @@ function Shell() {
 				subscribeRpcEvents={subscribeRpcEvents}
 				submitPrompt={submitPrompt}
 				abort={abort}
+				answerBlockingEvent={answerBlockingEvent}
 				runBash={runBash}
 				mintUrl={mintUrl}
 				loadArtifacts={loadArtifacts}
 			/>
 		);
-	}, [selected, subscribeRpcEvents, submitPrompt, abort, runBash, mintUrl, loadArtifacts]);
+	}, [selected, subscribeRpcEvents, submitPrompt, abort, answerBlockingEvent, runBash, mintUrl, loadArtifacts]);
 
 	return (
 		<div className="shell">

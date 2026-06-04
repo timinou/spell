@@ -119,8 +119,14 @@ export function renderEventLogEntry(entry: { kind: string; ts: number; text?: st
 	switch (entry.kind) {
 		case "turn_start":
 			return `${GRAY}[${time}] · turn${RESET}\r\n`;
+		case "turn_end":
+			return `${GRAY}[${time}] · end${RESET}\r\n`;
+		case "user_message":
+			return `${BOLD}${CYAN}[${time}] you ›${RESET} ${entry.text ?? ""}\r\n`;
 		case "tool_call":
 			return `${CYAN}[${time}] › ${entry.toolName ?? "?"}${RESET}\r\n`;
+		case "tool_result":
+			return `${GREEN}[${time}] ✓ ${entry.toolName ?? "?"}${RESET}\r\n`;
 		case "assistant_text":
 			return `${GRAY}[${time}]${RESET} ${entry.text ?? ""}\r\n`;
 		case "plan_decision":

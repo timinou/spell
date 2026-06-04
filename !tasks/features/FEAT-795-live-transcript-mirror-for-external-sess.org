@@ -1,8 +1,9 @@
 #+TITLE: Live transcript mirror for external sessions
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14fbf5dd98cd8683
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-spell--remote-2/2026-06-04T12-36-00-739Z_14fbf5dd98cd8683.jsonl]]
 #+CUSTOM_ID: FEAT-795-live-transcript-mirror-for-external-sess
+#+COMPLETION_HASH: 52dc7202b7859e75
 
 * Initial Message
 
@@ -74,3 +75,5 @@ this the live transcript feed.
 - =bun --cwd packages/coding-agent test=
 - =bun --cwd packages/spell-server test=
 - Manual: type in TUI, see it appear in web transcript.
+
+NOTE [2026-06-04]: Landed + R2 reviewed clean (1 P3 fixed: resubscribe backfill guard). Types synced, no double-emit, bounded.

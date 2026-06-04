@@ -1,7 +1,9 @@
 import type { DerivedSession } from "../state/sessions";
 
-function statusClass(status: DerivedSession["status"]): string {
-	return `dot ${status}`;
+function statusClass(session: DerivedSession): string {
+	// A pending blocking event takes visual precedence over run status.
+	if (session.currentBlockingEvent) return "dot blocked";
+	return `dot ${session.status}`;
 }
 
 function shorten(value: string, max = 36): string {
@@ -26,13 +28,17 @@ export function SessionCard({
 			}}>
 			<div className="row">
 				<div className="name" title={title}>{title}</div>
-				<span className={statusClass(session.status)} title={session.status} />
+				<span
+					className={statusClass(session)}
+					title={session.currentBlockingEvent ? "blocked" : session.status}
+				/>
 			</div>
 			<div className="row meta">
 				<span>{shorten(session.cwd, 32)}</span>
 				<div className="badges">
 					{session.kind === "spawned" && session.ownedBy && <span className="badge owner">{session.ownedBy}</span>}
 					{session.kind === "external" && <span className="badge">CLI</span>}
+					{session.currentBlockingEvent && <span className="badge blocked">BLOCKED</span>}
 					{session.ready && <span className="badge ready">READY</span>}
 				</div>
 			</div>

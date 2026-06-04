@@ -45,3 +45,15 @@ Landed + R1: deregister equality cleanup. Types in sync confirmed by reviewer. T
 :RELATIONS:
 ABOUT: FEAT-794-registry-ws-hub-route-prompt-to-external
 :END:
+** ITEM Live transcript mirror for external sessions
+
+Landed + R2 reviewed clean (1 P3 fixed: resubscribe backfill guard). Types synced, no double-emit, bounded.
+:PROPERTIES:
+:CUSTOM_ID: EP-ad0ae5e239e94374
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-04T14:06:15Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-795-live-transcript-mirror-for-external-sess
+:END:

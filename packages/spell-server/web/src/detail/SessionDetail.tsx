@@ -17,8 +17,13 @@ const TAB_LABELS: Array<{ id: TabId; label: string }> = [
 interface Props {
 	session: DerivedSession;
 	subscribeRpcEvents: (sessionId: string, listener: (event: { type: string }) => void) => () => void;
-	submitPrompt: (sessionId: string, message: string) => Promise<void>;
+	submitPrompt: (sessionId: string, message: string, deliverAs?: "steer" | "followUp" | "auto") => Promise<void>;
 	abort: (sessionId: string) => Promise<void>;
+	answerBlockingEvent: (
+		sessionId: string,
+		eventId: string,
+		payload: import("../api/client").EventResponsePayload,
+	) => void;
 	runBash: (sessionId: string, command: string) => Promise<{ stdout?: string; stderr?: string; exitCode?: number }>;
 	mintUrl: (sessionId: string, artifactPath: string, ttlSec?: number) => Promise<{ url: string; expiresAt: number }>;
 	loadArtifacts: (sessionId: string) => Promise<import("../api/client").ArtifactRef[]>;
@@ -64,8 +69,9 @@ export function SessionDetail(props: Props) {
 					<StreamTab
 						session={session}
 						subscribeRpcEvents={props.subscribeRpcEvents}
-						submitPrompt={isExternal ? undefined : props.submitPrompt}
+						submitPrompt={props.submitPrompt}
 						abort={isExternal ? undefined : props.abort}
+						answerBlockingEvent={props.answerBlockingEvent}
 					/>
 				)}
 				{tab === "bash" && !isExternal && <BashTab session={session} runBash={props.runBash} />}

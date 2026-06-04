@@ -11,6 +11,28 @@ async function request<T>(path: string, token: string, init: RequestInit = {}): 
 	return r.json() as Promise<T>;
 }
 
+/** Minimal mirror of spell-server BlockingEventPayload (the fields the web renders). */
+export interface AskQuestion {
+	id: string;
+	question: string;
+	options: Array<{ label: string }>;
+	recommended?: number;
+	multi?: boolean;
+}
+
+export type BlockingEventPayload =
+	| { kind: "plan_approval"; eventId: string; title: string; itemId: string; planSummary: string; selectorOptions: string[] }
+	| { kind: "ask"; eventId: string; questions: AskQuestion[] }
+	| { kind: "pending_action"; eventId: string; actionType: string; description: string }
+	| { kind: "hook_selector"; eventId: string; title: string; options: string[] }
+	| { kind: "hook_input"; eventId: string; title: string; placeholder?: string };
+
+export type EventResponsePayload =
+	| { kind: "plan_approval"; selectedOption: string }
+	| { kind: "ask"; answers: Array<{ questionId: string; selectedIndices: number[] }> }
+	| { kind: "hook_selector"; selectedIndex: number }
+	| { kind: "hook_input"; value: string };
+
 export interface SessionSummary {
 	sessionId: string;
 	kind: "external" | "spawned";
@@ -20,6 +42,7 @@ export interface SessionSummary {
 	startedAt: number;
 	projectName: string;
 	lastHeartbeat: number;
+	currentBlockingEvent?: BlockingEventPayload;
 	ownedBy?: string;
 	templateName?: string;
 	watchExtensions?: string[];

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ArtifactRef, SessionSummary } from "../api/client";
+import type { ArtifactRef, BlockingEventPayload, SessionSummary } from "../api/client";
 
 export type SessionStatus = "spawning" | "running" | "done" | "error";
 
@@ -23,6 +23,7 @@ interface SessionsState {
 	pushLog: (sessionId: string, entry: DerivedSession["logs"][number]) => void;
 	noteEvent: (sessionId: string, event: { type: string; assistantMessageEvent?: { type: string; delta?: string; content?: string } }) => void;
 	markReady: (sessionId: string) => void;
+	setBlockingEvent: (sessionId: string, event: BlockingEventPayload | undefined) => void;
 }
 
 function lift(summary: SessionSummary): DerivedSession {
@@ -86,7 +87,22 @@ export const useSessions = create<SessionsState>((set) => ({
 			if (!sess) return state;
 			const next = new Map(state.sessions);
 			const logs = [...sess.logs, entry].slice(-200);
-			next.set(sessionId, { ...sess, logs, lastText: entry.text ?? sess.lastText });
+			// Derive live status for external (terminal) sessions from their event
+			// stream so the sidebar badge reflects streaming vs idle.
+			let status = sess.status;
+			if (entry.kind === "turn_start" || entry.kind === "tool_call" || entry.kind === "user_message") {
+				status = "running";
+			} else if (entry.kind === "turn_end") {
+				status = "done";
+			} else if (entry.kind === "error") {
+				status = "error";
+			}
+			next.set(sessionId, {
+				...sess,
+				logs,
+				status,
+				lastText: entry.text ?? sess.lastText,
+			});
 			return { sessions: next };
 		}),
 	noteEvent: (sessionId, event) =>
@@ -120,6 +136,14 @@ export const useSessions = create<SessionsState>((set) => ({
 			if (!sess) return state;
 			const next = new Map(state.sessions);
 			next.set(sessionId, { ...sess, ready: true });
+			return { sessions: next };
+		}),
+	setBlockingEvent: (sessionId, event) =>
+		set(state => {
+			const sess = state.sessions.get(sessionId);
+			if (!sess) return state;
+			const next = new Map(state.sessions);
+			next.set(sessionId, { ...sess, currentBlockingEvent: event });
 			return { sessions: next };
 		}),
 }));
