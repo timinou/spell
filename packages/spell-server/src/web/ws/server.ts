@@ -289,6 +289,11 @@ export class WebSubsystem {
 					connection.unsubscribe(msg.sessionId, msg.channels as Channel[] | undefined);
 					return;
 				case "rpc": {
+					const entry = this.#deps.registry.getSession(msg.sessionId);
+					if (entry?.kind === "external") {
+						await this.#dispatchExternalRpc(connection, msg, entry, correlationId);
+						return;
+					}
 					try {
 						const response = await this.#deps.hub.send(msg.sessionId, msg.command);
 						connection.send({ type: "rpc_response", sessionId: msg.sessionId, response, correlationId });
@@ -385,6 +390,45 @@ export class WebSubsystem {
 			logger.warn("ws dispatch failed", { error: String(error) });
 			connection.send({ type: "error", code: "internal", message: String(error), correlationId });
 		}
+	}
+
+	/**
+	 * Steer an external (terminal/TUI) session. Only `prompt` is supported today
+	 * — it is injected over the bridge socket as a real user turn. Other RPC
+	 * commands have no external transport yet and are rejected truthfully.
+	 */
+	async #dispatchExternalRpc(
+		connection: WebConnection,
+		msg: Extract<WsClientMessage, { type: "rpc" }>,
+		entry: SessionRegistryEntry,
+		correlationId: string | undefined,
+	): Promise<void> {
+		if (msg.command.type !== "prompt") {
+			connection.send({
+				type: "rpc_response",
+				sessionId: msg.sessionId,
+				response: {
+					type: "response",
+					command: msg.command.type,
+					success: false,
+					error: "unsupported_for_external",
+				},
+				correlationId,
+			});
+			return;
+		}
+		const result = await this.#deps.registry.injectMessage(msg.sessionId, {
+			text: msg.command.message,
+			deliverAs: msg.deliverAs ?? "auto",
+		});
+		connection.send({
+			type: "rpc_response",
+			sessionId: msg.sessionId,
+			response: result.accepted
+				? { type: "response", command: "prompt", success: true, data: { injected: true } }
+				: { type: "response", command: "prompt", success: false, error: result.reason ?? "rejected" },
+			correlationId,
+		});
 	}
 
 	#tapEvents(connection: WebConnection, sessionId: string): void {

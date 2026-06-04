@@ -1,0 +1,79 @@
+#+TITLE: Web UI: unified steer composer + external transcript
+#+STATE: ITEM
+#+SESSION_ID: 14fbf5dd98cd8683
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-spell--remote-2/2026-06-04T12-36-00-739Z_14fbf5dd98cd8683.jsonl]]
+#+CUSTOM_ID: FEAT-796-web-ui-unified-steer-composer-external-t
+
+* Initial Message
+
+You are in a repo that I would like you to use as a free reign to build a server that I can use to control **all** my sessions as long as one server is open in the computer.
+
+You need to look at ../spell-remote-example, this is where the config will live.
+
+I would like a web interface that is easy to use. For now, don't think about permissions and auth; we will end up just using Firezone for making a local network.
+
+The web interface should contain everything needed to steer the control of all existing sessions on this computer. If I send a message from that interface to a running session, it needs to act as if I had sent it from the Terminal. You are free to experiment with whatever architecture makes sense, although the idea of interconnected sessions that know each other through sockets is what makes most sense to me.
+
+I am going for lunch, so you will have to do a deep deep deep exploration on your own, build a wave manifest alongside FEAT and BUG recorded in a PLAN in waves (use the org tool), create mockups using GenerateUIScreen (for desktop and for mobile), and go through all the architectural challenges as you go. Once that is done and settled, write the org files and start work by yourself, continuing all the way to the final delivery. To help you out, use the main thread to do architectural work, and subtasks only for mechanical work. Use reviewer swarms in between waves to check your work, and surface, file, and fix/implement ANY and ALL FEAT/BUG that you find. Check-in in chat, showing what's going on, what's been done, and what you're going to do, so that I can read the whole conversation when I come back.
+
+Go for it, godspeed!
+
+:PROPERTIES:
+:DEPENDS: FEAT-796-web-ui-unified-steer-composer-external-t::FEAT-794-registry-ws-hub-route-prompt-to-external FEAT-796-web-ui-unified-steer-composer-external-t::FEAT-795-live-transcript-mirror-for-external-sess
+:END:
+
+Part of [[id:PLAN-326-remote-control-server-steer-all-local-se]] — Wave 3.
+
+* Scope
+
+Make the React SPA (=packages/spell-server/web/=) able to steer external sessions and render
+their transcript. Match the approved desktop mockup.
+
+** Composer (=web/src/detail/SessionDetail.tsx= + StreamTab)
+- Message box with Steer / Follow-up segmented toggle (mockup). On send → existing
+  =submitPrompt(sessionId, message)= which already issues =rpc {type:prompt}=; extend to pass
+  deliverAs (map toggle → command field). Works for BOTH external + spawned now (FEAT-794).
+- Disable/relabel only where genuinely unsupported.
+
+** Transcript renderer
+- =StreamRenderer.ts= / =StreamTab.tsx= consume =rpc_event= (spawned) AND =external_event_log=
+  (external). Add a normalizer so both render as a unified turn list (user / assistant / tool).
+- =state/sessions.ts= already has =pushLog= + =noteEvent=; unify into one transcript model per
+  session.
+
+** Status + actions (=sidebar/SessionCard.tsx=)
+- Badge: streaming (blue) / blocked (amber) / idle (grey) / spawned (purple) from
+  =currentBlockingEvent= + a streaming signal (derive from recent event_log turn_start/turn_end).
+- Abort + New-session buttons wired (abort external is follow-up if not in W1; hide if unsupported).
+
+** Blocking events (existing) kept
+- The pinned answer card (ask/approval) already exists via =answer_blocking_event=; ensure it
+  still renders for external sessions alongside the new composer.
+
+* Existing patterns
+
+- =App.tsx submitPrompt/abort=, =ws/client.ts=, =state/sessions.ts= are the integration points.
+- =detail/StreamTab.tsx=, =StreamRenderer.ts=, =xterm-setup.ts= render spawned streams today.
+
+* Edge cases
+
+- Session removed mid-view → graceful empty state.
+- External session with no event-log (older TUI) → show status only + a note.
+- Steer while idle vs streaming → both submit; UI shows queued indicator.
+
+* Tests
+
+- =web/test= (happy-dom): normalizer maps external_event_log + rpc_event to same turn shape.
+- Composer send dispatches rpc prompt with deliverAs from toggle.
+
+* Acceptance
+
+- From desktop browser: select a live terminal session, type, choose Steer/Follow-up, Send →
+  the TUI receives it; the transcript updates live.
+- Status badges accurate; blocking-event answering still works.
+
+* Verification
+
+- =bun --cwd packages/spell-server/web test= (if configured) or =bun run check:ts=
+- =bun --cwd packages/spell-server run build:web=
+- Manual full loop.

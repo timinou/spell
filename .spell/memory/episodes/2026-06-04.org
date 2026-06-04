@@ -1,0 +1,11 @@
+#+TITLE: Episodes 2026-06-04
+
+** ITEM Building "spell remote control server" — one server controls ALL local sessions via web UI. Deep exploration of spell-spell--remote-2 monorepo found: spell-server pkg already has HTTP+WS server, web-token auth, SocketSessionRegistry (external CLI sessions + spawned RPC sessions), React SPA (packages/spell-server/web/), artifact watcher, templates, telegram bridge. CORE GAP: external (terminal/TUI) sessions register via SessionBridgeClient over ~/.spell/server.sock and can ONLY answer blocking events (ask/approval) + emit low-fi event_log — they are NOT steerable with free-form messages. WebSessionHub.send() explicitly throws for external sessions ("not steerable"). The user's #1 requirement = inject arbitrary message into running terminal session "as if typed in terminal". Fix = extend socket protocol with inject_message (server→client) + inject_ack, wire SessionBridgeClient.onInjectMessage → InteractiveMode.injectRemoteInput → session.prompt(text,{streamingBehavior steer|followUp}). Mirror transcript via session JSONL + live event_log. Key files: packages/coding-agent/src/session-bridge/{client,types}.ts, packages/coding-agent/src/modes/interactive-mode.ts + main.ts (runInteractiveMode wires bridge), packages/spell-server/src/socket/{server,session-registry,types}.ts, packages/spell-server/src/web/ws/{protocol,server}.ts + session/web-session-hub.ts, web/src/App.tsx. Config lives in ../spell-remote-example (server.kdl http+auth+web tokens, channels.kdl, autonomy.kdl). Org categories under !tasks/{plans,features,bugs}.
+:PROPERTIES:
+:CUSTOM_ID: EP-cdec54f4ad505874
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-04T12:49:18Z
+:END:
+:RELATIONS:
+:END:

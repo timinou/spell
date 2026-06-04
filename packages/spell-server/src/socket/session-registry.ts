@@ -1,6 +1,26 @@
 import type * as net from "node:net";
 import type { RpcClient } from "../rpc/rpc-client";
-import type { BlockingEventPayload, EventLogEntry, EventResponsePayload, SocketServerMessage } from "./types";
+import type {
+	BlockingEventPayload,
+	EventLogEntry,
+	EventResponsePayload,
+	InjectDeliverAs,
+	SocketServerMessage,
+} from "./types";
+
+/** Result of a remote message injection attempt. */
+export interface InjectResult {
+	accepted: boolean;
+	reason?: string;
+}
+
+interface PendingInject {
+	resolve: (result: InjectResult) => void;
+	timer: ReturnType<typeof setTimeout>;
+}
+
+/** How long to wait for a client `inject_ack` before giving up. */
+const INJECT_ACK_TIMEOUT_MS = 10_000;
 
 export type SessionKind = "external" | "spawned";
 
@@ -65,6 +85,8 @@ export class SocketSessionRegistry {
 	#eventLogHandlers = new Set<EventLogHandler>();
 	#recentLog = new Map<string, EventLogEntry[]>();
 	#recentLogCap: number;
+	#pendingInjects = new Map<string, PendingInject>();
+	#injectCounter = 0;
 
 	constructor(options: SocketSessionRegistryOptions = {}) {
 		this.#recentLogCap = options.recentLogCap ?? DEFAULT_RECENT_LOG_CAP;
@@ -125,6 +147,14 @@ export class SocketSessionRegistry {
 			return;
 		}
 		this.#recentLog.delete(sessionId);
+		const prefix = `${sessionId}-inject-`;
+		for (const [injectId, pending] of this.#pendingInjects) {
+			if (injectId.startsWith(prefix)) {
+				this.#pendingInjects.delete(injectId);
+				clearTimeout(pending.timer);
+				pending.resolve({ accepted: false, reason: "deregistered" });
+			}
+		}
 		this.#emitSessionChange("deregistered", sessionId);
 	}
 
@@ -204,6 +234,67 @@ export class SocketSessionRegistry {
 		};
 		entry.connection.write(`${JSON.stringify(message)}\n`);
 		this.clearBlockingEvent(sessionId);
+	}
+
+	/**
+	 * Push a free-form input message to a registered external session over its
+	 * bridge socket, to be delivered as a real user turn. Resolves when the
+	 * session acknowledges (or the wait times out / the connection is dead).
+	 *
+	 * Only external sessions have a `connection`; spawned sessions are steered
+	 * via their RpcClient and must not reach this path.
+	 */
+	injectMessage(
+		sessionId: string,
+		input: { text: string; deliverAs: InjectDeliverAs },
+		timeoutMs = INJECT_ACK_TIMEOUT_MS,
+	): Promise<InjectResult> {
+		const entry = this.#sessions.get(sessionId);
+		if (!entry) {
+			return Promise.resolve({ accepted: false, reason: "unknown_session" });
+		}
+		if (entry.kind !== "external" || !entry.connection || entry.connection.destroyed) {
+			return Promise.resolve({ accepted: false, reason: "not_connected" });
+		}
+
+		this.#injectCounter += 1;
+		const injectId = `${sessionId}-inject-${this.#injectCounter}`;
+		const message: SocketServerMessage = {
+			type: "inject_input",
+			injectId,
+			text: input.text,
+			deliverAs: input.deliverAs,
+			timestamp: Date.now(),
+		};
+
+		const { promise, resolve } = Promise.withResolvers<InjectResult>();
+		const timer = setTimeout(() => {
+			if (this.#pendingInjects.delete(injectId)) {
+				resolve({ accepted: false, reason: "ack_timeout" });
+			}
+		}, timeoutMs);
+		if (timer && "unref" in timer) {
+			(timer as NodeJS.Timeout).unref();
+		}
+		this.#pendingInjects.set(injectId, { resolve, timer });
+
+		try {
+			entry.connection.write(`${JSON.stringify(message)}\n`);
+		} catch (error) {
+			clearTimeout(timer);
+			this.#pendingInjects.delete(injectId);
+			return Promise.resolve({ accepted: false, reason: `write_failed: ${String(error)}` });
+		}
+		return promise;
+	}
+
+	/** Resolve a pending inject when the client's `inject_ack` arrives. */
+	resolveInject(injectId: string, accepted: boolean, reason?: string): void {
+		const pending = this.#pendingInjects.get(injectId);
+		if (!pending) return;
+		this.#pendingInjects.delete(injectId);
+		clearTimeout(pending.timer);
+		pending.resolve({ accepted, reason });
 	}
 
 	cancelEvent(sessionId: string, eventId: string, reason?: string): void {

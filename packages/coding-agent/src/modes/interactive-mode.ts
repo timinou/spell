@@ -1373,6 +1373,66 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#uiHelpers.queueCompactionMessage(text, mode);
 	}
 
+	/**
+	 * Inject a message from a remote operator (web/Telegram) as if it had been
+	 * typed in this terminal. Routes through the exact same submit semantics as
+	 * the input controller so steering, follow-up, history, persistence, and the
+	 * niri/status listener all behave identically to a local keystroke.
+	 *
+	 * `deliverAs`:
+	 * - "steer"    → interrupt the current stream
+	 * - "followUp" → queue behind the current stream
+	 * - "auto"     → steer while streaming, else submit as a new turn
+	 */
+	async injectRemoteInput(
+		text: string,
+		deliverAs: "steer" | "followUp" | "auto",
+	): Promise<{ accepted: boolean; reason?: string }> {
+		const trimmed = text.trim();
+		if (!trimmed) {
+			return { accepted: false, reason: "empty" };
+		}
+
+		const streamingBehavior: "steer" | "followUp" = deliverAs === "followUp" ? "followUp" : "steer";
+
+		try {
+			// Queued behind an in-flight compaction, mirroring input-controller.
+			if (this.session.isCompacting) {
+				this.queueCompactionMessage(text, streamingBehavior);
+				this.updatePendingMessagesDisplay();
+				this.ui.requestRender();
+				return { accepted: true };
+			}
+
+			// Mid-stream: steer or follow-up, exactly like a terminal submit.
+			if (this.session.isStreaming) {
+				this.editor.addToHistory(text);
+				await this.session.prompt(text, { streamingBehavior });
+				this.updatePendingMessagesDisplay();
+				this.ui.requestRender();
+				return { accepted: true };
+			}
+
+			// Idle: the main loop is parked on getUserInput(). If the input callback
+			// is armed, drive submission through the identical terminal path so the
+			// optimistic user message + loop continuation match a keystroke exactly.
+			if (this.onInputCallback) {
+				this.editor.addToHistory(text);
+				const submission = this.startPendingSubmission({ text });
+				this.onInputCallback(submission);
+				return { accepted: true };
+			}
+
+			// No armed callback (e.g. busy between turns): fall back to prompt().
+			this.editor.addToHistory(text);
+			await this.session.prompt(text);
+			this.ui.requestRender();
+			return { accepted: true };
+		} catch (error) {
+			return { accepted: false, reason: error instanceof Error ? error.message : String(error) };
+		}
+	}
+
 	flushCompactionQueue(options?: { willRetry?: boolean }): Promise<void> {
 		return this.#uiHelpers.flushCompactionQueue(options);
 	}

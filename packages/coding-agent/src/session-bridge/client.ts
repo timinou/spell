@@ -7,6 +7,7 @@ import {
 	EVENT_LOG_ENTRY_KINDS,
 	type EventLogEntry,
 	type EventResponsePayload,
+	type InjectDeliverAs,
 	type SocketClientMessage,
 	type SocketServerMessage,
 } from "./types";
@@ -20,6 +21,16 @@ const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000] as const;
 type PendingEvent = {
 	resolve: (payload: EventResponsePayload | null) => void;
 };
+
+/**
+ * Handles a server-pushed input injection. Returns whether the message was
+ * accepted as a real user turn (and an optional reason when not).
+ */
+export type InjectInputHandler = (input: {
+	injectId: string;
+	text: string;
+	deliverAs: InjectDeliverAs;
+}) => Promise<{ accepted: boolean; reason?: string }>;
 
 export interface SessionBridgeOptions {
 	socketPath?: string;
@@ -57,6 +68,7 @@ export class SessionBridgeClient {
 	#buffer = "";
 	#eventIdCounter = 0;
 	#connectInFlight: Promise<boolean> | null = null;
+	#injectHandler: InjectInputHandler | undefined;
 
 	constructor(options: SessionBridgeOptions) {
 		this.#options = options;
@@ -170,6 +182,15 @@ export class SessionBridgeClient {
 	#isEventLogEnabled(): boolean {
 		if (this.#options.eventLog === true) return true;
 		return process.env.SPELL_BRIDGE_EVENT_LOG === "1";
+	}
+
+	/**
+	 * Register the callback invoked when the server pushes an `inject_input`
+	 * frame (a remote operator steering this terminal session). The client
+	 * always replies with `inject_ack` reflecting the handler's verdict.
+	 */
+	onInjectInput(handler: InjectInputHandler): void {
+		this.#injectHandler = handler;
 	}
 
 	notifyEventResolved(eventId: string): void {
@@ -296,7 +317,31 @@ export class SessionBridgeClient {
 				pending.resolve(null);
 				return;
 			}
+			case "inject_input": {
+				void this.#handleInjectInput(msg.injectId, msg.text, msg.deliverAs);
+				return;
+			}
 		}
+	}
+
+	async #handleInjectInput(injectId: string, text: string, deliverAs: InjectDeliverAs): Promise<void> {
+		let result: { accepted: boolean; reason?: string };
+		if (!this.#injectHandler) {
+			result = { accepted: false, reason: "no_handler" };
+		} else {
+			try {
+				result = await this.#injectHandler({ injectId, text, deliverAs });
+			} catch (error) {
+				result = { accepted: false, reason: error instanceof Error ? error.message : String(error) };
+			}
+		}
+		this.#send({
+			type: "inject_ack",
+			timestamp: Date.now(),
+			injectId,
+			accepted: result.accepted,
+			reason: result.reason,
+		});
 	}
 
 	async #attemptReconnect(): Promise<void> {

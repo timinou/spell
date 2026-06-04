@@ -89,6 +89,25 @@ export interface EventResolvedSocketClientMessage extends SocketMessageBase {
 	eventId: string;
 }
 
+/**
+ * How a remotely-injected message should be delivered into the session.
+ * - "steer": interrupt the current stream (steering message)
+ * - "followUp": queue behind the current stream
+ * - "auto": steer if streaming, otherwise submit as a normal new turn
+ */
+export type InjectDeliverAs = "steer" | "followUp" | "auto";
+
+/**
+ * Client → server acknowledgement that an `inject_input` frame was (or was not)
+ * accepted as a real user turn. Mirrors the `event_resolved` ack style.
+ */
+export interface InjectAckSocketClientMessage extends SocketMessageBase {
+	type: "inject_ack";
+	injectId: string;
+	accepted: boolean;
+	reason?: string;
+}
+
 export type EventLogEntryKind = "turn_start" | "turn_end" | "tool_call" | "assistant_text" | "plan_decision" | "error";
 
 export const EVENT_LOG_ENTRY_KINDS: ReadonlySet<EventLogEntryKind> = new Set([
@@ -131,7 +150,8 @@ export type SocketClientMessage =
 	| BlockingEventSocketClientMessage
 	| HeartbeatSocketClientMessage
 	| EventResolvedSocketClientMessage
-	| EventLogSocketClientMessage;
+	| EventLogSocketClientMessage
+	| InjectAckSocketClientMessage;
 
 export interface RegisteredSocketServerMessage extends SocketMessageBase {
 	type: "registered";
@@ -182,10 +202,24 @@ export interface EventCancelledSocketServerMessage extends SocketMessageBase {
 	reason?: string;
 }
 
+/**
+ * Server → client free-form input injection. Routed to a registered external
+ * (terminal/TUI) session so a web/remote operator can steer it exactly as if
+ * the message had been typed in the terminal. The client replies with
+ * `inject_ack`.
+ */
+export interface InjectInputSocketServerMessage extends SocketMessageBase {
+	type: "inject_input";
+	injectId: string;
+	text: string;
+	deliverAs: InjectDeliverAs;
+}
+
 export type SocketServerMessage =
 	| RegisteredSocketServerMessage
 	| EventResponseSocketServerMessage
-	| EventCancelledSocketServerMessage;
+	| EventCancelledSocketServerMessage
+	| InjectInputSocketServerMessage;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
@@ -198,6 +232,7 @@ const SOCKET_CLIENT_MESSAGE_TYPES = new Set([
 	"heartbeat",
 	"event_resolved",
 	"event_log",
+	"inject_ack",
 ]);
 
 export function isSocketClientMessage(value: unknown): value is SocketClientMessage {

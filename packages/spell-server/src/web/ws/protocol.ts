@@ -1,5 +1,5 @@
 import type { BridgeRpcCommand, RpcEvent, RpcResponseEvent } from "../../rpc";
-import type { BlockingEventPayload, EventLogEntry, EventResponsePayload } from "../../socket/types";
+import type { BlockingEventPayload, EventLogEntry, EventResponsePayload, InjectDeliverAs } from "../../socket/types";
 import type { ArtifactCreatedEvent } from "../artifacts/types";
 
 /** Subscribable channel set per session. */
@@ -51,7 +51,18 @@ export type WsClientMessage =
 			correlationId?: string;
 	  }
 	| { type: "unsubscribe"; sessionId: string; channels?: Channel[]; correlationId?: string }
-	| { type: "rpc"; sessionId: string; command: BridgeRpcCommand; correlationId?: string }
+	| {
+			type: "rpc";
+			sessionId: string;
+			command: BridgeRpcCommand;
+			/**
+			 * For external (terminal) sessions a `prompt` command is injected as a
+			 * real user turn; `deliverAs` controls steer vs follow-up vs auto.
+			 * Ignored for spawned sessions.
+			 */
+			deliverAs?: InjectDeliverAs;
+			correlationId?: string;
+	  }
 	| {
 			type: "answer_blocking_event";
 			sessionId: string;

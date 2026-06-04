@@ -172,6 +172,10 @@ async function runInteractiveMode(
 	);
 	dbgStartup("G:after:new InteractiveMode");
 
+	// Allow a remote operator (web dashboard / Telegram) to steer this terminal
+	// session over the bridge socket as if the message were typed locally.
+	sessionBridge?.onInjectInput(({ text, deliverAs }) => mode.injectRemoteInput(text, deliverAs));
+
 	dbgStartup("H:before:mode.init");
 	await mode.init();
 	dbgStartup("H:after:mode.init");

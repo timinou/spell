@@ -155,6 +155,9 @@ export class SocketServer {
 					this.#registry.clearBlockingEvent(sessionId);
 				}
 				return sessionId;
+			case "inject_ack":
+				this.#registry.resolveInject(parsed.injectId, parsed.accepted, parsed.reason);
+				return sessionId;
 			case "event_log":
 				if (sessionId && isEventLogEntry(parsed.entry)) {
 					this.#registry.appendEventLog(sessionId, parsed.entry);

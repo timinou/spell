@@ -1,0 +1,130 @@
+#+TITLE: Remote Control Server — steer all local sessions from one web app
+#+STATE: ITEM
+#+SESSION_ID: 14fbf5dd98cd8683
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-spell--remote-2/2026-06-04T12-36-00-739Z_14fbf5dd98cd8683.jsonl]]
+#+CUSTOM_ID: PLAN-326-remote-control-server-steer-all-local-se
+
+* Initial Message
+
+You are in a repo that I would like you to use as a free reign to build a server that I can use to control **all** my sessions as long as one server is open in the computer.
+
+You need to look at ../spell-remote-example, this is where the config will live.
+
+I would like a web interface that is easy to use. For now, don't think about permissions and auth; we will end up just using Firezone for making a local network.
+
+The web interface should contain everything needed to steer the control of all existing sessions on this computer. If I send a message from that interface to a running session, it needs to act as if I had sent it from the Terminal. You are free to experiment with whatever architecture makes sense, although the idea of interconnected sessions that know each other through sockets is what makes most sense to me.
+
+I am going for lunch, so you will have to do a deep deep deep exploration on your own, build a wave manifest alongside FEAT and BUG recorded in a PLAN in waves (use the org tool), create mockups using GenerateUIScreen (for desktop and for mobile), and go through all the architectural challenges as you go. Once that is done and settled, write the org files and start work by yourself, continuing all the way to the final delivery. To help you out, use the main thread to do architectural work, and subtasks only for mechanical work. Use reviewer swarms in between waves to check your work, and surface, file, and fix/implement ANY and ALL FEAT/BUG that you find. Check-in in chat, showing what's going on, what's been done, and what you're going to do, so that I can read the whole conversation when I come back.
+
+Go for it, godspeed!
+
+* Intent
+
+One server, running anywhere on this machine, controls *all* live spell sessions through an
+easy web interface. Sending a message from the web to a running terminal session must act
+*exactly* as if the user had typed it in that terminal. Config lives in =../spell-remote-example=.
+No auth/permissions work for now (Firezone local network handles that later).
+
+* Current reality (post-exploration)
+
+The =packages/spell-server= package already is an HTTP+WebSocket server with web-token auth,
+a unified session registry (external CLI sessions + server-spawned RPC sessions), a React SPA
+(=packages/spell-server/web=), an artifact watcher, templates, and the Telegram bridge.
+
+Sessions ALREADY connect to one global server at =~/.spell/server.sock= via
+=SessionBridgeClient= (=packages/coding-agent/src/session-bridge/client.ts=). So the
+"interconnected sessions that know each other through sockets" substrate EXISTS.
+
+** The core gap
+
+External (terminal/TUI) sessions can only:
+- register (pid/cwd/mode/project)
+- answer *blocking events* (ask / plan_approval / hook_*) — Q&A round-trips
+- emit low-fi =event_log= summaries (opt-in)
+
+They CANNOT receive a free-form steering message. =WebSessionHub.send()= explicitly throws
+"not steerable" for external sessions; =ws/server.ts= only routes =rpc= to spawned sessions and
+=answer_blocking_event= to external ones. There is no terminal-input injection path.
+
+∴ The #1 user requirement (send a message to a running terminal session as if typed) is
+unimplemented. Everything else (transcript, status, mobile) is presentation on top.
+
+* Architecture
+
+Make terminal sessions *first-class steerable* by extending the EXISTING socket — not a new
+transport. The socket becomes bidirectional for real input, not just Q&A.
+
+#+begin_src
+web composer ──WS{type:rpc, command:{type:prompt|steer|abort,...}}──▶ WebSubsystem.#dispatch
+                                                                         │ external? 
+                                                                         ▼
+                                                       SocketSessionRegistry.injectMessage(sid, payload)
+                                                                         │ writes frame
+                                                                         ▼
+                                       session.connection ──{type:inject_input}──▶ SessionBridgeClient
+                                                                         │ onInjectInput
+                                                                         ▼
+                                       InteractiveMode.injectRemoteInput(text, mode)
+                                                                         │
+                                                                         ▼
+                                       session.prompt(text, {streamingBehavior:steer|followUp})
+                                       ≡ identical to a terminal keystroke submit ✓
+#+end_src
+
+Transcript mirror: external sessions push a richer =event_log= (user msg, assistant text,
+tool start/end) so the web renders what the terminal shows; the registry keeps a ring buffer
+backfilled on subscribe. (We deliberately reuse =event_log=, not a second channel.)
+
+** Design invariants
+
+1. ONE steering surface. A web =prompt= to an external session and to a spawned session take the
+   same =BridgeRpcCommand= shape; the hub dispatches by session kind. No parallel API.
+2. Injection is exactly =session.prompt= — same queueing, steer/follow-up, history, persistence.
+   No bespoke message path that could drift from terminal behavior.
+3. The socket stays line-delimited JSON; new frames are additive + back-compatible (old TUIs
+   that don't understand =inject_input= simply never receive one).
+4. Server already global via =~/.spell/server.sock=; "one server controls all" needs no new
+   discovery — only that every TUI keeps connecting (it does).
+
+* Execution Manifest (waves)
+
+** W1 — Steerable terminal sessions (spine, main thread)
+- FEAT-792 bidirectional socket protocol: =inject_input= (server→client) + =inject_ack= (client→server) frames, types synced both sides.
+- FEAT-793 client receive + TUI injection: =SessionBridgeClient= dispatch → =InteractiveMode.injectRemoteInput= → =session.prompt(...,{streamingBehavior})=.
+- FEAT-794 registry + ws/hub routing: =registry.injectMessage()=; =WebSubsystem.#dispatch= routes external =prompt/steer/abort= to the socket instead of throwing.
+Gate: a web prompt reaches a running TUI and appears as a normal user turn. Reviewer swarm R1.
+
+** W2 — Live transcript mirror (main thread + mechanical)
+- FEAT-795 richer external =event_log= (user/assistant/tool) from interactive-mode; ring-buffer backfill on subscribe; ws forwards.
+Gate: web shows the terminal's turns within ~1s. Reviewer swarm R2.
+
+** W3 — Web UI: unified steer + transcript (mechanical swarm under main-thread contract)
+- FEAT-796 composer steers external sessions (Steer/Follow-up); transcript renderer consumes external event stream; status badges (streaming/blocked/idle); abort + new-session for external.
+Gate: full loop usable from desktop browser. Reviewer swarm R3.
+
+** W4 — Config, launcher, docs (mechanical)
+- FEAT-797 =../spell-remote-example= updated: =server.kdl= web tokens, launcher, README "control all sessions"; verify one server ↔ many TUIs.
+Gate: documented quick-start works from a clean shell.
+
+** W5 — Hardening + mobile + review fallout (main thread + swarm)
+- FEAT-798 mobile-responsive layout (drawer session list, sticky composer, big tap targets) per mobile mockup.
+- Absorb all BUG/FUP surfaced by R1–R3 reviewer swarms.
+Gate: green =check:ts= + =test=; mobile usable; review backlog burned.
+
+* Acceptance (whole plan)
+
+- From the web app, typing a message to any *running terminal session* injects it as a real
+  user turn (steer or follow-up), verified against a live TUI.
+- The web transcript reflects terminal activity (turns, tool calls) live.
+- Blocking-event answering (existing) still works for external sessions.
+- One server process serves every TUI on the machine; sessions appear/disappear live.
+- Desktop + mobile layouts match the approved mockups.
+- =bun run check:ts= and package tests green.
+
+* Verification commands
+
+- =bun --cwd packages/spell-server test=
+- =bun --cwd packages/coding-agent test session-bridge=
+- =bun run check:ts=
+- Manual: start server (=spell server -c ../spell-remote-example/config=), open web, launch a
+  =spell= TUI in another terminal, steer it from the browser, observe the injected turn.

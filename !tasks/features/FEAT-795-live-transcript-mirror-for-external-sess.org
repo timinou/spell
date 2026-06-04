@@ -1,0 +1,76 @@
+#+TITLE: Live transcript mirror for external sessions
+#+STATE: ITEM
+#+SESSION_ID: 14fbf5dd98cd8683
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-spell--remote-2/2026-06-04T12-36-00-739Z_14fbf5dd98cd8683.jsonl]]
+#+CUSTOM_ID: FEAT-795-live-transcript-mirror-for-external-sess
+
+* Initial Message
+
+You are in a repo that I would like you to use as a free reign to build a server that I can use to control **all** my sessions as long as one server is open in the computer.
+
+You need to look at ../spell-remote-example, this is where the config will live.
+
+I would like a web interface that is easy to use. For now, don't think about permissions and auth; we will end up just using Firezone for making a local network.
+
+The web interface should contain everything needed to steer the control of all existing sessions on this computer. If I send a message from that interface to a running session, it needs to act as if I had sent it from the Terminal. You are free to experiment with whatever architecture makes sense, although the idea of interconnected sessions that know each other through sockets is what makes most sense to me.
+
+I am going for lunch, so you will have to do a deep deep deep exploration on your own, build a wave manifest alongside FEAT and BUG recorded in a PLAN in waves (use the org tool), create mockups using GenerateUIScreen (for desktop and for mobile), and go through all the architectural challenges as you go. Once that is done and settled, write the org files and start work by yourself, continuing all the way to the final delivery. To help you out, use the main thread to do architectural work, and subtasks only for mechanical work. Use reviewer swarms in between waves to check your work, and surface, file, and fix/implement ANY and ALL FEAT/BUG that you find. Check-in in chat, showing what's going on, what's been done, and what you're going to do, so that I can read the whole conversation when I come back.
+
+Go for it, godspeed!
+
+:PROPERTIES:
+:DEPENDS: FEAT-795-live-transcript-mirror-for-external-sess::FEAT-793-client-receive-tui-injection-of-remote-i
+:END:
+
+Part of [[id:PLAN-326-remote-control-server-steer-all-local-se]] — Wave 2.
+
+* Scope
+
+The web must show what a terminal session is doing. External sessions already can opt into a
+low-fi =event_log= (=turn_start/turn_end/tool_call/assistant_text/plan_decision/error=). Make
+this the live transcript feed.
+
+** Coding-agent side
+- Ensure interactive sessions emit =event_log= entries for: user message submitted (NEW kind
+  =user_message= OR reuse =assistant_text= taxonomy — extend =EventLogEntryKind= in BOTH
+  =types.ts= with =user_message=), assistant text (final), tool_call start/end, turn start/end.
+- Gate behind the existing flag but DEFAULT-ON when the session is bridge-connected to a server
+  the user controls? Keep opt-in via =SPELL_BRIDGE_EVENT_LOG=1= AND enable automatically when an
+  =inject_input= capable server is present. Decide minimal: enable event-log when bridge connects
+  (the whole point is remote visibility). Clip text to existing =EVENT_LOG_TEXT_MAX=.
+- Hook points: =interactive-mode.ts= session.subscribe handler already sees session events;
+  forward a compact mapping to =sessionBridge.emitEventLog(...)=.
+
+** Server side
+- Registry already keeps a ring buffer (=getRecentLog=). On web =subscribe events= for an
+  external session, backfill recent entries to that connection (replay), then live-forward.
+- =ws/server.ts= =#tapEvents= currently only taps the spawned hub; add external backfill +
+  the existing =onEventLog= fanout already forwards =external_event_log=.
+
+* Existing patterns
+
+- =SocketSessionRegistry.appendEventLog / getRecentLog / onEventLog= already exist.
+- =ws/server.ts registerFanout()= already forwards =external_event_log=. The missing piece is
+  (a) richer emission from interactive-mode, (b) backfill-on-subscribe.
+
+* Edge cases
+
+- High-volume sessions: ring buffer cap (50) already bounds memory; clip text.
+- Privacy: only emit when bridge-connected (user's own server) — document this.
+- Don't double-emit when terminal and remote both active.
+
+* Tests
+
+- coding-agent: interactive event → =emitEventLog= called with mapped kind/text (mock bridge).
+- spell-server: subscribing to events backfills =getRecentLog= entries to the connection.
+
+* Acceptance
+
+- Opening a session in the web shows its recent + live turns (user/assistant/tool) within ~1s.
+- Memory bounded; text clipped.
+
+* Verification
+
+- =bun --cwd packages/coding-agent test=
+- =bun --cwd packages/spell-server test=
+- Manual: type in TUI, see it appear in web transcript.

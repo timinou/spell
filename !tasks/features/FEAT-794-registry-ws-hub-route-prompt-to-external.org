@@ -1,0 +1,84 @@
+#+TITLE: Registry + ws/hub route prompt to external sessions
+#+STATE: DOING
+#+SESSION_ID: 14fbf5dd98cd8683
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-spell--remote-2/2026-06-04T12-36-00-739Z_14fbf5dd98cd8683.jsonl]]
+#+CUSTOM_ID: FEAT-794-registry-ws-hub-route-prompt-to-external
+
+* Initial Message
+
+You are in a repo that I would like you to use as a free reign to build a server that I can use to control **all** my sessions as long as one server is open in the computer.
+
+You need to look at ../spell-remote-example, this is where the config will live.
+
+I would like a web interface that is easy to use. For now, don't think about permissions and auth; we will end up just using Firezone for making a local network.
+
+The web interface should contain everything needed to steer the control of all existing sessions on this computer. If I send a message from that interface to a running session, it needs to act as if I had sent it from the Terminal. You are free to experiment with whatever architecture makes sense, although the idea of interconnected sessions that know each other through sockets is what makes most sense to me.
+
+I am going for lunch, so you will have to do a deep deep deep exploration on your own, build a wave manifest alongside FEAT and BUG recorded in a PLAN in waves (use the org tool), create mockups using GenerateUIScreen (for desktop and for mobile), and go through all the architectural challenges as you go. Once that is done and settled, write the org files and start work by yourself, continuing all the way to the final delivery. To help you out, use the main thread to do architectural work, and subtasks only for mechanical work. Use reviewer swarms in between waves to check your work, and surface, file, and fix/implement ANY and ALL FEAT/BUG that you find. Check-in in chat, showing what's going on, what's been done, and what you're going to do, so that I can read the whole conversation when I come back.
+
+Go for it, godspeed!
+
+:PROPERTIES:
+:DEPENDS: FEAT-794-registry-ws-hub-route-prompt-to-external::FEAT-792-bidirectional-socket-inject-input-inject
+:END:
+
+Part of [[id:PLAN-326-remote-control-server-steer-all-local-se]] — Wave 1 (spine).
+
+* Scope
+
+Server side: make a web =prompt= (and =abort=) to an *external* session reach its TUI over the
+socket, instead of =WebSessionHub.send()= throwing "not steerable".
+
+** SocketSessionRegistry (=packages/spell-server/src/socket/session-registry.ts=)
+- Add =injectMessage(sessionId, {text, deliverAs}): {injectId} | null= — generates injectId,
+  writes an =inject_input= frame to =entry.connection= (external only). Returns null if no
+  live connection.
+- Track pending injects (Map injectId→resolver) and =resolveInject(injectId, accepted, reason)=
+  called when an =inject_ack= arrives. Optional: timeout → resolve accepted:false.
+- =abort= for external: add =sendAbort(sessionId)= writing an =inject_input= with a sentinel? NO —
+  prefer a distinct frame. SIMPLEST: reuse existing socket; add small =control= frame OR map
+  web =abort= to a dedicated =inject_input deliverAs:"abort"=? Decide: add =deliverAs= value is
+  wrong for abort. Instead add a separate optional =AbortSocketServerMessage= (type:"abort") in
+  FEAT-792 scope IF needed; for W1 MVP, support =prompt= injection only and leave abort of
+  external sessions as a documented follow-up (file BUG/FUP if it matters).
+
+** Socket server (=packages/spell-server/src/socket/server.ts=)
+- Handle inbound =inject_ack= in =#handleLine= → =registry.resolveInject(...)=.
+
+** WebSubsystem dispatch (=packages/spell-server/src/web/ws/server.ts=)
+- In =case "rpc"=: if target session kind === "external" and =command.type === "prompt"=,
+  route to =registry.injectMessage()= and reply with =rpc_response= (success=accepted).
+  Map =command.streamingBehavior=/explicit field → deliverAs (default "auto").
+- Keep spawned-session path (=hub.send=) unchanged.
+- For unsupported external commands, reply =rpc_response success:false error:"unsupported_for_external"=.
+
+* Existing patterns
+
+- =resolveEvent= / =cancelEvent= in the registry are the template for writing a frame to
+  =entry.connection= and tracking state.
+- =ws/server.ts #dispatch case "rpc"= and =case "answer_blocking_event"= show kind-based routing.
+
+* Edge cases
+
+- External session with dead/destroyed connection → rpc_response success:false.
+- Ack never arrives → timeout (e.g. 10s) resolves accepted:false; do not leak the pending map.
+- Spawned session unaffected.
+
+* Tests
+
+- =packages/spell-server/test= ws/server: rpc prompt to external session triggers
+  =registry.injectMessage= (spy) and returns rpc_response reflecting the ack.
+- registry: injectMessage writes a frame; resolveInject resolves the pending promise.
+
+* Acceptance
+
+- Web =prompt= to an external session writes =inject_input= to that session's socket and
+  surfaces the ack as =rpc_response=.
+- No "not steerable" throw for external =prompt=.
+- Spawned-session steering unchanged.
+
+* Verification
+
+- =bun --cwd packages/spell-server test=
+- =bun run check:ts=
+- Manual end-to-end with FEAT-793.

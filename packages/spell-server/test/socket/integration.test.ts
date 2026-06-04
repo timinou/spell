@@ -486,6 +486,70 @@ describe("socket server integration", () => {
 		}
 	});
 
+	it("injects a remote message and resolves on inject_ack", async () => {
+		const client = createClient();
+		await client.connect(socketPath);
+
+		const sessionId = "test-session-inject";
+		client.send({
+			type: "register",
+			timestamp: Date.now(),
+			sessionId,
+			pid: process.pid,
+			cwd: "/tmp/project",
+			mode: "interactive",
+			startedAt: Date.now(),
+			projectName: "test-project",
+		});
+		await client.nextMessage(); // registered ack
+
+		// Server injects a free-form steering message.
+		const injectPromise = registry.injectMessage(sessionId, { text: "run the tests", deliverAs: "steer" });
+
+		// Client receives the inject_input frame and acks it.
+		const injected = await client.nextMessage();
+		expect(injected.type).toBe("inject_input");
+		if (injected.type !== "inject_input") throw new Error("expected inject_input");
+		expect(injected.text).toBe("run the tests");
+		expect(injected.deliverAs).toBe("steer");
+
+		client.send({ type: "inject_ack", timestamp: Date.now(), injectId: injected.injectId, accepted: true });
+
+		const result = await injectPromise;
+		expect(result.accepted).toBe(true);
+	});
+
+	it("inject to unknown session is rejected", async () => {
+		const result = await registry.injectMessage("nope", { text: "hi", deliverAs: "auto" });
+		expect(result.accepted).toBe(false);
+		expect(result.reason).toBe("unknown_session");
+	});
+
+	it("resolves pending inject as rejected on disconnect", async () => {
+		const client = createClient();
+		await client.connect(socketPath);
+		const sessionId = "test-session-inject-drop";
+		client.send({
+			type: "register",
+			timestamp: Date.now(),
+			sessionId,
+			pid: process.pid,
+			cwd: "/tmp/project",
+			mode: "interactive",
+			startedAt: Date.now(),
+			projectName: "test-project",
+		});
+		await client.nextMessage();
+
+		const injectPromise = registry.injectMessage(sessionId, { text: "hello", deliverAs: "auto" });
+		await client.nextMessage(); // inject_input frame
+		client.destroy();
+		await Bun.sleep(100);
+		const result = await injectPromise;
+		expect(result.accepted).toBe(false);
+		expect(result.reason).toBe("deregistered");
+	});
+
 	it("handles malformed JSON gracefully", async () => {
 		const client = createClient();
 		await client.connect(socketPath);
