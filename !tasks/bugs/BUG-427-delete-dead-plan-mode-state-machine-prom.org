@@ -1,8 +1,9 @@
 #+TITLE: Retire plan-mode + fluid + autonomous-loop; keep grouped/gated todos
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14fa8e00912a893c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-03T10-23-44-708Z_14fa8e00912a893c.jsonl]]
 #+CUSTOM_ID: BUG-427-delete-dead-plan-mode-state-machine-prom
+#+COMPLETION_HASH: f2f0bb6d167b07d7
 
 Cutover already shipped (commits f2257961c, fdfc0b692): KDL-native roles live; plan-mode entry points removed. This item tracks deletion of the now-dead subsystems, staged so each build stays green.
 
@@ -60,3 +61,5 @@ These live in to-be-deleted dirs but feed surviving features:
 
 * Net
 ~plan-mode 2,200 + fluid 900 + myth 467 + loop 5,000 ≈ 8,500 LOC removed; ~4 symbol-extractions guard the kept grouped-todo + wave-snapshot features.
+
+NOTE [2026-06-03]: Executed in full across 6 commits (386ba8f53..968f4a961): 272 files, -20,052 LOC net. Stage 0 extractions (org-plan/plan-validation/org-depend→src/org/, wave-snapshot→tools/, mode-state/audit-state→modes/) guarded kept features. Stages 1-4 deleted plan-mode state machine + exit tool, plan/myth prompts, fluid canvas runtime, autonomous loop subsystem. tsgo held at baseline 83 after every stage. Full suite: 91 unique failures, all pre-existing (ModelRegistry/AgentDashboard/language+prompt snapshots); zero in plan-mode/fluid/loop or extracted org modules. KEPT: grouped/gated todos, wave-snapshot (/plan-snapshot), validate-plan org subcommand, audit mode, plan subagent. NOTE residual inert config (planMode.allowedFolders setting) left intentionally — settings-key removal w/ migration/compat tests is separate scope; mode-config-guide.md doc still references old plan/ultraplan examples (pi:// doc, non-blocking).
