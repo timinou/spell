@@ -49,24 +49,36 @@ function Shell() {
 		const ws = new SpellWsClient({
 			url: buildWsUrl(token),
 			onMessage: msg => {
+				// Subscribe to a session's live channels. Safe to call repeatedly: the
+				// server only backfills the transcript when `events` is newly added, so
+				// re-subscribing on every (re)connect does not duplicate history.
+				const subscribeToSession = (summary: SessionSummary) => {
+					if (summary.kind === "spawned") {
+						ws.send({
+							type: "subscribe",
+							sessionId: summary.sessionId,
+							channels: ["events", "artifacts", "state"],
+							artifactExt: summary.watchExtensions,
+						});
+					} else {
+						ws.send({ type: "subscribe", sessionId: summary.sessionId, channels: ["events", "artifacts"] });
+					}
+				};
 				switch (msg.type) {
 					case "session_list": {
-						sessions.setAll(msg.sessions as SessionSummary[]);
+						const list = msg.sessions as SessionSummary[];
+						sessions.setAll(list);
+						// On (re)connect — including a page refresh — subscribe to every
+						// already-existing session so its live events + artifacts flow and
+						// its recent transcript is backfilled. Without this, a refreshed
+						// page sees the session in the list but receives nothing further.
+						for (const summary of list) subscribeToSession(summary);
 						break;
 					}
 					case "session_added": {
-						sessions.upsert(msg.session as SessionSummary);
 						const summary = msg.session as SessionSummary;
-						if (summary.kind === "spawned") {
-							ws.send({
-								type: "subscribe",
-								sessionId: summary.sessionId,
-								channels: ["events", "artifacts", "state"],
-								artifactExt: summary.watchExtensions,
-							});
-						} else {
-							ws.send({ type: "subscribe", sessionId: summary.sessionId, channels: ["events", "artifacts"] });
-						}
+						sessions.upsert(summary);
+						subscribeToSession(summary);
 						break;
 					}
 					case "session_updated":

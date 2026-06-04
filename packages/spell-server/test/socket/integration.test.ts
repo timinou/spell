@@ -519,6 +519,30 @@ describe("socket server integration", () => {
 		expect(result.accepted).toBe(true);
 	});
 
+	it("stores sessionRoot reported by an external session at register", async () => {
+		const client = createClient();
+		await client.connect(socketPath);
+		const sessionId = "sess-with-root";
+		client.send({
+			type: "register",
+			timestamp: Date.now(),
+			sessionId,
+			pid: process.pid,
+			cwd: "/tmp/project",
+			mode: "interactive",
+			startedAt: Date.now(),
+			projectName: "p",
+			sessionRoot: "/home/u/.spell/agent/sessions/p/sess-with-root",
+		});
+		await client.nextMessage(); // registered ack
+		// Give the server a tick to apply the register.
+		await Bun.sleep(30);
+		const entry = registry.getSession(sessionId);
+		expect(entry?.kind).toBe("external");
+		expect(entry?.sessionRoot).toBe("/home/u/.spell/agent/sessions/p/sess-with-root");
+		client.destroy();
+	});
+
 	it("inject to unknown session is rejected", async () => {
 		const result = await registry.injectMessage("nope", { text: "hi", deliverAs: "auto" });
 		expect(result.accepted).toBe(false);

@@ -179,6 +179,7 @@ export class SocketServer {
 				mode: message.mode,
 				startedAt: message.startedAt,
 				projectName: message.projectName,
+				sessionRoot: message.sessionRoot,
 			},
 			socket,
 		);

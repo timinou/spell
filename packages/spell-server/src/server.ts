@@ -167,7 +167,10 @@ export async function startSpellServer(
 		webWatcher = new ArtifactWatcher();
 		const signingKey = deriveSigningKey(config.server);
 		artifactDeps = {
-			sessionRoots: id => webHub?.getSessionRoot(id),
+			// Spawned sessions resolve via the hub; external (terminal) sessions
+			// report their artifacts dir at register time — fall back to that so the
+			// artifact list/serve endpoints work for terminal sessions too.
+			sessionRoots: id => webHub?.getSessionRoot(id) ?? registry.getSession(id)?.sessionRoot,
 			web: config.server.web,
 			signingKey,
 		};

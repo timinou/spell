@@ -35,6 +35,12 @@ export interface SessionRegistryEntry {
 	projectName: string;
 	lastHeartbeat: number;
 	currentBlockingEvent?: BlockingEventPayload;
+	/**
+	 * Absolute artifacts directory for the session. For external sessions it is
+	 * reported by the bridge at register time; lets the server list + watch
+	 * artifacts for terminal sessions the same way it does for spawned ones.
+	 */
+	sessionRoot?: string;
 	/** Present only for kind = 'external' (the bridge socket connection). */
 	connection?: net.Socket;
 	/**
@@ -53,7 +59,10 @@ export interface SessionRegistryEntry {
 	rpcClient?: RpcClient;
 }
 
-type SessionMetadata = Pick<SessionRegistryEntry, "pid" | "cwd" | "mode" | "startedAt" | "projectName">;
+type SessionMetadata = Pick<
+	SessionRegistryEntry,
+	"pid" | "cwd" | "mode" | "startedAt" | "projectName" | "sessionRoot"
+>;
 
 export interface SpawnedRegistration {
 	sessionId: string;

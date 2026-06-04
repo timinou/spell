@@ -47,6 +47,8 @@ export interface SessionBridgeOptions {
 	mode: string;
 	startedAt: number;
 	projectName: string;
+	/** Absolute artifacts directory for this session (for server-side listing/watch). */
+	sessionRoot?: string;
 	/**
 	 * Opt in to forwarding low-fi summary events (`turn_start`, `tool_call`,
 	 * `assistant_text`, ...) to the bridge. Default off so external CLI sessions
@@ -471,6 +473,7 @@ export class SessionBridgeClient {
 			mode: this.#options.mode,
 			startedAt: this.#options.startedAt,
 			projectName: this.#options.projectName,
+			sessionRoot: this.#options.sessionRoot,
 		});
 	}
 

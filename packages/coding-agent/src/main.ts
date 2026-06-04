@@ -150,6 +150,7 @@ async function runInteractiveMode(
 			mode: "interactive",
 			startedAt: Date.now(),
 			projectName: path.basename(cwd),
+			sessionRoot: session.sessionManager.getArtifactsDir() ?? undefined,
 		});
 		// Keep the bridge REGARDLESS of initial reachability and supervise the
 		// connection: the control server may be started (or restarted) after this

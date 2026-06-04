@@ -73,6 +73,8 @@ export class WebSubsystem {
 				return;
 			}
 			if (type === "deregistered") {
+				// Release any external-session artifact watch started on subscribe.
+				this.#deps.watcher.unwatch(sessionId);
 				const summary: SessionSummary = entry
 					? entryToSummary(entry)
 					: {
@@ -303,6 +305,15 @@ export class WebSubsystem {
 							}
 						}
 						this.#tapEvents(connection, msg.sessionId);
+					}
+					if (msg.channels.includes("artifacts")) {
+						// Spawned sessions are watched by the hub. External (terminal)
+						// sessions report their artifacts dir at register time — start a
+						// watch here so live artifacts stream to the web. Idempotent.
+						const entry = this.#deps.registry.getSession(msg.sessionId);
+						if (entry?.kind === "external" && entry.sessionRoot) {
+							this.#deps.watcher.watch(msg.sessionId, entry.sessionRoot);
+						}
 					}
 					if (msg.channels.includes("debug")) this.#tapStderr(connection, msg.sessionId);
 					return;

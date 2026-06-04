@@ -13,6 +13,12 @@ export interface RegisterSocketClientMessage extends SocketMessageBase {
 	mode: string;
 	startedAt: number;
 	projectName: string;
+	/**
+	 * Absolute artifacts directory for this session (`<sessionFile w/o .jsonl>`),
+	 * so the server can list + watch artifacts for external (terminal) sessions
+	 * the same way it does for spawned ones.
+	 */
+	sessionRoot?: string;
 }
 
 export interface DeregisterSocketClientMessage extends SocketMessageBase {
