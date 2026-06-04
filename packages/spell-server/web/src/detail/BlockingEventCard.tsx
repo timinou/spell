@@ -18,9 +18,9 @@ export function BlockingEventCard({ event, onAnswer }: Props) {
 				<div className="bc-title">Plan approval — {event.title}</div>
 				{event.planSummary && <div className="bc-body">{event.planSummary}</div>}
 				<div className="bc-actions">
-					{event.selectorOptions.map((option) => (
+					{event.selectorOptions.map((option, index) => (
 						<button
-							key={option}
+							key={`${index}-${option}`}
 							className="btn"
 							onClick={() => onAnswer(event.eventId, { kind: "plan_approval", selectedOption: option })}
 						>
@@ -43,7 +43,7 @@ export function BlockingEventCard({ event, onAnswer }: Props) {
 				<div className="bc-actions">
 					{event.options.map((option, index) => (
 						<button
-							key={option}
+							key={`${index}-${option}`}
 							className="btn"
 							onClick={() => onAnswer(event.eventId, { kind: "hook_selector", selectedIndex: index })}
 						>
@@ -108,7 +108,7 @@ function AskCard({
 							const recommended = q.recommended === index;
 							return (
 								<button
-									key={opt.label}
+									key={`${index}-${opt.label}`}
 									className={`btn${active ? " btn-primary" : ""}`}
 									onClick={() => toggle(q.id, index, q.multi)}
 								>

@@ -97,6 +97,14 @@ export class WebSubsystem {
 			}
 		});
 
+		this.#deps.registry.onBlockingEventCleared(sessionId => {
+			for (const c of this.#connections) {
+				if (c.wants(sessionId, "events")) {
+					c.send({ type: "blocking_event_cleared", sessionId });
+				}
+			}
+		});
+
 		this.#deps.registry.onEventLog((sessionId, entry: EventLogEntry) => {
 			for (const c of this.#connections) {
 				if (c.wants(sessionId, "events")) {

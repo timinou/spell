@@ -600,6 +600,28 @@ describe("session registry standalone", () => {
 		fakeSocket.destroy();
 	});
 
+	it("clearBlockingEvent notifies cleared handlers exactly once", () => {
+		const registry = new SocketSessionRegistry();
+		const socket = new net.Socket();
+		registry.register(
+			"blk",
+			{ pid: process.pid, cwd: "/a", mode: "interactive", startedAt: Date.now(), projectName: "a" },
+			socket,
+		);
+		const cleared: string[] = [];
+		registry.onBlockingEventCleared(sid => cleared.push(sid));
+		registry.setBlockingEvent("blk", {
+			kind: "ask",
+			eventId: "e1",
+			questions: [{ id: "q", question: "?", options: [{ label: "y" }] }],
+		});
+		registry.clearBlockingEvent("blk");
+		// Second clear is a no-op (already undefined) and must not re-notify.
+		registry.clearBlockingEvent("blk");
+		expect(cleared).toEqual(["blk"]);
+		socket.destroy();
+	});
+
 	it("getBlocked returns only sessions with blocking events", () => {
 		const registry = new SocketSessionRegistry();
 		const socket1 = new net.Socket();

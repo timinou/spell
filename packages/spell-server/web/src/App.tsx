@@ -96,6 +96,10 @@ function Shell() {
 						);
 						break;
 					}
+					case "blocking_event_cleared": {
+						sessions.setBlockingEvent(msg.sessionId as string, undefined);
+						break;
+					}
 					case "artifact_created": {
 						const sessionId = msg.sessionId as string;
 						const event = msg.artifact as { uri: string; agent: string; tool: string; filename: string; ext: string; sizeBytes: number };

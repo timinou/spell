@@ -65,6 +65,7 @@ export interface SpawnedRegistration {
 }
 
 type BlockingEventHandler = (sessionId: string, event: BlockingEventPayload) => void;
+type BlockingEventClearedHandler = (sessionId: string) => void;
 type SessionChangeHandler = (type: "registered" | "deregistered", sessionId: string) => void;
 type EventLogHandler = (sessionId: string, entry: EventLogEntry) => void;
 
@@ -82,6 +83,7 @@ export interface SocketSessionRegistryOptions {
 export class SocketSessionRegistry {
 	#sessions = new Map<string, SessionRegistryEntry>();
 	#blockingEventHandlers = new Set<BlockingEventHandler>();
+	#blockingEventClearedHandlers = new Set<BlockingEventClearedHandler>();
 	#sessionChangeHandlers = new Set<SessionChangeHandler>();
 	#eventLogHandlers = new Set<EventLogHandler>();
 	#recentLog = new Map<string, EventLogEntry[]>();
@@ -216,8 +218,14 @@ export class SocketSessionRegistry {
 		if (!entry) {
 			return;
 		}
+		if (entry.currentBlockingEvent === undefined) {
+			return;
+		}
 
 		entry.currentBlockingEvent = undefined;
+		for (const handler of this.#blockingEventClearedHandlers) {
+			handler(sessionId);
+		}
 	}
 
 	resolveEvent(sessionId: string, eventId: string, payload: EventResponsePayload): void {
@@ -319,6 +327,14 @@ export class SocketSessionRegistry {
 
 	offBlockingEvent(handler: BlockingEventHandler): void {
 		this.#blockingEventHandlers.delete(handler);
+	}
+
+	onBlockingEventCleared(handler: BlockingEventClearedHandler): void {
+		this.#blockingEventClearedHandlers.add(handler);
+	}
+
+	offBlockingEventCleared(handler: BlockingEventClearedHandler): void {
+		this.#blockingEventClearedHandlers.delete(handler);
 	}
 
 	onSessionChange(handler: SessionChangeHandler): void {

@@ -97,6 +97,7 @@ export type WsServerMessage =
 	| { type: "rpc_response"; sessionId: string; response: RpcResponseEvent; correlationId?: string }
 	| { type: "external_event_log"; sessionId: string; entry: EventLogEntry }
 	| { type: "blocking_event"; sessionId: string; payload: BlockingEventPayload }
+	| { type: "blocking_event_cleared"; sessionId: string }
 	| { type: "artifact_created"; sessionId: string; artifact: ArtifactCreatedEvent }
 	| { type: "artifact_url"; sessionId: string; url: string; expiresAt: number; correlationId?: string }
 	| { type: "spawn_result"; sessionId: string; correlationId?: string }
