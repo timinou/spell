@@ -1,0 +1,60 @@
+#+TITLE: No sessions in web: bridge connects once + feature not deployed to installed spell
+#+STATE: ITEM
+#+SESSION_ID: 14fbf5dd98cd8683
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-spell--remote-2/2026-06-04T12-36-00-739Z_14fbf5dd98cd8683.jsonl]]
+#+CUSTOM_ID: BUG-430-no-sessions-in-web-bridge-connects-once
+
+* Initial Message
+
+You are in a repo that I would like you to use as a free reign to build a server that I can use to control **all** my sessions as long as one server is open in the computer.
+
+You need to look at ../spell-remote-example, this is where the config will live.
+
+I would like a web interface that is easy to use. For now, don't think about permissions and auth; we will end up just using Firezone for making a local network.
+
+The web interface should contain everything needed to steer the control of all existing sessions on this computer. If I send a message from that interface to a running session, it needs to act as if I had sent it from the Terminal. You are free to experiment with whatever architecture makes sense, although the idea of interconnected sessions that know each other through sockets is what makes most sense to me.
+
+I am going for lunch, so you will have to do a deep deep deep exploration on your own, build a wave manifest alongside FEAT and BUG recorded in a PLAN in waves (use the org tool), create mockups using GenerateUIScreen (for desktop and for mobile), and go through all the architectural challenges as you go. Once that is done and settled, write the org files and start work by yourself, continuing all the way to the final delivery. To help you out, use the main thread to do architectural work, and subtasks only for mechanical work. Use reviewer swarms in between waves to check your work, and surface, file, and fix/implement ANY and ALL FEAT/BUG that you find. Check-in in chat, showing what's going on, what's been done, and what you're going to do, so that I can read the whole conversation when I come back.
+
+Go for it, godspeed!
+
+Reported by user: "I see no running sessions in the web thing." Two distinct root causes.
+
+* Cause A — bridge connected only once (FIXED, commit be2980703)
+
+=SessionBridgeClient= connected a single time at TUI startup; the only reconnect path
+(=socket.on("close")= → =#attemptReconnect=) fired solely after an ESTABLISHED connection
+dropped, capped at 3 attempts. So:
+- a =spell= TUI started BEFORE the server never registered;
+- after a server restart, every session permanently dropped after ~7s.
+
+Fix: added a persistent supervisor (=start()= + =#scheduleSupervise=) that (re)connects forever
+with capped backoff (500ms..15s) until =dispose=, re-registering on every connect. =main.ts= now
+keeps the bridge regardless of initial reachability. Covered by =test/session-bridge/supervisor.test.ts=.
+
+* Cause B — feature not deployed to the installed binary (ACTION REQUIRED)
+
+The installed =spell= (=~/.local/share/reflex/bun/bin/spell=) is =bun link='d to
+=/home/user/code/ora/spell/packages/coding-agent= (the =main= checkout, HEAD 88ac5b6). ALL the
+PLAN-326 work lives in a SEPARATE clone =/home/user/code/ora/spell-spell--remote-2= on branch
+=spell--remote-2= (HEAD be2980703). Same git remote (timinou/spell), divergent branches.
+
+∴ Even with Cause A fixed, running terminals + any new =spell= execute =main=, which has none of
+the feature. The web server must ALSO run this checkout (the smoke test did:
+=packages/spell-server/src/main.ts= from remote-2).
+
+** Deployment options (user decision)
+1. Merge =spell--remote-2= into =main= in =/home/user/code/ora/spell=, restart sessions + server.
+   (Cleanest; main is currently 6 behind origin/main with untracked files — needs care.)
+2. Re-point the global link to this checkout:
+   =cd /home/user/code/ora/spell-spell--remote-2 && bun link= (or relink
+   =@spell/pi-coding-agent= → this path), then restart the TUIs + server.
+3. Run the server from this checkout AND start the sessions you want to control with
+   =bun /home/user/code/ora/spell-spell--remote-2/packages/coding-agent/src/cli.ts=.
+
+NB: existing long-running TUIs must be RESTARTED either way — the supervisor lives in the new
+code; processes already running the old code can't acquire it.
+
+* Acceptance
+- A freshly started =spell= (from the deployed checkout) appears in the web sidebar within ~1s
+  whether or not the server was already running, and survives a server restart.
