@@ -93,3 +93,15 @@ Single-column <=720px, slide-in drawer + scrim, mobile topbar/hamburger, sticky 
 :RELATIONS:
 ABOUT: FEAT-798-mobile-responsive-dashboard-layout
 :END:
+** ITEM Remote Control Server — steer all local sessions from one web app
+
+All 5 waves landed + reviewed (R1/R2/R3 + final seam review). Core feature works: web operator steers any running terminal session as a real user turn (Steer/Follow-up/Auto), live transcript mirror, blocking-event answering, mobile layout, turnkey config in ../spell-remote-example. Gates: spell-server tsc clean, 772/773 tests pass (1 pre-existing failure → BUG-429, unrelated). coding-agent: my 4 files clean (60 pre-existing baseline errors unchanged). Follow-ups filed: FUP-105 (remote prefix semantics), BUG-428 (external-session authz, deferred to Firezone), BUG-429 (pre-existing frontend test).
+:PROPERTIES:
+:CUSTOM_ID: EP-48d68224d691adfd
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-04T14:49:37Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-326-remote-control-server-steer-all-local-se
+:END:

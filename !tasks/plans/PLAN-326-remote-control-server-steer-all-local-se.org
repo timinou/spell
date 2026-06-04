@@ -1,8 +1,9 @@
 #+TITLE: Remote Control Server — steer all local sessions from one web app
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14fbf5dd98cd8683
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-spell--remote-2/2026-06-04T12-36-00-739Z_14fbf5dd98cd8683.jsonl]]
 #+CUSTOM_ID: PLAN-326-remote-control-server-steer-all-local-se
+#+COMPLETION_HASH: 623af8b10c490069
 
 * Initial Message
 
@@ -128,3 +129,5 @@ Gate: green =check:ts= + =test=; mobile usable; review backlog burned.
 - =bun run check:ts=
 - Manual: start server (=spell server -c ../spell-remote-example/config=), open web, launch a
   =spell= TUI in another terminal, steer it from the browser, observe the injected turn.
+
+NOTE [2026-06-04]: All 5 waves landed + reviewed (R1/R2/R3 + final seam review). Core feature works: web operator steers any running terminal session as a real user turn (Steer/Follow-up/Auto), live transcript mirror, blocking-event answering, mobile layout, turnkey config in ../spell-remote-example. Gates: spell-server tsc clean, 772/773 tests pass (1 pre-existing failure → BUG-429, unrelated). coding-agent: my 4 files clean (60 pre-existing baseline errors unchanged). Follow-ups filed: FUP-105 (remote prefix semantics), BUG-428 (external-session authz, deferred to Firezone), BUG-429 (pre-existing frontend test).
