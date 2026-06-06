@@ -58,3 +58,7 @@ code; processes already running the old code can't acquire it.
 * Acceptance
 - A freshly started =spell= (from the deployed checkout) appears in the web sidebar within ~1s
   whether or not the server was already running, and survives a server restart.
+
+NOTE [2026-06-04]: Follow-on fixes after user retest (refresh dropped live messages + artifacts):
+(1) session_list now subscribes to every session on (re)connect — refresh + WS auto-reconnect fully recover with transcript backfill (was: only session_added subscribed).
+(2) External sessions now report sessionRoot (artifacts dir) at register; registry stores it; artifact list HTTP endpoint + serve router + live watcher all fall back to it. Verified e2e: external session artifact 0.txt lists correctly. Commits cba0462e3, 5da42cc3e. Still pending: deployment (Cause B) — user will merge.
