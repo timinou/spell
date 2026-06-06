@@ -154,6 +154,26 @@ export class SocketSessionRegistry {
 		];
 	}
 
+	/**
+	 * Deregister only if the entry is still bound to `connection`. Used by the
+	 * socket server's per-connection cleanup so a *stale* socket closing (after
+	 * its session already re-registered over a fresh socket) cannot evict the
+	 * live entry.
+	 *
+	 * Race it closes: on a fast reconnect the OS may deliver the new socket's
+	 * `register` before the old socket's `close`. `register()` destroys the old
+	 * socket, whose deferred `close` would otherwise `deregister` the just-
+	 * registered live session. Guarding on identity makes the cleanup a no-op in
+	 * that case.
+	 */
+	deregisterIfConnection(sessionId: string, connection: net.Socket): void {
+		const entry = this.#sessions.get(sessionId);
+		if (!entry || entry.connection !== connection) {
+			return;
+		}
+		this.deregister(sessionId);
+	}
+
 	deregister(sessionId: string): void {
 		if (!this.#sessions.delete(sessionId)) {
 			return;

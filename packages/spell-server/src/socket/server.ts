@@ -90,7 +90,9 @@ export class SocketServer {
 			}
 			closed = true;
 			if (sessionId) {
-				this.#registry.deregister(sessionId);
+				// Guard on socket identity: if this session already re-registered over
+				// a fresh socket (fast reconnect), a stale close must not evict it.
+				this.#registry.deregisterIfConnection(sessionId, socket);
 			}
 		};
 
