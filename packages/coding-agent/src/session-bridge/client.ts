@@ -12,7 +12,23 @@ import {
 	type SocketServerMessage,
 } from "./types";
 
+/**
+ * Clip length for low-fidelity summary kinds (tool intents, errors, ...). These
+ * are one-line glances, not content, so a tight clamp keeps frames small.
+ */
 const EVENT_LOG_TEXT_MAX = 256;
+
+/**
+ * Per-frame text budget for *content* kinds (assistant/user messages). Long
+ * messages are split into ordered chunks under this cap rather than truncated,
+ * so the web transcript shows the full message while no single WS frame (or
+ * ring-buffer entry) grows unbounded. Continuation chunks carry `meta.cont`;
+ * non-final chunks carry `meta.more` so the renderer reassembles one line.
+ */
+const EVENT_LOG_CHUNK_MAX = 8_192;
+
+/** Kinds whose `text` is real content and must be delivered in full (chunked). */
+const EVENT_LOG_CONTENT_KINDS: ReadonlySet<EventLogEntry["kind"]> = new Set(["assistant_text", "user_message"]);
 
 const DEFAULT_SOCKET_RELATIVE_PATH = ".spell/server.sock";
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -181,8 +197,21 @@ export class SessionBridgeClient {
 		if (!this.#isEventLogEnabled()) return;
 		if (!this.#connected || !this.#socket) return;
 		if (!EVENT_LOG_ENTRY_KINDS.has(entry.kind)) return;
+
+		// Content kinds (assistant/user text) are delivered in full, split into
+		// ordered chunks so a long message survives intact without any single frame
+		// growing unbounded. Low-fi summary kinds keep the tight one-line clamp.
+		if (
+			entry.text !== undefined &&
+			EVENT_LOG_CONTENT_KINDS.has(entry.kind) &&
+			entry.text.length > EVENT_LOG_CHUNK_MAX
+		) {
+			this.#emitChunked(entry);
+			return;
+		}
+
 		const clipped: EventLogEntry =
-			entry.text !== undefined && entry.text.length > EVENT_LOG_TEXT_MAX
+			entry.text !== undefined && !EVENT_LOG_CONTENT_KINDS.has(entry.kind) && entry.text.length > EVENT_LOG_TEXT_MAX
 				? { ...entry, text: entry.text.slice(0, EVENT_LOG_TEXT_MAX) }
 				: entry;
 		this.#send({
@@ -190,6 +219,30 @@ export class SessionBridgeClient {
 			timestamp: Date.now(),
 			entry: clipped,
 		});
+	}
+
+	/**
+	 * Split a long content message into ordered `event_log` frames. The first
+	 * frame renders with its normal prefix; continuation frames set `meta.cont`
+	 * (renderer omits the timestamp prefix) and every non-final frame sets
+	 * `meta.more` (renderer omits the trailing newline) so the web side stitches
+	 * the chunks back into a single logical line.
+	 */
+	#emitChunked(entry: EventLogEntry): void {
+		const text = entry.text ?? "";
+		for (let offset = 0; offset < text.length; offset += EVENT_LOG_CHUNK_MAX) {
+			const slice = text.slice(offset, offset + EVENT_LOG_CHUNK_MAX);
+			const isFirst = offset === 0;
+			const isLast = offset + EVENT_LOG_CHUNK_MAX >= text.length;
+			const meta: Record<string, string | number | boolean> = { ...entry.meta };
+			if (!isFirst) meta.cont = true;
+			if (!isLast) meta.more = true;
+			this.#send({
+				type: "event_log",
+				timestamp: Date.now(),
+				entry: { ...entry, text: slice, meta: Object.keys(meta).length > 0 ? meta : undefined },
+			});
+		}
 	}
 
 	/**

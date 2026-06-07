@@ -8,7 +8,7 @@ export interface DerivedSession extends SessionSummary {
 	ready: boolean;
 	lastText?: string;
 	artifacts: ArtifactRef[];
-	logs: Array<{ kind: string; ts: number; text?: string; toolName?: string }>;
+	logs: Array<{ kind: string; ts: number; text?: string; toolName?: string; meta?: Record<string, string | number | boolean> }>;
 }
 
 interface SessionsState {

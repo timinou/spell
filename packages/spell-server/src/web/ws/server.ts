@@ -8,6 +8,7 @@ import type { EventLogEntry } from "../../socket/types";
 import { mintSignedArtifactUrl } from "../artifacts/signed-url";
 import type { ArtifactCreatedEvent } from "../artifacts/types";
 import type { ArtifactWatcher } from "../artifacts/watcher";
+import { replayTranscript } from "../session/transcript-replay";
 import type { WebSessionHub } from "../session/web-session-hub";
 import { MissingParamError, ParamCoercionError, UnknownParamError } from "../templates/params";
 import type { TemplateRunner } from "../templates/runner";
@@ -183,7 +184,8 @@ export class WebSubsystem {
 			if (segments.length === 5 && segments[4] === "artifacts" && request.method === "GET") {
 				// Spawned sessions resolve via the hub; external (terminal) sessions
 				// report their artifacts dir at register time (registry.sessionRoot).
-				const root = this.#deps.hub.getSessionRoot(sessionId) ?? this.#deps.registry.getSession(sessionId)?.sessionRoot;
+				const root =
+					this.#deps.hub.getSessionRoot(sessionId) ?? this.#deps.registry.getSession(sessionId)?.sessionRoot;
 				if (!root) return jsonResponse({ artifacts: [] });
 				const artifacts = await listArtifactsInRoot(sessionId, root);
 				return jsonResponse({ artifacts });
@@ -298,13 +300,13 @@ export class WebSubsystem {
 					const eventsAlreadySubscribed = connection.wants(msg.sessionId, "events");
 					connection.subscribe(msg.sessionId, msg.channels as Channel[], msg.artifactExt);
 					if (msg.channels.includes("events")) {
-						// Backfill the recent terminal transcript so a freshly-opened web
-						// session shows context immediately, then stream live updates.
-						const entry = this.#deps.registry.getSession(msg.sessionId);
-						if (!eventsAlreadySubscribed && entry?.kind === "external") {
-							for (const recent of this.#deps.registry.getRecentLog(msg.sessionId)) {
-								connection.send({ type: "external_event_log", sessionId: msg.sessionId, entry: recent });
-							}
+						// Backfill the recent transcript so a freshly-opened web session
+						// shows context immediately, then stream live updates. The disk
+						// JSONL is the single source of truth for both external (terminal)
+						// and spawned sessions; the in-memory ring only ever held a partial
+						// live tail and nothing from before the daemon began observing.
+						if (!eventsAlreadySubscribed) {
+							await this.#backfillTranscript(connection, msg.sessionId);
 						}
 						this.#tapEvents(connection, msg.sessionId);
 					}
@@ -392,9 +394,11 @@ export class WebSubsystem {
 						// rpc_event stream, no need to block spawn_result on it.
 						connection.send({ type: "spawn_result", sessionId, correlationId });
 						if (msg.initialPrompt && msg.initialPrompt.trim().length > 0) {
-							void this.#deps.hub.send(sessionId, { type: "prompt", message: msg.initialPrompt }).catch(error => {
-								logger.warn("raw spawn: initial prompt send failed", { sessionId, error: String(error) });
-							});
+							void this.#deps.hub
+								.send(sessionId, { type: "prompt", message: msg.initialPrompt })
+								.catch(error => {
+									logger.warn("raw spawn: initial prompt send failed", { sessionId, error: String(error) });
+								});
 						}
 					} catch (error) {
 						connection.send({ type: "error", code: "spawn_failed", message: String(error), correlationId });
@@ -464,6 +468,23 @@ export class WebSubsystem {
 				: { type: "response", command: "prompt", success: false, error: result.reason ?? "rejected" },
 			correlationId,
 		});
+	}
+
+	/**
+	 * Replay the recent on-disk transcript for a freshly-subscribed session.
+	 * Works for both external (terminal) and spawned sessions: the session JSONL
+	 * is `${sessionRoot}.jsonl`, where `sessionRoot` is resolved the same way the
+	 * artifacts route does (hub for spawned, registry for external). Bounded and
+	 * fail-soft — a missing/unreadable transcript yields no frames, never throws.
+	 */
+	async #backfillTranscript(connection: WebConnection, sessionId: string): Promise<void> {
+		const root = this.#deps.hub.getSessionRoot(sessionId) ?? this.#deps.registry.getSession(sessionId)?.sessionRoot;
+		if (!root) return;
+		const entries = await replayTranscript(`${root}.jsonl`);
+		for (const entry of entries) {
+			if (!connection.wants(sessionId, "events")) return;
+			connection.send({ type: "external_event_log", sessionId, entry });
+		}
 	}
 
 	#tapEvents(connection: WebConnection, sessionId: string): void {

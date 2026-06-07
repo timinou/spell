@@ -105,7 +105,13 @@ function Shell() {
 					}
 					case "external_event_log": {
 						const sessionId = msg.sessionId as string;
-						const entry = msg.entry as { kind: string; ts: number; text?: string; toolName?: string };
+						const entry = msg.entry as {
+							kind: string;
+							ts: number;
+							text?: string;
+							toolName?: string;
+							meta?: Record<string, string | number | boolean>;
+						};
 						sessions.pushLog(sessionId, entry);
 						break;
 					}

@@ -142,16 +142,53 @@ describe("SessionBridgeClient emitEventLog", () => {
 		client.dispose();
 	});
 
-	it("truncates assistant_text to 256 characters", async () => {
+	it("delivers assistant_text in full when under the chunk cap", async () => {
 		const client = makeClient({ eventLog: true });
 		await client.connect();
-		const longText = "a".repeat(500);
-		client.emitEventLog({ kind: "assistant_text", ts: 1, text: longText });
+		const text = "a".repeat(500);
+		client.emitEventLog({ kind: "assistant_text", ts: 1, text });
 		await Bun.sleep(20);
-		const line = bridge.receivedLines.find(l => l.includes('"assistant_text"'));
-		expect(line).toBeDefined();
+		const lines = bridge.receivedLines.filter(l => l.includes('"assistant_text"'));
+		expect(lines).toHaveLength(1);
+		const parsed = JSON.parse(lines[0] as string) as { entry: { text?: string } };
+		expect(parsed.entry.text).toBe(text);
+		client.dispose();
+	});
+
+	it("chunks a long assistant_text into ordered frames with continuation markers", async () => {
+		const client = makeClient({ eventLog: true });
+		await client.connect();
+		// 20_000 chars > 8_192 cap → 3 chunks (8192, 8192, 3616).
+		const text = "x".repeat(20_000);
+		client.emitEventLog({ kind: "assistant_text", ts: 1, text });
+		await Bun.sleep(20);
+		const frames = bridge.receivedLines
+			.filter(l => l.includes('"assistant_text"'))
+			.map(l => JSON.parse(l) as { entry: { text?: string; meta?: Record<string, unknown> } });
+		expect(frames).toHaveLength(3);
+		// Reassembled content equals the original, in order.
+		expect(frames.map(f => f.entry.text).join("")).toBe(text);
+		// First frame: no cont marker, but more=true (not final).
+		expect(frames[0]?.entry.meta?.cont).toBeUndefined();
+		expect(frames[0]?.entry.meta?.more).toBe(true);
+		// Middle frame: continuation + more.
+		expect(frames[1]?.entry.meta?.cont).toBe(true);
+		expect(frames[1]?.entry.meta?.more).toBe(true);
+		// Last frame: continuation, no more.
+		expect(frames[2]?.entry.meta?.cont).toBe(true);
+		expect(frames[2]?.entry.meta?.more).toBeUndefined();
+		client.dispose();
+	});
+
+	it("keeps low-fi kinds (tool_call) clamped to 256 chars", async () => {
+		const client = makeClient({ eventLog: true });
+		await client.connect();
+		client.emitEventLog({ kind: "tool_call", ts: 1, toolName: "bash", text: "i".repeat(500) });
+		await Bun.sleep(20);
+		const line = bridge.receivedLines.find(l => l.includes('"tool_call"'));
 		const parsed = JSON.parse(line as string) as { entry: { text?: string } };
 		expect(parsed.entry.text?.length).toBe(256);
+		client.dispose();
 	});
 
 	it("drops entries with unknown kinds", async () => {

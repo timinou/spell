@@ -114,21 +114,35 @@ function renderAssistantEvent(event: AssistantEvent): string {
 	}
 }
 
-export function renderEventLogEntry(entry: { kind: string; ts: number; text?: string; toolName?: string }): string {
+export function renderEventLogEntry(entry: {
+	kind: string;
+	ts: number;
+	text?: string;
+	toolName?: string;
+	meta?: Record<string, string | number | boolean>;
+}): string {
 	const time = new Date(entry.ts).toISOString().slice(11, 19);
+	// Chunked content frames: `cont` continuation chunks omit the timestamp
+	// prefix; non-final chunks (`more`) omit the trailing newline so a long
+	// assistant/user message stitches back into one logical line.
+	const cont = entry.meta?.cont === true;
+	const more = entry.meta?.more === true;
+	const nl = more ? "" : "\r\n";
 	switch (entry.kind) {
 		case "turn_start":
 			return `${GRAY}[${time}] · turn${RESET}\r\n`;
 		case "turn_end":
 			return `${GRAY}[${time}] · end${RESET}\r\n`;
 		case "user_message":
-			return `${BOLD}${CYAN}[${time}] you ›${RESET} ${entry.text ?? ""}\r\n`;
+			return cont
+				? `${entry.text ?? ""}${nl}`
+				: `${BOLD}${CYAN}[${time}] you ›${RESET} ${entry.text ?? ""}${nl}`;
 		case "tool_call":
 			return `${CYAN}[${time}] › ${entry.toolName ?? "?"}${RESET}\r\n`;
 		case "tool_result":
 			return `${GREEN}[${time}] ✓ ${entry.toolName ?? "?"}${RESET}\r\n`;
 		case "assistant_text":
-			return `${GRAY}[${time}]${RESET} ${entry.text ?? ""}\r\n`;
+			return cont ? `${entry.text ?? ""}${nl}` : `${GRAY}[${time}]${RESET} ${entry.text ?? ""}${nl}`;
 		case "plan_decision":
 			return `${GREEN}[${time}] plan decided${RESET}\r\n`;
 		case "error":

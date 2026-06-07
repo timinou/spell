@@ -1,0 +1,158 @@
+#+TITLE: Web dashboard shows only the first 256 chars of assistant messages
+#+STATE: REVIEW
+#+SESSION_ID: 14fe99f45415532f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-06T13-49-53-360Z_14fe99f45415532f.jsonl]]
+#+CUSTOM_ID: BUG-432-web-dashboard-shows-only-the-first-256-c
+
+* Initial Message
+
+1. why do sessions not show their history when I connect with them on the server?
+2. why are the open sessions showing only the beginning of sessions? [Image #1]
+
+* Initial Message
+
+On the spell-server web dashboard, each session shows only the *beginning* of
+assistant content — a few wrapped lines, then a =[HH:MM:SS] · end= footer. The
+footer is the =turn_end= log entry, NOT a truncation marker; the real loss is
+upstream: assistant text is hard-clipped before it leaves the CLI.
+
+* Root Cause (verified)
+
+External (terminal) CLI sessions mirror activity to the dashboard via the
+low-fi =event_log= summary channel. Assistant messages are emitted as a single
+=assistant_text= entry that is clipped at the source:
+
+- =packages/coding-agent/src/session-bridge/client.ts:15= —
+  =const EVENT_LOG_TEXT_MAX = 256;=
+- =packages/coding-agent/src/session-bridge/client.ts:184= —
+  clip applied: =entry.text.length > EVENT_LOG_TEXT_MAX ? slice(0, MAX) : entry=
+- Emitted from =packages/coding-agent/src/modes/interactive-mode.ts:1503= on
+  =message_end= via =bridge.emitEventLog({ kind: "assistant_text", ts, text })=.
+
+256 chars is roughly 3 wrapped terminal lines — exactly what the screenshot
+shows before =· end=. The remainder is discarded at the CLI; the dashboard
+never receives it.
+
+NB: spawned sessions stream full text via the *unclipped* =rpc_event= path
+(=message_update= / =text_delta=), so this defect is specific to the external
+=event_log= summary path.
+
+* Scope
+
+In:
+- Make assistant (and user) message content reach the dashboard un-truncated
+  for external sessions.
+- Preferred approach: stream assistant text for external sessions through the
+  same chunked, unclipped channel spawned sessions use (text deltas / a
+  dedicated full-text event), rather than a single clipped summary line.
+- If the chunked route is out of reach for the bridge transport, raise/remove
+  =EVENT_LOG_TEXT_MAX= for =assistant_text=/=user_message= kinds specifically,
+  with a sane upper bound and chunking so a single frame cannot be unbounded.
+- Keep the tool_call/tool_result/turn markers as compact summaries (they are
+  intentionally low-fi and not affected).
+
+Out:
+- The "no history on connect" backfill defect (tracked separately).
+- Reworking the blocking-event / inject protocol.
+- Spawned-session rendering (already unclipped).
+
+Rationale:
+- Repo evidence: the clip is unconditional for any =entry.text= over 256 chars,
+  applied to =assistant_text= the same as a one-line tool intent.
+- Repo evidence: spawned sessions already prove an unclipped streaming path
+  exists end-to-end (=StreamRenderer.renderRpcEvent= handles =text_delta=).
+
+* Existing Patterns
+
+- =packages/spell-server/web/src/detail/StreamRenderer.ts= — =renderRpcEvent=
+  already renders streaming =text_delta= for spawned sessions with no clip;
+  =renderEventLogEntry= renders the clipped external summary. Converge external
+  assistant text onto the richer path or feed it full text.
+- =packages/coding-agent/src/session-bridge/client.ts= — =emitEventLog= is the
+  single clip site; any kind-specific exemption or chunking lands here.
+- =packages/coding-agent/src/modes/interactive-mode.ts= =#setupBridgeEventLog=
+  — the =message_end= to =assistant_text= mapping is where a chunked emit would
+  be produced if we split long messages.
+- =packages/spell-server/src/socket/session-registry.ts= — ring-buffer entries
+  must stay bounded in memory; a chunking strategy keeps per-frame size sane
+  without one giant string.
+
+* Tests
+
+User/workflow coverage first:
+1. An assistant message longer than 256 chars renders in full on the dashboard
+   for an external session.
+2. A user message longer than 256 chars likewise renders in full.
+3. Compact summaries (tool_call intent, etc.) remain bounded/low-fi.
+4. No single emitted frame exceeds the documented per-frame cap (chunking holds).
+5. Rendering order at the seam between chunks is correct (no interleave/garble).
+
+Concrete test files / scenarios:
+- =packages/coding-agent/test/session-bridge/client.test.ts= (or nearest) —
+  assert =assistant_text= over the threshold is emitted in full (chunked if
+  applicable) and not =slice(0,256)=; assert tool intents stay clipped.
+- =packages/spell-server/web/test/detail/StreamRenderer.test.ts= — assert the
+  renderer reassembles/streams full assistant content for the external path.
+
+* Implementation
+
+** ITEM Decide transport: chunked rpc_event vs kind-exempt event_log
+:PROPERTIES:
+:CUSTOM_ID: BUG-web-clip::decide-transport
+:LAYER: api
+:END:
+- Files: design note in the item; inspect =session-bridge/client.ts= and
+  =web/ws/server.ts= to confirm whether external sessions can ride the
+  =rpc_event= text-delta path or must extend =event_log=.
+- Choose the cutover that converges external + spawned rendering rather than
+  forking a second renderer.
+
+** ITEM Emit full assistant/user text (chunked, unclipped)
+:PROPERTIES:
+:CUSTOM_ID: BUG-web-clip::emit-full-text
+:DEPENDS: BUG-web-clip::decide-transport
+:LAYER: api
+:END:
+- Files: =packages/coding-agent/src/session-bridge/client.ts=,
+  =packages/coding-agent/src/modes/interactive-mode.ts=.
+- Remove the blanket 256 clip for =assistant_text=/=user_message=; chunk long
+  messages under a documented per-frame cap. Keep low-fi kinds clipped.
+
+** ITEM Render full external assistant text
+:PROPERTIES:
+:CUSTOM_ID: BUG-web-clip::render-full-text
+:DEPENDS: BUG-web-clip::emit-full-text
+:LAYER: ui
+:END:
+- Files: =packages/spell-server/web/src/detail/StreamRenderer.ts=,
+  =packages/spell-server/web/src/App.tsx= if a new event shape is introduced.
+- Ensure the dashboard reassembles/streams chunks into the full message in
+  order.
+
+* Edge Cases
+
+- A very long single message must not produce one unbounded WS frame — chunk it.
+- Ring-buffer memory: chunked entries must still respect the bounded ring; do
+  not let one message evict the entire backfill window unintentionally.
+- Mixed content (assistant text + tool calls in one turn): ordering preserved.
+- Non-text/attachment messages: =extractMessageText= empty so still no emit.
+- Backward compatibility: an older CLI still clipping must not break the newer
+  renderer (treat absent chunks as a single entry).
+
+* Acceptance Criteria
+
+- Assistant and user messages render in full on the dashboard for external
+  sessions, regardless of length.
+- No single WS frame exceeds the documented cap; chunking preserves order.
+- Compact tool/turn summaries remain low-fi and bounded.
+- Spawned-session rendering is unchanged.
+
+* Verification
+
+- =bun test packages/coding-agent/test/session-bridge/client.test.ts=
+- =bun test packages/spell-server/web/test/detail/StreamRenderer.test.ts=
+- =bun run --parallel check:ts=
+- Manual: produce a >1KB assistant message in an external session; confirm the
+  dashboard shows the whole thing, not the first 3 lines + =· end=.
+
+NOTE [2026-06-07]: Implemented via chunking, not clamp-bump. session-bridge/client.ts: content kinds (assistant_text, user_message) delivered in full, split at EVENT_LOG_CHUNK_MAX=8192/frame; continuation chunks carry meta.cont, non-final carry meta.more. Low-fi kinds keep 256 clamp. StreamRenderer.renderEventLogEntry honors meta.cont (omit ts prefix) + meta.more (omit trailing newline) so N frames stitch into one logical line; sessions.ts + App.tsx thread meta through. Old 256-clip test replaced with full/chunk/low-fi-clamp contract tests. Tests: event-log-client.test.ts (8) + StreamRenderer.test.ts (13). All green; tsgo clean; biome clean.

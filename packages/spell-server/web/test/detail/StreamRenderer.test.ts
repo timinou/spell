@@ -89,6 +89,42 @@ describe("renderEventLogEntry", () => {
 		const out = renderEventLogEntry({ kind: "weird_kind", ts });
 		expect(out).toContain("weird_kind");
 	});
+
+	it("renders full assistant text with prefix and trailing newline for a single frame", () => {
+		const out = renderEventLogEntry({ kind: "assistant_text", ts, text: "hello world" });
+		expect(out).toContain("12:34:56");
+		expect(out).toContain("hello world");
+		expect(out.endsWith("\r\n")).toBe(true);
+	});
+
+	it("reassembles chunked assistant frames into one logical line", () => {
+		// First chunk: has prefix, suppresses newline (more=true).
+		const first = renderEventLogEntry({ kind: "assistant_text", ts, text: "AAA", meta: { more: true } });
+		expect(first).toContain("12:34:56");
+		expect(first).toContain("AAA");
+		expect(first.endsWith("\r\n")).toBe(false);
+
+		// Middle chunk: continuation (no prefix), suppresses newline.
+		const mid = renderEventLogEntry({ kind: "assistant_text", ts, text: "BBB", meta: { cont: true, more: true } });
+		expect(mid).not.toContain("12:34:56");
+		expect(mid).toBe("BBB");
+
+		// Last chunk: continuation, final newline.
+		const last = renderEventLogEntry({ kind: "assistant_text", ts, text: "CCC", meta: { cont: true } });
+		expect(last).not.toContain("12:34:56");
+		expect(last.endsWith("\r\n")).toBe(true);
+
+		// Concatenation strips ANSI prefix only on the first; payload is contiguous.
+		expect((first + mid + last).replace(/\u001b\[[0-9]*m/g, "")).toContain("AAABBBCCC");
+	});
+
+	it("reassembles chunked user_message frames", () => {
+		const first = renderEventLogEntry({ kind: "user_message", ts, text: "foo", meta: { more: true } });
+		const last = renderEventLogEntry({ kind: "user_message", ts, text: "bar", meta: { cont: true } });
+		expect(first).toContain("you");
+		expect(first.endsWith("\r\n")).toBe(false);
+		expect(last).toBe("bar\r\n");
+	});
 });
 
 describe("renderTemplateInfo", () => {

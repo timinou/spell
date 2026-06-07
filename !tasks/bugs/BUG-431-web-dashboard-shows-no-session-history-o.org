@@ -1,0 +1,169 @@
+#+TITLE: Web dashboard shows no session history on connect
+#+STATE: REVIEW
+#+SESSION_ID: 14fe99f45415532f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-06T13-49-53-360Z_14fe99f45415532f.jsonl]]
+#+CUSTOM_ID: BUG-431-web-dashboard-shows-no-session-history-o
+
+* Initial Message
+
+1. why do sessions not show their history when I connect with them on the server?
+2. why are the open sessions showing only the beginning of sessions? [Image #1]
+
+* Initial Message
+
+Connecting to an existing session on the spell-server web dashboard shows no
+prior history — the transcript only starts streaming from events that arrive
+*after* the browser subscribes. Reconnecting or opening a long-running session
+yields a near-empty terminal until the next turn fires.
+
+* Root Cause (verified)
+
+The web dashboard never reads a session's transcript from disk. It relays a
+live, in-memory ring buffer of low-fi =event_log= summaries, with three gaps:
+
+1. =packages/spell-server/src/socket/session-registry.ts:86= —
+   =DEFAULT_RECENT_LOG_CAP = 50=. =#recentLog= is filled only from =event_log=
+   frames the daemon observes *after* it starts watching. Anything before
+   (the bulk of an existing session) was never buffered. No disk replay exists.
+
+2. =packages/spell-server/src/web/ws/server.ts:303-307= — backfill loop is
+   gated to =entry?.kind === "external"=. Spawned sessions get *zero* backfill;
+   =#tapEvents= (=server.ts:~430=) subscribes to new events going forward only.
+   So attaching to a running spawned session is blank until the next event.
+
+3. =packages/coding-agent/src/session-bridge/client.ts:198= — =emitEventLog=
+   no-ops unless =SPELL_BRIDGE_EVENT_LOG=1= or =enableEventLog()= was called,
+   so a session that never opted in has nothing to backfill or stream.
+
+Key enabling fact: =sessionRoot= (registered by the CLI) is the artifacts dir =
+=sessionFile= with =.jsonl= stripped (=session-manager.ts:1605=). So the full
+transcript JSONL is at =${sessionRoot}.jsonl= and the server *can* read it.
+
+* Scope
+
+In:
+- On =subscribe= with the =events= channel, backfill the recent transcript by
+  reading the session's JSONL from disk (tail-bounded) and rendering it before
+  live streaming begins — for BOTH external and spawned sessions.
+- Surface the transcript path to the web layer: persist =${sessionRoot}.jsonl=
+  (or an explicit =transcriptPath=) on the registry entry so the ws server can
+  locate it without guessing.
+- Reuse the existing =renderEventLogEntry= mapping so backfilled lines render
+  identically to live ones; map JSONL message entries to =EventLogEntry= shape.
+- Bound the disk replay (e.g. last N entries / size budget) so a huge session
+  does not flood the socket; document the bound.
+
+Out:
+- Changing the wire protocol beyond what is needed to carry backfill entries.
+- Full bidirectional transcript sync / pagination / scrollback history server.
+- Fixing the 256-char assistant_text clip (tracked separately).
+- Spawned-session RPC replay via =get_messages= (different transport; the disk
+  JSONL is the single source of truth for both kinds).
+
+Rationale:
+- Repo evidence: =web/ws/server.ts= subscribe handler only backfills external
+  via the 50-entry ring; spawned path has no backfill at all.
+- Repo evidence: =session-manager.ts= writes an append-only JSONL whose path is
+  derivable from the already-registered =sessionRoot=.
+
+* Existing Patterns
+
+- =packages/spell-server/src/web/ws/server.ts= — =#dispatch= "subscribe" case
+  already distinguishes =eventsAlreadySubscribed= to avoid double-backfill;
+  extend that same guard to drive a disk replay instead of (or before) the ring.
+- =packages/spell-server/web/src/detail/StreamRenderer.ts= (frontend) — pure
+  =renderEventLogEntry= already maps =EventLogEntry= to ANSI; reuse its kinds.
+- =packages/coding-agent/src/session/session-manager.ts= —
+  =loadEntriesFromFile(path, storage)= is the canonical JSONL reader; a
+  server-side equivalent (or a thin extracted reader) should parse the same
+  shape rather than re-inventing entry parsing.
+- =packages/spell-server/src/socket/session-registry.ts= — =getRecentLog= is
+  the current backfill source; the disk replay should slot in beside it, not
+  replace the live ring used for cross-tab fan-out.
+
+* Tests
+
+User/workflow coverage first:
+1. Subscribing to an external session with prior on-disk history replays the
+   recent transcript (user/assistant/tool entries) before any live event.
+2. Subscribing to a spawned session likewise backfills from disk (no longer
+   blank until next event).
+3. A redundant resubscribe does NOT double-paint the backfilled history.
+4. Replay is bounded: a session with thousands of entries sends only the
+   documented tail, in order.
+5. A session with no JSONL yet (fresh) backfills nothing and does not error.
+6. Live streaming after backfill continues without gaps or duplicate lines at
+   the seam.
+
+Concrete test files / scenarios:
+- =packages/spell-server/test/web/ws/server.test.ts= (or nearest existing ws
+  test) — drive subscribe against a temp session root with a seeded JSONL;
+  assert ordered =external_event_log= frames precede live frames; assert no
+  duplication on resubscribe.
+- A server-side transcript-reader unit test: JSONL to =EventLogEntry[]= mapping,
+  including bound/tail behavior and malformed-line skipping.
+
+* Implementation
+
+** ITEM Expose transcript path on registry entries
+:PROPERTIES:
+:CUSTOM_ID: BUG-web-history::transcript-path
+:LAYER: api
+:END:
+- Files: =packages/spell-server/src/socket/session-registry.ts=,
+  =packages/spell-server/src/socket/types.ts=,
+  =packages/coding-agent/src/session-bridge/types.ts=.
+- Add =transcriptPath?= (or derive =${sessionRoot}.jsonl= centrally) on the
+  registry entry / register message so the web layer can locate the JSONL.
+- Keep =sessionRoot= contract intact; this is an additive field.
+
+** ITEM Server-side bounded transcript reader
+:PROPERTIES:
+:CUSTOM_ID: BUG-web-history::reader
+:DEPENDS: BUG-web-history::transcript-path
+:LAYER: api
+:END:
+- Files: new =packages/spell-server/src/web/session/transcript-replay.ts=.
+- Read the JSONL tail (bounded by entry count + byte budget), parse each line,
+  map message/tool entries to =EventLogEntry= reusing the shared kinds, skip
+  malformed lines truthfully.
+
+** ITEM Drive disk backfill from subscribe (both kinds)
+:PROPERTIES:
+:CUSTOM_ID: BUG-web-history::subscribe-backfill
+:DEPENDS: BUG-web-history::reader
+:LAYER: api
+:END:
+- Files: =packages/spell-server/src/web/ws/server.ts=.
+- In the "subscribe"/events branch, when newly subscribing, send the bounded
+  disk replay as =external_event_log= frames for external AND spawned, then
+  start the live tap. Preserve the =eventsAlreadySubscribed= no-double-paint
+  guard.
+
+* Edge Cases
+
+- Resubscribe must not replay twice (existing =eventsAlreadySubscribed= guard).
+- Session whose JSONL is mid-write: reader tolerates a trailing partial line.
+- Spawned session that also streams unclipped =rpc_event= live: backfill seam
+  must not duplicate the in-flight turn already painted by the live tap.
+- Very large transcript: only the documented bounded tail is sent.
+- Missing/relocated JSONL (session rotated file): degrade to empty backfill,
+  never throw across the ws dispatch.
+
+* Acceptance Criteria
+
+- Connecting to an existing external OR spawned session shows recent prior
+  history immediately, before the next live event.
+- History comes from the on-disk JSONL, not solely the 50-entry ring.
+- No double-painting on resubscribe; bounded replay for large sessions.
+- Live streaming continues seamlessly after backfill.
+
+* Verification
+
+- =bun test packages/spell-server/test/web/ws/server.test.ts=
+- =bun test= for the new transcript-reader unit.
+- =bun run --parallel check:ts=
+- Manual: open the dashboard against a long-running session; confirm recent
+  transcript paints on connect and live turns continue without gaps.
+
+NOTE [2026-06-07]: Implemented as cutover. New web/session/transcript-replay.ts reads ${sessionRoot}.jsonl (bounded tail, entry+byte caps, malformed/partial-line tolerant) and maps message entries to EventLogEntry[]. web/ws/server.ts subscribe now calls #backfillTranscript for BOTH external and spawned (root resolved via hub.getSessionRoot ?? registry.sessionRoot, same as artifacts route), gated by !eventsAlreadySubscribed to prevent double-paint. No new protocol field needed. Tests: transcript-replay.test.ts (11) + ws/subscribe-backfill.test.ts (4). All green; tsgo clean (no new errors); biome clean.
