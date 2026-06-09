@@ -1,5 +1,5 @@
 #+TITLE: pi-org journal: JournalTodoItem/Group shape + serializeJournalOrg drawer keys (VERIFY_*, REF, CLOSES_REF)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 1502540eec30c834
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T11-18-25-968Z_1502540eec30c834.jsonl]]
 #+CUSTOM_ID: FEAT-803-pi-org-journal-journaltodoitem-group-sha
