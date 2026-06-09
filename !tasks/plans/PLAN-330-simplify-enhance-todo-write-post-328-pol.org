@@ -1,0 +1,34 @@
+#+TITLE: Simplify + enhance todo_write (post-328 polish + capability)
+#+STATE: ITEM
+#+SESSION_ID: 1502540eec30c834
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T11-18-25-968Z_1502540eec30c834.jsonl]]
+#+CUSTOM_ID: PLAN-330-simplify-enhance-todo-write-post-328-pol
+
+* Initial Message
+
+i restarted the session, can you test drive this?
+
+Follow-up to PLAN-328 (flat TodoNode declarative reconcile, landed 67a06604f).
+
+Sequenced per user decision:
+- PLAN-329a (polish, ships first): fix redundant post-completion gate footer voice + tighten prompt wording. No new capability.
+- PLAN-329b (enhancement, scoped after a is named): genuinely new capability — candidate set: verify.review live LLM-gating · multi-blocker wave viz · ref auto-close-on-complete.
+
+* Wart found in live test-drive (PLAN-329a root)
+After {status:completed, verified:true} on a node with verify.cmd, the
+summary footer re-prints the IMPERATIVE "Gate Requirements: Run `echo ok`
+(verify.cmd) for t3." plus aggregate "Group complete. Run verification
+commands." — both on an already-completed+verified node. The two-phase
+guard (applyStatusTransition) already forced run+attest before completion,
+so post-completion imperatives are redundant.
+
+Fix = voice split, not removal:
+- pre-completion  "--- Verification Required ---" stays imperative (correct).
+- post-completion "--- Gate Requirements ---" becomes CONFIRMATORY past-tense
+  ("Verified: t3 (verify.cmd)") so the two sections have distinct, non-
+  overlapping voices. Aggregate "Group complete. Run verification commands."
+  similarly reframed to confirmation.
+
+Touch: src/tools/todo-write.ts (gateDirectivesForNode + completedGroups
+block), tests todo-write-gates.test.ts (lines 189-241, 687, 766) +
+todo-write-deferral.test.ts (331,344), prompts/tools/todo-write.md wording.

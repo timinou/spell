@@ -42,6 +42,9 @@ Use `todo_write` for roster tracking, gates, or blockers before delegating work.
 ```
 verify { cmd | artifact | commit }  → REQUIRED → two-phase: resubmit { status:"completed", verified:true }
 verify { review }                   → advisory self-review, never gates
+
+phase 1 → "Verification Required" lists imperatives (do these, then resubmit verified:true)
+phase 2 → "Verification Cleared"  is a receipt (already done — no further action)
 ```
 
 <critical>

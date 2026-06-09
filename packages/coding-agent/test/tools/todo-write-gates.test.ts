@@ -180,14 +180,14 @@ describe("formatSummary gate directives", () => {
 		});
 	}
 
-	test("completing a gated node injects Gate Requirements section", () => {
+	test("completing a gated node injects Verification Cleared receipt", () => {
 		const node = makeNode({ id: "task-1", content: "Build it", status: "completed", verify: { commit: true } });
 		const result = callFormatSummary({
 			nodes: [node],
 			completedGatedNodes: [node],
 		});
-		expect(result).toContain("--- Gate Requirements ---");
-		expect(result).toContain("Commit changes (verify.commit) for task-1.");
+		expect(result).toContain("--- Verification Cleared ---");
+		expect(result).toContain("✓ task-1 cleared: verify.commit.");
 	});
 
 	test("each gate type produces its directive", () => {
@@ -206,10 +206,8 @@ describe("formatSummary gate directives", () => {
 			nodes: [node],
 			completedGatedNodes: [node],
 		});
-		expect(result).toContain("Run `bun test` (verify.cmd) for task-1.");
-		expect(result).toContain("Verify artifact at dist/out.json (verify.artifact) for task-1.");
-		expect(result).toContain("Commit changes (verify.commit) for task-1.");
-		expect(result).toContain("Advisory review: check acceptance (verify.review) for task-1.");
+		expect(result).toContain("✓ task-1 cleared: verify.cmd, verify.artifact, verify.commit.");
+		expect(result).toContain("↳ task-1 advisory review: check acceptance (verify.review).");
 	});
 
 	test("no gate directives when completing non-gated node", () => {
@@ -218,7 +216,7 @@ describe("formatSummary gate directives", () => {
 			nodes: [node],
 			completedGatedNodes: [],
 		});
-		expect(result).not.toContain("--- Gate Requirements ---");
+		expect(result).not.toContain("--- Verification Cleared ---");
 	});
 
 	test("group completion aggregate directive", () => {
@@ -237,8 +235,7 @@ describe("formatSummary gate directives", () => {
 			completedGroups: ["Build"],
 		});
 		expect(result).toContain('Group "Build" complete.');
-		expect(result).toContain("Commit changes.");
-		expect(result).toContain("Run verification commands.");
+		expect(result).toContain("gated node(s) cleared.");
 	});
 
 	test("blocked node shows [blocked] label in remaining items", () => {
@@ -684,7 +681,7 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 		expect(nodes[0]?.status).toBe("completed");
 
 		const summary = result.content.find(part => part.type === "text")?.text ?? "";
-		expect(summary).toContain("Gate Requirements");
+		expect(summary).toContain("Verification Cleared");
 	});
 
 	test("non-gated node completes without verified", async () => {
@@ -729,7 +726,7 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 
 		const summary = result.content.find(part => part.type === "text")?.text ?? "";
 		expect(summary).not.toContain("Verification Required");
-  expect(summary).toContain("Advisory review: check acceptance criteria (verify.review) for task-1.");
+		expect(summary).toContain("↳ task-1 advisory review: check acceptance criteria (verify.review).");
 	});
 
 	test("closesRef-only node triggers two-phase completion", async () => {
@@ -763,7 +760,7 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 		expect(acceptedNodes[0]?.status).toBe("completed");
 
 		const acceptedSummary = accepted.content.find(part => part.type === "text")?.text ?? "";
-		expect(acceptedSummary).toContain("Gate Requirements");
+		expect(acceptedSummary).toContain("Verification Cleared");
 	});
 });
 

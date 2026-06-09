@@ -953,13 +953,27 @@ function applyStatusTransition(
 // =============================================================================
 
 /** Build gate directive lines for a single node. */
+/**
+ * Build confirmatory receipt lines for a completed gated node.
+ *
+ * By the time a node reaches this section it has already cleared its gates:
+ * required gates (cmd/artifact/commit/closesRef) passed the two-phase
+ * `verified:true` guard in {@link applyStatusTransition}, and `closesRef`
+ * auto-transitioned its org item to DONE. The voice is therefore a receipt,
+ * not an imperative — the imperative checklist lives in "Verification
+ * Required" (pending) only. Advisory review is the lone non-gating signal and
+ * is surfaced as a reminder.
+ */
 function gateDirectivesForNode(node: TodoNode): string[] {
-	const lines: string[] = [];
 	const v = node.verify;
-	if (v?.cmd) lines.push(`Run \`${v.cmd}\` (verify.cmd) for ${node.id}.`);
-	if (v?.artifact) lines.push(`Verify artifact at ${v.artifact} (verify.artifact) for ${node.id}.`);
-	if (v?.commit) lines.push(`Commit changes (verify.commit) for ${node.id}.`);
-	if (v?.review) lines.push(`Advisory review: ${v.review} (verify.review) for ${node.id}.`);
+	const cleared: string[] = [];
+	if (v?.cmd) cleared.push("verify.cmd");
+	if (v?.artifact) cleared.push("verify.artifact");
+	if (v?.commit) cleared.push("verify.commit");
+	if (node.closesRef) cleared.push(`closes ${node.ref ?? "ref"}`);
+	const lines: string[] = [];
+	if (cleared.length > 0) lines.push(`✓ ${node.id} cleared: ${cleared.join(", ")}.`);
+	if (v?.review) lines.push(`  ↳ ${node.id} advisory review: ${v.review} (verify.review).`);
 	return lines;
 }
 
@@ -1051,7 +1065,7 @@ export function formatSummary({
 
 	if (completedGatedNodes.length > 0) {
 		lines.push("");
-		lines.push("--- Gate Requirements ---");
+		lines.push("--- Verification Cleared ---");
 		for (const node of completedGatedNodes) {
 			for (const directive of gateDirectivesForNode(node)) lines.push(directive);
 		}
@@ -1082,11 +1096,8 @@ export function formatSummary({
 			const group = byLabel.get(label);
 			if (!group) continue;
 			const gated = group.filter(node => hasGate(node) || node.closesRef);
-			const actions: string[] = [];
-			if (gated.some(node => node.verify?.commit)) actions.push("Commit changes.");
-			if (gated.some(node => node.verify?.artifact)) actions.push("Verify artifacts.");
-			if (gated.some(node => node.verify?.cmd)) actions.push("Run verification commands.");
-			if (actions.length > 0) lines.push(`\nGroup "${label}" complete. ${actions.join(" ")}`);
+			const cleared = gated.length > 0 ? ` ${gated.length} gated node(s) cleared.` : "";
+			lines.push(`\nGroup "${label}" complete.${cleared}`);
 			const deferred = group.filter(node => node.status === "abandoned" && node.deferralFupId);
 			if (deferred.length > 0) {
 				const fupRefs = deferred.map(node => `${node.id} -> ${node.deferralFupId}`).join(", ");

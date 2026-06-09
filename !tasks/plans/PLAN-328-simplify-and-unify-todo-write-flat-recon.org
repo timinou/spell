@@ -1,8 +1,9 @@
 #+TITLE: Simplify and unify todo_write — flat reconcile node, verify{} gates, ref linkage (PLAN-327 follow-up)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 1502540eec30c834
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T11-18-25-968Z_1502540eec30c834.jsonl]]
 #+CUSTOM_ID: PLAN-328-simplify-and-unify-todo-write-flat-recon
+#+COMPLETION_HASH: 8c4add603032cb0a
 
 * Initial Message
 
@@ -67,3 +68,4 @@ TodoNode {
 ** Wave 3 — verify (blocked on Wave 2)
 - [[id:FEAT-804-symbolify-todo-write-md-eager-todo-md-up]] symbolify todo-write.md + eager-todo.md AND update ~26 test files; add reconcile + verify{} + ref fixtures. Run bun run --parallel check:ts + targeted suites green.
 
+NOTE [2026-06-09]: Landed in 67a06604f. Full cutover: spine + 4 consumer waves + journal + 24 test files migrated + NEW property/fuzz suite. 260+ tests green, tsgo at baseline 58 (zero new). Net -473 LOC. Mid-flight BUG-438 filed (subagent 402 silent fail).

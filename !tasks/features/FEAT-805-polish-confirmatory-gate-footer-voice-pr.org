@@ -1,0 +1,11 @@
+#+TITLE: Polish: confirmatory gate footer voice + prompt wording
+#+STATE: DONE
+#+SESSION_ID: 1502540eec30c834
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T11-18-25-968Z_1502540eec30c834.jsonl]]
+#+CUSTOM_ID: FEAT-805-polish-confirmatory-gate-footer-voice-pr
+
+* Initial Message
+
+i restarted the session, can you test drive this?
+
+PLAN-330a. Root cause in PLAN-330 body. Split footer voice: post-completion "Gate Requirements" becomes confirmatory past-tense; pre-completion "Verification Required" stays imperative. Update todo-write-gates.test.ts + todo-write-deferral.test.ts assertions + prompts/tools/todo-write.md. Gate: bun test packages/coding-agent/test/tools/todo-write-gates.test.ts packages/coding-agent/test/tools/todo-write-deferral.test.ts
