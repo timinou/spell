@@ -1,8 +1,9 @@
 #+TITLE: Simplify + enhance todo_write (post-328 polish + capability)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 1502540eec30c834
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T11-18-25-968Z_1502540eec30c834.jsonl]]
 #+CUSTOM_ID: PLAN-330-simplify-enhance-todo-write-post-328-pol
+#+COMPLETION_HASH: 4b46e0216ef211e0
 
 * Initial Message
 
@@ -32,3 +33,5 @@ Fix = voice split, not removal:
 Touch: src/tools/todo-write.ts (gateDirectivesForNode + completedGroups
 block), tests todo-write-gates.test.ts (lines 189-241, 687, 766) +
 todo-write-deferral.test.ts (331,344), prompts/tools/todo-write.md wording.
+
+NOTE [2026-06-09]: 330a (059ed70c0): confirmatory gate-footer voice. 330b (a4f0839a0): verify.review LLM-gating (review-judge.ts, single-phase, fail-open, todo.reviewJudge setting) + blocker-wave viz (computeWaveDepths, Waves:/[wK] in summary). 17 new tests, tsgo at baseline 58.
