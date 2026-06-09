@@ -6,7 +6,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { type Agent, type AgentMessage, ThinkingLevel } from "@spell/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@spell/pi-ai";
-import { type AgentStatus, type AgentStatusContext, deriveAgentStatus } from "@spell/pi-desktop-common";
+import {
+	type AgentStatus,
+	type AgentStatusContext,
+	deriveAgentStatus,
+	type TodoItemView,
+	type TodoPhaseView,
+} from "@spell/pi-desktop-common";
 import { NiriOverviewController } from "@spell/pi-niri";
 import { appendItemToFile, generateId, resolveCategories } from "@spell/pi-org";
 import type { Component, OverlayHandle, SlashCommand } from "@spell/pi-tui";
@@ -44,7 +50,33 @@ import { STTController, type SttState } from "../stt";
 import { SubagentTracker } from "../task/subagent-tracker";
 import type { SingleResult } from "../task/types";
 import { replaceTabs, TRUNCATE_LENGTHS } from "../tools/render-utils";
-import { isDelegatedTask } from "../tools/todo-write";
+import { isDelegatedNode, type TodoNode as TodoNodeT } from "../tools/todo-write";
+
+/** Project the flat node roster into the desktop-overlay phase view, clustered by group label. */
+function nodesToPhaseViews(nodes: TodoNodeT[]): TodoPhaseView[] {
+	const order: string[] = [];
+	const buckets = new Map<string, TodoItemView[]>();
+	for (const node of nodes) {
+		const label = node.group?.trim() || "Todos";
+		if (!buckets.has(label)) {
+			buckets.set(label, []);
+			order.push(label);
+		}
+		const orgId = typeof node.ref === "string" && node.ref.startsWith("org://") ? node.ref.slice("org://".length) : undefined;
+		buckets.get(label)!.push({
+			id: node.id,
+			content: node.content,
+			status: node.status,
+			blockers: node.blockers,
+			gateCommit: node.verify?.commit,
+			gateArtifact: node.verify?.artifact,
+			gateCmd: node.verify?.cmd,
+			gateLlm: node.verify?.review,
+			orgItemId: orgId,
+		});
+	}
+	return order.map((name, idx) => ({ id: `group-${idx + 1}`, name, tasks: buckets.get(name)! }));
+}
 import type { EventBus } from "../utils/event-bus";
 import type { BlockingEventLike } from "../utils/intention-summarizer";
 import { generateSessionTitle, setTerminalTitle } from "../utils/title-generator";
@@ -81,7 +113,7 @@ import {
 	onThemeChange,
 	theme,
 } from "./theme/theme";
-import type { CompactionQueuedMessage, InteractiveModeContext, SubmittedUserInput, TodoGroup, TodoItem } from "./types";
+import type { CompactionQueuedMessage, InteractiveModeContext, SubmittedUserInput, TodoNode } from "./types";
 import { UiHelpers } from "./utils/ui-helpers";
 
 /**
@@ -173,7 +205,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	todoExpanded = false;
 	#auditDepth = 0;
 	#auditMaxDepth = 2;
-	todoGroups: TodoGroup[] = [];
+	todoNodes: TodoNode[] = [];
 	hideThinkingBlock = false;
 	pendingImages: ImageContent[] = [];
 	compactionQueuedMessages: CompactionQueuedMessage[] = [];
@@ -318,7 +350,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.eventBus) {
 			this.#subagentTracker = new SubagentTracker(this.eventBus, () => {
 				this.statusLine.setSubagentInfo(this.#subagentTracker?.getInfo() ?? null);
-				if (this.todoGroups.length > 0) {
+				if (this.todoNodes.length > 0) {
 					this.#renderTodoList();
 				}
 				this.ui.requestRender();
@@ -631,7 +663,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					},
 				},
 				get todoPhases() {
-					return ctx.session.getTodoGroups();
+					return nodesToPhaseViews(ctx.session.getTodoNodes());
 				},
 				getClearedCompletedCounts() {
 					return ctx.session.getClearedCompletedCounts();
@@ -927,15 +959,23 @@ export class InteractiveMode implements InteractiveModeContext {
 		visit(results);
 	}
 
-	#renderChildTodoGroups(todo: TodoItem, prefix: string): string[] {
-		const childGroups = todo.delegation?.childGroups?.filter(group => group.tasks.length > 0) ?? [];
-		if (childGroups.length === 0) return [];
+		#renderChildTodoGroups(todo: TodoNode, prefix: string): string[] {
+		const childNodes = todo.delegation?.childNodes ?? [];
+		if (childNodes.length === 0) return [];
 		const lines: string[] = [];
-		for (const group of childGroups) {
-			lines.push(theme.fg("muted", `${prefix}↳ ${group.name}`));
-			for (const child of group.tasks) {
+		// Cluster child nodes by their cosmetic group label for display.
+		const byLabel = new Map<string, TodoNode[]>();
+		for (const child of childNodes) {
+			const label = child.group?.trim() || "Tasks";
+			const bucket = byLabel.get(label);
+			if (bucket) bucket.push(child);
+			else byLabel.set(label, [child]);
+		}
+		for (const [label, items] of byLabel) {
+			lines.push(theme.fg("muted", `${prefix}↳ ${label}`));
+			for (const child of items) {
 				const nestedChild = child.delegation
-					? { ...child, delegation: { ...child.delegation, childGroups: undefined } }
+					? { ...child, delegation: { ...child.delegation, childNodes: undefined } }
 					: child;
 				lines.push(this.#formatTodoLine(nestedChild, `${prefix}  `, true));
 			}
@@ -943,8 +983,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return lines;
 	}
 
-	#getDelegatedTodoContent(todo: TodoItem): string {
-		if (!isDelegatedTask(todo)) {
+	#getDelegatedTodoContent(todo: TodoNode): string {
+		if (!isDelegatedNode(todo)) {
 			return todo.content;
 		}
 		if (todo.status !== "in_progress") {
@@ -978,7 +1018,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		return `${todo.content} ${spinner} ${activityText}`;
 	}
 
-	#formatTodoLine(todo: TodoItem, prefix: string, showDetailPreview = false): string {
+	#formatTodoLine(todo: TodoNode, prefix: string, showDetailPreview = false): string {
 		const checkbox = theme.checkbox;
 		const content = this.#getDelegatedTodoContent(todo);
 		const childLines = this.#renderChildTodoGroups(todo, `${prefix}  `);
@@ -1026,7 +1066,22 @@ export class InteractiveMode implements InteractiveModeContext {
 		return [theme.fg("dim", `${prefix}  ${truncateToWidth(replaceTabs(firstLine), TRUNCATE_LENGTHS.TITLE)}`)];
 	}
 
-	#getActiveGroup(groups: TodoGroup[]): TodoGroup | undefined {
+		/** Cluster the flat node roster by cosmetic group label, preserving order. */
+	#clusterByLabel(nodes: TodoNode[]): Array<{ name: string; tasks: TodoNode[] }> {
+		const order: string[] = [];
+		const buckets = new Map<string, TodoNode[]>();
+		for (const node of nodes) {
+			const label = node.group?.trim() || "Todos";
+			if (!buckets.has(label)) {
+				buckets.set(label, []);
+				order.push(label);
+			}
+			buckets.get(label)!.push(node);
+		}
+		return order.map(name => ({ name, tasks: buckets.get(name)! }));
+	}
+
+	#getActiveGroup(groups: Array<{ name: string; tasks: TodoNode[] }>): { name: string; tasks: TodoNode[] } | undefined {
 		const nonEmpty = groups.filter(group => group.tasks.length > 0);
 		const active = nonEmpty.find(group =>
 			group.tasks.some(
@@ -1036,9 +1091,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		return active ?? nonEmpty[nonEmpty.length - 1];
 	}
 
-	#renderTodoList(): void {
+		#renderTodoList(): void {
 		this.todoContainer.clear();
-		const groups = this.todoGroups.filter(group => group.tasks.length > 0);
+		const groups = this.#clusterByLabel(this.todoNodes).filter(group => group.tasks.length > 0);
 		if (groups.length === 0) {
 			return;
 		}
@@ -1076,7 +1131,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #loadTodoList(): Promise<void> {
-		this.todoGroups = this.session.getTodoGroups();
+		this.todoNodes = this.session.getTodoNodes();
 		this.#renderTodoList();
 	}
 
@@ -1873,18 +1928,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
-	setTodos(todos: TodoItem[] | TodoGroup[]): void {
-		if (todos.length > 0 && "tasks" in todos[0]) {
-			this.todoGroups = todos as TodoGroup[];
-		} else {
-			this.todoGroups = [
-				{
-					id: "default",
-					name: "Todos",
-					tasks: todos as TodoItem[],
-				},
-			];
-		}
+	setTodos(todos: TodoNode[]): void {
+		this.todoNodes = todos;
 		this.#renderTodoList();
 		this.ui.requestRender();
 	}
@@ -1981,7 +2026,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			isAwaitingHookInput: this.hookSelector !== undefined || this.hookInput !== undefined,
 			isUserPaused: this.#isUserPaused,
 			hasInputCallback: this.onInputCallback !== undefined,
-			todoPhases: this.session.getTodoGroups(),
+			todoPhases: nodesToPhaseViews(this.session.getTodoNodes()),
 		};
 	}
 
@@ -2024,10 +2069,8 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#getInProgressTodoTitles(): string[] {
 		const titles: string[] = [];
-		for (const phase of this.session.getTodoGroups()) {
-			for (const task of phase.tasks) {
-				if (task.status === "in_progress") titles.push(task.content);
-			}
+		for (const node of this.session.getTodoNodes()) {
+			if (node.status === "in_progress") titles.push(node.content);
 		}
 		return titles.slice(0, 5);
 	}

@@ -1,0 +1,29 @@
+#+TITLE: Task integration: template/index/executor adopt verify{}, ref, closesRef, verificationArtifact
+#+STATE: ITEM
+#+SESSION_ID: 1502540eec30c834
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T11-18-25-968Z_1502540eec30c834.jsonl]]
+#+CUSTOM_ID: FEAT-801-task-integration-template-index-executor
+#+LAYER: core
+#+BLOCKERS: FEAT-799-todonode-type-declarative-reconcile-sche
+
+* Initial Message
+
+how would you simplify both the prompt and the implementation of the todo_write system and make it more powerful as a follow-up to PLAN-327?
+
+Wave 2 consumer for [[id:PLAN-328-simplify-and-unify-todo-write-flat-recon]]. Blocked on [[id:FEAT-799-todonode-type-declarative-reconcile-sche]].
+
+* Target
+~packages/coding-agent/src/task/template.ts~, ~packages/coding-agent/src/task/index.ts~, ~packages/coding-agent/src/task/executor.ts~, ~packages/coding-agent/src/task/types.ts~.
+
+* Change
+- ~template.ts~ ~gateDirectivesForTask~ + verification-context render: read ~node.verify.{cmd,artifact,commit,review}~ + ~closesRef~ instead of gateCmd/gateArtifact/gateCommit/gateLlm/verifyCmd/orgItemClosingId.
+- ~index.ts~: ~#writeVerificationArtifact~ reads ~node.verificationArtifact~ (now internal-only field, still present on TodoNode). ~#findTodoForRef~ + ~resolveRef~ already exist — confirm they consume the renamed session API (getTodoNodes). ~closesRef~ replaces orgItemClosingId in any task-side lifecycle.
+- ~executor.ts~: ~runtimeVerification~ object (gateCmd/gateCommit/gateArtifact at lines ~167,1063) maps to verify{} when seeding child todos; ~progress.todoGroups~ → ~progress.todoNodes~ (TodoNode[]) — coordinate field rename with types.ts (~236,268).
+- ~types.ts~: ~todoGroups?:TodoGroup[]~ → ~todoNodes?:TodoNode[]~.
+
+* Edge
+- task auto-roster (~index.ts~ ~449,512) creates nodes with ~ref:null~; reconcile upsert must accept partial nodes from the roster bridge.
+- verificationArtifact stays system-written (task owns it) — must NOT appear in the model input schema (enforced by TODO-SPINE) yet remain readable here.
+
+* Accept
+~bun test packages/coding-agent/test/task/*.test.ts~ green after TODO-TESTS fixture updates. check:ts clean.

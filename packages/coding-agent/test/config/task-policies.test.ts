@@ -9,7 +9,7 @@ import {
 	resolveLayerFromProperties,
 	type TaskPolicy,
 	type TaskPolicyConfig,
-	type TaskPolicyGates,
+	type TaskVerify,
 } from "../../src/config/task-policies";
 
 // Fixtures
@@ -20,18 +20,18 @@ function makePolicies(): TaskPolicy[] {
 		{
 			name: "frontend-journey-tests",
 			match: { layer: "frontend" },
-			gates: { gateLlm: "Journey tests required", gateCmd: "mix test test/journey/" },
+			verify: { review: "Journey tests required", cmd: "mix test test/journey/" },
 			inject: "Write journey tests.",
 		},
 		{
 			name: "api-contract-tests",
 			match: { layer: "api" },
-			gates: { gateCmd: "mix test test/contract/" },
+			verify: { cmd: "mix test test/contract/" },
 		},
 		{
 			name: "frontend-docs",
 			match: { layer: "frontend" },
-			gates: { verifyCmd: "mix docs" },
+			verify: { commit: true },
 			inject: "Document the UI story.",
 		},
 	];
@@ -66,24 +66,24 @@ describe("mergePolicies", () => {
 		version: 1,
 		layers: { frontend: { description: "UI" }, api: { description: "API" } },
 		policies: [
-			{ name: "frontend-tests", match: { layer: "frontend" }, gates: { gateCmd: "project-cmd" } },
-			{ name: "api-tests", match: { layer: "api" }, gates: { gateCmd: "api-cmd" } },
+			{ name: "frontend-tests", match: { layer: "frontend" }, verify: { cmd: "project-cmd" } },
+			{ name: "api-tests", match: { layer: "api" }, verify: { cmd: "api-cmd" } },
 		],
 	};
 
 	it("mode policy with same name overrides project policy", () => {
 		const modePolicies: TaskPolicy[] = [
-			{ name: "frontend-tests", match: { layer: "frontend" }, gates: { gateCmd: "mode-cmd" } },
+			{ name: "frontend-tests", match: { layer: "frontend" }, verify: { cmd: "mode-cmd" } },
 		];
 		const merged = mergePolicies(projectConfig, modePolicies);
 		expect(merged.policies).toHaveLength(2);
 		const frontendPolicy = merged.policies.find(p => p.name === "frontend-tests");
-		expect(frontendPolicy!.gates.gateCmd).toBe("mode-cmd");
+		expect(frontendPolicy!.verify.cmd).toBe("mode-cmd");
 	});
 
 	it("mode policy with different name accumulates", () => {
 		const modePolicies: TaskPolicy[] = [
-			{ name: "frontend-docs", match: { layer: "frontend" }, gates: { gateLlm: "docs required" } },
+			{ name: "frontend-docs", match: { layer: "frontend" }, verify: { review: "docs required" } },
 		];
 		const merged = mergePolicies(projectConfig, modePolicies);
 		expect(merged.policies).toHaveLength(3);
@@ -105,7 +105,7 @@ describe("mergePolicies", () => {
 	});
 
 	it("empty project policies pass through mode policies", () => {
-		const modePolicies: TaskPolicy[] = [{ name: "test", match: { layer: "frontend" }, gates: { gateCmd: "cmd" } }];
+		const modePolicies: TaskPolicy[] = [{ name: "test", match: { layer: "frontend" }, verify: { cmd: "cmd" } }];
 		const merged = mergePolicies(undefined, modePolicies);
 		expect(merged.policies).toHaveLength(1);
 		expect(merged.policies[0].name).toBe("test");
@@ -115,34 +115,33 @@ describe("mergePolicies", () => {
 describe("resolveGates", () => {
 	const policies = makePolicies();
 
-	it("returns merged gates for frontend layer", () => {
-		const gates = resolveGates("frontend", policies);
-		expect(gates.gateLlm).toBe("Journey tests required");
-		expect(gates.gateCmd).toBe("mix test test/journey/");
-		expect(gates.verifyCmd).toBe("mix docs");
+	it("returns merged verify for frontend layer", () => {
+		const verify = resolveGates("frontend", policies);
+		expect(verify.review).toBe("Journey tests required");
+		expect(verify.cmd).toBe("mix test test/journey/");
+		expect(verify.commit).toBe(true);
 	});
 
-	it("accumulates gates from multiple matching policies", () => {
-		// frontend-journey-tests provides gateLlm + gateCmd
-		// frontend-docs provides verifyCmd
-		const gates = resolveGates("frontend", policies);
-		expect(gates.gateLlm).toBeDefined();
-		expect(gates.gateCmd).toBeDefined();
-		expect(gates.verifyCmd).toBeDefined();
+	it("accumulates verify fields from multiple matching policies", () => {
+		// frontend-journey-tests provides review + cmd; frontend-docs provides commit
+		const verify = resolveGates("frontend", policies);
+		expect(verify.review).toBeDefined();
+		expect(verify.cmd).toBeDefined();
+		expect(verify.commit).toBeDefined();
 	});
 
 	it("last match wins when multiple policies set same gate", () => {
 		const dupes: TaskPolicy[] = [
-			{ name: "a", match: { layer: "frontend" }, gates: { gateCmd: "first" } },
-			{ name: "b", match: { layer: "frontend" }, gates: { gateCmd: "second" } },
+			{ name: "a", match: { layer: "frontend" }, verify: { cmd: "first" } },
+			{ name: "b", match: { layer: "frontend" }, verify: { cmd: "second" } },
 		];
-		const gates = resolveGates("frontend", dupes);
-		expect(gates.gateCmd).toBe("second");
+		const verify = resolveGates("frontend", dupes);
+		expect(verify.cmd).toBe("second");
 	});
 
 	it("returns empty gates for unmatched layer", () => {
-		const gates = resolveGates("unknown", policies);
-		expect(gates).toEqual({});
+		const verify = resolveGates("unknown", policies);
+		expect(verify).toEqual({});
 	});
 });
 
@@ -150,23 +149,23 @@ describe("applyPolicyGates", () => {
 	const policies = makePolicies();
 
 	it("fills in missing gate fields from policy", () => {
-		const existing: TaskPolicyGates = {};
+		const existing: TaskVerify = {};
 		const result = applyPolicyGates(existing, "frontend", policies);
-		expect(result.gateLlm).toBe("Journey tests required");
-		expect(result.gateCmd).toBe("mix test test/journey/");
+		expect(result.review).toBe("Journey tests required");
+		expect(result.cmd).toBe("mix test test/journey/");
 	});
 
 	it("preserves existing explicit gates over policy defaults", () => {
-		const existing: TaskPolicyGates = { gateCmd: "explicit-cmd" };
+		const existing: TaskVerify = { cmd: "explicit-cmd" };
 		const result = applyPolicyGates(existing, "frontend", policies);
-		expect(result.gateCmd).toBe("explicit-cmd");
-		expect(result.gateLlm).toBe("Journey tests required");
+		expect(result.cmd).toBe("explicit-cmd");
+		expect(result.review).toBe("Journey tests required");
 	});
 
 	it("returns existing gates when no matching policies", () => {
-		const existing: TaskPolicyGates = { gateCmd: "mine" };
+		const existing: TaskVerify = { cmd: "mine" };
 		const result = applyPolicyGates(existing, "unknown", policies);
-		expect(result.gateCmd).toBe("mine");
+		expect(result.cmd).toBe("mine");
 	});
 });
 

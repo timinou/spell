@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { Settings } from "@spell/pi-coding-agent/config/settings";
 import type { ToolSession } from "../../src/tools";
-import { type TodoGroup, TodoWriteTool } from "../../src/tools/todo-write";
+import { type TodoNode, TodoWriteTool } from "../../src/tools/todo-write";
 import { FakeEventBus } from "../../src/utils/fake-event-bus";
 
-function createSession(initialPhases: TodoGroup[] = [], eventBus = new FakeEventBus()): ToolSession {
-	let groups = initialPhases;
+function createSession(initialNodes: TodoNode[] = [], eventBus = new FakeEventBus()): ToolSession {
+	let nodes = initialNodes;
 	return {
 		cwd: "/tmp/test",
 		hasUI: false,
@@ -14,55 +14,44 @@ function createSession(initialPhases: TodoGroup[] = [], eventBus = new FakeEvent
 		getSessionSpawns: () => "*",
 		settings: Settings.isolated(),
 		eventBus,
-		getTodoGroups: () => groups,
-		setTodoGroups: next => {
-			groups = next;
+		getTodoNodes: () => nodes,
+		setTodoNodes: (next: TodoNode[]) => {
+			nodes = next;
 		},
-	};
+	} as unknown as ToolSession;
 }
 
 describe("todo_write DAG semantics", () => {
-	test("replace assigns canonical URIs and honors blocker DAG edges", async () => {
+	test("reset assigns canonical URIs and honors blocker DAG edges", async () => {
 		const tool = new TodoWriteTool(createSession());
 		const result = await tool.execute("call-1", {
-			ops: [
-				{
-					op: "replace",
-					groups: [
-						{
-							name: "Execution",
-							tasks: [{ content: "A" }, { content: "B", blockers: ["task-1"] }],
-						},
-					],
-				},
-			],
+			reset: true,
+			tasks: [{ content: "A" }, { content: "B", blockers: ["task-1"] }],
 		});
 
-		const tasks = result.details?.groups[0]?.tasks ?? [];
-		expect(tasks[0]?.uri).toBe("task://sess-test/main/task-1");
-		expect(tasks[1]?.uri).toBe("task://sess-test/main/task-2");
-		expect(tasks.map(task => task.status)).toEqual(["in_progress", "pending"]);
+		const nodes = result.details?.nodes ?? [];
+		expect(nodes[0]?.uri).toBe("task://sess-test/main/task-1");
+		expect(nodes[1]?.uri).toBe("task://sess-test/main/task-2");
+		expect(nodes.map(n => n.status)).toEqual(["in_progress", "pending"]);
 	});
 
-	test("add_group is cosmetic and still materializes grouped tasks", async () => {
+	test("group label is cosmetic and still materializes nodes", async () => {
 		const tool = new TodoWriteTool(createSession());
 		const result = await tool.execute("call-1", {
-			ops: [{ op: "add_group", name: "foundation", tasks: [{ content: "Define schema" }] }],
+			reset: true,
+			tasks: [{ content: "Define schema", group: "foundation" }],
 		});
 
-		expect(result.details?.groups.map(group => group.name)).toEqual(["foundation"]);
-		expect(result.details?.groups[0]?.tasks[0]?.status).toBe("in_progress");
+		const nodes = result.details?.nodes ?? [];
+		expect(nodes.map(n => n.group)).toEqual(["foundation"]);
+		expect(nodes[0]?.status).toBe("in_progress");
 	});
 
 	test("emits fine-grained events for task creation and status changes", async () => {
 		const eventBus = new FakeEventBus();
 		const tool = new TodoWriteTool(createSession([], eventBus));
-		await tool.execute("call-1", {
-			ops: [{ op: "replace", groups: [{ name: "work", tasks: [{ content: "A" }] }] }],
-		});
-		await tool.execute("call-2", {
-			ops: [{ op: "update", id: "task-1", status: "completed" }],
-		});
+		await tool.execute("call-1", { reset: true, tasks: [{ content: "A", group: "work" }] });
+		await tool.execute("call-2", { tasks: [{ id: "task-1", status: "completed" }] });
 
 		expect(eventBus.emittedFor("todo:task:created")).toEqual([
 			{ taskUri: "task://sess-test/main/task-1", kind: "work", slug: "task-1" },
@@ -76,32 +65,22 @@ describe("todo_write DAG semantics", () => {
 	test("numeric task-N blockers remain valid slugs", async () => {
 		const tool = new TodoWriteTool(createSession());
 		const result = await tool.execute("call-1", {
-			ops: [
-				{
-					op: "replace",
-					groups: [{ name: "work", tasks: [{ content: "A" }, { content: "B", blockers: ["task-1"] }] }],
-				},
-			],
+			reset: true,
+			tasks: [{ content: "A", group: "work" }, { content: "B", group: "work", blockers: ["task-1"] }],
 		});
 
-		expect(result.details?.groups[0]?.tasks.map(task => task.blockers)).toEqual([undefined, ["task-1"]]);
+		expect((result.details?.nodes ?? []).map(n => n.blockers)).toEqual([undefined, ["task-1"]]);
 	});
 
 	test("gated completion still requires verified true", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("call-1", {
-			ops: [
-				{
-					op: "replace",
-					groups: [{ name: "work", tasks: [{ content: "Verify", gateCmd: "bun test test/foo.test.ts" }] }],
-				},
-			],
+			reset: true,
+			tasks: [{ content: "Verify", group: "work", verify: { cmd: "bun test test/foo.test.ts" } }],
 		});
-		const result = await tool.execute("call-2", {
-			ops: [{ op: "update", id: "task-1", status: "completed" }],
-		});
+		const result = await tool.execute("call-2", { tasks: [{ id: "task-1", status: "completed" }] });
 
-		expect(result.details?.groups[0]?.tasks[0]?.status).toBe("in_progress");
+		expect(result.details?.nodes[0]?.status).toBe("in_progress");
 		const summary = result.content.find(part => part.type === "text");
 		expect(summary?.text).toContain("requires verification before completion");
 	});

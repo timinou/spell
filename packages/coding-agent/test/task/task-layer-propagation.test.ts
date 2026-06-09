@@ -3,31 +3,26 @@ import { Value } from "@sinclair/typebox/value";
 import type { TaskPolicy } from "../../src/config/task-policies";
 import { resolveVerificationContext } from "../../src/task/template";
 import { taskItemSchema } from "../../src/task/types";
-import type { TodoGroup } from "../../src/tools/todo-write";
+import type { TodoNode } from "../../src/tools/todo-write";
 
 const testPolicies: TaskPolicy[] = [
 	{
 		name: "frontend-tests",
 		match: { layer: "frontend" },
-		gates: { gateCmd: "mix test test/journey/" },
+		verify: { cmd: "mix test test/journey/" },
 		inject: "Write journey tests covering the complete user flow.",
 	},
 ];
 
-function makePhases(layer?: string): TodoGroup[] {
+function makeNodes(layer?: string): TodoNode[] {
 	return [
 		{
-			id: "phase-1",
-			name: "test",
-			tasks: [
-				{
-					id: "task-1",
-					content: "Build UI",
-					status: "pending",
-					layer,
-					gateCmd: "mix test",
-				},
-			],
+			id: "task-1",
+			content: "Build UI",
+			status: "pending",
+			group: "test",
+			layer,
+			verify: { cmd: "mix test" },
 		},
 	];
 }
@@ -35,38 +30,38 @@ function makePhases(layer?: string): TodoGroup[] {
 describe("task layer propagation", () => {
 	describe("resolveVerificationContext with policies", () => {
 		test("includes policy inject text for layer-tagged todo", () => {
-			const phases = makePhases("frontend");
-			const result = resolveVerificationContext("task-1", phases, testPolicies);
+			const nodes = makeNodes("frontend");
+			const result = resolveVerificationContext("task-1", nodes, testPolicies);
 			expect(result).toBeDefined();
 			expect(result).toContain("Write journey tests");
 			expect(result).toContain("Policy Guidance");
 		});
 
 		test("no policy inject text without layer", () => {
-			const phases = makePhases();
-			const result = resolveVerificationContext("task-1", phases, testPolicies);
+			const nodes = makeNodes();
+			const result = resolveVerificationContext("task-1", nodes, testPolicies);
 			expect(result).toBeDefined();
 			expect(result).toContain("mix test");
 			expect(result).not.toContain("Policy Guidance");
 		});
 
 		test("no policy inject text with unmatched layer", () => {
-			const phases = makePhases("backend");
-			const result = resolveVerificationContext("task-1", phases, testPolicies);
+			const nodes = makeNodes("backend");
+			const result = resolveVerificationContext("task-1", nodes, testPolicies);
 			expect(result).toBeDefined();
 			expect(result).not.toContain("Policy Guidance");
 		});
 
 		test("no policy inject text without policies", () => {
-			const phases = makePhases("frontend");
-			const result = resolveVerificationContext("task-1", phases);
+			const nodes = makeNodes("frontend");
+			const result = resolveVerificationContext("task-1", nodes);
 			expect(result).toBeDefined();
 			expect(result).not.toContain("Policy Guidance");
 		});
 
 		test("policy inject text appears after gate requirements", () => {
-			const phases = makePhases("frontend");
-			const result = resolveVerificationContext("task-1", phases, testPolicies)!;
+			const nodes = makeNodes("frontend");
+			const result = resolveVerificationContext("task-1", nodes, testPolicies)!;
 			const gateIdx = result.indexOf("mix test");
 			const policyIdx = result.indexOf("Policy Guidance");
 			expect(gateIdx).toBeLessThan(policyIdx);
@@ -81,6 +76,7 @@ describe("task layer propagation", () => {
 					description: "Inspect file",
 					assignment: "## Target\n- File: foo.ts",
 					layer: "frontend",
+					ref: null,
 				}),
 			).toBe(true);
 		});

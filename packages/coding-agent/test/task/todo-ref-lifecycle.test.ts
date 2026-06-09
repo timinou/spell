@@ -7,7 +7,7 @@ import * as discoveryModule from "../../src/task/discovery";
 import * as executorModule from "../../src/task/executor";
 import type { AgentDefinition, AgentProgress, SingleResult } from "../../src/task/types";
 import type { ToolSession } from "../../src/tools";
-import type { TodoGroup } from "../../src/tools/todo-write";
+import type { TodoNode } from "../../src/tools/todo-write";
 
 const baseAgent: AgentDefinition = {
 	name: "task",
@@ -43,10 +43,10 @@ function createResult(id: string, transcriptPath: string, overrides: Partial<Sin
 function createSession(
 	tempDir: string,
 	settings: Settings,
-	initialGroups: TodoGroup[],
-): ToolSession & { snapshots: TodoGroup[][] } {
-	let groups = structuredClone(initialGroups);
-	const snapshots: TodoGroup[][] = [];
+	initialNodes: TodoNode[],
+): ToolSession & { snapshots: TodoNode[][] } {
+	let nodes = structuredClone(initialNodes);
+	const snapshots: TodoNode[][] = [];
 	return {
 		cwd: tempDir,
 		hasUI: false,
@@ -57,9 +57,9 @@ function createSession(
 		getModelString: () => undefined,
 		getArtifactsDir: () => path.join(tempDir, "artifacts"),
 		getSessionId: () => "parent-session",
-		getTodoGroups: () => groups,
-		setTodoGroups: (next: TodoGroup[]) => {
-			groups = structuredClone(next);
+		getTodoNodes: () => nodes,
+		setTodoNodes: (next: TodoNode[]) => {
+			nodes = structuredClone(next);
 			snapshots.push(structuredClone(next));
 		},
 		settings,
@@ -70,7 +70,7 @@ function createSession(
 		contextFiles: [],
 		promptTemplates: [],
 		snapshots,
-	} as unknown as ToolSession & { snapshots: TodoGroup[][] };
+	} as unknown as ToolSession & { snapshots: TodoNode[][] };
 }
 
 describe("TaskTool todoRef lifecycle", () => {
@@ -90,7 +90,7 @@ describe("TaskTool todoRef lifecycle", () => {
 	it("marks linked parent todo in_progress on spawn and completed on success", async () => {
 		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
 		const session = createSession(tempDir, settings, [
-			{ id: "phase-1", name: "Work", tasks: [{ id: "task-1", content: "Inspect file", status: "pending" }] },
+			{ id: "task-1", content: "Inspect file", status: "pending", group: "Work" },
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "subtask1.jsonl");
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
@@ -110,16 +110,12 @@ describe("TaskTool todoRef lifecycle", () => {
 				durationMs: 0,
 				sessionId: "child-session",
 				transcriptPath,
-				todoGroups: [
-					{
-						id: "child-phase-1",
-						name: "Delegated Work",
-						tasks: [{ id: "child-task-1", content: "Read file", status: "in_progress" }],
-					},
+				todoNodes: [
+					{ id: "child-task-1", content: "Read file", status: "in_progress", group: "Delegated Work" },
 				],
 			};
 			options.onProgress?.(progress);
-			return createResult(options.id, transcriptPath, { todoGroups: progress.todoGroups });
+			return createResult(options.id, transcriptPath, { todoNodes: progress.todoNodes });
 		});
 		const { TaskTool } = await import("../../src/task/index");
 		const tool = await TaskTool.create(session);
@@ -127,13 +123,13 @@ describe("TaskTool todoRef lifecycle", () => {
 		await tool.execute("call-success", {
 			agent: "task",
 			tasks: [
-				{ id: "subtask1", description: "Inspect file", assignment: "## Target\n- File: foo.ts", todoRef: "task-1" },
+				{ id: "subtask1", description: "Inspect file", assignment: "## Target\n- File: foo.ts", ref: "task-1" },
 			],
 		});
 
 		expect(session.snapshots.length).toBeGreaterThanOrEqual(2);
-		const runningSnapshot = session.snapshots.find(snapshot => snapshot[0]?.tasks[0]?.status === "in_progress");
-		expect(runningSnapshot?.[0]?.tasks[0]).toMatchObject({
+		const runningSnapshot = session.snapshots.find(snapshot => snapshot[0]?.status === "in_progress");
+		expect(runningSnapshot?.[0]).toMatchObject({
 			status: "in_progress",
 			delegation: {
 				agent: "task",
@@ -141,18 +137,15 @@ describe("TaskTool todoRef lifecycle", () => {
 				transcriptPath,
 			},
 		});
-		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
+		const finalTask = session.snapshots.at(-1)?.[0];
 		expect(finalTask).toMatchObject({
 			status: "completed",
 			delegation: {
 				agent: "task",
 				sessionId: "child-session",
 				transcriptPath,
-				childGroups: [
-					{
-						name: "Delegated Work",
-						tasks: [{ content: "Read file", status: "in_progress" }],
-					},
+				childNodes: [
+					{ content: "Read file", status: "in_progress", group: "Delegated Work" },
 				],
 			},
 		});
@@ -161,11 +154,7 @@ describe("TaskTool todoRef lifecycle", () => {
 	it("stores delegated verification summary even without a dedicated verification artifact", async () => {
 		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
 		const session = createSession(tempDir, settings, [
-			{
-				id: "phase-1",
-				name: "Work",
-				tasks: [{ id: "task-1", content: "Inspect file", status: "pending", gateCmd: "bun test lifecycle" }],
-			},
+			{ id: "task-1", content: "Inspect file", status: "pending", group: "Work", verify: { cmd: "bun test lifecycle" } },
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "subtask-verify.jsonl");
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
@@ -200,12 +189,12 @@ describe("TaskTool todoRef lifecycle", () => {
 					id: "subtask-verify",
 					description: "Inspect file",
 					assignment: "## Target\n- File: foo.ts",
-					todoRef: "task-1",
+					ref: "task-1",
 				},
 			],
 		});
 
-		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
+		const finalTask = session.snapshots.at(-1)?.[0];
 		expect(finalTask?.status).toBe("completed");
 		expect(finalTask?.delegation?.result?.verification).toEqual({
 			status: "passed",
@@ -220,7 +209,7 @@ describe("TaskTool todoRef lifecycle", () => {
 	it("marks linked parent todo failed when delegated subagent errors", async () => {
 		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
 		const session = createSession(tempDir, settings, [
-			{ id: "phase-1", name: "Work", tasks: [{ id: "task-1", content: "Inspect file", status: "pending" }] },
+			{ id: "task-1", content: "Inspect file", status: "pending", group: "Work" },
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "subtask1.jsonl");
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
@@ -253,12 +242,12 @@ describe("TaskTool todoRef lifecycle", () => {
 		await tool.execute("call-fail", {
 			agent: "task",
 			tasks: [
-				{ id: "subtask1", description: "Inspect file", assignment: "## Target\n- File: foo.ts", todoRef: "task-1" },
+				{ id: "subtask1", description: "Inspect file", assignment: "## Target\n- File: foo.ts", ref: "task-1" },
 			],
 		});
 
 		expect(session.snapshots.length).toBeGreaterThanOrEqual(2);
-		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
+		const finalTask = session.snapshots.at(-1)?.[0];
 		expect(finalTask).toMatchObject({
 			status: "failed",
 			delegation: {

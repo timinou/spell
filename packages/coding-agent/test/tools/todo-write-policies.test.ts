@@ -6,44 +6,41 @@ import { Settings } from "@spell/pi-coding-agent/config/settings";
 import type { TaskPolicy } from "../../src/config/task-policies";
 import type { ToolSession } from "../../src/tools";
 import {
-	applyOps,
+	applyReconcile,
 	type FormatSummaryOptions,
 	formatSummary,
-	getNextTodoIds,
 	injectPolicyGates,
-	type TodoGroup,
-	type TodoItem,
+	type TodoNode,
 	type TodoStatus,
 	TodoWriteTool,
 } from "../../src/tools/todo-write";
 
-function makeTask(overrides: Partial<TodoItem> & { id: string; content: string }): TodoItem {
+function makeNode(overrides: Partial<TodoNode> & { id: string; content: string }): TodoNode {
 	return { status: "pending" as TodoStatus, ...overrides };
 }
 
-function makePhase(id: string, name: string, tasks: TodoItem[]): TodoGroup {
-	return { id, name, tasks };
+function fileFromNodes(nodes: TodoNode[]) {
+	const maxTaskId = nodes.reduce((max, n) => {
+		const num = Number.parseInt(n.id.replace(/^task-/, ""), 10);
+		return Number.isNaN(num) ? max : Math.max(max, num);
+	}, 0);
+	return { nodes, nextTaskId: maxTaskId + 1 };
 }
 
-function fileFromPhases(phases: TodoGroup[]) {
-	const { nextTaskId, nextGroupId } = getNextTodoIds(phases);
-	return { groups: phases, nextTaskId, nextGroupId };
-}
-
-function createSession(cwd: string, initialGroups: TodoGroup[] = [], policies?: TaskPolicy[]): ToolSession {
-	let groups = initialGroups;
+function createSession(cwd: string, initialNodes: TodoNode[] = [], policies?: TaskPolicy[]): ToolSession {
+	let nodes = initialNodes;
 	return {
 		cwd,
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
 		settings: Settings.isolated(),
-		getTodoGroups: () => groups,
-		setTodoGroups: next => {
-			groups = next;
+		getTodoNodes: () => nodes,
+		setTodoNodes: (next: TodoNode[]) => {
+			nodes = next;
 		},
 		getResolvedTaskPolicies: policies ? () => policies : undefined,
-	};
+	} as unknown as ToolSession;
 }
 
 function summaryText(result: { content: Array<{ type: string; text?: string }> }): string {
@@ -54,12 +51,12 @@ function summaryText(result: { content: Array<{ type: string; text?: string }> }
 
 function makeSummary(overrides: Partial<FormatSummaryOptions> = {}): string {
 	return formatSummary({
-		groups: overrides.groups ?? [makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Do work" })])],
+		nodes: overrides.nodes ?? [makeNode({ id: "task-1", content: "Do work", group: "Work" })],
 		errors: overrides.errors ?? [],
-		completedGroupIds: overrides.completedGroupIds ?? [],
-		completedGatedTasks: overrides.completedGatedTasks ?? [],
-		pendingVerificationTasks: overrides.pendingVerificationTasks ?? [],
-		pendingDeferralTasks: overrides.pendingDeferralTasks ?? [],
+		completedGroups: overrides.completedGroups ?? [],
+		completedGatedNodes: overrides.completedGatedNodes ?? [],
+		pendingVerificationNodes: overrides.pendingVerificationNodes ?? [],
+		pendingDeferralNodes: overrides.pendingDeferralNodes ?? [],
 	});
 }
 
@@ -67,15 +64,15 @@ const frontendPolicies: TaskPolicy[] = [
 	{
 		name: "frontend-defaults",
 		match: { layer: "frontend" },
-		gates: {
-			gateCmd: "bun test packages/coding-agent/test/tools/todo-write-policies.test.ts",
-			verifyCmd: "bun check packages/coding-agent/src/tools/todo-write.ts",
+		verify: {
+			cmd: "bun test packages/coding-agent/test/tools/todo-write-policies.test.ts",
+			review: "bun check packages/coding-agent/src/tools/todo-write.ts",
 		},
 	},
 	{
 		name: "frontend-commit",
 		match: { layer: "frontend" },
-		gates: { gateCommit: true },
+		verify: { commit: true },
 	},
 ];
 
@@ -91,84 +88,78 @@ afterEach(async () => {
 
 describe("injectPolicyGates", () => {
 	it("fills missing gates and preserves explicit gates", () => {
-		const task = makeTask({
+		const node = makeNode({
 			id: "task-1",
 			content: "Implement UI",
 			layer: "frontend",
-			gateCmd: "bun test explicit.test.ts",
+			verify: { cmd: "bun test explicit.test.ts" },
 		});
 
-		injectPolicyGates(task, frontendPolicies);
+		injectPolicyGates(node, frontendPolicies);
 
-		expect(task.gateCmd).toBe("bun test explicit.test.ts");
-		expect(task.gateCommit).toBe(true);
-		expect(task.verifyCmd).toBe("bun check packages/coding-agent/src/tools/todo-write.ts");
+		expect(node.verify?.cmd).toBe("bun test explicit.test.ts");
+		expect(node.verify?.commit).toBe(true);
+		expect(node.verify?.review).toBe("bun check packages/coding-agent/src/tools/todo-write.ts");
 	});
 
 	it("does nothing when layer is missing or unmatched", () => {
-		const withoutLayer = makeTask({ id: "task-1", content: "A" });
-		const unknownLayer = makeTask({ id: "task-2", content: "B", layer: "backend" });
+		const withoutLayer = makeNode({ id: "task-1", content: "A" });
+		const unknownLayer = makeNode({ id: "task-2", content: "B", layer: "backend" });
 
 		injectPolicyGates(withoutLayer, frontendPolicies);
 		injectPolicyGates(unknownLayer, frontendPolicies);
 
-		expect(withoutLayer.gateCommit).toBeUndefined();
-		expect(unknownLayer.gateCommit).toBeUndefined();
+		expect(withoutLayer.verify?.commit).toBeUndefined();
+		expect(unknownLayer.verify?.commit).toBeUndefined();
 	});
 });
 
-describe("applyOps policy injection", () => {
-	it("injects policy gates on replace and preserves layer", () => {
-		const result = applyOps(
-			fileFromPhases([]),
-			[{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Implement UI", layer: "frontend" }] }] }],
+describe("applyReconcile policy injection", () => {
+	it("injects policy gates on reset and preserves layer", () => {
+		const result = applyReconcile(
+			fileFromNodes([]),
+			{ reset: true, tasks: [{ content: "Implement UI", layer: "frontend" }] },
 			[],
 			frontendPolicies,
 		);
 
-		const task = result.file.groups[0]?.tasks[0];
-		if (!task) throw new Error("Expected task");
-		expect(task.layer).toBe("frontend");
-		expect(task.gateCommit).toBe(true);
-		expect(task.gateCmd).toBe("bun test packages/coding-agent/test/tools/todo-write-policies.test.ts");
+		const node = result.file.nodes[0];
+		if (!node) throw new Error("Expected node");
+		expect(node.layer).toBe("frontend");
+		expect(node.verify?.commit).toBe(true);
+		expect(node.verify?.cmd).toBe("bun test packages/coding-agent/test/tools/todo-write-policies.test.ts");
 	});
 
 	it("injects policy gates when layer is set via update", () => {
-		const initial = fileFromPhases([
-			makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Implement" })]),
-		]);
-		const result = applyOps(
+		const initial = fileFromNodes([makeNode({ id: "task-1", content: "Implement" })]);
+		const result = applyReconcile(
 			initial,
-			[{ op: "update", id: "task-1", layer: "frontend" }],
-			initial.groups,
+			{ tasks: [{ id: "task-1", layer: "frontend" }] },
+			initial.nodes,
 			frontendPolicies,
 		);
-		const task = result.file.groups[0]?.tasks[0];
-		if (!task) throw new Error("Expected task");
-		expect(task.layer).toBe("frontend");
-		expect(task.gateCommit).toBe(true);
-		expect(task.verifyCmd).toBe("bun check packages/coding-agent/src/tools/todo-write.ts");
+		const node = result.file.nodes[0];
+		if (!node) throw new Error("Expected node");
+		expect(node.layer).toBe("frontend");
+		expect(node.verify?.commit).toBe(true);
+		expect(node.verify?.review).toBe("bun check packages/coding-agent/src/tools/todo-write.ts");
 	});
 
-	it("injects policy gates on add_phase with layer", () => {
-		const initial = fileFromPhases([
-			makePhase("phase-1", "Existing", [makeTask({ id: "task-1", content: "Setup" })]),
-		]);
-		const result = applyOps(
+	it("injects policy gates when adding new node with layer", () => {
+		const initial = fileFromNodes([makeNode({ id: "task-1", content: "Setup" })]);
+		const result = applyReconcile(
 			initial,
-			[{ op: "add_phase", name: "Frontend", tasks: [{ content: "Build UI", layer: "frontend" }] }],
-			initial.groups,
+			{ tasks: [{ content: "Build UI", layer: "frontend", group: "Frontend" }] },
+			initial.nodes,
 			frontendPolicies,
 		);
 
-		const addedPhase = result.file.groups[1];
-		if (!addedPhase) throw new Error("Expected added phase");
-		const task = addedPhase.tasks[0];
-		if (!task) throw new Error("Expected task in added phase");
-		expect(task.layer).toBe("frontend");
-		expect(task.gateCommit).toBe(true);
-		expect(task.gateCmd).toBe("bun test packages/coding-agent/test/tools/todo-write-policies.test.ts");
-		expect(task.verifyCmd).toBe("bun check packages/coding-agent/src/tools/todo-write.ts");
+		const addedNode = result.file.nodes[1];
+		if (!addedNode) throw new Error("Expected added node");
+		expect(addedNode.layer).toBe("frontend");
+		expect(addedNode.verify?.commit).toBe(true);
+		expect(addedNode.verify?.cmd).toBe("bun test packages/coding-agent/test/tools/todo-write-policies.test.ts");
+		expect(addedNode.verify?.review).toBe("bun check packages/coding-agent/src/tools/todo-write.ts");
 	});
 });
 
@@ -178,23 +169,24 @@ describe("TodoWriteTool session policy injection", () => {
 			{
 				name: "frontend-gates",
 				match: { layer: "frontend" },
-				gates: {
-					gateCommit: true,
-					gateCmd: "bun test packages/coding-agent/test/tools/todo-write-policies.test.ts",
-					verifyCmd: "bun check packages/coding-agent/src/tools/todo-write.ts",
+				verify: {
+					commit: true,
+					cmd: "bun test packages/coding-agent/test/tools/todo-write-policies.test.ts",
+					review: "bun check packages/coding-agent/src/tools/todo-write.ts",
 				},
 			},
 		];
 		const tool = new TodoWriteTool(createSession(tempDir, [], sessionPolicies));
 		const result = await tool.execute("call-1", {
-			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Implement UI", layer: "frontend" }] }] }],
+			reset: true,
+			tasks: [{ content: "Implement UI", layer: "frontend", group: "Work" }],
 		});
 
-		const task = result.details?.groups[0]?.tasks[0];
-		if (!task) throw new Error("Expected task");
-		expect(task.layer).toBe("frontend");
-		expect(task.gateCommit).toBe(true);
-		expect(task.gateCmd).toBe("bun test packages/coding-agent/test/tools/todo-write-policies.test.ts");
+		const node = result.details?.nodes[0];
+		if (!node) throw new Error("Expected node");
+		expect(node.layer).toBe("frontend");
+		expect(node.verify?.commit).toBe(true);
+		expect(node.verify?.cmd).toBe("bun test packages/coding-agent/test/tools/todo-write-policies.test.ts");
 		expect(summaryText(result)).toContain("[frontend]");
 	});
 });
@@ -202,9 +194,7 @@ describe("TodoWriteTool session policy injection", () => {
 describe("formatSummary layer badges", () => {
 	it("shows layer tag in remaining items summary", () => {
 		const text = makeSummary({
-			groups: [
-				makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Implement UI", layer: "frontend" })]),
-			],
+			nodes: [makeNode({ id: "task-1", content: "Implement UI", layer: "frontend", group: "Work" })],
 		});
 
 		expect(text).toContain("task-1 Implement UI [pending] [frontend] (Work)");

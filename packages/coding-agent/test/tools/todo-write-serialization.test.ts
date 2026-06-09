@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { Settings } from "@spell/pi-coding-agent/config/settings";
 import type { ToolSession } from "../../src/tools";
-import type { TodoGroup } from "../../src/tools/todo-write";
+import type { TodoNode } from "../../src/tools/todo-write";
 import { queueTodoMutation, TodoWriteTool } from "../../src/tools/todo-write";
 
 function createMockSession(): ToolSession {
@@ -9,19 +9,19 @@ function createMockSession(): ToolSession {
 }
 
 function createTodoWriteSession() {
-	let groups: TodoGroup[] = [];
+	let nodes: TodoNode[] = [];
 	const session = {
 		cwd: "/tmp/test",
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
 		settings: Settings.isolated(),
-		getTodoGroups: () => groups,
-		setTodoGroups: (next: TodoGroup[]) => {
-			groups = next;
+		getTodoNodes: () => nodes,
+		setTodoNodes: (next: TodoNode[]) => {
+			nodes = next;
 		},
 	} as unknown as ToolSession;
-	return { session, getGroups: () => groups };
+	return { session, getNodes: () => nodes };
 }
 
 describe("queueTodoMutation serialization", () => {
@@ -130,28 +130,23 @@ describe("queueTodoMutation serialization", () => {
 
 describe("TodoWriteTool verificationArtifact serialization", () => {
 	it("round-trips verificationArtifact through add and update operations", async () => {
-		const { session, getGroups } = createTodoWriteSession();
+		const { session, getNodes } = createTodoWriteSession();
 		const tool = new TodoWriteTool(session);
 
 		await tool.execute("call-add", {
-			ops: [
+			tasks: [
 				{
-					op: "add_group",
-					name: "Work",
-					tasks: [
-						{
-							content: "Delegate verification",
-							verificationArtifact: "artifacts/verification.json",
-						},
-					],
+					content: "Delegate verification",
+					group: "Work",
+					verificationArtifact: "artifacts/verification.json",
 				},
 			],
 		});
-		expect(getGroups()[0]?.tasks[0]?.verificationArtifact).toBe("artifacts/verification.json");
+		expect(getNodes()[0]?.verificationArtifact).toBe("artifacts/verification.json");
 
 		const updated = await tool.execute("call-update", {
-			ops: [{ op: "update", id: "task-1", verificationArtifact: "artifacts/verification-final.json" }],
+			tasks: [{ id: "task-1", verificationArtifact: "artifacts/verification-final.json" }],
 		});
-		expect(updated.details?.groups[0]?.tasks[0]?.verificationArtifact).toBe("artifacts/verification-final.json");
+		expect(updated.details?.nodes[0]?.verificationArtifact).toBe("artifacts/verification-final.json");
 	});
 });

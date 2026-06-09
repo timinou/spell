@@ -8,8 +8,8 @@
 
 import { logger } from "@spell/pi-utils";
 import type { EventBus } from "../utils/event-bus";
-import type { TodoGroup } from "./todo-write";
-import { hasGate, isTaskBlocked } from "./todo-write";
+import type { TodoNode } from "./todo-write";
+import { hasGate, isNodeBlocked } from "./todo-write";
 
 // =============================================================================
 // Payload types
@@ -20,15 +20,15 @@ export interface TodoDashboardTask {
 	content: string;
 	status: string;
 	blocked: boolean;
-	gateCommit?: boolean;
-	gateArtifact?: string;
-	verificationArtifact?: string;
-	gateCmd?: string;
-	gateLlm?: string;
+	group?: string;
+	verifyCommit?: boolean;
+	verifyArtifact?: string;
 	verifyCmd?: string;
+	verifyReview?: string;
+	verificationArtifact?: string;
 	blockers?: string[];
-	orgItemId?: string;
-	orgItemClosingId?: string;
+	ref?: string | null;
+	closesRef?: boolean;
 }
 
 export interface TodoDashboardGroup {
@@ -55,8 +55,8 @@ export interface TodoControlMessage {
 // =============================================================================
 
 interface TodoSessionAccessor {
-	getTodoGroups?: () => TodoGroup[];
-	setTodoGroups?: (groups: TodoGroup[], options?: { reset?: boolean }) => void;
+	getTodoNodes?: () => TodoNode[];
+	setTodoNodes?: (nodes: TodoNode[], options?: { reset?: boolean }) => void;
 }
 
 // =============================================================================
@@ -66,7 +66,7 @@ interface TodoSessionAccessor {
 const PANEL_ID = "todo-dashboard";
 const PANEL_TITLE = "Todo Tasks";
 
-const VALID_GATE_FIELDS = new Set(["gateCommit", "gateArtifact", "gateCmd", "gateLlm", "verifyCmd"]);
+const VALID_GATE_FIELDS = new Set(["commit", "artifact", "cmd", "review"]);
 
 export class TodoDashboardBridge {
 	readonly #session: TodoSessionAccessor;
@@ -79,34 +79,45 @@ export class TodoDashboardBridge {
 		this.#eventBus = eventBus;
 	}
 
-	buildSnapshot(): TodoDashboardPayload {
-		const groups = this.#session.getTodoGroups?.() ?? [];
-		const allTasks = groups.flatMap(group => group.tasks);
+		buildSnapshot(): TodoDashboardPayload {
+		const nodes = this.#session.getTodoNodes?.() ?? [];
 
-		const dashboardGroups: TodoDashboardGroup[] = groups.map(group => ({
-			id: group.id,
-			name: group.name,
-			tasks: group.tasks.map(task => ({
+		// Cluster flat nodes by cosmetic group label for the dashboard.
+		const order: string[] = [];
+		const buckets = new Map<string, TodoNode[]>();
+		for (const node of nodes) {
+			const label = node.group?.trim() || "Tasks";
+			if (!buckets.has(label)) {
+				buckets.set(label, []);
+				order.push(label);
+			}
+			buckets.get(label)!.push(node);
+		}
+
+		const dashboardGroups: TodoDashboardGroup[] = order.map((label, idx) => ({
+			id: `group-${idx + 1}`,
+			name: label,
+			tasks: buckets.get(label)!.map(task => ({
 				id: task.id,
 				content: task.content,
 				status: task.status,
-				blocked: isTaskBlocked(task, allTasks),
-				gateCommit: task.gateCommit,
-				gateArtifact: task.gateArtifact,
+				blocked: isNodeBlocked(task, nodes),
+				group: task.group,
+				verifyCommit: task.verify?.commit,
+				verifyArtifact: task.verify?.artifact,
+				verifyCmd: task.verify?.cmd,
+				verifyReview: task.verify?.review,
 				verificationArtifact: task.verificationArtifact,
-				gateCmd: task.gateCmd,
-				gateLlm: task.gateLlm,
-				verifyCmd: task.verifyCmd,
 				blockers: task.blockers,
-				orgItemId: task.orgItemId,
-				orgItemClosingId: task.orgItemClosingId,
+				ref: task.ref,
+				closesRef: task.closesRef,
 			})),
 		}));
 
 		return {
 			type: "todo_snapshot",
 			groups: dashboardGroups,
-			hasGatedTasks: allTasks.some(hasGate),
+			hasGatedTasks: nodes.some(hasGate),
 		};
 	}
 
@@ -146,6 +157,7 @@ export class TodoDashboardBridge {
 	}
 
 	/** Process gate toggle messages from QML panel. */
+		/** Process gate toggle messages from QML panel. */
 	handleControl(payload: TodoControlMessage): void {
 		if (payload.action !== "todo_control") return;
 
@@ -155,39 +167,28 @@ export class TodoDashboardBridge {
 			return;
 		}
 
-		const groups = this.#session.getTodoGroups?.();
-		if (!groups) return;
+		const nodes = this.#session.getTodoNodes?.();
+		if (!nodes) return;
 
-		let found = false;
-		for (const group of groups) {
-			for (const task of group.tasks) {
-				if (task.id === taskId) {
-					if (gate === "gateCommit") {
-						task.gateCommit = enabled;
-					} else if (gate === "gateArtifact") {
-						task.gateArtifact = enabled ? task.gateArtifact || "" : undefined;
-					} else if (gate === "gateCmd") {
-						task.gateCmd = enabled ? task.gateCmd || "" : undefined;
-					} else if (gate === "gateLlm") {
-						task.gateLlm = enabled ? task.gateLlm || "" : undefined;
-					} else if (gate === "verifyCmd") {
-						task.verifyCmd = enabled ? task.verifyCmd || "" : undefined;
-					}
-					found = true;
-					break;
-				}
-			}
-			if (found) break;
-		}
-
-		if (!found) {
+		const task = nodes.find(node => node.id === taskId);
+		if (!task) {
 			logger.warn("todo-dashboard: task not found for control", { taskId });
 			return;
 		}
+		const verify = task.verify ?? (task.verify = {});
+		if (gate === "commit") {
+			verify.commit = enabled;
+		} else if (gate === "artifact") {
+			verify.artifact = enabled ? verify.artifact || "" : undefined;
+		} else if (gate === "cmd") {
+			verify.cmd = enabled ? verify.cmd || "" : undefined;
+		} else if (gate === "review") {
+			verify.review = enabled ? verify.review || "" : undefined;
+		}
 
-		this.#session.setTodoGroups?.(groups);
+		this.#session.setTodoNodes?.(nodes);
 		// Re-emit so subscribers (including ourselves) refresh
-		this.#eventBus?.emit("todo:change", { groups });
+		this.#eventBus?.emit("todo:change", { nodes });
 	}
 
 	dispose(): void {

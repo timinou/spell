@@ -19,7 +19,7 @@ import * as discoveryModule from "../../src/task/discovery";
 import * as executorModule from "../../src/task/executor";
 import type { AgentDefinition, AgentProgress, SingleResult } from "../../src/task/types";
 import type { ToolSession } from "../../src/tools";
-import type { TodoGroup } from "../../src/tools/todo-write";
+import type { TodoNode } from "../../src/tools/todo-write";
 
 const baseAgent: AgentDefinition = {
 	name: "task",
@@ -55,10 +55,10 @@ function createResult(id: string, transcriptPath: string, overrides: Partial<Sin
 function createSession(
 	tempDir: string,
 	settings: Settings,
-	initialGroups: TodoGroup[],
-): ToolSession & { snapshots: TodoGroup[][] } {
-	let groups = structuredClone(initialGroups);
-	const snapshots: TodoGroup[][] = [];
+	initialNodes: TodoNode[],
+): ToolSession & { snapshots: TodoNode[][] } {
+	let nodes = structuredClone(initialNodes);
+	const snapshots: TodoNode[][] = [];
 	return {
 		cwd: tempDir,
 		hasUI: false,
@@ -69,9 +69,9 @@ function createSession(
 		getModelString: () => undefined,
 		getArtifactsDir: () => path.join(tempDir, "artifacts"),
 		getSessionId: () => "parent-session",
-		getTodoGroups: () => groups,
-		setTodoGroups: (next: TodoGroup[]) => {
-			groups = structuredClone(next);
+		getTodoNodes: () => nodes,
+		setTodoNodes: (next: TodoNode[]) => {
+			nodes = structuredClone(next);
 			snapshots.push(structuredClone(next));
 		},
 		settings,
@@ -82,7 +82,7 @@ function createSession(
 		contextFiles: [],
 		promptTemplates: [],
 		snapshots,
-	} as unknown as ToolSession & { snapshots: TodoGroup[][] };
+	} as unknown as ToolSession & { snapshots: TodoNode[][] };
 }
 
 function mockRunSubprocess(transcriptPath: string, overrides: Partial<SingleResult> = {}): void {
@@ -126,7 +126,7 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 	it("marks todo completed when subagent succeeds and no gates are set", async () => {
 		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
 		const session = createSession(tempDir, settings, [
-			{ id: "phase-1", name: "Work", tasks: [{ id: "task-1", content: "Build feature", status: "pending" }] },
+			{ id: "task-1", content: "Build feature", status: "pending", group: "Work" },
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "sub1.jsonl");
 		mockRunSubprocess(transcriptPath);
@@ -137,22 +137,18 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 		await tool.execute("call-1", {
 			agent: "task",
 			tasks: [
-				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", todoRef: "task-1" },
+				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", ref: "task-1" },
 			],
 		});
 
-		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
+		const finalTask = session.snapshots.at(-1)?.[0];
 		expect(finalTask?.status).toBe("completed");
 	});
 
 	it("marks todo completed when subagent succeeds and gateCmd is satisfied", async () => {
 		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
 		const session = createSession(tempDir, settings, [
-			{
-				id: "phase-1",
-				name: "Work",
-				tasks: [{ id: "task-1", content: "Build feature", status: "pending", gateCmd: "bun test" }],
-			},
+			{ id: "task-1", content: "Build feature", status: "pending", group: "Work", verify: { cmd: "bun test" } },
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "sub1.jsonl");
 		mockRunSubprocess(transcriptPath, {
@@ -165,22 +161,18 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 		await tool.execute("call-1", {
 			agent: "task",
 			tasks: [
-				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", todoRef: "task-1" },
+				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", ref: "task-1" },
 			],
 		});
 
-		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
+		const finalTask = session.snapshots.at(-1)?.[0];
 		expect(finalTask?.status).toBe("completed");
 	});
 
 	it("marks todo gate_failed when subagent succeeds but gateCmd is NOT satisfied", async () => {
 		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
 		const session = createSession(tempDir, settings, [
-			{
-				id: "phase-1",
-				name: "Work",
-				tasks: [{ id: "task-1", content: "Build feature", status: "pending", gateCmd: "bun test" }],
-			},
+			{ id: "task-1", content: "Build feature", status: "pending", group: "Work", verify: { cmd: "bun test" } },
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "sub1.jsonl");
 		// Subagent succeeds but never ran `bun test`
@@ -194,11 +186,11 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 		await tool.execute("call-1", {
 			agent: "task",
 			tasks: [
-				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", todoRef: "task-1" },
+				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", ref: "task-1" },
 			],
 		});
 
-		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
+		const finalTask = session.snapshots.at(-1)?.[0];
 		expect(finalTask?.status).toBe("gate_failed");
 		expect(finalTask?.delegation?.result?.gateFailures).toBeDefined();
 		expect(finalTask?.delegation?.result?.gateFailures?.length).toBe(1);
@@ -211,17 +203,12 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
 		const session = createSession(tempDir, settings, [
 			{
-				id: "phase-1",
-				name: "Work",
-				tasks: [
-					{
-						id: "task-1",
-						content: "Build feature",
-						status: "pending",
-						gateCmd: "bun test",
-						verificationArtifact: "artifacts/delegated-verification.json",
-					},
-				],
+				id: "task-1",
+				content: "Build feature",
+				status: "pending",
+				group: "Work",
+				verify: { cmd: "bun test" },
+				verificationArtifact: "artifacts/delegated-verification.json",
 			},
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "sub-success.jsonl");
@@ -239,12 +226,12 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 					id: "sub-success",
 					description: "Build feature",
 					assignment: "## Target\n- File: foo.ts",
-					todoRef: "task-1",
+					ref: "task-1",
 				},
 			],
 		});
 
-		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
+		const finalTask = session.snapshots.at(-1)?.[0];
 		expect(finalTask?.delegation?.result?.verification?.status).toBe("passed");
 		expect(finalTask?.delegation?.result?.verification?.artifactPath).toBe(
 			path.join(tempDir, "artifacts", "delegated-verification.json"),
@@ -259,11 +246,7 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 	it("marks todo gate_failed when gateCommit is required but no git commit in bash history", async () => {
 		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
 		const session = createSession(tempDir, settings, [
-			{
-				id: "phase-1",
-				name: "Work",
-				tasks: [{ id: "task-1", content: "Build feature", status: "pending", gateCommit: true }],
-			},
+			{ id: "task-1", content: "Build feature", status: "pending", group: "Work", verify: { commit: true } },
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "sub1.jsonl");
 		// No git commit in history
@@ -277,11 +260,11 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 		await tool.execute("call-1", {
 			agent: "task",
 			tasks: [
-				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", todoRef: "task-1" },
+				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", ref: "task-1" },
 			],
 		});
 
-		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
+		const finalTask = session.snapshots.at(-1)?.[0];
 		expect(finalTask?.status).toBe("gate_failed");
 		expect(finalTask?.delegation?.result?.gateFailures?.[0]?.gate).toBe("gateCommit");
 	});
@@ -290,17 +273,12 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
 		const session = createSession(tempDir, settings, [
 			{
-				id: "phase-1",
-				name: "Work",
-				tasks: [
-					{
-						id: "task-1",
-						content: "Build feature",
-						status: "pending",
-						gateCmd: "bun test",
-						verificationArtifact: "artifacts/delegated-verification-failed.json",
-					},
-				],
+				id: "task-1",
+				content: "Build feature",
+				status: "pending",
+				group: "Work",
+				verify: { cmd: "bun test" },
+				verificationArtifact: "artifacts/delegated-verification-failed.json",
 			},
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "sub-gate-failed.jsonl");
@@ -317,12 +295,12 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 					id: "sub-gate-failed",
 					description: "Build feature",
 					assignment: "## Target\n- File: foo.ts",
-					todoRef: "task-1",
+					ref: "task-1",
 				},
 			],
 		});
 
-		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
+		const finalTask = session.snapshots.at(-1)?.[0];
 		expect(finalTask?.status).toBe("gate_failed");
 		expect(finalTask?.delegation?.result?.verification?.artifactPath).toBe(
 			path.join(tempDir, "artifacts", "delegated-verification-failed.json"),
@@ -337,11 +315,7 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 	it("marks todo gate_failed when gateArtifact is required but file doesn't exist", async () => {
 		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
 		const session = createSession(tempDir, settings, [
-			{
-				id: "phase-1",
-				name: "Work",
-				tasks: [{ id: "task-1", content: "Build feature", status: "pending", gateArtifact: "dist/output.json" }],
-			},
+			{ id: "task-1", content: "Build feature", status: "pending", group: "Work", verify: { artifact: "dist/output.json" } },
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "sub1.jsonl");
 		mockRunSubprocess(transcriptPath, {
@@ -354,11 +328,11 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 		await tool.execute("call-1", {
 			agent: "task",
 			tasks: [
-				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", todoRef: "task-1" },
+				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", ref: "task-1" },
 			],
 		});
 
-		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
+		const finalTask = session.snapshots.at(-1)?.[0];
 		expect(finalTask?.status).toBe("gate_failed");
 		expect(finalTask?.delegation?.result?.gateFailures?.[0]?.gate).toBe("gateArtifact");
 	});
@@ -371,11 +345,7 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 		await fs.writeFile(path.join(artifactDir, "output.json"), "{}");
 
 		const session = createSession(tempDir, settings, [
-			{
-				id: "phase-1",
-				name: "Work",
-				tasks: [{ id: "task-1", content: "Build feature", status: "pending", gateArtifact: "dist/output.json" }],
-			},
+			{ id: "task-1", content: "Build feature", status: "pending", group: "Work", verify: { artifact: "dist/output.json" } },
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "sub1.jsonl");
 		mockRunSubprocess(transcriptPath);
@@ -386,11 +356,11 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 		await tool.execute("call-1", {
 			agent: "task",
 			tasks: [
-				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", todoRef: "task-1" },
+				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", ref: "task-1" },
 			],
 		});
 
-		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
+		const finalTask = session.snapshots.at(-1)?.[0];
 		expect(finalTask?.status).toBe("completed");
 	});
 
@@ -398,17 +368,11 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
 		const session = createSession(tempDir, settings, [
 			{
-				id: "phase-1",
-				name: "Work",
-				tasks: [
-					{
-						id: "task-1",
-						content: "Build feature",
-						status: "pending",
-						gateCmd: "bun test",
-						gateCommit: true,
-					},
-				],
+				id: "task-1",
+				content: "Build feature",
+				status: "pending",
+				group: "Work",
+				verify: { cmd: "bun test", commit: true },
 			},
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "sub1.jsonl");
@@ -423,11 +387,11 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 		await tool.execute("call-1", {
 			agent: "task",
 			tasks: [
-				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", todoRef: "task-1" },
+				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", ref: "task-1" },
 			],
 		});
 
-		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
+		const finalTask = session.snapshots.at(-1)?.[0];
 		expect(finalTask?.status).toBe("gate_failed");
 		const failures = finalTask?.delegation?.result?.gateFailures ?? [];
 		expect(failures.length).toBe(2);
@@ -438,11 +402,7 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 	it("marks todo failed when subagent fails (exitCode != 0), does NOT check gates", async () => {
 		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
 		const session = createSession(tempDir, settings, [
-			{
-				id: "phase-1",
-				name: "Work",
-				tasks: [{ id: "task-1", content: "Build feature", status: "pending", gateCmd: "bun test" }],
-			},
+			{ id: "task-1", content: "Build feature", status: "pending", group: "Work", verify: { cmd: "bun test" } },
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "sub1.jsonl");
 		// Subagent fails
@@ -458,11 +418,11 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 		await tool.execute("call-1", {
 			agent: "task",
 			tasks: [
-				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", todoRef: "task-1" },
+				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", ref: "task-1" },
 			],
 		});
 
-		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
+		const finalTask = session.snapshots.at(-1)?.[0];
 		// Should be "failed", NOT "gate_failed"
 		expect(finalTask?.status).toBe("failed");
 		// No gate failures should be present
@@ -472,11 +432,7 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 	it("marks todo gate_failed when extractedToolData is empty (no bash history)", async () => {
 		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
 		const session = createSession(tempDir, settings, [
-			{
-				id: "phase-1",
-				name: "Work",
-				tasks: [{ id: "task-1", content: "Build feature", status: "pending", gateCmd: "bun test" }],
-			},
+			{ id: "task-1", content: "Build feature", status: "pending", group: "Work", verify: { cmd: "bun test" } },
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "sub1.jsonl");
 		// No extractedToolData at all
@@ -490,11 +446,11 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 		await tool.execute("call-1", {
 			agent: "task",
 			tasks: [
-				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", todoRef: "task-1" },
+				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", ref: "task-1" },
 			],
 		});
 
-		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
+		const finalTask = session.snapshots.at(-1)?.[0];
 		expect(finalTask?.status).toBe("gate_failed");
 	});
 
@@ -502,17 +458,11 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
 		const session = createSession(tempDir, settings, [
 			{
-				id: "phase-1",
-				name: "Work",
-				tasks: [
-					{
-						id: "task-1",
-						content: "Build feature",
-						status: "pending",
-						gateCmd: "bun test",
-						gateCommit: true,
-					},
-				],
+				id: "task-1",
+				content: "Build feature",
+				status: "pending",
+				group: "Work",
+				verify: { cmd: "bun test", commit: true },
 			},
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "sub1.jsonl");
@@ -531,11 +481,11 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 		await tool.execute("call-1", {
 			agent: "task",
 			tasks: [
-				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", todoRef: "task-1" },
+				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", ref: "task-1" },
 			],
 		});
 
-		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
+		const finalTask = session.snapshots.at(-1)?.[0];
 		expect(finalTask?.status).toBe("completed");
 	});
 });

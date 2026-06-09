@@ -117,7 +117,7 @@ import type { CheckpointState } from "../tools/checkpoint";
 import { outputMeta } from "../tools/output-meta";
 import { resolveToCwd } from "../tools/path-utils";
 import type { PendingActionStore } from "../tools/pending-action";
-import { cloneTodoGroups, getLatestTodoGroupsFromEntries, type TodoGroup, type TodoItem } from "../tools/todo-write";
+import { cloneTodoNodes, getLatestTodoNodesFromEntries, type TodoNode } from "../tools/todo-write";
 import { clampTimeout } from "../tools/tool-timeouts";
 import { parseCommandArgs } from "../utils/command-args";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
@@ -178,7 +178,7 @@ export type AgentSessionEvent =
 	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
 	| { type: "ttsr_triggered"; rules: Rule[] }
-	| { type: "todo_reminder"; todos: TodoItem[]; attempt: number; maxAttempts: number }
+	| { type: "todo_reminder"; todos: TodoNode[]; attempt: number; maxAttempts: number }
 	| { type: "todo_auto_clear" }
 	| { type: "audit_suggest" }
 	| { type: "audit_escalate"; auditContent: string };
@@ -323,13 +323,12 @@ interface HandoffOptions {
 const AUTO_HANDOFF_THRESHOLD_FOCUS = renderPromptTemplate(autoHandoffThresholdFocusPrompt);
 
 /** Collect all task IDs referenced in any task's blockers array across all groups. */
-function collectBlockerRefs(groups: TodoGroup[]): Set<string> {
+/** Collect all task IDs referenced in any node's blockers array. */
+function collectBlockerRefs(nodes: TodoNode[]): Set<string> {
 	const refs = new Set<string>();
-	for (const group of groups) {
-		for (const task of group.tasks) {
-			for (const blockerId of task.blockers ?? []) {
-				refs.add(blockerId);
-			}
+	for (const node of nodes) {
+		for (const blockerId of node.blockers ?? []) {
+			refs.add(blockerId);
 		}
 	}
 	return refs;
@@ -421,7 +420,7 @@ export class AgentSession {
 
 	// Todo completion reminder state
 	#todoReminderCount = 0;
-	#todoGroups: TodoGroup[] = [];
+	#todoNodes: TodoNode[] = [];
 	#waveSnapshots = new Set<string>();
 	#todoClearTimers = new Map<string, Timer>();
 	/** Tracks how many completed tasks have been auto-cleared per group. */
@@ -539,7 +538,7 @@ export class AgentSession {
 				timestamp: Date.now(),
 			});
 		});
-		this.#syncTodoGroupsFromBranch();
+		this.#syncTodoNodesFromBranch();
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, hooks, auto-compaction, retry logic)
@@ -824,8 +823,7 @@ export class AgentSession {
 					toolName?: string;
 					details?: {
 						path?: string;
-						groups?: TodoGroup[];
-						phases?: TodoGroup[];
+						nodes?: TodoNode[];
 						report?: string;
 						startedAt?: string;
 					};
@@ -836,9 +834,9 @@ export class AgentSession {
 				if (toolName === "edit" && details?.path) {
 					this.#invalidateFileCacheForPath(details.path);
 				}
-				const todoGroups = details?.groups ?? details?.phases;
-				if (toolName === "todo_write" && !isError && Array.isArray(todoGroups)) {
-					this.setTodoGroups(todoGroups);
+				const todoNodes = details?.nodes;
+				if (toolName === "todo_write" && !isError && Array.isArray(todoNodes)) {
+					this.setTodoNodes(todoNodes);
 				}
 				if (toolName === "todo_write" && isError) {
 					const errorText = content?.find(part => part.type === "text")?.text;
@@ -2779,21 +2777,21 @@ export class AgentSession {
 		return this.#skillWarnings;
 	}
 
-	getTodoGroups(): TodoGroup[] {
-		return this.#cloneTodoGroups(this.#todoGroups);
+	getTodoNodes(): TodoNode[] {
+		return cloneTodoNodes(this.#todoNodes);
 	}
 
 	getClearedCompletedCounts(): ReadonlyMap<string, { name: string; count: number }> {
 		return this.#clearedCompletedCounts;
 	}
 
-	setTodoGroups(groups: TodoGroup[], options?: { reset?: boolean }): void {
-		this.#todoGroups = this.#cloneTodoGroups(groups);
+	setTodoNodes(nodes: TodoNode[], options?: { reset?: boolean }): void {
+		this.#todoNodes = cloneTodoNodes(nodes);
 		if (options?.reset) {
 			this.#clearedCompletedCounts.clear();
 			this.#waveSnapshots.clear();
 		}
-		this.#scheduleTodoAutoClear(groups);
+		this.#scheduleTodoAutoClear(nodes);
 	}
 
 	hasWaveSnapshot(ref: string): boolean {
@@ -2804,41 +2802,31 @@ export class AgentSession {
 		this.#waveSnapshots.add(ref);
 	}
 
-	#syncTodoGroupsFromBranch(): void {
-		const groups = getLatestTodoGroupsFromEntries(this.sessionManager.getBranch());
-		// Strip completed tasks unless another task still references them via blockers.
-		// Abandoned tasks are preserved for deferral audit trail.
-		const referencedIds = collectBlockerRefs(groups);
-		for (const group of groups) {
-			group.tasks = group.tasks.filter(task => task.status !== "completed" || referencedIds.has(task.id));
-		}
-		this.setTodoGroups(
-			groups.filter(group => group.tasks.length > 0),
-			{ reset: true },
-		);
-	}
-
-	#cloneTodoGroups(groups: TodoGroup[]): TodoGroup[] {
-		return cloneTodoGroups(groups);
+	#syncTodoNodesFromBranch(): void {
+		const nodes = getLatestTodoNodesFromEntries(this.sessionManager.getBranch());
+		// Strip completed nodes unless another node still references them via blockers.
+		// Abandoned nodes are preserved for deferral audit trail.
+		const referencedIds = collectBlockerRefs(nodes);
+		const kept = nodes.filter(node => node.status !== "completed" || referencedIds.has(node.id));
+		this.setTodoNodes(kept, { reset: true });
 	}
 
 	/** Schedule auto-removal of completed tasks after a delay. */
-	#scheduleTodoAutoClear(groups: TodoGroup[]): void {
+		/** Schedule auto-removal of completed nodes after a delay. */
+	#scheduleTodoAutoClear(nodes: TodoNode[]): void {
 		const delaySec = this.settings.get("tasks.todoClearDelay") ?? 60;
 		if (delaySec < 0) return; // "Never" — no auto-clear
 		const delayMs = delaySec * 1000;
-		const referencedIds = collectBlockerRefs(groups);
+		const referencedIds = collectBlockerRefs(nodes);
 		const doneTaskIds = new Set<string>();
-		for (const group of groups) {
-			for (const task of group.tasks) {
-				// Only schedule tasks that are completed AND not referenced by any other task's blockers.
-				if (task.status === "completed" && !referencedIds.has(task.id)) {
-					doneTaskIds.add(task.id);
-				}
+		for (const node of nodes) {
+			// Only schedule nodes that are completed AND not referenced by any other node's blockers.
+			if (node.status === "completed" && !referencedIds.has(node.id)) {
+				doneTaskIds.add(node.id);
 			}
 		}
 
-		// Cancel timers for tasks that are no longer done (e.g. status was reverted)
+		// Cancel timers for nodes that are no longer done (e.g. status was reverted)
 		for (const [id, timer] of this.#todoClearTimers) {
 			if (!doneTaskIds.has(id)) {
 				clearTimeout(timer);
@@ -2846,11 +2834,10 @@ export class AgentSession {
 			}
 		}
 
-		// Schedule new timers for newly-done tasks
+		// Schedule new timers for newly-done nodes
 		for (const id of doneTaskIds) {
 			if (this.#todoClearTimers.has(id)) continue;
 			if (delayMs === 0) {
-				// Instant — run synchronously on next microtask to batch removals
 				const timer = setTimeout(() => this.#runTodoAutoClear(id), 0);
 				this.#todoClearTimers.set(id, timer);
 			} else {
@@ -2861,33 +2848,26 @@ export class AgentSession {
 	}
 
 	/** Remove a single completed task and notify the UI. */
+		/** Remove a single completed node and notify the UI. */
 	#runTodoAutoClear(taskId: string): void {
 		this.#todoClearTimers.delete(taskId);
-		let removed = false;
-		for (const group of this.#todoGroups) {
-			const idx = group.tasks.findIndex(t => t.id === taskId);
-			if (
-				idx !== -1 &&
-				group.tasks[idx]!.status === "completed" &&
-				!collectBlockerRefs(this.#todoGroups).has(taskId)
-			) {
-				// Track the cleared task count for this group before removing.
-				const entry = this.#clearedCompletedCounts.get(group.id);
-				if (entry) {
-					entry.count++;
-				} else {
-					this.#clearedCompletedCounts.set(group.id, { name: group.name, count: 1 });
-				}
-				group.tasks.splice(idx, 1);
-				removed = true;
-				break;
-			}
+		const idx = this.#todoNodes.findIndex(n => n.id === taskId);
+		if (
+			idx === -1 ||
+			this.#todoNodes[idx]!.status !== "completed" ||
+			collectBlockerRefs(this.#todoNodes).has(taskId)
+		) {
+			return;
 		}
-		if (!removed) return;
+		// Track the cleared count under the node's group label (or 'Tasks').
+		const label = this.#todoNodes[idx]!.group?.trim() || "Tasks";
+		const entry = this.#clearedCompletedCounts.get(label);
+		if (entry) entry.count++;
+		else this.#clearedCompletedCounts.set(label, { name: label, count: 1 });
+		this.#todoNodes.splice(idx, 1);
 
-		// Remove empty groups, then re-evaluate newly eligible completed tasks.
-		this.#todoGroups = this.#todoGroups.filter(group => group.tasks.length > 0);
-		this.#scheduleTodoAutoClear(this.#todoGroups);
+		// Re-evaluate newly eligible completed nodes.
+		this.#scheduleTodoAutoClear(this.#todoNodes);
 		this.#emit({ type: "todo_auto_clear" });
 	}
 
@@ -2945,7 +2925,7 @@ export class AgentSession {
 		this.#bashToolArgsByCallId.clear();
 		await this.sessionManager.flush();
 		await this.sessionManager.newSession(options);
-		this.setTodoGroups([], { reset: true });
+		this.setTodoNodes([], { reset: true });
 		this.agent.sessionId = this.sessionManager.getSessionId();
 		this.#steeringMessages = [];
 		this.#followUpMessages = [];
@@ -3361,7 +3341,7 @@ export class AgentSession {
 		await this.sessionManager.rewriteEntries();
 		const sessionContext = this.sessionManager.buildSessionContext();
 		this.agent.replaceMessages(sessionContext.messages);
-		this.#syncTodoGroupsFromBranch();
+		this.#syncTodoNodesFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 		return result;
 	}
@@ -3491,7 +3471,7 @@ export class AgentSession {
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
-			this.#syncTodoGroupsFromBranch();
+			this.#syncTodoNodesFromBranch();
 			this.#closeCodexProviderSessionsForHistoryRewrite();
 
 			// Get the saved compaction entry for the hook
@@ -3705,7 +3685,7 @@ export class AgentSession {
 			// Rebuild agent messages from session
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
-			this.#syncTodoGroupsFromBranch();
+			this.#syncTodoNodesFromBranch();
 
 			return { document: handoffText, savedPath };
 		} finally {
@@ -3847,7 +3827,7 @@ export class AgentSession {
 			return undefined;
 		}
 
-		if (this.getTodoGroups().length > 0) {
+		if (this.getTodoNodes().length > 0) {
 			return undefined;
 		}
 
@@ -3899,33 +3879,29 @@ export class AgentSession {
 			return false;
 		}
 
-		const groups = this.getTodoGroups();
-		if (groups.length === 0) {
+		const nodes = this.getTodoNodes();
+		if (nodes.length === 0) {
 			this.#todoReminderCount = 0;
 			return false;
 		}
 
-		const incompleteByGroup = groups
-			.map(group => ({
-				name: group.name,
-				tasks: group.tasks
-					.filter(
-						(task): task is TodoItem & { status: "pending" | "in_progress" } =>
-							task.status === "pending" || task.status === "in_progress",
-					)
-					.map(task => ({ id: task.id, content: task.content, status: task.status })),
-			}))
-			.filter(group => group.tasks.length > 0);
-		const incomplete = incompleteByGroup.flatMap(group => group.tasks);
+		const incomplete = nodes.filter(node => node.status === "pending" || node.status === "in_progress");
 		if (incomplete.length === 0) {
 			this.#todoReminderCount = 0;
 			return false;
 		}
 
-		// Build reminder message
+		// Build reminder message, clustered by the cosmetic group label.
 		this.#todoReminderCount++;
-		const todoList = incompleteByGroup
-			.map(group => `- ${group.name}\n${group.tasks.map(task => `  - ${task.content}`).join("\n")}`)
+		const byLabel = new Map<string, TodoNode[]>();
+		for (const node of incomplete) {
+			const label = node.group?.trim() || "Tasks";
+			const bucket = byLabel.get(label);
+			if (bucket) bucket.push(node);
+			else byLabel.set(label, [node]);
+		}
+		const todoList = [...byLabel.entries()]
+			.map(([label, items]) => `- ${label}\n${items.map(node => `  - ${node.content}`).join("\n")}`)
 			.join("\n");
 		const reminder =
 			`<system-reminder>\n` +
@@ -4467,7 +4443,7 @@ export class AgentSession {
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
-			this.#syncTodoGroupsFromBranch();
+			this.#syncTodoNodesFromBranch();
 			this.#closeCodexProviderSessionsForHistoryRewrite();
 
 			// Get the saved compaction entry for the hook
@@ -5137,7 +5113,7 @@ export class AgentSession {
 		}
 
 		this.agent.replaceMessages(sessionContext.messages);
-		this.#syncTodoGroupsFromBranch();
+		this.#syncTodoNodesFromBranch();
 
 		// Restore model if saved
 		const defaultModelStr = sessionContext.models.default;
@@ -5225,7 +5201,7 @@ export class AgentSession {
 		} else {
 			this.sessionManager.createBranchedSession(selectedEntry.parentId);
 		}
-		this.#syncTodoGroupsFromBranch();
+		this.#syncTodoNodesFromBranch();
 		this.agent.sessionId = this.sessionManager.getSessionId();
 
 		// Reload messages from entries (works for both file and in-memory mode)
@@ -5397,7 +5373,7 @@ export class AgentSession {
 		this.agent.replaceMessages(sessionContext.messages);
 		this.#trackedBashToolExecutions = [];
 		this.#bashToolArgsByCallId.clear();
-		this.#syncTodoGroupsFromBranch();
+		this.#syncTodoNodesFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 
 		// Emit session_tree event

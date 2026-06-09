@@ -28,8 +28,8 @@ policy "api-quality" layer="api" {
 		expect(result.policies.layers).toEqual({ api: { description: "API endpoints" } });
 		expect(result.policies.policies).toHaveLength(1);
 		expect(result.policies.policies[0].name).toBe("api-quality");
-		expect(result.policies.policies[0].gates.gateCommit).toBe(true);
-		expect(result.policies.policies[0].gates.gateCmd).toBe("bun test");
+		expect(result.policies.policies[0].verify.commit).toBe(true);
+		expect(result.policies.policies[0].verify.cmd).toBe("bun test");
 	});
 
 	it("parses appearance settings", async () => {

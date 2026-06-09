@@ -1,0 +1,28 @@
+#+TITLE: pi-org journal: JournalTodoItem/Group shape + serializeJournalOrg drawer keys (VERIFY_*, REF, CLOSES_REF)
+#+STATE: ITEM
+#+SESSION_ID: 1502540eec30c834
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T11-18-25-968Z_1502540eec30c834.jsonl]]
+#+CUSTOM_ID: FEAT-803-pi-org-journal-journaltodoitem-group-sha
+#+LAYER: core
+#+BLOCKERS: FEAT-799-todonode-type-declarative-reconcile-sche
+
+* Initial Message
+
+how would you simplify both the prompt and the implementation of the todo_write system and make it more powerful as a follow-up to PLAN-327?
+
+Wave 2 consumer for [[id:PLAN-328-simplify-and-unify-todo-write-flat-recon]]. Blocked on [[id:FEAT-799-todonode-type-declarative-reconcile-sche]].
+
+* Target
+~packages/org/src/journal.ts~.
+
+* Change
+- ~JournalTodoItem~: replace gateCommit/gateArtifact/gateCmd/gateLlm/verifyCmd + orgItemId/orgItemClosingId with ~verify?:{commit?,artifact?,cmd?,review?}~ + ~ref?~ + ~closesRef?~. Keep status union (incl. failed/gate_failed for serialization completeness).
+- ~JournalTodoGroup~: either drop (flat list) or keep as a thin {name, tasks} derived from node ~group~ labels. Decision: keep group serialization for readable org output, derived from node.group at write time in todo-write.ts (writeJournal call passes grouped view).
+- ~serializeJournalOrg~ drawer keys: GATE_COMMIT/GATE_ARTIFACT/GATE_CMD/GATE_LLM/VERIFY_CMD → VERIFY_COMMIT/VERIFY_ARTIFACT/VERIFY_CMD/VERIFY_REVIEW. ORG_ITEM_ID/ORG_ITEM_CLOSING_ID → REF/CLOSES_REF. Keep DEPENDS, DEFERRED_TO, STATUS, TASK_ID.
+
+* Edge
+- ~todo-write.ts~ ~writeJournal(projectRoot, sessionId, updated.groups)~ call now passes a grouped projection of flat nodes (group label → JournalTodoGroup). Build the projection at the call site so journal.ts stays presentation-only.
+- DEPENDS drawer is read by org wave engine (BUG-309 history: engine reads :BLOCKERS:/:DEPENDS:) — keep DEPENDS key name unchanged.
+
+* Accept
+~bun test~ for any journal test; serialized org round-trips with new drawer keys. check:ts clean across pi-org.

@@ -2,7 +2,7 @@ import type { ThinkingLevel } from "@spell/pi-agent-core";
 import type { Usage } from "@spell/pi-ai";
 import { $env } from "@spell/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import type { TodoGroup } from "../tools/todo-write";
+import type { TodoNode } from "../tools/todo-write";
 import type { BatchImplicitBlocker } from "./batch-scheduler";
 import type { NestedRepoPatch } from "./worktree";
 import type { GateFailure } from "./gate-verification";
@@ -52,7 +52,7 @@ export const taskItemSchema = Type.Object({
 	assignment: Type.Optional(
 		Type.String({
 			description:
-				"Complete per-task instructions the subagent executes. When omitted and todoRef is set, auto-derived from the linked todo's content and details. Must follow the Target/Change/Edge Cases/Acceptance structure when provided explicitly.",
+				"Complete per-task instructions the subagent executes. When omitted and a non-null `ref` is set, auto-derived from the linked todo/org item's content. Must follow the Target/Change/Edge Cases/Acceptance structure when provided explicitly.",
 		}),
 	),
 	blockers: Type.Optional(
@@ -61,12 +61,10 @@ export const taskItemSchema = Type.Object({
 				"Task IDs within this batch that must complete before this task starts. Enables intra-batch DAG scheduling.",
 		}),
 	),
-	todoRef: Type.Optional(
-		Type.String({
-			description:
-				"Todo item ID (e.g. 'task-3') to link this subagent to. Resolves verification requirements (gates, orgItemId) and injects them into the subagent context automatically.",
-		}),
-	),
+	ref: Type.Union([Type.String(), Type.Null()], {
+		description:
+			"Required link target. `null` = no linkage. A roster id (e.g. 'task-3') links to an in-session todo. An `org://ITEM-ID` URI links to a durable org item (cross-session). Resolves verification requirements (gates) and injects them into the subagent context automatically.",
+	}),
 	layer: Type.Optional(
 		Type.String({
 			description: "Layer for policy-based gate injection. Propagated to auto-roster todo items.",
@@ -235,7 +233,7 @@ export interface AgentProgress {
 	modelOverride?: string | string[];
 	sessionId?: string;
 	transcriptPath?: string;
-	todoGroups?: TodoGroup[];
+	todoNodes?: TodoNode[];
 	/** Running cost from accumulated message_end events */
 	usage?: { cost: number };
 	/** Data extracted by registered subprocess tool handlers (keyed by tool name) */
@@ -267,7 +265,7 @@ export interface SingleResult {
 	abortReason?: string;
 	sessionId?: string;
 	transcriptUri?: string;
-	todoGroups?: TodoGroup[];
+	todoNodes?: TodoNode[];
 	/** Aggregated usage from the subprocess, accumulated incrementally from message_end events. */
 	usage?: Usage;
 	/** Output path for the task result */

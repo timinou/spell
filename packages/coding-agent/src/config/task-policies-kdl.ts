@@ -2,7 +2,7 @@ import type { Document, Node } from "@bgotink/kdl";
 import { parse } from "@bgotink/kdl";
 import { logger } from "@spell/pi-utils";
 import { getBooleanArgument, getStringArgument, getStringProperty } from "./kdl-helpers";
-import type { LayerDefinition, TaskPolicy, TaskPolicyConfig, TaskPolicyGates } from "./task-policies";
+import type { LayerDefinition, TaskPolicy, TaskPolicyConfig, TaskVerify } from "./task-policies";
 
 function parseLayerNode(node: Node): [string, LayerDefinition] | undefined {
 	const name = getStringArgument(node);
@@ -16,36 +16,35 @@ function parseLayerNode(node: Node): [string, LayerDefinition] | undefined {
 	];
 }
 
-function parsePolicyGates(policyNode: Node): { gates: TaskPolicyGates; description?: string; inject?: string } {
-	const gates: TaskPolicyGates = {};
+function parsePolicyGates(policyNode: Node): { verify: TaskVerify; description?: string; inject?: string } {
+	const verify: TaskVerify = {};
 	let description: string | undefined;
 	let inject: string | undefined;
 
 	for (const childNode of policyNode.children?.nodes ?? []) {
 		switch (childNode.getName()) {
+			case "verify-commit":
 			case "gate-commit": {
-				const gateCommit = getBooleanArgument(childNode);
-				if (gateCommit !== undefined) gates.gateCommit = gateCommit;
+				const commit = getBooleanArgument(childNode);
+				if (commit !== undefined) verify.commit = commit;
 				break;
 			}
+			case "verify-cmd":
 			case "gate-cmd": {
-				const gateCmd = getStringArgument(childNode);
-				if (gateCmd !== undefined) gates.gateCmd = gateCmd;
+				const cmd = getStringArgument(childNode);
+				if (cmd !== undefined) verify.cmd = cmd;
 				break;
 			}
+			case "verify-artifact":
 			case "gate-artifact": {
-				const gateArtifact = getStringArgument(childNode);
-				if (gateArtifact !== undefined) gates.gateArtifact = gateArtifact;
+				const artifact = getStringArgument(childNode);
+				if (artifact !== undefined) verify.artifact = artifact;
 				break;
 			}
+			case "verify-review":
 			case "gate-llm": {
-				const gateLlm = getStringArgument(childNode);
-				if (gateLlm !== undefined) gates.gateLlm = gateLlm;
-				break;
-			}
-			case "verify-cmd": {
-				const verifyCmd = getStringArgument(childNode);
-				if (verifyCmd !== undefined) gates.verifyCmd = verifyCmd;
+				const review = getStringArgument(childNode);
+				if (review !== undefined) verify.review = review;
 				break;
 			}
 			case "inject": {
@@ -59,7 +58,7 @@ function parsePolicyGates(policyNode: Node): { gates: TaskPolicyGates; descripti
 		}
 	}
 
-	return { gates, description, inject };
+	return { verify, description, inject };
 }
 
 function parsePolicyNode(node: Node): TaskPolicy | undefined {
@@ -75,12 +74,12 @@ function parsePolicyNode(node: Node): TaskPolicy | undefined {
 		return undefined;
 	}
 
-	const { gates, description, inject } = parsePolicyGates(node);
+	const { verify, description, inject } = parsePolicyGates(node);
 	return {
 		name,
 		description,
 		match: { layer },
-		gates,
+		verify,
 		inject,
 	};
 }

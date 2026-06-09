@@ -3,18 +3,17 @@ layer "api" description="Service boundaries and integration points"
 layer "cli" description="Command-line interfaces and binaries"
 
 policy "core-quality" layer="core" {
-    gate-commit #true
-    gate-cmd "cargo test"
+    verify-commit #true
+    verify-cmd "cargo test"
 }
 
 policy "api-quality" layer="api" {
-    gate-commit #true
-    gate-cmd "cargo test"
-    verify-cmd "cargo clippy -- -D warnings"
+    verify-commit #true
+    verify-cmd "cargo clippy -- -D warnings && cargo test"
 }
 
 policy "cli-quality" layer="cli" {
-    gate-commit #true
+    verify-commit #true
 }
 // agents {
 //     rule "explore" {

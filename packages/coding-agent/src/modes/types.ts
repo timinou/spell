@@ -13,7 +13,7 @@ import type { SessionContext, SessionManager } from "../session/session-manager"
 import type { SubagentTracker } from "../task/subagent-tracker";
 import type { SingleResult } from "../task/types";
 
-import type { TodoGroup, TodoItem } from "../tools/todo-write";
+import type { TodoNode } from "../tools/todo-write";
 import type { EventBus } from "../utils/event-bus";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
@@ -26,7 +26,7 @@ import type { ToolExecutionHandle } from "./components/tool-execution";
 import type { OAuthManualInputManager } from "./oauth-manual-input";
 import type { Theme } from "./theme/theme";
 
-export type { TodoDelegation, TodoGroup, TodoItem, TodoStatus } from "../tools/todo-write";
+export type { TodoDelegation, TodoNode, TodoStatus } from "../tools/todo-write";
 export type CompactionQueuedMessage = {
 	text: string;
 	mode: "steer" | "followUp";
@@ -94,7 +94,7 @@ export interface InteractiveModeContext {
 	fileSlashCommands: Set<string>;
 	skillCommands: Map<string, string>;
 	oauthManualInput: OAuthManualInputManager;
-	todoGroups: TodoGroup[];
+	todoNodes: TodoNode[];
 
 	// Lifecycle
 	init(): Promise<void>;
@@ -143,7 +143,7 @@ export interface InteractiveModeContext {
 	updateEditorTopBorder(): void;
 	updateEditorBorderColor(): void;
 	rebuildChatFromMessages(): void;
-	setTodos(todos: TodoItem[] | TodoGroup[]): void;
+	setTodos(todos: TodoNode[]): void;
 	reloadTodos(): Promise<void>;
 	recordSubagentResults?(results: SingleResult[]): void;
 	toggleTodoExpansion(): void;

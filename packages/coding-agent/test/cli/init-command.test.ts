@@ -43,7 +43,7 @@ describe("runInitCommand", () => {
 		const config = await parseSpellKdl(content);
 		expect(content).toContain('domain "coding"');
 		expect(content).toContain('import "spell.coding.typescript"');
-		expect(config.policies.policies.find(policy => policy.name === "api-quality")?.gates.gateCmd).toBe("bun test");
+		expect(config.policies.policies.find(policy => policy.name === "api-quality")?.verify.cmd).toBe("bun test");
 	});
 
 	it("uses the growth template when domain is overridden", async () => {

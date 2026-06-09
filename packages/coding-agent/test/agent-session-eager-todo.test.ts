@@ -137,7 +137,7 @@ describe("AgentSession eager todo enforcement", () => {
 			label: "Bash",
 			description: "Mock bash tool",
 			parameters: Type.Object({}),
-   execute: async () => ({ content: [{ type: "text" as const, text: "ok" }], data: null }),
+			execute: async () => ({ content: [{ type: "text" as const, text: "ok" }], data: null }),
 		};
 
 		const agent = new Agent({
@@ -204,7 +204,7 @@ describe("AgentSession eager todo enforcement", () => {
 			toolNames: ["todo_write", "bash"],
 			messageRoles: ["user", "user"],
 			messageTexts: [
-				expect.stringContaining("Before doing substantive work on the upcoming user request"),
+				expect.stringContaining("Before substantive work on the upcoming request"),
 				"list all work trees",
 			],
 			lastMessageRole: "user",
@@ -218,17 +218,8 @@ describe("AgentSession eager todo enforcement", () => {
 	it("initializes todos once, then continues within the same user turn", async () => {
 		scriptedResponses = [
 			createToolCallAssistantMessage("todo_write", {
-				ops: [
-					{
-						op: "replace",
-						phases: [
-							{
-								name: "List worktrees",
-								tasks: [{ content: "List all git worktrees in the current repository", status: "in_progress" }],
-							},
-						],
-					},
-				],
+				reset: true,
+				tasks: [{ content: "List all git worktrees in the current repository", status: "in_progress", group: "List worktrees" }],
 			}),
 			createAssistantMessage("real user turn handled"),
 		];
@@ -242,7 +233,7 @@ describe("AgentSession eager todo enforcement", () => {
 			toolNames: ["todo_write", "bash"],
 			messageRoles: ["user", "user"],
 			messageTexts: [
-				expect.stringContaining("Before doing substantive work on the upcoming user request"),
+				expect.stringContaining("Before substantive work on the upcoming request"),
 				"list all work trees",
 			],
 			lastMessageRole: "user",
@@ -251,7 +242,7 @@ describe("AgentSession eager todo enforcement", () => {
 		expect(observedCalls[1]?.toolChoice).toBeUndefined();
 		expect(observedCalls[1]?.lastMessageRole).toBe("toolResult");
 		expect(observedCalls[1]?.messageRoles.slice(-2)).toEqual(["assistant", "toolResult"]);
-		expect(session.getTodoGroups()).toHaveLength(1);
-		expect(session.getTodoGroups()[0]?.tasks[0]?.content).toBe("List all git worktrees in the current repository");
+		expect(session.getTodoNodes()).toHaveLength(1);
+		expect(session.getTodoNodes()[0]?.content).toBe("List all git worktrees in the current repository");
 	});
 });

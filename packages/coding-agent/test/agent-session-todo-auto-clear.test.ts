@@ -23,7 +23,7 @@ import { AuthStorage } from "@spell/pi-coding-agent/session/auth-storage";
 
 import { SessionManager } from "@spell/pi-coding-agent/session/session-manager";
 
-import type { TodoGroup } from "@spell/pi-coding-agent/tools/todo-write";
+import type { TodoNode } from "@spell/pi-coding-agent/tools/todo-write";
 
 import { TempDir } from "@spell/pi-utils";
 
@@ -106,129 +106,95 @@ describe("AgentSession todo auto-clear blocker awareness", () => {
 	});
 
 	it("clears an unreferenced completed task after the delay", () => {
-		const phases: TodoGroup[] = [
-			{ id: "phase-1", name: "Phase 1", tasks: [{ id: "task-a", content: "Do A", status: "completed" }] },
-		];
-		session.setTodoGroups(phases);
+		const nodes: TodoNode[] = [{ id: "task-a", content: "Do A", status: "completed" }];
+		session.setTodoNodes(nodes);
 
 		// Still present before delay elapses
-		expect(session.getTodoGroups()[0]?.tasks).toHaveLength(1);
+		expect(session.getTodoNodes()).toHaveLength(1);
 
 		vi.advanceTimersByTime(1100);
 
 		// Should have been cleared
-		expect(session.getTodoGroups()).toHaveLength(0);
+		expect(session.getTodoNodes()).toHaveLength(0);
 	});
 
 	it("does NOT clear a completed task that is still referenced via blockers", () => {
-		const phases: TodoGroup[] = [
-			{
-				id: "phase-1",
-				name: "Phase 1",
-				tasks: [
-					{ id: "task-a", content: "Do A", status: "completed" },
-					{ id: "task-b", content: "Do B", status: "pending", blockers: ["task-a"] },
-				],
-			},
+		const nodes: TodoNode[] = [
+			{ id: "task-a", content: "Do A", status: "completed" },
+			{ id: "task-b", content: "Do B", status: "pending", blockers: ["task-a"] },
 		];
-		session.setTodoGroups(phases);
+		session.setTodoNodes(nodes);
 
 		vi.advanceTimersByTime(5000);
 
 		// task-a must remain because task-b still lists it as a blocker
-		const tasks = session.getTodoGroups()[0]?.tasks ?? [];
+		const tasks = session.getTodoNodes();
 		expect(tasks.some((task: { id: string }) => task.id === "task-a")).toBe(true);
 	});
 
 	it("clears a previously-referenced completed task once the referencing task is removed", () => {
-		const phases: TodoGroup[] = [
-			{
-				id: "phase-1",
-				name: "Phase 1",
-				tasks: [
-					{ id: "task-a", content: "Do A", status: "completed" },
-					{ id: "task-b", content: "Do B", status: "pending", blockers: ["task-a"] },
-				],
-			},
+		const nodes: TodoNode[] = [
+			{ id: "task-a", content: "Do A", status: "completed" },
+			{ id: "task-b", content: "Do B", status: "pending", blockers: ["task-a"] },
 		];
-		session.setTodoGroups(phases);
+		session.setTodoNodes(nodes);
 		vi.advanceTimersByTime(5000);
 		// task-a still present (referenced)
-		expect(session.getTodoGroups()[0]?.tasks.some((task: { id: string }) => task.id === "task-a")).toBe(true);
+		expect(session.getTodoNodes().some((task: { id: string }) => task.id === "task-a")).toBe(true);
 
 		// Remove task-b (the referencing task)
-		const updatedPhases: TodoGroup[] = [
-			{ id: "phase-1", name: "Phase 1", tasks: [{ id: "task-a", content: "Do A", status: "completed" }] },
-		];
-		session.setTodoGroups(updatedPhases);
+		const updatedNodes: TodoNode[] = [{ id: "task-a", content: "Do A", status: "completed" }];
+		session.setTodoNodes(updatedNodes);
 
 		// Now task-a has no referencing tasks — timer should be scheduled
 		vi.advanceTimersByTime(1100);
 
-		expect(session.getTodoGroups()).toHaveLength(0);
+		expect(session.getTodoNodes()).toHaveLength(0);
 	});
 
 	it("cascades auto-clear once a referenced completed task becomes unreferenced", () => {
-		const phases: TodoGroup[] = [
-			{
-				id: "phase-1",
-				name: "Phase 1",
-				tasks: [
-					{ id: "task-a", content: "Do A", status: "completed" },
-					{ id: "task-b", content: "Do B", status: "completed", blockers: ["task-a"] },
-				],
-			},
+		const nodes: TodoNode[] = [
+			{ id: "task-a", content: "Do A", status: "completed" },
+			{ id: "task-b", content: "Do B", status: "completed", blockers: ["task-a"] },
 		];
-		session.setTodoGroups(phases);
+		session.setTodoNodes(nodes);
 
 		vi.advanceTimersByTime(1100);
 
-		const tasks = session.getTodoGroups()[0]?.tasks ?? [];
+		const tasks = session.getTodoNodes();
 		expect(tasks.some((task: { id: string }) => task.id === "task-b")).toBe(false);
 		expect(tasks.some((task: { id: string }) => task.id === "task-a")).toBe(true);
 
 		vi.advanceTimersByTime(1100);
 
-		expect(session.getTodoGroups()).toHaveLength(0);
+		expect(session.getTodoNodes()).toHaveLength(0);
 	});
 
 	it("keeps a completed task referenced by an abandoned task", () => {
 		// Even abandoned tasks' blocker references count, to preserve audit visibility.
-		const phases: TodoGroup[] = [
-			{
-				id: "phase-1",
-				name: "Phase 1",
-				tasks: [
-					{ id: "task-a", content: "Do A", status: "completed" },
-					{ id: "task-b", content: "Do B", status: "abandoned", blockers: ["task-a"] },
-				],
-			},
+		const nodes: TodoNode[] = [
+			{ id: "task-a", content: "Do A", status: "completed" },
+			{ id: "task-b", content: "Do B", status: "abandoned", blockers: ["task-a"] },
 		];
-		session.setTodoGroups(phases);
+		session.setTodoNodes(nodes);
 
 		vi.advanceTimersByTime(5000);
 
-		const tasks = session.getTodoGroups()[0]?.tasks ?? [];
+		const tasks = session.getTodoNodes();
 		expect(tasks.some((task: { id: string }) => task.id === "task-a")).toBe(true);
 	});
 
 	it("still clears completed tasks that have no references, even when other tasks are referenced", () => {
-		const phases: TodoGroup[] = [
-			{
-				id: "phase-1",
-				name: "Phase 1",
-				tasks: [
-					{ id: "task-a", content: "Do A", status: "completed" },
-					{ id: "task-b", content: "Do B", status: "completed" },
-					{ id: "task-c", content: "Do C", status: "pending", blockers: ["task-b"] },
-				],
-			},
+		const nodes: TodoNode[] = [
+			{ id: "task-a", content: "Do A", status: "completed" },
+			{ id: "task-b", content: "Do B", status: "completed" },
+			{ id: "task-c", content: "Do C", status: "pending", blockers: ["task-b"] },
 		];
-		session.setTodoGroups(phases);
+		session.setTodoNodes(nodes);
 
 		vi.advanceTimersByTime(1100);
 
-		const tasks = session.getTodoGroups()[0]?.tasks ?? [];
+		const tasks = session.getTodoNodes();
 		// task-a had no references → cleared
 		expect(tasks.some((task: { id: string }) => task.id === "task-a")).toBe(false);
 		// task-b is referenced by task-c → preserved
@@ -240,29 +206,23 @@ describe("AgentSession todo auto-clear blocker awareness", () => {
 	it("preserves referenced completed tasks when syncing phases from branch history", async () => {
 		await session.dispose();
 		const syncedSessionManager = SessionManager.inMemory(tempDir.path());
-		const phases: TodoGroup[] = [
-			{
-				id: "phase-1",
-				name: "Phase 1",
-				tasks: [
-					{ id: "task-a", content: "Do A", status: "completed" },
-					{ id: "task-b", content: "Do B", status: "pending", blockers: ["task-a"] },
-				],
-			},
+		const nodes: TodoNode[] = [
+			{ id: "task-a", content: "Do A", status: "completed" },
+			{ id: "task-b", content: "Do B", status: "pending", blockers: ["task-a"] },
 		];
 		const todoWriteResult: ToolResultMessage = {
 			role: "toolResult",
 			toolCallId: "call-1",
 			toolName: "todo_write",
 			content: [{ type: "text", text: "ok" }],
-			details: { phases },
+			details: { nodes },
 			isError: false,
 			timestamp: Date.now(),
 		};
 		syncedSessionManager.appendMessage(todoWriteResult);
 		session = makeSession(tempDir, authStorage, 1000, syncedSessionManager);
 
-		const tasks = session.getTodoGroups()[0]?.tasks ?? [];
+		const tasks = session.getTodoNodes();
 		expect(tasks.map((task: { id: string }) => task.id)).toEqual(["task-a", "task-b"]);
 	});
 });

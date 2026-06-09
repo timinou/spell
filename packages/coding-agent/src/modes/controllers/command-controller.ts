@@ -415,7 +415,7 @@ export class CommandController {
 	}
 
 	async handleSnapshotsCommand(): Promise<void> {
-		const planId = this.ctx.session.getTodoGroups().find(group => group.planItemId)?.planItemId;
+		const planId = this.ctx.session.getTodoNodes().find(node => node.planItemId)?.planItemId;
 		if (!planId) {
 			this.ctx.showWarning("No active plan snapshots for this session.");
 			return;

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test, vi } from "bun:test";
 import { Settings } from "@spell/pi-coding-agent/config/settings";
 import * as orgModule from "@spell/pi-org";
 import type { ToolSession } from "../../src/tools";
-import { type TodoGroup, TodoWriteTool } from "../../src/tools/todo-write";
+import { type TodoNode, TodoWriteTool } from "../../src/tools/todo-write";
 
 interface MockItem {
 	id: string;
@@ -11,19 +11,19 @@ interface MockItem {
 	body?: string;
 }
 
-function createSession(options: { groups?: TodoGroup[]; orgEnabled?: boolean } = {}): ToolSession {
-	let groups = options.groups ?? [];
+function createSession(options: { nodes?: TodoNode[]; orgEnabled?: boolean } = {}): ToolSession {
+	let nodes = options.nodes ?? [];
 	return {
 		cwd: "/tmp/test",
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
 		settings: Settings.isolated({ "org.enabled": options.orgEnabled ?? true }),
-		getTodoGroups: () => groups,
-		setTodoGroups: next => {
-			groups = next;
+		getTodoNodes: () => nodes,
+		setTodoNodes: (next: TodoNode[]) => {
+			nodes = next;
 		},
-	};
+	} as unknown as ToolSession;
 }
 
 describe("TodoWriteTool org lifecycle hooks", () => {
@@ -52,10 +52,11 @@ describe("TodoWriteTool org lifecycle hooks", () => {
 		});
 	});
 
-	test("auto-transitions orgItemId task to DOING when work starts", async () => {
+	test("auto-transitions ref task to DOING when work starts", async () => {
 		const tool = new TodoWriteTool(createSession());
 		const result = await tool.execute("call-1", {
-			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Implement", orgItemId: "FEAT-001" }] }] }],
+			reset: true,
+			tasks: [{ content: "Implement", group: "Work", ref: "org://FEAT-001" }],
 		});
 
 		expect(updateItemStateSpy).toHaveBeenCalledWith("/tmp/feat-001.org", "FEAT-001", "DOING", expect.any(Array));
@@ -63,25 +64,19 @@ describe("TodoWriteTool org lifecycle hooks", () => {
 		expect(text).toContain("INFO: Org item FEAT-001 auto-transitioned to DOING.");
 	});
 
-	test("auto-transitions orgItemClosingId task to DONE only after verified completion", async () => {
+	test("auto-transitions closesRef task to DONE only after verified completion", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("call-1", {
-			ops: [
-				{
-					op: "replace",
-					groups: [
-						{ name: "Work", tasks: [{ content: "Ship", orgItemId: "FEAT-001", orgItemClosingId: "FEAT-001" }] },
-					],
-				},
-			],
+			reset: true,
+			tasks: [{ content: "Ship", group: "Work", ref: "org://FEAT-001", closesRef: true }],
 		});
 		updateItemStateSpy.mockClear();
 
-		await tool.execute("call-2", { ops: [{ op: "update", id: "task-1", status: "completed" }] });
+		await tool.execute("call-2", { tasks: [{ id: "task-1", status: "completed" }] });
 		expect(updateItemStateSpy).not.toHaveBeenCalled();
 
 		const accepted = await tool.execute("call-3", {
-			ops: [{ op: "update", id: "task-1", status: "completed", verified: true }],
+			tasks: [{ id: "task-1", status: "completed", verified: true }],
 		});
 		expect(updateItemStateSpy).toHaveBeenCalledWith("/tmp/feat-001.org", "FEAT-001", "DONE", expect.any(Array));
 		const text = accepted.content.find(part => part.type === "text")?.text ?? "";
@@ -91,7 +86,8 @@ describe("TodoWriteTool org lifecycle hooks", () => {
 	test("skips hooks cleanly when org is disabled", async () => {
 		const tool = new TodoWriteTool(createSession({ orgEnabled: false }));
 		await tool.execute("call-1", {
-			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Implement", orgItemId: "FEAT-001" }] }] }],
+			reset: true,
+			tasks: [{ content: "Implement", group: "Work", ref: "org://FEAT-001" }],
 		});
 		expect(updateItemStateSpy).not.toHaveBeenCalled();
 	});
@@ -100,10 +96,11 @@ describe("TodoWriteTool org lifecycle hooks", () => {
 		items.delete("FEAT-001");
 		const tool = new TodoWriteTool(createSession());
 		const result = await tool.execute("call-1", {
-			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Implement", orgItemId: "FEAT-001" }] }] }],
+			reset: true,
+			tasks: [{ content: "Implement", group: "Work", ref: "org://FEAT-001" }],
 		});
 		expect(updateItemStateSpy).not.toHaveBeenCalled();
-		expect(result.details?.groups[0]?.tasks[0]?.status).toBe("in_progress");
+		expect(result.details?.nodes[0]?.status).toBe("in_progress");
 		const text = result.content.find(part => part.type === "text")?.text ?? "";
 		expect(text).toContain("WARN: Org item FEAT-001 not found for DOING transition.");
 	});
@@ -112,48 +109,39 @@ describe("TodoWriteTool org lifecycle hooks", () => {
 		vi.spyOn(orgModule, "findItemById").mockRejectedValue(new Error("connection refused"));
 		const tool = new TodoWriteTool(createSession());
 		const result = await tool.execute("call-1", {
-			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Implement", orgItemId: "FEAT-001" }] }] }],
+			reset: true,
+			tasks: [{ content: "Implement", group: "Work", ref: "org://FEAT-001" }],
 		});
 		const text = result.content.find(part => part.type === "text")?.text ?? "";
 		expect(text).toContain("WARN: Failed to transition org item FEAT-001 to DOING: connection refused");
 		// Task should still be in_progress despite the org hook failure
-		expect(result.details?.groups[0]?.tasks[0]?.status).toBe("in_progress");
+		expect(result.details?.nodes[0]?.status).toBe("in_progress");
 	});
 
-	test("shared orgItemId only transitions to DOING once", async () => {
+	test("shared ref only transitions to DOING once", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("call-1", {
-			ops: [
-				{
-					op: "replace",
-					groups: [
-						{
-							name: "Work",
-							tasks: [
-								{ content: "First", orgItemId: "FEAT-001" },
-								{ content: "Second", orgItemId: "FEAT-001" },
-							],
-						},
-					],
-				},
+			reset: true,
+			tasks: [
+				{ content: "First", group: "Work", ref: "org://FEAT-001" },
+				{ content: "Second", group: "Work", ref: "org://FEAT-001" },
 			],
 		});
 		updateItemStateSpy.mockClear();
 
-		await tool.execute("call-2", { ops: [{ op: "update", id: "task-1", status: "completed" }] });
+		await tool.execute("call-2", { tasks: [{ id: "task-1", status: "completed" }] });
 		expect(updateItemStateSpy).not.toHaveBeenCalled();
 	});
 
 	test("todo_write does not auto-complete the parent plan", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("call-1", {
-			ops: [
-				{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Finish", orgItemClosingId: "FEAT-001" }] }] },
-			],
+			reset: true,
+			tasks: [{ content: "Finish", group: "Work", ref: "org://FEAT-001", closesRef: true }],
 		});
 
 		await tool.execute("call-2", {
-			ops: [{ op: "update", id: "task-1", status: "completed", verified: true }],
+			tasks: [{ id: "task-1", status: "completed", verified: true }],
 		});
 
 		expect(updateItemStateSpy).toHaveBeenCalledWith("/tmp/feat-001.org", "FEAT-001", "DONE", expect.any(Array));

@@ -4,22 +4,22 @@ layer "ui" description="Frontend components and pages"
 layer "data" description="Database models, migrations, and queries"
 
 policy "core-quality" layer="core" {
-    gate-commit #true
+    verify-commit #true
 }
 
 policy "api-quality" layer="api" {
-    gate-commit #true
-    gate-cmd "bun test"
+    verify-commit #true
+    verify-cmd "bun test"
 }
 
 policy "ui-quality" layer="ui" {
-    gate-commit #true
-    gate-cmd "bun test"
+    verify-commit #true
+    verify-cmd "bun test"
 }
 
 policy "data-safety" layer="data" {
-    gate-commit #true
-    gate-llm "Verify migration safety and reversibility"
+    verify-commit #true
+    verify-review "Verify migration safety and reversibility"
 }
 // agents {
 //     rule "explore" {

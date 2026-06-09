@@ -1,0 +1,34 @@
+#+TITLE: TodoNode type + declarative reconcile schema + applyOps rewrite (verify{}/ref/closesRef)
+#+STATE: ITEM
+#+SESSION_ID: 1502540eec30c834
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T11-18-25-968Z_1502540eec30c834.jsonl]]
+#+CUSTOM_ID: FEAT-799-todonode-type-declarative-reconcile-sche
+#+LAYER: core
+
+* Initial Message
+
+how would you simplify both the prompt and the implementation of the todo_write system and make it more powerful as a follow-up to PLAN-327?
+
+Wave 1 spine for [[id:PLAN-328-simplify-and-unify-todo-write-flat-recon]]. Lands the load-bearing contract; all Wave 2 consumers blocked on this.
+
+* Target
+~packages/coding-agent/src/tools/todo-write.ts~
+
+* Change
+- Replace ~TodoGroup~ + 4-op union (~replace~/~add_group~/~add_phase~/~add_task~/~update~) with flat declarative schema: ~todo_write { tasks: Array<Partial<TodoNode> & {id?,content}>, reset?:boolean }~.
+- Define ~TodoNode~ ONCE (kills InputTask/add_task/update triplication). Fields: ~id content status? group? details? notes? blockers?[] ref? closesRef? verify?{commit?,artifact?,cmd?,review?} filesDeps?~. Internal-only (not in input schema): ~kind dataContent artifactPath delegation gitBaseline layer planItemId waveIndex verificationArtifact failed/gate_failed status values~.
+- Reconcile semantics in ~applyOps~: upsert by id (id present → merge fields; absent → untouched); ~reset:true~ → clear then set; auto-assign ~task-N~ when id omitted. One code path replaces the 4 op-case switch.
+- ~verify{}~ helpers: rewrite ~hasGate~/~hasRequiredGate~ to read ~verify.{commit,artifact,cmd}~ (required) + ~verify.review~ (advisory). ~commit|artifact|cmd~ present ⇒ ~hasRequiredGate~ true → two-phase verified completion.
+- ~ref~/~closesRef~: import + reuse ~task~'s ~resolveRef~ (from task/index.ts or shared). null → no link; roster-id → in-session; org:// → org lookup. ~closesRef:true~ on completion triggers DONE transition (replaces orgItemClosingId path in ~applyOrgLifecycleHooks~ + ~collectCompletedGatedTasks~).
+- Status: input schema enum = pending|in_progress|completed|abandoned. Keep failed|gate_failed on the ~TodoStatus~ type (delegation/promoteReadyTasks set internally).
+- Relocate ~planItemId?~/~waveIndex?~ from TodoGroup onto TodoNode; ~collectWaveSnapshotRequests~ reads node fields. Group is a cosmetic ~group?:string~ label.
+- Keep ~promoteReadyTasks~/~buildTodoDag~/~isTaskBlocked~ DAG logic intact — only adjust the group→flat iteration and field names.
+- Export a stable surface for consumers: ~TodoNode~, ~applyOps~, ~formatSummary~, ~hasGate~, ~hasRequiredGate~, ~injectPolicyGates~, ~promoteReadyTasks~, ~findTask~, ~cloneTodoNodes~ (was cloneTodoGroups), ~getLatestTodoNodesFromEntries~.
+
+* Edge
+- ~getLatestTodoNodesFromEntries~ reads persisted tool results; with D6 hard-break it returns [] for old-shape entries (groups[]/phases[]) rather than crashing — guard the shape.
+- ~setTodoGroups/getTodoGroups~ session API renamed to ~setTodoNodes/getTodoNodes~ (coordinate with TODO-RENDER) OR keep names but change payload to ~TodoNode[]~ — pick rename for clarity, it's a cutover.
+- ~formatSummary~ flat output: drop "Group N/M" framing; group by optional ~group~ label only when present.
+
+* Accept
+~bun run check:ts~ passes for todo-write.ts in isolation (consumers updated in Wave 2). Unit: reconcile upsert/reset, verify{} two-phase, ref shape-dispatch covered by new fixtures (TODO-TESTS).

@@ -1,0 +1,32 @@
+#+TITLE: TUI/session render: agent-session, interactive-mode, todo-reminder, dashboard-bridge, command-controller, TodoPanel adopt flat TodoNode
+#+STATE: ITEM
+#+SESSION_ID: 1502540eec30c834
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T11-18-25-968Z_1502540eec30c834.jsonl]]
+#+CUSTOM_ID: FEAT-802-tui-session-render-agent-session-interac
+#+LAYER: ui
+#+BLOCKERS: FEAT-799-todonode-type-declarative-reconcile-sche
+
+* Initial Message
+
+how would you simplify both the prompt and the implementation of the todo_write system and make it more powerful as a follow-up to PLAN-327?
+
+Wave 2 consumer for [[id:PLAN-328-simplify-and-unify-todo-write-flat-recon]]. Blocked on [[id:FEAT-799-todonode-type-declarative-reconcile-sche]].
+
+* Target
+~session/agent-session.ts~, ~modes/interactive-mode.ts~, ~modes/types.ts~, ~modes/components/todo-reminder.ts~, ~tools/todo-dashboard-bridge.ts~, ~modes/controllers/command-controller.ts~, ~modes/qml/panels/TodoPanel.qml~.
+
+* Change
+- ~agent-session.ts~: rename ~#todoGroups~/~getTodoGroups~/~setTodoGroups~/~#syncTodoGroupsFromBranch~/~#scheduleTodoAutoClear~/auto-clear filter + reminder builder (3895-3935) to operate on flat ~TodoNode[]~ grouped by optional ~group~ label. ~getLatestTodoNodesFromEntries~ replaces groups reader.
+- ~interactive-mode.ts~: ~#formatTodoLine~/~#renderChildTodoGroups~/~#getActiveGroup~/~setTodos~/~todoPhases~ (1984,2027) consume flat nodes; group headers from ~group~ label.
+- ~todo-reminder.ts~: ~#gateBadges~ reads ~verify.{commit,artifact,cmd,review}~ + ~ref~ instead of gate*/orgItemId.
+- ~todo-dashboard-bridge.ts~: ~VALID_GATE_FIELDS~ → verify sub-keys; projection (94-102) maps node.verify + ref/closesRef; toggle handler (165-169) writes node.verify.
+- ~command-controller.ts~ ~handleSnapshotsCommand~ (418): ~planItemId~ now read from a node, not group.
+- ~TodoPanel.qml~: any gate*/group field references → verify/group.
+- ~modes/types.ts~ re-exports: ~TodoGroup~ removed; export ~TodoNode~.
+
+* Edge
+- session branch sync points (~3364,3494,3708,4470,5140,5228,5400) all call the renamed sync — update every call site.
+- auto-clear ~referencedIds~ logic (2807-2889) currently iterates groups → flatten.
+
+* Accept
+~bun test packages/coding-agent/test/agent-session-*.test.ts packages/coding-agent/test/tools/todo-dashboard-bridge.test.ts~ green. qmllint clean on TodoPanel.qml. check:ts clean.

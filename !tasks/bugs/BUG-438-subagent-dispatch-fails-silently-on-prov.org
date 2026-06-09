@@ -1,0 +1,29 @@
+#+TITLE: Subagent dispatch fails silently on provider 402 (kimi-code) — empty result, no orchestrator surface
+#+STATE: ITEM
+#+SESSION_ID: 1502540eec30c834
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T11-18-25-968Z_1502540eec30c834.jsonl]]
+#+CUSTOM_ID: BUG-438-subagent-dispatch-fails-silently-on-prov
+
+* Initial Message
+
+how would you simplify both the prompt and the implementation of the todo_write system and make it more powerful as a follow-up to PLAN-327?
+
+Mid-flight finding during PLAN-328 Wave 2 dispatch.
+
+* Symptom
+Three parallel `task` subagents (agent=task, model kimi-for-coding via kimi-code provider) each terminated with stopReason=error, errorMessage=402 "We're unable to verify your membership benefits at this time." The subagents produced empty `.md` result artifacts and made ZERO file edits. The orchestrator `await` returned "No running background jobs to wait for" immediately — the failure did NOT surface as a visible job error to the orchestrator; it had to be discovered by reading transcripts on disk.
+
+* Evidence
+~$HOME/.spell/agent/sessions/-code-ora-spell/<session>/0-TaskIntegration.jsonl~ final assistant message: stopReason "error", 402 invalid_request_error, content []. Same for 1-RenderSession, 2-JournalShape.
+
+* Impact
+- Provider auth/quota failures on a subagent model silently waste a dispatch and yield empty results that look like "completed with no output". The orchestrator cannot distinguish "did nothing" from "ran and found nothing" without reading raw transcripts.
+- No fallback model kicked in (cf. PLAN-288 usage-limit retry/fallback — a 402 membership error is not handled by that path).
+
+* Proposed
+1. Surface subagent stopReason=error (esp. 4xx provider errors) as a FAILED job with the errorMessage in the envelope, so `await`/roster shows gate_failed/failed, not silent empty success.
+2. Extend model-fallback (BUG-328 / PLAN-288 territory) to treat 402 membership/verification errors as a switch-fallback trigger, not a terminal empty result.
+3. Consider a dispatch-time preflight: if the resolved subagent model provider returns 4xx on first token, fail loud before marking the task done.
+
+* Workaround used
+Orchestrator executed Wave 2 directly on the main thread (different provider/auth) after detecting the empty results.

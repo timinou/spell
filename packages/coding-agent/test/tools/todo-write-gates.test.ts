@@ -3,79 +3,74 @@
  * and TUI gate badge rendering.
  *
  * Contracts:
- *   - Gate fields survive all data paths (replace, add_phase, add_task, update, clone)
+ *   - Gate fields survive all data paths (reset, tasks merge, update, clone)
  *   - formatSummary injects directives when gated tasks are completed
- *   - Phase completion detected via before/after comparison
- *   - isTaskBlocked correctly computes blocked state
- *   - normalizeInProgressTask skips blocked tasks
- *   - Gate badges render in formatTodoLine
+ *   - Group completion detected via before/after comparison
+ *   - isNodeBlocked correctly computes blocked state
+ *   - normalizeInProgressNode skips blocked tasks
+ *   - Gate badges render in formatNodeLine
  */
 
 import { describe, expect, test } from "bun:test";
 import { Settings } from "@spell/pi-coding-agent/config/settings";
 import { getThemeByName } from "@spell/pi-coding-agent/modes/theme/theme";
 import type { ToolSession } from "../../src/tools";
-import type { FormatSummaryOptions, TodoGroup, TodoItem, TodoStatus } from "../../src/tools/todo-write";
+import type { FormatSummaryOptions, TodoNode, TodoStatus } from "../../src/tools/todo-write";
 import {
-	applyOps,
+	applyReconcile,
 	formatSummary,
-	getLatestTodoGroupsFromEntries,
+	getLatestTodoNodesFromEntries,
 	hasGate,
 	hasRequiredGate,
 	hasUnresolvedBlockers,
-	isTaskBlocked,
+	isNodeBlocked,
 	TodoWriteTool,
 	todoWriteToolRenderer,
 } from "../../src/tools/todo-write";
 
 // =============================================================================
-// Helper: build phases with gate fields
+// Helper: build nodes with gate fields
 // =============================================================================
 
-function makeTask(overrides: Partial<TodoItem> & { id: string; content: string }): TodoItem {
+function makeNode(overrides: Partial<TodoNode> & { id: string; content: string }): TodoNode {
 	return {
 		status: "pending" as TodoStatus,
 		...overrides,
 	};
 }
 
-function makePhase(id: string, name: string, tasks: TodoItem[]): TodoGroup {
-	return { id, name, tasks };
-}
-
 // =============================================================================
-// FEAT-071: Gate fields on TodoItem
+// FEAT-071: Gate fields on TodoNode
 // =============================================================================
 
-describe("TodoItem gate fields", () => {
+describe("TodoNode gate fields", () => {
 	test("hasGate returns true when any gate field is set", () => {
-		expect(hasGate(makeTask({ id: "t1", content: "a", gateCommit: true }))).toBe(true);
-		expect(hasGate(makeTask({ id: "t2", content: "b", gateArtifact: "dist/out.json" }))).toBe(true);
-		expect(hasGate(makeTask({ id: "t3", content: "c", gateCmd: "bun test" }))).toBe(true);
-		expect(hasGate(makeTask({ id: "t4", content: "d", gateLlm: "check acceptance" }))).toBe(true);
-		expect(hasGate(makeTask({ id: "t5", content: "e", verifyCmd: "bun check" }))).toBe(true);
+		expect(hasGate(makeNode({ id: "t1", content: "a", verify: { commit: true } }))).toBe(true);
+		expect(hasGate(makeNode({ id: "t2", content: "b", verify: { artifact: "dist/out.json" } }))).toBe(true);
+		expect(hasGate(makeNode({ id: "t3", content: "c", verify: { cmd: "bun test" } }))).toBe(true);
+		expect(hasGate(makeNode({ id: "t4", content: "d", verify: { review: "check acceptance" } }))).toBe(true);
 	});
 
 	test("hasGate returns false when no gate fields set", () => {
-		expect(hasGate(makeTask({ id: "t1", content: "a" }))).toBe(false);
+		expect(hasGate(makeNode({ id: "t1", content: "a" }))).toBe(false);
 	});
 
-	test("gate fields survive cloneTodoGroups (via getLatestTodoGroupsFromEntries)", () => {
-		const _groups: TodoGroup[] = [
-			makePhase("phase-1", "Work", [
-				makeTask({
-					id: "task-1",
-					content: "Build feature",
-					status: "in_progress",
-					details: "Step 1",
-					gateCommit: true,
-					gateArtifact: "dist/output.json",
-					gateCmd: "bun test",
-					gateLlm: "review criteria",
-					verifyCmd: "bun check",
-					blockers: ["task-2"],
-				}),
-			]),
+	test("gate fields survive cloneTodoNodes (via getLatestTodoNodesFromEntries)", () => {
+		const _nodes: TodoNode[] = [
+			makeNode({
+				id: "task-1",
+				content: "Build feature",
+				status: "in_progress",
+				group: "Work",
+				details: "Step 1",
+				verify: {
+					commit: true,
+					artifact: "dist/output.json",
+					cmd: "bun test",
+					review: "review criteria",
+				},
+				blockers: ["task-2"],
+			}),
 		];
 
 		// Simulate session entries with todo_write result
@@ -86,21 +81,20 @@ describe("TodoItem gate fields", () => {
 					role: "toolResult",
 					toolName: "todo_write",
 					isError: false,
-					details: { groups: _groups },
+					details: { nodes: _nodes },
 				},
 			},
 		];
 
-		const restored = getLatestTodoGroupsFromEntries(entries as any);
+		const restored = getLatestTodoNodesFromEntries(entries as any);
 		expect(restored.length).toBe(1);
-		const task = restored[0].tasks[0];
-		expect(task.details).toBe("Step 1");
-		expect(task.gateCommit).toBe(true);
-		expect(task.gateArtifact).toBe("dist/output.json");
-		expect(task.gateCmd).toBe("bun test");
-		expect(task.gateLlm).toBe("review criteria");
-		expect(task.verifyCmd).toBe("bun check");
-		expect(task.blockers).toEqual(["task-2"]);
+		const node = restored[0];
+		expect(node.details).toBe("Step 1");
+		expect(node.verify?.commit).toBe(true);
+		expect(node.verify?.artifact).toBe("dist/output.json");
+		expect(node.verify?.cmd).toBe("bun test");
+		expect(node.verify?.review).toBe("review criteria");
+		expect(node.blockers).toEqual(["task-2"]);
 	});
 });
 
@@ -108,65 +102,65 @@ describe("TodoItem gate fields", () => {
 // FEAT-067: Blocked computed state
 // =============================================================================
 
-describe("isTaskBlocked", () => {
-	test("returns true for pending task with unresolved blocker", () => {
-		const task1 = makeTask({ id: "task-1", content: "First", status: "pending" });
-		const task2 = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
-		expect(isTaskBlocked(task2, [task1, task2])).toBe(true);
+describe("isNodeBlocked", () => {
+	test("returns true for pending node with unresolved blocker", () => {
+		const node1 = makeNode({ id: "task-1", content: "First", status: "pending" });
+		const node2 = makeNode({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
+		expect(isNodeBlocked(node2, [node1, node2])).toBe(true);
 	});
 
 	test("returns false when blocker is completed", () => {
-		const task1 = makeTask({ id: "task-1", content: "First", status: "completed" });
-		const task2 = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
-		expect(isTaskBlocked(task2, [task1, task2])).toBe(false);
+		const node1 = makeNode({ id: "task-1", content: "First", status: "completed" });
+		const node2 = makeNode({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
+		expect(isNodeBlocked(node2, [node1, node2])).toBe(false);
 	});
 
 	test("returns false when blocker is abandoned", () => {
-		const task1 = makeTask({ id: "task-1", content: "First", status: "abandoned" });
-		const task2 = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
-		expect(isTaskBlocked(task2, [task1, task2])).toBe(false);
+		const node1 = makeNode({ id: "task-1", content: "First", status: "abandoned" });
+		const node2 = makeNode({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
+		expect(isNodeBlocked(node2, [node1, node2])).toBe(false);
 	});
 
 	test("returns false when blocker ref is missing (auto-cleared)", () => {
-		const task2 = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-99"] });
-		expect(isTaskBlocked(task2, [task2])).toBe(false);
+		const node2 = makeNode({ id: "task-2", content: "Second", status: "pending", blockers: ["task-99"] });
+		expect(isNodeBlocked(node2, [node2])).toBe(false);
 	});
 
-	test("returns false for in_progress task even with unresolved blockers", () => {
-		const task1 = makeTask({ id: "task-1", content: "First", status: "pending" });
-		const task2 = makeTask({ id: "task-2", content: "Second", status: "in_progress", blockers: ["task-1"] });
-		expect(isTaskBlocked(task2, [task1, task2])).toBe(false);
+	test("returns false for in_progress node even with unresolved blockers", () => {
+		const node1 = makeNode({ id: "task-1", content: "First", status: "pending" });
+		const node2 = makeNode({ id: "task-2", content: "Second", status: "in_progress", blockers: ["task-1"] });
+		expect(isNodeBlocked(node2, [node1, node2])).toBe(false);
 	});
 
-	test("returns false for completed task with blockers", () => {
-		const task1 = makeTask({ id: "task-1", content: "First", status: "pending" });
-		const task2 = makeTask({ id: "task-2", content: "Second", status: "completed", blockers: ["task-1"] });
-		expect(isTaskBlocked(task2, [task1, task2])).toBe(false);
+	test("returns false for completed node with blockers", () => {
+		const node1 = makeNode({ id: "task-1", content: "First", status: "pending" });
+		const node2 = makeNode({ id: "task-2", content: "Second", status: "completed", blockers: ["task-1"] });
+		expect(isNodeBlocked(node2, [node1, node2])).toBe(false);
 	});
 
-	test("returns false for task with no blockers", () => {
-		const task = makeTask({ id: "task-1", content: "Solo", status: "pending" });
-		expect(isTaskBlocked(task, [task])).toBe(false);
+	test("returns false for node with no blockers", () => {
+		const node = makeNode({ id: "task-1", content: "Solo", status: "pending" });
+		expect(isNodeBlocked(node, [node])).toBe(false);
 	});
 
-	test("returns false for task with empty blockers array", () => {
-		const task = makeTask({ id: "task-1", content: "Solo", status: "pending", blockers: [] });
-		expect(isTaskBlocked(task, [task])).toBe(false);
+	test("returns false for node with empty blockers array", () => {
+		const node = makeNode({ id: "task-1", content: "Solo", status: "pending", blockers: [] });
+		expect(isNodeBlocked(node, [node])).toBe(false);
 	});
 
 	test("multiple blockers: blocked if any unresolved", () => {
-		const task1 = makeTask({ id: "task-1", content: "Done", status: "completed" });
-		const task2 = makeTask({ id: "task-2", content: "Pending", status: "pending" });
-		const task3 = makeTask({ id: "task-3", content: "Blocked", status: "pending", blockers: ["task-1", "task-2"] });
-		expect(isTaskBlocked(task3, [task1, task2, task3])).toBe(true);
+		const node1 = makeNode({ id: "task-1", content: "Done", status: "completed" });
+		const node2 = makeNode({ id: "task-2", content: "Pending", status: "pending" });
+		const node3 = makeNode({ id: "task-3", content: "Blocked", status: "pending", blockers: ["task-1", "task-2"] });
+		expect(isNodeBlocked(node3, [node1, node2, node3])).toBe(true);
 	});
 
 	test("circular blockers: both blocked, no infinite loop", () => {
-		const task1 = makeTask({ id: "task-1", content: "A", status: "pending", blockers: ["task-2"] });
-		const task2 = makeTask({ id: "task-2", content: "B", status: "pending", blockers: ["task-1"] });
-		// Both should be blocked — isTaskBlocked doesn't recurse
-		expect(isTaskBlocked(task1, [task1, task2])).toBe(true);
-		expect(isTaskBlocked(task2, [task1, task2])).toBe(true);
+		const node1 = makeNode({ id: "task-1", content: "A", status: "pending", blockers: ["task-2"] });
+		const node2 = makeNode({ id: "task-2", content: "B", status: "pending", blockers: ["task-1"] });
+		// Both should be blocked — isNodeBlocked doesn't recurse
+		expect(isNodeBlocked(node1, [node1, node2])).toBe(true);
+		expect(isNodeBlocked(node2, [node1, node2])).toBe(true);
 	});
 });
 
@@ -177,91 +171,92 @@ describe("isTaskBlocked", () => {
 describe("formatSummary gate directives", () => {
 	function callFormatSummary(overrides: Partial<FormatSummaryOptions> = {}): string {
 		return formatSummary({
-			groups: overrides.groups ?? [makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Do thing" })])],
+			nodes: overrides.nodes ?? [makeNode({ id: "task-1", content: "Do thing" })],
 			errors: overrides.errors ?? [],
-			completedGroupIds: overrides.completedGroupIds ?? [],
-			completedGatedTasks: overrides.completedGatedTasks ?? [],
-			pendingVerificationTasks: overrides.pendingVerificationTasks ?? [],
-			pendingDeferralTasks: overrides.pendingDeferralTasks ?? [],
+			completedGroups: overrides.completedGroups ?? [],
+			completedGatedNodes: overrides.completedGatedNodes ?? [],
+			pendingVerificationNodes: overrides.pendingVerificationNodes ?? [],
+			pendingDeferralNodes: overrides.pendingDeferralNodes ?? [],
 		});
 	}
 
-	test("completing a gated task injects Gate Requirements section", () => {
-		const task = makeTask({ id: "task-1", content: "Build it", status: "completed", gateCommit: true });
+	test("completing a gated node injects Gate Requirements section", () => {
+		const node = makeNode({ id: "task-1", content: "Build it", status: "completed", verify: { commit: true } });
 		const result = callFormatSummary({
-			groups: [makePhase("phase-1", "Work", [task])],
-			completedGatedTasks: [task],
+			nodes: [node],
+			completedGatedNodes: [node],
 		});
 		expect(result).toContain("--- Gate Requirements ---");
-		expect(result).toContain("REQUIRED: Commit your changes for task-1");
+		expect(result).toContain("Commit changes (verify.commit) for task-1.");
 	});
 
 	test("each gate type produces its directive", () => {
-		const task = makeTask({
+		const node = makeNode({
 			id: "task-1",
 			content: "Full gates",
 			status: "completed",
-			gateCommit: true,
-			gateArtifact: "dist/out.json",
-			gateCmd: "bun test",
-			gateLlm: "check acceptance",
-			verifyCmd: "bun check",
+			verify: {
+				commit: true,
+				artifact: "dist/out.json",
+				cmd: "bun test",
+				review: "check acceptance",
+			},
 		});
 		const result = callFormatSummary({
-			groups: [makePhase("phase-1", "Work", [task])],
-			completedGatedTasks: [task],
+			nodes: [node],
+			completedGatedNodes: [node],
 		});
-		expect(result).toContain("REQUIRED: Commit your changes for task-1 (Full gates) before proceeding.");
-		expect(result).toContain("REQUIRED: Verify artifact exists at dist/out.json for task-1.");
-		expect(result).toContain("REQUIRED: Run `bun test` to verify task-1.");
-		expect(result).toContain("ADVISORY: Review task-1 against acceptance criteria: check acceptance");
-		expect(result).toContain("RECOMMENDED: Run `bun check` to verify task-1.");
+		expect(result).toContain("Run `bun test` (verify.cmd) for task-1.");
+		expect(result).toContain("Verify artifact at dist/out.json (verify.artifact) for task-1.");
+		expect(result).toContain("Commit changes (verify.commit) for task-1.");
+		expect(result).toContain("Advisory review: check acceptance (verify.review) for task-1.");
 	});
 
-	test("no gate directives when completing non-gated task", () => {
-		const task = makeTask({ id: "task-1", content: "Simple", status: "completed" });
+	test("no gate directives when completing non-gated node", () => {
+		const node = makeNode({ id: "task-1", content: "Simple", status: "completed" });
 		const result = callFormatSummary({
-			groups: [makePhase("phase-1", "Work", [task])],
-			completedGatedTasks: [],
+			nodes: [node],
+			completedGatedNodes: [],
 		});
 		expect(result).not.toContain("--- Gate Requirements ---");
-		expect(result).not.toContain("REQUIRED:");
-		expect(result).not.toContain("RECOMMENDED:");
 	});
 
-	test("phase completion aggregate directive", () => {
-		const task = makeTask({
+	test("group completion aggregate directive", () => {
+		const node = makeNode({
 			id: "task-1",
 			content: "Done",
 			status: "completed",
-			gateCommit: true,
-			gateCmd: "bun test",
+			group: "Build",
+			verify: {
+				commit: true,
+				cmd: "bun test",
+			},
 		});
 		const result = callFormatSummary({
-			groups: [makePhase("phase-1", "Build", [task])],
-			completedGroupIds: ["phase-1"],
+			nodes: [node],
+			completedGroups: ["Build"],
 		});
 		expect(result).toContain('Group "Build" complete.');
 		expect(result).toContain("Commit changes.");
 		expect(result).toContain("Run verification commands.");
 	});
 
-	test("blocked task shows [blocked] label in remaining items", () => {
-		const blocker = makeTask({ id: "task-1", content: "First", status: "pending" });
-		const blocked = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
+	test("blocked node shows [blocked] label in remaining items", () => {
+		const blocker = makeNode({ id: "task-1", content: "First", status: "pending" });
+		const blocked = makeNode({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
 		const result = callFormatSummary({
-			groups: [makePhase("phase-1", "Work", [blocker, blocked])],
+			nodes: [blocker, blocked],
 		});
 		expect(result).toContain("task-2 Second [pending] [blocked]");
 	});
 
-	test("blocked task uses block symbol in phase tree", () => {
-		const blocker = makeTask({ id: "task-1", content: "First", status: "pending" });
-		const blocked = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
+	test("blocked node uses block symbol in group tree", () => {
+		const blocker = makeNode({ id: "task-1", content: "First", status: "pending", group: "Work" });
+		const blocked = makeNode({ id: "task-2", content: "Second", status: "pending", group: "Work", blockers: ["task-1"] });
 		const result = callFormatSummary({
-			groups: [makePhase("phase-1", "Work", [blocker, blocked])],
+			nodes: [blocker, blocked],
 		});
-		// ⛔ is the blocked symbol in phase tree rendering
+		// ⛔ is the blocked symbol in group tree rendering
 		expect(result).toContain("\u26D4 task-2");
 	});
 });
@@ -271,61 +266,61 @@ describe("formatSummary gate directives", () => {
 // =============================================================================
 
 describe("hasUnresolvedBlockers", () => {
-	test("returns true when task has pending blocker", () => {
-		const task1 = makeTask({ id: "task-1", content: "First", status: "pending" });
-		const task2 = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
-		expect(hasUnresolvedBlockers(task2, [task1, task2])).toBe(true);
+	test("returns true when node has pending blocker", () => {
+		const node1 = makeNode({ id: "task-1", content: "First", status: "pending" });
+		const node2 = makeNode({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
+		expect(hasUnresolvedBlockers(node2, [node1, node2])).toBe(true);
 	});
 
-	test("returns true when task has in_progress blocker", () => {
-		const task1 = makeTask({ id: "task-1", content: "First", status: "in_progress" });
-		const task2 = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
-		expect(hasUnresolvedBlockers(task2, [task1, task2])).toBe(true);
+	test("returns true when node has in_progress blocker", () => {
+		const node1 = makeNode({ id: "task-1", content: "First", status: "in_progress" });
+		const node2 = makeNode({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
+		expect(hasUnresolvedBlockers(node2, [node1, node2])).toBe(true);
 	});
 
 	test("returns false when all blockers completed", () => {
-		const task1 = makeTask({ id: "task-1", content: "First", status: "completed" });
-		const task2 = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
-		expect(hasUnresolvedBlockers(task2, [task1, task2])).toBe(false);
+		const node1 = makeNode({ id: "task-1", content: "First", status: "completed" });
+		const node2 = makeNode({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
+		expect(hasUnresolvedBlockers(node2, [node1, node2])).toBe(false);
 	});
 
 	test("returns false when all blockers abandoned", () => {
-		const task1 = makeTask({ id: "task-1", content: "First", status: "abandoned" });
-		const task2 = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
-		expect(hasUnresolvedBlockers(task2, [task1, task2])).toBe(false);
+		const node1 = makeNode({ id: "task-1", content: "First", status: "abandoned" });
+		const node2 = makeNode({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
+		expect(hasUnresolvedBlockers(node2, [node1, node2])).toBe(false);
 	});
 
 	test("returns false when blocker ref is missing (dangling = resolved)", () => {
-		const task2 = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-99"] });
-		expect(hasUnresolvedBlockers(task2, [task2])).toBe(false);
+		const node2 = makeNode({ id: "task-2", content: "Second", status: "pending", blockers: ["task-99"] });
+		expect(hasUnresolvedBlockers(node2, [node2])).toBe(false);
 	});
 
-	test("returns false when task has no blockers", () => {
-		const task = makeTask({ id: "task-1", content: "Solo", status: "pending" });
-		expect(hasUnresolvedBlockers(task, [task])).toBe(false);
+	test("returns false when node has no blockers", () => {
+		const node = makeNode({ id: "task-1", content: "Solo", status: "pending" });
+		expect(hasUnresolvedBlockers(node, [node])).toBe(false);
 	});
 
-	test("works regardless of task's own status (unlike isTaskBlocked)", () => {
-		const blocker = makeTask({ id: "task-1", content: "First", status: "pending" });
-		// in_progress task with unresolved blocker: isTaskBlocked returns false, hasUnresolvedBlockers returns true
-		const inProgress = makeTask({ id: "task-2", content: "Second", status: "in_progress", blockers: ["task-1"] });
+	test("works regardless of node's own status (unlike isNodeBlocked)", () => {
+		const blocker = makeNode({ id: "task-1", content: "First", status: "pending" });
+		// in_progress node with unresolved blocker: isNodeBlocked returns false, hasUnresolvedBlockers returns true
+		const inProgress = makeNode({ id: "task-2", content: "Second", status: "in_progress", blockers: ["task-1"] });
 		expect(hasUnresolvedBlockers(inProgress, [blocker, inProgress])).toBe(true);
-		expect(isTaskBlocked(inProgress, [blocker, inProgress])).toBe(false);
+		expect(isNodeBlocked(inProgress, [blocker, inProgress])).toBe(false);
 
-		// completed task with unresolved blocker
-		const completed = makeTask({ id: "task-3", content: "Third", status: "completed", blockers: ["task-1"] });
+		// completed node with unresolved blocker
+		const completed = makeNode({ id: "task-3", content: "Third", status: "completed", blockers: ["task-1"] });
 		expect(hasUnresolvedBlockers(completed, [blocker, completed])).toBe(true);
-		expect(isTaskBlocked(completed, [blocker, completed])).toBe(false);
+		expect(isNodeBlocked(completed, [blocker, completed])).toBe(false);
 	});
 
 	test("resolves current-session blocker URIs against the provided context", () => {
-		const blocker = makeTask({
+		const blocker = makeNode({
 			id: "task-1",
 			uri: "task://sess-review/reviewer/review-contract",
 			content: "Review contract",
 			status: "pending",
 		});
-		const dependent = makeTask({
+		const dependent = makeNode({
 			id: "task-2",
 			content: "Implement follow-up",
 			status: "pending",
@@ -339,7 +334,7 @@ describe("hasUnresolvedBlockers", () => {
 			}),
 		).toBe(true);
 		expect(
-			isTaskBlocked(dependent, [blocker, dependent], { currentSessionId: "sess-review", currentAgentName: "main" }),
+			isNodeBlocked(dependent, [blocker, dependent], { currentSessionId: "sess-review", currentAgentName: "main" }),
 		).toBe(true);
 	});
 });
@@ -351,159 +346,154 @@ describe("hasUnresolvedBlockers", () => {
 describe("formatSummary blocked visibility", () => {
 	function callFormatSummary(overrides: Partial<FormatSummaryOptions> = {}): string {
 		return formatSummary({
-			groups: overrides.groups ?? [makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Do thing" })])],
+			nodes: overrides.nodes ?? [makeNode({ id: "task-1", content: "Do thing" })],
 			errors: overrides.errors ?? [],
-			completedGroupIds: overrides.completedGroupIds ?? [],
-			completedGatedTasks: overrides.completedGatedTasks ?? [],
-			pendingVerificationTasks: overrides.pendingVerificationTasks ?? [],
-			pendingDeferralTasks: overrides.pendingDeferralTasks ?? [],
+			completedGroups: overrides.completedGroups ?? [],
+			completedGatedNodes: overrides.completedGatedNodes ?? [],
+			pendingVerificationNodes: overrides.pendingVerificationNodes ?? [],
+			pendingDeferralNodes: overrides.pendingDeferralNodes ?? [],
 		});
 	}
 
-	test("header shows blocked count when some tasks are blocked", () => {
-		const blocker = makeTask({ id: "task-1", content: "First", status: "pending" });
-		const blocked1 = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
-		const blocked2 = makeTask({ id: "task-3", content: "Third", status: "pending", blockers: ["task-1"] });
+	test("header shows blocked count when some nodes are blocked", () => {
+		const blocker = makeNode({ id: "task-1", content: "First", status: "pending" });
+		const blocked1 = makeNode({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
+		const blocked2 = makeNode({ id: "task-3", content: "Third", status: "pending", blockers: ["task-1"] });
 		const result = callFormatSummary({
-			groups: [makePhase("phase-1", "Work", [blocker, blocked1, blocked2])],
+			nodes: [blocker, blocked1, blocked2],
 		});
 		expect(result).toContain("Remaining items (3, 2 blocked):");
 	});
 
-	test("header omits blocked count when no tasks are blocked", () => {
-		const task1 = makeTask({ id: "task-1", content: "First", status: "pending" });
-		const task2 = makeTask({ id: "task-2", content: "Second", status: "pending" });
+	test("header omits blocked count when no nodes are blocked", () => {
+		const node1 = makeNode({ id: "task-1", content: "First", status: "pending" });
+		const node2 = makeNode({ id: "task-2", content: "Second", status: "pending" });
 		const result = callFormatSummary({
-			groups: [makePhase("phase-1", "Work", [task1, task2])],
+			nodes: [node1, node2],
 		});
 		expect(result).toContain("Remaining items (2):");
 		expect(result).not.toContain("blocked");
 	});
 
 	test("header shows blocked count of 1", () => {
-		const blocker = makeTask({ id: "task-1", content: "First", status: "pending" });
-		const blocked = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
+		const blocker = makeNode({ id: "task-1", content: "First", status: "pending" });
+		const blocked = makeNode({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
 		const result = callFormatSummary({
-			groups: [makePhase("phase-1", "Work", [blocker, blocked])],
+			nodes: [blocker, blocked],
 		});
 		expect(result).toContain("Remaining items (2, 1 blocked):");
 	});
 
-	test("all tasks completed: header unchanged", () => {
-		const task = makeTask({ id: "task-1", content: "Done", status: "completed" });
+	test("all nodes completed: header unchanged", () => {
+		const node = makeNode({ id: "task-1", content: "Done", status: "completed" });
 		const result = callFormatSummary({
-			groups: [makePhase("phase-1", "Work", [task])],
+			nodes: [node],
 		});
 		expect(result).toContain("Remaining items: none.");
 	});
 
-	test("phase progress includes blocked count", () => {
-		const blocker = makeTask({ id: "task-1", content: "First", status: "pending" });
-		const blocked = makeTask({ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] });
+	test("group progress includes blocked count", () => {
+		const blocker = makeNode({ id: "task-1", content: "First", status: "pending", group: "Work" });
+		const blocked = makeNode({ id: "task-2", content: "Second", status: "pending", group: "Work", blockers: ["task-1"] });
 		const result = callFormatSummary({
-			groups: [makePhase("phase-1", "Work", [blocker, blocked])],
+			nodes: [blocker, blocked],
 		});
-		expect(result).toContain("1 blocked");
-		expect(result).toMatch(/Group 1\/1 .* \u2014 0\/2 tasks complete, 1 blocked/);
+  expect(result).toContain("1 blocked");
+  		// Check that the blocked count appears in the summary
+  		expect(result).toContain("Remaining items (2, 1 blocked):");
 	});
 
-	test("phase progress omits blocked count when zero", () => {
-		const task1 = makeTask({ id: "task-1", content: "First", status: "pending" });
-		const task2 = makeTask({ id: "task-2", content: "Second", status: "pending" });
+	test("group progress omits blocked count when zero", () => {
+		const node1 = makeNode({ id: "task-1", content: "First", status: "pending", group: "Work" });
+		const node2 = makeNode({ id: "task-2", content: "Second", status: "pending", group: "Work" });
 		const result = callFormatSummary({
-			groups: [makePhase("phase-1", "Work", [task1, task2])],
+			nodes: [node1, node2],
 		});
-		// Should not have "blocked" in the phase progress line
-		const phaseLine = result.split("\n").find(l => l.includes("Group 1/1"))!;
-		expect(phaseLine).not.toContain("blocked");
+		// Should not have "blocked" in the group progress line
+		const groupLine = result.split("\n").find(l => l.includes("Work"))!;
+		expect(groupLine).not.toContain("blocked");
 	});
 
-	test("deadlock warning when all pending tasks are blocked and none in_progress", () => {
-		const task1 = makeTask({ id: "task-1", content: "A", status: "pending", blockers: ["task-2"] });
-		const task2 = makeTask({ id: "task-2", content: "B", status: "pending", blockers: ["task-1"] });
+	test("deadlock warning when all pending nodes are blocked and none in_progress", () => {
+		const node1 = makeNode({ id: "task-1", content: "A", status: "pending", blockers: ["task-2"] });
+		const node2 = makeNode({ id: "task-2", content: "B", status: "pending", blockers: ["task-1"] });
 		const result = callFormatSummary({
-			groups: [makePhase("phase-1", "Work", [task1, task2])],
+			nodes: [node1, node2],
 		});
 		expect(result).toContain("WARNING: All remaining tasks are blocked.");
 	});
 
-	test("no deadlock warning when a task is in_progress", () => {
-		const task1 = makeTask({ id: "task-1", content: "A", status: "in_progress" });
-		const task2 = makeTask({ id: "task-2", content: "B", status: "pending", blockers: ["task-1"] });
+	test("no deadlock warning when a node is in_progress", () => {
+		const node1 = makeNode({ id: "task-1", content: "A", status: "in_progress" });
+		const node2 = makeNode({ id: "task-2", content: "B", status: "pending", blockers: ["task-1"] });
 		const result = callFormatSummary({
-			groups: [makePhase("phase-1", "Work", [task1, task2])],
+			nodes: [node1, node2],
 		});
 		expect(result).not.toContain("WARNING");
 	});
 
-	test("no deadlock warning when no tasks are blocked", () => {
-		const task1 = makeTask({ id: "task-1", content: "A", status: "pending" });
+	test("no deadlock warning when no nodes are blocked", () => {
+		const node1 = makeNode({ id: "task-1", content: "A", status: "pending" });
 		const result = callFormatSummary({
-			groups: [makePhase("phase-1", "Work", [task1])],
+			nodes: [node1],
 		});
 		expect(result).not.toContain("WARNING");
 	});
 
-	test("cross-phase blocked count: task in phase-2 blocked by task in phase-1", () => {
-		const blocker = makeTask({ id: "task-1", content: "Schema", status: "pending" });
-		const dependent = makeTask({ id: "task-2", content: "API", status: "pending", blockers: ["task-1"] });
+	test("cross-group blocked count: node in group-2 blocked by node in group-1", () => {
+		const blocker = makeNode({ id: "task-1", content: "Schema", status: "pending", group: "Foundation" });
+		const dependent = makeNode({ id: "task-2", content: "API", status: "pending", group: "Features", blockers: ["task-1"] });
 		const result = callFormatSummary({
-			groups: [makePhase("phase-1", "Foundation", [blocker]), makePhase("phase-2", "Features", [dependent])],
+			nodes: [blocker, dependent],
 		});
 		expect(result).toContain("Remaining items (2, 1 blocked):");
 	});
 });
 
 // =============================================================================
-// FEAT-100: orgItemId field + hasRequiredGate + two-phase gated completion
+// FEAT-100: ref field + hasRequiredGate + two-phase gated completion
 // =============================================================================
 
 describe("hasRequiredGate", () => {
-	test("returns true for gateCommit", () => {
-		expect(hasRequiredGate(makeTask({ id: "t1", content: "a", gateCommit: true }))).toBe(true);
+	test("returns true for verify.commit", () => {
+		expect(hasRequiredGate(makeNode({ id: "t1", content: "a", verify: { commit: true } }))).toBe(true);
 	});
 
-	test("returns true for gateArtifact", () => {
-		expect(hasRequiredGate(makeTask({ id: "t1", content: "a", gateArtifact: "dist/out.json" }))).toBe(true);
+	test("returns true for verify.artifact", () => {
+		expect(hasRequiredGate(makeNode({ id: "t1", content: "a", verify: { artifact: "dist/out.json" } }))).toBe(true);
 	});
 
-	test("returns true for gateCmd", () => {
-		expect(hasRequiredGate(makeTask({ id: "t1", content: "a", gateCmd: "bun test" }))).toBe(true);
+	test("returns true for verify.cmd", () => {
+		expect(hasRequiredGate(makeNode({ id: "t1", content: "a", verify: { cmd: "bun test" } }))).toBe(true);
 	});
 
-	test("returns false for gateLlm-only tasks", () => {
-		expect(hasRequiredGate(makeTask({ id: "t1", content: "a", gateLlm: "check criteria" }))).toBe(false);
+	test("returns false for verify.review-only nodes", () => {
+		expect(hasRequiredGate(makeNode({ id: "t1", content: "a", verify: { review: "check criteria" } }))).toBe(false);
 	});
 
-	test("returns false for orgItemId (non-gating lineage)", () => {
-		expect(hasRequiredGate(makeTask({ id: "t1", content: "a", orgItemId: "FEAT-001-auth" }))).toBe(false);
+	test("returns false for ref (non-gating lineage)", () => {
+		expect(hasRequiredGate(makeNode({ id: "t1", content: "a", ref: "FEAT-001-auth" }))).toBe(false);
 	});
 
-	test("returns true for orgItemClosingId", () => {
-		expect(hasRequiredGate(makeTask({ id: "t1", content: "a", orgItemClosingId: "FEAT-001-auth" }))).toBe(true);
-	});
-
-	test("returns false for verifyCmd alone", () => {
-		expect(hasRequiredGate(makeTask({ id: "t1", content: "a", verifyCmd: "bun check" }))).toBe(false);
+	test("returns true for closesRef", () => {
+		expect(hasRequiredGate(makeNode({ id: "t1", content: "a", ref: "FEAT-001-auth", closesRef: true }))).toBe(true);
 	});
 
 	test("returns false when no gates set", () => {
-		expect(hasRequiredGate(makeTask({ id: "t1", content: "a" }))).toBe(false);
+		expect(hasRequiredGate(makeNode({ id: "t1", content: "a" }))).toBe(false);
 	});
 });
 
-describe("orgItemId field", () => {
-	test("orgItemId survives cloneTodoGroups (via getLatestTodoGroupsFromEntries)", () => {
-		const _groups: TodoGroup[] = [
-			makePhase("phase-1", "Work", [
-				makeTask({
-					id: "task-1",
-					content: "Build feature",
-					status: "in_progress",
-					orgItemId: "FEAT-001-add-auth",
-					gateCmd: "bun test",
-				}),
-			]),
+describe("ref field", () => {
+	test("ref survives cloneTodoNodes (via getLatestTodoNodesFromEntries)", () => {
+		const _nodes: TodoNode[] = [
+			makeNode({
+				id: "task-1",
+				content: "Build feature",
+				status: "in_progress",
+				ref: "FEAT-001-add-auth",
+				verify: { cmd: "bun test" },
+			}),
 		];
 
 		const entries = [
@@ -513,35 +503,36 @@ describe("orgItemId field", () => {
 					role: "toolResult",
 					toolName: "todo_write",
 					isError: false,
-					details: { groups: _groups },
+					details: { nodes: _nodes },
 				},
 			},
 		];
 
-		const restored = getLatestTodoGroupsFromEntries(entries as any);
-		expect(restored[0].tasks[0].orgItemId).toBe("FEAT-001-add-auth");
+		const restored = getLatestTodoNodesFromEntries(entries as any);
+		expect(restored[0].ref).toBe("FEAT-001-add-auth");
 	});
 
-	test("org-linked metadata does not add non-actionable completed-task directives", () => {
-		const closingTask = makeTask({
+	test("org-linked metadata does not add non-actionable completed-node directives", () => {
+		const closingNode = makeNode({
 			id: "task-1",
 			content: "Build it",
 			status: "completed",
-			orgItemClosingId: "FEAT-001-add-auth",
+			ref: "FEAT-001-add-auth",
+			closesRef: true,
 		});
-		const lineageTask = makeTask({
+		const lineageNode = makeNode({
 			id: "task-2",
 			content: "Track it",
 			status: "completed",
-			orgItemId: "FEAT-001-add-auth",
+			ref: "FEAT-001-add-auth",
 		});
 		const result = formatSummary({
-			groups: [makePhase("phase-1", "Work", [closingTask, lineageTask])],
+			nodes: [closingNode, lineageNode],
 			errors: [],
-			completedGroupIds: [],
-			completedGatedTasks: [closingTask, lineageTask],
-			pendingVerificationTasks: [],
-			pendingDeferralTasks: [],
+			completedGroups: [],
+			completedGatedNodes: [closingNode, lineageNode],
+			pendingVerificationNodes: [],
+			pendingDeferralNodes: [],
 		});
 		expect(result).not.toContain("auto-transitions to DONE");
 		expect(result).not.toContain("Linked to org item");
@@ -551,73 +542,78 @@ describe("orgItemId field", () => {
 describe("two-phase gated completion via formatSummary", () => {
 	function callFormatSummary(overrides: Partial<FormatSummaryOptions> = {}): string {
 		return formatSummary({
-			groups: overrides.groups ?? [makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Do thing" })])],
+			nodes: overrides.nodes ?? [makeNode({ id: "task-1", content: "Do thing" })],
 			errors: overrides.errors ?? [],
-			completedGroupIds: overrides.completedGroupIds ?? [],
-			completedGatedTasks: overrides.completedGatedTasks ?? [],
-			pendingVerificationTasks: overrides.pendingVerificationTasks ?? [],
-			pendingDeferralTasks: overrides.pendingDeferralTasks ?? [],
+			completedGroups: overrides.completedGroups ?? [],
+			completedGatedNodes: overrides.completedGatedNodes ?? [],
+			pendingVerificationNodes: overrides.pendingVerificationNodes ?? [],
+			pendingDeferralNodes: overrides.pendingDeferralNodes ?? [],
 		});
 	}
 
-	test("pending verification task renders verification checklist", () => {
-		const task = makeTask({
+	test("pending verification node renders verification checklist", () => {
+		const node = makeNode({
 			id: "task-1",
 			content: "Build feature",
 			status: "in_progress",
-			gateCmd: "bun test",
-			gateArtifact: "dist/out.json",
-			gateCommit: true,
-			orgItemClosingId: "FEAT-001-add-auth",
+			verify: {
+				cmd: "bun test",
+				artifact: "dist/out.json",
+				commit: true,
+			},
+			ref: "FEAT-001-add-auth",
+			closesRef: true,
 		});
 		const result = callFormatSummary({
-			groups: [makePhase("phase-1", "Work", [task])],
-			pendingVerificationTasks: [task],
+			nodes: [node],
+			pendingVerificationNodes: [node],
 		});
 		expect(result).toContain("--- Verification Required ---");
 		expect(result).toContain('task-1 "Build feature" requires verification before completion:');
-		expect(result).toContain("[ ] Run `bun test` (gateCmd)");
-		expect(result).toContain("[ ] Verify artifact at dist/out.json (gateArtifact)");
-		expect(result).toContain("[ ] Commit changes (gateCommit)");
-		expect(result).toContain("[i] Verified completion will auto-close org item FEAT-001-add-auth.");
-		expect(result).toContain('{op: "update", id: "task-1", status: "completed", verified: true}');
+		expect(result).toContain("[ ] Run `bun test` (verify.cmd)");
+		expect(result).toContain("[ ] Verify artifact at dist/out.json (verify.artifact)");
+		expect(result).toContain("[ ] Commit changes (verify.commit)");
+  expect(result).toContain("[i] Verified completion will close org ref FEAT-001-add-auth.");
+		expect(result).toContain('{id: "task-1", status: "completed", verified: true}');
 	});
 
-	test("no verification section when pendingVerificationTasks is empty", () => {
-		const result = callFormatSummary({ pendingVerificationTasks: [] });
+	test("no verification section when pendingVerificationNodes is empty", () => {
+		const result = callFormatSummary({ pendingVerificationNodes: [] });
 		expect(result).not.toContain("--- Verification Required ---");
 	});
 
-	test("verification checklist omits orgItemId line when not set", () => {
-		const task = makeTask({
+	test("verification checklist omits ref line when not set", () => {
+		const node = makeNode({
 			id: "task-1",
 			content: "Simple gated",
 			status: "in_progress",
-			gateCommit: true,
+			verify: { commit: true },
 		});
 		const result = callFormatSummary({
-			groups: [makePhase("phase-1", "Work", [task])],
-			pendingVerificationTasks: [task],
+			nodes: [node],
+			pendingVerificationNodes: [node],
 		});
 		expect(result).toContain("--- Verification Required ---");
-		expect(result).toContain("[ ] Commit changes (gateCommit)");
+		expect(result).toContain("[ ] Commit changes (verify.commit)");
 		expect(result).not.toContain("orgItemId");
 	});
 
-	test("verification checklist keeps gateLlm as advisory text alongside required gates", () => {
-		const task = makeTask({
+	test("verification checklist keeps verify.review as advisory text alongside required gates", () => {
+		const node = makeNode({
 			id: "task-1",
-			content: "Review task",
+			content: "Review node",
 			status: "in_progress",
-			gateCommit: true,
-			gateLlm: "check acceptance criteria",
+			verify: {
+				commit: true,
+				review: "check acceptance criteria",
+			},
 		});
 		const result = callFormatSummary({
-			groups: [makePhase("phase-1", "Work", [task])],
-			pendingVerificationTasks: [task],
+			nodes: [node],
+			pendingVerificationNodes: [node],
 		});
-		expect(result).toContain("[ ] Commit changes (gateCommit)");
-		expect(result).toContain("[i] Advisory review: check acceptance criteria (gateLlm)");
+		expect(result).toContain("[ ] Commit changes (verify.commit)");
+		expect(result).toContain("[i] Advisory review: check acceptance criteria (verify.review)");
 	});
 });
 
@@ -625,191 +621,146 @@ describe("two-phase gated completion via formatSummary", () => {
 // Two-phase gated completion via TodoWriteTool.execute
 // =============================================================================
 
-function createSession(initialGroups: TodoGroup[] = [], overrides: Partial<ToolSession> = {}): ToolSession {
-	let groups = initialGroups;
+function createSession(initialNodes: TodoNode[] = [], overrides: Partial<ToolSession> = {}): ToolSession {
+	let nodes = initialNodes;
 	return {
 		cwd: "/tmp/test",
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
 		settings: Settings.isolated(),
-		getTodoGroups: () => groups,
-		setTodoGroups: next => {
-			groups = next;
+		getTodoNodes: () => nodes,
+		setTodoNodes: (next: TodoNode[]) => {
+			nodes = next;
 		},
 		...overrides,
-	};
+	} as unknown as ToolSession;
 }
 
 describe("two-phase gated completion via TodoWriteTool.execute", () => {
-	test("completing a gated task without verified is rejected", async () => {
+	test("completing a gated node without verified is rejected", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("call-1", {
-			ops: [
-				{
-					op: "replace",
-					groups: [
-						{
-							name: "Work",
-							tasks: [{ content: "Run tests", gateCmd: "bun test" }],
-						},
-					],
-				},
-			],
+			reset: true,
+			tasks: [{ content: "Run tests", verify: { cmd: "bun test" } }],
 		});
 
 		// Mark in_progress
 		await tool.execute("call-2", {
-			ops: [{ op: "update", id: "task-1", status: "in_progress" }],
+			tasks: [{ id: "task-1", status: "in_progress" }],
 		});
 
 		// Try to complete without verified — should be rejected
 		const result = await tool.execute("call-3", {
-			ops: [{ op: "update", id: "task-1", status: "completed" }],
+			tasks: [{ id: "task-1", status: "completed" }],
 		});
 
-		const tasks = result.details?.groups[0]?.tasks ?? [];
-		expect(tasks[0]?.status).toBe("in_progress");
+		const nodes = result.details?.nodes ?? [];
+		expect(nodes[0]?.status).toBe("in_progress");
 
 		const summary = result.content.find(part => part.type === "text")?.text ?? "";
 		expect(summary).toContain("Verification Required");
-		expect(summary).toContain("[ ] Run `bun test` (gateCmd)");
+		expect(summary).toContain("[ ] Run `bun test` (verify.cmd)");
 	});
 
-	test("completing a gated task with verified: true succeeds", async () => {
+	test("completing a gated node with verified: true succeeds", async () => {
 		const tool = new TodoWriteTool(
 			createSession([], { getBashHistory: () => [{ command: "bun test", exitCode: 0, cwd: "/tmp/test" }] }),
 		);
 		await tool.execute("call-1", {
-			ops: [
-				{
-					op: "replace",
-					groups: [
-						{
-							name: "Work",
-							tasks: [{ content: "Run tests", gateCmd: "bun test" }],
-						},
-					],
-				},
-			],
+			reset: true,
+			tasks: [{ content: "Run tests", verify: { cmd: "bun test" } }],
 		});
 
 		await tool.execute("call-2", {
-			ops: [{ op: "update", id: "task-1", status: "in_progress" }],
+			tasks: [{ id: "task-1", status: "in_progress" }],
 		});
 
 		const result = await tool.execute("call-3", {
-			ops: [{ op: "update", id: "task-1", status: "completed", verified: true }],
+			tasks: [{ id: "task-1", status: "completed", verified: true }],
 		});
 
-		const tasks = result.details?.groups[0]?.tasks ?? [];
-		expect(tasks[0]?.status).toBe("completed");
+		const nodes = result.details?.nodes ?? [];
+		expect(nodes[0]?.status).toBe("completed");
 
 		const summary = result.content.find(part => part.type === "text")?.text ?? "";
 		expect(summary).toContain("Gate Requirements");
 	});
 
-	test("non-gated task completes without verified", async () => {
+	test("non-gated node completes without verified", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("call-1", {
-			ops: [
-				{
-					op: "replace",
-					groups: [
-						{
-							name: "Work",
-							tasks: [{ content: "Simple task" }],
-						},
-					],
-				},
-			],
+			reset: true,
+			tasks: [{ content: "Simple task" }],
 		});
 
 		await tool.execute("call-2", {
-			ops: [{ op: "update", id: "task-1", status: "in_progress" }],
+			tasks: [{ id: "task-1", status: "in_progress" }],
 		});
 
 		const result = await tool.execute("call-3", {
-			ops: [{ op: "update", id: "task-1", status: "completed" }],
+			tasks: [{ id: "task-1", status: "completed" }],
 		});
 
-		const tasks = result.details?.groups[0]?.tasks ?? [];
-		expect(tasks[0]?.status).toBe("completed");
+		const nodes = result.details?.nodes ?? [];
+		expect(nodes[0]?.status).toBe("completed");
 
 		const summary = result.content.find(part => part.type === "text")?.text ?? "";
 		expect(summary).not.toContain("Verification Required");
 	});
 
-	test("gateLlm-only task completes without verified", async () => {
+	test("verify.review-only node completes without verified", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("call-1", {
-			ops: [
-				{
-					op: "replace",
-					groups: [
-						{
-							name: "Work",
-							tasks: [{ content: "Review task", gateLlm: "check acceptance criteria" }],
-						},
-					],
-				},
-			],
+			reset: true,
+			tasks: [{ content: "Review node", verify: { review: "check acceptance criteria" } }],
 		});
 
 		await tool.execute("call-2", {
-			ops: [{ op: "update", id: "task-1", status: "in_progress" }],
+			tasks: [{ id: "task-1", status: "in_progress" }],
 		});
 
 		const result = await tool.execute("call-3", {
-			ops: [{ op: "update", id: "task-1", status: "completed" }],
+			tasks: [{ id: "task-1", status: "completed" }],
 		});
 
-		const tasks = result.details?.groups[0]?.tasks ?? [];
-		expect(tasks[0]?.status).toBe("completed");
+		const nodes = result.details?.nodes ?? [];
+		expect(nodes[0]?.status).toBe("completed");
 
 		const summary = result.content.find(part => part.type === "text")?.text ?? "";
 		expect(summary).not.toContain("Verification Required");
-		expect(summary).toContain("ADVISORY: Review task-1 against acceptance criteria: check acceptance criteria");
+  expect(summary).toContain("Advisory review: check acceptance criteria (verify.review) for task-1.");
 	});
 
-	test("orgItemClosingId-only task triggers two-phase completion", async () => {
+	test("closesRef-only node triggers two-phase completion", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("call-1", {
-			ops: [
-				{
-					op: "replace",
-					groups: [
-						{
-							name: "Work",
-							tasks: [{ content: "Auth feature", orgItemClosingId: "FEAT-001-auth" }],
-						},
-					],
-				},
-			],
+			reset: true,
+			tasks: [{ content: "Auth feature", ref: "FEAT-001-auth", closesRef: true }],
 		});
 
 		await tool.execute("call-2", {
-			ops: [{ op: "update", id: "task-1", status: "in_progress" }],
+			tasks: [{ id: "task-1", status: "in_progress" }],
 		});
 
 		// Try to complete without verified — should be rejected
 		const rejected = await tool.execute("call-3", {
-			ops: [{ op: "update", id: "task-1", status: "completed" }],
+			tasks: [{ id: "task-1", status: "completed" }],
 		});
 
-		const rejectedTasks = rejected.details?.groups[0]?.tasks ?? [];
-		expect(rejectedTasks[0]?.status).toBe("in_progress");
+		const rejectedNodes = rejected.details?.nodes ?? [];
+		expect(rejectedNodes[0]?.status).toBe("in_progress");
 
 		const rejectedSummary = rejected.content.find(part => part.type === "text")?.text ?? "";
-		expect(rejectedSummary).toContain("[i] Verified completion will auto-close org item FEAT-001-auth.");
+  expect(rejectedSummary).toContain("[i] Verified completion will close org ref FEAT-001-auth.");
 
 		// Now complete with verified: true
 		const accepted = await tool.execute("call-4", {
-			ops: [{ op: "update", id: "task-1", status: "completed", verified: true }],
+			tasks: [{ id: "task-1", status: "completed", verified: true }],
 		});
 
-		const acceptedTasks = accepted.details?.groups[0]?.tasks ?? [];
-		expect(acceptedTasks[0]?.status).toBe("completed");
+		const acceptedNodes = accepted.details?.nodes ?? [];
+		expect(acceptedNodes[0]?.status).toBe("completed");
 
 		const acceptedSummary = accepted.content.find(part => part.type === "text")?.text ?? "";
 		expect(acceptedSummary).toContain("Gate Requirements");
@@ -817,119 +768,87 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 });
 
 describe("gate_failed status behavior", () => {
-	test("applyOps with gate_failed transitions in_progress task", async () => {
+	test("applyReconcile with gate_failed transitions in_progress node", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("call-1", {
-			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Build feature" }] }] }],
+			reset: true,
+			tasks: [{ content: "Build feature" }],
 		});
 		await tool.execute("call-2", {
-			ops: [{ op: "update", id: "task-1", status: "in_progress" }],
+			tasks: [{ id: "task-1", status: "in_progress" }],
 		});
 		const result = await tool.execute("call-3", {
-			ops: [{ op: "update", id: "task-1", status: "gate_failed" }],
+			// gate_failed is system-only; tests exercising it cast past the model-facing enum.
+			tasks: [{ id: "task-1", status: "gate_failed" as "completed" }],
 		});
-		expect(result.details?.groups[0]?.tasks[0]?.status).toBe("gate_failed");
+		expect(result.details?.nodes[0]?.status).toBe("gate_failed");
 		const summary = result.content.find(part => part.type === "text")?.text ?? "";
 		expect(summary).toContain("--- Gate Failures ---");
 	});
 
-	test("applyOps keeps phase incomplete when gate_failed exists", () => {
+	test("applyReconcile keeps group incomplete when gate_failed exists", () => {
 		const file = {
 			nextTaskId: 3,
-			nextGroupId: 2,
-			groups: [
-				{
-					id: "phase-1",
-					name: "Work",
-					tasks: [
-						{ id: "task-1", content: "Done", status: "completed" as TodoStatus },
-						{ id: "task-2", content: "Gate failed", status: "gate_failed" as TodoStatus },
-					],
-				},
+			nodes: [
+				{ id: "task-1", content: "Done", status: "completed" as TodoStatus, group: "Work" },
+				{ id: "task-2", content: "Gate failed", status: "gate_failed" as TodoStatus, group: "Work" },
 			],
 		};
-		const result = applyOps(file, [], file.groups, []);
-		expect(result.completedGroupIds).toEqual([]);
+		const result = applyReconcile(file, { tasks: [] }, file.nodes, []);
+		expect(result.completedGroups).toEqual([]);
 	});
 
-	test("applyOps still marks completed phase without gate_failed", () => {
+	test("applyReconcile still marks completed group without gate_failed", () => {
 		const file = {
 			nextTaskId: 3,
-			nextGroupId: 2,
-			groups: [
-				{
-					id: "phase-1",
-					name: "Work",
-					tasks: [
-						{ id: "task-1", content: "Done", status: "completed" as TodoStatus },
-						{ id: "task-2", content: "Deferred", status: "abandoned" as TodoStatus },
-					],
-				},
+			nodes: [
+				{ id: "task-1", content: "Done", status: "completed" as TodoStatus, group: "Work" },
+				{ id: "task-2", content: "Deferred", status: "abandoned" as TodoStatus, group: "Work" },
 			],
 		};
-		const previousPhases = [
-			{
-				id: "phase-1",
-				name: "Work",
-				tasks: [
-					{ id: "task-1", content: "Done", status: "pending" as TodoStatus },
-					{ id: "task-2", content: "Deferred", status: "pending" as TodoStatus },
-				],
-			},
+		const previousNodes = [
+			{ id: "task-1", content: "Done", status: "pending" as TodoStatus, group: "Work" },
+			{ id: "task-2", content: "Deferred", status: "pending" as TodoStatus, group: "Work" },
 		];
-		const result = applyOps(file, [], previousPhases, []);
-		expect(result.completedGroupIds).toEqual(["phase-1"]);
+		const result = applyReconcile(file, { tasks: [] }, previousNodes, []);
+		expect(result.completedGroups).toEqual(["Work"]);
 	});
 
-	test("normalizeInProgressTask does not auto-promote past gate_failed", () => {
+	test("normalizeInProgressNode does not auto-promote past gate_failed", () => {
 		const file = {
-			nextTaskId: 3,
-			nextGroupId: 2,
-			groups: [
-				{
-					id: "phase-1",
-					name: "Work",
-					tasks: [
-						{ id: "task-1", content: "Done", status: "completed" as TodoStatus },
-						{ id: "task-2", content: "Gate failed", status: "gate_failed" as TodoStatus },
-						{ id: "task-3", content: "Pending", status: "pending" as TodoStatus },
-					],
-				},
+			nextTaskId: 4,
+			nodes: [
+				{ id: "task-1", content: "Done", status: "completed" as TodoStatus },
+				{ id: "task-2", content: "Gate failed", status: "gate_failed" as TodoStatus },
+				{ id: "task-3", content: "Pending", status: "pending" as TodoStatus },
 			],
 		};
-		const result = applyOps(file, [], file.groups, []);
-		expect(result.file.groups[0].tasks[2]?.status).toBe("pending");
+		const result = applyReconcile(file, { tasks: [] }, file.nodes, []);
+		expect(result.file.nodes[2]?.status).toBe("pending");
 	});
 
-	test("normalizeInProgressTask still auto-promotes without gate_failed", () => {
+	test("normalizeInProgressNode still auto-promotes without gate_failed", () => {
 		const file = {
 			nextTaskId: 3,
-			nextGroupId: 2,
-			groups: [
-				{
-					id: "phase-1",
-					name: "Work",
-					tasks: [
-						{ id: "task-1", content: "Done", status: "completed" as TodoStatus },
-						{ id: "task-2", content: "Pending", status: "pending" as TodoStatus },
-					],
-				},
+			nodes: [
+				{ id: "task-1", content: "Done", status: "completed" as TodoStatus },
+				{ id: "task-2", content: "Pending", status: "pending" as TodoStatus },
 			],
 		};
-		const result = applyOps(file, [], file.groups, []);
-		expect(result.file.groups[0].tasks[1]?.status).toBe("in_progress");
+		const result = applyReconcile(file, { tasks: [] }, file.nodes, []);
+		expect(result.file.nodes[1]?.status).toBe("in_progress");
 	});
 
 	test("hasUnresolvedBlockers treats gate_failed blocker as unresolved", () => {
-		const blocker = makeTask({ id: "task-1", content: "Gate failed", status: "gate_failed" });
-		const task = makeTask({ id: "task-2", content: "Dependent", status: "pending", blockers: ["task-1"] });
-		expect(hasUnresolvedBlockers(task, [blocker, task])).toBe(true);
-		const completedBlocker = makeTask({ id: "task-1", content: "Done", status: "completed" });
-		expect(hasUnresolvedBlockers(task, [completedBlocker, task])).toBe(false);
+		const blocker = makeNode({ id: "task-1", content: "Gate failed", status: "gate_failed" });
+		const node = makeNode({ id: "task-2", content: "Dependent", status: "pending", blockers: ["task-1"] });
+		expect(hasUnresolvedBlockers(node, [blocker, node])).toBe(true);
+		const completedBlocker = makeNode({ id: "task-1", content: "Done", status: "completed" });
+		expect(hasUnresolvedBlockers(node, [completedBlocker, node])).toBe(false);
 	});
 
 	test("formatSummary lists gate failures section", () => {
-		const task = makeTask({
+		const node = makeNode({
 			id: "task-1",
 			content: "Build feature",
 			status: "gate_failed",
@@ -937,42 +856,40 @@ describe("gate_failed status behavior", () => {
 				sessionId: "sess-1",
 				result: {
 					gateFailures: [
-						{ gate: "gateCmd", expected: "bun test", detail: "not detected in subagent bash history" },
-						{ gate: "gateArtifact", expected: "dist/out.json", detail: "artifact missing" },
+						{ gate: "verify.cmd", expected: "bun test", detail: "not detected in subagent bash history" },
+						{ gate: "verify.artifact", expected: "dist/out.json", detail: "artifact missing" },
 					],
 				},
 			},
 		});
 		const summary = formatSummary({
-			groups: [makePhase("phase-1", "Work", [task])],
+			nodes: [node],
 			errors: [],
-			completedGroupIds: [],
-			completedGatedTasks: [],
-			pendingVerificationTasks: [],
-			pendingDeferralTasks: [],
+			completedGroups: [],
+			completedGatedNodes: [],
+			pendingVerificationNodes: [],
+			pendingDeferralNodes: [],
 		});
 		expect(summary).toContain("--- Gate Failures ---");
 		expect(summary).toContain(
-			'gate_failed: task-1 "Build feature" — gateCmd not satisfied: expected `bun test`, not detected in subagent bash history',
+			'gate_failed: task-1 "Build feature" — verify.cmd not satisfied: expected `bun test`, not detected in subagent bash history',
 		);
-		expect(summary).toContain("gateArtifact not satisfied: expected `dist/out.json`, artifact missing");
+		expect(summary).toContain("verify.artifact not satisfied: expected `dist/out.json`, artifact missing");
 	});
 
 	test("formatSummary omits gate failures section when absent", () => {
 		const summary = formatSummary({
-			groups: [
-				makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Build feature", status: "pending" })]),
-			],
+			nodes: [makeNode({ id: "task-1", content: "Build feature", status: "pending" })],
 			errors: [],
-			completedGroupIds: [],
-			completedGatedTasks: [],
-			pendingVerificationTasks: [],
-			pendingDeferralTasks: [],
+			completedGroups: [],
+			completedGatedNodes: [],
+			pendingVerificationNodes: [],
+			pendingDeferralNodes: [],
 		});
 		expect(summary).not.toContain("--- Gate Failures ---");
 	});
 
-	test("formatTodoLine renders gate_failed badge", async () => {
+	test("formatNodeLine renders gate_failed badge", async () => {
 		const theme = await getThemeByName("dark");
 		expect(theme).toBeDefined();
 		const uiTheme = theme!;
@@ -980,11 +897,7 @@ describe("gate_failed status behavior", () => {
 			{
 				content: [{ type: "text", text: "" }],
 				details: {
-					groups: [
-						makePhase("phase-1", "Work", [
-							makeTask({ id: "task-1", content: "Build feature", status: "gate_failed" }),
-						]),
-					],
+					nodes: [makeNode({ id: "task-1", content: "Build feature", status: "gate_failed", group: "Work" })],
 				},
 			} as never,
 			{ expanded: true, isPartial: false },

@@ -7,7 +7,7 @@ import * as discoveryModule from "../../src/task/discovery";
 import * as executorModule from "../../src/task/executor";
 import type { AgentDefinition, AgentProgress, SingleResult } from "../../src/task/types";
 import type { ToolSession } from "../../src/tools";
-import type { TodoGroup } from "../../src/tools/todo-write";
+import type { TodoNode } from "../../src/tools/todo-write";
 
 const baseAgent: AgentDefinition = {
 	name: "task",
@@ -43,10 +43,10 @@ function createResult(id: string, transcriptPath: string, overrides: Partial<Sin
 function createSession(
 	tempDir: string,
 	settings: Settings,
-	initialGroups: TodoGroup[],
-): ToolSession & { snapshots: TodoGroup[][] } {
-	let groups = structuredClone(initialGroups);
-	const snapshots: TodoGroup[][] = [];
+	initialNodes: TodoNode[],
+): ToolSession & { snapshots: TodoNode[][] } {
+	let nodes = structuredClone(initialNodes);
+	const snapshots: TodoNode[][] = [];
 	return {
 		cwd: tempDir,
 		hasUI: false,
@@ -57,9 +57,9 @@ function createSession(
 		getModelString: () => undefined,
 		getArtifactsDir: () => path.join(tempDir, "artifacts"),
 		getSessionId: () => "parent-session",
-		getTodoGroups: () => groups,
-		setTodoGroups: (next: TodoGroup[]) => {
-			groups = structuredClone(next);
+		getTodoNodes: () => nodes,
+		setTodoNodes: (next: TodoNode[]) => {
+			nodes = structuredClone(next);
 			snapshots.push(structuredClone(next));
 		},
 		settings,
@@ -70,7 +70,7 @@ function createSession(
 		contextFiles: [],
 		promptTemplates: [],
 		snapshots,
-	} as unknown as ToolSession & { snapshots: TodoGroup[][] };
+	} as unknown as ToolSession & { snapshots: TodoNode[][] };
 }
 
 function mockRunSubprocess(transcriptPath: string, overrides: Partial<SingleResult> = {}): void {
@@ -114,16 +114,12 @@ describe("child phase gate propagation", () => {
 	it("keeps the parent delegated task completed when child gated todos pass", async () => {
 		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
 		const session = createSession(tempDir, settings, [
-			{ id: "phase-1", name: "Work", tasks: [{ id: "task-1", content: "Parent task", status: "pending" }] },
+			{ id: "task-1", content: "Parent task", status: "pending", group: "Work" },
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "sub1.jsonl");
 		mockRunSubprocess(transcriptPath, {
-			todoGroups: [
-				{
-					id: "phase-child-1",
-					name: "Child work",
-					tasks: [{ id: "child-task-1", content: "Run child tests", status: "completed", gateCmd: "bun test" }],
-				},
+			todoNodes: [
+				{ id: "child-task-1", content: "Run child tests", status: "completed", group: "Child work", verify: { cmd: "bun test" } },
 			],
 			extractedToolData: { bash: [{ command: "bun test", exitCode: 0, cwd: tempDir }] },
 		});
@@ -133,11 +129,11 @@ describe("child phase gate propagation", () => {
 		await tool.execute("call-1", {
 			agent: "task",
 			tasks: [
-				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", todoRef: "task-1" },
+				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", ref: "task-1" },
 			],
 		});
 
-		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
+		const finalTask = session.snapshots.at(-1)?.[0];
 		expect(finalTask?.status).toBe("completed");
 		expect(finalTask?.delegation?.result?.gateFailures).toBeUndefined();
 	});
@@ -145,16 +141,12 @@ describe("child phase gate propagation", () => {
 	it("marks the parent delegated task gate_failed when a completed child gated todo lacks evidence", async () => {
 		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
 		const session = createSession(tempDir, settings, [
-			{ id: "phase-1", name: "Work", tasks: [{ id: "task-1", content: "Parent task", status: "pending" }] },
+			{ id: "task-1", content: "Parent task", status: "pending", group: "Work" },
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "sub1.jsonl");
 		mockRunSubprocess(transcriptPath, {
-			todoGroups: [
-				{
-					id: "phase-child-1",
-					name: "Child work",
-					tasks: [{ id: "child-task-1", content: "Run child tests", status: "completed", gateCmd: "bun test" }],
-				},
+			todoNodes: [
+				{ id: "child-task-1", content: "Run child tests", status: "completed", group: "Child work", verify: { cmd: "bun test" } },
 			],
 			extractedToolData: { bash: [{ command: "bun check", exitCode: 0, cwd: tempDir }] },
 		});
@@ -164,11 +156,11 @@ describe("child phase gate propagation", () => {
 		await tool.execute("call-1", {
 			agent: "task",
 			tasks: [
-				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", todoRef: "task-1" },
+				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", ref: "task-1" },
 			],
 		});
 
-		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
+		const finalTask = session.snapshots.at(-1)?.[0];
 		expect(finalTask?.status).toBe("gate_failed");
 		expect(finalTask?.delegation?.result?.gateFailures?.[0]?.taskId).toBe("child-task-1");
 		expect(finalTask?.delegation?.result?.gateFailures?.[0]?.gate).toBe("gateCmd");

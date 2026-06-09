@@ -11,48 +11,52 @@
 
 import { describe, expect, test } from "bun:test";
 import { TodoDashboardBridge } from "../../src/tools/todo-dashboard-bridge";
-import type { TodoGroup } from "../../src/tools/todo-write";
+import type { TodoNode } from "../../src/tools/todo-write";
 import { EventBus } from "../../src/utils/event-bus";
 
-function makeGroups(
+function makeNodes(
 	...items: Array<{
 		id: string;
 		content: string;
 		status?: string;
-		gateCommit?: boolean;
+		group?: string;
+		verifyCommit?: boolean;
+		verifyArtifact?: string;
+		verifyCmd?: string;
 		verificationArtifact?: string;
 		blockers?: string[];
-		orgItemId?: string;
-		orgItemClosingId?: string;
+		ref?: string | null;
+		closesRef?: boolean;
 	}>
-): TodoGroup[] {
-	return [
-		{
-			id: "group-1",
-			name: "Test Group",
-			tasks: items.map(item => ({
-				id: item.id,
-				content: item.content,
-				status: (item.status ?? "pending") as any,
-				gateCommit: item.gateCommit,
-				verificationArtifact: item.verificationArtifact,
-				blockers: item.blockers,
-				orgItemId: item.orgItemId,
-				orgItemClosingId: item.orgItemClosingId,
-			})),
-		},
-	];
+): TodoNode[] {
+	return items.map(item => ({
+		id: item.id,
+		content: item.content,
+		status: (item.status ?? "pending") as any,
+		group: item.group ?? "Test Group",
+		verify: item.verifyCommit || item.verifyArtifact || item.verifyCmd
+			? {
+					commit: item.verifyCommit,
+					artifact: item.verifyArtifact,
+					cmd: item.verifyCmd,
+			  }
+			: undefined,
+		verificationArtifact: item.verificationArtifact,
+		blockers: item.blockers,
+		ref: item.ref,
+		closesRef: item.closesRef,
+	}));
 }
 
-function makeSession(initialGroups: TodoGroup[] = []) {
-	let groups = initialGroups;
+function makeSession(initialNodes: TodoNode[] = []) {
+	let nodes = initialNodes;
 	return {
-		getTodoGroups: () => groups,
-		setTodoGroups: (p: TodoGroup[]) => {
-			groups = p;
+		getTodoNodes: () => nodes,
+		setTodoNodes: (p: TodoNode[]) => {
+			nodes = p;
 		},
-		get currentGroups() {
-			return groups;
+		get currentNodes() {
+			return nodes;
 		},
 	};
 }
@@ -60,7 +64,7 @@ function makeSession(initialGroups: TodoGroup[] = []) {
 describe("TodoDashboardBridge", () => {
 	test("buildSnapshot returns groups with blocked status", () => {
 		const session = makeSession(
-			makeGroups(
+			makeNodes(
 				{ id: "task-1", content: "First", status: "pending" },
 				{ id: "task-2", content: "Second", status: "pending", blockers: ["task-1"] },
 			),
@@ -76,8 +80,8 @@ describe("TodoDashboardBridge", () => {
 	});
 
 	test("buildSnapshot reports hasGatedTasks correctly", () => {
-		const gated = makeSession(makeGroups({ id: "t1", content: "A", gateCommit: true }));
-		const plain = makeSession(makeGroups({ id: "t1", content: "A" }));
+		const gated = makeSession(makeNodes({ id: "t1", content: "A", verifyCommit: true }));
+		const plain = makeSession(makeNodes({ id: "t1", content: "A" }));
 
 		expect(new TodoDashboardBridge(gated).buildSnapshot().hasGatedTasks).toBe(true);
 		expect(new TodoDashboardBridge(plain).buildSnapshot().hasGatedTasks).toBe(false);
@@ -85,7 +89,7 @@ describe("TodoDashboardBridge", () => {
 
 	test("subscribe triggers callback on todo:change", () => {
 		const eventBus = new EventBus();
-		const session = makeSession(makeGroups({ id: "t1", content: "A", gateCommit: true }));
+		const session = makeSession(makeNodes({ id: "t1", content: "A", verifyCommit: true }));
 		const bridge = new TodoDashboardBridge(session, eventBus);
 
 		const snapshots: any[] = [];
@@ -135,7 +139,7 @@ describe("TodoDashboardBridge", () => {
 			events.push(data);
 		});
 
-		const session = makeSession(makeGroups({ id: "t1", content: "A", gateCommit: true }));
+		const session = makeSession(makeNodes({ id: "t1", content: "A", verifyCommit: true }));
 		const bridge = new TodoDashboardBridge(session, eventBus);
 		bridge.subscribe(() => {}); // subscribe triggers auto-register check
 
@@ -154,14 +158,14 @@ describe("TodoDashboardBridge", () => {
 			removeEvents.push(data);
 		});
 
-		const session = makeSession(makeGroups({ id: "t1", content: "A", gateCommit: true }));
+		const session = makeSession(makeNodes({ id: "t1", content: "A", verifyCommit: true }));
 		const bridge = new TodoDashboardBridge(session, eventBus);
 		bridge.subscribe(() => {});
 
 		expect(bridge.panelRegistered).toBe(true);
 
 		// Remove gated tasks and emit change
-		session.setTodoGroups(makeGroups({ id: "t1", content: "A" }));
+		session.setTodoNodes(makeNodes({ id: "t1", content: "A" }));
 		eventBus.emit("todo:change", {});
 
 		expect(bridge.panelRegistered).toBe(false);
@@ -169,22 +173,22 @@ describe("TodoDashboardBridge", () => {
 	});
 
 	test("handleControl toggles gate field on task", () => {
-		const session = makeSession(makeGroups({ id: "task-1", content: "A" }));
+		const session = makeSession(makeNodes({ id: "task-1", content: "A" }));
 		const bridge = new TodoDashboardBridge(session);
 
 		bridge.handleControl({
 			action: "todo_control",
 			taskId: "task-1",
-			gate: "gateCommit",
+			gate: "commit",
 			enabled: true,
 		});
 
-		const groups = session.getTodoGroups();
-		expect(groups[0].tasks[0].gateCommit).toBe(true);
+		const nodes = session.getTodoNodes();
+		expect(nodes[0].verify?.commit).toBe(true);
 	});
 
 	test("handleControl ignores invalid gate field", () => {
-		const session = makeSession(makeGroups({ id: "task-1", content: "A" }));
+		const session = makeSession(makeNodes({ id: "task-1", content: "A" }));
 		const bridge = new TodoDashboardBridge(session);
 
 		bridge.handleControl({
@@ -195,13 +199,13 @@ describe("TodoDashboardBridge", () => {
 		});
 
 		// No error thrown, task unchanged
-		const groups = session.getTodoGroups();
-		expect(groups[0].tasks[0].gateCommit).toBeUndefined();
+		const nodes = session.getTodoNodes();
+		expect(nodes[0].verify?.commit).toBeUndefined();
 	});
 
 	test("dispose cleans up subscriptions and unregisters panel", () => {
 		const eventBus = new EventBus();
-		const session = makeSession(makeGroups({ id: "t1", content: "A", gateCommit: true }));
+		const session = makeSession(makeNodes({ id: "t1", content: "A", verifyCommit: true }));
 		const bridge = new TodoDashboardBridge(session, eventBus);
 
 		bridge.subscribe(() => {});
@@ -213,26 +217,26 @@ describe("TodoDashboardBridge", () => {
 
 	test("buildSnapshot includes verificationArtifact", () => {
 		const session = makeSession(
-			makeGroups({ id: "task-1", content: "Auth task", verificationArtifact: "artifacts/verify.json" }),
+			makeNodes({ id: "task-1", content: "Auth task", verificationArtifact: "artifacts/verify.json" }),
 		);
 		const snap = new TodoDashboardBridge(session).buildSnapshot();
 
 		expect(snap.groups[0].tasks[0]?.verificationArtifact).toBe("artifacts/verify.json");
 	});
 
-	test("buildSnapshot includes orgItemId and orgItemClosingId", () => {
+	test("buildSnapshot includes ref and closesRef", () => {
 		const session = makeSession(
-			makeGroups({
+			makeNodes({
 				id: "task-1",
 				content: "Auth task",
-				orgItemId: "FEAT-001-auth",
-				orgItemClosingId: "FEAT-001-auth-close",
+				ref: "org://FEAT-001-auth",
+				closesRef: true,
 			}),
 		);
 		const bridge = new TodoDashboardBridge(session);
 		const snap = bridge.buildSnapshot();
 
-		expect(snap.groups[0].tasks[0].orgItemId).toBe("FEAT-001-auth");
-		expect(snap.groups[0].tasks[0].orgItemClosingId).toBe("FEAT-001-auth-close");
+		expect(snap.groups[0].tasks[0].ref).toBe("org://FEAT-001-auth");
+		expect(snap.groups[0].tasks[0].closesRef).toBe(true);
 	});
 });

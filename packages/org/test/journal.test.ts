@@ -187,17 +187,15 @@ describe("writeJournal", () => {
 						id: "task-1",
 						content: "Build feature",
 						status: "in_progress",
-						gateCommit: true,
-						gateArtifact: "dist/output.json",
-						verifyCmd: "bun test",
+						verify: { commit: true, artifact: "dist/output.json", cmd: "bun test" },
 					},
 				],
 			},
 		];
 		await writeJournal(tmpDir, "gate-session", gatedPhases);
 		const content = await Bun.file(journalFilePath(tmpDir, "gate-session")).text();
-		expect(content).toContain(":GATE_COMMIT: true");
-		expect(content).toContain(":GATE_ARTIFACT: dist/output.json");
+		expect(content).toContain(":VERIFY_COMMIT: true");
+		expect(content).toContain(":VERIFY_ARTIFACT: dist/output.json");
 		expect(content).toContain(":VERIFY_CMD: bun test");
 	});
 
@@ -237,13 +235,12 @@ describe("writeJournal", () => {
 		];
 		await writeJournal(tmpDir, "plain-session", plainPhases);
 		const content = await Bun.file(journalFilePath(tmpDir, "plain-session")).text();
-		expect(content).not.toContain(":GATE_");
-		expect(content).not.toContain(":VERIFY_CMD");
+		expect(content).not.toContain(":VERIFY_");
 		expect(content).not.toContain(":DEPENDS");
 		expect(content).not.toContain(":BLOCKER");
 	});
 
-	test("orgItemId and orgItemClosingId written to journal", async () => {
+	test("ref and closesRef written to journal", async () => {
 		const groups: JournalTodoGroup[] = [
 			{
 				id: "group-1",
@@ -253,16 +250,16 @@ describe("writeJournal", () => {
 						id: "task-1",
 						content: "Linked task",
 						status: "completed",
-						orgItemId: "FEAT-001-auth",
-						orgItemClosingId: "FEAT-001-auth-close",
+						ref: "org://FEAT-001-auth",
+						closesRef: true,
 					},
 				],
 			},
 		];
 		await writeJournal(tmpDir, "linked-session", groups);
 		const content = await Bun.file(journalFilePath(tmpDir, "linked-session")).text();
-		expect(content).toContain(":ORG_ITEM_ID: FEAT-001-auth");
-		expect(content).toContain(":ORG_ITEM_CLOSING_ID: FEAT-001-auth-close");
+		expect(content).toContain(":REF: org://FEAT-001-auth");
+		expect(content).toContain(":CLOSES_REF: true");
 	});
 
 	test("omits org item properties when not set", async () => {
@@ -281,8 +278,8 @@ describe("writeJournal", () => {
 		];
 		await writeJournal(tmpDir, "no-org-session", groups);
 		const content = await Bun.file(journalFilePath(tmpDir, "no-org-session")).text();
-		expect(content).not.toContain(":ORG_ITEM_ID:");
-		expect(content).not.toContain(":ORG_ITEM_CLOSING_ID:");
+		expect(content).not.toContain(":REF:");
+		expect(content).not.toContain(":CLOSES_REF:");
 	});
 
 	test("serializes details as body text below PROPERTIES drawer", async () => {

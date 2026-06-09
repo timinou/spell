@@ -6,11 +6,10 @@ layer "frontend" description="UI work"
 layer "api" description="API layer"
 
 policy "fe-gates" layer="frontend" {
-	gate-commit #true
-	gate-cmd "bun test test/ui/**"
-	verify-cmd "bun check:ts"
-	gate-llm "Check accessibility"
-	gate-artifact "dist/bundle.js"
+	verify-commit #true
+	verify-cmd "bun test test/ui/**"
+	verify-review "Check accessibility"
+	verify-artifact "dist/bundle.js"
 	inject "Follow design system conventions"
 	description "Frontend quality gates"
 }
@@ -42,12 +41,11 @@ layer "api" description="API layer"
 			name: "fe-gates",
 			description: "Frontend quality gates",
 			match: { layer: "frontend" },
-			gates: {
-				gateCommit: true,
-				gateCmd: "bun test test/ui/**",
-				verifyCmd: "bun check:ts",
-				gateLlm: "Check accessibility",
-				gateArtifact: "dist/bundle.js",
+			verify: {
+				commit: true,
+				cmd: "bun test test/ui/**",
+				review: "Check accessibility",
+				artifact: "dist/bundle.js",
 			},
 			inject: "Follow design system conventions",
 		});
@@ -72,12 +70,12 @@ policy "api-gates" layer="api" {
 			{
 				name: "fe-gates",
 				match: { layer: "frontend" },
-				gates: { gateCmd: "bun test test/ui/**" },
+				verify: { cmd: "bun test test/ui/**" },
 			},
 			{
 				name: "api-gates",
 				match: { layer: "api" },
-				gates: { verifyCmd: "bun check:ts" },
+				verify: { cmd: "bun check:ts" },
 			},
 		]);
 	});
@@ -120,7 +118,7 @@ policy "valid-policy" layer="frontend" {
 			{
 				name: "valid-policy",
 				match: { layer: "frontend" },
-				gates: { gateCmd: "bun check:ts" },
+				verify: { cmd: "bun check:ts" },
 			},
 		]);
 	});
@@ -141,7 +139,7 @@ policy "valid-policy" layer="frontend" {
 			{
 				name: "valid-policy",
 				match: { layer: "frontend" },
-				gates: { gateCmd: "bun check:ts" },
+				verify: { cmd: "bun check:ts" },
 			},
 		]);
 	});
@@ -176,7 +174,7 @@ policy "fe-gates" layer="frontend" {
 			{
 				name: "fe-gates",
 				match: { layer: "frontend" },
-				gates: { gateCmd: "bun test test/ui/**" },
+				verify: { cmd: "bun test test/ui/**" },
 			},
 		]);
 	});

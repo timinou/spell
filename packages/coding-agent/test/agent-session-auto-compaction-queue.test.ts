@@ -185,12 +185,8 @@ describe("AgentSession auto-compaction queue resume", () => {
 	it("forwards todo reminder lifecycle signals to extensions", async () => {
 		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
 
-		session.setTodoGroups([
-			{
-				id: "phase-1",
-				name: "Execution",
-				tasks: [{ id: "task-1", content: "Finish pending task", status: "in_progress" }],
-			},
+		session.setTodoNodes([
+			{ id: "task-1", content: "Finish pending task", status: "in_progress", group: "Execution" },
 		]);
 
 		const { promise: reminderDone, resolve: onReminderDone } = Promise.withResolvers<void>();

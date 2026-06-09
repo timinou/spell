@@ -1,6 +1,6 @@
 import { Box, Container, Spacer, Text } from "@spell/pi-tui";
 import { theme } from "../../modes/theme/theme";
-import { hasGate, hasRequiredGate, type TodoItem } from "../../tools/todo-write";
+import { hasGate, hasRequiredGate, type TodoNode } from "../../tools/todo-write";
 
 /**
  * Component that renders a todo completion reminder notification.
@@ -10,7 +10,7 @@ export class TodoReminderComponent extends Container {
 	#box: Box;
 
 	constructor(
-		private readonly todos: TodoItem[],
+		private readonly todos: TodoNode[],
 		private readonly attempt: number,
 		private readonly maxAttempts: number,
 	) {
@@ -46,15 +46,14 @@ export class TodoReminderComponent extends Container {
 		this.#box.addChild(new Text(theme.italic(todoList), 0, 0));
 	}
 
-	#gateBadges(task: TodoItem): string {
+		#gateBadges(task: TodoNode): string {
 		if (!hasGate(task) && !hasRequiredGate(task)) return "";
 		const parts: string[] = [];
-		if (task.gateCommit) parts.push("[commit]");
-		if (task.gateArtifact) parts.push("[artifact]");
-		if (task.gateCmd) parts.push("[cmd]");
-		if (task.gateLlm) parts.push("[llm]");
-		if (task.verifyCmd) parts.push("[verify]");
-		if (task.orgItemId) parts.push("[org]");
-		return ` ${parts.join(" ")}`;
+		if (task.verify?.commit) parts.push("[commit]");
+		if (task.verify?.artifact) parts.push("[artifact]");
+		if (task.verify?.cmd) parts.push("[cmd]");
+		if (task.verify?.review) parts.push("[review]");
+		if (task.ref) parts.push("[ref]");
+		return parts.length > 0 ? ` ${parts.join(" ")}` : "";
 	}
 }

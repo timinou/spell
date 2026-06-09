@@ -1,0 +1,69 @@
+#+TITLE: Simplify and unify todo_write — flat reconcile node, verify{} gates, ref linkage (PLAN-327 follow-up)
+#+STATE: ITEM
+#+SESSION_ID: 1502540eec30c834
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T11-18-25-968Z_1502540eec30c834.jsonl]]
+#+CUSTOM_ID: PLAN-328-simplify-and-unify-todo-write-flat-recon
+
+* Initial Message
+
+how would you simplify both the prompt and the implementation of the todo_write system and make it more powerful as a follow-up to PLAN-327?
+
+Follow-up to PLAN-327 (interactive task system). PLAN-327 made ~task~ auto-create roster todos and ride the shared EventBus; ~task.ref~ (string|null, shape-dispatched: roster-id | org://) already landed there. This plan converges ~todo_write~ onto the same primitives, collapsing its surface ~3x while making it more powerful.
+
+* Problem (measured in repo, 2026-06-09)
+
+- ~todo-write.ts~ = 1764 loc. Prompt = 112 loc + sniper block.
+- P1 group-centric API but groups are cosmetic (~TodoGroup~ doc: "Ordering comes from blockers/DAG edges, not group position"). 4 ops (replace/add_group/add_phase/add_task) + update exist mostly to feed a presentation overlay. ~planItemId~/~waveIndex~ on ~TodoGroup~ are NEVER set by any input op → wave-snapshot path is dormant.
+- P2 schema triplication: ~InputTask~ (18 fields) ⟂ ~add_task~ inline (same 18) ⟂ ~update~ inline (same 18 + verified + deferralFupId). Model-facing JSON ~3x larger than necessary.
+- P3 gate proliferation: 7 ways to say "needs verification" — gateCommit · gateArtifact · gateCmd · gateLlm · verifyCmd · verificationArtifact · orgItemClosingId. verifyCmd("recommended") vs gateCmd("required") = soft/hard dup. verificationArtifact is delegated-evidence (system-only) yet model-facing.
+- P4 two ID systems + two org links: slug · uri · auto task-N  ⟂  orgItemId(non-gating) · orgItemClosingId(gating). ~resolveTaskRef~ already shape-dispatches; ~task~ already solved this with ~ref~.
+- P5 status enum mixes model-settable (pending·in_progress·completed·abandoned) with system-only delegation outcomes (failed·gate_failed) — model can set states it should never set.
+
+* Locked decisions
+
+| # | decision |
+|---|----------|
+| D1 | Full flatten. Drop ~TodoGroup~ container. ~TodoNode~ is the unit; carries optional ~group?:string~ label. Relocate ~planItemId?~/~waveIndex?~ onto the node (keeps wave-snapshot + command-controller ~handleSnapshotsCommand~ working, now model-driven). |
+| D2 | Declarative reconcile. ~todo_write { tasks:[Partial<TodoNode> keyed by id], reset? }~. Drop replace/add_group/add_phase/add_task/update ops. Upsert by id; absent id untouched; ~reset:true~ clears-then-sets. Idempotent (safe re-emit, robust to eager-todo first call + model retries). |
+| D3 | Gates → ~verify?:{commit?:bool, artifact?:string, cmd?:string, review?:string}~. Presence of commit/artifact/cmd ⇒ required (drives two-phase). ~review~ = advisory (was gateLlm). ~verifyCmd~ dies (soft dup of cmd). ~verificationArtifact~ → system-only, off the model schema (lives on internal ~TodoNode~ for delegation evidence write in task/index.ts). |
+| D4 | Linkage → ~ref?:string\|null~ + ~closesRef?:bool~. REUSE ~task~'s ~resolveRef~ (roster-id \| org://). ~closesRef:true~ ⇒ completion closes the org item (was orgItemClosingId). ~orgItemId~/~orgItemClosingId~ removed. One linkage concept across both tools. |
+| D5 | Model status enum = 4 (pending\|in_progress\|completed\|abandoned). ~failed~/~gate_failed~ become internal-only (delegation sets them; not in input schema). |
+| D6 | Hard-break session migration. No legacy adapter. Resumed pre-cutover sessions lose todo state and re-plan next turn. Acceptable for a short-lived dev tool. |
+| D7 | Symbolify prompts (~todo-write.md~, ~eager-todo.md~) per FUP-106 ask — notation-core, <language>-style, once the schema shrinks. |
+
+* Net model-facing shape
+
+#+begin_src
+TodoNode {
+  id?  content  status?  group?  details?  notes?  blockers?[]
+  ref?  closesRef?  verify?{commit,artifact,cmd,review}  filesDeps?[]
+}
+// ~9 keys vs ~20 · one definition vs three · 4 statuses vs 6
+#+end_src
+
+* Why also more powerful
+
+- declarative reconcile → idempotent planning; merges cleanly with ~task~ auto-roster; safe re-emit.
+- one node type → PLAN-327 ask-dialogue (~task:ask:*~) attaches to the node; Q/A thread, DAG, gates, org-link share one render + one event spine.
+- ~verify{}~ as data → two-phase protocol, policy-layer injection, delegated-evidence all operate on ONE structure not 7 scattered fields.
+- ~ref~ unified with ~task.ref~ → cross-session org linkage identical in both tools.
+
+* Non-goals
+
+- No change to DAG scheduler semantics or ~promoteReadyTasks~ logic (only field names it reads).
+- No new transport; rides existing EventBus.
+- Not building PLAN-327's ask-dialogue here — this makes the node ready for it.
+
+* Execution Manifest (waves)
+** Wave 1 — spine (sequential, main thread): the contract
+- [[id:FEAT-799-todonode-type-declarative-reconcile-sche]] TodoNode type + reconcile schema + applyOps rewrite + verify{}/ref/closesRef internal model. Everything downstream consumes this. Lands alone.
+
+** Wave 2 — consumers (parallel; all blocked on FEAT-799)
+- [[id:FEAT-800-policy-gates-verify-shape-taskpolicygate]] policy gates → verify{} shape + KDL parser + injectPolicyGates/applyPolicyGates.
+- [[id:FEAT-801-task-integration-template-index-executor]] task integration: template.ts gate render, index.ts verificationArtifact/closesRef + resolveRef, executor.ts runtimeVerification field names.
+- [[id:FEAT-802-tui-session-render-agent-session-interac]] TUI/session render: agent-session, interactive-mode, todo-reminder, dashboard-bridge, command-controller, TodoPanel.qml.
+- [[id:FEAT-803-pi-org-journal-journaltodoitem-group-sha]] pi-org journal.ts: JournalTodoItem/Group shape + serializeJournalOrg drawer keys.
+
+** Wave 3 — verify (blocked on Wave 2)
+- [[id:FEAT-804-symbolify-todo-write-md-eager-todo-md-up]] symbolify todo-write.md + eager-todo.md AND update ~26 test files; add reconcile + verify{} + ref fixtures. Run bun run --parallel check:ts + targeted suites green.
+

@@ -181,12 +181,12 @@ function generateSpellKdl(project: DetectedProject, domain: string, templateName
 }
 
 function createPolicyBlock(name: string, layer: string, commands: { gateCmd?: string; verifyCmd?: string }): string[] {
-	const lines = [`policy ${JSON.stringify(name)} layer=${JSON.stringify(layer)} {`, "    gate-commit #true"];
-	if (commands.gateCmd) {
-		lines.push(`    gate-cmd ${JSON.stringify(commands.gateCmd)}`);
-	}
-	if (commands.verifyCmd) {
-		lines.push(`    verify-cmd ${JSON.stringify(commands.verifyCmd)}`);
+	const lines = [`policy ${JSON.stringify(name)} layer=${JSON.stringify(layer)} {`, "    verify-commit #true"];
+	// gateCmd (required) + verifyCmd (advisory) fold into one verify.cmd under PLAN-328.
+	// Chain them so neither check is lost; advisory runs first, gating test second.
+	const cmd = [commands.verifyCmd, commands.gateCmd].filter((c): c is string => !!c).join(" && ");
+	if (cmd) {
+		lines.push(`    verify-cmd ${JSON.stringify(cmd)}`);
 	}
 	lines.push("}");
 	return lines;

@@ -1,0 +1,28 @@
+#+TITLE: Policy gates → verify{} shape (TaskPolicyGates, KDL parser, injectPolicyGates)
+#+STATE: ITEM
+#+SESSION_ID: 1502540eec30c834
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T11-18-25-968Z_1502540eec30c834.jsonl]]
+#+CUSTOM_ID: FEAT-800-policy-gates-verify-shape-taskpolicygate
+#+LAYER: core
+#+BLOCKERS: FEAT-799-todonode-type-declarative-reconcile-sche
+
+* Initial Message
+
+how would you simplify both the prompt and the implementation of the todo_write system and make it more powerful as a follow-up to PLAN-327?
+
+Wave 2 consumer for [[id:PLAN-328-simplify-and-unify-todo-write-flat-recon]]. Blocked on [[id:TODO-SPINE]].
+
+* Target
+~packages/coding-agent/src/config/task-policies.ts~, ~packages/coding-agent/src/config/task-policies-kdl.ts~, ~injectPolicyGates~ in todo-write.ts.
+
+* Change
+- ~TaskPolicyGates~ shape: keep KDL author-facing keys OR migrate to ~verify{}~ sub-shape. Decision: keep KDL surface stable (gate-commit/gate-cmd/etc in spell.kdl) but have ~applyPolicyGates~/~resolveGates~ emit into the ~verify{}~ structure the node now expects.
+- ~applyPolicyGates~ returns a ~verify~-shaped partial; ~injectPolicyGates~ merges policy ~verify~ into ~node.verify~ respecting existing explicit values (never overwrite).
+- ~gateLlm~ policy field → ~verify.review~. ~verifyCmd~ policy field folds into ~verify.cmd~ (advisory→required consolidation; if a policy only set verifyCmd, it now sets cmd — confirm this is intended hardening in plan, document in test).
+
+* Edge
+- ~spell.kdl~ existing policy blocks must still parse. If KDL keys unchanged, only the internal mapping shifts. Verify ~task-policies-kdl.test.ts~ + ~spell-kdl.test.ts~ expectations.
+- mergePolicies/resolveGates field-by-field copy must cover the new shape exhaustively.
+
+* Accept
+~bun test packages/coding-agent/test/config/task-policies*.test.ts~ green after fixture updates (TODO-TESTS owns assertions). Type-checks against TODO-SPINE's TodoNode.verify.

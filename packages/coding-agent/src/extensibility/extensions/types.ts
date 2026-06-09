@@ -41,7 +41,7 @@ import type {
 	SessionManager,
 } from "../../session/session-manager";
 import type { BashToolDetails, BashToolInput } from "../../tools";
-import type { TodoItem } from "../../tools/todo-write";
+import type { TodoNode } from "../../tools/todo-write";
 import type { EventBus } from "../../utils/event-bus";
 import type { SlashCommandInfo } from "../slash-commands";
 
@@ -580,7 +580,7 @@ export interface TtsrTriggeredEvent {
 /** Fired when todo reminder logic detects unfinished todos */
 export interface TodoReminderEvent {
 	type: "todo_reminder";
-	todos: TodoItem[];
+	todos: TodoNode[];
 	attempt: number;
 	maxAttempts: number;
 }

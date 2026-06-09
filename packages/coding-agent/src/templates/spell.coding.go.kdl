@@ -3,18 +3,17 @@ layer "api" description="HTTP and RPC handlers"
 layer "cmd" description="Executable entrypoints"
 
 policy "core-quality" layer="core" {
-    gate-commit #true
-    gate-cmd "go test ./..."
+    verify-commit #true
+    verify-cmd "go test ./..."
 }
 
 policy "api-quality" layer="api" {
-    gate-commit #true
-    gate-cmd "go test ./..."
-    verify-cmd "go vet ./..."
+    verify-commit #true
+    verify-cmd "go vet ./... && go test ./..."
 }
 
 policy "cmd-quality" layer="cmd" {
-    gate-commit #true
+    verify-commit #true
 }
 // agents {
 //     rule "explore" {

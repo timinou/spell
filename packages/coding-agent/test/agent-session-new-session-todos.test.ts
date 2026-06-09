@@ -97,18 +97,15 @@ describe("AgentSession newSession clears todo artifacts", () => {
 		const oldSessionFile = session.sessionFile;
 		expect(oldSessionFile).toBeDefined();
 
-		session.setTodoGroups([
-			{ id: "phase-1", name: "Tasks", tasks: [{ id: "task-1", content: "do the thing", status: "pending" }] },
-		]);
-		expect(session.getTodoGroups()).toHaveLength(1);
-		expect(session.getTodoGroups()[0]?.tasks).toHaveLength(1);
+		session.setTodoNodes([{ id: "task-1", content: "do the thing", status: "pending" }]);
+		expect(session.getTodoNodes()).toHaveLength(1);
 		await session.newSession();
 
 		const newSessionFile = session.sessionFile;
 		expect(newSessionFile).toBeDefined();
 		expect(newSessionFile).not.toBe(oldSessionFile);
 
-		expect(session.getTodoGroups()).toHaveLength(0);
+		expect(session.getTodoNodes()).toHaveLength(0);
 	});
 
 	it("should clear stale todo cache when branching from the first user message", async () => {
@@ -121,18 +118,12 @@ describe("AgentSession newSession clears todo artifacts", () => {
 		const branchCandidates = session.getUserMessagesForBranching();
 		expect(branchCandidates).toHaveLength(1);
 
-		session.setTodoGroups([
-			{
-				id: "phase-1",
-				name: "Execution",
-				tasks: [{ id: "task-1", content: "stale from old branch", status: "in_progress" }],
-			},
-		]);
-		expect(session.getTodoGroups()).toHaveLength(1);
+		session.setTodoNodes([{ id: "task-1", content: "stale from old branch", status: "in_progress" }]);
+		expect(session.getTodoNodes()).toHaveLength(1);
 
 		const result = await session.branch(branchCandidates[0].entryId);
 		expect(result.cancelled).toBe(false);
 		expect(result.selectedText).toBe("start task");
-		expect(session.getTodoGroups()).toHaveLength(0);
+		expect(session.getTodoNodes()).toHaveLength(0);
 	});
 });

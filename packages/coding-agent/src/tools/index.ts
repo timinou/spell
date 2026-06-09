@@ -58,7 +58,7 @@ import { SendFileTool } from "./send-file";
 import { loadSshTool } from "./ssh";
 import { StatusTool } from "./status";
 import { SubmitResultTool } from "./submit-result";
-import { type TodoGroup, TodoWriteTool } from "./todo-write";
+import { type TodoNode, TodoWriteTool } from "./todo-write";
 
 // Exa MCP tools (22 tools)
 
@@ -187,10 +187,12 @@ export interface ToolSession {
 	isAgentIdle?: () => boolean;
 	/** Get compact conversation context for subagents (excludes tool results, system prompts) */
 	getCompactContext?: () => string;
+	/** Get the concrete session as an answer-pump source for interactive tasks (PLAN-327). */
+	getAnswerPumpSession?: () => import("../task/answer-pump").AnswerPumpSession | undefined;
 	/** Get cached todo groups for this session. */
-	getTodoGroups?: () => TodoGroup[];
-	/** Replace cached todo groups for this session. */
-	setTodoGroups?: (groups: TodoGroup[], options?: { reset?: boolean }) => void;
+	getTodoNodes?: () => TodoNode[];
+	/** Replace cached todo nodes for this session. */
+	setTodoNodes?: (nodes: TodoNode[], options?: { reset?: boolean }) => void;
 	/** Whether MCP tool discovery is active for this session. */
 	isMCPDiscoveryEnabled?: () => boolean;
 	/** Get hidden-but-discoverable MCP tools for search_tool_bm25 prompts and fallbacks. */

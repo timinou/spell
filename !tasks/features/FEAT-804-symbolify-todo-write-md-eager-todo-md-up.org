@@ -1,0 +1,38 @@
+#+TITLE: Symbolify todo-write.md + eager-todo.md; update ~26 test files for flat reconcile / verify{} / ref
+#+STATE: ITEM
+#+SESSION_ID: 1502540eec30c834
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T11-18-25-968Z_1502540eec30c834.jsonl]]
+#+CUSTOM_ID: FEAT-804-symbolify-todo-write-md-eager-todo-md-up
+#+LAYER: core
+#+BLOCKERS: FEAT-800-policy-gates-verify-shape-taskpolicygate FEAT-801-task-integration-template-index-executor FEAT-802-tui-session-render-agent-session-interac FEAT-803-pi-org-journal-journaltodoitem-group-sha
+
+* Initial Message
+
+how would you simplify both the prompt and the implementation of the todo_write system and make it more powerful as a follow-up to PLAN-327?
+
+Wave 3 for [[id:PLAN-328-simplify-and-unify-todo-write-flat-recon]]. Blocked on [[id:FEAT-800-policy-gates-verify-shape-taskpolicygate]], [[id:FEAT-801-task-integration-template-index-executor]], [[id:FEAT-802-tui-session-render-agent-session-interac]].
+
+* Target
+~packages/coding-agent/src/prompts/tools/todo-write.md~, ~packages/coding-agent/src/prompts/system/eager-todo.md~, all ~26 todo/task test files.
+
+* Change — prompts (D7 symbolify, <language>-style)
+- todo-write.md: replace 112-line prose + sniper block with notation core:
+  - ~todo_write { tasks:[…], reset? }~ declarative roster over a blocker-DAG.
+  - node grammar: ~{ id content status? group? blockers? ref? verify? details? }~
+  - status pending → in_progress → completed | abandoned
+  - blockers[] = ids that must finish first → wave order (groups cosmetic)
+  - ref = org://ID linkage; closesRef ⇒ completion closes it
+  - verify {cmd|artifact|commit} required (two-phase: resubmit verified:true) · {review} advisory
+  - self-work: flip in_progress before · completed immediately after · ≤1 in_progress
+  - delegated: ~task~ owns lifecycle — never hand-set delegation/failed/gate_failed
+  - reset:true initial plan · omit = merge by id (idempotent)
+  - keep autoRosterEnabled/swarmEnabled handlebars conditionals (kill dead swarmEnabled block flagged in PLAN-327).
+- eager-todo.md: update to single declarative call (~todo_write { tasks, reset:true }~), drop "single replace op" wording.
+
+* Change — tests
+- Rewrite ops-based fixtures ({op:"replace",groups} / add_task / update) to ~{tasks,reset}~ across: tools/todo-write*.test.ts, todo-apply-ops-dag, todo-promote-ready, todo-write-{gates,deferral,delegation,org-hooks,policies,serialization}, direct-work-gate-enforcement, agent-session-{eager-todo,todo-auto-clear,new-session-todos}, task/{gate-verification,gate-enforcement,todo-ref-injection,todo-ref-lifecycle,child-phase-gate-propagation,task-layer-propagation,auto-roster,executor-subagent-reminders}, dashboard-bridge, config/task-policies*, prompts/auto-roster-prompts.
+- Replace gate*/orgItem* assertions with verify{}/ref/closesRef.
+- Add NEW fixtures: reconcile upsert-by-id, reset clear-then-set, idempotent re-emit, verify{} two-phase verified flow, ref shape-dispatch (null|roster|org://), closesRef DONE transition.
+
+* Accept
+~bun run --parallel check:ts~ clean. ~bun test~ across all listed suites green. Manual: prompt renders with autoRoster on+off.

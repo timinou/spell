@@ -31,7 +31,7 @@ import { createSpawnSuccessorTool } from "../swarm/spawn-successor-tool";
 import type { SwarmNodeLike } from "../task/swarm-scheduler";
 import { type ContextFileEntry, truncateTail } from "../tools";
 import { jtdToJsonSchema } from "../tools/jtd-to-json-schema";
-import { cloneTodoGroups, type TodoGroup } from "../tools/todo-write";
+import { cloneTodoNodes, type TodoNode } from "../tools/todo-write";
 import { ToolAbortError } from "../tools/tool-errors";
 import { EventBus, Priority } from "../utils/event-bus";
 import { buildNamedToolChoice } from "../utils/tool-choice";
@@ -40,6 +40,7 @@ import "./bash-subprocess-handler";
 import { type GateFailure, type TrackedBashExecution, verifyGates } from "./gate-verification";
 import { createProgressHeartbeat } from "./progress-heartbeat";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
+import { makeAskOrchestratorTool } from "./ask-tools";
 import {
 	type AgentDefinition,
 	type AgentProgress,
@@ -205,6 +206,10 @@ export interface ExecutorOptions {
 	runtimeVerification?: RuntimeVerificationOptions;
 	/** Additional custom tools injected by the caller (e.g., orchestrator escalate). */
 	customTools?: CustomTool[];
+	/** Interactive-task ask broker (PLAN-327). When set, `ask_orchestrator` is injected and answers are delivered via followUp. */
+	askBroker?: import("./ask-broker").AskBroker;
+	/** Logical task id for ask-broker routing (the roster/logical id, not the execution id). */
+	askTaskId?: string;
 	/** Swarm runtime context; when absent, swarm tools stay unavailable. */
 	swarmContext?: {
 		active: boolean;
@@ -1132,10 +1137,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					}
 				}
 				if (event.toolName === "todo_write") {
-					const todoResult = event.result as { details?: { groups?: unknown; phases?: unknown } } | undefined;
-					const todoGroups = todoResult?.details?.groups ?? todoResult?.details?.phases;
-					if (Array.isArray(todoGroups)) {
-						progress.todoGroups = cloneTodoGroups(todoGroups as TodoGroup[]);
+					const todoResult = event.result as { details?: { nodes?: unknown } } | undefined;
+					const todoNodes = todoResult?.details?.nodes;
+					if (Array.isArray(todoNodes)) {
+						progress.todoNodes = cloneTodoNodes(todoNodes as TodoNode[]);
 					}
 				}
 				if (event.toolName === "task") {
@@ -1359,7 +1364,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 							}),
 						] as CustomTool[])
 					: [];
-			const allCustomTools = [...mcpProxyTools, ...swarmTools, ...(options.customTools ?? [])];
+			const askTools =
+				options.askBroker && options.askTaskId
+					? [makeAskOrchestratorTool(options.askBroker, options.askTaskId) as unknown as CustomTool]
+					: [];
+			const allCustomTools = [...mcpProxyTools, ...swarmTools, ...askTools, ...(options.customTools ?? [])];
 			const enableMCP = !options.mcpManager;
 			const { normalized: normalizedOutputSchema } = normalizeOutputSchema(outputSchema);
 			let todoWriteAvailable =
@@ -1447,6 +1456,17 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						activeSession = session;
 						progress.sessionId = session.sessionId;
 						progress.transcriptPath = sessionFile ?? undefined;
+						if (options.askBroker && options.askTaskId) {
+							options.askBroker.registerTaskSession(options.askTaskId, session.sessionId);
+							// Out-of-band answer delivery: followUp surfaces on the worker's next turn.
+							options.askBroker.registerDelivery(options.askTaskId, text => {
+								// Only deliver into a still-streaming worker. A finished/idle worker
+								// cannot act on the answer, and a bare prompt() would revive a
+								// completed subagent into a detached turn.
+								if (!session.isStreaming) return;
+								void session.prompt(text, { streamingBehavior: "followUp", attribution: "agent" }).catch(() => {});
+							});
+						}
 						const actualTodoWrite = session.getActiveToolNames().includes("todo_write");
 						if (actualTodoWrite !== todoWriteAvailable) {
 							todoWriteAvailable = actualTodoWrite;
@@ -1740,6 +1760,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				if (exitCode === 0) exitCode = 1;
 			}
 			sessionAbortController.abort();
+			if (options.askBroker && options.askTaskId) {
+				options.askBroker.unregisterDelivery(options.askTaskId);
+			}
 			if (unsubscribe) {
 				try {
 					unsubscribe();
@@ -1899,7 +1922,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		abortReason: finalAbortReason,
 		sessionId: progress.sessionId,
 		transcriptUri: progress.transcriptPath,
-		todoGroups: progress.todoGroups ? cloneTodoGroups(progress.todoGroups) : undefined,
+		todoNodes: progress.todoNodes ? cloneTodoNodes(progress.todoNodes) : undefined,
 		usage: hasUsage ? accumulatedUsage : undefined,
 		outputPath,
 		extractedToolData: progress.extractedToolData,

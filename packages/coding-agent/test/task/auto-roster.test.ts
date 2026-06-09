@@ -7,7 +7,7 @@ import * as discoveryModule from "../../src/task/discovery";
 import * as executorModule from "../../src/task/executor";
 import type { AgentDefinition, AgentProgress, SingleResult } from "../../src/task/types";
 import type { ToolSession } from "../../src/tools";
-import type { TodoGroup } from "../../src/tools/todo-write";
+import type { TodoNode } from "../../src/tools/todo-write";
 
 const baseAgent: AgentDefinition = {
 	name: "task",
@@ -48,10 +48,10 @@ function createResult(
 function createSession(
 	tempDir: string,
 	settings: Settings,
-	initialGroups: TodoGroup[] = [],
-): ToolSession & { snapshots: TodoGroup[][]; getCurrentGroups: () => TodoGroup[] } {
-	let groups = structuredClone(initialGroups);
-	const snapshots: TodoGroup[][] = [];
+	initialNodes: TodoNode[] = [],
+): ToolSession & { snapshots: TodoNode[][]; getCurrentNodes: () => TodoNode[] } {
+	let nodes = structuredClone(initialNodes);
+	const snapshots: TodoNode[][] = [];
 	return {
 		cwd: tempDir,
 		hasUI: false,
@@ -62,9 +62,9 @@ function createSession(
 		getModelString: () => undefined,
 		getArtifactsDir: () => path.join(tempDir, "artifacts"),
 		getSessionId: () => "parent-session",
-		getTodoGroups: () => groups,
-		setTodoGroups: (next: TodoGroup[]) => {
-			groups = structuredClone(next);
+		getTodoNodes: () => nodes,
+		setTodoNodes: (next: TodoNode[]) => {
+			nodes = structuredClone(next);
 			snapshots.push(structuredClone(next));
 		},
 		settings,
@@ -75,8 +75,8 @@ function createSession(
 		contextFiles: [],
 		promptTemplates: [],
 		snapshots,
-		getCurrentGroups: () => groups,
-	} as unknown as ToolSession & { snapshots: TodoGroup[][]; getCurrentGroups: () => TodoGroup[] };
+		getCurrentNodes: () => nodes,
+	} as unknown as ToolSession & { snapshots: TodoNode[][]; getCurrentNodes: () => TodoNode[] };
 }
 
 describe("TaskTool auto-roster", () => {
@@ -108,12 +108,12 @@ describe("TaskTool auto-roster", () => {
 
 		await tool.execute("call-auto-roster", {
 			agent: "task",
-			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect" }],
+			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect", ref: null }],
 		});
 
 		const createdSnapshot = session.snapshots[0];
-		expect(createdSnapshot?.[0]?.name).toBe("Tasks");
-		expect(createdSnapshot?.[0]?.tasks[0]).toMatchObject({
+		expect(createdSnapshot?.[0]?.group).toBe("Tasks");
+		expect(createdSnapshot?.[0]).toMatchObject({
 			content: "Inspect",
 			status: "pending",
 			delegation: { sessionId: "pending", agent: "task" },
@@ -138,13 +138,13 @@ describe("TaskTool auto-roster", () => {
 		await tool.execute("call-sanitize-integration", {
 			agent: "task",
 			context: `## ${heading}\\n## Goal\\nFix dispatch`,
-			tasks: [{ id: "verify", description: "Verify\\nstuff", assignment: "## Target\n- Task: Verify" }],
+			tasks: [{ id: "verify", description: "Verify\\nstuff", assignment: "## Target\n- Task: Verify", ref: null }],
 		});
 
-		const createdPhase = session.snapshots[0]?.[0];
-		expect(createdPhase?.name).toBe(heading.slice(0, 80));
-		expect(createdPhase?.name).toHaveLength(80);
-		expect(createdPhase?.tasks[0]?.content).toBe("Verify stuff");
+		const createdNode = session.snapshots[0]?.[0];
+		expect(createdNode?.group).toBe(heading.slice(0, 80));
+		expect(createdNode?.group).toHaveLength(80);
+		expect(createdNode?.content).toBe("Verify stuff");
 	});
 
 	it("marks auto-created tasks in_progress and completed with delegated metadata", async () => {
@@ -182,11 +182,11 @@ describe("TaskTool auto-roster", () => {
 
 		await tool.execute("call-auto-roster-running", {
 			agent: "task",
-			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect" }],
+			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect", ref: null }],
 		});
 
-		const runningSnapshot = session.snapshots.find(snapshot => snapshot[0]?.tasks[0]?.status === "in_progress");
-		expect(runningSnapshot?.[0]?.tasks[0]).toMatchObject({
+		const runningSnapshot = session.snapshots.find(snapshot => snapshot[0]?.status === "in_progress");
+		expect(runningSnapshot?.[0]).toMatchObject({
 			status: "in_progress",
 			delegation: {
 				agent: "task",
@@ -194,7 +194,7 @@ describe("TaskTool auto-roster", () => {
 				transcriptPath,
 			},
 		});
-		expect(session.getCurrentGroups()[0]?.tasks[0]).toMatchObject({
+		expect(session.getCurrentNodes()[0]).toMatchObject({
 			status: "completed",
 			delegation: {
 				agent: "task",
@@ -212,7 +212,7 @@ describe("TaskTool auto-roster", () => {
 			"task.autoRoster": true,
 		});
 		const session = createSession(tempDir, settings, [
-			{ id: "phase-1", name: "Existing", tasks: [{ id: "task-1", content: "Existing", status: "pending" }] },
+			{ id: "task-1", content: "Existing", status: "pending", group: "Existing" },
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "subtask.jsonl");
 		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(createResult("one", "Existing", transcriptPath));
@@ -222,16 +222,16 @@ describe("TaskTool auto-roster", () => {
 		await tool.execute("call-mixed-roster", {
 			agent: "task",
 			tasks: [
-				{ id: "existing", description: "Existing", assignment: "## Target\n- Task: Existing", todoRef: "task-1" },
-				{ id: "new-task", description: "New task", assignment: "## Target\n- Task: New task" },
+				{ id: "existing", description: "Existing", assignment: "## Target\n- Task: Existing", ref: "task-1" },
+				{ id: "new-task", description: "New task", assignment: "## Target\n- Task: New task", ref: null },
 			],
 		});
 
-		const groups = session.getCurrentGroups();
-		expect(groups).toHaveLength(2);
-		expect(groups[0]?.tasks[0]?.id).toBe("task-1");
-		expect(groups[1]?.tasks).toHaveLength(1);
-		expect(groups[1]?.tasks[0]).toMatchObject({ content: "New task" });
+		const nodes = session.getCurrentNodes();
+		expect(nodes).toHaveLength(2);
+		expect(nodes[0]?.id).toBe("task-1");
+		expect(nodes.filter(n => n.group === "Tasks")).toHaveLength(1);
+		expect(nodes.find(n => n.content === "New task")).toMatchObject({ content: "New task" });
 	});
 
 	it("uses the provided phase name for auto-created work", async () => {
@@ -250,10 +250,10 @@ describe("TaskTool auto-roster", () => {
 		await tool.execute("call-phase-roster", {
 			agent: "task",
 			phase: "Investigation",
-			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect" }],
+			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect", ref: null }],
 		});
 
-		expect(session.snapshots[0]?.[0]?.name).toBe("Investigation");
+		expect(session.snapshots[0]?.[0]?.group).toBe("Investigation");
 	});
 
 	it("suppresses auto-roster when agent roster is disabled or setting is off", async () => {
@@ -276,9 +276,9 @@ describe("TaskTool auto-roster", () => {
 		);
 		await (await TaskTool.create(rosterSuppressed)).execute("call-roster-false", {
 			agent: "quick_task",
-			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect" }],
+			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect", ref: null }],
 		});
-		expect(rosterSuppressed.getCurrentGroups()).toEqual([]);
+		expect(rosterSuppressed.getCurrentNodes()).toEqual([]);
 
 		const settingSuppressed = createSession(
 			tempDir,
@@ -291,9 +291,9 @@ describe("TaskTool auto-roster", () => {
 		);
 		await (await TaskTool.create(settingSuppressed)).execute("call-auto-roster-off", {
 			agent: "quick_task",
-			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect" }],
+			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect", ref: null }],
 		});
-		expect(settingSuppressed.getCurrentGroups()).toEqual([]);
+		expect(settingSuppressed.getCurrentNodes()).toEqual([]);
 	});
 
 	it("marks auto-created tasks failed on abort without leaving pending items", async () => {
@@ -320,14 +320,14 @@ describe("TaskTool auto-roster", () => {
 			{
 				agent: "task",
 				tasks: [
-					{ id: "a", description: "A", assignment: "## Target\n- Task: A" },
-					{ id: "b", description: "B", assignment: "## Target\n- Task: B", blockers: ["a"] },
+					{ id: "a", description: "A", assignment: "## Target\n- Task: A", ref: null },
+					{ id: "b", description: "B", assignment: "## Target\n- Task: B", blockers: ["a"], ref: null },
 				],
 			},
 			controller.signal,
 		);
 
-		const finalTasks = session.getCurrentGroups()[0]?.tasks ?? [];
+		const finalTasks = session.getCurrentNodes();
 		expect(finalTasks.map(task => task.status)).toEqual(["failed", "failed"]);
 		expect(finalTasks.some(task => task.status === "pending")).toBe(false);
 	});
@@ -356,14 +356,14 @@ describe("TaskTool auto-roster", () => {
 			{
 				agent: "task",
 				tasks: [
-					{ id: "a", description: "A", assignment: "## Target\n- Task: A" },
-					{ id: "b", description: "B", assignment: "## Target\n- Task: B", blockers: ["a"] },
+					{ id: "a", description: "A", assignment: "## Target\n- Task: A", ref: null },
+					{ id: "b", description: "B", assignment: "## Target\n- Task: B", blockers: ["a"], ref: null },
 				],
 			},
 			controller.signal,
 		);
 
-		const finalTasks = session.getCurrentGroups()[0]?.tasks ?? [];
+		const finalTasks = session.getCurrentNodes();
 		for (const task of finalTasks) {
 			expect(task.delegation?.sessionId).not.toBe("pending");
 			expect(task.delegation?.sessionId).toBe("skipped");
@@ -394,14 +394,14 @@ describe("TaskTool auto-roster", () => {
 			{
 				agent: "task",
 				tasks: [
-					{ id: "a", description: "A", assignment: "## Target\n- Task: A" },
-					{ id: "b", description: "B", assignment: "## Target\n- Task: B", blockers: ["a"] },
+					{ id: "a", description: "A", assignment: "## Target\n- Task: A", ref: null },
+					{ id: "b", description: "B", assignment: "## Target\n- Task: B", blockers: ["a"], ref: null },
 				],
 			},
 			controller.signal,
 		);
 
-		const finalTasks = session.getCurrentGroups()[0]?.tasks ?? [];
+		const finalTasks = session.getCurrentNodes();
 		expect(finalTasks[0]?.delegation?.result?.error).toBeDefined();
 		expect(finalTasks[1]?.delegation?.result?.error).toBeDefined();
 	});
@@ -421,10 +421,10 @@ describe("TaskTool auto-roster", () => {
 
 		await tool.execute("call-todos-disabled", {
 			agent: "task",
-			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect" }],
+			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect", ref: null }],
 		});
 
-		expect(session.getCurrentGroups()).toEqual([]);
+		expect(session.getCurrentNodes()).toEqual([]);
 	});
 
 	it("returns error without orphan items when async enabled but no manager", async () => {
@@ -442,12 +442,12 @@ describe("TaskTool auto-roster", () => {
 
 		const result = await tool.execute("call-async-no-manager", {
 			agent: "task",
-			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect" }],
+			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect", ref: null }],
 		});
 
 		const text = result.content.find(p => p.type === "text")?.text ?? "";
 		expect(text).toContain("no async job manager");
-		expect(session.getCurrentGroups()).toEqual([]);
+		expect(session.getCurrentNodes()).toEqual([]);
 	});
 
 	it("sync path still auto-creates roster items after guard", async () => {
@@ -465,11 +465,11 @@ describe("TaskTool auto-roster", () => {
 
 		await tool.execute("call-sync-auto-roster", {
 			agent: "task",
-			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect" }],
+			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect", ref: null }],
 		});
 
 		expect(session.snapshots.length).toBeGreaterThan(0);
-		expect(session.snapshots[0]?.[0]?.tasks[0]).toMatchObject({ content: "Inspect" });
+  expect(session.snapshots[0]?.[0]).toMatchObject({ content: "Inspect" });
 	});
 
 	it("async + blocking agent still creates roster items", async () => {
@@ -491,11 +491,11 @@ describe("TaskTool auto-roster", () => {
 
 		await tool.execute("call-async-blocking", {
 			agent: "task",
-			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect" }],
+			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect", ref: null }],
 		});
 
 		expect(session.snapshots.length).toBeGreaterThan(0);
-		expect(session.snapshots[0]?.[0]?.tasks[0]).toMatchObject({ content: "Inspect" });
+  expect(session.snapshots[0]?.[0]).toMatchObject({ content: "Inspect" });
 	});
 
 	describe("phase name derivation", () => {
@@ -515,10 +515,10 @@ describe("TaskTool auto-roster", () => {
 			await tool.execute("call-phase-goal", {
 				agent: "task",
 				context: "## Goal\nRename symbols",
-				tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target" }],
+				tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target", ref: null }],
 			});
 
-			expect(session.snapshots[0]?.[0]?.name).toBe("Tasks");
+			expect(session.snapshots[0]?.[0]?.group).toBe("Tasks");
 		});
 
 		it("uses first non-structural heading", async () => {
@@ -537,10 +537,10 @@ describe("TaskTool auto-roster", () => {
 			await tool.execute("call-phase-investigation", {
 				agent: "task",
 				context: "# Investigation\n## Goal\nRename symbols",
-				tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target" }],
+				tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target", ref: null }],
 			});
 
-			expect(session.snapshots[0]?.[0]?.name).toBe("Investigation");
+ 		expect(session.snapshots[0]?.[0]?.group).toBe("Investigation");
 		});
 
 		it("falls back to Tasks when all headings are structural", async () => {
@@ -559,10 +559,10 @@ describe("TaskTool auto-roster", () => {
 			await tool.execute("call-phase-all-structural", {
 				agent: "task",
 				context: "## Goal\n## Constraints\n## Acceptance",
-				tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target" }],
+				tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target", ref: null }],
 			});
 
-			expect(session.snapshots[0]?.[0]?.name).toBe("Tasks");
+			expect(session.snapshots[0]?.[0]?.group).toBe("Tasks");
 		});
 
 		it("does not skip headings that contain skip-list word as prefix", async () => {
@@ -581,10 +581,10 @@ describe("TaskTool auto-roster", () => {
 			await tool.execute("call-phase-goals-prefix", {
 				agent: "task",
 				context: "## Goals for Sprint 3\nSome content",
-				tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target" }],
+				tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target", ref: null }],
 			});
 
-			expect(session.snapshots[0]?.[0]?.name).toBe("Goals for Sprint 3");
+			expect(session.snapshots[0]?.[0]?.group).toBe("Goals for Sprint 3");
 		});
 
 		it("skips Non-goals and API Contract headings", async () => {
@@ -603,10 +603,10 @@ describe("TaskTool auto-roster", () => {
 			await tool.execute("call-phase-nogoals", {
 				agent: "task",
 				context: "## Non-goals\nDon't change tests\n## API Contract\nExact types",
-				tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target" }],
+				tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target", ref: null }],
 			});
 
-			expect(session.snapshots[0]?.[0]?.name).toBe("Tasks");
+			expect(session.snapshots[0]?.[0]?.group).toBe("Tasks");
 		});
 	});
 });

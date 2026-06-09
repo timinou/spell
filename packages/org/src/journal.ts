@@ -30,14 +30,13 @@ export interface JournalTodoItem {
 	status: "pending" | "in_progress" | "completed" | "abandoned" | "failed" | "gate_failed";
 	notes?: string;
 	details?: string;
-	gateCommit?: boolean;
-	gateArtifact?: string;
-	gateCmd?: string;
-	gateLlm?: string;
-	verifyCmd?: string;
+	/** Verification gates. commit|artifact|cmd gate completion; review is advisory. */
+	verify?: { commit?: boolean; artifact?: string; cmd?: string; review?: string };
 	blockers?: string[];
-	orgItemId?: string;
-	orgItemClosingId?: string;
+	/** Linkage to a roster id or org://ITEM-ID. */
+	ref?: string | null;
+	/** When true, completing this node closes its org ref. */
+	closesRef?: boolean;
 	deferralFupId?: string;
 }
 
@@ -84,14 +83,13 @@ function serializeJournalOrg(groups: JournalTodoGroup[], sessionId: string, date
 			lines.push(":PROPERTIES:");
 			lines.push(`:TASK_ID: ${task.id}`);
 			lines.push(`:STATUS: ${task.status}`);
-			if (task.gateCommit) lines.push(":GATE_COMMIT: true");
-			if (task.gateArtifact) lines.push(`:GATE_ARTIFACT: ${task.gateArtifact}`);
-			if (task.gateCmd) lines.push(`:GATE_CMD: ${task.gateCmd}`);
-			if (task.gateLlm) lines.push(`:GATE_LLM: ${task.gateLlm}`);
-			if (task.verifyCmd) lines.push(`:VERIFY_CMD: ${task.verifyCmd}`);
+			if (task.verify?.commit) lines.push(":VERIFY_COMMIT: true");
+			if (task.verify?.artifact) lines.push(`:VERIFY_ARTIFACT: ${task.verify.artifact}`);
+			if (task.verify?.cmd) lines.push(`:VERIFY_CMD: ${task.verify.cmd}`);
+			if (task.verify?.review) lines.push(`:VERIFY_REVIEW: ${task.verify.review}`);
 			if (task.blockers?.length) lines.push(`:DEPENDS: ${task.blockers.join(" ")}`);
-			if (task.orgItemId) lines.push(`:ORG_ITEM_ID: ${task.orgItemId}`);
-			if (task.orgItemClosingId) lines.push(`:ORG_ITEM_CLOSING_ID: ${task.orgItemClosingId}`);
+			if (task.ref) lines.push(`:REF: ${task.ref}`);
+			if (task.closesRef) lines.push(":CLOSES_REF: true");
 			if (task.deferralFupId) lines.push(`:DEFERRED_TO: ${task.deferralFupId}`);
 			lines.push(":END:");
 

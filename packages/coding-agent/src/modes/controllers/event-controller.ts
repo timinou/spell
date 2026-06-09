@@ -10,7 +10,7 @@ import { TodoReminderComponent } from "../../modes/components/todo-reminder";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { TtsrNotificationComponent } from "../../modes/components/ttsr-notification";
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
-import type { InteractiveModeContext, TodoGroup } from "../../modes/types";
+import type { InteractiveModeContext, TodoNode } from "../../modes/types";
 import { finalizeOrphanPendingTools } from "../../modes/utils/finalize-pending-tools";
 import { reapGhostStreamingCells } from "../../modes/utils/reap-ghost-streaming-cells";
 import type { AgentSessionEvent } from "../../session/agent-session";
@@ -556,7 +556,7 @@ export class EventController {
 						this.#backgroundToolCallIds.delete(event.toolCallId);
 					}
 					if (event.toolName === "task") {
-						this.ctx.setTodos(this.ctx.session.getTodoGroups());
+						this.ctx.setTodos(this.ctx.session.getTodoNodes());
 					}
 					this.ctx.ui.requestRender();
 				}
@@ -623,7 +623,7 @@ export class EventController {
 							this.#backgroundToolCallIds.delete(event.toolCallId);
 						}
 						if (event.toolName === "task") {
-							this.ctx.setTodos(this.ctx.session.getTodoGroups());
+ 						this.ctx.setTodos(this.ctx.session.getTodoNodes());
 							const details = event.result.details as { results?: unknown[] } | undefined;
 							if (!isBackgroundRunning && Array.isArray(details?.results) && details.results.length > 0) {
 								this.ctx.recordSubagentResults?.(details.results as never);
@@ -634,10 +634,9 @@ export class EventController {
 				}
 				// Update todo display when todo_write tool completes
 				if (event.toolName === "todo_write" && !event.isError) {
-					const details = event.result.details as { groups?: TodoGroup[]; phases?: TodoGroup[] } | undefined;
-					const groups = details?.groups ?? details?.phases;
-					if (groups) {
-						this.ctx.setTodos(groups);
+					const details = event.result.details as { nodes?: TodoNode[] } | undefined;
+					if (details?.nodes) {
+						this.ctx.setTodos(details.nodes);
 					}
 				} else if (event.toolName === "todo_write" && event.isError) {
 					const textContent = event.result.content.find(

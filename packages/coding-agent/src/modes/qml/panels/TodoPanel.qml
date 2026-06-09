@@ -117,45 +117,45 @@ Item {
                                 Flow {
                                     Layout.fillWidth: true
                                     spacing: SpellUI.SpellTheme.spacingS
-                                    visible: (modelData.gateCommit === true) ||
-                                             (typeof modelData.gateArtifact === "string" && modelData.gateArtifact.length > 0) ||
-                                             (typeof modelData.gateCmd === "string" && modelData.gateCmd.length > 0) ||
-                                             (typeof modelData.verifyCmd === "string" && modelData.verifyCmd.length > 0)
+                                    visible: (modelData.verifyCommit === true) ||
+                                             (typeof modelData.verifyArtifact === "string" && modelData.verifyArtifact.length > 0) ||
+                                             (typeof modelData.verifyCmd === "string" && modelData.verifyCmd.length > 0) ||
+                                             (typeof modelData.verifyReview === "string" && modelData.verifyReview.length > 0)
 
                                     CheckBox {
-                                        objectName: "gateCommit_" + (modelData.id || "")
+                                        objectName: "verifyCommit_" + (modelData.id || "")
                                         text: "commit"
-                                        checked: modelData.gateCommit === true
+                                        checked: modelData.verifyCommit === true
                                         font.family: SpellUI.SpellTheme.monoFontFamily
                                         font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                                        onToggled: todoPanel.controlRequested(modelData.id || "", "gateCommit", checked)
+                                        onToggled: todoPanel.controlRequested(modelData.id || "", "commit", checked)
                                     }
 
                                     CheckBox {
-                                        objectName: "gateArtifact_" + (modelData.id || "")
+                                        objectName: "verifyArtifact_" + (modelData.id || "")
                                         text: "artifact"
-                                        checked: typeof modelData.gateArtifact === "string" && modelData.gateArtifact.length > 0
+                                        checked: typeof modelData.verifyArtifact === "string" && modelData.verifyArtifact.length > 0
                                         font.family: SpellUI.SpellTheme.monoFontFamily
                                         font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                                        onToggled: todoPanel.controlRequested(modelData.id || "", "gateArtifact", checked)
-                                    }
-
-                                    CheckBox {
-                                        objectName: "gateCmd_" + (modelData.id || "")
-                                        text: "cmd"
-                                        checked: typeof modelData.gateCmd === "string" && modelData.gateCmd.length > 0
-                                        font.family: SpellUI.SpellTheme.monoFontFamily
-                                        font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                                        onToggled: todoPanel.controlRequested(modelData.id || "", "gateCmd", checked)
+                                        onToggled: todoPanel.controlRequested(modelData.id || "", "artifact", checked)
                                     }
 
                                     CheckBox {
                                         objectName: "verifyCmd_" + (modelData.id || "")
-                                        text: "verify"
+                                        text: "cmd"
                                         checked: typeof modelData.verifyCmd === "string" && modelData.verifyCmd.length > 0
                                         font.family: SpellUI.SpellTheme.monoFontFamily
                                         font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
-                                        onToggled: todoPanel.controlRequested(modelData.id || "", "verifyCmd", checked)
+                                        onToggled: todoPanel.controlRequested(modelData.id || "", "cmd", checked)
+                                    }
+
+                                    CheckBox {
+                                        objectName: "verifyReview_" + (modelData.id || "")
+                                        text: "review"
+                                        checked: typeof modelData.verifyReview === "string" && modelData.verifyReview.length > 0
+                                        font.family: SpellUI.SpellTheme.monoFontFamily
+                                        font.pixelSize: SpellUI.SpellTheme.fontSizeSmall
+                                        onToggled: todoPanel.controlRequested(modelData.id || "", "review", checked)
                                     }
                                 }
                             }

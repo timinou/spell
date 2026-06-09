@@ -23,19 +23,27 @@ export interface TaskPolicyMatch {
 	layer: string;
 }
 
-export interface TaskPolicyGates {
-	gateCommit?: boolean;
-	gateArtifact?: string;
-	gateCmd?: string;
-	gateLlm?: string;
-	verifyCmd?: string;
+/**
+ * Verification gates a policy applies to a layer. Shares the `verify{}`
+ * vocabulary with {@link TodoNode}: `commit|artifact|cmd` gate completion,
+ * `review` is advisory. (The legacy `gate*`/`verifyCmd` names were folded into
+ * this shape in PLAN-328; `verify-cmd` advisory commands now map to `cmd`.)
+ */
+export interface TaskVerify {
+	commit?: boolean;
+	artifact?: string;
+	cmd?: string;
+	review?: string;
 }
+
+/** @deprecated Alias retained for readability at call sites; identical to {@link TaskVerify}. */
+export type TaskPolicyGates = TaskVerify;
 
 export interface TaskPolicy {
 	name: string;
 	description?: string;
 	match: TaskPolicyMatch;
-	gates: TaskPolicyGates;
+	verify: TaskVerify;
 	inject?: string;
 }
 
@@ -122,15 +130,15 @@ export function mergePolicies(
 // =============================================================================
 
 /** Compute merged gates from all policies matching the given layer. */
-export function resolveGates(layer: string | undefined, policies: TaskPolicy[]): TaskPolicyGates {
+/** Compute merged verify gates from all policies matching the given layer. */
+export function resolveGates(layer: string | undefined, policies: TaskPolicy[]): TaskVerify {
 	const matching = matchPolicies(layer, policies);
-	const merged: TaskPolicyGates = {};
+	const merged: TaskVerify = {};
 	for (const policy of matching) {
-		if (policy.gates.gateCommit !== undefined) merged.gateCommit = policy.gates.gateCommit;
-		if (policy.gates.gateArtifact !== undefined) merged.gateArtifact = policy.gates.gateArtifact;
-		if (policy.gates.gateCmd !== undefined) merged.gateCmd = policy.gates.gateCmd;
-		if (policy.gates.gateLlm !== undefined) merged.gateLlm = policy.gates.gateLlm;
-		if (policy.gates.verifyCmd !== undefined) merged.verifyCmd = policy.gates.verifyCmd;
+		if (policy.verify.commit !== undefined) merged.commit = policy.verify.commit;
+		if (policy.verify.artifact !== undefined) merged.artifact = policy.verify.artifact;
+		if (policy.verify.cmd !== undefined) merged.cmd = policy.verify.cmd;
+		if (policy.verify.review !== undefined) merged.review = policy.verify.review;
 	}
 	return merged;
 }
@@ -146,18 +154,21 @@ export function resolveInjectText(layer: string | undefined, policies: TaskPolic
  * Apply policy gates to a task, respecting existing explicit gates.
  * Existing gates are never overwritten — policy gates fill in missing fields.
  */
+/**
+ * Apply policy verify gates to a node, respecting existing explicit gates.
+ * Existing fields are never overwritten — policy gates fill in missing ones.
+ */
 export function applyPolicyGates(
-	existingGates: TaskPolicyGates,
+	existingVerify: TaskVerify,
 	layer: string | undefined,
 	policies: TaskPolicy[],
-): TaskPolicyGates {
-	const policyGates = resolveGates(layer, policies);
+): TaskVerify {
+	const policyVerify = resolveGates(layer, policies);
 	return {
-		gateCommit: existingGates.gateCommit ?? policyGates.gateCommit,
-		gateArtifact: existingGates.gateArtifact ?? policyGates.gateArtifact,
-		gateCmd: existingGates.gateCmd ?? policyGates.gateCmd,
-		gateLlm: existingGates.gateLlm ?? policyGates.gateLlm,
-		verifyCmd: existingGates.verifyCmd ?? policyGates.verifyCmd,
+		commit: existingVerify.commit ?? policyVerify.commit,
+		artifact: existingVerify.artifact ?? policyVerify.artifact,
+		cmd: existingVerify.cmd ?? policyVerify.cmd,
+		review: existingVerify.review ?? policyVerify.review,
 	};
 }
 

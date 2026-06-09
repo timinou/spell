@@ -4,7 +4,8 @@ import subagentPredecessorResultsTemplate from "../prompts/system/subagent-prede
 	type: "text",
 };
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
-import { findTask, type TodoGroup } from "../tools/todo-write";
+import { findNode, type TodoNode } from "../tools/todo-write";
+import { resolveRef } from "./ref-resolver";
 import type { TaskItem } from "./types";
 
 interface RenderResult {
@@ -38,56 +39,55 @@ export function renderTemplate(context: string | undefined, task: TaskItem): Ren
 }
 
 /**
- * Resolve a todoRef against the current todo groups and build a verification
+ * Resolve a roster ref against the current todo groups and build a verification
  * requirements section for the subagent. Returns undefined if the ref is
  * unresolvable or the todo has no gates worth injecting.
  */
 export function resolveVerificationContext(
-	todoRef: string,
-	groups: TodoGroup[],
+	ref: string,
+	nodes: TodoNode[],
 	policies?: TaskPolicy[],
 ): string | undefined {
-	const task = findTask(groups, todoRef);
-	if (!task) return undefined;
+	const node = findNode(nodes, ref);
+	if (!node) return undefined;
 
 	const lines: string[] = [];
-	if (task.gateCmd) lines.push(`You MUST run: \`${task.gateCmd}\` and verify it passes.`);
-	if (task.gateArtifact) lines.push(`You MUST produce artifact at: ${task.gateArtifact}`);
-	if (task.verificationArtifact) {
-		lines.push(`Verification evidence will be persisted at: ${task.verificationArtifact}`);
+	if (node.verify?.cmd) lines.push(`You MUST run: \`${node.verify.cmd}\` and verify it passes.`);
+	if (node.verify?.artifact) lines.push(`You MUST produce artifact at: ${node.verify.artifact}`);
+	if (node.verificationArtifact) {
+		lines.push(`Verification evidence will be persisted at: ${node.verificationArtifact}`);
 	}
-	if (task.gateCommit) lines.push("You MUST commit changes before yielding.");
-	if (task.gateLlm) lines.push(`You MUST self-review against: ${task.gateLlm}`);
-	if (task.verifyCmd) lines.push(`You SHOULD run: \`${task.verifyCmd}\` to verify.`);
-	if (task.orgItemClosingId) {
+	if (node.verify?.commit) lines.push("You MUST commit changes before yielding.");
+	if (node.verify?.review) lines.push(`You MUST self-review against: ${node.verify.review}`);
+	const orgItemId = resolveRef(node.ref).kind === "org" ? (resolveRef(node.ref) as { itemId: string }).itemId : undefined;
+	if (node.closesRef && orgItemId) {
 		lines.push(
-			`You MUST update org item ${task.orgItemClosingId}: set to DOING at start, update with progress, and append completion report when done.`,
+			`You MUST update org item ${orgItemId}: set to DOING at start, update with progress, and append completion report when done.`,
 		);
-	}
-	if (task.orgItemId && !task.orgItemClosingId) {
-		lines.push(`Linked to org item ${task.orgItemId} for lineage tracking (non-gating).`);
+	} else if (orgItemId) {
+		lines.push(`Linked to org item ${orgItemId} for lineage tracking (non-gating).`);
 	}
 
-	if (policies && task.layer) {
-		const injectText = resolveInjectText(task.layer, policies);
+	if (policies && node.layer) {
+		const injectText = resolveInjectText(node.layer, policies);
 		if (injectText) {
 			lines.push("");
-			lines.push(`--- Policy Guidance (layer: ${task.layer}) ---`);
+			lines.push(`--- Policy Guidance (layer: ${node.layer}) ---`);
 			lines.push(injectText);
 		}
 	}
 
 	if (lines.length === 0) return undefined;
 
-	return `--- Verification Requirements (from ${todoRef}) ---\n${lines.join("\n")}`;
+	return `--- Verification Requirements (from ${ref}) ---\n${lines.join("\n")}`;
 }
 
-export function resolvePredecessorResultsContext(todoRef: string, groups: TodoGroup[]): string | undefined {
-	const task = findTask(groups, todoRef);
-	if (!task?.blockers?.length) return undefined;
+export function resolvePredecessorResultsContext(ref: string, nodes: TodoNode[]): string | undefined {
+	const node = findNode(nodes, ref);
+	if (!node?.blockers?.length) return undefined;
 
-	const predecessors = task.blockers
-		.map(blockerId => findTask(groups, blockerId))
+	const predecessors = node.blockers
+		.map(blockerId => findNode(nodes, blockerId))
 		.filter((blocker): blocker is NonNullable<typeof blocker> => blocker !== undefined)
 		.filter(blocker => blocker.status === "completed" && blocker.delegation?.result !== undefined)
 		.map(blocker => ({
@@ -101,7 +101,7 @@ export function resolvePredecessorResultsContext(todoRef: string, groups: TodoGr
 	if (predecessors.length === 0) return undefined;
 
 	return renderPromptTemplate(subagentPredecessorResultsTemplate, {
-		todoRef,
+		todoRef: ref,
 		predecessors,
 	});
 }

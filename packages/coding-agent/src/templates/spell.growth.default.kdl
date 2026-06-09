@@ -4,21 +4,21 @@ layer "outreach" description="Email campaigns, social, ads"
 layer "design" description="Brand assets, visual materials"
 
 policy "content-review" layer="content" {
-    gate-llm "Verify tone matches brand voice guidelines"
-    gate-commit #true
+    verify-review "Verify tone matches brand voice guidelines"
+    verify-commit #true
 }
 
 policy "analytics-review" layer="analytics" {
-    gate-commit #true
+    verify-commit #true
 }
 
 policy "outreach-review" layer="outreach" {
-    gate-llm "Check messaging consistency across channels"
-    gate-commit #true
+    verify-review "Check messaging consistency across channels"
+    verify-commit #true
 }
 
 policy "design-review" layer="design" {
-    gate-commit #true
+    verify-commit #true
 }
 // agents {
 //     rule "explore" {

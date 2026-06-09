@@ -18,114 +18,104 @@ import {
 	resolveVerificationContext,
 } from "@spell/pi-coding-agent/task/template";
 
-import type { TodoGroup, TodoItem } from "@spell/pi-coding-agent/tools/todo-write";
+import type { TodoNode } from "@spell/pi-coding-agent/tools/todo-write";
 
-function makeTask(overrides: Partial<TodoItem> & { id: string; content: string }): TodoItem {
+function makeNode(overrides: Partial<TodoNode> & { id: string; content: string }): TodoNode {
 	return { status: "in_progress", ...overrides };
-}
-
-function makeGroup(id: string, name: string, tasks: TodoItem[]): TodoGroup {
-	return { id, name, tasks };
 }
 
 describe("resolveVerificationContext", () => {
 	test("returns correct block for a todo with all gates set", () => {
-		const groups = [
-			makeGroup("phase-1", "Work", [
-				makeTask({
-					id: "task-1",
-					content: "Build feature",
-					gateCmd: "bun test test/foo.test.ts",
-					gateArtifact: "screenshots/auth-flow.png",
-					gateCommit: true,
-					gateLlm: "check acceptance criteria",
-					verifyCmd: "bun check:ts",
-					orgItemId: "FEAT-001-add-auth",
-					orgItemClosingId: "FEAT-001-add-auth",
-				}),
-			]),
+		const nodes = [
+			makeNode({
+				id: "task-1",
+				content: "Build feature",
+				group: "Work",
+				verify: {
+					cmd: "bun test test/foo.test.ts",
+					artifact: "screenshots/auth-flow.png",
+					commit: true,
+					review: "check acceptance criteria",
+				},
+				ref: "org://FEAT-001-add-auth",
+				closesRef: true,
+			}),
 		];
-		const result = resolveVerificationContext("task-1", groups)!;
+		const result = resolveVerificationContext("task-1", nodes)!;
 		expect(result).toContain("--- Verification Requirements (from task-1) ---");
 		expect(result).toContain("You MUST run: `bun test test/foo.test.ts` and verify it passes.");
 		expect(result).toContain("You MUST produce artifact at: screenshots/auth-flow.png");
 		expect(result).toContain("You MUST commit changes before yielding.");
 		expect(result).toContain("You MUST self-review against: check acceptance criteria");
-		expect(result).toContain("You SHOULD run: `bun check:ts` to verify.");
 		expect(result).toContain("You MUST update org item FEAT-001-add-auth");
 	});
 
 	test("returns undefined for non-existent todoRef", () => {
-		const groups = [makeGroup("phase-1", "Work", [makeTask({ id: "task-1", content: "Exists" })])];
-		expect(resolveVerificationContext("task-99", groups)).toBeUndefined();
+		const nodes = [makeNode({ id: "task-1", content: "Exists", group: "Work" })];
+		expect(resolveVerificationContext("task-99", nodes)).toBeUndefined();
 	});
 
 	test("returns undefined for gateless todo", () => {
-		const groups = [makeGroup("phase-1", "Work", [makeTask({ id: "task-1", content: "No gates" })])];
-		expect(resolveVerificationContext("task-1", groups)).toBeUndefined();
+		const nodes = [makeNode({ id: "task-1", content: "No gates", group: "Work" })];
+		expect(resolveVerificationContext("task-1", nodes)).toBeUndefined();
 	});
 
-	test("returns undefined for empty groups", () => {
+	test("returns undefined for empty nodes", () => {
 		expect(resolveVerificationContext("task-1", [])).toBeUndefined();
 	});
 
-	test("resolves across multiple groups", () => {
-		const groups = [
-			makeGroup("phase-1", "Foundation", [makeTask({ id: "task-1", content: "Schema" })]),
-			makeGroup("phase-2", "Features", [
-				makeTask({
-					id: "task-2",
-					content: "API",
-					gateCmd: "bun test",
-				}),
-			]),
+	test("resolves across multiple nodes", () => {
+		const nodes = [
+			makeNode({ id: "task-1", content: "Schema", group: "Foundation" }),
+			makeNode({
+				id: "task-2",
+				content: "API",
+				group: "Features",
+				verify: { cmd: "bun test" },
+			}),
 		];
-		const result = resolveVerificationContext("task-2", groups)!;
+		const result = resolveVerificationContext("task-2", nodes)!;
 		expect(result).toContain("You MUST run: `bun test`");
 	});
 
-	test("orgItemId-only todo produces context", () => {
-		const groups = [
-			makeGroup("phase-1", "Work", [
-				makeTask({ id: "task-1", content: "Org linked", orgItemId: "FEAT-005-refactor" }),
-			]),
+	test("ref-only todo produces context", () => {
+		const nodes = [
+			makeNode({ id: "task-1", content: "Org linked", group: "Work", ref: "org://FEAT-005-refactor" }),
 		];
-		const result = resolveVerificationContext("task-1", groups)!;
+		const result = resolveVerificationContext("task-1", nodes)!;
 		expect(result).toContain("FEAT-005-refactor");
 		expect(result).toContain("--- Verification Requirements (from task-1) ---");
 	});
 
-	test("verifyCmd alone produces advisory context", () => {
-		const groups = [
-			makeGroup("phase-1", "Work", [makeTask({ id: "task-1", content: "Advisory", verifyCmd: "bun lint" })]),
+	test("review produces verification context", () => {
+		const nodes = [
+			makeNode({ id: "task-1", content: "Advisory", group: "Work", verify: { review: "check lint" } }),
 		];
-		const result = resolveVerificationContext("task-1", groups)!;
-		expect(result).toContain("You SHOULD run: `bun lint` to verify.");
-		expect(result).not.toContain("You MUST");
+		const result = resolveVerificationContext("task-1", nodes)!;
+		expect(result).toContain("You MUST self-review against: check lint");
 	});
 });
 
 describe("resolvePredecessorResultsContext", () => {
 	test("renders completed blocker outputs for dependent tasks", () => {
-		const groups = [
-			makeGroup("phase-1", "Work", [
-				makeTask({
-					id: "task-1",
-					content: "Build schema",
-					status: "completed",
-					delegation: {
-						sessionId: "child-session",
-						transcriptPath: "/tmp/child.jsonl",
-						result: {
-							output: "Schema summary",
-							outputPath: "/tmp/child.md",
-						},
+		const nodes = [
+			makeNode({
+				id: "task-1",
+				content: "Build schema",
+				group: "Work",
+				status: "completed",
+				delegation: {
+					sessionId: "child-session",
+					transcriptPath: "/tmp/child.jsonl",
+					result: {
+						output: "Schema summary",
+						outputPath: "/tmp/child.md",
 					},
-				}),
-				makeTask({ id: "task-2", content: "Build API", blockers: ["task-1"] }),
-			]),
+				},
+			}),
+			makeNode({ id: "task-2", content: "Build API", group: "Work", blockers: ["task-1"] }),
 		];
-		const result = resolvePredecessorResultsContext("task-2", groups)!;
+		const result = resolvePredecessorResultsContext("task-2", nodes)!;
 		expect(result).toContain("--- Predecessor Results (from task-2 blockers) ---");
 		expect(result).toContain("### task-1 — Build schema");
 		expect(result).toContain("Output artifact: /tmp/child.md");
@@ -133,13 +123,11 @@ describe("resolvePredecessorResultsContext", () => {
 	});
 
 	test("returns undefined when blockers have no completed result data", () => {
-		const groups = [
-			makeGroup("phase-1", "Work", [
-				makeTask({ id: "task-1", content: "Build schema", status: "completed" }),
-				makeTask({ id: "task-2", content: "Build API", blockers: ["task-1"] }),
-			]),
+		const nodes = [
+			makeNode({ id: "task-1", content: "Build schema", group: "Work", status: "completed" }),
+			makeNode({ id: "task-2", content: "Build API", group: "Work", blockers: ["task-1"] }),
 		];
-		expect(resolvePredecessorResultsContext("task-2", groups)).toBeUndefined();
+		expect(resolvePredecessorResultsContext("task-2", nodes)).toBeUndefined();
 	});
 });
 
@@ -151,8 +139,7 @@ describe("renderTemplate with augmented assignment", () => {
 		const result = renderTemplate("Shared context", {
 			id: "DoWork",
 			description: "Do work",
-			assignment: augmentedAssignment,
-		});
+			assignment: augmentedAssignment, ref: null });
 		expect(result.task).toContain("--- Verification Requirements (from task-1) ---");
 		expect(result.task).toContain("You MUST run: `bun test`");
 		expect(result.task).toContain("Do the thing.");
@@ -163,8 +150,7 @@ describe("renderTemplate with augmented assignment", () => {
 		const result = renderTemplate("Context", {
 			id: "Plain",
 			description: "Plain task",
-			assignment: "Just an assignment",
-		});
+			assignment: "Just an assignment", ref: null });
 		expect(result.task).not.toContain("Verification Requirements");
 		expect(result.task).toContain("Just an assignment");
 	});
