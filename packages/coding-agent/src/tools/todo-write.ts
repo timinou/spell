@@ -555,6 +555,46 @@ export function hasUnresolvedBlockers(
 	});
 }
 
+/**
+ * Wave depth per non-terminal node = topological level in the blocker DAG.
+ *
+ * A node whose blockers are all terminal (completed/abandoned) sits at wave 1
+ * (ready now); each unmet blocker pushes a dependent one wave deeper. Terminal
+ * nodes are excluded. Pure longest-path over *incomplete* blockers — surfaces
+ * how many sequential rounds of work remain and which nodes can run in parallel.
+ */
+export function computeWaveDepths(
+	nodes: TodoNode[],
+	context: ResolvedTodoContext = { currentSessionId: "current", currentAgentName: "main" },
+): Map<string, number> {
+	const isTerminal = (node: TodoNode): boolean =>
+		node.status === "completed" || node.status === "abandoned";
+	const byId = new Map<string, TodoNode>();
+	for (const node of nodes) byId.set(node.id, node);
+	const depths = new Map<string, number>();
+	const visiting = new Set<string>();
+	const resolve = (ref: string): TodoNode | undefined =>
+		resolveNodeRef(ref, nodes, context) ?? byId.get(ref);
+	const depthOf = (node: TodoNode): number => {
+		if (isTerminal(node)) return 0;
+		const cached = depths.get(node.id);
+		if (cached !== undefined) return cached;
+		if (visiting.has(node.id)) return 1; // cycle guard — treat as ready
+		visiting.add(node.id);
+		let maxBlocker = 0;
+		for (const ref of node.blockers ?? []) {
+			const blocker = resolve(ref);
+			if (!blocker || isTerminal(blocker)) continue;
+			maxBlocker = Math.max(maxBlocker, depthOf(blocker));
+		}
+		visiting.delete(node.id);
+		const depth = maxBlocker + 1;
+		depths.set(node.id, depth);
+		return depth;
+	};
+	for (const node of nodes) if (!isTerminal(node)) depthOf(node);
+	return depths;
+}
 export function isNodeBlocked(
 	node: TodoNode,
 	allNodes: TodoNode[],
@@ -1046,6 +1086,12 @@ export function formatSummary({
 	const total = nodes.length;
 	const done = nodes.filter(node => node.status === "completed" || node.status === "abandoned").length;
 	lines.push(`Progress: ${done}/${total} complete.`);
+	const waveDepths = computeWaveDepths(nodes);
+	const maxWave = Math.max(0, ...waveDepths.values());
+	if (maxWave >= 2) {
+		const readyCount = [...waveDepths.values()].filter(depth => depth === 1).length;
+		lines.push(`Waves: ${maxWave} (w1 ready: ${readyCount} parallel).`);
+	}
 	for (const node of nodes) {
 		const blocked = isNodeBlocked(node, nodes);
 		const sym =
@@ -1060,7 +1106,9 @@ export function formatSummary({
 							: blocked
 								? "⛔"
 								: "○";
-		lines.push(`    ${sym} ${node.id} ${formatNodeContent(node)}`);
+		const wave = maxWave >= 2 ? waveDepths.get(node.id) : undefined;
+		const waveBadge = wave !== undefined ? ` [w${wave}]` : "";
+		lines.push(`    ${sym} ${node.id}${waveBadge} ${formatNodeContent(node)}`);
 	}
 
 	if (completedGatedNodes.length > 0) {
@@ -1131,7 +1179,12 @@ export function formatSummary({
 			for (const gateFailure of failure.failures) {
 				lines.push(`  - ${gateFailure.gate}: expected \`${gateFailure.expected}\`, ${gateFailure.detail}`);
 			}
-			lines.push(`  Status remains ${failure.previousStatus ?? "pending"}. Fix the missing evidence, then retry with verified: true.`);
+			const reviewOnly = failure.failures.every(gateFailure => gateFailure.gate === "verify.review");
+			lines.push(
+				reviewOnly
+					? `  Status remains ${failure.previousStatus ?? "in_progress"}. Address the review feedback, then mark completed again.`
+					: `  Status remains ${failure.previousStatus ?? "pending"}. Fix the missing evidence, then retry with verified: true.`,
+			);
 		}
 	}
 
@@ -1183,10 +1236,13 @@ async function verifyDirectWorkCompletions(
 	params: TodoWriteParams,
 	previousNodes: TodoNode[],
 	nextNodes: TodoNode[],
+	reviewNotices: string[] = [],
 ): Promise<GateVerificationFailure[]> {
 	const gateVerificationFailures: GateVerificationFailure[] = [];
 	const executions = [...(session.getBashHistory?.() ?? [])];
 	const currentStatuses = buildPreviousStatusMap(previousNodes);
+	const reviewGatingEnabled = session.settings.get("todo.reviewJudge") !== false;
+	const reviewJudge = reviewGatingEnabled ? session.getReviewJudge?.() : undefined;
 
 	for (const input of params.tasks) {
 		if (!input.id) continue;
@@ -1235,6 +1291,28 @@ async function verifyDirectWorkCompletions(
 				const previousStatus = currentStatuses.get(node.id);
 				node.status = previousStatus ?? "pending";
 				gateVerificationFailures.push({ node, previousStatus, failures });
+				continue;
+			}
+		}
+
+		// verify.review LLM-gating (single-phase: the judge IS the verification).
+		if (input.status === "completed" && node.status === "completed" && node.verify?.review && reviewJudge) {
+			const verdict = await reviewJudge({
+				nodeId: node.id,
+				content: node.content,
+				criteria: node.verify.review,
+				context: session.getCompactContext?.() ?? "",
+			});
+			if (verdict.degraded) {
+				reviewNotices.push(`INFO: ${node.id} review not gated (${verdict.reason}).`);
+			} else if (!verdict.pass) {
+				const previousStatus = currentStatuses.get(node.id);
+				node.status = previousStatus ?? "in_progress";
+				gateVerificationFailures.push({
+					node,
+					previousStatus,
+					failures: [{ gate: "verify.review", expected: node.verify.review, detail: verdict.reason || "Review criteria were not met." }],
+				});
 				continue;
 			}
 		}
@@ -1374,7 +1452,8 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 			const { file: updated, errors, warnings, completedGroups, completedGatedNodes, pendingVerificationNodes, pendingDeferralNodes } =
 				applyReconcile(current, params, previousNodes, activePolicies, context, isolationMode);
 			await captureDirectWorkBaselines(this.session, previousNodes, updated.nodes);
-			const gateVerificationFailures = await verifyDirectWorkCompletions(this.session, params, previousNodes, updated.nodes);
+			const reviewNotices: string[] = [];
+			const gateVerificationFailures = await verifyDirectWorkCompletions(this.session, params, previousNodes, updated.nodes, reviewNotices);
 			const waveSnapshotRequests = collectWaveSnapshotRequests(previousNodes, updated.nodes);
 			const waveSnapshotNotices: string[] = [];
 			this.session.setTodoNodes?.(updated.nodes, params.reset ? { reset: true } : undefined);
@@ -1408,7 +1487,7 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 				gateVerificationFailures,
 				pendingDeferralNodes,
 			});
-			const extraNotices = [...waveSnapshotNotices, ...orgLifecycleNotices];
+			const extraNotices = [...waveSnapshotNotices, ...orgLifecycleNotices, ...reviewNotices];
 			const text = extraNotices.length > 0 ? `${summary}\n${extraNotices.join("\n")}` : summary;
 
 			return {

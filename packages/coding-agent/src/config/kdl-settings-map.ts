@@ -449,6 +449,7 @@ export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> =
 	"todo.reminders": { block: "tools", nodePath: "todo", accessor: "property", propertyName: "reminders" },
 	"todo.reminders.max": { block: "tools", nodePath: "todo", accessor: "property", propertyName: "reminders-max" },
 	"todo.eager": { block: "tools", nodePath: "todo", accessor: "property", propertyName: "eager" },
+	"todo.reviewJudge": { block: "tools", nodePath: "todo", accessor: "property", propertyName: "review-judge" },
 	"find.enabled": { block: "tools", nodePath: "find", accessor: "property", propertyName: "enabled" },
 	"grep.enabled": { block: "tools", nodePath: "grep", accessor: "property", propertyName: "enabled" },
 	"grep.contextBefore": {
@@ -513,6 +514,7 @@ export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> =
 	},
 	"task.eager": { block: "tasks", nodePath: "eager", accessor: "argument" },
 	"task.autoRoster": { block: "tasks", nodePath: "auto-roster", accessor: "argument" },
+	"task.interactive": { block: "tasks", nodePath: "interactive", accessor: "argument" },
 	"task.maxConcurrency": { block: "tasks", nodePath: "max-concurrency", accessor: "argument" },
 	"task.maxRecursionDepth": { block: "tasks", nodePath: "max-recursion", accessor: "argument" },
 	"task.maxToolCalls": { block: "tasks", nodePath: "max-tool-calls", accessor: "argument" },

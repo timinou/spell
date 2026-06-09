@@ -41,10 +41,13 @@ Use `todo_write` for roster tracking, gates, or blockers before delegating work.
 
 ```
 verify { cmd | artifact | commit }  → REQUIRED → two-phase: resubmit { status:"completed", verified:true }
-verify { review }                   → advisory self-review, never gates
+verify { review }                   → model-judged on completion: criteria met → passes; unmet → reverts (single-phase, no verified flag). Fails open if judge unavailable. Disable via todo.reviewJudge=false.
 
 phase 1 → "Verification Required" lists imperatives (do these, then resubmit verified:true)
 phase 2 → "Verification Cleared"  is a receipt (already done — no further action)
+
+When the roster has a blocker DAG ≥2 deep the summary prints a `Waves: N` line
+and `[wK]` badges — same wave = runnable in parallel now.
 ```
 
 <critical>

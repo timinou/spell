@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { isEnoent } from "@spell/pi-utils";
 import { $ } from "bun";
 
-export type GateType = "gateCmd" | "gateCommit" | "gateArtifact";
+export type GateType = "gateCmd" | "gateCommit" | "gateArtifact" | "verify.review";
 
 export interface GateFailure {
 	gate: GateType;

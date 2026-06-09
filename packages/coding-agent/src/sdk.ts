@@ -138,6 +138,7 @@ import {
 } from "./tools/canvas";
 import { ToolContextStore } from "./tools/context";
 import { getImageGenerationToolsWithRegistry } from "./tools/image-generation";
+import { createModelReviewJudge } from "./tools/review-judge";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
 import { PendingActionStore } from "./tools/pending-action";
 import { EventBus } from "./utils/event-bus";
@@ -1063,6 +1064,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		getBashHistory: () => session.getBashHistory(),
 		captureGitBaseline: () => session.captureGitBaseline(),
 		compareGitBaseline: baseline => session.compareGitBaseline(baseline),
+		getReviewJudge: () => {
+			const activeModel = agent?.state.model ?? model;
+			return activeModel ? createModelReviewJudge(activeModel) : undefined;
+		},
 	};
 
 	// Initialize internal URL router for internal protocols (agent://, artifact://, memory://, skill://, rule://, mcp://, local://, task://, data://)

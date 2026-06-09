@@ -233,6 +233,8 @@ export interface ToolSession {
 	compareGitBaseline?: (
 		baseline: import("../session/git-baseline").GitBaseline,
 	) => Promise<import("../session/git-baseline").GitBaselineDiff | null>;
+	/** LLM judge for verify.review gating (PLAN-330b). Absent → review stays advisory. */
+	getReviewJudge?: () => import("./review-judge").ReviewJudge | undefined;
 }
 
 type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;

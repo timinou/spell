@@ -1041,6 +1041,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"todo.reviewJudge": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			label: "Gate verify.review with a model",
+			description:
+				"When a completed todo carries verify.review acceptance criteria, judge them with a one-shot model call and block completion if unmet (fail-open on error). Disable to keep verify.review advisory-only.",
+		},
+	},
+
 	// Search and AST tools
 	"find.enabled": {
 		type: "boolean",
@@ -1332,6 +1343,17 @@ export const SETTINGS_SCHEMA = {
 			tab: "tasks",
 			label: "Auto-Roster",
 			description: "Automatically create todo roster entries when dispatching tasks",
+		},
+	},
+
+	"task.interactive": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tasks",
+			label: "Interactive Tasks",
+			description:
+				"Let subagents ask the orchestrator questions mid-run via the ask_orchestrator tool. The orchestrator answers from a context snapshot and routes the answer to relevant tasks. Independent of async execution.",
 		},
 	},
 
