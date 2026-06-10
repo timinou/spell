@@ -74,6 +74,7 @@ export function createAnalyzeFileTool(options: {
 					id: `AnalyzeFile${index + 1}`,
 					description: `Analyze ${file}`,
 					assignment: prompt,
+					ref: null,
 				};
 			});
 			const taskParams: TaskParams = {

@@ -38,7 +38,7 @@ type SemVer = {
 };
 
 type GeminiKind = "pro" | "flash";
-type AnthropicKind = "opus" | "sonnet";
+type AnthropicKind = "opus" | "sonnet" | "fable";
 type OpenAIVariant = "base" | "codex" | "codex-max" | "codex-mini" | "codex-spark" | "max" | "nano";
 
 interface GeminiModel {
@@ -457,7 +457,7 @@ function parseGeminiModel(modelId: string): GeminiModel | null {
 }
 
 function parseAnthropicModel(modelId: string): AnthropicModel | null {
-	const match = /claude-(opus|sonnet)-(\d+(?:[.-]\d+){0,2})\b/.exec(modelId);
+	const match = /claude-(opus|sonnet|fable)-(\d+(?:[.-]\d+){0,2})\b/.exec(modelId);
 	if (!match) {
 		return null;
 	}
