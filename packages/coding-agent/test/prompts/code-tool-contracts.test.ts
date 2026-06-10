@@ -3,10 +3,10 @@ import * as path from "node:path";
 import type { TemplateContext } from "@spell/pi-coding-agent/config/prompt-templates";
 import { renderPromptTemplate } from "@spell/pi-coding-agent/config/prompt-templates";
 
-import semanticHint from "@spell/pi-coding-agent/prompts/tools/code-hint-semantic.md" with { type: "text" };
-import fallbackHint from "@spell/pi-coding-agent/prompts/tools/code-hint-text-fallback.md" with { type: "text" };
-import grepPrompt from "@spell/pi-coding-agent/prompts/tools/grep.md" with { type: "text" };
-import patchPrompt from "@spell/pi-coding-agent/prompts/tools/patch.md" with { type: "text" };
+import semanticHint from "../../src/prompts/tools/code-hint-semantic.md" with { type: "text" };
+import fallbackHint from "../../src/prompts/tools/code-hint-text-fallback.md" with { type: "text" };
+import grepPrompt from "../../src/prompts/tools/grep.md" with { type: "text" };
+import patchPrompt from "../../src/prompts/tools/patch.md" with { type: "text" };
 
 const systemPromptsDir = path.resolve(import.meta.dir, "../../src/prompts/system");
 

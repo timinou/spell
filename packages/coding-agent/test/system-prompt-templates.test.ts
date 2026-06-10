@@ -172,15 +172,16 @@ describe("system Handlebars prompt templates", () => {
 		expect(rendered).toContain("call `search_tool_bm25` before concluding no such tool exists");
 	});
 
-	test("todo-write prompt includes dependency management content and omits 'On blockers:'", async () => {
+	test("todo-write prompt documents blocker DAG + abandonment (PLAN-328 roster)", async () => {
 		const templatePath = path.join(import.meta.dir, "../src/prompts/tools/todo-write.md");
 		const template = await Bun.file(templatePath).text();
 		const rendered = renderPromptTemplate(template, baseRenderContext);
 
-		expect(rendered).toContain("dependency-management");
 		expect(rendered).toContain("blockers");
+		expect(rendered).toContain("deferralFupId");
+		// Pre-PLAN-328 phrasing must not resurface.
 		expect(rendered).not.toContain("On blockers:");
-		expect(rendered).toContain("On runtime impediments:");
+		expect(rendered).not.toContain("On runtime impediments:");
 	});
 
 	test("system-prompt renders eager task guidance from default settings", async () => {
@@ -195,7 +196,10 @@ describe("system Handlebars prompt templates", () => {
 
 		expect(settings.get("task.eager")).toBe(true);
 		expect(rendered).toContain("### Task tool for parallel work");
-		expect(rendered).toContain("Delegate work to subagents by default");
+		// The base prompt is intentionally neutral on delegation (scope decides);
+		// swarm-by-default voice belongs to mode overlays, not the stable base.
+		expect(rendered).toContain("Keep direct execution for straightforward work");
+		expect(rendered).not.toContain("Delegate work to subagents by default");
 	});
 
 	test("system-prompt renders notation guidance in stable section", async () => {

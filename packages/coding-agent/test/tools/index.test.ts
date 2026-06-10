@@ -239,8 +239,9 @@ describe("TOOL_TIERS", () => {
   });
 
   it("assigns specialized tier to deferred tools", () => {
-    // gateway/loop_* dropped in PLAN-306 W11.4.d (BUILTIN_TOOLS commit 2f6958d7a)
-    const specialized: string[] = ["canvas", "browser", "calc", "lsp"]; // lsp demoted in PLAN-318 W6
+    // gateway/loop_* dropped in PLAN-306 W11.4.d; lsp hard-nuked in FUP-095
+    // (find/edit semantic qualifiers replace it — unregistered ∴ defaults to standard)
+    const specialized: string[] = ["canvas", "browser", "calc"];
     for (const name of specialized) {
       expect(getToolTier(name)).toBe("specialized");
     }
