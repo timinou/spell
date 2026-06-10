@@ -5,7 +5,6 @@ import { renderPromptTemplate } from "@spell/pi-coding-agent/config/prompt-templ
 
 import semanticHint from "../../src/prompts/tools/code-hint-semantic.md" with { type: "text" };
 import fallbackHint from "../../src/prompts/tools/code-hint-text-fallback.md" with { type: "text" };
-import grepPrompt from "../../src/prompts/tools/grep.md" with { type: "text" };
 import patchPrompt from "../../src/prompts/tools/patch.md" with { type: "text" };
 
 const systemPromptsDir = path.resolve(import.meta.dir, "../../src/prompts/system");
@@ -60,14 +59,6 @@ describe("code-edit contract prompts", () => {
 	it("keeps patch mode off code-supported fallback paths", () => {
 		expect(patchPrompt).toContain("only for unsupported plain-text files");
 		expect(patchPrompt).toContain("tighten the structural target instead of falling back to patch mode");
-	});
-
-	it("describes grep semantic and raw-text repo search modes", () => {
-		expect(grepPrompt).toContain(`mode: "auto"`);
-		expect(grepPrompt).toContain(`mode: "rawText"`);
-		expect(grepPrompt).toContain(`mode: "semantic"`);
-		expect(grepPrompt).toContain("targetId");
-		expect(grepPrompt).toContain("scopeTargetId");
 	});
 
 	it("describes code symbols file and workspace modes", () => {
