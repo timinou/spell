@@ -412,6 +412,14 @@ export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> =
 	// ── Tools ────────────────────────────────────────────────────────────
 	"tools.intentTracing": { block: "tools", nodePath: "intent-tracing", accessor: "argument" },
 	"tools.maxTimeout": { block: "tools", nodePath: "max-timeout", accessor: "argument" },
+	// execute max-heap-mb=64  → PTC-Lisp sandbox heap ceiling in MB (0 = runtime default ~50MB;
+	// ptc_runner counts WORDS, 1 word = 8 bytes — converted at the client boundary).
+	"tools.executeMaxHeapMb": {
+		block: "tools",
+		nodePath: "execute",
+		accessor: "property",
+		propertyName: "max-heap-mb",
+	},
 	"bashInterceptor.enabled": {
 		block: "tools",
 		nodePath: "bash-interceptor",
@@ -431,14 +439,6 @@ export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> =
 	"todo.eager": { block: "tools", nodePath: "todo", accessor: "property", propertyName: "eager" },
 	"todo.reviewJudge": { block: "tools", nodePath: "todo", accessor: "property", propertyName: "review-judge" },
 	"find.enabled": { block: "tools", nodePath: "find", accessor: "property", propertyName: "enabled" },
-	"grep.enabled": { block: "tools", nodePath: "grep", accessor: "property", propertyName: "enabled" },
-	"grep.contextBefore": {
-		block: "tools",
-		nodePath: "grep",
-		accessor: "property",
-		propertyName: "context-before",
-	},
-	"grep.contextAfter": { block: "tools", nodePath: "grep", accessor: "property", propertyName: "context-after" },
 	"astGrep.enabled": { block: "tools", nodePath: "ast-grep", accessor: "property", propertyName: "enabled" },
 
 	"renderMermaid.enabled": {

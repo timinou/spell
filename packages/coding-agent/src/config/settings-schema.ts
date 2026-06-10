@@ -317,6 +317,17 @@ export const SETTINGS_SCHEMA = {
 			submenu: true,
 		},
 	},
+	"tools.executeMaxHeapMb": {
+		type: "number",
+		default: 0,
+		ui: {
+			tab: "tools",
+			label: "Execute sandbox max heap (MB)",
+			description:
+				"Heap ceiling for execute PTC-Lisp programs; 0 = runtime default (~50MB). Also the max a per-call max_heap_mb may request. Hard-capped at 256MB",
+			submenu: true,
+		},
+	},
 	"tools.getSpillThreshold": {
 		type: "number",
 		default: 25000,
@@ -1022,38 +1033,6 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			label: "Find",
 			description: "Enable the find tool for file searching",
-		},
-	},
-
-	"grep.enabled": {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "tools",
-			label: "Grep",
-			description: "Enable the grep tool for content searching",
-		},
-	},
-
-	"grep.contextBefore": {
-		type: "number",
-		default: 0,
-		ui: {
-			tab: "tools",
-			label: "Grep Context Before",
-			description: "Lines of context before each grep match",
-			submenu: true,
-		},
-	},
-
-	"grep.contextAfter": {
-		type: "number",
-		default: 0,
-		ui: {
-			tab: "tools",
-			label: "Grep Context After",
-			description: "Lines of context after each grep match",
-			submenu: true,
 		},
 	},
 

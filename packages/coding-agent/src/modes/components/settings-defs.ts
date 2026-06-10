@@ -165,22 +165,6 @@ const OPTION_PROVIDERS: Partial<Record<SettingPath, OptionProvider>> = {
 		{ value: "3", label: "3 reminders" },
 		{ value: "5", label: "5 reminders" },
 	],
-	// Grep context
-	"grep.contextBefore": [
-		{ value: "0", label: "0 lines" },
-		{ value: "1", label: "1 line" },
-		{ value: "2", label: "2 lines" },
-		{ value: "3", label: "3 lines" },
-		{ value: "5", label: "5 lines" },
-	],
-	"grep.contextAfter": [
-		{ value: "0", label: "0 lines" },
-		{ value: "1", label: "1 line" },
-		{ value: "2", label: "2 lines" },
-		{ value: "3", label: "3 lines" },
-		{ value: "5", label: "5 lines" },
-		{ value: "10", label: "10 lines" },
-	],
 	// Autocomplete max visible
 	autocompleteMaxVisible: [
 		{ value: "3", label: "3 items" },

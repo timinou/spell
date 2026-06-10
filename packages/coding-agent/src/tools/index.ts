@@ -37,8 +37,6 @@ import { CreateTool } from "./create";
 import { CodepathEditTool } from "./edit";
 
 import { FetchTool } from "./fetch";
-// REMOVED_PLAN_306_W11: Zero session usage in W0-3 replay corpus
-// import { GatewayTool } from "./gateway";
 import { FindTool } from "./find";
 import { GetTool } from "./get";
 import { GoalsTool } from "./goals-tool";
@@ -88,7 +86,6 @@ export * from "./edit";
 
 export * from "./fetch";
 export * from "./find";
-export * from "./gateway";
 export * from "./get";
 export * from "./goals-tool";
 export * from "./image-generation";
@@ -356,16 +353,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const requestedTools =
 		toolNames && toolNames.length > 0 ? [...new Set(toolNames.map(name => name.toLowerCase()))] : undefined;
 
-	// Auto-include AST counterparts when their text-based sibling is present
-	if (requestedTools) {
-		if (
-			requestedTools.includes("grep") &&
-			!requestedTools.includes("ast_grep") &&
-			session.settings.get("astGrep.enabled")
-		) {
-			requestedTools.push("ast_grep");
-		}
-	}
 	const allTools: Record<string, ToolFactory> = {
 		...BUILTIN_TOOLS,
 		...HIDDEN_TOOLS,
@@ -374,8 +361,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "org") return !!session.settings.get("org.enabled");
 		if (name === "todo_write") return session.settings.get("todo.enabled");
 		if (name === "find") return session.settings.get("find.enabled");
-		if (name === "grep") return session.settings.get("grep.enabled");
-		if (name === "ast_grep") return session.settings.get("astGrep.enabled");
 		if (name === "render_mermaid") return session.settings.get("renderMermaid.enabled");
 
 		if (name === "inspect_image") return session.settings.get("inspect_image.enabled");
