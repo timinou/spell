@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { CodepathEditTool } from "../../src/tools/edit";
 
 describe("PLAN-304 regression — canonical Op surface for symbol-target writes", () => {
-	test("new shape kind:'symbolReplace' is accepted by the tool schema", async () => {
+	test("replace verb on a symbol target is accepted by the tool schema", async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "p304-new-"));
 		const file = path.join(dir, "f.ts");
 		await fs.writeFile(file, "export function foo() { return 1; }\n", "utf-8");
@@ -17,7 +17,7 @@ describe("PLAN-304 regression — canonical Op surface for symbol-target writes"
 				{
 					target: `${file}::foo`,
 					action: {
-						kind: "symbolReplace",
+						kind: "replace",
 						content: "export function foo() { return 9; }",
 					},
 				},
@@ -43,7 +43,7 @@ describe("PLAN-304 regression — canonical Op surface for symbol-target writes"
 // schema layer now exposes the same capability via the new `fileFindReplace`
 // kind. Both spellings must reach the kernel without schema rejection.
 describe("BUG-2026-05-13 — findAndReplace on bare file path", () => {
-	test("new kind:'fileFindReplace' is accepted by the tool schema", async () => {
+	test("replace verb with find on a file target is accepted by the tool schema", async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bug-fnr-new-"));
 		const file = path.join(dir, "f.ts");
 		await fs.writeFile(file, "const oldName = 1;\n", "utf-8");
@@ -54,7 +54,7 @@ describe("BUG-2026-05-13 — findAndReplace on bare file path", () => {
 			operations: [
 				{
 					target: file,
-					action: { kind: "fileFindReplace", find: "oldName", content: "newName" },
+					action: { kind: "replace", find: "oldName", content: "newName" },
 				},
 			],
 		});

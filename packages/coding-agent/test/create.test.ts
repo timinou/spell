@@ -66,6 +66,37 @@ describe("CreateTool", () => {
 		expect(content).toBe("hello");
 	});
 
+	it("serialises JSON-object content the arg-coercion layer parsed string→object", async () => {
+		// Regression: the model emits a `package.json` body as a JSON object; the
+		// validation/coercion layer turns the string into an actual object before
+		// it reaches the tool. Previously create fell into the artifact-URI branch
+		// and threw `undefined is not an object (evaluating 'input.match')`.
+		const tool = new CreateTool(createSession());
+		const result = await tool.execute("t", {
+			path: "pkg.json",
+			content: { name: "demo", version: "1.0.0", scripts: { build: "tsc" } } as never,
+		});
+		expect(result.isError).toBeFalsy();
+		expect(getText(result)).toContain("Created");
+		const content = await fs.readFile(path.join(tmpDir, "pkg.json"), "utf-8");
+		expect(JSON.parse(content)).toEqual({ name: "demo", version: "1.0.0", scripts: { build: "tsc" } });
+	});
+
+	it("serialises JSON-array content coerced away from string", async () => {
+		const tool = new CreateTool(createSession());
+		const result = await tool.execute("t", { path: "arr.json", content: [1, 2, 3] as never });
+		expect(result.isError).toBeFalsy();
+		const content = await fs.readFile(path.join(tmpDir, "arr.json"), "utf-8");
+		expect(JSON.parse(content)).toEqual([1, 2, 3]);
+	});
+
+	it("reports a clear diagnostic for a bytes payload missing its artifactUri", async () => {
+		const tool = new CreateTool(createSession());
+		const result = await tool.execute("t", { path: "x.bin", content: { kind: "bytes" } as never });
+		expect(result.isError).toBeTruthy();
+		expect(getText(result)).toContain("artifact URI");
+	});
+
 	it("rejects creation when file exists without force", async () => {
 		const existingFile = path.join(tmpDir, "exists.txt");
 		await fs.writeFile(existingFile, "old", "utf-8");

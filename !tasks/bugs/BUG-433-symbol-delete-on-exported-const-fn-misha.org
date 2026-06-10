@@ -1,0 +1,30 @@
+#+TITLE: Symbol delete on exported const/fn mishandles export wrapper span
+#+STATE: DONE
+#+SESSION_ID: 15022e9a3d98d40f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-34-47-158Z_15022e9a3d98d40f.jsonl]]
+#+CUSTOM_ID: BUG-433-symbol-delete-on-exported-const-fn-misha
+#+COMPLETION_HASH: 02b432898e6f09c6
+
+* Initial Message
+
+the edit tool has so many sub-tools it's kinda insane. it should have much less, especially considering they are redundant with CodePath specs. Please provide me your own understanding and explain
+
+Pre-existing (red on HEAD before PLAN-321 verb cutover; reproduces identically on legacy `symbolDelete` Op and the new `delete` verb — same code path via SymbolTarget → code_buffer).
+
+Repro:
+- `edit { target: "f.ts::X", action: { kind: "delete" } }` where `export const X = 1;`
+  → hard error "Edit would leave the buffer structurally invalid" ; file unchanged.
+- Same with `export function X(){}`
+  → no error but leaves dangling `export ` (delete span targets the inner declarator, not the enclosing `export_statement`).
+
+Root: symbol delete resolves to the declarator/inner decl node, not the enclosing export statement, so the removed span is wrong (const) or partial (fn). Surfaced by test `BUG-341 ... delete on path::Symbol erases bytes but file survives` in packages/coding-agent/test/edit.test.ts.
+
+Fix area: crates/pi-natives/src/code_path/code_resolver/mutation.rs (SymbolDelete span resolution) — climb to enclosing export_statement/lexical_declaration when the matched node is wrapped.
+
+Scope note: out of scope for PLAN-321 (surface collapse); verb `delete` lowers correctly to Op::SymbolDelete — the defect is below the Op layer.
+
+NOTE [2026-06-09]: Root cause: resolve_mutation_edit (crates/pi-natives/src/code_path/code_resolver/mutation.rs) selected the NARROWEST matching node via min_by_key(span_len). A name query returns the declaration's full wrapper chain (variable_declarator ⊂ lexical_declaration ⊂ export_statement). Narrow is correct for rename (name field) and replace (declaration body) but wrong for DELETE — deleting the inner declarator orphans the `export const` wrapper → `export const ;` (invalid syntax/hard error for const; dangling `export ` for fn).
+
+Fix: delete-gated re-anchor to the WIDEST match that still contains the narrow anchor (language-agnostic; matched set is exactly the wrapper chain). rename/replace keep the narrow node.
+
+Tests: kernel regression `verb_delete_removes_enclosing_declaration_wrapper` (exported const/fn + plain const) in napi.rs; TS BUG-341 now green. Full edit suite 78/78.

@@ -511,25 +511,45 @@ pub fn execute_code_path_inner(
 		};
 
 		let cp_value = serde_json::to_value(&cp).ok();
+		// PLAN-321: the external action surface is the 6-verb `Verb` enum, which
+		// lowers to a precise kernel `Op` using the *target* shape (family is
+		// never named by the model). Legacy callers (e.g. `create.ts` emitting
+		// `fileCreate`, or any pre-cutover Op kind) still deserialize directly as
+		// `Op` — we try `Verb` first, fall back to `Op`. One compatibility seam,
+		// no flag-day break.
 		let ops: Vec<Op> = {
 			let mut parsed = Vec::with_capacity(raw_actions.len());
 			for raw in &raw_actions {
-				let raw_with_target = match (&cp_value, raw) {
-					(Some(t), serde_json::Value::Object(obj)) if !obj.contains_key("target") => {
-						let mut clone = obj.clone();
-						clone.insert("target".to_string(), t.clone());
-						serde_json::Value::Object(clone)
-					},
-					_ => raw.clone(),
+				let kind = raw.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+				let is_verb = matches!(
+					kind,
+					"replace" | "rename" | "delete" | "patch" | "restructure"
+				);
+				let parse_result: std::result::Result<Op, String> = if is_verb {
+					// Verbs carry no `target`; they lower against the parsed `cp`.
+					serde_json::from_value::<pi_code_path::Verb>(raw.clone())
+						.map_err(|e| format!("invalid verb action: {e}"))
+						.and_then(|verb| verb.lower(&cp).map_err(|d| d.message))
+				} else {
+					let raw_with_target = match (&cp_value, raw) {
+						(Some(t), serde_json::Value::Object(obj)) if !obj.contains_key("target") => {
+							let mut clone = obj.clone();
+							clone.insert("target".to_string(), t.clone());
+							serde_json::Value::Object(clone)
+						},
+						_ => raw.clone(),
+					};
+					serde_json::from_value::<Op>(raw_with_target)
+						.map_err(|e| format!("invalid action JSON: {e}"))
 				};
-				match serde_json::from_value::<Op>(raw_with_target) {
+				match parse_result {
 					Ok(op) => parsed.push(op),
-					Err(e) => {
+					Err(msg) => {
 						return Ok(vec![CodePathChunk {
 							nodes:       vec![],
 							diagnostics: vec![DiagnosticDto {
 								variant: "parse_error".to_string(),
-								message: format!("invalid action JSON: {e}"),
+								message: msg,
 								span:    None,
 							}],
 							done:        true,
@@ -610,6 +630,14 @@ pub fn execute_code_path_inner(
 					let mut group_outcomes = Vec::new();
 					let mut should_delete = false;
 					for op in &group_ops {
+						// Snapshot before each op so we can backfill a unified diff for
+						// any resolver that leaves `MutationOutcome.diff = None` (symbol /
+						// css / heading paths). Text/line ops already populate `diff`; the
+						// backfill below is a no-op for them (it only fills `None`). This
+						// gives the TUI a real diff for structural edits instead of a flat
+						// "Updated X (N edit(s))" summary.
+						let before_op = buf.source();
+						let outcomes_before = group_outcomes.len();
 						match op {
 							Op::FileCreate { target: _, content, force } => {
 								if path.exists() && !force {
@@ -730,6 +758,20 @@ pub fn execute_code_path_inner(
 									.map_err(|d| pi_code_engine::CodeEngineError::Edit(d.message))?;
 								group_outcomes.push(outcome);
 							},
+						}
+						// Backfill a unified diff for any outcome this op produced that
+						// lacks one (symbol/css/heading resolvers return `diff: None`).
+						let after_op = buf.source();
+						if after_op != before_op && !should_delete {
+							for outcome in group_outcomes.iter_mut().skip(outcomes_before) {
+								// `created` keeps its dedicated "Created X" render; delete is
+								// a whole-file removal where a diff is pure noise.
+								if outcome.diff.is_none() && !outcome.created {
+									outcome.diff = Some(
+										diffy::create_patch(&before_op, &after_op).to_string(),
+									);
+								}
+							}
 						}
 					}
 					Ok((group_outcomes, should_delete))
@@ -1612,6 +1654,384 @@ mod tests {
 		);
 		let text = std::fs::read_to_string(root.join("foo.ts")).unwrap();
 		assert!(text.contains("newName"), "expected rename to newName, got: {}", text);
+	}
+
+	/// Structural (symbol/css/heading) edits must carry a unified `diff` in the
+	/// edit-result metadata so the TUI renders a real diff rather than a flat
+	/// "Updated X (N edit(s))" line. Backfilled at the napi chokepoint for any
+	/// resolver that leaves `MutationOutcome.diff = None`.
+	#[test]
+	fn edit_result_backfills_diff_for_structural_ops() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		let cases: &[(&str, &str, serde_json::Value)] = &[
+			(
+				"s.ts",
+				"function oldName() {}\n",
+				serde_json::json!([{ "kind": "rename", "to": "newName" }]),
+			),
+			(
+				"s.css",
+				":root { --accent: blue; }\n.x { color: var(--accent); }\n",
+				serde_json::json!([{ "kind": "rename", "to": "--brand" }]),
+			),
+		];
+		let targets = ["s.ts::oldName", "s.css::--accent"];
+		for ((file, src, actions), target) in cases.iter().zip(targets) {
+			std::fs::write(root.join(file), src).unwrap();
+			let chunks = execute_code_path_inner(
+				opts_edit_with_root(target.to_string(), root.clone(), Some(actions.clone())),
+				crate::task::CancelToken::default(),
+			)
+			.unwrap();
+			let diff = chunks[0].nodes[0].metadata.get("diff");
+			assert!(
+				diff.and_then(|d| d.as_str()).is_some_and(|s| !s.is_empty()),
+				"expected backfilled diff for `{target}`, metadata: {:?}",
+				chunks[0].nodes[0].metadata
+			);
+		}
+	}
+
+
+	// ── PLAN-321: verb surface end-to-end through the real edit branch ──
+
+	#[test]
+	fn verb_replace_rewrites_symbol() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("foo.ts"), "function foo() { return 1; }\n").unwrap();
+		let actions = Some(serde_json::json!([
+			{"kind": "replace", "content": "function foo() { return 42; }"}
+		]));
+		let chunks = execute_code_path_inner(
+			opts_edit_with_root("foo.ts::foo".to_string(), root.clone(), actions),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		assert!(chunks[0].diagnostics.is_empty(), "{:?}", chunks[0].diagnostics);
+		assert_eq!(chunks[0].nodes[0].kind, "§edit-result");
+		let text = std::fs::read_to_string(root.join("foo.ts")).unwrap();
+		assert!(text.contains("return 42"), "got: {text}");
+	}
+
+	#[test]
+	fn verb_rename_symbol_lowers_and_applies() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("foo.ts"), "function oldName() {}\n").unwrap();
+		let actions = Some(serde_json::json!([
+			{"kind": "rename", "to": "newName"}
+		]));
+		let chunks = execute_code_path_inner(
+			opts_edit_with_root("foo.ts::oldName".to_string(), root.clone(), actions),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		assert!(chunks[0].diagnostics.is_empty(), "{:?}", chunks[0].diagnostics);
+		let text = std::fs::read_to_string(root.join("foo.ts")).unwrap();
+		assert!(text.contains("newName"), "got: {text}");
+	}
+
+	#[test]
+	fn verb_delete_symbol_lowers_and_applies() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("foo.ts"), "function keep() {}\nfunction dead() {}\n").unwrap();
+		let actions = Some(serde_json::json!([
+			{"kind": "delete"}
+		]));
+		let chunks = execute_code_path_inner(
+			opts_edit_with_root("foo.ts::dead".to_string(), root.clone(), actions),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		assert!(chunks[0].diagnostics.is_empty(), "{:?}", chunks[0].diagnostics);
+		let text = std::fs::read_to_string(root.join("foo.ts")).unwrap();
+		assert!(!text.contains("dead"), "dead symbol should be gone, got: {text}");
+		assert!(text.contains("keep"), "keep should remain, got: {text}");
+	}
+
+	/// BUG-433: delete must remove the WHOLE statement including any enclosing
+	/// `export` / `const`/`let` wrapper, not just the inner declarator. A name
+	/// query yields the nested wrapper chain; selecting the narrow node orphans
+	/// the wrapper (`export const ;`) → invalid syntax. Covers exported const,
+	/// exported fn, and plain const.
+	#[test]
+	fn verb_delete_removes_enclosing_declaration_wrapper() {
+		let cases = [
+			("export const X = 1;\nexport const Y = 2;\n", "X", "X = 1", "Y = 2"),
+			("export function X(){}\nexport function Y(){}\n", "X", "function X", "function Y"),
+			("const A = 1;\nconst B = 2;\n", "A", "A = 1", "B = 2"),
+		];
+		for (src, sym, gone, kept) in cases {
+			let dir = tempfile::tempdir().unwrap();
+			let root = dir.path().to_path_buf();
+			std::fs::write(root.join("d.ts"), src).unwrap();
+			let actions = Some(serde_json::json!([{ "kind": "delete" }]));
+			let chunks = execute_code_path_inner(
+				opts_edit_with_root(format!("d.ts::{sym}"), root.clone(), actions),
+				crate::task::CancelToken::default(),
+			)
+			.unwrap();
+			assert!(
+				chunks[0].diagnostics.is_empty(),
+				"delete `{sym}` in `{src}` errored: {:?}",
+				chunks[0].diagnostics
+			);
+			let text = std::fs::read_to_string(root.join("d.ts")).unwrap();
+			assert!(!text.contains(gone), "`{gone}` should be gone, got: {text:?}");
+			assert!(text.contains(kept), "`{kept}` should remain, got: {text:?}");
+			// No orphaned wrapper keyword left dangling.
+			assert!(
+				!text.contains("export const ;") && !text.contains("export ;"),
+				"orphaned wrapper in: {text:?}"
+			);
+		}
+	}
+
+	// ── Property test (BUG-433/434): edit must never corrupt the buffer ──
+	//
+	// Invariant under test: for ANY TS declaration wrapped in arbitrary
+	// modifiers (`export`, `default`, `async`) and any declaration kind
+	// (fn/const/let/class), both `delete` and whole-symbol `replace` (with
+	// content that is itself a complete declaration) must:
+	//   (a) succeed without diagnostics, and
+	//   (b) leave the file parseable (no tree-sitter ERROR node).
+	// This is the generative generalization of the wrapper-selection bug: the
+	// narrow-node selection used to orphan the `export`/`const` wrapper.
+
+	/// Parse TS source and report whether it contains any ERROR / MISSING node.
+	fn ts_has_error(src: &str) -> bool {
+		let mut p = tree_sitter::Parser::new();
+		p.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+			.unwrap();
+		let tree = p.parse(src, None).unwrap();
+		tree.root_node().has_error()
+	}
+
+	proptest::proptest! {
+		#![proptest_config(proptest::prelude::ProptestConfig::with_cases(96))]
+
+		/// `delete` on a wrapped declaration never corrupts the file and removes
+		/// the target while keeping the sibling.
+		#[test]
+		fn prop_delete_never_corrupts(
+			export in proptest::bool::ANY,
+			kind_ix in 0usize..4,
+		) {
+			let prefix = if export { "export " } else { "" };
+			let (decl_tgt, decl_sib) = match kind_ix {
+				0 => ("function Tgt(){ return 1; }", "function Sib(){ return 2; }"),
+				1 => ("const Tgt = 1;", "const Sib = 2;"),
+				2 => ("let Tgt = 1;", "let Sib = 2;"),
+				_ => ("class Tgt {}", "class Sib {}"),
+			};
+			let src = format!("{prefix}{decl_tgt}\n{prefix}{decl_sib}\n");
+			let dir = tempfile::tempdir().unwrap();
+			let root = dir.path().to_path_buf();
+			std::fs::write(root.join("p.ts"), &src).unwrap();
+			let actions = Some(serde_json::json!([{ "kind": "delete" }]));
+			let chunks = execute_code_path_inner(
+				opts_edit_with_root("p.ts::Tgt".to_string(), root.clone(), actions),
+				crate::task::CancelToken::default(),
+			)
+			.unwrap();
+			proptest::prop_assert!(
+				chunks[0].diagnostics.is_empty(),
+				"delete errored on `{src}`: {:?}", chunks[0].diagnostics
+			);
+			let out = std::fs::read_to_string(root.join("p.ts")).unwrap();
+			proptest::prop_assert!(!ts_has_error(&out), "delete corrupted `{src}` -> `{out}`");
+			proptest::prop_assert!(!out.contains("Tgt"), "target survived: `{out}`");
+			proptest::prop_assert!(out.contains("Sib"), "sibling lost: `{out}`");
+		}
+
+		/// Whole-symbol `replace` with full-declaration content (which may itself
+		/// carry the `export` wrapper) never corrupts the file — the regression
+		/// that motivated BUG-434.
+		#[test]
+		fn prop_whole_replace_never_corrupts(
+			src_export in proptest::bool::ANY,
+			content_export in proptest::bool::ANY,
+			kind_ix in 0usize..4,
+		) {
+			let sp = if src_export { "export " } else { "" };
+			let cp = if content_export { "export " } else { "" };
+			let (decl, repl) = match kind_ix {
+				0 => ("function Tgt(){ return 1; }", "function Tgt(){ return 42; }"),
+				1 => ("const Tgt = 1;", "const Tgt = 42;"),
+				2 => ("let Tgt = 1;", "let Tgt = 42;"),
+				_ => ("class Tgt { x = 1; }", "class Tgt { x = 42; }"),
+			};
+			let src = format!("{sp}{decl}\nconst Keep = 0;\n");
+			let content = format!("{cp}{repl}");
+			let dir = tempfile::tempdir().unwrap();
+			let root = dir.path().to_path_buf();
+			std::fs::write(root.join("p.ts"), &src).unwrap();
+			let actions = Some(serde_json::json!([{ "kind": "replace", "content": content }]));
+			let chunks = execute_code_path_inner(
+				opts_edit_with_root("p.ts::Tgt".to_string(), root.clone(), actions),
+				crate::task::CancelToken::default(),
+			)
+			.unwrap();
+			proptest::prop_assert!(
+				chunks[0].diagnostics.is_empty(),
+				"replace errored: src=`{src}` content=`{content}`: {:?}",
+				chunks[0].diagnostics
+			);
+			let out = std::fs::read_to_string(root.join("p.ts")).unwrap();
+			proptest::prop_assert!(
+				!ts_has_error(&out),
+				"replace corrupted: src=`{src}` content=`{content}` -> `{out}`"
+			);
+			proptest::prop_assert!(out.contains("42"), "replacement not applied: `{out}`");
+			proptest::prop_assert!(out.contains("Keep"), "sibling lost: `{out}`");
+		}
+
+		/// BUG-435: CSS custom-property rename via selector-in-target must (a)
+		/// succeed and (b) update BOTH the `:root` declaration and every `var()`
+		/// reference — across generated names and reference counts. This is the
+		/// case the bug broke (custom props were invisible to symbol resolution).
+		///
+		/// Scope note: class/id token rename is exercised by the example-based
+		/// tests (single-rule). Multi-rule *class* rename resolves a single
+		/// declaration and refuses ambiguity by design — a separate semantic from
+		/// this fix — so this property focuses on custom properties, where multiple
+		/// `var()` references for one declaration is the natural, supported model.
+		#[test]
+		fn prop_css_custom_prop_rename_updates_decl_and_all_refs(
+			name in "[a-z][a-z0-9]{0,7}",
+			newname in "[a-z][a-z0-9]{0,7}",
+			refs in 0usize..5,
+		) {
+			// Prefix-disjoint so plain substring assertions are sound (`--a0` would
+			// otherwise contain `--a`). Orthogonal to the fix.
+			proptest::prop_assume!(name != newname);
+			proptest::prop_assume!(!newname.starts_with(&name) && !name.starts_with(&newname));
+			let mut src = format!(":root {{ --{name}: blue; }}\n");
+			for i in 0..refs {
+				src.push_str(&format!(".r{i} {{ color: var(--{name}); }}\n"));
+			}
+			let dir = tempfile::tempdir().unwrap();
+			let root = dir.path().to_path_buf();
+			std::fs::write(root.join("p.css"), &src).unwrap();
+			let to = format!("--{newname}");
+			let actions = Some(serde_json::json!([{ "kind": "rename", "to": to }]));
+			let chunks = execute_code_path_inner(
+				opts_edit_with_root(format!("p.css::--{name}"), root.clone(), actions),
+				crate::task::CancelToken::default(),
+			)
+			.unwrap();
+			proptest::prop_assert!(
+				chunks[0].diagnostics.is_empty(),
+				"custom-prop rename `--{name}`->`{to}` errored on `{src}`: {:?}",
+				chunks[0].diagnostics
+			);
+			let out = std::fs::read_to_string(root.join("p.css")).unwrap();
+			proptest::prop_assert!(
+				!out.contains(&format!("--{name}")),
+				"old custom-prop `--{name}` survived: `{out}`"
+			);
+			// Declaration + every var() reference must carry the new name: expect
+			// 1 (decl) + refs occurrences of `--newname`.
+			let got = out.matches(&format!("--{newname}")).count();
+			proptest::prop_assert_eq!(
+				got, 1 + refs,
+				"expected {} occurrences of `--{}`, got {} in `{}`",
+				1 + refs, newname, got, out
+			);
+		}
+	}
+
+	/// BUG-435 example coverage: custom-prop rename updates declaration + var()
+	/// references; single-rule class / id rename update the selector token.
+	#[test]
+	fn verb_css_token_renames() {
+		let cases = [
+			(
+				":root { --accent: blue; }\n.x { color: var(--accent); }\n",
+				"--accent",
+				"--brand",
+				"--accent",
+				"--brand",
+			),
+			(".btn { color: red; }\n", ".btn", ".button", ".btn", ".button"),
+			("#hdr { height: 1px; }\n", "#hdr", "#top", "#hdr", "#top"),
+		];
+		for (src, tgt, to, gone, present) in cases {
+			let dir = tempfile::tempdir().unwrap();
+			let root = dir.path().to_path_buf();
+			std::fs::write(root.join("p.css"), src).unwrap();
+			let actions = Some(serde_json::json!([{ "kind": "rename", "to": to }]));
+			let chunks = execute_code_path_inner(
+				opts_edit_with_root(format!("p.css::{tgt}"), root.clone(), actions),
+				crate::task::CancelToken::default(),
+			)
+			.unwrap();
+			assert!(
+				chunks[0].diagnostics.is_empty(),
+				"css rename {tgt}->{to} errored: {:?}",
+				chunks[0].diagnostics
+			);
+			let out = std::fs::read_to_string(root.join("p.css")).unwrap();
+			assert!(!out.contains(gone), "`{gone}` survived: {out:?}");
+			assert!(out.contains(present), "`{present}` missing: {out:?}");
+		}
+	}
+
+	#[test]
+	fn verb_replace_line_range() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("a.txt"), "l1\nl2\nl3\n").unwrap();
+		let actions = Some(serde_json::json!([
+			{"kind": "replace", "content": "X2"}
+		]));
+		let chunks = execute_code_path_inner(
+			opts_edit_with_root("a.txt:2-2".to_string(), root.clone(), actions),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		assert!(chunks[0].diagnostics.is_empty(), "{:?}", chunks[0].diagnostics);
+		let text = std::fs::read_to_string(root.join("a.txt")).unwrap();
+		assert_eq!(text, "l1\nX2\nl3\n", "got: {text}");
+	}
+
+	#[test]
+	fn verb_patch_applies_diff() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("a.txt"), "foo\nbar\nbaz\n").unwrap();
+		let diff = "--- a.txt\n+++ a.txt\n@@ -1,3 +1,3 @@\n foo\n-bar\n+qux\n baz\n";
+		let actions = Some(serde_json::json!([
+			{"kind": "patch", "diff": diff}
+		]));
+		let chunks = execute_code_path_inner(
+			opts_edit_with_root("a.txt".to_string(), root.clone(), actions),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		assert!(chunks[0].diagnostics.is_empty(), "{:?}", chunks[0].diagnostics);
+		let text = std::fs::read_to_string(root.join("a.txt")).unwrap();
+		assert_eq!(text, "foo\nqux\nbaz\n", "got: {text}");
+	}
+
+	#[test]
+	fn legacy_filecreate_op_still_works_post_cutover() {
+		// create.ts emits {kind:fileCreate}; the Op fallback must keep working.
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		let actions = Some(serde_json::json!([
+			{"kind": "fileCreate", "content": "hi"}
+		]));
+		let chunks = execute_code_path_inner(
+			opts_edit_with_root("new.txt".to_string(), root.clone(), actions),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		assert!(chunks[0].diagnostics.is_empty(), "{:?}", chunks[0].diagnostics);
+		assert_eq!(std::fs::read_to_string(root.join("new.txt")).unwrap(), "hi");
 	}
 
 	#[test]

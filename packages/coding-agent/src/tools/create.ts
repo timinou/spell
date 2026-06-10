@@ -82,20 +82,46 @@ export class CreateTool implements AgentTool<typeof createSchema> {
 		}
 
 		// Resolve content payload (string | base64 | artifact URI).
+		//
+		// The tagged-union arms ({kind:"base64",data} / {kind:"bytes",artifactUri})
+		// are discriminated on `kind`. Everything else is treated as a literal file
+		// body: a plain string passes through; a bare object/array is JSON content
+		// the arg-coercion layer parsed string→value (e.g. a `package.json` body the
+		// model emitted as a JSON object) — we re-serialise it rather than crash on
+		// the missing discriminator (was: `router.canHandle(undefined)` → throw).
 		let content: string;
-		if (typeof params.content === "string") {
-			content = params.content;
-		} else if (params.content.kind === "base64") {
-			content = Buffer.from(params.content.data, "base64").toString("utf-8");
-		} else {
-			const router = this.session.internalRouter;
-			if (!router?.canHandle(params.content.artifactUri)) {
-				return toolResult<CreateToolResultDetails>({ path: params.path, error: "invalid_artifact_uri" })
-					.text(`Cannot resolve artifact URI: ${params.content.artifactUri}`)
-					.done();
+		const rawContent = params.content as unknown;
+		if (typeof rawContent === "string") {
+			content = rawContent;
+		} else if (rawContent && typeof rawContent === "object") {
+			const tagged = rawContent as { kind?: unknown; data?: unknown; artifactUri?: unknown };
+			if (tagged.kind === "base64" && typeof tagged.data === "string") {
+				content = Buffer.from(tagged.data, "base64").toString("utf-8");
+			} else if (tagged.kind === "bytes") {
+				const router = this.session.internalRouter;
+				const artifactUri = typeof tagged.artifactUri === "string" ? tagged.artifactUri : undefined;
+				if (!artifactUri || !router?.canHandle(artifactUri)) {
+					const r = toolResult<CreateToolResultDetails>({ path: params.path, error: "invalid_artifact_uri" })
+						.text(`Cannot resolve artifact URI: ${artifactUri ?? "(missing)"}`)
+						.done();
+					r.isError = true;
+					return r;
+				}
+				const resource = await router.resolve(artifactUri);
+				content = resource.content;
+			} else {
+				// Untagged object/array: JSON body coerced away from string. Serialise
+				// back with stable 2-space indentation (matches conventional config files).
+				content = `${JSON.stringify(rawContent, null, 2)}\n`;
 			}
-			const resource = await router.resolve(params.content.artifactUri);
-			content = resource.content;
+		} else {
+			const r = toolResult<CreateToolResultDetails>({ path: params.path, error: "invalid_content" })
+				.text(
+					`Cannot create file: content must be a string, base64, or artifact payload (got ${rawContent === null ? "null" : typeof rawContent}).`,
+				)
+				.done();
+			r.isError = true;
+			return r;
 		}
 
 		// Managed-buffer guards (shrink + parse-regression) only when overwriting an

@@ -1,69 +1,167 @@
-Apply Op to target. Symbol-first. Auto-persists. 3 verbs: `replace`, `rename`, `delete`.
+Apply a verb to a CodePath target. Symbol-first. Auto-persists, auto-coordinates.
 
-call ::= edit { operations: [{ target, action: { kind, …fields } }] }
+call ::= edit { operations: [{ target, action: { kind, …fields } }], transaction? }
 
-target ::= `<file>`  (file-scoped)
-       ·  `<file>::<Symbol>`  (symbol-scoped)
-       ·  `<file>::<Symbol>#body|#sig`  (scoped)
-       ·  `<glob>`  (multi-file)
+## The whole verb surface
+  replace · rename · delete · patch · restructure · undo · redo
 
-**Read-only qualifiers** (`#hover` / `#hover_inferred` / `#type_definition` /
-`#type_def` / `#signature` / `#inlay` / `#diagnostics`) are NOT valid edit
-targets — they describe a *view* of code (smart-merge type display,
-diagnostics, etc.), not a code region. The kernel rejects them with
-`IncompatibleTargetShape` and a hint pointing at `#body` / `#sig` (for
-editing a scope) or `find { target: "…" }` (for reading the view).
-Query `find` for inspection; use `edit` only with `#body` / `#sig`.
+**Family (file / symbol / line / heading / css) is NOT a verb.** It is carried
+by the `target` CodePath shape; the kernel dispatches to the right resolver
+from the target alone. You never name the family.
 
-**Body/sig scope is delimiter-inclusive.** `#body` (or `{scope:"body"}`)
-replaces the *entire* body span a `find …#body` read returns, including the
-block delimiters: braces for C-likes (`{ … }`), `do … end` for Elixir. Your
-`content` must therefore include those delimiters — a braceless body is
-rejected (and reverted) by the post-edit parse gate, never written. `#sig`
-replaces the signature up to (not including) the body. Both accept either the
-`foo#body` qualifier or the `{scope:"body"|"sig"}` action field; they are
-equivalent.
+```
+target = "foo.ts::Bar.method"   → family = symbol (from shape)
+action = { kind: "replace", … } → verb only; no family restated
+```
 
-## Cheat Sheet
+──────────────────────────────────────────────────────────────────────
+target ::= "<file>"                  file-scoped
+       ·  "<file>::<Symbol>"         symbol-scoped
+       ·  "<file>::<Symbol>#body"    body span only (delimiter-inclusive)
+       ·  "<file>::<Symbol>#sig"     signature span only
+       ·  "<file>::§<kind>[pred]"    structural node set (e.g. §call[name=log])
+       ·  "<file>:A-B"               line slice (A,B 1-indexed inclusive)
+       ·  "<file.css>::.cls|#id|--prop"  css selector / custom-prop token
+       ·  "<file.md>::Heading Text"  markdown/org heading (text is the name)
+       ·  "<glob>::<Symbol>"         multi-file (rename / structural replace ∀)
 
-| want | target | action |
-|------|--------|--------|
-| rewrite whole function | `"file.ts :: foo"` | `{ kind: "replace", content: "function foo() { … }" }` |
-| change function body | `"file.ts :: foo#body"` | `{ kind: "replace", content: "{ return 42; }" }` |
-| change signature only | `"file.ts :: foo#sig"` | `{ kind: "replace", content: "function foo(x: number) " }` |
-| rename everywhere | `"**/*.ts :: oldName"` | `{ kind: "rename", content: "newName" }` |
-| wrap in try/catch | `"file.ts :: risky"` | `{ kind: "replace", content: "try { $BODY } catch(e) { throw new SafeError(e); }" }` |
-| add annotation above | `"file.ts :: func"` | `{ kind: "replace", content: "@deprecated\n$DECL" }` |
-| replace pattern in file | `"file.ts"` | `{ kind: "replace", find: "old", content: "new" }` |
-| structural replace across files (find nodes matching a CodePath query, replace their content with template) | `"src/**/*.ts :: §call_expression[name=console.log]"` | `{ kind: "replace", content: "logger.info($1)" }` |
-| prepend to file | `"file.ts"` | `{ kind: "replace", place: "start", content: "// @ts-check\n" }` |
-| append to file | `"file.ts"` | `{ kind: "replace", place: "end", content: "\n// footer" }` |
-| overwrite file | `"file.ts"` | `{ kind: "replace", content: "export const X = 1;" }` |
-| delete dead symbol | `"file.ts :: deadFunc"` | `{ kind: "delete" }` |
-| delete file | `"file.ts"` | `{ kind: "delete" }` |
+Read-only qualifiers (`#hover` `#signature` `#type_definition` `#inlay`
+`#diagnostics`) are NOT editable — they are *views*. The kernel rejects them
+with `IncompatibleTargetShape`; use `find` to read them, `#body`/`#sig` to edit
+a scope.
 
-## Template Variables
+═══════════════════════════════════════════════════════════════════════
+## replace — the workhorse
 
-In `content`, `$VAR` placeholders are substituted with values from the matched AST node.
+{ kind: "replace", content, find?, matching?, place?, at?, occurrence? }
 
-| var | resolves to |
-|-----|------------|
-| `$1` — `$9` | Nth named child of the matched node |
-| `$0` | Full matched text (alias `$MATCH`) |
-| `$LAST` | Last named child |
-| `$BODY` | Body text of a declaration (stripped of delimiters) |
-| `$NAME` | Name field of a declaration |
-| `$SIG` | Signature — everything before the body |
-| `$DECL` | Full declaration text (alias `$MATCH`) |
-| `$MATCH` | Full text of the matched node |
+Behaviour is selected by the target shape + which fields are present:
 
-Escape literal `$` with `$$`. JS template syntax `${…}` passes through unchanged.
+| target            | + fields                     | effect                       |
+|-------------------|------------------------------|------------------------------|
+| file              | content                      | overwrite whole file         |
+| file              | content, place:start\|end    | prepend / append             |
+| file              | content, place:before\|after, at | insert at a line anchor  |
+| file:A-B          | content                      | replace line range           |
+| file::Sym         | content                      | rewrite whole declaration    |
+| file::Sym#body    | content                      | rewrite body (incl. `{ … }`) |
+| file::Sym#sig     | content                      | rewrite signature only       |
+| file::Sym         | content, place:before\|after | insert before / after symbol |
+| file::§q[pred]    | content (+ $vars)            | structural replace ∀ matched |
+| any               | find, content                | find-and-replace in scope    |
+| file.md::Heading  | content                      | replace block under heading  |
+
+  find        pattern to locate within the target scope (triggers find-replace)
+  matching    "structural" (default; tree-sitter / word-boundary aware)
+              | "raw" (byte-literal, no boundary check)
+  occurrence  first | last | all (default) | N (1-indexed)
+  place       start | end | before | after
+  at          1-indexed line anchor for place:before|after on a FILE target
+
+`#body` / `#sig` spans are **delimiter-inclusive**: content MUST include the
+outer braces (C-likes) or `do … end` (Elixir). A braceless body is rejected by
+the post-edit parse gate and never written.
+
+`find` cannot combine with `place`.
+
+═══════════════════════════════════════════════════════════════════════
+## rename — identifier-aware
+
+{ kind: "rename", to }
+
+  target = file::Sym       → rename symbol + all in-file references
+  target = glob::Sym       → rename across every matching file
+  target = file.css::.cls  → rename CSS class token throughout stylesheet
+  target = file.css::#id    → rename CSS id token
+  target = file.css::--prop → rename CSS custom property
+
+The CSS namespace (class / id / custom-prop) is read from the selector sigil in
+the target — no per-namespace verb. A bare file target has nothing to rename.
+
+═══════════════════════════════════════════════════════════════════════
+## delete
+
+{ kind: "delete", allowSiblingDelete? }
+
+  target = file            → unlink file
+  target = file::Sym       → remove declaration
+  target = file.css::.cls  → remove dead CSS rule
+  allowSiblingDelete       permit removing the last decl in a group (default false)
+
+═══════════════════════════════════════════════════════════════════════
+## patch — raw unified-diff escape hatch
+
+{ kind: "patch", diff }
+
+Apply a unified diff to the file target. Use only when a precise hunk is
+already in hand; prefer `replace` for everything structural.
+
+═══════════════════════════════════════════════════════════════════════
+## restructure — AST surgery
+
+{ kind: "restructure", op, … }
+
+  op:"move"      direction:"up"|"down"     reorder among siblings (±1)
+  op:"transpose" column:N                  move to 1-indexed sibling slot
+  op:"splice"    mode:"self"|"up"|"down"   unwrap node; promote/absorb children
+  op:"clone"     renameTo?:string          duplicate decl (optional new name)
+  op:"promote"                             heading level up   (## → #)
+  op:"demote"                              heading level down (# → ##)
+
+Niche by design — most edits are replace/rename/delete. `move` is the common
+case; `transpose` is the explicit-slot form. move/transpose/splice/clone take a
+symbol target; promote/demote take a markdown/org heading target.
+
+═══════════════════════════════════════════════════════════════════════
+## undo / redo — workspace edit-log ops
+
+{ kind: "undo" } | { kind: "redo" }
+
+Operate on the session's edit log, not a target (target-less). `undo` reverts
+the most recent uncommitted edit in the session; `redo` re-applies the most
+recently undone one. MUST be dispatched ALONE — never batched with other ops.
+
+═══════════════════════════════════════════════════════════════════════
+## Template variables (in replace `content`)
+
+$1–$9 nth named child · $0/$MATCH/$DECL full match · $LAST last child
+$BODY body (no delimiters) · $NAME name field · $SIG signature
+Escape literal `$` as `$$`. JS `${…}` passes through untouched.
+
+═══════════════════════════════════════════════════════════════════════
+## Cheat sheet
+
+| want                       | target                                  | action                                        |
+|----------------------------|-----------------------------------------|-----------------------------------------------|
+| overwrite file             | "f.ts"                                  | replace · content                             |
+| rewrite function           | "f.ts::foo"                             | replace · content                             |
+| edit body only             | "f.ts::foo#body"                        | replace · content:"{ … }"                     |
+| edit signature             | "f.ts::foo#sig"                         | replace · content                             |
+| wrap in try/catch          | "f.ts::risky"                           | replace · content:"try { $BODY } catch(e){…}" |
+| find/replace in file       | "f.ts"                                  | replace · find, content                       |
+| literal find/replace       | "f.ts"                                  | replace · find, content, matching:"raw"       |
+| structural replace ∀ files | "src/**/*.ts::§call[name=console.log]"  | replace · content:"logger.info($1)"           |
+| append to file             | "f.ts"                                  | replace · place:"end", content                |
+| insert after line 40       | "f.ts"                                  | replace · place:"after", at:40, content       |
+| insert after a symbol      | "f.ts::foo"                             | replace · place:"after", content              |
+| replace lines 10–20        | "f.ts:10-20"                            | replace · content                             |
+| rename symbol ∀ files      | "**/*.ts::oldName"                      | rename · to:"newName"                         |
+| rename css var             | "theme.css::--accent"                   | rename · to:"--brand"                         |
+| delete dead symbol         | "f.ts::deadFn"                          | delete                                        |
+| delete file                | "f.ts"                                  | delete                                        |
+| move method up             | "f.ts::Cls.m"                           | restructure · op:"move", direction:"up"       |
+| unwrap block               | "f.ts::wrapper"                         | restructure · op:"splice", mode:"up"          |
+| demote heading             | "doc.md::Intro"                         | restructure · op:"demote"                     |
+| revert last edit           | (none)                                  | undo  (alone)                                 |
 
 <rules>
-- target shape determines mechanism: kernel dispatches to symbol/file/line/heading/CSS resolver automatically
-- `find` field on `replace` triggers structural find-and-replace within each matched node
-- `place: "start"|"end"` on file target controls prepend/append
-- edits commit immediately; undo/redo via `action: { kind: "undo" }` dispatched alone
-- batches: best-effort (default) or `transaction: "strict"` (snapshot, rollback on failure)
-- prefer symbol targets over file targets for surgical edits — diffs review better
+- target shape ⇒ mechanism. Never encode family in the verb.
+- batches: best-effort (default — applied ops persist, rest skip on failure)
+  or transaction:"strict" (snapshot all targets; rollback all on any failure).
+- edits commit immediately and are coordinated cross-session by the edit broker
+  (intent→commit→conflict); a PeerConflict diagnostic means another session
+  committed the same span first — re-read and retry.
+- prefer symbol / structural targets over line slices — diffs review cleaner
+  and survive line drift.
+- undo/redo MUST be solo in a batch.
 </rules>

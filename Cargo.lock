@@ -4020,6 +4020,7 @@ dependencies = [
  "pi-typst-surface",
  "pi-workspace-cache",
  "portable-pty",
+ "proptest",
  "rayon",
  "regex",
  "ropey",

@@ -1,0 +1,15 @@
+#+TITLE: Implement redo verb (was a stub advertised as working)
+#+STATE: DONE
+#+SESSION_ID: 15022e9a3d98d40f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-34-47-158Z_15022e9a3d98d40f.jsonl]]
+#+CUSTOM_ID: FEAT-808-implement-redo-verb-was-a-stub-advertise
+
+* Initial Message
+
+test drive this new surface
+
+Done during surface-simplification pass. The `redo` verb was on the 6-verb edit surface + edit.md but handle_redo was a stub ("redo not yet implemented; re-apply manually") — extra shit advertised as functional.
+
+FIX: added EditHistory::reapply (crates/pi-natives/src/code_path/edit_history.rs) — inverse of revert: finds the most-recently-reverted matching entry, re-applies before→after (via revert_chunk_replace with args swapped for non-clean cases), clears the `reverted` flag so undo can re-undo. handle_redo (manage.rs) wired symmetric to handle_undo (target-less, session-scoped, file narrows). edit.md redo doc updated to reflect functional behavior.
+
+Tests: handle_redo_reapplies_after_undo (undo→redo→undo round-trip), handle_redo_nothing_to_redo_is_graceful; e2e via executeCodePath (edit→undo→redo restores content). All green.

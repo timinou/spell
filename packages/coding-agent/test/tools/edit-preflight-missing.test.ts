@@ -48,7 +48,7 @@ describe("edit pre-flight existence — BUG-403", () => {
 			operations: [
 				{
 					target: "does-not-exist.ts",
-					action: { kind: "fileFindReplace", find: "X", content: "Y" },
+					action: { kind: "replace", find: "X", content: "Y" },
 				},
 			],
 		});
@@ -69,7 +69,7 @@ describe("edit pre-flight existence — BUG-403", () => {
 			operations: [
 				{
 					target: "missing.ts::Foo",
-					action: { kind: "symbolReplace", content: "function Foo() {}" },
+					action: { kind: "replace", content: "function Foo() {}" },
 				},
 			],
 		});
@@ -83,7 +83,9 @@ describe("edit pre-flight existence — BUG-403", () => {
 		const file = path.join(cwd, "fresh.ts");
 		const tool = new CodepathEditTool(makeSession());
 		const result = await tool.execute("t", {
-			operations: [{ target: file, action: { kind: "fileCreate", content: "hello" } }],
+			// Legacy Op-fallback path (create.ts emits `fileCreate`); the boundary
+			// keeps accepting Op kinds, so this locks that retained compatibility seam.
+			operations: [{ target: file, action: { kind: "fileCreate", content: "hello" } as any }],
 		});
 		expect((result as any).isError ?? false).toBe(false);
 		expect(await fs.readFile(file, "utf-8")).toBe("hello");
@@ -93,7 +95,8 @@ describe("edit pre-flight existence — BUG-403", () => {
 		const file = path.join(cwd, "appended.ts");
 		const tool = new CodepathEditTool(makeSession());
 		const result = await tool.execute("t", {
-			operations: [{ target: file, action: { kind: "fileAppend", content: "data" } }],
+			// Legacy Op-fallback: anchorless fileAppend create-on-absence is retained.
+			operations: [{ target: file, action: { kind: "fileAppend", content: "data" } as any }],
 		});
 		expect((result as any).isError ?? false).toBe(false);
 		expect(await fs.readFile(file, "utf-8")).toContain("data");

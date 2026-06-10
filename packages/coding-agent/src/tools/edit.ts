@@ -12,13 +12,13 @@ import { enforcePathWrite } from "../sandbox";
 import { renderCodeCell } from "../tui";
 import type { ToolSession } from ".";
 import { formatCodePathResult } from "./codepath-result";
+import { sessionContextOpts } from "./codepath-session";
 import type { EditParams } from "./codepath-types";
 import { editSchema } from "./codepath-types";
 import { enforceModeWrite } from "./mode-guard";
 import { resolveCwdRelativePath } from "./path-resolution";
 import { replaceTabs } from "./render-utils";
 import { type DetailsWithMeta, toolResult } from "./tool-result";
-import { sessionContextOpts } from "./codepath-session";
 
 type EditToolResultDetails = DetailsWithMeta & {
 	operations?: number;
@@ -32,6 +32,23 @@ type EditToolResultDetails = DetailsWithMeta & {
 	firstChangedLine?: number;
 };
 
+/**
+ * Compose a descriptive title for an edit-result cell: `<verb> · <target>`,
+ * or `<n> ops` for an aggregated batch. Keeps the bare "Edit" only when no
+ * details survive. Errors get a leading ⚠ so the title reads at a glance.
+ */
+function editResultTitle(d: EditToolResultDetails | undefined, isError: boolean): string {
+	const lead = isError ? "⚠ " : "";
+	if (!d) return `${lead}Edit`;
+	if (typeof d.operations === "number" && d.operations > 1) {
+		return `${lead}edit · ${d.operations} ops`;
+	}
+	const verb = d.action ?? d.op;
+	if (verb && d.target) return `${lead}${verb} · ${d.target}`;
+	if (d.target) return `${lead}edit · ${d.target}`;
+	if (verb) return `${lead}${verb}`;
+	return `${lead}Edit`;
+}
 
 function normalizeLines(value: string | string[] | null | undefined): string | undefined {
 	if (value === undefined || value === null) return undefined;
@@ -86,7 +103,6 @@ function isErrorResult(result: AgentToolResult): boolean {
 	return details?.error !== undefined;
 }
 
-
 class SimpleFileSystem implements FileSystem {
 	async exists(path: string): Promise<boolean> {
 		return fs.exists(path);
@@ -104,8 +120,6 @@ class SimpleFileSystem implements FileSystem {
 		await fs.mkdir(path, { recursive: true });
 	}
 }
-
-
 
 export class CodepathEditTool implements AgentTool<typeof editSchema> {
 	readonly name = "edit";
@@ -171,142 +185,152 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		// (e.g. cwd `/proj/apps/foo` + target `apps/foo/lib/x.ts` → silent nest) when
 		// on-disk evidence supports it. Degenerate paths (target == cwd-tail) are
 		// the only hard-reject case; warnings are surfaced in per-op result text.
-  const ops = params.operations
-  			.map((op, i) => {
-  				if (!op) return null;
-  				const resolved = resolveCwdRelativePath(effectiveCwd, op.target, { mode: "file" });
-  				return { i, op, targetPath: resolved.path, resolved };
-  			})
-  			.filter(
-  				(
-  					x,
-  				): x is {
-  					i: number;
-  					op: NonNullable<EditParams["operations"][number]>;
-  					targetPath: string;
-  					resolved: ReturnType<typeof resolveCwdRelativePath>;
-  				} => x !== null,
-  			);
+		const ops = params.operations
+			.map((op, i) => {
+				if (!op) return null;
+				const resolved = resolveCwdRelativePath(effectiveCwd, op.target, { mode: "file" });
+				// The on-disk file is the locator part only: strip the `::Symbol`
+				// query, the `#body`/`#sig` qualifier, and a trailing `:A-B` / `:A`
+				// / `:A-` line-slice suffix. The slice regex is end-anchored and
+				// digit-only so it cannot clip a Windows drive prefix (`C:\`) or a
+				// mid-path colon. Used for existence checks AND strict-transaction
+				// snapshot/rollback keying — both must address the real file, not
+				// the qualified target (otherwise rollback silently no-ops).
+				const filePart = resolved.path
+					.split("::")[0]!
+					.split("#")[0]!
+					.replace(/:\d+(?:-\d*)?$/, "");
+				return { i, op, targetPath: resolved.path, filePart, resolved };
+			})
+			.filter(
+				(
+					x,
+				): x is {
+					i: number;
+					op: NonNullable<EditParams["operations"][number]>;
+					targetPath: string;
+					filePart: string;
+					resolved: ReturnType<typeof resolveCwdRelativePath>;
+				} => x !== null,
+			);
 
-  		// Strict transaction: snapshot every unique target file before any op runs.
-  		const snapshots = new Map<string, { existed: boolean; content: string | null }>();
-  		if (transactionMode === "strict") {
-  			for (const { targetPath } of ops) {
-  				if (snapshots.has(targetPath)) continue;
-  				if (await fs.exists(targetPath)) {
-  					snapshots.set(targetPath, { existed: true, content: await fs.readFile(targetPath, "utf-8") });
-  				} else {
-  					snapshots.set(targetPath, { existed: false, content: null });
-  				}
-  			}
-  		}
+		// Strict transaction: snapshot every unique target file before any op runs.
+		const snapshots = new Map<string, { existed: boolean; content: string | null }>();
+		if (transactionMode === "strict") {
+			for (const { filePart } of ops) {
+				if (snapshots.has(filePart)) continue;
+				if (await fs.exists(filePart)) {
+					snapshots.set(filePart, { existed: true, content: await fs.readFile(filePart, "utf-8") });
+				} else {
+					snapshots.set(filePart, { existed: false, content: null });
+				}
+			}
+		}
 
-  		const results: AgentToolResult[] = [];
-  		let failedOpIndex: number | null = null;
-  		const skippedOpIndices: number[] = [];
+		const results: AgentToolResult[] = [];
+		let failedOpIndex: number | null = null;
+		const skippedOpIndices: number[] = [];
 
-  		for (const { i, op, targetPath, resolved } of ops) {
-  			// Degenerate cwd-prefix duplication (target path equals cwd-tail) is the
-  			// only case the coalesce helper cannot rescue; treat as fail-fast like
-  			// other batch-stopping diagnostics. Coalesced / kept-nested decisions are
-  			// surfaced as warnings on the per-op success text further below.
-  			if (resolved.decision === "degenerate") {
-  				const result = toolResult<EditToolResultDetails>({
-  					target: op.target,
-  					error: "cwd_prefix_duplication",
-  				})
-  					.text(resolved.warning ?? "cwd_prefix_duplication")
-  					.done();
-  				result.isError = true;
-  				results.push(result);
-  				failedOpIndex = i + 1;
-  				for (let j = i + 1; j < params.operations.length; j++) skippedOpIndices.push(j + 1);
-  				break;
-  			}
+		for (const { i, op, targetPath, filePart, resolved } of ops) {
+			// Degenerate cwd-prefix duplication (target path equals cwd-tail) is the
+			// only case the coalesce helper cannot rescue; treat as fail-fast like
+			// other batch-stopping diagnostics. Coalesced / kept-nested decisions are
+			// surfaced as warnings on the per-op success text further below.
+			if (resolved.decision === "degenerate") {
+				const result = toolResult<EditToolResultDetails>({
+					target: op.target,
+					error: "cwd_prefix_duplication",
+				})
+					.text(resolved.warning ?? "cwd_prefix_duplication")
+					.done();
+				result.isError = true;
+				results.push(result);
+				failedOpIndex = i + 1;
+				for (let j = i + 1; j < params.operations.length; j++) skippedOpIndices.push(j + 1);
+				break;
+			}
 
-  			enforceModeWrite(this.session, targetPath, { op: "update" });
-  			const sandboxError = enforcePathWrite(targetPath, sessionCwd, this.session.sandboxPolicy);
-  			if (sandboxError) throw new Error(sandboxError);
+			enforceModeWrite(this.session, targetPath, { op: "update" });
+			const sandboxError = enforcePathWrite(targetPath, sessionCwd, this.session.sandboxPolicy);
+			if (sandboxError) throw new Error(sandboxError);
 
-  			const action = op.action;
-  			const idempotent = op.idempotent ?? params.idempotent ?? false;
-  			const opKindPre = (action as any).kind as string | undefined;
+			const action = op.action;
+			const idempotent = op.idempotent ?? params.idempotent ?? false;
+			const opKindPre = (action as any).kind as string | undefined;
 
-  			// BUG-403: ops that mutate an existing file must fail loud and early
-  			// when the target is missing, rather than degrading into a confusing
-  			// downstream diagnostic (e.g. "scope is empty — buffer is 0 bytes").
-  			// Anchorless fileAppend/filePrepend create-on-absence and are handled
-  			// below; fileCreate is excluded from MUTATING_KINDS.
-  			const isAnchorlessCreate =
-  				(opKindPre === "fileAppend" || opKindPre === "filePrepend") &&
-  				!(action as any).pos &&
-  				!(action as any).end;
-  			// targetPath may carry a `::Symbol` query and/or `#body` qualifier;
-  			// existence is a property of the file part only.
-  			const filePart = targetPath.split("::")[0]!.split("#")[0]!;
-  			if (isMutatingKind(opKindPre) && !isAnchorlessCreate && !(await fs.exists(filePart))) {
-  				const result = toolResult<EditToolResultDetails>({
-  					target: op.target,
-  					action: opKindPre,
-  					error: "file_not_found",
-  				})
-  					.text(`file not found: ${op.target} (create it before editing)`)
-  					.done();
-  				result.isError = true;
-  				results.push(result);
-  				failedOpIndex = i + 1;
-  				for (let j = i + 1; j < params.operations.length; j++) skippedOpIndices.push(j + 1);
-  				break;
-  			}
+			// BUG-403: ops that mutate an existing file must fail loud and early
+			// when the target is missing, rather than degrading into a confusing
+			// downstream diagnostic (e.g. "scope is empty — buffer is 0 bytes").
+			// Anchorless fileAppend/filePrepend create-on-absence and are handled
+			// below; fileCreate is excluded from MUTATING_KINDS.
+			const isAnchorlessCreate =
+				(opKindPre === "fileAppend" || opKindPre === "filePrepend") && !(action as any).pos && !(action as any).end;
+			// `filePart` (the on-disk locator, qualifiers stripped) is precomputed
+			// alongside the resolved target so existence checks and strict-transaction
+			// snapshot/rollback share one notion of "the file".
+			if (isMutatingKind(opKindPre) && !isAnchorlessCreate && !(await fs.exists(filePart))) {
+				const result = toolResult<EditToolResultDetails>({
+					target: op.target,
+					action: opKindPre,
+					error: "file_not_found",
+				})
+					.text(`file not found: ${op.target} (create it before editing)`)
+					.done();
+				result.isError = true;
+				results.push(result);
+				failedOpIndex = i + 1;
+				for (let j = i + 1; j < params.operations.length; j++) skippedOpIndices.push(j + 1);
+				break;
+			}
 
-  			let result: AgentToolResult;
-  			// Route by Op kind
-  			const opKind = (action as any).kind;
-  			if (opKind === "filePatch") {
-   			result = await this.#executePatch(targetPath, (action as any).diff!, signal);
-   			} else if (
-   				(opKind === "fileAppend" || opKind === "filePrepend") &&
-   				!(action as any).pos &&
-   				!(action as any).end &&
-   				!(await fs.exists(targetPath))
-   			) {
-   				// File-create shortcut: anchorless fileAppend/filePrepend on a
-   				// missing file becomes a creation. Single-shot, no kernel round-trip.
-   				result = await this.#executeLineId(targetPath, action, i + 1, idempotent);
-   			} else {
-   				// All other ops — including numeric-anchor line ops since
-   				// PLAN-317 — route through the kernel's TextResolver.
-   				result = await this.#executeStructural(targetPath, action, effectiveCwd, signal);
-   			}
+			let result: AgentToolResult;
+			// Route by Op kind
+			const opKind = (action as any).kind;
+			if (opKind === "filePatch" || opKind === "patch") {
+				result = await this.#executePatch(targetPath, (action as any).diff!, signal);
+			} else if (
+				(opKind === "fileAppend" || opKind === "filePrepend") &&
+				!(action as any).pos &&
+				!(action as any).end &&
+				!(await fs.exists(targetPath))
+			) {
+				// File-create shortcut: anchorless fileAppend/filePrepend on a
+				// missing file becomes a creation. Single-shot, no kernel round-trip.
+				result = await this.#executeLineId(targetPath, action, i + 1, idempotent);
+			} else {
+				// All other ops — including numeric-anchor line ops since
+				// PLAN-317 — route through the kernel's TextResolver.
+				result = await this.#executeStructural(targetPath, action, effectiveCwd, signal);
+			}
 
-  			if (isErrorResult(result)) {
-  				result.isError = true;
-  				results.push(result);
-  				failedOpIndex = i + 1;
-  				for (let j = i + 1; j < params.operations.length; j++) skippedOpIndices.push(j + 1);
-  				break;
-  			}
-  			// Surface the coalesce/kept-nested warning so the agent self-corrects on
-  			// the next call. We append it; we do NOT mark the result as an error —
-  			// the op succeeded at the resolved location.
-  			if (resolved.warning && !isErrorResult(result)) {
-  				result = {
-  					...result,
-  					content: result.content.map((c, idx, all) => {
-  						// Append warning to the FIRST text node so single-op consumers
-  						// (which read result.content.find(type=text)) see it inline.
-  						if (c.type !== "text") return c;
-  						const firstTextIdx = all.findIndex(x => x.type === "text");
-  						return idx === firstTextIdx ? { ...c, text: `${c.text}\n⚠ ${resolved.warning}` } : c;
-  					}),
-  				};
-  			}
-  			results.push(result);
-  		}
+			if (isErrorResult(result)) {
+				result.isError = true;
+				results.push(result);
+				failedOpIndex = i + 1;
+				for (let j = i + 1; j < params.operations.length; j++) skippedOpIndices.push(j + 1);
+				break;
+			}
+			// Surface the coalesce/kept-nested warning so the agent self-corrects on
+			// the next call. We append it; we do NOT mark the result as an error —
+			// the op succeeded at the resolved location.
+			if (resolved.warning && !isErrorResult(result)) {
+				result = {
+					...result,
+					content: result.content.map((c, idx, all) => {
+						// Append warning to the FIRST text node so single-op consumers
+						// (which read result.content.find(type=text)) see it inline.
+						if (c.type !== "text") return c;
+						const firstTextIdx = all.findIndex(x => x.type === "text");
+						return idx === firstTextIdx ? { ...c, text: `${c.text}\n⚠ ${resolved.warning}` } : c;
+					}),
+				};
+			}
+			results.push(result);
+		}
 
-  		// Strict rollback: restore every snapshotted file on any failure.
-  		let rolledBack = false;
-  		if (transactionMode === "strict" && failedOpIndex !== null) {
+		// Strict rollback: restore every snapshotted file on any failure.
+		let rolledBack = false;
+		if (transactionMode === "strict" && failedOpIndex !== null) {
 			for (const [path, snap] of snapshots) {
 				if (snap.existed) {
 					await fs.writeFile(path, snap.content ?? "", "utf-8");
@@ -360,10 +384,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		const diagnostics = chunks.flatMap(c => c.diagnostics);
 		if (diagnostics.length > 0) {
 			const diag = diagnostics[0]!;
-			let text = diag.message;
-			if (diag.hint) {
-				text += `\n  = hint: ${diag.hint}`;
-			}
+			const text = diag.message;
 			return toolResult<EditToolResultDetails>({
 				target: nodePath.relative(effectiveCwd, targetPath),
 				action: action.kind,
@@ -379,13 +400,19 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		const diff = meta?.diff as string | undefined;
 		const editCount = (meta?.editCount as number) ?? 1;
 		const created = meta?.created as boolean | undefined;
+		const relTarget = nodePath.relative(effectiveCwd, targetPath);
+		// Dual-audience summary: a one-line `<verb> · <target>` header gives the
+		// agent immediate context (the diff's own ---/+++ headers are generic),
+		// followed by the unified diff body. Falls back to the flat status line
+		// when no diff is available (e.g. no-op or whole-file create/delete).
+		const header = `${action.kind} · ${relTarget}`;
 		const summary = diff?.length
-			? diff
+			? `${header}\n${diff}`
 			: created
 				? `Created ${targetPath}`
 				: `Updated ${targetPath} (${editCount} edit(s))`;
 		return toolResult<EditToolResultDetails>({
-			target: nodePath.relative(effectiveCwd, targetPath),
+			target: relTarget,
 			action: action.kind,
 		})
 			.text(summary)
@@ -456,7 +483,18 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 			.filter(c => c.type === "text")
 			.map(c => (c as { text?: string }).text ?? "")
 			.join("\n");
-		const sanitized = replaceTabs(text);
+		// Descriptive title: name the verb + target (and op count for batches) so
+		// the cell reads e.g. `replace · src/app.ts::greet` instead of a bare
+		// "Edit". Falls back to "Edit" when details are absent.
+		const d = result.details as EditToolResultDetails | undefined;
+		const title = editResultTitle(d, result.isError === true);
+		// The agent-facing text prepends a `<verb> · <target>` header for context;
+		// the TUI already shows that in the title, so drop a leading header line
+		// that matches it to keep the diff cell clean.
+		const verb = d?.action ?? d?.op;
+		const headerLine = verb && d?.target ? `${verb} · ${d.target}` : undefined;
+		const body = headerLine && text.startsWith(`${headerLine}\n`) ? text.slice(headerLine.length + 1) : text;
+		const sanitized = replaceTabs(body);
 		const maxChars = 2_000;
 		const truncated = sanitized.length > maxChars ? `${sanitized.slice(0, maxChars)}\n...truncated` : sanitized;
 		return {
@@ -465,8 +503,8 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 					{
 						code: truncated,
 						language: "diff",
-						title: "Edit",
-						status: "complete",
+						title,
+						status: result.isError === true ? "error" : "complete",
 						expanded: options.expanded,
 						width,
 					},

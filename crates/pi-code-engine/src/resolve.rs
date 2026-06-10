@@ -349,7 +349,63 @@ fn find_symbol_node<'a>(
 		}
 	}
 
+	// Self-nesting containers (markdown/org/typst sections nest as sections):
+	// a bare child name like `Section` is addressable without the full
+	// `Parent.Section` dot-path, matching what the read-side resolver accepts.
+	// Gated to self-nesting `class_like` so code languages keep top-level +
+	// dot-path semantics (a nested fn is NOT bare-addressable). Ambiguity
+	// across the tree is surfaced as an error, identical to the top-level rule.
+	if profile_has_self_nesting_container(profile) {
+		let nested = find_nested_matches(root, profile, source, base_symbol);
+		if nested.len() == 1 {
+			return Ok(Some(nested[0]));
+		}
+		if nested.len() > 1 {
+			return Err(ambiguous_symbol_error(symbol, &nested));
+		}
+	}
+
 	Ok(None)
+}
+
+/// True when the profile declares a `class_like` container whose own
+/// `node_type` appears in its `member_types` — i.e. it nests within itself
+/// (markdown/org/typst `section`). Code containers (Rust `impl_item`, TS
+/// `class_declaration`) hold *different* member node types and are excluded.
+fn profile_has_self_nesting_container(profile: &LanguageProfile) -> bool {
+	profile
+		.class_like
+		.iter()
+		.any(|cl| cl.member_types.iter().any(|m| m == &cl.node_type))
+}
+
+/// Recursively collect every declaration node matching `name` anywhere in the
+/// tree (used only for self-nesting container languages). Mirrors
+/// `match_declaration`'s name comparison; descends through all named children.
+fn find_nested_matches<'a>(
+	node: Node<'a>,
+	profile: &LanguageProfile,
+	source: &str,
+	name: &str,
+) -> Vec<Node<'a>> {
+	let mut out = Vec::new();
+	fn walk<'a>(
+		node: Node<'a>,
+		profile: &LanguageProfile,
+		source: &str,
+		name: &str,
+		out: &mut Vec<Node<'a>>,
+	) {
+		let mut cursor = node.walk();
+		for child in node.named_children(&mut cursor) {
+			if let Some(found) = match_declaration(child, profile, name, source) {
+				out.push(found);
+			}
+			walk(child, profile, source, name, out);
+		}
+	}
+	walk(node, profile, source, name, &mut out);
+	out
 }
 
 fn split_deduplicated_name(name: &str) -> (&str, Option<usize>) {
@@ -733,6 +789,54 @@ mod tests {
 			body.starts_with("Follow these steps"),
 			"body should start after heading line: {body:?}"
 		);
+	}
+
+	/// BUG-439: a nested heading is addressable by its BARE name (no
+	/// `Parent.` dot-path), matching the read-side resolver. Self-nesting
+	/// container languages opt into recursive descent.
+	#[test]
+	fn resolve_markdown_bare_nested_section() {
+		let source = "# Title\n\nIntro.\n\n## Section\n\nBody.\n";
+		let buffer =
+			CodeBuffer::from_str(source, LanguageId::new("markdown"), registry()).expect("buf");
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("markdown")).unwrap();
+		let resolved = resolve_symbol(&buffer, profile, "Section").expect("bare nested section");
+		assert_eq!(resolved.name, "Section");
+		assert_eq!(resolved.kind, "section");
+	}
+
+	/// Bare nested resolution must still refuse ambiguity: two `## Dup`
+	/// headings under different parents → ambiguous error (same rule as
+	/// top-level duplicates), guiding the agent to the dot-path.
+	#[test]
+	fn resolve_markdown_bare_nested_ambiguous() {
+		let source = "# A\n\n## Dup\n\nx\n\n# B\n\n## Dup\n\ny\n";
+		let buffer =
+			CodeBuffer::from_str(source, LanguageId::new("markdown"), registry()).expect("buf");
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("markdown")).unwrap();
+		let err = resolve_symbol(&buffer, profile, "Dup").expect_err("ambiguous");
+		assert!(
+			err.to_string().contains("Ambiguous"),
+			"expected ambiguity error, got: {err}"
+		);
+		// Dot-path disambiguates.
+		assert!(resolve_symbol(&buffer, profile, "A.Dup").is_ok());
+		assert!(resolve_symbol(&buffer, profile, "B.Dup").is_ok());
+	}
+
+	/// A bare top-level name must NOT recurse past a unique top-level match
+	/// (no behavior change for the common case).
+	#[test]
+	fn resolve_markdown_bare_toplevel_unaffected() {
+		let source = "# Title\n\n## Section\n\nBody.\n";
+		let buffer =
+			CodeBuffer::from_str(source, LanguageId::new("markdown"), registry()).expect("buf");
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("markdown")).unwrap();
+		let resolved = resolve_symbol(&buffer, profile, "Title").expect("top-level");
+		assert_eq!(resolved.name, "Title");
 	}
 
 	#[test]

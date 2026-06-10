@@ -143,7 +143,7 @@ mod tests {
 		let err = buffer
 			.edit_batch(edits)
 			.expect_err("reject partial wrapper splice");
-		assert!(err.to_string().contains("structurally invalid"));
+		assert!(err.to_string().contains("unparseable"));
 		assert!(buffer.source().contains("#let title = [Spell]"));
 	}
 

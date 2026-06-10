@@ -96,6 +96,10 @@ pub trait EditHistory: Send + Sync {
 	fn record(&self, entry: EditEntry);
 	fn query(&self, q: HistoryQuery) -> Vec<EditEntry>;
 	fn revert(&self, q: HistoryQuery) -> RevertOutcome;
+	/// Re-apply the most-recently-reverted matching entry (the inverse of
+	/// [`EditHistory::revert`]): restores `before→after` and clears the
+	/// `reverted` flag so a subsequent `revert` can undo it again.
+	fn reapply(&self, q: HistoryQuery) -> RevertOutcome;
 }
 
 /// JSONL-backed history stored at `<root>/.spell/edit-history.jsonl`.
@@ -250,6 +254,61 @@ impl EditHistory for JsonlHistory {
 		}
 		let entry_id = entry.id.clone();
 		entries[idx].reverted = true;
+		self.write_all(&entries);
+		RevertOutcome::Success { entry_id }
+	}
+
+	fn reapply(&self, q: HistoryQuery) -> RevertOutcome {
+		let mut entries = self.read_all();
+		// Inverse of revert: target the most-recently *reverted* entry.
+		let idx = entries.iter().rposition(|e| {
+			if !e.reverted {
+				return false;
+			}
+			if let Some(ref sid) = q.session_id {
+				if e.session_id != *sid {
+					return false;
+				}
+			}
+			if let Some(ref glob) = q.file_glob {
+				if !glob_match(glob, &e.file) {
+					return false;
+				}
+			}
+			true
+		});
+		let idx = match idx {
+			Some(i) => i,
+			None => return RevertOutcome::NotFound,
+		};
+
+		let entry = &entries[idx];
+		let file = &entry.file;
+		if let Some(parent) = file.parent() {
+			let _ = std::fs::create_dir_all(parent);
+		}
+		// Re-apply before→after. If the file already matches `before`, swap to
+		// `after`; otherwise locate the `before` chunk and replace it (symmetric
+		// with revert_chunk_replace, args swapped).
+		let current = std::fs::read_to_string(file).unwrap_or_else(|_| entry.before.clone());
+		let new_content = if current == entry.before {
+			entry.after.clone()
+		} else {
+			match revert_chunk_replace(&current, &entry.before, &entry.after) {
+				Some(s) => s,
+				None => {
+					return RevertOutcome::Error(format!(
+						"cannot reapply {} cleanly: file changed since undo and chunk replace failed",
+						entry.id
+					));
+				},
+			}
+		};
+		if let Err(e) = std::fs::write(file, &new_content) {
+			return RevertOutcome::Error(format!("write failed: {e}"));
+		}
+		let entry_id = entry.id.clone();
+		entries[idx].reverted = false;
 		self.write_all(&entries);
 		RevertOutcome::Success { entry_id }
 	}

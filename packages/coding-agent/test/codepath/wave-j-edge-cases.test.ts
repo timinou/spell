@@ -14,15 +14,14 @@
  * No legacy adapter, no removed Op::from_legacy paths.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { executeCodePath } from "@spell/pi-natives";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
-import * as path from "node:path";
 import * as os from "node:os";
-import { Settings } from "@spell/pi-coding-agent/config/settings";
-import { computeLineHash } from "@spell/pi-coding-agent/patch";
-import { CodepathEditTool, type ToolSession } from "@spell/pi-coding-agent/tools";
+import * as path from "node:path";
 import type { AgentToolResult } from "@spell/pi-agent-core";
+import { Settings } from "@spell/pi-coding-agent/config/settings";
+import { CodepathEditTool, type ToolSession } from "@spell/pi-coding-agent/tools";
+import { executeCodePath } from "@spell/pi-natives";
 
 function makeSession(tmpDir: string, sandboxPolicy?: ToolSession["sandboxPolicy"]): ToolSession {
 	return {
@@ -131,8 +130,8 @@ describe("Wave J: edge cases", () => {
 		const result = await tool.execute("t", {
 			transaction: "strict",
 			operations: [
-				{ target: file, action: { kind: "fileRawTextReplace", find: "alpha", content: "ALPHA" } },
-				{ target: file, action: { kind: "fileRawTextReplace", find: "beta", content: "BETA" } },
+				{ target: file, action: { kind: "replace", matching: "raw", find: "alpha", content: "ALPHA" } },
+				{ target: file, action: { kind: "replace", matching: "raw", find: "beta", content: "BETA" } },
 			],
 		});
 		expect(result.isError).toBeFalsy();
@@ -150,9 +149,9 @@ describe("Wave J: edge cases", () => {
 			transaction: "strict",
 			operations: [
 				// Op 1 succeeds on a.txt.
-				{ target: a, action: { kind: "fileRawTextReplace", find: "original-a", content: "patched-a" } },
+				{ target: a, action: { kind: "replace", matching: "raw", find: "original-a", content: "patched-a" } },
 				// Op 2 fails: searching for a string that doesn't exist in b.txt.
-				{ target: b, action: { kind: "fileRawTextReplace", find: "ABSENT_TOKEN_XYZ", content: "patched-b" } },
+				{ target: b, action: { kind: "replace", matching: "raw", find: "ABSENT_TOKEN_XYZ", content: "patched-b" } },
 			],
 		});
 		expect(result.isError).toBe(true);
@@ -169,15 +168,15 @@ describe("Wave J: edge cases", () => {
 		const result = await tool.execute("t", {
 			operations: [
 				{
-					target: `${file}::f`,
-    	action: { kind: "symbolReplace", scope: "body", content: "@@@" /* missing braces + invalid */ },
-    				},
-    			],
-    		});
-    		expect(result.isError).toBe(true);
-    		const text = getText(result);
-    		expect(text).toMatch(/braces|outer braces|\{ \.\.\. \}|structurally invalid/i);
-    		expect(text).toContain("@@@"); // diagnostic includes the offending excerpt
+					target: `${file}::f#body`,
+					action: { kind: "replace", content: "@@@" /* missing braces + invalid */ },
+				},
+			],
+		});
+		expect(result.isError).toBe(true);
+		const text = getText(result);
+		expect(text).toMatch(/delimiters|braces|\{ \.\.\. \}|unparseable/i);
+		expect(text).toContain("@@@"); // diagnostic includes the offending excerpt
 	});
 
 	it("lineInsert with at:{side:'after', line:N} inserts multiline content correctly", async () => {
@@ -190,7 +189,7 @@ describe("Wave J: edge cases", () => {
 			operations: [
 				{
 					target: file,
-					action: { kind: "lineInsert", at: { side: "after", line: 2 }, content: ["one", "two"] },
+					action: { kind: "replace", place: "after", at: 2, content: ["one", "two"] },
 				},
 			],
 		});
@@ -220,7 +219,7 @@ describe("Wave J: edge cases", () => {
 				operations: [
 					{
 						target: "../../../etc/passwd",
-						action: { kind: "fileWrite", content: "owned\n", force: true },
+						action: { kind: "fileWrite", content: "owned\n", force: true } as any,
 					},
 				],
 			});

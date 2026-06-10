@@ -1,0 +1,19 @@
+#+TITLE: Descriptive edit tool result: titled diff cell + structural diff backfill
+#+STATE: DONE
+#+SESSION_ID: 15022e9a3d98d40f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-34-47-158Z_15022e9a3d98d40f.jsonl]]
+#+CUSTOM_ID: FEAT-807-descriptive-edit-tool-result-titled-diff
+
+* Initial Message
+
+test drive this new surface
+
+Implemented during PLAN-321 verb-surface test-drive (user asked for "more descriptive edit interfaces in the TUI").
+
+PROBLEM: symbol/css/heading edits rendered a flat "Updated X (1 edit(s))" line with NO diff, while only file/line/text edits showed a unified diff. Root cause: text ops go through apply_to_text (populates MutationOutcome.diff); symbol/css/heading resolvers hardcode `diff: None`. TUI cell title was a bare "Edit".
+
+FIX (two layers):
+1. Rust chokepoint (crates/pi-natives/src/code_path/napi.rs edit group loop): snapshot buf.source() before each op; after the op, backfill `outcome.diff` via diffy::create_patch(before, after) for any outcome that left it None. Guards: skip when should_delete (whole-file removal) or outcome.created (keeps "Created X" render). No-op for text ops (already Some). Test: edit_result_backfills_diff_for_structural_ops.
+2. TS render (packages/coding-agent/src/tools/edit.ts): renderResult title now `<verb> · <target>` (editResultTitle helper) with error→⚠ + status "error"; agent-facing summary text prepends `<verb> · <target>` header above the diff (dual-audience); TUI strips that header line since the title carries it.
+
+Verified e2e via executeCodePath: symbol replace + css rename now carry `@@` diffs; agent text starts with `replace · a.ts::greet`.

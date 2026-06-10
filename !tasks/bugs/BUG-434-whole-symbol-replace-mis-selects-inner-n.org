@@ -1,0 +1,23 @@
+#+TITLE: Whole-symbol replace mis-selects inner node on export-wrapped declarations
+#+STATE: ITEM
+#+SESSION_ID: 15022e9a3d98d40f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-34-47-158Z_15022e9a3d98d40f.jsonl]]
+#+CUSTOM_ID: BUG-434-whole-symbol-replace-mis-selects-inner-n
+
+* Initial Message
+
+the edit tool has so many sub-tools it's kinda insane. it should have much less, especially considering they are redundant with CodePath specs. Please provide me your own understanding and explain
+
+Same root class as BUG-433 (delete), now confirmed for `replace`.
+
+resolve_mutation_edit (crates/pi-natives/src/code_path/code_resolver/mutation.rs) selects the NARROWEST matching node via min_by_key(span_len). For `export function greet(){...}` the name query yields `function_declaration ⊂ export_statement`; whole-replace picks `function_declaration` (no `export` kw). Then:
+- content `function greet()...`        → ✓ replaces inner decl
+- content `export function greet()...` → ✗ structural-invalid (orphaned/duplicated `export`)
+
+Footgun: the agent writing the full declaration *as it appears in the file* gets rejected; only the un-exported form works.
+
+Fix: for kind==replace WHOLE (no #body/#sig qualifier) AND kind==delete, re-anchor to the widest match containing the narrow anchor (the wrapper chain) — generalize the BUG-433 delete fix to cover whole-replace. Body/sig/rename keep the narrow node.
+
+Repro (deterministic): target `f.ts::greet` on multiline exported fn, replace content beginning with `export`.
+
+QoL: the error message blames content ("must form a complete block") when the true cause is wrong node selection — rewrite to name resolved node+span and the real fix.

@@ -1,10 +1,10 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Settings } from "@spell/pi-coding-agent/config/settings";
-import { FindTool } from "@spell/pi-coding-agent/tools/find";
-import { CodepathEditTool } from "@spell/pi-coding-agent/tools/edit";
 import type { ToolSession } from "@spell/pi-coding-agent/tools";
+import { CodepathEditTool } from "@spell/pi-coding-agent/tools/edit";
+import { FindTool } from "@spell/pi-coding-agent/tools/find";
 
 let tmpDir: string;
 let find: FindTool;
@@ -36,7 +36,12 @@ afterEach(async () => {
 });
 
 function getText(result: any): string {
-	return result.content?.filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n") || "";
+	return (
+		result.content
+			?.filter((c: any) => c.type === "text")
+			.map((c: any) => c.text)
+			.join("\n") || ""
+	);
 }
 
 async function writeFile(relPath: string, content: string): Promise<void> {
@@ -52,18 +57,27 @@ function relGlob(glob: string): string {
 
 describe("Pipeline 1: rename a function and verify no stale references", () => {
 	test("renames parseConfig to loadConfig and updates all call sites", async () => {
-		await writeFile("api.ts", `export function parseConfig() {
+		await writeFile(
+			"api.ts",
+			`export function parseConfig() {
   return {};
 }
-`);
-		await writeFile("app.ts", `import { parseConfig } from './api';
+`,
+		);
+		await writeFile(
+			"app.ts",
+			`import { parseConfig } from './api';
 
 console.log(parseConfig());
-`);
-		await writeFile("worker.ts", `import { parseConfig } from './api';
+`,
+		);
+		await writeFile(
+			"worker.ts",
+			`import { parseConfig } from './api';
 
 parseConfig();
-`);
+`,
+		);
 
 		// Step 1: rename the exported function declaration.
 		const renameResult = await edit.execute("t", {
@@ -81,7 +95,7 @@ parseConfig();
 			operations: [
 				{
 					target: path.join(tmpDir, "app.ts"),
-					action: { kind: "fileFindReplace", find: "parseConfig", content: "loadConfig", occurrence: "all" },
+					action: { kind: "replace", find: "parseConfig", content: "loadConfig", occurrence: "all" },
 				},
 			],
 		});
@@ -91,7 +105,7 @@ parseConfig();
 			operations: [
 				{
 					target: path.join(tmpDir, "worker.ts"),
-					action: { kind: "fileFindReplace", find: "parseConfig", content: "loadConfig", occurrence: "all" },
+					action: { kind: "replace", find: "parseConfig", content: "loadConfig", occurrence: "all" },
 				},
 			],
 		});
@@ -122,18 +136,20 @@ parseConfig();
 
 describe("Pipeline 2: insert a guard clause at top of function", () => {
 	test("injects an early-return guard while preserving original logic", async () => {
-		await writeFile("auth.ts", `function validate(token: string) {
+		await writeFile(
+			"auth.ts",
+			`function validate(token: string) {
   return token.length > 0;
 }
-`);
+`,
+		);
 
 		const result = await edit.execute("t", {
 			operations: [
 				{
-					target: path.join(tmpDir, "auth.ts::validate"),
+					target: path.join(tmpDir, "auth.ts::validate#body"),
 					action: {
-						kind: "symbolReplace",
-						scope: "body",
+						kind: "replace",
 						content: `{
   if (!token) {
     throw new Error("Token required");
@@ -159,8 +175,11 @@ describe("Pipeline 3: undo/redo round-trip", () => {
 		// for manage undo/redo, so the edit log is unreachable.  Use raw
 		// executeCodePath({ command:"manage", manage:"undo", root, sessionId })
 		// when session-scoped history is required.
-		await writeFile("foo.ts", `export const foo = 1;
-`);
+		await writeFile(
+			"foo.ts",
+			`export const foo = 1;
+`,
+		);
 
 		// Apply a rename.
 		const renameResult = await edit.execute("t", {

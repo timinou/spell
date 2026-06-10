@@ -1,5 +1,5 @@
 import { type Static, Type } from "@sinclair/typebox";
-import { editOpSchema } from "./codepath-op-schema.generated";
+import { verbActionSchema } from "./verb-schema";
 
 // Re-export NAPI surface types
 export type {
@@ -37,7 +37,7 @@ export {
 // Source: kernel Op enum via list_ops() NAPI introspection.
 // Refresh: `bun run gen:op-schema`. See codepath-op-schema.generated.ts.
 
-
+export type { EditOp } from "./codepath-op-schema.generated";
 // ── Re-export generated Op schemas (kernel-derived) ──
 export {
 	cssRemoveDeadStyleOp,
@@ -73,8 +73,6 @@ export {
 	symbolTransposeOp,
 	symbolWrapOp,
 } from "./codepath-op-schema.generated";
-export type { EditOp } from "./codepath-op-schema.generated";
-
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Get tool schema
@@ -140,22 +138,20 @@ export const editOperationSchema = Type.Recursive(This =>
 				description:
 					"Stable edit target ID: '<file>' for file roots or '<file>::Symbol.member' for declarations. Multi-word symbols may be backtick-quoted, e.g. foo.ts::`export * from \"./json\"`. Scope qualifiers `#body` / `#sig` are valid edit targets; read-only semantic qualifiers (`#hover`, `#hover_inferred`, `#type_definition`, `#type_def`, `#signature`, `#inlay`, `#diagnostics`) are rejected with IncompatibleTargetShape — use `find` for inspection.",
 			}),
-			action: Type.Union([
-				Type.Omit(editOpSchema, ["target"]),
-				Type.Object({ kind: Type.Literal("undo") }, { additionalProperties: false, description: "Undo the last edit transaction in this session" }),
-				Type.Object({ kind: Type.Literal("redo") }, { additionalProperties: false, description: "Redo the most recently undone transaction in this session" }),
-			]),
+			// PLAN-321: the external action surface is the hand-authored 6-verb
+			// `Verb` surface (+ undo/redo), NOT the 31 kernel Op kinds. The kernel
+			// lowers each verb to a precise Op from the target shape. Legacy Op
+			// kinds still deserialize at the boundary (Verb-first, Op-fallback) so
+			// `create.ts`'s `fileCreate` keeps working; they're just no longer
+			// advertised on the model-facing surface.
+			action: verbActionSchema,
 			children: Type.Optional(
 				Type.Array(This, { description: "Nested child target operations under the same file tree" }),
 			),
-			occurrence: Type.Optional(
-				Type.Union(
-					[Type.Literal("first"), Type.Literal("last"), Type.Literal("all"), Type.Integer({ minimum: 1 })],
-					{
-						description: "Match occurrence selector: first | last | all | 1-indexed number",
-					},
-				),
-			),
+			// NB: `occurrence` lives ONLY inside the `replace` verb (verb-schema.ts);
+			// it is a find-replace selector, not an operation-level knob. The former
+			// op-level duplicate was never read by edit.ts — removed to keep one
+			// home for the field on the model-facing surface.
 			idempotent: Type.Optional(
 				Type.Boolean({
 					description: "Allow mutating edit commands to succeed when they intentionally make no semantic change",

@@ -51,7 +51,7 @@ describe("edit({ root }) — BUG-401", () => {
 			operations: [
 				{
 					target: "rel.ts",
-					action: { kind: "fileFindReplace", find: "beta", content: "delta" },
+					action: { kind: "replace", find: "beta", content: "delta" },
 				},
 			],
 		});
@@ -78,7 +78,7 @@ describe("edit({ root }) — BUG-401", () => {
 			operations: [
 				{
 					target: "hello.ts",
-					action: { kind: "fileFindReplace", find: "world", content: "REPLACED" },
+					action: { kind: "replace", find: "world", content: "REPLACED" },
 				},
 			],
 		});

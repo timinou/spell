@@ -1,0 +1,27 @@
+#+TITLE: undo verb rejected target-less dispatch despite contract
+#+STATE: DONE
+#+SESSION_ID: 15022e9a3d98d40f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-34-47-158Z_15022e9a3d98d40f.jsonl]]
+#+CUSTOM_ID: BUG-440-undo-verb-rejected-target-less-dispatch
+#+COMPLETION_HASH: a0a6c19499cd66d3
+
+* Initial Message
+
+test drive this new surface
+
+Found + FIXED during PLAN-321 verb-surface test-drive.
+
+The `undo` verb is documented as "dispatched alone; target ignored" (edit.md + verb-schema.ts), and edit.ts routes it via `manage undo` with `target: ""`. But `manage::handle_undo` had a hard guard rejecting empty target ("manage undo requires a file target"), so EVERY undo failed:
+```
+edit { operations: [{ target: "", action: { kind: "undo" } }] }
+→ [missing_target] manage undo requires a file target
+```
+Even passing a file target failed because the guard fired before the engine ran.
+
+Root cause: artificial guard. The underlying `JsonlHistory::revert` treats `file_glob` as OPTIONAL (None → revert most-recent uncommitted edit in session, any file), and `history_for("")` already falls back to `workspace_root_for(root)`. So target-less undo was fully supported by the engine; only the guard blocked it.
+
+Fix (crates/pi-natives/src/code_path/manage.rs::handle_undo): drop the empty-target rejection; pass `file_glob` only when a file is supplied (narrows the revert), else revert session-wide most-recent. Matches the verb contract.
+
+NB: `redo` remains a stub ("redo not yet implemented; re-apply manually") — separate, pre-existing, out of scope here.
+
+NOTE [2026-06-09]: Fixed + tested. handle_undo no longer requires a target; history_for made root-inclusive (workspace_root_for walks from path.parent(), so target-less branch now probes root/.spell-history-probe to see root's own .spell marker — fixes the latent asymmetry where target-less undo would resolve a DIFFERENT history file than the recording edit when cwd IS the workspace root). Unit tests handle_undo_reverts_without_target + handle_undo_no_history_is_graceful green; e2e via executeCodePath (undo target-less, 0 diagnostics) green.

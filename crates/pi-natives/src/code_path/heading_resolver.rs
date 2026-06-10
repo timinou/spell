@@ -39,8 +39,14 @@ impl HeadingResolver {
 					ActionContent::Single(s) => s.clone(),
 					ActionContent::Multi(v) => v.join("\n"),
 				};
+				// A markdown/org section IS a declaration (the profile registers
+				// `section` with name + body + span), so replacing the block under a
+				// heading is exactly a whole-symbol `write` over the section node —
+				// no bespoke procedure. (The old "replaceCodeBlock" routed to an
+				// unregistered name and, even when mapped, targeted fenced CODE
+				// blocks, not the section body — wrong semantic. BUG-439.)
 				json!({
-					"kind": "replaceCodeBlock",
+					"kind": "write",
 					"content": content_str
 				})
 			},
@@ -92,8 +98,9 @@ impl MutationResolver for HeadingResolver {
 					ActionContent::Single(s) => s.clone(),
 					ActionContent::Multi(v) => v.join("\n"),
 				};
+				// Section = declaration ⇒ whole-symbol write (see apply_to_buffer).
 				let action_json = json!({
-					"kind": "replaceCodeBlock",
+					"kind": "write",
 					"content": content_str
 				});
 				Some(

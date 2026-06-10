@@ -395,6 +395,32 @@ impl CodeResolverImpl {
 				span: None,
 			})?;
 
+		// BUG-433 / BUG-434: a name query yields the declaration's whole *wrapper
+		// chain* (e.g. `variable_declarator ⊂ lexical_declaration ⊂
+		// export_statement`). The narrowest match is correct only for RENAME (which
+		// climbs to the `name` field anyway). Operations that act on the whole
+		// statement — DELETE and whole-symbol REPLACE — must target the WIDEST match
+		// containing the anchor, else they orphan the wrapper:
+		//   delete  narrow → `export const ;`        (invalid syntax)
+		//   replace narrow → inner `function_decl` only; content that legitimately
+		//           begins with `export …` then double-prefixes / orphans the kw,
+		//           and the parse gate rejects the agent's *natural* full-decl input.
+		// Re-anchoring to the wrapper makes `::sym` whole-replace authoritative over
+		// the entire declaration (content replaces the statement verbatim), while
+		// `#body` / `#sig` keep the narrow node via the scoped legacy path upstream.
+		// Language-agnostic: the matched set is exactly this declaration's chain.
+		let op_kind = action_json.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+		let whole_statement_op = matches!(op_kind, "delete" | "write");
+		let node: &tree_sitter::Node = if whole_statement_op {
+			nodes
+				.iter()
+				.filter(|n| n.start_byte() <= node.start_byte() && n.end_byte() >= node.end_byte())
+				.max_by_key(|n| (n.end_byte() - n.start_byte()))
+				.unwrap_or(node)
+		} else {
+			node
+		};
+
 		// This builder path handles only whole-declaration writes, renames, and
 		// deletes. Body/sig-scoped writes are intercepted upstream in
 		// `apply_to_buffer` and routed to the legacy `single_action` path, which

@@ -27,6 +27,30 @@ const PARSE_TIMEOUT_MICROS: u64 = 5_000_000;
 const SAVE_LOCK_BUDGET: Duration = Duration::from_millis(500);
 const REVALIDATE_LOCK_BUDGET: Duration = Duration::from_millis(100);
 
+/// Build the diagnostic shown when an applied edit leaves the buffer with a
+/// tree-sitter parse error (the original parsed cleanly, so the new content is
+/// at fault). Dual-audience: a human-readable cause + concrete next-actions,
+/// plus a stable `[agent-hint]` tail the model can pattern-match on.
+///
+/// Tree-sitter error recovery often relocates the ERROR node *outside* the
+/// literal edit span (e.g. braceless body content orphans the enclosing
+/// `export`/`do`), so we describe the likely causes rather than claiming a
+/// precise location we can't trust.
+fn structural_invalid_message(new_text: &str) -> String {
+	let excerpt: String = new_text.chars().take(48).collect();
+	let ellipsis = if new_text.chars().count() > 48 { "…" } else { "" };
+	format!(
+		"Edit rejected: applying it would make the file unparseable (it parsed cleanly before, so \
+		 the new content is the cause).\n  content begins: `{excerpt}{ellipsis}`\n  likely causes:\n   \
+		  • a `#body` edit whose content omits the outer delimiters (`{{ … }}` / `do … end`)\n     \
+		  • a whole-symbol replace whose content is itself an incomplete declaration\n     • a line/range \
+		 edit that splits a token or bracket pair\n  try:\n     • for a body change, target `<sym>#body` and include the braces\n     • for a \
+		 signature change, target `<sym>#sig`\n     • for a whole-decl change, target `<sym>` and provide \
+		 the complete declaration\n  [agent-hint] structural_invalid: content produced a parse error; match the \
+		 target scope (#body|#sig|whole) to the content shape and keep delimiters balanced."
+	)
+}
+
 fn metadata_modified(metadata: &fs::Metadata) -> Option<SystemTime> {
 	metadata.modified().ok()
 }
@@ -946,11 +970,9 @@ impl CodeBuffer {
 			};
 			if self.tree.root_node().has_error() {
 				restore(self);
-				return Err(CodeEngineError::Edit(
-					"Edit would leave the buffer structurally invalid. Re-anchor the target or include \
-					 an explicit separator."
-						.into(),
-				));
+				return Err(CodeEngineError::Edit(structural_invalid_message(
+					&edit.new_text,
+				)));
 			}
 		}
 
@@ -1060,16 +1082,8 @@ impl CodeBuffer {
 			// single-edit path's whole-file gate.
 			if self.tree.root_node().has_error() {
 				restore(self);
-				let excerpt: String = all_forwards
-					.first()
-					.map(|e| e.new_text.chars().take(40).collect())
-					.unwrap_or_default();
-				return Err(CodeEngineError::Edit(format!(
-					"Edit would leave the buffer structurally invalid (new content starts with: \
-					 `{excerpt}`). If replacing a body, the content must form a complete block \
-					 (include the `{{ ... }}` / `do ... end` delimiters). Re-anchor the target or \
-					 include an explicit separator."
-				)));
+				let first = all_forwards.first().map(|e| e.new_text.as_str()).unwrap_or("");
+				return Err(CodeEngineError::Edit(structural_invalid_message(first)));
 			}
 		}
 		if !all_forwards.is_empty() {
@@ -1857,7 +1871,7 @@ mod tests {
 				new_text:     "export const = ;\n".into(),
 			})
 			.expect_err("reject invalid syntax");
-		assert!(err.to_string().contains("structurally invalid"));
+		assert!(err.to_string().contains("unparseable"));
 		assert_eq!(buffer.source(), source);
 		assert_eq!(buffer.version(), 0);
 	}

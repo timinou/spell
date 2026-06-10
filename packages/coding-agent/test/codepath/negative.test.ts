@@ -6,14 +6,14 @@
  * asserts the diagnostic surfaces through the TS tool layer.
  */
 
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { FindTool } from "@spell/pi-coding-agent/tools/find";
-import { CodepathEditTool } from "@spell/pi-coding-agent/tools/edit";
-import type { ToolSession } from "@spell/pi-coding-agent/tools";
 import type { AgentToolResult } from "@spell/pi-agent-core";
+import type { ToolSession } from "@spell/pi-coding-agent/tools";
+import { CodepathEditTool } from "@spell/pi-coding-agent/tools/edit";
+import { FindTool } from "@spell/pi-coding-agent/tools/find";
 
 let tmpDir: string;
 let find: FindTool;
@@ -36,10 +36,8 @@ function indicatesDiagnostic(result: AgentToolResult): boolean {
 		.map(c => (c as { text?: string }).text ?? "")
 		.join("\n");
 	// Match all-caps error codes (PATH_NOT_FOUND, etc) and structured diagnostics
-	return (
-		/\[§|\b[A-Z][A-Z_]{4,}\b|error|invalid|incompatible|not[\s_-]?found|no[\s_-]?match|out[\s_-]?of|cwd_prefix|cannot|forbidden|history_op/i.test(
-			text,
-		)
+	return /\[§|\b[A-Z][A-Z_]{4,}\b|error|invalid|incompatible|not[\s_-]?found|no[\s_-]?match|out[\s_-]?of|cwd_prefix|cannot|forbidden|history_op/i.test(
+		text,
 	);
 }
 
@@ -102,7 +100,7 @@ describe("negative space — edit", () => {
 			operations: [
 				{
 					target: "foo.ts",
-					action: { kind: "symbolReplace", content: "new content" },
+					action: { kind: "symbolReplace", content: "new content" } as any,
 				},
 			],
 		});
@@ -118,17 +116,14 @@ describe("negative space — edit", () => {
 		}
 	});
 
-	test.todo(
-		"'fileFindReplace' on symbol target — SHOULD return IncompatibleTargetShape (kernel currently overloads to symbol-scoped find/replace)",
-		() => {},
-	);
+	test.todo("'fileFindReplace' on symbol target — SHOULD return IncompatibleTargetShape (kernel currently overloads to symbol-scoped find/replace)", () => {});
 	test.skip("'fileFindReplace' on symbol target — IncompatibleTargetShape", async () => {
 		await fs.writeFile(path.join(tmpDir, "foo.ts"), "export function greet() { return 'hi'; }\n");
 		const result = await edit.execute("t", {
 			operations: [
 				{
 					target: "foo.ts::greet",
-					action: { kind: "fileFindReplace", find: "hi", content: "hello" },
+					action: { kind: "replace", find: "hi", content: "hello" },
 				},
 			],
 		});
@@ -139,7 +134,7 @@ describe("negative space — edit", () => {
 		await fs.writeFile(path.join(tmpDir, "foo.ts"), "export const x = 1;\n");
 		const result = await edit.execute("t", {
 			operations: [
-				{ target: "foo.ts", action: { kind: "fileFindReplace", find: "1", content: "2" } },
+				{ target: "foo.ts", action: { kind: "replace", find: "1", content: "2" } },
 				{ target: "", action: { kind: "undo" } },
 			],
 		});
@@ -157,7 +152,7 @@ describe("negative space — edit", () => {
 			operations: [
 				{
 					target: "foo.ts::NotASymbol",
-					action: { kind: "symbolRename", newName: "Renamed" },
+					action: { kind: "rename", to: "Renamed" },
 				},
 			],
 		});
@@ -171,7 +166,7 @@ describe("negative space — edit", () => {
 			operations: [
 				{
 					target: "exists.ts",
-					action: { kind: "fileCreate", content: "new\n" },
+					action: { kind: "fileCreate", content: "new\n" } as any,
 				},
 			],
 		});
@@ -184,7 +179,7 @@ describe("negative space — edit", () => {
 			operations: [
 				{
 					target: "foo.ts::Ghost",
-					action: { kind: "symbolWrap", content: "wrap($BODY)" },
+					action: { kind: "replace", content: "wrap($BODY)" },
 				},
 			],
 		});

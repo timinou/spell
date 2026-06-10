@@ -47,14 +47,14 @@ async function write(name: string, body: string): Promise<string> {
 }
 
 describe("numeric line addressing — BUG-404", () => {
-	it("lineReplace accepts {start, end} as numbers", async () => {
+	it("replace on a line-range target accepts numeric start-end", async () => {
 		const file = await write("a.txt", "one\ntwo\nthree\nfour\n");
 		const tool = new CodepathEditTool(makeSession());
 		const result = await tool.execute("t", {
 			operations: [
 				{
-					target: file,
-					action: { kind: "lineReplace", span: { start: 2, end: 3 }, content: ["TWO", "THREE"] },
+					target: `${file}:2-3`,
+					action: { kind: "replace", content: ["TWO", "THREE"] },
 				},
 			],
 		});
@@ -62,14 +62,14 @@ describe("numeric line addressing — BUG-404", () => {
 		expect(await fs.readFile(file, "utf-8")).toBe("one\nTWO\nTHREE\nfour\n");
 	});
 
-	it("lineReplace accepts {start} as a single-line number", async () => {
+	it("replace on a single-line target", async () => {
 		const file = await write("b.txt", "one\ntwo\nthree\n");
 		const tool = new CodepathEditTool(makeSession());
 		const result = await tool.execute("t", {
 			operations: [
 				{
-					target: file,
-					action: { kind: "lineReplace", span: { start: 2 }, content: "TWO" },
+					target: `${file}:2-2`,
+					action: { kind: "replace", content: "TWO" },
 				},
 			],
 		});
@@ -77,14 +77,14 @@ describe("numeric line addressing — BUG-404", () => {
 		expect(await fs.readFile(file, "utf-8")).toBe("one\nTWO\nthree\n");
 	});
 
-	it("lineInsert accepts {side, line} numeric", async () => {
+	it("replace place:after with numeric `at` inserts after a line", async () => {
 		const file = await write("c.txt", "one\nthree\n");
 		const tool = new CodepathEditTool(makeSession());
 		const result = await tool.execute("t", {
 			operations: [
 				{
 					target: file,
-					action: { kind: "lineInsert", at: { side: "after", line: 1 }, content: "two" },
+					action: { kind: "replace", place: "after", at: 1, content: "two" },
 				},
 			],
 		});
@@ -92,14 +92,14 @@ describe("numeric line addressing — BUG-404", () => {
 		expect(await fs.readFile(file, "utf-8")).toBe("one\ntwo\nthree\n");
 	});
 
-	it("lineAppend accepts a bare numeric anchor", async () => {
+	it("replace place:after appends after the anchor line", async () => {
 		const file = await write("d.txt", "one\ntwo\nthree\n");
 		const tool = new CodepathEditTool(makeSession());
 		const result = await tool.execute("t", {
 			operations: [
 				{
 					target: file,
-					action: { kind: "lineAppend", at: 2, content: "TWO-EXTRA" },
+					action: { kind: "replace", place: "after", at: 2, content: "TWO-EXTRA" },
 				},
 			],
 		});
@@ -107,14 +107,14 @@ describe("numeric line addressing — BUG-404", () => {
 		expect(await fs.readFile(file, "utf-8")).toBe("one\ntwo\nTWO-EXTRA\nthree\n");
 	});
 
-	it("linePrepend accepts a bare numeric anchor", async () => {
+	it("replace place:before inserts before the anchor line", async () => {
 		const file = await write("e.txt", "one\nthree\n");
 		const tool = new CodepathEditTool(makeSession());
 		const result = await tool.execute("t", {
 			operations: [
 				{
 					target: file,
-					action: { kind: "linePrepend", at: 2, content: "two" },
+					action: { kind: "replace", place: "before", at: 2, content: "two" },
 				},
 			],
 		});
@@ -122,19 +122,18 @@ describe("numeric line addressing — BUG-404", () => {
 		expect(await fs.readFile(file, "utf-8")).toBe("one\ntwo\nthree\n");
 	});
 
-	it("rejects string-shaped LINE#HASH anchors (post-removal)", async () => {
+	it("replace place:before|after requires `at` on a file target", async () => {
 		const file = await write("f.txt", "one\ntwo\nthree\n");
 		const tool = new CodepathEditTool(makeSession());
 		const result = await tool.execute("t", {
 			operations: [
 				{
 					target: file,
-					action: { kind: "lineReplace", span: { start: "2#XX" } as any, content: "TWO" },
+					action: { kind: "replace", place: "after", content: "TWO" },
 				},
 			],
 		});
 		expect((result as any).isError).toBe(true);
-		// helpful message naming the expected numeric shape
-		expect(getText(result)).toMatch(/number|integer|u32|line/i);
+		expect(getText(result)).toMatch(/at|line|requires/i);
 	});
 });

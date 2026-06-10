@@ -1,0 +1,24 @@
+#+TITLE: CSS custom-property rename: resolver does not index --prop tokens
+#+STATE: ITEM
+#+SESSION_ID: 15022e9a3d98d40f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-34-47-158Z_15022e9a3d98d40f.jsonl]]
+#+CUSTOM_ID: BUG-435-css-custom-property-rename-resolver-does
+
+* Initial Message
+
+the edit tool has so many sub-tools it's kinda insane. it should have much less, especially considering they are redundant with CodePath specs. Please provide me your own understanding and explain
+
+`style.css::--accent` rename lowers correctly to Op::CssRenameCustomProp (verb.rs test passes), but the CSS resolver's symbol enumeration only indexes selectors. Error: "Symbol '--accent' not found. Available: [:root, .x]".
+
+Root: CSS resolver symbol search (crates/pi-natives/src/code_path/css_resolver.rs + web_refactor) enumerates selector tokens, not custom-property declarations. The `--accent` declaration inside `:root{}` is invisible to symbol resolution.
+
+Fix: extend CSS symbol enumeration to include custom-property declarations; rename must update both the declaration (`--accent:`) and all `var(--accent)` references.
+
+QoL: error message should list custom properties separately: "Available selectors: [...]; custom properties: [...]".
+
+Repro: `s.css::--accent` rename to `--brand` on `:root{--accent:blue}
+.x{color:var(--accent)}`.
+
+NOTE [2026-06-09]: FIXED for custom properties: single_action synthesizes a token-only ResolvedSymbol for `renameCustomProperty` (the procedure scans the buffer for the token + var() refs and only reads resolved.name). Class/id rename kept on real selector-resolution (they need resolved.kind=="rule"). Property test prop_css_custom_prop_rename_updates_decl_and_all_refs (96 cases) green: decl + all var() refs renamed.
+
+SEPARATE FINDING (not fixed here): multi-rule CLASS rename refuses with "Ambiguous symbol '.a': found at lines N, M" when the same class heads multiple rule_sets. Renaming a class token arguably should update all rule occurrences; today resolve_symbol resolves one declaration and refuses ambiguity. Worth a follow-up enhancement (FEAT) distinct from this custom-prop fix.

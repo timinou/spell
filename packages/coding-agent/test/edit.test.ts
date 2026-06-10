@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, spyOn, test } from "bun:te
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Settings } from "@spell/pi-coding-agent/config/settings";
-import { computeLineHash } from "@spell/pi-coding-agent/patch";
 import { CodepathEditTool, createTools, type ToolSession } from "@spell/pi-coding-agent/tools";
 import * as nativesModule from "@spell/pi-natives";
 
@@ -89,8 +88,8 @@ describe("CodepathEditTool", () => {
 		const result = await tool.execute("t", {
 			operations: [
 				{
-					target: file,
-					action: { kind: "lineReplace", span: { start: 2 }, content: ["delta"] },
+					target: `${file}:2-2`,
+					action: { kind: "replace", content: ["delta"] },
 				},
 			],
 		});
@@ -104,7 +103,7 @@ describe("CodepathEditTool", () => {
 		await writeFile(file, "alpha");
 		const tool = new CodepathEditTool(createSession());
 		const result = await tool.execute("t", {
-			operations: [{ target: file, action: { kind: "fileAppend", content: ["beta"] } }],
+			operations: [{ target: file, action: { kind: "replace", place: "end", content: ["beta"] } }],
 		});
 		// PLAN-308: legacy `append` now routes via kernel TextResolver; result text
 		// is a kernel-rendered diff. Asserting file-content outcome is the durable check.
@@ -120,7 +119,9 @@ describe("CodepathEditTool", () => {
 		expect(await fs.exists(file)).toBe(false);
 		const tool = new CodepathEditTool(createSession());
 		const result = await tool.execute("t", {
-			operations: [{ target: file, action: { kind: "fileAppend", content: ["alpha", "beta"] } }],
+			// Legacy anchorless-create affordance (fileAppend creates missing file);
+			// preserved by the Verb-first/Op-fallback boundary. Cast keeps the Op path.
+			operations: [{ target: file, action: { kind: "fileAppend", content: ["alpha", "beta"] } as any }],
 		});
 		expect((result as any).isError).toBeFalsy();
 		const content = await fs.readFile(file, "utf-8");
@@ -133,7 +134,7 @@ describe("CodepathEditTool", () => {
 		expect(await fs.exists(file)).toBe(false);
 		const tool = new CodepathEditTool(createSession());
 		const result = await tool.execute("t", {
-			operations: [{ target: file, action: { kind: "fileAppend", content: "fresh content" } }],
+			operations: [{ target: file, action: { kind: "fileAppend", content: "fresh content" } as any }],
 		});
 		expect((result as any).isError).toBeFalsy();
 		const content = await fs.readFile(file, "utf-8");
@@ -145,7 +146,7 @@ describe("CodepathEditTool", () => {
 		await writeFile(file, "beta");
 		const tool = new CodepathEditTool(createSession());
 		const result = await tool.execute("t", {
-			operations: [{ target: file, action: { kind: "filePrepend", content: ["alpha"] } }],
+			operations: [{ target: file, action: { kind: "replace", place: "start", content: ["alpha"] } }],
 		});
 		expect((result as any).isError).toBeFalsy();
 		const content = await fs.readFile(file, "utf-8");
@@ -161,7 +162,7 @@ describe("CodepathEditTool", () => {
 			operations: [
 				{
 					target: "src/example.ts::oldName",
-					action: { kind: "symbolRename", newName: "newName" },
+					action: { kind: "rename", to: "newName" },
 				},
 			],
 		});
@@ -170,7 +171,7 @@ describe("CodepathEditTool", () => {
 				command: "edit",
 				root: tmpDir,
 				target: "src/example.ts::oldName",
-				actions: [expect.objectContaining({ kind: "symbolRename", newName: "newName" })],
+				actions: [expect.objectContaining({ kind: "rename", to: "newName" })],
 			}),
 		);
 	});
@@ -186,7 +187,7 @@ describe("CodepathEditTool", () => {
 		] as any);
 		const tool = new CodepathEditTool(createSession());
 		const result = await tool.execute("t", {
-			operations: [{ target: "src/example.ts::oldName", action: { kind: "symbolRename", newName: "newName" } }],
+			operations: [{ target: "src/example.ts::oldName", action: { kind: "rename", to: "newName" } }],
 		});
 		expect(getText(result)).toContain("oldName not found");
 	});
@@ -200,7 +201,7 @@ describe("CodepathEditTool", () => {
 				{
 					target: file,
 					action: {
-						kind: "filePatch",
+						kind: "patch",
 						diff: `@@ -1,2 +1,2 @@
 -line one
 +line alpha
@@ -225,8 +226,8 @@ describe("CodepathEditTool", () => {
 		const result = await tool.execute("t", {
 			operations: [
 				{
-					target: file,
-					action: { kind: "lineReplace", span: { start: 1 }, content: ["same"] },
+					target: `${file}:1-1`,
+					action: { kind: "replace", content: ["same"] },
 				},
 			],
 		});
@@ -241,7 +242,7 @@ describe("CodepathEditTool", () => {
 			operations: [
 				{
 					target: "src/example.ts",
-					action: { kind: "fileFindReplace", find: "foo", content: "bar", occurrence: "first" },
+					action: { kind: "replace", find: "foo", content: "bar", occurrence: "first" },
 				},
 			],
 		});
@@ -256,7 +257,7 @@ describe("CodepathEditTool", () => {
 			operations: [
 				{
 					target: "src/example.ts",
-					action: { kind: "fileFindReplace", find: "foo", content: "bar", occurrence: "last" },
+					action: { kind: "replace", find: "foo", content: "bar", occurrence: "last" },
 				},
 			],
 		});
@@ -271,7 +272,7 @@ describe("CodepathEditTool", () => {
 			operations: [
 				{
 					target: "src/example.ts",
-					action: { kind: "fileFindReplace", find: "foo", content: "bar", occurrence: "all" },
+					action: { kind: "replace", find: "foo", content: "bar", occurrence: "all" },
 				},
 			],
 		});
@@ -286,7 +287,7 @@ describe("CodepathEditTool", () => {
 			operations: [
 				{
 					target: "src/example.ts",
-					action: { kind: "fileFindReplace", find: "foo", content: "bar", occurrence: 3 },
+					action: { kind: "replace", find: "foo", content: "bar", occurrence: 3 },
 				},
 			],
 		});
@@ -305,7 +306,7 @@ describe("CodepathEditTool", () => {
 			operations: [
 				{
 					target: file,
-					action: { kind: "lineReplace", span: { start: "2#ZZ" } as any, content: ["delta"] },
+					action: { kind: "lineReplace", span: { start: "2#ZZ" }, content: ["delta"] } as any,
 				},
 			],
 		});
@@ -393,7 +394,7 @@ describe("BUG-341 zero-byte guard and routing", () => {
 		await writeFile(file, "hi\n");
 		const tool = new CodepathEditTool(createSession());
 		const result = await tool.execute("t", {
-			operations: [{ target: file, action: { kind: "fileDelete" } }],
+			operations: [{ target: file, action: { kind: "delete" } }],
 		});
 		expect(getText(result)).toContain("Updated");
 		expect(await fs.exists(file)).toBe(false);
@@ -404,8 +405,9 @@ describe("BUG-341 zero-byte guard and routing", () => {
 		await writeFile(file, "export const X = 1;\nexport const Y = 2;\n");
 		const tool = new CodepathEditTool(createSession());
 		const result = await tool.execute("t", {
-			operations: [{ target: `${file}::X`, action: { kind: "symbolDelete" } }],
+			operations: [{ target: `${file}::X`, action: { kind: "delete" } }],
 		});
+		expect((result as any).isError ?? false).toBe(false);
 		expect(await fs.exists(file)).toBe(true);
 		const content = await fs.readFile(file, "utf-8");
 		expect(content).not.toContain("export const X");
@@ -414,7 +416,7 @@ describe("BUG-341 zero-byte guard and routing", () => {
 	test("insertBefore with numeric line inserts before that line", async () => {
 		const file = await tempFile(`alpha\nbeta\ngamma\n`);
 		const result = await edit({
-			operations: [{ target: file, action: { kind: "lineInsert", at: { side: "before", line: 2 }, content: ["INSERTED"] } }],
+			operations: [{ target: file, action: { kind: "replace", place: "before", at: 2, content: ["INSERTED"] } }],
 		});
 		expect((result as any).isError ?? false).toBe(false);
 		expect(await fs.readFile(file, "utf8")).toBe("alpha\nINSERTED\nbeta\ngamma\n");
@@ -422,7 +424,9 @@ describe("BUG-341 zero-byte guard and routing", () => {
 
 	test("insertAfter with numeric line inserts after that line", async () => {
 		const file = await tempFile(`a\nb\nc\n`);
-		await edit({ operations: [{ target: file, action: { kind: "lineInsert", at: { side: "after", line: 2 }, content: ["X"] } }] });
+		await edit({
+			operations: [{ target: file, action: { kind: "replace", place: "after", at: 2, content: ["X"] } }],
+		});
 		expect(await fs.readFile(file, "utf8")).toBe("a\nb\nX\nc\n");
 	});
 
@@ -430,7 +434,12 @@ describe("BUG-341 zero-byte guard and routing", () => {
 	test("insertBefore with legacy LINE#HASH string is rejected", async () => {
 		const file = await tempFile(`alpha\nbeta\ngamma\n`);
 		const result = await edit({
-			operations: [{ target: file, action: { kind: "lineInsert", at: { side: "before", anchor: "2#XX" } as any, content: ["X"] } }],
+			operations: [
+				{
+					target: file,
+					action: { kind: "lineInsert", at: { side: "before", anchor: "2#XX" }, content: ["X"] } as any,
+				},
+			],
 		});
 		expect((result as any).isError).toBe(true);
 	});
@@ -452,7 +461,7 @@ describe("BUG-342 batch fail-fast + transaction:strict", () => {
 		const file = path.join(tmpDir, "f.ts");
 		await writeFile(file, "const a = 1;\n");
 		const result = await edit({
-			operations: [{ target: file, action: { kind: "fileFindReplace", find: "NOTPRESENT", content: "X" } }],
+			operations: [{ target: file, action: { kind: "replace", find: "NOTPRESENT", content: "X" } }],
 		});
 		expect((result as { isError?: boolean }).isError).toBe(true);
 	});
@@ -466,9 +475,9 @@ describe("BUG-342 batch fail-fast + transaction:strict", () => {
 		await writeFile(c, "const gamma = 3;\n");
 		const result = await edit({
 			operations: [
-				{ target: a, action: { kind: "fileFindReplace", find: "alpha", content: "A1" } },
-				{ target: b, action: { kind: "fileFindReplace", find: "NOPE", content: "X" } },
-				{ target: c, action: { kind: "fileFindReplace", find: "gamma", content: "G3" } },
+				{ target: a, action: { kind: "replace", find: "alpha", content: "A1" } },
+				{ target: b, action: { kind: "replace", find: "NOPE", content: "X" } },
+				{ target: c, action: { kind: "replace", find: "gamma", content: "G3" } },
 			],
 		});
 		expect((result as { isError?: boolean }).isError).toBe(true);
@@ -487,13 +496,41 @@ describe("BUG-342 batch fail-fast + transaction:strict", () => {
 		const result = await edit({
 			transaction: "strict",
 			operations: [
-				{ target: a, action: { kind: "fileFindReplace", find: "alpha", content: "A1" } },
-				{ target: b, action: { kind: "fileFindReplace", find: "NOPE", content: "X" } },
+				{ target: a, action: { kind: "replace", find: "alpha", content: "A1" } },
+				{ target: b, action: { kind: "replace", find: "NOPE", content: "X" } },
 			],
 		} as any);
 		expect((result as { isError?: boolean }).isError).toBe(true);
 		// BOTH files restored
 		expect(await fs.readFile(a, "utf8")).toBe("const alpha = 1;\n");
+		expect(await fs.readFile(b, "utf8")).toBe("const beta = 2;\n");
+	});
+
+	test("transaction:strict rolls back a qualified (symbol/find) target, not just bare-file ops", async () => {
+		// Regression: the snapshot map keyed on the *qualified* target
+		// (`file.ts::Sym` / `file.ts` + find) while the real mutation hit the
+		// stripped file part. For a symbol/find op the snapshot pointed at a
+		// phantom path, so rollback no-op'd and op1's write survived despite the
+		// "Rolled back" message — silent data corruption.
+		const a = path.join(tmpDir, "a.ts");
+		const b = path.join(tmpDir, "b.ts");
+		const aOriginal = "export function greet() {\n\treturn 1;\n}\n";
+		await writeFile(a, aOriginal);
+		await writeFile(b, "const beta = 2;\n");
+		const result = await edit({
+			transaction: "strict",
+			operations: [
+				// op1 succeeds against a *qualified* (symbol) target in `a`. The snapshot
+				// must key on the file part (`a.ts`), not the qualified id (`a.ts::greet#body`).
+				{ target: `${a}::greet#body`, action: { kind: "replace", content: "{\n\treturn 99;\n}" } },
+				// op2 fails → the whole transaction must roll back, including op1.
+				{ target: `${b}::nonexistentSym`, action: { kind: "replace", content: "x" } },
+			],
+		} as any);
+		expect((result as { isError?: boolean }).isError).toBe(true);
+		expect(getText(result)).toMatch(/rolled back/i);
+		// op1's file MUST be restored to its pre-batch content.
+		expect(await fs.readFile(a, "utf8")).toBe(aOriginal);
 		expect(await fs.readFile(b, "utf8")).toBe("const beta = 2;\n");
 	});
 
@@ -504,8 +541,8 @@ describe("BUG-342 batch fail-fast + transaction:strict", () => {
 		const result = await edit({
 			transaction: "strict",
 			operations: [
-				{ target: created, action: { kind: "fileCreate", content: "const fresh = 1;\n" } },
-				{ target: existing, action: { kind: "fileFindReplace", find: "NOPE", content: "X" } },
+				{ target: created, action: { kind: "fileCreate", content: "const fresh = 1;\n" } as any },
+				{ target: existing, action: { kind: "replace", find: "NOPE", content: "X" } },
 			],
 		} as any);
 		expect((result as { isError?: boolean }).isError).toBe(true);
@@ -520,8 +557,8 @@ describe("BUG-342 batch fail-fast + transaction:strict", () => {
 		await writeFile(b, "const b = 2;\n");
 		const result = await edit({
 			operations: [
-				{ target: a, action: { kind: "fileFindReplace", find: "a = 1", content: "a = 11" } },
-				{ target: b, action: { kind: "fileFindReplace", find: "b = 2", content: "b = 22" } },
+				{ target: a, action: { kind: "replace", find: "a = 1", content: "a = 11" } },
+				{ target: b, action: { kind: "replace", find: "b = 2", content: "b = 22" } },
 			],
 		});
 		expect((result as { isError?: boolean }).isError).toBeFalsy();
@@ -532,7 +569,7 @@ describe("BUG-342 batch fail-fast + transaction:strict", () => {
 		const a = path.join(tmpDir, "a.ts");
 		await writeFile(a, "const a = 1;\n");
 		const result = await edit({
-			operations: [{ target: a, action: { kind: "fileFindReplace", find: "NOPE", content: "X" } }],
+			operations: [{ target: a, action: { kind: "replace", find: "NOPE", content: "X" } }],
 		});
 		// Single-op behavior: per-op result returned directly. Aggregate envelope is for multi-op only.
 		expect(result.details).toBeDefined();
@@ -561,7 +598,9 @@ describe("cwd-prefix duplication guard", () => {
 			operations: [
 				{
 					target: "apps/hotelcomm/lib/foo.ex",
-					action: { kind: "fileAppend", content: ["x"] },
+					// Anchorless fileAppend create-on-missing (legacy affordance) exercises
+					// the cwd-coalesce path; retained via the Op-fallback boundary.
+					action: { kind: "fileAppend", content: ["x"] } as any,
 				},
 			],
 		});

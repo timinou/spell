@@ -29,6 +29,7 @@ pub mod scheme_dispatch;
 pub mod types;
 pub mod template;
 pub mod unified;
+pub mod verb;
 
 pub use ast::*;
 pub use dialect::*;
@@ -38,6 +39,7 @@ pub use op::{
 	SymScope, SymbolTarget,
 };
 pub use op_schema::{FieldSchema, FieldType, OpSchema, TargetFamily};
+pub use verb::{Matching, Place, RestructureOp, Verb};
 pub use parser::{parse_code_path, parse_locator};
 pub use renderer::render_code_path;
 pub use resolver::traits::MutationResolver;

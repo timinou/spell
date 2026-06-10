@@ -890,6 +890,25 @@ pub(crate) fn would_leave_zero_bytes(buffer: &CodeBuffer, edits: &[TextEdit]) ->
 	}
 	result.is_empty()
 }
+/// Build a token-only `ResolvedSymbol` for CSS token procedures (BUG-435).
+/// Only `name` is meaningful — the rename/remove procedures scan the buffer for
+/// the literal token and never dereference the byte spans, so they are zeroed.
+fn synthetic_token_symbol(name: String) -> ResolvedSymbol {
+	ResolvedSymbol {
+		name,
+		kind: "css-token".into(),
+		start_byte: 0,
+		end_byte: 0,
+		line: 0,
+		end_line: 0,
+		body_start_byte: None,
+		body_end_byte: None,
+		identifier_range: ByteRange { start: 0, end: 0 },
+		declaration_range: ByteRange { start: 0, end: 0 },
+		statement_range: ByteRange { start: 0, end: 0 },
+	}
+}
+
 pub(crate) fn single_action(
 	buffer: &CodeBuffer,
 	profile: &LanguageProfile,
@@ -901,7 +920,28 @@ pub(crate) fn single_action(
 		.get("kind")
 		.and_then(Value::as_str)
 		.ok_or_else(|| CodeEngineError::Edit("Each action requires 'kind'".into()))?;
-	let resolved = resolve_target_id(buffer, profile, path, target_id)?;
+	// BUG-435: `renameCustomProperty` operates on a *literal token* carried by
+	// the target (`style.css::--accent`) — NOT a resolvable selector. Custom
+	// properties are declarations inside `:root {}` / arbitrary rules, so
+	// `resolve_symbol` (which only knows selector rules) fails with
+	// `Symbol '--accent' not found. Available: […]`. The procedure scans the
+	// buffer for the token itself (declaration + every `var()` reference) and
+	// reads only `resolved.name`, so a token-only synthetic symbol is correct
+	// and sufficient.
+	//
+	// Class / id token renames are DIFFERENT: they require a resolved CSS *rule*
+	// node (`resolved.kind == "rule"`) to scope the rename and prove the match,
+	// so they must keep going through real selector resolution — a synthetic
+	// symbol would trip their `requires a CSS rule target` proof gate.
+	let resolved = if action_kind == "renameCustomProperty" {
+		let (_, token) = parse_target_id(target_id)
+			.map_err(|e| CodeEngineError::Edit(e.to_string()))?;
+		token
+			.map(synthetic_token_symbol)
+			.or_else(|| resolve_target_id(buffer, profile, path, target_id).ok().flatten())
+	} else {
+		resolve_target_id(buffer, profile, path, target_id)?
+	};
 	let conservative_web_refactor = matches!(buffer.language().as_str(), "html" | "css");
 	let within = action_within(resolved.as_ref());
 

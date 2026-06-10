@@ -306,8 +306,10 @@ fn fixtures() -> Vec<Fixture> {
 		),
 		(
 			OpKind::HeadingPromote,
+			// BUG-439: bare nested heading `Sub` now resolves (self-nesting
+			// container recursion in resolve_symbol) — promote succeeds.
 			|_r| Op::HeadingPromote { target: build_target_heading(_r, "a.md", "Sub") },
-			true, // Heading ops need proper heading structure
+			false,
 		),
 		(
 			OpKind::HeadingDemote,
@@ -316,11 +318,14 @@ fn fixtures() -> Vec<Fixture> {
 		),
 		(
 			OpKind::HeadingReplaceBlock,
+			// BUG-439: routes to whole-symbol `write` over the section node (a
+			// section IS a declaration), and `Sub` resolves as a bare nested
+			// heading — replace succeeds.
 			|_r| Op::HeadingReplaceBlock {
 				target:  build_target_heading(_r, "a.md", "Sub"),
-				content: ActionContent::Single("Replaced body.\n".into()),
+				content: ActionContent::Single("## Sub\n\nReplaced body.\n".into()),
 			},
-			true, // Heading ops need proper heading structure
+			false,
 		),
 	]
 }

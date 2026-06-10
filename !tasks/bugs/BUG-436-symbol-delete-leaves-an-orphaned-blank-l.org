@@ -1,0 +1,21 @@
+#+TITLE: Symbol delete leaves an orphaned blank line
+#+STATE: ITEM
+#+SESSION_ID: 15022e9a3d98d40f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-34-47-158Z_15022e9a3d98d40f.jsonl]]
+#+CUSTOM_ID: BUG-436-symbol-delete-leaves-an-orphaned-blank-l
+
+* Initial Message
+
+the edit tool has so many sub-tools it's kinda insane. it should have much less, especially considering they are redundant with CodePath specs. Please provide me your own understanding and explain
+
+Cosmetic / low priority. After `delete` on a symbol, the declaration's span is removed but the trailing newline remains, leaving an empty line.
+
+Repro: delete `dead` from `function keep(){}
+function dead(){}
+` → result `function keep(){}
+
+` (blank line where `dead` was).
+
+Fix: when a symbol/statement delete makes the line empty, extend the removed span to consume one trailing newline. Must preserve intentional blank-line separation between siblings and not over-consume when the deletion is mid-line. Low-risk, but verify against the sibling-deletion guard and the BUG-433/434 wrapper re-anchor (delete now targets the widest statement node).
+
+Scope note: surfaced during PLAN-321 verb test-drive alongside BUG-433/434. Independent, deferrable.
