@@ -33,6 +33,16 @@ describe("auto-roster prompt wiring", () => {
 
 		expect(rendered).toContain("You MAY let `task` auto-create roster nodes");
 		expect(rendered).not.toContain("You **MUST** call `todo_write` first in this turn.");
+		// kill-list D3: emergent waves, not full-tree-upfront.
+		expect(rendered).toContain("waves emerge from review fallout");
+		expect(rendered).not.toContain("Plan investigation → implementation → verification up front");
+	});
+
+	it("non-roster eager-todo plans the spine + next wave, not the whole tree (kill-list D3)", () => {
+		const rendered = renderPromptTemplate(eagerTodoPrompt, { autoRosterEnabled: false });
+
+		expect(rendered).toContain("waves emerge from review fallout");
+		expect(rendered).not.toContain("Cover the WHOLE request");
 	});
 
 	it("documents todo_write coexistence with auto-created roster items", () => {

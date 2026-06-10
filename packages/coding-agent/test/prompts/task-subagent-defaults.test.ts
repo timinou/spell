@@ -4,9 +4,11 @@ import taskPrompt from "../../src/prompts/agents/task.md" with { type: "text" };
 import { loadBundledAgents } from "../../src/task/agents";
 
 describe("task subagent defaults", () => {
-	it("bundled task prompt prefers direct work before delegation", () => {
-		expect(taskPrompt).toContain("Default: do the work directly.");
-		expect(taskPrompt).toContain("Delegate only when the task is clearly justified");
+	it("bundled task prompt makes delegation scope-conditional, not swarm-by-default (kill-list D1)", () => {
+		expect(taskPrompt).toContain("atomic → direct");
+		expect(taskPrompt).toContain("multi-file/multi-concern → delegate");
+		// Old swarm-by-default phrasing must not resurface.
+		expect(taskPrompt).not.toContain("do the work directly");
 	});
 
 	it("bundled quick_task prompt treats scope restriction as optional config", () => {

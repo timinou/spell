@@ -214,6 +214,16 @@ describe("system Handlebars prompt templates", () => {
 		expect(rendered).toContain("Symbols carry logic");
 		expect(rendered).not.toContain("<thinking-mode>");
 	});
+
+	test("system-prompt's per-turn imperative counts proof as advancement (kill-list D4)", async () => {
+		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
+		const template = await Bun.file(templatePath).text();
+		const rendered = renderPromptTemplate(template, { ...baseRenderContext });
+
+		expect(rendered).toContain("or its proof");
+		// Narrow phrasing biased the model to skip the review lane to show progress.
+		expect(rendered).not.toContain("MUST** materially advance the deliverable.");
+	});
 });
 
 describe("terse communication baked into base prompt", () => {
