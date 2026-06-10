@@ -52,6 +52,10 @@ export function listOpKinds(): OpKindInfo[] {
 	return native.listOpKinds();
 }
 
+export function listVerbKinds(): string[] {
+	return native.listVerbKinds();
+}
+
 export function listQualifiers(): QualifierInfo[] {
 	return native.listQualifiers();
 }
@@ -80,10 +84,14 @@ export function registerSchemeCallback(
 	callback: (body: string) => { url: string; content: string; mime?: string; notes?: string[]; sourcePath?: string },
 	options?: import("./types").SchemeCallbackOptions,
 ): void {
-	native.registerSchemeCallback(scheme, (err: Error | null, body: string) => {
-		if (err) throw err;
-		return callback(body);
-	}, options);
+	native.registerSchemeCallback(
+		scheme,
+		(err: Error | null, body: string) => {
+			if (err) throw err;
+			return callback(body);
+		},
+		options,
+	);
 }
 
 export function unregisterSchemeCallback(scheme: string): boolean {

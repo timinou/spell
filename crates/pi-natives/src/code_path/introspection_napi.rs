@@ -130,6 +130,13 @@ pub fn list_op_kinds() -> Vec<OpKindInfo> {
 		.collect()
 }
 
+/// List the external Verb surface kinds (PLAN-321). The TS verb schema
+/// asserts parity against this so the Rust enum and TS union cannot drift.
+#[napi]
+pub fn list_verb_kinds() -> Vec<String> {
+	pi_code_path::introspection::list_verb_kinds()
+}
+
 /// List all registered qualifiers across FS and text dialects.
 #[napi]
 pub fn list_qualifiers() -> Vec<QualifierInfo> {

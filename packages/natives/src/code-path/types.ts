@@ -93,16 +93,16 @@ export interface DiagnosticVariantInfo {
 }
 
 export interface OpSchemaDto {
-	kind:          string;
-	targetFamily:  string;
-	fields:        FieldSchemaDto[];
-	description:   string;
+	kind: string;
+	targetFamily: string;
+	fields: FieldSchemaDto[];
+	description: string;
 }
 
 export interface FieldSchemaDto {
-	name:        string;
-	typeName:    string;
-	required:    boolean;
+	name: string;
+	typeName: string;
+	required: boolean;
 	description: string;
 }
 
@@ -111,7 +111,6 @@ export interface LanguageDialectInfo {
 	extensions: string[];
 	capabilities: string[];
 }
-
 
 /**
  * PLAN-310: result returned by a JS callback registered with
@@ -145,13 +144,18 @@ declare module "../bindings" {
 		renderCodePath(ast: any): string;
 		getRegisteredExtensions(): string[];
 		listOpKinds(): OpKindInfo[];
+		listVerbKinds(): string[];
 		listQualifiers(): QualifierInfo[];
 		listEdgeKinds(): EdgeKindInfo[];
 		listDiagnosticVariants(): DiagnosticVariantInfo[];
 		listLanguageDialects(): LanguageDialectInfo[];
 		listOps(): OpSchemaDto[];
 		// PLAN-310: dynamic scheme registration via TSFn callback.
-		registerSchemeCallback(scheme: string, callback: (err: Error | null, body: string) => JsResolvedContent, options?: SchemeCallbackOptions): void;
+		registerSchemeCallback(
+			scheme: string,
+			callback: (err: Error | null, body: string) => JsResolvedContent,
+			options?: SchemeCallbackOptions,
+		): void;
 		unregisterSchemeCallback(scheme: string): boolean;
 		listRegisteredSchemes(): string[];
 		clearRuntimeSchemes(): void;

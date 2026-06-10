@@ -132,6 +132,23 @@ pub fn list_op_kinds() -> Vec<OpKindInfo> {
 /// The expected count of OpKind variants — used in tests.
 pub const OP_KIND_COUNT: usize = 31;
 
+// ── list_verb_kinds (PLAN-321) ───────────────────────────────────
+
+/// Enumerate the external [`crate::Verb`] surface kinds, in surface order.
+///
+/// This is the model-facing 6-verb surface (+ undo/redo) that lowers to the
+/// 31 [`OpKind`] variants. The hand-authored TS verb schema asserts parity
+/// against this list so the Rust enum and the TS union cannot drift.
+pub fn list_verb_kinds() -> Vec<String> {
+	["replace", "rename", "delete", "patch", "restructure", "undo", "redo"]
+		.into_iter()
+		.map(String::from)
+		.collect()
+}
+
+/// Expected count of verb-surface kinds (6 verbs + undo/redo).
+pub const VERB_KIND_COUNT: usize = 7;
+
 // ── list_qualifiers ──────────────────────────────────────────────
 
 /// Enumerate all registered qualifiers across FS and text dialects.
@@ -213,7 +230,7 @@ pub fn list_edge_kinds() -> Vec<EdgeKindInfo> {
 		EdgeKindInfo {
 			symbol:      "def→".to_string(),
 			name:        "Definition".to_string(),
-			description: "From a declaration to its references (set-valued)".to_string(),
+			description: "From a declaration to its references (set-valued). Trailing `→` is sugar for `…def→§*`. Follows re-export chains.".to_string(),
 		},
 		EdgeKindInfo {
 			symbol:      "call→".to_string(),
@@ -230,11 +247,27 @@ pub fn list_edge_kinds() -> Vec<EdgeKindInfo> {
 			name:        "Bind".to_string(),
 			description: "From a use to its binding site (scope-local)".to_string(),
 		},
+		EdgeKindInfo {
+			symbol:      "implements→".to_string(),
+			name:        "Implements".to_string(),
+			description: "From a type to the interface/trait it implements (TS `implements`, Rust `impl Trait for X`)"
+				.to_string(),
+		},
+		EdgeKindInfo {
+			symbol:      "inherits→".to_string(),
+			name:        "Inherits".to_string(),
+			description: "From a type to its base type (TS `extends`, Python `class X(Base)`)".to_string(),
+		},
+		EdgeKindInfo {
+			symbol:      "dispatches→".to_string(),
+			name:        "Dispatches".to_string(),
+			description: "From a polymorphic call site to candidate dispatch targets".to_string(),
+		},
 	]
 }
 
 /// Expected edge kind count.
-pub const EDGE_KIND_COUNT: usize = 5;
+pub const EDGE_KIND_COUNT: usize = 8;
 
 // ── list_diagnostic_variants ─────────────────────────────────────
 
@@ -445,7 +478,33 @@ mod tests {
 	}
 
 	#[test]
-	fn list_edge_kinds_matches_5() {
+	fn list_edge_kinds_matches_count() {
 		assert_eq!(list_edge_kinds().len(), EDGE_KIND_COUNT);
+	}
+
+	#[test]
+	fn list_verb_kinds_matches_count_and_serde() {
+		let kinds = list_verb_kinds();
+		assert_eq!(kinds.len(), VERB_KIND_COUNT);
+		// Each listed kind must round-trip to a real Verb variant via serde,
+		// guaranteeing the introspection list cannot drift from the enum.
+		for k in &kinds {
+			let json = match k.as_str() {
+				"replace" => serde_json::json!({"kind": "replace", "content": "x"}),
+				"rename" => serde_json::json!({"kind": "rename", "to": "x"}),
+				"delete" => serde_json::json!({"kind": "delete"}),
+				"patch" => serde_json::json!({"kind": "patch", "diff": "d"}),
+				"restructure" => {
+					serde_json::json!({"kind": "restructure", "op": "demote"})
+				},
+				"undo" => serde_json::json!({"kind": "undo"}),
+				"redo" => serde_json::json!({"kind": "redo"}),
+				other => panic!("unlisted verb kind: {other}"),
+			};
+			assert!(
+				serde_json::from_value::<crate::Verb>(json).is_ok(),
+				"verb kind `{k}` does not deserialize to a Verb variant"
+			);
+		}
 	}
 }
