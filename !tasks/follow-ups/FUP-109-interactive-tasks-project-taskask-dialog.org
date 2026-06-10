@@ -1,0 +1,22 @@
+#+TITLE: Interactive tasks — project task:ask:* dialogue to spell-server web/Telegram
+#+STATE: ITEM
+#+SESSION_ID: 15022ed13b056c12
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-35-43-468Z_15022ed13b056c12.jsonl]]
+#+CUSTOM_ID: FUP-109-interactive-tasks-project-taskask-dialog
+
+* Initial Message
+
+Read the task tool description and compare it to using jq on the ~/.spell/agent/sessions folder (I think that's the hierarchy). Also other tool calls in the system prompt. I would like to symbolify it (like the <language> part of the system prompt) and make it much leaner and adapted to actual use.
+
+Also look up online how people implement task tools. There should be an event broker, and more ways to be aware of each other, and better context passing, and better context initialisation to make sure a subtask does not misunderstand or get misguided.
+
+From PLAN-327. The TUI surface for interactive-task Q&A is complete (SubagentTracker aggregates task:ask:raised/answered/cancelled into getAskDialogue()/openAskCount; status-line shows an open-ask pressure signal; subagent-viewer shows per-agent pending-ask count).
+
+The spell-server surface is NOT wired yet. The server runs in a separate process and forwards agent events to web (WS) + Telegram via the RPC/JSONL bridge (web-session-hub.ts, session-event-callbacks.ts), not the in-process EventBus. To surface the dialogue server-side:
+1. The RPC bridge must forward task:ask:raised/answered/cancelled frames (the subagent progress already flows this path \u2014 extend it).
+2. web-session-hub projects them onto the session's WS event stream (a new LifecycleEvent variant, e.g. ask_dialogue).
+3. Telegram session-notifications already has an `ask`/`needs_input` event kind \u2014 a BLOCKING worker ask could surface as a human-answerable notification (degrades to human-in-loop, ties into FUP-106 user escalation).
+
+Seam noted; the in-process tracker getters (getAskDialogue/openAskCount) are the data source the server projection reads from once the RPC frame forwarding lands.
+
+NOTE [2026-06-10]: SUBSUMED into PLAN-331 W3 (unified server projection). Rather than bolting task:ask:* forwarding onto the existing blocking-event path (which would add a 5th parallel comms surface), PLAN-331 unifies BlockingEvent + task:ask:* onto ONE substrate event frame, projected uniformly to WS/Telegram. Key constraint from user decision: projection is OBSERVATION-ONLY — the human watches the dialogue but does NOT answer a subagent's question (escalation redesign parks unanswerable asks for the next orchestrator turn instead). The in-process tracker getters (getAskDialogue/openAskCount) remain the data source. Implement under PLAN-331 W3.

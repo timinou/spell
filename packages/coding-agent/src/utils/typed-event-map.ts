@@ -20,4 +20,17 @@ export interface SwarmEventMap {
 	"swarm:artifact": { runId: string; entryId: string; agent: string; dataUri: string; type: string };
 	"swarm:handoff": { fromAgent: string; toAgent?: string; context: string };
 	"swarm:progress": { agentId: string; progress: number; total: number; label: string };
+	// Interactive-task dialogue (PLAN-327). Observation-only: the AskBroker promise
+	// map is the functional channel; these emits drive TUI/server surfaces.
+	"task:ask:raised": {
+		runId: string;
+		questionId: string;
+		fromTaskId: string;
+		fromSessionId?: string;
+		question: string;
+		scopeHint?: string;
+		blocking: boolean;
+	};
+	"task:ask:answered": { runId: string; questionId: string; answer: string; recipients: string[] };
+	"task:ask:cancelled": { runId: string; questionId: string; reason: string };
 }

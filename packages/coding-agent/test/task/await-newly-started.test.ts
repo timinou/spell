@@ -102,8 +102,8 @@ describe("AwaitTool Newly Started detection", () => {
 		const startResult = await tool.execute("call-newly-started-test", {
 			agent: "task",
 			tasks: [
-				{ id: "A", description: "A", assignment: "## Target\n- Task: A" },
-				{ id: "B", description: "B", assignment: "## Target\n- Task: B", blockers: ["A"] },
+				{ id: "A", description: "A", assignment: "## Target\n- Task: A", ref: null },
+				{ id: "B", description: "B", assignment: "## Target\n- Task: B", blockers: ["A"], ref: null },
 			],
 		});
 
@@ -157,7 +157,7 @@ describe("AwaitTool Newly Started detection", () => {
 		const startResult = await tool.execute("call-no-newly-started", {
 			agent: "task",
 			tasks: [
-				{ id: "C", description: "C", assignment: "## Target\n- Task: C" },
+				{ id: "C", description: "C", assignment: "## Target\n- Task: C", ref: null },
 			],
 		});
 

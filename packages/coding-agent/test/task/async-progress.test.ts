@@ -126,7 +126,7 @@ describe("TaskTool async retry progress", () => {
 			"call-async-progress",
 			{
 				agent: "task",
-				tasks: [{ id: "subtask1", description: "Inspect file", assignment: "## Target\n- File: foo.ts" }],
+				tasks: [{ id: "subtask1", description: "Inspect file", assignment: "## Target\n- File: foo.ts", ref: null }],
 			},
 			undefined,
 			update => {
@@ -198,8 +198,8 @@ describe("TaskTool async retry progress", () => {
 			{
 				agent: "task",
 				tasks: [
-					{ id: "t1", description: "Task 1", assignment: "## Target\n- Task: 1" },
-					{ id: "t2", description: "Task 2", assignment: "## Target\n- Task: 2" },
+					{ id: "t1", description: "Task 1", assignment: "## Target\n- Task: 1", ref: null },
+					{ id: "t2", description: "Task 2", assignment: "## Target\n- Task: 2", ref: null },
 				],
 			},
 			undefined,

@@ -1,0 +1,25 @@
+#+TITLE: org:// ref runtime gate enforcement + unresolvable-ref validation
+#+STATE: ITEM
+#+SESSION_ID: 15022ed13b056c12
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-35-43-468Z_15022ed13b056c12.jsonl]]
+#+CUSTOM_ID: FUP-107-org-ref-runtime-gate-enforcement-unresol
+
+* Initial Message
+
+Read the task tool description and compare it to using jq on the ~/.spell/agent/sessions folder (I think that's the hierarchy). Also other tool calls in the system prompt. I would like to symbolify it (like the <language> part of the system prompt) and make it much leaner and adapted to actual use.
+
+Also look up online how people implement task tools. There should be an event broker, and more ways to be aware of each other, and better context passing, and better context initialisation to make sure a subtask does not misunderstand or get misguided.
+
+From PLAN-327 review wave 1 (2 reviewers, both flagged the runtime-enforcement gap independently \u2014 strong signal).
+
+** Two org-ref parity gaps (deeper than the cheap fixes already landed)
+
+*** R1 \u2014 org gates injected-as-text but not runtime-enforced (P2, conf 0.6, BOTH reviewers)
+For `org://` refs, `#injectVerificationContext` injects gate PROPERTIES as imperative MUST text, but runtime enforcement (`#buildRuntimeVerificationOptions` \u2192 `verifyTaskGates` fails the task on violation) is roster-only \u2014 it's reached via `rosterRefOf(originalTask)` which returns undefined for org refs (index.ts ~1667,1720). So org gates are advisory text while roster gates are actually enforced. Asymmetry: an org-linked subagent can skip a gate it was told it MUST satisfy.
+Fix sketch: have `#buildRuntimeVerificationOptions` also accept an org-resolved gate set (resolve org item \u2192 RuntimeVerificationOptions), or unify both branches through a single resolved-gate struct. Needs the async org resolution result threaded to the runtime-verification call site (currently sync).
+
+*** R2 \u2014 unresolvable/empty org:// ref \u2192 silent empty-assignment dispatch (P2, conf 0.6)
+`#validateTaskBatch` only flags missing-assignment when `resolveRef(ref).kind === \"none\"`. An `org://` ref passes validation, but if org is disabled or the id is a typo, `resolveOrgRefItem` returns undefined and the task dispatches with an empty/context-only prompt. Also: a resolvable org item with an EMPTY body yields `## Task: <title>` only (no actionable instructions) \u2014 no minimum-content guard equivalent to roster's buildSniperAssignment.
+Fix sketch: validation must become org-aware (async pre-resolve, or a post-resolution check that fails the batch / surfaces a model-visible warning when an org ref resolves to nothing or to an empty assignment).
+
+Both are architectural (sync validation vs async resolution; parallel runtime-enforcement path). Deferred from the wave-1 cutover, which landed the two cheap parity wins (gate-property set extended to gateLlm/verificationArtifact/orgItemClosingId; gateCommit falsy-token handling).

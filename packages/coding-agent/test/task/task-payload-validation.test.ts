@@ -66,7 +66,7 @@ function payloadBytes(params: TaskParams): number {
 function createParamsAtByteSize(targetBytes: number): TaskParams {
 	const params: TaskParams = {
 		agent: "task",
-		tasks: [{ id: "task-a", description: "A", assignment: "" }],
+		tasks: [{ id: "task-a", description: "A", assignment: "", ref: null }],
 	};
 	const task = params.tasks[0]!;
 	const baseBytes = payloadBytes(params);
@@ -86,7 +86,7 @@ function createParamsAtByteSize(targetBytes: number): TaskParams {
 function createParamsOverLimitByBytes(limitBytes: number): TaskParams {
 	const params: TaskParams = {
 		agent: "task",
-		tasks: [{ id: "task-b", description: "B", assignment: "" }],
+		tasks: [{ id: "task-b", description: "B", assignment: "", ref: null }],
 	};
 	const task = params.tasks[0]!;
 	const fillUnit = "é";

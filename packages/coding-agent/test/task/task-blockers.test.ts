@@ -94,9 +94,9 @@ describe("TaskTool blocker integration", () => {
 		await tool.execute("call-sync-blockers", {
 			agent: "task",
 			tasks: [
-				{ id: "A", description: "A", assignment: "## Target\n- Task: A" },
-				{ id: "B", description: "B", assignment: "## Target\n- Task: B", blockers: ["A"] },
-				{ id: "C", description: "C", assignment: "## Target\n- Task: C", blockers: ["A"] },
+				{ id: "A", description: "A", assignment: "## Target\n- Task: A", ref: null },
+				{ id: "B", description: "B", assignment: "## Target\n- Task: B", blockers: ["A"], ref: null },
+				{ id: "C", description: "C", assignment: "## Target\n- Task: C", blockers: ["A"], ref: null },
 			],
 		});
 
@@ -127,9 +127,9 @@ describe("TaskTool blocker integration", () => {
 		await tool.execute("call-async-blockers", {
 			agent: "task",
 			tasks: [
-				{ id: "A", description: "A", assignment: "## Target\n- Task: A" },
-				{ id: "B", description: "B", assignment: "## Target\n- Task: B", blockers: ["A"] },
-				{ id: "C", description: "C", assignment: "## Target\n- Task: C", blockers: ["B"] },
+				{ id: "A", description: "A", assignment: "## Target\n- Task: A", ref: null },
+				{ id: "B", description: "B", assignment: "## Target\n- Task: B", blockers: ["A"], ref: null },
+				{ id: "C", description: "C", assignment: "## Target\n- Task: C", blockers: ["B"], ref: null },
 			],
 		});
 		const deadline = Date.now() + 5_000;
@@ -152,8 +152,8 @@ describe("TaskTool blocker integration", () => {
 		const result = await tool.execute("call-sync-implicit-blockers", {
 			agent: "task",
 			tasks: [
-				{ id: "A", description: "A", assignment: "## Target\n- Task: A", filesDeps: ["src/"] },
-				{ id: "B", description: "B", assignment: "## Target\n- Task: B", filesDeps: ["src/foo.ts"] },
+				{ id: "A", description: "A", assignment: "## Target\n- Task: A", filesDeps: ["src/"], ref: null },
+				{ id: "B", description: "B", assignment: "## Target\n- Task: B", filesDeps: ["src/foo.ts"], ref: null },
 			],
 		});
 		const text = result.content.find(part => part.type === "text")?.text ?? "";
@@ -183,8 +183,8 @@ describe("TaskTool blocker integration", () => {
 		const result = await tool.execute("call-async-implicit-blockers", {
 			agent: "task",
 			tasks: [
-				{ id: "A", description: "A", assignment: "## Target\n- Task: A", filesDeps: ["src/"] },
-				{ id: "B", description: "B", assignment: "## Target\n- Task: B", filesDeps: ["src/foo.ts"] },
+				{ id: "A", description: "A", assignment: "## Target\n- Task: A", filesDeps: ["src/"], ref: null },
+				{ id: "B", description: "B", assignment: "## Target\n- Task: B", filesDeps: ["src/foo.ts"], ref: null },
 			],
 		});
 		const text = result.content.find(part => part.type === "text")?.text ?? "";
@@ -221,9 +221,9 @@ describe("TaskTool blocker integration", () => {
 		const result = await tool.execute("call-queued-text", {
 			agent: "task",
 			tasks: [
-				{ id: "X", description: "X", assignment: "## Target\\n- Task: X" },
-				{ id: "Y", description: "Y", assignment: "## Target\\n- Task: Y" },
-				{ id: "Z", description: "Z", assignment: "## Target\\n- Task: Z", blockers: ["X"] },
+				{ id: "X", description: "X", assignment: "## Target\\n- Task: X", ref: null },
+				{ id: "Y", description: "Y", assignment: "## Target\\n- Task: Y", ref: null },
+				{ id: "Z", description: "Z", assignment: "## Target\\n- Task: Z", blockers: ["X"], ref: null },
 			],
 		});
 
@@ -260,8 +260,8 @@ describe("TaskTool blocker integration", () => {
 		const result = await tool.execute("call-implicit-queued", {
 			agent: "task",
 			tasks: [
-				{ id: "P", description: "P", assignment: "## Target\\n- Task: P", filesDeps: ["a.ts"] },
-				{ id: "Q", description: "Q", assignment: "## Target\\n- Task: Q", filesDeps: ["a.ts"] },
+				{ id: "P", description: "P", assignment: "## Target\\n- Task: P", filesDeps: ["a.ts"], ref: null },
+				{ id: "Q", description: "Q", assignment: "## Target\\n- Task: Q", filesDeps: ["a.ts"], ref: null },
 			],
 		});
 
@@ -297,8 +297,8 @@ describe("TaskTool blocker integration", () => {
 		const result = await tool.execute("call-no-blockers-no-queued", {
 			agent: "task",
 			tasks: [
-				{ id: "M", description: "M", assignment: "## Target\\n- Task: M" },
-				{ id: "N", description: "N", assignment: "## Target\\n- Task: N" },
+				{ id: "M", description: "M", assignment: "## Target\\n- Task: M", ref: null },
+				{ id: "N", description: "N", assignment: "## Target\\n- Task: N", ref: null },
 			],
 		});
 

@@ -7,8 +7,7 @@ describe("renderTemplate", () => {
 		const result = renderTemplate(undefined, {
 			id: "Test",
 			description: "Short label",
-			assignment: "Do the thing in detail.\nStep 1: read file.\nStep 2: edit it.",
-		});
+			assignment: "Do the thing in detail.\nStep 1: read file.\nStep 2: edit it.", ref: null });
 		expect(result.task).toBe("Do the thing in detail.\nStep 1: read file.\nStep 2: edit it.");
 		expect(result.id).toBe("Test");
 		expect(result.description).toBe("Short label");
@@ -18,8 +17,7 @@ describe("renderTemplate", () => {
 		const result = renderTemplate("Shared constraints here", {
 			id: "TaskA",
 			description: "First task",
-			assignment: "Full instructions for the agent.\nWith multiple lines.",
-		});
+			assignment: "Full instructions for the agent.\nWith multiple lines.", ref: null });
 		expect(result.task).toContain("Shared constraints here");
 		expect(result.task).toContain(sectionSeparator("Background").trimStart());
 		expect(result.task).toContain("Full instructions for the agent.\nWith multiple lines.");
@@ -29,8 +27,7 @@ describe("renderTemplate", () => {
 		const result = renderTemplate("  \n  context  \n  ", {
 			id: "X",
 			description: "label",
-			assignment: "the real work",
-		});
+			assignment: "the real work", ref: null });
 		expect(result.task).toStartWith(`${sectionSeparator("Background").trimStart()}\n<context>\ncontext`);
 		expect(result.task).toContain("the real work");
 	});
@@ -39,8 +36,7 @@ describe("renderTemplate", () => {
 		const result = renderTemplate("   ", {
 			id: "X",
 			description: "label",
-			assignment: "just the assignment",
-		});
+			assignment: "just the assignment", ref: null });
 		expect(result.task).toBe("just the assignment");
 	});
 });

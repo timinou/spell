@@ -46,6 +46,7 @@ import {
 	calculateRateLimitBackoffMs,
 	getSupportedEfforts,
 	isContextOverflow,
+	isProviderRetryableError,
 	modelsAreEqual,
 	parseRateLimitReason,
 	systemPromptText,
@@ -4576,10 +4577,20 @@ export class AgentSession {
 	}
 
 	#isRetryableErrorMessage(errorMessage: string): boolean {
-		// Match: overloaded_error, rate limit, usage limit, 429, 500, 502, 503, 504, service unavailable, connection error, fetch failed, retry delay exceeded, stream stall
-		return /overloaded|rate.?limit|usage.?limit|too many requests|429|500|502|503|504|service.?unavailable|server error|internal error|connection.?error|unable to connect|fetch failed|retry delay|stream stall/i.test(
-			errorMessage,
-		);
+		// Session-owned transient classes: overloaded_error, rate limit, usage limit, 429,
+		// 500, 502, 503, 504, service unavailable, connection error, fetch failed, retry
+		// delay exceeded, stream stall.
+		if (
+			/overloaded|rate.?limit|usage.?limit|too many requests|429|500|502|503|504|service.?unavailable|server error|internal error|connection.?error|unable to connect|fetch failed|retry delay|stream stall/i.test(
+				errorMessage,
+			)
+		) {
+			return true;
+		}
+		// Provider stream-envelope corruption (truncated JSON, out-of-order SSE events,
+		// HTTP/2 INTERNAL_ERROR). streamAnthropic delegates turn-level retry to this layer,
+		// so reuse the provider's transient classifier instead of duplicating its regex.
+		return isProviderRetryableError(new Error(errorMessage));
 	}
 
 	#isUsageLimitErrorMessage(errorMessage: string): boolean {

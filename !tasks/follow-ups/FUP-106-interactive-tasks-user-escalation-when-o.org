@@ -1,0 +1,19 @@
+#+TITLE: Interactive tasks — user escalation when orchestrator can't answer from context
+#+STATE: ITEM
+#+SESSION_ID: 15022ed13b056c12
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-35-43-468Z_15022ed13b056c12.jsonl]]
+#+CUSTOM_ID: FUP-106-interactive-tasks-user-escalation-when-o
+
+* Initial Message
+
+Read the task tool description and compare it to using jq on the ~/.spell/agent/sessions folder (I think that's the hierarchy). Also other tool calls in the system prompt. I would like to symbolify it (like the <language> part of the system prompt) and make it much leaner and adapted to actual use.
+
+Also look up online how people implement task tools. There should be an event broker, and more ways to be aware of each other, and better context passing, and better context initialisation to make sure a subtask does not misunderstand or get misguided.
+
+Follow-up from PLAN-327 (D8). The ask_orchestrator/answer_subtask loop forces the orchestrator to answer subtask questions from its context snapshot. When the question is genuinely unanswerable without the human, there is currently no escalation path.
+
+Proposed (deferred): add ~defer: true~ to ~answer_subtask~ -> surfaces the question to the USER (reuse the real /btw or ask-user/proxy_ask path). Blocking workers keep waiting; non-blocking get the answer on a later turn once the user responds.
+
+Depends on PLAN-327 landing first.
+
+NOTE [2026-06-10]: SUPERSEDED by PLAN-331 escalation redesign (user decision 2026-06-09). The "surface to USER / proxy_ask" design is REJECTED — a subagent's question must never interrupt a human. New behaviour: orchestrator cannot answer from context → PARK the question until the next orchestrator turn (fold into the existing answeredLog result-summary seam). No human interrupt, no conservative-default auto-proceed. The defer:true→ask-user mechanism in this FUP's body is obsolete. Track the parked-for-next-turn implementation under PLAN-331.

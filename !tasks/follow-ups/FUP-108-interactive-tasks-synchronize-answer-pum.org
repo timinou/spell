@@ -1,0 +1,26 @@
+#+TITLE: Interactive tasks — synchronize answer-pump drain with broker.close + session dispose
+#+STATE: ITEM
+#+SESSION_ID: 15022ed13b056c12
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-35-43-468Z_15022ed13b056c12.jsonl]]
+#+CUSTOM_ID: FUP-108-interactive-tasks-synchronize-answer-pum
+
+* Initial Message
+
+Read the task tool description and compare it to using jq on the ~/.spell/agent/sessions folder (I think that's the hierarchy). Also other tool calls in the system prompt. I would like to symbolify it (like the <language> part of the system prompt) and make it much leaner and adapted to actual use.
+
+Also look up online how people implement task tools. There should be an event broker, and more ways to be aware of each other, and better context passing, and better context initialisation to make sure a subtask does not misunderstand or get misguided.
+
+From PLAN-327 review wave 2 (2 P2 findings, conf 0.4-0.5).
+
+** R1 \u2014 broker.close() races in-flight answer fork (P2)
+~askBroker?.close()~ runs synchronously after ~scheduleBatch~ resolves, but the answer pump is fire-and-forget (~void (async () => { ... broker.answer() })()~). If the batch resolves while a fork is still streaming, close() clears ~#pending~ and the in-flight ~broker.answer~ later no-ops (answer silently dropped, warn-logged). Conversely a delivery can land into a session whose ~finally~ is about to ~dispose()~.
+Fix sketch: track in-flight fork promises on the broker; ~close()~ should await pending forks (bounded timeout) before resolving-cancelled. Or have the pump register an AbortController the broker signals on close.
+
+** R2 \u2014 isolated worktree teardown race (P2, conf 0.4)
+Isolated subagents get followUp delivery identically; a late non-blocking answer could start a turn referencing a worktree being torn down in ~cleanupWorktree~. Compounds R1 + the (now-fixed) revival issue. The ~session.isStreaming~ delivery guard added in wave-2 triage mitigates the common case (idle worker won't revive), but a worker streaming AT teardown time is still a window.
+Fix sketch: gate delivery additionally on \"worker not in teardown\"; or drain/await deliveries before cleanup.
+
+Both are timing windows, not common-path. The wave-2 triage already fixed the two P1s (fork-rejection deadlock; non-blocking revival via isStreaming guard) and redesigned D6 to be turn-safe (answeredLog in result text instead of mid-turn history mutation). These P2s are the residual synchronization hardening.
+
+** R3 \u2014 executor ask-wiring integration test gap (from review wave 3, P1 test gap)
+The wave-2 isStreaming delivery guard (`if (!session.isStreaming) return` in executor.ts registerDelivery), the registerDelivery routing into a live worker, and unregisterDelivery teardown have NO test \u2014 all PLAN-327 tests exercise broker/pump/tool in isolation. A real integration test needs to spawn an agent session (heavyweight). When the close/dispose synchronization work (R1/R2) is done, add an executor-level integration test covering: (a) delivery into a streaming worker reaches its session; (b) delivery into an idle/finished worker is dropped (guard holds); (c) unregisterDelivery fires on session finish. Unit-level proof is insufficient because the guard depends on live session.isStreaming state.

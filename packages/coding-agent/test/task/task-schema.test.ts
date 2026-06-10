@@ -10,7 +10,7 @@ const taskItemSchema = Type.Object({
 	filesDeps: Type.Optional(Type.Array(Type.String())),
 	assignment: Type.Optional(Type.String()),
 	blockers: Type.Optional(Type.Array(Type.String())),
-	todoRef: Type.Optional(Type.String()),
+	ref: Type.Union([Type.String(), Type.Null()]),
 	layer: Type.Optional(Type.String()),
 	model: Type.Optional(
 		Type.String({
@@ -51,6 +51,7 @@ describe("taskItemSchema", () => {
 		const result = Value.Check(taskItemSchema, {
 			id: "a",
 			description: "x",
+			ref: null,
 			model: "anthropic/claude-haiku-4-5",
 		});
 		expect(result).toBe(true);
@@ -60,6 +61,7 @@ describe("taskItemSchema", () => {
 		const result = Value.Check(taskItemSchema, {
 			id: "a",
 			description: "x",
+			ref: null,
 		});
 		expect(result).toBe(true);
 	});
@@ -68,14 +70,42 @@ describe("taskItemSchema", () => {
 		const result = Value.Check(taskItemSchema, {
 			id: "a",
 			description: "x",
+			ref: null,
 			model: "",
 		});
 		expect(result).toBe(true);
 	});
 
+	test("accepts ref as a roster id", () => {
+		const result = Value.Check(taskItemSchema, {
+			id: "a",
+			description: "x",
+			ref: "task-3",
+		});
+		expect(result).toBe(true);
+	});
+
+	test("accepts ref as an org:// uri", () => {
+		const result = Value.Check(taskItemSchema, {
+			id: "a",
+			description: "x",
+			ref: "org://FEAT-123",
+		});
+		expect(result).toBe(true);
+	});
+
+	test("rejects task missing required ref", () => {
+		const result = Value.Check(taskItemSchema, {
+			id: "a",
+			description: "x",
+		});
+		expect(result).toBe(false);
+	});
+
 	test("rejects missing required id", () => {
 		const result = Value.Check(taskItemSchema, {
 			description: "x",
+			ref: null,
 		});
 		expect(result).toBe(false);
 	});
@@ -83,6 +113,7 @@ describe("taskItemSchema", () => {
 	test("rejects missing required description", () => {
 		const result = Value.Check(taskItemSchema, {
 			id: "a",
+			ref: null,
 		});
 		expect(result).toBe(false);
 	});
@@ -94,7 +125,7 @@ describe("taskSchema (batch)", () => {
 	test("accepts batch with model default", () => {
 		const result = Value.Check(schema, {
 			agent: "explore",
-			tasks: [{ id: "a", description: "x" }],
+			tasks: [{ id: "a", description: "x", ref: null }],
 			model: "pi/smol",
 		});
 		expect(result).toBe(true);
@@ -103,7 +134,7 @@ describe("taskSchema (batch)", () => {
 	test("accepts batch without model", () => {
 		const result = Value.Check(schema, {
 			agent: "explore",
-			tasks: [{ id: "a", description: "x" }],
+			tasks: [{ id: "a", description: "x", ref: null }],
 		});
 		expect(result).toBe(true);
 	});
@@ -111,7 +142,7 @@ describe("taskSchema (batch)", () => {
 	test("accepts batch model + per-task override", () => {
 		const result = Value.Check(schema, {
 			agent: "explore",
-			tasks: [{ id: "a", description: "x", model: "openai/gpt-5-mini" }],
+			tasks: [{ id: "a", description: "x", ref: null, model: "openai/gpt-5-mini" }],
 			model: "pi/smol",
 		});
 		expect(result).toBe(true);
@@ -121,8 +152,8 @@ describe("taskSchema (batch)", () => {
 		const result = Value.Check(schema, {
 			agent: "explore",
 			tasks: [
-				{ id: "a", description: "x", model: "anthropic/claude-haiku-4-5" },
-				{ id: "b", description: "y" },
+				{ id: "a", description: "x", ref: null, model: "anthropic/claude-haiku-4-5" },
+				{ id: "b", description: "y", ref: null },
 			],
 			model: "pi/smol",
 		});
@@ -131,7 +162,7 @@ describe("taskSchema (batch)", () => {
 
 	test("rejects batch without agent", () => {
 		const result = Value.Check(schema, {
-			tasks: [{ id: "a", description: "x" }],
+			tasks: [{ id: "a", description: "x", ref: null }],
 		});
 		expect(result).toBe(false);
 	});
@@ -150,7 +181,7 @@ describe("taskSchema no isolation", () => {
 	test("accepts batch with model but no isolation field", () => {
 		const result = Value.Check(schemaNoIso, {
 			agent: "explore",
-			tasks: [{ id: "a", description: "x" }],
+			tasks: [{ id: "a", description: "x", ref: null }],
 			model: "pi/smol",
 		});
 		expect(result).toBe(true);
@@ -159,7 +190,7 @@ describe("taskSchema no isolation", () => {
 	test("rejects batch with unexpected isolation field", () => {
 		const result = Value.Check(schemaNoIso, {
 			agent: "explore",
-			tasks: [{ id: "a", description: "x" }],
+			tasks: [{ id: "a", description: "x", ref: null }],
 			isolation: { mode: "worktree" },
 		});
 		expect(result).toBe(true); // TypeBox is permissive; extra props are ignored

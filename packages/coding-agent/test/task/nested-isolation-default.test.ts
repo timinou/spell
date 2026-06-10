@@ -67,6 +67,7 @@ function buildParams(isolated: boolean | undefined, taskDefs: Array<{ id: string
 			id: task.id,
 			description: task.id,
 			assignment: `## Target\n- Task: ${task.id}`,
+			ref: null,
 			...(task.filesDeps ? { filesDeps: task.filesDeps } : {}),
 		})),
 	};

@@ -162,4 +162,67 @@ describe("AgentSession stream stall retry visibility", () => {
 			await session.dispose();
 		}
 	});
+
+	// Provider stream-envelope corruption: streamAnthropic emits these as a plain
+	// errorMessage (no streamDiagnostics) and delegates turn-level retry to the
+	// session. The session matcher must treat them as retryable. See
+	// packages/ai/test/anthropic-retry.test.ts for the provider-side contract.
+	function createProviderErrorMessage(errorMessage: string): AssistantMessage {
+		return {
+			role: "assistant",
+			content: [],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			stopReason: "error",
+			errorMessage,
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+	}
+
+	it("retries corrupted-stream errors surfaced as a plain provider errorMessage", async () => {
+		const session = createSession(2);
+		const retryStarts: string[] = [];
+		session.subscribe(event => {
+			if (event.type === "auto_retry_start" && event.errorMessage) {
+				retryStarts.push(event.errorMessage);
+			}
+		});
+
+		try {
+			await emitAssistantTurn(
+				session,
+				createProviderErrorMessage('Unexpected event order, got message_start before receiving "message_stop"'),
+			);
+
+			expect(retryStarts).toHaveLength(1);
+			expect(retryStarts[0]).toContain("Attempt 1/2 failed; retrying.");
+			expect(retryStarts[0]).toContain("Unexpected event order");
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	it("does not retry non-transient provider validation errors", async () => {
+		const session = createSession(2);
+		let retried = false;
+		session.subscribe(event => {
+			if (event.type === "auto_retry_start") retried = true;
+		});
+
+		try {
+			await emitAssistantTurn(session, createProviderErrorMessage("Invalid tool schema"));
+			expect(retried).toBe(false);
+		} finally {
+			await session.dispose();
+		}
+	});
 });

@@ -174,3 +174,74 @@ describe("SubagentTracker", () => {
 		expect(tracker.getInfo().runningCount).toBe(0);
 	});
 });
+
+describe("SubagentTracker ask dialogue (PLAN-327)", () => {
+	test("aggregates raised → answered into the dialogue + openAskCount", () => {
+		const bus = new EventBus();
+		const tracker = new SubagentTracker(bus, () => {});
+
+		bus.emit("task:ask:raised", {
+			runId: "r",
+			questionId: "r:ask-1",
+			fromTaskId: "task-1",
+			question: "which error type?",
+			blocking: true,
+		});
+		expect(tracker.getInfo().openAskCount).toBe(1);
+		expect(tracker.getPendingAsksForTask("task-1").length).toBe(1);
+
+		bus.emit("task:ask:answered", {
+			runId: "r",
+			questionId: "r:ask-1",
+			answer: "AppError",
+			recipients: ["task-1", "task-3"],
+		});
+		expect(tracker.getInfo().openAskCount).toBe(0);
+		const dialogue = tracker.getAskDialogue();
+		expect(dialogue.length).toBe(1);
+		expect(dialogue[0]?.status).toBe("answered");
+		expect(dialogue[0]?.answer).toBe("AppError");
+		expect(dialogue[0]?.recipients).toContain("task-3");
+		tracker.dispose();
+	});
+
+	test("cancelled ask resolves to answered with no-answer marker", () => {
+		const bus = new EventBus();
+		const tracker = new SubagentTracker(bus, () => {});
+		bus.emit("task:ask:raised", {
+			runId: "r",
+			questionId: "r:ask-1",
+			fromTaskId: "task-1",
+			question: "q",
+			blocking: true,
+		});
+		bus.emit("task:ask:cancelled", { runId: "r", questionId: "r:ask-1", reason: "batch complete" });
+		expect(tracker.getInfo().openAskCount).toBe(0);
+		expect(tracker.getAskDialogue()[0]?.status).toBe("answered");
+		tracker.dispose();
+	});
+
+	test("answered for unknown questionId is ignored (no phantom entry)", () => {
+		const bus = new EventBus();
+		const tracker = new SubagentTracker(bus, () => {});
+		bus.emit("task:ask:answered", { runId: "r", questionId: "ghost", answer: "x", recipients: [] });
+		bus.emit("task:ask:cancelled", { runId: "r", questionId: "ghost", reason: "x" });
+		expect(tracker.getAskDialogue().length).toBe(0);
+		expect(tracker.getInfo().openAskCount).toBe(0);
+		tracker.dispose();
+	});
+
+	test("after dispose, ask events no longer mutate the dialogue", () => {
+		const bus = new EventBus();
+		const tracker = new SubagentTracker(bus, () => {});
+		tracker.dispose();
+		bus.emit("task:ask:raised", {
+			runId: "r",
+			questionId: "r:ask-1",
+			fromTaskId: "task-1",
+			question: "q",
+			blocking: true,
+		});
+		expect(tracker.getAskDialogue().length).toBe(0);
+	});
+});

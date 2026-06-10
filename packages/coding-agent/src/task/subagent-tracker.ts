@@ -10,6 +10,27 @@ interface SubagentProgressPayload {
 	progress: AgentProgress;
 }
 
+interface AskRaisedPayload {
+	runId: string;
+	questionId: string;
+	fromTaskId: string;
+	question: string;
+	blocking: boolean;
+}
+
+interface AskAnsweredPayload {
+	runId: string;
+	questionId: string;
+	answer: string;
+	recipients: string[];
+}
+
+interface AskCancelledPayload {
+	runId: string;
+	questionId: string;
+	reason: string;
+}
+
 export interface SubagentInfo {
 	runningCount: number;
 	pendingCount: number;
@@ -19,6 +40,20 @@ export interface SubagentInfo {
 		currentTool?: string;
 		lastIntent?: string;
 	} | null;
+	/** Interactive-task asks awaiting an orchestrator answer (PLAN-327). */
+	openAskCount: number;
+}
+
+/** A worker↔orchestrator dialogue entry surfaced in the TUI (PLAN-327). */
+export interface AskDialogueEntry {
+	questionId: string;
+	fromTaskId: string;
+	question: string;
+	blocking: boolean;
+	status: "pending" | "answered";
+	answer?: string;
+	recipients?: string[];
+	raisedAtMs: number;
 }
 
 export interface SubagentLifetimeStats {
@@ -67,14 +102,22 @@ export class SubagentTracker {
 	#byAgentType = new Map<string, { count: number; tokens: number; cost: number }>();
 	#notifyTimer?: NodeJS.Timeout;
 	#unsubscribe: () => void;
+	#unsubscribeAsk: Array<() => void> = [];
 	#onChange: () => void;
 	#disposed = false;
+	/** Ordered Q&A dialogue, keyed by questionId for in-place answer updates. */
+	#asks = new Map<string, AskDialogueEntry>();
 
 	constructor(eventBus: EventBus, onChange: () => void) {
 		this.#onChange = onChange;
 		this.#unsubscribe = eventBus.subscribe(TASK_SUBAGENT_PROGRESS_CHANNEL, raw => {
 			this.#onProgress(raw as SubagentProgressPayload);
 		});
+		this.#unsubscribeAsk.push(
+			eventBus.subscribe("task:ask:raised", raw => this.#onAskRaised(raw as AskRaisedPayload)),
+			eventBus.subscribe("task:ask:answered", raw => this.#onAskAnswered(raw as AskAnsweredPayload)),
+			eventBus.subscribe("task:ask:cancelled", raw => this.#onAskCancelled(raw as AskCancelledPayload)),
+		);
 	}
 
 	recordCompletion(result: SingleResult): void {
@@ -136,7 +179,57 @@ export class SubagentTracker {
 						lastIntent: mostActiveAgent.lastIntent,
 					}
 				: null,
+			openAskCount: this.#openAskCount(),
 		};
+	}
+
+	/** Full Q&A dialogue (PLAN-327), ordered by raise time, for viewers to render. */
+	getAskDialogue(): AskDialogueEntry[] {
+		return Array.from(this.#asks.values()).sort((a, b) => a.raisedAtMs - b.raisedAtMs);
+	}
+
+	/** Pending (unanswered) asks for a given task id. Filters the map directly (no sort). */
+	getPendingAsksForTask(taskId: string): AskDialogueEntry[] {
+		const out: AskDialogueEntry[] = [];
+		for (const ask of this.#asks.values()) {
+			if (ask.fromTaskId === taskId && ask.status === "pending") out.push(ask);
+		}
+		return out;
+	}
+
+	#openAskCount(): number {
+		let n = 0;
+		for (const ask of this.#asks.values()) if (ask.status === "pending") n++;
+		return n;
+	}
+
+	#onAskRaised(payload: AskRaisedPayload): void {
+		this.#asks.set(payload.questionId, {
+			questionId: payload.questionId,
+			fromTaskId: payload.fromTaskId,
+			question: payload.question,
+			blocking: payload.blocking,
+			status: "pending",
+			raisedAtMs: Date.now(),
+		});
+		this.#scheduleChange();
+	}
+
+	#onAskAnswered(payload: AskAnsweredPayload): void {
+		const entry = this.#asks.get(payload.questionId);
+		if (!entry) return;
+		entry.status = "answered";
+		entry.answer = payload.answer;
+		entry.recipients = payload.recipients;
+		this.#scheduleChange();
+	}
+
+	#onAskCancelled(payload: AskCancelledPayload): void {
+		const entry = this.#asks.get(payload.questionId);
+		if (!entry) return;
+		entry.status = "answered";
+		entry.answer = entry.answer ?? "(no answer)";
+		this.#scheduleChange();
 	}
 
 	getLifetimeStats(): SubagentLifetimeStats {
@@ -177,6 +270,8 @@ export class SubagentTracker {
 			this.#notifyTimer = undefined;
 		}
 		this.#unsubscribe();
+		for (const unsub of this.#unsubscribeAsk) unsub();
+		this.#unsubscribeAsk = [];
 	}
 
 	#onProgress(payload: SubagentProgressPayload): void {

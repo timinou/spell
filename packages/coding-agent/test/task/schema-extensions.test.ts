@@ -13,6 +13,7 @@ describe("task schema extensions", () => {
 		id: "inspectFile",
 		description: "Inspect file",
 		assignment: "## Target\n- File: foo.ts",
+		ref: null,
 	};
 
 	test("taskItemSchema accepts blockers", () => {

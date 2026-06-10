@@ -587,7 +587,10 @@ export class SubagentViewerComponent implements Component {
 			const tokens = `${formatNumber(agent.tokens)} tokens`;
 			const duration = formatDuration(agent.durationMs);
 			const cost = agent.usage?.cost ? `  ${formatCost(agent.usage.cost)}` : "";
-			stats = ` ${tools}  ${tokens}  ${duration}${cost}`;
+			// PLAN-327: show open asks for this agent (awaiting orchestrator answer).
+			const pendingAsks = this.#subagentTracker?.getPendingAsksForTask(agent.id) ?? [];
+			const askPart = pendingAsks.length > 0 ? `  ⏸ ${pendingAsks.length} ask${pendingAsks.length === 1 ? "" : "s"}?` : "";
+			stats = ` ${tools}  ${tokens}  ${duration}${cost}${askPart}`;
 		} else if (selected?.kind === "async") {
 			const job = selected.job;
 			const duration = formatDuration(Math.max(0, (job.endTime ?? Date.now()) - job.startTime));

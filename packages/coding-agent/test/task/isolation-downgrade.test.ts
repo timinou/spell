@@ -60,7 +60,7 @@ function createSession(tempDir: string, settings: Settings): ToolSession {
 function buildParams(isolated: boolean | undefined, taskIds: string[]): TaskParams {
 	const params: TaskParams = {
 		agent: "task",
-		tasks: taskIds.map(id => ({ id, description: id, assignment: `## Target\n- Task: ${id}` })),
+		tasks: taskIds.map(id => ({ id, description: id, assignment: `## Target\n- Task: ${id}`, ref: null })),
 	};
 	if (isolated !== undefined) {
 		(params as TaskParams & { isolated?: boolean }).isolated = isolated;
