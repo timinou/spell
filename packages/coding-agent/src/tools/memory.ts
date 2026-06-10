@@ -16,6 +16,7 @@ import type {
 	AgentToolUpdateCallback,
 	RenderResultOptions,
 } from "@spell/pi-agent-core";
+import { StringEnum } from "@spell/pi-ai";
 import { executeOrg } from "@spell/pi-natives";
 import type { Component } from "@spell/pi-tui";
 import { Text } from "@spell/pi-tui";
@@ -40,6 +41,9 @@ export interface MemoryProgressSnapshot {
 		total: number;
 		started_ms: number;
 	};
+	/** Indexed org-item count once a (full or partial) lane exists.
+	 *  Present for `warm` and partial `warming` states; absent while cold. */
+	item_count?: number;
 	error?: string;
 }
 
@@ -142,8 +146,11 @@ export const MEMORY_EDGE_KINDS = [
 	"CONTAINS",
 ] as const;
 
-const NodeKindLit = Type.Union(MEMORY_NODE_KINDS.map(k => Type.Literal(k)));
-const EdgeKindLit = Type.Union(MEMORY_EDGE_KINDS.map(k => Type.Literal(k)));
+// StringEnum (`{type:"string", enum:[…]}`) over Type.Union-of-literals: one
+// list in the wire schema instead of a 26-arm anyOf repeated at every use
+// site, and compatible with providers that reject anyOf/const (Google).
+const NodeKindLit = StringEnum(MEMORY_NODE_KINDS);
+const EdgeKindLit = StringEnum(MEMORY_EDGE_KINDS);
 
 export const memorySchema = Type.Object({
 	action: Type.Union(
@@ -163,7 +170,7 @@ export const memorySchema = Type.Object({
 	text: Type.Optional(Type.String({ description: "Search query (search) · episode summary (note)" })),
 	// Unified kind field: `save` node kind · `link` edge kind · `neighbors` n/a.
 	kind: Type.Optional(
-		Type.Union([NodeKindLit, EdgeKindLit], {
+		StringEnum([...MEMORY_NODE_KINDS, ...MEMORY_EDGE_KINDS], {
 			description:
 				"save: episode|concept|playbook|decision · link: INVOLVED|ABOUT|PRODUCED|DISTILLED_FROM|SUPERSEDES|…",
 		}),
@@ -173,7 +180,7 @@ export const memorySchema = Type.Object({
 	id: Type.Optional(Type.String({ description: "Item id (about) or focus fallback (neighbors)" })),
 	scope: Type.Optional(
 		Type.Array(NodeKindLit, {
-			description: "Kind filter: episode | concept | playbook | decision | entity | actor | workflow",
+			description: "Kind filter (node kinds)",
 		}),
 	),
 	focus: Type.Optional(Type.String({ description: "Graph focus node id (search, neighbors)" })),

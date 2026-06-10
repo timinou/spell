@@ -191,32 +191,6 @@ export type EditOperation = Static<typeof editOperationSchema>;
 export type EditParams = Static<typeof editSchema>;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Manage tool schema
-// ═══════════════════════════════════════════════════════════════════════════
-
-export const manageSchema = Type.Object(
-	{
-		command: Type.Union([
-			Type.Literal("save"),
-			Type.Literal("undo"),
-			Type.Literal("redo"),
-			Type.Literal("diff"),
-			Type.Literal("buffers"),
-			Type.Literal("languages"),
-			Type.Literal("index"),
-			Type.Literal("watcherStatus"),
-			Type.Literal("lockStatus"),
-			Type.Literal("status"),
-			Type.Literal("context"),
-		]),
-		file: Type.Optional(Type.String({ description: "File path for file-scoped management commands" })),
-	},
-	{ additionalProperties: false },
-);
-
-export type ManageParams = Static<typeof manageSchema>;
-
-// ═══════════════════════════════════════════════════════════════════════════
 // Status tool schema — kernel observability only.
 // Drops save/undo/redo/diff/buffers/context vs manage:
 //   save    — edits auto-persist (no buffer surface)

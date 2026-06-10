@@ -16,7 +16,7 @@ mock.module("@spell/pi-natives", () => ({
 const { dispatchMemoryAction, formatMemoryResult, MemoryTool, memorySchema } = await import("../../src/tools/memory");
 const { Settings } = await import("@spell/pi-coding-agent/config/settings");
 
-import { Value } from "@sinclair/typebox/value";
+import { validateToolArguments } from "@spell/pi-ai";
 import type { ToolSession } from "../../src/tools";
 
 // FEAT-780: executeOrg is async now. These helpers wrap the response
@@ -296,9 +296,21 @@ describe("MemoryTool wiring", () => {
 	}
 
 	it("declares the action union in its schema", () => {
-		expect(Value.Check(memorySchema, { action: "search", text: "x" })).toBe(true);
-		expect(Value.Check(memorySchema, { action: "save", kind: "concept", title: "t" })).toBe(true);
-		expect(Value.Check(memorySchema, { action: "nope" })).toBe(false);
+		// ajv path (production validator) — Value.Check can't visit StringEnum's
+		// Type.Unsafe nodes, so validate the way the agent loop does.
+		const tool = { name: "memory", parameters: memorySchema } as never;
+		const check = (args: Record<string, unknown>) => {
+			try {
+				validateToolArguments(tool, { id: "t", name: "memory", arguments: args } as never);
+				return true;
+			} catch {
+				return false;
+			}
+		};
+		expect(check({ action: "search", text: "x" })).toBe(true);
+		expect(check({ action: "save", kind: "concept", title: "t" })).toBe(true);
+		expect(check({ action: "save", kind: "NOT_A_KIND", title: "t" })).toBe(false);
+		expect(check({ action: "nope" })).toBe(false);
 	});
 
 	it("MemoryTool.execute returns an error envelope on dispatch failure", async () => {
