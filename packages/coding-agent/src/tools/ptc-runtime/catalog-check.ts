@@ -40,7 +40,6 @@ const EXEMPT: ReadonlySet<string> = new Set<string>([
 	"send_file",
 	"canvas",
 	"canvas_cast",
-	"manage", // legacy alias
 ]);
 
 /** Compute the set of builtin tools missing an explicit effect tag. */

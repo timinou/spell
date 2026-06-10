@@ -8,9 +8,7 @@ import type { TaskPolicy } from "../config/task-policies";
 import type { Skill } from "../extensibility/skills";
 import type { InternalUrlRouter } from "../internal-urls";
 
-
 // REMOVED_PLAN_306_W11: Loop tools had zero session usage in W0-3 replay corpus
-
 
 import type { DiscoverableMCPSearchIndex, DiscoverableMCPTool } from "../mcp/discoverable-tool-metadata";
 import type { ActiveModeState } from "../modes/mode-state";
@@ -45,7 +43,6 @@ import { FindTool } from "./find";
 import { GetTool } from "./get";
 import { GoalsTool } from "./goals-tool";
 import { InspectImageTool } from "./inspect-image";
-import { ManageTool } from "./manage";
 import { MemoryTool } from "./memory";
 import { OrgTool } from "./org";
 import { wrapToolWithMetaNotice } from "./output-meta";
@@ -64,7 +61,6 @@ import { type TodoNode, TodoWriteTool } from "./todo-write";
 
 export * from "../exa";
 export type * from "../exa/types";
-
 
 export * from "../patch";
 export * from "../sandbox";
@@ -97,7 +93,6 @@ export * from "./get";
 export * from "./goals-tool";
 export * from "./image-generation";
 export * from "./inspect-image";
-export * from "./manage";
 export * from "./pending-action";
 export * from "./render-mermaid";
 export * from "./resolve";
@@ -270,7 +265,6 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	find: s => new FindTool(s),
 	status: () => new StatusTool(),
 	get: s => new GetTool(s), // legacy alias — REMOVE_AT_WAVE_11
-	manage: () => new ManageTool(), // legacy alias — REMOVE_AT_WAVE_11 (replaced by `status`)
 	create: s => new CreateTool(s),
 	edit: s => new CodepathEditTool(s),
 	execute: s => new ExecuteTool(s),
@@ -305,7 +299,6 @@ export const TOOL_TIERS: Record<string, ToolTier> = {
 	find: "standard",
 	status: "standard",
 	get: "standard", // legacy alias for find
-	manage: "standard", // legacy alias for status
 	create: "standard",
 
 	// Specialized — compact API descriptions to reduce token usage

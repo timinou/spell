@@ -233,7 +233,7 @@ describe("TOOL_TIERS", () => {
   });
 
   it("assigns standard tier to find/edit/create/status (post-PLAN-306 cutover)", () => {
-    for (const name of ["find", "edit", "create", "status", "get", "manage"]) {
+    for (const name of ["find", "edit", "create", "status", "get"]) {
       expect(getToolTier(name)).toBe("standard");
     }
   });
