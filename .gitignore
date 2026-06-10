@@ -85,3 +85,8 @@ spell-session-*.html
 # PLAN-318 W1: pi-code-graph workspace caches are build artifacts.
 **/.spell/graph/
 rust_out
+
+# Tool caches (clj-kondo, clojure-lsp, scratch)
+.clj-kondo/
+.lsp/
+.scratch/
