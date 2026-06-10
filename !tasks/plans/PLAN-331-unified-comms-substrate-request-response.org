@@ -167,3 +167,43 @@ Delete ~src/swarm/{blackboard,handoff-tool,spawn-successor-tool}.ts~ AND strip ~
 * Open questions raised by pressure-test
 - OQ2 (was implicit) — W2: is there a FUTURE spawned-answerable event worth building the channel for (e.g. when subagents spawn OUT-of-process), or descope W2 entirely? Note subagents run IN-process today (executor misnomer), so the cross-process answer channel has no current consumer.
 - OQ3 — given findings, is the substrate (W1') worth doing now as pure refactor, or defer until a second real transport consumer exists (peer/federation)? The honest high-value slice may be just W0 + W3' + W4'.
+
+* LOCKED SCOPE (user decision, 2026-06-10) — ship the high-value slice only
+
+PLAN-331 now builds ONLY: **W0 + W3' + W4'**. The substrate waves W1' (wire extraction) and W2' (spawned-answer channel) are DEFERRED to FUP-110 — they are refactor-only / fixing-an-unreachable-bug until a real cross-process consumer exists.
+
+| wave | status | what |
+|------|--------|------|
+| W0  | IN PLAN | FUP-107 org gate enforcement parity (standalone correctness fix) |
+| W3' | IN PLAN | Observation projection: forward ~task:ask:*~ + subagent EventBus emits over the existing rpc channel → web-session-hub → WS/Team Chat/Telegram. Observation-only (C4). Subsumes FUP-109. No ~comms/~ dependency. |
+| W4' | IN PLAN | Dead-code cleanup: delete ~src/swarm/{blackboard,handoff-tool,spawn-successor-tool}.ts~ + strip ~executor.ts:29-30~ imports + swarmTools block (~1350,1358~) + delete 4 test files. RETAIN ~swarm/{uri,uri-protocol,types}~. |
+| W1' | → FUP-110 | Wire extraction (~src/comms/~). Deferred: no cross-process consumer today (subagents in-process). |
+| W2' | → FUP-110 | Spawned-answer channel. Deferred: fixes unreachable state; ~extension_ui~ already answers spawned children. |
+
+** Two new follow-ups filed (2026-06-10)
+- FUP-110 — deferred substrate (W1'/W2') with un-defer triggers + verified extraction seam preserved.
+- FUP-111 — agent introspection tool (query peers' recent activity + wait-on-each-other). Builds ON W3' observation layer + AskBroker parked-promise; in-process today. NOT this plan.
+
+** Team Chat observability (user candidate consumer) — verdict
+A redesigned Team Chat "see all inter-process comms" view is OBSERVATION-ONLY → it consumes W3' (event projection), NOT the W1' request/response wire. ∴ it does NOT pull the substrate forward; it reinforces making W3' first-class. If desired, that UI work is a downstream consumer of W3' (own ticket).
+* SHIPPED (2026-06-10)
+
+High-value slice delivered in three atomic commits, each independently verified:
+
+| wave | commit | verification |
+|------|--------|--------------|
+| W0 FUP-107 org gate parity | e4af51d92 | ref-resolver 20/20; task suite 370 pass/0 fail; tsgo clean |
+| W4' dead swarm code | 71c53e072 | swarm-scheduler 8/8; task suite 370 pass/0 fail; tsgo clean |
+| W3' task:ask projection | 07b8d58bf | 5 new projection tests; spell-server check exit 0; tsgo clean |
+
+** Implementation notes (deltas from the plan)
+- W3' was bigger than "add a frame" (oracle was right): subagent/task:ask events did NOT cross the RPC boundary at all. AgentSessionEvent (what session.subscribe streams to stdout) and the EventBus (carrying task:ask:*) are SEPARATE buses. So W3' had to BUILD the source-side rail (runRpcMode(session, eventBus) -> projectTaskAskEvents). The SERVER hops were already generic passthrough (isRpcEvent is structural; #tapEvents forwards all non-response events; rpc_event carries Exclude<RpcEvent,RpcResponseEvent>), so adding RpcTaskAskEvent to both unions completed the rail with no new hops. Chose explicit typed frame over generic wrapper (house convention: RpcEvent is a discriminated whitelist).
+- W4' grounding correction confirmed: files were NOT "zero callers" - executor.ts:29-30 statically imported the tools. Also found swarm/types.ts was dead too (imported only by the deleted blackboard.ts), and swarm/{uri,uri-protocol}.ts + swarm-scheduler.ts are LIVE (retained). Stripped the executor swarmContext field + swarmTools block + prompt overlay + 3 imports + deleted the orphan prompt md.
+- W0 seam fix as planned: async #resolveRuntimeGates up-front -> Map<taskId,RuntimeVerificationOptions>; sync #runtimeVerificationFor stamps baseline at dispatch. mapOrgGateOptions maps only the enforceable subset (cmd/artifact/commit); advisory keys stay text-only.
+
+** Known gate caveat
+Root bun run check:ts has 81 PRE-EXISTING tsgo errors (ai, coding-agent tests, swarm-extension - confirmed at pre-PLAN-331 baseline 9eeff37a1), unrelated to this work. Per-package tsgo is clean for every PLAN-331 file.
+
+** Deferred (unchanged)
+- W1' wire extraction + W2' spawned-answer -> FUP-110 (no cross-process consumer today).
+- Agent introspection tool -> FUP-111.

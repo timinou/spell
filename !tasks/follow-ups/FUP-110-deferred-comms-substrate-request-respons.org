@@ -1,0 +1,30 @@
+#+TITLE: Deferred comms substrate — request/response wire + spawned-answer channel (PLAN-331 W1'/W2')
+#+STATE: ITEM
+#+SESSION_ID: 15022ed13b056c12
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-35-43-468Z_15022ed13b056c12.jsonl]]
+#+CUSTOM_ID: FUP-110-deferred-comms-substrate-request-respons
+
+* Initial Message
+
+pressure-test the plan first
+
+Deferred out of PLAN-331 after pressure-test (oracle agent://11-PressureTestPlan331, 2026-06-10). PLAN-331 ships only the high-value slice W0 + W3' + W4'. This FUP holds the two substrate waves that were found to be refactor-only / fixing-an-unreachable-bug TODAY.
+
+* Why deferred (not cancelled)
+- W1' (extract ~src/comms/~ Transport + RequestBroker + child-stdio): the request/response WIRE only earns its place when an answer must cross a real PROCESS boundary. Today subagents run IN-PROCESS (~executor.ts::runSubprocess~ is a misnomer — ~createAgentSession()~ + ~session.prompt()~ in the same Bun process), so there is NO second cross-process consumer. Building it now = pure refactor, zero functional payoff, and (per finding 2) forcing ptc-runtime to consume it risks PLAN-324 regressions.
+- W2' (spawned-answer channel: extend ~BridgeRpcCommand~ with ~answer~, fix ~not_supported_for_spawned~): fixes an UNREACHABLE state. ~setBlockingEvent~ fires only from ~socket/server.ts:147~ for EXTERNAL sessions; spawned sessions never build ~SessionBridgeClient~ (only interactive ~main.ts:146~ does), so ~currentBlockingEvent~ is never set for spawned and the ~web/ws/server.ts:353~ rejection guards a state nothing enters. Spawned children already answer questions via the working ~extension_ui_request~/~extension_ui_response~ duplex (~rpc-mode.ts:115~/~687~).
+
+* Trigger to un-defer (build when ANY of these lands)
+1. A peer/federation plan where an answer crosses an instance↔instance boundary (the original W5 goal).
+2. Out-of-process subagents (if ~executor~ ever spawns a real child process instead of in-process sessions).
+3. A concrete spawned-answerable event that does NOT violate C4 (observation-only escalation). None exists today.
+
+* When un-deferred — the verified extraction seam (still valid)
+- WIRE lives in ~packages/coding-agent/src/tools/ptc-runtime/client.ts:117-128~ — the ~Transport~ interface ({writeLine,onLine,onClose,close}) is cleanly factored; lift verbatim into ~src/comms/transport.ts~.
+- Correlation core = ~nextId~ + ~pending:Map<id,{resolve,reject}>~ + ~request()~ (~client.ts:175-199~) → ~src/comms/request-broker.ts~.
+- DO NOT route ptc-runtime through it (finding 2): ptc's value (per-call AbortSignal/execSignals PLAN-324, init-replay, backpressure writer) is orthogonal to the trivial pending map. Leave ptc as-is unless a concrete reason emerges.
+- AskBroker keeps its DIRECT-Promise in-process resolve (finding 3): do NOT wrap the in-process path in a Transport/envelope round-trip — that adds serialization + parse-failure surface for zero gain. AskBroker consumes only the correlation core IF/when it needs cross-process delivery.
+- envelope shape: JSON-RPC-2.0 / NDJSON, house style from PtcRuntimeClient + knowledge daemon ~{protocol_version}~.
+
+* Note on the Team Chat observability candidate (2026-06-10)
+A Team Chat "see all inter-process comms" UI is OBSERVATION-ONLY → it consumes PLAN-331 W3' (event projection), NOT this wire. Watching traffic needs fan-out frames, not a correlated request/response channel. ∴ it does not un-defer W1'.

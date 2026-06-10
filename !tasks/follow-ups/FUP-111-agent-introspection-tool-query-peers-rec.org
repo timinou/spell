@@ -1,0 +1,29 @@
+#+TITLE: Agent introspection tool — query peers' recent activity + wait-on-each-other
+#+STATE: ITEM
+#+SESSION_ID: 15022ed13b056c12
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-35-43-468Z_15022ed13b056c12.jsonl]]
+#+CUSTOM_ID: FUP-111-agent-introspection-tool-query-peers-rec
+
+* Initial Message
+
+pressure-test the plan first
+
+New tool idea from user (2026-06-10). A tool that lets agents and subagents (a) QUERY what each other is doing — recent history/activity — and (b) optionally WAIT on each other (block until a peer reaches some state / finishes).
+
+* Shape (preliminary)
+- READ side (query recent activity): consumes the OBSERVATION layer, not the request/response wire. The data already flows on EventBus (~task:subagent:event~, ~task:subagent:progress~, ~todo:*~, ~task:ask:*~) and the roster/todo state. A query tool reads a per-session activity ring + roster snapshot. No new transport needed.
+- WAIT side (block until peer state): this IS request/response semantics (await → notify). Today subagents run IN-PROCESS (shared EventBus + shared AskBroker-style registry), so a wait primitive is an in-process parked-Promise keyed on (peerSessionId, predicate) — the SAME parked-promise pattern AskBroker already uses (~ask-broker.ts~). Does NOT need the deferred cross-process wire (FUP for PLAN-331 W1'/W2') UNLESS the peer is in another process/instance.
+
+* Dependencies / ordering
+- Builds naturally on PLAN-331 W3' (observation projection) — the same EventBus taps that feed Team Chat also feed an agent-facing query tool. Do AFTER W3'.
+- Reuses AskBroker's parked-promise primitive for the wait side. If PLAN-331 W1' (RequestBroker extraction) ever lands, the wait side can adopt it for cross-process peers; until then, in-process is sufficient.
+- Registration precedent: ~task/subprocess-tool-registry.ts~ (how subagent-scoped tools are wired).
+
+* Open questions
+- OQ — scope of "recent history": just this session's subagent tree, or cross-session/cross-instance? Cross-instance pulls in the peer/federation plan (and the deferred wire). In-tree only is shippable now.
+- OQ — wait semantics: wait-for-completion only, or arbitrary predicate (wait-until-peer-reaches-state)? Predicate waiting needs a state model on the observation stream.
+- OQ — deadlock guard: A waits on B while B waits on A. Need a cycle detector or a timeout/abort on the wait tool.
+
+* Relation to other work
+- Distinct from PLAN-331 (which is comms plumbing). This is an agent-FACING capability built ON the plumbing.
+- Distinct from swarm-extension (orthogonal batch pipelines).
