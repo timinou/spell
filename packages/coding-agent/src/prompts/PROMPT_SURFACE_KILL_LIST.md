@@ -225,22 +225,34 @@ silent alias.
 | `prompts/tools/read.md` (632 B) | zero `with {type:"text"}` imports | ⌦ **DONE** (W-B) |
 | `prompts/tools/grep.md` (1.4 KB) | only a *test* pinned a dead tool's prompt | ⌦ **DONE** (W-B; test block excised) |
 | `prompts/tools/ast-grep.md` (2.5 KB) | zero imports | ⌦ **DONE** (W-B) |
-| `prompts/tools/resolve.md` (405 B) | **live** — `tools/resolve.ts:9` imports it | ✓ keep (list was wrong) |
-| `prompts/tools/gateway.md` (347 B) | **live** — `tools/gateway.ts:4` imports it | ✓ keep (list was wrong) |
+| `prompts/tools/resolve.md` (405 B) | **live** — deferred-action resolver, auto-injected | ✓ keep |
+| `prompts/tools/gateway.md` (347 B) | dead tool (`GatewayTool` unregistered) | ⌦ **DONE** |
 | `prompts/tools/patch.md`, `replace.md` | imported by `patch/index.ts` — **live** | ✓ keep |
 
-Correction (2026-06-10): the original ⌦ verdict on `resolve.md`/`gateway.md` was
-wrong. Both have a live `import … with { type: "text" }` in their sibling
-`tools/{resolve,gateway}.ts`; deleting the `.md` alone breaks compilation. The
-*tools themselves* may be unregistered in `BUILTIN_TOOLS`, but that is a Class-1
-style tool-removal question (delete `.ts` + `.md` together), not a free orphan
-delete. Left for a future tool-removal wave.
+Correction (2026-06-10, revised): two separate sub-questions hid behind "has a
+live import":
+- **resolve** — `ResolveTool` IS registered (`HIDDEN_TOOLS.resolve`) and
+  auto-injected whenever any tool reports `deferrable` (index.ts apply/discard
+  resolver). Genuinely live. ✓ keep.
+- **gateway** — `GatewayTool` registration was commented out
+  (`REMOVED_PLAN_306_W11`); `createIf` never fires, barrel re-export had zero
+  consumers. The sibling `import … with {type:"text"}` kept the `.md` *compiling*
+  but the importer was itself dead. Deleted `.ts`+`.md` together (Class-1 pair).
+  Do not confuse with the live gateway **CLI/daemon** (`commands/gateway.ts` +
+  `@spell/pi-gateway`) — same name, different lifecycle.
+
+Also deleted with it (the *code half* of the read/grep/ast-grep orphans):
+`grep.enabled`/`grep.contextBefore`/`grep.contextAfter` settings + the
+grep→ast_grep auto-include block + dead `isToolAllowed` branches — all gated a
+`grep`/`ast_grep` agent tool with no factory. `astGrep.enabled` KEPT (live: bash
+prompt gates ast-grep CLI guidance off it).
 
 Verify-before-delete that drove the correction:
 ```
 find { target: "packages/coding-agent/src/**/*.ts::§line[text~=\"(read|grep|ast-grep|resolve|gateway)\\.md\"]" }
 ```
-grep/read/ast-grep → 0 src imports (grep had 1 stale test). resolve/gateway → 1 src import each.
+read/ast-grep → 0 src imports. grep → 1 stale test. resolve → live (registered).
+gateway → 1 import, but from a dead tool ∴ pair-deleted.
 
 ### Class 3 — removed-but-referenced (FUP, do not bundle)
 - `loop_prepare/launch/done` already commented in `tools/index.ts`, but
