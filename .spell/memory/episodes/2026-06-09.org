@@ -1,0 +1,116 @@
+#+TITLE: Episodes 2026-06-09
+
+** ITEM Knowledge daemon "hang" root cause: NOT slow file walking. Org lane scans only !tasks + .spell/memory (bounded); code lane uses ignore::WalkBuilder with git_ignore+git_exclude (gitignore-aware). Real cost = bge-m3 model load (5-30s) + embedding every org item in build_vec_index_with (warm Phase 2), while with_org_lane blocks the RPC on a Condvar (unbounded wait_warm). Fix: BM25+graph need no model → serve lexical-only immediately; bound the lane wait; release client mutex across RPC; TS retry-with-progress on warming status.
+:PROPERTIES:
+:CUSTOM_ID: EP-e4754a2bcb1e12bf
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-09T09:10:12Z
+:END:
+:RELATIONS:
+:END:
+** ITEM Symbol delete on exported const/fn mishandles export wrapper span
+
+Root cause: resolve_mutation_edit (crates/pi-natives/src/code_path/code_resolver/mutation.rs) selected the NARROWEST matching node via min_by_key(span_len). A name query returns the declaration's full wrapper chain (variable_declarator ⊂ lexical_declaration ⊂ export_statement). Narrow is correct for rename (name field) and replace (declaration body) but wrong for DELETE — deleting the inner declarator orphans the `export const` wrapper → `export const ;` (invalid syntax/hard error for const; dangling `export ` for fn).
+:PROPERTIES:
+:CUSTOM_ID: EP-6ebc918c18c32890
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-09T11:25:57Z
+:END:
+:RELATIONS:
+ABOUT: BUG-433-symbol-delete-on-exported-const-fn-misha
+:END:
+** ITEM Knowledge capability cache latches negative verdict permanently (transient daemon-down → search disabled for whole session)
+
+Fixed in crates/pi-natives/src/embedding_worker.rs::capabilities — only successful init probes are cached; Err(_) returns a default set for that call but leaves CAPS empty so the next call re-probes. Regression test `capability_probe_failure_does_not_latch_negative_verdict` (socket_tests) pins the contract: hard spawn failure → cache stays None → v2 init listener comes up → re-probe reports knowledge_capable + caches. Full pi-natives suite green (432 passed, 0 failed). Found while dogfooding the BM25-first fix live: swapped daemon binary + killed stale daemon, but the session's memory tool kept reporting "daemon does not support protocol v2" despite a confirmed-live v2 daemon on the socket — root-caused to this latched negative cache, not a stale-daemon problem.
+:PROPERTIES:
+:CUSTOM_ID: EP-904e45b612f5919f
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-09T11:46:10Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-329-knowledge-capability-cache-latches-negat
+:END:
+** ITEM PLAN-328 landed: todo_write flattened from group-of-TodoItem to flat TodoNode declarative reconcile (todo_write {tasks,reset}). 7 gate fields collapsed to verify{commit,artifact,cmd,review}; orgItem*→ref/closesRef reusing task/ref-resolver; status input 6→4 (failed/gate_failed system-only); TodoGroup container dropped (group is now a cosmetic label). KDL policy gate-* keys back-compat aliased to verify-*. journal drawer keys GATE_*→VERIFY_*, ORG_ITEM_*→REF/CLOSES_REF (DEPENDS preserved for wave engine). Property/fuzz test pattern: seeded LCG (no fast-check dep) × 200 seeds × invariants. Commit 67a06604f.
+:PROPERTIES:
+:CUSTOM_ID: EP-4fb6c9411a875ad1
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-09T16:14:13Z
+:END:
+:RELATIONS:
+INVOLVED: PLAN-328-simplify-and-unify-todo-write-flat-recon
+INVOLVED: BUG-438-subagent-dispatch-fails-silently-on-prov
+:END:
+** ITEM Simplify and unify todo_write — flat reconcile node, verify{} gates, ref linkage (PLAN-327 follow-up)
+
+Landed in 67a06604f. Full cutover: spine + 4 consumer waves + journal + 24 test files migrated + NEW property/fuzz suite. 260+ tests green, tsgo at baseline 58 (zero new). Net -473 LOC. Mid-flight BUG-438 filed (subagent 402 silent fail).
+:PROPERTIES:
+:CUSTOM_ID: EP-8d69c3d2ff100d3c
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-09T16:14:43Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-328-simplify-and-unify-todo-write-flat-recon
+:END:
+** ITEM PLAN-330a landed (059ed70c0): live test-drive of PLAN-328 todo_write found redundant post-completion gate nag. Root: one imperative voice for both two-phase sections. Fix = voice split: pre-completion 'Verification Required' stays imperative; post-completion 'Gate Requirements' renamed 'Verification Cleared', past-tense receipt (✓ id cleared: verify.cmd.). NB: live todo_write tool reflects the session-loaded build, not source edits — verify footer/format changes via direct formatSummary unit test, not the live tool. PLAN-330b (enhancement) still unscoped: candidates verify.review live LLM-gating / multi-blocker wave viz / ref auto-close (NB ref auto-close ALREADY exists at todo-write.ts:485).
+:PROPERTIES:
+:CUSTOM_ID: EP-39f00aefdd2bcca7
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-09T21:19:03Z
+:END:
+:RELATIONS:
+INVOLVED: PLAN-330-simplify-enhance-todo-write-post-328-pol
+INVOLVED: FEAT-805-polish-confirmatory-gate-footer-voice-pr
+:END:
+** ITEM undo verb rejected target-less dispatch despite contract
+
+Fixed + tested. handle_undo no longer requires a target; history_for made root-inclusive (workspace_root_for walks from path.parent(), so target-less branch now probes root/.spell-history-probe to see root's own .spell marker — fixes the latent asymmetry where target-less undo would resolve a DIFFERENT history file than the recording edit when cwd IS the workspace root). Unit tests handle_undo_reverts_without_target + handle_undo_no_history_is_graceful green; e2e via executeCodePath (undo target-less, 0 diagnostics) green.
+:PROPERTIES:
+:CUSTOM_ID: EP-52064d2cf3121124
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-09T21:36:32Z
+:END:
+:RELATIONS:
+ABOUT: BUG-440-undo-verb-rejected-target-less-dispatch
+:END:
+** ITEM PLAN-321 6-verb edit surface test-drive (live). Surface design is sound — every redundancy collapse lowers correctly (verb.rs::lower verified against target shape). Bugs found are all resolver-depth, not surface-design: BUG-439 (nested md/org headings unreachable by edit — read-resolver sees §section but edit-path resolve_symbol enumerates only level-1 headings), BUG-440 (undo verb rejected target-less dispatch despite contract — artificial guard + latent history_for asymmetry, FIXED), plus FEAT-807 (structural edits had no diff in TUI + bare "Edit" title — backfill diff at napi chokepoint + descriptive verb·target title, DONE). Redundancy analysis: 31 kernel Ops (File 8 / Symbol 12 / Line 4 / Css 4 / Heading 3) collapse to 6 verbs because the family prefix re-encodes what the CodePath target shape already carries.
+:PROPERTIES:
+:CUSTOM_ID: EP-935c0f13c1f2db3f
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-09T21:37:20Z
+:END:
+:RELATIONS:
+ABOUT: BUG-439-edit-resolver-cannot-target-nested-markd
+ABOUT: BUG-440-undo-verb-rejected-target-less-dispatch
+ABOUT: FEAT-807-descriptive-edit-tool-result-titled-diff
+:END:
+** ITEM Simplify + enhance todo_write (post-328 polish + capability)
+
+330a (059ed70c0): confirmatory gate-footer voice. 330b (a4f0839a0): verify.review LLM-gating (review-judge.ts, single-phase, fail-open, todo.reviewJudge setting) + blocker-wave viz (computeWaveDepths, Waves:/[wK] in summary). 17 new tests, tsgo at baseline 58.
+:PROPERTIES:
+:CUSTOM_ID: EP-bc101d786996c5a8
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-09T22:12:00Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-330-simplify-enhance-todo-write-post-328-pol
+:END:
+** ITEM PLAN-330b landed (a4f0839a0): two todo_write enhancements. (1) verify.review LLM-gating — new src/tools/review-judge.ts with injectable ReviewJudge seam + createModelReviewJudge using streamSimple (one-shot inference, NOT a task subagent → avoids todo_write↔task cycle). Single-phase (judge IS verification, no verified flag), fail-open on infra error (degraded verdict completes + INFO notice), opt-out via todo.reviewJudge setting. Wired in sdk getReviewJudge() resolving live session model. (2) computeWaveDepths() — topological longest-path over incomplete blocker DAG, surfaced as 'Waves: N' + [wK] badges in formatSummary when depth≥2. GateType gained 'verify.review'. NB UserMessage requires timestamp field; streamSimple(model, {systemPrompt, messages}). 17 new tests. Pattern: inject model-call seams (like agent streamFn) for deterministic tool tests.
+:PROPERTIES:
+:CUSTOM_ID: EP-20558d664809d420
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-09T22:13:07Z
+:END:
+:RELATIONS:
+INVOLVED: PLAN-330-simplify-enhance-todo-write-post-328-pol
+INVOLVED: FEAT-806-enhance-new-todo-write-capability-scope
+:END:

@@ -1,0 +1,19 @@
+#+TITLE: Dangling import isDelegatedTask blocks entire TS tools test suite
+#+STATE: ITEM
+#+SESSION_ID: 15022e9a3d98d40f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-34-47-158Z_15022e9a3d98d40f.jsonl]]
+#+CUSTOM_ID: BUG-437-dangling-import-isdelegatedtask-blocks-e
+
+* Initial Message
+
+the edit tool has so many sub-tools it's kinda insane. it should have much less, especially considering they are redundant with CodePath specs. Please provide me your own understanding and explain
+
+NOT introduced by PLAN-321 / BUG-433-436 work — pre-existing dirty-tree breakage from in-flight task-system changes.
+
+`src/tools/todo-write.ts` renamed `isDelegatedTask` → `isDelegatedNode(node: TodoNode)` (working tree; HEAD still had `isDelegatedTask` x7). But the consumer `src/modes/interactive-mode.ts:47` still does `import { isDelegatedTask } from "../tools/todo-write"` and calls it at line 947 with a `TodoItem`.
+
+Effect: `@spell/pi-coding-agent/tools` barrel fails to load → SyntaxError: "Export named 'isDelegatedTask' not found" → EVERY test importing the tools barrel fails to even load (edit.test, edit-matrix, wave-j-edge-cases, etc. show `0 pass / 1 fail` = load error, not test failure).
+
+Fix (owner of the task-system refactor): update interactive-mode.ts to `isDelegatedNode` and reconcile TodoItem vs TodoNode types, OR re-add an `isDelegatedTask(TodoItem)` shim. Not fixed here to avoid masking the in-flight refactor's intended type model.
+
+Verification of BUG-433/434/435 fixes was done at the Rust level (kernel tests + proptest, all green) since the TS e2e harness is blocked by this.

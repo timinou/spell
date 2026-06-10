@@ -1,0 +1,169 @@
+#+TITLE: Unified comms substrate — request/response over a transport-agnostic wire
+#+STATE: ITEM
+#+SESSION_ID: 15022ed13b056c12
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-35-43-468Z_15022ed13b056c12.jsonl]]
+#+CUSTOM_ID: PLAN-331-unified-comms-substrate-request-response
+
+* Initial Message
+
+i restarted the session, can you test-drive this?
+
+Design doc. Grounds the foundation before any peer/federation work.
+
+* Goal
+
+Collapse Spell's FOUR parallel "a process needs an answer from elsewhere" mechanisms onto ONE transport-agnostic request/response substrate, so:
+- a *spawned* (RPC) agent CAN answer a blocking event (today: hard-rejected ~not_supported_for_spawned~)
+- ~task:ask:*~ subagent dialogue is observable server-side (web/Telegram) for FREE — same frame as blocking events
+- the wire is modelled on the most mature existing pattern (PtcRuntimeClient JSON-RPC-2.0/NDJSON) so a future BEAM orchestration move is wire-compatible, not a 4-protocol translation
+- dead swarm comms code (blackboard/handoff/spawn-successor) is removed (parallel-impl cleanup)
+
+NON-GOAL this plan: instance↔instance peer/federation. That is a SEPARATE follow-on plan, viable only once this substrate proves out. (User decision 2026-06-09.)
+
+* Grounding facts (verified in repo, 2026-06-09)
+
+Four request/response mechanisms exist today, at four maturity levels:
+
+| mechanism | file | transport | answer channel | maturity |
+|-----------|------|-----------|----------------|----------|
+| BlockingEvent | ~spell-server/socket/*~, ~web/ws/*~ | unix socket, JSONL | ✓ ~resolveEvent~ socket write-back (EXTERNAL sessions only) | live |
+| AskBroker ~task:ask:*~ | ~coding-agent/task/ask-broker.ts~ | in-process shared object | ✓ parked Promise (in-process only) | live, tested (PLAN-327) |
+| RPC stdio | ~spell-server/rpc/rpc-client.ts~ | child stdout JSONL | ✗ ~not_supported_for_spawned~ (web/ws/server.ts ~line 353) | live |
+| PtcRuntimeClient | ~coding-agent/tools/ptc-runtime/client.ts~ | NDJSON, JSON-RPC 2.0 | ✓ id-correlated, bidirectional, per-call cancel, init-replay | MOST mature |
+
+- ~EventBus~ (P0–P3 priority queue) is an OBSERVATION layer (drop-oldest, no delivery guarantee) — NOT a comms substrate, by design. Keep it as the observation tap.
+- ~src/swarm/{blackboard,handoff-tool,spawn-successor-tool}.ts~: zero callers, zero tests, never registered. The "tried but never tested" comms attempt. AskBroker superseded it. DEAD.
+- ~packages/swarm-extension/~: live + tested, but ORTHOGONAL (standalone YAML pipelines, filesystem comms, heavyweight subprocesses). Do NOT unify — different problem.
+- BEAM today = execute-sandbox (~ptc_runner~) + Expert LSP ONLY. No plan to move orchestration/comms onto BEAM. ∴ a TS substrate is SAFE (BEAM won't obsolete it) and forward-aligned IF it mirrors the PtcRuntimeClient wire.
+
+* The key insight — the primitive already exists, split across two files
+
+#+begin_src
+PtcRuntimeClient  ⊃  Transport{writeLine,onLine,onClose,close}  +  pending:Map<id,{resolve,reject}>  +  nextId
+                     └─ the WIRE: id-correlated parked-promise over an abstract pipe. Transport is ALREADY the extraction seam.
+AskBroker         ⊃  blocking|non-block modes  +  recipient fan-out  +  originator-always(D2)  +  task:ask:* observation
+                     └─ the SEMANTICS: request/response policy on top of a wire.
+
+∴ substrate = AskBroker's SEMANTICS lifted onto PtcRuntimeClient's WIRE, transport-agnostic.
+  Transport impls: in-process | child-stdio | unix-socket | (future) BEAM | (future) peer.
+#+end_src
+
+** Preliminary wire-extraction design (answers the "own folder?" question)
+
+YES — the wire extracts cleanly. ~Transport~ is already an interface in client.ts decoupling correlation from the physical pipe. Proposed home:
+
+#+begin_src
+packages/coding-agent/src/comms/            ← new folder, single responsibility = the wire
+  transport.ts        Transport interface (lifted verbatim from ptc-runtime/client.ts)
+  request-broker.ts   RequestBroker: nextId + pending<id,{resolve,reject}> + per-call AbortSignal
+                        + bidirectional reentrant-request handler + transparent-replay hook
+  envelope.ts         { v, id, kind: "request"|"response"|"event", correlationId?, method?, params?, result?, error? }
+                        (JSON-RPC-2.0-shaped, house style from PtcRuntimeClient + knowledge daemon {protocol_version})
+  transports/
+    in-process.ts     direct function-call Transport (for AskBroker's current zero-IPC case)
+    child-stdio.ts    wraps a child's stdin/stdout (RPC path)
+    (socket.ts later) unix-socket Transport (spell-server external path) — W3 may stub, full in follow-on
+#+end_src
+
+Responsibility split keeps PtcRuntimeClient as a CONSUMER of comms/ (it adds catalog/execute/tool_call semantics on top), and AskBroker becomes a consumer too. Neither owns the wire.
+
+* Plan (W0 standalone, then W1–W4 substrate)
+
+** W0 — FUP-107 org gate enforcement parity (STANDALONE PREREQUISITE)
+Independent correctness fix, ~½ day. Do FIRST (user decision). Not part of the substrate but blocks nothing and clears a real hole. See FUP-107. Org ~org://~ gates are injected as MUST text but never runtime-enforced (~rosterRefOf~ → undefined → ~buildRuntimeVerificationOptions~ → undefined → ~verifyGates~ never runs). Roster gates ARE enforced. Asymmetry → org-linked subagent can skip a gate it was told it MUST satisfy.
+Seam: ~resolveOrgRefItem~ is async; ~buildRuntimeVerificationOptions~ is sync. Resolve org gates → structured ~TaskVerify~ once, async, up front (alongside ~injectVerificationContext~ which ALREADY awaits the same resolution), thread result to executor call site. Unify roster+org through ONE resolved-gate struct.
+Also: ~validateTaskBatch~ becomes org-aware (fail loud on unresolvable/empty-body org ref).
+
+** W1 — Extract the substrate primitive (no behaviour change)
+Create ~src/comms/~ (transport.ts + request-broker.ts + envelope.ts + in-process transport). Lift ~Transport~ + the pending-map correlation core out of PtcRuntimeClient. Make AskBroker a CONSUMER: its blocking/non-block/fan-out semantics sit on RequestBroker's parked-promise core. PtcRuntimeClient ALSO refactored to consume comms/ (proves generality with the mature case). ZERO behaviour change — all PLAN-327 + ptc-runtime tests stay green. This wave PROVES the primitive.
+
+** W2 — Spawned-agent answer channel (real bugfix)
+Extend ~BridgeRpcCommand~ with an ~answer~ frame (id-correlated). Wire ~web/ws/server.ts~ ~answer_blocking_event~ for ~kind:"spawned"~ to write the answer INTO the child via the child-stdio Transport, instead of returning ~not_supported_for_spawned~. Closes a real bug + proves duplex-over-stdio on the new substrate.
+
+** W3 — Unified server projection (subsumes FUP-109, observation-only)
+~BlockingEvent~ + ~task:ask:*~ ride ONE frame kind to the server. RPC bridge forwards ~task:ask:raised/answered/cancelled~ as substrate event frames; ~web-session-hub~ projects onto WS; Telegram observes uniformly. OBSERVATION ONLY — the human does NOT answer a subagent's question (see escalation redesign below). FUP-109 collapses into this.
+
+** W4 — Dead-code cleanup
+Delete ~src/swarm/{blackboard,handoff-tool,spawn-successor-tool}.ts~ + their dangling exports/tests/registry refs. Removes the confusing parallel comms impl AskBroker already superseded.
+
+─── STOP. Peer/instance↔instance federation = SEPARATE follow-on plan once W1–W4 prove the substrate. ───
+
+* Escalation redesign (supersedes FUP-106 "ask the user")
+
+User decision 2026-06-09: a subagent's question must NEVER interrupt a human, and must NOT auto-proceed on a guessed default.
+- orchestrator cannot answer from context → PARK until the next orchestrator turn (fold into the existing ~answeredLog~ result-summary seam). No human interrupt, no conservative-default auto-proceed.
+- FUP-106 rewritten: delete the "surface to USER / proxy_ask" design. Replace with "unanswerable → parked for next orchestrator turn."
+- ∴ W3 server projection is purely for WATCHING the dialogue, not for answering it.
+
+* Decisions (locked with user, 2026-06-09)
+
+| # | decision |
+|---|----------|
+| C1 | Scope = W1–W4 substrate foundation. Peer/federation deferred to its own plan. |
+| C2 | Wire models on PtcRuntimeClient JSON-RPC-2.0/NDJSON envelope (forward-aligned with BEAM). Preliminary design extracts the wire to its own ~src/comms/~ folder for clean responsibility. |
+| C3 | FUP-107 done FIRST as standalone (W0), not folded into the substrate. |
+| C4 | Escalation: unanswerable ask → parked for next orchestrator turn. No human interrupt, no auto-default. Supersedes FUP-106. |
+| C5 | EventBus stays the observation tap; it is NOT the substrate. swarm-extension is orthogonal, untouched. |
+
+* Risks / open questions
+
+- R1 — refactoring PtcRuntimeClient onto comms/ in W1 risks regressing the mature execute path. Mitigation: W1 is behaviour-preserving; the full ptc-runtime test suite (client/execute/roundtrip/integration) is the gate.
+- R2 — child-stdio duplex (W2): the RPC child must LISTEN for answer frames on stdin without colliding with existing ~BridgeRpcCommand~ framing. Verify the stdin reader multiplexes cleanly.
+- R3 — W3 frame unification must not double-deliver (a blocking event already routes for external sessions; don't also project it as a task:ask frame). Keep the taxonomies distinct on the wire, unified only at the observation projection.
+- OQ1 — does the socket Transport land in W3 or defer to the peer plan? Leaning: stub the interface in W3, full impl in the peer follow-on.
+
+* Pressure-test findings (oracle, 2026-06-10 — agent://11-PressureTestPlan331)
+
+Adversarial review BEFORE implementation. Two CRITICALS invert the plan's risk profile. All claims below re-verified directly against live code.
+
+** CRITICAL 1 — W2 fixes the back half of a path with no front half
+- ~setBlockingEvent~ fires ONLY from ~socket/server.ts:147~ on a ~blocking_event~ socket frame → only EXTERNAL sessions (net.Socket) ever raise one. Spawned sessions are driven via RpcClient stdin/stdout and run ~--mode rpc~; ~SessionBridgeClient~ is built only in interactive ~main.ts:146~, never in ~rpc-mode.ts~. ∴ ~currentBlockingEvent~ is never set for spawned → the ws push never fires → the ~not_supported_for_spawned~ rejection (~web/ws/server.ts:353~) guards a state spawned sessions NEVER ENTER.
+- The only in-child question source is the in-process AskBroker subagent ask — which C4 says must NOT be human-answered.
+- AND spawned children ALREADY answer questions today via a working duplex: ~extension_ui_request~ out (~rpc-mode.ts:115~) → ~extension_ui_response~ dispatched by id (~rpc-mode.ts:687~). The answer channel that matters is not broken.
+- ∴ W2 builds a correlation channel for an event nothing produces. Rescope or descope.
+
+** CRITICAL 2 — forcing ptc-runtime into W1 is risk without reward
+- ptc's "wire" is just ~nextId~ + ~pending=Map<id,{resolve,reject}>~ + ~request()~ (~client.ts:175-199~), ~15 trivial lines. Its REAL value is orthogonal: per-call AbortSignal composition + ~execSignals~ (PLAN-324), init-replay, backpressure writer.
+- W1 is "zero behaviour change" → refactoring ptc buys no W1 functionality while risking PLAN-324 cancellation/replay regressions. R1 is self-inflicted. The bug (W2) and value (W2/W3) do not require ptc to be a consumer.
+
+** HIGH 3 — in-process Transport for AskBroker is degenerate indirection
+- ~AskBroker.raise~ resolves a Promise with a live object ref (~ask-broker.ts:146-160~) — no serialization today. An envelope (~writeLine(JSON.stringify)~ → ~onLine(JSON.parse)~) forces a string round-trip + new parse-failure surface on a direct call. The ~Transport~ contract is ~writeLine(line:string)~ (~client.ts:120~); in-process either honors it (pointless) or passes objects (different sig → "one Transport" is nominal).
+- AskBroker's fan-out/originator-always (~answer()~ recipientSet, ~l.185-215~), non-block ack-immediate (~l.163~), out-of-band followUp (~#delivery~), broadcast cancel (~l.252~), answeredLog, EventBus emits — NONE fit ~pending<id,{resolve,reject}>~; all bolted on. Shared primitive ~15 lines; divergent semantics ~250 lines.
+
+** HIGH 4 — W4 grounding factually wrong (NOT "zero callers, zero tests")
+- ~executor.ts:29-30~ statically import ~createHandoffTool~ + ~createSpawnSuccessorTool~, used in the swarmTools block (~executor.ts:1350,1358~). Tests exist: ~test/swarm/{blackboard,handoff-tool,spawn-successor-tool}.test.ts~ + ~test/agent-session-handoff.test.ts~.
+- Files are RUNTIME-dead only because ~swarmContext.active~ is never populated. ~swarm/{uri,uri-protocol,types}~ ARE still imported by ~todo-write.ts:28~ + ~internal-urls/index.ts:23~ → must be RETAINED. Deletion must also strip the executor imports + swarmTools block + delete 4 test files, or executor won't compile.
+
+** Lower
+- MED 5 — BlockingEvent RAISE path (~emitBlockingEvent~ via ~raceWithBridge~, ~race.ts:29~) appears to have no non-test callers; the answer-over-bridge mechanism may be partially vestigial on the raise side. LOW confidence (grep-backed absence).
+- LOW 6 — R3 double-delivery: real but already moot under C4 (observation-only). Mitigation sound.
+- COSMETIC 7 — W3 observation projection needs NO comms/ and can ship FIRST (forward ~task:ask:*~ EventBus emits over the existing rpc event channel + web-session-hub projection).
+
+** Sound parts (oracle confirms)
+- ~Transport~ IS cleanly factored at the child/socket boundary (~client.ts:117-128~) — extraction there is low-friction.
+- W2 stdin multiplex (R2) is genuinely safe — ~extension_ui~ already proves duplex-over-stdio by id; ~readJsonl~ is line-framed.
+- W4 INTENT correct (swarm blackboard/handoff/spawn-successor ARE runtime-dead).
+- W0 (FUP-107) is legitimately independent.
+- The wire-vs-semantics CONCEPT is valid; the error is W1 scope (which side to extract from), not the distinction.
+
+* Revised plan (post-pressure-test)
+
+Verdict: conceptually coherent, mis-scoped on risk. Reorder by value-per-risk.
+
+** W0 — FUP-107 org gate enforcement parity. UNCHANGED. Standalone, do first.
+
+** W3' — Observation projection (PROMOTED to first comms wave; was W3)
+Forward ~task:ask:raised/answered/cancelled~ EventBus emits over the EXISTING rpc event channel; project via web-session-hub onto WS; Telegram observes. NO ~comms/~ dependency, observation-only (C4). Highest value-per-risk. Subsumes FUP-109. Ship before any extraction.
+
+** W1' — Substrate extraction, SHRUNK (was W1)
+Create ~src/comms/~: ~transport.ts~ (lift the interface from ~client.ts:117-128~) + minimal ~RequestBroker~ (nextId + pending<id,{resolve,reject}>) + ~child-stdio~ transport. Make AskBroker a consumer of the CORRELATION CORE ONLY; AskBroker KEEPS its direct-Promise resolve for the in-process path (NO in-process Transport, NO envelope round-trip — finding 3). DO NOT touch ptc-runtime (finding 2) — it stays as-is; it is not a W1 consumer. Refactor value only; zero functional change.
+
+** W2' — Spawned-answer channel: RESCOPED / GATED (was W2)
+BLOCKED on a real producer. Today nothing raises a spawned blocking event and ~extension_ui~ already answers spawned child questions (finding 1). Before building any answer frame: either (a) define a concrete spawned-answerable event that does not violate C4, or (b) descope until one exists. Decision needed from user — see OQ2.
+
+** W4' — Dead-code cleanup, CORRECTED grounding (was W4)
+Delete ~src/swarm/{blackboard,handoff-tool,spawn-successor-tool}.ts~ AND strip ~executor.ts:29-30~ imports + the swarmTools block (~1350,1358~) AND delete the 4 test files. RETAIN ~swarm/{uri,uri-protocol,types}~ (live consumers). Independent of comms/.
+
+* Open questions raised by pressure-test
+- OQ2 (was implicit) — W2: is there a FUTURE spawned-answerable event worth building the channel for (e.g. when subagents spawn OUT-of-process), or descope W2 entirely? Note subagents run IN-process today (executor misnomer), so the cross-process answer channel has no current consumer.
+- OQ3 — given findings, is the substrate (W1') worth doing now as pure refactor, or defer until a second real transport consumer exists (peer/federation)? The honest high-value slice may be just W0 + W3' + W4'.

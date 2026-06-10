@@ -1,0 +1,38 @@
+#+TITLE: Edit resolver cannot target nested markdown/org headings
+#+STATE: DONE
+#+SESSION_ID: 15022e9a3d98d40f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-34-47-158Z_15022e9a3d98d40f.jsonl]]
+#+CUSTOM_ID: BUG-439-edit-resolver-cannot-target-nested-markd
+#+COMPLETION_HASH: 5eb6ca5454af4999
+
+* Initial Message
+
+test drive this new surface
+
+Found during PLAN-321 verb-surface test-drive.
+
+Repro:
+```
+doc.md:
+  # Title
+  ## Section
+edit { target: "doc.md::Section", action: { kind: "replace", content: "## Section
+
+x
+" } }
+→ edit error: Symbol 'Section' not found. Available: [Title]
+```
+
+Inconsistency: the READ resolver sees `doc.md::Section` correctly (`find` returns `§section`), but the EDIT path routes through `single_action` → `resolve_symbol` (crates/pi-code-engine/src/resolve.rs:137), whose `find_symbol_node` + `collect_top_level_names` only enumerate LEVEL-1 headings. Nested `## Section` lives inside the `# Title` section node and is never visited → "Available: [Title]".
+
+Note the verb lowering is CORRECT: `verb.rs::is_heading` gates on mdorg extension + query present, and `replace` lowers to `Op::HeadingReplaceBlock`. But the heading resolver (`heading_resolver.rs`) delegates to `inner.apply_to_buffer` → code_buffer `single_action` → symbol resolution, which is where nested headings are lost. Top-level `# Title` works (demote verified e2e); only nesting fails.
+
+Fix direction: md/org heading resolution must recurse into section subtrees (or the heading resolver should resolve headings by document structure, not the generic top-level symbol walk). Scope: pi-code-engine resolve / md-org profile container query — not the verb surface.
+
+NOTE [2026-06-10]: Fixed at root + tested e2e. TWO compounding defects:
+
+1. SEMANTIC MISMAP: HeadingReplaceBlock routed to procedure "replaceCodeBlock" which (a) was unregistered in single_action's dispatch (→ "Unknown action kind"), and (b) even when mapped (replace-code-block) replaced FENCED CODE blocks, not the section body — wrong op entirely. Heading replace was 100% broken even on top-level headings. FIX: a markdown/org `section` IS a declaration (profile registers it w/ name+body+span), so HeadingReplaceBlock now routes to whole-symbol `write` over the section node — reusing the exact symbol-replace machinery (heading_resolver.rs, both apply_to_buffer + try_apply).
+
+2. NESTED RESOLUTION: bare `::Section` (a nested ## heading) failed because find_symbol_node only walked root's direct children; nested headings required the dot-path `Title.Section`. Read-side resolver accepted bare names → read/edit divergence. FIX (resolve.rs): added gated recursive descent — when the profile has a SELF-NESTING class_like container (node_type ∈ member_types, true for markdown/org/typst `section`, false for Rust impl/TS class), bare names resolve recursively; ambiguity still errors (guiding to dot-path). Code languages keep top-level+dot-path semantics unchanged.
+
+Tests: resolve_markdown_bare_nested_section / _ambiguous / _toplevel_unaffected (pi-code-engine); op_matrix HeadingPromote+HeadingReplaceBlock flipped expected_unimpl→working; e2e (executeCodePath) top-level + bare-nested + dot-path replace + nested promote all green.

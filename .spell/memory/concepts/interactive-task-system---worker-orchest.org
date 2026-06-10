@@ -1,0 +1,38 @@
+#+TITLE: interactive-task-system---worker-orchest
+
+** ITEM Interactive task system — worker↔orchestrator dialogue (PLAN-327)
+
+Spell's task subagents run IN-PROCESS (executor.ts::runSubprocess = createAgentSession + session.prompt in the same Bun process), so worker↔orchestrator dialogue needs zero IPC — it's a shared in-memory AskBroker.
+
+## Architecture (shipped)
+- `ask_orchestrator` (in-task CustomTool, injected via ExecutorOptions.customTools when task.interactive on) → broker.raise(). blocking=true parks the worker at the tool boundary (answer = tool result); blocking=false acks + answer delivered via followUp on a later turn.
+- Answer pump (answer-pump.ts) forks a /btw-STYLE one-shot streamSimple over the orchestrator's formatCompactContext() snapshot, toolChoice forced to `answer_subtask`. KEY INSIGHT (from how /btw works): this needs NO live orchestrator turn → the orchestrator can be blocked in `await taskBatch` and still answer → kills the async-batch requirement and the deadlock risk.
+- AskBroker (ask-broker.ts): pending-promise map = functional channel; `task:ask:*` EventBus emits = observation-only (TUI/server). D2 invariant (originator always receives) enforced in code via Set, not prompt. close() unparks all pending on batch end.
+- ref-resolver.ts: `todoRef`→`ref` cutover (required, nullable). resolveRef dispatches null|roster-id(`task-N`)|`org://ID`. Org refs resolve item body→assignment + PROPERTIES drawer→verification lines (mapOrgGateProperties mirrors the full roster gate set).
+- TUI: SubagentTracker subscribes task:ask:* → getAskDialogue/openAskCount; status-line shows "N asks?" pressure signal; viewer footer shows per-agent pending count.
+
+## Critical pitfalls (found by review, fixed)
+1. Pump fork rejection MUST unpark the worker (try/catch around the fire-and-forget IIFE) else the whole batch deadlocks (worker's runner never completes → scheduleBatch never resolves → close() unreachable).
+2. NEVER append to orchestrator history mid-`await taskBatch` (D6) — it wedges a message between the task tool_use and its tool_result → Anthropic 400. Surface answered-asks in the task RESULT text instead (turn-safe, lands in tool_result position).
+3. Out-of-band delivery (followUp) MUST guard on `session.isStreaming` — a bare prompt() to an idle/finished worker revives it into a detached turn.
+
+## Deferred (FUPs)
+- FUP-106 user escalation (orchestrator can't answer → ask the human)
+- FUP-107 org-ref runtime gate ENFORCEMENT (currently injected-as-text only; rosterRefOf returns undefined for org refs so #buildRuntimeVerificationOptions skips them) + unresolvable/empty org ref validation
+- FUP-108 close()/dispose synchronization races + executor isStreaming-guard integration test
+- FUP-109 spell-server web/Telegram projection of task:ask:* (cross-process RPC frame forwarding)
+
+## Repo gotchas
+- Package typecheck is `bun run check` (NOT check:ts) at packages/coding-agent; root has check:ts.
+- 61 pre-existing baseline TS errors (edit.ts hint/DiagnosticDto, codepath/* edit-kind enums, path-resolution, mcp-kdl) — unrelated to feature work.
+- `.md`-via-package-alias test harness fails for prompt tests (eager-todo.md, code-hint-semantic.md) on baseline — pre-existing, not a regression.
+- TaskItem schema is recreated inline in task-schema.test.ts (avoids circular import) — must mirror real schema manually on change.
+:PROPERTIES:
+:CUSTOM_ID: CON-interactive-task-system---worker-orchest
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-09T13:02:16Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: PLAN-327-interactive-task-system-workerorchestrat
+:END:

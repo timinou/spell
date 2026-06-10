@@ -1,0 +1,21 @@
+#+TITLE: comms-substrate-foundation--plan-331----
+
+** ITEM Comms substrate foundation (PLAN-331) — unify 4 request/response mechanisms on PtcRuntimeClient wire
+
+Spell has FOUR parallel "process needs an answer" mechanisms: (1) BlockingEvent socket (spell-server, external-only answers), (2) AskBroker task:ask:* (in-process, PLAN-327), (3) RPC stdio (spawned agents — answer HARD-REJECTED via not_supported_for_spawned), (4) PtcRuntimeClient NDJSON JSON-RPC-2.0 (Node↔BEAM, MOST mature: id-correlated, bidirectional, per-call cancel, init-replay).
+
+KEY INSIGHT: the substrate primitive already exists split across two files. PtcRuntimeClient holds the WIRE (Transport interface {writeLine,onLine,onClose,close} + pending:Map<id,{resolve,reject}> + nextId) — Transport is ALREADY the extraction seam. AskBroker holds the SEMANTICS (blocking|non-block, recipient fan-out, originator-always D2, observation events). Substrate = AskBroker semantics lifted onto PtcRuntimeClient wire, transport-agnostic.
+
+DECISIONS (user, 2026-06-09): C1 scope=W1-W4 foundation, peer/federation deferred to own plan. C2 wire models on PtcRuntimeClient envelope (forward-aligned with BEAM), extract to new src/comms/ folder (transport.ts + request-broker.ts + envelope.ts + transports/). C3 FUP-107 (org gate enforcement parity) done FIRST standalone. C4 escalation: unanswerable subagent ask → PARKED for next orchestrator turn, NO human interrupt, NO auto-default (supersedes FUP-106's ask-user design). C5 EventBus stays observation tap (NOT substrate); swarm-extension orthogonal (untouched).
+
+DEAD CODE confirmed: src/swarm/{blackboard,handoff-tool,spawn-successor-tool}.ts — zero callers/tests/registration, the "tried but never tested" comms attempt AskBroker superseded. Delete in W4.
+
+BEAM: only execute-sandbox (ptc_runner) + Expert LSP today. NO plan to move orchestration onto BEAM. TS substrate is safe + forward-aligned. FUP-109 subsumed into W3 (observation-only projection). FUP-106 superseded by C4.
+:PROPERTIES:
+:CUSTOM_ID: DEC-comms-substrate-foundation--plan-331----
+:KIND: decision
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-10T12:32:43Z
+:END:
+:RELATIONS:
+:END:

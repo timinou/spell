@@ -1,0 +1,41 @@
+#+TITLE: Episodes 2026-06-10
+
+** ITEM Edit resolver cannot target nested markdown/org headings
+
+Fixed at root + tested e2e. TWO compounding defects:
+:PROPERTIES:
+:CUSTOM_ID: EP-c6cc8d08fb68bc35
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-10T11:45:22Z
+:END:
+:RELATIONS:
+ABOUT: BUG-439-edit-resolver-cannot-target-nested-markd
+:END:
+** ITEM Prompt-weight reduction session (2026-06-10): removed ManageTool (folded kernel dispatch into StatusTool; kernel NAPI command name "manage" unchanged), stubbed get.md as find alias, moved find/task reference tables to docs/find-tool-reference.md + docs/task-tool-reference.md (embedded as pi:// in both TS docs-index and kernel phf via build.rs rerun-if-changed docs/), fixed stale symbolReplace/fileFindReplace guidance in system-prompt.md (PLAN-320 made the verb surface replace/rename/delete/patch/restructure+undo/redo; OpKinds are internal lowering). Reconciled prompt-snapshots.test.ts to verb-level parity via listVerbKinds(); added implements→/inherits→/dispatches→ to pi-code-path list_edge_kinds (EDGE_KIND_COUNT 5→8) closing a kernel-introspection gap where find.md hand-listed edges the introspection didn't know. memory.ts enums converted to StringEnum (one wire enum list vs 26-arm anyOf ×3); NB Value.Check crashes on Type.Unsafe — tests must validate via validateToolArguments (ajv). AGENTS.md daemon internals distilled to CON-pi-knowledge-worker-daemon-internals--pl. Gotcha: loader prefers pi_natives.dev.node when present — rebuild dev:native too or introspection changes don't surface.
+:PROPERTIES:
+:CUSTOM_ID: EP-d2fa27cdcd6f260b
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-10T12:28:51Z
+:END:
+:RELATIONS:
+:END:
+** ITEM Test-drove edit/create tools. Found+fixed 2 critical bugs. (A) create.ts crashed with "undefined is not an object (evaluating 'input.match')" whenever content was a JSON object literal (e.g. package.json) — the arg-coercion layer (packages/ai/src/utils/validation.ts) parses string→object for union-typed content, lenientArgValidation passes it raw, create's content discriminator fell into the artifact-URI branch → router.canHandle(undefined). Fix: discriminate on kind, JSON.stringify untagged objects/arrays. (B) edit.ts transaction:strict rollback silently no-op'd for symbol/qualified targets — snapshot map keyed on qualified targetPath (file.ts::Sym#body) while mutation hit stripped filePart (file.ts); rollback restored a phantom path, op1's write survived despite "Rolled back" message = silent corruption. Fix: precompute filePart in ops map, key snapshot+existence+rollback on it. Regression tests added to test/create.test.ts and test/edit.test.ts; both verified fail-without-fix.
+:PROPERTIES:
+:CUSTOM_ID: EP-f9387fbfb7790c93
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-10T12:43:41Z
+:END:
+:RELATIONS:
+:END:
+** ITEM PLAN-331 pressure-test (oracle agent://11) found two criticals that invert the plan's risk profile, both re-verified against live code: (1) W2 spawned-answer channel fixes the back half of a path with no front half — setBlockingEvent fires only from socket/server.ts:147 for EXTERNAL sessions; spawned sessions never raise a blocking event (no SessionBridgeClient in rpc-mode), so not_supported_for_spawned (web/ws/server.ts:353) guards an unreachable state. Spawned children ALREADY answer via extension_ui_request/response duplex (rpc-mode.ts:115/687). W2 must be rescoped/gated on a real producer. (2) Forcing ptc-runtime into W1 is risk-without-reward — its 'wire' is ~15 trivial lines; its real value (PLAN-324 per-call AbortSignal/execSignals, init-replay) is orthogonal; refactoring it for a zero-behaviour-change wave only risks regression. Also W4 grounding wrong: executor.ts:29-30 statically import the swarm tools (NOT 'zero callers'); deletion must strip imports+block+4 test files; retain swarm/{uri,uri-protocol,types}. Revised sequence: W0 (FUP-107) → W3' observation projection FIRST (no comms/ dep, highest value-per-risk) → W1' shrunk extraction from AskBroker+child-stdio only, ptc untouched, AskBroker keeps direct-Promise (no in-process Transport) → W2' gated on a real producer → W4' corrected cleanup. Honest high-value slice may be just W0+W3'+W4'; substrate refactor (W1') possibly defer until a second real transport consumer exists.
+:PROPERTIES:
+:CUSTOM_ID: EP-46acd0b86b9ae75e
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-10T13:48:06Z
+:END:
+:RELATIONS:
+:END:
