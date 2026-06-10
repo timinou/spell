@@ -16,17 +16,12 @@ spell-monorepo -- javascript
 - `status { command }` is kernel observability: `languages` · `index` · `watcherStatus` · `lockStatus` · `status`. NOT for save/diff/buffers (auto-saves; diff via `find ... #diff` post-kernel-rebuild).
 - `create { path, content }` for new files; `edit` for overwrites.
 - `bash { command }` for processes only (build, test, git, scripts). Not for cat/grep/sed/head/tail/wc/find/ls — use `find`.
-- Legacy `get` and `manage` tools still registered as `REMOVE_AT_WAVE_11` aliases.
+- Legacy `get` tool still registered as a `REMOVE_AT_WAVE_11` alias of `find`. `manage` is removed (replaced by `status`).
 
 ### Knowledge daemon (PLAN-315)
-- `pi-knowledge-worker` is the user-scoped daemon serving both the org/memory recall lane (W2) and the code-graph hybrid lane (W3). Renamed from `pi-embedding-worker` in W1; legacy binary symlink + `embed.sock` + `PI_EMBEDDING_WORKER` env are retained one release as fallbacks.
-- Wire protocol: line-delimited JSON over `$XDG_RUNTIME_DIR/spell/knowledge.sock`. `init` returns `{protocol_version: 2, supported_commands: [...]}`. Full surface (15 commands): `init`, `embed_batch`, `embed_query`, `open`, `close`, `stats`, `search`, `about`, `neighbors`, `since`, `subscribe`, `unsubscribe`, `cg_search`, `cg_definition`, `cg_references`, `cg_callers`.
-- Per-repo cache: FNV-1a 64 `repo_handle = fnv:xxxxxxxxxxxxxxxx`; LRU eviction via `KNOWLEDGE_MAX_WARM_REPOS` (default 8) and `KNOWLEDGE_IDLE_TTL_SECS` (default 1800). Each `RepoSlot` carries `Arc<OrgLaneState>` and `Arc<CodeLaneState>` with non-blocking warm-load (316) + push-subscribe (315 W4).
-- Push-subscribe (W4): bidirectional channel via `subscribe { repo_handle, lanes }`. Daemon pushes `index_changed` / `warm_completed` / `evicted` / `heartbeat` / `lag` event frames. Subscriber state is a `SubscriptionToken` held by the per-connection `ConnState`; Drop deregisters from `LaneEvents`. Bounded `sync_channel(256)` per connection; overflow drops oldest + emits `{event: lag, dropped: N}` on next successful send.
-- Sessions auto-spawn the daemon on first connect. In the default `Daemon` worker mode, an unreachable daemon or any RPC failure surfaces as a query error (fail-loud); the in-process `WarmEngine` is reached only when `PI_KNOWLEDGE_WORKER=inprocess`. The fast path is gated by `embedding_worker::knowledge_capable()` which memoises capabilities from the `init` response.
-- Client subscriptions live in `pi_natives::knowledge_client::KnowledgeSubscription`. Opens its own socket (separate from the shared embedding transport so subscribe doesn't block other queries); spawns a background reader thread; Drop sends Unsubscribe + closes.
-- Escape hatch: set `PI_KNOWLEDGE_WORKER=inprocess` to bypass the daemon socket and serve queries directly from the in-process `WarmEngine`. Useful for CI, offline development, and tests. In this mode RPC is not attempted at all (no daemon connection); in the default `Daemon` mode RPC errors propagate as query failures with the message hinting at the escape hatch.
-- `:RELATIONS:` and `:PROPERTIES:` drawers at file scope (before any heading) are parsed by `pi-org-engine::buffer::extract_file_level_item` (W7 fix); they propagate to the file-level OrgItem and thence to TypedGraph so `memory.about` returns proper neighbors for concept/episode notes. `cmd_link` (memory.link tool) also supports file-level CUSTOM_IDs: when `from` matches a `#+CUSTOM_ID:` frontmatter line, the edge writes into the file-level `:RELATIONS:` drawer (created lazily, idempotent on repeat).
+- `pi-knowledge-worker`: user-scoped daemon serving the org/memory recall lane + code-graph hybrid lane over `$XDG_RUNTIME_DIR/spell/knowledge.sock` (line-delimited JSON). Sessions auto-spawn it; daemon failures are fail-loud query errors.
+- Escape hatch: `PI_KNOWLEDGE_WORKER=inprocess` bypasses the socket and serves from the in-process `WarmEngine` (CI, offline, tests).
+- Protocol/cache/subscription internals: memory concept `CON-pi-knowledge-worker-daemon-internals--pl`.
 
 ### URI scheme dispatch (PLAN-310)
 - Kernel owns URI dispatch via `SchemeRegistry`. Adding a scheme = one new file in `crates/pi-natives/src/code_path/uri/` exposing `pub fn build(ctx) -> SchemeProfile`. `build.rs` auto-collects.

@@ -69,11 +69,11 @@ target ::= Locator (Query)? (Qualifier)?
 | bind→ | Bind | From a use to its binding site (scope-local) |
 | call→ | Call | From a call site to the callee |
 | def→ | Definition | From a declaration to its references (set-valued). Trailing `→` is sugar for `…def→§*`. Follows re-export chains. |
-| import→ | Import | From an imported name to the source module |
-| ref→ | Reference | Follow a reference to its definition |
-| implements→ | Implements | From a type to the interface/trait it implements (TS `implements`, Rust `impl Trait for X`) |
-| inherits→ | Inherits | From a type to its base type (TS `extends`, Python `class X(Base)`) |
 | dispatches→ | Dispatches | From a polymorphic call site to candidate dispatch targets |
+| implements→ | Implements | From a type to the interface/trait it implements (TS `implements`, Rust `impl Trait for X`) |
+| import→ | Import | From an imported name to the source module |
+| inherits→ | Inherits | From a type to its base type (TS `extends`, Python `class X(Base)`) |
+| ref→ | Reference | Follow a reference to its definition |
 <!-- @end -->
 
 <rules>
@@ -82,63 +82,10 @@ target ::= Locator (Query)? (Qualifier)?
 - globs ✗ slice  ·  uri ✗ query  ·  graph edges (def→/ref→/call→/import→/bind→) need `status index` ready
 </rules>
 
-## `#hover` smart-merge
+## Semantic notes
 
-`#hover` consults BOTH the graph-side (tree-sitter written signature) AND
-the semantic-side (LSP inferred type) backends, then merges:
-
-| graph result    | LSP result    | output                                |
-|-----------------|---------------|---------------------------------------|
-| `x`             | `x`           | `x`                                   |
-| `x`             | —             | `x [source: graph]`                   |
-| —               | `y`           | `y [source: semantic]`                |
-| `x`             | `y` (≠)       | `written:  x` / `inferred: y`         |
-| —               | —             | `unknown`                             |
-
-Default behaviour is `[source=both]` (smart-merge). Use `[source=graph]`
-to skip the LSP query (cost-sensitive paths) or `[source=semantic]` to
-ignore the written annotation.
-
-The deprecated `#hover_inferred` qualifier was folded into
-`#hover [source=semantic]` (FUP-097).
-
-Read-only semantic qualifiers (`#hover`, `#type_definition`, `#type_def`,
-`#signature`, `#inlay`, `#diagnostics`) cannot be used as `edit` targets
-— they describe a *view* of code, not a region. For editing, use `#body`
-or `#sig` to scope to the body or signature region of a symbol. Use
-`find { target: "… #qual" }` to inspect any of the read-only views.
-
-## Languages
-
-Semantic qualifiers (`#hover`, `#signature`, `#type_definition`,
-`#inlay`, `#diagnostics`) dispatch via the per-workspace
-`SemanticBackend`. 17 languages ship wired out of the box:
-
-```
-elixir       expert
-rust         rust-analyzer
-typescript   typescript-language-server
-python       pyright-langserver
-go           gopls
-ruby         ruby-lsp
-css          vscode-css-language-server
-html         vscode-html-language-server
-c / cpp      clangd  (shared)
-swift        sourcekit-lsp
-kotlin       kotlin-language-server
-lua          lua-language-server
-nix          nil
-haskell      haskell-language-server-wrapper
-java         jdtls
-clojure      clojure-lsp
-```
-
-When an LSP binary is not on PATH, semantic dispatch degrades
-gracefully to AnnotationSemanticBackend (tree-sitter `#hover` only); a
-stderr warning is emitted on first use carrying the install hint.
-
-Adding a new language is one stanza in
-`crates/pi-code-graph/src/semantic/defaults.kdl` — zero Rust code
-changes, zero new dependencies. See FUP-094 for the data-driven
-fan-out playbook.
+- `#hover` smart-merges tree-sitter (written) + LSP (inferred); `[source=graph|semantic]` picks one half. `#hover_inferred` ≡ `#hover [source=semantic]` (deprecated).
+- semantic qualifiers (`#hover` `#signature` `#type_definition` `#inlay` `#diagnostics`) are read-only views — ✗ `edit` targets; edit via `#body`/`#sig`.
+- missing LSP binary → graceful degrade to tree-sitter `#hover` only.
+- deep reference (hover merge matrix, 17-language LSP table): `pi://find-tool-reference.md` — read it when a semantic qualifier behaves unexpectedly.
 

@@ -1,0 +1,21 @@
+#+TITLE: pi-knowledge-worker-daemon-internals--pl
+
+** ITEM pi-knowledge-worker daemon internals (PLAN-315)
+
+Detail moved out of .spell/AGENTS.md (prompt-weight reduction, 2026-06-10). Current as of PLAN-315 W7.
+
+- `pi-knowledge-worker` is the user-scoped daemon serving both the org/memory recall lane (W2) and the code-graph hybrid lane (W3). Renamed from `pi-embedding-worker` in W1; legacy binary symlink + `embed.sock` + `PI_EMBEDDING_WORKER` env retained one release as fallbacks.
+- Wire protocol: line-delimited JSON over `$XDG_RUNTIME_DIR/spell/knowledge.sock`. `init` returns `{protocol_version: 2, supported_commands: [...]}`. 15 commands: init, embed_batch, embed_query, open, close, stats, search, about, neighbors, since, subscribe, unsubscribe, cg_search, cg_definition, cg_references, cg_callers.
+- Per-repo cache: FNV-1a 64 `repo_handle = fnv:xxxxxxxxxxxxxxxx`; LRU eviction via `KNOWLEDGE_MAX_WARM_REPOS` (default 8) and `KNOWLEDGE_IDLE_TTL_SECS` (default 1800). Each `RepoSlot` carries `Arc<OrgLaneState>` + `Arc<CodeLaneState>` with non-blocking warm-load (316) + push-subscribe (315 W4).
+- Push-subscribe (W4): bidirectional channel via `subscribe { repo_handle, lanes }`. Daemon pushes index_changed / warm_completed / evicted / heartbeat / lag event frames. Subscriber state = `SubscriptionToken` held by per-connection `ConnState`; Drop deregisters from `LaneEvents`. Bounded `sync_channel(256)` per connection; overflow drops oldest + emits `{event: lag, dropped: N}` on next successful send.
+- Sessions auto-spawn the daemon on first connect. Default `Daemon` mode: unreachable daemon or RPC failure = query error (fail-loud); in-process `WarmEngine` only when `PI_KNOWLEDGE_WORKER=inprocess` (CI/offline/tests — no RPC attempted at all). Fast path gated by `embedding_worker::knowledge_capable()` memoising init capabilities.
+- Client subscriptions: `pi_natives::knowledge_client::KnowledgeSubscription`. Opens its own socket (separate from shared embedding transport so subscribe doesn't block queries); background reader thread; Drop sends Unsubscribe + closes.
+- `:RELATIONS:`/`:PROPERTIES:` drawers at file scope (before any heading) parsed by `pi-org-engine::buffer::extract_file_level_item` (W7 fix); propagate to file-level OrgItem → TypedGraph so memory.about returns proper neighbors for concept/episode notes. `cmd_link` supports file-level CUSTOM_IDs: when `from` matches `#+CUSTOM_ID:` frontmatter, edge writes into file-level `:RELATIONS:` drawer (created lazily, idempotent).
+:PROPERTIES:
+:CUSTOM_ID: CON-pi-knowledge-worker-daemon-internals--pl
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-10T12:09:45Z
+:END:
+:RELATIONS:
+:END:

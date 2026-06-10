@@ -50,7 +50,7 @@ const renderContext: TemplateContext = {
 	skills: [],
 	systemPromptCustomization: "",
 	toolInfo: [],
-	tools: ["get", "edit", "create", "manage", "task", "bash"],
+	tools: ["find", "edit", "create", "status", "task", "bash"],
 	worktree: "/tmp/project",
 	writeToolName: "write",
 	eagerTasks: true,
@@ -88,8 +88,11 @@ describe("code-edit contract prompts", () => {
 		const rendered = renderPromptTemplate(template, renderContext);
 
 		expect(rendered).toContain("tree-sitter read/outline/edit/change");
-		expect(rendered).toContain("Your main tool: `edit`.");
-		expect(rendered).toContain("line-target resolve AST/node boundaries");
+		expect(rendered).toContain("Your main tool: `edit`");
+		expect(rendered).toContain("symbol/structural targets");
 		expect(rendered).toContain("fallback to patch mode is last resort");
+		// Stale action names from the pre-PLAN-320 flat Op enum must not resurface.
+		expect(rendered).not.toContain("symbolReplace");
+		expect(rendered).not.toContain("fileFindReplace");
 	});
 });

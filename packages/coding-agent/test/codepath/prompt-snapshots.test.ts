@@ -10,9 +10,9 @@
 // reversion to legacy prose).
 
 import { describe, expect, test } from "bun:test";
-import { listEdgeKinds, listOps, listQualifiers, listDiagnosticVariants } from "@spell/pi-natives";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { listDiagnosticVariants, listEdgeKinds, listQualifiers, listVerbKinds } from "@spell/pi-natives";
 
 const PROMPTS_DIR = path.join(import.meta.dir, "../../src/prompts/tools");
 const EDIT_MD = path.join(PROMPTS_DIR, "edit.md");
@@ -34,17 +34,30 @@ const EXPECTATIONS: PromptExpectation[] = [
 		mustNotContain: ["recursive:", "depth:", "format:", "MUST NOT use"],
 	},
 	{
+		// PLAN-320 verb surface: 6 verbs + undo/redo. The 31 OpKind variants are
+		// kernel implementation detail and must NOT leak into the prompt.
 		name: "edit.md",
 		minLines: 25,
-		mustContain: ["symbol", "target", "action", "kind", "fileFindReplace", "symbolReplace", "undo"],
- // LINE#ID now appears in richer-generated field descriptions (kernel-derived)
+		mustContain: [
+			"symbol",
+			"target",
+			"action",
+			"replace",
+			"rename",
+			"delete",
+			"patch",
+			"restructure",
+			"undo",
+			"redo",
+		],
+		mustNotContain: ["fileFindReplace", "symbolReplace", "lineReplace", "headingReplaceBlock"],
 	},
 	{
 		name: "status.md",
 		minLines: 15,
 		mustContain: ["languages", "index", "lockStatus", "watcherStatus"],
 		// Forbidden as commands; cross-references (e.g. "diff lives in find") are fine.
-		mustNotContain: ["command: \"save\"", "command: \"buffers\"", "command: \"context\""],
+		mustNotContain: ['command: "save"', 'command: "buffers"', 'command: "context"'],
 	},
 	{
 		name: "create.md",
@@ -88,16 +101,6 @@ describe("prompt snapshots — find/edit/status/create/bash", () => {
 		expect(bashMustNotCount).toBeLessThanOrEqual(2);
 	});
 
-	function extractSentinel(promptPath: string, name: string): string {
-		const content = fs.readFileSync(promptPath, "utf-8");
-		const startTag = `<!-- @generated:${name} -->`;
-		const endTag = "<!-- @end -->";
-		const start = content.indexOf(startTag);
-		if (start < 0) throw new Error(`missing ${startTag}`);
-		const end = content.indexOf(endTag, start);
-		return content.slice(start + startTag.length, end);
-	}
-
 	// ── Kernel-parity tests ──
 	// These check that the prompts surface every kernel-known entity. The check
 	// is honest — it scans the *whole* prompt file (not just sentinel blocks)
@@ -107,10 +110,13 @@ describe("prompt snapshots — find/edit/status/create/bash", () => {
 	// Stronger byte-equality between generator output and sentinel content is
 	// tracked under W10.2 follow-up; this tier is the floor.
 
-	test("edit.md mentions every Op kind from listOps()", () => {
+	test("edit.md mentions every verb kind from listVerbKinds()", () => {
+		// PLAN-320/321: the model-facing surface is the verb union, not the
+		// 31-variant OpKind enum (now an internal lowering target). Parity at
+		// the verb level is the no-drift contract; Rust asserts the inverse
+		// (every listed verb deserializes to a Verb variant).
 		const content = fs.readFileSync(EDIT_MD, "utf-8");
-		const ops = listOps();
-		for (const op of ops) expect(content).toContain(op.kind);
+		for (const kind of listVerbKinds()) expect(content).toContain(kind);
 	});
 
 	test("find.md mentions every qualifier from listQualifiers()", () => {
@@ -138,10 +144,10 @@ describe("prompt snapshots — find/edit/status/create/bash", () => {
 	});
 
 	test("sentinel blocks exist for kernel-derived content", () => {
-		const edit = fs.readFileSync(EDIT_MD, "utf-8");
+		// edit.md dropped its sentinel in the PLAN-320 W4 verb rewrite — the
+		// verb surface is hand-authored prose locked by the listVerbKinds()
+		// parity test above. find.md keeps the generated qualifier/edge tables.
 		const find = fs.readFileSync(FIND_MD, "utf-8");
-		expect(edit).toContain("<!-- @generated:edit-ops -->");
-		expect(edit).toContain("<!-- @end -->");
 		expect(find).toContain("<!-- @generated:find-recipes -->");
 		expect(find).toContain("<!-- @end -->");
 	});
@@ -166,12 +172,6 @@ describe("prompt snapshots — find/edit/status/create/bash", () => {
 	test("find.md sentinel content is byte-equal to _generated/find-recipes.md", () => {
 		const inside = sentinelContent(FIND_MD, "find-recipes").trim();
 		const generated = fs.readFileSync(path.join(GENERATED_DIR, "find-recipes.md"), "utf-8").trim();
-		expect(inside).toBe(generated);
-	});
-
-	test("edit.md sentinel content is byte-equal to _generated/edit-ops.md", () => {
-		const inside = sentinelContent(EDIT_MD, "edit-ops").trim();
-		const generated = fs.readFileSync(path.join(GENERATED_DIR, "edit-ops.md"), "utf-8").trim();
 		expect(inside).toBe(generated);
 	});
 });
