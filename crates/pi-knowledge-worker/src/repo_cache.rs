@@ -24,7 +24,7 @@ use std::{
 	path::{Path, PathBuf},
 	sync::{Arc, Condvar, Mutex, OnceLock},
 	thread,
-	time::{Instant, SystemTime, UNIX_EPOCH},
+	time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use pi_knowledge_core::recall::Embedder;
@@ -56,8 +56,32 @@ pub struct OrgLaneState {
 
 enum OrgLaneInner {
 	Cold,
-	Warming,
+	/// Embed phase in flight. `partial` carries a servable lexical-only
+	/// lane (BM25 + graph, empty vec) once the cheap index phase finishes,
+	/// so reads need not block on the slow bge-m3 embed.
+	Warming { partial: Option<Arc<OrgLane>> },
 	Warm(Arc<OrgLane>),
+	Error(String),
+}
+
+/// Outcome of a bounded lane acquire. Mirrors a search-engine split state:
+/// the caller is told whether the lane is fully ready, lexically servable,
+/// or still building — never parked indefinitely.
+pub enum LaneAcquire {
+	/// Full lane (BM25 + vector + graph) ready.
+	Warm(Arc<OrgLane>),
+	/// Lexical-only lane servable now; vectors still building.
+	Partial(Arc<OrgLane>),
+	/// Still warming, no partial available yet. Carries a progress snapshot.
+	Warming(Value),
+	Error(String),
+}
+
+/// Outcome of a bounded code-graph lane acquire. No lexical partial — the
+/// graph build is monolithic — so the lane is Warm, Warming, or Error.
+pub enum CodeAcquire<'a> {
+	Warm(&'a CodeLane),
+	Warming,
 	Error(String),
 }
 
@@ -80,7 +104,7 @@ impl OrgLaneState {
 		let guard = self.inner.lock().expect("OrgLaneState mutex");
 		match &*guard {
 			OrgLaneInner::Cold => "cold",
-			OrgLaneInner::Warming => "warming",
+			OrgLaneInner::Warming { .. } => "warming",
 			OrgLaneInner::Warm(_) => "warm",
 			OrgLaneInner::Error(_) => "error",
 		}
@@ -88,6 +112,18 @@ impl OrgLaneState {
 
 	pub fn progress(&self) -> &WarmProgress {
 		&self.progress
+	}
+
+	/// Number of indexed org items once a (full or partial) lane is
+	/// available. `None` while cold/warming-with-no-partial or on error.
+	/// Cheap: reads `items.len()` off the `Arc<OrgLane>` already held.
+	pub fn item_count(&self) -> Option<usize> {
+		let guard = self.inner.lock().expect("OrgLaneState mutex");
+		match &*guard {
+			OrgLaneInner::Warm(lane) => Some(lane.items.len()),
+			OrgLaneInner::Warming { partial: Some(lane) } => Some(lane.items.len()),
+			_ => None,
+		}
 	}
 
 	pub fn error_message(&self) -> Option<String> {
@@ -99,15 +135,49 @@ impl OrgLaneState {
 		}
 	}
 
-	/// Block until the lane reaches a terminal state.
+	/// Block until the lane reaches a terminal state. Retained for callers
+	/// (and tests) that genuinely want to wait for the full vector lane.
 	pub fn wait_warm(&self) -> Result<Arc<OrgLane>, String> {
 		let mut guard = self.inner.lock().expect("OrgLaneState mutex");
 		loop {
 			match &*guard {
 				OrgLaneInner::Warm(lane) => return Ok(Arc::clone(lane)),
 				OrgLaneInner::Error(e) => return Err(e.clone()),
-				OrgLaneInner::Cold | OrgLaneInner::Warming => {
+				OrgLaneInner::Cold | OrgLaneInner::Warming { .. } => {
 					guard = self.cv.wait(guard).expect("OrgLaneState condvar");
+				},
+			}
+		}
+	}
+
+	/// Bounded acquire: wait up to `deadline` for the full lane, but return
+	/// the lexical-only partial lane the instant it is available, and never
+	/// block past the deadline. `progress` supplies the snapshot embedded in
+	/// a `Warming` outcome. This is the non-blocking query path — a search
+	/// engine "split state" check rather than an unbounded park.
+	pub fn acquire_bounded(&self, deadline: Duration, progress: &WarmProgress) -> LaneAcquire {
+		let mut guard = self.inner.lock().expect("OrgLaneState mutex");
+		let start = Instant::now();
+		loop {
+			match &*guard {
+				OrgLaneInner::Warm(lane) => return LaneAcquire::Warm(Arc::clone(lane)),
+				OrgLaneInner::Error(e) => return LaneAcquire::Error(e.clone()),
+				OrgLaneInner::Warming { partial: Some(lane) } => {
+					return LaneAcquire::Partial(Arc::clone(lane));
+				},
+				OrgLaneInner::Cold | OrgLaneInner::Warming { partial: None } => {
+					let elapsed = start.elapsed();
+					if elapsed >= deadline {
+						return LaneAcquire::Warming(progress.snapshot());
+					}
+					let (g, timeout) = self
+						.cv
+						.wait_timeout(guard, deadline - elapsed)
+						.expect("OrgLaneState condvar");
+					guard = g;
+					if timeout.timed_out() {
+						return LaneAcquire::Warming(progress.snapshot());
+					}
 				},
 			}
 		}
@@ -119,10 +189,20 @@ impl OrgLaneState {
 	fn try_start_warming(&self) -> bool {
 		let mut guard = self.inner.lock().expect("OrgLaneState mutex");
 		if matches!(&*guard, OrgLaneInner::Cold) {
-			*guard = OrgLaneInner::Warming;
+			*guard = OrgLaneInner::Warming { partial: None };
 			true
 		} else {
 			false
+		}
+	}
+
+	/// Publish the lexical-only partial lane mid-warm. No-op if the lane
+	/// already reached a terminal state (defensive against races).
+	fn finalize_partial(&self, lane: OrgLane) {
+		let mut guard = self.inner.lock().expect("OrgLaneState mutex");
+		if matches!(&*guard, OrgLaneInner::Warming { partial: None }) {
+			*guard = OrgLaneInner::Warming { partial: Some(Arc::new(lane)) };
+			self.cv.notify_all();
 		}
 	}
 
@@ -173,10 +253,31 @@ impl CodeLaneState {
 	}
 
 	/// Block until warm-load completes. Returns the lane on success.
+	/// Retained for tests/callers that genuinely want to wait.
 	pub fn wait_warm(&self) -> Result<&CodeLane, &String> {
 		match self.inner.wait() {
 			Ok(lane) => Ok(lane),
 			Err(e) => Err(e),
+		}
+	}
+
+	/// Bounded acquire. The code-graph build is monolithic (no lexical
+	/// partial split), so the outcome is Warm, Error, or — if still
+	/// building past `deadline` — Warming. `OnceLock` has no timed wait, so
+	/// we poll `get()` on a short cadence rather than parking on `wait()`.
+	pub fn acquire_bounded(&self, deadline: Duration) -> CodeAcquire<'_> {
+		let start = Instant::now();
+		loop {
+			if let Some(result) = self.inner.get() {
+				return match result {
+					Ok(lane) => CodeAcquire::Warm(lane),
+					Err(e) => CodeAcquire::Error(e.clone()),
+				};
+			}
+			if start.elapsed() >= deadline {
+				return CodeAcquire::Warming;
+			}
+			thread::sleep(Duration::from_millis(10));
 		}
 	}
 
@@ -351,8 +452,16 @@ pub fn open_with_embedder(
 			.name(format!("warm-org-{handle}"))
 			.spawn(move || {
 				let started = Instant::now();
-				let result =
-					OrgLane::warm_load_with(&root_clone, &state_clone.progress, &*embedder);
+				// `on_partial` publishes the lexical-only lane (BM25 + graph)
+				// the moment the cheap index phase finishes, so bounded
+				// acquires can serve searches during the slow embed phase.
+				let partial_state = Arc::clone(&state_clone);
+				let result = OrgLane::warm_load_with(
+					&root_clone,
+					&state_clone.progress,
+					&*embedder,
+					|partial| partial_state.finalize_partial(partial),
+				);
 				match result {
 					Ok(lane) => {
 						state_clone.finalize_warm(lane);
@@ -424,12 +533,29 @@ pub fn wait_warm(repo_handle: &str) -> Result<Arc<OrgLane>, String> {
 	state.wait_warm()
 }
 
-/// Borrow the org/memory lane for a repo handle. Blocks until the
-/// background warm worker finishes; surfaces a warm-load error
-/// deterministically if the worker failed.
-pub fn with_org_lane<T, F>(repo_handle: &str, f: F) -> Result<T, String>
+/// Grace window for a bounded lane acquire. If the full (or lexical)
+/// lane is not ready within this window the daemon returns a
+/// `status:"warming"` payload instead of parking the RPC. Kept small so
+/// the warm fast-path stays a single round-trip yet long enough that a
+/// just-finished warm-load resolves inline rather than bouncing the
+/// client into a retry.
+const LANE_ACQUIRE_GRACE: Duration = Duration::from_millis(150);
+
+/// Borrow the org/memory lane for a repo handle, bounded.
+///
+/// Non-blocking query contract (mirrors a search-engine split state):
+/// - full lane ready → run `f`
+/// - lexical-only partial ready (vectors still building) → run `f` on it;
+///   `OrgLane::search` self-degrades to BM25 + graph when `vec.is_empty()`
+/// - still warming past the grace window → return `{status:"warming",
+///   progress, partial:false}` without invoking `f`
+/// - warm-load failed → surface the error
+///
+/// `f` returns a `Value` (every daemon caller builds JSON), so the
+/// warming sentinel can share the return type without a generic juggle.
+pub fn with_org_lane<F>(repo_handle: &str, f: F) -> Result<Value, String>
 where
-	F: FnOnce(&OrgLane) -> Result<T, String>,
+	F: FnOnce(&OrgLane) -> Result<Value, String>,
 {
 	let state = {
 		let mut map = slots().lock().map_err(|e| format!("slots mutex: {e}"))?;
@@ -444,16 +570,26 @@ where
 		}
 		Arc::clone(&slot.org_state)
 	};
-	let lane = state.wait_warm()?;
-	f(&lane)
+	match state.acquire_bounded(LANE_ACQUIRE_GRACE, state.progress()) {
+		LaneAcquire::Warm(lane) | LaneAcquire::Partial(lane) => f(&lane),
+		LaneAcquire::Warming(progress) => Ok(json!({
+			"status": "warming",
+			"progress": progress,
+			"partial": false,
+		})),
+		LaneAcquire::Error(e) => Err(e),
+	}
 }
 
-/// Borrow the code-graph lane for a repo handle. Blocks until the
-/// background warm worker finishes; returns error if handle unknown
-/// or code_graph lane not requested at `open` time.
-pub fn with_code_lane<T, F>(repo_handle: &str, f: F) -> Result<T, String>
+/// Borrow the code-graph lane for a repo handle, bounded.
+///
+/// Same non-blocking contract as [`with_org_lane`]: full lane → run `f`;
+/// still building past the grace window → `{status:"warming", progress}`
+/// without invoking `f`; build failed → surface the error. Never parks on
+/// `OnceLock::wait()`.
+pub fn with_code_lane<F>(repo_handle: &str, f: F) -> Result<Value, String>
 where
-	F: FnOnce(&CodeLane) -> Result<T, String>,
+	F: FnOnce(&CodeLane) -> Result<Value, String>,
 {
 	let state = {
 		let mut map = slots().lock().map_err(|e| format!("slots mutex: {e}"))?;
@@ -468,9 +604,14 @@ where
 		}
 		Arc::clone(&slot.code_state)
 	};
-	match state.wait_warm() {
-		Ok(lane) => f(lane),
-		Err(e) => Err(format!("code_graph lane error for {repo_handle}: {e}")),
+	match state.acquire_bounded(LANE_ACQUIRE_GRACE) {
+		CodeAcquire::Warm(lane) => f(lane),
+		CodeAcquire::Warming => Ok(json!({
+			"status": "warming",
+			"progress": { "phase": "index" },
+			"partial": false,
+		})),
+		CodeAcquire::Error(e) => Err(format!("code_graph lane error for {repo_handle}: {e}")),
 	}
 }
 
@@ -528,6 +669,9 @@ fn org_lane_stats(state: &OrgLaneState) -> Value {
 	let mut payload = json!({ "status": status });
 	if let Some(p) = progress {
 		payload["progress"] = p;
+	}
+	if let Some(count) = state.item_count() {
+		payload["item_count"] = json!(count);
 	}
 	if let Some(e) = error {
 		payload["error"] = json!(e);
@@ -722,7 +866,7 @@ mod tests {
 	#[test]
 	fn with_code_lane_rejects_unknown_handle() {
 		let _g = test_guard();
-		let result = with_code_lane("fnv:0000000000000000", |_| Ok(()));
+		let result = with_code_lane("fnv:0000000000000000", |_| Ok(json!({})));
 		assert!(result.is_err());
 	}
 

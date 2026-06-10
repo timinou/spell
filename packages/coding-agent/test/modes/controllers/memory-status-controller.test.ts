@@ -73,9 +73,33 @@ describe("MemoryStatusController", () => {
 		}
 	}) as unknown as typeof clearInterval;
 
+	// Flash-timer fakes (setTimeout/clearTimeout) for the ready flash.
+	let timeoutCallbacks: Array<() => void>;
+	let timeoutIds: number[];
+	let nextTimeoutId: number;
+
+	const fakeSetTimeout = ((cb: () => void) => {
+		timeoutCallbacks.push(cb);
+		const id = nextTimeoutId++;
+		timeoutIds.push(id);
+		return id as unknown as ReturnType<typeof setTimeout>;
+	}) as unknown as typeof setTimeout;
+
+	const fakeClearTimeout = ((id: ReturnType<typeof setTimeout>) => {
+		const numId = id as unknown as number;
+		const idx = timeoutIds.indexOf(numId);
+		if (idx >= 0) {
+			timeoutIds.splice(idx, 1);
+			timeoutCallbacks.splice(idx, 1);
+		}
+	}) as unknown as typeof clearTimeout;
+
 	beforeEach(() => {
 		intervalCallbacks = [];
 		intervalIds = [];
+		timeoutCallbacks = [];
+		timeoutIds = [];
+		nextTimeoutId = 1;
 		nextIntervalId = 1;
 	});
 
@@ -98,6 +122,26 @@ describe("MemoryStatusController", () => {
 		controller.dispose();
 	});
 
+	it("does NOT flash ready when the daemon was already warm (no transition)", async () => {
+		const { ctx, statusEvents } = makeCtx();
+		const controller = new MemoryStatusController(ctx, {
+			peek: async () => ({ status: "warm", item_count: 9 }) as MemoryProgressSnapshot,
+			setIntervalFn: fakeSetInterval,
+			clearIntervalFn: fakeClearInterval,
+			setTimeoutFn: fakeSetTimeout,
+			clearTimeoutFn: fakeClearTimeout,
+		});
+		controller.start();
+		await flushPolls();
+		intervalCallbacks[0]?.();
+		await flushPolls();
+
+		// Never saw warming → nothing transitioned → no flash, no timer.
+		expect(statusEvents).toEqual([]);
+		expect(timeoutCallbacks).toHaveLength(0);
+		controller.dispose();
+	});
+
 	it("publishes 'indexing N/M (phase)' while daemon is warming", async () => {
 		const { ctx, statusEvents } = makeCtx();
 		const controller = new MemoryStatusController(ctx, {
@@ -113,33 +157,41 @@ describe("MemoryStatusController", () => {
 		controller.dispose();
 	});
 
-	it("transitions warming→warm clears the segment", async () => {
+	it("transitions warming→warm flashes 'memory ready' then clears", async () => {
 		const { ctx, statusEvents } = makeCtx();
 		const states: MemoryProgressSnapshot[] = [
 			snap("warming", { phase: "scan", done: 0, total: 10, started_ms: 0 }),
 			snap("warming", { phase: "embed", done: 5, total: 10, started_ms: 0 }),
-			snap("warm"),
+			{ status: "warm", item_count: 42 },
 		];
 		let i = 0;
 		const controller = new MemoryStatusController(ctx, {
 			peek: async () => states[Math.min(i, states.length - 1)],
 			setIntervalFn: fakeSetInterval,
 			clearIntervalFn: fakeClearInterval,
+			setTimeoutFn: fakeSetTimeout,
+			clearTimeoutFn: fakeClearTimeout,
 		});
-		controller.start(); // poll 0
+		controller.start(); // poll 0 — warming/scan
 		await flushPolls();
 		i = 1;
-		intervalCallbacks[0]?.(); // poll 1
+		intervalCallbacks[0]?.(); // poll 1 — warming/embed
 		await flushPolls();
 		i = 2;
-		intervalCallbacks[0]?.(); // poll 2
+		intervalCallbacks[0]?.(); // poll 2 — warm → flash ready
 		await flushPolls();
 
+		// Progress, then a transient ready flash carrying the item count.
 		expect(statusEvents.map(e => e.text)).toEqual([
 			expect.stringContaining("0/10 (scan)") as unknown as string,
 			expect.stringContaining("5/10 (embed)") as unknown as string,
-			undefined,
+			expect.stringContaining("memory ready · 42 items") as unknown as string,
 		]);
+
+		// The flash timer fires → segment yields the status line.
+		expect(timeoutCallbacks).toHaveLength(1);
+		timeoutCallbacks[0]?.();
+		expect(statusEvents.at(-1)?.text).toBeUndefined();
 		controller.dispose();
 	});
 

@@ -164,17 +164,26 @@ impl OrgLane {
 	/// progress to the UI (legacy / test convenience).
 	pub fn warm_load(repo_root: &Path) -> Result<Self, String> {
 		let progress = WarmProgress::new();
-		Self::warm_load_with(repo_root, &progress, &DaemonEmbedder)
+		Self::warm_load_with(repo_root, &progress, &DaemonEmbedder, |_| {})
 	}
 
 	/// Warm-load the org-memory lane, publishing phase + per-item
 	/// progress to `progress` and routing embeddings through `embedder`.
 	/// The embedder is dyn-dispatched so daemon code can pass
 	/// `DaemonEmbedder` while tests pass a deterministic stub.
+	///
+	/// BM25-first ordering: the lexical corpus (scan → BM25 → graph) is
+	/// built **before** embedding, since BM25 + graph need no model. The
+	/// `on_partial` callback fires with a fully servable lexical-only lane
+	/// (empty vector index) the moment that corpus is ready, so the daemon
+	/// can answer searches with BM25 + graph hits while the 5–30 s bge-m3
+	/// embed phase runs in the background. `search()` self-degrades when
+	/// `vec.is_empty()`, so the partial lane never triggers a model load.
 	pub fn warm_load_with(
 		repo_root: &Path,
 		progress: &WarmProgress,
 		embedder: &dyn Embedder,
+		on_partial: impl FnOnce(OrgLane),
 	) -> Result<Self, String> {
 		// Phase 1 — scan.
 		progress.enter(WarmPhase::Scan, 0);
@@ -184,17 +193,34 @@ impl OrgLane {
 
 		let docs = project_docs(&items);
 
-		// Phase 2 — embed.
-		progress.enter(WarmPhase::Embed, items.len());
-		let vec = build_vec_index_with(&items, embedder, progress)?;
-
-		// Phase 3 — index (BM25 + graph). Counts stay at `total` because
-		// these phases are fast (sub-second on typical corpora) and don't
-		// naturally chunk per-item.
+		// Phase 2 — index (BM25 + graph). Cheap (sub-second), no model.
 		progress.enter(WarmPhase::Index, items.len());
 		progress.done.store(items.len(), Ordering::SeqCst);
 		let bm25 = SearchIndex::from_docs(&docs);
+
+		// Publish a servable lexical-only lane (empty vec) before embedding.
+		// `TypedGraph` isn't `Clone` (graph-backed inner store), so the
+		// partial gets its own deterministic rebuild — cheap, in-memory, no
+		// IO. One bounded corpus clone (items/docs/bm25) buys lane
+		// immutability + concurrent lexical serving during the slow embed.
+		let empty_vec = VectorIndex::new(EMBEDDER_DIM, items.len().max(1))
+			.map_err(|e| format!("vec init: {e}"))?;
+		on_partial(Self {
+			repo_root: repo_root.to_path_buf(),
+			items: items.clone(),
+			docs: docs.clone(),
+			bm25: bm25.clone(),
+			vec: empty_vec,
+			graph: build_typed_graph(&items),
+			profiles: RecallProfileRegistry::default(),
+			last_built: SystemTime::now(),
+		});
+
 		let graph = build_typed_graph(&items);
+
+		// Phase 3 — embed (the expensive, model-bound phase).
+		progress.enter(WarmPhase::Embed, items.len());
+		let vec = build_vec_index_with(&items, embedder, progress)?;
 
 		// Phase 4 — done.
 		progress.enter(WarmPhase::Done, items.len());
@@ -214,6 +240,18 @@ impl OrgLane {
 
 	pub fn search(&self, query: RecallQuery) -> Result<Vec<RecallHit>, String> {
 		let embedder = DaemonEmbedder;
+		// BM25-first / partial-warm safety: when no vectors are present
+		// (lexical-only partial lane, or a worker-down build) disable the
+		// vector lane so BM25 + graph hits still surface instead of paying
+		// the embedder model-load stall or propagating an embed error.
+		// Mirrors `pi_natives::recall_engine` vec.is_empty() degradation.
+		let query = if self.vec.is_empty() {
+			let mut weights = query.weights.clone().unwrap_or_default();
+			weights.vector = 0.0;
+			RecallQuery { weights: Some(weights), ..query }
+		} else {
+			query
+		};
 		let ctx = RecallContext {
 			docs:     &self.docs,
 			bm25:     &self.bm25,

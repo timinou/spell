@@ -239,6 +239,20 @@ impl WorkerTransport {
 			Self::Socket(_) => { /* dropping the stream is enough */ },
 		}
 	}
+
+	/// Whether multiple in-flight requests can safely use independent
+	/// transport instances concurrently. Unix-socket daemon connections
+	/// are multi-client (the daemon spawns a thread per connection), so a
+	/// per-request socket is fine. A subprocess multiplexes one
+	/// stdin/stdout pair and must stay serialized.
+	#[cfg(unix)]
+	fn supports_concurrent_access(&self) -> bool {
+		matches!(self, Self::Socket(_))
+	}
+	#[cfg(not(unix))]
+	fn supports_concurrent_access(&self) -> bool {
+		false
+	}
 }
 
 /// Static capability cache. Populated on first successful `init` against
@@ -249,9 +263,17 @@ fn caps_slot() -> &'static Mutex<Option<Capabilities>> {
 	CAPS.get_or_init(|| Mutex::new(None))
 }
 
-/// Return cached capabilities, performing `init` if necessary. Best-effort:
-/// on transport failure returns empty (v=0, no commands) so callers fall
-/// through to the in-process WarmEngine path.
+/// Return cached capabilities, performing `init` if necessary.
+///
+/// Only **successful** probes are cached. A failed `init` (daemon down,
+/// not yet spawned, or mid-restart) must NOT latch a negative verdict for
+/// the rest of the process lifetime — otherwise a transient cold-start
+/// failure permanently disables the knowledge fast-path even after the
+/// daemon comes up healthy (the classic "search broke once, stays broken"
+/// DX trap). On failure we return an empty (v=0) capability set for this
+/// call but leave the cache empty so the next call re-probes — by then
+/// `with_worker` has already dropped the broken transport and will
+/// reconnect to the live daemon.
 pub fn capabilities() -> Capabilities {
 	if let Ok(guard) = caps_slot().lock()
 		&& let Some(caps) = guard.as_ref()
@@ -259,14 +281,17 @@ pub fn capabilities() -> Capabilities {
 		return caps.clone();
 	}
 	let init_req = KnowledgeRequest { command: "init", args: serde_json::Value::Object(Default::default()) };
-	let caps = match with_worker(|worker| worker.request_raw(&init_req)) {
-		Ok(response) => parse_capabilities(&response),
+	match with_worker(|worker| worker.request_raw(&init_req)) {
+		Ok(response) => {
+			let caps = parse_capabilities(&response);
+			if let Ok(mut guard) = caps_slot().lock() {
+				*guard = Some(caps.clone());
+			}
+			caps
+		},
+		// Transient failure — do not cache. Next call re-probes.
 		Err(_) => Capabilities::default(),
-	};
-	if let Ok(mut guard) = caps_slot().lock() {
-		*guard = Some(caps.clone());
 	}
-	caps
 }
 
 /// Convenience: does the active transport speak protocol v2 with the
@@ -429,13 +454,21 @@ struct SocketClient {
 
 #[cfg(unix)]
 impl SocketClient {
-	fn connect(socket_path: PathBuf, stream: UnixStream) -> Result<Self> {
-		let writer_stream = stream.try_clone().map_err(|error| {
-			worker_error(format!(
-				"failed to clone socket handle for {}: {error}",
-				socket_path.display()
-			))
-		})?;
+ fn connect(socket_path: PathBuf, stream: UnixStream) -> Result<Self> {
+ 		stream
+ 			.set_read_timeout(Some(Duration::from_secs(30)))
+ 			.map_err(|error| {
+ 				worker_error(format!(
+ 					"failed to set read timeout on socket {}: {error}",
+ 					socket_path.display()
+ 				))
+ 			})?;
+ 		let writer_stream = stream.try_clone().map_err(|error| {
+ 			worker_error(format!(
+ 				"failed to clone socket handle for {}: {error}",
+ 				socket_path.display()
+ 			))
+ 		})?;
 		Ok(Self {
 			socket_path,
 			reader: BufReader::new(stream),
@@ -547,23 +580,57 @@ pub fn embed_query(text: &str) -> Result<Vec<f32>> {
 		.ok_or_else(|| worker_error("worker response missing `vector` field"))
 }
 
+/// Run `f` against the active worker transport.
+///
+/// For multi-client transports (the Unix-socket daemon) the global mutex
+/// is held only to *acquire* a transport, then released for the duration
+/// of the (potentially slow) RPC — so a long `search` no longer
+/// head-of-line-blocks `stats`, `note`, or `embed_query`. The transport is
+/// returned to the slot on success and dropped on error. A second
+/// concurrent caller that finds the slot empty simply opens its own socket
+/// (cheap; the daemon is multi-client).
+///
+/// Subprocess transports multiplex a single stdin/stdout pair and cannot
+/// be used concurrently, so they keep the original lock-across-RPC path.
 fn with_worker<T>(f: impl FnOnce(&mut WorkerTransport) -> Result<T>) -> Result<T> {
-	let mut guard = worker_slot()
-		.lock()
-		.map_err(|error| worker_error(format!("worker mutex poisoned: {error}")))?;
-	if guard.is_none() {
-		*guard = Some(acquire()?);
-	}
-	let result = {
-		let worker = guard
-			.as_mut()
-			.ok_or_else(|| worker_error("worker failed to initialize"))?;
-		f(worker)
+	// Acquire (or create) a transport under the lock, then decide whether
+	// to detach it for a lock-free RPC.
+	let mut transport = {
+		let mut guard = worker_slot()
+			.lock()
+			.map_err(|error| worker_error(format!("worker mutex poisoned: {error}")))?;
+		let existing = match guard.take() {
+			Some(t) => t,
+			None => acquire()?,
+		};
+		if !existing.supports_concurrent_access() {
+			// Serialized path: keep the lock for the whole RPC.
+			let mut held = existing;
+			let result = f(&mut held);
+			if result.is_ok() {
+				*guard = Some(held);
+			} else {
+				held.stop();
+			}
+			return result;
+		}
+		existing
 	};
-	if result.is_err()
-		&& let Some(mut worker) = guard.take()
-	{
-		worker.stop();
+
+	// Concurrent path: lock released. Do the RPC, then return the
+	// transport to the slot (or drop it on error).
+	let result = f(&mut transport);
+	if result.is_ok() {
+		if let Ok(mut guard) = worker_slot().lock() {
+			if guard.is_none() {
+				*guard = Some(transport);
+			} else {
+				// Another caller already repopulated the slot; close ours.
+				transport.stop();
+			}
+		}
+	} else {
+		transport.stop();
 	}
 	result
 }
@@ -1017,6 +1084,14 @@ mod socket_tests {
 			unsafe { env::set_var("PI_TEST_EMBEDDING_WORKER_MODE", mode) }
 		}
 
+		fn remove_worker_env() {
+			// SAFETY: serialised through `TEST_ENV_LOCK` via `SocketEnv::new`.
+			unsafe {
+				env::remove_var(WORKER_ENV_VAR);
+				env::remove_var(WORKER_ENV_VAR_LEGACY);
+			}
+		}
+
 		fn set_socket_env(path: &Path) {
 			// SAFETY: serialised through `TEST_ENV_LOCK` via `SocketEnv::new`.
 			unsafe { env::set_var(WORKER_SOCKET_ENV_VAR, path) }
@@ -1169,6 +1244,73 @@ mod socket_tests {
 		let second = embed_query("second").expect("recovery query should succeed");
 		assert_eq!(second, canned_vector());
 		handle.join().expect("listener thread should finish cleanly");
+		let _ = fs::remove_file(&socket);
+	}
+
+	/// Answer a single `init` request with a protocol-v2 capability set.
+	fn spawn_init_listener(socket: PathBuf) -> JoinHandle<()> {
+		let listener = UnixListener::bind(&socket).expect("bind init listener");
+		thread::spawn(move || {
+			let (stream, _) = listener.accept().expect("accept init conn");
+			let reader_stream = stream.try_clone().expect("clone stream");
+			let mut reader = BufReader::new(reader_stream);
+			let mut writer = stream;
+			let mut line = String::new();
+			reader.read_line(&mut line).expect("read init request");
+			let payload = serde_json::json!({
+				"ok": true,
+				"protocol_version": 2,
+				"supported_commands": ["init", "search", "about", "neighbors", "since"],
+			});
+			let mut bytes = serde_json::to_vec(&payload).expect("encode init response");
+			bytes.push(b'\n');
+			writer.write_all(&bytes).expect("write init response");
+			writer.flush().expect("flush init response");
+			let _ = socket;
+		})
+	}
+
+	/// PLAN-329 regression: a failed `init` probe must NOT latch a negative
+	/// capability verdict. Before the fix, the first probe (daemon down)
+	/// cached `Capabilities::default()` (v=0) forever, permanently
+	/// disabling the knowledge fast-path even after a healthy v2 daemon
+	/// came up. The cache must only memoise *successful* probes.
+	#[test]
+	fn capability_probe_failure_does_not_latch_negative_verdict() {
+		let _env = SocketEnv::new();
+		let socket = unique_socket_path("caps-relatch");
+		let _ = fs::remove_file(&socket);
+
+		// Stage 1: force a HARD probe failure. Point the worker env at a
+		// nonexistent binary so `acquire()` takes the subprocess branch and
+		// `spawn()` errors out with no daemon fallback. capabilities()
+		// returns a default (v=0) set but must leave the cache empty so a
+		// later probe can succeed.
+		SocketEnv::set_worker_env(Path::new("/nonexistent/spell/pi-knowledge-worker-missing"));
+		let first = capabilities();
+		assert!(!first.knowledge_capable(), "probe with failed spawn must be non-capable");
+		assert!(
+			caps_slot().lock().expect("caps lock").is_none(),
+			"a FAILED probe must not populate the capability cache (PLAN-329)"
+		);
+
+		// Stage 2: clear the bogus subprocess env and bring up a healthy v2
+		// daemon at the socket. Because the failure was not cached, the
+		// re-probe reaches it and learns v2.
+		SocketEnv::remove_worker_env();
+		SocketEnv::set_socket_env(&socket);
+		let handle = spawn_init_listener(socket.clone());
+		let second = capabilities();
+		assert!(
+			second.knowledge_capable(),
+			"re-probe after daemon came up must report v2 capable; got {second:?}"
+		);
+		assert!(
+			caps_slot().lock().expect("caps lock").is_some(),
+			"a SUCCESSFUL probe must populate the cache"
+		);
+
+		handle.join().expect("init listener thread should finish cleanly");
 		let _ = fs::remove_file(&socket);
 	}
 }

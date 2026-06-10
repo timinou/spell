@@ -24,6 +24,10 @@ const STATUS_KEY = "memory.indexing";
  *  daemon stats call (sub-ms) is negligible cost. */
 const DEFAULT_INTERVAL_MS = 2_000;
 
+/** How long the transient "memory ready" flash stays on the status line
+ *  after warm-load completes, before yielding the slot. */
+const DEFAULT_READY_FLASH_MS = 4_000;
+
 export interface MemoryStatusControllerDeps {
 	/** Override the daemon-progress lookup (test seam). Always async
 	 *  post-FEAT-780; tests may return a resolved Promise. */
@@ -34,6 +38,12 @@ export interface MemoryStatusControllerDeps {
 	setIntervalFn?: typeof setInterval;
 	/** Test seam for the timer. */
 	clearIntervalFn?: typeof clearInterval;
+	/** How long the "memory ready" flash persists. Default 4000. */
+	readyFlashMs?: number;
+	/** Test seam for the flash timer. */
+	setTimeoutFn?: typeof setTimeout;
+	/** Test seam for the flash timer. */
+	clearTimeoutFn?: typeof clearTimeout;
 	/** FEAT-784: override the push-subscribe wiring (test seam). When
 	 *  omitted, the controller uses the real knowledge daemon. Return
 	 *  `{ unsubscribe, error: null }` to simulate success; any non-null
@@ -48,17 +58,28 @@ export interface MemoryStatusControllerDeps {
 export class MemoryStatusController {
 	static readonly STATUS_KEY = STATUS_KEY;
 	static readonly DEFAULT_INTERVAL_MS = DEFAULT_INTERVAL_MS;
+	static readonly DEFAULT_READY_FLASH_MS = DEFAULT_READY_FLASH_MS;
 
 	readonly #ctx: InteractiveModeContext;
 	readonly #peek: (cwd: string) => Promise<MemoryProgressSnapshot>;
 	readonly #intervalMs: number;
 	readonly #setIntervalFn: typeof setInterval;
 	readonly #clearIntervalFn: typeof clearInterval;
+	readonly #readyFlashMs: number;
+	readonly #setTimeoutFn: typeof setTimeout;
+	readonly #clearTimeoutFn: typeof clearTimeout;
 	readonly #subscribe: NonNullable<MemoryStatusControllerDeps["subscribe"]>;
 
 	#timer: ReturnType<typeof setInterval> | undefined;
 	/** Last status text we wrote, so we don't spam render requests. */
 	#lastStatus: string | undefined;
+	/** True once we've observed `warming`, so the warm→ready transition
+	 *  can flash a confirmation. A session that opens already-warm never
+	 *  saw warming → no flash (nothing transitioned). */
+	#sawWarming: boolean = false;
+	/** Timer that clears the transient "ready" flash. The flash yields the
+	 *  status line after a few seconds — idle infra shouldn't camp there. */
+	#readyFlashTimer: ReturnType<typeof setTimeout> | undefined;
 	/** FEAT-780: a poll is in flight. Prevents pile-up if `peek` ever
 	 *  takes longer than `intervalMs` to resolve. Net effect: we skip
 	 *  ticks rather than queue them. */
@@ -73,6 +94,9 @@ export class MemoryStatusController {
 		this.#intervalMs = deps.intervalMs ?? DEFAULT_INTERVAL_MS;
 		this.#setIntervalFn = deps.setIntervalFn ?? setInterval;
 		this.#clearIntervalFn = deps.clearIntervalFn ?? clearInterval;
+		this.#readyFlashMs = deps.readyFlashMs ?? DEFAULT_READY_FLASH_MS;
+		this.#setTimeoutFn = deps.setTimeoutFn ?? setTimeout;
+		this.#clearTimeoutFn = deps.clearTimeoutFn ?? clearTimeout;
 		this.#subscribe = deps.subscribe ?? subscribeKnowledge;
 	}
 
@@ -117,20 +141,53 @@ export class MemoryStatusController {
 		try {
 			const cwd = this.#ctx.sessionManager.getCwd();
 			const snap = await this.#peek(cwd);
+
+			if (snap.status === "warming") {
+				this.#sawWarming = true;
+			} else if (snap.status === "warm" && this.#sawWarming) {
+				// warming → ready transition: flash a transient confirmation,
+				// then yield the status line. Only once per warm cycle.
+				this.#sawWarming = false;
+				this.#flashReady(snap.item_count);
+				return;
+			}
+
 			const text = this.#renderText(snap);
 			if (text === this.#lastStatus) return;
-			this.#lastStatus = text;
-			this.#ctx.statusLine.setHookStatus(STATUS_KEY, text);
-			this.#ctx.ui.requestRender();
+			this.#setStatus(text);
 		} finally {
 			this.#inFlight = false;
 		}
+	}
+
+	/** Write a transient "memory ready · N items" flash, then auto-clear
+	 *  after `readyFlashMs` so idle infra doesn't camp the status line. */
+	#flashReady(itemCount: number | undefined): void {
+		const items = typeof itemCount === "number" ? ` \u00b7 ${itemCount} item${itemCount === 1 ? "" : "s"}` : "";
+		this.#setStatus(`\uD83D\uDCDA memory ready${items}`);
+		if (this.#readyFlashTimer) this.#clearTimeoutFn(this.#readyFlashTimer);
+		this.#readyFlashTimer = this.#setTimeoutFn(() => {
+			this.#readyFlashTimer = undefined;
+			this.#setStatus(undefined);
+		}, this.#readyFlashMs);
+	}
+
+	/** Set the hook status + request a render, deduped on `#lastStatus`. */
+	#setStatus(text: string | undefined): void {
+		if (text === this.#lastStatus) return;
+		this.#lastStatus = text;
+		this.#ctx.statusLine.setHookStatus(STATUS_KEY, text);
+		this.#ctx.ui.requestRender();
 	}
 
 	dispose(): void {
 		if (this.#timer) {
 			this.#clearIntervalFn(this.#timer);
 			this.#timer = undefined;
+		}
+		if (this.#readyFlashTimer) {
+			this.#clearTimeoutFn(this.#readyFlashTimer);
+			this.#readyFlashTimer = undefined;
 		}
 		if (this.#subscription) {
 			this.#subscription.unsubscribe();

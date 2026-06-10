@@ -230,6 +230,10 @@ const subagentsSegment: StatusLineSegment = {
 		if (info.totalCost > 0) {
 			parts.push(formatCost(info.totalCost));
 		}
+		// PLAN-327: open asks awaiting an orchestrator answer (pressure signal).
+		if (info.openAskCount > 0) {
+			parts.push(`${info.openAskCount} ask${info.openAskCount === 1 ? "" : "s"}?`);
+		}
 
 		const activityText = info.mostActiveAgent
 			? [info.mostActiveAgent.currentTool, info.mostActiveAgent.lastIntent].filter(Boolean).join(": ")

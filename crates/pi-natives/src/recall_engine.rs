@@ -416,21 +416,43 @@ impl RecallEngineHandle {
 			"weights": query_args.weights,
 			"profile": query_args.profile,
 		});
-		let response = embedding_worker::knowledge_request("search", args)
-			.map_err(|e| format!("rpc search: {e}"))?;
-		if response.get("ok") != Some(&serde_json::Value::Bool(true)) {
-			let err = response
-				.get("error")
-				.and_then(serde_json::Value::as_str)
-				.unwrap_or("unknown daemon error");
-			return Err(format!("rpc search failed: {err}"));
+		// Bounded warming retry. PLAN-316 made the daemon non-blocking: a
+		// search on a still-building lane returns `{ok:true,
+		// status:"warming"}` instantly instead of parking. The BM25-first
+		// warm ordering means the lexical lane (BM25 + graph) is servable
+		// within the sub-second scan/index phase — well before the 5–30 s
+		// embed — so a short poll resolves to real lexical hits rather than
+		// a false-empty result. Between attempts the global worker mutex is
+		// free (Socket transport releases it during the RPC), so this does
+		// not head-of-line-block other knowledge calls.
+		const MAX_WARMING_ATTEMPTS: usize = 12;
+		const WARMING_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+		for attempt in 0..=MAX_WARMING_ATTEMPTS {
+			let response = embedding_worker::knowledge_request("search", args.clone())
+				.map_err(|e| format!("rpc search: {e}"))?;
+			if response.get("ok") != Some(&serde_json::Value::Bool(true)) {
+				let err = response
+					.get("error")
+					.and_then(serde_json::Value::as_str)
+					.unwrap_or("unknown daemon error");
+				return Err(format!("rpc search failed: {err}"));
+			}
+			// Lane still building and no servable lexical partial yet — poll.
+			let warming = response.get("status").and_then(serde_json::Value::as_str)
+				== Some("warming")
+				&& response.get("hits").is_none();
+			if warming && attempt < MAX_WARMING_ATTEMPTS {
+				std::thread::sleep(WARMING_POLL);
+				continue;
+			}
+			let hits = response
+				.get("hits")
+				.cloned()
+				.unwrap_or(serde_json::Value::Array(vec![]));
+			return serde_json::from_value::<Vec<RecallHit>>(hits)
+				.map_err(|e| format!("rpc search hit deserialise: {e}"));
 		}
-		let hits = response
-			.get("hits")
-			.cloned()
-			.unwrap_or(serde_json::Value::Array(vec![]));
-		serde_json::from_value::<Vec<RecallHit>>(hits)
-			.map_err(|e| format!("rpc search hit deserialise: {e}"))
+		unreachable!("warming retry loop always returns within bounds")
 	}
 
 	/// Open the daemon-side repo handle without performing any search.

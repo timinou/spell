@@ -1,0 +1,47 @@
+#+TITLE: Knowledge capability cache latches negative verdict permanently (transient daemon-down → search disabled for whole session)
+#+STATE: DONE
+#+SESSION_ID: 15022fe746d5a46b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-40-28-187Z_15022fe746d5a46b.jsonl]]
+#+CUSTOM_ID: PLAN-329-knowledge-capability-cache-latches-negat
+#+COMPLETION_HASH: 66f32042433bc2a6
+
+* Initial Message
+
+i want you to look at semantic search tools that use BM25 and to tell me how they fix these issues. please plan before continuing, I want a rock-solid lean implementation that just works
+
+* Symptom
+Semantic search / memory tool reports "recall via daemon not available: daemon does not support protocol v2, or no daemon is reachable" and STAYS broken for the rest of the session — even after a healthy v2 daemon is confirmed up on the socket. Manifests as "search broke once, stays broken" and is a recurring DX trap when restarting/rebuilding the daemon mid-session.
+
+* Root cause
+`pi-natives::embedding_worker::capabilities()` caches the result of the FIRST `init` probe into a process-global `CAPS: OnceLock<Mutex<Option<Capabilities>>>`. It caches *negative* results identically to positive ones:
+
+#+begin_src rust
+let caps = match with_worker(|worker| worker.request_raw(&init_req)) {
+    Ok(response) => parse_capabilities(&response),
+    Err(_) => Capabilities::default(),   // v=0, no commands
+};
+*guard = Some(caps.clone());             // <-- caches the failure permanently
+#+end_src
+
+If the very first knowledge query happens while the daemon is down / not yet spawned / mid-restart, `Capabilities::default()` (v=0) is cached forever. Every later `capabilities()` short-circuits on `if Some(caps) return` and never re-probes. The session's native module (`pi_natives.dev.node`) is loaded once at process start, so the poisoned cache lives the whole session.
+
+This defeats the recovery path: `with_worker` already drops a broken transport on error and reconnects next call — but the capability cache sits IN FRONT of that and never lets a second probe through.
+
+* Fix
+Cache only SUCCESSFUL probes. On `Err(_)`, return `Capabilities::default()` for that one call but leave the cache empty so the next call re-probes (by which time `with_worker` has reconnected to the live daemon). Patch applied in `crates/pi-natives/src/embedding_worker.rs::capabilities`.
+
+* Follow-ups / hardening
+- Consider a TTL or explicit invalidation hook so a daemon that DOWNGRADES (v2 → restarted as v1, or evicted) is re-probed, not just the down→up direction.
+- `reset_for_tests` already clears CAPS; add a public `invalidate_capabilities()` the session can call on a daemon-restart signal.
+- DX: the swap-binary-then-kill-daemon workflow during development should "just work" once negative results stop latching. Document escape hatch `PI_KNOWLEDGE_WORKER=inprocess` for offline/CI.
+
+* Repro
+1. Start a session (loads native, no daemon yet OR daemon stale).
+2. Issue one `memory.search` while daemon is down → error.
+3. Bring up a healthy v2 daemon (confirm `init` → protocol_version:2 over the socket).
+4. Issue `memory.search` again → still errors with "daemon does not support protocol v2" despite the daemon being live. ← BUG
+
+* Acceptance
+After step 3, step 4 succeeds (re-probe picks up the live daemon). Add a unit test in embedding_worker: first probe fails (no transport) → cache stays empty → second probe (transport available) succeeds and caches v2.
+
+NOTE [2026-06-09]: Fixed in crates/pi-natives/src/embedding_worker.rs::capabilities — only successful init probes are cached; Err(_) returns a default set for that call but leaves CAPS empty so the next call re-probes. Regression test `capability_probe_failure_does_not_latch_negative_verdict` (socket_tests) pins the contract: hard spawn failure → cache stays None → v2 init listener comes up → re-probe reports knowledge_capable + caches. Full pi-natives suite green (432 passed, 0 failed). Found while dogfooding the BM25-first fix live: swapped daemon binary + killed stale daemon, but the session's memory tool kept reporting "daemon does not support protocol v2" despite a confirmed-live v2 daemon on the socket — root-caused to this latched negative cache, not a stale-daemon problem.

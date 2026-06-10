@@ -113,9 +113,10 @@ describe("MemoryStatusController FEAT-784 push-subscribe", () => {
 		capturedHandler!({ event: "warm_completed" });
 		await flushPolls();
 
-		// Poll re-fired; text transitioned to undefined (warm hides widget).
+		// Poll re-fired; the warming→warm transition flashes a transient
+		// "memory ready" confirmation (cleared later by the flash timer).
 		expect(statusEvents.length).toBe(2);
-		expect(statusEvents[1]!.text).toBeUndefined();
+		expect(statusEvents[1]!.text).toContain("memory ready");
 
 		controller.dispose();
 		expect(unsubscribeCalls).toBe(1);

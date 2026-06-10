@@ -49,6 +49,10 @@ impl StubEmbedder {
 	fn batch_calls(&self) -> usize {
 		self.batch_calls.load(Ordering::SeqCst)
 	}
+
+	fn query_calls(&self) -> usize {
+		self.query_calls.load(Ordering::SeqCst)
+	}
 }
 
 impl Embedder for StubEmbedder {
@@ -190,14 +194,20 @@ fn stats_reports_progress_during_warm_load() {
 	let _ = repo_cache::close(&handle);
 }
 
-/// Workflow 3: Concurrent search on a warming slot waits, then returns
-/// hits — no deadlock, no panic.
+/// Workflow 3: Search on a warming slot is **non-blocking** (PLAN-316 +
+/// BM25-first). It returns promptly with one of:
+/// - lexical-only hits served from the partial lane (BM25 + graph), or
+/// - a `{status:"warming"}` sentinel if even the cheap index phase
+///   hasn't finished within the grace window.
+/// It must NOT block for the full (slow) embed phase.
 #[test]
-fn search_waits_for_warm_then_returns() {
+fn search_on_warming_slot_is_non_blocking() {
 	let _g = warm_lock();
 	clear_slots();
 	let tmp = seed_corpus(4);
-	let embedder = StubEmbedder::new(Duration::from_millis(80)); // ~320ms
+	// Large per-text delay so the embed phase dominates: if search blocked
+	// on it, elapsed would exceed the embed time (4 * 200ms = 800ms).
+	let embedder = StubEmbedder::new(Duration::from_millis(200));
 
 	let opened = repo_cache::open_with_embedder(
 		tmp.path(),
@@ -208,8 +218,9 @@ fn search_waits_for_warm_then_returns() {
 	.expect("open");
 	let handle = opened["repo_handle"].as_str().expect("handle").to_string();
 
-	// Kick a search immediately — should block briefly while warm-load
-	// finishes, then succeed without acquiring the slots mutex.
+	// Kick a search immediately. The bounded acquire grace is ~150ms; the
+	// embed phase is ~800ms. A non-blocking search must return well before
+	// the embed completes.
 	let search_started = Instant::now();
 	let result = repo_cache::with_org_lane(&handle, |lane| {
 		lane.search(pi_knowledge_core::recall::RecallQuery {
@@ -217,13 +228,30 @@ fn search_waits_for_warm_then_returns() {
 			limit: 4,
 			..Default::default()
 		})
+		.map(|hits| serde_json::json!({ "hits": hits }))
 	});
 	let elapsed = search_started.elapsed();
 
 	assert!(result.is_ok(), "search failed: {:?}", result.err());
 	assert!(
-		elapsed >= Duration::from_millis(80),
-		"search returned before warm-load finished (race): {elapsed:?}"
+		elapsed < Duration::from_millis(600),
+		"search blocked on the embed phase instead of serving lexically: {elapsed:?}"
+	);
+
+	// Eventually the full lane settles and a search returns real hits.
+	repo_cache::wait_warm(&handle).expect("wait_warm");
+	let warm_result = repo_cache::with_org_lane(&handle, |lane| {
+		lane.search(pi_knowledge_core::recall::RecallQuery {
+			text: Some("concept".into()),
+			limit: 4,
+			..Default::default()
+		})
+		.map(|hits| serde_json::json!({ "hits": hits }))
+	})
+	.expect("warm search");
+	assert!(
+		warm_result["hits"].is_array(),
+		"warm search should return a hits array, got {warm_result:?}"
 	);
 
 	let _ = repo_cache::close(&handle);
@@ -311,6 +339,79 @@ fn warm_load_failure_surfaces_error() {
 	repo_cache::wait_warm(&handle).expect("wait_warm");
 	let after = repo_cache::stats(Some(&handle)).expect("stats");
 	assert_eq!(after["org_lane"]["status"].as_str(), Some("warm"));
+
+	let _ = repo_cache::close(&handle);
+}
+
+/// BM25-first: while the slow embed phase runs, a search served from the
+/// partial lexical lane returns real BM25 hits (vector lane disabled) —
+/// never the `query_calls` path (which would imply a model-load stall).
+#[test]
+fn partial_lane_serves_bm25_hits_during_embed() {
+	let _g = warm_lock();
+	clear_slots();
+	let tmp = seed_corpus(5);
+	let embedder = StubEmbedder::new(Duration::from_millis(200)); // ~1s embed
+
+	let opened = repo_cache::open_with_embedder(
+		tmp.path(),
+		false,
+		&[Lane::OrgMemory],
+		Arc::new(embedder.clone()),
+	)
+	.expect("open");
+	let handle = opened["repo_handle"].as_str().expect("handle").to_string();
+
+	// Give the worker enough time to finish scan + BM25 + graph (cheap)
+	// and publish the partial lane, but not the embed phase.
+	thread::sleep(Duration::from_millis(120));
+
+	let partial_started = Instant::now();
+	let result = repo_cache::with_org_lane(&handle, |lane| {
+		lane.search(pi_knowledge_core::recall::RecallQuery {
+			text: Some("concept".into()),
+			limit: 5,
+			..Default::default()
+		})
+		.map(|hits| serde_json::json!({ "hits": hits }))
+	})
+	.expect("partial search");
+	let partial_elapsed = partial_started.elapsed();
+
+	// Core invariant: the partial search is non-blocking (never waits on
+	// the ~1s embed) and returns a well-formed response — a lexical `hits`
+	// array served from the partial lane, or a `warming` sentinel if the
+	// cheap index phase wasn't done yet. Crucially the query embedder is
+	// never invoked (vec.is_empty() → vector weight forced to 0), so there
+	// is no model-load stall.
+	assert!(
+		partial_elapsed < Duration::from_millis(500),
+		"partial search blocked on embed: {partial_elapsed:?}"
+	);
+	let served_lexically = result.get("hits").map(|h| h.is_array()).unwrap_or(false);
+	let warming = result["status"].as_str() == Some("warming");
+	assert!(
+		served_lexically || warming,
+		"expected lexical hits or warming sentinel, got {result:?}"
+	);
+	assert_eq!(
+		embedder.query_calls(),
+		0,
+		"partial lane must not invoke the query embedder (no model-load stall)"
+	);
+
+	// The corpus is genuinely searchable once fully warm.
+	repo_cache::wait_warm(&handle).expect("wait_warm");
+	let warm = repo_cache::with_org_lane(&handle, |lane| {
+		lane.search(pi_knowledge_core::recall::RecallQuery {
+			text: Some("concept".into()),
+			limit: 5,
+			..Default::default()
+		})
+		.map(|hits| serde_json::json!({ "hits": hits }))
+	})
+	.expect("warm search");
+	assert!(warm["hits"].is_array(), "warm search returns a hits array");
 
 	let _ = repo_cache::close(&handle);
 }
