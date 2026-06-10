@@ -16,10 +16,7 @@ import type { Settings } from "../config/settings";
 import { buildOrgConfig } from "../org/org-plan";
 
 /** Discriminated linkage kind parsed from a task `ref`. */
-export type RefKind =
-	| { kind: "none" }
-	| { kind: "roster"; id: string }
-	| { kind: "org"; uri: string; itemId: string };
+export type RefKind = { kind: "none" } | { kind: "roster"; id: string } | { kind: "org"; uri: string; itemId: string };
 
 const ORG_URI_PREFIX = "org://";
 
@@ -41,14 +38,25 @@ export function resolveRef(ref: string | null | undefined): RefKind {
 }
 
 /** Verification + assignment material derived from an org item. */
+/** Runtime-enforceable gate subset derived from org PROPERTIES.
+ *  Structurally compatible with executor's RuntimeVerificationOptions (sans baseline). */
+export interface OrgGateOptions {
+	gateCmd?: string;
+	gateCommit?: boolean;
+	gateArtifact?: string;
+}
+
+/** Verification + assignment material derived from an org item. */
 export interface OrgRefResolution {
 	itemId: string;
 	title: string;
 	state: string;
 	/** Body text — used as assignment fallback when no explicit assignment given. */
 	body: string;
-	/** Verification requirement lines mapped from PROPERTIES drawer. */
+	/** Verification requirement lines mapped from PROPERTIES drawer (human-readable, incl. advisory). */
 	verificationLines: string[];
+	/** Runtime-enforceable gate subset mapped from PROPERTIES drawer (what the executor actually checks). */
+	gateOptions: OrgGateOptions;
 }
 
 /**
@@ -91,7 +99,30 @@ export function mapOrgGateProperties(properties: Record<string, string>): string
 	}
 	return lines;
 }
-
+/**
+ * Map the runtime-ENFORCEABLE gate subset from an org PROPERTIES drawer.
+ *
+ * This is the structured counterpart to {@link mapOrgGateProperties}: where that
+ * produces human-readable MUST/SHOULD lines for the assignment, this produces the
+ * machine-checkable options the executor's `verifyGates` actually runs on
+ * submit_result. Only the three enforceable gates map here (GATE_CMD / GATE_ARTIFACT
+ * / GATE_COMMIT); advisory keys (VERIFY_CMD, GATE_LLM, …) stay text-only.
+ *
+ * Mirrors the roster path, where `todo.verify.{cmd,artifact,commit}` feed
+ * RuntimeVerificationOptions — closing the org-vs-roster enforcement asymmetry.
+ */
+export function mapOrgGateOptions(properties: Record<string, string>): OrgGateOptions {
+	const get = (upper: string, lower: string): string | undefined => properties[upper] ?? properties[lower];
+	const isFalsy = (value: string): boolean => /^(false|0|no|off)$/iu.test(value.trim());
+	const gateCmd = get("GATE_CMD", "gate_cmd");
+	const gateArtifact = get("GATE_ARTIFACT", "gate_artifact");
+	const gateCommit = get("GATE_COMMIT", "gate_commit");
+	const options: OrgGateOptions = {};
+	if (gateCmd) options.gateCmd = gateCmd;
+	if (gateArtifact) options.gateArtifact = gateArtifact;
+	if (gateCommit && !isFalsy(gateCommit)) options.gateCommit = true;
+	return options;
+}
 /**
  * Resolve an `org://` ref to its item content + verification material.
  * Returns undefined when org is disabled or the item is not found.
@@ -119,6 +150,7 @@ export async function resolveOrgRefItem(
 		state: item.state,
 		body: item.body ?? "",
 		verificationLines: mapOrgGateProperties(item.properties ?? {}),
+		gateOptions: mapOrgGateOptions(item.properties ?? {}),
 	};
 }
 

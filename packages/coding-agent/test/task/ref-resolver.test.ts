@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	buildOrgAssignment,
 	buildOrgVerificationContext,
+	mapOrgGateOptions,
 	mapOrgGateProperties,
 	resolveRef,
 } from "../../src/task/ref-resolver";
@@ -59,6 +60,7 @@ describe("buildOrgVerificationContext", () => {
 				"You MUST run: `bun test` and verify it passes.",
 				"You MUST self-review against: no console.log",
 			],
+			gateOptions: {},
 		});
 		expect(text).toContain("Verification Requirements (from org://FEAT-1)");
 		expect(text).toContain("bun test");
@@ -67,7 +69,14 @@ describe("buildOrgVerificationContext", () => {
 
 	test("returns undefined when no gate lines", () => {
 		expect(
-			buildOrgVerificationContext({ itemId: "X", title: "T", state: "ITEM", body: "", verificationLines: [] }),
+			buildOrgVerificationContext({
+				itemId: "X",
+				title: "T",
+				state: "ITEM",
+				body: "",
+				verificationLines: [],
+				gateOptions: {},
+			}),
 		).toBeUndefined();
 	});
 });
@@ -117,15 +126,63 @@ describe("mapOrgGateProperties (wave-1 parity)", () => {
 	});
 });
 
+describe("mapOrgGateOptions (FUP-107 runtime-enforceable subset)", () => {
+	test("maps the three enforceable gates only (cmd/artifact/commit)", () => {
+		const opts = mapOrgGateOptions({
+			GATE_CMD: "bun test",
+			GATE_ARTIFACT: "out.txt",
+			GATE_COMMIT: "true",
+			// advisory keys must NOT leak into the enforceable subset
+			GATE_LLM: "no console.log",
+			VERIFY_CMD: "bun lint",
+			VERIFICATION_ARTIFACT: "evidence.md",
+			ORG_ITEM_CLOSING_ID: "FEAT-9",
+		});
+		expect(opts).toEqual({ gateCmd: "bun test", gateArtifact: "out.txt", gateCommit: true });
+	});
+
+	test("dual-spelling lower_snake keys resolve", () => {
+		expect(mapOrgGateOptions({ gate_cmd: "make test" })).toEqual({ gateCmd: "make test" });
+	});
+
+	test("gateCommit falsy tokens do NOT set commit", () => {
+		for (const v of ["false", "0", "no", "off", "FALSE", "Off"]) {
+			expect(mapOrgGateOptions({ GATE_COMMIT: v }).gateCommit).toBeUndefined();
+		}
+	});
+
+	test("gateCommit truthy sets commit:true", () => {
+		expect(mapOrgGateOptions({ GATE_COMMIT: "yes" }).gateCommit).toBe(true);
+	});
+
+	test("empty properties → empty options", () => {
+		expect(mapOrgGateOptions({})).toEqual({});
+	});
+});
+
 describe("buildOrgAssignment", () => {
 	test("title + body", () => {
-		const a = buildOrgAssignment({ itemId: "X", title: "Do thing", state: "ITEM", body: "details here", verificationLines: [] });
+		const a = buildOrgAssignment({
+			itemId: "X",
+			title: "Do thing",
+			state: "ITEM",
+			body: "details here",
+			verificationLines: [],
+			gateOptions: {},
+		});
 		expect(a).toContain("## Task: Do thing");
 		expect(a).toContain("details here");
 	});
 
 	test("empty body → title only", () => {
-		const a = buildOrgAssignment({ itemId: "X", title: "Do thing", state: "ITEM", body: "", verificationLines: [] });
+		const a = buildOrgAssignment({
+			itemId: "X",
+			title: "Do thing",
+			state: "ITEM",
+			body: "",
+			verificationLines: [],
+			gateOptions: {},
+		});
 		expect(a).toBe("## Task: Do thing");
 	});
 });

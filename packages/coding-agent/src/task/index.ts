@@ -44,11 +44,11 @@ import { resolveAgentEffectiveConfig } from "./agent-config-resolver";
 // Import review tools for side effects (registers subagent tool handlers)
 import "../tools/review";
 import { generateCommitMessage } from "../utils/commit-message-generator";
+import { attachAnswerPump } from "./answer-pump";
+import { AskBroker } from "./ask-broker";
 import { type BatchGraph, type BatchImplicitBlocker, buildBatchGraph, scheduleBatch } from "./batch-scheduler";
 import { discoverAgents, getAgent } from "./discovery";
 import { type RuntimeVerificationOptions, runSubprocess } from "./executor";
-import { AskBroker } from "./ask-broker";
-import { attachAnswerPump } from "./answer-pump";
 import {
 	type GateFailure,
 	type GateVerificationResult,
@@ -57,15 +57,16 @@ import {
 } from "./gate-verification";
 import { resolveIsolationBackendForTaskExecution } from "./isolation-backend";
 import { AgentOutputManager } from "./output-manager";
-import { renderCall, renderResult } from "./render";
-import { deriveAutoRosterPhaseNameFromContext, sanitizeTaskContent } from "./sanitize";
-import { renderTemplate, resolvePredecessorResultsContext, resolveVerificationContext } from "./template";
 import {
 	buildOrgAssignment,
 	buildOrgVerificationContext,
+	type OrgGateOptions,
 	resolveOrgRefItem,
 	resolveRef,
 } from "./ref-resolver";
+import { renderCall, renderResult } from "./render";
+import { deriveAutoRosterPhaseNameFromContext, sanitizeTaskContent } from "./sanitize";
+import { renderTemplate, resolvePredecessorResultsContext, resolveVerificationContext } from "./template";
 import {
 	type AgentDefinition,
 	type AgentProgress,
@@ -315,7 +316,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	}
 
 	/** Augment each task's assignment with todoRef-derived execution context. */
-		/** Augment each task's assignment with ref-derived execution context (roster + org). */
+	/** Augment each task's assignment with ref-derived execution context (roster + org). */
 	async #injectVerificationContext(tasks: TaskItem[]): Promise<TaskItem[]> {
 		const nodes = this.session.getTodoNodes?.();
 		const activePolicies = this.session.getResolvedTaskPolicies?.() ?? [];
@@ -344,7 +345,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	}
 
 	/** Resolve todoRef-derived assignments for tasks missing explicit assignment. */
-		/** Resolve ref-derived assignments (roster + org) for tasks missing explicit assignment. */
+	/** Resolve ref-derived assignments (roster + org) for tasks missing explicit assignment. */
 	async #resolveTodoRefAssignments(tasks: TaskItem[]): Promise<TaskItem[]> {
 		const nodes = this.session.getTodoNodes?.();
 		let changed = false;
@@ -415,11 +416,25 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		} catch (error) {
 			problems.push(error instanceof Error ? error.message : String(error));
 		}
-		const missingAssignmentIndexes = tasks.flatMap((task, index) =>
-			!task.assignment?.trim() && resolveRef(task.ref).kind === "none" ? [index] : [],
-		);
+		// Assignment resolution (roster + org) runs async BEFORE validation, and a resolved
+		// org item always yields at least `## Task: <title>`. So an empty assignment paired
+		// with an org ref means the ref is unresolvable (typo / missing item) — fail loud
+		// rather than silently dispatching a subagent with no instructions (FUP-107).
+		const missingAssignmentIndexes: number[] = [];
+		const unresolvableOrgRefIndexes: number[] = [];
+		tasks.forEach((task, index) => {
+			if (task.assignment?.trim()) return;
+			const kind = resolveRef(task.ref).kind;
+			if (kind === "none") missingAssignmentIndexes.push(index);
+			else if (kind === "org") unresolvableOrgRefIndexes.push(index);
+		});
 		if (missingAssignmentIndexes.length > 0) {
 			problems.push(`Tasks at indexes ${missingAssignmentIndexes.join(", ")} have no assignment and no ref`);
+		}
+		if (unresolvableOrgRefIndexes.length > 0) {
+			problems.push(
+				`Tasks at indexes ${unresolvableOrgRefIndexes.join(", ")} reference an org item that could not be resolved (check the org:// id exists and has a body)`,
+			);
 		}
 		return problems.length > 0 ? problems.join(". ") : undefined;
 	}
@@ -584,21 +599,63 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		return verification;
 	}
 
-	#buildRuntimeVerificationOptions(
-		todoRef: string | undefined,
+	/**
+	 * Resolve runtime-enforceable gates for an entire batch ONCE, up front, async.
+	 *
+	 * Closes the org-vs-roster enforcement asymmetry (FUP-107): roster refs read
+	 * `todo.verify.{cmd,commit,artifact}` synchronously, but org refs require an async
+	 * `resolveOrgRefItem` lookup the old sync `#buildRuntimeVerificationOptions` could not
+	 * perform — so org gates were injected as advisory text but never enforced. Resolving
+	 * both shapes into one `Map<taskId, RuntimeVerificationOptions>` here lets the sync
+	 * dispatch path ({@link #runtimeVerificationFor}) stamp the worktree baseline and hand
+	 * identical options to the executor regardless of ref kind.
+	 *
+	 * Keyed by `task.id` (logicalId). Only tasks that carry an actual gate are present.
+	 */
+	async #resolveRuntimeGates(tasks: TaskItem[]): Promise<Map<string, RuntimeVerificationOptions>> {
+		const nodes = this.session.getTodoNodes?.();
+		const gatesByTaskId = new Map<string, RuntimeVerificationOptions>();
+		await Promise.all(
+			tasks.map(async task => {
+				const resolved = resolveRef(task.ref);
+				if (resolved.kind === "roster") {
+					if (!nodes) return;
+					const todo = findNode(nodes, resolved.id);
+					if (!todo || !hasRequiredGate(todo)) return;
+					gatesByTaskId.set(task.id, {
+						gateCmd: todo.verify?.cmd,
+						gateCommit: todo.verify?.commit,
+						gateArtifact: todo.verify?.artifact,
+					});
+					return;
+				}
+				if (resolved.kind === "org") {
+					const orgItem = await resolveOrgRefItem(resolved.itemId, this.session.settings, this.session.cwd);
+					if (!orgItem) return;
+					const opts = this.#runtimeOptionsFromOrgGates(orgItem.gateOptions);
+					if (opts) gatesByTaskId.set(task.id, opts);
+				}
+			}),
+		);
+		return gatesByTaskId;
+	}
+
+	/** Lift the enforceable org gate subset into executor options, or undefined when empty. */
+	#runtimeOptionsFromOrgGates(gates: OrgGateOptions): RuntimeVerificationOptions | undefined {
+		if (!gates.gateCmd && !gates.gateCommit && !gates.gateArtifact) return undefined;
+		return { gateCmd: gates.gateCmd, gateCommit: gates.gateCommit, gateArtifact: gates.gateArtifact };
+	}
+
+	/**
+	 * Stamp the worktree baseline onto pre-resolved gate options at dispatch time.
+	 * Sync: the async resolution already happened in {@link #resolveRuntimeGates}.
+	 */
+	#runtimeVerificationFor(
+		base: RuntimeVerificationOptions | undefined,
 		isolationContext?: { isolationDir: string; baselineHeadCommit: string },
 	): RuntimeVerificationOptions | undefined {
-		if (!todoRef) return undefined;
-		const nodes = this.session.getTodoNodes?.();
-		if (!nodes) return undefined;
-		const todo = findNode(nodes, todoRef);
-		if (!todo || !hasRequiredGate(todo)) return undefined;
-		return {
-			gateCmd: todo.verify?.cmd,
-			gateCommit: todo.verify?.commit,
-			gateArtifact: todo.verify?.artifact,
-			baselineHeadCommit: isolationContext?.baselineHeadCommit,
-		};
+		if (!base) return undefined;
+		return { ...base, baselineHeadCommit: isolationContext?.baselineHeadCommit };
 	}
 
 	async #queueTodoRefMutation<T>(action: () => Promise<T>): Promise<T | undefined> {
@@ -1431,6 +1488,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		}
 
 		const tasks = await this.#injectVerificationContext(params.tasks);
+		// Resolve roster + org gates ONCE, async, up front (FUP-107). The sync dispatch
+		// path below stamps the worktree baseline onto these and hands them to the executor,
+		// so org gates are enforced identically to roster gates.
+		const runtimeGatesByTaskId = await this.#resolveRuntimeGates(tasks);
 		const taskValidationError = this.#validateTaskBatch(tasks);
 		if (taskValidationError) {
 			return {
@@ -1672,7 +1733,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						modelOverride,
 						thinkingLevel: thinkingLevelOverride,
 						outputSchema: effectiveOutputSchema,
-						runtimeVerification: this.#buildRuntimeVerificationOptions(rosterRefOf(originalTask)),
+						runtimeVerification: this.#runtimeVerificationFor(runtimeGatesByTaskId.get(originalTask.id)),
 						askBroker,
 						askTaskId: askBroker ? taskExecution.logicalId : undefined,
 						sessionFile,
@@ -1727,7 +1788,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						modelOverride,
 						thinkingLevel: thinkingLevelOverride,
 						outputSchema: effectiveOutputSchema,
-						runtimeVerification: this.#buildRuntimeVerificationOptions(rosterRefOf(originalTask), isolationContext),
+						runtimeVerification: this.#runtimeVerificationFor(
+							runtimeGatesByTaskId.get(originalTask.id),
+							isolationContext,
+						),
 						askBroker,
 						askTaskId: askBroker ? taskExecution.logicalId : undefined,
 						sessionFile,
