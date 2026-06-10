@@ -60,7 +60,6 @@ import {
 	type ToolDefinition,
 	wrapRegisteredTools,
 } from "./extensibility/extensions";
-import { createCavemanExtension } from "./extensibility/extensions/caveman";
 import { loadSkills as loadSkillsInternal, type Skill, type SkillWarning } from "./extensibility/skills";
 import { type FileSlashCommand, loadSlashCommands as loadSlashCommandsInternal } from "./extensibility/slash-commands";
 import {
@@ -74,7 +73,6 @@ import {
 	OrgProtocolHandler,
 	PiProtocolHandler,
 } from "./internal-urls";
-
 
 import { discoverAndLoadMCPTools, type MCPManager, type MCPToolsLoadResult } from "./mcp";
 import {
@@ -138,9 +136,9 @@ import {
 } from "./tools/canvas";
 import { ToolContextStore } from "./tools/context";
 import { getImageGenerationToolsWithRegistry } from "./tools/image-generation";
-import { createModelReviewJudge } from "./tools/review-judge";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
 import { PendingActionStore } from "./tools/pending-action";
+import { createModelReviewJudge } from "./tools/review-judge";
 import { EventBus } from "./utils/event-bus";
 
 // Types
@@ -988,7 +986,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const pendingActionStore = new PendingActionStore();
 
-
 	const gatewayClient = taskDepth === 0 ? new GatewayClient({ autoSpawn: false }) : undefined;
 
 	// Load project-level task policies once per session (cached in the closure below)
@@ -1201,7 +1198,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	const inlineExtensions: ExtensionFactory[] = options.extensions ? [...options.extensions] : [];
-	inlineExtensions.push(createCavemanExtension(settings));
 	if (customTools.length > 0) {
 		inlineExtensions.push(createCustomToolsExtension(customTools));
 	}
@@ -1777,7 +1773,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	for (const warning of modesResult.warnings) {
 		logger.warn(warning);
 	}
-
 
 	postmortem.registerSessionContext(() => {
 		const activeModel = session.model ?? model;

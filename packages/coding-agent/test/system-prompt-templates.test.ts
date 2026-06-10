@@ -183,7 +183,6 @@ describe("system Handlebars prompt templates", () => {
 		expect(rendered).toContain("On runtime impediments:");
 	});
 
-
 	test("system-prompt renders eager task guidance from default settings", async () => {
 		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
 		const template = await Bun.file(templatePath).text();
@@ -211,47 +210,18 @@ describe("system Handlebars prompt templates", () => {
 		expect(rendered).toContain("Symbols carry logic");
 		expect(rendered).not.toContain("<thinking-mode>");
 	});
-
-	test("caveman template does not contain thinking instructions", async () => {
-		const templatePath = path.join(systemPromptsDir, "caveman.md");
-		const template = await Bun.file(templatePath).text();
-
-		const rendered = renderPromptTemplate(template, {
-			...baseRenderContext,
-			cavemanActive: true,
-			terseThinking: true,
-		});
-
-		expect(rendered).not.toContain("thinking-mode");
-		expect(rendered).toContain("Terse mode active");
-	});
 });
 
-describe("caveman prompt composition", () => {
-	test("buildSystemPrompt renders terse caveman guidance without thinking-mode wrapper", async () => {
-		const rendered = await renderBuiltSystemPrompt(
-			Settings.isolated({
-				"caveman.defaultLevel": "full",
-				"caveman.thinkingMode": "normal",
-			}),
-		);
+describe("terse communication baked into base prompt", () => {
+	// Caveman mode was removed as a toggle; its style is now unconditional in
+	// <communication>. These pins guard against the style regressing to prose.
+	test("buildSystemPrompt always carries terse communication guidance", async () => {
+		const rendered = await renderBuiltSystemPrompt(Settings.isolated());
 
-		expect(rendered).toContain("Terse mode active");
+		expect(rendered).toContain("Terse by default");
+		expect(rendered).toContain("Auto-clarity");
+		expect(rendered).not.toContain("Terse mode active");
 		expect(rendered).not.toContain("<thinking-mode>");
-		expect(rendered).not.toContain("Think in notation");
-	});
-
-	test("buildSystemPrompt keeps terse caveman guidance in caveman mode", async () => {
-		const rendered = await renderBuiltSystemPrompt(
-			Settings.isolated({
-				"caveman.defaultLevel": "full",
-				"caveman.thinkingMode": "caveman",
-			}),
-		);
-
-		expect(rendered).toContain("Terse mode active");
-		expect(rendered).not.toContain("<thinking-mode>");
-		expect(rendered).not.toContain("Think in notation");
 	});
 });
 

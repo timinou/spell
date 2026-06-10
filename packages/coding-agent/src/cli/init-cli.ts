@@ -123,7 +123,6 @@ function generateSpellKdl(project: DetectedProject, domain: string, templateName
 		"",
 		"interaction {",
 		"\t// steering #true",
-		'\t// caveman enabled=#false level="full"',
 		"\t// auto-compact #true",
 		"\tcontext max-file-lines=2000 {",
 		'\t\t// promotion enabled=#true target="slow"',

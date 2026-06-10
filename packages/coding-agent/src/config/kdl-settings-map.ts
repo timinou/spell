@@ -230,25 +230,6 @@ export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> =
 
 	// ── Interaction ──────────────────────────────────────────────────────
 	steeringMode: { block: "interaction", nodePath: "steering", accessor: "argument" },
-	"caveman.defaultLevel": { block: "interaction", nodePath: "caveman", accessor: "property", propertyName: "level" },
-	"caveman.showStatus": {
-		block: "interaction",
-		nodePath: "caveman",
-		accessor: "property",
-		propertyName: "show-status",
-	},
-	"caveman.thinkingMode": {
-		block: "interaction",
-		nodePath: "caveman",
-		accessor: "property",
-		propertyName: "thinking-mode",
-	},
-	"caveman.affectSubagents": {
-		block: "interaction",
-		nodePath: "caveman",
-		accessor: "property",
-		propertyName: "affect-subagents",
-	},
 	followUpMode: { block: "interaction", nodePath: "follow-up-mode", accessor: "argument" },
 	interruptMode: { block: "interaction", nodePath: "interrupt-mode", accessor: "argument" },
 	doubleEscapeAction: { block: "interaction", nodePath: "double-escape-action", accessor: "argument" },
@@ -444,7 +425,6 @@ export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> =
 		propertyName: "simple-ls",
 	},
 
-
 	"todo.enabled": { block: "tools", nodePath: "todo", accessor: "property", propertyName: "enabled" },
 	"todo.reminders": { block: "tools", nodePath: "todo", accessor: "property", propertyName: "reminders" },
 	"todo.reminders.max": { block: "tools", nodePath: "todo", accessor: "property", propertyName: "reminders-max" },
@@ -618,7 +598,6 @@ export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> =
 	},
 
 	// ── Fluid ────────────────────────────────────────────────────────────
-
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

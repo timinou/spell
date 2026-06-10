@@ -15,7 +15,6 @@ import { CACHE_BOUNDARY_MARKER, renderPromptTemplate } from "./config/prompt-tem
 import type { Settings, SkillsSettings } from "./config/settings";
 import { type ContextFile, loadCapability, type SystemPrompt as SystemPromptFile } from "./discovery";
 import { loadSkills, type Skill } from "./extensibility/skills";
-import cavemanPromptTemplate from "./prompts/system/caveman.md" with { type: "text" };
 import customSystemPromptTemplate from "./prompts/system/custom-system-prompt.md" with { type: "text" };
 import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
 import { getGitToplevelSync } from "./session/git-baseline";
@@ -436,7 +435,10 @@ export interface BuildSystemPromptOptions {
 
 /** Build the system prompt with tools, guidelines, and context */
 export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}): Promise<SystemPromptBlock[]> {
-	dbgStartup("bsp:enter", { hasCustom: !!options.customPrompt, toolCount: options.toolNames?.length ?? options.tools?.size ?? -1 });
+	dbgStartup("bsp:enter", {
+		hasCustom: !!options.customPrompt,
+		toolCount: options.toolNames?.length ?? options.tools?.size ?? -1,
+	});
 	if ($env.NULL_PROMPT === "true") {
 		return [{ text: "", stable: true }];
 	}
@@ -535,23 +537,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const cwdBelowGitRoot = gitToplevel !== null && gitToplevel !== promptCwd && promptCwd.startsWith(`${gitToplevel}/`);
 	const gitRootForPrompt = cwdBelowGitRoot ? gitToplevel : null;
 
-	const cavemanLevel = settings?.get("caveman.defaultLevel") ?? "off";
-	const cavemanThinkingMode = settings?.get("caveman.thinkingMode") ?? "caveman";
-	const cavemanAffectSubagents = settings?.get("caveman.affectSubagents") ?? true;
-	const cavemanActive = cavemanLevel !== "off" && (!isSubagent || cavemanAffectSubagents);
-	const cavemanPromptData = {
-		cavemanActive,
-		cavemanLevel,
-		cavemanLite: cavemanLevel === "lite",
-		cavemanFull: cavemanLevel === "full",
-		cavemanUltra: cavemanLevel === "ultra",
-		cavemanWenyanLite: cavemanLevel === "wenyan-lite",
-		cavemanWenyan: cavemanLevel === "wenyan",
-		cavemanWenyanUltra: cavemanLevel === "wenyan-ultra",
-		terseThinking: cavemanActive && cavemanThinkingMode !== "normal",
-	};
-	const cavemanPrompt = cavemanActive ? renderPromptTemplate(cavemanPromptTemplate, cavemanPromptData) : "";
-	const appendPromptParts = [resolvedAppendPrompt, cavemanPrompt].filter(
+	const appendPromptParts = [resolvedAppendPrompt].filter(
 		(section): section is string => typeof section === "string" && section.trim().length > 0,
 	);
 
@@ -616,7 +602,6 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		autoRosterEnabled,
 		specializedToolNames,
 		hasSpecializedTools: specializedToolNames.length > 0,
-		...cavemanPromptData,
 	};
 	dbgStartup("bsp:before:renderPromptTemplate");
 	const rendered = renderPromptTemplate(

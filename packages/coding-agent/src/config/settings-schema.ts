@@ -198,7 +198,10 @@ export const SETTINGS_SCHEMA = {
 	 * conventions (Claude/Cursor/VSCode) stay native — they are discovered
 	 * via mcp-json provider, separately.
 	 */
-	"mcp.servers": { type: "record", default: EMPTY_STRING_RECORD as unknown as Record<string, unknown> } as RecordDef<unknown>,
+	"mcp.servers": {
+		type: "record",
+		default: EMPTY_STRING_RECORD as unknown as Record<string, unknown>,
+	} as RecordDef<unknown>,
 
 	/**
 	 * SSH host map. Sourced from spell.kdl `ssh { target "name" ... }` block.
@@ -206,7 +209,10 @@ export const SETTINGS_SCHEMA = {
 	 * <cwd>/.spell/ssh.json, and <cwd>/ssh.json (BUG-388, WAVE 2.6).
 	 * ~/.ssh/config (system SSH) is foreign and stays native.
 	 */
-	"ssh.hosts": { type: "record", default: EMPTY_STRING_RECORD as unknown as Record<string, unknown> } as RecordDef<unknown>,
+	"ssh.hosts": {
+		type: "record",
+		default: EMPTY_STRING_RECORD as unknown as Record<string, unknown>,
+	} as RecordDef<unknown>,
 
 	// ────────────────────────────────────────────────────────────────────────
 	// Appearance
@@ -322,7 +328,6 @@ export const SETTINGS_SCHEMA = {
 			submenu: true,
 		},
 	},
-
 
 	"statusLine.showHookStatus": {
 		type: "boolean",
@@ -489,48 +494,6 @@ export const SETTINGS_SCHEMA = {
 			tab: "interaction",
 			label: "Steering Mode",
 			description: "How to process queued messages while agent is working",
-		},
-	},
-
-	"caveman.defaultLevel": {
-		type: "enum",
-		values: ["off", "lite", "full", "ultra", "wenyan-lite", "wenyan", "wenyan-ultra"] as const,
-		default: "off",
-		ui: {
-			tab: "agent",
-			label: "Caveman Default Level",
-			description: "Token-saving communication level applied on new sessions (off = disabled)",
-		},
-	},
-
-	"caveman.showStatus": {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "agent",
-			label: "Caveman Status Bar",
-			description: "Show animated campfire status indicator when caveman mode is active",
-		},
-	},
-
-	"caveman.thinkingMode": {
-		type: "enum",
-		values: ["caveman", "normal"] as const,
-		default: "caveman",
-		ui: {
-			tab: "agent",
-			label: "Caveman Thinking Mode",
-			description: "Thinking block style: compressed symbolic notation (default) or verbose prose",
-		},
-	},
-
-	"caveman.affectSubagents": {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "agent",
-			label: "Caveman Subagents",
-			description: "Apply caveman mode to delegated subagents (task tool)",
 		},
 	},
 
@@ -971,7 +934,6 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-
 	// Bash interceptor
 	"bashInterceptor.enabled": {
 		type: "boolean",
@@ -1104,7 +1066,6 @@ export const SETTINGS_SCHEMA = {
 			description: "Enable the ast_grep tool for structural AST search",
 		},
 	},
-
 
 	// Optional tools
 
@@ -1942,13 +1903,6 @@ export interface SttSettings {
 	modelPath: string | undefined;
 }
 
-export interface CavemanSettings {
-	defaultLevel: SettingValue<"caveman.defaultLevel">;
-	showStatus: boolean;
-	thinkingMode: SettingValue<"caveman.thinkingMode">;
-	affectSubagents: boolean;
-}
-
 export interface BashInterceptorRule {
 	pattern: string;
 	flags?: string;
@@ -1971,7 +1925,6 @@ export interface GroupTypeMap {
 	statusLine: StatusLineSettings;
 	thinkingBudgets: ThinkingBudgetsSettings;
 	stt: SttSettings;
-	caveman: CavemanSettings;
 	modelRoles: Record<string, string>;
 }
 
