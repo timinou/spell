@@ -4,10 +4,10 @@
  * Runs each subagent on the main thread and forwards AgentEvents for progress tracking.
  */
 import path from "node:path";
+import type { TSchema } from "@sinclair/typebox";
 import type { AgentEvent, ThinkingLevel } from "@spell/pi-agent-core";
 import { type SystemPromptBlock, systemPromptText } from "@spell/pi-ai";
 import { logger, untilAborted } from "@spell/pi-utils";
-import type { TSchema } from "@sinclair/typebox";
 import Ajv, { type ValidateFunction } from "ajv";
 import { ModelRegistry } from "../config/model-registry";
 import { resolveModelCandidates } from "../config/model-resolver";
@@ -20,27 +20,23 @@ import { callTool } from "../mcp/client";
 import type { MCPManager } from "../mcp/manager";
 import submitReminderTemplate from "../prompts/system/subagent-submit-reminder.md" with { type: "text" };
 import subagentSystemPromptTemplate from "../prompts/system/subagent-system-prompt.md" with { type: "text" };
-import swarmAgentSystemPromptTemplate from "../prompts/system/swarm-agent-system-prompt.md" with { type: "text" };
 import type { SandboxPolicy } from "../sandbox";
 import { createAgentSession, discoverAuthStorage } from "../sdk";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { AuthStorage } from "../session/auth-storage";
 import { SessionManager } from "../session/session-manager";
-import { createHandoffTool } from "../swarm/handoff-tool";
-import { createSpawnSuccessorTool } from "../swarm/spawn-successor-tool";
-import type { SwarmNodeLike } from "../task/swarm-scheduler";
 import { type ContextFileEntry, truncateTail } from "../tools";
 import { jtdToJsonSchema } from "../tools/jtd-to-json-schema";
 import { cloneTodoNodes, type TodoNode } from "../tools/todo-write";
 import { ToolAbortError } from "../tools/tool-errors";
-import { EventBus, Priority } from "../utils/event-bus";
+import { type EventBus, Priority } from "../utils/event-bus";
 import { buildNamedToolChoice } from "../utils/tool-choice";
 // Import bash subprocess handler for side effects (tracks bash commands for gate verification)
 import "./bash-subprocess-handler";
+import { makeAskOrchestratorTool } from "./ask-tools";
 import { type GateFailure, type TrackedBashExecution, verifyGates } from "./gate-verification";
 import { createProgressHeartbeat } from "./progress-heartbeat";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
-import { makeAskOrchestratorTool } from "./ask-tools";
 import {
 	type AgentDefinition,
 	type AgentProgress,
@@ -210,15 +206,6 @@ export interface ExecutorOptions {
 	askBroker?: import("./ask-broker").AskBroker;
 	/** Logical task id for ask-broker routing (the roster/logical id, not the execution id). */
 	askTaskId?: string;
-	/** Swarm runtime context; when absent, swarm tools stay unavailable. */
-	swarmContext?: {
-		active: boolean;
-		agent: string;
-		sessionId: string;
-		currentTaskUri?: string;
-		blackboard?: import("../swarm/blackboard").SwarmBlackboard;
-		scheduler?: import("../task/swarm-scheduler").SwarmScheduler<SwarmNodeLike>;
-	};
 }
 
 function parseStringifiedJson(value: unknown): unknown {
@@ -249,7 +236,6 @@ function normalizeOutputSchema(schema: unknown): {
 }
 // Schema grammar boundary: JTD in agent frontmatter vs TypeBox in code.
 // See tasks/plans/plan-artifacts/PLAN-308/ADR-schema-grammar-boundary.md
-
 
 function buildOutputValidator(schema: unknown): {
 	validate?: ValidateFunction;
@@ -801,8 +787,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				? "*"
 				: agent.spawns.join(",");
 
-
-
 	const outputChunks: string[] = [];
 	const finalOutputChunks: string[] = [];
 	const RECENT_OUTPUT_TAIL_BYTES = 8 * 1024;
@@ -1344,31 +1328,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 							},
 						];
 			const mcpProxyTools = options.mcpManager ? createMCPProxyTools(options.mcpManager) : [];
-			const swarmTools =
-				options.swarmContext?.active && options.swarmContext.blackboard && options.swarmContext.scheduler
-					? ([
-							createHandoffTool({
-								active: true,
-								agent: options.swarmContext.agent,
-								sessionId: options.swarmContext.sessionId,
-								currentTaskUri: options.swarmContext.currentTaskUri,
-								blackboard: options.swarmContext.blackboard,
-								eventBus: options.eventBus ?? new EventBus(),
-							}),
-							createSpawnSuccessorTool({
-								active: true,
-								agent: options.swarmContext.agent,
-								sessionId: options.swarmContext.sessionId,
-								currentTaskUri: options.swarmContext.currentTaskUri ?? "",
-								scheduler: options.swarmContext.scheduler,
-							}),
-						] as CustomTool[])
-					: [];
 			const askTools =
 				options.askBroker && options.askTaskId
 					? [makeAskOrchestratorTool(options.askBroker, options.askTaskId) as unknown as CustomTool]
 					: [];
-			const allCustomTools = [...mcpProxyTools, ...swarmTools, ...askTools, ...(options.customTools ?? [])];
+			const allCustomTools = [...mcpProxyTools, ...askTools, ...(options.customTools ?? [])];
 			const enableMCP = !options.mcpManager;
 			const { normalized: normalizedOutputSchema } = normalizeOutputSchema(outputSchema);
 			let todoWriteAvailable =
@@ -1416,19 +1380,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 									todoWriteAvailable,
 								});
 								overlayParts.push(subagentOverlay);
-								if (
-									options.swarmContext?.active &&
-									options.swarmContext.blackboard &&
-									options.swarmContext.scheduler
-								) {
-									const swarmOverlay = renderPromptTemplate(swarmAgentSystemPromptTemplate, {
-										swarmEnabled: true,
-										handoffEnabled: true,
-										spawnSuccessorEnabled: true,
-										currentTaskUri: options.swarmContext.currentTaskUri ?? "",
-									});
-									overlayParts.push(swarmOverlay);
-								}
 								const stableBlocks = defaultBlocks.filter(block => block.stable !== false);
 								const dynamicTexts = defaultBlocks
 									.filter(block => block.stable === false)
@@ -1464,7 +1415,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 								// cannot act on the answer, and a bare prompt() would revive a
 								// completed subagent into a detached turn.
 								if (!session.isStreaming) return;
-								void session.prompt(text, { streamingBehavior: "followUp", attribution: "agent" }).catch(() => {});
+								void session
+									.prompt(text, { streamingBehavior: "followUp", attribution: "agent" })
+									.catch(() => {});
 							});
 						}
 						const actualTodoWrite = session.getActiveToolNames().includes("todo_write");
