@@ -11,10 +11,11 @@
  * - Extension UI: Extension UI requests are emitted, client responds with extension_ui_response
  */
 import { readJsonl, Snowflake } from "@spell/pi-utils";
-import { warmMemoryLane } from "../../tools/memory";
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../../extensibility/extensions";
 import { type Theme, theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
+import { warmMemoryLane } from "../../tools/memory";
+import type { EventBus } from "../../utils/event-bus";
 import type {
 	RpcCommand,
 	RpcExtensionUIRequest,
@@ -22,6 +23,7 @@ import type {
 	RpcResponse,
 	RpcSessionState,
 } from "./rpc-types";
+import { projectTaskAskEvents } from "./task-ask-projection";
 
 // Re-export types for consumers
 export type * from "./rpc-types";
@@ -30,12 +32,19 @@ export type * from "./rpc-types";
  * Run in RPC mode.
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
  */
-export async function runRpcMode(session: AgentSession): Promise<never> {
+export async function runRpcMode(session: AgentSession, eventBus?: EventBus): Promise<never> {
 	// Signal to RPC clients that the server is ready to accept commands
 	process.stdout.write(`${JSON.stringify({ type: "ready" })}\n`);
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
 		process.stdout.write(`${JSON.stringify(obj)}\n`);
 	};
+
+	// PLAN-331 W3': project the in-process task:ask:* dialogue onto the RPC stdout
+	// rail so spell-server can OBSERVE worker↔orchestrator Q&A. Observation-only —
+	// answers are composed in-process by the orchestrator, never over this channel.
+	// runRpcMode runs for the process lifetime (returns never), so the
+	// subscriptions live as long as the session and need no teardown.
+	if (eventBus) projectTaskAskEvents(eventBus, output);
 
 	const success = <T extends RpcCommand["type"]>(
 		id: string | undefined,

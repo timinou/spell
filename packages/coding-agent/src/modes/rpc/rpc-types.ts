@@ -65,6 +65,41 @@ export type RpcCommand =
 	| { id?: string; type: "get_messages" };
 
 // ============================================================================
+// Subagent dialogue events (stdout, observation-only — PLAN-331 W3')
+// ============================================================================
+
+/**
+ * Projection of the in-process `task:ask:*` EventBus dialogue onto the RPC
+ * stdout rail so spell-server (web / Telegram) can OBSERVE worker↔orchestrator
+ * Q&A. Observation-only: the human watches; answers are composed in-process by
+ * the orchestrator (PLAN-327 AskBroker), never over this channel.
+ *
+ * One frame kind, three lifecycle phases — keeps the ask taxonomy distinct on
+ * the wire from blocking events (which ride a separate answerable path).
+ */
+export type RpcTaskAskEvent =
+	| {
+			type: "task_ask";
+			phase: "raised";
+			runId: string;
+			questionId: string;
+			fromTaskId: string;
+			fromSessionId?: string;
+			question: string;
+			scopeHint?: string;
+			blocking: boolean;
+	  }
+	| {
+			type: "task_ask";
+			phase: "answered";
+			runId: string;
+			questionId: string;
+			answer: string;
+			recipients: string[];
+	  }
+	| { type: "task_ask"; phase: "cancelled"; runId: string; questionId: string; reason: string };
+
+// ============================================================================
 // RPC State
 // ============================================================================
 

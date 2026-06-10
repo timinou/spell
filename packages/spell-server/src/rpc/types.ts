@@ -71,8 +71,30 @@ export type RpcEvent =
 			partialResult: RpcToolResult;
 	  }
 	| { type: "tool_execution_end"; toolCallId: string; toolName: string; isError?: boolean; result?: RpcToolResult }
+	| RpcTaskAskEvent
 	| RpcResponseEvent
 	| { type: "error"; message: string };
+
+/**
+ * Observation-only projection of a spawned session's worker↔orchestrator
+ * dialogue (PLAN-331 W3'). Mirrors coding-agent's RpcTaskAskEvent. Rides the
+ * existing `rpc_event` WS frame to the browser; the human watches but does not
+ * answer (answers are composed in-process by the orchestrator, PLAN-327).
+ */
+export type RpcTaskAskEvent =
+	| {
+			type: "task_ask";
+			phase: "raised";
+			runId: string;
+			questionId: string;
+			fromTaskId: string;
+			fromSessionId?: string;
+			question: string;
+			scopeHint?: string;
+			blocking: boolean;
+	  }
+	| { type: "task_ask"; phase: "answered"; runId: string; questionId: string; answer: string; recipients: string[] }
+	| { type: "task_ask"; phase: "cancelled"; runId: string; questionId: string; reason: string };
 
 /** Subset of AssistantMessageEvent we care about for streaming */
 export type AssistantEvent =

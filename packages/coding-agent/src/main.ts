@@ -935,7 +935,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	}
 
 	if (startupRoute.kind === "rpc") {
-		await runRpcMode(session);
+		await runRpcMode(session, eventBus);
 		return;
 	}
 	if (startupRoute.kind === "interactive-qml") {
