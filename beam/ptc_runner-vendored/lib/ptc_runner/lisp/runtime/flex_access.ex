@@ -1,0 +1,424 @@
+defmodule PtcRunner.Lisp.Runtime.FlexAccess do
+  @moduledoc """
+  Flexible key access helpers for PTC-Lisp runtime.
+
+  These helpers allow accessing map keys using either atom or string versions,
+  with hyphen/underscore normalization for seamless interoperability between
+  Clojure-style keywords (`:turn-summaries`) and Elixir-style keys (`:turn_summaries`).
+
+  ## Lookup order
+
+  1. Exact match (atom or string as given)
+  2. Atom↔string variant (`:foo` → `"foo"` or vice versa)
+  3. Hyphen↔underscore normalized variant (`:turn-summaries` → `:turn_summaries`, `"turn_summaries"`)
+  """
+
+  alias PtcRunner.Lisp.Keyword, as: LispKeyword
+
+  @doc """
+  Flexible key access: try atom/string and hyphen/underscore variants of the key.
+  Returns the value if found, nil if missing.
+  Use this for simple lookups where you don't need to distinguish between nil values and missing keys.
+  """
+  def flex_get(%MapSet{}, _key), do: nil
+  def flex_get(%LispKeyword{}, _key), do: nil
+
+  def flex_get(map, %LispKeyword{name: name} = key) when is_map(map) and not is_struct(map) do
+    case Map.fetch(map, key) do
+      {:ok, value} -> value
+      :error -> flex_get_keyword_name(map, name)
+    end
+  end
+
+  def flex_get(map, key) when is_map(map) and not is_struct(map) and is_atom(key) do
+    case Map.fetch(map, key) do
+      {:ok, value} ->
+        value
+
+      :error ->
+        str = to_string(key)
+
+        case Map.fetch(map, str) do
+          {:ok, value} ->
+            value
+
+          :error ->
+            case Map.fetch(map, LispKeyword.new(str)) do
+              {:ok, value} -> value
+              :error -> get_normalized(map, str, :atom)
+            end
+        end
+    end
+  end
+
+  def flex_get(map, key) when is_map(map) and not is_struct(map) and is_binary(key) do
+    case Map.fetch(map, key) do
+      {:ok, value} ->
+        value
+
+      :error ->
+        # Try converting string to existing atom (safe - won't create new atoms)
+        result =
+          try do
+            Map.fetch(map, String.to_existing_atom(key))
+          rescue
+            ArgumentError -> :error
+          end
+
+        case result do
+          {:ok, value} ->
+            value
+
+          :error ->
+            case Map.fetch(map, LispKeyword.new(key)) do
+              {:ok, value} -> value
+              :error -> get_normalized(map, key, :string)
+            end
+        end
+    end
+  end
+
+  def flex_get(nil, path) when is_list(path), do: nil
+
+  def flex_get(map, path) when is_map(map) and not is_struct(map) and is_list(path),
+    do: flex_get_in(map, path)
+
+  def flex_get(map, key) when is_map(map) and not is_struct(map), do: Map.get(map, key)
+
+  # List index support - only non-negative integers
+  def flex_get(list, key) when is_list(list) and is_integer(key) and key >= 0,
+    do: Enum.at(list, key)
+
+  def flex_get(list, _key) when is_list(list), do: nil
+
+  def flex_get(nil, _key), do: nil
+
+  @doc """
+  Flexible key fetch: try both atom and string versions of the key.
+  Returns {:ok, value} if found, :error if missing.
+  Use this when you need to distinguish between nil values and missing keys.
+  """
+  def flex_fetch(%MapSet{}, _key), do: :error
+  def flex_fetch(%LispKeyword{}, _key), do: :error
+
+  def flex_fetch(map, %LispKeyword{name: name} = key) when is_map(map) and not is_struct(map) do
+    case Map.fetch(map, key) do
+      {:ok, _} = ok -> ok
+      :error -> flex_fetch_keyword_name(map, name)
+    end
+  end
+
+  def flex_fetch(map, key) when is_map(map) and not is_struct(map) and is_atom(key) do
+    case Map.fetch(map, key) do
+      {:ok, _} = ok ->
+        ok
+
+      :error ->
+        str = to_string(key)
+
+        case Map.fetch(map, str) do
+          {:ok, _} = ok ->
+            ok
+
+          :error ->
+            case Map.fetch(map, LispKeyword.new(str)) do
+              {:ok, _} = ok -> ok
+              :error -> fetch_normalized(map, str, :atom)
+            end
+        end
+    end
+  end
+
+  def flex_fetch(map, key) when is_map(map) and not is_struct(map) and is_binary(key) do
+    case Map.fetch(map, key) do
+      {:ok, _} = ok ->
+        ok
+
+      :error ->
+        result =
+          try do
+            Map.fetch(map, String.to_existing_atom(key))
+          rescue
+            ArgumentError -> :error
+          end
+
+        case result do
+          {:ok, _} = ok ->
+            ok
+
+          :error ->
+            case Map.fetch(map, LispKeyword.new(key)) do
+              {:ok, _} = ok -> ok
+              :error -> fetch_normalized(map, key, :string)
+            end
+        end
+    end
+  end
+
+  def flex_fetch(nil, path) when is_list(path), do: :error
+
+  def flex_fetch(map, path) when is_map(map) and not is_struct(map) and is_list(path),
+    do: flex_fetch_in(map, path)
+
+  def flex_fetch(map, key) when is_map(map) and not is_struct(map), do: Map.fetch(map, key)
+
+  # List index support - single traversal using sentinel
+  def flex_fetch(list, key) when is_list(list) and is_integer(key) and key >= 0 do
+    case Enum.at(list, key, :__flex_not_found__) do
+      :__flex_not_found__ -> :error
+      value -> {:ok, value}
+    end
+  end
+
+  def flex_fetch(list, _key) when is_list(list), do: :error
+
+  def flex_fetch(nil, _key), do: :error
+
+  @doc """
+  Flexible nested key access: try both atom and string versions at each level.
+  """
+  def flex_get_in(data, []), do: data
+  def flex_get_in(nil, _path), do: nil
+
+  def flex_get_in(data, [key | rest]) when is_map(data) do
+    case flex_fetch(data, key) do
+      {:ok, value} -> flex_get_in(value, rest)
+      :error -> nil
+    end
+  end
+
+  # List index support - simplified since flex_get_in(nil, rest) returns nil
+  def flex_get_in(data, [key | rest]) when is_list(data) and is_integer(key) and key >= 0 do
+    flex_get_in(Enum.at(data, key), rest)
+  end
+
+  def flex_get_in(_data, _path), do: nil
+
+  @doc """
+  Flexible nested key fetch: try both atom and string versions at each level.
+  Returns {:ok, value} if found, :error if missing.
+  """
+  def flex_fetch_in(data, []), do: {:ok, data}
+  def flex_fetch_in(nil, _path), do: :error
+
+  def flex_fetch_in(data, [key | rest]) when is_map(data) do
+    case flex_fetch(data, key) do
+      {:ok, value} -> flex_fetch_in(value, rest)
+      :error -> :error
+    end
+  end
+
+  # List index support - single traversal using sentinel
+  def flex_fetch_in(data, [key | rest]) when is_list(data) and is_integer(key) and key >= 0 do
+    case Enum.at(data, key, :__flex_not_found__) do
+      :__flex_not_found__ -> :error
+      value -> flex_fetch_in(value, rest)
+    end
+  end
+
+  def flex_fetch_in(_data, _path), do: :error
+
+  @doc """
+  Flexible nested key insertion: creates intermediate maps as needed at each level.
+  Aligns with Clojure's assoc-in behavior.
+  """
+  def flex_put_in(_data, [], v), do: v
+  def flex_put_in(nil, path, v), do: flex_put_in(%{}, path, v)
+
+  def flex_put_in(data, [key | rest], v) when is_map(data) do
+    case rest do
+      [] ->
+        # Last key in path: put the value
+        Map.put(data, key, v)
+
+      _ ->
+        # More path to traverse: get or create intermediate map
+        case flex_fetch(data, key) do
+          {:ok, nested} when is_map(nested) ->
+            # Key exists with a map value: recurse
+            nested_result = flex_put_in(nested, rest, v)
+            Map.put(data, key, nested_result)
+
+          {:ok, nested} when is_list(nested) ->
+            # Key exists with a list value: recurse into list
+            nested_result = flex_put_in(nested, rest, v)
+            Map.put(data, key, nested_result)
+
+          {:ok, _} ->
+            # Key exists with a non-map/non-list value: can't traverse further
+            raise ArgumentError,
+                  "could not put/update key #{inspect(key)} on a non-map value"
+
+          :error ->
+            # Key missing: create new intermediate map
+            nested_result = flex_put_in(%{}, rest, v)
+            Map.put(data, key, nested_result)
+        end
+    end
+  end
+
+  # List index support - Clojure's assoc-in works on vectors (index == length appends)
+  def flex_put_in(data, [key | rest], v) when is_list(data) and is_integer(key) and key >= 0 do
+    len = length(data)
+
+    cond do
+      key < len ->
+        case rest do
+          [] -> List.replace_at(data, key, v)
+          _ -> List.update_at(data, key, &flex_put_in(&1, rest, v))
+        end
+
+      key == len ->
+        case rest do
+          [] -> data ++ [v]
+          _ -> data ++ [flex_put_in(%{}, rest, v)]
+        end
+
+      true ->
+        raise ArgumentError, "index #{key} out of bounds for list of length #{len}"
+    end
+  end
+
+  @doc """
+  Flexible nested key update: creates intermediate maps as needed at each level.
+  Aligns with Clojure's update-in behavior.
+  """
+  def flex_update_in(data, [], f), do: f.(data)
+  def flex_update_in(nil, path, f), do: flex_update_in(%{}, path, f)
+
+  def flex_update_in(data, [key | rest], f) when is_map(data) do
+    case rest do
+      [] ->
+        # Last key in path: update the value at this key
+        old_val = flex_get(data, key)
+        new_val = f.(old_val)
+        Map.put(data, key, new_val)
+
+      _ ->
+        # More path to traverse: get or create intermediate map
+        case flex_fetch(data, key) do
+          {:ok, nested} when is_map(nested) ->
+            # Key exists with a map value: recurse
+            nested_result = flex_update_in(nested, rest, f)
+            Map.put(data, key, nested_result)
+
+          {:ok, nested} when is_list(nested) ->
+            # Key exists with a list value: recurse into list
+            nested_result = flex_update_in(nested, rest, f)
+            Map.put(data, key, nested_result)
+
+          {:ok, _} ->
+            # Key exists with a non-map/non-list value: can't traverse further
+            raise ArgumentError,
+                  "could not put/update key #{inspect(key)} on a non-map value"
+
+          :error ->
+            # Key missing: create new intermediate map and update
+            nested_result = flex_update_in(%{}, rest, f)
+            Map.put(data, key, nested_result)
+        end
+    end
+  end
+
+  # List index support - throws on out-of-bounds (Clojure semantics)
+  def flex_update_in(data, [key | rest], f) when is_list(data) and is_integer(key) and key >= 0 do
+    if key < length(data) do
+      case rest do
+        [] -> List.update_at(data, key, f)
+        _ -> List.update_at(data, key, &flex_update_in(&1, rest, f))
+      end
+    else
+      raise ArgumentError, "index #{key} out of bounds for list of length #{length(data)}"
+    end
+  end
+
+  # --- Hyphen/underscore normalization helpers ---
+  #
+  # Called after exact and atom↔string lookups have failed.
+  # Normalizes hyphens to underscores (the canonical Elixir separator),
+  # then tries both atom and string forms in the caller's preferred order.
+  #
+  # `prefer` is `:atom` or `:string`, matching the original key type so the
+  # normalized tier preserves the same atom-before-string (or vice versa)
+  # precedence as the non-normalized tiers.
+
+  defp get_normalized(map, str, prefer) do
+    case fetch_normalized(map, str, prefer) do
+      {:ok, value} -> value
+      :error -> nil
+    end
+  end
+
+  defp fetch_normalized(map, str, prefer) when is_binary(str) do
+    normalized = normalize_separator(str)
+
+    if normalized == str do
+      :error
+    else
+      case prefer do
+        :atom -> fetch_normalized_atom_first(map, normalized)
+        :string -> fetch_normalized_string_first(map, normalized)
+      end
+    end
+  end
+
+  defp fetch_normalized_atom_first(map, normalized) do
+    result =
+      try do
+        Map.fetch(map, String.to_existing_atom(normalized))
+      rescue
+        ArgumentError -> :error
+      end
+
+    case result do
+      {:ok, _} = ok -> ok
+      :error -> Map.fetch(map, normalized)
+    end
+  end
+
+  defp fetch_normalized_string_first(map, normalized) do
+    case Map.fetch(map, normalized) do
+      {:ok, _} = ok ->
+        ok
+
+      :error ->
+        try do
+          Map.fetch(map, String.to_existing_atom(normalized))
+        rescue
+          ArgumentError -> :error
+        end
+    end
+  end
+
+  defp flex_get_keyword_name(map, name) do
+    case fetch_keyword_name(map, name) do
+      {:ok, value} -> value
+      :error -> get_normalized(map, name, :atom)
+    end
+  end
+
+  defp flex_fetch_keyword_name(map, name) do
+    case fetch_keyword_name(map, name) do
+      {:ok, _} = ok -> ok
+      :error -> fetch_normalized(map, name, :atom)
+    end
+  end
+
+  defp fetch_keyword_name(map, name) do
+    result =
+      try do
+        Map.fetch(map, String.to_existing_atom(name))
+      rescue
+        ArgumentError -> :error
+      end
+
+    case result do
+      {:ok, _} = ok -> ok
+      :error -> Map.fetch(map, name)
+    end
+  end
+
+  # Normalize to underscores — the canonical Elixir separator.
+  # Handles mixed keys like "foo-bar_baz" → "foo_bar_baz".
+  defp normalize_separator(str), do: String.replace(str, "-", "_")
+end

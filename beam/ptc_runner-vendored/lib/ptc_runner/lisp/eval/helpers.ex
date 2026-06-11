@@ -1,0 +1,260 @@
+defmodule PtcRunner.Lisp.Eval.Helpers do
+  @moduledoc """
+  Shared helper functions for Lisp evaluation.
+
+  Provides type error formatting and type description utilities.
+  """
+
+  alias PtcRunner.Lisp.Env
+  alias PtcRunner.Lisp.Env.Builtin
+  alias PtcRunner.Lisp.Keyword, as: LispKeyword
+
+  @doc """
+  Generates a type error tuple for FunctionClauseError in builtins.
+  """
+  @spec type_error_for_args(function(), [term()]) :: {:type_error, String.t(), term()}
+  def type_error_for_args(fun, args) do
+    fun_name = function_name(fun)
+
+    case specific_type_error(fun_name, args) do
+      {:ok, error} -> error
+      :none -> generic_type_error(fun_name, args)
+    end
+  end
+
+  # Specific error messages for common mistakes
+  defp specific_type_error(name, [_, %MapSet{} = set])
+       when name in [:take, :drop, :sort_by, :take_while, :drop_while] do
+    {:ok, {:type_error, "#{name} does not support sets (sets are unordered)", set}}
+  end
+
+  defp specific_type_error(name, [%MapSet{} = set])
+       when name in [:first, :last, :nth, :reverse, :distinct, :flatten, :sort] do
+    {:ok, {:type_error, "#{name} does not support sets (sets are unordered)", set}}
+  end
+
+  # first/last/nth on maps - maps are unordered
+  defp specific_type_error(name, [%{} = map] = args)
+       when name in [:first, :last, :reverse] and not is_struct(map) do
+    {:ok,
+     {:type_error,
+      "#{name} does not support maps (maps are unordered). " <>
+        "Use (keys m), (vals m), or (entries m) to get a sorted list", args}}
+  end
+
+  defp specific_type_error(:nth, [_n, %{} = _map] = args) do
+    {:ok,
+     {:type_error,
+      "nth does not support maps (maps are unordered). " <>
+        "Use (keys m), (vals m), or (entries m) to get a sorted list", args}}
+  end
+
+  defp specific_type_error(:update_vals, [f, m] = args) when is_function(f) and is_map(m) do
+    {:ok,
+     {:type_error,
+      "update-vals expects (map, function) but got (function, map). " <>
+        "Use -> (thread-first) instead of ->> (thread-last) with update-vals", args}}
+  end
+
+  defp specific_type_error(:update_vals, [%Builtin{} = _f, m] = args) when is_map(m) do
+    {:ok,
+     {:type_error,
+      "update-vals expects (map, function) but got (function, map). " <>
+        "Use -> (thread-first) instead of ->> (thread-last) with update-vals", args}}
+  end
+
+  # Also match builtin tuples (now passed through from closure_to_fun)
+  defp specific_type_error(:update_vals, [{tag, _} = _f, m] = args)
+       when tag in [:normal, :collect] and is_map(m) do
+    {:ok,
+     {:type_error,
+      "update-vals expects (map, function) but got (function, map). " <>
+        "Use -> (thread-first) instead of ->> (thread-last) with update-vals", args}}
+  end
+
+  defp specific_type_error(:update_vals, [{tag, _, _} = _f, m] = args)
+       when tag in [:variadic, :variadic_nonempty, :multi_arity] and is_map(m) do
+    {:ok,
+     {:type_error,
+      "update-vals expects (map, function) but got (function, map). " <>
+        "Use -> (thread-first) instead of ->> (thread-last) with update-vals", args}}
+  end
+
+  defp specific_type_error(:sort_by, [key, coll, comp] = args)
+       when (is_atom(key) or is_binary(key) or is_function(key, 1)) and is_list(coll) and
+              (is_function(comp) or comp in [:asc, :desc, :>, :<]) do
+    {:ok,
+     {:type_error,
+      "sort-by expects (key, comparator, collection) but got (key, collection, comparator). " <>
+        "Try: (sort-by #{inspect(key)} #{inspect(comp)} collection)", args}}
+  end
+
+  # (get key map) / (get-in path map) — collection must come first. A keyword
+  # or string first arg with a map second arg is almost always swapped.
+  defp specific_type_error(name, [k, %{} = m] = args)
+       when name in [:get, :get_in] and not is_struct(m) and
+              (is_atom(k) or is_binary(k) or is_list(k) or
+                 is_struct(k, PtcRunner.Lisp.Keyword)) do
+    {:ok,
+     {:type_error,
+      "#{display_name(name)} expects the collection first, e.g. (#{display_name(name)} map key) — " <>
+        "got (#{describe_type(k)}, map), arguments appear to be swapped", args}}
+  end
+
+  defp specific_type_error(_name, _args), do: :none
+
+  defp display_name(:get_in), do: "get-in"
+  defp display_name(name), do: to_string(name)
+
+  defp generic_type_error(fun_name, args) do
+    type_descriptions = Enum.map(args, &describe_type/1)
+
+    {:type_error, "#{fun_name}: invalid argument types: #{Enum.join(type_descriptions, ", ")}",
+     args}
+  end
+
+  @doc """
+  Describes the type of a value for error messages.
+  """
+  @spec describe_type(term()) :: String.t()
+  def describe_type(nil), do: "nil"
+  def describe_type(%Builtin{}), do: "function"
+  def describe_type(%MapSet{}), do: "set"
+  def describe_type(%LispKeyword{}), do: "keyword"
+  def describe_type(x) when is_list(x), do: "list"
+  def describe_type(x) when is_map(x), do: "map"
+  def describe_type(x) when is_binary(x), do: "string"
+  def describe_type(x) when is_number(x), do: "number"
+  def describe_type(x) when is_boolean(x), do: "boolean"
+  def describe_type(x) when is_atom(x), do: "keyword"
+  def describe_type(x) when is_function(x), do: "function"
+  # Internal builtin-binding tuples (e.g. `{:normal, &fun/2}`) — these reach
+  # error formatting when a builtin is used as a value, e.g. `(first filter)`.
+  # Surface them as "function" rather than the leaky "unknown".
+  def describe_type({tag, _}) when tag in [:normal, :collect], do: "function"
+  def describe_type({:special, :println}), do: "function"
+
+  def describe_type({tag, _, _}) when tag in [:variadic, :variadic_nonempty, :multi_arity],
+    do: "function"
+
+  def describe_type(_), do: "unknown"
+
+  # Special forms that require parentheses - bare symbols will fail with :unbound_var
+  @special_forms MapSet.new([
+                   :return,
+                   :fail,
+                   :let,
+                   :if,
+                   :fn,
+                   :when,
+                   :"if-let",
+                   :"when-let",
+                   :"if-some",
+                   :"when-some",
+                   :"when-first",
+                   :cond,
+                   :case,
+                   :condp,
+                   :do,
+                   :and,
+                   :or,
+                   :not,
+                   :->,
+                   :"->>",
+                   :"as->",
+                   :"cond->",
+                   :"cond->>",
+                   :"some->",
+                   :"some->>"
+                 ])
+
+  # Common Clojure/Java functions that don't exist in PTC-Lisp, with alternatives
+  @clojure_alternatives %{
+    # SPELL PATCH-2 (D-5): high-frequency hallucinated builtins observed in
+    # practice — the agent reaches for a Clojure name PTC-Lisp spells
+    # differently. Jaro distance misses these (too far), so name them directly.
+    "map-vals" => "use update-vals to map over a map's values",
+    "map-keys" => "use update-keys to map over a map's keys",
+    "dedupe-by" => "use (distinct ...) or (dedupe ...) — no -by variant",
+    "group-by-vals" => "use group-by, then update-vals over the groups",
+    "format" => "use str and arithmetic, e.g. (str (* 100.0 (/ a b)) \"%\")",
+    "re-find" => "use grep for line matching, or (re-pattern \"...\") with re-find",
+    "re-seq" => "use (re-seq (re-pattern \"...\") text) — requires compiled regex",
+    "printf" => "use println with str",
+    "spit" => "not available — no file I/O",
+    "slurp" => "not available — no file I/O",
+    "require" => "not available — no namespace loading",
+    "import" => "not available — no Java interop"
+  }
+
+  @doc """
+  Formats closure errors with helpful messages.
+  """
+  @spec format_closure_error(term()) :: String.t()
+  def format_closure_error({:unbound_var, name}) do
+    var_str = to_string(name)
+
+    cond do
+      # Check if it's a special form used without parentheses
+      MapSet.member?(@special_forms, name) ->
+        "Undefined variable: #{var_str}. Hint: '#{var_str}' is a special form, use (#{var_str} ...) with parentheses"
+
+      # Check for common Clojure/Java functions not in PTC-Lisp
+      alt = Map.get(@clojure_alternatives, var_str) ->
+        "Undefined variable: #{var_str}. Not available in PTC-Lisp — #{alt}"
+
+      # Check for common underscore/hyphen confusion
+      String.contains?(var_str, "_") ->
+        suggested = String.replace(var_str, "_", "-")
+        "Undefined variable: #{var_str}. Hint: Use hyphens not underscores (try: #{suggested})"
+
+      # Try to find similar builtin names
+      suggestion = find_similar_builtin(name) ->
+        "Undefined variable: #{var_str}. Did you mean: #{suggestion}"
+
+      true ->
+        "Undefined variable: #{var_str}"
+    end
+  end
+
+  def format_closure_error(reason), do: "closure error: #{inspect(reason)}"
+
+  # Find a similar builtin name using Jaro distance + heuristics
+  defp find_similar_builtin(name) do
+    name_str = to_string(name)
+    builtins = Env.initial() |> Map.keys() |> Enum.map(&to_string/1)
+
+    # Score each builtin: higher is better
+    scored =
+      builtins
+      |> Enum.map(fn builtin ->
+        jaro = String.jaro_distance(name_str, builtin)
+        # Bonus for same sorted characters (catches transpositions like "mpa" -> "map")
+        same_chars_bonus = if sorted_chars(name_str) == sorted_chars(builtin), do: 0.3, else: 0
+        # Bonus for similar length (penalize long suggestions for short input)
+        len_diff = abs(String.length(name_str) - String.length(builtin))
+        len_penalty = len_diff * 0.05
+        score = jaro + same_chars_bonus - len_penalty
+        {builtin, score, jaro}
+      end)
+      |> Enum.filter(fn {_builtin, score, jaro} -> score > 0.8 or jaro > 0.85 end)
+      |> Enum.max_by(fn {_builtin, score, _jaro} -> score end, fn -> nil end)
+
+    case scored do
+      {builtin, _score, _jaro} -> builtin
+      nil -> nil
+    end
+  end
+
+  defp sorted_chars(str) do
+    str |> String.graphemes() |> Enum.sort()
+  end
+
+  # Extract function name from function reference
+  defp function_name(fun) when is_function(fun) do
+    case Function.info(fun, :name) do
+      {:name, name} -> name
+      _ -> :unknown
+    end
+  end
+end
