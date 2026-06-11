@@ -345,10 +345,10 @@ pub fn dashboard(
 			let current = totals.get(&item.state).and_then(Value::as_u64).unwrap_or(0);
 			totals.insert(item.state.clone(), json!(current + 1));
 			if item.state == "DOING" || item.state == "REVIEW" {
-				in_progress.push((*item).clone());
+				in_progress.push(dashboard_ref(item));
 			}
 			if item.state == "BLOCKED" {
-				blocked.push((*item).clone());
+				blocked.push(dashboard_ref(item));
 			}
 		}
 		category_outputs.push(json!({
@@ -463,6 +463,28 @@ fn duplicate_id_locations(items: &[OrgItem]) -> BTreeMap<String, Vec<OrgIndexLoc
 		.collect()
 }
 
+/// Body-less projection of an item for dashboard lists (BUG-426).
+///
+/// A dashboard is metrics + actionable identity, never content: embedding full
+/// `OrgItem`s (each carrying the entire org body, recursively through
+/// `children`) made the dashboard payload unbounded — large enough to OOM the
+/// `execute` sandbox once FEAT-789 exposed raw results as `data`. Trimming at
+/// the source makes the lean shape the single truth for every consumer
+/// (TUI render, data channel, NAPI serialization). This mirrors the
+/// `includeBody: false` default the other list commands (query/graph/wave)
+/// already honor.
+fn dashboard_ref(item: &OrgItem) -> Value {
+	json!({
+		"id": item.id,
+		"title": item.title,
+		"state": item.state,
+		"category": item.category,
+		"file": item.file,
+		"line": item.line,
+		"priority": item.priority(),
+	})
+}
+
 fn strip_body(item: &mut OrgItem) {
 	item.body = None;
 	for child in &mut item.children {
@@ -499,4 +521,86 @@ pub fn fingerprint_hash(entry: &OrgIndexEntry) -> u64 {
 
 pub fn git_head(root: &Path) -> Option<String> {
 	read_git_head(root)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn persisted_item(id: &str, state: &str, body_bytes: usize) -> PersistedOrgItem {
+		PersistedOrgItem {
+			id:         id.to_string(),
+			title:      format!("title {id}"),
+			state:      state.to_string(),
+			category:   "tasks".to_string(),
+			dir:        "!tasks".to_string(),
+			file:       format!("/tmp/{id}.org"),
+			line:       1,
+			level:      0,
+			properties: HashMap::from([("PRIORITY".to_string(), "#A".to_string())]),
+			body:       Some("x".repeat(body_bytes)),
+			clocks:     Vec::new(),
+			byte_range: (0, 0),
+			children:   Vec::new(),
+			relations:  Vec::new(),
+		}
+	}
+
+	fn entry_with(items: Vec<PersistedOrgItem>) -> OrgIndexEntry {
+		OrgIndexEntry::new(
+			OrgIndex {
+				root: PathBuf::from("/tmp"),
+				generated_at_ms: 0,
+				items,
+				duplicate_ids: BTreeMap::new(),
+			},
+			WorkspaceFingerprint {
+				root:     PathBuf::from("/tmp"),
+				git_head: None,
+				files:    BTreeMap::new(),
+			},
+		)
+	}
+
+	/// BUG-426: dashboard inProgress/blocked must be body-less refs, bounded
+	/// regardless of org body sizes — full bodies OOM'd the execute sandbox.
+	#[test]
+	fn dashboard_items_are_bodyless_refs() {
+		let entry = entry_with(vec![
+			persisted_item("FEAT-1", "DOING", 64 * 1024),
+			persisted_item("BUG-2", "BLOCKED", 64 * 1024),
+			persisted_item("FEAT-3", "ITEM", 64 * 1024),
+		]);
+		let categories = vec![OrgCategoryInput {
+			abs_path: PathBuf::from("/tmp/!tasks"),
+			name:     "tasks".to_string(),
+			dir:      "!tasks".to_string(),
+			prefix:   "FEAT".to_string(),
+		}];
+
+		let value = dashboard(&entry, &categories, &["ITEM", "DOING", "BLOCKED", "DONE"]);
+
+		let in_progress = value["inProgress"].as_array().expect("inProgress array");
+		let blocked = value["blocked"].as_array().expect("blocked array");
+		assert_eq!(in_progress.len(), 1);
+		assert_eq!(blocked.len(), 1);
+
+		for item in in_progress.iter().chain(blocked) {
+			assert!(item.get("body").is_none(), "dashboard ref must not carry body");
+			assert!(item.get("children").is_none(), "dashboard ref must not carry children");
+			assert!(item["id"].is_string());
+			assert!(item["title"].is_string());
+			assert!(item["file"].is_string());
+			assert!(item["line"].is_number());
+			assert_eq!(item["priority"], json!("A"), "priority normalized without '#'");
+		}
+
+		// The whole payload stays bounded even with fat bodies in the index.
+		let serialized = serde_json::to_string(&value).expect("serializable");
+		assert!(
+			serialized.len() < 8 * 1024,
+			"dashboard payload must not scale with body size (got {} bytes)",
+			serialized.len()
+		);
+	}
 }

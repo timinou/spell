@@ -11,7 +11,7 @@ import { existsSync } from "node:fs";
 import * as path from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { AgentToolResult } from "@spell/pi-agent-core";
-import { ExecuteTool } from "./execute";
+import { ExecuteTool, resolveMaxHeapWords } from "./execute";
 import { DEFAULT_POLICY, PERMISSIVE_POLICY } from "./policy";
 import type { DispatchableTool, ToolProvider } from "./tool-dispatch";
 
@@ -179,4 +179,36 @@ d("ExecuteTool (real BEAM, injected provider)", () => {
 			await tool.dispose();
 		}
 	}, 60_000);
+});
+
+// Pure resolver — no BEAM needed (FEAT-791).
+describe("resolveMaxHeapWords", () => {
+	const MB = (n: number) => Math.floor((n * 1024 * 1024) / 8);
+
+	it("returns undefined when neither setting nor request deviates (runtime default applies)", () => {
+		expect(resolveMaxHeapWords(0)).toBeUndefined();
+	});
+
+	it("setting raises the ceiling for every program", () => {
+		expect(resolveMaxHeapWords(64)).toBe(MB(64));
+	});
+
+	it("per-call request clamps to the operator setting", () => {
+		expect(resolveMaxHeapWords(64, 128)).toBe(MB(64));
+		expect(resolveMaxHeapWords(64, 16)).toBe(MB(16));
+	});
+
+	it("without a setting, a request can only tighten below the runtime default", () => {
+		expect(resolveMaxHeapWords(0, 200)).toBe(MB(50));
+		expect(resolveMaxHeapWords(0, 8)).toBe(MB(8));
+	});
+
+	it("hard-caps at 256MB regardless of setting size (typo guard)", () => {
+		expect(resolveMaxHeapWords(10_000)).toBe(MB(256));
+		expect(resolveMaxHeapWords(10_000, 9_999)).toBe(MB(256));
+	});
+
+	it("floors a sub-1MB request to 1MB", () => {
+		expect(resolveMaxHeapWords(64, 0)).toBe(MB(1));
+	});
 });

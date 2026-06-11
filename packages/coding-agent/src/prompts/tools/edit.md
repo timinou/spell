@@ -140,7 +140,7 @@ Escape literal `$` as `$$`. JS `${…}` passes through untouched.
 | wrap in try/catch          | "f.ts::risky"                           | replace · content:"try { $BODY } catch(e){…}" |
 | find/replace in file       | "f.ts"                                  | replace · find, content                       |
 | literal find/replace       | "f.ts"                                  | replace · find, content, matching:"raw"       |
-| structural replace ∀ files | "src/**/*.ts::§call[name=console.log]"  | replace · content:"logger.info($1)"           |
+| structural replace ∀ files | "src/**/*.ts::§call[name=console.log]"  | replace · content:"logger.info$2" (keeps args)  |
 | append to file             | "f.ts"                                  | replace · place:"end", content                |
 | insert after line 40       | "f.ts"                                  | replace · place:"after", at:40, content       |
 | insert after a symbol      | "f.ts::foo"                             | replace · place:"after", content              |

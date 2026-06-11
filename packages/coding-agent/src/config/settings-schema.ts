@@ -328,6 +328,19 @@ export const SETTINGS_SCHEMA = {
 			submenu: true,
 		},
 	},
+	"tools.executeSessionStoreMb": {
+		type: "number",
+		default: 0,
+		ui: {
+			tab: "tools",
+			label: "Execute session store max (MB)",
+			description:
+				"Ceiling for the session-scoped data store (session bucket); 0 = runtime default 64MB",
+			submenu: true,
+			tooltip: true,
+		},
+	},
+
 	"tools.getSpillThreshold": {
 		type: "number",
 		default: 25000,

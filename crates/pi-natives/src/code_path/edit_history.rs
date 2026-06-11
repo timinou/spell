@@ -84,11 +84,85 @@ impl HistoryQuery {
 }
 
 /// Result of a revert operation.
+///
+/// `Success` carries the *effective* change the operation produced so callers
+/// can render a diff cell (PLAN-332 Thesis D / FEAT-809): for `revert` the
+/// effective diff is after→before (the recorded diff, reversed); for `reapply`
+/// it is before→after (the recorded diff as-is). `file` is the absolute path
+/// that changed, for the cell title.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RevertOutcome {
-	Success { entry_id: String },
+	Success { entry_id: String, file: PathBuf, diff: String },
 	NotFound,
 	Error(String),
+}
+
+/// Reverse a recorded edit diff: swap `+`/`-` line prefixes and the two sides
+/// of each `@@ -a,b +c,d @@` header, turning a before→after diff into the
+/// effective undo diff (after→before).
+///
+/// Recorded diffs come solely from `pi_code_engine::diff_lines`, which emits
+/// ONLY `@@` hunk headers and bare `+`/`-` content lines — never `---`/`+++`
+/// file headers. We deliberately do NOT special-case `--- `/`+++ `: a removed
+/// source line whose text begins with `-- ` (Lua/SQL/Haskell comment)
+/// serialises to a diff line `--- …`, and treating that as a file header would
+/// corrupt it (wrong sign, dropped prefix). The generic single-char `+`/`-`
+/// branches reverse every content line correctly, headers included. Context
+/// lines (leading space) and any other line pass through unchanged.
+pub(crate) fn reverse_unified_diff(diff: &str) -> String {
+	let mut out = String::with_capacity(diff.len());
+	// BUG-459: a change block lists removals (`-`) before additions (`+`) by
+	// unified-diff convention. Reversing must preserve that ordering, so we
+	// can't just swap signs in place (that would emit `+`-before-`-`). Instead
+	// we buffer each contiguous run of +/- lines and, on flush, emit the
+	// formerly-`+` lines (now `-`) first, then the formerly-`-` lines (now `+`).
+	let mut pending_minus: Vec<String> = Vec::new(); // become `-` (were `+`)
+	let mut pending_plus: Vec<String> = Vec::new(); // become `+` (were `-`)
+
+	let flush = |out: &mut String, minus: &mut Vec<String>, plus: &mut Vec<String>| {
+		for l in minus.drain(..) {
+			out.push_str(&l);
+		}
+		for l in plus.drain(..) {
+			out.push_str(&l);
+		}
+	};
+
+	for line in diff.split_inclusive('\n') {
+		let (body, nl) = match line.strip_suffix('\n') {
+			Some(b) => (b, "\n"),
+			None => (line, ""),
+		};
+		if let Some(rest) = body.strip_prefix("@@ ") {
+			// A hunk header ends the current change block.
+			flush(&mut out, &mut pending_minus, &mut pending_plus);
+			// `@@ -a,b +c,d @@` → `@@ -c,d +a,b @@`
+			if let Some(close) = rest.find(" @@") {
+				let ranges = &rest[..close];
+				let tail = &rest[close..];
+				let parts: Vec<&str> = ranges.split(' ').collect();
+				if parts.len() == 2
+					&& let (Some(minus), Some(plus)) =
+						(parts[0].strip_prefix('-'), parts[1].strip_prefix('+'))
+				{
+					out.push_str(&format!("@@ -{plus} +{minus}{tail}{nl}"));
+					continue;
+				}
+			}
+			out.push_str(line);
+		} else if let Some(rest) = body.strip_prefix('+') {
+			pending_minus.push(format!("-{rest}{nl}"));
+		} else if let Some(rest) = body.strip_prefix('-') {
+			pending_plus.push(format!("+{rest}{nl}"));
+		} else {
+			// Context (leading space) or any other line ends the change block
+			// and passes through unchanged.
+			flush(&mut out, &mut pending_minus, &mut pending_plus);
+			out.push_str(line);
+		}
+	}
+	flush(&mut out, &mut pending_minus, &mut pending_plus);
+	out
 }
 
 /// Storage backend for edit history.
@@ -253,9 +327,12 @@ impl EditHistory for JsonlHistory {
 			return RevertOutcome::Error(format!("write failed: {e}"));
 		}
 		let entry_id = entry.id.clone();
+		// Effective change of an undo is after→before: reverse the recorded diff.
+		let effective_diff = reverse_unified_diff(&entry.diff);
+		let file_path = entry.file.clone();
 		entries[idx].reverted = true;
 		self.write_all(&entries);
-		RevertOutcome::Success { entry_id }
+		RevertOutcome::Success { entry_id, file: file_path, diff: effective_diff }
 	}
 
 	fn reapply(&self, q: HistoryQuery) -> RevertOutcome {
@@ -308,9 +385,12 @@ impl EditHistory for JsonlHistory {
 			return RevertOutcome::Error(format!("write failed: {e}"));
 		}
 		let entry_id = entry.id.clone();
+		// Effective change of a redo is before→after: the recorded diff as-is.
+		let effective_diff = entry.diff.clone();
+		let file_path = entry.file.clone();
 		entries[idx].reverted = false;
 		self.write_all(&entries);
-		RevertOutcome::Success { entry_id }
+		RevertOutcome::Success { entry_id, file: file_path, diff: effective_diff }
 	}
 }
 
@@ -428,5 +508,71 @@ mod tests {
 		);
 		assert_eq!(r.len(), 1);
 		assert!(r[0].commit.is_none());
+	}
+
+	// PLAN-332 Thesis D / FEAT-809: undo/redo surface the effective diff.
+	#[test]
+	fn reverse_unified_diff_swaps_signs_and_ranges() {
+		// Recorded diffs are headerless (only `@@` + bare `+`/`-` lines).
+		let forward = "@@ -1,2 +1,2 @@\n-old line\n+new line\n ctx\n";
+		let reversed = reverse_unified_diff(forward);
+		// BUG-459: the reversed hunk keeps unified-diff order — removals (`-`)
+		// before additions (`+`) — so the formerly-`+` line becomes the leading
+		// `-` and the formerly-`-` line becomes the trailing `+`.
+		assert_eq!(reversed, "@@ -1,2 +1,2 @@\n-new line\n+old line\n ctx\n");
+		// Reversing twice is the identity (both sides are well-formed minus-first).
+		assert_eq!(reverse_unified_diff(&reversed), forward);
+	}
+
+	// Review P2 regression: a removed/added source line whose TEXT begins with
+	// `-- ` / `++ ` must NOT be mistaken for a `---`/`+++` file header. The
+	// reversed line keeps its content; only the leading diff sign flips.
+	#[test]
+	fn reverse_unified_diff_preserves_comment_content_lines() {
+		// `-- note` is a Lua/SQL/Haskell comment; in a forward diff the removed
+		// line serialises as `--- note` (diff sign `-` + text `-- note`).
+		let forward = "@@ -1 +1 @@\n--- note\n+++ kept\n";
+		let reversed = reverse_unified_diff(forward);
+		// Undo flips signs AND keeps minus-first order (BUG-459): the formerly-`+`
+		// line (`+++ kept`) becomes the leading `-++ kept`, the formerly-`-` line
+		// (`--- note`) becomes the trailing `+-- note`. Crucially the CONTENT
+		// (`++ kept`, `-- note`) is preserved — not mistaken for a file header.
+		assert_eq!(reversed, "@@ -1 +1 @@\n-++ kept\n+-- note\n");
+		assert_eq!(reverse_unified_diff(&reversed), forward);
+	}
+
+	// BUG-459: a multi-line change block must reverse to minus-first order — all
+	// removals before all additions — not interleaved or plus-first.
+	#[test]
+	fn reverse_unified_diff_multiline_block_is_minus_first() {
+		let forward = "@@ -1,3 +1,3 @@\n-a\n-b\n+x\n+y\n";
+		let reversed = reverse_unified_diff(forward);
+		assert_eq!(reversed, "@@ -1,3 +1,3 @@\n-x\n-y\n+a\n+b\n");
+		assert_eq!(reverse_unified_diff(&reversed), forward);
+	}
+
+	#[test]
+	fn revert_returns_effective_after_to_before_diff() {
+		let tmp = std::env::temp_dir();
+		let f = tmp.join(format!("history-diff-{}.txt", std::process::id()));
+		std::fs::write(&f, "AFTER\n").unwrap();
+		let h = JsonlHistory::in_memory();
+		let mut e = entry("S1", f.to_str().unwrap());
+		e.before = "BEFORE\n".into();
+		e.after = "AFTER\n".into();
+		e.diff = "@@ -1 +1 @@\n-BEFORE\n+AFTER\n".into();
+		h.record(e);
+		let out = h.revert(HistoryQuery::default().session_id("S1"));
+		match out {
+			RevertOutcome::Success { diff, file, .. } => {
+				// Undo's effective diff is after→before: signs flipped.
+				assert!(diff.contains("+BEFORE"), "diff: {diff}");
+				assert!(diff.contains("-AFTER"), "diff: {diff}");
+				assert_eq!(file, f);
+			},
+			other => panic!("expected Success, got {other:?}"),
+		}
+		assert_eq!(std::fs::read_to_string(&f).unwrap(), "BEFORE\n");
+		let _ = std::fs::remove_file(&f);
 	}
 }

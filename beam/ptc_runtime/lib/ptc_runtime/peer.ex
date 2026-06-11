@@ -56,6 +56,7 @@ defmodule PtcRuntime.Peer do
   use GenServer
   require Logger
 
+  alias PtcRunner.Lisp.HandleStore
   alias PtcRuntime.Bridge
 
   @type writer :: (iodata() -> :ok)
@@ -78,11 +79,30 @@ defmodule PtcRuntime.Peer do
 
 
   # Default sandbox max heap in words (50 MB / 8 bytes-per-word).
-  # Overridable per-session via the Peer start_link :max_heap opt.
+  # Overridable per-session via the Peer start_link :max_heap opt, and
+  # per-execute via the `max_heap` request param (FEAT-791) — clamped to
+  # @max_heap_ceiling so a malformed frame can't exhaust the host.
   @default_max_heap 6_250_000
+  # Absolute per-execute heap ceiling in words (256 MB / 8 bytes-per-word).
+  @max_heap_ceiling 33_554_432
   # How long a single tool_call may wait for Node before the worker gives up.
   # Generous: Node may itself be doing slow IO (bash, network).
   @tool_call_timeout 120_000
+
+  # SPELL PATCH-3 (D-2): a decoded tool result whose serialized size reaches
+  # this many BYTES is PARKED in the HandleStore and replied as a small handle,
+  # so it never copies onto the sandbox worker's heap. Measured with
+  # `:erlang.external_size/1`, which counts off-heap binary payloads (string
+  # bodies) — the BUG-426 dashboard is mostly those. Below the threshold the
+  # result is replied verbatim (no handle ceremony for the common small case).
+  @handle_park_bytes 262_144
+
+  # SPELL PATCH-4 (D-6): the persistent HandleStore bucket for bound large
+  # values. Never released by an execute teardown (those release a numeric
+  # exec id); swept only at peer/BEAM exit. A bound handle re-homed here keeps
+  # the D-2 offload benefit across executes instead of being realized into a
+  # compile-heap-blowing term.
+  @session_bucket :__session_bindings__
 
   defmodule State do
     @moduledoc false
@@ -103,7 +123,15 @@ defmodule PtcRuntime.Peer do
               max_heap: nil,
               worker_max_heap: nil,
               max_parallel_workers: nil,
-              max_concurrent_executes: nil
+              max_concurrent_executes: nil,
+              # SPELL PATCH-4 (D-6): session bindings. `(def x v)` in one execute
+              # persists `v` here; the next execute resolves `x` from it. Reuses
+              # ptc_runner's existing def→memory machinery rather than a parallel
+              # `bind/` namespace. A cache, never durable truth: lost on respawn
+              # (the agent re-binds by re-running). Values are realized (handles
+              # are exec-scoped and released at teardown), so a bound value is
+              # always a plain term.
+              memory: %{}
   end
 
   # -------------------------------------------------------------------------
@@ -188,7 +216,9 @@ defmodule PtcRuntime.Peer do
          %{
            st
            | next_id: id + 1,
-             pending: Map.put(st.pending, id, {from, mref}),
+             # Carry `exec_id` (PATCH-3) so a parked response handle is filed
+             # under the originating execute's GC bucket.
+             pending: Map.put(st.pending, id, {from, mref, exec_id}),
              callers: Map.put(st.callers, mref, id)
          }}
 
@@ -217,7 +247,7 @@ defmodule PtcRuntime.Peer do
   end
 
   # An execute proc finished. Reply to its request id.
-  def handle_info({:execute_done, id, result}, %State{} = st) do
+  def handle_info({:execute_done, id, result, memory}, %State{} = st) do
     case result do
       {:ok, value} ->
         write(st, result_frame(id, value))
@@ -225,6 +255,46 @@ defmodule PtcRuntime.Peer do
       {:error, frame} ->
         write(st, error_frame(id, @code_execute_failed, frame.message, frame.data))
     end
+
+    # SPELL PATCH-4 (D-6): persist this execute's bindings (`def`s) for the next
+    # one. Only a successful, encodable run returns non-nil memory; a failed or
+    # crashed program leaves bindings untouched. Capture happens in the
+    # serialized GenServer, so concurrent executes can't interleave the merge.
+    #
+    # CRITICAL handle interaction: a `(def x (tool/big {}))` binds a HANDLE whose
+    # term is released below at this execute's teardown — the next execute would
+    # see a stale handle. We re-home such handles into a persistent session
+    # bucket (@session_bucket, never released) so the binding stays a small
+    # handle and the NEXT execute seeds it without copying a multi-MB term onto
+    # the bounded compile heap (which would OOM the compile phase). A bound
+    # large value thus keeps the D-2 offload benefit across executes.
+    # MERGE (not replace) the new bindings into session memory: two concurrent
+    # executes binding DIFFERENT names must both survive. The seed is a
+    # snapshot at spawn, so the just-finished execute's `memory` already
+    # contains the bindings it saw plus its own new ones; merging it over the
+    # current `st.memory` keeps any binding a concurrently-completed execute
+    # committed in between. Same-name conflicts resolve last-completed-wins.
+    st =
+      if is_map(memory),
+        do: %{st | memory: Map.merge(st.memory, persist_bindings(memory))},
+        else: st
+
+    # SPELL PATCH-3 / W2b (D-2/D-7): record how much this execute offloaded —
+    # the observable proof handles kept N bytes off the sandbox heap — then
+    # drop every value it parked. One bucket sweep, no per-handle bookkeeping;
+    # idempotent. A handle can't escape its execute: the result is encoded
+    # inside the rescued execute proc (ensure_encodable) before reaching here,
+    # and a Handle struct is not JSON-encodable, so a raw-handle return already
+    # fails as an unencodable return rather than leaking a stale ref.
+    case HandleStore.stats(HandleStore, id) do
+      %{count: n, bytes: bytes} when n > 0 ->
+        Logger.info("execute #{id} offloaded #{n} value(s), #{bytes} bytes kept off sandbox heap")
+
+      _ ->
+        :ok
+    end
+
+    HandleStore.release(HandleStore, id)
 
     {:noreply, st}
   end
@@ -273,12 +343,15 @@ defmodule PtcRuntime.Peer do
         Logger.warning("response for unknown id #{inspect(id)}")
         st
 
-      {{from, mref}, pending} ->
+      {{from, mref, exec_id}, pending} ->
         Process.demonitor(mref, [:flush])
 
         reply =
           case msg do
-            %{"result" => r} -> {:ok, r}
+            # SPELL PATCH-3 (D-2): park a large result HERE, before the reply
+            # copies it onto the sandbox worker's heap (the E1 OOM point). The
+            # worker receives a small handle; the term stays in the store.
+            %{"result" => r} -> {:ok, maybe_park(r, exec_id)}
             %{"error" => e} -> {:error, e}
           end
 
@@ -301,6 +374,17 @@ defmodule PtcRuntime.Peer do
   defp handle_request("init", id, params, %State{} = st) do
     catalog = Map.get(params, "catalog", %{})
     tools = Bridge.build_tools(catalog, self())
+
+    # PATCH-5: configure the session-store ceiling from the Node-side setting.
+    # `sessionStoreBytes` is the operator's ceiling in bytes (converted from MB
+    # at the Node boundary); a nil/absent value leaves the runtime default (64 MB).
+    case Map.get(params, "sessionStoreBytes") do
+      ceiling when is_integer(ceiling) and ceiling > 0 ->
+        HandleStore.configure(HandleStore, ceiling)
+
+      _ ->
+        :ok
+    end
 
     write(
       st,
@@ -344,15 +428,40 @@ defmodule PtcRuntime.Peer do
       # this execute's id (PLAN-324). The init-time `st.tools` (exec_id nil) is
       # only used for the names probe; real calls run under an id-bound map.
       exec_tools = Bridge.build_tools(st.catalog || %{}, peer, id)
-      run_opts = execute_opts(params, exec_tools, st)
+      # SPELL PATCH-4 (D-6): seed this execute with the session's bound memory
+      # (a snapshot at spawn). `(def x v)` in the program adds to it; the new
+      # memory is captured on completion. The GenServer serializes the capture,
+      # so concurrent executes can't corrupt the merge — last-completed wins
+      # (acceptable for a sequential REPL-style binding cache).
+      run_opts = execute_opts(params, exec_tools, st, id) |> Keyword.put(:memory, st.memory)
 
       {_pid, ref} =
         spawn_monitor(fn ->
-          send(peer, {:execute_done, id, run_program(program, run_opts)})
+          {wire_result, memory} = run_program(program, run_opts)
+          send(peer, {:execute_done, id, wire_result, memory})
         end)
 
       %{st | tasks: Map.put(st.tasks, ref, id)}
     end
+  end
+
+  # Parse-only validation (W4 / FEAT-810): check a program parses and references
+  # no unknown builtins/vars, running ZERO tool calls and ZERO effects. Used at
+  # STORE time for a stored program so a typo can never be persisted as a live
+  # tile and then fail effectfully on a later re-run. Available pre-init (it
+  # touches no catalog state). Returns `{ok: true}` or `{ok: false, errors: [..]}`
+  # where errors carry the same "Did you mean" hints as the in-band gate.
+  defp handle_request("validate", id, params, %State{} = st) do
+    program = Map.get(params, "program", "")
+
+    result =
+      case PtcRunner.Lisp.validate(program) do
+        :ok -> %{"ok" => true}
+        {:error, errors} -> %{"ok" => false, "errors" => errors}
+      end
+
+    write(st, result_frame(id, result))
+    st
   end
 
   defp handle_request(method, id, _params, %State{} = st) do
@@ -364,28 +473,45 @@ defmodule PtcRuntime.Peer do
   # Program execution (PtcRunner.Lisp.run wrapper)
   # -------------------------------------------------------------------------
 
+  # Returns `{wire_result, memory}`: the wire_result is the JSON-RPC payload
+  # (encodable value or error map); `memory` is the program's post-run
+  # `step.memory` to persist as session bindings (SPELL PATCH-4), or `nil` to
+  # leave bindings unchanged (a failed/crashed program does not mutate them).
   @spec run_program(String.t(), keyword()) ::
-          {:ok, term()} | {:error, %{message: String.t(), data: map()}}
+          {{:ok, term()} | {:error, %{message: String.t(), data: map()}}, map() | nil}
   defp run_program(program, opts) do
     case PtcRunner.Lisp.run(program, opts) do
       {:ok, step} ->
-        ensure_encodable(step.return)
+        # A SUCCESSFUL run commits its bindings regardless of whether the
+        # RETURN encodes — `(def x v)` returns a non-encodable Var (`#'x`) yet
+        # is the canonical way to bind, so binding capture must not hinge on
+        # return encodability. The wire still gets the unencodable error when
+        # the return itself can't serialize.
+        #
+        # EXCEPTION: a program that ended via `(fail ...)` returns the
+        # `{:__ptc_fail__, _}` signal in the :ok tuple (a logical failure, not
+        # a crash). Its `def`s must NOT commit — a failed program leaves
+        # bindings untouched, same as the `{:error, step}` path.
+        case step.return do
+          {:__ptc_fail__, _} -> {ensure_encodable(step.return), nil}
+          _ -> {ensure_encodable(step.return), step.memory}
+        end
 
       {:error, step} ->
         fail = step.fail || %{}
 
-        {:error,
-         %{
-           message: Map.get(fail, :message) || "execution failed",
-           data: %{
-             "reason" => to_string(Map.get(fail, :reason) || "unknown"),
-             "usage" => safe_usage(step)
-           }
-         }}
+        {{:error,
+          %{
+            message: Map.get(fail, :message) || "execution failed",
+            data: %{
+              "reason" => to_string(Map.get(fail, :reason) || "unknown"),
+              "usage" => safe_usage(step)
+            }
+          }}, nil}
     end
   rescue
     e ->
-      {:error, %{message: Exception.message(e), data: %{"reason" => "exception"}}}
+      {{:error, %{message: Exception.message(e), data: %{"reason" => "exception"}}}, nil}
   end
 
   # A program may return a value Jason cannot encode (e.g. a closure from
@@ -418,16 +544,93 @@ defmodule PtcRuntime.Peer do
 
   # Translate execute params into PtcRunner.Lisp.run/2 options. Caps are clamped
   # to defensible ceilings; the program cannot ask for unbounded wall time.
-  defp execute_opts(params, tools, %State{} = st) do
+  defp execute_opts(params, tools, %State{} = st, exec_id) do
     timeout = params |> Map.get("timeout_ms", 1_000) |> clamp(1, 30_000)
 
     [tools: tools, timeout: timeout, caller: :in_process_v1]
     |> maybe_put(:context, Map.get(params, "context"))
     |> maybe_put(:signature, Map.get(params, "signature"))
     # (max_parallel_workers 8, max_heap = 6_250_000 words ~50MB).
-    |> maybe_put(:max_heap, st.max_heap)
+    |> maybe_put(:max_heap, request_max_heap(params, st))
     |> maybe_put(:worker_max_heap, st.worker_max_heap)
     |> maybe_put(:max_parallel_workers, st.max_parallel_workers)
+    # SPELL PATCH-3 (D-2): hand the sandbox the store + this execute's GC bucket
+    # so handle-aware builtins can project parked tool results in-place.
+    |> Keyword.put(:handle_store, HandleStore)
+    |> Keyword.put(:exec_id, exec_id)
+  end
+
+  # Re-home any %Handle{} bound in `memory` (SPELL PATCH-4) into the persistent
+  # session bucket before its per-execute bucket is released, so the binding
+  # survives as a SMALL handle (not a realized multi-MB term that would OOM the
+  # next execute's bounded compile phase). A stale handle (already gone)
+  # degrades to nil rather than crashing the session. Shallow over the binding
+  # map's top-level values — the common `(def x (tool/...))` shape.
+  #
+  # The session bucket is never released by an execute; it is swept whole at
+  # peer teardown (the BEAM exit drops the store). A rebind of the same name
+  # leaves the prior term in the bucket until teardown — a bounded, session-
+  # scoped cost acceptable for an interactive binding cache.
+  defp persist_bindings(memory) do
+    Map.new(memory, fn
+      {k, %PtcRunner.Lisp.Handle{} = h} ->
+        case HandleStore.rehome(HandleStore, h, @session_bucket) do
+          {:ok, rehomed} ->
+            {k, rehomed}
+
+          {:error, :stale_handle} ->
+            {k, nil}
+
+          # The handle was already EVICTED by the reaper (session store hit its
+          # ceiling). Keep the original handle as a stable tombstone so a later
+          # read of this binding hits the loud evicted error again, rather than
+          # crashing the Peer (CaseClauseError) or collapsing to a silent nil.
+          {:error, {:evicted, _id}} ->
+            {k, h}
+        end
+
+      {k, v} ->
+        # A LARGE in-program-computed binding (e.g. `(def x <multi-MB list>)`,
+        # never a tool result, so it was never parked) would be seeded verbatim
+        # into the NEXT execute's bounded compile heap (~10MB, smaller than the
+        # 50MB execute heap) and OOM it — poisoning EVERY later execute until
+        # respawn. Park such a value into the session bucket so the binding is a
+        # small handle on the compile heap, projected lazily. Small values pass
+        # through unchanged.
+        if (is_map(v) or is_list(v) or is_binary(v)) and
+             :erlang.external_size(v) >= @handle_park_bytes do
+          {k, HandleStore.put(HandleStore, v, @session_bucket)}
+        else
+          {k, v}
+        end
+    end)
+  end
+
+  # Park a large tool result in the HandleStore (returning a small handle) or
+  # pass a small result through verbatim. Threshold in flat words (~256KB).
+  # A handle escaping into a non-encodable wire position can't happen: results
+  # are only parked on the path to a sandbox worker, never the execute reply.
+  defp maybe_park(result, exec_id)
+       when (is_map(result) or is_list(result) or is_binary(result)) and exec_id != nil do
+    if :erlang.external_size(result) >= @handle_park_bytes do
+      HandleStore.put(HandleStore, result, exec_id)
+    else
+      result
+    end
+  end
+
+  defp maybe_park(result, _exec_id), do: result
+
+  # Per-execute heap ceiling (FEAT-791): a positive-integer `max_heap` param
+  # (in WORDS — Node converts from MB at its boundary) overrides the session
+  # default for this one program, clamped to @max_heap_ceiling. Node already
+  # enforces its operator-setting ceiling; this clamp is defense in depth
+  # against a malformed/hostile frame. Non-integer or missing → session state.
+  defp request_max_heap(params, %State{} = st) do
+    case Map.get(params, "max_heap") do
+      n when is_integer(n) and n > 0 -> min(n, @max_heap_ceiling)
+      _ -> st.max_heap
+    end
   end
 
   defp maybe_put(opts, _k, nil), do: opts

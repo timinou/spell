@@ -16,19 +16,7 @@ pub fn eval(pred: &Predicate, node: &Node, src: &str, dialect: &LanguageDialect)
 			.any(|a| a.name == name.as_str() && (a.matcher)(node, src)),
 		Predicate::Attribute { name, value } => {
 			if name == "name" {
-				if let Some(child) = node.child_by_field_name("name") {
-					if let Some(text) = src.get(child.start_byte()..child.end_byte()) {
-						if text == value.as_str() {
-							return true;
-						}
-					}
-				}
-				if let Some(text) = src.get(node.start_byte()..node.end_byte()) {
-					if text == value.as_str() {
-						return true;
-					}
-				}
-				return false;
+				return matches_name_attribute(node, src, value);
 			}
 			// v1: accept all non-"name" attributes.
 			true
@@ -60,4 +48,33 @@ pub fn eval(pred: &Predicate, node: &Node, src: &str, dialect: &LanguageDialect)
 			true
 		},
 	}
+}
+/// Match a `[name=VALUE]` attribute predicate against a node.
+///
+/// Resolution order, first hit wins:
+/// 1. `name` field (declarations: fn/class/struct/var with a name child).
+/// 2. callee field — `function` (TS/JS/Py/Go `call_expression`, Rust
+///    `call_expression`) or `macro` (Rust `macro_invocation`). This is what
+///    makes `§call[name=console.log]` resolve: a call has no `name` field, its
+///    callee lives in the `function`/`macro` field.
+/// 3. full-node text (last resort for leaf nodes whose identity == their text).
+fn matches_name_attribute(node: &Node, src: &str, value: &str) -> bool {
+	let text_of = |n: &Node| src.get(n.start_byte()..n.end_byte());
+
+	if let Some(child) = node.child_by_field_name("name")
+		&& text_of(&child) == Some(value)
+	{
+		return true;
+	}
+
+	// Callee of a call/macro lives in the `function`/`macro` field, not `name`.
+	for field in ["function", "macro"] {
+		if let Some(callee) = node.child_by_field_name(field)
+			&& text_of(&callee) == Some(value)
+		{
+			return true;
+		}
+	}
+
+	text_of(node) == Some(value)
 }

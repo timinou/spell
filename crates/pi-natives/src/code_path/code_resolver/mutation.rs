@@ -80,10 +80,7 @@ pub(crate) fn build_target_id(
 /// `scope` field, so `resolve_symbol` must see the bare `file::Symbol` to
 /// match the declaration. Rendering `foo#body` verbatim would make the symbol
 /// lookup fail with "Symbol 'foo#body' not found".
-pub(crate) fn build_target_id_lenient(
-	path: &CodePath,
-	root: Option<&std::path::Path>,
-) -> String {
+pub(crate) fn build_target_id_lenient(path: &CodePath, root: Option<&std::path::Path>) -> String {
 	build_target_id_allow_qualifiers(path, root).unwrap_or_default()
 }
 
@@ -322,7 +319,6 @@ fn edit_err_message(e: &pi_code_engine::CodeEngineError) -> String {
 	}
 }
 
-
 impl CodeResolverImpl {
 	/// Resolve a CodePath target to a scoped TextEdit, bypassing the legacy
 	/// `build_target_id → resolve_symbol → single_action` chain.
@@ -335,11 +331,13 @@ impl CodeResolverImpl {
 		action_json: &Value,
 	) -> Result<(PathBuf, TextEdit, String), Diagnostic> {
 		let file_path = self.codepath_fs_path(target)?;
-		let profile = self.registry.match_path(&file_path)
+		let profile = self
+			.registry
+			.match_path(&file_path)
 			.ok_or_else(|| Diagnostic {
 				variant: DiagnosticVariant::NoMatches,
 				message: format!("no language profile for: {}", file_path.display()),
-				span: None,
+				span:    None,
 			})?;
 
 		let source = std::fs::read_to_string(&file_path).map_err(|e| {
@@ -352,28 +350,30 @@ impl CodeResolverImpl {
 		})?;
 
 		let mut parser = tree_sitter::Parser::new();
-		parser.set_language(&profile.ts_language).map_err(|e| Diagnostic {
-			variant: DiagnosticVariant::ParseError,
-			message: format!("tree-sitter error: {e}"),
-			span: None,
-		})?;
+		parser
+			.set_language(&profile.ts_language)
+			.map_err(|e| Diagnostic {
+				variant: DiagnosticVariant::ParseError,
+				message: format!("tree-sitter error: {e}"),
+				span:    None,
+			})?;
 		let tree = parser.parse(&source, None).ok_or_else(|| Diagnostic {
 			variant: DiagnosticVariant::ParseError,
 			message: "parse failed".into(),
-			span: None,
+			span:    None,
 		})?;
 
 		// Resolve the CodePath query to a tree-sitter node
 		let query = target.query.as_ref().ok_or_else(|| Diagnostic {
 			variant: DiagnosticVariant::NoMatches,
 			message: "edit target must have a symbol query (e.g. `::Name`)".into(),
-			span: None,
+			span:    None,
 		})?;
 
 		let dialect = profile.dialect.as_ref().ok_or_else(|| Diagnostic {
 			variant: DiagnosticVariant::UnsupportedOperation,
 			message: "no dialect for language".into(),
-			span: None,
+			span:    None,
 		})?;
 		let cancel = CancellationToken::new();
 		let root = tree.root_node();
@@ -392,7 +392,7 @@ impl CodeResolverImpl {
 			.ok_or_else(|| Diagnostic {
 				variant: DiagnosticVariant::NoMatches,
 				message: "symbol not found".into(),
-				span: None,
+				span:    None,
 			})?;
 
 		// BUG-433 / BUG-434: a name query yields the declaration's whole *wrapper
@@ -409,7 +409,10 @@ impl CodeResolverImpl {
 		// the entire declaration (content replaces the statement verbatim), while
 		// `#body` / `#sig` keep the narrow node via the scoped legacy path upstream.
 		// Language-agnostic: the matched set is exactly this declaration's chain.
-		let op_kind = action_json.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+		let op_kind = action_json
+			.get("kind")
+			.and_then(|v| v.as_str())
+			.unwrap_or("");
 		let whole_statement_op = matches!(op_kind, "delete" | "write");
 		let node: &tree_sitter::Node = if whole_statement_op {
 			nodes
@@ -425,19 +428,25 @@ impl CodeResolverImpl {
 		// deletes. Body/sig-scoped writes are intercepted upstream in
 		// `apply_to_buffer` and routed to the legacy `single_action` path, which
 		// resolves the declaration node and applies the proven `replace_body`.
-		let kind = action_json.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+		let kind = action_json
+			.get("kind")
+			.and_then(|v| v.as_str())
+			.unwrap_or("");
 
 		// For rename: only replace the name field, not the whole symbol
 		let (byte_range, content) = if kind == "rename" {
-			let name_node = node.child_by_field_name("name")
+			let name_node = node
+				.child_by_field_name("name")
 				.or_else(|| node.child_by_field_name("declarator"))
 				.ok_or_else(|| Diagnostic {
 					variant: DiagnosticVariant::UnsupportedOperation,
 					message: format!("node '{}' has no name field for rename", node.kind()),
-					span: None,
+					span:    None,
 				})?;
 			// op_to_code_buffer_action puts the new name in "content" for rename
-			let new_name = action_json.get("content").and_then(|v| v.as_str())
+			let new_name = action_json
+				.get("content")
+				.and_then(|v| v.as_str())
 				.or_else(|| action_json.get("newName").and_then(|v| v.as_str()))
 				.unwrap_or("");
 			(name_node.start_byte()..name_node.end_byte(), new_name.to_string())
@@ -454,11 +463,13 @@ impl CodeResolverImpl {
 			new_text:     content,
 		};
 
-		let target_id = format!("{}::{}", file_path.display(), render_code_path(target, &DummyLexer).replace(" :: ", "::"));
+		let target_id = format!(
+			"{}::{}",
+			file_path.display(),
+			render_code_path(target, &DummyLexer).replace(" :: ", "::")
+		);
 		Ok((file_path, edit, target_id))
 	}
-
-
 
 	/// Build the content string for the edit, expanding template variables
 	/// if the content contains $VARS placeholders.
@@ -471,22 +482,22 @@ impl CodeResolverImpl {
 	) -> Result<String, Diagnostic> {
 		let raw_content = action_json.get("content").and_then(|v| v.as_str());
 		match raw_content {
-			Some(c) if c.contains('$') => {
-				expand_template(c, node, source).map_err(|e| Diagnostic {
-					variant: DiagnosticVariant::ParseError,
-					message: e.message,
-					span: None,
-				})
-			}
+			Some(c) if c.contains('$') => expand_template(c, node, source).map_err(|e| Diagnostic {
+				variant: DiagnosticVariant::ParseError,
+				message: e.message,
+				span:    None,
+			}),
 			Some(c) => Ok(c.to_string()),
-			None if kind == "rename" => {
-				Ok(action_json.get("newName").and_then(|v| v.as_str()).unwrap_or("").to_string())
-			}
+			None if kind == "rename" => Ok(action_json
+				.get("newName")
+				.and_then(|v| v.as_str())
+				.unwrap_or("")
+				.to_string()),
 			None if kind == "delete" => Ok(String::new()),
 			None => Err(Diagnostic {
 				variant: DiagnosticVariant::ParseError,
 				message: "edit action requires content or newName".into(),
-				span: None,
+				span:    None,
 			}),
 		}
 	}
@@ -499,9 +510,14 @@ impl CodeResolverImpl {
 		Ok(if path.is_absolute() {
 			path.to_path_buf()
 		} else {
-			self.root.as_deref().unwrap_or(std::path::Path::new(".")).join(path)
+			self
+				.root
+				.as_deref()
+				.unwrap_or(std::path::Path::new("."))
+				.join(path)
 		})
 	}
+
 	/// Shared helper for code_buffer-based mutations.
 	///
 	/// Uses the new CodePath resolver path (resolve_mutation_edit) for
@@ -517,7 +533,10 @@ impl CodeResolverImpl {
 		// for the core 3 verbs (replace, rename, delete) when the file
 		// has a code dialect. Languages without a dialect (HTML, CSS,
 		// Markdown) and ops other than these 3 stay on the legacy path.
-		let kind = action_json.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+		let kind = action_json
+			.get("kind")
+			.and_then(|v| v.as_str())
+			.unwrap_or("");
 		// Body/sig-scoped writes route to the legacy `single_action` path, which
 		// resolves the *declaration* node via `resolve_symbol` and applies the
 		// proven `replace_body` (brace/do-end precondition + re-indent +
@@ -540,18 +559,31 @@ impl CodeResolverImpl {
 					.filter(|s| matches!(*s, "body" | "sig"))
 			});
 		let scoped_write = kind == "write" && scope.is_some();
-		let use_builder = matches!(kind, "write" | "rename" | "delete") && !scoped_write;
+		// `rename` MUST take the legacy `single_action` path: it delegates to
+		// `rename_symbol`, which renames the declaration AND every in-file
+		// reference. The builder path (`resolve_mutation_edit`) only rewrites the
+		// declaration's name field, silently leaving call sites dangling — a
+		// correctness bug that breaks the renamed code. Only `write`/`delete`
+		// (whole-node single-edit ops) are safe on the builder path.
+		let use_builder = matches!(kind, "write" | "delete") && !scoped_write;
 		// Check if the file is a code language (has a dialect).
 		// Non-code languages (HTML/CSS/MD/Org) use the legacy path.
 		let is_code_lang = match &target.locator {
-			pi_code_path::ast::Locator::Fs(fs) => {
-				fs.segments.last().and_then(|seg| {
+			pi_code_path::ast::Locator::Fs(fs) => fs
+				.segments
+				.last()
+				.and_then(|seg| {
 					if let pi_code_path::ast::FsSegment::Literal(s) = seg {
 						let ext = std::path::Path::new(s).extension()?.to_str()?;
-						Some(!matches!(ext, "html" | "htm" | "css" | "scss" | "less" | "md" | "markdown" | "org"))
-					} else { None }
-				}).unwrap_or(true)
-			}
+						Some(!matches!(
+							ext,
+							"html" | "htm" | "css" | "scss" | "less" | "md" | "markdown" | "org"
+						))
+					} else {
+						None
+					}
+				})
+				.unwrap_or(true),
 			_ => true,
 		};
 		if target.query.is_some() && use_builder && is_code_lang {
@@ -559,7 +591,7 @@ impl CodeResolverImpl {
 			buffer.edit_batch(vec![edit]).map_err(|e| Diagnostic {
 				variant: DiagnosticVariant::UnsupportedOperation,
 				message: edit_err_message(&e),
-				span: None,
+				span:    None,
 			})?;
 			return Ok(MutationOutcome {
 				edit_count:     1,

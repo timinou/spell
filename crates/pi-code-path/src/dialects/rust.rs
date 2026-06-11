@@ -16,9 +16,7 @@ use winnow::{Parser, token::take_while};
 
 use crate::{
 	ast::NamePayload,
-	dialect::{
-		AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierSpec,
-	},
+	dialect::{AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierSpec},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -66,12 +64,56 @@ impl NameLexer for RustNameLexer {
 		}
 	}
 
-	fn matches(&self, n: &NamePayload, _node: Node<'_>, _src: &str) -> bool {
-		match n {
-			NamePayload::Raw(_) => false,
-			NamePayload::Quoted(_) => false,
+	fn matches(&self, n: &NamePayload, node: Node<'_>, src: &str) -> bool {
+		// Mirror the TS dialect: match the LEAF segment of a `::`-qualified path
+		// (e.g. `Widget::label` → `label`) against the node's `name` field for Rust
+		// declaration kinds. Without this, the walker's text fallback compares the
+		// full rendered path (`Widget::label`) to the bare name field (`label`) and
+		// never matches — so qualified Rust member addressing resolved to nothing.
+		let target = match n {
+			NamePayload::Raw(s) | NamePayload::Quoted(s) => s.as_str(),
+		};
+		matches_rust_leaf(target, node, src)
+	}
+}
+
+/// Match a `::`-qualified (or bare) Rust name's LEAF segment against a node's
+/// declared name. Handles the common declaration kinds; for a qualified path
+/// like `Widget::label` only the final `label` segment is compared (parity with
+/// the TS dialect's leaf-matching). Container scoping (verifying the `impl
+/// Widget` enclosing block) is a follow-up — leaf-matching already restores the
+/// natural `Type::method` / `module::item` addressing that returned nothing.
+fn matches_rust_leaf(target: &str, node: Node<'_>, src: &str) -> bool {
+	// Leaf = final path segment. Strip a trailing turbofish if present.
+	let leaf = target.rsplit("::").next().unwrap_or(target);
+	let leaf = leaf.split("::<").next().unwrap_or(leaf).trim();
+	if leaf.is_empty() {
+		return false;
+	}
+	if !matches!(
+		node.kind(),
+		"function_item"
+			| "struct_item"
+			| "enum_item"
+			| "trait_item"
+			| "type_item"
+			| "const_item"
+			| "static_item"
+			| "mod_item"
+			| "union_item"
+			| "macro_definition"
+	) {
+		return false;
+	}
+	if let Some(name_child) = node.child_by_field_name("name") {
+		if let Some(text) = src.get(name_child.start_byte()..name_child.end_byte()) {
+			// Strip a raw-identifier prefix so `r#type` matches `type`.
+			let node_leaf = text.trim_start_matches("r#");
+			let want = leaf.trim_start_matches("r#");
+			return node_leaf == want;
 		}
 	}
+	false
 }
 
 fn parse_segments(input: &mut &str) -> winnow::Result<Vec<RustSegment>> {
@@ -426,8 +468,8 @@ fn normalize_ws(text: &str) -> String {
 }
 pub fn rust_dialect() -> LanguageDialect {
 	LanguageDialect {
-		name_lexer: Arc::new(RustNameLexer),
-		anchors:    vec![
+		name_lexer:   Arc::new(RustNameLexer),
+		anchors:      vec![
 			AnchorPattern {
 				name:    "test-body",
 				matcher: |n, src| {
@@ -558,7 +600,7 @@ pub fn rust_dialect() -> LanguageDialect {
 				},
 			},
 		],
-		qualifiers: vec![
+		qualifiers:   vec![
 			QualifierSpec {
 				name:       "body",
 				applies_to: vec![
@@ -643,7 +685,7 @@ pub fn rust_dialect() -> LanguageDialect {
 				resolve:    Arc::new(qualifiers::UnsafeBlock),
 			},
 		],
-		edge_kinds: EdgeKindSet::default(),
+		edge_kinds:   EdgeKindSet::default(),
 		kind_aliases: std::collections::HashMap::from([
 			("function", vec!["function_item", "function_signature_item"]),
 			("method", vec!["function_item"]),
@@ -652,7 +694,15 @@ pub fn rust_dialect() -> LanguageDialect {
 			("import", vec!["use_declaration", "extern_crate_declaration"]),
 			("binding", vec!["let_declaration", "const_item", "static_item"]),
 			("identifier", vec!["identifier", "type_identifier", "field_identifier"]),
-			("decl", vec!["function_item", "struct_item", "enum_item", "trait_item", "impl_item", "mod_item", "use_declaration"]),
+			("decl", vec![
+				"function_item",
+				"struct_item",
+				"enum_item",
+				"trait_item",
+				"impl_item",
+				"mod_item",
+				"use_declaration",
+			]),
 		]),
 	}
 }

@@ -132,6 +132,28 @@ impl Resolver for FsResolver {
 		}
 		// Apply qualifier if present.
 		if let Some(qual) = &path.qualifier {
+			// Ergonomic domain redirect: `#tree` is a DIRECTORY qualifier. When the
+			// caller EXPLICITLY addressed a single file with it (one resolved node,
+			// a regular file), it silently returns a lone `§file` leaf — a confusing
+			// no-op for someone after the file's symbol structure. Name the right
+			// qualifier (`#outline`). Gated on a single explicit node so directory
+			// walks (`.#tree`, `src/#tree`) that legitimately enumerate file children
+			// are unaffected. Mirrors the BUG-444 grep-context domain diagnostic.
+			if qual.name == "tree" && nodes.len() == 1 && nodes[0].kind == "§file" {
+				// Non-fatal (BUG-444 pattern): keep the §file node so the path still
+				// resolves, but attach guidance toward the symbol-structure qualifier
+				// rather than throwing a hard error or returning a confusing bare leaf.
+				let loc = nodes[0].locator.clone();
+				nodes[0].diagnostics.push(Diagnostic {
+					variant: DiagnosticVariant::UnsupportedOperation,
+					message: format!(
+						"#tree is a directory qualifier; `{loc}` is a file — it has no tree to walk. \
+						 For its symbol structure use `{loc}#outline`, or read it with `{loc}#raw`"
+					),
+					span:    None,
+				});
+				return Ok(nodes);
+			}
 			let mut out = Vec::new();
 			for n in nodes {
 				// BUG-371: §not-found is a sentinel node carrying DID_YOU_MEAN
@@ -400,6 +422,37 @@ mod tests {
 			"`.#tree` must include nested entries, got: {:?}",
 			nodes.iter().map(|n| &n.locator).collect::<Vec<_>>()
 		);
+	}
+
+	#[test]
+	fn tree_on_explicit_file_redirects_to_outline() {
+		// Ergonomic domain redirect: `file#tree` (single explicit file) must error
+		// with guidance toward `#outline`/`#raw` rather than returning a lone §file
+		// leaf. Directory `#tree` (incl. `.#tree`) is unaffected — see bug372 above.
+		use crate::ast::Qualifier;
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		fs::write(root.join("f.rs"), "fn a() {}\n").unwrap();
+
+		let cp = CodePath {
+			locator:   Locator::Fs(FsLocator {
+				segments: vec![FsSegment::Literal("f.rs".to_string())],
+			}),
+			query:     None,
+			qualifier: Some(Qualifier { name: "tree".to_string(), args: None }),
+		};
+		let resolver = FsResolver::new(root);
+		let nodes = resolver.resolve(&cp, &CancellationToken::new()).unwrap();
+		// Non-fatal: the §file node resolves AND carries the redirect diagnostic.
+		assert_eq!(nodes.len(), 1);
+		assert_eq!(nodes[0].kind, "§file");
+		let msgs: Vec<_> = nodes[0]
+			.diagnostics
+			.iter()
+			.map(|d| d.message.clone())
+			.collect();
+		assert!(msgs.iter().any(|m| m.contains("#outline")), "must name #outline: {msgs:?}");
+		assert!(msgs.iter().any(|m| m.contains("directory qualifier")), "msgs: {msgs:?}");
 	}
 
 	#[test]

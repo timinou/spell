@@ -9,7 +9,10 @@
 use std::{path::PathBuf, sync::Arc};
 
 use pi_code_engine::language::LanguageRegistry;
-use pi_code_path::{parser::parse_code_path, resolver::{CancellationToken, CodeResolver}};
+use pi_code_path::{
+	parser::parse_code_path,
+	resolver::{CancellationToken, CodeResolver},
+};
 
 use super::walker::CodeResolverImpl;
 
@@ -27,11 +30,7 @@ fn temp_ts(name: &str, content: &str, dir: &std::path::Path) -> PathBuf {
 #[test]
 fn alias_method_matches_method_definition() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_ts(
-		"foo.ts",
-		"class Foo { bar(x: number): void { return; } }\n",
-		dir.path(),
-	);
+	let path = temp_ts("foo.ts", "class Foo { bar(x: number): void { return; } }\n", dir.path());
 	let cp =
 		parse_code_path("foo.ts::§method", &pi_code_path::dialects::typescript::TsNameLexer).unwrap();
 	let query = cp.query.unwrap();
@@ -57,8 +56,8 @@ fn alias_function_matches_arrow_and_declaration() {
 		"function f1() {}\nconst f2 = () => {};\nconst f3 = function() {};\n",
 		dir.path(),
 	);
-	let cp =
-		parse_code_path("foo.ts::§function", &pi_code_path::dialects::typescript::TsNameLexer).unwrap();
+	let cp = parse_code_path("foo.ts::§function", &pi_code_path::dialects::typescript::TsNameLexer)
+		.unwrap();
 	let query = cp.query.unwrap();
 	let results = resolver()
 		.resolve(&path, &query, None, &CancellationToken::new())
@@ -126,11 +125,9 @@ fn alias_import_matches_import_statement() {
 fn alias_unknown_yields_no_match() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = temp_ts("foo.ts", "function f() {}\n", dir.path());
-	let cp = parse_code_path(
-		"foo.ts::§frobnicate",
-		&pi_code_path::dialects::typescript::TsNameLexer,
-	)
-	.unwrap();
+	let cp =
+		parse_code_path("foo.ts::§frobnicate", &pi_code_path::dialects::typescript::TsNameLexer)
+			.unwrap();
 	let query = cp.query.unwrap();
 	let results = resolver()
 		.resolve(&path, &query, None, &CancellationToken::new())

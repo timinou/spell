@@ -2,14 +2,17 @@ import { statSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@spell/pi-agent-core";
-import { executeCodePath } from "@spell/pi-natives";
+import { executeCodePath, parseCodePath } from "@spell/pi-natives";
 import type { Component } from "@spell/pi-tui";
+import { formatBytes } from "@spell/pi-utils";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { InternalUrlRouter } from "../internal-urls";
 import { RouterDelegateToKernel } from "../internal-urls/router";
 import type { Theme } from "../modes/theme/theme";
 import getDescription from "../prompts/tools/get.md" with { type: "text" };
 import { renderCodeCell, renderStatusLine, truncateToWidth } from "../tui";
+import { ImageInputTooLargeError, loadImageInput, MAX_IMAGE_INPUT_BYTES } from "../utils/image-input";
+import { classifyFileForRead } from "../utils/mime";
 import { type CodePathFormatMode, formatCodePathResult } from "./codepath-result";
 import { sessionContextOpts } from "./codepath-session";
 import type { CodePathChunk, GetParams, NodeRefDto } from "./codepath-types";
@@ -30,18 +33,45 @@ type GetToolResultDetails = DetailsWithMeta & {
 
 /**
  * Classifies a target for auto-attach behavior.
- * - `"bare-plain"`: plain filesystem path (no scheme, axis, qualifier, terminator, glob).
+ * - `"bare-plain"`: plain filesystem path (no scheme, query, qualifier, glob).
  *   Auto-attach `#raw` for files, `#listing` for dirs.
- * - `"qualified"`: has explicit qualifier (`#...`) — caller's qualifier wins.
- * - `"other"`: scheme, axis, terminator, or glob — pass through unchanged.
+ * - `"qualified"`: has an explicit qualifier (`#...`) — caller's qualifier wins.
+ * - `"other"`: scheme, query (symbol / line-slice `:A-B`), terminator, or glob
+ *   — pass through to the kernel unchanged.
+ *
+ * PLAN-332 Thesis B: this delegates to the kernel's `parseCodePath` so the TS
+ * tool and the Rust resolver share ONE grammar. The previous hand-rolled regex
+ * didn't recognise the `:A-B` line-slice shorthand, so a sliced ABSOLUTE path
+ * was misclassified `bare-plain`, hit the literal `fs.stat` fast-path on
+ * `foo.ts:5-7`, and returned PATH_NOT_FOUND before the kernel could strip the
+ * slice (BUG-442). A bare relative slice survived only by accident.
  */
 function classifyBareTarget(target: string): "bare-plain" | "qualified" | "other" {
+	// Cheap structural rejects the parser also honours; kept first so an
+	// unparseable target (e.g. `foo.ts:80:5`) still classifies deterministically
+	// rather than falling through the throw path below.
 	if (target.includes("://")) return "other";
-	if (target.includes("::")) return "other";
 	if (target.includes(";")) return "other";
 	if (/[*?[]/.test(target)) return "other";
-	if (target.includes("#")) return "qualified";
-	return "bare-plain";
+	try {
+		const ast = parseCodePath(target) as {
+			query?: unknown | null;
+			qualifier?: unknown | null;
+		} | null;
+		if (!ast) return target.includes("#") ? "qualified" : "bare-plain";
+		// A query (symbol target OR line-slice `:A-B`) means the kernel must
+		// resolve it — never stat the literal string. Qualifier-only (`#raw`)
+		// keeps caller-wins semantics.
+		if (ast.query != null) return "other";
+		if (ast.qualifier != null) return "qualified";
+		return "bare-plain";
+	} catch {
+		// Unparseable (e.g. `line:col`): preserve legacy fallback so behaviour
+		// degrades to the old regex classification rather than crashing.
+		if (target.includes("::")) return "other";
+		if (target.includes("#")) return "qualified";
+		return "bare-plain";
+	}
 }
 
 /**
@@ -51,6 +81,9 @@ function classifyBareTarget(target: string): "bare-plain" | "qualified" | "other
  * sourceInternal) is rebuilt by `renderSchemeNode` below.
  */
 // §kinds emitted by fs/text/outline dialects — NOT URI-scheme nodes.
+// §kinds emitted by fs/text/outline dialects — never URI-scheme nodes. Kept
+// as a defensive fast-reject; the authoritative gate is the target's scheme
+// (a §<scheme> node can only arise from a `scheme://…` target, see below).
 const NON_SCHEME_NODE_KINDS = new Set([
 	"§file",
 	"§dir",
@@ -66,13 +99,31 @@ const NON_SCHEME_NODE_KINDS = new Set([
 	"§listing",
 ]);
 
-function extractSchemeNode(chunks: CodePathChunk[]): NodeRefDto | null {
+/**
+ * Extract the scheme token from a URI-shaped target (`scheme://…`), lowercased.
+ * Returns null for bare paths, symbol targets, globs, and line slices — none of
+ * which can ever produce a kernel §<scheme> node.
+ */
+function targetScheme(target: string): string | null {
+	const m = /^([a-z][a-z0-9+.-]*):\/\//i.exec(target);
+	return m ? m[1].toLowerCase() : null;
+}
+
+function extractSchemeNode(chunks: CodePathChunk[], target: string): NodeRefDto | null {
+	// A kernel §<scheme> node only arises from a `scheme://…` target. Bare
+	// `file::Symbol` reads resolve to one AST node whose kind ALSO starts with
+	// `§` (e.g. §function_declaration) — those must NOT be mistaken for scheme
+	// nodes (BUG: the old denylist could not enumerate every grammar's kinds, so
+	// any single-node symbol read fell through to renderSchemeNode → [§empty]).
+	const scheme = targetScheme(target);
+	if (scheme === null) return null;
 	const nodes = chunks.flatMap(c => c.nodes);
 	if (nodes.length !== 1) return null;
 	const node = nodes[0];
 	if (typeof node.kind !== "string" || !node.kind.startsWith("§") || node.kind.length < 2) return null;
 	if (NON_SCHEME_NODE_KINDS.has(node.kind)) return null;
-	return node;
+	// Authoritative: the node kind must name the very scheme we resolved.
+	return node.kind === `§${scheme}` ? node : null;
 }
 
 function renderSchemeNode(node: NodeRefDto, params: GetParams, target: string): AgentToolResult {
@@ -106,16 +157,25 @@ function buildDirQualifier(target: string, params: GetParams): string {
 }
 
 /**
+ * Trailing line-slice shorthand: `:A`, `:A-B`, `:A-`, `:A+N`, `:-N`. End-
+ * anchored and digit/`+`/`-` only so it cannot clip a Windows drive prefix
+ * (`C:\`) or a `line:col` form (which has a 2nd colon and is left intact).
+ * Mirrors the kernel's `parse_line_slice_suffix` grammar. PLAN-332 Thesis B.
+ */
+const LINE_SLICE_SUFFIX = /:-?\d+(?:[-+]\d*)?$/;
+
+/**
  * Extract the longest absolute directory prefix from a CodePath target.
  * Strips, in order: symbol query (`::...`), qualifier (`#...`), glob meta
- * (everything from first `*`, `?`, or `[`), and trailing `/`.
- * Returns the stripped string if absolute; otherwise `null`.
+ * (everything from first `*`, `?`, or `[`), the `:A-B` line-slice, and
+ * trailing `/`. Returns the stripped string if absolute; otherwise `null`.
  */
 function extractAbsolutePrefix(target: string): string | null {
 	const stripped = target
 		.replace(/::.*$/, "") // symbol query
 		.replace(/#.*$/, "") // qualifier
 		.replace(/[*?[].*$/, "") // glob meta
+		.replace(LINE_SLICE_SUFFIX, "") // line-slice shorthand (BUG-442)
 		.replace(/\/+$/, ""); // trailing slash
 	return path.isAbsolute(stripped) ? stripped : null;
 }
@@ -160,18 +220,15 @@ function effectiveRootFor(target: string, providedRoot: string | undefined, sess
 function makeRelativeToRoot(target: string, rootDir: string): string {
 	if (!rootDir || !path.isAbsolute(target)) return target;
 
-	// Find the first structural separator that splits the filesystem path from qualifiers.
-	// The target can have `::` and `#` in any order; pick the earliest split point.
+	// Find the first structural separator that splits the filesystem path from
+	// the query/qualifier. The target can carry `::`, `#`, or a trailing
+	// `:A-B` line-slice (BUG-442) in any order; pick the earliest split point.
 	const qi = target.indexOf("::");
 	const hi = target.indexOf("#");
-	let splitAt = -1;
-	if (qi >= 0 && hi >= 0) {
-		splitAt = Math.min(qi, hi);
-	} else if (qi >= 0) {
-		splitAt = qi;
-	} else if (hi >= 0) {
-		splitAt = hi;
-	}
+	const sliceMatch = target.match(LINE_SLICE_SUFFIX);
+	const si = sliceMatch ? target.length - sliceMatch[0].length : -1;
+	const candidates = [qi, hi, si].filter(i => i >= 0);
+	const splitAt = candidates.length > 0 ? Math.min(...candidates) : -1;
 
 	const base = splitAt >= 0 ? target.slice(0, splitAt) : target;
 	const suffix = splitAt >= 0 ? target.slice(splitAt) : "";
@@ -421,11 +478,25 @@ export class GetTool implements AgentTool<typeof getSchema> {
 				if (stat.isFile()) {
 					statProbeFoundFile = true;
 
-					// FEAT-713: always #raw for bare-path files. Drops the
-					// outline-first default that returned [§file] markers
-					// without content for source files (T1.1, T1.8 + repro).
-					target = `${normalized}#raw`;
-					attachedQualifier = "#raw (auto)";
+					// Classify by content before picking a qualifier. Magic-byte
+					// images route to #image (→ image content block the model can
+					// see); other binaries short-circuit to a marker (never a
+					// latin-1 mojibake dump via #raw); text falls back to #raw.
+					// FEAT-713: #raw is the default for textual bare-path files.
+					const classification = await classifyFileForRead(absCandidate);
+					if (classification.kind === "image") {
+						return await this.readImageFile(params, absCandidate, classification.mimeType);
+					} else if (classification.kind === "binary") {
+						return toolResult<GetToolResultDetails>({ target: params.target })
+							.text(
+								`[binary file: ${params.target} (${formatBytes(stat.size)}) — not shown as text. ` +
+									`Use a hex/byte view or an appropriate parser if you need its contents.]`,
+							)
+							.done();
+					} else {
+						target = `${normalized}#raw`;
+						attachedQualifier = "#raw (auto)";
+					}
 				} else if (stat.isDirectory()) {
 					target = buildDirQualifier(normalized, params);
 					attachedQualifier = `${target.slice(normalized.length)} (auto)`;
@@ -463,7 +534,22 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		const absPrefix = extractAbsolutePrefix(target);
 		if (!looksLikeRegex && absPrefix !== null) {
 			const rootEqual = path.resolve(absPrefix) === path.resolve(rootDir);
-			if (rootEqual || !absPrefix.startsWith(process.cwd())) {
+			// PLAN-332 Thesis B / BUG-442: a target carrying a QUERY (symbol or
+			// `:A-B` line-slice) must be relativised even when it lives under cwd —
+			// the kernel's query resolvers only accept a relative locator (an
+			// absolute sliced path resolves to zero nodes regardless of root). Bare
+			// in-cwd FILE paths (incl. the stat-probe's auto-attached `#raw`) pass
+			// through unchanged — the kernel resolves those directly. We test the
+			// ORIGINAL target (not the possibly-#raw-rewritten one) and only act on a
+			// genuine `query` (symbol / line-slice), never a bare qualifier.
+			let hasQuery = false;
+			try {
+				const ast = parseCodePath(params.target) as { query?: unknown | null } | null;
+				hasQuery = ast?.query != null;
+			} catch {
+				hasQuery = false;
+			}
+			if (rootEqual || !absPrefix.startsWith(process.cwd()) || hasQuery) {
 				target = makeRelativeToRoot(target, rootDir);
 			}
 		}
@@ -483,7 +569,7 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		// render with the legacy JS-handler shape: optional notes prefix +
 		// content body + sourceInternal(url). This bypasses the buildNodeList
 		// `[§kind]` label so the result is shape-equivalent to the JS path.
-		const schemeNode = extractSchemeNode(chunks);
+		const schemeNode = extractSchemeNode(chunks, target);
 		if (schemeNode) {
 			return renderSchemeNode(schemeNode, params, target);
 		}
@@ -641,6 +727,58 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		return toolResult<GetToolResultDetails>({ format: params.format, target })
 			.text(notePrefix + (text || `[§empty] ${target}`))
 			.sourceInternal(resource.url ?? target)
+			.done();
+	}
+
+	/**
+	 * Read a magic-byte-detected image file into an image content block, mirroring
+	 * the canonical read path (`loadImageInput` — same sniffing, autoResize, and
+	 * size ceiling used by file mentions / inspect_image). This is what lets bare
+	 * `find foo.png` / `get foo.png` surface a *viewable* picture in the thread
+	 * instead of a latin-1 mojibake dump (via #raw) or a silently-dropped
+	 * handle-only node (via the kernel #image qualifier, which omits bytes >512KB).
+	 */
+	private async readImageFile(params: GetParams, absPath: string, mimeType: string): Promise<AgentToolResult> {
+		if (this.session?.settings?.get("images.blockImages")) {
+			return toolResult<GetToolResultDetails>({ target: params.target })
+				.text(
+					`[image not read: ${params.target} (${mimeType}) — image submission disabled (images.blockImages=true)]`,
+				)
+				.done();
+		}
+
+		let loaded: Awaited<ReturnType<typeof loadImageInput>>;
+		try {
+			loaded = await loadImageInput({
+				path: absPath,
+				cwd: this.session?.cwd ?? process.cwd(),
+				resolvedPath: absPath,
+				detectedMimeType: mimeType,
+				autoResize: this.session?.settings?.get("images.autoResize") ?? true,
+				maxBytes: MAX_IMAGE_INPUT_BYTES,
+			});
+		} catch (error) {
+			if (error instanceof ImageInputTooLargeError) {
+				return toolResult<GetToolResultDetails>({ target: params.target, error: "IMAGE_TOO_LARGE" })
+					.text(`[image too large to read: ${params.target} — ${error.message}]`)
+					.done();
+			}
+			throw error;
+		}
+
+		if (!loaded) {
+			// Sniffed as an image but the loader rejected it (corrupt / unsupported);
+			// fall through to a textual marker rather than dumping bytes.
+			return toolResult<GetToolResultDetails>({ target: params.target })
+				.text(`[image unreadable: ${params.target} (${mimeType})]`)
+				.done();
+		}
+
+		return toolResult<GetToolResultDetails>({ target: params.target, nodeCount: 1, fileCount: 1 })
+			.content([
+				{ type: "text", text: loaded.textNote },
+				{ type: "image", data: loaded.data, mimeType: loaded.mimeType },
+			])
 			.done();
 	}
 

@@ -5,6 +5,8 @@
 	import ChatPane from "./ChatPane.svelte";
 	import SpawnDialog from "./SpawnDialog.svelte";
 	import DebugPanel from "./DebugPanel.svelte";
+	import CodemodTilePanel from "./CodemodTilePanel.svelte";
+	import type { RunStoredResult } from "../lib/protocol";
 
 	interface Props {
 		debugOpen: boolean;
@@ -15,12 +17,34 @@
 		onSubmit: (sessionId: string, text: string) => Promise<void>;
 		onAbort: (sessionId: string) => void;
 		onKill: (sessionId: string) => Promise<void>;
+		onRunStored: (
+			sessionId: string,
+			req: {
+				program: string;
+				mode?: "read" | "write";
+				intent?: "interactive" | "visible-refresh" | "background-tick";
+				autoWrite?: boolean;
+			},
+		) => Promise<RunStoredResult>;
 		onBlockingAction: (sessionId: string, eventId: string, choice: string | number) => void;
 		onSignOut: () => void;
 	}
-	let { token, templates, debugOpen, onToggleDebug, onSpawn, onSubmit, onAbort, onKill, onBlockingAction, onSignOut }: Props = $props();
+	let {
+		token,
+		templates,
+		debugOpen,
+		onToggleDebug,
+		onSpawn,
+		onSubmit,
+		onAbort,
+		onKill,
+		onRunStored,
+		onBlockingAction,
+		onSignOut,
+	}: Props = $props();
 
 	let spawnOpen = $state(false);
+	let tilesOpen = $state(false);
 
 	function onKey(e: KeyboardEvent) {
 		if ((e.metaKey || e.ctrlKey) && e.key === "n") {
@@ -79,6 +103,14 @@
 		<button class="btn btn-ghost small" onclick={() => onToggleDebug(!debugOpen)} title="Toggle debug">
 			{debugOpen ? "🐛" : "Debug"}
 		</button>
+		<button
+			class="btn btn-ghost small"
+			onclick={() => (tilesOpen = !tilesOpen)}
+			disabled={!app.current}
+			title="Codemod tiles — stored programs that transform the repo"
+		>
+			{tilesOpen ? "✕ Codemods" : "Codemods"}
+		</button>
 		<button class="btn btn-ghost small" onclick={onSignOut}>Sign out</button>
 	</footer>
 
@@ -87,6 +119,13 @@
 	{/if}
 	{#if debugOpen && app.current}
 		<DebugPanel sessionState={app.current} onClose={() => onToggleDebug(false)} />
+	{/if}
+	{#if tilesOpen && app.current}
+		<CodemodTilePanel
+			sessionId={app.current.summary.sessionId}
+			{onRunStored}
+			onClose={() => (tilesOpen = false)}
+		/>
 	{/if}
 </div>
 

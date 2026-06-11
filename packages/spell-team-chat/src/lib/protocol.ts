@@ -72,7 +72,35 @@ export type BridgeRpcCommand =
 	| { id?: string; type: "abort" }
 	| { id?: string; type: "new_session" }
 	| { id?: string; type: "get_state" }
-	| { id?: string; type: "get_session_stats" };
+	| { id?: string; type: "get_session_stats" }
+	// Stored programs (W4) — mirror of spell-server BridgeRpcCommand. Runs a stored
+	// PTC-Lisp program via the agent's ExecuteTool intent-gated runner, no LLM turn.
+	| {
+			id?: string;
+			type: "run_stored";
+			program: string;
+			mode?: "read" | "write";
+			intent?: "interactive" | "visible-refresh" | "background-tick";
+			autoWrite?: boolean;
+			signature?: string;
+			context?: Record<string, unknown>;
+	  };
+
+/** The transaction outcome a run_stored response carries (mirror of TxnOutcome). */
+export interface TxnOutcome {
+	outcome: "committed" | "rolled-back" | "dry-run" | "inert" | "none";
+	files: number;
+	paths?: string[];
+	restoreFailures?: string[];
+}
+
+/** The `data` payload of a successful run_stored rpc_response. */
+export interface RunStoredResult {
+	data: unknown;
+	isError: boolean;
+	transaction: TxnOutcome | null;
+	text: string;
+}
 
 export type RpcStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 

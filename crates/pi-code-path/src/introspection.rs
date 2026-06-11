@@ -187,14 +187,22 @@ pub fn list_qualifiers() -> Vec<QualifierInfo> {
 			applies_to:  vec!["file".to_string()],
 		},
 		QualifierInfo {
+			// `#match` operates on a node produced by a preceding `[text~="re"]`
+			// predicate — it returns the matched substring of that grep hit. It is
+			// NOT a bare file/symbol qualifier (BUG-444): using it without a text
+			// predicate yields a domain diagnostic, not content. Advertise the real
+			// usage so the generated doc + the invariant test agree.
 			name:        "match".to_string(),
-			args_schema: None,
-			applies_to:  vec!["file".to_string(), "symbol".to_string()],
+			args_schema: Some("after [text~=\"re\"]".to_string()),
+			applies_to:  vec!["grep".to_string()],
 		},
 		QualifierInfo {
+			// Like `#match`, `#captures[N]` reads the Nth regex capture group of a
+			// preceding `[text~="(re)"]` grep hit — a grep-context qualifier, not a
+			// bare file/symbol one (BUG-444).
 			name:        "captures".to_string(),
-			args_schema: Some("N".to_string()),
-			applies_to:  vec!["file".to_string(), "symbol".to_string()],
+			args_schema: Some("N after [text~=\"(re)\"]".to_string()),
+			applies_to:  vec!["grep".to_string()],
 		},
 		QualifierInfo {
 			name:        "lines".to_string(),
@@ -230,7 +238,9 @@ pub fn list_edge_kinds() -> Vec<EdgeKindInfo> {
 		EdgeKindInfo {
 			symbol:      "def→".to_string(),
 			name:        "Definition".to_string(),
-			description: "From a declaration to its references (set-valued). Trailing `→` is sugar for `…def→§*`. Follows re-export chains.".to_string(),
+			description: "From a declaration to its references (set-valued). Trailing `→` is sugar \
+			              for `…def→§*`. Follows re-export chains."
+				.to_string(),
 		},
 		EdgeKindInfo {
 			symbol:      "call→".to_string(),
@@ -250,13 +260,15 @@ pub fn list_edge_kinds() -> Vec<EdgeKindInfo> {
 		EdgeKindInfo {
 			symbol:      "implements→".to_string(),
 			name:        "Implements".to_string(),
-			description: "From a type to the interface/trait it implements (TS `implements`, Rust `impl Trait for X`)"
+			description: "From a type to the interface/trait it implements (TS `implements`, Rust \
+			              `impl Trait for X`)"
 				.to_string(),
 		},
 		EdgeKindInfo {
 			symbol:      "inherits→".to_string(),
 			name:        "Inherits".to_string(),
-			description: "From a type to its base type (TS `extends`, Python `class X(Base)`)".to_string(),
+			description: "From a type to its base type (TS `extends`, Python `class X(Base)`)"
+				.to_string(),
 		},
 		EdgeKindInfo {
 			symbol:      "dispatches→".to_string(),
@@ -434,9 +446,45 @@ mod tests {
 
 	#[test]
 	fn list_qualifiers_all_well_formed() {
+		// PLAN-332 Thesis C / BUG-444: `applies_to` is a CONTROLLED vocabulary of
+		// target families. Pinning it here is the anti-drift guard — a future
+		// qualifier that advertises a bogus family (e.g. `#match` claiming
+		// `symbol` when it only works in a grep context) fails this test, so the
+		// generated find.md can never again over-promise a capability the
+		// resolver doesn't honour.
+		const KNOWN_FAMILIES: &[&str] = &["file", "dir", "symbol", "grep"];
 		for q in &list_qualifiers() {
 			assert!(!q.name.is_empty());
 			assert!(!q.applies_to.is_empty(), "applies_to for {} must not be empty", q.name);
+			for family in &q.applies_to {
+				assert!(
+					KNOWN_FAMILIES.contains(&family.as_str()),
+					"qualifier `#{}` advertises unknown target family `{}` (known: {:?}); add it to \
+					 KNOWN_FAMILIES only if a resolver actually honours it",
+					q.name,
+					family,
+					KNOWN_FAMILIES,
+				);
+			}
+		}
+	}
+
+	// PLAN-332 Thesis C / BUG-444: the grep-context qualifiers (`#match`,
+	// `#captures`) must advertise the `grep` family — NOT `file`/`symbol` —
+	// because they read metadata a preceding `[text~=...]` predicate attaches.
+	// This is the specific regression that motivated the controlled vocabulary.
+	#[test]
+	fn grep_context_qualifiers_are_not_advertised_as_bare_file_or_symbol() {
+		for name in ["match", "captures"] {
+			let q = list_qualifiers()
+				.into_iter()
+				.find(|q| q.name == name)
+				.unwrap_or_else(|| panic!("qualifier `#{name}` missing from introspection"));
+			assert_eq!(
+				q.applies_to,
+				vec!["grep".to_string()],
+				"`#{name}` must advertise only the `grep` family (BUG-444)"
+			);
 		}
 	}
 

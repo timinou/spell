@@ -339,6 +339,18 @@ function extractImages(
 				text: `[image unavailable: bytes externalized to ${content.artifactUri}]`,
 				skipImageBlock: true,
 			});
+		} else if (content.handle) {
+			// Kernel #image qualifier omits inline bytes for oversized rasters
+			// (>512KiB), leaving a handle-only node. Surface a marker instead of
+			// silently dropping the image so the model knows it exists and how to
+			// view it. (Bare-path image reads bypass this by loading via the read
+			// path, which resizes; this only fires on an explicit `…#image`.)
+			images.push({
+				data: "",
+				mimeType: content.mimeType,
+				text: `[image too large to inline (${content.mimeType}${content.width && content.height ? `, ${content.width}×${content.height}` : ""}); read the bare path to get a resized, viewable version]`,
+				skipImageBlock: true,
+			});
 		}
 	}
 	return images;

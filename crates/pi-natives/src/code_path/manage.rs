@@ -15,11 +15,22 @@ use serde_json::{Value, json};
 
 use super::{
 	edit_history::{EditHistory, HistoryQuery, JsonlHistory},
-	napi::{DiagnosticDto, NodeRefDto},
+	napi::{ContentDto, DiagnosticDto, NodeRefDto},
 };
 
 /// Build a §manage-result NodeRefDto with the given subcommand and payload.
 fn manage_result(subcommand: &str, payload: Value) -> NodeRefDto {
+	manage_result_inner(subcommand, payload, None)
+}
+
+/// Like [`manage_result`] but attaches a text body — used by undo/redo to carry
+/// the effective diff so the TS render layer shows a diff cell rather than an
+/// opaque entry id (PLAN-332 Thesis D / FEAT-809).
+fn manage_result_with_content(subcommand: &str, payload: Value, content: String) -> NodeRefDto {
+	manage_result_inner(subcommand, payload, Some(content))
+}
+
+fn manage_result_inner(subcommand: &str, payload: Value, content: Option<String>) -> NodeRefDto {
 	let mut metadata = serde_json::Map::new();
 	metadata.insert("subcommand".to_string(), Value::String(subcommand.to_string()));
 	metadata.insert("payload".to_string(), payload);
@@ -28,7 +39,11 @@ fn manage_result(subcommand: &str, payload: Value) -> NodeRefDto {
 		range_start: 0,
 		range_end:   0,
 		kind:        "§manage-result".to_string(),
-		content:     None,
+		content:     content.map(|value| ContentDto {
+			kind: "text".to_string(),
+			value: Some(value),
+			..Default::default()
+		}),
 		metadata:    Value::Object(metadata),
 		diagnostics: Vec::new(),
 	}
@@ -119,8 +134,13 @@ pub fn handle_undo(
 		query = query.file_glob(path.to_string_lossy().to_string());
 	}
 	match history.revert(query) {
-		super::edit_history::RevertOutcome::Success { entry_id } => {
-			Ok(manage_result("undo", json!({ "reverted": entry_id })))
+		super::edit_history::RevertOutcome::Success { entry_id, file, diff } => {
+			let rel = file.to_string_lossy().to_string();
+			Ok(manage_result_with_content(
+				"undo",
+				json!({ "reverted": entry_id, "file": rel, "diff": diff }),
+				diff,
+			))
 		},
 		super::edit_history::RevertOutcome::NotFound => Ok(manage_result(
 			"undo",
@@ -146,13 +166,17 @@ pub fn handle_redo(
 		query = query.file_glob(path.to_string_lossy().to_string());
 	}
 	match history.reapply(query) {
-		super::edit_history::RevertOutcome::Success { entry_id } => {
-			Ok(manage_result("redo", json!({ "reapplied": entry_id })))
+		super::edit_history::RevertOutcome::Success { entry_id, file, diff } => {
+			let rel = file.to_string_lossy().to_string();
+			Ok(manage_result_with_content(
+				"redo",
+				json!({ "reapplied": entry_id, "file": rel, "diff": diff }),
+				diff,
+			))
 		},
-		super::edit_history::RevertOutcome::NotFound => Ok(manage_result(
-			"redo",
-			json!({ "message": "no undone edit to redo for this session" }),
-		)),
+		super::edit_history::RevertOutcome::NotFound => {
+			Ok(manage_result("redo", json!({ "message": "no undone edit to redo for this session" })))
+		},
 		super::edit_history::RevertOutcome::Error(e) => {
 			Err(diag_internal(format!("reapply failed: {e}")))
 		},
@@ -318,15 +342,13 @@ mod undo_tests {
 		// Target-less undo: must succeed and revert the file to "ORIG".
 		let out = handle_undo("", &root, "S1").expect("target-less undo should succeed");
 		let payload = out.metadata.get("payload").unwrap();
-		assert!(
-			payload.get("reverted").is_some(),
-			"expected a reverted entry id, got: {payload:?}"
-		);
+		assert!(payload.get("reverted").is_some(), "expected a reverted entry id, got: {payload:?}");
 		assert_eq!(std::fs::read_to_string(&file).unwrap(), "ORIG\n");
 	}
 
 	/// redo re-applies the most recently undone edit (round-trip): write AFTER,
-	/// record before/after, undo → ORIG, redo → AFTER. Target-less, mirroring undo.
+	/// record before/after, undo → ORIG, redo → AFTER. Target-less, mirroring
+	/// undo.
 	#[test]
 	fn handle_redo_reapplies_after_undo() {
 		let ws = tempfile::tempdir().unwrap();
@@ -351,10 +373,7 @@ mod undo_tests {
 		assert_eq!(std::fs::read_to_string(&file).unwrap(), "ORIG\n");
 		let out = handle_redo("", &root, "S1").expect("redo should succeed");
 		let payload = out.metadata.get("payload").unwrap();
-		assert!(
-			payload.get("reapplied").is_some(),
-			"expected reapplied entry id, got: {payload:?}"
-		);
+		assert!(payload.get("reapplied").is_some(), "expected reapplied entry id, got: {payload:?}");
 		assert_eq!(std::fs::read_to_string(&file).unwrap(), "AFTER\n");
 		// And undo again works (reverted flag was cleared).
 		handle_undo("", &root, "S1").expect("undo again");
@@ -368,7 +387,13 @@ mod undo_tests {
 		let root = ws.path().to_path_buf();
 		std::fs::create_dir_all(root.join(".spell")).unwrap();
 		let out = handle_redo("", &root, "NOPE").expect("redo no-op should not error");
-		assert!(out.metadata.get("payload").unwrap().get("message").is_some());
+		assert!(
+			out.metadata
+				.get("payload")
+				.unwrap()
+				.get("message")
+				.is_some()
+		);
 	}
 
 	/// Empty session with no history → graceful NotFound message, not an error.
@@ -379,10 +404,7 @@ mod undo_tests {
 		std::fs::create_dir_all(root.join(".spell")).unwrap();
 		let out = handle_undo("", &root, "NOPE").expect("no-history undo should not error");
 		let payload = out.metadata.get("payload").unwrap();
-		assert!(
-			payload.get("message").is_some(),
-			"expected a graceful message, got: {payload:?}"
-		);
+		assert!(payload.get("message").is_some(), "expected a graceful message, got: {payload:?}");
 		let _ = PathBuf::new();
 	}
 }

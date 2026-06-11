@@ -64,6 +64,12 @@ type InboundFrame = (RequestFrame | ResponseFrame) & Record<string, unknown>;
 export interface ToolCallRequest {
 	tool: string;
 	args: Record<string, unknown>;
+	/**
+	 * The originating execute's id (D3): binds this tool call to its program's
+	 * transaction scope so write-effect calls enlist under the right program.
+	 * Absent for callers that don't carry one (the wire stays clean).
+	 */
+	execId?: number;
 }
 
 /**
@@ -82,8 +88,23 @@ export interface ExecuteParams {
 	context?: Record<string, unknown>;
 	signature?: string;
 	timeoutMs?: number;
+	/**
+	 * Sandbox heap ceiling in BEAM WORDS (1 word = 8 bytes — callers convert from
+	 * MB at the boundary; FEAT-791). Omitted → the runtime's default (~50MB).
+	 */
+	maxHeapWords?: number;
+	/** Session-store ceiling in BYTES (PATCH-5); omitted → runtime default. */
+	sessionStoreBytes?: number;
 	/** Aborts the tool_calls this execute issues (composed with the client signal). */
 	signal?: AbortSignal;
+	/**
+	 * Called synchronously with the execute's wire id the instant it is allocated
+	 * (D3). The id is the SAME value that tags this program's reentrant tool_calls
+	 * (`exec_id`), so a caller can open a transaction scope keyed by it BEFORE the
+	 * program issues its first write. Called once per attempt (a transparent
+	 * re-init retry re-invokes it with the retry's id).
+	 */
+	onExecId?: (execId: number) => void;
 }
 
 /** Catalog handed to the runtime at `init`. */
@@ -163,15 +184,32 @@ export class PtcRuntimeClient {
 	}
 
 	/** Hydrate the runtime with the tool + provider catalog. */
-	async init(catalog: Catalog): Promise<{ tools: string[] }> {
+	async init(catalog: Catalog, sessionStoreBytes?: number): Promise<{ tools: string[] }> {
 		this.lastCatalog = catalog;
-		const result = (await this.request("init", { catalog })) as { tools?: string[] };
+		const params: Record<string, unknown> = { catalog };
+		if (sessionStoreBytes !== undefined) params.sessionStoreBytes = sessionStoreBytes;
+		const result = (await this.request("init", params)) as { tools?: string[] };
 		return { tools: result.tools ?? [] };
 	}
 
 	/** True once the runtime has closed (process exit or `close()`). */
 	get closed(): boolean {
 		return this._closed;
+	}
+
+	/**
+	 * Parse-only validation (W4 / FEAT-810): check a program parses and uses no
+	 * unknown builtins/vars, running ZERO tool calls and ZERO effects. Used at
+	 * STORE time for a stored program. Resolves `{ ok: true }` or
+	 * `{ ok: false, errors }` (errors carry "Did you mean" hints). Available
+	 * pre-init.
+	 */
+	async validate(program: string): Promise<{ ok: boolean; errors?: string[] }> {
+		const result = (await this.request("validate", { program })) as {
+			ok?: boolean;
+			errors?: string[];
+		};
+		return { ok: result.ok ?? false, errors: result.errors };
 	}
 
 	/** Run a PTC-Lisp program; resolve with its (signature-validated) value. */
@@ -181,11 +219,16 @@ export class PtcRuntimeClient {
 			// Register the per-execute signal under the id we are about to allocate
 			// so inbound tool_calls tagged with this exec_id compose against it.
 			if (params.signal) this.execSignals.set(id, params.signal);
+			// D3: hand the caller the id NOW (before the program runs) so it can open
+			// a transaction scope keyed by the same exec_id this program's tool_calls
+			// will carry.
+			params.onExecId?.(id);
 			const p = this.request("execute", {
 				program: params.program,
 				context: params.context,
 				signature: params.signature,
 				timeout_ms: params.timeoutMs,
+				max_heap: params.maxHeapWords,
 			});
 			// Fire-and-forget cleanup: deregister the per-execute signal once this
 			// execute settles. Done off the awaited chain so it adds no microtask
@@ -287,7 +330,10 @@ export class PtcRuntimeClient {
 		}
 
 		try {
-			const value = await this.onToolCall({ tool, args: params.args ?? {} }, this.toolCallSignal(params.exec_id));
+			const value = await this.onToolCall(
+				{ tool, args: params.args ?? {}, execId: params.exec_id },
+				this.toolCallSignal(params.exec_id),
+			);
 			this.respondResult(frame.id, value);
 		} catch (e) {
 			this.respondError(frame.id, -32000, e instanceof Error ? e.message : String(e));

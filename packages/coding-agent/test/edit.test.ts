@@ -613,3 +613,55 @@ describe("cwd-prefix duplication guard", () => {
 		expect(await fs.exists(path.join(nested, "lib", "foo.ex"))).toBe(true);
 	});
 });
+
+// PLAN-332 Thesis D / FEAT-809: undo/redo surface the EFFECTIVE diff, not an
+// opaque entry id. The kernel returns a §manage-result whose payload carries
+// `diff` + `file`; the tool turns it into a diff-cell result.
+describe("FEAT-809 undo/redo diff output", () => {
+	afterEach(() => {
+		(spyOn(nativesModule, "executeCodePath") as any).mockRestore?.();
+	});
+
+	function manageResult(payload: Record<string, unknown>, content?: string): any {
+		return [
+			{
+				nodes: [
+					{
+						locator: "manage://undo",
+						rangeStart: 0,
+						rangeEnd: 0,
+						kind: "§manage-result",
+						content: content ? { kind: "text", value: content } : null,
+						metadata: { subcommand: "undo", payload },
+						diagnostics: [],
+					},
+				],
+				diagnostics: [],
+				done: true,
+			},
+		];
+	}
+
+	it("renders the effective diff for undo (not a bare entry id)", async () => {
+		const diff = "@@ -1 +1 @@\n+export const value = 1;\n-export const value = 999;";
+		spyOn(nativesModule, "executeCodePath").mockResolvedValue(
+			manageResult({ reverted: "32", file: path.join(tmpDir, "x.ts"), diff }, diff),
+		);
+		const result = await edit({ operations: [{ target: "", action: { kind: "undo" } }] });
+		const text = getText(result);
+		expect(text).toContain("export const value = 1;");
+		expect(text).not.toContain('"reverted"');
+		// details carry action+target so renderResult shows a titled diff cell.
+		const d = result.details as { action?: string; target?: string };
+		expect(d.action).toBe("undo");
+		expect(d.target).toBe("x.ts");
+	});
+
+	it("surfaces the actionable message when there is nothing to undo", async () => {
+		spyOn(nativesModule, "executeCodePath").mockResolvedValue(
+			manageResult({ message: "no uncommitted edit found for this session" }),
+		);
+		const result = await edit({ operations: [{ target: "", action: { kind: "undo" } }] });
+		expect(getText(result)).toContain("no uncommitted edit found");
+	});
+});

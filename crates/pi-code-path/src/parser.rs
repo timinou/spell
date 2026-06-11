@@ -867,7 +867,15 @@ fn range_predicate(input: &mut &str) -> ModalResult<Predicate> {
 fn attribute_predicate(input: &mut &str) -> ModalResult<Predicate> {
 	let name: &str = ident.parse_next(input)?;
 	'='.parse_next(input)?;
-	let value = alt((quoted_string, ident.map(|s: &str| s.to_string()))).parse_next(input)?;
+	// The unquoted value is a free token up to `]`/space so dotted member paths
+	// (`name=console.log`, `name=a.b.c`) and other punctuated identifiers parse
+	// without requiring quotes — matching the documented `§call[name=console.log]`
+	// recipe. Quoted values still win when present.
+	let value = alt((
+		quoted_string,
+		take_while(1.., |c: char| c != ']' && c != ' ').map(|s: &str| s.to_string()),
+	))
+	.parse_next(input)?;
 	Ok(Predicate::Attribute { name: name.to_string(), value })
 }
 
@@ -1064,11 +1072,7 @@ mod tests {
 		] {
 			let cp = parse_code_path(input, &DotLexer)
 				.unwrap_or_else(|e| panic!("parse failed for {input}: {e:?}"));
-			assert_eq!(
-				cp.qualifier.as_ref().expect("qualifier present").name,
-				expected,
-				"{input}"
-			);
+			assert_eq!(cp.qualifier.as_ref().expect("qualifier present").name, expected, "{input}");
 		}
 	}
 
@@ -1078,7 +1082,8 @@ mod tests {
 		let cp = parse_code_path("src/foo.ex::handle_call[type_aware]", &DotLexer).unwrap();
 		let q = cp.query.unwrap();
 		assert!(
-			q.head.predicates
+			q.head
+				.predicates
 				.iter()
 				.any(|p| matches!(p, Predicate::Flag(s) if s == "type_aware")),
 			"type_aware flag predicate present"
@@ -1393,6 +1398,19 @@ mod tests {
 		let q = cp.query.unwrap();
 		assert!(
 			matches!(&q.head.predicates[0], Predicate::Attribute { name, value } if name == "lang" && value == "rust")
+		);
+	}
+
+	#[test]
+	fn predicate_attribute_dotted_value() {
+		// Adversarial test-drive: an unquoted attribute value may contain dots so
+		// the documented `§call[name=console.log]` recipe parses without quotes.
+		let cp = parse_code_path("a.ts::§call[name=console.log]", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert!(
+			matches!(&q.head.predicates[0], Predicate::Attribute { name, value } if name == "name" && value == "console.log"),
+			"got: {:?}",
+			q.head.predicates
 		);
 	}
 
@@ -1854,8 +1872,7 @@ mod tests {
 }
 #[cfg(test)]
 mod trailing_edge_tests {
-	use super::tests::DotLexer;
-	use super::*;
+	use super::{tests::DotLexer, *};
 
 	#[test]
 	fn trailing_def_arrow_synthesizes_star_step() {
@@ -1892,8 +1909,7 @@ mod trailing_edge_tests {
 }
 #[cfg(test)]
 mod heritage_edge_tests {
-	use super::tests::DotLexer;
-	use super::*;
+	use super::{tests::DotLexer, *};
 
 	#[test]
 	fn implements_arrow_parses() {

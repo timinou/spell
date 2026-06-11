@@ -365,9 +365,10 @@ fn select_lexer(target: &str) -> (NameLexerWrapper, Vec<Diagnostic>) {
 		// `execute_code_path_inner` (post-parse).
 		diagnostics.push(Diagnostic {
 			variant: DiagnosticVariant::Informational,
-			message: "glob path prefix means language-specific symbol-name matching is \
-			          disabled for this query; this only affects `::SymbolName` style heads, \
-			          not `::§kind` / `::¶anchor` / `::field:` axes".to_string(),
+			message: "glob path prefix means language-specific symbol-name matching is disabled for \
+			          this query; this only affects `::SymbolName` style heads, not `::§kind` / \
+			          `::¶anchor` / `::field:` axes"
+				.to_string(),
 			span:    None,
 		});
 		return (
@@ -469,7 +470,11 @@ pub fn execute_code_path_inner(
 			.filter(|d| {
 				let is_glob_lexer_hint = matches!(d.variant, DiagnosticVariant::Informational)
 					&& d.message.contains("glob path prefix");
-				if is_glob_lexer_hint { head_is_name } else { true }
+				if is_glob_lexer_hint {
+					head_is_name
+				} else {
+					true
+				}
 			})
 			.collect()
 	};
@@ -521,10 +526,7 @@ pub fn execute_code_path_inner(
 			let mut parsed = Vec::with_capacity(raw_actions.len());
 			for raw in &raw_actions {
 				let kind = raw.get("kind").and_then(|k| k.as_str()).unwrap_or("");
-				let is_verb = matches!(
-					kind,
-					"replace" | "rename" | "delete" | "patch" | "restructure"
-				);
+				let is_verb = matches!(kind, "replace" | "rename" | "delete" | "patch" | "restructure");
 				let parse_result: std::result::Result<Op, String> = if is_verb {
 					// Verbs carry no `target`; they lower against the parsed `cp`.
 					serde_json::from_value::<pi_code_path::Verb>(raw.clone())
@@ -767,9 +769,8 @@ pub fn execute_code_path_inner(
 								// `created` keeps its dedicated "Created X" render; delete is
 								// a whole-file removal where a diff is pure noise.
 								if outcome.diff.is_none() && !outcome.created {
-									outcome.diff = Some(
-										diffy::create_patch(&before_op, &after_op).to_string(),
-									);
+									outcome.diff =
+										Some(diffy::create_patch(&before_op, &after_op).to_string());
 								}
 							}
 						}
@@ -797,9 +798,11 @@ pub fn execute_code_path_inner(
 		let nodes: Vec<NodeRefDto> = outcomes.into_iter().map(mutation_outcome_to_dto).collect();
 		let mut chunk = CodePathChunk { nodes, diagnostics: Vec::new(), done: true };
 		if !parse_diagnostics.is_empty() {
-			chunk
-				.diagnostics
-				.extend(parse_diagnostics.into_iter().map(crate::code_path::marshal::diagnostic_to_dto));
+			chunk.diagnostics.extend(
+				parse_diagnostics
+					.into_iter()
+					.map(crate::code_path::marshal::diagnostic_to_dto),
+			);
 		}
 		return Ok(vec![chunk]);
 	}
@@ -808,11 +811,11 @@ pub fn execute_code_path_inner(
 	// When the query chain contains an Edge combinator (ref→/def→/call→/
 	// import→/bind→), resolve the prefix as a normal symbol query, then
 	// walk the cached pi-code-graph to produce the edge's neighbours.
-	if let Some(edge_pos) = cp
-		.query
-		.as_ref()
-		.and_then(|q| q.chain.iter().position(|(c, _)| matches!(c, pi_code_path::ast::Combinator::Edge(_))))
-	{
+	if let Some(edge_pos) = cp.query.as_ref().and_then(|q| {
+		q.chain
+			.iter()
+			.position(|(c, _)| matches!(c, pi_code_path::ast::Combinator::Edge(_)))
+	}) {
 		if let Locator::Fs(_) = &cp.locator {
 			return edge_dispatch::resolve(
 				cp,
@@ -957,10 +960,13 @@ pub fn execute_code_path_inner(
 			// profiles get the unmodified URI — their qualifiers are codepath ops
 			// to apply post-resolution, not part of the identifier.
 			let resolve_uri = match &cp.qualifier {
-				Some(q) if registry.scheme_uses_callback_loader(&uri.scheme)
-					&& !matches!(q.name.as_str(),
-						"json" | "stat" | "tree" | "raw" | "listing" | "diff")
-				=> {
+				Some(q)
+					if registry.scheme_uses_callback_loader(&uri.scheme)
+						&& !matches!(
+							q.name.as_str(),
+							"json" | "stat" | "tree" | "raw" | "listing" | "diff"
+						) =>
+				{
 					let mut p = uri.path.clone();
 					p.push('#');
 					p.push_str(&q.name);
@@ -969,7 +975,7 @@ pub fn execute_code_path_inner(
 						p.push_str(args);
 					}
 					pi_code_path::ast::UriLocator { scheme: uri.scheme.clone(), path: p }
-				}
+				},
 				_ => uri.clone(),
 			};
 
@@ -984,10 +990,12 @@ pub fn execute_code_path_inner(
 							let text = match &resolved.content {
 								pi_code_path::types::Content::Text { value } => value.clone(),
 								pi_code_path::types::Content::ExtractedText { text, .. } => text.clone(),
-								_ => return Err(Error::from_reason(format!(
-									"#json: requires text content; got binary for {}://{}",
-									uri.scheme, uri.path
-								))),
+								_ => {
+									return Err(Error::from_reason(format!(
+										"#json: requires text content; got binary for {}://{}",
+										uri.scheme, uri.path
+									)));
+								},
 							};
 							let extracted = match pi_code_path::jq_subset::eval(&text, expr) {
 								Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_default(),
@@ -1073,7 +1081,11 @@ pub fn execute_code_path_inner(
 							metadata.insert(
 								"notes".into(),
 								serde_json::Value::Array(
-									resolved.notes.iter().map(|n| serde_json::Value::String(n.clone())).collect(),
+									resolved
+										.notes
+										.iter()
+										.map(|n| serde_json::Value::String(n.clone()))
+										.collect(),
 								),
 							);
 						}
@@ -1656,6 +1668,36 @@ mod tests {
 		assert!(text.contains("newName"), "expected rename to newName, got: {}", text);
 	}
 
+	/// Regression (adversarial test-drive): `rename` MUST rewrite every in-file
+	/// reference, not just the declaration. The builder path
+	/// (resolve_mutation_edit) only rewrote the declaration name field,
+	/// silently leaving call sites dangling; rename now routes to the legacy
+	/// `single_action` → `rename_symbol` path which renames the declaration AND
+	/// all references.
+	#[test]
+	fn edit_rename_symbol_updates_all_references() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		let file = root.join("refs.ts");
+		std::fs::write(
+			&file,
+			"function helper(x: number) { return x; }\nconst a = helper(1);\nconst b = helper(2);\n",
+		)
+		.unwrap();
+		let actions = Some(serde_json::json!([
+			{"kind": "symbolRename", "newName": "doubler"}
+		]));
+		let chunks = execute_code_path_inner(
+			opts_edit_with_root("refs.ts::helper".to_string(), root.clone(), actions),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		assert!(chunks[0].diagnostics.is_empty(), "rename diagnostics: {:?}", chunks[0].diagnostics);
+		let text = std::fs::read_to_string(root.join("refs.ts")).unwrap();
+		assert!(!text.contains("helper"), "all `helper` occurrences must be renamed, got: {text}");
+		assert_eq!(text.matches("doubler").count(), 3, "decl + 2 call sites must be renamed: {text}");
+	}
+
 	/// Structural (symbol/css/heading) edits must carry a unified `diff` in the
 	/// edit-result metadata so the TUI renders a real diff rather than a flat
 	/// "Updated X (N edit(s))" line. Backfilled at the napi chokepoint for any
@@ -1693,7 +1735,6 @@ mod tests {
 		}
 	}
 
-
 	// ── PLAN-321: verb surface end-to-end through the real edit branch ──
 
 	#[test]
@@ -1713,6 +1754,30 @@ mod tests {
 		assert_eq!(chunks[0].nodes[0].kind, "§edit-result");
 		let text = std::fs::read_to_string(root.join("foo.ts")).unwrap();
 		assert!(text.contains("return 42"), "got: {text}");
+	}
+
+	#[test]
+	fn edit_md_structural_recipe_preserves_arguments() {
+		// BUG-454: the marquee edit.md cheat-sheet recipe
+		//   "§call[name=console.log]"  →  replace · content:"logger.info$2"
+		// must (a) resolve the call via the callee `function` field and
+		// (b) preserve the call's arguments ($2 = the arguments node).
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("svc.ts"), "function f() {\n  console.log(\"hi\", x);\n}\n")
+			.unwrap();
+		let actions = Some(serde_json::json!([
+			{"kind": "replace", "content": "logger.info$2"}
+		]));
+		let chunks = execute_code_path_inner(
+			opts_edit_with_root("svc.ts::§call[name=console.log]".to_string(), root.clone(), actions),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		assert!(chunks[0].diagnostics.is_empty(), "{:?}", chunks[0].diagnostics);
+		let text = std::fs::read_to_string(root.join("svc.ts")).unwrap();
+		assert!(text.contains("logger.info(\"hi\", x)"), "args must be preserved, got: {text}");
+		assert!(!text.contains("console.log"), "callee must be replaced, got: {text}");
 	}
 
 	#[test]
@@ -2204,13 +2269,13 @@ mod tests {
 	}
 }
 
-/// Wrap a single NodeRef into the standard CodePathChunk[] shape with done=true.
-/// Used by special-case branches that bypass the main projection/limit pipeline.
+/// Wrap a single NodeRef into the standard CodePathChunk[] shape with
+/// done=true. Used by special-case branches that bypass the main
+/// projection/limit pipeline.
 fn single_node_chunks(node: pi_code_path::types::NodeRef) -> Vec<CodePathChunk> {
 	let dtos = nodes_to_dtos(vec![node], ARTIFACT_THRESHOLD);
 	vec![CodePathChunk { nodes: dtos, diagnostics: vec![], done: true }]
 }
-
 
 /// PLAN-310: agent:// URL path-form sugar.
 ///
@@ -2222,7 +2287,9 @@ fn single_node_chunks(node: pi_code_path::types::NodeRef) -> Vec<CodePathChunk> 
 /// Numeric segments become `[N]`; identifier-ish segments become `.<name>`;
 /// other segments become `["<name>"]` with quotes escaped.
 fn rewrite_agent_path_form(target: &mut String) {
-	let Some(rest) = target.strip_prefix("agent://") else { return };
+	let Some(rest) = target.strip_prefix("agent://") else {
+		return;
+	};
 	if rest.contains('#') {
 		return; // already has qualifier; user-controlled
 	}
@@ -2232,7 +2299,9 @@ fn rewrite_agent_path_form(target: &mut String) {
 	};
 	let mut parts = path.splitn(2, '/');
 	let id = parts.next().unwrap_or("");
-	let Some(json_path) = parts.next() else { return };
+	let Some(json_path) = parts.next() else {
+		return;
+	};
 	if id.is_empty() || json_path.is_empty() {
 		return;
 	}
@@ -2267,7 +2336,6 @@ fn path_segments_to_jq(path: &str) -> String {
 	out
 }
 
-
 /// Best-effort percent-decoding (URL-encoded segments). Returns the raw
 /// segment when the bytes don't form a valid UTF-8 string after decoding.
 fn percent_decode_str(s: &str) -> String {
@@ -2296,4 +2364,3 @@ fn hex_digit(b: u8) -> Option<u8> {
 		_ => None,
 	}
 }
-

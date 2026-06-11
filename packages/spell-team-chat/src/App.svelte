@@ -2,6 +2,7 @@
 	import { onMount } from "svelte";
 	import { api, tokenStore, type ManifestTemplate } from "./lib/api";
 	import { app, toasts } from "./lib/stores.svelte";
+	import type { RunStoredResult } from "./lib/protocol";
 	import { buildWsUrl, WsClient } from "./lib/ws";
 	import Login from "./components/Login.svelte";
 	import Shell from "./components/Shell.svelte";
@@ -138,6 +139,34 @@
 		ws?.send({ type: "rpc", sessionId, command: { type: "abort" } });
 	}
 
+	// W4 stored-program tile: run a stored PTC-Lisp program through the agent's
+	// intent-gated runner (no LLM turn) and return the structured result the tile
+	// renders (preview / committed / rolled-back). Targets a spawned session.
+	async function onRunStored(
+		sessionId: string,
+		req: {
+			program: string;
+			mode?: "read" | "write";
+			intent?: "interactive" | "visible-refresh" | "background-tick";
+			autoWrite?: boolean;
+		},
+	): Promise<RunStoredResult> {
+		if (!ws) throw new Error("not connected");
+		const result = await ws.request({
+			type: "rpc",
+			sessionId,
+			command: { type: "run_stored", ...req },
+		});
+		if (result.type !== "rpc_response") throw new Error("unexpected response");
+		// The wire field is `success` (RpcResponseEvent), not `ok`. On an agent-side
+		// error the response carries success:false + an `error` string and NO data —
+		// surface that string rather than returning undefined and crashing the tile.
+		const resp = result.response as { success?: boolean; error?: string; data?: unknown };
+		if (resp.success === false) throw new Error(resp.error ?? "run_stored failed");
+		if (!resp.data) throw new Error("run_stored returned no result");
+		return resp.data as RunStoredResult;
+	}
+
 	async function onKill(sessionId: string) {
 		if (!token) return;
 		await api.killSession(token, sessionId);
@@ -184,6 +213,7 @@
 		{onSubmit}
 		{onAbort}
 		{onKill}
+		{onRunStored}
 		{onBlockingAction}
 		onSignOut={signOut}
 	/>

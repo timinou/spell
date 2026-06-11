@@ -184,6 +184,56 @@ defmodule PtcRuntime.PeerRobustnessTest do
     end
   end
 
+  describe "FEAT-791: per-execute max_heap request param" do
+    test "a per-execute max_heap overrides the session ceiling for that program" do
+      # Session default would allow this allocation; a tiny per-execute
+      # max_heap must fail it memory_exceeded — proving the param reaches
+      # PtcRunner.Lisp.run for THIS execute.
+      peer = H.start()
+      init!(peer)
+
+      H.send_frame(peer, %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "execute",
+        "params" => %{
+          "program" => ~S|(reduce (fn [acc x] (str acc x)) "" (range 0 50000))|,
+          "timeout_ms" => 5_000,
+          "max_heap" => 2_000
+        }
+      })
+
+      assert %{"id" => 1, "error" => %{"data" => %{"reason" => "memory_exceeded"}}} =
+               H.recv(6_000)
+
+      # The override was per-execute: the next program (no param) runs under
+      # the session default and succeeds.
+      H.send_frame(peer, %{
+        "jsonrpc" => "2.0",
+        "id" => 2,
+        "method" => "execute",
+        "params" => %{"program" => ~S|(+ 1 2)|}
+      })
+
+      assert %{"id" => 2, "result" => 3} = H.recv(2_000)
+      assert Process.alive?(peer)
+    end
+
+    test "a non-integer max_heap is ignored (session default applies)" do
+      peer = H.start()
+      init!(peer)
+
+      H.send_frame(peer, %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "execute",
+        "params" => %{"program" => ~S|(+ 1 1)|, "max_heap" => "lots"}
+      })
+
+      assert %{"id" => 1, "result" => 2} = H.recv(2_000)
+    end
+  end
+
   describe "PLAN-323: concurrent-execute admission ceiling" do
     test "rejects an execute beyond the concurrent ceiling, accepts again after one drains" do
       # Ceiling of 1: while one execute is in flight (blocked on a tool_call we

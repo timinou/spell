@@ -51,11 +51,11 @@ target ::= Locator (Query)? (Qualifier)?
 | qualifier | applies to | args |
 |---|---|---|
 | #bytes | file | — |
-| #captures | file, symbol | N |
+| #captures | grep | N after [text~="(re)"] |
 | #image | file | — |
 | #lines | file | a..b |
 | #listing | dir | — |
-| #match | file, symbol | — |
+| #match | grep | after [text~="re"] |
 | #raw | file | — |
 | #stat | file, dir | — |
 | #text | file | — |

@@ -71,8 +71,7 @@ pub fn walk(
 	// closure. Cross-file order becomes nondeterministic, but `find` results are
 	// set-valued downstream (TextResolver re-groups by file). Diagnostics are
 	// preserved in the same Vec for caller compatibility.
-	let collector: Arc<Mutex<Vec<Result<NodeRef, Diagnostic>>>> =
-		Arc::new(Mutex::new(results));
+	let collector: Arc<Mutex<Vec<Result<NodeRef, Diagnostic>>>> = Arc::new(Mutex::new(results));
 	let globset = Arc::new(globset);
 	let negative_globsets = Arc::new(negative_globsets);
 	let root = Arc::new(opts.root.clone());
@@ -153,10 +152,10 @@ pub fn walk(
 /// Returns:
 /// - `Ok(None)` for empty or pure-`**` patterns (no filter applied).
 /// - `Ok(Some(gs))` for valid compiled patterns.
-/// - `Err(msg)` when the pattern is non-empty but globset rejects it.
-///   The caller MUST treat this as zero matches + diagnostic; legacy
-///   behaviour was to treat compile failure as "no filter" which produced
-///   pathological unfiltered walks (BUG-405).
+/// - `Err(msg)` when the pattern is non-empty but globset rejects it. The
+///   caller MUST treat this as zero matches + diagnostic; legacy behaviour was
+///   to treat compile failure as "no filter" which produced pathological
+///   unfiltered walks (BUG-405).
 fn build_globset(pattern: &str) -> Result<Option<globset::GlobSet>, String> {
 	if pattern.is_empty() || pattern == "**" {
 		return Ok(None);
@@ -168,7 +167,10 @@ fn build_globset(pattern: &str) -> Result<Option<globset::GlobSet>, String> {
 		},
 		Err(e) => return Err(format!("invalid glob pattern `{pattern}`: {e}")),
 	}
-	builder.build().map(Some).map_err(|e| format!("invalid glob pattern `{pattern}`: {e}"))
+	builder
+		.build()
+		.map(Some)
+		.map_err(|e| format!("invalid glob pattern `{pattern}`: {e}"))
 }
 fn build_negative_globsets(loc: &FsLocator) -> Vec<globset::GlobSet> {
 	let segments = if loc.segments.len() == 1 {
@@ -405,8 +407,9 @@ mod tests {
 		assert!(nodes.len() < 250);
 	}
 
-	// BUG-405 (PLAN-318 W0): invalid glob (predicate-lookalike that globset rejects)
-	// must yield zero matches + diagnostic, NOT fall through to unfiltered walk.
+	// BUG-405 (PLAN-318 W0): invalid glob (predicate-lookalike that globset
+	// rejects) must yield zero matches + diagnostic, NOT fall through to
+	// unfiltered walk.
 	#[test]
 	fn glob_invalid_pattern_returns_empty_with_diagnostic() {
 		let (_dir, root) = make_walker_root();
@@ -435,12 +438,12 @@ mod tests {
 			nodes.iter().take(5).map(|n| &n.locator).collect::<Vec<_>>(),
 		);
 		assert!(
-			diags.iter().any(|d| d.message.to_lowercase().contains("glob")
-				&& (d.message.contains("invalid") || d.message.contains("compile"))),
+			diags
+				.iter()
+				.any(|d| d.message.to_lowercase().contains("glob")
+					&& (d.message.contains("invalid") || d.message.contains("compile"))),
 			"expected a diagnostic naming the invalid glob; got: {:?}",
 			diags.iter().map(|d| &d.message).collect::<Vec<_>>(),
 		);
 	}
-
 }
-

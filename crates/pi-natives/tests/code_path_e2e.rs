@@ -431,6 +431,27 @@ mod qualifier_tests {
 		let text = content_text(&results[0]);
 		assert!(text.contains("sample markdown"), "first-para should contain text, got: {}", text);
 	}
+
+	// Adversarial test-drive regression: qualified Rust member addressing
+	// (`Type::method`) resolved to ZERO nodes because `RustNameLexer::matches`
+	// was a `false`-returning stub, so the walker's text fallback compared the
+	// full path `Point::origin` against the bare name field `origin` and missed.
+	// Leaf-matching restores it. Bare `origin` already worked; the regression is
+	// specifically the qualified form.
+	#[test]
+	fn rust_qualified_member_body_resolves() {
+		let path = fixture_root().join("sample.rs");
+		let results = resolve_qualified(
+			&path,
+			"sample.rs::Point::origin#body",
+			&pi_code_path::dialects::rust::RustNameLexer,
+		);
+		assert!(
+			results.iter().any(|r| matches!(&r.content, Some(pi_code_path::types::Content::Text { value }) if value.contains("0.0"))),
+			"`Point::origin#body` must resolve the method body (contains 0.0), got kinds {:?}",
+			results.iter().map(|r| r.kind.clone()).collect::<Vec<_>>()
+		);
+	}
 }
 
 mod anchor_tests {

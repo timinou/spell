@@ -201,12 +201,53 @@ fn match_declaration<'a>(
 	match_declaration(child, profile, name, source)
 }
 
+/// Descend through wrapper nodes (TS `export_statement`, Python
+/// `decorated_definition`) to the class-like container node so member
+/// resolution can match the declared `class_like.node_type`. Returns the input
+/// node unchanged when it is already class-like or no class-like child exists.
+fn unwrap_to_class_like<'a>(node: Node<'a>, profile: &LanguageProfile) -> Node<'a> {
+	let is_class_like = |n: &Node<'_>| profile.class_like.iter().any(|cl| cl.node_type == n.kind());
+	if is_class_like(&node) {
+		return node;
+	}
+	// Look one level down for a class-like child (covers single-wrapper cases:
+	// export/decorator). Bounded to direct named children — deeper nesting is not
+	// a wrapper pattern.
+	let mut cursor = node.walk();
+	for child in node.named_children(&mut cursor) {
+		if is_class_like(&child) {
+			return child;
+		}
+	}
+	node
+}
+
+/// Unwrap a Python `decorated_definition` member to its inner definition
+/// (`function_definition` / `class_definition`). The wrapper has no body field
+/// of its own, so #body / #sig extraction must operate on the inner node.
+/// Returns the node unchanged when it is not a decorated wrapper.
+fn unwrap_decorated_member(node: Node<'_>) -> Node<'_> {
+	if node.kind() == "decorated_definition" {
+		let mut cursor = node.walk();
+		for child in node.named_children(&mut cursor) {
+			if child.kind() != "decorator" {
+				return child;
+			}
+		}
+	}
+	node
+}
+
 /// Unwrap export_statement to get the inner declaration node.
 fn unwrap_export(node: Node<'_>) -> Node<'_> {
 	if node.kind() == "export_statement" {
 		let mut cursor = node.walk();
 		for child in node.named_children(&mut cursor) {
-			if child.kind() != "export_statement" {
+			// Skip the export keyword wrapper and any leading `decorator` nodes
+			// (`@sealed export class X`): the decoration precedes the declaration
+			// as a sibling, so returning the first child would yield the decorator
+			// rather than the class — leaving the symbol unrecognised.
+			if child.kind() != "export_statement" && child.kind() != "decorator" {
 				return child;
 			}
 		}
@@ -310,6 +351,28 @@ fn ambiguous_symbol_error(name: &str, matches: &[Node<'_>]) -> CodeEngineError {
 	))
 }
 
+/// Split a qualified symbol into `(container, member)` at its LAST path
+/// separator. Supports both `::` (Rust) and `.` (TS/Python/Go); `::` is
+/// preferred when present so `Type::method` splits correctly. Returns `None`
+/// when there is no non-empty container and member on either side.
+fn split_container_member(symbol: &str) -> Option<(&str, &str)> {
+	if let Some(idx) = symbol.rfind("::") {
+		let container = &symbol[..idx];
+		let member = &symbol[idx + 2..];
+		if !container.is_empty() && !member.is_empty() {
+			return Some((container, member));
+		}
+	}
+	if let Some(idx) = symbol.rfind('.') {
+		let container = &symbol[..idx];
+		let member = &symbol[idx + 1..];
+		if !container.is_empty() && !member.is_empty() {
+			return Some((container, member));
+		}
+	}
+	None
+}
+
 fn find_symbol_node<'a>(
 	root: Node<'a>,
 	profile: &LanguageProfile,
@@ -332,11 +395,18 @@ fn find_symbol_node<'a>(
 		return Err(ambiguous_symbol_error(symbol, &matches));
 	}
 
-	if let Some(last_dot) = symbol.rfind('.') {
-		let container_name = &symbol[..last_dot];
-		let member_name = &symbol[last_dot + 1..];
-		if !container_name.is_empty() && !member_name.is_empty() {
-			if let Some(container_node) = find_symbol_node(root, profile, source, container_name)? {
+	// Container/member split. Languages use different separators: TS/Python/Go
+	// use `.` (`Class.method`); Rust uses `::` (`Type::method`, `Trait::method`).
+	// Try the language-appropriate separator(s); `::` is checked first so a Rust
+	// `Widget::label` splits at the LAST `::` (container `Widget`, member `label`)
+	// rather than being treated as an unresolvable single name.
+	if let Some((container_name, member_name)) = split_container_member(symbol) {
+		// First, the single-container path (unchanged behaviour): handles the
+		// common case plus nested/self-nesting containers and dotted sub-paths
+		// (`A.B.method`). A container name that resolves uniquely goes straight
+		// through here.
+		match find_symbol_node(root, profile, source, container_name) {
+			Ok(Some(container_node)) => {
 				return resolve_member_node(
 					container_node,
 					profile,
@@ -345,7 +415,30 @@ fn find_symbol_node<'a>(
 					member_name,
 				)
 				.map(Some);
-			}
+			},
+			Ok(None) => {},
+			Err(_) => {
+				// Container name was AMBIGUOUS: in Rust a type and its `impl`
+				// block(s) share a name (`struct Widget` + `impl Widget` + `impl
+				// Trait for Widget`). Don't fail — gather every top-level container
+				// candidate and try the member in each; non-member-bearing nodes
+				// (the struct itself) simply yield no match.
+				let (base_container, _) = split_deduplicated_name(container_name);
+				let containers = find_top_level_matches(root, profile, source, base_container);
+				let mut found: Vec<Node<'a>> = Vec::new();
+				for container_node in containers {
+					if let Ok(node) =
+						resolve_member_node(container_node, profile, source, container_name, member_name)
+					{
+						found.push(node);
+					}
+				}
+				match found.len() {
+					0 => {},
+					1 => return Ok(Some(found[0])),
+					_ => return Err(ambiguous_symbol_error(symbol, &found)),
+				}
+			},
 		}
 	}
 
@@ -429,6 +522,11 @@ fn resolve_member_node<'a>(
 	class_name: &str,
 	member_name: &str,
 ) -> Result<Node<'a>> {
+	// The container node may arrive wrapped: TS `export_statement > class`, Python
+	// `decorated_definition > class_definition`. Descend to the class-like node so
+	// member resolution works on decorated/exported containers (otherwise the
+	// node_type check below fails on the wrapper).
+	let class_node = unwrap_to_class_like(class_node, profile);
 	let class_like = profile
 		.class_like
 		.iter()
@@ -462,7 +560,10 @@ fn resolve_member_node<'a>(
 		if let Some(decl) = declaration_for(profile, child, source) {
 			if let Some(name) = declaration_name(source, child, decl) {
 				if name == base_member_name {
-					matches.push(child);
+					// A decorated member (`@property def magnitude`) is a
+					// `decorated_definition` wrapper with no body field of its own;
+					// return the inner definition so #body/#sig extraction works.
+					matches.push(unwrap_decorated_member(child));
 				}
 			}
 		}
@@ -817,10 +918,7 @@ mod tests {
 		let profile = registry();
 		let profile = profile.get(&LanguageId::new("markdown")).unwrap();
 		let err = resolve_symbol(&buffer, profile, "Dup").expect_err("ambiguous");
-		assert!(
-			err.to_string().contains("Ambiguous"),
-			"expected ambiguity error, got: {err}"
-		);
+		assert!(err.to_string().contains("Ambiguous"), "expected ambiguity error, got: {err}");
 		// Dot-path disambiguates.
 		assert!(resolve_symbol(&buffer, profile, "A.Dup").is_ok());
 		assert!(resolve_symbol(&buffer, profile, "B.Dup").is_ok());
@@ -1231,5 +1329,88 @@ Deep section body.
 			.expect("resolve qualified clojure var");
 		assert_eq!(resolved.name, "normalize-name");
 		assert_eq!(resolved.kind, "function");
+	}
+
+	// Adversarial test-drive regressions: qualified member resolution on the
+	// EDIT side (find_symbol_node / resolve_member_node).
+
+	/// Rust `Type::method` must resolve the impl method even though the type and
+	/// its impl block(s) share a name (the container is "ambiguous" but only the
+	/// impl bears the member). Previously the `::` separator was never split and
+	/// the container ambiguity errored before member lookup.
+	#[test]
+	fn resolve_rust_qualified_impl_method() {
+		let source = "pub struct Widget { id: u64 }\n\nimpl Widget {\n    pub fn label(&self) -> \
+		              String { String::new() }\n    pub fn new() -> Self { Self { id: 0 } }\n}\n";
+		let buffer = CodeBuffer::from_str(source, LanguageId::new("rust"), registry()).expect("buf");
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("rust")).unwrap();
+		let resolved = resolve_symbol(&buffer, profile, "Widget::label").expect("Widget::label");
+		assert_eq!(resolved.name, "label");
+		assert!(resolved.body_start_byte.is_some(), "method must carry a body span");
+	}
+
+	/// Rust trait-impl method (`impl Trait for Type`) is addressable by
+	/// `Type::method` too — the member lives in a second impl block sharing the
+	/// type name.
+	#[test]
+	fn resolve_rust_trait_impl_method() {
+		let source = "pub struct W;\n\nimpl W { fn a(&self) {} }\n\nimpl std::fmt::Display for W \
+		              {\n    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { \
+		              Ok(()) }\n}\n";
+		let buffer = CodeBuffer::from_str(source, LanguageId::new("rust"), registry()).expect("buf");
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("rust")).unwrap();
+		let resolved = resolve_symbol(&buffer, profile, "W::fmt").expect("W::fmt");
+		assert_eq!(resolved.name, "fmt");
+	}
+
+	/// Python member of a DECORATED class (`@dataclass class C`) must resolve:
+	/// the container arrives as a `decorated_definition` wrapper that has to be
+	/// descended to the `class_definition` before member lookup.
+	#[test]
+	fn resolve_python_decorated_class_member() {
+		let source =
+			"from dataclasses import dataclass\n\n@dataclass\nclass Point:\n    x: int\n    def \
+			 norm(self) -> float:\n        return 0.0\n";
+		let buffer =
+			CodeBuffer::from_str(source, LanguageId::new("python"), registry()).expect("buf");
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("python")).unwrap();
+		let resolved = resolve_symbol(&buffer, profile, "Point.norm").expect("Point.norm");
+		assert_eq!(resolved.name, "norm");
+		assert!(resolved.body_start_byte.is_some(), "method must carry a body span");
+	}
+
+	/// Python `@property` member is itself a `decorated_definition`; #body span
+	/// extraction must descend to the inner `function_definition`.
+	#[test]
+	fn resolve_python_decorated_property_member_has_body() {
+		let source = "class V:\n    @property\n    def mag(self) -> float:\n        return 1.0\n";
+		let buffer =
+			CodeBuffer::from_str(source, LanguageId::new("python"), registry()).expect("buf");
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("python")).unwrap();
+		let resolved = resolve_symbol(&buffer, profile, "V.mag").expect("V.mag");
+		assert_eq!(resolved.name, "mag");
+		assert!(
+			resolved.body_start_byte.is_some() && resolved.body_end_byte.is_some(),
+			"decorated property must expose a body span for #body edits"
+		);
+	}
+
+	/// TS decorated + exported class (`@sealed export class S`) member must
+	/// resolve: `unwrap_export` has to skip the leading `decorator` sibling to
+	/// reach the class declaration.
+	#[test]
+	fn resolve_ts_decorated_exported_class_member() {
+		let source = "@sealed\nexport class S {\n  go(): number {\n    return 1;\n  }\n}\n";
+		let buffer =
+			CodeBuffer::from_str(source, LanguageId::new("typescript"), registry()).expect("buf");
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("typescript")).unwrap();
+		let resolved = resolve_symbol(&buffer, profile, "S.go").expect("S.go");
+		assert_eq!(resolved.name, "go");
+		assert!(resolved.body_start_byte.is_some(), "method must carry a body span");
 	}
 }

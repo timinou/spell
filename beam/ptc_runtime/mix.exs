@@ -44,7 +44,10 @@ defmodule PtcRuntime.MixProject do
 
   defp deps do
     [
-      {:ptc_runner, "~> 0.11.0"},
+      # Spell-owned vendored fork (F0, specs/beam-orchestrator/06-execute-substrate.md):
+      # handle-aware builtins, psettled, and preflight lint land in the fork's eval
+      # layer. Divergence ledger: beam/ptc_runner-vendored/SPELL_PATCHES.md.
+      {:ptc_runner, path: "../ptc_runner-vendored"},
       {:jason, "~> 1.4"},
       # Property-based testing for the P0' verification lane.
       {:stream_data, "~> 1.1", only: [:test]}

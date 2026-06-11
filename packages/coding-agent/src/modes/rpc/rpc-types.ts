@@ -52,6 +52,21 @@ export type RpcCommand =
 	| { id?: string; type: "bash"; command: string }
 	| { id?: string; type: "abort_bash" }
 
+	// Stored programs (W4) — run a stored PTC-Lisp program through ExecuteTool's
+	// intent-gated runner WITHOUT an LLM turn (a direct execution command, like
+	// `bash`). A host (a Team Chat tile) sends this to preview (visible-refresh),
+	// apply (interactive), or auto-run (background-tick) a stored program.
+	| {
+			id?: string;
+			type: "run_stored";
+			program: string;
+			mode?: "read" | "write";
+			intent?: "interactive" | "visible-refresh" | "background-tick";
+			autoWrite?: boolean;
+			signature?: string;
+			context?: Record<string, unknown>;
+	  }
+
 	// Session
 	| { id?: string; type: "get_session_stats" }
 	| { id?: string; type: "export_html"; outputPath?: string }

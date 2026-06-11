@@ -25,8 +25,14 @@ use std::{
 
 use dashmap::DashMap;
 use pi_code_graph::{
-	BuildGraphOptions, CacheStore, CodeGraph, CodeGraphBuilder, LanguageRegistry, Result as CgResult,
+	BuildGraphOptions, CacheStatus, CacheStore, CodeGraph, CodeGraphBuilder, GraphCacheEntry,
+	LanguageRegistry, Result as CgResult,
 };
+
+/// Cache entry name on disk (`.spell/graph/workspace.bin`). Must match the
+/// name used by the `status index` path in `code_graph.rs` so both read the
+/// same persisted artifact.
+const CACHE_NAME: &str = "workspace";
 
 /// Per-workspace cache entry.
 #[derive(Clone)]
@@ -60,8 +66,25 @@ pub fn get_or_build_graph(root: &Path) -> CgResult<Arc<CodeGraph>> {
 	std::fs::create_dir_all(&cache_dir)?;
 	let cache = CacheStore::new(&cache_dir);
 	let builder = CodeGraphBuilder::new(registry, cache);
-	let outcome = builder.build(&BuildGraphOptions::new(&canon))?;
-	let arc = Arc::new(outcome.graph);
+
+	// BUG-456: warm-load the persisted graph when its fingerprint is fresh,
+	// mirroring the `status index` path (code_graph.rs::ensure_graph). Without
+	// this the first edge query in a cold process re-parses every file
+	// (~78s on a 5.5k-file workspace) even though `.spell/graph/workspace.bin`
+	// already holds an up-to-date graph. A fresh load is a fast deserialize.
+	let graph = match builder.cache_status(&canon) {
+		Ok(CacheStatus::Fresh) => match builder.cache().load::<GraphCacheEntry>(CACHE_NAME) {
+			Ok(Some(entry)) => CodeGraph::from(entry.graph),
+			// Cache vanished or failed to deserialize between the status check
+			// and the load — fall back to a full build rather than erroring.
+			_ => builder.build(&BuildGraphOptions::new(&canon))?.graph,
+		},
+		// Missing or stale (fingerprint mismatch) → full build, which persists
+		// the result for the next cold process.
+		_ => builder.build(&BuildGraphOptions::new(&canon))?.graph,
+	};
+
+	let arc = Arc::new(graph);
 	graphs().insert(canon, CachedGraph { graph: arc.clone(), built_at: SystemTime::now() });
 	Ok(arc)
 }
@@ -111,6 +134,44 @@ pub fn warm_count() -> usize {
 	graphs().len()
 }
 
+/// On-disk persisted-graph readiness, reported without building or loading.
+///
+/// BUG-457: lets `status index` distinguish "a fast warm-load is available"
+/// from "a full build is required", instead of conflating both into
+/// `warm:false`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiskCacheState {
+	/// `.spell/graph/workspace.bin` exists and its fingerprint matches the
+	/// current working tree — the next edge query warm-loads in sub-second.
+	Fresh,
+	/// Persisted cache exists but is out of date (files/git HEAD changed) —
+	/// the next edge query rebuilds.
+	Stale,
+	/// No persisted cache — the next edge query does a full cold build.
+	Missing,
+}
+
+/// Inspect the persisted disk cache for `root` without building or loading it.
+///
+/// Cheap relative to a build: it deserialises only the cache header + walks
+/// the working tree to recompute the fingerprint (stat-only, no content read).
+pub fn disk_cache_state(root: &Path) -> DiskCacheState {
+	let Ok(canon) = std::fs::canonicalize(root) else {
+		return DiskCacheState::Missing;
+	};
+	let Ok(registry) = LanguageRegistry::new().with_defaults() else {
+		return DiskCacheState::Missing;
+	};
+	let cache_dir = canon.join(".spell").join("graph");
+	let cache = CacheStore::new(&cache_dir);
+	let builder = CodeGraphBuilder::new(registry, cache);
+	match builder.cache_status(&canon) {
+		Ok(CacheStatus::Fresh) => DiskCacheState::Fresh,
+		Ok(CacheStatus::Stale { .. }) => DiskCacheState::Stale,
+		_ => DiskCacheState::Missing,
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -135,6 +196,72 @@ mod tests {
 		assert!(peek(root).is_none(), "cold peek must be None");
 		let _ = get_or_build_graph(root).expect("build");
 		assert!(peek(root).is_some(), "warm peek must be Some");
+	}
+
+	// BUG-456: after the in-memory entry is dropped, a rebuild must warm-load
+	// from the persisted `.spell/graph/workspace.bin` (fresh fingerprint) rather
+	// than re-parsing every file. We can't directly observe the re-parse here,
+	// but we assert (a) the persisted cache exists after the first build and
+	// (b) the post-invalidate graph reports the same symbol topology — i.e. the
+	// load path produced an equivalent graph.
+	#[test]
+	fn rebuild_after_memory_drop_warm_loads_from_disk() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path();
+		std::fs::write(root.join("a.ts"), b"export function alpha() { return 1; }\n").unwrap();
+
+		let g1 = get_or_build_graph(root).expect("first build");
+		let stats1 = g1.graph_status();
+
+		// The build must have persisted the cache to disk.
+		let cache_file = std::fs::canonicalize(root)
+			.unwrap()
+			.join(".spell")
+			.join("graph")
+			.join("workspace.bin");
+		assert!(cache_file.exists(), "first build must persist workspace.bin");
+
+		// Drop only the in-memory entry; the disk cache stays fresh.
+		invalidate(root);
+		assert!(peek(root).is_none(), "in-memory entry dropped");
+
+		// This rebuild should warm-load from disk and yield an equivalent graph.
+		let g2 = get_or_build_graph(root).expect("warm-load rebuild");
+		let stats2 = g2.graph_status();
+		assert_eq!(
+			stats1.symbol_count, stats2.symbol_count,
+			"warm-loaded graph must have the same symbol count as the original"
+		);
+		assert_eq!(
+			stats1.file_count, stats2.file_count,
+			"warm-loaded graph must have the same file count as the original"
+		);
+	}
+
+	// BUG-457: disk_cache_state reports Missing before any build, Fresh after a
+	// build persists the cache, without populating the in-process map.
+	#[test]
+	fn disk_cache_state_transitions_missing_to_fresh() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path();
+		std::fs::write(root.join("a.ts"), b"export function alpha() { return 1; }\n").unwrap();
+
+		assert_eq!(
+			disk_cache_state(root),
+			DiskCacheState::Missing,
+			"no persisted cache before first build"
+		);
+
+		let _ = get_or_build_graph(root).expect("build persists cache");
+		// Drop the in-memory entry so disk_cache_state can't be confused with it.
+		invalidate(root);
+		assert!(peek(root).is_none(), "in-memory entry dropped");
+
+		assert_eq!(
+			disk_cache_state(root),
+			DiskCacheState::Fresh,
+			"persisted cache is fresh after a build with no working-tree change"
+		);
 	}
 
 	#[test]

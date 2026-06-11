@@ -119,7 +119,7 @@ mod tests {
 			.clone()
 	}
 
-	#[test]
+		#[test]
 	fn rename_function_and_calls() {
 		let source =
 			"function add(a: number, b: number) {\n  return a + b;\n}\nconst result = add(1, 2);";

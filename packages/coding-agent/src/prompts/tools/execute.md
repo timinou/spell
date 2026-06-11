@@ -14,6 +14,44 @@ result enters your context.
 - `signature` — an optional return contract, e.g. `{total :int}` or
   `[{id :int}]`. The result is validated against it.
 - `timeout_ms` — wall-clock cap, 1..30000 (default 1000).
+### Settled fan-out (errors as values)
+- `(psettled f coll)` — like `pmap`, but a per-element failure is captured
+  rather than aborting the whole batch. Each result is `{"ok" value}` or
+  `{"err" reason}`. Use when one bad element shouldn't lose the rest:
+  `(->> (psettled (fn [f] (tool/find {:target f})) data/files) (filter ok?) (map #(unwrap-or % nil)))`
+- `ok?` / `err?` branch on a settled result; `(unwrap-or settled default)`
+  extracts an ok value or yields the default. Errors are DATA, not exceptions.
+- NB: heap/timeout/capacity kills still abort the whole run — `psettled` only
+  settles *logical* failures, never global safety limits.
+
+### Large tool results (handles)
+- A tool result bigger than ~256KB is auto-parked OFF the sandbox heap and
+  returned as a *handle*. You don't manage this — just keep projecting:
+  `count`, `get`, `get-in`, `keys`, `vals`, `select-keys`, `contains?`,
+  `first`, `nth`, `take` run against a handle WITHOUT pulling the whole value
+  onto the heap. This is what lets `(count (get (tool/org {:command "dashboard"}) "inProgress"))`
+  work where realizing the whole dashboard would `memory_exceeded`.
+- `(handle-meta x)` shows a parked value's cost/shape (`bytes`, `shape`,
+  `count`, `keys`) without realizing it; `(handle? x)` tests for one.
+- A transform over a handle (`map`/`filter`/`reduce`/`group-by`) realizes it
+  first — project to a slice (e.g. `take`, `select-keys`) BEFORE transforming
+  if the value is large.
+
+### Session bindings (iterate without re-fetching)
+- `(def x v)` persists `x` for your NEXT execute on the same session — bind an
+  expensive tool result once, then iterate on aggregation cheaply:
+  `execute 1: (def hits (tool/find {:target "src/**/*.rs::§line[text~=\"unwrap\"]"})) (count hits)`
+  `execute 2: (->> hits (group-by #(get % "file")) (update-vals count))` — zero re-fetch.
+- A large bound value stays offloaded (handle) across executes — no re-OOM.
+- A program that `(fail ...)`s or errors does NOT commit its `def`s. Bindings
+  are a session cache, lost on restart (re-bind by re-running).
+
+### Heap
+- `max_heap_mb` — sandbox heap ceiling in MB for this program (default ~50).
+  Clamped to the operator's `tools { execute max-heap-mb=N }` setting; you can
+  always tighten, never raise beyond it. If a program dies `memory_exceeded`,
+  first project/aggregate earlier (pull less data); raise the heap only for
+  legitimately large datasets.
 
 ## Calling tools
 
@@ -69,8 +107,23 @@ Frequencies over a projection:
 - `update-vals` is `(update-vals m f)` — thread with `->` (first), NOT `->>`.
 - Tool args and the return value must be JSON-serializable (no closures).
 - Signatures return **string-keyed** maps: `(get r "total")`, not `(:total r)`.
+  (Keyword access `(:total r)` also resolves — keyword→string is automatic — but
+  prefer string keys for clarity.)
 - A non-terminating loop hits an iteration/timeout limit and returns an error;
   the runtime survives — fix the program and re-run.
+
+## Required keys: `get!` / `get-in!`
+
+`get`/`get-in` return `nil` for a missing key — and `(count nil)` → 0,
+`(map f nil)` → [], so a typo'd key can silently yield a plausible-but-wrong
+result. When a key MUST exist, use the strict variants:
+
+- `(get! m k)` — like `get`, but a missing key FAILS LOUD naming the key.
+- `(get-in! m path)` — like `get-in`, but any missing path segment fails loud.
+
+They are keyword/string/hyphen-aware exactly like `get`. A present key whose
+value is `nil` is returned (only ABSENCE fails). A `get!` failure inside
+`psettled` settles as `{:err …}` like any other element failure.
 
 ## Capability policy
 
@@ -78,3 +131,20 @@ Programs may call **read** and **write** tools (find, get, org, edit, create,
 memory, todo_write, …). Tools that run external processes (`bash`, `task`) or
 reach the network (`fetch`, `web_search`) are **denied by default** and surface
 a policy error if called. Use those tools directly instead.
+
+## Transactional file writes (all-or-nothing)
+
+A program's **file** writes (`edit`, `create`) are transactional: they apply as
+the program runs, but if the program **errors or `(fail …)`s**, every file it
+wrote is **rolled back** to its pre-program state — a created file is removed, an
+edited file is restored. A program that succeeds keeps its writes. So a
+half-finished program never leaves the repo half-edited; fix the program and
+re-run cleanly. (A hard crash mid-program self-heals on the next run.)
+
+**Don't mix file writes with non-file mutations in one program.** `edit`/`create`
+can roll back, but `org` set/update, `memory` save/note, `todo_write`, and
+side-effecting `bash` **cannot** — so a program that mixes them is **rejected**
+(if the file writes rolled back but the org/memory change didn't, you'd be left
+inconsistent). Split such work: do the file edits in one program, the org/memory
+mutation in another. (Reads of any tool — `org query`, `memory search`, `find`
+— mix freely with file writes; reads need no rollback.)

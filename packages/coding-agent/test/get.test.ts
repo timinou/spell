@@ -147,6 +147,53 @@ describe("GetTool", () => {
 		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: "artifact://sess/1" }));
 	});
 
+	// Regression (adversarial test-drive): a bare `file::Symbol` read resolves to
+	// a SINGLE AST node whose kind starts with `§` (e.g. §function_declaration)
+	// and carries NO `content`. The scheme-node detector must not mistake it for a
+	// kernel §<scheme> URI node — doing so routed it to renderSchemeNode, which
+	// reads the absent content and emitted `[§empty] …` instead of the node label.
+	it("renders bare symbol node label, not [§empty], for content-less AST node", async () => {
+		spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+			makeChunk([{ locator: "src/main.ts", kind: "§function_declaration" }]),
+		]);
+		const tool = new GetTool();
+		const result = await tool.execute("t", { target: "src/main.ts::alpha" });
+		const text = getText(result);
+		expect(text).not.toContain("[§empty]");
+		expect(text).toContain("[§function_declaration]");
+	});
+
+	// Regression guard for the inverse: a genuine `scheme://` target whose single
+	// node kind names that scheme (§<scheme>) MUST still route to the scheme
+	// renderer (content body, no `[§kind]` label).
+	it("still routes a real §<scheme> node to the scheme renderer", async () => {
+		// Kernel scheme nodes carry content as `{ kind: "text", value }` — match that
+		// shape directly (makeChunk's `text` helper field is not what renderSchemeNode
+		// reads), so this exercises the real scheme-render path end to end.
+		spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+			{
+				nodes: [
+					{
+						locator: "skill://coding",
+						rangeStart: 0,
+						rangeEnd: 0,
+						kind: "§skill",
+						content: { kind: "text", value: "# Coding" },
+						metadata: {},
+						diagnostics: [],
+					},
+				],
+				diagnostics: [],
+				done: true,
+			} as any,
+		]);
+		const tool = new GetTool();
+		const result = await tool.execute("t", { target: "skill://coding" });
+		const text = getText(result);
+		expect(text).toContain("# Coding");
+		expect(text).not.toContain("[§skill]");
+	});
+
 	it("formats output as locations when format=locations", async () => {
 		spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 			makeChunk([
@@ -729,6 +776,31 @@ describe("GetTool", () => {
 			expect(text).toContain("line 82");
 		});
 
+		// BUG-442 (PLAN-332 Thesis B): a line-slice on an ABSOLUTE path must read
+		// the same lines as the relative form — previously the absolute slice was
+		// misclassified bare-plain, hit the literal fs.stat fast-path on
+		// `…foo.ts:5-7`, and returned PATH_NOT_FOUND before the kernel could strip
+		// the slice. This exercises the REAL kernel (no executeCodePath mock).
+		it("reads a line slice from an absolute path (no PATH_NOT_FOUND)", async () => {
+			(spyOn(nativesModule, "executeCodePath") as unknown as { mockRestore?: () => void }).mockRestore?.();
+			const tmp = nodePath.join(process.cwd(), "test/tmp-bug442-slice");
+			await fs.mkdir(tmp, { recursive: true });
+			const real = nodePath.join(tmp, "lines.ts");
+			await fs.writeFile(real, "const a = 1;\nconst b = 2;\nconst c = 3;\nconst d = 4;\n", "utf-8");
+			try {
+				const tool = new GetTool();
+				const absResult = await tool.execute("t", { target: `${real}:2-3` });
+				const absText = getText(absResult);
+				expect(absText).not.toContain("PATH_NOT_FOUND");
+				expect(absText).toContain("const b = 2;");
+				expect(absText).toContain("const c = 3;");
+				expect(absText).not.toContain("const a = 1;");
+				expect(absText).not.toContain("const d = 4;");
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+
 		it("#stat qualifier surfaces lineCount metadata", async () => {
 			// Real kernel; #stat should expose lineCount per FEAT-717.
 			(spyOn(nativesModule, "executeCodePath") as unknown as { mockRestore?: () => void }).mockRestore?.();
@@ -848,7 +920,6 @@ describe("GetTool", () => {
 		expect(getText(result)).toContain("[note] Binary artifact (png)");
 	});
 });
-
 
 // ─────────────────────────────────────────────────────────────
 // FEAT-816: absolute targets outside session cwd self-root via
@@ -974,9 +1045,7 @@ describe("FEAT-816: absolute targets self-root", () => {
 		]);
 		const tool = new GetTool();
 		await tool.execute("t", { target: "**/*.nonexistent-feat816-marker" });
-		expect(spy).toHaveBeenCalledWith(
-			expect.objectContaining({ root: process.cwd() }),
-		);
+		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ root: process.cwd() }));
 	});
 
 	it("relative path with ../ still resolves against cwd", async () => {
@@ -989,9 +1058,7 @@ describe("FEAT-816: absolute targets self-root", () => {
 			]);
 			const tool = new GetTool();
 			await tool.execute("t", { target: relPath });
-			expect(spy).toHaveBeenCalledWith(
-				expect.objectContaining({ root: process.cwd() }),
-			);
+			expect(spy).toHaveBeenCalledWith(expect.objectContaining({ root: process.cwd() }));
 		} finally {
 			await fs.rm(absPath, { force: true });
 		}
@@ -1003,9 +1070,7 @@ describe("FEAT-816: absolute targets self-root", () => {
 		]);
 		const tool = new GetTool();
 		await tool.execute("t", { target: "gitignored.txt", gitignore: false });
-		expect(spy).toHaveBeenCalledWith(
-			expect.objectContaining({ gitignore: false }),
-		);
+		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ gitignore: false }));
 	});
 
 	it("find tool surfaces same absolute-target reads", async () => {
@@ -1087,9 +1152,7 @@ describe("BUG-380: absolute target equal to root", () => {
 		try {
 			const tool = new GetTool();
 			await tool.execute("t", { target: outsideRoot });
-			expect(spy).toHaveBeenCalledWith(
-				expect.objectContaining({ target: ".", root: outsideRoot }),
-			);
+			expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: ".", root: outsideRoot }));
 		} finally {
 			await fs.rm(outsideRoot, { recursive: true });
 		}
@@ -1104,9 +1167,7 @@ describe("BUG-380: absolute target equal to root", () => {
 		try {
 			const tool = new GetTool();
 			await tool.execute("t", { target: `${outsideRoot}#tree` });
-			expect(spy).toHaveBeenCalledWith(
-				expect.objectContaining({ target: ".#tree", root: outsideRoot }),
-			);
+			expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: ".#tree", root: outsideRoot }));
 		} finally {
 			await fs.rm(outsideRoot, { recursive: true });
 		}
@@ -1121,9 +1182,7 @@ describe("BUG-380: absolute target equal to root", () => {
 		try {
 			const tool = new GetTool();
 			await tool.execute("t", { target: `${outsideRoot}/#tree` });
-			expect(spy).toHaveBeenCalledWith(
-				expect.objectContaining({ target: ".#tree", root: outsideRoot }),
-			);
+			expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: ".#tree", root: outsideRoot }));
 		} finally {
 			await fs.rm(outsideRoot, { recursive: true });
 		}
@@ -1142,12 +1201,91 @@ describe("BUG-380: absolute target equal to root", () => {
 		try {
 			const tool = new GetTool();
 			await tool.execute("t", { target: `${outsideRoot}/sub`, root: outsideRoot });
-			expect(spy).toHaveBeenCalledWith(
-				expect.objectContaining({ target: "sub#listing", root: outsideRoot }),
-			);
+			expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: "sub#listing", root: outsideRoot }));
 		} finally {
 			await fs.rm(outsideRoot, { recursive: true });
 		}
 	});
 });
 
+describe("GetTool bare-path content routing (images / binaries)", () => {
+	// 1×1 transparent PNG.
+	const PNG_1X1 = Buffer.from(
+		"89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da6360000002000154a24f9c0000000049454e44ae426082",
+		"hex",
+	);
+
+	it("returns an image content block (not a #raw text dump) for a bare image path", async () => {
+		const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-img");
+		await fs.mkdir(tmp, { recursive: true });
+		const real = nodePath.join(tmp, "dot.png");
+		await fs.writeFile(real, PNG_1X1);
+		// Spy asserts we never round-trip the kernel with a #raw target for images.
+		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([]);
+		try {
+			const tool = new GetTool(createSession());
+			const result = await tool.execute("t", { target: real });
+			const imageBlocks = result.content.filter(c => c.type === "image");
+			expect(imageBlocks).toHaveLength(1);
+			expect(imageBlocks[0]).toMatchObject({ type: "image", mimeType: "image/png" });
+			expect((imageBlocks[0] as { data: string }).data.length).toBeGreaterThan(0);
+			expect(spy).not.toHaveBeenCalled();
+		} finally {
+			(spy as any).mockRestore?.();
+			await fs.rm(tmp, { recursive: true });
+		}
+	});
+
+	it("emits a text marker (no image, no mojibake) for a bare non-image binary path", async () => {
+		const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-bin");
+		await fs.mkdir(tmp, { recursive: true });
+		const real = nodePath.join(tmp, "blob.bin");
+		// NUL byte + non-UTF8 bytes → binary sniff.
+		await fs.writeFile(real, Buffer.from([0x00, 0x01, 0xff, 0xfe, 0x80, 0x00]));
+		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([]);
+		try {
+			const tool = new GetTool(createSession());
+			const result = await tool.execute("t", { target: real });
+			expect(result.content.filter(c => c.type === "image")).toHaveLength(0);
+			expect(getText(result)).toContain("binary file");
+			expect(spy).not.toHaveBeenCalled();
+		} finally {
+			(spy as any).mockRestore?.();
+			await fs.rm(tmp, { recursive: true });
+		}
+	});
+
+	it("respects images.blockImages — marker instead of image block", async () => {
+		const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-img-block");
+		await fs.mkdir(tmp, { recursive: true });
+		const real = nodePath.join(tmp, "dot.png");
+		await fs.writeFile(real, PNG_1X1);
+		const settings = Settings.isolated({ "images.blockImages": true });
+		try {
+			const tool = new GetTool(createSession({ settings }));
+			const result = await tool.execute("t", { target: real });
+			expect(result.content.filter(c => c.type === "image")).toHaveLength(0);
+			expect(getText(result)).toContain("image submission disabled");
+		} finally {
+			await fs.rm(tmp, { recursive: true });
+		}
+	});
+
+	it("still reads a UTF-8 text file as #raw text (no false-positive binary marker)", async () => {
+		const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-txt");
+		await fs.mkdir(tmp, { recursive: true });
+		const real = nodePath.join(tmp, "hello.txt");
+		await fs.writeFile(real, "héllo 世界", "utf-8");
+		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+			makeChunk([{ locator: real, kind: "file", content: { text: "héllo 世界" } }]),
+		]);
+		try {
+			const tool = new GetTool(createSession());
+			await tool.execute("t", { target: real });
+			expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${real}#raw` }));
+		} finally {
+			(spy as any).mockRestore?.();
+			await fs.rm(tmp, { recursive: true });
+		}
+	});
+});

@@ -619,6 +619,45 @@ export async function runRpcMode(session: AgentSession, eventBus?: EventBus): Pr
 			}
 
 			// =================================================================
+			// Stored programs (W4) — direct, non-LLM execution (like bash)
+			// =================================================================
+
+			case "run_stored": {
+				const executeTool = session.getToolByName("execute");
+				if (!executeTool) {
+					return error(id, "run_stored", "execute tool is not available in this session");
+				}
+				// Route through the execute tool surface, which forwards mode/intent to
+				// ExecuteTool.runStored (the intent-gated, transactional runner). The
+				// result's details.transaction carries the outcome the tile renders.
+				const result = await executeTool.execute(
+					`rpc-run-stored-${Date.now()}`,
+					{
+						program: command.program,
+						mode: command.mode,
+						intent: command.intent,
+						auto_write: command.autoWrite,
+						signature: command.signature,
+						context: command.context,
+					},
+					undefined,
+					undefined,
+					undefined,
+				);
+				// Surface the structured transaction outcome + the program's value +
+				// rendered text, so the tile can render preview/commit/rollback states.
+				return success(id, "run_stored", {
+					data: result.data,
+					isError: result.isError ?? false,
+					transaction: result.details?.transaction ?? null,
+					text: result.content
+						.filter((c): c is { type: "text"; text: string } => c.type === "text")
+						.map(c => c.text)
+						.join(""),
+				});
+			}
+
+			// =================================================================
 			// Session
 			// =================================================================
 

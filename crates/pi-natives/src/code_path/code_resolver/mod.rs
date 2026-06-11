@@ -13,6 +13,8 @@ mod html_qualifier_tests;
 #[cfg(test)]
 mod mdorg_qualifier_tests;
 #[cfg(test)]
+mod name_predicate_tests;
+#[cfg(test)]
 mod py_qualifier_tests;
 #[cfg(test)]
 mod qualifier_tests;

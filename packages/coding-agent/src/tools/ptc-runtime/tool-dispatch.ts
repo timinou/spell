@@ -34,6 +34,7 @@ import type { AgentToolContext, AgentToolResult } from "@spell/pi-agent-core";
 import type { CatalogTool } from "./catalog-gen";
 import type { ToolCallHandler, ToolCallRequest } from "./client";
 import { type CapabilityPolicy, DEFAULT_POLICY, enforcePolicy } from "./policy";
+import type { TransactionRegistry } from "./transaction";
 
 /** Minimal shape of a runnable tool (structural subset of AgentTool). */
 export interface DispatchableTool {
@@ -77,6 +78,13 @@ export interface DispatchOptions {
 	context?: AgentToolContext;
 	/** Monotonic id source for toolCallId; defaults to a local counter. */
 	idPrefix?: string;
+	/**
+	 * Transaction registry (D3). When present, the dispatcher captures FS-write
+	 * snapshots into the scope bound to a tool call's `execId` BEFORE the tool
+	 * runs, so the program can roll back on failure. Absent → no transaction
+	 * tracking (the legacy optimistic-commit behaviour).
+	 */
+	transactions?: TransactionRegistry;
 }
 
 /** Raised when a requested tool is not available to programs. */
@@ -96,13 +104,28 @@ export function makeToolDispatcher(opts: DispatchOptions): ToolCallHandler {
 	const prefix = opts.idPrefix ?? "ptc";
 	const policy = opts.policy ?? DEFAULT_POLICY;
 
-	return async ({ tool, args }: ToolCallRequest, signal?: AbortSignal): Promise<unknown> => {
+	return async ({ tool, args, execId }: ToolCallRequest, signal?: AbortSignal): Promise<unknown> => {
 		const instance = opts.lookup(tool);
 		if (!instance) throw new ToolNotAvailableError(tool);
 
 		// Enforce the capability policy BEFORE running the tool. A denied effect
-		// throws PolicyDeniedError, surfaced to the program as a tool error.
-		enforcePolicy(tool, policy, args);
+		// throws PolicyDeniedError, surfaced to the program as a tool error. The
+		// resolved effect (arg-refined) feeds the D3 mixed-effect guard.
+		const effect = enforcePolicy(tool, policy, args);
+
+		const scope = opts.transactions?.get(execId);
+		if (scope) {
+			// D3.4 (W2) dynamic guard: reject the program the instant this scope holds
+			// BOTH a rollback-able FS write and a non-rollback-able mutation. Runs at
+			// DISPATCH — seeing every call by resolved name+effect — so it catches a
+			// write tool invoked in value position that the static preflight's text
+			// scan cannot. Throws MixedEffectError BEFORE the tool (and its snapshot)
+			// runs, so no torn state.
+			scope.guard(tool, effect);
+			// D3 (W1): capture FS-write snapshots BEFORE the tool mutates, so a later
+			// program error can roll the write back. A no-op for non-FS-write tools.
+			await scope.capture(tool, args);
+		}
 
 		// Compose the per-call signal (the originating execute's, supplied by the
 		// client) with any dispatch-level signal, so the tool aborts when EITHER

@@ -131,6 +131,14 @@ impl CodeResolver for CodeResolverImpl {
 
 		let root = tree.root_node();
 		let nodes = evaluate_query(query, vec![root], &src, dialect, cancel);
+		// BUG-443: a bare-name query matches BOTH an `export_statement` wrapper
+		// and the declaration nested inside it (the TS name lexer delegates
+		// through the export wrapper). Collapse to the inner declaration: drop
+		// any export wrapper that strictly contains another matched node. This
+		// is a no-op for explicit `§export_statement` queries (the inner decl is
+		// not in the set) and for bodyless re-exports like `export * from "x"`
+		// (nothing nested matched), so those keep returning the wrapper.
+		let nodes = collapse_export_wrappers(nodes);
 
 		// FEAT-718: Extract a SymbolSlice predicate from the terminal step (if any).
 		// The slice transforms each resolved symbol node into a sliced text body.
@@ -155,10 +163,10 @@ impl CodeResolver for CodeResolverImpl {
 				serde_json::Value::Number(((node.start_position().row + 1) as u64).into()),
 			);
 			let mut nref = NodeRef {
-				locator:     locator.clone(),
-				range:       node.start_byte()..node.end_byte(),
-				kind:        format!("§{}", node.kind()),
-				content:     None,
+				locator: locator.clone(),
+				range: node.start_byte()..node.end_byte(),
+				kind: format!("§{}", node.kind()),
+				content: None,
 				metadata,
 				diagnostics: Vec::new(),
 			};
@@ -200,14 +208,62 @@ impl CodeResolver for CodeResolverImpl {
 						});
 					}
 				} else {
+					// BUG-444: `#match` / `#captures` are grep-context qualifiers — they
+					// read metadata a preceding `[text~=\"re\"]` predicate attaches and
+					// are only registered in the TEXT dialect, so on a code/symbol node
+					// they fall here. Emit a DOMAIN diagnostic that names the real usage
+					// rather than the bare \"unknown qualifier\", matching the corrected
+					// find.md capability table (`#match | grep`).
+					let message = match q.name.as_str() {
+						"match" | "captures" => format!(
+							"#{} is a grep-context qualifier: it operates on a [text~=\"re\"] match, \
+							 e.g. `file::§line[text~=\"TODO\"]#{}` — not on a bare file/symbol target",
+							q.name, q.name
+						),
+						_ => format!("unknown qualifier '{}'", q.name),
+					};
 					nref.diagnostics.push(Diagnostic {
 						variant: DiagnosticVariant::UnsupportedOperation,
-						message: format!("unknown qualifier '{}'", q.name),
-						span:    None,
+						message,
+						span: None,
 					});
 				}
 			}
+			// BUG-455: a bare symbol or `§kind[pred]` query carries no qualifier,
+			// so neither the qualifier branch nor SymbolSlice populated content.
+			// Default it to the matched node's own source span so reads like
+			// `file::Symbol` and `§call[text~="x"]` show what matched instead of a
+			// bare kind label. The qualifier-present-but-non-applicable path keeps
+			// content `None` (it lives in the `_qualifier.is_some()` branch above).
+			if nref.content.is_none() && _qualifier.is_none() {
+				nref.content = Some(pi_code_path::types::Content::Text {
+					value: src[nref.range.clone()].to_string(),
+				});
+			}
 			results.push(nref);
+		}
+
+		// BUG-458: a qualifier like `#body`/`#sig` on a name that appears both as a
+		// class `method_definition` and an interface `method_signature` (via
+		// `implements`) matches both nodes. The signature node has no body, so it
+		// emits a spurious `does not apply to node kind` diagnostic alongside the
+		// correct result. When at least one sibling DID satisfy the qualifier,
+		// these non-applicable-kind matches are noise — drop them so the result set
+		// is just the node the agent meant.
+		if let Some(q) = _qualifier {
+			let non_applicable_msg = format!("qualifier '{}' does not apply to node kind", q.name);
+			let has_applicable = results.iter().any(|r| {
+				!r.diagnostics
+					.iter()
+					.any(|d| d.message.starts_with(&non_applicable_msg))
+			});
+			if has_applicable && results.len() > 1 {
+				results.retain(|r| {
+					!r.diagnostics
+						.iter()
+						.any(|d| d.message.starts_with(&non_applicable_msg))
+				});
+			}
 		}
 
 		Ok(results)
@@ -335,6 +391,31 @@ fn line_byte_range(src: &str, first: i64, last: i64) -> Option<(usize, usize)> {
 // ---------------------------------------------------------------------------
 // Query evaluation
 // ---------------------------------------------------------------------------
+
+/// BUG-443: drop `export_statement` wrappers that strictly contain another
+/// matched node, collapsing an exported declaration to a single node (the
+/// inner decl). Preserves explicit export queries and bodyless re-exports
+/// (`export * from "x"`) where no inner sibling matched.
+fn collapse_export_wrappers(nodes: Vec<Node<'_>>) -> Vec<Node<'_>> {
+	if nodes.len() < 2 {
+		return nodes;
+	}
+	nodes
+		.iter()
+		.copied()
+		.filter(|node| {
+			if node.kind() != "export_statement" {
+				return true;
+			}
+			// Keep the wrapper only if no OTHER matched node lives inside it.
+			!nodes.iter().any(|other| {
+				other.id() != node.id()
+					&& other.start_byte() >= node.start_byte()
+					&& other.end_byte() <= node.end_byte()
+			})
+		})
+		.collect()
+}
 
 fn collect_descendants<'a>(node: Node<'a>, out: &mut Vec<Node<'a>>) {
 	out.push(node);
@@ -597,6 +678,31 @@ mod tests {
 	// ------------------------------------------------------------------
 
 	#[test]
+	fn bare_symbol_query_populates_content() {
+		// BUG-455: a bare symbol query (no qualifier) must populate content with
+		// the matched node's own source span — otherwise `file::Symbol` renders
+		// a bare kind label with no text.
+		let resolver = resolver();
+		let f = temp_file(".ts", "function foo() {\n  return 1;\n}\n");
+		let query = Query::single(Step {
+			axis:       None,
+			head:       Head::Name(NamePayload::Raw("foo".into())),
+			predicates: vec![],
+		});
+		let results = run_query(&resolver, f.path(), query);
+		assert_eq!(results.len(), 1);
+		let content = results[0]
+			.content
+			.as_ref()
+			.expect("bare symbol must carry content");
+		let pi_code_path::types::Content::Text { value } = content else {
+			panic!("expected text content");
+		};
+		assert!(value.contains("function foo()"), "content must be the decl source: {value:?}");
+		assert!(value.contains("return 1;"), "content must include the body: {value:?}");
+	}
+
+	#[test]
 	fn ts_top_level_function() {
 		let resolver = resolver();
 		let f = temp_file(".ts", "function foo() {}\n");
@@ -608,6 +714,119 @@ mod tests {
 		let results = run_query(&resolver, f.path(), query);
 		assert_eq!(results.len(), 1);
 		assert_eq!(results[0].kind, "§function_declaration");
+	}
+
+	// BUG-443: a bare-name query against an EXPORTED declaration must resolve
+	// to a single node (the inner decl), not the decl AND its export_statement
+	// wrapper. The double-match previously produced a spurious
+	// `unsupported_operation` diagnostic on the wrapper for `#body`.
+	#[test]
+	fn ts_exported_function_resolves_single_node() {
+		let resolver = resolver();
+		let f = temp_file(".ts", "export function alpha() {\n  return 1;\n}\n");
+		let query = Query::single(Step {
+			axis:       None,
+			head:       Head::Name(NamePayload::Raw("alpha".into())),
+			predicates: vec![],
+		});
+		let results = run_query(&resolver, f.path(), query);
+		assert_eq!(results.len(), 1, "exported decl must collapse to one node: {results:?}");
+		assert_eq!(results[0].kind, "§function_declaration");
+	}
+
+	// Guard: an explicit `export_statement` kind query still returns the
+	// wrapper (the inner decl is not in the match set, so nothing collapses).
+	#[test]
+	fn ts_explicit_export_statement_query_keeps_wrapper() {
+		let resolver = resolver();
+		let f = temp_file(".ts", "export function alpha() { return 1; }\n");
+		let query = Query::single(Step {
+			axis:       Some(Axis::Structural),
+			head:       Head::NodeKind("export_statement".into()),
+			predicates: vec![],
+		});
+		let results = run_query(&resolver, f.path(), query);
+		assert_eq!(results.len(), 1);
+		assert_eq!(results[0].kind, "§export_statement");
+	}
+
+	// BUG-444: `#match` on a bare symbol must yield a DOMAIN diagnostic naming
+	// the grep-context usage — not the generic "unknown qualifier".
+	#[test]
+	fn ts_match_qualifier_on_symbol_gives_domain_diagnostic() {
+		let resolver = resolver();
+		let f = temp_file(".ts", "export function alpha() { return 1; }\n");
+		let cp = pi_code_path::parse_code_path(
+			"foo.ts::alpha#match",
+			&pi_code_path::dialects::typescript::TsNameLexer,
+		)
+		.unwrap();
+		let results = resolver
+			.resolve(f.path(), &cp.query.unwrap(), cp.qualifier.as_ref(), &CancellationToken::new())
+			.unwrap();
+		let msgs: Vec<String> = results
+			.iter()
+			.flat_map(|r| r.diagnostics.iter().map(|d| d.message.clone()))
+			.collect();
+		assert!(
+			msgs
+				.iter()
+				.any(|m| m.contains("grep-context") && m.contains("text~")),
+			"expected grep-context domain diagnostic, got: {msgs:?}"
+		);
+		assert!(
+			!msgs.iter().any(|m| m.contains("unknown qualifier")),
+			"must NOT be the generic unknown-qualifier diagnostic: {msgs:?}"
+		);
+	}
+
+	// BUG-458: `#body` on a method name that exists both as a class
+	// `method_definition` and an interface `method_signature` (via `implements`)
+	// must return only the body-bearing definition — the signature match (which
+	// can't have a body) is dropped, not surfaced as a spurious diagnostic.
+	#[test]
+	fn ts_body_on_implements_method_drops_signature_noise() {
+		let resolver = resolver();
+		let f = temp_file(
+			".ts",
+			"export interface Handler { handle(x: number): number; }\nexport class Server implements \
+			 Handler {\nhandle(x: number): number { return x * 2; }\n}\n",
+		);
+		let cp = pi_code_path::parse_code_path(
+			"foo.ts::Server.handle#body",
+			&pi_code_path::dialects::typescript::TsNameLexer,
+		)
+		.unwrap();
+		let results = resolver
+			.resolve(f.path(), &cp.query.unwrap(), cp.qualifier.as_ref(), &CancellationToken::new())
+			.unwrap();
+		assert_eq!(results.len(), 1, "only the body-bearing definition should remain: {results:?}");
+		assert_eq!(results[0].kind, "§method_definition");
+		assert!(
+			results[0].diagnostics.is_empty(),
+			"no spurious does-not-apply diagnostic: {:?}",
+			results[0].diagnostics
+		);
+		let content = results[0].content.as_ref().expect("body content present");
+		let pi_code_path::types::Content::Text { value } = content else {
+			panic!("expected text content");
+		};
+		assert!(value.contains("return x * 2"), "body content: {value:?}");
+	}
+
+	// Guard: a bodyless re-export keeps the wrapper (no nested decl matched).
+	#[test]
+	fn ts_reexport_star_keeps_wrapper() {
+		let resolver = resolver();
+		let f = temp_file(".ts", "export * from \"./json\";\nexport const x = 1;\n");
+		let cp = pi_code_path::parse_code_path(
+			"foo.ts::`export * from \"./json\"`",
+			&pi_code_path::dialects::typescript::TsNameLexer,
+		)
+		.unwrap();
+		let results = run_query(&resolver, f.path(), cp.query.unwrap());
+		assert_eq!(results.len(), 1);
+		assert_eq!(results[0].kind, "§export_statement");
 	}
 
 	#[test]

@@ -934,11 +934,13 @@ pub(crate) fn single_action(
 	// so they must keep going through real selector resolution — a synthetic
 	// symbol would trip their `requires a CSS rule target` proof gate.
 	let resolved = if action_kind == "renameCustomProperty" {
-		let (_, token) = parse_target_id(target_id)
-			.map_err(|e| CodeEngineError::Edit(e.to_string()))?;
-		token
-			.map(synthetic_token_symbol)
-			.or_else(|| resolve_target_id(buffer, profile, path, target_id).ok().flatten())
+		let (_, token) =
+			parse_target_id(target_id).map_err(|e| CodeEngineError::Edit(e.to_string()))?;
+		token.map(synthetic_token_symbol).or_else(|| {
+			resolve_target_id(buffer, profile, path, target_id)
+				.ok()
+				.flatten()
+		})
 	} else {
 		resolve_target_id(buffer, profile, path, target_id)?
 	};
@@ -1005,12 +1007,12 @@ pub(crate) fn single_action(
 		"findAndReplace" => {
 			let (start_byte, end_byte) = target_range(buffer, resolved.as_ref());
 			PreparedEditOperation {
- 			edits:  apply_patches(buffer, start_byte, end_byte, &[Patch {
- 				find:       action_find(action)?.to_string(),
- 				replace:    action_content(action)?.to_string(),
- 				occurrence: action_occurrence(action)?,
- 				force:      action_force(action),
- 			}])?,
+				edits:  apply_patches(buffer, start_byte, end_byte, &[Patch {
+					find:       action_find(action)?.to_string(),
+					replace:    action_content(action)?.to_string(),
+					occurrence: action_occurrence(action)?,
+					force:      action_force(action),
+				}])?,
 				proof:  None,
 				action: action_kind.to_string(),
 			}
@@ -1018,12 +1020,12 @@ pub(crate) fn single_action(
 		"rawTextReplace" => {
 			let (start_byte, end_byte) = target_range(buffer, resolved.as_ref());
 			PreparedEditOperation {
- 			edits:  apply_raw_text_patches(buffer, start_byte, end_byte, &[Patch {
- 				find:       action_find(action)?.to_string(),
- 				replace:    action_content(action)?.to_string(),
- 				occurrence: action_occurrence(action)?,
- 				force:      action_force(action),
- 			}])?,
+				edits:  apply_raw_text_patches(buffer, start_byte, end_byte, &[Patch {
+					find:       action_find(action)?.to_string(),
+					replace:    action_content(action)?.to_string(),
+					occurrence: action_occurrence(action)?,
+					force:      action_force(action),
+				}])?,
 				proof:  None,
 				action: action_kind.to_string(),
 			}
@@ -1812,6 +1814,7 @@ pub(crate) fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 					json!({
 						"available": true,
 						"warm": true,
+						"state": "warm",
 						"root": root.display().to_string(),
 						"file_count": stats.file_count,
 						"symbol_count": stats.symbol_count,
@@ -1821,13 +1824,32 @@ pub(crate) fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 					false,
 				))
 			} else {
+				// BUG-457: the in-process cache is empty, but a fresh persisted
+				// graph on disk means the next edge query warm-loads in
+				// sub-second — report that distinctly from a true cold build.
+				let (state, reason) = match crate::code_graph_cache::disk_cache_state(&root) {
+					crate::code_graph_cache::DiskCacheState::Fresh => (
+						"cached",
+						"persisted graph on disk is fresh; the next edge query warm-loads it \
+						 (sub-second, no rebuild)"
+							.to_string(),
+					),
+					crate::code_graph_cache::DiskCacheState::Stale => (
+						"stale",
+						"persisted graph on disk is out of date; the next edge query rebuilds it"
+							.to_string(),
+					),
+					crate::code_graph_cache::DiskCacheState::Missing => {
+						("cold", "no persisted graph; the next edge query does a full build".to_string())
+					},
+				};
 				Ok(json_response(
 					json!({
 						"available": true,
 						"warm": false,
+						"state": state,
 						"root": root.display().to_string(),
-      "reason": "no edge query has triggered build yet; run e.g. \
-      						            `find { target: \"path::Sym def\u{2192}\u{a7}call_expression\" }`"
+						"reason": reason,
 					}),
 					false,
 				))
@@ -2138,7 +2160,7 @@ mod tests {
 					replace:    replace.to_string(),
 					occurrence: Occurrence::Unique,
 
-					force:      false,
+					force: false,
 				})
 			})
 			.collect()

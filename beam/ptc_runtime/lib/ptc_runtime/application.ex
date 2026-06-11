@@ -26,6 +26,11 @@ defmodule PtcRuntime.Application do
     PtcRuntime.Logger.install()
 
     children = [
+      # SPELL PATCH-3 (D-2): owns large parked tool results so they never land
+      # on a sandbox heap. A long-lived singleton; per-execute buckets (not the
+      # process) are the GC unit. Started before the Peer so it's ready for the
+      # first execute.
+      PtcRunner.Lisp.HandleStore,
       {PtcRuntime.Peer, peer_opts()}
     ]
 

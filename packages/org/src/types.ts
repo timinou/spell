@@ -135,6 +135,28 @@ export interface CategoryMetrics {
 	byState: Record<string, number>;
 }
 
+/**
+ * Body-less item projection for dashboard lists (BUG-426).
+ *
+ * A dashboard is metrics + actionable identity, never content: full `OrgItem`s
+ * (each carrying the entire org body, recursively through children) made the
+ * payload unbounded — large enough to OOM the `execute` sandbox. Mirrors the
+ * `includeBody: false` default of the other list commands. Need the body?
+ * `get` the id.
+ */
+export interface OrgDashboardItemRef {
+	id: string;
+	title: string;
+	state: string;
+	category: string;
+	/** Absolute path to the .org file. */
+	file: string;
+	/** 1-indexed heading line. */
+	line: number;
+	/** Normalized PRIORITY (e.g. "A"), if set. */
+	priority: string | null;
+}
+
 export interface OrgDashboard {
 	/** Project root (cwd). */
 	root: string;
@@ -142,10 +164,10 @@ export interface OrgDashboard {
 	categories: CategoryMetrics[];
 	/** Totals across all categories. */
 	totals: Record<string, number>;
-	/** Items currently DOING. */
-	inProgress: OrgItem[];
-	/** Items that are BLOCKED. */
-	blocked: OrgItem[];
+	/** Items currently DOING/REVIEW (body-less refs). */
+	inProgress: OrgDashboardItemRef[];
+	/** Items that are BLOCKED (body-less refs). */
+	blocked: OrgDashboardItemRef[];
 }
 
 // =============================================================================

@@ -11,9 +11,9 @@ import editDescription from "../prompts/tools/edit.md" with { type: "text" };
 import { enforcePathWrite } from "../sandbox";
 import { renderCodeCell } from "../tui";
 import type { ToolSession } from ".";
-import { formatCodePathResult } from "./codepath-result";
+
 import { sessionContextOpts } from "./codepath-session";
-import type { EditParams } from "./codepath-types";
+import type { CodePathChunk, EditParams } from "./codepath-types";
 import { editSchema } from "./codepath-types";
 import { enforceModeWrite } from "./mode-guard";
 import { resolveCwdRelativePath } from "./path-resolution";
@@ -174,10 +174,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 				sessionId: this.session.getSessionId?.()?.trim() || undefined,
 				abortSignal: signal,
 			});
-			const formatted = formatCodePathResult(chunks, { format: "node-list" });
-			return toolResult<EditToolResultDetails>({ action: kind })
-				.text(formatted.text ?? `${kind} complete`)
-				.done();
+			return this.#renderHistoryResult(kind, chunks);
 		}
 
 		// Pre-resolve target paths once; used by strict snapshot and the loop.
@@ -417,6 +414,32 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		})
 			.text(summary)
 			.data({ diff, editCount, created })
+			.done();
+	}
+
+	/**
+	 * Render an undo/redo result. PLAN-332 Thesis D / FEAT-809: the kernel's
+	 * `§manage-result` node carries the EFFECTIVE diff (after→before for undo,
+	 * before→after for redo) plus the file that changed in its payload. We turn
+	 * that into a diff-cell result — `action: kind` + `target: <rel file>` +
+	 * text `kind · file\n<diff>` — so `renderResult` shows the same titled diff
+	 * cell as a normal edit, instead of an opaque `{"reverted":"32"}`.
+	 */
+	#renderHistoryResult(kind: "undo" | "redo", chunks: CodePathChunk[]): AgentToolResult {
+		const node = chunks.flatMap(c => c.nodes).find(n => n.kind === "§manage-result");
+		const payload = (node?.metadata as { payload?: Record<string, unknown> } | undefined)?.payload;
+		const diff = typeof payload?.diff === "string" ? payload.diff : undefined;
+		const file = typeof payload?.file === "string" ? payload.file : undefined;
+		// Nothing-to-undo (or a legacy result without a diff): surface the kernel's
+		// message verbatim so the agent sees the actionable hint, not a blank cell.
+		if (!diff) {
+			const message = typeof payload?.message === "string" ? payload.message : `${kind}: nothing to ${kind}`;
+			return toolResult<EditToolResultDetails>({ action: kind }).text(message).done();
+		}
+		const relTarget = file ? nodePath.relative(this.session.cwd, file) : kind;
+		return toolResult<EditToolResultDetails>({ action: kind, target: relTarget })
+			.text(`${kind} · ${relTarget}\n${diff}`)
+			.data({ diff, file })
 			.done();
 	}
 

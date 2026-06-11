@@ -11,7 +11,21 @@ export type BridgeRpcCommand =
 	| { id?: string; type: "abort" }
 	| { id?: string; type: "new_session" }
 	| { id?: string; type: "get_state" }
-	| { id?: string; type: "get_session_stats" };
+	| { id?: string; type: "get_session_stats" }
+	// Stored programs (W4) — run a stored PTC-Lisp program through the agent's
+	// ExecuteTool intent-gated runner, WITHOUT an LLM turn. Carries the tile's
+	// stored program + run intent; the response data is { data, isError,
+	// transaction, text } the tile renders. Mirrors coding-agent RpcCommand.
+	| {
+			id?: string;
+			type: "run_stored";
+			program: string;
+			mode?: "read" | "write";
+			intent?: "interactive" | "visible-refresh" | "background-tick";
+			autoWrite?: boolean;
+			signature?: string;
+			context?: Record<string, unknown>;
+	  };
 
 /** Image content reference matching coding-agent's ImageContent */
 export interface ImageContentRef {

@@ -104,6 +104,15 @@ describe("execute", () => {
 		expect(params.signature).toBe("{a :int}");
 		expect(params.timeout_ms).toBe(500);
 	});
+
+	it("passes maxHeapWords through as max_heap; omits it when unset (FEAT-791)", async () => {
+		const { client, t } = mk();
+		void client.execute({ program: "x", maxHeapWords: 8_388_608 });
+		expect((t.last().params as Record<string, unknown>).max_heap).toBe(8_388_608);
+
+		void client.execute({ program: "y" });
+		expect((t.last().params as Record<string, unknown>).max_heap).toBeUndefined();
+	});
 });
 
 describe("re-init handshake (Review Gate 1, P2)", () => {
