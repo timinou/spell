@@ -1,0 +1,46 @@
+#+TITLE: D3 journal: wire startedAt into a staleness gate or drop it
+#+STATE: ITEM
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: FUP-118-d3-journal-wire-startedat-into-a-stalene
+
+* Initial Message
+
+P3 (NIF): Can you try it out? Will the warm kernel keep mini-sessions separate? What else besides improvements can it do? Is it strong improvements?
+W4 (stored programs): explain what that means please, what are the possibilities? How hard is the integration?
+Deferred, documented: D3, E4: what does it do?
+
+Think deeply
+
+* Context (D3 W3 reviewer swarm, P3)
+
+`TransactionJournal` records `startedAt` (ms) in every JournalRecord but `sweep()`
+never reads it. After the P1/P2 fixes (liveness probe + per-launch nonce), recovery is
+gated correctly by pid-liveness \u2014 a DEAD pid's journal is recovered, a LIVE one
+skipped. `startedAt` is currently dead weight.
+
+Two coherent options:
+A. DROP startedAt \u2014 the liveness probe fully decides recovery; the field reads as an
+   unfinished staleness intent.
+B. USE startedAt as a secondary staleness gate \u2014 e.g. only auto-recover a dead-pid
+   journal older than a small grace window, and surface very-recent ones for manual
+   inspection (defends against a race where a process died microseconds ago and a fast
+   restart sweeps a journal whose files might still be settling). Low marginal value
+   given the pid-liveness probe already handles the live case.
+
+Recommend A (drop it) unless a concrete staleness need appears \u2014 the liveness probe is
+the correct primary gate and startedAt adds nothing today.
+
+* Files
+
+- packages/coding-agent/src/tools/ptc-runtime/transaction.ts (JournalRecord, write, sweep).
+
+* Acceptance
+
+Either startedAt is removed (JournalRecord slimmed) OR it gates recovery with a
+documented grace window + test. No dead fields.
+
+* Relationships
+
+Polish follow-up to PLAN-333 (D3 W3). Non-blocking \u2014 the crash-recovery guarantee is
+correct without it.

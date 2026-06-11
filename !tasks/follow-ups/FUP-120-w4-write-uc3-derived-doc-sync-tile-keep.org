@@ -1,0 +1,240 @@
+#+TITLE: W4-write UC3: derived-doc sync tile — keep a README table generated from source of truth
+#+STATE: ITEM
+#+SESSION_ID: 1505405ac9be8b39
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a/12-UC3DerivedDoc.jsonl]]
+#+CUSTOM_ID: FUP-120-w4-write-uc3-derived-doc-sync-tile-keep
+
+* One-line
+
+A dashboard tile that detects staleness in a DERIVED document (e.g. a status table in
+README), shows a row-level preview of what would change, and syncs it transactionally
+on demand — the dry-run preview IS the product.
+
+* Why this use case
+
+The whole value of a derived-doc tile is the STALENESS SIGNAL — "the table is out of
+date, would update 4 rows". That signal only matters when a human is looking (deciding
+whether to apply). visible-refresh fits exactly: it runs as a dry-run on every
+dashboard-open, tells you precisely how stale the doc is, with zero mutation risk.
+
+Background-ticking it would be pointless (nobody watching) and auto-writing a doc is
+usually undesirable (docs often want a human eye before commit). interactive is for the
+explicit sync click. visible-refresh is the primary, always-on mode.
+
+This UC also demonstrates the richest preview — row-level diffs — proving the preview
+mechanism scales beyond file counts.
+
+* Depends on (HARD)
+
+- W4-write core (FUP-112): StoredProgram.mode="write", three-valued RunIntent,
+  dry-run + autoWrite + structured txn outcome (details.transaction.files,
+  details.transaction.paths, details.transaction.outcome). This UC is a CONSUMER of
+  that machinery; do not start until FUP-112 ships.
+- D3 (PLAN-333, DONE): the transactional lane that makes the apply atomic and captures
+  "would write N files" during dry-run.
+- The canvas/dashboard tile surface (see "Surfaces to verify").
+
+* The grounded scenario (concrete, end to end)
+
+A project's README has a "Supported Platforms" table with rows like:
+
+| Platform | Status | Since |
+|----------|--------|-------|
+| Linux    | ✓      | v0.1  |
+| macOS    | ✓      | v0.1  |
+| Windows  | ⚠ beta | v2.0  |
+
+The source of truth is org DONE items: when a platform reaches "stable", a dev
+advances its org state to DONE and sets :platform: and :status: properties. The table
+DRIFTS — nobody remembers to update the README — until a PR review gets embarassing.
+
+The dev authors a stored write program once:
+
+```clojure
+;; title: "sync supported-platforms table"
+;; mode: write
+(let [done-items (tool/org {:command "query" :query "todo:DONE tags:platform"})
+      rows (->> done-items
+                (map (fn [i]
+                       (str "| " (get i "property:platform")
+                            " | ✓ | " (get i "property:since")
+                            " |")))
+                (str/join "
+"))
+      table (str "<!-- platforms-begin -->
+"
+                 "| Platform | Status | Since |
+"
+                 "|----------|--------|-------|
+"
+                 rows "
+"
+                 "<!-- platforms-end -->")]
+  (tool/edit {:target "README.md"
+              :operations [{:target "README.md::<!-- platforms-begin -->"
+                            :action {:kind "replace" :content table}}]}))
+```
+
+They save it as a tile on their project dashboard. From then on:
+
+** State A — doc in sync
+visible-refresh runs the program as a dry-run. The derived table matches the source of
+truth exactly (same rows, same values) → D3 captured 0 writes, forced rollback.
+Tile renders: "sync supported-platforms table · ✓ up to date". No noise, no buttons.
+
+** State B — source of truth changed (2 new platforms reached stable, 1 status upgraded)
+visible-refresh dry-run: the program queries org, builds the new table, tries to write
+it. D3 snapshots the original README.md, captures the edit, then force-rolls-back. The
+result's details.transaction = { outcome: "dry-run", files: 1, paths: ["README.md"] }.
+BUT — the program itself returns richer structure: the tile asks the program for a
+HUMAN-readable diff. The program is designed to return a structured summary alongside
+its writes:
+
+```clojure
+;; after the edit, return the row diff for rendering
+{:writes 1, :summary "would add 2 rows (FreeBSD, illumos), update 1 (Windows ✓), remove 0"}
+```
+
+The tile renders:
+```
+┌─ sync supported-platforms table ────────────[⚙]─┐
+│  ⚠ out of date · would change 4 rows in README.md │   ← visible-refresh verdict
+│  + FreeBSD  ✓  v2.2                                 │   ← row-level preview
+│  + illumos  ✓  v2.2                                 │
+│  ~ Windows  ✓  v2.1 (was ⚠ beta)                   │
+│  ┌──────────┐  ┌──────────────┐                    │
+│  │ Sync     │  │ ⏻ auto-apply  │  last: —          │   ← Apply = interactive
+│  └──────────┘  └──────────────┘                    │
+└────────────────────────────────────────────────────┘
+```
+
+The row-level diff is the distinguishing UX of this UC.
+
+** State C — dev clicks [Sync] (interactive intent)
+The program runs for real: queries org, builds table, edits README.md transactionally.
+details.transaction = { outcome: "committed", files: 1, paths: ["README.md"] }.
+Tile renders:
+```
+┌─ sync supported-platforms table ────────────[⚙]─┐
+│  ✓ committed README.md · table synced · 14:32     │
+└──────────────────────────────────────────────────┘
+```
+If the program errors (e.g. org query fails), D3 rolls back:
+"↩ rolled back · org query failed: invalid filter, repo unchanged".
+
+** State D — optional: autoWrite armed (for purely mechanical tables)
+A dev who fully trusts a purely-mechanical automatable table (e.g. an API surface table
+derived from export analysis, not org state) can arm autoWrite. On background tick, the
+table gets regenerated silently + an audit line is recorded. Contrast: for the
+supported-platforms table (which represents a human judgement call about stability), a
+dev would usually NOT arm autoWrite — and that's fine. The preview alone is the
+valuable end state; autoWrite is available but clearly labelled as "for purely
+mechanical tables only, use with thought".
+
+* Architecture (step by step)
+
+1. STORAGE. A tile persists a StoredProgram (mode:"write") plus tile-local UX state:
+   { autoWrite: boolean, lastOutcome?: TxnOutcome, lastRunAt?: number,
+   history: AuditLine[], lastDiff?: string }. The `lastDiff` is the row-detail string
+   returned by the program on the most recent visible-refresh — the host stores it so
+   the diff survives tile minimises/expands without re-running.
+
+2. REFRESH (visible). When the dashboard is open and the tile refreshes, the host calls
+   `runStored(stored, { intent: "visible-refresh" }, context)`. The program executes as
+   a dry run: D3 captures writes, force-rolls-back. The result's
+   details.transaction = { outcome: "dry-run", files: N, paths: [...] }.
+   The program's return value (a structured summary map with `:writes`, `:summary`,
+   `:diff-rows` string) is rendered by the tile as the row-level preview. The host
+   caches this return value as `lastDiff` for expand/hover.
+
+3. SYNC (interactive). The [Sync] button calls
+   `runStored(stored, { intent: "interactive" })`. The write executes for real;
+   details.transaction = { outcome: "committed" | "rolled-back", files, paths }. The
+   tile renders the outcome and appends an audit line. On success, the tile returns to
+   "up to date" state immediately (next visible-refresh would confirm 0 drift anyway).
+
+4. AUTO (background). If `tile.autoWrite` is set, a background tick calls
+   `runStored(stored, { intent: "background-tick", autoWrite: true })` → writes for
+   real, records the outcome. If NOT set, the tick is INERT. Per the scenario, doc-sync
+   tiles typically remain unarmed — the preview alone is worth it; the tile explicitly
+   suggests "use with thought" when autoWrite is toggled on for a derived-doc program.
+
+5. The host NEVER constructs the diff — it renders the program's returned
+   structured summary verbatim. The program is responsible for returning human-readable
+   row-level diffs. The host only reads details.transaction for the formal outcome and
+   the program's return value for the preview content.
+
+* UX (taste)
+
+```
+State B — stale with row-level diff (the richest preview of the four UCs):
+
+┌─ sync supported-platforms table ────────────[⚙]─┐
+│  ⚠ out of date · would change 4 rows in README.md │   ← headline is the staleness verdict
+│  + FreeBSD  ✓  v2.2                                │   ← added rows in green
+│  + illumos  ✓  v2.2                                │
+│  ~ Windows  ✓  v2.1 (was ⚠ beta)                  │   ← changed rows in amber
+│  ┌──────────┐  ┌──────────────┐                   │
+│  │ Sync     │  │ ⏻ auto-apply  │  last: 14:02 ✓1  │   ← Sync primary when stale
+│  └──────────┘  └──────────────┘                   │      greyed when in-sync
+└──────────────────────────────────────────────────┘
+
+State A — in sync (calm):
+
+┌─ sync supported-platforms table ────────────[⚙]─┐
+│  ✓ up to date · last verified 14:32               │
+└──────────────────────────────────────────────────┘
+```
+- Calm by default: in-sync shows one line, no buttons. Zero drift = zero noise.
+- Headline is the staleness verdict ("up to date" or "out of date"). The row count is
+  secondary detail on the same line.
+- Row diffs are compact: `+` added (green), `~` changed (amber), `−` removed (red).
+  Each row fits on one line; wrap only for long content.
+- [Sync] is primary only when drift>0; greyed when clean. The button label is "Sync",
+  not "Apply" — matching the doc-sync domain language.
+- "auto-apply" exists but the tile notes it's for mechanical tables. The toggle has a
+  tooltip: "Auto-sync on background tick (recommended for purely mechanical tables only)".
+  This is the RECOMMENDED DEFAULT being OFF — contrast with UC1 where arming is the goal.
+- Colour semantics: warning amber for drift (actionable, not alarming), green for
+  committed/in-sync, neutral grey for rolled-back with "repo unchanged" reassurance.
+  Row additions green, changes amber, removals red.
+
+* Surfaces to verify at implementation
+
+- The exact tile host (org dashboard tile vs canvas window vs both) and its refresh
+  lifecycle hook — where "visible-refresh" fires.
+- How a tile persists StoredProgram + autoWrite + lastDiff (the cached return value
+  from the last preview).
+- The details.transaction shape from FUP-112 — render from it verbatim.
+- How the program's return value is surfaced through runStored (it returns
+  AgentToolResult with both details.transaction and the program result; the host needs
+  to access the result for the diff string).
+- The expand/hover affordance for row-level diffs (compacted to headline by default,
+  expandable).
+
+* Tests
+
+- visible-refresh on a synced doc → tile shows "up to date", 0 writes, repo UNCHANGED.
+- visible-refresh on a drifted doc → tile shows row-level preview ("would add 2, update
+  1"), repo UNCHANGED (dry-run actually rolled back). Preview matches program's returned
+  diff structure.
+- interactive Sync → README updated transactionally, outcome "committed", files=1,
+  audit line appended.
+- Sync when program errors mid-apply → "rolled-back", repo unchanged, failure reasoned.
+- background-tick, autoWrite OFF → INERT (no run, no cost, tile state unchanged).
+- background-tick, autoWrite ON → README updated, audit line recorded.
+- lastDiff survives tile collapse/expand (cached by host, not re-previewed).
+
+* Acceptance
+
+A derived-doc tile shows a live staleness signal with row-level diffs while the
+dashboard is open without mutating, syncs atomically on click with a visible outcome,
+and remains preview-only by default with an optional auto-sync (clearly labelled as
+mechanical-only). Every real write leaves an audit line; every rollback is transparent.
+
+* Relationships
+
+Consumer of FUP-112 (W4-write core). Sibling consumer UCs: UC1 codemod tile (interactive
+primary), UC2 changelog (background tick), UC4 auto-format (background tick). Unique in
+that the dry-run preview IS the product and the tile defaults to autoWrite:OFF.
+Demonstrates the richest row-level preview among the set.

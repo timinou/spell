@@ -1,0 +1,34 @@
+#+TITLE: execute-substrate-direction--fork-ptc-ru
+
+** ITEM Execute substrate direction: fork ptc_runner, polymorphic handles, staged sole-lane
+
+Decided 2026-06-10 (specs/beam-orchestrator/06-execute-substrate.md is the durable record). Key decisions:
+
+D-1 FORK: vendor ptc_runner → beam/ptc_runner-vendored/ + SPELL_PATCHES.md (brush-core precedent). No h/* shim namespace ever ships — polymorphic handle-aware builtins, psettled, and lint hooks land in the forked eval layer directly.
+
+D-2 HANDLES: tool results >~256KB park in a Peer-owned store; sandbox gets opaque handle; core builtins (get/count/take/filter/group-by/...) polymorphic over handles, executing host-side. max_n charges only materialized slices → E1 heap-error class structurally impossible. Store backing is two-phase: ETS (bridge) → ResourceArc (NIF) — eval contract is backing-agnostic, so W2 and P3 run in parallel safely.
+
+D-3 SOLE LANE (staged): execute becomes the only lane for read/aggregate/write-batch tools; ask/canvas/bash-PTY/task/approvals stay direct. DEFAULT_DENYLIST already encodes the boundary.
+
+D-4 psettled per-element {:ok|:err} + ok?/err?/unwrap-or prelude — errors as data, no exceptions (preserves ptc_runner no-try philosophy). Upstreamable.
+
+D-5 preflight lint in Peer (parse + unbound-symbol + nearest-builtin hint) — grammar errors cost ~10ms and 0 effects.
+
+D-6 session bindings bind/<key> (handle store, session lifetime) — REPL-ization.
+
+D-7 cost meter in execute details (per-tool-call bytes, watermark).
+
+DEFERRED: transactional write lane (edit-broker MultiIntent) until an agent demonstrably loses partial work.
+
+NIF (P3): kernel split (pi-kernel carve-out + OwnerId + reclaim hook) happens AS PART OF P3, not after; interim NIF reads scoped to non-index paths (file/org/memory — no graph, no writes) to avoid two-kernels divergence and index RAM duplication.
+
+W0 SHIPPED same session: FEAT-791 (executeMaxHeapMb kdl setting + per-call max_heap_mb, operator-ceiling semantics, words conversion once at Node boundary, peer-side clamp) + BUG-426 (dashboard_ref body-less projection in org_index.rs, OrgDashboardItemRef type).
+:PROPERTIES:
+:CUSTOM_ID: DEC-execute-substrate-direction--fork-ptc-ru
+:KIND: decision
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-10T15:10:35Z
+:END:
+:RELATIONS:
+ABOUT: CON-ptcruntime--beam-compute-coprocessor---e
+:END:

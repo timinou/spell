@@ -1,0 +1,99 @@
+#+TITLE: Execute nil-poisoning: missing-key nil silently absorbed by collection ops — add strict accessor (E7)
+#+STATE: DONE
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: BUG-448-execute-nil-poisoning-silent-keyword-get
+#+COMPLETION_HASH: 9a8c26e87783ba98
+
+* Context (CORRECTED after empirical verification — read this)
+
+The original framing of this bug ("(:items r) on a string-keyed tool result silently
+returns nil") is FALSE. Verified against the live fork (PtcRunner.Lisp.run/2):
+
+```
+(:items {"items" 5})            => 5      ; flex-access ALREADY resolves keyword→string
+(get {"items" 5} :items)        => 5      ; same
+(:turn-summaries {"turn_summaries" 9}) => 9 ; hyphen↔underscore ALSO already normalized
+```
+`FlexAccess.flex_fetch_keyword_name/2` (flex_access.ex) falls back to
+`Map.fetch(map, name)` with the string name, and `fetch_normalized/3` handles
+hyphen/underscore. So the keyword-on-string-keyed-map "poisoning" DOES NOT EXIST.
+
+The REAL nil-poison is narrower (verified):
+```
+(:itmes {"items" 5})            => nil    ; genuine typo / missing key → nil
+(get-in {"a" {"b" 5}} ["a" "x" "b"]) => nil ; missing mid-path → nil
+(+ 1 (:absent {"x" 1}))         => FAILS LOUD (type_error: add ... nil)  ; arithmetic self-defends ✓
+(count (:absent {"x" 1}))       => 0      ; SILENT plausible-wrong  ← the actual danger
+(map f (:absent {"x" 1}))       => []     ; SILENT plausible-wrong  ← the actual danger
+(filter p (:absent {"x" 1}))    => []     ; SILENT plausible-wrong  ← the actual danger
+```
+∴ the danger is: a missing key returns nil, and COLLECTION ops (count→0, map→[],
+filter→[]) absorb it into a plausible-but-wrong value that propagates to the final
+result. Arithmetic already fails loud; only the collection-absorb path is silent.
+
+* Why NOT a default hard error
+
+nil-punning is RELIED UPON: priv/functions.exs is nil-dense (since/notes/divergences
+fields default nil), and (count nil)→0 / (map f nil)→[] are idioms. A blanket
+hard-fail on missing-key access would break back-compat across the program corpus
+(specs/beam-orchestrator/04-where-ptcrunner-shines.md). Decision REVERSED from the
+original "hard typed error": default access stays nil-returning.
+
+* Fix (decision: OPT-IN strict accessor, zero back-compat risk)
+
+Add a strict accessor that FAILS LOUD on a missing key, leaving default access
+untouched. Author reaches for it when a key MUST exist (the W4 stored-program and
+sole-lane cases especially):
+
+```
+(get! m k)        ; like get, but missing key → fail-signal {:err "required key \"k\" absent"}
+(get-in! m path)  ; like get-in, but any missing level → fail-signal naming the absent segment
+```
+- Implement as builtins in runtime + env (alongside get/get-in). Use the existing
+  fail-signal mechanism (the {:__ptc_fail__, _} path psettled/W3 already handle), NOT
+  an exception — preserves the no-try philosophy (errors as data).
+- get!/get-in! reuse FlexAccess.flex_fetch (keyword/string/hyphen-aware), so the ONLY
+  difference from get/get-in is :error → fail instead of :error → default-nil.
+- Register in source_atoms.ex (intern, not String.to_atom — atom-table vuln #953),
+  analyze.ex, lisp.ex (collect_*), functions.exs catalog, predicates/runtime.
+
+* ALSO: sharpen the W1b preflight shape-lint (best-effort warn, not block)
+
+When a program threads an accessor result DIRECTLY into a collection op whose
+nil-absorb is silent (count/map/filter/reduce) without a nil-guard or get!, emit a
+hint: "missing key → nil → count/map silently yields 0/[]; use get! if the key is
+required". Warn only; never block (back-compat). Same lint entry as W1b.
+
+* Files
+
+- beam/ptc_runner-vendored/lib/ptc_runner/lisp/runtime.ex (+ runtime/predicates.ex) —
+  get!/get-in! delegating to FlexAccess.flex_fetch, :error → fail-signal.
+- beam/ptc_runner-vendored/lib/ptc_runner/lisp/env.ex — register builtins.
+- beam/ptc_runner-vendored/lib/ptc_runner/lisp/source_atoms.ex — intern the names.
+- beam/ptc_runner-vendored/lib/ptc_runner/lisp/analyze.ex + lisp.ex — wire through.
+- beam/ptc_runner-vendored/priv/functions.exs — catalog entries.
+- W1b lint entry — the new warn.
+- beam/ptc_runner-vendored/SPELL_PATCHES.md — PATCH-6 (revised scope).
+
+* Tests (beam/ptc_runtime/test/nil_poison_test.exs)
+
+- (get! {"items" 5} "items") => 5 ; present key returns value.
+- (get! {"items" 5} "absent") => fail-signal naming "absent" (LOUD, not nil).
+- (get-in! {"a" {"b" 5}} ["a" "x"]) => fail-signal naming "x".
+- (get! m :items) where m string-keyed with "items" => 5 (keyword-aware, like get).
+- default (get m "absent") still => nil ; (count (get m "absent")) still => 0 (back-compat).
+- a get!-failed program inside psettled settles as {:err ...} (composes with W1).
+
+* Acceptance
+
+A required-key miss fails loud via get!/get-in! with the absent key named; default
+nil-returning access and nil-punning idioms UNCHANGED; preflight emits a best-effort
+hint when a raw accessor feeds a silent-absorb collection op. mix test green; fork
+compiles --warnings-as-errors.
+
+* Blocked-by
+
+Nothing. Independent of the reaper; parallel. Good before W4.
+
+NOTE [2026-06-11]: Shipped: get!/get-in! strict accessors (PATCH-6). Premise corrected empirically (keyword→string already resolves; real poison = missing-key nil absorbed by count/map). 14 nil_poison tests + full BEAM suite green. Default nil-returning access unchanged (back-compat).

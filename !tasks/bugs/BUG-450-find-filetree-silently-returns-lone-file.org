@@ -1,0 +1,29 @@
+#+TITLE: find: `file#tree` silently returns lone §file leaf instead of redirecting to #outline
+#+STATE: DONE
+#+SESSION_ID: 1503acd8825ce2c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-24-49-929Z_1503acd8825ce2c9.jsonl]]
+#+CUSTOM_ID: BUG-450-find-filetree-silently-returns-lone-file
+
+* Initial Message
+
+ok then run an adversarial review test-driving all of this code path thing and trying it for advanced advanced stuff please. how ergonomic is it?
+
+## Symptom
+`find { target: "file.ts#tree" }` returns a useless single `[§file]` leaf with no guidance. `#tree` is a directory-only qualifier (`applies_to: ["dir"]`), but applying it to a file silently "succeeds" — a confusing no-op for a caller who reasonably expected the file's symbol structure (the actual qualifier is `#outline`).
+
+## Root cause
+`crates/pi-code-path/src/dialects/fs/qualifiers.rs::resolve_tree` treats a file as a zero-child tree → emits one `§file` node, no diagnostic. The `applies_to` domain metadata existed but wasn't enforced on the fs path (unlike the BUG-444 grep-context diagnostics on the symbol path).
+
+## Fix
+`crates/pi-code-path/src/dialects/fs/mod.rs` qualifier-application loop: when `#tree` resolves to exactly ONE node that is a regular file (explicit single-file target), attach a non-fatal `UnsupportedOperation` diagnostic naming `#outline`/`#raw`, and still return the `§file` node (BUG-444 non-fatal pattern). Gated on `nodes.len() == 1` so directory walks (`.#tree`, `src/#tree`) that legitimately enumerate file children are unaffected.
+
+## Verification
+- `tree_on_explicit_file_redirects_to_outline` (resolver level): asserts the §file node resolves AND carries the redirect diagnostic.
+- `bug372_dot_with_tree_qualifier` regression: `.#tree` still enumerates nested files (initially broke when the check lived in resolve_tree per-node; relocated to the single-node gate).
+- pi-code-path lib: 524 passed, 0 failed.
+- Live (native rebuilt): `file#tree` → §file + clean Diagnostics: redirect (no throw); `dir#tree` → full enumeration; `file#outline` → symbol structure.
+
+## NB
+Surfaced during the BUG-449 adversarial test-drive. Also confirmed `#outline` is the correct, working file-structure qualifier.
+</body>
+<parameter name="_i">Filing tree-on-file redirect bug

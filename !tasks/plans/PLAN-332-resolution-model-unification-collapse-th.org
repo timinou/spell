@@ -1,0 +1,48 @@
+#+TITLE: Resolution-model unification: collapse the four drift seams in CodePath
+#+STATE: DONE
+#+SESSION_ID: 1503acd8825ce2c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-24-49-929Z_1503acd8825ce2c9.jsonl]]
+#+CUSTOM_ID: PLAN-332-resolution-model-unification-collapse-th
+
+* Initial Message
+
+test drive the edit and the create interface (the recent BUGs and PLANs and FEATs implemented them, see if the implementation works well)
+
+* Thesis
+Five bugs (BUG-441/442/443/444, FEAT-809) share one root: *resolution-model fragmentation* — seams where two implementations of the same truth drifted apart. Fix = collapse the seams into single authorities. Meta-principle: kernel owns truth, TS renders it.
+
+* Seams → Theses
+- A. Single resolution authority (Rust): verbs consume one wrapper-aware ResolvedSymbol; no verb re-resolves from a bare line. Fixes BUG-441 (move on methods) + BUG-443 (export double-node).
+- B. Single grammar authority (TS): get.ts uses the already-exported parseCodePath; delete classifyBareTarget regex. Fixes BUG-442 (abs-path slice).
+- C. Single capability authority: dialects answer supports(qualifier,family); doc-gen + invariant test from that. Fixes BUG-444 (#match doc drift).
+- D. Single edit-outcome contract: every mutation incl. undo/redo returns {file,before,after,diff}; render via FEAT-807 diff cell; cross-root recording fix. Fixes FEAT-809.
+
+* Build order (spine-first)
+Wave 1 = Thesis A (load-bearing; main thread). Reviewer swarm. Wave 2 = B + D (parallel). Reviewer swarm. Wave 3 = C (blockers A). Reviewer swarm. Wave 4 = anti-drift test layer.
+
+* Anti-drift deliverable (the real ambition)
+1 parser (no TS grammar regex), 1 resolver (no line round-trip in verbs), capability invariant test (doc⟺resolver), 1 outcome type. Make the bug-class unrepresentable.
+
+* Mid-flight policy
+Reviewer swarms between waves file + fix ALL surfaced FEAT/BUG. No deferrals.
+
+* Outcome (complete)
+All four theses landed + reviewer swarms + anti-drift layer.
+
+** Bugs fixed (original 5 + 2 surfaced mid-flight)
+- BUG-441 method move \u2014 drag.rs member_node_for_drag (span-anchored, decoration-aware). DONE.
+- BUG-442 abs-path slice \u2014 get.ts classifyBareTarget\u2192parseCodePath; slice-aware extractAbsolutePrefix/makeRelativeToRoot; query-bearing abs targets relativised. DONE.
+- BUG-443 export double-node \u2014 walker.rs collapse_export_wrappers. DONE.
+- BUG-444 #match doc drift \u2014 introspection applies_to corrected to `grep`; anti-drift invariant test; walker domain diagnostic. DONE.
+- FEAT-809 undo diff \u2014 RevertOutcome carries file+diff; reverse_unified_diff; edit.ts diff-cell render. DONE.
+- BUG-445 (surfaced by A-review) \u2014 move stranded Rust attributes / TS+Py decorators; statement-unit swap. DONE.
+- BUG-446 (surfaced by BD-review) \u2014 reverse_unified_diff corrupted `--`/`++` content lines; dropped header branches. DONE.
+
+** Anti-drift deliverables (the ambition)
+1. One parser: get.ts uses parseCodePath (no TS grammar regex).
+2. One resolver: drag consumes the symbol span, no line round-trip.
+3. Capability invariant: list_qualifiers_all_well_formed pins controlled family vocabulary; grep_context test locks #match/#captures.
+4. One outcome: undo/redo render through the same diff cell as edits.
+
+** Verification
+pi-code-engine 211 \u00b7 pi-code-path 523 \u00b7 pi-natives lib 449 \u00b7 TS tools 125 \u2014 all 0 fail. My files fmt+biome+typecheck clean. All 4 theses live-verified via fresh native. One pre-existing flaky broker-concurrency test (wave-J) unrelated.

@@ -1,0 +1,166 @@
+#+TITLE: W4-write UC1: codemod tile — a stored transform you keep and re-apply on drift
+#+STATE: DONE
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: FUP-119-w4-write-uc1-codemod-tile-a-stored-trans
+#+COMPLETION_HASH: 879ba529c2d7d33e
+
+* Initial Message
+
+P3 (NIF): Can you try it out? Will the warm kernel keep mini-sessions separate? What else besides improvements can it do? Is it strong improvements?
+W4 (stored programs): explain what that means please, what are the possibilities? How hard is the integration?
+Deferred, documented: D3, E4: what does it do?
+
+Think deeply
+
+* One-line
+
+A dashboard tile that holds a saved PTC-Lisp WRITE program (a codemod), shows
+"would change N files" as a live drift signal whenever the dashboard is open, and
+applies it transactionally with one click (or auto, if armed).
+
+* Why this is the anchor use case
+
+This is the purest expression of W4-write's value: a transform stops being a
+one-shot command and becomes a DURABLE, RE-APPLICABLE object. The dev keeps the
+codemod; it watches the repo; it tells them when the repo has drifted away from the
+shape the codemod enforces; applying it is one safe, atomic action. It is the case
+that justifies the whole "program as a value" thesis.
+
+* Depends on (HARD)
+
+- W4-write core (FUP-112): StoredProgram.mode="write", validateStoredProgram's
+  rollback-safe bar, three-valued RunIntent (interactive | visible-refresh |
+  background-tick), dry-run + autoWrite + structured txn outcome. This UC is a
+  CONSUMER of that machinery; do not start until FUP-112 ships.
+- D3 (PLAN-333, DONE): the transactional lane that makes the apply atomic.
+- The canvas/dashboard tile surface (see "Surfaces to verify" — the exact host may be
+  an org dashboard tile, a canvas window, or both; confirm at implementation).
+
+* The grounded scenario (concrete, end to end)
+
+A repo migrated its logger: `oldLog(x)` → `logger.info(x)`. New code occasionally
+reintroduces `oldLog` (muscle memory, copy-paste, merges). The dev wants a STANDING
+guard, not a one-time sweep.
+
+They author the codemod once as a stored write program:
+
+```clojure
+;; title: "migrate oldLog → logger.info"
+;; mode: write
+(->> (tool/find {:target "src/**/*.ts::§call[name=oldLog]"})
+     (map (fn [hit]
+            (tool/edit {:operations
+              [{:target (str (get hit "path") "::" (get hit "symbol"))
+                :action {:kind "replace" :find "oldLog" :content "logger.info"}}]})))
+     (count))                       ; returns N files changed
+```
+
+They save it as a tile on their project dashboard. From then on:
+
+** State A — repo is clean (no oldLog anywhere)
+The tile renders calm: "migrate oldLog → logger.info · ✓ no drift". The visible-refresh
+dry-run found 0 matches → 0 writes → nothing to do. No noise.
+
+** State B — drift appears (someone reintroduced oldLog in 3 files)
+Next time the dashboard is OPEN, the tile's visible-refresh dry-run runs the program
+read-only (D3 captures the writes, force-rolls-back), and the tile renders:
+"migrate oldLog → logger.info · ⚠ would change 3 files" with the file list on hover
+and an [Apply] affordance.
+
+** State C — the dev clicks [Apply] (interactive intent)
+The program runs for real, transactionally. The tile renders the structured txn
+outcome: "✓ committed 3 files (foo.ts, bar.ts, baz.ts) · 14:32". If the program had
+errored mid-run, D3 rolls back and the tile shows "↩ rolled back — program failed:
+<reason>, repo unchanged". Either way the repo is never half-migrated.
+
+** State D — the dev arms autoWrite (background-tick intent, opt-in per tile)
+For a codemod they fully trust, they flip the tile's "auto-apply" toggle. Now even a
+background tick (dashboard closed) applies the transform and APPENDS a visible audit
+line to the tile's history: "✓ auto-committed 2 files · 03:14". Never silent.
+
+* Architecture (step by step)
+
+1. STORAGE. A tile persists a StoredProgram (program text + mode:"write" + title +
+   optional signature) plus tile-local UX state: { autoWrite: boolean,
+   lastOutcome?: TxnOutcome, lastRunAt?: number, history: AuditLine[] }. Storage host
+   is the dashboard/canvas tile model (confirm the exact store; likely the org item's
+   PROPERTIES drawer or a canvas window's bridge state, mirroring how W4-read tiles
+   store their :program block).
+
+2. REFRESH (visible). When the dashboard is open and the tile refreshes, the host
+   calls `executeTool.runStored(stored, { intent: "visible-refresh" }, context)`. Per
+   FUP-112, a write program under visible-refresh runs as a DRY RUN: the program
+   executes, D3 captures the writes, then force-rolls-back even on success. The result's
+   `details.transaction` = { outcome: "dry-run", files: N, paths: [...] }. The tile
+   renders the drift signal from that (N>0 → "would change N", N=0 → "no drift").
+
+3. APPLY (interactive). The [Apply] button calls
+   `runStored(stored, { intent: "interactive" })`. The write executes for real;
+   `details.transaction` = { outcome: "committed" | "rolled-back", files, ... }. The
+   tile renders the outcome and appends an audit line.
+
+4. AUTO (background). If `tile.autoWrite` is set, a background tick calls
+   `runStored(stored, { intent: "background-tick", autoWrite: true })` → writes for
+   real, records the outcome to the tile's history (visible on next open). If autoWrite
+   is NOT set, a background tick is INERT (per FUP-112) — the tile keeps its last known
+   state, costs nothing.
+
+5. The host NEVER constructs the rollback logic — it only reads `details.transaction`
+   and renders. All atomicity lives in D3; all mode/intent logic lives in FUP-112; this
+   UC is purely presentation + the per-tile autoWrite toggle.
+
+* UX (taste)
+
+```
+┌─ migrate oldLog → logger.info ──────────────[⚙]─┐
+│  ⚠ would change 3 files                          │   ← visible-refresh dry-run
+│  foo.ts · bar.ts · baz.ts                        │
+│  ┌─────────┐  ┌──────────────┐                   │
+│  │ Apply   │  │ ⏻ auto-apply │  last: 14:02 ✓2   │   ← Apply = interactive
+│  └─────────┘  └──────────────┘                   │      toggle = arm autoWrite
+└──────────────────────────────────────────────────┘
+```
+- Calm by default: 0 drift → a single ✓ line, no buttons clamor.
+- The drift count is the headline; the file list is secondary (hover/expand).
+- [Apply] is primary only when drift>0; greyed when clean.
+- "auto-apply" is a deliberate, sticky per-tile toggle with a visible armed state (a
+  filled indicator) so the dev always knows which tiles can mutate unattended.
+- Every real write (interactive or auto) leaves a timestamped audit line; the tile's
+  history is one expand away. Discard/rollback outcomes are shown with equal weight to
+  commits (a failed apply must not look like a no-op).
+- Colour: drift = warning amber (actionable, not alarming red); committed = success
+  green; rolled-back = neutral with a clear "repo unchanged" reassurance.
+
+* Surfaces to verify at implementation
+
+- The exact tile host (org dashboard tile vs canvas window vs both) and its refresh
+  lifecycle hook — where "visible-refresh" fires.
+- How a tile persists StoredProgram + autoWrite (PROPERTIES drawer vs canvas bridge).
+- The `details.transaction` shape from FUP-112 (outcome/files/paths) — render from it
+  verbatim; do not recompute.
+
+* Tests
+
+- visible-refresh on a drifted repo → tile shows "would change N", repo UNCHANGED
+  (dry-run actually rolled back).
+- visible-refresh on a clean repo → "no drift", 0 writes.
+- interactive Apply → repo changed, txn outcome "committed", audit line appended.
+- a program that errors mid-apply → "rolled-back", repo unchanged, failure surfaced.
+- background-tick, autoWrite OFF → INERT (no run, no cost, tile state unchanged).
+- background-tick, autoWrite ON → writes for real, audit line recorded.
+
+* Acceptance
+
+A saved codemod tile shows live drift while the dashboard is open without mutating,
+applies atomically on click with a visible committed/rolled-back outcome, and only
+mutates on a background tick when explicitly armed — every real write leaving an audit
+line.
+
+* Relationships
+
+Consumer of FUP-112 (W4-write core). Sibling consumer UCs: UC2 changelog (background
+tick), UC3 derived-doc sync, UC4 auto-format. Part of the "execute as live
+instrumentation" vision (specs/beam-orchestrator/04-where-ptcrunner-shines.md).
+
+NOTE [2026-06-11]: SHIPPED in Spell Team Chat (not canvas \u2014 user chose team-chat host). Investigation reframed scope: the tile needed NEW plumbing (the FUPs flagged this), built as a vertical slice across 3 packages + substrate. SUBSTRATE: executeSchema gained mode/intent/auto_write; execute() routes to runStored when present (now reachable via the tool surface for ANY host). AGENT: run_stored RpcCommand + rpc-mode handler (mirrors bash, non-LLM). SERVER: BridgeRpcCommand run_stored passthrough (WS dispatch forwards generically; external CLI sessions correctly reject it). FRONTEND: CodemodTilePanel.svelte realizing this FUP's design \u2014 localStorage-persisted tiles, dry-run-on-open drift signal ('would change N files', zero mutation), [Apply]=interactive commit, \u23fb auto-arm toggle, audit history (commit AND rollback equal weight), calm-by-default amber-drift/green-commit. Reviewer-gated: confirmed safety invariant (preview never mutates, external-session reject, policy applies); 2 fixes (P1 $effect retry-storm \u2192 `checked` flag; P2 wire-field ok\u2192success error check). svelte-check 0/0, build OK, 19 team-chat + 14 substrate tests green. DEFERRED as follow-ups (per scope decision): tile-state SERVER persistence (localStorage is v1, per-browser; team-chat is multiplayer), a per-tile background-tick SCHEDULER (the autoWrite arming works; nothing fires unattended ticks yet \u2014 the agent issues them today). FUP-121 (format tile) now reuses this exact substrate \u2014 a thin follow-up.

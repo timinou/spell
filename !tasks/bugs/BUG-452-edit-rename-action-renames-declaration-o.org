@@ -1,0 +1,37 @@
+#+TITLE: edit: `rename` action renames declaration only, silently leaves all references dangling
+#+STATE: DONE
+#+SESSION_ID: 1503acd8825ce2c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-24-49-929Z_1503acd8825ce2c9.jsonl]]
+#+CUSTOM_ID: BUG-452-edit-rename-action-renames-declaration-o
+
+* Initial Message
+
+ok then run an adversarial review test-driving all of this code path thing and trying it for advanced advanced stuff please. how ergonomic is it?
+
+## Severity: P1 — silent code corruption on a core operation
+
+## Symptom
+`edit { target: "f.ts::helper", action: { kind: "rename", to: "doubler" } }` renames ONLY the declaration. Every in-file reference is left untouched → the renamed code no longer compiles/runs.
+
+Repro: `function helper(x){...}; const a = helper(1); const b = helper(2);` → rename `helper`→`doubler` yields `function doubler(...)` but `helper(1)`, `helper(2)` remain. The tool reports success. The `rename` action contract explicitly states "rename symbol + all in-file references."
+
+## Root cause
+Two rename code paths exist:
+- **Legacy** `single_action` (`code_buffer.rs`) → `rename_symbol` (`edit/rename.rs`): correctly scans the whole tree and rewrites the declaration + every matching `identifier`/`property_identifier`/`type_identifier` reference (it has tests: `rename_function_and_calls`).
+- **Builder** `resolve_mutation_edit` (`code_resolver/mutation.rs`): for `kind=="rename"` it rewrites ONLY `node.child_by_field_name("name")` — a single name-field edit, no reference scan.
+
+`apply_to_buffer` routed all `write|rename|delete` symbol ops with a query through the **builder** path (`use_builder`). So every `rename` via the modern `edit` tool silently used the reference-unsafe path.
+
+## Fix
+`crates/pi-natives/src/code_path/code_resolver/mutation.rs`: exclude `rename` from `use_builder` (`matches!(kind, "write" | "delete")`). Rename now routes to the legacy `single_action` → `rename_symbol` path, which renames declaration + all references. `write`/`delete` (whole-node single edits) stay on the builder path.
+
+## Verification
+- `edit_rename_symbol_updates_all_references` (napi test): asserts 0 `helper` remain + exactly 3 `doubler` (decl + 2 calls). Fail-without-fix / pass-with-fix confirmed.
+- Existing `edit_rename_symbol_via_code_resolver` still passes.
+- Live: TS fn rename updates all call sites; Rust impl-method rename works (via the BUG-451 container/member fix on the same legacy path).
+- pi-natives mutation tests 7/7, napi edit tests 36/36.
+
+## NB / follow-up
+`rename_symbol`'s reference scan matches `identifier`/`property_identifier`/`type_identifier`. Rust method-CALL sites (`w.label()`) are `field_identifier` and are not renamed — a narrower follow-up (whether `Type::method` rename should touch `.method()` calls is also semantically ambiguous across receivers). The declaration-plus-value-reference corruption — the actual data-loss bug — is fixed.
+</body>
+<parameter name="_i">Filing rename reference-safety bug

@@ -1,0 +1,136 @@
+#+TITLE: Execute substrate horizon: clean-field hardening → stored programs → transactional writes → NIF (umbrella)
+#+STATE: ITEM
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: PLAN-335-execute-substrate-horizon-clean-field-ha
+
+* Initial Message
+
+P3 (NIF): Can you try it out? Will the warm kernel keep mini-sessions separate? What else besides improvements can it do? Is it strong improvements?
+W4 (stored programs): explain what that means please, what are the possibilities? How hard is the integration?
+Deferred, documented: D3, E4: what does it do?
+
+Think deeply
+
+* North star
+
+Make `execute` (the PTC-Lisp tool-call lane) the agent's working memory + query
+planner over the whole repo, safely enough to become the PRIMARY tool lane (D-3). The
+substrate F0/W1/W2/W3 SHIPPED (vendored fork beam/ptc_runner-vendored/, 73 tests + 5
+properties green); this umbrella tracks the path from "shipped substrate" to "wildest
+vision" by FIRST clearing the alive-and-scary error classes, THEN building on clean field.
+
+Specs (source of truth):
+- specs/beam-orchestrator/06-execute-substrate.md — decisions D-1..D-7, N-1..N-3, build order.
+- specs/beam-orchestrator/07-execute-substrate-status.md — shipped state + error inventory
+  + the alive-and-scary classes this umbrella attacks.
+- 01-vision.md (WS-B), 03-roadmap.md (P-phases), 04-where-ptcrunner-shines.md (program corpus).
+
+* The error inventory, final state (from 07-status)
+
+```
+DEAD   E1 heap-OOM (W2 offload) · E2 ceiling (FEAT-791) · E3 pmap all-or-nothing
+       (W1 psettled) · E5 boot · E6 hallucinated builtins (W1b preflight) · E8
+ALIVE  #1 partial effects (E4)      → PLAN-333 (D3 transactional lane)
+& SCARY #2 store leak / no reaper   → BUG-447 (reaper)
+       #3 nil-poisoning (E7 silent) → BUG-448 (hard typed error)
+       #4 NIF panic blast           → PLAN-334 (P3, not live yet)
+```
+
+* The filed set (all self-contained, each needs no further clarification)
+
+```
+BUG-447  reaper for HandleStore session bucket + Peer memory (clean field; UNBLOCKS W4)
+BUG-448  nil-poisoning → hard typed error in flex_fetch (clean field; parallel)
+FEAT-810 W4 stored programs, READ-ONLY (the visible win; gated on BUG-447)
+PLAN-333 D3 transactional write lane (kills E4 — the only state-corrupting class)
+PLAN-334 P3 find-as-NIF proof (WS-B derisk; gates nothing we ship now)
+FUP-112  W4-write stored programs that mutate (gated on PLAN-333)
+FUP-113  upstream PRs from SPELL_PATCHES (fork maintenance)
+```
+
+* Dependency DAG (verified, not asserted)
+
+```
+BUG-447 reaper ──► FEAT-810 W4-read          (HARD: unattended re-run parks every tick)
+BUG-448 nil   ─── independent, parallel       (nicer before W4 so stored progs fail loud)
+PLAN-333 D3 ──► FUP-112 W4-write              (partial-effects gates only WRITE programs)
+PLAN-334 P3 ─── orthogonal; gates P5/P6, nothing here
+FUP-113 ─────── opportunistic, independent
+```
+
+* Sequencing (corrected from the naive "fix all scary classes before W4")
+
+The naive order would block everything on D3 (a multi-week Rust+Node+Peer transactional
+lane). The real split: scary classes are TWO cost tiers — #2/#3 are cheap self-contained
+BUGs; #1 IS D3 (architectural, a PLAN). W4-READ needs the reaper (#2) but NOT the
+partial-effects fix (#1) because read-only programs have no effects to roll back. ∴:
+
+```
+1. BUG-447 reaper        clean field + unblocks W4           [do first]
+2. BUG-448 nil-block     clean field, cheap                  [parallel with 1]
+3. FEAT-810 W4 read-only DO IT — the visible payoff          [after 1]
+4. PLAN-333 D3           scope deep; the real E4 cure         [after 3 or parallel]
+5. PLAN-334 P3           scope deep; WS-B bet, not error-relief [when WS-B is the goal]
+6. FUP-112 W4-write      gated on D3                          [after 4]
+7. FUP-113 upstream PRs  opportunistic                        [anytime]
+```
+
+* Why this reaches the wildest vision
+
+"execute as the sole tool lane" (D-3) requires three things this set delivers:
+- it can't LEAK under long/sole-lane use → BUG-447 reaper.
+- it can't silently lie → BUG-448 nil-block.
+- it can't corrupt the repo on a mid-program error → PLAN-333 D3.
+- its programs become durable, re-runnable instrumentation → FEAT-810 + FUP-112 (W4).
+- it eventually runs over one warm shared kernel for N agents → PLAN-334 P3 (the WS-B
+  prize; the isolation primitive it needs already exists — buffer.rs session_id partition).
+
+Clear those and `execute` stops being "a tool that runs Lisp" and becomes a database
+query language for a codebase, with the agent as query author — the north star.
+
+* Acceptance (umbrella)
+
+All seven children reach DONE; the alive-and-scary inventory (#1/#2/#3) is empty;
+`execute` is leak-bounded, fails loud, commits atomically, and stores/re-runs programs.
+P3 (#4) tracked separately as the WS-B gate, not required for the substrate to be "clean".
+
+* Children
+
+BUG-447, BUG-448, FEAT-810, PLAN-333, PLAN-334, FUP-112, FUP-113.
+
+* SHIPPED THIS SESSION (clean field + W4-read core)
+
+```
+BUG-447 reaper        DONE  session-store LRU + ceiling (PATCH-5); 2 review fixes
+                            (loud realize, persist_bindings tombstone). 92 BEAM tests.
+BUG-448 nil-block     DONE  get!/get-in! strict accessors (PATCH-6); premise corrected
+                            empirically (keyword→string already resolved). 14 tests.
+FEAT-810 W4-read core DONE  stored-program.ts contract + read-only guard + validate
+                            (PATCH-7) + runStored. 20 tests, real-BEAM round-trip.
+```
+
+Verification: BEAM `mix test` = 92 tests + 5 properties green, warnings-free.
+Node `bun test` execute+client+stored-program = 54 tests green.
+
+* DISCOVERED + FILED (new follow-ups)
+
+```
+FUP-114  policy catalog pre-filter is name-static (org/memory dropped under
+         READONLY_POLICY though their read sub-commands are allowed at call time).
+FUP-115  W4 caller-1: wire memory playbook :program block to the shipped runner
+         (the FEAT-810 acceptance anchor consumer; core is done + tested).
+```
+
+* REMAINING (scoped, not started)
+
+```
+PLAN-333 D3 transactional write lane  — kills E4 (partial effects); gates W4-write.
+PLAN-334 P3 find-as-NIF proof         — WS-B derisk; isolation primitive already exists.
+FUP-112  W4-write                      — gated on D3.
+FUP-113  upstream PRs                  — opportunistic.
+```
+
+The alive-and-scary inventory is now: #1 (partial effects) = PLAN-333 scoped;
+#2 (leak) DONE; #3 (nil) DONE; #4 (NIF panic) = PLAN-334 scoped, not live. The field
+is clean for the W4/sole-lane build.

@@ -1,0 +1,167 @@
+#+TITLE: W4-write UC2: nightly changelog tile — a scheduled write that auto-applies when armed
+#+STATE: ITEM
+#+SESSION_ID: 1505405a10fe8b37
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a/11-UC2Changelog.jsonl]]
+#+CUSTOM_ID: FUP-122-w4-write-uc2-nightly-changelog-tile-a-sc
+#+DEPENDS: FUP-112-w4-write-stored-programs-that-mutate-ena
+#+PRIORITY: B
+
+* Initial Message
+
+Create org FUP for W4-write UC2: nightly changelog tile.
+This UC lives in the background-tick intent quadrant and justifies the inert-by-default-for-background rule.
+Grounded scenario: a project keeps CHANGELOG.md updated from merged commits; a tick fires nightly at 3am with NOBODY watching.
+Match FUP-119's section structure exactly.
+
+* One-line
+
+A dashboard tile that runs a saved PTC-Lisp WRITE program nightly (3am) to update CHANGELOG.md from recent commits — INERT unless explicitly armed, writes for real when armed, and records every outcome as a visible audit line.
+
+* Why this use case (what it uniquely demonstrates)
+
+This is the case that JUSTIFIES the inert-by-default-for-background rule. A changelog update is a true unattended scheduled job: nobody watches at 3am. A dry-run preview into a log nobody reads would be PURE WASTE (full program compute + disk churn) AND the preview would be STALE by morning (more commits land overnight). The correct behaviour is:
+
+- **Unarmed → inert**: zero cost, the tile does not fire; the dev updates the changelog manually/interactively instead.
+- **Armed → write for real + audit line**: the dev deliberately opted in ("yes, auto-maintain the changelog nightly"), so the tick writes and records the outcome for the dev to see next morning.
+
+Contrast with UC1 (codemod, visible-refresh): a codemod tile's value is the LIVE drift preview while you watch; a changelog tile has no watcher at tick time, so preview is worthless — the value is the actual nightly write, gated on trust (autoWrite).
+
+* Depends on (HARD)
+
+- W4-write core (FUP-112): StoredProgram.mode="write", three-valued RunIntent (interactive | visible-refresh | background-tick), autoWrite gating on background-tick, structured txn outcome `details.transaction`. This UC is a CONSUMER of that machinery; do not start until FUP-112 ships.
+- D3 (PLAN-333, DONE): the transactional lane that makes the write atomic and rollback-safe. The changelog program is a write-bar-compliant FS-only program (it edits CHANGELOG.md — no org-set, no memory-save, no bash — so it passes assertTransactionSafe).
+- The scheduler / tick infrastructure that emits background-tick intent for dashboard tiles (confirm at implementation: likely the org dashboard scheduler or a canvas heartbeat). The tile must receive background-tick events and respond per autoWrite state.
+- The tile host (see "Surfaces to verify" — same as UC1).
+
+* The grounded scenario (concrete, end to end)
+
+A team maintains a project whose changelog they want auto-updated nightly from merged PRs / DONE org items. The dev authors the program once as a stored write:
+
+```clojure
+;; title: "Update CHANGELOG.md from recent DONE items"
+;; mode: write
+;; signature: {:tags ["changelog" "nightly"]}
+(let [items (tool/org-query {:query "todo:DONE timestamp:today-7d..today"
+                             :includeBody true})
+      entries (->> items
+                   (map (fn [i]
+                          (str "- " (get i "title")
+                               " · " (get i "category")
+                               " (" (or (get i "id") "no-id") ")")))
+                   (clojure.string/join "
+"))
+      date-str (.. (js/Date.) (toISOString) (slice 0 10))
+      header (str "## " date-str "
+
+")
+      body (str header entries "
+
+")]
+  (tool/edit {:target "CHANGELOG.md"
+              :action {:kind "replace"
+                       :place "start"
+                       :content body}}))
+```
+
+Key: this program only uses tool/edit — an FS write — which passes assertTransactionSafe. It NEVER mixes org-set, memory-save, or bash (those would fail the rollback-safe bar at store time and be rejected). The program returns the entry count as its result value.
+
+The dev saves it as a tile. Then:
+
+** State A — unarmed tile, 3am tick fires
+The host receives a background-tick event, sees `tile.autoWrite = false`, and DOES NOTHING. No program loaded, no compute, no churn. The tile's last-known state persists. The dashboard shows: "auto-update off · last manual run 2d ago" (from the tile's stored lastOutcome).
+
+** State B — dev explicitly arms autoWrite
+The dev flips the per-tile autoWrite toggle. The tile state transitions: `autoWrite: true`. The tile now shows an armed indicator (e.g. a filled icon) — deliberate visual signal that this tile can mutate unattended. The arming is sticky (survives dashboard close/reopen).
+
+** State C — armed tile, next 3am tick fires
+The host receives a background-tick event, sees `tile.autoWrite = true`, and calls `executeTool.runStored(stored, { intent: "background-tick", autoWrite: true }, context)`. The write program executes for real. D3 snapshots CHANGELOG.md, applies the edits, commits on success. The result's `details.transaction` = `{ outcome: "committed", files: 1, paths: ["CHANGELOG.md"] }`. The host appends an audit line to the tile's history. Next time the dev opens the dashboard, the tile shows: "✓ auto-committed CHANGELOG.md · 03:00 · +4 entries".
+
+** State D — armed tile, program errors at tick time
+(e.g. a malformed commit message, or the org-query returns malformed data). D3 catches the error mid-write, rolls back the snapshot, and returns `{ outcome: "rolled-back", files: 1, paths: ["CHANGELOG.md"], restoreFailures?: [] }`. The host appends a failure audit line. Next open, the tile shows: "↩ rolled back 03:00 — repo unchanged, see error". Crucially: the failure does NOT silently skip — the dev sees on next open that last night failed, can inspect the error, and take manual action. If D3's restore itself failed, `restoreFailures` is non-empty, which demands higher-severity rendering (the repo may be in an unexpected state — but that is D3's domain, not this tile's; the tile surfaces it faithfully).
+
+** State E — dev opens dashboard mid-day and clicks [Update now]
+This is an interactive run. The host calls `runStored(stored, { intent: "interactive" })`. The program writes for real. The outcome renders immediately: "✓ committed CHANGELOG.md · 14:32 · +2 entries". Also appended as an audit line. This covers the case where the dev wants an instant update without waiting for the nightly tick.
+
+* Architecture (numbered steps)
+
+1. STORAGE. A tile persists a StoredProgram (program text + mode:"write" + title + optional signature) plus tile-local UX state: `{ autoWrite: boolean, lastOutcome?: TxnOutcome, lastRunAt?: number, history: AuditLine[] }`. Same host as UC1 (org dashboard PROPERTIES drawer or canvas bridge). The `autoWrite` boolean is a first-class tile property, not buried in the program.
+
+2. SCHEDULED TICK (background). When the scheduler fires a tick event for this tile (e.g. 3am cron or a rolling interval), the host checks `tile.autoWrite`:
+   - `false` → DO NOTHING. The tile's lastOutcome and lastRunAt remain unchanged. Zero cost.
+   - `true` → call `runStored(stored, { intent: "background-tick", autoWrite: true }, context)`. Per FUP-112, a background-tick with autoWrite:true executes the write for real. The host takes the returned AgentToolResult and writes its `details.transaction` into `tile.lastOutcome`, sets `tile.lastRunAt`, and prepends an AuditLine to tile.history (most recent first, bounded queue — max ~50 entries).
+
+3. INTERACTIVE APPLY. The [Update now] button calls `runStored(stored, { intent: "interactive" })`. Same outcome flow as UC1: outcome rendered immediately, audit line appended. This is also how the dev runs the updater manually when autoWrite is off.
+
+4. RENDERING. The host NEVER constructs rollback logic. It reads `details.transaction` from the run result and renders it:
+   - `outcome: "committed"` → ✓ green, file count + paths.
+   - `outcome: "rolled-back"` → ↩ amber with "repo unchanged", error message from result.
+   - `outcome: "dry-run"` → not applicable to background-tick (see reasoning above).
+   - `outcome: "none"` → no-op display (if the program returned 0 changes).
+
+   All atomicity lives in D3; all mode/intent/autoWrite gating lives in FUP-112; this UC is purely presentation + the per-tile autoWrite toggle + audit history management.
+
+5. AUDIT HISTORY. Each tick or interactive run appends an AuditLine: `{ timestamp, outcome, files, paths?, error?, resultValue? }`. The history is collapsible in the tile UI. It is bounded so it never consumes unbounded storage (e.g. keep last 50 entries, drop oldest). Both commits AND rollbacks are recorded with equal fidelity — a failed apply must never be invisible.
+
+* UX (taste)
+
+```
+┌─ Update CHANGELOG.md ────────────────[⚙]───┐
+│  auto-update [●] armed       last: 03:00 ✓4 │   ← armed, last success green
+│  ┌──────────────┐                            │
+│  │ Update now   │                            │   ← interactive; works regardless of armed state
+│  └──────────────┘                            │
+│  ┌─ History (3) ───────────────────────┐     │   ← collapsible, shows both ✓ and ↩
+│  │ 03:00 ✓ committed CHANGELOG.md +4   │     │
+│  │ yesterday ↩ rolled back 03:00       │     │   ← failure equally visible
+│  │ 2d ago   ✓ committed +2             │     │
+│  └─────────────────────────────────────┘     │
+└──────────────────────────────────────────────┘
+```
+
+```
+┌─ Update CHANGELOG.md ────────────────[⚙]───┐
+│  auto-update [○] off          last manual:  │   ← unarmed, dim state
+│  ┌──────────────┐              2d ago ✓2    │
+│  │ Update now   │                            │
+│  └──────────────┘                            │
+└──────────────────────────────────────────────┘
+```
+
+Taste notes:
+- **Calm by default**: unarmed state is visually quiet — a dim toggle, the armed indicator is the only prominent per-tile attention signal. A tile that never fires (unused) should not glow or animate.
+- **Headline = the outcome state**: the last-outcome line is the first thing the eye sees when the tile has history. Committed = green checkmark. Rolled-back = amber with "repo unchanged" reassurance text (so the dev knows the repo is not corrupted, just the update failed).
+- **Armed state is explicit**: a filled toggle/icon (●) vs hollow (○). The dev must be able to glance at the dashboard and know exactly which tiles can mutate unattended. This is a trust signal.
+- **Audit history is visible, not buried**: the last N outcomes are one expand away. Commits and rollbacks interleaved chronologically, both with timestamps. A failure that happened at 3am is seen at 9am when the dev opens the dashboard — it is not silently swallowed.
+- **[Update now] always works**: regardless of autoWrite state, the dev can always trigger an interactive run. This is the escape hatch for "I need it now" and "I turned off auto but want one update".
+- **Colour semantics**: armed = steady indicator (not flashing); success green (✓); failure amber (↩) with body copy "repo unchanged" to avoid alarm; unarmed = neutral/dim grey.
+- **No preview during tick**: background-tick with no watcher produces no preview. The only feedback is the audit line the tile records for when the dev next opens the dashboard.
+
+* Surfaces to verify at implementation
+
+- The scheduler/tick infrastructure: what emits background-tick events, how it reaches the tile, what guarantees about tick frequency (at most once per period, no overlapping ticks, etc.).
+- The tile host (org dashboard vs canvas window vs both) and its state persistence: how `autoWrite` survives restarts.
+- The `details.transaction` shape from FUP-112: confirm outcome values ("committed" | "rolled-back" | "dry-run" | "none"), files count, paths array, restoreFailures array.
+- How the tile programmatically knows its tick was a background-tick vs interactive vs visible-refresh (for rendering context — e.g. "auto-committed at 03:00" vs "committed at 14:32").
+- Audit history storage: bounded queue (50 entries), serialisable, survives restarts.
+- AssertTransactionSafe validation of the changelog program at store time: verify it passes (only FS writes) and that a mixed-effects program would be rejected.
+
+* Tests
+
+- **Unarmed background-tick → inert**: set `autoWrite: false`, fire a background-tick event → assert the program was NOT invoked (no load, no compute, no cost), `lastOutcome` and `lastRunAt` unchanged, no audit line appended.
+- **Unarmed background-tick → last state preserved**: ensure the tile's previous outcome remains visible after an inert tick (the dashboard does not "forget" the last manual run).
+- **Armed background-tick → real write + audit**: set `autoWrite: true`, fire a background-tick → assert CHANGELOG.md changed, `details.transaction.outcome = "committed"`, audit line appended with correct timestamp.
+- **Armed background-tick, program errors mid-write → rollback + visible failure**: inject a program that errors after the first edit → assert D3 rolled back (CHANGELOG.md unchanged), `details.transaction.outcome = "rolled-back"`, audit line appended with error detail, tile shows failure record (not silent).
+- **Armed background-tick, D3 restore failure → `restoreFailures` surfaced**: inject a D3 restore failure (test harness) → assert the tile renders the restoreFailure with higher severity.
+- **Interactive [Update now] → writes + outcome**: click the button with autoWrite OFF → assert CHANGELOG.md changed, `outcome = "committed"`, audit line appended (interactive label, not "auto-committed").
+- **Interactive [Update now] while armed → same behaviour**: interactive overrides autoWrite semantics, always writes for real, outcome recorded.
+- **Tick isolation**: two background-tick events in quick succession → assert they do not overlap (the second waits for the first to complete; D3 handles concurrent-file-write locking).
+- **Audit history bounded**: fire >50 ticks → assert history truncated to last 50 entries.
+- **AssertTransactionSafe rejection at store time**: a program mixing `(tool/edit CHANGELOG.md)` + `(tool/org-set ...)` → assert store-time validation rejects it with a mixed-effects error.
+
+* Acceptance
+
+A scheduled changelog tile is inert at tick time when unarmed (zero cost, no state mutation), writes CHANGELOG.md atomically when armed (nightly or on [Update now]), records every outcome as a visible audit line (commits AND rollbacks with equal fidelity), and surfaces failures transparently with the reassurance that the repo is unchanged. The arming toggle is deliberate and visually unmistakable.
+
+* Relationships
+
+Consumer of FUP-112 (W4-write core). Sibling consumer UCs: FUP-119 (UC1 codemod, visible-refresh), UC3 derived-doc sync, UC4 auto-format. Part of the "execute as live instrumentation" vision. Contrasts with UC1: codemod tile's value is live drift preview while watched; changelog tile has no watcher at tick time → preview is worthless → justifies the inert-by-default-for-background rule.

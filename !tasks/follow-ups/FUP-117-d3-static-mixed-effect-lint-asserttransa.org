@@ -1,0 +1,61 @@
+#+TITLE: D3 static mixed-effect lint (assertTransactionSafe) — regex false-positives on strings/comments
+#+STATE: ITEM
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: FUP-117-d3-static-mixed-effect-lint-asserttransa
+
+* Initial Message
+
+P3 (NIF): Can you try it out? Will the warm kernel keep mini-sessions separate? What else besides improvements can it do? Is it strong improvements?
+W4 (stored programs): explain what that means please, what are the possibilities? How hard is the integration?
+Deferred, documented: D3, E4: what does it do?
+
+Think deeply
+
+* Context (from D3 W2 reviewer swarm, P2)
+
+D3's AUTHORITATIVE mixed-effect guard is DYNAMIC (`TransactionScope.guard`, in the
+dispatcher) \u2014 it sees every tool call by resolved name+effect and catches
+value-position evasion the static scan cannot. That is shipped and tested.
+
+`assertTransactionSafe` (the STATIC, regex-based preflight in transaction.ts) is
+RETAINED but DEMOTED to a non-gating advisory export (no longer wired into execute()'s
+hard path), because as a text scan it has two imperfections:
+1. False-positive: a `(tool/NAME ...)` pattern appearing inside a STRING literal or a
+   `;` comment is treated as a real call \u2014 so a safe program (e.g. org-set alone whose
+   :body text mentions `(tool/edit ...)`) would be wrongly flagged.
+2. Sub-command extraction (COMMAND_LITERAL in stored-program.ts) only matches
+   :command/:action as the FIRST key after `(tool/NAME`; a reordered map
+   `(tool/org {:id "X" :command "query"})` yields command=undefined \u2192 falls back to
+   the static `write` effect \u2192 a safe FS-write + org-READ program would be flagged.
+
+Neither causes torn state (both fail CLOSED), and neither affects the dynamic guard
+(the real guarantee). This FUP is about making the ADVISORY lint accurate enough to
+surface as an early hint without false positives.
+
+* Options
+
+A. If/when a real PTC-Lisp PARSER is available Node-side (none today), use it instead
+   of the regex so string/comment text and key order don't matter. The BEAM already
+   has collect_tool_names (lisp.ex) \u2014 could expose a peer method returning the
+   program's tool-call set + per-call sub-command (0 effects), and assertTransactionSafe
+   consumes THAT instead of regex-scanning. This also fixes W4's extractToolCalls.
+B. Improve the regex to skip string/comment regions and match :command/:action
+   anywhere in the arg map (not just first key). Cheaper, still heuristic.
+
+Recommend A (a peer `tool_calls` introspection method) \u2014 it single-sources extraction
+with the BEAM's real analyzer and benefits both W2's advisory lint AND W4's read-only
+guard (FEAT-810, same extractToolCalls). Until then the dynamic guard is the guarantee
+and the static advisory is simply not wired as a gate.
+
+* Acceptance
+
+The advisory static lint (if surfaced) no longer false-flags tool-call patterns in
+strings/comments or reordered sub-command keys. The dynamic guard remains the
+authoritative check. extractToolCalls (shared with W4/FEAT-810) gains the same accuracy.
+
+* Relationships
+
+Follow-up to PLAN-333 (D3 W2). Shares the extractToolCalls accuracy concern with
+FEAT-810 (W4 read-only guard). Low priority \u2014 the dynamic guard already guarantees
+no torn state; this is advisory-lint polish.

@@ -1,0 +1,69 @@
+#+TITLE: Codemod tile: server-side persistence + per-tile background-tick scheduler
+#+STATE: ITEM
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: FUP-123-codemod-tile-server-side-persistence-per
+
+* Initial Message
+
+P3 (NIF): Can you try it out? Will the warm kernel keep mini-sessions separate? What else besides improvements can it do? Is it strong improvements?
+W4 (stored programs): explain what that means please, what are the possibilities? How hard is the integration?
+Deferred, documented: D3, E4: what does it do?
+
+Think deeply
+
+* Context (deferred from FUP-119, the shipped codemod tile)
+
+The codemod tile shipped in Spell Team Chat (CodemodTilePanel.svelte) with two honest
+gaps, deferred deliberately to keep the first build right-sized:
+
+1. PERSISTENCE is localStorage-only (STORE_KEY 'spell.codemod-tiles.v1'). It survives
+   reload but is PER-BROWSER \u2014 and team-chat is MULTIPLAYER, so tiles aren't shared
+   across operators. spell-server's StateStoreManager is READ-ONLY (opens SQLite
+   {readonly:true}); there is no writable KV/state API. A shared tile store needs new
+   writable server code + a REST/WS endpoint.
+
+2. The background-tick SCHEDULER does not exist. The tile's autoWrite toggle ARMS a
+   tile (and runStored's background-tick intent is implemented + gated), but nothing
+   FIRES per-tile ticks. startDashboardUpdater (qml-mode) is a status pusher, not a
+   program scheduler. So 'auto-apply' is armed-but-never-triggered until a scheduler
+   scans armed tiles and issues run_stored {intent:'background-tick', autoWrite:true}.
+
+* Scope
+
+A. Writable tile store (server):
+   - Add a writable store (a new SQLite table or a JSON store under the daemon's state
+     dir) for tile configs keyed by (owner, sessionCwd or project). Expose
+     GET/PUT /web/api/tiles (bearer-authed like the rest of /web/api/*).
+   - team-chat CodemodTilePanel reads/writes via the new api.ts methods instead of
+     localStorage (fall back to localStorage when offline).
+   - Decide sharing semantics: per-operator vs per-project-shared tiles.
+
+B. Per-tile scheduler (server or daemon):
+   - A scheduler (reuse spell-server's GoalScheduler/Croner precedent) that scans armed
+     tiles and, on each tick, issues a run_stored {intent:'background-tick',
+     autoWrite:true} against the tile's target spawned session (spawn-on-demand if
+     none). Record the outcome to the tile's audit history (the store from A).
+   - Per-tile schedule config (cron expression or interval) in the tile model.
+   - Overlap protection (skip a tick if the prior run is still in flight) \u2014 mirror
+     GoalScheduler's `running` guard.
+
+* Tests
+
+- A tile config PUT then GET round-trips via the server store (survives reload + is
+  visible to a second operator if shared).
+- An armed tile fires on its schedule \u2192 run_stored background-tick \u2192 the write commits
+  (or rolls back) and an audit line is recorded; an UNARMED tile never fires.
+- Overlap: a tick during an in-flight run is skipped.
+
+* Acceptance
+
+Tile configs persist server-side (shared per the chosen semantics) and an armed tile
+applies on a schedule with a recorded outcome; unarmed tiles never auto-run.
+
+* Relationships
+
+Follow-up to FUP-119 (codemod tile, shipped). The substrate (runStored background-tick
+gating) is done; this is the persistence + firing mechanism around it. Shared by
+FUP-121 (format tile) and FUP-122 (nightly changelog \u2014 which is PRIMARILY a scheduler
+use case, so B is its hard dependency).

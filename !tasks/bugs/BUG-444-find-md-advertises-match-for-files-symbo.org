@@ -1,0 +1,33 @@
+#+TITLE: find.md advertises #match for files/symbols but it only works in text dialect
+#+STATE: DONE
+#+SESSION_ID: 1503acd8825ce2c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-24-49-929Z_1503acd8825ce2c9.jsonl]]
+#+CUSTOM_ID: BUG-444-find-md-advertises-match-for-files-symbo
+#+COMPLETION_HASH: b6e5539473d8f566
+
+* Initial Message
+
+test drive the edit and the create interface (the recent BUGs and PLANs and FEATs implemented them, see if the implementation works well)
+
+* Symptom
+The find tool doc (packages/coding-agent/src/prompts/tools/find.md) Qualifiers table lists:
+| #match | file, symbol | — |
+But `find { "foo.ts::greet#match" }` → `[unsupported_operation] unknown qualifier 'match'`.
+
+* Root cause
+`#match` is implemented only in the *text* dialect and requires a preceding `TextMatch` predicate:
+- crates/pi-code-path/src/dialects/text/qualifiers.rs:26 `"match" => resolve_match(...)`
+- :91 `"#match requires preceding TextMatch predicate"`
+It is registered in introspection (crates/pi-code-path/src/introspection.rs:190) which is presumably what the doc generator picked up, but no fs/symbol dialect resolves it. So the capability matrix in the doc over-promises.
+
+* Fix direction (pick one)
+A. *Doc-truthful*: regenerate the qualifier table from actual per-dialect resolver support so `#match` is shown only where it resolves (text/grep contexts with a TextMatch predicate). Cheapest, correct.
+B. *Implement-symbol-match*: define `#match` on symbol/file targets as "the matched node's full span text" (≈ `#text` of the resolved node) and wire it into the fs/code dialects. More work; only if there's a real use distinct from `#text`/`#body`.
+
+Recommend A unless a symbol-level `#match` has a concrete consumer. Either way the doc and the resolver capability set must agree (FEAT-728/727-style invariant test would catch this drift).
+
+* Acceptance
+- Doc qualifier table reflects real resolver support (no qualifier advertised on a target family that rejects it).
+- Optional invariant test: every qualifier listed in find.md for a family resolves (or returns a domain diagnostic, not `unknown qualifier`) on a representative target of that family.
+
+NOTE [2026-06-10]: Fixed in PLAN-332 Thesis C. (1) Corrected introspection applies_to for #match/#captures: file,symbol → grep, with args note. (2) Regenerated find-recipes.md + synced find.md (#match | grep | after [text~="re"]). (3) Anti-drift invariant: list_qualifiers_all_well_formed pins controlled family vocab {file,dir,symbol,grep}; grep_context_qualifiers test locks #match/#captures. (4) Walker emits a DOMAIN diagnostic ("#match is a grep-context qualifier… not on a bare file/symbol") instead of generic "unknown qualifier" — meeting the original acceptance. Tests: pi-code-path 523, walker 23 (incl ts_match_qualifier_on_symbol_gives_domain_diagnostic), prompt-snapshots 12.

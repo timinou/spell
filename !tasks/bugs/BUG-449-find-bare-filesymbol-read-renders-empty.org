@@ -1,0 +1,30 @@
+#+TITLE: find: bare `file::Symbol` read renders [§empty] for all languages (scheme-node misclassification)
+#+STATE: DONE
+#+SESSION_ID: 1503acd8825ce2c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-24-49-929Z_1503acd8825ce2c9.jsonl]]
+#+CUSTOM_ID: BUG-449-find-bare-filesymbol-read-renders-empty
+
+* Initial Message
+
+ok then run an adversarial review test-driving all of this code path thing and trying it for advanced advanced stuff please. how ergonomic is it?
+
+## Symptom
+`find { target: "file.ts::Symbol" }` — the most natural whole-declaration read — returns `[§empty] file.ts::Symbol` for EVERY language (TS, Rust, Python verified). Qualified forms `::Symbol#body` / `::Symbol#sig` work; bare `::Symbol` does not. Reproduced on the tool's own source: `codepath-result.ts::formatCodePathResult` → `[§empty]`.
+
+## Root cause
+`packages/coding-agent/src/tools/get.ts::extractSchemeNode` used a DENYLIST (`NON_SCHEME_NODE_KINDS`) to decide whether a single `§`-prefixed node is a kernel URI-scheme resolution (`§skill`, `§org`, …). But every tree-sitter AST kind ALSO starts with `§` (`§function_declaration`, `§class_declaration`, `§struct_item`, …) and is unbounded — the denylist cannot enumerate them. So any bare single-symbol read (1 node, kind `§…`, not in denylist) was misclassified as a scheme node → routed to `renderSchemeNode`, which reads `node.content` (ABSENT for bare symbol reads — kernel only attaches content for `#body`/`#sig`/grep) → `[§empty]`.
+
+`#body`/`#sig` escaped because they carry `content`; multi-node queries escaped because `nodes.length !== 1`.
+
+## Fix
+Replace the unbounded denylist with an authoritative allowlist gated on the TARGET's URI scheme: a `§<scheme>` node can only arise from a `scheme://…` target, and its kind must equal `§{scheme}`. Bare paths/symbols/globs/slices (`targetScheme(target) === null`) can never be scheme nodes. Denylist kept as defensive fast-reject.
+
+- `extractSchemeNode(chunks)` → `extractSchemeNode(chunks, target)`; added `targetScheme()` helper.
+- Call site passes `target`.
+
+## Verification
+- Regression tests in `test/get.test.ts`: "renders bare symbol node label, not [§empty]…" (content-less `§function_declaration` → `[§function_declaration]`) + "still routes a real §<scheme> node…" (`§skill` with content → body, no label).
+- Fail-without-fix / pass-with-fix both confirmed.
+- All 74 get.test.ts pass. Live scheme reads (skill://, pi://, memory://) verified non-regressing.
+</body>
+<parameter name="_i">Filing bare-symbol empty bug

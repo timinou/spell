@@ -1,0 +1,31 @@
+#+TITLE: undo/redo effective diff prints + before − (reversed vs edit-diff − then + ordering)
+#+STATE: DONE
+#+SESSION_ID: 1503acd8825ce2c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-24-49-929Z_1503acd8825ce2c9.jsonl]]
+#+CUSTOM_ID: BUG-459-undo-redo-effective-diff-prints-before-r
+#+COMPLETION_HASH: 9bfb25fd9151aeff
+
+* Initial Message
+
+i reloaded the session, test-drive this again.
+
+## Symptom
+The `undo`/`redo` effective diff (FEAT-809) renders the added line (`+`) before the removed line (`−`):
+```
+undo · file.py
+@@ -8,1 +8,1 @@
++        return (self.x ** 2 + self.y ** 2) ** 0.5
+-        return 42.0
+```
+whereas every other edit-tool diff uses the conventional unified-diff order (`−` then `+`).
+
+## Impact
+Cosmetic inconsistency. Readers parsing the diff visually (or tooling expecting unified-diff convention) see the hunk inverted. Functionally correct — the reverse-diff content is right, only the +/− row order differs.
+
+## Fix
+In the undo/redo diff renderer (`edit.ts #renderHistoryResult` / `reverse_unified_diff` in edit_history.rs), emit removed (`−`) lines before added (`+`) lines per hunk, matching the forward edit diff.
+
+## Origin
+Surfaced during adversarial CodePath test-drive (undo/redo round-trip on a Python body edit).
+
+NOTE [2026-06-11]: Fixed: reverse_unified_diff now buffers each contiguous +/- change block and flushes removals (−) before additions (+), matching unified-diff convention, instead of swapping signs in place (which yielded +-before-−). Content-preservation for -- / ++ comment lines retained. Tests updated: reverse_unified_diff_swaps_signs_and_ranges, _preserves_comment_content_lines; added _multiline_block_is_minus_first. Verified live: undo diff is − then +.

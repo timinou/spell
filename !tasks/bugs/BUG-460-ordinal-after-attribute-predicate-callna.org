@@ -1,0 +1,27 @@
+#+TITLE: Ordinal-after-attribute predicate (§call[name=x][0]) — verify find-tool vs napi parity post-rebuild
+#+STATE: DONE
+#+SESSION_ID: 1503acd8825ce2c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-24-49-929Z_1503acd8825ce2c9.jsonl]]
+#+CUSTOM_ID: BUG-460-ordinal-after-attribute-predicate-callna
+#+COMPLETION_HASH: 1583141aca8c7e88
+
+* Initial Message
+
+i reloaded the session, test-drive this again.
+
+## Symptom (needs reconfirm)
+During the test-drive, `§call[name=print][0]` (ordinal after an attribute predicate) returned a node via the napi binding (fresh native) but the live `find` tool returned `[§no-results]`. Strongly suspected to be stale-native (the session-loaded find tool had the pre-BUG-454 native, where `name=` matched 0 call nodes so any ordinal also yielded nothing).
+
+## Action
+Reconfirm on a clean rebuilt native that find-tool and napi agree for:
+- `§call[name=print]` (base set)
+- `§call[name=print][0]`, `[1]`, `[-1]`, `[0..1]` (ordinal/range after attribute)
+If they diverge post-rebuild, it's a real find-tool/napi projection bug; if they agree, close as stale-native artifact (no fix needed).
+
+## Note
+Separately observed: ordinal-filtered call nodes rendered empty content via napi node-list — but that is fixed by BUG-455 (bare-query content fallback). Re-verify content is populated on ordinal-filtered sets too.
+
+## Origin
+Surfaced during adversarial CodePath test-drive (ordinal/range probing on filtered structural sets).
+
+NOTE [2026-06-11]: Verified no real bug — was a stale-native artifact. On clean rebuilt native, find-tool and napi agree across §call[name=print] base (n=2), [0], [1], [2] (n=0), [-1], [0..1]; ordinals index correctly and content is populated (BUG-455 fix applies to filtered sets too). Original divergence was the pre-BUG-454 native loaded in-session where name= matched 0 calls. No code change needed.

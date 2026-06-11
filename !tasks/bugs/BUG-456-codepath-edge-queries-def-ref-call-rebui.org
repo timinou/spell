@@ -1,0 +1,31 @@
+#+TITLE: CodePath edge queries (def→/ref→/call→) rebuild graph cold per process — 78s first-query stall despite warm persisted cache
+#+STATE: DONE
+#+SESSION_ID: 1503acd8825ce2c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-24-49-929Z_1503acd8825ce2c9.jsonl]]
+#+CUSTOM_ID: BUG-456-codepath-edge-queries-def-ref-call-rebui
+#+COMPLETION_HASH: c0282b8eb1e03466
+
+* Initial Message
+
+i reloaded the session, test-drive this again.
+
+## Symptom
+The first graph-edge query (`def→`/`ref→`/`call→`/`import→`) in any fresh process blocks **~78 seconds** (measured: 77423ms on this 5556-file workspace). Subsequent edge queries are ~367ms (warm). `find "X def→"` appears to hang.
+
+## Root cause
+`crates/pi-natives/src/code_graph_cache.rs::get_or_build_graph` only memoises in a process-local `DashMap`. On a cold process (miss) it calls `CodeGraphBuilder::build()`, which **unconditionally re-parses every file** via `ignore::WalkBuilder` (`crates/pi-code-graph/src/indexer.rs::build`). It never consults the persisted `.spell/graph/workspace.bin` (21MB, written by the same build).
+
+Meanwhile the `status index` path (`code_graph.rs::ensure_graph`) DOES warm-load: it checks `builder.cache_status(root)` and, when `CacheStatus::Fresh`, calls `cache.load::<GraphCacheEntry>(CACHE_NAME)` — a fast deserialize. That's why `status index` returns instantly while edge queries stall.
+
+∴ two graph-construction paths diverged: the observability path warm-loads, the edge-query path rebuilds cold.
+
+## Fix
+Make `get_or_build_graph` replicate `ensure_graph`'s warm-load: build a `CodeGraphBuilder`, check `cache_status`; if `Fresh`, `load::<GraphCacheEntry>("workspace")` and wrap in Arc; else `build()` (which persists for next time). Memoise the Arc in the DashMap as today.
+
+## Acceptance
+- First `def→` query on a workspace with a fresh `.spell/graph/workspace.bin` completes in <2s (deserialize), not a full re-parse.
+- Cold build (no cache) still works and persists.
+- Stale cache (fingerprint mismatch) still triggers rebuild.
+- Edge results identical to before.
+
+NOTE [2026-06-11]: Fixed: get_or_build_graph now warm-loads .spell/graph/workspace.bin when cache_status==Fresh (mirrors code_graph.rs::ensure_graph), falling back to full build on Missing/Stale. Test: rebuild_after_memory_drop_warm_loads_from_disk. Combined with FEAT-811 (lazy BM25), steady-state cold-process first edge query 78s→~1s; verified live.

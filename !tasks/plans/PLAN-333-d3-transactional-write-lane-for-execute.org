@@ -1,0 +1,167 @@
+#+TITLE: D3: Transactional write lane for execute — all-or-nothing program effects (kills E4 partial effects)
+#+STATE: DONE
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: PLAN-333-d3-transactional-write-lane-for-execute
+#+COMPLETION_HASH: 5499515ba3a558e5
+
+* Initial Message
+
+P3 (NIF): Can you try it out? Will the warm kernel keep mini-sessions separate? What else besides improvements can it do? Is it strong improvements?
+W4 (stored programs): explain what that means please, what are the possibilities? How hard is the integration?
+Deferred, documented: D3, E4: what does it do?
+
+Think deeply
+
+* Problem (error class E4 — the only one that CORRUPTS state)
+
+A PTC-Lisp program that does effectful work then errors leaves PARTIAL EFFECTS:
+```clojure
+(tool/create "a.txt" ...)   ; committed to disk
+(tool/edit "b.rs" ...)      ; committed to buffer
+(boom)                       ; error → program "discarded" but a.txt + b.rs ALREADY landed
+```
+The program reports failure, so the agent may retry → double-apply. This is
+"alive-and-scary #1" in specs/beam-orchestrator/07-execute-substrate-status.md and
+the deferred "D3-txn" in 06-execute-substrate.md. It is the worst class because it
+silently corrupts the repo; W1 psettled + W1b preflight removed the two COMMON
+producers (mid-batch fan-out failure; typo-after-effects) but the general case is open.
+
+* Verified current behavior (why this is real, not theoretical)
+
+- In `beam/ptc_runtime/lib/ptc_runtime/peer.ex` (handle_call {:tool_call,...}, ~L187)
+  each tool call dispatches over the wire to Node and the effect COMMITS IMMEDIATELY.
+  There is no enlistment, no envelope. A later error cannot unwind earlier commits.
+- The affordance D3 builds on EXISTS at single-edit granularity:
+  `BufferRegistry.edit_transaction(session_id, path, code_paths, fn)` in
+  crates/pi-code-engine/src/buffer.rs, with `ClientMessage::Intent` conflict detection
+  and journaling (see crates/pi-code-engine/tests/coord_transaction.rs:
+  edit_transaction_surfaces_peer_conflict_on_overlapping_intent,
+  edit_transaction_emits_journal_entry_on_success). pi-edit-broker
+  (crates/pi-edit-broker/) is the coordination server.
+- WHAT'S MISSING: a PROGRAM-SPANNING envelope — "enlist every edit/create this program
+  makes; commit them atomically iff the program reaches its end; discard all on error."
+  That is FEAT-638 MultiIntent/MultiCommit at program scope (referenced in 06 D3-defer).
+
+* Design: BEGIN…COMMIT/ROLLBACK around a program
+
+```
+execute program start → open a transaction scope (session_id = the execute's owner)
+  each (tool/edit ...)/(tool/create ...) → ENLIST into the scope's intent set
+                                            (stage the buffer mutation, do NOT commit)
+  program reaches end successfully        → MultiCommit: apply all staged intents
+                                            atomically (the broker already detects
+                                            overlapping-intent conflicts per-path)
+  program errors / fail-signal            → discard scope: zero intents land
+```
+
+Decisions to make explicit in this plan (so impl needs no clarification):
+- D3.1 Scope boundary = one execute program (NOT a session; bindings persist across
+  executes but a transaction does not). A multi-execute "transaction" is out of scope.
+- D3.2 Read tools (find/org-query/memory) are NOT enlisted — they read live state
+  mid-program as today. Only write-effect tools (effects.ts `write` tag:
+  edit/create/org-set/etc.) enlist. Reuse the effects.ts taxonomy — do not re-derive.
+- D3.3 Conflict semantics: if at COMMIT time the broker reports a peer conflict on an
+  enlisted path (another session committed the same span first), the WHOLE program's
+  commit fails with a typed PeerConflict result — nothing lands, agent re-runs. This
+  reuses the existing edit_transaction conflict path, lifted to the multi-intent set.
+- D3.4 Non-buffer effects (bash with side effects, network) CANNOT be rolled back.
+  Decision: the transactional lane covers BUFFER/FS edits via the broker ONLY. A
+  program that mixes (tool/bash {non-read}) with edits is REJECTED at preflight with
+  "transactional lane covers edits/creates; side-effecting bash cannot enlist —
+  split the program". Honest boundary, not a false promise of total rollback.
+- D3.5 Partial-commit visibility: the cost meter (D-7) reports enlisted-vs-committed
+  counts in execute details so the agent sees "5 edits staged, all committed" or
+  "5 staged, 0 committed (PeerConflict on b.rs)".
+
+* Build order (phases)
+
+1. Crate: program-scoped MultiIntent over pi-edit-broker — a scope that accumulates
+   intents keyed by session_id+exec_id and commits/discards as a set. (FEAT-638 lift.)
+   Files: crates/pi-edit-broker/src/server.rs, crates/pi-code-engine/src/coord/,
+   crates/pi-code-engine/src/buffer.rs (MultiCommit entry).
+2. Node: execute.ts opens a scope per program; effectful tool dispatches stage into it;
+   on program success commit, on error discard. Files:
+   packages/coding-agent/src/tools/ptc-runtime/execute.ts, tool-dispatch.ts, effects.ts.
+3. Peer: thread a transaction token through the tool_call frame so staged edits are
+   filed under the program's scope. Files: beam/ptc_runtime/lib/ptc_runtime/peer.ex.
+4. Preflight: reject side-effecting-bash + edit mixes (D3.4); SPELL_PATCHES PATCH-7.
+
+* Tests
+
+- A program that creates A, edits B, then errors → NEITHER A nor B lands (the
+  decisive partial-effect test). Re-run after fixing → both land.
+- A program that creates A, edits B, succeeds → both land atomically; journal shows
+  one MultiCommit.
+- Concurrent execute commits an overlapping span first → the program's commit fails
+  PeerConflict, nothing lands, typed result.
+- Read tools mid-program see live state (not staged) — reads are not enlisted.
+- A program mixing side-effecting bash + edit → rejected at preflight.
+
+* Acceptance
+
+The canonical create-edit-boom program leaves the repo UNCHANGED; the success path
+commits atomically with one journal entry; an overlapping concurrent commit yields a
+typed PeerConflict with zero partial landing. Rust + bun + mix suites green.
+
+* Relationships
+
+- Closes E4 (the deferred D3-txn from spec 06). Gates the W4-WRITE follow-up (a stored
+  WRITE program is only safe once partial effects are impossible).
+- Independent of P3 (NIF) and of the two scary BUGs (reaper/nil) — but should land
+  before "execute as sole lane" (D-3) makes write-programs common.
+- Scope is large (Rust broker + Node + Peer) → this is a PLAN, not a quick fix.
+
+* MECHANISM CORRECTION (post-investigation, 2026-06-11)
+
+Investigation (agent://7-TxnSubstrate) found the plan's core mechanism assumption
+is WRONG for the actual write path:
+
+- ASSUMED: stage `(tool/edit)`/`(tool/create)` writes via
+  `BufferRegistry.edit_transaction` + broker `MultiCommit`.
+- ACTUAL: the Spell `edit`/`create` tools BYPASS pi-code-engine entirely \u2014 they
+  call the kernel (`executeCodePath` \u2192 pi-natives) which writes DIRECTLY to disk.
+  The broker `MultiIntent`/`MultiCommit` protocol (stubbed-ready in
+  crates/pi-edit-broker) coordinates pi-code-engine BUFFER edits across SESSIONS
+  \u2014 a different axis. The ptc write tools never touch it.
+
+- FOUND INSTEAD: `edit.ts` (lines 214-335) ALREADY implements strict
+  snapshot/rollback \u2014 snapshot every target file before ops, restore on failure \u2014
+  at SINGLE-tool-call granularity. This is exactly D3's needed primitive, at the
+  wrong SCOPE.
+
+CORRECTED MECHANISM: D3 = program-scoped snapshot/rollback at the DISPATCH layer.
+Lift edit.ts's strict-transaction snapshot/restore from single-call to
+whole-program scope:
+- a TransactionScope (Node) opens per execute program;
+- each write-effect tool call captures its touched files' BEFORE-state (first
+  touch only, deduped) into the scope;
+- program SUCCESS \u2192 commit = no-op (writes already durable), clear snapshots;
+- program ERROR/fail-signal \u2192 rollback = restore all snapshots in REVERSE.
+This is optimistic-apply + rollback (writes land, then revert on error), NOT
+deferred-commit (nothing-on-disk-until-success). The deferred-commit IDEAL needs a
+staging VFS the write tools route through \u2014 which does not exist \u2014 so it is a
+documented future refinement, not the MVP. Optimistic-apply + rollback FULLY kills
+E4 (the create-edit-boom program leaves the repo clean) with one narrow residual:
+a hard Node-process crash mid-program before rollback runs \u2014 addressed by a
+snapshot-set journal (W3) for crash-recovery, strictly better than today (where
+EVERY error leaks partial effects).
+
+exec_id threading: `client.ts:313` carries exec_id but uses it only for the abort
+signal; it does NOT reach `onToolCall`. D3 must thread exec_id into the dispatcher
+so a tool call binds to its program's TransactionScope.
+
+SEPARATED OUT: the Rust broker MultiIntent/MultiCommit work (concurrent PROGRAMS
+committing the same file) is a real but DIFFERENT concern from E4 partial-effects.
+Filed as its own item; not on the E4 critical path.
+
+* REVISED WAVES
+
+W1  TransactionScope + exec_id threading + write-tool snapshot capture +
+    commit/rollback on program settle (Node). Kills E4. \u2192 reviewer swarm.
+W2  Preflight boundary: reject a program mixing FS writes (rollback-able) with
+    non-rollback-able effects (memory save/note, side-effecting bash) \u2014 honest
+    D3.4. \u2192 reviewer swarm.
+W3  Crash-window snapshot-set journal + docs (execute.md, SPELL_PATCHES) \u2192 review.
+
+NOTE [2026-06-11]: SHIPPED W1+W2+W3, reviewer-cleared each wave (9 findings found+fixed across 3 swarms). Mechanism corrected mid-flight from broker-MultiCommit (wrong: edit/create bypass pi-code-engine, write direct to disk) to optimistic-apply + program-scoped snapshot/rollback at the Node dispatch layer. W1 snapshot/rollback + exec_id threading (4 review fixes). W2 DYNAMIC mixed-effect guard at dispatch (review caught fatal fail-open in static-regex design \u2192 moved to dynamic, catches value-position evasion). W3 crash-window journal (review caught P1 cross-process clobber \u2192 pid liveness probe + nonce + atomic write). Kills E4 \u2014 the last state-corrupting error class. 179 Node + 92 BEAM + 5 props green. Docs: execute.md + specs/08. Residuals filed: FUP-116 (concurrent-program atomicity), FUP-117 (static-lint accuracy), FUP-118 (journal startedAt). Unblocks FUP-112 (W4-write).

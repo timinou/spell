@@ -1,0 +1,35 @@
+#+TITLE: CodeGraph::new eagerly rebuilds BM25 search index on every load — ~20s of edge-query warm-load cost is search work edges never use
+#+STATE: DONE
+#+SESSION_ID: 1503acd8825ce2c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-24-49-929Z_1503acd8825ce2c9.jsonl]]
+#+CUSTOM_ID: FEAT-811-codegraphnew-eagerly-rebuilds-bm25-searc
+#+COMPLETION_HASH: d28937cd34ae617d
+
+* Initial Message
+
+i reloaded the session, test-drive this again.
+
+## Context
+After BUG-456 (warm-load from disk), the first edge query (`def→`/`ref→`/`call→`) still takes ~21-24s on a 70k-symbol / 217k-edge workspace, vs ~0.5s once memoised. Profiling the load path:
+
+`code_graph_cache::get_or_build_graph` → `cache.load::<GraphCacheEntry>` (bincode deserialize of 21MB) → `CodeGraph::from(entry.graph)` → `CodeGraph::new` → **`bm25_adapter::build_search_index(&persisted)`** which tokenises and indexes all 70k node labels into a BM25 SearchIndex on EVERY construction.
+
+Edge resolution (EdgeResolverImpl) walks the petgraph only — it never queries the BM25 index. ∴ ~20s of the warm-load is search-index work that edge queries never use.
+
+## Proposed improvement
+Make the BM25 search_index lazy / optional in CodeGraph:
+- Option A: OnceCell<Bm25Index> built on first bm25_search_adapted call, not in new.
+- Option B: a CodeGraph::new_without_search constructor used by code_graph_cache (edge path); knowledge-worker search lane keeps eager build.
+- Option C: persist the BM25 index alongside the graph so load is deserialize-only.
+
+Option A is cleanest (single type, pay-on-use). Verify the knowledge-worker search lane still warms its index eagerly if it needs sub-second first-search.
+
+## Acceptance
+- First edge query on a fresh-cache workspace completes in <3s (deserialize-bound, no BM25 build).
+- Search lane behaviour unchanged (or explicitly eager-warmed where needed).
+- Bench or timing assertion guarding the regression.
+
+## Origin
+Surfaced during adversarial CodePath test-drive; BUG-456 fixed the 78s→24s cold-rebuild half, this is the remaining deserialize+index half.
+
+NOTE [2026-06-11]: Implemented Option A: CodeGraph.search_index is now OnceLock<SearchIndex>, built lazily via search_index_lazy() on first bm25_search/search_index() call. new() and with_vectors() no longer build it eagerly. Manual Clone impl carries a built index or leaves it unbuilt. Search lane (pi-knowledge-worker) builds on first search — 31 tests green. Edge queries skip BM25 entirely. Test: search_index_is_built_lazily. Combined with BUG-456: cold-process first edge query 78s→~1s (verified live, no-edits fresh process). pi-code-graph 162, pi-natives 457, pi-knowledge-worker 31, pi-code-engine 216 — all green.

@@ -1,0 +1,36 @@
+#+TITLE: CodePath: §call[name=X] never matches call callees + marquee edit recipe $1 binds callee not arg
+#+STATE: DONE
+#+SESSION_ID: 1503acd8825ce2c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-24-49-929Z_1503acd8825ce2c9.jsonl]]
+#+CUSTOM_ID: BUG-454-codepath-callnamex-never-matches-call-ca
+#+COMPLETION_HASH: 3dd30ece4bba90b1
+
+* Initial Message
+
+i reloaded the session, test-drive this again.
+
+## Symptom
+The marquee structural-replace recipe in edit.md cheat sheet is non-functional:
+`"src/**/*.ts::§call[name=console.log]"` → `replace · content:"logger.info($1)"`
+
+Two independent defects compound:
+
+### 1. `name=` Attribute predicate never matches a call (resolver gap)
+`crates/pi-natives/src/code_path/code_resolver/predicates.rs::eval` for `Predicate::Attribute{name:"name"}` checks `child_by_field_name("name")` then full-node text. A `call_expression` has its callee in the `function` field (TS/JS/Py/Rust/Go), never a `name` field, and full text is `console.log(...)` ≠ `console.log`. ∴ `§call[name=console.log]` resolves to 0 nodes. Was the explicitly-deferred half of BUG-453.
+
+### 2. `$1` binds the callee, not the argument (doc/semantics mismatch)
+Template `$N` = Nth named child. For `call_expression`, child[0] = callee (`console.log`), child[1] = arguments. So `logger.info($1)` → `logger.info(console.log)` — silent corruption.
+
+## Live repro
+`edit ".scratch_cp/svc.ts::§call[name=console.log]" replace "logger.info($1)"` → "symbol not found".
+
+## Fix
+1. predicates.rs eval: for `name` attribute, also match the `function` field (callee) text for call nodes.
+2. Fix edit.md marquee recipe to a form that actually preserves arguments.
+
+## Acceptance
+- `§call[name=console.log]` resolves the call node across TS/Py/Rust.
+- The documented recipe, run verbatim, transforms `console.log(x)` → `logger.info(x)` preserving `x`.
+- fail-without/pass-with regression test in predicates + doc-recipe e2e.
+
+NOTE [2026-06-11]: Fixed: predicates.rs matches_name_attribute() consults function/macro callee fields; edit.md recipe corrected to logger.info$2 (keeps args). Tests: name_predicate_tests.rs (4), napi edit_md_structural_recipe_preserves_arguments (1). Fail-without/pass-with confirmed; live verified across TS/Py/Rust.

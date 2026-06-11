@@ -1,0 +1,61 @@
+#+TITLE: W4-write: stored programs that mutate — enable write tools in stored programs once D3 lands
+#+STATE: DONE
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: FUP-112-w4-write-stored-programs-that-mutate-ena
+#+COMPLETION_HASH: c6ab779d83246f9b
+
+* Initial Message
+
+P3 (NIF): Can you try it out? Will the warm kernel keep mini-sessions separate? What else besides improvements can it do? Is it strong improvements?
+W4 (stored programs): explain what that means please, what are the possibilities? How hard is the integration?
+Deferred, documented: D3, E4: what does it do?
+
+Think deeply
+
+* Context
+
+FEAT "Stored programs (W4)" ships READ-ONLY stored programs (find/org-query/memory/
+bash-read). Write tools (edit/create/org-set) are rejected at store time there, because
+a stored WRITE program re-run unattended that errors halfway leaves PARTIAL EFFECTS
+(error class E4). This FUP lifts that restriction — but ONLY after the partial-effect
+class is structurally impossible.
+
+* Blocked-by (HARD)
+
+PLAN "D3: Transactional write lane for execute". W4-write MUST NOT enable any write
+tool in a stored program until D3 makes program effects all-or-nothing. Until then a
+flaky Monday-morning rollup that writes could half-corrupt the repo on every failed tick.
+
+* Scope
+
+- Remove the W4-read store-time rejection of write-tagged programs (effects.ts `write`
+  set) — gated behind a check that D3's transactional lane is active.
+- A stored WRITE program re-run wraps in D3's BEGIN…COMMIT/ROLLBACK envelope: the
+  whole program commits atomically on success, discards on error. No partial landing
+  across re-runs.
+- Unattended callers (org tile tick, canvas refresh) that run a WRITE program must
+  surface the commit/discard outcome (reuse D3.5 cost-meter enlisted-vs-committed
+  counts) so a silently-discarded write tile is visible, not invisible.
+- Decision: a WRITE stored program triggered on an automatic tick (not an explicit
+  user/agent run) should default to DRY-RUN-then-confirm OR be explicitly opt-in per
+  tile — pick at implementation; do NOT let an unattended tick silently mutate the repo
+  without a visible record. (This is the one genuinely new risk W4-write introduces.)
+
+* Tests
+
+- A stored write program that errors mid-run → zero effects across the re-run (inherits
+  D3's decisive test, exercised through the stored-program path).
+- A stored write program that succeeds → atomic commit, outcome surfaced to the caller.
+- A write program cannot be stored/enabled when D3's lane is inactive (guard holds).
+
+* Acceptance
+
+A stored program may mutate, but only transactionally (D3), and an unattended write tick
+leaves a visible commit/discard record — never a silent partial mutation.
+
+* Relationships
+
+Depends on D3 (PLAN) + the W4 FEAT. Part of the "execute as sole lane" (D-3) endgame.
+
+NOTE [2026-06-11]: SHIPPED with the three-valued RunIntent design (interactive | visible-refresh | background-tick), reviewer-cleared (1 P1 silent-mutation + 2 lower found and fixed). StoredProgram.mode read|write; validateStoredProgram branches (read\u2192assertReadOnly, write\u2192assertTransactionSafe rollback-safe bar). Structured TxnOutcome (committed|rolled-back|dry-run|inert|none) on details.transaction, wired in all settle paths. runStored gates SAFETY-FIRST on a runtime readOnly backstop (not the declared flag) so an omitted/mislabeled mode can never silently commit \u2014 read mode discards any write in every intent; write mode commits only interactive or armed-background-tick; visible-refresh always dry-run previews. 13 W4-write tests (6 unit mode-bar + 7 real-BEAM incl. the decisive omitted-mode-never-commits regression) + 192 full ptc-runtime suite green. No new runtime \u2014 rode entirely on D3 + W4-read. 4 consumer use-case FUPs written: FUP-119 codemod (visible-refresh), FUP-120 derived-doc, FUP-121 format (dual-context), FUP-122 changelog (background-tick).

@@ -1,5 +1,5 @@
 #+TITLE: org dashboard data channel embeds full item bodies, OOMs execute sandbox
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14f9a29f12b3c7dc
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-fup095/2026-06-02T17-15-21-034Z_14f9a29f12b3c7dc.jsonl]]
 #+CUSTOM_ID: BUG-426-org-dashboard-data-channel-embeds-full-i
@@ -51,3 +51,8 @@ List/summary commands project to refs; only `get` returns full bodies. Dashboard
 
 ## Acceptance
 `(tool/org {:command "dashboard"})` returns a bounded, body-less metrics payload from inside `execute` without memory_exceeded; dashboard items expose id/title/state/category/file/line/priority.
+
+* Resolution
+
+DONE (2026-06-10). Native-side fix as specified: `org_index.rs::dashboard()` now pushes `dashboard_ref(item)` — body-less `{id, title, state, category, file, line, priority}` (priority normalized via `OrgItem::priority()`, no `#` prefix) — into `inProgress`/`blocked`. New `OrgDashboardItemRef` type in packages/org/src/types.ts; `OrgDashboard.inProgress/blocked` retyped (no TS field-level consumers existed). Regression test `dashboard_items_are_bodyless_refs`: index with 64KB bodies → dashboard payload <8KB, no `body`/`children` keys, ref fields asserted. NB: runtime effect requires a pi-natives rebuild. Sibling FEAT-791 (heap kdl setting) shipped alongside.
+

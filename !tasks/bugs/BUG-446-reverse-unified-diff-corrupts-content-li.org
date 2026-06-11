@@ -1,0 +1,27 @@
+#+TITLE: reverse_unified_diff corrupts content lines starting with -- or ++ (fixed in PLAN-332 D)
+#+STATE: ITEM
+#+SESSION_ID: 1503acd8825ce2c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-24-49-929Z_1503acd8825ce2c9.jsonl]]
+#+CUSTOM_ID: BUG-446-reverse-unified-diff-corrupts-content-li
+
+* Initial Message
+
+test drive the edit and the create interface (the recent BUGs and PLANs and FEATs implemented them, see if the implementation works well)
+
+* Symptom
+The undo diff cell (FEAT-809) displayed corrupted content for source lines whose text begins with `-- ` or `++ ` (Lua/SQL/Haskell/Ada/Elm comments). E.g. undoing an edit that removed `-- note` showed `+++ note` (wrong sign, `-- ` prefix dropped) instead of `+-- note`.
+
+* Scope
+DISPLAY-ONLY. File content reverts correctly (revert uses before/after snapshots, not the diff). Only the rendered undo diff was wrong. P2.
+
+* Surfaced by
+PLAN-332 Thesis D reviewer swarm.
+
+* Root cause (crates/pi-natives/src/code_path/edit_history.rs)
+`reverse_unified_diff` had `--- `/`+++ ` file-header swap branches. But recorded diffs come solely from `pi_code_engine::diff_lines` (buffer.rs:666), which emits ONLY `@@` hunk headers + bare `+`/`-` content lines \u2014 never `---`/`+++` file headers. So those branches were dead for their stated purpose and instead matched real content: a removed `-- note` serialises to forward-diff line `--- note`, which `strip_prefix("--- ")` caught \u2192 emitted `+++ note`.
+
+* Fix
+Dropped the `--- `/`+++ ` branches. The generic single-char `+`/`-` reversal handles every content line correctly (including ones that happen to start with `-`/`+`). Added regression `reverse_unified_diff_preserves_comment_content_lines` asserting `--- note` \u2192 `+-- note`.
+
+* Status
+FIXED in PLAN-332 Wave 2. cargo test -p pi-natives edit_history: 6 pass.

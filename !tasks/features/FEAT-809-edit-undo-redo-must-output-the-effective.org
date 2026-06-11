@@ -1,0 +1,57 @@
+#+TITLE: edit undo/redo must output the effective diff, not an opaque entry id
+#+STATE: ITEM
+#+SESSION_ID: 1503acd8825ce2c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-24-49-929Z_1503acd8825ce2c9.jsonl]]
+#+CUSTOM_ID: FEAT-809-edit-undo-redo-must-output-the-effective
+
+* Initial Message
+
+test drive the edit and the create interface (the recent BUGs and PLANs and FEATs implemented them, see if the implementation works well)
+
+* Symptom
+`edit { undo }` works (the file is reverted on disk) but the tool result is opaque:
+#+begin_src json
+manage://undo  [§manage-result]
+{ "reverted": "32" }
+#+end_src
+The user/agent sees a bare entry id — no filename, no before→after, no diff. `redo` mirrors this with `{ "reapplied": "32" }`. There is no way to know *what* changed without a follow-up `find #diff`.
+
+NB: earlier "undo is inert / no uncommitted edit" reports were a *cross-workspace artifact* — edits under `/tmp/edcreate` (its own git root) recorded to a different `.spell/edit-history.jsonl` than the session cwd's. In-workspace undo reverts correctly. So the correctness bug is narrow; the real defect is output UX + the cross-root recording surprise.
+
+* Desired behaviour (per user)
+"undo should work in a way where the latest change gets unapplied, and the tool outputs the effective diff."
+
+So `edit { undo }` should:
+1. Unapply the most recent (non-reverted, this-session) edit — already done.
+2. Return a *titled diff cell* showing the effective change that undo produced (i.e. after→before of the reverted entry), in the same render shape FEAT-807 gave normal edits: `undo · <relpath>` header + unified diff, `language=diff`.
+3. `redo` symmetric: title `redo · <relpath>`, diff = before→after of the reapplied entry.
+4. When nothing to undo, keep the clear message but make it actionable (see cross-root note below).
+
+* Design
+** Data already exists
+`EditEntry { before, after, diff, file, .. }` (crates/pi-natives/src/code_path/edit_history.rs) already stores everything. `revert`/`reapply` return only `RevertOutcome::Success { entry_id }`.
+
+** Rust changes
+- Extend `RevertOutcome::Success` to carry the reverted entry's payload, e.g.
+  `Success { entry_id, file: PathBuf, before: String, after: String, diff: String }`,
+  or add a sibling struct returned alongside. `revert` already has `entry` in hand at the mutation point; capture `file`, and the *effective* diff (for undo, the applied change is after→before, so either recompute or store the inverse).
+- `handle_undo`/`handle_redo` (crates/pi-natives/src/code_path/manage.rs) build the `manage_result` with the diff payload:
+  `json!({ "reverted": entry_id, "file": rel, "diff": effective_diff })`.
+  For undo, effective diff = reverse of `entry.diff` (swap +/- and ranges) OR recompute from after→before via the same differ used on the edit path (preferred — single source of truth).
+
+** TS render changes
+- `CodepathEditTool` undo/redo branch: detect the `§manage-result` with a `diff` field and render via the existing titled-diff cell path (FEAT-807 `renderCodeCell({language:"diff", title:"undo · <relpath>"})`) instead of dumping JSON.
+- Fall back to the current JSON line only when no diff is present (e.g. nothing-to-undo).
+
+** Cross-root recording (secondary, same item)
+The recorder keys history on `workspace_root_for(record.file)` while `handle_undo` with an empty target probes the *session root*. When an edit targets a file outside the session's workspace root, its entry lands in a different history file and target-less undo silently finds nothing. Options:
+- Make target-less undo search the session-root history first, then fall back to the most-recent entry across the session id regardless of root; or
+- When "no uncommitted edit found", include a hint: "N edits this session were recorded under a different workspace root (<root>); pass an explicit target to undo them."
+
+* Acceptance
+- `edit { undo }` after a symbol edit returns a `diff`-language cell titled `undo · <relpath>` showing the reverted hunk; file content matches `before`.
+- `edit { redo }` returns `redo · <relpath>` showing the reapplied hunk; content matches `after`.
+- Nothing-to-undo path returns the clear (now actionable) message.
+- Rust: `revert`/`reapply` expose the entry payload; unit test asserts the returned diff is non-empty and matches after→before / before→after.
+- TS: test asserts the undo result content is a diff cell, not raw `{"reverted":...}` JSON.
+- `cargo test -p pi-natives undo` + `bun test test/edit.test.ts` green.

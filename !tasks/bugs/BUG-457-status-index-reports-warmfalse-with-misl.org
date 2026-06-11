@@ -1,0 +1,28 @@
+#+TITLE: status index reports warm:false with misleading message — warmth tracks in-process DashMap only, decoupled from persisted graph cache
+#+STATE: DONE
+#+SESSION_ID: 1503acd8825ce2c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-24-49-929Z_1503acd8825ce2c9.jsonl]]
+#+CUSTOM_ID: BUG-457-status-index-reports-warmfalse-with-misl
+#+COMPLETION_HASH: 7f9ce2e96a81483c
+
+* Initial Message
+
+i reloaded the session, test-drive this again.
+
+## Symptom
+`status index` (manage://index) returns `"warm": false` with reason "no edge query has triggered build yet" even when `.spell/graph/workspace.bin` holds a fully-built, up-to-date graph on disk. After one edge query it flips to `warm:true` with full stats. The "warm" signal only reflects whether the **in-process `code_graph_cache` DashMap** is populated — it is blind to the persisted cache that BUG-456 now warm-loads from.
+
+## Why it's confusing
+An operator checking readiness sees `warm:false` and concludes the graph isn't built, when in fact a fast warm-load is available. The message actively suggests running an edge query "to trigger build" when no build is needed — only an in-process load.
+
+## Fix
+Make `status index` distinguish three states:
+- `warm` (in-process Arc present),
+- `cached` (persisted `.bin` fresh on disk, load pending — sub-second to serve),
+- `cold` (no cache; full build needed).
+Report `cached` instead of `warm:false` when `cache_status==Fresh`, with a message reflecting load-not-build.
+
+## Origin
+Surfaced during adversarial CodePath test-drive (BUG-456 investigation): the two graph-construction paths (status vs edge) read different warmth signals.
+
+NOTE [2026-06-11]: Fixed: added code_graph_cache::disk_cache_state (Fresh/Stale/Missing via builder.cache_status, no build). graph_stats handler now reports a `state` field: warm (in-process), cached (fresh disk → sub-second warm-load), stale (disk out of date → rebuild), cold (no cache → full build), each with an accurate reason. Tests: disk_cache_state_transitions_missing_to_fresh. Verified live: fresh process reports state=cached not warm:false.

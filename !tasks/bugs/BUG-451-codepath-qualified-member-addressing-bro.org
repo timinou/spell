@@ -1,0 +1,45 @@
+#+TITLE: CodePath: qualified member addressing broken for Rust (read) + decorated containers (edit, all langs)
+#+STATE: DONE
+#+SESSION_ID: 1503acd8825ce2c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-24-49-929Z_1503acd8825ce2c9.jsonl]]
+#+CUSTOM_ID: BUG-451-codepath-qualified-member-addressing-bro
+
+* Initial Message
+
+ok then run an adversarial review test-driving all of this code path thing and trying it for advanced advanced stuff please. how ergonomic is it?
+
+## Summary
+Adversarial test-drive of `find`/`edit` across a TS+Rust+Python corpus surfaced that **qualified member addressing** (`Container::member` / `Container.member`) was broken on multiple axes. Two distinct resolvers are involved — the read-side CodePath walker and the edit-side `CodeBuffer`/`resolve_symbol` — and each had gaps.
+
+## Findings & fixes
+
+### 1. Rust read-side: `Type::method` resolved to ZERO nodes
+`RustNameLexer::matches` was a stub returning `false` for every payload. The walker's text fallback then compared the FULL rendered path (`Widget::label`) against the bare name field (`label`) → never matched. Only bare `label` worked (fragile across multiple impls).
+**Fix** (`crates/pi-code-path/src/dialects/rust.rs`): implement `matches` via `matches_rust_leaf` — take the leaf `::` segment and compare to the node's `name` field for Rust declaration kinds (parity with the TS dialect's leaf-matching; handles `r#` raw idents + turbofish).
+
+### 2. Edit-side: Rust `::` separator never split
+`find_symbol_node` only split container/member on `.` (`symbol.rfind('.')`). Rust members use `::`, so `Widget::label` was treated as one unresolvable name.
+**Fix** (`crates/pi-code-engine/src/resolve.rs`): `split_container_member` tries `::` then `.`.
+
+### 3. Edit-side: container name ambiguity (struct + impl blocks)
+A Rust type and its `impl` block(s) share a name → `find_symbol_node("Widget")` errored as ambiguous BEFORE member lookup.
+**Fix**: on ambiguity, gather every top-level container candidate via `find_top_level_matches` and try the member in each; non-member-bearing nodes (the struct) yield no match. Single success → resolve; multiple → ambiguous.
+
+### 4. Edit-side: decorated/exported containers (all langs)
+`@dataclass class Point` (Python `decorated_definition` wrapper) and `@sealed export class Server` (TS `export_statement` whose first child is the `decorator`) were not member-addressable.
+**Fix**: `unwrap_to_class_like` descends a wrapper to the class-like node before the member node_type check; `unwrap_export` skips leading `decorator` siblings.
+
+### 5. Edit-side: `@property` member body
+A decorated member (`@property def magnitude`) is itself a `decorated_definition` with no body field → "has no body to replace".
+**Fix**: `unwrap_decorated_member` returns the inner definition for #body/#sig span extraction.
+
+## Verification
+- 5 resolver-level regression tests in `resolve.rs` (rust impl method, rust trait-impl method, py decorated class member, py decorated @property body, ts decorated+exported class member) — fail-without/pass-with confirmed for the Rust matcher.
+- 1 e2e test in `code_path_e2e.rs` (read-side `Point::origin#body`).
+- Live matrix: 13/13 member edits OK across TS/Rust/Python incl. decorated containers, @property, trait impls, free fns.
+- pi-code-engine 211, pi-code-path 524, code_path_e2e 30 — 0 failures.
+
+## NB
+The `@property`/decorated-container edit failures were PRE-EXISTING (confirmed by stashing the resolve.rs change and reproducing on pristine HEAD). `Container.member` for Rust correctly parse-fails (Rust has no `.` paths; `::` is the idiom). Container-scoping for true disambiguation (e.g. same method name in two impls of different traits) remains a documented follow-up — leaf-matching + multi-container trial covers the common cases.
+</body>
+<parameter name="_i">Filing qualified member addressing bug

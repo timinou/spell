@@ -1,0 +1,41 @@
+#+TITLE: edit restructure move fails on class methods (siblings exist)
+#+STATE: ITEM
+#+SESSION_ID: 1503acd8825ce2c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-24-49-929Z_1503acd8825ce2c9.jsonl]]
+#+CUSTOM_ID: BUG-441-edit-restructure-move-fails-on-class-met
+
+* Initial Message
+
+test drive the edit and the create interface (the recent BUGs and PLANs and FEATs implemented them, see if the implementation works well)
+
+* Symptom
+`edit { restructure, op:"move" }` on a class method fails both directions while the same op works on top-level declarations:
+- `file.ts::Box.second` move up → `edit error: No sibling to swap with`
+- `file.ts::Box.second` move down → `edit error: Unsafe move at line N: target ends on a shared boundary line.`
+
+Repro (TS):
+#+begin_src ts
+export class Box {
+  first(): number { return 1; }
+  second(): number { return 2; }
+  third(): number { return 3; }
+}
+#+end_src
+`Box.second` plainly has `first` above and `third` below, yet move-up reports no sibling and move-down reports a shared-boundary refusal. Top-level fn moves (e.g. two `export function`s) work fine.
+
+* Root cause (two compounding faults)
+crates/pi-code-engine/src/edit/drag.rs
+
+1. *Sibling lookup (move up)* — `drag_node` resolves the symbol → line → `node_at_line` (`resolve_line_target`), then `node.parent()` and `parent.named_children()`. For a method the resolved node and the parent's `named_children` ids don't line up: `sibling_pair` can't find `current.id()` among the parent's named children (or the parent is resolved as the wrong wrapper — `class_declaration`/`export_statement` rather than `class_body`), so `position(...)` is None → "No sibling to swap with". The symbol resolver elsewhere also only surfaces `[Box]` at the top level (see `Available: [Box]` on a line-range target), suggesting the method node returned by `resolve_line_target` is not the `class_body`'s direct named child the drag logic expects.
+
+2. *Shared-boundary guard (move down)* — `standalone_sibling_boundary` (crates/pi-code-engine/src/edit/replace.rs) treats a method whose closing `}` shares a line with the next method's start (or whose span ends on a brace-only line that the next sibling also touches) as ending on a "shared boundary" and refuses. Brace-dense class bodies routinely hit this even when the move is well-defined.
+
+* Fix direction
+- Resolve the move target to the *named declaration node that is a direct child of the container we intend to reorder* (the `class_body` member), not the line-hit node. Mirror how `replace`/`delete` already normalise `export const`/method wrappers (see BUG-433 wrapper-span handling) so `sibling_pair` walks the member list, not the enclosing class/export.
+- For the boundary guard, compute the sibling span from the member node's start/end rows (delimiter-inclusive, like `#body`) so an interior method with a dedicated start line and a `}`-terminated end line is treated as a whole sibling. Only refuse when two members genuinely share a physical line (`a(){} b(){}` on one line).
+- Add fixtures: 3-method class (move middle up + down), method adjacent to a field, single-line-body method.
+
+* Acceptance
+- `Box.second` move up swaps with `first`; move down swaps with `third`; rendered diff shows the swap.
+- Top-level move behaviour unchanged (regression).
+- `cargo test -p pi-code-engine drag` green incl. new cases.

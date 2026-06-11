@@ -1,0 +1,56 @@
+#+TITLE: W4 caller-1: wire memory playbook :program block to stored-program runner
+#+STATE: ITEM
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: FUP-115-w4-caller-1-wire-memory-playbook-program
+
+* Initial Message
+
+P3 (NIF): Can you try it out? Will the warm kernel keep mini-sessions separate? What else besides improvements can it do? Is it strong improvements?
+W4 (stored programs): explain what that means please, what are the possibilities? How hard is the integration?
+Deferred, documented: D3, E4: what does it do?
+
+Think deeply
+
+* Context
+
+FEAT-810 (W4 read-only) shipped the stored-program CORE and proved it end-to-end over
+the real BEAM (round-trip identity: a stored program reproduces its inline value;
+store-time read-only guard; preflight; signature re-validation). What remains is the
+thin CONSUMER wiring named as the FEAT's caller-1 acceptance anchor: a memory playbook
+carrying a `:program` block that the agent can re-run.
+
+The core is in `packages/coding-agent/src/tools/ptc-runtime/stored-program.ts`:
+- `StoredProgram` contract, `validateStoredProgram(stored, validate)` (read-only guard
+  + preflight), and the runtime side `ExecuteTool.validateProgram` / `runStored`.
+
+* Scope (thin consumer)
+
+1. `packages/coding-agent/src/tools/memory.ts` (save path) + `memories/index.ts`
+   (storage): accept a fenced PTC-Lisp `:program` block on `kind=playbook` save. At
+   STORE time, parse the block into a StoredProgram and call
+   `validateStoredProgram(stored, p => executeTool.validateProgram(p))`; REJECT the
+   save if not read-only or preflight fails (surface the typed message/hints).
+2. A re-run path: \"run this playbook\" feeds the stored block to
+   `ExecuteTool.runStored(stored)` (the shared invocation path) and returns the value.
+3. `packages/coding-agent/src/prompts/tools/memory.md` + `.../tools/execute.md`:
+   document the `:program` block + re-run semantics.
+
+* Tests
+
+- Save a read-only :program playbook → persisted; re-run → reproduces the inline value.
+- Save a playbook whose program writes (e.g. (tool/edit ...)) → REJECTED at save with
+  the read-only message.
+- Save a playbook with a typo'd builtin → REJECTED at save (preflight, 0 effects).
+
+* Acceptance
+
+A read-only health program saved as a memory playbook re-runs and reproduces its
+inline value; write/typo programs are rejected at SAVE time (the FEAT-810 caller-1
+acceptance, now via the real memory surface).
+
+* Relationships
+
+Consumer of the shipped FEAT-810 core. Callers 2 (org tile) and 3 (canvas panel) are
+separate thin consumers \u2014 file as siblings if/when wanted. W4-write (FUP-112) gated on
+D3 (PLAN-333).

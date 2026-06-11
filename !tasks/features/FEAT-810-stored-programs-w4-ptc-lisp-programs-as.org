@@ -1,0 +1,136 @@
+#+TITLE: Stored programs (W4): PTC-Lisp programs as durable, re-runnable values via execute lane
+#+STATE: DONE
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: FEAT-810-stored-programs-w4-ptc-lisp-programs-as
+#+COMPLETION_HASH: bf33ac9351042739
+
+* Initial Message
+
+P3 (NIF): Can you try it out? Will the warm kernel keep mini-sessions separate? What else besides improvements can it do? Is it strong improvements?
+W4 (stored programs): explain what that means please, what are the possibilities? How hard is the integration?
+Deferred, documented: D3, E4: what does it do?
+
+Think deeply
+
+* North star
+
+Today a PTC-Lisp program is EPHEMERAL: written, run once, discarded. W4 makes a
+program a DURABLE, NAMED, RE-RUNNABLE value. The program text is stored (memory /
+org / canvas) and re-executed later by a NEW caller (a save, a tick, a refresh).
+This is the vision doc's P4 property and WS-B's "policy as data" lane, collected with
+ZERO new runtime — the execute lane (F0/W1/W2/W3 shipped) IS the engine.
+
+Reads with: specs/beam-orchestrator/01-vision.md (destination),
+06-execute-substrate.md (W4 build-order line), 07-execute-substrate-status.md
+(W4 scoped as thin integration), 04-where-ptcrunner-shines.md (the program corpus).
+
+* Scope (this FEAT = READ-ONLY stored programs only)
+
+Read/aggregate programs only: find/org/memory/bash-read/get/count/group-by/etc.
+WRITE-flavored stored programs (edit/create inside a stored program) are EXPLICITLY
+out of scope here and gated on D3 (transactional write lane) — see sibling FUP
+"W4-write". Rationale: a stored program re-run unattended that does (edit ...) and
+fails halfway leaves partial effects (error class E4); read-only programs have no
+effects to roll back, so they are safe to store and re-run TODAY.
+
+* HARD prerequisite
+
+BUG "Execute HandleStore + session bindings leak — no reaper" (sibling, #A). A stored
+tile re-running every tick parks a handle every tick; without the reaper this is
+guaranteed unbounded growth. W4 MUST NOT merge before the reaper. (Verified:
+handle_store.ex @session_bucket is never released today.)
+
+* Architecture: one stored-program contract, three callers
+
+A stored program is just `{ program: string, signature?: string, context?: map }` —
+the exact ExecuteParams shape (packages/coding-agent/src/tools/ptc-runtime/execute.ts,
+`executeSchema`). "Store" = persist that triple as a value; "re-run" = feed it to the
+existing `ExecuteTool.execute` path (which already does spawn/effects-gate/render/
+artifact-handoff). NO new execution machinery — W4 is a STORAGE + INVOCATION shim.
+
+Verified existing surfaces to reuse:
+- Node entry: `ExecuteTool.execute(...)` in execute.ts (the whole gated lane).
+- Client: `client.execute({program,context,signature,timeoutMs,maxHeapWords,signal})`
+  → peer.ex `run_program/2` → `{:execute_done, id, wire_result, memory}` (peer.ex:429).
+- Effects policy: `policy.ts` DEFAULT_POLICY already classifies read vs write tools —
+  W4-read enforces "read-only" by REUSING that classifier (reject a stored program
+  whose static tool set intersects the write set), NOT by inventing a new gate.
+- Preflight lint (W1b): a stored program is lint-checked at STORE time (0 effects) so
+  a typo can never be persisted as a live tile.
+
+* The three callers (deliverable surfaces)
+
+1. memory playbook with a :program block
+   - `memory save kind=playbook` may carry a fenced PTC-Lisp `:program` block.
+   - A new verb path "run this playbook" feeds the block to ExecuteTool.execute.
+   - Surface: packages/coding-agent/src/tools/memory.ts (save path) +
+     packages/coding-agent/src/memories/index.ts (storage).
+   - "How's the repo?" → re-execute the stored health program instead of re-deriving.
+
+2. org dashboard / rollup tile
+   - An org item may carry a stored program in a PROPERTIES drawer (e.g.
+     `:PROGRAM:` custom prop, mirroring existing drawer conventions).
+   - On `org dashboard`, a tile re-runs its program and renders the value. Each tick
+     = one execute (reaper-bounded). Surface: packages/org/ + the dashboard path.
+
+3. canvas health panel
+   - A canvas window (rule://canvas-activation territory) re-runs a stored program on
+     refresh → a self-updating repo dashboard. Surface: a canvas QML + bridge action
+     that calls the execute lane.
+
+NB: callers 2 and 3 MAY be split into their own follow-up FEATs if scope demands —
+caller 1 (memory playbook :program) is the MINIMUM viable W4 and the acceptance anchor.
+Decide at implementation: ship caller 1 fully; 2/3 may become FUPs if the storage
+contract proves they need org/canvas plumbing beyond a thin shim.
+
+* The stored-program value contract (freeze this)
+
+```
+StoredProgram = {
+  program:   string         ; the PTC-Lisp source (lint-clean at store time)
+  signature?: string        ; optional output contract (validated each run)
+  context?:  map            ; static data bound under data/<key> (D-6 convention)
+  title:     string         ; human label
+  readOnly:  true           ; W4-read invariant; WRITE programs rejected at store
+}
+```
+Stored as: a fenced block in the memory/org body (text-first, diff-able, travels as a
+value — the P4 property). Re-run = parse block → ExecuteParams → ExecuteTool.execute.
+
+* Files (caller 1, minimum viable)
+
+- packages/coding-agent/src/tools/memory.ts — accept + persist a :program block on
+  kind=playbook save; lint it at store time (reuse W1b preflight via a client call);
+  reject if its static tool set intersects the write set (reuse policy.ts classifier).
+- packages/coding-agent/src/memories/index.ts — storage of the block in the playbook.
+- packages/coding-agent/src/tools/ptc-runtime/execute.ts — a small `runStored(stored)`
+  helper (or reuse execute() directly) so callers share ONE invocation path.
+- packages/coding-agent/src/prompts/tools/memory.md + .../tools/execute.md — document
+  the :program block + re-run semantics.
+- New test: packages/coding-agent/src/tools/ptc-runtime/stored-program.test.ts.
+
+* Tests
+
+- Store a read-only :program playbook → persisted; re-run → returns the SAME value as
+  running the program inline (round-trip identity).
+- Store a program with a write tool (e.g. (tool/edit ...)) → REJECTED at store time
+  with a clear "W4-read is read-only; write programs need D3" message.
+- Store a program with a typo'd builtin → REJECTED at store time (preflight, 0 effects).
+- Re-run a stored program N times in a session → session store stays bounded (proves
+  the reaper prereq is wired; cross-check BUG reaper acceptance).
+- A signature on a stored program is validated on each re-run (drift → typed rejection).
+
+* Acceptance
+
+A read-only health program saved as a memory playbook re-runs and reproduces its
+inline value; a write program and a typo'd program are both rejected at STORE time
+(not at first run); repeated re-runs stay memory-bounded. `bun test
+stored-program.test.ts` green; execute.test.ts still green; tsc clean for touched files.
+
+* Blocked-by
+
+BUG reaper (HARD). Independent of BUG nil-poison (but nicer if that lands first so
+stored programs fail loud). Out of scope: D3 (gates W4-write FUP), P3.
+
+NOTE [2026-06-11]: Shipped W4 read-only core: stored-program.ts (StoredProgram contract + assertReadOnly read-only guard reusing effects.ts arg-refinement + validateStoredProgram), validate peer method (PATCH-7) + client.validate + ExecuteTool.validateProgram/runStored. 20 tests green; execute+client 34 green; BEAM 92+5 green. Callers 2/3 (org tile, canvas) deferred per FEAT scope; caller 1 (memory playbook) wiring is a thin consumer atop the shipped core. Discovered+filed FUP-114 (policy pre-filter inconsistency). W4-write remains gated on D3 (FUP-112).

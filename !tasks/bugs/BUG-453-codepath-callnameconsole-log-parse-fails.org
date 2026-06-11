@@ -1,0 +1,26 @@
+#+TITLE: CodePath: §call[name=console.log] parse-fails on dotted attribute value; resolver also doesn't match call callees
+#+STATE: DONE
+#+SESSION_ID: 1503acd8825ce2c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-24-49-929Z_1503acd8825ce2c9.jsonl]]
+#+CUSTOM_ID: BUG-453-codepath-callnameconsole-log-parse-fails
+
+* Initial Message
+
+ok then run an adversarial review test-driving all of this code path thing and trying it for advanced advanced stuff please. how ergonomic is it?
+
+## Symptom
+The edit tool's own cheat sheet documents `src/**/*.ts::§call[name=console.log]` for structural replace. But that target **parse-fails**: `unexpected trailing input: "[name=console.log]"`. Same for any dotted attribute value (`[name=a.b.c]`).
+
+## Root cause (parse)
+`crates/pi-code-path/src/parser.rs::attribute_predicate` parsed the unquoted value via `ident`, which only accepts alphanumeric + `_` + `-` → stops at the first `.`. The `=` then has dangling input.
+
+## Fix (parse)
+Unquoted attribute value now consumes a free token up to `]`/space (matching `compare_predicate`'s RHS grammar), so `name=console.log` and `name=a.b.c` parse. Quoted values still take precedence. Regression test `predicate_attribute_dotted_value`. All 525 pi-code-path lib tests pass; `[ext=ts]`, `[lang=rust]`, `[name="*.test.ts"]` unaffected.
+
+## Remaining gap (resolver semantics) — follow-up
+Even with the parse fixed, `§call[name=console.log]` resolves to ZERO nodes. The `name=` predicate matcher (`code_resolver/predicates.rs`) compares against `node.child_by_field_name("name")`, but a `call_expression`'s callee `console.log` is a `member_expression`, not a `name` field — so call-name matching never succeeds. The working alternative is `§call[text~="console.log"]` (verified). Either the resolver should special-case call callees for `name=`, or the docs/recipe should switch to `text~=`. Filed as the follow-up dimension; the parse blocker (the syntactic failure) is fixed here.
+
+## NB
+Surfaced during the adversarial edit test-drive while exercising the documented structural-replace recipe.
+</body>
+<parameter name="_i">Filing dotted attribute parse bug

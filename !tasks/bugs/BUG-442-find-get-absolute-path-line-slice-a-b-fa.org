@@ -1,0 +1,49 @@
+#+TITLE: find/get: absolute-path line slice :A-B fails with PATH_NOT_FOUND
+#+STATE: ITEM
+#+SESSION_ID: 1503acd8825ce2c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-24-49-929Z_1503acd8825ce2c9.jsonl]]
+#+CUSTOM_ID: BUG-442-find-get-absolute-path-line-slice-a-b-fa
+
+* Initial Message
+
+test drive the edit and the create interface (the recent BUGs and PLANs and FEATs implemented them, see if the implementation works well)
+
+* Symptom
+Line-slice shorthand works for workspace-relative paths but fails for absolute paths:
+- `find { target: "movetest.ts:5-7" }` → returns lines 5–7 (`§line` 5..7) ✓
+- `find { target: "/home/user/code/ora/spell/movetest.ts:5-7" }` → `PATH_NOT_FOUND: ... (resolved to /home/.../movetest.ts:5-7)` ✗
+
+The slice suffix is glued onto the filename and `fs.stat` fails on the literal `…ts:5-7`.
+
+* Root cause
+packages/coding-agent/src/tools/get.ts
+
+`classifyBareTarget()` (≈line 38) does not recognise the `:A-B` / `:A` / `:-N` line-slice shorthand:
+#+begin_src ts
+function classifyBareTarget(target: string): "bare-plain" | "qualified" | "other" {
+  if (target.includes("://")) return "other";
+  if (target.includes("::")) return "other";
+  if (target.includes(";")) return "other";
+  if (/[*?[]/.test(target)) return "other";
+  if (target.includes("#")) return "qualified";
+  return "bare-plain";   // ← `foo.ts:5-7` lands here
+}
+#+end_src
+So a sliced target is classified `bare-plain` and enters the pre-stat fast path (≈line 413). There:
+- `absCandidate = path.resolve(rootDir, "/abs/foo.ts:5-7")` → stat → ENOENT
+- `isExplicitPath = path.isAbsolute(normalized) || startsWith("./"|"../")` → TRUE for absolute
+- ENOENT + isExplicitPath → early `PATH_NOT_FOUND` return; the kernel parser (which *does* strip the slice via `parse_line_slice_suffix`) is never reached.
+
+Relative sliced paths survive only by accident: ENOENT but `isExplicitPath=false` → "flow through to the kernel", which then parses the slice correctly.
+
+* Fix direction
+Make the TS pre-stat path slice-aware so it matches the kernel grammar:
+- In `classifyBareTarget`, detect a trailing line-slice suffix (`/:(?:-?\d+)(?:-\d*)?$/` excluding `::`) and return `"qualified"` so sliced targets bypass the bare-path stat probe entirely (cleanest — the kernel owns slice resolution).
+- OR strip the recognised slice suffix before computing `absCandidate`/`fs.stat`, then re-attach for the kernel call.
+- Guard against false positives: `C:\…` Windows drive prefix (mid-path colon, not end-anchored), and `foo.ts:80:5` line:col forms.
+
+* Acceptance
+- `find { "/abs/foo.ts:5-7" }` and `find { "foo.ts:5-7" }` both return lines 5–7 identically.
+- `edit { "/abs/foo.ts:5-7", replace }` (line-range edit on absolute path) resolves.
+- Windows-drive and line:col targets unaffected.
+- New test in test/get.test.ts (or codepath suite) covering abs+rel slice parity.

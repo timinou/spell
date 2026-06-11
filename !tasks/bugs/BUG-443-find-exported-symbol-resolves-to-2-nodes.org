@@ -1,0 +1,47 @@
+#+TITLE: find: exported symbol resolves to 2 nodes + spurious unsupported_operation diagnostic
+#+STATE: ITEM
+#+SESSION_ID: 1503acd8825ce2c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-24-49-929Z_1503acd8825ce2c9.jsonl]]
+#+CUSTOM_ID: BUG-443-find-exported-symbol-resolves-to-2-nodes
+
+* Initial Message
+
+test drive the edit and the create interface (the recent BUGs and PLANs and FEATs implemented them, see if the implementation works well)
+
+* Symptom
+Reading/editing an *exported* top-level symbol matches both the declaration and its `export_statement` wrapper, producing a duplicate node and a false-error diagnostic. Non-exported symbols are clean.
+
+Repro (TS):
+#+begin_src ts
+export function alpha(): number { return 1; }
+function beta(): number { return 2; }
+#+end_src
+- `find { "exptest.ts::alpha#body" }`:
+  #+begin_example
+  exptest.ts  [§export_statement]
+  exptest.ts  [§function_declaration]
+  { return 1; }
+  Diagnostics:
+  [unsupported_operation] qualifier 'body' does not apply to node kind 'export_statement'
+  #+end_example
+- `find { "exptest.ts::beta#body" }` → single `function_declaration`, body, no diagnostics.
+
+Same doubling shows on bare `::alpha` (renders `[§function_declaration]` + `[§export_statement]`).
+
+* Impact
+- `#body`/`#sig` still return the right span (the declaration node satisfies it), but every exported-symbol read is polluted with a spurious `[unsupported_operation]` line that *looks* like an error. Agents may treat it as a failure and retry/backoff.
+- Structural ops that fan out over the matched set risk acting twice (decl + wrapper).
+
+* Root cause
+The symbol resolver returns both the named declaration and its enclosing `export_statement` for an exported name (the name lexer / candidate collector matches the export wrapper as well as the inner decl). The qualifier evaluator then runs `#body` against *each* matched node; the `export_statement` has no body span → emits `unsupported_operation` instead of being filtered out.
+Dialects: crates/pi-code-path/src/dialects/typescript.rs (candidate matching) + the per-node qualifier dispatch in crates/pi-natives/src/code_path/*. Related prior art: BUG-433 (symbol delete on `export const`/fn wrapper span) and FEAT-339/dialect work already normalise export wrappers for *edit* — read path needs the same normalisation.
+
+* Fix direction
+- When a name resolves to a declaration nested directly inside an `export_statement` (or `export default`), collapse to a single canonical node. Prefer the inner declaration for symbol identity, but keep the export-inclusive *span* for edit verbs (as BUG-433 established) — i.e. one node, decl identity, wrapper-aware span.
+- If both must transiently appear, the qualifier evaluator should *skip* nodes for which a qualifier doesn't apply rather than emit `unsupported_operation`, when at least one sibling in the same match set satisfies it. Reserve the diagnostic for the truly-zero-applicable case.
+
+* Acceptance
+- `find { "::alpha#body" }` returns exactly one node, the body, and no diagnostics — identical shape to `beta`.
+- Bare `::alpha` returns one node.
+- Edit verbs on exported symbols keep wrapper-aware span behaviour (BUG-433 regression intact).
+- Fixture covering `export function`, `export const`, `export default`, and `export { x }` re-export.

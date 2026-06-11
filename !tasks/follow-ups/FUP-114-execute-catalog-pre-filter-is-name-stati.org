@@ -1,0 +1,78 @@
+#+TITLE: Execute catalog pre-filter is name-static — inconsistent with arg-aware effect refinement
+#+STATE: ITEM
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: FUP-114-execute-catalog-pre-filter-is-name-stati
+
+* Initial Message
+
+P3 (NIF): Can you try it out? Will the warm kernel keep mini-sessions separate? What else besides improvements can it do? Is it strong improvements?
+W4 (stored programs): explain what that means please, what are the possibilities? How hard is the integration?
+Deferred, documented: D3, E4: what does it do?
+
+Think deeply
+
+* Context (discovered building W4 / FEAT-810)
+
+`execute.ts spawn()` advertises only policy-permitted tools to the runtime via
+`allowedTools(names, policy)` (policy.ts), which calls `isAllowed(name, policy)` \u2014
+and `isAllowed` resolves `effectOf(name)` with NO args, i.e. the tool's STATIC
+(highest) effect. But the per-CALL gate (`enforcePolicy` in the dispatcher) DOES
+pass args, so `org query`/`org dashboard` refine to `read`.
+
+Consequence: under `READONLY_POLICY`, `org` (statically `write`) is filtered OUT of
+the advertised catalog, so a genuinely read-only program calling
+`(tool/org {:command \"dashboard\"})` gets `null` (tool not advertised) \u2014 even though
+the call is read and the per-call gate would allow it. The catalog pre-filter and
+the per-call gate disagree about the same tool.
+
+Surfaced concretely in W4: stored read-only programs had to run under DEFAULT_POLICY
+(allows write at the catalog level) and rely on the store-time `assertReadOnly` guard
+(stored-program.ts) as the real read-only enforcement \u2014 because READONLY_POLICY's
+name-static pre-filter wrongly drops org/memory entirely.
+
+* The inconsistency
+
+```
+catalog pre-filter (allowedTools/isAllowed)  → effectOf(name)        ← STATIC, no args
+per-call gate      (enforcePolicy)           → effectOf(name, args)  ← arg-refined
+```
+A tool whose static effect is write but which has read sub-commands (org, memory) is
+either fully advertised (DEFAULT_POLICY) or fully hidden (READONLY_POLICY) \u2014 never
+\"advertised but write sub-commands denied at call time\". The set-based policy CAN
+express \"allow read, deny write\" but the pre-filter collapses it to the static tag.
+
+* Options
+
+A. Advertise a tool if ANY of its effects (static OR any refined sub-command) is
+   permitted; rely on the per-call `enforcePolicy` to deny the write sub-commands at
+   call time (defense already exists). → READONLY_POLICY would advertise org, and a
+   `(tool/org {:command \"set\"})` call would be denied at dispatch. Most faithful to
+   the set-policy intent.
+B. Leave pre-filter static; document that READONLY_POLICY excludes mixed-effect tools
+   by design, and read-only stored programs use DEFAULT_POLICY + store-time
+   assertReadOnly (the W4 status quo). Simpler, but the two gates stay inconsistent.
+
+Recommend A: make `allowedTools` consider refined sub-command effects (a tool is
+advertised iff at least one of its possible effects is permitted), keeping the
+per-call gate as the precise enforcement. Add a test that READONLY_POLICY advertises
+org/memory but denies their write sub-commands at call time.
+
+* Files
+
+- packages/coding-agent/src/tools/ptc-runtime/policy.ts (allowedTools/isAllowed).
+- packages/coding-agent/src/tools/ptc-runtime/effects.ts (a helper enumerating a
+  tool's possible refined effects, if option A).
+- policy.test.ts \u2014 the new advertise-but-deny-subcommand test.
+
+* Acceptance
+
+READONLY_POLICY advertises mixed-effect tools (org/memory) so their READ sub-commands
+work in a program, while their WRITE sub-commands are denied at call time. The catalog
+pre-filter and per-call gate agree. Existing execute/policy tests stay green.
+
+* Relationships
+
+Discovered via FEAT-810 (W4). Not blocking \u2014 W4 read-only correctly enforces read-only
+at store time via assertReadOnly. This is a consistency/ergonomics cleanup of the
+policy layer.

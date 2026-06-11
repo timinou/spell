@@ -1,0 +1,49 @@
+#+TITLE: Upstream PRs from ptc_runner-vendored SPELL_PATCHES — psettled, lint hooks, handle protocol
+#+STATE: ITEM
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: FUP-113-upstream-prs-from-ptc-runner-vendored-sp
+
+* Initial Message
+
+P3 (NIF): Can you try it out? Will the warm kernel keep mini-sessions separate? What else besides improvements can it do? Is it strong improvements?
+W4 (stored programs): explain what that means please, what are the possibilities? How hard is the integration?
+Deferred, documented: D3, E4: what does it do?
+
+Think deeply
+
+* Context
+
+`beam/ptc_runner-vendored/` is a vendored fork of ptc_runner (precedent:
+crates/brush-core-vendored). Each wave documents its divergence in
+`beam/ptc_runner-vendored/SPELL_PATCHES.md` as PATCH-N with an upstream disposition
+(`upstreamable` | `spell-specific`). A long-lived fork ossifies if upstreamable patches
+are never offered back; this FUP keeps the rebase surface small.
+
+* The upstreamable patches (per SPELL_PATCHES dispositions)
+
+- PATCH-1 psettled + ok?/err?/unwrap-or — `upstreamable` (the patch IS the spec for a
+  settled-fan-out PR; errors-as-data, preserves the no-try philosophy).
+- PATCH-2 preflight lint hooks + nearest-builtin hints — `upstreamable` candidate
+  (a general lint-entry hook in the eval entry point).
+- PATCH-3 HandleStore behaviour + handle protocol — `upstreamable` as a PROTOCOL
+  (backing-agnostic put/project/realize/release/rehome/stats), even if Spell's ETS/
+  ResourceArc backings are spell-specific.
+
+* Action
+
+- For each upstreamable PATCH-N: prepare a minimal, rebased PR against ptc_runner
+  upstream; track acceptance. Keep spell-specific patches (catalog wiring, session-
+  binding Peer plumbing) clearly marked as non-upstream.
+- On each deliberate upstream rebase, re-verify SPELL_PATCHES PATCH-N still applies and
+  the fork's `mix test` (73 tests + 5 properties at last count) stays green.
+
+* Acceptance
+
+Upstreamable patches are offered upstream (or have a tracked rejection reason); the
+fork's rebase procedure in SPELL_PATCHES.md is exercised at least once and documented.
+
+* Relationships
+
+Maintenance follow-up for the whole execute-substrate fork. Independent of all feature
+work; do opportunistically.

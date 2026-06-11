@@ -1,0 +1,40 @@
+#+TITLE: restructure move strands Rust attributes / decorators (latent, fixed in PLAN-332 A)
+#+STATE: ITEM
+#+SESSION_ID: 1503acd8825ce2c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-24-49-929Z_1503acd8825ce2c9.jsonl]]
+#+CUSTOM_ID: BUG-445-restructure-move-strands-rust-attributes
+
+* Initial Message
+
+test drive the edit and the create interface (the recent BUGs and PLANs and FEATs implemented them, see if the implementation works well)
+
+* Symptom
+`restructure move` on a decorated/attributed declaration stranded its decorations. E.g. moving an attributed Rust fn down produced:
+#+begin_example
+#[inline]
+#[inline]
+
+fn alpha() {...}      ← bare fn moved, BOTH attributes left behind
+fn beta() {...}
+#+end_example
+Latent: tree-sitter models Rust `attribute_item` and TS/JS/Python `decorator` as *siblings* of the declaration, not children. The pre-PLAN-332 line-leaf drag resolved the bare `function_item` and swapped only its span; the new span-anchored resolver did too — both stranded attributes.
+
+* Surfaced by
+PLAN-332 Thesis A reviewer swarm (P1). The unified resolver made the gap visible; investigation showed it pre-existed (Rust attributed move never worked).
+
+* Root cause + Fix (crates/pi-code-engine/src/edit/drag.rs)
+The move swapped *bare declaration node* spans. Now it swaps whole *statement units*:
+- `is_decoration_sibling(node)` — true for `attribute_item` | `decorator`.
+- `sibling_pair` skips decoration siblings when finding the adjacent declaration to swap with (a decoration belongs to the decl that follows it).
+- `statement_unit_span(node)` — extends the moved span backward over immediately-preceding decoration siblings.
+- `drag_node` swaps the two unit spans (decoration-inclusive), and runs the shared-boundary guard on the unit span.
+
+* Tests
+- `drag_rust_attributed_item_down_does_not_error` (attributes travel with the fn).
+- Existing TS method + top-level + boundary tests unchanged (7 drag tests green).
+
+* Status
+FIXED in PLAN-332 Wave 1. This item documents the latent defect + fix for traceability.
+
+* Follow-up (separate)
+TS/Python decorator move now covered by `is_decoration_sibling`/`statement_unit_span` but lacks dedicated tests — add in the anti-drift wave (PLAN-332 final).

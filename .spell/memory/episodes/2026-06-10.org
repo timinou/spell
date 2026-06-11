@@ -39,3 +39,60 @@ ABOUT: BUG-439-edit-resolver-cannot-target-nested-markd
 :END:
 :RELATIONS:
 :END:
+** ITEM Filed 5 org items from edit/create test-drive (beyond the 2 already-fixed criticals). BUG-441: restructure move broken on class methods — drag.rs sibling_pair can't find method among parent named_children (move up "No sibling") + standalone_sibling_boundary refuses brace-dense members (move down "shared boundary"); top-level moves fine. BUG-442: absolute-path line slice :A-B → PATH_NOT_FOUND; root cause classifyBareTarget() in get.ts doesn't recognize :A-B suffix → returns bare-plain → pre-stat fast path stats literal 'foo.ts:5-7' → ENOENT+isExplicitPath early-return before kernel parses slice; relative survives by accident (ENOENT but not explicit → flows to kernel). FEAT-809: undo/redo work but output opaque {"reverted":"32"} — should emit titled diff cell (EditEntry already has before/after/diff; revert/reapply only return entry_id; extend RevertOutcome::Success to carry payload, render via FEAT-807 diff cell). Also cross-root recording surprise: recorder keys history on workspace_root_for(file), target-less undo probes session root → /tmp edits land in different history file (this caused my earlier 'undo inert' misread). BUG-443: exported symbol resolves to 2 nodes (decl + export_statement) + spurious unsupported_operation diagnostic on #body; non-exported clean; needs export-wrapper collapse like BUG-433 did for edit. BUG-444: find.md advertises #match for file/symbol but only text dialect implements it (needs TextMatch predicate) — doc/impl drift.
+:PROPERTIES:
+:CUSTOM_ID: EP-29c21dfe47f70473
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-10T15:19:38Z
+:END:
+:RELATIONS:
+ABOUT: BUG-441-edit-restructure-move-fails-on-class-met
+ABOUT: BUG-442-find-get-absolute-path-line-slice-a-b-fa
+ABOUT: FEAT-809-edit-undo-redo-must-output-the-effective
+ABOUT: BUG-443-find-exported-symbol-resolves-to-2-nodes
+ABOUT: BUG-444-find-md-advertises-match-for-files-symbo
+:END:
+** ITEM PLAN-331 high-value slice SHIPPED (4 commits: e4af51d92 W0, 71c53e072 W4', 07b8d58bf W3', 031a3d946 docs). Key implementation learnings: (1) W3' confirmed the oracle's deepest finding — task:ask:*/subagent events do NOT cross the RPC boundary at all today. AgentSessionEvent (session.subscribe→stdout) and the EventBus (task:ask:*) are SEPARATE buses; agent-session.ts has no eventBus reference. So W3' built the source rail: runRpcMode(session, eventBus) + projectTaskAskEvents helper. The SERVER side was already generic passthrough — isRpcEvent is STRUCTURAL (any object with string type), #tapEvents forwards all non-response events, rpc_event WS frame carries Exclude<RpcEvent,RpcResponseEvent>. So adding RpcTaskAskEvent to both RpcEvent unions (coding-agent + spell-server mirror) completed the rail with zero new hops. (2) W0 seam: #buildRuntimeVerificationOptions was sync+roster-only → replaced with async #resolveRuntimeGates (roster+org, up-front, Map<taskId,opts>) + sync #runtimeVerificationFor (baseline stamp at dispatch). mapOrgGateOptions = enforceable subset only (cmd/artifact/commit). (3) W4': swarm/types.ts was ALSO dead (only blackboard.ts imported it); swarm/{uri,uri-protocol}.ts + task/swarm-scheduler.ts are LIVE. (4) Gotcha: symbol-target edit (TaskTool.#method) silently no-op'd twice — had to use find/replace on method body text instead. (5) Root bun run check:ts has 81 pre-existing tsgo errors across ai/coding-agent-tests/swarm-extension, unrelated — per-package tsgo is the real per-change gate. Deferred: FUP-110 (W1'/W2' substrate, no cross-process consumer), FUP-111 (agent introspection tool, builds on W3' observation layer). User's Team Chat IPC-observability idea consumes W3', does not justify the wire.
+:PROPERTIES:
+:CUSTOM_ID: EP-625d04ff8dc8464
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-10T15:49:11Z
+:END:
+:RELATIONS:
+:END:
+** ITEM Thesis A root causes (verified by reading source). BUG-441 move-on-methods: code_buffer.rs dispatches move via action_line()→resolved.line, then drag_node(buffer,line,dir) RE-RESOLVES through resolve_line_target→raw_node_at_byte at that line's first non-ws byte. For a top-level fn the first token is the `function` KEYWORD (anonymous) so raw_node_at_byte walks up to function_declaration, whose parent=program, siblings=other decls → works. For a METHOD the line's first token is the property_identifier (name), whose parent IS the method_definition, so sibling_pair walks the method's OWN children (name/params/body) not class members → 'No sibling' (move up, idx 0) and 'shared boundary' (move down, swapping name↔params on one physical line). Fix: drag must consume the ResolvedSymbol's statement_range node directly (the class_body member), find it among container's named_children by byte-range identity, not re-resolve from a line. ResolvedSymbol already has statement_range/declaration_range/identifier_range. BUG-443 export double-node: walker.rs evaluate_query bare-name (no combinator) does collect_descendants(root) and BOTH export_statement (via typescript.rs matches_raw export-delegation arm) AND inner function_declaration match head → 2 nodes survive id-dedup. Fix: when a matched node is an export_statement wrapping another matched decl, drop the wrapper (collapse to inner) OR skip unsupported-qualifier diagnostic when a sibling in the set satisfies it. Files: crates/pi-code-engine/src/edit/drag.rs, line_target.rs, code_buffer.rs (action_line/range_for_action ln 818), resolve.rs (ResolvedSymbol), crates/pi-natives/src/code_path/code_resolver/walker.rs, crates/pi-code-path/src/dialects/typescript.rs.
+:PROPERTIES:
+:CUSTOM_ID: EP-57f83778811b6970
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-10T19:09:08Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-332-resolution-model-unification-collapse-th
+ABOUT: BUG-441-edit-restructure-move-fails-on-class-met
+ABOUT: BUG-443-find-exported-symbol-resolves-to-2-nodes
+:END:
+** ITEM find.md advertises #match for files/symbols but it only works in text dialect
+
+Fixed in PLAN-332 Thesis C. (1) Corrected introspection applies_to for #match/#captures: file,symbol → grep, with args note. (2) Regenerated find-recipes.md + synced find.md (#match | grep | after [text~="re"]). (3) Anti-drift invariant: list_qualifiers_all_well_formed pins controlled family vocab {file,dir,symbol,grep}; grep_context_qualifiers test locks #match/#captures. (4) Walker emits a DOMAIN diagnostic ("#match is a grep-context qualifier… not on a bare file/symbol") instead of generic "unknown qualifier" — meeting the original acceptance. Tests: pi-code-path 523, walker 23 (incl ts_match_qualifier_on_symbol_gives_domain_diagnostic), prompt-snapshots 12.
+:PROPERTIES:
+:CUSTOM_ID: EP-4a8b033fe62d04e1
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-10T20:43:57Z
+:END:
+:RELATIONS:
+ABOUT: BUG-444-find-md-advertises-match-for-files-symbo
+:END:
+** ITEM PLAN-332 resolution-model unification COMPLETE (spine-first, 4 waves, 2 reviewer swarms). Fixed 5 original + 2 surfaced bugs. Thesis A: drag.rs member_node_for_drag (span-anchored, decoration-aware statement-unit swap) fixes BUG-441 method move; walker.rs collapse_export_wrappers fixes BUG-443 export double-node. Thesis B: get.ts classifyBareTarget delegates to parseCodePath (single grammar); slice-aware extractAbsolutePrefix/makeRelativeToRoot; query-bearing abs targets relativised — fixes BUG-442. Thesis C: introspection #match/#captures applies_to corrected file,symbol→grep; anti-drift invariant tests (controlled family vocab); walker domain diagnostic — fixes BUG-444. Thesis D: RevertOutcome carries file+diff, reverse_unified_diff (after→before), manage_result_with_content, edit.ts #renderHistoryResult diff cell — fixes FEAT-809. Mid-flight: A-review found BUG-445 (move stranded Rust attrs/decorators → statement-unit swap); BD-review found BUG-446 (reverse_unified_diff corrupted --/++ content lines → dropped header branches). Verification: pi-code-engine 211, pi-code-path 523, pi-natives 449 lib+all integration, TS tools 125 — 0 fail. All files fmt+biome+typecheck clean. All 4 theses live-verified via fresh native rebuild. Gotcha: live find/edit tools load prebuilt .dev.node at session start — Rust changes need `bun run build:native --dev` (~13s incremental) to reflect; cargo unit tests compile fresh so are authoritative. Roster gate-matcher needs literal single-bash-call exit codes; decomposed/timed-out runs don't register despite passing output.
+:PROPERTIES:
+:CUSTOM_ID: EP-79328714188ae65a
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-10T20:58:25Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-332-resolution-model-unification-collapse-th
+:END:

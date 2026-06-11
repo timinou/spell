@@ -1,0 +1,84 @@
+#+TITLE: Execute HandleStore + session bindings leak — no reaper, unbounded session-lifetime growth
+#+STATE: DONE
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: BUG-447-execute-handlestore-session-bindings-lea
+#+COMPLETION_HASH: 6084610f6fbda201
+
+* Initial Message
+
+P3 (NIF): Can you try it out? Will the warm kernel keep mini-sessions separate? What else besides improvements can it do? Is it strong improvements?
+W4 (stored programs): explain what that means please, what are the possibilities? How hard is the integration?
+Deferred, documented: D3, E4: what does it do?
+
+Think deeply
+
+* Context
+
+W2 (`beam/ptc_runner-vendored/lib/ptc_runner/lisp/handle_store.ex`) parks any tool
+result > 256KB (`@handle_park_bytes 262_144`) into two kinds of bucket:
+- exec-scoped buckets — released at execute teardown (fine).
+- a PERSISTENT session bucket `@session_bucket :__session_bindings__` — created by
+  W3 session bindings (`rehome/3`, `put`) and *never released*.
+
+W3 also grows `PtcRuntime.Peer` `State.memory` (a `%{}` map) by one entry per
+`(def x v)` across the whole session.
+
+Today sessions are short ⇒ tolerable. Two forces make it fatal:
+1. D-3 "execute as the sole tool lane" → far more, longer-lived programs.
+2. **W4 unattended re-execution** (FEAT, sibling item) → a stored dashboard/rollup
+   tile re-running every tick parks a handle EVERY tick, none reaped. Slow leak →
+   GUARANTEED unbounded growth. This is why the reaper is a HARD prereq for W4-read.
+
+Error class: this is "alive-and-scary #2 — resource-leak under sole-lane" from the
+execute substrate analysis (specs/beam-orchestrator/07-execute-substrate-status.md).
+
+* Fix
+
+A reaper over the *session-lifetime* stores (NOT the exec buckets — those already
+release):
+- Eviction policy in `handle_store.ex` for `@session_bucket`: LRU keyed by
+  last-access, bounded by a configurable ceiling. Reuse the existing settings family
+  — add `tools { execute session-store-mb=N }` mirroring `execute max-heap-mb`
+  (FEAT-791 precedent: `resolveMaxHeapWords` in execute.ts; thread mb→bytes once at
+  the Node boundary, clamp in peer.ex). Default conservative (e.g. 64MB).
+- Bound `Peer State.memory` the same way (evict oldest binding when the session
+  store exceeds ceiling).
+- Evicted binding semantics (per D-6: bindings are a CACHE, never durable truth):
+  reading an evicted `bind/<key>` must FAIL LOUD with a typed value
+  `{"err" => "binding <key> evicted (session store ceiling); re-run to rebind"}`,
+  NOT `memory_exceeded`, NOT a stale value, NOT a silent nil.
+- Touch-on-access: every projection/read of a session handle updates its LRU stamp,
+  so a hot binding survives and a cold one is the eviction victim.
+
+* Files
+
+- `beam/ptc_runner-vendored/lib/ptc_runner/lisp/handle_store.ex` — eviction policy,
+  last-access stamps, ceiling check on `put`/`rehome`.
+- `beam/ptc_runtime/lib/ptc_runtime/peer.ex` — bound `State.memory`; trigger reaper
+  on the merge path (`Map.merge(st.memory, persist_bindings(...))` from W3 review).
+- `packages/coding-agent/src/tools/execute.ts` + `client.ts` — thread
+  `session-store-mb` (mirror the max-heap plumbing).
+- Settings kdl parser — `tools { execute session-store-mb=N }`.
+- `beam/ptc_runner-vendored/SPELL_PATCHES.md` — PATCH-5.
+
+* Tests (beam/ptc_runtime/test/session_store_eviction_test.exs)
+
+- A loop of ~1000 large parks in ONE session stays under the configured ceiling
+  (heap watermark bounded — the decisive leak test).
+- Park N+1 large session values past the ceiling → the OLDEST (coldest) is evicted.
+- Read an evicted binding → typed `{"err" => "...evicted..."}` value (loud), not a
+  crash and not a stale value.
+- A repeatedly-accessed (hot) binding survives eviction while cold ones are reaped.
+
+* Acceptance
+
+In a single session: 1000 large parks stay under ceiling; evicted-then-read yields a
+loud typed err with the "re-run to rebind" hint; hot binding survives. `mix test`
+green; fork compiles `--warnings-as-errors`.
+
+* Blocked-by
+
+Nothing. This UNBLOCKS the W4 read-only FEAT (sibling). Order: do this first.
+
+NOTE [2026-06-11]: Shipped: session-store LRU reaper + ceiling (PATCH-5), tools.executeSessionStoreMb setting. Review caught+fixed 2 silent gaps (realize_handle evicted→nil made loud; persist_bindings missing {:evicted} clause crash → tombstone). 92 BEAM tests + 5 properties green, warnings-free.

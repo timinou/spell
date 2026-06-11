@@ -1,0 +1,33 @@
+#+TITLE: execute-substrate-w1-w3-shipped--psettle
+
+** ITEM Execute substrate W1-W3 shipped: psettled, preflight lint, handle offload, session bindings
+
+Shipped 2026-06-10 across F0/W1/W2/W3 in the vendored ptc_runner fork (beam/ptc_runner-vendored, a path dep) + ptc_runtime Peer. 73 tests + 5 properties green, warnings-free. Each wave reviewer-swarmed; all findings fixed.
+
+ARCHITECTURE FACTS (load-bearing for future work):
+- The E1/BUG-426 OOM point is `GenServer.reply(from, {:ok, r})` in peer.ex dispatch: it COPIES the decoded tool result onto the sandbox worker's heap before any builtin runs. Fix = park large results in a HandleStore process BEFORE the reply; reply a small %Handle{}.
+- BEAM copy semantics make handles subtle: :ets.lookup copies the whole term to the caller (re-OOM). Projections MUST run in the owner process (GenServer.call whose reply is the slice). Not ETS.
+- Sizing MUST use :erlang.external_size/1 (counts off-heap binary payloads), NOT :erts_debug.flat_size (undercounts string-heavy results like org bodies by orders of magnitude — the exact payload offload targets). Threshold 256KB.
+- ptc_runner already has cross-program persistence via (def x v)→step.memory; session bindings (W3) reuse it by threading memory in the Peer. NO parallel bind/ namespace.
+- do_eval/do_apply_fun clauses must be grouped; a helper inserted between clauses trips Elixir's clause-grouping warning. Put helpers in the helper region.
+- Untrusted name→atom must use SourceAtoms.intern/1 (bounded vocab), never String.to_atom (atom-table growth, #953).
+- A %Handle{} bound via (def x (tool/big)) has its per-execute bucket released at teardown; W3 re-homes it (HandleStore.rehome/3) to a persistent @session_bindings bucket so it stays a small handle and doesn't OOM the next execute's SMALLER bounded compile heap (~10MB vs 50MB execute heap).
+
+RECURRING REVIEW FINDINGS (watch for these):
+- positional arg assumptions: (take n coll) puts the handle LAST, (get m k) first — locate by predicate not position.
+- closure/HOF EvalContext.new sites must propagate new ctx fields (exec_id, handle_store) or re-parked nested results bucket under nil and leak.
+- session memory capture must MERGE not replace (concurrent executes binding different names).
+- large NON-tool computed bindings ((def x (range 0 200000))) also need parking, else they poison every later execute's compile phase.
+
+P3 REASSESSMENT: offload killed E1 over the existing bridge, so P3 (NIF) is now a perf+architecture spike (WS-B: one warm kernel, N agents), NOT error-relief. The HandleStore contract (put/project/realize/release/rehome/stats) is backing-agnostic — phase 2 swaps BEAM-process-map → Rust ResourceArc, language semantics unchanged. W4 (stored programs) is now a thin integration (execute from memory/org/canvas callers), no new runtime.
+
+Status doc: specs/beam-orchestrator/07-execute-substrate-status.md. Patch ledger: beam/ptc_runner-vendored/SPELL_PATCHES.md (PATCH-0..4).
+:PROPERTIES:
+:CUSTOM_ID: CON-execute-substrate-w1-w3-shipped--psettle
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-10T21:10:13Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: DEC-execute-substrate-direction--fork-ptc-ru
+:END:

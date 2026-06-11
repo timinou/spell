@@ -1,5 +1,5 @@
 #+TITLE: Expose execute sandbox max-heap as kdl setting + per-call thread
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14f9a29f12b3c7dc
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-fup095/2026-06-02T17-15-21-034Z_14f9a29f12b3c7dc.jsonl]]
 #+CUSTOM_ID: FEAT-791-expose-execute-sandbox-max-heap-as-kdl-s
@@ -46,3 +46,8 @@ Independent. BUG-426 stops dashboard from emitting bloat in the first place (the
 
 ## Acceptance
 `tools { execute max-heap-mb=64 }` lets an execute program build a ~64MB `data` value without memory_exceeded; absent the setting, default stays ~10MB.
+
+* Resolution
+
+DONE (2026-06-10). `tools.executeMaxHeapMb` setting (kdl: `tools { execute max-heap-mb=N }`) + per-call `max_heap_mb` param. `resolveMaxHeapWords` (execute.ts, exported + 6 unit tests): setting = OPERATOR ceiling — when >0 it raises the default for every program AND bounds per-call requests; unset, a per-call request can only tighten below the 50MB runtime default (raising is an operator decision, never an agent one); 256MB hard cap. MB→words conversion (×1024×1024/8) exactly once at the Node boundary. client.ts threads `max_heap` into the execute frame (omitted when undefined); peer.ex `request_max_heap` clamps to `@max_heap_ceiling` (defense vs hostile frame) and applies per-execute only — next program reverts to session state. Tests: 6 resolver units + client frame passthrough/omission + 2 peer tests (override forces memory_exceeded, non-integer ignored). All ptc-runtime (119 TS) + beam (23+5 prop) green.
+

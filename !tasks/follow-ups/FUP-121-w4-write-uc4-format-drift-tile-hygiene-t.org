@@ -1,0 +1,274 @@
+#+TITLE: W4-write UC4: format-drift tile — hygiene that fits both a dashboard nudge and a background sweep
+#+STATE: ITEM
+#+SESSION_ID: 1505405b0ebe8b3b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a/13-UC4Format.jsonl]]
+#+CUSTOM_ID: FUP-121-w4-write-uc4-format-drift-tile-hygiene-t
+#+PRIORITY: B
+
+* One-line
+
+A formatting-hygiene stored WRITE program that surfaces identically as both a
+dashboard tile ("would reformat 6 files" nudge) and a nightly background sweep
+that auto-tidies the tree — the SAME program, different intents, proving the
+three-valued RunIntent design is about CONTEXT, not the program.
+
+* Why this is the synthesis use case
+
+UC1 (codemod tile) and UC3 (derived-doc sync) each wired one intent well, and UC2
+(changelog) established background ticks. This is the case that retroactively
+EXPLAINS why intent is three-valued and caller-supplied rather than baked into the
+stored program itself.
+
+A format-hygiene program — find drifted files, reformat them, done — is IDENTICAL
+whether running (a) as a dashboard tile refreshing in your peripheral vision while
+you work or (b) as an armed background sweep that quietly keeps the tree tidy at
+2am. The program text is the same. What differs is the INTENT argument passed to
+runStored, which is a property of the WIRING/CONTEXT, not the stored program.
+
+This UC shows both wirings explicitly:
+- Dashboard tile → visible-refresh (preview-only) + interactive [Format] to apply.
+- Background sweep → background-tick + autoWrite:true (runs nightly, commits for
+  real, records an audit line).
+
+It is also the most natural auto-write candidate of the four UCs (see
+Idempotence & Safety below), so it is where users will most readily arm the
+autoWrite toggle — making the armed-state visual and the audit-history UX the most
+consequential here.
+
+* Depends on (HARD)
+
+- W4-write core (FUP-112): StoredProgram mode="write", three-valued RunIntent
+  (interactive | visible-refresh | background-tick), dry-run semantics,
+  autoWrite flag, structured txn outcome. This UC is a CONSUMER — it calls
+  runStored with two different intents for the same stored program; do not start
+  until FUP-112 ships.
+- D3 (PLAN-333, DONE): the transactional snapshot/rollback lane. The format
+  program expressed as file edits depends on D3 for atomicity (see the honest
+  constraint about bash in "The grounded scenario" below).
+- The tile/sweep wiring infrastructure: a dashboard tile lifecycle that fires
+  refresh hooks, and a scheduler/host that fires background ticks per tile config.
+
+* Idempotence & safety — why formatting is the best auto-write candidate
+
+A reformat is deterministic and self-checking:
+  - Re-running on already-formatted files produces 0 matches → 0 edits → no drift.
+  - An armed background sweep therefore CONVERGES and never thrashes: once the tree
+    is clean, each tick is an instant no-op.
+  - Mechanical transformations (whitespace, import ordering, trailing commas) have
+    no semantic side effects — rolling back an errored format is always safe.
+
+This is in contrast to UC1's codemod (which may need human judgment on new drift)
+and UC3's derived-doc sync (which may regenerate stale content in surprising ways).
+Formatting is where users will most readily trust autoWrite, so the armed-state
+indicator and the audit history matter most in this UC.
+
+* The grounded scenario (concrete, end to end)
+
+A project uses Prettier/Dprint/whatever. Files drift: someone's editor didn't run
+the formatter on save, a merge conflict was resolved with raw text, a copy-pasted
+block from a different project. The dev wants a standing guard.
+
+They save a format-hygiene program once as a stored write program:
+
+```clojure
+;; title: "prettier-format"
+;; mode: write
+(->> (tool/find {:target "src/**/*.ts::§line[mtime>now-1d]"
+                 :format :paths-only})
+     (filter (fn [path]
+               (let [content (tool/get-content path)
+                     formatted (external-prettier-format content)]
+                 (not= content formatted))))
+     (map (fn [path]
+            (tool/edit {:target path
+                        :action {:kind "replace"
+                                 :content (external-prettier-format
+                                            (tool/get-content path))}})))
+     (count))   ; returns N formatted
+```
+
+**Honest constraint on external tools.** The expression above uses a hypothetical
+`external-prettier-format` — but shelling out to an external binary would FAIL the
+rollback-safe bar (the program mixes FS-writes with a non-rollback-able side
+effect ⇒ rejected at store time by `validateStoredProgram`). In practice the
+program must express the reformat as PTC-Lisp `file/edit` operations that
+produce the formatted content inline. Two realistic approaches:
+  (a) Bind a WASM formatter (e.g. dprint WASM) into the BEAM runtime so
+      `(prettier-format content)` is a pure elixir function call — rollback-safe.
+  (b) Use PTC-Lisp's own formatting capabilities (whitespace/sort rules expressed
+      in tool calls) without an external process.
+Either way the stored program must be FS-write-only. This constraint is real
+and worth noting at spec time.
+
+They wire it TWICE:
+
+**Wiring 1 — Dashboard tile (intent: visible-refresh + interactive)**
+
+The tile sits on their project dashboard. It refreshes whenever the dashboard
+is open, running the program with `intent: "visible-refresh"` (dry-run, D3
+force-rolls-back). The tile renders the drift signal. A [Format] button applies
+it with `intent: "interactive"`.
+
+**Wiring 2 — Background sweep (intent: background-tick + autoWrite:true)**
+
+The same stored program is registered with a scheduler as a background job
+(identical tile model, same `storedProgram` ref, just with `autoWrite:true` and
+a cron-like schedule). It runs with `intent: "background-tick"` and
+`autoWrite:true`, commits for real, records an audit line. When the dashboard is
+opened the next morning, the tile shows the sweep's last outcome in its history.
+
+The pedagogy: the two wirings share ONE `.program` value. The intent is supplied
+by the CALLER at run time, not stored alongside the program.
+
+* Architecture (step by step)
+
+1. STORAGE (shared). A single StoredProgram `{ program: "...", mode: "write",
+   title: "prettier-format", context: nil }` lives in the store. Both the dashboard
+   tile and the background sweep reference it by id. Each wiring has its OWN tile
+   state: `{ autoWrite: boolean, lastOutcome?: TxnOutcome, lastRunAt?: number,
+   history: AuditLine[], schedule?: "*/30 * * * *" }`. The background sweep's
+   state also includes the cron expression that drives its ticks.
+
+2. TILE REFRESH (visible-refresh). The dashboard open → tile refreshes → host calls
+   `runStored(stored, { intent: "visible-refresh" }, context)`. Per FUP-112, a write
+   program under visible-refresh runs as a DRY RUN: the program executes, D3 captures
+   the writes, then force-rolls-back. The result's `details.transaction` =
+   `{ outcome: "dry-run", files: N, paths: ["..."] }`. N=0 → "✓ formatting no drift",
+   N>0 → "⚠ would reformat N files" with the file list.
+
+3. FORMAT (interactive). Dashboard tile's [Format] button calls
+   `runStored(stored, { intent: "interactive" })`. Writes for real; result =
+   `{ outcome: "committed", files: N, paths: [...] }` or `"rolled-back"`. Tile
+   renders outcome, appends audit line to its history.
+
+4. BACKGROUND SWEEP (background-tick). The scheduler fires. The host loads the
+   background sweep's tile state. If `autoWrite === true`, it calls
+   `runStored(stored, { intent: "background-tick", autoWrite: true })` — writes for
+   real, records outcome + timestamp to the background sweep's persistent history.
+   If `autoWrite === false`, the tick is INERT (no run, no log, no cost — the
+   last-known state persists silently). Per FUP-112, `autoWrite` must be explicitly
+   prototyped in the tile state; a background-tick without the flag is guaranteed
+   inert by the runner.
+
+5. AUDIT HISTORY. The tile's history (shared between the two wirings only by
+   convention; each wiring keeps its own `AuditLine[]`) stores entries like:
+   `{ at: "2026-06-11T02:00Z", intent: "background-tick", outcome: "committed",
+   files: 6, paths: ["..."] }`. The dashboard tile's history comes from its OWN
+   runs; the sweep's history comes from ITS runs. When both are visible (e.g. the
+   sweep's last outcome shown on the dashboard tile as a sub-line), they each
+   render from their own store.
+
+* UX (taste)
+
+```
+┌─ prettier-format ────────────────────────[⚙]─┐
+│  ⚠ would reformat 6 files                     │   ← visible-refresh dry-run
+│  (3 new since last run)                        │
+│  ┌──────────┐  ┌──────────────┐               │
+│  │ Format   │  │ ⏻ auto-fmt   │ last: 02:00   │   ← Apply = interactive
+│  └──────────┘  └──────────────┘  ✓6 files     │      toggle = arm autoWrite
+│                                               │
+│  ─── nightly sweep ───────────────────────────│
+│  last: 02:00 ✓ auto-formatted 6 files         │   ← audit line from sweep
+│  drift: 3 new since sweep                     │
+└───────────────────────────────────────────────┘
+```
+
+- Calm by default: "✓ formatting no drift" is a single subdued line. No buttons
+  clamour when the tree is clean.
+- The drift count is the headline; the "N new since last run" delta tells the dev
+  whether drift is accumulating or stable.
+- [Format] is primary only when drift>0. Greyed when clean.
+- The "auto-fmt" toggle is sticky per tile, shown with a FILLED indicator when
+  armed. Because formatting is the case users arm most readily, the armed-state
+  visual must be unmistakable (filled icon, or a coloured indicator band) — never
+  an ambiguous unfilled/filled outline.
+- The background sweep's last run renders as an audit sub-section beneath the
+  interactive controls. This avoids conflating two separate histories (interactive
+  clicks vs scheduled runs) while keeping the full picture visible.
+- Outcome colour semantics (same as UC1): drift = warning amber (actionable,
+  not alarming red); committed = success green; rolled-back = neutral with a clear
+  "repo unchanged" reassurance. Because a rollback on a formatter error may leave
+  unformatted files, surface the specific failure path: "↩ rolled back — formatter
+  failed on src/foo.ts, repo unchanged".
+
+* Surfaces to verify at implementation
+
+- The two-wiring identity: background sweep tile state must reference the SAME
+  stored program id as the dashboard tile; they must NOT each store a copy of the
+  program text. Verify at implementation that the background sweep config points
+  to a StoredProgram ref, not an inline copy.
+- The scheduler lifecycle: what fires background ticks per tile (cron-style
+  expression in tile state, or a global interval that scans all armed tiles).
+- The WASM/dinline formatter approach (see the "Honest constraint" note) — the
+  exact approach for embedding formatting as PTC-Lisp tool calls without shelling
+  out must be decided at implementation time.
+- The audit-line store: where the background sweep's history persists (same store
+  as the tile, or a separate log). The dashboard tile must be able to display the
+  sweep's last outcome without re-running the sweep.
+
+* Tests
+
+- visible-refresh on a drifted tree → tile shows "would reformat N files", repo
+  UNCHANGED after the refresh (dry-run rolled back). Assert N matches the actual
+  drift.
+- visible-refresh on a clean tree → tile shows "no drift", 0 writes recorded in
+  the txn result.
+- interactive [Format] on drifted tree → files reformatted, txn outcome
+  "committed" with correct file list, audit line appended.
+- interactive [Format] on clean tree → program produces 0 writes, outcome
+  "committed" with files=0 (no-op commit is still a valid transaction, not an
+  error).
+- background sweep, autoWrite OFF → INERT: no run happens, no cost, tile state
+  unchanged (last outcome persists as-is).
+- background sweep, autoWrite ON, tree drifted → writes for real, files
+  reformatted, audit line recorded with the sweep's timestamp and count.
+- background sweep, autoWrite ON, tree clean → program produces 0 writes,
+  outcome "committed" with files=0, audit line shows "0 files" — confirms
+  convergence (no thrash).
+- idempotent re-run (re-run interactive [Format] after a first successful
+  format) → files=0, no change. Verifies the deterministic self-checking
+  property.
+- formatter error on one file (simulate a syntax error the formatter rejects) →
+  *whole program* rolls back (D3), outcome "rolled-back" for the failing file,
+  repo unchanged. The tile shows "↩ rolled back — formatter failed on
+  src/corrupt.ts, repo unchanged".
+
+* Acceptance
+
+The same stored format program drives BOTH a dashboard tile (visible-refresh
+preview + interactive apply) and a background sweep (scheduled, autoWrite-gated,
+audited). The tile is calm when the tree is clean, nudges when drift appears,
+applies transactionally, and the sweep converges without thrashing. The
+implementation proves that intent is a contextual caller-supplied argument, not a
+property of the stored program.
+
+* Relationships
+
+Synthesis sibling of UC1 (codemod tile), UC2 (background changelog), UC3
+(derived-doc sync). This UC TIES the set together by demonstrating the SAME
+stored program across two intents — the pedagogical point that retroactively
+justifies the three-valued design. Consumer of FUP-112 (W4-write core). The
+idempotence argument specifically contrasts with UC1/UC3 to explain why
+formatting is the most natural auto-write candidate. Part of the "execute as live
+instrumentation" vision (specs/beam-orchestrator/04-where-ptcrunner-shines.md).
+
+* UPDATE (post FUP-119 ship): now a THIN follow-up
+
+The codemod tile (FUP-119) shipped the full substrate this UC needs: the run_stored
+RPC command across all 3 packages, the execute-tool routing, and CodemodTilePanel.svelte
+(localStorage-persisted tiles, visible-refresh dry-run preview, [Apply], \u23fb auto-arm,
+audit history). A format-drift tile is now ALMOST the same component with a
+format-program instead of a codemod-program \u2014 it does not need new plumbing.
+
+What remains specific to this UC:
+- The format PROGRAM expressed as FS-write tool calls (NOT side-effecting bash \u2014 that
+  fails the rollback-safe bar; the honest constraint this FUP already documents).
+- The dual-context wiring (the same tile usable as a dashboard nudge AND a background
+  sweep) depends on the SCHEDULER from FUP-123 for the sweep half.
+- CodemodTilePanel is currently codemod-flavored in copy; either generalize it to a
+  'StoredProgramTile' that both UCs share, or template a thin FormatTile variant.
+
+∴ this UC reduces to: (1) a format program, (2) generalize/rename the tile component to
+be program-agnostic, (3) the sweep half waits on FUP-123's scheduler. The risky parts
+(safety, transactionality, intent gating, the RPC slice) are DONE.

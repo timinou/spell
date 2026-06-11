@@ -1,0 +1,113 @@
+#+TITLE: P3: find-as-NIF proof — pi-kernel carve-out + OwnerId + rustler skin + 3 gates (WS-B derisk)
+#+STATE: ITEM
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: PLAN-334-p3-find-as-nif-proof-pi-kernel-carve-out
+
+* Initial Message
+
+P3 (NIF): Can you try it out? Will the warm kernel keep mini-sessions separate? What else besides improvements can it do? Is it strong improvements?
+W4 (stored programs): explain what that means please, what are the possibilities? How hard is the integration?
+Deferred, documented: D3, E4: what does it do?
+
+Think deeply
+
+* What this is
+
+The load-bearing WS-B spike: expose ONE tool (`find`, the pure-kernel read path) to a
+BEAM runtime via rustler, over the SAME `execute_code_path_inner` the NAPI uses, and
+prove three contracts. Per spec N-1 this is NOT a toy — its scope includes carving a
+host-agnostic pi-kernel crate. A green P3 means the extraction is DONE, not just derisked.
+
+Reads with: specs/beam-orchestrator/01-vision.md (target arch, the contracts),
+03-roadmap.md (P3 section + dependency graph), 06-execute-substrate.md (N-1/N-2/N-3).
+
+* Honest framing (decided — do not re-litigate)
+
+P3 is a PERFORMANCE + ARCHITECTURE bet, NOT error-relief. W2's offload already killed
+the heap-error class OVER THE EXISTING BRIDGE — the big term is parked once in the Peer
+store and never crosses to the sandbox. The NIF's marginal win there is one JSON+pipe
+round per large result, not a correctness fix. P3's UNIQUE value:
+  1. one warm kernel, N agents (the code-graph index — 100s of MB — built ONCE/node,
+     shared; today every Node session re-indexes).
+  2. true zero-copy handles (D-2 phase 2 / N-3): a term lives in Rust, projected via
+     NIF calls, bytes copied once at final materialize.
+  3. lock-liveness across a fleet (OwnerId + monitor → agent crash anywhere reclaims locks).
+∴ sequence P3 for the WS-B prize. It gates NOTHING we ship now (W4/D3/the BUGs are
+all independent). Do it when WS-B is the goal, not to fix today's errors.
+
+* Verified preconditions (all GREEN — this is why P3 is reachable)
+
+- Host-neutral entry EXISTS: `pub fn execute_code_path_inner(...)` at
+  crates/pi-natives/src/code_path/napi.rs:396. NAPI is a thin skin OVER it; rustler is
+  a SECOND skin over the SAME fn — not a reimplementation.
+- Greenfield: grep `rustler` across crates → 0 hits; no pi-kernel crate exists.
+  Nothing to undo; pure addition.
+- Toolchain present: cargo + elixir + mix + erl all on PATH.
+- ISOLATION PRIMITIVE ALREADY EXISTS (the biggest unknown, now answered): in
+  crates/pi-code-engine/src/buffer.rs the BufferRegistry partitions by an OPAQUE
+  `session_id: String` — edits keyed by it (L119/225/316), undo/redo SESSION-SCOPED
+  (`undo_scoped(session_id)` L245), conflict detection keys off `entry.session_id != sid`
+  (L385). ∴ "will the warm kernel keep mini-sessions separate?" → YES, by construction
+  already shipped. N-1's OwnerId is a RENAME (session_id → opaque owner token; today a
+  Node session id, tomorrow a BEAM pid string) + a reclaim HOOK, not a redesign.
+
+* The three acceptance gates (this IS the acceptance — "find works" is NOT)
+
+1. correctness   NIF find returns the SAME chunks as the NAPI path for a corpus of
+                 targets (paths, globs, slices, symbols).
+2. panic-safety  a deliberately panicking find → {:error, ...}; the BEAM NODE SURVIVES.
+                 (NAPI panic kills 1 Node proc; NIF panic kills the WHOLE node → every
+                 NIF boundary MUST catch_unwind → {:error}. This is the new contract.)
+3. lock-liveness owning BEAM proc killed mid-op → file lock reclaimed via process
+                 monitor + ResourceArc Drop calling the OwnerId reclaim hook.
+
+* Scope (N-1 — the kernel split is PART of P3)
+
+- Carve a host-agnostic `pi-kernel` crate out of pi-natives (napi.rs is already a
+  marshalling skin; this makes that boundary a CRATE boundary). Audit that no
+  orchestration/state logic leaked into the NAPI layer; if it did, extract to core
+  first and LIST what moved (the "kernel_truth: unsure" item from the roadmap).
+- OwnerId abstraction in the lock table: owner = opaque token; reclaim hook the host
+  registers (Node: async-context teardown; BEAM: monitor + ResourceArc Drop).
+- rustler skin over execute_code_path_inner; the three gates proven against the REAL
+  core, not a throwaway.
+- Scheduler classification: tag which kernel ops are <1ms (regular sched) / DirtyCpu
+  (resolve/edit/graph) / must-not-NIF (external-proc). find-read is DirtyCpu.
+
+* N-2 (interim read scoping — keep in this plan, do not skip)
+
+While Node remains session owner (pre-P5), the NIF lane serves ONLY non-index,
+non-mutable paths: file reads/slices, org queries, memory search. Graph edges
+(def→/ref→), ALL writes, anything touching buffer_registry or undo history stay
+bridge-served. Zero index duplication, zero undo-history forking. Cutover of graph +
+writes is P5's job, not P3's.
+
+* N-3 (handles → ResourceArc — the payoff, after gates green)
+
+Once NIF reads land, swap the HandleStore backing ETS → ResourceArc: tool results live
+in Rust; handle-aware builtins project via NIF calls; transfer cost for served paths →
+0. The LANGUAGE SEMANTICS (D-2) DO NOT CHANGE — this is why W2 and P3 ran in parallel
+without invalidating each other. The HandleStore behaviour (put/project/realize/
+release/rehome/stats) is already backing-agnostic by design.
+
+* Files (indicative)
+
+- NEW crates/pi-kernel/ (carved from pi-natives).
+- crates/pi-natives/src/code_path/napi.rs — becomes a thin re-export over pi-kernel.
+- crates/pi-code-engine/src/buffer.rs — session_id → OwnerId + reclaim hook.
+- NEW beam-side rustler NIF crate (beam/ or a new crate) + Elixir wrapper.
+- crates/pi-edit-broker/ — OwnerId reclaim wiring.
+
+* Acceptance
+
+3 gates green against the EXTRACTED pi-kernel (not a throwaway); a killed BEAM owner
+has its lock reclaimed via the OwnerId hook; kernel-cleanliness audit says core is
+clean OR lists exactly what to extract; scheduler classification documented.
+
+* Relationships
+
+- Gates P5 (tool surface → NIF) and thereby P6 (subagents on BEAM). Gates NOTHING in
+  the execute-substrate error work. P0' (fup-095-nuke-lsp-tool merge) gates only the
+  lsp slice of P5, not P3. Multi-day/greenfield — sequence behind W4/D3 unless WS-B is
+  the active goal.

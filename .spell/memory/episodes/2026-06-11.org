@@ -1,0 +1,210 @@
+#+TITLE: Episodes 2026-06-11
+
+** ITEM Execute nil-poisoning: missing-key nil silently absorbed by collection ops — add strict accessor (E7)
+
+Shipped: get!/get-in! strict accessors (PATCH-6). Premise corrected empirically (keyword→string already resolves; real poison = missing-key nil absorbed by count/map). 14 nil_poison tests + full BEAM suite green. Default nil-returning access unchanged (back-compat).
+:PROPERTIES:
+:CUSTOM_ID: EP-ca1aa7c89338d49c
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-11T11:53:54Z
+:END:
+:RELATIONS:
+ABOUT: BUG-448-execute-nil-poisoning-silent-keyword-get
+:END:
+** ITEM Execute HandleStore + session bindings leak — no reaper, unbounded session-lifetime growth
+
+Shipped: session-store LRU reaper + ceiling (PATCH-5), tools.executeSessionStoreMb setting. Review caught+fixed 2 silent gaps (realize_handle evicted→nil made loud; persist_bindings missing {:evicted} clause crash → tombstone). 92 BEAM tests + 5 properties green, warnings-free.
+:PROPERTIES:
+:CUSTOM_ID: EP-2ece35a1a2faf67d
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-11T11:54:08Z
+:END:
+:RELATIONS:
+ABOUT: BUG-447-execute-handlestore-session-bindings-lea
+:END:
+** ITEM Stored programs (W4): PTC-Lisp programs as durable, re-runnable values via execute lane
+
+Shipped W4 read-only core: stored-program.ts (StoredProgram contract + assertReadOnly read-only guard reusing effects.ts arg-refinement + validateStoredProgram), validate peer method (PATCH-7) + client.validate + ExecuteTool.validateProgram/runStored. 20 tests green; execute+client 34 green; BEAM 92+5 green. Callers 2/3 (org tile, canvas) deferred per FEAT scope; caller 1 (memory playbook) wiring is a thin consumer atop the shipped core. Discovered+filed FUP-114 (policy pre-filter inconsistency). W4-write remains gated on D3 (FUP-112).
+:PROPERTIES:
+:CUSTOM_ID: EP-407b2bcfbe3817b9
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-11T11:54:49Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-810-stored-programs-w4-ptc-lisp-programs-as
+:END:
+** ITEM Execute substrate clean-field + W4-read session: filed 8 org items (BUG-447 reaper, BUG-448 nil-block, FEAT-810 W4-read, PLAN-333 D3, PLAN-334 P3, PLAN-335 umbrella, FUP-112/113), then implemented the 3 clean-field+build items. Key lessons: (1) BUG-448 premise was FALSE — verified empirically that flex_access already resolves keyword→string AND hyphen→underscore, so (:items r) on string-keyed map returns the value; real nil-poison is narrower (missing-key nil absorbed by count→0/map→[], while arithmetic already fails loud). Corrected to opt-in get!/get-in! strict accessors, NOT a default hard error (nil-punning relied upon in functions.exs). (2) Reviewing subagent output caught 2 silent-degradation gaps the reaper agent left: realize_handle evicted→nil and persist_bindings missing {:evicted} clause (CaseClauseError crash) — both made loud, matching the hardening thesis (silent wrong > loud crash). (3) The reaper tests had isolation defects: singleton HandleStore session bucket not reset in setup (order-dependent) + knife's-edge count assertion at ceiling boundary — fixed by releasing session bucket in setup and rewriting the count assertion as a deterministic coldest-first LRU property test. (4) W4 read-only guard reuses effects.ts effectOf with arg-refinement so (tool/org {:command "dashboard"}) correctly classifies as read despite org's static write tag. Discovered FUP-114: catalog pre-filter (isAllowed, name-static) is inconsistent with the per-call arg-aware gate. Final: BEAM 92 tests+5 props green across seeds, Node 139 green, all warnings-free.
+:PROPERTIES:
+:CUSTOM_ID: EP-d5310744c619de1
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-11T11:59:53Z
+:END:
+:RELATIONS:
+ABOUT: CON-execute-substrate-w1-w3-shipped--psettle
+:END:
+** ITEM CodePath: §call[name=X] never matches call callees + marquee edit recipe $1 binds callee not arg
+
+Fixed: predicates.rs matches_name_attribute() consults function/macro callee fields; edit.md recipe corrected to logger.info$2 (keeps args). Tests: name_predicate_tests.rs (4), napi edit_md_structural_recipe_preserves_arguments (1). Fail-without/pass-with confirmed; live verified across TS/Py/Rust.
+:PROPERTIES:
+:CUSTOM_ID: EP-2210cd34c985550b
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-11T14:33:22Z
+:END:
+:RELATIONS:
+ABOUT: BUG-454-codepath-callnamex-never-matches-call-ca
+:END:
+** ITEM CodePath: bare symbol/structural query renders kind label but NULL content (no source shown)
+
+Fixed: walker.rs structural loop defaults content to node source span when no qualifier present. Test: bare_symbol_query_populates_content. qualifier_tests non-applicable (content None) still passes. Fail-without/pass-with confirmed; live verified.
+:PROPERTIES:
+:CUSTOM_ID: EP-3cca3d0740afbb7d
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-11T14:33:34Z
+:END:
+:RELATIONS:
+ABOUT: BUG-455-codepath-bare-symbol-structural-query-re
+:END:
+** ITEM CodePath edge queries (def→/ref→/call→) rebuild graph cold per process — 78s first-query stall despite warm persisted cache
+
+Fixed: get_or_build_graph now warm-loads .spell/graph/workspace.bin when cache_status==Fresh (mirrors code_graph.rs::ensure_graph), falling back to full build on Missing/Stale. Test: rebuild_after_memory_drop_warm_loads_from_disk. Combined with FEAT-811 (lazy BM25), steady-state cold-process first edge query 78s→~1s; verified live.
+:PROPERTIES:
+:CUSTOM_ID: EP-e64d965aeba09f21
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-11T15:46:04Z
+:END:
+:RELATIONS:
+ABOUT: BUG-456-codepath-edge-queries-def-ref-call-rebui
+:END:
+** ITEM CodeGraph::new eagerly rebuilds BM25 search index on every load — ~20s of edge-query warm-load cost is search work edges never use
+
+Implemented Option A: CodeGraph.search_index is now OnceLock<SearchIndex>, built lazily via search_index_lazy() on first bm25_search/search_index() call. new() and with_vectors() no longer build it eagerly. Manual Clone impl carries a built index or leaves it unbuilt. Search lane (pi-knowledge-worker) builds on first search — 31 tests green. Edge queries skip BM25 entirely. Test: search_index_is_built_lazily. Combined with BUG-456: cold-process first edge query 78s→~1s (verified live, no-edits fresh process). pi-code-graph 162, pi-natives 457, pi-knowledge-worker 31, pi-code-engine 216 — all green.
+:PROPERTIES:
+:CUSTOM_ID: EP-33c191e890fea566
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-11T15:46:22Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-811-codegraphnew-eagerly-rebuilds-bm25-searc
+:END:
+** ITEM D3: Transactional write lane for execute — all-or-nothing program effects (kills E4 partial effects)
+
+SHIPPED W1+W2+W3, reviewer-cleared each wave (9 findings found+fixed across 3 swarms). Mechanism corrected mid-flight from broker-MultiCommit (wrong: edit/create bypass pi-code-engine, write direct to disk) to optimistic-apply + program-scoped snapshot/rollback at the Node dispatch layer. W1 snapshot/rollback + exec_id threading (4 review fixes). W2 DYNAMIC mixed-effect guard at dispatch (review caught fatal fail-open in static-regex design \u2192 moved to dynamic, catches value-position evasion). W3 crash-window journal (review caught P1 cross-process clobber \u2192 pid liveness probe + nonce + atomic write). Kills E4 \u2014 the last state-corrupting error class. 179 Node + 92 BEAM + 5 props green. Docs: execute.md + specs/08. Residuals filed: FUP-116 (concurrent-program atomicity), FUP-117 (static-lint accuracy), FUP-118 (journal startedAt). Unblocks FUP-112 (W4-write).
+:PROPERTIES:
+:CUSTOM_ID: EP-e21594ef24904e7b
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-11T16:18:43Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-333-d3-transactional-write-lane-for-execute
+:END:
+** ITEM D3 transactional write lane (PLAN-333) shipped end-to-end with 3 interlaced reviewer swarms (9 findings, all fixed). KEY LESSONS: (1) The plan's core mechanism was WRONG and an explore agent caught it before any code: edit/create tools BYPASS pi-code-engine (they call the kernel \u2192 write direct to disk), so the broker MultiCommit/edit_transaction path the plan assumed doesn't apply. Correct mechanism = optimistic-apply + program-scoped snapshot/rollback at the Node DISPATCH layer, lifting edit.ts's existing per-call strict-transaction to whole-program scope. (2) exec_id threading: BEAM already sends exec_id in tool_call frames; client.ts used it only for the abort signal. Added onExecId hook (called at wire-id allocation) so the scope keys to the same id the tool_calls carry. (3) W2 review caught a FATAL fail-open: a static regex preflight (extractToolCalls) can't see a write tool invoked in VALUE position ((let [w tool/org] (w {:command set}))) because PTC-Lisp treats tool/NAME as a first-class RuntimeCallable. Fix: move the guarantee to a DYNAMIC guard at the dispatch layer (TransactionScope.guard sees every call by resolved name+effect); demote the static check to advisory. General principle: a text-scan guard on a language with first-class callables ALWAYS fails open; enforce at dispatch. (4) W3 review caught a multi-process data-corruption bug: a shared journal dir + pid-equality liveness check \u2192 process B's startup sweep restores-over and deletes process A's LIVE in-flight journal. Fix: process.kill(pid,0) liveness probe (recover only DEAD pids) + per-launch nonce (defeat pid reuse) + atomic temp+rename write (defeat torn records). General principle: any crash-recovery journal in a shared dir MUST probe liveness, not assume pid identity. (5) Reviewer swarms between waves caught what happy-path tests missed every time \u2014 all 9 findings were in edge cases (unreadable files, re-init retry, concurrent capture, value-position calls, cross-process sweep). Result: E4 (the last state-corrupting error class) is dead. Filed FUP-116/117/118 for honest residuals. 179 Node + 92 BEAM tests green.
+:PROPERTIES:
+:CUSTOM_ID: EP-aac25c49202801ec
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-11T16:19:08Z
+:END:
+:RELATIONS:
+ABOUT: CON-execute-substrate-w1-w3-shipped--psettle
+:END:
+** ITEM Ordinal-after-attribute predicate (§call[name=x][0]) — verify find-tool vs napi parity post-rebuild
+
+Verified no real bug — was a stale-native artifact. On clean rebuilt native, find-tool and napi agree across §call[name=print] base (n=2), [0], [1], [2] (n=0), [-1], [0..1]; ordinals index correctly and content is populated (BUG-455 fix applies to filtered sets too). Original divergence was the pre-BUG-454 native loaded in-session where name= matched 0 calls. No code change needed.
+:PROPERTIES:
+:CUSTOM_ID: EP-c3e6a182185e931b
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-11T17:00:10Z
+:END:
+:RELATIONS:
+ABOUT: BUG-460-ordinal-after-attribute-predicate-callna
+:END:
+** ITEM status index reports warm:false with misleading message — warmth tracks in-process DashMap only, decoupled from persisted graph cache
+
+Fixed: added code_graph_cache::disk_cache_state (Fresh/Stale/Missing via builder.cache_status, no build). graph_stats handler now reports a `state` field: warm (in-process), cached (fresh disk → sub-second warm-load), stale (disk out of date → rebuild), cold (no cache → full build), each with an accurate reason. Tests: disk_cache_state_transitions_missing_to_fresh. Verified live: fresh process reports state=cached not warm:false.
+:PROPERTIES:
+:CUSTOM_ID: EP-41505f9c8b4c6352
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-11T17:19:40Z
+:END:
+:RELATIONS:
+ABOUT: BUG-457-status-index-reports-warmfalse-with-misl
+:END:
+** ITEM undo/redo effective diff prints + before − (reversed vs edit-diff − then + ordering)
+
+Fixed: reverse_unified_diff now buffers each contiguous +/- change block and flushes removals (−) before additions (+), matching unified-diff convention, instead of swapping signs in place (which yielded +-before-−). Content-preservation for -- / ++ comment lines retained. Tests updated: reverse_unified_diff_swaps_signs_and_ranges, _preserves_comment_content_lines; added _multiline_block_is_minus_first. Verified live: undo diff is − then +.
+:PROPERTIES:
+:CUSTOM_ID: EP-179d5a8dab4c7a27
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-11T17:19:41Z
+:END:
+:RELATIONS:
+ABOUT: BUG-459-undo-redo-effective-diff-prints-before-r
+:END:
+** ITEM #body on a class method also matches the implements-interface method_signature → noisy non-fatal diagnostic
+
+Fixed: walker post-pass drops non-applicable-kind matches (e.g. interface method_signature) when ≥1 sibling satisfied the qualifier and results.len()>1. Single-node non-applicable case keeps its diagnostic (qualifier_tests:254 still passes). Test: ts_body_on_implements_method_drops_signature_noise. Verified live: Server.handle#body → 1 node, 0 diagnostics.
+:PROPERTIES:
+:CUSTOM_ID: EP-153651acfa54172b
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-11T17:20:03Z
+:END:
+:RELATIONS:
+ABOUT: BUG-458-body-on-a-class-method-also-matches-the
+:END:
+** ITEM W4-write: stored programs that mutate — enable write tools in stored programs once D3 lands
+
+SHIPPED with the three-valued RunIntent design (interactive | visible-refresh | background-tick), reviewer-cleared (1 P1 silent-mutation + 2 lower found and fixed). StoredProgram.mode read|write; validateStoredProgram branches (read\u2192assertReadOnly, write\u2192assertTransactionSafe rollback-safe bar). Structured TxnOutcome (committed|rolled-back|dry-run|inert|none) on details.transaction, wired in all settle paths. runStored gates SAFETY-FIRST on a runtime readOnly backstop (not the declared flag) so an omitted/mislabeled mode can never silently commit \u2014 read mode discards any write in every intent; write mode commits only interactive or armed-background-tick; visible-refresh always dry-run previews. 13 W4-write tests (6 unit mode-bar + 7 real-BEAM incl. the decisive omitted-mode-never-commits regression) + 192 full ptc-runtime suite green. No new runtime \u2014 rode entirely on D3 + W4-read. 4 consumer use-case FUPs written: FUP-119 codemod (visible-refresh), FUP-120 derived-doc, FUP-121 format (dual-context), FUP-122 changelog (background-tick).
+:PROPERTIES:
+:CUSTOM_ID: EP-e9dfcc1f1815a97c
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-11T18:19:06Z
+:END:
+:RELATIONS:
+ABOUT: FUP-112-w4-write-stored-programs-that-mutate-ena
+:END:
+** ITEM W4-write (FUP-112) shipped: stored PTC-Lisp programs may now MUTATE transactionally, riding D3's all-or-nothing lane + W4-read's guard infrastructure (NO new runtime). KEY DESIGN: three-valued RunIntent supplied by the CALLER (not baked in the program) \u2014 interactive (writes commit) | visible-refresh (dry-run preview, the product for a watching human) | background-tick (inert unless tile armed autoWrite). The intent is a property of the RUN CONTEXT, not the program \u2014 the same stored program behaves correctly in all three depending on how a caller (dashboard tile / canvas / scheduled tick) wires it. KEY LESSON (reviewer caught a P1 silent-mutation): the FIRST design gated on a declared StoredProgram.mode field that defaults to 'read' \u2014 so a write program with OMITTED or lost mode would fall through the read path and COMMIT ungated under visible-refresh/background-tick (the exact silent mutation the feature exists to prevent). FIX = make safety a RUNTIME BACKSTOP not a declared flag: read mode (incl. omitted) runs the program but DISCARDS any file write (force-rollback) in EVERY intent, reporting a loud read-only-violation. Safe-by-discard, not safe-by-declaration. General principle: a safety gate must key on what the code DOES at runtime, never on a declarable/omittable attribute \u2014 the same lesson as D3's W2 (dynamic dispatch guard beats static regex). Added 'inert' TxnOutcome distinct from 'none' so a tile tells 'skipped-unarmed' from 'ran-no-writes'. Structured TxnOutcome {outcome, files, paths, restoreFailures} on details.transaction so tile hosts RENDER from it, never recompute rollback. Wrote 4 grounded consumer use-case FUPs each landing in its natural intent quadrant: FUP-119 codemod tile (visible-refresh drift preview), FUP-120 derived-doc sync (visible-refresh row-diff), FUP-121 format-drift (dual-context synthesis proving intent is contextual), FUP-122 nightly changelog (background-tick, justifies inert-default). 13 W4-write + 192 ptc-runtime tests green.
+:PROPERTIES:
+:CUSTOM_ID: EP-116182e5dcea44a7
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-11T18:19:59Z
+:END:
+:RELATIONS:
+ABOUT: CON-execute-substrate-w1-w3-shipped--psettle
+:END:
+** ITEM W4-write UC1: codemod tile — a stored transform you keep and re-apply on drift
+
+SHIPPED in Spell Team Chat (not canvas \u2014 user chose team-chat host). Investigation reframed scope: the tile needed NEW plumbing (the FUPs flagged this), built as a vertical slice across 3 packages + substrate. SUBSTRATE: executeSchema gained mode/intent/auto_write; execute() routes to runStored when present (now reachable via the tool surface for ANY host). AGENT: run_stored RpcCommand + rpc-mode handler (mirrors bash, non-LLM). SERVER: BridgeRpcCommand run_stored passthrough (WS dispatch forwards generically; external CLI sessions correctly reject it). FRONTEND: CodemodTilePanel.svelte realizing this FUP's design \u2014 localStorage-persisted tiles, dry-run-on-open drift signal ('would change N files', zero mutation), [Apply]=interactive commit, \u23fb auto-arm toggle, audit history (commit AND rollback equal weight), calm-by-default amber-drift/green-commit. Reviewer-gated: confirmed safety invariant (preview never mutates, external-session reject, policy applies); 2 fixes (P1 $effect retry-storm \u2192 `checked` flag; P2 wire-field ok\u2192success error check). svelte-check 0/0, build OK, 19 team-chat + 14 substrate tests green. DEFERRED as follow-ups (per scope decision): tile-state SERVER persistence (localStorage is v1, per-browser; team-chat is multiplayer), a per-tile background-tick SCHEDULER (the autoWrite arming works; nothing fires unattended ticks yet \u2014 the agent issues them today). FUP-121 (format tile) now reuses this exact substrate \u2014 a thin follow-up.
+:PROPERTIES:
+:CUSTOM_ID: EP-b460443e899362b9
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-11T20:41:40Z
+:END:
+:RELATIONS:
+ABOUT: FUP-119-w4-write-uc1-codemod-tile-a-stored-trans
+:END:
+** ITEM Codemod tile (FUP-119) shipped in Spell Team Chat as a vertical slice. KEY ARCHITECTURE FACT (load-bearing for any future tile/consumer): the team-chat frontend CANNOT invoke a tool directly \u2014 every path is prompt-only (LLM turn). The WS BridgeRpcCommand union had no tool-invoke verb. Reaching ExecuteTool.runStored required NEW plumbing across 3 packages: (1) coding-agent rpc-types.ts run_stored RpcCommand + rpc-mode.ts handler (mirror the `bash` case = a direct non-LLM execution command; calls session.getToolByName('execute').execute(...)); (2) spell-server rpc/types.ts BridgeRpcCommand run_stored variant (WS dispatch forwards msg.command generically to hub.send \u2014 no per-type whitelist \u2014 and WsClientMessage.rpc uses BridgeRpcCommand, so one union edit covers the whole server path; external CLI sessions correctly reject via #dispatchExternalRpc, only spawned web sessions are steerable); (3) team-chat lib/protocol.ts mirror (hand-synced with server) + App.svelte onRunStored (ws.request rpc round-trip) + Shell wiring + the .svelte tile. SUBSTRATE TRICK that made the agent side trivial: extended executeSchema with mode/intent/auto_write and had execute() route to runStored when present \u2014 so runStored is reachable through the generic tool surface (.execute) without a new tool. Persistence: spell-server StateStoreManager is READ-ONLY (SQLite {readonly:true}); no writable state API \u2014 used localStorage (per-browser v1; deferred shared server store to FUP-123). No per-tile tick scheduler exists \u2014 autoWrite arms but nothing fires (deferred to FUP-123). REVIEWER caught 2 defects: P1 a Svelte $effect that re-fired run_stored forever when the dry-run threw (preview stayed undefined \u2192 condition stayed true) \u2014 fix = a `checked` flag set on success AND failure so the on-open dry-run fires once, retry is explicit; P2 the error guard read response.ok but the wire field is `success` (RpcResponseEvent) \u2014 agent errors slipped through as undefined data \u2192 downstream TypeError; fix = read success/error. GENERAL LESSON: a Svelte $effect that triggers an async action gated on a field the action sets must gate on a flag set in BOTH success and failure paths, else a throwing action loops forever. Scoping lesson: when a FUP assumes a host surface, VERIFY it exists before building \u2014 the canvas round-trip existed but didn't reach runStored, team-chat couldn't reach tools at all; the honest move was substrate-first + one real tile + deferring persistence/scheduler. svelte-check 0/0, build OK, 19 team-chat + 14 substrate tests green.
+:PROPERTIES:
+:CUSTOM_ID: EP-7c09c05e109f7990
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-11T20:43:51Z
+:END:
+:RELATIONS:
+ABOUT: CON-execute-substrate-w1-w3-shipped--psettle
+:END:

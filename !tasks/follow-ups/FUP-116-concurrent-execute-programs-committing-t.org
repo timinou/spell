@@ -1,0 +1,70 @@
+#+TITLE: Concurrent execute programs committing the same file — wire broker MultiIntent/MultiCommit
+#+STATE: ITEM
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: FUP-116-concurrent-execute-programs-committing-t
+
+* Initial Message
+
+P3 (NIF): Can you try it out? Will the warm kernel keep mini-sessions separate? What else besides improvements can it do? Is it strong improvements?
+W4 (stored programs): explain what that means please, what are the possibilities? How hard is the integration?
+Deferred, documented: D3, E4: what does it do?
+
+Think deeply
+
+* Context (separated from PLAN-333 D3 during investigation)
+
+D3 (PLAN-333) kills E4 partial-effects via program-scoped snapshot/rollback at the
+Node dispatch layer. That handles a SINGLE program's atomicity. It does NOT handle
+TWO concurrent execute programs writing the SAME file (executes can overlap; admission
+ceiling is 8). Program A's rollback could clobber Program B's committed write, or two
+optimistic-applies could interleave.
+
+The substrate for this EXISTS but is stubbed: crates/pi-edit-broker has the
+`ClientMessage::MultiIntent`/`MultiCommit`/`MultiAbort` protocol + `BrokerState`
+`active_txns: HashMap<TxnId, TxnState>` + `try_grant_multi`/`record_multi_commit`, and
+the `CoordClient` trait has `multi_intent`/`multi_commit`/`multi_abort` methods \u2014 but
+`SocketCoordClient`'s implementations are STUBS returning `Acknowledged` immediately
+(crates/pi-code-engine/src/coord/client.rs ~line 75-90). No wire messages are sent.
+
+Critically: the Spell `edit`/`create` tools bypass pi-code-engine entirely (kernel
+writes directly to disk), so even wiring the broker stubs would NOT cover the ptc
+write path unless those tools are ALSO routed through the coordinated buffer registry
+\u2014 a larger change.
+
+* Scope
+
+1. Implement SocketCoordClient::multi_intent/multi_commit/multi_abort (send the
+   ClientMessage variants, handle ServerMessage Multi* replies). Files:
+   crates/pi-code-engine/src/coord/socket.rs, client.rs.
+2. Implement BrokerState try_grant_multi / record_multi_commit (atomic all-or-none
+   intent reservation + unit commit). Files: crates/pi-edit-broker/src/state.rs,
+   conn.rs.
+3. Decide + implement how the ptc write path participates: either route edit/create
+   through the coordinated buffer registry, OR have D3's TransactionScope take a
+   broker MultiIntent over its touched files at program start (cross-program lock),
+   committing/aborting as a unit. The latter reuses D3's scope without rewriting the
+   edit tool \u2014 likely the cleaner path.
+4. PeerConflict semantics: if a concurrent program holds an intent on a file this
+   program wants, fail the whole program's commit with a typed PeerConflict (reuse the
+   existing CodeEngineError::PeerConflict surface), nothing lands, agent re-runs.
+
+* Tests
+
+- Two concurrent programs writing the same file: one wins, the other gets a typed
+  PeerConflict, no torn/clobbered state.
+- Two concurrent programs writing DIFFERENT files: both commit (no false conflict).
+- crates/pi-code-engine/tests/coord_transaction.rs has the single-file precedent;
+  add the multi-file analogue.
+
+* Acceptance
+
+Concurrent execute programs touching overlapping files are serialized via the broker:
+one commits, the other gets PeerConflict with zero partial/clobbered landing.
+Different-file programs run concurrently with no false conflict. Rust suites green.
+
+* Relationships
+
+Follow-up to PLAN-333 (D3). D3's single-program atomicity does NOT depend on this;
+this closes the CONCURRENT-program gap. Lower priority \u2014 single-session sequential use
+is the common case; concurrent same-file writes from two overlapping programs are rare.

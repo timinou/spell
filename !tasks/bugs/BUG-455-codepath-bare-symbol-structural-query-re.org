@@ -1,0 +1,36 @@
+#+TITLE: CodePath: bare symbol/structural query renders kind label but NULL content (no source shown)
+#+STATE: DONE
+#+SESSION_ID: 1503acd8825ce2c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-24-49-929Z_1503acd8825ce2c9.jsonl]]
+#+CUSTOM_ID: BUG-455-codepath-bare-symbol-structural-query-re
+#+COMPLETION_HASH: 39949aadaea3907a
+
+* Initial Message
+
+i reloaded the session, test-drive this again.
+
+## Symptom
+`find "file::Symbol"` and `find "file::§call[text~=\"x\"]"` — the two most natural read forms — render the kind label with **no source text**:
+```
+find ".scratch_cp/svc.ts::increment"
+→ /…/svc.ts  [§function_declaration]      (and nothing else)
+```
+The agent sees *that* something matched but not *what*. Useless for reading.
+
+## Root cause
+`crates/pi-natives/src/code_path/code_resolver/walker.rs` structural-query loop (~L165): `NodeRef.content` is initialised `None` and only populated when a qualifier (`#body`/`#raw`/`#outline`) or a SymbolSlice is present. A bare symbol or `§kind[pred]` query carries **no qualifier** → content stays `None` → blank render.
+
+Confirmed via napi: `svc.ts::increment` → `content: NULL`; `svc.ts::increment#body` → `content: "{ return n + 1; }"`.
+
+This is the content-half sibling of BUG-449 (which fixed only the kind *label* misclassification).
+
+## Fix
+In the walker loop, when `_qualifier.is_none()` (and no SymbolSlice already set content), default `content` to the matched node's own text span (`src[node.start_byte()..node.end_byte()]`). Must NOT touch the qualifier-present-but-non-applicable path (qualifier_tests.rs:254 asserts `content.is_none()` there — that path has `_qualifier.is_some()`).
+
+## Acceptance
+- `file::Symbol` (no qualifier) returns the whole declaration text.
+- `§call[text~="x"]` returns each matched call's source.
+- qualifier_tests.rs:254 (non-applicable qualifier → None) still passes.
+- fail-without/pass-with regression test.
+
+NOTE [2026-06-11]: Fixed: walker.rs structural loop defaults content to node source span when no qualifier present. Test: bare_symbol_query_populates_content. qualifier_tests non-applicable (content None) still passes. Fail-without/pass-with confirmed; live verified.

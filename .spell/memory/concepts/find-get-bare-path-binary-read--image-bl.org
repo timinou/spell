@@ -1,0 +1,22 @@
+#+TITLE: find-get-bare-path-binary-read--image-bl
+
+** ITEM find/get bare-path binary read: image-block routing
+
+Problem: `find foo.png` / `get foo.png` dumped binary bytes as mojibake text. Root cause: GetTool auto-attaches `#raw` for EVERY bare-path file (get.ts ~L481), and kernel `resolve_raw`→`decode_text` (pi-code-path/src/dialects/text/qualifiers.rs) latin-1 byte→char force-decodes non-UTF8 into Content::Text. The whole image-block pipeline (Content::Image, kernel #image qualifier resolve_image, codepath-result.ts extractImages, get.ts L616 pushes {type:"image"} blocks) existed and was wired but the bare-file dispatcher never routed images into it — #image only fired on a manual `foo.png#image`.
+
+Structural fix (3 parts):
+1. utils/mime.ts: added `classifyFileForRead(path) -> {kind:"image"|"binary"|"text"}` reusing existing `detectMimeFromBytes` (magic-byte image sniff) + a binary sniff (NUL byte or strict-UTF8 decode failure over first 8KiB, matching kernel anchors.rs FsAnchor::Binary). Single source of truth, both sides agree.
+2. tools/get.ts: in the bare-file stat branch, classify by CONTENT before picking a qualifier. image→new `readImageFile()` (reads via canonical `loadImageInput` from utils/image-input.ts — same autoResize+blockImages+20MB ceiling as file mentions/inspect_image — returns text note + {type:"image"} block). binary→short-circuit textual `[binary file: … size]` marker (never #raw mojibake). text→#raw as before. Routing via loadImageInput (not kernel #image) also avoids the >512KB handle-only drop because loadImageInput resizes.
+3. tools/codepath-result.ts extractImages: hardened the handle-only case (kernel #image omits inline bytes >512KiB → handle-only node) to emit a marker instead of silently dropping, for explicit `…#image` targets.
+
+find delegates to GetTool(session) so it inherits the fix. Tests in test/get.test.ts (real PNG→image block, NUL binary→marker, blockImages→marker, UTF8 text→#raw). Verified e2e: dot.png→["text","image"], blob.bin→[binary file marker], hi.txt→#raw text.
+
+Key trap: GetTool.execute's 5th arg is `_context` NOT session; session comes from the CONSTRUCTOR `new GetTool(session)`. Tests passing session as 5th arg silently get default settings.
+:PROPERTIES:
+:CUSTOM_ID: CON-find-get-bare-path-binary-read--image-bl
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-11T17:48:24Z
+:END:
+:RELATIONS:
+:END:

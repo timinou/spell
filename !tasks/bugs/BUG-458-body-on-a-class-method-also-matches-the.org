@@ -1,0 +1,25 @@
+#+TITLE: #body on a class method also matches the implements-interface method_signature → noisy non-fatal diagnostic
+#+STATE: DONE
+#+SESSION_ID: 1503acd8825ce2c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-24-49-929Z_1503acd8825ce2c9.jsonl]]
+#+CUSTOM_ID: BUG-458-body-on-a-class-method-also-matches-the
+#+COMPLETION_HASH: 3dd937ae62097b81
+
+* Initial Message
+
+i reloaded the session, test-drive this again.
+
+## Symptom
+For a class implementing an interface, `find "file.ts::Server.handle#body"` resolves the class `method_definition` (correct) AND the interface's `method_signature` of the same name (from `implements Handler`). The signature node has no body → emits a non-fatal `[unsupported_operation] qualifier 'body' does not apply to node kind 'method_signature'` diagnostic alongside the correct result.
+
+## Impact
+Cosmetic: the right answer is returned, but the spurious diagnostic adds noise and could mislead an agent into thinking the edit target was ambiguous.
+
+## Fix options
+- When a `#body`/`#sig` qualifier yields ≥1 applicable node, suppress non-applicable-kind diagnostics for sibling matches of the same name (treat as filtered, not errored).
+- Or rank `method_definition` over `method_signature` for body-bearing qualifiers and drop the bodyless match.
+
+## Origin
+Surfaced during adversarial CodePath test-drive (strict-rollback probe on a decorated `implements` class).
+
+NOTE [2026-06-11]: Fixed: walker post-pass drops non-applicable-kind matches (e.g. interface method_signature) when ≥1 sibling satisfied the qualifier and results.len()>1. Single-node non-applicable case keeps its diagnostic (qualifier_tests:254 still passes). Test: ts_body_on_implements_method_drops_signature_noise. Verified live: Server.handle#body → 1 node, 0 diagnostics.
