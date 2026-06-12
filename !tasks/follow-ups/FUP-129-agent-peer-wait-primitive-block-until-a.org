@@ -1,0 +1,40 @@
+#+TITLE: Agent peer-wait primitive — block until a peer reaches a state (FUP-111 wait half, split out)
+#+STATE: ITEM
+#+SESSION_ID: 15022ed13b056c12
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-35-43-468Z_15022ed13b056c12.jsonl]]
+#+CUSTOM_ID: FUP-129-agent-peer-wait-primitive-block-until-a
+
+* Initial Message
+
+review whether FUP-110 and FUP-111 and the Team Chat IPC view still make sense and explain to me what they materially add to the experience and how you'd implement them. Review the code as it is now.
+
+Split out of FUP-111 (2026-06-10) after grounding against live code. FUP-111's QUERY half ships separately (a read tool over peer activity, no transport). THIS item is the WAIT half: a primitive that lets an agent/subagent block until a named peer reaches some state (completed / gate-satisfied / answered / arbitrary predicate). It is request/response semantics (await -> notify), distinct from a read, and carries real deadlock/scheduler hazards. Deferred deliberately; build only against a concrete need.
+
+* What it would add (materially)
+Today an orchestrator can only sequence peers via ROSTER BLOCKERS (declared up front) or by blindly `await`-ing a spawned job to completion. There is no way for a RUNNING agent to say "pause here until `reviewer` has passed its gate, then continue" as a mid-flight decision. A wait primitive enables adaptive coordination: fan out, then have one worker gate on another's partial result without tearing down and re-rostering. Genuinely useful for pipelines whose dependency only becomes known mid-run.
+
+* Why it is NOT free (the hazards — all verified against code)
+1. DEADLOCK. A waits on B while B waits on A. The roster DAG already forbids this statically (MutableDag.#assertAcyclic, Kahn's algorithm, src/task/mutable-dag.ts:?, throws "contains dependency cycles"). A runtime wait primitive BYPASSES that DAG — it creates an edge the scheduler never sees. ∴ a wait primitive MUST carry its own live wait-for graph + cycle check at await time, or it reintroduces exactly the deadlock the DAG was built to prevent.
+2. SCHEDULER STARVATION. Subagents run IN-PROCESS (executor.ts:1360 createAgentSession + :1532 session.prompt — same Bun event loop, despite the runSubprocess name). batch-scheduler drives waves; a naive parked-Promise wait inside a worker turn can stall the wave if the awaited peer is itself queued behind the waiter. Must reason about wave admission, not just promise resolution.
+3. NO CROSS-PROCESS REACH. The wait target may be a peer in another process/instance once peer/federation lands (PLAN-331 deferred wire, FUP-110). In-process today; the primitive's notify side would then need the deferred RequestBroker. So scope MUST be in-tree/in-process until FUP-110 lands.
+4. LIVENESS. An awaited peer that crashes / is aborted / never reaches the predicate must release the waiter. Needs: mandatory timeout + abort propagation + a terminal-status escape (reuse SubagentTracker TERMINAL_STATUSES set).
+
+* Recommended design IF/WHEN built
+- PREFER declarative over imperative: first ask whether the need is really a roster blocker added mid-run. `todo_write` already supports adding nodes with `blockers:[...]` to a live roster (MutableDag.addNode + #assertAcyclic guards the cycle). If the orchestrator can express "B now depends on A" as a roster edge, the EXISTING DAG handles ordering AND cycle rejection for free — no new primitive. This should be the default answer; the wait tool is only for cases that cannot be expressed as a static edge.
+- IF a true runtime wait is needed: model it as `wait_for_peer({ peer, until: "completed"|"gate_passed"|"answered"|predicate, timeoutMs })`. Implement on the AskBroker parked-Promise pattern (ask-broker.ts:168 — Map<id,{resolve}>), keyed on (waiterTaskId, peerTaskId, predicate). Resolve from the SAME EventBus channels the query half reads (task:subagent:progress terminal status, task:ask:answered, a new task:gate:passed if needed).
+- DEADLOCK GUARD (mandatory, not optional): maintain a live waits-on edge set; on each `wait_for_peer`, add the edge to a scratch MutableDag and call topologicalOrder() (throws on cycle) BEFORE parking. On cycle -> reject the tool call with a directive error ("would deadlock: A->B->A; resolve via roster blocker or abort one side"). This REUSES the exact cycle detector the static DAG uses; do not hand-roll a second one.
+- TIMEOUT mandatory: no unbounded wait. Default e.g. 120s, caller-overridable, hard ceiling. On timeout -> resolve with `{ timedOut:true }`, surfaced to the agent as "peer did not reach state in time; proceed with judgment" (mirrors AskBroker's cancelled path).
+- LIVENESS: subscribe peer terminal status; if peer hits a TERMINAL_STATUS without satisfying the predicate -> release waiter with `{ peerTerminated:true }`.
+
+* Dependencies / ordering
+- AFTER FUP-111 query half (shares the EventBus taps + the run-scoped activity registry the query half introduces).
+- Cross-process variant blocked on FUP-110 (deferred comms substrate / RequestBroker).
+- Reuses: AskBroker parked-Promise (ask-broker.ts), MutableDag cycle detector (mutable-dag.ts), TERMINAL_STATUSES (subagent-tracker.ts).
+
+* Open questions
+- Is there a real use case that CANNOT be a mid-run roster blocker? If every concrete need reduces to "add an edge to the live DAG", this primitive should stay unbuilt and `todo_write`-add-blocker is the answer.
+- Predicate richness: terminal-only (cheap, safe) vs arbitrary state predicate (needs a queryable state model on the observation stream — couples tighter to the query half's activity ring).
+- Should a wait edge auto-register as a roster blocker (so the static DAG sees it and the existing cycle/visualisation machinery applies)? This might collapse the whole feature back into the DAG — worth prototyping first.
+
+* Verdict
+Defer. The static roster blocker (todo_write + MutableDag) already covers the safe, declarative version of "wait for a peer", WITH cycle detection. Build this runtime primitive only when a concrete need appears that cannot be expressed as a mid-run roster edge — and even then, lead with the cycle guard, the timeout, and the terminal-status liveness release, all reusing existing substrate.

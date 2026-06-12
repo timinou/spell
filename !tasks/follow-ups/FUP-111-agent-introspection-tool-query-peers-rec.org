@@ -27,3 +27,26 @@ New tool idea from user (2026-06-10). A tool that lets agents and subagents (a) 
 * Relation to other work
 - Distinct from PLAN-331 (which is comms plumbing). This is an agent-FACING capability built ON the plumbing.
 - Distinct from swarm-extension (orthogonal batch pipelines).
+
+* RESCOPED 2026-06-10 — QUERY HALF ONLY (wait half split to FUP-129)
+After grounding against live code, this FUP is now the QUERY half only: a read-only tool letting an agent/subagent ask "what are my peers doing / what have they done". The WAIT half (block until a peer reaches a state) moved to FUP-129 with full hazard analysis (deadlock/starvation/liveness).
+
+** Two factual corrections to the original notes (verified against code)
+1. WRONG PRECEDENT. The original "Registration precedent: task/subprocess-tool-registry.ts" is incorrect. subprocess-tool-registry.ts is a DISPLAY/EXTRACTION registry (extractData/renderInline/renderFinal for TUI rendering of subprocess tool output) — NOT a tool-injection seam. The CORRECT precedent is the AskBroker pattern: a run-scoped object constructed in src/task/index.ts:1570 (`new AskBroker(...)`), threaded through ExecutorOptions (executor.ts:205-206 `askBroker?`), and injected into each subagent's toolset via makeAskOrchestratorTool (ask-tools.ts:52) wired at executor.ts:1332-1333 through createAgentSession's `customTools`.
+2. SubagentTracker IS NOT REACHABLE from subagents. The original "thin read over SubagentTracker maps" has a wiring gap: SubagentTracker is instantiated TUI-side (modes/interactive-mode.ts:351) and consumed by the subagent-viewer component. It does NOT exist in rpc/headless mode and is NOT threaded into executor or subagent sessions. So the query tool CANNOT read it directly. It needs its own run-scoped activity registry (a small peer of AskBroker), fed by the SAME EventBus channel SubagentTracker subscribes to (TASK_SUBAGENT_PROGRESS_CHANNEL = "task:subagent:progress"), constructed in index.ts alongside the broker and threaded via ExecutorOptions.
+
+** Shape (query half)
+- A run-scoped PeerActivityRegistry (new, ~SubagentTracker-lite): subscribes task:subagent:progress (+ optionally task:ask:* and todo:change), keeps a bounded snapshot per task id: { agent, status, lastIntent, currentTool, recentTools, toolCount, durationMs, openAsks, todoSummary }. Lives for the run; disposed with the broker.
+- A `peer_activity` tool (hidden, injected like ask_orchestrator, closed over the registry + the caller's own taskId so it can exclude/annotate self): params e.g. { peer?: string (task id; omit = all siblings), include?: ("tools"|"asks"|"todos")[] }. Returns a compact structured snapshot.
+- Observation-only: pure read of data already on the EventBus. No new transport. C4-safe.
+
+** Implementation sketch
+1. src/task/peer-activity-registry.ts — extract the progress-subscription + snapshot slice of SubagentTracker into a headless, run-scoped class (no TUI deps, no debounce/onChange — just a queryable map). SubagentTracker can later be refactored to wrap it (one-implementation), but ship the registry standalone first.
+2. src/task/index.ts ~1570 — construct PeerActivityRegistry next to AskBroker; pass both via ExecutorOptions.
+3. src/task/executor.ts ~1332 — when the registry is present, push makePeerActivityTool(registry, taskId) into allCustomTools (same block as ask_orchestrator).
+4. src/task/peer-activity-tools.ts — makePeerActivityTool: typebox params, hidden tool, renderCall/renderResult for TUI.
+5. Tests: registry unit (progress in -> snapshot out, bounded), tool unit (peer filter, self-exclusion, empty-when-no-peers).
+
+** Dependencies
+- Independent of FUP-110 (no cross-process) and FUP-129 (wait half). Ships alone.
+- Shares the registry with FUP-129 if/when that is built (the wait half reads the same activity stream).
