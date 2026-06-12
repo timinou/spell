@@ -1975,7 +1975,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		if (!allowedTools.includes(tool)) {
 			const errMsg = `Armed tool "${tool}" not in allowed list for window "${windowId}". Allowed: [${allowedTools.join(", ")}]`;
 			logger.warn("canvas armed tool rejected", { windowId, tool, allowedTools });
-			reply?.({ error: errMsg });
+			// FUP-128: structured error CODE so QML tiles render the failure class
+			// (config error = not retryable) instead of parsing the prose.
+			reply?.({ error: errMsg, code: "not-allowed" });
 			await session.sendCustomMessage({
 				customType: "canvas-tool-invoke",
 				content: `Armed tool rejected: ${tool} (window: ${windowId}) — not in allowlist`,
@@ -2004,7 +2006,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			} else {
 				const errMsg = `Armed tool "${tool}" is not registered in this session`;
 				logger.warn("canvas armed tool not found", { windowId, tool });
-				reply?.({ error: errMsg });
+				reply?.({ error: errMsg, code: "not-found" });
 				await session.sendCustomMessage({
 					customType: "canvas-tool-invoke",
 					content: `Armed tool not found: ${tool} (window: ${windowId})`,
@@ -2034,7 +2036,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				.filter((c): c is { type: "text"; text: string } => c.type === "text")
 				.map(c => c.text)
 				.join("");
-			reply(invokeError ? { error: invokeError } : { result: text });
+			// FUP-126: forward the STRUCTURED result (details + data) alongside the
+			// flattened text. QML tiles read e.g. details.transaction.{outcome,files,
+			// paths} to render drift — without this they could only parse prose. A
+			// rolled-back transaction arrives here as a SUCCESS reply carrying
+			// details.transaction.outcome === "rolled-back" (NOT an error code — FUP-128
+			// keeps the error channel distinct from safe non-commit outcomes).
+			reply(
+				invokeError
+					? { error: invokeError, code: "threw" }
+					: { result: text, details: result.details ?? null, data: result.data ?? null },
+			);
 		}
 
 		await session.sendCustomMessage({

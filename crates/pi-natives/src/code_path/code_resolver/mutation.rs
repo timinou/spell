@@ -21,7 +21,7 @@ use pi_code_path::{
 };
 use serde_json::{Value, json};
 
-use super::CodeResolverImpl;
+use super::NativeResolver;
 
 const MUTATION_SESSION_ID: &str = "pi-code-path-mutation";
 
@@ -319,7 +319,7 @@ fn edit_err_message(e: &pi_code_engine::CodeEngineError) -> String {
 	}
 }
 
-impl CodeResolverImpl {
+impl NativeResolver {
 	/// Resolve a CodePath target to a scoped TextEdit, bypassing the legacy
 	/// `build_target_id → resolve_symbol → single_action` chain.
 	///
@@ -332,7 +332,7 @@ impl CodeResolverImpl {
 	) -> Result<(PathBuf, TextEdit, String), Diagnostic> {
 		let file_path = self.codepath_fs_path(target)?;
 		let profile = self
-			.registry
+			.registry()
 			.match_path(&file_path)
 			.ok_or_else(|| Diagnostic {
 				variant: DiagnosticVariant::NoMatches,
@@ -377,7 +377,7 @@ impl CodeResolverImpl {
 		})?;
 		let cancel = CancellationToken::new();
 		let root = tree.root_node();
-		let nodes = super::walker::evaluate_query(query, vec![root], &source, dialect, &cancel);
+		let nodes = pi_kernel::walker::evaluate_query(query, vec![root], &source, dialect, &cancel);
 		// Selection must be deterministic and target the *specific* declaration.
 		// A name query can match both an inner declaration and an enclosing
 		// wrapper (e.g. TS `export function foo` yields both `function_declaration`
@@ -504,17 +504,13 @@ impl CodeResolverImpl {
 
 	/// Derive the filesystem path from a CodePath's FsLocator.
 	fn codepath_fs_path(&self, target: &CodePath) -> Result<PathBuf, Diagnostic> {
-		let target_id = build_target_id(target, self.root.as_deref())?;
+		let target_id = build_target_id(target, self.root())?;
 		let (file_part, _) = target_id.split_once("::").unwrap_or((&target_id, ""));
 		let path = std::path::Path::new(file_part);
 		Ok(if path.is_absolute() {
 			path.to_path_buf()
 		} else {
-			self
-				.root
-				.as_deref()
-				.unwrap_or(std::path::Path::new("."))
-				.join(path)
+			self.root().unwrap_or(std::path::Path::new(".")).join(path)
 		})
 	}
 
@@ -606,7 +602,7 @@ impl CodeResolverImpl {
 		// above; render the target_id without it and inject `scope` into the
 		// action so `single_action` resolves the declaration and applies
 		// `replace_body`.
-		let target_id = build_target_id_allow_qualifiers(target, self.root.as_deref())?;
+		let target_id = build_target_id_allow_qualifiers(target, self.root())?;
 		let scoped_action = scoped_write.then(|| {
 			let mut obj = action_json.as_object().cloned().unwrap_or_default();
 			obj.insert("scope".to_string(), Value::String(scope.unwrap().to_string()));
@@ -654,21 +650,17 @@ impl CodeResolverImpl {
 	) -> Result<MutationOutcome, Diagnostic> {
 		// Build target_id but skip qualifier rejection — apply_to_buffer
 		// handles qualifiers in the builder path when applicable.
-		let target_id = build_target_id_allow_qualifiers(target, self.root.as_deref())?;
+		let target_id = build_target_id_allow_qualifiers(target, self.root())?;
 		let (file_part, _) = target_id.split_once("::").unwrap_or((&target_id, ""));
 		let path = std::path::Path::new(file_part);
 		let path = if path.is_absolute() {
 			path.to_path_buf()
 		} else {
-			self
-				.root
-				.as_deref()
-				.unwrap_or(std::path::Path::new("."))
-				.join(path)
+			self.root().unwrap_or(std::path::Path::new(".")).join(path)
 		};
 
 		let code_paths = vec![target_id];
-		let session_id = self.session_id.as_deref().unwrap_or(MUTATION_SESSION_ID);
+		let session_id = self.session_id().unwrap_or(MUTATION_SESSION_ID);
 
 		let (_, outcome) = crate::buffer_registry()
 			.edit_transaction(Some(session_id), &path, &code_paths, |buffer| {
@@ -686,7 +678,7 @@ impl CodeResolverImpl {
 	}
 }
 
-impl MutationResolver for CodeResolverImpl {
+impl MutationResolver for NativeResolver {
 	fn try_apply(
 		&self,
 		op: &Op,
@@ -731,11 +723,11 @@ mod tests {
 		resolver::traits::{CancellationToken, MutationResolver},
 	};
 
-	use super::CodeResolverImpl;
+	use super::NativeResolver;
 
-	fn ts_resolver() -> CodeResolverImpl {
+	fn ts_resolver() -> NativeResolver {
 		let registry = pi_code_engine::language::LanguageRegistry::with_builtins().expect("builtins");
-		CodeResolverImpl::new(Arc::new(registry))
+		NativeResolver::new(Arc::new(registry))
 	}
 
 	fn ts_symbol_path(file: &std::path::Path, symbol: &str) -> CodePath {
@@ -752,7 +744,7 @@ mod tests {
 		}
 	}
 
-	fn elixir_resolver() -> CodeResolverImpl {
+	fn elixir_resolver() -> NativeResolver {
 		ts_resolver()
 	}
 
@@ -782,8 +774,7 @@ mod tests {
 			scope: SymScope::Body,
 			content: ActionContent::Single("{\n  return x * 2;\n}".into()),
 		};
-		let resolver = ts_resolver();
-		let resolver = CodeResolverImpl { root: Some(dir.path().to_path_buf()), ..resolver };
+		let resolver = ts_resolver().with_root(dir.path().to_path_buf());
 		let result = resolver.try_apply(&op, &CancellationToken::new());
 		assert!(matches!(result, Some(Ok(_))), "body replace failed: {result:?}");
 		let src = std::fs::read_to_string(&path).unwrap();
@@ -807,8 +798,7 @@ mod tests {
 			scope: SymScope::Body,
 			content: ActionContent::Single("do\n    result = compute(ast)\n    result\n  end".into()),
 		};
-		let resolver = elixir_resolver();
-		let resolver = CodeResolverImpl { root: Some(dir.path().to_path_buf()), ..resolver };
+		let resolver = elixir_resolver().with_root(dir.path().to_path_buf());
 		let result = resolver.try_apply(&op, &CancellationToken::new());
 		assert!(matches!(result, Some(Ok(_))), "elixir body replace failed: {result:?}");
 		let src = std::fs::read_to_string(&path).unwrap();
@@ -857,8 +847,7 @@ mod tests {
 			content: ActionContent::Single("function newName() { return 2; }".into()),
 		};
 
-		let resolver = ts_resolver();
-		let resolver_with_root = CodeResolverImpl { root: Some(root.clone()), ..resolver };
+		let resolver_with_root = ts_resolver().with_root(root.clone());
 		let result = resolver_with_root.try_apply(&op, &CancellationToken::new());
 		assert!(matches!(result, Some(Ok(_))), "expected Some(Ok(_)), got {:?}", result);
 		let src = std::fs::read_to_string(root.join("a.ts")).unwrap();

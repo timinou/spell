@@ -1,0 +1,125 @@
+#+TITLE: QML harness: bridge.invoke(tool,args) promise helper — kill manual _rid correlation boilerplate
+#+STATE: DONE
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: FUP-127-qml-harness-bridge-invoketoolargs-promis
+#+COMPLETION_HASH: db5de29ae1156edb
+
+* Initial Message
+
+Ok, explain to me what FUP-121 and FUP-122 actually look like, and also what your initial plan w.r.t QML codemod tiles, I also wanted some QML stuff (and QoL improvements to QML if you see any).
+
+P3 is still in scope, keep that in mind
+
+* One-line
+
+Every QML tile that invokes an armed tool must hand-roll request/response correlation:
+generate a `_rid`, `bridge.send({_tool, _rid, ...})`, then match `payload._rid` in a
+separate `onMessage` handler. Provide a `bridge.invoke(tool, args) -> Promise`-style
+helper in the QML harness so a tile writes `const r = await bridge.invoke("execute", {...})`
+instead of 15 lines of dispatch/match bookkeeping.
+
+* The pain (concrete, from the reference tile)
+
+`packages/coding-agent/src/modes/qml/canvas/reference/DataDashboard.qml` shows the
+current pattern:
+
+```qml
+// dispatch (line ~62)
+bridge.send({ _tool: "write", _rid: "dashboard-export", args... })
+
+// ...elsewhere, in the message handler (line ~169)
+onMessage: (payload) => {
+  if (payload && payload._rid === "dashboard-export") {
+    // handle the reply for THIS specific request
+  }
+}
+```
+
+The `_rid` is a hand-picked string constant; the dispatch and the handling are physically
+separated; concurrent invocations need unique `_rid`s the author must manage; there is no
+timeout/error path unless hand-written. Every tile reinvents this. A codemod tile firing
+visible-refresh on open AND interactive-apply on click AND a retry needs THREE correlated
+round-trips — that's a lot of manual `_rid` plumbing and a real source of bugs (collisions,
+leaked handlers, lost replies).
+
+* The seam that exists
+
+QML → `bridge.send({_tool, _rid, args})` → `CANVAS_TOOL_INVOKE_CHANNEL` → sdk.ts handler
+(~L1970) → `tool.execute(...)` → `reply({_rid?, result, ...})` → QML `onMessage(payload)`.
+The harness already owns both ends of the bridge. The helper is pure QML/JS sugar layered
+on the EXISTING protocol — no new server plumbing.
+
+* Design
+
+Add to the injected `bridge` object (wherever it is constructed for the QML runtime —
+search for the object exposing `bridge.send`/`bridge.subscribe`, likely the QML mode host
+or the canvas bootstrap that wires `windowWidth`/`bridge`):
+
+```js
+// pseudo — implement in the harness JS that backs `bridge`
+let _seq = 0;
+const _pending = new Map(); // rid -> {resolve, reject, timer}
+bridge.invoke = function(tool, args, opts) {
+  const rid = "inv-" + (++_seq) + "-" + Date.now();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      _pending.delete(rid);
+      reject(new Error("armed tool timeout: " + tool));
+    }, (opts && opts.timeoutMs) || 30000);
+    _pending.set(rid, { resolve, reject, timer });
+    bridge.send({ _tool: tool, _rid: rid, ...args });
+  });
+};
+// in the central onMessage demux:
+//   if (payload._rid && _pending.has(payload._rid)) {
+//     const p = _pending.get(payload._rid); clearTimeout(p.timer); _pending.delete(payload._rid);
+//     payload.error ? p.reject(new Error(payload.error)) : p.resolve(payload);
+//   }
+```
+
+A tile then writes:
+
+```qml
+const r = await bridge.invoke("execute",
+  { program: tile.program, mode: "write", intent: "visible-refresh" });
+// r.details.transaction.files  (requires FUP-126 lossy-reply fix to be present)
+```
+
+* Edge cases
+
+- Concurrent invokes: monotonic `_seq` + timestamp guarantees unique `_rid`s; the demux
+  routes each reply to its own promise. No collisions.
+- Timeout: reject after a configurable budget so a tile never hangs forever on a lost
+  reply; default 30s.
+- Error replies (`{error}`) reject the promise; success resolves with the full payload.
+- The helper must NOT swallow non-invoke messages — only intercept payloads whose `_rid`
+  is in `_pending`; everything else flows to the tile's normal `onMessage`.
+- QML's JS engine (Qt) supports Promises/async-await in recent Qt6 — VERIFY at
+  implementation that the target Qt version's QML JS supports `await` in the contexts
+  tiles use; if not, expose a callback form `bridge.invoke(tool,args,cb)` as the primitive
+  and a thin promise wrapper where supported.
+
+* Tests
+
+- Two `bridge.invoke` calls in flight simultaneously resolve to their correct respective
+  replies (no cross-talk).
+- A reply with `{error}` rejects the returned promise with that message.
+- A dropped/never-arriving reply rejects via timeout after the budget; `_pending` is
+  cleaned up (no leak).
+- A non-invoke bridge message (e.g. an event push) is NOT intercepted and reaches the
+  tile's onMessage.
+
+* Acceptance
+
+A QML tile performs an armed-tool round-trip with `await bridge.invoke(tool, args)` and no
+hand-written `_rid`; concurrent invokes, errors, and timeouts are handled by the harness.
+
+* Relationships
+
+Pairs with FUP-126 (lossy-reply: invoke is only useful if the reply carries structured
+details). Together they make a QML codemod/format tile a small build instead of
+boilerplate-heavy. Sibling: structured error codes FUP. Does not block the shipped
+Team-Chat tile (which uses ws.request correlation on the Svelte side).
+
+NOTE [2026-06-12]: SHIPPED + reviewer-gated. Implemented as a reusable QML component ArmedTool.qml (NOT a native bridge method \u2014 bridge is native-injected with only send()+messageReceived signal, can't extend it). Component: invoke(tool,args,onResult,onError,timeoutMs?) generates monotonic _rid, copy-on-write _pending table, per-invoke single-shot Timer for timeout (code:'timeout'), route(payload)->bool (true=consumed an in-flight reply, false=non-invoke msg flows to tile), _forget tears down entry+Timer. Callback-primitive (not Promise) deliberately for Qt-JS-engine portability \u2014 a Promise wrapper can layer on top. Registered in components/qmldir. Tile usage: ArmedTool{id:armed} + Connections on bridge forwarding to armed.route(). Reviewer confirmed no cross-talk, no leak on throw, safe deferred Timer-destroy from own handler, _pending written before send (no pre-set-reply race). qmllint clean.

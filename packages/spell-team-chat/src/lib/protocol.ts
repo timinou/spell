@@ -84,6 +84,33 @@ export type BridgeRpcCommand =
 			autoWrite?: boolean;
 			signature?: string;
 			context?: Record<string, unknown>;
+	  }
+	// Tile persistence (FUP-123) — mirror of spell-server BridgeRpcCommand. Config
+	// is an org item; history is a memory episode. owner/project are optional on the
+	// wire (agent supplies an "operator" placeholder + project default).
+	| { id?: string; type: "tile_list"; project?: string }
+	| {
+			id?: string;
+			type: "tile_create";
+			tile: {
+				owner?: string;
+				project?: string;
+				title: string;
+				kind?: "codemod" | "format";
+				programRef?: string;
+				programInline?: string;
+				mode: "read" | "write";
+				autoWrite: boolean;
+				schedule?: string;
+			};
+	  }
+	| { id?: string; type: "tile_update"; tileId: string; patch: Record<string, unknown> }
+	| { id?: string; type: "tile_delete"; tileId: string }
+	| {
+			id?: string;
+			type: "tile_record_run";
+			tileId: string;
+			run: { intent: string; outcome: string; files: number; paths?: string[]; error?: string };
 	  };
 
 /** The transaction outcome a run_stored response carries (mirror of TxnOutcome). */
@@ -100,6 +127,34 @@ export interface RunStoredResult {
 	isError: boolean;
 	transaction: TxnOutcome | null;
 	text: string;
+}
+
+/** A persisted tile's durable config + cached last-outcome (mirror of TileRecord). */
+export interface TileRecord {
+	id: string;
+	owner: string;
+	project: string;
+	title: string;
+	kind: "codemod" | "format";
+	programRef?: string;
+	programInline?: string;
+	mode: "read" | "write";
+	autoWrite: boolean;
+	schedule?: string;
+	lastOutcome?: TxnOutcome["outcome"];
+	lastFiles?: number;
+	lastRunAt?: string;
+}
+
+/** `data` payloads of the tile rpc responses. */
+export interface TileListResult {
+	tiles: TileRecord[];
+}
+export interface TileCreateResult {
+	tileId: string;
+}
+export interface TileUpdateResult {
+	ok: boolean;
 }
 
 export type RpcStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";

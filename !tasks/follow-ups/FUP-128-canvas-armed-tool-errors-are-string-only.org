@@ -1,0 +1,95 @@
+#+TITLE: Canvas armed-tool errors are string-only — add structured error code so tiles render failure class correctly
+#+STATE: DONE
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: FUP-128-canvas-armed-tool-errors-are-string-only
+#+COMPLETION_HASH: 61c4ef6842dabf52
+
+* Initial Message
+
+Ok, explain to me what FUP-121 and FUP-122 actually look like, and also what your initial plan w.r.t QML codemod tiles, I also wanted some QML stuff (and QoL improvements to QML if you see any).
+
+P3 is still in scope, keep that in mind
+
+* One-line
+
+The canvas armed-tool reply signals failure as a bare `{ error: string }`, so a QML tile
+cannot distinguish failure CLASSES — "tool not in allowlist" (config error, red) vs "tool
+threw" (runtime error, red) vs a transactional "rolled-back" outcome (NOT an error —
+amber, "repo unchanged"). Add a structured `code` discriminant to the reply so tiles
+render the right tone and reassurance copy.
+
+* Where (exact)
+
+`packages/coding-agent/src/sdk.ts`, `CANVAS_TOOL_INVOKE_CHANNEL` subscriber (~L1969-2050).
+Three reply sites:
+- allowlist reject (~L1980): `reply?.({ error: errMsg })`
+- tool-not-found (~L2008): `reply?.({ error: errMsg })`
+- execute threw / success (~L2035): `reply(invokeError ? { error: invokeError } : { result: text })`
+
+All errors collapse to an opaque string. The tile gets no machine-readable class.
+
+* Why this matters (concrete)
+
+A rolled-back transaction is NOT a tile error — it is a legitimate outcome the tile must
+render calmly ("↩ rolled back — repo unchanged"), distinct from a hard failure ("tool not
+registered" — a misconfiguration the user must fix). With string-only errors a tile either
+treats everything as a red alarm (wrong — rollbacks are normal + safe) or parses the
+string (fragile). NB: a rolled-back txn currently arrives as a SUCCESS reply with
+`details.transaction.outcome="rolled-back"` (once FUP-126 forwards details) — so the
+PRIMARY rollback signal is via details, not error. This FUP is specifically about the
+ERROR channel: distinguishing rejection/not-found/threw so the tile shows the right
+diagnostic and whether a retry is even sensible.
+
+* Fix
+
+Extend the error reply shape to `{ error: string; code: ArmedToolErrorCode }` where:
+
+```ts
+type ArmedToolErrorCode =
+  | "not-allowed"     // tool not in the per-window allowlist (config; not retryable)
+  | "not-found"       // tool not registered in this session (config; not retryable)
+  | "threw"           // tool.execute threw (runtime; may be retryable)
+```
+
+Set `code` at each reply site:
+- allowlist reject → `{ error: errMsg, code: "not-allowed" }`
+- not-found → `{ error: errMsg, code: "not-found" }`
+- execute threw → `{ error: invokeError, code: "threw" }`
+
+Update `CanvasToolInvokePayload.reply`'s type union accordingly. QML tiles read
+`payload.code` to choose rendering: not-allowed/not-found → red "misconfigured, no
+retry"; threw → amber "failed, retry available".
+
+* Edge cases
+
+- Backward compat: existing QML tiles that only read `payload.error` keep working (`error`
+  string still present); `code` is additive.
+- Do NOT conflate the transactional rolled-back OUTCOME with an error code — rollback is a
+  successful run with a non-commit outcome, surfaced via `details.transaction` (FUP-126),
+  not via the error channel. Keep the two channels distinct so a tile never alarms on a
+  safe rollback.
+
+* Tests
+
+- Armed invoke of a tool NOT in the window allowlist → reply `{ error, code: "not-allowed" }`.
+- Armed invoke of an unregistered tool name → `{ error, code: "not-found" }`.
+- Armed invoke where `tool.execute` throws → `{ error, code: "threw" }`.
+- A successful execute whose transaction rolled back → reply is a SUCCESS (has
+  `details.transaction.outcome="rolled-back"`), NOT an error reply (no `code`).
+
+* Acceptance
+
+A QML tile distinguishes a config error (no retry) from a runtime failure (retry) from a
+safe rollback (calm, repo-unchanged) using `payload.code` + `payload.details.transaction`,
+never by parsing prose.
+
+* Relationships
+
+Completes the QML armed-tool QoL trio with FUP-126 (lossy-reply forwards details) and
+FUP-127 (bridge.invoke promise helper). Together they bring the canvas armed-tool seam to
+parity with the Spell Team Chat run_stored RPC path, which already surfaces
+isError + transaction + text separately. Lowest priority of the trio (the rollback signal
+primarily rides details, not error), but needed for correct failure-class rendering.
+
+NOTE [2026-06-12]: SHIPPED + reviewer-gated. sdk.ts: 3 reply sites carry machine-readable code \u2014 allowlist-reject {error,code:'not-allowed'}, tool-not-found {error,code:'not-found'}, execute-threw {error,code:'threw'}. ArmedTool.qml adds code:'timeout' on lost-reply budget. canvas.ts ArmedToolErrorCode = 'not-allowed'|'not-found'|'threw' exported (timeout is QML-helper-side). Error channel kept DISTINCT from safe non-commit txn outcomes (rollback rides success details.transaction, never the error channel) \u2014 so a tile never alarms on a safe rollback. Backward compat: error string still present, code additive. Reviewer confirmed.

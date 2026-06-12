@@ -53,6 +53,7 @@ pi-knowledge-core = { path = "../pi-knowledge-core" }
 bincode = "1.3"
 pi-code-engine = { path = "../pi-code-engine" }
 pi-code-path = { path = "../pi-code-path" }
+pi-kernel = { path = "../pi-kernel" }
 pi-org-engine = { path = "../pi-org-engine" }
 pi-workspace-cache = { path = "../pi-workspace-cache" }
 pi-typst-surface = { path = "../pi-typst-surface" }

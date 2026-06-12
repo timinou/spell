@@ -1,0 +1,33 @@
+#+TITLE: p3-pi-kernel-carve-out--verified-boundar
+
+** ITEM P3 pi-kernel carve-out: verified boundary + gate-3 reclaim maps to existing broker deregister
+
+P3 (PLAN-334) architecture pass done 2026-06-12; spec specs/beam-orchestrator/09-p3-pi-kernel-carve-out.md. P3 = carve a host-agnostic pi-kernel out of pi-natives + OwnerId + a rustler skin over execute_code_path_inner + 3 gates, to unlock WS-B (one warm kernel, N agents). It is an ARCHITECTURE bet, gates nothing shipped; the substrate already killed the live errors.
+
+METHOD LESSON: the code-explorer agent dispatched for the boundary map ran with WEB-ONLY tools (exa) and NO local codebase access \u2014 its output was inference from my brief, not file-verified, so UNRELIABLE. I re-did the audit by direct file read. Lesson: for a local-codebase boundary map, verify the agent has find/grep/read on the repo, or do it inline; don't trust a web-tool agent's 'file:line' claims.
+
+VERIFIED GROUND TRUTH (all by direct read):
+- execute_code_path_inner(opts: CodePathTaskOptions, cancel: CancelToken) -> Result<Vec<CodePathChunk>> at crates/pi-natives/src/code_path/napi.rs:397 = host-neutral orchestrator; NAPI execute_code_path (L389) is a thin skin over it; rustler = 2nd skin over the SAME fn.
+- CodePathTaskOptions (napi.rs:212): only #[allow(dead_code)]+#[derive(Default)], NO napi derive, plain fields \u2192 moves as-is.
+- CancelToken (task.rs:108): struct = {Option<Instant>, Arc<Flag>} plain; only ::new takes napi Unknown/AbortSignal \u2192 struct to kernel, ctor stays in skin.
+- CodePathChunk (napi.rs:79) IS #[napi(object)] \u2192 the ONE real refactor: kernel returns plain KernelChunk twin, skin maps twin->DTO via From.
+- clean read/write branch: manage(L405)/edit(L499)/else=read; read path NIF-eligible.
+- scheme dispatch (L951): native declarative schemes (file/skill/rule/memory/org) need NO callback; only runtime TS schemes do; N-2 read lane = declarative only \u2192 NIF needs no callback bridge.
+- read-path statics share-safe: fs_cache.rs:109 FS_CACHE LazyLock<DashMap> concurrent; dialect_registry.rs *_LEXER OnceLock read-only-after-init. Two-kernels RAM hazard = the code-graph INDEX, which N-2 excludes from the read lane.
+
+BIGGEST FINDING (reshapes gate 3): there are TWO lock layers. (a) file_lock::with_exclusive_lock (buffer.rs:652) = OS-level RAII-scoped, auto-released at block end, NO reclaim needed. (b) edit-broker intent/registration (pi-edit-broker/src/conn.rs) = session-keyed PERSISTENT and ALREADY self-reclaiming: conn.rs:134 deregister-on-disconnect + TTL'd record_intent (L225). ∴ gate-3's 'reclaim hook' = wire a BEAM process-monitor :DOWN to the broker's EXISTING deregister(owner), NOT new lock machinery. Far smaller than PLAN-334 feared.
+
+OwnerId = a NEWTYPE RENAME of the existing opaque session_id partition (buffer.rs: Revision.session_id, undo_scoped/redo_scoped, edit_transaction(session_id), conflict L385) + reclaim(owner) delegating to broker deregister. Value unchanged (Node session id; BEAM 'beam:{pid}').
+
+Build order: P3.1 carve pi-kernel (KernelChunk twin is the only real refactor) \u2192 P3.2 OwnerId+reclaim \u2192 P3.3 rustler skin (gate1 correctness) \u2192 P3.4 catch_unwind (gate2 panic-safety) \u2192 P3.5 monitor->reclaim (gate3 lock-liveness) \u2192 P3.6 docs. find-read = DirtyCpu scheduler class. Deferred to P5: graph+writes cutover, index moves wholesale (resolves two-kernels), N-3 HandleStore ETS->ResourceArc (zero-copy payoff, D-2 semantics unchanged).
+:PROPERTIES:
+:CUSTOM_ID: DEC-p3-pi-kernel-carve-out--verified-boundar
+:KIND: decision
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-12T19:52:25Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-334-p3-find-as-nif-proof-pi-kernel-carve-out
+ABOUT: CON-execute-substrate-w1-w3-shipped--psettle
+DISTILLED_FROM: PLAN-334-p3-find-as-nif-proof-pi-kernel-carve-out
+:END:

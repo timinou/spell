@@ -34,6 +34,22 @@ impl CodeResolverImpl {
 		self.session_id = Some(sid);
 		self
 	}
+
+	// Accessors (P3.1): the fields stay `pub(super)` so kernel-internal impls
+	// touch them directly, but the pi-natives `NativeResolver` newtype (which
+	// carries the write/mutation methods) reads them across the crate boundary
+	// through these instead of widening the fields to `pub`.
+	pub fn registry(&self) -> &Arc<LanguageRegistry> {
+		&self.registry
+	}
+
+	pub fn root(&self) -> Option<&Path> {
+		self.root.as_deref()
+	}
+
+	pub fn session_id(&self) -> Option<&str> {
+		self.session_id.as_deref()
+	}
 }
 
 impl CodeResolver for CodeResolverImpl {
@@ -425,7 +441,7 @@ fn collect_descendants<'a>(node: Node<'a>, out: &mut Vec<Node<'a>>) {
 	}
 }
 
-pub(crate) fn evaluate_query<'a>(
+pub fn evaluate_query<'a>(
 	query: &Query,
 	starting_nodes: Vec<Node<'a>>,
 	src: &'a str,
@@ -591,7 +607,7 @@ fn predicates_match(
 			.anchors
 			.iter()
 			.any(|a| a.name == name.as_str() && (a.matcher)(&node, src)),
-		_ => super::predicates::eval(p, &node, src, dialect),
+		_ => crate::predicates::eval(p, &node, src, dialect),
 	})
 }
 

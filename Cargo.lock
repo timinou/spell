@@ -3949,6 +3949,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pi-kernel"
+version = "13.12.8"
+dependencies = [
+ "pi-code-engine",
+ "pi-code-path",
+ "serde_json",
+ "tempfile",
+ "tree-sitter",
+ "tree-sitter-elixir",
+ "tree-sitter-typescript",
+]
+
+[[package]]
 name = "pi-knowledge-core"
 version = "13.12.8"
 dependencies = [
@@ -4015,6 +4028,7 @@ dependencies = [
  "pi-code-engine",
  "pi-code-graph",
  "pi-code-path",
+ "pi-kernel",
  "pi-knowledge-core",
  "pi-org-engine",
  "pi-typst-surface",

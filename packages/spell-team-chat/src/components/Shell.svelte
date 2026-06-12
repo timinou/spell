@@ -6,7 +6,13 @@
 	import SpawnDialog from "./SpawnDialog.svelte";
 	import DebugPanel from "./DebugPanel.svelte";
 	import CodemodTilePanel from "./CodemodTilePanel.svelte";
-	import type { RunStoredResult } from "../lib/protocol";
+	import type {
+		BridgeRpcCommand,
+		RunStoredResult,
+		TileCreateResult,
+		TileListResult,
+		TileUpdateResult,
+	} from "../lib/protocol";
 
 	interface Props {
 		debugOpen: boolean;
@@ -26,6 +32,22 @@
 				autoWrite?: boolean;
 			},
 		) => Promise<RunStoredResult>;
+		onTileList: (sessionId: string, project?: string) => Promise<TileListResult>;
+		onTileCreate: (
+			sessionId: string,
+			tile: Extract<BridgeRpcCommand, { type: "tile_create" }>["tile"],
+		) => Promise<TileCreateResult>;
+		onTileUpdate: (
+			sessionId: string,
+			tileId: string,
+			patch: Record<string, unknown>,
+		) => Promise<TileUpdateResult>;
+		onTileRecordRun: (
+			sessionId: string,
+			tileId: string,
+			run: { intent: string; outcome: string; files: number; paths?: string[]; error?: string },
+		) => Promise<void>;
+		onTileDelete: (sessionId: string, tileId: string) => Promise<void>;
 		onBlockingAction: (sessionId: string, eventId: string, choice: string | number) => void;
 		onSignOut: () => void;
 	}
@@ -39,6 +61,11 @@
 		onAbort,
 		onKill,
 		onRunStored,
+		onTileList,
+		onTileCreate,
+		onTileUpdate,
+		onTileRecordRun,
+		onTileDelete,
 		onBlockingAction,
 		onSignOut,
 	}: Props = $props();
@@ -124,6 +151,11 @@
 		<CodemodTilePanel
 			sessionId={app.current.summary.sessionId}
 			{onRunStored}
+			{onTileList}
+			{onTileCreate}
+			{onTileUpdate}
+			{onTileRecordRun}
+			{onTileDelete}
 			onClose={() => (tilesOpen = false)}
 		/>
 	{/if}

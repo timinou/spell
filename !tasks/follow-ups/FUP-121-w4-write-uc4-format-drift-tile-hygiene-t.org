@@ -1,9 +1,10 @@
 #+TITLE: W4-write UC4: format-drift tile — hygiene that fits both a dashboard nudge and a background sweep
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 1505405b0ebe8b3b
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a/13-UC4Format.jsonl]]
 #+CUSTOM_ID: FUP-121-w4-write-uc4-format-drift-tile-hygiene-t
 #+PRIORITY: B
+#+COMPLETION_HASH: fe9fb75fd7f2d830
 
 * One-line
 
@@ -272,3 +273,5 @@ What remains specific to this UC:
 ∴ this UC reduces to: (1) a format program, (2) generalize/rename the tile component to
 be program-agnostic, (3) the sweep half waits on FUP-123's scheduler. The risky parts
 (safety, transactionality, intent gating, the RPC slice) are DONE.
+
+NOTE [2026-06-12]: SHIPPED (dashboard/visible-refresh half) + reviewer-gated. Generalized the tile with a `kind` facet (codemod|format) \u2014 presentation + starter only, NOT a safety axis (both gated identically by the rollback-safe bar; reviewer confirmed no run/txn branch on kind). Added across all layers: tile-store TileKind + KIND property (defaults codemod for legacy), rpc-types/rpc-mode tile_create.kind passthrough, server+protocol mirror, panel draftKind + +Codemod/+Format buttons + per-tile kind badge + kind-aware editor hint + header retitle Codemods\u2192Tiles. REAL format program (FORMAT_STARTER): rollback-safe whitespace-hygiene sweep (trim trailing ws per line + single final newline) via tool/find #raw + tool/edit ONLY \u2014 no shelling to prettier (would fail assertTransactionSafe). E6 DISCIPLINE: wrote format-program.integration.test.ts running the EXACT program against the LIVE BEAM; caught + fixed 2 real bugs the static version hid \u2014 (1) nested (-> orig (->> (split-lines) ...)) mis-threads (-> injects orig as ->>'s first arg) \u2192 rewrote as flat let-bindings (join \"\\n\" (map trimr (split-lines orig))); (2) mock execute sig. Shipped starter fixed to match the proven program verbatim. REVIEWER found 1 P2 (writeCache dropped the new kind \u2192 undefined badge + cached format tile migrates as codemod) \u2192 FIXED (kind in durable cache + defensive loadCache default). Verification: agent 58=58, 9 tests (8 tile-store + 1 format-on-real-BEAM), server 0, svelte 0/0, build OK. DEFERRED: full prettier-style reformatting needs the WASM formatter (Q-formatter, P3-adjacent); the background-sweep half needs FUP-130's scheduler. The dual-context synthesis (same program, two intents) is now realizable \u2014 the dashboard/interactive half ships here.

@@ -16,7 +16,7 @@ use pi_code_path::{
 	unified::{TargetShape, UnifiedAction},
 };
 
-use super::code_resolver::CodeResolverImpl;
+use super::code_resolver::NativeResolver;
 
 // ── Helpers ───────────────────────────────────────────────────────
 
@@ -40,7 +40,7 @@ fn action_delete() -> UnifiedAction {
 fn apply_unified(
 	cp: &CodePath,
 	action: &UnifiedAction,
-	resolver: &CodeResolverImpl,
+	resolver: &NativeResolver,
 ) -> Result<pi_code_path::ast::MutationOutcome, String> {
 	let op = pi_code_path::unified::unified_op_from_action(cp, action)
 		.map_err(|d| d.message)?;
@@ -67,7 +67,7 @@ fn assert_unified_edit(
 	std::fs::write(&file_path, fixture).unwrap();
 
 	let registry = Arc::new(LanguageRegistry::with_builtins().unwrap());
-	let resolver = CodeResolverImpl::new(registry).with_root(root.clone());
+	let resolver = NativeResolver::new(registry).with_root(root.clone());
 
 	let lexer = pi_code_path::dialects::typescript::TsNameLexer;
 	let cp = pi_code_path::parser::parse_code_path(target_str, &lexer)
@@ -158,7 +158,7 @@ fn ts_delete() {
 	let path = root.join("test.ts");
 	std::fs::write(&path, "function dead() { return 1; }\nfunction alive() { return 2; }\n").unwrap();
 	let registry = Arc::new(LanguageRegistry::with_builtins().unwrap());
-	let resolver = CodeResolverImpl::new(registry).with_root(root.clone());
+	let resolver = NativeResolver::new(registry).with_root(root.clone());
 	let cp = parse("test.ts::dead");
 	let _outcome = apply_unified(&cp, &action_delete(), &resolver).unwrap();
 	let actual = std::fs::read_to_string(&path).unwrap();
@@ -176,7 +176,7 @@ fn ts_replace_body_reparse() {
 	let path = root.join("test.ts");
 	std::fs::write(&path, "function foo() { return 1; }\n").unwrap();
 	let registry = Arc::new(LanguageRegistry::with_builtins().unwrap());
-	let resolver = CodeResolverImpl::new(registry).with_root(root.clone());
+	let resolver = NativeResolver::new(registry).with_root(root.clone());
 	let cp = parse("test.ts::foo");
 	apply_unified(&cp, &action_replace("function foo() { return 42; }"), &resolver).unwrap();
 	let actual = std::fs::read_to_string(&path).unwrap();
@@ -203,7 +203,7 @@ fn rs_replace_reparse() {
 	let path = root.join("test.rs");
 	std::fs::write(&path, "fn foo() -> i32 { 1 }\n").unwrap();
 	let registry = Arc::new(LanguageRegistry::with_builtins().unwrap());
-	let resolver = CodeResolverImpl::new(registry).with_root(root.clone());
+	let resolver = NativeResolver::new(registry).with_root(root.clone());
 	let cp = parse("test.rs::foo");
 	apply_unified(&cp, &action_replace("fn foo() -> i32 { 42 }"), &resolver).unwrap();
 	let actual = std::fs::read_to_string(&path).unwrap();

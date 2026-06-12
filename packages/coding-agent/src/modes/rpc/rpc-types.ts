@@ -67,6 +67,34 @@ export type RpcCommand =
 			context?: Record<string, unknown>;
 	  }
 
+	// Tile persistence (FUP-123) — server-side CRUD for Team Chat tiles, riding the
+	// same spawned-session lane as run_stored (external CLI sessions are rejected
+	// upstream by #dispatchExternalRpc). Mirrors tile-store.ts's TileRecord contract.
+	| { id?: string; type: "tile_list"; project?: string }
+	| {
+			id?: string;
+			type: "tile_create";
+			tile: {
+				owner?: string;
+				project?: string;
+				title: string;
+				kind?: "codemod" | "format";
+				programRef?: string;
+				programInline?: string;
+				mode: "read" | "write";
+				autoWrite: boolean;
+				schedule?: string;
+			};
+	  }
+	| { id?: string; type: "tile_update"; tileId: string; patch: Record<string, unknown> }
+	| { id?: string; type: "tile_delete"; tileId: string }
+	| {
+			id?: string;
+			type: "tile_record_run";
+			tileId: string;
+			run: { intent: string; outcome: string; files: number; paths?: string[]; error?: string };
+	  }
+
 	// Session
 	| { id?: string; type: "get_session_stats" }
 	| { id?: string; type: "export_html"; outputPath?: string }

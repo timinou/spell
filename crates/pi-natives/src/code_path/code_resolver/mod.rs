@@ -1,6 +1,27 @@
+//! Code resolver — pi-natives view.
+//!
+//! P3.1 (PLAN-334): the host-agnostic READ resolver (`CodeResolverImpl`,
+//! `evaluate_query`, predicate evaluation) now lives in the `pi-kernel` crate.
+//! This module re-exports it (so existing `super::walker::*` / `super::
+//! CodeResolverImpl` references keep compiling unchanged) and adds the
+//! pi-natives-only WRITE layer:
+//!   - `NativeResolver` (native.rs): a newtype over the kernel resolver that
+//!     carries the mutation methods + `impl MutationResolver`. It must be local
+//!     to pi-natives — the orphan rule forbids `impl MutationResolver (foreign)
+//!     for CodeResolverImpl (foreign)`.
+//!   - `mutation` (mutation.rs): the write path, touching `crate::code_buffer`
+//!     / `crate::buffer_registry()` — bridge-only, never moves to the kernel.
+
 pub mod mutation;
-pub mod predicates;
-pub mod walker;
+pub mod native;
+
+/// Re-export shim: the read resolver now lives in `pi-kernel`. Keeps
+/// `super::walker::CodeResolverImpl` / `super::walker::evaluate_query` call
+/// sites (the ~10 cfg(test) qualifier-test files + mutation.rs) compiling
+/// unchanged.
+pub mod walker {
+	pub use pi_kernel::walker::{CodeResolverImpl, evaluate_query};
+}
 
 #[cfg(test)]
 mod css_qualifier_tests;
@@ -23,18 +44,16 @@ mod qualifier_tests;
 // `kind_alias_tests.rs` to stay isolated.
 #[cfg(test)]
 mod kind_alias_tests;
-use std::sync::Arc;
 
-use pi_code_engine::language::LanguageRegistry;
-use pi_code_path::types::{Diagnostic, DiagnosticVariant};
-pub use walker::CodeResolverImpl;
+pub use native::NativeResolver;
+pub use pi_kernel::walker::CodeResolverImpl;
 
-/// Convenience constructor using the built-in language registry.
-pub fn new() -> Result<CodeResolverImpl, Diagnostic> {
-	let registry = LanguageRegistry::with_builtins().map_err(|e| Diagnostic {
-		variant: DiagnosticVariant::UnsupportedOperation,
-		message: format!("failed to initialise language registry: {e}"),
-		span:    None,
-	})?;
-	Ok(CodeResolverImpl::new(Arc::new(registry)))
+use pi_code_path::types::Diagnostic;
+
+/// Convenience constructor: a write-capable [`NativeResolver`] backed by the
+/// built-in language registry. Read-only callers use it through `Deref` (the
+/// `CodeResolver::resolve` method autoderefs to the kernel resolver); write
+/// callers reach the inherent mutation methods directly.
+pub fn new() -> Result<NativeResolver, Diagnostic> {
+	Ok(NativeResolver(pi_kernel::read::new()?))
 }

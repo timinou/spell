@@ -2,7 +2,13 @@
 	import { onMount } from "svelte";
 	import { api, tokenStore, type ManifestTemplate } from "./lib/api";
 	import { app, toasts } from "./lib/stores.svelte";
-	import type { RunStoredResult } from "./lib/protocol";
+	import type {
+		BridgeRpcCommand,
+		RunStoredResult,
+		TileCreateResult,
+		TileListResult,
+		TileUpdateResult,
+	} from "./lib/protocol";
 	import { buildWsUrl, WsClient } from "./lib/ws";
 	import Login from "./components/Login.svelte";
 	import Shell from "./components/Shell.svelte";
@@ -157,14 +163,66 @@
 			sessionId,
 			command: { type: "run_stored", ...req },
 		});
+		return unwrapRpc<RunStoredResult>(result, "run_stored");
+	}
+
+	// Shared unwrap for rpc_response frames. The wire field is `success`
+	// (RpcResponseEvent), NOT `ok`; an agent-side error carries success:false +
+	// an `error` string and NO data — surface that string rather than returning
+	// undefined and crashing the caller.
+	function unwrapRpc<T>(result: { type: string; response?: unknown }, label: string): T {
 		if (result.type !== "rpc_response") throw new Error("unexpected response");
-		// The wire field is `success` (RpcResponseEvent), not `ok`. On an agent-side
-		// error the response carries success:false + an `error` string and NO data —
-		// surface that string rather than returning undefined and crashing the tile.
 		const resp = result.response as { success?: boolean; error?: string; data?: unknown };
-		if (resp.success === false) throw new Error(resp.error ?? "run_stored failed");
-		if (!resp.data) throw new Error("run_stored returned no result");
-		return resp.data as RunStoredResult;
+		if (resp.success === false) throw new Error(resp.error ?? `${label} failed`);
+		if (!resp.data) throw new Error(`${label} returned no result`);
+		return resp.data as T;
+	}
+
+	// Tile persistence (FUP-123) — config CRUD + history over the same rpc lane.
+	async function onTileList(sessionId: string, project?: string): Promise<TileListResult> {
+		if (!ws) throw new Error("not connected");
+		const result = await ws.request({ type: "rpc", sessionId, command: { type: "tile_list", project } });
+		return unwrapRpc<TileListResult>(result, "tile_list");
+	}
+	async function onTileCreate(
+		sessionId: string,
+		tile: Extract<BridgeRpcCommand, { type: "tile_create" }>["tile"],
+	): Promise<TileCreateResult> {
+		if (!ws) throw new Error("not connected");
+		const result = await ws.request({ type: "rpc", sessionId, command: { type: "tile_create", tile } });
+		return unwrapRpc<TileCreateResult>(result, "tile_create");
+	}
+	async function onTileUpdate(
+		sessionId: string,
+		tileId: string,
+		patch: Record<string, unknown>,
+	): Promise<TileUpdateResult> {
+		if (!ws) throw new Error("not connected");
+		const result = await ws.request({ type: "rpc", sessionId, command: { type: "tile_update", tileId, patch } });
+		const data = unwrapRpc<TileUpdateResult>(result, "tile_update");
+		// The store signals a non-applied mutation with ok:false (NOT a thrown error)
+		// — surface it so the caller's revert path fires instead of keeping a stale
+		// optimistic state.
+		if (data.ok === false) throw new Error("tile_update did not apply");
+		return data;
+	}
+	async function onTileRecordRun(
+		sessionId: string,
+		tileId: string,
+		run: { intent: string; outcome: string; files: number; paths?: string[]; error?: string },
+	): Promise<void> {
+		if (!ws) throw new Error("not connected");
+		const result = await ws.request({ type: "rpc", sessionId, command: { type: "tile_record_run", tileId, run } });
+		unwrapRpc<{ ok: boolean }>(result, "tile_record_run");
+	}
+	async function onTileDelete(sessionId: string, tileId: string): Promise<void> {
+		if (!ws) throw new Error("not connected");
+		const result = await ws.request({ type: "rpc", sessionId, command: { type: "tile_delete", tileId } });
+		// Delete is IDEMPOTENT: ok:false = the tile file was already absent server-side,
+		// which matches the user's intent (it's gone). Reverting the optimistic removal
+		// would resurrect a phantom tile with no server backing — so we do NOT throw on
+		// ok:false here. A genuine delete failure surfaces as an rpc error (unwrapRpc).
+		unwrapRpc<{ ok: boolean }>(result, "tile_delete");
 	}
 
 	async function onKill(sessionId: string) {
@@ -214,6 +272,11 @@
 		{onAbort}
 		{onKill}
 		{onRunStored}
+		{onTileList}
+		{onTileCreate}
+		{onTileUpdate}
+		{onTileRecordRun}
+		{onTileDelete}
 		{onBlockingAction}
 		onSignOut={signOut}
 	/>

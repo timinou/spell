@@ -10,11 +10,21 @@
  * - Events: AgentSessionEvent objects streamed as they occur
  * - Extension UI: Extension UI requests are emitted, client responds with extension_ui_response
  */
-import { readJsonl, Snowflake } from "@spell/pi-utils";
+import { getProjectDir, readJsonl, Snowflake } from "@spell/pi-utils";
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../../extensibility/extensions";
 import { type Theme, theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
 import { warmMemoryLane } from "../../tools/memory";
+import {
+	createTile,
+	deleteTile,
+	listTiles,
+	recordRun,
+	type TileOutcome,
+	type TileRecord,
+	type TileRunOutcome,
+	updateTile,
+} from "../../tools/ptc-runtime/tile-store";
 import type { EventBus } from "../../utils/event-bus";
 import type {
 	RpcCommand,
@@ -655,6 +665,60 @@ export async function runRpcMode(session: AgentSession, eventBus?: EventBus): Pr
 						.map(c => c.text)
 						.join(""),
 				});
+			}
+
+			// =================================================================
+			// Tile persistence (FUP-123) — server-side CRUD for Team Chat tiles.
+			// Rides the same spawned-session lane as run_stored, so external CLI
+			// sessions are rejected upstream by #dispatchExternalRpc. projectRoot is
+			// the session cwd; owner has no per-operator auth context yet, so it
+			// defaults to the stable "operator" placeholder (real auth deferred).
+			// =================================================================
+
+			case "tile_list": {
+				const projectRoot = session.sessionManager.getCwd() ?? getProjectDir();
+				const tiles = await listTiles(projectRoot, command.project ?? projectRoot);
+				return success(id, "tile_list", { tiles });
+			}
+
+			case "tile_create": {
+				const projectRoot = session.sessionManager.getCwd() ?? getProjectDir();
+				const rec: Omit<TileRecord, "id" | "lastOutcome" | "lastFiles" | "lastRunAt"> = {
+					owner: command.tile.owner ?? "operator",
+					project: command.tile.project ?? projectRoot,
+					title: command.tile.title,
+					kind: command.tile.kind ?? "codemod",
+					programRef: command.tile.programRef,
+					programInline: command.tile.programInline,
+					mode: command.tile.mode,
+					autoWrite: command.tile.autoWrite,
+					schedule: command.tile.schedule,
+				};
+				const tileId = await createTile(projectRoot, rec);
+				return success(id, "tile_create", { tileId });
+			}
+
+			case "tile_update": {
+				const projectRoot = session.sessionManager.getCwd() ?? getProjectDir();
+				const ok = await updateTile(
+					projectRoot,
+					command.tileId,
+					command.patch as Partial<Omit<TileRecord, "id">>,
+				);
+				return success(id, "tile_update", { ok });
+			}
+
+			case "tile_record_run": {
+				const projectRoot = session.sessionManager.getCwd() ?? getProjectDir();
+				const run: TileRunOutcome = { ...command.run, outcome: command.run.outcome as TileOutcome };
+				await recordRun(projectRoot, command.tileId, run);
+				return success(id, "tile_record_run", { ok: true });
+			}
+
+			case "tile_delete": {
+				const projectRoot = session.sessionManager.getCwd() ?? getProjectDir();
+				const ok = await deleteTile(projectRoot, command.tileId);
+				return success(id, "tile_delete", { ok });
 			}
 
 			// =================================================================

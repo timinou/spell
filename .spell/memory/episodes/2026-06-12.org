@@ -1,0 +1,114 @@
+#+TITLE: Episodes 2026-06-12
+
+** ITEM Team Chat render arm for task_ask projection (PLAN-331 W3' consumer)
+
+Implemented 2026-06-10, commit 0b73856b6. svelte-check 0 errors; reducer suite 24 pass (5 new task_ask cases). Pure client-side addition on the shipped W3' rail.
+:PROPERTIES:
+:CUSTOM_ID: EP-75860db198ced6ff
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-12T12:11:52Z
+:END:
+:RELATIONS:
+ABOUT: FUP-124-team-chat-render-arm-for-task-ask-projec
+:END:
+** ITEM PLAN-331 follow-through (2026-06-10): reviewed FUP-110/111 + Team Chat IPC view against live code, then shipped the two cheap consumers. KEY REFRAME: W3' (07b8d58bf) wired task_ask all the way to the BROWSER but the spell-team-chat reducer dropped it on 'default: return s' — so it arrived invisible. The 'Team Chat IPC view' was therefore not new work, it was W3''s missing render ARM. Shipped as FUP-124 (commit 0b73856b6): client-side only (transport already generic end-to-end via isRpcEvent structural + ws #tapEvents). Reducer correlates lifecycle in place (raised appends pending ask bubble keyed by questionId; answered/cancelled mutate matching bubble) so it reads as dialogue not log. Observation-only (C4): no browser answer path, unlike 'blocking' bubbles. 5 reducer tests, svelte-check 0 errors. VERDICTS: FUP-110 (substrate wire) stays deferred — re-verified subagents in-process (executor.ts:1360 createAgentSession + :1532 session.prompt), AskBroker resolves live Promise ref (:168), no cross-process consumer. FUP-111 RESCOPED: ship the QUERY half (thin read over existing SubagentTracker #activeAgents/#asks maps — aggregator already exists, just needs a snapshot getter); DEFER the WAIT half (deadlock/starvation risk) and steer waiting toward roster blockers (DAG already has cycle detection) rather than a new in-flight wait primitive. GOTCHAS: (1) biome --write reformatted UNRELATED single-line interfaces in protocol.ts (RpcAssistantContentBlock, RpcToolResult) — reverted, reapplied by hand; package gate is svelte-check not biome. (2) Filed FUP-125 triaging the 81 root check:ts tsgo errors: bucket A (~7 phantom — root tsconfig lacks DOM lib so it checks browser pkg spell-team-chat without window/location/getElementById that DO exist under the pkg's own svelte-check; fix = exclude browser pkg from root include OR project references), bucket B (~66 test-file casts, opportunistic), bucket C (~3 real src — path-resolution.ts CwdResolutionDecision, swarm-extension, procmgr). Until bucket A lands, check:ts cannot be green from root; per-package check is the trustworthy gate.
+:PROPERTIES:
+:CUSTOM_ID: EP-57f7a3d152ce95df
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-12T12:13:00Z
+:END:
+:RELATIONS:
+:END:
+** ITEM Canvas armed-tool reply drops structured details — QML tiles can only see flattened text
+
+SHIPPED + reviewer-gated (agent://18-ReviewQmlQol, correct). sdk.ts CANVAS_TOOL_INVOKE_CHANNEL handler success reply now forwards {result:text, details:result.details??null, data:result.data??null} \u2014 a QML tile reads details.transaction.{outcome,files,paths} without parsing prose. canvas.ts: CanvasToolInvokePayload.reply typed as ArmedToolReply union (success {result,details,data} | failure {error,code}); ArmedToolReply + ArmedToolErrorCode exported with full contract doc. Reviewer confirmed details/data are plain JSON-serialisable (execute readonly TxnOutcome) and allowlist still gates. tsc 58=58 no new errors, qmllint clean. Rolled-back txn rides the success channel (details.transaction.outcome) NOT the error channel \u2014 distinct, per FUP-128.
+:PROPERTIES:
+:CUSTOM_ID: EP-74930f68eeaf9348
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-12T12:46:41Z
+:END:
+:RELATIONS:
+ABOUT: FUP-126-canvas-armed-tool-reply-drops-structured
+:END:
+** ITEM QML harness: bridge.invoke(tool,args) promise helper — kill manual _rid correlation boilerplate
+
+SHIPPED + reviewer-gated. Implemented as a reusable QML component ArmedTool.qml (NOT a native bridge method \u2014 bridge is native-injected with only send()+messageReceived signal, can't extend it). Component: invoke(tool,args,onResult,onError,timeoutMs?) generates monotonic _rid, copy-on-write _pending table, per-invoke single-shot Timer for timeout (code:'timeout'), route(payload)->bool (true=consumed an in-flight reply, false=non-invoke msg flows to tile), _forget tears down entry+Timer. Callback-primitive (not Promise) deliberately for Qt-JS-engine portability \u2014 a Promise wrapper can layer on top. Registered in components/qmldir. Tile usage: ArmedTool{id:armed} + Connections on bridge forwarding to armed.route(). Reviewer confirmed no cross-talk, no leak on throw, safe deferred Timer-destroy from own handler, _pending written before send (no pre-set-reply race). qmllint clean.
+:PROPERTIES:
+:CUSTOM_ID: EP-b4e4bc12e948b720
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-12T12:46:41Z
+:END:
+:RELATIONS:
+ABOUT: FUP-127-qml-harness-bridge-invoketoolargs-promis
+:END:
+** ITEM Canvas armed-tool errors are string-only — add structured error code so tiles render failure class correctly
+
+SHIPPED + reviewer-gated. sdk.ts: 3 reply sites carry machine-readable code \u2014 allowlist-reject {error,code:'not-allowed'}, tool-not-found {error,code:'not-found'}, execute-threw {error,code:'threw'}. ArmedTool.qml adds code:'timeout' on lost-reply budget. canvas.ts ArmedToolErrorCode = 'not-allowed'|'not-found'|'threw' exported (timeout is QML-helper-side). Error channel kept DISTINCT from safe non-commit txn outcomes (rollback rides success details.transaction, never the error channel) \u2014 so a tile never alarms on a safe rollback. Backward compat: error string still present, code additive. Reviewer confirmed.
+:PROPERTIES:
+:CUSTOM_ID: EP-430532e42ecc5a9c
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-12T12:48:10Z
+:END:
+:RELATIONS:
+ABOUT: FUP-128-canvas-armed-tool-errors-are-string-only
+:END:
+** ITEM FUP-111 query-half design discovery (2026-06-10): there are TWO existing peer-awareness substrates in Spell, not zero. (1) EDIT-BROKER (pi-edit-broker Rust crate, user-scoped daemon at ~/.spell/edit-broker.sock): tracks cross-PROCESS/cross-SESSION editing — PeerSummary{sessionId,cwd,openFiles,projectName}, CommitRecord/PeerEdit{codePaths,diffHash,ts}, FileIntent claims. Already wired to TS via packages/coding-agent/src/session/edit-coordinator.ts: coordStatus(file?)->{brokerUp,peers,socketPath}, recentPeerActivity(file,sinceMs,limit)->{edits}, openCodeBufferPaths(). Already CONSUMED in status-line/segments.ts (shows 'coord: N peers'). NAPI command 'coord_status'/'coord_peer_activity' in code_buffer.rs:1792. This is the 'a running agent is editing this file' substrate the user asked about — it exists and is file/codePath-granular with diffHash + intent claims, BUT it keys on sessionId and carries NO agent-purpose/task semantics (no 'why', no agent type, no task assignment). (2) SubagentTracker (TS, TUI-scoped, interactive-mode.ts:351): tracks in-PROCESS sibling subagents via task:subagent:progress EventBus channel — agent type, status, lastIntent, currentTool, task/assignment, todoNodes. Rich on PURPOSE but unreachable from subagents (TUI-only) and in-process-only. KEY SYNTHESIS for peer_activity tool: the two are COMPLEMENTARY axes — edit-broker = WHERE (files/codepaths, cross-process) but anonymous; SubagentTracker = WHO/WHY (agent purpose, intent) but in-process. A good peer_activity answer joins them on sessionId: 'reviewer (session X) is editing src/foo.ts [intent: checking auth flow]'. The join key is sessionId (edit-broker PeerSummary.sessionId == AgentProgress.sessionId). BEAM consideration (user flagged): edit-broker is ALREADY a separate daemon process w/ NDJSON socket protocol — it is the natural BEAM-ready boundary; the in-process registry is the part that'd need rethinking for BEAM. Encapsulation imperative: define a PeerActivityProvider interface that hides whether data came from in-process EventBus or cross-process broker socket, so a BEAM reimpl swaps the impl not the tool. User wants: kdl-tunable (pull tool default + ambient-on-peer-commit/completion), birth the registry now as shared substrate.
+:PROPERTIES:
+:CUSTOM_ID: EP-b8619b31f83e326a
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-12T13:22:40Z
+:END:
+:RELATIONS:
+:END:
+** ITEM Tile persistence: org-item config + memory-episode history + browser-driven tick
+
+SHIPPED (persistence + browser-tick half) + reviewer-gated. Built per DEC-tile-persistence-architecture: NO new storage backend. tiles org category (TILE prefix, defaults.ts). tile-store.ts foundation: TileRecord contract, list/get/create/update/delete/recordRun \u2014 config in org PROPERTIES drawer, history as memory episode + last-outcome cached on the org item. 7 tests over real native org engine (incl. rename, delete, commit+rollback record). RPC: tile_list/create/update/delete/record_run across rpc-types+rpc-mode (agent), BridgeRpcCommand passthrough (server), protocol mirror + App handlers + Shell threading + CodemodTilePanel rewired to SERVER-AS-TRUTH with localStorage offline-fallback, offline/error banners, optimistic-with-revert. Reviewer (agent://21-ReviewTilePersist) found 3 P2s ALL FIXED: title-rename via native updateItem headline; first-load MIGRATION of pre-FUP-123 localStorage tiles (never clobber non-empty cache with empty server set) + loadedFor re-fire gate; ok:false honored on update (revert), delete idempotent. Safety confirmed: external sessions rejected (shared rpc lane), dry-run never mutates, recordRun best-effort. Verification: agent 58=58, server 0, svelte 0/0, build OK. DEFERRED (own FUPs): FUP-130 unattended scheduler (daemon idle-exits, needs OS-timer always-on host); FUP-115 playbook programRef (programInline used today).
+:PROPERTIES:
+:CUSTOM_ID: EP-a0aa3e2194dbd862
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-12T13:36:29Z
+:END:
+:RELATIONS:
+ABOUT: FUP-123-codemod-tile-server-side-persistence-per
+:END:
+** ITEM FUP-123 tile persistence SHIPPED (persistence + browser-tick half) reviewer-gated. Built per DEC-tile-persistence-architecture with NO new storage backend: tile CONFIG = org item in new `tiles` category (TILE prefix, defaults.ts) PROPERTIES drawer; tile HISTORY = memory episode per run + last-outcome cached as org-item properties. Foundation: packages/coding-agent/src/tools/ptc-runtime/tile-store.ts (TileRecord + list/get/create/update/delete/recordRun), 7 tests over real native org engine via PI_KNOWLEDGE_WORKER=inprocess. KEY API FACTS for org programmatic CRUD: executeOrg comes from @spell/pi-natives (NOT pi-org); pi-org/native-ops.ts exports appendItemToFile/findItemById/readCategory/setPropertyInFile/generateId/resolveCategories; the TITLE is the org HEADLINE not a PROPERTIES field \u2014 rename requires executeOrg({command:'updateItem',id,title}) (native org_buffer.rs:306 org_edit::update_title), setPropertyInFile only writes drawer props. Project root in rpc-mode = session.sessionManager.getCwd() (session.cwd does NOT exist). RPC: 5 tile commands (tile_list/create/update/delete/record_run) added to RpcCommand (rpc-types/rpc-mode), BridgeRpcCommand (spell-server passthrough, generic forward no per-cmd logic), protocol.ts mirror, App.svelte handlers w/ shared unwrapRpc<T> (wire field is `success` not `ok`). CodemodTilePanel rewired: server source-of-truth, localStorage offline FALLBACK only, optimistic-with-revert mutations. REVIEWER (agent://21-ReviewTilePersist) caught 3 P2s ALL FIXED: (a) updateTile dropped title (org headline not property) \u2192 added native updateItem title path; (b) first server load writeCache() over empty server set DESTROYED pre-migration localStorage tiles \u2192 added MIGRATION (push cached tiles to server via onTileCreate when server empty + cache non-empty) + loadedFor gate so $effect doesn't re-fire-clobber; (c) updateTile/deleteTile return ok:false (not throw) which wire-wraps as success:true never inspected \u2192 onTileUpdate now throws on ok:false (revert fires), delete kept IDEMPOTENT (ok:false=already-gone, reverting would resurrect phantom). LESSON: store functions that signal failure via return-false (not throw) need explicit ok-inspection at the rpc boundary, else optimistic UI silently diverges. LESSON: a localStorage->server migration must never overwrite a non-empty local cache with an empty server result. DEFERRED: FUP-130 unattended scheduler (knowledge daemon idle-exits at 30min crates/pi-knowledge-worker/src/main.rs, needs OS-timer always-on host), FUP-115 playbook programRef (programInline used now). Also shipped this session: QML armed-tool QoL trio FUP-126/127/128 (lossy-reply fix, ArmedTool.qml correlation helper, error codes).
+:PROPERTIES:
+:CUSTOM_ID: EP-171571569e28f097
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-12T13:37:27Z
+:END:
+:RELATIONS:
+ABOUT: DEC-tile-persistence-architecture--org-item-
+ABOUT: CON-execute-substrate-w1-w3-shipped--psettle
+:END:
+** ITEM W4-write UC4: format-drift tile — hygiene that fits both a dashboard nudge and a background sweep
+
+SHIPPED (dashboard/visible-refresh half) + reviewer-gated. Generalized the tile with a `kind` facet (codemod|format) \u2014 presentation + starter only, NOT a safety axis (both gated identically by the rollback-safe bar; reviewer confirmed no run/txn branch on kind). Added across all layers: tile-store TileKind + KIND property (defaults codemod for legacy), rpc-types/rpc-mode tile_create.kind passthrough, server+protocol mirror, panel draftKind + +Codemod/+Format buttons + per-tile kind badge + kind-aware editor hint + header retitle Codemods\u2192Tiles. REAL format program (FORMAT_STARTER): rollback-safe whitespace-hygiene sweep (trim trailing ws per line + single final newline) via tool/find #raw + tool/edit ONLY \u2014 no shelling to prettier (would fail assertTransactionSafe). E6 DISCIPLINE: wrote format-program.integration.test.ts running the EXACT program against the LIVE BEAM; caught + fixed 2 real bugs the static version hid \u2014 (1) nested (-> orig (->> (split-lines) ...)) mis-threads (-> injects orig as ->>'s first arg) \u2192 rewrote as flat let-bindings (join \"\\n\" (map trimr (split-lines orig))); (2) mock execute sig. Shipped starter fixed to match the proven program verbatim. REVIEWER found 1 P2 (writeCache dropped the new kind \u2192 undefined badge + cached format tile migrates as codemod) \u2192 FIXED (kind in durable cache + defensive loadCache default). Verification: agent 58=58, 9 tests (8 tile-store + 1 format-on-real-BEAM), server 0, svelte 0/0, build OK. DEFERRED: full prettier-style reformatting needs the WASM formatter (Q-formatter, P3-adjacent); the background-sweep half needs FUP-130's scheduler. The dual-context synthesis (same program, two intents) is now realizable \u2014 the dashboard/interactive half ships here.
+:PROPERTIES:
+:CUSTOM_ID: EP-dc1b6ec04e74350d
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-12T15:51:31Z
+:END:
+:RELATIONS:
+ABOUT: FUP-121-w4-write-uc4-format-drift-tile-hygiene-t
+:END:
+** ITEM FUP-121 format tile SHIPPED + reviewer-gated. Generalized the codemod tile with a `kind` facet (codemod|format) across tile-store (KIND property, defaults codemod for legacy) + RPC (tile_create.kind passthrough, defaults codemod in handler) + server/protocol mirror + panel (draftKind, +Codemod/+Format buttons, per-tile kind badge, kind-aware hint, header Codemods->Tiles). kind is PRESENTATION-ONLY not a safety axis \u2014 both kinds gated identically by assertTransactionSafe; reviewer verified no run/txn branch on kind. REAL format program FORMAT_STARTER: rollback-safe whitespace sweep (trim trailing ws per line + single final newline) via tool/find #raw (read) + tool/edit (write) ONLY, no prettier shell (would fail rollback-safe bar). KEY E6 LESSON (proven by running against live BEAM via format-program.integration.test.ts): PTC-Lisp thread macros DON'T nest \u2014 `(-> orig (->> (split-lines) (map trimr) (join)))` is BROKEN because -> injects orig as the FIRST arg of the inner ->>, so split-lines gets orig-prepended wrong; rewrite as flat let-bindings: `(join \"\\n\" (map trimr (split-lines orig)))` then `(str (trim-newline trimmed) \"\\n\")`. Also: integration-test tool mocks use execute(_id, params) two-arg signature (NOT execute(args)) \u2014 wrong sig makes args.target undefined. PTC string builtins confirmed in beam/ptc_runner-vendored/priv/functions.exs: split-lines, trimr/triml/trim, trim-newline, join, replace, split, str, some?, re-find/re-seq. find returns content via target '#raw' suffix \u2192 (get result \"text\"). REVIEWER (agent://22) found 1 P2: writeCache() omitted the new kind field \u2192 offline-cached tiles render undefined badge + a cached format tile migrates back as codemod \u2192 FIXED (kind in durable cache obj + defensive loadCache default). LESSON: when adding a non-optional field to a persisted view-model, update EVERY serialization path (server map AND the localStorage cache) or the cache silently drops it (the `as Tile[]` cast hides it from the typechecker). Integration test gating: beforeAll needs explicit 60s timeout for cold `mix` compile on first BEAM spawn (default 5s times out). All green: agent 58=58, 9 tests, server 0, svelte 0/0, build OK. DEFERRED: WASM formatter for full reformatting (Q-formatter, P3-adjacent); background-sweep half needs FUP-130 scheduler.
+:PROPERTIES:
+:CUSTOM_ID: EP-d02cdc917236400e
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-12T15:51:58Z
+:END:
+:RELATIONS:
+ABOUT: DEC-tile-persistence-architecture--org-item-
+ABOUT: CON-execute-substrate-w1-w3-shipped--psettle
+:END:

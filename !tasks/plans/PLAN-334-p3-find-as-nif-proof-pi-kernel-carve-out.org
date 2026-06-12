@@ -1,5 +1,5 @@
 #+TITLE: P3: find-as-NIF proof — pi-kernel carve-out + OwnerId + rustler skin + 3 gates (WS-B derisk)
-#+STATE: ITEM
+#+STATE: DOING
 #+SESSION_ID: 1503ad6112fe682a
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
 #+CUSTOM_ID: PLAN-334-p3-find-as-nif-proof-pi-kernel-carve-out
@@ -111,3 +111,33 @@ clean OR lists exactly what to extract; scheduler classification documented.
   the execute-substrate error work. P0' (fup-095-nuke-lsp-tool merge) gates only the
   lsp slice of P5, not P3. Multi-day/greenfield — sequence behind W4/D3 unless WS-B is
   the active goal.
+
+* ARCHITECTURE PASS COMPLETE (2026-06-12) → spec 09-p3-pi-kernel-carve-out.md
+
+File-verified boundary audit done (NOT via the explorer agent, which had web-only
+tools + no local access; all GT below checked by direct file read). Execution spec:
+specs/beam-orchestrator/09-p3-pi-kernel-carve-out.md.
+
+Verified ground truth (GT-1..9):
+- GT-2: CodePathTaskOptions (napi.rs:212) has ONLY #[allow(dead_code)]+#[derive(Default)],
+  NO napi derive → moves to pi-kernel as-is.
+- GT-3: CancelToken struct (task.rs:108) = {Option<Instant>, Arc<Flag>} plain; only
+  ::new takes napi Unknown/AbortSignal → struct moves, ctor stays in skin.
+- GT-4: CodePathChunk (napi.rs:79) IS #[napi(object)] → the ONE real refactor: kernel
+  returns a plain KernelChunk twin, each skin maps twin→DTO.
+- GT-5: clean read/write branch in execute_code_path_inner — manage(L405)/edit(L499)/
+  else=read. Read path is NIF-eligible; one branch point, no tangle.
+- GT-6: scheme dispatch (L951) — native declarative schemes need NO callback; only
+  runtime TS schemes do. N-2 read lane uses declarative only → NIF needs no callback bridge.
+- GT-7: read-path statics share-safe (FS_CACHE DashMap concurrent; *_LEXER OnceLock
+  read-only-after-init). Two-kernels RAM hazard = the code-graph index, which N-2 excludes.
+- GT-9 (BIGGEST): TWO lock layers. (a) file_lock::with_exclusive_lock = RAII-scoped,
+  auto-released, NO reclaim needed. (b) edit-broker intent/registration = persistent,
+  session-keyed, and ALREADY self-reclaims (conn.rs:134 deregister-on-disconnect +
+  TTL'd record_intent). ∴ gate-3 reclaim hook = wire BEAM process-monitor death to the
+  broker's EXISTING deregister, NOT new lock machinery. Much smaller than the plan feared.
+
+∴ OwnerId = a newtype RENAME of session_id (GT-8 confirmed the partition exists) +
+reclaim(owner) delegating to broker deregister. Build order P3.1 (carve) → P3.2
+(OwnerId+reclaim) → P3.3 (rustler, gate1) → P3.4 (panic, gate2) → P3.5 (liveness,
+gate3) → P3.6 (docs). Next: P3.1 the carve.

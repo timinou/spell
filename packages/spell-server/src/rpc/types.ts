@@ -25,6 +25,32 @@ export type BridgeRpcCommand =
 			autoWrite?: boolean;
 			signature?: string;
 			context?: Record<string, unknown>;
+	  }
+	// Tile persistence (FUP-123) — forwarded generically to the agent's
+	// tile-store CRUD lane. Mirrors coding-agent RpcCommand tile variants.
+	| { id?: string; type: "tile_list"; project?: string }
+	| {
+			id?: string;
+			type: "tile_create";
+			tile: {
+				owner?: string;
+				project?: string;
+				title: string;
+				kind?: "codemod" | "format";
+				programRef?: string;
+				programInline?: string;
+				mode: "read" | "write";
+				autoWrite: boolean;
+				schedule?: string;
+			};
+	  }
+	| { id?: string; type: "tile_update"; tileId: string; patch: Record<string, unknown> }
+	| { id?: string; type: "tile_delete"; tileId: string }
+	| {
+			id?: string;
+			type: "tile_record_run";
+			tileId: string;
+			run: { intent: string; outcome: string; files: number; paths?: string[]; error?: string };
 	  };
 
 /** Image content reference matching coding-agent's ImageContent */

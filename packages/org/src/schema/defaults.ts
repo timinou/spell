@@ -67,6 +67,11 @@ export const DEFAULT_ORG_CONFIG: OrgConfig = {
 				followups: { prefix: "FUP", path: "follow-ups" },
 				drafts: { prefix: "DRAFT", path: "drafts" },
 				audits: { prefix: "AUD", path: "audits" },
+				// Stored-program tiles (FUP-123): a tile = a queryable org item whose
+				// PROPERTIES drawer holds its config (owner/project/program_ref/mode/
+				// autoWrite/schedule + a cached last-outcome). Run history lives as
+				// memory episodes, not in the org body.
+				tiles: { prefix: "TILE", path: "tiles" },
 			},
 		},
 		sessions: {

@@ -8,3 +8,4 @@ CodeBlock 1.0 CodeBlock.qml
 ProgressBar 1.0 ProgressBar.qml
 
 SpellBrowser 1.0 SpellBrowser.qml
+ArmedTool 1.0 ArmedTool.qml

@@ -14,14 +14,14 @@ use pi_code_path::{
 };
 use serde_json::json;
 
-use super::code_resolver::CodeResolverImpl;
+use super::code_resolver::NativeResolver;
 
 pub struct HeadingResolver {
-	inner: Arc<CodeResolverImpl>,
+	inner: Arc<NativeResolver>,
 }
 
 impl HeadingResolver {
-	pub fn new(inner: Arc<CodeResolverImpl>) -> Self {
+	pub fn new(inner: Arc<NativeResolver>) -> Self {
 		Self { inner }
 	}
 

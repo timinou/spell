@@ -1,0 +1,24 @@
+[package]
+name = "pi-kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+# pi-kernel: the host-agnostic kernel READ core (PLAN-334 / P3.1).
+# Carved out of pi-natives so a BEAM rustler skin can call the same read
+# resolver the NAPI skin uses. MUST NOT depend on napi, rustler, or any
+# host-specific symbol (e.g. pi-natives' buffer_registry) — N-2 read-lane
+# isolation. The write/buffer machinery stays in pi-natives.
+
+[dependencies]
+pi-code-path = { path = "../pi-code-path" }
+pi-code-engine = { path = "../pi-code-engine" }
+tree-sitter = "0.25"
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
+tree-sitter-typescript = "0.23"
+tree-sitter-elixir = "0.3"

@@ -1,0 +1,28 @@
+#+TITLE: p3-1-carve-uses-s2-newtype--deref----orp
+
+** ITEM P3.1 carve uses S2 newtype (Deref) — orphan rule E0117 makes free-fns illegal
+
+P3.1 (carve pi-kernel) strategy, decided 2026-06-12 via oracle (agent 24-CarveStrategy). The READ resolver (code_resolver/walker.rs 1126L + predicates.rs 80L, both pure: deps only pi_code_engine::language::LanguageRegistry + pi_code_path::* + tree_sitter, ZERO crate::/napi) moves to a NEW pi-kernel crate. mutation.rs (write path, uses crate::code_buffer + buffer_registry) STAYS in pi-natives.
+
+DECISIVE RUST CONSTRAINT (I initially missed it): TWO coherence rules bite, not one. (1) inherent-impl-across-crates blocks mutation.rs's `impl CodeResolverImpl { fn resolve_mutation_edit }` once the type moves. (2) THE KILLER: mutation.rs ALSO has `impl MutationResolver for CodeResolverImpl` (mutation.rs:689). After the move BOTH the trait (pi-code-path) AND the type (pi-kernel) are foreign to pi-natives \u2192 E0117 ORPHAN VIOLATION. Free functions (my candidate S1) do NOT legalize a foreign-trait-on-foreign-type impl \u2192 S1 is ILLEGAL, not merely costly. Only a LOCAL pi-natives type can carry both. ∴ S2 newtype is MANDATORY.
+
+THE DESIGN (S2 + cheap S1 bits):
+- pi-kernel/src/: walker.rs (CodeResolverImpl + impl CodeResolver \u2014 legal, foreign trait + local type; evaluate_query widened pub(crate)->pub; ADD 3 accessors pub fn registry()/root()/session_id() so pi-natives reads the pub(super) fields without making them pub), predicates.rs (unchanged), read.rs (resolve_read sugar), lib.rs (pub use). DO NOT over-engineer KernelError \u2014 reuse pi_code_path::Diagnostic (already host-agnostic); `pub type KernelError = Diagnostic` if a nominal type is wanted, promote to enum later.
+- pi-natives code_resolver/: native.rs `pub struct NativeResolver(pub CodeResolverImpl)` + `impl Deref<Target=CodeResolverImpl>` + builder forwards (new/with_root/with_session_id). mutation.rs: retarget BOTH impl blocks `impl CodeResolverImpl`->`impl NativeResolver` and `impl MutationResolver for CodeResolverImpl`->`for NativeResolver`; field access self.registry->self.0.registry() etc; evaluate_query path -> pi_kernel::evaluate_query. Free fns (build_target_id*, op_to_code_buffer_action) stay put.
+- CHURN MINIMIZER: code_resolver/mod.rs replace `pub mod walker` with re-export shim `pub mod walker { pub use pi_kernel::{CodeResolverImpl, evaluate_query}; }` + keep `pub use walker::CodeResolverImpl` \u2014 keeps ~10 read-test files UNCHANGED. `new()` returns NativeResolver.
+- Deref makes read consumers (css_resolver, heading_resolver, semantic_dispatch, edge_dispatch, napi read branch) call .resolve() transparently; css/heading change field type Arc<CodeResolverImpl>->Arc<NativeResolver>.
+
+GOTCHAS: mutation.rs:786/811/861 use struct-update `CodeResolverImpl{ root:..., ..resolver }` against pub(super) root \u2014 unreachable cross-crate, MUST become NativeResolver::new(reg).with_root(p); they're #[cfg(test)] so a non-test build stays green and HIDES them until cargo test. Deref+trait-method needs CodeResolver trait in scope at call site. Keep MutationResolver SOLELY on the newtype (no ambiguity through Deref). S4 (cfg mutation in pi-kernel) is IMPOSSIBLE not just N-2-violating: it forces pi-kernel->pi-natives cycle (mutation touches buffer_registry, a pi-natives symbol).
+
+MIGRATION ORDER (keep cargo build -p pi-natives green per step, steps 2-5 one atomic commit): 1 create crate+empty lib+dep (no-op green) -> 2 move walker+predicates+accessors+evaluate_query pub (pi-kernel green, pi-natives RED expected) -> 3 mod.rs shim + native.rs newtype -> 4 mutation.rs retarget+test struct-updates -> 5 css/heading/napi field types -> 6 cargo test + independent `cargo build -p pi-kernel` proves N-2 (links with NO buffer_registry symbol). resolve_read shape: `pub fn resolve_read(registry, file, query, qualifier, cancel) -> Result<Vec<NodeRef>, Diagnostic>`.
+:PROPERTIES:
+:CUSTOM_ID: DEC-p3-1-carve-uses-s2-newtype--deref----orp
+:KIND: decision
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-12T20:40:23Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-334-p3-find-as-nif-proof-pi-kernel-carve-out
+DISTILLED_FROM: PLAN-334-p3-find-as-nif-proof-pi-kernel-carve-out
+DISTILLED_FROM: DEC-p3-pi-kernel-carve-out--verified-boundar
+:END:

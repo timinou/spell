@@ -21,7 +21,7 @@ use pi_code_path::{
 use strum::IntoEnumIterator;
 
 use super::{
-	code_resolver::CodeResolverImpl, css_resolver::CssResolver, heading_resolver::HeadingResolver,
+	code_resolver::NativeResolver, css_resolver::CssResolver, heading_resolver::HeadingResolver,
 };
 
 /// Builds a tempdir with known TS/MD/CSS files and returns (dir, ts_file,
@@ -354,12 +354,12 @@ fn every_op_dispatches_or_explicitly_unimpl() {
 		// Rebuild resolvers per iteration with root set
 		let fs_r = FsResolver::new(sub_root.clone());
 		let text_r = TextResolver::new(sub_root.clone());
-		let code_r = CodeResolverImpl::new(registry.clone()).with_root(sub_root.clone());
+		let code_r = NativeResolver::new(registry.clone()).with_root(sub_root.clone());
 		let css_r = CssResolver::new(Arc::new(
-			CodeResolverImpl::new(registry.clone()).with_root(sub_root.clone()),
+			NativeResolver::new(registry.clone()).with_root(sub_root.clone()),
 		));
 		let heading_r = HeadingResolver::new(Arc::new(
-			CodeResolverImpl::new(registry.clone()).with_root(sub_root.clone()),
+			NativeResolver::new(registry.clone()).with_root(sub_root.clone()),
 		));
 
 		let op = build(&sub_root);

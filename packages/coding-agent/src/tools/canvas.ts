@@ -178,9 +178,29 @@ export interface CanvasToolInvokePayload {
 	/**
 	 * Optional callback to deliver the tool result back to the QML window.
 	 * Present only when the QML payload included a `_rid` field.
+	 *
+	 * The result is one of (see sdk.ts CANVAS_TOOL_INVOKE_CHANNEL handler):
+	 *   success: { result: string; details: unknown | null; data: unknown | null }
+	 *            — `details` carries structured tool output (e.g. the execute tool's
+	 *              `details.transaction = {outcome, files, paths}`) so a QML tile can
+	 *              render outcomes WITHOUT parsing the flattened `result` prose (FUP-126).
+	 *              A rolled-back transaction is a SUCCESS here with
+	 *              `details.transaction.outcome === "rolled-back"`.
+	 *   failure: { error: string; code: ArmedToolErrorCode } — a hard failure with a
+	 *              machine-readable class (FUP-128): not-allowed/not-found = config
+	 *              (not retryable), threw = runtime (retryable). Distinct from a safe
+	 *              non-commit transaction outcome, which rides the success `details`.
 	 */
-	reply?: (result: Record<string, unknown>) => void;
+	reply?: (result: ArmedToolReply) => void;
 }
+
+/** Failure class for an armed-tool reply (FUP-128). */
+export type ArmedToolErrorCode = "not-allowed" | "not-found" | "threw";
+
+/** Structured result delivered to a QML window from an armed-tool invocation. */
+export type ArmedToolReply =
+	| { result: string; details?: unknown; data?: unknown }
+	| { error: string; code: ArmedToolErrorCode };
 
 /** Payload emitted on CANVAS_ORCHESTRATOR_CHANNEL when QML sends _tier: 'orchestrator'. */
 export interface CanvasOrchestratorPayload {

@@ -1,0 +1,107 @@
+#+TITLE: Canvas armed-tool reply drops structured details — QML tiles can only see flattened text
+#+STATE: DONE
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: FUP-126-canvas-armed-tool-reply-drops-structured
+#+COMPLETION_HASH: 0a15427cc5127cbc
+
+* Initial Message
+
+Ok, explain to me what FUP-121 and FUP-122 actually look like, and also what your initial plan w.r.t QML codemod tiles, I also wanted some QML stuff (and QoL improvements to QML if you see any).
+
+P3 is still in scope, keep that in mind
+
+* One-line
+
+The canvas armed-tool round-trip (QML `bridge.send({_tool,_rid})` → tool.execute → `reply`)
+flattens the tool result to JOINED TEXT ONLY before replying to QML, discarding
+`result.details` — so a QML tile literally cannot read structured outcome data (e.g. the
+execute tool's `details.transaction = {outcome, files, paths}`). This is the single
+biggest blocker to a structured QML tile (codemod/format/changelog) and should be fixed
+before any QML tile is built.
+
+* Where (exact)
+
+`packages/coding-agent/src/sdk.ts`, the `CANVAS_TOOL_INVOKE_CHANNEL` subscriber
+(~L1969-2050). The reply construction (~L2035):
+
+```ts
+if (reply) {
+  const text = result.content
+    .filter((c): c is { type: "text"; text: string } => c.type === "text")
+    .map(c => c.text)
+    .join("");
+  reply(invokeError ? { error: invokeError } : { result: text });   // ← details dropped
+}
+```
+
+`result` is an `AgentToolResult<unknown>` = `{ content, details, data }`. Only `content`
+(text) survives the hop to QML. `details` and `data` are silently dropped.
+
+* Why this matters (concrete)
+
+The execute tool returns the transactional outcome a tile must render in
+`result.details.transaction` (shape: `{ outcome: "committed"|"rolled-back"|"dry-run"|
+"none"|"inert", files: number, paths: string[], restoreFailures?: string[] }` — see
+`packages/coding-agent/src/tools/ptc-runtime/stored-program.ts` TxnOutcome / the
+`details.transaction` wiring in execute.ts). A codemod tile's ENTIRE value is rendering
+"would reformat 6 files" from `details.transaction.files` and the drift tone from
+`.outcome`. With only flattened text, the QML tile would have to PARSE prose to recover a
+number — fragile and wrong.
+
+Contrast: the Spell Team Chat tile (CodemodTilePanel.svelte) gets the structured
+transaction because the run_stored RPC path (rpc-mode.ts handler) returns
+`{ data, isError, transaction: result.details?.transaction ?? null, text }` explicitly.
+The CANVAS path has no equivalent — it only forwards text. So the two hosts are NOT at
+parity: the canvas armed-tool seam is lossy.
+
+* Fix
+
+Forward the structured result alongside the text. Change the reply to:
+
+```ts
+reply(invokeError
+  ? { error: invokeError }
+  : { result: text, details: result.details ?? null, data: result.data ?? null });
+```
+
+Update `CanvasToolInvokePayload`'s `reply` callback type (search the type def — likely in
+`packages/coding-agent/src/modes/qml/...` or canvas.ts) so `reply` accepts
+`{ result: string; details?: unknown; data?: unknown } | { error: string }`. QML side
+(reference tiles, e.g. DataDashboard.qml's `onMessage` handler matching `payload._rid`)
+then reads `payload.details` / `payload.data`.
+
+* Edge cases
+
+- `details`/`data` may be undefined for tools that don't set them → forward `?? null`,
+  never throw.
+- `details`/`data` must be JSON-serialisable to cross the QML bridge (they already cross
+  the same JSON channel inbound; outbound is symmetric). Verify no handle/function leaks
+  into `details` for any armed tool (execute's transaction outcome is plain data — safe).
+- Keep `text` for backward compat — existing QML tiles (DataDashboard [Export]) read
+  `result`/`text` and must keep working.
+
+* Tests
+
+- A canvas armed-tool invoke of `execute` with `{mode:"write", intent:"visible-refresh"}`
+  on a drifted tree → the reply payload carries `details.transaction.outcome === "dry-run"`
+  and `details.transaction.files === N` (not just prose). Repo unchanged (dry-run).
+- An armed tool that sets no details → reply carries `details: null`, no throw.
+- Existing DataDashboard [Export] flow still receives `result` text unchanged.
+
+* Acceptance
+
+A QML tile can read `payload.details.transaction.{outcome,files,paths}` from an armed
+`execute` invocation without parsing prose. The Spell Team Chat tile and a canvas tile
+reach byte-identical structured outcome data.
+
+* Relationships
+
+Blocker for the QML codemod/format/changelog tiles (the original canvas-host plan, see
+explore agent 15-TileHost). Sibling QoL: bridge.invoke() promise helper + structured
+error codes (filed separately). Parallel to the shipped Team-Chat codemod tile (FUP-119)
+which routes around this via the run_stored RPC path. The substrate
+(executeSchema mode/intent/auto_write → runStored) is host-agnostic and already shipped,
+so once this lossy-reply is fixed the QML armed path reaches runStored with full fidelity.
+
+NOTE [2026-06-12]: SHIPPED + reviewer-gated (agent://18-ReviewQmlQol, correct). sdk.ts CANVAS_TOOL_INVOKE_CHANNEL handler success reply now forwards {result:text, details:result.details??null, data:result.data??null} \u2014 a QML tile reads details.transaction.{outcome,files,paths} without parsing prose. canvas.ts: CanvasToolInvokePayload.reply typed as ArmedToolReply union (success {result,details,data} | failure {error,code}); ArmedToolReply + ArmedToolErrorCode exported with full contract doc. Reviewer confirmed details/data are plain JSON-serialisable (execute readonly TxnOutcome) and allowlist still gates. tsc 58=58 no new errors, qmllint clean. Rolled-back txn rides the success channel (details.transaction.outcome) NOT the error channel \u2014 distinct, per FUP-128.

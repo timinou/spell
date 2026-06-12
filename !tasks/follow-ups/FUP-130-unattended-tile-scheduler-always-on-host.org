@@ -1,0 +1,91 @@
+#+TITLE: Unattended tile scheduler — always-on host fires armed tiles on schedule (3am nightly)
+#+STATE: ITEM
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: FUP-130-unattended-tile-scheduler-always-on-host
+
+* Initial Message
+
+Ok, explain to me what FUP-121 and FUP-122 actually look like, and also what your initial plan w.r.t QML codemod tiles, I also wanted some QML stuff (and QoL improvements to QML if you see any).
+
+P3 is still in scope, keep that in mind
+
+* One-line
+
+Split out of FUP-123: the half that fires an ARMED tile's stored write program on a
+schedule (e.g. nightly 3am) when NO browser/session is open. Requires an always-on host —
+which the pi-knowledge-worker daemon is NOT (it idle-exits after 30min to spare RAM). This
+is the hard dependency of FUP-122 (nightly changelog), the primary unattended-tick UC.
+
+* Why this is separate from FUP-123
+
+FUP-123 builds tile persistence (org-item config + memory-episode history) + browser-driven
+"tick while panel open". That works while someone is watching. But FUP-122's whole point is a
+3am tick with NOBODY watching — which needs a process that is alive at 3am.
+
+EMPIRICAL CONSTRAINT (verified, do not re-litigate): the pi-knowledge-worker daemon
+idle-EXITS after 30min by design (crates/pi-knowledge-worker/src/main.rs:9 "30-minute
+(configurable) idle exit so the worker doesn't pin RAM"; accept_loop exits when
+idle>=idle_secs). It is a query-serving daemon that deliberately dies when idle. It cannot
+host a cron loop. spell-server is alive only while a web session is active. So neither
+existing process can fire at 3am unattended.
+
+* Design options (decide at impl)
+
+A. OS-timer one-shot (RECOMMENDED). Add a CLI command `spell tiles tick [--project X]` that:
+   - reads armed tiles (org-query AUTOWRITE=t for the project/all),
+   - for each, resolves program_ref -> playbook program, spawns a headless agent session
+     (or reuses the rpc run_stored path) with intent=background-tick + autoWrite=true,
+     against the tile's project cwd,
+   - writes the outcome (memory episode + org-item LAST_OUTCOME cache, exactly as FUP-123's
+     run path does).
+   Then ship a systemd-timer (.timer + .service) / launchd plist / cron snippet + an install
+   story (`spell tiles install-schedule`). The OS owns "always-on"; the tick process runs
+   and exits. No long-lived daemon to write. This reuses ALL of FUP-123's persistence + run
+   plumbing; the only new thing is the CLI entrypoint + the OS-timer install.
+
+B. New always-on user daemon. A dedicated long-lived scheduler process (systemd --user /
+   launchd) with a cron loop (reuse spell-server's GoalScheduler/Croner precedent) that scans
+   armed tiles and fires ticks. Heaviest: new deployable, lifecycle, idle policy, install. Only
+   justified if ticks must be sub-minute or need warm in-process state (tiles do not).
+
+* Cross-cutting requirements (either option)
+
+- CONTEXT for an unattended run: there is no live session at 3am. The tick must construct a
+  run context (cwd = tile.project, a synthetic exec id, capability policy applied). Resolve
+  Q-context from the stored-program open questions here.
+- OVERLAP guard: skip a tick if the prior run for that tile is still in flight (mirror
+  GoalScheduler's `running` guard). A long codemod must not stack.
+- SPAWN-on-demand: no session for the project -> spawn a headless one for the tick, tear it
+  down after. Or run the program via a direct runStored call without a full session if the
+  capability surface allows.
+- FAILURE visibility: a 3am rollback must be VISIBLE at 9am — the memory episode + org-item
+  LAST_OUTCOME cache (FUP-123) already provide this; confirm the tick writes them on BOTH
+  commit and rollback.
+- SAFETY: only ARMED (autoWrite=t) tiles fire. An unarmed tile is inert (zero cost). The
+  runtime readOnly/autoWrite backstop in runStored (W4-write) still gates — an unarmed or
+  read-mode program discards any write even if the scheduler mis-fires.
+
+* Tests
+
+- Armed tile + scheduled tick -> stored program runs with intent=background-tick, write
+  commits (or rolls back), memory episode + org LAST_OUTCOME updated. Unarmed tile -> tick is
+  inert (no run, no episode, no cost).
+- Overlap: a tick fired while the prior run is in flight is skipped (no stacking).
+- Unattended context: a tick with no live session constructs a valid run context against
+  tile.project and applies the capability policy.
+- Failure at tick time -> rollback recorded + visible via the FUP-123 surfaces (repo unchanged).
+- `spell tiles install-schedule` writes a valid systemd-timer/launchd/cron entry (option A).
+
+* Acceptance
+
+An armed tile's write program fires on its schedule from an always-on host with no browser
+open, commits/rolls-back transactionally, records a visible outcome (episode + org cache), is
+overlap-guarded, and only fires when armed. Unarmed tiles never run.
+
+* Relationships
+
+Split from FUP-123 (persistence + browser-tick, which this hard-depends on). Hard dependency
+of FUP-122 (nightly changelog — the canonical unattended UC) and the background-sweep half of
+FUP-121 (format). Resolves stored-program open question Q-context (run context for a
+session-less tick). Decision provenance: DEC-tile-persistence-architecture.

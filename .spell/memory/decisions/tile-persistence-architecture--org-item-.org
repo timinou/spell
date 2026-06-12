@@ -1,0 +1,27 @@
+#+TITLE: tile-persistence-architecture--org-item-
+
+** ITEM Tile persistence architecture: org-item config + memory-episode history, no new backend
+
+FUP-123 (codemod/format/changelog tile persistence + scheduler) architecture, decided 2026-06-11 with the user across a refining-question pass. Four locked decisions:
+
+1. SCHEDULER = SPLIT (option C). The pi-knowledge-worker daemon IDLE-EXITS after 30min by design (crates/pi-knowledge-worker/src/main.rs line 9 + accept_loop exits when idle>=idle_secs, to not pin RAM) → it CANNOT fire a 3am nightly tick. So the unattended-firing half is SEPARABLE: build persistence + browser-driven 'tick while panel open' NOW; file the unattended-3am scheduler as its OWN FUP needing an always-on host (best long-term: OS timer / systemd-timer one-shot `spell tiles tick`, NOT a reinvented cron in a RAM-conscious daemon).
+
+2. PROGRAM STORE = memory playbook :program block (FUP-115), referenced by id. A tile stores program_ref=playbook-id, NOT inline program text. Reuses the KG promote-lifecycle (episode→playbook when proven); one program, many wirings by ref → solves FUP-121's one-program-two-wirings identity problem.
+
+3. PERSISTENCE = SPLIT by lifecycle (the record has two halves with opposite storage needs):
+   - TILE CONFIG (id, owner, project, title, program_ref, mode, autoWrite, schedule) = LOW-churn, declarative → an ORG ITEM with a PROPERTIES drawer. Git-tracked, human-inspectable, org-queryable ('armed tiles for project X' = property filter), promote-lifecycle. owner+project columns BOTH present → per-operator now, per-project-shared later (sharing flag deferred).
+   - TILE HISTORY (audit log, ~50 rows, appended every run) = HIGH-churn, event-log shaped → a memory EPISODE per run (KG timeline, 'tile X committed 4 files'), + last-outcome CACHED on the org item as a property for fast render. NOT stored as a churning ** History subheading (would churn git).
+   ∴ NO new storage backend (rejected: new writable SQLite in spell-server, since spell-server SQLite is read-only and a 2nd backend is outside the KG lifecycle). Tradeoff accepted: org-file writes are heavier than SQL + need the agent's existing file-lock discipline under concurrent scheduler+browser access — fine at tile scale.
+
+4. WHY this shape: it maps 1:1 onto the user's instinct 'save into a note/episode/journal when unsure, promote' — a tile IS a queryable org item, its history IS the KG timeline. Everything git-tracked + inspectable + promotable, zero new backend.
+
+Context: this followed shipping the QML armed-tool QoL trio (FUP-126 forward details, FUP-127 ArmedTool.qml correlation helper, FUP-128 error codes) — all DONE + reviewer-clean. The substrate (executeSchema mode/intent/auto_write → runStored) shipped earlier and is host-agnostic.
+:PROPERTIES:
+:CUSTOM_ID: DEC-tile-persistence-architecture--org-item-
+:KIND: decision
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-12T12:55:18Z
+:END:
+:RELATIONS:
+ABOUT: CON-execute-substrate-w1-w3-shipped--psettle
+:END:

@@ -1,69 +1,119 @@
-#+TITLE: Codemod tile: server-side persistence + per-tile background-tick scheduler
-#+STATE: ITEM
+#+TITLE: Tile persistence: org-item config + memory-episode history + browser-driven tick
+#+STATE: DONE
 #+SESSION_ID: 1503ad6112fe682a
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
 #+CUSTOM_ID: FUP-123-codemod-tile-server-side-persistence-per
+#+COMPLETION_HASH: 5db0292b8579d240
 
-* Initial Message
+* DECIDED ARCHITECTURE (supersedes the original SQLite+server-scheduler sketch below)
 
-P3 (NIF): Can you try it out? Will the warm kernel keep mini-sessions separate? What else besides improvements can it do? Is it strong improvements?
-W4 (stored programs): explain what that means please, what are the possibilities? How hard is the integration?
-Deferred, documented: D3, E4: what does it do?
+Decided 2026-06-11 with the user (refining-question pass). See decision memory
+DEC-tile-persistence-architecture--org-item-. Four locks:
 
-Think deeply
+1. SCHEDULER = SPLIT. The pi-knowledge-worker daemon IDLE-EXITS after 30min by design
+   (crates/pi-knowledge-worker/src/main.rs:9 + accept_loop exits when idle>=idle_secs, to
+   not pin RAM) → it CANNOT fire a 3am nightly tick. So this FUP builds ONLY persistence +
+   browser-driven "tick while panel open". The unattended-3am scheduler is split out to
+   FUP-129 (needs an always-on host: OS timer / systemd-timer one-shot, NOT the daemon).
 
-* Context (deferred from FUP-119, the shipped codemod tile)
+2. PROGRAM lives in a memory playbook :program block (FUP-115), referenced by id. A tile
+   stores program_ref=playbook-id, NOT inline program text. One program, many wirings by
+   ref (solves FUP-121 identity). FUP-115 is a soft dependency — until it ships, a tile MAY
+   fall back to inline program text, but the schema carries program_ref as the forward path.
 
-The codemod tile shipped in Spell Team Chat (CodemodTilePanel.svelte) with two honest
-gaps, deferred deliberately to keep the first build right-sized:
+3. PERSISTENCE = SPLIT by lifecycle (record has two halves, opposite storage needs):
+   - TILE CONFIG (low-churn, declarative) = an ORG ITEM with a PROPERTIES drawer.
+   - TILE HISTORY (high-churn, event-log) = a memory EPISODE per run + last-outcome cached
+     as a property on the org item for fast render.
+   ∴ NO new storage backend. (spell-server SQLite stays read-only; not reopened writable.)
 
-1. PERSISTENCE is localStorage-only (STORE_KEY 'spell.codemod-tiles.v1'). It survives
-   reload but is PER-BROWSER \u2014 and team-chat is MULTIPLAYER, so tiles aren't shared
-   across operators. spell-server's StateStoreManager is READ-ONLY (opens SQLite
-   {readonly:true}); there is no writable KV/state API. A shared tile store needs new
-   writable server code + a REST/WS endpoint.
+4. owner+project columns BOTH present → per-operator now, per-project-shared later (sharing
+   flag deferred). This maps to the user's "save into a note/episode, promote" instinct.
 
-2. The background-tick SCHEDULER does not exist. The tile's autoWrite toggle ARMS a
-   tile (and runStored's background-tick intent is implemented + gated), but nothing
-   FIRES per-tile ticks. startDashboardUpdater (qml-mode) is a status pusher, not a
-   program scheduler. So 'auto-apply' is armed-but-never-triggered until a scheduler
-   scans armed tiles and issues run_stored {intent:'background-tick', autoWrite:true}.
+* What gets written (exact)
 
-* Scope
+** Tile config — an org item (category: follow-ups or a new `tiles` category — decide at impl)
 
-A. Writable tile store (server):
-   - Add a writable store (a new SQLite table or a JSON store under the daemon's state
-     dir) for tile configs keyed by (owner, sessionCwd or project). Expose
-     GET/PUT /web/api/tiles (bearer-authed like the rest of /web/api/*).
-   - team-chat CodemodTilePanel reads/writes via the new api.ts methods instead of
-     localStorage (fall back to localStorage when offline).
-   - Decide sharing semantics: per-operator vs per-project-shared tiles.
+```
+* Codemod: migrate oldLog -> logger.info
+  :PROPERTIES:
+  :CUSTOM_ID:    FUP-123-codemod-tile-server-side-persistence-per::TILE-a1b2
+  :OWNER:        alice            ; operator token
+  :PROJECT:      /code/ora/spell  ; cwd/project key
+  :PROGRAM_REF:  PB-migrate-oldlog ; -> memory playbook id (FUP-115); inline fallback ok
+  :MODE:         write
+  :AUTOWRITE:    t                ; the arm toggle (trust signal)
+  :SCHEDULE:     0 3 * * *        ; for FUP-129's unattended half; unused here
+  :LAST_OUTCOME: committed        ; cached for fast render
+  :LAST_FILES:   4
+  :LAST_RUN_AT:  2026-06-11T03:00
+  :END:
+```
 
-B. Per-tile scheduler (server or daemon):
-   - A scheduler (reuse spell-server's GoalScheduler/Croner precedent) that scans armed
-     tiles and, on each tick, issues a run_stored {intent:'background-tick',
-     autoWrite:true} against the tile's target spawned session (spawn-on-demand if
-     none). Record the outcome to the tile's audit history (the store from A).
-   - Per-tile schedule config (cron expression or interval) in the tile model.
-   - Overlap protection (skip a tick if the prior run is still in flight) \u2014 mirror
-     GoalScheduler's `running` guard.
+Queryable: "armed tiles for project X" = org-query property filter AUTOWRITE=t PROJECT=X.
+
+** Tile history — a memory episode per run (KG timeline)
+
+On each run (interactive or browser-tick), append a memory episode:
+`note "tile TILE-a1b2 <intent> <outcome> <files> [paths]"` with about=[TILE-a1b2 org id],
+involved=[program_ref]. The episode store is the durable bounded timeline (KG handles
+retention). The org item caches ONLY the last outcome (3 properties above) for render
+without a KG query.
+
+* Build scope (this FUP — persistence + browser-tick only)
+
+1. ORG TILE STORE (coding-agent): helpers to create/read/update a tile org item via the
+   existing org tool surface (PROPERTIES drawer read/write). owner+project keyed. A list
+   query for the web UI: tiles WHERE project=current. NB use the agent's existing org file
+   locking — tiles may be written by a browser action AND (later) a scheduler.
+
+2. HISTORY = memory episode (coding-agent): on every run, write one episode; update the
+   org item's LAST_OUTCOME/LAST_FILES/LAST_RUN_AT cache properties. Bounded by KG retention,
+   not a hand-rolled 50-cap.
+
+3. WEB UI wiring (spell-team-chat + spell-server): the CodemodTilePanel reads/writes tiles
+   via a NEW REST surface (GET/PUT /web/api/tiles → coding-agent org-tile-store). localStorage
+   becomes the OFFLINE FALLBACK, not the source of truth. The run_stored RPC path is unchanged.
+   Browser-driven tick: the existing on-open visible-refresh + interactive Apply stay; this
+   just persists their outcomes server-side instead of per-browser localStorage.
+
+4. NO unattended firing here. autoWrite ARMS a tile and persists; nothing fires it on a
+   schedule yet — FUP-129 owns that. Document this clearly in the tile UI ("armed; auto-runs
+   when the scheduler ships").
 
 * Tests
 
-- A tile config PUT then GET round-trips via the server store (survives reload + is
-  visible to a second operator if shared).
-- An armed tile fires on its schedule \u2192 run_stored background-tick \u2192 the write commits
-  (or rolls back) and an audit line is recorded; an UNARMED tile never fires.
-- Overlap: a tick during an in-flight run is skipped.
+- Create a tile → an org item with the PROPERTIES drawer round-trips (owner/project/program_ref/
+  mode/autoWrite); a second read returns identical config.
+- A run appends a memory episode AND updates the org item's LAST_OUTCOME cache; the panel
+  renders last-outcome from the cache without a KG query.
+- List tiles for project X returns only X's tiles (owner+project filter).
+- Arming (autoWrite=t) persists to the org item and survives reload (server-side, not just
+  localStorage); a second operator on the same project sees the tile (per-project read path
+  present even if sharing-write is deferred).
+- Offline (server unreachable) → localStorage fallback still renders the last-known tiles.
 
 * Acceptance
 
-Tile configs persist server-side (shared per the chosen semantics) and an armed tile
-applies on a schedule with a recorded outcome; unarmed tiles never auto-run.
+Tile configs persist as org items (git-tracked, org-queryable, owner+project keyed), run
+history persists as memory episodes with a last-outcome cache on the org item, and the
+team-chat panel reads/writes server-side with localStorage as offline fallback. No new
+storage backend. Unattended scheduled firing is explicitly OUT (FUP-129).
 
 * Relationships
 
-Follow-up to FUP-119 (codemod tile, shipped). The substrate (runStored background-tick
-gating) is done; this is the persistence + firing mechanism around it. Shared by
-FUP-121 (format tile) and FUP-122 (nightly changelog \u2014 which is PRIMARILY a scheduler
-use case, so B is its hard dependency).
+Follow-up to FUP-119 (shipped codemod tile). Soft-deps FUP-115 (playbook :program for
+program_ref). Splits the unattended-3am scheduler to FUP-129. Shared by FUP-121 (format)
+and FUP-122 (changelog) — both need this persistence; FUP-122 ALSO hard-needs FUP-129's
+scheduler (it is primarily an unattended-tick UC). Decision: DEC-tile-persistence-architecture.
+
+----------------------------------------------------------------------
+* SUPERSEDED original sketch (kept for provenance)
+
+The original body proposed a writable SQLite `tiles` table in spell-server + a scheduler in
+spell-server or the knowledge daemon. SUPERSEDED because: (a) the knowledge daemon idle-exits
+(can't fire at 3am); (b) a new SQLite backend is outside the KG lifecycle + not git-tracked;
+(c) the user chose org-item config + memory-episode history to reuse the note/promote
+lifecycle. The scheduler is split to FUP-129 with an always-on host (OS timer).
+
+NOTE [2026-06-12]: SHIPPED (persistence + browser-tick half) + reviewer-gated. Built per DEC-tile-persistence-architecture: NO new storage backend. tiles org category (TILE prefix, defaults.ts). tile-store.ts foundation: TileRecord contract, list/get/create/update/delete/recordRun \u2014 config in org PROPERTIES drawer, history as memory episode + last-outcome cached on the org item. 7 tests over real native org engine (incl. rename, delete, commit+rollback record). RPC: tile_list/create/update/delete/record_run across rpc-types+rpc-mode (agent), BridgeRpcCommand passthrough (server), protocol mirror + App handlers + Shell threading + CodemodTilePanel rewired to SERVER-AS-TRUTH with localStorage offline-fallback, offline/error banners, optimistic-with-revert. Reviewer (agent://21-ReviewTilePersist) found 3 P2s ALL FIXED: title-rename via native updateItem headline; first-load MIGRATION of pre-FUP-123 localStorage tiles (never clobber non-empty cache with empty server set) + loadedFor re-fire gate; ok:false honored on update (revert), delete idempotent. Safety confirmed: external sessions rejected (shared rpc lane), dry-run never mutates, recordRun best-effort. Verification: agent 58=58, server 0, svelte 0/0, build OK. DEFERRED (own FUPs): FUP-130 unattended scheduler (daemon idle-exits, needs OS-timer always-on host); FUP-115 playbook programRef (programInline used today).

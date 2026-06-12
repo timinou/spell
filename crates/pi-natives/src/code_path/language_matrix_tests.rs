@@ -32,14 +32,14 @@ use pi_code_path::{
 };
 
 use super::{
-	code_resolver::CodeResolverImpl, css_resolver::CssResolver, heading_resolver::HeadingResolver,
+	code_resolver::NativeResolver, css_resolver::CssResolver, heading_resolver::HeadingResolver,
 };
 
 // ── Helpers ────────────────────────────────────────────────────────
 
-fn resolver() -> CodeResolverImpl {
+fn resolver() -> NativeResolver {
 	let reg = LanguageRegistry::with_builtins().expect("builtins");
-	CodeResolverImpl::new(Arc::new(reg))
+	NativeResolver::new(Arc::new(reg))
 }
 
 fn symbol_path(file: &std::path::Path, symbol: &str) -> CodePath {
@@ -85,7 +85,7 @@ fn heading_symbol_path(file: &std::path::Path, symbol: &str) -> CodePath {
 /// Returns Ok(()) if the op was handled (Some(Ok(...))) regardless of
 /// application success, Err(message) if no resolver claimed the op.
 fn dispatch_op(
-	code_r: &CodeResolverImpl,
+	code_r: &NativeResolver,
 	css_r: &CssResolver,
 	heading_r: &HeadingResolver,
 	op: &Op,
