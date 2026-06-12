@@ -1,0 +1,37 @@
+#+TITLE: Root check:ts tsgo debt — 81 errors, triaged (mostly aggregate-tsconfig + test sloppiness)
+#+STATE: ITEM
+#+SESSION_ID: 15022ed13b056c12
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-35-43-468Z_15022ed13b056c12.jsonl]]
+#+CUSTOM_ID: FUP-125-root-checkts-tsgo-debt-81-errors-triaged
+
+* Initial Message
+
+review whether FUP-110 and FUP-111 and the Team Chat IPC view still make sense and explain to me what they materially add to the experience and how you'd implement them. Review the code as it is now.
+
+Flagged during PLAN-331. Root `bun run check:ts` (tsgo -p tsconfig.json) reports 81 errors at baseline 9eeff37a1 — ALL pre-existing, none from PLAN-331. Per-package checks are clean. This ticket triages them so a future cleanup is actionable. NOT a product-bug backlog.
+
+* Root cause buckets (81 total)
+
+** Bucket A — aggregate tsconfig lacks DOM lib (~7, structural, real fix)
+Root tsconfig.json includes `packages/*/src/**` + `packages/*/test/**` with the base lib set (no DOM). It thus type-checks the BROWSER package spell-team-chat WITHOUT its own `lib: ["ES2022","DOM","DOM.Iterable"]` (packages/spell-team-chat/tsconfig.json:5). Result: phantom errors that do NOT exist under the package's own svelte-check:
+- spell-team-chat/src/lib/stores.svelte.ts:40 `window`
+- spell-team-chat/src/lib/ws.ts:133-134 `location`
+- spell-team-chat/src/main.ts:5 `getElementById`
+- spell-team-chat/test/e2e/* (7) — Playwright DOM ctx
+FIX OPTIONS: (a) exclude spell-team-chat from root include (it has its own check in CI), or (b) project references / per-package tsconfig solution so the root gate composes package configs instead of one flat lib set. (a) is the cutover; the browser package already self-checks via `bun run check`.
+
+** Bucket B — test-file type sloppiness (~66, low-value, mechanical)
+27x TS2352 (unsafe `as` casts in test fixtures), 13x TS7006 (implicit any params), 13x TS2769 (overload mismatch in mocks), 8x TS2339, etc. Concentrated in coding-agent/test (37+15+5) and ai/test (4). Each is a local fixture-typing fix. High churn, low risk, near-zero product value. Do opportunistically when touching the owning test.
+
+** Bucket C — real src (~3, worth a look)
+- coding-agent/src/tools/path-resolution.ts:164 TS2322 "project-root" not in CwdResolutionDecision — likely a missing union member; VERIFY it isn't a live bug.
+- swarm-extension/src/swarm/executor.ts:90 TS2353 `enableLsp` not in ExecutorOptions; schema.ts:257 TS18047 null children. swarm-extension is the orthogonal batch pipeline — owner should confirm.
+- utils/src/procmgr.ts:36 TS2322 env Record mismatch.
+
+* Recommended order
+1. Bucket A (cutover: fix the gate so it stops emitting phantom browser errors) — restores `check:ts` as a meaningful root gate.
+2. Bucket C (3 real ones — confirm none are live bugs).
+3. Bucket B opportunistically (do not batch-fix 66 test casts speculatively).
+
+* Note
+Until Bucket A lands, `bun run check:ts` is NOT a reliable boolean gate (the browser-package phantom errors mean green is impossible from root). Per-package `bun run check` is the trustworthy per-change gate meanwhile.

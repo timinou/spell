@@ -1,0 +1,25 @@
+#+TITLE: Team Chat render arm for task_ask projection (PLAN-331 W3' consumer)
+#+STATE: ITEM
+#+SESSION_ID: 15022ed13b056c12
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-35-43-468Z_15022ed13b056c12.jsonl]]
+#+CUSTOM_ID: FUP-124-team-chat-render-arm-for-task-ask-projec
+
+* Initial Message
+
+review whether FUP-110 and FUP-111 and the Team Chat IPC view still make sense and explain to me what they materially add to the experience and how you'd implement them. Review the code as it is now.
+
+Downstream consumer of PLAN-331 W3' (commit 07b8d58bf). W3' wired the worker<->orchestrator `task:ask:*` dialogue all the way to the browser as a `task_ask` rpc_event frame, but the spell-team-chat client reducer drops it on `default: return s` — so the data arrives invisible.
+
+* Material value
+When a worker subagent asks the orchestrator a mid-run question (PLAN-327 interactive tasks), a human watching Team Chat / Telegram currently sees the orchestrator apparently STALL during an invisible Q&A. This render arm surfaces the dialogue as a distinct bubble lane (e.g. "researcher asked: which auth provider? -> orchestrator answered: Auth0"), making subagent reasoning observable — the entire point of the web view.
+
+* Scope (observation-only, C4)
+No answer path from browser; answers composed in-process by orchestrator (PLAN-327 AskBroker). No new transport — rides the shipped W3' rail.
+
+* Implementation
+1. `spell-team-chat/src/lib/protocol.ts` — add `RpcTaskAskEvent` to client RpcEvent union (mirror `spell-server/src/rpc/types.ts:98`, three phases raised/answered/cancelled).
+2. `reducers.ts` — `case "task_ask":` before default. `raised` pushes an `ask` bubble keyed by questionId; `answered`/`cancelled` resolve IN PLACE (mutate matching bubble, not append) so the lane reads as dialogue not log.
+3. New `kind: "ask"` in BubbleKind + ChatBubble fields; Bubble.svelte render branch + labelFor.
+4. test/unit/reducers.test.ts — feed 3-phase sequence, assert one bubble transitions pending->answered.
+
+* Risk: trivial. Separate `case` from `blocking` (no double-delivery). No browser answer surface.
