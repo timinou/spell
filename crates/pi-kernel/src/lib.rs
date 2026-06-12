@@ -10,10 +10,13 @@
 //! host-specific symbol. The error type is `pi_code_path::types::Diagnostic`
 //! (already host-agnostic); each skin maps it to its own error.
 
+pub mod dialect_registry;
+pub mod parse;
 pub mod predicates;
 pub mod read;
 pub mod walker;
 
+pub use parse::{ResolveOutput, resolve_target, select_lexer};
 pub use read::resolve_read;
 pub use walker::{CodeResolverImpl, evaluate_query};
 

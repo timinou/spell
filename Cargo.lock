@@ -3959,6 +3959,7 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-elixir",
  "tree-sitter-typescript",
+ "winnow 0.7.15",
 ]
 
 [[package]]

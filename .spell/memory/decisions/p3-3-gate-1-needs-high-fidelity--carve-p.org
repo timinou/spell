@@ -1,0 +1,27 @@
+#+TITLE: p3-3-gate-1-needs-high-fidelity--carve-p
+
+** ITEM P3.3 gate-1 needs HIGH fidelity: carve parse path into pi-kernel resolve_target; split 3a (carve+parity) / 3b (rustler+gate)
+
+P3.3 (rustler NIF + gate-1 correctness) design, decided 2026-06-12 via oracle (agent 28-Gate1Shape). 
+
+GATE-1 FIDELITY: HIGH required, LOW guts the spike. The plan's acceptance corpus is phrased in TARGET STRINGS (paths/globs/slices/symbols); globs+slices live in the FS Locator/Qualifier, NOT in Query \u2014 so a pre-built-Query NIF (resolve_read only) CANNOT EXPRESS the corpus at all, and reduces to both sides calling resolve_read(sameQuery) = a tautology proving only FFI marshalling. The spike's value (warm kernel serves REAL read queries identically) demands the parse+dispatch path.
+
+THE CARVE (small, ~190 host-agnostic lines, NOT a balloon): select_lexer/DotLexer/NameLexerWrapper (napi.rs:279-386) depend ONLY on pi-code-path (NameLexer/NamePayload/winnow/tree_sitter/dialect_registry) \u2014 zero host coupling. dialect_registry.rs is 81 lines, pi-code-path dialects only, OnceLock *_LEXER statics (GT-7 share-safe) move verbatim. parse_code_path + FsResolver already live in pi-code-path (a pi-kernel dep). FormatExtractor trait is ALREADY in pi-code-path/resolver/traits.rs. Move dialect_registry + select_lexer into pi-kernel; napi.rs re-exports (pub use) \u2014 SINGLE SOURCE, reject option-(b) duplicate-in-skin (that's the exact drift that makes NIF!=NAPI later).
+
+NEW ENTRY: `pub fn resolve_target(registry: &Arc<LanguageRegistry>, target: &str, root: &Path, extractors: &[Arc<dyn FormatExtractor>], cancel: &CancellationToken) -> Result<Vec<NodeRef>, Diagnostic>` \u2014 owns select_lexer + parse_code_path + read-dispatch (text-qualifier/pure-text/symbol/outline/diff/fs branches ONLY; EXCLUDE semantic_dispatch/URI/edit/manage which need LSP/scheme_registry/writes from pi-natives). resolve_read stays the per-file primitive resolve_target's symbol/outline branches call. INJECT the extractor chain as a param so pi-kernel stays pure: MarkitdownExtractor (extractors/mod.rs:25) shells out (non-deterministic, pi-natives-bound) \u2014 pi-natives passes default_extractors() incl. Markitdown; the gate test passes only pure JsonExtractor/HtmlExtractor.
+
+LIFETIMES/SEND: no concern. resolve returns fully-owned Vec<NodeRef> (String/Range/Content/HashMap/Vec<Diagnostic>, all Serialize); tree_sitter::Node<'_> appears only INSIDE NameLexer::matches during resolution, no borrow escapes. Shared Arcs in OnceLock statics are Send+Sync. Returning an owned JSON String to BEAM is trivially safe.
+
+GATE-1 ASSERTION DISCIPLINE (anti-flake): (1) parse BOTH payloads to serde_json::Value and compare Values, NEVER strings \u2014 kills the metadata HashMap<String,Value> key-order flake (RandomState differs per process). (2) Sort node array by (locator, range.start, range.end) before compare \u2014 kills walk-order nondeterminism. (3) Canonicalize root identically both sides (same absolute PathBuf) so NodeRef.locator matches (read branch does root.join for relative file nodes, napi.rs:886). (4) Compare diagnostics too (don't strip) \u2014 the glob-prefix informational diagnostic IS part of fidelity; resolve_target MUST port the suppression filter at napi.rs:466-481. (5) Gate compares NODES (NAPI CodePathChunk.nodes vs NIF Vec<NodeRef>).
+
+SPLIT (decided): P3.3a = carve dialect_registry+select_lexer + add resolve_target into pi-kernel; prove with IN-PROCESS Rust parity test resolve_target == execute_code_path_inner read nodes (NO BEAM toolchain needed) \u2014 this is the fidelity-determining risk-bearing work, surfaces any carve-balloon early. P3.3b = rustler NIF (calls resolve_target, returns owned JSON String, warm Arc<LanguageRegistry> in ResourceArc/OnceLock) + Elixir wrapper + cross-runtime GATE 1 (mechanical once 3a lands). Corpus: foo.ts, src/lib.rs, README.md, src/**/*.rs, *.ts, foo.ts:80-130, lib.rs:1-5, foo.ts::Bar.method, lib.rs::\u00a7function, lib.rs::\u00a7function#body, foo.ts#outline, src/**/*.ts::SymName. Toolchain confirmed: cargo, elixir/OTP 28, mix, rustler 0.38 fetchable. Effort: 3a ~0.5-1.5d, 3b ~0.5d. OPTIONAL future: promote NodeRef.metadata to BTreeMap for source-deterministic JSON (hardens every cross-runtime gate; out of P3.3 scope).
+:PROPERTIES:
+:CUSTOM_ID: DEC-p3-3-gate-1-needs-high-fidelity--carve-p
+:KIND: decision
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-12T21:27:44Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-334-p3-find-as-nif-proof-pi-kernel-carve-out
+DISTILLED_FROM: PLAN-334-p3-find-as-nif-proof-pi-kernel-carve-out
+:END:

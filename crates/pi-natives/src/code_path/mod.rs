@@ -9,7 +9,12 @@
 pub mod abort;
 pub mod code_resolver;
 pub mod css_resolver;
-pub mod dialect_registry;
+/// Re-export shim: `dialect_registry` now lives in `pi-kernel` (P3.3a). Keeps
+/// `dialect_registry::select_dialect` call sites (napi.rs select_lexer,
+/// dispatch_tests) compiling unchanged.
+pub mod dialect_registry {
+	pub use pi_kernel::dialect_registry::*;
+}
 pub mod diff_qualifier;
 pub mod edge_dispatch;
 pub mod edge_resolver;
@@ -35,6 +40,8 @@ mod language_matrix_tests;
 mod manage_tests;
 #[cfg(test)]
 mod op_matrix_tests;
+#[cfg(test)]
+mod kernel_parity_tests;
 #[cfg(test)]
 mod routing_tests;
 #[cfg(test)]

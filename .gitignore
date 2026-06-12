@@ -90,3 +90,4 @@ rust_out
 .clj-kondo/
 .lsp/
 .scratch/
+erl_crash.dump
