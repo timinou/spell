@@ -1,8 +1,9 @@
 #+TITLE: Team Chat render arm for task_ask projection (PLAN-331 W3' consumer)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 15022ed13b056c12
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-35-43-468Z_15022ed13b056c12.jsonl]]
 #+CUSTOM_ID: FUP-124-team-chat-render-arm-for-task-ask-projec
+#+COMPLETION_HASH: df3218dc9a31f3a4
 
 * Initial Message
 
@@ -23,3 +24,5 @@ No answer path from browser; answers composed in-process by orchestrator (PLAN-3
 4. test/unit/reducers.test.ts — feed 3-phase sequence, assert one bubble transitions pending->answered.
 
 * Risk: trivial. Separate `case` from `blocking` (no double-delivery). No browser answer surface.
+
+NOTE [2026-06-12]: Implemented 2026-06-10, commit 0b73856b6. svelte-check 0 errors; reducer suite 24 pass (5 new task_ask cases). Pure client-side addition on the shipped W3' rail.
