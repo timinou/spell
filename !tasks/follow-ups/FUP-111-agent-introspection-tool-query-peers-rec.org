@@ -50,3 +50,11 @@ After grounding against live code, this FUP is now the QUERY half only: a read-o
 ** Dependencies
 - Independent of FUP-110 (no cross-process) and FUP-129 (wait half). Ships alone.
 - Shares the registry with FUP-129 if/when that is built (the wait half reads the same activity stream).
+
+* DESIGN DEP added 2026-06-10 — FUP-131 (PeerActivityProvider join spike)
+Grounding the edit-broker angle (user direction) revealed the query tool should JOIN two existing substrates, not read one:
+- pi-edit-broker (WHERE: files/codepaths, cross-process, anonymous) — ALREADY wired to TS via edit-coordinator.ts (coordStatus/recentPeerActivity), already consumed by status-line. This is the "agent is editing this file" signal the user asked about. It exists.
+- task:subagent:progress / SubagentTracker (WHO/WHY: agent purpose, intent) — in-process, TUI-only.
+Join key = sessionId. The useful answer = "reviewer is editing src/auth.ts::validateToken — checking auth flow" needs BOTH.
+This + the BEAM-portability requirement (user: "might end up on the BEAM") + kdl tunability promote the design to its own spike: FUP-131. The tool depends only on a PeerActivityProvider interface (BEAM = swap impl, not rewrite; edit-broker daemon is the proven cross-process boundary). BIRTH the in-process registry now (user direction) as the provider's in-process impl.
+∴ FUP-111 implementation BLOCKED ON FUP-131 (interface + join semantics + kdl schema). Then FUP-111 ships pull mode against the provider.

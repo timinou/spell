@@ -1,0 +1,72 @@
+#+TITLE: DESIGN: PeerActivityProvider — join edit-broker (WHERE) + subagent stream (WHO/WHY), BEAM-portable seam
+#+STATE: ITEM
+#+SESSION_ID: 15022ed13b056c12
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-09T08-35-43-468Z_15022ed13b056c12.jsonl]]
+#+CUSTOM_ID: FUP-131-design-peeractivityprovider-join-edit-br
+
+* Initial Message
+
+review whether FUP-110 and FUP-111 and the Team Chat IPC view still make sense and explain to me what they materially add to the experience and how you'd implement them. Review the code as it is now.
+
+Design spike feeding FUP-111 (query half) and FUP-129 (wait half). Surfaced 2026-06-10 by grounding the peer-introspection idea against live code and finding TWO existing peer-awareness substrates that must be JOINED, plus a BEAM-portability requirement from the user. This is architecture, not a code sketch — design before implementing FUP-111.
+
+* The two substrates (both verified in live code)
+** A. pi-edit-broker (WHERE — files/codepaths, cross-process, anonymous)
+- Rust daemon, user-scoped, ~/.spell/edit-broker.sock, NDJSON. crates/pi-edit-broker/src/protocol.rs.
+- Tracks: PeerSummary{sessionId,cwd,openFiles,projectName}, CommitRecord/PeerEdit{codePaths,diffHash,ts}, FileIntent claims (atomic multi-file txns), conflicts.
+- ALREADY wired to TS: packages/coding-agent/src/session/edit-coordinator.ts — coordStatus(file?)->{brokerUp,peers,socketPath}, recentPeerActivity(file,sinceMs,limit)->{edits}, openCodeBufferPaths(). NAPI cmd coord_status / coord_peer_activity in pi-natives/src/code_buffer.rs:1792.
+- ALREADY consumed: modes/components/status-line/segments.ts:411 ("coord: N peers").
+- STRENGTH: file/symbol-granular, cross-PROCESS today, intent claims + diff hashes. This is the "a running agent is editing this file, be careful" signal.
+- GAP: keys on sessionId only. NO agent purpose — no agent type, no task/assignment, no intent. Anonymous.
+
+** B. SubagentTracker / task:subagent:progress (WHO/WHY — purpose, in-process)
+- TS, TUI-scoped (modes/interactive-mode.ts:351). Subscribes EventBus "task:subagent:progress".
+- Tracks: AgentProgress{agent,status,lastIntent,currentTool,task,assignment,todoNodes,sessionId,...}.
+- STRENGTH: rich on purpose/intent.
+- GAP: TUI-only (unreachable from subagents, absent in rpc/headless); in-PROCESS only.
+
+* The join (the actual product)
+Join key = sessionId (edit-broker PeerSummary.sessionId == AgentProgress.sessionId). Joined answer:
+"reviewer (session X) is editing src/auth.ts::validateToken — intent: checking auth flow"
+Neither substrate yields this alone. WHERE ⊕ WHO/WHY on sessionId is the value.
+
+* The provider boundary (BEAM-portability — user flagged "might end up on the BEAM")
+The tool MUST depend only on an interface, never on either substrate directly:
+
+  interface PeerActivityProvider {
+    peers(filter?: { scope, file?, peer? }): PeerActivity[]   // joined WHERE+WHO/WHY
+    subscribe(kind: "commit"|"completion"|"intent", cb): Unsubscribe
+  }
+  interface PeerActivity {
+    sessionId: string; taskId?: string; agent?: string; status?: string;
+    intent?: string; currentTool?: string;
+    editing?: { files: string[]; codePaths: string[]; lastCommitTs?: number };
+  }
+
+- IN-PROCESS impl (today): join EventBus activity registry (WHO/WHY) with edit-coordinator.ts calls (WHERE).
+- BEAM impl (future): edit-broker is ALREADY a daemon w/ socket protocol — it is the proven cross-process boundary. A BEAM reimpl swaps the provider impl; the tool + kdl config are unchanged. The in-process EventBus registry is the part that does NOT survive a BEAM move, so it lives BEHIND the provider, never leaks into the tool.
+- ENCAPSULATION RULE: peer_activity tool, kdl schema, and prompt docs reference only PeerActivityProvider + PeerActivity. Zero imports of edit-coordinator or EventBus from the tool.
+
+* kdl config (user: tunable, sensible default)
+  peer-awareness {
+    mode "both"                      // pull | ambient | both    (default both)
+    ambient-on "commit completion"   // which peer events inject a one-line context note (default: peer commit OR task completion — low-noise, high-signal)
+    scope "siblings"                 // siblings | tree | session-peers   (session-peers lights up edit-broker cross-process axis)
+    detail "terse"                   // terse (status+intent) | rich (tools/asks/todos/edits)
+  }
+Settings precedent: src/config/settings-schema.ts "task.interactive" (boolean, default false, ui tab "tasks"). Extend with a nested "task.peerAwareness" group or discrete keys.
+
+* Open design questions
+1. Ambient injection mechanism: how does a one-liner ("✓ reviewer committed src/auth.ts") enter a running subagent's context without being intrusive? Candidates: followUp (like AskBroker answer delivery, executor.ts:1413) on peer-commit; or a turn-boundary context block. followUp is proven but may fragment attention; turn-boundary is cleaner but needs a hook. DECIDE before building ambient mode. (Pull mode has no such question — ship pull first.)
+2. Join liveness: edit-broker peers are cross-process & may outlive a subagent run; SubagentTracker entries are run-scoped. The join must tolerate a WHERE-entry with no WHO/WHY (foreign session = show anonymous "another session editing X") and a WHO/WHY entry with no WHERE (agent not editing). Define the outer-join semantics.
+3. Scope "session-peers": exposing cross-process peers (other humans'/agents' sessions on the same repo) to a subagent — privacy/noise boundary? Probably opt-in only.
+4. Where does the in-process registry live + get constructed? Pattern = AskBroker (index.ts:1570, threaded via ExecutorOptions, injected via customTools at executor.ts:1332). Registry constructed beside AskBroker; provider wraps registry + edit-coordinator; tool closed over provider + callerTaskId.
+5. Does SubagentTracker refactor to consume the registry in the same change (one implementation) or follow-up? Lean: registry standalone first, SubagentTracker wraps it next (cutover, staged).
+
+* Dependencies
+- Blocks FUP-111 implementation (query half consumes this provider).
+- Informs FUP-129 (wait half reads the same provider stream).
+- Independent of FUP-110 (substrate wire) — edit-broker already provides the cross-process reach this needs.
+
+* Verdict
+Design the PeerActivityProvider interface + join semantics + kdl schema FIRST (this spike). Then FUP-111 implements pull mode against it. Ambient mode + session-peers scope follow once OQ1/OQ3 are decided. Birth the registry now (user direction) as the in-process provider impl behind the interface.
