@@ -222,6 +222,7 @@ pub fn resolve_target(
 	target: &str,
 	root: &Path,
 	extractors: &[Arc<dyn FormatExtractor>],
+	gitignore: Option<bool>,
 	cancel: &CancellationToken,
 ) -> Result<ResolveOutput, Diagnostic> {
 	let (lexer, parse_diagnostics) = select_lexer(target);
@@ -278,9 +279,13 @@ pub fn resolve_target(
 					span: None,
 				});
 			} else if is_text_qualifier_only(&cp) || is_pure_text_query(&cp) {
-				TextResolver::new(root.clone())
-					.with_extractors(extractors.to_vec())
-					.resolve(&cp, cancel)?
+				// gitignore threads to the TextResolver branches ONLY — mirrors NAPI,
+				// where the fs/symbol/outline resolvers always use gitignore=true.
+				let mut resolver = TextResolver::new(root.clone()).with_extractors(extractors.to_vec());
+				if let Some(g) = gitignore {
+					resolver = resolver.with_gitignore(g);
+				}
+				resolver.resolve(&cp, cancel)?
 			} else if is_symbol_query(&cp) || is_outline_qualifier(&cp) {
 				// Code query / outline: walk files, then code-resolve per file.
 				let qualifier = cp.qualifier.take();

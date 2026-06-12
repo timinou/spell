@@ -114,7 +114,7 @@ fn assert_parity(target: &str, root: &PathBuf) {
 		pi_code_engine::language::LanguageRegistry::with_builtins().expect("registry"),
 	);
 	let cancel = CancellationToken::new();
-	let out = pi_kernel::resolve_target(&registry, target, root, &pure_extractors(), &cancel)
+	let out = pi_kernel::resolve_target(&registry, target, root, &pure_extractors(), None, &cancel)
 		.unwrap_or_else(|d| panic!("kernel resolve failed for {target:?}: {}", d.message));
 	let kernel_dtos = nodes_to_dtos(out.nodes, NO_STAGING);
 	let mut kernel_diags: Vec<String> = out
@@ -214,7 +214,7 @@ fn semantic_qualifiers_are_excluded_from_the_kernel_read_lane() {
 	);
 	let cancel = CancellationToken::new();
 	for target in ["foo.ts::bar#hover", "foo.ts#diagnostics", "src/lib.rs::hello#signature"] {
-		let out = pi_kernel::resolve_target(&registry, target, &root, &pure_extractors(), &cancel);
+		let out = pi_kernel::resolve_target(&registry, target, &root, &pure_extractors(), None, &cancel);
 		let err = out.expect_err(&format!("{target:?} must be excluded from the kernel read lane"));
 		assert!(
 			matches!(err.variant, pi_code_path::types::DiagnosticVariant::UnsupportedOperation),

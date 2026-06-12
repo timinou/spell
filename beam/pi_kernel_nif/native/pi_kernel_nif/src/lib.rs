@@ -48,7 +48,8 @@ fn resolve_target(target: String, root: String) -> Result<String, String> {
 			panic!("injected NIF panic for gate-2 test: {target}");
 		}
 		let cancel = CancellationToken::new();
-		pi_kernel::resolve_target(registry(), &target, Path::new(&root), &[], &cancel)
+		// gitignore defaults to the resolver default (None) for the NIF read lane.
+		pi_kernel::resolve_target(registry(), &target, Path::new(&root), &[], None, &cancel)
 	}));
 
 	match outcome {

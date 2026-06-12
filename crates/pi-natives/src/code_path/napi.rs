@@ -11,13 +11,12 @@ use std::{
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use pi_code_path::{
-	ast::{Axis, CodePath, FsSegment, Head, Locator, MutationOutcome},
+	ast::{CodePath, FsSegment, Head, Locator, MutationOutcome},
 	dialect::NameLexer,
-	dialects::{fs::FsResolver, text::TextResolver},
 	op::Op,
 	parser::parse_code_path,
 	renderer::render_code_path,
-	resolver::{CancellationToken, CodeResolver, Resolver},
+	resolver::CancellationToken,
 	types::{Diagnostic, DiagnosticVariant, NodeRef},
 };
 use winnow::{Parser, token::take_while};
@@ -303,6 +302,21 @@ impl NameLexer for DotLexer {
 }
 
 static DOT_LEXER_ARC: OnceLock<Arc<dyn NameLexer>> = OnceLock::new();
+
+/// The warm language registry for the read lane (P3.7 cutover). Built once and
+/// shared with `pi_kernel::resolve_target`; the old per-call `code_resolver::new()`
+/// rebuilt it each time — this caches it (same builtins, read-only after init).
+fn code_resolver_registry() -> Arc<pi_code_engine::language::LanguageRegistry> {
+	static REGISTRY: OnceLock<Arc<pi_code_engine::language::LanguageRegistry>> = OnceLock::new();
+	REGISTRY
+		.get_or_init(|| {
+			Arc::new(
+				pi_code_engine::language::LanguageRegistry::with_builtins()
+					.expect("kernel language registry init failed"),
+			)
+		})
+		.clone()
+}
 
 /// Thin wrapper so `Arc<dyn NameLexer>` satisfies the `NameLexer` trait
 /// bound required by `parse_code_path`.
@@ -840,94 +854,13 @@ pub fn execute_code_path_inner(
 			if semantic_dispatch::is_semantic_dispatch(&cp) {
 				// FUP-099 (FUP-LIVE): #hover / #signature / #type_definition /
 				// #inlay / #diagnostics (and the deprecated #hover_inferred)
-				// dispatch via the per-workspace CompositeSemanticBackend
-				// before any of the text/symbol/diff/outline paths claim the
-				// qualifier. Mutual exclusion with text qualifiers is by name:
-				// no semantic qualifier collides with the text/fs qualifier set.
+				// dispatch via the per-workspace CompositeSemanticBackend. This
+				// is HOST-ONLY (LSP backend) — the kernel read lane excludes it,
+				// so it is handled here before delegating to resolve_target.
 				semantic_dispatch::resolve(&cp, &root, &pi_token, &cancel_token)?
-			} else if is_text_qualifier_only(&cp) {
-				// FEAT-689 / B2,B10: bare-file + content qualifier (#raw,
-				// #bytes, #lines, #text, #match, #image) routes to the
-				// TextResolver, not the FsResolver. Without this branch
-				// the FsResolver claims the path and emits "unknown
-				// qualifier" because it only knows listing/tree/stat.
-				let extractors = default_extractors();
-				let mut resolver = TextResolver::new(root.clone()).with_extractors(extractors);
-				if let Some(gitignore) = opts.gitignore {
-					resolver = resolver.with_gitignore(gitignore);
-				}
-				resolver
-					.resolve(&cp, &pi_token)
-					.map_err(|d| Error::from_reason(d.message))?
-			} else if is_pure_text_query(&cp) {
-				let extractors = default_extractors();
-				let mut resolver = TextResolver::new(root).with_extractors(extractors);
-				if let Some(gitignore) = opts.gitignore {
-					resolver = resolver.with_gitignore(gitignore);
-				}
-				resolver
-					.resolve(&cp, &pi_token)
-					.map_err(|d| Error::from_reason(d.message))?
-			} else if is_symbol_query(&cp) {
-				// Code query: walk files, then apply code resolver per file.
-				let qualifier = cp.qualifier.take();
-				let fs_resolver = FsResolver::new(root.clone());
-				let file_nodes = fs_resolver
-					.resolve(&cp, &pi_token)
-					.map_err(|d| Error::from_reason(d.message))?;
-
-				let code_resolver = code_resolver::new().map_err(|d| Error::from_reason(d.message))?;
-				let query = cp.query.as_ref().unwrap();
-				let mut results = Vec::new();
-				for file_node in file_nodes {
-					if cancel_token.aborted() || pi_token.is_cancelled() {
-						break;
-					}
-					let path = if Path::new(&file_node.locator).is_absolute() {
-						PathBuf::from(&file_node.locator)
-					} else {
-						root.join(&file_node.locator)
-					};
-					match code_resolver.resolve(&path, query, qualifier.as_ref(), &pi_token) {
-						Ok(mut nodes) => results.append(&mut nodes),
-						Err(d) => {
-							let mut node = file_node;
-							node.diagnostics.push(d);
-							results.push(node);
-						},
-					}
-				}
-				results
-			} else if is_outline_qualifier(&cp) {
-				let qualifier = cp.qualifier.take();
-				let fs_resolver = FsResolver::new(root.clone());
-				let file_nodes = fs_resolver
-					.resolve(&cp, &pi_token)
-					.map_err(|d| Error::from_reason(d.message))?;
-				let code_resolver = code_resolver::new().map_err(|d| Error::from_reason(d.message))?;
-				let dummy_query = pi_code_path::ast::Query::single(pi_code_path::ast::Step {
-					axis:       None,
-					head:       pi_code_path::ast::Head::NodeKind("*".into()),
-					predicates: vec![],
-				});
-				let mut results = Vec::new();
-				for file_node in file_nodes {
-					let path = if Path::new(&file_node.locator).is_absolute() {
-						PathBuf::from(&file_node.locator)
-					} else {
-						root.join(&file_node.locator)
-					};
-					match code_resolver.resolve(&path, &dummy_query, qualifier.as_ref(), &pi_token) {
-						Ok(mut nodes) => results.append(&mut nodes),
-						Err(d) => {
-							let mut node = file_node;
-							node.diagnostics.push(d);
-							results.push(node);
-						},
-					}
-				}
-				results
 			} else if is_diff_qualifier(&cp) {
+				// #diff is HOST-ONLY (git subprocess); also excluded from the kernel
+				// read lane and handled here before delegating.
 				let qualifier = cp.qualifier.as_ref().unwrap();
 				let locator_str = fs_locator_to_path(&cp.locator);
 				let diff_node = NodeRef {
@@ -941,10 +874,25 @@ pub fn execute_code_path_inner(
 				diff_qualifier::resolve(&diff_node, qualifier, &root)
 					.map_err(|d| Error::from_reason(d.message))?
 			} else {
-				let resolver = FsResolver::new(root);
-				resolver
-					.resolve(&cp, &pi_token)
-					.map_err(|d| Error::from_reason(d.message))?
+				// P3.7 CUTOVER: every remaining read shape (text-qualifier, pure-text,
+				// symbol, outline, fs) is served by the SAME host-agnostic kernel entry
+				// the rustler skin calls — single source of truth, no duplicate dispatch.
+				// The kernel resolves nodes + query-level diagnostics; the diagnostics
+				// fold into parse_diagnostics so the chunk-level emission is unchanged.
+				// out.diagnostics is the lexer-selection set — IDENTICAL to napi's own
+				// filtered `parse_diagnostics` (both are pure fns of opts.target), which
+				// is already emitted at the chunk level below. Discard the kernel's copy
+				// to avoid double-counting (e.g. the glob-prefix hint).
+				let out = pi_kernel::resolve_target(
+					&code_resolver_registry(),
+					&opts.target,
+					&root,
+					&default_extractors(),
+					opts.gitignore,
+					&pi_token,
+				)
+				.map_err(|d| Error::from_reason(d.message))?;
+				out.nodes
 			}
 		},
 		Locator::Uri(uri) => {
@@ -1189,37 +1137,11 @@ pub fn execute_code_path_inner(
 	Ok(chunks)
 }
 
-fn is_pure_text_query(cp: &CodePath) -> bool {
-	let Some(query) = &cp.query else {
-		return false;
-	};
-	let head_kind = match &query.head.head {
-		Head::NodeKind(k) => k.as_str(),
-		_ => return false,
-	};
-	matches!(head_kind, "line" | "para" | "chunk") && query.head.axis == Some(Axis::Structural)
-}
-
-/// FEAT-689: a CodePath with no query and a content-class qualifier
-/// (raw/bytes/lines/text/match/image) is a TextResolver target, not an
-/// FsResolver one. The FsResolver only understands listing/tree/stat
-/// qualifiers, so without this routing predicate a bare `get("a.ts")`
-/// (auto-qualified to `a.ts#raw`) errors out as "unknown qualifier: raw".
-fn is_text_qualifier_only(cp: &CodePath) -> bool {
-	if cp.query.is_some() {
-		return false;
-	}
-	cp.qualifier.as_ref().is_some_and(|q| {
-		matches!(q.name.as_str(), "raw" | "bytes" | "lines" | "text" | "match" | "image")
-	})
-}
-
-/// #outline qualifier routes to the code resolver (symbol outline).
-fn is_outline_qualifier(cp: &CodePath) -> bool {
-	cp.query.is_none() && cp.qualifier.as_ref().is_some_and(|q| q.name == "outline")
-}
-
 /// Check if the CodePath has a `#diff` qualifier (routes to diff_qualifier).
+/// The remaining read-shape predicates (text-qualifier / pure-text / symbol /
+/// outline) moved to `pi_kernel::parse` with the P3.7 cutover — napi delegates
+/// those branches to `pi_kernel::resolve_target`, keeping only the host-only
+/// `#diff` check here.
 fn is_diff_qualifier(cp: &CodePath) -> bool {
 	cp.query.is_none() && cp.qualifier.as_ref().is_some_and(|q| q.name == "diff")
 }
@@ -1247,10 +1169,6 @@ fn fs_locator_to_path(locator: &Locator) -> String {
 		},
 		Locator::Uri(_) => ".".to_string(),
 	}
-}
-
-fn is_symbol_query(cp: &CodePath) -> bool {
-	cp.query.is_some() && !is_pure_text_query(cp)
 }
 
 // ── parseCodePath ────────────────────────────────────────────────
