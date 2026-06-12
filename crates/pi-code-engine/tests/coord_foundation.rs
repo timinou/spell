@@ -2,8 +2,8 @@ use std::{path::PathBuf, sync::Arc};
 
 use pi_code_engine::{
 	CodeBuffer, CoordClient, IntentResult, JournalEntry, JournalReader, JournalWriter, LanguageId,
-	LanguageRegistry, NullCoordClient, PeerEdit, TextEdit, default_journal_root, derive_code_paths,
-	journal_path_for,
+	LanguageRegistry, NullCoordClient, OwnerId, PeerEdit, TextEdit, default_journal_root,
+	derive_code_paths, journal_path_for,
 };
 
 fn registry() -> Arc<LanguageRegistry> {
@@ -194,7 +194,7 @@ fn journal_path_is_deterministic() {
 fn null_coord_client_is_granting() {
 	let client = NullCoordClient;
 	let file = PathBuf::from("/tmp/x.ts");
-	assert!(matches!(client.intent("s", &file, &["::x".into()], 0), IntentResult::Granted));
+	assert!(matches!(client.intent(&OwnerId::from("s"), &file, &["::x".into()], 0), IntentResult::Granted));
 	let edits = client.recent_peer_edits(&file, 0, 10);
 	assert!(edits.is_empty());
 	assert!(client.peer_state(&file).peers.is_empty());

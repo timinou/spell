@@ -6,7 +6,7 @@ pub mod peer_state;
 pub mod socket;
 
 pub use client::{
-	CommitResult, CoordClient, IntentResult, PeerEdit, PeerInfo, PeerState, SessionId,
+	CommitResult, CoordClient, IntentResult, OwnerId, PeerEdit, PeerInfo, PeerState, SessionId,
 };
 pub use journal::{
 	JournalEntry, JournalReader, JournalWriter, default_journal_root, journal_path_for,
@@ -45,11 +45,11 @@ impl MockCoordClient {
 
 #[cfg(test)]
 impl CoordClient for MockCoordClient {
-	fn on_open(&self, _session: &str, _file: &std::path::Path, _revision: u64) {}
+	fn on_open(&self, _owner: &OwnerId, _file: &std::path::Path, _revision: u64) {}
 
 	fn intent(
 		&self,
-		_session: &str,
+		_owner: &OwnerId,
 		_file: &std::path::Path,
 		_code_paths: &[String],
 		_base_revision: u64,
@@ -62,7 +62,7 @@ impl CoordClient for MockCoordClient {
 
 	fn commit(
 		&self,
-		_session: &str,
+		_owner: &OwnerId,
 		_file: &std::path::Path,
 		_revision: u64,
 		_parent_revision: u64,
@@ -89,5 +89,5 @@ impl CoordClient for MockCoordClient {
 		PeerState { peers: Vec::new(), recent_commits: Vec::new(), latest_revision: None }
 	}
 
-	fn on_close(&self, _session: &str, _file: &std::path::Path) {}
+	fn on_close(&self, _owner: &OwnerId, _file: &std::path::Path) {}
 }

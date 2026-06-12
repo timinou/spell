@@ -18,8 +18,8 @@ pub use buffer::{
 };
 pub use coord::{
 	BrokerEndpoint, CommitResult, CoordClient, IntentResult, JournalEntry, JournalReader,
-	JournalWriter, NullCoordClient, PeerEdit, PeerInfo, PeerState, SessionId, SocketCoordClient,
-	default_journal_root, derive_code_paths, journal_path_for,
+	JournalWriter, NullCoordClient, OwnerId, PeerEdit, PeerInfo, PeerState, SessionId,
+	SocketCoordClient, default_journal_root, derive_code_paths, journal_path_for,
 };
 pub use diff::{DiffHunk, DiffKind, diff_lines};
 pub use edit::{DragDirection, SpliceMode};

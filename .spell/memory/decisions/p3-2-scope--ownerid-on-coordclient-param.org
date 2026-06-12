@@ -1,0 +1,31 @@
+#+TITLE: p3-2-scope--ownerid-on-coordclient-param
+
+** ITEM P3.2 scope: OwnerId on CoordClient params (serde transparent) + reclaim stub; gate-3 hold needs persistent rustler client
+
+P3.2 (OwnerId + reclaim) scope, decided 2026-06-12 via oracle (agent 26-OwnerIdScope). Corrects my initial scoping.
+
+MINIMAL-CORRECT SURFACE (wire-neutral, ~no risk):
+1. Define `pub struct OwnerId(String)` in pi-code-engine/src/coord/client.rs (beside `pub type SessionId`). Derive From<&str>, From<String>, AsRef<str>, Display + Serialize/Deserialize with #[serde(transparent)] (serializes as bare inner string \u2192 broker protocol.rs SessionId=String stays BYTE-IDENTICAL; the 'renaming a serialized field' fear is FALSE).
+2. Re-type owner params on the CoordClient trait (client.rs:82-108): `session: &str` -> `owner: &OwnerId` on on_open/intent/commit/on_close (this IS the lock-table boundary the plan names; the in-process analogue of broker state.rs:67 intents HashMap keyed by Intent.session_id). Update 4 impls: MockCoordClient (coord/mod.rs:47), NullCoordClient (coord/null.rs), SocketCoordClient (socket.rs:251), future rustler. CORRECTION over my plan: newtyping 'host boundary only' while trait params stay &str = ZERO cross-owner protection; the newtype MUST be on the trait params.
+3. Add `fn reclaim(&self, owner: &OwnerId)` to CoordClient with DEFAULT no-op body (Mock/Null compile unchanged). Reclaim ACTION belongs on the trait; the death TRIGGER (Node async-context teardown / BEAM monitor :DOWN) is HOST-owned, NOT on the trait \u2014 the host detector CALLS coord.reclaim(owner).
+4. At the 2-3 buffer.rs coord call sites: wrap OwnerId::from(sid). DO NOT rewrite the ~104 session_id Option<&str> THREADING refs (that's threading, not the lock table).
+5. SocketCoordClient::reclaim = documented no-op STUB for now.
+
+DECISIVE EMPIRICAL FINDING (reshapes gate 3): the CURRENT SocketCoordClient sends ClientMessage::Bye at the END of EVERY op (socket.rs with_session) \u2192 broker conn.rs:134 deregister fires \u2192 the intent placed by intent() (buffer.rs:633) is GONE before commit() (buffer.rs:697) opens its own connection. NOTHING is held across calls. ∴ reclaim() is a NO-OP against today's client; gate-3 ('hold intent, kill mid-op, reclaim, 2nd owner acquires') presumes a hold the current model does NOT provide. Functional gate-3 wiring REQUIRES a PERSISTENT-connection client \u2014 that lands with the rustler skin (P3.3+/P3.5), NOT P3.2. Sequence accordingly: P3.2 ships the type-safety + the reclaim trait method (stub); P3.5 wires functional reclaim atop the persistent client.
+
+RECLAIM PATH FORK (surfaced, decided): socket-per-owner (RECOMMENDED, zero protocol change) \u2014 each BEAM mini-session owner = its own UnixStream held open for the hold duration, wrapped in ResourceArc; ResourceArc Drop -> stream close -> broker existing conn.rs:134 deregister reclaims that owner's intents. This is the plan's 'BEAM: monitor + ResourceArc Drop' read literally; reclaim(owner) = 'drop this owner's held connection', NO new message. ALTERNATIVE shared-node-socket REQUIRES a NEW ClientMessage::Deregister{session_id} + multi-owner conn handler (conn.rs:78,183 is one-owner-per-connection today; ReleaseIntent only releases specific file+code_paths for the connection's single session, not whole-owner) \u2014 a REAL scope expansion, DEFERRED to a dedicated phase, do NOT smuggle into P3.
+
+ALSO (reaper why-BEAM-needs-explicit-reclaim): broker reaper.rs uses pid-liveness kill(pid,0); a killed BEAM *process* shares the node OS pid \u2192 kill still alive \u2192 reaper never fires \u2192 BEAM owner death needs an EXPLICIT reclaim, can't rely on the pid reaper.
+
+CAVEAT (filed as future): whether Bye-immediately-deregisters single-file intents is intentional or a latent defect (TTL persistence expected?) is unresolved \u2014 worth a ticket; doesn't change P3.2 surface. OwnerId home = pi-code-engine/coord (no pi-kernel dep); move to pi-kernel only if a later phase needs both hosts to share it below the engine.
+:PROPERTIES:
+:CUSTOM_ID: DEC-p3-2-scope--ownerid-on-coordclient-param
+:KIND: decision
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-12T21:09:24Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-334-p3-find-as-nif-proof-pi-kernel-carve-out
+DISTILLED_FROM: PLAN-334-p3-find-as-nif-proof-pi-kernel-carve-out
+DISTILLED_FROM: DEC-p3-pi-kernel-carve-out--verified-boundar
+:END:

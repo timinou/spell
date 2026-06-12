@@ -628,9 +628,10 @@ impl BufferRegistry {
 			let base_revision = latest_coord_revision_for(&key)?;
 			if let Some(sid) = session_id {
 				if !target_code_paths.is_empty() {
+					let owner = crate::coord::OwnerId::from(sid);
 					match self
 						.coord
-						.intent(sid, &key, target_code_paths, base_revision)
+						.intent(&owner, &key, target_code_paths, base_revision)
 					{
 						crate::coord::IntentResult::Granted => {},
 						crate::coord::IntentResult::Conflict {
@@ -695,7 +696,7 @@ impl BufferRegistry {
 				let revision = parent_revision.saturating_add(1);
 				let commit_result = if let Some(sid) = session_id {
 					self.coord.commit(
-						sid,
+						&crate::coord::OwnerId::from(sid),
 						&key,
 						revision,
 						parent_revision,

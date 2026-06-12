@@ -13,7 +13,7 @@ use parking_lot::Mutex as ParkingMutex;
 use pi_edit_broker::{ClientMessage, PeerSummary, ServerMessage, spawn_broker_if_absent};
 
 use super::{
-	client::{CommitResult, CoordClient, IntentResult, PeerEdit, PeerInfo, PeerState, SessionId},
+	client::{CommitResult, CoordClient, IntentResult, OwnerId, PeerEdit, PeerInfo, PeerState, SessionId},
 	default_journal_root,
 	journal::{JournalEntry, JournalReader, journal_path_for},
 	peer_state::PeerStateStore,
@@ -250,19 +250,19 @@ fn now_ms() -> u64 {
 }
 
 impl CoordClient for SocketCoordClient {
-	fn on_open(&self, session: &str, file: &Path, _revision: u64) {
-		let _ = self.with_session(session, |_stream, _reader| Some(()));
+	fn on_open(&self, owner: &OwnerId, file: &Path, _revision: u64) {
+		let _ = self.with_session(owner.as_str(), |_stream, _reader| Some(()));
 		self.sync_recent_from_journal(file);
 	}
 
 	fn intent(
 		&self,
-		session: &str,
+		owner: &OwnerId,
 		file: &Path,
 		code_paths: &[String],
 		base_revision: u64,
 	) -> IntentResult {
-		let result = self.with_session(session, |stream, reader| {
+		let result = self.with_session(owner.as_str(), |stream, reader| {
 			write_json(stream, &ClientMessage::Intent {
 				file: file.to_path_buf(),
 				code_paths: code_paths.to_vec(),
@@ -310,7 +310,7 @@ impl CoordClient for SocketCoordClient {
 
 	fn commit(
 		&self,
-		session: &str,
+		owner: &OwnerId,
 		file: &Path,
 		revision: u64,
 		parent_revision: u64,
@@ -318,7 +318,7 @@ impl CoordClient for SocketCoordClient {
 		diff_hash: &str,
 		byte_len: u64,
 	) -> CommitResult {
-		let result = self.with_session(session, |stream, reader| {
+		let result = self.with_session(owner.as_str(), |stream, reader| {
 			write_json(stream, &ClientMessage::Commit {
 				file: file.to_path_buf(),
 				revision,
@@ -372,7 +372,16 @@ impl CoordClient for SocketCoordClient {
 		state
 	}
 
-	fn on_close(&self, _session: &str, _file: &Path) {}
+	fn on_close(&self, _owner: &OwnerId, _file: &Path) {}
+
+	/// P3.2: reclaim an owner's coordination state. On today's
+	/// connection-per-call client nothing is held across calls (each op ends
+	/// with a `Bye` that the broker treats as disconnect-deregister), so there
+	/// is nothing to reclaim — this is a documented no-op. The functional
+	/// implementation lands with the persistent-connection client (P3.5): a
+	/// BEAM owner's held connection is closed, and the broker's existing
+	/// disconnect-deregister frees that owner's intents.
+	fn reclaim(&self, _owner: &OwnerId) {}
 
 	fn multi_intent(
 		&self,
