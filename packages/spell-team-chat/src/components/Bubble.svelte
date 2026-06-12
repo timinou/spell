@@ -50,6 +50,17 @@
 				<div class="block-title">{(bubble.blocking as { title?: string; actionType?: string }).title ?? (bubble.blocking as { actionType?: string }).actionType}</div>
 				<div class="block-summary muted">awaiting response…</div>
 			{/if}
+		{:else if bubble.kind === "ask" && bubble.ask}
+			<div class="block-title">{bubble.ask.fromTaskId ?? "worker"} asks</div>
+			<div class="block-summary">{bubble.ask.question}</div>
+			{#if bubble.ask.status === "answered"}
+				<div class="ask-answer">orchestrator answered</div>
+				<pre class="text">{bubble.ask.answer}</pre>
+			{:else if bubble.ask.status === "cancelled"}
+				<div class="block-summary muted">cancelled—{bubble.ask.reason}</div>
+			{:else}
+				<div class="block-summary muted">awaiting orchestrator…</div>
+			{/if}
 		{:else if bubble.kind === "artifact" && bubble.artifact}
 			<ArtifactInline artifact={bubble.artifact} {token} />
 		{:else if bubble.text}
@@ -70,6 +81,7 @@
 			case "tool_end": return "tool ←";
 			case "tool_update": return "tool ↻";
 			case "blocking": return "Blocking";
+			case "ask": return "Dialogue";
 			case "external_log": return "External";
 			case "artifact": return "Artifact";
 			case "system": return "System";
@@ -115,6 +127,15 @@
 	.bubble.artifact {
 		background: var(--bg-secondary);
 		border-color: var(--border-secondary);
+	}
+	.bubble.ask {
+		border-left: 3px solid var(--accent-faint, var(--border-secondary));
+		background: var(--bg-secondary);
+	}
+	.ask-answer {
+		font-size: var(--font-size-xs);
+		color: var(--text-secondary);
+		margin-top: 4px;
 	}
 	.bubble.external_log {
 		background: var(--bg-secondary);

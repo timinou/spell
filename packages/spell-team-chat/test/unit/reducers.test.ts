@@ -233,3 +233,78 @@ describe("appendProcessInfo / appendStderr", () => {
 		expect(s.stderrLog[199]).toEqual({ ts: 250, line: "line 250" });
 	});
 });
+
+describe("applyRpcEvent — task_ask dialogue (PLAN-331 W3')", () => {
+	const raised = {
+		type: "task_ask" as const,
+		phase: "raised" as const,
+		runId: "r1",
+		questionId: "q1",
+		fromTaskId: "researcher",
+		question: "Which auth provider?",
+		blocking: true,
+	};
+
+	it("raised appends a pending ask bubble", () => {
+		const s = applyRpcEvent(freshSessionStateCore(), raised);
+		expect(s.bubbles).toHaveLength(1);
+		expect(s.bubbles[0]).toMatchObject({
+			kind: "ask",
+			ask: { questionId: "q1", fromTaskId: "researcher", status: "pending", question: "Which auth provider?" },
+		});
+	});
+
+	it("answered resolves the matching bubble in place (no append)", () => {
+		let s = applyRpcEvent(freshSessionStateCore(), raised);
+		s = applyRpcEvent(s, {
+			type: "task_ask",
+			phase: "answered",
+			runId: "r1",
+			questionId: "q1",
+			answer: "Auth0",
+			recipients: ["researcher"],
+		} as RpcEvent);
+		expect(s.bubbles).toHaveLength(1);
+		expect(s.bubbles[0].ask).toMatchObject({ status: "answered", answer: "Auth0", question: "Which auth provider?" });
+	});
+
+	it("cancelled resolves the matching bubble in place", () => {
+		let s = applyRpcEvent(freshSessionStateCore(), raised);
+		s = applyRpcEvent(s, {
+			type: "task_ask",
+			phase: "cancelled",
+			runId: "r1",
+			questionId: "q1",
+			reason: "broker closed",
+		} as RpcEvent);
+		expect(s.bubbles[0].ask).toMatchObject({ status: "cancelled", reason: "broker closed" });
+	});
+
+	it("answer with no matching raised bubble is ignored (out-of-order)", () => {
+		const s = applyRpcEvent(freshSessionStateCore(), {
+			type: "task_ask",
+			phase: "answered",
+			runId: "r1",
+			questionId: "orphan",
+			answer: "x",
+			recipients: [],
+		} as RpcEvent);
+		expect(s.bubbles).toHaveLength(0);
+	});
+
+	it("correlates distinct questionIds independently", () => {
+		let s = applyRpcEvent(freshSessionStateCore(), raised);
+		s = applyRpcEvent(s, { ...raised, questionId: "q2", fromTaskId: "reviewer", question: "Ship it?" });
+		s = applyRpcEvent(s, {
+			type: "task_ask",
+			phase: "answered",
+			runId: "r1",
+			questionId: "q1",
+			answer: "Auth0",
+			recipients: ["researcher"],
+		} as RpcEvent);
+		expect(s.bubbles).toHaveLength(2);
+		expect(s.bubbles[0].ask).toMatchObject({ status: "answered" });
+		expect(s.bubbles[1].ask).toMatchObject({ status: "pending", question: "Ship it?" });
+	});
+});

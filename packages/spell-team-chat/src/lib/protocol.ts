@@ -131,8 +131,30 @@ export type RpcEvent =
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; intent?: string; args?: unknown }
 	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args?: unknown; partialResult: RpcToolResult }
 	| { type: "tool_execution_end"; toolCallId: string; toolName: string; isError?: boolean; result?: RpcToolResult }
+	| RpcTaskAskEvent
 	| RpcResponseEvent
 	| { type: "error"; message: string };
+
+/**
+ * Observation-only projection of a spawned session's worker↔orchestrator
+ * dialogue (PLAN-331 W3'). Mirrors coding-agent / spell-server RpcTaskAskEvent.
+ * The human watches; answers are composed in-process by the orchestrator
+ * (PLAN-327), never over this channel.
+ */
+export type RpcTaskAskEvent =
+	| {
+			type: "task_ask";
+			phase: "raised";
+			runId: string;
+			questionId: string;
+			fromTaskId: string;
+			fromSessionId?: string;
+			question: string;
+			scopeHint?: string;
+			blocking: boolean;
+	  }
+	| { type: "task_ask"; phase: "answered"; runId: string; questionId: string; answer: string; recipients: string[] }
+	| { type: "task_ask"; phase: "cancelled"; runId: string; questionId: string; reason: string };
 
 /* -- Event log (external sessions) ------------------------------------ */
 export interface EventLogEntry {

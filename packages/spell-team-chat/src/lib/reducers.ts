@@ -21,6 +21,7 @@ export type BubbleKind =
 	| "system"
 	| "external_log"
 	| "artifact"
+	| "ask"
 	| "error";
 
 export interface ChatBubble {
@@ -35,6 +36,8 @@ export interface ChatBubble {
 	args?: unknown;
 	blocking?: BlockingEventPayload;
 	artifact?: ArtifactCreatedEvent;
+	/** task_ask dialogue (observation-only, PLAN-331 W3'): correlates raised→answered/cancelled in place. */
+	ask?: { questionId: string; fromTaskId?: string; status: "pending" | "answered" | "cancelled"; question?: string; answer?: string; reason?: string };
 }
 
 export interface SessionStateCore {
@@ -169,9 +172,49 @@ export function applyRpcEvent(s: SessionStateCore, event: RpcEvent): SessionStat
 				...s,
 				bubbles: [...s.bubbles, { id: newBubble(), kind: "error", ts: Date.now(), text: event.message }],
 			};
+		case "task_ask":
+			return applyTaskAsk(s, event);
 		default:
 			return s;
 	}
+}
+
+/**
+ * Observation-only worker↔orchestrator dialogue (PLAN-331 W3'). `raised`
+ * appends a pending `ask` bubble; `answered`/`cancelled` resolve the matching
+ * bubble IN PLACE (keyed by questionId) so the lane reads as a dialogue, not a
+ * log. An answer/cancel with no matching raised bubble is ignored (out-of-order
+ * or pre-subscribe).
+ */
+function applyTaskAsk(s: SessionStateCore, event: Extract<RpcEvent, { type: "task_ask" }>): SessionStateCore {
+	if (event.phase === "raised") {
+		return {
+			...s,
+			bubbles: [
+				...s.bubbles,
+				{
+					id: newBubble(),
+					kind: "ask",
+					ts: Date.now(),
+					ask: {
+						questionId: event.questionId,
+						fromTaskId: event.fromTaskId,
+						status: "pending",
+						question: event.question,
+					},
+				},
+			],
+		};
+	}
+	let matched = false;
+	const bubbles = s.bubbles.map(b => {
+		if (b.kind !== "ask" || b.ask?.questionId !== event.questionId || b.ask.status !== "pending") return b;
+		matched = true;
+		return event.phase === "answered"
+			? { ...b, ask: { ...b.ask, status: "answered" as const, answer: event.answer } }
+			: { ...b, ask: { ...b.ask, status: "cancelled" as const, reason: event.reason } };
+	});
+	return matched ? { ...s, bubbles } : s;
 }
 
 export function pushBlocking(s: SessionStateCore, payload: BlockingEventPayload): SessionStateCore {
