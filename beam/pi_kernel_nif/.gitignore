@@ -1,0 +1,6 @@
+/_build/
+/deps/
+/priv/native/
+native/pi_kernel_nif/target/
+*.beam
+erl_crash.dump

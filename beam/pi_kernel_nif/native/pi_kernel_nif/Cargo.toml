@@ -1,0 +1,29 @@
+[package]
+name = "pi_kernel_nif"
+version = "0.1.0"
+edition = "2021"
+
+# The rustler NIF skin over pi-kernel (PLAN-334 / P3.3b). This is the BEAM-side
+# analogue of the pi-natives NAPI skin: it calls the SAME host-agnostic
+# `pi_kernel::resolve_target` the NAPI skin's read branch calls, so the read
+# result is byte-identical across runtimes (gate 1). The kernel resolves fully
+# in Rust and the NIF returns an owned JSON string to the BEAM — no tree-sitter
+# borrow escapes the call.
+
+# Standalone workspace: this crate lives physically under the spell repo root
+# (whose Cargo.toml is a workspace), but it is built by `mix`/rustler as its own
+# unit, NOT as a spell workspace member. The empty [workspace] table makes it a
+# workspace root so `cargo metadata` resolves it independently; the path deps
+# below still point back into the spell crates.
+[workspace]
+
+[lib]
+name = "pi_kernel_nif"
+crate-type = ["cdylib"]
+
+[dependencies]
+rustler = "0.38"
+serde_json = "1"
+pi-kernel = { path = "../../../../crates/pi-kernel" }
+pi-code-engine = { path = "../../../../crates/pi-code-engine" }
+pi-code-path = { path = "../../../../crates/pi-code-path" }
