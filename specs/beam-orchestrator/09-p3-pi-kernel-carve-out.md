@@ -1,8 +1,44 @@
 # 09 · P3 — pi-kernel carve-out + OwnerId + rustler find + 3 gates
 
-Status: execution spec. Derived from PLAN-334 + a file-verified boundary audit
-(2026-06-12). Supersedes the indicative file list in PLAN-334 with verified
-ground truth.
+Status: **SHIPPED 2026-06-12** — all three gates green, reviewer-gated, committed.
+Derived from PLAN-334 + a file-verified boundary audit. Supersedes the indicative
+file list in PLAN-334 with verified ground truth.
+
+## As-built summary (what shipped)
+
+```
+P3.1  a732eae0c  pi-kernel crate carved (read resolver); NativeResolver newtype
+                 (Deref) carries write methods; N-2 isolation proven.
+P3.2  a45428986  OwnerId on CoordClient lock-table params (#[serde(transparent)],
+                 wire-neutral) + reclaim() trait method (stub).
+P3.3a 2b1727710  resolve_target (parse + read-dispatch) in pi-kernel; GATE 1
+                 in-process: 7 parity tests, byte-identical to NAPI.
+P3.3b a3c9abe13  rustler NIF skin (beam/pi_kernel_nif); GATE 1 cross-runtime:
+                 6 tests on live BEAM (OTP 28).
+P3.4  a3c9abe13  GATE 2 panic-safety: catch_unwind to {:error}, BEAM survives.
+P3.5  5d1975f2d  GATE 3 lock-liveness: dead owner to broker reclaim to reacquire.
+```
+
+### The 3 gates — all GREEN
+```
+GATE 1  correctness   NIF read == pi_kernel::resolve_target == NAPI execute_code_path_inner
+                      (in-process parity 7/7 + cross-runtime BEAM 6/6)
+GATE 2  panic-safety  injected NIF panic caught; ping()+resolve succeed in same VM after
+                      -> kills error class #4 (NIF-panic)
+GATE 3  lock-liveness owner A holds intent (60s TTL) -> A dies (conn drop) -> broker
+                      deregister -> owner B acquires reclaimed intent (no deadlock)
+```
+
+### Deferred to a future BEAM-integration phase (NOT P3)
+```
+- The functional :DOWN-monitor -> ResourceArc(held-connection) Drop -> reclaim WIRING
+  in the NIF (socket-per-owner). P3.5 proved the broker RECLAIM the trigger relies on;
+  the NIF-side persistent-connection client + monitor is the next phase.
+- napi's execute_code_path_inner read branch CALLING resolve_target (today proven-
+  equivalent twins; the cutover to a single call site is mechanical follow-up).
+- P5: graph edges + writes cut over to the NIF; the code-graph index moves wholesale
+  (resolves the two-kernels RAM cost); N-3 HandleStore ETS->ResourceArc (zero-copy).
+```
 
 > P3 is the **architecture bet**, not error-relief. The execute substrate
 > (W0–W4) already killed every live error class over the bridge. P3's unique

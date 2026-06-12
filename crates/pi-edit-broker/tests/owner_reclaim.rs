@@ -10,8 +10,10 @@
 //! sees the disconnect → its existing `deregister`-on-disconnect (conn.rs:134)
 //! frees that owner's intents. This test proves the BROKER end of that path: a
 //! dropped client connection reclaims its intents and a second client then
-//! acquires the same file. The BEAM monitor → drop trigger is exercised by the
-//! NIF gate in beam/pi_kernel_nif; here we prove the reclaim it relies on.
+//! acquires the same file. The BEAM-side :DOWN-monitor -> ResourceArc(held-
+//! connection) Drop trigger is DEFERRED to a future BEAM-integration phase (it is
+//! not yet wired in beam/pi_kernel_nif); this test proves the broker reclaim that
+//! trigger will rely on.
 //!
 //! Why the broker reclaim (not the pid reaper) is the BEAM path: the reaper
 //! (reaper.rs) probes liveness via `kill(pid, 0)`, but a killed BEAM *process*

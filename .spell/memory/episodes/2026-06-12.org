@@ -112,3 +112,14 @@ ABOUT: FUP-121-w4-write-uc4-format-drift-tile-hygiene-t
 ABOUT: DEC-tile-persistence-architecture--org-item-
 ABOUT: CON-execute-substrate-w1-w3-shipped--psettle
 :END:
+** ITEM P3 (PLAN-334) progress 2026-06-12: P3.1 + P3.2 + P3.3a all SHIPPED reviewer-gated + committed (a732eae0c, a45428986, 2b1727710). The pi-kernel crate now exists with: walker/predicates (read resolver), OwnerId on CoordClient, and resolve_target (full parse+read-dispatch). GATE 1 proven IN-PROCESS: 7 parity tests assert pi_kernel::resolve_target byte-identical to execute_code_path_inner (NAPI). N-2 isolation proven (zero napi/rustler/buffer in pi-kernel deps). Remaining: P3.3b (rustler NIF + Elixir wrapper + cross-runtime gate1), P3.4 (panic catch_unwind gate2), P3.5 (functional reclaim atop persistent-connection client gate3), P3.6 (docs) \u2014 ALL need a live BEAM rustler NIF. KEY METHOD WINS this run: (1) the dispatched code-explorer agent had WEB-ONLY tools (no repo access) \u2014 its boundary map was unreliable inference; re-did by direct file read. Lesson: verify a boundary-map agent has find/grep/read on the repo. (2) oracle consults were decisive 3x: caught orphan-rule E0117 making free-fns illegal (forced NativeResolver newtype), corrected OwnerId scope (newtype on trait params not host-boundary; serde transparent), and ruled gate-1 needs HIGH fidelity (resolve_target owning parse, not pre-built Query). (3) The in-process parity test CAUGHT 2 real fidelity gaps the static carve hid: NAPI emits lexer diagnostics at chunk-level not on a node (\u2192 ResolveOutput split), and metadata HashMap key-order flake (\u2192 canonical_json compare). ENVIRONMENT: pi-natives integration-test binaries hit linker OOM (ld signal 7 Bus error) building in parallel (40+ tree-sitter crates + napi); a rustler NIF .so over pi-kernel links less (315 vs 1340 dep-tree lines, 25 vs 40 ts-language crates) so single-NIF-alone is plausibly feasible with 20Gi free, but P3.3b must build the NIF in isolation. Flaky test to ignore: embedding_worker::socket_tests::client_recovers_from_dead_socket (socket timing, passes in isolation, zero coord refs).
+:PROPERTIES:
+:CUSTOM_ID: EP-3cc0a69ea73a2db0
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-12T22:06:18Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-334-p3-find-as-nif-proof-pi-kernel-carve-out
+ABOUT: DEC-p3-pi-kernel-carve-out--verified-boundar
+:END:

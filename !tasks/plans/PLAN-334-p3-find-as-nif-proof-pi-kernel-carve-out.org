@@ -141,3 +141,34 @@ Verified ground truth (GT-1..9):
 reclaim(owner) delegating to broker deregister. Build order P3.1 (carve) → P3.2
 (OwnerId+reclaim) → P3.3 (rustler, gate1) → P3.4 (panic, gate2) → P3.5 (liveness,
 gate3) → P3.6 (docs). Next: P3.1 the carve.
+
+* PROGRESS (2026-06-12): P3.1 + P3.2 + P3.3a SHIPPED (reviewer-gated, committed)
+
+3 milestones done, each reviewer-clean + committed:
+- P3.1 (a732eae0c): carved pi-kernel crate (host-agnostic read resolver). NativeResolver
+  newtype (Deref) carries the write methods (orphan-rule-safe). N-2 PROVEN: zero
+  napi/rustler/buffer in pi-kernel dep tree. pi-kernel 25 tests, pi-natives 435+, green.
+- P3.2 (a45428986): OwnerId(String) newtype on CoordClient lock-table params +
+  reclaim() trait method (no-op stub). #[serde(transparent)] = wire byte-identical
+  (broker protocol untouched). EMPIRICAL: today's SocketCoordClient sends Bye after
+  every op (nothing held across calls) \u2192 functional reclaim needs the persistent-conn
+  client (P3.5), reclaim is a documented stub now.
+- P3.3a (2b1727710): carved the parse path (dialect_registry + select_lexer +
+  read-dispatch) into pi-kernel `resolve_target(registry,target,root,extractors,cancel)
+  -> ResolveOutput{nodes,diagnostics}`. GATE 1 (IN-PROCESS) PROVEN: 7 parity tests
+  (plain/glob/slice/symbol/outline/glob-diag + semantic-exclusion) assert byte-identical
+  nodes AND diagnostics vs execute_code_path_inner. Reviewer-gated, fixed P1 (stray
+  erl_crash.dump) + P2 (semantic-dispatch guard).
+
+REMAINING: P3.3b (rustler NIF + Elixir wrapper + cross-runtime gate 1) \u2192 P3.4 (panic
+catch_unwind, gate 2) \u2192 P3.5 (functional reclaim atop persistent client, gate 3) \u2192
+P3.6 (docs). All three need a LIVE BEAM rustler NIF.
+
+ENVIRONMENT NOTE: the pi-natives INTEGRATION-TEST binaries (worker_mode/semantic_live_e2e/
+edge_dispatch_e2e) hit a linker OOM (ld signal 7 Bus error) building in parallel \u2014 the
+~40 tree-sitter language crates + napi make them huge. A rustler NIF .so over pi-kernel
+links LESS (pi-kernel dep tree 315 lines vs pi-natives 1340; 25 ts-language crates via
+pi-code-engine builtins vs ~40), and 20Gi RAM is free, so a single NIF link built ALONE
+is plausibly feasible \u2014 but the heavy-link risk is real and P3.3b should build the NIF
+in isolation (not alongside the integration tests). The decision point: P3.3b is a
+greenfield Mix project + rustler crate + cross-runtime test, the spike's BEAM half.
