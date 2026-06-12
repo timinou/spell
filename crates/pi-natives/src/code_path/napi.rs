@@ -883,6 +883,15 @@ pub fn execute_code_path_inner(
 				// filtered `parse_diagnostics` (both are pure fns of opts.target), which
 				// is already emitted at the chunk level below. Discard the kernel's copy
 				// to avoid double-counting (e.g. the glob-prefix hint).
+				//
+				// Host-abort bridge: the kernel's mid-walk guard checks `pi_token` (host-
+				// agnostic). Propagate an already-fired host abort (AbortSignal/timeout)
+				// into it so an aborted request skips the walk entirely. Full mid-walk
+				// responsiveness for a long in-flight symbol walk is FUP-tracked; the
+				// post-match guard below returns Err on abort either way.
+				if cancel_token.aborted() {
+					pi_token.cancel();
+				}
 				let out = pi_kernel::resolve_target(
 					&code_resolver_registry(),
 					&opts.target,
