@@ -12,9 +12,7 @@ use winnow::{Parser, token::take_while};
 
 use crate::{
 	ast::NamePayload,
-	dialect::{
-		AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierSpec,
-	},
+	dialect::{AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierSpec},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -47,18 +45,36 @@ impl NameLexer for MdNameLexer {
 				},
 			}
 		}
-		Ok(NamePayload::Raw(render_segments(&segments)))
+		// BUG-469: a quoted segment (backtick or double-quote) yields a `Quoted`
+		// payload carrying the *bare* heading text, so `matches` compares it
+		// directly against the (unquoted) heading node text and `render` re-wraps
+		// it in the canonical backtick form for stable round-trip.
+		let quoted = segments
+			.iter()
+			.any(|s| matches!(s, MdSegment::QuotedHeading(_)));
+		let bare = render_segments_bare(&segments);
+		Ok(if quoted {
+			NamePayload::Quoted(bare)
+		} else {
+			NamePayload::Raw(bare)
+		})
 	}
 
 	fn render(&self, n: &NamePayload) -> String {
 		match n {
 			NamePayload::Raw(s) => s.clone(),
-			NamePayload::Quoted(s) => s.clone(),
+			// Canonical backtick display — mirrors the parser error hint and the
+			// quoting form used by every other dialect; round-trips through parse.
+			NamePayload::Quoted(s) => format!("`{s}`"),
 		}
 	}
 
 	fn matches(&self, n: &NamePayload, node: Node<'_>, src: &str) -> bool {
-		let rendered = self.render(n);
+		// Compare against the BARE payload text (no quote delimiters), not
+		// `render()` — a quoted target must match an unquoted heading node.
+		let rendered = match n {
+			NamePayload::Raw(s) | NamePayload::Quoted(s) => s.clone(),
+		};
 		let kind = node.kind();
 		// Only match structural heading/section nodes
 		if !matches!(kind, "section" | "atx_heading" | "setext_heading" | "headline") {
@@ -79,6 +95,12 @@ impl NameLexer for MdNameLexer {
 }
 
 fn parse_segment(input: &mut &str) -> winnow::Result<MdSegment> {
+	// BUG-469: accept backtick quoting (the canonical quote char across every
+	// other dialect and the form the parser error hint recommends), plus the
+	// existing double-quote form. Both carry the bare heading text.
+	if input.starts_with('`') {
+		return parse_backtick(input);
+	}
 	if input.starts_with('"') {
 		return parse_quoted(input);
 	}
@@ -89,6 +111,32 @@ fn parse_segment(input: &mut &str) -> winnow::Result<MdSegment> {
 	} else {
 		Ok(MdSegment::Heading(s.to_string()))
 	}
+}
+
+/// Backtick-quoted heading segment: verbatim text up to the closing backtick.
+/// Mirrors the elixir/haskell/rust lexers — no escape processing, since a
+/// heading cannot itself contain a backtick boundary.
+fn parse_backtick(input: &mut &str) -> winnow::Result<MdSegment> {
+	let snapshot = *input;
+	*input = &input[1..]; // consume opening `
+	let mut buf = String::new();
+	let mut consumed = 0;
+	let mut closed = false;
+	for (idx, c) in input.char_indices() {
+		if c == '`' {
+			closed = true;
+			consumed = idx + 1;
+			break;
+		}
+		buf.push(c);
+		consumed = idx + c.len_utf8();
+	}
+	if !closed || buf.is_empty() {
+		*input = snapshot;
+		return Err(winnow::error::ContextError::default());
+	}
+	*input = &input[consumed..];
+	Ok(MdSegment::QuotedHeading(buf))
 }
 
 fn parse_quoted(input: &mut &str) -> winnow::Result<MdSegment> {
@@ -131,14 +179,16 @@ fn parse_quoted(input: &mut &str) -> winnow::Result<MdSegment> {
 	Ok(MdSegment::QuotedHeading(buf))
 }
 
-fn render_segments(segs: &[MdSegment]) -> String {
+/// Join segments into a single BARE name string (no quote delimiters). Quoted
+/// headings contribute their literal text; this is both the payload value and
+/// the string `matches` compares against an unquoted heading node. Display
+/// re-quoting (backticks) is handled in `render`.
+fn render_segments_bare(segs: &[MdSegment]) -> String {
 	segs
 		.iter()
 		.map(|s| match s {
 			MdSegment::Heading(h) => h.clone(),
-			MdSegment::QuotedHeading(q) => {
-				format!("\"{}\"", q.replace('\\', "\\\\").replace('"', "\\\""))
-			},
+			MdSegment::QuotedHeading(q) => q.clone(),
 			MdSegment::ListItem(n) => n.to_string(),
 		})
 		.collect::<Vec<_>>()
@@ -206,9 +256,7 @@ mod qualifiers {
 
 	use crate::{
 		dialect::QualifierResolver,
-		dialects::mdorg::{
-			first_child_kind, heading_child, heading_text_node, match_kind,
-		},
+		dialects::mdorg::{first_child_kind, heading_child, heading_text_node, match_kind},
 	};
 
 	pub struct Body;
@@ -456,8 +504,8 @@ mod qualifiers {
 /// Bundle the Markdown / Org dialect.
 pub fn markdown_dialect() -> LanguageDialect {
 	LanguageDialect {
-		name_lexer: Arc::new(MdNameLexer),
-		anchors:    vec![
+		name_lexer:   Arc::new(MdNameLexer),
+		anchors:      vec![
 			AnchorPattern {
 				name:    "code-block",
 				matcher: |n, _s| {
@@ -563,7 +611,7 @@ pub fn markdown_dialect() -> LanguageDialect {
 				},
 			},
 		],
-		qualifiers: vec![
+		qualifiers:   vec![
 			QualifierSpec {
 				name:       "body",
 				applies_to: vec!["section".into()],
@@ -635,7 +683,7 @@ pub fn markdown_dialect() -> LanguageDialect {
 				resolve:    Arc::new(qualifiers::Deadline),
 			},
 		],
-		edge_kinds: EdgeKindSet::default(),
+		edge_kinds:   EdgeKindSet::default(),
 		kind_aliases: std::collections::HashMap::new(),
 	}
 }
@@ -643,6 +691,7 @@ pub fn markdown_dialect() -> LanguageDialect {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::ast::Head;
 
 	#[test]
 	fn parse_simple_heading() {
@@ -653,11 +702,13 @@ mod tests {
 
 	#[test]
 	fn parse_quoted_heading() {
+		// BUG-469: double-quoted heading now yields `Quoted` with BARE text
+		// (no leaked delimiters) so it can match an unquoted heading node.
 		let mut input = "\"Quick start\"";
 		let payload = MdNameLexer.parse(&mut input).unwrap();
 		match payload {
-			NamePayload::Raw(s) => assert_eq!(s, "\"Quick start\""),
-			_ => panic!("expected Raw"),
+			NamePayload::Quoted(s) => assert_eq!(s, "Quick start"),
+			_ => panic!("expected Quoted"),
 		}
 	}
 
@@ -677,11 +728,12 @@ mod tests {
 
 	#[test]
 	fn parse_quoted_with_escape() {
+		// Escapes inside a double-quoted heading are decoded into the bare text.
 		let mut input = "\"He said \\\"hi\\\"\"";
 		let payload = MdNameLexer.parse(&mut input).unwrap();
 		match payload {
-			NamePayload::Raw(s) => assert_eq!(s, "\"He said \\\"hi\\\"\""),
-			_ => panic!("expected Raw"),
+			NamePayload::Quoted(s) => assert_eq!(s, "He said \"hi\""),
+			_ => panic!("expected Quoted"),
 		}
 	}
 
@@ -697,6 +749,44 @@ mod tests {
 		let mut input = "Heading/sub";
 		let payload = MdNameLexer.parse(&mut input).unwrap();
 		assert!(matches!(payload, NamePayload::Raw(s) if s == "Heading"));
+	}
+
+	#[test]
+	fn backtick_heading_with_spaces_and_unicode() {
+		// BUG-469: bare unicode/space heading after `::` must be addressable via
+		// backtick quoting — the exact remedy the parser error hint suggests.
+		let target =
+			"notes.md::`\u{21c4} Obsidian \u{2014} a first-party sync integration (the heart)`";
+		let res = crate::parser::parse_code_path(target, &MdNameLexer);
+		assert!(res.is_ok(), "backtick-quoted heading must parse, got {res:?}");
+		let cp = res.unwrap();
+		let q = cp.query.expect("query");
+		match &q.head.head {
+			Head::Name(NamePayload::Quoted(s)) => {
+				assert_eq!(s, "\u{21c4} Obsidian \u{2014} a first-party sync integration (the heart)");
+			},
+			other => panic!("expected Quoted bare payload, got {other:?}"),
+		}
+	}
+
+	#[test]
+	fn double_quote_heading_still_supported() {
+		let target = "notes.md::\"Quick start (v2)\"";
+		let cp = crate::parser::parse_code_path(target, &MdNameLexer).unwrap();
+		match &cp.query.unwrap().head.head {
+			Head::Name(NamePayload::Quoted(s)) => assert_eq!(s, "Quick start (v2)"),
+			other => panic!("expected Quoted bare payload, got {other:?}"),
+		}
+	}
+
+	#[test]
+	fn quoted_heading_round_trips_to_backticks() {
+		let cp = crate::parser::parse_code_path("n.md::`A B C`", &MdNameLexer).unwrap();
+		let rendered = crate::renderer::render_code_path(&cp, &MdNameLexer);
+		// Renderer canonicalises `::` spacing; the heading re-quotes as backticks.
+		assert!(rendered.contains("`A B C`"), "expected backtick re-quote, got {rendered:?}");
+		let cp2 = crate::parser::parse_code_path(&rendered, &MdNameLexer).unwrap();
+		assert_eq!(cp, cp2, "round-trip must be stable");
 	}
 
 	#[test]

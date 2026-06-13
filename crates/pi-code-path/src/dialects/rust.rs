@@ -271,7 +271,12 @@ fn render_segments(segs: &[RustSegment]) -> String {
 						out.push_str("r#");
 						out.push_str(s);
 					},
-					_ => unreachable!(),
+					// BUG-469: backtick-quoted verbatim segment. The bare text is
+					// carried through (it is what `matches`/leaf-matching compares);
+					// previously omitted here, so this fell into `unreachable!()`
+					// and aborted the process on any `file.rs::`name`` target.
+					RustSegment::Quoted(s) => out.push_str(s),
+					RustSegment::Turbofish(_) | RustSegment::ImplFor { .. } => unreachable!(),
 				}
 			},
 		}
@@ -710,6 +715,15 @@ pub fn rust_dialect() -> LanguageDialect {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn parse_backtick_quoted_does_not_crash() {
+		// BUG-469: a backtick-quoted Rust symbol produced `RustSegment::Quoted`,
+		// which `render_segments` did not handle → `unreachable!()` → SIGABRT.
+		let mut input = "`weird name with spaces`";
+		let payload = RustNameLexer.parse(&mut input).unwrap();
+		assert!(matches!(payload, NamePayload::Quoted(s) if s == "weird name with spaces"));
+	}
 
 	#[test]
 	fn parse_simple_ident() {

@@ -1,0 +1,113 @@
+#+TITLE: md heading CodePath rejects unicode/space headings; backtick hint misleads
+#+STATE: REVIEW
+#+SESSION_ID: 1507cd7b43108946
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-13T17-21-20-652Z_1507cd7b43108946.jsonl]]
+#+CUSTOM_ID: BUG-469-md-heading-codepath-rejects-unicode-spac
+
+* Initial Message
+
+Edit
+ ┌─── ✘ ⚠ Edit ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ unexpected trailing input: "⇄ Obsidian — a first-party sync integration.4. Architecture.4.2 The identity map (the heart)" — try backtick-quoting the symbol or use a structural axis like §export_statement[text~="..."]                                                            │
+ └─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+ The unicode/special chars in the heading break the symbol target.
+
+
+GOAL:
+Reproduce the error then file a BUG then TDD fix it
+
+* Summary
+`MdNameLexer` (crates/pi-code-path/src/dialects/mdorg.rs) cannot address markdown/org
+headings that contain spaces or non-alphanumeric/unicode chars, and the parser's
+"unexpected trailing input" hint actively misleads the user toward a remedy that
+also fails.
+
+* Reproduction
+Target (from user report):
+  notes.md::⇄ Obsidian — a first-party sync integration.4. Architecture.4.2 The identity map (the heart)
+
+parse_code_path(target, &MdNameLexer) =>
+  BARE:     Err(ParseError "parse failed at position 10")   ; fails at first unicode char after `::`
+  BACKTICK: Err(ParseError "parse failed at position 10")   ; `::`backtick`...`` ALSO fails
+  DQUOTE:   Ok(... Name(Raw("\"⇄ Obsidian — a first-party sync integration\"")))  ; parses but...
+
+* Root cause
+1. parse_segment() consumes only [alphanumeric | '_' | '-'] for unquoted segments,
+   so any heading with a space or unicode punctuation (⇄ — ( )) stops the lexer and
+   leaves trailing input → generic ParseError / "unexpected trailing input".
+2. The ONLY quoting MdNameLexer supports is double-quote ("). Every other dialect
+   (elixir, haskell, python, rust) AND the FS locator use BACKTICK (`) as the
+   canonical quote char.
+3. The error hint in parser.rs hint_for_trailing() says
+   "try backtick-quoting the symbol", and the edit-tool docs show
+   `foo.ts::`export * from "./json"``. For markdown that advice fails — backticks
+   are not recognised by MdNameLexer.
+4. Even the working double-quote form stores the literal quotes in the payload
+   (Raw("\"…\"")). render() returns the quotes verbatim, and MdNameLexer::matches()
+   compares render(payload).trim() == heading_text.trim(), so a quoted target can
+   never match a real (unquoted) heading node → latent resolution failure.
+
+* Expected
+- Backtick-quoted heading segments parse (consistency with all other dialects +
+  the documented hint): `notes.md::`⇄ Obsidian — a first-party sync integration``
+- The quoted payload matches the bare heading text (matches() strips the quoting).
+- Nested dotted form with quoted segments resolves:
+  `Sec`.`Sub` style where each segment may be backtick-quoted.
+
+* Fix sketch (TDD)
+- mdorg.rs parse_segment(): accept backtick-quoted segment (mirror elixir/haskell),
+  emit NamePayload::Quoted with bare text; keep existing " support as alias.
+- render()/render_segments(): round-trip quoted segments by re-wrapping in backticks
+  for display, but matches() must compare against the *bare* segment text.
+- Tests: parser round-trip + e2e resolve against a fixture heading with spaces/unicode.
+
+* Acceptance
+- cargo test -p pi-code-path (mdorg) green incl. new backtick + unicode cases
+- cargo test -p pi-natives mdorg/e2e heading resolution green
+</body>
+
+* Resolution (2026-06-13)
+
+** Second defect found during reproduction (process crash)
+While reproducing, discovered a HARD CRASH: a backtick-quoted RUST symbol
+(`file.rs::`weird name``) parsed to `RustSegment::Quoted`, which
+`render_segments` did NOT handle → inner `_ => unreachable!()` → SIGABRT
+(panic at rust.rs:274, aborts the whole process). This matches the reported
+`spell terminated by signal SIGABRT`. Fixed alongside.
+
+** Fixes
+1. crates/pi-code-path/src/dialects/mdorg.rs
+   - parse_segment: accept backtick-quoted segments (parse_backtick), mirroring
+     elixir/haskell/rust + the parser error hint. Double-quote kept as alias.
+   - QuotedHeading now flows to NamePayload::Quoted carrying BARE text
+     (render_segments_bare); render() re-wraps Quoted in canonical backticks for
+     stable round-trip; matches() compares the bare payload (not render()) so a
+     quoted target matches an unquoted heading node.
+2. crates/pi-code-path/src/dialects/rust.rs
+   - render_segments: handle RustSegment::Quoted (emit verbatim text); narrowed
+     the remaining unreachable!() to the genuinely-dead Turbofish/ImplFor arms
+     (already matched by the outer match) so it can never abort again.
+
+** Tests (TDD: red → green)
+- pi-code-path/src/dialects/mdorg.rs:
+  backtick_heading_with_spaces_and_unicode, double_quote_heading_still_supported,
+  quoted_heading_round_trips_to_backticks; updated parse_quoted_heading /
+  parse_quoted_with_escape to the corrected Quoted(bare) contract.
+- pi-code-path/src/dialects/rust.rs: parse_backtick_quoted_does_not_crash.
+- pi-natives mdorg_qualifier_tests.rs: backtick_unicode_heading_resolves_body
+  (full walker path — parses the user's exact unicode/space heading via backtick
+  and resolves #body).
+
+** Verification
+- cargo test -p pi-code-path : 532 passed
+- cargo test -p pi-natives (mdorg + code_path_e2e) : green (30 e2e passed)
+- cargo test -p pi-kernel : 54 passed
+- cargo build -p pi-code-path -p pi-natives -p pi-kernel : clean
+
+NB: the live `find` tool still runs the PRE-BUILT binary (index state=stale), so
+a manual `find` retry won't reflect the fix until the harness binary is rebuilt;
+the cargo e2e test exercises the identical resolver→walker→matches path.
+
+NOTE [2026-06-13]: Reproduced, filed, TDD-fixed; also fixed an adjacent Rust backtick SIGABRT crash uncovered during repro.

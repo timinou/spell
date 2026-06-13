@@ -1,0 +1,29 @@
+#+TITLE: codepath-dialect-quoting-must-be-uniform
+
+** ITEM CodePath dialect quoting must be uniform: backtick canonical, payload bare
+
+Symptom: `find/edit` target `file.md::⇄ Heading — with spaces` → "unexpected trailing input … try backtick-quoting the symbol", and `file.rs::`name with spaces`` → SIGABRT (process crash).
+
+Root causes (crates/pi-code-path/src/dialects/):
+1. mdorg.rs MdNameLexer only supported double-quote `"`; the parser error hint (parser.rs hint_for_trailing) and edit-tool docs recommend BACKTICK. Every other dialect (elixir/haskell/python/rust) + the FS locator use backtick. So the suggested remedy failed for markdown.
+2. mdorg double-quote path stored quotes IN the payload (Raw("\"…\"")); matches() compared render(payload) (with quotes) to the bare heading text → never matched (latent).
+3. rust.rs render_segments had no arm for RustSegment::Quoted (only Ident/Keyword/Raw + outer Turbofish/ImplFor) → inner `_ => unreachable!()` reached → panic/SIGABRT on ANY backtick rust symbol.
+
+Fix pattern (apply per-dialect):
+- parse: a quoted segment (backtick OR existing quote) → NamePayload::Quoted carrying BARE text.
+- render: Quoted → re-wrap in canonical backticks (round-trips, matches the hint).
+- matches: compare the BARE payload string, not render(), so a quoted target matches an unquoted node.
+- NEVER leave a catch-all `_ => unreachable!()` in a render match over an enum that a parser can produce; enumerate the genuinely-dead variants explicitly so a new/forgotten variant is a compile error, not a runtime abort.
+
+The walker (crates/pi-kernel/src/walker.rs head_matches) calls dialect.name_lexer.matches(payload,…) then falls back to comparing render(payload) against the node `name` field — both must see bare text.
+
+Live caveat: the `find`/`edit` tools run the pre-built harness binary; index `state:stale` means a manual retry won't reflect crate changes until rebuilt. Verify via `cargo test -p pi-natives` e2e (resolver().resolve() → walker → matches), which is the identical path.
+:PROPERTIES:
+:CUSTOM_ID: CON-codepath-dialect-quoting-must-be-uniform
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T17:59:31Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: BUG-469-md-heading-codepath-rejects-unicode-spac
+:END:

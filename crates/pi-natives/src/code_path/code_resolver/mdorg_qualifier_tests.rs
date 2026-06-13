@@ -516,3 +516,31 @@ fn dump_simple_org() {
 	walk(tree.root_node(), org, 0);
 	panic!("intentional");
 }
+
+// BUG-469: a heading with spaces/unicode must be addressable via a
+// backtick-quoted CodePath, end-to-end through the walker's name matching.
+#[test]
+fn backtick_unicode_heading_resolves_body() {
+	let dir = tempfile::tempdir().unwrap();
+	let path = temp_md(
+		"notes.md",
+		"# \u{21c4} Obsidian \u{2014} sync (the heart)\n\nBody text here.\n",
+		dir.path(),
+	);
+	let cp = parse_code_path(
+		"notes.md::`\u{21c4} Obsidian \u{2014} sync (the heart)`#body",
+		&pi_code_path::dialects::mdorg::MdNameLexer,
+	)
+	.expect("backtick-quoted unicode heading must parse");
+	let query = cp.query.unwrap();
+	let qualifier = cp.qualifier.as_ref();
+	let results = resolver()
+		.resolve(&path, &query, qualifier, &CancellationToken::new())
+		.unwrap();
+	let result = results
+		.iter()
+		.find(|r| r.content.is_some())
+		.expect("backtick unicode heading must resolve a body node");
+	let text = result.content.as_ref().unwrap().value();
+	assert!(text.contains("Body text here."), "body should match, got: {text}");
+}
