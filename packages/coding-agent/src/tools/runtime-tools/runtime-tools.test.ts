@@ -289,3 +289,44 @@ describe("built-in descriptors (drift guard)", () => {
 		}
 	}, 60_000);
 });
+
+describe("KDL per-verb gate policy (Phase 2.5)", () => {
+	it("readRuntimeToolPolicies parses a runtime-tools block from spell.kdl", async () => {
+		const { readRuntimeToolPolicies } = await import("./kdl-policy");
+		const fs = await import("node:fs/promises");
+		const os = await import("node:os");
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "rt-kdl-"));
+		await fs.writeFile(
+			path.join(dir, "spell.kdl"),
+			'runtime-tools {\n  git {\n    verb "reset" gate="warn"\n    verb "log" gate="confirm"\n  }\n}\n',
+		);
+		const pol = await readRuntimeToolPolicies(dir);
+		expect(pol.git).toEqual({ reset: { gate: "warn" }, log: { gate: "confirm" } });
+	}, 30_000);
+
+	it("KDL gates override built-in defaults AND class-defaults; unspecified auto-derive", async () => {
+		const { GIT_DESCRIPTOR } = await import("./builtin/descriptors");
+		const d = new RuntimeToolDispatcher();
+		try {
+			const gitSrc = await Bun.file(gitPath).text();
+			const { tools } = await loadRuntimeTools(
+				[
+					{
+						path: "<builtin>/git.ptc",
+						policy: { reset: { gate: "confirm" } },
+						precomputedDescriptor: GIT_DESCRIPTOR,
+					},
+				],
+				d,
+				() => composeToolSource(gitSrc),
+				{ git: { reset: { gate: "warn" }, status: { gate: "deny" } } },
+			);
+			const v = tools[0].policy.verbs;
+			expect(v.reset.gate).toBe("warn"); // KDL beats built-in confirm
+			expect(v.status.gate).toBe("deny"); // KDL beats class-default silent
+			expect(v.log.gate).toBe("silent"); // no override → class default
+		} finally {
+			d.close();
+		}
+	}, 60_000);
+});

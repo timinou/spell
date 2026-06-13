@@ -18,6 +18,7 @@ import type { ToolSession } from "../index";
 import { GIT_DESCRIPTOR, RUN_DESCRIPTOR } from "./builtin/descriptors";
 import gitPtc from "./builtin/git.ptc" with { type: "text" };
 import runPtc from "./builtin/run.ptc" with { type: "text" };
+import { readRuntimeToolPolicies } from "./kdl-policy";
 import { loadRuntimeTools, type RuntimeToolSource } from "./loader";
 import type { RawToolPolicy } from "./policy";
 import { RuntimeToolDispatcher } from "./runtime";
@@ -77,6 +78,11 @@ export interface RuntimeToolSet {
 export async function createRuntimeTools(session: ToolSession): Promise<RuntimeToolSet> {
 	const dispatcher = new RuntimeToolDispatcher();
 
+	// Per-verb gate overrides from spell.kdl (PLAN-337 Phase 2.5), merged over the
+	// built-in defaults below. A user's `runtime-tools { git { verb "reset"
+	// gate="warn" } }` wins per verb; resolvePolicy fills the rest from :class.
+	const kdlPolicies = await readRuntimeToolPolicies(session.cwd).catch(() => ({}));
+
 	// Built-ins are bundled as text; user/project tools are discovered on disk.
 	// Both flow through the same loader (describe → resolvePolicy). A user tool
 	// with the same name as a built-in OVERRIDES it (project > user > built-in).
@@ -92,9 +98,11 @@ export async function createRuntimeTools(session: ToolSession): Promise<RuntimeT
 	const readSource = (p: string): string | undefined => builtinText.get(p) ?? diskText.get(p);
 
 	// Later sources win on name collision: built-ins first, then user, then
-	// project (discoverUserToolSources returns user-before-project).
+	// project (discoverUserToolSources returns user-before-project). The KDL
+	// per-verb gates are applied by tool NAME inside the loader (after describe),
+	// so they override BOTH built-ins and user .ptc consistently.
 	const allSources = [...builtinSources, ...discovered.map(d => d.source)];
-	const { tools: loaded } = await loadRuntimeTools(allSources, dispatcher, readSource);
+	const { tools: loaded } = await loadRuntimeTools(allSources, dispatcher, readSource, kdlPolicies);
 
 	// De-dupe by tool name, last-wins (so a project .ptc overrides a built-in).
 	const byName = new Map<string, (typeof loaded)[number]>();

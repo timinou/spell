@@ -38,6 +38,7 @@ export async function loadRuntimeTools(
 	sources: RuntimeToolSource[],
 	dispatcher: RuntimeToolDispatcher,
 	readSource?: (path: string) => string | undefined,
+	kdlPolicies?: Record<string, RawToolPolicy>,
 ): Promise<RuntimeToolLoadResult> {
 	const tools: LoadedRuntimeTool[] = [];
 	const errors: Array<{ path: string; error: string }> = [];
@@ -55,7 +56,13 @@ export async function loadRuntimeTools(
 				continue;
 			}
 
-			const { policy, errors: policyErrors } = resolvePolicy(descriptor, src.policy);
+			// Merge KDL per-verb gates (by tool name) over the source's own policy —
+			// KDL wins per verb (PLAN-337 Phase 2.5). Applies to built-ins AND user
+			// .ptc uniformly, since the tool name is known after describe.
+			const kdlPolicy = kdlPolicies?.[descriptor.name];
+			const mergedPolicy: RawToolPolicy | undefined =
+				src.policy || kdlPolicy ? { ...(src.policy ?? {}), ...(kdlPolicy ?? {}) } : undefined;
+			const { policy, errors: policyErrors } = resolvePolicy(descriptor, mergedPolicy);
 			if (policyErrors.length > 0) {
 				// Fail-loud: a tool whose two faces disagree is not loaded.
 				errors.push({ path: src.path, error: policyErrors.join("; ") });
