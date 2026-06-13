@@ -170,7 +170,18 @@ defmodule PtcRuntime.Peer do
     writer = Keyword.get(opts, :writer, &default_writer/1)
     autostart = Keyword.get(opts, :autostart, true)
 
-    if autostart, do: start_reader(self())
+    if autostart do
+      # The stdio device defaults to `:unicode` when stdout is a pipe. In that
+      # mode `IO.binwrite/2` (our frame writer) treats each byte of an already
+      # UTF-8-encoded binary as a latin1 character and re-UTF-8-encodes it,
+      # double-mangling every non-ASCII codepoint on the wire (BUG-464). The
+      # protocol is a raw JSON *byte* stream — Jason owns UTF-8 at the JSON
+      # layer — so put the device in `:latin1` (transparent bytes) and pump it
+      # with `binread`/`binwrite` on both legs. ASCII frames are unaffected;
+      # non-ASCII now round-trips byte-identical.
+      :io.setopts(:standard_io, encoding: :latin1)
+      start_reader(self())
+    end
 
     {:ok,
      %State{
@@ -684,7 +695,10 @@ defmodule PtcRuntime.Peer do
   end
 
   defp reader_loop(peer) do
-    case IO.read(:stdio, :line) do
+    # `binread` (not `IO.read`) so the reader pulls raw bytes, symmetric to the
+    # `IO.binwrite` writer and consistent with the `:latin1` device set in
+    # `init/1` (BUG-464). Jason decodes the UTF-8 bytes at the JSON layer.
+    case IO.binread(:stdio, :line) do
       :eof ->
         send(peer, :eof)
 

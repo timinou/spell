@@ -90,4 +90,19 @@ d("execute round-trip", () => {
 			c.close();
 		}
 	}, 60_000);
+
+	it("non-ASCII returns byte-identical (no latin1 mojibake on the wire) — BUG-464", async () => {
+		const c = client();
+		try {
+			await c.init({ tools: [] });
+			// Bare string return: em-dash, ellipsis, arrow — all U+20xx (UTF-8 3-byte).
+			await expect(c.execute({ program: '"—…→"' })).resolves.toBe("—…→");
+			// Embedded in a map value + key, plus an accented latin1-range char and CJK.
+			await expect(c.execute({ program: '{:label "café → 日本語"}' })).resolves.toEqual({ label: "café → 日本語" });
+			// Inbound round-trip: a non-ASCII string passed via context returns intact.
+			await expect(c.execute({ program: "data/s", context: { s: "—…→" } })).resolves.toBe("—…→");
+		} finally {
+			c.close();
+		}
+	}, 60_000);
 });
