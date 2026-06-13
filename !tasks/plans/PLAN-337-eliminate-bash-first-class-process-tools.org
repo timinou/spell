@@ -426,3 +426,27 @@ SandboxPolicy.bashAllow/bashDeny in favor of per-tool/per-verb policy. The
 - Phase 4 tier reorder: execute→core, bash→standard (commit).
 - Perf: precomputed built-in descriptors \u2014 createRuntimeTools 1462ms→1ms; the
   dispatcher spawns lazily only on first verb call (commit).
+
+* Phase 2.5 + Phase 4 terminal status (2026-06-13): DONE
+
+PHASE 2.5 (KDL per-verb gates): runtime-tools/kdl-policy.ts readRuntimeToolPolicies
+reads a `runtime-tools { git { verb "reset" gate="warn" } }` block from all three
+spell.kdl tiers (user<project<local, merged per verb) directly from the KDL
+Document (dynamic map, doesn't fit flat settings schema). loader.ts merges KDL
+gates by tool NAME after describe (KDL wins per verb, over built-in AND user .ptc
+policy); resolvePolicy still validates phantom-verb + auto-fills unspecified from
+:class. Proven: KDL reset=warn beats built-in confirm; status=deny beats
+class-default silent; unspecified auto-derive. Committed.
+
+PHASE 4 terminal tool: tools/terminal.ts TerminalTool — scoped interactive-PTY
+escape hatch (sudo/top/less/vim/REPLs), thin wrapper over runInteractiveBashPty.
+Requires UI (errors clearly without, redirecting to run/git/bash). Registered
+specialized tier; denied in execute (interactive); reuses bashToolRenderer.
+Committed.
+
+Phase 4 status: tier reorder DONE (execute=core, bash=standard), perf fix DONE
+(precomputed descriptors), terminal DONE. Remaining Phase 4: nothing required.
+
+REMAINING: Phase 3 (real gate enforcement, deferred per user — see spec) and
+Phase 5 (delete bash, deferred until sustained non-use). Both fully specced in
+the phase-345-specs suboutline.
