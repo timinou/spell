@@ -1,0 +1,75 @@
+#+TITLE: Tier-2 true hot reload: state-preserving BEAM code-swap (mix-dev only)
+#+STATE: ITEM
+#+CUSTOM_ID: FUP-138-tier-2-true-hot-reload-state-preserving-b
+
+* Initial Message
+
+Follow-up from the runtime-refresh work: Tier 1 (soft respawn via the
+`refresh_runtime` flag on the execute tool) shipped. This is Tier 2 — preserve
+session state across a runtime code change.
+
+* Context
+
+The BEAM runtime is long-lived per session (`mix run --no-halt`, one OS proc).
+After editing `beam/` source, a plain `execute` runs the OLD code. Tier 1
+(`refresh_runtime: true`, ExecuteTool.execute → dispose() → ensureClient
+respawns) solves correctness by respawning a FRESH runtime, but DROPS session
+bindings (`def`s) and parked HandleStore terms (a re-derivable cache).
+
+Tier 2 keeps that state: hot-swap the changed modules into the RUNNING BEAM via
+OTP code replacement, so the Peer GenServer and HandleStore keep their state.
+
+* Proven feasible (probe, 2026-06-13)
+
+A stateful GenServer ran V2 logic AND kept its mutated state (count=42) across a
+`Code.compile_string` + `:code.purge` + `:code.load_binary` swap, SAME pid. OTP
+code replacement is the mechanism. So the core works; the engineering is in
+recompiling the right modules + edge cases.
+
+* The work
+
+Add a `reload` JSON-RPC method to `beam/ptc_runtime/lib/ptc_runtime/peer.ex`
+(sibling to init/execute/validate at handle_request/4):
+- Recompile changed modules under `beam/ptc_runtime` AND the vendored
+  `beam/ptc_runner-vendored` (the sandbox/builtins), then `:code.load_binary`
+  (or `IEx.Helpers.recompile`-style `mix compile` + purge) in dependency order.
+- Reply with what reloaded (module list) + any compile errors as a clean error
+  frame (never crash the Peer — reuse the non-raising `write/2` discipline).
+- Node side: a `PtcRuntimeClient.reload()` method + an execute-tool flag
+  (e.g. `hot_reload: true`, distinct from Tier-1 `refresh_runtime`) that calls
+  it instead of dispose()+respawn when state preservation is wanted.
+
+* Hard gates / caveats (load-bearing)
+
+- DEPLOYMENT GATE: only valid when `resolveSpawn().source === "mix"` (source on
+  disk, recompilable). A Burrito release (`source: "burrito"`/`"env"`) has a
+  FROZEN BEAM in the binary → reload is impossible; return a clean
+  "hot reload unsupported in release; use refresh_runtime" error. Check the
+  source on the Node side before sending `reload`.
+- SCOPE: hot reload swaps BEAM code ONLY. A Node-side fix (client.ts, spawn.ts,
+  tool-dispatch.ts) still needs Tier 1 (respawn) or a session restart. Document
+  this so the agent picks the right tool.
+- PURGE-OF-RUNNING-CODE: a sandbox proc / pmap worker executing OLD code during
+  the swap. `:code.purge` kills procs lingering on old code; `:code.soft_purge`
+  refuses if any run it. Decide: drain in-flight executes first (admission
+  control already tracks `st.tasks`), or soft_purge + retry. The Peer itself is
+  idle between messages so swapping ITS module is safe; the risk is the spawned
+  execute procs.
+- Module dependency ordering: load leaf modules before dependents; or lean on
+  `mix compile` to produce a consistent beam set, then load all changed.
+
+* Acceptance
+
+After editing a `beam/` builtin or peer module, a `reload` swaps it into the
+running runtime: a probe exercising the change passes AND a session binding
+`(def keep 99)` made BEFORE the reload still resolves to 99 AFTER (state
+preserved — the distinguishing proof vs Tier-1, where it would be gone). The
+Burrito/release path returns a clean unsupported error, not a crash. In-flight
+executes are not corrupted by the swap.
+
+* Relationships
+
+Tier 2 of the runtime-refresh design. Tier 1 (refresh_runtime flag) is DONE.
+Motivating pain: BUG-464 (a BEAM transport fix needed a whole-session restart).
+Lower priority than Tier 1 — Tier 1 already solves correctness; Tier 2 is a
+state-preservation ergonomic for iterative runtime hacking.

@@ -1,5 +1,5 @@
 #+TITLE: execute tool mojibakes non-ASCII in results (UTF-8 decoded as latin1 on the transport boundary)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 1503ad6112fe682a
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
 #+CUSTOM_ID: BUG-464-execute-tool-mojibakes-non-ascii-in-resu
@@ -79,3 +79,29 @@ produces.
 
 P5/FUP-132 prep — user asked to use `execute` heavily to surface warts. This
 was the first.
+
+* Resolution (2026-06-13)
+
+Root cause: the BEAM's stdout device is in =:unicode= mode when stdout is a
+pipe. The peer's frame writer is =IO.binwrite(:stdio, iodata)= (raw bytes). A
+unicode-mode device treats each byte of an already-UTF-8-encoded binary as a
+*latin1 character* and re-UTF-8-encodes it — double-mangling every non-ASCII
+codepoint:  =E2 80 94= ("—") → =C3 A2 C2 80 C2 94= on the wire. Node reads utf8
+→ "â…". Outbound-only because the inbound leg's =IO.read(:stdio, :line)= uses
+the unicode codec, which decodes correctly (count "—" = 1). Internal storage and
+Jason encode/decode were never at fault — the seam is purely the device write
+mode. Proven live: raw wire bytes from a fresh BEAM = =c3 a2 c2 80 c2 94= before
+Node touches them; =IO.binwrite(<<0xE2,0x80,0x94>>)= under a unicode device
+emits =c3 a2 c2 80 c2 94= while =IO.write= emits =e2 80 94=.
+
+Fix (=lib/ptc_runtime/peer.ex=): make the wire a transparent byte channel —
+=:io.setopts(:standard_io, encoding: :latin1)= on autostart and switch the
+reader to =IO.binread(:stdio, :line)= (symmetric with the =IO.binwrite= writer).
+Jason owns UTF-8 at the JSON layer; the device no longer re-encodes. Test
+transport is unaffected (it injects its own writer with =autostart: false=).
+
+Verification: fresh-spawn probe returns =—…→= and ={:label "café → 日本語"}=
+byte-identical (outbound, embedded-in-map, and inbound-via-context). Added
+=roundtrip.test.ts= BUG-464 case (5 pass). BEAM =mix test= 119 tests 0 failures;
+client.test + client.integration 23 pass. NB: a session's long-lived =execute=
+runtime spawned before this edit keeps mojibaking until session restart.

@@ -1,0 +1,261 @@
+#+TITLE: Eliminate bash: first-class process tools + execute coprocessor
+#+STATE: ITEM
+#+CUSTOM_ID: PLAN-337-eliminate-bash-first-class-process-tools
+
+* Goal
+
+Remove the freeform =bash= tool. Replace every legitimate use with a
+first-class, structured tool (or the =execute= PTC-Lisp coprocessor), so the
+agent never hand-writes shell. Wins: structured I/O (no eye-parsing), tighter
+per-verb sandboxing, no quoting/escaping hazards, and discoverable affordances.
+
+NB: this is the natural endpoint of work already in flight — AGENTS.md already
+says "bash is for processes only; file reads/search/list/stat → find", and
+=bash-interceptor.ts= already redirects cat/grep/sed/find/echo to find/edit.
+We're finishing the job: the *process* half.
+
+* Reality (verified, file-cited)
+
+bash today is a CORE-tier tool (index.ts L275) with 8 capability surfaces:
+1. command exec w/ env + cwd (bash.ts L308; exec via @spell/pi-natives Shell)
+2. async/background jobs (job-manager.ts; await-tool.ts; cancel-job.ts) — typed
+   =:type "bash" | "task"= (job-manager.ts L155) → NOT bash-specific, extensible
+3. PTY mode for interactive procs (bash-interactive.ts; PtySession + xterm)
+4. streaming output + artifact spill (OutputSink / TailBuffer)
+5. head/tail slicing (post-hoc, bash.ts L245)
+6. file-inspection interception → find/edit (bash-interceptor.ts) [already done]
+7. sandbox allow/deny over the raw command string (sandbox/bash-guard.ts,
+   glob match; SandboxPolicy.bashAllow/bashDeny in sandbox/types.ts)
+8. capability/effects model: bash = `exec`, denied to execute programs
+   (ptc-runtime/effects.ts L80). find/edit/create/org/memory/calc/status = read|write.
+
+* Design — what bash decomposes into
+
+** Category A — Build/test/lint runners (the 80% case)
+   cargo / bun / mix / npm. Today: =bash {command:"cargo test -p X"}=.
+   → NEW tool `run` (or `task-runner`): a CURATED runner, not freeform shell.
+   Shape: `run { tool: "cargo"|"bun"|"mix"|..., args: [...], cwd?, env?, async? }`.
+   - args is a LIST (no shell string → no quoting/word-splitting hazards).
+   - allowlist of runner binaries from project config (package.json scripts,
+     Cargo workspace, mix tasks) → discoverable + sandbox-trivial (gate on the
+     runner name + subcommand, not a regex over an opaque string).
+   - reuses OutputSink/TailBuffer (factor out of bash into a shared exec-output
+     module) + AsyncJobManager (already type-generic enough; add "run" to the
+     union).
+   Effort: M. Risk: low. Covers the dominant daily use.
+
+** Category B — git
+   log/show/diff/status/commit/add/checkout. Today: freeform bash.
+   → NEW tool `git`: `git { command: "log"|"show"|"diff"|"commit"|..., args, ... }`.
+   - structured subcommands → structured output (e.g. log → list of commits;
+     status → {staged, unstaged, untracked}; diff → unified text or per-file).
+   - SAFETY WIN: gate destructive verbs (reset/checkout/clean/push -f) behind
+     explicit confirmation — exactly the operations the user already flagged as
+     dangerous in a shared worktree. A structured git tool can refuse
+     reset/checkout/stash by policy; a freeform bash cannot.
+   Effort: M. Risk: low–med (breadth of git surface; start with read verbs +
+   commit, defer exotic plumbing).
+
+** Category C — inline scripts (python -c, sqlite3, jq, one-off compute)
+   → ABSORB into `execute` (PTC-Lisp). Most inline scripts are
+   data-munging/compute that PTC already does better (count/group/filter/join/
+   aggregate over tool results, structured). For genuinely external interpreters
+   (python/sqlite) that PTC can't host: either a narrow `run` runner entry, or
+   accept they stay out of scope (rare).
+   Effort: S (docs/guidance). Risk: low.
+
+** Category D — async/background jobs
+   The jobs:// + await + cancel_job mechanism (job-manager.ts) is ALREADY
+   general (typed union, per-session isolation, watchdog, delivery queue). Only
+   the =:type= union literal is bash/task-coupled.
+   → Generalize: change the union to an open string (or add "run"/"git"), so any
+   long-running first-class tool registers a background job. No new machinery.
+   Effort: S. Risk: low.
+
+** Category E — PTY / interactive (sudo, ssh, top, less, vim)
+   THE HARD CORE. bash-interactive.ts + PtySession is the only path; a real TTY
+   is genuinely required. Two sub-cases:
+   - ssh → already a dedicated `ssh` tool (tools/ssh.ts) exists; route there.
+   - sudo/top/less/vim/interactive REPLs → genuinely process+TTY bound.
+   → Option E1: a narrow `terminal` (pty) tool that does ONLY interactive PTY
+     sessions — the same bash-interactive.ts impl, renamed, freeform-command but
+     explicitly scoped to "I need a live terminal", not general scripting.
+   → Option E2: accept this as the ONE irreducible process escape hatch and keep
+     a minimal `shell` tool gated to pty/interactive use only.
+   This is the category that blocks "100% bash elimination". Decision needed:
+   is a scoped `terminal` tool acceptable, or must even PTY go?
+
+** Category F — persistent shell state (the interactive `!` shell)
+   bash-executor.ts reuses Shell via sessionKey so `cd`/exports persist across
+   the user's interactive `!` shell (a HUMAN affordance, not an agent one).
+   → Keep as a human-only feature wired to the `!` shell entry, independent of
+   the agent-facing bash tool. Removing agent bash doesn't touch it.
+
+* The sandbox/security upgrade (a reason to do this, not just a cost)
+
+Today: =enforceBashCommand= glob-matches a raw command STRING (bash-guard.ts) —
+fragile (`sh -c 'rm -rf'` evades a naive deny; quoting tricks). First-class
+tools gate on STRUCTURE: `git` refuses `reset` by verb; `run` only launches
+allowlisted runners with list-args (no shell interpolation). The capability
+=effects.ts= model already classifies tools — `run`/`git` become `exec` too,
+but with a far smaller, structured attack surface than freeform bash.
+
+* Migration (cutover, not parallel — per the repo's refactor discipline)
+
+Phase 1: build `run` + generalize AsyncJobManager + shared exec-output module.
+  Route the test/build/lint muscle off bash. (Covers most usage immediately.)
+Phase 2: build `git` (read verbs + commit; gated destructive verbs).
+Phase 3: docs + execute guidance absorb inline-script category; ssh→ssh tool.
+Phase 4: decide Category E (terminal/pty escape hatch). Demote bash from CORE →
+  remove from default tiers; keep ONLY the pty path if E2 chosen.
+Phase 5: delete bash tool + bash-interceptor (interception moot once bash gone);
+  retire =SandboxPolicy.bashAllow/bashDeny= in favor of per-tool policy.
+
+Each phase ships a working replacement BEFORE removing the corresponding bash
+use — no capability gap mid-migration. bash stays registered (de-tiered) until
+Phase 5 so nothing breaks.
+
+* Open decisions (need product calls)
+
+1. Category E: is a scoped `terminal` (pty-only) tool acceptable as the single
+   process escape hatch, or is the goal literally zero process tools (then
+   sudo/top/interactive REPLs become unsupported)?
+2. `run` allowlist source: derive from project manifests (package.json scripts,
+   Cargo/mix tasks) automatically, or explicit config?
+3. `git` destructive-verb policy: confirm-gate (interactive) vs hard-deny vs
+   per-mode (telegram-readonly already exists as a precedent).
+
+* Acceptance
+
+A new session can build, test, lint, run git, and do inline compute WITHOUT the
+bash tool registered — each via a structured tool with structured output, under
+a per-verb sandbox at least as strong as today's command-glob. The only
+remaining process surface (if any) is an explicitly-scoped interactive terminal.
+
+* Relationships
+
+Builds on the execute/probe ergonomics work (CON-ptc-lisp-probe-special-form):
+probe + structured tool results are what make eliminating bash's flat-text
+output viable. Inventory: agent://0-BashUsageInventory (this session).
+
+** ITEM PTC-Lisp interfaces + derived KDL policy (two-faced tool defs)
+:PROPERTIES:
+:CUSTOM_ID: PLAN-337-eliminate-bash-first-class-process-tools::ptc-kdl-tool-defs
+:END:
+A tool definition has TWO faces, each in its native language; they are checked
+against each other at load so neither drifts.
+
+** PTC-Lisp file = INTERFACE (source of truth for STRUCTURE)
+Declares the tool, its verbs, and per-verb: arg schema, an argv builder
+(:exec), an output parser (:parse, runs in the BEAM sandbox), and a :class
+(:read | :write | :destructive). Example git.ptc:
+
+  (deftool git {:doc "Structured git operations"}
+    (defverb status {:class :read
+      :exec ["git" "status" "--porcelain=v2" "--branch"]
+      :parse (fn [out] (parse-porcelain out))})       ; → {:branch :staged [] :unstaged [] :untracked []}
+    (defverb log {:class :read
+      :args {:n {:int 20} :path {:str :optional}}
+      :exec (fn [{:keys [n path]}]
+              (cat ["git" "log" (str "-" n) "--pretty=format:%H%x1f%an%x1f%aI%x1f%s"]
+                   (when path ["--" path])))
+      :parse (fn [out] (->> (split out "
+")
+                            (map #(zipmap [:hash :author :date :subject] (split % "\u001f")))))})
+    (defverb commit   {:class :write       :args {:message {:str}} :exec (fn [a] ["git" "commit" "-m" (:message a)])})
+    (defverb reset    {:class :destructive ...})
+    (defverb checkout {:class :destructive ...})
+    ;; anti-roadblock: passthrough escape so curation is never a cage
+    (defverb raw {:class :destructive :args {:argv {:list}} :exec (fn [a] (cons "git" (:argv a)))}))
+
+** KDL config = POLICY (source of truth for BEHAVIOUR), DERIVED from the interface
+
+  git {
+    // auto-generated skeleton; user edits preserved on re-sync
+    verb "status"   { gate "silent" }
+    verb "log"      { gate "silent" }
+    verb "commit"   { gate "silent" }
+    verb "reset"    { gate "confirm" }   // destructive default
+    verb "checkout" { gate "confirm" }
+    verb "raw"      { gate "warn" }
+  }
+
+gate ∈ silent | warn | confirm | deny.  warn = execute + TUI warning colour.
+
+** The bidirectional contract (drift-proof)
+- PTC → KDL (`spell tools sync`): read interfaces → emit/refresh KDL skeleton;
+  every verb appears with its :class-default gate; existing user gates preserved.
+- KDL ⊨ PTC (load-time validation): every KDL verb-policy MUST name a verb the
+  interface declares (no phantom policy); every :destructive verb MUST carry an
+  explicit gate (fail-loud if absent). ⇒ no ungoverned destructive verb; no
+  policy for a non-existent verb.
+
+** Execution loop (privileged in Node, shaping in the sandbox)
+  agent → (tool/git {:verb "log" :n 100})
+    → resolve verb from git.ptc
+    → build argv via :exec
+    → Node execCommand(argv)            ← the process; gated by KDL policy + sandbox
+    → raw stdout → :parse (PTC, BEAM sandbox) → structured value
+    → data + probe-style render
+Result: git log → list of {hash author date subject}, QUERYABLE via execute
+(group-by/filter/count). status → structured tree. This is the material win over
+bash: structured output, not text you eye-parse. Every tool keeps a `raw`
+passthrough verb so you are never blocked.
+
+** Decisions (settled)
+1. Category E: a scoped `terminal` (pty-only) tool is the single process escape hatch. ✓
+2. `run`: auto-derive runners from manifests + KDL config; UNLISTED runners still
+   EXECUTE but render in the TUI warning colour (gate "warn") so usage is observed
+   before any hard gate. ✓
+3. git destructive policy (proposed): tiered defaults —
+   - read (status/log/diff/show/branch) → silent
+   - additive-write (add/commit/stash-push/tag) → silent
+   - worktree-destructive (reset --hard / checkout -f / clean / restore / stash-pop)
+     → CONFIRM (not warn): shared worktree may hold other agents' uncommitted work
+     (the absolute no-stash/checkout rule); warn would execute before you see it.
+   - history-destructive (push --force / rebase) → confirm
+   - all per-verb overridable in KDL (downgrade to warn to observe).
+   Asymmetry vs run: a build can't eat uncommitted work (warn ok); git destructive can (confirm).
+
+** New piece to build (the one genuinely missing primitive)
+The custom-tools loader (extensibility/custom-tools/loader.ts) loads TS FACTORY
+MODULES (.ts/.js via Bun import; skips .md/.json). It does NOT load .ptc as tool
+defs. So: a `deftool` PTC-interpreter → CustomTool bridge — evaluate the .ptc
+interface in the runtime, synthesize a CustomTool whose execute does argv-build →
+execCommand (exec/exec.ts execCommand already exists) → PTC :parse. Reuses the
+PTC runtime, tool dispatch, effects model, AsyncJobManager, and OutputSink.
+
+* Phase 1 status (2026-06-13): BUILT + TESTED
+
+The deftool runtime-tools mechanism is implemented under
+packages/coding-agent/src/tools/runtime-tools/:
+- prelude.ptc.ts — PTC prelude (deftool) + postlude (rt-describe/rt-argv/rt-parse).
+  Split because PTC has NO forward references: dispatch helpers that close over
+  `tool` must be defined AFTER the file binds it.
+- runtime.ts — RuntimeToolDispatcher: owns a dedicated empty-catalog
+  PtcRuntimeClient; describe/argv/parse via the 3-beat loop. Closures NEVER cross
+  the wire (unencodable); only data (argv list, parsed value) crosses; args+stdout
+  ride the `context` channel (data/*), never string-interpolated.
+- policy.ts — resolvePolicy (drift-proof: phantom-policy + ungoverned-destructive
+  errors) + deriveSkeleton (PTC→KDL scaffold).
+- tool.ts — makeRuntimeTool: AgentTool whose execute runs beat1(BEAM argv) →
+  beat2(Node execCommand, gated) → beat3(BEAM parse). Gates: silent/warn(tint via
+  details.warn)/confirm(Phase-1 warn+note)/deny(reject). Reuses enforceBashCommand
+  as 2nd sandbox gate.
+- loader.ts — loadRuntimeTools: read .ptc → describe → resolvePolicy → fail-loud.
+- builtin/git.ptc, builtin/run.ptc — real interfaces. git log/status/branch
+  proven LIVE on this repo returning structured data (queryable by execute).
+- runtime-tools.test.ts — 11 tests pass (policy drift, skeleton, live
+  describe/argv/parse, fail-loud load).
+- job-manager.ts: AsyncJobType widened ("bash"|"task"|string) for future
+  run/git background jobs.
+
+KEY ARCH FINDINGS (verified by dogfooding): PTC closures unencodable across wire;
+no eval/read-string; quote is symbol-only; defn has no forward refs; 	/
+ escapes
+work but \uXXXX does NOT (git log uses %x09 tab sep, not %x1f). Splicing the tool
+source + a dispatch call into the existing execute path = ZERO new protocol.
+
+NOT YET WIRED: session registration (BUILTIN_TOOLS factory + KDL config loading +
+TUI warn-colour renderer + `spell tools sync` command). That is Phase 1b — the
+module is complete and tested in isolation; nothing existing is touched.

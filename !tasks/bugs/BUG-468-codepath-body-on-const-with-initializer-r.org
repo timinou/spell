@@ -1,0 +1,58 @@
+#+TITLE: CodePath #body on a const-with-initializer returns null content (no brace-block span)
+#+STATE: ITEM
+#+CUSTOM_ID: BUG-468-codepath-body-on-const-with-initializer-r
+
+* Symptom (found live via execute, 2026-06-13)
+
+`find` (and `tool/find`) on a `#body` qualifier targeting a `const X = <expr>`
+declaration whose initializer is NOT a brace-block returns a node with NULL/empty
+text, while the SAME symbol without `#body` returns the full source.
+
+Measured (via `(tool/find …)` returning node maps):
+
+| target | text |
+|--------|------|
+| `tool-dispatch.ts::DEFAULT_DENYLIST#body` | NULL |
+| `tool-dispatch.ts::DEFAULT_DENYLIST`      | 778 chars (full decl) |
+| `execute.ts::ExecuteTool.dispose#body`    | 77 chars (method body, OK) |
+| `execute.ts::MAX_RESULT_BYTES`            | 25 chars (full decl) |
+
+`DEFAULT_DENYLIST` is `export const DEFAULT_DENYLIST: ReadonlySet<string> = new
+Set([...])`. The `#body` resolver expects a delimiter-inclusive brace/block span
+(works for a function/method body `{ ... }`), but a `const`'s initializer
+expression (here `new Set([...])`) is not a block, so the body-span resolver
+matches nothing and yields empty text instead of falling back to the
+initializer expression (or the whole declarator).
+
+* Scope
+
+Affects the `find` TOOL and `tool/find` via execute EQUALLY (same CodePath
+resolver underneath) — NOT execute-specific. Same class as BUG-455 (bare
+symbol renders kind but NULL content). Likely the same root: a qualifier/kind
+resolver that has no span for non-block-bodied declarations.
+
+* Expected
+
+`const X = <expr>#body` should return the initializer expression span (the
+`<expr>` after `=`), or degrade to the full declarator text with a note — never
+silent null. At minimum, emit a diagnostic ("no block body for this symbol; use
+the bare symbol or #raw") rather than an empty success.
+
+* Repro
+
+#+begin_src
+find { target: "packages/coding-agent/src/tools/ptc-runtime/tool-dispatch.ts::DEFAULT_DENYLIST#body" }
+;; → node with empty body; compare to the same target without #body (full decl).
+#+end_src
+
+* Priority
+
+#C — not data loss (the bare-symbol read works), but a silent-empty success is a
+papercut that pushes agents back to raw reads / bash when drilling const tables.
+
+* Discovered during
+
+probe/execute dogfooding (the "why do agents still reach for bash" research).
+Originally mis-filed as "tool/find renders #body poorly" — corrected: tool/find
+projects text faithfully; the gap is in the CodePath #body span resolver for
+non-block declarations, shared by both surfaces.
