@@ -70,6 +70,39 @@ defmodule PiKernelNifTest do
     end
   end
 
+  describe "P5.A — graph edges from the warm kernel index" do
+    # A cross-file reference: `helper` defined in lib.ts, imported + called in
+    # main.ts. def→ must traverse the STATIC pi-code-graph index (not an LSP) and
+    # return the referencing file. Proves the BEAM serves edges from the SAME
+    # warm resident index resolve_target reads from (WS-B).
+    setup %{root: root} do
+      File.write!(Path.join(root, "lib.ts"), "export function helper() { return 42; }\n")
+
+      File.write!(
+        Path.join(root, "main.ts"),
+        "import { helper } from './lib';\nexport const x = helper();\n"
+      )
+
+      :ok
+    end
+
+    test "def→ resolves a cross-file reference through the NIF", %{root: root} do
+      assert {:ok, %{"nodes" => nodes}} =
+               PiKernelNif.resolve_edges_decoded("lib.ts::helper def→", root)
+
+      assert is_list(nodes)
+      assert nodes != [], "def→ must resolve the cross-file reference, got 0 nodes"
+      # The reference lives in main.ts (where helper is imported/called).
+      assert Enum.any?(nodes, fn n -> String.contains?(n["locator"], "main.ts") end),
+             "resolved reference must point at main.ts, got #{inspect(Enum.map(nodes, & &1["locator"]))}"
+    end
+
+    test "a non-edge target is rejected (use resolve_target instead)", %{root: root} do
+      assert {:error, reason} = PiKernelNif.resolve_edges("foo.ts::bar", root)
+      assert reason =~ "edge" or reason =~ "UnsupportedOperation"
+    end
+  end
+
   describe "gate 2 — panic-safety" do
     test "a panic in the NIF is caught and the BEAM node survives", %{root: root} do
       # The injected-panic sentinel forces a Rust panic inside the NIF boundary.

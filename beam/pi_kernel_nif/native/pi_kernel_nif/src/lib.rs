@@ -74,6 +74,40 @@ fn resolve_target(target: String, root: String) -> Result<String, String> {
 	}
 }
 
+/// Resolve a graph-edge `target` (one containing `def→/ref→/call→/import→/bind→`)
+/// rooted at `root`, returning `{"nodes": [...], "diagnostics": [...]}` JSON. This
+/// serves edges from the SAME warm resident `pi-kernel` index the NAPI skin uses
+/// — one index per BEAM node, shared across N agents (P5.A, PLAN-336 / WS-B).
+///
+/// Like `resolve_target`, the kernel call is `catch_unwind`-wrapped (gate 2): a
+/// panic surfaces as `{:error, reason}` and the node survives.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn resolve_edges(target: String, root: String) -> Result<String, String> {
+	let outcome = catch_unwind(AssertUnwindSafe(|| {
+		let cancel = CancellationToken::new();
+		pi_kernel::resolve_edges(registry(), &target, Path::new(&root), &cancel)
+	}));
+
+	match outcome {
+		Ok(Ok(out)) => {
+			let value = serde_json::json!({
+				"nodes": out.nodes,
+				"diagnostics": out.diagnostics,
+			});
+			serde_json::to_string(&value).map_err(|e| format!("serialize error: {e}"))
+		},
+		Ok(Err(diag)) => Err(format!("{:?}: {}", diag.variant, diag.message)),
+		Err(panic) => {
+			let reason = panic
+				.downcast_ref::<&str>()
+				.map(|s| s.to_string())
+				.or_else(|| panic.downcast_ref::<String>().cloned())
+				.unwrap_or_else(|| "unknown panic".to_string());
+			Err(format!("panic caught in NIF: {reason}"))
+		},
+	}
+}
+
 /// Liveness probe — returns `:ok`. Used by the gate-2 test to confirm the BEAM
 /// node is still alive AFTER a caught NIF panic.
 #[rustler::nif]

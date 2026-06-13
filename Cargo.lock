@@ -3952,7 +3952,9 @@ dependencies = [
 name = "pi-kernel"
 version = "13.12.8"
 dependencies = [
+ "dashmap",
  "pi-code-engine",
+ "pi-code-graph",
  "pi-code-path",
  "serde_json",
  "tempfile",

@@ -1,0 +1,116 @@
+#+TITLE: P5 — wholesale kernel: graph+writes to NIF, index into warm BEAM, zero-copy handles
+#+STATE: DOING
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: PLAN-336-p5-wholesale-kernel-graphwrites-to-nif-i
+
+* Initial Message
+
+i restarted the session; please write the "What I'd still consider" as FUPs if not done already, then focus on P5 and the FUP that you left for later; explain them again with their call sites and what they enable down the line. Try to use the 'execute' tool as much as possible to discover any warts previously undiscovered, thanks.
+
+* Origin
+
+Deferred from PLAN-334 / spec `specs/beam-orchestrator/09-p3-pi-kernel-carve-out.md`
+("Deferred to P5" + risk ledger). P3 SHIPPED the read lane through a shared
+`pi_kernel` crate with two skins (NAPI + rustler NIF). P5 finishes the extraction:
+graph edges + writes + the code-graph INDEX move kernel-side, and large handles
+go zero-copy. This is the architecture-bet payoff (WS-B: one warm kernel, N
+agents share one resident index), not error-relief.
+
+Prereq DONE: FUP-132 (live host-abort probe on pi_code_path::CancellationToken,
+commit 77b172738) — the cancellation primitive P5.2's shared resident-index walk
+needs.
+
+* Verified ground truth (file-checked 2026-06-13)
+
+- `pi-kernel` is READ-ONLY by design (lib.rs moduledoc): "writes, the buffer
+  registry, undo history, and the code-graph index stay bridge-side in
+  pi-natives." So P5.1/P5.2 each need a host-agnostic ENTRY added to pi-kernel
+  (or a sibling crate) BEFORE the NIF can call them.
+- NIF skin today: `beam/pi_kernel_nif/native/pi_kernel_nif/src/lib.rs` exposes
+  only `resolve_target/2` (read) + `ping/0` + broker_conn's claim/release. Every
+  entry is `catch_unwind`-wrapped (gate 2) and `DirtyCpu`/`DirtyIo` scheduled.
+- Edges: `crates/pi-natives/src/code_path/edge_dispatch.rs::resolve` +
+  `edge_resolver/mod.rs` — already take a host-agnostic
+  `pi_code_path::CancellationToken` (✓ portable), but live in pi-natives and
+  return napi DTOs.
+- Writes: `crates/pi-natives/src/code_path/code_resolver/mutation.rs::try_apply`
+  (MutationResolver) — operates on the buffer registry (`code_buffer.rs`), which
+  is napi-coupled (the registry + undo history are the bridge-side state the
+  kernel moduledoc names).
+- Index: `crates/pi-natives/src/code_graph.rs` is a THIN napi wrapper
+  (`napi::Result`, embeddings worker call, cache path resolution). The actual
+  engine — `CodeGraphBuilder`, `CacheStore`, `GraphStore`, `extract_chunks`,
+  query — lives in `crates/pi-code-graph`, which is ALREADY host-agnostic (no
+  napi/rustler dep). ∴ P5.2 carve is mostly orchestration, not algorithm.
+- Handles: `beam/ptc_runner-vendored/lib/ptc_runner/lisp/handle_store.ex` is a
+  GenServer that owns large parked terms; projections run in-owner so only
+  slices leave (deliberately NOT :ets — handle_store.ex:10). Backing the large
+  payloads with a rustler `ResourceArc` (same mechanism gate-3 BrokerConnection
+  uses, broker_conn.rs:134) gives by-reference crossing.
+
+* P5.1 — graph edges + writes cut over to the NIF
+
+Today only the BEAM READ lane works; a PTC program over the BEAM can read code
+but cannot follow `def→/ref→/call→` or apply an edit through the kernel.
+- Add host-agnostic edge + mutation entries callable by the NIF. Edges are the
+  cheaper half (resolver already CancellationToken-clean). Writes require the
+  buffer-registry state to be reachable host-agnostically (the harder half;
+  may stage as P5.1a edges, P5.1b writes).
+- Mirror the NAPI dispatch: `edge_dispatch::resolve` / `mutation::try_apply`.
+- Gate: NIF edge/write result byte-identical to NAPI (extend kernel_parity
+  discipline to edges + a mutation round-trip).
+Enables: full graph + write parity for the BEAM execute substrate (`tool/find`
+edges, a future `tool/edit`).
+
+* P5.2 — code-graph INDEX wholesale into the warm BEAM kernel
+
+Today (GT-7, "two-kernels RAM"): the index builds NODE-side
+(code_graph.rs::run_code_graph → ensure_graph); the BEAM has its own resident
+runtime. N agents on a node ⇒ N index builds ⇒ N RAM copies.
+- Add a host-agnostic index entry (wrapping pi-code-graph's CodeGraphBuilder +
+  CacheStore) the NIF can drive; index resident in the ONE warm BEAM kernel.
+- Cancellation via FUP-132's probe (per-caller abort of a shared walk).
+- Open: embeddings worker (pi-knowledge-worker) interaction — the index build
+  calls out to the embedding daemon; that lane must be reachable from the BEAM
+  side (or the index build stays embeddings-free and the semantic lane is added
+  later).
+Enables (THE bet, spec 09:53): one warm kernel, N agents, index built ONCE per
+node, shared. Resolves GT-7.
+
+* P5.3 — N-3 zero-copy HandleStore: ETS-style copy → ResourceArc
+
+Today HandleStore avoids the copy on READS (projections run in-owner) at the
+cost of a GenServer.call per projection; large terms still get copied once into
+the owner at `put`.
+- Back large handles with a rustler ResourceArc so payloads cross the NIF
+  boundary by reference, not copy. Language semantics unchanged (handle.ex
+  contract identical) → lands after gates green without touching D-2.
+Enables: true zero-copy for large tool results / pmap fan-out. Lowest-risk of
+the three.
+
+* Sequencing
+
+FUP-132 (DONE) → P5.1 + P5.3 (independent, parallel-safe) → P5.2 (the big carve;
+benefits from FUP-132's probe for the shared-index walk; depends on the
+host-agnostic-entry pattern P5.1 establishes).
+
+* Acceptance (per part)
+
+P5.1: NIF `edge`/`mutation` entries exist, catch_unwind-wrapped, byte-identical
+to NAPI on a parity corpus. P5.2: a single resident index serves N BEAM execute
+calls with one build (proven by a build-count probe + RAM comparison). P5.3: a
+large handle crosses the NIF by reference (no full-term copy; proven by a
+size/alloc probe), handle.ex contract unchanged.
+
+* Risk ledger (from spec 09)
+
+two-kernels RAM (resolved by P5.2) · panic blast (gate 2 catch_unwind at every
+NIF entry — MUST extend to new entries) · second-skin tax (rustler DTOs
+alongside napi — bounded; core stays in pi-kernel/pi-code-graph).
+
+NOTE [2026-06-13]: SCOPE CORRECTION (file-verified): P5.1-edges and P5.2-index are the SAME carve, not separable. edge_dispatch.rs:108 calls code_graph_cache::get_or_build_graph — graph edges REQUIRE the index. But code_graph_cache.rs (the warm Arc<CodeGraph> cache + builder) and edge_resolver/mod.rs are BOTH already host-agnostic (deps: only pi_code_graph + pi_code_path + dashmap + std; zero napi/rustler/Error::from_reason). The napi coupling for edges is purely the DTO marshaling in edge_dispatch.rs, not the graph machinery.
+
+∴ Revised plan: lift edge_resolver + code_graph_cache into pi-kernel (or a sibling host-agnostic crate) + add a kernel resolve_edges entry → the NIF gets edges AND the resident shared index TOGETHER. The two-kernels RAM win (P5.2) falls out of the same move. The embeddings/semantic-search lane (code_graph.rs, napi::Result + embedding worker) stays node-side, deferrable — it's the genuinely napi-heavy part.
+
+Revised sequencing: P5.A = lift edge_resolver+code_graph_cache to pi-kernel + kernel resolve_edges entry + NIF edge entry (delivers edges + shared index). P5.B = writes carve (buffer registry — the hard, separate one). P5.3 = zero-copy handles (independent). Semantic search lane deferred.

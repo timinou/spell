@@ -17,7 +17,9 @@ pub mod dialect_registry {
 }
 pub mod diff_qualifier;
 pub mod edge_dispatch;
-pub mod edge_resolver;
+// P5.A (PLAN-336): the edge resolver moved to pi-kernel (host-agnostic, shared
+// with the BEAM NIF). Re-exported so `code_path::edge_resolver::*` resolves.
+pub use pi_kernel::edge_resolver;
 pub mod edit_history;
 pub mod extractors;
 pub mod heading_resolver;

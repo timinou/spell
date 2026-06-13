@@ -25,6 +25,19 @@ defmodule PiKernelNif do
 
   # NB: rustler encodes Rust `Result<String, String>` as `{:ok, s} | {:error, s}`.
 
+  @doc """
+  Resolve a graph-edge `target` (one containing `def→/ref→/call→/import→/bind→`)
+  rooted at `root`. Returns the raw JSON string
+  `{"nodes": [...], "diagnostics": [...]}` on success or `{:error, reason}`.
+
+  Serves edges from the SAME warm resident kernel index `resolve_target` reads
+  from — one index per BEAM node, shared across N agents (P5.A / WS-B).
+
+  Replaced at load time by the NIF; this body only runs if the NIF failed to load.
+  """
+  @spec resolve_edges(String.t(), String.t()) :: {:ok, String.t()} | {:error, String.t()}
+  def resolve_edges(_target, _root), do: :erlang.nif_error(:nif_not_loaded)
+
   @doc "Liveness probe; returns `:ok`. Used to confirm the node survives a caught panic."
   @spec ping() :: :ok
   def ping, do: :erlang.nif_error(:nif_not_loaded)
@@ -58,6 +71,19 @@ defmodule PiKernelNif do
   def resolve(target, root) do
     # rustler maps Rust `Result<String, String>` to `{:ok, json} | {:error, reason}`.
     case resolve_target(target, root) do
+      {:ok, json} when is_binary(json) -> Jason.decode(json)
+      {:error, _} = err -> err
+      other -> {:error, {:unexpected, other}}
+    end
+  end
+
+  @doc """
+  Resolve and decode an edge query in one step:
+  `{:ok, %{"nodes" => [...], "diagnostics" => [...]}}` or `{:error, reason}`.
+  """
+  @spec resolve_edges_decoded(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def resolve_edges_decoded(target, root) do
+    case resolve_edges(target, root) do
       {:ok, json} when is_binary(json) -> Jason.decode(json)
       {:error, _} = err -> err
       other -> {:error, {:unexpected, other}}

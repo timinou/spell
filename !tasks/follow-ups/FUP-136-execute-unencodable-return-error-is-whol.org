@@ -1,0 +1,104 @@
+#+TITLE: execute unencodable-return error is whole-map + location-blind (one bad leaf poisons the result)
+#+STATE: ITEM
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: FUP-136-execute-unencodable-return-error-is-whol
+
+* Initial Message
+
+i restarted the session; please write the "What I'd still consider" as FUPs if not done already, then focus on P5 and the FUP that you left for later; explain them again with their call sites and what they enable down the line. Try to use the 'execute' tool as much as possible to discover any warts previously undiscovered, thanks.
+
+* Symptom (found live via execute, 2026-06-13)
+
+A program returning a map where ONE value is non-serializable fails the WHOLE
+return with a single opaque error — every sibling good value is lost, and there
+is no hint which key was the offender:
+#+begin_src
+{:close1 (try starts-with (catch e (str e)))   ; fine, a string
+ :close2 (try mapv        (catch e (str e)))}   ; mapv is BOUND → catch never
+                                                ; fires → the builtin fn leaks in
+;; => PtcRuntime error (unencodable_return): program returned a non-serializable value
+#+end_src
+`:close1` was a perfectly good string; the agent sees none of it, and nothing
+points at `:close2`/`mapv`. (Here the trigger was a user mistake — `mapv`
+resolves to a fn so `catch` never ran — but the runtime's RESPONSE to that
+mistake is the wart: maximally unhelpful.)
+
+* Where
+
+`PtcRunner.Lisp.run/2` → Peer `run_program/2`
+(`beam/ptc_runtime/lib/ptc_runtime/peer.ex:476`) calls `ensure_encodable/1`
+(peer.ex:524):
+#+begin_src elixir
+defp ensure_encodable(value) do
+  case Jason.encode_to_iodata(value) do
+    {:ok, _}   -> {:ok, value}
+    {:error, _} -> {:error, %{message: "program returned a non-serializable value",
+                              data: %{"reason" => "unencodable_return"}}}
+  end
+end
+#+end_src
+The encode is all-or-nothing over the top-level value and the `{:error, _}`
+branch DISCARDS Jason's error detail. So: (1) one bad leaf poisons every sibling,
+(2) the path to the offender is thrown away.
+
+Context that makes the current shape deliberate (do NOT naively "fix" by making
+everything encode): the moduledoc at peer.ex:476 notes a SUCCESSFUL run still
+commits its bindings even when the return is non-encodable — e.g. `(def x v)`
+returns a Var `#'x` that Jason can't encode, yet `def` is the canonical bind. So
+"non-encodable return → error, bindings still commit" is intended. The wart is
+only the error's BLAST RADIUS and LACK OF LOCALITY, not that it errors at all.
+
+* Why I'm not just fixing it (the fix is a real judgment call)
+
+Three candidate fixes, with tradeoffs:
+
+** A — locate the offender, keep failing loud (RECOMMENDED)
+On the `{:error, _}` branch, walk the value tree to find the non-encodable
+path(s) and name them, e.g.:
+  "non-serializable value at :close2 (a #<builtin>) — functions/Vars can't cross
+   the wire; return its name/result instead".
+Still an error (correct — the program DID return junk), but actionable and
+local. Cost: a recursive encodability probe over maps/lists (bounded; only runs
+on the already-failing path, so no hot-path cost). Open question: report the
+FIRST offending path or ALL of them (cap at N). Lean: first + a count.
+
+** B — partial encode (REJECTED)
+Replace non-encodable leaves with a placeholder and return the rest. Rejected:
+SILENTLY corrupts the return, hides the bug, violates fail-loud. The agent would
+get a "successful" result with phantom values.
+
+** C — make nominal callables encodable as a stable string (SECONDARY, narrow)
+`(str mapv)` ALREADY yields "#<builtin>" via the Var/fn formatter, and `(str
+starts-with…)` etc. work — so a NAMED builtin has a meaningful repr. Option C:
+let a returned builtin/Var serialize to that string (so the map above would
+return `{:close1 "…", :close2 "#<builtin>"}`). Tradeoff: a program returning a
+fn would "succeed" with a useless-but-honest string instead of erroring.
+Defensible for NOMINAL builtins (they have names); WRONG as a blanket — an
+anonymous closure `(fn [x] x)` has no meaningful serialization and should still
+error. So C is only safe if scoped to named builtins/Vars, and even then it
+changes success/failure semantics (a judgment the owner should make). A+C
+compose: C shrinks the failure set to genuinely opaque values, A makes the
+remaining failures local.
+
+Recommendation: implement A (pure ergonomics win, no semantic change). Consider C
+only for named builtins/Vars, as a separate decision, because it changes what
+"succeeds".
+
+* Acceptance
+
+A: a return map with one non-encodable value yields an error naming the offending
+key/path (and ideally a hint), while a fully-encodable map is unaffected. Test in
+peer/run_program coverage. If C is adopted: a returned named builtin serializes to
+its "#<builtin>"/name string; an anonymous closure still errors (now via A's
+located message).
+
+* Priority rationale
+
+#C — correctness is fine (it errors, doesn't corrupt); this is an ergonomics /
+diagnosability gap. Bites whenever a program accidentally returns a fn/Var nested
+in a larger result, which is easy during exploration.
+
+* Discovered during
+
+P5/FUP-132 prep, exercising execute error shapes (user asked to surface warts).

@@ -97,7 +97,10 @@ pub mod ast;
 pub mod clipboard;
 pub mod code_buffer;
 pub mod code_graph;
-pub mod code_graph_cache;
+// P5.A (PLAN-336): the workspace graph cache moved to pi-kernel (host-agnostic,
+// shared with the BEAM NIF). Re-exported here so existing
+// `crate::code_graph_cache::*` call sites keep resolving unchanged.
+pub use pi_kernel::graph_cache as code_graph_cache;
 pub mod code_path;
 pub mod semantic_cache;
 // PLAN-315 W2: client-side transport to pi-knowledge-worker.

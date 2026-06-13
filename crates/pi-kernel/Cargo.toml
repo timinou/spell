@@ -15,6 +15,11 @@ repository.workspace = true
 [dependencies]
 pi-code-path = { path = "../pi-code-path" }
 pi-code-engine = { path = "../pi-code-engine" }
+# P5.A (PLAN-336): the code-graph index + edge resolver moved kernel-side so the
+# BEAM NIF skin can serve graph edges from one warm resident index (WS-B). Both
+# pi-code-graph and dashmap are host-agnostic (no napi/rustler) — N-2 preserved.
+pi-code-graph = { path = "../pi-code-graph" }
+dashmap = "6.1"
 tree-sitter = "0.25"
 serde_json = "1"
 winnow = "0.7"
