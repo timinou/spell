@@ -6,14 +6,17 @@ target ::= Locator (Query)? (Qualifier)?
   Pred      [N] [a..b] [text~="re"] [attr=val] [size>1M] [mtime>2026-01-01]
             [type_aware] [severity=error|warning|info|hint] [source=graph|semantic|both]
   Combinator  / // ^ ^^ << >> ref→ def→ call→ import→ bind→ implements→ inherits→ dispatches→ | & −
-  Qualifier   #body #sig #stat #tree #diff #listing #raw
+  Qualifier   #outline #body #sig #stat #tree #diff #listing #raw
               #hover #type_definition #signature #inlay #diagnostics
 
 <recipes>
 | want                | target                                      |
 |---------------------|---------------------------------------------|
-| read file           | `foo.ts`                                    |
-| slice               | `foo.ts:80-130`                             |
+| read file (outline) | `foo.ts`  → symbol map, the default for code |
+| read full text      | `foo.ts#raw`                                |
+| outline depth       | `foo.ts#outline[depth=1]` (top-level only)  |
+| drill into a symbol | `foo.ts::Bar.method#body`  ← paste from outline |
+| slice (last resort) | `foo.ts:80-130`                             |
 | grep one            | `foo.ts::§line[text~="TODO"]`               |
 | grep many           | `src/**/*.ts::§line[text~="TODO"]`          |
 | find files          | `src/**/*.ts`                               |
@@ -44,6 +47,15 @@ target ::= Locator (Query)? (Qualifier)?
 | recent              | `src/**/*.ts::§file[mtime>2026-05-01]`     |
 | uri                 | `memory://root` · `artifact://…` · `skill://…` |
 </recipes>
+
+<symbol-first>
+Reading a bare code file returns its `#outline` — a nested map of copy-pasteable
+`file::Symbol` CodePaths (with signatures + ● exported / · local markers), NOT
+the whole file. Work from those handles: drill a symbol with `file::Sym#body`,
+edit it with `edit { target: "file::Sym#body" }`. Reach for `#raw` only when you
+truly need the full text, and `:A-B` line slices only as a last resort — they
+drift and review worse than symbol targets.
+</symbol-first>
 
 <!-- @generated:find-recipes -->
 ## Qualifiers

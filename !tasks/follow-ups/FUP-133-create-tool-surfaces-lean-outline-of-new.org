@@ -1,0 +1,19 @@
+#+TITLE: Create tool surfaces lean outline of new file
+#+STATE: DONE
+#+SESSION_ID: 150776b1bbf437c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-13T11-02-09-903Z_150776b1bbf437c9.jsonl]]
+#+CUSTOM_ID: FUP-133-create-tool-surfaces-lean-outline-of-new
+#+COMPLETION_HASH: 8cb8d882845fae7f
+
+* Initial Message
+
+look at the edit tool and how it's implemented. I'd like you to make the surface more ergonomic so that the agent stops using line numbers to parse files. That means:
+- giving more hints as to the CodePaths you can use to edit symbols instead of files
+- showing file outlines by default when it is being requested (instead of the whole file)
+- anything else you deem relevant to make that tool more ergonomic.
+
+let's design and refine the design together
+
+After `create` materializes a file, render the same lean `#outline` map (symbol-first `file::Symbol` rows) as confirmation to the user, and optionally include it in the agent-facing result as a structural ref. Reuses the kernel `#outline` render from the read/edit ergonomics work (PLAN-306 symbol-first surface). Gate to outline-capable code files; skip non-code / empty new files.
+
+NOTE [2026-06-13]: Implemented in same session as the read/edit symbol-first work. create.ts #outlineOf appends lean outline after creating a non-empty code-supported file. Verified via create-e2e-regression.test.ts (shows file::Symbol CodePath rows).

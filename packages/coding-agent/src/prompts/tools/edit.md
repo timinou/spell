@@ -20,7 +20,7 @@ target ::= "<file>"                  file-scoped
        ·  "<file>::<Symbol>#body"    body span only (delimiter-inclusive)
        ·  "<file>::<Symbol>#sig"     signature span only
        ·  "<file>::§<kind>[pred]"    structural node set (e.g. §call[name=log])
-       ·  "<file>:A-B"               line slice (A,B 1-indexed inclusive)
+       ·  "<file>:A-B"               line slice (A,B 1-indexed) — LAST RESORT
        ·  "<file.css>::.cls|#id|--prop"  css selector / custom-prop token
        ·  "<file.md>::Heading Text"  markdown/org heading (text is the name)
        ·  "<glob>::<Symbol>"         multi-file (rename / structural replace ∀)
@@ -162,6 +162,9 @@ Escape literal `$` as `$$`. JS `${…}` passes through untouched.
   (intent→commit→conflict); a PeerConflict diagnostic means another session
   committed the same span first — re-read and retry.
 - prefer symbol / structural targets over line slices — diffs review cleaner
-  and survive line drift.
+  and survive line drift. Don't have the symbol path? Read the file with `find`
+  (it returns an `#outline` of copy-pasteable `file::Symbol` handles) and edit
+  `file::Sym#body`. Reserve `:A-B` for non-code text or genuinely line-oriented
+  edits.
 - undo/redo MUST be solo in a batch.
 </rules>

@@ -115,25 +115,18 @@ impl CodeResolver for CodeResolverImpl {
 			span:    None,
 		})?;
 
-		// #outline qualifier: return symbol outline instead of full content
-		if _qualifier.is_some_and(|q| q.name == "outline") {
-			let root = tree.root_node();
-			let mut cursor = root.walk();
-			let children: Vec<_> = root.named_children(&mut cursor).collect();
-			let mut lines: Vec<String> = Vec::with_capacity(children.len());
-			for child in &children {
-				let range = child.start_byte()..child.end_byte();
-				let decl_text = src[range].to_string();
-				let first_line = decl_text.lines().next().unwrap_or("").to_string();
-				lines.push(format!(
-					"{} | {} (L{}-L{})",
-					first_line,
-					child.kind(),
-					child.start_position().row + 1,
-					child.end_position().row + 1,
-				));
-			}
-			let text = lines.join("\n");
+		// #outline qualifier: return a symbol-first structural map instead of full
+		// content. The map foregrounds copy-pasteable `file::Symbol` CodePaths (the
+		// editable handle) and relegates line numbers to a secondary hint — this is
+		// what steers the agent toward symbol-scoped edits over `:A-B` line slices.
+		// Built on the rich pi-code-engine outline (nested children, signatures,
+		// exported flags), not a flat top-level walk. `#outline[depth=N]` prunes the
+		// tree to N levels (default: full depth).
+		if let Some(q) = _qualifier.filter(|q| q.name == "outline") {
+			let max_depth = parse_outline_depth(q.args.as_deref());
+			// Reuse the tree we already parsed above — the engine outline needs only
+			// the root node + source + profile, so there is no second parse here.
+			let text = render_outline_map(file, tree.root_node(), &src, profile, max_depth);
 			let node = NodeRef {
 				locator:     file.to_string_lossy().to_string(),
 				range:       0..src.len(),
@@ -402,6 +395,100 @@ fn line_byte_range(src: &str, first: i64, last: i64) -> Option<(usize, usize)> {
 		return None;
 	}
 	Some((s, e))
+}
+
+// ---------------------------------------------------------------------------
+// Outline map (#outline)
+// ---------------------------------------------------------------------------
+
+/// Parse the `depth=N` argument of `#outline[depth=N]`. Mirrors the fs `#tree`
+/// arg grammar. Absent / unparseable → full depth (`usize::MAX`).
+fn parse_outline_depth(args: Option<&str>) -> usize {
+	args
+		.and_then(|s| {
+			s.trim()
+				.strip_prefix("depth=")
+				.or_else(|| s.trim().strip_prefix("depth = "))
+				.and_then(|n| n.trim().parse::<usize>().ok())
+		})
+		.unwrap_or(usize::MAX)
+}
+
+/// Render a symbol-first outline map for `file` from an already-parsed `root`
+/// node + its `src`. Each entry leads with the copy-pasteable `file::Symbol`
+/// CodePath (the editable handle), followed by an exported marker (● exported /
+/// · local), the node kind, a line hint, and the L0 signature. Nested children
+/// are indented and addressed by their dotted symbol path
+/// (`file::Parent.child`). Takes the tree the resolver already built — no
+/// second parse (option B of the double-parse fix; the warm BufferRegistry
+/// cache stays out of the kernel read lane by PLAN-334 design).
+fn render_outline_map(
+	file: &Path,
+	root: Node<'_>,
+	src: &str,
+	profile: &pi_code_engine::language::LanguageProfile,
+	max_depth: usize,
+) -> String {
+	use pi_code_engine::outline::{EnrichFlags, outline_from_root};
+
+	let rel = file.to_string_lossy();
+	// No re-parse: the caller already parsed `src` into `root`; the engine outline
+	// walks that node + source directly (see pi_code_engine::outline_from_root).
+	let entries = outline_from_root(root, src, profile, EnrichFlags::default());
+
+	let mut lines: Vec<String> = Vec::new();
+	let mut count = 0usize;
+	for entry in &entries {
+		push_outline_entry(&mut lines, &mut count, entry, &rel, None, 0, max_depth);
+	}
+
+	let header = format!("{rel}  ·  outline ({count} symbol{})", if count == 1 { "" } else { "s" });
+	if lines.is_empty() {
+		// Empty-state affordance: no symbols to address → point at the raw read.
+		// Kept always-on because the outline itself carries no actionable handle here.
+		return format!("{header}\n  (no top-level symbols)\n… full text → {rel}#raw");
+	}
+	// No always-on teaching hint for the populated case: the rows already ARE the
+	// copy-pasteable `file::Symbol` handles, and the host read tool appends a
+	// once-per-(session, filetype) hint on auto-outline reads (see get.ts).
+	format!("{header}\n{}", lines.join("\n"))
+}
+
+/// Append one outline entry (and, within `max_depth`, its children) to `lines`.
+/// `parent_path` is the dotted symbol path of the enclosing scope, used to
+/// compose the child's `file::Parent.child` CodePath.
+fn push_outline_entry(
+	lines: &mut Vec<String>,
+	count: &mut usize,
+	entry: &pi_code_engine::outline::OutlineEntry,
+	rel: &str,
+	parent_path: Option<&str>,
+	depth: usize,
+	max_depth: usize,
+) {
+	if depth >= max_depth {
+		return;
+	}
+	let symbol_path =
+		parent_path.map_or_else(|| entry.name.clone(), |parent| format!("{parent}.{}", entry.name));
+	let indent = "  ".repeat(depth + 1);
+	let marker = if entry.exported { '●' } else { '·' };
+	// The signature already restates the name + params; show it only when it
+	// adds beyond the bare `file::Symbol` handle. Trim to keep rows scannable.
+	let sig = entry.signature.trim();
+	let sig_part = if sig.is_empty() || sig == entry.name {
+		String::new()
+	} else {
+		format!("   {sig}")
+	};
+	lines.push(format!(
+		"{indent}{marker} {rel}::{symbol_path}   {}   L{}{sig_part}",
+		entry.kind, entry.line,
+	));
+	*count += 1;
+	for child in &entry.children {
+		push_outline_entry(lines, count, child, rel, Some(&symbol_path), depth + 1, max_depth);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -687,6 +774,95 @@ mod tests {
 		resolver
 			.resolve(file, &query, None, &CancellationToken::new())
 			.unwrap()
+	}
+
+	/// Resolve `file` with an `#outline[args]` qualifier and return the single
+	/// `§outline` node's rendered text. The query is irrelevant — the outline
+	/// branch short-circuits before query evaluation (mirrors how parse.rs runs
+	/// a universal `§*` query alongside the qualifier).
+	fn run_outline(resolver: &CodeResolverImpl, file: &Path, args: Option<&str>) -> String {
+		let query = Query::single(Step {
+			axis:       None,
+			head:       Head::NodeKind("*".into()),
+			predicates: vec![],
+		});
+		let qual =
+			pi_code_path::ast::Qualifier { name: "outline".into(), args: args.map(str::to_string) };
+		let results = resolver
+			.resolve(file, &query, Some(&qual), &CancellationToken::new())
+			.unwrap();
+		assert_eq!(results.len(), 1, "outline yields exactly one §outline node");
+		assert_eq!(results[0].kind, "§outline");
+		let Some(pi_code_path::types::Content::Text { value }) = results[0].content.as_ref() else {
+			panic!("outline node must carry text content");
+		};
+		value.clone()
+	}
+
+	#[test]
+	fn outline_emits_copy_pasteable_symbol_codepaths() {
+		// The outline must foreground the editable `file::Symbol` CodePath — NOT a
+		// bare `(L40-L51)` line range — so the agent pastes a symbol target back
+		// into `edit`, instead of counting lines for a `:A-B` slice.
+		let resolver = resolver();
+		let f = temp_file(
+			".ts",
+			"export function greet(name: string): string {\n  return `hi ${name}`;\n}\n\nfunction \
+			 local() {}\n",
+		);
+		let rel = f.path().to_string_lossy().to_string();
+		let text = run_outline(&resolver, f.path(), None);
+		assert!(text.contains(&format!("{rel}::greet")), "must show file::Symbol CodePath: {text}");
+		assert!(text.contains(&format!("{rel}::local")), "must list the local fn too: {text}");
+		// Exported marker present for greet, local marker for local().
+		assert!(text.contains('●'), "exported symbol marker: {text}");
+		assert!(text.contains('·'), "local symbol marker: {text}");
+		// Header counts symbols; line hint is secondary (Lnn), not a range handle.
+		assert!(text.contains("outline ("), "header names the outline: {text}");
+	}
+
+	#[test]
+	fn outline_nests_children_with_dotted_paths() {
+		// A class method must be addressable as `file::Class.method` — the dotted
+		// symbol path that `edit` accepts for symbol-scoped edits.
+		let resolver = resolver();
+		let f =
+			temp_file(".ts", "export class Bar {\n  method(x: number): void {\n    return;\n  }\n}\n");
+		let rel = f.path().to_string_lossy().to_string();
+		let text = run_outline(&resolver, f.path(), None);
+		assert!(text.contains(&format!("{rel}::Bar")), "class row: {text}");
+		assert!(
+			text.contains(&format!("{rel}::Bar.method")),
+			"nested method must use the dotted child path: {text}"
+		);
+	}
+
+	#[test]
+	fn outline_depth_prunes_nested_children() {
+		// `#outline[depth=1]` shows only top-level symbols; the nested method is
+		// pruned. depth=2 brings it back.
+		let resolver = resolver();
+		let f = temp_file(".ts", "export class Bar {\n  method(x: number): void {}\n}\n");
+		let rel = f.path().to_string_lossy().to_string();
+		let depth1 = run_outline(&resolver, f.path(), Some("depth=1"));
+		assert!(depth1.contains(&format!("{rel}::Bar")), "depth=1 keeps the class: {depth1}");
+		assert!(
+			!depth1.contains(&format!("{rel}::Bar.method")),
+			"depth=1 must prune the nested method: {depth1}"
+		);
+		let depth2 = run_outline(&resolver, f.path(), Some("depth=2"));
+		assert!(
+			depth2.contains(&format!("{rel}::Bar.method")),
+			"depth=2 restores the nested method: {depth2}"
+		);
+	}
+
+	#[test]
+	fn parse_outline_depth_grammar() {
+		assert_eq!(parse_outline_depth(None), usize::MAX);
+		assert_eq!(parse_outline_depth(Some("depth=2")), 2);
+		assert_eq!(parse_outline_depth(Some("depth = 3")), 3);
+		assert_eq!(parse_outline_depth(Some("garbage")), usize::MAX);
 	}
 
 	// ------------------------------------------------------------------

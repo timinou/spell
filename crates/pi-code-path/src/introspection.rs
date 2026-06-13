@@ -177,6 +177,14 @@ pub fn list_qualifiers() -> Vec<QualifierInfo> {
 			applies_to:  vec!["file".to_string()],
 		},
 		QualifierInfo {
+			// `#outline` returns a symbol-first structural map (nested `file::Symbol`
+			// CodePaths + signatures), the default for bare code-file reads. `depth=N`
+			// prunes the tree to N levels.
+			name:        "outline".to_string(),
+			args_schema: Some("depth=N".to_string()),
+			applies_to:  vec!["file".to_string()],
+		},
+		QualifierInfo {
 			name:        "bytes".to_string(),
 			args_schema: None,
 			applies_to:  vec!["file".to_string()],
@@ -223,7 +231,7 @@ pub fn list_qualifiers() -> Vec<QualifierInfo> {
 }
 
 /// Expected minimum qualifier count.
-pub const QUALIFIER_COUNT_MIN: usize = 8;
+pub const QUALIFIER_COUNT_MIN: usize = 9;
 
 // ── list_edge_kinds ──────────────────────────────────────────────
 

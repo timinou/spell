@@ -71,6 +71,81 @@ describe("GetTool", () => {
 		}
 	});
 
+	it("auto-attaches #outline (not #raw) for a bare code file", async () => {
+		const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-outline");
+		await fs.mkdir(tmp, { recursive: true });
+		const real = nodePath.join(tmp, "mod.ts");
+		await fs.writeFile(real, "export function foo() { return 1; }\n", "utf-8");
+		try {
+			const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+				makeChunk([{ locator: real, kind: "§outline", content: { text: `${real}  ·  outline (1 symbol)` } }]),
+			]);
+			const tool = new GetTool();
+			await tool.execute("t", { target: real });
+			expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${real}#outline` }));
+		} finally {
+			await fs.rm(tmp, { recursive: true });
+		}
+	});
+
+	it("keeps #raw for a bare non-code text file (.json)", async () => {
+		const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-json");
+		await fs.mkdir(tmp, { recursive: true });
+		const real = nodePath.join(tmp, "data.json");
+		await fs.writeFile(real, '{"a":1}\n', "utf-8");
+		try {
+			const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+				makeChunk([{ locator: real, kind: "file", content: { text: '{"a":1}' } }]),
+			]);
+			const tool = new GetTool();
+			await tool.execute("t", { target: real });
+			expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${real}#raw` }));
+		} finally {
+			await fs.rm(tmp, { recursive: true });
+		}
+	});
+
+	it("honors an explicit #raw on a code file (no outline override)", async () => {
+		const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-explicit-raw");
+		await fs.mkdir(tmp, { recursive: true });
+		const real = nodePath.join(tmp, "mod.ts");
+		await fs.writeFile(real, "export const x = 1;\n", "utf-8");
+		try {
+			const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+				makeChunk([{ locator: real, kind: "file", content: { text: "export const x = 1;" } }]),
+			]);
+			const tool = new GetTool();
+			await tool.execute("t", { target: `${real}#raw` });
+			// Explicit qualifier is not bare-plain → passes through verbatim.
+			expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${real}#raw` }));
+		} finally {
+			await fs.rm(tmp, { recursive: true });
+		}
+	});
+
+	it("appends the teaching hint only once per (session, filetype)", async () => {
+		const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-hint");
+		await fs.mkdir(tmp, { recursive: true });
+		const a = nodePath.join(tmp, "a.ts");
+		const b = nodePath.join(tmp, "b.ts");
+		await fs.writeFile(a, "export const x = 1;\n", "utf-8");
+		await fs.writeFile(b, "export const y = 2;\n", "utf-8");
+		try {
+			spyOn(nativesModule, "executeCodePath").mockImplementation(async (opts: any) =>
+				[makeChunk([{ locator: opts.target, kind: "§outline", content: { text: `${opts.target} · outline (1 symbol)` } }])],
+			);
+			const sessionId = `sess-${Date.now()}`;
+			const tool = new GetTool(createSession({ getSessionId: () => sessionId }));
+			const first = getText(await tool.execute("t", { target: a }));
+			const second = getText(await tool.execute("t", { target: b }));
+			expect(first).toContain("outline shown");
+			// Same session + same .ts extension → hint suppressed on the second read.
+			expect(second).not.toContain("outline shown");
+		} finally {
+			await fs.rm(tmp, { recursive: true });
+		}
+	});
+
 	it("does not auto-attach #raw when content=false is set explicitly", async () => {
 		const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-noraw");
 		await fs.mkdir(tmp, { recursive: true });
@@ -658,59 +733,33 @@ describe("GetTool", () => {
 	});
 
 	// ─────────────────────────────────────────────────────────────
-	// FEAT-713: source-extension files default to #raw, not #outline.
-	// ─────────────────────────────────────────────────────────────
-	describe("FEAT-713: bare-file default qualifier", () => {
-		it("auto-attaches #raw for bare .ts path (no #outline)", async () => {
-			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-feat713-ts");
-			await fs.mkdir(tmp, { recursive: true });
-			const real = nodePath.join(tmp, "sample.ts");
-			await fs.writeFile(real, "export const x = 1;\n", "utf-8");
-			try {
-				const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
-					makeChunk([{ locator: real, kind: "file", content: { text: "export const x = 1;\n" } }]),
-				]);
-				const tool = new GetTool();
-				await tool.execute("t", { target: real });
-				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${real}#raw` }));
-			} finally {
-				await fs.rm(tmp, { recursive: true });
-			}
-		});
-
-		it("auto-attaches #raw for bare .md path", async () => {
-			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-feat713-md");
-			await fs.mkdir(tmp, { recursive: true });
-			const real = nodePath.join(tmp, "NOTES.md");
-			await fs.writeFile(real, "# title\n", "utf-8");
-			try {
-				const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
-					makeChunk([{ locator: real, kind: "file", content: { text: "# title\n" } }]),
-				]);
-				const tool = new GetTool();
-				await tool.execute("t", { target: real });
-				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${real}#raw` }));
-			} finally {
-				await fs.rm(tmp, { recursive: true });
-			}
-		});
-
-		it("auto-attaches #raw for bare .rs path", async () => {
-			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-feat713-rs");
-			await fs.mkdir(tmp, { recursive: true });
-			const real = nodePath.join(tmp, "lib.rs");
-			await fs.writeFile(real, "fn main() {}\n", "utf-8");
-			try {
-				const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
-					makeChunk([{ locator: real, kind: "file", content: { text: "fn main() {}\n" } }]),
-				]);
-				const tool = new GetTool();
-				await tool.execute("t", { target: real });
-				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${real}#raw` }));
-			} finally {
-				await fs.rm(tmp, { recursive: true });
-			}
-		});
+	// PLAN-306 (supersedes FEAT-713): bare reads of outline-capable code files
+	// default to #outline (symbol-first map), steering edits toward symbol scopes.
+	// Non-code text (.json, .txt, unknown) still defaults to #raw.
+	// ─────────────────────────────────────────────
+	describe("PLAN-306: bare-file default qualifier (symbol-first)", () => {
+		for (const [ext, name, body] of [
+			["ts", "sample.ts", "export const x = 1;\n"],
+			["md", "NOTES.md", "# title\n"],
+			["rs", "lib.rs", "fn main() {}\n"],
+		] as const) {
+			it(`auto-attaches #outline for bare .${ext} path`, async () => {
+				const tmp = nodePath.join(process.cwd(), `packages/coding-agent/test/tmp-plan306-${ext}`);
+				await fs.mkdir(tmp, { recursive: true });
+				const real = nodePath.join(tmp, name);
+				await fs.writeFile(real, body, "utf-8");
+				try {
+					const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+						makeChunk([{ locator: real, kind: "§outline", content: { text: `${real} · outline` } }]),
+					]);
+					const tool = new GetTool();
+					await tool.execute("t", { target: real });
+					expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${real}#outline` }));
+				} finally {
+					await fs.rm(tmp, { recursive: true });
+				}
+			});
+		}
 	});
 
 	// ─────────────────────────────────────────────────────────────

@@ -2,7 +2,7 @@ import { statSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@spell/pi-agent-core";
-import { executeCodePath, parseCodePath } from "@spell/pi-natives";
+import { executeCodePath, getRegisteredExtensions, parseCodePath } from "@spell/pi-natives";
 import type { Component } from "@spell/pi-tui";
 import { formatBytes } from "@spell/pi-utils";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -30,7 +30,61 @@ type GetToolResultDetails = DetailsWithMeta & {
 	matchCount?: number;
 	fileCount?: number;
 };
+/**
+ * Symbol-first default reads: a bare code-file read auto-attaches `#outline`
+ * (a nested `file::Symbol` structural map) instead of `#raw` (a whole-file
+ * dump). This is the central lever steering the agent toward symbol-scoped
+ * edits over `:A-B` line slices: the read surface hands back copy-pasteable
+ * CodePaths, so the edit surface receives them. Escape hatches (`#raw`,
+ * `:A-B`, `::Symbol`) are explicit and unaffected.
+ *
+ * The capable-extension set is exactly the dialects whose `outline` capability
+ * is advertised by the kernel (`getRegisteredExtensions()`), computed once.
+ * Files outside it (`.txt`, `.json`, unknown) keep the `#raw` default.
+ */
+let OUTLINE_EXTS: Set<string> | null = null;
+function outlineCapableExtensions(): Set<string> {
+	if (OUTLINE_EXTS) return OUTLINE_EXTS;
+	try {
+		OUTLINE_EXTS = new Set(getRegisteredExtensions().map(e => e.toLowerCase()));
+	} catch {
+		// Native binding unavailable (degraded host): fall back to raw reads.
+		OUTLINE_EXTS = new Set();
+	}
+	return OUTLINE_EXTS;
+}
 
+/** Whether a path's extension has an outline-capable dialect. */
+function isOutlineCapable(filePath: string): boolean {
+	const ext = path.extname(filePath).replace(/^\./, "").toLowerCase();
+	return ext.length > 0 && outlineCapableExtensions().has(ext);
+}
+
+/**
+ * Contextual hint gating (PLAN-306): the auto-outline read appends a one-line
+ * teaching hint (how to reach full text / drill into a symbol / go deeper)
+ * ONCE per (session, file-extension) so it educates without becoming noise on
+ * every read. Keyed by `${sessionId}\0${ext}`; a bounded cap guards the
+ * long-lived daemon process from unbounded growth. `null` sessionId (no id)
+ * collapses to a single global bucket.
+ */
+const OUTLINE_HINT_SEEN = new Set<string>();
+const OUTLINE_HINT_CAP = 4_096;
+function shouldEmitOutlineHint(sessionId: string | null, ext: string): boolean {
+	const key = `${sessionId ?? ""}\u0000${ext.toLowerCase()}`;
+	if (OUTLINE_HINT_SEEN.has(key)) return false;
+	if (OUTLINE_HINT_SEEN.size >= OUTLINE_HINT_CAP) OUTLINE_HINT_SEEN.clear();
+	OUTLINE_HINT_SEEN.add(key);
+	return true;
+}
+
+/** The teaching hint appended after a first-per-filetype auto-outline read. */
+function outlineHintLine(displayPath: string): string {
+	return (
+		`… outline shown (default for code files). Full text → ${displayPath}#raw · ` +
+		`drill into a symbol → ${displayPath}::Symbol#body · deeper nesting → ${displayPath}#outline[depth=N]`
+	);
+}
 /**
  * Classifies a target for auto-attach behavior.
  * - `"bare-plain"`: plain filesystem path (no scheme, query, qualifier, glob).
@@ -464,6 +518,9 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		let statProbeFoundFile = false;
 		let attachedQualifier: string | null = null;
 		let resolvedAbs: string | null = null;
+		// Set when the stat-probe auto-attached `#outline` to a bare code file;
+		// gates the once-per-(session, filetype) teaching hint appended below.
+		let autoOutline = false;
 
 		const rootDir = effectiveRootFor(target, params.root, process.cwd());
 
@@ -493,7 +550,15 @@ export class GetTool implements AgentTool<typeof getSchema> {
 									`Use a hex/byte view or an appropriate parser if you need its contents.]`,
 							)
 							.done();
+					} else if (isOutlineCapable(absCandidate)) {
+						// Symbol-first default: code files resolve to their `#outline`
+						// structural map (copy-pasteable `file::Symbol` rows), not a
+						// whole-file `#raw` dump. Steers edits toward symbol scopes.
+						target = `${normalized}#outline`;
+						attachedQualifier = "#outline (auto)";
+						autoOutline = true;
 					} else {
+						// Non-code text (.txt, .json, unknown): no outline dialect → raw.
 						target = `${normalized}#raw`;
 						attachedQualifier = "#raw (auto)";
 					}
@@ -607,7 +672,17 @@ export class GetTool implements AgentTool<typeof getSchema> {
 			});
 		}
 
-		const text = prettifyDidYouMean(displayText);
+		let text = prettifyDidYouMean(displayText);
+		// Contextual teaching hint: appended once per (session, filetype) after a
+		// successful auto-outline read, so the agent learns the escape hatches
+		// (#raw / ::Symbol#body / depth) without the hint repeating on every read.
+		if (autoOutline && displayText) {
+			const sessionId = this.session?.getSessionId?.() ?? null;
+			const ext = path.extname(params.target).replace(/^\./, "");
+			if (shouldEmitOutlineHint(sessionId, ext)) {
+				text = `${text}\n${outlineHintLine(params.target)}`;
+			}
+		}
 		const builder = toolResult<GetToolResultDetails>({
 			format: params.format,
 			target: params.target,

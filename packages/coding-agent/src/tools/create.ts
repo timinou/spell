@@ -170,9 +170,39 @@ export class CreateTool implements AgentTool<typeof createSchema> {
 		// Surface the duplication-coalesce warning so the agent self-corrects on the
 		// next call. Without this signal, the bug pattern would recur indefinitely.
 		const dupNote = resolved.warning ? `\n   ⚠ ${resolved.warning}` : "";
+		// FUP-133: echo the new file's lean `#outline` (symbol-first `file::Symbol`
+		// rows) so the user sees the shape that landed and the agent gets ready-made
+		// CodePath handles for follow-up edits — same symbol-first affordance the
+		// read surface uses. Gated to non-empty code-supported files.
+		const outline = await this.#outlineOf(relFromCwd, content);
+		const outlineNote = outline ? `\n\n${outline}` : "";
 		return toolResult<CreateToolResultDetails>({ path: params.path, created: true, bytes: stat.size })
-			.text(`Created ${relFromCwd} (${stat.size} bytes)\n   → ${resolvedPath}${dupNote}`)
+			.text(`Created ${relFromCwd} (${stat.size} bytes)\n   → ${resolvedPath}${dupNote}${outlineNote}`)
 			.done();
+	}
+
+	/**
+	 * FUP-133: resolve the lean `#outline` of a just-created file. Returns the
+	 * kernel's symbol-first structural map, or null when the file is empty, not
+	 * code-supported, or the outline came back empty/errored (best-effort: a
+	 * confirmation nicety must never fail the create).
+	 */
+	async #outlineOf(relPath: string, content: string): Promise<string | null> {
+		if (content.trim().length === 0 || !isCodeToolSupportedPath(relPath)) return null;
+		try {
+			const chunks = await executeCodePath({
+				...sessionContextOpts(this.session ?? null),
+				command: "get",
+				target: `${relPath}#outline`,
+				root: this.session.cwd,
+			});
+			if (chunks.some(c => c.diagnostics.length > 0)) return null;
+			const node = chunks.flatMap(c => c.nodes).find(n => n.kind === "§outline");
+			const text = node?.content?.text ?? node?.content?.value;
+			return text && text.trim().length > 0 ? text : null;
+		} catch {
+			return null;
+		}
 	}
 
 	renderCall(args: unknown, options: RenderResultOptions, theme: unknown): Component {

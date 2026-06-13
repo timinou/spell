@@ -8,6 +8,7 @@
 | #lines | file | a..b |
 | #listing | dir | — |
 | #match | grep | after [text~="re"] |
+| #outline | file | depth=N |
 | #raw | file | — |
 | #stat | file, dir | — |
 | #text | file | — |

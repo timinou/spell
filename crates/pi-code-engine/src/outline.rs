@@ -147,12 +147,24 @@ pub fn outline(
 	profile: &LanguageProfile,
 	enrich: EnrichFlags,
 ) -> Vec<OutlineEntry> {
-	let source = buffer.source();
-	let root = buffer.tree().root_node();
+	outline_from_root(buffer.tree().root_node(), &buffer.source(), profile, enrich)
+}
+
+/// Build the outline directly from an already-parsed tree-sitter root node and
+/// its source, bypassing [`CodeBuffer`]. Used by the host-agnostic kernel read
+/// lane (pi-kernel), which parses the file itself and would otherwise have to
+/// re-parse into a throwaway `CodeBuffer` just to call [`outline`]. The buffer
+/// path ([`outline`]) is the convenience wrapper over this.
+pub fn outline_from_root(
+	root: Node<'_>,
+	source: &str,
+	profile: &LanguageProfile,
+	enrich: EnrichFlags,
+) -> Vec<OutlineEntry> {
 	let mut cursor = root.walk();
 	let mut entries = root
 		.named_children(&mut cursor)
-		.filter_map(|node| entry_for_node(&source, profile, node, enrich))
+		.filter_map(|node| entry_for_node(source, profile, node, enrich))
 		.collect::<Vec<_>>();
 	deduplicate_entries(&mut entries);
 	entries
