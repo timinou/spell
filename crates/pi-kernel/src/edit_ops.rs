@@ -21,7 +21,7 @@ use std::path::Path;
 
 use pi_code_engine::{
 	CodeEngineError,
-	buffer::CodeBuffer,
+	buffer::{BufferRegistry, CodeBuffer},
 	edit::{
 		DragDirection, Occurrence, Patch, ReplacePolicy, SpliceMode, TextEdit, apply_patches,
 		apply_raw_text_patches, clone_node, drag_node, insert_after, insert_after_symbol,
@@ -740,6 +740,100 @@ pub fn get_profile(
 ) -> Result<LanguageProfile, CodeEngineError> {
 	registry.get(buffer_lang).cloned().ok_or_else(|| {
 		CodeEngineError::Edit(format!("Language profile not found for {}", path.display()))
+	})
+}
+
+/// The result of an `apply_edit`: how many edits applied + the committed revision.
+/// (Not `Serialize`-derived: pi-kernel has no `serde` dep; the NIF builds the
+/// JSON via `serde_json::json!` from these public fields.)
+#[derive(Debug, Default)]
+pub struct ApplyEditOutcome {
+	pub edit_count:     u32,
+	pub revision:       u64,
+	pub target_summary: String,
+}
+
+#[cfg(test)]
+mod tests {
+	use std::sync::Arc;
+
+	use pi_code_engine::buffer::BufferRegistry;
+	use pi_code_engine::language::LanguageRegistry;
+	use serde_json::json;
+
+	use super::*;
+
+	fn lang_registry() -> Arc<LanguageRegistry> {
+		Arc::new(LanguageRegistry::with_builtins().expect("builtins"))
+	}
+
+	/// End-to-end: apply a `write` to a real file through a real BufferRegistry
+	/// transaction — the exact path the BEAM NIF edit lane drives. Proves the
+	/// host-agnostic edit core mutates the file with no napi layer.
+	#[test]
+	fn apply_edit_writes_symbol_body_end_to_end() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("m.ts");
+		std::fs::write(&path, "export function foo() { return 1; }\n").unwrap();
+
+		let lang = lang_registry();
+		let buffers = BufferRegistry::new(lang.clone());
+		// Body-scoped write keeps the declaration well-formed (include the braces).
+		let action = json!({ "kind": "write", "scope": "body", "content": "{ return 2; }" });
+		let target = format!("{}::foo", path.display());
+
+		let out = apply_edit(&lang, &buffers, Some("edit-ops-test"), &path, &target, &action)
+			.expect("apply_edit must succeed end-to-end");
+		assert!(out.edit_count >= 1, "at least one edit applied");
+
+		// The transaction committed to disk (auto-save mode).
+		let after = std::fs::read_to_string(&path).unwrap();
+		assert!(after.contains("return 2"), "file must reflect the edit, got: {after}");
+		assert!(!after.contains("return 1"), "old body must be gone");
+	}
+
+	/// An unknown action kind surfaces a clean CodeEngineError, not a panic.
+	#[test]
+	fn apply_edit_unknown_kind_errors_cleanly() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("m.ts");
+		std::fs::write(&path, "export const x = 1;\n").unwrap();
+		let lang = lang_registry();
+		let buffers = BufferRegistry::new(lang.clone());
+		let action = json!({ "kind": "no-such-action" });
+		let target = format!("{}::x", path.display());
+		assert!(apply_edit(&lang, &buffers, None, &path, &target, &action).is_err());
+	}
+}
+
+/// Apply ONE edit action to `path::target_symbol` through the buffer registry's
+/// transaction (P5.B). Host-agnostic: the NAPI skin and the BEAM NIF both call
+/// this with their own registry (wired to the same broker, so cross-runtime
+/// edit coordination + undo history are shared — no split-brain).
+///
+/// `target_id` is `<file>` or `<file>::<symbol>`; `action` is the same action
+/// JSON the napi edit path uses (`{"kind":"write","content":"…"}` etc.).
+pub fn apply_edit(
+	registry_lang: &pi_code_engine::language::LanguageRegistry,
+	buffers: &BufferRegistry,
+	session_id: Option<&str>,
+	path: &Path,
+	target_id: &str,
+	action: &Value,
+) -> Result<ApplyEditOutcome, CodeEngineError> {
+	let code_paths = vec![target_id.to_string()];
+	let (txn, count) =
+		buffers.edit_transaction(session_id, path, &code_paths, |buffer| {
+			let profile = get_profile(registry_lang, path, buffer.language())?;
+			let prepared = single_action(buffer, &profile, path, target_id, action)?;
+			let n = prepared.edits.len() as u32;
+			buffer.edit_batch(prepared.edits)?;
+			Ok(n)
+		})?;
+	Ok(ApplyEditOutcome {
+		edit_count:     count,
+		revision:       txn.revision,
+		target_summary: target_id.to_string(),
 	})
 }
 

@@ -19,6 +19,8 @@ use std::{
 	sync::{Arc, OnceLock},
 };
 
+use pi_code_engine::buffer::BufferRegistry;
+use pi_code_engine::coord::{BrokerEndpoint, SocketCoordClient};
 use pi_code_engine::language::LanguageRegistry;
 use pi_code_path::resolver::CancellationToken;
 
@@ -63,6 +65,65 @@ fn resolve_target(target: String, root: String) -> Result<String, String> {
 			serde_json::to_string(&value).map_err(|e| format!("serialize error: {e}"))
 		},
 		Ok(Err(diag)) => Err(format!("{:?}: {}", diag.variant, diag.message)),
+		Err(panic) => {
+			let reason = panic
+				.downcast_ref::<&str>()
+				.map(|s| s.to_string())
+				.or_else(|| panic.downcast_ref::<String>().cloned())
+				.unwrap_or_else(|| "unknown panic".to_string());
+			Err(format!("panic caught in NIF: {reason}"))
+		},
+	}
+}
+
+/// The warm BEAM-side buffer registry — one per node, wired to the broker as the
+/// `beam` peer so cross-runtime edit coordination (intents, peer-conflict
+/// detection, journal) is shared with the NAPI `napi` peer through the SAME
+/// broker. Built once; `BufferRegistry` is `Send + Sync` (P5.B / PLAN-336).
+fn buffers() -> &'static BufferRegistry {
+	static BUFFERS: OnceLock<BufferRegistry> = OnceLock::new();
+	BUFFERS.get_or_init(|| {
+		let endpoint = BrokerEndpoint::default_for("beam".into());
+		BufferRegistry::new_with_coord(
+			registry().clone(),
+			None,
+			Arc::new(SocketCoordClient::new(endpoint)),
+		)
+	})
+}
+
+/// Apply ONE edit `action` (JSON string) to `target` (`<file>` or
+/// `<file>::<symbol>`), attributed to `session_id` ("" = no session). Returns
+/// `{"edit_count":N,"revision":R,"targetSummary":"…"}` JSON. Writes commit through
+/// the warm registry's transaction, coordinated cross-runtime via the broker
+/// (P5.B). catch_unwind-wrapped (gate 2): a panic is `{:error, _}`, node survives.
+#[rustler::nif(schedule = "DirtyIo")]
+fn apply_edit(
+	session_id: String,
+	target: String,
+	action_json: String,
+) -> Result<String, String> {
+	let outcome = catch_unwind(AssertUnwindSafe(|| {
+		let action: serde_json::Value = serde_json::from_str(&action_json)
+			.map_err(|e| format!("invalid action JSON: {e}"))?;
+		// target = `<file>` or `<file>::<symbol>`; the file part is the path.
+		let file_part = target.split_once("::").map_or(target.as_str(), |(f, _)| f);
+		let path = Path::new(file_part).to_path_buf();
+		let sid = if session_id.is_empty() { None } else { Some(session_id.as_str()) };
+		pi_kernel::apply_edit(registry(), buffers(), sid, &path, &target, &action)
+			.map_err(|d| format!("{d}"))
+	}));
+
+	match outcome {
+		Ok(Ok(out)) => {
+			let value = serde_json::json!({
+				"edit_count": out.edit_count,
+				"revision": out.revision,
+				"targetSummary": out.target_summary,
+			});
+			serde_json::to_string(&value).map_err(|e| format!("serialize error: {e}"))
+		},
+		Ok(Err(reason)) => Err(reason),
 		Err(panic) => {
 			let reason = panic
 				.downcast_ref::<&str>()

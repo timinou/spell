@@ -27,6 +27,7 @@ pub mod walker;
 
 pub use edge_resolver::EdgeResolverImpl;
 pub use edges::{EdgeOutput, edge_position, resolve_edges};
+pub use edit_ops::{ApplyEditOutcome, apply_edit};
 pub use graph_cache::{
 	CachedGraph, DiskCacheState, disk_cache_state, get_or_build_graph, invalidate,
 	invalidate_for_file, peek, warm_count,

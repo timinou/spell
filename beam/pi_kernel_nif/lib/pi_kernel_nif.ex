@@ -38,6 +38,22 @@ defmodule PiKernelNif do
   @spec resolve_edges(String.t(), String.t()) :: {:ok, String.t()} | {:error, String.t()}
   def resolve_edges(_target, _root), do: :erlang.nif_error(:nif_not_loaded)
 
+  @doc """
+  Apply ONE edit `action` (JSON string) to `target` (`<file>` or
+  `<file>::<symbol>`), attributed to `session_id` ("" = no session). Returns the
+  raw JSON `{"edit_count":N,"revision":R,"targetSummary":"…"}` or `{:error, reason}`.
+
+  The write commits through the warm BEAM buffer registry's transaction,
+  coordinated cross-runtime with the NAPI peer via the SAME broker (P5.B). So a
+  BEAM-applied edit and a Node-applied edit see each other's intents (no
+  split-brain).
+
+  Replaced at load time by the NIF; this body only runs if the NIF failed to load.
+  """
+  @spec apply_edit(String.t(), String.t(), String.t()) ::
+          {:ok, String.t()} | {:error, String.t()}
+  def apply_edit(_session_id, _target, _action_json), do: :erlang.nif_error(:nif_not_loaded)
+
   @doc "Liveness probe; returns `:ok`. Used to confirm the node survives a caught panic."
   @spec ping() :: :ok
   def ping, do: :erlang.nif_error(:nif_not_loaded)
@@ -84,6 +100,21 @@ defmodule PiKernelNif do
   @spec resolve_edges_decoded(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def resolve_edges_decoded(target, root) do
     case resolve_edges(target, root) do
+      {:ok, json} when is_binary(json) -> Jason.decode(json)
+      {:error, _} = err -> err
+      other -> {:error, {:unexpected, other}}
+    end
+  end
+
+  @doc """
+  Apply an edit and decode the outcome:
+  `{:ok, %{"edit_count" => N, "revision" => R, "targetSummary" => "…"}}` or
+  `{:error, reason}`.
+  """
+  @spec apply_edit_decoded(String.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, term()}
+  def apply_edit_decoded(session_id, target, action_json) do
+    case apply_edit(session_id, target, action_json) do
       {:ok, json} when is_binary(json) -> Jason.decode(json)
       {:error, _} = err -> err
       other -> {:error, {:unexpected, other}}

@@ -103,6 +103,34 @@ defmodule PiKernelNifTest do
     end
   end
 
+  describe "P5.B — apply edits through the warm BEAM registry" do
+    test "a body-scoped write commits to a real file via the NIF", %{root: root} do
+      file = Path.join(root, "edit_me.ts")
+      File.write!(file, "export function foo() { return 1; }\n")
+      target = "#{file}::foo"
+      action = ~s({"kind":"write","scope":"body","content":"{ return 2; }"})
+
+      assert {:ok, %{"edit_count" => n}} =
+               PiKernelNif.apply_edit_decoded("beam-test-session", target, action)
+
+      assert n >= 1
+      # The write committed to disk through the registry transaction.
+      after_text = File.read!(file)
+      assert after_text =~ "return 2", "file must reflect the BEAM-applied edit: #{after_text}"
+      refute after_text =~ "return 1"
+    end
+
+    test "an unknown action kind returns a clean error (no node crash)", %{root: root} do
+      file = Path.join(root, "edit_bad.ts")
+      File.write!(file, "export const x = 1;\n")
+      assert {:error, reason} =
+               PiKernelNif.apply_edit("", "#{file}::x", ~s({"kind":"no-such"}))
+      assert is_binary(reason)
+      # Node survives.
+      assert :ok = PiKernelNif.ping()
+    end
+  end
+
   describe "gate 2 — panic-safety" do
     test "a panic in the NIF is caught and the BEAM node survives", %{root: root} do
       # The injected-panic sentinel forces a Rust panic inside the NIF boundary.
