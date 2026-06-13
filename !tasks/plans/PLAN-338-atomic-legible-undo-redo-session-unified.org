@@ -1,10 +1,11 @@
 #+TITLE: Atomic legible undo/redo — session-unified log (B) + commit-awareness guard (C)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 1507d4f02b2299d8
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-13T17-53-55-372Z_1507d4f02b2299d8.jsonl]]
 #+CUSTOM_ID: PLAN-338-atomic-legible-undo-redo-session-unified
 #+SESSION_ID: 1507d4f02b2299d8
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-13T17-53-55-372Z_1507d4f02b2299d8.jsonl]]
+#+COMPLETION_HASH: e843a77f57e6844e
 
 * Initial Message
 
@@ -85,3 +86,5 @@ Team Chat: force-undo of committed file → visible channel system notice
 
 * Predecessor
 BUG-470 (fix A + grouping, COMPLETE). This plan = the B/C residue noted there.
+
+NOTE [2026-06-13]: Shipped B+C across all layers. Kernel: session-unified log (SessionDirGuard + workspace field + entry_id query), commit_guard + revert_guarded Declined/force. Agent: status command:history, edit undo/redo id/force, declined render. TUI: /history palette + amber warning cell. Team Chat: edit_history RPC end-to-end + EditHistoryPanel + Bubble accents, with 5 Puppeteer proof screenshots. Tests: edit_history 30, commit_guard 6, manage 18, TS e2e 3, team-chat unit 24 — all green; fmt clean. Commits d3c322691, a783698fc, 53cc5327b.
