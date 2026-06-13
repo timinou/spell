@@ -11,6 +11,8 @@
 //! node (unlike a NAPI panic, which kills only one Node process). A caught panic
 //! is returned to the BEAM as `{:error, reason}` and the node survives.
 
+mod broker_conn;
+
 use std::{
 	panic::{AssertUnwindSafe, catch_unwind},
 	path::Path,
@@ -80,3 +82,7 @@ fn ping() -> rustler::Atom {
 }
 
 rustler::init!("Elixir.PiKernelNif");
+
+// NB: `broker_conn`'s NIFs (claim_intent/release_intent) and the
+// BrokerConnection resource are registered via their #[rustler::nif] /
+// #[rustler::resource_impl] attributes + auto-discovery (rustler 0.38).

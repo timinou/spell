@@ -27,3 +27,6 @@ serde_json = "1"
 pi-kernel = { path = "../../../../crates/pi-kernel" }
 pi-code-engine = { path = "../../../../crates/pi-code-engine" }
 pi-code-path = { path = "../../../../crates/pi-code-path" }
+# Gate 3 (P3.8): the NIF holds a broker connection per owner so a dead BEAM
+# process reclaims its edit-intents (the :DOWN-monitor -> ResourceArc Drop path).
+pi-edit-broker = { path = "../../../../crates/pi-edit-broker" }

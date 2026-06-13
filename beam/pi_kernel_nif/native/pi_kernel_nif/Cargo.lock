@@ -1008,6 +1008,7 @@ version = "0.1.0"
 dependencies = [
  "pi-code-engine",
  "pi-code-path",
+ "pi-edit-broker",
  "pi-kernel",
  "rustler",
  "serde_json",
