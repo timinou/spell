@@ -1,0 +1,79 @@
+#+TITLE: P5.3 reassessed: large-payload zero-copy belongs at the NIF JSON boundary, not the HandleStore
+#+STATE: ITEM
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: FUP-137-p5-3-reassessed-large-payload-zero-copy
+
+* Initial Message
+
+i restarted the session; please write the "What I'd still consider" as FUPs if not done already, then focus on P5 and the FUP that you left for later; explain them again with their call sites and what they enable down the line. Try to use the 'execute' tool as much as possible to discover any warts previously undiscovered, thanks.
+
+* Why the original P5.3 spec ("HandleStore ETS→ResourceArc zero-copy") is incoherent
+
+Verified against the actual code (handle.ex, handle_store.ex, peer.ex):
+
+1. **It is NOT ETS.** handle.ex moduledoc explicitly REJECTS ETS: ":ets.lookup
+   copies the whole term to the caller, which would re-land the 38MB on the
+   sandbox heap and defeat the purpose." HandleStore is a GenServer precisely so
+   projections run WHERE the term lives and only slices copy back. The "ETS→"
+   premise describes a design that was never adopted.
+
+2. **The parked terms are native Elixir terms, never Rust data.** They originate
+   from BEAM tool calls (peer.ex maybe_park / rehome: `is_map/is_list/is_binary`
+   Elixir values, sized by `:erlang.external_size`). A rustler `ResourceArc`
+   holds RUST-side data. To park an Elixir term in a ResourceArc you must
+   serialize Elixir→Rust — a COPY, the opposite of zero-copy — and every
+   projection would deserialize back. Strictly worse than the current in-owner
+   GenServer projection.
+
+3. **There is no NIF boundary in this path.** The HandleStore terms live and die
+   inside the BEAM (parked at tool-reply, projected by sandbox builtins, swept at
+   execute teardown). "Zero-copy ACROSS the NIF" is meaningless for data that
+   never crosses it. The spec conflated two distinct copy problems (the
+   sandbox-heap copy, already solved in-BEAM, vs. a cross-FFI copy that doesn't
+   occur here).
+
+∴ Implementing P5.3-as-written would be a locally-coherent, systemically-wrong
+change. Not done.
+
+* The REAL opportunity it gestures at
+
+The one place large data DOES cross the NIF boundary today: the kernel read/edge
+NIFs return a JSON **String** —
+`beam/pi_kernel_nif/native/pi_kernel_nif/src/lib.rs` `resolve_target/2` and
+`resolve_edges/2` both `serde_json::to_string(&{nodes,diagnostics})` then hand a
+full owned binary to the BEAM, which `Jason.decode`s it (a second full parse +
+allocation). For a large symbol/outline walk or a high-fan-out edge result that
+is: serialize-to-String (Rust) → copy across FFI → parse (BEAM). Three passes
+over the whole payload.
+
+Candidate improvements (verify cost before building — measure a large real walk
+first):
+- Return an already-decoded term tree via rustler `Term` encoding instead of a
+  JSON string round-trip (skips the BEAM-side Jason.decode parse).
+- Or stream node chunks (the NAPI side already chunks at 64 nodes —
+  edge_dispatch) so a huge result doesn't materialize as one giant binary.
+- A ResourceArc COULD legitimately help HERE: park the Rust-side ResolveOutput
+  in a resource and let the BEAM pull projections — but only if a real workload
+  shows the String round-trip is a bottleneck. Today read results are bounded
+  (the NAPI artifact-staging threshold exists for exactly the large case); the
+  NIF has no such staging yet.
+
+* Acceptance (when evidenced)
+
+A measured large kernel result (e.g. `**/*.ts::§function` over a big tree) shows
+the JSON String round-trip dominating; replace it with term-encoding or chunked
+streaming; assert wall-clock / allocation improvement with no result change.
+
+* Priority rationale
+
+#C — no current bottleneck evidence; the NIF read/edge results are not yet a hot
+large-payload path (the BEAM execute substrate's heavy lane is tool results,
+which the HandleStore already handles in-BEAM). Revisit if/when a BEAM-side large
+kernel query workload appears.
+
+* Supersedes
+
+The "N-3 HandleStore ETS→ResourceArc" line in spec 09 "Deferred to P5" and in
+PLAN-336 P5.3 — both rest on the incoherent premise above. This FUP is the
+corrected, evidence-gated version.
