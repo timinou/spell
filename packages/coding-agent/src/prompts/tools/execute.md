@@ -107,6 +107,24 @@ Tools are called kebab-case with a string-keyed map; the result is a value:
 
 Structured tool results come back as data (maps/lists), so you can pipe them.
 
+### Process tools: `git`, `run` (structured — prefer over bash)
+
+Runtime tools run real processes but return STRUCTURED, queryable data — call
+them with `{:verb "…" :args {…}}`:
+
+```clojure
+(tool/git {:verb "log" :args {:n 20}})        ; → [{"hash" "author" "date" "subject"} …]
+(tool/git {:verb "status"})                    ; → {"clean" bool "files" [{"status" "path"}]}
+(tool/run {:verb "bun" :args {:args ["test"]}}) ; → {"passed" "failed" "raw"}
+```
+
+Because the result is data, you can query it directly — this is the win over
+bash's flat text:
+`(→> (tool/git {:verb "log" :args {:n 200}}) (group-by #(get % "author")) (update-vals count))`.
+Verbs: `git` = status/log/diff/show/branch/add/commit/reset/checkout/raw;
+`run` = cargo/bun/mix/npm/exec. `(doc "git")` lists them. Reach for these (and
+other runtime tools from `~/.spell/agent/tools/*.ptc`) before bash.
+
 **A `tool/<x>` call returns the SAME shape the `<x>` tool returns**, projected
 into PTC data. In particular `tool/find` returns a **LIST of node maps**, each
 `{"path" "kind" "text" …}` — index it as a list, not a single map:

@@ -357,3 +357,72 @@ make the future policy surface observable before it is built.
   out from observing the advisory warnings.
 - Phase 4: scoped `terminal` pty tool; demote bash from CORE; delete bash +
   bash-interceptor; retire SandboxPolicy.bashAllow/bashDeny.
+
+** ITEM Phase 3 & 4 & 5 specs (deferred work)
+:PROPERTIES:
+:CUSTOM_ID: PLAN-337-eliminate-bash-first-class-process-tools::phase-345-specs
+:END:
+Detailed specs so this is resumable without re-deriving. Current state: Phase 2
+DONE (active, execute-callable, advisory gates, user .ptc dirs, auto-sync).
+Phase 4 tier-reorder DONE (execute=core, bash=standard). Below is what remains.
+
+** GAP to close first: KDL per-verb gate parsing (Phase 2.5)
+The settings flag runtimeTools.enabled is KDL-wired. The PER-VERB gate KDL block
+is NOT yet parsed from spell.kdl. Today session.ts feeds only the BUILT-IN
+hardcoded policies into the loader; a user's `git { verb "reset" { gate "warn" } }`
+in spell.kdl is ignored.
+Spec:
+- Parse a `runtime-tools` (or per-tool) block from spell.kdl via the existing
+  kdl-reader, shape: tool-name → { verb-name → { gate } } = RawToolPolicy.
+- Merge order: built-in defaults < user spell.kdl < project spell.kdl (last wins),
+  passed as RuntimeToolSource.policy to the loader (resolvePolicy already merges).
+- A `git`/`run` KDL block overrides the hardcoded BUILTINS policy in session.ts.
+- Add to kdl-settings-map.ts / the KDL schema so it round-trips.
+- deriveSkeleton (already built) generates the scaffold for `spell tools sync`
+  OR an auto-write-on-first-run that seeds spell.kdl with the derived gates.
+Effort: M. This is what makes "kdl config derived from the interface" fully real.
+
+** Phase 3: real gate enforcement (currently ADVISORY only)
+Today every gate is advisory: nothing blocks, warn-tint + a note states what the
+full policy WOULD do. Phase 3 turns that into enforcement, gated by a NEW setting
+`runtimeTools.enforce` (default false → stays advisory, honoring "alignment over
+security now"; flip to true when ready).
+Spec (in tool.ts execute, only when enforce=true):
+- deny  → throw ToolError (block), in BOTH model→TUI and execute contexts.
+- confirm → context-dependent:
+    - model→TUI: raise a pending-action (session.pendingActionStore) and await
+      user confirmation before running. The argv + verb + class are the prompt.
+    - execute (the FINAL execution environment, cannot prompt): confirm collapses
+      to warn \u2014 run + flag. The program is the trusted orchestrator. (This is the
+      load-bearing reframe: do NOT try to prompt inside a sandboxed program.)
+- warn → run + tint (unchanged) in both contexts.
+- silent → run quiet.
+Enforcement-context detection: the runtime tool's execute is called either
+directly (model→TUI: has AgentToolContext with UI) or via the execute bridge
+dispatcher (no UI / programmatic). Distinguish by a flag the bridge sets, or by
+absence of a UI-bearing context. tool.ts already receives `context` (5th arg).
+Effort: M-L (pending-action wiring is the bulk). Reuse bash's approval pattern.
+
+** Phase 4 remainder: scoped terminal (pty) tool
+Tier reorder is DONE. Remaining Phase-4 item: the single irreducible process
+escape hatch for genuinely interactive TTY work (sudo/top/less/vim/REPLs) that
+neither execute nor structured tools can absorb.
+Spec:
+- New `terminal` tool wrapping the EXISTING bash-interactive.ts PtySession impl
+  (rename/extract, don't duplicate). Freeform command BUT explicitly scoped to
+  "I need a live terminal" \u2014 not general scripting.
+- ssh already has its own tool; route there. terminal covers the rest.
+- Tier: specialized (rarely needed). Gated to hasUI (a pty needs a real terminal).
+Effort: S-M (mostly extraction from bash-interactive.ts).
+
+** Phase 5: delete bash (NOT now)
+Only after MANY sessions demonstrably never rely on bash (observed via usage:
+bash demoted to standard means its use is now a signal). Then: remove BashTool +
+bash-interceptor (interception moot once bash is gone), retire
+SandboxPolicy.bashAllow/bashDeny in favor of per-tool/per-verb policy. The
+`terminal` pty tool remains as the one process escape hatch.
+
+** Done in this pass
+- Phase 4 tier reorder: execute→core, bash→standard (commit).
+- Perf: precomputed built-in descriptors \u2014 createRuntimeTools 1462ms→1ms; the
+  dispatcher spawns lazily only on first verb call (commit).

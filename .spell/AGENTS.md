@@ -15,7 +15,9 @@ spell-monorepo -- javascript
 - `edit { operations: [{ target, action: { kind, ... } }] }` mutates. Symbol-first targets (`path::Symbol`) preferred over file targets. `kind: "undo" | "redo"` for history ops (must be alone in batch).
 - `status { command }` is kernel observability: `languages` · `index` · `watcherStatus` · `lockStatus` · `status`. NOT for save/diff/buffers (auto-saves; diff via `find ... #diff` post-kernel-rebuild).
 - `create { path, content }` for new files; `edit` for overwrites.
-- `bash { command }` for processes only (build, test, git, scripts). Not for cat/grep/sed/head/tail/wc/find/ls — use `find`.
+- `execute { program }` (CORE) is the PTC-Lisp coprocessor and the primary action tool: structured I/O, tool composition (`(tool/<x> {…})`), and `probe` for labelled multi-checks. See `packages/coding-agent/src/prompts/tools/execute.md`.
+- Runtime tools (PLAN-337): `git` and `run` are first-class STRUCTURED process tools — `git {verb:"log"…}` → list of commit maps; `run {verb:"bun", args:[…]}` → parsed result. Callable directly AND inside `execute` (`(tool/git {:verb "log"})`), so output is queryable. User tools: drop a `<name>.ptc` (deftool interface) in `~/.spell/agent/tools/` or `<cwd>/.spell/tools/`. Prefer these over bash.
+- `bash { command }` (STANDARD, demoted from core in PLAN-337) is the process escape hatch — prefer `execute` + `git`/`run`; bash kept until Phase 5. Not for cat/grep/sed/head/tail/wc/find/ls — use `find`.
 - Legacy `get` tool still registered as a `REMOVE_AT_WAVE_11` alias of `find`. `manage` is removed (replaced by `status`).
 
 ### Knowledge daemon (PLAN-315)
