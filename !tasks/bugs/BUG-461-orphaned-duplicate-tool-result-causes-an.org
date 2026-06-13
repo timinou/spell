@@ -1,0 +1,51 @@
+#+TITLE: Orphaned duplicate tool_result causes Anthropic 400 when user steers mid-tool-turn
+#+STATE: DONE
+#+SESSION_ID: 15077013c354e824
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-13T10-33-15-277Z_15077013c354e824.jsonl]]
+#+CUSTOM_ID: BUG-461-orphaned-duplicate-tool-result-causes-an
+#+COMPLETION_HASH: b0b610c20ff04d45
+
+* Initial Message
+
+Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.312.content.2:
+ unexpected `tool_use_id` found in `tool_result` blocks: toolu_012TiTwwaFRZBatSRrwraVtw. Each
+ `tool_result` block must have a corresponding `tool_use` block in the previous
+ message."},"request_id":"req_011Cc16mWNc2rMTRwy4Dim73"}
+ raw-http-request=/home/user/.spell/logs/http-400-requests/1781346462190-1xdt07wlhbj94.json
+
+
+
+dude, look at oh-my-pi's way of solving that please, thanks
+
+* Symptom
+Anthropic 400: `messages.N.content.M: unexpected tool_use_id found in tool_result blocks: toolu_…. Each tool_result block must have a corresponding tool_use block in the previous message.`
+Request dump: =/home/user/.spell/logs/http-400-requests/1781346462190-1xdt07wlhbj94.json=
+
+* Root cause
+Two =tool_result= blocks emitted for one =tool_use= id (=proxy_ask=, =toolu_012TiT…=), the second orphaned by an intervening user message:
+
+#+begin_example
+msg[316] assistant : tool_use    toolu_012TiT (proxy_ask)
+msg[317] user      : tool_result toolu_012TiT err=true  "No result provided"  ← synthetic
+msg[318] user      : text        "DID:… STUCK:…"                              ← user steering
+msg[319] user      : tool_result toolu_012TiT err=false [real ask answer]     ← real, late
+#+end_example
+
+Sequence:
+1. assistant calls =proxy_ask= → turn pending
+2. user steers with a NEW text message instead of answering; real ask-result lands later in history
+3. =transformMessages= 2nd pass sees the user-text interrupt the pending call → injects synthetic "No result provided" before the user msg, marks the id =Resolved=
+4. the real result arrives later → current code only skips =Aborted=, not =Resolved= → pushed too
+5. Anthropic merges the user turns; result 319's preceding message is user text (318), not an assistant tool_use → 400
+
+* Fix
+=packages/ai/src/providers/transform-messages.ts= toolResult branch: a =tool_use= takes exactly one result. Skip a duplicate when the id is already =Resolved= (not just =Aborted=). Keep-first → the kept result stays adjacent to its tool_use; the late orphan is dropped.
+
+* Scope
+- packages/ai/src/providers/transform-messages.ts (one-result-per-tool_use dedup guard)
+- packages/ai/test/duplicate-tool-results.test.ts (regression: assistant(toolCall) → user(text) → real toolResult ⇒ exactly 1 result, adjacency preserved)
+
+* Notes
+Deeper origin: the duplicate is persisted upstream by the agent loop when a pending tool turn is interrupted by user steering. Transform guard is the robust provider-boundary fix; source-side persistence fix is a possible follow-up.
+
+NOTE [2026-06-13]: Fixed in transform-messages.ts: toolResult branch now skips a duplicate when the id is already Resolved (not just Aborted) → one-result-per-tool_use, keep-first preserves adjacency. Regression test added to duplicate-tool-results.test.ts ("drops a late real tool result when a user message interrupted the tool turn"); verified it fails (2 results) without the guard and passes (1) with it. biome + tsgo clean for changed files; full suite green (9 pass).

@@ -192,8 +192,16 @@ export function transformMessages<TApi extends Api>(
 
 			result.push(msg);
 		} else if (msg.role === "toolResult") {
-			// Skip tool results for aborted tool calls (we already injected synthetic ones)
-			if (toolCallStatus.get(msg.toolCallId) === ToolCallStatus.Aborted) continue;
+			// A tool_use takes exactly one result. Drop duplicates:
+			// - Aborted: a synthetic "aborted" result was already injected.
+			// - Resolved: a result for this id was already emitted — e.g. an orphan synthetic
+			//   inserted when a user message interrupted the tool turn (user steered instead of
+			//   answering). A second, late result would be separated from its tool_use by that
+			//   user message and rejected by the API ("must have a corresponding tool_use block
+			//   in the previous message"). Keep-first → the kept result stays adjacent to its
+			//   tool_use; the late orphan is dropped.
+			const status = toolCallStatus.get(msg.toolCallId);
+			if (status === ToolCallStatus.Aborted || status === ToolCallStatus.Resolved) continue;
 			toolCallStatus.set(msg.toolCallId, ToolCallStatus.Resolved);
 			result.push(msg);
 		} else if (msg.role === "user" || msg.role === "developer") {

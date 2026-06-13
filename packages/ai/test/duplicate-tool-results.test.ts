@@ -253,6 +253,66 @@ describe("Duplicate Tool Results Regression", () => {
 		expect(result2.length).toBe(1);
 		expect(result3.length).toBe(1);
 	});
+
+	it("drops a late real tool result when a user message interrupted the tool turn", () => {
+		// Regression for the orphaned-duplicate 400: assistant calls a tool (e.g. ask),
+		// the user steers with a NEW text message instead of answering, and the real
+		// tool result is persisted AFTER that user text. transformMessages injects a
+		// synthetic "No result provided" before the user text; the late real result must
+		// be dropped so the kept result stays adjacent to its tool_use.
+		const toolCallId = "toolu_012TiTwwaFRZBatSRrwraVtw";
+
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "toolCall", id: toolCallId, name: "ask", arguments: { question: "pick one" } }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-3-5-sonnet-20241022",
+			usage: {
+				input: 100,
+				output: 50,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 150,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: 1000,
+		};
+
+		const lateRealResult: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: toolCallId,
+			toolName: "ask",
+			content: [{ type: "text", text: "the real answer" }],
+			isError: false,
+			timestamp: 1003,
+		};
+
+		const messages = [
+			{ role: "user" as const, content: "ask me the questions", timestamp: 500 },
+			assistantMessage,
+			// User steers with a new text message instead of answering the tool
+			{ role: "user" as const, content: "ask me the questions again", timestamp: 1001 },
+			lateRealResult,
+		];
+
+		const transformed = transformMessages(messages, model);
+
+		// Exactly one tool result for the id
+		const toolResults = transformed.filter(
+			m => m.role === "toolResult" && (m as ToolResultMessage).toolCallId === toolCallId,
+		);
+		expect(toolResults.length).toBe(1);
+
+		// The kept result must precede the steering user text (adjacency with the tool_use)
+		const resultIndex = transformed.findIndex(
+			m => m.role === "toolResult" && (m as ToolResultMessage).toolCallId === toolCallId,
+		);
+		const steerIndex = transformed.findIndex(m => m.role === "user" && m.content === "ask me the questions again");
+		expect(resultIndex).toBeGreaterThanOrEqual(0);
+		expect(steerIndex).toBeGreaterThan(resultIndex);
+	});
 });
 
 /**
