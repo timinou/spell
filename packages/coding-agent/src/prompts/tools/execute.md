@@ -64,6 +64,29 @@ Tools are called kebab-case with a string-keyed map; the result is a value:
 
 Structured tool results come back as data (maps/lists), so you can pipe them.
 
+**A `tool/<x>` call returns the SAME shape the `<x>` tool returns**, projected
+into PTC data. In particular `tool/find` returns a **LIST of node maps**, each
+`{"path" "kind" "text" ...}` — index it as a list, not a single map:
+`(map #(get % "text") (tool/find {:target "..."}))`, and
+`(get (first (tool/find {...})) "text")` for the first node. When unsure of a
+result's shape, bind it with `(def r (tool/… …))` and inspect `(keys r)` /
+`(handle-meta r)` on the next execute.
+
+## Discover the language from inside it
+
+Don't guess a builtin's name or spelling — ask the runtime:
+
+- `(apropos "index")` — list every builtin whose name/doc matches, each with a
+  one-line description. Use it when you reach for a Clojure name and aren't sure
+  PTC spells it the same (e.g. `index-of`, `update-vals`, `subs`).
+- `(doc "subs")` — full signature + semantics + edge-case notes for one builtin.
+- `(dir "str")` — list the names in a namespace.
+
+These run like any expression and return data, so a quick `(apropos "…")`
+execute is the fastest way to resolve "does PTC have X?" — cheaper than a failed
+program. Substring tests: `(index-of s sub)` (>= 0 when present) or the
+Clojure-Java method `(.contains s sub)`.
+
 ## Worked examples
 
 Count + group (replaces `rg -c ... | awk`):
@@ -100,7 +123,27 @@ Frequencies over a projection:
 `->` `->>` `let` `fn` `if` `cond` `for` `loop`/`recur` `map` `filter` `reduce`
 `mapcat` `group-by` `frequencies` `update-vals` `sort-by` `take` `drop`
 `distinct` `dedupe` `count` `get` `get-in` `assoc` `merge` `select-keys`
-`str` `join` `split` `re-find` `re-seq` and the usual arithmetic/comparison.
+`str` `join` `split` `re-find` `re-seq` `try`/`catch`/`finally` `fail`
+and the usual arithmetic/comparison. (`(apropos "…")` lists the rest.)
+
+### Error handling: `try` / `catch` / `finally`
+
+Clojure-shaped, for when a single failing step shouldn't lose the whole program
+(the SEQUENTIAL analogue of `psettled`'s per-element settling):
+
+```clojure
+(try (tool/find {:target maybe-missing})
+     (catch e {:error e})        ; e = the error message (or the value of (fail v))
+     (finally (cleanup)))        ; optional; runs on every exit path
+```
+
+- `catch` traps a raised/returned program error AND `(fail v)` (binds the raw
+  `v`); `finally` is optional and its value is discarded.
+- `(return v)` is NOT trapped — it bubbles through (finally still runs).
+- SAFETY: `try` can NOT swallow a heap/timeout/capacity kill — those re-raise
+  past the handler, exactly like `psettled`. A global safety limit always wins.
+- Prefer `psettled` for fan-out; reach for `try` for a single fallible step or
+  a guaranteed `finally` cleanup.
 
 ## Gotchas (these will bite)
 
@@ -135,8 +178,9 @@ a policy error if called. Use those tools directly instead.
 ## Transactional file writes (all-or-nothing)
 
 A program's **file** writes (`edit`, `create`) are transactional: they apply as
-the program runs, but if the program **errors or `(fail …)`s**, every file it
-wrote is **rolled back** to its pre-program state — a created file is removed, an
+the program runs, but if the program **errors or `(fail …)`s** (and the failure
+isn't caught by a `try`), every file it wrote is **rolled back** to its
+pre-program state — a created file is removed, an
 edited file is restored. A program that succeeds keeps its writes. So a
 half-finished program never leaves the repo half-edited; fix the program and
 re-run cleanly. (A hard crash mid-program self-heals on the next run.)

@@ -550,6 +550,82 @@ defmodule PtcRunner.Lisp.Eval do
     end
   end
 
+  # ============================================================
+  # Exception handling: (try body (catch e handler) (finally cleanup))
+  #
+  # SPELL PATCH-8 (FEAT-812). Faithful Clojure semantics over BEAM try:
+  #   * a raised program error (ExecutionError / ToolExecutionError / any other
+  #     Elixir exception) OR `(fail v)` is CAUGHT and bound to the catch var
+  #     (raised errors → message string; `(fail v)` → the raw value v).
+  #   * `(return v)` is NOT an error: it bubbles through to the enclosing
+  #     `return` boundary (after running `finally`), like Clojure's non-local
+  #     return semantics over a try.
+  #   * `finally` ALWAYS runs — on normal completion, after a caught error, and
+  #     while a `return`/uncaught error propagates — for its side effects only;
+  #     its value is discarded.
+  #
+  # SANDBOX BOUNDARY (mirrors the psettled rescue, eval.ex stable_resource_error?):
+  # heap/timeout/capacity kills must NEVER be swallowed. A top-level heap or
+  # deadline kill terminates the BEAM process before any rescue runs, so it is
+  # uncatchable by construction. The one catchable form — a nested
+  # ExecutionError carrying a stable resource reason — is RE-RAISED past the
+  # handler here. ∴ `try` can never let a program settle past a global safety
+  # limit. The `finally` still runs on that re-raise (resource cleanup), then
+  # the kill propagates.
+  defp do_eval({:try, body_do, catch_clause, finally_do}, %EvalContext{} = eval_ctx) do
+    try do
+      # PTC has TWO error channels: most logical errors (unbound var, arithmetic,
+      # type, arity, tool failure) surface as an `{:error, reason}` RETURN TUPLE
+      # from do_eval (apply.ex converts those raises). Only an ExecutionError
+      # with a stable resource reason is re-raised past apply. So the tuple
+      # channel is the primary catch path; the rescue/catch arms cover the
+      # raise/throw ones.
+      case do_eval(body_do, eval_ctx) do
+        {:ok, _value, _ctx} = ok ->
+          ok
+
+        {:error, reason} ->
+          if catch_clause == nil do
+            {:error, reason}
+          else
+            run_try_catch(catch_clause, error_reason_to_value(reason), eval_ctx)
+          end
+      end
+    rescue
+      e in ExecutionError ->
+        # Global safety limit OR no handler → propagate (finally still runs via
+        # `after`). Only an ordinary program error WITH a catch clause is caught.
+        if stable_execution_error?(e) or catch_clause == nil do
+          reraise(e, __STACKTRACE__)
+        else
+          run_try_catch(catch_clause, Exception.message(e), eval_ctx)
+        end
+
+      e in PtcRunner.ToolExecutionError ->
+        # A tool failure RAISES (eval.ex record_tool_call_inner) rather than
+        # returning a tuple — catch it as an ordinary logical error. No handler
+        # re-raises so the failure still aborts the run.
+        if catch_clause == nil do
+          reraise(e, __STACKTRACE__)
+        else
+          run_try_catch(catch_clause, Exception.message(e), eval_ctx)
+        end
+    catch
+      # `(fail v)` is a catchable logical failure: bind the raw value v. With no
+      # catch clause it re-throws so the failure propagates unchanged.
+      {:fail_signal, _value, _ctx} = signal when catch_clause == nil ->
+        throw(signal)
+
+      {:fail_signal, value, _ctx} ->
+        run_try_catch(catch_clause, value, eval_ctx)
+    after
+      # `finally` runs on EVERY exit path (normal / caught / re-raised / return /
+      # fail). `(return v)` is not listed in `catch` above, so it bubbles to the
+      # enclosing return boundary — and `after` runs as it passes through.
+      run_try_finally(finally_do, eval_ctx)
+    end
+  end
+
   # Dynamic task ID: (task id-expr expr) — evaluate id-expr to get the string ID
   defp do_eval({:task_dynamic, id_ast, body_ast}, eval_ctx) do
     with {:ok, id, eval_ctx} <- do_eval(id_ast, eval_ctx) do
@@ -642,6 +718,57 @@ defmodule PtcRunner.Lisp.Eval do
   # ============================================================
   # Evaluation helpers
   # ============================================================
+
+  # try/catch support (SPELL PATCH-8). Run the catch handler with the error
+  # value bound to the catch var. `nil` clause = re-raise already handled by the
+  # caller, so this is only reached WITH a clause. Returns the do_eval triple.
+  defp run_try_catch({var, handler_do}, error_value, %EvalContext{} = eval_ctx) do
+    handler_ctx = EvalContext.merge_env(eval_ctx, %{var => error_value})
+
+    case do_eval(handler_do, handler_ctx) do
+      {:ok, value, final_ctx} ->
+        # Drop the catch binding from the caller's scope (handler-local), like let.
+        {:ok, value, %{final_ctx | env: eval_ctx.env, locals: eval_ctx.locals}}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # Run the finally body for side effects only; its value is discarded and the
+  # surrounding try result is preserved. A raise/throw INSIDE finally propagates
+  # (Clojure parity). `nil` = no finally clause, a no-op.
+  defp run_try_finally(nil, _eval_ctx), do: :ok
+
+  defp run_try_finally(finally_do, %EvalContext{} = eval_ctx) do
+    _ = do_eval(finally_do, eval_ctx)
+    :ok
+  end
+
+  # A nested ExecutionError carrying a stable resource reason must abort even
+  # under `try` — the same global-safety set the psettled worker re-raises.
+  defp stable_execution_error?(%ExecutionError{reason: reason})
+       when reason in [:memory_exceeded, :timeout, :parallel_capacity_exceeded],
+       do: true
+
+  defp stable_execution_error?(_), do: false
+
+  # Render a do_eval `{:error, reason}` tuple into the value bound to a catch
+  # var. PTC error reasons are heterogeneous tuples whose LAST string element is
+  # the human message (e.g. `{:type_error, msg, args}`, `{:arithmetic_error,
+  # msg}`, `{:unbound_var, name}`). Surface that string so a handler sees a
+  # readable message; fall back to inspect for atom/opaque reasons.
+  defp error_reason_to_value(msg) when is_binary(msg), do: msg
+  defp error_reason_to_value({:unbound_var, name}), do: "Undefined variable: #{name}"
+
+  defp error_reason_to_value(reason) when is_tuple(reason) do
+    case Enum.find(Tuple.to_list(reason), &is_binary/1) do
+      nil -> inspect(reason)
+      msg -> msg
+    end
+  end
+
+  defp error_reason_to_value(reason), do: inspect(reason)
 
   defp resolve_local(name, locals, env, eval_ctx) do
     if MapSet.member?(locals, name), do: {:ok, Map.get(env, name), eval_ctx}, else: :error

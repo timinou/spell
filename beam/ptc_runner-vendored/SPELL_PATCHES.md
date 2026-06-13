@@ -384,6 +384,77 @@ method.
 Tests: `packages/coding-agent/src/tools/ptc-runtime/stored-program.test.ts`
 (20: read-only guard units + real-BEAM round-trip/validate/signature).
 
+## PATCH-8 (FEAT, execute-ergonomics): `try`/`catch`/`finally` ✅ LANDED
+
+**Disposition**: upstreamable (PR candidate) — a faithful Clojure subset feature.
+
+Clojure-shaped exception handling: `(try body… (catch e handler…) (finally
+cleanup…))`. Both `catch` and `finally` are optional trailing clauses (catch
+before finally). The catch binds ONE symbol to the error value. This is the
+SEQUENTIAL analogue of PATCH-1's `psettled` (per-element settling) — for a single
+fallible step or a guaranteed `finally` cleanup.
+
+Semantics (faithful to Clojure over BEAM `try/rescue/catch/after`):
+
+- `catch` traps BOTH PTC error channels: the `{:error, reason}` RETURN TUPLE
+  that `apply.ex` produces for most logical errors (unbound var, arithmetic,
+  type, arity), a raised `ToolExecutionError` (tool failure), and the
+  `{:fail_signal, v}` throw from `(fail v)` (binds the raw `v`, not a string).
+- `(return v)` is NOT trapped — it bubbles to the enclosing return boundary
+  (Clojure non-local return); `finally` still runs as it passes through.
+- `finally` runs on EVERY exit path (normal / caught / re-raised / return /
+  fail); its value is discarded.
+- the catch var binds ONLY inside the handler (handler-local scope, like a
+  `let`); `closure_capture` treats it as bound so a `try` inside an `fn` is
+  free-var-correct.
+
+**SAFETY (the load-bearing invariant)**: `try` must NEVER let a program swallow a
+global safety limit. A heap/timeout/capacity kill terminates the BEAM process
+before any rescue runs (uncatchable by construction); the one catchable form — a
+nested `ExecutionError` carrying a stable resource reason
+(`:memory_exceeded` / `:timeout` / `:parallel_capacity_exceeded`) — is RE-RAISED
+past the handler (mirrors the `psettled` worker rescue + `stable_resource_error?`).
+`finally` still runs on that re-raise, then the kill propagates. A dedicated
+SAFETY test wraps a heap-cap kill in `(try … (catch e "SWALLOWED"))` and asserts
+the run aborts with `:memory_exceeded`, never the handler value.
+
+W4-write interaction: `try` is control-flow, not a transaction boundary. A
+caught error means the PROGRAM succeeds → file writes COMMIT (the transaction
+journal keys rollback on program-level failure, `execute.ts`). An UNCAUGHT
+failure still rolls back. Documented in `prompts/tools/execute.md`.
+
+### Files touched
+
+```
+lib/ptc_runner/lisp/analyze.ex        — dispatch_list_form :try; analyze_try +
+                                       split_trailing_clause + catch/finally
+                                       sub-analyzers → {:try, body, catch, finally}
+lib/ptc_runner/lisp/eval.ex           — do_eval({:try,…}) over try/rescue/catch/
+                                       after (both error channels + stable-
+                                       resource re-raise); run_try_catch /
+                                       run_try_finally / stable_execution_error? /
+                                       error_reason_to_value helpers
+lib/ptc_runner/lisp/closure_capture.ex — {:try,…} free-var clause (catch var
+                                       handler-local)
+lib/ptc_runner/lisp/core_to_source.ex — format({:try,…}) round-trip + do-splice
+lib/ptc_runner/lisp/eval/helpers.ex   — :try in @special_forms (closure-error hint)
+lib/ptc_runner/lisp/source_atoms.ex   — try/catch/finally in @special_forms
+```
+
+Tests: `beam/ptc_runtime/test/try_catch_test.exs` (21 over real BEAM via
+`PtcRunner.Lisp.run/2`: normal/catch/finally/return-bubbling/nesting/closure-
+capture/let-usage + the SAFETY heap-cap-abort invariant + an analysis-error
+case). Full `ptc_runtime` suite stays green (113 tests + 5 properties).
+
+EMPIRICAL notes (cost real iterations): (1) the catch-var symbol is the INTERNED
+name — an ATOM only if in the bounded vocab, else a BINARY — so the analyzer
+guard accepts `is_atom or is_binary` and the handler binding key matches
+`{:var, name}` resolution. (2) PTC has TWO error channels (tuple + raise); a
+first cut that only rescued raises missed every `{:error, reason}` tuple error.
+(3) tool failures RAISE `ToolExecutionError` (not a tuple) — needs its own rescue
+arm. (4) top-level `(return v)`/`(fail v)` surface as `{:__ptc_return__, v}` /
+`{:__ptc_fail__, v}` sentinels at the program boundary.
+
 ## Upstream rebase procedure
 
 1. Fetch the new hex tarball into a scratch dir.

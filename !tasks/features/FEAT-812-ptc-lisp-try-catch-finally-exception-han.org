@@ -1,0 +1,85 @@
+#+TITLE: PTC-Lisp try/catch/finally exception handling (execute ergonomics)
+#+STATE: DONE
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: FEAT-812-ptc-lisp-try-catch-finally-exception-han
+
+* Initial Message
+
+P5 and FUP-132 -> what would they achieve?
+
+moreover, please test-drive all this (I restart Spell)
+
+* Summary
+
+SPELL PATCH-8 to the vendored ptc_runner: Clojure-shaped `(try body… (catch e
+handler…) (finally cleanup…))` in PTC-Lisp, the `execute` tool's language. The
+SEQUENTIAL analogue of PATCH-1's `psettled` (errors-as-values for parallel
+fan-out): for a single fallible step or guaranteed cleanup.
+
+Motivated by execute-tool ergonomics review: the ONE genuine capability gap
+(vs discoverability gaps fixed by teaching apropos/doc in execute.md). Before
+this, ANY error inside a sequential program aborted the whole run with no
+in-language recovery.
+
+* Semantics (faithful Clojure over BEAM try/rescue/catch/after)
+
+- catch traps BOTH PTC error channels: the {:error, reason} RETURN TUPLE
+  (apply.ex converts most raises: unbound var, arithmetic, type, arity), a
+  raised ToolExecutionError (tool failure), AND the {:fail_signal, v} throw from
+  (fail v) — binds the RAW v, not a string.
+- (return v) is NOT trapped — bubbles to the enclosing return boundary; finally
+  still runs as it passes through.
+- finally runs on EVERY exit path (normal/caught/re-raised/return/fail); value
+  discarded.
+- catch var is handler-local (like let); closure_capture treats it as bound.
+- both catch and finally optional, trailing (catch before finally).
+
+* SAFETY invariant (load-bearing)
+
+try can NEVER swallow a global safety limit. Heap/timeout/capacity kill
+terminates the BEAM process before any rescue runs (uncatchable by
+construction); the one catchable form — a nested ExecutionError with a stable
+resource reason (:memory_exceeded/:timeout/:parallel_capacity_exceeded) — is
+RE-RAISED past the handler (mirrors the psettled worker rescue +
+stable_resource_error?). Dedicated test: heap-cap kill wrapped in (try … (catch
+e "SWALLOWED")) asserts the run aborts :memory_exceeded, never the handler value.
+
+* W4-write interaction
+
+try is control-flow, NOT a transaction boundary. A caught error → program
+SUCCEEDS → file writes COMMIT (the D3 transaction journal keys rollback on
+program-level failure, execute.ts success vs catch path). An UNCAUGHT failure
+still rolls back. Documented in prompts/tools/execute.md.
+
+* Files
+
+- beam/ptc_runner-vendored/lib/ptc_runner/lisp/{analyze,eval,closure_capture,core_to_source}.ex
+- beam/ptc_runner-vendored/lib/ptc_runner/lisp/eval/helpers.ex + source_atoms.ex
+- beam/ptc_runner-vendored/SPELL_PATCHES.md (PATCH-8 section)
+- beam/ptc_runtime/test/try_catch_test.exs (21 tests)
+- packages/coding-agent/src/prompts/tools/execute.md (try section + discovery + tool-shape)
+
+* Verification
+
+try_catch_test.exs 21/21; full ptc_runtime suite 113 tests + 5 properties, 0
+failures (zero regressions). Clean warnings-as-errors compile.
+
+* Empirical notes (cost real iterations)
+
+1. catch-var symbol = INTERNED name: atom only if in bounded vocab, else binary
+   → analyzer guard is_atom OR is_binary; handler key matches {:var,name}.
+2. PTC has TWO error channels (tuple + raise); first cut only rescued raises →
+   missed every {:error,reason} tuple error.
+3. tool failures RAISE ToolExecutionError (not a tuple) → own rescue arm.
+4. top-level (return v)/(fail v) surface as {:__ptc_return__,v}/{:__ptc_fail__,v}
+   sentinels at the program boundary.
+
+* Relationships
+
+Sibling of the execute-ergonomics review: P1 (teach apropos/doc + tool-result
+shape in execute.md) shipped alongside; P2 (catalog return-shape hints)
+abandoned (AgentTool has no result schema → would be ungated drift; reframed
+into P1 prose + in-language discovery); P3 (string-builtin alias pass) dissolved
+(includes?/starts-with?/index-of/… all already exist — friction was a naming
+guess, not a gap). Distinct from FUP-132 (kernel mid-walk host-abort).
