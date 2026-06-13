@@ -759,7 +759,13 @@ defmodule PtcRunner.Lisp.Eval do
   # msg}`, `{:unbound_var, name}`). Surface that string so a handler sees a
   # readable message; fall back to inspect for atom/opaque reasons.
   defp error_reason_to_value(msg) when is_binary(msg), do: msg
-  defp error_reason_to_value({:unbound_var, name}), do: "Undefined variable: #{name}"
+
+  # BUG-465: reuse the ONE rich unbound-var formatter (special-form / clojure-
+  # alternative / underscore / jaro "Did you mean" hints) so a CAUGHT unbound var
+  # carries the same guidance as the uncaught top-level surface — don't strip the
+  # single best ergonomic affordance the moment a program wraps a call in try.
+  defp error_reason_to_value({:unbound_var, _name} = reason),
+    do: PtcRunner.Lisp.Eval.Helpers.format_closure_error(reason)
 
   defp error_reason_to_value(reason) when is_tuple(reason) do
     case Enum.find(Tuple.to_list(reason), &is_binary/1) do

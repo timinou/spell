@@ -55,6 +55,14 @@ defmodule PtcRuntime.TryCatchTest do
       assert is_binary(caught["caught"])
     end
 
+    # BUG-465: a CAUGHT unbound var must carry the same "Did you mean" suggestion
+    # the uncaught top-level surface gives — try must not strip the best hint.
+    test "caught unbound var keeps the 'Did you mean' suggestion" do
+      assert {:ok, msg} = run!(~S|(try starts-with (catch e e))|)
+      assert msg =~ "Undefined variable: starts-with"
+      assert msg =~ "Did you mean: starts-with?"
+    end
+
     test "a tool failure is caught; handler value replaces the body" do
       assert {:ok, "recovered"} =
                run!(~S|(try (tool/boom {}) (catch e "recovered"))|)

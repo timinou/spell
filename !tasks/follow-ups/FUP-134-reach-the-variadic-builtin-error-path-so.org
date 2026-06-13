@@ -1,0 +1,58 @@
+#+TITLE: Reach the variadic-builtin error path so type_error hints can fire (conj/into/etc.)
+#+STATE: ITEM
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: FUP-134-reach-the-variadic-builtin-error-path-so
+
+* Initial Message
+
+i restarted the session; please write the "What I'd still consider" as FUPs if not done already, then focus on P5 and the FUP that you left for later; explain them again with their call sites and what they enable down the line. Try to use the 'execute' tool as much as possible to discover any warts previously undiscovered, thanks.
+
+* Context (follow-up to BUG-462)
+
+BUG-462 added recovery hints to `specific_type_error/2` in
+`beam/ptc_runner-vendored/lib/ptc_runner/lisp/eval/helpers.ex`. The hint for
+`(contains? <string> <string>)` fires because `contains?` is registered as a
+direct `{:normal, &Runtime.contains?/2}` builtin (env.ex:324). On a type
+mismatch it raises `FunctionClauseError`, which apply.ex's rescue arm
+(apply.ex ~line 158, `Helpers.type_error_for_args(fun, converted_args)`) catches —
+and `function_name/1` (helpers.ex:255) extracts `:contains?` so the table matches.
+
+`conj` (and other variadic builtins: `into`, `str`, `concat`, …) is registered
+as `{:variadic_nonempty, :conj, &Runtime.conj/2}` (env.ex:283). Its error path
+does NOT reach the same seam: `(conj "ab" "c")` surfaces as a RuntimeError-
+wrapped "no function clause matching in PtcRunner.Lisp.Runtime.Collection.conj/2"
+that `function_name/1` cannot key on, so `specific_type_error/2` never sees
+`:conj`. The speculative conj clause was dropped in BUG-462 (commit 2f0548a1e)
+for exactly this reason.
+
+* The gap
+
+The variadic dispatch wrapper (the `:variadic_nonempty` arm in apply.ex / env.ex)
+loses the builtin's logical name before the FunctionClauseError rescue runs, so
+the suggestion table is unreachable for the entire variadic builtin family.
+
+* Possible fix
+
+Thread the logical name (already present in the registration tuple,
+`{:variadic_nonempty, :conj, fun}`) through the variadic apply path so that when
+the underlying fn raises FunctionClauseError, the rescue can call
+`type_error_for_args` with `:conj` rather than an anonymous fn ref. Then a
+`specific_type_error(:conj, [s|_]) when is_binary(s)` clause (suggest `(str …)`)
+would fire.
+
+* Acceptance
+
+`(conj "ab" "c")` → a type_error that names `str` (or the right collection
+idiom), parallel to the `contains?` → `includes?` hint. No regression to working
+variadic calls. Covered by a nil_poison_test.exs / helpers test.
+
+* Priority rationale
+
+#C — long-tail. Defer until a real collision surfaces; do not build a blanket
+type-inference engine. The curated, per-builtin table matches the codebase style.
+
+* Relationships
+
+Follow-up to BUG-462 (done, 2f0548a1e). Sibling of the "generalize type_error
+hint table" FUP.

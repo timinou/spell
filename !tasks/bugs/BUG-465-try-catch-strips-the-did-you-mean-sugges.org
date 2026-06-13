@@ -1,0 +1,72 @@
+#+TITLE: try/catch strips the "Did you mean" suggestion from caught unbound_var errors
+#+STATE: ITEM
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: BUG-465-try-catch-strips-the-did-you-mean-sugges
+
+* Initial Message
+
+i restarted the session; please write the "What I'd still consider" as FUPs if not done already, then focus on P5 and the FUP that you left for later; explain them again with their call sites and what they enable down the line. Try to use the 'execute' tool as much as possible to discover any warts previously undiscovered, thanks.
+
+* Symptom (found live via execute, 2026-06-13)
+
+An UNCAUGHT unbound variable gets the rich suggestion:
+#+begin_src
+starts-with
+;; => unbound_var: "Undefined variable: starts-with. Did you mean: starts-with?"
+#+end_src
+
+The SAME error CAUGHT by a try/catch loses the suggestion entirely:
+#+begin_src
+(try starts-with (catch e e))
+;; => "Undefined variable: starts-with"        ; no "Did you mean"
+(try includes  (catch e e)) ; => "Undefined variable: includes"  ; no hint
+#+end_src
+
+So the moment a program defensively wraps a call in try/catch (exactly when an
+agent is exploring and most needs the hint), the best diagnostic the runtime has
+is discarded.
+
+* Root cause
+
+Two divergent renderers for `{:unbound_var, name}`:
+
+1. The RICH formatter — `PtcRunner.Lisp.Eval.Helpers.format_closure_error/1`
+   (helpers.ex:204-230): special-form hint, @clojure_alternatives, underscore→
+   hyphen, and `find_similar_builtin/1` (jaro distance + transposition/length
+   heuristics, threshold 0.8/0.85) → "Did you mean: …". This feeds the UNCAUGHT
+   top-level error surface.
+
+2. The POOR formatter — `error_reason_to_value/1` in eval.ex:762:
+   `defp error_reason_to_value({:unbound_var, name}), do: "Undefined variable: #{name}"`
+   This renders the value BOUND TO THE CATCH VAR (added by FEAT-812 try/catch,
+   commit ebf81f383). It reimplements only the bare prefix, dropping every hint.
+
+* Fix
+
+Route eval.ex:762's `{:unbound_var, name}` clause through the existing rich
+formatter instead of reimplementing it:
+#+begin_src elixir
+defp error_reason_to_value({:unbound_var, name}),
+  do: PtcRunner.Lisp.Eval.Helpers.format_closure_error({:unbound_var, name})
+#+end_src
+(Helpers is not yet aliased in eval.ex — use the fully-qualified call or add the
+alias.) One source of truth for the unbound-var message; caught == uncaught.
+
+* Acceptance
+
+`(try starts-with (catch e e))` → "Undefined variable: starts-with. Did you mean:
+starts-with?" — byte-identical to the uncaught surface. Add a try_catch_test.exs
+case asserting the caught value carries the suggestion. Full ptc_runtime suite
+green.
+
+* Priority rationale
+
+#B — silently degrades the single best ergonomic affordance the runtime has,
+precisely in the defensive-coding path. Introduced by FEAT-812 (ebf81f383); a
+regression on my own recent work.
+
+* Discovered during
+
+P5/FUP-132 prep, exercising error shapes via execute (user asked to surface
+warts).

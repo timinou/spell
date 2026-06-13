@@ -1,0 +1,81 @@
+#+TITLE: execute tool mojibakes non-ASCII in results (UTF-8 decoded as latin1 on the transport boundary)
+#+STATE: ITEM
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: BUG-464-execute-tool-mojibakes-non-ascii-in-resu
+
+* Initial Message
+
+i restarted the session; please write the "What I'd still consider" as FUPs if not done already, then focus on P5 and the FUP that you left for later; explain them again with their call sites and what they enable down the line. Try to use the 'execute' tool as much as possible to discover any warts previously undiscovered, thanks.
+
+* Symptom (found live via the execute tool, 2026-06-13)
+
+Any non-ASCII codepoint in an `execute` RESULT renders as latin1 mojibake to the
+model:
+- `"—"` (U+2014) → `â`   (byte 0xE2 shown as U+00E2, trailing 0x80 0x94 dropped/invisible)
+- `"…"` (U+2026) → `â¦`
+- `"→"` (U+2192) → `â`
+
+This is why BUG-462/463's own messages (which contain `—` and `…`) came back
+mojibaked when test-driven through `execute`, despite being correct in the
+ExUnit suite.
+
+* Proof it is OUTBOUND-only (runner data is correct UTF-8)
+
+Run inside execute:
+#+begin_src
+{:count (count "—")                         ; => 1   (correct: 1 codepoint)
+ :json-len (count (json/generate-string "—")) ; => 3   (correct: E2 80 94)
+ :reparsed-count (count (json/parse-string (json/generate-string "—")))} ; => 1
+#+end_src
+Internal storage, JSON encode, and JSON re-decode are ALL correct. A bare
+`"—"` program return still renders `â`. Numbers/ASCII are unaffected. Injected
+context (`data/probe = "\u2014"`) also has `count` = 1 — so INBOUND is fine too.
+∴ the corruption is purely on the runner→host result-rendering path.
+
+The inbound tool-arg echo IS also affected in error messages: a `tool/find`
+target containing `§` echoes back as `Â§` and `café` as `cafÃÂ©` in the
+runner's error string — i.e. when the host's (already-latin1-decoded) arg is
+sent back through and re-encoded, it double-mangles. The root is a single
+latin1/utf8 seam, surfacing on both the result and the echoed-arg paths.
+
+* Candidate sites (need the LIVE transport pinned)
+
+- `packages/coding-agent/src/tools/ptc-runtime/client.ts:472` sets
+  `child.stdout.setEncoding("utf8")` for the SPAWN transport — that path looks
+  correct, so either (a) this deployment uses a different transport (socket /
+  resident daemon) whose reader does not set utf8, or (b) a `Buffer.toString()`
+  defaulting to latin1, or a `latin1`/`binary` encoding, sits on the inbound
+  decode of NDJSON frames.
+- BEAM side, `beam/ptc_runtime/lib/ptc_runtime/peer.ex`: WRITER is
+  `IO.binwrite(:stdio, iodata)` (raw bytes, line 676) but READER is
+  `IO.read(:stdio, :line)` (encoding-sensitive, line 687) — an asymmetry. The
+  `:stdio` device encoding is never set via `:io.setopts` anywhere in
+  `beam/ptc_runtime/`. binwrite of raw UTF-8 bytes is correct on the wire; the
+  asymmetry matters only if the device is in a non-unicode mode for reads. Given
+  inbound `count` = 1, the BEAM reader currently decodes correctly — so the
+  prime suspect is the Node-side inbound decode for THIS session's transport.
+
+* Repro
+
+`execute` program: `"—"`  → returns `â` instead of `—`.
+
+* Acceptance
+
+A non-ASCII string returned (or embedded in a result map) by an `execute`
+program renders byte-identical to the model. Add a roundtrip test
+(`packages/coding-agent/src/tools/ptc-runtime/roundtrip.test.ts` or client
+test) asserting `execute("\"—…→\"")` returns `—…→`. Pin the offending
+encoding site and set it to utf8.
+
+* Priority rationale
+
+#B — silent data corruption of all non-ASCII output. Doesn't crash, but every
+em-dash/arrow/accent/CJK in a result is wrong, which is easy to ship into
+artifacts/docs unnoticed. Common in error messages and any prose the runner
+produces.
+
+* Discovered during
+
+P5/FUP-132 prep — user asked to use `execute` heavily to surface warts. This
+was the first.

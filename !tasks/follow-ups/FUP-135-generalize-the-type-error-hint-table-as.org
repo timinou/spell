@@ -1,0 +1,53 @@
+#+TITLE: Generalize the type_error hint table as real builtin/type collisions surface
+#+STATE: ITEM
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: FUP-135-generalize-the-type-error-hint-table-as
+
+* Initial Message
+
+i restarted the session; please write the "What I'd still consider" as FUPs if not done already, then focus on P5 and the FUP that you left for later; explain them again with their call sites and what they enable down the line. Try to use the 'execute' tool as much as possible to discover any warts previously undiscovered, thanks.
+
+* Context (follow-up to BUG-462)
+
+BUG-462 (commit 2f0548a1e) turned `type_error` from a dead end into a recoverable
+error for ONE curated case: `(contains? <string> <string>)` →
+"For strings use (includes? s sub) or (index-of s sub)". The mechanism is a
+per-builtin/per-arg-shape clause table, `specific_type_error/2`, in
+`beam/ptc_runner-vendored/lib/ptc_runner/lisp/eval/helpers.ex`, consulted by
+`type_error_for_args/2` (~helpers.ex:90) before falling back to
+`generic_type_error/2` (~helpers.ex:109, the bare "invalid argument types: …").
+
+This is the same affordance the excellent `unbound_var` path already provides
+("Did you mean: starts-with?" / ".substring") — but for type mismatches.
+
+* The opportunity
+
+Add new `specific_type_error/2` clauses as real collisions are observed in live
+`execute` use. Candidate next entries (verify each is real before adding):
+- `(get <list> k)` shape errors → point at `(nth coll i)` / `(first …)`.
+- `(assoc <list> …)` / `(update <list> …)` → vector-vs-list idioms.
+- numeric ops on strings → `(parse-long s)` / `(parse-double s)` first.
+
+* Non-goals (deliberate)
+
+Do NOT build a blanket type-inference / coercion-suggestion engine. The curated
+per-case table is intentional: each clause is a verified, high-signal idiom
+collision, matching the codebase's style and the `unbound_var` suggestion engine.
+Speculative clauses that never fire (see FUP-134, conj) are the failure mode to
+avoid.
+
+* Acceptance
+
+Each added clause: (a) cites a real observed friction, (b) suggests the correct
+idiom, (c) has a test in nil_poison_test.exs proving it fires AND that the correct
+typed call still works (no false positive).
+
+* Priority rationale
+
+#C — evidence-gated. Land clauses one at a time as friction is observed, not
+preemptively.
+
+* Relationships
+
+Follow-up to BUG-462 (done, 2f0548a1e). Sibling of FUP-134 (variadic error path).
