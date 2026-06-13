@@ -33,15 +33,16 @@ defmodule PiKernelNif do
   Gate 3 (P3.8): open + HOLD a broker connection for `owner` at `socket` (spawning
   the broker from `broker_bin` if absent; pass "" to use the broker's own
   resolution), claim an edit-intent on `file`/`code_path`, and monitor the CALLING
-  process. Returns `{:ok, resource, granted}`. The connection is held inside the
-  resource; when the caller process dies, the NIF's :DOWN monitor closes it and the
-  broker reclaims this owner's intents (so a second owner can then acquire).
+  process. Returns `{:ok, {resource, granted}}` (rustler wraps the Rust
+  `Ok((resource, granted))`). The connection is held inside the resource; when the
+  caller process dies, the NIF's :DOWN monitor closes it and the broker reclaims
+  this owner's intents (so a second owner can then acquire).
 
   NB: `socket`/`broker_bin` are explicit args, not env — `System.put_env` does not
   reliably reach the NIF's `std::env`.
   """
   @spec claim_intent(String.t(), String.t(), String.t(), String.t(), String.t()) ::
-          {:ok, reference(), boolean()} | {:error, String.t()}
+          {:ok, {reference(), boolean()}} | {:error, String.t()}
   def claim_intent(_socket, _broker_bin, _owner, _file, _code_path),
     do: :erlang.nif_error(:nif_not_loaded)
 

@@ -74,7 +74,12 @@ fn read_line(reader: &mut BufReader<UnixStream>) -> Option<ServerMessage> {
 /// on the Elixir side does NOT reliably reach the NIF's `std::env::var_os`, so
 /// the host hands the paths in directly. `broker_bin` empty = let the broker's
 /// own resolution (sibling exe / PATH) find it.
-#[rustler::nif]
+///
+/// DirtyIo-scheduled: this does blocking socket I/O (a cold broker spawn polls up
+/// to ~2s, plus blocking connect + read_line for the Hello/Welcome + IntentAck).
+/// A regular-scheduler NIF must return in <1ms, so this MUST run on a dirty I/O
+/// scheduler to avoid stalling the BEAM scheduler it lands on.
+#[rustler::nif(schedule = "DirtyIo")]
 fn claim_intent<'a>(
 	env: Env<'a>,
 	socket: String,

@@ -45,20 +45,29 @@ defmodule BrokerReclaimTest do
 
     parent = self()
 
-    # Owner A: a separate process that claims + HOLDS the intent, then waits.
-    # It hands the parent its result, then blocks until killed.
+    # Owner A: a separate process that claims the intent and is monitored by the
+    # NIF. It hands the parent BOTH its result AND the resource term, then blocks
+    # until killed.
+    #
+    # CRITICAL (gate-3 credibility): the parent RETAINS the resource term, so when
+    # A is killed the ResourceArc refcount does NOT hit 0 — the natural struct
+    # Drop (Mutex<Option<UnixStream>> closing the socket) CANNOT fire. The only
+    # thing that can close A's held connection is the NIF's Resource::down monitor
+    # callback (keyed on A's pid). So a successful reclaim here PROVES the :DOWN
+    # monitor drove it, not GC-drop.
     a =
       spawn(fn ->
         result = PiKernelNif.claim_intent(socket, bin, "ownerA-beam", file, code_path)
         send(parent, {:a_claimed, result})
-        # Hold the resource alive in THIS process so the connection stays open
-        # until the process dies (kill below).
         receive do
           :never -> :ok
         end
       end)
 
-    assert_receive {:a_claimed, {:ok, {_res_a, true}}}, 5_000
+    assert_receive {:a_claimed, {:ok, {res_a, true}}}, 5_000
+    # Pin the resource in THIS (surviving) process so GC cannot reclaim it on A's
+    # death — see the CRITICAL note above. Kept referenced to the end of the test.
+    _pinned = res_a
 
     # Owner B: while A holds, B must be REJECTED (the lock is real).
     assert {:ok, {res_b1, granted_b1}} =
@@ -67,9 +76,9 @@ defmodule BrokerReclaimTest do
     refute granted_b1, "owner B must be rejected while A holds the intent"
     PiKernelNif.release_intent(res_b1)
 
-    # ── Owner A DIES: kill the process holding the resource. ──
-    # The resource becomes unreferenced → rustler Resource::down (the monitor on
-    # A) fires → the held UnixStream closes → the broker reclaims A's intents.
+    # ── Owner A DIES: kill A. The parent still holds the resource term (_pinned),
+    # so GC cannot drop it — ONLY the NIF's Resource::down monitor (on A's pid)
+    # can close A's held connection → the broker reclaims A's intents.
     ref = Process.monitor(a)
     Process.exit(a, :kill)
     assert_receive {:DOWN, ^ref, :process, ^a, :killed}, 5_000
@@ -85,5 +94,8 @@ defmodule BrokerReclaimTest do
            "after owner A died, owner B must acquire the reclaimed intent (no deadlock)"
 
     PiKernelNif.release_intent(res_b2)
+    # Keep A's resource referenced to here so the pinning above is real (the
+    # compiler/GC can't drop _pinned earlier).
+    assert is_reference(res_a)
   end
 end
