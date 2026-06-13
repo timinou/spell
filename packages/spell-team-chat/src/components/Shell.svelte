@@ -6,8 +6,10 @@
 	import SpawnDialog from "./SpawnDialog.svelte";
 	import DebugPanel from "./DebugPanel.svelte";
 	import CodemodTilePanel from "./CodemodTilePanel.svelte";
+	import EditHistoryPanel from "./EditHistoryPanel.svelte";
 	import type {
 		BridgeRpcCommand,
+		EditHistoryResult,
 		RunStoredResult,
 		TileCreateResult,
 		TileListResult,
@@ -48,6 +50,7 @@
 			run: { intent: string; outcome: string; files: number; paths?: string[]; error?: string },
 		) => Promise<void>;
 		onTileDelete: (sessionId: string, tileId: string) => Promise<void>;
+		onEditHistory: (sessionId: string, file?: string) => Promise<EditHistoryResult>;
 		onBlockingAction: (sessionId: string, eventId: string, choice: string | number) => void;
 		onSignOut: () => void;
 	}
@@ -66,12 +69,14 @@
 		onTileUpdate,
 		onTileRecordRun,
 		onTileDelete,
+		onEditHistory,
 		onBlockingAction,
 		onSignOut,
 	}: Props = $props();
 
 	let spawnOpen = $state(false);
 	let tilesOpen = $state(false);
+	let historyOpen = $state(false);
 
 	function onKey(e: KeyboardEvent) {
 		if ((e.metaKey || e.ctrlKey) && e.key === "n") {
@@ -132,6 +137,14 @@
 		</button>
 		<button
 			class="btn btn-ghost small"
+			onclick={() => (historyOpen = !historyOpen)}
+			disabled={!app.current}
+			title="Edit history — every file this session changed"
+		>
+			{historyOpen ? "✕ History" : "History"}
+		</button>
+		<button
+			class="btn btn-ghost small"
 			onclick={() => (tilesOpen = !tilesOpen)}
 			disabled={!app.current}
 			title="Codemod tiles — stored programs that transform the repo"
@@ -157,6 +170,13 @@
 			{onTileRecordRun}
 			{onTileDelete}
 			onClose={() => (tilesOpen = false)}
+		/>
+	{/if}
+	{#if historyOpen && app.current}
+		<EditHistoryPanel
+			sessionId={app.current.summary.sessionId}
+			{onEditHistory}
+			onClose={() => (historyOpen = false)}
 		/>
 	{/if}
 </div>

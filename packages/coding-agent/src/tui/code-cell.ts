@@ -18,7 +18,7 @@ export interface CodeCellOptions {
 	index?: number;
 	total?: number;
 	title?: string;
-	status?: "pending" | "running" | "complete" | "error";
+	status?: "pending" | "running" | "complete" | "error" | "warning";
 	spinnerFrame?: number;
 	duration?: number;
 	output?: string;
@@ -37,6 +37,7 @@ function getState(status?: CodeCellOptions["status"]): State | undefined {
 	if (!status) return undefined;
 	if (status === "complete") return "success";
 	if (status === "error") return "error";
+	if (status === "warning") return "warning";
 	if (status === "running") return "running";
 	return "pending";
 }
@@ -50,9 +51,11 @@ function formatHeader(options: CodeCellOptions, theme: Theme): { title: string; 
 				? "success"
 				: status === "error"
 					? "error"
-					: status === "running"
-						? "running"
-						: "pending",
+					: status === "warning"
+						? "warning"
+						: status === "running"
+							? "running"
+							: "pending",
 			theme,
 			spinnerFrame,
 		);

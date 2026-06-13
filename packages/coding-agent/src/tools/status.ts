@@ -25,6 +25,7 @@ import { formatCodePathResult } from "./codepath-result";
 import { sessionContextOpts } from "./codepath-session";
 import type { StatusParams } from "./codepath-types";
 import { statusSchema } from "./codepath-types";
+import type { ToolSession } from ".";
 import { replaceTabs } from "./render-utils";
 import { type DetailsWithMeta, toolResult } from "./tool-result";
 
@@ -39,6 +40,11 @@ export class StatusTool implements AgentTool<typeof statusSchema> {
 	readonly parameters = statusSchema;
 	readonly lenientArgValidation = true;
 
+	// PLAN-338 B: `history` is session-scoped (the edit-history log is keyed by
+	// session dir). The session is optional so existing kernel-observability
+	// commands (languages/index/…) keep working without one.
+	constructor(private readonly session?: ToolSession) {}
+
 	async execute(
 		_toolCallId: string,
 		params: StatusParams,
@@ -48,11 +54,15 @@ export class StatusTool implements AgentTool<typeof statusSchema> {
 	): Promise<AgentToolResult> {
 		// `index` triggers background code-graph indexing; edge resolvers
 		// emit CODE_GRAPH_NOT_INITIALISED until it completes.
+		// PLAN-338 B: `history` is session-scoped — thread the session context
+		// (sessionDir) + sessionId so the kernel resolves THIS session's unified
+		// edit log. Other commands ignore these fields.
 		const chunks = await executeCodePath({
-			...sessionContextOpts(undefined),
+			...sessionContextOpts(this.session ?? null),
 			command: "manage",
 			manage: params.command,
 			target: params.file ?? "",
+			sessionId: this.session?.getSessionId?.()?.trim() || undefined,
 			abortSignal: signal,
 		});
 

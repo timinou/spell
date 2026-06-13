@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@spell/pi-agent-core";
@@ -30,6 +31,9 @@ type EditToolResultDetails = DetailsWithMeta & {
 	idempotent?: boolean;
 	diff?: string;
 	firstChangedLine?: number;
+	// PLAN-338 C: undo declined because the file is already committed (safe-stop,
+	// not an error). Drives the amber warning cell in renderResult.
+	declined?: boolean;
 };
 
 /**
@@ -150,6 +154,27 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 				: sessionCwd;
 		const transactionMode: "best-effort" | "strict" = params.transaction ?? "best-effort";
 
+		// BUG-466: `operations` must be an array. When the model stringifies the
+		// payload (common for Elixir `do…end` bodies whose escaping breaks JSON
+		// coercion in validateToolArguments), `lenientArgValidation` hands the raw
+		// string straight here — guard before any `.some`/`.map` so the failure is
+		// an actionable tool error, not an opaque `params.operations.some is not a
+		// function` TypeError.
+		if (!Array.isArray(params.operations)) {
+			const err = toolResult<EditToolResultDetails>({
+				error: "malformed_operations",
+			})
+				.text(
+					"`operations` must be a JSON array of {target, action} objects, not a string. " +
+						"The payload arrived as a stringified blob that failed to parse (often from over-escaped " +
+						"content — e.g. Elixir `do…end` bodies with interpolation/sigils). Re-send `operations` as a " +
+						"real array; prefer smaller per-op edits to reduce escaping surface.",
+				)
+				.done();
+			err.isError = true;
+			return err;
+		}
+
 		// History ops (undo/redo): dispatch via kernel manage subcommand and short-circuit.
 		// Reject batches mixing history with regular edits — history ops are atomic on
 		// the workspace edit log, not per-target.
@@ -165,13 +190,37 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 				err.isError = true;
 				return err;
 			}
-			const kind = params.operations[0].action.kind as "undo" | "redo";
+			const historyOp = params.operations[0];
+			const kind = historyOp.action.kind as "undo" | "redo";
+			// BUG (undo-atomicity): honour the agent's target. Previously hardcoded
+			// `target: ""`, which discarded `op.target` and silently degraded every
+			// undo/redo into "revert the most-recent edit in the session-cwd's
+			// workspace shard" — which, in a multi-package repo, reverted a DIFFERENT
+			// (often already-committed) file than the one named. A target now scopes
+			// the revert to that file's edit group; absent target keeps the
+			// most-recent-edit behaviour (the verb is still dispatched alone).
+			const historyTarget = typeof historyOp.target === "string" ? historyOp.target.trim() : "";
+			// PLAN-338 B/C: id-precise undo/redo + commit-guard override. `id`
+			// targets a specific history entry; `force` (undo only) reverts even a
+			// committed file past the safety decline.
+			const historyAction = historyOp.action as { id?: string; force?: boolean };
+			const historyEntryId =
+				typeof historyAction.id === "string" && historyAction.id.trim() ? historyAction.id.trim() : undefined;
+			const historyForce = kind === "undo" && historyAction.force === true ? true : undefined;
 			const chunks = await executeCodePath({
 				...sessionContextOpts(this.session ?? null),
 				command: "manage",
 				manage: kind,
-				target: "",
+				target: historyTarget,
+				// `root` MUST match the root the edits resolved against (effectiveCwd),
+				// so the manage handler's `absolute_path(target, root)` and workspace
+				// probe address the SAME file/history log the edits wrote to. Without
+				// it the handler falls back to the process cwd and the file_glob never
+				// matches the recorded entry.
+				root: effectiveCwd,
 				sessionId: this.session.getSessionId?.()?.trim() || undefined,
+				historyEntryId,
+				historyForce,
 				abortSignal: signal,
 			});
 			return this.#renderHistoryResult(kind, chunks);
@@ -227,6 +276,14 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		const results: AgentToolResult[] = [];
 		let failedOpIndex: number | null = null;
 		const skippedOpIndices: number[] = [];
+
+		// Undo-atomicity: one group id per logical `edit` invocation. Every
+		// structural op in this batch (and any kernel-side fan-out, e.g. a
+		// cross-file rename) is stamped with it, so a later `undo`/`redo` reverts
+		// the whole batch as a unit instead of peeling off one file at a time.
+		// Only meaningful for multi-write invocations, but harmless (singleton
+		// group) for a single op.
+		const editGroupId = randomUUID();
 
 		for (const { i, op, targetPath, filePart, resolved } of ops) {
 			// Degenerate cwd-prefix duplication (target path equals cwd-tail) is the
@@ -297,7 +354,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 			} else {
 				// All other ops — including numeric-anchor line ops since
 				// PLAN-317 — route through the kernel's TextResolver.
-				result = await this.#executeStructural(targetPath, action, effectiveCwd, signal);
+				result = await this.#executeStructural(targetPath, action, effectiveCwd, signal, editGroupId);
 			}
 
 			if (isErrorResult(result)) {
@@ -364,6 +421,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		action: any,
 		effectiveCwd: string,
 		_signal?: AbortSignal,
+		editGroupId?: string,
 	): Promise<AgentToolResult> {
 		// Delegate structural ops to the NAPI edit surface.
 		// The Rust layer (CodeBuffer::open / CodePath resolver) handles
@@ -376,6 +434,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 			actions: [action],
 			root: effectiveCwd,
 			sessionId: this.session.getSessionId?.()?.trim() || undefined,
+			editGroupId,
 		});
 
 		const diagnostics = chunks.flatMap(c => c.diagnostics);
@@ -428,18 +487,57 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 	#renderHistoryResult(kind: "undo" | "redo", chunks: CodePathChunk[]): AgentToolResult {
 		const node = chunks.flatMap(c => c.nodes).find(n => n.kind === "§manage-result");
 		const payload = (node?.metadata as { payload?: Record<string, unknown> } | undefined)?.payload;
-		const diff = typeof payload?.diff === "string" ? payload.diff : undefined;
-		const file = typeof payload?.file === "string" ? payload.file : undefined;
+		// Group-aware: one undo/redo may touch MULTIPLE files (a cross-file rename).
+		// The kernel returns a `files` array (entryId/file/diff each) plus a scalar
+		// `file`/`diff` for the primary entry (back-compat). Prefer the array.
+		const files = Array.isArray(payload?.files)
+			? (payload.files as Array<{ file?: unknown; diff?: unknown }>)
+			: [];
+		const primaryDiff = typeof payload?.diff === "string" ? payload.diff : undefined;
+		const primaryFile = typeof payload?.file === "string" ? payload.file : undefined;
+		// The kernel also attaches the fully-rendered, per-file diff body as the
+		// node's text content; prefer it so multi-file groups show every hunk.
+		const body = node?.content?.value ?? node?.content?.text;
+
+		// PLAN-338 C: a DECLINED undo (committed file, not forced) is a SAFE-STOP,
+		// not an error. Surface the kernel's actionable message (file + sha + how to
+		// force) and flag `declined` so the TUI can render an amber warning cell
+		// instead of a red error. isError stays false — the agent should read the
+		// hint and choose force or `git revert`, not treat it as a failure.
+		if (payload?.declined === true) {
+			const message =
+				typeof payload?.message === "string" ? payload.message : `${kind} declined: file already committed`;
+			const declinedFiles = Array.isArray(payload?.files)
+				? (payload.files as Array<{ file?: unknown; commit?: unknown }>)
+						.map(f => (typeof f.file === "string" ? f.file : undefined))
+						.filter((f): f is string => f !== undefined)
+				: [];
+			return toolResult<EditToolResultDetails>({ action: kind, declined: true, error: "committed" })
+				.text(message)
+				.data({ declined: true, reason: "committed", files: declinedFiles })
+				.done();
+		}
+
 		// Nothing-to-undo (or a legacy result without a diff): surface the kernel's
 		// message verbatim so the agent sees the actionable hint, not a blank cell.
-		if (!diff) {
+		if (files.length === 0 && !primaryDiff) {
 			const message = typeof payload?.message === "string" ? payload.message : `${kind}: nothing to ${kind}`;
 			return toolResult<EditToolResultDetails>({ action: kind }).text(message).done();
 		}
-		const relTarget = file ? nodePath.relative(this.session.cwd, file) : kind;
-		return toolResult<EditToolResultDetails>({ action: kind, target: relTarget })
-			.text(`${kind} · ${relTarget}\n${diff}`)
-			.data({ diff, file })
+
+		const rel = (f: string) => nodePath.relative(this.session.cwd, f);
+		const touched = files
+			.map(f => (typeof f.file === "string" ? f.file : undefined))
+			.filter((f): f is string => f !== undefined);
+		const relTarget = touched.length > 0 ? rel(touched[0]!) : primaryFile ? rel(primaryFile) : kind;
+		const countNote = touched.length > 1 ? ` (+${touched.length - 1} more file${touched.length > 2 ? "s" : ""})` : "";
+		const text =
+			typeof body === "string" && body.length > 0
+				? body
+				: `${kind} · ${relTarget}\n${primaryDiff ?? ""}`;
+		return toolResult<EditToolResultDetails>({ action: kind, target: `${relTarget}${countNote}` })
+			.text(text)
+			.data({ diff: primaryDiff, file: primaryFile, files: touched, fileCount: touched.length })
 			.done();
 	}
 
@@ -510,7 +608,9 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		// the cell reads e.g. `replace · src/app.ts::greet` instead of a bare
 		// "Edit". Falls back to "Edit" when details are absent.
 		const d = result.details as EditToolResultDetails | undefined;
-		const title = editResultTitle(d, result.isError === true);
+		// PLAN-338 C: a declined undo is a safe-stop, shown amber (warning), not red.
+		const declined = d?.declined === true;
+		const title = editResultTitle(d, result.isError === true || declined);
 		// The agent-facing text prepends a `<verb> · <target>` header for context;
 		// the TUI already shows that in the title, so drop a leading header line
 		// that matches it to keep the diff cell clean.
@@ -527,7 +627,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 						code: truncated,
 						language: "diff",
 						title,
-						status: result.isError === true ? "error" : "complete",
+						status: result.isError === true ? "error" : declined ? "warning" : "complete",
 						expanded: options.expanded,
 						width,
 					},

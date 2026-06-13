@@ -22,6 +22,9 @@ fn manage_opts(subcommand: &str, target: &str, root: PathBuf) -> CodePathTaskOpt
 		artifact_threshold: None,
 		gitignore:          None,
 		session_id:         None,
+		edit_group_id:      None,
+		history_entry_id:   None,
+		history_force:      None,
 		home:               None,
 		session_dir:        None,
 	}
@@ -139,4 +142,94 @@ fn manage_undo_redo_round_trip() {
 	// produce a panic.
 	assert!(undo_chunk.nodes.len() + undo_chunk.diagnostics.len() >= 1);
 	assert!(redo_chunk.nodes.len() + redo_chunk.diagnostics.len() >= 1);
+}
+
+/// Build an `edit` task-options for a single find/replace action against
+/// `target`, stamping `edit_group_id` so the recorder groups the resulting
+/// entries. `.spell` under root makes it the workspace so the edit-history log
+/// and the undo handler resolve the same file.
+fn edit_replace_opts(
+	target: &str,
+	find: &str,
+	replace: &str,
+	root: PathBuf,
+	session: &str,
+	group: Option<&str>,
+) -> CodePathTaskOptions {
+	CodePathTaskOptions {
+		command:            "edit".to_string(),
+		target:             target.to_string(),
+		transaction:        None,
+		limit:              None,
+		head:               None,
+		tail:               None,
+		offset:             None,
+		format:             None,
+		root:               Some(root.to_string_lossy().to_string()),
+		actions:            Some(serde_json::json!([{
+			"kind": "fileFindReplace",
+			"find": find,
+			"content": replace,
+		}])),
+		manage:             None,
+		artifact_threshold: None,
+		gitignore:          None,
+		session_id:         Some(session.to_string()),
+		edit_group_id:      group.map(Into::into),
+		history_entry_id:   None,
+		history_force:      None,
+		home:               None,
+		session_dir:        None,
+	}
+}
+
+/// End-to-end (real recorder + thread-local group): two edits to two files in
+/// ONE logical invocation share an `editGroupId`; a single targeted `undo`
+/// reverts BOTH files atomically. This is the full-stack proof of the
+/// operation-aware, target-honouring fix — not just the unit-level revert.
+#[test]
+fn edit_group_undo_reverts_all_member_files_e2e() {
+	let dir = tempfile::tempdir().unwrap();
+	let root = dir.path().to_path_buf();
+	std::fs::create_dir_all(root.join(".spell")).unwrap();
+	std::fs::write(root.join("a.ts"), "const v = oldName;\n").unwrap();
+	std::fs::write(root.join("b.ts"), "call(oldName);\n").unwrap();
+
+	// Two edits, same group id, same session — simulating one cross-file rename.
+	let ea = run(edit_replace_opts("a.ts", "oldName", "newName", root.clone(), "S1", Some("G1")));
+	assert!(ea.diagnostics.is_empty(), "edit a diagnostics: {:?}", ea.diagnostics);
+	let eb = run(edit_replace_opts("b.ts", "oldName", "newName", root.clone(), "S1", Some("G1")));
+	assert!(eb.diagnostics.is_empty(), "edit b diagnostics: {:?}", eb.diagnostics);
+	assert_eq!(std::fs::read_to_string(root.join("a.ts")).unwrap(), "const v = newName;\n");
+	assert_eq!(std::fs::read_to_string(root.join("b.ts")).unwrap(), "call(newName);\n");
+
+	// A single undo targeting ONE member reverts the WHOLE group.
+	let undo = run(manage_opts_session("undo", "a.ts", root.clone(), "S1"));
+	assert!(undo.diagnostics.is_empty(), "undo diagnostics: {:?}", undo.diagnostics);
+	let payload = undo.nodes[0].metadata.get("payload").unwrap();
+	assert_eq!(
+		payload.get("fileCount").and_then(Value::as_u64),
+		Some(2),
+		"both grouped files should revert; payload: {payload:?}"
+	);
+	assert_eq!(std::fs::read_to_string(root.join("a.ts")).unwrap(), "const v = oldName;\n");
+	assert_eq!(std::fs::read_to_string(root.join("b.ts")).unwrap(), "call(oldName);\n");
+
+	// And redo re-applies both.
+	let redo = run(manage_opts_session("redo", "a.ts", root.clone(), "S1"));
+	assert!(redo.diagnostics.is_empty(), "redo diagnostics: {:?}", redo.diagnostics);
+	assert_eq!(std::fs::read_to_string(root.join("a.ts")).unwrap(), "const v = newName;\n");
+	assert_eq!(std::fs::read_to_string(root.join("b.ts")).unwrap(), "call(newName);\n");
+}
+
+/// Manage opts variant carrying a session id (the default helper passes None).
+fn manage_opts_session(
+	subcommand: &str,
+	target: &str,
+	root: PathBuf,
+	session: &str,
+) -> CodePathTaskOptions {
+	let mut o = manage_opts(subcommand, target, root);
+	o.session_id = Some(session.to_string());
+	o
 }

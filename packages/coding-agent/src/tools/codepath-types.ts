@@ -205,6 +205,9 @@ export const statusSchema = Type.Object(
 			Type.Literal("watcherStatus"),
 			Type.Literal("lockStatus"),
 			Type.Literal("status"),
+			// PLAN-338 B: read-only edit-history listing for this session,
+			// newest-first. `file` narrows to edits touching that path.
+			Type.Literal("history"),
 		]),
 		file: Type.Optional(Type.String({ description: "File path for file-scoped commands" })),
 	},

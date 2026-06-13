@@ -9,7 +9,7 @@ import {
 	type UsageLimit,
 	type UsageReport,
 } from "@spell/pi-ai";
-import { copyToClipboard } from "@spell/pi-natives";
+import { copyToClipboard, executeCodePath } from "@spell/pi-natives";
 import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@spell/pi-tui";
 import { formatDuration, Snowflake, setProjectDir } from "@spell/pi-utils";
 import { $ } from "bun";
@@ -431,6 +431,62 @@ export class CommandController {
 			info += `  ${theme.fg("dim", `git restore --source=${snapshot.ref} -- <path>`)}\n`;
 		}
 		info += `\n${theme.fg("dim", "Cleanup: git update-ref -d <ref>")}`;
+		this.ctx.chatContainer.addChild(new Spacer(1));
+		this.ctx.chatContainer.addChild(new Text(info.trimEnd(), 1, 0));
+		this.ctx.ui.requestRender();
+	}
+
+	/**
+	 * PLAN-338 B: `/history` — show this session's edit history (newest-first),
+	 * read from the kernel's session-unified log via `status command:"history"`.
+	 * Each row shows the entry id (for `/undo <id>` or agent id-precise undo),
+	 * file, group marker, and a committed badge. Optional `file` narrows it.
+	 */
+	async handleHistoryCommand(file?: string): Promise<void> {
+		const sessionId = this.ctx.sessionManager.getSessionId?.()?.trim() || undefined;
+		const sessionDir = this.ctx.sessionManager.getArtifactsDir?.() ?? undefined;
+		const cwd = this.ctx.sessionManager.getCwd();
+		let chunks: Awaited<ReturnType<typeof executeCodePath>>;
+		try {
+			chunks = await executeCodePath({
+				command: "manage",
+				manage: "history",
+				target: file ?? "",
+				root: cwd,
+				sessionId,
+				...(sessionDir ? { sessionDir } : {}),
+			});
+		} catch (error) {
+			this.ctx.showError(`Failed to read edit history: ${error instanceof Error ? error.message : String(error)}`);
+			return;
+		}
+		const node = chunks.flatMap(c => c.nodes).find(n => n.kind === "§manage-result");
+		const payload = (node?.metadata as { payload?: Record<string, unknown> } | undefined)?.payload;
+		const entries = Array.isArray(payload?.entries)
+			? (payload.entries as Array<Record<string, unknown>>)
+			: [];
+		if (entries.length === 0) {
+			this.ctx.showWarning(file ? `No edit history for ${file} in this session.` : "No edit history for this session.");
+			return;
+		}
+		const undoable = typeof payload?.undoable === "number" ? payload.undoable : 0;
+		const redoable = typeof payload?.redoable === "number" ? payload.redoable : 0;
+		let info = `${theme.bold("Edit History")} ${theme.fg("dim", `(${undoable} undoable, ${redoable} redoable)`)}\n\n`;
+		for (const e of entries) {
+			const id = String(e.id ?? "?");
+			const filePath = typeof e.file === "string" ? path.relative(cwd, e.file) : "?";
+			const reverted = e.reverted === true;
+			const committed = e.committed === true;
+			const group = typeof e.groupId === "string" ? e.groupId : undefined;
+			// State glyph: ✓ applied (undoable), ↺ reverted (redoable).
+			const stateGlyph = reverted ? theme.fg("muted", "↺") : theme.fg("success", "✓");
+			const badges: string[] = [];
+			if (group) badges.push(theme.fg("dim", "group"));
+			if (committed) badges.push(theme.fg("warning", "committed"));
+			const badgeStr = badges.length > 0 ? ` ${badges.join(" ")}` : "";
+			info += `${stateGlyph} ${theme.fg("dim", id.padStart(4))}  ${filePath}${badgeStr}\n`;
+		}
+		info += `\n${theme.fg("dim", "Undo an entry: /undo — or ask the agent to undo a specific id.")}`;
 		this.ctx.chatContainer.addChild(new Spacer(1));
 		this.ctx.chatContainer.addChild(new Text(info.trimEnd(), 1, 0));
 		this.ctx.ui.requestRender();

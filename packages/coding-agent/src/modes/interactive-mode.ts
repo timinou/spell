@@ -1654,6 +1654,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handleSnapshotsCommand();
 	}
 
+	handleHistoryCommand(file?: string): Promise<void> {
+		return this.#commandController.handleHistoryCommand(file);
+	}
+
 	handleUsageCommand(reports?: UsageReport[] | null): Promise<void> {
 		return this.#commandController.handleUsageCommand(reports);
 	}

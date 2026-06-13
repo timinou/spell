@@ -99,6 +99,20 @@ pub struct CodePathOptions<'env> {
 	pub gitignore:          Option<bool>,
 	#[napi(js_name = "sessionId")]
 	pub session_id:         Option<String>,
+	// Undo-atomicity: a stable id shared by every edit produced by one logical
+	// `edit` tool invocation. Stamped onto each recorded `EditEntry` so undo/redo
+	// revert the whole group (e.g. a cross-file rename) atomically. Absent => each
+	// entry is its own singleton group (legacy behaviour).
+	#[napi(js_name = "editGroupId")]
+	pub edit_group_id:      Option<String>,
+	// PLAN-338 B/C: undo/redo controls. `historyEntryId` targets a specific
+	// edit-history entry by id (id-precise undo from the history listing).
+	// `historyForce` bypasses the commit-awareness guard (deliberate override to
+	// revert an already-committed file).
+	#[napi(js_name = "historyEntryId")]
+	pub history_entry_id:   Option<String>,
+	#[napi(js_name = "historyForce")]
+	pub history_force:      Option<bool>,
 	pub abort_signal:       Option<Unknown<'env>>,
 	#[napi(js_name = "timeoutMs")]
 	pub timeout_ms:         Option<u32>,
@@ -222,6 +236,9 @@ pub struct CodePathTaskOptions {
 	pub manage:             Option<String>,
 	pub gitignore:          Option<bool>,
 	pub session_id:         Option<String>,
+	pub edit_group_id:      Option<String>,
+	pub history_entry_id:   Option<String>,
+	pub history_force:      Option<bool>,
 	pub artifact_threshold: Option<u32>,
 	// PLAN-310 W1: SessionContext threading.
 	pub home:               Option<String>,
@@ -265,6 +282,9 @@ impl From<CodePathOptions<'_>> for CodePathTaskOptions {
 			actions:            value.actions,
 			manage:             value.manage,
 			session_id:         value.session_id,
+			edit_group_id:      value.edit_group_id,
+			history_entry_id:   value.history_entry_id,
+			history_force:      value.history_force,
 			gitignore:          value.gitignore,
 			artifact_threshold: value.artifact_threshold,
 			home:               value.home,
@@ -304,8 +324,9 @@ impl NameLexer for DotLexer {
 static DOT_LEXER_ARC: OnceLock<Arc<dyn NameLexer>> = OnceLock::new();
 
 /// The warm language registry for the read lane (P3.7 cutover). Built once and
-/// shared with `pi_kernel::resolve_target`; the old per-call `code_resolver::new()`
-/// rebuilt it each time — this caches it (same builtins, read-only after init).
+/// shared with `pi_kernel::resolve_target`; the old per-call
+/// `code_resolver::new()` rebuilt it each time — this caches it (same builtins,
+/// read-only after init).
 fn code_resolver_registry() -> Arc<pi_code_engine::language::LanguageRegistry> {
 	static REGISTRY: OnceLock<Arc<pi_code_engine::language::LanguageRegistry>> = OnceLock::new();
 	REGISTRY
@@ -428,15 +449,28 @@ pub fn execute_code_path_inner(
 		let target = opts.target.clone();
 		let manage = opts.manage.as_deref().unwrap_or("");
 		let session_id = opts.session_id.as_deref().unwrap_or("");
+		let session_dir = opts.session_dir.as_deref();
+		let history_entry_id = opts.history_entry_id.as_deref();
+		let history_force = opts.history_force.unwrap_or(false);
 		let outcome = match manage {
 			"" => Err(super::manage::handle_missing()),
 			"languages" => super::manage::handle_languages(),
 			"buffers" => super::manage::handle_buffers(),
 			"save" => super::manage::handle_save(&target, &root),
-			"undo" => super::manage::handle_undo(&target, &root, session_id),
-			"redo" => super::manage::handle_redo(&target, &root, session_id),
-			"diff" => super::manage::handle_diff(&target, &root, session_id),
-			"context" => super::manage::handle_context(&root, session_id),
+			"undo" => super::manage::handle_undo(
+				&target,
+				&root,
+				session_id,
+				session_dir,
+				history_entry_id,
+				history_force,
+			),
+			"redo" => {
+				super::manage::handle_redo(&target, &root, session_id, session_dir, history_entry_id)
+			},
+			"diff" => super::manage::handle_diff(&target, &root, session_id, session_dir),
+			"context" => super::manage::handle_context(&root, session_id, session_dir),
+			"history" => super::manage::handle_history(&target, &root, session_id, session_dir),
 			"watcherStatus" | "watcher_status" => super::manage::handle_watcher_status(),
 			"lockStatus" | "lock_status" => super::manage::handle_lock_status(&target, &root),
 			"status" => super::manage::handle_status(
@@ -520,6 +554,20 @@ pub fn execute_code_path_inner(
 	// ── Edit command branch ──────────────────────────────────────
 	if opts.command == "edit" {
 		use pi_code_engine::buffer::TextEdit;
+
+		// Undo-atomicity: activate this invocation's edit group for the duration
+		// of the whole edit branch. Every `EditEntry` the recorder writes while
+		// this guard is live (one per fan-out write — multi-op batch or multi-file
+		// rename) is stamped with the same group_id, so undo/redo revert them as a
+		// unit. Dropped on every exit path (including early returns below).
+		let _edit_group =
+			crate::code_path::edit_history::EditGroupGuard::new(opts.edit_group_id.clone());
+		// PLAN-338 B: activate the session dir so the recorder writes to the
+		// session-unified log (`<session_dir>/edit-history.jsonl`) rather than the
+		// per-workspace shard. The read side mirrors this via `history_for`.
+		let _session_dir = crate::code_path::edit_history::SessionDirGuard::new(
+			opts.session_dir.as_deref().map(std::path::PathBuf::from),
+		);
 
 		let raw_actions: Vec<serde_json::Value> = match opts.actions {
 			Some(v) => serde_json::from_value(v)
@@ -1029,6 +1077,9 @@ pub fn execute_code_path_inner(
 							manage:             opts.manage.clone(),
 							gitignore:          opts.gitignore,
 							session_id:         opts.session_id.clone(),
+							edit_group_id:      opts.edit_group_id.clone(),
+							history_entry_id:   opts.history_entry_id.clone(),
+							history_force:      opts.history_force,
 							artifact_threshold: opts.artifact_threshold,
 							home:               opts.home.clone(),
 							session_dir:        opts.session_dir.clone(),
@@ -1242,6 +1293,9 @@ mod tests {
 			gitignore:          None,
 			artifact_threshold: None,
 			session_id:         None,
+			edit_group_id:      None,
+			history_entry_id:   None,
+			history_force:      None,
 			home:               None,
 			session_dir:        None,
 		}
@@ -1262,6 +1316,9 @@ mod tests {
 			gitignore:          None,
 			artifact_threshold: None,
 			session_id:         None,
+			edit_group_id:      None,
+			history_entry_id:   None,
+			history_force:      None,
 			home:               None,
 			session_dir:        None,
 		}
@@ -1286,6 +1343,9 @@ mod tests {
 			gitignore: None,
 			artifact_threshold: None,
 			session_id: None,
+			edit_group_id: None,
+			history_entry_id: None,
+			history_force: None,
 			home: None,
 			session_dir: None,
 		}

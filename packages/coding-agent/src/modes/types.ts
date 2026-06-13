@@ -155,6 +155,7 @@ export interface InteractiveModeContext {
 	handleSessionCommand(): Promise<void>;
 	handleJobsCommand(): Promise<void>;
 	handleSnapshotsCommand(): Promise<void>;
+	handleHistoryCommand(file?: string): Promise<void>;
 	handleUsageCommand(reports?: UsageReport[] | null): Promise<void>;
 	handleChangelogCommand(showFull?: boolean): Promise<void>;
 	handleHotkeysCommand(): void;

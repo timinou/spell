@@ -51,7 +51,10 @@ export type BridgeRpcCommand =
 			type: "tile_record_run";
 			tileId: string;
 			run: { intent: string; outcome: string; files: number; paths?: string[]; error?: string };
-	  };
+	  }
+	// Edit history (PLAN-338 B) — read-only listing of the session's unified edit
+	// log; powers the Team Chat Edit History panel. Forwarded to the bridge as-is.
+	| { id?: string; type: "edit_history"; file?: string };
 
 /** Image content reference matching coding-agent's ImageContent */
 export interface ImageContentRef {

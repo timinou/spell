@@ -262,6 +262,18 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		},
 	},
 	{
+		name: "history",
+		description: "Show this session's edit history",
+		inlineHint: "[file]",
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			// Optional arg: a file path to narrow the listing.
+			const arg = command.args.trim();
+			await runtime.ctx.handleHistoryCommand(arg || undefined);
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
 		name: "usage",
 		description: "Show provider usage and limits",
 		handle: async (_command, runtime) => {

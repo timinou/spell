@@ -118,14 +118,43 @@ export const restructureVerb = Type.Union(
 	{ description: "AST surgery: move / transpose / splice / clone / heading promote-demote" },
 );
 
-// ── history ── (dispatched alone; target ignored)
+// ── history ── (dispatched alone; the operation's `target` SCOPES the revert)
+// The op-level `target` is honoured: it narrows undo/redo to that file's edit
+// group (the set of edits from one logical `edit` invocation), reverted/
+// re-applied atomically. A file-root target (`path`) is the norm; omit-scoping
+// (target unused by the kernel) falls back to the most-recent edit.
 export const undoVerb = Type.Object(
-	{ kind: Type.Literal("undo") },
-	{ additionalProperties: false, description: "Undo the last edit transaction (dispatch alone)" },
+	{
+		kind: Type.Literal("undo"),
+		// PLAN-338 B: undo a SPECIFIC past edit by its history id (from
+		// `status { command: "history" }`). Overrides target/most-recent scoping.
+		id: Type.Optional(Type.String({ description: "Edit-history entry id to undo (id-precise undo)" })),
+		// PLAN-338 C: revert even an already-committed file. Without this, undo of
+		// a committed file DECLINES (safe-stop) to avoid silently rewriting work
+		// already saved in git.
+		force: Type.Optional(
+			Type.Boolean({ description: "Revert even if the file is already committed (overrides the safety decline)" }),
+		),
+	},
+	{
+		additionalProperties: false,
+		description:
+			"Undo the last edit transaction (dispatch alone). The operation's `target` file scopes the " +
+			"undo to that file's edit group, reverted atomically; with no meaningful target the most-recent " +
+			"edit is reverted. `id` undoes a specific past edit; undo of a committed file declines unless `force`.",
+	},
 );
 export const redoVerb = Type.Object(
-	{ kind: Type.Literal("redo") },
-	{ additionalProperties: false, description: "Redo the most recently undone transaction (dispatch alone)" },
+	{
+		kind: Type.Literal("redo"),
+		id: Type.Optional(Type.String({ description: "Edit-history entry id to redo (id-precise redo)" })),
+	},
+	{
+		additionalProperties: false,
+		description:
+			"Redo the most recently undone transaction (dispatch alone). The operation's `target` file scopes " +
+			"the redo to that file's edit group, re-applied atomically. `id` redoes a specific entry.",
+	},
 );
 
 // ── union ──

@@ -106,6 +106,9 @@ export type BridgeRpcCommand =
 	  }
 	| { id?: string; type: "tile_update"; tileId: string; patch: Record<string, unknown> }
 	| { id?: string; type: "tile_delete"; tileId: string }
+	// Edit history (PLAN-338 B) — read-only listing of the session's unified edit
+	// log; powers the Edit History panel. Mirror of coding-agent's RpcCommand.
+	| { id?: string; type: "edit_history"; file?: string }
 	| {
 			id?: string;
 			type: "tile_record_run";
@@ -155,6 +158,25 @@ export interface TileCreateResult {
 }
 export interface TileUpdateResult {
 	ok: boolean;
+}
+
+// Edit history (PLAN-338 B) — mirror of coding-agent's EditHistoryEntry/Data.
+export interface EditHistoryEntry {
+	id: string;
+	file: string;
+	workspace: string;
+	groupId: string | null;
+	reverted: boolean;
+	committed: boolean;
+	commit: string | null;
+	agentLabel: string;
+	timestamp: number;
+}
+export interface EditHistoryResult {
+	entries: EditHistoryEntry[];
+	total: number;
+	undoable: number;
+	redoable: number;
 }
 
 export type RpcStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";

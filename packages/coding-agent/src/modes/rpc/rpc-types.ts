@@ -11,6 +11,40 @@ import type { SessionStats } from "../../session/agent-session";
 import type { CompactionResult } from "../../session/compaction";
 
 // ============================================================================
+// Edit history (PLAN-338 B)
+// ============================================================================
+
+/** One edit in the session's unified edit-history log (newest-first in lists). */
+export interface EditHistoryEntry {
+	/** Stable entry id — use for id-precise undo/redo. */
+	id: string;
+	/** Absolute path of the edited file. */
+	file: string;
+	/** Workspace root the file belongs to (monorepo subtree). */
+	workspace: string;
+	/** Group id shared by edits from one logical `edit` invocation (e.g. a rename). */
+	groupId: string | null;
+	/** True once undone (redoable); false while applied (undoable). */
+	reverted: boolean;
+	/** Live git state: the file is committed at HEAD (undo declines unless forced). */
+	committed: boolean;
+	/** HEAD sha the edit was recorded against (provenance), if in a repo. */
+	commit: string | null;
+	/** Agent/actor label that made the edit (multi-actor legibility). */
+	agentLabel: string;
+	/** Unix seconds. */
+	timestamp: number;
+}
+
+/** Payload of an `edit_history` response: the session's edits + roll-up counts. */
+export interface EditHistoryData {
+	entries: EditHistoryEntry[];
+	total: number;
+	undoable: number;
+	redoable: number;
+}
+
+// ============================================================================
 // RPC Commands (stdin)
 // ============================================================================
 
@@ -88,6 +122,11 @@ export type RpcCommand =
 	  }
 	| { id?: string; type: "tile_update"; tileId: string; patch: Record<string, unknown> }
 	| { id?: string; type: "tile_delete"; tileId: string }
+
+	// Edit history (PLAN-338 B) — read this session's unified edit log (newest
+	// first) for the Team Chat Edit History panel. `file` narrows to one path.
+	// Read-only; rides the same spawned-session lane as run_stored.
+	| { id?: string; type: "edit_history"; file?: string }
 	| {
 			id?: string;
 			type: "tile_record_run";
@@ -232,6 +271,13 @@ export type RpcResponse =
 	// Session
 	| { id?: string; type: "response"; command: "get_session_stats"; success: true; data: SessionStats }
 	| { id?: string; type: "response"; command: "export_html"; success: true; data: { path: string } }
+	| {
+			id?: string;
+			type: "response";
+			command: "edit_history";
+			success: true;
+			data: EditHistoryData;
+	  }
 	| { id?: string; type: "response"; command: "switch_session"; success: true; data: { cancelled: boolean } }
 	| { id?: string; type: "response"; command: "branch"; success: true; data: { text: string; cancelled: boolean } }
 	| {

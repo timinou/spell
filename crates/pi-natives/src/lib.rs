@@ -72,9 +72,22 @@ pub(crate) fn buffer_registry() -> &'static BufferRegistry {
 			// text without re-reading disk.
 			crate::semantic_cache::notify_buffer_change(&record.file, &record.after);
 
-			let root = pi_code_engine::workspace_root_for(&record.file);
-			let path = root.join(".spell").join("edit-history.jsonl");
+			let workspace = pi_code_engine::workspace_root_for(&record.file);
+			// PLAN-338 B: prefer the session-unified log
+			// (`<session_dir>/edit-history.jsonl`) when a session dir is active on
+			// this thread, so ONE log spans every workspace the session touches.
+			// Fall back to the legacy per-workspace shard otherwise (headless/test;
+			// also the natural fresh-start for pre-unification sessions).
+			let path = match crate::code_path::edit_history::current_session_dir() {
+				Some(dir) => crate::code_path::edit_history::session_log_path(&dir),
+				None => workspace.join(".spell").join("edit-history.jsonl"),
+			};
 			let history = crate::code_path::edit_history::JsonlHistory::new(path);
+			// PLAN-338 C: capture HEAD at record time (before `record.file` moves).
+			// This is the commit the edit was made AGAINST (provenance), NOT proof the
+			// edit is committed — the undo guard re-checks live git state
+			// (commit_guard::is_committed). Fail-open None when not a repo.
+			let commit_at_record = crate::code_path::commit_guard::head_sha(&record.file);
 			history.record(crate::code_path::edit_history::EditEntry {
 				id:          crate::code_path::edit_history::next_entry_id(),
 				session_id:  record.session_id,
@@ -84,8 +97,13 @@ pub(crate) fn buffer_registry() -> &'static BufferRegistry {
 				after:       record.after,
 				diff:        record.diff,
 				timestamp:   SystemTime::now(),
-				commit:      None,
+				commit:      commit_at_record,
 				reverted:    false,
+				// Stamp the group active on this thread (set by the edit command
+				// handler for one logical `edit` invocation) so a multi-file
+				// operation's entries undo/redo atomically.
+				group_id:    crate::code_path::edit_history::current_edit_group(),
+				workspace:   workspace.to_string_lossy().into_owned(),
 			});
 		});
 		registry.with_edit_recorder(recorder)

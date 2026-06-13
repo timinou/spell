@@ -14,6 +14,7 @@ import { getProjectDir, readJsonl, Snowflake } from "@spell/pi-utils";
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../../extensibility/extensions";
 import { type Theme, theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
+import { executeCodePath } from "@spell/pi-natives";
 import { warmMemoryLane } from "../../tools/memory";
 import {
 	createTile,
@@ -27,6 +28,7 @@ import {
 } from "../../tools/ptc-runtime/tile-store";
 import type { EventBus } from "../../utils/event-bus";
 import type {
+	EditHistoryEntry,
 	RpcCommand,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
@@ -719,6 +721,50 @@ export async function runRpcMode(session: AgentSession, eventBus?: EventBus): Pr
 				const projectRoot = session.sessionManager.getCwd() ?? getProjectDir();
 				const ok = await deleteTile(projectRoot, command.tileId);
 				return success(id, "tile_delete", { ok });
+			}
+
+			// Edit history (PLAN-338 B) — read the session's unified edit log via the
+			// kernel `manage history` subcommand. Read-only; powers the Team Chat
+			// Edit History panel.
+			case "edit_history": {
+				const cwd = session.sessionManager.getCwd() ?? getProjectDir();
+				const sessionId = session.sessionManager.getSessionId?.()?.trim() || undefined;
+				const artifactsDir = session.sessionManager.getArtifactsDir?.() ?? undefined;
+				let chunks: Awaited<ReturnType<typeof executeCodePath>>;
+				try {
+					chunks = await executeCodePath({
+						command: "manage",
+						manage: "history",
+						target: command.file ?? "",
+						root: cwd,
+						sessionId,
+						...(artifactsDir ? { sessionDir: artifactsDir } : {}),
+					});
+				} catch (e) {
+					return error(id, "edit_history", e instanceof Error ? e.message : String(e));
+				}
+				const node = chunks.flatMap(c => c.nodes).find(n => n.kind === "§manage-result");
+				const payload = (node?.metadata as { payload?: Record<string, unknown> } | undefined)?.payload ?? {};
+				const rawEntries = Array.isArray(payload.entries)
+					? (payload.entries as Array<Record<string, unknown>>)
+					: [];
+				const entries: EditHistoryEntry[] = rawEntries.map(e => ({
+					id: String(e.id ?? ""),
+					file: typeof e.file === "string" ? e.file : "",
+					workspace: typeof e.workspace === "string" ? e.workspace : "",
+					groupId: typeof e.groupId === "string" ? e.groupId : null,
+					reverted: e.reverted === true,
+					committed: e.committed === true,
+					commit: typeof e.commit === "string" ? e.commit : null,
+					agentLabel: typeof e.agentLabel === "string" ? e.agentLabel : "",
+					timestamp: typeof e.timestamp === "number" ? e.timestamp : 0,
+				}));
+				return success(id, "edit_history", {
+					entries,
+					total: typeof payload.total === "number" ? payload.total : entries.length,
+					undoable: typeof payload.undoable === "number" ? payload.undoable : 0,
+					redoable: typeof payload.redoable === "number" ? payload.redoable : 0,
+				});
 			}
 
 			// =================================================================

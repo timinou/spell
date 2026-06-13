@@ -8,6 +8,7 @@
 
 pub mod abort;
 pub mod code_resolver;
+pub mod commit_guard;
 pub mod css_resolver;
 /// Re-export shim: `dialect_registry` now lives in `pi-kernel` (P3.3a). Keeps
 /// `dialect_registry::select_dialect` call sites (napi.rs select_lexer,
@@ -37,13 +38,13 @@ pub mod uri;
 #[cfg(test)]
 mod dispatch_tests;
 #[cfg(test)]
+mod kernel_parity_tests;
+#[cfg(test)]
 mod language_matrix_tests;
 #[cfg(test)]
 mod manage_tests;
 #[cfg(test)]
 mod op_matrix_tests;
-#[cfg(test)]
-mod kernel_parity_tests;
 #[cfg(test)]
 mod routing_tests;
 #[cfg(test)]

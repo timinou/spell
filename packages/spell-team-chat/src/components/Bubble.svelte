@@ -9,13 +9,32 @@
 		onBlockingAction?: (eventId: string, choice: string | number) => void;
 	}
 	let { bubble, token, onBlockingAction }: Props = $props();
+
+	// PLAN-338: classify edit tool_end results so undo/redo/declined read clearly.
+	// The kernel renders the result text with recognisable lead lines:
+	//   "undo · <file>", "redo · <file>", or "undo declined: already committed — …".
+	const editClass = $derived.by<"declined" | "undo" | "redo" | null>(() => {
+		if (bubble.kind !== "tool_end" || bubble.toolName !== "edit") return null;
+		const t = (bubble.text ?? "").trimStart();
+		if (/^undo declined/i.test(t) || /declined: already committed/i.test(t)) return "declined";
+		if (/^undo[\s·]/.test(t)) return "undo";
+		if (/^redo[\s·]/.test(t)) return "redo";
+		return null;
+	});
 </script>
 
-<div class="bubble {bubble.kind}" class:err={bubble.isError}>
+<div class="bubble {bubble.kind}" class:err={bubble.isError} class:edit-declined={editClass === "declined"} class:edit-undo={editClass === "undo" || editClass === "redo"}>
 	<div class="meta">
 		<span class="speaker">{labelFor(bubble.kind)}</span>
 		{#if bubble.toolName}
 			<span class="muted mono">{bubble.toolName}</span>
+		{/if}
+		{#if editClass === "declined"}
+			<span class="edit-tag declined" title="Undo declined — file is committed">declined</span>
+		{:else if editClass === "undo"}
+			<span class="edit-tag undo">undo</span>
+		{:else if editClass === "redo"}
+			<span class="edit-tag undo">redo</span>
 		{/if}
 		<span class="muted clock">{formatClock(bubble.ts)}</span>
 	</div>
@@ -120,6 +139,24 @@
 		border-color: var(--border-secondary);
 		font-size: var(--font-size-xs);
 	}
+	/* PLAN-338: undo/redo and declined edit results get an intent accent. */
+	.bubble.edit-undo {
+		border-left: 3px solid var(--border-accent);
+	}
+	.bubble.edit-declined {
+		border-left: 3px solid var(--color-warning);
+		background: color-mix(in srgb, var(--color-warning) 8%, var(--bg-secondary));
+	}
+	.edit-tag {
+		font-size: 9px;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		padding: 1px 6px;
+		border-radius: var(--radius-sm);
+		font-weight: var(--font-weight-semibold);
+	}
+	.edit-tag.undo { background: color-mix(in srgb, var(--border-accent) 18%, transparent); color: var(--border-accent); }
+	.edit-tag.declined { background: color-mix(in srgb, var(--color-warning) 20%, transparent); color: var(--color-warning); }
 	.bubble.blocking {
 		border-left: 3px solid var(--color-warning);
 		background: var(--bg-elevated);

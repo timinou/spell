@@ -4,6 +4,7 @@
 	import { app, toasts } from "./lib/stores.svelte";
 	import type {
 		BridgeRpcCommand,
+		EditHistoryResult,
 		RunStoredResult,
 		TileCreateResult,
 		TileListResult,
@@ -225,6 +226,12 @@
 		unwrapRpc<{ ok: boolean }>(result, "tile_delete");
 	}
 
+	async function onEditHistory(sessionId: string, file?: string): Promise<EditHistoryResult> {
+		if (!ws) throw new Error("not connected");
+		const result = await ws.request({ type: "rpc", sessionId, command: { type: "edit_history", file } });
+		return unwrapRpc<EditHistoryResult>(result, "edit_history");
+	}
+
 	async function onKill(sessionId: string) {
 		if (!token) return;
 		await api.killSession(token, sessionId);
@@ -277,6 +284,7 @@
 		{onTileUpdate}
 		{onTileRecordRun}
 		{onTileDelete}
+		{onEditHistory}
 		{onBlockingAction}
 		onSignOut={signOut}
 	/>

@@ -11,6 +11,23 @@ export interface CodePathOptions {
 	manage?: string;
 	/** Session ID for per-agent edit history attribution. */
 	sessionId?: string;
+	/**
+	 * Undo-atomicity: a stable id shared by every edit produced by one logical
+	 * `edit` tool invocation. Stamped onto each recorded edit-history entry so
+	 * undo/redo revert the whole group (e.g. a cross-file rename) atomically.
+	 * Omit for a single standalone edit.
+	 */
+	editGroupId?: string;
+	/**
+	 * PLAN-338 B: target a specific edit-history entry by id for undo/redo
+	 * (id-precise, from the `status command:"history"` listing).
+	 */
+	historyEntryId?: string;
+	/**
+	 * PLAN-338 C: bypass the commit-awareness guard on undo — revert even a file
+	 * already committed to git (the deliberate override past the safety decline).
+	 */
+	historyForce?: boolean;
 	/** Abort signal for cancelling the operation. */
 	abortSignal?: AbortSignal;
 	/** Timeout in milliseconds for the operation. */
