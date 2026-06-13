@@ -3,22 +3,52 @@ chaining tool calls — instead of many Bash turns you parse by eye.
 
 PTC-Lisp is a small, deterministic Clojure subset. The program runs in an
 isolated process (no fs/net/shell of its own); it reaches Spell's real tools via
-`(tool/<name> {...})`, and you get back ONE small value. Use it to **count,
+`(tool/<name> {…})`, and you get back ONE small value. Use it to **count,
 group, filter, join, and aggregate** — the program does the work; only the
 result enters your context.
 
-## Parameters
+## Investigate several things at once: `probe`
 
+When you want to check a handful of things, name each check and let one program
+answer them all. `(probe "title" expr "title" expr …)` runs each `expr` in
+order and renders it as a titled block:
+
+```clojure
+(probe
+  "DOING items"   (count (get (tool/org {:command "query" :query "todo:DOING"}) "items"))
+  "rust TODOs"     (count (tool/find {:target "src/**/*.rs::§line[text~=\"TODO\"]"}))
+  "dashboard shape" (keys (tool/org {:command "dashboard"})))
+```
+
+→ renders as
+
+```
+<probe title="DOING items">12</probe>
+<probe title="rust TODOs">7</probe>
+<probe title="dashboard shape">["inProgress" "blocked" "done"]</probe>
+```
+
+The title is your **intention** for each check; the value is the evidence. A
+check that fails settles in place as `{"err" reason}` and the rest still run —
+so one broken probe never costs you the others (the sequential analogue of
+`psettled`). `def`s thread across checks, so you can bind once and reuse:
+`(probe "hits" (def hits (tool/find {…})) "by file" (→ (group-by #(get % "file") hits) (update-vals count)))`.
+Reach for `probe` whenever you'd otherwise run a series of separate lookups.
+
+## Parameters
 - `program` (required) — the PTC-Lisp source.
 - `context` — a map bound under `data/<key>` inside the program.
 - `signature` — an optional return contract, e.g. `{total :int}` or
   `[{id :int}]`. The result is validated against it.
 - `timeout_ms` — wall-clock cap, 1..30000 (default 1000).
+- `refresh_runtime` — `true` tears down the live BEAM runtime and respawns a
+  fresh one BEFORE running this program. Default false (the long-lived runtime
+  persists). See *Refreshing the runtime* below.
 ### Settled fan-out (errors as values)
 - `(psettled f coll)` — like `pmap`, but a per-element failure is captured
   rather than aborting the whole batch. Each result is `{"ok" value}` or
   `{"err" reason}`. Use when one bad element shouldn't lose the rest:
-  `(->> (psettled (fn [f] (tool/find {:target f})) data/files) (filter ok?) (map #(unwrap-or % nil)))`
+  `(→> (psettled (fn [f] (tool/find {:target f})) data/files) (filter ok?) (map #(unwrap-or % nil)))`
 - `ok?` / `err?` branch on a settled result; `(unwrap-or settled default)`
   extracts an ok value or yields the default. Errors are DATA, not exceptions.
 - NB: heap/timeout/capacity kills still abort the whole run — `psettled` only
@@ -41,10 +71,23 @@ result enters your context.
 - `(def x v)` persists `x` for your NEXT execute on the same session — bind an
   expensive tool result once, then iterate on aggregation cheaply:
   `execute 1: (def hits (tool/find {:target "src/**/*.rs::§line[text~=\"unwrap\"]"})) (count hits)`
-  `execute 2: (->> hits (group-by #(get % "file")) (update-vals count))` — zero re-fetch.
+  `execute 2: (→> hits (group-by #(get % "file")) (update-vals count))` — zero re-fetch.
 - A large bound value stays offloaded (handle) across executes — no re-OOM.
-- A program that `(fail ...)`s or errors does NOT commit its `def`s. Bindings
+- A program that `(fail …)`s or errors does NOT commit its `def`s. Bindings
   are a session cache, lost on restart (re-bind by re-running).
+
+### Refreshing the runtime (after editing `beam/` source)
+- The BEAM runtime is long-lived per session: it spawns once and keeps the code
+  it booted with. If you edit runtime source under `beam/` (the PTC-Lisp
+  sandbox, builtins, the JSON-RPC peer), a plain `execute` still runs the OLD
+  code — the change won't take effect until the runtime respawns.
+- Set `refresh_runtime: true` to respawn the runtime in-place (no whole-session
+  restart) and run your program on the FRESH one. Refresh + verify in a single
+  call: pair it with a tiny probe that exercises the fix, e.g.
+  `execute { program: "—…→", refresh_runtime: true }` after a transport fix.
+- Cost: a refresh DROPS session bindings (`def`s) and parked handles — they are
+  a re-derivable cache, so re-bind by re-running. Default off; only refresh when
+  you actually changed runtime source.
 
 ### Heap
 - `max_heap_mb` — sandbox heap ceiling in MB for this program (default ~50).
@@ -66,16 +109,15 @@ Structured tool results come back as data (maps/lists), so you can pipe them.
 
 **A `tool/<x>` call returns the SAME shape the `<x>` tool returns**, projected
 into PTC data. In particular `tool/find` returns a **LIST of node maps**, each
-`{"path" "kind" "text" ...}` — index it as a list, not a single map:
-`(map #(get % "text") (tool/find {:target "..."}))`, and
-`(get (first (tool/find {...})) "text")` for the first node. When unsure of a
+`{"path" "kind" "text" …}` — index it as a list, not a single map:
+`(map #(get % "text") (tool/find {:target "…"}))`, and
+`(get (first (tool/find {…})) "text")` for the first node. When unsure of a
 result's shape, bind it with `(def r (tool/… …))` and inspect `(keys r)` /
 `(handle-meta r)` on the next execute.
 
 ## Discover the language from inside it
 
 Don't guess a builtin's name or spelling — ask the runtime:
-
 - `(apropos "index")` — list every builtin whose name/doc matches, each with a
   one-line description. Use it when you reach for a Clojure name and aren't sure
   PTC spells it the same (e.g. `index-of`, `update-vals`, `subs`).
@@ -84,12 +126,12 @@ Don't guess a builtin's name or spelling — ask the runtime:
 
 These run like any expression and return data, so a quick `(apropos "…")`
 execute is the fastest way to resolve "does PTC have X?" — cheaper than a failed
-program. Substring tests: `(index-of s sub)` (>= 0 when present) or the
+program. Substring tests: `(index-of s sub)` (≥ 0 when present) or the
 Clojure-Java method `(.contains s sub)`.
 
 ## Worked examples
 
-Count + group (replaces `rg -c ... | awk`):
+Count + group (replaces `rg -c … | awk`):
 
 ```clojure
 (let [items (get (tool/org {:command "query" :query "todo:DOING"}) "items")]
@@ -120,10 +162,11 @@ Frequencies over a projection:
 
 ## Available builtins (Clojure subset)
 
-`->` `->>` `let` `fn` `if` `cond` `for` `loop`/`recur` `map` `filter` `reduce`
+`→` `→>` `let` `fn` `if` `cond` `for` `loop`/`recur` `map` `filter` `reduce`
 `mapcat` `group-by` `frequencies` `update-vals` `sort-by` `take` `drop`
 `distinct` `dedupe` `count` `get` `get-in` `assoc` `merge` `select-keys`
 `str` `join` `split` `re-find` `re-seq` `try`/`catch`/`finally` `fail`
+`probe` `psettled` `pmap`
 and the usual arithmetic/comparison. (`(apropos "…")` lists the rest.)
 
 ### Error handling: `try` / `catch` / `finally`
@@ -136,7 +179,6 @@ Clojure-shaped, for when a single failing step shouldn't lose the whole program
      (catch e {:error e})        ; e = the error message (or the value of (fail v))
      (finally (cleanup)))        ; optional; runs on every exit path
 ```
-
 - `catch` traps a raised/returned program error AND `(fail v)` (binds the raw
   `v`); `finally` is optional and its value is discarded.
 - `(return v)` is NOT trapped — it bubbles through (finally still runs).
@@ -146,8 +188,7 @@ Clojure-shaped, for when a single failing step shouldn't lose the whole program
   a guaranteed `finally` cleanup.
 
 ## Gotchas (these will bite)
-
-- `update-vals` is `(update-vals m f)` — thread with `->` (first), NOT `->>`.
+- `update-vals` is `(update-vals m f)` — thread with `→` (first), NOT `→>`.
 - Tool args and the return value must be JSON-serializable (no closures).
 - Signatures return **string-keyed** maps: `(get r "total")`, not `(:total r)`.
   (Keyword access `(:total r)` also resolves — keyword→string is automatic — but
@@ -159,8 +200,7 @@ Clojure-shaped, for when a single failing step shouldn't lose the whole program
 
 `get`/`get-in` return `nil` for a missing key — and `(count nil)` → 0,
 `(map f nil)` → [], so a typo'd key can silently yield a plausible-but-wrong
-result. When a key MUST exist, use the strict variants:
-
+result. When a key **MUST** exist, use the strict variants:
 - `(get! m k)` — like `get`, but a missing key FAILS LOUD naming the key.
 - `(get-in! m path)` — like `get-in`, but any missing path segment fails loud.
 

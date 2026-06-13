@@ -55,8 +55,17 @@ export const executeSchema = Type.Object({
 	),
 	session_store_mb: Type.Optional(
 		Type.Integer({
+			description: "Session-scoped data store ceiling in MB (default ~64MB). Set via tools.executeSessionStoreMb.",
+		}),
+	),
+	refresh_runtime: Type.Optional(
+		Type.Boolean({
 			description:
-				"Session-scoped data store ceiling in MB (default ~64MB). Set via tools.executeSessionStoreMb.",
+				"Tear down the live BEAM runtime and respawn a fresh one BEFORE running this program. " +
+				"Use after editing `beam/` runtime source so the change takes effect without restarting the " +
+				"whole session (the runtime is long-lived and otherwise keeps the old code). Drops session " +
+				"bindings (`def`s) and parked handles — they are a re-derivable cache. Default false: keep the " +
+				'existing runtime. Combine with a tiny probe program (e.g. "—…→") to refresh and verify in one call.',
 		}),
 	),
 	// ----- W4 stored-program fields (a tile / consumer invokes runStored via the
@@ -213,6 +222,17 @@ export class ExecuteTool implements AgentTool<typeof executeSchema, ExecuteToolD
 		_onUpdate?: unknown,
 		context?: AgentToolContext,
 	): Promise<AgentToolResult> {
+		// Agent-triggered runtime refresh (Tier 1, soft respawn). When set, tear the
+		// live BEAM down so the NEXT ensureClient() spawns a fresh `mix run` that
+		// recompiles changed `beam/` source — picking up a runtime edit without a
+		// whole-session restart (the motivating pain from BUG-464). Default off: the
+		// long-lived runtime persists. dispose() is idempotent (no live client → no-op),
+		// so this is safe on a cold tool too. Refresh THEN run, so the same call both
+		// reloads and verifies on the fresh runtime.
+		if (params.refresh_runtime === true) {
+			await this.dispose();
+		}
+
 		// W4: when the caller supplies stored-program fields (`mode`/`intent`/
 		// `auto_write`), route through the intent-gated stored runner so the tool
 		// surface — and therefore any host that invokes a tool (a Team Chat tile, a
@@ -359,6 +379,9 @@ export class ExecuteTool implements AgentTool<typeof executeSchema, ExecuteToolD
 				: transaction?.outcome === "dry-run"
 					? `\n\nDry run: would change ${transaction.files} file(s) — repo NOT modified.`
 					: "";
+			// Surface structured probe rows so the TUI renderer reads clean data
+			// (titles + values) rather than re-parsing the formatted <probe> text.
+			const probeRows = extractProbeRows(value);
 			return {
 				content: [{ type: "text", text: rendered.text + dryRunNote }],
 				details: {
@@ -367,6 +390,7 @@ export class ExecuteTool implements AgentTool<typeof executeSchema, ExecuteToolD
 					durationMs: Date.now() - started,
 					...(rendered.artifactUri ? { artifactUri: rendered.artifactUri } : {}),
 					...(transaction ? { transaction } : {}),
+					...(probeRows ? { probe: probeRows } : {}),
 				},
 				// The program's return value IS the payload — the whole point of execute.
 				data: value,
@@ -427,13 +451,19 @@ export class ExecuteTool implements AgentTool<typeof executeSchema, ExecuteToolD
 	 * degrades to the in-line truncation marker.
 	 */
 	async #renderResult(value: unknown): Promise<{ text: string; artifactUri?: string }> {
-		const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+		// A `(probe "title" expr ...)` result arrives as the sentinel map
+		// { "__probe__": [[title, value], ...] } (ordered pairs). Render it as a
+		// sequence of <probe title="...">value</probe> blocks so an investigation
+		// reads as titled sections rather than a raw object. Any other value falls
+		// through to the generic string/JSON path below.
+		const probe = renderProbe(value);
+		const text = probe ?? (typeof value === "string" ? value : JSON.stringify(value, null, 2));
 		if (text.length <= MAX_RESULT_BYTES) return { text };
 
 		const head = text.slice(0, MAX_RESULT_BYTES);
 		if (this.saveArtifact) {
 			try {
-				const ext = typeof value === "string" ? "txt" : "json";
+				const ext = typeof value === "string" || probe !== null ? "txt" : "json";
 				const ref = await this.saveArtifact(text, "execute", ext);
 				if (ref) {
 					return {
@@ -477,10 +507,7 @@ export class ExecuteTool implements AgentTool<typeof executeSchema, ExecuteToolD
 	 * STORE time so it can never be persisted and then fail effectfully on a
 	 * later re-run.
 	 */
-	async validateProgram(
-		program: string,
-		context?: AgentToolContext,
-	): Promise<{ ok: boolean; errors?: string[] }> {
+	async validateProgram(program: string, context?: AgentToolContext): Promise<{ ok: boolean; errors?: string[] }> {
 		const client = await this.ensureClient(context);
 		return client.validate(program);
 	}
@@ -740,6 +767,57 @@ function truncationMarker(head: string, totalBytes: number): string {
 	);
 }
 
+/** One probe check: the agent's stated intention + the evidence value. */
+export interface ProbeRow {
+	title: string;
+	value: unknown;
+}
+
+/**
+ * Detect a `(probe ...)` result and return its ordered rows, else `null`.
+ *
+ * A probe result is the sentinel map `{ "__probe__": [[title, value], ...] }` —
+ * an ordered list of pairs (a vector, not a key-sorted map, so intention order
+ * survives the wire). Shared by the text renderer (below) and the TUI renderer
+ * so both read the same structured rows rather than re-parsing formatted text.
+ */
+export function extractProbeRows(value: unknown): ProbeRow[] | null {
+	if (typeof value !== "object" || value === null) return null;
+	const rows = (value as Record<string, unknown>).__probe__;
+	if (!Array.isArray(rows)) return null;
+	return rows.map(row => ({
+		// Each row is a [title, value] pair; tolerate a malformed row defensively.
+		title: Array.isArray(row) ? String(row[0]) : "",
+		value: Array.isArray(row) ? row[1] : row,
+	}));
+}
+
+/**
+ * Render a `(probe "title" expr ...)` result into titled blocks.
+ *
+ * Each row renders as a `<probe title="...">value</probe>` block: the title is
+ * the agent's stated intention; the value is the evidence (a scalar inline, a
+ * structured value pretty-printed as JSON, or — when a check is itself a nested
+ * `probe` — its own titled blocks, indented). Returns `null` for any non-probe
+ * value so the caller falls back to the generic render.
+ */
+function renderProbe(value: unknown): string | null {
+	const rows = extractProbeRows(value);
+	if (rows === null) return null;
+	return rows.map(({ title, value: inner }) => renderProbeBlock(title, inner)).join("\n\n");
+}
+
+/** Render one probe block, recursing when the value is itself a probe. */
+function renderProbeBlock(title: string, inner: unknown): string {
+	const nested = renderProbe(inner);
+	const body =
+		nested !== null
+			? nested.replace(/^/gm, "  ") // indent a nested probe under its parent
+			: typeof inner === "string"
+				? inner
+				: JSON.stringify(inner, null, 2);
+	return `<probe title=${JSON.stringify(title)}>\n${body}\n</probe>`;
+}
 /** Render an execute failure as an actionable message. */
 function renderError(e: unknown): string {
 	if (e instanceof PtcRuntimeError) {

@@ -179,6 +179,138 @@ d("ExecuteTool (real BEAM, injected provider)", () => {
 			await tool.dispose();
 		}
 	}, 60_000);
+
+	it("refresh_runtime respawns a fresh runtime, dropping session bindings", async () => {
+		const tool = new ExecuteTool(undefined, { policy: PERMISSIVE_POLICY, provider: provider([]) });
+		try {
+			// Bind a session var on the live runtime (PATCH-4 D-6: `def` persists
+			// across executes on the SAME runtime).
+			await tool.execute("c1", { program: "(def keep 99)" });
+			const before = await tool.execute("c2", { program: "keep" });
+			expect(before.isError).toBeFalsy();
+			expect(before.content[0]).toMatchObject({ text: "99" });
+
+			// Refresh: tear down + respawn, then run the probe on the fresh runtime.
+			// The binding is gone → resolving `keep` is now an unbound-var error,
+			// proving a brand-new BEAM (not the old one) served this call.
+			const after = await tool.execute("c3", { program: "keep", refresh_runtime: true });
+			expect(after.isError).toBe(true);
+
+			// And the fresh runtime is fully usable for ordinary work.
+			const probe = await tool.execute("c4", { program: "(+ 1 1)" });
+			expect(probe.isError).toBeFalsy();
+			expect(probe.content[0]).toMatchObject({ text: "2" });
+		} finally {
+			await tool.dispose();
+		}
+	}, 60_000);
+
+	it("refresh_runtime on a cold tool is a no-op that still runs the program", async () => {
+		// dispose() is idempotent: refreshing before any runtime exists must not
+		// throw — it simply spawns the first runtime and runs.
+		const tool = new ExecuteTool(undefined, { policy: PERMISSIVE_POLICY, provider: provider([]) });
+		try {
+			const r = await tool.execute("c1", { program: "(* 6 7)", refresh_runtime: true });
+			expect(r.isError).toBeFalsy();
+			expect(r.content[0]).toMatchObject({ text: "42" });
+		} finally {
+			await tool.dispose();
+		}
+	}, 60_000);
+
+	it("probe renders ordered titled blocks and settles per-check failures", async () => {
+		const tool = new ExecuteTool(undefined, { policy: PERMISSIVE_POLICY, provider: provider([]) });
+		try {
+			const r = await tool.execute("c1", {
+				program: '(probe "one" (+ 1 2) "two" (fail "boom") "three" (* 10 10))',
+			});
+			expect(r.isError).toBeFalsy();
+			const text = (r.content[0] as { text: string }).text;
+			// Titled blocks, in order, with the failing check settled (not aborting).
+			expect(text).toBe(
+				'<probe title="one">\n3\n</probe>\n\n' +
+					'<probe title="two">\n{\n  "err": "boom"\n}\n</probe>\n\n' +
+					'<probe title="three">\n100\n</probe>',
+			);
+		} finally {
+			await tool.dispose();
+		}
+	}, 60_000);
+
+	it("a nested probe renders as indented titled blocks (not raw sentinel)", async () => {
+		const tool = new ExecuteTool(undefined, { policy: PERMISSIVE_POLICY, provider: provider([]) });
+		try {
+			const r = await tool.execute("c1", {
+				program: '(probe "outer" (probe "inner-a" 1 "inner-b" 2))',
+			});
+			expect(r.isError).toBeFalsy();
+			const text = (r.content[0] as { text: string }).text;
+			// The nested probe is rendered as its own titled blocks, indented under the
+			// parent — NOT dumped as a raw { "__probe__": ... } object.
+			expect(text).not.toContain("__probe__");
+			expect(text).toContain('<probe title="outer">');
+			expect(text).toContain('  <probe title="inner-a">');
+			expect(text).toContain('  <probe title="inner-b">');
+		} finally {
+			await tool.dispose();
+		}
+	}, 60_000);
+
+	it("probe surfaces structured rows in details for the TUI renderer", async () => {
+		const tool = new ExecuteTool(undefined, { policy: PERMISSIVE_POLICY, provider: provider([]) });
+		try {
+			const r = await tool.execute("c1", { program: '(probe "a" 1 "b" {:k 2})' });
+			expect(r.isError).toBeFalsy();
+			const probe = (r.details as { probe?: Array<{ title: string; value: unknown }> }).probe;
+			expect(probe).toEqual([
+				{ title: "a", value: 1 },
+				{ title: "b", value: { k: 2 } },
+			]);
+		} finally {
+			await tool.dispose();
+		}
+	}, 60_000);
+
+	it("a denied tool surfaces an actionable message naming the available set", async () => {
+		const tool = new ExecuteTool(undefined, { policy: PERMISSIVE_POLICY, provider: provider([]) });
+		try {
+			const r = await tool.execute("c1", {
+				program: '(try (tool/bash {:command "x"}) (catch e e))',
+			});
+			expect(r.isError).toBeFalsy();
+			const text = (r.content[0] as { text: string }).text;
+			expect(text).toContain("not callable from a program");
+			expect(text).toContain("call them directly");
+		} finally {
+			await tool.dispose();
+		}
+	}, 60_000);
+
+	it("probe threads ctx so a def in one check is visible to the next", async () => {
+		const tool = new ExecuteTool(undefined, { policy: PERMISSIVE_POLICY, provider: provider([]) });
+		try {
+			const r = await tool.execute("c1", {
+				program: '(probe "bind" (do (def n 7) n) "use" (+ n 1))',
+			});
+			expect(r.isError).toBeFalsy();
+			const text = (r.content[0] as { text: string }).text;
+			expect(text).toContain('<probe title="bind">\n7\n</probe>');
+			expect(text).toContain('<probe title="use">\n8\n</probe>');
+		} finally {
+			await tool.dispose();
+		}
+	}, 60_000);
+
+	it("probe is discoverable via apropos/doc", async () => {
+		const tool = new ExecuteTool(undefined, { policy: PERMISSIVE_POLICY, provider: provider([]) });
+		try {
+			const r = await tool.execute("c1", { program: '(apropos "probe")' });
+			expect(r.isError).toBeFalsy();
+			expect((r.content[0] as { text: string }).text).toContain("probe");
+		} finally {
+			await tool.dispose();
+		}
+	}, 60_000);
 });
 
 // Pure resolver — no BEAM needed (FEAT-791).
