@@ -507,7 +507,15 @@ pub fn execute_code_path_inner(
 		.map(PathBuf::from)
 		.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-	let pi_token = CancellationToken::new();
+	// FUP-132: drive the kernel token from the host abort LIVE. The host
+	// `cancel_token` owns the AbortSignal flag + timeout deadline; a probe cloning
+	// it lets every kernel mid-walk guard (`is_cancelled()`) observe a host abort
+	// the instant it fires — not just at the post-match boundary. One wiring point
+	// covers every branch (symbol/outline walk, edge dispatch, semantic dispatch).
+	let pi_token = {
+		let host = cancel_token.clone();
+		CancellationToken::with_host_probe(move || host.aborted())
+	};
 
 	// ── Edit command branch ──────────────────────────────────────
 	if opts.command == "edit" {
@@ -884,14 +892,11 @@ pub fn execute_code_path_inner(
 				// is already emitted at the chunk level below. Discard the kernel's copy
 				// to avoid double-counting (e.g. the glob-prefix hint).
 				//
-				// Host-abort bridge: the kernel's mid-walk guard checks `pi_token` (host-
-				// agnostic). Propagate an already-fired host abort (AbortSignal/timeout)
-				// into it so an aborted request skips the walk entirely. Full mid-walk
-				// responsiveness for a long in-flight symbol walk is FUP-tracked; the
-				// post-match guard below returns Err on abort either way.
-				if cancel_token.aborted() {
-					pi_token.cancel();
-				}
+				// FUP-132: `pi_token` is host-probe-driven (built at the top of this fn),
+				// so the kernel's mid-walk guard observes a host abort (AbortSignal/
+				// timeout) LIVE — both an already-fired abort (walk skipped on the first
+				// guard) and one firing DURING a long walk (terminates early). No
+				// pre-delegate bridge needed.
 				let out = pi_kernel::resolve_target(
 					&code_resolver_registry(),
 					&opts.target,

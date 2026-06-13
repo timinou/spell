@@ -20,14 +20,42 @@ use crate::{
 
 /// Hand-rolled cancellation token so resolvers can short-circuit
 /// without adding a new crate dependency.
-#[derive(Debug, Clone)]
+///
+/// Two cancellation sources, both surfaced through `is_cancelled()`:
+/// - the `flag`: flipped by `cancel()` (in-tree, e.g. a resolver giving up).
+/// - an optional `host_probe`: a host-supplied closure polled on each check, so
+///   an EXTERNAL abort (napi `AbortSignal` / timeout deadline) reflects LIVE into
+///   the kernel's mid-walk guards (FUP-132). The probe result is latched into
+///   `flag` the first time it returns true, so it is polled at most until the
+///   first abort and every clone then short-circuits on the shared flag.
+#[derive(Clone)]
 pub struct CancellationToken {
-	flag: Arc<AtomicBool>,
+	flag:       Arc<AtomicBool>,
+	host_probe: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+}
+
+impl std::fmt::Debug for CancellationToken {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("CancellationToken")
+			.field("cancelled", &self.flag.load(Ordering::Relaxed))
+			.field("host_probe", &self.host_probe.is_some())
+			.finish()
+	}
 }
 
 impl CancellationToken {
 	pub fn new() -> Self {
-		CancellationToken { flag: Arc::new(AtomicBool::new(false)) }
+		CancellationToken { flag: Arc::new(AtomicBool::new(false)), host_probe: None }
+	}
+
+	/// Create a token whose cancellation is driven by a host-supplied probe
+	/// (FUP-132). The probe is polled on every `is_cancelled()` until it first
+	/// returns true, at which point the result latches into the shared flag.
+	pub fn with_host_probe<F>(probe: F) -> Self
+	where
+		F: Fn() -> bool + Send + Sync + 'static,
+	{
+		CancellationToken { flag: Arc::new(AtomicBool::new(false)), host_probe: Some(Arc::new(probe)) }
 	}
 
 	pub fn cancel(&self) {
@@ -35,7 +63,18 @@ impl CancellationToken {
 	}
 
 	pub fn is_cancelled(&self) -> bool {
-		self.flag.load(Ordering::Relaxed)
+		if self.flag.load(Ordering::Relaxed) {
+			return true;
+		}
+		// Consult the host probe; latch a positive into the shared flag so the
+		// poll happens at most once per abort and all clones short-circuit after.
+		if let Some(probe) = &self.host_probe
+			&& probe()
+		{
+			self.flag.store(true, Ordering::Relaxed);
+			return true;
+		}
+		false
 	}
 }
 
@@ -146,5 +185,60 @@ mod tests {
 		let t2 = t.clone();
 		t2.cancel();
 		assert!(t.is_cancelled());
+	}
+
+	// FUP-132: a host-abort probe makes is_cancelled() reflect an EXTERNAL abort
+	// (AbortSignal/deadline) live, so the kernel's mid-walk guard fires the instant
+	// the host aborts — not only at the post-match boundary.
+	#[test]
+	fn host_probe_drives_cancellation_live() {
+		use std::sync::Arc;
+		use std::sync::atomic::{AtomicBool, Ordering};
+
+		let host_aborted = Arc::new(AtomicBool::new(false));
+		let probe_flag = host_aborted.clone();
+		let t = CancellationToken::with_host_probe(move || probe_flag.load(Ordering::Relaxed));
+
+		// Not aborted yet → walk continues.
+		assert!(!t.is_cancelled());
+
+		// Host aborts MID-WALK → the very next guard check observes it.
+		host_aborted.store(true, Ordering::Relaxed);
+		assert!(t.is_cancelled());
+	}
+
+	// FUP-132: the probe result latches — once cancelled, stays cancelled even if the
+	// host flag flaps back (cheap + monotonic, matches cooperative-cancel semantics).
+	#[test]
+	fn host_probe_latches() {
+		use std::sync::Arc;
+		use std::sync::atomic::{AtomicBool, Ordering};
+
+		let host_aborted = Arc::new(AtomicBool::new(true));
+		let probe_flag = host_aborted.clone();
+		let t = CancellationToken::with_host_probe(move || probe_flag.load(Ordering::Relaxed));
+
+		assert!(t.is_cancelled());
+		host_aborted.store(false, Ordering::Relaxed);
+		assert!(t.is_cancelled(), "cancellation must latch");
+	}
+
+	// FUP-132: a clone shares the latched flag; a probe firing on one is visible on
+	// the other (the kernel clones the token down through resolvers).
+	#[test]
+	fn host_probe_clone_shares_latched_state() {
+		use std::sync::Arc;
+		use std::sync::atomic::{AtomicBool, Ordering};
+
+		let host_aborted = Arc::new(AtomicBool::new(false));
+		let probe_flag = host_aborted.clone();
+		let t = CancellationToken::with_host_probe(move || probe_flag.load(Ordering::Relaxed));
+		let t2 = t.clone();
+
+		host_aborted.store(true, Ordering::Relaxed);
+		// Observing on t latches the shared flag…
+		assert!(t.is_cancelled());
+		// …so the clone sees it too, even without re-probing.
+		assert!(t2.is_cancelled());
 	}
 }

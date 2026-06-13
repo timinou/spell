@@ -158,6 +158,77 @@ fn fixture() -> (tempfile::TempDir, PathBuf) {
 	(dir, root)
 }
 
+/// FUP-132: a host abort firing DURING a multi-file symbol walk terminates it
+/// early via the probe-driven token — the kernel's mid-walk guard
+/// (`cancel.is_cancelled()`, parse.rs) observes the host abort LIVE, not only at
+/// the post-match boundary. We drive `pi_kernel::resolve_target` directly (the
+/// same entry the NAPI read branch delegates to) with a probe that fires after
+/// the first file is visited, and assert the result is a strict prefix of the
+/// full walk.
+#[test]
+fn host_abort_terminates_symbol_walk_early() {
+	use std::sync::atomic::{AtomicUsize, Ordering};
+
+	let dir = tempfile::tempdir().unwrap();
+	let root = dir.path().to_path_buf();
+	// Many files so a full walk yields many nodes; an early abort yields far fewer.
+	for i in 0..40 {
+		std::fs::write(
+			root.join(format!("f{i}.rs")),
+			format!("pub fn a{i}() -> u32 {{ {i} }}\npub fn b{i}() -> u32 {{ {i} }}\n"),
+		)
+		.unwrap();
+	}
+	let registry = Arc::new(
+		pi_code_engine::language::LanguageRegistry::with_builtins().expect("registry"),
+	);
+	let target = "*.rs::§function";
+
+	// Baseline: full walk, no abort — establishes the complete node count.
+	let full = pi_kernel::resolve_target(
+		&registry,
+		target,
+		&root,
+		&pure_extractors(),
+		None,
+		&CancellationToken::new(),
+	)
+	.expect("full walk");
+	let full_count = full.nodes.len();
+	assert!(full_count >= 40, "fixture should yield many nodes, got {full_count}");
+
+	// Aborting run: the probe reports "not aborted" for the first few checks, then
+	// flips true — simulating a host AbortSignal/timeout firing mid-walk.
+	let checks = Arc::new(AtomicUsize::new(0));
+	let probe_checks = checks.clone();
+	let token = CancellationToken::with_host_probe(move || {
+		// Fire after the first guard observation so at least one file is walked but
+		// the remainder is skipped.
+		probe_checks.fetch_add(1, Ordering::Relaxed) >= 1
+	});
+	let aborted = pi_kernel::resolve_target(
+		&registry,
+		target,
+		&root,
+		&pure_extractors(),
+		None,
+		&token,
+	);
+
+	// The walk short-circuits: either an early Err (guard at fs-walk level) or a
+	// strictly-truncated node set. Both prove early termination; assert the
+	// node set, when produced, is a strict prefix — NOT the full walk.
+	if let Ok(out) = aborted {
+		assert!(
+			out.nodes.len() < full_count,
+			"host abort must truncate the walk: got {} of {full_count} nodes",
+			out.nodes.len(),
+		);
+	}
+	// And the token latched cancelled after the probe fired.
+	assert!(token.is_cancelled(), "token must latch cancelled after the probe fires");
+}
+
 #[test]
 fn parity_plain_file_paths() {
 	let (_d, root) = fixture();
