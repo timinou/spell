@@ -12,13 +12,20 @@ import { logger } from "@spell/pi-utils";
 import { type EffectTag, registerRuntimeToolEffects } from "../ptc-runtime/effects";
 import { type RawToolPolicy, resolvePolicy } from "./policy";
 import { composeToolSource, type RuntimeToolDispatcher } from "./runtime";
-import { classEffect, type LoadedRuntimeTool } from "./types";
+import { classEffect, type LoadedRuntimeTool, type ToolDescriptor } from "./types";
 
 export interface RuntimeToolSource {
 	/** Absolute path to the `.ptc` interface file. */
 	path: string;
 	/** Parsed KDL policy block for this tool (verb → { gate }), if any. */
 	policy?: RawToolPolicy;
+	/**
+	 * A precomputed descriptor. When present, the loader SKIPS the BEAM
+	 * `describe` call — built-ins ship a static descriptor so loading them costs
+	 * no runtime spawn (the dispatcher is only spawned lazily on the first verb
+	 * call). A drift test asserts the embedded descriptor matches the .ptc.
+	 */
+	precomputedDescriptor?: ToolDescriptor;
 }
 
 export interface RuntimeToolLoadResult {
@@ -40,7 +47,9 @@ export async function loadRuntimeTools(
 			const interfaceSource = readSource?.(src.path) ?? (await fs.readFile(src.path, "utf8"));
 			const source = composeToolSource(interfaceSource);
 
-			const descriptor = await dispatcher.describe(source);
+			// Built-ins ship a precomputed descriptor → no BEAM describe at load (the
+			// dispatcher spawns lazily on first verb call). User .ptc files describe.
+			const descriptor = src.precomputedDescriptor ?? (await dispatcher.describe(source));
 			if (!descriptor?.name || typeof descriptor.verbs !== "object") {
 				errors.push({ path: src.path, error: "interface did not produce a valid descriptor (missing name/verbs)" });
 				continue;

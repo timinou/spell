@@ -15,18 +15,26 @@ import * as path from "node:path";
 import type { AgentTool } from "@spell/pi-agent-core";
 import { getProjectAgentDir, getToolsDir } from "@spell/pi-utils";
 import type { ToolSession } from "../index";
+import { GIT_DESCRIPTOR, RUN_DESCRIPTOR } from "./builtin/descriptors";
 import gitPtc from "./builtin/git.ptc" with { type: "text" };
 import runPtc from "./builtin/run.ptc" with { type: "text" };
 import { loadRuntimeTools, type RuntimeToolSource } from "./loader";
 import type { RawToolPolicy } from "./policy";
 import { RuntimeToolDispatcher } from "./runtime";
 import { makeRuntimeTool } from "./tool";
+import type { ToolDescriptor } from "./types";
 
-/** A built-in interface plus its default per-verb policy. */
+/** A built-in interface plus its default per-verb policy + static descriptor. */
 interface BuiltinRuntimeTool {
 	name: string;
 	source: string;
 	policy: RawToolPolicy;
+	/**
+	 * Precomputed descriptor so loading a built-in costs NO BEAM spawn at session
+	 * startup (the dispatcher spawns lazily on the first verb call). Must match
+	 * what `(rt-describe)` returns for `source`; a drift test enforces this.
+	 */
+	descriptor: ToolDescriptor;
 }
 
 /**
@@ -38,6 +46,7 @@ const BUILTINS: BuiltinRuntimeTool[] = [
 	{
 		name: "git",
 		source: gitPtc,
+		descriptor: GIT_DESCRIPTOR,
 		policy: {
 			reset: { gate: "confirm" },
 			checkout: { gate: "confirm" },
@@ -47,6 +56,7 @@ const BUILTINS: BuiltinRuntimeTool[] = [
 	{
 		name: "run",
 		source: runPtc,
+		descriptor: RUN_DESCRIPTOR,
 		// `run` has no destructive verbs; the escape `exec` is warn (observe).
 		policy: {
 			exec: { gate: "warn" },
@@ -73,6 +83,7 @@ export async function createRuntimeTools(session: ToolSession): Promise<RuntimeT
 	const builtinSources: RuntimeToolSource[] = BUILTINS.map(b => ({
 		path: `<builtin>/${b.name}.ptc`,
 		policy: b.policy,
+		precomputedDescriptor: b.descriptor,
 	}));
 	const builtinText = new Map(BUILTINS.map((b, i) => [builtinSources[i].path, b.source]));
 

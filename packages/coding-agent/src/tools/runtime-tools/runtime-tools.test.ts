@@ -260,3 +260,32 @@ describe("runtime tools callable inside execute (PLAN-337 Phase 2)", () => {
 		}
 	}, 60_000);
 });
+
+describe("built-in descriptors (drift guard)", () => {
+	it("GIT_DESCRIPTOR/RUN_DESCRIPTOR match what (rt-describe) derives from the .ptc", async () => {
+		const { GIT_DESCRIPTOR, RUN_DESCRIPTOR } = await import("./builtin/descriptors");
+		const d = new RuntimeToolDispatcher();
+		try {
+			const gitSrc = composeToolSource(await Bun.file(gitPath).text());
+			const runSrc = composeToolSource(await Bun.file(path.join(BUILTIN, "run.ptc")).text());
+			expect(await d.describe(gitSrc)).toEqual(GIT_DESCRIPTOR);
+			expect(await d.describe(runSrc)).toEqual(RUN_DESCRIPTOR);
+		} finally {
+			d.close();
+		}
+	}, 60_000);
+
+	it("loading built-ins spawns NO BEAM (precomputed descriptors) — fast", async () => {
+		const session = { cwd: process.cwd(), settings: { get: () => true } } as unknown as ToolSession;
+		const t0 = Date.now();
+		const { tools, dispose } = await createRuntimeTools(session);
+		const ms = Date.now() - t0;
+		try {
+			expect(tools.map(t => t.name).sort()).toEqual(["git", "run"]);
+			// No BEAM spawn at load → well under a second (spawn alone is ~1.5s).
+			expect(ms).toBeLessThan(500);
+		} finally {
+			dispose();
+		}
+	}, 60_000);
+});
