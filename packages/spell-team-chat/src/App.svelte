@@ -11,6 +11,7 @@
 		TileUpdateResult,
 	} from "./lib/protocol";
 	import { buildWsUrl, WsClient } from "./lib/ws";
+	import { demoEditHistory, demoRequested, seedDemo } from "./lib/demo-seed";
 	import Login from "./components/Login.svelte";
 	import Shell from "./components/Shell.svelte";
 	import Toast from "./components/Toast.svelte";
@@ -101,7 +102,20 @@
 		ws = client;
 	}
 
+	// Dev-only offline demo: `?demo` boots the REAL Shell with seeded data so the
+	// design is viewable without a backend/login. Guarded by import.meta.env.DEV
+	// inside demoRequested(), so it is tree-shaken from production builds.
+	// `import.meta.env.DEV &&` is statically false in production, so Vite constant-
+	// folds demoMode to `false`, dead-code-eliminates both branches below, and
+	// drops the demo-seed module from the prod bundle entirely.
+	const demoMode = import.meta.env.DEV && demoRequested();
+
 	onMount(() => {
+		if (demoMode) {
+			seedDemo();
+			token = "demo";
+			return;
+		}
 		if (token) connect(token);
 		return () => {
 			ws?.dispose();
@@ -227,6 +241,7 @@
 	}
 
 	async function onEditHistory(sessionId: string, file?: string): Promise<EditHistoryResult> {
+		if (demoMode) return demoEditHistory();
 		if (!ws) throw new Error("not connected");
 		const result = await ws.request({ type: "rpc", sessionId, command: { type: "edit_history", file } });
 		return unwrapRpc<EditHistoryResult>(result, "edit_history");
