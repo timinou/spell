@@ -1,0 +1,82 @@
+#+TITLE: undo/redo discarded op target + reverted multi-file ops non-atomically (silent committed-file loss)
+#+STATE: ITEM
+#+SESSION_ID: 1507d4f02b2299d8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-13T17-53-55-372Z_1507d4f02b2299d8.jsonl]]
+#+CUSTOM_ID: BUG-470-undo-redo-discarded-op-target-reverted-m
+#+SESSION_ID: 1507d4f02b2299d8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-13T17-53-55-372Z_1507d4f02b2299d8.jsonl]]
+
+* Initial Message
+
+- The edit tool's undo is session-global and twice reverted committed files; its symbol-target
+ replace repeatedly corrupted def/defp in these files. I switched to python rewrites + git show
+ HEAD:path restores, verified every diff, and confirmed all committed files match HEAD. No work lost.
+
+
+PLEASE EXPLAIN (this was in session File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-06-12T19-52-01-244Z_1506a660f72dd418.jsonl
+ ID: 1506a660f72dd418)
+
+I'd like to make undo a lot more atomic bro, wtf was that????
+please compare with the actual undo commands performed there.
+
+* Initial Message
+User report (session 1506a660f72dd418, agentmaker repo):
+"The edit tool's undo is session-global and twice reverted committed files; its
+symbol-target replace repeatedly corrupted def/defp. I switched to python
+rewrites + git show HEAD:path restores... No work lost. PLEASE EXPLAIN. I'd like
+to make undo a lot more atomic."
+
+* Root cause (three compounding bugs)
+Traced both undo ops in the source session. Each reverted a DIFFERENT file than
+its target:
+- undo#1 target=packages/djinn_calendar/.../mock.ex → reverted apps/agentmaker/!docs/DJINN-CALENDAR-C4-C6-BRIEF.md (235 lines → 0)
+- undo#2 target=packages/djinn_integrations/.../registry.ex → reverted apps/agentmaker/.../meetings_live.ex
+
+1. TARGET DISCARDED (primary). edit.ts:194 hardcoded `target: ""` in the manage
+   bridge → op.target never reached the kernel. Every undo degraded to
+   target-less "revert most-recent".
+2. PER-SHARD HISTORY. lib.rs:74 records each edit into
+   workspace_root_for(file)/.spell/edit-history.jsonl. A monorepo splits one
+   session across N logs. Target-less undo probes only the session-cwd shard →
+   the packages/… corruption lived in a different log, invisible; the
+   most-recent entry in the visible shard was the long-committed brief.
+3. NO COMMIT AWARENESS. EditEntry.commit hardcoded None (lib.rs:85); nothing
+   reconciles external `git commit`s → revert() happily rewrote committed work.
+
+* Fix shipped (this session)
+- Fix A: edit.ts threads op.target + root to manage undo/redo → revert scopes to
+  the named file.
+- Operation-aware grouping: one editGroupId per `edit` invocation (NAPI option →
+  thread-local EditGroupGuard in napi.rs → stamped on every EditEntry via the
+  lib.rs recorder). revert/reapply in edit_history.rs operate on the whole group
+  atomically (intra-group rollback = all-or-nothing on disk) so a cross-file
+  rename never half-reverts. group_id is `#[serde(default)]` → legacy logs read
+  as singletons.
+- manage.rs handle_undo/handle_redo: honour target (file_glob scope), render
+  multi-file payload (files[], fileCount, per-file diff body).
+- Docs: verb-schema.ts undo/redo descriptions now state target scopes the revert.
+
+* Files
+crates/pi-natives/src/code_path/edit_history.rs (group-aware revert/reapply,
+EditGroupGuard, apply_group), manage.rs (target-threaded, render_history_success),
+napi.rs (editGroupId option + guard), lib.rs (stamp group_id);
+packages/coding-agent/src/tools/edit.ts (fix A + editGroupId), verb-schema.ts;
+packages/natives/src/code-path/types.ts (+ .d.ts).
+
+* Tests
+- edit_history.rs group_tests: 22 (atomic rename undo+redo, targeted-vs-recent,
+  LIFO stacked same-file, dirty-member atomic rollback, empty/nothing-to-redo,
+  5× repeat cycles, distinct-group order, JSONL persistence, legacy compat,
+  guard nesting, 2 proptest: group round-trip 1–6 files + reverse-diff involution).
+- manage_tests.rs edit_group_undo_reverts_all_member_files_e2e (real recorder +
+  thread-local).
+- edit-undo-atomicity.test.ts (TS, live binding): fix A, fix B, batch-rejection.
+All green; cargo fmt clean; zero new clippy warnings.
+
+* Remaining (follow-ups — NOT yet done)
+- B: session-scoped unified edit log (kills the per-shard target-less gap, bug #2).
+- C: commit-awareness — undo refuses/warns on already-committed files (bug #3).
+These are the architectural half; A + grouping is the bleeding-stopper.
+
+* STATE
+Code fix COMPLETE + verified. File tracks the fix and the B/C residue.

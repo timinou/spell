@@ -1,0 +1,75 @@
+#+TITLE: CodePathOptions TS mirror is hand-maintained (not napi-generated) and has no parity test → silent drift
+#+STATE: ITEM
+#+SESSION_ID: 1507d4f02b2299d8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-13T17-53-55-372Z_1507d4f02b2299d8.jsonl]]
+#+CUSTOM_ID: BUG-472-codepathoptions-ts-mirror-is-hand-mainta
+#+SESSION_ID: 1507d4f02b2299d8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-13T17-53-55-372Z_1507d4f02b2299d8.jsonl]]
+
+* Initial Message
+
+- The edit tool's undo is session-global and twice reverted committed files; its symbol-target
+ replace repeatedly corrupted def/defp in these files. I switched to python rewrites + git show
+ HEAD:path restores, verified every diff, and confirmed all committed files match HEAD. No work lost.
+
+
+PLEASE EXPLAIN (this was in session File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-06-12T19-52-01-244Z_1506a660f72dd418.jsonl
+ ID: 1506a660f72dd418)
+
+I'd like to make undo a lot more atomic bro, wtf was that????
+please compare with the actual undo commands performed there.
+
+* Initial Message
+While adding undo-atomicity options (editGroupId, historyForce, historyEntryId)
+each field had to be hand-added in BOTH crates/pi-natives/src/code_path/napi.rs
+(`#[napi(object)] CodePathOptions`) AND packages/natives/src/code-path/types.ts.
+They can silently drift. User: "shouldn't schemas be auto-generated on the rust
+side? why aren't they?"
+
+* Finding: three schema layers, only this one is unguarded
+1. codepath-op-schema.generated.ts (31 kernel Op kinds) — AUTO-GENERATED via
+   `bun run gen:op-schema` from `list_ops()` NAPI introspection. Correct.
+2. verb-schema.ts (6-verb agent surface) — hand-authored BY DESIGN (curated DX
+   surface, decoupled from kernel ops). Guarded by verb-schema-parity.test.ts
+   against `listVerbKinds()`. Correct.
+3. CodePathOptions in packages/natives/src/code-path/types.ts — hand-mirror of
+   the Rust `#[napi(object)] CodePathOptions` struct. NOT generated, NO parity
+   test. ← the gap.
+
+* Why it isn't generated
+- The Rust structs DO carry `#[napi(object)]` — napi-rs CAN emit a .d.ts.
+- But packages/natives/scripts/build-native.ts:156 invokes raw `cargo build`,
+  NOT `napi build --dts`. So napi's type-def emission never runs; types.ts is a
+  manual copy.
+- Same toolchain-bypass class as BUG-471 (build script not using canonical
+  cargo target dir).
+
+* Impact
+Every napi-boundary field (CodePathOptions and the other `#[napi(object)]`
+structs mirrored across packages/natives/src/**/types.ts) is a two-file manual
+edit. A missing TS field surfaces only as a downstream tsgo error (as happened
+this session: editGroupId added to .d.ts but not the real types.ts, caught only
+by tsgo). A type MISMATCH (wrong optionality/type) may not be caught at all.
+
+* Fix options
+A. Run napi type-def generation in build-native.ts (napi-rs `--dts` or
+   `napi build`) and commit/consume the generated .d.ts; delete the hand mirror.
+   Canonical fix; aligns with how op-schema is already generated.
+B. If full napi-cli adoption is too big: add a PARITY TEST that reflects over the
+   Rust struct (or a generated JSON descriptor from a small `list_options()`
+   introspection fn, mirroring `list_ops()`) and asserts types.ts matches —
+   same pattern as verb-schema-parity.test.ts. Cheapest guard.
+C. Minimum: a doc-comment cross-ref + a test that every `#[napi(js_name)]` in
+   CodePathOptions appears as a key in the TS interface.
+
+Recommend B (introspection + parity test) — consistent with the existing
+list_ops()/listVerbKinds() pattern, low blast radius, catches drift in CI.
+
+* Files
+crates/pi-natives/src/code_path/napi.rs (CodePathOptions),
+packages/natives/src/code-path/types.ts (+ types.d.ts),
+packages/natives/scripts/build-native.ts.
+
+* STATE
+Unfixed. Surfaced by PLAN-338. Not blocking PLAN-338 (fields added by hand +
+tsgo-verified), but the drift risk is systemic across all napi(object) mirrors.

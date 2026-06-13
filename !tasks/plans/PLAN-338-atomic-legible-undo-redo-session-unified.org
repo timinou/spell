@@ -1,0 +1,87 @@
+#+TITLE: Atomic legible undo/redo — session-unified log (B) + commit-awareness guard (C)
+#+STATE: ITEM
+#+SESSION_ID: 1507d4f02b2299d8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-13T17-53-55-372Z_1507d4f02b2299d8.jsonl]]
+#+CUSTOM_ID: PLAN-338-atomic-legible-undo-redo-session-unified
+#+SESSION_ID: 1507d4f02b2299d8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-13T17-53-55-372Z_1507d4f02b2299d8.jsonl]]
+
+* Initial Message
+
+- The edit tool's undo is session-global and twice reverted committed files; its symbol-target
+ replace repeatedly corrupted def/defp in these files. I switched to python rewrites + git show
+ HEAD:path restores, verified every diff, and confirmed all committed files match HEAD. No work lost.
+
+
+PLEASE EXPLAIN (this was in session File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-06-12T19-52-01-244Z_1506a660f72dd418.jsonl
+ ID: 1506a660f72dd418)
+
+I'd like to make undo a lot more atomic bro, wtf was that????
+please compare with the actual undo commands performed there.
+
+* Goal
+Finish the undo-atomicity work begun in BUG-470 (fix A + operation-grouping
+shipped). Two architectural halves remain:
+- B: session-scoped UNIFIED edit log (kills the per-workspace-shard gap where a
+  target-less undo only sees one subtree's log).
+- C: commit-awareness — undo DECLINES on already-committed files unless forced
+  (closes the silent committed-file data-loss hole that reverted the brief).
+
+Both are kernel + agent-interface + TUI + Team Chat (all three surfaces, first cut).
+
+* Decisions (user, 2026-06-13)
+- Migration: FRESH START. New sessions use the unified log; legacy per-shard
+  logs ignored (undo history does not carry across the cutover). Simplest.
+- C default: DECLINE-BY-DEFAULT. Committed edits refuse to revert unless
+  { force: true }. Safety first.
+
+* Naming (resolved)
+`status` is the blessed agent READ surface (dispatches to kernel `manage`).
+- Inspect history → status { command: "history", file? }  [NEW]
+- Mutate undo/redo → edit { operations:[{ target, action:{ kind:"undo", id?, force? }}] }
+
+* B — session-unified log
+Kernel: log at <sessionDir>/edit-history.jsonl (was workspace_root_for(file)/.spell/…).
+  Entries gain `workspace` field. history_for("") resolves the session log
+  directly (no cwd probe). HistoryQuery gains entry_id: Option<String> for
+  id-precise undo/redo. NO migration fold-in (fresh start).
+Agent (in-chat): status{command:"history"} → ordered newest-first
+  { entries:[{id,file,workspace,group_id,kind,reverted,committed,commit?,agent_label,ts}],
+    total, undoable, redoable }; file filter supported.
+  edit undo/redo op gains `id?` (target a specific entry/group) + `force?`.
+  Result payload gains scope:"file"|"group"|"session", remaining:N.
+TUI: history palette (list from status:history; select + `u` → id-precise undo).
+Team Chat: multi-file undo = one collapsed CodemodTilePanel tile (expands to
+  per-file diffs) + agent_label row ("undoing Alice's rename").
+
+* C — commit-awareness
+Kernel: before revert, reconcile vs git HEAD (clean-at-HEAD OR entry.commit set
+  ⇒ committed). New RevertOutcome::Declined{ entries:[{entry_id,file,commit}] },
+  returned by default when any targeted entry committed; nothing written.
+  force:true bypasses. Stamp `commit` (git rev-parse HEAD) at record time as
+  fallback. git absent ⇒ fail-open (treat as uncommitted, never block).
+Agent (in-chat): declined → structured actionable result ("undo declined: app.ts
+  committed at a1b2c3d. re-run {force:true} or git revert a1b2c3d").
+TUI: amber warning cell + interactive confirm "committed. Revert anyway? [y/N]".
+Team Chat: force-undo of committed file → visible channel system notice
+  ("⚠ Bob force-reverted app.ts (was committed a1b2c3d)"); non-forced declines local.
+
+* Build sequence
+1. Kernel: unified log + workspace field + entry_id query (B core)
+2. Kernel: commit reconciliation + Declined + force (C core) — shares EditEntry/
+   HistoryQuery/RevertOutcome with step 1, do together
+3. status{command:"history"} subcommand + payload (B agent read)
+4. edit: id/force op fields + Declined render + confirm hook (B+C agent mutate)
+5. TUI: history palette + declined warning cell + confirm (all surfaces)
+6. Team Chat: collapsed multi-file tile + actor label + force notice (all surfaces)
+7. Tests per layer + 3× Puppeteer proof SCREENSHOTS for Team Chat (user-required)
+
+* Acceptance
+- cargo test -p pi-natives green; new unit+property+e2e for unified log + decline.
+- status{command:"history"} returns ordered session log; file filter works.
+- TS live-binding test: committed file declines, force reverts.
+- TUI: history palette renders; declined shows amber + confirm.
+- Team Chat: collapsed tile + force notice, WITH proof screenshots attached.
+
+* Predecessor
+BUG-470 (fix A + grouping, COMPLETE). This plan = the B/C residue noted there.

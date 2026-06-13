@@ -1,0 +1,63 @@
+#+TITLE: build-native.ts reads ./target/debug but cargo emits to CARGO_TARGET_DIR (~/.cache) → ships stale .node silently
+#+STATE: ITEM
+#+SESSION_ID: 1507d4f02b2299d8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-13T17-53-55-372Z_1507d4f02b2299d8.jsonl]]
+#+CUSTOM_ID: BUG-471-build-native-ts-reads-target-debug-but-c
+#+SESSION_ID: 1507d4f02b2299d8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-13T17-53-55-372Z_1507d4f02b2299d8.jsonl]]
+
+* Initial Message
+
+- The edit tool's undo is session-global and twice reverted committed files; its symbol-target
+ replace repeatedly corrupted def/defp in these files. I switched to python rewrites + git show
+ HEAD:path restores, verified every diff, and confirmed all committed files match HEAD. No work lost.
+
+
+PLEASE EXPLAIN (this was in session File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-06-12T19-52-01-244Z_1506a660f72dd418.jsonl
+ ID: 1506a660f72dd418)
+
+I'd like to make undo a lot more atomic bro, wtf was that????
+please compare with the actual undo commands performed there.
+
+* Initial Message
+Discovered while verifying undo-atomicity (BUG-470): after a Rust change,
+`bun run build:native --dev` reported "Build complete" but the installed
+pi_natives.dev.node did NOT contain the new code — TS tests ran against a stale
+binary (EditEntry.group_id field absent at runtime despite being in source).
+
+* Root cause
+`.cargo/config.toml` sets `[build] target-dir = "/home/user/.cache/cargo-target"`.
+cargo therefore emits the freshly-built cdylib to
+  ~/.cache/cargo-target/debug/libpi_natives.so
+But packages/natives/scripts/build-native.ts computes its search roots as
+(build-native.ts ~L163):
+  targetRoots = [CARGO_TARGET_DIR env, repoRoot/target, rustDir/target]
+CARGO_TARGET_DIR is read only from the ENV VAR, not from .cargo/config.toml. In
+this shell the env var is unset, so the script finds the STALE
+  ./target/debug/libpi_natives.so   (an old inode, timestamp Jun 13 00:56)
+and copies that to pi_natives.dev.node. The genuinely-fresh artifact in
+~/.cache/cargo-target is never seen. Output even prints
+"Found addon: /home/user/code/ora/spell/target/debug/libpi_natives.so" — looks
+successful, silently wrong.
+
+* Impact
+- Native changes appear not to take effect; TS/integration tests validate stale
+  behaviour. High footgun: a green test run can be meaningless after a Rust edit.
+- Worked around manually this session by `cp ~/.cache/cargo-target/debug/libpi_natives.so packages/natives/native/pi_natives.dev.node`.
+
+* Fix options
+A. Resolve target-dir the way cargo does: parse `.cargo/config.toml`
+   `[build] target-dir` (and CARGO_TARGET_DIR env) into targetRoots, preferring
+   it. Most correct.
+B. Use `cargo metadata --format-version 1` → `.target_directory` (authoritative,
+   honours config + env + workspace). Simplest robust fix.
+C. Add `cargo build ... --message-format=json` and read the artifact path from
+   the `compiler-artifact` message for pi-natives (exact file, no guessing).
+Recommend B or C — stop guessing the path from a hardcoded list.
+
+* Files
+packages/natives/scripts/build-native.ts (targetRoots / findBuiltBinary).
+
+* STATE
+Unfixed. Workaround known. Affects anyone whose .cargo/config.toml redirects
+target-dir (this repo does, repo-wide).
