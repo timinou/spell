@@ -15,11 +15,10 @@ import { askToolRenderer } from "./ask";
 import { bashToolRenderer } from "./bash";
 import { calculatorToolRenderer } from "./calculator";
 import { fetchToolRenderer } from "./fetch";
-import { executeToolRenderer } from "./ptc-runtime/render";
-
 import { inspectImageToolRenderer } from "./inspect-image-renderer";
-
+import { executeToolRenderer } from "./ptc-runtime/render";
 import { resolveToolRenderer } from "./resolve";
+import { runtimeToolRenderer } from "./runtime-tools/render";
 import { searchToolBm25Renderer } from "./search-tool-bm25";
 import { sshToolRenderer } from "./ssh";
 import { todoWriteToolRenderer } from "./todo-write";
@@ -45,8 +44,8 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	calc: calculatorToolRenderer as ToolRenderer,
 	edit: editToolRenderer as ToolRenderer,
 	execute: executeToolRenderer as ToolRenderer,
-
-
+	git: runtimeToolRenderer as ToolRenderer,
+	run: runtimeToolRenderer as ToolRenderer,
 
 	inspect_image: inspectImageToolRenderer as ToolRenderer,
 

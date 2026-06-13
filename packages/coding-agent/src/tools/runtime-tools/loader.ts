@@ -29,13 +29,14 @@ export interface RuntimeToolLoadResult {
 export async function loadRuntimeTools(
 	sources: RuntimeToolSource[],
 	dispatcher: RuntimeToolDispatcher,
+	readSource?: (path: string) => string | undefined,
 ): Promise<RuntimeToolLoadResult> {
 	const tools: LoadedRuntimeTool[] = [];
 	const errors: Array<{ path: string; error: string }> = [];
 
 	for (const src of sources) {
 		try {
-			const interfaceSource = await fs.readFile(src.path, "utf8");
+			const interfaceSource = readSource?.(src.path) ?? (await fs.readFile(src.path, "utf8"));
 			const source = composeToolSource(interfaceSource);
 
 			const descriptor = await dispatcher.describe(source);

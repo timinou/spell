@@ -33,6 +33,12 @@ declare module "*.kdl" {
 	export default content;
 }
 
+// PTC-Lisp runtime-tool interfaces imported as text
+declare module "*.ptc" {
+	const content: string;
+	export default content;
+}
+
 
 // Handlebars templates imported as text
 declare module "*.hbs" {

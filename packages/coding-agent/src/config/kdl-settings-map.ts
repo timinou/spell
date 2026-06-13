@@ -439,6 +439,7 @@ export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> =
 	"todo.eager": { block: "tools", nodePath: "todo", accessor: "property", propertyName: "eager" },
 	"todo.reviewJudge": { block: "tools", nodePath: "todo", accessor: "property", propertyName: "review-judge" },
 	"find.enabled": { block: "tools", nodePath: "find", accessor: "property", propertyName: "enabled" },
+	"runtimeTools.enabled": { block: "tools", nodePath: "runtimeTools", accessor: "property", propertyName: "enabled" },
 	"astGrep.enabled": { block: "tools", nodePath: "ast-grep", accessor: "property", propertyName: "enabled" },
 
 	"renderMermaid.enabled": {

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
+import type { ToolSession } from "../index";
 import { loadRuntimeTools } from "./loader";
 import { deriveSkeleton, resolvePolicy } from "./policy";
 import { composeToolSource, RuntimeToolDispatcher } from "./runtime";
+import { createRuntimeTools } from "./session";
 import type { ToolDescriptor } from "./types";
 
 const BUILTIN = path.join(import.meta.dir, "builtin");
@@ -152,6 +154,51 @@ describe("loadRuntimeTools", () => {
 			expect(errors[0].error).toContain("explicit gate");
 		} finally {
 			d.close();
+		}
+	}, 60_000);
+});
+
+describe("createRuntimeTools (session wiring)", () => {
+	// Minimal session stub: createRuntimeTools + makeRuntimeTool only touch cwd
+	// and sandboxPolicy (at execute time).
+	const session = { cwd: process.cwd(), sandboxPolicy: undefined } as unknown as ToolSession;
+
+	it("loads the built-in git and run tools with bundled sources", async () => {
+		const { tools, dispose } = await createRuntimeTools(session);
+		try {
+			const names = tools.map(t => t.name).sort();
+			expect(names).toEqual(["git", "run"]);
+			// Verbs surface in the description so the model can discover them.
+			const git = tools.find(t => t.name === "git");
+			expect(git?.description).toContain("log");
+			expect(git?.description).toContain("status");
+		} finally {
+			dispose();
+		}
+	}, 60_000);
+
+	it("runs git status end-to-end and returns structured data", async () => {
+		const { tools, dispose } = await createRuntimeTools(session);
+		try {
+			const git = tools.find(t => t.name === "git");
+			expect(git).toBeDefined();
+			const res = await git!.execute("c1", { verb: "status" }, undefined, undefined, {} as never);
+			expect(res.isError).toBeFalsy();
+			// status parser → { clean: bool, files: [...] }
+			expect(res.data).toHaveProperty("clean");
+			expect(res.data).toHaveProperty("files");
+		} finally {
+			dispose();
+		}
+	}, 60_000);
+
+	it("rejects an unknown verb with the available list", async () => {
+		const { tools, dispose } = await createRuntimeTools(session);
+		try {
+			const git = tools.find(t => t.name === "git");
+			await expect(git!.execute("c1", { verb: "nope" }, undefined, undefined, {} as never)).rejects.toThrow(/unknown verb/);
+		} finally {
+			dispose();
 		}
 	}, 60_000);
 });

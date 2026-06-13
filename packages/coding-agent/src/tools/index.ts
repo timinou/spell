@@ -46,6 +46,7 @@ import { OrgTool } from "./org";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { ExecuteTool } from "./ptc-runtime/execute";
 import { RenderMermaidTool } from "./render-mermaid";
+import { createRuntimeTools } from "./runtime-tools/session";
 import { ResolveTool } from "./resolve";
 import { reportFindingTool } from "./review";
 import { SearchToolBm25Tool } from "./search-tool-bm25";
@@ -397,6 +398,24 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		}),
 	);
 	const tools = baseResults.filter((r): r is Tool => r !== null);
+
+	// Runtime tools (PLAN-337): dynamic deftool tools (git, run) loaded from PTC
+	// interfaces. Opt-in via runtimeTools.enabled. When a tool list is requested,
+	// honour it — only add runtime tools whose name was asked for (or all, when no
+	// explicit list). Failures are non-fatal (logged by the loader).
+	if (session.settings.get("runtimeTools.enabled")) {
+		try {
+			const { tools: runtimeTools } = await logger.timeAsync("createTools:runtimeTools", createRuntimeTools, session);
+			for (const rt of runtimeTools) {
+				if (requestedTools === undefined || requestedTools.includes(rt.name.toLowerCase())) {
+					tools.push(wrapToolWithMetaNotice(rt));
+				}
+			}
+		} catch (e) {
+			logger.warn(`runtime-tools load failed: ${e instanceof Error ? e.message : String(e)}`);
+		}
+	}
+
 	const hasDeferrableTools = tools.some(tool => tool.deferrable === true);
 	if (!hasDeferrableTools) {
 		return tools;

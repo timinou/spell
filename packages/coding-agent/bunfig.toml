@@ -6,3 +6,4 @@ saveTextLockfile = true
 [loader]
 ".md" = "text"
 ".py" = "text"
+".ptc" = "text"

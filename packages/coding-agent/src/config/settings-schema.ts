@@ -1049,6 +1049,16 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"runtimeTools.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			label: "Runtime tools",
+			description: "Enable deftool runtime tools (git, run) — structured, first-class process tools (PLAN-337)",
+		},
+	},
+
 	"astGrep.enabled": {
 		type: "boolean",
 		default: true,
