@@ -88,6 +88,25 @@ export const TOOL_EFFECTS: Readonly<Record<string, EffectTag>> = {
 };
 
 /**
+ * Runtime-tool verb-class registry (PLAN-337). Runtime tools (git, run, user
+ * .ptc) are dynamic, so their effect is resolved per-verb from the homoiconic
+ * `:class` declared in the interface, not a static TOOL_EFFECTS entry. Populated
+ * when runtime tools load; consulted by `refineEffect`.
+ *
+ * Class → effect mapping keeps every runtime-tool call within the default
+ * {pure, read, write} policy (so `tool/git` works in execute without opening the
+ * `exec` lane that freeform bash needs): read→read, write→write, and
+ * destructive→write (the runtime tool's OWN advisory gate flags the risk; the
+ * effect only governs catalog/policy admission).
+ */
+const RUNTIME_TOOL_VERB_EFFECTS = new Map<string, Map<string, EffectTag>>();
+
+/** Register a runtime tool's per-verb effects (derived from each verb's :class). */
+export function registerRuntimeToolEffects(toolName: string, verbClassToEffect: Map<string, EffectTag>): void {
+	RUNTIME_TOOL_VERB_EFFECTS.set(toolName, verbClassToEffect);
+}
+
+/**
  * Resolve a tool's effect. Unknown tools default to `exec` — the deny-by-default
  * posture: an untagged tool is treated as maximally privileged so it is blocked
  * under anything short of an exec-allowing policy. (Tags below `exec` such as
@@ -95,6 +114,19 @@ export const TOOL_EFFECTS: Readonly<Record<string, EffectTag>> = {
  * the boundary the default read+write policy denies.)
  */
 export function effectOf(toolName: string, args?: Record<string, unknown>): EffectTag {
+	// Runtime tools (PLAN-337) are resolved per-verb from their registered
+	// :class map. Their base (no verb / unknown verb) is the MOST privileged of
+	// their verbs, so an unspecified call is conservatively gated; a known verb
+	// refines to its own effect below.
+	const runtimeVerbs = RUNTIME_TOOL_VERB_EFFECTS.get(toolName);
+	if (runtimeVerbs) {
+		const verb = args && typeof args.verb === "string" ? args.verb : undefined;
+		const verbEffect = verb ? runtimeVerbs.get(verb) : undefined;
+		if (verbEffect) return verbEffect;
+		// Base = the highest effect among the tool's verbs (conservative default).
+		return maxEffect([...runtimeVerbs.values()]);
+	}
+
 	const base = TOOL_EFFECTS[toolName] ?? "exec";
 	// Sub-command refinement: a tool tagged at its HIGHEST effect (conservative
 	// default) can resolve to a LOWER effect for a read-only sub-command, so a
@@ -105,6 +137,12 @@ export function effectOf(toolName: string, args?: Record<string, unknown>): Effe
 		if (refined) return refined;
 	}
 	return base;
+}
+
+/** The most-privileged effect in a set, by the {read<write} ordering we use for
+ * runtime tools (runtime tools never map above `write`). Defaults to `read`. */
+function maxEffect(effects: EffectTag[]): EffectTag {
+	return effects.includes("write") ? "write" : "read";
 }
 
 /**

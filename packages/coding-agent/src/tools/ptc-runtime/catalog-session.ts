@@ -22,11 +22,18 @@ export type { ToolProvider };
  * factories. Instantiation is eager (once) and memoized; failures are silently
  * skipped (the tool is simply unavailable to programs).
  */
-export function buildSessionToolProvider(session?: ToolSession): {
+export function buildSessionToolProvider(
+	session?: ToolSession,
+	extraTools?: InstantiatedTool[],
+): {
 	catalogTools(): CatalogTool[];
 	lookup(name: string): DispatchableTool | undefined;
 } {
 	const instances = instantiate(session);
+	// Runtime tools (PLAN-337: git, run, user .ptc) are loaded asynchronously and
+	// injected here so a program can call `tool/git`, `tool/run`, etc. They are
+	// not in BUILTIN_TOOLS (dynamic), so the caller passes the instances.
+	for (const t of extraTools ?? []) instances.set(t.name, t);
 
 	return {
 		catalogTools(): CatalogTool[] {

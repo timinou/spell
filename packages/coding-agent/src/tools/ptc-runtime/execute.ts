@@ -30,6 +30,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult } from "@spell/pi-age
 import executeDescription from "../../prompts/tools/execute.md" with { type: "text" };
 import type { ArtifactRef } from "../../session/artifacts";
 import type { ToolSession } from "../index";
+import { createRuntimeTools, type RuntimeToolSet } from "../runtime-tools/session";
 import { generateToolCatalog } from "./catalog-gen";
 import { buildSessionToolProvider } from "./catalog-session";
 import { type Catalog, PtcRuntimeClient, PtcRuntimeError, spawnTransport } from "./client";
@@ -186,6 +187,8 @@ export class ExecuteTool implements AgentTool<typeof executeSchema, ExecuteToolD
 	private readonly provider?: ToolProvider;
 	private readonly saveArtifact?: SaveArtifact;
 	private client: PtcRuntimeClient | null = null;
+	/** Runtime tools (PLAN-337) loaded for the program catalog; disposed with this tool. */
+	private runtimeToolSet: RuntimeToolSet | null = null;
 	private initPromise: Promise<void> | null = null;
 	/**
 	 * D3: per-program transaction scopes. The dispatcher captures FS-write
@@ -439,6 +442,8 @@ export class ExecuteTool implements AgentTool<typeof executeSchema, ExecuteToolD
 		this.client?.close();
 		this.client = null;
 		this.initPromise = null;
+		this.runtimeToolSet?.dispose();
+		this.runtimeToolSet = null;
 	}
 
 	/**
@@ -598,7 +603,7 @@ export class ExecuteTool implements AgentTool<typeof executeSchema, ExecuteToolD
 	}
 
 	private async spawn(context?: AgentToolContext): Promise<void> {
-		const provider = this.provider ?? this.defaultProvider();
+		const provider = this.provider ?? (await this.defaultProvider());
 		const catalogTools = generateToolCatalog(provider.catalogTools());
 
 		// Advertise only policy-permitted tools to the runtime (pre-filter); the
@@ -647,8 +652,20 @@ export class ExecuteTool implements AgentTool<typeof executeSchema, ExecuteToolD
 	 * their schemas. Tools requiring a session are skipped when none is present
 	 * (e.g. in minimal contexts), yielding an empty catalog rather than failing.
 	 */
-	private defaultProvider(): ToolProvider {
-		return buildSessionToolProvider(this.session);
+	private async defaultProvider(): Promise<ToolProvider> {
+		// Include runtime tools (PLAN-337: git, run, user .ptc) so a program can
+		// call `tool/git`, `tool/run`, etc. Loaded once and disposed with this tool.
+		let extra: AgentTool[] = [];
+		if (this.session?.settings?.get("runtimeTools.enabled")) {
+			try {
+				this.runtimeToolSet = await createRuntimeTools(this.session);
+				extra = this.runtimeToolSet.tools;
+			} catch {
+				// Runtime tools are best-effort in the catalog; a load failure simply
+				// means a program cannot call them.
+			}
+		}
+		return buildSessionToolProvider(this.session, extra as never);
 	}
 }
 

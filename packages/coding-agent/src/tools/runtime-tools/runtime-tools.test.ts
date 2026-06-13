@@ -235,3 +235,28 @@ describe("advisory gates (alignment over security)", () => {
 		}
 	}, 60_000);
 });
+
+describe("runtime tools callable inside execute (PLAN-337 Phase 2)", () => {
+	it("tool/git is callable from an execute program and returns structured data", async () => {
+		const { ExecuteTool } = await import("../ptc-runtime/execute");
+		const session = {
+			cwd: process.cwd(),
+			settings: { get: (k: string) => (k === "runtimeTools.enabled" ? true : undefined) },
+		} as unknown as ConstructorParameters<typeof ExecuteTool>[0];
+		const tool = new ExecuteTool(session);
+		try {
+			const r = await tool.execute(
+				"c1",
+				{ program: '(count (tool/git {:verb "log" :args {:n 2}}))' } as never,
+				undefined,
+				undefined,
+				{} as never,
+			);
+			expect(r.isError).toBeFalsy();
+			// log n:2 → 2 structured commit entries, counted in-program.
+			expect((r.content[0] as { text: string }).text).toBe("2");
+		} finally {
+			await tool.dispose();
+		}
+	}, 60_000);
+});

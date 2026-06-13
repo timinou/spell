@@ -35,6 +35,16 @@ export interface ToolPolicy {
 	verbs: Record<string, VerbPolicy>;
 }
 
+/**
+ * Map a verb's :class to the execute-policy effect lane. Kept within
+ * {read, write} so runtime tools are callable under the default policy without
+ * opening the `exec` lane (which freeform bash needs). The runtime tool's own
+ * advisory gate — not this effect — flags destructive risk.
+ */
+export function classEffect(verbClass: VerbClass): "read" | "write" {
+	return verbClass === "read" ? "read" : "write";
+}
+
 /** The default gate for a verb class when no KDL override is present. */
 export function defaultGate(verbClass: VerbClass): Gate {
 	switch (verbClass) {

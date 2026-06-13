@@ -9,9 +9,10 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { logger } from "@spell/pi-utils";
+import { type EffectTag, registerRuntimeToolEffects } from "../ptc-runtime/effects";
 import { type RawToolPolicy, resolvePolicy } from "./policy";
 import { composeToolSource, type RuntimeToolDispatcher } from "./runtime";
-import type { LoadedRuntimeTool } from "./types";
+import { classEffect, type LoadedRuntimeTool } from "./types";
 
 export interface RuntimeToolSource {
 	/** Absolute path to the `.ptc` interface file. */
@@ -51,6 +52,14 @@ export async function loadRuntimeTools(
 				errors.push({ path: src.path, error: policyErrors.join("; ") });
 				continue;
 			}
+
+			// Register this tool's per-verb effects (derived from each verb's :class)
+			// so the execute coprocessor can call it under the default policy.
+			const verbEffects = new Map<string, EffectTag>();
+			for (const [verbName, verb] of Object.entries(descriptor.verbs)) {
+				verbEffects.set(verbName, classEffect(verb.class));
+			}
+			registerRuntimeToolEffects(descriptor.name, verbEffects);
 
 			tools.push({ descriptor, policy, source, path: src.path });
 		} catch (e) {
