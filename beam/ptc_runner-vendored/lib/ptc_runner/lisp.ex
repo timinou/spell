@@ -1148,17 +1148,44 @@ defmodule PtcRunner.Lisp do
             value
 
           {:error, reason} ->
-            raise ExecutionError, reason: :tool_error, message: name, data: reason
+            # Carry an actionable message (not the bare tool name) so a program's
+            # `(catch e ...)` sees WHY the tool failed, with the raw reason kept
+            # in `data` for structured handlers.
+            raise ExecutionError,
+              reason: :tool_error,
+              message: "tool '#{name}' failed: #{describe_reason(reason)}",
+              data: reason
 
           value ->
             value
         end
 
       :error ->
+        # An unknown name is almost always a tool that isn't program-callable
+        # (denied: bash/task/fetch/web_search/… — call those directly), or a typo.
+        # Surface the available set so the message is self-correcting rather than
+        # echoing back just the bad name.
         available = Map.keys(normalized_tools) |> Enum.sort()
-        raise ExecutionError, reason: :unknown_tool, message: name, data: available
+
+        raise ExecutionError,
+          reason: :unknown_tool,
+          message:
+            "tool '#{name}' is not callable from a program. " <>
+              "Tools that run a process or reach the network (bash, task, fetch, web_search) " <>
+              "are denied here — call them directly instead. " <>
+              "Available in-program: #{Enum.join(available, ", ")}.",
+          data: available
     end
   end
+
+  # A tool's `{:error, reason}` reason is heterogeneous: a plain string is the
+  # message; a map with a "message"/:message key carries one; anything else is
+  # inspected. Mirrors the catch-value extraction the evaluator does for its own
+  # error tuples, so a tool failure reads the same as any other caught error.
+  defp describe_reason(reason) when is_binary(reason), do: reason
+  defp describe_reason(%{"message" => msg}) when is_binary(msg), do: msg
+  defp describe_reason(%{message: msg}) when is_binary(msg), do: msg
+  defp describe_reason(reason), do: inspect(reason)
 
   # Normalize tools from various formats to Tool structs
   defp normalize_tools(raw_tools) do
