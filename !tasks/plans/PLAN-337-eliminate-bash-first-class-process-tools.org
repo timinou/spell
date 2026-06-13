@@ -259,3 +259,30 @@ source + a dispatch call into the existing execute path = ZERO new protocol.
 NOT YET WIRED: session registration (BUILTIN_TOOLS factory + KDL config loading +
 TUI warn-colour renderer + `spell tools sync` command). That is Phase 1b — the
 module is complete and tested in isolation; nothing existing is touched.
+
+* Phase 1b status (2026-06-13): WIRED + LIVE
+
+git/run are now live session tools (opt-in via runtimeTools.enabled, default off):
+- settings-schema.ts + kdl-settings-map.ts: runtimeTools.enabled flag.
+- runtime-tools/session.ts: createRuntimeTools loads built-in git/run (.ptc
+  bundled as text imports) with default policy (git reset/checkout→confirm,
+  git raw / run exec→warn), one shared dispatcher disposed at session end.
+- tools/index.ts createTools: appends runtime tools when enabled, honouring an
+  explicit tool list; failures non-fatal.
+- runtime-tools/render.ts + renderers.ts: runtimeToolRenderer (git/run) shows
+  tool/verb + argv; warn-gated verbs tinted with the warning colour.
+- bun-imports.d.ts + bunfig.toml (root + package): .ptc text loader.
+
+Proven LIVE: createRuntimeTools → [git, run]; git log returns structured commit
+list (showed this session's own commits); run exec (warn) ran with
+details.warn=true. Tests: 14 runtime-tools + 33 createTools, all green.
+
+Committed across 7 commits (BUG-464, probe BEAM, denial fix, execute
+enhancements, runtime-tools Phase 1, task docs, Phase 1b).
+
+* Remaining (future phases)
+- Phase 2: `spell tools sync` CLI (PTC→KDL skeleton) + user/project .ptc loading
+  from config dirs (currently only built-ins).
+- Phase 3: confirm gate → interactive pending-action (currently warn+note).
+- Phase 4: scoped `terminal` pty tool; demote bash from CORE; delete bash +
+  bash-interceptor; retire SandboxPolicy.bashAllow/bashDeny for per-tool policy.
