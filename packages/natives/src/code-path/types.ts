@@ -1,6 +1,8 @@
 export interface CodePathOptions {
 	command: string;
 	target: string;
+	/** Atomicity mode for multi-action edit chains: best-effort (default) or strict (snapshot + rollback on any failure). */
+	transaction?: "best-effort" | "strict";
 	limit?: number;
 	head?: number;
 	tail?: number;
@@ -167,6 +169,7 @@ declare module "../bindings" {
 		listDiagnosticVariants(): DiagnosticVariantInfo[];
 		listLanguageDialects(): LanguageDialectInfo[];
 		listOps(): OpSchemaDto[];
+		listCodepathOptionKeys(): string[];
 		// PLAN-310: dynamic scheme registration via TSFn callback.
 		registerSchemeCallback(
 			scheme: string,

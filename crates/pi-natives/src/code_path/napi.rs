@@ -124,6 +124,82 @@ pub struct CodePathOptions<'env> {
 	pub session_dir:        Option<String>,
 }
 
+/// Canonical JS-facing key names of [`CodePathOptions`] (BUG-472).
+///
+/// The TS mirror `packages/natives/src/code-path/types.ts::CodePathOptions` is
+/// hand-authored (the build does not run `napi build --dts`), so it can
+/// silently drift from this struct. `codepath-options-parity.test.ts` pins the
+/// TS interface keys against this list — the same guard pattern as
+/// `listVerbKinds()`/`verb-schema-parity.test.ts`.
+///
+/// Keep this list in sync with the struct. The `assert_codepath_option_keys_
+/// exhaustive` fn below is a COMPILE-TIME tripwire: it destructures every field
+/// without a `..` rest pattern, so adding or removing a `CodePathOptions` field
+/// fails the build until this list is updated to match.
+#[napi]
+pub fn list_codepath_option_keys() -> Vec<String> {
+	[
+		"command",
+		"target",
+		"transaction",
+		"limit",
+		"head",
+		"tail",
+		"offset",
+		"format",
+		"root",
+		"actions",
+		"manage",
+		"gitignore",
+		"sessionId",
+		"editGroupId",
+		"historyEntryId",
+		"historyForce",
+		"abortSignal",
+		"timeoutMs",
+		"artifactThreshold",
+		"home",
+		"sessionDir",
+	]
+	.iter()
+	.map(|s| (*s).to_string())
+	.collect()
+}
+
+/// Compile-time exhaustiveness tripwire for [`list_codepath_option_keys`].
+///
+/// Never called at runtime — it exists so the compiler rejects any change to
+/// the `CodePathOptions` field set that is not reflected in the key list above
+/// (and, by the parity test, in the TS mirror). The exhaustive destructure (no
+/// `..`) is the mechanism: a new field => "pattern does not mention field"; a
+/// removed field => "struct has no field".
+#[allow(dead_code, reason = "compile-time exhaustiveness tripwire; never called")]
+fn assert_codepath_option_keys_exhaustive(opts: CodePathOptions<'_>) {
+	let CodePathOptions {
+		command: _,
+		target: _,
+		transaction: _,
+		limit: _,
+		head: _,
+		tail: _,
+		offset: _,
+		format: _,
+		root: _,
+		actions: _,
+		manage: _,
+		gitignore: _,
+		session_id: _,
+		edit_group_id: _,
+		history_entry_id: _,
+		history_force: _,
+		abort_signal: _,
+		timeout_ms: _,
+		artifact_threshold: _,
+		home: _,
+		session_dir: _,
+	} = opts;
+}
+
 // ── Transaction mode ─────────────────────────────────────────────
 
 /// Atomicity mode for multi-action edit chains.

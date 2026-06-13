@@ -56,6 +56,15 @@ export function listVerbKinds(): string[] {
 	return native.listVerbKinds();
 }
 
+/**
+ * Canonical JS-facing key names of `CodePathOptions`, sourced from the Rust
+ * struct (BUG-472). `codepath-options-parity.test.ts` asserts the TS interface
+ * keys match this, guarding the hand-authored mirror against silent drift.
+ */
+export function listCodepathOptionKeys(): string[] {
+	return native.listCodepathOptionKeys();
+}
+
 export function listQualifiers(): QualifierInfo[] {
 	return native.listQualifiers();
 }
