@@ -77,13 +77,19 @@ impl std::fmt::Display for SemanticCacheError {
 impl std::error::Error for SemanticCacheError {}
 
 impl From<std::io::Error> for SemanticCacheError {
-	fn from(e: std::io::Error) -> Self { Self::Io(e) }
+	fn from(e: std::io::Error) -> Self {
+		Self::Io(e)
+	}
 }
 impl From<ConfigError> for SemanticCacheError {
-	fn from(e: ConfigError) -> Self { Self::Config(e) }
+	fn from(e: ConfigError) -> Self {
+		Self::Config(e)
+	}
 }
 impl From<pi_code_graph::CodeGraphError> for SemanticCacheError {
-	fn from(e: pi_code_graph::CodeGraphError) -> Self { Self::Graph(e) }
+	fn from(e: pi_code_graph::CodeGraphError) -> Self {
+		Self::Graph(e)
+	}
 }
 
 /// Return the warm `Arc<CompositeSemanticBackend>` for `root`, building on
@@ -98,23 +104,21 @@ pub fn get_or_build(root: &Path) -> Result<Arc<CompositeSemanticBackend>, Semant
 
 	// Build outside the map lock to keep contention low.
 	let graph = code_graph_cache::get_or_build_graph(&canon)?;
-	let annotation = Arc::new(
-		AnnotationSemanticBackend::new(graph).with_workspace_root(canon.clone()),
-	);
+	let annotation =
+		Arc::new(AnnotationSemanticBackend::new(graph).with_workspace_root(canon.clone()));
 	let mut composite = CompositeSemanticBackend::new(annotation);
 
 	let config = SemanticConfig::load_layered(&canon)?.resolve();
-	let registry = Arc::new(LspRegistry::new(
-		config.max_warm_servers(),
-		config.idle_ttl(),
-	));
+	let registry = Arc::new(LspRegistry::new(config.max_warm_servers(), config.idle_ttl()));
 	for spec in config.server_specs.values() {
 		registry.register_spec(spec.clone());
 	}
 
 	// Per-language LSP wiring: best-effort, fail-graceful.
 	for lb in config.language_backends.values() {
-		let Some(server_name) = lb.lsp.as_ref() else { continue };
+		let Some(server_name) = lb.lsp.as_ref() else {
+			continue;
+		};
 		let Some(spec) = config.server_specs.get(server_name) else {
 			eprintln!(
 				"warn[semantic]: config references undefined server '{server_name}' for language '{}'",
@@ -127,16 +131,18 @@ pub fn get_or_build(root: &Path) -> Result<Arc<CompositeSemanticBackend>, Semant
 				// FUP-100: pass language_id so the backend can ensure_opened()
 				// before each LSP request. Without this, the LSP returns empty
 				// hover/signature/etc until the document is opened.
-				let backend = Arc::new(
-					LspSemanticBackend::with_language_id(client, &lb.language),
-				);
+				let backend = Arc::new(LspSemanticBackend::with_language_id(client, &lb.language));
 				let exts = spec.file_extensions.clone();
 				composite.register_lsp(exts, backend);
 			},
 			Err(LspClientError::SpawnFailed(msg)) => {
-				let hint = spec.install_hint.as_deref().unwrap_or("(no install hint configured)");
+				let hint = spec
+					.install_hint
+					.as_deref()
+					.unwrap_or("(no install hint configured)");
 				eprintln!(
-					"warn[semantic]: LSP spawn failed for '{server_name}' (language '{}'): {msg} -- {hint}",
+					"warn[semantic]: LSP spawn failed for '{server_name}' (language '{}'): {msg} -- \
+					 {hint}",
 					lb.language
 				);
 			},
@@ -147,10 +153,11 @@ pub fn get_or_build(root: &Path) -> Result<Arc<CompositeSemanticBackend>, Semant
 	}
 
 	let arc = Arc::new(composite);
-	backends().insert(
-		canon,
-		CachedSemantic { composite: arc.clone(), registry, built_at: SystemTime::now() },
-	);
+	backends().insert(canon, CachedSemantic {
+		composite: arc.clone(),
+		registry,
+		built_at: SystemTime::now(),
+	});
 	Ok(arc)
 }
 
@@ -288,10 +295,7 @@ mod tests {
 		assert!(peek(root).is_none(), "after invalidate, peek must be None");
 
 		let b2 = get_or_build(root).expect("rebuild");
-		assert!(
-			!Arc::ptr_eq(&b1, &b2),
-			"post-invalidate rebuild must return a new Arc"
-		);
+		assert!(!Arc::ptr_eq(&b1, &b2), "post-invalidate rebuild must return a new Arc");
 		invalidate(root);
 	}
 
@@ -337,8 +341,7 @@ mod tests {
 		)
 		.unwrap();
 
-		let composite = get_or_build(root)
-			.expect("build must succeed even when an LSP cannot spawn");
+		let composite = get_or_build(root).expect("build must succeed even when an LSP cannot spawn");
 		// The composite is usable; we got back an Arc.
 		assert!(Arc::strong_count(&composite) >= 1);
 		invalidate(root);

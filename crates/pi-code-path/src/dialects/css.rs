@@ -11,9 +11,7 @@ use tree_sitter::Node;
 
 use crate::{
 	ast::NamePayload,
-	dialect::{
-		AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierSpec,
-	},
+	dialect::{AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierSpec},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -266,8 +264,8 @@ mod qualifiers {
 
 pub fn css_dialect() -> LanguageDialect {
 	LanguageDialect {
-		name_lexer: Arc::new(CssNameLexer),
-		anchors:    vec![
+		name_lexer:   Arc::new(CssNameLexer),
+		anchors:      vec![
 			AnchorPattern {
 				name:    "custom-prop",
 				matcher: |n, src| {
@@ -319,7 +317,7 @@ pub fn css_dialect() -> LanguageDialect {
 				},
 			},
 		],
-		qualifiers: vec![
+		qualifiers:   vec![
 			QualifierSpec {
 				name:       "selector",
 				applies_to: vec!["rule_set".into(), "selectors".into()],
@@ -357,7 +355,7 @@ pub fn css_dialect() -> LanguageDialect {
 				resolve:    Arc::new(qualifiers::Prelude),
 			},
 		],
-		edge_kinds: {
+		edge_kinds:   {
 			let set = EdgeKindSet::default();
 			// TODO: css-var→/extends→/imports→/mixin→/applies-to→ deferred until EdgeKind
 			// extension

@@ -11,9 +11,7 @@ use winnow::{Parser, token::take_while};
 
 use crate::{
 	ast::NamePayload,
-	dialect::{
-		AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierSpec,
-	},
+	dialect::{AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierSpec},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -326,8 +324,8 @@ fn normalize_ws(text: &str) -> String {
 }
 pub fn python_dialect() -> LanguageDialect {
 	LanguageDialect {
-		name_lexer: Arc::new(PyNameLexer),
-		anchors:    vec![
+		name_lexer:   Arc::new(PyNameLexer),
+		anchors:      vec![
 			AnchorPattern {
 				name:    "return",
 				matcher: |n, _s| has_descendant_kind(*n, "return_statement"),
@@ -399,7 +397,7 @@ pub fn python_dialect() -> LanguageDialect {
 				},
 			},
 		],
-		qualifiers: vec![
+		qualifiers:   vec![
 			QualifierSpec {
 				name:       "body",
 				applies_to: vec!["function_definition".into(), "class_definition".into()],
@@ -436,7 +434,7 @@ pub fn python_dialect() -> LanguageDialect {
 				resolve:    Arc::new(qualifiers::BaseClasses),
 			},
 		],
-		edge_kinds: {
+		edge_kinds:   {
 			let set = EdgeKindSet::default();
 			// TODO: type→/inherits→/override→ deferred until EdgeKind extension
 			set

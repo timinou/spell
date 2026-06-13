@@ -2,13 +2,13 @@
 //!
 //! Exercises the full path:
 //!   target string \u2192 parser \u2192 napi.rs is_semantic_dispatch \u2192
-//!   semantic_dispatch::resolve \u2192 semantic_cache (Annotation + optional LSP) \u2192
-//!   type_resolver::dispatch \u2192 format_outcome \u2192 NodeRef
+//!   semantic_dispatch::resolve \u2192 semantic_cache (Annotation + optional
+//! LSP) \u2192   type_resolver::dispatch \u2192 format_outcome \u2192 NodeRef
 //!
 //! Tests fall into two tiers:
 //! 1. **Annotation-only** \u2014 always-on tree-sitter side. Asserts that
-//!    `#hover` / `#signature` / etc dispatch and produce structured results
-//!    (or `\u{00a7}empty` when the backend has no answer).
+//!    `#hover` / `#signature` / etc dispatch and produce structured results (or
+//!    `\u{00a7}empty` when the backend has no answer).
 //! 2. **Smart-merge** \u2014 `#[ignore]`-gated by `which()` checks. Asserts
 //!    dual-source merge when an LSP is on PATH (rust-analyzer / Expert).
 
@@ -53,6 +53,9 @@ fn opts(root: &std::path::Path, target: &str) -> CodePathTaskOptions {
 		gitignore:          None,
 		artifact_threshold: None,
 		session_id:         Some("semantic-e2e".into()),
+		edit_group_id:      None,
+		history_entry_id:   None,
+		history_force:      None,
 		home:               None,
 		session_dir:        None,
 	}
@@ -67,7 +70,11 @@ fn total_nodes(chunks: &[CodePathChunk]) -> usize {
 }
 
 fn first_node_kind(chunks: &[CodePathChunk]) -> Option<&str> {
-	chunks.iter().flat_map(|c| c.nodes.iter()).next().map(|n| n.kind.as_str())
+	chunks
+		.iter()
+		.flat_map(|c| c.nodes.iter())
+		.next()
+		.map(|n| n.kind.as_str())
 }
 
 fn first_text(chunks: &[CodePathChunk]) -> Option<String> {
@@ -154,14 +161,9 @@ fn type_definition_qualifier_dispatches_for_symbol() {
 #[test]
 fn type_def_alias_dispatches_identically_to_type_definition() {
 	let dir = make_ws();
-	let a = execute(
-		dir.path(),
-		&format!("{}/src/lib.rs::add#type_definition", dir.path().display()),
-	);
-	let b = execute(
-		dir.path(),
-		&format!("{}/src/lib.rs::add#type_def", dir.path().display()),
-	);
+	let a =
+		execute(dir.path(), &format!("{}/src/lib.rs::add#type_definition", dir.path().display()));
+	let b = execute(dir.path(), &format!("{}/src/lib.rs::add#type_def", dir.path().display()));
 	// Both must produce the same kind (no panic; same dispatch path).
 	assert_eq!(first_node_kind(&a), first_node_kind(&b));
 }
@@ -230,10 +232,7 @@ fn hover_smart_merge_when_rust_analyzer_available() {
 	//   - Single:    "<repr> [source: graph|semantic]"
 	//   - Disagreed: "written:  ...\ninferred: ..."
 	//   - None:      "unknown" — valid in fresh-tempdir mode
-	assert!(
-		!text.is_empty(),
-		"hover text must be non-empty (got empty string)"
-	);
+	assert!(!text.is_empty(), "hover text must be non-empty (got empty string)");
 }
 
 // ── Negative tests ──────────────────────────────────────────────────
@@ -301,8 +300,7 @@ fn notify_buffer_change_returns_zero_when_no_warm_lsp() {
 	// projects where the LSP hasn't been spawned yet.
 	let dir = make_ws();
 	let file_path = dir.path().join("src/lib.rs");
-	let notified =
-		pi_natives::semantic_cache::notify_buffer_change(&file_path, "new content");
+	let notified = pi_natives::semantic_cache::notify_buffer_change(&file_path, "new content");
 	assert_eq!(notified, 0, "no warm cache, no notification");
 }
 
@@ -312,18 +310,12 @@ fn notify_buffer_change_skips_files_not_yet_opened_by_lsp() {
 	// has opened any file yet. notify_buffer_change must NOT pre-emptively
 	// fire didChange before didOpen (a protocol violation per LSP spec).
 	let dir = make_ws();
-	let _ = pi_natives::semantic_cache::get_or_build(dir.path())
-		.expect("semantic cache build");
+	let _ = pi_natives::semantic_cache::get_or_build(dir.path()).expect("semantic cache build");
 	let file_path = dir.path().join("src/lib.rs");
-	let notified =
-		pi_natives::semantic_cache::notify_buffer_change(&file_path, "new content");
-	assert_eq!(
-		notified, 0,
-		"warm LSP that hasn't seen the file must not receive didChange"
-	);
+	let notified = pi_natives::semantic_cache::notify_buffer_change(&file_path, "new content");
+	assert_eq!(notified, 0, "warm LSP that hasn't seen the file must not receive didChange");
 	pi_natives::semantic_cache::invalidate(dir.path());
 }
-
 
 // ── FUP-094: multi-language fan-out ─────────────────────────────
 
@@ -337,20 +329,20 @@ fn notify_buffer_change_skips_files_not_yet_opened_by_lsp() {
 fn each_language_dispatch_survives_smoke_query() {
 	// (language label, file extension, fixture body)
 	let languages: Vec<(&str, &str, &str)> = vec![
-		("python",     "py",   "def add(x: int, y: int) -> int:\n    return x + y\n"),
-		("go",         "go",   "package x\nfunc Add(x int, y int) int { return x + y }\n"),
-		("ruby",       "rb",   "def add(x, y)\n  x + y\nend\n"),
-		("css",        "css",  ".x { color: red; }\n"),
-		("html",       "html", "<!doctype html>\n<title>x</title>\n"),
-		("c",          "c",    "int add(int x, int y) { return x + y; }\n"),
-		("cpp",        "cpp",  "int add(int x, int y) { return x + y; }\n"),
-		("swift",      "swift","func add(x: Int, y: Int) -> Int { x + y }\n"),
-		("kotlin",     "kt",   "fun add(x: Int, y: Int): Int = x + y\n"),
-		("lua",        "lua",  "function add(x, y) return x + y end\n"),
-		("nix",        "nix",  "{ add = x: y: x + y; }\n"),
-		("haskell",    "hs",   "add :: Int -> Int -> Int\nadd x y = x + y\n"),
-		("java",       "java", "class X { int add(int x, int y) { return x + y; } }\n"),
-		("clojure",    "clj",  "(defn add [x y] (+ x y))\n"),
+		("python", "py", "def add(x: int, y: int) -> int:\n    return x + y\n"),
+		("go", "go", "package x\nfunc Add(x int, y int) int { return x + y }\n"),
+		("ruby", "rb", "def add(x, y)\n  x + y\nend\n"),
+		("css", "css", ".x { color: red; }\n"),
+		("html", "html", "<!doctype html>\n<title>x</title>\n"),
+		("c", "c", "int add(int x, int y) { return x + y; }\n"),
+		("cpp", "cpp", "int add(int x, int y) { return x + y; }\n"),
+		("swift", "swift", "func add(x: Int, y: Int) -> Int { x + y }\n"),
+		("kotlin", "kt", "fun add(x: Int, y: Int): Int = x + y\n"),
+		("lua", "lua", "function add(x, y) return x + y end\n"),
+		("nix", "nix", "{ add = x: y: x + y; }\n"),
+		("haskell", "hs", "add :: Int -> Int -> Int\nadd x y = x + y\n"),
+		("java", "java", "class X { int add(int x, int y) { return x + y; } }\n"),
+		("clojure", "clj", "(defn add [x y] (+ x y))\n"),
 	];
 
 	for (label, ext, body) in languages {
@@ -358,20 +350,18 @@ fn each_language_dispatch_survives_smoke_query() {
 		let file = dir.path().join(format!("main.{ext}"));
 		std::fs::write(&file, body).unwrap();
 		let target = format!("{}#diagnostics", file.display());
-		let result = execute_code_path_inner(
-			opts(dir.path(), &target),
-			CancelToken::default(),
-		);
+		let result = execute_code_path_inner(opts(dir.path(), &target), CancelToken::default());
 		assert!(
 			result.is_ok(),
 			"{label}: dispatch must not return an error; got error: {}",
-			result.as_ref().err().map(|e| e.to_string()).unwrap_or_default()
+			result
+				.as_ref()
+				.err()
+				.map(|e| e.to_string())
+				.unwrap_or_default()
 		);
 		let chunks = result.unwrap();
-		assert!(
-			!chunks.is_empty(),
-			"{label}: dispatch must produce at least one chunk"
-		);
+		assert!(!chunks.is_empty(), "{label}: dispatch must produce at least one chunk");
 	}
 }
 
@@ -400,4 +390,3 @@ fn python_hover_dispatches_via_pyright() {
 	let text = first_text(&chunks).expect("hover content");
 	assert!(!text.is_empty(), "hover text must be non-empty");
 }
-

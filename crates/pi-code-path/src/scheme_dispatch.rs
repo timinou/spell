@@ -31,8 +31,7 @@ use crate::{
 /// (callback profile) are explicitly NOT in this list — the agent runtime
 /// is responsible for calling `registerScheme` at session start.
 /// Currently dynamic: rule (BUG-393), skill (BUG-394), jobs (BUG-395).
-pub const RESERVED_SCHEMES: &[&str] =
-	&["memory", "agent", "artifact", "org", "pi", "local"];
+pub const RESERVED_SCHEMES: &[&str] = &["memory", "agent", "artifact", "org", "pi", "local"];
 
 impl SchemeRegistry {
 	/// Returns true if the scheme is registered AND uses a Callback loader.
@@ -211,7 +210,10 @@ fn dispatch(
 		return Err(cancelled());
 	}
 
-	let m = profile.layout.parse(body).map_err(|d| with_usage(d, profile))?;
+	let m = profile
+		.layout
+		.parse(body)
+		.map_err(|d| with_usage(d, profile))?;
 	let root = profile.root.resolve(ctx)?;
 
 	// IdFragment owns its own dispatch path — bypasses ContentLoader.
@@ -254,10 +256,7 @@ fn dispatch(
 			let key = path.to_string_lossy();
 			let text = table.get(key.as_ref()).ok_or_else(|| Diagnostic {
 				variant: DiagnosticVariant::FileNotFound,
-				message: format!(
-					"{url}: no embedded doc named '{key}' (usage: {})",
-					profile.usage
-				),
+				message: format!("{url}: no embedded doc named '{key}' (usage: {})", profile.usage),
 				span:    None,
 			})?;
 			Ok(ResolvedContent {
@@ -274,7 +273,9 @@ fn dispatch(
 				.id
 				.as_deref()
 				.ok_or_else(|| invalid("Indexed loader requires Indexed layout"))?;
-			let addr = lookup.lookup(id, ctx, cancel).map_err(|d| with_usage(d, profile))?;
+			let addr = lookup
+				.lookup(id, ctx, cancel)
+				.map_err(|d| with_usage(d, profile))?;
 			let notes = addr.notes.clone();
 			let mut resolved = read_file_with_range(
 				&addr.path,
@@ -287,7 +288,9 @@ fn dispatch(
 			Ok(resolved)
 		},
 		ContentLoader::Callback(cb) => {
-			let mut content = cb.resolve(body, ctx, cancel).map_err(|d| with_usage(d, profile))?;
+			let mut content = cb
+				.resolve(body, ctx, cancel)
+				.map_err(|d| with_usage(d, profile))?;
 			if content.url.is_empty() {
 				content.url = url.to_string();
 			}
@@ -440,10 +443,7 @@ fn with_usage(mut d: Diagnostic, profile: &SchemeProfile) -> Diagnostic {
 	d.message = if profile.usage.is_empty() {
 		format!("{}://: {}", profile.scheme, d.message)
 	} else {
-		format!(
-			"{}://: {} (usage: {})",
-			profile.scheme, d.message, profile.usage
-		)
+		format!("{}://: {} (usage: {})", profile.scheme, d.message, profile.usage)
 	};
 	d
 }
@@ -451,7 +451,8 @@ fn with_usage(mut d: Diagnostic, profile: &SchemeProfile) -> Diagnostic {
 ///   - collapse `.` components
 ///   - resolve `..` by popping a non-`..` parent
 ///   - leave leading absolute prefix intact
-/// Returns the result as PathBuf. Used to reject escaping subpaths before fs touch.
+/// Returns the result as PathBuf. Used to reject escaping subpaths before fs
+/// touch.
 fn normalize_path(p: &Path) -> std::path::PathBuf {
 	use std::path::Component;
 	let mut out = std::path::PathBuf::new();
@@ -460,14 +461,16 @@ fn normalize_path(p: &Path) -> std::path::PathBuf {
 			Component::ParentDir => {
 				// Only pop when the trailing component is a real name; otherwise keep
 				// `..` so the start_with check below catches escape attempts.
-				let popped = out.components().next_back().map(|c| c.as_os_str().to_owned());
-				let should_pop = matches!(
-					out.components().next_back(),
-					Some(Component::Normal(_))
-				);
+				let popped = out
+					.components()
+					.next_back()
+					.map(|c| c.as_os_str().to_owned());
+				let should_pop = matches!(out.components().next_back(), Some(Component::Normal(_)));
 				if should_pop {
 					out.pop();
-				} else if popped.is_none() || matches!(out.components().next_back(), Some(Component::ParentDir)) {
+				} else if popped.is_none()
+					|| matches!(out.components().next_back(), Some(Component::ParentDir))
+				{
 					out.push("..");
 				}
 			},
@@ -478,8 +481,8 @@ fn normalize_path(p: &Path) -> std::path::PathBuf {
 	out
 }
 
-/// Returns true when `child` is the same path as `parent` or a descendant of it,
-/// comparing component-by-component (avoids prefix false-positives like
+/// Returns true when `child` is the same path as `parent` or a descendant of
+/// it, comparing component-by-component (avoids prefix false-positives like
 /// `/foo/bar` starts_with `/foo/ba`).
 fn path_starts_with(child: &Path, parent: &Path) -> bool {
 	let child_norm = normalize_path(child);

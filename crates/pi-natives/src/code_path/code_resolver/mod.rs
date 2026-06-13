@@ -46,9 +46,8 @@ mod qualifier_tests;
 mod kind_alias_tests;
 
 pub use native::NativeResolver;
-pub use pi_kernel::walker::CodeResolverImpl;
-
 use pi_code_path::types::Diagnostic;
+pub use pi_kernel::walker::CodeResolverImpl;
 
 /// Convenience constructor: a write-capable [`NativeResolver`] backed by the
 /// built-in language registry. Read-only callers use it through `Deref` (the

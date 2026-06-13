@@ -67,8 +67,9 @@ pub struct SchemeCallbackOptions {
 	pub bash_expandable:     Option<bool>,
 	/// Sync callback budget in ms. Default: 5000.
 	pub budget_ms:           Option<u32>,
-	/// Canonical URI form shown in error diagnostics. Default: `<scheme>://<body>`.
-	/// Pass something like `"rule://<name>"` to give users an exact shape to copy.
+	/// Canonical URI form shown in error diagnostics. Default:
+	/// `<scheme>://<body>`. Pass something like `"rule://<name>"` to give users
+	/// an exact shape to copy.
 	pub usage:               Option<String>,
 }
 
@@ -113,11 +114,11 @@ pub fn register_scheme_callback(
 	let usage = Box::leak(usage_str.into_boxed_str());
 	let profile = SchemeProfile {
 		// Box::leak so &'static str outlives the call. One leak per registration.
-		scheme:       Box::leak(scheme.clone().into_boxed_str()),
+		scheme: Box::leak(scheme.clone().into_boxed_str()),
 		usage,
-		root:         RootTemplate::Virtual,
-		layout:       PathLayout::Direct,
-		loader:       ContentLoader::Callback(cb),
+		root: RootTemplate::Virtual,
+		layout: PathLayout::Direct,
+		loader: ContentLoader::Callback(cb),
 		capabilities: SchemeCapabilities {
 			fs_backed: opts.fs_backed.unwrap_or(false),
 			codepath_compatible: opts.codepath_compatible.unwrap_or(false),
@@ -125,7 +126,7 @@ pub fn register_scheme_callback(
 			cache: CacheStrategy::Ttl(budget),
 			bash_expandable: opts.bash_expandable.unwrap_or(false),
 			callback_budget: Some(budget),
-			static_notes:    &[],
+			static_notes: &[],
 		},
 	};
 	reg.insert(scheme, DynamicEntry { profile });

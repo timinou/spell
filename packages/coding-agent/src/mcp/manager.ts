@@ -4,9 +4,10 @@
  * Discovers, connects to, and manages MCP servers.
  * Handles tool loading and lifecycle.
  */
+
+import type { TSchema } from "@sinclair/typebox";
 import { GatewayClient } from "@spell/pi-gateway";
 import { logger } from "@spell/pi-utils";
-import type { TSchema } from "@sinclair/typebox";
 import type { SourceMeta } from "../capability/types";
 import { resolveConfigValue } from "../config/resolve-config-value";
 import type { CustomTool } from "../extensibility/custom-tools/types";
@@ -123,6 +124,12 @@ export class MCPManager {
 	#sources = new Map<string, SourceMeta>();
 	#authStorage: AuthStorage | null = null;
 	#onNotification?: (serverName: string, method: string, params: unknown) => void;
+	#onServerRequest?: (
+		serverName: string,
+		method: string,
+		params: unknown,
+		id: string | number,
+	) => Promise<{ result?: unknown; error?: { code: number; message: string; data?: unknown } }>;
 	#onToolsChanged?: (tools: CustomTool<TSchema, MCPToolDetails>[]) => void;
 	#onResourcesChanged?: (serverName: string, uri: string) => void;
 	#onPromptsChanged?: (serverName: string) => void;
@@ -143,6 +150,21 @@ export class MCPManager {
 	 */
 	setOnNotification(handler: (serverName: string, method: string, params: unknown) => void): void {
 		this.#onNotification = handler;
+	}
+
+	/**
+	 * Set a handler for server-initiated requests (e.g. `elicitation/create`).
+	 * It returns the JSON-RPC reply payload `{ result }` or `{ error }`.
+	 */
+	setOnServerRequest(
+		handler: (
+			serverName: string,
+			method: string,
+			params: unknown,
+			id: string | number,
+		) => Promise<{ result?: unknown; error?: { code: number; message: string; data?: unknown } }>,
+	): void {
+		this.#onServerRequest = handler;
 	}
 
 	/**
@@ -307,6 +329,7 @@ export class MCPManager {
 					onNotification: (method, params) => {
 						this.#handleServerNotification(name, method, params);
 					},
+					onServerRequest: (method, params, id) => this.#handleServerRequest(name, method, params, id),
 				});
 			})().then(
 				connection => {
@@ -552,6 +575,24 @@ export class MCPManager {
 			logger.debug("Failed MCP notification refresh", { path: `mcp:${serverName}`, kind, error });
 		});
 	}
+	/**
+	 * Route a server-initiated request to the registered handler (the UI layer
+	 * for `elicitation/create`). Falls back to a JSON-RPC "method not found"
+	 * error when no handler is set, so the server is never left hanging.
+	 */
+	async #handleServerRequest(
+		serverName: string,
+		method: string,
+		params: unknown,
+		id: string | number,
+	): Promise<{ result?: unknown; error?: { code: number; message: string; data?: unknown } }> {
+		logger.debug("MCP server request received", { path: `mcp:${serverName}`, method });
+		if (!this.#onServerRequest) {
+			return { error: { code: -32601, message: `Method not supported: ${method}` } };
+		}
+		return this.#onServerRequest(serverName, method, params, id);
+	}
+
 	#handleServerNotification(serverName: string, method: string, params: unknown): void {
 		logger.debug("MCP notification received", { path: `mcp:${serverName}`, method });
 

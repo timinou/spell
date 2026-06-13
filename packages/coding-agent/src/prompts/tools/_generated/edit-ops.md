@@ -7,7 +7,7 @@ symbol-scoped — target must be `<file>::Symbol`
   symbolMove             direction (required direction) — Move direction: up or down
   symbolRawTextReplace   find (required content) — Text pattern to search for · content (required content) — New file contents (string or string[]) · occurrence (optional occurrence) — Which match to replace: first, last, all, or 1-indexed N (default: all)
   symbolRename           newName (required identifier) — New name for the symbol
-  symbolReplace          scope (optional symScope) — Replacement scope: whole (default), body (content MUST include outer braces { ... }), or target · content (required content) — New file contents (string or string[])
+  symbolReplace          scope (optional symScope) — Replacement scope: whole (default), body (content **MUST** include outer braces { … }), or target · content (required content) — New file contents (string or string[])
   symbolSplice           mode (required spliceMode) — Splice mode: self, up, or down
   symbolTranspose        column (required u32) — 1-indexed column to transpose to
   symbolWrap             content (required content) — New file contents (string or string[])
@@ -15,7 +15,7 @@ symbol-scoped — target must be `<file>::Symbol`
 file-scoped — target is `<file>`
   fileAppend           content (required content) — New file contents (string or string[])
   fileCreate           content (required content) — New file contents (string or string[]) · force (optional bool) — Overwrite if exists (default: false)
-  fileDelete          
+  fileDelete
   fileFindReplace      find (required content) — Text pattern to search for · content (required content) — New file contents (string or string[]) · occurrence (optional occurrence) — Which match to replace: first, last, all, or 1-indexed N (default: all)
   filePatch            diff (required diff) — Unified diff string to apply
   filePrepend          content (required content) — New file contents (string or string[])
@@ -29,10 +29,10 @@ line-scoped — target is `<file>`
   lineReplace   span (required lineSpan) — Inclusive line range: {start, end?} (1-indexed) · content (required content) — New file contents (string or string[])
 
 heading/css — Markdown/Org/CSS specific
-  headingDemote        
-  headingPromote       
+  headingDemote
+  headingPromote
   headingReplaceBlock   content (required content) — New file contents (string or string[])
-  cssRemoveDeadStyle   
+  cssRemoveDeadStyle
   cssRenameClassToken   find (required identifier) — CSS class/id/custom-property token to find · replace (required identifier) — Replacement token
   cssRenameCustomProp   find (required identifier) — CSS class/id/custom-property token to find · replace (required identifier) — Replacement token
   cssRenameIdToken      find (required identifier) — CSS class/id/custom-property token to find · replace (required identifier) — Replacement token

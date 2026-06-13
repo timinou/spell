@@ -213,9 +213,7 @@ impl PathLayout {
 
 			Self::Namespaced { namespace, default_file, subpath_allowed } => {
 				if body.is_empty() {
-					return Err(layout_err(&format!(
-						"missing namespace (expected '{namespace}')"
-					)));
+					return Err(layout_err(&format!("missing namespace (expected '{namespace}')")));
 				}
 				let (ns, rest) = body.split_once('/').unwrap_or((body, ""));
 				if ns != namespace {
@@ -391,9 +389,10 @@ pub struct SchemeCapabilities {
 #[derive(Clone, Debug)]
 pub struct SchemeProfile {
 	pub scheme:       &'static str,
-	/// Canonical URI form shown in diagnostics, e.g. `"memory://root[/<subpath>]"`.
-	/// Surfaced when the body is missing or malformed so users see the expected
-	/// shape rather than internal layout enum variants.
+	/// Canonical URI form shown in diagnostics, e.g.
+	/// `"memory://root[/<subpath>]"`. Surfaced when the body is missing or
+	/// malformed so users see the expected shape rather than internal layout
+	/// enum variants.
 	pub usage:        &'static str,
 	pub root:         RootTemplate,
 	pub layout:       PathLayout,

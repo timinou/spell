@@ -111,8 +111,8 @@ fn callback_err(msg: impl Into<String>) -> Diagnostic {
 /// diagnostic is just the first informative line.
 ///
 /// Input shapes seen in the wild:
-///   `"Error: skill not found\nError: skill not found\n    at resolveSkill ..."`
-///   `"skill not found\n    at resolveSkill (/path/...)"`
+///   `"Error: skill not found\nError: skill not found\n    at resolveSkill
+/// ..."`   `"skill not found\n    at resolveSkill (/path/...)"`
 fn sanitize_js_reason(raw: &str) -> String {
 	// First non-empty line, sans "Error: " prefix, sans "at <fn> (...)" suffix.
 	let first = raw
@@ -127,14 +127,14 @@ fn cancelled(msg: impl Into<String>) -> Diagnostic {
 	Diagnostic { variant: DiagnosticVariant::Cancelled, message: msg.into(), span: None }
 }
 
-
 #[cfg(test)]
 mod sanitize_tests {
 	use super::sanitize_js_reason;
 
 	#[test]
 	fn strips_error_prefix_and_stack() {
-		let input = "Error: skill not found\nError: skill not found\n    at resolveSkill (/path/to/scheme-bootstrap.ts:126:23)";
+		let input = "Error: skill not found\nError: skill not found\n    at resolveSkill \
+		             (/path/to/scheme-bootstrap.ts:126:23)";
 		assert_eq!(sanitize_js_reason(input), "skill not found");
 	}
 
@@ -155,4 +155,3 @@ mod sanitize_tests {
 		assert_eq!(sanitize_js_reason(input), "foo");
 	}
 }
-

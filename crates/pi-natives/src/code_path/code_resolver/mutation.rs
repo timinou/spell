@@ -617,11 +617,13 @@ impl NativeResolver {
 		// P5.B: edit-prep now lives in pi_kernel::edit_ops (host-agnostic).
 		// language_registry() yields Arc<LanguageRegistry>; deref to &LanguageRegistry.
 		let registry = crate::language_registry();
-		let profile = pi_kernel::edit_ops::get_profile(&registry, path, buffer.language())
-			.map_err(|e| Diagnostic {
-				variant: DiagnosticVariant::Inaccessible,
-				message: e.to_string(),
-				span:    None,
+		let profile =
+			pi_kernel::edit_ops::get_profile(&registry, path, buffer.language()).map_err(|e| {
+				Diagnostic {
+					variant: DiagnosticVariant::Inaccessible,
+					message: e.to_string(),
+					span:    None,
+				}
 			})?;
 		let prepared =
 			pi_kernel::edit_ops::single_action(buffer, &profile, path, &target_id, action_json)

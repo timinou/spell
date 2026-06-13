@@ -42,9 +42,9 @@ fn apply_unified(
 	action: &UnifiedAction,
 	resolver: &NativeResolver,
 ) -> Result<pi_code_path::ast::MutationOutcome, String> {
-	let op = pi_code_path::unified::unified_op_from_action(cp, action)
-		.map_err(|d| d.message)?;
-	resolver.try_apply(&op, &CancellationToken::new())
+	let op = pi_code_path::unified::unified_op_from_action(cp, action).map_err(|d| d.message)?;
+	resolver
+		.try_apply(&op, &CancellationToken::new())
 		.ok_or_else(|| "no resolver claimed this op".to_string())?
 		.map_err(|d| d.message)
 }
@@ -60,7 +60,11 @@ fn assert_unified_edit(
 	let dir = tempfile::tempdir().unwrap();
 	let root = dir.path().to_path_buf();
 	let ext = match lang {
-		"ts" => "ts", "rs" => "rs", "py" => "py", "go" => "go", "elixir" => "ex",
+		"ts" => "ts",
+		"rs" => "rs",
+		"py" => "py",
+		"go" => "go",
+		"elixir" => "ex",
 		_ => panic!("unknown lang: {lang}"),
 	};
 	let file_path = root.join(format!("test.{ext}"));
@@ -74,13 +78,13 @@ fn assert_unified_edit(
 		.unwrap_or_else(|e| panic!("failed to parse target '{target_str}': {}", e.message));
 
 	let _outcome = apply_unified(&cp, action, &resolver)
-		.unwrap_or_else(|e| panic!(
-			"edit failed for {lang}/{target_str}: {e}\nfixture:\n{fixture}"
-		));
+		.unwrap_or_else(|e| panic!("edit failed for {lang}/{target_str}: {e}\nfixture:\n{fixture}"));
 
 	let actual = std::fs::read_to_string(&file_path).unwrap();
-	assert_eq!(actual, expected,
-		"\n═══ FAIL: {lang} ═══\nTARGET: {target_str}\nFIXTURE:\n{fixture}\nEXPECTED:\n{expected}\nACTUAL:\n{actual}\n═══"
+	assert_eq!(
+		actual, expected,
+		"\n═══ FAIL: {lang} ═══\nTARGET: \
+		 {target_str}\nFIXTURE:\n{fixture}\nEXPECTED:\n{expected}\nACTUAL:\n{actual}\n═══"
 	);
 
 	// Verify output re-parses without syntax errors
@@ -100,7 +104,9 @@ fn reparse_verify(lang: &str, source: &str) {
 		_ => return,
 	};
 	let Some(profile) = profile else { return };
-	let Some(_dialect) = &profile.dialect else { return };
+	let Some(_dialect) = &profile.dialect else {
+		return;
+	};
 
 	let mut parser = tree_sitter::Parser::new();
 	parser.set_language(&profile.ts_language).unwrap();
@@ -110,7 +116,8 @@ fn reparse_verify(lang: &str, source: &str) {
 		let mut errors = Vec::new();
 		collect_errors(root, source, &mut errors);
 		panic!(
-			"\n═══ PARSE ERROR: {lang} ═══\nEdit produced unparseable output:\n{}\nOUTPUT:\n{source}\n═══",
+			"\n═══ PARSE ERROR: {lang} ═══\nEdit produced unparseable \
+			 output:\n{}\nOUTPUT:\n{source}\n═══",
 			errors.join("\n")
 		);
 	}
@@ -119,7 +126,9 @@ fn reparse_verify(lang: &str, source: &str) {
 fn collect_errors(node: tree_sitter::Node<'_>, source: &str, out: &mut Vec<String>) {
 	if node.is_error() || node.is_missing() {
 		let pos = node.start_position();
-		let text = source.get(node.start_byte()..node.end_byte()).unwrap_or("?");
+		let text = source
+			.get(node.start_byte()..node.end_byte())
+			.unwrap_or("?");
 		out.push(format!("  L{}:{} {} {:?}", pos.row + 1, pos.column + 1, node.kind(), text));
 	}
 	let mut cursor = node.walk();
@@ -132,7 +141,8 @@ fn collect_errors(node: tree_sitter::Node<'_>, source: &str, out: &mut Vec<Strin
 
 #[test]
 fn ts_replace_whole() {
-	assert_unified_edit("ts",
+	assert_unified_edit(
+		"ts",
 		"function foo() { return 1; }\n",
 		"test.ts::foo",
 		&action_replace("function bar() { return 99; }"),
@@ -142,7 +152,8 @@ fn ts_replace_whole() {
 
 #[test]
 fn ts_rename() {
-	assert_unified_edit("ts",
+	assert_unified_edit(
+		"ts",
 		"function oldName() { return 1; }\n",
 		"test.ts::oldName",
 		&action_rename("newName"),
@@ -156,7 +167,8 @@ fn ts_delete() {
 	let dir = tempfile::tempdir().unwrap();
 	let root = dir.path().to_path_buf();
 	let path = root.join("test.ts");
-	std::fs::write(&path, "function dead() { return 1; }\nfunction alive() { return 2; }\n").unwrap();
+	std::fs::write(&path, "function dead() { return 1; }\nfunction alive() { return 2; }\n")
+		.unwrap();
 	let registry = Arc::new(LanguageRegistry::with_builtins().unwrap());
 	let resolver = NativeResolver::new(registry).with_root(root.clone());
 	let cp = parse("test.ts::dead");
@@ -188,7 +200,8 @@ fn ts_replace_body_reparse() {
 
 #[test]
 fn rs_rename() {
-	assert_unified_edit("rs",
+	assert_unified_edit(
+		"rs",
 		"fn old_fn() -> i32 { 1 }\n",
 		"test.rs::old_fn",
 		&action_rename("new_fn"),
@@ -229,9 +242,10 @@ fn dispatch_file_find_replace() {
 	let cp = parse("test.ts");
 	let op = pi_code_path::unified::unified_op_from_action(&cp, &UnifiedAction::Replace {
 		content: ActionContent::Single("new".into()),
-		find: Some(ActionContent::Single("old".into())),
-		place: None,
-	}).unwrap();
+		find:    Some(ActionContent::Single("old".into())),
+		place:   None,
+	})
+	.unwrap();
 	assert!(matches!(op, Op::FileFindReplace { .. }));
 }
 
@@ -245,8 +259,6 @@ fn dispatch_rename_file_target_errors() {
 }
 
 fn parse(target: &str) -> CodePath {
-	pi_code_path::parser::parse_code_path(
-		target,
-		&pi_code_path::dialects::typescript::TsNameLexer,
-	).unwrap()
+	pi_code_path::parser::parse_code_path(target, &pi_code_path::dialects::typescript::TsNameLexer)
+		.unwrap()
 }

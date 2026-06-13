@@ -79,12 +79,13 @@ impl KnowledgeSubscription {
 			"repo_handle": repo_handle.into(),
 			"lanes": lanes,
 		});
-		serde_json::to_writer(&mut writer, &request)
-			.map_err(|e| format!("encode subscribe: {e}"))?;
+		serde_json::to_writer(&mut writer, &request).map_err(|e| format!("encode subscribe: {e}"))?;
 		writer
 			.write_all(b"\n")
 			.map_err(|e| format!("write subscribe: {e}"))?;
-		writer.flush().map_err(|e| format!("flush subscribe: {e}"))?;
+		writer
+			.flush()
+			.map_err(|e| format!("flush subscribe: {e}"))?;
 
 		// Read subscribe response (one line) BEFORE spawning the event
 		// reader, so we can synchronously validate the subscription.
@@ -93,8 +94,8 @@ impl KnowledgeSubscription {
 		reader
 			.read_line(&mut line)
 			.map_err(|e| format!("read subscribe response: {e}"))?;
-		let response: Value = serde_json::from_str(line.trim())
-			.map_err(|e| format!("parse subscribe response: {e}"))?;
+		let response: Value =
+			serde_json::from_str(line.trim()).map_err(|e| format!("parse subscribe response: {e}"))?;
 		if response.get("ok") != Some(&Value::Bool(true)) {
 			let err = response
 				.get("error")
@@ -135,8 +136,9 @@ impl KnowledgeSubscription {
 							on_event(value);
 						}
 					},
-					Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
-						|| e.kind() == std::io::ErrorKind::TimedOut =>
+					Err(e)
+						if e.kind() == std::io::ErrorKind::WouldBlock
+							|| e.kind() == std::io::ErrorKind::TimedOut =>
 					{
 						// Read timeout — loop and check stopped flag.
 					},
@@ -187,15 +189,14 @@ fn resolve_socket_path() -> Result<PathBuf, String> {
 	{
 		return Ok(PathBuf::from(value));
 	}
-	let base: PathBuf = if let Some(xdg) =
-		std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty())
-	{
-		PathBuf::from(xdg).join("spell")
-	} else {
-		// SAFETY: getuid is signal-safe + always returns.
-		let uid = unsafe { libc::getuid() };
-		PathBuf::from(format!("/tmp/spell-{uid}"))
-	};
+	let base: PathBuf =
+		if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
+			PathBuf::from(xdg).join("spell")
+		} else {
+			// SAFETY: getuid is signal-safe + always returns.
+			let uid = unsafe { libc::getuid() };
+			PathBuf::from(format!("/tmp/spell-{uid}"))
+		};
 	let primary = base.join("knowledge.sock");
 	let legacy = base.join("embed.sock");
 	if !primary.exists() && legacy.exists() {

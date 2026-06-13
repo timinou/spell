@@ -1,0 +1,24 @@
+#+TITLE: eliminate-bash-via-first-class-process-t
+
+** ITEM Eliminate bash via first-class process tools (run/git) + execute
+
+Design (PLAN-337) to remove the freeform bash tool. bash decomposes into 6 categories with replacement strategies:
+A. Build/test/lint runners (cargo/bun/mix) → NEW `run` tool: curated runner allowlist, LIST args (no shell quoting), structured output. The 80% case. Effort M.
+B. git → NEW `git` tool: structured subcommands, structured output, destructive-verb gating (reset/checkout/push -f confirm or deny) — a security WIN over freeform. Effort M.
+C. inline scripts (python -c/sqlite/jq) → absorb into execute (PTC-Lisp) for data munging; narrow runner entry for true external interpreters. Effort S.
+D. async jobs → AsyncJobManager (job-manager.ts) already general, only the :type "bash"|"task" union literal is coupled; generalize. Effort S.
+E. PTY/interactive (sudo/ssh/top/less/vim) → THE HARD CORE, genuinely TTY-bound (bash-interactive.ts + PtySession). ssh→existing ssh tool; rest needs a scoped `terminal` pty-only tool OR accept as the single irreducible escape hatch. This is what blocks 100% elimination — needs product decision.
+F. persistent `!` shell (human affordance via bash-executor sessionKey) → keep, independent of agent bash.
+
+Key architectural facts (verified): security today = sandbox/bash-guard.ts glob-matches the raw command STRING (fragile; `sh -c` evades). First-class tools gate on STRUCTURE (verb+list-args) → smaller, stronger attack surface. effects.ts already classifies tools by effect (bash=exec, find/edit=read/write); run/git become exec with structured surface. Migration = cutover in 5 phases, replacement ships before each bash use is removed, bash de-tiered from CORE then deleted last. Open decisions: (1) is a scoped pty `terminal` tool acceptable or zero-process goal; (2) run allowlist from manifests vs config; (3) git destructive-verb policy.
+
+This is the endpoint of the execute/probe ergonomics work: structured tool output + probe are what make eliminating bash's flat-text viable. Inventory artifact: agent://0-BashUsageInventory.
+:PROPERTIES:
+:CUSTOM_ID: DEC-eliminate-bash-via-first-class-process-t
+:KIND: decision
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T15:19:03Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: CON-ptc-lisp-probe-special-form--titled-inve
+:END:

@@ -141,9 +141,7 @@ fn fixtures() -> Vec<Fixture> {
 			|_r| Op::LineReplace {
 				target:  build_target_file(_r, "a.ts"),
 				span:    LineSpan { start: LineAnchor(1), end: None },
-				content: ActionContent::Single(
-					"function foo(a, b) { const y = 99; return y; }".into(),
-				),
+				content: ActionContent::Single("function foo(a, b) { const y = 99; return y; }".into()),
 			},
 			false,
 		),

@@ -72,7 +72,6 @@ fn lines_to_text(lines: &[String]) -> String {
 	text
 }
 
-
 fn read_file(path: &Path) -> Result<(String, Vec<String>), Diagnostic> {
 	let text = std::fs::read_to_string(path).map_err(|e| Diagnostic {
 		variant: DiagnosticVariant::Inaccessible,
@@ -452,8 +451,11 @@ mod tests {
 			.expect("should return Some")
 			.unwrap_err();
 		assert!(matches!(err.variant, DiagnosticVariant::ParseError));
-		assert!(err.message.contains("line 99") && err.message.contains("3 line"),
-			"expected helpful out-of-range diagnostic, got: {}", err.message);
+		assert!(
+			err.message.contains("line 99") && err.message.contains("3 line"),
+			"expected helpful out-of-range diagnostic, got: {}",
+			err.message
+		);
 	}
 
 	#[test]

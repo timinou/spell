@@ -21,17 +21,19 @@ enum Matcher {
 
 impl Matcher {
 	fn from_pattern(pat: &str) -> Self {
-		let is_literal = !pat.is_empty()
-			&& pat.bytes().all(|b| {
-				!matches!(
-					b,
-					b'.' | b'^'
-						| b'$' | b'*' | b'+'
-						| b'?' | b'(' | b')'
-						| b'[' | b']' | b'{'
-						| b'}' | b'|' | b'\\'
-				)
-			});
+		let is_literal =
+			!pat.is_empty()
+				&& pat.bytes().all(|b| {
+					!matches!(
+						b,
+						b'.'
+							| b'^' | b'$' | b'*'
+							| b'+' | b'?' | b'('
+							| b')' | b'[' | b']'
+							| b'{' | b'}' | b'|'
+							| b'\\'
+					)
+				});
 		if is_literal {
 			return Matcher::Literal(pat.to_string());
 		}

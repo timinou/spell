@@ -32,6 +32,9 @@ fn opts(target: &str) -> CodePathTaskOptions {
 		gitignore:          None,
 		artifact_threshold: None,
 		session_id:         Some("reexport-e2e".into()),
+		edit_group_id:      None,
+		history_entry_id:   None,
+		history_force:      None,
 		home:               None,
 		session_dir:        None,
 	}
@@ -69,11 +72,16 @@ fn def_arrow_on_reexported_class_surfaces_consumer_through_reexport() {
 	assert!(
 		!has_file_not_found(&chunks),
 		"def→ on re-exported symbol must not FileNotFound; got diags: {:?}",
-		chunks.iter().flat_map(|c| c.diagnostics.iter().map(|d| d.message.clone())).collect::<Vec<_>>()
+		chunks
+			.iter()
+			.flat_map(|c| c.diagnostics.iter().map(|d| d.message.clone()))
+			.collect::<Vec<_>>()
 	);
 	let locs = locators(&chunks);
 	assert!(
-		locs.iter().any(|l| l.contains("reexport_root.ts") || l.contains("reexport_consumer.ts")),
+		locs
+			.iter()
+			.any(|l| l.contains("reexport_root.ts") || l.contains("reexport_consumer.ts")),
 		"expected re-exporter or consumer to surface as referrer; got locators: {locs:?}"
 	);
 }

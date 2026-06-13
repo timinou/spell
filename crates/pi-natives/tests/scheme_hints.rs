@@ -26,10 +26,7 @@ fn ctx_with_session(dir: &std::path::Path) -> SessionContext {
 ///   - "Indexed layout"
 fn assert_no_enum_leaks(msg: &str) {
 	for forbidden in ["NamedFile", "NamedDir", "Namespaced", "IdFragment"] {
-		assert!(
-			!msg.contains(forbidden),
-			"diagnostic leaks PathLayout enum '{forbidden}': {msg}"
-		);
+		assert!(!msg.contains(forbidden), "diagnostic leaks PathLayout enum '{forbidden}': {msg}");
 	}
 }
 
@@ -105,11 +102,7 @@ fn pi_unknown_doc_includes_usage_hint() {
 	assert_no_enum_leaks(&err.message);
 	assert!(err.message.contains("pi://"), "diag: {}", err.message);
 	assert!(err.message.contains("usage:"), "diag: {}", err.message);
-	assert!(
-		err.message.contains("pi://<filename>.md"),
-		"diag: {}",
-		err.message
-	);
+	assert!(err.message.contains("pi://<filename>.md"), "diag: {}", err.message);
 }
 
 // ── org:// (Indexed) ────────────────────────────────────────────
@@ -125,11 +118,7 @@ fn org_bare_uri_has_friendly_hint() {
 	assert_no_enum_leaks(&err.message);
 	assert!(err.message.contains("org://"), "diag: {}", err.message);
 	assert!(err.message.contains("usage:"), "diag: {}", err.message);
-	assert!(
-		err.message.contains("org://<CUSTOM_ID>"),
-		"diag: {}",
-		err.message
-	);
+	assert!(err.message.contains("org://<CUSTOM_ID>"), "diag: {}", err.message);
 }
 
 // ── artifact:// (Indexed) ───────────────────────────────────────

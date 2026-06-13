@@ -881,10 +881,7 @@ fn cmd_recall_warm(options: &Value) -> Result<Value> {
 		.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 	let response = crate::recall_engine::warm(&repo_root).map_err(org_err)?;
 	// `None` means daemon caps unprobed; skip rather than force init.
-	Ok(json_response(
-		response.unwrap_or_else(|| json!({ "status": "unavailable" })),
-		false,
-	))
+	Ok(json_response(response.unwrap_or_else(|| json!({ "status": "unavailable" })), false))
 }
 
 /// PLAN-316 — read warm-load progress for the active repo without
@@ -901,10 +898,7 @@ fn cmd_recall_stats(options: &Value) -> Result<Value> {
 	// `None` here means the daemon hasn't been initialised yet — surface
 	// that as `unavailable` so callers can skip rather than triggering
 	// the slow `init` model-load path.
-	Ok(json_response(
-		response.unwrap_or_else(|| json!({ "status": "unavailable" })),
-		false,
-	))
+	Ok(json_response(response.unwrap_or_else(|| json!({ "status": "unavailable" })), false))
 }
 
 fn cmd_remember(options: &Value) -> Result<Value> {
@@ -1266,7 +1260,10 @@ fn cmd_link(options: &Value) -> Result<Value> {
 			let end_idx = (start + 1..preamble_end)
 				.find(|&i| new_lines[i].trim() == ":END:")
 				.ok_or_else(|| {
-					org_err(format!("file-level :RELATIONS: drawer missing :END: in {}", file_path.display()))
+					org_err(format!(
+						"file-level :RELATIONS: drawer missing :END: in {}",
+						file_path.display()
+					))
 				})?;
 			// Idempotent: if edge already there, no-op.
 			for i in (start + 1)..end_idx {
@@ -2067,7 +2064,8 @@ mod tests {
 		let ep_path = dir.path().join("EP-test-drawer.org");
 		fs::write(
 			&ep_path,
-			"#+TITLE: Test\n#+CUSTOM_ID: EP-test-drawer\n#+KIND: episode\n\n:RELATIONS:\nABOUT: CON-existing\n:END:\n\n* Body\nfoo\n",
+			"#+TITLE: Test\n#+CUSTOM_ID: EP-test-drawer\n#+KIND: episode\n\n:RELATIONS:\nABOUT: \
+			 CON-existing\n:END:\n\n* Body\nfoo\n",
 		)
 		.expect("seed ep");
 
@@ -2092,7 +2090,8 @@ mod tests {
 		let ep_path = dir.path().join("EP-idem.org");
 		fs::write(
 			&ep_path,
-			"#+TITLE: Test\n#+CUSTOM_ID: EP-idem\n#+KIND: episode\n\n:RELATIONS:\nABOUT: CON-foo\n:END:\n\n* Body\n",
+			"#+TITLE: Test\n#+CUSTOM_ID: EP-idem\n#+KIND: episode\n\n:RELATIONS:\nABOUT: \
+			 CON-foo\n:END:\n\n* Body\n",
 		)
 		.expect("seed ep");
 

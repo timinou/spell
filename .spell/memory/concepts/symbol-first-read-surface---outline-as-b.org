@@ -1,0 +1,25 @@
+#+TITLE: symbol-first-read-surface---outline-as-b
+
+** ITEM Symbol-first read surface: #outline as bare-code-file default
+
+Goal: stop the agent parsing files by line number for edits. Root cause: the READ surface spoke lines (bare file → #raw whole-file dump, no symbol handles), so the EDIT surface received lines (:A-B slices). Fix the read surface and the edit habit follows.
+
+Changes (PLAN-306 surface, full stack):
+1. Kernel `#outline` rebuilt (crates/pi-kernel/src/walker.rs): was a flat top-level walk foregrounding `(L40-L51)` ranges with NO copy-pasteable handle. Now built on pi-code-engine::outline (nested, signatures, exported flags). Renders each row as `<indent><marker> file::Symbol   kind   Lnn   signature` where marker = ● exported / · local. Children use dotted `file::Parent.child` paths. `#outline[depth=N]` prunes to N levels (parse_outline_depth mirrors fs #tree depth= grammar). Helper fns: render_outline_map, push_outline_entry, parse_outline_depth.
+2. Introspection (crates/pi-code-path/src/introspection.rs): registered QualifierInfo outline args=depth=N applies_to=file; QUALIFIER_COUNT_MIN 8→9. Flows into _generated/find-recipes.md via gen-prompts.ts.
+3. TS read default (packages/coding-agent/src/tools/get.ts): bare code file → auto #outline instead of #raw. Gated on getRegisteredExtensions() (== dialects with outline capability; ts/rs/md/py/ex/css/html/... yes, json/txt no). Non-code text keeps #raw. Once-per-(session,ext) teaching hint via module-local bounded Set (OUTLINE_HINT_SEEN, cap 4096) keyed `${sessionId}\0${ext}`; kernel render carries NO always-on hint (TS owns the contextual hint).
+4. Prompts: find.md gained <symbol-first> note + outline/depth recipe rows + #outline in qualifier line; edit.md strengthened ':A-B = LAST RESORT' + 'read #outline to get file::Symbol handles'.
+5. FUP-133: create.ts echoes the same lean #outline after materializing a code-supported non-empty file (#outlineOf helper, best-effort, never fails the create).
+
+Cutover discipline: the old FEAT-713 tests (which asserted #raw default for .ts/.md/.rs) were REWRITTEN to assert #outline, not left as parallel behavior. PLAN-306 supersedes FEAT-713's raw-default policy.
+
+Tests: kernel outline 4/4 (codepaths, nesting, depth prune, depth grammar), parity 7/7, dispatch outline pass, get.test.ts 82/82, create 17+1 e2e.
+:PROPERTIES:
+:CUSTOM_ID: CON-symbol-first-read-surface---outline-as-b
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T12:37:29Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: FUP-133-create-tool-surfaces-lean-outline-of-new
+:END:

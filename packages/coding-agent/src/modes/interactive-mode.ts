@@ -37,7 +37,6 @@ import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../extensibil
 import type { CompactOptions } from "../extensibility/extensions/types";
 import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slash-commands";
 import { buildOrgConfig } from "../org/org-plan";
-import type { UserModeState } from "./mode-state";
 import auditPrompt from "../prompts/system/audit.md" with { type: "text" };
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import { HistoryStorage } from "../session/history-storage";
@@ -51,6 +50,7 @@ import { SubagentTracker } from "../task/subagent-tracker";
 import type { SingleResult } from "../task/types";
 import { replaceTabs, TRUNCATE_LENGTHS } from "../tools/render-utils";
 import { isDelegatedNode, type TodoNode as TodoNodeT } from "../tools/todo-write";
+import type { UserModeState } from "./mode-state";
 
 /** Project the flat node roster into the desktop-overlay phase view, clustered by group label. */
 function nodesToPhaseViews(nodes: TodoNodeT[]): TodoPhaseView[] {
@@ -62,7 +62,8 @@ function nodesToPhaseViews(nodes: TodoNodeT[]): TodoPhaseView[] {
 			buckets.set(label, []);
 			order.push(label);
 		}
-		const orgId = typeof node.ref === "string" && node.ref.startsWith("org://") ? node.ref.slice("org://".length) : undefined;
+		const orgId =
+			typeof node.ref === "string" && node.ref.startsWith("org://") ? node.ref.slice("org://".length) : undefined;
 		buckets.get(label)!.push({
 			id: node.id,
 			content: node.content,
@@ -77,6 +78,8 @@ function nodesToPhaseViews(nodes: TodoNodeT[]): TodoPhaseView[] {
 	}
 	return order.map((name, idx) => ({ id: `group-${idx + 1}`, name, tasks: buckets.get(name)! }));
 }
+
+import type { ElicitationSchema, MCPElicitationParams, MCPElicitationResult } from "../mcp/types";
 import type { EventBus } from "../utils/event-bus";
 import type { BlockingEventLike } from "../utils/intention-summarizer";
 import { generateSessionTitle, setTerminalTitle } from "../utils/title-generator";
@@ -85,23 +88,24 @@ import { AuditModeOverlay } from "./components/audit-mode-overlay";
 import type { BashExecutionComponent } from "./components/bash-execution";
 import { CustomEditor } from "./components/custom-editor";
 import { DynamicBorder } from "./components/dynamic-border";
+import type { ElicitationComponent } from "./components/elicitation";
 import type { HookEditorComponent } from "./components/hook-editor";
 import type { HookInputComponent } from "./components/hook-input";
 import type { HookSelectorComponent } from "./components/hook-selector";
 import { StatusLineComponent } from "./components/status-line";
-import { FocusRenderThrottle } from "./focus-render-throttle";
 import type { ToolExecutionHandle } from "./components/tool-execution";
 import { WelcomeComponent } from "./components/welcome";
 import { BtwController } from "./controllers/btw-controller";
 import { CommandController } from "./controllers/command-controller";
-import { MemoryStatusController } from "./controllers/memory-status-controller";
 import { EventController } from "./controllers/event-controller";
 import { ExtensionUiController } from "./controllers/extension-ui-controller";
 import { InputController } from "./controllers/input-controller";
 import { IntentionController } from "./controllers/intention-controller";
 import { MCPCommandController } from "./controllers/mcp-command-controller";
+import { MemoryStatusController } from "./controllers/memory-status-controller";
 import { SelectorController } from "./controllers/selector-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
+import { FocusRenderThrottle } from "./focus-render-throttle";
 import { OAuthManualInputManager } from "./oauth-manual-input";
 import { setMermaidRenderCallback } from "./theme/mermaid-cache";
 import type { Theme } from "./theme/theme";
@@ -236,6 +240,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	hookInput: HookInputComponent | undefined = undefined;
 	#userPausedFrame: UserPausedFrameContainer;
 	hookEditor: HookEditorComponent | undefined = undefined;
+	hookElicitation: ElicitationComponent | undefined = undefined;
 	lastStatusSpacer: Spacer | undefined = undefined;
 	lastStatusText: Text | undefined = undefined;
 	fileSlashCommands: Set<string> = new Set();
@@ -425,6 +430,19 @@ export class InteractiveMode implements InteractiveModeContext {
 		dbgStartup("a:init:enter", { alreadyInitialized: this.isInitialized });
 		if (this.isInitialized) return;
 
+		// Route MCP server-initiated requests (elicitation/create) to the UI panel.
+		this.mcpManager?.setOnServerRequest(async (_serverName, method, params) => {
+			if (method !== "elicitation/create") {
+				return { error: { code: -32601, message: `Method not supported: ${method}` } };
+			}
+			const p = params as Partial<MCPElicitationParams> | undefined;
+			if (!p || typeof p.message !== "string" || !p.requestedSchema) {
+				return { error: { code: -32602, message: "Invalid elicitation params" } };
+			}
+			const result = await this.showElicitation(p.message, p.requestedSchema);
+			return { result };
+		});
+
 		this.keybindings = await logger.timeAsync("InteractiveMode.init:keybindings", () => KeybindingsManager.create());
 		dbgStartup("b:after:KeybindingsManager.create");
 
@@ -504,7 +522,6 @@ export class InteractiveMode implements InteractiveModeContext {
 				})),
 			),
 		);
-
 
 		const startupQuiet = settings.get("startup.quiet");
 
@@ -820,8 +837,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
-
-
 	showAuditOverlay(): void {
 		if (!this.#auditOverlay) {
 			this.#auditOverlay = new AuditModeOverlay(this.#auditDepth, this.#auditMaxDepth);
@@ -959,7 +974,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		visit(results);
 	}
 
-		#renderChildTodoGroups(todo: TodoNode, prefix: string): string[] {
+	#renderChildTodoGroups(todo: TodoNode, prefix: string): string[] {
 		const childNodes = todo.delegation?.childNodes ?? [];
 		if (childNodes.length === 0) return [];
 		const lines: string[] = [];
@@ -1066,7 +1081,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		return [theme.fg("dim", `${prefix}  ${truncateToWidth(replaceTabs(firstLine), TRUNCATE_LENGTHS.TITLE)}`)];
 	}
 
-		/** Cluster the flat node roster by cosmetic group label, preserving order. */
+	/** Cluster the flat node roster by cosmetic group label, preserving order. */
 	#clusterByLabel(nodes: TodoNode[]): Array<{ name: string; tasks: TodoNode[] }> {
 		const order: string[] = [];
 		const buckets = new Map<string, TodoNode[]>();
@@ -1081,7 +1096,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		return order.map(name => ({ name, tasks: buckets.get(name)! }));
 	}
 
-	#getActiveGroup(groups: Array<{ name: string; tasks: TodoNode[] }>): { name: string; tasks: TodoNode[] } | undefined {
+	#getActiveGroup(
+		groups: Array<{ name: string; tasks: TodoNode[] }>,
+	): { name: string; tasks: TodoNode[] } | undefined {
 		const nonEmpty = groups.filter(group => group.tasks.length > 0);
 		const active = nonEmpty.find(group =>
 			group.tasks.some(
@@ -1091,7 +1108,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		return active ?? nonEmpty[nonEmpty.length - 1];
 	}
 
-		#renderTodoList(): void {
+	#renderTodoList(): void {
 		this.todoContainer.clear();
 		const groups = this.#clusterByLabel(this.todoNodes).filter(group => group.tasks.length > 0);
 		if (groups.length === 0) {
@@ -1135,10 +1152,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#renderTodoList();
 	}
 
-
-
-
-
 	/** Apply any deferred model switch after the current stream ends. */
 	async flushPendingModelSwitch(): Promise<void> {
 		const model = this.#pendingModelSwitch;
@@ -1159,11 +1172,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (sessionContext.mode === "plan") {
 		}
 	}
-
-
-
-
-
 
 	async handleModeCommand(modeName: string, _prompt?: string): Promise<void> {
 		const config = this.session.getModeConfig(modeName);
@@ -1206,8 +1214,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showStatus(`Mode "${config.name}" activated.`);
 		}
 	}
-
-
 
 	stop(): void {
 		if (this.loadingAnimation) {
@@ -1987,6 +1993,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#extensionUiController.showHookInput(title, placeholder);
 	}
 
+	showElicitation(message: string, schema: ElicitationSchema): Promise<MCPElicitationResult> {
+		return this.#extensionUiController.showElicitation(message, schema);
+	}
+
 	hideHookInput(): void {
 		this.#extensionUiController.hideHookInput();
 	}
@@ -2105,4 +2115,3 @@ function extractMessageText(message: AgentMessage): string | undefined {
 	const joined = parts.join("\n").trim();
 	return joined.length > 0 ? joined : undefined;
 }
-

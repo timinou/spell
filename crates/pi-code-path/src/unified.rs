@@ -20,14 +20,10 @@
 
 use std::path::Path;
 
-
-use crate::dialect::NameLexer;
 use crate::{
 	ast::{ActionContent, CodePath, FsSegment, Locator},
-	op::{
-		CssTarget, FileTarget, HeadingTarget, Identifier, Op,
-		SymScope, SymbolTarget,
-	},
+	dialect::NameLexer,
+	op::{CssTarget, FileTarget, HeadingTarget, Identifier, Op, SymScope, SymbolTarget},
 	types::{Diagnostic, DiagnosticVariant},
 };
 
@@ -38,15 +34,9 @@ use crate::{
 pub enum UnifiedAction {
 	/// Replace the target with `content`. Optional `find` for structural
 	/// find-and-replace. Optional `place` for append/prepend.
-	Replace {
-		content: ActionContent,
-		find:    Option<ActionContent>,
-		place:   Option<Place>,
-	},
+	Replace { content: ActionContent, find: Option<ActionContent>, place: Option<Place> },
 	/// Rename a symbol target.
-	Rename {
-		content: Identifier,
-	},
+	Rename { content: Identifier },
 	/// Delete the target.
 	Delete,
 }
@@ -119,12 +109,15 @@ fn read_only_semantic_diagnostic(action: &str, qualifier: &str) -> Diagnostic {
 	Diagnostic {
 		variant: DiagnosticVariant::IncompatibleTargetShape,
 		message: format!(
-			"cannot {action} a target with `#{qualifier}` — it is a read-only \
-semantic view, not a region of code. Use \
-`find {{ target: \"…#{qualifier}\" }}` to inspect it.{}",
-			if suggestion.is_empty() { String::new() } else { format!(" {suggestion}") }
+			"cannot {action} a target with `#{qualifier}` — it is a read-only semantic view, not a \
+			 region of code. Use `find {{ target: \"…#{qualifier}\" }}` to inspect it.{}",
+			if suggestion.is_empty() {
+				String::new()
+			} else {
+				format!(" {suggestion}")
+			}
 		),
-		span: None,
+		span:    None,
 	}
 }
 
@@ -184,7 +177,8 @@ impl TargetShape {
 				};
 				TargetShape::SemanticReadOnly { qualifier }
 			},
-			(false, true, Some(_)) => TargetShape::Symbol, // other qualifiers (e.g. #raw) treated as whole-symbol
+			(false, true, Some(_)) => TargetShape::Symbol, /* other qualifiers (e.g. #raw) treated
+			                                                 * as whole-symbol */
 			// Non-glob, no query
 			(false, false, None) => TargetShape::File,
 			(false, false, _) => TargetShape::Unknown,
@@ -197,26 +191,18 @@ impl TargetShape {
 /// Detect the NameLexer for a file path based on extension.
 pub fn lexer_for_path(path: &Path) -> Box<dyn NameLexer> {
 	match path.extension().and_then(|e| e.to_str()) {
-		Some("ts") | Some("tsx") | Some("mts") | Some("cts") =>
-			Box::new(crate::dialects::typescript::TsNameLexer),
-		Some("rs") =>
-			Box::new(crate::dialects::rust::RustNameLexer),
-		Some("py") | Some("pyi") =>
-			Box::new(crate::dialects::python::PyNameLexer),
-		Some("go") =>
-			Box::new(crate::dialects::go::GoNameLexer),
-		Some("ex") | Some("exs") | Some("heex") =>
-			Box::new(crate::dialects::elixir::ExNameLexer),
-		Some("hs") =>
-			Box::new(crate::dialects::haskell::HsNameLexer),
-		Some("html") | Some("htm") =>
-			Box::new(crate::dialects::html::HtmlNameLexer),
-		Some("css") | Some("scss") | Some("less") =>
-			Box::new(crate::dialects::css::CssNameLexer),
-		Some("md") | Some("markdown") =>
-			Box::new(crate::dialects::mdorg::MdNameLexer),
-		Some("org") =>
-			Box::new(crate::dialects::mdorg::MdNameLexer),
+		Some("ts") | Some("tsx") | Some("mts") | Some("cts") => {
+			Box::new(crate::dialects::typescript::TsNameLexer)
+		},
+		Some("rs") => Box::new(crate::dialects::rust::RustNameLexer),
+		Some("py") | Some("pyi") => Box::new(crate::dialects::python::PyNameLexer),
+		Some("go") => Box::new(crate::dialects::go::GoNameLexer),
+		Some("ex") | Some("exs") | Some("heex") => Box::new(crate::dialects::elixir::ExNameLexer),
+		Some("hs") => Box::new(crate::dialects::haskell::HsNameLexer),
+		Some("html") | Some("htm") => Box::new(crate::dialects::html::HtmlNameLexer),
+		Some("css") | Some("scss") | Some("less") => Box::new(crate::dialects::css::CssNameLexer),
+		Some("md") | Some("markdown") => Box::new(crate::dialects::mdorg::MdNameLexer),
+		Some("org") => Box::new(crate::dialects::mdorg::MdNameLexer),
 		_ => Box::new(crate::dialects::typescript::TsNameLexer),
 	}
 }
@@ -227,22 +213,15 @@ pub fn lexer_for_path(path: &Path) -> Box<dyn NameLexer> {
 ///
 /// Returns a [`Diagnostic`] when the action cannot be applied to the
 /// given target shape.
-pub fn unified_op_from_action(
-	cp: &CodePath,
-	action: &UnifiedAction,
-) -> Result<Op, Diagnostic> {
+pub fn unified_op_from_action(cp: &CodePath, action: &UnifiedAction) -> Result<Op, Diagnostic> {
 	let shape = TargetShape::classify(cp);
 
 	match action {
 		UnifiedAction::Replace { content, find, place } => {
 			dispatch_replace(cp, shape, content, find, place)
-		}
-		UnifiedAction::Rename { content } => {
-			dispatch_rename(cp, shape, content)
-		}
-		UnifiedAction::Delete => {
-			dispatch_delete(cp, shape)
-		}
+		},
+		UnifiedAction::Rename { content } => dispatch_rename(cp, shape, content),
+		UnifiedAction::Delete => dispatch_delete(cp, shape),
 	}
 }
 
@@ -256,7 +235,9 @@ fn dispatch_replace(
 	reject_if_read_only(shape, "replace")?;
 
 	// Symbol-scoped with find: find-and-replace within the symbol
-	if find.is_some() && matches!(shape, TargetShape::Symbol | TargetShape::SymbolBody | TargetShape::SymbolSig) {
+	if find.is_some()
+		&& matches!(shape, TargetShape::Symbol | TargetShape::SymbolBody | TargetShape::SymbolSig)
+	{
 		let target = SymbolTarget::new(cp.clone())?;
 		return Ok(Op::SymbolFindReplace {
 			target,
@@ -269,28 +250,16 @@ fn dispatch_replace(
 	match (shape, place) {
 		(TargetShape::Symbol, None) => {
 			let target = SymbolTarget::new(cp.clone())?;
-			Ok(Op::SymbolReplace {
-				target,
-				scope: SymScope::Whole,
-				content: content.clone(),
-			})
-		}
+			Ok(Op::SymbolReplace { target, scope: SymScope::Whole, content: content.clone() })
+		},
 		(TargetShape::SymbolBody, None) => {
 			let target = SymbolTarget::new(cp.clone())?;
-			Ok(Op::SymbolReplace {
-				target,
-				scope: SymScope::Body,
-				content: content.clone(),
-			})
-		}
+			Ok(Op::SymbolReplace { target, scope: SymScope::Body, content: content.clone() })
+		},
 		(TargetShape::SymbolSig, None) => {
 			let target = SymbolTarget::new(cp.clone())?;
-			Ok(Op::SymbolReplace {
-				target,
-				scope: SymScope::Sig,
-				content: content.clone(),
-			})
-		}
+			Ok(Op::SymbolReplace { target, scope: SymScope::Sig, content: content.clone() })
+		},
 		(TargetShape::File, None) if find.is_some() => {
 			let target = FileTarget::new(cp.clone())?;
 			Ok(Op::FileFindReplace {
@@ -299,40 +268,27 @@ fn dispatch_replace(
 				content: content.clone(),
 				occurrence: None,
 			})
-		}
+		},
 		(TargetShape::File, None) => {
 			// Bare content: overwrite file
 			let target = FileTarget::new(cp.clone())?;
-			Ok(Op::FileWrite {
-				target,
-				content: content.clone(),
-				force: false,
-			})
-		}
+			Ok(Op::FileWrite { target, content: content.clone(), force: false })
+		},
 		(TargetShape::File, Some(Place::End)) => {
 			let target = FileTarget::new(cp.clone())?;
-			Ok(Op::FileAppend {
-				target,
-				content: content.clone(),
-			})
-		}
+			Ok(Op::FileAppend { target, content: content.clone() })
+		},
 		(TargetShape::File, Some(Place::Start)) => {
 			let target = FileTarget::new(cp.clone())?;
-			Ok(Op::FilePrepend {
-				target,
-				content: content.clone(),
-			})
-		}
+			Ok(Op::FilePrepend { target, content: content.clone() })
+		},
 		(TargetShape::GlobSymbol, _) => {
 			// Multi-file symbol operation — dispatch as batch
-			// For now, return a single SymbolReplace and let the caller handle glob expansion
+			// For now, return a single SymbolReplace and let the caller handle glob
+			// expansion
 			let target = SymbolTarget::new(cp.clone())?;
-			Ok(Op::SymbolReplace {
-				target,
-				scope: SymScope::Whole,
-				content: content.clone(),
-			})
-		}
+			Ok(Op::SymbolReplace { target, scope: SymScope::Whole, content: content.clone() })
+		},
 		(TargetShape::GlobFile, None) if find.is_some() => {
 			let target = FileTarget::new(cp.clone())?;
 			Ok(Op::FileFindReplace {
@@ -341,14 +297,11 @@ fn dispatch_replace(
 				content: content.clone(),
 				occurrence: None,
 			})
-		}
+		},
 		(TargetShape::Heading, None) => {
 			let target = HeadingTarget::new(cp.clone())?;
-			Ok(Op::HeadingReplaceBlock {
-				target,
-				content: content.clone(),
-			})
-		}
+			Ok(Op::HeadingReplaceBlock { target, content: content.clone() })
+		},
 		(TargetShape::Css, None) => {
 			let target = CssTarget::new(cp.clone())?;
 			Ok(Op::CssRenameClassToken {
@@ -356,14 +309,14 @@ fn dispatch_replace(
 				find: String::new(),
 				replace: content_to_string(content),
 			})
-		}
+		},
 		_ => Err(Diagnostic {
 			variant: DiagnosticVariant::IncompatibleTargetShape,
 			message: format!(
 				"replace with target shape {:?} and place {:?} is not supported",
 				shape, place
 			),
-			span: None,
+			span:    None,
 		}),
 	}
 }
@@ -380,55 +333,42 @@ fn dispatch_rename(
 		| TargetShape::SymbolSig
 		| TargetShape::GlobSymbol => {
 			let target = SymbolTarget::new(cp.clone())?;
-			Ok(Op::SymbolRename {
-				target,
-				new_name: new_name.clone(),
-			})
-		}
+			Ok(Op::SymbolRename { target, new_name: new_name.clone() })
+		},
 		_ => Err(Diagnostic {
 			variant: DiagnosticVariant::IncompatibleTargetShape,
 			message: format!(
 				"rename requires a symbol target (e.g. 'file.ts :: funcName'). Got shape: {:?}",
 				shape
 			),
-			span: None,
+			span:    None,
 		}),
 	}
 }
 
-fn dispatch_delete(
-	cp: &CodePath,
-	shape: TargetShape,
-) -> Result<Op, Diagnostic> {
+fn dispatch_delete(cp: &CodePath, shape: TargetShape) -> Result<Op, Diagnostic> {
 	reject_if_read_only(shape, "delete")?;
 	match shape {
-		TargetShape::Symbol
-		| TargetShape::SymbolBody
-		| TargetShape::SymbolSig => {
+		TargetShape::Symbol | TargetShape::SymbolBody | TargetShape::SymbolSig => {
 			let target = SymbolTarget::new(cp.clone())?;
-			Ok(Op::SymbolDelete {
-				target,
-				allow_sibling_delete: false,
-			})
-		}
+			Ok(Op::SymbolDelete { target, allow_sibling_delete: false })
+		},
 		TargetShape::File | TargetShape::GlobFile => {
 			let target = FileTarget::new(cp.clone())?;
 			Ok(Op::FileDelete { target })
-		}
+		},
 		TargetShape::GlobSymbol => {
 			let target = SymbolTarget::new(cp.clone())?;
-			Ok(Op::SymbolDelete {
-				target,
-				allow_sibling_delete: false,
-			})
-		}
+			Ok(Op::SymbolDelete { target, allow_sibling_delete: false })
+		},
 		_ => Err(Diagnostic {
 			variant: DiagnosticVariant::IncompatibleTargetShape,
 			message: format!(
-				"delete with target shape {:?} is not supported. Use: symbol, file, CSS, or glob targets.",
+				"delete with target shape {:?} is not supported. Use: symbol, file, CSS, or glob \
+				 targets.",
 				shape
 			),
-			span: None,
+			span:    None,
 		}),
 	}
 }
@@ -449,8 +389,7 @@ fn content_to_string(content: &ActionContent) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::parser::parse_code_path;
-	use crate::dialects::typescript::TsNameLexer;
+	use crate::{dialects::typescript::TsNameLexer, parser::parse_code_path};
 
 	fn parse(target: &str) -> CodePath {
 		parse_code_path(target, &TsNameLexer).unwrap()
@@ -514,31 +453,35 @@ mod tests {
 	// friendly hint pointing at `find { … #qual }`.
 	#[test]
 	fn replace_on_read_only_qualifier_returns_diagnostic_with_hint() {
-		let err = dispatch(
-			"foo.ts :: bar#hover_inferred",
-			UnifiedAction::Replace { content: sc("x"), find: None, place: None },
-		).expect_err("read-only qualifier must reject");
+		let err = dispatch("foo.ts :: bar#hover_inferred", UnifiedAction::Replace {
+			content: sc("x"),
+			find:    None,
+			place:   None,
+		})
+		.expect_err("read-only qualifier must reject");
 		assert!(matches!(err.variant, DiagnosticVariant::IncompatibleTargetShape));
-		assert!(err.message.contains("#hover_inferred"), "hint must mention qualifier: {}", err.message);
+		assert!(
+			err.message.contains("#hover_inferred"),
+			"hint must mention qualifier: {}",
+			err.message
+		);
 		assert!(err.message.contains("find"), "hint must redirect to find: {}", err.message);
 	}
 
 	#[test]
 	fn rename_on_read_only_qualifier_returns_diagnostic() {
-		let err = dispatch(
-			"foo.ts :: bar#type_definition",
-			UnifiedAction::Rename { content: Identifier("baz".into()) },
-		).expect_err("rename on read-only qualifier must reject");
+		let err = dispatch("foo.ts :: bar#type_definition", UnifiedAction::Rename {
+			content: Identifier("baz".into()),
+		})
+		.expect_err("rename on read-only qualifier must reject");
 		assert!(matches!(err.variant, DiagnosticVariant::IncompatibleTargetShape));
 		assert!(err.message.contains("#type_definition"));
 	}
 
 	#[test]
 	fn delete_on_read_only_qualifier_returns_diagnostic() {
-		let err = dispatch(
-			"foo.ts :: bar#diagnostics",
-			UnifiedAction::Delete,
-		).expect_err("delete on read-only qualifier must reject");
+		let err = dispatch("foo.ts :: bar#diagnostics", UnifiedAction::Delete)
+			.expect_err("delete on read-only qualifier must reject");
 		assert!(matches!(err.variant, DiagnosticVariant::IncompatibleTargetShape));
 		assert!(err.message.contains("#diagnostics"));
 	}
@@ -552,10 +495,12 @@ mod tests {
 			TargetShape::SemanticReadOnly { qualifier } => assert_eq!(qualifier, "hover"),
 			other => panic!("expected SemanticReadOnly(hover), got {other:?}"),
 		}
-		let err = dispatch(
-			"foo.ts :: bar#hover",
-			UnifiedAction::Replace { content: sc("x"), find: None, place: None },
-		).expect_err("edit on #hover must reject");
+		let err = dispatch("foo.ts :: bar#hover", UnifiedAction::Replace {
+			content: sc("x"),
+			find:    None,
+			place:   None,
+		})
+		.expect_err("edit on #hover must reject");
 		assert!(err.message.contains("#sig"), "hint must point at #sig: {}", err.message);
 		assert!(err.message.contains("#body"), "hint must point at #body: {}", err.message);
 	}
@@ -564,12 +509,17 @@ mod tests {
 	// `find { target: "…" }` shape, not the ambiguous shorthand.
 	#[test]
 	fn read_only_diagnostic_uses_canonical_find_target_syntax() {
-		let err = dispatch(
-			"foo.ts :: bar#diagnostics",
-			UnifiedAction::Replace { content: sc("x"), find: None, place: None },
-		).expect_err("read-only qualifier must reject");
-		assert!(err.message.contains("target:"),
-			"diagnostic should use `find {{ target: \"…\" }}` syntax: {}", err.message);
+		let err = dispatch("foo.ts :: bar#diagnostics", UnifiedAction::Replace {
+			content: sc("x"),
+			find:    None,
+			place:   None,
+		})
+		.expect_err("read-only qualifier must reject");
+		assert!(
+			err.message.contains("target:"),
+			"diagnostic should use `find {{ target: \"…\" }}` syntax: {}",
+			err.message
+		);
 	}
 
 	#[test]
@@ -588,9 +538,10 @@ mod tests {
 	fn replace_symbol_whole() {
 		let op = dispatch("foo.ts :: bar", UnifiedAction::Replace {
 			content: sc("function bar() { return 42; }"),
-			find: None,
-			place: None,
-		}).unwrap();
+			find:    None,
+			place:   None,
+		})
+		.unwrap();
 		assert!(matches!(op, Op::SymbolReplace { scope: SymScope::Whole, .. }));
 	}
 
@@ -598,9 +549,10 @@ mod tests {
 	fn replace_symbol_body() {
 		let op = dispatch("foo.ts :: bar#body", UnifiedAction::Replace {
 			content: sc("return 42;"),
-			find: None,
-			place: None,
-		}).unwrap();
+			find:    None,
+			place:   None,
+		})
+		.unwrap();
 		assert!(matches!(op, Op::SymbolReplace { scope: SymScope::Body, .. }));
 	}
 
@@ -608,9 +560,10 @@ mod tests {
 	fn replace_symbol_sig() {
 		let op = dispatch("foo.ts :: bar#sig", UnifiedAction::Replace {
 			content: sc("function bar(x: number): void"),
-			find: None,
-			place: None,
-		}).unwrap();
+			find:    None,
+			place:   None,
+		})
+		.unwrap();
 		assert!(matches!(op, Op::SymbolReplace { scope: SymScope::Sig, .. }));
 	}
 
@@ -618,9 +571,10 @@ mod tests {
 	fn replace_symbol_with_find() {
 		let op = dispatch("foo.ts :: bar", UnifiedAction::Replace {
 			content: sc("logger.info($1)"),
-			find: Some(sc("console.log($1)")),
-			place: None,
-		}).unwrap();
+			find:    Some(sc("console.log($1)")),
+			place:   None,
+		})
+		.unwrap();
 		assert!(matches!(op, Op::SymbolFindReplace { .. }));
 	}
 
@@ -628,9 +582,10 @@ mod tests {
 	fn replace_file_bare() {
 		let op = dispatch("foo.ts", UnifiedAction::Replace {
 			content: sc("export const X = 1;"),
-			find: None,
-			place: None,
-		}).unwrap();
+			find:    None,
+			place:   None,
+		})
+		.unwrap();
 		assert!(matches!(op, Op::FileWrite { .. }));
 	}
 
@@ -638,9 +593,10 @@ mod tests {
 	fn replace_file_with_find() {
 		let op = dispatch("foo.ts", UnifiedAction::Replace {
 			content: sc("newPattern"),
-			find: Some(sc("oldPattern")),
-			place: None,
-		}).unwrap();
+			find:    Some(sc("oldPattern")),
+			place:   None,
+		})
+		.unwrap();
 		assert!(matches!(op, Op::FileFindReplace { .. }));
 	}
 
@@ -648,9 +604,10 @@ mod tests {
 	fn replace_file_append() {
 		let op = dispatch("foo.ts", UnifiedAction::Replace {
 			content: sc("\nnew line"),
-			find: None,
-			place: Some(Place::End),
-		}).unwrap();
+			find:    None,
+			place:   Some(Place::End),
+		})
+		.unwrap();
 		assert!(matches!(op, Op::FileAppend { .. }));
 	}
 
@@ -658,9 +615,10 @@ mod tests {
 	fn replace_file_prepend() {
 		let op = dispatch("foo.ts", UnifiedAction::Replace {
 			content: sc("// header\n"),
-			find: None,
-			place: Some(Place::Start),
-		}).unwrap();
+			find:    None,
+			place:   Some(Place::Start),
+		})
+		.unwrap();
 		assert!(matches!(op, Op::FilePrepend { .. }));
 	}
 
@@ -670,7 +628,8 @@ mod tests {
 	fn rename_symbol() {
 		let op = dispatch("foo.ts :: oldName", UnifiedAction::Rename {
 			content: Identifier("newName".to_string()),
-		}).unwrap();
+		})
+		.unwrap();
 		assert!(matches!(op, Op::SymbolRename { .. }));
 	}
 
@@ -678,15 +637,15 @@ mod tests {
 	fn rename_glob_symbol() {
 		let op = dispatch("**/*.ts :: oldName", UnifiedAction::Rename {
 			content: Identifier("newName".to_string()),
-		}).unwrap();
+		})
+		.unwrap();
 		assert!(matches!(op, Op::SymbolRename { .. }));
 	}
 
 	#[test]
 	fn rename_file_target_errors() {
-		let result = dispatch("foo.ts", UnifiedAction::Rename {
-			content: Identifier("bar".to_string()),
-		});
+		let result =
+			dispatch("foo.ts", UnifiedAction::Rename { content: Identifier("bar".to_string()) });
 		assert!(result.is_err());
 		assert!(result.unwrap_err().message.contains("symbol target"));
 	}
@@ -723,17 +682,17 @@ mod tests {
 	fn replace_unsupported_shape_errors() {
 		// URI targets are not classified as a supported shape
 		let cp = CodePath {
-			locator: Locator::Uri(crate::ast::UriLocator {
+			locator:   Locator::Uri(crate::ast::UriLocator {
 				scheme: "unknown".into(),
-				path: "x".into(),
+				path:   "x".into(),
 			}),
-			query: None,
+			query:     None,
 			qualifier: None,
 		};
 		let result = unified_op_from_action(&cp, &UnifiedAction::Replace {
 			content: sc("new"),
-			find: None,
-			place: None,
+			find:    None,
+			place:   None,
 		});
 		assert!(result.is_err());
 	}

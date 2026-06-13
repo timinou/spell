@@ -60,10 +60,6 @@ use pi_code_graph::{
 	BuildGraphOptions, CacheStatus, CacheStore, CodeGraphBuilder,
 	LanguageRegistry as GraphLanguageRegistry, query::GraphOutlineEnrichment,
 };
-use serde_json::{Value, json};
-use tree_sitter::Node;
-
-use crate::{buffer_registry, language_registry};
 // P5.B (PLAN-336): the host-agnostic edit-prep cluster now lives in
 // pi_kernel::edit_ops; re-import every symbol the napi paths in this file use so
 // the call sites resolve unchanged.
@@ -71,6 +67,10 @@ use pi_kernel::edit_ops::{
 	action_content, action_line, edn_named_children, edn_node_for_path, edn_node_text,
 	edn_root_value, single_action, target_range,
 };
+use serde_json::{Value, json};
+use tree_sitter::Node;
+
+use crate::{buffer_registry, language_registry};
 fn engine_err(error: pi_code_engine::error::CodeEngineError) -> Error {
 	let payload = match &error {
 		CodeEngineError::ExternalModification { path, .. } => json!({
@@ -578,9 +578,10 @@ fn workspace_root_for(path: &Path) -> PathBuf {
 	}
 }
 
-// P5.B (PLAN-336): prove_dead_style + the action_* accessors + resolve_target_id
-// (and the EDN path helpers below) moved to pi_kernel::edit_ops. Imported at the
-// top of this file; the napi paths here call the kernel versions unchanged.
+// P5.B (PLAN-336): prove_dead_style + the action_* accessors +
+// resolve_target_id (and the EDN path helpers below) moved to
+// pi_kernel::edit_ops. Imported at the top of this file; the napi paths here
+// call the kernel versions unchanged.
 fn file_target_id_for_path(path: &Path, options: &Value) -> String {
 	let root = root_hint(options).unwrap_or_else(|| workspace_root_for(path));
 	relativize_path(path, &root)
@@ -590,9 +591,10 @@ fn symbol_target_id(file_target_id: &str, symbol_path: &str) -> String {
 	format!("{file_target_id}::{symbol_path}")
 }
 
-// P5.B (PLAN-336): target_range, would_leave_zero_bytes, synthetic_token_symbol,
-// and single_action moved to pi_kernel::edit_ops (host-agnostic, shared with the
-// BEAM NIF edit lane). Imported at the top of this file.
+// P5.B (PLAN-336): target_range, would_leave_zero_bytes,
+// synthetic_token_symbol, and single_action moved to pi_kernel::edit_ops
+// (host-agnostic, shared with the BEAM NIF edit lane). Imported at the top of
+// this file.
 fn execute_operation_node(
 	buffer: &mut CodeBuffer,
 	profile: &LanguageProfile,
@@ -1668,6 +1670,9 @@ mod tests {
 				gitignore:          None,
 				artifact_threshold: None,
 				session_id:         None,
+				edit_group_id:      None,
+				history_entry_id:   None,
+				history_force:      None,
 				home:               None,
 				session_dir:        None,
 			},

@@ -1,0 +1,76 @@
+#+TITLE: Full mid-walk host-abort bridge for kernel resolve_target (symbol/outline walk)
+#+STATE: ITEM
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: FUP-132-full-mid-walk-host-abort-bridge-for-kern
+
+* Initial Message
+
+Ok, explain to me what FUP-121 and FUP-122 actually look like, and also what your initial plan w.r.t QML codemod tiles, I also wanted some QML stuff (and QoL improvements to QML if you see any).
+
+P3 is still in scope, keep that in mind
+
+* Context (P3.7 cutover, PLAN-334)
+
+After the P3.7 cutover, execute_code_path_inner's read branch delegates to
+pi_kernel::resolve_target, passing the host-agnostic `pi_token`
+(pi_code_path::resolver::CancellationToken). The kernel's symbol/outline walk
+(crates/pi-kernel/src/parse.rs, the per-file loop) checks `cancel.is_cancelled()`
+mid-walk.
+
+The ORIGINAL hand-written napi symbol/outline loop checked
+`cancel_token.aborted() || pi_token.is_cancelled()` per file \u2014 where the LIVE
+signal was the host `cancel_token` (a napi CancelToken backed by an AbortSignal +
+timeout deadline). `pi_token` was never synced to it, so post-cutover the kernel's
+mid-walk guard sees an inert token.
+
+P3.7 added a PRE-delegate bridge: `if cancel_token.aborted() { pi_token.cancel() }`
+so an ALREADY-aborted request (timeout already elapsed, or abort fired before the
+walk) skips the walk. This covers the common case. The residual gap: an abort that
+fires DURING a long in-flight symbol/outline walk over many files no longer
+terminates it early \u2014 the kernel completes the full walk, then the post-match
+guard at napi.rs (`if cancel_token.aborted()`) returns Err("Aborted: Signal").
+
+RESULT-PRESERVING (the final result is identical: Err on abort), but a
+responsiveness/CPU regression for aborting a large in-flight symbol query.
+Reviewer-filed P3, conf 0.55 (agent 32-ReviewCutover).
+
+* The fix
+
+Bridge the host `cancel_token` (napi task::CancelToken, Arc<Flag> + deadline) to
+the kernel `pi_token` (pi_code_path CancellationToken, Arc<AtomicBool>, Clone) so
+the kernel's mid-walk guard fires on host abort. Options:
+- A: spawn a lightweight watcher (std::thread or the existing tokio runtime) that,
+  for the duration of the resolve, polls cancel_token.aborted() / its deadline and
+  calls pi_token.cancel() on fire. Clean but a thread/task per resolve.
+- B: have CancelToken expose a way to subscribe a callback (it already has
+  on_abort wiring for AbortSignal at task.rs:127) \u2014 register pi_token.cancel() as
+  an abort callback at pi_token creation (napi.rs:510), so ALL kernel branches
+  (not just symbol/outline) get host-abort propagation for free. Also needs the
+  timeout deadline path covered (a timer that cancels pi_token at the deadline).
+- C: thread the deadline into the kernel \u2014 give resolve_target an optional
+  deadline so its loop checks Instant::now() vs deadline. Avoids the signal bridge
+  but only covers timeout, not AbortSignal.
+
+Recommended: B (subscribe pi_token.cancel to the host abort + a deadline timer at
+napi.rs:510) \u2014 systemic, covers every kernel call, one wiring point.
+
+* Tests
+
+- A symbol/outline query over a many-file fixture, with an AbortSignal fired
+  mid-walk (or a tiny timeout), terminates EARLY \u2014 assert it does not complete the
+  full walk (e.g. via a resolve-count probe or a wall-clock bound well under the
+  full-walk time).
+- The already-aborted case still skips the walk (P3.7 behavior preserved).
+- Non-aborted resolves are unaffected (no perf regression from the bridge).
+
+* Acceptance
+
+An abort firing DURING a large kernel symbol/outline walk terminates it early
+(not just at the post-match guard), matching the original hand-written loop's
+responsiveness. Result on abort unchanged (Err).
+
+* Relationships
+
+Follow-up to P3.7 (PLAN-334 cutover). Low priority (result-preserving). The bridge
+also benefits the BEAM rustler skin if/when it threads a host cancel into the NIF.

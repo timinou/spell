@@ -1,0 +1,25 @@
+#+TITLE: p5-kernel-carve--edges-index-host-agnost
+
+** ITEM P5 kernel carve: edges+index host-agnostic, writes+handles are not
+
+P5 (PLAN-336) finishes the pi-kernel extraction begun in P3. Key verified facts that reshaped the plan:
+
+1. GRAPH EDGES REQUIRE THE INDEX. edge_dispatch.rs calls get_or_build_graph — so "P5.1 edges" and "P5.2 index" are ONE carve, not separable. But both edge_resolver/mod.rs and code_graph_cache.rs were ALREADY host-agnostic (deps: only pi-code-graph + dashmap + std; zero napi/rustler/Error::from_reason refs, only `use super::*` in their own test mods). So the lift is a clean `git mv` + re-export shims (`pub use pi_kernel::graph_cache as code_graph_cache`) — zero consumer churn. pi-code-graph itself (CodeGraphBuilder, CacheStore, GraphStore) is host-agnostic; only the thin wrapper code_graph.rs carries napi+embeddings.
+
+2. P5.A SHIPPED (546f9d04f): lifted both modules to pi-kernel + new pi-kernel/edges.rs `resolve_edges()` (host-agnostic core of edge_dispatch minus napi DTOs) + NIF resolve_edges/2 (catch_unwind gate-2, DirtyCpu) + Elixir wrappers. BEAM now resolves cross-file def→ from the SAME warm resident index (WS-B: one index per node, N agents). Edges come from the STATIC pi-code-graph index (tree-sitter), NOT an LSP — that separation is WHY edges are movable. The LSP/type-aware lane (#hover/[type_aware]) stays a host-skin path resolve_target rejects with UnsupportedOperation.
+
+3. P5.3 ("HandleStore ETS→ResourceArc zero-copy") is INCOHERENT as specced (→ FUP-137): HandleStore is a GenServer NOT ETS (handle.ex explicitly rejects ETS); it parks native Elixir terms (not Rust data); the terms live+die in the BEAM with NO NIF boundary in the path. A ResourceArc holds Rust data → would ADD a serialize copy, the opposite of the goal. The real cross-NIF copy is the JSON-String round-trip in resolve_target/resolve_edges (serialize→FFI→Jason.decode), evidence-gated in FUP-137.
+
+LESSON: spec "deferred" items can rest on conflated premises. VERIFY a gap is real against the code before implementing. Two copy problems (sandbox-heap vs cross-FFI) were conflated under one "zero-copy" label.
+
+P5 remaining: P5.B (writes carve — mutation.rs depends on the napi-coupled buffer registry + undo history in code_buffer.rs; the genuinely hard separable piece). Semantic/embeddings lane stays node-side.
+:PROPERTIES:
+:CUSTOM_ID: CON-p5-kernel-carve--edges-index-host-agnost
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T13:32:48Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: PLAN-336-p5-wholesale-kernel-graphwrites-to-nif-i
+DISTILLED_FROM: FUP-137-p5-3-reassessed-large-payload-zero-copy
+:END:

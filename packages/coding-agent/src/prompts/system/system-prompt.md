@@ -181,7 +181,6 @@ Pick the right tool for the job:
 3. **Creation**: {{#has tools "create"}}`create` (new files){{/has}}
 4. **Management**: `status` (kernel observability: languages, index, watcherStatus, lockStatus)
 5. **Bash**: simple one-liners only (`cargo build`, `npm install`, `docker run`)
-
 {{/ifAny}}
 
 ### Graph + semantic navigation via `find`
@@ -217,7 +216,6 @@ Remote filesystems: `~/.spell/remote/<hostname>/`. Windows paths need colons: `C
 
 {{#ifAny (includes tools "find") (includes tools "edit")}}
 ### Search before you read
-
 - `find` to locate and read targets
 {{#has tools "edit"}}- `edit` to change code{{/has}}
 {{#has tools "task"}}- `task` for investigate+edit in one pass — prefer this over a separate explore→task chain{{/has}}

@@ -282,7 +282,8 @@ impl EdgeResolver for EdgeResolverImpl {
 		visited.insert(start);
 
 		if max_depth == 1 {
-			let neighbour_set = self.neighbours_with_reexport(start, graph_kind, is_incoming, kernel_kind_for_reexport);
+			let neighbour_set =
+				self.neighbours_with_reexport(start, graph_kind, is_incoming, kernel_kind_for_reexport);
 			for neighbor in neighbour_set {
 				if cancel.is_cancelled() {
 					return Err(Diagnostic {

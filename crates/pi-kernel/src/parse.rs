@@ -20,16 +20,15 @@ use std::{
 	sync::{Arc, OnceLock},
 };
 
+use pi_code_engine::language::LanguageRegistry;
 use pi_code_path::{
 	ast::{Axis, CodePath, FsSegment, Head, Locator},
 	dialect::NameLexer,
-	dialects::text::TextResolver,
-	dialects::fs::FsResolver,
+	dialects::{fs::FsResolver, text::TextResolver},
 	parser::parse_code_path,
 	resolver::{CancellationToken, CodeResolver, FormatExtractor, Resolver},
 	types::{Diagnostic, DiagnosticVariant, NodeRef},
 };
-use pi_code_engine::language::LanguageRegistry;
 
 use crate::dialect_registry;
 
@@ -178,8 +177,9 @@ fn is_uri(cp: &CodePath) -> bool {
 /// Semantic qualifier names (#hover/#signature/#type_definition/#type_def/
 /// #inlay/#diagnostics + the deprecated #hover_inferred). These dispatch to the
 /// LSP backend in the NAPI skin and are NOT served by the kernel read lane. The
-/// name set mirrors `pi-natives type_resolver::is_semantic_qualifier`; kept here
-/// (not imported) so pi-kernel takes no dependency on the host semantic layer.
+/// name set mirrors `pi-natives type_resolver::is_semantic_qualifier`; kept
+/// here (not imported) so pi-kernel takes no dependency on the host semantic
+/// layer.
 fn is_semantic_qualifier(cp: &CodePath) -> bool {
 	cp.qualifier.as_ref().is_some_and(|q| {
 		matches!(
@@ -240,7 +240,11 @@ pub fn resolve_target(
 		.filter(|d| {
 			let is_glob_lexer_hint = matches!(d.variant, DiagnosticVariant::Informational)
 				&& d.message.contains("glob path prefix");
-			if is_glob_lexer_hint { head_is_name } else { true }
+			if is_glob_lexer_hint {
+				head_is_name
+			} else {
+				true
+			}
 		})
 		.collect();
 
@@ -253,7 +257,7 @@ pub fn resolve_target(
 				message: "URI locators are resolved by the host skin (runtime SchemeRegistry), not \
 				          the kernel read lane"
 					.to_string(),
-				span: None,
+				span:    None,
 			});
 		},
 		Locator::Fs(_) => {
@@ -264,19 +268,19 @@ pub fn resolve_target(
 			if is_semantic_qualifier(&cp) {
 				return Err(Diagnostic {
 					variant: DiagnosticVariant::UnsupportedOperation,
-					message: "semantic qualifiers (#hover/#signature/#type_definition/#inlay/\
-					          #diagnostics) are resolved by the host skin (LSP backend), not \
-					          the kernel read lane"
+					message: "semantic qualifiers \
+					          (#hover/#signature/#type_definition/#inlay/#diagnostics) are resolved by \
+					          the host skin (LSP backend), not the kernel read lane"
 						.to_string(),
-					span: None,
+					span:    None,
 				});
 			} else if is_diff_qualifier(&cp) {
 				return Err(Diagnostic {
 					variant: DiagnosticVariant::UnsupportedOperation,
-					message: "#diff is resolved by the host skin (git subprocess), not the kernel \
-					          read lane"
+					message: "#diff is resolved by the host skin (git subprocess), not the kernel read \
+					          lane"
 						.to_string(),
-					span: None,
+					span:    None,
 				});
 			} else if is_text_qualifier_only(&cp) || is_pure_text_query(&cp) {
 				// gitignore threads to the TextResolver branches ONLY — mirrors NAPI,
@@ -354,7 +358,11 @@ pub fn fs_locator_to_path(locator: &Locator) -> String {
 					_ => {},
 				}
 			}
-			if parts.is_empty() { ".".to_string() } else { parts.join("") }
+			if parts.is_empty() {
+				".".to_string()
+			} else {
+				parts.join("")
+			}
 		},
 		Locator::Uri(_) => ".".to_string(),
 	}

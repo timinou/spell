@@ -26,8 +26,8 @@ pub mod resolver;
 pub mod scheme;
 pub mod scheme_cache;
 pub mod scheme_dispatch;
-pub mod types;
 pub mod template;
+pub mod types;
 pub mod unified;
 pub mod verb;
 
@@ -39,7 +39,6 @@ pub use op::{
 	SymScope, SymbolTarget,
 };
 pub use op_schema::{FieldSchema, FieldType, OpSchema, TargetFamily};
-pub use verb::{Matching, Place, RestructureOp, Verb};
 pub use parser::{parse_code_path, parse_locator};
 pub use renderer::render_code_path;
 pub use resolver::traits::MutationResolver;
@@ -51,3 +50,4 @@ pub use scheme::{
 pub use scheme_cache::SchemeCache;
 pub use scheme_dispatch::{RESERVED_SCHEMES, SchemeRegistry, validate_scheme_name};
 pub use types::*;
+pub use verb::{Matching, Place, RestructureOp, Verb};

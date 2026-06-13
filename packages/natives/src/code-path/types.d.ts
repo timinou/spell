@@ -11,6 +11,13 @@ export interface CodePathOptions {
     manage?: string;
     /** Session ID for per-agent edit history attribution. */
     sessionId?: string;
+    /**
+     * Undo-atomicity: a stable id shared by every edit produced by one logical
+     * `edit` tool invocation. Stamped onto each recorded edit-history entry so
+     * undo/redo revert the whole group (e.g. a cross-file rename) atomically.
+     * Omit for a single standalone edit.
+     */
+    editGroupId?: string;
     /** Abort signal for cancelling the operation. */
     abortSignal?: AbortSignal;
     /** Timeout in milliseconds for the operation. */

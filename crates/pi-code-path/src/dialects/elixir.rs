@@ -260,8 +260,8 @@ fn normalize_ws(text: &str) -> String {
 
 pub fn elixir_dialect() -> LanguageDialect {
 	LanguageDialect {
-		name_lexer: Arc::new(ExNameLexer),
-		anchors:    vec![
+		name_lexer:   Arc::new(ExNameLexer),
+		anchors:      vec![
 			AnchorPattern {
 				name:    "defmodule",
 				matcher: |n, src| {
@@ -328,7 +328,7 @@ pub fn elixir_dialect() -> LanguageDialect {
 				},
 			},
 		],
-		qualifiers: vec![
+		qualifiers:   vec![
 			QualifierSpec {
 				name:       "body",
 				applies_to: vec!["call".into()],
@@ -350,7 +350,7 @@ pub fn elixir_dialect() -> LanguageDialect {
 				resolve:    Arc::new(qualifiers::Docstring),
 			},
 		],
-		edge_kinds: EdgeKindSet::default(),
+		edge_kinds:   EdgeKindSet::default(),
 		kind_aliases: std::collections::HashMap::new(),
 	}
 }

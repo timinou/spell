@@ -111,10 +111,7 @@ mod tests {
 
 	use super::*;
 	use crate::{
-		ast::NamePayload,
-		dialect::NameLexer,
-		parser::parse_code_path,
-		renderer::render_code_path,
+		ast::NamePayload, dialect::NameLexer, parser::parse_code_path, renderer::render_code_path,
 	};
 
 	/// Minimal NameLexer that consumes alphanumeric + dots.

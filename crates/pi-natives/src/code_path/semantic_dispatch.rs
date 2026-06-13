@@ -49,9 +49,10 @@ pub fn resolve(
 	pi_token: &CancellationToken,
 	cancel_token: &CancelToken,
 ) -> Result<Vec<NodeRef>> {
-	let qualifier = cp.qualifier.as_ref().ok_or_else(|| {
-		Error::from_reason("semantic_dispatch invoked without a qualifier")
-	})?;
+	let qualifier = cp
+		.qualifier
+		.as_ref()
+		.ok_or_else(|| Error::from_reason("semantic_dispatch invoked without a qualifier"))?;
 
 	let backend = semantic_cache::get_or_build(root)
 		.map_err(|e| Error::from_reason(format!("semantic cache build failed: {e}")))?;
@@ -64,8 +65,7 @@ pub fn resolve(
 		if cancel_token.aborted() || pi_token.is_cancelled() {
 			break;
 		}
-		let outcome =
-			type_resolver::dispatch(&*backend, qualifier, &predicates, &file, line, col);
+		let outcome = type_resolver::dispatch(&*backend, qualifier, &predicates, &file, line, col);
 		out.extend(format_outcome(outcome, &file, line, col));
 	}
 	Ok(out)
@@ -84,15 +84,16 @@ pub fn resolve(
 /// today (the qualifier rule consumes one bracketed group); when grammar
 /// support arrives, this fn handles each pair.
 fn extract_predicates(q: &Qualifier) -> Vec<Predicate> {
-	let Some(args) = q.args.as_deref() else { return Vec::new() };
+	let Some(args) = q.args.as_deref() else {
+		return Vec::new();
+	};
 	let trimmed = args.trim();
 	if trimmed.is_empty() {
 		return Vec::new();
 	}
 	let pred = match trimmed.split_once('=') {
-		Some((name, value)) => Predicate::Attribute {
-			name:  name.trim().to_string(),
-			value: value.trim().to_string(),
+		Some((name, value)) => {
+			Predicate::Attribute { name: name.trim().to_string(), value: value.trim().to_string() }
 		},
 		None => Predicate::Flag(trimmed.to_string()),
 	};
@@ -104,9 +105,8 @@ fn extract_predicates(q: &Qualifier) -> Vec<Predicate> {
 /// Resolve a CodePath target to one or more `(file, line, col)` triples.
 ///
 /// - Locator-only (`foo.rs#diagnostics`): one triple at `(file, 1, 1)`
-/// - Symbol target (`foo.rs::Bar#hover`): resolve via the tree-sitter
-///   code resolver and take each matched node's start position
-///   (1-indexed)
+/// - Symbol target (`foo.rs::Bar#hover`): resolve via the tree-sitter code
+///   resolver and take each matched node's start position (1-indexed)
 fn resolve_positions(
 	cp: &CodePath,
 	root: &Path,
@@ -127,8 +127,7 @@ fn resolve_positions(
 	};
 
 	// Symbol target: re-use the code resolver to find matching nodes.
-	let code_resolver_inst =
-		code_resolver::new().map_err(|d| Error::from_reason(d.message))?;
+	let code_resolver_inst = code_resolver::new().map_err(|d| Error::from_reason(d.message))?;
 	// Strip the qualifier for the symbol-resolve pass — qualifiers are our
 	// concern, not the walker's. Predicates on query steps (e.g. for
 	// `def→[type_aware]`) are not relevant for semantic qualifier dispatch.
@@ -139,11 +138,7 @@ fn resolve_positions(
 	let positions: Vec<(PathBuf, u32, u32)> = nodes
 		.iter()
 		.map(|n| {
-			let line = n
-				.metadata
-				.get("line")
-				.and_then(|v| v.as_u64())
-				.unwrap_or(1) as u32;
+			let line = n.metadata.get("line").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
 			// Walker doesn't currently emit column metadata; use 1 as a
 			// safe default (sufficient for AnnotationSemanticBackend which
 			// falls through to "preceding symbol on line" when col doesn't
@@ -181,7 +176,11 @@ fn locator_to_path(loc: &Locator, root: &Path) -> Result<PathBuf> {
 		}
 	}
 	let rel = PathBuf::from(joined);
-	let abs = if rel.is_absolute() { rel } else { root.join(rel) };
+	let abs = if rel.is_absolute() {
+		rel
+	} else {
+		root.join(rel)
+	};
 	Ok(abs)
 }
 
@@ -192,12 +191,7 @@ fn locator_to_path(loc: &Locator, root: &Path) -> Result<PathBuf> {
 /// The locator is `<file>:<line>` (mirrors edge_resolver's symbol locator
 /// shape). Each variant maps to a distinct `kind` so consumers can
 /// detect the qualifier type from the result.
-fn format_outcome(
-	outcome: TypeResolverOutcome,
-	file: &Path,
-	line: u32,
-	_col: u32,
-) -> Vec<NodeRef> {
+fn format_outcome(outcome: TypeResolverOutcome, file: &Path, line: u32, _col: u32) -> Vec<NodeRef> {
 	let locator = format!("{}:{}", file.display(), line);
 	match outcome {
 		TypeResolverOutcome::Hover(h) => {
@@ -226,12 +220,7 @@ fn format_outcome(
 		TypeResolverOutcome::Inlay(hints) => {
 			let body = hints
 				.iter()
-				.map(|h| {
-					format!(
-						"{}:{}  {} ({:?})",
-						h.location.line, h.location.col, h.label, h.kind
-					)
-				})
+				.map(|h| format!("{}:{}  {} ({:?})", h.location.line, h.location.col, h.label, h.kind))
 				.collect::<Vec<_>>()
 				.join("\n");
 			vec![mk_text("§inlay", body, &locator)]
@@ -253,8 +242,7 @@ fn format_outcome(
 			vec![mk_text("§diagnostics", body, &locator)]
 		},
 		TypeResolverOutcome::Deprecated { name, replacement } => {
-			let text =
-				format!("qualifier #{name} is deprecated; use #{replacement} instead");
+			let text = format!("qualifier #{name} is deprecated; use #{replacement} instead");
 			let mut nref = mk_text("§deprecated", text.clone(), &locator);
 			nref.diagnostics.push(Diagnostic {
 				variant: DiagnosticVariant::UnsupportedOperation,
@@ -285,19 +273,20 @@ fn mk_text(kind: &str, value: String, locator: &str) -> NodeRef {
 
 fn mk_empty(kind: &str, locator: &str) -> NodeRef {
 	NodeRef {
-		locator: locator.to_string(),
-		range: 0..0,
-		kind: kind.to_string(),
-		content: None,
-		metadata: Default::default(),
+		locator:     locator.to_string(),
+		range:       0..0,
+		kind:        kind.to_string(),
+		content:     None,
+		metadata:    Default::default(),
 		diagnostics: Vec::new(),
 	}
 }
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use pi_code_path::ast::{FsLocator, Qualifier};
+
+	use super::*;
 
 	fn ws() -> tempfile::TempDir {
 		let dir = tempfile::tempdir().unwrap();
@@ -311,24 +300,17 @@ mod tests {
 
 	fn cp_file_only(name: &str, qual: &str) -> CodePath {
 		CodePath {
-			locator: Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal(name.to_string())],
-			}),
-			query: None,
+			locator:   Locator::Fs(FsLocator { segments: vec![FsSegment::Literal(name.to_string())] }),
+			query:     None,
 			qualifier: Some(Qualifier { name: qual.to_string(), args: None }),
 		}
 	}
 
 	fn cp_file_only_with_args(name: &str, qual: &str, args: &str) -> CodePath {
 		CodePath {
-			locator: Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal(name.to_string())],
-			}),
-			query: None,
-			qualifier: Some(Qualifier {
-				name: qual.to_string(),
-				args: Some(args.to_string()),
-			}),
+			locator:   Locator::Fs(FsLocator { segments: vec![FsSegment::Literal(name.to_string())] }),
+			query:     None,
+			qualifier: Some(Qualifier { name: qual.to_string(), args: Some(args.to_string()) }),
 		}
 	}
 
@@ -402,7 +384,8 @@ mod tests {
 		assert!(!result.is_empty(), "diagnostics must produce at least one node");
 		// First (and only) result kind is §diagnostics.
 		assert!(
-			result[0].kind == "§diagnostics" || result[0].kind == "§empty"
+			result[0].kind == "§diagnostics"
+				|| result[0].kind == "§empty"
 				|| result[0].kind.starts_with("§"),
 			"unexpected kind: {}",
 			result[0].kind,

@@ -90,4 +90,3 @@ fn multiple_invalidate_rebuild_cycles_work() {
 	let g3 = code_graph_cache::get_or_build_graph(root).expect("rebuild 2");
 	assert!(!Arc::ptr_eq(&g2, &g3));
 }
-

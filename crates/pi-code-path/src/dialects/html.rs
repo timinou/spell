@@ -13,9 +13,7 @@ use tree_sitter::Node;
 
 use crate::{
 	ast::NamePayload,
-	dialect::{
-		AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierSpec,
-	},
+	dialect::{AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierSpec},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -282,8 +280,8 @@ pub fn html_dialect() -> LanguageDialect {
 	let element_kinds: Vec<String> =
 		vec!["element".into(), "script_element".into(), "style_element".into()];
 	LanguageDialect {
-		name_lexer: Arc::new(HtmlNameLexer),
-		anchors:    vec![AnchorPattern {
+		name_lexer:   Arc::new(HtmlNameLexer),
+		anchors:      vec![AnchorPattern {
 			name:    "landmark-by-role",
 			matcher: |n, src| {
 				if !match_kind(n, &["element", "script_element", "style_element"]) {
@@ -301,7 +299,7 @@ pub fn html_dialect() -> LanguageDialect {
 				false
 			},
 		}],
-		qualifiers: vec![
+		qualifiers:   vec![
 			QualifierSpec {
 				name:       "innerHTML",
 				applies_to: element_kinds.clone(),
@@ -328,7 +326,7 @@ pub fn html_dialect() -> LanguageDialect {
 				resolve:    Arc::new(qualifiers::Tag),
 			},
 		],
-		edge_kinds: EdgeKindSet::default(),
+		edge_kinds:   EdgeKindSet::default(),
 		kind_aliases: std::collections::HashMap::new(),
 	}
 }

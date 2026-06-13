@@ -22,10 +22,8 @@ fn unique_dir(label: &str) -> PathBuf {
 		.duration_since(std::time::UNIX_EPOCH)
 		.unwrap()
 		.as_nanos();
-	let dir = std::env::temp_dir().join(format!(
-		"pi-natives-sub-client-{label}-{}-{nanos}",
-		std::process::id()
-	));
+	let dir = std::env::temp_dir()
+		.join(format!("pi-natives-sub-client-{label}-{}-{nanos}", std::process::id()));
 	fs::create_dir_all(&dir).expect("tempdir");
 	dir
 }
@@ -52,11 +50,18 @@ fn seed(root: &std::path::Path) {
 	.expect("write");
 }
 
-fn spawn_daemon(socket: &std::path::Path, pidfile: &std::path::Path, bin: &std::path::Path) -> Child {
+fn spawn_daemon(
+	socket: &std::path::Path,
+	pidfile: &std::path::Path,
+	bin: &std::path::Path,
+) -> Child {
 	Command::new(bin)
-		.arg("--socket").arg(socket)
-		.arg("--pidfile").arg(pidfile)
-		.arg("--idle-secs").arg("30")
+		.arg("--socket")
+		.arg(socket)
+		.arg("--pidfile")
+		.arg(pidfile)
+		.arg("--idle-secs")
+		.arg("30")
 		.stdin(Stdio::null())
 		.stdout(Stdio::null())
 		.stderr(Stdio::null())
@@ -129,10 +134,8 @@ fn subscribe_receives_warm_completed_event_end_to_end() {
 	assert!(!sub.subscription_ids().is_empty(), "subscription_ids non-empty");
 
 	// Close + re-open to fire warm_completed.
-	let _ = embedding_worker::knowledge_request(
-		"close",
-		serde_json::json!({ "repo_handle": &handle }),
-	);
+	let _ =
+		embedding_worker::knowledge_request("close", serde_json::json!({ "repo_handle": &handle }));
 	let _ = embedding_worker::knowledge_request(
 		"open",
 		serde_json::json!({

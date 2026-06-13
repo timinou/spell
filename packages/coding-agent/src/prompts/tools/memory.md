@@ -3,15 +3,15 @@ Project memory — recall priors, save lessons, walk the knowledge graph.
 One tool, seven `action`s. Memory lives under `.spell/memory/` (concepts, episodes, playbooks, decisions). Edges are typed (INVOLVED, ABOUT, PRODUCED, DISTILLED_FROM, SUPERSEDES, …).
 
 <actions>
-| action      | does                                                            | key args                                                       |
-|-------------|-----------------------------------------------------------------|----------------------------------------------------------------|
-| `search`    | hybrid recall (FTS + graph) over tasks & memory                 | `text`, `scope[]`, `focus`, `hops`, `limit`, `profile`, `include_personal`, `scope_personal_only` |
-| `about`     | one node + its 1-hop neighbours, with distillation lineage      | `id` → `{node, neighbors[], lineage[]}`                         |
-| `neighbors` | typed subgraph walk from a focus node                           | `focus` (or `id`), `hops`, `kinds[]` → `{nodes, edges}`         |
-| `note`      | append an episode (what happened, work-in-progress)             | `text`, `about[]`, `involved[]`                                |
-| `save`      | persist a concept/playbook/decision (distilled)                 | `kind`, `title`, `body`, `distilled_from[]`, `relations[]`     |
-| `link`      | add a typed edge between two items                              | `from`, `to`, `kind`                                           |
-| `since`     | diff of memory state since a timestamp (ISO-8601 or epoch-ms)   | `ts`                                                           |
+|action|does|key args|
+|---|---|---|
+|`search`|hybrid recall (FTS + graph) over tasks & memory|`text`, `scope[]`, `focus`, `hops`, `limit`, `profile`, `include_personal`, `scope_personal_only`|
+|`about`|one node + its 1-hop neighbours, with distillation lineage|`id` → `{node, neighbors[], lineage[]}`|
+|`neighbors`|typed subgraph walk from a focus node|`focus` (or `id`), `hops`, `kinds[]` → `{nodes, edges}`|
+|`note`|append an episode (what happened, work-in-progress)|`text`, `about[]`, `involved[]`|
+|`save`|persist a concept/playbook/decision (distilled)|`kind`, `title`, `body`, `distilled_from[]`, `relations[]`|
+|`link`|add a typed edge between two items|`from`, `to`, `kind`|
+|`since`|diff of memory state since a timestamp (ISO-8601 or epoch-ms)|`ts`|
 </actions>
 
 <archetypes>

@@ -22,8 +22,8 @@ fn test_lock() -> &'static Mutex<()> {
 
 /// RAII guard that saves and restores env vars + resets caches.
 struct EnvSnapshot {
-	_guard:      std::sync::MutexGuard<'static, ()>,
-	prior_mode:  Option<OsString>,
+	_guard:       std::sync::MutexGuard<'static, ()>,
+	prior_mode:   Option<OsString>,
 	prior_worker: Option<OsString>,
 }
 
@@ -67,10 +67,8 @@ fn temp_repo(label: &str) -> PathBuf {
 		.duration_since(std::time::UNIX_EPOCH)
 		.unwrap()
 		.as_nanos();
-	let dir = std::env::temp_dir().join(format!(
-		"pi-natives-worker-mode-{label}-{}-{nanos}",
-		std::process::id()
-	));
+	let dir = std::env::temp_dir()
+		.join(format!("pi-natives-worker-mode-{label}-{}-{nanos}", std::process::id()));
 	fs::create_dir_all(&dir).expect("tempdir");
 	dir
 }
@@ -78,16 +76,10 @@ fn temp_repo(label: &str) -> PathBuf {
 fn seed(root: &std::path::Path) {
 	let tasks = root.join("!tasks");
 	fs::create_dir_all(&tasks).expect("mk tasks");
-	fs::write(
-		tasks.join("A.org"),
-		"* TODO A\n:PROPERTIES:\n:CUSTOM_ID: A-1\n:END:\n\nbody of A\n",
-	)
-	.expect("write item");
-	fs::write(
-		tasks.join("B.org"),
-		"* TODO B\n:PROPERTIES:\n:CUSTOM_ID: B-1\n:END:\n\nbody of B\n",
-	)
-	.expect("write item");
+	fs::write(tasks.join("A.org"), "* TODO A\n:PROPERTIES:\n:CUSTOM_ID: A-1\n:END:\n\nbody of A\n")
+		.expect("write item");
+	fs::write(tasks.join("B.org"), "* TODO B\n:PROPERTIES:\n:CUSTOM_ID: B-1\n:END:\n\nbody of B\n")
+		.expect("write item");
 }
 
 #[test]
@@ -140,8 +132,7 @@ fn daemon_mode_propagates_rpc_failure() {
 	let err = pi_natives::recall_engine::query(&repo, query)
 		.expect_err("daemon mode should fail when no daemon is reachable");
 	assert!(
-		err.contains("PI_KNOWLEDGE_WORKER=inprocess")
-			|| err.contains("set PI_KNOWLEDGE_WORKER"),
+		err.contains("PI_KNOWLEDGE_WORKER=inprocess") || err.contains("set PI_KNOWLEDGE_WORKER"),
 		"error should mention the escape hatch: {err}"
 	);
 

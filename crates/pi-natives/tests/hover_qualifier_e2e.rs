@@ -30,6 +30,9 @@ fn opts(target: &str) -> CodePathTaskOptions {
 		gitignore:          None,
 		artifact_threshold: None,
 		session_id:         Some("hover-e2e".into()),
+		edit_group_id:      None,
+		history_entry_id:   None,
+		history_force:      None,
 		home:               None,
 		session_dir:        None,
 	}
@@ -67,8 +70,5 @@ fn hover_returns_function_signature_line() {
 fn hover_truncates_arrow_function_at_arrow_or_brace() {
 	let chunks = execute("sample.ts::arrowGreet#hover");
 	let body = first_text(&chunks).expect("hover should return content");
-	assert!(
-		body.contains("arrowGreet"),
-		"expected arrowGreet in signature; got: {body:?}"
-	);
+	assert!(body.contains("arrowGreet"), "expected arrowGreet in signature; got: {body:?}");
 }

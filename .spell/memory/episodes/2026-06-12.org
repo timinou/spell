@@ -123,3 +123,25 @@ ABOUT: CON-execute-substrate-w1-w3-shipped--psettle
 ABOUT: PLAN-334-p3-find-as-nif-proof-pi-kernel-carve-out
 ABOUT: DEC-p3-pi-kernel-carve-out--verified-boundar
 :END:
+** ITEM P3: find-as-NIF proof — pi-kernel carve-out + OwnerId + rustler skin + 3 gates (WS-B derisk)
+
+P3 COMPLETE 2026-06-12. All 3 gates green, reviewer-gated (4 review passes: P3.1, P3.2, P3.3a, final P3 series), 6 commits (a732eae0c..e952ac98f). pi-kernel carved (host-agnostic, N-2 isolation proven), OwnerId on the lock table (wire-neutral), resolve_target parse+read-dispatch (in-process parity 7/7 byte-identical to NAPI), rustler NIF skin on live BEAM OTP 28 (cross-runtime gate-1 6/6), panic-safety gate-2 (catch_unwind, BEAM survives \u2014 kills error class #4), lock-liveness gate-3 (dead owner\u2192broker reclaim\u2192reacquire). Final review correct conf 0.85. DEFERRED to future BEAM-integration phase (honestly scoped in spec 09): NIF-side :DOWN-monitor\u2192ResourceArc-Drop trigger (socket-per-owner; the broker reclaim it relies on IS proven), napi read branch calling resolve_target (proven-equivalent twins today), and P5 (graph+writes cutover, index moves wholesale resolving two-kernels RAM, N-3 HandleStore ETS\u2192ResourceArc zero-copy). The warm-kernel WS-B architecture is de-risked end-to-end: one kernel, two skins (NAPI+rustler), proven identical.
+:PROPERTIES:
+:CUSTOM_ID: EP-81ba3f83425b9be6
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-12T22:42:46Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-334-p3-find-as-nif-proof-pi-kernel-carve-out
+:END:
+** ITEM ENV WORKAROUND (recurs): building any crate in pi-natives' dependency closure (pi-natives, pi-code-graph, pi-knowledge-core, pi-org-engine \u2014 anything pulling usearch\u2192numkong) in this environment FAILS at the cc build-script with 'cc: error: unrecognized command-line option -mavx10.2-512'. Cause: numkong 7.6.0's build.rs probes the AMD Ryzen AI 7 350 CPU and emits the NK_TARGET_DIAMOND ISA flag -mavx10.2-512, which GCC 16.1.1 doesn't support. FIX: prefix builds/tests with `NK_TARGET_DIAMOND=0` (env var) \u2014 numkong build.rs line 428 honors NK_TARGET_FOO=0 to force an ISA target OFF, skipping the bad flag. e.g. `NK_TARGET_DIAMOND=0 cargo test -p pi-natives`. Pre-existing + unrelated to any feature work; numkong is a far transitive dep (usearch\u2192pi-knowledge-core\u2192pi-natives). The cache was previously warm (P3.1-3.6 built fine) so it only surfaced when numkong's rlib got evicted (likely the parallel integration-test-link disk pressure / the ld signal-7 OOM). pi-kernel itself does NOT pull numkong so it builds without the env. ALSO: P3.7 done \u2014 NAPI read branch now DELEGATES to pi_kernel::resolve_target (carve ADOPTED not just extracted); resolve_target gained gitignore: Option<bool> (real fidelity seam the cutover surfaced, threaded to TextResolver branches only); behavior-preserving proven by absolute-behavior anchors routing_tests 22/op_matrix 2/unified 9 (NOT just cross-skin parity, which weakened post-cutover since both sides now route through the kernel). Committed 598e6002c. Remaining P3: P3.8 functional gate-3 (NIF :DOWN-monitor\u2192ResourceArc held-connection\u2192reclaim).
+:PROPERTIES:
+:CUSTOM_ID: EP-81df787294597246
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-12T23:25:49Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-334-p3-find-as-nif-proof-pi-kernel-carve-out
+:END:

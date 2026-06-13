@@ -194,10 +194,10 @@ article-dropped fragments.
 ## 4. Deprecated tools — full removal plan
 
 ### Class 1 — live legacy aliases (`REMOVE_AT_WAVE_11`, cost real tokens every session)
-| tool | registration | prompt | tier | replaced by |
+|tool|registration|prompt|tier|replaced by|
 |---|---|---|---|---|
-| `get` | `tools/index.ts:279` | `prompts/tools/get.md` | `tools/index.ts:314` | `find` |
-| `manage` | `tools/index.ts:280` | `prompts/tools/manage.md` | `tools/index.ts:315` | `status` |
+|`get`|`tools/index.ts:279`|`prompts/tools/get.md`|`tools/index.ts:314`|`find`|
+|`manage`|`tools/index.ts:280`|`prompts/tools/manage.md`|`tools/index.ts:315`|`status`|
 
 Transitional shims that reference them:
 - `tools/find.ts:14` ("REMOVE_AT_WAVE_11: the GetTool delegation is a transitional shim")
@@ -220,14 +220,14 @@ keep a 1-release **fail-loud** error stub (`get → throw "renamed to find"`), n
 silent alias.
 
 ### Class 2 — orphan prompt `.md` (no live registration, pure dead tokens)
-| file | status | action |
+|file|status|action|
 |---|---|---|
-| `prompts/tools/read.md` (632 B) | zero `with {type:"text"}` imports | ⌦ **DONE** (W-B) |
-| `prompts/tools/grep.md` (1.4 KB) | only a *test* pinned a dead tool's prompt | ⌦ **DONE** (W-B; test block excised) |
-| `prompts/tools/ast-grep.md` (2.5 KB) | zero imports | ⌦ **DONE** (W-B) |
-| `prompts/tools/resolve.md` (405 B) | **live** — deferred-action resolver, auto-injected | ✓ keep |
-| `prompts/tools/gateway.md` (347 B) | dead tool (`GatewayTool` unregistered) | ⌦ **DONE** |
-| `prompts/tools/patch.md`, `replace.md` | imported by `patch/index.ts` — **live** | ✓ keep |
+|`prompts/tools/read.md` (632 B)|zero `with {type:"text"}` imports|⌦ **DONE** (W-B)|
+|`prompts/tools/grep.md` (1.4 KB)|only a *test* pinned a dead tool's prompt|⌦ **DONE** (W-B; test block excised)|
+|`prompts/tools/ast-grep.md` (2.5 KB)|zero imports|⌦ **DONE** (W-B)|
+|`prompts/tools/resolve.md` (405 B)|**live** — deferred-action resolver, auto-injected|✓ keep|
+|`prompts/tools/gateway.md` (347 B)|dead tool (`GatewayTool` unregistered)|⌦ **DONE**|
+|`prompts/tools/patch.md`, `replace.md`|imported by `patch/index.ts` — **live**|✓ keep|
 
 Correction (2026-06-10, revised): two separate sub-questions hid behind "has a
 live import":

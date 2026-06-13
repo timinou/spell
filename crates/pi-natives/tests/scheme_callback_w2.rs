@@ -108,7 +108,8 @@ fn dynamic_profile_invalid_name_rejected() {
 #[test]
 fn static_profile_takes_precedence_over_dynamic() {
 	// scheme_dispatch::SchemeRegistry::lookup checks static map first.
-	let mut reg = SchemeRegistry::from_static([pi_natives::code_path::uri::memory::build as _], None);
+	let mut reg =
+		SchemeRegistry::from_static([pi_natives::code_path::uri::memory::build as _], None);
 	// Attempt to override memory via dynamic should reject (reserved).
 	let err = reg
 		.register_dynamic_profile(build_dynamic_profile("memory", "x"))
@@ -197,7 +198,6 @@ fn callback_can_emit_source_path() {
 	assert_eq!(r.mime, Some("text/plain".into()));
 }
 
-
 // ── Wave 2 BUG-393: rule:// becomes callback-only ───────────────
 
 #[test]
@@ -284,4 +284,3 @@ fn rule_callback_resolves_with_source_path() {
 	let err = reg.resolve(&missing, None, &cancel).unwrap_err();
 	assert!(matches!(err.variant, DiagnosticVariant::FileNotFound));
 }
-

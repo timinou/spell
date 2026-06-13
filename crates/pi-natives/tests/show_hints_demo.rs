@@ -1,5 +1,6 @@
 //! Diagnostic-quality demo: prints all error paths for the 6 declarative
-//! schemes. Run with `cargo test -p pi-natives --test show_hints_demo -- --nocapture`.
+//! schemes. Run with `cargo test -p pi-natives --test show_hints_demo --
+//! --nocapture`.
 
 use pi_code_path::{
 	UriLocator, resolver::traits::CancellationToken, scheme::SessionContext,

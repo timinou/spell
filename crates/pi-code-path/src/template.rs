@@ -98,14 +98,15 @@ impl TemplateError {
 				}
 			),
 			hint:    Some(match variable {
-				"BODY" =>
-					"Use $MATCH to reference the full matched text, or target a declaration node (function, method, class)."
-						.into(),
-				"NAME" =>
-					"Use a declaration node (function, class, variable, module) for $NAME.".into(),
-				"SIG" =>
-					"Use $MATCH for the full text, or target a declaration node with a body for $SIG."
-						.into(),
+				"BODY" => "Use $MATCH to reference the full matched text, or target a declaration \
+				           node (function, method, class)."
+					.into(),
+				"NAME" => {
+					"Use a declaration node (function, class, variable, module) for $NAME.".into()
+				},
+				"SIG" => "Use $MATCH for the full text, or target a declaration node with a body for \
+				          $SIG."
+					.into(),
 				_ => "Use $MATCH for the full matched text.".into(),
 			}),
 		}
@@ -116,7 +117,8 @@ impl TemplateError {
 			variant: TemplateErrorVariant::UnknownVariable { name: name.to_string() },
 			message: format!("${name}: unknown template variable"),
 			hint:    Some(
-				"Valid variables: $1 $2 $LAST $BODY $NAME $SIG $DECL $MATCH. Use $$ for literal dollar sign."
+				"Valid variables: $1 $2 $LAST $BODY $NAME $SIG $DECL $MATCH. Use $$ for literal \
+				 dollar sign."
 					.into(),
 			),
 		}
@@ -125,11 +127,7 @@ impl TemplateError {
 
 impl From<TemplateError> for Diagnostic {
 	fn from(e: TemplateError) -> Self {
-		Diagnostic {
-			variant: DiagnosticVariant::ParseError,
-			message: e.message,
-			span:    None,
-		}
+		Diagnostic { variant: DiagnosticVariant::ParseError, message: e.message, span: None }
 	}
 }
 
@@ -155,23 +153,23 @@ pub fn expand_template(
 		match chars.peek().copied() {
 			None => {
 				result.push('$');
-			}
+			},
 			Some('$') => {
 				chars.next();
 				result.push('$');
-			}
+			},
 			Some('{') => {
 				result.push('$');
 				result.push('{');
 				chars.next();
-			}
+			},
 			Some(c) if c.is_ascii_digit() => {
 				// $0 through $9 only (single digit).
 				// Multi-digit like $100 is literal $ followed by text.
 				chars.next();
 				let n = (c as u8 - b'0') as usize;
 				expand_positional(&mut result, node, source, n)?;
-			}
+			},
 			Some('L') => {
 				chars.next(); // consume 'L'
 				// Check for "AST" by peeking each char individually.
@@ -198,16 +196,16 @@ pub fn expand_template(
 					// $L then something else → literal
 					result.push_str("$L");
 				}
-			}
+			},
 			Some(c) if c.is_uppercase() => {
 				chars.next();
 				let name = consume_uppercase_token(&mut chars, c);
 				expand_named(&mut result, node, source, &name)?;
-			}
+			},
 			Some(_c) => {
 				// $ followed by non-uppercase, non-digit → literal
 				result.push('$');
-			}
+			},
 		}
 	}
 
@@ -240,25 +238,23 @@ fn expand_positional(
 	let named: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
 
 	let idx = n.saturating_sub(1);
-	let child = named.get(idx).copied().ok_or_else(|| {
-		TemplateError::pos_out_of_range(n, named.len())
-	})?;
+	let child = named
+		.get(idx)
+		.copied()
+		.ok_or_else(|| TemplateError::pos_out_of_range(n, named.len()))?;
 
 	push_node_range(out, child, source);
 	Ok(())
 }
 
-fn expand_last(
-	out: &mut String,
-	node: Node<'_>,
-	source: &str,
-) -> Result<(), TemplateError> {
+fn expand_last(out: &mut String, node: Node<'_>, source: &str) -> Result<(), TemplateError> {
 	let mut cursor = node.walk();
 	let named: Vec<Node<'_>> = node.named_children(&mut cursor).collect();
 
-	let last = named.into_iter().last().ok_or_else(|| {
-		TemplateError::pos_out_of_range(1, 0)
-	})?;
+	let last = named
+		.into_iter()
+		.last()
+		.ok_or_else(|| TemplateError::pos_out_of_range(1, 0))?;
 
 	push_node_range(out, last, source);
 	Ok(())
@@ -273,7 +269,8 @@ fn expand_named(
 	match name {
 		"BODY" => {
 			// Primary: use tree-sitter "body" field
-			if let Some(body_node) = node.child_by_field_name("body")
+			if let Some(body_node) = node
+				.child_by_field_name("body")
 				.or_else(|| node.child_by_field_name("do_block"))
 			{
 				let body_text = source
@@ -283,15 +280,13 @@ fn expand_named(
 				out.push_str(inner);
 			} else if node.kind() == "do_block" {
 				// Elixir: do_block passed directly — strip do/end
-				let body_text = source
-					.get(node.start_byte()..node.end_byte())
-					.unwrap_or("");
+				let body_text = source.get(node.start_byte()..node.end_byte()).unwrap_or("");
 				let inner = strip_body_delimiters(node, body_text);
 				out.push_str(inner);
 			} else {
 				return Err(TemplateError::not_applicable("BODY", node.kind()));
 			}
-		}
+		},
 		"NAME" => {
 			let name_node = node
 				.child_by_field_name("name")
@@ -302,9 +297,10 @@ fn expand_named(
 			} else {
 				return Err(TemplateError::not_applicable("NAME", node.kind()));
 			}
-		}
+		},
 		"SIG" => {
-			let body_node = node.child_by_field_name("body")
+			let body_node = node
+				.child_by_field_name("body")
 				.or_else(|| node.child_by_field_name("do_block"))
 				.ok_or_else(|| TemplateError::not_applicable("SIG", node.kind()))?;
 			let sig_end = body_node.start_byte();
@@ -318,13 +314,13 @@ fn expand_named(
 			} else {
 				return Err(TemplateError::not_applicable("SIG", node.kind()));
 			}
-		}
+		},
 		"DECL" | "MATCH" => {
 			push_node_range(out, node, source);
-		}
+		},
 		_ => {
 			return Err(TemplateError::unknown(name));
-		}
+		},
 	}
 	Ok(())
 }
@@ -398,8 +394,9 @@ fn consume_uppercase_token(
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use tree_sitter::Parser;
+
+	use super::*;
 
 	fn parse_ts(source: &'static str) -> (tree_sitter::Tree, &'static str) {
 		let mut parser = Parser::new();
@@ -412,7 +409,9 @@ mod tests {
 
 	fn parse_rs(source: &'static str) -> (tree_sitter::Tree, &'static str) {
 		let mut parser = Parser::new();
-		parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
+		parser
+			.set_language(&tree_sitter_rust::LANGUAGE.into())
+			.unwrap();
 		let tree = parser.parse(source, None).unwrap();
 		(tree, source)
 	}
@@ -428,7 +427,9 @@ mod tests {
 
 	fn parse_go(source: &'static str) -> (tree_sitter::Tree, &'static str) {
 		let mut parser = Parser::new();
-		parser.set_language(&tree_sitter_go::LANGUAGE.into()).unwrap();
+		parser
+			.set_language(&tree_sitter_go::LANGUAGE.into())
+			.unwrap();
 		let tree = parser.parse(source, None).unwrap();
 		(tree, source)
 	}
@@ -467,11 +468,7 @@ mod tests {
 
 	#[test]
 	fn positional_1_first_named_child() {
-		let r = expand(
-			"function foo(x: number) { return x; }",
-			"$1",
-			parse_ts,
-		).unwrap();
+		let r = expand("function foo(x: number) { return x; }", "$1", parse_ts).unwrap();
 		assert_eq!(r, "foo");
 	}
 
@@ -479,11 +476,7 @@ mod tests {
 	fn positional_last_child() {
 		// TS function_declaration: [identifier, formal_parameters, statement_block]
 		// $LAST should be the statement_block: "{ return x; }"
-		let r = expand(
-			"function foo(x: number) { return x; }",
-			"$LAST",
-			parse_ts,
-		).unwrap();
+		let r = expand("function foo(x: number) { return x; }", "$LAST", parse_ts).unwrap();
 		assert_eq!(r, "{ return x; }");
 	}
 
@@ -520,8 +513,7 @@ mod tests {
 		let (tree, src) = parse_ex("def foo do\n  x = 1\n  x + 1\nend\n");
 		let root = tree.root_node();
 		// Search for the do_block node and use its body
-		let node = find_node_by_kind(root, "do_block")
-			.expect("should find do_block in Elixir tree");
+		let node = find_node_by_kind(root, "do_block").expect("should find do_block in Elixir tree");
 		let r = expand_template("$BODY", node, src).unwrap();
 		assert!(r.contains("x = 1"), "got: {:?}", r);
 	}
@@ -561,7 +553,12 @@ mod tests {
 
 	#[test]
 	fn name_go() {
-		let r = expand("func HandleRequest(w http.ResponseWriter) error { return nil }", "$NAME", parse_go).unwrap();
+		let r = expand(
+			"func HandleRequest(w http.ResponseWriter) error { return nil }",
+			"$NAME",
+			parse_go,
+		)
+		.unwrap();
 		assert_eq!(r, "HandleRequest");
 	}
 
@@ -569,11 +566,9 @@ mod tests {
 
 	#[test]
 	fn sig_ts() {
-		let r = expand(
-			"function foo(a: number, b: string): boolean { return true; }",
-			"$SIG",
-			parse_ts,
-		).unwrap();
+		let r =
+			expand("function foo(a: number, b: string): boolean { return true; }", "$SIG", parse_ts)
+				.unwrap();
 		assert!(r.starts_with("function foo"));
 		assert!(r.contains("a: number"));
 		assert!(!r.contains("return true"));
@@ -586,7 +581,8 @@ mod tests {
 			"fn foo<T: Display + Debug>(x: T) -> String where T: Clone { format!(\"{x}\") }",
 			"$SIG",
 			parse_rs,
-		).unwrap();
+		)
+		.unwrap();
 		assert!(r.contains("fn foo"));
 		assert!(r.contains("T: Display + Debug"));
 		assert!(!r.contains("format!"));
@@ -660,7 +656,8 @@ mod tests {
 			"function risky() { return JSON.parse(input); }",
 			"try {\n  $BODY\n} catch(e) {\n  throw new SafeError(e);\n}",
 			parse_ts,
-		).unwrap();
+		)
+		.unwrap();
 		assert!(r.contains("try {"));
 		assert!(!r.contains("$BODY"));
 		assert!(r.contains("catch(e)"));
@@ -668,21 +665,14 @@ mod tests {
 
 	#[test]
 	fn rename_with_name() {
-		let r = expand(
-			"function parseConfig(a: number) { return a; }",
-			"$NAME_v2",
-			parse_ts,
-		).unwrap();
+		let r =
+			expand("function parseConfig(a: number) { return a; }", "$NAME_v2", parse_ts).unwrap();
 		assert_eq!(r, "parseConfig_v2");
 	}
 
 	#[test]
 	fn annotation_before_decl() {
-		let r = expand(
-			"function oldFunc() { return 1; }",
-			"@deprecated\\n$DECL",
-			parse_ts,
-		).unwrap();
+		let r = expand("function oldFunc() { return 1; }", "@deprecated\\n$DECL", parse_ts).unwrap();
 		assert!(r.contains("@deprecated"));
 		assert!(r.contains("function oldFunc()"));
 	}
@@ -699,10 +689,7 @@ mod tests {
 	#[test]
 	fn error_position_oob() {
 		let err = expand("function foo() {}", "$99", parse_ts).unwrap_err();
-		assert!(matches!(
-			err.variant,
-			TemplateErrorVariant::PositionOutOfRange { .. }
-		));
+		assert!(matches!(err.variant, TemplateErrorVariant::PositionOutOfRange { .. }));
 	}
 
 	#[test]
@@ -712,10 +699,7 @@ mod tests {
 		let mut cursor = root.walk();
 		let node = root.named_children(&mut cursor).next().unwrap();
 		let err = expand_template("$BODY", node, src).unwrap_err();
-		assert!(matches!(
-			err.variant,
-			TemplateErrorVariant::NotApplicable { .. }
-		));
+		assert!(matches!(err.variant, TemplateErrorVariant::NotApplicable { .. }));
 	}
 
 	// === Body edge cases ===
@@ -728,11 +712,8 @@ mod tests {
 
 	#[test]
 	fn body_multiline_braces_stripped() {
-		let r = expand(
-			"function foo() {\n  const x = 1;\n  return x;\n}",
-			"$BODY",
-			parse_ts,
-		).unwrap();
+		let r =
+			expand("function foo() {\n  const x = 1;\n  return x;\n}", "$BODY", parse_ts).unwrap();
 		assert!(!r.contains('{'));
 		assert!(!r.contains('}'));
 		assert!(r.contains("const x = 1;"));

@@ -1,0 +1,45 @@
+#+TITLE: edit tool crashes with TypeError when `operations` arrives as a non-array string
+#+STATE: DONE
+#+SESSION_ID: 1507948bc96efd93
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-13T13-12-35-365Z_1507948bc96efd93.jsonl]]
+#+CUSTOM_ID: BUG-466-edit-tool-crashes-with-typeerror-when-op
+#+COMPLETION_HASH: ae4e066d5989aefb
+
+* Initial Message
+
+Edit
+ ┌─── ✘ ⚠ Edit ──────────────────────────────────────────────────────────────────────────────────────┐
+ │ params.operations.some is not a function. (In 'params.operations.some((op) => op &&               │
+ │ historyKinds.has(op.action.kind))', 'params.operations.some' is undefined)                        │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+Why is this happening when editing elixir files?
+
+* Symptom
+`edit` fails with: `params.operations.some is not a function. (In 'params.operations.some((op) => op && historyKinds.has(op.action.kind))', 'params.operations.some' is undefined)`. Observed when editing Elixir files (`do … end` bodies), but the root cause is content-agnostic.
+
+* Root cause
+`CodepathEditTool.execute` (packages/coding-agent/src/tools/edit.ts:157) assumes `params.operations` is an array and calls `.some(...)`. When the model serializes `operations` as a JSON *string* instead of a real array:
+1. `validateToolArguments` (packages/ai/src/utils/validation.ts:500) attempts string→array coercion via `tryParseJsonForTypes` / balanced-JSON extraction.
+2. Coercion fails (malformed/over-escaped/truncated payload) → validation throws.
+3. `edit` sets `lenientArgValidation = true` (edit.ts:129), so agent-loop (packages/agent/src/agent-loop.ts:531 and :816) swallows the throw and passes the RAW unparsed args to `execute`.
+4. `params.operations` is still a string → `.some` is undefined → TypeError.
+
+* Why Elixir surfaces it
+Elixir `#body` edits are the worst case for string-coercion: `do…end` blocks carry `"`, `\`, `#{}` interpolation, sigils, heredocs. Hand-stringified `operations` payloads mis-escape or truncate, so JSON.parse / extractBalancedJson (validation.ts:130) fail. C-family `{…}` bodies align with JSON's own braces so the balanced scanner recovers more often; `do…end` gives the extractor no structural anchor.
+
+* Fix (layer A — stop the crash class)
+Guard at the top of `execute`: if `!Array.isArray(params.operations)`, return an isError tool result with an actionable message ("operations must be a JSON array, not a string") instead of letting the raw TypeError escape. Placed before the historyKinds `.some` call (edit.ts:~157).
+
+* Fix (layer B — optional hardening)
+Consider: when `lenientArgValidation` bypasses a validation throw, surface a structured "args failed validation" result for tools that declare a strict shape, rather than handing raw args downstream. Broader change — affects all lenient tools (find/org/memory/status/get/create/submit-result), so scope carefully.
+
+* Repro
+Invoke `edit` with `operations` as a stringified JSON array (`"operations": "[{...}]"`) containing Elixir `do…end` content with interpolation/sigils.
+
+* Acceptance
+- `edit` with non-array `operations` returns a clear isError result, not a TypeError.
+- Regression test in packages/coding-agent/test/tools/ covering non-array `operations`.
+
+NOTE [2026-06-13]: Fix A landed. Guard added at top of CodepathEditTool.execute (packages/coding-agent/src/tools/edit.ts:~153): non-array `operations` → isError "malformed_operations" with actionable message instead of raw `.some` TypeError. Regression test: packages/coding-agent/test/tools/edit-malformed-operations.test.ts (stringified-array + undefined cases). Full edit suite 101 pass. Biome clean on both files. Fix B (structured lenient-validation surface) left out of scope as noted.

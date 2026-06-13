@@ -1,0 +1,51 @@
+#+TITLE: lenientArgValidation mis-applied to 4 naive tools (find/get/create/status) — same crash class as BUG-466
+#+STATE: ITEM
+#+SESSION_ID: 1507948bc96efd93
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-13T13-12-35-365Z_1507948bc96efd93.jsonl]]
+#+CUSTOM_ID: BUG-467-lenientargvalidation-mis-applied-to-4-na
+
+* Initial Message
+
+Edit
+ ┌─── ✘ ⚠ Edit ──────────────────────────────────────────────────────────────────────────────────────┐
+ │ params.operations.some is not a function. (In 'params.operations.some((op) => op &&               │
+ │ historyKinds.has(op.action.kind))', 'params.operations.some' is undefined)                        │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+Why is this happening when editing elixir files?
+
+* Context
+Follow-up from BUG-466 (edit crash on stringified `operations`). Audit of all 8 tools declaring `lenientArgValidation = true` in packages/coding-agent/src/tools/.
+
+* Finding: the flag is overloaded
+`lenientArgValidation` conflates two meanings:
+- INTENDED: "my execute() handles raw/loose args" — earned via internal guards.
+- ACCIDENTAL: set on tools whose execute() dereferences required fields AS IF validated, so the lenient bypass (agent-loop.ts:531/:816) silently converts a clean validation throw into a downstream TypeError.
+
+* Audit (8 tools)
+DEFENSIVE (keep lenient — genuinely handle raw args):
+- org.ts — `params.command ?? ""`, `typeof params.x === "string"` throughout.
+- memory.ts — `typeof params.text === "string"`, `params.x ?? default` for every field.
+- submit-result.ts — casts `params as Record<string,unknown>` + manual validation + throws. Test (submit-result.test.ts:430) asserts the flag IS the contract (dynamic per-task result schema).
+
+NAIVE (set flag but dereference required fields → latent BUG-466-class crash):
+- edit.ts — `params.operations.some/.map/.length`. GUARDED in BUG-466. Keep lenient (operations[] benefits from coercion) + keep the array guard as backstop. This is the correct model: lenient + entry guard.
+- find.ts:56 — `params.target.length`, `.startsWith`. Crash if target missing.
+- get.ts:504 — `params.target` → `path.extname`, `.split`, regex. Crash if target missing.
+- create.ts:57 — `resolveCwdRelativePath(cwd, params.path)`. Throws if path missing.
+- status.ts:54 — `params.command` passed to kernel `manage` (soft garbage, not a hard crash, but still wrong).
+
+* Why the flag was set
+git: PLAN-296 (062c1f55d) + PLAN-306 (f7a6a5b63) applied it wholesale to the generic-tool family. No per-tool rationale, no comment, no evidence coercion was ever needed for the single-string-field tools.
+
+* Decision: Fix B is per-tool, NOT a single bypass-site change
+A uniform "structured error on lenient bypass" (B1) would BREAK the 3 defensive tools that depend on raw-arg passthrough (esp. submit-result). Correct fix:
+1. Drop `lenientArgValidation` from find/get/create/status. Schemas are trivial (target/path/command); a hard "field required" validation error is strictly more actionable than a passthrough that crashes deeper. Verify no coercion dependency first (none found in audit).
+2. edit: keep lenient + keep BUG-466 array guard (operations[] coercion is the legit case).
+3. org/memory/submit-result: no change.
+
+* Acceptance
+- find/get/create/status with missing required field → clean validation error, not a TypeError or garbage kernel call.
+- No regression in submit-result/org/memory lenient behavior (their tests stay green).
+- Decide & document: is `lenientArgValidation` "I tolerate raw args" only? Add a doc comment on the AgentTool field (packages/agent/src/types.ts:323) stating tools must self-guard every field if they set it.

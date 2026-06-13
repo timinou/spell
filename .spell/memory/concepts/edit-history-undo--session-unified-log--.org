@@ -1,0 +1,28 @@
+#+TITLE: edit-history-undo--session-unified-log--
+
+** ITEM Edit-history undo: session-unified log, group atomicity, commit guard
+
+Spell's agent undo/redo lives in the kernel edit-history log (crates/pi-natives/src/code_path/edit_history.rs) + manage.rs handlers, surfaced via edit{undo/redo} and status{command:history}.
+
+ARCHITECTURE (after BUG-470 + PLAN-338):
+- Recorder is a global closure (lib.rs ~L75) firing SYNCHRONOUSLY on the edit thread. Carry per-invocation context via THREAD-LOCAL guards, not signature threading: EditGroupGuard (group_id) and SessionDirGuard (session log path). Both set in napi.rs edit branch, read by the recorder.
+- LOG LOCATION: session-unified at <sessionDir>/edit-history.jsonl (PLAN-338 B). Was per-workspace-shard (workspace_root_for(file)/.spell/…) — that split caused target-less undo to only see the session-cwd subtree's log in a monorepo. history_for() and the recorder must agree on the path.
+- GROUPING: one editGroupId per `edit` tool call → every EditEntry from that invocation (multi-op batch OR kernel multi-file rename) shares it → revert/reapply operate on the whole group atomically (apply_group with intra-group rollback = all-or-nothing on disk). A None group_id is a singleton.
+- COMMIT GUARD (PLAN-338 C): revert_guarded(q, force, is_committed_fn). commit_guard.rs reconciles vs live git HEAD (fail-open: git absent ⇒ not committed). Decline-by-default (RevertOutcome::Declined, writes nothing) when any group member is committed; force overrides. entry.commit is PROVENANCE (HEAD at record time), NOT the guard signal — use live is_committed().
+- entry_id on HistoryQuery = id-precise undo (expands to the entry's group).
+
+TS SURFACE:
+- edit.ts history dispatch MUST pass op.target AND root=effectiveCwd (the bug: hardcoded target:"" discarded the target, root omission resolved wrong workspace). id→historyEntryId, force→historyForce.
+- status{command:history} is the blessed READ surface (status dispatches to kernel `manage`); undo/redo stay on `edit` (mutation). EditEntry serde fields are #[serde(default)] for legacy-log compat.
+
+TEAM CHAT: edit_history RPC (rpc-mode.ts → BridgeRpcCommand → web ws → App.svelte onEditHistory) → EditHistoryPanel.svelte. Bubble.svelte detects edit undo/redo/declined from result text lead lines for intent accents.
+
+GOTCHA: build-native.ts reads ./target/debug but .cargo/config.toml redirects to ~/.cache/cargo-target → it installs a STALE .node. Manually `cp ~/.cache/cargo-target/debug/libpi_natives.so packages/natives/native/pi_natives.dev.node` after a Rust change before TS tests (BUG-471).
+:PROPERTIES:
+:CUSTOM_ID: CON-edit-history-undo--session-unified-log--
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T20:20:59Z
+:END:
+:RELATIONS:
+:END:

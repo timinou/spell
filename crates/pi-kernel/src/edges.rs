@@ -11,7 +11,10 @@
 //! shared across N agents — WS-B). The napi skin keeps its own thin wrapper
 //! (`edge_dispatch`) that adds DTO chunking + artifact staging on top of this.
 
-use std::{path::Path, path::PathBuf, sync::Arc};
+use std::{
+	path::{Path, PathBuf},
+	sync::Arc,
+};
 
 use pi_code_engine::language::LanguageRegistry;
 use pi_code_path::{
@@ -74,7 +77,8 @@ pub fn resolve_edges(
 	// trailing step filters the edge results by kind.
 	let (prefix_chain, edge_step) = split_at_edge(query, edge_pos);
 	let prefix_query = Query { head: query.head.clone(), chain: prefix_chain };
-	let prefix_cp = CodePath { locator: cp.locator.clone(), query: Some(prefix_query), qualifier: None };
+	let prefix_cp =
+		CodePath { locator: cp.locator.clone(), query: Some(prefix_query), qualifier: None };
 
 	// ── Resolve the prefix to starting NodeRefs (FS walk → code resolve) ──
 	let root = root.to_path_buf();
@@ -136,13 +140,20 @@ fn split_at_edge(query: &Query, edge_pos: usize) -> (Vec<(Combinator, Step)>, St
 /// `EdgeResolverImpl` matches. pi-code-graph stores symbols by path RELATIVE to
 /// the workspace root, so an absolute prefix would never match — strip root.
 fn to_graph_locator(start: &NodeRef, root: &Path) -> NodeRef {
-	let line = start.metadata.get("line").and_then(|v| v.as_u64()).unwrap_or(0);
+	let line = start
+		.metadata
+		.get("line")
+		.and_then(|v| v.as_u64())
+		.unwrap_or(0);
 	let abs = if Path::new(&start.locator).is_absolute() {
 		PathBuf::from(&start.locator)
 	} else {
 		root.join(&start.locator)
 	};
-	let rel = abs.strip_prefix(root).map(|p| p.to_path_buf()).unwrap_or(abs);
+	let rel = abs
+		.strip_prefix(root)
+		.map(|p| p.to_path_buf())
+		.unwrap_or(abs);
 	let mut copy = start.clone();
 	copy.locator = format!("{}:{}", rel.display(), line);
 	copy
@@ -155,7 +166,10 @@ fn filter_by_tail_step(nodes: Vec<NodeRef>, tail: &Step) -> Vec<NodeRef> {
 		Head::NodeKind(k) if k == "*" => nodes,
 		Head::NodeKind(want) => {
 			let want_pref = format!("§{want}");
-			nodes.into_iter().filter(|n| n.kind == want_pref || n.kind == *want).collect()
+			nodes
+				.into_iter()
+				.filter(|n| n.kind == want_pref || n.kind == *want)
+				.collect()
 		},
 		// A name filter against `<file>:<line>` locators is best-effort; pass
 		// through (mirrors edge_dispatch).
@@ -184,12 +198,14 @@ mod tests {
 
 	/// End-to-end: a real `def→` over a real two-file workspace resolves through
 	/// the warm index (get_or_build_graph) + EdgeResolverImpl. Proves the kernel
-	/// edge lane works without any napi/DTO layer — the exact path the NIF calls.
+	/// edge lane works without any napi/DTO layer — the exact path the NIF
+	/// calls.
 	///
-	/// NB: edges come from the STATIC `pi-code-graph` index (tree-sitter), NOT an
-	/// LSP. The LSP / type-aware lane (#hover, [type_aware]) is a separate path the
-	/// kernel rejects with UnsupportedOperation (host-skin only) — that is exactly
-	/// why this edge lane is host-agnostic and can serve from the BEAM.
+	/// NB: edges come from the STATIC `pi-code-graph` index (tree-sitter), NOT
+	/// an LSP. The LSP / type-aware lane (#hover, [type_aware]) is a separate
+	/// path the kernel rejects with UnsupportedOperation (host-skin only) —
+	/// that is exactly why this edge lane is host-agnostic and can serve from
+	/// the BEAM.
 	#[test]
 	fn def_edge_resolves_cross_file_reference_end_to_end() {
 		let dir = tempfile::tempdir().unwrap();
@@ -234,4 +250,3 @@ mod tests {
 		assert!(out.nodes.is_empty(), "a pre-cancelled walk yields no nodes");
 	}
 }
-

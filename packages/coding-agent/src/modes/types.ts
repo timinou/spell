@@ -18,6 +18,7 @@ import type { EventBus } from "../utils/event-bus";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
 import type { CustomEditor } from "./components/custom-editor";
+import type { ElicitationComponent } from "./components/elicitation";
 import type { HookEditorComponent } from "./components/hook-editor";
 import type { HookInputComponent } from "./components/hook-input";
 import type { HookSelectorComponent } from "./components/hook-selector";
@@ -60,7 +61,6 @@ export interface InteractiveModeContext {
 	eventBus?: EventBus;
 	subagentTracker?: SubagentTracker;
 
-
 	// State
 	isInitialized: boolean;
 	isBackgrounded: boolean;
@@ -89,6 +89,7 @@ export interface InteractiveModeContext {
 	hookSelector: HookSelectorComponent | undefined;
 	hookInput: HookInputComponent | undefined;
 	hookEditor: HookEditorComponent | undefined;
+	hookElicitation: ElicitationComponent | undefined;
 	lastStatusSpacer: Spacer | undefined;
 	lastStatusText: Text | undefined;
 	fileSlashCommands: Set<string>;

@@ -24,18 +24,18 @@ Use `todo_write` for roster tracking, gates, or blockers before delegating work.
 { id?  content  status?  group?  details?  notes?  blockers?[]  ref?  closesRef?  verify?  filesDeps?[] }
 ```
 
-| field | meaning |
+|field|meaning|
 |---|---|
-| `id` | omit to auto-assign `task-N`; provide to upsert an existing node |
-| `content` | short label (5-10 words) — required for a NEW node |
-| `status` | `pending → in_progress → completed \| abandoned` |
-| `group` | cosmetic display label — ordering comes from `blockers`, NOT groups |
-| `blockers[]` | ids that must finish first → wave order; circular/dangling are reported |
-| `ref` | linkage: `org://ITEM-ID` (durable) or roster id. `null` = none |
-| `closesRef` | `true` ⇒ completing this node closes its `org://` ref (→ DONE) |
-| `verify` | `{ commit? artifact? cmd? review? }` — see below |
-| `details` | paths/steps/specifics; shown only while the node is active |
-| `filesDeps[]` | files this node mutates (isolation overlap check) |
+|`id`|omit to auto-assign `task-N`; provide to upsert an existing node|
+|`content`|short label (5-10 words) — required for a NEW node|
+|`status`|`pending → in_progress → completed \|abandoned`|
+|`group`|cosmetic display label — ordering comes from `blockers`, NOT groups|
+|`blockers[]`|ids that must finish first → wave order; circular/dangling are reported|
+|`ref`|linkage: `org://ITEM-ID` (durable) or roster id. `null` = none|
+|`closesRef`|`true` ⇒ completing this node closes its `org://` ref (→ DONE)|
+|`verify`|`{ commit? artifact? cmd? review? }` — see below|
+|`details`|paths/steps/specifics; shown only while the node is active|
+|`filesDeps[]`|files this node mutates (isolation overlap check)|
 
 ## verify
 
@@ -58,7 +58,6 @@ Call `todo_write` twice per node you execute yourself:
 </critical>
 
 ## rules
-
 - self-work: flip `in_progress` BEFORE · `completed` immediately AFTER · ≤1 `in_progress`
 - delegated: `task` owns the lifecycle — never hand-set `delegation`, `failed`, or `gate_failed`
 - blocked nodes can't start; complete/abandon a blocker first (deadlock is warned)

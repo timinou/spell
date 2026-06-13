@@ -29,8 +29,8 @@ use crate::{
 		SpliceMode,
 	},
 	op::{
-		CssTarget, FileTarget, HeadingTarget, Identifier, LineAnchor, LineAt, LineSpan, Op,
-		SymScope, SymbolTarget,
+		CssTarget, FileTarget, HeadingTarget, Identifier, LineAnchor, LineAt, LineSpan, Op, SymScope,
+		SymbolTarget,
 	},
 	types::{Diagnostic, DiagnosticVariant},
 };
@@ -158,12 +158,16 @@ enum CssNs {
 /// will fall through to symbol lowering and be rejected there if invalid.
 /// Filesystem extension of the target locator, lowercased, if any.
 fn fs_extension(cp: &CodePath) -> Option<String> {
-	let Locator::Fs(fs) = &cp.locator else { return None };
+	let Locator::Fs(fs) = &cp.locator else {
+		return None;
+	};
 	let last = fs.segments.iter().rev().find_map(|seg| match seg {
 		crate::ast::FsSegment::Literal(s) if s != "/" => Some(s),
 		_ => None,
 	})?;
-	last.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase())
+	last
+		.rsplit_once('.')
+		.map(|(_, ext)| ext.to_ascii_lowercase())
 }
 
 /// True when the target is a CSS-family file (`.css`).
@@ -171,7 +175,8 @@ fn is_css_file(cp: &CodePath) -> bool {
 	fs_extension(cp).as_deref() == Some("css")
 }
 
-/// True when the target is a markdown/org-family file (`.md` / `.mdx` / `.org`).
+/// True when the target is a markdown/org-family file (`.md` / `.mdx` /
+/// `.org`).
 fn is_mdorg_file(cp: &CodePath) -> bool {
 	matches!(fs_extension(cp).as_deref(), Some("md" | "mdx" | "org"))
 }
@@ -267,9 +272,7 @@ impl Verb {
 
 			Verb::Rename { to } => Self::lower_rename(target, to),
 
-			Verb::Delete { allow_sibling_delete } => {
-				Self::lower_delete(target, allow_sibling_delete)
-			},
+			Verb::Delete { allow_sibling_delete } => Self::lower_delete(target, allow_sibling_delete),
 
 			Verb::Restructure { op } => Self::lower_restructure(target, op),
 
@@ -309,10 +312,7 @@ impl Verb {
 		if is_bare_file(target) {
 			return Ok(Op::FileDelete { target: FileTarget::new(target.clone())? });
 		}
-		Ok(Op::SymbolDelete {
-			target: SymbolTarget::new(target.clone())?,
-			allow_sibling_delete,
-		})
+		Ok(Op::SymbolDelete { target: SymbolTarget::new(target.clone())?, allow_sibling_delete })
 	}
 
 	fn lower_restructure(target: &CodePath, op: RestructureOp) -> Result<Op, Diagnostic> {
@@ -323,21 +323,18 @@ impl Verb {
 			RestructureOp::Demote => {
 				Ok(Op::HeadingDemote { target: HeadingTarget::new(target.clone())? })
 			},
-			RestructureOp::Move { direction } => Ok(Op::SymbolMove {
-				target: SymbolTarget::new(target.clone())?,
-				direction,
-			}),
-			RestructureOp::Transpose { column } => Ok(Op::SymbolTranspose {
-				target: SymbolTarget::new(target.clone())?,
-				column,
-			}),
+			RestructureOp::Move { direction } => {
+				Ok(Op::SymbolMove { target: SymbolTarget::new(target.clone())?, direction })
+			},
+			RestructureOp::Transpose { column } => {
+				Ok(Op::SymbolTranspose { target: SymbolTarget::new(target.clone())?, column })
+			},
 			RestructureOp::Splice { mode } => {
 				Ok(Op::SymbolSplice { target: SymbolTarget::new(target.clone())?, mode })
 			},
-			RestructureOp::Clone { rename_to } => Ok(Op::SymbolClone {
-				target: SymbolTarget::new(target.clone())?,
-				rename_to,
-			}),
+			RestructureOp::Clone { rename_to } => {
+				Ok(Op::SymbolClone { target: SymbolTarget::new(target.clone())?, rename_to })
+			},
 		}
 	}
 
@@ -394,14 +391,12 @@ impl Verb {
 				(Place::End, false) => {
 					Ok(Op::FileAppend { target: FileTarget::new(target.clone())?, content })
 				},
-				(Place::Before, true) => Ok(Op::SymbolInsertBefore {
-					target: SymbolTarget::new(target.clone())?,
-					content,
-				}),
-				(Place::After, true) => Ok(Op::SymbolInsertAfter {
-					target: SymbolTarget::new(target.clone())?,
-					content,
-				}),
+				(Place::Before, true) => {
+					Ok(Op::SymbolInsertBefore { target: SymbolTarget::new(target.clone())?, content })
+				},
+				(Place::After, true) => {
+					Ok(Op::SymbolInsertAfter { target: SymbolTarget::new(target.clone())?, content })
+				},
 				(Place::Before | Place::After, false) => {
 					let line = at.ok_or_else(|| {
 						incompatible(
@@ -414,11 +409,7 @@ impl Verb {
 						Place::Before => LineAt::Before { line: anchor },
 						_ => LineAt::After { line: anchor },
 					};
-					Ok(Op::LineInsert {
-						target: FileTarget::new(target.clone())?,
-						at:     line_at,
-						content,
-					})
+					Ok(Op::LineInsert { target: FileTarget::new(target.clone())?, at: line_at, content })
 				},
 				(Place::Start | Place::End, true) => Err(incompatible(
 					"place:start|end applies to file targets (prepend/append); for a symbol use \
@@ -469,10 +460,7 @@ fn strip_query(cp: &CodePath) -> CodePath {
 /// the resulting CodePath satisfies `SymbolTarget::new` (which rejects the
 /// qualifier shape). The scope is carried by the Op's `scope` field.
 fn strip_body_sig(cp: &CodePath) -> CodePath {
-	let drop = matches!(
-		cp.qualifier.as_ref().map(|q| q.name.as_str()),
-		Some("body") | Some("sig")
-	);
+	let drop = matches!(cp.qualifier.as_ref().map(|q| q.name.as_str()), Some("body") | Some("sig"));
 	CodePath {
 		locator:   cp.locator.clone(),
 		query:     cp.query.clone(),
@@ -775,7 +763,9 @@ mod tests {
 
 	#[test]
 	fn rename_bare_file_errors() {
-		let err = Verb::Rename { to: "x".into() }.lower(&cp("foo.ts")).unwrap_err();
+		let err = Verb::Rename { to: "x".into() }
+			.lower(&cp("foo.ts"))
+			.unwrap_err();
 		assert_eq!(err.variant, DiagnosticVariant::IncompatibleTargetShape);
 	}
 
@@ -886,10 +876,9 @@ mod tests {
 			"kind": "restructure", "op": "move", "direction": "down"
 		}))
 		.unwrap();
-		assert!(matches!(
-			r,
-			Verb::Restructure { op: RestructureOp::Move { direction: Direction::Down } }
-		));
+		assert!(matches!(r, Verb::Restructure {
+			op: RestructureOp::Move { direction: Direction::Down },
+		}));
 
 		let ren: Verb =
 			serde_json::from_value(serde_json::json!({ "kind": "rename", "to": "z" })).unwrap();

@@ -1,0 +1,29 @@
+#+TITLE: ptc-lisp-probe-special-form--titled-inve
+
+** ITEM PTC-Lisp probe special form (titled investigation blocks)
+
+`(probe "title" expr "title" expr ...)` — a PTC-Lisp special form that runs a labelled, ordered sequence of checks in one execute. Motivation: agents reflexively batch shell inspections with `echo "=== label ==="` separators (a hand-rolled structured-output over bash's flat byte stream); probe makes that native, ordered, machine-readable. The title is the agent's INTENTION per check; the value is evidence.
+
+Semantics: returns sentinel map {"__probe__" => [[title, value], ...]} — a VECTOR of pairs, because PTC maps key-sort and lose intent order (proven: vectors preserve order, maps don't). Per-check failures SETTLE as {"err" => reason} (sequential analogue of psettled) — one broken check never loses the rest. ctx threads across checks (a `def` in one is visible to the next). Global safety kills (heap/timeout/capacity) still abort — never settled, same boundary as try/psettled.
+
+Implementation (commit pending, all in beam/ptc_runner-vendored + Node):
+- analyze.ex: dispatch_list_form {:symbol,:probe} → analyze_probe; chunks forms into {title,body} pairs → {:probe, pairs} AST; added to supported_forms.
+- source_atoms.ex @special_forms: added `probe` to bounded vocab (REQUIRED — else the symbol stays a binary and {:symbol,:probe} dispatch never matches; this was the bug when probe first returned unbound_var).
+- eval.ex: do_eval({:probe, pairs}) folds eval_probe_body (mirrors try error channels: {:error} tuple, ExecutionError/ToolExecutionError rescue, fail_signal catch; stable resource errors reraise).
+- core_to_source.ex: format + collect_var_refs clauses for {:probe,_} (format/1 has no catch-all → needed for parity, like try).
+- functions.exs: registry entry (dispatch: :analyze) → discoverable via apropos/doc.
+- execute.ts: renderProbe() detects the sentinel, renders <probe title="...">value</probe> blocks; wired into #renderResult before generic stringify.
+- Docs: execute.md top section "Investigate several things at once: probe".
+
+Tests: beam probe_test.exs (11, direct Lisp.run); execute.test.ts (3, real BEAM through render). BEAM mix test 130 pass.
+
+NB Node-side caveat (same as refresh_runtime/BUG-464): renderProbe ships in execute.ts loaded at session start, so a running session shows raw sentinel until restart; the BEAM eval half is live via refresh_runtime.
+:PROPERTIES:
+:CUSTOM_ID: CON-ptc-lisp-probe-special-form--titled-inve
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T14:57:08Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: CON-ptc-beam-runtime-refresh--tier-1-soft-re
+:END:

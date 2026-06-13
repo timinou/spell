@@ -30,6 +30,9 @@ fn opts(target: &str) -> CodePathTaskOptions {
 		gitignore:          None,
 		artifact_threshold: None,
 		session_id:         Some("edge-e2e".into()),
+		edit_group_id:      None,
+		history_entry_id:   None,
+		history_force:      None,
 		home:               None,
 		session_dir:        None,
 	}
@@ -61,7 +64,10 @@ fn def_arrow_returns_at_least_one_referrer() {
 	assert!(
 		!has_file_not_found(&chunks),
 		"def→ must not produce FileNotFound diagnostics (path mismatch bug); got diags: {:?}",
-		chunks.iter().flat_map(|c| c.diagnostics.iter().map(|d| d.message.clone())).collect::<Vec<_>>()
+		chunks
+			.iter()
+			.flat_map(|c| c.diagnostics.iter().map(|d| d.message.clone()))
+			.collect::<Vec<_>>()
 	);
 	assert!(
 		total_nodes(&chunks) >= 1,

@@ -11,12 +11,14 @@ import type {
 	ExtensionUIDialogOptions,
 	TerminalInputHandler,
 } from "../../extensibility/extensions";
-import { warmMemoryLane } from "../../tools/memory";
+import type { ElicitationSchema, MCPElicitationResult } from "../../mcp/types";
+import { ElicitationComponent } from "../../modes/components/elicitation";
 import { HookEditorComponent } from "../../modes/components/hook-editor";
 import { HookInputComponent } from "../../modes/components/hook-input";
 import { HookSelectorComponent } from "../../modes/components/hook-selector";
 import { getAvailableThemesWithPaths, getThemeByName, setTheme, type Theme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
+import { warmMemoryLane } from "../../tools/memory";
 import { setTerminalTitle } from "../../utils/title-generator";
 
 export class ExtensionUiController {
@@ -730,6 +732,45 @@ export class ExtensionUiController {
 		this.ctx.editorContainer.clear();
 		this.ctx.editorContainer.addChild(this.ctx.editor);
 		this.ctx.hookInput = undefined;
+		this.ctx.ui.setFocus(this.ctx.editor);
+		this.ctx.ui.requestRender();
+	}
+
+	/**
+	 * Show an MCP elicitation panel: render the server's message + schema form
+	 * and resolve with the user's {action, content}. Mirrors the hook-input/
+	 * selector overlay lifecycle.
+	 */
+	showElicitation(message: string, schema: ElicitationSchema): Promise<MCPElicitationResult> {
+		const { promise, resolve } = Promise.withResolvers<MCPElicitationResult>();
+		let settled = false;
+		const finish = (result: MCPElicitationResult) => {
+			if (settled) return;
+			settled = true;
+			this.hideElicitation();
+			resolve(result);
+		};
+		const togglePauseKeys = this.ctx.keybindings.getKeys("toggleUserPause");
+		this.ctx.hookElicitation = new ElicitationComponent(message, schema, finish, {
+			tui: this.ctx.ui,
+			onTogglePause: () => this.ctx.handleToggleUserPause(),
+			togglePauseKeys,
+		});
+		this.ctx.editorContainer.clear();
+		this.ctx.editorContainer.addChild(this.ctx.hookElicitation);
+		this.ctx.ui.setFocus(this.ctx.hookElicitation);
+		this.ctx.ui.requestRender();
+		return promise;
+	}
+
+	/**
+	 * Hide the elicitation panel.
+	 */
+	hideElicitation(): void {
+		this.ctx.hookElicitation?.dispose();
+		this.ctx.editorContainer.clear();
+		this.ctx.editorContainer.addChild(this.ctx.editor);
+		this.ctx.hookElicitation = undefined;
 		this.ctx.ui.setFocus(this.ctx.editor);
 		this.ctx.ui.requestRender();
 	}

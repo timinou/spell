@@ -3,13 +3,13 @@
 //! Routes semantic CodePath qualifiers to [`pi_code_graph::SemanticBackend`]:
 //!
 //! - `#hover` → smart merge of written (graph) + inferred (LSP) via
-//!   [`pi_code_graph::merge_hover`]. Default `[source=both]`; escape
-//!   hatches `[source=graph]` and `[source=semantic]`.
+//!   [`pi_code_graph::merge_hover`]. Default `[source=both]`; escape hatches
+//!   `[source=graph]` and `[source=semantic]`.
 //! - `#type_definition` (alias `#type_def`) → `backend.type_definition_of`
 //! - `#signature` → `backend.signature_at`
 //! - `#inlay` → `backend.inlay_hints(file, range)`
-//! - `#diagnostics` → `backend.diagnostics(file)` filtered by
-//!   the `[severity=…]` predicate
+//! - `#diagnostics` → `backend.diagnostics(file)` filtered by the
+//!   `[severity=…]` predicate
 //!
 //! ## Hover smart-merge (FUP-097)
 //!
@@ -25,10 +25,10 @@
 //!
 //! The `[source=…]` predicate on `#hover` overrides the smart-merge:
 //!
-//! - `[source=graph]` — use only the written (Annotation) half. Note the
-//!   LSP query is still issued by [`CompositeSemanticBackend::hover_dual`];
-//!   only the merged output is graph-only. (Future optimisation: thread
-//!   the source selector through the trait method to skip the LSP probe.)
+//! - `[source=graph]` — use only the written (Annotation) half. Note the LSP
+//!   query is still issued by [`CompositeSemanticBackend::hover_dual`]; only
+//!   the merged output is graph-only. (Future optimisation: thread the source
+//!   selector through the trait method to skip the LSP probe.)
 //! - `[source=semantic]` — use only the inferred (LSP) half
 //! - `[source=both]` (default) — smart merge above
 //!
@@ -49,9 +49,9 @@
 use std::path::Path;
 
 use pi_code_graph::{
-	classify_hover_dual, merge_hover, Confidence, DiagnosticSeverity, HoverDual, HoverOutcome,
-	HoverSource, InferResult, InlayHint, LineRange, SemanticBackend, SemanticDiagnostic,
-	SemanticLocation, SignatureInfo, TypeRepr,
+	Confidence, DiagnosticSeverity, HoverDual, HoverOutcome, HoverSource, InferResult, InlayHint,
+	LineRange, SemanticBackend, SemanticDiagnostic, SemanticLocation, SignatureInfo, TypeRepr,
+	classify_hover_dual, merge_hover,
 };
 use pi_code_path::ast::{Predicate, Qualifier};
 
@@ -93,10 +93,7 @@ pub enum TypeResolverOutcome {
 /// `#hover` is admitted post-FUP-097: it dispatches through the same
 /// smart-merge path as the deprecated `#hover_inferred` did.
 pub fn is_semantic_qualifier(name: &str) -> bool {
-	matches!(
-		name,
-		"hover" | "type_definition" | "type_def" | "signature" | "inlay" | "diagnostics"
-	)
+	matches!(name, "hover" | "type_definition" | "type_def" | "signature" | "inlay" | "diagnostics")
 }
 
 /// FUP-097: qualifiers that the W3 grammar accepted but have since been
@@ -196,7 +193,7 @@ pub fn dispatch(
 	// other reasoning — the agent should learn the canonical replacement.
 	if let Some(replacement) = deprecated_qualifier_replacement(&qualifier.name) {
 		return TypeResolverOutcome::Deprecated {
-			name: qualifier.name.clone(),
+			name:        qualifier.name.clone(),
 			replacement: replacement.to_string(),
 		};
 	}
@@ -209,7 +206,9 @@ pub fn dispatch(
 	match qualifier.name.as_str() {
 		// FUP-097: smart-merge dispatch. Default = Both (merge); escape
 		// hatches via `[source=…]`.
-		"hover" => dispatch_hover(backend, sp.source.unwrap_or(SourceSelector::Both), file, line, col),
+		"hover" => {
+			dispatch_hover(backend, sp.source.unwrap_or(SourceSelector::Both), file, line, col)
+		},
 		"type_definition" | "type_def" => {
 			TypeResolverOutcome::TypeDefinition(backend.type_definition_of(file, line, col))
 		},
@@ -235,8 +234,8 @@ pub fn dispatch(
 
 /// `#hover` smart-merge dispatch (FUP-097).
 ///
-/// `source=both` (default): query both halves via [`SemanticBackend::hover_dual`],
-/// merge via [`pi_code_graph::merge_hover`].
+/// `source=both` (default): query both halves via
+/// [`SemanticBackend::hover_dual`], merge via [`pi_code_graph::merge_hover`].
 /// `source=graph`: take only `dual.written` (Annotation half).
 /// `source=semantic`: take only `dual.inferred` (LSP half).
 fn dispatch_hover(
@@ -257,7 +256,9 @@ fn dispatch_hover(
 
 /// Test whether the `[type_aware]` flag is present in a predicate set.
 pub fn has_type_aware(predicates: &[Predicate]) -> bool {
-	predicates.iter().any(|p| matches!(p, Predicate::Flag(s) if s == "type_aware"))
+	predicates
+		.iter()
+		.any(|p| matches!(p, Predicate::Flag(s) if s == "type_aware"))
 }
 
 /// Narrow the result of an `EdgeResolver::resolve` call by receiver type via
@@ -378,25 +379,29 @@ mod tests {
 	/// when `None`, the trait default impl runs (classify-by-confidence on
 	/// `type_at`).
 	struct StubBackend {
-		hover: InferResult,
+		hover:               InferResult,
 		hover_dual_override: Option<HoverDual>,
-		type_def: Option<SemanticLocation>,
-		sig: Option<SignatureInfo>,
-		inlay: Vec<InlayHint>,
-		diag: Vec<SemanticDiagnostic>,
-		last_inlay_range: std::sync::Mutex<Option<LineRange>>,
+		type_def:            Option<SemanticLocation>,
+		sig:                 Option<SignatureInfo>,
+		inlay:               Vec<InlayHint>,
+		diag:                Vec<SemanticDiagnostic>,
+		last_inlay_range:    std::sync::Mutex<Option<LineRange>>,
 	}
 
 	impl StubBackend {
 		fn new() -> Self {
 			Self {
-				hover: InferResult::known(TypeRepr::text("Foo"), Confidence::Inferred, TypeSource::ForwardFlow),
+				hover:               InferResult::known(
+					TypeRepr::text("Foo"),
+					Confidence::Inferred,
+					TypeSource::ForwardFlow,
+				),
 				hover_dual_override: None,
-				type_def: Some(SemanticLocation::point("/tmp/types.rs", 10, 1)),
-				sig: None,
-				inlay: vec![],
-				diag: vec![],
-				last_inlay_range: std::sync::Mutex::new(None),
+				type_def:            Some(SemanticLocation::point("/tmp/types.rs", 10, 1)),
+				sig:                 None,
+				inlay:               vec![],
+				diag:                vec![],
+				last_inlay_range:    std::sync::Mutex::new(None),
 			}
 		}
 
@@ -407,8 +412,14 @@ mod tests {
 	}
 
 	impl SemanticBackend for StubBackend {
-		fn capabilities(&self) -> Capabilities { Capabilities::default() }
-		fn type_at(&self, _f: &Path, _l: u32, _c: u32) -> InferResult { self.hover.clone() }
+		fn capabilities(&self) -> Capabilities {
+			Capabilities::default()
+		}
+
+		fn type_at(&self, _f: &Path, _l: u32, _c: u32) -> InferResult {
+			self.hover.clone()
+		}
+
 		fn hover_dual(&self, file: &Path, line: u32, col: u32) -> HoverDual {
 			if let Some(d) = &self.hover_dual_override {
 				return d.clone();
@@ -418,13 +429,23 @@ mod tests {
 			// between the two implementations (FUP-097 reviewer SEM-3).
 			classify_hover_dual(self.type_at(file, line, col))
 		}
-		fn type_definition_of(&self, _f: &Path, _l: u32, _c: u32) -> Option<SemanticLocation> { self.type_def.clone() }
-		fn signature_at(&self, _f: &Path, _l: u32, _c: u32) -> Option<SignatureInfo> { self.sig.clone() }
+
+		fn type_definition_of(&self, _f: &Path, _l: u32, _c: u32) -> Option<SemanticLocation> {
+			self.type_def.clone()
+		}
+
+		fn signature_at(&self, _f: &Path, _l: u32, _c: u32) -> Option<SignatureInfo> {
+			self.sig.clone()
+		}
+
 		fn inlay_hints(&self, _f: &Path, range: Option<LineRange>) -> Vec<InlayHint> {
 			*self.last_inlay_range.lock().unwrap() = range;
 			self.inlay.clone()
 		}
-		fn diagnostics(&self, _f: &Path) -> Vec<SemanticDiagnostic> { self.diag.clone() }
+
+		fn diagnostics(&self, _f: &Path) -> Vec<SemanticDiagnostic> {
+			self.diag.clone()
+		}
 	}
 
 	/// Helper: build an InferResult for the written half of a HoverDual.
@@ -472,11 +493,12 @@ mod tests {
 		}
 	}
 
-	/// FUP-097 case A: both halves agree under normalisation - Agreed, no source label.
+	/// FUP-097 case A: both halves agree under normalisation - Agreed, no source
+	/// label.
 	#[test]
 	fn hover_merge_agreed_collapses_to_one_repr() {
 		let stub = StubBackend::new().with_dual(HoverDual {
-			written: Some(written("fn foo(x: i32) -> bool")),
+			written:  Some(written("fn foo(x: i32) -> bool")),
 			inferred: Some(inferred("fn foo(x: i32) -> bool")),
 		});
 		let out = dispatch(&stub, &qual("hover"), &[], &file(), 1, 1);
@@ -491,10 +513,8 @@ mod tests {
 	/// FUP-097 case B: only written present - Single { Graph }.
 	#[test]
 	fn hover_merge_single_graph_when_only_written() {
-		let stub = StubBackend::new().with_dual(HoverDual {
-			written: Some(written("&str")),
-			inferred: None,
-		});
+		let stub = StubBackend::new()
+			.with_dual(HoverDual { written: Some(written("&str")), inferred: None });
 		let out = dispatch(&stub, &qual("hover"), &[], &file(), 1, 1);
 		match out {
 			TypeResolverOutcome::Hover(HoverOutcome::Single { repr, source }) => {
@@ -508,10 +528,8 @@ mod tests {
 	/// FUP-097 case C: only inferred present - Single { Semantic }.
 	#[test]
 	fn hover_merge_single_semantic_when_only_inferred() {
-		let stub = StubBackend::new().with_dual(HoverDual {
-			written: None,
-			inferred: Some(inferred("User { id: i32 }")),
-		});
+		let stub = StubBackend::new()
+			.with_dual(HoverDual { written: None, inferred: Some(inferred("User { id: i32 }")) });
 		let out = dispatch(&stub, &qual("hover"), &[], &file(), 1, 1);
 		match out {
 			TypeResolverOutcome::Hover(HoverOutcome::Single { repr, source }) => {
@@ -522,11 +540,12 @@ mod tests {
 		}
 	}
 
-	/// FUP-097 case D: both differ after normalisation - Disagreed, both labelled.
+	/// FUP-097 case D: both differ after normalisation - Disagreed, both
+	/// labelled.
 	#[test]
 	fn hover_merge_disagreed_renders_both() {
 		let stub = StubBackend::new().with_dual(HoverDual {
-			written: Some(written("any")),
+			written:  Some(written("any")),
 			inferred: Some(inferred("User { id: i32 }")),
 		});
 		let out = dispatch(&stub, &qual("hover"), &[], &file(), 1, 1);
@@ -550,10 +569,8 @@ mod tests {
 	/// FUP-097: [source=graph] takes only the written half.
 	#[test]
 	fn hover_source_graph_uses_only_written() {
-		let stub = StubBackend::new().with_dual(HoverDual {
-			written: Some(written("any")),
-			inferred: Some(inferred("User")),
-		});
+		let stub = StubBackend::new()
+			.with_dual(HoverDual { written: Some(written("any")), inferred: Some(inferred("User")) });
 		let preds = vec![Predicate::Attribute { name: "source".into(), value: "graph".into() }];
 		let out = dispatch(&stub, &qual("hover"), &preds, &file(), 1, 1);
 		match out {
@@ -568,10 +585,8 @@ mod tests {
 	/// FUP-097: [source=semantic] takes only the inferred half.
 	#[test]
 	fn hover_source_semantic_uses_only_inferred() {
-		let stub = StubBackend::new().with_dual(HoverDual {
-			written: Some(written("any")),
-			inferred: Some(inferred("User")),
-		});
+		let stub = StubBackend::new()
+			.with_dual(HoverDual { written: Some(written("any")), inferred: Some(inferred("User")) });
 		let preds = vec![Predicate::Attribute { name: "source".into(), value: "semantic".into() }];
 		let out = dispatch(&stub, &qual("hover"), &preds, &file(), 1, 1);
 		match out {
@@ -697,16 +712,22 @@ mod tests {
 			fn capabilities(&self) -> Capabilities {
 				Capabilities { narrow_dispatch: true, ..Default::default() }
 			}
+
 			fn type_at(&self, _f: &Path, _l: u32, _c: u32) -> InferResult {
 				InferResult::unknown()
 			}
+
 			fn narrow_dispatch(
 				&self,
 				_call_site: &SemanticLocation,
 				candidates: &[SemanticLocation],
 			) -> Vec<SemanticLocation> {
 				// Stub narrowing: keep only odd-line candidates.
-				candidates.iter().filter(|l| l.line % 2 == 1).cloned().collect()
+				candidates
+					.iter()
+					.filter(|l| l.line % 2 == 1)
+					.cloned()
+					.collect()
 			}
 		}
 		let backend = NarrowingBackend;
@@ -727,19 +748,19 @@ mod tests {
 		assert_eq!(outcome_to_summary(&agreed), "i32");
 
 		let single_graph = TypeResolverOutcome::Hover(HoverOutcome::Single {
-			repr: "i32".into(),
+			repr:   "i32".into(),
 			source: HoverSource::Graph,
 		});
 		assert_eq!(outcome_to_summary(&single_graph), "i32 [source: graph]");
 
 		let single_semantic = TypeResolverOutcome::Hover(HoverOutcome::Single {
-			repr: "User".into(),
+			repr:   "User".into(),
 			source: HoverSource::Semantic,
 		});
 		assert_eq!(outcome_to_summary(&single_semantic), "User [source: semantic]");
 
 		let disagreed = TypeResolverOutcome::Hover(HoverOutcome::Disagreed {
-			written: "any".into(),
+			written:  "any".into(),
 			inferred: "User".into(),
 		});
 		assert_eq!(outcome_to_summary(&disagreed), "written:  any\ninferred: User");
@@ -748,7 +769,7 @@ mod tests {
 		assert_eq!(outcome_to_summary(&none), "unknown");
 
 		let deprecated = TypeResolverOutcome::Deprecated {
-			name: "hover_inferred".into(),
+			name:        "hover_inferred".into(),
 			replacement: "hover [source=semantic]".into(),
 		};
 		assert_eq!(

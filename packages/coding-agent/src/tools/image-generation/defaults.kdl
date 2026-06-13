@@ -62,6 +62,9 @@ schema "ui-screen" {
     section  "components" "Key UI components with their content (e.g., 'header with avatar, search bar, 3 product cards with price')." label="Components"
     section  "tokens"     "Visual tokens: color palette, typography scale, spacing, radii, elevation." label="Design tokens"
 
+    // TODO: Add a field that lets me put post-generation instructions and put the <discipline> block there (to be injected the first time it's used within a session)
+    // TODO: Think about this in the context of the other edit etc. tools, as a general kdl hook tool, or maybe per-tool to get started and get done with it?
+
     instructions """
         Generates a high-fidelity UI-screen mockup using the configured image provider (ChatGPT Codex `gpt-image-2` by default; falls back to Gemini, OpenRouter, or Antigravity).
 
@@ -71,5 +74,34 @@ schema "ui-screen" {
         - List concrete `components` and `tokens` (palette, type scale) so the result is build-ready.
         - For UI text labels: keep them short, and add "sharp, legible, correctly spelled".
         </instructions>
+        <discipline>
+        ## Mock critique (apply per generated screen, before presenting)
+
+        view first → never present unseen. resize → inline → read pixels, ✗ trust the gen-prompt echo.
+
+        verdict line: <surface> — <Ship|Polish|Broken>; N fixes
+
+        bucket every observation:
+            ✓ keep   → what's right + WHY (tie to code affordance it honors)
+            ✗ fix    → concrete defect → corrective directive (not "improve X")
+            ? rethink→ underspecified region → assign it a distinct job
+            ⚠ honesty→ does mock imply data/behaviour that code lacks?
+
+        each ✗ fix MUST carry:
+            - placement/scope error?  (per-doc vs per-collection vs per-org property leak)
+            - happy-path-only?        (∃ degraded/empty/failure state rendered?)
+            - legend/scale missing?   (number w/o unit; chip w/o what-it-measures)
+            - decorative noise?       (element earns px only past threshold N)
+            - phantom affordance?     (entry-point / trigger shown? or appears from nowhere)
+            - loop closure?           (verify/undo/back path present?)
+
+        ⚠ honesty = hard gate:
+            mock shows X → ∃ data/runtime path producing X today?
+            ✗ → label aspirational + promote prerequisite to plan epic (not UI-only change)
+            never let a mock imply a traversal/citation/state that didn't happen.
+
+        ground every critique in repo truth, ✗ vibes.
+        each fix = next version's diff. earn the v-bump.
+        </discipline>
         """
 }

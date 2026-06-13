@@ -463,15 +463,12 @@ fn save_vector_cache(
 	embedder_model.clone_into(&mut meta.embedder_model);
 	meta.embedder_dim = vectors.dim();
 
-	save_all(
-		cache,
-		vec![(
-			VECTORS_META_NAME,
-			Box::new(move |w: &mut BufWriter<File>| {
-				bincode::serialize_into(w, &meta).map_err(pi_knowledge_core::Error::Bincode)
-			}) as Box<dyn FnOnce(&mut BufWriter<File>) -> pi_knowledge_core::Result<()>>,
-		)],
-	)
+	save_all(cache, vec![(
+		VECTORS_META_NAME,
+		Box::new(move |w: &mut BufWriter<File>| {
+			bincode::serialize_into(w, &meta).map_err(pi_knowledge_core::Error::Bincode)
+		}) as Box<dyn FnOnce(&mut BufWriter<File>) -> pi_knowledge_core::Result<()>>,
+	)])
 	.map_err(|e| Error::from_reason(format!("Failed to write vector cache meta: {e}")))
 }
 
@@ -1213,10 +1210,8 @@ mod tests {
 			.duration_since(std::time::UNIX_EPOCH)
 			.unwrap_or_default()
 			.as_nanos();
-		let dir = std::env::temp_dir().join(format!(
-			"pi-natives-code-graph-meta-{name}-{}-{unique}",
-			std::process::id()
-		));
+		let dir = std::env::temp_dir()
+			.join(format!("pi-natives-code-graph-meta-{name}-{}-{unique}", std::process::id()));
 		let _ = fs::remove_dir_all(&dir);
 		fs::create_dir_all(&dir).expect("cache dir should be created");
 		(CacheStore::new(&dir), dir)
@@ -1227,8 +1222,7 @@ mod tests {
 		let (cache, dir) = test_cache_store("model-mismatch");
 		let vectors = tiny_vector_index(8);
 		let fingerprint = dummy_fingerprint();
-		save_vector_cache(&cache, &vectors, &fingerprint, "model-X")
-			.expect("save should succeed");
+		save_vector_cache(&cache, &vectors, &fingerprint, "model-X").expect("save should succeed");
 
 		let state = load_vector_cache(&cache, Some(&fingerprint), "model-Y", vectors.dim());
 		assert!(
@@ -1245,8 +1239,7 @@ mod tests {
 		let (cache, dir) = test_cache_store("dim-mismatch");
 		let vectors = tiny_vector_index(8);
 		let fingerprint = dummy_fingerprint();
-		save_vector_cache(&cache, &vectors, &fingerprint, "model-X")
-			.expect("save should succeed");
+		save_vector_cache(&cache, &vectors, &fingerprint, "model-X").expect("save should succeed");
 
 		let state = load_vector_cache(&cache, Some(&fingerprint), "model-X", 16);
 		assert!(
@@ -1263,8 +1256,7 @@ mod tests {
 		let (cache, dir) = test_cache_store("meta-missing");
 		let vectors = tiny_vector_index(8);
 		let fingerprint = dummy_fingerprint();
-		save_vector_cache(&cache, &vectors, &fingerprint, "model-X")
-			.expect("save should succeed");
+		save_vector_cache(&cache, &vectors, &fingerprint, "model-X").expect("save should succeed");
 
 		let meta_path = dir.join(format!("{VECTORS_META_NAME}.bin"));
 		assert!(meta_path.exists(), "sanity: meta sidecar exists after save");
@@ -1285,8 +1277,7 @@ mod tests {
 		let (cache, dir) = test_cache_store("fresh");
 		let vectors = tiny_vector_index(8);
 		let fingerprint = dummy_fingerprint();
-		save_vector_cache(&cache, &vectors, &fingerprint, "model-X")
-			.expect("save should succeed");
+		save_vector_cache(&cache, &vectors, &fingerprint, "model-X").expect("save should succeed");
 
 		let state = load_vector_cache(&cache, Some(&fingerprint), "model-X", vectors.dim());
 		assert!(

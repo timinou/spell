@@ -11,9 +11,7 @@ use winnow::{Parser, token::take_while};
 
 use crate::{
 	ast::NamePayload,
-	dialect::{
-		AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierSpec,
-	},
+	dialect::{AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierSpec},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -394,8 +392,8 @@ mod qualifiers {
 
 pub fn go_dialect() -> LanguageDialect {
 	LanguageDialect {
-		name_lexer: Arc::new(GoNameLexer),
-		anchors:    vec![
+		name_lexer:   Arc::new(GoNameLexer),
+		anchors:      vec![
 			AnchorPattern {
 				name:    "defer",
 				matcher: |n, _s| has_descendant_kind(*n, "defer_statement"),
@@ -493,7 +491,7 @@ pub fn go_dialect() -> LanguageDialect {
 				},
 			},
 		],
-		qualifiers: vec![
+		qualifiers:   vec![
 			QualifierSpec {
 				name:       "body",
 				applies_to: vec!["function_declaration".into(), "method_declaration".into()],
@@ -544,7 +542,7 @@ pub fn go_dialect() -> LanguageDialect {
 				resolve:    Arc::new(qualifiers::NamedReturns),
 			},
 		],
-		edge_kinds: EdgeKindSet::default(),
+		edge_kinds:   EdgeKindSet::default(),
 		kind_aliases: std::collections::HashMap::from([
 			("function", vec!["function_declaration", "func_literal"]),
 			("method", vec!["method_declaration"]),
@@ -553,7 +551,13 @@ pub fn go_dialect() -> LanguageDialect {
 			("import", vec!["import_declaration", "import_spec"]),
 			("binding", vec!["var_declaration", "const_declaration", "short_var_declaration"]),
 			("identifier", vec!["identifier", "field_identifier", "type_identifier"]),
-			("decl", vec!["function_declaration", "method_declaration", "type_declaration", "var_declaration", "const_declaration"]),
+			("decl", vec![
+				"function_declaration",
+				"method_declaration",
+				"type_declaration",
+				"var_declaration",
+				"const_declaration",
+			]),
 		]),
 	}
 }

@@ -1,0 +1,171 @@
+#+TITLE: Episodes 2026-06-13
+
+** ITEM P3 (PLAN-334) FULLY FINISHED 2026-06-12 \u2014 the two finish items beyond the original 3-gates spike are done + reviewer-gated. P3.7 CUTOVER (598e6002c): NAPI execute_code_path_inner read branch now DELEGATES to pi_kernel::resolve_target \u2014 carve ADOPTED, duplicate dispatch DELETED, single source of truth. resolve_target gained gitignore:Option<bool>. Behavior-preserving proven by ABSOLUTE anchors (routing_tests 22/op_matrix 2/unified 9 = napi-new==napi-old, since cross-skin parity weakened post-cutover when both sides route through the kernel). P3.8 FUNCTIONAL gate-3 (c9507f230+bac994dee): beam/pi_kernel_nif BrokerConnection rustler resource holds per-owner broker UnixStream; env.monitor + Resource::down(IMPLEMENTS_DOWN=true) fire on owner :DOWN \u2192 close \u2192 broker reclaim (conn.rs:134). Proven end-to-end on OTP 28: A holds, A killed, B acquires reclaimed intent. KEY REVIEW LESSON (agent 33): the first gate-3 test couldn't ISOLATE the :DOWN monitor from natural ResourceArc GC-drop \u2014 BrokerConnection has no explicit Drop but its struct-drop closes the UnixStream when refcount\u21920, and killed owner A held the sole ref, so GC-drop reclaimed independently; test would pass even with IMPLEMENTS_DOWN=false. FIX = STRENGTHEN not soften: the parent process retains A's resource term so killing A keeps refcount>0 \u2192 GC-drop CANNOT fire \u2192 ONLY the monitor can close the socket \u2192 test still passes \u2192 monitor path genuinely proven. GENERAL LESSON: to prove a destructor/monitor callback drives an effect (vs a coincidental drop path), pin the resource so the ordinary drop CAN'T fire, leaving the callback as the only possible cause. TWO EMPIRICAL ENV FACTS banked: (1) System.put_env on the Elixir side does NOT reach a NIF's std::env::var_os \u2014 pass paths as NIF ARGS (cost me 2 test iterations); (2) building anything in pi-natives' dep closure needs NK_TARGET_DIAMOND=0 (numkong SIMD dep build.rs emits -mavx10.2-512, GCC 16.1.1 rejects; the env forces that ISA off). Also fixed: claim_intent does blocking I/O \u2192 schedule=DirtyIo; rustler encodes Ok((a,b)) as {:ok,{a,b}} not {:ok,a,b} (spec was wrong). 6 P3-finish commits 598e6002c..bac994dee. Remaining: P5 (graph+writes cutover, index wholesale, N-3 zero-copy) + FUP-132 (mid-walk host-abort) \u2014 genuinely later, user said finish P3 before P5.
+:PROPERTIES:
+:CUSTOM_ID: EP-df991e126e8478e
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T00:23:24Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-334-p3-find-as-nif-proof-pi-kernel-carve-out
+ABOUT: CON-p3-pi-kernel-warm-kernel-spike-shipped--
+:END:
+** ITEM Orphaned duplicate tool_result causes Anthropic 400 when user steers mid-tool-turn
+
+Fixed in transform-messages.ts: toolResult branch now skips a duplicate when the id is already Resolved (not just Aborted) → one-result-per-tool_use, keep-first preserves adjacency. Regression test added to duplicate-tool-results.test.ts ("drops a late real tool result when a user message interrupted the tool turn"); verified it fails (2 results) without the guard and passes (1) with it. biome + tsgo clean for changed files; full suite green (9 pass).
+:PROPERTIES:
+:CUSTOM_ID: EP-78b6b07aff91ba75
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T11:03:54Z
+:END:
+:RELATIONS:
+ABOUT: BUG-461-orphaned-duplicate-tool-result-causes-an
+:END:
+** ITEM execute-tool ergonomics review (2026-06-13) shipped FEAT-812 + execute.md teaching. CENTRAL FINDING: the friction I hit live (tool/find returns null via (get res "text"); (find s needle) failing) was DISCOVERABILITY, not capability. PTC-Lisp ALREADY has apropos/doc/dir (discovery.ex) + every string builtin (includes?, starts-with?, ends-with?, index-of, last-index-of, subs, trim*, blank?, split-lines, join, replace — string.ex, registered env.ex) + .contains/.indexOf interop. My reaches were NAMING GUESSES. So: P1 (teach apropos/doc + tool/<x> mirrors <x> shape, tool/find=LIST of node-maps {path,kind,text}, in execute.md) was the 80/20 fix. P2 (catalog return-shape hints) ABANDONED not deferred: AgentTool (packages/agent/src/types.ts) has NO result/output schema, only parameters — a curated return map would be ungated drift, exactly what catalog-gen.ts exists to prevent; reframed into P1 prose + in-language discovery. P3 (string-alias pass) DISSOLVED: nothing missing. The ONE real capability gap = sequential try/catch (psettled only covers PARALLEL per-element settling). FEAT-812 = SPELL PATCH-8: Clojure (try body (catch e h) (finally f)) in vendored ptc_runner. KEY IMPL LESSONS: (1) PTC has TWO error channels — most logical errors are {:error,reason} RETURN TUPLES from do_eval (apply.ex converts the raises), only ExecutionError/ToolExecutionError actually RAISE; a try must handle BOTH (a first cut rescuing only raises missed all tuple errors). (2) catch-var symbol = SourceAtoms.intern(name) = ATOM if in bounded vocab else BINARY → analyzer guard is_atom OR is_binary, handler key matches {:var,name}. (3) SAFETY: try re-raises stable_resource_error? (memory_exceeded/timeout/parallel_capacity_exceeded) exactly like the psettled worker — heap kill also bypasses rescue via process death; proved by a test that wraps a heap-cap kill in catch and asserts abort. (4) W4: try is control-flow not txn boundary — caught error → program succeeds → writes COMMIT (execute.ts success path vs catch path keys rollback). New special form needs 6 sites: analyze.ex dispatch+analyzer, eval.ex do_eval, closure_capture.ex (bound var), core_to_source.ex (round-trip), helpers.ex + source_atoms.ex (@special_forms). GENERAL PRINCIPLE applied: refused to force P2 (locally coherent, systemically wrong = ungated drift); verified P3 was a non-gap before filing. ENV: building/testing anything in beam needs NK_TARGET_DIAMOND=0; the running execute peer is STALE after vendored edits (loads old compiled runner) — authoritative test is the runner's ExUnit suite which compiles fresh. Commit ebf81f383. Full ptc_runtime suite 113 tests+5 properties 0 failures.
+:PROPERTIES:
+:CUSTOM_ID: EP-9a35bbd780985d9f
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T11:07:49Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-812-ptc-lisp-try-catch-finally-exception-han
+:END:
+** ITEM PTC-Lisp type_error is a dead-end: no recovery hint for wrong-typed builtin calls
+
+Scoped to contains?-on-string (the actual friction). Dropped the speculative conj-on-string clause: conj is registered {:variadic_nonempty,...} (env.ex:283), not {:normal,...} like contains? (env.ex:324), so its error path produces a RuntimeError-wrapped "no function clause matching" that function_name/1 can't key on — the specific_type_error seam doesn't fire for it. contains? works because it's a direct :normal fn → FunctionClauseError → type_error_for_args. Extending the hint to variadic builtins is a separate, larger change; not warranted for a speculative case.
+Fixed in 2f0548a1e. contains?-on-string now points at includes?/index-of via specific_type_error/2; execute.md reinforces the (get (tool/find..) "text") nil trap. Tests in nil_poison_test.exs. conj dropped (variadic dispatch, separate seam).
+:PROPERTIES:
+:CUSTOM_ID: EP-a9658bfc80ab2cd5
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T11:37:42Z
+:END:
+:RELATIONS:
+ABOUT: BUG-462-ptc-lisp-type-error-is-a-dead-end-no-rec
+:END:
+** ITEM PTC-Lisp get!/get-in! says "absent from map" even when the container is a list or nil
+
+Fixed in 2f0548a1e. get! list branch names the list (+ count + index/first hint); nil branch says 'value is nil'; map unchanged. get_in! was already container-aware. Tests in nil_poison_test.exs.
+:PROPERTIES:
+:CUSTOM_ID: EP-3d44820b5950bb54
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T11:37:47Z
+:END:
+:RELATIONS:
+ABOUT: BUG-463-ptc-lisp-get-get-in-says-absent-from-map
+:END:
+** ITEM try/catch strips the "Did you mean" suggestion from caught unbound_var errors
+
+Fixed in ccfb0fd4a. eval.ex:762 now routes {:unbound_var,name} through Helpers.format_closure_error. Test in try_catch_test.exs (22/22; full suite 119+5 green). Verified live: (try starts-with (catch e e)) → "...Did you mean: starts-with?" after restart.
+:PROPERTIES:
+:CUSTOM_ID: EP-b641d5da30630383
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T12:06:02Z
+:END:
+:RELATIONS:
+ABOUT: BUG-465-try-catch-strips-the-did-you-mean-sugges
+:END:
+** ITEM Create tool surfaces lean outline of new file
+
+Implemented in same session as the read/edit symbol-first work. create.ts #outlineOf appends lean outline after creating a non-empty code-supported file. Verified via create-e2e-regression.test.ts (shows file::Symbol CodePath rows).
+:PROPERTIES:
+:CUSTOM_ID: EP-4d085f6353e7eba8
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T12:37:39Z
+:END:
+:RELATIONS:
+ABOUT: FUP-133-create-tool-surfaces-lean-outline-of-new
+:END:
+** ITEM edit tool crashes with TypeError when `operations` arrives as a non-array string
+
+Fix A landed. Guard added at top of CodepathEditTool.execute (packages/coding-agent/src/tools/edit.ts:~153): non-array `operations` → isError "malformed_operations" with actionable message instead of raw `.some` TypeError. Regression test: packages/coding-agent/test/tools/edit-malformed-operations.test.ts (stringified-array + undefined cases). Full edit suite 101 pass. Biome clean on both files. Fix B (structured lenient-validation surface) left out of scope as noted.
+:PROPERTIES:
+:CUSTOM_ID: EP-18ad025e88362185
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T13:31:39Z
+:END:
+:RELATIONS:
+ABOUT: BUG-466-edit-tool-crashes-with-typeerror-when-op
+:END:
+** ITEM Shared working tree hazard: this spell repo has MULTIPLE agents with uncommitted work in the same tree simultaneously. NEVER use git stash/reset/revert/checkout/restore — any of them can destroy other agents' uncommitted changes. To compare against a baseline, use git diff or read the specific file; errors not naming your file are pre-existing. (Learned after a stash/pop scare during BUG-464 work — recovered intact, but the rule is absolute.)
+:PROPERTIES:
+:CUSTOM_ID: EP-6a1cc189b9014030
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T14:17:17Z
+:END:
+:RELATIONS:
+:END:
+** ITEM PLAN-337 architecture pivot (verified by dogfooding): PTC closures CANNOT cross the BEAM↔Node wire (unencodable_return), and there is NO eval/read-string in the runtime, and quote is symbol-only. ∴ a deftool .ptc interface must store each verb's :exec/:parse as Lisp SOURCE STRINGS. The execution loop is 3-beat: beat1 BEAM builds argv (Node splices `(<exec-src> <args-literal>)` into a program string, runs via existing execute path, gets argv), beat2 Node execCommand(argv) gated by KDL policy + sandbox, beat3 BEAM parses stdout (splice `(<parse-src> <stdout-literal>)`). Process-exec can't run in BEAM (sandboxed); parse/argv-build can't run in Node (no PTC interp there). Splicing source into the program text rides the existing execute JSON-RPC — ZERO new protocol. Inline fn application + source splicing both confirmed working live.
+:PROPERTIES:
+:CUSTOM_ID: EP-78374a5743f268b
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T15:40:35Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-337-eliminate-bash-first-class-process-tools
+:END:
+** ITEM PLAN-337 Phase 1b DONE + committed: git/run are live session tools (opt-in runtimeTools.enabled, default off). Wiring: settings-schema runtimeTools.enabled + kdl-settings-map; runtime-tools/session.ts createRuntimeTools loads built-in git/run (.ptc bundled via text import — needed bun-imports.d.ts `declare module "*.ptc"` + bunfig [loader] ".ptc"="text" in BOTH root and package bunfig); tools/index.ts createTools appends them gated by setting honouring requestedTools; runtime-tools/render.ts runtimeToolRenderer registered for git+run keys (warn-gated verbs tinted warning colour via details.warn); loader.ts got optional readSource param so bundled built-ins skip fs read; runtime tool dispose attached to first tool closes the shared dispatcher. Proven live: createRuntimeTools→[git,run]; git log returns structured commits; run exec warn-gated ran with details.warn=true. Tests: 14 runtime-tools + 33 createTools green. 8 session commits total (BUG-464, probe BEAM, denial fix, execute enhancements, runtime-tools P1, task docs, P1b, plan). Shared worktree: committed ONLY my files explicitly by path, never git add -A. Remaining: Phase 2 (spell tools sync CLI + user/project .ptc dirs), Phase 3 (confirm→interactive pending-action), Phase 4 (terminal pty tool, delete bash).
+:PROPERTIES:
+:CUSTOM_ID: EP-a9189ab12b4683d0
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T16:32:04Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-337-eliminate-bash-first-class-process-tools
+ABOUT: CON-deftool-runtime-tools--ptc-interface---k
+:END:
+** ITEM PLAN-337 Phase 2 DONE + committed (3 commits c3a16c43c, aa1147582, 25f595022). git/run: (1) ACTIVE by default (runtimeTools.enabled=true), (2) USER DIRS (~/.spell/agent/tools + <cwd>/.spell/tools *.ptc, project>user>builtin override by name), (3) AUTO-SYNC (resolvePolicy derives gate from :class when KDL omits; no fail-loud, no manual command; phantom-policy/invalid-gate stay errors), (4) ADVISORY GATES per user direction 'alignment over security NOW': NOTHING blocks incl deny, anything > silent RUNS + details.warn tint + note saying what full policy WOULD do — makes future gate surface observable, (5) EXECUTE-CALLABLE: tool/git/tool/run work inside execute. Key effect design: RUNTIME_TOOL_VERB_EFFECTS registry in effects.ts maps tool→verb→effect from homoiconic :class (read→read, write/destructive→write), kept within default {pure,read,write} policy so runtime tools callable WITHOUT opening exec lane (bash stays denied in execute). buildSessionToolProvider gained extraTools param; ExecuteTool.defaultProvider async, loads via createRuntimeTools, disposes set. Proven live: (->> (tool/git {:verb \"log\"}) (map #(get % \"subject\"))) + probe combining git status+branch+run exec in one program. 16 runtime-tools + 211 ptc-runtime tests green. Ideal policy infra recorded in PLAN-337 suboutline capability-policy-infra (3 layers: classification=homoiconic :class, policy=effects+disposition, enforcement-context=execute is final env so confirm collapses to warn/deny). Remaining: Phase 3 real enforcement (advisory→confirm/deny), Phase 4 terminal pty + delete bash.
+:PROPERTIES:
+:CUSTOM_ID: EP-43fffdc1581fcfde
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T17:23:59Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-337-eliminate-bash-first-class-process-tools
+ABOUT: CON-deftool-runtime-tools--ptc-interface---k
+:END:
+** ITEM PLAN-337 session continuation: (1) Verified Phase 2 live in reloaded session \u2014 tool/git + tool/run work inside execute (git log\u2192structured commits, run exec\u2192output, git status\u2192{clean,files}), queryable via PTC pipelines. (2) PHASE 4 tier reorder DONE+committed: TOOL_TIERS execute core\u2192 (was specialized), bash standard\u2192 (was core); bash NOT deleted (kept as escape hatch until Phase 5 after sustained non-use). Tier affects description verbosity (specialized=compact) + tiered loading. (3) PERF REGRESSION found+fixed: activating runtime tools made createTools spawn a BEAM (~1.5s) to describe git/run at startup (index.test timed out 5s). Fix: precomputed static descriptors in builtin/descriptors.ts (GIT_DESCRIPTOR/RUN_DESCRIPTOR), loader RuntimeToolSource.precomputedDescriptor skips dispatcher.describe; dispatcher now spawns LAZILY only on first verb call. createRuntimeTools 1462ms\u21921ms. Drift test asserts embedded===rt-describe. (4) DOCS: PLAN-337 suboutline phase-345-specs written with detailed resumable specs \u2014 Phase 2.5 (KDL per-verb gate parsing gap: settings flag is wired but per-verb git{verb{gate}} block from spell.kdl NOT parsed yet; session.ts only feeds builtin hardcoded policies), Phase 3 (real enforcement gated by NEW runtimeTools.enforce setting default false; deny blocks, confirm\u2192pending-action in model\u2192TUI but collapses to warn in execute since it's the final env can't prompt), Phase 4 remainder (scoped terminal pty tool extracting bash-interactive.ts), Phase 5 (delete bash). execute.md + AGENTS.md updated documenting git/run + execute-as-core. 5 commits this pass. Tests: 18 runtime-tools + 34 index green.
+:PROPERTIES:
+:CUSTOM_ID: EP-7a0a5c8085022700
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T17:40:00Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-337-eliminate-bash-first-class-process-tools
+ABOUT: CON-deftool-runtime-tools--ptc-interface---k
+:END:
+** ITEM PLAN-337 Phase 2.5 + Phase 4 terminal DONE+committed (9ccb40cb0, 51e795a72, 0aae809db). PHASE 2.5: runtime-tools/kdl-policy.ts readRuntimeToolPolicies reads `runtime-tools { git { verb "reset" gate="warn" } }` from spell.kdl (user<project<local merged per verb, parsed direct from @bgotink/kdl Document via getDocumentNode/getChildNodes/getStringArgument/getStringProperty — dynamic gate map doesn't fit flat settings schema). loader.ts gained 4th param kdlPolicies; merges by tool NAME after describe (KDL wins per verb over built-in AND user .ptc); resolvePolicy validates phantom-verb + auto-fills from :class. PHASE 4 terminal: tools/terminal.ts TerminalTool, scoped interactive PTY escape hatch wrapping runInteractiveBashPty; requires ctx.ui (errors redirecting to run/git/bash without); registered specialized + denied in execute (added to DEFAULT_DENYLIST) + reuses bashToolRenderer. Phase 4 fully done (tier reorder+perf+terminal). Tests: kdl-policy 2, terminal 3, all green. REMAINING: Phase 3 (real enforcement, deferred per user) + Phase 5 (delete bash, deferred until sustained non-use) — both specced in PLAN-337 phase-345-specs suboutline.
+:PROPERTIES:
+:CUSTOM_ID: EP-ff32f7c97281651e
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T18:15:14Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-337-eliminate-bash-first-class-process-tools
+ABOUT: CON-deftool-runtime-tools--ptc-interface---k
+:END:
+** ITEM Atomic legible undo/redo — session-unified log (B) + commit-awareness guard (C)
+
+Shipped B+C across all layers. Kernel: session-unified log (SessionDirGuard + workspace field + entry_id query), commit_guard + revert_guarded Declined/force. Agent: status command:history, edit undo/redo id/force, declined render. TUI: /history palette + amber warning cell. Team Chat: edit_history RPC end-to-end + EditHistoryPanel + Bubble accents, with 5 Puppeteer proof screenshots. Tests: edit_history 30, commit_guard 6, manage 18, TS e2e 3, team-chat unit 24 — all green; fmt clean. Commits d3c322691, a783698fc, 53cc5327b.
+:PROPERTIES:
+:CUSTOM_ID: EP-c15e0746b3f05ea0
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T20:20:28Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-338-atomic-legible-undo-redo-session-unified
+:END:

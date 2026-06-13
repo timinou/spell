@@ -1,8 +1,9 @@
 #+TITLE: P3: find-as-NIF proof — pi-kernel carve-out + OwnerId + rustler skin + 3 gates (WS-B derisk)
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 1503ad6112fe682a
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
 #+CUSTOM_ID: PLAN-334-p3-find-as-nif-proof-pi-kernel-carve-out
+#+COMPLETION_HASH: 16e9b8d5be48a18d
 
 * Initial Message
 
@@ -172,3 +173,35 @@ pi-code-engine builtins vs ~40), and 20Gi RAM is free, so a single NIF link buil
 is plausibly feasible \u2014 but the heavy-link risk is real and P3.3b should build the NIF
 in isolation (not alongside the integration tests). The decision point: P3.3b is a
 greenfield Mix project + rustler crate + cross-runtime test, the spike's BEAM half.
+
+NOTE [2026-06-12]: P3 COMPLETE 2026-06-12. All 3 gates green, reviewer-gated (4 review passes: P3.1, P3.2, P3.3a, final P3 series), 6 commits (a732eae0c..e952ac98f). pi-kernel carved (host-agnostic, N-2 isolation proven), OwnerId on the lock table (wire-neutral), resolve_target parse+read-dispatch (in-process parity 7/7 byte-identical to NAPI), rustler NIF skin on live BEAM OTP 28 (cross-runtime gate-1 6/6), panic-safety gate-2 (catch_unwind, BEAM survives \u2014 kills error class #4), lock-liveness gate-3 (dead owner\u2192broker reclaim\u2192reacquire). Final review correct conf 0.85. DEFERRED to future BEAM-integration phase (honestly scoped in spec 09): NIF-side :DOWN-monitor\u2192ResourceArc-Drop trigger (socket-per-owner; the broker reclaim it relies on IS proven), napi read branch calling resolve_target (proven-equivalent twins today), and P5 (graph+writes cutover, index moves wholesale resolving two-kernels RAM, N-3 HandleStore ETS\u2192ResourceArc zero-copy). The warm-kernel WS-B architecture is de-risked end-to-end: one kernel, two skins (NAPI+rustler), proven identical.
+
+* P3 FULLY FINISHED (2026-06-12) — P3.7 cutover + P3.8 functional gate-3
+
+The two items I'd scoped as "P3 finish" (NOT P5) are now DONE + reviewer-gated:
+
+- P3.7 (598e6002c, 400c0f630): CUTOVER. NAPI execute_code_path_inner read branch
+  now DELEGATES to pi_kernel::resolve_target \u2014 the carve is ADOPTED, the duplicate
+  read-dispatch is DELETED, single source of truth. Kept semantic+#diff host-only
+  checks first. resolve_target gained gitignore:Option<bool> (a real fidelity seam
+  the cutover surfaced). Behavior-preserving proven by ABSOLUTE anchors (routing 22,
+  op_matrix 2, unified 9 \u2014 the napi-new==napi-old proof, not just cross-skin parity).
+  Reviewer correct conf 0.82; 1 P3 fixed (pre-delegate host-abort bridge; full
+  mid-walk = FUP-132).
+
+- P3.8 (c9507f230, f64df8c39, bac994dee): FUNCTIONAL gate-3. beam/pi_kernel_nif
+  BrokerConnection rustler resource holds a per-owner broker connection;
+  env.monitor + Resource::down fire on the owner's :DOWN \u2192 close \u2192 broker reclaim.
+  Proven END TO END (broker_reclaim_test.exs): A holds, A killed, B acquires.
+  Reviewer caught the credibility gap (test couldn't isolate :DOWN monitor from
+  ResourceArc GC-drop) \u2192 STRENGTHENED: parent pins A's resource term so GC can't
+  reclaim \u2192 ONLY the monitor can close \u2192 now genuinely proves the :DOWN path.
+  Also fixed DirtyIo + spec shape. 8/8 NIF tests.
+
+EMPIRICAL note for any future BEAM work: System.put_env on the Elixir side does
+NOT reach a NIF's std::env::var_os \u2014 pass paths as NIF args. And building anything
+in pi-natives' dep closure needs NK_TARGET_DIAMOND=0 (numkong/GCC16 -mavx10.2-512).
+
+∴ P3 is COMPLETE: kernel carved + ADOPTED (one read path, two skins), 3 gates green
+INCLUDING the functional BEAM trigger. Only P5 (graph+writes cutover, index
+wholesale move, N-3 zero-copy) + FUP-132 (mid-walk abort) remain \u2014 genuinely later.

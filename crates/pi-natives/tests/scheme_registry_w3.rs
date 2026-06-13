@@ -22,10 +22,7 @@ fn w3_profiles_present() {
 	for expected in ["agent", "artifact", "org"] {
 		assert!(names.contains(&expected.to_string()), "missing {expected}");
 	}
-	assert!(
-		!names.contains(&"jobs".to_string()),
-		"jobs should be dynamic-only post BUG-395"
-	);
+	assert!(!names.contains(&"jobs".to_string()), "jobs should be dynamic-only post BUG-395");
 }
 
 // ── agent:// ─────────────────────────────────────────────────────
@@ -87,7 +84,6 @@ fn setup_job(root: &PathBuf, id: &str) {
 // registerScheme.
 
 // ── org:// ───────────────────────────────────────────────────────
-
 #[test]
 fn org_resolves_item_by_id() {
 	let home = TempDir::new().unwrap();
@@ -150,9 +146,10 @@ fn org_resolves_item_under_project_tasks() {
 	let r = reg.resolve(&uri, Some(&ctx), &cancel).unwrap();
 	assert_eq!(r.source_path, Some(org_file));
 	assert!(
-		r.notes.iter().any(|n| n.contains("Cutover plan") && n.contains("PLAN-310")),
+		r.notes
+			.iter()
+			.any(|n| n.contains("Cutover plan") && n.contains("PLAN-310")),
 		"expected title note, got: {:?}",
 		r.notes
 	);
 }
-

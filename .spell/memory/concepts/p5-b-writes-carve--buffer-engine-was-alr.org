@@ -1,0 +1,29 @@
+#+TITLE: p5-b-writes-carve--buffer-engine-was-alr
+
+** ITEM P5.B writes carve: buffer engine was already host-agnostic
+
+P5.B (PLAN-336) put the code-EDIT lane kernel-side so the BEAM NIF can mutate code through the kernel (commits ce50e5621 + 3a614bfea + 6d3c541e4).
+
+KEY DISCOVERY that made it tractable: the buffer ENGINE was ALREADY host-agnostic. BufferRegistry + edit_transaction + undo history live in crates/pi-code-engine (zero napi/rustler). pi-natives only held a OnceLock<BufferRegistry> ACCESSOR. And single_action + all action_* helpers + EDN path resolution had ZERO napi refs — they returned CodeEngineError, operated on CodeBuffer + serde_json::Value, and merely LIVED in the napi-coupled code_buffer.rs (2000+ lines).
+
+CARVE: moved the ~740-line edit-prep cluster to a new pi-kernel/src/edit_ops.rs. WHY pi-kernel not pi-code-engine: prove_dead_style (remove-dead-style proof) needs pi-code-graph, and pi-code-graph DEPENDS ON pi-code-engine (cycle) — so it can't live in engine. pi-kernel deps both (since P5.A), so the cluster sits there. The mutation edit lane never emits removeDeadStyle (only the 12 core kinds), so the graph-proof arm is dormant there but preserved for the napi batch path.
+
+RE-EXPORT TRICK (same as P5.A): pi-natives code_buffer.rs deletes the moved defs + re-imports the 8 symbols its remaining napi paths use; test-only edit primitives gated #[cfg(test)]; required_str #[allow(dead_code)] (lib-only dead-code pass can't see through the #[napi] batch entry). mutation.rs repointed to pi_kernel::edit_ops.
+
+NIF apply_edit/3 (DirtyIo, catch_unwind gate-2): warm BEAM BufferRegistry wired to broker as 'beam' peer. STATE-OWNERSHIP question (the design crux) RESOLVED by reusing the existing broker: cross-runtime edit coordination already flows through the broker socket (gate-3 claim_intent). BEAM 'beam'-peer + napi 'napi'-peer arbitrate through the SAME broker → no split-brain, no new arbitration needed.
+
+GOTCHA (cost an iteration): a whole-symbol `write` of a complete declaration tripped the parse-safety guard ('would make file unparseable'); use scope:"body" with braces (`{ return 2; }`) for body edits in tests.
+
+DEFERRED: FUP-139 (BEAM registry has watcher:None + no edit-recorder → BEAM edit won't invalidate graph cache or write edit-history; matters only when BEAM editing goes live; napi stays authoritative).
+
+Verify pattern: NIF mix 12/12 (8 base + 2 edges + 2 apply_edit), pi-kernel lib 54, code_path 289, code_buffer 21, mutation 7. All NK_TARGET_DIAMOND=0 prefixed.
+:PROPERTIES:
+:CUSTOM_ID: CON-p5-b-writes-carve--buffer-engine-was-alr
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T15:08:55Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: PLAN-336-p5-wholesale-kernel-graphwrites-to-nif-i
+DISTILLED_FROM: FUP-139-p5-b-beam-buffer-registry-lacks-filewatc
+:END:

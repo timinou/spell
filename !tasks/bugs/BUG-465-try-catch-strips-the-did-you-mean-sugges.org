@@ -1,8 +1,9 @@
 #+TITLE: try/catch strips the "Did you mean" suggestion from caught unbound_var errors
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 1503ad6112fe682a
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
 #+CUSTOM_ID: BUG-465-try-catch-strips-the-did-you-mean-sugges
+#+COMPLETION_HASH: c3df2768f8aab102
 
 * Initial Message
 
@@ -70,3 +71,5 @@ regression on my own recent work.
 
 P5/FUP-132 prep, exercising error shapes via execute (user asked to surface
 warts).
+
+NOTE [2026-06-13]: Fixed in ccfb0fd4a. eval.ex:762 now routes {:unbound_var,name} through Helpers.format_closure_error. Test in try_catch_test.exs (22/22; full suite 119+5 green). Verified live: (try starts-with (catch e e)) → "...Did you mean: starts-with?" after restart.

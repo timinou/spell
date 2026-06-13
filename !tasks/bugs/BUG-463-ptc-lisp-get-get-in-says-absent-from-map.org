@@ -1,8 +1,9 @@
 #+TITLE: PTC-Lisp get!/get-in! says "absent from map" even when the container is a list or nil
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 1503ad6112fe682a
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
 #+CUSTOM_ID: BUG-463-ptc-lisp-get-get-in-says-absent-from-map
+#+COMPLETION_HASH: 8dc8f0133a4617f7
 
 * Initial Message
 
@@ -50,3 +51,5 @@ Small, message-only change; no behavior change.
 - `(get! nil "k")` message says "nil".
 - ExUnit assertions for each branch; full ptc_runtime suite green.
 - Build/test prefixed `NK_TARGET_DIAMOND=0`.
+
+NOTE [2026-06-13]: Fixed in 2f0548a1e. get! list branch names the list (+ count + index/first hint); nil branch says 'value is nil'; map unchanged. get_in! was already container-aware. Tests in nil_poison_test.exs.

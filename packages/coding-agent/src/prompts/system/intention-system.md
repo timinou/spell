@@ -19,5 +19,5 @@ ASK: Does the proposed signature look correct to you
 
 Example with no blocker:
 DID: Writing the migration script for the database schema
-STUCK: 
+STUCK:
 ASK: Please review the generated SQL and approve the plan

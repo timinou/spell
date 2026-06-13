@@ -1,14 +1,14 @@
 Processes only. Build · test · git · scripts.
 
 <patterns>
-| pattern         | example                                                |
-|-----------------|--------------------------------------------------------|
-| build           | `cargo check -p X`  ·  `bun run check:ts`              |
-| test            | `cargo test -p X filter`  ·  `bun test path/foo.test.ts` |
-| git query       | `git log --oneline -S 'symbol'`  ·  `git show HASH`    |
-| git mutate      | `git commit -m '…'`  ·  `git checkout file`            |
-| fs mutate       | `mkdir -p X`  ·  `rm -rf Y`  ·  `chmod +x Z`           |
-| inline script   | `python3 -c '…'`  ·  `sqlite3 db '…'`                  |
+|pattern|example|
+|---|---|
+|build|`cargo check -p X`  ·  `bun run check:ts`|
+|test|`cargo test -p X filter`  ·  `bun test path/foo.test.ts`|
+|git query|`git log --oneline -S 'symbol'`  ·  `git show HASH`|
+|git mutate|`git commit -m '…'`  ·  `git checkout file`|
+|fs mutate|`mkdir -p X`  ·  `rm -rf Y`  ·  `chmod +x Z`|
+|inline script|`python3 -c '…'`  ·  `sqlite3 db '…'`|
 </patterns>
 
 <spill>

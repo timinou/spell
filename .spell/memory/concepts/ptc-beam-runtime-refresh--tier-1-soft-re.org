@@ -1,0 +1,18 @@
+#+TITLE: ptc-beam-runtime-refresh--tier-1-soft-re
+
+** ITEM PTC BEAM runtime refresh (Tier 1 soft respawn + Tier 2 hot reload)
+
+The PTC-Lisp execute runtime is a long-lived BEAM OS process, one per session (mix run --no-halt; resolveSpawn in packages/coding-agent/src/tools/ptc-runtime/spawn.ts). It keeps the code it booted with → editing beam/ source has NO effect until the runtime respawns. This was the friction behind BUG-464 (a transport fix needed a full session restart).
+
+TIER 1 (DONE): `refresh_runtime: boolean` flag on the execute tool schema (execute.ts executeSchema). When true, ExecuteTool.execute calls this.dispose() (idempotent: client?.close() + null) BEFORE routing, so the next ensureClient() respawns a fresh `mix run` (recompiles changed beam/ source), and the same call runs its program on the fresh runtime — refresh+verify atomically. Default false: long-lived runtime persists ("otherwise keep the old BEAM"). Agent-triggered, no slash command. COST: drops session bindings (def's) and parked HandleStore handles (re-derivable cache). Works for BOTH beam/ AND node-side changes (full respawn). Tests in execute.test.ts prove it via session-binding-drop (def keep 99 → gone after refresh). Documented in prompts/tools/execute.md "Refreshing the runtime".
+
+TIER 2 (FUP-138, deferred): true OTP hot code-swap — a `reload` JSON-RPC method on peer.ex that recompiles+:code.load_binary's changed modules into the RUNNING BEAM, preserving Peer/HandleStore state (def's survive). PROVEN feasible by probe (GenServer kept count=42 across Code.compile_string+:code.purge+load_binary, same pid). HARD GATES: only mix-dev (source==mix; Burrito release = frozen BEAM, return clean unsupported error); swaps BEAM code ONLY (node-side fix still needs Tier1); purge-of-running-code edge case for in-flight execute/pmap procs.
+:PROPERTIES:
+:CUSTOM_ID: CON-ptc-beam-runtime-refresh--tier-1-soft-re
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T14:17:32Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: EP-6a1cc189b9014030
+:END:

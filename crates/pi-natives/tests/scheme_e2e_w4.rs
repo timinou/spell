@@ -7,11 +7,10 @@ use pi_natives::{
 };
 
 #[test]
-#[ignore = "PLAN-310 BUG-394: skill:// moved to dynamic callback registration; \
-	this static-profile test no longer applies. The end-to-end behavior is \
-	validated via the bun-test suite which exercises registerScheme at session \
-	start, OR via scheme_callback_w2.rs::rule_callback_resolves_with_source_path \
-	(same shape)."]
+#[ignore = "PLAN-310 BUG-394: skill:// moved to dynamic callback registration; this static-profile \
+            test no longer applies. The end-to-end behavior is validated via the bun-test suite \
+            which exercises registerScheme at session start, OR via \
+            scheme_callback_w2.rs::rule_callback_resolves_with_source_path (same shape)."]
 fn execute_code_path_resolves_skill_uri() {}
 
 #[test]
@@ -55,8 +54,10 @@ fn execute_code_path_unknown_scheme_errors() {
 
 #[test]
 fn execute_code_path_forwards_suffix_to_source_path() {
-	use pi_natives::code_path::napi::{execute_code_path_inner, CodePathTaskOptions};
-	use pi_natives::task::CancelToken as NativesCancelToken;
+	use pi_natives::{
+		code_path::napi::{CodePathTaskOptions, execute_code_path_inner},
+		task::CancelToken as NativesCancelToken,
+	};
 
 	let dir = tempfile::TempDir::new().unwrap();
 	let mem_file = dir.path().join(".spell/memory/memory_summary.md");
@@ -83,11 +84,12 @@ fn execute_code_path_forwards_suffix_to_source_path() {
 	assert!(!all_text.contains("LINE_ONE"), "line 2 should not include line 1: {all_text}");
 }
 
-
 #[test]
 fn execute_code_path_json_qualifier_extracts_field() {
-	use pi_natives::code_path::napi::{execute_code_path_inner, CodePathTaskOptions};
-	use pi_natives::task::CancelToken as NativesCancelToken;
+	use pi_natives::{
+		code_path::napi::{CodePathTaskOptions, execute_code_path_inner},
+		task::CancelToken as NativesCancelToken,
+	};
 
 	let dir = tempfile::TempDir::new().unwrap();
 	let mem_file = dir.path().join(".spell/memory/data.json");
@@ -115,8 +117,10 @@ fn execute_code_path_json_qualifier_extracts_field() {
 
 #[test]
 fn execute_code_path_json_qualifier_array_index() {
-	use pi_natives::code_path::napi::{execute_code_path_inner, CodePathTaskOptions};
-	use pi_natives::task::CancelToken as NativesCancelToken;
+	use pi_natives::{
+		code_path::napi::{CodePathTaskOptions, execute_code_path_inner},
+		task::CancelToken as NativesCancelToken,
+	};
 
 	let dir = tempfile::TempDir::new().unwrap();
 	let mem_file = dir.path().join(".spell/memory/arr.json");
@@ -142,11 +146,12 @@ fn execute_code_path_json_qualifier_array_index() {
 	assert!(text.contains("b"), "got: {text}");
 }
 
-
 #[test]
 fn execute_code_path_agent_path_form_extracts_via_jq() {
-	use pi_natives::code_path::napi::{execute_code_path_inner, CodePathTaskOptions};
-	use pi_natives::task::CancelToken as NativesCancelToken;
+	use pi_natives::{
+		code_path::napi::{CodePathTaskOptions, execute_code_path_inner},
+		task::CancelToken as NativesCancelToken,
+	};
 
 	let dir = tempfile::TempDir::new().unwrap();
 	let sess_dir = dir.path().to_path_buf();
@@ -172,4 +177,3 @@ fn execute_code_path_agent_path_form_extracts_via_jq() {
 		.join("\n");
 	assert!(text.contains("bar"), "path-form should extract via #json: — got: {text}");
 }
-

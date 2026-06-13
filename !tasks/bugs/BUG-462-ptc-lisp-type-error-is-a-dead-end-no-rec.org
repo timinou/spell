@@ -1,8 +1,9 @@
 #+TITLE: PTC-Lisp type_error is a dead-end: no recovery hint for wrong-typed builtin calls
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 1503ad6112fe682a
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
 #+CUSTOM_ID: BUG-462-ptc-lisp-type-error-is-a-dead-end-no-rec
+#+COMPLETION_HASH: 951922220fb8f64a
 
 * Initial Message
 
@@ -65,3 +66,5 @@ nudge.
 - Build/test prefixed `NK_TARGET_DIAMOND=0` (numkong/GCC16 ISA workaround).
 
 NOTE [2026-06-13]: Scoped to contains?-on-string (the actual friction). Dropped the speculative conj-on-string clause: conj is registered {:variadic_nonempty,...} (env.ex:283), not {:normal,...} like contains? (env.ex:324), so its error path produces a RuntimeError-wrapped "no function clause matching" that function_name/1 can't key on — the specific_type_error seam doesn't fire for it. contains? works because it's a direct :normal fn → FunctionClauseError → type_error_for_args. Extending the hint to variadic builtins is a separate, larger change; not warranted for a speculative case.
+
+NOTE [2026-06-13]: Fixed in 2f0548a1e. contains?-on-string now points at includes?/index-of via specific_type_error/2; execute.md reinforces the (get (tool/find..) "text") nil trap. Tests in nil_poison_test.exs. conj dropped (variadic dispatch, separate seam).

@@ -261,7 +261,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	canvas_cast: CanvasCastTool.createIf,
 	// Generic code-path tools (coexistence wave; override legacy registrations)
 	find: s => new FindTool(s),
-	status: () => new StatusTool(),
+	status: s => new StatusTool(s),
 	get: s => new GetTool(s), // legacy alias — REMOVE_AT_WAVE_11
 	create: s => new CreateTool(s),
 	edit: s => new CodepathEditTool(s),

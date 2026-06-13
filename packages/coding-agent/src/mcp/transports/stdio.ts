@@ -28,6 +28,16 @@ export class StdioTransport implements MCPTransport {
 	onClose?: () => void;
 	onError?: (error: Error) => void;
 	onNotification?: (method: string, params: unknown) => void;
+	/**
+	 * Handler for SERVER-INITIATED requests (e.g. `elicitation/create`). A
+	 * server request carries both `id` and `method`; the transport replies on
+	 * the same channel with the same `id` once this resolves.
+	 */
+	onServerRequest?: (
+		method: string,
+		params: unknown,
+		id: string | number,
+	) => Promise<{ result?: unknown; error?: { code: number; message: string; data?: unknown } }>;
 
 	constructor(private config: MCPStdioServerConfig) {}
 
@@ -110,6 +120,14 @@ export class StdioTransport implements MCPTransport {
 	}
 
 	#handleMessage(message: JsonRpcResponse): void {
+		// A SERVER-INITIATED request carries BOTH `id` and `method`. It must be
+		// detected before the response branch (which keys only on `id`), else it
+		// would be mistaken for a reply to one of our requests and dropped.
+		if ("id" in message && message.id !== null && "method" in message) {
+			const req = message as unknown as { id: string | number; method: string; params?: unknown };
+			this.#handleServerRequest(req.method, req.params, req.id);
+			return;
+		}
 		// Check if it's a response (has id)
 		if ("id" in message && message.id !== null) {
 			const pending = this.#pendingRequests.get(message.id);
@@ -126,6 +144,32 @@ export class StdioTransport implements MCPTransport {
 			const notification = message as { method: string; params?: unknown };
 			this.onNotification?.(notification.method, notification.params);
 		}
+	}
+
+	/**
+	 * Handle a server-initiated request: delegate to `onServerRequest`, then
+	 * write the JSON-RPC reply back on stdin with the SAME id. If no handler is
+	 * set, reply with a "method not found" error so the server is never left
+	 * hanging.
+	 */
+	#handleServerRequest(method: string, params: unknown, id: string | number): void {
+		const respond = (payload: { result?: unknown; error?: { code: number; message: string; data?: unknown } }) => {
+			if (!this.#process?.stdin) return;
+			const reply = { jsonrpc: "2.0" as const, id, ...payload };
+			this.#process.stdin.write(`${JSON.stringify(reply)}\n`);
+			this.#process.stdin.flush();
+		};
+		if (!this.onServerRequest) {
+			respond({ error: { code: -32601, message: `Method not found: ${method}` } });
+			return;
+		}
+		this.onServerRequest(method, params, id)
+			.then(respond)
+			.catch((err: unknown) => {
+				respond({
+					error: { code: -32603, message: err instanceof Error ? err.message : String(err) },
+				});
+			});
 	}
 
 	#handleClose(): void {

@@ -45,7 +45,16 @@ impl FsLocator {
 	/// True when the locator contains glob segments (Star, DoubleStar, Question,
 	/// CharClass, or Brace).
 	pub fn is_glob(&self) -> bool {
-		self.segments.iter().any(|seg| matches!(seg, FsSegment::Star | FsSegment::DoubleStar | FsSegment::Question | FsSegment::CharClass(_) | FsSegment::Brace { .. }))
+		self.segments.iter().any(|seg| {
+			matches!(
+				seg,
+				FsSegment::Star
+					| FsSegment::DoubleStar
+					| FsSegment::Question
+					| FsSegment::CharClass(_)
+					| FsSegment::Brace { .. }
+			)
+		})
 	}
 }
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -231,11 +240,13 @@ pub enum EdgeKind {
 	Import,
 	/// bind→ — from a use to its binding site (scope-local).
 	Bind,
-	/// implements→ — PLAN-318 W2: from a type to the interface/trait it implements.
+	/// implements→ — PLAN-318 W2: from a type to the interface/trait it
+	/// implements.
 	Implements,
 	/// inherits→ — PLAN-318 W2: from a type to its base type.
 	Inherits,
-	/// dispatches→ — PLAN-318 W2: from a polymorphic call site to candidate dispatch targets.
+	/// dispatches→ — PLAN-318 W2: from a polymorphic call site to candidate
+	/// dispatch targets.
 	Dispatches,
 }
 

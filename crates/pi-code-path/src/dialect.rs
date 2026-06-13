@@ -97,10 +97,10 @@ impl Default for EdgeKindSet {
 /// Registered into LanguageProfile at construction time.
 #[derive(Clone)]
 pub struct LanguageDialect {
-	pub name_lexer: Arc<dyn NameLexer>,
-	pub anchors:    Vec<AnchorPattern>,
-	pub qualifiers: Vec<QualifierSpec>,
-	pub edge_kinds: EdgeKindSet,
+	pub name_lexer:   Arc<dyn NameLexer>,
+	pub anchors:      Vec<AnchorPattern>,
+	pub qualifiers:   Vec<QualifierSpec>,
+	pub edge_kinds:   EdgeKindSet,
 	/// BUG-413 (PLAN-318 W0): universal `§kind` alias → list of raw tree-sitter
 	/// kinds for this dialect. Recipe `::§function` resolves cross-language
 	/// via this map; raw kinds (e.g. `::§function_declaration` in TS) still

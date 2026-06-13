@@ -24,6 +24,9 @@ fn opts(target: impl Into<String>) -> CodePathTaskOptions {
 		artifact_threshold: None,
 		gitignore:          None,
 		session_id:         None,
+		edit_group_id:      None,
+		history_entry_id:   None,
+		history_force:      None,
 		home:               None,
 		session_dir:        None,
 	}
@@ -45,6 +48,9 @@ fn opts_with_root(target: impl Into<String>, root: std::path::PathBuf) -> CodePa
 		artifact_threshold: None,
 		gitignore:          None,
 		session_id:         None,
+		edit_group_id:      None,
+		history_entry_id:   None,
+		history_force:      None,
 		home:               None,
 		session_dir:        None,
 	}
@@ -205,7 +211,6 @@ fn registered_extensions_includes_ts_and_py() {
 	assert!(exts.contains(&"py".to_string()));
 }
 
-
 // ─────────────────────────────────────────────────────────────────
 // PLAN-318 W0 / BUG-411: informational diagnostic for glob FS prefix
 // must be suppressed when the query head is a NodeKind / FieldName /
@@ -225,10 +230,7 @@ fn glob_prefix_with_nodekind_query_suppresses_diagnostic() {
 	)
 	.unwrap();
 
-	let diags: Vec<_> = chunks
-		.iter()
-		.flat_map(|c| c.diagnostics.iter())
-		.collect();
+	let diags: Vec<_> = chunks.iter().flat_map(|c| c.diagnostics.iter()).collect();
 
 	assert!(
 		!diags
@@ -248,10 +250,7 @@ fn glob_prefix_with_name_query_emits_informational_not_unsupported() {
 	let chunks =
 		execute_code_path_inner(opts_with_root("*.ts::Foo", root), CancelToken::default()).unwrap();
 
-	let diags: Vec<_> = chunks
-		.iter()
-		.flat_map(|c| c.diagnostics.iter())
-		.collect();
+	let diags: Vec<_> = chunks.iter().flat_map(|c| c.diagnostics.iter()).collect();
 
 	// Must emit *some* fallback diagnostic for Name-head queries (the lexer
 	// choice actually matters here), but the variant must be `informational`
@@ -259,13 +258,16 @@ fn glob_prefix_with_name_query_emits_informational_not_unsupported() {
 	// like `NamePayload` / `DotLexer`.
 	let relevant: Vec<_> = diags
 		.iter()
-		.filter(|d| d.message.to_lowercase().contains("name") || d.message.to_lowercase().contains("lexer"))
+		.filter(|d| {
+			d.message.to_lowercase().contains("name") || d.message.to_lowercase().contains("lexer")
+		})
 		.collect();
 	assert!(!relevant.is_empty(), "expected a name-lexer fallback hint for Name-head query");
 	for d in &relevant {
 		assert_ne!(
 			d.variant, "unsupported_operation",
-			"name-lexer fallback hint must not be classified as unsupported_operation; got variant={} msg={}",
+			"name-lexer fallback hint must not be classified as unsupported_operation; got \
+			 variant={} msg={}",
 			d.variant, d.message
 		);
 		assert!(
@@ -275,8 +277,6 @@ fn glob_prefix_with_name_query_emits_informational_not_unsupported() {
 		);
 	}
 }
-
-
 
 // BUG-410 (PLAN-318 W0): end-to-end edit error must have exactly one prefix.
 #[test]
@@ -308,8 +308,6 @@ fn edit_diagnostic_has_single_prefix_end_to_end() {
 	}
 }
 
-
-
 // BUG-405 (PLAN-318 W0): end-to-end — invalid glob in `find` target must
 // return zero file nodes plus a diagnostic naming the invalid pattern, NOT
 // fall through to an unfiltered workspace walk.
@@ -334,10 +332,7 @@ fn invalid_glob_predicate_lookalike_zero_results_with_diagnostic() {
 		.flat_map(|c| c.nodes.iter())
 		.filter(|n| n.kind == "§file" || n.kind == "§dir")
 		.collect();
-	let diags: Vec<_> = chunks
-		.iter()
-		.flat_map(|c| c.diagnostics.iter())
-		.collect();
+	let diags: Vec<_> = chunks.iter().flat_map(|c| c.diagnostics.iter()).collect();
 
 	assert!(
 		file_nodes.is_empty(),
@@ -351,11 +346,11 @@ fn invalid_glob_predicate_lookalike_zero_results_with_diagnostic() {
 		.flat_map(|c| c.nodes.iter())
 		.flat_map(|n| n.diagnostics.iter())
 		.any(|d| d.message.to_lowercase().contains("glob"));
-	let chunk_diag_mentions_glob =
-		diags.iter().any(|d| d.message.to_lowercase().contains("glob"));
+	let chunk_diag_mentions_glob = diags
+		.iter()
+		.any(|d| d.message.to_lowercase().contains("glob"));
 	assert!(
 		node_diag_mentions_glob || chunk_diag_mentions_glob,
 		"expected a diagnostic naming the invalid glob somewhere"
 	);
 }
-

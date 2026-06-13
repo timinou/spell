@@ -37,19 +37,19 @@ a scope.
 
 Behaviour is selected by the target shape + which fields are present:
 
-| target            | + fields                     | effect                       |
-|-------------------|------------------------------|------------------------------|
-| file              | content                      | overwrite whole file         |
-| file              | content, place:start\|end    | prepend / append             |
-| file              | content, place:before\|after, at | insert at a line anchor  |
-| file:A-B          | content                      | replace line range           |
-| file::Sym         | content                      | rewrite whole declaration    |
-| file::Sym#body    | content                      | rewrite body (incl. `{ … }`) |
-| file::Sym#sig     | content                      | rewrite signature only       |
-| file::Sym         | content, place:before\|after | insert before / after symbol |
-| file::§q[pred]    | content (+ $vars)            | structural replace ∀ matched |
-| any               | find, content                | find-and-replace in scope    |
-| file.md::Heading  | content                      | replace block under heading  |
+|target|+ fields|effect|
+|---|---|---|
+|file|content|overwrite whole file|
+|file|content, place:start\|end|prepend / append|
+|file|content, place:before\|after, at|insert at a line anchor|
+|file:A-B|content|replace line range|
+|file::Sym|content|rewrite whole declaration|
+|file::Sym#body|content|rewrite body (incl. `{ … }`)|
+|file::Sym#sig|content|rewrite signature only|
+|file::Sym|content, place:before\|after|insert before / after symbol|
+|file::§q[pred]|content (+ $vars)|structural replace ∀ matched|
+|any|find, content|find-and-replace in scope|
+|file.md::Heading|content|replace block under heading|
 
   find        pattern to locate within the target scope (triggers find-replace)
   matching    "structural" (default; tree-sitter / word-boundary aware)
@@ -58,7 +58,7 @@ Behaviour is selected by the target shape + which fields are present:
   place       start | end | before | after
   at          1-indexed line anchor for place:before|after on a FILE target
 
-`#body` / `#sig` spans are **delimiter-inclusive**: content MUST include the
+`#body` / `#sig` spans are **delimiter-inclusive**: content **MUST** include the
 outer braces (C-likes) or `do … end` (Elixir). A braceless body is rejected by
 the post-edit parse gate and never written.
 
@@ -119,7 +119,7 @@ symbol target; promote/demote take a markdown/org heading target.
 
 Operate on the session's edit log, not a target (target-less). `undo` reverts
 the most recent uncommitted edit in the session; `redo` re-applies the most
-recently undone one. MUST be dispatched ALONE — never batched with other ops.
+recently undone one. **MUST** be dispatched ALONE — never batched with other ops.
 
 ═══════════════════════════════════════════════════════════════════════
 ## Template variables (in replace `content`)
@@ -131,28 +131,28 @@ Escape literal `$` as `$$`. JS `${…}` passes through untouched.
 ═══════════════════════════════════════════════════════════════════════
 ## Cheat sheet
 
-| want                       | target                                  | action                                        |
-|----------------------------|-----------------------------------------|-----------------------------------------------|
-| overwrite file             | "f.ts"                                  | replace · content                             |
-| rewrite function           | "f.ts::foo"                             | replace · content                             |
-| edit body only             | "f.ts::foo#body"                        | replace · content:"{ … }"                     |
-| edit signature             | "f.ts::foo#sig"                         | replace · content                             |
-| wrap in try/catch          | "f.ts::risky"                           | replace · content:"try { $BODY } catch(e){…}" |
-| find/replace in file       | "f.ts"                                  | replace · find, content                       |
-| literal find/replace       | "f.ts"                                  | replace · find, content, matching:"raw"       |
-| structural replace ∀ files | "src/**/*.ts::§call[name=console.log]"  | replace · content:"logger.info$2" (keeps args)  |
-| append to file             | "f.ts"                                  | replace · place:"end", content                |
-| insert after line 40       | "f.ts"                                  | replace · place:"after", at:40, content       |
-| insert after a symbol      | "f.ts::foo"                             | replace · place:"after", content              |
-| replace lines 10–20        | "f.ts:10-20"                            | replace · content                             |
-| rename symbol ∀ files      | "**/*.ts::oldName"                      | rename · to:"newName"                         |
-| rename css var             | "theme.css::--accent"                   | rename · to:"--brand"                         |
-| delete dead symbol         | "f.ts::deadFn"                          | delete                                        |
-| delete file                | "f.ts"                                  | delete                                        |
-| move method up             | "f.ts::Cls.m"                           | restructure · op:"move", direction:"up"       |
-| unwrap block               | "f.ts::wrapper"                         | restructure · op:"splice", mode:"up"          |
-| demote heading             | "doc.md::Intro"                         | restructure · op:"demote"                     |
-| revert last edit           | (none)                                  | undo  (alone)                                 |
+|want|target|action|
+|---|---|---|
+|overwrite file|"f.ts"|replace · content|
+|rewrite function|"f.ts::foo"|replace · content|
+|edit body only|"f.ts::foo#body"|replace · content:"{ … }"|
+|edit signature|"f.ts::foo#sig"|replace · content|
+|wrap in try/catch|"f.ts::risky"|replace · content:"try { $BODY } catch(e){…}"|
+|find/replace in file|"f.ts"|replace · find, content|
+|literal find/replace|"f.ts"|replace · find, content, matching:"raw"|
+|structural replace ∀ files|"src/**/*.ts::§call[name=console.log]"|replace · content:"logger.info$2" (keeps args)|
+|append to file|"f.ts"|replace · place:"end", content|
+|insert after line 40|"f.ts"|replace · place:"after", at:40, content|
+|insert after a symbol|"f.ts::foo"|replace · place:"after", content|
+|replace lines 10–20|"f.ts:10-20"|replace · content|
+|rename symbol ∀ files|"**/*.ts::oldName"|rename · to:"newName"|
+|rename css var|"theme.css::--accent"|rename · to:"--brand"|
+|delete dead symbol|"f.ts::deadFn"|delete|
+|delete file|"f.ts"|delete|
+|move method up|"f.ts::Cls.m"|restructure · op:"move", direction:"up"|
+|unwrap block|"f.ts::wrapper"|restructure · op:"splice", mode:"up"|
+|demote heading|"doc.md::Intro"|restructure · op:"demote"|
+|revert last edit|(none)|undo  (alone)|
 
 <rules>
 - target shape ⇒ mechanism. Never encode family in the verb.
@@ -166,5 +166,5 @@ Escape literal `$` as `$$`. JS `${…}` passes through untouched.
   (it returns an `#outline` of copy-pasteable `file::Symbol` handles) and edit
   `file::Sym#body`. Reserve `:A-B` for non-code text or genuinely line-oriented
   edits.
-- undo/redo MUST be solo in a batch.
+- undo/redo **MUST** be solo in a batch.
 </rules>

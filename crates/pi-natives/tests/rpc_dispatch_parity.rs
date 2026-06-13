@@ -3,8 +3,8 @@
 //! Spawns the pi-knowledge-worker daemon binary in stdio mode, then uses
 //! the client's `embedding_worker::knowledge_request` directly to verify:
 //! 1. Capability discovery returns protocol_version=2 + supported_commands
-//! 2. The same query against the same corpus produces equivalent hits
-//!    whether served via RPC or in-process WarmEngine.
+//! 2. The same query against the same corpus produces equivalent hits whether
+//!    served via RPC or in-process WarmEngine.
 //!
 //! Embedder may be unreachable in CI; the parity assertion is therefore
 //! over BM25-only weights so embedder availability doesn't matter.
@@ -37,10 +37,8 @@ fn unique_dir(label: &str) -> PathBuf {
 		.duration_since(std::time::UNIX_EPOCH)
 		.unwrap()
 		.as_nanos();
-	let dir = std::env::temp_dir().join(format!(
-		"pi-natives-rpc-{label}-{}-{nanos}",
-		std::process::id()
-	));
+	let dir =
+		std::env::temp_dir().join(format!("pi-natives-rpc-{label}-{}-{nanos}", std::process::id()));
 	fs::create_dir_all(&dir).expect("tempdir");
 	dir
 }
@@ -52,7 +50,8 @@ fn seed(root: &std::path::Path) {
 		fs::write(
 			memory.join(format!("{id}.org")),
 			format!(
-				"* {id}\n:PROPERTIES:\n:CUSTOM_ID: {id}\n:KIND: concept\n:END:\n\nbody text for {label}",
+				"* {id}\n:PROPERTIES:\n:CUSTOM_ID: {id}\n:KIND: concept\n:END:\n\nbody text for \
+				 {label}",
 			),
 		)
 		.expect("write");
@@ -60,11 +59,18 @@ fn seed(root: &std::path::Path) {
 }
 
 /// Spawn the daemon in socket mode for the duration of the test.
-fn spawn_daemon_socket(socket: &std::path::Path, pidfile: &std::path::Path, bin: &std::path::Path) -> Child {
+fn spawn_daemon_socket(
+	socket: &std::path::Path,
+	pidfile: &std::path::Path,
+	bin: &std::path::Path,
+) -> Child {
 	Command::new(bin)
-		.arg("--socket").arg(socket)
-		.arg("--pidfile").arg(pidfile)
-		.arg("--idle-secs").arg("30")
+		.arg("--socket")
+		.arg(socket)
+		.arg("--pidfile")
+		.arg(pidfile)
+		.arg("--idle-secs")
+		.arg("30")
 		.stdin(Stdio::null())
 		.stdout(Stdio::null())
 		.stderr(Stdio::null())
@@ -90,7 +96,10 @@ fn wait_for_socket(socket: &std::path::Path) -> bool {
 #[test]
 fn rpc_dispatch_end_to_end() {
 	let Some(bin) = knowledge_worker_bin() else {
-		eprintln!("skipping: pi-knowledge-worker binary not built (run `cargo build -p pi-knowledge-worker`)");
+		eprintln!(
+			"skipping: pi-knowledge-worker binary not built (run `cargo build -p \
+			 pi-knowledge-worker`)"
+		);
 		return;
 	};
 	subtest_capability_discovery(&bin);
@@ -153,26 +162,28 @@ fn subtest_open_close_round_trip(bin: &std::path::Path) {
 		std::env::set_var("PI_KNOWLEDGE_WORKER_SOCKET", &sock);
 	}
 
-	let opened =
-		embedding_worker::knowledge_request("open", serde_json::json!({
+	let opened = embedding_worker::knowledge_request(
+		"open",
+		serde_json::json!({
 			"repo_root": &dir,
 			"lanes": ["org_memory"],
-		}))
-		.expect("rpc open");
+		}),
+	)
+	.expect("rpc open");
 	assert_eq!(opened["ok"], true, "open: {opened}");
-	let handle = opened["repo_handle"].as_str().expect("handle str").to_string();
+	let handle = opened["repo_handle"]
+		.as_str()
+		.expect("handle str")
+		.to_string();
 
-	let stats =
-		embedding_worker::knowledge_request("stats", serde_json::json!({})).expect("stats");
+	let stats = embedding_worker::knowledge_request("stats", serde_json::json!({})).expect("stats");
 	assert_eq!(stats["ok"], true);
 	let repos = stats["repos"].as_array().expect("repos");
 	assert!(repos.iter().any(|r| r["repo_handle"] == handle.as_str()), "open repo in stats");
 
-	let closed = embedding_worker::knowledge_request(
-		"close",
-		serde_json::json!({ "repo_handle": &handle }),
-	)
-	.expect("close");
+	let closed =
+		embedding_worker::knowledge_request("close", serde_json::json!({ "repo_handle": &handle }))
+			.expect("close");
 	assert_eq!(closed["ok"], true);
 	assert_eq!(closed["closed"], true);
 

@@ -1,0 +1,40 @@
+#+TITLE: p3-pi-kernel-warm-kernel-spike-shipped--
+
+** ITEM P3 pi-kernel warm-kernel spike SHIPPED: one kernel, two skins, 3 gates green
+
+P3 (PLAN-334) COMPLETE 2026-06-12. The BEAM warm-kernel architecture spike is de-risked end-to-end: ONE host-agnostic kernel (pi-kernel), TWO skins (NAPI in pi-natives + rustler NIF in beam/pi_kernel_nif), proven IDENTICAL. 6 commits a732eae0c..e952ac98f, 4 reviewer passes (all correct).
+
+WHAT SHIPPED:
+- pi-kernel CRATE carved from pi-natives: walker/predicates (read resolver), dialect_registry, parse.rs (select_lexer + resolve_target). N-2 isolation PROVEN (cargo tree: zero napi/rustler/buffer in deps). NativeResolver newtype (Deref<CodeResolverImpl>) in pi-natives carries the write/mutation methods (orphan rule E0117 forces a local type \u2014 free fns illegal).
+- OwnerId(String) #[serde(transparent)] on the CoordClient lock-table params + reclaim() trait method (stub). Wire byte-identical (broker protocol untouched).
+- pi_kernel::resolve_target(registry, target, root, extractors, cancel) -> ResolveOutput{nodes, diagnostics}: owns parse+lexer+read-dispatch (text/symbol/outline/fs); returns UnsupportedOperation for semantic/URI/#diff (host-only); extractors INJECTED so kernel stays pure.
+- rustler NIF skin (rustler 0.38, OTP 28): warm Arc<LanguageRegistry> in OnceLock, DirtyCpu, catch_unwind, returns owned JSON. Standalone Mix project + empty [workspace] cargo table (keeps it off spell's panic=abort so unwinding works \u2014 load-bearing for gate 2).
+
+THE 3 GATES (all green):
+- GATE 1 correctness: NIF == resolve_target == NAPI execute_code_path_inner. Proven IN-PROCESS (7 parity tests, byte-identical nodes+diagnostics) AND CROSS-RUNTIME (6 BEAM tests). Transitivity is content-equivalence (serde wire-shape differs from napi DTO but both derive from the same NodeRef).
+- GATE 2 panic-safety: injected NIF panic caught by catch_unwind -> {:error}; ping()+resolve succeed in same VM after -> BEAM node SURVIVES. Kills error class #4 (NIF-panic).
+- GATE 3 lock-liveness: owner A holds intent (60s TTL=proves reclaim not expiry) -> A dies (conn drop) -> broker disconnect-deregister (conn.rs:134) -> owner B acquires reclaimed intent. No deadlock.
+
+KEY LESSONS (banked across DEC-p3-* decisions + EP-3cc0a69ea73a2db0):
+1. Orphan rule E0117: moving a type across crates makes BOTH a foreign-trait-impl illegal in the origin crate -> newtype + Deref is the only legal carrier. Free functions DON'T fix foreign-trait-on-foreign-type.
+2. A boundary-map explorer agent can run with WEB-ONLY tools (no repo access) -> its file:line claims are inference. VERIFY repo access or audit inline.
+3. Gate fidelity: an in-process parity test (resolve_target vs NAPI) CAUGHT 2 real fidelity gaps a static carve hid \u2014 NAPI emits lexer diagnostics at CHUNK level not on a node (-> ResolveOutput split), and a metadata HashMap key-order flake (-> canonical_json compare). Always prove cross-impl equivalence with a running test, not by reading.
+4. Empirical link-feasibility probe before committing to a heavy build: a minimal cdylib over pi-kernel linked fine (115MB .so) even though pi-natives integration-test binaries OOM the linker in parallel (40+ tree-sitter crates + napi). The NIF .so links ALONE.
+5. serde #[serde(transparent)] makes a newtype wire-identical to its inner \u2014 the way to add type identity to a serialized field with ZERO protocol change.
+6. rustler 0.38: #[rustler::nif(schedule="DirtyCpu")] + auto-discovery + rustler::init!("Elixir.Mod"); maps Rust Result<T,E> to {:ok,T}|{:error,E}; empty [workspace] in the NIF Cargo.toml isolates it from a parent workspace's panic=abort.
+
+DEFERRED (honestly scoped in spec 09, NOT P3): NIF-side :DOWN-monitor->ResourceArc(held-connection)-Drop trigger (socket-per-owner; the broker reclaim it relies on IS proven by gate 3); napi read branch CALLING resolve_target (proven-equivalent twins today, cutover is mechanical); P5 (graph+writes cutover to NIF, index moves wholesale resolving two-kernels RAM, N-3 HandleStore ETS->ResourceArc zero-copy).
+:PROPERTIES:
+:CUSTOM_ID: CON-p3-pi-kernel-warm-kernel-spike-shipped--
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-12T22:43:33Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-334-p3-find-as-nif-proof-pi-kernel-carve-out
+ABOUT: CON-execute-substrate-w1-w3-shipped--psettle
+DISTILLED_FROM: PLAN-334-p3-find-as-nif-proof-pi-kernel-carve-out
+DISTILLED_FROM: DEC-p3-pi-kernel-carve-out--verified-boundar
+DISTILLED_FROM: DEC-p3-2-scope--ownerid-on-coordclient-param
+DISTILLED_FROM: DEC-p3-3-gate-1-needs-high-fidelity--carve-p
+:END:

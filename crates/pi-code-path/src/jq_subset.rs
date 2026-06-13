@@ -70,10 +70,15 @@ pub fn parse(expr: &str) -> Result<Vec<Step>, String> {
 					return Err(format!("unterminated quoted key in {expr}"));
 				}
 				let inner = &raw[1..raw.len() - 1];
-				let unesc = inner.replace("\\\"", "\"").replace("\\'", "'").replace("\\\\", "\\");
+				let unesc = inner
+					.replace("\\\"", "\"")
+					.replace("\\'", "'")
+					.replace("\\\\", "\\");
 				steps.push(Step::Field(unesc));
 			} else if raw.bytes().all(|b| b.is_ascii_digit()) {
-				let n: usize = raw.parse().map_err(|e| format!("bad index in {expr}: {e}"))?;
+				let n: usize = raw
+					.parse()
+					.map_err(|e| format!("bad index in {expr}: {e}"))?;
 				steps.push(Step::Index(n));
 			} else {
 				// bare identifier — treat as field
@@ -141,10 +146,10 @@ mod tests {
 
 	#[test]
 	fn parse_dotted_fields() {
-		assert_eq!(
-			parse(".foo.bar").unwrap(),
-			vec![Step::Field("foo".into()), Step::Field("bar".into())]
-		);
+		assert_eq!(parse(".foo.bar").unwrap(), vec![
+			Step::Field("foo".into()),
+			Step::Field("bar".into())
+		]);
 	}
 
 	#[test]
@@ -154,10 +159,10 @@ mod tests {
 
 	#[test]
 	fn parse_quoted_key() {
-		assert_eq!(
-			parse(".foo[\"weird key\"]").unwrap(),
-			vec![Step::Field("foo".into()), Step::Field("weird key".into())]
-		);
+		assert_eq!(parse(".foo[\"weird key\"]").unwrap(), vec![
+			Step::Field("foo".into()),
+			Step::Field("weird key".into())
+		]);
 	}
 
 	#[test]

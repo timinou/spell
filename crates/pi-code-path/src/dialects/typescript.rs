@@ -331,9 +331,7 @@ mod tests {
 
 use std::sync::Arc;
 
-use crate::dialect::{
-	AnchorPattern, EdgeKindSet, LanguageDialect, QualifierSpec,
-};
+use crate::dialect::{AnchorPattern, EdgeKindSet, LanguageDialect, QualifierSpec};
 
 mod qualifiers {
 	use std::ops::Range;
@@ -574,8 +572,8 @@ fn has_descendant_if_with_return(node: tree_sitter::Node<'_>) -> bool {
 /// Bundle the TypeScript / JavaScript / TSX dialect.
 pub fn typescript_dialect() -> LanguageDialect {
 	LanguageDialect {
-		name_lexer: Arc::new(TsNameLexer),
-		anchors:    vec![
+		name_lexer:   Arc::new(TsNameLexer),
+		anchors:      vec![
 			AnchorPattern {
 				name:    "return",
 				matcher: |n, _s| {
@@ -658,7 +656,7 @@ pub fn typescript_dialect() -> LanguageDialect {
 				},
 			},
 		],
-		qualifiers: vec![
+		qualifiers:   vec![
 			QualifierSpec {
 				name:       "body",
 				applies_to: vec![
@@ -734,20 +732,33 @@ pub fn typescript_dialect() -> LanguageDialect {
 				resolve:    Arc::new(qualifiers::DefaultExport),
 			},
 		],
-		edge_kinds: {
+		edge_kinds:   {
 			let k = EdgeKindSet::default();
 			// TODO: type→ and jsx-prop→ edges deferred until EdgeKind extension
 			k
 		},
 		kind_aliases: std::collections::HashMap::from([
-			("function", vec!["function_declaration", "function_expression", "arrow_function", "function_signature", "method_definition"]),
+			("function", vec![
+				"function_declaration",
+				"function_expression",
+				"arrow_function",
+				"function_signature",
+				"method_definition",
+			]),
 			("method", vec!["method_definition", "method_signature", "abstract_method_signature"]),
 			("class", vec!["class_declaration", "abstract_class_declaration"]),
 			("call", vec!["call_expression", "new_expression"]),
 			("import", vec!["import_statement"]),
 			("binding", vec!["variable_declarator", "lexical_declaration"]),
 			("identifier", vec!["identifier", "property_identifier", "type_identifier"]),
-			("decl", vec!["function_declaration", "class_declaration", "interface_declaration", "type_alias_declaration", "enum_declaration", "lexical_declaration"]),
+			("decl", vec![
+				"function_declaration",
+				"class_declaration",
+				"interface_declaration",
+				"type_alias_declaration",
+				"enum_declaration",
+				"lexical_declaration",
+			]),
 		]),
 	}
 }

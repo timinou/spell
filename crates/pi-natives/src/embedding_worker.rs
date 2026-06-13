@@ -1,10 +1,9 @@
-
 /// Execution mode for the knowledge daemon dispatch path.
 ///
-/// - `Daemon`: route recall queries over the Unix socket to the
-///   user-scoped `pi-knowledge-worker`; fail-loud on RPC errors.
-/// - `Inprocess`: bypass the daemon entirely; use the in-process
-///   `WarmEngine` directly (useful for CI, offline, and tests).
+/// - `Daemon`: route recall queries over the Unix socket to the user-scoped
+///   `pi-knowledge-worker`; fail-loud on RPC errors.
+/// - `Inprocess`: bypass the daemon entirely; use the in-process `WarmEngine`
+///   directly (useful for CI, offline, and tests).
 ///
 /// Set via `PI_KNOWLEDGE_WORKER=inprocess` (case-insensitive).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,7 +40,8 @@ fn read_worker_mode_from_env() -> WorkerMode {
 		Ok(v) if v.eq_ignore_ascii_case("inprocess") => WorkerMode::Inprocess,
 		Ok(v) => {
 			eprintln!(
-				"[pi-natives] warning: unknown PI_KNOWLEDGE_WORKER value \"{v}\", expected \"inprocess\" or a binary path; defaulting to worker mode Daemon"
+				"[pi-natives] warning: unknown PI_KNOWLEDGE_WORKER value \"{v}\", expected \
+				 \"inprocess\" or a binary path; defaulting to worker mode Daemon"
 			);
 			WorkerMode::Daemon
 		},
@@ -58,7 +58,6 @@ use std::{
 	sync::{Mutex, OnceLock},
 	time::{Duration, Instant},
 };
-
 #[cfg(unix)]
 use std::{os::unix::net::UnixStream, thread};
 
@@ -78,7 +77,10 @@ const WORKER_SOCKET_ENV_VAR_LEGACY: &str = "PI_EMBEDDING_WORKER_SOCKET";
 fn read_worker_env() -> Option<std::ffi::OsString> {
 	let val = env::var_os(WORKER_ENV_VAR).or_else(|| env::var_os(WORKER_ENV_VAR_LEGACY));
 	// "inprocess" is a mode signal, not a binary path — fall through to legacy.
-	if val.as_deref().is_some_and(|v| v.eq_ignore_ascii_case("inprocess")) {
+	if val
+		.as_deref()
+		.is_some_and(|v| v.eq_ignore_ascii_case("inprocess"))
+	{
 		return env::var_os(WORKER_ENV_VAR_LEGACY);
 	}
 	val
@@ -161,7 +163,10 @@ pub(crate) struct KnowledgeRequest {
 }
 
 impl Serialize for KnowledgeRequest {
-	fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+	fn serialize<S: serde::Serializer>(
+		&self,
+		serializer: S,
+	) -> std::result::Result<S::Ok, S::Error> {
 		use serde::ser::SerializeMap;
 		let args_obj = self.args.as_object();
 		let field_count = 1 + args_obj.map_or(0, serde_json::Map::len);
@@ -249,6 +254,7 @@ impl WorkerTransport {
 	fn supports_concurrent_access(&self) -> bool {
 		matches!(self, Self::Socket(_))
 	}
+
 	#[cfg(not(unix))]
 	fn supports_concurrent_access(&self) -> bool {
 		false
@@ -280,7 +286,8 @@ pub fn capabilities() -> Capabilities {
 	{
 		return caps.clone();
 	}
-	let init_req = KnowledgeRequest { command: "init", args: serde_json::Value::Object(Default::default()) };
+	let init_req =
+		KnowledgeRequest { command: "init", args: serde_json::Value::Object(Default::default()) };
 	match with_worker(|worker| worker.request_raw(&init_req)) {
 		Ok(response) => {
 			let caps = parse_capabilities(&response);
@@ -305,8 +312,8 @@ pub fn knowledge_capable() -> bool {
 ///
 /// - `Some(true)` — already initialised and supports the knowledge surface.
 /// - `Some(false)` — already initialised and does not.
-/// - `None` — not initialised yet; caller should treat this as
-///   "unknown, skip" rather than force the load.
+/// - `None` — not initialised yet; caller should treat this as "unknown, skip"
+///   rather than force the load.
 ///
 /// Use this for UI / status / startup probes. Use [`knowledge_capable`]
 /// only when you are about to issue a real recall query that justifies
@@ -417,10 +424,12 @@ impl EmbeddingWorker {
 		self.ensure_running()?;
 		serde_json::to_writer(&mut self.stdin, request)
 			.map_err(|error| worker_error(format!("failed to encode raw request: {error}")))?;
-		self.stdin
+		self
+			.stdin
 			.write_all(b"\n")
 			.map_err(|error| worker_error(format!("failed to write raw request: {error}")))?;
-		self.stdin
+		self
+			.stdin
 			.flush()
 			.map_err(|error| worker_error(format!("failed to flush raw request: {error}")))?;
 
@@ -454,21 +463,21 @@ struct SocketClient {
 
 #[cfg(unix)]
 impl SocketClient {
- fn connect(socket_path: PathBuf, stream: UnixStream) -> Result<Self> {
- 		stream
- 			.set_read_timeout(Some(Duration::from_secs(30)))
- 			.map_err(|error| {
- 				worker_error(format!(
- 					"failed to set read timeout on socket {}: {error}",
- 					socket_path.display()
- 				))
- 			})?;
- 		let writer_stream = stream.try_clone().map_err(|error| {
- 			worker_error(format!(
- 				"failed to clone socket handle for {}: {error}",
- 				socket_path.display()
- 			))
- 		})?;
+	fn connect(socket_path: PathBuf, stream: UnixStream) -> Result<Self> {
+		stream
+			.set_read_timeout(Some(Duration::from_secs(30)))
+			.map_err(|error| {
+				worker_error(format!(
+					"failed to set read timeout on socket {}: {error}",
+					socket_path.display()
+				))
+			})?;
+		let writer_stream = stream.try_clone().map_err(|error| {
+			worker_error(format!(
+				"failed to clone socket handle for {}: {error}",
+				socket_path.display()
+			))
+		})?;
 		Ok(Self {
 			socket_path,
 			reader: BufReader::new(stream),
@@ -637,12 +646,12 @@ fn with_worker<T>(f: impl FnOnce(&mut WorkerTransport) -> Result<T>) -> Result<T
 
 /// Choose a transport for the next request. Precedence:
 ///
-/// 1. `PI_EMBEDDING_WORKER` set → always per-process subprocess (preserves
-///    test fixtures that point at the mock binary).
-/// 2. `PI_EMBEDDING_WORKER_SOCKET` or the default daemon socket reachable →
-///    use the shared user-scoped daemon (PLAN-310 W3).
-/// 3. Default daemon binary resolvable → spawn it, wait for its socket, and
-///    use it.
+/// 1. `PI_EMBEDDING_WORKER` set → always per-process subprocess (preserves test
+///    fixtures that point at the mock binary).
+/// 2. `PI_EMBEDDING_WORKER_SOCKET` or the default daemon socket reachable → use
+///    the shared user-scoped daemon (PLAN-310 W3).
+/// 3. Default daemon binary resolvable → spawn it, wait for its socket, and use
+///    it.
 /// 4. Otherwise fall back to the in-process subprocess so the existing
 ///    behaviour still works (CI containers without `XDG_RUNTIME_DIR`, etc.).
 fn acquire() -> Result<WorkerTransport> {
@@ -679,15 +688,14 @@ fn acquire() -> Result<WorkerTransport> {
 ///   which is rare on Linux but happens inside minimal containers).
 #[cfg(unix)]
 fn default_socket_path() -> PathBuf {
-	let base: PathBuf = if let Some(xdg) =
-		env::var_os("XDG_RUNTIME_DIR").filter(|value| !value.is_empty())
-	{
-		PathBuf::from(xdg).join("spell")
-	} else {
-		// SAFETY: `getuid` is always safe — it cannot fail and has no side effects.
-		let uid = unsafe { libc::getuid() };
-		PathBuf::from(format!("/tmp/spell-{uid}"))
-	};
+	let base: PathBuf =
+		if let Some(xdg) = env::var_os("XDG_RUNTIME_DIR").filter(|value| !value.is_empty()) {
+			PathBuf::from(xdg).join("spell")
+		} else {
+			// SAFETY: `getuid` is always safe — it cannot fail and has no side effects.
+			let uid = unsafe { libc::getuid() };
+			PathBuf::from(format!("/tmp/spell-{uid}"))
+		};
 	let primary = base.join("knowledge.sock");
 	let legacy = base.join("embed.sock");
 	// If the legacy socket exists and the primary does not, prefer the
@@ -760,8 +768,7 @@ fn resolve_worker_path() -> Result<PathBuf> {
 	{
 		return validate_override_path(PathBuf::from(override_path), WORKER_ENV_VAR);
 	}
-	if let Some(override_path) =
-		env::var_os(WORKER_ENV_VAR_LEGACY).filter(|value| !value.is_empty())
+	if let Some(override_path) = env::var_os(WORKER_ENV_VAR_LEGACY).filter(|value| !value.is_empty())
 	{
 		return validate_override_path(PathBuf::from(override_path), WORKER_ENV_VAR_LEGACY);
 	}
@@ -985,9 +992,9 @@ mod tests {
 		assert_eq!(batch.len(), 2);
 		assert_eq!(batch[0].len(), 1024);
 		assert_eq!(batch[0][0], 1.0);
-		assert_eq!(batch[0][1], 1.0);   // seed = index + 1 = 1
-		assert_eq!(batch[0][2], 2.0);   // batch_len = 2
-		assert_eq!(batch[1][1], 2.0);   // seed = index + 1 = 2
+		assert_eq!(batch[0][1], 1.0); // seed = index + 1 = 1
+		assert_eq!(batch[0][2], 2.0); // batch_len = 2
+		assert_eq!(batch[1][1], 2.0); // seed = index + 1 = 2
 
 		let query = embed_query("graph").expect("query embedding should succeed");
 		// Mock query: v[0]=1, v[1]=max(text.len(),1), v[2]=1.
@@ -1199,7 +1206,9 @@ mod socket_tests {
 		let vector = embed_query("alpha").expect("socket path should serve query");
 		assert_eq!(vector, canned_vector());
 
-		handle.join().expect("listener thread should finish cleanly");
+		handle
+			.join()
+			.expect("listener thread should finish cleanly");
 		let _ = fs::remove_file(&socket);
 	}
 
@@ -1234,7 +1243,9 @@ mod socket_tests {
 
 		let first = embed_query("first");
 		assert!(first.is_err(), "dead-socket request must surface an error");
-		dead_handle.join().expect("dead listener thread should finish");
+		dead_handle
+			.join()
+			.expect("dead listener thread should finish");
 		let _ = fs::remove_file(&socket);
 
 		// Stage 2: bring up a healthy listener at the same path. The dispatcher
@@ -1243,7 +1254,9 @@ mod socket_tests {
 		let handle = spawn_canned_listener(socket.clone(), canned_vector());
 		let second = embed_query("second").expect("recovery query should succeed");
 		assert_eq!(second, canned_vector());
-		handle.join().expect("listener thread should finish cleanly");
+		handle
+			.join()
+			.expect("listener thread should finish cleanly");
 		let _ = fs::remove_file(&socket);
 	}
 
@@ -1310,7 +1323,9 @@ mod socket_tests {
 			"a SUCCESSFUL probe must populate the cache"
 		);
 
-		handle.join().expect("init listener thread should finish cleanly");
+		handle
+			.join()
+			.expect("init listener thread should finish cleanly");
 		let _ = fs::remove_file(&socket);
 	}
 }

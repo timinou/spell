@@ -31,7 +31,8 @@ fn auto_registry_contains_w1_profiles() {
 }
 
 // PLAN-310 BUG-393/394: skill:// and rule:// moved to dynamic callback
-// registration. See scheme_callback_w2.rs::rule_callback_resolves_with_source_path
+// registration. See
+// scheme_callback_w2.rs::rule_callback_resolves_with_source_path
 // for the equivalent test against the callback profile shape.
 
 #[test]
@@ -180,4 +181,3 @@ fn local_rejects_path_traversal() {
 	let err = reg.resolve(&uri, Some(&ctx), &cancel).unwrap_err();
 	assert!(err.message.contains("escapes scheme root"), "diag: {}", err.message);
 }
-

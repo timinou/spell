@@ -7,15 +7,15 @@
 //! graph.
 //!
 //! This module:
-//! 1. Resolves the query prefix (head + chain[..edge_pos]) via the existing
-//!    FS + code resolver pipeline. The result is a set of starting symbol
+//! 1. Resolves the query prefix (head + chain[..edge_pos]) via the existing FS
+//!    + code resolver pipeline. The result is a set of starting symbol
 //!    `NodeRef`s with `metadata.line` populated by the walker.
 //! 2. Looks up — or lazily builds — the workspace `Arc<CodeGraph>` via
 //!    [`code_graph_cache::get_or_build_graph`].
-//! 3. Wraps it in `EdgeResolverImpl` and calls `resolve` per starting
-//!    node with the edge kind.
-//! 4. Filters results by the trailing step (`§call_expression`, etc.).
-//!    A `§*` trailing step matches all neighbours.
+//! 3. Wraps it in `EdgeResolverImpl` and calls `resolve` per starting node with
+//!    the edge kind.
+//! 4. Filters results by the trailing step (`§call_expression`, etc.). A `§*`
+//!    trailing step matches all neighbours.
 //!
 //! Multi-edge chains (e.g. `…def→…call→…`) are not yet supported in W1.
 //! The first Edge consumes the rest of the chain; subsequent combinators
@@ -71,8 +71,8 @@ pub fn resolve(
 	let prefix_cp = CodePath {
 		locator:   cp.locator.clone(),
 		query:     Some(prefix_query),
-		qualifier: None, // qualifiers don't apply to the prefix; they would
-		                 // re-anchor on the edge result instead — handled below.
+		qualifier: None, /* qualifiers don't apply to the prefix; they would
+		                  * re-anchor on the edge result instead — handled below. */
 	};
 
 	let fs_resolver = FsResolver::new(root.clone());
@@ -80,8 +80,7 @@ pub fn resolve(
 		.resolve(&prefix_cp, pi_token)
 		.map_err(|d| Error::from_reason(d.message))?;
 
-	let code_resolver_inst =
-		code_resolver::new().map_err(|d| Error::from_reason(d.message))?;
+	let code_resolver_inst = code_resolver::new().map_err(|d| Error::from_reason(d.message))?;
 	let prefix_query_ref = prefix_cp.query.as_ref().unwrap();
 
 	let mut starts: Vec<NodeRef> = Vec::new();
@@ -156,7 +155,11 @@ pub fn resolve(
 	if let Some(last) = chunks.last_mut() {
 		last.done = true;
 	} else {
-		chunks.push(CodePathChunk { nodes: Vec::new(), diagnostics: Vec::new(), done: true });
+		chunks.push(CodePathChunk {
+			nodes:       Vec::new(),
+			diagnostics: Vec::new(),
+			done:        true,
+		});
 	}
 
 	// Attach parse + graph diagnostics to the first chunk.
@@ -204,7 +207,10 @@ fn to_graph_locator(start: &NodeRef, root: &std::path::Path) -> NodeRef {
 	} else {
 		root.join(&start.locator)
 	};
-	let rel = abs.strip_prefix(root).map(|p| p.to_path_buf()).unwrap_or(abs);
+	let rel = abs
+		.strip_prefix(root)
+		.map(|p| p.to_path_buf())
+		.unwrap_or(abs);
 	let mut copy = start.clone();
 	copy.locator = format!("{}:{}", rel.display(), line);
 	copy
@@ -235,8 +241,9 @@ fn filter_by_tail_step(nodes: Vec<NodeRef>, tail: &Step) -> Vec<NodeRef> {
 #[cfg(test)]
 #[allow(dead_code)] // keep symbol referenced even when split_at_edge is unused under future refactors
 mod tests {
-	use super::*;
 	use pi_code_path::ast::{Axis, EdgeKind};
+
+	use super::*;
 
 	fn step(name: &str) -> Step {
 		Step {

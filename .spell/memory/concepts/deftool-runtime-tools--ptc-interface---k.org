@@ -1,0 +1,31 @@
+#+TITLE: deftool-runtime-tools--ptc-interface---k
+
+** ITEM deftool runtime tools: PTC interface + KDL policy (3-beat loop)
+
+PLAN-337 Phase 1, built+tested in packages/coding-agent/src/tools/runtime-tools/. A "runtime tool" (git, run, …) has TWO faces that stay drift-proof in lockstep: a PTC-Lisp .ptc INTERFACE file (structure) + a KDL block (behaviour/gates).
+
+.ptc file: (def tool (deftool "git" {:doc ... :verbs {"log" {:class "read" :args {...} :exec (fn [a] [argv...]) :parse (fn [stdout] structured)}}})). :class ∈ read|write|destructive.
+
+THE LOAD-BEARING ARCH CONSTRAINT (verified by dogfooding execute): PTC closures CANNOT cross the BEAM↔Node wire (unencodable_return); there is NO eval/read-string; quote is symbol-only; defn has NO forward references (a defn captures named vars at DEFINITION time). Consequences:
+- The tool's :exec/:parse closures NEVER leave the BEAM. Only DATA crosses: built argv (list) on beat 1, parsed value on beat 3.
+- prelude split: deftool BEFORE the file, rt-describe/rt-argv/rt-parse helpers AFTER (they close over `tool`). composeToolSource = prelude + file + postlude.
+- args + stdout ride the execute `context` channel (data/verb, data/args, data/stdout) — NEVER string-interpolated into program text (injection-safe).
+- \t and \n string escapes work in PTC but \uXXXX does NOT — git log uses %x09 (tab) field sep, not %x1f, splitting on "\t".
+
+3-beat execution loop (RuntimeToolDispatcher owns a dedicated empty-catalog PtcRuntimeClient): beat1 BEAM builds argv → beat2 Node execCommand(argv[0], argv.slice(1), cwd) gated by KDL policy + enforceBashCommand → beat3 BEAM parses stdout → structured data (queryable by execute coprocessor). ZERO new JSON-RPC protocol — rides the existing execute path.
+
+Gates: silent (run) | warn (run + details.warn=true tints TUI) | confirm (Phase1: warn+note; interactive pending-action = Phase4) | deny (reject). defaultGate: read/write→silent, destructive→confirm. resolvePolicy is drift-proof: phantom-policy (KDL verb not in interface) → error; ungoverned destructive (no explicit gate) → error. deriveSkeleton: interface→KDL scaffold for `spell tools sync`.
+
+Files: prelude.ptc.ts, runtime.ts, policy.ts, tool.ts, loader.ts, types.ts, index.ts, builtin/{git,run}.ptc, runtime-tools.test.ts (11 pass). git log/status/branch proven LIVE on the repo. AsyncJobType widened in job-manager.ts.
+
+NOT YET WIRED (Phase 1b): BUILTIN_TOOLS factory registration, KDL config load, TUI warn-colour renderer (details.warn), `spell tools sync` CLI. Module complete+tested in isolation; nothing existing touched.
+:PROPERTIES:
+:CUSTOM_ID: CON-deftool-runtime-tools--ptc-interface---k
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T15:58:13Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: DEC-eliminate-bash-via-first-class-process-t
+DISTILLED_FROM: EP-78374a5743f268b
+:END:

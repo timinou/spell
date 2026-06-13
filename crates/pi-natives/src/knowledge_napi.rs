@@ -2,8 +2,8 @@
 //! MemoryStatusController.
 //!
 //! Lifecycle:
-//! - `knowledge_subscribe` opens a fresh socket, sends `subscribe`, spawns
-//!   a reader thread, and stashes the live `KnowledgeSubscription` in a
+//! - `knowledge_subscribe` opens a fresh socket, sends `subscribe`, spawns a
+//!   reader thread, and stashes the live `KnowledgeSubscription` in a
 //!   process-global registry. Returns a numeric handle.
 //! - Event frames invoke the supplied `ThreadsafeFunction<String>` (JSON
 //!   payload) on the libuv main thread.

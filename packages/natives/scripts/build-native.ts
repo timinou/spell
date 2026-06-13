@@ -36,7 +36,29 @@ function runCommand(command: string, args: string[]): string | null {
 		return null;
 	}
 }
-
+// Cargo's real target dir honors CARGO_TARGET_DIR *and* `[build] target-dir`
+// from any .cargo/config.toml (incl. ~/.cargo). A bare repoRoot/target scan
+// misses a redirected dir and can install a stale artifact whose napi ABI no
+// longer matches the TS bindings → SIGILL/SIGBUS on the first native call.
+// `cargo metadata` is the authoritative resolver.
+function resolveCargoTargetDir(): string | undefined {
+	if (Bun.env.CARGO_TARGET_DIR) return path.resolve(Bun.env.CARGO_TARGET_DIR);
+	const metadataJson = runCommand("cargo", [
+		"metadata",
+		"--no-deps",
+		"--format-version",
+		"1",
+		"--manifest-path",
+		path.join(repoRoot, "Cargo.toml"),
+	]);
+	if (!metadataJson) return undefined;
+	try {
+		const meta = JSON.parse(metadataJson) as { target_directory?: string };
+		return meta.target_directory ? path.resolve(meta.target_directory) : undefined;
+	} catch {
+		return undefined;
+	}
+}
 function detectHostAvx2Support(): boolean {
 	if (process.arch !== "x64") return false;
 
@@ -82,15 +104,27 @@ const effectiveVariant = resolveEffectiveVariant();
 const variantSuffix = effectiveVariant ? `-${effectiveVariant}` : "";
 const exeSuffix = targetPlatform === "win32" ? ".exe" : "";
 
+// Cargo's real target dir (honors ~/.cargo `[build] target-dir`). Resolved once
+// here so the RUSTFLAGS guard below and the artifact scan further down agree.
+const cargoTargetDir = resolveCargoTargetDir();
+// A target dir outside the repo (e.g. a shared ~/.cache/cargo-target) may be
+// reused across machines with different CPUs. cargo fingerprints on the
+// RUSTFLAGS *string*, not the host ISA, so a `target-cpu=native` artifact built
+// on CPU-A would be silently reused on CPU-B → SIGILL on an unsupported opcode.
+// Only trust `native` when the target dir is repo-local.
+const targetDirIsRepoLocal = !cargoTargetDir || cargoTargetDir.startsWith(`${repoRoot}${path.sep}`);
+
 // Default to native CPU optimization for local builds; explicit variants use fixed ISA targets.
 if (!isCrossCompile && !Bun.env.RUSTFLAGS) {
 	if (effectiveVariant === "modern") {
 		Bun.env.RUSTFLAGS = "-C target-cpu=x86-64-v3";
 	} else if (effectiveVariant === "baseline") {
 		Bun.env.RUSTFLAGS = "-C target-cpu=x86-64-v2";
-	} else {
+	} else if (targetDirIsRepoLocal) {
 		Bun.env.RUSTFLAGS = "-C target-cpu=native";
 	}
+	// else: shared/non-repo target dir on a variant-less arch → leave RUSTFLAGS
+	// unset so cargo builds a portable baseline safe to reuse across CPUs.
 }
 
 async function cleanupStaleTemps(dir: string): Promise<void> {
@@ -161,11 +195,18 @@ async function buildCargoPackage(packageName: string): Promise<{ exitCode: numbe
 }
 
 const profile = isDev ? "debug" : "release";
+// cargoTargetDir resolved once near the RUSTFLAGS guard above.
+// Scan cargo's authoritative target dir FIRST so a freshly-built artifact is
+// always preferred over a stale one left in repoRoot/target (e.g. a fossil
+// from before a `[build] target-dir` redirect). The legacy locations remain as
+// fallbacks for setups where `cargo metadata` is unavailable.
 const targetRoots = [
-	Bun.env.CARGO_TARGET_DIR ? path.resolve(Bun.env.CARGO_TARGET_DIR) : undefined,
-	path.join(repoRoot, "target"),
-	path.join(rustDir, "target"),
-].filter((v): v is string => Boolean(v));
+	...new Set(
+		[cargoTargetDir, path.join(repoRoot, "target"), path.join(rustDir, "target")].filter((v): v is string =>
+			Boolean(v),
+		),
+	),
+];
 
 const profileDirs = targetRoots.flatMap(root => {
 	if (crossTarget) {

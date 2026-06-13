@@ -35,7 +35,7 @@ import type {
 } from "./types";
 
 /** MCP protocol version we support */
-const PROTOCOL_VERSION = "2025-03-26";
+const PROTOCOL_VERSION = "2025-06-18";
 
 /** Default connection timeout in ms */
 const CONNECTION_TIMEOUT_MS = 30_000;
@@ -74,6 +74,8 @@ async function initializeConnection(
 		protocolVersion: PROTOCOL_VERSION,
 		capabilities: {
 			roots: { listChanged: false },
+			// Advertise support for server-initiated elicitation requests.
+			elicitation: {},
 		},
 		clientInfo: CLIENT_INFO,
 	};
@@ -101,7 +103,15 @@ async function initializeConnection(
 export async function connectToServer(
 	name: string,
 	config: MCPServerConfig,
-	options?: { signal?: AbortSignal; onNotification?: (method: string, params: unknown) => void },
+	options?: {
+		signal?: AbortSignal;
+		onNotification?: (method: string, params: unknown) => void;
+		onServerRequest?: (
+			method: string,
+			params: unknown,
+			id: string | number,
+		) => Promise<{ result?: unknown; error?: { code: number; message: string; data?: unknown } }>;
+	},
 ): Promise<MCPServerConnection> {
 	const timeoutMs = config.timeout ?? CONNECTION_TIMEOUT_MS;
 
@@ -109,6 +119,9 @@ export async function connectToServer(
 		const transport = await createTransport(config);
 		if (options?.onNotification) {
 			transport.onNotification = options.onNotification;
+		}
+		if (options?.onServerRequest) {
+			transport.onServerRequest = options.onServerRequest;
 		}
 
 		try {

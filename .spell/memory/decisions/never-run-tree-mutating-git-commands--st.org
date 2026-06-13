@@ -1,0 +1,36 @@
+#+TITLE: never-run-tree-mutating-git-commands--st
+
+** ITEM Never run tree-mutating git commands (stash/reset/revert/checkout)
+
+HARD RULE from user (emphatic), 2026-06-13.
+
+NEVER run any git command that mutates the working tree or index:
+- git stash (and stash pop/apply/drop)
+- git reset (any mode)
+- git revert
+- git checkout / git restore (of files or branches)
+- git clean
+
+Why: the user keeps a large uncommitted working set across long sessions. Any
+stash/reset/checkout risks stranding or clobbering hours of unstaged work. Even
+`stash; ...; stash pop` is forbidden — the round-trip is unacceptable risk.
+
+Allowed (read-only / non-mutating):
+- git status, git log, git diff, git show HEAD:path, git stash list (read)
+- git add + git commit ONLY when the user explicitly asks to commit.
+
+For "is this failure pre-existing vs introduced by me?" — do NOT stash to compare.
+Instead: reason from the diff, read `git show HEAD:path` for the baseline file,
+or run the test against an unrelated/unmodified path. Never temporarily revert
+the tree to test.
+
+Context: violated this once by running `git stash` to check if a read-routing
+test failure was pre-existing. The pop restored cleanly, but it was reckless.
+:PROPERTIES:
+:CUSTOM_ID: DEC-never-run-tree-mutating-git-commands--st
+:KIND: decision
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T19:09:44Z
+:END:
+:RELATIONS:
+:END:

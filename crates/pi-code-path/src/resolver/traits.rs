@@ -24,10 +24,10 @@ use crate::{
 /// Two cancellation sources, both surfaced through `is_cancelled()`:
 /// - the `flag`: flipped by `cancel()` (in-tree, e.g. a resolver giving up).
 /// - an optional `host_probe`: a host-supplied closure polled on each check, so
-///   an EXTERNAL abort (napi `AbortSignal` / timeout deadline) reflects LIVE into
-///   the kernel's mid-walk guards (FUP-132). The probe result is latched into
-///   `flag` the first time it returns true, so it is polled at most until the
-///   first abort and every clone then short-circuits on the shared flag.
+///   an EXTERNAL abort (napi `AbortSignal` / timeout deadline) reflects LIVE
+///   into the kernel's mid-walk guards (FUP-132). The probe result is latched
+///   into `flag` the first time it returns true, so it is polled at most until
+///   the first abort and every clone then short-circuits on the shared flag.
 #[derive(Clone)]
 pub struct CancellationToken {
 	flag:       Arc<AtomicBool>,
@@ -55,7 +55,10 @@ impl CancellationToken {
 	where
 		F: Fn() -> bool + Send + Sync + 'static,
 	{
-		CancellationToken { flag: Arc::new(AtomicBool::new(false)), host_probe: Some(Arc::new(probe)) }
+		CancellationToken {
+			flag:       Arc::new(AtomicBool::new(false)),
+			host_probe: Some(Arc::new(probe)),
+		}
 	}
 
 	pub fn cancel(&self) {
@@ -192,8 +195,10 @@ mod tests {
 	// the host aborts — not only at the post-match boundary.
 	#[test]
 	fn host_probe_drives_cancellation_live() {
-		use std::sync::Arc;
-		use std::sync::atomic::{AtomicBool, Ordering};
+		use std::sync::{
+			Arc,
+			atomic::{AtomicBool, Ordering},
+		};
 
 		let host_aborted = Arc::new(AtomicBool::new(false));
 		let probe_flag = host_aborted.clone();
@@ -207,12 +212,15 @@ mod tests {
 		assert!(t.is_cancelled());
 	}
 
-	// FUP-132: the probe result latches — once cancelled, stays cancelled even if the
-	// host flag flaps back (cheap + monotonic, matches cooperative-cancel semantics).
+	// FUP-132: the probe result latches — once cancelled, stays cancelled even if
+	// the host flag flaps back (cheap + monotonic, matches cooperative-cancel
+	// semantics).
 	#[test]
 	fn host_probe_latches() {
-		use std::sync::Arc;
-		use std::sync::atomic::{AtomicBool, Ordering};
+		use std::sync::{
+			Arc,
+			atomic::{AtomicBool, Ordering},
+		};
 
 		let host_aborted = Arc::new(AtomicBool::new(true));
 		let probe_flag = host_aborted.clone();
@@ -227,8 +235,10 @@ mod tests {
 	// the other (the kernel clones the token down through resolvers).
 	#[test]
 	fn host_probe_clone_shares_latched_state() {
-		use std::sync::Arc;
-		use std::sync::atomic::{AtomicBool, Ordering};
+		use std::sync::{
+			Arc,
+			atomic::{AtomicBool, Ordering},
+		};
 
 		let host_aborted = Arc::new(AtomicBool::new(false));
 		let probe_flag = host_aborted.clone();

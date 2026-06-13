@@ -16,8 +16,10 @@ use std::{path::PathBuf, sync::Arc};
 
 use pi_code_path::resolver::CancellationToken;
 
-use super::marshal::nodes_to_dtos;
-use super::napi::{CodePathTaskOptions, NodeRefDto, execute_code_path_inner};
+use super::{
+	marshal::nodes_to_dtos,
+	napi::{CodePathTaskOptions, NodeRefDto, execute_code_path_inner},
+};
 
 /// A threshold high enough that no content is ever artifact-staged, so DTOs
 /// carry inline content on both sides (apples-to-apples).
@@ -39,6 +41,9 @@ fn opts(target: &str, root: &PathBuf) -> CodePathTaskOptions {
 		artifact_threshold: Some(u32::MAX),
 		gitignore:          None,
 		session_id:         None,
+		edit_group_id:      None,
+		history_entry_id:   None,
+		history_force:      None,
 		home:               None,
 		session_dir:        None,
 	}
@@ -110,9 +115,8 @@ fn assert_parity(target: &str, root: &PathBuf) {
 	}
 
 	// Kernel path.
-	let registry = Arc::new(
-		pi_code_engine::language::LanguageRegistry::with_builtins().expect("registry"),
-	);
+	let registry =
+		Arc::new(pi_code_engine::language::LanguageRegistry::with_builtins().expect("registry"));
 	let cancel = CancellationToken::new();
 	let out = pi_kernel::resolve_target(&registry, target, root, &pure_extractors(), None, &cancel)
 		.unwrap_or_else(|d| panic!("kernel resolve failed for {target:?}: {}", d.message));
@@ -154,17 +158,18 @@ fn fixture() -> (tempfile::TempDir, PathBuf) {
 		"pub fn hello() -> u32 {\n    42\n}\n\npub fn world() -> u32 {\n    7\n}\n",
 	)
 	.unwrap();
-	std::fs::write(root.join("README.md"), "# Title\n\nSome text.\n\n## Section\n\nMore.\n").unwrap();
+	std::fs::write(root.join("README.md"), "# Title\n\nSome text.\n\n## Section\n\nMore.\n")
+		.unwrap();
 	(dir, root)
 }
 
 /// FUP-132: a host abort firing DURING a multi-file symbol walk terminates it
 /// early via the probe-driven token — the kernel's mid-walk guard
-/// (`cancel.is_cancelled()`, parse.rs) observes the host abort LIVE, not only at
-/// the post-match boundary. We drive `pi_kernel::resolve_target` directly (the
-/// same entry the NAPI read branch delegates to) with a probe that fires after
-/// the first file is visited, and assert the result is a strict prefix of the
-/// full walk.
+/// (`cancel.is_cancelled()`, parse.rs) observes the host abort LIVE, not only
+/// at the post-match boundary. We drive `pi_kernel::resolve_target` directly
+/// (the same entry the NAPI read branch delegates to) with a probe that fires
+/// after the first file is visited, and assert the result is a strict prefix of
+/// the full walk.
 #[test]
 fn host_abort_terminates_symbol_walk_early() {
 	use std::sync::atomic::{AtomicUsize, Ordering};
@@ -179,9 +184,8 @@ fn host_abort_terminates_symbol_walk_early() {
 		)
 		.unwrap();
 	}
-	let registry = Arc::new(
-		pi_code_engine::language::LanguageRegistry::with_builtins().expect("registry"),
-	);
+	let registry =
+		Arc::new(pi_code_engine::language::LanguageRegistry::with_builtins().expect("registry"));
 	let target = "*.rs::§function";
 
 	// Baseline: full walk, no abort — establishes the complete node count.
@@ -206,14 +210,8 @@ fn host_abort_terminates_symbol_walk_early() {
 		// the remainder is skipped.
 		probe_checks.fetch_add(1, Ordering::Relaxed) >= 1
 	});
-	let aborted = pi_kernel::resolve_target(
-		&registry,
-		target,
-		&root,
-		&pure_extractors(),
-		None,
-		&token,
-	);
+	let aborted =
+		pi_kernel::resolve_target(&registry, target, &root, &pure_extractors(), None, &token);
 
 	// The walk short-circuits: either an early Err (guard at fs-walk level) or a
 	// strictly-truncated node set. Both prove early termination; assert the
@@ -280,12 +278,12 @@ fn semantic_qualifiers_are_excluded_from_the_kernel_read_lane() {
 	// UnsupportedOperation Err so a host skin can fall back to its own handling
 	// (mirrors NAPI's semantic-first check). Covers the P2 review finding.
 	let (_d, root) = fixture();
-	let registry = Arc::new(
-		pi_code_engine::language::LanguageRegistry::with_builtins().expect("registry"),
-	);
+	let registry =
+		Arc::new(pi_code_engine::language::LanguageRegistry::with_builtins().expect("registry"));
 	let cancel = CancellationToken::new();
 	for target in ["foo.ts::bar#hover", "foo.ts#diagnostics", "src/lib.rs::hello#signature"] {
-		let out = pi_kernel::resolve_target(&registry, target, &root, &pure_extractors(), None, &cancel);
+		let out =
+			pi_kernel::resolve_target(&registry, target, &root, &pure_extractors(), None, &cancel);
 		let err = out.expect_err(&format!("{target:?} must be excluded from the kernel read lane"));
 		assert!(
 			matches!(err.variant, pi_code_path::types::DiagnosticVariant::UnsupportedOperation),

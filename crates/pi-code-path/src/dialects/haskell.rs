@@ -12,9 +12,7 @@ use winnow::{Parser, token::take_while};
 
 use crate::{
 	ast::NamePayload,
-	dialect::{
-		AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierSpec,
-	},
+	dialect::{AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierSpec},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -304,8 +302,8 @@ fn normalize_ws(text: &str) -> String {
 
 pub fn haskell_dialect() -> LanguageDialect {
 	LanguageDialect {
-		name_lexer: Arc::new(HsNameLexer),
-		anchors:    vec![
+		name_lexer:   Arc::new(HsNameLexer),
+		anchors:      vec![
 			AnchorPattern {
 				name:    "return",
 				matcher: |n, src| {
@@ -347,7 +345,7 @@ pub fn haskell_dialect() -> LanguageDialect {
 			AnchorPattern { name: "case-of", matcher: |n, _src| n.kind() == "case" },
 			AnchorPattern { name: "lambda", matcher: |n, _src| n.kind() == "lambda" },
 		],
-		qualifiers: vec![
+		qualifiers:   vec![
 			QualifierSpec {
 				name:       "body",
 				applies_to: vec!["function".into(), "bind".into()],
@@ -395,7 +393,7 @@ pub fn haskell_dialect() -> LanguageDialect {
 				resolve:    Arc::new(qualifiers::Pragmas),
 			},
 		],
-		edge_kinds: EdgeKindSet::default(),
+		edge_kinds:   EdgeKindSet::default(),
 		kind_aliases: std::collections::HashMap::new(),
 	}
 }

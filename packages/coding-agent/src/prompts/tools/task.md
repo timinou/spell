@@ -11,33 +11,33 @@ Worker returns one result; it cannot ask you mid-flight. Front-load or it fails 
 </model>
 
 <fields>
-| field        | scope  | meaning                                                          |
-|--------------|--------|-----------------------------------------------------------------|
-| agent        | batch  | worker type for all tasks (see roster below)                    |
-| context      | batch  | shared background, prepended to every assignment — write once   |
-| schema       | batch  | JTD output contract; ✗ duplicate in assignment                  |
-| model        | batch  | default model ∀ tasks (`anthropic/claude-haiku-4-5` · `pi/smol`)|
-| phase        | batch  | roster group name for the auto-created todos                    |
+|field|scope|meaning|
+|---|---|---|
+|agent|batch|worker type for all tasks (see roster below)|
+|context|batch|shared background, prepended to every assignment — write once|
+|schema|batch|JTD output contract; ✗ duplicate in assignment|
+|model|batch|default model ∀ tasks (`anthropic/claude-haiku-4-5` · `pi/smol`)|
+|phase|batch|roster group name for the auto-created todos|
 {{#if isolationEnabled}}| isolated     | batch  | worktree + patch return; use iff tasks edit overlapping files   |
 {{/if}}| id           | task   | CamelCase ≤48; stable handle for blockers/refs                  |
-| assignment   | task   | self-contained instructions (Target/Change/Edge/Acceptance)     |
-| blockers     | task   | task ids that must finish first → intra-batch DAG               |
-| ref          | task   | REQUIRED. `null` = no link. roster id (`task-3`) or `org://ID`; pulls gates + predecessor outputs |
-| filesDeps    | task   | files this task may mutate; req. for scope-restricted agents    |
-| description  | task   | UI label only — worker never sees it                            |
-| model        | task   | per-task override; beats batch model                            |
+|assignment|task|self-contained instructions (Target/Change/Edge/Acceptance)|
+|blockers|task|task ids that must finish first → intra-batch DAG|
+|ref|task|**REQUIRED**. `null` = no link. roster id (`task-3`) or `org://ID`; pulls gates + predecessor outputs|
+|filesDeps|task|files this task may mutate; req. for scope-restricted agents|
+|description|task|UI label only — worker never sees it|
+|model|task|per-task override; beats batch model|
 </fields>
 
 <recipes>
-| want                          | shape                                                            |
-|-------------------------------|------------------------------------------------------------------|
-| one delegated investigate+edit| `{agent:"task", tasks:[{id,description,assignment,ref:null}]}`   |
-| parallel independent edits    | `tasks:[A,B,C]` — disjoint `filesDeps`, no `blockers`           |
-| pipeline (contract→consumers) | B `blockers:["A"]` → A's output auto-injected into B            |
-| structured return             | set batch `schema`; worker calls `submit_result`               |
-| cheap fan-out                 | batch `model:"pi/smol"`; bump one via task `model`             |
-| resume a planned todo         | task `ref:"task-3"` (no assignment → derived from todo)        |
-| link durable org work         | task `ref:"org://FEAT-123"` → gates + body from the org item   |
+|want|shape|
+|---|---|
+|one delegated investigate+edit|`{agent:"task", tasks:[{id,description,assignment,ref:null}]}`|
+|parallel independent edits|`tasks:[A,B,C]` — disjoint `filesDeps`, no `blockers`|
+|pipeline (contract→consumers)|B `blockers:["A"]` → A's output auto-injected into B|
+|structured return|set batch `schema`; worker calls `submit_result`|
+|cheap fan-out|batch `model:"pi/smol"`; bump one via task `model`|
+|resume a planned todo|task `ref:"task-3"` (no assignment → derived from todo)|
+|link durable org work|task `ref:"org://FEAT-123"` → gates + body from the org item|
 {{#if asyncEnabled}}| fire-and-forget               | dispatch → `read jobs://` to poll → `await` to join            |
 {{/if}}</recipes>
 

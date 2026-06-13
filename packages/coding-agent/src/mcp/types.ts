@@ -122,7 +122,46 @@ export interface MCPImplementation {
 export interface MCPClientCapabilities {
 	roots?: { listChanged?: boolean };
 	sampling?: Record<string, never>;
+	/** Declares support for server-initiated `elicitation/create` requests. */
+	elicitation?: Record<string, never>;
 	experimental?: Record<string, unknown>;
+}
+
+/**
+ * Restricted JSON-Schema subset used by elicitation `requestedSchema`
+ * (flat object of primitive properties per the MCP spec).
+ */
+export interface ElicitationSchema {
+	type: "object";
+	properties: Record<string, ElicitationProperty>;
+	required?: string[];
+}
+
+export interface ElicitationProperty {
+	type: "string" | "number" | "integer" | "boolean";
+	title?: string;
+	description?: string;
+	/** String enum (with optional display names). */
+	enum?: string[];
+	enumNames?: string[];
+	default?: string | number | boolean;
+	minimum?: number;
+	maximum?: number;
+	minLength?: number;
+	maxLength?: number;
+	format?: "email" | "uri" | "date" | "date-time";
+}
+
+/** Params of a server-initiated `elicitation/create` request. */
+export interface MCPElicitationParams {
+	message: string;
+	requestedSchema: ElicitationSchema;
+}
+
+/** Client's reply to an elicitation request. */
+export interface MCPElicitationResult {
+	action: "accept" | "decline" | "cancel";
+	content?: Record<string, unknown>;
 }
 
 /** MCP server capabilities */
@@ -237,6 +276,15 @@ export interface MCPTransport {
 	onClose?: () => void;
 	onError?: (error: Error) => void;
 	onNotification?: (method: string, params: unknown) => void;
+	/**
+	 * Handler for server-initiated requests (e.g. `elicitation/create`). The
+	 * transport replies on the same channel with the same id once it resolves.
+	 */
+	onServerRequest?: (
+		method: string,
+		params: unknown,
+		id: string | number,
+	) => Promise<{ result?: unknown; error?: { code: number; message: string; data?: unknown } }>;
 }
 
 /** Transport factory function */
