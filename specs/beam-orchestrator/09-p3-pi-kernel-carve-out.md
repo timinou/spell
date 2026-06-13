@@ -29,15 +29,24 @@ GATE 3  lock-liveness owner A holds intent (60s TTL) -> A dies (conn drop) -> br
                       deregister -> owner B acquires reclaimed intent (no deadlock)
 ```
 
-### Deferred to a future BEAM-integration phase (NOT P3)
+### P3 finish work — DONE (P3.7 + P3.8)
 ```
-- The functional :DOWN-monitor -> ResourceArc(held-connection) Drop -> reclaim WIRING
-  in the NIF (socket-per-owner). P3.5 proved the broker RECLAIM the trigger relies on;
-  the NIF-side persistent-connection client + monitor is the next phase.
-- napi's execute_code_path_inner read branch CALLING resolve_target (today proven-
-  equivalent twins; the cutover to a single call site is mechanical follow-up).
-- P5: graph edges + writes cut over to the NIF; the code-graph index moves wholesale
+P3.7  598e6002c  CUTOVER: napi's execute_code_path_inner read branch now DELEGATES
+                 to pi_kernel::resolve_target (single source of truth, duplicate
+                 dispatch deleted). Behavior-preserving (routing/op_matrix/unified
+                 absolute anchors green). resolve_target gained gitignore param.
+P3.8  c9507f230  FUNCTIONAL gate-3: beam/pi_kernel_nif BrokerConnection resource
+                 holds a per-owner broker connection; env.monitor + Resource::down
+                 fire on the owner's :DOWN -> close -> broker reclaim. Proven end to
+                 end (broker_reclaim_test.exs): A holds, A killed, B acquires.
+```
+
+### Deferred to P5 (NOT P3 — genuinely later)
+```
+- graph edges + writes cut over to the NIF; the code-graph index moves wholesale
   (resolves the two-kernels RAM cost); N-3 HandleStore ETS->ResourceArc (zero-copy).
+- FUP-132: full mid-walk host-abort responsiveness for the kernel symbol/outline
+  walk (result-preserving; the pre-delegate abort bridge covers the common case).
 ```
 
 > P3 is the **architecture bet**, not error-relief. The execute substrate
