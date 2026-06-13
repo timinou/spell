@@ -614,14 +614,17 @@ impl NativeResolver {
 			message: "buffer has no path".into(),
 			span:    None,
 		})?;
-		let profile =
-			crate::code_buffer::get_profile(path, buffer.language()).map_err(|e| Diagnostic {
+		// P5.B: edit-prep now lives in pi_kernel::edit_ops (host-agnostic).
+		// language_registry() yields Arc<LanguageRegistry>; deref to &LanguageRegistry.
+		let registry = crate::language_registry();
+		let profile = pi_kernel::edit_ops::get_profile(&registry, path, buffer.language())
+			.map_err(|e| Diagnostic {
 				variant: DiagnosticVariant::Inaccessible,
 				message: e.to_string(),
 				span:    None,
 			})?;
 		let prepared =
-			crate::code_buffer::single_action(buffer, &profile, path, &target_id, action_json)
+			pi_kernel::edit_ops::single_action(buffer, &profile, path, &target_id, action_json)
 				.map_err(|e| Diagnostic {
 					variant: DiagnosticVariant::UnsupportedOperation,
 					message: edit_err_message(&e),

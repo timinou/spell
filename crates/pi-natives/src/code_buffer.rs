@@ -1,91 +1,7 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum EdnPathSegment {
-	Key(String),
-	Index(usize),
-}
-
-fn parse_edn_path(path: &str) -> Option<Vec<EdnPathSegment>> {
-	let inner = path.trim().strip_prefix('[')?.strip_suffix(']')?.trim();
-	if inner.is_empty() {
-		return Some(Vec::new());
-	}
-	inner
-		.split_whitespace()
-		.map(|token| {
-			if let Some(key) = token.strip_prefix(':') {
-				Some(EdnPathSegment::Key(format!(":{key}")))
-			} else {
-				token.parse::<usize>().ok().map(EdnPathSegment::Index)
-			}
-		})
-		.collect()
-}
-
-fn edn_node_text(buffer: &CodeBuffer, node: Node<'_>) -> String {
-	buffer
-		.source()
-		.get(node.start_byte()..node.end_byte())
-		.unwrap_or_default()
-		.to_string()
-}
-
-fn edn_named_children(node: Node<'_>) -> Vec<Node<'_>> {
-	let mut cursor = node.walk();
-	node.named_children(&mut cursor).collect()
-}
-
-fn edn_root_value(buffer: &CodeBuffer) -> Option<Node<'_>> {
-	let root = buffer.tree().root_node();
-	edn_named_children(root).into_iter().next()
-}
-
-fn edn_child_for_segment<'a>(
-	buffer: &CodeBuffer,
-	node: Node<'a>,
-	segment: &EdnPathSegment,
-) -> Option<Node<'a>> {
-	let children = edn_named_children(node);
-	match segment {
-		EdnPathSegment::Index(index) => children.get(*index).copied(),
-		EdnPathSegment::Key(key) => {
-			if node.kind() != "map_lit" {
-				return None;
-			}
-			children.chunks(2).find_map(|pair| {
-				let [candidate, value] = pair else {
-					return None;
-				};
-				(edn_node_text(buffer, *candidate) == *key).then_some(*value)
-			})
-		},
-	}
-}
-
-fn edn_node_for_path<'a>(buffer: &'a CodeBuffer, path: &str) -> Option<Node<'a>> {
-	let segments = parse_edn_path(path)?;
-	let mut node = edn_root_value(buffer)?;
-	for segment in &segments {
-		node = edn_child_for_segment(buffer, node, segment)?;
-	}
-	Some(node)
-}
-
-pub(crate) fn edn_resolved_symbol(buffer: &CodeBuffer, path: &str) -> Option<ResolvedSymbol> {
-	let node = edn_node_for_path(buffer, path)?;
-	Some(ResolvedSymbol {
-		name:              path.to_string(),
-		kind:              node.kind().to_string(),
-		start_byte:        node.start_byte(),
-		end_byte:          node.end_byte(),
-		line:              (node.start_position().row + 1) as u32,
-		end_line:          (node.end_position().row + 1) as u32,
-		body_start_byte:   None,
-		body_end_byte:     None,
-		identifier_range:  ByteRange { start: node.start_byte(), end: node.end_byte() },
-		declaration_range: ByteRange { start: node.start_byte(), end: node.end_byte() },
-		statement_range:   ByteRange { start: node.start_byte(), end: node.end_byte() },
-	})
-}
+// P5.B (PLAN-336): the EDN path helpers (parse_edn_path, edn_node_text,
+// edn_named_children, edn_root_value, edn_child_for_segment, edn_node_for_path,
+// edn_resolved_symbol) moved to pi_kernel::edit_ops (host-agnostic). Imported
+// below; edn_navigate_result and the napi EDN paths call the kernel versions.
 fn edn_navigate_result(buffer: &CodeBuffer, node: Node<'_>) -> NavigateResult {
 	let items = edn_named_children(node)
 		.into_iter()
@@ -124,19 +40,20 @@ use pi_code_engine::{
 	CodeEngineError, JournalEntry, JournalReader, PeerEdit, PeerInfo, PeerState,
 	buffer::CodeBuffer,
 	default_journal_root,
-	edit::{
-		DragDirection, Occurrence, Patch, ReplacePolicy, SpliceMode, TextEdit, apply_patches,
-		apply_raw_text_patches, clone_node, drag_node, insert_after, insert_after_symbol,
-		insert_before, insert_before_symbol, kill_node, rename_symbol, replace_body,
-		replace_body_safe, splice_node, transpose_nodes, wrap_node,
-	},
 	file_lock::lock_status,
 	journal_path_for,
 	language::{LanguageId, LanguageProfile},
 	navigate::{NavigateAction, NavigateItem, NavigateResult, navigate as navigate_buffer},
 	outline::{EnrichFlags, OutlineEntry, outline as outline_buffer, read as read_buffer},
 	procedure::ProcedureProof,
-	resolve::{ByteRange, ResolvedSymbol, resolve_symbol},
+};
+// P5.B: after single_action moved to pi_kernel::edit_ops, these edit primitives
+// remain used only by the test-only `single_edit_operation` / `parse_patches`
+// helpers below; gate the import so the lib build stays warning-clean.
+#[cfg(test)]
+use pi_code_engine::{
+	edit::{Occurrence, Patch, TextEdit, apply_patches},
+	resolve::resolve_symbol,
 	run_procedure,
 };
 use pi_code_graph::{
@@ -147,6 +64,13 @@ use serde_json::{Value, json};
 use tree_sitter::Node;
 
 use crate::{buffer_registry, language_registry};
+// P5.B (PLAN-336): the host-agnostic edit-prep cluster now lives in
+// pi_kernel::edit_ops; re-import every symbol the napi paths in this file use so
+// the call sites resolve unchanged.
+use pi_kernel::edit_ops::{
+	action_content, action_line, edn_named_children, edn_node_for_path, edn_node_text,
+	edn_root_value, single_action, target_range,
+};
 fn engine_err(error: pi_code_engine::error::CodeEngineError) -> Error {
 	let payload = match &error {
 		CodeEngineError::ExternalModification { path, .. } => json!({
@@ -247,6 +171,11 @@ fn navigate_action(value: Option<&str>) -> Result<NavigateAction> {
 	}
 }
 
+// P5.B: the action_* helpers that used this moved to pi_kernel::edit_ops; the
+// remaining callers live in the napi `executeCodeBuffer` batch subtree, which
+// the lib-only dead-code pass can't see through the #[napi] entry. Still live
+// (and test-exercised), so silence the false positive.
+#[allow(dead_code)]
 pub(crate) fn required_str<'a>(options: &'a Value, field: &str) -> Result<&'a str> {
 	options
 		.get(field)
@@ -421,12 +350,7 @@ struct TargetSummary {
 	children:  Vec<Self>,
 }
 
-#[derive(Debug)]
-pub(crate) struct PreparedEditOperation {
-	pub edits:  Vec<TextEdit>,
-	pub proof:  Option<ProcedureProof>,
-	pub action: String,
-}
+// PreparedEditOperation moved to pi_kernel::edit_ops (P5.B); imported below.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EditSaveMode {
@@ -654,214 +578,9 @@ fn workspace_root_for(path: &Path) -> PathBuf {
 	}
 }
 
-pub(crate) fn prove_dead_style(
-	path: &Path,
-	resolved: &ResolvedSymbol,
-) -> std::result::Result<ProcedureProof, CodeEngineError> {
-	let root = workspace_root_for(path);
-	let cache = CacheStore::new(root.join(".spell/graph"));
-	let target_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-	let registry = GraphLanguageRegistry::new()
-		.with_defaults()
-		.map_err(|error| CodeEngineError::Edit(error.to_string()))?;
-	let builder = CodeGraphBuilder::new(registry, cache);
-	let outcome = builder
-		.build(&BuildGraphOptions::new(&root))
-		.map_err(|error| CodeEngineError::Edit(error.to_string()))?;
-	let Some(item) = outcome
-		.graph
-		.graph_dead_code_with_limit(0)
-		.into_iter()
-		.find(|item| {
-			let item_path = if item.symbol.path.is_absolute() {
-				item.symbol.path.clone()
-			} else {
-				root.join(&item.symbol.path)
-			};
-			item_path == target_path
-				&& item.symbol.kind == "cssrule"
-				&& item.symbol.label.ends_with(&format!("::{}", resolved.name))
-		})
-	else {
-		return Err(CodeEngineError::Refusal {
-			message:    "Dead-style removal refused: static graph still sees possible consumers or \
-			             lacks proof of zero consumers"
-				.into(),
-			reason:     "graph_dead_code did not prove this CSS rule unused at the requested location"
-				.into(),
-			confidence: "low".into(),
-			basis:      "graph_dead_code".into(),
-			matches:    None,
-		});
-	};
-	Ok(ProcedureProof {
-		basis:      "graph_dead_code".into(),
-		reason:     item.reason,
-		confidence: item.confidence,
-		matches:    Some(1),
-	})
-}
-
-/// Dispatch a single edit operation (symbol-targeted or line-targeted).
-/// Dispatch a single edit operation (symbol-targeted or line-targeted).
-pub(crate) fn action_content(action: &Value) -> std::result::Result<&str, CodeEngineError> {
-	required_str(action, "content").map_err(|error| CodeEngineError::Edit(error.to_string()))
-}
-
-/// FEAT-707: identifier shape check used by clone-with-rename.
-pub(crate) fn is_valid_identifier(s: &str) -> bool {
-	let mut chars = s.chars();
-	let Some(first) = chars.next() else {
-		return false;
-	};
-	if !(first.is_alphabetic() || first == '_' || first == '$') {
-		return false;
-	}
-	chars.all(|c| c.is_alphanumeric() || c == '_' || c == '$')
-}
-
-/// FEAT-707: replace the first whole-word occurrence of `from` with `to`
-/// inside `text`. Used to rename the cloned declaration's identifier.
-pub(crate) fn rename_first_occurrence(text: &str, from: &str, to: &str) -> String {
-	if from.is_empty() {
-		return text.to_string();
-	}
-	let bytes = text.as_bytes();
-	let from_bytes = from.as_bytes();
-	let mut i = 0;
-	while i + from_bytes.len() <= bytes.len() {
-		if &bytes[i..i + from_bytes.len()] == from_bytes {
-			let before_ok = i == 0 || {
-				let prev = bytes[i - 1] as char;
-				!(prev.is_alphanumeric() || prev == '_' || prev == '$')
-			};
-			let after_idx = i + from_bytes.len();
-			let after_ok = after_idx == bytes.len() || {
-				let next = bytes[after_idx] as char;
-				!(next.is_alphanumeric() || next == '_' || next == '$')
-			};
-			if before_ok && after_ok {
-				let mut out = String::with_capacity(text.len() - from.len() + to.len());
-				out.push_str(&text[..i]);
-				out.push_str(to);
-				out.push_str(&text[i + from.len()..]);
-				return out;
-			}
-		}
-		i += 1;
-	}
-	text.to_string()
-}
-
-pub(crate) fn action_find(action: &Value) -> std::result::Result<&str, CodeEngineError> {
-	required_str(action, "find").map_err(|error| CodeEngineError::Edit(error.to_string()))
-}
-
-pub(crate) fn action_line(action: &Value, resolved: Option<&ResolvedSymbol>) -> usize {
-	action
-		.get("line")
-		.and_then(Value::as_u64)
-		.and_then(|line| usize::try_from(line).ok())
-		.filter(|line| *line > 0)
-		.or_else(|| resolved.map(|symbol| symbol.line as usize))
-		.or_else(|| {
-			action
-				.get("pos")
-				.and_then(Value::as_str)
-				.and_then(|pos| pos.split('#').next())
-				.and_then(|num| num.parse().ok())
-		})
-		.unwrap_or(0)
-}
-
-pub(crate) fn action_allow_sibling_delete(action: &Value) -> bool {
-	action
-		.get("allowSiblingDelete")
-		.and_then(Value::as_bool)
-		.unwrap_or(false)
-}
-
-pub(crate) fn action_occurrence(
-	action: &Value,
-) -> std::result::Result<Occurrence, CodeEngineError> {
-	match action.get("occurrence") {
-		None | Some(Value::Null) => Ok(Occurrence::Unique),
-		Some(Value::String(value)) => match value.as_str() {
-			"first" => Ok(Occurrence::First),
-			"last" => Ok(Occurrence::Last),
-			"all" => Ok(Occurrence::All),
-			_ => Err(CodeEngineError::Edit("invalid occurrence value".into())),
-		},
-		Some(Value::Number(value)) => value
-			.as_u64()
-			.and_then(|index| usize::try_from(index).ok())
-			.filter(|index| *index > 0)
-			.map(Occurrence::Index)
-			.ok_or_else(|| CodeEngineError::Edit("invalid occurrence value".into())),
-		Some(_) => Err(CodeEngineError::Edit("invalid occurrence value".into())),
-	}
-}
-pub(crate) fn action_force(action: &Value) -> bool {
-	action
-		.get("force")
-		.and_then(Value::as_bool)
-		.unwrap_or(false)
-}
-pub(crate) fn action_within(resolved: Option<&ResolvedSymbol>) -> Option<(usize, usize)> {
-	let symbol = resolved?;
-	Some((symbol.start_byte, symbol.end_byte))
-}
-
-pub(crate) fn range_for_action(kind: &str, resolved: &ResolvedSymbol) -> ByteRange {
-	match kind {
-		"rename" => resolved.identifier_range,
-		"wrap" | "splice" | "move" | "clone" => resolved.statement_range,
-		_ => resolved.declaration_range,
-	}
-}
-
-pub(crate) fn statement_within(resolved: Option<&ResolvedSymbol>) -> Option<(usize, usize)> {
-	let symbol = resolved?;
-	Some((symbol.statement_range.start, symbol.statement_range.end))
-}
-
-pub(crate) fn action_column(action: &Value) -> usize {
-	value_to_usize(action.get("column"), 0)
-}
-
-pub(crate) fn action_node_type(action: &Value) -> &str {
-	action.get("nodeType").and_then(Value::as_str).unwrap_or("")
-}
-
-pub(crate) fn action_mode(action: &Value) -> SpliceMode {
-	match action.get("mode").and_then(Value::as_str).unwrap_or("self") {
-		"up" => SpliceMode::Up,
-		"down" => SpliceMode::Down,
-		_ => SpliceMode::Self_,
-	}
-}
-
-pub(crate) fn resolve_target_id(
-	buffer: &CodeBuffer,
-	profile: &LanguageProfile,
-	_path: &Path,
-	target_id: &str,
-) -> std::result::Result<Option<ResolvedSymbol>, CodeEngineError> {
-	let (_, symbol_target_id) =
-		parse_target_id(target_id).map_err(|error| CodeEngineError::Edit(error.to_string()))?;
-	match symbol_target_id {
-		Some(symbol_target_id) if buffer.language().as_str() == "edn" => {
-			edn_resolved_symbol(buffer, &symbol_target_id)
-				.map(Some)
-				.ok_or_else(|| {
-					CodeEngineError::Edit(format!("EDN target path '{symbol_target_id}' not found"))
-				})
-		},
-		Some(symbol_target_id) => resolve_symbol(buffer, profile, &symbol_target_id).map(Some),
-		None => Ok(None),
-	}
-}
-
+// P5.B (PLAN-336): prove_dead_style + the action_* accessors + resolve_target_id
+// (and the EDN path helpers below) moved to pi_kernel::edit_ops. Imported at the
+// top of this file; the napi paths here call the kernel versions unchanged.
 fn file_target_id_for_path(path: &Path, options: &Value) -> String {
 	let root = root_hint(options).unwrap_or_else(|| workspace_root_for(path));
 	relativize_path(path, &root)
@@ -871,380 +590,9 @@ fn symbol_target_id(file_target_id: &str, symbol_path: &str) -> String {
 	format!("{file_target_id}::{symbol_path}")
 }
 
-pub(crate) fn target_range(
-	buffer: &CodeBuffer,
-	resolved: Option<&ResolvedSymbol>,
-) -> (usize, usize) {
-	match resolved {
-		Some(symbol) => (symbol.start_byte, symbol.end_byte),
-		None => (0, buffer.source().len()),
-	}
-}
-
-pub(crate) fn would_leave_zero_bytes(buffer: &CodeBuffer, edits: &[TextEdit]) -> bool {
-	let mut result = buffer.source().to_string();
-	let mut sorted: Vec<_> = edits.iter().collect();
-	sorted.sort_by_key(|e| std::cmp::Reverse(e.start_byte));
-	for edit in sorted {
-		result.replace_range(edit.start_byte..edit.old_end_byte, &edit.new_text);
-	}
-	result.is_empty()
-}
-/// Build a token-only `ResolvedSymbol` for CSS token procedures (BUG-435).
-/// Only `name` is meaningful — the rename/remove procedures scan the buffer for
-/// the literal token and never dereference the byte spans, so they are zeroed.
-fn synthetic_token_symbol(name: String) -> ResolvedSymbol {
-	ResolvedSymbol {
-		name,
-		kind: "css-token".into(),
-		start_byte: 0,
-		end_byte: 0,
-		line: 0,
-		end_line: 0,
-		body_start_byte: None,
-		body_end_byte: None,
-		identifier_range: ByteRange { start: 0, end: 0 },
-		declaration_range: ByteRange { start: 0, end: 0 },
-		statement_range: ByteRange { start: 0, end: 0 },
-	}
-}
-
-pub(crate) fn single_action(
-	buffer: &CodeBuffer,
-	profile: &LanguageProfile,
-	path: &Path,
-	target_id: &str,
-	action: &Value,
-) -> std::result::Result<PreparedEditOperation, CodeEngineError> {
-	let action_kind = action
-		.get("kind")
-		.and_then(Value::as_str)
-		.ok_or_else(|| CodeEngineError::Edit("Each action requires 'kind'".into()))?;
-	// BUG-435: `renameCustomProperty` operates on a *literal token* carried by
-	// the target (`style.css::--accent`) — NOT a resolvable selector. Custom
-	// properties are declarations inside `:root {}` / arbitrary rules, so
-	// `resolve_symbol` (which only knows selector rules) fails with
-	// `Symbol '--accent' not found. Available: […]`. The procedure scans the
-	// buffer for the token itself (declaration + every `var()` reference) and
-	// reads only `resolved.name`, so a token-only synthetic symbol is correct
-	// and sufficient.
-	//
-	// Class / id token renames are DIFFERENT: they require a resolved CSS *rule*
-	// node (`resolved.kind == "rule"`) to scope the rename and prove the match,
-	// so they must keep going through real selector resolution — a synthetic
-	// symbol would trip their `requires a CSS rule target` proof gate.
-	let resolved = if action_kind == "renameCustomProperty" {
-		let (_, token) =
-			parse_target_id(target_id).map_err(|e| CodeEngineError::Edit(e.to_string()))?;
-		token.map(synthetic_token_symbol).or_else(|| {
-			resolve_target_id(buffer, profile, path, target_id)
-				.ok()
-				.flatten()
-		})
-	} else {
-		resolve_target_id(buffer, profile, path, target_id)?
-	};
-	let conservative_web_refactor = matches!(buffer.language().as_str(), "html" | "css");
-	let within = action_within(resolved.as_ref());
-
-	let prepared = match action_kind {
-		"write" => {
-			let content = action_content(action)?;
-			match (resolved.as_ref(), action.get("scope").and_then(Value::as_str)) {
-				(Some(symbol), Some("body")) => PreparedEditOperation {
-					edits:  if action_allow_sibling_delete(action) {
-						replace_body(buffer, symbol, content, ReplacePolicy {
-							allow_sibling_delete: true,
-						})?
-					} else {
-						replace_body_safe(buffer, symbol, content)?
-					},
-					proof:  None,
-					action: action_kind.to_string(),
-				},
-				(Some(symbol), Some("sig")) => {
-					let body_start = symbol.body_start_byte.ok_or_else(|| {
-						CodeEngineError::Edit(format!(
-							"Symbol '{}' (kind: {}) has no body; cannot scope to signature",
-							symbol.name, symbol.kind
-						))
-					})?;
-					PreparedEditOperation {
-						edits:  vec![TextEdit {
-							start_byte:   symbol.start_byte,
-							old_end_byte: body_start,
-							new_text:     content.to_string(),
-						}],
-						proof:  None,
-						action: action_kind.to_string(),
-					}
-				},
-				(Some(symbol), _) => PreparedEditOperation {
-					edits:  vec![TextEdit {
-						start_byte:   symbol.start_byte,
-						old_end_byte: symbol.end_byte,
-						new_text:     content.to_string(),
-					}],
-					proof:  None,
-					action: action_kind.to_string(),
-				},
-				(None, Some(scope @ ("body" | "sig"))) => {
-					return Err(CodeEngineError::Edit(format!(
-						"write scope '{scope}' requires a declaration targetId, not a file targetId"
-					)));
-				},
-				(None, _) => PreparedEditOperation {
-					edits:  vec![TextEdit {
-						start_byte:   0,
-						old_end_byte: buffer.source().len(),
-						new_text:     content.to_string(),
-					}],
-					proof:  None,
-					action: action_kind.to_string(),
-				},
-			}
-		},
-		"findAndReplace" => {
-			let (start_byte, end_byte) = target_range(buffer, resolved.as_ref());
-			PreparedEditOperation {
-				edits:  apply_patches(buffer, start_byte, end_byte, &[Patch {
-					find:       action_find(action)?.to_string(),
-					replace:    action_content(action)?.to_string(),
-					occurrence: action_occurrence(action)?,
-					force:      action_force(action),
-				}])?,
-				proof:  None,
-				action: action_kind.to_string(),
-			}
-		},
-		"rawTextReplace" => {
-			let (start_byte, end_byte) = target_range(buffer, resolved.as_ref());
-			PreparedEditOperation {
-				edits:  apply_raw_text_patches(buffer, start_byte, end_byte, &[Patch {
-					find:       action_find(action)?.to_string(),
-					replace:    action_content(action)?.to_string(),
-					occurrence: action_occurrence(action)?,
-					force:      action_force(action),
-				}])?,
-				proof:  None,
-				action: action_kind.to_string(),
-			}
-		},
-		"wrap" => {
-			let symbol = resolved
-				.as_ref()
-				.ok_or_else(|| CodeEngineError::Edit("wrap requires a declaration targetId".into()))?;
-			let range = range_for_action("wrap", symbol);
-			let mut sym = symbol.clone();
-			sym.start_byte = range.start;
-			sym.end_byte = range.end;
-			PreparedEditOperation {
-				edits:  wrap_node(buffer, &sym, action_content(action)?)?,
-				proof:  None,
-				action: action_kind.to_string(),
-			}
-		},
-		"rename" => {
-			if conservative_web_refactor {
-				return Err(CodeEngineError::Refusal {
-					message:    "HTML/CSS rename is not yet supported safely. Use renameIdToken, \
-					             renameClassToken, or renameCustomProperty only when the target is a \
-					             provable literal token."
-						.into(),
-					reason:     "generic rename does not preserve proof for HTML/CSS token semantics"
-						.into(),
-					confidence: "low".into(),
-					basis:      "operation_scope".into(),
-					matches:    None,
-				});
-			}
-			let symbol = resolved.as_ref().ok_or_else(|| {
-				CodeEngineError::Edit("rename requires a declaration targetId".into())
-			})?;
-			let range = range_for_action("rename", symbol);
-			let mut sym = symbol.clone();
-			sym.start_byte = range.start;
-			sym.end_byte = range.end;
-			PreparedEditOperation {
-				edits:  rename_symbol(buffer, &sym, action_content(action)?)?,
-				proof:  None,
-				action: action_kind.to_string(),
-			}
-		},
-		"delete" => {
-			if conservative_web_refactor {
-				return Err(CodeEngineError::Refusal {
-					message:    "HTML/CSS delete is not yet supported safely. Use removeDeadStyle only \
-					             after the static graph proves a CSS rule has no consumers."
-						.into(),
-					reason:     "generic delete does not preserve proof for HTML/CSS style or markup \
-					             reachability"
-						.into(),
-					confidence: "low".into(),
-					basis:      "operation_scope".into(),
-					matches:    None,
-				});
-			}
-			let edits = match (resolved.as_ref(), has_meaningful_index_field(action.get("line"))) {
-				(Some(symbol), false) => vec![TextEdit {
-					start_byte:   symbol.start_byte,
-					old_end_byte: symbol.end_byte,
-					new_text:     String::new(),
-				}],
-				_ => kill_node(
-					buffer,
-					action_line(action, resolved.as_ref()),
-					action_node_type(action),
-					within,
-				)?,
-			};
-			if would_leave_zero_bytes(buffer, &edits) {
-				return Err(CodeEngineError::Edit(
-					"zero_byte_delete_blocked: deleting this target would leave the file empty; use a \
-					 bare path target to delete the file"
-						.into(),
-				));
-			}
-			PreparedEditOperation { edits, proof: None, action: action_kind.to_string() }
-		},
-		"insertBefore" => {
-			let content = action_content(action)?;
-			match (resolved.as_ref(), has_meaningful_index_field(action.get("line"))) {
-				(Some(symbol), false) => PreparedEditOperation {
-					edits:  insert_before_symbol(buffer, symbol, content)?,
-					proof:  None,
-					action: action_kind.to_string(),
-				},
-				_ => PreparedEditOperation {
-					edits:  insert_before(
-						buffer,
-						action_line(action, resolved.as_ref()),
-						action_node_type(action),
-						content,
-						within,
-					)?,
-					proof:  None,
-					action: action_kind.to_string(),
-				},
-			}
-		},
-		"insertAfter" => {
-			let content = action_content(action)?;
-			match (resolved.as_ref(), has_meaningful_index_field(action.get("line"))) {
-				(Some(symbol), false) => PreparedEditOperation {
-					edits:  insert_after_symbol(buffer, symbol, content)?,
-					proof:  None,
-					action: action_kind.to_string(),
-				},
-				_ => PreparedEditOperation {
-					edits:  insert_after(
-						buffer,
-						action_line(action, resolved.as_ref()),
-						action_node_type(action),
-						content,
-						within,
-					)?,
-					proof:  None,
-					action: action_kind.to_string(),
-				},
-			}
-		},
-		"splice" => PreparedEditOperation {
-			edits:  splice_node(
-				buffer,
-				action_line(action, resolved.as_ref()),
-				action_mode(action),
-				statement_within(resolved.as_ref()),
-			)?,
-			proof:  None,
-			action: action_kind.to_string(),
-		},
-		"move" => PreparedEditOperation {
-			edits:  drag_node(
-				buffer,
-				action_line(action, resolved.as_ref()),
-				match action
-					.get("direction")
-					.and_then(Value::as_str)
-					.unwrap_or("down")
-				{
-					"up" => DragDirection::Up,
-					_ => DragDirection::Down,
-				},
-				statement_within(resolved.as_ref()),
-			)?,
-			proof:  None,
-			action: action_kind.to_string(),
-		},
-		"clone" => {
-			let mut edits = clone_node(
-				buffer,
-				action_line(action, resolved.as_ref()),
-				statement_within(resolved.as_ref()),
-			)?;
-			// FEAT-707: when `content` is provided, rename the identifier
-			// inside the cloned snippet so the agent gets two named
-			// declarations instead of `foo` + `foo` (and an immediate
-			// duplicate-binding error).
-			if let Some(new_name) = action.get("content").and_then(Value::as_str)
-				&& !new_name.is_empty()
-			{
-				if !is_valid_identifier(new_name) {
-					return Err(CodeEngineError::Edit(format!(
-						"clone content must be a valid identifier (got {new_name:?})"
-					)));
-				}
-				if let Some(orig_name) = resolved.as_ref().map(|r| r.name.clone()) {
-					for edit in &mut edits {
-						edit.new_text = rename_first_occurrence(&edit.new_text, &orig_name, new_name);
-					}
-				}
-			}
-			PreparedEditOperation { edits, proof: None, action: action_kind.to_string() }
-		},
-		"transpose" => PreparedEditOperation {
-			edits:  transpose_nodes(
-				buffer,
-				action_line(action, resolved.as_ref()),
-				action_column(action),
-				within,
-			)?,
-			proof:  None,
-			action: action_kind.to_string(),
-		},
-		other => {
-			let procedure_name = match other {
-				"renameClassToken" => "rename-class-token",
-				"renameIdToken" => "rename-id-token",
-				"renameCustomProperty" => "rename-custom-property",
-				"removeDeadStyle" => "remove-dead-style",
-				_ => other,
-			};
-			let procedure = profile
-				.procedures
-				.get(procedure_name)
-				.ok_or_else(|| CodeEngineError::Edit(format!("Unknown action kind: {other}")))?;
-			let symbol = resolved.as_ref().ok_or_else(|| {
-				CodeEngineError::Edit(format!("{other} requires a declaration targetId"))
-			})?;
-			let mut procedure_options = action.as_object().cloned().unwrap_or_default();
-			procedure_options.insert("file".into(), Value::String(path.display().to_string()));
-			let mut result =
-				run_procedure(procedure, buffer, symbol, profile, &Value::Object(procedure_options))?;
-			if procedure_name == "remove-dead-style" {
-				result.proof = Some(prove_dead_style(path, symbol)?);
-			}
-			PreparedEditOperation {
-				edits:  result.edits,
-				proof:  result.proof,
-				action: other.to_string(),
-			}
-		},
-	};
-
-	Ok(prepared)
-}
-
+// P5.B (PLAN-336): target_range, would_leave_zero_bytes, synthetic_token_symbol,
+// and single_action moved to pi_kernel::edit_ops (host-agnostic, shared with the
+// BEAM NIF edit lane). Imported at the top of this file.
 fn execute_operation_node(
 	buffer: &mut CodeBuffer,
 	profile: &LanguageProfile,

@@ -8,8 +8,8 @@
 //! P5.A (PLAN-336): the code-graph INDEX (`graph_cache`) and the EDGE resolver
 //! (`edge_resolver`) now live here too — both depend only on host-agnostic
 //! `pi-code-graph`, so a BEAM NIF can serve `def→/ref→/call→/import→/bind→`
-//! edges from ONE warm resident index shared across N agents (WS-B). Writes, the
-//! buffer registry, and undo history stay bridge-side in `pi-natives`.
+//! edges from ONE warm resident index shared across N agents (WS-B). Writes,
+//! the buffer registry, and undo history stay bridge-side in `pi-natives`.
 //!
 //! Invariant: this crate MUST NOT depend on `napi`, `rustler`, or any
 //! host-specific symbol. The error type is `pi_code_path::types::Diagnostic`
@@ -18,6 +18,7 @@
 pub mod dialect_registry;
 pub mod edge_resolver;
 pub mod edges;
+pub mod edit_ops;
 pub mod graph_cache;
 pub mod parse;
 pub mod predicates;
