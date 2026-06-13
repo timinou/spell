@@ -399,10 +399,10 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	);
 	const tools = baseResults.filter((r): r is Tool => r !== null);
 
-	// Runtime tools (PLAN-337): dynamic deftool tools (git, run) loaded from PTC
-	// interfaces. Opt-in via runtimeTools.enabled. When a tool list is requested,
-	// honour it — only add runtime tools whose name was asked for (or all, when no
-	// explicit list). Failures are non-fatal (logged by the loader).
+	// Runtime tools (PLAN-337): dynamic deftool tools (git, run, + user .ptc)
+	// loaded from PTC interfaces. Active by default. When a tool list is
+	// requested, honour it — only add runtime tools whose name was asked for (or
+	// all, when no explicit list). Failures are non-fatal (logged by the loader).
 	if (session.settings.get("runtimeTools.enabled")) {
 		try {
 			const { tools: runtimeTools } = await logger.timeAsync("createTools:runtimeTools", createRuntimeTools, session);

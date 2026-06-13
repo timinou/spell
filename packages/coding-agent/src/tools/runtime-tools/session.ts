@@ -10,7 +10,10 @@
  * built-in defaults govern every destructive verb explicitly so the fail-loud
  * loader accepts them.
  */
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { AgentTool } from "@spell/pi-agent-core";
+import { getProjectAgentDir, getToolsDir } from "@spell/pi-utils";
 import type { ToolSession } from "../index";
 import gitPtc from "./builtin/git.ptc" with { type: "text" };
 import runPtc from "./builtin/run.ptc" with { type: "text" };
@@ -64,16 +67,28 @@ export interface RuntimeToolSet {
 export async function createRuntimeTools(session: ToolSession): Promise<RuntimeToolSet> {
 	const dispatcher = new RuntimeToolDispatcher();
 
-	// The loader reads `.ptc` from disk; the built-ins are bundled as text, so we
-	// load them via the in-memory path by writing through a tiny source shim.
-	const sources: RuntimeToolSource[] = BUILTINS.map(b => ({ path: `<builtin>/${b.name}.ptc`, policy: b.policy }));
-	const { tools: loaded, errors } = await loadRuntimeToolsFromSources(dispatcher, BUILTINS, sources);
+	// Built-ins are bundled as text; user/project tools are discovered on disk.
+	// Both flow through the same loader (describe → resolvePolicy). A user tool
+	// with the same name as a built-in OVERRIDES it (project > user > built-in).
+	const builtinSources: RuntimeToolSource[] = BUILTINS.map(b => ({
+		path: `<builtin>/${b.name}.ptc`,
+		policy: b.policy,
+	}));
+	const builtinText = new Map(BUILTINS.map((b, i) => [builtinSources[i].path, b.source]));
 
-	if (errors.length > 0) {
-		// Surfaced by the loader's logger; a failed built-in is skipped, not fatal.
-	}
+	const discovered = await discoverUserToolSources(session.cwd);
+	const diskText = new Map(discovered.map(d => [d.source.path, d.text]));
+	const readSource = (p: string): string | undefined => builtinText.get(p) ?? diskText.get(p);
 
-	const tools = loaded.map(l => makeRuntimeTool(l, dispatcher, session));
+	// Later sources win on name collision: built-ins first, then user, then
+	// project (discoverUserToolSources returns user-before-project).
+	const allSources = [...builtinSources, ...discovered.map(d => d.source)];
+	const { tools: loaded } = await loadRuntimeTools(allSources, dispatcher, readSource);
+
+	// De-dupe by tool name, last-wins (so a project .ptc overrides a built-in).
+	const byName = new Map<string, (typeof loaded)[number]>();
+	for (const l of loaded) byName.set(l.descriptor.name, l);
+	const tools = [...byName.values()].map(l => makeRuntimeTool(l, dispatcher, session));
 
 	if (tools.length === 0) {
 		dispatcher.close();
@@ -88,15 +103,32 @@ export async function createRuntimeTools(session: ToolSession): Promise<RuntimeT
 }
 
 /**
- * Load built-ins whose source is already in memory (bundled text), reusing the
- * loader's describe + policy-resolution path without a filesystem read.
+ * Discover user/project `.ptc` interface files. Scans `~/.spell/agent/tools`
+ * (user) then `<cwd>/.spell/tools` (project) — project last so it wins on a name
+ * collision. No KDL policy here: gates auto-derive from each verb's :class
+ * (resolvePolicy fills them), so a user just drops a `.ptc` and it works.
  */
-async function loadRuntimeToolsFromSources(
-	dispatcher: RuntimeToolDispatcher,
-	builtins: BuiltinRuntimeTool[],
-	sources: RuntimeToolSource[],
-): ReturnType<typeof loadRuntimeTools> {
-	// Reuse the on-disk loader by providing the bundled text through a source map.
-	const byPath = new Map(builtins.map((b, i) => [sources[i].path, b.source]));
-	return loadRuntimeTools(sources, dispatcher, path => byPath.get(path));
+async function discoverUserToolSources(cwd: string): Promise<Array<{ source: RuntimeToolSource; text: string }>> {
+	const dirs = [getToolsDir(), path.join(getProjectAgentDir(cwd), "tools")];
+	const out: Array<{ source: RuntimeToolSource; text: string }> = [];
+
+	for (const dir of dirs) {
+		let entries: string[];
+		try {
+			entries = await fs.readdir(dir);
+		} catch {
+			continue; // dir doesn't exist — fine
+		}
+		for (const entry of entries.sort()) {
+			if (!entry.endsWith(".ptc")) continue;
+			const full = path.join(dir, entry);
+			try {
+				const text = await fs.readFile(full, "utf8");
+				out.push({ source: { path: full }, text });
+			} catch {
+				// Unreadable file — skip.
+			}
+		}
+	}
+	return out;
 }

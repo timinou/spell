@@ -334,8 +334,7 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "tools",
 			label: "Execute session store max (MB)",
-			description:
-				"Ceiling for the session-scoped data store (session bucket); 0 = runtime default 64MB",
+			description: "Ceiling for the session-scoped data store (session bucket); 0 = runtime default 64MB",
 			submenu: true,
 			tooltip: true,
 		},
@@ -1051,11 +1050,12 @@ export const SETTINGS_SCHEMA = {
 
 	"runtimeTools.enabled": {
 		type: "boolean",
-		default: false,
+		default: true,
 		ui: {
 			tab: "tools",
 			label: "Runtime tools",
-			description: "Enable deftool runtime tools (git, run) — structured, first-class process tools (PLAN-337)",
+			description:
+				"Enable deftool runtime tools (git, run, + user .ptc) — structured, first-class process tools (PLAN-337)",
 		},
 	},
 

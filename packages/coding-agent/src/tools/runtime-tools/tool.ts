@@ -13,11 +13,10 @@
 import { Type } from "@sinclair/typebox";
 import type { AgentTool, AgentToolResult } from "@spell/pi-agent-core";
 import { execCommand } from "../../exec/exec";
-import { enforceBashCommand } from "../../sandbox";
 import type { ToolSession } from "../index";
 import { ToolError } from "../tool-errors";
 import type { RuntimeToolDispatcher } from "./runtime";
-import type { Gate, LoadedRuntimeTool } from "./types";
+import type { Gate, LoadedRuntimeTool, VerbClass } from "./types";
 
 /** Details surfaced to the TUI renderer. */
 export interface RuntimeToolDetails {
@@ -35,6 +34,25 @@ const runtimeToolSchema = Type.Object({
 	verb: Type.String({ description: "The verb (subcommand) to run." }),
 	args: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "Verb arguments." })),
 });
+
+/**
+ * The advisory note for a verb whose gate is stricter than `silent`. Returns the
+ * empty string for `silent`. Describes what the FULL policy would do (PLAN-337
+ * Phase 2 ships gates as advisory-only: alignment over security), so every
+ * future confirm/deny point is visible without blocking anything yet.
+ */
+function advisoryNote(tool: string, verb: string, verbClass: VerbClass, gate: Gate): string {
+	switch (gate) {
+		case "silent":
+			return "";
+		case "warn":
+			return `⚠ ${tool} ${verb} (${verbClass}) — uncurated; observed (would warn under full policy)`;
+		case "confirm":
+			return `⚠ ${tool} ${verb} (${verbClass}) ran WITHOUT confirmation — would require confirmation under the full policy`;
+		case "deny":
+			return `⚠ ${tool} ${verb} (${verbClass}) ran — would be DENIED under the full policy`;
+	}
+}
 
 export function makeRuntimeTool(
 	loaded: LoadedRuntimeTool,
@@ -62,25 +80,16 @@ export function makeRuntimeTool(
 			}
 			const gate: Gate = policy.verbs[verb]?.gate ?? "silent";
 
-			// `deny`: refuse before doing any work.
-			if (gate === "deny") {
-				throw new ToolError(
-					`'${descriptor.name} ${verb}' is denied by policy (gate "deny"). Edit the tool's KDL block to allow it.`,
-				);
-			}
+			// ADVISORY gates (PLAN-337 Phase 2): alignment over security for now —
+			// NOTHING blocks (not even gate "deny"). Anything stricter than "silent"
+			// RUNS but is flagged: the warn tint + a note saying what the full policy
+			// WOULD do, so every future confirm/deny point is observable before the
+			// policy engine is built. `deny` warns loudest.
+			const advisory = advisoryNote(descriptor.name, verb, verbDesc.class, gate);
+			const warn = gate !== "silent";
 
 			// Beat 1: build argv in the sandbox.
 			const argv = await dispatcher.argv(source, verb, args);
-			const commandString = argv.join(" ");
-
-			// Reuse the existing command sandbox (allow/deny globs) as a second gate.
-			const sandboxError = enforceBashCommand(commandString, session.sandboxPolicy);
-			if (sandboxError) throw new ToolError(sandboxError);
-
-			// `confirm`: Phase 1 surfaces a clear warning and proceeds; interactive
-			// confirmation (pending-action) lands in Phase 4. We never silently run a
-			// destructive verb without flagging it.
-			const warn = gate === "warn" || gate === "confirm";
 
 			// Beat 2: run the process (argv form — no shell, no injection).
 			const started = Date.now();
@@ -99,15 +108,8 @@ export function makeRuntimeTool(
 			}
 
 			const failed = result.code !== 0;
-			const gateNote =
-				gate === "confirm"
-					? `\n\n[gate "confirm": destructive verb ran (interactive confirm pending — Phase 4)]`
-					: gate === "warn"
-						? `\n\n[gate "warn": uncurated verb — observed]`
-						: "";
 			const errNote = failed ? `\n\n[exit ${result.code}]${result.stderr ? `\n${result.stderr}` : ""}` : "";
-
-			const display = `${descriptor.name} ${verb}${gateNote}${errNote}${parseNote}`;
+			const display = `${descriptor.name} ${verb}${advisory ? `\n\n${advisory}` : ""}${errNote}${parseNote}`;
 
 			return {
 				content: [{ type: "text", text: display }],

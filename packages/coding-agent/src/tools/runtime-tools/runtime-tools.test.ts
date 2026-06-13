@@ -35,9 +35,12 @@ describe("resolvePolicy (drift-proof)", () => {
 		expect(errors.some(e => e.includes("nonexistent"))).toBe(true);
 	});
 
-	it("rejects a destructive verb with no explicit gate (ungoverned risk)", () => {
-		const { errors } = resolvePolicy(desc, {}); // reset is destructive, ungoverned
-		expect(errors.some(e => e.includes("reset") && e.includes("explicit gate"))).toBe(true);
+	it("auto-derives a destructive verb's gate from its class when KDL omits it", () => {
+		// PLAN-337 Phase 2: a missing gate is DERIVED from :class (no fail-loud).
+		const { policy, errors } = resolvePolicy(desc, {});
+		expect(errors).toEqual([]);
+		expect(policy.verbs.reset.gate).toBe("confirm"); // destructive default
+		expect(policy.verbs.log.gate).toBe("silent");
 	});
 
 	it("rejects an invalid gate value", () => {
@@ -144,14 +147,15 @@ describe("loadRuntimeTools", () => {
 		}
 	}, 60_000);
 
-	it("rejects a tool whose destructive verbs are ungoverned (fail-loud)", async () => {
+	it("loads a tool with no KDL policy, auto-deriving gates from :class", async () => {
 		const d = new RuntimeToolDispatcher();
 		try {
-			// No policy at all → git's destructive verbs (reset/checkout/raw) are ungoverned.
+			// No policy at all → git's destructive verbs auto-derive to confirm.
 			const { tools, errors } = await loadRuntimeTools([{ path: gitPath }], d);
-			expect(tools).toHaveLength(0);
-			expect(errors).toHaveLength(1);
-			expect(errors[0].error).toContain("explicit gate");
+			expect(errors).toEqual([]);
+			expect(tools).toHaveLength(1);
+			expect(tools[0].policy.verbs.reset.gate).toBe("confirm");
+			expect(tools[0].policy.verbs.status.gate).toBe("silent");
 		} finally {
 			d.close();
 		}
@@ -196,7 +200,36 @@ describe("createRuntimeTools (session wiring)", () => {
 		const { tools, dispose } = await createRuntimeTools(session);
 		try {
 			const git = tools.find(t => t.name === "git");
-			await expect(git!.execute("c1", { verb: "nope" }, undefined, undefined, {} as never)).rejects.toThrow(/unknown verb/);
+			await expect(git!.execute("c1", { verb: "nope" }, undefined, undefined, {} as never)).rejects.toThrow(
+				/unknown verb/,
+			);
+		} finally {
+			dispose();
+		}
+	}, 60_000);
+});
+
+describe("advisory gates (alignment over security)", () => {
+	const session = { cwd: process.cwd(), sandboxPolicy: undefined } as unknown as ToolSession;
+
+	it("a confirm-gated verb RUNS (does not block) and is flagged with details.warn + a note", async () => {
+		const { tools, dispose } = await createRuntimeTools(session);
+		try {
+			const git = tools.find(t => t.name === "git");
+			// `diff --cached` against a clean index is harmless; but its gate is read.
+			// Use `log` (silent) vs a destructive verb to assert advisory behaviour:
+			// run `reset` with a no-op ref so nothing actually changes, but it is
+			// gated confirm → must still execute and be flagged.
+			const res = await git!.execute(
+				"c1",
+				{ verb: "reset", args: { ref: "HEAD" } },
+				undefined,
+				undefined,
+				{} as never,
+			);
+			// It ran (reset HEAD is a no-op on a repo) and is flagged, not blocked.
+			expect((res.details as { warn?: boolean }).warn).toBe(true);
+			expect((res.content[0] as { text: string }).text).toContain("would require confirmation");
 		} finally {
 			dispose();
 		}

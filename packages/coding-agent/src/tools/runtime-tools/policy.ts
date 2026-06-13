@@ -33,7 +33,8 @@ export function resolvePolicy(descriptor: ToolDescriptor, raw: RawToolPolicy | u
 	const verbs: Record<string, { gate: Gate }> = {};
 	const rawEntries = raw ?? {};
 
-	// Phantom-policy check: every KDL verb must exist in the interface.
+	// Phantom-policy check: every KDL verb must exist in the interface (a real
+	// config mistake — a gate for a verb that does not exist).
 	for (const verbName of Object.keys(rawEntries)) {
 		if (!(verbName in descriptor.verbs)) {
 			errors.push(
@@ -52,18 +53,10 @@ export function resolvePolicy(descriptor: ToolDescriptor, raw: RawToolPolicy | u
 			);
 		}
 
+		// Auto-sync: a verb with no (valid) KDL gate takes its :class default. The
+		// gate is DERIVED from the homoiconic :class, never required to be written
+		// out — a user .ptc just works, and `deriveSkeleton` can persist the result.
 		const gate: Gate = rawGate !== undefined && GATES.has(rawGate) ? (rawGate as Gate) : defaultGate(verb.class);
-
-		// Ungoverned-risk check: a destructive verb must carry an EXPLICIT gate.
-		// (Its default is `confirm`, but we require the policy to state it so the
-		// risk is visible in config, never implicit.)
-		if (verb.class === "destructive" && rawGate === undefined) {
-			errors.push(
-				`tool '${descriptor.name}': destructive verb '${verbName}' has no explicit gate in KDL ` +
-					`(add \`verb "${verbName}" { gate "confirm" }\` — destructive verbs must be governed explicitly)`,
-			);
-		}
-
 		verbs[verbName] = { gate };
 	}
 
