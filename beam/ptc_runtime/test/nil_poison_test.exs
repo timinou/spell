@@ -97,4 +97,39 @@ defmodule PtcRuntime.NilPoisonTest do
       assert b["err"] =~ "need"
     end
   end
+
+  # BUG-463: get! must name the ACTUAL container, not always "map".
+  describe "get! — container-accurate failure messages (BUG-463)" do
+    test "key-miss on a LIST names it a list (the (get (tool/find ..) k) trap)" do
+      assert {:error, fail} = run_ok(~S|(get! ["a" "b"] "text")|)
+      assert fail.message =~ "list"
+      refute fail.message =~ "from map"
+    end
+
+    test "get! on nil says the value is nil (not 'absent from map')" do
+      assert {:error, fail} = run_ok(~S|(get! nil "x")|)
+      assert fail.message =~ "nil"
+      refute fail.message =~ "from map"
+    end
+
+    test "key-miss on a MAP still says map" do
+      assert {:error, fail} = run_ok(~S|(get! {"a" 1} "b")|)
+      assert fail.message =~ "map"
+    end
+  end
+
+  # BUG-462: a wrong-typed call to a real builtin must SUGGEST the right one,
+  # not dead-end at "invalid argument types".
+  describe "type_error recovery hints (BUG-462)" do
+    test "(contains? string string) points at includes?/index-of" do
+      assert {:error, fail} = run_ok(~S|(contains? "hello" "ell")|)
+      assert fail.message =~ "includes?"
+      assert fail.message =~ "index-of"
+    end
+
+    test "contains? still WORKS on real collections (no false positive)" do
+      assert {:ok, true} = run_ok(~S|(contains? {"a" 1} "a")|)
+      assert {:ok, true} = run_ok(~S|(contains? [10 20 30] 20)|)
+    end
+  end
 end

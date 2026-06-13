@@ -110,16 +110,22 @@ defmodule PtcRunner.Lisp.Runtime.MapOps do
     case FlexAccess.flex_fetch(l, k) do
       {:ok, value} -> value
       :error ->
+        # BUG-463: name the actual container. A LIST hit here usually means the
+        # value was indexed by key when it should be by position or (first …)'d
+        # — the classic (get (tool/find …) "k") trap (tool/find returns a list).
         raise ExecutionError,
           reason: :type_error,
-          message: "get!: required key #{inspect(k)} absent from map"
+          message:
+            "get!: required key #{inspect(k)} absent from list " <>
+              "(#{length(l)} items — index by position, or (first …) it first)"
     end
   end
 
   def get!(nil, k) do
+    # BUG-463: the container is nil, not a map.
     raise ExecutionError,
       reason: :type_error,
-      message: "get!: required key #{inspect(k)} absent from map"
+      message: "get!: cannot get key #{inspect(k)} — value is nil"
   end
 
   @doc """

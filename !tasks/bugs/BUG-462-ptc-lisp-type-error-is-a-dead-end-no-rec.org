@@ -1,0 +1,67 @@
+#+TITLE: PTC-Lisp type_error is a dead-end: no recovery hint for wrong-typed builtin calls
+#+STATE: DOING
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: BUG-462-ptc-lisp-type-error-is-a-dead-end-no-rec
+
+* Initial Message
+
+P5 and FUP-132 -> what would they achieve?
+
+moreover, please test-drive all this (I restart Spell)
+
+* Symptom
+
+Calling a real builtin with wrong-typed args produces a type_error that names
+the types but NOT what to use instead — a dead end. Contrast the unbound_var
+path, which always suggests ("Did you mean: …").
+
+Live repro (execute tool):
+#+begin_src
+(contains? "hello" "ell")
+;; → PtcRuntime error (type_error): contains?: invalid argument types: string, string
+#+end_src
+
+`contains?` is collections-only (map/set/list); the string analogue is
+`(includes? s sub)` or `(index-of s sub)` (>= 0). The error doesn't say so, so
+the caller is stuck. This is the residual half of the execute-ergonomics
+friction class (the other half — discoverability — was fixed by teaching
+apropos/doc in FEAT-812's execute.md pass).
+
+* Root cause
+
+`beam/ptc_runner-vendored/lib/ptc_runner/lisp/eval/helpers.ex`:
+- `type_error_for_args/2` tries `specific_type_error/2` (an EXTENSIBLE
+  pattern-match table of helpful messages — e.g. sort-by arg-order, update-vals
+  thread-direction, get/get-in collection-first) and falls back to
+  `generic_type_error/2` (line 109) which only joins `describe_type` of each
+  arg → "invalid argument types: string, string". No suggestion.
+
+The affordance to fix this ALREADY EXISTS: `specific_type_error/2` is the right
+home. The fix is additive — a new clause, not a new mechanism.
+
+* Fix
+
+Add `specific_type_error/2` clauses for the high-traffic string-vs-collection
+collisions, pointing at the right builtin:
+- `(contains? <string> <string>)` → "contains? is for collections (map/set/list).
+  For strings use (includes? s sub) or (index-of s sub) (>= 0 when present)."
+- consider `(conj <string> …)`, and any other collection fn called on a string
+  where a string analogue exists.
+
+Keep it curated (a few real collisions), not a blanket type-inference engine —
+mirrors how the existing specific clauses are hand-picked for common mistakes.
+
+Also: reinforce in `packages/coding-agent/src/prompts/tools/execute.md` the
+concrete `(get (tool/find …) "text")` → nil trap (tool/find is a LIST; use
+`(get (first …) "text")` or `get!`), since that is the sibling discoverability
+nudge.
+
+* Acceptance
+
+- `(contains? "s" "sub")` error text names `includes?`/`index-of`.
+- New ExUnit test in the vendored runner (or ptc_runtime) asserting the message.
+- Full ptc_runtime suite stays green.
+- Build/test prefixed `NK_TARGET_DIAMOND=0` (numkong/GCC16 ISA workaround).
+
+NOTE [2026-06-13]: Scoped to contains?-on-string (the actual friction). Dropped the speculative conj-on-string clause: conj is registered {:variadic_nonempty,...} (env.ex:283), not {:normal,...} like contains? (env.ex:324), so its error path produces a RuntimeError-wrapped "no function clause matching" that function_name/1 can't key on — the specific_type_error seam doesn't fire for it. contains? works because it's a direct :normal fn → FunctionClauseError → type_error_for_args. Extending the hint to variadic builtins is a separate, larger change; not warranted for a speculative case.

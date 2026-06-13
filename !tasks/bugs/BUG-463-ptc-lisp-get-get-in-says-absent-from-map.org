@@ -1,0 +1,52 @@
+#+TITLE: PTC-Lisp get!/get-in! says "absent from map" even when the container is a list or nil
+#+STATE: ITEM
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: BUG-463-ptc-lisp-get-get-in-says-absent-from-map
+
+* Initial Message
+
+P5 and FUP-132 -> what would they achieve?
+
+moreover, please test-drive all this (I restart Spell)
+
+* Symptom
+
+`get!` fails loud (good) but the message hard-codes "from map" regardless of the
+actual container, which misleads when the value is a list or nil.
+
+Live repro (execute tool):
+#+begin_src
+(get! ["a" "b"] "text")
+;; → get!: required key "text" absent from map      ← it's a LIST, not a map
+#+end_src
+
+This is the strict-accessor catch for the classic `(get (tool/find …) "text")`
+silent-nil trap (tool/find returns a LIST of node maps). `get!` correctly fails,
+but "from map" sends the reader looking for a map key when the real problem is
+"this is a list — index it, or (first …) it first."
+
+* Root cause
+
+`beam/ptc_runner-vendored/lib/ptc_runner/lisp/runtime/map_ops.ex`:
+- `get!/2` has three branches (map ~line 99, list ~line 109, nil ~line 119);
+  ALL raise the same `"get!: required key #{k} absent from map"`. The list and
+  nil branches should name their actual container.
+- check `get_in!` for the same hard-coded wording.
+
+* Fix
+
+Make the message container-accurate:
+- list branch  → name it a list ("... absent from list (N items — index by
+  position, or (first …) it)").
+- nil branch   → "... value is nil".
+- map branch   → unchanged.
+
+Small, message-only change; no behavior change.
+
+* Acceptance
+
+- `(get! ["a"] "text")` message says "list", not "map".
+- `(get! nil "k")` message says "nil".
+- ExUnit assertions for each branch; full ptc_runtime suite green.
+- Build/test prefixed `NK_TARGET_DIAMOND=0`.

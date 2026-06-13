@@ -168,6 +168,10 @@ They are keyword/string/hyphen-aware exactly like `get`. A present key whose
 value is `nil` is returned (only ABSENCE fails). A `get!` failure inside
 `psettled` settles as `{:err …}` like any other element failure.
 
+The classic silent-nil trap: `(get (tool/find …) "text")` → `nil`. `tool/find`
+returns a **LIST** of node maps, and `get` by string key on a list is `nil` (no
+error). Use `(get (first (tool/find …)) "text")`, or `get!` to fail loud.
+
 ## Capability policy
 
 Programs may call **read** and **write** tools (find, get, org, edit, create,
