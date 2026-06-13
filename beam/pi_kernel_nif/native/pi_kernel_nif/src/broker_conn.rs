@@ -138,8 +138,15 @@ fn claim_intent<'a>(
 
 	// Monitor the calling process: on its :DOWN, `Resource::down` fires and
 	// closes the held connection → broker reclaims this owner's intents.
+	//
+	// `env.monitor` returns None when the caller is ALREADY dead at claim time
+	// (it raced its own death). Then `down()` would never fire and this freshly
+	// acquired intent would leak until GC. Reclaim eagerly: close now so the broker
+	// frees it immediately — the just-dead owner can't use it anyway.
 	let caller = env.pid();
-	let _ = env.monitor(&resource, &caller);
+	if env.monitor(&resource, &caller).is_none() {
+		resource.close();
+	}
 
 	// Return `(resource, granted)`; rustler wraps the Ok in `{:ok, ...}`, so the
 	// Elixir side sees `{:ok, {resource, granted}}` → unwrapped by the wrapper.
