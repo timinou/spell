@@ -1,0 +1,108 @@
+;; git — structured git operations (PLAN-337, replaces freeform `git` via bash).
+;;
+;; Each verb builds an argv (:exec) and shapes raw stdout into structured data
+;; (:parse). :class drives the default KDL gate: read/write → silent,
+;; destructive → confirm (a shared worktree may hold other agents' uncommitted
+;; work, so destructive verbs are governed explicitly). Every verb's output is
+;; QUERYABLE by the execute coprocessor — e.g.
+;;   (->> (tool/git {:verb "log" :n 200}) (group-by #(get % "author")) (update-vals count))
+
+(def tool
+  (deftool "git"
+    {:doc "Structured git operations"
+     :verbs
+     {;; ---- read ----
+      "status"
+      {:class "read"
+       :exec  (fn [a] ["git" "status" "--porcelain"])
+       :parse (fn [out]
+                (let [lines (filter #(not= % "") (split out "\n"))]
+                  {"clean" (empty? lines)
+                   "files" (map (fn [l] {"status" (.substring l 0 2)
+                                         "path"   (.substring l 3)})
+                                lines)}))}
+
+      "log"
+      {:class "read"
+       :args  {:n {:type "int" :default 20} :path {:type "str" :optional true}}
+       ;; %x09 = a literal TAB separator git writes between fields; PTC splits on
+       ;; "\t" (PTC interprets \t/\n but NOT \uXXXX escapes). Tabs are vanishingly
+       ;; rare in author/subject; the 4-field split tolerates a stray trailing one.
+       :exec  (fn [a]
+                (let [n (get a "n")
+                      base ["git" "log" (str "-" (if (nil? n) 20 n))
+                            "--pretty=format:%H%x09%an%x09%aI%x09%s"]
+                      p (get a "path")]
+                  (if (nil? p) base (concat base ["--" p]))))
+       :parse (fn [out]
+                (->> (split out "\n")
+                     (filter #(not= % ""))
+                     (map (fn [line]
+                            (let [parts (split line "\t")]
+                              {"hash"    (get parts 0)
+                               "author"  (get parts 1)
+                               "date"    (get parts 2)
+                               "subject" (get parts 3)})))))}
+
+      "diff"
+      {:class "read"
+       :args  {:staged {:type "bool" :optional true} :path {:type "str" :optional true}}
+       :exec  (fn [a]
+                (let [base (if (get a "staged") ["git" "diff" "--stat" "--cached"] ["git" "diff" "--stat"])
+                      p (get a "path")]
+                  (if (nil? p) base (concat base ["--" p]))))
+       :parse (fn [out] {"stat" out})}
+
+      "show"
+      {:class "read"
+       :args  {:ref {:type "str" :default "HEAD"}}
+       :exec  (fn [a] ["git" "show" "--stat" (let [r (get a "ref")] (if (nil? r) "HEAD" r))])
+       :parse (fn [out] {"text" out})}
+
+      "branch"
+      {:class "read"
+       :exec  (fn [a] ["git" "branch" "--format=%(refname:short)%09%(HEAD)"])
+       :parse (fn [out]
+                (->> (split out "\n")
+                     (filter #(not= % ""))
+                     (map (fn [l]
+                            (let [parts (split l "\t")]
+                              {"name" (get parts 0) "current" (= (get parts 1) "*")})))))}
+
+      ;; ---- write (additive) ----
+      "add"
+      {:class "write"
+       :args  {:paths {:type "list"}}
+       :exec  (fn [a] (concat ["git" "add" "--"] (get a "paths")))
+       :parse (fn [out] {"ok" true})}
+
+      "commit"
+      {:class "write"
+       :args  {:message {:type "str"}}
+       :exec  (fn [a] ["git" "commit" "-m" (get a "message")])
+       :parse (fn [out] {"text" out})}
+
+      ;; ---- destructive (gated confirm by default) ----
+      "reset"
+      {:class "destructive"
+       :args  {:ref {:type "str" :default "HEAD"} :hard {:type "bool" :optional true}}
+       :exec  (fn [a]
+                (let [r (let [x (get a "ref")] (if (nil? x) "HEAD" x))]
+                  (if (get a "hard") ["git" "reset" "--hard" r] ["git" "reset" r])))
+       :parse (fn [out] {"text" out})}
+
+      "checkout"
+      {:class "destructive"
+       :args  {:ref {:type "str"} :force {:type "bool" :optional true}}
+       :exec  (fn [a]
+                (if (get a "force")
+                  ["git" "checkout" "--force" (get a "ref")]
+                  ["git" "checkout" (get a "ref")]))
+       :parse (fn [out] {"text" out})}
+
+      ;; ---- escape hatch (never a cage) ----
+      "raw"
+      {:class "destructive"
+       :args  {:argv {:type "list"}}
+       :exec  (fn [a] (concat ["git"] (get a "argv")))
+       :parse (fn [out] {"text" out})}}}))

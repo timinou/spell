@@ -1,0 +1,59 @@
+;; run — curated build/test/lint runners (PLAN-337, replaces freeform runner bash).
+;;
+;; A verb per runner. Args are LIST-shaped (no shell string → no quoting/word-
+;; splitting hazards). Known runners parse their output into structured results
+;; (passed/failed counts), so test runs are queryable instead of eye-parsed.
+;;
+;; Runners not declared here are still reachable via the `exec` escape verb,
+;; which (per KDL policy) defaults to gate "warn": it RUNS but is tinted in the
+;; TUI so real usage is observed before any hard gate is decided.
+
+(def tool
+  (deftool "run"
+    {:doc "Run curated build/test/lint commands"
+     :verbs
+     {"cargo"
+      {:class "write"
+       :args  {:args {:type "list"}}
+       :exec  (fn [a] (concat ["cargo"] (get a "args")))
+       :parse (fn [out]
+                (let [p (re-find #"(\d+) passed" out)
+                      f (re-find #"(\d+) failed" out)]
+                  {"passed" (if (nil? p) nil (parse-int (get p 1)))
+                   "failed" (if (nil? f) nil (parse-int (get f 1)))
+                   "raw" out}))}
+
+      "bun"
+      {:class "write"
+       :args  {:args {:type "list"}}
+       :exec  (fn [a] (concat ["bun"] (get a "args")))
+       :parse (fn [out]
+                (let [p (re-find #"(\d+) pass" out)
+                      f (re-find #"(\d+) fail" out)]
+                  {"passed" (if (nil? p) nil (parse-int (get p 1)))
+                   "failed" (if (nil? f) nil (parse-int (get f 1)))
+                   "raw" out}))}
+
+      "mix"
+      {:class "write"
+       :args  {:args {:type "list"}}
+       :exec  (fn [a] (concat ["mix"] (get a "args")))
+       :parse (fn [out]
+                (let [f (re-find #"(\d+) failures?" out)
+                      t (re-find #"(\d+) tests?" out)]
+                  {"tests" (if (nil? t) nil (parse-int (get t 1)))
+                   "failures" (if (nil? f) nil (parse-int (get f 1)))
+                   "raw" out}))}
+
+      "npm"
+      {:class "write"
+       :args  {:args {:type "list"}}
+       :exec  (fn [a] (concat ["npm"] (get a "args")))
+       :parse (fn [out] {"raw" out})}
+
+      ;; escape hatch: any other runner. KDL default gate "warn" (observe).
+      "exec"
+      {:class "write"
+       :args  {:argv {:type "list"}}
+       :exec  (fn [a] (get a "argv"))
+       :parse (fn [out] {"raw" out})}}}))

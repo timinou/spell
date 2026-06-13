@@ -9,6 +9,14 @@ export const ASYNC_JOB_PROGRESS_CHANNEL = "async:job:progress" as const;
 /** Reason an `AsyncJobUpdate` was emitted. */
 export type AsyncJobUpdateReason = "registered" | "progress" | "terminal";
 
+/**
+ * The kind of work a background job runs. Historically just bash/task; widened
+ * to `string` so first-class process tools (run, git, … — the bash-elimination
+ * tools, PLAN-337) can register long-running jobs through the same machinery.
+ * The known literals are kept for documentation and exhaustive UI handling.
+ */
+export type AsyncJobType = "bash" | "task" | (string & {});
+
 /** Wire-shape payload emitted on `ASYNC_JOB_PROGRESS_CHANNEL`. */
 export interface AsyncJobUpdate {
 	reason: AsyncJobUpdateReason;
@@ -18,7 +26,7 @@ export interface AsyncJobUpdate {
 /** Serialisable subset of an `AsyncJob`. */
 export interface AsyncJobSnapshot {
 	id: string;
-	type: "bash" | "task";
+	type: AsyncJobType;
 	status: SubagentOutcome;
 	label: string;
 	startTime: number;
@@ -46,7 +54,7 @@ export interface AsyncJobProgress {
 
 export interface AsyncJob {
 	id: string;
-	type: "bash" | "task";
+	type: AsyncJobType;
 	status: SubagentOutcome;
 	startTime: number;
 	label: string;
@@ -149,7 +157,7 @@ export class AsyncJobManager {
 	}
 
 	register(
-		type: "bash" | "task",
+		type: AsyncJobType,
 		label: string,
 		run: (ctx: {
 			jobId: string;
