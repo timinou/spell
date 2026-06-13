@@ -137,8 +137,16 @@ interface CodexResponsesRequest {
 	instructions: string;
 	input: CodexInputMessage[];
 	tools: CodexImageToolSpec[];
-	tool_choice: "auto";
+	/**
+	 * Force the hosted image_generation tool. With `"auto"` the gpt-5.5 text
+	 * model frequently answers text-only and never emits an image, surfacing as
+	 * "No image data returned." Forcing the tool guarantees an image_generation
+	 * call. See OpenAI Responses API tool_choice docs.
+	 */
+	tool_choice: CodexForcedToolChoice;
 }
+
+type CodexForcedToolChoice = { type: "image_generation" };
 
 interface CodexImageResult {
 	images: InlineImageData[];
@@ -402,6 +410,24 @@ function buildCodexImageTool(opts: { image_size?: string; aspect_ratio?: string 
 	const size = opts.image_size ?? aspectRatioToCodexSize(opts.aspect_ratio);
 	if (size) tool.size = size;
 	return tool;
+}
+
+/**
+ * Build the Codex `/codex/responses` request body for a hosted image
+ * generation. `tool_choice` is forced to the image_generation tool so the
+ * gpt-5.5 text model always emits an image instead of answering text-only
+ * (the cause of "No image data returned.").
+ */
+export function buildCodexRequest(req: RunImageGenerationInput, images: InlineImageData[]): CodexResponsesRequest {
+	return {
+		model: CODEX_TEXT_MODEL,
+		stream: true,
+		store: false,
+		instructions: CODEX_IMAGE_INSTRUCTIONS,
+		input: buildCodexInput(req.prompt, images),
+		tools: [buildCodexImageTool(req)],
+		tool_choice: { type: "image_generation" },
+	};
 }
 
 function buildCodexHeaders(cred: ImageApiKey): Record<string, string> {
@@ -843,15 +869,7 @@ export async function runImageGeneration(
 		}
 
 		if (provider === "openai-codex") {
-			const requestBody: CodexResponsesRequest = {
-				model: CODEX_TEXT_MODEL,
-				stream: true,
-				store: false,
-				instructions: CODEX_IMAGE_INSTRUCTIONS,
-				input: buildCodexInput(prompt, resolvedImages),
-				tools: [buildCodexImageTool(req)],
-				tool_choice: "auto",
-			};
+			const requestBody = buildCodexRequest(req, resolvedImages);
 
 			const response = await fetch(`${CODEX_BASE_URL}${CODEX_RESPONSES_PATH}`, {
 				method: "POST",
