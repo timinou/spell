@@ -1,10 +1,11 @@
 #+TITLE: build-native.ts reads ./target/debug but cargo emits to CARGO_TARGET_DIR (~/.cache) → ships stale .node silently
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 1507d4f02b2299d8
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-13T17-53-55-372Z_1507d4f02b2299d8.jsonl]]
 #+CUSTOM_ID: BUG-471-build-native-ts-reads-target-debug-but-c
 #+SESSION_ID: 1507d4f02b2299d8
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-13T17-53-55-372Z_1507d4f02b2299d8.jsonl]]
+#+COMPLETION_HASH: e7e1ae4b3ff4fb77
 
 * Initial Message
 
@@ -61,3 +62,5 @@ packages/natives/scripts/build-native.ts (targetRoots / findBuiltBinary).
 * STATE
 Unfixed. Workaround known. Affects anyone whose .cargo/config.toml redirects
 target-dir (this repo does, repo-wide).
+
+NOTE [2026-06-13]: Already fixed in HEAD (commit 45fbd2e03 "chore(prd): forgotten files"). build-native.ts now has resolveCargoTargetDir() using authoritative `cargo metadata --no-deps --format-version 1` → target_directory (option B from the report), placed FIRST in targetRoots; findBuiltBinary returns first-match in profileDirs order. Verified live: cargo metadata resolves /home/user/.cache/cargo-target (matching the global ~/.cargo/config.toml [build] target-dir redirect), no stale repo-local ./target exists. The original footgun (stale repoRoot/target winning the scan) is structurally eliminated. Closing as fixed.

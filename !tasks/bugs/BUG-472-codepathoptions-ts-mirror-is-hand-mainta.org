@@ -1,10 +1,11 @@
 #+TITLE: CodePathOptions TS mirror is hand-maintained (not napi-generated) and has no parity test → silent drift
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 1507d4f02b2299d8
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-13T17-53-55-372Z_1507d4f02b2299d8.jsonl]]
 #+CUSTOM_ID: BUG-472-codepathoptions-ts-mirror-is-hand-mainta
 #+SESSION_ID: 1507d4f02b2299d8
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-13T17-53-55-372Z_1507d4f02b2299d8.jsonl]]
+#+COMPLETION_HASH: dd96ab1607e9ebec
 
 * Initial Message
 
@@ -73,3 +74,5 @@ packages/natives/scripts/build-native.ts.
 * STATE
 Unfixed. Surfaced by PLAN-338. Not blocking PLAN-338 (fields added by hand +
 tsgo-verified), but the drift risk is systemic across all napi(object) mirrors.
+
+NOTE [2026-06-13]: Fixed per report's option B. Confirmed real drift on inspection: Rust struct had `transaction` field, TS mirror omitted it. Fix: (1) list_codepath_option_keys() napi fn in napi.rs exposing the struct's JS-facing key names, backed by assert_codepath_option_keys_exhaustive() — a compile-time tripwire that exhaustively destructures CodePathOptions with no `..` rest, so any field add/remove breaks the Rust build until the key list is updated; (2) added missing `transaction?: "best-effort"|"strict"` to TS interface; (3) codepath-options-parity.test.ts pins TS interface keys against kernel list (mirrors verb-schema-parity.test.ts). Verified: parity test 2 pass; negative test (remove a key → 2 fail) confirms the guard bites; tsgo clean on changed files; clippy/fmt clean (added reason= to the allow attr per nursery lint). Committed. NB BUG-471 turned out already-fixed in HEAD (45fbd2e03).
