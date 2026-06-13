@@ -88,6 +88,7 @@ defmodule PtcRunner.Lisp.SourceAtoms do
   @special_forms ~w(
     return fail
     try catch finally
+    probe
     task step-done task-reset
     let fn def defn defonce
     if if-let if-not if-some

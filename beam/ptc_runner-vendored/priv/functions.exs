@@ -5088,6 +5088,27 @@
       divergences: nil
     },
     %{
+      name: "probe",
+      description:
+        "A labelled, ordered sequence of checks: (probe \"title\" expr \"title\" expr ...). Each expr is evaluated in order and rendered as a titled <probe> block. A failing check settles in place as {\"err\" => reason} instead of aborting, so one broken check never loses the rest. Use it to investigate several things in one execute.",
+      binding: nil,
+      category: :core,
+      dispatch: :analyze,
+      signatures: ["(probe \"title\" expr ...)"],
+      since: nil,
+      section: "Functional Tools",
+      ptc_extension?: true,
+      examples: [
+        "(probe \"test files\" (count (tool/find {:target \"**/*.test.ts\"})))",
+        "(probe \"shape\" (keys data/x) \"first\" (first hits))"
+      ],
+      notes:
+        "Sequential analogue of psettled: per-check failures settle as {\"err\" => reason}; ctx threads across checks so a `def` in one is visible to the next. Resource kills (heap/timeout/capacity) still abort the whole run.",
+      see_also: ["psettled", "println", "doc"],
+      clojure_var: nil,
+      divergences: nil
+    },
+    %{
       name: "quote",
       description: "Return a symbolic reference without resolving it",
       binding: nil,

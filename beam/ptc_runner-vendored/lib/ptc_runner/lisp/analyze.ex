@@ -116,6 +116,7 @@ defmodule PtcRunner.Lisp.Analyze do
       :pcalls,
       :apply,
       :println,
+      :probe,
       :return,
       :fail,
       :task,
@@ -360,6 +361,7 @@ defmodule PtcRunner.Lisp.Analyze do
   defp dispatch_list_form({:symbol, :return}, rest, _list, tail?), do: analyze_return(rest, tail?)
   defp dispatch_list_form({:symbol, :fail}, rest, _list, tail?), do: analyze_fail(rest, tail?)
   defp dispatch_list_form({:symbol, :try}, rest, _list, _tail?), do: analyze_try(rest)
+  defp dispatch_list_form({:symbol, :probe}, rest, _list, _tail?), do: analyze_probe(rest)
   defp dispatch_list_form({:symbol, :task}, rest, _list, tail?), do: analyze_task(rest, tail?)
 
   defp dispatch_list_form({:symbol, :"step-done"}, rest, _list, tail?),
@@ -1126,6 +1128,41 @@ defmodule PtcRunner.Lisp.Analyze do
     with {:ok, finally_do} <- wrap_body(forms, false) do
       {:ok, finally_do}
     end
+  end
+
+  # ============================================================
+  # Investigation: (probe "title" expr "title" expr ...)
+  # A labelled, ordered sequence of checks. Each (title, expr) pair is evaluated
+  # in order; the result is an ORDERED list of [title value] pairs (a vector, so
+  # insertion order survives the wire — a map would sort keys). A pair whose expr
+  # fails settles in place as [title {"err" reason}] instead of aborting the run
+  # (the SEQUENTIAL analogue of psettled), so one broken check never loses the
+  # rest. Global safety kills (heap/timeout/capacity) still abort, like try.
+  # The execute tool renders each pair as a <probe title="...">value</probe>
+  # block, so an investigation reads as titled sections rather than raw data.
+  # ============================================================
+
+  defp analyze_probe(forms) when rem(length(forms), 2) == 0 do
+    forms
+    |> Enum.chunk_every(2)
+    |> Enum.reduce_while({:ok, []}, fn [title_ast, body_ast], {:ok, acc} ->
+      with {:ok, title} <- do_analyze(title_ast, false),
+           {:ok, body} <- do_analyze(body_ast, false) do
+        {:cont, {:ok, [{title, body} | acc]}}
+      else
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, pairs} -> {:ok, {:probe, Enum.reverse(pairs)}}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp analyze_probe(_forms) do
+    {:error,
+     {:invalid_arity, :probe,
+      "expected (probe \"title\" expr ...) with an even number of forms (title/expr pairs)"}}
   end
 
   # ============================================================

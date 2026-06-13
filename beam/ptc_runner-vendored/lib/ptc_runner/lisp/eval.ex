@@ -626,6 +626,33 @@ defmodule PtcRunner.Lisp.Eval do
     end
   end
 
+  # Investigation: (probe "title" expr ...) — a labelled, ordered sequence of
+  # checks. Evaluate each pair in order, threading ctx so a `def` in one check is
+  # visible to the next (like do/let). A check whose expr fails SETTLES in place
+  # as {"err" => reason} rather than aborting the whole probe (sequential
+  # psettled); ctx is preserved across a settled failure so later checks still
+  # run. Global safety kills (heap/timeout/capacity) re-raise past the settle,
+  # exactly like try/psettled. Result is the sentinel map
+  # {"__probe__" => [[title, value], ...]} — an ordered list of pairs the execute
+  # tool unwraps and renders as <probe title="...">value</probe> blocks.
+  defp do_eval({:probe, pairs}, %EvalContext{} = eval_ctx) do
+    {rows, final_ctx} =
+      Enum.reduce(pairs, {[], eval_ctx}, fn {title_ast, body_ast}, {acc, ctx} ->
+        {title, ctx} =
+          case do_eval(title_ast, ctx) do
+            {:ok, t, ctx2} -> {to_string(t), ctx2}
+            # A title that itself fails to evaluate is degenerate; label the row
+            # so the failure is visible rather than crashing the probe.
+            {:error, reason} -> {error_reason_to_value(reason), ctx}
+          end
+
+        {value, ctx} = eval_probe_body(body_ast, ctx)
+        {[[title, value] | acc], ctx}
+      end)
+
+    {:ok, %{"__probe__" => Enum.reverse(rows)}, final_ctx}
+  end
+
   # Dynamic task ID: (task id-expr expr) — evaluate id-expr to get the string ID
   defp do_eval({:task_dynamic, id_ast, body_ast}, eval_ctx) do
     with {:ok, id, eval_ctx} <- do_eval(id_ast, eval_ctx) do
@@ -718,6 +745,30 @@ defmodule PtcRunner.Lisp.Eval do
   # ============================================================
   # Evaluation helpers
   # ============================================================
+
+  # Evaluate one probe check body, settling a logical failure as a value while
+  # preserving the threaded ctx. Mirrors the try error channels: the {:error,_}
+  # tuple path, a raised ExecutionError / ToolExecutionError, and a `(fail v)`
+  # throw — but a STABLE resource error (heap/timeout/capacity) re-raises so a
+  # global safety limit always wins, never settled.
+  defp eval_probe_body(body_ast, %EvalContext{} = eval_ctx) do
+    try do
+      case do_eval(body_ast, eval_ctx) do
+        {:ok, value, ctx2} -> {value, ctx2}
+        {:error, reason} -> {%{"err" => error_reason_to_value(reason)}, eval_ctx}
+      end
+    rescue
+      e in ExecutionError ->
+        if stable_execution_error?(e),
+          do: reraise(e, __STACKTRACE__),
+          else: {%{"err" => Exception.message(e)}, eval_ctx}
+
+      e in PtcRunner.ToolExecutionError ->
+        {%{"err" => Exception.message(e)}, eval_ctx}
+    catch
+      {:fail_signal, value, _ctx} -> {%{"err" => value}, eval_ctx}
+    end
+  end
 
   # try/catch support (SPELL PATCH-8). Run the catch handler with the error
   # value bound to the catch var. `nil` clause = re-raise already handled by the
