@@ -40,6 +40,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	ask: askToolRenderer as ToolRenderer,
 
 	bash: bashToolRenderer as ToolRenderer,
+	terminal: bashToolRenderer as ToolRenderer, // PLAN-337: same PTY-style output display
 
 	calc: calculatorToolRenderer as ToolRenderer,
 	edit: editToolRenderer as ToolRenderer,

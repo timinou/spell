@@ -196,6 +196,7 @@ export const DEFAULT_DENYLIST: ReadonlySet<string> = new Set([
 	"execute", // no recursion into the coprocessor
 	"task", // spawns subagents that could transitively re-enter execute (PLAN-323)
 	"ask", // interactive — would deadlock the sandbox
+	"terminal", // interactive PTY — needs a real TTY, cannot run in the sandbox
 	"resolve", // deferred-action resolution is an agent-loop concern
 	"submit_result", // completion signal, not a data tool
 	// agent-state / escalation — structurally off-limits to programs

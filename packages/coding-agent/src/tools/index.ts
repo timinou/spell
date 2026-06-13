@@ -32,10 +32,8 @@ import { CancelJobTool } from "./cancel-job";
 import { CanvasTool } from "./canvas";
 import { CanvasCastTool } from "./canvas-cast";
 import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
-
 import { CreateTool } from "./create";
 import { CodepathEditTool } from "./edit";
-
 import { FetchTool } from "./fetch";
 import { FindTool } from "./find";
 import { GetTool } from "./get";
@@ -54,6 +52,7 @@ import { SendFileTool } from "./send-file";
 import { loadSshTool } from "./ssh";
 import { StatusTool } from "./status";
 import { SubmitResultTool } from "./submit-result";
+import { TerminalTool } from "./terminal";
 import { type TodoNode, TodoWriteTool } from "./todo-write";
 
 // Exa MCP tools (22 tools)
@@ -236,6 +235,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	render_mermaid: s => new RenderMermaidTool(s),
 	ask: AskTool.createIf,
 	bash: s => new BashTool(s),
+	terminal: s => new TerminalTool(s),
 
 	calc: s => new CalculatorTool(s),
 	ssh: loadSshTool,
@@ -314,6 +314,7 @@ export const TOOL_TIERS: Record<string, ToolTier> = {
 
 	render_mermaid: "specialized",
 	ssh: "specialized",
+	terminal: "specialized", // PLAN-337: the scoped interactive-PTY escape hatch
 	inspect_image: "specialized",
 	browser: "specialized",
 	checkpoint: "specialized",
