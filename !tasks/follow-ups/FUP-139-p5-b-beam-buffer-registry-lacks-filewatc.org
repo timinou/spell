@@ -1,0 +1,69 @@
+#+TITLE: P5.B BEAM buffer registry lacks FileWatcher + edit-recorder parity
+#+STATE: ITEM
+#+SESSION_ID: 1503ad6112fe682a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-10T12-27-09-771Z_1503ad6112fe682a.jsonl]]
+#+CUSTOM_ID: FUP-139-p5-b-beam-buffer-registry-lacks-filewatc
+
+* Initial Message
+
+i restarted the session; please write the "What I'd still consider" as FUPs if not done already, then focus on P5 and the FUP that you left for later; explain them again with their call sites and what they enable down the line. Try to use the 'execute' tool as much as possible to discover any warts previously undiscovered, thanks.
+
+* Context (follow-on to P5.B, commit 3a614bfea)
+
+P5.B added a warm BEAM-side `BufferRegistry` in the NIF (`buffers()` in
+`beam/pi_kernel_nif/native/pi_kernel_nif/src/lib.rs`) so `apply_edit/3` can
+commit edits through the kernel. It is built with:
+#+begin_src rust
+BufferRegistry::new_with_coord(registry().clone(), None, Arc::new(SocketCoordClient::new(endpoint)))
+#+end_src
+i.e. `watcher: None` and NO edit-recorder.
+
+The NAPI side (`crates/pi-natives/src/lib.rs::buffer_registry`) wires BOTH:
+- a `FileWatcher` whose `on_change` invalidates `code_graph_cache` +
+  `semantic_cache` (BUG-414 / FUP-100), and
+- an edit-recorder closure that (a) pushes didChange to warm LSPs and (b) writes
+  `.spell/edit-history.jsonl` (the undo/journal history).
+
+* The gap
+
+A BEAM-applied edit today:
+- does NOT invalidate the workspace graph/semantic caches → a subsequent BEAM
+  edge query (P5.A `resolve_edges`) could serve a stale index after a BEAM edit.
+- does NOT record edit history → no `.spell/edit-history.jsonl` entry, so the
+  edit is invisible to history/undo tooling and to the LSP didChange path.
+
+This is acceptable for the CURRENT state (the BEAM edit lane is proven end-to-end
+but not yet the production edit path; the NAPI side remains authoritative and
+wires everything). It becomes load-bearing the moment BEAM-applied edits go live
+alongside reads.
+
+* Fix (when BEAM editing goes live)
+
+Wire the BEAM `buffers()` registry like the napi one:
+- `FileWatcher::new()` + `on_change` → `pi_kernel::invalidate_for_file` (now
+  kernel-side after P5.A) for the graph cache; semantic cache invalidation stays
+  napi-side (embeddings lane is node-only), so the BEAM watcher covers only the
+  graph cache.
+- an edit-recorder writing the same `.spell/edit-history.jsonl` schema
+  (`crate::code_path::edit_history` is napi-side; the JSONL writer would need a
+  host-agnostic home, or the BEAM records via its own path).
+
+Note the cache-invalidation half is now cheap to do (P5.A moved
+`get_or_build_graph`/`invalidate_for_file` into pi-kernel); the history/LSP half
+is the larger piece (edit_history + semantic_cache are still napi-side).
+
+* Acceptance
+
+A BEAM `apply_edit` to a file under a workspace with a warm graph invalidates
+that graph (next `resolve_edges` rebuilds) and appends an edit-history entry,
+matching the napi edit path. Test: warm a graph, BEAM-edit a file, assert the
+cached graph was dropped + a history entry exists.
+
+* Priority
+
+#C — only matters when BEAM-applied edits become a live path. Today napi remains
+the authoritative editor; the BEAM lane is proven but dormant.
+
+* Relationships
+
+Follow-on to PLAN-336 P5.B (3a614bfea).

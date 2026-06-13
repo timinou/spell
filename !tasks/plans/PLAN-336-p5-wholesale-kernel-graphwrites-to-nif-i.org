@@ -114,3 +114,40 @@ NOTE [2026-06-13]: SCOPE CORRECTION (file-verified): P5.1-edges and P5.2-index a
 ∴ Revised plan: lift edge_resolver + code_graph_cache into pi-kernel (or a sibling host-agnostic crate) + add a kernel resolve_edges entry → the NIF gets edges AND the resident shared index TOGETHER. The two-kernels RAM win (P5.2) falls out of the same move. The embeddings/semantic-search lane (code_graph.rs, napi::Result + embedding worker) stays node-side, deferrable — it's the genuinely napi-heavy part.
 
 Revised sequencing: P5.A = lift edge_resolver+code_graph_cache to pi-kernel + kernel resolve_edges entry + NIF edge entry (delivers edges + shared index). P5.B = writes carve (buffer registry — the hard, separate one). P5.3 = zero-copy handles (independent). Semantic search lane deferred.
+
+NOTE [2026-06-13]: P5.A SHIPPED (commit 546f9d04f): edge_resolver + code_graph_cache lifted to pi-kernel (host-agnostic); new resolve_edges kernel entry + NIF resolve_edges/2 + Elixir wrappers. BEAM resolves cross-file def→ through the warm resident index. This delivers BOTH the edge lane (orig P5.1-edges) AND the shared-index move (orig P5.2) — they were one carve. Tests green: pi-kernel edges 3 (non-vacuous cross-file), NIF 10/10, kernel_parity 8, code_path 289. The two-kernels RAM win (GT-7) is structurally enabled.
+
+REMAINING P5 work:
+- P5.B (writes carve): mutation.rs → host-agnostic. HARDER — depends on the buffer registry (code_buffer.rs, napi-coupled state: buffer registry + undo history). This is the genuinely hard separable piece. NOT yet started.
+- P5.3 (zero-copy handles): HandleStore large terms → rustler ResourceArc. Independent. Under assessment.
+- Semantic/embeddings lane (code_graph.rs): stays node-side (napi + embedding worker); deferred indefinitely unless a BEAM semantic-search need arises.
+
+NOTE [2026-06-13]: P5.B SCOPE CORRECTION (file-verified, much smaller than feared):
+- The buffer ENGINE is ALREADY host-agnostic: BufferRegistry + edit_transaction + undo history all live in crates/pi-code-engine/src/buffer.rs (323/605); pi-code-engine has ZERO napi/rustler deps.
+- pi-natives only holds a OnceLock<BufferRegistry> ACCESSOR (lib.rs:44) wired with host bits: BrokerEndpoint::default_for("napi"), FileWatcher, SocketCoordClient, an edit-recorder closure (semantic cache + JSONL history).
+- The MUTATION LOGIC (mutation.rs) has ZERO napi refs. Its only pi-natives couplings are 3 crate:: calls: code_buffer::get_profile, code_buffer::single_action, buffer_registry().
+- single_action + ALL action_* helpers (code_buffer.rs:912-1290) return CodeEngineError (host-agnostic), operate on serde_json::Value + CodeBuffer, ZERO napi refs. They merely LIVE in a file (code_buffer.rs) that ALSO has napi exports.
+
+∴ STATE-OWNERSHIP concern DISSOLVES: cross-runtime edit coordination already goes through the broker socket (SocketCoordClient + gate-3 claim_intent). A BEAM-side registry reuses the SAME broker arbitration — no split-brain (that's what P3.8 gate-3 is for).
+
+REVISED P5.B PLAN (clean carve, like P5.A):
+1. Move the host-agnostic edit helpers (single_action, action_*, resolve_target_id, range_for_action, etc.) out of code_buffer.rs into a pi-kernel module (e.g. pi-kernel/edit.rs) OR a shared pi-code-engine spot. They're already CodeEngineError-based.
+2. Move mutation.rs (NativeResolver mutation impl) kernel-side, taking the registry as a param instead of crate::buffer_registry().
+3. Add a kernel apply_edit() entry + NIF apply_edit/N (catch_unwind gate-2). The NIF builds/holds a BufferRegistry wired to the SAME broker endpoint (BrokerEndpoint::default_for("beam") or shared).
+4. Gate: NIF edit result == NAPI edit (parity), broker coordination intact (gate-3 still arbitrates).
+
+Risk: single_action is large (~330 lines) + pulls many action_* helpers; the carve is mechanical but wide. The napi DTO rendering (render_edit_results etc.) STAYS node-side.
+
+NOTE [2026-06-13]: P5.B SHIPPED (commits ce50e5621 steps 1-2, 3a614bfea step 3). The BEAM now applies edits through the kernel via NIF apply_edit/3 — full write parity alongside P5.A's read+edges.
+
+What landed:
+- edit_ops.rs in pi-kernel: single_action cluster + EDN helpers + prove_dead_style + get_profile + apply_edit (host-agnostic, runs single_action inside BufferRegistry::edit_transaction).
+- mutation.rs repointed to pi_kernel::edit_ops (napi edit lane unchanged behavior).
+- NIF apply_edit/3 (DirtyIo, catch_unwind gate-2): warm BEAM BufferRegistry wired to broker as 'beam' peer → cross-runtime edit coordination shared with napi 'napi' peer through the SAME broker. State-ownership question RESOLVED (no split-brain; broker arbitrates, per gate-3).
+
+Verify: NIF 12/12, pi-kernel 54, code_path 289, code_buffer 21, mutation 7 — green.
+
+P5 STATUS NOW: P5.A (read+edges+index) ✓, P5.B (writes) ✓. Remaining/deferred:
+- Semantic/embeddings lane (code_graph.rs napi+embedding worker): stays node-side, deferred indefinitely (no BEAM semantic-search need).
+- P5.3 zero-copy handles: superseded by FUP-137 (incoherent as specced; real opportunity = NIF JSON round-trip, evidence-gated).
+- Follow-on hardening for P5.B: the BEAM 'beam'-peer registry uses no FileWatcher + no edit-recorder (napi side wires both); a real BEAM edit deployment would want watcher-driven cache invalidation + journal/history parity. Candidate FUP if BEAM editing goes live.
