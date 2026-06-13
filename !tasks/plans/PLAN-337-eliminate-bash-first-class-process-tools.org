@@ -286,3 +286,74 @@ enhancements, runtime-tools Phase 1, task docs, Phase 1b).
 - Phase 3: confirm gate → interactive pending-action (currently warn+note).
 - Phase 4: scoped `terminal` pty tool; demote bash from CORE; delete bash +
   bash-interceptor; retire SandboxPolicy.bashAllow/bashDeny for per-tool policy.
+
+** ITEM Capability policy: ideal infra vs alignment-first NOW
+:PROPERTIES:
+:CUSTOM_ID: PLAN-337-eliminate-bash-first-class-process-tools::capability-policy-infra
+:END:
+User direction: prioritise ALIGNMENT over security now. Nothing blocks, nothing
+prompts; but anything that WOULD be gated under the full policy emits a VISIBLE
+warning, so the future policy surface is observable before it is built.
+
+** Ideal infra (target, for later) — three separated layers
+1. CLASSIFICATION (source of truth = the homoiconic .ptc). Each verb's :class
+   (read|write|destructive) IS the capability. effectOf(name, args) refines
+   per-verb by reading args.verb → the verb's class (the refineEffect hook
+   already does this for org/memory; runtime tools slot in via an injected
+   verb-class registry). NOT a coarse per-tool tag — git diff is :read, git
+   reset is :destructive, in the same tool.
+2. POLICY = allowed effects + per-effect/per-verb DISPOSITION
+   (allow|warn|confirm|deny). KDL `gate` per verb overrides the class default.
+   "git reset → confirm in a shared worktree" lives here.
+3. ENFORCEMENT CONTEXT = who calls changes disposition. Model→TUI can prompt
+   (confirm works). execute is the FINAL EXECUTION ENVIRONMENT — cannot prompt,
+   so confirm collapses to warn-or-deny; the program is the trusted orchestrator.
+   Do NOT force the model→TUI gate paradigm into execute; reshape it.
+
+End state: one :class declaration drives catalog + classification + policy +
+gate + TUI rendering — zero drift, all read the same homoiconic source.
+
+** What ships NOW (alignment-first)
+Gates are ADVISORY everywhere. silent → run quiet. warn|confirm|deny → RUN
+anyway + warn-tint (details.warn) + a note stating what the full policy WOULD do
+(e.g. "[would confirm: git reset is :destructive]"). deny does NOT block yet —
+it warns loudly. This gives full power immediately AND makes every future
+confirm/deny point visible, which informs how to flesh out layer 2 later. Zero
+security infra built now — pure signal.
+
+* Phase 2 status (2026-06-13): ACTIVE + EXECUTE-CALLABLE + AUTO-SYNC + USER DIRS
+
+git/run are activated by default and callable from inside execute:
+- ACTIVATE: runtimeTools.enabled defaults true (no flag).
+- USER DIRS: discover ~/.spell/agent/tools + <cwd>/.spell/tools *.ptc; a user
+  tool overrides a built-in by name (project > user > built-in).
+- AUTO-SYNC: resolvePolicy derives each verb's gate from its :class when KDL
+  omits it (no manual `spell tools sync`, no fail-loud). KDL only overrides;
+  phantom-policy + invalid-gate stay hard errors.
+- ADVISORY GATES (alignment over security per user): NOTHING blocks (not even
+  deny). Anything stricter than silent RUNS + warn-tint + a note stating what
+  the full policy WOULD do, so every future confirm/deny point is observable.
+- EXECUTE-CALLABLE: (tool/git {:verb "log"}) etc. work inside execute. Per-verb
+  effects derived from :class (read→read, write/destructive→write) keep calls
+  within the default {pure,read,write} policy without opening the exec lane
+  (bash stays out). Provider injects the dynamic runtime tools; effectOf reads
+  args.verb via a registry.
+
+Proven live: (->> (tool/git {:verb "log"}) (map #(get % "subject"))) returns
+commits; a probe combining git status + branch + run exec runs in one program.
+Tests: 16 runtime-tools + 211 ptc-runtime + 33 createTools green. 3 Phase-2
+commits (s1-s3 activate/dirs/auto-sync/advisory; s4 execute-callable; + this).
+
+** Capability-policy ideal infra (recorded for later)
+See suboutline "capability-policy-infra": 3 layers — classification (homoiconic
+:class), policy (effects + per-verb disposition allow|warn|confirm|deny), and
+enforcement context (model→TUI can prompt; execute is the final environment,
+confirm collapses to warn-or-deny). NOW everything is advisory; the warnings
+make the future policy surface observable before it is built.
+
+* Remaining (future)
+- Phase 3: turn advisory gates into real enforcement (confirm→interactive
+  pending-action in model→TUI; deny blocks) once the policy strategy is fleshed
+  out from observing the advisory warnings.
+- Phase 4: scoped `terminal` pty tool; demote bash from CORE; delete bash +
+  bash-interceptor; retire SandboxPolicy.bashAllow/bashDeny.
