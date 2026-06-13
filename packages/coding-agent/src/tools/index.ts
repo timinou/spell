@@ -46,9 +46,9 @@ import { OrgTool } from "./org";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { ExecuteTool } from "./ptc-runtime/execute";
 import { RenderMermaidTool } from "./render-mermaid";
-import { createRuntimeTools } from "./runtime-tools/session";
 import { ResolveTool } from "./resolve";
 import { reportFindingTool } from "./review";
+import { createRuntimeTools } from "./runtime-tools/session";
 import { SearchToolBm25Tool } from "./search-tool-bm25";
 import { SendFileTool } from "./send-file";
 import { loadSshTool } from "./ssh";
@@ -273,7 +273,12 @@ export type ToolTier = "core" | "standard" | "specialized";
 export const TOOL_TIERS: Record<string, ToolTier> = {
 	// Core — always loaded, essential for any task
 
-	bash: "core",
+	// execute (the PTC-Lisp coprocessor) is the primary action tool: structured
+	// I/O, tool composition, and — via runtime tools (PLAN-337: git, run) — a
+	// growing superset of what bash does, with queryable results. Promoted to
+	// core; bash is demoted to standard (kept, not deleted: Phase 5 removes it
+	// only after sustained sessions never need it).
+	execute: "core",
 
 	task: "core",
 	ask: "core",
@@ -281,6 +286,11 @@ export const TOOL_TIERS: Record<string, ToolTier> = {
 	// Standard — loaded by default, common development tools
 
 	edit: "standard",
+
+	// bash: demoted from core (PLAN-337). Still loaded by default — the process
+	// escape hatch — but no longer the headline action tool; prefer execute +
+	// runtime tools (git, run). Removal is deferred to Phase 5.
+	bash: "standard",
 
 	todo_write: "standard",
 	org: "standard",
@@ -311,7 +321,6 @@ export const TOOL_TIERS: Record<string, ToolTier> = {
 	calc: "specialized",
 	search_tool_bm25: "specialized",
 	send_file: "specialized",
-	execute: "specialized",
 };
 
 /** Get the tool tier, defaulting to "standard" for unknown tools (e.g. MCP tools). */
@@ -405,7 +414,11 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	// all, when no explicit list). Failures are non-fatal (logged by the loader).
 	if (session.settings.get("runtimeTools.enabled")) {
 		try {
-			const { tools: runtimeTools } = await logger.timeAsync("createTools:runtimeTools", createRuntimeTools, session);
+			const { tools: runtimeTools } = await logger.timeAsync(
+				"createTools:runtimeTools",
+				createRuntimeTools,
+				session,
+			);
 			for (const rt of runtimeTools) {
 				if (requestedTools === undefined || requestedTools.includes(rt.name.toLowerCase())) {
 					tools.push(wrapToolWithMetaNotice(rt));

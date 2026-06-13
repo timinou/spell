@@ -225,11 +225,15 @@ describe("TOOL_TIERS", () => {
     expect(tieredKeys).toEqual(builtinKeys);
   });
 
-  it("assigns core tier to essential tools", () => {
-    const coreTier: string[] = ["bash", "task", "ask"]; // lsp demoted in PLAN-318 W6
+  it("assigns core tier to essential tools (execute promoted in PLAN-337)", () => {
+    const coreTier: string[] = ["execute", "task", "ask"]; // execute promoted, bash demoted (PLAN-337)
     for (const name of coreTier) {
       expect(getToolTier(name)).toBe("core");
     }
+  });
+
+  it("demotes bash to standard (PLAN-337: prefer execute + runtime tools; bash kept until Phase 5)", () => {
+    expect(getToolTier("bash")).toBe("standard");
   });
 
   it("assigns standard tier to find/edit/create/status (post-PLAN-306 cutover)", () => {
