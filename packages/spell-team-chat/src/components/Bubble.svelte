@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { ChatBubble } from "../lib/stores.svelte";
 	import { formatClock } from "../lib/time";
+	import { classifyDiffLines, summariseArgs } from "../lib/bubble-presentation";
 	import ArtifactInline from "./ArtifactInline.svelte";
 
 	interface Props {
@@ -21,6 +22,19 @@
 		if (/^redo[\s·]/.test(t)) return "redo";
 		return null;
 	});
+
+	// A tool_start carries `args` but no `text`, so it used to render as "(empty)".
+	// Summarise the salient target (path/target/command/query/…) into a compact
+	// mono line, mirroring the structured-tile language of the side panels.
+	const toolSummary = $derived.by<string | null>(() =>
+		bubble.kind === "tool_start" || bubble.kind === "tool_update" ? summariseArgs(bubble.args) : null,
+	);
+
+	// Split a tool result body into typed lines so unified diffs render with
+	// add/remove/hunk accents instead of a flat grey slab.
+	const bodyLines = $derived.by(() =>
+		bubble.kind === "tool_end" && bubble.text ? classifyDiffLines(bubble.text) : null,
+	);
 </script>
 
 <div class="bubble {bubble.kind}" class:err={bubble.isError} class:edit-declined={editClass === "declined"} class:edit-undo={editClass === "undo" || editClass === "redo"}>
@@ -82,8 +96,15 @@
 			{/if}
 		{:else if bubble.kind === "artifact" && bubble.artifact}
 			<ArtifactInline artifact={bubble.artifact} {token} />
+		{:else if toolSummary}
+			<code class="tool-summary">{toolSummary}</code>
+		{:else if bodyLines}
+			<pre class="text diff">{#each bodyLines as ln}<span class="dl {ln.cls}">{ln.text}
+</span>{/each}</pre>
 		{:else if bubble.text}
 			<pre class="text">{bubble.text}</pre>
+		{:else if bubble.kind === "tool_start"}
+			<span class="muted small">running…</span>
 		{:else}
 			<span class="muted">(empty)</span>
 		{/if}
@@ -214,4 +235,26 @@
 		gap: 6px;
 		flex-wrap: wrap;
 	}
+	/* tool_start target summary — a compact mono chip instead of "(empty)". */
+	.tool-summary {
+		display: inline-block;
+		max-width: 100%;
+		padding: 2px 7px;
+		border-radius: var(--radius-sm);
+		background: var(--bg-tertiary);
+		border: 1px solid var(--border-secondary);
+		font-family: var(--font-mono, monospace);
+		font-size: var(--font-size-xs);
+		color: var(--text-secondary);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	/* Unified-diff bodies get per-line add/remove/hunk accents. */
+	.text.diff { display: block; }
+	.dl { display: block; }
+	.dl.add { color: var(--color-success); background: color-mix(in srgb, var(--color-success) 12%, transparent); }
+	.dl.del { color: var(--color-error); background: color-mix(in srgb, var(--color-error) 12%, transparent); }
+	.dl.hunk { color: var(--accent-secondary); opacity: 0.85; }
+	.dl.ctx { color: var(--text-secondary); }
 </style>
