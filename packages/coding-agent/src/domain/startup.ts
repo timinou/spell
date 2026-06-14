@@ -34,6 +34,12 @@ export function resolveStartupRoute(options: ResolveStartupRouteOptions): Startu
 		return { kind: "print", mode: options.mode ?? "text" };
 	}
 	const interactiveSurface = options.domainManifest?.interactiveSurface ?? "tui";
+	// A headless/autonomous domain (`surface "none"`) has no human present:
+	// with no explicit mode/canvas/pipe above, fall through to one-shot print
+	// rather than launching an interactive TUI that would block on input.
+	if (interactiveSurface === "none") {
+		return { kind: "print", mode: "text" };
+	}
 	if (interactiveSurface === "qml" && options.displayAvailable) {
 		return { kind: "interactive-qml" };
 	}

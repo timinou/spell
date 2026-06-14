@@ -38,6 +38,22 @@ use crate::embedder_adapter::DaemonEmbedder;
 const SCANNED_SUBDIRS: &[&str] = &["!tasks", ".spell/memory"];
 const EMBEDDER_DIM: usize = 1024;
 
+/// Env var gating the embedding (vector) lane. Set to `0`/`false`/`off` by a
+/// declarative autonomous domain (`knowledge { embeddings #false }`) to skip
+/// the fastembed bge-m3 model load entirely: no model download, no RAM, no
+/// embed stall. Recall self-degrades to BM25 + graph (the `search()`
+/// `vec.is_empty()` path), so the lane stays fully servable — just lexical.
+const EMBEDDINGS_ENV_VAR: &str = "PI_KNOWLEDGE_WORKER_EMBEDDINGS";
+
+/// True when embeddings are explicitly disabled via env. Absent/unrecognized
+/// → enabled (embeddings are the default; opt-out only).
+pub fn embeddings_disabled() -> bool {
+	matches!(
+		std::env::var(EMBEDDINGS_ENV_VAR).ok().as_deref(),
+		Some("0") | Some("false") | Some("off") | Some("FALSE") | Some("OFF")
+	)
+}
+
 // ---------------------------------------------------------------------------
 // Warm-load progress
 // ---------------------------------------------------------------------------
@@ -218,9 +234,18 @@ impl OrgLane {
 
 		let graph = build_typed_graph(&items);
 
-		// Phase 3 — embed (the expensive, model-bound phase).
-		progress.enter(WarmPhase::Embed, items.len());
-		let vec = build_vec_index_with(&items, embedder, progress)?;
+		// Phase 3 — embed (the expensive, model-bound phase). Skipped entirely
+		// when embeddings are disabled (autonomous/container profile): the lane
+		// keeps an empty vector index and `search()` degrades to BM25 + graph,
+		// avoiding the bge-m3 model load (download + RAM) altogether.
+		let vec = if embeddings_disabled() {
+			progress.enter(WarmPhase::Embed, items.len());
+			progress.done.store(items.len(), Ordering::SeqCst);
+			VectorIndex::new(EMBEDDER_DIM, items.len().max(1)).map_err(|e| format!("vec init: {e}"))?
+		} else {
+			progress.enter(WarmPhase::Embed, items.len());
+			build_vec_index_with(&items, embedder, progress)?
+		};
 
 		// Phase 4 — done.
 		progress.enter(WarmPhase::Done, items.len());
@@ -599,6 +624,32 @@ mod tests {
 		assert!(lane.items.len() >= 2, "expected >=2 items, got {}", lane.items.len());
 		assert!(lane.docs.len() == lane.items.len());
 		assert!(lane.items.iter().any(|i| i.id == "CON-alpha"));
+	}
+
+	#[test]
+	fn embeddings_disabled_skips_vector_lane() {
+		let _g = lane_lock();
+		let tmp = TempDir::new().expect("tmp");
+		seed_corpus(tmp.path());
+		// SAFETY: lane_lock serialises env mutation across lane tests.
+		unsafe { std::env::set_var(EMBEDDINGS_ENV_VAR, "0") };
+		let lane = OrgLane::warm_load(tmp.path()).expect("warm");
+		unsafe { std::env::remove_var(EMBEDDINGS_ENV_VAR) };
+		// Items + lexical corpus present, but the vector lane is empty: the
+		// embed phase was skipped (no model load). search() degrades to BM25.
+		assert!(lane.items.len() >= 2, "corpus still scanned");
+		assert!(lane.vec.is_empty(), "vector lane must be empty when embeddings disabled");
+	}
+
+	#[test]
+	fn embeddings_disabled_recognizes_falsey_values() {
+		let _g = lane_lock();
+		for (val, want) in [("0", true), ("false", true), ("off", true), ("1", false), ("", false)] {
+			// SAFETY: lane_lock serialises env mutation.
+			unsafe { std::env::set_var(EMBEDDINGS_ENV_VAR, val) };
+			assert_eq!(embeddings_disabled(), want, "value {val:?}");
+		}
+		unsafe { std::env::remove_var(EMBEDDINGS_ENV_VAR) };
 	}
 
 	#[test]

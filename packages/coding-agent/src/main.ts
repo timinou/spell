@@ -24,8 +24,9 @@ import { findConfigFile } from "./config";
 import { ModelRegistry } from "./config/model-registry";
 import { resolveCliModel, resolveModelRoleValue, resolveModelScope, type ScopedModel } from "./config/model-resolver";
 import { Settings, settings } from "./config/settings";
-import { loadMergedProviderConfigs } from "./config/spell-kdl";
+import { loadDomainDefs, loadMergedProviderConfigs } from "./config/spell-kdl";
 import { initializeWithSettings } from "./discovery";
+import { activateDomain } from "./domain/activation";
 import { detectDomain } from "./domain/detection";
 import { loadActiveDomain, type SpellDomain } from "./domain/loader";
 import { resolveStartupRoute } from "./domain/startup";
@@ -682,7 +683,10 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		// Explicit --canvas <name> keeps the named canvas mode regardless of domain.
 		const domainOverride = parsedArgs.canvas === "" ? "growth" : parsedArgs.domain;
 		const activeDomain = await logger.timeAsync("detectDomain", () => detectDomain(cwd, domainOverride));
-		domainManifest = await logger.timeAsync("loadActiveDomain", () => loadActiveDomain(activeDomain, cwd));
+		const domainDefs = await logger.timeAsync("loadDomainDefs", () => loadDomainDefs(cwd, getAgentDir()));
+		domainManifest = await logger.timeAsync("loadActiveDomain", () =>
+			loadActiveDomain(activeDomain, cwd, domainDefs),
+		);
 		if (parsedArgs.canvas === "") {
 			// Clear the canvas sentinel so startup route falls through to domain-driven
 			// interactive-qml (growth domain has interactiveSurface: 'qml').
@@ -694,6 +698,25 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		process.exit(1);
 	}
 	await logger.timeAsync("settings:init", () => Settings.init({ cwd }));
+	// Apply the active domain's declarative runtime contract (env require/set,
+	// knowledge-lane signal, model-role pins). Fail loud on a missing required
+	// env var — a declarative domain whose contract can't be honored must not
+	// silently fall back. Runs after Settings.init (model-role override sink) and
+	// before session/worker spawn (env vars are read at boot).
+	try {
+		const activation = activateDomain(domainManifest, { settings });
+		if (activation.forcedEnv.length > 0 || activation.pinnedRoles.length > 0) {
+			logger.info("domain:activate", {
+				domain: domainManifest.name,
+				forcedEnv: activation.forcedEnv,
+				pinnedRoles: activation.pinnedRoles,
+			});
+		}
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		process.stderr.write(`${chalk.red(`Error: ${message}`)}\n`);
+		process.exit(1);
+	}
 	if (parsedArgs.noPty) {
 		Bun.env.PI_NO_PTY = "1";
 	}

@@ -33,7 +33,18 @@ function isBuiltinDomain(name: string): boolean {
  * selection like `growth` always resolves to the bundled manifest instead of any
  * arbitrary `cwd/domain/growth/manifest.ts` folder.
  */
-export async function loadActiveDomain(name: string, cwd: string): Promise<SpellDomain> {
+export async function loadActiveDomain(
+	name: string,
+	cwd: string,
+	domainDefs?: Map<string, SpellDomain>,
+): Promise<SpellDomain> {
+	// Inline KDL `domain "x" { … }` definitions win over built-in/workspace
+	// manifests with the same name: a declarative domain is the most local,
+	// explicit source of truth.
+	const kdlDef = domainDefs?.get(name);
+	if (kdlDef) {
+		return kdlDef;
+	}
 	if (isBuiltinDomain(name)) {
 		return await loadBuiltinDomain(name, BUILTIN_DOMAIN_LOADERS[name]);
 	}
@@ -166,8 +177,13 @@ function validateManifest(name: string, manifest: unknown): void {
 	if (m.shellQmlPath !== undefined && typeof m.shellQmlPath !== "string") {
 		throw new Error(`${ctx} field 'shellQmlPath' must be a string when provided`);
 	}
-	if (m.interactiveSurface !== undefined && m.interactiveSurface !== "tui" && m.interactiveSurface !== "qml") {
-		throw new Error(`${ctx} field 'interactiveSurface' must be either 'tui' or 'qml' when provided`);
+	if (
+		m.interactiveSurface !== undefined &&
+		m.interactiveSurface !== "tui" &&
+		m.interactiveSurface !== "qml" &&
+		m.interactiveSurface !== "none"
+	) {
+		throw new Error(`${ctx} field 'interactiveSurface' must be 'tui', 'qml', or 'none' when provided`);
 	}
 	if (m.modesDir !== undefined && typeof m.modesDir !== "string") {
 		throw new Error(`${ctx} field 'modesDir' must be a string when provided`);

@@ -9,6 +9,8 @@ import { resolveTemplate } from "../templates";
 import { type AgentRulesConfig, parseAgentsBlock } from "./agents-kdl";
 import { getStringArgument } from "./kdl-helpers";
 import { parseKeybindingsBlock } from "./kdl-keybindings";
+import type { SpellDomain } from "../domain/loader";
+import { isDomainDefinition, parseDomainBlocks, resolveDomainManifests } from "./kdl-domains";
 import type { ParsedModeBlock } from "./kdl-modes";
 import { parseModeBlocks } from "./kdl-modes";
 import { type KdlProviderConfig, parseProvidersBlock } from "./kdl-providers";
@@ -19,6 +21,12 @@ import { parseTaskPoliciesKdl } from "./task-policies-kdl";
 
 export interface SpellProjectConfig {
 	domain?: string;
+	/**
+	 * Inline `domain "x" { … }` definitions (declarative domains). Keyed by
+	 * name, with `extends` chains already resolved into full `SpellDomain`
+	 * manifests. The loader prefers these over built-in/workspace manifests.
+	 */
+	domainDefs?: Map<string, SpellDomain>;
 	policies: TaskPolicyConfig;
 	settings: RawSettings;
 	providers?: {
@@ -90,8 +98,14 @@ function mergeSpellConfigs(base: SpellProjectConfig, override: SpellProjectConfi
 				}
 			: undefined;
 
+	const domainDefs =
+		base.domainDefs || override.domainDefs
+			? new Map([...(base.domainDefs ?? []), ...(override.domainDefs ?? [])])
+			: undefined;
+
 	return {
 		domain: override.domain ?? base.domain,
+		domainDefs,
 		policies: { version: 1, layers: mergedLayers, policies: mergedPolicies },
 		settings: mergeRawSettings(base.settings, override.settings),
 		providers,
@@ -219,7 +233,13 @@ export async function parseSpellKdl(
 	for (const node of document.nodes) {
 		switch (node.getName()) {
 			case "domain":
-				result.domain = getStringArgument(node);
+				// A `domain "x"` selector (no children) names the active domain.
+				// A `domain "x" { … }` definition is a declarative domain and is
+				// collected separately below (parseDomainBlocks) — it does NOT set
+				// the active-domain selector.
+				if (!isDomainDefinition(node)) {
+					result.domain = getStringArgument(node);
+				}
 				break;
 			case "import": {
 				const ns = getStringArgument(node);
@@ -272,6 +292,23 @@ export async function parseSpellKdl(
 		result.modes = [...(result.modes ?? []), ...modes];
 	}
 
+	// Inline `domain "x" { … }` definitions → resolved SpellDomain manifests.
+	// extends/cycle errors are config errors: surface as a warning and skip the
+	// offending set rather than aborting the whole config load.
+	const domainBlocks = parseDomainBlocks(document);
+	if (domainBlocks.length > 0) {
+		try {
+			const resolved = resolveDomainManifests(domainBlocks);
+			result.domainDefs = result.domainDefs
+				? new Map([...result.domainDefs, ...resolved])
+				: resolved;
+		} catch (error) {
+			logger.warn("spell-kdl: domain definition error", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
 	const localPolicyConfig = parseTaskPoliciesKdl(
 		format(new Document(document.nodes.filter(node => node.getName() === "layer" || node.getName() === "policy"))),
 	);
@@ -316,13 +353,33 @@ export async function loadUserSpellKdl(agentDir = getAgentDir()): Promise<SpellP
 	}
 }
 
+/**
+ * Load + merge user and project spell.kdl into one `SpellProjectConfig`.
+ * Single merge path; narrower accessors (providers, domainDefs) derive from it.
+ */
+export async function loadMergedSpellConfig(
+	projectDir: string,
+	agentDir = getAgentDir(),
+): Promise<SpellProjectConfig> {
+	const [userConfig, projectConfig] = await Promise.all([loadUserSpellKdl(agentDir), loadSpellKdl(projectDir)]);
+	return mergeSpellConfigs(userConfig ?? createEmptyConfig(), projectConfig ?? createEmptyConfig());
+}
+
 export async function loadMergedProviderConfigs(
 	projectDir: string,
 	agentDir = getAgentDir(),
 ): Promise<Record<string, KdlProviderConfig> | undefined> {
-	const [userConfig, projectConfig] = await Promise.all([loadUserSpellKdl(agentDir), loadSpellKdl(projectDir)]);
-	const mergedConfig = mergeSpellConfigs(userConfig ?? createEmptyConfig(), projectConfig ?? createEmptyConfig());
+	const mergedConfig = await loadMergedSpellConfig(projectDir, agentDir);
 	const providers = mergedConfig.providers?.providers;
 	if (!providers || Object.keys(providers).length === 0) return undefined;
 	return providers;
+}
+
+/** Inline KDL domain definitions from merged user+project config (or undefined). */
+export async function loadDomainDefs(
+	projectDir: string,
+	agentDir = getAgentDir(),
+): Promise<Map<string, SpellDomain> | undefined> {
+	const mergedConfig = await loadMergedSpellConfig(projectDir, agentDir);
+	return mergedConfig.domainDefs;
 }

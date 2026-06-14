@@ -14,9 +14,14 @@ export async function loadDomainPromptContext(
 		return { contextFiles: [] };
 	}
 
-	const systemPrompt = domainManifest.systemPromptPath
-		? await readDomainFile(domainManifest, cwd, domainManifest.systemPromptPath, "system prompt")
-		: undefined;
+	// Inline `systemPrompt` (declarative KDL domains) wins over a sidecar
+	// `systemPromptPath` (TS manifest domains): a KDL domain carries its prompt
+	// in-band with no file to resolve.
+	const systemPrompt = domainManifest.systemPrompt
+		? domainManifest.systemPrompt
+		: domainManifest.systemPromptPath
+			? await readDomainFile(domainManifest, cwd, domainManifest.systemPromptPath, "system prompt")
+			: undefined;
 	const contextFiles = await Promise.all(
 		(domainManifest.contextFiles ?? []).map(async filePath => ({
 			path: filePath,

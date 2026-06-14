@@ -774,9 +774,26 @@ fn walk_org_files(dir: &Path) -> Vec<PathBuf> {
 	files
 }
 
+/// True when the embedding (vector) lane is explicitly disabled via
+/// `PI_KNOWLEDGE_WORKER_EMBEDDINGS=0|false|off`. Mirrors the daemon-side gate
+/// in `pi-knowledge-worker::lane_org`. Absent/unrecognized → enabled.
+fn embeddings_disabled() -> bool {
+	matches!(
+		std::env::var("PI_KNOWLEDGE_WORKER_EMBEDDINGS").ok().as_deref(),
+		Some("0") | Some("false") | Some("off") | Some("FALSE") | Some("OFF")
+	)
+}
+
 fn build_vec_index(items: &[OrgItem]) -> Result<VectorIndex, String> {
 	let mut vec = VectorIndex::new(DIM, items.len().max(1)).map_err(|e| format!("vec init: {e}"))?;
 	if items.is_empty() {
+		return Ok(vec);
+	}
+	// Embeddings disabled (autonomous/container profile via
+	// PI_KNOWLEDGE_WORKER_EMBEDDINGS=0): skip the fastembed model load and
+	// keep an empty vector lane. Recall degrades to BM25 + graph in `search()`
+	// (the vec.is_empty() path), so this stays fully servable — just lexical.
+	if embeddings_disabled() {
 		return Ok(vec);
 	}
 	let texts: Vec<String> = items

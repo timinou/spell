@@ -1,0 +1,84 @@
+// Autonomous domains — declarative, fully KDL-defined.
+//
+// These domains carry their entire definition in data: prompt, tool policy,
+// surface, knowledge lane, env contract, model roles. No TS manifest. Parsed
+// by packages/coding-agent/src/config/kdl-domains.ts into the same SpellDomain
+// shape the built-in TS manifests produce.
+//
+// Usage:
+//   spell --domain autonomous "<task>"     # harness-agnostic autonomous run
+//   spell --domain harbor "<task>"         # Terminal-Bench / Harbor binding
+// or set `domain "autonomous"` (selector) at the top of a project spell.kdl,
+// or import this file:  import "./spell.autonomous.kdl"
+
+// ── autonomous ──────────────────────────────────────────────────────────────
+// Base autonomous profile. No human is present. Harness-agnostic — reused by
+// harbor below and any future unattended consumer (CI, cron, server goals).
+domain "autonomous" {
+	description "Fully autonomous agent — no human in the loop"
+
+	// Keystone: headless. Routes to one-shot print/rpc (never an interactive
+	// TUI that would block on input) and gates interactive-only tools off.
+	surface "none"
+
+	// Knowledge: keep org/memory (BM25 + graph recall) but skip the fastembed
+	// bge-m3 model load — no download, no multi-GB RAM, no embed stall. Recall
+	// self-degrades to lexical + graph, which is all an ephemeral autonomous
+	// run needs.
+	knowledge {
+		embeddings #false
+	}
+
+	// Tool policy. `browser` is intentionally NOT denied — headless puppeteer
+	// is container-safe and useful for web tasks. Denied: the interactive /
+	// human-facing surfaces that have no meaning with no human present.
+	tools {
+		deny "ask" "canvas" "send_file" "approvals" "checkpoint"
+	}
+
+	// The no-human system prompt. Overrides the default interactive stance.
+	prompt """
+	You run fully autonomously. No human is present and none will respond.
+
+	- No `ask`, no plan-gate, no confirmation step exists. Do not wait for one.
+	- Ambiguity → choose the conservative, standard default, record the decision
+	  inline (a comment or a short note in your output), and proceed.
+	- Push-back has no audience: when you disagree with an approach, write the
+	  reasoning down and act on the best alternative yourself.
+	- Yield only when the task is settled — tests green, build clean, the
+	  deliverable complete. "Blocked on a question" is not a stopping state;
+	  resolve it and continue.
+	- The only reader of your transcript is an automated grader. Be terse; spend
+	  effort on the work product, not on narration.
+	"""
+}
+
+// ── harbor ──────────────────────────────────────────────────────────────────
+// Terminal-Bench / Harbor binding. IS-A autonomous (inherits surface, prompt,
+// knowledge, tool policy) and adds the harness env contract on top.
+domain "harbor" extends="autonomous" {
+	description "Autonomous agent bound to the Harbor / Terminal-Bench harness"
+
+	// Env contract. Harbor injects the model via $HARBOR_MODEL; require it so a
+	// misconfigured run fails loud at startup instead of silently picking some
+	// default model and corrupting the benchmark attribution.
+	env {
+		require "HARBOR_MODEL"
+		// Force in-process knowledge (no daemon socket inside the task
+		// container) and embeddings off (belt-and-suspenders with the
+		// inherited knowledge block).
+		set "PI_KNOWLEDGE_WORKER" "inprocess"
+		set "PI_KNOWLEDGE_WORKER_EMBEDDINGS" "0"
+	}
+
+	// Pin every model role to the harness-chosen model so subagents (task tool)
+	// run on the same model as the root agent — clean, single-model attribution
+	// on the leaderboard. $HARBOR_MODEL is resolved against the environment at
+	// activation.
+	model {
+		roles {
+			default "$HARBOR_MODEL"
+			task "$HARBOR_MODEL"
+		}
+	}
+}
