@@ -442,18 +442,13 @@ export class WebSubsystem {
 		entry: SessionRegistryEntry,
 		correlationId: string | undefined,
 	): Promise<void> {
+		// Non-prompt commands are proxied to the CLI over the duplex bridge frame
+		// (FEAT-815): the agent runs them through the same handler its stdin RPC
+		// loop uses (edit_history, undo/redo, get_state, code_query, …) and returns
+		// a typed result. `prompt` keeps its dedicated inject path below.
 		if (msg.command.type !== "prompt") {
-			connection.send({
-				type: "rpc_response",
-				sessionId: msg.sessionId,
-				response: {
-					type: "response",
-					command: msg.command.type,
-					success: false,
-					error: "unsupported_for_external",
-				},
-				correlationId,
-			});
+			const response = await this.#deps.registry.requestRpc(msg.sessionId, msg.command);
+			connection.send({ type: "rpc_response", sessionId: msg.sessionId, response, correlationId });
 			return;
 		}
 		const result = await this.#deps.registry.injectMessage(msg.sessionId, {

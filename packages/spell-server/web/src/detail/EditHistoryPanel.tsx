@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { EditHistoryData, EditHistoryEntry } from "../api/client";
 
 type Lens = "all" | "undoable" | "redoable" | "committed";
@@ -6,6 +6,10 @@ type Lens = "all" | "undoable" | "redoable" | "committed";
 interface Props {
 	sessionId: string;
 	loadEditHistory: (sessionId: string, file?: string) => Promise<EditHistoryData>;
+	/** FEAT-815: undo a recorded edit by its entry id (force overrides commit guard). */
+	onUndo?: (sessionId: string, entryId?: string, force?: boolean) => Promise<unknown>;
+	/** FEAT-815: redo a previously-undone edit by its entry id. */
+	onRedo?: (sessionId: string, entryId?: string) => Promise<unknown>;
 	onClose: () => void;
 }
 
@@ -67,31 +71,61 @@ function passesLens(g: Group, lens: Lens): boolean {
 	}
 }
 
-export function EditHistoryPanel({ sessionId, loadEditHistory, onClose }: Props) {
+export function EditHistoryPanel({ sessionId, loadEditHistory, onUndo, onRedo, onClose }: Props) {
 	const [data, setData] = useState<EditHistoryData | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [lens, setLens] = useState<Lens>("all");
 	const [filter, setFilter] = useState("");
 	const [expanded, setExpanded] = useState<Set<string>>(new Set());
+	// Pending undo/redo action state: which entry is in flight, and any notice.
+	const [acting, setActing] = useState<string | null>(null);
+	const [notice, setNotice] = useState<string | null>(null);
 
-	useEffect(() => {
+	const refresh = useCallback(() => {
 		let live = true;
-		setData(null);
-		setError(null);
 		loadEditHistory(sessionId)
 			.then(d => { if (live) setData(d); })
 			.catch(e => {
 				if (!live) return;
 				const raw = e instanceof Error ? e.message : String(e);
-				// External (CLI bridge) sessions don't expose the edit-history RPC.
+				// External (CLI bridge) sessions used to not expose this; keep the
+				// friendly copy for any residual unsupported error.
 				setError(
-					/unsupported_for_external|not supported|external/i.test(raw)
+					/unsupported_for_external|not supported/i.test(raw)
 						? "Edit history is available for server-spawned sessions only."
 						: raw,
 				);
 			});
 		return () => { live = false; };
 	}, [sessionId, loadEditHistory]);
+
+	useEffect(() => {
+		setData(null);
+		setError(null);
+		setNotice(null);
+		return refresh();
+	}, [refresh]);
+
+	// Run an undo/redo, surface a declined notice, then refresh the list.
+	async function act(kind: "undo" | "redo", entryId: string, force = false) {
+		const fn = kind === "undo" ? onUndo : onRedo;
+		if (!fn) return;
+		setActing(entryId);
+		setNotice(null);
+		try {
+			const data = (await fn(sessionId, entryId, force)) as { declined?: unknown; message?: string } | undefined;
+			if (data && Array.isArray(data.declined) && data.declined.length > 0) {
+				setNotice(`#${entryId} is already committed — use Force to revert anyway.`);
+			} else if (data?.message) {
+				setNotice(data.message);
+			}
+		} catch (e) {
+			setNotice(e instanceof Error ? e.message : String(e));
+		} finally {
+			setActing(null);
+			refresh();
+		}
+	}
 
 	const groups = useMemo(() => {
 		if (!data) return [];
@@ -130,6 +164,8 @@ export function EditHistoryPanel({ sessionId, loadEditHistory, onClose }: Props)
 				))}
 			</div>
 
+			{notice && <div className="hist-notice">{notice}</div>}
+
 			<div className="hist-list">
 				{error && <div className="hist-empty err">{error}</div>}
 				{!error && !data && <div className="hist-empty muted">Loading…</div>}
@@ -149,6 +185,25 @@ export function EditHistoryPanel({ sessionId, loadEditHistory, onClose }: Props)
 									{multi && <span className="chip group">GROUP ×{g.entries.length}</span>}
 									{g.committed && <span className="chip committed">COMMITTED</span>}
 								</span>
+								{(onUndo || onRedo) && (
+									<span className="hist-actions" onClick={e => e.stopPropagation()}>
+										{!g.reverted && onUndo && (
+											<button className="hist-act" disabled={acting === lead.id} onClick={() => act("undo", lead.id, false)} title="Undo this edit">
+												Undo
+											</button>
+										)}
+										{!g.reverted && g.committed && onUndo && (
+											<button className="hist-act force" disabled={acting === lead.id} onClick={() => act("undo", lead.id, true)} title="Force undo a committed edit">
+												Force
+											</button>
+										)}
+										{g.reverted && onRedo && (
+											<button className="hist-act" disabled={acting === lead.id} onClick={() => act("redo", lead.id)} title="Redo this edit">
+												Redo
+											</button>
+										)}
+									</span>
+								)}
 							</div>
 							<div className="hist-row-meta">
 								<span className="chip ws">{shortWorkspace(g.workspace)}</span>

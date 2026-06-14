@@ -6,6 +6,7 @@ import { CommandBar } from "./cmd/CommandBar";
 import { TemplateRunnerModal } from "./cmd/TemplateRunner";
 import { SessionDetail } from "./detail/SessionDetail";
 import { EditHistoryPanel } from "./detail/EditHistoryPanel";
+import { CodeLensPanel } from "./detail/CodeLensPanel";
 import { SessionList } from "./sidebar/SessionList";
 import { useSessions } from "./state/sessions";
 import { useTemplates } from "./state/templates";
@@ -37,6 +38,7 @@ function Shell() {
 	const [pickedTemplate, setPickedTemplate] = useState<ManifestTemplate | null>(null);
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [historyOpen, setHistoryOpen] = useState(false);
+	const [lensOpen, setLensOpen] = useState(false);
 	const selected = sessions.selected ? sessions.sessions.get(sessions.selected) ?? null : null;
 
 	// On mobile the sidebar is a drawer; selecting a session closes it so the
@@ -246,6 +248,35 @@ function Shell() {
 		[],
 	);
 
+	// FEAT-815: undo/redo a recorded edit + run a semantic code query, all over
+	// the same correlationId round-trip. For external sessions these are proxied
+	// to the CLI agent's kernel via the duplex bridge frame.
+	const sendRpc = useCallback(async (sessionId: string, command: Record<string, unknown>): Promise<unknown> => {
+		const cid = nextCid();
+		const { promise, resolve } = Promise.withResolvers<any>();
+		pendingResponses.current.set(cid, resolve);
+		wsRef.current?.send({ type: "rpc", sessionId, command, correlationId: cid });
+		const msg = await promise;
+		const response = msg?.response;
+		if (response && response.success === false) throw new Error(response.error ?? `${command.type} failed`);
+		return response?.data;
+	}, []);
+
+	const requestUndo = useCallback(
+		(sessionId: string, entryId?: string, force?: boolean) =>
+			sendRpc(sessionId, { type: "undo", entryId, force }),
+		[sendRpc],
+	);
+	const requestRedo = useCallback(
+		(sessionId: string, entryId?: string) => sendRpc(sessionId, { type: "redo", entryId }),
+		[sendRpc],
+	);
+	const requestCodeQuery = useCallback(
+		(sessionId: string, target: string) =>
+			sendRpc(sessionId, { type: "code_query", target }) as Promise<import("./detail/CodeLensPanel").CodeQueryData>,
+		[sendRpc],
+	);
+
 	const answerBlockingEvent = useCallback(
 		(sessionId: string, eventId: string, payload: import("./api/client").EventResponsePayload) => {
 			wsRef.current?.send({ type: "answer_blocking_event", sessionId, eventId, payload });
@@ -322,7 +353,7 @@ function Shell() {
 	}, [selected, subscribeRpcEvents, submitPrompt, abort, answerBlockingEvent, runBash, mintUrl, loadArtifacts]);
 
 	return (
-		<div className={`shell${menuOpen ? " menu-open" : ""}${historyOpen && selected ? " has-history" : ""}`}>
+		<div className={`shell${menuOpen ? " menu-open" : ""}${(historyOpen || lensOpen) && selected ? " has-history" : ""}`}>
 			<aside className="sidebar">
 				<header>
  				<h1>Spell</h1>
@@ -330,10 +361,25 @@ function Shell() {
  						{selected && (
  							<button
  								className={`btn${historyOpen ? " btn-primary" : ""}`}
- 								onClick={() => setHistoryOpen(o => !o)}
+ 								onClick={() => {
+ 									setHistoryOpen(o => !o);
+ 									setLensOpen(false);
+ 								}}
  								title="Edit history — every file this session changed"
  							>
  								History
+ 							</button>
+ 						)}
+ 						{selected && (
+ 							<button
+ 								className={`btn${lensOpen ? " btn-primary" : ""}`}
+ 								onClick={() => {
+ 									setLensOpen(o => !o);
+ 									setHistoryOpen(false);
+ 								}}
+ 								title="Code lens — callers, defs, types, diagnostics via pi-code-graph"
+ 							>
+ 								Lens
  							</button>
  						)}
  						<button className="btn" onClick={signOut} title="Sign out">
@@ -358,7 +404,16 @@ function Shell() {
 				<EditHistoryPanel
 					sessionId={selected.sessionId}
 					loadEditHistory={requestEditHistory}
+					onUndo={requestUndo}
+					onRedo={requestRedo}
 					onClose={() => setHistoryOpen(false)}
+				/>
+			)}
+			{lensOpen && selected && (
+				<CodeLensPanel
+					sessionId={selected.sessionId}
+					runCodeQuery={requestCodeQuery}
+					onClose={() => setLensOpen(false)}
 				/>
 			)}
 			<CommandBar onPickTemplate={onPickTemplate} onKillSession={onKillSession} />

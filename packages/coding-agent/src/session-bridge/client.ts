@@ -4,6 +4,8 @@ import * as path from "node:path";
 import { logger } from "@spell/pi-utils";
 import {
 	type BlockingEventPayload,
+	type BridgeRpcRequest,
+	type BridgeRpcResult,
 	EVENT_LOG_ENTRY_KINDS,
 	type EventLogEntry,
 	type EventResponsePayload,
@@ -55,6 +57,13 @@ export type InjectInputHandler = (input: {
 	deliverAs: InjectDeliverAs;
 }) => Promise<{ accepted: boolean; reason?: string }>;
 
+/**
+ * Handles a server-proxied RPC command (FEAT-815 duplex). Runs the command
+ * through the agent's RPC handler and returns the typed result. The transport
+ * passes the command structurally; the handler narrows by `command.type`.
+ */
+export type RpcRequestHandler = (command: BridgeRpcRequest) => Promise<BridgeRpcResult>;
+
 export interface SessionBridgeOptions {
 	socketPath?: string;
 	sessionId: string;
@@ -97,6 +106,7 @@ export class SessionBridgeClient {
 	#eventIdCounter = 0;
 	#connectInFlight: Promise<boolean> | null = null;
 	#injectHandler: InjectInputHandler | undefined;
+	#rpcHandler: RpcRequestHandler | undefined;
 	#eventLogEnabled = false;
 
 	constructor(options: SessionBridgeOptions) {
@@ -267,6 +277,16 @@ export class SessionBridgeClient {
 	 */
 	onInjectInput(handler: InjectInputHandler): void {
 		this.#injectHandler = handler;
+	}
+
+	/**
+	 * Register the callback invoked when the server proxies an `rpc_request`
+	 * (FEAT-815 duplex) — e.g. a remote operator inspecting edit history, undoing
+	 * an edit, or running a code query against this terminal session. The client
+	 * replies with `rpc_response` carrying the typed result.
+	 */
+	onRpcRequest(handler: RpcRequestHandler): void {
+		this.#rpcHandler = handler;
 	}
 
 	notifyEventResolved(eventId: string): void {
@@ -453,7 +473,30 @@ export class SessionBridgeClient {
 				void this.#handleInjectInput(msg.injectId, msg.text, msg.deliverAs);
 				return;
 			}
+			case "rpc_request": {
+				void this.#handleRpcRequest(msg.requestId, msg.command);
+				return;
+			}
 		}
+	}
+
+	async #handleRpcRequest(requestId: string, command: BridgeRpcRequest): Promise<void> {
+		let response: BridgeRpcResult;
+		if (!this.#rpcHandler) {
+			response = { type: "response", command: command.type, success: false, error: "no_rpc_handler" };
+		} else {
+			try {
+				response = await this.#rpcHandler(command);
+			} catch (error) {
+				response = {
+					type: "response",
+					command: command.type,
+					success: false,
+					error: error instanceof Error ? error.message : String(error),
+				};
+			}
+		}
+		this.#send({ type: "rpc_response", timestamp: Date.now(), requestId, response });
 	}
 
 	async #handleInjectInput(injectId: string, text: string, deliverAs: InjectDeliverAs): Promise<void> {

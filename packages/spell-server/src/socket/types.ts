@@ -114,6 +114,35 @@ export interface InjectAckSocketClientMessage extends SocketMessageBase {
 	reason?: string;
 }
 
+/**
+ * A duplex RPC command the daemon proxies to an external session (FEAT-815).
+ * Kept structural ({ id?, type } & extra fields) so the socket transport stays
+ * decoupled from coding-agent's concrete BridgeRpcCommand union — the CLI side
+ * narrows by `type`. This is what gives terminal sessions the SAME command
+ * surface spawned sessions get over their RpcClient (edit_history, undo/redo,
+ * get_state, code_query, …).
+ */
+export interface BridgeRpcRequest {
+	type: string;
+	id?: string;
+	[key: string]: unknown;
+}
+
+/** Typed result the CLI returns for a proxied RPC (mirrors coding-agent RpcResponse). */
+export type BridgeRpcResult =
+	| { type: "response"; command: string; success: true; data?: unknown }
+	| { type: "response"; command: string; success: false; error: string };
+
+/**
+ * CLI → daemon: the typed result of a proxied `rpc_request`, correlated by
+ * `requestId`. Mirrors the inject_ack ack style but carries a full payload.
+ */
+export interface RpcResponseSocketClientMessage extends SocketMessageBase {
+	type: "rpc_response";
+	requestId: string;
+	response: BridgeRpcResult;
+}
+
 export type EventLogEntryKind =
 	| "turn_start"
 	| "turn_end"
@@ -167,7 +196,8 @@ export type SocketClientMessage =
 	| HeartbeatSocketClientMessage
 	| EventResolvedSocketClientMessage
 	| EventLogSocketClientMessage
-	| InjectAckSocketClientMessage;
+	| InjectAckSocketClientMessage
+	| RpcResponseSocketClientMessage;
 
 export interface RegisteredSocketServerMessage extends SocketMessageBase {
 	type: "registered";
@@ -231,11 +261,23 @@ export interface InjectInputSocketServerMessage extends SocketMessageBase {
 	deliverAs: InjectDeliverAs;
 }
 
+/**
+ * Server → client: a proxied RPC command for an external session (FEAT-815).
+ * The client runs it through the same handler the agent's stdin RPC loop uses
+ * and replies with `rpc_response` correlated by `requestId`.
+ */
+export interface RpcRequestSocketServerMessage extends SocketMessageBase {
+	type: "rpc_request";
+	requestId: string;
+	command: BridgeRpcRequest;
+}
+
 export type SocketServerMessage =
 	| RegisteredSocketServerMessage
 	| EventResponseSocketServerMessage
 	| EventCancelledSocketServerMessage
-	| InjectInputSocketServerMessage;
+	| InjectInputSocketServerMessage
+	| RpcRequestSocketServerMessage;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
@@ -249,6 +291,7 @@ const SOCKET_CLIENT_MESSAGE_TYPES = new Set([
 	"event_resolved",
 	"event_log",
 	"inject_ack",
+	"rpc_response",
 ]);
 
 export function isSocketClientMessage(value: unknown): value is SocketClientMessage {

@@ -160,6 +160,9 @@ export class SocketServer {
 			case "inject_ack":
 				this.#registry.resolveInject(parsed.injectId, parsed.accepted, parsed.reason);
 				return sessionId;
+			case "rpc_response":
+				this.#registry.resolveRpc(parsed.requestId, parsed.response);
+				return sessionId;
 			case "event_log":
 				if (sessionId && isEventLogEntry(parsed.entry)) {
 					this.#registry.appendEventLog(sessionId, parsed.entry);

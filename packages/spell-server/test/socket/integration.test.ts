@@ -549,6 +549,75 @@ describe("socket server integration", () => {
 		expect(result.reason).toBe("unknown_session");
 	});
 
+	// ── FEAT-815 duplex RPC frame ──────────────────────────────────────────────
+	it("proxies an rpc_request and resolves with the client's rpc_response", async () => {
+		const client = createClient();
+		await client.connect(socketPath);
+		const sessionId = "sess-rpc";
+		client.send({
+			type: "register",
+			timestamp: Date.now(),
+			sessionId,
+			pid: process.pid,
+			cwd: "/tmp/project",
+			mode: "interactive",
+			startedAt: Date.now(),
+			projectName: "test-project",
+		});
+		await client.nextMessage(); // registered ack
+
+		const rpcPromise = registry.requestRpc(sessionId, { type: "edit_history" });
+		const req = await client.nextMessage();
+		expect(req.type).toBe("rpc_request");
+		if (req.type !== "rpc_request") throw new Error("expected rpc_request");
+		expect(req.command.type).toBe("edit_history");
+
+		client.send({
+			type: "rpc_response",
+			timestamp: Date.now(),
+			requestId: req.requestId,
+			response: { type: "response", command: "edit_history", success: true, data: { entries: [], total: 0, undoable: 0, redoable: 0 } },
+		});
+
+		const result = await rpcPromise;
+		expect(result.success).toBe(true);
+		if (!result.success) throw new Error("expected success");
+		expect(result.data).toEqual({ entries: [], total: 0, undoable: 0, redoable: 0 });
+	});
+
+	it("rpc_request to unknown session fails with unknown_session", async () => {
+		const result = await registry.requestRpc("nope", { type: "undo" });
+		expect(result.success).toBe(false);
+		if (result.success) throw new Error("expected failure");
+		expect(result.error).toBe("unknown_session");
+	});
+
+	it("resolves a pending rpc_request as failed on disconnect", async () => {
+		const client = createClient();
+		await client.connect(socketPath);
+		const sessionId = "sess-rpc-drop";
+		client.send({
+			type: "register",
+			timestamp: Date.now(),
+			sessionId,
+			pid: process.pid,
+			cwd: "/tmp/project",
+			mode: "interactive",
+			startedAt: Date.now(),
+			projectName: "test-project",
+		});
+		await client.nextMessage();
+
+		const rpcPromise = registry.requestRpc(sessionId, { type: "code_query", target: "x.ts::Foo def→" });
+		await client.nextMessage(); // rpc_request frame
+		client.destroy();
+		await Bun.sleep(100);
+		const result = await rpcPromise;
+		expect(result.success).toBe(false);
+		if (result.success) throw new Error("expected failure");
+		expect(result.error).toBe("deregistered");
+	});
+
 	it("resolves pending inject as rejected on disconnect", async () => {
 		const client = createClient();
 		await client.connect(socketPath);

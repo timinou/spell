@@ -39,7 +39,7 @@ import browseFindingsPrompt from "./prompts/agents/browse-findings.md" with { ty
 import { type CreateAgentSessionOptions, createAgentSession, discoverAuthStorage } from "./sdk";
 import type { AgentSession } from "./session/agent-session";
 import { resolveResumableSession, type SessionInfo, SessionManager } from "./session/session-manager";
-import { SessionBridgeClient } from "./session-bridge";
+import { handleBridgeRpc, SessionBridgeClient } from "./session-bridge";
 import { resolvePromptInput } from "./system-prompt";
 import { getChangelogPath, getNewEntries, parseChangelog } from "./utils/changelog";
 import type { EventBus } from "./utils/event-bus";
@@ -178,6 +178,9 @@ async function runInteractiveMode(
 	// Allow a remote operator (web dashboard / Telegram) to steer this terminal
 	// session over the bridge socket as if the message were typed locally.
 	sessionBridge?.onInjectInput(({ text, deliverAs }) => mode.injectRemoteInput(text, deliverAs));
+	// FEAT-815: let a remote operator run proxied RPC (edit history, undo/redo,
+	// code queries) against this terminal session, routed through the kernel.
+	sessionBridge?.onRpcRequest(command => handleBridgeRpc(session.sessionManager, command));
 
 	dbgStartup("H:before:mode.init");
 	await mode.init();

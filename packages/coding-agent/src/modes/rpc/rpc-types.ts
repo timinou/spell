@@ -127,6 +127,15 @@ export type RpcCommand =
 	// first) for the Team Chat Edit History panel. `file` narrows to one path.
 	// Read-only; rides the same spawned-session lane as run_stored.
 	| { id?: string; type: "edit_history"; file?: string }
+	// Undo/redo a recorded edit (PLAN-338 C). `id` targets a specific entry
+	// (else newest); `force` overrides the commit-guard decline-by-default.
+	// Routes through kernel `manage undo|redo` (revert_guarded + commit_guard).
+	| { id?: string; type: "undo"; entryId?: string; force?: boolean }
+	| { id?: string; type: "redo"; entryId?: string }
+	// Semantic code query (FEAT-815 Phase C). Resolves an arbitrary CodePath
+	// `target` (e.g. "src/x.ts::Foo def→", "::Bar#hover", "**/*.ts#diagnostics")
+	// through pi-code-path/pi-code-graph via executeCodePath — read-only.
+	| { id?: string; type: "code_query"; target: string; format?: string }
 	| {
 			id?: string;
 			type: "tile_record_run";

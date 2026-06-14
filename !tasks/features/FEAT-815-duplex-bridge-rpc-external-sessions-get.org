@@ -1,0 +1,29 @@
+#+TITLE: Duplex bridge RPC: external sessions get full BridgeRpcCommand + pi-code-graph lens
+#+STATE: ITEM
+#+SESSION_ID: 1507d4f02b2299d8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-13T17-53-55-372Z_1507d4f02b2299d8.jsonl]]
+#+CUSTOM_ID: FEAT-815-duplex-bridge-rpc-external-sessions-get
+
+* Initial Message
+
+Check if BUG-471 and BUG-472 are still relevant; if they are, fix them. At the same time, see if the design you made for the recent harness tiles in Team Chat can be extended to other parts of Team Chat (parts of it look really horrible, try to make screenshots to see, and tell me how you'd improve them)
+
+Make external (CLI bridge) sessions answer the full BridgeRpcCommand surface from the web dashboard, by adding a request/response (duplex) frame to the bridge socket protocol — symmetric to the existing inject_input/inject_ack correlation.
+
+ARCHITECTURE (verified):
+- Today the bridge (packages/spell-server/src/socket/types.ts ⇄ packages/coding-agent/src/session-bridge/types.ts) is push-only: daemon→CLI has ONLY inject_input. #dispatchExternalRpc (web/ws/server.ts) rejects everything except "prompt" with unsupported_for_external.
+- Spawned sessions get full duplex via WebSessionHub's RpcClient (stdin/stdout). External sessions need the same over the socket.
+
+SEMANTIC SURFACE = napi only: route ALL data through executeCodePath({command:"manage", manage:"history|undo|redo"}) and arbitrary {target} CodePath queries (pi-code-path/pi-code-graph). NO jsonl backdoor, NO reparsing. Daemon + agent share the kernel as the single authority.
+
+PLAN:
+1. proto: add rpc_request (daemon→CLI, {requestId, command}) + rpc_response (CLI→daemon, {requestId, response}) to BOTH socket type mirrors. Command typed structurally ({id?,type} & Record) so transport stays decoupled from coding-agent's BridgeRpcCommand.
+2. daemon: SocketSessionRegistry.requestRpc(sessionId, command): Promise<result> with pendingRpc Map + timeout (clone of injectMessage/resolveInject/#pendingInjects). socket/server.ts: handle rpc_response → resolveRpc. web/ws/server.ts #dispatchExternalRpc: forward any command via requestRpc instead of rejecting.
+3. cli: SessionBridgeClient.onRpcRequest handler; main.ts wires it to a shared bridge-command handler that calls executeCodePath (history/undo/redo + code_query) and session methods (get_state/abort). Reply rpc_response.
+4. cmds: extend BridgeRpcCommand (spell-server mirror + coding-agent) with undo {id?,force?}, redo {id?}, code_query {target, qualifier?}.
+5. web: EditHistoryPanel undo/redo buttons (now functional for external); new "Code lens" affordance issuing code_query (callers/defs/hover/diagnostics) rendered as a results panel.
+6. Phase C extra: surface more pi-code-graph — def→/ref→/call→/implements→/inherits→ edges, #diagnostics, #hover/#signature — as a semantic side panel over any live session.
+
+SAFETY: gate remote mutation behind a bridge { allow-rpc … } KDL node (mirror web{token}); honor commit_guard decline-by-default for undo. Keep both socket type mirrors in sync (SYNC comment already present).
+
+Test target: spell-remote-example at ../spell-remote-example (its .spell/edit-history.jsonl already has real entries).

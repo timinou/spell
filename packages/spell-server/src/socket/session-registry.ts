@@ -2,6 +2,8 @@ import type * as net from "node:net";
 import type { RpcClient } from "../rpc/rpc-client";
 import type {
 	BlockingEventPayload,
+	BridgeRpcRequest,
+	BridgeRpcResult,
 	EventLogEntry,
 	EventResponsePayload,
 	InjectDeliverAs,
@@ -20,8 +22,17 @@ interface PendingInject {
 	timer: ReturnType<typeof setTimeout>;
 }
 
+interface PendingRpc {
+	sessionId: string;
+	resolve: (result: BridgeRpcResult) => void;
+	timer: ReturnType<typeof setTimeout>;
+}
+
 /** How long to wait for a client `inject_ack` before giving up. */
 const INJECT_ACK_TIMEOUT_MS = 10_000;
+
+/** How long to wait for a proxied `rpc_response` before giving up (FEAT-815). */
+const RPC_RESPONSE_TIMEOUT_MS = 30_000;
 
 export type SessionKind = "external" | "spawned";
 
@@ -99,6 +110,8 @@ export class SocketSessionRegistry {
 	#recentLogCap: number;
 	#pendingInjects = new Map<string, PendingInject>();
 	#injectCounter = 0;
+	#pendingRpcs = new Map<string, PendingRpc>();
+	#rpcCounter = 0;
 
 	constructor(options: SocketSessionRegistryOptions = {}) {
 		this.#recentLogCap = options.recentLogCap ?? DEFAULT_RECENT_LOG_CAP;
@@ -184,6 +197,13 @@ export class SocketSessionRegistry {
 				this.#pendingInjects.delete(injectId);
 				clearTimeout(pending.timer);
 				pending.resolve({ accepted: false, reason: "deregistered" });
+			}
+		}
+		for (const [requestId, pending] of this.#pendingRpcs) {
+			if (pending.sessionId === sessionId) {
+				this.#pendingRpcs.delete(requestId);
+				clearTimeout(pending.timer);
+				pending.resolve({ type: "response", command: "unknown", success: false, error: "deregistered" });
 			}
 		}
 		this.#emitSessionChange("deregistered", sessionId);
@@ -332,6 +352,64 @@ export class SocketSessionRegistry {
 		this.#pendingInjects.delete(injectId);
 		clearTimeout(pending.timer);
 		pending.resolve({ accepted, reason });
+	}
+
+	/**
+	 * Proxy a BridgeRpcCommand to an external session over its bridge socket and
+	 * resolve with the typed result the CLI returns (FEAT-815 duplex). This is
+	 * the external-session analogue of the spawned hub's `RpcClient.send`. Only
+	 * external sessions have a `connection`; spawned sessions use their RpcClient.
+	 */
+	requestRpc(
+		sessionId: string,
+		command: BridgeRpcRequest,
+		timeoutMs = RPC_RESPONSE_TIMEOUT_MS,
+	): Promise<BridgeRpcResult> {
+		const entry = this.#sessions.get(sessionId);
+		if (!entry) {
+			return Promise.resolve({ type: "response", command: command.type, success: false, error: "unknown_session" });
+		}
+		if (entry.kind !== "external" || !entry.connection || entry.connection.destroyed) {
+			return Promise.resolve({ type: "response", command: command.type, success: false, error: "not_connected" });
+		}
+
+		this.#rpcCounter += 1;
+		const requestId = `${sessionId}-rpc-${this.#rpcCounter}`;
+		const message: SocketServerMessage = {
+			type: "rpc_request",
+			requestId,
+			command,
+			timestamp: Date.now(),
+		};
+
+		const { promise, resolve } = Promise.withResolvers<BridgeRpcResult>();
+		const timer = setTimeout(() => {
+			if (this.#pendingRpcs.delete(requestId)) {
+				resolve({ type: "response", command: command.type, success: false, error: "rpc_timeout" });
+			}
+		}, timeoutMs);
+		if (timer && "unref" in timer) {
+			(timer as NodeJS.Timeout).unref();
+		}
+		this.#pendingRpcs.set(requestId, { sessionId, resolve, timer });
+
+		try {
+			entry.connection.write(`${JSON.stringify(message)}\n`);
+		} catch (error) {
+			clearTimeout(timer);
+			this.#pendingRpcs.delete(requestId);
+			return Promise.resolve({ type: "response", command: command.type, success: false, error: `write_failed: ${String(error)}` });
+		}
+		return promise;
+	}
+
+	/** Resolve a pending proxied RPC when the client's `rpc_response` arrives. */
+	resolveRpc(requestId: string, response: BridgeRpcResult): void {
+		const pending = this.#pendingRpcs.get(requestId);
+		if (!pending) return;
+		this.#pendingRpcs.delete(requestId);
+		clearTimeout(pending.timer);
+		pending.resolve(response);
 	}
 
 	cancelEvent(sessionId: string, eventId: string, reason?: string): void {
