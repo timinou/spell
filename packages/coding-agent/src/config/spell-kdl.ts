@@ -13,6 +13,9 @@ import type { SpellDomain } from "../domain/loader";
 import { isDomainDefinition, parseDomainBlocks, resolveDomainManifests } from "./kdl-domains";
 import type { ParsedModeBlock } from "./kdl-modes";
 import { parseModeBlocks } from "./kdl-modes";
+import type { Discipline } from "./discipline";
+import { parseDisciplineBlocks } from "./kdl-discipline";
+import { policyToDiscipline } from "./discipline";
 import { type KdlProviderConfig, parseProvidersBlock } from "./kdl-providers";
 import { kdlDocumentToSettings } from "./kdl-reader";
 import type { RawSettings } from "./settings";
@@ -37,6 +40,8 @@ export interface SpellProjectConfig {
 	};
 	keybindings?: Record<string, string>;
 	modes?: ParsedModeBlock[];
+	/** First-class `discipline` blocks (FEAT-816). mode/policy desugar separately. */
+	disciplines?: Discipline[];
 	agents?: AgentRulesConfig;
 }
 
@@ -90,6 +95,12 @@ function mergeSpellConfigs(base: SpellProjectConfig, override: SpellProjectConfi
 			? { ...(base.keybindings ?? {}), ...(override.keybindings ?? {}) }
 			: undefined;
 	const modes = [...(base.modes ?? []), ...(override.modes ?? [])];
+	// Disciplines merge by name: override wins (project over user).
+	const overrideDisciplineNames = new Set((override.disciplines ?? []).map(d => d.name));
+	const disciplines = [
+		...(base.disciplines ?? []).filter(d => !overrideDisciplineNames.has(d.name)),
+		...(override.disciplines ?? []),
+	];
 	const agents =
 		base.agents || override.agents
 			? {
@@ -111,6 +122,7 @@ function mergeSpellConfigs(base: SpellProjectConfig, override: SpellProjectConfi
 		providers,
 		keybindings,
 		modes: modes.length > 0 ? modes : undefined,
+		disciplines: disciplines.length > 0 ? disciplines : undefined,
 		agents,
 	};
 }
@@ -291,6 +303,10 @@ export async function parseSpellKdl(
 	if (modes.length > 0) {
 		result.modes = [...(result.modes ?? []), ...modes];
 	}
+	const disciplines = parseDisciplineBlocks(document);
+	if (disciplines.length > 0) {
+		result.disciplines = [...(result.disciplines ?? []), ...disciplines];
+	}
 
 	// Inline `domain "x" { … }` definitions → resolved SpellDomain manifests.
 	// extends/cycle errors are config errors: surface as a warning and skip the
@@ -321,6 +337,23 @@ export async function parseSpellKdl(
 	}
 
 	return result;
+}
+
+/**
+ * The unified discipline set for a config: first-class `discipline` blocks plus
+ * every `policy` desugared into one. (Workflow `mode` roles desugar at the
+ * capability layer where {@link ModeConfig} objects are available; this accessor
+ * covers the config-resolvable triggers — tool/layer/auto/manual-from-discipline.)
+ *
+ * Dedup by name: an explicit `discipline` overrides a same-named desugared policy.
+ */
+export function unifiedDisciplines(config: SpellProjectConfig): Discipline[] {
+	const explicit = config.disciplines ?? [];
+	const explicitNames = new Set(explicit.map(d => d.name));
+	const fromPolicies = config.policies.policies
+		.map(policyToDiscipline)
+		.filter(d => !explicitNames.has(d.name));
+	return [...explicit, ...fromPolicies];
 }
 
 export async function loadSpellKdl(projectDir: string): Promise<SpellProjectConfig | undefined> {
