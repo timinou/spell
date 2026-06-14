@@ -1,7 +1,7 @@
 import type { Document, Node } from "@bgotink/kdl";
 import { parse } from "@bgotink/kdl";
 import { logger } from "@spell/pi-utils";
-import { getBooleanArgument, getStringArgument, getStringProperty } from "./kdl-helpers";
+import { getBooleanArgument, getNumberArgument, getStringArgument, getStringProperty } from "./kdl-helpers";
 import type { LayerDefinition, TaskPolicy, TaskPolicyConfig, TaskVerify } from "./task-policies";
 
 function parseLayerNode(node: Node): [string, LayerDefinition] | undefined {
@@ -45,6 +45,16 @@ function parsePolicyGates(policyNode: Node): { verify: TaskVerify; description?:
 			case "gate-llm": {
 				const review = getStringArgument(childNode);
 				if (review !== undefined) verify.review = review;
+				break;
+			}
+			case "verify-swarm":
+			case "swarm": {
+				const count = getNumberArgument(childNode);
+				if (count !== undefined && count > 0) {
+					verify.swarm = { count };
+					const criteria = getStringProperty(childNode, "criteria");
+					if (criteria) verify.swarm.criteria = criteria;
+				}
 				break;
 			}
 			case "inject": {

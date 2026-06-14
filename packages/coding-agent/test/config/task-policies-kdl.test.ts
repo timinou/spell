@@ -178,4 +178,14 @@ policy "fe-gates" layer="frontend" {
 			},
 		]);
 	});
+
+	it("parses a swarm gate on a policy (FEAT-816)", () => {
+		const config = parseTaskPoliciesKdl(`
+policy "impl-swarm" layer="implementation" {
+	gate-commit #true
+	swarm 3 criteria="security · leaks"
+}
+`);
+		expect(config!.policies[0]?.verify).toEqual({ commit: true, swarm: { count: 3, criteria: "security · leaks" } });
+	});
 });

@@ -41,7 +41,7 @@ import { PREVIEW_LIMITS } from "./render-utils";
  * lifecycle (the `task` tool) and never accepted from the model input schema.
  */
 export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned" | "failed" | "gate_failed";
-export type TodoKind = "work" | "data";
+export type TodoKind = "work" | "data" | "loop";
 
 /**
  * Verification requirements for a node. Presence of `commit`, `artifact`, or
@@ -53,6 +53,13 @@ export interface TodoVerify {
 	artifact?: string;
 	cmd?: string;
 	review?: string;
+	/**
+	 * Reviewer-swarm gate (FEAT-816): completing this node requires fanning out
+	 * `count` parallel `reviewer` agents over the node's diff. Two-phase like
+	 * cmd/commit — satisfiable-by-existing: if the diff was already reviewed this
+	 * activation, resubmit `verified:true` without re-dispatching.
+	 */
+	swarm?: { count: number; criteria?: string };
 }
 
 export interface TodoDelegationVerification {
@@ -157,8 +164,17 @@ const VerifySchema = Type.Object(
 		artifact: Type.Optional(Type.String({ description: "Path to an artifact that must exist (gates)." })),
 		cmd: Type.Optional(Type.String({ description: "Command that must pass (gates)." })),
 		review: Type.Optional(Type.String({ description: "Advisory self-review criteria (does not gate)." })),
+		swarm: Type.Optional(
+			Type.Object(
+				{
+					count: Type.Number({ description: "Number of parallel reviewer agents to fan out over the diff." }),
+					criteria: Type.Optional(Type.String({ description: "Per-swarm acceptance criteria for each reviewer." })),
+				},
+				{ description: "Reviewer-swarm gate: dispatch N reviewers over the node's diff before completion." },
+			),
+		),
 	},
-	{ description: "Verification requirements. commit|artifact|cmd gate completion; review is advisory." },
+	{ description: "Verification requirements. commit|artifact|cmd|swarm gate completion; review is advisory." },
 );
 
 /**
@@ -854,7 +870,7 @@ export function hasGate(node: TodoNode): boolean {
 /** True when the node has gates that require two-phase verified completion. */
 export function hasRequiredGate(node: TodoNode): boolean {
 	const v = node.verify;
-	return !!((v && (v.commit || v.artifact || v.cmd)) || node.closesRef);
+	return !!((v && (v.commit || v.artifact || v.cmd || v.swarm)) || node.closesRef);
 }
 
 /**
@@ -1162,6 +1178,14 @@ export function formatSummary({
 			if (node.verify?.cmd) lines.push(`  [ ] Run \`${node.verify.cmd}\` (verify.cmd)`);
 			if (node.verify?.artifact) lines.push(`  [ ] Verify artifact at ${node.verify.artifact} (verify.artifact)`);
 			if (node.verify?.commit) lines.push(`  [ ] Commit changes (verify.commit)`);
+			if (node.verify?.swarm) {
+				const { count, criteria } = node.verify.swarm;
+				lines.push(
+					`  [ ] Reviewer swarm: dispatch ${count} parallel \`reviewer\` task(s) over this node's diff` +
+						`${criteria ? ` (criteria: ${criteria})` : ""}; file findings to org, then resolve them (verify.swarm).` +
+						` Already reviewed this wave's diff? It is satisfied — proceed.`,
+				);
+			}
 			if (node.verify?.review) lines.push(`  [i] Advisory review: ${node.verify.review} (verify.review)`);
 			if (node.closesRef) lines.push(`  [i] Verified completion will close org ref ${node.ref ?? ""}.`);
 			lines.push("");

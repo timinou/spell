@@ -34,6 +34,8 @@ export interface TaskVerify {
 	artifact?: string;
 	cmd?: string;
 	review?: string;
+	/** Reviewer-swarm gate (FEAT-816): fan out N reviewers over the diff before completion. */
+	swarm?: { count: number; criteria?: string };
 }
 
 /** @deprecated Alias retained for readability at call sites; identical to {@link TaskVerify}. */
@@ -139,6 +141,7 @@ export function resolveGates(layer: string | undefined, policies: TaskPolicy[]):
 		if (policy.verify.artifact !== undefined) merged.artifact = policy.verify.artifact;
 		if (policy.verify.cmd !== undefined) merged.cmd = policy.verify.cmd;
 		if (policy.verify.review !== undefined) merged.review = policy.verify.review;
+		if (policy.verify.swarm !== undefined) merged.swarm = policy.verify.swarm;
 	}
 	return merged;
 }
@@ -169,6 +172,7 @@ export function applyPolicyGates(
 		artifact: existingVerify.artifact ?? policyVerify.artifact,
 		cmd: existingVerify.cmd ?? policyVerify.cmd,
 		review: existingVerify.review ?? policyVerify.review,
+		swarm: existingVerify.swarm ?? policyVerify.swarm,
 	};
 }
 

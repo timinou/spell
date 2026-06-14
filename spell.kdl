@@ -121,6 +121,15 @@ policy "ui-quality" layer="ui" {
     gate-cmd "bun run --workspaces --if-present --parallel test"
 }
 
+// FEAT-816 consumer #2: the reviewer-swarm sub-loop as a layer gate. Any todo
+// node / org item on the `implementation` layer must, before completion, fan out
+// 3 parallel reviewers over its diff and burn down the findings. Satisfiable by
+// an already-run review of the same diff (no blind re-dispatch).
+policy "implementation-swarm" layer="implementation" {
+    gate-commit #true
+    swarm 3 criteria="security holes · escape vectors · convention drift · leak/race · missing edges"
+}
+
 
 // ── Roles ── verb-titled, KDL-native. command → titlebar + /slash.
 //    context-policy: carry = re-inject every turn · fresh = once on activation

@@ -167,6 +167,24 @@ describe("applyPolicyGates", () => {
 		const result = applyPolicyGates(existing, "unknown", policies);
 		expect(result.cmd).toBe("mine");
 	});
+
+	it("threads the swarm gate from policy into the resolved verify (FEAT-816)", () => {
+		const swarmPolicies: TaskPolicy[] = [
+			{ name: "impl-swarm", match: { layer: "implementation" }, verify: { swarm: { count: 3, criteria: "sec" } } },
+		];
+		const resolved = resolveGates("implementation", swarmPolicies);
+		expect(resolved.swarm).toEqual({ count: 3, criteria: "sec" });
+		const applied = applyPolicyGates({}, "implementation", swarmPolicies);
+		expect(applied.swarm).toEqual({ count: 3, criteria: "sec" });
+	});
+
+	it("preserves an explicit swarm gate over the policy default", () => {
+		const swarmPolicies: TaskPolicy[] = [
+			{ name: "impl-swarm", match: { layer: "implementation" }, verify: { swarm: { count: 3 } } },
+		];
+		const applied = applyPolicyGates({ swarm: { count: 5 } }, "implementation", swarmPolicies);
+		expect(applied.swarm).toEqual({ count: 5 });
+	});
 });
 
 describe("resolveInjectText", () => {

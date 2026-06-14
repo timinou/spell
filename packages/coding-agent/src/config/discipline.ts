@@ -61,22 +61,14 @@ export interface DisciplineInject {
 // =============================================================================
 
 /**
- * A discipline's verify gate — the closing half of a sub-loop. Extends the
- * shared {@link TaskVerify} vocab (`commit|artifact|cmd|review`) with `swarm`:
- * fan out N parallel reviewers over the wave diff and block until they pass.
- *
- * `swarm` is satisfiable-by-existing-review: if the wave's diff was already
- * audited this activation, the gate clears without re-dispatching (validated
- * against session logs — 41% of swarm-using waves self-review).
+ * A discipline's verify gate — the closing half of a sub-loop. Identical to the
+ * shared {@link TaskVerify} vocab (`commit|artifact|cmd|review|swarm`); the
+ * `swarm` gate fans out N parallel reviewers over the wave diff and is
+ * satisfiable-by-existing-review (if the diff was already audited this
+ * activation, the gate clears without re-dispatching — validated against session
+ * logs: 41% of swarm-using waves self-review).
  */
-export interface DisciplineVerify extends TaskVerify {
-	swarm?: {
-		/** Number of parallel reviewer agents to fan out. */
-		count: number;
-		/** Optional per-swarm acceptance criteria handed to each reviewer. */
-		criteria?: string;
-	};
-}
+export type DisciplineVerify = TaskVerify;
 
 // Discipline
 // =============================================================================
@@ -169,14 +161,14 @@ export function toolDiscipline(name: string, tool: string, sections: ModeConfigS
 // =============================================================================
 
 /** True when a verify gate carries at least one active requirement. */
-export function hasVerify(verify: DisciplineVerify | TaskVerify | undefined): boolean {
+export function hasVerify(verify: TaskVerify | undefined): boolean {
 	if (!verify) return false;
 	return (
 		verify.commit !== undefined ||
 		verify.artifact !== undefined ||
 		verify.cmd !== undefined ||
 		verify.review !== undefined ||
-		("swarm" in verify && verify.swarm !== undefined)
+		verify.swarm !== undefined
 	);
 }
 

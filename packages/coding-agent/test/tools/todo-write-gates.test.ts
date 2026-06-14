@@ -468,6 +468,10 @@ describe("hasRequiredGate", () => {
 		expect(hasRequiredGate(makeNode({ id: "t1", content: "a", verify: { review: "check criteria" } }))).toBe(false);
 	});
 
+	test("returns true for verify.swarm (FEAT-816 sub-loop gate)", () => {
+		expect(hasRequiredGate(makeNode({ id: "t1", content: "a", verify: { swarm: { count: 3 } } }))).toBe(true);
+	});
+
 	test("returns false for ref (non-gating lineage)", () => {
 		expect(hasRequiredGate(makeNode({ id: "t1", content: "a", ref: "FEAT-001-auth" }))).toBe(false);
 	});
@@ -572,6 +576,21 @@ describe("two-phase gated completion via formatSummary", () => {
 		expect(result).toContain("[ ] Commit changes (verify.commit)");
   expect(result).toContain("[i] Verified completion will close org ref FEAT-001-add-auth.");
 		expect(result).toContain('{id: "task-1", status: "completed", verified: true}');
+	});
+
+	test("swarm gate emits a reviewer-swarm directive (FEAT-816)", () => {
+		const node = makeNode({
+			id: "task-1",
+			content: "Land wave",
+			status: "in_progress",
+			verify: { swarm: { count: 3, criteria: "security · leaks" } },
+		});
+		const result = callFormatSummary({ nodes: [node], pendingVerificationNodes: [node] });
+		expect(result).toContain("--- Verification Required ---");
+		expect(result).toContain("dispatch 3 parallel `reviewer` task(s) over this node's diff");
+		expect(result).toContain("criteria: security · leaks");
+		expect(result).toContain("Already reviewed this wave's diff? It is satisfied");
+		expect(result).toContain("(verify.swarm)");
 	});
 
 	test("no verification section when pendingVerificationNodes is empty", () => {
