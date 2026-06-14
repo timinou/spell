@@ -1,56 +1,56 @@
 #!/usr/bin/env bash
-# build-portable-native.sh — build a Spell native addon that loads in arbitrary
-# Terminal-Bench task containers.
+# build-portable-native.sh — ONE command to produce a Spell dist that runs in
+# arbitrary Terminal-Bench task containers.
 #
-# PROVEN (2026-06-14): built pi-natives inside manylinux_2_28 (glibc 2.28) and
-# verified the resulting .node `require()`s + initializes (not just resolves
-# symbols) on ubuntu:24.04 / ubuntu:22.04 / debian:12 — the exact images the
-# committed Arch-host .node (GLIBC_2.43) FAILS to load on. GLIBC floor 2.43→2.28.
+# Output: packaging/harbor/dist/
+#   spell                      — self-contained binary (glibc-2.28 floor, baseline ISA)
+#   spell.autonomous.kdl       — the autonomous + harbor domain spec
 #
-# WHY: glibc symbol versioning is backward-compatible — a 2.28-built addon runs
-# on 2.28→latest. CPU-ISA (SIGILL) is separately handled by x86-64 baseline.
+# PROVEN (2026-06-14): the native addon built this way `require()`s + inits on
+# ubuntu:24.04 / ubuntu:22.04 / debian:12 — where the committed Arch-host .node
+# (GLIBC_2.43) fails. glibc symbol versioning is backward-compatible (2.28→latest);
+# CPU-ISA handled by baseline x86-64. Everything runs INSIDE manylinux_2_28
+# (glibc 2.28 + gcc 14) so the binary inherits the low floor.
 #
-# This script runs the build INSIDE the manylinux container (it has glibc 2.28 +
-# gcc 14; it installs rustup nightly). For musl/Alpine, set TARGET=musl.
-#
-# Output: packaging/harbor/dist/pi_natives.<tag>.node — staged for install.sh.
+# Usage:  packaging/harbor/build-portable-native.sh            # glibc (default)
+#         TARGET=musl packaging/harbor/build-portable-native.sh # Alpine tasks
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-OUT_DIR="${OUT_DIR:-${REPO_ROOT}/packaging/harbor/dist}"
-TARGET="${TARGET:-glibc}"  # glibc | musl
+OUT_DIR="${REPO_ROOT}/packaging/harbor/dist"
+TARGET="${TARGET:-glibc}"
 mkdir -p "${OUT_DIR}"
 
 case "${TARGET}" in
-  glibc) IMAGE="quay.io/pypa/manylinux_2_28_x86_64"; TAG="manylinux_2_28-x64" ;;
-  musl)  IMAGE="rust:alpine";                        TAG="musl-x64" ;;
+  glibc) IMAGE="quay.io/pypa/manylinux_2_28_x86_64" ;;
+  musl)  IMAGE="rust:alpine" ;;
   *) echo "✗ Unknown TARGET=${TARGET} (expected glibc|musl)" >&2; exit 1 ;;
 esac
 
-echo "==> Building portable pi-natives (${TARGET}) in ${IMAGE}"
+echo "==> Building full Spell dist (${TARGET}) inside ${IMAGE}"
+echo "    This installs rust+bun in the container and compiles — first run ~10–20 min."
 
-# In-container build script. Baseline ISA (x86-64-v1: no AVX2 → no SIGILL on
-# old/cloud CPUs). cdylib (.so) renamed to .node for napi require().
-cat > "${OUT_DIR}/.ml-build.sh" <<'SCRIPT'
-set -euo pipefail
-export CARGO_HOME=/tmp/cargo CARGO_TARGET_DIR=/tmp/ml-target
-if ! command -v cargo >/dev/null 2>&1; then
-  curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain nightly --profile minimal >/tmp/rustup.log 2>&1
+# Everything happens in one container invocation: native addon + embedded
+# binary. The build script honors a pre-set RUSTFLAGS (build-native.ts guard),
+# so baseline ISA propagates to the cdylib.
+docker run --rm -v "${REPO_ROOT}":/work "${IMAGE}" bash -euo pipefail -c '
+  export CARGO_HOME=/tmp/cargo CARGO_TARGET_DIR=/tmp/ml-target PATH=$HOME/.bun/bin:$PATH
+  export RUSTFLAGS="-C target-cpu=x86-64"   # baseline: no AVX2 → no SIGILL
+  echo "==> install rust (nightly) + bun"
+  command -v cargo >/dev/null || curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain nightly --profile minimal >/tmp/rustup.log 2>&1
   source "$CARGO_HOME/env"
-fi
-export RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=x86-64"
-cd /work
-cargo build -p pi-natives --release
-SO=$(find "$CARGO_TARGET_DIR/release" -maxdepth 1 -name 'libpi_natives.so' | head -1)
-cp "$SO" "/work/packaging/harbor/dist/pi_natives.${TAG}.node"
-echo "max GLIBC: $(objdump -T "/work/packaging/harbor/dist/pi_natives.${TAG}.node" 2>/dev/null | grep -oE 'GLIBC_[0-9.]+' | sort -V | uniq | tail -1)"
-SCRIPT
+  command -v bun >/dev/null || curl -fsSL https://bun.sh/install | bash >/tmp/bun.log 2>&1
+  cd /work
+  echo "==> bun install"; bun install --frozen-lockfile >/tmp/install.log 2>&1 || bun install >/tmp/install.log 2>&1
+  echo "==> build native addon (baseline)"; bun --cwd=packages/natives run build:native
+  echo "==> compile self-contained binary"; bun --cwd=packages/coding-agent run build:binary
+  cp packages/coding-agent/dist/spell /work/packaging/harbor/dist/spell
+  echo "==> max GLIBC demanded by binary:"; objdump -T /work/packaging/harbor/dist/spell 2>/dev/null | grep -oE "GLIBC_[0-9.]+" | sort -V | uniq | tail -1 || true
+'
 
-docker run --rm -e "TAG=${TAG}" -v "${REPO_ROOT}":/work \
-  "${IMAGE}" bash "/work/packaging/harbor/dist/.ml-build.sh"
-rm -f "${OUT_DIR}/.ml-build.sh"
+cp "${REPO_ROOT}/spell.autonomous.kdl" "${OUT_DIR}/spell.autonomous.kdl"
+chmod +x "${OUT_DIR}/spell"
 
-echo "✓ Native addon staged: ${OUT_DIR}/pi_natives.${TAG}.node"
-echo "  Prove portability:  packaging/harbor/probe-libc.sh ${OUT_DIR}/pi_natives.${TAG}.node"
-echo "  Then build the self-contained binary with this .node embedded:"
-echo "    (inside the same manylinux image) bun --cwd=packages/coding-agent run build:binary"
+echo "✓ Dist ready: ${OUT_DIR}/{spell, spell.autonomous.kdl}"
+echo "  Prove it loads on TB images:"
+echo "    packaging/harbor/probe-libc.sh ${OUT_DIR}/spell ubuntu:24.04"

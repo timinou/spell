@@ -3,17 +3,40 @@
 Run Spell as a fully-autonomous agent on [Terminal-Bench](https://tbench.ai)
 via the [Harbor](https://harborframework.com) harness.
 
+## Run a single task locally — three commands
+
+```bash
+# 1. one-time: build the portable dist (binary + domain spec). ~10–20 min first run.
+packaging/harbor/build-portable-native.sh
+
+# 2. sanity: prove the harness + task work with the oracle (no model, no Spell).
+uv run harbor run --dataset terminal-bench@2.0 --task build-pov-ray --agent oracle --n-concurrent 1
+
+# 3. run Spell on the task. Your login travels in automatically (see below).
+uv run harbor run --dataset terminal-bench@2.0 --task build-pov-ray \
+  --agent-import-path packaging.harbor.spell_agent:SpellAgent \
+  --model anthropic/claude-opus-4-x --n-concurrent 1
+```
+
+NB the flags (confirmed against `harbor run -h`): `--dataset terminal-bench@2.0`,
+single task is `--task <name>` (NOT `--task-id`), agent is `--agent-import-path
+module:Class`, model is `--model`.
+
+## Your login survives the run (no re-auth)
+
+Spell stores credentials — **OAuth subscription tokens AND API keys** — in
+`~/.spell/agent/agent.db`. The adapter's `install()` `upload_file`s that db into
+the container and points Spell at it via `PI_CODING_AGENT_DIR`, so your existing
+login is used with zero re-authentication. Override the source db with
+`SPELL_AGENT_DB=/path/to/agent.db`. (If you instead rely on an env API key,
+`harbor run` forwards `ANTHROPIC_API_KEY` and the db upload is simply skipped.)
+
 ## How it fits together
 
-```
-harbor run -d terminal-bench/terminal-bench-2 \
-  --agent-import-path packaging.harbor.spell_agent:SpellAgent \
-  -m anthropic/claude-opus-4-x -n 8
-```
-
-- `spell_agent.py` — Harbor `BaseInstalledAgent`. `install()` stages Spell into
-  the task container (`install.sh`); `run()` drives `spell --domain harbor -p`;
-  `populate_context_post_run()` harvests the transcript + token usage.
+- `spell_agent.py` — Harbor `BaseInstalledAgent`. `install()` uploads the dist +
+  your `agent.db` and fail-loud-verifies the binary loads; `run()` drives
+  `spell --domain harbor -p`; `populate_context_post_run()` harvests the
+  transcript + token usage.
 - `spell.autonomous.kdl` (repo root) — the **declarative** autonomous + harbor
   domains. `harbor extends autonomous`, adds the `$HARBOR_MODEL` env contract.
 - The `harbor` domain's `surface "none"` routes Spell headless and gates
@@ -66,16 +89,17 @@ install, not a tool call mid-run.
 - Leaderboard-grade (5 trials) frontier: **~$250–500 API + cloud infra**.
 - Smoke run (5 tasks, cheap model, local Docker): **<$5**.
 
-## First milestone
+## Scale up
 
-```
-# 1. validate the harness itself
-harbor run -d terminal-bench/terminal-bench-2 -a oracle -n 4
-# 2. build + prove the portable native
-packaging/harbor/build-portable-native.sh
-packaging/harbor/probe-libc.sh packaging/harbor/dist/spell
-# 3. smoke Spell on a few tasks, cheap model
-harbor run -d terminal-bench/terminal-bench-2 \
+Once a single task passes, widen the run — drop `--task`, raise concurrency, pick
+a cheaper model for a full smoke pass:
+
+```bash
+uv run harbor run --dataset terminal-bench@2.0 \
   --agent-import-path packaging.harbor.spell_agent:SpellAgent \
-  -m anthropic/claude-haiku-4-5 -n 4
+  --model anthropic/claude-haiku-4-5 --n-concurrent 4
 ```
+
+Prove native portability across the libc matrix in CI:
+`packaging/harbor/probe-libc.sh packaging/harbor/dist/spell` (exits 1 on any
+unresolved-symbol failure).

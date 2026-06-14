@@ -34,9 +34,21 @@ SPELL_BIN = f"{SPELL_PREFIX}/spell"
 DOMAIN_SPEC_DIR = "/root/.spell"  # user spell.kdl dir; domain spec imported here
 TRANSCRIPT_PATH = "/tmp/spell-harbor-transcript.jsonl"
 
-# The install script (staged next to this file) builds/copies a portable Spell
-# binary and the autonomous domain spec into the container.
-_INSTALL_SH = Path(__file__).parent / "install.sh"
+# Auth forwarding: Spell stores logins (OAuth subscription tokens AND API keys)
+# in agent.db under its agent dir. We upload the host db into the container and
+# point Spell at it via PI_CODING_AGENT_DIR, so YOUR login survives the run
+# without re-authenticating. Host path resolves ~/.spell/agent/agent.db (or the
+# SPELL_AGENT_DB override).
+CONTAINER_AGENT_DIR = f"{SPELL_PREFIX}/agent"
+CONTAINER_AGENT_DB = f"{CONTAINER_AGENT_DIR}/agent.db"
+_HOST_AGENT_DB = Path(
+    os.environ.get("SPELL_AGENT_DB")
+    or (Path.home() / ".spell" / "agent" / "agent.db")
+)
+
+# Host dir holding the built dist (binary + domain spec). Built by
+# packaging/harbor/build-portable-native.sh. Override with SPELL_DIST_DIR.
+_DIST_DIR = Path(os.environ.get("SPELL_DIST_DIR") or (Path(__file__).parent / "dist"))
 
 
 class SpellAgent(BaseInstalledAgent):
@@ -49,10 +61,65 @@ class SpellAgent(BaseInstalledAgent):
     def version(self) -> str | None:
         return os.environ.get("SPELL_VERSION", "dev")
 
-    @property
-    def install_agent_script_path(self) -> Path:
-        # BaseInstalledAgent runs this script in the container during install().
-        return _INSTALL_SH
+    async def install(self, environment: BaseEnvironment) -> None:
+        """Stage Spell into the task container — fully self-contained.
+
+        Uploads the host-built dist (binary + domain spec) and the host login
+        (agent.db), wires a minimal user spell.kdl, then verifies the native
+        addon LOADS in THIS container (fail-loud on a libc mismatch, before the
+        benchmark starts rather than at first tool call).
+        """
+        spell_bin = _DIST_DIR / "spell"
+        domain_spec = _DIST_DIR / "spell.autonomous.kdl"
+        if not spell_bin.is_file() or not domain_spec.is_file():
+            raise RuntimeError(
+                f"Spell dist missing in {_DIST_DIR}. Build it first:\n"
+                f"  packaging/harbor/build-portable-native.sh"
+            )
+
+        # 1. binary + domain spec
+        await self.exec_as_root(
+            environment, command=f"mkdir -p {shlex.quote(SPELL_PREFIX)} {shlex.quote(DOMAIN_SPEC_DIR)}"
+        )
+        await environment.upload_file(spell_bin, SPELL_BIN)
+        await environment.upload_file(domain_spec, f"{DOMAIN_SPEC_DIR}/spell.autonomous.kdl")
+        await self.exec_as_root(environment, command=f"chmod +x {shlex.quote(SPELL_BIN)}")
+        # Minimal user spell.kdl that imports the domain spec so `--domain
+        # harbor` resolves. heredoc avoids nested-quote escaping.
+        kdl_path = f"{DOMAIN_SPEC_DIR}/spell.kdl"
+        await self.exec_as_agent(
+            environment,
+            command=(
+                f"cat > {shlex.quote(kdl_path)} <<'EOF'\n"
+                'import "./spell.autonomous.kdl"\n'
+                "EOF\n"
+            ),
+        )
+
+        # 2. login: upload agent.db so Spell finds YOUR credentials (OAuth
+        #    subscription + API keys). Best-effort — if you only use an env API
+        #    key, skipping this is harmless.
+        if _HOST_AGENT_DB.is_file():
+            await self.exec_as_agent(
+                environment, command=f"mkdir -p {shlex.quote(CONTAINER_AGENT_DIR)}"
+            )
+            await environment.upload_file(_HOST_AGENT_DB, CONTAINER_AGENT_DB)
+            for suffix in ("-wal", "-shm"):
+                sidecar = _HOST_AGENT_DB.with_name(_HOST_AGENT_DB.name + suffix)
+                if sidecar.is_file():
+                    await environment.upload_file(sidecar, CONTAINER_AGENT_DB + suffix)
+
+        # 3. fail-loud load verification (the real portability gate).
+        result = await self.exec_as_agent(
+            environment, command=f"{shlex.quote(SPELL_BIN)} --version"
+        )
+        if getattr(result, "return_code", 1) != 0:
+            raise RuntimeError(
+                "Spell binary failed to load in this container — likely a libc "
+                "mismatch. Rebuild for this image's libc:\n"
+                "  glibc image (default): packaging/harbor/build-portable-native.sh\n"
+                "  musl/Alpine image:     TARGET=musl packaging/harbor/build-portable-native.sh"
+            )
 
     @with_prompt_template
     async def run(
@@ -76,7 +143,9 @@ class SpellAgent(BaseInstalledAgent):
                 "`harbor run` (forwarded as $HARBOR_MODEL)."
             )
 
+        # PI_CODING_AGENT_DIR points Spell at the uploaded agent.db (login).
         cmd = (
+            f"PI_CODING_AGENT_DIR={shlex.quote(CONTAINER_AGENT_DIR)} "
             f"HARBOR_MODEL={shlex.quote(model)} "
             f"{shlex.quote(SPELL_BIN)} "
             f"--domain harbor "
