@@ -43,6 +43,25 @@ login is used with zero re-authentication. Override the source db with
   interactive tools; `knowledge { embeddings #false }` + env keep org/memory on
   BM25+graph (no fastembed RAM/download).
 
+### Native addon: shipped as a SIDECAR, not embedded
+
+`bun --compile` records the addon in the binary's manifest but does **not**
+embed `.node` as an fs-readable blob — at runtime Spell extracts/loads it from
+`~/.spell/natives/<version>/`. So the dist ships the `.node` as a separate file
+and the adapter uploads it to `/root/.spell/natives/<version>/`. Verified
+end-to-end in ubuntu:24.04: binary runs, addon loads (no GitHub download
+fallback), `--domain harbor` resolves from the KDL spec, and the
+`HARBOR_MODEL` env contract fails loud when unset.
+
+Container layout the adapter creates (mirrors a real install):
+```
+/opt/spell/spell                          # binary
+/root/.spell/spell.kdl                     # imports the domain spec
+/root/.spell/spell.autonomous.kdl          # autonomous + harbor domains
+/root/.spell/agent/agent.db                # your login (PI_CODING_AGENT_DIR)
+/root/.spell/natives/<version>/*.node      # native addon sidecar
+```
+
 ## Native (libc) portability — RESOLVED, proven
 
 **The committed repo `.node` does NOT work in TB containers** (measured

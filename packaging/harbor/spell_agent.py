@@ -28,10 +28,19 @@ from harbor.agents.installed.base import BaseInstalledAgent, with_prompt_templat
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
-# Where Spell + its domain spec land inside the task container.
+# Spell's config root in the container. Layout MUST mirror a real install
+# (verified end-to-end in ubuntu:24.04):
+#   /root/.spell/spell.kdl                    — user config (imports the domain spec)
+#   /root/.spell/spell.autonomous.kdl         — the autonomous + harbor domains
+#   /root/.spell/agent/agent.db               — login (PI_CODING_AGENT_DIR points here)
+#   /root/.spell/natives/<version>/*.node     — native addon sidecar
+# loadUserSpellKdl reads `dirname(PI_CODING_AGENT_DIR)/spell.kdl`, so the agent
+# dir MUST be a child of the config root for the domain spec to resolve.
 SPELL_PREFIX = "/opt/spell"
 SPELL_BIN = f"{SPELL_PREFIX}/spell"
-DOMAIN_SPEC_DIR = "/root/.spell"  # user spell.kdl dir; domain spec imported here
+CONFIG_ROOT = "/root/.spell"
+DOMAIN_SPEC_DIR = CONFIG_ROOT  # user spell.kdl + domain spec live here
+NATIVES_DIR = f"{CONFIG_ROOT}/natives"  # + /<version>/*.node
 TRANSCRIPT_PATH = "/tmp/spell-harbor-transcript.jsonl"
 
 # Auth forwarding: Spell stores logins (OAuth subscription tokens AND API keys)
@@ -39,7 +48,7 @@ TRANSCRIPT_PATH = "/tmp/spell-harbor-transcript.jsonl"
 # point Spell at it via PI_CODING_AGENT_DIR, so YOUR login survives the run
 # without re-authenticating. Host path resolves ~/.spell/agent/agent.db (or the
 # SPELL_AGENT_DB override).
-CONTAINER_AGENT_DIR = f"{SPELL_PREFIX}/agent"
+CONTAINER_AGENT_DIR = f"{CONFIG_ROOT}/agent"
 CONTAINER_AGENT_DB = f"{CONTAINER_AGENT_DIR}/agent.db"
 _HOST_AGENT_DB = Path(
     os.environ.get("SPELL_AGENT_DB")
@@ -84,6 +93,27 @@ class SpellAgent(BaseInstalledAgent):
         await environment.upload_file(spell_bin, SPELL_BIN)
         await environment.upload_file(domain_spec, f"{DOMAIN_SPEC_DIR}/spell.autonomous.kdl")
         await self.exec_as_root(environment, command=f"chmod +x {shlex.quote(SPELL_BIN)}")
+
+        # 1b. native addon SIDECAR. bun --compile does not embed .node as an
+        #     fs-readable blob, so at runtime Spell loads it from
+        #     ~/.spell/natives/<version>/. Upload it there. Without this, the
+        #     binary runs but every native tool (find/edit/execute/org) fails to
+        #     load and tries to download the addon from GitHub.
+        node_files = list(_DIST_DIR.glob("pi_natives*.node"))
+        version_file = _DIST_DIR / ".natives-version"
+        if node_files and version_file.is_file():
+            version = version_file.read_text().strip()
+            natives_dir = f"{NATIVES_DIR}/{version}"
+            await self.exec_as_agent(
+                environment, command=f"mkdir -p {shlex.quote(natives_dir)}"
+            )
+            for node in node_files:
+                await environment.upload_file(node, f"{natives_dir}/{node.name}")
+        else:
+            raise RuntimeError(
+                f"Native addon sidecar missing in {_DIST_DIR} (need pi_natives*.node "
+                f"+ .natives-version). Rebuild: packaging/harbor/build-portable-native.sh"
+            )
         # Minimal user spell.kdl that imports the domain spec so `--domain
         # harbor` resolves. heredoc avoids nested-quote escaping.
         kdl_path = f"{DOMAIN_SPEC_DIR}/spell.kdl"
