@@ -13,6 +13,7 @@ pub mod embedder_adapter;
 pub mod engine;
 pub mod lane_code;
 pub mod lane_org;
+pub mod org_cache;
 pub mod repo_cache;
 pub mod subscribe;
 

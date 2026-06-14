@@ -3984,6 +3984,7 @@ dependencies = [
 name = "pi-knowledge-worker"
 version = "13.12.8"
 dependencies = [
+ "bincode",
  "clap",
  "fastembed",
  "fd-lock",

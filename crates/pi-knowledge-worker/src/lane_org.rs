@@ -11,6 +11,7 @@
 //! warm state; route `Search`, `About`, `Neighbors`, `Since` commands here.
 
 use std::{
+	collections::BTreeMap,
 	fs,
 	path::{Path, PathBuf},
 	sync::atomic::{AtomicU8, AtomicUsize, Ordering},
@@ -33,10 +34,16 @@ use pi_org_engine::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::embedder_adapter::DaemonEmbedder;
+use crate::{
+	embedder_adapter::DaemonEmbedder,
+	org_cache::{OrgVecCache, carry_forward, plan_embeds},
+};
 
 const SCANNED_SUBDIRS: &[&str] = &["!tasks", ".spell/memory"];
 const EMBEDDER_DIM: usize = 1024;
+/// Embedder identity persisted in the org vec cache manifest. A change here
+/// (model swap) invalidates every cached vector via `OrgVecManifest` check.
+const EMBEDDER_MODEL: &str = "bge-m3";
 
 /// Env var gating the embedding (vector) lane. Set to `0`/`false`/`off` by a
 /// declarative autonomous domain (`knowledge { embeddings #false }`) to skip
@@ -238,13 +245,18 @@ impl OrgLane {
 		// when embeddings are disabled (autonomous/container profile): the lane
 		// keeps an empty vector index and `search()` degrades to BM25 + graph,
 		// avoiding the bge-m3 model load (download + RAM) altogether.
+		//
+		// BUG-474/476: cache-aware + chunked. `build_vec_index_with` loads the
+		// prior persisted index, re-embeds only changed/new items in bounded
+		// chunks (bumping `progress.done` per chunk so the marker actually
+		// climbs), carries unchanged vectors forward, prunes vanished ids, and
+		// persists the result for the next warm.
+		progress.enter(WarmPhase::Embed, items.len());
 		let vec = if embeddings_disabled() {
-			progress.enter(WarmPhase::Embed, items.len());
 			progress.done.store(items.len(), Ordering::SeqCst);
 			VectorIndex::new(EMBEDDER_DIM, items.len().max(1)).map_err(|e| format!("vec init: {e}"))?
 		} else {
-			progress.enter(WarmPhase::Embed, items.len());
-			build_vec_index_with(&items, embedder, progress)?
+			build_vec_index_with(repo_root, &items, embedder, progress)?
 		};
 
 		// Phase 4 — done.
@@ -532,7 +544,32 @@ fn project_docs(items: &[OrgItem]) -> Vec<RecallDoc> {
 		.collect()
 }
 
+/// Default embed chunk size. Bounded so `progress.done` advances smoothly and
+/// the engine lock is released between chunks (BUG-476/478). Override via
+/// `KNOWLEDGE_EMBED_CHUNK`.
+const DEFAULT_EMBED_CHUNK: usize = 256;
+
+fn embed_chunk_size() -> usize {
+	std::env::var("KNOWLEDGE_EMBED_CHUNK")
+		.ok()
+		.and_then(|v| v.parse().ok())
+		.filter(|n| *n > 0)
+		.unwrap_or(DEFAULT_EMBED_CHUNK)
+}
+
+/// Build (or incrementally refresh) the vector index for `items`.
+///
+/// BUG-474 (cache) + BUG-476 (chunking):
+/// 1. Load the prior persisted index + manifest for `repo_root`.
+/// 2. Partition items into reuse (unchanged content hash) vs embed (new/changed).
+/// 3. Carry reused vectors forward; embed the rest in bounded chunks, bumping
+///    `progress.done` per chunk so the warm marker climbs in real time.
+/// 4. Persist the refreshed index + manifest for the next warm.
+///
+/// Vanished ids are pruned implicitly: the new index only contains keys for
+/// the current `items`.
 fn build_vec_index_with(
+	repo_root: &Path,
 	items: &[OrgItem],
 	embedder: &dyn Embedder,
 	progress: &WarmProgress,
@@ -542,46 +579,67 @@ fn build_vec_index_with(
 	if items.is_empty() {
 		return Ok(vec);
 	}
-	let texts: Vec<String> = items
-		.iter()
-		.map(|item| match item.body.as_ref() {
-			Some(body) => format!("{} {}", item.title, body.chars().take(512).collect::<String>()),
-			None => item.title.clone(),
-		})
-		.collect();
-	let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
-	match embedder.embed_batch(&refs) {
-		Ok(vectors) => {
-			for (idx, item) in items.iter().enumerate() {
-				if let Some(v) = vectors.get(idx) {
-					let node_id = id_hash(&item.id);
-					if let Err(e) = vec.upsert(VectorEntry { node_id, vector: v.clone() }) {
-						eprintln!("vec upsert for {}: {e}", item.id);
-					}
-				}
-				progress.bump_done();
+
+	let cache = OrgVecCache::for_repo(repo_root, EMBEDDER_MODEL, EMBEDDER_DIM);
+	let prior = cache.as_ref().and_then(OrgVecCache::load);
+	let plan = plan_embeds(items, prior.as_ref());
+
+	// Carry forward unchanged vectors from the prior index.
+	let mut live: BTreeMap<u64, u64> = BTreeMap::new();
+	if let Some(loaded) = prior.as_ref() {
+		for (key, item) in &plan.reuse {
+			if let Err(e) = carry_forward(&mut vec, &loaded.index, *key) {
+				eprintln!("carry-forward {}: {e}", item.id);
 			}
-		},
-		Err(e) => {
-			// Embedder unavailable: vector lane remains empty. Advance the
-			// counter to `total` so observers don't see it stuck mid-phase.
-			eprintln!("daemon embedder unavailable; vector lane empty: {e}");
-			progress.done.store(items.len(), Ordering::SeqCst);
-		},
+			if let Some(hash) = loaded.manifest.entries.get(key) {
+				live.insert(*key, *hash);
+			}
+		}
+	}
+	// Reused items are already accounted for in the progress total.
+	for _ in 0..plan.reuse.len() {
+		progress.bump_done();
+	}
+
+	// Embed the changed/new items in bounded chunks.
+	let chunk_size = embed_chunk_size();
+	let mut embed_failed = false;
+	for chunk in plan.embed.chunks(chunk_size) {
+		let refs: Vec<&str> = chunk.iter().map(|(_, _, text, _)| text.as_str()).collect();
+		match embedder.embed_batch(&refs) {
+			Ok(vectors) => {
+				for ((key, item, _text, hash), v) in chunk.iter().zip(vectors.iter()) {
+					if let Err(e) = vec.upsert(VectorEntry { node_id: *key, vector: v.clone() }) {
+						eprintln!("vec upsert for {}: {e}", item.id);
+					} else {
+						live.insert(*key, *hash);
+					}
+					progress.bump_done();
+				}
+			},
+			Err(e) => {
+				// Embedder unavailable mid-build: stop embedding, keep whatever
+				// (reused + earlier-chunk) vectors we have. search() degrades to
+				// BM25 for the unembedded remainder.
+				eprintln!("daemon embedder unavailable; partial vector lane: {e}");
+				embed_failed = true;
+				progress.done.store(items.len(), Ordering::SeqCst);
+				break;
+			},
+		}
+	}
+
+	// Persist only a complete, embedder-healthy build so a transient embed
+	// failure never poisons the cache with a half-corpus index.
+	if !embed_failed
+		&& let Some(cache) = cache.as_ref()
+		&& let Err(e) = cache.save(&vec, &live)
+	{
+		eprintln!("org vec cache save: {e}");
 	}
 	Ok(vec)
 }
 
-fn id_hash(id: &str) -> u64 {
-	const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-	const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-	let mut h = FNV_OFFSET;
-	for &b in id.as_bytes() {
-		h ^= u64::from(b);
-		h = h.wrapping_mul(FNV_PRIME);
-	}
-	h
-}
 
 #[cfg(test)]
 mod tests {

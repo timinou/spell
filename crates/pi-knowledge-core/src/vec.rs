@@ -133,6 +133,22 @@ impl VectorIndex {
 		self.dim
 	}
 
+	/// True when `node_id` already has a vector. Lets the incremental cache
+	/// rebuild skip re-embedding an unchanged item.
+	pub fn contains(&self, node_id: u64) -> bool {
+		self.inner.contains(node_id)
+	}
+
+	/// Read a stored vector back by key. `None` when absent. Used to carry
+	/// forward unchanged vectors when rebuilding the index incrementally.
+	pub fn get(&self, node_id: u64) -> Option<Vec<f32>> {
+		let mut buf = vec![0.0f32; self.dim];
+		match self.inner.get(node_id, &mut buf) {
+			Ok(n) if n > 0 => Some(buf),
+			_ => None,
+		}
+	}
+
 	/// Save with `.tmp` + atomic rename.
 	pub fn save(&self, path: &Path) -> Result<()> {
 		if let Some(parent) = path.parent() {

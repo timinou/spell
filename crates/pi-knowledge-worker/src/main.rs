@@ -370,6 +370,56 @@ fn install_signal_handlers() {
 	}
 }
 
+/// BUG-475 — cap the daemon's CPU affinity so fastembed/ort (which hardcode
+/// `with_intra_threads(available_parallelism())` and read the affinity mask)
+/// don't peg every core during the warm-load embed.
+///
+/// `available_parallelism()` on Linux reports the count of CPUs in the
+/// process affinity mask, so restricting the mask is the version-independent
+/// lever — fastembed exposes no thread knob on `TextInitOptions`.
+///
+/// Threads = `KNOWLEDGE_EMBED_THREADS` if set (clamped ≥1), else half the
+/// available cores (min 1). Must run BEFORE the first embedding-engine init.
+/// Best-effort: failures are logged to the (already redirected) stderr and
+/// the daemon proceeds uncapped rather than refusing to serve.
+fn cap_embed_affinity() {
+	use nix::{
+		sched::{CpuSet, sched_getaffinity, sched_setaffinity},
+		unistd::Pid,
+	};
+
+	let available = thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+	let target = std::env::var("KNOWLEDGE_EMBED_THREADS")
+		.ok()
+		.and_then(|v| v.parse::<usize>().ok())
+		.map_or_else(|| (available / 2).max(1), |n| n.clamp(1, available));
+	if target >= available {
+		return; // No cap needed / requested.
+	}
+
+	// Read the current mask so we pin to CPUs the process is actually allowed
+	// on (respecting any cgroup/taskset restriction already in effect).
+	let Ok(current) = sched_getaffinity(Pid::from_raw(0)) else {
+		return;
+	};
+	let mut set = CpuSet::new();
+	let mut picked = 0usize;
+	for cpu in 0..CpuSet::count() {
+		if picked >= target {
+			break;
+		}
+		if current.is_set(cpu).unwrap_or(false) && set.set(cpu).is_ok() {
+			picked += 1;
+		}
+	}
+	if picked == 0 {
+		return;
+	}
+	if let Err(e) = sched_setaffinity(Pid::from_raw(0), &set) {
+		eprintln!("pi-knowledge-worker: affinity cap failed: {e}");
+	}
+}
+
 /// Resolve the default daemon root directory.
 ///
 /// `$XDG_RUNTIME_DIR/spell` when `XDG_RUNTIME_DIR` is set and writable;
@@ -741,6 +791,10 @@ fn run_socket_mode(socket: PathBuf, pidfile: Option<PathBuf>, idle_secs: u64, da
 
 	// 4. Install signal handlers after we know we're the surviving process.
 	install_signal_handlers();
+
+	// 4b. BUG-475: cap CPU affinity before any embed work so fastembed/ort
+	//     can't saturate every core.
+	cap_embed_affinity();
 
 	// 5. Bind the listener (clearing stale files).
 	let listener = match bind_listener(&socket) {

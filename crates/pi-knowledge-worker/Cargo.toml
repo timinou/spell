@@ -24,9 +24,10 @@ pi-org-engine = { path = "../pi-org-engine" }
 pi-code-graph = { path = "../pi-code-graph" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+bincode = "1.3"
 clap = { version = "4", features = ["derive"] }
 fd-lock = "4"
-nix = { version = "0.29", features = ["signal", "process", "fs", "poll", "user"] }
+nix = { version = "0.29", features = ["signal", "process", "fs", "poll", "user", "sched"] }
 libc = "0.2"
 
 [dev-dependencies]
