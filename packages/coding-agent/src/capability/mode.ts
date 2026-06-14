@@ -1,7 +1,14 @@
-import type { TaskPolicy } from "../config/task-policies";
 import { defineCapability } from ".";
 import type { SourceMeta } from "./types";
 
+/**
+ * Frontmatter for a workflow role (KDL `mode` block / `.spell/modes/*.md`).
+ * Roles desugar to the unified {@link Discipline} primitive (FEAT-816); this
+ * shape is the manual-trigger sugar surface. Fields here are the LIVE set — the
+ * dead aspirational fields (decomposition/todo/afterComplete/ui/gates/categories/
+ * taskPolicies) and the never-implemented `summarize` cadence were removed in the
+ * W4 convergence. Re-add a field only alongside a real consumer.
+ */
 export interface ModeConfigFrontmatter {
 	name?: string;
 	description?: string;
@@ -12,37 +19,14 @@ export interface ModeConfigFrontmatter {
 		allow?: string[];
 		deny?: string[];
 	};
-	gates?: Record<string, boolean>;
-	decomposition?: {
-		requiredSections?: string[];
-	};
 	audit?: {
 		focusAreas?: string[];
 		maxDepth?: number;
 		escalation?: boolean | "suggest" | "auto";
 	};
-	todo?: {
-		phases?: Array<{
-			name: string;
-			tasks?: Array<{
-				content: string;
-				gateCmd?: string;
-				gateLlm?: string;
-				gateArtifact?: string;
-				gateCommit?: boolean;
-			}>;
-		}>;
-	};
-	categories?: string[];
-	ui?: {
-		canvas?: string;
-		overlay?: string;
-		primary?: "tui" | "canvas";
-	};
-	afterComplete?: string;
-	contextPolicy?: "fresh" | "carry" | { type: "summarize"; description: string };
+	/** Injection cadence: `carry` re-injects every turn, `fresh` once per activation. */
+	contextPolicy?: "fresh" | "carry";
 	model?: string;
-	taskPolicies?: TaskPolicy[];
 }
 
 export interface ModeConfigSections {

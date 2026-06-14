@@ -28,11 +28,6 @@ mode "plan" extends="base" {
 		allow "read" "grep"
 		deny "write"
 	}
-	categories "features" "bugs"
-	gates {
-		decomposition #true
-		allow-edits #false
-	}
 }
 `);
 
@@ -46,8 +41,6 @@ mode "plan" extends="base" {
 					readOnly: true,
 					contextPolicy: "fresh",
 					tools: { allow: ["read", "grep"], deny: ["write"] },
-					categories: ["features", "bugs"],
-					gates: { decomposition: true, allowEdits: false },
 				},
 				sections: {
 					context: "Plan context",

@@ -56,7 +56,7 @@ import { abortableSleep, getAgentDbPath, isEnoent, logger } from "@spell/pi-util
 import type { AsyncJob, AsyncJobManager } from "../async";
 import type { ResolvedModeConfig } from "../capability/mode";
 import type { Discipline } from "../config/discipline";
-import { injectBody, toolDisciplineMap } from "../config/discipline";
+import { injectBody, modeToDiscipline, toolDisciplineMap } from "../config/discipline";
 import type { Rule } from "../capability/rule";
 import { MODEL_ROLE_IDS, type ModelRegistry, type ModelRole } from "../config/model-registry";
 import { extractExplicitThinkingSelector, parseModelString, resolveModelRoleValue } from "../config/model-resolver";
@@ -2204,19 +2204,17 @@ export class AgentSession {
 	#buildUserModeMessage(): CustomMessage | null {
 		const state = this.#userModeState;
 		if (!state?.enabled) return null;
-		const policy = state.config.frontmatter.contextPolicy;
-		const once = policy === "fresh";
+		// Unified injection (FEAT-816 W4): a manually-activated role is a Discipline.
+		// One mechanism — same injectBody + cadence the tool-disciplines use.
+		const discipline = modeToDiscipline(state.config);
+		const once = discipline.inject?.cadence === "once";
 		if (once && this.#userModeContextSent) return null;
-		const { context, instructions, focusAreas } = state.config.sections;
-		const content = [context, instructions, focusAreas]
-			.map(section => section?.trim())
-			.filter((section): section is string => !!section)
-			.join("\n\n");
+		const content = injectBody(discipline.inject);
 		if (!content) return null;
 		this.#userModeContextSent = true;
 		return {
 			role: "custom",
-			customType: "role-context",
+			customType: "discipline-context",
 			content,
 			display: false,
 			attribution: "agent",

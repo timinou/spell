@@ -16,10 +16,6 @@ export interface ParsedModeBlock {
 	sections: ModeConfigSections;
 }
 
-function toCamelCase(name: string): string {
-	return name.replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase());
-}
-
 function parseToolsNode(node: Node): ModeConfigFrontmatter["tools"] | undefined {
 	const allow = getChildNode(node, "allow") ? getStringArguments(getChildNode(node, "allow")!) : [];
 	const deny = getChildNode(node, "deny") ? getStringArguments(getChildNode(node, "deny")!) : [];
@@ -29,15 +25,6 @@ function parseToolsNode(node: Node): ModeConfigFrontmatter["tools"] | undefined 
 	if (allow.length > 0) tools.allow = allow;
 	if (deny.length > 0) tools.deny = deny;
 	return tools;
-}
-
-function parseGatesNode(node: Node): Record<string, boolean> | undefined {
-	const gates: Record<string, boolean> = {};
-	for (const child of node.children?.nodes ?? []) {
-		const value = getBooleanArgument(child);
-		if (value !== undefined) gates[toCamelCase(child.getName())] = value;
-	}
-	return Object.keys(gates).length > 0 ? gates : undefined;
 }
 
 function parseModeNode(node: Node): ParsedModeBlock | undefined {
@@ -79,16 +66,6 @@ function parseModeNode(node: Node): ParsedModeBlock | undefined {
 	const toolsNode = getChildNode(node, "tools");
 	const tools = toolsNode ? parseToolsNode(toolsNode) : undefined;
 	if (tools) config.tools = tools;
-
-	const categoriesNode = getChildNode(node, "categories");
-	if (categoriesNode) {
-		const categories = getStringArguments(categoriesNode);
-		if (categories.length > 0) config.categories = categories;
-	}
-
-	const gatesNode = getChildNode(node, "gates");
-	const gates = gatesNode ? parseGatesNode(gatesNode) : undefined;
-	if (gates) config.gates = gates;
 
 	return { name, config, sections };
 }
