@@ -148,6 +148,15 @@ describe("discipline — injectBody", () => {
 	test("empty for no inject", () => {
 		expect(injectBody(undefined)).toBe("");
 	});
+	test("covers examples + custom sections (no silent drop)", () => {
+		const body = injectBody({
+			cadence: "once",
+			sections: { examples: "ex", custom: { extra: "cust" } },
+		});
+		expect(body).toContain("ex");
+		expect(body).toContain("cust");
+		expect(hasInject({ cadence: "once", sections: { custom: { only: "x" } } })).toBe(true);
+	});
 });
 
 describe("discipline — toolDisciplineMap (session injection selection)", () => {

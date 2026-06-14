@@ -172,21 +172,36 @@ export function hasVerify(verify: TaskVerify | undefined): boolean {
 	);
 }
 
-/** True when the inject carries any non-empty prose section. */
-export function hasInject(inject: DisciplineInject | undefined): boolean {
-	if (!inject) return false;
-	const { context, instructions, focusAreas } = inject.sections;
-	return !!(context?.trim() || instructions?.trim() || focusAreas?.trim());
+/**
+ * Ordered prose sections of an inject, flattened to a list. Covers every
+ * {@link ModeConfigSections} prose field — not just context/instructions/focus —
+ * so a role/discipline whose guidance lives in examples/phase/custom sections
+ * is not silently dropped.
+ */
+function injectSectionList(inject: DisciplineInject | undefined): string[] {
+	if (!inject) return [];
+	const s = inject.sections;
+	const ordered = [
+		s.context,
+		s.instructions,
+		s.focusAreas,
+		s.planPhase,
+		s.codePhase,
+		s.reviewPhase,
+		s.examples,
+		...Object.values(s.custom ?? {}),
+	];
+	return ordered.map(x => x?.trim()).filter((x): x is string => !!x);
 }
 
-/** Flatten an inject's prose sections into one body string (context→instructions→focus). */
+/** True when the inject carries any non-empty prose section. */
+export function hasInject(inject: DisciplineInject | undefined): boolean {
+	return injectSectionList(inject).length > 0;
+}
+
+/** Flatten an inject's prose sections into one body string, in section order. */
 export function injectBody(inject: DisciplineInject | undefined): string {
-	if (!inject) return "";
-	const { context, instructions, focusAreas } = inject.sections;
-	return [context, instructions, focusAreas]
-		.map(s => s?.trim())
-		.filter((s): s is string => !!s)
-		.join("\n\n");
+	return injectSectionList(inject).join("\n\n");
 }
 
 /**

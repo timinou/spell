@@ -94,7 +94,7 @@ function parseVerify(node: Node): DisciplineVerify | undefined {
 		switch (child.getName()) {
 			case "swarm": {
 				const count = getNumberArgument(child);
-				if (count !== undefined && count > 0) {
+				if (count !== undefined && Number.isInteger(count) && count > 0) {
 					verify.swarm = { count };
 					const criteria = getStringProperty(child, "criteria");
 					if (criteria) verify.swarm.criteria = criteria;

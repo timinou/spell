@@ -400,7 +400,13 @@ export function cloneTodoNodes(nodes: TodoNode[]): TodoNode[] {
 export function injectPolicyGates(node: TodoNode, policies: TaskPolicy[]): void {
 	if (!node.layer || policies.length === 0) return;
 	const resolved = applyPolicyGates(node.verify ?? {}, node.layer, policies);
-	if (resolved.commit !== undefined || resolved.artifact !== undefined || resolved.cmd !== undefined || resolved.review !== undefined) {
+	if (
+		resolved.commit !== undefined ||
+		resolved.artifact !== undefined ||
+		resolved.cmd !== undefined ||
+		resolved.review !== undefined ||
+		resolved.swarm !== undefined
+	) {
 		node.verify = resolved;
 	}
 }
@@ -864,7 +870,7 @@ function collectWaveSnapshotRequests(
 
 export function hasGate(node: TodoNode): boolean {
 	const v = node.verify;
-	return !!(v && (v.commit || v.artifact || v.cmd || v.review));
+	return !!(v && (v.commit || v.artifact || v.cmd || v.review || v.swarm));
 }
 
 /** True when the node has gates that require two-phase verified completion. */
@@ -1026,6 +1032,7 @@ function gateDirectivesForNode(node: TodoNode): string[] {
 	if (v?.cmd) cleared.push("verify.cmd");
 	if (v?.artifact) cleared.push("verify.artifact");
 	if (v?.commit) cleared.push("verify.commit");
+	if (v?.swarm) cleared.push("verify.swarm");
 	if (node.closesRef) cleared.push(`closes ${node.ref ?? "ref"}`);
 	const lines: string[] = [];
 	if (cleared.length > 0) lines.push(`✓ ${node.id} cleared: ${cleared.join(", ")}.`);

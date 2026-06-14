@@ -50,7 +50,7 @@ function parsePolicyGates(policyNode: Node): { verify: TaskVerify; description?:
 			case "verify-swarm":
 			case "swarm": {
 				const count = getNumberArgument(childNode);
-				if (count !== undefined && count > 0) {
+				if (count !== undefined && Number.isInteger(count) && count > 0) {
 					verify.swarm = { count };
 					const criteria = getStringProperty(childNode, "criteria");
 					if (criteria) verify.swarm.criteria = criteria;

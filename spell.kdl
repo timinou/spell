@@ -193,29 +193,9 @@ mode "challenge" {
 	"""
 }
 
-// ── Tool-disciplines ── on tool="x" + inject once: a post-result protocol
-//    injected the FIRST time the tool is used in a session (FEAT-816).
-discipline "mock-critique" {
-	description "Critique a generated UI mockup before presenting it"
-	on tool="generate_ui_screen"
-	inject cadence="once" {
-		instructions """
-		Mock critique (apply per generated screen, before presenting):
-		view first → never present unseen. resize → inline → read pixels, ✗ trust the gen-prompt echo.
-		verdict line: <surface> — <Ship|Polish|Broken>; N fixes
-		bucket every observation:
-		  ✓ keep    → what's right + WHY (tie to the code affordance it honors)
-		  ✗ fix     → concrete defect → corrective directive (not "improve X")
-		  ? rethink → underspecified region → assign it a distinct job
-		  ⚠ honesty → does the mock imply data/behaviour the code lacks?
-		each ✗ fix carries: placement/scope leak? · happy-path-only (∃ empty/error state)? ·
-		  legend/scale missing? · decorative noise? · phantom affordance? · loop closure (verify/undo/back)?
-		⚠ honesty = hard gate: mock shows X → ∃ data/runtime path producing X today?
-		  ✗ → label aspirational + promote the prerequisite to a plan epic (not a UI-only change).
-		ground every critique in repo truth, ✗ vibes. each fix = next version's diff. earn the v-bump.
-		"""
-	}
-}
+// Tool-disciplines (e.g. "mock-critique" for generate_ui_screen) ship as BUNDLED
+// defaults in config/bundled-disciplines.kdl — available in every repo. Declare a
+// project `discipline "name" { … }` block here only to add or override one.
 
 mode "design" {
 	command "/design"

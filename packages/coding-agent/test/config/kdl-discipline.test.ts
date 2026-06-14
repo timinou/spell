@@ -92,6 +92,11 @@ describe("kdl-discipline — verify (incl. swarm)", () => {
 		const d = parseOne(`discipline "q" { verify { swarm 0 } }`);
 		expect(d?.verify).toBeUndefined();
 	});
+
+	test("swarm non-integer count ignored", () => {
+		const d = parseOne(`discipline "q" { verify { swarm 2.5 } }`);
+		expect(d?.verify).toBeUndefined();
+	});
 });
 
 describe("kdl-discipline — tools + read-only", () => {

@@ -1,0 +1,34 @@
+// Bundled disciplines shipped with the coding agent (FEAT-816).
+//
+// These are the package-level DEFAULT disciplines, available in EVERY repo
+// without a per-project spell.kdl block. User/project `discipline` blocks merge
+// over these by name (project > user > bundled).
+//
+// Tool-disciplines here are the universal counterpart to what used to live in a
+// tool's own description: a once-per-session post-result protocol, injected the
+// first time the tool is used. Moving them here (vs the description) means the
+// guidance is paid once per session, not on every call, while staying universal.
+
+// Mock-critique: critique a generated UI mockup before presenting it. Was the
+// `<discipline>` block inside generate_ui_screen's description; now a discipline.
+discipline "mock-critique" {
+	description "Critique a generated UI mockup before presenting it"
+	on tool="generate_ui_screen"
+	inject cadence="once" {
+		instructions """
+		Mock critique (apply per generated screen, before presenting):
+		view first → never present unseen. resize → inline → read pixels, ✗ trust the gen-prompt echo.
+		verdict line: <surface> — <Ship|Polish|Broken>; N fixes
+		bucket every observation:
+		  ✓ keep    → what's right + WHY (tie to the code affordance it honors)
+		  ✗ fix     → concrete defect → corrective directive (not "improve X")
+		  ? rethink → underspecified region → assign it a distinct job
+		  ⚠ honesty → does the mock imply data/behaviour the code lacks?
+		each ✗ fix carries: placement/scope leak? · happy-path-only (∃ empty/error state)? ·
+		  legend/scale missing? · decorative noise? · phantom affordance? · loop closure (verify/undo/back)?
+		⚠ honesty = hard gate: mock shows X → ∃ data/runtime path producing X today?
+		  ✗ → label aspirational + promote the prerequisite to a plan epic (not a UI-only change).
+		ground every critique in repo truth, ✗ vibes. each fix = next version's diff. earn the v-bump.
+		"""
+	}
+}

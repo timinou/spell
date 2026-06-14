@@ -16,6 +16,7 @@ import { parseModeBlocks } from "./kdl-modes";
 import type { Discipline } from "./discipline";
 import { parseDisciplineBlocks } from "./kdl-discipline";
 import { policyToDiscipline } from "./discipline";
+import bundledDisciplinesKdl from "./bundled-disciplines.kdl" with { type: "text" };
 import { type KdlProviderConfig, parseProvidersBlock } from "./kdl-providers";
 import { kdlDocumentToSettings } from "./kdl-reader";
 import type { RawSettings } from "./settings";
@@ -418,7 +419,26 @@ export async function loadMergedDisciplines(
 	agentDir = getAgentDir(),
 ): Promise<Discipline[]> {
 	const mergedConfig = await loadMergedSpellConfig(projectDir, agentDir);
-	return unifiedDisciplines(mergedConfig);
+	const configured = unifiedDisciplines(mergedConfig);
+	// Bundled defaults are the base layer — available in EVERY repo. User/project
+	// disciplines override them by name (configured wins on conflict).
+	const configuredNames = new Set(configured.map(d => d.name));
+	const bundled = parseBundledDisciplines().filter(d => !configuredNames.has(d.name));
+	return [...bundled, ...configured];
+}
+
+let bundledDisciplinesCache: Discipline[] | null = null;
+function parseBundledDisciplines(): Discipline[] {
+	if (bundledDisciplinesCache) return bundledDisciplinesCache;
+	try {
+		bundledDisciplinesCache = parseDisciplineBlocks(parse(bundledDisciplinesKdl));
+	} catch (error) {
+		logger.warn("disciplines: failed to parse bundled defaults", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		bundledDisciplinesCache = [];
+	}
+	return bundledDisciplinesCache;
 }
 
 /** Inline KDL domain definitions from merged user+project config (or undefined). */
