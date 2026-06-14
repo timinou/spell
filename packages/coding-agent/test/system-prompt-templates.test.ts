@@ -223,6 +223,50 @@ describe("system Handlebars prompt templates", () => {
 		expect(rendered).toContain("or its proof");
 		// Narrow phrasing biased the model to skip the review lane to show progress.
 		expect(rendered).not.toContain("MUST** materially advance the deliverable.");
+		// Anti-stop spine restored alongside the D4 proof carve-out (session-log
+		// analysis: recurring "why did you stop" after the imperative was softened).
+		expect(rendered).toContain("Never yield mid-wave");
+	});
+
+	test("system-prompt bans destructive git state-discard ops", async () => {
+		const rendered = await renderBuiltSystemPrompt(Settings.isolated());
+		// Highest-recurrence user instruction across repos: never stash/reset/revert/checkout.
+		expect(rendered).toContain("git stash");
+		expect(rendered).toMatch(/NEVER.*reset.*revert.*checkout/);
+	});
+
+	test("system-prompt scopes terseness to conversation, exempts artifacts", async () => {
+		const rendered = await renderBuiltSystemPrompt(Settings.isolated());
+		expect(rendered).toContain("comprehensive, not terse");
+	});
+
+	test("system-prompt surfaces execute above bash in the precedence ladder", async () => {
+		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
+		const template = await Bun.file(templatePath).text();
+		const rendered = renderPromptTemplate(template, {
+			...baseRenderContext,
+			tools: ["find", "edit", "create", "task", "bash", "execute", "org"],
+		});
+		// execute is a core tool; the ladder must name it as the compute/inspect lane
+		// and demote bash to process-only (session logs: 52.7% bash, 0.2% execute).
+		const execIdx = rendered.indexOf("**Compute/inspect**");
+		const bashIdx = rendered.indexOf("**Process**");
+		expect(execIdx).toBeGreaterThan(-1);
+		expect(bashIdx).toBeGreaterThan(execIdx);
+		expect(rendered).toContain("Replace the bash + pipe habit with `execute`");
+		// org default bakes in repo-independently when the tool is present.
+		expect(rendered).toContain("Track multi-step work in `org`");
+	});
+
+	test("precedence ladder falls back to plain bash when execute absent", async () => {
+		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
+		const template = await Bun.file(templatePath).text();
+		const rendered = renderPromptTemplate(template, {
+			...baseRenderContext,
+			tools: ["find", "edit", "bash"],
+		});
+		expect(rendered).toContain("simple one-liners only");
+		expect(rendered).not.toContain("**Compute/inspect**");
 	});
 });
 
