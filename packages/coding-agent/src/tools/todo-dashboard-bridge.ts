@@ -25,7 +25,13 @@ export interface TodoDashboardTask {
 	verifyArtifact?: string;
 	verifyCmd?: string;
 	verifyReview?: string;
+	/** Reviewer-swarm gate (FEAT-816): N parallel reviewers over the diff. */
+	verifySwarm?: { count: number; criteria?: string };
 	verificationArtifact?: string;
+	/** Kind marker; "loop" renders the node as a sub-loop card. */
+	kind?: string;
+	/** Delegated subagent name — the model signifier for a running task/swarm (A3). */
+	delegationAgent?: string;
 	blockers?: string[];
 	ref?: string | null;
 	closesRef?: boolean;
@@ -107,7 +113,10 @@ export class TodoDashboardBridge {
 				verifyArtifact: task.verify?.artifact,
 				verifyCmd: task.verify?.cmd,
 				verifyReview: task.verify?.review,
+				verifySwarm: task.verify?.swarm,
 				verificationArtifact: task.verificationArtifact,
+				kind: task.kind,
+				delegationAgent: task.delegation?.agent,
 				blockers: task.blockers,
 				ref: task.ref,
 				closesRef: task.closesRef,

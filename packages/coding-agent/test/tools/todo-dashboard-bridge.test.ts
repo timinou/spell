@@ -87,6 +87,23 @@ describe("TodoDashboardBridge", () => {
 		expect(new TodoDashboardBridge(plain).buildSnapshot().hasGatedTasks).toBe(false);
 	});
 
+	test("buildSnapshot surfaces swarm gate, kind, and delegation agent (FEAT-816 W3)", () => {
+		const node: TodoNode = {
+			id: "wave-2",
+			content: "Land spine",
+			status: "in_progress",
+			kind: "loop",
+			verify: { swarm: { count: 3, criteria: "security" } },
+			delegation: { sessionId: "s1", agent: "reviewer" },
+		};
+		const snap = new TodoDashboardBridge(makeSession([node])).buildSnapshot();
+		const task = snap.groups[0].tasks[0];
+		expect(task.verifySwarm).toEqual({ count: 3, criteria: "security" });
+		expect(task.kind).toBe("loop");
+		expect(task.delegationAgent).toBe("reviewer");
+		expect(snap.hasGatedTasks).toBe(true);
+	});
+
 	test("subscribe triggers callback on todo:change", () => {
 		const eventBus = new EventBus();
 		const session = makeSession(makeNodes({ id: "t1", content: "A", verifyCommit: true }));
