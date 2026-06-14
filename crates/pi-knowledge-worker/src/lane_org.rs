@@ -513,8 +513,13 @@ fn scan_items(repo_root: &Path) -> Vec<OrgItem> {
 			let Ok(source) = fs::read_to_string(&file) else {
 				continue;
 			};
+			// BUG-480: include_body=true so bodies reach the embedder + BM25.
+			// `embed_text` formats "{title} {body[..512]}"; with bodies absent it
+			// fell back to title-only, capping vector recall. project_docs (BM25)
+			// also indexes the body. The vec cache re-embeds once on first warm
+			// after this change (content hashes shift), then stabilises.
 			let Ok(parsed) =
-				pi_org_engine::extract_items_from_source(&source, &[], "", "", &path_str, false)
+				pi_org_engine::extract_items_from_source(&source, &[], "", "", &path_str, true)
 			else {
 				continue;
 			};
@@ -701,6 +706,14 @@ mod tests {
 		assert!(lane.items.len() >= 2, "expected >=2 items, got {}", lane.items.len());
 		assert!(lane.docs.len() == lane.items.len());
 		assert!(lane.items.iter().any(|i| i.id == "CON-alpha"));
+		// BUG-480: bodies must be populated so the embedder sees "{title} {body}",
+		// not title-only. The seeded items carry bodies ("alpha body" etc).
+		let alpha = lane.items.iter().find(|i| i.id == "CON-alpha").expect("alpha");
+		assert!(
+			alpha.body.as_deref().is_some_and(|b| b.contains("alpha body")),
+			"scanned item must carry its body (BUG-480); got {:?}",
+			alpha.body
+		);
 	}
 
 	#[test]
