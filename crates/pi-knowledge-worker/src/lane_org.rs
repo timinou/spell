@@ -14,7 +14,10 @@ use std::{
 	collections::BTreeMap,
 	fs,
 	path::{Path, PathBuf},
-	sync::atomic::{AtomicU8, AtomicUsize, Ordering},
+	sync::{
+		Arc,
+		atomic::{AtomicU8, AtomicUsize, Ordering},
+	},
 	time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -176,7 +179,10 @@ pub struct OrgLane {
 	pub docs:       Vec<RecallDoc>,
 	pub bm25:       SearchIndex,
 	pub vec:        VectorIndex,
-	pub graph:      TypedGraph,
+	/// Shared (BUG-478): built once per warm and shared by the partial
+	/// (lexical-only) and full lanes via `Arc`, since `TypedGraph` isn't
+	/// `Clone`. Avoids the redundant second `build_typed_graph`.
+	pub graph:      Arc<TypedGraph>,
 	pub profiles:   RecallProfileRegistry,
 	pub last_built: SystemTime,
 }
@@ -221,11 +227,15 @@ impl OrgLane {
 		progress.done.store(items.len(), Ordering::SeqCst);
 		let bm25 = SearchIndex::from_docs(&docs);
 
-		// Publish a servable lexical-only lane (empty vec) before embedding.
-		// `TypedGraph` isn't `Clone` (graph-backed inner store), so the
-		// partial gets its own deterministic rebuild — cheap, in-memory, no
-		// IO. One bounded corpus clone (items/docs/bm25) buys lane
-		// immutability + concurrent lexical serving during the slow embed.
+		// Publish a servable lexical-only lane (empty vec) before embedding, so
+		// bounded acquires can answer BM25 + graph searches during the slow
+		// embed. One bounded corpus clone (items/docs/bm25) buys lane
+		// immutability + concurrent lexical serving.
+		//
+		// BUG-478: build the typed graph ONCE and share it (Arc) across the
+		// partial lexical lane and the full lane. `TypedGraph` isn't `Clone`,
+		// but an `Arc` clone is a refcount bump — no redundant second build.
+		let graph = Arc::new(build_typed_graph(&items));
 		let empty_vec = VectorIndex::new(EMBEDDER_DIM, items.len().max(1))
 			.map_err(|e| format!("vec init: {e}"))?;
 		on_partial(Self {
@@ -234,12 +244,10 @@ impl OrgLane {
 			docs: docs.clone(),
 			bm25: bm25.clone(),
 			vec: empty_vec,
-			graph: build_typed_graph(&items),
+			graph: Arc::clone(&graph),
 			profiles: RecallProfileRegistry::default(),
 			last_built: SystemTime::now(),
 		});
-
-		let graph = build_typed_graph(&items);
 
 		// Phase 3 — embed (the expensive, model-bound phase). Skipped entirely
 		// when embeddings are disabled (autonomous/container profile): the lane
@@ -294,7 +302,7 @@ impl OrgLane {
 			bm25:     &self.bm25,
 			vec:      &self.vec,
 			embedder: &embedder,
-			graph:    &self.graph,
+			graph:    &*self.graph,
 			profiles: &self.profiles,
 		};
 		recall(query, &ctx).map_err(|e| format!("recall: {e}"))
