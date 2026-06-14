@@ -3,6 +3,13 @@ import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import ".." as SpellUI
 
+// NB (FEAT-816): this panel consumes the `todo_snapshot` payload produced by
+// TodoDashboardBridge.buildSnapshot(). That bridge is not yet instantiated by a
+// live session (no `new TodoDashboardBridge` in src), so the loop accent / swarm
+// chip / model badge below are wired but DORMANT until the bridge is hooked into
+// qml-mode. The reachable swarm signifier today is the terminal TUI badge in
+// modes/components/todo-reminder.ts (#gateBadges). Do not claim this panel as
+// live until the bridge emits todo_snapshot.
 Item {
     id: todoPanel
 

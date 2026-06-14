@@ -1049,12 +1049,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			let cached: TaskPolicy[] | undefined;
 			return () => {
 				if (cached !== undefined) return cached;
-				const modeState = session?.getActiveModeState();
-				let modePolicies: TaskPolicy[] | undefined;
-				if (modeState?.type === "user") {
-					modePolicies = modeState.config?.frontmatter?.taskPolicies;
-				}
-				cached = mergePolicies(projectTaskPolicies, modePolicies).policies;
+				// FEAT-816: roles no longer carry a parallel `taskPolicies` array (pruned
+				// as dead surface — the mode parser never populated it). A role that needs
+				// gates expresses them via its discipline `verify`. Only project policies merge.
+				cached = mergePolicies(projectTaskPolicies, undefined).policies;
 				return cached;
 			};
 		})(),
