@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: "Code review specialist for quality/security analysis"
-tools: find, bash, lsp, fetch, web_search, report_finding
+tools: find, bash, execute, lsp, fetch, web_search, report_finding
 spawns: explore, task
 model: pi/slow
 thinking-level: high

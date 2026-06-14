@@ -1,7 +1,7 @@
 ---
 name: plan
 description: Software architect for complex multi-file architectural decisions. NOT for simple tasks, single-file changes, or tasks completable in <5 tool calls.
-tools: find, bash, lsp, fetch, web_search
+tools: find, bash, execute, lsp, fetch, web_search
 spawns: explore
 model: pi/plan, pi/slow
 thinking-level: high

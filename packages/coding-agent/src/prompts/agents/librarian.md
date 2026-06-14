@@ -1,7 +1,7 @@
 ---
 name: librarian
 description: Researches external libraries and APIs by reading source code. Returns definitive, source-verified answers.
-tools: find, bash, lsp, web_search, fetch
+tools: find, bash, execute, lsp, web_search, fetch
 model: pi/smol
 thinking-level: minimal
 output:
