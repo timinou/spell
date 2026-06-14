@@ -408,6 +408,19 @@ export async function loadMergedProviderConfigs(
 	return providers;
 }
 
+/**
+ * Unified disciplines from merged user+project config: explicit `discipline`
+ * blocks ∪ desugared `policy` blocks. Consumed by the session for tool/layer
+ * triggered injection (FEAT-816). Manual (role) triggers flow via ModeConfig.
+ */
+export async function loadMergedDisciplines(
+	projectDir: string,
+	agentDir = getAgentDir(),
+): Promise<Discipline[]> {
+	const mergedConfig = await loadMergedSpellConfig(projectDir, agentDir);
+	return unifiedDisciplines(mergedConfig);
+}
+
 /** Inline KDL domain definitions from merged user+project config (or undefined). */
 export async function loadDomainDefs(
 	projectDir: string,

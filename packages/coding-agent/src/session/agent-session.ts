@@ -55,6 +55,8 @@ import {
 import { abortableSleep, getAgentDbPath, isEnoent, logger } from "@spell/pi-utils";
 import type { AsyncJob, AsyncJobManager } from "../async";
 import type { ResolvedModeConfig } from "../capability/mode";
+import type { Discipline } from "../config/discipline";
+import { injectBody, toolDisciplineMap } from "../config/discipline";
 import type { Rule } from "../capability/rule";
 import { MODEL_ROLE_IDS, type ModelRegistry, type ModelRole } from "../config/model-registry";
 import { extractExplicitThinkingSelector, parseModelString, resolveModelRoleValue } from "../config/model-resolver";
@@ -834,6 +836,11 @@ export class AgentSession {
 				// Invalidate streaming edit cache when edit tool completes to prevent stale data
 				if (toolName === "edit" && details?.path) {
 					this.#invalidateFileCacheForPath(details.path);
+				}
+				// Tool-discipline injection (FEAT-816): a successful tool call may carry
+				// a once-per-session post-result protocol (e.g. Mock-critique).
+				if (!isError) {
+					void this.#maybeInjectToolDiscipline(toolName);
 				}
 				const todoNodes = details?.nodes;
 				if (toolName === "todo_write" && !isError && Array.isArray(todoNodes)) {
@@ -2138,6 +2145,48 @@ export class AgentSession {
 
 	setModeConfigs(configs: Map<string, ResolvedModeConfig>): void {
 		this.#modeConfigs = configs;
+	}
+
+	/**
+	 * Tool-triggered disciplines (`on tool="x"`), keyed by tool name. Their
+	 * inject prose is delivered once per session, on the turn AFTER the tool
+	 * first produces a result (FEAT-816 W2). Reuses the proven `nextTurn`
+	 * custom-message seam — no tool wrapper required.
+	 */
+	#toolDisciplines = new Map<string, Discipline>();
+	/** Tool-discipline names already injected this session (inject-once ledger). */
+	#injectedToolDisciplines = new Set<string>();
+
+	setDisciplines(disciplines: Discipline[]): void {
+		this.#toolDisciplines = toolDisciplineMap(disciplines);
+	}
+
+	/**
+	 * If a tool-discipline targets `toolName` and hasn't fired yet this session,
+	 * inject its prose as a next-turn system reminder. Idempotent per session.
+	 */
+	async #maybeInjectToolDiscipline(toolName: string | undefined): Promise<void> {
+		if (!toolName) return;
+		const discipline = this.#toolDisciplines.get(toolName);
+		if (!discipline || this.#injectedToolDisciplines.has(discipline.name)) return;
+		const body = injectBody(discipline.inject);
+		if (!body) return;
+		this.#injectedToolDisciplines.add(discipline.name);
+		const reminder = [
+			"<system-reminder>",
+			`Discipline \"${discipline.name}\" applies after using \`${toolName}\`:`,
+			body,
+			"</system-reminder>",
+		].join("\n");
+		await this.sendCustomMessage(
+			{
+				customType: "discipline-context",
+				content: reminder,
+				display: false,
+				details: { discipline: discipline.name, tool: toolName },
+			},
+			{ deliverAs: "nextTurn" },
+		);
 	}
 
 	// =========================================================================

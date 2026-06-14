@@ -5,9 +5,11 @@ import {
 	type Discipline,
 	hasInject,
 	hasVerify,
+	injectBody,
 	modeToDiscipline,
 	policyToDiscipline,
 	toolDiscipline,
+	toolDisciplineMap,
 } from "@spell/pi-coding-agent/config/discipline";
 import type { TaskPolicy } from "@spell/pi-coding-agent/config/task-policies";
 
@@ -132,5 +134,30 @@ describe("discipline — hasInject", () => {
 	test("false when all empty", () => {
 		expect(hasInject({ cadence: "carry", sections: { custom: {} } })).toBe(false);
 		expect(hasInject(undefined)).toBe(false);
+	});
+});
+
+describe("discipline — injectBody", () => {
+	test("joins context/instructions/focus in order", () => {
+		const body = injectBody({
+			cadence: "once",
+			sections: { context: "c", instructions: "i", focusAreas: "f", custom: {} },
+		});
+		expect(body).toBe("c\n\ni\n\nf");
+	});
+	test("empty for no inject", () => {
+		expect(injectBody(undefined)).toBe("");
+	});
+});
+
+describe("discipline — toolDisciplineMap (session injection selection)", () => {
+	test("keys only on-tool disciplines with inject prose", () => {
+		const map = toolDisciplineMap([
+			toolDiscipline("mock", "generate_ui_screen", { instructions: "critique", custom: {} }),
+			modeToDiscipline(makeMode()), // manual → excluded
+			{ name: "empty", on: { kind: "tool", tool: "edit" }, origin: "discipline" }, // no inject → excluded
+		]);
+		expect([...map.keys()]).toEqual(["generate_ui_screen"]);
+		expect(map.get("generate_ui_screen")?.name).toBe("mock");
 	});
 });

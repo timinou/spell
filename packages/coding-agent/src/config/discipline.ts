@@ -186,3 +186,26 @@ export function hasInject(inject: DisciplineInject | undefined): boolean {
 	const { context, instructions, focusAreas } = inject.sections;
 	return !!(context?.trim() || instructions?.trim() || focusAreas?.trim());
 }
+
+/** Flatten an inject's prose sections into one body string (context→instructions→focus). */
+export function injectBody(inject: DisciplineInject | undefined): string {
+	if (!inject) return "";
+	const { context, instructions, focusAreas } = inject.sections;
+	return [context, instructions, focusAreas]
+		.map(s => s?.trim())
+		.filter((s): s is string => !!s)
+		.join("\n\n");
+}
+
+/**
+ * Build the tool→discipline lookup map for a discipline set: only `on tool`
+ * disciplines that carry inject prose are eligible for once-per-session
+ * post-result injection. (Shared by the session wiring and its tests.)
+ */
+export function toolDisciplineMap(disciplines: Discipline[]): Map<string, Discipline> {
+	const map = new Map<string, Discipline>();
+	for (const d of disciplines) {
+		if (d.on.kind === "tool" && hasInject(d.inject)) map.set(d.on.tool, d);
+	}
+	return map;
+}

@@ -33,7 +33,7 @@ import { setupCallbackSchemes } from "./scheme-bootstrap";
 import "./discovery";
 import { buildServicePromptSection } from "./browser/service-prompt-section";
 import { resolveConfigValue } from "./config/resolve-config-value";
-import { loadMergedProviderConfigs } from "./config/spell-kdl";
+import { loadMergedDisciplines, loadMergedProviderConfigs } from "./config/spell-kdl";
 import { loadTaskPolicies, mergePolicies, type TaskPolicy } from "./config/task-policies";
 import { initializeWithSettings } from "./discovery";
 import type { SpellDomain } from "./domain/loader";
@@ -1769,6 +1769,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	if (modesResult.resolvedConfigs.size > 0) {
 		session.setModeConfigs(modesResult.resolvedConfigs);
+	}
+	// FEAT-816: tool/layer-triggered disciplines (manual roles flow via ModeConfig).
+	try {
+		const disciplines = await loadMergedDisciplines(cwd, agentDir);
+		if (disciplines.length > 0) session.setDisciplines(disciplines);
+	} catch (error) {
+		logger.warn("disciplines: failed to load", {
+			error: error instanceof Error ? error.message : String(error),
+		});
 	}
 	for (const warning of modesResult.warnings) {
 		logger.warn(warning);
