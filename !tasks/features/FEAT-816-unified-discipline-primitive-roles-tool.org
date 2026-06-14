@@ -1,0 +1,75 @@
+#+TITLE: Unified `discipline` primitive — roles + tool-disciplines + layer policies + sub-loops
+#+STATE: ITEM
+#+SESSION_ID: 15092c1520a8d7d4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T18-53-08-610Z_15092c1520a8d7d4.jsonl]]
+#+CUSTOM_ID: FEAT-816-unified-discipline-primitive-roles-tool
+
+* Initial Message
+
+look at my jsonl of my recent sessoins (~/.spell somewhere) and my user messages. find my repeated instructions and frustrations (and also when I say I am impressed). From your overall judgement of the conversations, what is being misaligned across the prompts? also fold in the fact that I still see too many bash calls instead of execute. where are we failing to properly instruct? also look at the recent removals from system-prompts.md. Are there things that worsened post-removal?
+
+#+EFFORT: 3d
+#+LAYER: config
+
+* Why (evidence)
+Three parallel implementations of ONE need — "a named protocol that activates on a trigger, injects guidance, optionally closes with a verify gate":
+- =mode "x" {}=  → ROLE: prose inject (context/instructions), trigger=manual(/slash), cadence=carry|fresh. orchestrate/discover/challenge/design. ~10 dead frontmatter fields.
+- =policy "x" layer=  → LAYER POLICY: verify{commit|cmd|artifact|review}+inject, trigger=layer-match.
+- =generate_ui_screen <discipline>=  → Mock-critique prose stuck in the tool DESCRIPTION (paid every call); the kdl TODO asks for inject-once.
+
+Harmony violation (Principle #2: one need = one impl). Session-log evidence (30d, ~74k tool calls):
+- "reviewer swarm / wave loop" = 303 user mentions across 18 repos — a fixed methodology the user re-types nearly every task; agent drops it the moment instruction stops (17 explicit "you forgot to review / wtf" hits).
+- The methodology is ALREADY encoded in the =orchestrate= role's instructions, but roles are manual-only and have no structured loop/verify linkage.
+- B1 timing validation: across the 75 sessions that DID use reviewer swarms, 59% of commits had NO reviewer within ±8 events → an auto verify{swarm} gate ADDS value; but 41% already self-review → gate must be satisfiable-by-existing-review, never blindly re-fired.
+
+NexAU-AHE (arxiv 2604.25850 / ElephantBroker 2603.25097) names the activation taxonomy we're missing: procedures support 6 activation modes — manual · actor-default · trigger-word · task-classifier · goal-bound · supervisor-forced. Our =on= field is a subset of this; =auto= = task-classifier.
+
+* What — the unified primitive
+#+begin_src kdl
+discipline "name" {
+    on   manual | tool "generate_ui_screen" | layer "implementation" | auto   // trigger
+    inject once|carry { context "…"  instructions "…" }                       // guidance + cadence
+    verify { cmd "…" · review "…" · swarm 3 criteria="…" · commit }           // loop-closer (optional)
+    tools { allow … deny … }   read-only #true                                 // optional constraints
+}
+#+end_src
+- roles            = =on manual= + =inject carry=   → orchestrate/discover/challenge/design
+- tool-disciplines = =on tool=   + =inject once=    → Mock-critique (moves OUT of tool description)
+- layer policies   = =on layer=  + =verify=         → api-quality/ui-quality
+One loader, one injection path (per-turn role seam + tool_result hook seam — both already wired), one =verify= vocab. =mode=/=policy= kept as desugaring ALIASES for back-compat.
+
+* Sub-loops — =verify= as the closing half of a discipline
+A sub-loop = a discipline's =activate → work → verify → (loop|exit)= cycle made observable. "Slightly structured" pays 3 audiences:
+- AGENT: explicit close-condition → won't stop mid-loop, won't forget the review step (the 303× pain). instructions=loop body; verify=exit gate.
+- RUNTIME: =verify{swarm N}= is a real gate — auto-dispatches N reviewers over the wave diff, blocks until pass (satisfiable-by-existing per B1). Loops nest (wave ⊃ review).
+- TUI/TEAM CHAT: renders as a labeled collapsible unit — "▼ Wave 2 · orchestrate · spine→review→gate · 3 reviewers · 2 findings · [SLOW auto]". User sees active loop, pending gate, AND which model drives it (A3).
+Kept simple: sub-loop = a todo node kind="loop" + verify{swarm}. REUSES the existing wave roster — no new tracker.
+
+* Visual (mockup — target end-state, aspirational until built)
+Mockup: artifact://15092c1520a8d7d4/main/generate_image/88.png (critiqued; verdict Ship/3-fixes).
+Card: bordered loop unit in transcript; phase rows spine✓ / review⟳ (3 reviewer sub-rows, per-concern, live status) / gate○🔒; "findings → org: BUG-512,513 filed"; right rail "Active discipline: orchestrate · verify: swarm 3+cmd · context-policy: carry"; model badge [SLOW auto].
+Critique fixes folded into W4 acceptance: (1) live loop card REPLACES duplicate flat log lines, not duplicates; (2) gate row legend on first encounter ("3 reviewers must pass"); (3) ▼ when expanded.
+
+* Consumers to land in THIS feat (both, per user)
+1. Mock-critique tool-discipline — move the =<discipline>= block out of generate_ui_screen's description into =discipline "mock-critique" { on tool "generate_ui_screen"; inject once {…} }=. Resolves the kdl TODO. Description shrinks to when/how-to-call only.
+2. Reviewer-swarm sub-loop — =orchestrate= role gains =verify { swarm 3 }=; wave todo nodes can carry kind="loop". First real swarm-gate consumer.
+
+* Scope
+**In scope**: discipline KDL schema + parser (extend kdl-modes.ts); normalizer that desugars mode/policy→discipline; the =on= trigger dispatch (manual/tool/layer/auto); =verify{swarm}= gate executor (fan-out reviewers, satisfiable-by-existing); todo node kind="loop"; TUI loop-card renderer + model badge; the 2 consumers; tests + snapshots.
+**Out of scope**: full NexAU goal-bound/supervisor-forced triggers (file FUP); auto-classifier model choice tuning (FUP); migrating user .spell/modes/*.md sidecars (compat shim only).
+**Deprecate/converge**: dead ModeConfigFrontmatter fields (decomposition/audit/todo.phases/ui/afterComplete) audited — keep only what discipline uses; =policy= and =mode= become thin aliases.
+
+* Tests
+- kdl: discipline block parses all 4 =on= forms; mode/policy desugar to identical normalized shape (golden).
+- inject: once vs carry cadence (reuse #buildUserModeMessage path); tool-discipline injects on FIRST matching tool_result only.
+- verify{swarm}: gate dispatches N reviewers; PASSES without re-dispatch when wave diff already reviewed (B1 satisfiable); blocks until findings triaged.
+- TUI: loop card renders phases + model badge; collapses constituent events (no dup log lines).
+- back-compat: existing spell.kdl mode/policy blocks still load (snapshot parity).
+
+* Implementation (waves — orchestrate methodology, dogfooded)
+- W0 spine: =Discipline= type + normalizer (mode/policy/tool-discipline → one shape) + golden tests. Load-bearing contract, main thread.
+- W1: parser extension (=on=, =inject=, =verify{swarm}=) in kdl-modes.ts; desugar mode/policy.
+- W2: injection dispatch — wire =on tool= to tool_result hook (inject-once ledger), =on layer= to existing policy path, =on manual= to role path. Consumer #1 (Mock-critique) lands here.
+- W2.5 (reviewer swarm): verify{swarm} gate executor + todo kind="loop". Consumer #2.
+- W3: TUI loop-card renderer + [MODEL auto] badge (A3). Fold mockup critique fixes.
+- W4: deprecation sweep — dead frontmatter fields, mode/policy→alias, docs + memory. Reviewer swarm between each.
