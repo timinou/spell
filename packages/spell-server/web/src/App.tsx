@@ -5,6 +5,7 @@ import { Login } from "./auth/Login";
 import { CommandBar } from "./cmd/CommandBar";
 import { TemplateRunnerModal } from "./cmd/TemplateRunner";
 import { SessionDetail } from "./detail/SessionDetail";
+import { EditHistoryPanel } from "./detail/EditHistoryPanel";
 import { SessionList } from "./sidebar/SessionList";
 import { useSessions } from "./state/sessions";
 import { useTemplates } from "./state/templates";
@@ -35,6 +36,7 @@ function Shell() {
 	const toasts = useToasts();
 	const [pickedTemplate, setPickedTemplate] = useState<ManifestTemplate | null>(null);
 	const [menuOpen, setMenuOpen] = useState(false);
+	const [historyOpen, setHistoryOpen] = useState(false);
 	const selected = sessions.selected ? sessions.sessions.get(sessions.selected) ?? null : null;
 
 	// On mobile the sidebar is a drawer; selecting a session closes it so the
@@ -228,6 +230,22 @@ function Shell() {
 		wsRef.current?.send({ type: "rpc", sessionId, command: { type: "abort" } });
 	}, []);
 
+	// Fetch the session's unified edit-history log (PLAN-338) over RPC. Resolves
+	// with the typed payload or throws on an error response.
+	const requestEditHistory = useCallback(
+		async (sessionId: string, file?: string): Promise<import("./api/client").EditHistoryData> => {
+			const cid = nextCid();
+			const { promise, resolve } = Promise.withResolvers<any>();
+			pendingResponses.current.set(cid, resolve);
+			wsRef.current?.send({ type: "rpc", sessionId, command: { type: "edit_history", file }, correlationId: cid });
+			const msg = await promise;
+			const response = msg?.response;
+			if (response && response.success === false) throw new Error(response.error ?? "edit_history failed");
+			return (response?.data ?? { entries: [], total: 0, undoable: 0, redoable: 0 }) as import("./api/client").EditHistoryData;
+		},
+		[],
+	);
+
 	const answerBlockingEvent = useCallback(
 		(sessionId: string, eventId: string, payload: import("./api/client").EventResponsePayload) => {
 			wsRef.current?.send({ type: "answer_blocking_event", sessionId, eventId, payload });
@@ -304,13 +322,24 @@ function Shell() {
 	}, [selected, subscribeRpcEvents, submitPrompt, abort, answerBlockingEvent, runBash, mintUrl, loadArtifacts]);
 
 	return (
-		<div className={`shell${menuOpen ? " menu-open" : ""}`}>
+		<div className={`shell${menuOpen ? " menu-open" : ""}${historyOpen && selected ? " has-history" : ""}`}>
 			<aside className="sidebar">
 				<header>
-					<h1>Spell</h1>
-					<button className="btn" onClick={signOut} title="Sign out">
-						Sign out
-					</button>
+ 				<h1>Spell</h1>
+ 					<div style={{ display: "flex", gap: 6 }}>
+ 						{selected && (
+ 							<button
+ 								className={`btn${historyOpen ? " btn-primary" : ""}`}
+ 								onClick={() => setHistoryOpen(o => !o)}
+ 								title="Edit history — every file this session changed"
+ 							>
+ 								History
+ 							</button>
+ 						)}
+ 						<button className="btn" onClick={signOut} title="Sign out">
+ 							Sign out
+ 						</button>
+ 					</div>
 				</header>
 				<SessionList />
 			</aside>
@@ -325,6 +354,13 @@ function Shell() {
 				</div>
 				{sessionDetail}
 			</div>
+			{historyOpen && selected && (
+				<EditHistoryPanel
+					sessionId={selected.sessionId}
+					loadEditHistory={requestEditHistory}
+					onClose={() => setHistoryOpen(false)}
+				/>
+			)}
 			<CommandBar onPickTemplate={onPickTemplate} onKillSession={onKillSession} />
 			{pickedTemplate && (
 				<TemplateRunnerModal

@@ -89,3 +89,25 @@ export const api = {
 			body: JSON.stringify({ params }),
 		}),
 };
+
+// ── Edit history (PLAN-338) ─────────────────────────────────────────────────
+/** One edit in the session's unified edit-history log. Mirrors coding-agent EditHistoryEntry. */
+export interface EditHistoryEntry {
+	id: string;
+	file: string;
+	workspace: string;
+	groupId: string | null;
+	reverted: boolean;
+	committed: boolean;
+	commit: string | null;
+	agentLabel: string;
+	timestamp: number;
+}
+
+/** Payload of an `edit_history` RPC response. */
+export interface EditHistoryData {
+	entries: EditHistoryEntry[];
+	total: number;
+	undoable: number;
+	redoable: number;
+}

@@ -3,7 +3,7 @@ import type { DerivedSession } from "../state/sessions";
 import { ArtifactsTab } from "./ArtifactsTab";
 import { BashTab } from "./BashTab";
 import { StateTab } from "./StateTab";
-import { StreamTab } from "./StreamTab";
+import { ChatStream } from "./ChatStream";
 
 type TabId = "stream" | "bash" | "state" | "artifacts";
 
@@ -66,7 +66,7 @@ export function SessionDetail(props: Props) {
 			</div>
 			<div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
 				{tab === "stream" && (
-					<StreamTab
+					<ChatStream
 						session={session}
 						subscribeRpcEvents={props.subscribeRpcEvents}
 						submitPrompt={props.submitPrompt}
