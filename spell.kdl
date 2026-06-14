@@ -36,6 +36,15 @@ model {
 	// compaction enabled=#true threshold=0.7 strategy="context-full"
 }
 
+// knowledge {
+// 	embeddings #true
+// 	// BUG-477: skip auto-embedding org/memory items whose file hasn't been
+// 	// modified in more than N days. Stale items stay BM25 + graph searchable
+// 	// and are embedded automatically on the next warm once their file is
+// 	// touched. Unset / 0 → embed the whole corpus (default).
+// 	embed-recency-days 90
+// }
+
 providers {
 	// provider "anthropic" {
 	// 	api-key "$ANTHROPIC_API_KEY"

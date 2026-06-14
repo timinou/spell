@@ -36,7 +36,7 @@ use serde_json::{Value, json};
 
 use crate::{
 	embedder_adapter::DaemonEmbedder,
-	org_cache::{OrgVecCache, carry_forward, plan_embeds},
+	org_cache::{OrgVecCache, carry_forward, plan_embeds_with_recency, recency_cutoff_from_env},
 };
 
 const SCANNED_SUBDIRS: &[&str] = &["!tasks", ".spell/memory"];
@@ -582,7 +582,18 @@ fn build_vec_index_with(
 
 	let cache = OrgVecCache::for_repo(repo_root, EMBEDDER_MODEL, EMBEDDER_DIM);
 	let prior = cache.as_ref().and_then(OrgVecCache::load);
-	let plan = plan_embeds(items, prior.as_ref());
+	// BUG-477: recency gate. Items in files older than the configured window
+	// are left BM25 + graph searchable but skipped from the embed batch (unless
+	// already cached). Editing a stale file refreshes its mtime + content hash,
+	// so the next warm embeds it — the natural embed-on-demand path.
+	let recency = recency_cutoff_from_env();
+	let plan = plan_embeds_with_recency(items, prior.as_ref(), recency);
+	if !plan.skipped.is_empty() {
+		eprintln!(
+			"org embed recency gate: {} item(s) left lexical-only (BM25 + graph)",
+			plan.skipped.len()
+		);
+	}
 
 	// Carry forward unchanged vectors from the prior index.
 	let mut live: BTreeMap<u64, u64> = BTreeMap::new();

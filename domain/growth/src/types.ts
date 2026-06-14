@@ -48,6 +48,15 @@ export interface DomainToolConfig {
 export interface DomainKnowledgeConfig {
   /** When false, skip embeddings; recall is lexical (BM25) + graph only. */
   embeddings?: boolean;
+  /**
+   * BUG-477: skip auto-embedding items whose owning file hasn't been modified
+   * in more than this many days. Stale items stay BM25 + graph searchable and
+   * are embedded on the next warm once their file is touched (the natural
+   * embed-on-demand path). Surfaced to the worker via the
+   * `KNOWLEDGE_EMBED_RECENCY_DAYS` env var at activation. Unset / 0 → embed
+   * everything (default).
+   */
+  embedRecencyDays?: number;
 }
 
 /**

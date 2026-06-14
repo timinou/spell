@@ -153,22 +153,72 @@ impl OrgVecCache {
 
 }
 
-/// Partition `items` into (reuse, embed) given a prior cache. `reuse` carries
-/// forward an existing vector by key; `embed` must be freshly embedded.
+/// Partition `items` into reuse / embed / skip given a prior cache and an
+/// optional recency cutoff.
 ///
-/// An item is reusable iff the loaded index contains its key AND the stored
-/// content hash equals the freshly-computed one.
+/// - reuse: the loaded index contains the key AND the stored content hash
+///   equals the freshly-computed one (unchanged item).
+/// - embed: new or changed item within the recency window (must embed now).
+/// - skip:  BUG-477 — item whose owning file is older than the recency cutoff
+///   AND which has no carried-forward vector. It stays BM25 + graph
+///   searchable; editing the file refreshes its mtime + content hash so the
+///   next warm embeds it (the natural "embed-on-demand" path). A skipped item
+///   that already had a cached vector is REUSED, never dropped — recency only
+///   gates *new* embedding work, it never evicts existing vectors.
 pub struct EmbedPlan<'a> {
 	/// (key, item) pairs whose vectors carry forward unchanged.
 	pub reuse: Vec<(u64, &'a OrgItem)>,
 	/// (`key`, `item`, `embed_text`, `content_hash`) pairs needing a fresh embed.
 	pub embed: Vec<(u64, &'a OrgItem, String, u64)>,
+	/// Items intentionally left unembedded by the recency gate (lexical-only).
+	pub skipped: Vec<&'a OrgItem>,
+}
+
+/// A file mtime cutoff in epoch-ms: items in files modified before this are
+/// recency-skipped. `None` disables the gate (embed everything).
+pub type RecencyCutoffMs = Option<u64>;
+
+/// Read the recency cutoff from `KNOWLEDGE_EMBED_RECENCY_DAYS` (set by the
+/// `knowledge { embed-recency-days N }` KDL knob via domain activation).
+/// Returns `Some(cutoff_epoch_ms)` when a positive N is configured, else
+/// `None` (gate disabled).
+#[must_use]
+pub fn recency_cutoff_from_env() -> RecencyCutoffMs {
+	let days: u64 = std::env::var("KNOWLEDGE_EMBED_RECENCY_DAYS")
+		.ok()
+		.and_then(|v| v.parse().ok())
+		.filter(|n| *n > 0)?;
+	let now_ms = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map_or(0, |d| d.as_millis() as u64);
+	let window_ms = days.saturating_mul(24 * 60 * 60 * 1000);
+	Some(now_ms.saturating_sub(window_ms))
+}
+
+/// File mtime (epoch-ms) for an item's owning file. `0` when unavailable so a
+/// missing/unreadable file is treated as "old" and recency-skipped.
+fn item_file_mtime_ms(item: &OrgItem) -> u64 {
+	std::fs::metadata(&item.file)
+		.and_then(|m| m.modified())
+		.ok()
+		.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+		.map_or(0, |d| d.as_millis() as u64)
 }
 
 #[must_use]
 pub fn plan_embeds<'a>(items: &'a [OrgItem], prior: Option<&LoadedCache>) -> EmbedPlan<'a> {
+	plan_embeds_with_recency(items, prior, None)
+}
+
+#[must_use]
+pub fn plan_embeds_with_recency<'a>(
+	items: &'a [OrgItem],
+	prior: Option<&LoadedCache>,
+	recency_cutoff_ms: RecencyCutoffMs,
+) -> EmbedPlan<'a> {
 	let mut reuse = Vec::new();
 	let mut embed = Vec::new();
+	let mut skipped = Vec::new();
 	for item in items {
 		let key = id_hash(&item.id);
 		let text = embed_text(item);
@@ -177,12 +227,20 @@ pub fn plan_embeds<'a>(items: &'a [OrgItem], prior: Option<&LoadedCache>) -> Emb
 			p.manifest.entries.get(&key) == Some(&hash) && p.index.contains(key)
 		});
 		if reusable {
+			// Already embedded + unchanged — keep it regardless of recency.
 			reuse.push((key, item));
+			continue;
+		}
+		// New or changed. Apply the recency gate to *new* embedding work only.
+		if let Some(cutoff) = recency_cutoff_ms
+			&& item_file_mtime_ms(item) < cutoff
+		{
+			skipped.push(item);
 		} else {
 			embed.push((key, item, text, hash));
 		}
 	}
-	EmbedPlan { reuse, embed }
+	EmbedPlan { reuse, embed, skipped }
 }
 
 fn read_manifest(path: &Path) -> Option<OrgVecManifest> {
@@ -247,6 +305,47 @@ mod tests {
 		let plan = plan_embeds(&items, None);
 		assert_eq!(plan.embed.len(), 2);
 		assert!(plan.reuse.is_empty());
+		assert!(plan.skipped.is_empty());
+	}
+
+	#[test]
+	fn recency_gate_skips_old_files_embeds_recent() {
+		use std::time::{Duration, SystemTime};
+
+		let tmp = TempDir::new().unwrap();
+		// Two items backed by real files so mtime is meaningful.
+		let old_path = tmp.path().join("old.org");
+		let new_path = tmp.path().join("new.org");
+		std::fs::write(&old_path, "x").unwrap();
+		std::fs::write(&new_path, "y").unwrap();
+		// Backdate the old file ~100 days.
+		let hundred_days_ago =
+			SystemTime::now() - Duration::from_secs(100 * 24 * 60 * 60);
+		let ft = filetime::FileTime::from_system_time(hundred_days_ago);
+		filetime::set_file_mtime(&old_path, ft).unwrap();
+
+		let mut old = item("OLD", "old", "o");
+		old.file = old_path.to_string_lossy().into_owned();
+		let mut fresh = item("NEW", "new", "n");
+		fresh.file = new_path.to_string_lossy().into_owned();
+		let items = vec![old, fresh];
+
+		// Cutoff at 90 days: old (100d) skipped, new (just-written) embedded.
+		let now_ms = SystemTime::now()
+			.duration_since(SystemTime::UNIX_EPOCH)
+			.unwrap()
+			.as_millis() as u64;
+		let cutoff = now_ms - 90 * 24 * 60 * 60 * 1000;
+		let plan = plan_embeds_with_recency(&items, None, Some(cutoff));
+		assert_eq!(plan.embed.len(), 1, "only the recent item embeds");
+		assert_eq!(plan.embed[0].1.id, "NEW");
+		assert_eq!(plan.skipped.len(), 1, "the old item is skipped");
+		assert_eq!(plan.skipped[0].id, "OLD");
+
+		// No cutoff → both embed (back-compat).
+		let plan_all = plan_embeds_with_recency(&items, None, None);
+		assert_eq!(plan_all.embed.len(), 2);
+		assert!(plan_all.skipped.is_empty());
 	}
 
 	#[test]

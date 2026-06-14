@@ -3988,6 +3988,7 @@ dependencies = [
  "clap",
  "fastembed",
  "fd-lock",
+ "filetime",
  "libc",
  "nix 0.29.0",
  "pi-code-graph",

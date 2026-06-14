@@ -82,6 +82,19 @@ export function activateDomain(
 		setEnv("PI_KNOWLEDGE_WORKER_EMBEDDINGS", "0");
 		forcedEnv.push("PI_KNOWLEDGE_WORKER_EMBEDDINGS");
 	}
+	// 2b. BUG-477: recency gate — skip auto-embedding items in files older than
+	//     N days (still BM25 + graph searchable; embedded on next warm once
+	//     touched). Also boot-time env on the worker.
+	if (
+		domain.knowledge?.embedRecencyDays !== undefined &&
+		domain.knowledge.embedRecencyDays > 0
+	) {
+		setEnv(
+			"KNOWLEDGE_EMBED_RECENCY_DAYS",
+			String(domain.knowledge.embedRecencyDays),
+		);
+		forcedEnv.push("KNOWLEDGE_EMBED_RECENCY_DAYS");
+	}
 
 	// 3. Forced env (explicit set wins over the knowledge-derived default above
 	//    only if it names the same var; declarative intent is explicit).

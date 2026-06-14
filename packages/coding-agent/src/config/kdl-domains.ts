@@ -22,6 +22,7 @@ import {
 	getBooleanArgument,
 	getChildNode,
 	getChildNodes,
+	getNumberArgument,
 	getStringArgument,
 	getStringArguments,
 	getStringProperty,
@@ -55,11 +56,18 @@ export function isDomainDefinition(node: Node): boolean {
 }
 
 function parseKnowledge(node: Node): DomainKnowledgeConfig | undefined {
+	const config: DomainKnowledgeConfig = {};
 	const embeddingsNode = getChildNode(node, "embeddings");
-	if (!embeddingsNode) return undefined;
-	const embeddings = getBooleanArgument(embeddingsNode);
-	if (embeddings === undefined) return undefined;
-	return { embeddings };
+	if (embeddingsNode) {
+		const embeddings = getBooleanArgument(embeddingsNode);
+		if (embeddings !== undefined) config.embeddings = embeddings;
+	}
+	const recencyNode = getChildNode(node, "embed-recency-days");
+	if (recencyNode) {
+		const days = getNumberArgument(recencyNode);
+		if (days !== undefined && days > 0) config.embedRecencyDays = days;
+	}
+	return Object.keys(config).length > 0 ? config : undefined;
 }
 
 function parseEnv(node: Node): DomainEnvConfig | undefined {

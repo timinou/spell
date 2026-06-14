@@ -40,6 +40,29 @@ describe("parseDomainBlocks", () => {
 		expect(b.systemPrompt).toBe("no human");
 	});
 
+	it("parses knowledge embed-recency-days (BUG-477)", () => {
+		const blocks = parseDomains(`
+			domain "coding" {
+				knowledge {
+					embeddings #true
+					embed-recency-days 90
+				}
+			}
+		`);
+		expect(blocks).toHaveLength(1);
+		expect(blocks[0].knowledge).toEqual({ embeddings: true, embedRecencyDays: 90 });
+	});
+
+	it("ignores zero / negative embed-recency-days", () => {
+		const blocks = parseDomains(`
+			domain "coding" {
+				knowledge { embed-recency-days 0 }
+			}
+		`);
+		// 0 disables the gate → not surfaced; knowledge has no other fields → undefined.
+		expect(blocks[0].knowledge).toBeUndefined();
+	});
+
 	it("ignores a bare `domain \"x\"` selector (no children)", () => {
 		// Selector form must NOT be parsed as a definition.
 		expect(parseDomains(`domain "coding"`)).toHaveLength(0);
