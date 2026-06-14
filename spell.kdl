@@ -107,6 +107,19 @@ org {
 	// todo-keywords "INIT" "ITEM" "DOING" "REVIEW" "DONE" "BLOCKED"
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  Disciplines (FEAT-816) — ONE primitive, three authoring forms.
+//  A discipline = a named protocol that activates on a TRIGGER, INJECTs guidance,
+//  and optionally closes with a VERIFY gate (the sub-loop). The three sugar forms
+//  below all normalize to the same `Discipline { on, inject, verify }`:
+//    • `mode "x"  { … }`          → on manual  (a /slash role)
+//    • `policy "x" layer="y" {…}` → on layer   (a layer gate)
+//    • `discipline "x" { on tool="t" … }` → on tool (post-result protocol, e.g. mock-critique)
+//  Tool-disciplines also ship as bundled defaults (config/bundled-disciplines.kdl),
+//  available in every repo. The canonical surface is `discipline {}`; mode/policy
+//  are kept as ergonomic sugar.
+// ═══════════════════════════════════════════════════════════════════════════
+
 // Project-specific policy overrides
 // The imported template provides base layers and policies.
 // Policies declared here override the template by name.

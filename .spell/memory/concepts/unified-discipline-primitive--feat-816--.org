@@ -1,0 +1,47 @@
+#+TITLE: unified-discipline-primitive--feat-816--
+
+** ITEM Unified discipline primitive (FEAT-816)
+
+FEAT-816 converged three parallel "named protocol" mechanisms into ONE primitive: `Discipline { on, inject, verify }`.
+
+## The one type (packages/coding-agent/src/config/discipline.ts)
+- `on`: trigger — `manual` (role) | `tool "x"` (post-result) | `layer "y"` (gate) | `auto` (future task-classifier). Subset of NexAU-AHE's 6 activation modes.
+- `inject`: `{ cadence: "carry"|"once", sections }` — guidance entering context. `injectBody()` flattens ALL ModeConfigSections prose (context/instructions/focusAreas/examples/phase/custom), in order.
+- `verify`: the loop-closer (sub-loop) — `commit|artifact|cmd|review|swarm{count,criteria}`. Shared `TaskVerify` vocab (DisciplineVerify = TaskVerify).
+
+## Three authoring sugars → one type
+- `mode "x" {}` → modeToDiscipline → on:manual. `.spell/modes/*.md` + KDL `mode` blocks.
+- `policy "x" layer=y {}` → policyToDiscipline → on:layer. Carries verify gates onto todo nodes via injectPolicyGates/resolveGates/applyPolicyGates.
+- `discipline "x" { on tool=t }` → first-class. Tool-disciplines also ship BUNDLED (config/bundled-disciplines.kdl) so they're universal across repos (not just the project spell.kdl). unifiedDisciplines(cfg) = explicit ∪ desugared policies; loadMergedDisciplines prepends bundled.
+
+## Injection mechanism (W4 Option-A cutover)
+ONE path: agent-session #buildUserModeMessage now desugars active mode via modeToDiscipline + injectBody + cadence (same as tool-disciplines). customType unified to "discipline-context" (was "role-context"; no renderer keyed on it, display:false). Tool-disciplines fire once-per-session in the toolResult observer (#maybeInjectToolDiscipline, nextTurn custom-message seam, inject-once ledger). NO tool wrapper needed.
+
+## swarm gate (the reviewer-swarm sub-loop)
+verify{swarm N} is a TWO-PHASE verified gate (like cmd/commit): hasRequiredGate blocks completion until verified:true; the "Verification Required" directive tells the agent to fan out N reviewers, file findings, burn down. SATISFIABLE-BY-EXISTING (B1 data: 59% of commits in swarm-using sessions had no nearby review → gate adds value; 41% self-review → directive says "already reviewed? satisfied, proceed" — never blindly auto-dispatches from inside the tool).
+
+## TUI surfaces (3, distinct)
+1. QML dashboard panel (TodoPanel.qml, --mode qml): loop accent border + swarm chip + model badge. Via TodoDashboardBridge (may be unwired — verify before claiming live).
+2. Terminal TUI (todo-reminder.ts #gateBadges): [swarm ×N] text badge — the one users actually see.
+3. Team Chat (session-bridge emitEventLog): swarm directive flows via existing tool_result text; no dedicated todo-snapshot event kind (pre-existing gap).
+
+## Pruned in W4 (dead surface)
+contextPolicy "summarize" (never implemented; parser only produced bare string; unreachable {type,description} object). 7 zero-reader ModeConfigFrontmatter fields: decomposition/todo/afterComplete/ui/gates/categories/taskPolicies (removed from type AND kdl-modes parser).
+
+## Diagnostics
+parseTrigger takes a DisciplineWarn callback (NOT logger import — keeps pure parser free of native-coupled @spell/pi-utils graph); spell-kdl supplies logger.warn. Warns on malformed `on tool`/`on layer` (no value → never-firing manual fallback).
+
+## Decision: Option A over B
+Chose full mechanism cutover (one injection path) over data-model-only convergence because user wasn't using /orchestrate → clean > compatible. Golden test (role-injection-golden.test.ts) proved byte-identical output for the 3 role sections before the swap.
+
+## Future-proofing (final KDL design)
+New triggers = new `on <kind>`. New cadence (e.g. real summarize) = new DisciplineCadence member + impl. New gates = extend verify vocab. Composition: multiple disciplines active at once; `extends` for inheritance. Per-discipline `model` drives the role/reviewers + the TUI badge.
+:PROPERTIES:
+:CUSTOM_ID: CON-unified-discipline-primitive--feat-816--
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-14T21:39:23Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: org://FEAT-816-unified-discipline-primitive-roles-tool
+:END:
