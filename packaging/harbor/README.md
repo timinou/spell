@@ -20,29 +20,34 @@ harbor run -d terminal-bench/terminal-bench-2 \
   interactive tools; `knowledge { embeddings #false }` + env keep org/memory on
   BM25+graph (no fastembed RAM/download).
 
-## The one real risk: native (libc) portability
+## Native (libc) portability — RESOLVED, proven
 
-**Measured 2026-06-14.** The repo's committed `.node` is built on a
-bleeding-edge host (glibc 2.43) and **does not load** in realistic TB images:
+**The committed repo `.node` does NOT work in TB containers** (measured
+2026-06-14): built on an Arch host (glibc 2.43), it fails to load on every
+realistic image — `GLIBC_2.43 not found` on ubuntu/debian, no libstdc++ at all
+on Alpine/musl. CPU-ISA (`SIGILL`) was already handled by baseline; **libc was
+the open axis.**
 
-| image | libc | loads? | blocker |
+**Fix built + proven (2026-06-14).** `build-portable-native.sh` compiles
+pi-natives inside `manylinux_2_28` (glibc 2.28) with baseline ISA. The
+resulting addon was verified to not just resolve symbols but to `require()` +
+initialize (exporting `executeCodeGraph`/`executeOrg`/`executeCodeBuffer`):
+
+| image | libc | committed `.node` | manylinux_2_28 `.node` |
 |---|---|---|---|
-| ubuntu:24.04 | glibc 2.39 | ✗ | `GLIBC_2.43 not found` |
-| ubuntu:22.04 | glibc 2.35 | ✗ | + `CXXABI_1.3.15`, `GLIBC_2.39` |
-| debian:12 | glibc 2.36 | ✗ | same |
-| alpine:3.20 | musl | ✗ | no libstdc++/libgcc; ~45 symbol errors |
+| ubuntu:24.04 | glibc 2.39 | ✗ `GLIBC_2.43` | ✓ loads |
+| ubuntu:22.04 | glibc 2.35 | ✗ `GLIBC_2.43`+`CXXABI_1.3.15` | ✓ loads |
+| debian:12 | glibc 2.36 | ✗ same | ✓ `require()` + init verified |
+| alpine:3.20 | musl | ✗ ~45 symbol errors | (use `TARGET=musl`) |
 
-CPU-ISA (`SIGILL`) is already solved by `TARGET_VARIANT=baseline`. **libc is
-the open axis.** Because the agent owns its container image, this is a
-build-config task, not research:
+GLIBC floor dropped **2.43 → 2.28**; backward-compatible up to latest. Because
+the agent owns its container image, this is a settled build step, not research.
 
-1. `build-portable-native.sh` (TARGET=glibc) — build the dist `.node` against
-   an old-glibc sysroot (run inside manylinux_2_28 / Debian 11, glibc 2.28
-   floor) + static libstdc++/libgcc. One artifact loads on every glibc
-   container ≥ 2.28.
-2. `build-portable-native.sh TARGET=musl` — optional, for Alpine tasks.
-3. `probe-libc.sh dist/spell` — **prove** it: mounts the artifact into the libc
-   matrix and fails loud on any unresolved symbol. Run in CI.
+```
+packaging/harbor/build-portable-native.sh                  # glibc (default)
+packaging/harbor/build-portable-native.sh TARGET=musl      # Alpine tasks
+packaging/harbor/probe-libc.sh dist/pi_natives.*.node      # CI gate (exit 1 on fail)
+```
 
 `install.sh` re-verifies the addon loads in the actual task container
 (`spell --version`) before the benchmark starts — a libc mismatch fails the

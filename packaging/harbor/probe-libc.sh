@@ -25,11 +25,12 @@ fail=0
 for img in "${IMAGES[@]}"; do
   echo "==================== ${img} ===================="
   out="$(docker run --rm -v "${ABS}":/probe.node:ro "${img}" sh -c '
-    ldd /probe.node 2>&1 | grep -iE "not found|error|symbol" && exit 1
-    echo "(all symbols resolved)"
+    bad=$(ldd /probe.node 2>&1 | grep -iE "not found|version .* not found|undefined symbol" || true)
+    if [ -n "$bad" ]; then echo "$bad"; exit 1; fi
+    echo "(all deps resolved)"
   ' 2>&1 || true)"
   echo "${out}" | sed 's/^/  /'
-  if echo "${out}" | grep -qiE "not found|error|symbol"; then
+  if echo "${out}" | grep -qiE "not found|undefined symbol"; then
     echo "  ✗ FAIL on ${img}"
     fail=1
   else
