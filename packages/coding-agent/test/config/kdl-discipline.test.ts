@@ -35,6 +35,26 @@ describe("kdl-discipline — trigger forms", () => {
 		expect(d?.on).toEqual({ kind: "manual" });
 		expect(d?.command).toBe("/r");
 	});
+
+	test("on tool \"x\" arg+arg form", () => {
+		const d = parseOne(`discipline "m" { on tool "generate_ui_screen" }`);
+		expect(d?.on).toEqual({ kind: "tool", tool: "generate_ui_screen" });
+	});
+
+	test("malformed `on tool` (no value) falls back to manual + warns (W4.4 diagnostic)", () => {
+		const warnings: string[] = [];
+		const blocks = parseDisciplineBlocks(parse(`discipline "oops" { on tool }`), m => warnings.push(m));
+		expect(blocks[0]?.on).toEqual({ kind: "manual" });
+		expect(warnings.length).toBe(1);
+		expect(warnings[0]).toContain("oops");
+		expect(warnings[0]).toContain("will not fire");
+	});
+
+	test("well-formed triggers emit no warning", () => {
+		const warnings: string[] = [];
+		parseDisciplineBlocks(parse(`discipline "ok" { on tool="x" }`), m => warnings.push(m));
+		expect(warnings.length).toBe(0);
+	});
 });
 
 describe("kdl-discipline — inject", () => {

@@ -55,17 +55,33 @@ import {
  * or a property form (`on tool="x"`, `on layer="x"`). Property form wins.
  * Defaults to `manual` when the node is malformed.
  */
-function parseTrigger(node: Node): DisciplineTrigger {
+/** Sink for non-fatal parser diagnostics. Kept callback-based so the pure parser
+ *  stays free of the logger (and its native-coupled dependency graph); the
+ *  config layer supplies the real logger. */
+export type DisciplineWarn = (message: string) => void;
+
+function parseTrigger(node: Node, disciplineName: string, warn: DisciplineWarn): DisciplineTrigger {
 	const tool = getStringProperty(node, "tool");
 	if (tool) return { kind: "tool", tool };
 	const layer = getStringProperty(node, "layer");
 	if (layer) return { kind: "layer", layer };
 	const arg = getStringArgument(node);
 	if (arg === "auto") return { kind: "auto" };
+	if (arg === "manual") return { kind: "manual" };
 	if (arg === "tool" || arg === "layer") {
 		// `on tool "x"` (arg+arg) form
 		const second = getStringArgument(node, 1);
 		if (second) return arg === "tool" ? { kind: "tool", tool: second } : { kind: "layer", layer: second };
+		// `on tool` / `on layer` with no value: an authoring mistake — a tool/layer
+		// discipline that can never fire. Warn instead of silently making it manual.
+		warn(
+			`discipline "${disciplineName}": \`on ${arg}\` has no value — expected \`on ${arg}="…"\`. ` +
+				"Falling back to manual; this discipline will not fire on its intended trigger.",
+		);
+		return { kind: "manual" };
+	}
+	if (arg !== undefined && arg.length > 0) {
+		warn(`discipline "${disciplineName}": unknown trigger \`on ${arg}\` — falling back to manual.`);
 	}
 	return { kind: "manual" };
 }
@@ -144,7 +160,9 @@ function parseTools(node: Node): DisciplineTools | undefined {
 }
 
 /** Parse a single `discipline "name" { … }` node. */
-export function parseDisciplineNode(node: Node): Discipline | undefined {
+const noopWarn: DisciplineWarn = () => {};
+
+export function parseDisciplineNode(node: Node, warn: DisciplineWarn = noopWarn): Discipline | undefined {
 	const name = getStringArgument(node);
 	if (!name) return undefined;
 
@@ -158,7 +176,7 @@ export function parseDisciplineNode(node: Node): Discipline | undefined {
 
 	const command = commandNode ? getStringArgument(commandNode) : undefined;
 	// A `command` with no explicit `on` implies a manual (role-style) trigger.
-	const on: DisciplineTrigger = onNode ? parseTrigger(onNode) : { kind: "manual" };
+	const on: DisciplineTrigger = onNode ? parseTrigger(onNode, name, warn) : { kind: "manual" };
 
 	const discipline: Discipline = { name, on, origin: "discipline" };
 	if (descriptionNode) discipline.description = getStringArgument(descriptionNode);
@@ -183,10 +201,10 @@ export function parseDisciplineNode(node: Node): Discipline | undefined {
 }
 
 /** Collect all first-class `discipline` blocks from a KDL document. */
-export function parseDisciplineBlocks(doc: Document): Discipline[] {
+export function parseDisciplineBlocks(doc: Document, warn: DisciplineWarn = noopWarn): Discipline[] {
 	const disciplines: Discipline[] = [];
 	for (const node of doc.findNodesByName("discipline")) {
-		const parsed = parseDisciplineNode(node);
+		const parsed = parseDisciplineNode(node, warn);
 		if (parsed) disciplines.push(parsed);
 	}
 	return disciplines;

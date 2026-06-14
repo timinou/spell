@@ -304,7 +304,7 @@ export async function parseSpellKdl(
 	if (modes.length > 0) {
 		result.modes = [...(result.modes ?? []), ...modes];
 	}
-	const disciplines = parseDisciplineBlocks(document);
+	const disciplines = parseDisciplineBlocks(document, msg => logger.warn(msg));
 	if (disciplines.length > 0) {
 		result.disciplines = [...(result.disciplines ?? []), ...disciplines];
 	}
@@ -431,7 +431,7 @@ let bundledDisciplinesCache: Discipline[] | null = null;
 function parseBundledDisciplines(): Discipline[] {
 	if (bundledDisciplinesCache) return bundledDisciplinesCache;
 	try {
-		bundledDisciplinesCache = parseDisciplineBlocks(parse(bundledDisciplinesKdl));
+		bundledDisciplinesCache = parseDisciplineBlocks(parse(bundledDisciplinesKdl), msg => logger.warn(msg));
 	} catch (error) {
 		logger.warn("disciplines: failed to parse bundled defaults", {
 			error: error instanceof Error ? error.message : String(error),
