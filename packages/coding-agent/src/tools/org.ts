@@ -368,7 +368,21 @@ export function memoizeOrgResult(
 	return `Repeat of previous org ${label} result unchanged${subject ? ` (${subject})` : ""}.\nContinue using the prior IDs, states, and next-step guidance.`;
 }
 
+/**
+ * Format an org tool result for the agent transcript. When the result carries
+ * an `idWarning` (the id was resolved from a partial prefix, see
+ * `resolveImplicitId` in @spell/org), a one-line notice is prefixed so the
+ * caller learns the canonical id and is nudged toward the full id / `query`.
+ */
 export function formatOrgResult(result: unknown, params?: Pick<OrgParams, "command">): string {
+	const body = formatOrgResultBody(result, params);
+	const warning =
+		typeof result === "object" && result !== null && typeof (result as Record<string, unknown>).idWarning === "string"
+			? ((result as Record<string, unknown>).idWarning as string)
+			: undefined;
+	return warning ? `warning: ${warning}\n${body}` : body;
+}
+export function formatOrgResultBody(result: unknown, params?: Pick<OrgParams, "command">): string {
 	const isObjectResult = typeof result === "object" && result !== null;
 	const record = isObjectResult ? (result as Record<string, unknown>) : null;
 	if (record && "wave_number" in record && Array.isArray(record.items)) {

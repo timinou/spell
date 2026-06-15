@@ -738,7 +738,13 @@ fn make_slug(summary: &str) -> String {
 	let trimmed: String = slug.trim_matches('-').to_string();
 	trimmed.chars().take(40).collect()
 }
-
+fn split_memory_summary(summary: &str) -> (String, String) {
+	let normalized = summary.trim();
+	let mut lines = normalized.lines();
+	let heading = lines.next().unwrap_or("").trim().to_string();
+	let body = lines.collect::<Vec<_>>().join("\n").trim().to_string();
+	(heading, body)
+}
 fn generate_id(prefix: &str, summary: &str) -> String {
 	use std::hash::{Hash, Hasher};
 	let ts = epoch_millis();
@@ -956,11 +962,18 @@ fn cmd_remember(options: &Value) -> Result<Value> {
 		.map(PathBuf::from)
 		.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
+	let (heading, body) = split_memory_summary(summary);
+	let slug_source = if heading.is_empty() {
+		summary
+	} else {
+		heading.as_str()
+	};
+
 	let (file_path, item_id, slug_str) = match kind {
 		"episode" => {
 			let date = iso_date();
-			let slug = make_slug(summary);
-			let id = generate_id("EP", summary);
+			let slug = make_slug(slug_source);
+			let id = generate_id("EP", slug_source);
 			let file = repo_root
 				.join(".spell")
 				.join("memory")
@@ -969,7 +982,7 @@ fn cmd_remember(options: &Value) -> Result<Value> {
 			(file, id, slug)
 		},
 		"concept" => {
-			let slug = make_slug(summary);
+			let slug = make_slug(slug_source);
 			let id = format!("CON-{}", slug);
 			let file = repo_root
 				.join(".spell")
@@ -982,7 +995,7 @@ fn cmd_remember(options: &Value) -> Result<Value> {
 			// PLAN-310 W9: playbooks live in the user-global personal store,
 			// not per-repo. Use HOME-rooted path so a playbook written from
 			// repo A is discoverable from repo B (with `include_personal:true`).
-			let slug = make_slug(summary);
+			let slug = make_slug(slug_source);
 			let id = format!("PB-{}", slug);
 			let home = std::env::var("HOME")
 				.map(std::path::PathBuf::from)
@@ -995,7 +1008,7 @@ fn cmd_remember(options: &Value) -> Result<Value> {
 			(file, id, slug)
 		},
 		"decision" => {
-			let slug = make_slug(summary);
+			let slug = make_slug(slug_source);
 			let id = format!("DEC-{}", slug);
 			let file = repo_root
 				.join(".spell")
@@ -1012,15 +1025,22 @@ fn cmd_remember(options: &Value) -> Result<Value> {
 		fs::create_dir_all(parent).map_err(|e| org_err(format!("mkdir: {e}")))?;
 	}
 
-	// Build the org-formatted block
+	// Build the org-formatted block. `summary` may contain a body (memory.save
+	// passes "title\n\nbody"); keep PROPERTIES immediately after the headline
+	// so extraction sees CUSTOM_ID/KIND and scoped recall can find the item.
 	let relations_drawer =
 		build_relations_drawer(&involves, &about, &produced, &distilled_from, &supersedes);
 	let created = iso_datetime();
 	let confidence = "0.6";
+	let body_block = if body.is_empty() {
+		String::new()
+	} else {
+		format!("\n{body}\n")
+	};
 
 	let block = format!(
-		"** ITEM {summary}\n:PROPERTIES:\n:CUSTOM_ID: {item_id}\n:KIND: {kind}\n:CONFIDENCE: \
-		 {confidence}\n:CREATED: {created}\n:END:\n{relations_drawer}\n"
+		"** ITEM {heading}\n:PROPERTIES:\n:CUSTOM_ID: {item_id}\n:KIND: {kind}\n:CONFIDENCE: \
+		 {confidence}\n:CREATED: {created}\n:END:\n{relations_drawer}{body_block}"
 	);
 
 	let path_str = file_path.to_string_lossy().to_string();
@@ -2020,6 +2040,33 @@ mod tests {
 		let body = fs::read_to_string(file).expect("read decision");
 		assert!(body.contains(":CUSTOM_ID: DEC-adopt-es256-keys"));
 		assert!(body.contains(":KIND: decision"));
+	}
+
+	#[test]
+	fn remember_multiline_summary_keeps_properties_after_heading() {
+		let dir = tempdir().expect("tempdir");
+		let result = remember(
+			dir.path(),
+			"concept",
+			"Recall Formatting\n\nBody text that used to be inserted before PROPERTIES.",
+		);
+		assert_eq!(result["error"], json!(false), "remember concept should succeed: {result}");
+		assert_eq!(result["output"]["id"], json!("CON-recall-formatting"));
+		let file = result["output"]["file"].as_str().expect("file path str");
+		let body = fs::read_to_string(file).expect("read concept");
+		assert!(
+			body
+				.contains("** ITEM Recall Formatting\n:PROPERTIES:\n:CUSTOM_ID: CON-recall-formatting"),
+			"properties must be immediately after heading: {body}"
+		);
+		let items = pi_org_engine::extract_items_from_source(&body, &[], "", "", file, true)
+			.expect("extract written concept");
+		let item = items
+			.iter()
+			.find(|it| it.id == "CON-recall-formatting")
+			.expect("concept item");
+		assert_eq!(item.property("KIND"), Some("concept"));
+		assert!(body.contains("Body text that used to be inserted before PROPERTIES."));
 	}
 
 	#[test]

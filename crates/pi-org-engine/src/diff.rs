@@ -12,9 +12,8 @@ use std::{
 	path::{Path, PathBuf},
 };
 
-use serde::{Deserialize, Serialize};
-
 use pi_knowledge_core::graph::EdgeKind;
+use serde::{Deserialize, Serialize};
 
 use crate::item::OrgItem;
 
@@ -161,7 +160,6 @@ fn collect_relation_kinds(rels: &[(EdgeKind, String)]) -> Vec<EdgeKind> {
 	let set: BTreeSet<EdgeKind> = rels.iter().map(|(k, _)| k.clone()).collect();
 	set.into_iter().collect()
 }
-
 
 #[cfg(test)]
 mod tests {

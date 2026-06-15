@@ -1,8 +1,9 @@
 #+TITLE: Unify gate-evaluation substrate — durable tool-agnostic evidence + single commit evaluator
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 150a10ace4512e1c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-15T11-31-52-849Z_150a10ace4512e1c.jsonl]]
 #+CUSTOM_ID: FEAT-817-unify-gate-evaluation-substrate-durable
+#+COMPLETION_HASH: 34916e5b26fed15e
 
 * Initial Message
 
@@ -116,3 +117,11 @@ This is a CUTOVER, not a parallel impl: the text-matcher's volatile source and t
 - Exactly ONE commit evaluator; `detectGitCommit` text-scan and `compareGitBaseline` gone; no dead remnants (grep clean).
 - `bun run check:ts` green; full coding-agent gate/todo/session test suites green; reviewer swarm between final waves.
 </body>
+
+NOTE [2026-06-15]: COMPLETE — 2 commits + reviewer-swarm hardening.
+
+c4e7b6cd5 (cutover): ExecutionRecord (tool-agnostic); durable getExecutionHistory derived from agent.state.messages (RC-A run/!-bash evidence + RC-B resume-survival; volatile #trackedBashToolExecutions + bash-tool-history.ts deleted); single detectHeadAdvanced commit evaluator used by direct+delegated (text-scan detectGitCommit + compareGitBaseline/GitBaselineDiff/parseStatusChangedFiles deleted); RC-C baseline re-capture on explicit in_progress re-entry. grep-clean of all dead symbols; tsgo clean; 465 gate/todo/session tests pass.
+
+368edcfda (hardening): reviewer swarm (2) found 2 P2 false-verdicts in the non-isolated delegated path (default isolation=none). F2 false-fail: child commit gate hit undefined baseline → fixed by capturing baseline for ANY-gate non-isolated tasks. F1 false-pass: shared-tree siblings could clear each other's commit gate → fixed with verifyGates({requireCommitInLog}) requiring the task's own log to show a git commit (detectGitCommitInLog), conjunct with real-HEAD; scoped to !worktreeDir (isolated + direct keep pure real-HEAD). Wired at all 3 delegated gate sites. 185 gate-suite tests pass incl. F1/F2 regressions; tsgo clean.
+
+Remaining 60 tsgo baseline errors + 1 read-routing test failure are pre-existing and unrelated (verified: no refs to any touched symbol).

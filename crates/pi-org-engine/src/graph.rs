@@ -565,10 +565,12 @@ pub fn connected_components(items: &[OrgItem]) -> Vec<Vec<String>> {
 
 use std::collections::BTreeSet;
 
-use pi_knowledge_core::recall::RecallGraph;
-use pi_knowledge_core::graph::{
-	EdgeKind as KnowledgeEdgeKind, Neighbor, Node as KnowledgeNode, NodeKey, PathStep,
-	TypedGraph as InnerGraph,
+use pi_knowledge_core::{
+	graph::{
+		EdgeKind as KnowledgeEdgeKind, Neighbor, Node as KnowledgeNode, NodeKey, PathStep,
+		TypedGraph as InnerGraph,
+	},
+	recall::RecallGraph,
 };
 
 /// Re-export of the unified edge kind so call sites that read
@@ -639,11 +641,7 @@ fn collect_edges(item: &OrgItem, edges: &mut Vec<TypedEdge>) {
 		if target.is_empty() {
 			continue;
 		}
-		edges.push(TypedEdge {
-			from: item.id.clone(),
-			to:   target.clone(),
-			kind: kind.clone(),
-		});
+		edges.push(TypedEdge { from: item.id.clone(), to: target.clone(), kind: kind.clone() });
 	}
 	let blockers_prop = item
 		.properties
@@ -687,9 +685,7 @@ fn walk_items(
 			file:     item.file.clone(),
 			dangling: false,
 		};
-		nodes
-			.entry(item.id.clone())
-			.or_insert_with(|| node.clone());
+		nodes.entry(item.id.clone()).or_insert_with(|| node.clone());
 		inner.upsert_node(KnowledgeNode {
 			key:     NodeKey::new(item.id.clone()),
 			kind:    String::new(),
@@ -782,11 +778,13 @@ pub fn neighborhood(
 	kinds_filter: &[EdgeKind],
 ) -> Subgraph {
 	let focus = NodeKey::new(root.to_string());
-	let filter: Option<&[EdgeKind]> =
-		if kinds_filter.is_empty() { None } else { Some(kinds_filter) };
+	let filter: Option<&[EdgeKind]> = if kinds_filter.is_empty() {
+		None
+	} else {
+		Some(kinds_filter)
+	};
 
-	let visits: Vec<Neighbor<EdgeKind>> =
-		graph.inner.neighborhood(&focus, hops as usize, filter);
+	let visits: Vec<Neighbor<EdgeKind>> = graph.inner.neighborhood(&focus, hops as usize, filter);
 
 	if visits.is_empty() {
 		// Root not present in inner — degrade to a single-node dangling
@@ -803,8 +801,7 @@ pub fn neighborhood(
 		};
 	}
 
-	let visited: BTreeSet<ItemId> =
-		visits.iter().map(|n| n.key.as_str().to_string()).collect();
+	let visited: BTreeSet<ItemId> = visits.iter().map(|n| n.key.as_str().to_string()).collect();
 
 	let sub_nodes: Vec<TypedGraphNode> = visited
 		.iter()
@@ -896,8 +893,11 @@ pub fn path(graph: &TypedGraph, a: &str, b: &str, kinds_filter: &[EdgeKind]) -> 
 	}
 	let from = NodeKey::new(a.to_string());
 	let to = NodeKey::new(b.to_string());
-	let filter: Option<&[EdgeKind]> =
-		if kinds_filter.is_empty() { None } else { Some(kinds_filter) };
+	let filter: Option<&[EdgeKind]> = if kinds_filter.is_empty() {
+		None
+	} else {
+		Some(kinds_filter)
+	};
 	let steps: Vec<PathStep<EdgeKind>> = graph.inner.path(&from, &to, filter)?;
 	let edges = steps
 		.into_iter()
@@ -905,7 +905,6 @@ pub fn path(graph: &TypedGraph, a: &str, b: &str, kinds_filter: &[EdgeKind]) -> 
 		.collect();
 	Some(GraphPath { edges })
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -270,6 +270,70 @@ async function fetchItems(ctx: OrgContext, id: string, includeBody = true): Prom
 async function fetchItem(ctx: OrgContext, id: string): Promise<OrgItem | undefined> {
 	return (await fetchItems(ctx, id))[0];
 }
+/**
+ * Maximum distinct candidate IDs surfaced in an AMBIGUOUS_ID error before the
+ * list is truncated. Keeps the agent-facing message bounded.
+ */
+const MAX_ID_CANDIDATES = 10;
+
+/**
+ * Maps each id-bearing org command to the argument key that carries a
+ * CUSTOM_ID. Commands absent from this map (create/query/init/dashboard/...) do
+ * not take an id and bypass implicit resolution entirely.
+ */
+const ID_ARG_BY_COMMAND: Record<string, string> = {
+	get: "id",
+	update: "id",
+	delete: "id",
+	note: "id",
+	set: "id",
+	"validate-plan": "id",
+	"suboutline-add": "parentId",
+	wave: "planItemId",
+};
+
+type IdResolution =
+	| { ok: true; id: string; warning?: string }
+	| { ok: false; error: true; code: "AMBIGUOUS_ID"; message: string; candidates: string[] };
+
+/**
+ * Resolve a possibly-partial CUSTOM_ID against the org index (FEAT: implicit
+ * prefix resolution). An exact hit wins immediately. Otherwise the id is
+ * treated as a `startsWith` prefix over every indexed item:
+ *   - 0 matches  -> returned unchanged; the downstream command emits its own
+ *                   NOT_FOUND so behaviour is identical to today.
+ *   - 1 match    -> resolved to the canonical id with a `warning` advising the
+ *                   caller to pass the full id (or use `query`) next time.
+ *   - >1 matches -> short-circuit AMBIGUOUS_ID listing the conflicting ids so
+ *                   the caller can disambiguate.
+ */
+async function resolveImplicitId(ctx: OrgContext, rawId: string): Promise<IdResolution> {
+	// Common path: exact id present in the index (cheap native filter).
+	const exact = await fetchItems(ctx, rawId, false);
+	if (exact.length > 0) return { ok: true, id: rawId };
+
+	// Fall back to a prefix scan over the full (already in-memory) index.
+	const all = await indexedList(ctx, { includeBody: false });
+	const candidates = [...new Set(all.filter(item => item.id.startsWith(rawId)).map(item => item.id))].sort();
+
+	if (candidates.length === 0) return { ok: true, id: rawId };
+	if (candidates.length === 1) {
+		return {
+			ok: true,
+			id: candidates[0] as string,
+			warning: `Resolved "${rawId}" -> "${candidates[0]}" by prefix. Pass the full ID or use \`query\` to avoid this.`,
+		};
+	}
+	const shown = candidates.slice(0, MAX_ID_CANDIDATES);
+	const suffix = candidates.length > shown.length ? ` (+${candidates.length - shown.length} more)` : "";
+	return {
+		ok: false,
+		error: true,
+		code: "AMBIGUOUS_ID",
+		message: `"${rawId}" matches ${candidates.length} items: ${shown.join(", ")}${suffix}. Pass the full ID or use \`query\`.`,
+		candidates,
+	};
+}
 function indexCategories(ctx: OrgContext): Array<{ absPath: string; name: string; dir: string; prefix: string }> {
 	return resolveCategories(ctx.config, ctx.projectRoot).map(category => ({
 		absPath: category.absPath,
@@ -482,7 +546,7 @@ async function cmdUpdate(
 		const body = args.body ?? args.append ?? "";
 		const rewrittenBody = rewriteSubOutlineIds(args.id, body).body;
 		const trySectionUpdate = async (filePath: string): Promise<Record<string, unknown> | null> => {
-   let result: Awaited<ReturnType<typeof executeOrg>>;
+			let result: Awaited<ReturnType<typeof executeOrg>>;
 			try {
 				result = await executeOrg({
 					command: "editSection",
@@ -540,7 +604,7 @@ async function cmdUpdate(
 	const rewrittenBody = args.body === undefined ? undefined : rewriteSubOutlineIds(args.id, args.body).body;
 	const rewrittenAppend = args.append === undefined ? undefined : rewriteSubOutlineIds(args.id, args.append).body;
 	const tryUpdate = async (filePath: string): Promise<Record<string, unknown> | null> => {
-  let result: Awaited<ReturnType<typeof executeOrg>>;
+		let result: Awaited<ReturnType<typeof executeOrg>>;
 		try {
 			result = await executeOrg({
 				command: "updateItem",
@@ -637,7 +701,7 @@ async function emitCompletionEpisode(ctx: OrgContext, id: string, _filePath: str
 	}
 }
 
-const COMPLETION_HEADING_RE = /^\*{1,6}\s+Completion\s*$([\s\S]*?)(?=^\*{1,6}\s|\Z)/m;
+const COMPLETION_HEADING_RE = /^\*{1,6}\s+Completion\s*$([\s\S]*?)(?=^\*{1,6}\s|Z)/m;
 const NOTE_LINE_RE = /^NOTE \[[^\]]+\]:\s*(.*)$/gm;
 
 /**
@@ -651,9 +715,7 @@ export function extractCompletionText(body: string): string {
 		const inner = sectionMatch[1].trim();
 		if (inner.length > 0) return inner;
 	}
-	const notes = [...body.matchAll(NOTE_LINE_RE)]
-		.map(m => m[1].trim())
-		.filter(line => line.length > 0);
+	const notes = [...body.matchAll(NOTE_LINE_RE)].map(m => m[1].trim()).filter(line => line.length > 0);
 	if (notes.length === 0) return "";
 	return notes.join("\n");
 }
@@ -692,7 +754,7 @@ async function cmdSet(
 	},
 ): Promise<unknown> {
 	const trySet = async (filePath: string): Promise<Record<string, unknown> | null> => {
-  let result: Awaited<ReturnType<typeof executeOrg>>;
+		let result: Awaited<ReturnType<typeof executeOrg>>;
 		try {
 			result = await executeOrg({
 				command: "setProperty",
@@ -738,7 +800,7 @@ async function cmdNote(
 	args: { id: string; note: string; file?: string; includeBody?: boolean },
 ): Promise<unknown> {
 	const tryNote = async (filePath: string): Promise<Record<string, unknown> | null> => {
-  let result: Awaited<ReturnType<typeof executeOrg>>;
+		let result: Awaited<ReturnType<typeof executeOrg>>;
 		try {
 			result = await executeOrg({
 				command: "appendNote",
@@ -870,16 +932,18 @@ async function cmdSuboutlineAdd(
 	}
 	const block = buildSuboutlineBlock(args);
 	const append = `${parentBody.trim().length > 0 ? "\n\n" : ""}${block}`;
-	const result = await createCategoryMutex.withLock(parentItem.file, async () =>
-		await executeOrg({
-			command: "updateItem",
-			file: parentItem.file,
-			id: parentItem.id,
-			append,
-			todoKeywords: ctx.config.todoKeywords,
-			root: ctx.projectRoot,
-			categories: indexCategories(ctx),
-		}),
+	const result = await createCategoryMutex.withLock(
+		parentItem.file,
+		async () =>
+			await executeOrg({
+				command: "updateItem",
+				file: parentItem.file,
+				id: parentItem.id,
+				append,
+				todoKeywords: ctx.config.todoKeywords,
+				root: ctx.projectRoot,
+				categories: indexCategories(ctx),
+			}),
 	);
 	if (result.error) {
 		return { error: true, message: String(result.output) };
@@ -1184,16 +1248,114 @@ async function cmdArchive(ctx: OrgContext, args: { category?: string }): Promise
 	return result.output;
 }
 
-
-
-
-
-
-
-
-
-
-
+/**
+ * Dispatch a resolved org command to its handler. Extracted from the tool's
+ * `execute` so the implicit-id resolution pre-pass (see {@link resolveImplicitId})
+ * can run uniformly before this switch and attach warnings after it.
+ */
+async function dispatchOrgCommand(ctx: OrgContext, command: string, args: Record<string, unknown>): Promise<unknown> {
+	switch (command) {
+		case "init":
+			return cmdInit(ctx, {
+				category: args.category as string | undefined,
+			});
+		case "create":
+			return cmdCreate(ctx, {
+				title: args.title as string,
+				category: args.category as string | undefined,
+				state: args.state as string | undefined,
+				properties: args.properties as Record<string, string> | undefined,
+				body: normalizeOrgBody(args.body as string | undefined),
+				file: args.file as string | undefined,
+			});
+		case "query":
+			return cmdQuery(ctx, {
+				state: args.state as string | string[] | undefined,
+				category: args.category as string | string[] | undefined,
+				dir: args.dir as string | string[] | undefined,
+				priority: args.priority as string | string[] | undefined,
+				layer: args.layer as string | string[] | undefined,
+				agent: args.agent as string | undefined,
+				includeBody: args.includeBody as boolean | undefined,
+				query: args.query as string | undefined,
+				ql: args.ql as string | undefined,
+				sort: args.sort as string | undefined,
+				limit: args.limit as number | undefined,
+				offset: args.offset as number | undefined,
+			});
+		case "get":
+			return cmdGet(ctx, { id: args.id as string });
+		case "update":
+			return cmdUpdate(ctx, {
+				id: args.id as string,
+				state: args.state as string | undefined,
+				note: args.note as string | undefined,
+				body: normalizeOrgBody(args.body as string | undefined),
+				append: normalizeOrgBody(args.append as string | undefined),
+				title: args.title as string | undefined,
+				file: args.file as string | undefined,
+				section: args.section as string | undefined,
+				includeBody: args.includeBody as boolean | undefined,
+			});
+		case "delete":
+			return cmdDelete(ctx, {
+				id: args.id as string,
+				file: args.file as string | undefined,
+			});
+		case "validate-plan":
+			return cmdValidatePlan(ctx, { id: args.id as string });
+		case "note":
+			return cmdNote(ctx, {
+				id: args.id as string,
+				note: normalizeOrgBody(args.note as string | undefined) ?? "",
+				file: args.file as string | undefined,
+				includeBody: args.includeBody as boolean | undefined,
+			});
+		case "set":
+			return cmdSet(ctx, {
+				id: args.id as string,
+				property: args.property as string,
+				value: args.value as string,
+				file: args.file as string | undefined,
+				includeBody: args.includeBody as boolean | undefined,
+			});
+		case "validate":
+			return cmdValidate(ctx, {
+				category: args.category as string | undefined,
+				file: args.file as string | undefined,
+			});
+		case "dashboard":
+			return cmdDashboard(ctx);
+		case "wave":
+			return cmdWave(ctx, {
+				file: args.file as string | undefined,
+				category: args.category as string | undefined,
+				manifest: (args.manifest as boolean | undefined) ?? false,
+				planItemId: args.planItemId as string | undefined,
+			});
+		case "graph":
+			return cmdGraph(ctx, {
+				file: args.file as string | undefined,
+				category: args.category as string | undefined,
+			});
+		case "archive":
+			return cmdArchive(ctx, {
+				category: args.category as string | undefined,
+			});
+		case "suboutline-add":
+			return cmdSuboutlineAdd(ctx, {
+				parentId: args.parentId as string,
+				slug: args.slug as string,
+				title: args.title as string,
+				body: normalizeOrgBody(args.body as string | undefined),
+				depends: Array.isArray(args.depends) ? (args.depends as string[]) : undefined,
+				layer: args.layer as string | undefined,
+				replace: args.replace as boolean | undefined,
+			});
+		default:
+			return { error: true, message: `Unknown command: ${command}` };
+	}
+}
 export function createOrgTool(
 	projectRoot: string,
 	config: OrgConfig = DEFAULT_ORG_CONFIG,
@@ -1207,7 +1369,7 @@ export function createOrgTool(
 	};
 	return {
 		name: "org",
-		description: `Org-mode project management. Subcommands:\n  init        Initialize org directories and category subdirs\n  create      Create a new task item (ID auto-generated)\n  query       List/filter items (state, category, priority, layer, or keyword query)\n  get         Get single item by ID with full body\n  update      Change state, body, title, or append text (any combo in one call)\n  note        Append a dated NOTE entry to an item (no state change)\n  set         Set a single PROPERTIES drawer value\n  validate    Validate items\n  delete       Delete an item file\n  validate-plan Validate a plan via injected callback\n  dashboard   Project metrics and in-progress/blocked summary\n  wave        Next wave of ready items by priority\n  graph       Dependency graph\n  archive     Archive DONE items\n  suboutline-add Append a structured implementation sub-heading to an existing item with auto-prefixed CUSTOM_ID.\n`,
+		description: `Org-mode project management. Subcommands:\n  init        Initialize org directories and category subdirs\n  create      Create a new task item (ID auto-generated)\n  query       List/filter items (state, category, priority, layer, or keyword query)\n  get         Get single item by ID with full body\n  update      Change state, body, title, or append text (any combo in one call)\n  note        Append a dated NOTE entry to an item (no state change)\n  set         Set a single PROPERTIES drawer value\n  validate    Validate items\n  delete       Delete an item file\n  validate-plan Validate a plan via injected callback\n  dashboard   Project metrics and in-progress/blocked summary\n  wave        Next wave of ready items by priority\n  graph       Dependency graph\n  archive     Archive DONE items\n  suboutline-add Append a structured implementation sub-heading to an existing item with auto-prefixed CUSTOM_ID.\n\nID args (id/parentId/planItemId) accept a partial CUSTOM_ID: an unambiguous prefix resolves to the full ID (with a warning); an ambiguous prefix returns AMBIGUOUS_ID listing the candidates. Pass the full ID or use \`query\` to avoid the lookup.\n`,
 		parameters: {
 			type: "object",
 			properties: {
@@ -1236,107 +1398,26 @@ export function createOrgTool(
 		},
 		async execute(args: Record<string, unknown>): Promise<unknown> {
 			const command = args.command as string;
-			switch (command) {
-				case "init":
-					return cmdInit(ctx, {
-						category: args.category as string | undefined,
-					});
-				case "create":
-					return cmdCreate(ctx, {
-						title: args.title as string,
-						category: args.category as string | undefined,
-						state: args.state as string | undefined,
-						properties: args.properties as Record<string, string> | undefined,
-						body: normalizeOrgBody(args.body as string | undefined),
-						file: args.file as string | undefined,
-					});
-				case "query":
-					return cmdQuery(ctx, {
-						state: args.state as string | string[] | undefined,
-						category: args.category as string | string[] | undefined,
-						dir: args.dir as string | string[] | undefined,
-						priority: args.priority as string | string[] | undefined,
-						layer: args.layer as string | string[] | undefined,
-						agent: args.agent as string | undefined,
-						includeBody: args.includeBody as boolean | undefined,
-						query: args.query as string | undefined,
-						ql: args.ql as string | undefined,
-						sort: args.sort as string | undefined,
-						limit: args.limit as number | undefined,
-						offset: args.offset as number | undefined,
-					});
-				case "get":
-					return cmdGet(ctx, { id: args.id as string });
-				case "update":
-					return cmdUpdate(ctx, {
-						id: args.id as string,
-						state: args.state as string | undefined,
-						note: args.note as string | undefined,
-						body: normalizeOrgBody(args.body as string | undefined),
-						append: normalizeOrgBody(args.append as string | undefined),
-						title: args.title as string | undefined,
-						file: args.file as string | undefined,
-						section: args.section as string | undefined,
-						includeBody: args.includeBody as boolean | undefined,
-					});
-				case "delete":
-					return cmdDelete(ctx, {
-						id: args.id as string,
-						file: args.file as string | undefined,
-					});
-				case "validate-plan":
-					return cmdValidatePlan(ctx, { id: args.id as string });
-				case "note":
-					return cmdNote(ctx, {
-						id: args.id as string,
-						note: normalizeOrgBody(args.note as string | undefined) ?? "",
-						file: args.file as string | undefined,
-						includeBody: args.includeBody as boolean | undefined,
-					});
-				case "set":
-					return cmdSet(ctx, {
-						id: args.id as string,
-						property: args.property as string,
-						value: args.value as string,
-						file: args.file as string | undefined,
-						includeBody: args.includeBody as boolean | undefined,
-					});
-				case "validate":
-					return cmdValidate(ctx, {
-						category: args.category as string | undefined,
-						file: args.file as string | undefined,
-					});
-				case "dashboard":
-					return cmdDashboard(ctx);
-				case "wave":
-					return cmdWave(ctx, {
-						file: args.file as string | undefined,
-						category: args.category as string | undefined,
-						manifest: (args.manifest as boolean | undefined) ?? false,
-						planItemId: args.planItemId as string | undefined,
-					});
-				case "graph":
-					return cmdGraph(ctx, {
-						file: args.file as string | undefined,
-						category: args.category as string | undefined,
-					});
-				case "archive":
-					return cmdArchive(ctx, {
-						category: args.category as string | undefined,
-					});
-				case "suboutline-add":
-					return cmdSuboutlineAdd(ctx, {
-						parentId: args.parentId as string,
-						slug: args.slug as string,
-						title: args.title as string,
-						body: normalizeOrgBody(args.body as string | undefined),
-						depends: Array.isArray(args.depends) ? (args.depends as string[]) : undefined,
-						layer: args.layer as string | undefined,
-						replace: args.replace as boolean | undefined,
-					});
-				default:
-					return { error: true, message: `Unknown command: ${command}` };
+			// FEAT: implicit prefix resolution. Each id-bearing command names the arg
+			// key holding a CUSTOM_ID; resolve it against the index before dispatch so
+			// a partial id (e.g. "FEAT-815" for file "FEAT-815-foo") still hits,
+			// ambiguity short-circuits, and an exact id is left untouched.
+			const idArg = ID_ARG_BY_COMMAND[command];
+			let idWarning: string | undefined;
+			if (idArg !== undefined) {
+				const rawId = args[idArg];
+				if (typeof rawId === "string" && rawId.length > 0) {
+					const resolution = await resolveImplicitId(ctx, rawId);
+					if (!resolution.ok) return resolution;
+					args[idArg] = resolution.id;
+					idWarning = resolution.warning;
+				}
 			}
+			const result = await dispatchOrgCommand(ctx, command, args);
+			if (idWarning !== undefined && typeof result === "object" && result !== null && !("error" in result)) {
+				(result as Record<string, unknown>).idWarning = idWarning;
+			}
+			return result;
 		},
 		async dispose() {
 			// No-op: native engine has no persistent state to clean up.

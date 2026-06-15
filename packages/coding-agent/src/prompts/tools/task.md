@@ -62,7 +62,32 @@ Parallel-safe: disjoint modules · file-scoped refactors · tests for existing c
 <templates>
 context    → ## Goal · ## Non-goals · ## Constraints · ## Contract · ## Acceptance
 assignment → ## Target (exact paths) · ## Change · ## Edge · ## Accept (observable)
-worked example + full template prose: `pi://task-tool-reference.md` — read before your first multi-task dispatch of a session.
+
+Worked example — rename `parseConfig`→`loadConfig`, two disjoint file-sets, no blocker:
+```yaml
+context: |
+  ## Goal       Rename parseConfig → loadConfig across config module + callers.
+  ## Non-goals  No behavior/signature change. Rename only.
+  ## Acceptance Orchestrator runs `bun check:ts` after both join. Tasks must NOT.
+tasks:
+  - id: RenameExport          # ref REQUIRED on every task — null when no todo/org link
+    ref: null
+    description: rename the export
+    assignment: |
+      ## Target  src/config/parser.ts — exported fn `parseConfig`. Non-goal: callers, tests.
+      ## Change  rename decl + JSDoc; if src/config/index.ts re-exports it, update there too.
+      ## Edge    overloads → rename all sigs. `_parseConfigValue` helper → leave. No compat alias.
+      ## Accept  parser.ts exports `loadConfig`; `parseConfig` gone as top-level export.
+  - id: UpdateCallers
+    ref: null
+    description: update import + call sites
+    assignment: |
+      ## Target  src/cli/init.ts, src/server/bootstrap.ts. Non-goal: parser.ts/index.ts (sibling task).
+      ## Change  `import { parseConfig }`→`loadConfig`; every `parseConfig(`→`loadConfig(`.
+      ## Edge    `cfg.parseConfig(…)` property access → update too. Doc strings → leave.
+      ## Accept  zero bare `parseConfig` in the target files.
+```
+Fuller prose + variants: `pi://task-tool-reference.md`.
 </templates>
 
 {{#list agents join="\n"}}

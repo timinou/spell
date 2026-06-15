@@ -5,9 +5,8 @@
 
 use std::collections::HashMap;
 
-use serde::Serialize;
-
 use pi_knowledge_core::graph::EdgeKind;
+use serde::Serialize;
 
 use crate::clock::ClockEntry;
 

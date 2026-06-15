@@ -824,3 +824,73 @@ describe("mutation body responses", () => {
 		expect(result.bodyLength).toBeUndefined();
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Implicit prefix id resolution (FEAT: partial CUSTOM_ID resolution)
+// ---------------------------------------------------------------------------
+
+describe("implicit prefix id resolution", () => {
+	test("exact id resolves with no warning", async () => {
+		await seedItem("projects", "PROJ-100-alpha", "Alpha");
+		const tool = makeTool();
+		const result = (await tool.execute({ command: "get", id: "PROJ-100-alpha" })) as Record<string, unknown>;
+		const item = result.item as Record<string, unknown>;
+		expect(item?.id).toBe("PROJ-100-alpha");
+		expect(result.idWarning).toBeUndefined();
+	});
+
+	test("unique prefix resolves to canonical id with a warning", async () => {
+		await seedItem("projects", "PROJ-815-implement-foo", "Foo");
+		const tool = makeTool();
+		const result = (await tool.execute({ command: "get", id: "PROJ-815" })) as Record<string, unknown>;
+		const item = result.item as Record<string, unknown>;
+		expect(item?.id).toBe("PROJ-815-implement-foo");
+		expect(typeof result.idWarning).toBe("string");
+		expect(result.idWarning as string).toContain("PROJ-815-implement-foo");
+	});
+
+	test("ambiguous prefix short-circuits with AMBIGUOUS_ID and candidates", async () => {
+		await seedItem("projects", "PROJ-815-foo", "Foo");
+		await seedItem("projects", "PROJ-815-bar", "Bar");
+		const tool = makeTool();
+		const result = (await tool.execute({ command: "get", id: "PROJ-815" })) as Record<string, unknown>;
+		expect(result.error).toBe(true);
+		expect(result.code).toBe("AMBIGUOUS_ID");
+		const candidates = result.candidates as string[];
+		expect(candidates).toContain("PROJ-815-foo");
+		expect(candidates).toContain("PROJ-815-bar");
+		expect(result.item).toBeUndefined();
+	});
+
+	test("no match falls through to downstream NOT_FOUND unchanged", async () => {
+		await seedItem("projects", "PROJ-100-alpha", "Alpha");
+		const tool = makeTool();
+		const result = (await tool.execute({ command: "get", id: "PROJ-999" })) as Record<string, unknown>;
+		expect(result.error).toBe(true);
+		expect(result.code).toBe("NOT_FOUND");
+		expect(result.message as string).toContain("PROJ-999");
+	});
+
+	test("exact id is preferred even when it is a prefix of others", async () => {
+		await seedItem("projects", "PROJ-10", "Ten");
+		await seedItem("projects", "PROJ-100-alpha", "Alpha");
+		const tool = makeTool();
+		const result = (await tool.execute({ command: "get", id: "PROJ-10" })) as Record<string, unknown>;
+		const item = result.item as Record<string, unknown>;
+		expect(item?.id).toBe("PROJ-10");
+		expect(result.idWarning).toBeUndefined();
+	});
+
+	test("resolution applies to mutating commands (update via prefix)", async () => {
+		await seedItem("projects", "PROJ-200-mut", "Mut", { state: "ITEM" });
+		const tool = makeTool();
+		const result = (await tool.execute({
+			command: "update",
+			id: "PROJ-200",
+			state: "DOING",
+		})) as Record<string, unknown>;
+		expect(result.success).toBe(true);
+		expect(result.id).toBe("PROJ-200-mut");
+		expect(typeof result.idWarning).toBe("string");
+	});
+});

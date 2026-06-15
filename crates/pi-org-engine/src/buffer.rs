@@ -13,13 +13,11 @@ use pi_code_engine::{
 	buffer::CodeBuffer,
 	language::{LanguageId, LanguageRegistry},
 };
-use tree_sitter::Node;
-
 use pi_knowledge_core::graph::EdgeKind;
+use tree_sitter::Node;
 
 use crate::{
 	clock::{self, ClockEntry},
-
 	item::OrgItem,
 };
 
@@ -362,11 +360,16 @@ fn extract_section_item(
 			"body" => {
 				let text = nested_body_text(source, child);
 				let trimmed_text = text.trim();
+				if !properties.contains_key("CUSTOM_ID") {
+					extract_properties_drawer_text(trimmed_text, &mut properties);
+				}
 				if trimmed_text.starts_with(":RELATIONS:") {
 					relations.extend(parse_relations_drawer_text(trimmed_text));
 				} else {
-					if options.include_body && !trimmed_text.is_empty() {
-						body_parts.push(text.clone());
+					let body_text = strip_drawer_text(&text, ":PROPERTIES:");
+					let trimmed_body = body_text.trim();
+					if options.include_body && !trimmed_body.is_empty() {
+						body_parts.push(trimmed_body.to_string());
 					}
 					for line in text.lines() {
 						if let Some(entry) = clock::parse_clock_line(line) {
@@ -382,11 +385,16 @@ fn extract_section_item(
 			_ => {
 				let text = node_text(source, child);
 				let trimmed_text = text.trim();
+				if !properties.contains_key("CUSTOM_ID") {
+					extract_properties_drawer_text(trimmed_text, &mut properties);
+				}
 				if trimmed_text.starts_with(":RELATIONS:") {
 					relations.extend(parse_relations_drawer_text(trimmed_text));
 				} else {
-					if options.include_body && !trimmed_text.is_empty() {
-						body_parts.push(trimmed_text.to_string());
+					let body_text = strip_drawer_text(trimmed_text, ":PROPERTIES:");
+					let trimmed_body = body_text.trim();
+					if options.include_body && !trimmed_body.is_empty() {
+						body_parts.push(trimmed_body.to_string());
 					}
 					for line in text.lines() {
 						if let Some(entry) = clock::parse_clock_line(line) {
@@ -502,7 +510,25 @@ fn extract_properties(source: &str, drawer: Node<'_>, properties: &mut HashMap<S
 		}
 	}
 }
-
+fn extract_properties_drawer_text(text: &str, properties: &mut HashMap<String, String>) {
+	let Some(drawer) = extract_drawer(text, ":PROPERTIES:") else {
+		return;
+	};
+	for line in drawer.lines() {
+		let line = line.trim();
+		if line.is_empty() || line == ":PROPERTIES:" || line == ":END:" {
+			continue;
+		}
+		if let Some(rest) = line.strip_prefix(':')
+			&& let Some((key, value)) = rest.split_once(':')
+		{
+			let key = key.trim().to_string();
+			if !key.is_empty() && !properties.contains_key(&key) {
+				properties.insert(key, value.trim().to_string());
+			}
+		}
+	}
+}
 fn extract_single_property(source: &str, prop: Node<'_>, properties: &mut HashMap<String, String>) {
 	let text = node_text(source, prop).trim().to_string();
 	if let Some(rest) = text.strip_prefix(':')
@@ -601,7 +627,26 @@ fn extract_drawer<'a>(source: &'a str, marker: &str) -> Option<&'a str> {
 	let end_line_len = after_end.find('\n').map_or(after_end.len(), |n| n + 1);
 	Some(&rel[..end_off + end_line_len])
 }
-
+fn strip_drawer_text(source: &str, marker: &str) -> String {
+	let Some(start) = source.find(marker) else {
+		return source.to_string();
+	};
+	let rel = &source[start..];
+	let Some(end_off) = rel.find(":END:") else {
+		return source.to_string();
+	};
+	let after_end = &rel[end_off..];
+	let end_line_len = after_end.find('\n').map_or(after_end.len(), |n| n + 1);
+	let end = start + end_off + end_line_len;
+	let before = source[..start].trim_end();
+	let after = source[end..].trim_start();
+	match (before.is_empty(), after.is_empty()) {
+		(true, true) => String::new(),
+		(false, true) => before.to_string(),
+		(true, false) => after.to_string(),
+		(false, false) => format!("{before}\n{after}"),
+	}
+}
 /// :END:).
 fn parse_relations_drawer_text(text: &str) -> Vec<(EdgeKind, String)> {
 	let mut relations = Vec::new();
@@ -934,17 +979,22 @@ mod tests {
 			"Some content.\n",
 		);
 		let items = extract_test_items(src, false);
-		let root = items.iter().find(|it| it.id == "CON-auth-flow").expect("file-level item");
+		let root = items
+			.iter()
+			.find(|it| it.id == "CON-auth-flow")
+			.expect("file-level item");
 		assert_eq!(root.relations.len(), 2, "two relations parsed; got {:?}", root.relations);
 		assert!(
-			root.relations
+			root
+				.relations
 				.iter()
 				.any(|(_, target)| target == "ENT-product-checkout"),
 			"ABOUT edge: {:?}",
 			root.relations
 		);
 		assert!(
-			root.relations
+			root
+				.relations
 				.iter()
 				.any(|(_, target)| target == "EP-2026-05-15-auth-discovery"),
 			"DISTILLED_FROM edge: {:?}",
@@ -967,9 +1017,36 @@ mod tests {
 			":END:\n",
 		);
 		let items = extract_test_items(src, false);
-		let root = items.iter().find(|it| it.id == "CON-x").expect("file-level item");
+		let root = items
+			.iter()
+			.find(|it| it.id == "CON-x")
+			.expect("file-level item");
 		assert_eq!(root.property("KIND"), Some("concept"));
 		assert_eq!(root.property("TAGS"), Some("alpha beta"));
+	}
+
+	#[test]
+	fn legacy_memory_heading_with_late_properties_still_extracts() {
+		let src = concat!(
+			"#+TITLE: legacy-concept\n\n",
+			"** ITEM Legacy Concept\n\n",
+			"Body written before the drawer by the old memory.save path.\n",
+			":PROPERTIES:\n",
+			":CUSTOM_ID: CON-legacy-concept\n",
+			":KIND: concept\n",
+			":END:\n",
+		);
+		let items = extract_test_items(src, true);
+		let item = items
+			.iter()
+			.find(|it| it.id == "CON-legacy-concept")
+			.expect("legacy memory item");
+		assert_eq!(item.property("KIND"), Some("concept"));
+		assert_eq!(item.title, "Legacy Concept");
+		let body = item.body.as_deref().expect("body");
+		assert!(body.contains("Body written"));
+		assert!(!body.contains(":PROPERTIES:"));
+		assert!(!body.contains(":CUSTOM_ID:"));
 	}
 
 	/// File whose first line is a heading must NOT pick up the heading's

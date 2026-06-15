@@ -130,6 +130,17 @@ describe("formatOrgResult", () => {
 		expect(output).toStartWith("{");
 		expect(output).toContain("unexpected");
 	});
+
+	it("prefixes a warning line when the result carries idWarning", () => {
+		const result = {
+			item: createItem({ id: "FEAT-815-do-thing" }),
+			idWarning: 'Resolved "FEAT-815" -> "FEAT-815-do-thing" by prefix.',
+		};
+		const output = formatOrgResult(result);
+		expect(output).toStartWith("warning: ");
+		expect(output).toContain("FEAT-815-do-thing");
+		expect(output).toContain("id: FEAT-815-do-thing");
+	});
 });
 
 describe("memoizeOrgResult", () => {
