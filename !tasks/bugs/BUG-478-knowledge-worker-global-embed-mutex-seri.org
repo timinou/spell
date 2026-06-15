@@ -1,0 +1,25 @@
+#+TITLE: knowledge worker warm path builds typed graph twice + holds embed lock for whole batch
+#+STATE: DONE
+#+SESSION_ID: 1509565aeda55489
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T21-57-50-135Z_1509565aeda55489.jsonl]]
+#+CUSTOM_ID: BUG-478-knowledge-worker-global-embed-mutex-seri
+#+COMPLETION_HASH: 93c838814c2fddc5
+
+* BUG: redundant warm-load work — =build_typed_graph= runs twice, and the global embed =Mutex= is held for the entire batch
+
+** Symptom / cost
+1. =OrgLane::warm_load_with= calls =build_typed_graph(&items)= TWICE per warm — once for the partial (lexical) lane, once for the full lane — because =TypedGraph= is not =Clone= (graph-backed inner store). Redundant CPU + allocation on every warm.
+2. The full-corpus =embed_batch= holds =engine.rs='s global =Mutex<TextEmbedding>= for its entire (multi-minute) duration, so an interactive =embed_query= queues behind it (defeats the 150ms non-blocking lane grace).
+
+** Fix
+1. Build the typed graph ONCE and share it across the partial and full lanes via =Arc<TypedGraph>= (change =OrgLane.graph= to =Arc<TypedGraph>=, or restructure so the partial borrows the same instance). Eliminates the second build.
+2. The chunking fix (BUG-476) already shrinks the embed critical section — chunked =embed_batch= releases + re-acquires the engine lock per chunk, letting a query's =embed_query= interleave between chunks. Verify a concurrent =embed_query= returns < 1s during a cold warm embed; if not, =thread::yield_now()= between chunks.
+
+** Acceptance
+- =build_typed_graph= invoked once per warm-load (assert via counter / instrumentation in a unit test).
+- Concurrent =embed_query= during a cold warm completes in < 1s.
+
+** Relations
+fix-plan item #5 of the knowledge-worker efficiency sweep. Interleave half depends on BUG-476 (chunking).
+
+NOTE [2026-06-14]: Fixed in commit d7469f7da. (1) OrgLane.graph -> Arc<TypedGraph>, built once and shared across partial+full lanes (was built twice; TypedGraph not Clone). (2) Interleave verified: tests/embed_interleave.rs models the shared engine Mutex with a slow lock-guarded embedder; a query embed acquires the lock mid-warm (latency < one chunk) while a chunked warm runs — proving BUG-476 chunking defeats the old whole-batch lock hold.

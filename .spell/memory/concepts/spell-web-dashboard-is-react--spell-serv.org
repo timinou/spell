@@ -1,0 +1,28 @@
+#+TITLE: spell-web-dashboard-is-react--spell-serv
+
+** ITEM Spell web dashboard is React (spell-server/web), NOT Svelte (spell-team-chat)
+
+CRITICAL: The web UI served at :8787/web is packages/spell-server/web — a React 19 + zustand + cmdk + xterm SPA (entry <div id="root">, title "Spell Dashboard", builds via `bun run --cwd=packages/spell-server build:web`, loaded by the server's loadWebAssets() from dist/). 
+
+packages/spell-team-chat is a SEPARATE Svelte app that spell-server NEVER serves (entry <div id="app">, title "Spell Team Chat"). Editing it has zero effect on what users see. Verify before touching frontend: `curl :8787/web/` → check #root vs #app, or grep the served bundle for react vs svelte.
+
+ARCHITECTURE of the real app (packages/spell-server/web/src):
+- App.tsx Shell: WS client (SpellWsClient), pendingResponses Map keyed by correlationId for rpc round-trips, useSessions zustand store (DerivedSession with .logs ring buffer + .currentBlockingEvent).
+- detail/SessionDetail.tsx: tabs Stream|Bash|State|Artifacts.
+- Stream rendering (PORTED 2026-06-13 from ANSI xterm to structured DOM):
+  - chat-presentation.ts (pure): summariseArgs, classifyDiffLines (REQUIRES @@ hunk — bare +/- lines are markdown bullets, not diffs!), classifyEditResult (undo/redo/declined).
+  - chat-model.ts (pure): reduceEvent folds RpcEvent stream → ChatBubble[]; correlates tool_execution_start+end by toolCallId into ONE tile; accumulates text/thinking deltas; reduceLogEntry maps external event_log entries.
+  - ChatBubble.tsx + ChatStream.tsx: DOM tiles. Replaced StreamTab.tsx/StreamRenderer.ts (deleted). xterm still used by BashTab.
+- EditHistoryPanel.tsx: edit_history RPC via App.requestEditHistory (correlationId round-trip → response.data). ONLY works for kind:"spawned" sessions; external (CLI bridge, event_log) sessions return unsupported_for_external.
+
+WIRE: server sends rpc_event with FULL tool args (tool_execution_start.args) + result (tool_execution_end.result.content[].text) — rpc/types.ts. The old StreamRenderer discarded them. edit_history RPC already supported server-side (BridgeRpcCommand).
+
+Tests: bun test in packages/spell-server/web (test/detail/*.test.ts). Dev: `bun run --cwd=packages/spell-server/web dev` on :5173 proxies api/ws to :8787; auth token via login form (localStorage key spell.web.token), NOT URL query.
+:PROPERTIES:
+:CUSTOM_ID: CON-spell-web-dashboard-is-react--spell-serv
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-14T17:16:35Z
+:END:
+:RELATIONS:
+:END:

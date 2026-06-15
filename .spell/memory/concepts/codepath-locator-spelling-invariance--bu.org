@@ -1,0 +1,24 @@
+#+TITLE: codepath-locator-spelling-invariance--bu
+
+** ITEM CodePath locator-spelling invariance (BUG-473)
+
+find/execute (tool/find) silently returned [] for valid targets depending on PATH SPELLING. Same file via {relative, absolute, ./, .., trailing-slash} resolved differently. Root cause = two layers each mishandling locator↔root:
+
+KERNEL (crates/pi-code-path/src/dialects/fs/walker.rs): walk() matches each entry by `rel = path.strip_prefix(root)` then `glob.is_match(rel)`. The glob came literally from locator segments (fs_locator_to_glob), only special-casing `.`/`./`. So an absolute pattern (leading `/`), a `..` segment, or a trailing-slash dir-glob (`crates/*/`) never matched the root-relative `rel` → 0 results, no diagnostic. FIX: normalize_glob_to_root() lexically absolutizes the pattern against root, resolves ./.., strips root prefix, trims trailing slash → every spelling becomes the same root-relative glob.
+
+TS (packages/coding-agent/src/tools/get.ts): effectiveRootFor + a relativize gate patched ABSOLUTE targets but skipped `..`-ESCAPING relative targets (extractAbsolutePrefix returns null for them). A target climbing OUT of cwd (../../packages/* from a subdir) hit the kernel with root=cwd, which can't walk above its own root → 0. FIX: absolutizeEscapingTarget() rewrites an escaping relative target to absolute and DROPS the narrow provided root so effectiveRootFor widens to the nearest existing ancestor.
+
+WHY TESTS MISSED IT: get.test.ts MOCKED executeCodePath (spyOn→mockResolvedValue) — asserted the STRING passed to the kernel, never real resolution; one test even asserted `../` pass-through (the bug). Lesson: path-resolution invariants MUST be tested against the REAL kernel (non-mocked tmpdir tree), driving FindTool→GetTool→kernel, asserting rel==abs==./==..-within==..-escaping. Plus Rust unit tests on the walker directly.
+
+KEY MODEL: walker always emits root-relative, slash-separated locators with no leading/trailing slash and no ./...; ANY pattern shape that doesn't match that form silently fails. Kernel can normalize WITHIN root; only the host skin (TS) can WIDEN the root (kernel never climbs above its root).
+
+GOTCHA: in-session find/execute tools are bound to the addon+TS bundle at SESSION START — rebuilding the native addon / editing TS does NOT affect the live session's tools. Validate via a fresh `bun` harness importing @spell/pi-natives + @spell/pi-coding-agent/tools, run from packages/coding-agent (native addon resolves relative to cwd).
+:PROPERTIES:
+:CUSTOM_ID: CON-codepath-locator-spelling-invariance--bu
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-14T22:28:25Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: BUG-473-find-execute-glob-resolution-locator-spe
+:END:

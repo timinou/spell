@@ -1,0 +1,33 @@
+#+TITLE: knowledge worker embed is monolithic — progress stuck at 0, uninterruptible
+#+STATE: DONE
+#+SESSION_ID: 1509565aeda55489
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T21-57-50-135Z_1509565aeda55489.jsonl]]
+#+CUSTOM_ID: BUG-476-knowledge-worker-embed-is-monolithic-pro
+#+COMPLETION_HASH: 3a3c260a292231ef
+
+* Initial Message
+
+bro.
+
+pi-knowledge-worker takes on the whole CPU and hangs (TUI marker is left at 0 forever)
+latest place that does this: /home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T18-53-08-610Z_15092c1520a8d7d4.jsonl
+
+why? can you find the root cause? what is shitty about your rust arch? please find all efficiency warts.
+
+* BUG: warm-load embed runs as one giant batch → progress marker stuck at 0 for the whole embed, no cancellation
+
+** Symptom
+TUI warm-progress marker shows =phase:embed done:0 total:11805= for the entire (multi-minute) embed wall-time, then jumps to done. Reads as "hung at 0 forever."
+
+** Root cause
+=lane_org.rs::build_vec_index_with= calls =embedder.embed_batch(&refs)= over ALL items in a single call, THEN loops =progress.bump_done()= afterward. So =done= is 0 for ~100% of the embed, and the snapshot the =stats= RPC returns to the TUI never advances mid-embed. Progress is decorative, not real. The single =embed= call is also uninterruptible — no chunk boundary to check a shutdown flag.
+
+** Fix
+Chunk the embed into batches (~256 items): for each chunk call =embed_batch=, upsert, then =progress.done.fetch_add(chunk_len)=. Between chunks, check the daemon SHUTDOWN flag and bail cleanly (persisting partial progress once BUG (cache) lands). Keep =total= = items.len(); =done= now climbs smoothly.
+
+** Acceptance
+- During a cold embed of the live corpus, =stats= snapshots show =done= strictly increasing across multiple polls (not 0 → total).
+- Chunk size tunable via =KNOWLEDGE_EMBED_CHUNK= (default 256).
+- A SIGTERM mid-embed exits within the drain grace without finishing the whole corpus.
+
+NOTE [2026-06-14]: Fixed in commit 69cbeade8. build_vec_index_with now embeds in chunks of KNOWLEDGE_EMBED_CHUNK (default 256), bumping progress.done per chunk so the marker climbs in real time; engine lock released between chunks (also helps BUG-478 interleave). Embedder failure mid-build stops cleanly and skips cache persist.

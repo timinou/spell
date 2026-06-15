@@ -1,0 +1,71 @@
+#+TITLE: evaluate smaller embed model (bge-small / MiniLM) vs bge-m3 for org recall
+#+STATE: DONE
+#+SESSION_ID: 1509565aeda55489
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T21-57-50-135Z_1509565aeda55489.jsonl]]
+#+CUSTOM_ID: BUG-479-evaluate-smaller-embed-model-bge-small-m
+
+* Initial Message
+
+bro.
+
+pi-knowledge-worker takes on the whole CPU and hangs (TUI marker is left at 0 forever)
+latest place that does this: /home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T18-53-08-610Z_15092c1520a8d7d4.jsonl
+
+why? can you find the root cause? what is shitty about your rust arch? please find all efficiency warts.
+
+* BUG/EVAL: bge-m3 (560M params, ~2.5GB resident, 1024-dim, multilingual) is oversized for short org titles/bodies
+
+** Hypothesis
+bge-small-en-v1.5 (~33M params, 384-dim) or all-MiniLM-L6-v2 (~22M, 384-dim) embed ~10× faster on CPU with far smaller RAM, and for short English org headings/bodies the recall quality may be comparable — possibly better latency-adjusted. The multilingual capacity of bge-m3 is largely wasted on an English-only task corpus.
+
+** Method (synthetic small dataset first)
+1. Build a synthetic eval set from the live corpus: sample ~200 org items, craft ~30 query→expected-id pairs (title paraphrases, body keyword queries).
+2. Embed the sample under each model (bge-m3, bge-small-en-v1.5, all-MiniLM-L6-v2) via fastembed, run the existing recall fusion, measure: recall@5, MRR, embed wall-time, resident RAM, dim.
+3. Decide: if a small model holds ≥~95% of bge-m3 recall@5 at ≥5× speed, switch the default behind the existing =PI_KNOWLEDGE_WORKER_EMBEDDINGS= / a new model knob.
+
+** Constraints
+- =EMBEDDER_DIM= is hardcoded 1024 in =lane_org.rs= AND =pi-natives::embedding_worker= — switching dim touches both + invalidates caches (=KnowledgeMeta.embedder_dim= already gates this, good).
+- Model name must be persisted in =KnowledgeMeta.embedder_model= (already a field) so a swap invalidates the cache cleanly.
+
+** Acceptance
+- A committed eval harness + a short results table in this item.
+- A recommendation (switch / keep) with the measured numbers.
+- If switch: =EmbeddingModel= + =EMBEDDER_DIM= made configurable, cache invalidation verified.
+
+** Relations
+Independent of the cache/thread/chunk fixes; do after 1–3 land and are tested.
+
+* RESULTS (committed harness: crates/pi-knowledge-worker/examples/model_eval.rs)
+
+Run: =cargo run -p pi-knowledge-worker --example model_eval= (downloads models from HF). Env: =EVAL_SAMPLE=N= corpus size, =EVAL_QUERY=title|body= query mode.
+
+** Easy queries (perturbed title → id), 200-doc sample, 40 queries
+| model | dim | recall@5 | MRR | embed_ms (debug, 200 docs) |
+|-------|-----|----------|-----|------|
+| bge-m3 | 1024 | 1.000 | 0.925 | 15535 |
+| bge-small-en-v1.5 | 384 | 1.000 | 0.988 | 1210 |
+| all-MiniLM-L6-v2 | 384 | 1.000 | 0.988 | 881 |
+→ all saturate recall@5; small models even edge MRR. Title queries don't discriminate.
+
+** Hard queries (mid-body snippet → id, query does NOT contain the title), 250-doc sample, 39 queries
+| model | dim | recall@5 | MRR | embed_ms (debug, 250 docs) |
+|-------|-----|----------|-----|------|
+| bge-m3 | 1024 | 0.923 | 0.734 | 231874 |
+| bge-small-en-v1.5 | 384 | 0.846 | 0.691 | 20065 |
+| all-MiniLM-L6-v2 | 384 | 0.872 | 0.660 | 12481 |
+
+NB: debug build (~10x slower than release); absolute ms not representative, but RATIOS are: bge-m3 ≈ 11x slower than bge-small, ≈ 18x slower than MiniLM. RAM: bge-m3 ~2.5GB resident vs ~150-300MB for the 384-dim models.
+
+** Verdict
+bge-m3 wins recall on hard queries (0.923 vs 0.846/0.872 recall@5; 0.734 vs 0.691/0.660 MRR). Small models retain 92-95% of recall@5 and ~90-94% of MRR at 11-18x speed and ~1/10 the RAM. The multilingual capacity of bge-m3 is unused on this English corpus, but it still embeds short English text better.
+
+RECOMMENDATION: KEEP bge-m3 as the default (quality leads). Do NOT auto-switch. Expose model choice as a future opt-in for users who prefer the speed/RAM tradeoff — but that is a coordinated cross-crate change, NOT a drop-in:
+
+** Blocker for any actual switch (separate follow-up if pursued)
+EMBEDDER_DIM=1024 is hardcoded in THREE places and the daemon embedder is shared with the CODE-GRAPH lane:
+- crates/pi-knowledge-worker/src/{engine.rs, lane_org.rs::EMBEDDER_DIM}
+- crates/pi-natives/src/{recall_engine.rs::DIM, embedding_worker.rs::EMBEDDER_DIM}  ← code-graph lane (code_graph.rs uses embedding_worker::embed_query/embed_batch)
+A model swap must plumb dim through all four + invalidate both lane caches. KnowledgeMeta.embedder_model/dim already gates the org cache; code-graph + pi-natives need equivalent gating. The chosen design (org_cache.rs OrgVecManifest.embedder_model/dim) makes the ORG side swap-safe already.
+
+** Separate finding surfaced by the eval
+scan_items passes include_body=FALSE to extract_items_from_source → the worker currently embeds TITLE-ONLY text, not "{title} {body}". build_vec_index_with/embed_text format a title+body string, but the scanned items have empty bodies, so vector recall is capped well below what the body-query eval shows is achievable. Worth a follow-up: scan with include_body=true so embeds carry body content (the eval used include_body=true to get the numbers above). This likely matters MORE than the model choice.

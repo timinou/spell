@@ -1,0 +1,34 @@
+#+TITLE: Spell⟷Spacetime language-profile unification
+#+STATE: ITEM
+#+SESSION_ID: 1508cbf54b12d2b0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T11-53-10-188Z_1508cbf54b12d2b0.jsonl]]
+#+CUSTOM_ID: FEAT-813-spellspacetime-language-profile-unificat
+
+* Initial Message
+
+look at ~/code/ora/verse and how it generates tree-sitter from the meta-compiler language.
+
+your goal is to look at how pi-* crates manage dynamic language profiles. Consider runtime/kdl/some other addition (also consider something specific to Spacetime. Weigh in all the options and show me your reasoning).
+
+Please understand the nuances of the work here. You are also free to propose improvements to the tree sitter generator and to the Spacetime LSP to make it world-class, as it hasn't been touched in a while and could benefit from some love. Since I am the creator of both Spell and Spacetime, I would LOVE to make the two seamlessly work with each other (also look at the Spacetime MCP btw).
+
+Deep architecture dive first, then come back with your insights, revelations, challenges (to me and to you), questions, and overall state of things
+
+Umbrella for unifying Spell's dynamic language-profile system with Spacetime's self-describing metasystem. Full design: ~/code/ora/verse/docs/specs/spell-spacetime-unification.md (self-contained blueprint).
+
+Thesis: one source of truth (verse MetaRegistry) → two consumers (verse runtime parser; Spell find/edit). Both repos independently started+abandoned the same data-driven seam (Spell ProfileYaml dead; verse treesitter_gen emit.rs dead). Integration is mechanical.
+
+Layered rollout (each ships value):
+- L0 HYGIENE: unify verse's 4 parsers onto one registry; unify Spell dialect_registry→LanguageRegistry; port build.rs grammar-gen→runtime fn. No behavior change.
+- L1 BRIDGE: Spell languages{} … lsp command="spacetime" args="lsp" + .st text profile → hover/completion/diag NOW (config only).
+- L2 PROFILE: finish ProfileYaml→register_profile_from_json + DefaultNameLexer; verse export-spell-profile emits profile.json+node-types.json → outline+::§+edit, no recompile.
+- L3 WASM: LanguageSource::{Static,Wasm} feature-gated + WasmStore; verse emits spacetime.wasm → genuinely new grammars.
+- L4 LIVE: first-party MCP (st_outline/st_profile + auto-register) + Canvas-on-Spacetime spike.
+
+Decisions locked: target both (Spell-grade + broad editor); coupling OK (assume spacetime binary, may upgrade it); auto-generate profile from registry (no hand-written .st profile in Spell Rust); unify the 3 Spell language concepts.
+
+Unified seams — Spell: S1 single registry entry (dialect non-optional, kill parallel map); S2 runtime register-from-data; S3 DefaultNameLexer; S4 LanguageSource. Verse: T1 one registry feeds parser+LSP+exporter; T2 export-spell-profile + faithful generate-grammar; T3 MCP introspection.
+
+Generalization goal: Spell onboards any {grammar+node-types.json+profile.json}; Spacetime serves any editor + any harness.
+
+NOTE [2026-06-14]: Decisions settled (user): (1) L0 = FULL cutover of verse LSP FormRegistry onto the single MetaRegistry (no thin bridge). (2) .st NameLexer investigated → bespoke thin SpacetimeNameLexer (CSS-class tier, ~40 lines), NOT the generic DefaultNameLexer. Finding: .st names are flat sigil-prefixed hyphenated idents (@react-to, %macro morph-to-color, &card, $color) + CSS selectors; ZERO ::/.-qualified symbol paths exist; sigil is a kind discriminator not a path separator. Model on pi-code-path/src/dialects/css.rs. Revised generalization: scalable seam = small library of composable NameLexer primitives (sigil_prefix/hyphenated_ident/path_split/selector) a data profile combines, NOT one parameterized lexer — so the exporter emits a lexer SPEC (data) not hand-written Rust. Spec §3.6 + §10 updated. Status: ready for autonomous implementation; start order L0+L1 parallel. User wants full autonomous build once settled.

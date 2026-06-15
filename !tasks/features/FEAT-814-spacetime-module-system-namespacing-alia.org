@@ -1,0 +1,35 @@
+#+TITLE: Spacetime module system (namespacing, aliasing, active use)
+#+STATE: ITEM
+#+SESSION_ID: 1508cbf54b12d2b0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T11-53-10-188Z_1508cbf54b12d2b0.jsonl]]
+#+CUSTOM_ID: FEAT-814-spacetime-module-system-namespacing-alia
+
+* Initial Message
+
+look at ~/code/ora/verse and how it generates tree-sitter from the meta-compiler language.
+
+your goal is to look at how pi-* crates manage dynamic language profiles. Consider runtime/kdl/some other addition (also consider something specific to Spacetime. Weigh in all the options and show me your reasoning).
+
+Please understand the nuances of the work here. You are also free to propose improvements to the tree sitter generator and to the Spacetime LSP to make it world-class, as it hasn't been touched in a while and could benefit from some love. Since I am the creator of both Spell and Spacetime, I would LOVE to make the two seamlessly work with each other (also look at the Spacetime MCP btw).
+
+Deep architecture dive first, then come back with your insights, revelations, challenges (to me and to you), questions, and overall state of things
+
+Design: ~/code/ora/verse/docs/specs/module-system.md (self-contained). Companion to FEAT-813 (unification spec §3.6/§3.7 fold the Spell/CodePath consequences). Verse-side language-design track.
+
+LINEAGE: Odin skeleton (folder=package, concatenation, public-by-default, collections) + PureScript joints (qualified alias, explicit export, re-export, hiding) + Elixir soul (use runs __using__ = active extension, not passive binding).
+
+KEY INSIGHT: verse already concatenates a folder's .st into one flat HashMap (Odin's exact model) and has a MODULE.st convention (doc + @import "./index.st") — so this is ADDING BOUNDARIES to existing concatenation, not a rewrite. %form NEVER changes; namespace is ambient from folder.
+
+CORE MECHANISM (self-hosted auto-extender): a bootstrap %form attaches namespace to SIGIL-names at two sites — definition (short→long: %macro camera in scene/ → key std:scene/camera) and reference (bare→correct: @camera under @use scene → std:scene/camera; @s/camera via alias). Self-hosted = DECLARED in .st, COMPILED to native tables (prefixed key + alias hashmap + dispatch pre-filter) — never re-interpreted per token, same discipline as every %form today. Efficiency: namespace pre-filter SHRINKS the scorer's candidate set → cheaper than flat-global dispatch.
+
+5 ELEGANCE PRINCIPLES: P1 sigil-scoped namespacing (sigil IS the membership marker; CSS/.HTML/$-vars stay global by construction). P2 reflective modularity (module system described in the language it governs; rules are data the LSP+Spell exporter read). P3 co-location (file defining @ defines @-namespacing). P4 global = empty-namespace degenerate case (no %global keyword). P5 active modules (Elixir: @use runs %using hook that installs SCOPED capture-types = modules as scoped dialects).
+
+@import CUTOVER: @import ≡ @use (open, GLOBAL, unprefixed) — the degenerate point. Keep @import as the global alias (98 uses unchanged); @use is namespaced. "@import floods, @use scopes."
+
+COLLISION NOTES: %exports already taken (primitive $-var exposure, 44 uses) → use %public for module API list. %scope taken (positional dispatch, 28) → module visibility is implicit file-level, no keyword.
+
+/ UNIFIES 4 AXES: filesystem stdlib/scene/camera.st = FQN std:scene/camera = ref @scene/camera = Spell CodePath scene/camera.st::§macro. / is value-position-only in .st today → unambiguous in name position.
+
+PHASING: M0 collections+FQN keying (behavior-preserving plumbing) → M1 @use+alias+bare-resolution+ambiguity+auto-extender %form + @import-as-global-alias → M2 MODULE.st manifest (%module/%public/%reexport) → M3 Elixir %using active hook + scoped capture_types → M4 LSP provenance + Spell exporter consumes namespaces as ::§.
+
+LOGICAL CONCLUSIONS SURFACED: modules-as-scoped-dialects (bigger than namespacing); MODULE.st completes a started convention; re-export = Spell profile boundary; collections solve embedded-stdlib (std: in-binary vs local: disk); authoring gets CHEAPER (author writes bare, gets namespaced free).

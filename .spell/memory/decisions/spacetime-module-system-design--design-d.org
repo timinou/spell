@@ -1,0 +1,27 @@
+#+TITLE: spacetime-module-system-design--design-d
+
+** ITEM Spacetime module system design
+
+Design doc: ~/code/ora/verse/docs/specs/module-system.md. Org: FEAT-814. Companion to FEAT-813 (unification §3.6/§3.7).
+
+Lineage: Odin (folder=package, concatenation, public-by-default, collections) + PureScript (qualified alias, explicit export, re-export, hiding) + Elixir (use→__using__ active extension).
+
+Verified verse reality: load_dir_recursive concatenates a folder's .st into ONE flat HashMap<String,MacroDefAst> (registry.rs:114) = Odin's model already, minus boundaries. MODULE.st convention exists (editable/dispatch) = doc + @import "./index.st". @import is parse-only directive, content-merge to flat global. %exports(44)=primitive $-var exposure (NOT module export → use %public). %scope(28)=positional dispatch (NOT module visibility). ∴ module system = adding boundaries to existing concatenation.
+
+Core: self-hosted namespace auto-extender = bootstrap %form attaching namespace to SIGIL-names at definition (prefix at register_macro) + reference (resolve bare/alias at dispatch). DECLARED in .st, COMPILED to native tables (prefixed key + alias hashmap + dispatch pre-filter), never per-token interpreted. Pre-filter SHRINKS scorer candidates → cheaper than flat dispatch. %form NEVER changes; namespace ambient from folder.
+
+5 elegance principles: P1 sigil-scoped (sigil=membership marker, non-sigil stays global by construction). P2 reflective modularity (homoiconic; rules are data for LSP+exporter). P3 co-location. P4 global=empty-namespace degenerate case. P5 active modules (Elixir %using installs scoped capture_types = modules-as-scoped-dialects).
+
+@import→@use cutover: @import≡@use(open,global,unprefixed)=degenerate point; keep @import as global alias (98 uses), @use namespaced. Collisions: %public not %exports; implicit file-visibility not %scope.
+
+/ unifies 4 axes: filesystem=FQN=reference=Spell CodePath. Reverses earlier "no separator→bespoke lexer" verdict: namespaces introduce / path-split → .st re-unifies onto composable DefaultNameLexer (sigil_prefix·path_split("/")·hyphenated_ident·selector_forms), onboards Go/Java/.st from data. Namespaces are the PRESSURE forcing the generic lexer into existence.
+
+Phasing M0 collections+FQN keying → M1 @use+alias+resolution+auto-extender+@import-alias → M2 MODULE.st manifest → M3 %using active hook → M4 LSP provenance+Spell exporter namespaces-as-::§.
+:PROPERTIES:
+:CUSTOM_ID: DEC-spacetime-module-system-design--design-d
+:KIND: decision
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-14T18:35:50Z
+:END:
+:RELATIONS:
+:END:

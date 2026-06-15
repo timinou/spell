@@ -1,0 +1,23 @@
+#+TITLE: spell-self-contained-binary-ships-native
+
+** ITEM Spell self-contained binary ships native addon as sidecar not embedded
+
+When packaging Spell as a `bun build --compile` self-contained binary for a clean environment (e.g. a Harbor/Terminal-Bench task container), the native pi-natives `.node` addon is NOT usable from inside the binary.
+
+Why: `bun --compile` records the addon in the embedded manifest (`embedded-addon.ts` via `new URL("../native/X.node", import.meta.url)`) but does NOT embed `.node` files as fs-readable blobs — bun special-cases native addons. At runtime `maybeExtractEmbeddedFile` does `fs.readFileSync('/$bunfs/native/pi_natives.*.node')` → ENOENT. The loader (`packages/natives/src/native.ts::loadNative`) then falls back to `~/.spell/natives/<version>/` and finally to downloading from GitHub releases. On a DEV host this is masked: the loader silently finds the addon in the workspace `packages/natives/native/` dir. In a clean container neither exists → crash or unwanted download.
+
+Fix: ship the `.node` as a SIDECAR file alongside the binary and place it at `~/.spell/natives/<version>/pi_natives.<platformTag>-<variant>.node`. `getNativesDir()` = `~/.spell/natives` (root-relative, NOT under PI_CODING_AGENT_DIR). Version = pi-natives package.json version (e.g. 13.12.8).
+
+Agent-dir layout gotcha: `loadUserSpellKdl` reads `path.dirname(PI_CODING_AGENT_DIR)/spell.kdl`. So to make a user spell.kdl load (e.g. one that `import`s a domain spec), the agent dir must be a CHILD of the config root: set PI_CODING_AGENT_DIR=/root/.spell/agent so it reads /root/.spell/spell.kdl. Default install already satisfies this (~/.spell/agent → ~/.spell/spell.kdl).
+
+Verified end-to-end in ubuntu:24.04 (the build-pov-ray TB base): binary runs, addon loads via sidecar, `--domain harbor` resolves from KDL, HARBOR_MODEL env contract fails loud when unset.
+
+Also: the pi-knowledge-worker binary (fastembed→ort→onnxruntime) needs glibc 2.38 symbols (__isoc23_*) that don't link against manylinux_2_28's glibc 2.28. But the harbor/autonomous profile never invokes it (PI_KNOWLEDGE_WORKER=inprocess + embeddings off → recall_engine query weight-zeroes the vector lane, never calling embed_batch). So skip building the worker; only pi-natives addon is required. org/memory still work via BM25+graph.
+:PROPERTIES:
+:CUSTOM_ID: CON-spell-self-contained-binary-ships-native
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-14T22:35:20Z
+:END:
+:RELATIONS:
+:END:

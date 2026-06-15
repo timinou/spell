@@ -1,0 +1,83 @@
+#+TITLE: Episodes 2026-06-14
+
+** ITEM Duplex bridge RPC: external sessions get full BridgeRpcCommand + pi-code-graph lens
+
+Shipped. Duplex rpc_request/rpc_response frame on the bridge socket (both type mirrors in SYNC); SocketSessionRegistry.requestRpc/resolveRpc correlation (clone of inject pattern); web/ws #dispatchExternalRpc forwards any non-prompt command instead of rejecting; SessionBridgeClient.onRpcRequest → shared bridge-rpc-handler.ts running edit_history/undo/redo/code_query through executeCodePath (pi-code-path/pi-code-graph + manage) — NO jsonl backdoor. BridgeRpcCommand gained undo/redo/code_query (both mirrors). Web: functional Undo/Redo/Force in EditHistoryPanel + new CodeLensPanel (Phase C: callers def→, definition ref→, implementers, base types inherits→, type #hover, outline, diagnostics). Tests: 36 socket + 25 web + 22 bridge green; integration proxy round-trip + CLI handler + code-lens unit. Live screenshot confirms UI + graceful unsupported_for_external against old backend. Activates after server+CLI restart. Commit on FEAT-815 branch. SAFETY note: KDL allow-rpc gate proposed in body but NOT yet implemented — deferred (see FUP below).
+:PROPERTIES:
+:CUSTOM_ID: EP-e82601241e88b98e
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-14T19:41:00Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-815-duplex-bridge-rpc-external-sessions-get
+:END:
+** ITEM Implemented implicit prefix CUSTOM_ID resolution for the org tool. Chokepoint is createOrgTool.execute in packages/org/src/tool.ts: a pre-switch pass maps each id-bearing command to its id arg (ID_ARG_BY_COMMAND: get/update/delete/note/set/validate-plan→id, suboutline-add→parentId, wave→planItemId), then resolveImplicitId() does exact-match-first then a startsWith prefix scan over indexedList. 0 matches→unchanged (downstream NOT_FOUND), 1→canonical id + idWarning, >1→{error,code:AMBIGUOUS_ID,candidates}. The switch body was extracted to module-level dispatchOrgCommand. Agent-facing surfacing in packages/coding-agent/src/tools/org.ts: formatOrgResult now wraps formatOrgResultBody and prepends "warning: <idWarning>". Tests: packages/org/test/tool-commands.test.ts (6 cases) + org-format-result.test.ts (1 case).
+:PROPERTIES:
+:CUSTOM_ID: EP-dbae3605e91b6ae6
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-14T20:50:47Z
+:END:
+:RELATIONS:
+:END:
+** ITEM knowledge worker org lane never persists vec/bm25 cache — full re-embed every warm
+
+Fixed in commit 69cbeade8. Added crates/pi-knowledge-worker/src/org_cache.rs: loads prior usearch index + manifest, re-embeds only changed/new items (content-hash gate), carries unchanged vectors forward, prunes vanished ids, persists via VectorIndex::save + bincode manifest under knowledge_cache_dir(repo). Verified by tests/incremental_cache.rs against a copy of the live corpus: warm-warm embeds 0; 1-file edit re-embeds exactly 1 item.
+:PROPERTIES:
+:CUSTOM_ID: EP-c50fbf8178a1ccd1
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-14T22:29:43Z
+:END:
+:RELATIONS:
+ABOUT: BUG-474-knowledge-worker-org-lane-never-persists
+:END:
+** ITEM knowledge worker uncaps ONNX intra-op threads — embed pegs every core
+
+Fixed in commit 69cbeade8. cap_embed_affinity() in main.rs pins the daemon CPU affinity (nix::sched) before engine init; KNOWLEDGE_EMBED_THREADS (default nproc/2). available_parallelism() honours the mask so fastembed/ort pick up the cap. Verified live: THREADS=4 -> Cpus_allowed_list 0-3; default on 16-core -> 0-7.
+:PROPERTIES:
+:CUSTOM_ID: EP-cb1cf30ed4919e3b
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-14T22:29:50Z
+:END:
+:RELATIONS:
+ABOUT: BUG-475-knowledge-worker-uncaps-onnx-intra-op-th
+:END:
+** ITEM knowledge worker embed is monolithic — progress stuck at 0, uninterruptible
+
+Fixed in commit 69cbeade8. build_vec_index_with now embeds in chunks of KNOWLEDGE_EMBED_CHUNK (default 256), bumping progress.done per chunk so the marker climbs in real time; engine lock released between chunks (also helps BUG-478 interleave). Embedder failure mid-build stops cleanly and skips cache persist.
+:PROPERTIES:
+:CUSTOM_ID: EP-db5fe784c0d6154a
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-14T22:29:52Z
+:END:
+:RELATIONS:
+ABOUT: BUG-476-knowledge-worker-embed-is-monolithic-pro
+:END:
+** ITEM knowledge worker embeds entire history incl DONE/archived — add mtime-gated auto-embed KDL setting
+
+Fixed in commit f6231e40d. KDL knob knowledge { embed-recency-days N } → KNOWLEDGE_EMBED_RECENCY_DAYS env → plan_embeds_with_recency skips embedding items in files older than N days (still BM25+graph searchable). Editing a stale file refreshes mtime+content-hash → embedded next warm (embed-on-demand). Cached vectors never evicted by the gate. Tested: org_cache recency unit test + kdl-domains parse tests.
+:PROPERTIES:
+:CUSTOM_ID: EP-fe636430366c546e
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-14T22:39:49Z
+:END:
+:RELATIONS:
+ABOUT: BUG-477-knowledge-worker-embeds-entire-history-i
+:END:
+** ITEM knowledge worker warm path builds typed graph twice + holds embed lock for whole batch
+
+Fixed in commit d7469f7da. (1) OrgLane.graph -> Arc<TypedGraph>, built once and shared across partial+full lanes (was built twice; TypedGraph not Clone). (2) Interleave verified: tests/embed_interleave.rs models the shared engine Mutex with a slow lock-guarded embedder; a query embed acquires the lock mid-warm (latency < one chunk) while a chunked warm runs — proving BUG-476 chunking defeats the old whole-batch lock hold.
+:PROPERTIES:
+:CUSTOM_ID: EP-780c811b407d5526
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-14T22:45:20Z
+:END:
+:RELATIONS:
+ABOUT: BUG-478-knowledge-worker-global-embed-mutex-seri
+:END:

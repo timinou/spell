@@ -1,0 +1,20 @@
+#+TITLE: Gate duplex bridge RPC mutations behind a KDL allow-rpc node
+#+STATE: ITEM
+#+SESSION_ID: 1507d4f02b2299d8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-13T17-53-55-372Z_1507d4f02b2299d8.jsonl]]
+#+CUSTOM_ID: FUP-142-gate-duplex-bridge-rpc-mutations-behind
+
+* Initial Message
+
+Check if BUG-471 and BUG-472 are still relevant; if they are, fix them. At the same time, see if the design you made for the recent harness tiles in Team Chat can be extended to other parts of Team Chat (parts of it look really horrible, try to make screenshots to see, and tell me how you'd improve them)
+
+FEAT-815 shipped the duplex bridge RPC: external (CLI) sessions now answer the full BridgeRpcCommand surface from the web (edit_history, undo/redo, code_query, get_state). Mutating ops (undo/redo, and prompt-as-inject) on a live terminal session are currently gated only by the web token.
+
+Add a `bridge { allow-rpc … }` node to server.kdl (mirror the existing `web { token }` activation pattern) so an operator opts into remote control per command-class:
+- read-only (edit_history, code_query, get_state) — safe, default allow
+- mutating (undo, redo) — explicit opt-in
+- steer/inject — already gated by remote steering being on
+
+Implementation: parse in manifest/parser.ts; thread an allow-set into SocketSessionRegistry.requestRpc (or the web/ws #dispatchExternalRpc gate) and reject disallowed command types with a clear error the web surfaces. commit_guard decline-by-default already protects committed-file undo; this is the coarser transport-level gate.
+
+Until then: deploy behind a private network (Firezone), as the spell-remote-example README already advises for the web surface.

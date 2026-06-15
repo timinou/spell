@@ -1,0 +1,21 @@
+#+TITLE: pi-natives-container-portability-via-man
+
+** ITEM pi-natives container portability via manylinux_2_28
+
+Problem: the committed pi-natives `.node` is built on the Arch dev host (glibc 2.43, newest libstdc++) and encodes that as a MINIMUM. It fails to load in any realistic container: `GLIBC_2.43 not found` + `CXXABI_1.3.15` on ubuntu:24.04/22.04 + debian:12; no libstdc++/libgcc at all (~45 symbol errors) on alpine/musl. CPU-ISA (SIGILL) is a separate axis already handled by TARGET_VARIANT=baseline / `-C target-cpu=x86-64`; libc is the open axis.
+
+Proven fix (2026-06-14): build pi-natives INSIDE `quay.io/pypa/manylinux_2_28_x86_64` (glibc 2.28 floor, gcc 14; install rustup nightly in-container) with `RUSTFLAGS="-C target-cpu=x86-64"`. cdylib `libpi_natives.so` → rename to `.node`. glibc symbol versioning is backward-compatible, so a 2.28-built addon runs on 2.28→latest. Verified the addon not only resolves symbols (ldd) but `require()`s + initializes in node:20-bookworm-slim (debian 12 / glibc 2.36), exporting executeCodeGraph/executeOrg/executeCodeBuffer. GLIBC floor dropped 2.43→2.28.
+
+Recipe: packaging/harbor/build-portable-native.sh (TARGET=glibc default, TARGET=musl for Alpine via rust:alpine). Prove with packaging/harbor/probe-libc.sh (mounts artifact into ubuntu/debian/alpine, greps ldd for real failures, exits 1 on any — CI-gateable). NB probe false-positive trap: don't grep for the word "symbol" in success output ("all symbols resolved" matches a naive failure grep).
+
+The 95M artifact is a CI/release output, gitignored under dist/. Build script honors a pre-set RUSTFLAGS (build-native.ts line ~118 guard) so the wrapper just does `cargo build -p pi-natives --release` + rename.
+
+Context: needed to run Spell as a Harbor/Terminal-Bench autonomous agent inside arbitrary task containers. Because the agent owns its container image, this is a settled build step, not research.
+:PROPERTIES:
+:CUSTOM_ID: CON-pi-natives-container-portability-via-man
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-14T20:21:34Z
+:END:
+:RELATIONS:
+:END:

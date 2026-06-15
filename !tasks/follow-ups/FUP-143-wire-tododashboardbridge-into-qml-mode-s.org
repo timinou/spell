@@ -1,0 +1,17 @@
+#+TITLE: Wire TodoDashboardBridge into qml-mode so the QML todo panel renders live
+#+STATE: ITEM
+#+SESSION_ID: 15092c1520a8d7d4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T18-53-08-610Z_15092c1520a8d7d4.jsonl]]
+#+CUSTOM_ID: FUP-143-wire-tododashboardbridge-into-qml-mode-s
+
+* Initial Message
+
+look at my jsonl of my recent sessoins (~/.spell somewhere) and my user messages. find my repeated instructions and frustrations (and also when I say I am impressed). From your overall judgement of the conversations, what is being misaligned across the prompts? also fold in the fact that I still see too many bash calls instead of execute. where are we failing to properly instruct? also look at the recent removals from system-prompts.md. Are there things that worsened post-removal?
+
+Surfaced by the FEAT-816 W3/W4 reviewer swarm. TodoDashboardBridge.buildSnapshot() (producer of the `todo_snapshot` payload TodoPanel.qml consumes) has NO `new TodoDashboardBridge` callsite in src — only tests. The live qml-mode shell emits `dashboard_update` on a 1s interval but never `todo_snapshot`, so TodoPanel.todoPhases stays [].
+
+∴ FEAT-816 W3 QML rendering (loop accent border, swarm ×N chip, model badge) is wired but DORMANT. The reachable swarm signifier today is the terminal-TUI badge (todo-reminder.ts #gateBadges, W4.6).
+
+Reviewer also noted a pre-existing payload.phases-vs-groups shape mismatch in TodoPanel.handleMessage (buildSnapshot returns {groups}, QML reads .phases) that would block rendering even once wired. Fix together.
+
+Scope: (1) instantiate TodoDashboardBridge in a live session, subscribe to todo changes, register the panel; (2) emit todo_snapshot; (3) reconcile groups/phases payload shape. Deadness predates FEAT-816; FEAT-816 only added fields to the dormant payload.

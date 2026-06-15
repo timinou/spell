@@ -1,0 +1,84 @@
+#+TITLE: find/execute glob resolution: locator spelling not invariant (absolute/../trailing-slash silently return [])
+#+STATE: REVIEW
+#+SESSION_ID: 15094725864ad7e9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T20-51-23-289Z_15094725864ad7e9.jsonl]]
+#+CUSTOM_ID: BUG-473-find-execute-glob-resolution-locator-spe
+
+* Initial Message
+
+free mock from contract = 0 in app. It's a Djinn package concept. Let me scan the monorepo substrate.
+
+
+ ✔ Execute: (probe 5 checks
+ ▸ pkg from_contract/free mock
+   []
+ ▸ pkg contract refs
+   0
+ ▸ pkg synthetic
+   []
+ ▸ pkg sandbox
+   []
+ ▸ djinn packages
+   []
+
+
+ Glob path resolution issue. Let me check the actual structure.
+
+
+File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-06-14T20-46-16-000Z_150945f9703dce83.jsonl
+ ID: 150945f9703dce83
+
+can you reproduce the problem here? what happened? i want a reliable execute tool. are there property/fuzz/hypothesis tests that would have caught that?
+
+## Symptom
+`find`/`execute (tool/find)` silently returns `[]` for valid targets depending on how the path is spelled. Repro from session `150945f9703dce83` (CWD=apps/agentmaker): `(tool/find {:target "../../packages/**/*.ex::§line[...]"})` and `"../../packages/*/"` → all `[]`, while equivalent `bash` from repo root found real hits. Agent misconcluded "djinn packages = []".
+
+## Root cause: locator spelling is not invariant
+A target addressing the SAME file resolves differently by spelling. Two layers:
+
+### Kernel `walk()` — crates/pi-code-path/src/dialects/fs/walker.rs
+`walk()` matches each entry via `rel = path.strip_prefix(root)` then `glob.is_match(rel)`. The glob comes from `fs_locator_to_glob(loc)` built literally from segments, special-casing only `.`/`./`. Therefore:
+- ABSOLUTE locator (`/root/crates/*`) → glob has leading `/`, never matches root-relative `rel` → 0.
+- `..` locator → literal `..` segment, never matches → 0.
+- TRAILING-SLASH dir-glob (`crates/*/`) → globset `crates/*/` doesn't match `crates/pi-code-path` → 0.
+No diagnostic emitted; looks like "no results".
+
+### TS `get.ts` — effectiveRootFor + relativize gate
+Patches ABSOLUTE targets (re-roots at prefix dir; `makeRelativeToRoot` incidentally strips trailing slash via path.relative). Two holes:
+1. `..`-relative targets: `extractAbsolutePrefix` returns null → entire relativize block skipped → raw `../...` hits kernel with root=cwd → 0. (THE USER REPRO.)
+2. qualified-absolute-under-cwd (`/cwd/sub/x#raw`): relativize gate `rootEqual || !under-cwd || hasQuery` misses it → absolute glob under non-matching root → empty-content.
+
+## Measured invariance matrix (X inconsistent), CWD=/home/user/code/ora/spell
+- `Cargo.toml#raw` rel=2032 OK ; `/abs/Cargo.toml#raw`=0 X ; `../spell/Cargo.toml#raw`=0 X
+- `crates/*/` rel=0 X ; `/abs/crates/*/`=586 OK ; `../spell/crates/*/`=0 X
+- `crates/*` rel=585 OK ; `/abs/crates/*`=586 OK
+- `/abs/README.md#outline`=ok OK ; `/abs/README.md#raw`=0 X (same file, different qualifier!)
+
+## Why tests missed it
+`packages/coding-agent/test/get.test.ts` MOCKS `executeCodePath` (spyOn -> mockResolvedValue) — asserts the target STRING passed to the kernel, not real resolution. The `"relative path with ../"` test even asserts pass-through unchanged. Kernel walker has NO test for absolute/../trailing-slash locators. A spelling-INVARIANCE property test is the missing coverage.
+
+## Fix plan
+1. KERNEL (systemic root cause): normalize locator->glob to be root-relative + slash-trimmed inside walk()/fs_locator_to_glob (thread `root`). Makes abs-under-root, `..`-within-root, trailing-slash all consistent with the relative form. Mirror in build_negative_globsets.
+2. TS get.ts (root widening): treat `..`/`.`-relative targets like absolute — resolve to absolute, pick nearest-existing containing dir as root, relativize. Close the qualified-absolute-under-cwd hole so abs `#raw` works.
+3. TESTS:
+   - Rust: proptest/unit in walker — same path via {relative, absolute, trailing-slash} -> identical node set.
+   - TS: REAL-kernel (non-mocked) invariance tests in get.test.ts — read same file via rel/abs/.. spellings -> identical content; glob via rel/abs/.. -> identical count.
+
+## Acceptance
+- `(tool/find {:target "../../packages/*/"})` and `"../X/**/*.ex"` from a subdir return the same nodes as the absolute/relative equivalents.
+- rel `crates/*/` == abs `crates/*/` node count.
+- abs `file#raw` == rel `file#raw` content.
+- New invariance tests fail on current code, pass after fix.
+- `bun run --parallel check:ts check:rs` + `cargo test -p pi-code-path` green.
+
+NOTE [2026-06-14]: FIXED. Two-layer cutover:
+1. KERNEL (root cause) — crates/pi-code-path/src/dialects/fs/walker.rs: fs_locator_to_glob + build_negative_globsets now take `root` and call new normalize_glob_to_root(), which lexically lifts the pattern to absolute, resolves ./.., strips the root prefix, and trims trailing slash. Subsumes the old `.`/`./` special case (BUG-372). Makes abs-under-root, ..-within-root, and trailing-slash dir-globs all resolve identically to the relative form. Added lexical_normalize() helper.
+2. TS (root widening) — packages/coding-agent/src/tools/get.ts: new absolutizeEscapingTarget() rewrites a relative target that ESCAPES its base (../.. climbing out of cwd) into an absolute target and drops the narrow provided root, so effectiveRootFor widens to the nearest existing ancestor (the kernel cannot climb above its own root). This is the user's exact repro.
+
+TESTS:
+- Rust: 5 new tests in walker.rs (glob_spelling_invariance_{file_glob,dir_glob_trailing_slash,recursive_glob,plain_file}, normalize_glob_to_root_unit, lexical_normalize_unit). pi-code-path: 538+13 pass.
+- TS: new "BUG-473: locator-spelling invariance (real kernel)" describe in get.test.ts — REAL (non-mocked) FindTool→kernel reads asserting rel==abs==./==..-within==..-escaping for globs and #raw. Rewrote the old "relative path with ../ still resolves against cwd" test (it encoded the bug) to assert correct root-widening. get.test.ts: 86 pass / 0 fail.
+
+VERIFIED end-to-end (fresh addon + source via bun harness): ../docs/*.md @crates == docs/*.md @root (60); ../README.md#raw @crates == README.md#raw @root (35931b); abs Cargo.toml#raw == rel (2077b); crates/*/ == crates/* (586). cargo fmt -p pi-code-path clean; clippy adds no new warnings on changed code.
+
+NOTE: in-session find/execute tools remain stale (bound to pre-rebuild addon at session start) — fix is live for new sessions. Pre-existing unrelated test failures (codepath/language-matrix missing fixtures, prompt-snapshots find.md sentinel) are NOT caused by this change. Repo working tree also carries unrelated uncommitted changes from prior sessions; my diff is exactly walker.rs + get.ts + get.test.ts.

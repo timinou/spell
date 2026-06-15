@@ -169,3 +169,36 @@ Shipped B+C across all layers. Kernel: session-unified log (SessionDirGuard + wo
 :RELATIONS:
 ABOUT: PLAN-338-atomic-legible-undo-redo-session-unified
 :END:
+** ITEM build-native.ts reads ./target/debug but cargo emits to CARGO_TARGET_DIR (~/.cache) → ships stale .node silently
+
+Already fixed in HEAD (commit 45fbd2e03 "chore(prd): forgotten files"). build-native.ts now has resolveCargoTargetDir() using authoritative `cargo metadata --no-deps --format-version 1` → target_directory (option B from the report), placed FIRST in targetRoots; findBuiltBinary returns first-match in profileDirs order. Verified live: cargo metadata resolves /home/user/.cache/cargo-target (matching the global ~/.cargo/config.toml [build] target-dir redirect), no stale repo-local ./target exists. The original footgun (stale repoRoot/target winning the scan) is structurally eliminated. Closing as fixed.
+:PROPERTIES:
+:CUSTOM_ID: EP-4aedb7b91a59327f
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T23:07:40Z
+:END:
+:RELATIONS:
+ABOUT: BUG-471-build-native-ts-reads-target-debug-but-c
+:END:
+** ITEM CodePathOptions TS mirror is hand-maintained (not napi-generated) and has no parity test → silent drift
+
+Fixed per report's option B. Confirmed real drift on inspection: Rust struct had `transaction` field, TS mirror omitted it. Fix: (1) list_codepath_option_keys() napi fn in napi.rs exposing the struct's JS-facing key names, backed by assert_codepath_option_keys_exhaustive() — a compile-time tripwire that exhaustively destructures CodePathOptions with no `..` rest, so any field add/remove breaks the Rust build until the key list is updated; (2) added missing `transaction?: "best-effort"|"strict"` to TS interface; (3) codepath-options-parity.test.ts pins TS interface keys against kernel list (mirrors verb-schema-parity.test.ts). Verified: parity test 2 pass; negative test (remove a key → 2 fail) confirms the guard bites; tsgo clean on changed files; clippy/fmt clean (added reason= to the allow attr per nursery lint). Committed. NB BUG-471 turned out already-fixed in HEAD (45fbd2e03).
+:PROPERTIES:
+:CUSTOM_ID: EP-8c0b52b195460faa
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T23:15:34Z
+:END:
+:RELATIONS:
+ABOUT: BUG-472-codepathoptions-ts-mirror-is-hand-mainta
+:END:
+** ITEM BUG-471 (build-native stale .node) was already fixed in HEAD commit 45fbd2e03: build-native.ts resolveCargoTargetDir() uses `cargo metadata --no-deps` target_directory, placed first in targetRoots, findBuiltBinary first-match-wins. Closed as already-fixed. BUG-472 (CodePathOptions napi mirror drift) was live with REAL drift — Rust struct had `transaction` field, TS mirror omitted it. Fixed with report's option B: list_codepath_option_keys() napi fn + compile-time exhaustiveness tripwire (exhaustive struct destructure, no `..`) + codepath-options-parity.test.ts (mirrors verb-schema-parity pattern). Verified negative (remove key → test fails). Also extended Team Chat structured-tile design into chat tool bubbles: lib/bubble-presentation.ts (summariseArgs kills "(empty)" tool_start, classifyDiffLines colors diffs add/del/hunk) + 8 unit tests. Built shell-harness.ts full-Shell gallery (seeds app store, mounts real Shell) for visual survey. NB team-chat timestamps are epoch MS for SessionSummary/bubbles but edit-history EditHistoryEntry.timestamp is SECONDS (kernel as_secs) → panel does *1000.
+:PROPERTIES:
+:CUSTOM_ID: EP-974aab36814ff4f3
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-13T23:29:06Z
+:END:
+:RELATIONS:
+:END:

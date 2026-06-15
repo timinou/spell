@@ -1,0 +1,41 @@
+#+TITLE: knowledge worker org lane never persists vec/bm25 cache — full re-embed every warm
+#+STATE: DONE
+#+SESSION_ID: 1509565aeda55489
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T21-57-50-135Z_1509565aeda55489.jsonl]]
+#+CUSTOM_ID: BUG-474-knowledge-worker-org-lane-never-persists
+#+COMPLETION_HASH: a3c76d1121a41336
+
+* Initial Message
+
+bro.
+
+pi-knowledge-worker takes on the whole CPU and hangs (TUI marker is left at 0 forever)
+latest place that does this: /home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T18-53-08-610Z_15092c1520a8d7d4.jsonl
+
+why? can you find the root cause? what is shitty about your rust arch? please find all efficiency warts.
+
+* BUG: org/memory lane never persists or loads its cache → full re-embed of the entire corpus on every daemon warm-load
+
+** Symptom
+pi-knowledge-worker pegs all CPU cores for minutes and the TUI warm marker sits at 0 indefinitely. Latest occurrence session: =/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T18-53-08-610Z_15092c1520a8d7d4.jsonl=.
+
+** Root cause
+=crates/pi-knowledge-worker/src/lane_org.rs= documents (module docstring step 4) "Persist via =pi_knowledge_core::cache::save_all=" but =save_all= / =VectorIndex::load= are referenced ONLY in that doc comment — never called. The org/memory lane has no persistence path at all, unlike the code-graph lane which fingerprint-caches into =.spell/graph/workspace.bin=.
+
+∴ every =OrgLane::warm_load_with= rebuilds from cold: scans ~2,124 =.org= files, then embeds ~11,805 org items through bge-m3 (560M-param CPU model) in one shot. Each daemon (re)start / fresh session that respawns the daemon repeats the full embed. Across session churn it can perpetually re-embed and never converge.
+
+** Fix
+Add a real cache layer to the org lane, mirroring the code-graph reference impl (=crates/pi-code-graph/src/cache.rs=):
+1. On warm: compute a =WorkspaceFingerprint= over =!tasks/= + =.spell/memory/= (=fingerprint_root= with an =*.org= matcher). Load =items.bin= + =bm25.bin= + =vectors.uidx= + =meta.bin= via =CacheStore=. If =KnowledgeMeta::status_against= is Fresh (schema + embedder model/dim + fingerprint match) → reuse, skip embed entirely.
+2. Incremental: re-embed ONLY items whose owning file fingerprint changed; carry forward unchanged vectors by stable =id_hash(item.id)= (usearch keys are already content-addressed by id). Persist via =save_all= (meta last, per its atomic contract).
+3. Cache location: =pi_knowledge_core::cache::knowledge_cache_dir(repo_root)= (already exists, currently unused by the worker).
+
+** Acceptance
+- Second warm-load of an unchanged corpus performs zero embed calls (verified via an embed-count probe / instrumented stub).
+- Touching one =.org= file re-embeds only that file's items on the next warm.
+- =KnowledgeMeta.embedder_model/dim= persisted so a model swap invalidates correctly.
+
+** Relations
+Part of the knowledge-worker efficiency sweep (BUGs filed together: thread cap, progress chunking, corpus mtime filter, global embed mutex, model-size eval).
+
+NOTE [2026-06-14]: Fixed in commit 69cbeade8. Added crates/pi-knowledge-worker/src/org_cache.rs: loads prior usearch index + manifest, re-embeds only changed/new items (content-hash gate), carries unchanged vectors forward, prunes vanished ids, persists via VectorIndex::save + bincode manifest under knowledge_cache_dir(repo). Verified by tests/incremental_cache.rs against a copy of the live corpus: warm-warm embeds 0; 1-file edit re-embeds exactly 1 item.

@@ -1,0 +1,27 @@
+#+TITLE: spell-spacetime-language-profile-unifica
+
+** ITEM Spell-Spacetime language-profile unification approach
+
+Design to unify Spell's dynamic tree-sitter language profiles with Spacetime (verse) self-describing metasystem. Full blueprint: ~/code/ora/verse/docs/specs/spell-spacetime-unification.md (self-contained, for a future Spell-inside-Spacetime session).
+
+KEY FINDINGS:
+- Both repos independently started+abandoned the SAME data-driven seam: Spell ProfileYaml/load_profile_json (pi-code-engine/src/language/profile.rs:483, dead) and verse treesitter_gen/emit.rs (dead, #![allow(dead_code)]). Verse's "generator" only injects a flat @name list into a static generic grammar.
+- Spell has THREE unconnected language concepts: LanguageProfile (pi-code-engine, tree-sitter, outline/§/edit/graph), LanguageDialect+NameLexer (pi-code-path, CodePath symbol resolution, kind_aliases=the §kind map BUG-413), SemanticBackend+semantic{} KDL (pi-code-graph, LSP-only). Unify behind LanguageProfile as source of truth; dialect non-optional; kill pi-kernel dialect_registry.rs parallel hardcoded ext-map.
+- Verse runtime parser is NOT tree-sitter — event form-matcher over MetaRegistry → rowan CST. tree-sitter is a bolt-on for editors. 4 parsers total (runtime/generator/LSP-registry/LSP-scanner) = root rot to fix first (L0).
+- LanguageProfile 3 non-serde holes: ts_language (→WASM grammar), procedures (Rust closures, not needed for outline/edit), production_rules (build.rs codegen = PURE data transform of node-types.json, trivially runtime-portable).
+
+SPIKE RESULT (ran it): tree-sitter 0.25.10 wasm feature works. WasmStore loads real grammar (json, 25 kinds) in 2.45ms, parses correctly. Cost: +6.2MB binary (363KB→6.59MB), +35s compile, pulls wasmtime+cranelift JIT. Feature-gate it. Worth it but as own milestone after data path proven.
+
+ROLLOUT: L0 hygiene (unify parsers/registries, no behavior change) → L1 LSP bridge (config only, value now) → L2 ProfileYaml revival + verse export-spell-profile (outline/§ no recompile) → L3 WASM grammars → L4 first-party MCP + Canvas-on-Spacetime spike.
+
+DECISIONS: target both Spell-grade+broad-editor; coupling OK (assume spacetime binary, may upgrade it); auto-generate profile from registry (no hand-written .st profile in Spell Rust).
+
+Org: FEAT-813 (umbrella), FUP-140 (wasmtime spike), FUP-141 (Canvas-on-Spacetime vision).
+:PROPERTIES:
+:CUSTOM_ID: DEC-spell-spacetime-language-profile-unifica
+:KIND: decision
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-14T14:37:57Z
+:END:
+:RELATIONS:
+:END:

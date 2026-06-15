@@ -1,0 +1,35 @@
+#+TITLE: knowledge worker uncaps ONNX intra-op threads — embed pegs every core
+#+STATE: DONE
+#+SESSION_ID: 1509565aeda55489
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T21-57-50-135Z_1509565aeda55489.jsonl]]
+#+CUSTOM_ID: BUG-475-knowledge-worker-uncaps-onnx-intra-op-th
+#+COMPLETION_HASH: 803ce0560502cd82
+
+* Initial Message
+
+bro.
+
+pi-knowledge-worker takes on the whole CPU and hangs (TUI marker is left at 0 forever)
+latest place that does this: /home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T18-53-08-610Z_15092c1520a8d7d4.jsonl
+
+why? can you find the root cause? what is shitty about your rust arch? please find all efficiency warts.
+
+* BUG: bge-m3 embed grabs all CPU cores (no ONNX intra-op thread cap)
+
+** Symptom
+During warm-load embed the daemon saturates every logical CPU (16 on the report machine), starving the editor/agent and the rest of the system. "Takes on the whole CPU."
+
+** Root cause
+fastembed 5.13 hardcodes =session_builder.with_intra_threads(available_parallelism()?.get())= in BOTH =TextEmbedding::try_new= and =try_new_from_user_defined= (=fastembed-5.13.2/src/text_embedding/impl.rs=). =TextInitOptions= exposes NO thread knob, so the cap cannot be set through fastembed's public API.
+
+** Fix
+=available_parallelism()= on Linux honours the process CPU-affinity mask. Cap the daemon's affinity at boot — before the engine initialises — so fastembed (and ort's global thread pool) observe a reduced core count. Add a knob =KNOWLEDGE_EMBED_THREADS= (default = max(1, nproc/2)); on socket-mode start, restrict affinity via =nix::sched::sched_setaffinity= (nix already a dep). Document that 0/unset → half-cores default.
+
+Alternative considered: ort global thread pool via =ort::init().with_intra_threads(n).commit()= before first session — but fastembed builds its own =Session= without the global pool unless =ort= is configured with a global env; affinity is the robust, fastembed-version-independent lever. Prefer affinity.
+
+** Acceptance
+- With default knob on a 16-core box, embed uses ≤8 cores (verify via =ps -L= / =/proc/self/status= Cpus_allowed_list).
+- =KNOWLEDGE_EMBED_THREADS=4= → ≤4 cores busy.
+- Query latency unaffected (single-query embed is not thread-bound at this corpus size).
+
+NOTE [2026-06-14]: Fixed in commit 69cbeade8. cap_embed_affinity() in main.rs pins the daemon CPU affinity (nix::sched) before engine init; KNOWLEDGE_EMBED_THREADS (default nproc/2). available_parallelism() honours the mask so fastembed/ort pick up the cap. Verified live: THREADS=4 -> Cpus_allowed_list 0-3; default on 16-core -> 0-7.

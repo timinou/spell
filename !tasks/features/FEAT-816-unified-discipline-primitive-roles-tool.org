@@ -1,5 +1,5 @@
 #+TITLE: Unified `discipline` primitive — roles + tool-disciplines + layer policies + sub-loops
-#+STATE: ITEM
+#+STATE: DOING
 #+SESSION_ID: 15092c1520a8d7d4
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T18-53-08-610Z_15092c1520a8d7d4.jsonl]]
 #+CUSTOM_ID: FEAT-816-unified-discipline-primitive-roles-tool
@@ -73,3 +73,36 @@ Critique fixes folded into W4 acceptance: (1) live loop card REPLACES duplicate 
 - W2.5 (reviewer swarm): verify{swarm} gate executor + todo kind="loop". Consumer #2.
 - W3: TUI loop-card renderer + [MODEL auto] badge (A3). Fold mockup critique fixes.
 - W4: deprecation sweep — dead frontmatter fields, mode/policy→alias, docs + memory. Reviewer swarm between each.
+
+* Progress (session 15092c15)
+W0-W2.5 + hardening LANDED & reviewed (6 commits):
+- W0 8ed380aff: Discipline type + normalizers + 14 golden tests
+- W1 2df3f9e78: discipline KDL parser + unifiedDisciplines + 16 tests
+- W2 a1a82f9bc: tool-discipline injection (nextTurn seam, inject-once ledger) + Mock-critique consumer (resolves defaults.kdl TODO)
+- W2.5 304fcbe70: verify{swarm} gate + TodoKind 'loop' + swarm threaded through policies + implementation-swarm consumer
+- HARDENING 696821ab4: between-waves reviewer swarm (2 reviewers) surfaced 6 findings, fixed 5 (swarm-only policy gate enforcement P2, bundled-disciplines universal source P2, all-section inject P2, hasGate/receipt P3, integer guard P3); deferred 2 P3 to W4.
+
+REMAINING:
+- W3: TUI loop-card renderer + [MODEL auto] badge (the mockup end-state; artifact://15092c1520a8d7d4/main/generate_image/88.png). Fold the 3 mock-critique fixes.
+- W4: deprecation sweep — dead ModeConfigFrontmatter fields, mode/policy→thin aliases, the 2 deferred P3s (modeToDiscipline summarize cadence; on-trigger diagnostics), docs + memory.
+
+Tests: ~190 green across discipline/kdl/policy/todo-write/gates/image-schema. Pre-existing baseline failures (kdl-settings-map, detectDomain) are unrelated PLAN-337 tree drift.
+
+* COMPLETE — all 6 waves landed + 2 reviewer swarms (session 15092c15)
+Full commit ledger:
+- W0 8ed380aff: Discipline type + normalizers + 14 tests
+- W1 2df3f9e78: KDL parser + unifiedDisciplines + 16 tests
+- W2 a1a82f9bc: tool-discipline injection + Mock-critique consumer (TODO resolved)
+- W2.5 304fcbe70: verify{swarm} gate + TodoKind loop + reviewer consumer
+- W2.5-harden 696821ab4: reviewer swarm #1 → 5 fixes (swarm-only policy enforcement, bundled-disciplines universal source, all-section inject, hasGate/receipt, integer guard)
+- W3 4ea66dce4: QML dashboard payload + panel (loop accent/swarm chip/model badge)
+- W4.2-4.3 867edb9ad: Option-A cutover (unified role injection via modeToDiscipline+injectBody) + prune summarize + 7 dead frontmatter fields
+- W4.4 099118d7c: trigger diagnostics via DisciplineWarn callback (no logger coupling)
+- W4.5-4.6 b1bf60f0a: terminal-TUI [swarm ×N] badge + spell.kdl docs + CON-unified-discipline-primitive memory
+- W4-harden 56c6fe4c1: reviewer swarm #2 → 2 fixes (P1 sdk.ts taskPolicies TS2339; P2 honest QML-dormant annotation)
+
+OUTCOME: ONE primitive (Discipline{on,inject,verify}); mode/policy/tool-discipline = three sugars; one injection mechanism (Option A); two consumers shipped (Mock-critique bundled+universal, reviewer-swarm sub-loop gate). ~210 tests green (native-free); spell-kdl-importing tests env-blocked by external unbuilt pi_natives (not a code defect).
+
+KNOWN-DORMANT (FUP-143): QML todo panel rendering is wired but unreachable (TodoDashboardBridge has no live `new` callsite — pre-existing). Live swarm signifier = terminal-TUI badge. W3 commit over-claimed; corrected in 56c6fe4c1.
+
+DEFERRED P3s (still open, low value): modeToDiscipline summarize-cadence (moot — summarize dropped); on-trigger diagnostics DONE in W4.4.

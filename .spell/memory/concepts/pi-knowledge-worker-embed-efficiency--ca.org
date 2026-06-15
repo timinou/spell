@@ -1,0 +1,30 @@
+#+TITLE: pi-knowledge-worker-embed-efficiency--ca
+
+** ITEM pi-knowledge-worker embed efficiency: cache, thread cap, recency, model
+
+pi-knowledge-worker (org/memory vector lane) CPU-peg + "warm marker stuck at 0" root causes and fixes (commits 69cbeade8, f6231e40d, d7469f7da, 159876028).
+
+ROOT CAUSE of the hang: the org/memory lane NEVER persisted its vector index — the module docstring claimed "Persist via cache::save_all" but save_all/VectorIndex::load were referenced only in a comment, never called. So every daemon warm re-embedded the full ~11.8k-item corpus through bge-m3 (560M-param CPU model) from cold. The code-graph lane DID fingerprint-cache (.spell/graph/workspace.bin); the org lane had no equivalent — asymmetric.
+
+"0 forever" marker: build_vec_index_with embedded ALL items in one embed_batch(None), bumping progress.done only AFTER it returned → done=0 for ~100% of the embed.
+
+"whole CPU": fastembed 5.13 hardcodes session.with_intra_threads(available_parallelism()) in BOTH try_new paths; TextInitOptions exposes NO thread knob. Lever = cap the daemon CPU affinity (available_parallelism reads the mask on Linux).
+
+FIXES:
+- BUG-474: new crates/pi-knowledge-worker/src/org_cache.rs. OrgVecCache loads prior usearch index + bincode manifest (OrgVecManifest: schema/model/dim + id_hash→content_hash). plan_embeds_with_recency partitions reuse/embed/skip; carry_forward reuses unchanged vectors via VectorIndex::get; persists vectors.uidx + org_vec_meta.bin under knowledge_cache_dir(repo). Per-item incremental, no whole-repo gate. Added VectorIndex::contains/get to pi-knowledge-core/src/vec.rs.
+- BUG-475: cap_embed_affinity() in main.rs (nix::sched, feature added) pins affinity before engine init; KNOWLEDGE_EMBED_THREADS, default nproc/2. Verified live: THREADS=4→0-3, default→0-7.
+- BUG-476: chunked embed (KNOWLEDGE_EMBED_CHUNK, default 256), progress bumps per chunk.
+- BUG-477: KDL knowledge { embed-recency-days N } → KNOWLEDGE_EMBED_RECENCY_DAYS → skip embedding items in files older than N days (still BM25+graph; embed-on-demand when file touched). Parsed in kdl-domains.ts, bridged in domain/activation.ts, type in domain/growth/src/types.ts, documented in spell.kdl.
+- BUG-478: OrgLane.graph TypedGraph→Arc<TypedGraph>, built once (was twice). Interleave verified (tests/embed_interleave.rs).
+- BUG-479: examples/model_eval.rs. bge-m3 wins recall (0.923 vs 0.846/0.872 recall@5 on body queries) but small 384-dim models hold 92-95% at 11-18x speed, ~1/10 RAM. KEEP bge-m3; swap is cross-crate (dim 1024 hardcoded in pi-natives::{recall_engine,embedding_worker} which ALSO serve code-graph via embedding_worker::embed_*).
+- BUG-480 (found via eval): scan_items passed include_body=FALSE → OrgItem.body=None → embed_text fell to title-only embeds (bodies never embedded OR BM25-indexed). Fixed to include_body=true. This likely matters MORE for recall than model choice.
+
+Tests: org_cache unit + tests/incremental_cache.rs (warm-warm embeds 0; 1-file edit re-embeds 1) against a copy of the live corpus; embed_interleave; kdl-domains parse. Daemonize fork leaves a [pi-knowledge-wo] <defunct> zombie (cosmetic, parent process::exit(0), spawner doesn't reap) — not fixed.
+:PROPERTIES:
+:CUSTOM_ID: CON-pi-knowledge-worker-embed-efficiency--ca
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-14T23:23:45Z
+:END:
+:RELATIONS:
+:END:

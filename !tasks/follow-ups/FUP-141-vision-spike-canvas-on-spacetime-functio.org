@@ -1,0 +1,25 @@
+#+TITLE: Vision spike: Canvas-on-Spacetime (&function(...) as native ad-hoc agent UI)
+#+STATE: ITEM
+#+SESSION_ID: 1508cbf54b12d2b0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T11-53-10-188Z_1508cbf54b12d2b0.jsonl]]
+#+CUSTOM_ID: FUP-141-vision-spike-canvas-on-spacetime-functio
+
+* Initial Message
+
+look at ~/code/ora/verse and how it generates tree-sitter from the meta-compiler language.
+
+your goal is to look at how pi-* crates manage dynamic language profiles. Consider runtime/kdl/some other addition (also consider something specific to Spacetime. Weigh in all the options and show me your reasoning).
+
+Please understand the nuances of the work here. You are also free to propose improvements to the tree sitter generator and to the Spacetime LSP to make it world-class, as it hasn't been touched in a while and could benefit from some love. Since I am the creator of both Spell and Spacetime, I would LOVE to make the two seamlessly work with each other (also look at the Spacetime MCP btw).
+
+Deep architecture dive first, then come back with your insights, revelations, challenges (to me and to you), questions, and overall state of things
+
+Parent: FEAT-813 (L4b). Design §6.3 of ~/code/ora/verse/docs/specs/spell-spacetime-unification.md.
+
+BET: Spacetime's @template &card($title){…} / &fn(...) invocation IS an ad-hoc-interface constructor. A Spacetime-backed Canvas lets the agent DESCRIBE a UI in .st (declarative, data-bound, animated, zero custom JS) instead of shipping bespoke QML per view. &component(data:$x) becomes the Spell-native "emit a view" primitive. Verse already proves it headlessly: MCP picker page (mcp/live.rs + stdlib/__mcp__/picker.st) is a real .st page served with zero custom JS.
+
+WHY COMPELLING: one renderer (Spacetime compiler) vs QML/web divergence; data-binding+state-machines+animation free from stdlib; agent authors UI in the same language it gets intelligence for; Spacetime gains a first-class harness render target (generalizes verse beyond websites).
+
+WHY A BET (not given): Canvas today is QML/native (pi-qml, packages/coding-agent/src/modes/qml/canvas/*.qml) driven by bridge.props JSON via the `canvas` tool; Spacetime targets web (DOM/CSS/JS). Convergence = either (a) Spell Canvas renders Spacetime HTML/JS in a webview [cheap, aligns w/ existing BrowserWindow.qml] or (b) Spacetime gains a QML backend [expensive]. PICK (a). Latency: compile-per-update must be warm (verse MCP keeps warm env; measure first).
+
+SPIKE: render ONE real Spell view (e.g. a task board) as a .st page in a webview Canvas; measure latency; go/no-go recorded here. Gated on explicit product call AFTER L1–L3 land. L4a (MCP introspection tools + first-party registration) is the low-risk precursor — do that first.

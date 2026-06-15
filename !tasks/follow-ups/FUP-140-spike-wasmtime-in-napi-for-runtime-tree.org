@@ -1,0 +1,31 @@
+#+TITLE: Spike: wasmtime-in-NAPI for runtime tree-sitter grammars (+ general WASM extension substrate)
+#+STATE: ITEM
+#+SESSION_ID: 1508cbf54b12d2b0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T11-53-10-188Z_1508cbf54b12d2b0.jsonl]]
+#+CUSTOM_ID: FUP-140-spike-wasmtime-in-napi-for-runtime-tree
+
+* Initial Message
+
+look at ~/code/ora/verse and how it generates tree-sitter from the meta-compiler language.
+
+your goal is to look at how pi-* crates manage dynamic language profiles. Consider runtime/kdl/some other addition (also consider something specific to Spacetime. Weigh in all the options and show me your reasoning).
+
+Please understand the nuances of the work here. You are also free to propose improvements to the tree sitter generator and to the Spacetime LSP to make it world-class, as it hasn't been touched in a while and could benefit from some love. Since I am the creator of both Spell and Spacetime, I would LOVE to make the two seamlessly work with each other (also look at the Spacetime MCP btw).
+
+Deep architecture dive first, then come back with your insights, revelations, challenges (to me and to you), questions, and overall state of things
+
+Parent: FEAT-813 (L3). Design §1.3 + §7 of ~/code/ora/verse/docs/specs/spell-spacetime-unification.md.
+
+ALREADY SPIKED (standalone, 2026-06-14): tree-sitter 0.25.10 `wasm` feature works. WasmStore round-trip PROVEN — loaded real tree-sitter-json.wasm (25 kinds) in 2.45ms, parsed correctly. API: tree_sitter::{wasmtime::Engine,Parser,WasmStore}; store.load_language(name,bytes); parser.set_wasm_store(store). Repro in Appendix B.
+
+MEASURED COST: pulls wasmtime+cranelift JIT. Compile +35s debug/+54s release. Binary 363KB→6.59MB (+6.2MB). ABI 13–15 (verse grammar=ABI14 ✓). WasmStore is Send+Sync.
+
+STILL TO VERIFY before L3 commit:
+1. wasmtime builds cleanly inside pi-natives NAPI .node on all target platforms.
+2. cranelift engine cold-start under the agent runtime.
+3. Gate behind cargo feature `wasm-grammars` so +6MB is opt-in (or workspace switch — affects everyone's .node).
+4. grammar_from_node_types runtime fn (port of build.rs:410, ~80 trivial lines; VERIFIED pure data transform).
+
+STRATEGIC (separate, downstream): wasmtime is also a general WASM host → candidate for Spell's Pi-independent extension ABI (tools/LSPs/renderers sandboxed, decoupled from NAPI host). Multi-quarter; do NOT conflate with grammar work. Record decision after grammar use proves wasmtime-in-NAPI viable.
+
+VERDICT: feasible, worth it, but as its own milestone after L1–L2 prove the data path. Don't block integration on it.

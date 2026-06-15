@@ -1,0 +1,32 @@
+#+TITLE: duplex-bridge-rpc--external-sessions-ans
+
+** ITEM Duplex bridge RPC: external sessions answer full BridgeRpcCommand via kernel
+
+FEAT-815. The bridge socket (packages/spell-server/src/socket/types.ts ⇄ packages/coding-agent/src/session-bridge/types.ts — kept in SYNC) gained a duplex request/response frame so external (CLI/TUI) sessions answer the SAME command surface spawned sessions get over their RpcClient.
+
+TRANSPORT (symmetric to the pre-existing inject_input/inject_ack pair):
+- rpc_request (daemon→CLI): { type:"rpc_request", requestId, command: BridgeRpcRequest }. BridgeRpcRequest is structural ({type, id?, [k]:unknown}) so the socket layer stays decoupled from coding-agent's concrete BridgeRpcCommand union.
+- rpc_response (CLI→daemon): { type:"rpc_response", requestId, response: BridgeRpcResult }.
+- BridgeRpcResult = {type:"response", command, success:true, data?} | {…, success:false, error}.
+
+DAEMON: SocketSessionRegistry.requestRpc(sessionId, command):Promise<BridgeRpcResult> + resolveRpc(requestId, response) with a #pendingRpcs Map + RPC_RESPONSE_TIMEOUT_MS(30s) + disconnect cleanup — a direct clone of injectMessage/resolveInject/#pendingInjects. socket/server.ts dispatches case "rpc_response"→resolveRpc. web/ws/server.ts #dispatchExternalRpc: for non-prompt commands, `await registry.requestRpc(...)` instead of replying unsupported_for_external (prompt still uses injectMessage).
+
+CLI: SessionBridgeClient.onRpcRequest(handler) + case "rpc_request" → #handleRpcRequest → reply rpc_response. Wired in main.ts to handleBridgeRpc (session-bridge/bridge-rpc-handler.ts), which runs commands through executeCodePath:
+- edit_history → manage history; undo/redo → manage undo|redo (historyEntryId/historyForce, commit_guard); code_query → executeCodePath({command:"get", target}) returning projected nodes.
+SEMANTIC RULE: everything goes through the kernel (pi-code-path/pi-code-graph + manage). NO jsonl/file reparsing. Daemon + agent share one authority.
+
+COMMANDS added to BridgeRpcCommand (both mirrors): undo{entryId?,force?}, redo{entryId?}, code_query{target,format?}.
+
+WEB (served React app, packages/spell-server/web): App.tsx requestUndo/requestRedo/requestCodeQuery via the existing correlationId round-trip (sendRpc helper). EditHistoryPanel: functional Undo/Redo/Force buttons + declined notice + refresh. CodeLensPanel + code-lens.ts: pi-code-graph lens (callers def→, definition ref→, implementers implements→, base types inherits→, type #hover, outline #outline, diagnostics #diagnostics) over any live session.
+
+ACTIVATION: only after server + CLI sessions RESTART with this build (running processes are old code). Tests prove transport: spell-server test/socket/integration.test.ts (proxy round-trip/unknown/disconnect), coding-agent test/session-bridge/rpc-request-client.test.ts, web test/detail/code-lens.test.ts.
+
+SAFETY GAP (FUP-142): mutating ops gated only by web token; a `bridge { allow-rpc }` KDL gate is proposed but unimplemented.
+:PROPERTIES:
+:CUSTOM_ID: CON-duplex-bridge-rpc--external-sessions-ans
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-14T19:41:57Z
+:END:
+:RELATIONS:
+:END:

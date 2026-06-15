@@ -1,0 +1,43 @@
+#+TITLE: knowledge worker embeds title-only — scan_items passes include_body=false
+#+STATE: ITEM
+#+SESSION_ID: 1509565aeda55489
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T21-57-50-135Z_1509565aeda55489.jsonl]]
+#+CUSTOM_ID: BUG-480-knowledge-worker-embeds-title-only-scan
+
+* Initial Message
+
+bro.
+
+pi-knowledge-worker takes on the whole CPU and hangs (TUI marker is left at 0 forever)
+latest place that does this: /home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T18-53-08-610Z_15092c1520a8d7d4.jsonl
+
+why? can you find the root cause? what is shitty about your rust arch? please find all efficiency warts.
+
+* BUG: org/memory vector lane embeds TITLE-ONLY text — bodies never reach the embedder
+
+** Discovery
+Surfaced while running the BUG-479 model eval. The eval embeds "{title} {body[..512]}" and achieves recall@5 ≈ 0.92 on body-snippet queries — but ONLY because the eval harness parses with =include_body=true=. The live worker does not.
+
+** Root cause
+=crates/pi-knowledge-worker/src/lane_org.rs::scan_items= (≈ line 517) calls:
+#+begin_src rust
+pi_org_engine::extract_items_from_source(&source, &[], "", "", &path_str, false)
+//                                                                        ^^^^^ include_body
+#+end_src
+With =include_body=false=, =pi-org-engine= leaves =OrgItem.body = None= (buffer.rs:192/410 only populate body when the flag is set). =org_cache::embed_text= then takes its =None => item.title.clone()= branch, so EVERY item is embedded as its title alone. Bodies — the bulk of the semantic signal — are never embedded.
+
+Impact: vector recall is capped far below achievable. A topic/body query ("the thing about X") can't match because only titles were embedded. This likely matters MORE for recall quality than the embed-model choice (BUG-479).
+
+** Fix
+Pass =include_body=true= in =scan_items= so =embed_text= sees real body content. Considerations:
+- =project_docs= (BM25) also reads =item.body= — BM25 currently indexes empty bodies too, so this improves lexical recall as well.
+- The =since()= path and =about()= already expect bodies in places; verify no double-counting.
+- Cost: parsing bodies is cheap (already in-memory); the embed text is capped at 512 chars in =embed_text= so embed cost is bounded.
+- BUG-474 cache: changing the embedded text changes every content hash → one full re-embed on the next warm (expected, one-time). The =OrgVecManifest= handles this correctly (hashes differ → re-embed).
+
+** Acceptance
+- After the fix, =OrgLane= items carry =Some(body)=; a body-snippet recall query returns the owning item (add a test mirroring the eval's body-query mode against a seeded corpus).
+- Re-run =model_eval= against the LIVE worker scan path (include_body=true) to confirm parity with the eval numbers.
+
+** Relations
+Found via BUG-479 eval. Independent of model choice; should land before any model swap is evaluated for production.

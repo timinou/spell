@@ -1,0 +1,49 @@
+#+TITLE: knowledge worker embeds entire history incl DONE/archived — add mtime-gated auto-embed KDL setting
+#+STATE: DONE
+#+SESSION_ID: 1509565aeda55489
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T21-57-50-135Z_1509565aeda55489.jsonl]]
+#+CUSTOM_ID: BUG-477-knowledge-worker-embeds-entire-history-i
+#+COMPLETION_HASH: 21b4626fdcb2413a
+
+* Initial Message
+
+bro.
+
+pi-knowledge-worker takes on the whole CPU and hangs (TUI marker is left at 0 forever)
+latest place that does this: /home/user/.spell/agent/sessions/-code-ora-spell/2026-06-14T18-53-08-610Z_15092c1520a8d7d4.jsonl
+
+why? can you find the root cause? what is shitty about your rust arch? please find all efficiency warts.
+
+* BUG: embed workload ∝ all org history (incl DONE/archived); no recency gate
+
+** Symptom
+The embed set is every item =scan_items= finds under =!tasks/= — ~11,805 headings including long-closed DONE tasks and archived items. Embedding cost scales with total history, not the active working set, so the corpus only ever grows and warm gets slower forever.
+
+** Root cause
+=lane_org.rs::scan_items= has no state/recency filter; =build_vec_index_with= embeds the full item list.
+
+** Fix
+Add a declarative KDL knob under the =knowledge= domain block:
+#+begin_src kdl
+knowledge {
+    embeddings #true
+    // Skip auto-embedding items whose owning file hasn't been modified in N days.
+    // Stale items remain BM25 + graph searchable; they are embedded ON DEMAND
+    // (lazily) if a query actually needs vector recall over them.
+    embed-recency-days 90
+}
+#+end_src
+- Parse in =packages/coding-agent/src/config/kdl-domains.ts::parseKnowledge= → extend =DomainKnowledgeConfig= (=domain/growth/src/types.ts=) with =embedRecencyDays?: number=.
+- Bridge in =packages/coding-agent/src/domain/activation.ts= → =setEnv("KNOWLEDGE_EMBED_RECENCY_DAYS", n)=.
+- Worker (=lane_org.rs=): when set, auto-embed only items whose file mtime is within N days; others go into BM25 + graph but are skipped from the embed batch. Track skipped ids.
+- Manual / on-demand: if a query's vector lane would need a skipped item (or an explicit "embed all" command), embed it then. "manual embed if it gets queried though, if it makes sense" — implement the lazy path: a query that returns a stale item with no vector triggers a background embed of that item's file-cohort, so the next query is vector-complete.
+
+** Acceptance
+- =embed-recency-days 90= → cold warm embeds only items from files touched in the last 90 days; =stats= total reflects the reduced set.
+- Unset / 0 → embed everything (current behaviour, back-compat).
+- A vector query hitting a stale item still returns it (BM25 path) and schedules its embed.
+
+** Relations
+Depends on the cache BUG (incremental embed + persistence) and the chunking BUG (clean batch boundaries) landing first.
+
+NOTE [2026-06-14]: Fixed in commit f6231e40d. KDL knob knowledge { embed-recency-days N } → KNOWLEDGE_EMBED_RECENCY_DAYS env → plan_embeds_with_recency skips embedding items in files older than N days (still BM25+graph searchable). Editing a stale file refreshes mtime+content-hash → embedded next warm (embed-on-demand). Cached vectors never evicted by the gate. Tested: org_cache recency unit test + kdl-domains parse tests.
