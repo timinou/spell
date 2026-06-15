@@ -22,7 +22,13 @@ import { listModels } from "./cli/list-models";
 import { selectSession } from "./cli/session-picker";
 import { findConfigFile } from "./config";
 import { ModelRegistry } from "./config/model-registry";
-import { resolveCliModel, resolveModelRoleValue, resolveModelScope, type ScopedModel } from "./config/model-resolver";
+import {
+	parseModelString,
+	resolveCliModel,
+	resolveModelRoleValue,
+	resolveModelScope,
+	type ScopedModel,
+} from "./config/model-resolver";
 import { Settings, settings } from "./config/settings";
 import { loadDomainDefs, loadMergedProviderConfigs } from "./config/spell-kdl";
 import { initializeWithSettings } from "./discovery";
@@ -53,10 +59,38 @@ function dbgStartup(step: string, ctx?: Record<string, unknown>): void {
 	if (process.env.SPELL_STARTUP_DBG !== "1") return;
 	try {
 		const elapsed = Math.round(performance.now() - _dbgStartupT0);
-		const ctxStr = ctx ? " " + JSON.stringify(ctx) : "";
+		const ctxStr = ctx ? ` ${JSON.stringify(ctx)}` : "";
 		process.stderr.write(`[STARTUP-DBG main +${elapsed}ms] ${step}${ctxStr}\n`);
 		logger.info(`startup-dbg main: ${step}`, { ...(ctx ?? {}), elapsedMs: elapsed });
 	} catch {}
+}
+
+function suggestModels(requested: string, modelRegistry: ModelRegistry): string[] {
+	const parsed = parseModelString(requested);
+	const allModels = modelRegistry.getAll();
+	const providerModels = parsed ? allModels.filter(model => model.provider === parsed.provider) : allModels;
+	const needle = (parsed?.id ?? requested).toLowerCase();
+	const broadPrefix = needle.match(/^([a-z]+-\d+(?:\.\d+)?)/)?.[1] ?? needle.slice(0, Math.min(5, needle.length));
+	const scored = providerModels.map(model => {
+		const id = model.id.toLowerCase();
+		let score = 10;
+		if (id === needle) score = 0;
+		else if (id.startsWith(needle)) score = 1;
+		else if (id.startsWith(broadPrefix)) score = 2;
+		else if (id.includes(broadPrefix)) score = 3;
+		else if (id.includes(needle.slice(0, 3))) score = 4;
+		return { key: `${model.provider}/${model.id}`, score };
+	});
+	return scored
+		.filter(entry => entry.score < 10)
+		.sort((a, b) => a.score - b.score || a.key.localeCompare(b.key))
+		.map(entry => entry.key)
+		.slice(0, 8);
+}
+
+function formatModelSuggestions(requested: string, modelRegistry: ModelRegistry): string {
+	const suggestions = suggestModels(requested, modelRegistry);
+	return suggestions.length > 0 ? ` Did you mean: ${suggestions.join(", ")}?` : "";
 }
 
 async function checkForNewVersion(currentVersion: string): Promise<string | undefined> {
@@ -483,12 +517,23 @@ async function buildSessionOptions(
 		usageOrder: settings.getStorage()?.getModelUsageOrder(),
 	};
 	if (parsed.model) {
-		const resolved = resolveCliModel({
+		let resolved = resolveCliModel({
 			cliProvider: parsed.provider,
 			cliModel: parsed.model,
 			modelRegistry,
 			preferences: modelMatchPreferences,
 		});
+		const parsedModelRef = parseModelString(parsed.model);
+		const refreshProviderId = parsed.provider ?? parsedModelRef?.provider;
+		if (resolved.error && refreshProviderId) {
+			await modelRegistry.refreshProvider(refreshProviderId, "online-if-uncached");
+			resolved = resolveCliModel({
+				cliProvider: parsed.provider,
+				cliModel: parsed.model,
+				modelRegistry,
+				preferences: modelMatchPreferences,
+			});
+		}
 		if (resolved.warning) {
 			process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
 		}
@@ -506,6 +551,43 @@ async function buildSessionOptions(
 			settings.overrideModelRoles({ default: `${resolved.model.provider}/${resolved.model.id}` });
 			if (!parsed.thinking && resolved.thinkingLevel) {
 				options.thinkingLevel = resolved.thinkingLevel;
+			}
+		}
+	} else if (domainManifest?.modelStrict) {
+		const requested = settings.getModelRole("default")?.trim();
+		if (requested && requested !== "default") {
+			const resolved = resolveCliModel({
+				cliModel: requested,
+				modelRegistry,
+				preferences: modelMatchPreferences,
+			});
+			if (resolved.warning) {
+				process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
+			}
+			if (resolved.model) {
+				options.model = resolved.model;
+				settings.overrideModelRoles({ default: `${resolved.model.provider}/${resolved.model.id}` });
+				if (!parsed.thinking && resolved.thinkingLevel) {
+					options.thinkingLevel = resolved.thinkingLevel;
+				}
+			} else {
+				const parsedRequested = parseModelString(requested);
+				if (!parsedRequested) {
+					process.stderr.write(
+						`${chalk.red(`Domain '${domainManifest.name}' model '${requested}' is not a provider/model id.`)}\n`,
+					);
+					process.exit(1);
+				}
+				if (resolved.error) {
+					process.stderr.write(
+						`${chalk.yellow(`Warning: ${resolved.error}${formatModelSuggestions(requested, modelRegistry)}`)}\n`,
+					);
+				}
+				// Preserve exact benchmark attribution while allowing Spell providers/models
+				// that are registered later by extensions or dynamic provider catalogs.
+				// `modelPattern` disables fallback; if it still cannot resolve after
+				// extension loading, session creation reports that exact missing model.
+				options.modelPattern = requested;
 			}
 		}
 	} else if (scopedModels.length > 0 && !parsed.continue && !parsed.resume) {
@@ -592,7 +674,6 @@ async function buildSessionOptions(
 		options.toolNames = parsed.tools;
 	}
 
-
 	if (parsed.sandboxPolicy) {
 		options.sandboxPolicy = parsed.sandboxPolicy;
 	}
@@ -625,7 +706,11 @@ async function buildSessionOptions(
 }
 
 export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<void> {
-	dbgStartup("A:runRootCommand:enter", { mode: parsed.mode, hasResume: parsed.resume !== undefined, hasContinue: !!parsed.continue });
+	dbgStartup("A:runRootCommand:enter", {
+		mode: parsed.mode,
+		hasResume: parsed.resume !== undefined,
+		hasContinue: !!parsed.continue,
+	});
 	logger.startTiming();
 
 	// Initialize theme early with defaults (CLI commands need symbols)

@@ -444,6 +444,22 @@ describe("ModelRegistry", () => {
 			expect(registry.find("openai", "gpt-5.4")?.contextWindow).toBe(1_000_000);
 		});
 
+		test("provider-defined gpt-5.5 applies the hardcoded context window policy", () => {
+			const registry = new ModelRegistry(
+				authStorage,
+				{
+					"openai-proxy": providerConfig(
+						"https://my-proxy.example.com/v1",
+						[{ id: "gpt-5.5" }],
+						"openai-responses",
+					),
+				},
+				modelsJsonPath,
+			);
+
+			expect(registry.find("openai-proxy", "gpt-5.5")?.contextWindow).toBe(1_050_000);
+		});
+
 		test("removing custom models from models.json keeps built-in provider models", async () => {
 			writeModelsJson({
 				anthropic: providerConfig("https://proxy.example.com/v1", [{ id: "claude-custom" }]),

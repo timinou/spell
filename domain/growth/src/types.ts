@@ -129,4 +129,9 @@ export interface SpellDomain {
    * the environment at activation.
    */
   modelRoles?: Record<string, string>;
+  /**
+   * When true, configured model roles must resolve by exact provider/model id.
+   * This is for benchmark domains where fuzzy fallback corrupts attribution.
+   */
+  modelStrict?: boolean;
 }

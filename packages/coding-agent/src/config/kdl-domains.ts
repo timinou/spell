@@ -17,7 +17,12 @@
  */
 
 import type { Document, Node } from "@bgotink/kdl";
-import type { DomainEnvConfig, DomainKnowledgeConfig, DomainToolConfig, SpellDomain } from "../../../../domain/growth/src/types";
+import type {
+	DomainEnvConfig,
+	DomainKnowledgeConfig,
+	DomainToolConfig,
+	SpellDomain,
+} from "../../../../domain/growth/src/types";
 import {
 	getBooleanArgument,
 	getChildNode,
@@ -46,6 +51,7 @@ export interface ParsedDomainBlock {
 	knowledge?: DomainKnowledgeConfig;
 	env?: DomainEnvConfig;
 	modelRoles?: Record<string, string>;
+	modelStrict?: boolean;
 	toolsAllow?: string[];
 	toolsDeny?: string[];
 }
@@ -98,6 +104,13 @@ function parseModelRoles(node: Node): Record<string, string> | undefined {
 		if (role && value !== undefined) roles[role] = value;
 	}
 	return Object.keys(roles).length > 0 ? roles : undefined;
+}
+
+function parseModelStrict(node: Node): boolean | undefined {
+	const modelNode = getChildNode(node, "model");
+	if (!modelNode) return undefined;
+	const strictNode = getChildNode(modelNode, "strict");
+	return strictNode ? getBooleanArgument(strictNode) : undefined;
 }
 
 /** Parse a single `domain "x" { … }` definition block. */
@@ -156,6 +169,8 @@ export function parseDomainNode(node: Node): ParsedDomainBlock | undefined {
 
 	const modelRoles = parseModelRoles(node);
 	if (modelRoles) block.modelRoles = modelRoles;
+	const modelStrict = parseModelStrict(node);
+	if (modelStrict !== undefined) block.modelStrict = modelStrict;
 
 	return block;
 }
@@ -213,6 +228,7 @@ export function mergeDomainDefs(parent: ParsedDomainBlock, child: ParsedDomainBl
 			parent.modelRoles || child.modelRoles
 				? { ...(parent.modelRoles ?? {}), ...(child.modelRoles ?? {}) }
 				: undefined,
+		modelStrict: child.modelStrict ?? parent.modelStrict,
 		toolsAllow: mergedAllow.size > 0 ? [...mergedAllow] : undefined,
 		toolsDeny: mergedDeny.size > 0 ? [...mergedDeny] : undefined,
 	};
@@ -263,6 +279,7 @@ export function domainBlockToManifest(block: ParsedDomainBlock): SpellDomain {
 		knowledge: block.knowledge,
 		env: block.env,
 		modelRoles: block.modelRoles,
+		modelStrict: block.modelStrict,
 	};
 }
 

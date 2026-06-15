@@ -1465,8 +1465,13 @@ export class ModelRegistry {
 	}
 	#applyHardcodedModelPolicies(models: Model<Api>[]): Model<Api>[] {
 		return models.map(model => {
-			if (model.id === "gpt-5.4" && model.provider !== "github-copilot") {
-				return { ...model, contextWindow: 1_000_000 };
+			if (model.provider !== "github-copilot") {
+				if (model.id === "gpt-5.4") {
+					return { ...model, contextWindow: 1_000_000 };
+				}
+				if (model.id === "gpt-5.5") {
+					return { ...model, contextWindow: 1_050_000 };
+				}
 			}
 			return model;
 		});

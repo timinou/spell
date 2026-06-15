@@ -63,7 +63,7 @@ describe("parseDomainBlocks", () => {
 		expect(blocks[0].knowledge).toBeUndefined();
 	});
 
-	it("ignores a bare `domain \"x\"` selector (no children)", () => {
+	it('ignores a bare `domain "x"` selector (no children)', () => {
 		// Selector form must NOT be parsed as a definition.
 		expect(parseDomains(`domain "coding"`)).toHaveLength(0);
 	});
@@ -81,13 +81,17 @@ describe("parseDomainBlocks", () => {
 		expect(b.env?.set).toEqual({ PI_KNOWLEDGE_WORKER: "inprocess" });
 	});
 
-	it("parses model roles", () => {
+	it("parses model roles and strict model resolution", () => {
 		const [b] = parseDomains(`
 			domain "harbor" {
-				model { roles { default "$HARBOR_MODEL"; task "$HARBOR_MODEL" } }
+				model {
+					strict #true
+					roles { default "$HARBOR_MODEL"; task "$HARBOR_MODEL" }
+				}
 			}
 		`);
 		expect(b.modelRoles).toEqual({ default: "$HARBOR_MODEL", task: "$HARBOR_MODEL" });
+		expect(b.modelStrict).toBe(true);
 	});
 });
 
@@ -110,12 +114,19 @@ describe("mergeDomainDefs (field-kind-aware)", () => {
 		expect(merged.knowledge).toEqual({ embeddings: false });
 	});
 
-	it("model roles deep-merge, child wins", () => {
-		const merged = mergeDomainDefs(parent, {
-			name: "child",
-			modelRoles: { default: "$HARBOR_MODEL", smol: "override" },
-		});
+	it("model roles deep-merge, child wins; strict inherits unless overridden", () => {
+		const merged = mergeDomainDefs(
+			{ ...parent, modelStrict: true },
+			{
+				name: "child",
+				modelRoles: { default: "$HARBOR_MODEL", smol: "override" },
+			},
+		);
 		expect(merged.modelRoles).toEqual({ smol: "override", default: "$HARBOR_MODEL" });
+		expect(merged.modelStrict).toBe(true);
+
+		const relaxed = mergeDomainDefs({ ...parent, modelStrict: true }, { name: "child", modelStrict: false });
+		expect(relaxed.modelStrict).toBe(false);
 	});
 
 	it("env require unions, set merges", () => {
@@ -144,9 +155,7 @@ describe("resolveDomainExtends", () => {
 		const resolved = resolveDomainExtends(pool.get("child")!, pool);
 		expect(resolved.interactiveSurface).toBe("none");
 
-		const orphan = new Map<string, ParsedDomainBlock>([
-			["x", { name: "x", extends: "ghost" }],
-		]);
+		const orphan = new Map<string, ParsedDomainBlock>([["x", { name: "x", extends: "ghost" }]]);
 		expect(() => resolveDomainExtends(orphan.get("x")!, orphan)).toThrow(/extends 'ghost'/);
 	});
 
@@ -170,7 +179,7 @@ describe("resolveDomainManifests (end-to-end, harbor extends autonomous)", () =>
 			}
 			domain "harbor" extends="autonomous" {
 				env { require "HARBOR_MODEL"; set "PI_KNOWLEDGE_WORKER" "inprocess" }
-				model { roles { default "$HARBOR_MODEL"; task "$HARBOR_MODEL" } }
+				model { strict #true; roles { default "$HARBOR_MODEL"; task "$HARBOR_MODEL" } }
 			}
 		`),
 	);
@@ -188,6 +197,7 @@ describe("resolveDomainManifests (end-to-end, harbor extends autonomous)", () =>
 		expect(harbor.env?.require).toEqual(["HARBOR_MODEL"]);
 		expect(harbor.env?.set).toEqual({ PI_KNOWLEDGE_WORKER: "inprocess" });
 		expect(harbor.modelRoles).toEqual({ default: "$HARBOR_MODEL", task: "$HARBOR_MODEL" });
+		expect(harbor.modelStrict).toBe(true);
 	});
 
 	it("browser is NOT denied in the autonomous toolset", () => {
