@@ -131,9 +131,11 @@ describe("GetTool", () => {
 		await fs.writeFile(a, "export const x = 1;\n", "utf-8");
 		await fs.writeFile(b, "export const y = 2;\n", "utf-8");
 		try {
-			spyOn(nativesModule, "executeCodePath").mockImplementation(async (opts: any) =>
-				[makeChunk([{ locator: opts.target, kind: "§outline", content: { text: `${opts.target} · outline (1 symbol)` } }])],
-			);
+			spyOn(nativesModule, "executeCodePath").mockImplementation(async (opts: any) => [
+				makeChunk([
+					{ locator: opts.target, kind: "§outline", content: { text: `${opts.target} · outline (1 symbol)` } },
+				]),
+			]);
 			const sessionId = `sess-${Date.now()}`;
 			const tool = new GetTool(createSession({ getSessionId: () => sessionId }));
 			const first = getText(await tool.execute("t", { target: a }));
@@ -267,6 +269,89 @@ describe("GetTool", () => {
 		const text = getText(result);
 		expect(text).toContain("# Coding");
 		expect(text).not.toContain("[§skill]");
+	});
+
+	// BUG: a binary `scheme://` URL (artifact/agent/…) that the kernel resolved
+	// to a real on-disk file came back as `[§empty]` + a note saying "use
+	// sourcePath-aware tools" — WITHOUT ever surfacing the resolved path. The
+	// agent then scanned the filesystem (`find /`) and timed out. A URL that
+	// resolved to a real file must behave like reading that file.
+	it("surfaces the resolved fs path for a binary artifact:// URL (never path-less [§empty])", async () => {
+		// Real PNG header so classifyFileForRead sniffs it as an image.
+		const pngMagic = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+		const tmp = nodePath.join(process.cwd(), `packages/coding-agent/test/tmp-bug-artifact-${Date.now()}`);
+		await fs.mkdir(tmp, { recursive: true });
+		const real = nodePath.join(tmp, "410.png");
+		await fs.writeFile(real, pngMagic);
+		try {
+			spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+				{
+					nodes: [
+						{
+							locator: "artifact://sess/main/generate_image/410.png",
+							rangeStart: 0,
+							rangeEnd: 0,
+							kind: "§artifact",
+							content: { kind: "bytes", artifactUri: "artifact-bytes-pending://x", size: 8 },
+							metadata: {
+								source_path: real,
+								notes: ["Binary artifact (png). Use sourcePath-aware tools to inspect it."],
+							},
+							diagnostics: [],
+						},
+					],
+					diagnostics: [],
+					done: true,
+				} as any,
+			]);
+			const tool = new GetTool();
+			const result = await tool.execute("t", {
+				target: "artifact://sess/main/generate_image/410.png",
+			});
+			// PNG magic → routed through the image reader → an image content block.
+			const hasImage = result.content.some(c => c.type === "image");
+			expect(hasImage).toBe(true);
+			// And NEVER the dead-end marker.
+			expect(getText(result)).not.toContain("[§empty]");
+		} finally {
+			await fs.rm(tmp, { recursive: true });
+		}
+	});
+
+	// Non-image binary (e.g. pdf, or a png that fails image-load): the textual
+	// marker MUST name the concrete resolved path so the agent never has to hunt.
+	it("names the resolved fs path for a non-image binary scheme node", async () => {
+		const tmp = nodePath.join(process.cwd(), `packages/coding-agent/test/tmp-bug-bin-${Date.now()}`);
+		await fs.mkdir(tmp, { recursive: true });
+		const real = nodePath.join(tmp, "doc.pdf");
+		// Non-UTF8, non-image bytes → classifyFileForRead returns "binary".
+		await fs.writeFile(real, Buffer.from([0x00, 0x01, 0x02, 0xff, 0xfe]));
+		try {
+			spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+				{
+					nodes: [
+						{
+							locator: "artifact://sess/main/x/doc.pdf",
+							rangeStart: 0,
+							rangeEnd: 0,
+							kind: "§artifact",
+							content: { kind: "bytes", artifactUri: "artifact-bytes-pending://x", size: 5 },
+							metadata: { source_path: real, notes: ["Binary artifact (pdf)."] },
+							diagnostics: [],
+						},
+					],
+					diagnostics: [],
+					done: true,
+				} as any,
+			]);
+			const tool = new GetTool();
+			const result = await tool.execute("t", { target: "artifact://sess/main/x/doc.pdf" });
+			const text = getText(result);
+			expect(text).toContain(real);
+			expect(text).not.toContain("[§empty]");
+		} finally {
+			await fs.rm(tmp, { recursive: true });
+		}
 	});
 
 	it("formats output as locations when format=locations", async () => {
@@ -730,6 +815,111 @@ describe("GetTool", () => {
 			expect(result.text).toContain("size=2048");
 			expect(result.text).toContain("kind=§file");
 		});
+
+		// ── §-prefixed kinds (the REAL kernel output) ──────────────────────
+		// The kernel emits §file/§dir/§symlink, not bare file/dir/symlink. These
+		// guard the prefix-aware FS_KINDS gate so live #tree output no longer
+		// falls through to the flat `[§dir]` node-list dump (the reported bug).
+		const makeFsNode = (
+			locator: string,
+			kind: string,
+			depth: number,
+			name: string,
+			rangeEnd = 0,
+		) => ({
+			locator,
+			rangeStart: 0,
+			rangeEnd,
+			kind,
+			content: undefined,
+			metadata: { depth, name },
+			diagnostics: [],
+		});
+
+		it("auto-promotes §-prefixed fs nodes (real kernel kinds) to fs-listing", () => {
+			const chunks = [
+				{
+					nodes: [
+						makeNode("specs/README.md", "§file", undefined),
+						makeNode("specs/subdir", "§dir", undefined),
+					],
+					diagnostics: [],
+					done: true,
+				},
+			];
+			const result = formatCodePathResult(chunks as any, {});
+			// Must NOT be the flat node-list `[§dir]` shape from the bug report.
+			expect(result.text).not.toContain("[§dir]");
+			expect(result.text).not.toContain("[§file]");
+		});
+
+		it("renders an indented tree from depth metadata (#tree)", () => {
+			const chunks = [
+				{
+					nodes: [
+						makeFsNode("pkg", "§dir", 0, "pkg"),
+						makeFsNode("pkg/src", "§dir", 1, "src"),
+						makeFsNode("pkg/src/main.ts", "§file", 2, "main.ts", 1024),
+						makeFsNode("pkg/readme.md", "§file", 1, "readme.md", 512),
+					],
+					diagnostics: [],
+					done: true,
+				},
+			];
+			const result = formatCodePathResult(chunks as any, {});
+			const lines = result.text.split("\n");
+			// Base dir at depth 0, no indent, basename + trailing slash.
+			expect(lines[0]).toBe("pkg/");
+			// depth-1 dir indented one level, basename only (no repeated path).
+			expect(lines).toContain("  src/");
+			// depth-2 file indented two levels, basename + size.
+			expect(lines.some(l => l.startsWith("    main.ts") && l.includes("1.0K"))).toBe(true);
+			// Full path must NOT repeat on child rows.
+			expect(result.text).not.toContain("pkg/src/main.ts");
+		});
+
+		it("indents a #listing relative to its depth-1 children", () => {
+			const chunks = [
+				{
+					nodes: [
+						makeFsNode("src/a.rs", "§file", 1, "a.rs", 100),
+						makeFsNode("src/b", "§dir", 1, "b"),
+					],
+					diagnostics: [],
+					done: true,
+				},
+			];
+			const result = formatCodePathResult(chunks as any, {});
+			const lines = result.text.split("\n");
+			// Children-only listing: min depth is 1, so they anchor at zero indent.
+			expect(lines).toContain("a.rs  100B");
+			expect(lines).toContain("b/");
+		});
+
+		it("surfaces §inaccessible entries inline within a tree", () => {
+			const chunks = [
+				{
+					nodes: [
+						makeFsNode("dir", "§dir", 0, "dir"),
+						{
+							locator: "dir/locked",
+							rangeStart: 0,
+							rangeEnd: 0,
+							kind: "§inaccessible",
+							content: undefined,
+							metadata: {},
+							diagnostics: [{ variant: "inaccessible", message: "permission denied" }],
+						},
+					],
+					diagnostics: [],
+					done: true,
+				},
+			];
+			const result = formatCodePathResult(chunks as any, {});
+			// One inaccessible entry must not demote the tree to node-list.
+			expect(result.text).toContain("dir/");
+			expect(result.text).toContain("inaccessible");
+		});
 	});
 
 	// ─────────────────────────────────────────────────────────────
@@ -1097,17 +1287,34 @@ describe("FEAT-816: absolute targets self-root", () => {
 		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ root: process.cwd() }));
 	});
 
-	it("relative path with ../ still resolves against cwd", async () => {
+	// BUG-473: a relative `../` target that ESCAPES cwd must WIDEN the walker root
+	// to a dir that contains it (the kernel can't climb above its own root), so
+	// the file actually resolves. Previously it was pinned to `root=cwd` and the
+	// escaping target silently matched nothing. We assert the widened root is an
+	// ancestor of cwd and the target was absolutized — the shape the absolute-
+	// target machinery then resolves correctly (proven end-to-end by the real-
+	// kernel invariance suite below).
+	it("relative path with ../ widens root to resolve an escaping target", async () => {
 		const relPath = `../spell-feat816-relative-${Date.now()}-${Math.random()}.txt`;
 		const absPath = nodePath.resolve(process.cwd(), relPath);
 		await fs.writeFile(absPath, "relative test\n", "utf-8");
 		try {
 			const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
-				makeChunk([{ locator: relPath, kind: "file", content: { text: "relative test\n" } }]),
+				makeChunk([{ locator: absPath, kind: "file", content: { text: "relative test\n" } }]),
 			]);
 			const tool = new GetTool();
 			await tool.execute("t", { target: relPath });
-			expect(spy).toHaveBeenCalledWith(expect.objectContaining({ root: process.cwd() }));
+			const call = spy.mock.calls[0][0] as { root: string; target: string };
+			// Root widened to an ancestor of cwd (parent dir holding the escaped file),
+			// NOT pinned to the too-narrow cwd (the pre-BUG-473 behaviour).
+			const parent = nodePath.dirname(process.cwd());
+			expect(call.root).toBe(parent);
+			expect(call.root).not.toBe(process.cwd());
+			// Target was absolutized then re-relativized under the WIDENED root, so it
+			// no longer carries a `../` escape and resolves under that root.
+			const locator = call.target.split("#")[0];
+			expect(locator.startsWith("..")).toBe(false);
+			expect(nodePath.resolve(call.root, locator)).toBe(absPath);
 		} finally {
 			await fs.rm(absPath, { force: true });
 		}
@@ -1335,6 +1542,127 @@ describe("GetTool bare-path content routing (images / binaries)", () => {
 		} finally {
 			(spy as any).mockRestore?.();
 			await fs.rm(tmp, { recursive: true });
+		}
+	});
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// BUG-473: locator-spelling invariance (REAL kernel — no mock).
+//
+// The SAME target, addressed via {relative, absolute, ./-prefixed, ..-within-
+// root, ..-escaping-from-subdir, trailing-slash} spellings, MUST resolve to the
+// SAME nodes through the real FindTool→GetTool→kernel pipeline. The mocked
+// GetTool tests above only assert the STRING handed to the kernel; they cannot
+// catch the kernel/TS divergence this bug was about. These drive the live
+// resolver so a regression in either layer fails the suite.
+// ───────────────────────────────────────────────────────────────────────────
+describe("BUG-473: locator-spelling invariance (real kernel)", () => {
+	// Build a small real tree under a unique tmp root:
+	//   <root>/pkg/a.txt, <root>/pkg/b.txt, <root>/pkg/c.md
+	//   <root>/sub/deep/   (a deep subdir to climb out of with `..`)
+	async function makeTree(): Promise<string> {
+		const root = await fs.mkdtemp(nodePath.join(require("node:os").tmpdir(), "bug473-"));
+		await fs.mkdir(nodePath.join(root, "pkg"), { recursive: true });
+		await fs.writeFile(nodePath.join(root, "pkg", "a.txt"), "ALPHA\n", "utf-8");
+		await fs.writeFile(nodePath.join(root, "pkg", "b.txt"), "BETA\n", "utf-8");
+		await fs.writeFile(nodePath.join(root, "pkg", "c.md"), "# gamma\n", "utf-8");
+		await fs.mkdir(nodePath.join(root, "sub", "deep"), { recursive: true });
+		return root;
+	}
+
+	// Drive the real FindTool (which delegates to GetTool) with a given cwd, no mock.
+	async function findNodes(target: string, cwd: string): Promise<string[]> {
+		const { FindTool } = await import("@spell/pi-coding-agent/tools");
+		const tool = new FindTool(createSession({ cwd }));
+		const result = await tool.execute("t", { target });
+		const text = (result.content ?? []).map((b: any) => b.text ?? "").join("");
+		// A glob over pure filesystem nodes auto-promotes to the fs-listing layout:
+		// one entry per line as `<locator>` (dirs get a trailing `/`, files an
+		// optional `  <size>` suffix) — no `[§kind]` marker. Strip the size/slash
+		// decoration and normalise to basenames for set comparison (absolute
+		// spellings echo absolute locators, relative echo relative).
+		return text
+			.split("\n")
+			.map(l => l.trim())
+			.filter(Boolean)
+			// Drop hint / placeholder / diagnostic lines.
+			.filter(l => !l.startsWith("(") && !l.startsWith("Diagnostics") && !l.startsWith("[§"))
+			// Path token is everything before a two-space size suffix; trailing
+			// `/` (dir) and `@` (symlink) markers are decoration.
+			.map(l => l.split("  ")[0].replace(/[/@]$/, ""))
+			.map(l => nodePath.basename(l))
+			.filter(Boolean)
+			.sort();
+	}
+
+	async function rawText(target: string, cwd: string): Promise<string> {
+		const { FindTool } = await import("@spell/pi-coding-agent/tools");
+		const tool = new FindTool(createSession({ cwd }));
+		const result = await tool.execute("t", { target });
+		return (result.content ?? []).map((b: any) => b.text ?? "").join("");
+	}
+
+	it("file glob resolves identically across spellings", async () => {
+		const root = await makeTree();
+		const deep = nodePath.join(root, "sub", "deep");
+		try {
+			const baseline = await findNodes("pkg/*.txt", root);
+			expect(baseline).toEqual(["a.txt", "b.txt"]);
+
+			// Absolute spelling.
+			expect(await findNodes(`${root}/pkg/*.txt`, root)).toEqual(baseline);
+			// ./-prefixed.
+			expect(await findNodes("./pkg/*.txt", root)).toEqual(baseline);
+			// ..-within-root (dip into sub/ then back to pkg/).
+			expect(await findNodes("sub/../pkg/*.txt", root)).toEqual(baseline);
+			// ..-escaping from a deep subdir back to pkg/ (the user's repro shape).
+			expect(await findNodes("../../pkg/*.txt", deep)).toEqual(baseline);
+		} finally {
+			await fs.rm(root, { recursive: true });
+		}
+	});
+
+	it("trailing-slash dir-glob matches the slashless form", async () => {
+		const root = await makeTree();
+		try {
+			const noSlash = await findNodes("*", root);
+			const withSlash = await findNodes("*/", root);
+			// Both enumerate the top-level entries; trailing slash no longer drops them.
+			expect(withSlash).toEqual(noSlash);
+			expect(noSlash).toContain("pkg");
+		} finally {
+			await fs.rm(root, { recursive: true });
+		}
+	});
+
+	it("#raw reads identical content across spellings", async () => {
+		const root = await makeTree();
+		const deep = nodePath.join(root, "sub", "deep");
+		try {
+			const want = "ALPHA";
+			expect(await rawText("pkg/a.txt#raw", root)).toContain(want);
+			expect(await rawText(`${root}/pkg/a.txt#raw`, root)).toContain(want);
+			expect(await rawText("./pkg/a.txt#raw", root)).toContain(want);
+			expect(await rawText("sub/../pkg/a.txt#raw", root)).toContain(want);
+			// ..-escaping from a deep subdir (the bug's headline failure).
+			expect(await rawText("../../pkg/a.txt#raw", deep)).toContain(want);
+		} finally {
+			await fs.rm(root, { recursive: true });
+		}
+	});
+
+	it("recursive glob resolves identically across spellings", async () => {
+		const root = await makeTree();
+		const deep = nodePath.join(root, "sub", "deep");
+		try {
+			const baseline = await findNodes("**/*.txt", root);
+			expect(baseline).toEqual(["a.txt", "b.txt"]);
+			expect(await findNodes(`${root}/**/*.txt`, root)).toEqual(baseline);
+			expect(await findNodes("./**/*.txt", root)).toEqual(baseline);
+			// Escaping from deep subdir.
+			expect(await findNodes("../../**/*.txt", deep)).toEqual(baseline);
+		} finally {
+			await fs.rm(root, { recursive: true });
 		}
 	});
 });

@@ -3917,6 +3917,7 @@ dependencies = [
  "insta",
  "miette",
  "phf 0.13.1",
+ "pi-text-search",
  "proptest",
  "rayon",
  "regex",
@@ -3991,6 +3992,7 @@ dependencies = [
  "filetime",
  "libc",
  "nix 0.29.0",
+ "ort",
  "pi-code-graph",
  "pi-knowledge-core",
  "pi-org-engine",
@@ -4036,6 +4038,7 @@ dependencies = [
  "pi-kernel",
  "pi-knowledge-core",
  "pi-org-engine",
+ "pi-text-search",
  "pi-typst-surface",
  "pi-workspace-cache",
  "portable-pty",
@@ -4113,6 +4116,21 @@ dependencies = [
  "thiserror 2.0.18",
  "tree-sitter",
  "tree-sitter-org",
+]
+
+[[package]]
+name = "pi-text-search"
+version = "13.12.8"
+dependencies = [
+ "globset",
+ "grep-matcher",
+ "grep-regex",
+ "grep-searcher",
+ "ignore",
+ "rayon",
+ "smallvec",
+ "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

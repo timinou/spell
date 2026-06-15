@@ -280,10 +280,34 @@ function buildSimpleList(nodes: NodeRefDto[]): string {
 	return [...paths].join("\n");
 }
 
-const FS_KINDS = new Set(["file", "dir", "symlink", "stat"]);
+// Kernel emits §-prefixed kinds (§file/§dir/§symlink) plus the bare `stat`
+// kind from #stat. Accept both prefixed and unprefixed spellings so the
+// auto-promotion gate fires on real resolver output (previously only matched
+// the unprefixed test fixtures, so live #tree fell through to node-list).
+const FS_KINDS = new Set(["file", "dir", "symlink", "stat", "§file", "§dir", "§symlink"]);
 
 function allFsNodes(nodes: NodeRefDto[]): boolean {
-	return nodes.length > 0 && nodes.every(n => FS_KINDS.has(n.kind));
+	// A walk may interleave §inaccessible sentinels (permission denied, transient
+	// IO) among real fs nodes; tolerate them so one unreadable entry doesn't
+	// demote the whole tree back to the flat node-list shape. Require at least one
+	// genuine fs node so an all-error result still routes to node-list (where the
+	// diagnostics render).
+	//
+	// A node carrying text content is a *content* read (#raw, or a bare file read
+	// whose §file node holds the source) — NOT a structural listing. Those must
+	// stay on the node-list path so the content renders; fs-listing only shows
+	// `path  size`. So any content-bearing node disqualifies auto-promotion.
+	if (nodes.length === 0) return false;
+	let sawFs = false;
+	for (const n of nodes) {
+		if (getNodeText(n) !== undefined) return false;
+		if (FS_KINDS.has(n.kind)) {
+			sawFs = true;
+		} else if (bareKind(n.kind) !== "inaccessible") {
+			return false;
+		}
+	}
+	return sawFs;
 }
 
 function formatSize(bytes: unknown): string {
@@ -293,13 +317,62 @@ function formatSize(bytes: unknown): string {
 	return `${(bytes / (1024 * 1024)).toFixed(1)}M`;
 }
 
+/** Strip a leading `§` from a node kind so `§dir` and `dir` compare equal. */
+function bareKind(kind: string): string {
+	return kind.startsWith("§") ? kind.slice(1) : kind;
+}
+
+/** Walk depth carried by the resolver (root = 0). Absent → treated as flat. */
+function nodeDepth(node: NodeRefDto): number | undefined {
+	const d = (node.metadata as Record<string, unknown> | undefined)?.depth;
+	return typeof d === "number" ? d : undefined;
+}
+
+/** Basename carried by the resolver; falls back to the locator's last segment. */
+function nodeName(node: NodeRefDto): string {
+	const n = (node.metadata as Record<string, unknown> | undefined)?.name;
+	if (typeof n === "string" && n.length > 0) return n;
+	const { path } = formatLocator(node.locator);
+	const p = path ?? node.locator;
+	const slash = p.lastIndexOf("/");
+	return slash >= 0 ? p.slice(slash + 1) : p;
+}
+
+/** File byte size: resolver encodes it as the node range width. */
+function nodeSize(node: NodeRefDto): number | undefined {
+	const meta = (node.metadata as Record<string, unknown> | undefined)?.size;
+	if (typeof meta === "number") return meta;
+	const start = (node as unknown as { rangeStart?: number }).rangeStart;
+	const end = (node as unknown as { rangeEnd?: number }).rangeEnd;
+	if (typeof start === "number" && typeof end === "number" && end >= start) return end - start;
+	return undefined;
+}
+
+/**
+ * Render a filesystem result.
+ *
+ * Two shapes, chosen by whether the nodes carry `depth` metadata:
+ *
+ * 1. **Indented tree** (`#tree` / `#listing` — depth present): each entry is
+ *    indented by its walk depth and shown by basename only, so structure reads
+ *    at a glance instead of repeating the full path on every row. Directories
+ *    get a trailing `/`, symlinks `@`, files an optional right-aligned size.
+ *    The base (depth 0) node is the header; its full path anchors the subtree.
+ *
+ * 2. **Flat list** (`#stat`, or fs nodes without depth): one line per node with
+ *    the full locator + metadata, preserving the prior stat/listing shape.
+ */
 function buildFsListing(nodes: NodeRefDto[]): string {
+	const hasDepth = nodes.some(n => nodeDepth(n) !== undefined);
+	if (hasDepth) return buildFsTree(nodes);
+
 	const lines: string[] = [];
 	for (const node of nodes) {
 		const loc = nodeToLocation(node);
-		if (node.kind === "stat") {
+		const kind = bareKind(node.kind);
+		if (kind === "stat") {
 			const parts: string[] = [loc];
-			const meta = node.metadata ?? {};
+			const meta = (node.metadata ?? {}) as Record<string, unknown>;
 			if (meta.size !== undefined) parts.push(`size=${meta.size}`);
 			if (meta.mtime) parts.push(`mtime=${meta.mtime}`);
 			if (meta.kind) {
@@ -308,14 +381,51 @@ function buildFsListing(nodes: NodeRefDto[]): string {
 				parts.push("kind=§stat");
 			}
 			lines.push(parts.join("  "));
-		} else if (node.kind === "dir") {
+		} else if (kind === "dir") {
 			lines.push(`${loc}/`);
-		} else if (node.kind === "symlink") {
+		} else if (kind === "symlink") {
 			lines.push(`${loc}@`);
 		} else {
-			const size = node.metadata?.size;
+			const size = nodeSize(node);
 			const sizeStr = size !== undefined ? `  ${formatSize(size)}` : "";
 			lines.push(`${loc}${sizeStr}`);
+		}
+	}
+	return lines.join("\n");
+}
+
+/**
+ * Indented tree render. Depth 0 (the walk base) becomes a path header; deeper
+ * entries are indented two spaces per level and shown by basename. Inaccessible
+ * entries surface inline so a permission error is visible, not silently
+ * dropped.
+ */
+function buildFsTree(nodes: NodeRefDto[]): string {
+	if (nodes.length === 0) return "";
+	// Minimum depth anchors the indentation (a #listing starts its children at
+	// depth 1; a #tree includes the depth-0 base). Indent relative to it.
+	const depths = nodes.map(n => nodeDepth(n) ?? 0);
+	const baseDepth = Math.min(...depths);
+	const lines: string[] = [];
+	for (const node of nodes) {
+		const kind = bareKind(node.kind);
+		if (kind === "inaccessible") {
+			const { path } = formatLocator(node.locator);
+			lines.push(`${path ?? node.locator}  ⟨inaccessible⟩`);
+			continue;
+		}
+		const depth = nodeDepth(node) ?? 0;
+		const rel = Math.max(0, depth - baseDepth);
+		const indent = "  ".repeat(rel);
+		const name = nodeName(node);
+		if (kind === "dir") {
+			lines.push(`${indent}${name}/`);
+		} else if (kind === "symlink") {
+			lines.push(`${indent}${name}@`);
+		} else {
+			const size = nodeSize(node);
+			const sizeStr = size !== undefined && size > 0 ? `  ${formatSize(size)}` : "";
+			lines.push(`${indent}${name}${sizeStr}`);
 		}
 	}
 	return lines.join("\n");
@@ -409,8 +519,15 @@ export function formatCodePathResult(chunks: CodePathChunk[], options: CodePathR
 			break;
 	}
 
-	// Degenerate-result hint: single dir node suggests recursive/depth.
-	if (nodes.length === 1 && nodes[0].kind === "dir" && text === `${nodes[0].locator}/`) {
+	// Degenerate-result hint: a bare directory target resolves to a single dir
+	// marker (no qualifier → no walk). Suggest #tree / #listing. Prefix-tolerant
+	// so it fires on the kernel's §dir as well as bare-`dir` test fixtures.
+	if (
+		nodes.length === 1 &&
+		bareKind(nodes[0].kind) === "dir" &&
+		nodeDepth(nodes[0]) === undefined &&
+		(text === `${nodes[0].locator}/` || text === `${nodeName(nodes[0])}/`)
+	) {
 		text +=
 			"\n\n(hint: single directory marker — use recursive: true or depth for recursive listing, or content: false to suppress)";
 	}

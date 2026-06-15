@@ -157,12 +157,12 @@ pub fn list_qualifiers() -> Vec<QualifierInfo> {
 		// FS dialect
 		QualifierInfo {
 			name:        "listing".to_string(),
-			args_schema: None,
+			args_schema: Some("ignored|hidden|all".to_string()),
 			applies_to:  vec!["dir".to_string()],
 		},
 		QualifierInfo {
 			name:        "tree".to_string(),
-			args_schema: Some("depth=N".to_string()),
+			args_schema: Some("depth=N ignored hidden all".to_string()),
 			applies_to:  vec!["dir".to_string()],
 		},
 		QualifierInfo {

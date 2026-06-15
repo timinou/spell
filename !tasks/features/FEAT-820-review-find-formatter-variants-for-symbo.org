@@ -1,0 +1,36 @@
+#+TITLE: Review find formatter variants for symbol-aware output
+#+STATE: DOING
+#+SESSION_ID: 150a981da51e09f3
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-15T21-23-37-748Z_150a981da51e09f3.jsonl]]
+#+CUSTOM_ID: FEAT-820-review-find-formatter-variants-for-symbo
+#+LAYER: tooling
+#+PRIORITY: B
+
+* Initial Message
+
+i want the find tool to output symbols also during multi-file hits, and efficiently, and consistently across the variatns.
+
+e.g. first line i
+
+/.../...rs
+::Symbol (if several lines hit or several symbols hit within one file, otherwise full codepath on one line)
+<lineno>: ...
+
+or something like that. what do you think?
+
+Review how the pi harness `find`/CodePath tool formats location-style results today, with emphasis on multi-file hits and where enclosing symbol context can be added consistently.
+
+User request: "do a big review of how these get formatted" after confirming this is the right repo.
+
+Scope:
+- Locate `find` tool implementation, renderer/formatter paths, and prompt/docs examples.
+- Map output variants: line grep, file list/tree/stat/raw, outline, symbol reads, structural hits, diagnostics, graph edge/location results, errors/truncation/artifact spill.
+- Identify shared data models carrying path/range/symbol metadata.
+- Recommend a consistent symbol-aware multi-file formatting design and likely implementation seams.
+
+Non-goals:
+- Do not implement until review is complete / user confirms direction.
+- Do not run broad tests unless code changes happen.
+
+Constraints:
+- Follow repo AGENTS: packages/coding-agent primary; no console logging; Bun over Node; no commits unless asked; prompt text in .md; use project memory for priors.

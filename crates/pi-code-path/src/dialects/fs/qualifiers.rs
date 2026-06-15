@@ -19,7 +19,7 @@ use crate::{
 /// fallthrough and routes to `diff_qualifier::resolve()`.
 pub fn resolve(node: &NodeRef, qual: &Qualifier, root: &Path) -> Result<Vec<NodeRef>, Diagnostic> {
 	match qual.name.as_str() {
-		"listing" => resolve_listing(node, root),
+		"listing" => resolve_listing(node, qual.args.as_deref(), root),
 		"tree" => resolve_tree(node, qual.args.as_deref(), root),
 		"stat" => resolve_stat(node, root),
 		"diff" => Err(Diagnostic {
@@ -35,78 +35,230 @@ pub fn resolve(node: &NodeRef, qual: &Qualifier, root: &Path) -> Result<Vec<Node
 	}
 }
 
-fn resolve_listing(node: &NodeRef, root: &Path) -> Result<Vec<NodeRef>, Diagnostic> {
-	let path = Path::new(&node.locator);
-	let full_path = resolve_full_path(path, root);
+/// Parsed flags for `#tree` / `#listing` args.
+///
+/// Grammar (inside the qualifier brackets, whitespace- or comma-separated):
+///   `depth=N`  — max recursion depth (tree only; listing is always one level)
+///   `ignored`  — include `.gitignore`d entries (default: excluded)
+///   `hidden`   — include dotfiles / hidden entries (default: excluded)
+///   `all`      — shorthand for `ignored hidden`
+///
+/// Examples: `#tree[depth=2]`, `#tree[ignored]`, `#tree[depth=3 ignored hidden]`.
+struct WalkFlags {
+	max_depth:       usize,
+	include_ignored: bool,
+	include_hidden:  bool,
+}
 
-	let entries = std::fs::read_dir(&full_path).map_err(|e| Diagnostic {
+fn parse_walk_flags(args: Option<&str>, default_depth: usize) -> WalkFlags {
+	let mut flags =
+		WalkFlags { max_depth: default_depth, include_ignored: false, include_hidden: false };
+	let Some(s) = args else { return flags };
+	for raw in s.split(|c: char| c == ',' || c.is_whitespace()) {
+		let tok = raw.trim();
+		if tok.is_empty() {
+			continue;
+		}
+		if let Some(n) = tok.strip_prefix("depth=").or_else(|| tok.strip_prefix("depth =")) {
+			if let Ok(d) = n.trim().parse::<usize>() {
+				flags.max_depth = d;
+			}
+		} else if tok.eq_ignore_ascii_case("ignored") {
+			flags.include_ignored = true;
+		} else if tok.eq_ignore_ascii_case("hidden") {
+			flags.include_hidden = true;
+		} else if tok.eq_ignore_ascii_case("all") {
+			flags.include_ignored = true;
+			flags.include_hidden = true;
+		}
+		// Unknown tokens are ignored for forward-compatibility.
+	}
+	flags
+}
+
+/// One `§inaccessible` node carrying a per-entry diagnostic, so a mid-walk
+/// failure (permission denied, transient IO) records itself instead of
+/// aborting the whole walk (BUG-371).
+fn inaccessible_node(locator: String, message: String) -> NodeRef {
+	NodeRef {
+		locator,
+		range: 0..0,
+		kind: "§inaccessible".into(),
+		content: None,
+		metadata: HashMap::new(),
+		diagnostics: vec![Diagnostic {
+			variant: DiagnosticVariant::Inaccessible,
+			message,
+			span: None,
+		}],
+	}
+}
+
+/// Gitignore-aware directory walk shared by `#listing` and `#tree`.
+///
+/// Reuses the `ignore` crate (same engine as the glob path) so a single tool —
+/// `find` — is internally consistent: `**/*.rs` and `dir/#tree` both honour
+/// `.gitignore` by default. Parent `.gitignore` files are consulted too, so a
+/// repo-root `node_modules/` rule prunes a subdirectory walk. Hidden entries
+/// and ignored entries are excluded by default and re-enabled only via the
+/// explicit `[hidden]` / `[ignored]` qualifier flags.
+///
+/// Each emitted node carries `depth` (walk distance from `base`, root = 0) and
+/// `name` (basename) metadata so the host renderer can draw an indented tree
+/// without re-deriving structure from path strings.
+///
+/// `include_root` keeps the base directory node itself (`#tree` wants it as the
+/// header; `#listing` drops it and returns children only). Output locators stay
+/// relative to the resolver `root`, anchored on the caller's `base` locator, so
+/// both absolute and relative addressing round-trip unchanged.
+fn walk_fs_nodes(
+	base: &str,
+	root: &Path,
+	flags: &WalkFlags,
+	include_root: bool,
+) -> Result<Vec<NodeRef>, Diagnostic> {
+	use ignore::WalkBuilder;
+
+	let base_path = Path::new(base);
+	let full_path = resolve_full_path(base_path, root);
+
+	// Entry-point must exist — hard error (parity with the previous resolvers).
+	// `symlink_metadata` so a dangling base symlink reports cleanly rather than
+	// chasing a missing target.
+	let base_meta = std::fs::symlink_metadata(&full_path).map_err(|e| Diagnostic {
 		variant: DiagnosticVariant::Inaccessible,
-		message: format!("cannot read directory: {e}"),
+		message: format!("metadata error: {e}"),
 		span:    None,
 	})?;
 
+	// A non-directory base has no children. `#listing` on a file is an error
+	// (mirrors the old `read_dir` failure); `#tree` returns the lone file node.
+	if !base_meta.is_dir() {
+		if !include_root {
+			return Err(Diagnostic {
+				variant: DiagnosticVariant::Inaccessible,
+				message: "cannot read directory: not a directory".into(),
+				span:    None,
+			});
+		}
+		let kind = if base_meta.is_symlink() { "§symlink" } else { "§file" };
+		let mut metadata = HashMap::new();
+		metadata.insert("depth".to_string(), serde_json::Value::from(0u64));
+		if let Some(name) = base_path.file_name() {
+			metadata.insert(
+				"name".to_string(),
+				serde_json::Value::String(name.to_string_lossy().to_string()),
+			);
+		}
+		return Ok(vec![NodeRef {
+			locator: base.to_string(),
+			range: 0..base_meta.len() as usize,
+			kind: kind.to_string(),
+			content: None,
+			metadata,
+			diagnostics: Vec::new(),
+		}]);
+	}
+
+	let mut builder = WalkBuilder::new(&full_path);
+	builder.hidden(!flags.include_hidden);
+	builder.follow_links(false);
+	// Deterministic ordering makes the rendered tree stable and readable.
+	builder.sort_by_file_name(std::cmp::Ord::cmp);
+	if flags.include_ignored {
+		// Disable every ignore source so nothing is filtered out.
+		builder.git_ignore(false);
+		builder.git_global(false);
+		builder.git_exclude(false);
+		builder.ignore(false);
+		builder.parents(false);
+	} else {
+		builder.git_ignore(true);
+		builder.git_global(true);
+		builder.git_exclude(true);
+		builder.ignore(true);
+		builder.parents(true);
+		// Honour `.gitignore` even outside a git repo (tempdir tests, detached
+		// subtrees) — same treatment as the glob walker.
+		builder.add_custom_ignore_filename(".gitignore");
+	}
+	// `#listing` is one level; `#tree` honours its depth flag. WalkBuilder counts
+	// the base as depth 0, so a one-level listing needs max_depth=1.
+	let effective_depth = if include_root { flags.max_depth } else { 1 };
+	if effective_depth != usize::MAX {
+		builder.max_depth(Some(effective_depth));
+	}
+
 	let mut nodes = Vec::new();
-	for entry in entries {
-		// BUG-371: resilient mid-walk errors — record as §inaccessible
-		// with a per-node diagnostic instead of aborting the listing.
-		let entry = match entry {
+	for result in builder.build() {
+		let entry = match result {
 			Ok(e) => e,
-			Err(e) => {
-				nodes.push(NodeRef {
-					locator:     path.to_string_lossy().to_string(),
-					range:       0..0,
-					kind:        "§inaccessible".into(),
-					content:     None,
-					metadata:    HashMap::new(),
-					diagnostics: vec![Diagnostic {
-						variant: DiagnosticVariant::Inaccessible,
-						message: format!("directory entry error: {e}"),
-						span:    None,
-					}],
-				});
+			Err(err) => {
+				nodes.push(inaccessible_node(base.to_string(), format!("walk error: {err}")));
 				continue;
 			},
 		};
-		let name = entry.file_name().to_string_lossy().to_string();
-		let meta = match entry.metadata() {
-			Ok(m) => m,
-			Err(e) => {
-				let child_path = path.join(&name);
-				nodes.push(NodeRef {
-					locator:     child_path.to_string_lossy().to_string(),
-					range:       0..0,
-					kind:        "§inaccessible".into(),
-					content:     None,
-					metadata:    HashMap::new(),
-					diagnostics: vec![Diagnostic {
-						variant: DiagnosticVariant::Inaccessible,
-						message: format!("metadata error: {e}"),
-						span:    None,
-					}],
-				});
-				continue;
-			},
-		};
-		let kind = if meta.is_dir() {
-			"§dir".to_string()
-		} else if meta.is_symlink() {
-			"§symlink".to_string()
+		let depth = entry.depth();
+		if depth == 0 && !include_root {
+			continue;
+		}
+		let abs = entry.path();
+		let rel_from_base = abs.strip_prefix(&full_path).unwrap_or_else(|_| Path::new(""));
+		let display = if rel_from_base.as_os_str().is_empty() {
+			base_path.to_path_buf()
 		} else {
-			"§file".to_string()
+			base_path.join(rel_from_base)
 		};
-		let child_path = path.join(&name);
-		let locator = child_path.to_string_lossy().to_string();
-		let size = meta.len();
+		let locator = display.to_string_lossy().to_string();
+		let name = display
+			.file_name()
+			.map(|n| n.to_string_lossy().to_string())
+			.unwrap_or_else(|| locator.clone());
+
+		let ft = entry.file_type();
+		let (kind, size, diagnostics) = match ft {
+			Some(t) if t.is_dir() => ("§dir".to_string(), 0u64, Vec::new()),
+			Some(t) if t.is_symlink() => {
+				// Detect dangling symlinks so the caller gets a per-node diagnostic
+				// (BUG-371) rather than silence — `metadata` follows the link.
+				let mut diags = Vec::new();
+				if std::fs::metadata(abs).is_err() {
+					diags.push(Diagnostic {
+						variant: DiagnosticVariant::Inaccessible,
+						message: "dangling symlink: target does not exist".into(),
+						span:    None,
+					});
+				}
+				("§symlink".to_string(), 0u64, diags)
+			},
+			_ => {
+				let sz = std::fs::metadata(abs).map(|m| m.len()).unwrap_or(0);
+				("§file".to_string(), sz, Vec::new())
+			},
+		};
+
+		let mut metadata = HashMap::new();
+		metadata.insert("depth".to_string(), serde_json::Value::from(depth as u64));
+		metadata.insert("name".to_string(), serde_json::Value::String(name));
 		nodes.push(NodeRef {
 			locator,
 			range: 0..size as usize,
 			kind,
 			content: None,
-			metadata: HashMap::new(),
-			diagnostics: Vec::new(),
+			metadata,
+			diagnostics,
 		});
 	}
 	Ok(nodes)
+}
+
+fn resolve_listing(
+	node: &NodeRef,
+	args: Option<&str>,
+	root: &Path,
+) -> Result<Vec<NodeRef>, Diagnostic> {
+	let flags = parse_walk_flags(args, 1);
+	walk_fs_nodes(&node.locator, root, &flags, false)
 }
 
 fn resolve_tree(
@@ -114,131 +266,10 @@ fn resolve_tree(
 	args: Option<&str>,
 	root: &Path,
 ) -> Result<Vec<NodeRef>, Diagnostic> {
-	let max_depth = args
-		.and_then(|s| {
-			s.strip_prefix("depth=")
-				.or_else(|| s.strip_prefix("depth = "))
-				.and_then(|n| n.parse::<usize>().ok())
-		})
-		.unwrap_or(usize::MAX);
-
-	let base = Path::new(&node.locator);
-	let mut results = Vec::new();
-	let mut stack = vec![(base.to_path_buf(), 0usize)];
-
-	while let Some((path, depth)) = stack.pop() {
-		if depth > max_depth {
-			continue;
-		}
-
-		let full_path = resolve_full_path(&path, root);
-
-		// BUG-371: use symlink_metadata so dangling symlinks don't abort
-		// the entire walk. The *first* (entry-point) node may still hard-
-		// error with ?; mid-walk failures produce per-node diagnostics.
-		let first = results.is_empty();
-		let meta = match std::fs::symlink_metadata(&full_path) {
-			Ok(m) => m,
-			Err(e) => {
-				if first {
-					return Err(Diagnostic {
-						variant: DiagnosticVariant::Inaccessible,
-						message: format!("metadata error: {e}"),
-						span:    None,
-					});
-				}
-				results.push(NodeRef {
-					locator:     path.to_string_lossy().to_string(),
-					range:       0..0,
-					kind:        "§inaccessible".into(),
-					content:     None,
-					metadata:    HashMap::new(),
-					diagnostics: vec![Diagnostic {
-						variant: DiagnosticVariant::Inaccessible,
-						message: format!("metadata error: {e}"),
-						span:    None,
-					}],
-				});
-				continue;
-			},
-		};
-
-		let kind = if meta.is_dir() {
-			"§dir".to_string()
-		} else if meta.is_symlink() {
-			"§symlink".to_string()
-		} else {
-			"§file".to_string()
-		};
-
-		let size = meta.len();
-
-		// BUG-371: detect dangling symlinks so the caller gets a per-node
-		// diagnostic instead of a hard crash on a later stat() call.
-		let mut diagnostics = Vec::new();
-		if meta.is_symlink() && std::fs::metadata(&full_path).is_err() {
-			diagnostics.push(Diagnostic {
-				variant: DiagnosticVariant::Inaccessible,
-				message: "dangling symlink: target does not exist".into(),
-				span:    None,
-			});
-		}
-
-		results.push(NodeRef {
-			locator: path.to_string_lossy().to_string(),
-			range: 0..size as usize,
-			kind,
-			content: None,
-			metadata: HashMap::new(),
-			diagnostics,
-		});
-
-		if meta.is_dir() && depth < max_depth {
-			let entries = match std::fs::read_dir(&full_path) {
-				Ok(e) => e,
-				Err(e) => {
-					results.push(NodeRef {
-						locator:     path.to_string_lossy().to_string(),
-						range:       0..0,
-						kind:        "§inaccessible".into(),
-						content:     None,
-						metadata:    HashMap::new(),
-						diagnostics: vec![Diagnostic {
-							variant: DiagnosticVariant::Inaccessible,
-							message: format!("read_dir error: {e}"),
-							span:    None,
-						}],
-					});
-					continue;
-				},
-			};
-			for entry in entries {
-				let entry = match entry {
-					Ok(e) => e,
-					Err(e) => {
-						results.push(NodeRef {
-							locator:     path.to_string_lossy().to_string(),
-							range:       0..0,
-							kind:        "§inaccessible".into(),
-							content:     None,
-							metadata:    HashMap::new(),
-							diagnostics: vec![Diagnostic {
-								variant: DiagnosticVariant::Inaccessible,
-								message: format!("directory entry error: {e}"),
-								span:    None,
-							}],
-						});
-						continue;
-					},
-				};
-				let name = entry.file_name();
-				let child_path = path.join(&name);
-				stack.push((child_path, depth + 1));
-			}
-		}
-	}
-
-	Ok(results)
+	// Default depth is unbounded; `#tree[depth=N]` caps it. The base directory
+	// node is included (depth 0) so the host renderer can use it as the header.
+	let flags = parse_walk_flags(args, usize::MAX);
+	walk_fs_nodes(&node.locator, root, &flags, true)
 }
 
 fn resolve_stat(node: &NodeRef, root: &Path) -> Result<Vec<NodeRef>, Diagnostic> {
@@ -362,9 +393,122 @@ mod tests {
 		let qual = Qualifier { name: "tree".to_string(), args: Some("depth=1".to_string()) };
 		let results = resolve(&n, &qual, &root).unwrap();
 		let locators: Vec<_> = results.iter().map(|r| r.locator.clone()).collect();
-		assert!(locators.contains(&"a".to_string()));
-		assert!(locators.contains(&"a/b".to_string()));
-		assert!(!locators.contains(&"a/b/c.rs".to_string()));
+		// Base dir included at depth 0 (header), its child dir at depth 1, but the
+		// grandchild file at depth 2 is pruned by depth=1.
+		assert!(locators.contains(&"a".to_string()), "base dir present: {locators:?}");
+		assert!(locators.contains(&"a/b".to_string()), "depth-1 child present: {locators:?}");
+		assert!(
+			!locators.contains(&"a/b/c.rs".to_string()),
+			"depth-2 grandchild pruned: {locators:?}"
+		);
+		// depth metadata is carried for the host renderer.
+		let base = results.iter().find(|r| r.locator == "a").unwrap();
+		assert_eq!(base.metadata.get("depth").and_then(|v| v.as_u64()), Some(0));
+		let child = results.iter().find(|r| r.locator == "a/b").unwrap();
+		assert_eq!(child.metadata.get("depth").and_then(|v| v.as_u64()), Some(1));
+	}
+
+	#[test]
+	fn qualifier_tree_excludes_gitignored_by_default() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		fs::write(root.join(".gitignore"), "node_modules/\nbuild.log\n").unwrap();
+		fs::create_dir(root.join("src")).unwrap();
+		fs::write(root.join("src/main.rs"), "").unwrap();
+		fs::create_dir(root.join("node_modules")).unwrap();
+		fs::write(root.join("node_modules/dep.js"), "").unwrap();
+		fs::write(root.join("build.log"), "").unwrap();
+
+		let n = node("", "§dir");
+		let qual = Qualifier { name: "tree".to_string(), args: None };
+		let results = resolve(&n, &qual, &root).unwrap();
+		let locators: Vec<_> = results.iter().map(|r| r.locator.clone()).collect();
+		assert!(
+			locators.iter().any(|l| l.ends_with("src/main.rs")),
+			"tracked file present: {locators:?}"
+		);
+		assert!(
+			!locators.iter().any(|l| l.contains("node_modules")),
+			"gitignored dir excluded by default: {locators:?}"
+		);
+		assert!(
+			!locators.iter().any(|l| l.ends_with("build.log")),
+			"gitignored file excluded by default: {locators:?}"
+		);
+	}
+
+	#[test]
+	fn qualifier_tree_ignored_flag_includes_gitignored() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		fs::write(root.join(".gitignore"), "node_modules/\n").unwrap();
+		fs::create_dir(root.join("node_modules")).unwrap();
+		fs::write(root.join("node_modules/dep.js"), "").unwrap();
+
+		let n = node("", "§dir");
+		let qual = Qualifier { name: "tree".to_string(), args: Some("ignored".to_string()) };
+		let results = resolve(&n, &qual, &root).unwrap();
+		let locators: Vec<_> = results.iter().map(|r| r.locator.clone()).collect();
+		assert!(
+			locators.iter().any(|l| l.contains("node_modules")),
+			"`[ignored]` flag includes gitignored entries: {locators:?}"
+		);
+	}
+
+	#[test]
+	fn qualifier_tree_excludes_hidden_by_default() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		fs::write(root.join("visible.rs"), "").unwrap();
+		fs::write(root.join(".hidden"), "").unwrap();
+
+		let n = node("", "§dir");
+		let qual = Qualifier { name: "tree".to_string(), args: None };
+		let results = resolve(&n, &qual, &root).unwrap();
+		let locators: Vec<_> = results.iter().map(|r| r.locator.clone()).collect();
+		assert!(locators.iter().any(|l| l.ends_with("visible.rs")), "visible: {locators:?}");
+		assert!(
+			!locators.iter().any(|l| l.ends_with(".hidden")),
+			"hidden excluded by default: {locators:?}"
+		);
+
+		let qual_hidden =
+			Qualifier { name: "tree".to_string(), args: Some("hidden".to_string()) };
+		let with_hidden = resolve(&n, &qual_hidden, &root).unwrap();
+		assert!(
+			with_hidden.iter().any(|r| r.locator.ends_with(".hidden")),
+			"`[hidden]` flag includes dotfiles"
+		);
+	}
+
+	#[test]
+	fn qualifier_listing_carries_depth_and_name_metadata() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		fs::create_dir(root.join("src")).unwrap();
+		fs::write(root.join("src/a.rs"), "").unwrap();
+
+		let n = node("src", "§dir");
+		let qual = Qualifier { name: "listing".to_string(), args: None };
+		let children = resolve(&n, &qual, &root).unwrap();
+		// Listing drops the base node, returns children only, all at depth 1.
+		assert!(children.iter().all(|c| c.locator != "src"), "base dir omitted from listing");
+		let a = children.iter().find(|c| c.locator == "src/a.rs").unwrap();
+		assert_eq!(a.metadata.get("depth").and_then(|v| v.as_u64()), Some(1));
+		assert_eq!(a.metadata.get("name").and_then(|v| v.as_str()), Some("a.rs"));
+	}
+
+	#[test]
+	fn qualifier_parse_walk_flags_grammar() {
+		assert_eq!(parse_walk_flags(None, 9).max_depth, 9);
+		assert_eq!(parse_walk_flags(Some("depth=2"), 9).max_depth, 2);
+		let all = parse_walk_flags(Some("all"), 9);
+		assert!(all.include_ignored && all.include_hidden);
+		let combo = parse_walk_flags(Some("depth=3 ignored"), 9);
+		assert_eq!(combo.max_depth, 3);
+		assert!(combo.include_ignored && !combo.include_hidden);
+		let comma = parse_walk_flags(Some("ignored,hidden"), 9);
+		assert!(comma.include_ignored && comma.include_hidden);
 	}
 
 	#[test]

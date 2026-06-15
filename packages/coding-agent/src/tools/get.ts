@@ -180,24 +180,6 @@ function extractSchemeNode(chunks: CodePathChunk[], target: string): NodeRefDto 
 	return node.kind === `§${scheme}` ? node : null;
 }
 
-function renderSchemeNode(node: NodeRefDto, params: GetParams, target: string): AgentToolResult {
-	const content = node.content;
-	const body =
-		content?.kind === "text"
-			? content.value
-			: ((content as { text?: string; value?: string } | undefined)?.text ??
-				(content as { value?: string } | undefined)?.value ??
-				"");
-	const meta = (node.metadata ?? {}) as Record<string, unknown>;
-	const notes = Array.isArray(meta.notes) ? (meta.notes as string[]) : [];
-	const notePrefix = notes.length ? `${notes.map(n => `[note] ${n}`).join("\n")}\n` : "";
-	const text = `${notePrefix}${body || `[§empty] ${target}`}`;
-	return toolResult<GetToolResultDetails>({ format: params.format, target })
-		.text(text)
-		.sourceInternal(node.locator)
-		.done();
-}
-
 /**
  * Builds a directory qualifier from params:
  * - `depth` → `#tree[depth=N]` (overrides recursive)
@@ -265,7 +247,41 @@ function effectiveRootFor(target: string, providedRoot: string | undefined, sess
 	if (!prefix) return sessionCwd;
 	return nearestExistingDir(prefix);
 }
-
+/**
+ * BUG-473: when a RELATIVE target escapes its resolution base (`../...`, or a
+ * bare relative resolving outside `rootDir`), rewrite it to an ABSOLUTE target
+ * so the absolute-target machinery (auto-root at the nearest existing ancestor
+ * + re-relativize) can resolve it. The kernel walker cannot climb above its own
+ * root, so an escaping target like `../../packages/*` from a subdir otherwise
+ * walks the too-narrow root and returns nothing.
+ *
+ * Returns the absolutized target, or `null` when no rewrite is needed (target
+ * is absolute, a URI, or a relative path that stays UNDER `rootDir` — those the
+ * kernel already resolves correctly post-BUG-473).
+ *
+ * Glob metacharacters and the `#qualifier` / `::Symbol` / `:A-B` suffix ride
+ * along untouched: `path.resolve` treats them as ordinary trailing path
+ * characters and only normalizes `.`/`..`/`/` separators.
+ */
+function absolutizeEscapingTarget(target: string, base: string, rootDir: string): string | null {
+	if (path.isAbsolute(target) || target.includes("://")) return null;
+	// Resolved absolute dir-prefix of the locator (strip glob meta + suffixes),
+	// mirroring extractAbsolutePrefix's stripping so the escape test ignores the
+	// query/qualifier/glob tail.
+	const prefix =
+		target
+			.replace(/::.*$/, "")
+			.replace(/#.*$/, "")
+			.replace(/[*?[].*$/, "")
+			.replace(LINE_SLICE_SUFFIX, "")
+			.replace(/\/+$/, "") || ".";
+	const absPrefix = path.resolve(base, prefix);
+	const rel = path.relative(rootDir, absPrefix);
+	// Stays under rootDir → no widening needed.
+	if (!rel.startsWith("..") && !path.isAbsolute(rel)) return null;
+	// Escapes rootDir → absolutize the whole target (suffix + glob preserved).
+	return path.resolve(base, target);
+}
 /**
  * Convert an absolute CodePath target to a relative path against `rootDir`.
  * Preserves qualifiers (`#...`, `::...`). When the target is already relative
@@ -522,7 +538,29 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		// gates the once-per-(session, filetype) teaching hint appended below.
 		let autoOutline = false;
 
-		const rootDir = effectiveRootFor(target, params.root, process.cwd());
+		// BUG-473: a relative target that ESCAPES its resolution base (`../...`
+		// climbing out of the session cwd / explicit root) cannot be resolved by
+		// the kernel walker, which never climbs above its own root. Rewrite it to
+		// an absolute target FIRST so the absolute-target path (auto-root at the
+		// nearest existing ancestor + re-relativize) takes over. The escape base is
+		// the explicit `root` when provided, else the session cwd (process.cwd()).
+		// In-root relative targets are left untouched (the kernel resolves them
+		// directly, and BUG-473's kernel normalization handles within-root `..`).
+		//
+		// When we absolutize, the (narrow) provided root MUST be dropped for root
+		// computation: effectiveRootFor short-circuits on a provided root, which
+		// would re-pin the walk to the too-narrow base and defeat the widening.
+		let providedRoot = params.root;
+		{
+			const escapeBase = params.root ?? process.cwd();
+			const absolutized = absolutizeEscapingTarget(target, escapeBase, escapeBase);
+			if (absolutized !== null) {
+				target = absolutized;
+				providedRoot = undefined;
+			}
+		}
+
+		const rootDir = effectiveRootFor(target, providedRoot, process.cwd());
 
 		if (params.content !== false && !looksLikeRegex && classifyBareTarget(target) === "bare-plain") {
 			const normalized = target.replace(/\/+$/, "");
@@ -636,16 +674,24 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		// `[§kind]` label so the result is shape-equivalent to the JS path.
 		const schemeNode = extractSchemeNode(chunks, target);
 		if (schemeNode) {
-			return renderSchemeNode(schemeNode, params, target);
+			return await this.renderSchemeNode(schemeNode, params, target);
 		}
 
+		// Pass `format` through untouched (no `?? "node-list"` fallback): an unset
+		// format lets formatCodePathResult auto-promote pure filesystem results
+		// (#tree / #listing) to the indented fs-listing layout. Coercing to
+		// "node-list" here defeats that gate and yields the flat `[§dir]` dump.
 		const result = formatCodePathResult(chunks, {
-			format: (params.format as CodePathFormatMode) ?? "node-list",
+			format: params.format as CodePathFormatMode | undefined,
 		});
 
 		let displayText = result.text?.trim();
 
-		if (!displayText) {
+		// FEAT-714 fires on a genuinely empty result set. Gate on the node count, not
+		// text emptiness: formatCodePathResult now emits a `(no entries)` placeholder
+		// for an empty unformatted result, which is truthy and would otherwise mask
+		// the richer reason + try-next diagnostic.
+		if (result.stats.nodeCount === 0) {
 			// FEAT-714: structured diagnostic with reason + try-next hint.
 			let reason = "empty-result";
 			let tryNext: string | null = null;
@@ -778,7 +824,7 @@ export class GetTool implements AgentTool<typeof getSchema> {
 				abortSignal: signal,
 			});
 			const rendered = formatCodePathResult(chunks, {
-				format: (params.format as CodePathFormatMode) ?? "node-list",
+				format: params.format as CodePathFormatMode | undefined,
 			});
 			return toolResult<GetToolResultDetails>({
 				format: params.format,
@@ -813,6 +859,74 @@ export class GetTool implements AgentTool<typeof getSchema> {
 	 * instead of a latin-1 mojibake dump (via #raw) or a silently-dropped
 	 * handle-only node (via the kernel #image qualifier, which omits bytes >512KB).
 	 */
+	/**
+	 * Render a kernel-resolved `scheme://…` node (kind `§<scheme>`).
+	 *
+	 * Invariant: a URL that resolved to a real file behaves like READING that
+	 * file. The kernel always forwards the concrete fs location in
+	 * `metadata.source_path`; this renderer surfaces it on every path so nothing
+	 * downstream (agent or sourcePath-aware tool) is ever left "wondering where
+	 * the URL is".
+	 *
+	 * - binary file (png/pdf/…) → image content block, or a binary marker that
+	 *   NAMES the resolved path. Never a dead-end `[§empty]` + "use sourcePath
+	 *   tools" note that withholds the very path it tells you to use (the BUG).
+	 * - text/extracted content → notes + body, with the resolved path attached
+	 *   as `sourcePath` meta and shown in the marker when the body is empty.
+	 */
+	private async renderSchemeNode(node: NodeRefDto, params: GetParams, target: string): Promise<AgentToolResult> {
+		const content = node.content;
+		const meta = (node.metadata ?? {}) as Record<string, unknown>;
+		const sourcePath = typeof meta.source_path === "string" ? meta.source_path : null;
+		const notes = Array.isArray(meta.notes) ? (meta.notes as string[]) : [];
+
+		// A scheme URL backed by a real binary file (kernel emits `bytes` for any
+		// non-UTF-8 file under ReadMode::Auto). Re-classify off the resolved path
+		// and read it exactly like a bare file read: image → visible image block;
+		// other binary → a marker that names the concrete fs path.
+		if (sourcePath && content?.kind === "bytes") {
+			try {
+				const classification = await classifyFileForRead(sourcePath);
+				if (classification.kind === "image") {
+					// readImageFile returns the visible image block for the resolved
+					// file — that IS the URL's content; hand it back directly.
+					return await this.readImageFile(params, sourcePath, classification.mimeType);
+				}
+				const size =
+					typeof (content as { size?: number }).size === "number"
+						? formatBytes((content as { size: number }).size)
+						: "unknown size";
+				return toolResult<GetToolResultDetails>({ format: params.format, target })
+					.text(
+						`[binary file: ${target} → ${sourcePath} (${size}) — not shown as text. ` +
+							`Use a hex/byte view or an appropriate parser if you need its contents.]`,
+					)
+					.sourcePath(sourcePath)
+					.sourceInternal(node.locator)
+					.done();
+			} catch {
+				// Classification failed (path vanished, permissions): fall through to
+				// the textual marker below, which still names the resolved path.
+			}
+		}
+
+		const body =
+			content?.kind === "text"
+				? content.value
+				: ((content as { text?: string; value?: string } | undefined)?.text ??
+					(content as { value?: string } | undefined)?.value ??
+					"");
+		const notePrefix = notes.length ? `${notes.map(n => `[note] ${n}`).join("\n")}\n` : "";
+		// Empty body but a real backing file → name the path instead of a bare
+		// `[§empty]` that strands the agent with nowhere to look.
+		const fallback = sourcePath ? `[resolved to ${sourcePath}]` : `[§empty] ${target}`;
+		const text = `${notePrefix}${body || fallback}`;
+		const builder = toolResult<GetToolResultDetails>({ format: params.format, target })
+			.text(text)
+			.sourceInternal(node.locator);
+		if (sourcePath) builder.sourcePath(sourcePath);
+		return builder.done();
+	}
 	private async readImageFile(params: GetParams, absPath: string, mimeType: string): Promise<AgentToolResult> {
 		if (this.session?.settings?.get("images.blockImages")) {
 			return toolResult<GetToolResultDetails>({ target: params.target })

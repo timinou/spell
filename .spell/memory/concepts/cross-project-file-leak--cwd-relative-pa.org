@@ -1,0 +1,33 @@
+#+TITLE: cross-project-file-leak--cwd-relative-pa
+
+** ITEM Cross-project file leak: cwd-relative path resolution + puppeteer userDataDir
+
+## Symptom
+Foreign files appear in the wrong project tree (e.g. Rust repo `verse` gets `rv/data/todos.json`, `cmstest/`, `better-ccflare/models.dev.json`, `puppeteer_dev_chrome_profile-*`), then get mass-deleted later by a confused cleanup commit. Traced from ~/code/ora/verse commits 4f734a0b + 4dfc2069.
+
+## Two root-cause classes
+1. AGENT-DRIVEN (BUG-481, the dominant one): tools resolve bare relative paths against session.cwd. The cwd-prefix guard `resolveCwdRelativePath` (packages/coding-agent/src/tools/path-resolution.ts) only caught the cwd-TAIL DUPLICATION shape (cwd=/x/apps/foo + apps/foo/bar). It was BLIND to the SIBLING shape (cwd=/code/ora/verse + write `rv/data/x.json` where `rv` is another project): detectCwdPrefixDuplication returns null (first seg differs), resolveFromProjectRoot finds nothing (brand-new path), falls through to silent path.resolve(cwd,p). Success msg echoes the input → no feedback signal → recurs forever.
+2. SPELL-INTERNAL (BUG-482): puppeteer.launch() in browser.ts omitted userDataDir → Chrome writes its default profile `puppeteer_dev_chrome_profile-*` to process.cwd(). Under the shared in-process session model (setProjectDir does a process-global process.chdir), that cwd can even be the WRONG project. This was the ONLY remaining internal cwd-write leak; everything else (model cache→getModelDbPath SQLite, images→os.tmpdir) already used ~/.spell dir helpers correctly.
+
+## Fix (commit a9c85a7e7)
+- Added 'unanchored-new' decision + siblingProjectCollision() detector: brand-new NESTED write (>=2 segs) whose first seg is absent under cwd but exists as a peer of cwd / ancestor up to projectRoot → soft warning naming the sibling + absolute alternative. No hard block (paths are cwd-relative by contract); just restores the missing feedback signal. Precision guards: only nested, sibling must actually exist, local dir under cwd suppresses.
+- Fixed CwdResolutionDecision type drift (added 'project-root' which was already returned + 'unanchored-new').
+- Threaded session git-root as projectRoot bound via new ToolSession.getRepoRoot (cached per cwd, uses getGitToplevelSync) into create/edit/send-file/browser-screenshot. All write tools already route through resolveCwdRelativePath, so the resolver is the single structural lever.
+- Pinned puppeteer userDataDir to ~/.spell/puppeteer/profiles/<snowflake>, unique per launch (avoids Chrome single-writer profile-lock contention across concurrent in-process browsers), best-effort rm on #closeBrowser.
+
+## Design principle reaffirmed
+The guard family's philosophy (BUG-029/358/360/361): never hard-block cwd-relative writes; ALWAYS emit a feedback signal in the tool result so the agent self-corrects next turn. The leak was a gap in signal coverage, not a missing block.
+
+## Process model fact
+Interactive CLI/TUI runs many sessions + ALL subagents in ONE process; setProjectDir/process.chdir makes process.cwd() process-global mutable state. Only session.cwd is a trustworthy per-session anchor; never trust process.cwd() for session-scoped writes.
+:PROPERTIES:
+:CUSTOM_ID: CON-cross-project-file-leak--cwd-relative-pa
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-15T12:11:56Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: EP-78e926524e57047
+DISTILLED_FROM: BUG-481-resolvecwdrelativepath-blind-to-sibling
+DISTILLED_FROM: BUG-482-puppeteer-launch-omits-userdatadir-chrom
+:END:

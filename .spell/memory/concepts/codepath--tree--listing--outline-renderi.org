@@ -1,0 +1,31 @@
+#+TITLE: codepath--tree--listing--outline-renderi
+
+** ITEM CodePath #tree/#listing/#outline rendering architecture
+
+The `find`/`get` filesystem + outline rendering spans two layers; bugs hid each other.
+
+## Layers
+- **Rust resolver** `crates/pi-code-path/src/dialects/fs/qualifiers.rs`: `resolve_tree`/`resolve_listing` produce `NodeRef` with kind `§dir`/`§file`/`§symlink`. Now share `walk_fs_nodes` (gitignore-aware via `ignore::WalkBuilder`, same engine as glob). Each node carries `depth` + `name` metadata. Flags parsed by `parse_walk_flags`: `depth=N`, `ignored`, `hidden`, `all`.
+- **Rust dialect** `dialects/fs/mod.rs`: a BARE directory locator pre-resolves (recursive glob) to ALL descendants; `#tree`/`#listing` then re-walk each → duplicated subtrees. Fix: `collapse_to_top_dirs` keeps only nodes not contained by another matched dir before the qualifier walk.
+- **Rust kernel outline** `crates/pi-kernel/src/walker.rs` `push_outline_entry`: rows now lead with bare `::Symbol` (path lives once in header `{rel}  ·  outline (N symbols)`); `truncate_sig` caps signatures at 72 chars.
+- **TS renderer** `packages/coding-agent/src/tools/codepath-result.ts`: `formatCodePathResult` auto-promotes pure-fs results to `buildFsListing` ONLY when `format===undefined` AND `allFsNodes`. `buildFsTree` renders indented tree from `depth` metadata.
+- **TS get.ts**: MUST pass `format: params.format` (NOT `?? "node-list"`) or auto-promotion never fires.
+
+## Three stacked defects (the original bug)
+1. `get.ts` coerced `undefined → "node-list"` → defeated auto-promotion gate.
+2. `FS_KINDS` lacked `§` prefix → real resolver kinds failed `allFsNodes`. Test fixtures used bare `"dir"` masking it.
+3. `resolve_tree` used raw `std::fs::read_dir` → bypassed gitignore.
+
+## Gotchas
+- `allFsNodes` must reject content-bearing nodes (a `#raw`/bare-file read carries `§file`+content; auto-promoting drops the content) and tolerate `§inaccessible` sentinels.
+- FEAT-714 no-results gate must check `result.stats.nodeCount===0`, not text emptiness (the `(no entries)` placeholder is truthy).
+- `find.md` has a `@generated:find-recipes` sentinel block synced from `_generated/find-recipes.md` via `bun scripts/gen-prompts.ts` then `format-prompts.ts`. The byte-equality test in `test/codepath/prompt-snapshots.test.ts` is PRE-EXISTING-BROKEN: sentinel on disk is `-→` (U+2192, from replaceAsciiSymbols) but test searches ASCII `-->`.
+- `format-prompts.ts` always reflows `system-prompt.md` (committed unformatted) — revert it to avoid scope creep.
+:PROPERTIES:
+:CUSTOM_ID: CON-codepath--tree--listing--outline-renderi
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-15T13:11:28Z
+:END:
+:RELATIONS:
+:END:

@@ -454,6 +454,18 @@ fn render_outline_map(
 	format!("{header}\n{}", lines.join("\n"))
 }
 
+/// Trim an over-long signature so outline rows stay scannable. The full
+/// signature is always reachable via `file::Symbol#sig`; the outline shows a
+/// preview. Cuts on a UTF-8 char boundary and appends an ellipsis.
+fn truncate_sig(sig: &str) -> String {
+	const MAX: usize = 72;
+	if sig.chars().count() <= MAX {
+		return sig.to_string();
+	}
+	let truncated: String = sig.chars().take(MAX).collect();
+	format!("{truncated}…")
+}
+
 /// Append one outline entry (and, within `max_depth`, its children) to `lines`.
 /// `parent_path` is the dotted symbol path of the enclosing scope, used to
 /// compose the child's `file::Parent.child` CodePath.
@@ -474,15 +486,19 @@ fn push_outline_entry(
 	let indent = "  ".repeat(depth + 1);
 	let marker = if entry.exported { '●' } else { '·' };
 	// The signature already restates the name + params; show it only when it
-	// adds beyond the bare `file::Symbol` handle. Trim to keep rows scannable.
+	// adds beyond the bare `::Symbol` handle. Trim to keep rows scannable.
 	let sig = entry.signature.trim();
 	let sig_part = if sig.is_empty() || sig == entry.name {
 		String::new()
 	} else {
-		format!("   {sig}")
+		format!("   {}", truncate_sig(sig))
 	};
+	// Row drops the repeated file path (it lives once in the header) and leads
+	// with the `::Symbol` handle. The full edit target is the header path + this
+	// row's `::Symbol` — e.g. header `foo.ts` + `::Bar.method` →
+	// `foo.ts::Bar.method`.
 	lines.push(format!(
-		"{indent}{marker} {rel}::{symbol_path}   {}   L{}{sig_part}",
+		"{indent}{marker} ::{symbol_path}   {}   L{}{sig_part}",
 		entry.kind, entry.line,
 	));
 	*count += 1;
@@ -812,8 +828,15 @@ mod tests {
 		);
 		let rel = f.path().to_string_lossy().to_string();
 		let text = run_outline(&resolver, f.path(), None);
-		assert!(text.contains(&format!("{rel}::greet")), "must show file::Symbol CodePath: {text}");
-		assert!(text.contains(&format!("{rel}::local")), "must list the local fn too: {text}");
+		// Path lives once in the header; rows lead with the bare `::Symbol` handle
+		// (header path + row = the full `file::Symbol` edit target).
+		assert!(text.contains(&rel), "header carries the file path once: {text}");
+		assert!(text.contains("::greet"), "must show ::Symbol handle: {text}");
+		assert!(text.contains("::local"), "must list the local fn too: {text}");
+		assert!(
+			!text.contains(&format!("{rel}::greet")),
+			"path must NOT repeat on each row (header-only): {text}"
+		);
 		// Exported marker present for greet, local marker for local().
 		assert!(text.contains('●'), "exported symbol marker: {text}");
 		assert!(text.contains('·'), "local symbol marker: {text}");
@@ -828,11 +851,11 @@ mod tests {
 		let resolver = resolver();
 		let f =
 			temp_file(".ts", "export class Bar {\n  method(x: number): void {\n    return;\n  }\n}\n");
-		let rel = f.path().to_string_lossy().to_string();
+		let _rel = f.path().to_string_lossy().to_string();
 		let text = run_outline(&resolver, f.path(), None);
-		assert!(text.contains(&format!("{rel}::Bar")), "class row: {text}");
+		assert!(text.contains("::Bar"), "class row: {text}");
 		assert!(
-			text.contains(&format!("{rel}::Bar.method")),
+			text.contains("::Bar.method"),
 			"nested method must use the dotted child path: {text}"
 		);
 	}
@@ -843,18 +866,12 @@ mod tests {
 		// pruned. depth=2 brings it back.
 		let resolver = resolver();
 		let f = temp_file(".ts", "export class Bar {\n  method(x: number): void {}\n}\n");
-		let rel = f.path().to_string_lossy().to_string();
+		let _rel = f.path().to_string_lossy().to_string();
 		let depth1 = run_outline(&resolver, f.path(), Some("depth=1"));
-		assert!(depth1.contains(&format!("{rel}::Bar")), "depth=1 keeps the class: {depth1}");
-		assert!(
-			!depth1.contains(&format!("{rel}::Bar.method")),
-			"depth=1 must prune the nested method: {depth1}"
-		);
+		assert!(depth1.contains("::Bar"), "depth=1 keeps the class: {depth1}");
+		assert!(!depth1.contains("::Bar.method"), "depth=1 must prune the nested method: {depth1}");
 		let depth2 = run_outline(&resolver, f.path(), Some("depth=2"));
-		assert!(
-			depth2.contains(&format!("{rel}::Bar.method")),
-			"depth=2 restores the nested method: {depth2}"
-		);
+		assert!(depth2.contains("::Bar.method"), "depth=2 restores the nested method: {depth2}");
 	}
 
 	#[test]

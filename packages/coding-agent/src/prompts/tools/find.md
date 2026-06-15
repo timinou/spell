@@ -20,7 +20,9 @@ target ::= Locator (Query)? (Qualifier)?
 |grep one|`foo.ts::§line[text~="TODO"]`|
 |grep many|`src/**/*.ts::§line[text~="TODO"]`|
 |find files|`src/**/*.ts`|
-|tree|`src/#tree`|
+|tree|`src/#tree`  → gitignored + hidden excluded by default|
+|tree incl. ignored|`src/#tree[ignored]`  ·  hidden: `[hidden]`  ·  both: `[all]`|
+|tree depth + flags|`src/#tree[depth=2 ignored]`|
 |size|`foo.ts#stat`|
 |diff|`foo.ts#diff`  ·  `#diff` (workspace)|
 |symbol|`foo.ts::Bar.method`|
@@ -49,12 +51,15 @@ target ::= Locator (Query)? (Qualifier)?
 </recipes>
 
 <symbol-first>
-Reading a bare code file returns its `#outline` — a nested map of copy-pasteable
-`file::Symbol` CodePaths (with signatures + ● exported / · local markers), NOT
-the whole file. Work from those handles: drill a symbol with `file::Sym#body`,
-edit it with `edit { target: "file::Sym#body" }`. Reach for `#raw` only when you
-truly need the full text, and `:A-B` line slices only as a last resort — they
-drift and review worse than symbol targets.
+Reading a bare code file returns its `#outline` — a nested symbol map, NOT the
+whole file. The file path prints ONCE in the header (`foo.ts  ·  outline (N
+symbols)`); each row then leads with the bare `::Symbol` handle plus ● exported
+/ · local marker, kind, line, and a trimmed signature. Recompose the full edit
+target as header-path + row, e.g. header `foo.ts` + row `::Bar.method` →
+`foo.ts::Bar.method`. Work from those handles: drill a symbol with
+`file::Sym#body`, edit it with `edit { target: "file::Sym#body" }`. Reach for
+`#raw` only when you truly need the full text, and `:A-B` line slices only as a
+last resort — they drift and review worse than symbol targets.
 </symbol-first>
 
 <!-- @generated:find-recipes -→
@@ -66,13 +71,14 @@ drift and review worse than symbol targets.
 |#captures|grep|N after [text~="(re)"]|
 |#image|file|—|
 |#lines|file|a..b|
-|#listing|dir|—|
+|#listing|dir|ignored|hidden|all|
 |#match|grep|after [text~="re"]|
+|#outline|file|depth=N|
 |#raw|file|—|
 |#stat|file, dir|—|
 |#text|file|—|
 |#thumbnail|file|N|
-|#tree|dir|depth=N|
+|#tree|dir|depth=N ignored hidden all|
 
 ## Edge kinds
 

@@ -6,14 +6,14 @@
 |#captures|grep|N after [text~="(re)"]|
 |#image|file|—|
 |#lines|file|a..b|
-|#listing|dir|—|
+|#listing|dir|ignored|hidden|all|
 |#match|grep|after [text~="re"]|
 |#outline|file|depth=N|
 |#raw|file|—|
 |#stat|file, dir|—|
 |#text|file|—|
 |#thumbnail|file|N|
-|#tree|dir|depth=N|
+|#tree|dir|depth=N ignored hidden all|
 
 ## Edge kinds
 

@@ -12,11 +12,12 @@ pub mod stream;
 
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
+use pi_text_search::{SearchConfig, SearchFile, SearchParams, search_file_list};
 use rayon::prelude::*;
 
 use super::fs::anchors::DefaultFsAnchorContext;
 use crate::{
-	ast::{CodePath, Combinator, Head, Locator, Predicate, Step},
+	ast::{CodePath, Combinator, FsLocator, FsSegment, Head, Locator, Predicate, Step},
 	dialects::fs::walker::{WalkOpts, walk},
 	resolver::traits::{CancellationToken, FormatExtractor, Resolver},
 	types::{Content, Diagnostic, DiagnosticVariant, NodeRef},
@@ -61,6 +62,18 @@ impl Resolver for TextResolver {
 				});
 			},
 		};
+
+		if let Some(query) = &path.query
+			&& let Some(pattern) = fast_line_search_pattern(query, path.qualifier.is_none())
+		{
+			return Ok(run_fast_line_search_locator(
+				pattern,
+				fs_loc,
+				self.root.clone(),
+				self.gitignore,
+				cancel,
+			));
+		}
 
 		let _anchor_ctx = DefaultFsAnchorContext::new(self.root.clone());
 		let opts =
@@ -127,11 +140,19 @@ impl Resolver for TextResolver {
 			},
 		};
 
+		let head_step = &query.head;
+		if let Some(pattern) = fast_line_search_pattern(query, path.qualifier.is_none()) {
+			return Ok(run_fast_line_search(
+				pattern,
+				&file_paths,
+				cancel,
+			));
+		}
+
 		// Apply head step to every file in parallel. Per-file scans are pure
 		// (no shared state), and the output set is already unordered downstream
 		// (callers re-group by file locator). We use rayon's thread pool to
 		// saturate cores on multi-file globs; cancellation is polled per file.
-		let head_step = &query.head;
 		let nodes: Vec<NodeRef> = file_paths
 			.par_iter()
 			.flat_map_iter(|path| {
@@ -201,6 +222,194 @@ impl Resolver for TextResolver {
 	}
 }
 
+fn fast_line_search_pattern<'a>(query: &'a crate::ast::Query, no_qualifier: bool) -> Option<&'a str> {
+	if !no_qualifier || !query.chain.is_empty() {
+		return None;
+	}
+	let step = &query.head;
+	if !matches!(&step.head, Head::NodeKind(kind) if kind == "line") {
+		return None;
+	}
+	if step.predicates.len() != 1 {
+		return None;
+	}
+	match &step.predicates[0] {
+		Predicate::TextMatch(pattern) | Predicate::LiteralMatch(pattern) => Some(pattern.as_str()),
+		_ => None,
+	}
+}
+
+fn run_fast_line_search_locator(
+	pattern: &str,
+	fs_loc: &FsLocator,
+	root: PathBuf,
+	gitignore: bool,
+	cancel: &CancellationToken,
+) -> Vec<NodeRef> {
+	let locator_pattern = fs_locator_to_glob_pattern(fs_loc);
+	let has_glob = locator_pattern
+		.bytes()
+		.any(|b| matches!(b, b'*' | b'?' | b'[' | b']' | b'{' | b'}'));
+	let candidate = if locator_pattern.is_empty() || locator_pattern == "." {
+		root.clone()
+	} else {
+		root.join(&locator_pattern)
+	};
+	let mut config = if !has_glob && candidate.exists() {
+		SearchConfig::new(pattern, candidate)
+	} else {
+		let mut config = SearchConfig::new(pattern, root);
+		config.glob = if locator_pattern.is_empty() || locator_pattern == "**" {
+			None
+		} else {
+			Some(locator_pattern)
+		};
+		config
+	};
+	config.gitignore = gitignore;
+	config.hidden = true;
+	let result = match pi_text_search::search_files(&config) {
+		Ok(result) => result,
+		Err(err) => return text_search_error(err.to_string()),
+	};
+	matches_to_line_nodes(result.matches, cancel)
+}
+
+fn fs_locator_to_glob_pattern(loc: &FsLocator) -> String {
+	let mut out = String::new();
+	for seg in &loc.segments {
+		match seg {
+			FsSegment::Literal(s) => out.push_str(s),
+			FsSegment::Star => out.push('*'),
+			FsSegment::DoubleStar => out.push_str("**"),
+			FsSegment::Question => out.push('?'),
+			FsSegment::CharClass(chars) => {
+				out.push('[');
+				for c in chars {
+					out.push(*c);
+				}
+				out.push(']');
+			},
+			FsSegment::Brace { items, exclusions: _ } => {
+				out.push('{');
+				out.push_str(&items.join(","));
+				out.push('}');
+			},
+		}
+	}
+	out
+}
+
+fn text_search_error(message: String) -> Vec<NodeRef> {
+	vec![NodeRef {
+		locator:     "<text-search>".to_string(),
+		range:       0..0,
+		kind:        "§error".to_string(),
+		content:     None,
+		metadata:    HashMap::new(),
+		diagnostics: vec![Diagnostic {
+			variant: DiagnosticVariant::ParseError,
+			message,
+			span:    None,
+		}],
+	}]
+}
+
+fn matches_to_line_nodes(
+	matches: Vec<pi_text_search::SearchMatch>,
+	cancel: &CancellationToken,
+) -> Vec<NodeRef> {
+	let mut nodes = Vec::with_capacity(matches.len());
+	for matched in matches {
+		if cancel.is_cancelled() {
+			break;
+		}
+		let start = matched.absolute_byte_offset as usize;
+		let end = start.saturating_add(matched.line.len());
+		let mut metadata = HashMap::new();
+		metadata.insert("line".to_string(), serde_json::Value::Number(matched.line_number.into()));
+		metadata.insert("shape".to_string(), serde_json::Value::String("match".to_string()));
+		if matched.truncated {
+			metadata.insert("truncated".to_string(), serde_json::Value::Bool(true));
+		}
+		nodes.push(NodeRef {
+			locator: format!("{}::<line {}>", matched.path, matched.line_number),
+			range: start..end,
+			kind: "§line".to_string(),
+			content: Some(Content::Text { value: matched.line }),
+			metadata,
+			diagnostics: Vec::new(),
+		});
+	}
+	nodes
+}
+fn run_fast_line_search(
+	pattern: &str,
+	file_paths: &[PathBuf],
+	cancel: &CancellationToken,
+) -> Vec<NodeRef> {
+	let files: Vec<SearchFile> = file_paths
+		.iter()
+		.map(|path| SearchFile {
+			path:          path.clone(),
+			relative_path: path.to_string_lossy().to_string(),
+		})
+		.collect();
+	let result = match search_file_list(
+		pattern,
+		files,
+		false,
+		false,
+		SearchParams {
+			context_before: 0,
+			context_after:  0,
+			max_columns:    None,
+			mode:           pi_text_search::OutputMode::Content,
+			max_count:      None,
+			offset:         0,
+		},
+		pi_text_search::DEFAULT_MAX_FILE_BYTES,
+	) {
+		Ok(result) => result,
+		Err(err) => {
+			return vec![NodeRef {
+				locator:     "<text-search>".to_string(),
+				range:       0..0,
+				kind:        "§error".to_string(),
+				content:     None,
+				metadata:    HashMap::new(),
+				diagnostics: vec![Diagnostic {
+					variant: DiagnosticVariant::ParseError,
+					message: err.to_string(),
+					span:    None,
+				}],
+			}];
+		},
+	};
+	let mut nodes = Vec::with_capacity(result.matches.len());
+	for matched in result.matches {
+		if cancel.is_cancelled() {
+			break;
+		}
+		let start = matched.absolute_byte_offset as usize;
+		let end = start.saturating_add(matched.line.len());
+		let mut metadata = HashMap::new();
+		metadata.insert("line".to_string(), serde_json::Value::Number(matched.line_number.into()));
+		metadata.insert("shape".to_string(), serde_json::Value::String("match".to_string()));
+		if matched.truncated {
+			metadata.insert("truncated".to_string(), serde_json::Value::Bool(true));
+		}
+		nodes.push(NodeRef {
+			locator: format!("{}::<line {}>", matched.path, matched.line_number),
+			range: start..end,
+			kind: "§line".to_string(),
+			content: Some(Content::Text { value: matched.line }),
+			metadata,
+			diagnostics: Vec::new(),
+		});
+	}
+	nodes
+}
 fn apply_step(content: &[u8], step: &Step, path: &std::path::Path) -> Vec<NodeRef> {
 	let mut nodes = match &step.head {
 		Head::NodeKind(kind) => match kind.as_str() {

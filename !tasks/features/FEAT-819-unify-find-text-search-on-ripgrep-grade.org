@@ -1,0 +1,262 @@
+#+TITLE: Unify find text search on ripgrep-grade Rust engine
+#+STATE: DONE
+#+SESSION_ID: 150a4b29aba76a4a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-15T15-47-24-974Z_150a4b29aba76a4a.jsonl]]
+#+AGENT: coding-agent
+#+CUSTOM_ID: FEAT-819-unify-find-text-search-on-ripgrep-grade
+#+LAYER: kernel
+#+PRIORITY: A
+#+TAGS: find,codepath,grep,performance
+
+* Initial Message
+
+queries like this are super slow:  ⏳ Find: **/*::§line[text~="overloaded_error|overloaded"]
+
+
+
+ ⏳ Find: **/*::§line[text~="glm|GLM"]
+
+
+(in this repo)
+
+how does ripgrep do it? in the pi-natives? and how does find do it too? does it ignore gitignore by default?
+
+ANALYSIS please, give me a report
+
+* Problem
+Repo-wide CodePath text queries are pathologically slow compared to ripgrep/native grep:
+
+- =find "**/*::§line[text~=\"overloaded_error|overloaded\"]"= measured ≈36.9s in this repo.
+- =find "**/*::§line[text~=\"glm|GLM\"]"= measured ≈34.4s in this repo.
+- Native pi grep / rg equivalents measured ≈0.5–1.3s.
+
+Root cause: =find= / CodePath TextResolver does not use the existing ripgrep-grade search engine. It walks files, reads each file fully, builds a line index, tests regex per line, and allocates CodePath nodes. Separately, =pi-natives::grep= already uses the ripgrep crate family (=grep-regex=, =grep-searcher=, =grep-matcher=) plus ignore/glob/rayon. This is a parallel implementation of the same need.
+
+User requirement: no parallel impl. Make =find= fast, period. Prefer a Rust package/shared crate over shelling out to =rg= unless analysis proves otherwise.
+
+* Decision
+Use ripgrep's Rust crates as the canonical text-search substrate, not the =rg= subprocess.
+
+Create a host-agnostic shared crate (proposed: =crates/pi-text-search=) that owns text search and filesystem walking for grep-like needs. Then:
+
+- =pi-natives::grep= becomes a NAPI DTO/task wrapper over =pi-text-search=.
+- =pi-code-path::TextResolver= delegates =§line[text~=...]= / =match= search to =pi-text-search= and maps matches to CodePath =NodeRef=s.
+- Existing per-line regex logic in TextResolver is retained only for non-search line operations or fallback semantics, not as a repo-wide text-search engine.
+
+Do not introduce a subprocess dependency on =rg=.
+
+* Rationale
+** Why not =rg= subprocess
+- Subprocess startup on every =find=.
+- stdout parsing, escaping, captures/context mapping, and binary/error semantics become fragile process plumbing.
+- Packaging/version drift across environments.
+- Harder cancellation and streaming integration.
+- Harder to produce exact CodePath =NodeRef= metadata and byte ranges robustly.
+
+** Why ripgrep crates
+- Already used in =crates/pi-natives/src/grep.rs=.
+- =grep_searcher::Searcher= provides efficient line-oriented search, multiline support, context lines, binary detection, mmap decisions, and =SinkMatch= metadata.
+- =SinkMatch= exposes =line_number()=, =absolute_byte_offset()=, =bytes()=, and =bytes_range_in_buffer()=, sufficient to map results back into CodePath line nodes.
+- Keeps search core host-agnostic and reusable by NAPI, future Rustler/BEAM skins, and CodePath kernel.
+
+* Current relevant files
+- =packages/coding-agent/src/tools/find.ts= — find tool delegates to GetTool / executeCodePath.
+- =packages/coding-agent/src/tools/get.ts= — calls =executeCodePath({ command: "get", target, root, gitignore })=.
+- =crates/pi-natives/src/code_path/napi.rs= — NAPI executeCodePath DTO/task options.
+- =crates/pi-kernel/src/parse.rs= — routes pure text queries to TextResolver.
+- =crates/pi-code-path/src/dialects/text/mod.rs= — TextResolver walks files and applies line steps.
+- =crates/pi-code-path/src/dialects/text/axes.rs= — current per-file =Matcher= and =line_steps= implementation.
+- =crates/pi-code-path/src/dialects/fs/walker.rs= — CodePath ignore/glob walker.
+- =crates/pi-natives/src/grep.rs= — existing ripgrep-crate based NAPI grep implementation.
+- =crates/pi-natives/src/fs_cache.rs= — existing native grep scan cache/walker integration.
+
+* Proposed design
+** New shared crate
+Create =crates/pi-text-search=.
+
+Dependencies:
+- =grep-regex= / =grep-searcher= / =grep-matcher=
+- =ignore=
+- =globset=
+- =rayon=
+- =serde= optional, only if DTO serialization is useful
+- =thiserror= or simple error type if needed
+
+Proposed API sketch:
+
+#+begin_src rust
+pub struct TextSearchQuery {
+    pub root: PathBuf,
+    pub path: PathBufOrGlob,
+    pub pattern: SearchPattern,
+    pub ignore_case: bool,
+    pub multiline: bool,
+    pub gitignore: bool,
+    pub hidden: bool,
+    pub glob: Option<String>,
+    pub type_filter: Option<TypeFilter>,
+    pub context_before: u32,
+    pub context_after: u32,
+    pub max_columns: Option<u32>,
+    pub max_count: Option<u64>,
+    pub offset: u64,
+    pub max_file_bytes: Option<u64>,
+    pub output_mode: OutputMode,
+}
+
+pub enum SearchPattern {
+    Regex(String),
+    Literal(String),
+}
+
+pub struct TextMatch {
+    pub path: String,
+    pub line_number: u64,
+    pub line: String,
+    pub context_before: Vec<ContextLine>,
+    pub context_after: Vec<ContextLine>,
+    pub truncated: bool,
+    pub absolute_byte_offset: u64,
+    pub bytes_range_in_buffer: Range<usize>,
+    pub match_count: Option<u64>,
+}
+
+pub struct TextSearchResult {
+    pub matches: Vec<TextMatch>,
+    pub total_matches: u64,
+    pub files_with_matches: u64,
+    pub files_searched: u64,
+    pub limit_reached: bool,
+}
+#+end_src
+
+The exact shape can differ, but it must support both existing =pi-natives::grep= DTOs and CodePath =NodeRef= mapping for =§line[text~=...]=.
+
+** Shared walker behavior
+Pin defaults once:
+- =gitignore=true= by default.
+- =hidden=true= by default, preserving Pi behavior even though CLI =rg= normally excludes hidden files.
+
+Walker should honour:
+- =.gitignore=
+- =.ignore=
+- =.git/info/exclude=
+- global gitignore
+- parent ignore files
+
+** pi-natives integration
+Refactor =crates/pi-natives/src/grep.rs=:
+- Keep NAPI option/result structs unless TS API changes are explicitly needed.
+- Move/replace search internals with calls into =pi-text-search=.
+- Preserve behavior for =search()= in-memory content search, =grep()= filesystem search, output modes, maxCount/offset, context, truncation, type filters, and callback streaming if supported today.
+
+** CodePath TextResolver integration
+In =crates/pi-code-path/src/dialects/text/mod.rs=:
+- Detect canonical fast-search shape before current per-file =std::fs::read + apply_step= loop.
+- For =§line[text~=PATTERN]= and =§line[match=LITERAL]=, call =pi-text-search=.
+- Map =TextMatch= to =NodeRef= with locator =path::<line N>=, kind =§line=, content=line, and metadata =line= + =shape: match=.
+- Preserve fallback for ranges/ordinal/last/len/non-search predicates and unsupported combinator/qualifier semantics.
+
+** Future structural prefilter
+After line search is unified, extend =find= performance for structural + text predicates such as =**/*.ts::§function[text~="retry"]=: grep prefilter candidate files, then tree-sitter parse/evaluate only those files.
+
+* Implementation plan
+** Phase 1 — Extract shared search core
+- Add =crates/pi-text-search=.
+- Move canonical matcher/searcher/collector/walker logic out of =pi-natives/src/grep.rs=.
+- Wire =Cargo.toml= workspace member automatically via =crates/*=; add dependencies to =pi-natives= and =pi-code-path=.
+- Preserve existing native grep tests.
+
+** Phase 2 — Rewire native grep wrapper
+- =pi-natives::grep= calls =pi-text-search=.
+- Remove duplicate internal search logic where possible.
+- Keep public NAPI result shapes stable.
+
+** Phase 3 — Route CodePath =§line[text~=]= to shared search
+- Add fast/canonical route in TextResolver.
+- Map shared search result to =NodeRef=.
+- Retain old line-index path only for non-search line operations/fallback.
+
+** Phase 4 — Bench + harden
+- Benchmark the two user examples.
+- Add tests for default ignore behavior, hidden behavior, regex alternation, invalid regex, context lines, single-file and glob paths.
+
+* Acceptance criteria
+Functional:
+- =find "**/*::§line[text~=\"overloaded_error|overloaded\"]"= returns expected visible matches and is fast in this repo.
+- =find "**/*::§line[text~=\"glm|GLM\"]"= returns expected visible matches and is fast in this repo.
+- Existing =@spell/pi-natives= grep API remains source-compatible.
+- =find= still respects =.gitignore= by default.
+- =find= still includes hidden files by default unless existing tool-level semantics are intentionally changed and documented.
+- =§line[range]= / ordinal line operations keep working.
+
+Performance:
+- Target repo-wide =§line[text~=...]= runtime: same order as native grep/rg, ideally <2s for the two measured queries in this repo.
+- Avoid full-file line-index construction for grep-shaped queries.
+
+Verification commands:
+#+begin_src sh
+cargo test -p pi-text-search
+cargo test -p pi-natives grep
+cargo test -p pi-code-path text
+bun run --parallel check:ts check:rs
+#+end_src
+
+Manual benchmark/proof:
+#+begin_src sh
+bun -e 'import { executeCodePath } from "./packages/natives/src/index.ts"; const root=process.cwd(); for (const target of ["**/*::§line[text~=\"overloaded_error|overloaded\"]", "**/*::§line[text~=\"glm|GLM\"]"]) { const t=performance.now(); const chunks=await executeCodePath({command:"get", target, root, gitignore:true}); const nodes=chunks.flatMap(c=>c.nodes); console.log(target, "ms", Math.round(performance.now()-t), "nodes", nodes.length); }'
+#+end_src
+
+* Risks / edge cases
+- Byte range mapping: CodePath nodes prefer accurate byte ranges. =grep_searcher::SinkMatch= exposes offsets, but mapping full line ranges may require care.
+- Match count semantics: native grep count mode vs CodePath one-node-per-line semantics may differ; preserve existing public contracts separately.
+- Context semantics: grep context and CodePath =<<= / =>>= context combinators must remain compatible or explicitly fallback.
+- Binary/large file behavior: native grep currently caps file reads at 4 MiB for file search. TextResolver currently reads full files. New shared behavior must be pinned by tests.
+- Invalid regex diagnostics: preserve useful CodePath diagnostics rather than silently returning no matches.
+- Dependency layering: =pi-code-path= must not depend on =pi-natives=. Shared crate must remain host-agnostic.
+
+* Notes from investigation
+Measured current behavior in this repo:
+- =executeCodePath= for overloaded query: ≈36.9s, 24 nodes.
+- =executeCodePath= for glm query: ≈34.4s, 543 nodes.
+- native =grep= for overloaded query: ≈1.35s, 24 matches, 6874 files searched.
+- native =grep= for glm query: ≈0.54s, 453 matches, 6874 files searched.
+- CLI =rg= for overloaded query: ≈0.96s.
+- CLI =rg= for glm query: ≈0.68s.
+
+Conclusion: the slow path is architectural, not incidental. =find= must use the same canonical Rust search substrate as native grep.
+
+NOTE [2026-06-15]: Implemented shared Rust text-search substrate and rewired consumers.
+
+Changes:
+- Added crates/pi-text-search with grep-regex/grep-searcher/grep-matcher + ignore/globset/rayon based content/file search API.
+- Rewrote crates/pi-natives/src/grep.rs as NAPI wrapper over pi-text-search, removing the native-owned grep engine implementation.
+- Wired pi-text-search into pi-natives and pi-code-path Cargo manifests.
+- Added TextResolver fast routing for §line[text~=...] / §line[match=...] to use pi-text-search and map matches back into CodePath §line NodeRefs.
+
+Verification:
+- cargo check -p pi-text-search: pass.
+- cargo check -p pi-code-path -p pi-natives: pass.
+- cargo test -p pi-text-search && cargo test -p pi-code-path text && cargo test -p pi-natives grep: pass.
+- Native grep benchmark after rebuild remains fast: overloaded query ≈484ms, glm query ≈793ms.
+
+Caveat:
+- Manual executeCodePath benchmark in the current API process still showed slow find timings and absolute .git/index locator evidence, indicating the exercised addon/session path may still be taking the file-list fallback or stale loaded native path rather than the new pre-walk locator fast path. Code-level routing is implemented and tests compile/pass, but a follow-up should add an explicit e2e assertion that executeCodePath(**/*::§line[text~=...]) returns relative-path locator output from the pre-walk fast path and does not enter the legacy file-list scan.
+
+NOTE [2026-06-15]: Follow-up benchmark after clearing/replacing the stale dev native addon path.
+
+Finding:
+- Loader in dev workspace preferred packages/natives/native/pi_natives.dev.node before release pi_natives.linux-x64-modern.node.
+- Previous slow executeCodePath benchmark was using stale pi_natives.dev.node, confirmed with PI_DEV=1 loader log.
+- Rebuilt dev addon with bun run dev:native, replacing the stale cache/load target.
+
+Fresh-process executeCodePath benchmark after rebuild:
+- **/*::§line[text~=\"overloaded_error|overloaded\"] → 561ms, 36 nodes, first locator !tasks/bugs/BUG-361-resolvetocwd-silently-nests-paths-for-br.org::<line 38>
+- **/*::§line[text~=\"glm|GLM\"] → 424ms, 501 nodes, first locator !tasks/bugs/BUG-486-zai-coding-plan-uses-stale-anthropic-end.org::<line 12>
+
+PI_DEV=1 explicit-loader run:
+- Loaded native addon from /home/user/code/ora/spell/packages/natives/native/pi_natives.dev.node
+- overloaded query → 556ms, 36 nodes
+- glm query → 452ms, 501 nodes
+
+Conclusion: live executeCodePath now uses the fast shared pi-text-search route. The earlier fallback-looking result was a stale dev addon/load-cache issue, not the new source route.

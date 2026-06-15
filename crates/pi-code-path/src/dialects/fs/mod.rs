@@ -154,6 +154,16 @@ impl Resolver for FsResolver {
 				});
 				return Ok(nodes);
 			}
+			// Directory-recursion qualifiers (`#tree`, `#listing`) own their own walk.
+			// A bare directory locator pre-resolves to its FULL recursive descendant
+			// set (the glob walk), so applying the qualifier to every node would walk
+			// nested subtrees repeatedly and concatenate duplicates. Collapse the set
+			// to its "top" nodes — those NOT contained by another matched directory —
+			// so the qualifier recurses exactly once per disjoint base. Genuinely
+			// disjoint bases (e.g. `*/#tree`) survive; nested descendants are dropped.
+			if matches!(qual.name.as_str(), "tree" | "listing") {
+				nodes = collapse_to_top_dirs(nodes);
+			}
 			let mut out = Vec::new();
 			for n in nodes {
 				// BUG-371: §not-found is a sentinel node carrying DID_YOU_MEAN
@@ -177,6 +187,47 @@ impl Resolver for FsResolver {
 		}
 		Ok(nodes)
 	}
+}
+
+/// Reduce a pre-walked node set to its "top" entries for a directory-recursion
+/// qualifier: keep a node only when NO other node in the set is a strict path
+/// ancestor of it. A bare directory locator expands (via the recursive glob
+/// walk) to every descendant; without this, `#tree`/`#listing` would re-walk
+/// each nested directory and emit overlapping, duplicated subtrees.
+///
+/// Path containment is computed on normalised `/`-separated segments so a name
+/// like `srcfoo` is not treated as living under `src`. Sentinel nodes
+/// (`§not-found`, `§invalid-pattern`, …) are always retained — the qualifier
+/// loop handles them separately.
+fn collapse_to_top_dirs(nodes: Vec<NodeRef>) -> Vec<NodeRef> {
+	if nodes.len() <= 1 {
+		return nodes;
+	}
+	fn segments(loc: &str) -> Vec<&str> {
+		loc.split('/').filter(|s| !s.is_empty() && *s != ".").collect()
+	}
+	fn is_ancestor(anc: &[&str], desc: &[&str]) -> bool {
+		anc.len() < desc.len() && desc.starts_with(anc)
+	}
+	let is_fs = |kind: &str| matches!(kind, "§dir" | "§file" | "§symlink");
+	let seg_list: Vec<Vec<&str>> = nodes.iter().map(|n| segments(&n.locator)).collect();
+	let mut keep = Vec::with_capacity(nodes.len());
+	for (i, n) in nodes.iter().enumerate() {
+		if !is_fs(&n.kind) {
+			keep.push(true);
+			continue;
+		}
+		// Drop this node if any OTHER fs node is a strict path ancestor of it.
+		let contained = nodes.iter().enumerate().any(|(j, other)| {
+			j != i && is_fs(&other.kind) && is_ancestor(&seg_list[j], &seg_list[i])
+		});
+		keep.push(!contained);
+	}
+	nodes
+		.into_iter()
+		.zip(keep)
+		.filter_map(|(n, k)| if k { Some(n) } else { None })
+		.collect()
 }
 
 #[cfg(test)]
@@ -398,6 +449,39 @@ mod tests {
 		let resolver = FsResolver::new(root);
 		let nodes = resolver.resolve(&cp, &CancellationToken::new()).unwrap();
 		assert!(!nodes.is_empty(), "`.` must resolve to the walker root, got empty result");
+	}
+
+	#[test]
+	fn tree_on_walk_root_has_no_duplicate_subtrees() {
+		// A bare directory locator (here the walk root via `.`) pre-resolves to its
+		// full recursive descendant set; `#tree` must collapse that to a single base
+		// walk, NOT re-walk every nested directory and concatenate duplicates.
+		use crate::ast::Qualifier;
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		fs::create_dir_all(root.join("src/inner")).unwrap();
+		fs::write(root.join("src/main.rs"), "").unwrap();
+		fs::write(root.join("src/inner/lib.rs"), "").unwrap();
+		fs::write(root.join("a.txt"), "").unwrap();
+
+		let cp = CodePath {
+			locator:   Locator::Fs(FsLocator { segments: vec![FsSegment::Literal(".".to_string())] }),
+			query:     None,
+			qualifier: Some(Qualifier { name: "tree".to_string(), args: None }),
+		};
+		let resolver = FsResolver::new(root);
+		let nodes = resolver.resolve(&cp, &CancellationToken::new()).unwrap();
+		let locators: Vec<_> = nodes.iter().map(|n| n.locator.clone()).collect();
+		// Each path appears exactly once — no duplicated subtrees.
+		let mut seen = std::collections::HashSet::new();
+		for l in &locators {
+			assert!(seen.insert(l.clone()), "duplicate node `{l}` in tree: {locators:?}");
+		}
+		// And the nested grandchild is present (full recursion happened once).
+		assert!(
+			locators.iter().any(|l| l.ends_with("src/inner/lib.rs")),
+			"nested file present: {locators:?}"
+		);
 	}
 
 	#[test]

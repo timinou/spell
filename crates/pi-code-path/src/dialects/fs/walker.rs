@@ -1,6 +1,6 @@
 use std::{
 	collections::HashMap,
-	path::PathBuf,
+	path::{Path, PathBuf},
 	sync::{Arc, Mutex},
 };
 
@@ -37,7 +37,7 @@ pub fn walk(
 	opts: &WalkOpts,
 	cancel: &CancellationToken,
 ) -> Vec<Result<NodeRef, Diagnostic>> {
-	let pattern = fs_locator_to_glob(loc);
+	let pattern = fs_locator_to_glob(loc, &opts.root);
 	let mut builder = WalkBuilder::new(&opts.root);
 	builder.hidden(!opts.hidden);
 	builder.git_ignore(opts.gitignore);
@@ -65,7 +65,7 @@ pub fn walk(
 			return results;
 		},
 	};
-	let negative_globsets = build_negative_globsets(loc);
+	let negative_globsets = build_negative_globsets(loc, &opts.root);
 
 	// Parallel walk: `WalkBuilder::build_parallel` drives a per-thread visitor
 	// closure. Cross-file order becomes nondeterministic, but `find` results are
@@ -172,7 +172,7 @@ fn build_globset(pattern: &str) -> Result<Option<globset::GlobSet>, String> {
 		.map(Some)
 		.map_err(|e| format!("invalid glob pattern `{pattern}`: {e}"))
 }
-fn build_negative_globsets(loc: &FsLocator) -> Vec<globset::GlobSet> {
+fn build_negative_globsets(loc: &FsLocator, root: &Path) -> Vec<globset::GlobSet> {
 	let segments = if loc.segments.len() == 1 {
 		if let FsSegment::Literal(raw) = &loc.segments[0] {
 			parser::tokenise_fs_path(raw).unwrap_or_else(|_| loc.segments.clone())
@@ -228,6 +228,9 @@ fn build_negative_globsets(loc: &FsLocator) -> Vec<globset::GlobSet> {
 						},
 					}
 				}
+				// BUG-473: re-relativize so negative patterns match the same
+				// root-relative `rel` strings the positive glob is tested against.
+				let pattern = normalize_glob_to_root(&pattern, root);
 				if let Ok(Some(gs)) = build_globset(&pattern) {
 					result.push(gs);
 				}
@@ -236,7 +239,7 @@ fn build_negative_globsets(loc: &FsLocator) -> Vec<globset::GlobSet> {
 	}
 	result
 }
-fn fs_locator_to_glob(loc: &FsLocator) -> String {
+fn fs_locator_to_glob(loc: &FsLocator, root: &Path) -> String {
 	let segments = if loc.segments.len() == 1 {
 		if let FsSegment::Literal(raw) = &loc.segments[0] {
 			parser::tokenise_fs_path(raw).unwrap_or_else(|_| loc.segments.clone())
@@ -282,13 +285,85 @@ fn fs_locator_to_glob(loc: &FsLocator) -> String {
 			},
 		}
 	}
-	// BUG-372: `.` and `./` are the cwd alias — walk the root unfiltered.
-	// build_globset returns None for an empty pattern, which is exactly the
-	// "no glob filter" path the walker already honours for `**`.
-	if out == "." || out == "./" {
+	// BUG-473: re-relativize the pattern against `root` so EVERY spelling of the
+	// same target resolves identically. The walker matches `glob.is_match(rel)`
+	// where `rel = path.strip_prefix(root)` is always root-relative, slash-
+	// separated, with no leading `/`, no `.`/`..`, and no trailing `/`. An
+	// absolute pattern, a `.`/`..`-bearing pattern, or a trailing-slash dir-glob
+	// therefore never matched even when it addressed a real file under root.
+	// `normalize_glob_to_root` lifts the pattern to absolute (lexically, against
+	// root), resolves `.`/`..`, and strips the root prefix — subsuming the old
+	// `.`/`./` → unfiltered special case (BUG-372).
+	normalize_glob_to_root(&out, root)
+}
+
+/// BUG-473: make a raw glob `pattern` (built from locator segments) MATCHABLE
+/// against the root-relative paths the walker produces.
+///
+/// The walker enumerates entries under `root` and tests `glob.is_match(rel)`
+/// where `rel` is ALWAYS root-relative, `/`-separated, with no leading `/`, no
+/// `.`/`..`, and no trailing `/`. A pattern that is absolute, carries `.`/`..`,
+/// or ends in `/` thus never matched even when addressing a real file under
+/// root. Re-relativizing here makes all spellings equivalent:
+///   `crates/*` == `/abs/root/crates/*` == `crates/*/` == `./crates/*`
+///   (and `../root/crates/*` when it stays within `root`).
+///
+/// Purely lexical (no filesystem access); glob metacharacters (`* ? [ ] { }`)
+/// are preserved as ordinary path components for the `/`-split. A pattern that
+/// lexically ESCAPES `root` is returned unchanged: it cannot match the
+/// under-root walk (0 results) — the correct outcome, since the host skin
+/// re-roots before reaching the kernel when an out-of-root read is intended.
+/// An empty pattern or `**` means "unfiltered walk" and passes through.
+fn normalize_glob_to_root(pattern: &str, root: &Path) -> String {
+	if pattern.is_empty() || pattern == "**" {
+		return pattern.to_string();
+	}
+	let root_str = root.to_string_lossy();
+	let root_trim = root_str.trim_end_matches('/');
+	// 1. Lift the pattern to an absolute lexical path string.
+	let abs = if pattern.starts_with('/') {
+		pattern.to_string()
+	} else {
+		format!("{root_trim}/{pattern}")
+	};
+	// 2. Lexically resolve `.`/`..`/empty components (glob tokens untouched).
+	let norm = lexical_normalize(&abs);
+	let root_norm = lexical_normalize(root_trim);
+	// 3. Re-relativize when the pattern stays within root.
+	if norm == root_norm {
+		// Addresses root itself → unfiltered walk (legacy `.`/`./` behaviour).
 		return String::new();
 	}
-	out
+	let prefix = format!("{root_norm}/");
+	if let Some(rel) = norm.strip_prefix(&prefix) {
+		return rel.to_string();
+	}
+	// Escapes root (or root is filesystem root `/`) → cannot match under-root walk.
+	norm
+}
+
+/// Lexical path normalization on a `/`-delimited string: resolves `.` and `..`,
+/// drops empty (repeated/trailing `/`) components. Preserves a leading `/`.
+/// Never touches the filesystem; glob metacharacters are ordinary components.
+fn lexical_normalize(p: &str) -> String {
+	let is_abs = p.starts_with('/');
+	let mut out: Vec<&str> = Vec::new();
+	for comp in p.split('/') {
+		match comp {
+			"" | "." => {},
+			".." => {
+				if matches!(out.last(), Some(&c) if c != "..") {
+					out.pop();
+				} else if !is_abs {
+					out.push("..");
+				}
+				// absolute + leading `..` → dropped (cannot climb above `/`).
+			},
+			other => out.push(other),
+		}
+	}
+	let joined = out.join("/");
+	if is_abs { format!("/{joined}") } else { joined }
 }
 
 #[cfg(test)]
@@ -445,5 +520,116 @@ mod tests {
 			"expected a diagnostic naming the invalid glob; got: {:?}",
 			diags.iter().map(|d| &d.message).collect::<Vec<_>>(),
 		);
+	}
+
+	// ── BUG-473: locator-spelling invariance ────────────────────────────────
+	// The SAME target, addressed via {relative, absolute, `.`-prefixed,
+	// trailing-slash, `..`-within-root} spellings, MUST resolve to the SAME node
+	// set. Before the fix, absolute / `..` / trailing-slash patterns silently
+	// matched nothing because the glob carried a leading `/`, a literal `..`, or a
+	// trailing `/` that never matched the walker's root-relative `rel` strings.
+
+	/// Parse a raw path string the way the host skin hands it to the walker:
+	/// a single Literal segment, which `fs_locator_to_glob` re-tokenises.
+	fn loc_from(raw: &str) -> FsLocator {
+		FsLocator { segments: vec![FsSegment::Literal(raw.to_string())] }
+	}
+
+	fn walk_locators(loc: &FsLocator, root: &PathBuf) -> Vec<String> {
+		let opts = WalkOpts { hidden: true, gitignore: true, root: root.clone() };
+		let mut out: Vec<String> = walk(loc, &opts, &CancellationToken::new())
+			.into_iter()
+			.filter_map(|r| r.ok())
+			.map(|n| n.locator)
+			.collect();
+		out.sort();
+		out
+	}
+
+	#[test]
+	fn glob_spelling_invariance_file_glob() {
+		let (_dir, root) = make_walker_root();
+		let root_str = root.to_string_lossy().to_string();
+		let base = walk_locators(&loc_from("src/*.rs"), &root);
+		assert_eq!(base.len(), 2, "baseline relative glob should match 2 files");
+
+		// Absolute spelling of the same glob.
+		assert_eq!(walk_locators(&loc_from(&format!("{root_str}/src/*.rs")), &root), base);
+		// `./`-prefixed spelling.
+		assert_eq!(walk_locators(&loc_from("./src/*.rs"), &root), base);
+		// `..`-within-root spelling: dip into tests/ then back up to src/.
+		assert_eq!(walk_locators(&loc_from("tests/../src/*.rs"), &root), base);
+		// Absolute with a redundant `.` component.
+		assert_eq!(walk_locators(&loc_from(&format!("{root_str}/./src/*.rs")), &root), base);
+	}
+
+	#[test]
+	fn glob_spelling_invariance_dir_glob_trailing_slash() {
+		let (_dir, root) = make_walker_root();
+		let root_str = root.to_string_lossy().to_string();
+		// `src/*` enumerates entries under src/ (files here). The trailing-slash
+		// form `src/*/` previously returned nothing; it must now equal `src/*`
+		// restricted to directories — but since src/ has only files, both forms
+		// resolve identically once normalized (the trailing `/` is stripped).
+		let no_slash = walk_locators(&loc_from("src/*"), &root);
+		let with_slash = walk_locators(&loc_from("src/*/"), &root);
+		assert_eq!(with_slash, no_slash, "trailing-slash dir-glob must match the slashless form");
+		// Absolute trailing-slash spelling agrees too.
+		assert_eq!(walk_locators(&loc_from(&format!("{root_str}/src/*/")), &root), no_slash,);
+	}
+
+	#[test]
+	fn glob_spelling_invariance_recursive_glob() {
+		let (_dir, root) = make_walker_root();
+		let root_str = root.to_string_lossy().to_string();
+		let base = walk_locators(&loc_from("**/*.rs"), &root);
+		assert!(base.len() >= 3, "baseline recursive glob should match all .rs files");
+		assert_eq!(walk_locators(&loc_from(&format!("{root_str}/**/*.rs")), &root), base);
+		assert_eq!(walk_locators(&loc_from("./**/*.rs"), &root), base);
+	}
+
+	#[test]
+	fn glob_spelling_invariance_plain_file() {
+		let (_dir, root) = make_walker_root();
+		let root_str = root.to_string_lossy().to_string();
+		let base = walk_locators(&loc_from("src/main.rs"), &root);
+		assert_eq!(base, vec!["src/main.rs".to_string()]);
+		assert_eq!(walk_locators(&loc_from(&format!("{root_str}/src/main.rs")), &root), base);
+		assert_eq!(walk_locators(&loc_from("./src/main.rs"), &root), base);
+		assert_eq!(walk_locators(&loc_from("tests/../src/main.rs"), &root), base);
+	}
+
+	#[test]
+	fn normalize_glob_to_root_unit() {
+		let root = Path::new("/proj/root");
+		// Relative passes through unchanged.
+		assert_eq!(normalize_glob_to_root("src/*.rs", root), "src/*.rs");
+		// Absolute-under-root → relative.
+		assert_eq!(normalize_glob_to_root("/proj/root/src/*.rs", root), "src/*.rs");
+		// `.` / `..` resolution.
+		assert_eq!(normalize_glob_to_root("./src/*.rs", root), "src/*.rs");
+		assert_eq!(normalize_glob_to_root("a/../src/*.rs", root), "src/*.rs");
+		// Trailing slash stripped.
+		assert_eq!(normalize_glob_to_root("src/*/", root), "src/*");
+		// Root itself → empty (unfiltered).
+		assert_eq!(normalize_glob_to_root(".", root), "");
+		assert_eq!(normalize_glob_to_root("/proj/root", root), "");
+		assert_eq!(normalize_glob_to_root("/proj/root/", root), "");
+		// `**` and empty pass through (unfiltered).
+		assert_eq!(normalize_glob_to_root("**", root), "**");
+		assert_eq!(normalize_glob_to_root("", root), "");
+		// Escaping root → returned as absolute (cannot match under-root walk).
+		assert_eq!(normalize_glob_to_root("/other/x", root), "/other/x");
+		assert_eq!(normalize_glob_to_root("../sibling/x", root), "/proj/sibling/x");
+	}
+
+	#[test]
+	fn lexical_normalize_unit() {
+		assert_eq!(lexical_normalize("/a/b/../c"), "/a/c");
+		assert_eq!(lexical_normalize("/a/./b"), "/a/b");
+		assert_eq!(lexical_normalize("a//b/"), "a/b");
+		assert_eq!(lexical_normalize("/a/../../b"), "/b"); // can't climb above root
+		assert_eq!(lexical_normalize("../a"), "../a");
+		assert_eq!(lexical_normalize("/"), "/");
 	}
 }
