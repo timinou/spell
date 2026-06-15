@@ -142,9 +142,11 @@ export async function transformRequestBody(
 		delete body.reasoning;
 	}
 
+	// Verbosity defaults to `low`: terse-by-default house style. Orthogonal to
+	// reasoning effort (depth). Callers override via StreamOptions.textVerbosity.
 	body.text = {
 		...body.text,
-		verbosity: options.textVerbosity || "medium",
+		verbosity: options.textVerbosity || "low",
 	};
 
 	const include = Array.isArray(options.include) ? [...options.include] : [];

@@ -39,3 +39,19 @@ describe("openai-codex include handling", () => {
 		expect(transformed.include).toEqual(["foo", "reasoning.encrypted_content"]);
 	});
 });
+
+describe("openai-codex text verbosity", () => {
+	it("defaults verbosity to low (terse-by-default house style)", async () => {
+		const body: RequestBody = { model: "gpt-5.1-codex" };
+		const transformed = await transformRequestBody(body, createCodexModel(body.model), {});
+		expect((transformed.text as { verbosity?: string }).verbosity).toBe("low");
+	});
+
+	it("honors an explicit textVerbosity override", async () => {
+		const body: RequestBody = { model: "gpt-5.1-codex" };
+		const transformed = await transformRequestBody(body, createCodexModel(body.model), {
+			textVerbosity: "high",
+		});
+		expect((transformed.text as { verbosity?: string }).verbosity).toBe("high");
+	});
+});
