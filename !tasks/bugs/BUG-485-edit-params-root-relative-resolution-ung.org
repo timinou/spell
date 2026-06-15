@@ -1,0 +1,34 @@
+#+TITLE: edit params.root relative resolution unguarded; doubled root bakes nesting before per-op guard
+#+STATE: DONE
+#+SESSION_ID: 150a03262cd1a8d8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-15T10-32-47-027Z_150a03262cd1a8d8.jsonl]]
+#+CUSTOM_ID: BUG-485-edit-params-root-relative-resolution-ung
+
+* Initial Message
+
+look at commits 4f734a0b and maybe 4dfc2069 in ~/code/ora/verse and when the files were created. Please trace this back to a potential bug in spell that exposed files cross-project (either through the spell server or something else). Pinpoint what each file/folder was originally meant for and spelunk in the ~/.spell/agent directory to explain it in details
+
+* Initial Message
+
+Found during the path-surface audit for the cross-project leak (BUG-481). edit.ts computed effectiveCwd with raw nodePath.resolve(sessionCwd, params.root) for a relative root. effectiveCwd is the BASE every per-op target then resolves against, so a duplicated/wrong relative root bakes the nesting in BEFORE the per-op resolveCwdRelativePath guard runs — the per-op guard (relative to the already-doubled base) can never see it.
+
+* Repro
+
+#+begin_src
+cwd = /proj/apps/foo
+edit { root: "apps/foo", operations: [{ target: "lib/x.ts", ... }] }
+OLD: effectiveCwd = path.resolve(cwd, "apps/foo") = /proj/apps/foo/apps/foo
+   → target lib/x.ts resolves under the doubled dir
+   → real file /proj/apps/foo/lib/x.ts untouched; edit lands in/forms wrong tree
+#+end_src
+
+This was the last raw path.resolve on a WRITE anchor (all per-op targets + create/send-file/browser already route through resolveCwdRelativePath; reads via get/find/image-input/mode-guard are not leak vectors since a wrong path is ENOENT, not a created file).
+
+* Fix (commit pending)
+
+Route a relative params.root through resolveCwdRelativePath(sessionCwd, root, { mode:"dir", projectRoot: getRepoRoot() }) before it becomes effectiveCwd. The project-root walk-up resolves a duplicated root back to the real directory; a degenerate root (root == cwd-tail) falls back to sessionCwd; any coalesce/sibling warning is surfaced via a new #appendWarning on both the single-op and aggregate result paths. Absolute root unchanged.
+
+* Acceptance
+
+- edit-root-threading.test.ts: duplicated relative root resolves to the real dir, no doubled tree; existing absolute + plain-relative root behavior unchanged.
+- 66/66 across path-resolution + edit suites green; tsgo clean on edit.ts.

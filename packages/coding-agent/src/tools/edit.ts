@@ -146,12 +146,32 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		// back to `session.cwd`. Always absolute (resolved against sessionCwd
 		// when relative). Threaded into both fs path resolution and the
 		// kernel call's `root` so the two stay in lockstep.
-		const effectiveCwd =
-			params.root && params.root.length > 0
-				? nodePath.isAbsolute(params.root)
-					? params.root
-					: nodePath.resolve(sessionCwd, params.root)
-				: sessionCwd;
+		//
+		// BUG-485: a RELATIVE `root` is itself subject to cwd-prefix duplication
+		// (e.g. cwd=/proj/apps/foo + root="apps/foo" → /proj/apps/foo/apps/foo).
+		// Because effectiveCwd is the BASE every per-op target then resolves
+		// against, a doubled root bakes the nesting in BEFORE the per-op guard
+		// runs — so the per-op guard can never see it. Guard the root here with the
+		// same resolver (mode:"dir"); a degenerate root (root == cwd-tail) safely
+		// falls back to sessionCwd, and any coalesce/sibling warning is surfaced.
+		let rootWarning: string | null = null;
+		let effectiveCwd: string;
+		if (params.root && params.root.length > 0) {
+			if (nodePath.isAbsolute(params.root)) {
+				effectiveCwd = params.root;
+			} else {
+				const rootResolved = resolveCwdRelativePath(sessionCwd, params.root, {
+					mode: "dir",
+					projectRoot: this.session.getRepoRoot?.() ?? undefined,
+				});
+				// Degenerate (root fully equals the cwd-tail) leaves no valid base —
+				// fall back to sessionCwd rather than an empty path.
+				effectiveCwd = rootResolved.decision === "degenerate" ? sessionCwd : rootResolved.path;
+				rootWarning = rootResolved.warning;
+			}
+		} else {
+			effectiveCwd = sessionCwd;
+		}
 		const transactionMode: "best-effort" | "strict" = params.transaction ?? "best-effort";
 
 		// BUG-466: `operations` must be an array. When the model stringifies the
@@ -399,7 +419,9 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		}
 
 		// Single-op shortcut: hand the per-op result back unchanged (isError already stamped).
-		if (params.operations.length === 1 && results.length === 1) return results[0]!;
+		if (params.operations.length === 1 && results.length === 1) {
+			return rootWarning ? this.#appendWarning(results[0]!, rootWarning) : results[0]!;
+		}
 
 		// Aggregate multi-op text with per-op headers and skipped/rolled-back markers.
 		const sections: string[] = [];
@@ -414,9 +436,28 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		if (rolledBack) sections.push("Rolled back transaction:strict — all target files restored to pre-batch state.");
 		const allText = sections.join("\n\n");
 
-		const builder = toolResult<EditToolResultDetails>({ operations: params.operations.length }).text(allText);
+		const builderText = rootWarning ? `${allText}\n⚠ ${rootWarning}` : allText;
+		const builder = toolResult<EditToolResultDetails>({ operations: params.operations.length }).text(builderText);
 		if (failedOpIndex !== null) builder.error();
 		return builder.done();
+	}
+
+	/**
+	 * Append a batch-level warning (e.g. a coalesced/sibling `root` param) to the
+	 * first text node of a result, mirroring the per-op warning surfacing so the
+	 * agent gets the feedback signal without the result being marked an error.
+	 */
+	#appendWarning(result: AgentToolResult, warning: string): AgentToolResult {
+		const firstTextIdx = result.content.findIndex(c => c.type === "text");
+		if (firstTextIdx === -1) {
+			return { ...result, content: [...result.content, { type: "text", text: `⚠ ${warning}` }] };
+		}
+		return {
+			...result,
+			content: result.content.map((c, idx) =>
+				c.type === "text" && idx === firstTextIdx ? { ...c, text: `${(c as { text: string }).text}\n⚠ ${warning}` } : c,
+			),
+		};
 	}
 
 	async #executeStructural(

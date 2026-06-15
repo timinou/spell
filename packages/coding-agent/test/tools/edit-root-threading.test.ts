@@ -86,3 +86,54 @@ describe("edit({ root }) — BUG-401", () => {
 		expect(await fs.readFile(path.join(sub, "hello.ts"), "utf-8")).toBe("REPLACED\n");
 	});
 });
+
+// BUG-485 — a RELATIVE `root` that duplicates the session-cwd tail must not
+// silently double-nest the resolution base (cwd=/x/apps/foo + root="apps/foo"
+// → /x/apps/foo/apps/foo, the OLD raw-path.resolve behaviour). The root is now
+// guarded by resolveCwdRelativePath (mode:"dir") before becoming effectiveCwd:
+// the project-root walk-up resolves the duplicated root back to the real
+// directory, so the edit lands at the correct path instead of a doubled tree.
+describe("edit({ root }) cwd-prefix duplication — BUG-485", () => {
+	let dupCwd: string;
+	let tail: string;
+
+	beforeAll(async () => {
+		// Build cwd = <base>/apps/foo, with the real file at cwd/lib/x.ts.
+		const base = await fs.mkdtemp(path.join(os.tmpdir(), "edit-dup-"));
+		dupCwd = path.join(base, "apps", "foo");
+		await fs.mkdir(path.join(dupCwd, "lib"), { recursive: true });
+		await fs.writeFile(path.join(dupCwd, "lib", "x.ts"), "one\ntwo\nthree\n", "utf-8");
+		// The cwd-tail prefix the agent erroneously repeats in `root`.
+		tail = `${path.basename(path.dirname(dupCwd))}/${path.basename(dupCwd)}`; // "apps/foo"
+	});
+
+	function makeDupSession(): ToolSession {
+		return {
+			cwd: dupCwd,
+			hasUI: false,
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			settings: Settings.isolated(),
+		};
+	}
+
+	it("resolves a duplicated relative root back to the real dir, not a doubled tree", async () => {
+		const tool = new CodepathEditTool(makeDupSession());
+		const result = await tool.execute("t", {
+			root: tail, // "apps/foo" — duplicates the cwd tail
+			operations: [
+				{
+					target: "lib/x.ts",
+					action: { kind: "replace", find: "two", content: "TWO" },
+				},
+			],
+		});
+		expect((result as any).isError ?? false).toBe(false);
+		// The real file under cwd must change — NOT a doubled cwd/apps/foo/lib/x.ts.
+		// (Old raw path.resolve(cwd, root) would have based the edit at the doubled
+		// dir, leaving the real file untouched and silently creating/missing the
+		// wrong tree.)
+		expect(await fs.readFile(path.join(dupCwd, "lib", "x.ts"), "utf-8")).toBe("one\nTWO\nthree\n");
+		expect(await fs.exists(path.join(dupCwd, "apps", "foo", "lib", "x.ts"))).toBe(false);
+	});
+});
