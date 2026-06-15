@@ -1955,8 +1955,17 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CORE: readonly ModelsDevProviderDescriptor
 ];
 
 const MODELS_DEV_PROVIDER_DESCRIPTORS_CODING_PLANS: readonly ModelsDevProviderDescriptor[] = [
-	// --- zAI ---
-	anthropicMessagesDescriptor("zai-coding-plan", "zai", "https://api.z.ai/api/anthropic"),
+	// --- zAI GLM Coding Plan ---
+	openAiCompletionsDescriptor("zai-coding-plan", "zai", "https://api.z.ai/api/coding/paas/v4", {
+		defaultContextWindow: 1_000_000,
+		defaultMaxTokens: 131_072,
+		compat: {
+			thinkingFormat: "zai",
+			reasoningContentField: "reasoning_content",
+			supportsDeveloperRole: false,
+			zaiToolStream: true,
+		},
+	}),
 	// --- Xiaomi ---
 	anthropicMessagesDescriptor("xiaomi", "xiaomi", "https://api.xiaomimimo.com/anthropic", {
 		defaultContextWindow: 262144,

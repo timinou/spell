@@ -73,7 +73,7 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	openrouter: "OPENROUTER_API_KEY",
 	kilo: "KILO_API_KEY",
 	"vercel-ai-gateway": "AI_GATEWAY_API_KEY",
-	zai: "ZAI_API_KEY",
+	zai: () => $pickenv("ZHIPU_API_KEY", "ZAI_API_KEY"),
 	mistral: "MISTRAL_API_KEY",
 	minimax: "MINIMAX_API_KEY",
 	"minimax-code": "MINIMAX_CODE_API_KEY",
@@ -193,12 +193,14 @@ export function stream<TApi extends Api>(
 		return streamBedrock(model as Model<"bedrock-converse-stream">, context, (options || {}) as BedrockOptions);
 	}
 
-	const apiKey = (options && 'apiKey' in options) ? options.apiKey : getEnvApiKey(model.provider);
+	const apiKey = options && "apiKey" in options ? options.apiKey : getEnvApiKey(model.provider);
 	if (!apiKey) {
 		throw new Error(`No API key for provider: ${model.provider}`);
 	}
-	if (!options || !('apiKey' in options)) {
-		console.error(`[AUTH-TRACE] stream() independently resolved env key for "${model.provider}" (SDK did not provide apiKey)`);
+	if (!options || !("apiKey" in options)) {
+		console.error(
+			`[AUTH-TRACE] stream() independently resolved env key for "${model.provider}" (SDK did not provide apiKey)`,
+		);
 	}
 	const providerOptions = { ...options, apiKey };
 
@@ -272,7 +274,7 @@ export function streamSimple<TApi extends Api>(
 		return stream(model, context, providerOptions);
 	}
 
-	const apiKey = (options && 'apiKey' in options) ? options.apiKey : getEnvApiKey(model.provider);
+	const apiKey = options && "apiKey" in options ? options.apiKey : getEnvApiKey(model.provider);
 	if (!apiKey) {
 		throw new Error(`No API key for provider: ${model.provider}`);
 	}

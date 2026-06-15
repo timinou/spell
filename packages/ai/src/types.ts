@@ -227,6 +227,14 @@ export interface StreamOptions {
 	onPayload?: (payload: unknown, model?: Model<Api>) => unknown | undefined | Promise<unknown | undefined>;
 	/** Cursor exec/MCP tool handlers (cursor-agent only). */
 	execHandlers?: CursorExecHandlers;
+	/**
+	 * Final-answer length control for providers that expose a verbosity knob
+	 * (OpenAI Codex/Responses `text.verbosity`). Orthogonal to `reasoning`:
+	 * `reasoning` tunes thinking depth, `textVerbosity` tunes answer length.
+	 * Unset → provider default (codex transport defaults to `low` to honor the
+	 * terse-by-default house style). Ignored by providers without the knob.
+	 */
+	textVerbosity?: "low" | "medium" | "high";
 }
 
 // Unified options with reasoning passed to streamSimple() and completeSimple()
@@ -490,8 +498,10 @@ export interface OpenAICompat {
 	requiresThinkingAsText?: boolean;
 	/** Whether tool call IDs must be normalized to Mistral format (exactly 9 alphanumeric chars). Default: auto-detected from URL. */
 	requiresMistralToolIds?: boolean;
-	/** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "zai" uses thinking: { type: "enabled" }, "qwen" uses top-level enable_thinking, and "qwen-chat-template" uses chat_template_kwargs.enable_thinking. Default: "openai". */
+	/** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "zai" uses thinking: { type }, "qwen" uses top-level enable_thinking, and "qwen-chat-template" uses chat_template_kwargs.enable_thinking. Default: "openai". */
 	thinkingFormat?: "openai" | "zai" | "qwen" | "qwen-chat-template";
+	/** Whether to send Z.AI's `tool_stream` parameter when tools are present. Default: auto-detected for Z.AI. */
+	zaiToolStream?: boolean;
 	/** Which reasoning content field to emit on assistant messages. Default: auto-detected. */
 	reasoningContentField?: "reasoning_content" | "reasoning" | "reasoning_text";
 	/** Whether assistant tool-call messages must include reasoning content. Default: false. */

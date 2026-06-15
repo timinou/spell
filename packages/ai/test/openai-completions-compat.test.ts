@@ -1,3 +1,4 @@
+import { Type } from "@sinclair/typebox";
 import { afterEach, describe, expect, it } from "bun:test";
 import { getBundledModel } from "../src/models";
 import { convertMessages, streamOpenAICompletions } from "../src/providers/openai-completions";
@@ -79,6 +80,7 @@ describe("openai-completions compatibility", () => {
 			requiresThinkingAsText: false,
 			requiresMistralToolIds: false,
 			thinkingFormat: "openai",
+			zaiToolStream: false,
 			reasoningContentField: "reasoning_content",
 			requiresReasoningContentForToolCalls: false,
 			requiresAssistantContentForToolCalls: false,
@@ -205,6 +207,100 @@ describe("openai-completions compatibility", () => {
 		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
 		expect(result.stopReason).toBe("stop");
 		expect(result.content[0]).toMatchObject({ type: "text", text: "done" });
+	});
+
+	it("reads full message-shaped choices from OpenAI-compatible streams", async () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("zai", "glm-5.2"),
+			api: "openai-completions",
+		};
+		global.fetch = createMockFetch([
+			{
+				id: "chatcmpl-zai-full-message",
+				object: "chat.completion",
+				created: 0,
+				model: model.id,
+				choices: [
+					{
+						index: 0,
+						message: { role: "assistant", content: "Hello from GLM" },
+						finish_reason: "stop",
+					},
+				],
+			},
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		expect(result.stopReason).toBe("stop");
+		expect(result.content[0]).toMatchObject({ type: "text", text: "Hello from GLM" });
+	});
+
+	it("sends ZAI Coding Plan thinking payload and OpenAI-compatible text", async () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("zai", "glm-5.2"),
+			api: "openai-completions",
+		};
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		global.fetch = createMockFetch(["[DONE]"]);
+		streamOpenAICompletions(
+			model,
+			{
+				messages: [
+					{
+						role: "user",
+						content: [{ type: "text", text: "hello" }],
+						timestamp: Date.now(),
+					},
+				],
+			},
+			{
+				apiKey: "test-key",
+				reasoning: "medium",
+				maxTokens: 32_000,
+				signal: createAbortedSignal(),
+				onPayload: payload => resolve(payload),
+			},
+		);
+
+		const payload = toObject(await promise) as Record<string, unknown>;
+		const messages = payload.messages as Array<Record<string, unknown>>;
+		expect(messages[0]?.content).toBe("hello");
+		expect(payload.thinking).toEqual({ type: "enabled", clear_thinking: false });
+		expect(payload.max_tokens).toBe(model.maxTokens);
+		expect(payload.max_completion_tokens).toBeUndefined();
+		expect(payload.reasoning_effort).toBeUndefined();
+		expect(payload.stream_options).toBeUndefined();
+	});
+
+	it("enables ZAI tool streaming when tools are present", async () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("zai", "glm-5.2"),
+			api: "openai-completions",
+		};
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		global.fetch = createMockFetch(["[DONE]"]);
+		streamOpenAICompletions(
+			model,
+			{
+				...baseContext(),
+				tools: [
+					{
+						name: "echo",
+						description: "Echo input",
+						parameters: Type.Object({ input: Type.String() }),
+					},
+				],
+			},
+			{
+				apiKey: "test-key",
+				signal: createAbortedSignal(),
+				onPayload: payload => resolve(payload),
+			},
+		);
+
+		const payload = toObject(await promise) as Record<string, unknown>;
+		expect(payload.tool_stream).toBe(true);
 	});
 
 	it("injects compat.extraBody into OpenAI payload", async () => {

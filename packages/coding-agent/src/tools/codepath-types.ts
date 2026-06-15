@@ -131,35 +131,30 @@ export type FindParams = Static<typeof findSchema>;
 // Edit tool schema
 // ═══════════════════════════════════════════════════════════════════════════
 
-export const editOperationSchema = Type.Recursive(This =>
-	Type.Object(
-		{
-			target: Type.String({
-				description:
-					"Stable edit target ID: '<file>' for file roots or '<file>::Symbol.member' for declarations. Multi-word symbols may be backtick-quoted, e.g. foo.ts::`export * from \"./json\"`. Scope qualifiers `#body` / `#sig` are valid edit targets; read-only semantic qualifiers (`#hover`, `#hover_inferred`, `#type_definition`, `#type_def`, `#signature`, `#inlay`, `#diagnostics`) are rejected with IncompatibleTargetShape — use `find` for inspection.",
+export const editOperationSchema = Type.Object(
+	{
+		target: Type.String({
+			description:
+				"Stable edit target ID: '<file>' for file roots or '<file>::Symbol.member' for declarations. Multi-word symbols may be backtick-quoted, e.g. foo.ts::`export * from \"./json\"`. Scope qualifiers `#body` / `#sig` are valid edit targets; read-only semantic qualifiers (`#hover`, `#hover_inferred`, `#type_definition`, `#type_def`, `#signature`, `#inlay`, `#diagnostics`) are rejected with IncompatibleTargetShape — use `find` for inspection.",
+		}),
+		// PLAN-321: the external action surface is the hand-authored 6-verb
+		// `Verb` surface (+ undo/redo), NOT the 31 kernel Op kinds. The kernel
+		// lowers each verb to a precise Op from the target shape. Legacy Op
+		// kinds still deserialize at the boundary (Verb-first, Op-fallback) so
+		// `create.ts`'s `fileCreate` keeps working; they're just no longer
+		// advertised on the model-facing surface.
+		action: verbActionSchema,
+		// NB: `occurrence` lives ONLY inside the `replace` verb (verb-schema.ts);
+		// it is a find-replace selector, not an operation-level knob. The former
+		// op-level duplicate was never read by edit.ts — removed to keep one
+		// home for the field on the model-facing surface.
+		idempotent: Type.Optional(
+			Type.Boolean({
+				description: "Allow mutating edit commands to succeed when they intentionally make no semantic change",
 			}),
-			// PLAN-321: the external action surface is the hand-authored 6-verb
-			// `Verb` surface (+ undo/redo), NOT the 31 kernel Op kinds. The kernel
-			// lowers each verb to a precise Op from the target shape. Legacy Op
-			// kinds still deserialize at the boundary (Verb-first, Op-fallback) so
-			// `create.ts`'s `fileCreate` keeps working; they're just no longer
-			// advertised on the model-facing surface.
-			action: verbActionSchema,
-			children: Type.Optional(
-				Type.Array(This, { description: "Nested child target operations under the same file tree" }),
-			),
-			// NB: `occurrence` lives ONLY inside the `replace` verb (verb-schema.ts);
-			// it is a find-replace selector, not an operation-level knob. The former
-			// op-level duplicate was never read by edit.ts — removed to keep one
-			// home for the field on the model-facing surface.
-			idempotent: Type.Optional(
-				Type.Boolean({
-					description: "Allow mutating edit commands to succeed when they intentionally make no semantic change",
-				}),
-			),
-		},
-		{ additionalProperties: false },
-	),
+		),
+	},
+	{ additionalProperties: false },
 );
 
 export const editSchema = Type.Object(

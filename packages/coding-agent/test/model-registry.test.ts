@@ -78,6 +78,19 @@ describe("ModelRegistry", () => {
 		return registry.getAll().filter(m => m.provider === provider);
 	}
 
+	describe("zai coding plan defaults", () => {
+		test("uses GLM-5.2 on the OpenAI-compatible coding endpoint", () => {
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
+			const model = registry.find("zai", "glm-5.2");
+
+			expect(model).toBeDefined();
+			expect(model?.api).toBe("openai-completions");
+			expect(model?.baseUrl).toBe("https://api.z.ai/api/coding/paas/v4");
+			expect(model?.contextWindow).toBe(1_000_000);
+			expect(model?.maxTokens).toBe(131_072);
+		});
+	});
+
 	/** Create a baseUrl-only override (no custom models) */
 	function overrideConfig(baseUrl: string, headers?: Record<string, string>) {
 		return { baseUrl, ...(headers && { headers }) };

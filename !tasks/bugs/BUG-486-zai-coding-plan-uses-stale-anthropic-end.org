@@ -1,0 +1,61 @@
+#+TITLE: zai coding plan uses stale anthropic endpoint
+#+STATE: DONE
+#+SESSION_ID: 150a4a2c23970e82
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-15T15-43-05-359Z_150a4a2c23970e82.jsonl]]
+#+CUSTOM_ID: BUG-486-zai-coding-plan-uses-stale-anthropic-end
+#+LAYER: ai
+#+PRIORITY: A
+#+TYPE: BUG
+
+* Initial Message
+
+why is glm breakoing on overloaded every time?
+
+for example:
+Error: {"type":"error","error":{"type":"overloaded_error","code":"500","message":"[500][Handler
+ dispatch failed; nested exception is
+ java.lang.StackOverflowError][202606152344537a9ced66caee48ec]"},"request_id":"202606152344537a9ced66c
+ aee48ec"}
+
+ Error: {"type":"error","error":{"type":"overloaded_error","code":"500","message":"[500][Handler
+ dispatch failed; nested exception is
+ java.lang.StackOverflowError][202606152344573b27c65665a24252]"},"request_id":"202606152344573b27c6566
+ 5a24252"}
+
+* Problem
+The =zai= provider is intended to represent the Z.AI GLM Coding Plan, but current provider wiring uses the Anthropic-compatible Coding Plan descriptor/path instead of the OpenCode-style OpenAI-compatible Coding Plan endpoint.
+
+Observed failures include repeated retryable =overloaded_error= 500 surfaces from Z.AI with nested =java.lang.StackOverflowError=, likely amplified by protocol/endpoint mismatch through Z.AI's Anthropic compatibility layer.
+
+* Source of truth
+- User confirmed: =zai= is intended as the Coding Plan provider.
+- OpenCode / models.dev use =@ai-sdk/openai-compatible= with endpoint =https://api.z.ai/api/coding/paas/v4=.
+- Z.AI docs warn Coding Plan should use the dedicated Coding API endpoint, not the general API.
+- GLM 5.2 has 1M context and should become the default Coding Plan model.
+
+* Desired behavior
+- =zai= uses OpenAI Chat Completions protocol via =https://api.z.ai/api/coding/paas/v4=.
+- Default =zai= model is =glm-5.2= with 1,000,000 context.
+- Existing Z.AI thinking support remains =thinking: { type: enabled|disabled }=.
+- Prefer =ZHIPU_API_KEY= while retaining =ZAI_API_KEY= compatibility.
+- Spoof OpenCode only if low-risk/token-light; otherwise avoid unnecessary headers.
+
+* Verification
+- Unit tests cover provider/default/env resolution changes.
+- Typecheck relevant packages.
+
+NOTE [2026-06-15]: Implemented: zai now uses OpenAI-compatible GLM Coding Plan endpoint https://api.z.ai/api/coding/paas/v4 in bundled models and models.dev mapping; default model is glm-5.2 with 1,000,000 context; env resolver prefers ZHIPU_API_KEY and falls back to ZAI_API_KEY. Did not add OpenCode spoof headers: endpoint/protocol alignment is the low-risk fix; header spoofing is unnecessary and brittle.
+
+Verification passed: bun test packages/ai/test/zai-coding-plan-provider.test.ts; bun test packages/coding-agent/test/model-registry.test.ts -t "zai coding plan defaults"; bunx biome check changed files.
+
+Broader checks failed for pre-existing/unrelated repo issues: full model-registry test file has many existing failures in unrelated suites; bun run check:ts / tsgo fail on existing formatting/type errors across unrelated packages/tests.
+
+NOTE [2026-06-15]: Patched remaining empty-output suspect: OpenAI-compatible text-only user content arrays are now collapsed to plain string content before request serialization. ZAI Coding Plan now matches OpenCode-style payload more closely: no `thinking`, no `reasoning_effort`, no `stream_options`, and `messages[0].content === "hello"` for text-only inputs. Focused tests pass: `bun test packages/ai/test/openai-completions-compat.test.ts packages/ai/test/zai-coding-plan-provider.test.ts`. Package-level `bun run check` still fails on pre-existing unrelated test type errors (`cassette`, `image-limits`, `zen`).
+
+NOTE [2026-06-15]: Follow-up after user reported same failure and asked to compare Z.AI docs + oh-my-pi/pi. Evidence: Z.AI docs (`/devpack/tool/others`, `/guides/capabilities/thinking-mode`, `/guides/tools/stream-tool`) and pi.dev GLM-5.2 page show Coding Plan endpoint remains OpenAI-compatible at `https://api.z.ai/api/coding/paas/v4`, but Pi/oh-my-pi expect `compat.thinkingFormat: "zai"` and `zaiToolStream: true`. Upstream Pi commit 64b51ef confirms Z.AI thinking control should be `thinking: { type: "enabled" | "disabled" }`, not `enable_thinking`, and not omitted. Patched our provider accordingly: restored ZAI thinking payload, kept `stream_options` omitted for ZAI, added `zaiToolStream` compat and sends `tool_stream: true` when tools are present, preserved string-only user text serialization, and kept full `choice.message` stream chunk parsing. Attempted live smoke but this process has no `ZHIPU_API_KEY`/`ZAI_API_KEY`, so direct API call cannot be performed here. Focused tests pass: `bun test packages/ai/test/openai-completions-compat.test.ts packages/ai/test/zai-coding-plan-provider.test.ts` => 12 pass. Package check still only fails on unrelated existing test issues after introduced compat typing errors were resolved.
+
+NOTE [2026-06-15]: Live debug with injected `ZAI_API_KEY` succeeded. Raw direct API findings: minimal `thinking:{type:"disabled"}` returns content `pong`; `thinking:{type:"enabled"}` with only 64 max tokens returns only `reasoning_content` and `finish_reason:"length"` (empty assistant text) because reasoning consumes the completion budget; enabled thinking with 32000 cap returns content; `thinking:{type:"enabled", clear_thinking:false}` is accepted and returns content. Patched provider to: (1) use `max_tokens` for ZAI instead of `max_completion_tokens`, matching docs/examples and faster observed first-content behavior, (2) send `clear_thinking:false` when ZAI thinking is enabled, and (3) serialize previous assistant thinking blocks back as `reasoning_content` for ZAI preserved-thinking multi-turn correctness. Live smoke through `streamOpenAICompletions` now returns `stop`, usage input=17 output=289, content=[thinking, text:`pong`]. Focused tests pass: `bun test packages/ai/test/openai-completions-compat.test.ts packages/ai/test/zai-coding-plan-provider.test.ts` => 12 pass.
+
+NOTE [2026-06-15]: Additional verification requested by user: ran Spell non-interactively through actual CLI using edited source. Commands: `bun --cwd packages/coding-agent src/cli.ts --print --no-tools --no-session --model zai/glm-5.2 --thinking medium 'Reply with exactly: pong'` => output `pong`; `bun --cwd packages/coding-agent src/cli.ts --print --no-tools --no-session --model zai/glm-5.2 --thinking medium 'hi'` => output `Hi. What are we working on?`. This proves the source CLI path works with the patched ZAI provider. If installed/running `spell` still fails, it is using stale package/runtime state and must be rebuilt/restarted or run via the source command above.
+
+NOTE [2026-06-15]: User requested removal of model-facing `edit.children` after session audit showed it was almost unused and caused ZAI schema failures. Removed `children` from `editOperationSchema` entirely, replacing recursive `Type.Recursive` with flat `Type.Object`. Since the source schema no longer emits `$id`/`$ref`, removed the ZAI-specific recursive schema sanitizer workaround and its test. Added `packages/coding-agent/test/edit-schema.test.ts` asserting serialized edit schema contains no `$ref`, `$id`, or `children`. Verification: `bun test packages/coding-agent/test/edit-schema.test.ts` => 1 pass; `bun test packages/ai/test/openai-completions-compat.test.ts packages/ai/test/zai-coding-plan-provider.test.ts` => 12 pass; default-tools ZAI CLI `bun --cwd packages/coding-agent src/cli.ts --print --model zai/glm-5.2 --thinking medium 'Reply with exactly: pong'` => `pong`. Schema probe: `{hasRef:false, hasId:false, hasChildren:false, bytes:6478}`.

@@ -90,10 +90,13 @@ function serializeToolArguments(value: unknown): string {
 	return "{}";
 }
 
-type ResolvedOpenAICompat = Required<Omit<OpenAICompat, "openRouterRouting" | "vercelGatewayRouting" | "extraBody">> & {
+type ResolvedOpenAICompat = Required<
+	Omit<OpenAICompat, "openRouterRouting" | "vercelGatewayRouting" | "extraBody" | "zaiToolStream">
+> & {
 	openRouterRouting?: OpenAICompat["openRouterRouting"];
 	vercelGatewayRouting?: OpenAICompat["vercelGatewayRouting"];
 	extraBody?: OpenAICompat["extraBody"];
+	zaiToolStream?: OpenAICompat["zaiToolStream"];
 };
 
 /**
@@ -364,6 +367,56 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					output.stopReason = mapStopReason(choice.finish_reason);
 				}
 
+				const appendReasoningFromObject = (source: object) => {
+					// Some endpoints return reasoning in reasoning_content (llama.cpp),
+					// or reasoning (other openai compatible endpoints).
+					// Use the first non-empty reasoning field to avoid duplication.
+					const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"];
+					for (const field of reasoningFields) {
+						const delta = (source as any)[field];
+						if (typeof delta === "string" && delta.length > 0) {
+							appendThinkingDelta(delta, field);
+							return;
+						}
+					}
+				};
+
+				const appendFullMessage = (message: object) => {
+					const content = (message as any).content;
+					if (typeof content === "string" && content.length > 0) {
+						if (!firstTokenTime) firstTokenTime = Date.now();
+						appendTextDelta(content);
+					} else if (Array.isArray(content)) {
+						for (const part of content) {
+							const text = part?.type === "text" && typeof part.text === "string" ? part.text : undefined;
+							if (text && text.length > 0) {
+								if (!firstTokenTime) firstTokenTime = Date.now();
+								appendTextDelta(text);
+							}
+						}
+					}
+
+					appendReasoningFromObject(message);
+
+					const toolCalls = (message as any).tool_calls;
+					if (Array.isArray(toolCalls)) {
+						for (const toolCall of toolCalls) {
+							finishCurrentBlock(currentBlock);
+							const args = serializeToolArguments(toolCall.function?.arguments);
+							currentBlock = {
+								type: "toolCall",
+								id: toolCall.id || "",
+								name: toolCall.function?.name || "",
+								arguments: parseStreamingJson(args),
+								partialArgs: args,
+							};
+							output.content.push(currentBlock);
+							stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+							stream.push({ type: "toolcall_delta", contentIndex: blockIndex(), delta: args, partial: output });
+						}
+					}
+				};
+
 				if (choice.delta) {
 					if (
 						choice.delta.content !== null &&
@@ -379,29 +432,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 						}
 					}
 
-					// Some endpoints return reasoning in reasoning_content (llama.cpp),
-					// or reasoning (other openai compatible endpoints)
-					// Use the first non-empty reasoning field to avoid duplication
-					// (e.g., chutes.ai returns both reasoning_content and reasoning with same content)
-					const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"];
-					let foundReasoningField: string | null = null;
-					for (const field of reasoningFields) {
-						if (
-							(choice.delta as any)[field] !== null &&
-							(choice.delta as any)[field] !== undefined &&
-							(choice.delta as any)[field].length > 0
-						) {
-							if (!foundReasoningField) {
-								foundReasoningField = field;
-								break;
-							}
-						}
-					}
-
-					if (foundReasoningField) {
-						const delta = (choice.delta as any)[foundReasoningField];
-						appendThinkingDelta(delta, foundReasoningField);
-					}
+					appendReasoningFromObject(choice.delta);
 
 					if (choice?.delta?.tool_calls) {
 						for (const toolCall of choice.delta.tool_calls) {
@@ -454,6 +485,9 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 							}
 						}
 					}
+				} else {
+					const message = (choice as any).message;
+					if (message && typeof message === "object") appendFullMessage(message);
 				}
 			}
 
@@ -563,7 +597,10 @@ function buildParams(model: Model<"openai-completions">, context: Context, optio
 	// Always send max_tokens to avoid their high default causing rate limit issues.
 	// Note: Direct kimi-code provider is handled by the dedicated Kimi provider in kimi.ts.
 	const isKimi = model.id.includes("moonshotai/kimi");
-	const effectiveMaxTokens = options?.maxTokens ?? (isKimi ? model.maxTokens : undefined);
+	const isZaiThinking = compat.thinkingFormat === "zai" && !!options?.reasoning && model.reasoning;
+	const effectiveMaxTokens = isZaiThinking
+		? model.maxTokens
+		: (options?.maxTokens ?? (isKimi ? model.maxTokens : undefined));
 
 	const params: OpenAICompletionsSamplingParams = {
 		model: model.id,
@@ -611,6 +648,9 @@ function buildParams(model: Model<"openai-completions">, context: Context, optio
 
 	if (context.tools) {
 		params.tools = convertTools(context.tools, compat);
+		if (compat.zaiToolStream) {
+			Reflect.set(params, "tool_stream", true);
+		}
 	} else if (hasToolHistory(context.messages)) {
 		// Anthropic (via LiteLLM/proxy) requires tools param when conversation has tool_calls/tool_results
 		params.tools = [];
@@ -621,9 +661,13 @@ function buildParams(model: Model<"openai-completions">, context: Context, optio
 	}
 
 	if (compat.thinkingFormat === "zai" && model.reasoning) {
-		// Z.ai uses binary thinking: { type: "enabled" | "disabled" }
-		// Must explicitly disable since z.ai defaults to thinking enabled
-		Reflect.set(params, "thinking", { type: options?.reasoning ? "enabled" : "disabled" });
+		// Z.AI uses binary thinking: { type: "enabled" | "disabled" }.
+		// When enabled, preserve reasoning_content across turns on the Coding Plan endpoint.
+		Reflect.set(
+			params,
+			"thinking",
+			options?.reasoning ? { type: "enabled", clear_thinking: false } : { type: "disabled" },
+		);
 	} else if (compat.thinkingFormat === "qwen" && model.reasoning) {
 		// Qwen uses top-level enable_thinking: boolean
 		Reflect.set(params, "enable_thinking", !!options?.reasoning);
@@ -867,6 +911,22 @@ export function convertMessages(
 					? content.filter(c => c.type !== "image_url")
 					: content;
 				if (filteredContent.length === 0) continue;
+
+				const hasImageContent = filteredContent.some(c => c.type === "image_url");
+				if (!hasImageContent) {
+					const text = filteredContent
+						.filter(c => c.type === "text")
+						.map(c => c.text)
+						.join("\n")
+						.toWellFormed();
+					if (text.trim().length === 0) continue;
+					params.push({
+						role,
+						content: text,
+					});
+					continue;
+				}
+
 				params.push({
 					role: "user",
 					content: filteredContent,
@@ -912,7 +972,7 @@ export function convertMessages(
 				}
 			}
 
-			if (compat.thinkingFormat === "openai") {
+			if (compat.thinkingFormat === "openai" || compat.thinkingFormat === "zai") {
 				const reasoningField = compat.reasoningContentField ?? "reasoning_content";
 				const reasoningContent = (assistantMsg as any)[reasoningField];
 				if (!reasoningContent) {
@@ -1163,7 +1223,8 @@ export function detectCompat(model: Model<"openai-completions">): ResolvedOpenAI
 		provider === "opencode-go" ||
 		baseUrl.includes("opencode.ai");
 
-	const useMaxTokens = provider === "mistral" || baseUrl.includes("mistral.ai") || baseUrl.includes("chutes.ai");
+	const useMaxTokens =
+		provider === "mistral" || baseUrl.includes("mistral.ai") || baseUrl.includes("chutes.ai") || isZai;
 
 	const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
 
@@ -1185,7 +1246,7 @@ export function detectCompat(model: Model<"openai-completions">): ResolvedOpenAI
 		supportsDeveloperRole: !isNonStandard,
 		supportsReasoningEffort: !isGrok && !isZai,
 		reasoningEffortMap,
-		supportsUsageInStreaming: !isCerebras,
+		supportsUsageInStreaming: !isCerebras && !isZai,
 		supportsToolChoice: true,
 		maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
 		requiresToolResultName: isMistral,
@@ -1193,6 +1254,7 @@ export function detectCompat(model: Model<"openai-completions">): ResolvedOpenAI
 		requiresThinkingAsText: isMistral,
 		requiresMistralToolIds: isMistral,
 		thinkingFormat: isZai ? "zai" : isAlibaba || isQwen ? "qwen" : "openai",
+		zaiToolStream: isZai,
 		reasoningContentField: "reasoning_content",
 		requiresReasoningContentForToolCalls: isOpenRouterKimi,
 		requiresAssistantContentForToolCalls: isOpenRouterKimi,
@@ -1224,6 +1286,7 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompat {
 		requiresThinkingAsText: model.compat.requiresThinkingAsText ?? detected.requiresThinkingAsText,
 		requiresMistralToolIds: model.compat.requiresMistralToolIds ?? detected.requiresMistralToolIds,
 		thinkingFormat: model.compat.thinkingFormat ?? detected.thinkingFormat,
+		zaiToolStream: model.compat.zaiToolStream ?? detected.zaiToolStream,
 		reasoningContentField: model.compat.reasoningContentField ?? detected.reasoningContentField,
 		requiresReasoningContentForToolCalls:
 			model.compat.requiresReasoningContentForToolCalls ?? detected.requiresReasoningContentForToolCalls,

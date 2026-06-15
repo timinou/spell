@@ -25,6 +25,7 @@ const compat: Required<OpenAICompat> = {
 	requiresThinkingAsText: false,
 	requiresMistralToolIds: false,
 	thinkingFormat: "openai",
+	zaiToolStream: false,
 	reasoningContentField: "reasoning_content",
 	requiresReasoningContentForToolCalls: false,
 	requiresAssistantContentForToolCalls: false,
