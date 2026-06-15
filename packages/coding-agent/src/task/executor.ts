@@ -1056,6 +1056,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 									cwd,
 									worktreeDir: worktree,
 									baselineHeadCommit: options.runtimeVerification?.baselineHeadCommit,
+									// No worktree ⇒ shared-tree run; require per-task commit attribution.
+									requireCommitInLog: !worktree,
 								});
 								if (!gateResult.passed) {
 									acceptExtractedData = false;

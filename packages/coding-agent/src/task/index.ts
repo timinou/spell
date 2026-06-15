@@ -852,6 +852,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			// against the worktree rather than the parent session cwd / bash history.
 			worktreeDir: isolationContext?.worktreeDir,
 			baselineHeadCommit: isolationContext?.baselineHeadCommit,
+			// Shared-tree (non-isolated) tasks need per-task commit attribution.
+			requireCommitInLog: !isolationContext?.worktreeDir,
 		});
 	}
 
@@ -883,6 +885,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				cwd: this.session.cwd,
 				worktreeDir: isolationContext?.worktreeDir,
 				baselineHeadCommit: isolationContext?.baselineHeadCommit,
+				requireCommitInLog: !isolationContext?.worktreeDir,
 			});
 			if (!gateResult.passed) {
 				failures.push(...gateResult.failures.map(failure => ({ taskId: child.id, ...failure })));
@@ -1732,10 +1735,13 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				if (!isIsolated) {
 					// Non-isolated commit gates compare the live parent-cwd HEAD against a
 					// baseline captured before the task runs (the isolated path uses the
-					// worktree baseline). Only needed when the task actually carries a
-					// commit gate; skipped otherwise to avoid a git call per task.
-					const nonIsolatedGates = runtimeGatesByTaskId.get(originalTask.id);
-					const nonIsolatedContext: GateEvalContext | undefined = nonIsolatedGates?.gateCommit
+					// worktree baseline). Capture it whenever this task carries ANY gate:
+					// the child nodes the subagent produces may add their own commit gate,
+					// whose kind is unknowable at dispatch (a missing baseline would make a
+					// child commit gate fail unconditionally). `worktreeDir` stays unset so
+					// the gate evaluator marks this as the shared-tree path and requires
+					// per-task commit attribution (a sibling's commit must not false-pass).
+					const nonIsolatedContext: GateEvalContext | undefined = runtimeGatesByTaskId.has(originalTask.id)
 						? { baselineHeadCommit: (await captureGitBaseline(this.session.cwd))?.head }
 						: undefined;
 					const result = await runSubprocess({
@@ -1750,7 +1756,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						modelOverride,
 						thinkingLevel: thinkingLevelOverride,
 						outputSchema: effectiveOutputSchema,
-						runtimeVerification: this.#runtimeVerificationFor(nonIsolatedGates, nonIsolatedContext),
+						runtimeVerification: this.#runtimeVerificationFor(
+							runtimeGatesByTaskId.get(originalTask.id),
+							nonIsolatedContext,
+						),
 						askBroker,
 						askTaskId: askBroker ? taskExecution.logicalId : undefined,
 						sessionFile,

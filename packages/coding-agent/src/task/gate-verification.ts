@@ -111,12 +111,12 @@ export function matchesGateCmd(gateCmd: string, executions: ExecutionRecord[], c
 }
 
 /**
- * The single `commit` gate evaluator: did HEAD advance past the baseline SHA
+ * The `commit` gate's git-state half: did HEAD advance past the baseline SHA
  * captured before the work began? Reads the real git state in `workdir` rather
- * than scanning a recorded command log, so it is identical for direct and
- * delegated work and immune to which tool ran `git commit` (or whether a hook,
- * squash, or amend produced the new HEAD). Returns false on any git error
- * (treat absence of evidence as evidence of absence).
+ * than scanning a recorded command log, so it is immune to which tool ran
+ * `git commit` (or whether a hook, squash, or amend produced the new HEAD).
+ * Returns false on any git error (treat absence of evidence as evidence of
+ * absence).
  */
 export async function detectHeadAdvanced(workdir: string, baselineHeadCommit: string): Promise<boolean> {
 	try {
@@ -125,6 +125,25 @@ export async function detectHeadAdvanced(workdir: string, baselineHeadCommit: st
 	} catch {
 		return false;
 	}
+}
+
+const GIT_COMMIT_PATTERN = /\bgit\s+commit\b/;
+
+/**
+ * The `commit` gate's attribution half (per-task): did THIS execution log contain
+ * a successful `git commit`? Needed only when work shares a working tree with
+ * concurrent siblings (non-isolated delegated tasks): real-HEAD-advanced alone
+ * cannot tell whose commit moved the shared HEAD, so a sibling's commit could
+ * false-pass another task's gate. Requiring the task's own log to show a commit
+ * restores per-task attribution. Isolated work (own worktree) and the sequential
+ * direct path do not need this — HEAD movement there is already attributable.
+ */
+export function detectGitCommitInLog(executions: ExecutionRecord[]): boolean {
+	return executions.some(
+		execution =>
+			execution.exitCode === 0 &&
+			(GIT_COMMIT_PATTERN.test(execution.command) || GIT_COMMIT_PATTERN.test(normalizeCommand(execution.command))),
+	);
 }
 
 export async function verifyGateArtifact(artifactPath: string, cwd: string): Promise<boolean> {
@@ -156,6 +175,15 @@ export async function verifyGates(opts: {
 	 * SHA. Absent ⇒ the commit gate fails with a baseline-missing detail.
 	 */
 	baselineHeadCommit?: string;
+	/**
+	 * When true, the commit gate ALSO requires a successful `git commit` in
+	 * `executions` (per-task attribution), not just an advanced HEAD. Set for
+	 * non-isolated delegated tasks that share a working tree with concurrent
+	 * siblings, so a sibling's commit cannot false-pass this gate. Left false for
+	 * isolated work (own worktree) and the sequential direct path, where HEAD
+	 * movement is already attributable.
+	 */
+	requireCommitInLog?: boolean;
 }): Promise<GateVerificationResult> {
 	const failures: GateFailure[] = [];
 
@@ -182,6 +210,14 @@ export async function verifyGates(opts: {
 					gate: "gateCommit",
 					expected: "git commit",
 					detail: "HEAD did not advance past the pre-work baseline.",
+				});
+			} else if (opts.requireCommitInLog && !detectGitCommitInLog(opts.executions)) {
+				// Shared-tree (non-isolated delegated) attribution: HEAD advanced, but
+				// not provably by THIS task — a concurrent sibling may have moved it.
+				failures.push({
+					gate: "gateCommit",
+					expected: "git commit",
+					detail: "No git commit by this task was recorded (HEAD moved, but a concurrent task may have committed it).",
 				});
 			}
 		}

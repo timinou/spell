@@ -489,12 +489,20 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 			},
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "sub1.jsonl");
-		// The subagent satisfies gateCmd (bun test) and advances HEAD with a real
-		// commit (fired inside the mocked subprocess, after the parent captured its
-		// pre-run baseline) so the unified real-HEAD commit gate passes.
+		// The subagent satisfies gateCmd (bun test), advances HEAD with a real commit
+		// (fired inside the mocked subprocess, after the parent captured its pre-run
+		// baseline), AND records that commit in its OWN execution log — so the unified
+		// real-HEAD gate AND the shared-tree per-task attribution both pass.
 		mockRunSubprocess(
 			transcriptPath,
-			{ extractedToolData: { bash: [{ command: "bun test", exitCode: 0, cwd: tempDir }] } },
+			{
+				extractedToolData: {
+					bash: [
+						{ command: "bun test", exitCode: 0, cwd: tempDir },
+						{ command: "git commit -am done", exitCode: 0, cwd: tempDir },
+					],
+				},
+			},
 			() => advanceHeadIn(tempDir, "done.txt"),
 		);
 
@@ -510,6 +518,37 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 
 		const finalTask = session.snapshots.at(-1)?.[0];
 		expect(finalTask?.status).toBe("completed");
+	});
+
+	it("marks todo gate_failed when HEAD moved but THIS task never committed (non-isolated sibling attribution)", async () => {
+		await initGitRepo(tempDir);
+		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
+		const session = createSession(tempDir, settings, [
+			{ id: "task-1", content: "Build feature", status: "pending", group: "Work", verify: { commit: true } },
+		]);
+		const transcriptPath = path.join(tempDir, "artifacts", "sub1.jsonl");
+		// HEAD advances during the run (a concurrent sibling committed in the shared
+		// parent cwd), but THIS task's log shows NO commit — the per-task attribution
+		// guard must fail the gate rather than false-pass off the sibling's commit.
+		mockRunSubprocess(
+			transcriptPath,
+			{ extractedToolData: { bash: [{ command: "bun test", exitCode: 0, cwd: tempDir }] } },
+			() => advanceHeadIn(tempDir, "sibling.txt"),
+		);
+
+		const { TaskTool } = await import("../../src/task/index");
+		const tool = await TaskTool.create(session);
+
+		await tool.execute("call-1", {
+			agent: "task",
+			tasks: [
+				{ id: "sub1", description: "Build feature", assignment: "## Target\n- File: foo.ts", ref: "task-1" },
+			],
+		});
+
+		const finalTask = session.snapshots.at(-1)?.[0];
+		expect(finalTask?.status).toBe("gate_failed");
+		expect(finalTask?.delegation?.result?.gateFailures?.[0]?.gate).toBe("gateCommit");
 	});
 });
 

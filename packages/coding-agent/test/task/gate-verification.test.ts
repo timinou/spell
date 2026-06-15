@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	detectGitCommitInLog,
 	detectHeadAdvanced,
 	type ExecutionRecord,
 	matchesGateCmd,
@@ -272,6 +273,24 @@ describe("gate verification", () => {
 		});
 	});
 
+	describe("detectGitCommitInLog", () => {
+		it("detects a successful git commit in the log", () => {
+			expect(detectGitCommitInLog([{ command: "git commit -m fix", exitCode: 0 }])).toBe(true);
+		});
+		it("detects a commit behind a cd / shell wrapper", () => {
+			expect(detectGitCommitInLog([{ command: "cd repo && git commit -m x", exitCode: 0 }])).toBe(true);
+			expect(detectGitCommitInLog([{ command: "sh -c 'git commit -m x'", exitCode: 0 }])).toBe(true);
+		});
+		it("ignores failed commits and non-commit git commands", () => {
+			expect(detectGitCommitInLog([{ command: "git commit -m x", exitCode: 1 }])).toBe(false);
+			expect(detectGitCommitInLog([{ command: "git add .", exitCode: 0 }])).toBe(false);
+			expect(detectGitCommitInLog([{ command: "git-commit", exitCode: 0 }])).toBe(false);
+		});
+		it("returns false for an empty log", () => {
+			expect(detectGitCommitInLog([])).toBe(false);
+		});
+	});
+
 	describe("verifyGateArtifact", () => {
 		it("returns true when the file exists", async () => {
 			await withTempDir(async dir => {
@@ -367,6 +386,51 @@ describe("gate verification", () => {
 			expect(result.passed).toBe(false);
 			expect(result.failures[0]?.gate).toBe("gateCommit");
 			expect(result.failures[0]?.detail).toBe("No git baseline was available to verify the commit against.");
+		});
+
+		it("with requireCommitInLog: passes when HEAD advanced AND this task's log shows a commit", async () => {
+			await withGitRepo(async (dir, baseline) => {
+				await advanceHead(dir, "b.txt");
+				const result = await verifyGates({
+					gateCommit: true,
+					executions: [{ command: "git commit -m work", exitCode: 0, cwd: dir }],
+					cwd: dir,
+					baselineHeadCommit: baseline,
+					requireCommitInLog: true,
+				});
+				expect(result.passed).toBe(true);
+			});
+		});
+
+		it("with requireCommitInLog: FAILS when HEAD advanced but this task's log shows no commit (sibling moved HEAD)", async () => {
+			await withGitRepo(async (dir, baseline) => {
+				// HEAD advanced (e.g. a concurrent sibling committed in the shared tree),
+				// but THIS task never committed — attribution guard must fail it.
+				await advanceHead(dir, "b.txt");
+				const result = await verifyGates({
+					gateCommit: true,
+					executions: [{ command: "bun test", exitCode: 0, cwd: dir }],
+					cwd: dir,
+					baselineHeadCommit: baseline,
+					requireCommitInLog: true,
+				});
+				expect(result.passed).toBe(false);
+				expect(result.failures[0]?.gate).toBe("gateCommit");
+				expect(result.failures[0]?.detail).toContain("No git commit by this task");
+			});
+		});
+
+		it("without requireCommitInLog (isolated/direct): HEAD advance alone passes", async () => {
+			await withGitRepo(async (dir, baseline) => {
+				await advanceHead(dir, "b.txt");
+				const result = await verifyGates({
+					gateCommit: true,
+					executions: [{ command: "bun test", exitCode: 0, cwd: dir }],
+					cwd: dir,
+					baselineHeadCommit: baseline,
+				});
+				expect(result.passed).toBe(true);
+			});
 		});
 
 		it("resolves the commit gate against the worktree dir when set", async () => {
