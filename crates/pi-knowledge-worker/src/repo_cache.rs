@@ -62,7 +62,9 @@ enum OrgLaneInner {
 	/// Embed phase in flight. `partial` carries a servable lexical-only
 	/// lane (BM25 + graph, empty vec) once the cheap index phase finishes,
 	/// so reads need not block on the slow bge-m3 embed.
-	Warming { partial: Option<Arc<OrgLane>> },
+	Warming {
+		partial: Option<Arc<OrgLane>>,
+	},
 	Warm(Arc<OrgLane>),
 	Error(String),
 }
@@ -404,10 +406,7 @@ fn evict_lru(map: &mut HashMap<String, RepoSlot>) {
 	while map.len() >= max_warm_repos() {
 		let victim = map
 			.iter()
-			.filter(|(_, slot)| {
-				slot.org_state.status() != "warming"
-			}
-)
+			.filter(|(_, slot)| slot.org_state.status() != "warming")
 			.min_by_key(|(_, slot)| slot.last_used)
 			.map(|(handle, _)| handle.clone());
 		if let Some(handle) = victim {
@@ -503,21 +502,15 @@ pub fn open_with_embedder(
 				// the moment the cheap index phase finishes, so bounded
 				// acquires can serve searches during the slow embed phase.
 				let partial_state = Arc::clone(&state_clone);
-				let result = OrgLane::warm_load_with(
-					&root_clone,
-					&state_clone.progress,
-					&*embedder,
-					|partial| partial_state.finalize_partial(partial),
-				);
+				let result =
+					OrgLane::warm_load_with(&root_clone, &state_clone.progress, &*embedder, |partial| {
+						partial_state.finalize_partial(partial)
+					});
 				match result {
 					Ok(lane) => {
 						state_clone.finalize_warm(lane);
 						let elapsed_ms = started.elapsed().as_millis() as u64;
-						subscribe::publish_warm_completed(
-							&handle_clone,
-							Lane::OrgMemory,
-							elapsed_ms,
-						);
+						subscribe::publish_warm_completed(&handle_clone, Lane::OrgMemory, elapsed_ms);
 					},
 					Err(e) => state_clone.finalize_error(e),
 				}
@@ -541,11 +534,7 @@ pub fn open_with_embedder(
 				// Publish before setting OnceLock so subscribers see the
 				// event even if they have a clone of the Arc.
 				if result.is_ok() {
-					subscribe::publish_warm_completed(
-						&handle_clone,
-						Lane::CodeGraph,
-						elapsed_ms,
-					);
+					subscribe::publish_warm_completed(&handle_clone, Lane::CodeGraph, elapsed_ms);
 				}
 				state_clone.set(result);
 			})
@@ -597,8 +586,8 @@ const LANE_ACQUIRE_GRACE: Duration = Duration::from_millis(150);
 /// - full lane ready → run `f`
 /// - lexical-only partial ready (vectors still building) → run `f` on it;
 ///   `OrgLane::search` self-degrades to BM25 + graph when `vec.is_empty()`
-/// - still warming past the grace window → return `{status:"warming",
-///   progress, partial:false}` without invoking `f`
+/// - still warming past the grace window → return `{status:"warming", progress,
+///   partial:false}` without invoking `f`
 /// - warm-load failed → surface the error
 ///
 /// `f` returns a `Value` (every daemon caller builds JSON), so the
@@ -681,6 +670,7 @@ pub fn stats(repo_handle: Option<&str>) -> Result<Value, String> {
 				.duration_since(UNIX_EPOCH)
 				.unwrap_or_default()
 				.as_millis() as u64,
+			"embedder": crate::embedder_status(),
 			"org_lane": org_lane_stats(&slot.org_state),
 			"code_lane": code_lane_stats(&slot.code_state),
 		}));
@@ -694,6 +684,7 @@ pub fn stats(repo_handle: Option<&str>) -> Result<Value, String> {
 				"repo_root": slot.repo_root,
 				"lanes": slot.lanes,
 				"last_used_ms_ago": slot.last_used.elapsed().as_millis() as u64,
+				"embedder": crate::embedder_status(),
 				"org_lane": org_lane_stats(&slot.org_state),
 				"code_lane": code_lane_stats(&slot.code_state),
 			})
@@ -716,7 +707,10 @@ fn org_lane_stats(state: &OrgLaneState) -> Value {
 		None
 	};
 	let error = state.error_message();
-	let mut payload = json!({ "status": status });
+	let mut payload = json!({
+		"status": status,
+		"embedder": crate::embedder_status(),
+	});
 	if let Some(p) = progress {
 		payload["progress"] = p;
 	}
@@ -903,6 +897,10 @@ mod tests {
 		assert_eq!(single["repo_handle"].as_str(), Some(handle.as_str()));
 		assert!(single["last_used_ms_ago"].is_number());
 		assert_eq!(single["org_lane"]["status"].as_str(), Some("warm"));
+		assert!(single["org_lane"]["embedder"]["desired"].as_str().is_some());
+		assert_eq!(single["org_lane"]["embedder"]["model"].as_str(), Some("bge-m3"));
+		assert_eq!(single["org_lane"]["embedder"]["dim"].as_u64(), Some(1024));
+		assert_eq!(single["embedder"], single["org_lane"]["embedder"]);
 
 		let _ = close(&handle);
 	}
@@ -914,7 +912,7 @@ mod tests {
 		let tmp = TempDir::new().expect("tempdir");
 		let result = open(tmp.path(), false, &[Lane::CodeGraph]).expect("open");
 		let handle = result["repo_handle"].as_str().expect("handle str");
-  assert_eq!(result["code_status"].as_str(), Some("warming"));
+		assert_eq!(result["code_status"].as_str(), Some("warming"));
 
 		// Block until warm completes.
 		let state = {
@@ -971,10 +969,7 @@ mod tests {
 
 		// The oldest two should be evicted. Verify we can still access
 		// the remaining ones.
-		assert!(
-			handles.len() > max_warm_repos(),
-			"should have created more than max"
-		);
+		assert!(handles.len() > max_warm_repos(), "should have created more than max");
 
 		// Clean up remaining slots.
 		for h in &handles {

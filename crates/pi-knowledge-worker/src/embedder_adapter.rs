@@ -9,7 +9,7 @@
 
 use pi_knowledge_core::{Error as KError, Result as KResult, recall::Embedder};
 
-use crate::engine::EmbeddingEngine;
+use crate::engine::{EMBEDDER_DIM, EmbeddingEngine};
 
 /// `Embedder` impl that defers each call to the engine slot. The engine is
 /// initialised lazily on first query (matches the existing protocol).
@@ -29,6 +29,6 @@ impl Embedder for DaemonEmbedder {
 	fn dim(&self) -> usize {
 		// bge-m3 output dimensionality. Keep this in sync with
 		// `pi-natives::embedding_worker::EMBEDDER_DIM`. PLAN-310 W2.5.
-		1024
+		EMBEDDER_DIM
 	}
 }

@@ -32,6 +32,17 @@ import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "./render-utils";
 // link) don't touch the lane on the read path, so they don't need it.
 const READ_ACTIONS = new Set<string>(["search", "about", "neighbors", "since"]);
 
+/** Shape of the embedder block embedded in daemon recall stats. */
+export interface MemoryEmbedderStatusSnapshot {
+	desired: "auto" | "cpu" | "vitis" | "off";
+	active: "cpu" | "vitis" | "disabled" | "unavailable";
+	state: "probing" | "ready" | "degraded" | "disabled" | "error";
+	model: string;
+	dim: number;
+	provider?: string;
+	reason?: string;
+}
+
 /** Shape of the `org_lane` payload returned by `executeOrg({command:'recall_stats'})`. */
 export interface MemoryProgressSnapshot {
 	status: "cold" | "warming" | "warm" | "error" | "unavailable";
@@ -41,6 +52,8 @@ export interface MemoryProgressSnapshot {
 		total: number;
 		started_ms: number;
 	};
+	/** Active embedding backend, when reported by protocol-v2 daemon stats. */
+	embedder?: MemoryEmbedderStatusSnapshot;
 	/** Indexed org-item count once a (full or partial) lane exists.
 	 *  Present for `warm` and partial `warming` states; absent while cold. */
 	item_count?: number;

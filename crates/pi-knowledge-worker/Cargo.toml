@@ -19,6 +19,7 @@ workspace = true
 
 [dependencies]
 fastembed = "5"
+ort = { version = "=2.0.0-rc.11", default-features = false, features = ["std", "vitis"] }
 pi-knowledge-core = { path = "../pi-knowledge-core" }
 pi-org-engine = { path = "../pi-org-engine" }
 pi-code-graph = { path = "../pi-code-graph" }

@@ -52,7 +52,6 @@ pub const ORG_VEC_SCHEMA_VERSION: u32 = 1;
 const MANIFEST_NAME: &str = "org_vec_meta.bin";
 const VECTORS_NAME: &str = "vectors.uidx";
 
-
 /// Stable content hash for an item's embedded text.
 ///
 /// FNV-1a over the exact string that `build_vec_index_with` feeds the embedder,
@@ -99,11 +98,7 @@ impl OrgVecCache {
 	/// non-fatal) when the cache base cannot be determined.
 	pub fn for_repo(repo_root: &Path, embedder_model: &str, embedder_dim: usize) -> Option<Self> {
 		let dir = knowledge_cache_dir(repo_root).ok()?;
-		Some(Self {
-			dir,
-			embedder_model: embedder_model.to_string(),
-			embedder_dim,
-		})
+		Some(Self { dir, embedder_model: embedder_model.to_string(), embedder_dim })
 	}
 
 	fn manifest_path(&self) -> PathBuf {
@@ -132,8 +127,9 @@ impl OrgVecCache {
 		Some(LoadedCache { index, manifest })
 	}
 
-	/// Persist `index` + a manifest describing `live` (`id_hash` → content hash).
-	/// Best-effort: a write error is returned but is non-fatal to the lane.
+	/// Persist `index` + a manifest describing `live` (`id_hash` → content
+	/// hash). Best-effort: a write error is returned but is non-fatal to the
+	/// lane.
 	pub fn save(&self, index: &VectorIndex, live: &BTreeMap<u64, u64>) -> Result<(), String> {
 		std::fs::create_dir_all(&self.dir).map_err(|e| format!("create cache dir: {e}"))?;
 		// Vectors first, manifest last: a crash between the two leaves a
@@ -150,7 +146,6 @@ impl OrgVecCache {
 		};
 		write_manifest(&self.manifest_path(), &manifest)
 	}
-
 }
 
 /// Partition `items` into reuse / embed / skip given a prior cache and an
@@ -160,16 +155,17 @@ impl OrgVecCache {
 ///   equals the freshly-computed one (unchanged item).
 /// - embed: new or changed item within the recency window (must embed now).
 /// - skip:  BUG-477 — item whose owning file is older than the recency cutoff
-///   AND which has no carried-forward vector. It stays BM25 + graph
-///   searchable; editing the file refreshes its mtime + content hash so the
-///   next warm embeds it (the natural "embed-on-demand" path). A skipped item
-///   that already had a cached vector is REUSED, never dropped — recency only
-///   gates *new* embedding work, it never evicts existing vectors.
+///   AND which has no carried-forward vector. It stays BM25 + graph searchable;
+///   editing the file refreshes its mtime + content hash so the next warm
+///   embeds it (the natural "embed-on-demand" path). A skipped item that
+///   already had a cached vector is REUSED, never dropped — recency only gates
+///   *new* embedding work, it never evicts existing vectors.
 pub struct EmbedPlan<'a> {
 	/// (key, item) pairs whose vectors carry forward unchanged.
-	pub reuse: Vec<(u64, &'a OrgItem)>,
-	/// (`key`, `item`, `embed_text`, `content_hash`) pairs needing a fresh embed.
-	pub embed: Vec<(u64, &'a OrgItem, String, u64)>,
+	pub reuse:   Vec<(u64, &'a OrgItem)>,
+	/// (`key`, `item`, `embed_text`, `content_hash`) pairs needing a fresh
+	/// embed.
+	pub embed:   Vec<(u64, &'a OrgItem, String, u64)>,
 	/// Items intentionally left unembedded by the recency gate (lexical-only).
 	pub skipped: Vec<&'a OrgItem>,
 }
@@ -223,9 +219,8 @@ pub fn plan_embeds_with_recency<'a>(
 		let key = id_hash(&item.id);
 		let text = embed_text(item);
 		let hash = content_hash(&text);
-		let reusable = prior.is_some_and(|p| {
-			p.manifest.entries.get(&key) == Some(&hash) && p.index.contains(key)
-		});
+		let reusable = prior
+			.is_some_and(|p| p.manifest.entries.get(&key) == Some(&hash) && p.index.contains(key));
 		if reusable {
 			// Already embedded + unchanged — keep it regardless of recency.
 			reuse.push((key, item));
@@ -319,8 +314,7 @@ mod tests {
 		std::fs::write(&old_path, "x").unwrap();
 		std::fs::write(&new_path, "y").unwrap();
 		// Backdate the old file ~100 days.
-		let hundred_days_ago =
-			SystemTime::now() - Duration::from_secs(100 * 24 * 60 * 60);
+		let hundred_days_ago = SystemTime::now() - Duration::from_secs(100 * 24 * 60 * 60);
 		let ft = filetime::FileTime::from_system_time(hundred_days_ago);
 		filetime::set_file_mtime(&old_path, ft).unwrap();
 

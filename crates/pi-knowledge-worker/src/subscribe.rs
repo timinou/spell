@@ -68,14 +68,14 @@ fn next_sub_id() -> SubId {
 /// LaneEvents fan-out can push event frames into the writer pipe directly.
 #[derive(Clone)]
 pub struct EventSink {
-	pub sub_id:   SubId,
-	pub out_tx:   SyncSender<Frame>,
-	pub repo:     String,
-	pub lane:     Lane,
+	pub sub_id:  SubId,
+	pub out_tx:  SyncSender<Frame>,
+	pub repo:    String,
+	pub lane:    Lane,
 	/// Bounded counter of dropped events since the last successful send.
 	/// Flushed (read + reset) every time the next event is delivered, as a
 	/// `{event:"lag", dropped: N}` frame.
-	pub dropped:  Arc<AtomicU64>,
+	pub dropped: Arc<AtomicU64>,
 }
 
 impl std::fmt::Debug for EventSink {
@@ -93,33 +93,19 @@ impl std::fmt::Debug for EventSink {
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
 	/// Index for `(repo, lane)` has been rebuilt; fingerprint is new.
-	IndexChanged {
-		repo_handle: String,
-		lane:        Lane,
-		fingerprint: String,
-	},
+	IndexChanged { repo_handle: String, lane: Lane, fingerprint: String },
 	/// Initial warm-load for `(repo, lane)` completed.
-	WarmCompleted {
-		repo_handle: String,
-		lane:        Lane,
-		ms:          u64,
-	},
+	WarmCompleted { repo_handle: String, lane: Lane, ms: u64 },
 	/// LRU evicted `(repo, lane)`; subscribers should consider their cached
 	/// `repo_handle` stale and re-issue `open` if they still care.
-	Evicted {
-		repo_handle: String,
-		reason:      String,
-	},
+	Evicted { repo_handle: String, reason: String },
 	/// Periodic liveness signal.
 	Heartbeat { ts: u64 },
 	/// Backpressure marker — N events were dropped before this frame.
 	Lag { dropped: u64 },
 	/// Synthetic benchmark payload; emitted_at in epoch ms.
 	/// PLAN-315 W8 perf instrumentation. Never emitted during normal operation.
-	BenchPayload {
-		emitted_at_ms: u64,
-		payload_id:   u32,
-	},
+	BenchPayload { emitted_at_ms: u64, payload_id: u32 },
 }
 
 /// Per-(repo_handle, lane) subscriber registry.
@@ -164,25 +150,25 @@ impl LaneEvents {
 				// frame first so the client sees the gap.
 				let dropped = sink.dropped.swap(0, Ordering::SeqCst);
 				if dropped > 0 {
-					let lag_body = serde_json::to_value(Event::Lag { dropped })
-						.unwrap_or_else(|_| json!(null));
+					let lag_body =
+						serde_json::to_value(Event::Lag { dropped }).unwrap_or_else(|_| json!(null));
 					match sink.out_tx.try_send(Frame::Event { body: lag_body }) {
-						Ok(()) | Err(TrySendError::Full(_)) => {}
+						Ok(()) | Err(TrySendError::Full(_)) => {},
 						Err(TrySendError::Disconnected(_)) => {
 							dead.push(sink.sub_id);
 							continue;
-						}
+						},
 					}
 				}
 				match sink.out_tx.try_send(frame_template()) {
-					Ok(()) => {}
+					Ok(()) => {},
 					Err(TrySendError::Full(_)) => {
 						// channel full → record drop, do NOT remove sink
 						sink.dropped.fetch_add(1, Ordering::SeqCst);
-					}
+					},
 					Err(TrySendError::Disconnected(_)) => {
 						dead.push(sink.sub_id);
-					}
+					},
 				}
 			}
 		}
@@ -230,12 +216,7 @@ impl EventRegistry {
 
 	/// Subscribe an outbound sink. Returns a `SubscriptionToken` which, on
 	/// drop, deregisters the sink.
-	pub fn subscribe(
-		&self,
-		repo: &str,
-		lane: Lane,
-		out_tx: SyncSender<Frame>,
-	) -> SubscriptionToken {
+	pub fn subscribe(&self, repo: &str, lane: Lane, out_tx: SyncSender<Frame>) -> SubscriptionToken {
 		let sub_id = next_sub_id();
 		let lane_events = self.lane(repo, lane);
 		lane_events.add(EventSink {
@@ -278,35 +259,26 @@ pub fn registry() -> &'static EventRegistry {
 
 /// Convenience: publish `IndexChanged` for a lane.
 pub fn publish_index_changed(repo: &str, lane: Lane, fingerprint: &str) {
-	registry().publish(
-		repo,
+	registry().publish(repo, lane, &Event::IndexChanged {
+		repo_handle: repo.to_owned(),
 		lane,
-		&Event::IndexChanged {
-			repo_handle: repo.to_owned(),
-			lane,
-			fingerprint: fingerprint.to_owned(),
-		},
-	);
+		fingerprint: fingerprint.to_owned(),
+	});
 }
 
 /// Convenience: publish `WarmCompleted` for a lane.
 pub fn publish_warm_completed(repo: &str, lane: Lane, ms: u64) {
-	registry().publish(
-		repo,
-		lane,
-		&Event::WarmCompleted { repo_handle: repo.to_owned(), lane, ms },
-	);
+	registry().publish(repo, lane, &Event::WarmCompleted { repo_handle: repo.to_owned(), lane, ms });
 }
 
 /// Convenience: publish `Evicted`.
 pub fn publish_evicted(repo: &str, reason: &str) {
 	// Eviction fires across all lanes for the repo; iterate over both.
 	for lane in [Lane::OrgMemory, Lane::CodeGraph] {
-		registry().publish(
-			repo,
-			lane,
-			&Event::Evicted { repo_handle: repo.to_owned(), reason: reason.to_owned() },
-		);
+		registry().publish(repo, lane, &Event::Evicted {
+			repo_handle: repo.to_owned(),
+			reason:      reason.to_owned(),
+		});
 	}
 }
 
@@ -318,11 +290,7 @@ pub fn publish_bench_event(repo_handle: &str, lane: Lane, payload_id: u32) {
 		.duration_since(UNIX_EPOCH)
 		.map(|d| d.as_millis() as u64)
 		.unwrap_or(0);
-	registry().publish(
-		repo_handle,
-		lane,
-		&Event::BenchPayload { emitted_at_ms, payload_id },
-	);
+	registry().publish(repo_handle, lane, &Event::BenchPayload { emitted_at_ms, payload_id });
 }
 
 /// Spawn a heartbeat thread bound to `out_tx`. Stops when the receiver is
@@ -340,8 +308,7 @@ pub fn spawn_heartbeat(
 			let ts = SystemTime::now()
 				.duration_since(UNIX_EPOCH)
 				.map_or(0, |d| d.as_secs());
-			let body = serde_json::to_value(Event::Heartbeat { ts })
-				.unwrap_or_else(|_| json!(null));
+			let body = serde_json::to_value(Event::Heartbeat { ts }).unwrap_or_else(|_| json!(null));
 			if out_tx.try_send(Frame::Event { body }).is_err() {
 				// Receiver dropped or channel full beyond drop-tolerance —
 				// stop the heartbeat. Reconnect will spawn a fresh one.
@@ -353,8 +320,9 @@ pub fn spawn_heartbeat(
 
 // `std::sync::mpsc::Sender::send` is unbounded; we want bounded for
 // backpressure. Use `crossbeam_channel` once added, or implement a bounded
-// wrapper. For PLAN-315 W4 we use a `SyncSender` backed by std::sync::mpsc::sync_channel
-// at the call site. This module assumes the `Sender` is one of those.
+// wrapper. For PLAN-315 W4 we use a `SyncSender` backed by
+// std::sync::mpsc::sync_channel at the call site. This module assumes the
+// `Sender` is one of those.
 
 #[cfg(test)]
 mod tests {
@@ -368,15 +336,11 @@ mod tests {
 		let (tx, rx) = sync_channel(SUB_CHANNEL_DEPTH);
 		let _token = registry.subscribe("fnv:abc", Lane::OrgMemory, tx);
 
-		registry.publish(
-			"fnv:abc",
-			Lane::OrgMemory,
-			&Event::IndexChanged {
-				repo_handle: "fnv:abc".into(),
-				lane: Lane::OrgMemory,
-				fingerprint: "fp-1".into(),
-			},
-		);
+		registry.publish("fnv:abc", Lane::OrgMemory, &Event::IndexChanged {
+			repo_handle: "fnv:abc".into(),
+			lane:        Lane::OrgMemory,
+			fingerprint: "fp-1".into(),
+		});
 
 		let frame = rx.recv_timeout(Duration::from_secs(1)).expect("frame");
 		let Frame::Event { body } = frame else {
@@ -397,15 +361,11 @@ mod tests {
 		assert_eq!(registry.lane("fnv:r", Lane::OrgMemory).len(), 0);
 
 		// Publish after drop should not deliver.
-		registry.publish(
-			"fnv:r",
-			Lane::OrgMemory,
-			&Event::IndexChanged {
-				repo_handle: "fnv:r".into(),
-				lane: Lane::OrgMemory,
-				fingerprint: "fp".into(),
-			},
-		);
+		registry.publish("fnv:r", Lane::OrgMemory, &Event::IndexChanged {
+			repo_handle: "fnv:r".into(),
+			lane:        Lane::OrgMemory,
+			fingerprint: "fp".into(),
+		});
 		assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
 	}
 
@@ -417,15 +377,11 @@ mod tests {
 		let _t1 = registry.subscribe("fnv:m", Lane::OrgMemory, tx1);
 		let _t2 = registry.subscribe("fnv:m", Lane::OrgMemory, tx2);
 
-		registry.publish(
-			"fnv:m",
-			Lane::OrgMemory,
-			&Event::WarmCompleted {
-				repo_handle: "fnv:m".into(),
-				lane: Lane::OrgMemory,
-				ms: 100,
-			},
-		);
+		registry.publish("fnv:m", Lane::OrgMemory, &Event::WarmCompleted {
+			repo_handle: "fnv:m".into(),
+			lane:        Lane::OrgMemory,
+			ms:          100,
+		});
 		let _ = rx1.recv_timeout(Duration::from_secs(1)).expect("rx1");
 		let _ = rx2.recv_timeout(Duration::from_secs(1)).expect("rx2");
 	}
@@ -434,15 +390,11 @@ mod tests {
 	fn publish_with_no_subscribers_is_noop() {
 		let registry = EventRegistry::new();
 		// No panic, no allocation in the lane map.
-		registry.publish(
-			"fnv:none",
-			Lane::OrgMemory,
-			&Event::IndexChanged {
-				repo_handle: "fnv:none".into(),
-				lane: Lane::OrgMemory,
-				fingerprint: "x".into(),
-			},
-		);
+		registry.publish("fnv:none", Lane::OrgMemory, &Event::IndexChanged {
+			repo_handle: "fnv:none".into(),
+			lane:        Lane::OrgMemory,
+			fingerprint: "x".into(),
+		});
 	}
 
 	#[test]
@@ -453,15 +405,11 @@ mod tests {
 		let _token = registry.subscribe("fnv:lag", Lane::OrgMemory, tx);
 
 		for i in 0..5 {
-			registry.publish(
-				"fnv:lag",
-				Lane::OrgMemory,
-				&Event::IndexChanged {
-					repo_handle: "fnv:lag".into(),
-					lane: Lane::OrgMemory,
-					fingerprint: format!("fp-{i}"),
-				},
-			);
+			registry.publish("fnv:lag", Lane::OrgMemory, &Event::IndexChanged {
+				repo_handle: "fnv:lag".into(),
+				lane:        Lane::OrgMemory,
+				fingerprint: format!("fp-{i}"),
+			});
 		}
 
 		// First frame: the first index_changed.
@@ -484,21 +432,17 @@ mod tests {
 				Some("lag") => {
 					saw_lag = true;
 					assert!(body["dropped"].as_u64().unwrap_or(0) > 0);
-				}
+				},
 				Some("index_changed") => saw_more_events += 1,
-				_ => {}
+				_ => {},
 			}
 		}
 		// Fire one more publish to actually flush the lag counter.
-		registry.publish(
-			"fnv:lag",
-			Lane::OrgMemory,
-			&Event::IndexChanged {
-				repo_handle: "fnv:lag".into(),
-				lane: Lane::OrgMemory,
-				fingerprint: "final".into(),
-			},
-		);
+		registry.publish("fnv:lag", Lane::OrgMemory, &Event::IndexChanged {
+			repo_handle: "fnv:lag".into(),
+			lane:        Lane::OrgMemory,
+			fingerprint: "final".into(),
+		});
 		while let Ok(frame) = rx.recv_timeout(Duration::from_millis(100)) {
 			let Frame::Event { body } = frame else {
 				continue;
@@ -508,7 +452,10 @@ mod tests {
 				break;
 			}
 		}
-		assert!(saw_lag, "expected a lag frame after channel overflow; saw {saw_more_events} extra events");
+		assert!(
+			saw_lag,
+			"expected a lag frame after channel overflow; saw {saw_more_events} extra events"
+		);
 	}
 
 	#[test]
@@ -523,11 +470,8 @@ mod tests {
 			.map(|d| d.as_millis() as u64)
 			.unwrap_or(0);
 
-		registry.publish(
-			"fnv:bench",
-			Lane::OrgMemory,
-			&Event::BenchPayload { emitted_at_ms, payload_id },
-		);
+		registry
+			.publish("fnv:bench", Lane::OrgMemory, &Event::BenchPayload { emitted_at_ms, payload_id });
 
 		let frame = rx.recv_timeout(Duration::from_secs(1)).expect("frame");
 		let Frame::Event { body } = frame else {

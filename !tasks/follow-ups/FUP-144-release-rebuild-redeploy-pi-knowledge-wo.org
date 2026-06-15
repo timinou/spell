@@ -1,8 +1,9 @@
 #+TITLE: Release-rebuild + redeploy pi-knowledge-worker once pi-code-path compiles (BUG-483 fixes 2+3)
-#+STATE: BLOCKED
+#+STATE: DONE
 #+SESSION_ID: 150a077d508122ea
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-15T10-51-44-834Z_150a077d508122ea.jsonl]]
 #+CUSTOM_ID: FUP-144-release-rebuild-redeploy-pi-knowledge-wo
+#+COMPLETION_HASH: 9d702504fd704e30
 
 * Initial Message
 
@@ -46,3 +47,5 @@ contain fixes 2+3.
 
 Prefer wiring this into the normal native build/deploy pipeline (see BUG-471)
 rather than a manual cp.
+
+NOTE [2026-06-15]: Unblocked + completed. pi-code-path now compiles (concurrent work fixed the E0061 in dialects/fs). Release-built pi-knowledge-worker (fix 2: idle-gate) and rebuilt the pi-natives modern addon via `bun run build:native` (fix 3: spawn_daemon child.wait() zombie reap). Both deployed to packages/natives/native/. Verified end-to-end: fresh daemon fast-warms from the persisted 17.5MB cache in ~30s (done 0→4139 carry-forward, embeds only new items) vs 55min cold; one clean daemon, socket responsive, no new zombie from the proper spawn path. NB: already-running bun sessions still hold the pre-fix addon in memory and will leak a zombie per daemon-spawn until they restart — harmless (0 resources), clears on session exit. New sessions load the fixed addon.

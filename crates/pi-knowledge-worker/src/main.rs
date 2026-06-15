@@ -9,8 +9,8 @@
 //! - 30-minute (configurable) idle exit so the worker doesn't pin RAM
 //!   indefinitely.
 //! - SIGTERM / SIGINT drain in-flight connections before exiting cleanly.
-//! - Stale socket files (regular file or dead listener) are unlinked on
-//!   startup before rebinding.
+//! - Stale socket files (regular file or dead listener) are unlinked on startup
+//!   before rebinding.
 
 use std::{
 	fs::{self, File, OpenOptions, Permissions},
@@ -113,7 +113,10 @@ enum Command {
 		limit:       usize,
 	},
 	/// `cg_definition` — resolve a symbol query to its primary location.
-	CgDefinition { repo_handle: String, query: String },
+	CgDefinition {
+		repo_handle: String,
+		query:       String,
+	},
 	/// `cg_references` — downstream references via graph_impact, bounded
 	/// by `max_depth` (default 3).
 	CgReferences {
@@ -515,9 +518,8 @@ fn redirect_stdio_to_devnull() {
 /// the inbound→outbound sync channel.
 struct ConnState {
 	/// Active subscriptions on this connection. Map allows O(1) unsubscribe.
-	subscriptions: std::sync::Mutex<
-		std::collections::HashMap<subscribe::SubId, subscribe::SubscriptionToken>,
-	>,
+	subscriptions:
+		std::sync::Mutex<std::collections::HashMap<subscribe::SubId, subscribe::SubscriptionToken>>,
 	/// Outbound sender shared between command handlers and event publishers.
 	out_tx:        std::sync::mpsc::SyncSender<subscribe::Frame>,
 }
@@ -600,10 +602,7 @@ fn handle_socket_conn(stream: UnixStream) {
 /// (which mutate `ConnState`) directly; everything else delegates to
 /// `process_line`. Returns the response JSON body (without the `Response`
 /// envelope) so the caller can put it on the wire.
-fn process_line_with_conn(
-	conn: &std::sync::Arc<ConnState>,
-	line: &str,
-) -> serde_json::Value {
+fn process_line_with_conn(conn: &std::sync::Arc<ConnState>, line: &str) -> serde_json::Value {
 	// Peek at the command name without consuming the full Command enum:
 	// Subscribe/Unsubscribe need access to ConnState which Command can't
 	// carry without polluting the dispatch type with non-Send state.
@@ -618,8 +617,7 @@ fn process_line_with_conn(
 	match parsed.get("command").and_then(|v| v.as_str()) {
 		Some("subscribe") => handle_subscribe(conn, &parsed),
 		Some("unsubscribe") => handle_unsubscribe(conn, &parsed),
-		_ => serde_json::to_value(process_line(line))
-			.unwrap_or(serde_json::Value::Null),
+		_ => serde_json::to_value(process_line(line)).unwrap_or(serde_json::Value::Null),
 	}
 }
 
@@ -636,7 +634,10 @@ fn handle_subscribe(
 			});
 		},
 	};
-	let lanes_value = request.get("lanes").cloned().unwrap_or(serde_json::json!([]));
+	let lanes_value = request
+		.get("lanes")
+		.cloned()
+		.unwrap_or(serde_json::json!([]));
 	let lanes: Vec<Lane> = match serde_json::from_value(lanes_value) {
 		Ok(v) => v,
 		Err(e) => {
@@ -655,8 +656,7 @@ fn handle_subscribe(
 
 	let mut sub_ids = Vec::new();
 	for lane in &lanes {
-		let token = subscribe::registry()
-			.subscribe(&repo_handle, *lane, conn.out_tx.clone());
+		let token = subscribe::registry().subscribe(&repo_handle, *lane, conn.out_tx.clone());
 		let sub_id = token.sub_id();
 		if let Ok(mut map) = conn.subscriptions.lock() {
 			map.insert(sub_id, token);
@@ -726,9 +726,7 @@ fn accept_loop(listener: &UnixListener, idle_secs: u64) {
 		// A cold warm of a large corpus outlasts the idle window; exiting
 		// mid-embed would discard the build before it persists, forcing a
 		// full re-embed (CPU + RAM hog) on the next daemon lifetime.
-		if idle >= idle_secs
-			&& INFLIGHT.load(Ordering::SeqCst) == 0
-			&& !repo_cache::warm_in_flight()
+		if idle >= idle_secs && INFLIGHT.load(Ordering::SeqCst) == 0 && !repo_cache::warm_in_flight()
 		{
 			break;
 		}

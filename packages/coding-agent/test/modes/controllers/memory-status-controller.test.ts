@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { MemoryStatusController } from "../../../src/modes/controllers/memory-status-controller";
-import type { MemoryProgressSnapshot } from "../../../src/tools/memory";
+import type { MemoryEmbedderStatusSnapshot, MemoryProgressSnapshot } from "../../../src/tools/memory";
 import type { InteractiveModeContext } from "../../../src/modes/types";
 
 interface StatusEvent {
@@ -39,6 +39,32 @@ function snap(
 ): MemoryProgressSnapshot {
 	return progress ? { status, progress } : { status };
 }
+
+const CPU_EMBEDDER: MemoryEmbedderStatusSnapshot = {
+	desired: "auto",
+	active: "cpu",
+	state: "ready",
+	model: "bge-m3",
+	dim: 1024,
+};
+
+const NPU_EMBEDDER: MemoryEmbedderStatusSnapshot = {
+	desired: "auto",
+	active: "vitis",
+	state: "ready",
+	model: "bge-m3",
+	dim: 1024,
+	provider: "VitisAIExecutionProvider",
+};
+
+const DEGRADED_EMBEDDER: MemoryEmbedderStatusSnapshot = {
+	desired: "auto",
+	active: "cpu",
+	state: "degraded",
+	model: "bge-m3",
+	dim: 1024,
+	reason: "NPU unavailable; using CPU",
+};
 
 /**
  * FEAT-780: `poll()` is async now (peek is async). Tests that drive
@@ -157,12 +183,46 @@ describe("MemoryStatusController", () => {
 		controller.dispose();
 	});
 
+	it("adds a backend suffix while daemon is warming when embedder status is present", async () => {
+		const { ctx, statusEvents } = makeCtx();
+		const controller = new MemoryStatusController(ctx, {
+			peek: async () => ({
+				status: "warming",
+				progress: { phase: "embed", done: 17, total: 40, started_ms: 0 },
+				embedder: CPU_EMBEDDER,
+			}),
+			setIntervalFn: fakeSetInterval,
+			clearIntervalFn: fakeClearInterval,
+		});
+		controller.start();
+		await flushPolls();
+		expect(statusEvents[0].text).toContain("indexing 17/40 (embed) · CPU");
+		controller.dispose();
+	});
+
+	it("renders degraded auto fallback as NPU unavailable to CPU", async () => {
+		const { ctx, statusEvents } = makeCtx();
+		const controller = new MemoryStatusController(ctx, {
+			peek: async () => ({
+				status: "warming",
+				progress: { phase: "embed", done: 2, total: 5, started_ms: 0 },
+				embedder: DEGRADED_EMBEDDER,
+			}),
+			setIntervalFn: fakeSetInterval,
+			clearIntervalFn: fakeClearInterval,
+		});
+		controller.start();
+		await flushPolls();
+		expect(statusEvents[0].text).toContain("NPU unavailable → CPU");
+		controller.dispose();
+	});
+
 	it("transitions warming→warm flashes 'memory ready' then clears", async () => {
 		const { ctx, statusEvents } = makeCtx();
 		const states: MemoryProgressSnapshot[] = [
 			snap("warming", { phase: "scan", done: 0, total: 10, started_ms: 0 }),
 			snap("warming", { phase: "embed", done: 5, total: 10, started_ms: 0 }),
-			{ status: "warm", item_count: 42 },
+			{ status: "warm", item_count: 42, embedder: NPU_EMBEDDER },
 		];
 		let i = 0;
 		const controller = new MemoryStatusController(ctx, {
@@ -185,7 +245,7 @@ describe("MemoryStatusController", () => {
 		expect(statusEvents.map(e => e.text)).toEqual([
 			expect.stringContaining("0/10 (scan)") as unknown as string,
 			expect.stringContaining("5/10 (embed)") as unknown as string,
-			expect.stringContaining("memory ready · 42 items") as unknown as string,
+			expect.stringContaining("memory ready · 42 items · NPU") as unknown as string,
 		]);
 
 		// The flash timer fires → segment yields the status line.

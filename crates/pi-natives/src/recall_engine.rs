@@ -779,7 +779,9 @@ fn walk_org_files(dir: &Path) -> Vec<PathBuf> {
 /// in `pi-knowledge-worker::lane_org`. Absent/unrecognized → enabled.
 fn embeddings_disabled() -> bool {
 	matches!(
-		std::env::var("PI_KNOWLEDGE_WORKER_EMBEDDINGS").ok().as_deref(),
+		std::env::var("PI_KNOWLEDGE_WORKER_EMBEDDINGS")
+			.ok()
+			.as_deref(),
 		Some("0") | Some("false") | Some("off") | Some("FALSE") | Some("OFF")
 	)
 }

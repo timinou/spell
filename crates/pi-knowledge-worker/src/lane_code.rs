@@ -18,9 +18,7 @@ use std::{
 	time::SystemTime,
 };
 
-use pi_code_graph::{
-	BuildGraphOptions, CacheStore, CodeGraph, CodeGraphBuilder, LanguageRegistry,
-};
+use pi_code_graph::{BuildGraphOptions, CacheStore, CodeGraph, CodeGraphBuilder, LanguageRegistry};
 use serde_json::{Value, json};
 
 /// Warm state for the code-graph lane of one repo.
@@ -70,8 +68,9 @@ impl CodeLane {
 	/// its primary location. Returns null when no symbol matches.
 	pub fn definition(&self, query: &str) -> Result<Value, String> {
 		match self.graph.graph_context(query) {
-			Some(ctx) => Ok(serde_json::to_value(&ctx)
-				.map_err(|e| format!("serialise context: {e}"))?),
+			Some(ctx) => {
+				Ok(serde_json::to_value(&ctx).map_err(|e| format!("serialise context: {e}"))?)
+			},
 			None => Ok(Value::Null),
 		}
 	}
@@ -80,8 +79,9 @@ impl CodeLane {
 	/// matched symbol. Maps to graph_impact under the hood.
 	pub fn references(&self, query: &str, max_depth: usize) -> Result<Value, String> {
 		match self.graph.graph_impact(query, max_depth) {
-			Some(result) => Ok(serde_json::to_value(&result)
-				.map_err(|e| format!("serialise impact: {e}"))?),
+			Some(result) => {
+				Ok(serde_json::to_value(&result).map_err(|e| format!("serialise impact: {e}"))?)
+			},
 			None => Ok(Value::Null),
 		}
 	}
@@ -90,8 +90,9 @@ impl CodeLane {
 	/// matched symbol via the flow query.
 	pub fn callers(&self, query: &str, max_depth: usize) -> Result<Value, String> {
 		match self.graph.graph_flow(query, max_depth) {
-			Some(result) => Ok(serde_json::to_value(&result)
-				.map_err(|e| format!("serialise flow: {e}"))?),
+			Some(result) => {
+				Ok(serde_json::to_value(&result).map_err(|e| format!("serialise flow: {e}"))?)
+			},
 			None => Ok(Value::Null),
 		}
 	}
@@ -119,8 +120,8 @@ mod tests {
 		fs::create_dir_all(&src).expect("mk src");
 		fs::write(
 			src.join("foo.ts"),
-			"export function helloAlpha() { return 1; }\n\
-			 export function helloBeta(x: number) { return helloAlpha() + x; }\n",
+			"export function helloAlpha() { return 1; }\nexport function helloBeta(x: number) { \
+			 return helloAlpha() + x; }\n",
 		)
 		.expect("write foo");
 	}
@@ -132,10 +133,7 @@ mod tests {
 		seed_repo(tmp.path());
 		let lane = CodeLane::warm_load(tmp.path()).expect("warm");
 		let names = lane.graph.symbol_names();
-		assert!(
-			names.iter().any(|n| n.contains("helloAlpha")),
-			"expected helloAlpha in {names:?}",
-		);
+		assert!(names.iter().any(|n| n.contains("helloAlpha")), "expected helloAlpha in {names:?}",);
 	}
 
 	#[test]

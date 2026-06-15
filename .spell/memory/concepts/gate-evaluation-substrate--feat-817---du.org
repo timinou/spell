@@ -1,0 +1,32 @@
+#+TITLE: gate-evaluation-substrate--feat-817---du
+
+** ITEM Gate evaluation substrate (FEAT-817): durable evidence + single commit evaluator
+
+Spell's todo/task `verify` gates (commit|artifact|cmd|review|swarm) share a type (TaskVerify = DisciplineVerify, FEAT-816) but had N ad-hoc evaluators. FEAT-817 unified the EVALUATION substrate.
+
+## The unclean interface (3 RCs were symptoms)
+- RC-A: gate evidence was bash-tool-ONLY (agent-session recorded only toolName==="bash"); run/execute/warm-runner satisfied gates were invisible.
+- RC-B: direct-path evidence was a VOLATILE in-memory array (#trackedBashToolExecutions) wiped on session resume/branch/navigateTree, never rehydrated → gate cleared a turn after resume saw empty log → permanently stuck. (Not a turn-window; no time filter exists.)
+- RC-C: the commit gate had THREE evaluators (direct baseline-diff via compareGitBaseline; delegated real-HEAD via detectGitCommitInWorktree; delegated text-scan detectGitCommit). Direct snapshotted baseline only on pending→in_progress edge, no repair path.
+
+## The fix (cutover, no parallel impls)
+- ExecutionRecord (was TrackedBashExecution): tool-agnostic {command,exitCode,cwd?}.
+- src/session/execution-history.ts::extractExecutionHistory: derive cmd-gate log ON DEMAND from DURABLE agent.state.messages — pair assistant.toolCall(bash).arguments.command with toolResult(bash).details.{exitCode,cwd} by toolCallId; reconstruct run commands from toolResult(run).details.argv; read bashExecution msgs. Survives resume; tool-agnostic. session.getExecutionHistory replaces getBashHistory.
+- src/task/gate-verification.ts::detectHeadAdvanced: SINGLE commit evaluator (real HEAD vs baseline SHA). verifyGates requires baselineHeadCommit for commit gate. detectGitCommit text-scan + compareGitBaseline/GitBaselineDiff/parseStatusChangedFiles DELETED.
+- RC-C repair: explicit status:"in_progress" re-entry re-captures a missing baseline (captureDirectWorkBaselines).
+
+## Hardening (reviewer swarm found, critical)
+Default task.isolation.mode is "none" → non-isolated delegated is the COMMON path. Real-HEAD alone is NOT per-task-attributable in a SHARED working tree: concurrent siblings' commit could false-pass another's gate (F1), and child-node commit gates hit undefined baseline → false-fail (F2). Fix: verifyGates({requireCommitInLog}) — when set (non-isolated delegated, !worktreeDir), commit gate requires BOTH advanced HEAD AND a git commit in THIS task's own execution log (detectGitCommitInLog). Conjunct, strictly stronger. Isolated (own worktree) + sequential direct path keep pure real-HEAD. Baseline captured for ANY-gate non-isolated task (child gate kinds unknowable at dispatch).
+
+## Key lesson
+When unifying a vocab (FEAT-816 did declaration), also unify the EVALUATION substrate — a shared type with divergent evaluators is the real uncleanliness. And: a real-state check (HEAD advanced) loses per-actor ATTRIBUTION in a shared resource; restore it with a per-actor evidence conjunct, scoped to the shared-tree case only.
+
+Anchors: gate failure strings "No successful execution matched the gate command", "HEAD did not advance past the pre-work baseline", "No git commit by this task was recorded". Files: src/task/gate-verification.ts, src/session/execution-history.ts, src/task/subprocess-execution-handlers.ts, src/tools/todo-write.ts, src/task/index.ts.
+:PROPERTIES:
+:CUSTOM_ID: CON-gate-evaluation-substrate--feat-817---du
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-15T14:50:37Z
+:END:
+:RELATIONS:
+:END:

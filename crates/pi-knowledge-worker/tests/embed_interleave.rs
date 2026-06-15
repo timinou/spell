@@ -80,7 +80,8 @@ fn seed(root: &std::path::Path, n: usize) {
 		std::fs::write(
 			dir.join(format!("BUG-{i:04}.org")),
 			format!(
-				"* BUG-{i:04} item {i}\n:PROPERTIES:\n:CUSTOM_ID: BUG-{i:04}\n:KIND: bug\n:END:\n\nbody {i}\n"
+				"* BUG-{i:04} item {i}\n:PROPERTIES:\n:CUSTOM_ID: BUG-{i:04}\n:KIND: \
+				 bug\n:END:\n\nbody {i}\n"
 			),
 		)
 		.unwrap();
@@ -124,13 +125,11 @@ fn chunked_warm_embed_releases_lock_between_chunks() {
 
 	// The query must NOT have waited for the whole warm batch. Allow generous
 	// slack for scheduling, but require it to be a fraction of the warm time.
-	assert!(
-		total_q < warm_elapsed,
-		"query acquired mid-warm: q={total_q:?} warm={warm_elapsed:?}"
-	);
+	assert!(total_q < warm_elapsed, "query acquired mid-warm: q={total_q:?} warm={warm_elapsed:?}");
 	assert!(
 		latency < Duration::from_millis(150),
-		"query lock-acquire latency {latency:?} should be ~one chunk, not the whole warm batch ({warm_elapsed:?})"
+		"query lock-acquire latency {latency:?} should be ~one chunk, not the whole warm batch \
+		 ({warm_elapsed:?})"
 	);
 	// Sanity: the warm actually chunked (many batch calls, not one).
 	assert!(

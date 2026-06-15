@@ -197,8 +197,8 @@ fn stats_reports_progress_during_warm_load() {
 /// Workflow 3: Search on a warming slot is **non-blocking** (PLAN-316 +
 /// BM25-first). It returns promptly with one of:
 /// - lexical-only hits served from the partial lane (BM25 + graph), or
-/// - a `{status:"warming"}` sentinel if even the cheap index phase
-///   hasn't finished within the grace window.
+/// - a `{status:"warming"}` sentinel if even the cheap index phase hasn't
+///   finished within the grace window.
 /// It must NOT block for the full (slow) embed phase.
 #[test]
 fn search_on_warming_slot_is_non_blocking() {
@@ -223,12 +223,13 @@ fn search_on_warming_slot_is_non_blocking() {
 	// the embed completes.
 	let search_started = Instant::now();
 	let result = repo_cache::with_org_lane(&handle, |lane| {
-		lane.search(pi_knowledge_core::recall::RecallQuery {
-			text: Some("concept".into()),
-			limit: 4,
-			..Default::default()
-		})
-		.map(|hits| serde_json::json!({ "hits": hits }))
+		lane
+			.search(pi_knowledge_core::recall::RecallQuery {
+				text: Some("concept".into()),
+				limit: 4,
+				..Default::default()
+			})
+			.map(|hits| serde_json::json!({ "hits": hits }))
 	});
 	let elapsed = search_started.elapsed();
 
@@ -241,12 +242,13 @@ fn search_on_warming_slot_is_non_blocking() {
 	// Eventually the full lane settles and a search returns real hits.
 	repo_cache::wait_warm(&handle).expect("wait_warm");
 	let warm_result = repo_cache::with_org_lane(&handle, |lane| {
-		lane.search(pi_knowledge_core::recall::RecallQuery {
-			text: Some("concept".into()),
-			limit: 4,
-			..Default::default()
-		})
-		.map(|hits| serde_json::json!({ "hits": hits }))
+		lane
+			.search(pi_knowledge_core::recall::RecallQuery {
+				text: Some("concept".into()),
+				limit: 4,
+				..Default::default()
+			})
+			.map(|hits| serde_json::json!({ "hits": hits }))
 	})
 	.expect("warm search");
 	assert!(
@@ -368,12 +370,13 @@ fn partial_lane_serves_bm25_hits_during_embed() {
 
 	let partial_started = Instant::now();
 	let result = repo_cache::with_org_lane(&handle, |lane| {
-		lane.search(pi_knowledge_core::recall::RecallQuery {
-			text: Some("concept".into()),
-			limit: 5,
-			..Default::default()
-		})
-		.map(|hits| serde_json::json!({ "hits": hits }))
+		lane
+			.search(pi_knowledge_core::recall::RecallQuery {
+				text: Some("concept".into()),
+				limit: 5,
+				..Default::default()
+			})
+			.map(|hits| serde_json::json!({ "hits": hits }))
 	})
 	.expect("partial search");
 	let partial_elapsed = partial_started.elapsed();
@@ -403,12 +406,13 @@ fn partial_lane_serves_bm25_hits_during_embed() {
 	// The corpus is genuinely searchable once fully warm.
 	repo_cache::wait_warm(&handle).expect("wait_warm");
 	let warm = repo_cache::with_org_lane(&handle, |lane| {
-		lane.search(pi_knowledge_core::recall::RecallQuery {
-			text: Some("concept".into()),
-			limit: 5,
-			..Default::default()
-		})
-		.map(|hits| serde_json::json!({ "hits": hits }))
+		lane
+			.search(pi_knowledge_core::recall::RecallQuery {
+				text: Some("concept".into()),
+				limit: 5,
+				..Default::default()
+			})
+			.map(|hits| serde_json::json!({ "hits": hits }))
 	})
 	.expect("warm search");
 	assert!(warm["hits"].is_array(), "warm search returns a hits array");

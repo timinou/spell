@@ -39,14 +39,11 @@ use serde_json::{Value, json};
 
 use crate::{
 	embedder_adapter::DaemonEmbedder,
+	engine::{EMBEDDER_DIM, EMBEDDER_MODEL, EmbedBackendMode},
 	org_cache::{OrgVecCache, carry_forward, plan_embeds_with_recency, recency_cutoff_from_env},
 };
 
 const SCANNED_SUBDIRS: &[&str] = &["!tasks", ".spell/memory"];
-const EMBEDDER_DIM: usize = 1024;
-/// Embedder identity persisted in the org vec cache manifest. A change here
-/// (model swap) invalidates every cached vector via `OrgVecManifest` check.
-const EMBEDDER_MODEL: &str = "bge-m3";
 
 /// Env var gating the embedding (vector) lane. Set to `0`/`false`/`off` by a
 /// declarative autonomous domain (`knowledge { embeddings #false }`) to skip
@@ -58,6 +55,9 @@ const EMBEDDINGS_ENV_VAR: &str = "PI_KNOWLEDGE_WORKER_EMBEDDINGS";
 /// True when embeddings are explicitly disabled via env. Absent/unrecognized
 /// → enabled (embeddings are the default; opt-out only).
 pub fn embeddings_disabled() -> bool {
+	if matches!(EmbedBackendMode::from_env(), Ok(EmbedBackendMode::Off)) {
+		return true;
+	}
 	matches!(
 		std::env::var(EMBEDDINGS_ENV_VAR).ok().as_deref(),
 		Some("0") | Some("false") | Some("off") | Some("FALSE") | Some("OFF")
@@ -239,13 +239,13 @@ impl OrgLane {
 		let empty_vec = VectorIndex::new(EMBEDDER_DIM, items.len().max(1))
 			.map_err(|e| format!("vec init: {e}"))?;
 		on_partial(Self {
-			repo_root: repo_root.to_path_buf(),
-			items: items.clone(),
-			docs: docs.clone(),
-			bm25: bm25.clone(),
-			vec: empty_vec,
-			graph: Arc::clone(&graph),
-			profiles: RecallProfileRegistry::default(),
+			repo_root:  repo_root.to_path_buf(),
+			items:      items.clone(),
+			docs:       docs.clone(),
+			bm25:       bm25.clone(),
+			vec:        empty_vec,
+			graph:      Arc::clone(&graph),
+			profiles:   RecallProfileRegistry::default(),
 			last_built: SystemTime::now(),
 		});
 
@@ -574,7 +574,8 @@ fn embed_chunk_size() -> usize {
 ///
 /// BUG-474 (cache) + BUG-476 (chunking):
 /// 1. Load the prior persisted index + manifest for `repo_root`.
-/// 2. Partition items into reuse (unchanged content hash) vs embed (new/changed).
+/// 2. Partition items into reuse (unchanged content hash) vs embed
+///    (new/changed).
 /// 3. Carry reused vectors forward; embed the rest in bounded chunks, bumping
 ///    `progress.done` per chunk so the warm marker climbs in real time.
 /// 4. Persist the refreshed index + manifest for the next warm.
@@ -664,7 +665,6 @@ fn build_vec_index_with(
 	Ok(vec)
 }
 
-
 #[cfg(test)]
 mod tests {
 	use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -708,9 +708,16 @@ mod tests {
 		assert!(lane.items.iter().any(|i| i.id == "CON-alpha"));
 		// BUG-480: bodies must be populated so the embedder sees "{title} {body}",
 		// not title-only. The seeded items carry bodies ("alpha body" etc).
-		let alpha = lane.items.iter().find(|i| i.id == "CON-alpha").expect("alpha");
+		let alpha = lane
+			.items
+			.iter()
+			.find(|i| i.id == "CON-alpha")
+			.expect("alpha");
 		assert!(
-			alpha.body.as_deref().is_some_and(|b| b.contains("alpha body")),
+			alpha
+				.body
+				.as_deref()
+				.is_some_and(|b| b.contains("alpha body")),
 			"scanned item must carry its body (BUG-480); got {:?}",
 			alpha.body
 		);

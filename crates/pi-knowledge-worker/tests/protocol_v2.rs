@@ -22,7 +22,8 @@ fn unique_dir(label: &str) -> PathBuf {
 		.duration_since(std::time::UNIX_EPOCH)
 		.unwrap()
 		.as_nanos();
-	let dir = std::env::temp_dir().join(format!("pi-kw-proto-{label}-{}-{nanos}", std::process::id()));
+	let dir =
+		std::env::temp_dir().join(format!("pi-kw-proto-{label}-{}-{nanos}", std::process::id()));
 	std::fs::create_dir_all(&dir).expect("tempdir");
 	dir
 }
@@ -301,7 +302,10 @@ fn search_unknown_repo_handle_returns_error() {
 	}));
 	assert_eq!(res["ok"], false);
 	assert!(
-		res["error"].as_str().unwrap_or("").contains("unknown repo_handle"),
+		res["error"]
+			.as_str()
+			.unwrap_or("")
+			.contains("unknown repo_handle"),
 		"{res}"
 	);
 }
@@ -330,11 +334,8 @@ fn cg_search_returns_hits_after_open_code_graph() {
 	let dir = unique_dir("cg-search");
 	let src = dir.join("src");
 	std::fs::create_dir_all(&src).expect("mk src");
-	std::fs::write(
-		src.join("foo.ts"),
-		"export function helloAlphaCg() { return 42; }\n",
-	)
-	.expect("write");
+	std::fs::write(src.join("foo.ts"), "export function helloAlphaCg() { return 42; }\n")
+		.expect("write");
 
 	let opened = round_trip(json!({
 		"command": "open",
@@ -442,4 +443,3 @@ fn cg_search_against_unopened_code_lane_errors() {
 
 	let _ = std::fs::remove_dir_all(&dir);
 }
-

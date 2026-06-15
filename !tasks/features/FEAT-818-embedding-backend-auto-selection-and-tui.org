@@ -1,0 +1,55 @@
+#+TITLE: Embedding backend auto selection and TUI status
+#+STATE: DONE
+#+SESSION_ID: 150a2b380ee2df46
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-15T13-27-51-099Z_150a2b380ee2df46.jsonl]]
+#+AREA: pi-knowledge-worker
+#+CUSTOM_ID: FEAT-818-embedding-backend-auto-selection-and-tui
+#+EFFORT: medium
+#+LAYER: knowledge
+#+TYPE: FEAT
+
+* Initial Message
+
+can you find out if you can use rust + onnx to move pi-knowledge-worker and all other embedding consumers to using the NPU on my computer? I want faster inference (prototype ad-hoc before showing me options)
+
+* Goal
+Implement the approved B-small path for Spell embeddings: a worker-owned embedding backend seam with automatic Vitis/NPU attempt, CPU fallback, daemon status exposure, and a light TUI status-line indicator.
+
+* Context
+- All embedding consumers centralize through `crates/pi-knowledge-worker/src/engine.rs` via `EmbeddingEngine` and the daemon protocol.
+- Current backend is `fastembed::TextEmbedding(BGEM3)` on CPU.
+- Rust `ort` has a Vitis execution provider binding, but this machine currently lacks a Vitis-enabled ONNX Runtime binary/provider in the linked runtime.
+- Spell runs in many places: local RyzenAI laptops, SSH remotes, containers, CI. Default must be zero-setup and graceful.
+
+* Requirements
+1. Default mode is auto: try NPU/Vitis only when useful, fall back to CPU without breaking recall.
+2. Explicit modes exist:
+   - `PI_KNOWLEDGE_EMBED_BACKEND=auto` default
+   - `cpu` forces CPU
+   - `vitis`/`npu` requires Vitis and fails loud if unavailable
+   - `off` disables embeddings / lexical-only path where already supported
+3. Daemon stats expose embedder status enough for UI:
+   - desired mode
+   - active backend
+   - state (`probing`, `ready`, `degraded`, `disabled`, `error`)
+   - model/dim
+   - optional provider and reason
+4. Existing consumers keep using `EmbeddingEngine` / `Embedder`; no parallel consumer-specific implementations.
+5. TUI memory status hook shows a light backend indicator during warming/ready/degraded states, e.g. `📚 indexing 12/30 (embed) · CPU`, `📚 memory ready · NPU`, `📚 NPU unavailable → CPU`.
+6. If backend status is absent (old daemon), UI remains unchanged.
+
+* Acceptance
+- Rust unit tests cover mode parsing, auto fallback to CPU when Vitis unavailable, forced Vitis failing loud, and stats including embedder status.
+- TS unit tests cover memory status rendering with CPU/NPU/degraded/absent status.
+- Targeted checks pass:
+  - `cargo test -p pi-knowledge-worker engine repo_cache::tests::stats_per_handle_returns_slot_metadata`
+  - relevant coding-agent memory-status tests or equivalent `bun test` target.
+
+* Non-goals
+- Do not bundle/install AMD RyzenAI SDK.
+- Do not change the embedding model or vector dimension.
+- Do not invalidate caches unless model/dim changes.
+
+NOTE [2026-06-15]: Implemented B-small embedding backend path. pi-knowledge-worker now has PI_KNOWLEDGE_EMBED_BACKEND auto/cpu/vitis|npu/off mode parsing, direct ort Vitis feature wiring, Vitis availability probe, CPU fallback in auto mode, mid-inference NPU->CPU fallback, shared bge-m3 model/dim constants, daemon stats embedder status, and TUI memory status suffixes (CPU/NPU/NPU unavailable -> CPU). Verified with targeted Rust and Bun tests.
+
+NOTE [2026-06-15]: Hardening review found off-mode bug: returning Err from EmbeddingEngine::new caused daemon init/capability detection to fail, disabling all recall instead of only vector embeddings. Fixed by adding a disabled backend runtime: init succeeds with disabled status, lane_org still builds lexical BM25/graph, and direct embedding calls return 'embeddings disabled'. Added off-mode unit test and reverified.

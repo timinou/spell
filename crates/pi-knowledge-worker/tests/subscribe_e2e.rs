@@ -28,10 +28,7 @@ fn unique_dir(label: &str) -> PathBuf {
 		.duration_since(std::time::UNIX_EPOCH)
 		.unwrap()
 		.as_nanos();
-	let dir = std::env::temp_dir().join(format!(
-		"pi-kw-sub-{label}-{}-{nanos}",
-		std::process::id()
-	));
+	let dir = std::env::temp_dir().join(format!("pi-kw-sub-{label}-{}-{nanos}", std::process::id()));
 	std::fs::create_dir_all(&dir).expect("tempdir");
 	dir
 }
@@ -47,8 +44,8 @@ fn seed(root: &std::path::Path) {
 }
 
 struct Daemon {
-	child: Child,
-	stdin: ChildStdin,
+	child:  Child,
+	stdin:  ChildStdin,
 	reader: BufReader<ChildStdout>,
 }
 
@@ -145,7 +142,9 @@ fn subtest_subscribe_returns_ids_and_ok() {
 	}));
 	let sub = d.recv();
 	assert_eq!(sub["ok"], true, "subscribe: {sub}");
-	let ids = sub["subscription_ids"].as_array().expect("subscription_ids");
+	let ids = sub["subscription_ids"]
+		.as_array()
+		.expect("subscription_ids");
 	assert_eq!(ids.len(), 1, "one subscription per lane");
 	assert!(ids[0].as_u64().is_some(), "sub_id is u64");
 
@@ -292,7 +291,12 @@ fn subtest_subscribe_validates_lanes() {
 	}));
 	let empty = d.recv();
 	assert_eq!(empty["ok"], false);
-	assert!(empty["error"].as_str().unwrap_or("").contains("at least one lane"));
+	assert!(
+		empty["error"]
+			.as_str()
+			.unwrap_or("")
+			.contains("at least one lane")
+	);
 
 	// Bad lane name → error.
 	d.send(json!({

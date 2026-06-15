@@ -39,7 +39,9 @@ fn embed_text(item: &OrgItem) -> String {
 }
 
 fn walk_org(dir: &Path, out: &mut Vec<PathBuf>) {
-	let Ok(rd) = std::fs::read_dir(dir) else { return };
+	let Ok(rd) = std::fs::read_dir(dir) else {
+		return;
+	};
 	for e in rd.flatten() {
 		let p = e.path();
 		if p.is_dir() {
@@ -60,14 +62,14 @@ fn load_corpus(repo: &Path, cap: usize) -> Vec<OrgItem> {
 	}
 	let mut items = Vec::new();
 	for f in files {
-		let Ok(src) = std::fs::read_to_string(&f) else { continue };
+		let Ok(src) = std::fs::read_to_string(&f) else {
+			continue;
+		};
 		let path = f.to_string_lossy();
 		// include_body=true so body-snippet queries have content. (NB: the
 		// worker's scan_items currently passes false — it embeds title-only;
 		// see the eval writeup for that separate finding.)
-		if let Ok(parsed) =
-			pi_org_engine::extract_items_from_source(&src, &[], "", "", &path, true)
-		{
+		if let Ok(parsed) = pi_org_engine::extract_items_from_source(&src, &[], "", "", &path, true) {
 			items.extend(parsed);
 		}
 		if items.len() >= cap {
@@ -83,10 +85,17 @@ fn load_corpus(repo: &Path, cap: usize) -> Vec<OrgItem> {
 fn title_to_query(title: &str) -> String {
 	let without_id = title
 		.split_whitespace()
-		.filter(|w| !w.chars().all(|c| c.is_ascii_uppercase() || c == '-' || c.is_ascii_digit()))
+		.filter(|w| {
+			!w.chars()
+				.all(|c| c.is_ascii_uppercase() || c == '-' || c.is_ascii_digit())
+		})
 		.collect::<Vec<_>>()
 		.join(" ");
-	let q = if without_id.trim().is_empty() { title.to_string() } else { without_id };
+	let q = if without_id.trim().is_empty() {
+		title.to_string()
+	} else {
+		without_id
+	};
 	q.to_lowercase()
 }
 
@@ -99,24 +108,27 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
 		na = a[i].mul_add(a[i], na);
 		nb = b[i].mul_add(b[i], nb);
 	}
-	if na == 0.0 || nb == 0.0 { 0.0 } else { dot / (na.sqrt() * nb.sqrt()) }
+	if na == 0.0 || nb == 0.0 {
+		0.0
+	} else {
+		dot / (na.sqrt() * nb.sqrt())
+	}
 }
 
 struct Metrics {
-	model:        String,
-	dim:          usize,
-	recall_at_5:  f64,
-	mrr:          f64,
-	embed_ms:     u128,
-	n_docs:       usize,
-	n_queries:    usize,
+	model:       String,
+	dim:         usize,
+	recall_at_5: f64,
+	mrr:         f64,
+	embed_ms:    u128,
+	n_docs:      usize,
+	n_queries:   usize,
 }
 
 fn eval_model(model: EmbeddingModel, label: &str, docs: &[Doc], queries: &[Query]) -> Metrics {
-	let mut embedder = TextEmbedding::try_new(
-		TextInitOptions::new(model).with_show_download_progress(true),
-	)
-	.expect("init model");
+	let mut embedder =
+		TextEmbedding::try_new(TextInitOptions::new(model).with_show_download_progress(true))
+			.expect("init model");
 
 	let doc_texts: Vec<String> = docs.iter().map(|d| d.text.clone()).collect();
 	let started = Instant::now();
@@ -219,10 +231,7 @@ fn main() {
 
 	println!("\n# BUG-479 embed-model eval");
 	println!("corpus sample: {} docs, {} queries\n", results[0].n_docs, results[0].n_queries);
-	println!(
-		"| model | dim | recall@5 | MRR | embed_ms ({} docs) |",
-		results[0].n_docs
-	);
+	println!("| model | dim | recall@5 | MRR | embed_ms ({} docs) |", results[0].n_docs);
 	println!("|---|---|---|---|---|");
 	for r in &results {
 		println!(

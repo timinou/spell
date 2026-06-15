@@ -19,7 +19,7 @@ pub mod subscribe;
 
 use std::sync::{Mutex, OnceLock};
 
-use crate::engine::EmbeddingEngine;
+use crate::engine::{EmbedBackendMode, EmbedderStatus, EmbeddingEngine};
 
 /// Knowledge lane identifier. Two cache shapes live in the daemon:
 /// the org/memory recall lane and the code-graph hybrid-search lane.
@@ -46,6 +46,19 @@ pub fn init_engine() -> Result<(), String> {
 		.map_err(|error| format!("mutex poisoned: {error}"))?;
 	*slot = Some(engine);
 	Ok(())
+}
+
+pub fn embedder_status() -> EmbedderStatus {
+	match engine_slot().lock() {
+		Ok(slot) => slot
+			.as_ref()
+			.map(EmbeddingEngine::status)
+			.unwrap_or_else(EmbedderStatus::uninitialized),
+		Err(error) => EmbedderStatus::error(
+			EmbedBackendMode::Auto,
+			format!("engine slot mutex poisoned: {error}"),
+		),
+	}
 }
 
 pub fn with_engine<T>(

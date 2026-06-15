@@ -15,7 +15,7 @@
 import { type KnowledgeEvent, repoHandle, subscribeKnowledge } from "@spell/pi-natives";
 
 import type { InteractiveModeContext } from "../types";
-import { type MemoryProgressSnapshot, peekMemoryProgress } from "../../tools/memory";
+import { type MemoryEmbedderStatusSnapshot, type MemoryProgressSnapshot, peekMemoryProgress } from "../../tools/memory";
 
 /** Hook-status key. Stable so the controller can replace its own entry. */
 const STATUS_KEY = "memory.indexing";
@@ -148,7 +148,7 @@ export class MemoryStatusController {
 				// warming → ready transition: flash a transient confirmation,
 				// then yield the status line. Only once per warm cycle.
 				this.#sawWarming = false;
-				this.#flashReady(snap.item_count);
+				this.#flashReady(snap.item_count, snap.embedder);
 				return;
 			}
 
@@ -162,9 +162,9 @@ export class MemoryStatusController {
 
 	/** Write a transient "memory ready · N items" flash, then auto-clear
 	 *  after `readyFlashMs` so idle infra doesn't camp the status line. */
-	#flashReady(itemCount: number | undefined): void {
+	#flashReady(itemCount: number | undefined, embedder: MemoryEmbedderStatusSnapshot | undefined): void {
 		const items = typeof itemCount === "number" ? ` \u00b7 ${itemCount} item${itemCount === 1 ? "" : "s"}` : "";
-		this.#setStatus(`\uD83D\uDCDA memory ready${items}`);
+		this.#setStatus(`\uD83D\uDCDA memory ready${items}${formatEmbedderSuffix(embedder)}`);
 		if (this.#readyFlashTimer) this.#clearTimeoutFn(this.#readyFlashTimer);
 		this.#readyFlashTimer = this.#setTimeoutFn(() => {
 			this.#readyFlashTimer = undefined;
@@ -213,6 +213,16 @@ export class MemoryStatusController {
 		if (snap.status !== "warming") return undefined;
 		const { done = 0, total = 0, phase = "scan" } = snap.progress ?? {};
 		const counts = total > 0 ? `${done}/${total}` : phase;
-		return `\uD83D\uDCDA indexing ${counts} (${phase})`;
+		return `\uD83D\uDCDA indexing ${counts} (${phase})${formatEmbedderSuffix(snap.embedder)}`;
 	}
+}
+
+function formatEmbedderSuffix(embedder: MemoryEmbedderStatusSnapshot | undefined): string {
+	if (!embedder) return "";
+	if (embedder.active === "vitis") return " · NPU";
+	if (embedder.state === "degraded" && embedder.active === "cpu") return " · NPU unavailable → CPU";
+	if (embedder.active === "cpu") return " · CPU";
+	if (embedder.active === "disabled" || embedder.state === "disabled") return " · lexical";
+	if (embedder.state === "error") return " · embeddings unavailable";
+	return "";
 }

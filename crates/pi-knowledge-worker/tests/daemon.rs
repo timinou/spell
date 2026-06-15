@@ -23,16 +23,20 @@ fn unique_dir(label: &str) -> PathBuf {
 		.duration_since(std::time::UNIX_EPOCH)
 		.unwrap()
 		.as_nanos();
-	let dir = std::env::temp_dir().join(format!("pi-embed-test-{label}-{}-{nanos}", std::process::id()));
+	let dir =
+		std::env::temp_dir().join(format!("pi-embed-test-{label}-{}-{nanos}", std::process::id()));
 	fs::create_dir_all(&dir).expect("tempdir");
 	dir
 }
 
 fn spawn_daemon(socket: &Path, pidfile: &Path, idle_secs: u64) -> Child {
 	Command::new(BIN)
-		.arg("--socket").arg(socket)
-		.arg("--pidfile").arg(pidfile)
-		.arg("--idle-secs").arg(idle_secs.to_string())
+		.arg("--socket")
+		.arg(socket)
+		.arg("--pidfile")
+		.arg(pidfile)
+		.arg("--idle-secs")
+		.arg(idle_secs.to_string())
 		.stdin(Stdio::null())
 		.stdout(Stdio::null())
 		.stderr(Stdio::null())
@@ -70,12 +74,21 @@ fn pidfile_lock_prevents_second_daemon() {
 
 	let mut a = spawn_daemon(&sock, &pidfile, 60);
 	assert!(wait_for_socket(&sock, Duration::from_secs(5)), "first daemon should bind");
-	let pid_a = fs::read_to_string(&pidfile).expect("pidfile written").trim().to_owned();
+	let pid_a = fs::read_to_string(&pidfile)
+		.expect("pidfile written")
+		.trim()
+		.to_owned();
 	assert!(!pid_a.is_empty(), "pidfile content");
 
 	let mut b = spawn_daemon(&sock, &pidfile, 60);
-	assert!(wait_for_exit(&mut b, Duration::from_secs(5)), "second daemon should exit (flock denied)");
-	let pid_after = fs::read_to_string(&pidfile).expect("pidfile still present").trim().to_owned();
+	assert!(
+		wait_for_exit(&mut b, Duration::from_secs(5)),
+		"second daemon should exit (flock denied)"
+	);
+	let pid_after = fs::read_to_string(&pidfile)
+		.expect("pidfile still present")
+		.trim()
+		.to_owned();
 	assert_eq!(pid_after, pid_a, "first daemon's pid still in pidfile");
 
 	let _ = a.kill();
@@ -102,8 +115,10 @@ fn idle_exit_after_configured_seconds() {
 
 #[test]
 fn sigterm_drains_and_exits_cleanly() {
-	use nix::sys::signal::{kill, Signal};
-	use nix::unistd::Pid;
+	use nix::{
+		sys::signal::{Signal, kill},
+		unistd::Pid,
+	};
 
 	let dir = unique_dir("sigterm");
 	let sock = dir.join("embed.sock");

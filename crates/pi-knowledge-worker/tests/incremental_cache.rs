@@ -82,9 +82,9 @@ fn seed_synthetic(root: &Path) {
 	std::fs::create_dir_all(&dir).expect("mk tasks");
 	for i in 0..40 {
 		let body = format!(
-			"* BUG-{i:03} synthetic item number {i}\n\
-			 :PROPERTIES:\n:CUSTOM_ID: BUG-{i:03}-synthetic\n:KIND: bug\n:END:\n\n\
-			 Body text for synthetic item {i} with enough words to embed.\n"
+			"* BUG-{i:03} synthetic item number {i}\n:PROPERTIES:\n:CUSTOM_ID: \
+			 BUG-{i:03}-synthetic\n:KIND: bug\n:END:\n\nBody text for synthetic item {i} with enough \
+			 words to embed.\n"
 		);
 		std::fs::write(dir.join(format!("BUG-{i:03}-synthetic.org")), body).expect("write");
 	}
@@ -173,9 +173,8 @@ fn editing_one_file_reembeds_only_its_items() {
 	let edited = repo.path().join("!tasks/bugs/BUG-007-synthetic.org");
 	std::fs::write(
 		&edited,
-		"* BUG-007 synthetic item number 7 EDITED COMPLETELY\n\
-		 :PROPERTIES:\n:CUSTOM_ID: BUG-007-synthetic\n:KIND: bug\n:END:\n\n\
-		 New body content entirely different now.\n",
+		"* BUG-007 synthetic item number 7 EDITED COMPLETELY\n:PROPERTIES:\n:CUSTOM_ID: \
+		 BUG-007-synthetic\n:KIND: bug\n:END:\n\nNew body content entirely different now.\n",
 	)
 	.expect("edit");
 
