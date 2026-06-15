@@ -49,12 +49,9 @@ import { AskBroker } from "./ask-broker";
 import { type BatchGraph, type BatchImplicitBlocker, buildBatchGraph, scheduleBatch } from "./batch-scheduler";
 import { discoverAgents, getAgent } from "./discovery";
 import { type RuntimeVerificationOptions, runSubprocess } from "./executor";
-import {
-	type GateFailure,
-	type GateVerificationResult,
-	type TrackedBashExecution,
-	verifyGates,
-} from "./gate-verification";
+import { captureGitBaseline } from "../session/git-baseline";
+import { type GateFailure, type GateVerificationResult, verifyGates } from "./gate-verification";
+import { gatherSubprocessExecutions } from "./subprocess-execution-handlers";
 import { resolveIsolationBackendForTaskExecution } from "./isolation-backend";
 import { AgentOutputManager } from "./output-manager";
 import {
@@ -98,6 +95,18 @@ import {
 } from "./worktree";
 
 const MAX_TASK_PARAMS_BYTES = 50 * 1024;
+
+/**
+ * Context for evaluating a delegated task's gates after it finishes. Both fields
+ * locate the same git working tree: `worktreeDir` is the isolation worktree when
+ * the task ran isolated (else undefined ⇒ the parent session cwd), and
+ * `baselineHeadCommit` is the HEAD captured before the task began — required by
+ * the commit gate, which compares the live HEAD against it.
+ */
+interface GateEvalContext {
+	worktreeDir?: string;
+	baselineHeadCommit?: string;
+}
 
 function createUsageTotals(): Usage {
 	return {
@@ -556,10 +565,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		status: TodoStatus,
 		verification: NonNullable<TodoDelegationResult["verification"]>,
 		result: SingleResult,
-		isolationContext?: { isolationDir: string; baselineHeadCommit: string },
+		isolationContext?: GateEvalContext,
 	): Promise<string | undefined> {
 		if (!todo.verificationArtifact) return undefined;
-		const baseDir = isolationContext?.isolationDir ?? this.session.cwd;
+		const baseDir = isolationContext?.worktreeDir ?? this.session.cwd;
 		const artifactPath = path.isAbsolute(todo.verificationArtifact)
 			? todo.verificationArtifact
 			: path.resolve(baseDir, todo.verificationArtifact);
@@ -584,7 +593,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		status: TodoStatus,
 		gateFailures: GateFailure[] | undefined,
 		result: SingleResult,
-		isolationContext?: { isolationDir: string; baselineHeadCommit: string },
+		isolationContext?: GateEvalContext,
 	): Promise<TodoDelegationResult["verification"] | undefined> {
 		if (!todo || (!hasRequiredGate(todo) && !todo.verificationArtifact)) return undefined;
 		const verification: NonNullable<TodoDelegationResult["verification"]> = {
@@ -652,7 +661,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	 */
 	#runtimeVerificationFor(
 		base: RuntimeVerificationOptions | undefined,
-		isolationContext?: { isolationDir: string; baselineHeadCommit: string },
+		isolationContext?: GateEvalContext,
 	): RuntimeVerificationOptions | undefined {
 		if (!base) return undefined;
 		return { ...base, baselineHeadCommit: isolationContext?.baselineHeadCommit };
@@ -762,7 +771,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	async #finalizeTodoRef(
 		task: TaskItem,
 		result: SingleResult,
-		isolationContext?: { isolationDir: string; baselineHeadCommit: string },
+		isolationContext?: GateEvalContext,
 	): Promise<void> {
 		const rosterRef = rosterRefOf(task);
 		if (!rosterRef) return;
@@ -824,7 +833,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	async #verifyTaskGates(
 		todoRef: string,
 		result: SingleResult,
-		isolationContext?: { isolationDir: string; baselineHeadCommit: string },
+		isolationContext?: GateEvalContext,
 	): Promise<GateVerificationResult | undefined> {
 		const nodes = this.session.getTodoNodes?.();
 		if (!nodes) return undefined;
@@ -832,7 +841,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		if (!todo) return undefined;
 		if (!hasRequiredGate(todo)) return undefined;
 
-		const executions = (result.extractedToolData?.bash as TrackedBashExecution[] | undefined) ?? [];
+		const executions = gatherSubprocessExecutions(result.extractedToolData);
 		return verifyGates({
 			gateCmd: todo.verify?.cmd,
 			gateCommit: todo.verify?.commit,
@@ -841,7 +850,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			cwd: this.session.cwd,
 			// When an isolation worktree is active, resolve artifact paths and gateCommit
 			// against the worktree rather than the parent session cwd / bash history.
-			worktreeDir: isolationContext?.isolationDir,
+			worktreeDir: isolationContext?.worktreeDir,
 			baselineHeadCommit: isolationContext?.baselineHeadCommit,
 		});
 	}
@@ -849,9 +858,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	async #verifyChildTodoGates(
 		childNodes: TodoNode[],
 		result: SingleResult,
-		isolationContext?: { isolationDir: string; baselineHeadCommit: string },
+		isolationContext?: GateEvalContext,
 	): Promise<Array<GateFailure & { taskId: string }> | undefined> {
-		const executions = (result.extractedToolData?.bash as TrackedBashExecution[] | undefined) ?? [];
+		const executions = gatherSubprocessExecutions(result.extractedToolData);
 		const failures: Array<GateFailure & { taskId: string }> = [];
 		for (const child of childNodes) {
 			if (child.status === "gate_failed") {
@@ -872,7 +881,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				gateArtifact: child.verify?.artifact,
 				executions,
 				cwd: this.session.cwd,
-				worktreeDir: isolationContext?.isolationDir,
+				worktreeDir: isolationContext?.worktreeDir,
 				baselineHeadCommit: isolationContext?.baselineHeadCommit,
 			});
 			if (!gateResult.passed) {
@@ -1705,7 +1714,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				const originalTask = tasks[index]!;
 				const returnWithTodoRef = async (
 					result: SingleResult,
-					isolationContext?: { isolationDir: string; baselineHeadCommit: string },
+					isolationContext?: GateEvalContext,
 				): Promise<SingleResult> => {
 					await this.#finalizeTodoRef(originalTask, result, isolationContext);
 					return result;
@@ -1721,6 +1730,14 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					emitProgress();
 				};
 				if (!isIsolated) {
+					// Non-isolated commit gates compare the live parent-cwd HEAD against a
+					// baseline captured before the task runs (the isolated path uses the
+					// worktree baseline). Only needed when the task actually carries a
+					// commit gate; skipped otherwise to avoid a git call per task.
+					const nonIsolatedGates = runtimeGatesByTaskId.get(originalTask.id);
+					const nonIsolatedContext: GateEvalContext | undefined = nonIsolatedGates?.gateCommit
+						? { baselineHeadCommit: (await captureGitBaseline(this.session.cwd))?.head }
+						: undefined;
 					const result = await runSubprocess({
 						cwd: this.session.cwd,
 						agent: effectiveAgent,
@@ -1733,7 +1750,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						modelOverride,
 						thinkingLevel: thinkingLevelOverride,
 						outputSchema: effectiveOutputSchema,
-						runtimeVerification: this.#runtimeVerificationFor(runtimeGatesByTaskId.get(originalTask.id)),
+						runtimeVerification: this.#runtimeVerificationFor(nonIsolatedGates, nonIsolatedContext),
 						askBroker,
 						askTaskId: askBroker ? taskExecution.logicalId : undefined,
 						sessionFile,
@@ -1753,7 +1770,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						skills: availableSkills,
 						promptTemplates,
 					});
-					return returnWithTodoRef(result);
+					return returnWithTodoRef(result, nonIsolatedContext);
 				}
 
 				const taskStart = Date.now();
@@ -1773,7 +1790,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						await applyBaseline(isolationDir, taskBaseline);
 					}
 					// Build context for gate verification against this worktree, not the parent cwd.
-					const isolationContext = { isolationDir, baselineHeadCommit: taskBaseline.root.headCommit };
+					const isolationContext: GateEvalContext = {
+						worktreeDir: isolationDir,
+						baselineHeadCommit: taskBaseline.root.headCommit,
+					};
 
 					const result = await runSubprocess({
 						cwd: this.session.cwd,

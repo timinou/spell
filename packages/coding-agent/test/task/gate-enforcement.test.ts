@@ -52,6 +52,21 @@ function createResult(id: string, transcriptPath: string, overrides: Partial<Sin
 	};
 }
 
+/** Turn an existing dir into a git repo with one commit (for commit-gate tests). */
+async function initGitRepo(dir: string): Promise<void> {
+	await $`git init -q`.cwd(dir).quiet().nothrow();
+	await $`git config user.email test@example.com`.cwd(dir).quiet().nothrow();
+	await $`git config user.name Test`.cwd(dir).quiet().nothrow();
+	await fs.writeFile(path.join(dir, "seed.txt"), "x");
+	await $`git add . && git commit -q -m seed`.cwd(dir).quiet().nothrow();
+}
+
+/** Advance HEAD with a fresh commit (models a subagent committing its work). */
+async function advanceHeadIn(dir: string, name: string): Promise<void> {
+	await fs.writeFile(path.join(dir, name), "y");
+	await $`git add . && git commit -q -m ${name}`.cwd(dir).quiet().nothrow();
+}
+
 function createSession(
 	tempDir: string,
 	settings: Settings,
@@ -85,8 +100,14 @@ function createSession(
 	} as unknown as ToolSession & { snapshots: TodoNode[][] };
 }
 
-function mockRunSubprocess(transcriptPath: string, overrides: Partial<SingleResult> = {}): void {
+function mockRunSubprocess(
+	transcriptPath: string,
+	overrides: Partial<SingleResult> = {},
+	/** Fires inside the mocked subprocess (after the parent captures its commit baseline). */
+	onRun?: () => Promise<void> | void,
+): void {
 	vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+		if (onRun) await onRun();
 		const progress: AgentProgress = {
 			index: 0,
 			id: options.id,
@@ -243,13 +264,14 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 		expect((artifact.verification as Record<string, unknown>).status).toBe("passed");
 	});
 
-	it("marks todo gate_failed when gateCommit is required but no git commit in bash history", async () => {
+	it("marks todo gate_failed when gateCommit is required but HEAD did not advance", async () => {
+		await initGitRepo(tempDir);
 		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
 		const session = createSession(tempDir, settings, [
 			{ id: "task-1", content: "Build feature", status: "pending", group: "Work", verify: { commit: true } },
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "sub1.jsonl");
-		// No git commit in history
+		// Subagent ran a command but never advanced HEAD → commit gate must fail.
 		mockRunSubprocess(transcriptPath, {
 			extractedToolData: { bash: [{ command: "bun test", exitCode: 0 }] },
 		});
@@ -455,6 +477,7 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 	});
 
 	it("marks todo completed when gateCmd passes and gateCommit passes", async () => {
+		await initGitRepo(tempDir);
 		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
 		const session = createSession(tempDir, settings, [
 			{
@@ -466,14 +489,14 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 			},
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "sub1.jsonl");
-		mockRunSubprocess(transcriptPath, {
-			extractedToolData: {
-				bash: [
-					{ command: "bun test", exitCode: 0, cwd: tempDir },
-					{ command: "git commit -m 'done'", exitCode: 0 },
-				],
-			},
-		});
+		// The subagent satisfies gateCmd (bun test) and advances HEAD with a real
+		// commit (fired inside the mocked subprocess, after the parent captured its
+		// pre-run baseline) so the unified real-HEAD commit gate passes.
+		mockRunSubprocess(
+			transcriptPath,
+			{ extractedToolData: { bash: [{ command: "bun test", exitCode: 0, cwd: tempDir }] } },
+			() => advanceHeadIn(tempDir, "done.txt"),
+		);
 
 		const { TaskTool } = await import("../../src/task/index");
 		const tool = await TaskTool.create(session);
@@ -513,19 +536,19 @@ describe("Gate enforcement: isolated worktree", () => {
 
 	// Direct unit tests for the underlying gate-verification helpers.
 
-	it("detectGitCommitInWorktree returns false when HEAD has not moved", async () => {
-		const { detectGitCommitInWorktree } = await import("../../src/task/gate-verification");
+	it("detectHeadAdvanced returns false when HEAD has not moved", async () => {
+		const { detectHeadAdvanced } = await import("../../src/task/gate-verification");
 		const baseline = (await $`git rev-parse HEAD`.cwd(repoDir).quiet().text()).trim();
-		expect(await detectGitCommitInWorktree(repoDir, baseline)).toBe(false);
+		expect(await detectHeadAdvanced(repoDir, baseline)).toBe(false);
 	});
 
-	it("detectGitCommitInWorktree returns true after a new commit", async () => {
-		const { detectGitCommitInWorktree } = await import("../../src/task/gate-verification");
+	it("detectHeadAdvanced returns true after a new commit", async () => {
+		const { detectHeadAdvanced } = await import("../../src/task/gate-verification");
 		const baseline = (await $`git rev-parse HEAD`.cwd(repoDir).quiet().text()).trim();
 		await fs.writeFile(path.join(repoDir, "new.txt"), "change");
 		await $`git add .`.cwd(repoDir).quiet();
 		await $`git commit -m add-file`.cwd(repoDir).quiet();
-		expect(await detectGitCommitInWorktree(repoDir, baseline)).toBe(true);
+		expect(await detectHeadAdvanced(repoDir, baseline)).toBe(true);
 	});
 
 	it("verifyGates: gateCommit passes via HEAD-moved check in worktree mode", async () => {

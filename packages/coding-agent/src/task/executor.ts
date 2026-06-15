@@ -32,9 +32,10 @@ import { ToolAbortError } from "../tools/tool-errors";
 import { type EventBus, Priority } from "../utils/event-bus";
 import { buildNamedToolChoice } from "../utils/tool-choice";
 // Import bash subprocess handler for side effects (tracks bash commands for gate verification)
-import "./bash-subprocess-handler";
+import "./subprocess-execution-handlers";
 import { makeAskOrchestratorTool } from "./ask-tools";
-import { type GateFailure, type TrackedBashExecution, verifyGates } from "./gate-verification";
+import { type ExecutionRecord, type GateFailure, verifyGates } from "./gate-verification";
+import { gatherSubprocessExecutions } from "./subprocess-execution-handlers";
 import { createProgressHeartbeat } from "./progress-heartbeat";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import {
@@ -1046,8 +1047,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						if (event.toolName === "submit_result" && extractedData !== undefined && !event.isError) {
 							const submitResult = extractedData as SubmitResultItem;
 							if (submitResult.status === "success" && hasRuntimeVerification(options.runtimeVerification)) {
-								const executions =
-									(progress.extractedToolData?.bash as TrackedBashExecution[] | undefined) ?? [];
+								const executions = gatherSubprocessExecutions(progress.extractedToolData);
 								const gateResult = await verifyGates({
 									gateCmd: options.runtimeVerification?.gateCmd,
 									gateCommit: options.runtimeVerification?.gateCommit,

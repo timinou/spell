@@ -1070,9 +1070,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return cached;
 			};
 		})(),
-		getBashHistory: () => session.getBashHistory(),
+		getExecutionHistory: () => session.getExecutionHistory(),
 		captureGitBaseline: () => session.captureGitBaseline(),
-		compareGitBaseline: baseline => session.compareGitBaseline(baseline),
 		getReviewJudge: () => {
 			const activeModel = agent?.state.model ?? model;
 			return activeModel ? createModelReviewJudge(activeModel) : undefined;

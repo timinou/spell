@@ -1,0 +1,118 @@
+#+TITLE: Unify gate-evaluation substrate — durable tool-agnostic evidence + single commit evaluator
+#+STATE: DOING
+#+SESSION_ID: 150a10ace4512e1c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-15T11-31-52-849Z_150a10ace4512e1c.jsonl]]
+#+CUSTOM_ID: FEAT-817-unify-gate-evaluation-substrate-durable
+
+* Initial Message
+
+Component: the todo_write roster gate-verification matcher (the thing that prints --- Gate Verification Failed ---). Not a product defect — a harness/tooling defect in Spell itself.
+
+ ### Symptom (reproduced 4×)
+
+ A roster node carrying verify: { cmd: "<X>" } cannot be completed even after <X> runs successfully:
+
+ ```
+   feat-d … could not be verified:
+     - gateCmd: expected `cd packages/djinn && mix test test/djinn/extra/conversation_server_test.exs`,
+       No successful execution matched the gate command.
+ ```
+
+ I ran that exact string, foreground, single bash call, from the monorepo root — Result: 16 passed, 1 skipped, exit 0 — and the matcher still reported no match. So the test passed; the matcher didn't see it.
+
+ ### Second failure mode (the fallback also broke)
+
+ Converting the gate to verify: { commit: true } then failed differently:
+
+ ```
+   gateCommit: expected `git commit`, Git baseline was not captured when the node entered in_progress.
+ ```
+
+ i.e. the commit-gate wants a baseline snapshot taken at the moment the node flips to in_progress, but these nodes entered in_progress in an earlier session/turn (or before baseline capture was wired), so the
+ baseline is absent and can never be satisfied retroactively. Re-entering in_progress + a fresh commit also didn't clear it.
+
+ ### Root-cause hypotheses (ranked — where a tooling session should look)
+
+ The matcher correlates "did a qualifying execution happen?" against the gate spec. Candidate break points:
+
+ 1. cwd / compound-command normalization (most likely for cmd). The gate string embeds cd packages/djinn && mix test …. The executor records the invocation as a bash call with its own cwd + a command field. If
+ the matcher compares the gate string against either (a) the recorded command after some normalization that strips/rewrites the cd … && prefix, or (b) cwd + bare-command, a cd X && Y gate will never equal a
+ {cwd: root, command: "cd X && Y"} record. Mismatch on the cd prefix is the single most plausible cause.
+ 2. Turn/time window scoping. The matcher may only scan executions from the current turn or a recent-N window. Gate clears attempted in a later turn than the test run → the qualifying execution has aged out.
+ (Explains why "run it then immediately verify" is the only thing that ever works for fresh nodes, and why aged nodes are permanently stuck.)
+ 3. Artifact-spill blindness. bash output >256KB parks to artifact://… with only a summary inline. If the matcher scans inline stdout for the pass/exit signal, a spilled run looks like "no successful
+ execution" even though exit was 0. The djinn test output is large → prime suspect.
+ 4. Exit-code source. Warm-runner (just test) wraps mix test and re-emits exit codes; if the matcher keys on a child PID's exit vs. the wrapper's, warm runs won't register. (My passing run was cold mix test,
+ though — so this alone doesn't explain it; likely compounds with #1/#2.)
+ 5. commit-gate baseline lifecycle. Baseline is captured only on the pending → in_progress transition. Nodes that never had a clean transition (pre-existing, or re-entered after the field existed) have no
+ baseline and no repair path. The fallback gate is therefore unusable for rescuing a stuck node.
+
+ ### Minimal repro for the tooling session
+
+ ```
+   todo_write { reset:true, tasks:[
+     { id:"t1", content:"probe gate", verify:{ cmd:"cd packages/djinn && mix test test/djinn/extra/conversation_server_test.exs" } }
+   ]}
+   todo_write { tasks:[{ id:"t1", status:"in_progress" }] }
+   # run the exact cmd in one foreground bash call → confirm exit 0
+   todo_write { tasks:[{ id:"t1", status:"completed", verified:true }] }   # ← observe rejection
+ ```
+
+ Then bisect: try a gate with no cd prefix (run the test from a cwd where the bare mix test … matches) to confirm hypothesis #1; try verify in the same turn vs. a later turn for #2; try a tiny test whose
+ output stays inline for #3.
+
+ ### Where the code lives
+
+ Search the Spell harness for the gate-failure strings — they're the anchors:
+ "No successful execution matched the gate command", "Git baseline was not captured", gateCmd, gateCommit. The matcher that emits these owns the execution-log correlation; the fix is almost certainly in how it
+ normalizes the recorded command/cwd (#1) and/or the lookback window (#2).
+
+ ### Impact / workaround
+
+ Display-layer only. Deliverables are committed + proof-green regardless. Workaround used this plan: drop the gate (verify:{}) and rely on commits + journal as the durable record. No product code is affected —
+ a tooling session can fix the matcher in isolation.
+
+
+-----
+Investigate and come back to me with root causes
+
+* Initial Message
+Sibling to FEAT-816 (which unified the discipline *declaration* — `{on, inject, verify}`). This unifies the discipline `verify` **evaluation substrate**. FEAT-816 gave gates one type (`TaskVerify = DisciplineVerify`); they still have N ad-hoc, fragile, partly-duplicated evaluators. Three reported failures (RC-A/B/C) are all symptoms of that one unclean interface.
+
+#+EFFORT: 1d
+#+LAYER: implementation
+
+* Why (evidence — all verified against HEAD 7a03fcc7d)
+The `verify` vocab is unified (`commit|artifact|cmd|review|swarm`), but evaluation is NOT:
+
+** RC-A — execution log is bash-only; run/execute/warm-runner invisible
+`agent-session.ts:1573` records evidence only when `event.toolName === "bash"`. The structured runtime tools `run`/`git` (PLAN-337) dispatch under their own names → a `cmd` gate satisfied via `run {verb:"mix"…}` (or any warm-runner) sees ZERO matchable executions. The delegated path (`extractedToolData.bash`) has the same bash-only blindness.
+
+** RC-B — direct-path evidence is volatile, never rehydrated
+`#trackedBashToolExecutions` is an in-memory array, wiped on newSession/switchSession/branch/navigateTree (agent-session.ts:2972,5149,5254,5432) and never restored from the durable session file. ∴ a `cmd` gate cleared a turn after a session resume/branch sees an empty log → permanently stuck. (Not a turn-window: there is no timestamp filter — confirmed.) The durable session entries already hold the same executions (`assistant.toolCall.arguments.command` + `toolResult.details.{exitCode,cwd}`, pairable by `toolCallId`); the matcher just doesn't read them.
+
+** RC-C — commit gate has two evaluators; the direct one has no repair path
+- Direct (todo-write:1300-1318): baseline captured ONLY on pending→in_progress edge (`captureDirectWorkBaselines`, guard `if previousStatus==="in_progress": skip`); compared via `compareGitBaseline().headAdvanced`. A node that entered in_progress before the field existed / in a prior wiped session has `gitBaseline===undefined` → "Git baseline was not captured" with NO repair (re-entering in_progress is a no-op under the guard).
+- Delegated (gate-verification `detectGitCommitInWorktree`): reads REAL HEAD vs a baseline SHA — clean, needs no lifecycle snapshot.
+- Delegated no-baseline (`detectGitCommit`): text-scans executions for `git commit` — a third, weakest mechanism.
+ONE gate kind, THREE evaluators. That inconsistency IS the unclean interface.
+
+* What — one evaluator over one durable, tool-agnostic evidence source
+1. `ExecutionRecord` (rename of `TrackedBashExecution`) — tool-agnostic `{command, exitCode, cwd?}`.
+2. Direct evidence: `session.getExecutionHistory()` reads the DURABLE message list (`bash`+`run` toolCall↔toolResult pairs by id, plus `!`-command bashExecution messages) → not wiped, covers run. Kills RC-A + RC-B together. `#trackedBashToolExecutions` + `bash-tool-history.ts` + the tool_execution_end push + all wipe sites DELETED.
+3. Delegated evidence: register `run` in subprocess-tool-registry (was bash-only); gather bash+run. Capture a baseline HEAD for NON-isolated commit gates at dispatch (isolated already has the worktree baseline).
+4. Commit gate: ALWAYS real-HEAD compare (`detectHeadAdvanced(dir, baselineHead)`, rename of `detectGitCommitInWorktree`); requires a baseline; text-scan `detectGitCommit` DELETED. Direct path passes `node.gitBaseline.head` + `workdir=cwd`. Repair path: an explicit `status:"in_progress"` re-captures the baseline (relax the skip guard) → RC-C dissolves.
+5. Dead-code sweep: `compareGitBaseline`, `GitBaselineDiff`, `parseStatusChangedFiles`, session `compareGitBaseline`, `ToolSession.compareGitBaseline`, sdk wiring — all dead post-cutover → removed. `captureGitBaseline` stays.
+
+This is a CUTOVER, not a parallel impl: the text-matcher's volatile source and the bespoke baseline-diff both delete; the delegated real-HEAD check generalizes to the single commit evaluator.
+
+* Scope
+**In**: gate-verification.ts (evaluator + ExecutionRecord + detectHeadAdvanced); agent-session.ts (durable getExecutionHistory, delete volatile array); todo-write.ts (direct cutover + commit repair); executor.ts + task/index.ts (run evidence + non-isolated baseline); bash-subprocess-handler.ts (+run); subprocess-tool-registry; git-baseline.ts (delete compareGitBaseline et al); tools/index.ts + sdk.ts (interface). Full unit + property/fuzz tests.
+**Out**: swarm/review gates (honor-system/judge — not evidence-correlated, already clean); the discipline declaration layer (FEAT-816, done).
+
+* Acceptance
+- A `cmd` gate clears after the test ran via `run` (RC-A) and after a session resume/branch (RC-B); a fresh `cmd` run still clears same-turn.
+- A `commit` gate on a legacy/undefined-baseline node clears after re-entering in_progress + committing (RC-C).
+- Exactly ONE commit evaluator; `detectGitCommit` text-scan and `compareGitBaseline` gone; no dead remnants (grep clean).
+- `bun run check:ts` green; full coding-agent gate/todo/session test suites green; reviewer swarm between final waves.
+</body>

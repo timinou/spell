@@ -1250,14 +1250,25 @@ export function formatSummary({
 
 async function captureDirectWorkBaselines(
 	session: ToolSession,
+	params: TodoWriteParams,
 	previousNodes: TodoNode[],
 	nextNodes: TodoNode[],
 ): Promise<void> {
 	const previousStatuses = buildPreviousStatusMap(previousNodes);
+	// Node ids for which THIS call explicitly requested status:"in_progress".
+	const explicitInProgress = new Set(
+		params.tasks.filter(task => task.id && task.status === "in_progress").map(task => task.id as string),
+	);
 	for (const node of nextNodes) {
 		if (isDelegatedNode(node)) continue;
 		if (!node.verify?.commit || node.status !== "in_progress") continue;
-		if (previousStatuses.get(node.id) === "in_progress") continue;
+		const enteringInProgress = previousStatuses.get(node.id) !== "in_progress";
+		// RC-C repair: a node may carry a missing/failed baseline — it entered
+		// in_progress before the field existed, or in a since-wiped session. An
+		// explicit re-entry (status:"in_progress" submitted again) re-captures it so
+		// the commit gate has a repair path instead of being permanently stuck.
+		const repairMissingBaseline = explicitInProgress.has(node.id) && !node.gitBaseline;
+		if (!enteringInProgress && !repairMissingBaseline) continue;
 		node.gitBaseline = session.captureGitBaseline ? await session.captureGitBaseline() : null;
 	}
 }
@@ -1270,7 +1281,7 @@ async function verifyDirectWorkCompletions(
 	reviewNotices: string[] = [],
 ): Promise<GateVerificationFailure[]> {
 	const gateVerificationFailures: GateVerificationFailure[] = [];
-	const executions = [...(session.getBashHistory?.() ?? [])];
+	const executions = [...(session.getExecutionHistory?.() ?? [])];
 	const currentStatuses = buildPreviousStatusMap(previousNodes);
 	const reviewGatingEnabled = session.settings.get("todo.reviewJudge") !== false;
 	const reviewJudge = reviewGatingEnabled ? session.getReviewJudge?.() : undefined;
@@ -1290,33 +1301,21 @@ async function verifyDirectWorkCompletions(
 		}
 
 		if (input.status === "completed" && input.verified && hasRequiredGate(node)) {
+			// One evaluator for every gate kind. The commit gate is real-HEAD-vs-baseline
+			// (identical to the delegated path): pass the baseline SHA captured when the
+			// node entered in_progress, and verifyGates compares the live HEAD in cwd.
 			const failures = [
 				...(
 					await verifyGates({
 						gateCmd: node.verify?.cmd,
 						gateArtifact: node.verify?.artifact,
+						gateCommit: node.verify?.commit,
 						executions,
 						cwd: session.cwd,
+						baselineHeadCommit: node.gitBaseline?.head,
 					})
 				).failures,
 			] as GateFailure[];
-
-			if (node.verify?.commit) {
-				if (node.gitBaseline === undefined) {
-					failures.push({ gate: "gateCommit", expected: "git commit", detail: "Git baseline was not captured when the node entered in_progress." });
-				} else if (node.gitBaseline === null) {
-					failures.push({ gate: "gateCommit", expected: "git commit", detail: "Git baseline could not be captured for this node." });
-				} else if (!session.compareGitBaseline) {
-					failures.push({ gate: "gateCommit", expected: "git commit", detail: "Current git state is unavailable for verification." });
-				} else {
-					const diff = await session.compareGitBaseline(node.gitBaseline);
-					if (!diff) {
-						failures.push({ gate: "gateCommit", expected: "git commit", detail: "Current git state is unavailable for verification." });
-					} else if (!diff.headAdvanced) {
-						failures.push({ gate: "gateCommit", expected: "git commit", detail: "HEAD did not move after the node entered in_progress." });
-					}
-				}
-			}
 
 			if (failures.length > 0) {
 				const previousStatus = currentStatuses.get(node.id);
@@ -1482,7 +1481,7 @@ export class TodoWriteTool implements AgentTool<typeof todoWriteSchema, TodoWrit
 			const isolationMode = Boolean(this.session.settings.get("task.isolation.mode"));
 			const { file: updated, errors, warnings, completedGroups, completedGatedNodes, pendingVerificationNodes, pendingDeferralNodes } =
 				applyReconcile(current, params, previousNodes, activePolicies, context, isolationMode);
-			await captureDirectWorkBaselines(this.session, previousNodes, updated.nodes);
+			await captureDirectWorkBaselines(this.session, params, previousNodes, updated.nodes);
 			const reviewNotices: string[] = [];
 			const gateVerificationFailures = await verifyDirectWorkCompletions(this.session, params, previousNodes, updated.nodes, reviewNotices);
 			const waveSnapshotRequests = collectWaveSnapshotRequests(previousNodes, updated.nodes);

@@ -11,7 +11,14 @@ export interface GateFailure {
 	detail: string;
 }
 
-export interface TrackedBashExecution {
+/**
+ * One recorded tool execution that can satisfy a `cmd` gate. Tool-agnostic: the
+ * `command` is the literal invocation (a bash command line, or a `run`/`git`
+ * runtime-tool argv joined back into a command line) and `cwd` is the resolved
+ * working directory it ran in. Both the direct (todo) and delegated (subagent)
+ * paths feed `verifyGates` the same shape; the source is irrelevant to matching.
+ */
+export interface ExecutionRecord {
 	command: string;
 	exitCode: number;
 	cwd?: string;
@@ -82,7 +89,7 @@ export function resolveCommandCwd(command: string, cwd: string): string {
 	return resolvedCwd;
 }
 
-export function matchesGateCmd(gateCmd: string, executions: TrackedBashExecution[], cwd: string): boolean {
+export function matchesGateCmd(gateCmd: string, executions: ExecutionRecord[], cwd: string): boolean {
 	const normalizedGateCmd = normalizeCommand(gateCmd);
 	if (normalizedGateCmd.length === 0) return false;
 	const expectedCwd = resolveCommandCwd(gateCmd, cwd);
@@ -103,21 +110,17 @@ export function matchesGateCmd(gateCmd: string, executions: TrackedBashExecution
 	});
 }
 
-export function detectGitCommit(executions: TrackedBashExecution[]): boolean {
-	const pattern = /\bgit\s+commit\b/;
-	return executions.some(
-		execution => pattern.test(execution.command) || pattern.test(normalizeCommand(execution.command)),
-	);
-}
-
 /**
- * For isolated worktree execution: verify a commit landed by checking if HEAD
- * moved past the pre-run baseline rather than scanning bash history.
- * Returns false on any git error (treat absence of evidence as evidence of absence).
+ * The single `commit` gate evaluator: did HEAD advance past the baseline SHA
+ * captured before the work began? Reads the real git state in `workdir` rather
+ * than scanning a recorded command log, so it is identical for direct and
+ * delegated work and immune to which tool ran `git commit` (or whether a hook,
+ * squash, or amend produced the new HEAD). Returns false on any git error
+ * (treat absence of evidence as evidence of absence).
  */
-export async function detectGitCommitInWorktree(worktreeDir: string, baselineHeadCommit: string): Promise<boolean> {
+export async function detectHeadAdvanced(workdir: string, baselineHeadCommit: string): Promise<boolean> {
 	try {
-		const currentHead = (await $`git rev-parse HEAD`.cwd(worktreeDir).quiet().nothrow().text()).trim();
+		const currentHead = (await $`git rev-parse HEAD`.cwd(workdir).quiet().nothrow().text()).trim();
 		return !!currentHead && currentHead !== baselineHeadCommit;
 	} catch {
 		return false;
@@ -139,15 +142,19 @@ export async function verifyGates(opts: {
 	gateCmd?: string;
 	gateCommit?: boolean;
 	gateArtifact?: string;
-	executions: TrackedBashExecution[];
+	executions: ExecutionRecord[];
 	/** Parent session cwd — used when no worktree is active. */
 	cwd: string;
 	/**
-	 * When set, artifact paths and gateCommit are resolved against the isolation
-	 * worktree rather than the parent cwd / bash history.
+	 * When set, artifact paths and the commit gate are resolved against the
+	 * isolation worktree rather than the parent cwd.
 	 */
 	worktreeDir?: string;
-	/** HEAD commit recorded before the task ran (required when worktreeDir is set). */
+	/**
+	 * HEAD commit recorded before the work began. REQUIRED for the commit gate:
+	 * the gate compares the current HEAD in the (worktree or cwd) against this
+	 * SHA. Absent ⇒ the commit gate fails with a baseline-missing detail.
+	 */
 	baselineHeadCommit?: string;
 }): Promise<GateVerificationResult> {
 	const failures: GateFailure[] = [];
@@ -161,17 +168,22 @@ export async function verifyGates(opts: {
 	}
 
 	if (opts.gateCommit) {
-		const committed = opts.baselineHeadCommit
-			? await detectGitCommitInWorktree(opts.worktreeDir ?? opts.cwd, opts.baselineHeadCommit)
-			: detectGitCommit(opts.executions);
-		if (!committed) {
+		if (!opts.baselineHeadCommit) {
 			failures.push({
 				gate: "gateCommit",
 				expected: "git commit",
-				detail: opts.baselineHeadCommit
-					? "HEAD did not advance past the pre-run baseline."
-					: "No git commit execution was detected.",
+				detail: "No git baseline was available to verify the commit against.",
 			});
+		} else {
+			const workdir = opts.worktreeDir ?? opts.cwd;
+			const advanced = await detectHeadAdvanced(workdir, opts.baselineHeadCommit);
+			if (!advanced) {
+				failures.push({
+					gate: "gateCommit",
+					expected: "git commit",
+					detail: "HEAD did not advance past the pre-work baseline.",
+				});
+			}
 		}
 	}
 

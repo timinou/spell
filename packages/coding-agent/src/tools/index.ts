@@ -223,14 +223,14 @@ export interface ToolSession {
 	gatewayClient?: GatewayClient;
 	/** Resolved task policies (project + mode merged). Cached per session. */
 	getResolvedTaskPolicies?: () => TaskPolicy[];
-	/** Get accumulated bash tool execution history for this session. */
-	getBashHistory?: () => ReadonlyArray<import("../task/gate-verification").TrackedBashExecution>;
+	/**
+	 * Gate-evidence execution log for this session, derived on demand from the
+	 * durable message history (bash + run tool calls, `!`-command bash). Survives
+	 * resume/branch; tool-agnostic.
+	 */
+	getExecutionHistory?: () => ReadonlyArray<import("../task/gate-verification").ExecutionRecord>;
 	/** Capture a git baseline for the session cwd. Returns null outside a git repo. */
 	captureGitBaseline?: () => Promise<import("../session/git-baseline").GitBaseline | null>;
-	/** Compare current working-tree against a previously captured baseline. Returns null when evidence is unavailable. */
-	compareGitBaseline?: (
-		baseline: import("../session/git-baseline").GitBaseline,
-	) => Promise<import("../session/git-baseline").GitBaselineDiff | null>;
 	/** LLM judge for verify.review gating (PLAN-330b). Absent → review stays advisory. */
 	getReviewJudge?: () => import("./review-judge").ReviewJudge | undefined;
 }

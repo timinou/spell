@@ -112,7 +112,7 @@ import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text
 import handoffDocumentPrompt from "../prompts/system/handoff-document.md" with { type: "text" };
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import type { SecretObfuscator } from "../secrets/obfuscator";
-import type { TrackedBashExecution } from "../task/gate-verification";
+import type { ExecutionRecord } from "../task/gate-verification";
 import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
 import { compactToolDescription, getToolTier } from "../tools";
 import type { CheckpointState } from "../tools/checkpoint";
@@ -126,7 +126,7 @@ import { parseCommandArgs } from "../utils/command-args";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
 import { buildNamedToolChoice } from "../utils/tool-choice";
-import { cloneTrackedBashHistory, extractTrackedBashExecution } from "./bash-tool-history";
+import { extractExecutionHistory } from "./execution-history";
 import {
 	type CompactionResult,
 	calculateContextTokens,
@@ -139,7 +139,7 @@ import {
 	shouldCompact,
 } from "./compaction";
 import { DEFAULT_PRUNE_CONFIG, pruneToolOutputs } from "./compaction/pruning";
-import { captureGitBaseline, compareGitBaseline, type GitBaseline, type GitBaselineDiff } from "./git-baseline";
+import { captureGitBaseline, type GitBaseline } from "./git-baseline";
 import {
 	type BashExecutionMessage,
 	type BranchSummaryMessage,
@@ -433,8 +433,6 @@ export class AgentSession {
 	// Bash execution state
 	#bashAbortController: AbortController | undefined = undefined;
 	#pendingBashMessages: BashExecutionMessage[] = [];
-	#trackedBashToolExecutions: TrackedBashExecution[] = [];
-	#bashToolArgsByCallId = new Map<string, Record<string, unknown>>();
 
 	// Extension system
 	#extensionRunner: ExtensionRunner | undefined = undefined;
@@ -1549,9 +1547,6 @@ export class AgentSession {
 			};
 			await this.#extensionRunner.emit(extensionEvent);
 		} else if (event.type === "tool_execution_start") {
-			if (event.toolName === "bash" && event.args && typeof event.args === "object" && !Array.isArray(event.args)) {
-				this.#bashToolArgsByCallId.set(event.toolCallId, event.args as Record<string, unknown>);
-			}
 			const extensionEvent: ToolExecutionStartEvent = {
 				type: "tool_execution_start",
 				toolCallId: event.toolCallId,
@@ -1570,17 +1565,6 @@ export class AgentSession {
 			};
 			await this.#extensionRunner.emit(extensionEvent);
 		} else if (event.type === "tool_execution_end") {
-			if (event.toolName === "bash") {
-				const args = this.#bashToolArgsByCallId.get(event.toolCallId);
-				this.#bashToolArgsByCallId.delete(event.toolCallId);
-				const execution = extractTrackedBashExecution(
-					args,
-					event.result as { content?: Array<{ type?: string; text?: string }>; details?: unknown } | undefined,
-					event.isError,
-					this.sessionManager.getCwd(),
-				);
-				if (execution) this.#trackedBashToolExecutions.push(execution);
-			}
 			const extensionEvent: ToolExecutionEndEvent = {
 				type: "tool_execution_end",
 				toolCallId: event.toolCallId,
@@ -2969,8 +2953,6 @@ export class AgentSession {
 		await this.#disposeTools("soft");
 		this.#asyncJobManager?.cancelAll();
 		this.agent.reset();
-		this.#trackedBashToolExecutions = [];
-		this.#bashToolArgsByCallId.clear();
 		await this.sessionManager.flush();
 		await this.sessionManager.newSession(options);
 		this.setTodoNodes([], { reset: true });
@@ -5050,11 +5032,13 @@ export class AgentSession {
 	}
 
 	/**
-	 * Return tracked bash tool executions for this session.
-	 * Callers receive an immutable snapshot so verification cannot mutate agent state.
+	 * Return the gate-evidence execution log for this session, derived on demand
+	 * from the DURABLE message history (bash + run tool calls, `!`-command bash).
+	 * Survives resume/branch because it reads the persisted transcript rather than
+	 * a volatile side-array; tool-agnostic so `run`-satisfied gates are visible.
 	 */
-	getBashHistory(): ReadonlyArray<TrackedBashExecution> {
-		return cloneTrackedBashHistory(this.#trackedBashToolExecutions);
+	getExecutionHistory(): ReadonlyArray<ExecutionRecord> {
+		return extractExecutionHistory(this.agent.state.messages as Parameters<typeof extractExecutionHistory>[0], this.sessionManager.getCwd());
 	}
 
 	/**
@@ -5064,15 +5048,6 @@ export class AgentSession {
 	async captureGitBaseline(): Promise<GitBaseline | null> {
 		const cwd = this.sessionManager.getCwd();
 		return captureGitBaseline(cwd);
-	}
-
-	/**
-	 * Compare the current working-tree state against a previously captured baseline.
-	 * Returns null when the repo or HEAD can no longer be resolved.
-	 */
-	async compareGitBaseline(baseline: GitBaseline): Promise<GitBaselineDiff | null> {
-		const cwd = this.sessionManager.getCwd();
-		return compareGitBaseline(cwd, baseline);
 	}
 
 	/**
@@ -5146,8 +5121,6 @@ export class AgentSession {
 		this.#disconnectFromAgent();
 		await this.abort();
 		await this.#disposeTools("soft");
-		this.#trackedBashToolExecutions = [];
-		this.#bashToolArgsByCallId.clear();
 		this.#steeringMessages = [];
 		this.#followUpMessages = [];
 		this.#pendingNextTurnMessages = [];
@@ -5251,8 +5224,6 @@ export class AgentSession {
 		// Flush pending writes before branching
 		await this.sessionManager.flush();
 		this.#asyncJobManager?.cancelAll();
-		this.#trackedBashToolExecutions = [];
-		this.#bashToolArgsByCallId.clear();
 
 		if (!selectedEntry.parentId) {
 			await this.sessionManager.newSession({ parentSession: previousSessionFile });
@@ -5429,8 +5400,6 @@ export class AgentSession {
 		// Update agent state
 		const sessionContext = this.sessionManager.buildSessionContext();
 		this.agent.replaceMessages(sessionContext.messages);
-		this.#trackedBashToolExecutions = [];
-		this.#bashToolArgsByCallId.clear();
 		this.#syncTodoNodesFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 

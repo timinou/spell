@@ -1,13 +1,13 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { $ } from "bun";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-	detectGitCommit,
+	detectHeadAdvanced,
+	type ExecutionRecord,
 	matchesGateCmd,
 	normalizeCommand,
-	type TrackedBashExecution,
 	verifyGateArtifact,
 	verifyGates,
 } from "../../src/task/gate-verification";
@@ -21,11 +21,27 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 	}
 }
 
-describe("gate verification", () => {
-	afterEach(() => {
-		// no shared state
-	});
+async function withGitRepo<T>(fn: (dir: string, baseline: string) => Promise<T>): Promise<T> {
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "gate-verification-git-"));
+	try {
+		await $`git init -q`.cwd(dir).quiet().nothrow();
+		await $`git config user.email test@example.com`.cwd(dir).quiet().nothrow();
+		await $`git config user.name Test`.cwd(dir).quiet().nothrow();
+		await fs.writeFile(path.join(dir, "a.txt"), "x");
+		await $`git add . && git commit -q -m baseline`.cwd(dir).quiet().nothrow();
+		const baseline = (await $`git rev-parse HEAD`.cwd(dir).quiet().nothrow().text()).trim();
+		return await fn(dir, baseline);
+	} finally {
+		await fs.rm(dir, { recursive: true, force: true });
+	}
+}
 
+async function advanceHead(dir: string, name: string): Promise<void> {
+	await fs.writeFile(path.join(dir, name), "y");
+	await $`git add . && git commit -q -m ${name}`.cwd(dir).quiet().nothrow();
+}
+
+describe("gate verification", () => {
 	describe("normalizeCommand", () => {
 		it("passes through plain commands", () => {
 			expect(normalizeCommand("bun test test/foo.test.ts")).toBe("bun test test/foo.test.ts");
@@ -72,99 +88,102 @@ describe("gate verification", () => {
 
 	describe("matchesGateCmd", () => {
 		it("matches exact successful execution in the expected cwd", () => {
-			const executions: TrackedBashExecution[] = [{ command: "bun test", exitCode: 0, cwd: "/app" }];
+			const executions: ExecutionRecord[] = [{ command: "bun test", exitCode: 0, cwd: "/app" }];
 			expect(matchesGateCmd("bun test", executions, "/app")).toBe(true);
 		});
 
 		it("matches exact command after normalization and cwd resolution", () => {
-			const executions: TrackedBashExecution[] = [
+			const executions: ExecutionRecord[] = [
 				{ command: "cd /app && bun test foo.ts", exitCode: 0, cwd: "/app" },
 			];
 			expect(matchesGateCmd("bun test foo.ts", executions, "/app")).toBe(true);
 		});
 
+		it("matches a gate that itself embeds a cd prefix against a bare execution in that dir", () => {
+			// The djinn RC: gate string carries `cd packages/djinn && mix test …`;
+			// the recorded execution ran the bare `mix test …` with cwd=packages/djinn.
+			const executions: ExecutionRecord[] = [
+				{ command: "mix test test/x_test.exs", exitCode: 0, cwd: "/repo/packages/djinn" },
+			];
+			expect(
+				matchesGateCmd("cd packages/djinn && mix test test/x_test.exs", executions, "/repo"),
+			).toBe(true);
+		});
+
 		it("matches transparent env wrappers", () => {
-			const executions: TrackedBashExecution[] = [{ command: "env CI=1 bun test", exitCode: 0, cwd: "/app" }];
+			const executions: ExecutionRecord[] = [{ command: "env CI=1 bun test", exitCode: 0, cwd: "/app" }];
 			expect(matchesGateCmd("bun test", executions, "/app")).toBe(true);
 		});
 
 		it("matches transparent shell wrappers", () => {
-			const executions: TrackedBashExecution[] = [{ command: 'sh -c "bun test"', exitCode: 0, cwd: "/app" }];
+			const executions: ExecutionRecord[] = [{ command: 'sh -c "bun test"', exitCode: 0, cwd: "/app" }];
 			expect(matchesGateCmd("bun test", executions, "/app")).toBe(true);
 		});
 
 		it("matches prefix with extra arguments", () => {
-			const executions: TrackedBashExecution[] = [{ command: "bun test foo.ts", exitCode: 0, cwd: "/app" }];
+			const executions: ExecutionRecord[] = [{ command: "bun test foo.ts", exitCode: 0, cwd: "/app" }];
 			expect(matchesGateCmd("bun test", executions, "/app")).toBe(true);
 		});
 
 		it("matches when gateCmd is followed by a shell pipe", () => {
-			const executions: TrackedBashExecution[] = [
-				{ command: "bun test | tail -5", exitCode: 0, cwd: "/app" },
-			];
+			const executions: ExecutionRecord[] = [{ command: "bun test | tail -5", exitCode: 0, cwd: "/app" }];
 			expect(matchesGateCmd("bun test", executions, "/app")).toBe(true);
 		});
 
 		it("matches when gateCmd is followed by a redirect", () => {
-			const executions: TrackedBashExecution[] = [
-				{ command: "bun test 2>&1", exitCode: 0, cwd: "/app" },
-			];
+			const executions: ExecutionRecord[] = [{ command: "bun test 2>&1", exitCode: 0, cwd: "/app" }];
 			expect(matchesGateCmd("bun test", executions, "/app")).toBe(true);
 		});
 
 		it("matches gateCmd with pipe and redirect combined", () => {
-			const executions: TrackedBashExecution[] = [
+			const executions: ExecutionRecord[] = [
 				{ command: "cd /app && cargo test -p pi-code-engine watcher 2>&1 | tail -5", exitCode: 0, cwd: "/app" },
 			];
 			expect(matchesGateCmd("cargo test -p pi-code-engine watcher", executions, "/app")).toBe(true);
 		});
 
 		it("matches gateCmd with extra flags", () => {
-			const executions: TrackedBashExecution[] = [
+			const executions: ExecutionRecord[] = [
 				{ command: "cargo test --workspace --verbose", exitCode: 0, cwd: "/app" },
 			];
 			expect(matchesGateCmd("cargo test --workspace", executions, "/app")).toBe(true);
 		});
 
-		// -- positive: edge cases --
-
 		it("matches shell wrapper with pipe and redirect", () => {
-			const executions: TrackedBashExecution[] = [
+			const executions: ExecutionRecord[] = [
 				{ command: 'sh -c "cargo test -p foo 2>&1 | tail -5"', exitCode: 0, cwd: "/app" },
 			];
 			expect(matchesGateCmd("cargo test -p foo", executions, "/app")).toBe(true);
 		});
 
 		it("matches when followed by && chain", () => {
-			const executions: TrackedBashExecution[] = [
+			const executions: ExecutionRecord[] = [
 				{ command: "cargo test -p foo && echo done", exitCode: 0, cwd: "/app" },
 			];
 			expect(matchesGateCmd("cargo test -p foo", executions, "/app")).toBe(true);
 		});
 
 		it("matches background operator", () => {
-			const executions: TrackedBashExecution[] = [
-				{ command: "cargo test &", exitCode: 0, cwd: "/app" },
-			];
+			const executions: ExecutionRecord[] = [{ command: "cargo test &", exitCode: 0, cwd: "/app" }];
 			expect(matchesGateCmd("cargo test", executions, "/app")).toBe(true);
 		});
 
 		it("matches env assignments with pipe", () => {
-			const executions: TrackedBashExecution[] = [
+			const executions: ExecutionRecord[] = [
 				{ command: "CI=1 RUST_BACKTRACE=1 cargo test | tail -5", exitCode: 0, cwd: "/app" },
 			];
 			expect(matchesGateCmd("cargo test", executions, "/app")).toBe(true);
 		});
 
 		it("matches when execution appends output redirect to file", () => {
-			const executions: TrackedBashExecution[] = [
+			const executions: ExecutionRecord[] = [
 				{ command: "bun test > test-output.log", exitCode: 0, cwd: "/app" },
 			];
 			expect(matchesGateCmd("bun test", executions, "/app")).toBe(true);
 		});
 
 		it("matches heredoc appended after command", () => {
-			const executions: TrackedBashExecution[] = [
+			const executions: ExecutionRecord[] = [
 				{ command: "cat <<'EOF'\nsome content\nEOF", exitCode: 0, cwd: "/app" },
 			];
 			expect(matchesGateCmd("cat", executions, "/app")).toBe(true);
@@ -173,63 +192,47 @@ describe("gate verification", () => {
 		// -- negative: boundary enforcement --
 
 		it("returns false when gateCmd is a substring inside a word (boundary guard)", () => {
-			const executions: TrackedBashExecution[] = [
-				{ command: "cargo test -p foobar", exitCode: 0, cwd: "/app" },
-			];
+			const executions: ExecutionRecord[] = [{ command: "cargo test -p foobar", exitCode: 0, cwd: "/app" }];
 			expect(matchesGateCmd("cargo test -p foo", executions, "/app")).toBe(false);
 		});
 
 		it("returns false when gateCmd is more specific than execution", () => {
-			const executions: TrackedBashExecution[] = [
-				{ command: "bun test", exitCode: 0, cwd: "/app" },
-			];
+			const executions: ExecutionRecord[] = [{ command: "bun test", exitCode: 0, cwd: "/app" }];
 			expect(matchesGateCmd("bun test --verbose", executions, "/app")).toBe(false);
 		});
 
 		it("returns false when execution is a prefix of the gate (run too little)", () => {
-			const executions: TrackedBashExecution[] = [
-				{ command: "cargo test", exitCode: 0, cwd: "/app" },
-			];
+			const executions: ExecutionRecord[] = [{ command: "cargo test", exitCode: 0, cwd: "/app" }];
 			expect(matchesGateCmd("cargo test --workspace", executions, "/app")).toBe(false);
 		});
 
 		it("returns false for semicolon without space boundary", () => {
-			const executions: TrackedBashExecution[] = [
-				{ command: "bun test;echo done", exitCode: 0, cwd: "/app" },
-			];
+			const executions: ExecutionRecord[] = [{ command: "bun test;echo done", exitCode: 0, cwd: "/app" }];
 			expect(matchesGateCmd("bun test", executions, "/app")).toBe(false);
 		});
 
 		it("returns false when gateCmd is empty", () => {
-			const executions: TrackedBashExecution[] = [
-				{ command: "bun test", exitCode: 0, cwd: "/app" },
-			];
+			const executions: ExecutionRecord[] = [{ command: "bun test", exitCode: 0, cwd: "/app" }];
 			expect(matchesGateCmd("", executions, "/app")).toBe(false);
 		});
 
 		it("returns false when gateCmd is whitespace only", () => {
-			const executions: TrackedBashExecution[] = [
-				{ command: "bun test", exitCode: 0, cwd: "/app" },
-			];
+			const executions: ExecutionRecord[] = [{ command: "bun test", exitCode: 0, cwd: "/app" }];
 			expect(matchesGateCmd("   ", executions, "/app")).toBe(false);
 		});
 
 		it("returns false when gateCmd equals execution plus extra content", () => {
-			// Gate asks for 'bun test --verbose', agent ran 'bun test'.
-			// Execution can't be a prefix of the gate — the gate is the floor.
-			const executions: TrackedBashExecution[] = [
-				{ command: "bun test", exitCode: 0, cwd: "/app" },
-			];
+			const executions: ExecutionRecord[] = [{ command: "bun test", exitCode: 0, cwd: "/app" }];
 			expect(matchesGateCmd("bun test file.ts", executions, "/app")).toBe(false);
 		});
 
 		it("returns false when the cwd does not match", () => {
-			const executions: TrackedBashExecution[] = [{ command: "bun test", exitCode: 0, cwd: "/other" }];
+			const executions: ExecutionRecord[] = [{ command: "bun test", exitCode: 0, cwd: "/other" }];
 			expect(matchesGateCmd("bun test", executions, "/app")).toBe(false);
 		});
 
 		it("returns false when no command matches", () => {
-			const executions: TrackedBashExecution[] = [{ command: "bun lint", exitCode: 0, cwd: "/app" }];
+			const executions: ExecutionRecord[] = [{ command: "bun lint", exitCode: 0, cwd: "/app" }];
 			expect(matchesGateCmd("bun test", executions, "/app")).toBe(false);
 		});
 
@@ -238,44 +241,34 @@ describe("gate verification", () => {
 		});
 
 		it("ignores failed executions", () => {
-			const executions: TrackedBashExecution[] = [{ command: "bun test", exitCode: 1, cwd: "/app" }];
+			const executions: ExecutionRecord[] = [{ command: "bun test", exitCode: 1, cwd: "/app" }];
 			expect(matchesGateCmd("bun test", executions, "/app")).toBe(false);
 		});
 
 		it("is case sensitive", () => {
-			const executions: TrackedBashExecution[] = [{ command: "BUN TEST", exitCode: 0, cwd: "/app" }];
+			const executions: ExecutionRecord[] = [{ command: "BUN TEST", exitCode: 0, cwd: "/app" }];
 			expect(matchesGateCmd("bun test", executions, "/app")).toBe(false);
 		});
 	});
 
-	describe("detectGitCommit", () => {
-		it("detects git commit", () => {
-			const executions: TrackedBashExecution[] = [{ command: "git commit -m 'fix'", exitCode: 0 }];
-			expect(detectGitCommit(executions)).toBe(true);
+	describe("detectHeadAdvanced", () => {
+		it("returns true when HEAD moved past the baseline", async () => {
+			await withGitRepo(async (dir, baseline) => {
+				await advanceHead(dir, "b.txt");
+				expect(await detectHeadAdvanced(dir, baseline)).toBe(true);
+			});
 		});
 
-		it("detects amend commits", () => {
-			const executions: TrackedBashExecution[] = [{ command: "git commit --amend", exitCode: 0 }];
-			expect(detectGitCommit(executions)).toBe(true);
+		it("returns false when HEAD is unchanged", async () => {
+			await withGitRepo(async (dir, baseline) => {
+				expect(await detectHeadAdvanced(dir, baseline)).toBe(false);
+			});
 		});
 
-		it("ignores git add", () => {
-			const executions: TrackedBashExecution[] = [{ command: "git add .", exitCode: 0 }];
-			expect(detectGitCommit(executions)).toBe(false);
-		});
-
-		it("returns false for empty arrays", () => {
-			expect(detectGitCommit([])).toBe(false);
-		});
-
-		it("detects commits behind cd prefixes", () => {
-			const executions: TrackedBashExecution[] = [{ command: "cd repo && git commit -m fix", exitCode: 0 }];
-			expect(detectGitCommit(executions)).toBe(true);
-		});
-
-		it("does not match git-commit", () => {
-			const executions: TrackedBashExecution[] = [{ command: "git-commit", exitCode: 0 }];
-			expect(detectGitCommit(executions)).toBe(false);
+		it("returns false in a non-git directory", async () => {
+			await withTempDir(async dir => {
+				expect(await detectHeadAdvanced(dir, "0".repeat(40))).toBe(false);
+			});
 		});
 	});
 
@@ -342,23 +335,52 @@ describe("gate verification", () => {
 			]);
 		});
 
-		it("passes when gateCommit is detected", async () => {
-			const result = await verifyGates({
-				gateCommit: true,
-				executions: [{ command: "git commit -m fix", exitCode: 0 }],
-				cwd: os.tmpdir(),
+		it("passes when gateCommit HEAD advanced past the baseline (no executions needed)", async () => {
+			await withGitRepo(async (dir, baseline) => {
+				await advanceHead(dir, "b.txt");
+				const result = await verifyGates({
+					gateCommit: true,
+					executions: [],
+					cwd: dir,
+					baselineHeadCommit: baseline,
+				});
+				expect(result.passed).toBe(true);
 			});
-			expect(result.passed).toBe(true);
 		});
 
-		it("fails when gateCommit is not detected", async () => {
-			const result = await verifyGates({
-				gateCommit: true,
-				executions: [{ command: "git add .", exitCode: 0 }],
-				cwd: os.tmpdir(),
+		it("fails gateCommit when HEAD did not advance, regardless of command log", async () => {
+			await withGitRepo(async (dir, baseline) => {
+				const result = await verifyGates({
+					gateCommit: true,
+					executions: [{ command: "git commit -m noop", exitCode: 0, cwd: dir }],
+					cwd: dir,
+					baselineHeadCommit: baseline,
+				});
+				expect(result.passed).toBe(false);
+				expect(result.failures[0]?.gate).toBe("gateCommit");
+				expect(result.failures[0]?.detail).toBe("HEAD did not advance past the pre-work baseline.");
 			});
+		});
+
+		it("fails gateCommit when no baseline is available", async () => {
+			const result = await verifyGates({ gateCommit: true, executions: [], cwd: os.tmpdir() });
 			expect(result.passed).toBe(false);
 			expect(result.failures[0]?.gate).toBe("gateCommit");
+			expect(result.failures[0]?.detail).toBe("No git baseline was available to verify the commit against.");
+		});
+
+		it("resolves the commit gate against the worktree dir when set", async () => {
+			await withGitRepo(async (dir, baseline) => {
+				await advanceHead(dir, "b.txt");
+				const result = await verifyGates({
+					gateCommit: true,
+					executions: [],
+					cwd: os.tmpdir(),
+					worktreeDir: dir,
+					baselineHeadCommit: baseline,
+				});
+				expect(result.passed).toBe(true);
+			});
 		});
 
 		it("passes when gateArtifact exists", async () => {
@@ -377,36 +399,34 @@ describe("gate verification", () => {
 		});
 
 		it("passes when multiple gates all pass", async () => {
-			await withTempDir(async dir => {
+			await withGitRepo(async (dir, baseline) => {
 				const artifact = path.join(dir, "artifact.txt");
 				await fs.writeFile(artifact, "ok");
+				await advanceHead(dir, "b.txt");
 				const result = await verifyGates({
 					gateCmd: "bun test",
 					gateCommit: true,
 					gateArtifact: artifact,
-					executions: [
-						{ command: "env CI=1 bun test", exitCode: 0, cwd: dir },
-						{ command: "git commit -m fix", exitCode: 0 },
-					],
+					executions: [{ command: "env CI=1 bun test", exitCode: 0, cwd: dir }],
 					cwd: dir,
+					baselineHeadCommit: baseline,
 				});
 				expect(result).toEqual({ passed: true, failures: [] });
 			});
 		});
 
 		it("fails with the failing gate when multiple gates are configured", async () => {
-			await withTempDir(async dir => {
+			await withGitRepo(async (dir, baseline) => {
 				const artifact = path.join(dir, "artifact.txt");
 				await fs.writeFile(artifact, "ok");
+				await advanceHead(dir, "b.txt");
 				const result = await verifyGates({
 					gateCmd: "bun test",
 					gateCommit: true,
 					gateArtifact: artifact,
-					executions: [
-						{ command: "pnpm test", exitCode: 0, cwd: dir },
-						{ command: "git commit -m fix", exitCode: 0 },
-					],
+					executions: [{ command: "pnpm test", exitCode: 0, cwd: dir }],
 					cwd: dir,
+					baselineHeadCommit: baseline,
 				});
 				expect(result.passed).toBe(false);
 				expect(result.failures.length).toBe(1);
@@ -416,73 +436,6 @@ describe("gate verification", () => {
 					detail: "No successful execution matched the gate command.",
 				});
 			});
-		});
-	});
-});
-
-describe("detectGitCommit through shell wrappers (BUG-355)", () => {
-	it("detects git commit nested inside bash -c", () => {
-		const executions: TrackedBashExecution[] = [
-			{ command: 'bash -c "git commit -m foo"', exitCode: 0 },
-		];
-		expect(detectGitCommit(executions)).toBe(true);
-	});
-
-	it("detects git commit nested inside sh -c", () => {
-		const executions: TrackedBashExecution[] = [
-			{ command: "sh -c 'git commit -m foo'", exitCode: 0 },
-		];
-		expect(detectGitCommit(executions)).toBe(true);
-	});
-
-	it("detects git commit nested inside bash -lc", () => {
-		const executions: TrackedBashExecution[] = [
-			{ command: "bash -lc 'git commit -m foo'", exitCode: 0 },
-		];
-		expect(detectGitCommit(executions)).toBe(true);
-	});
-});
-
-describe("verifyGates with baselineHeadCommit (BUG-355)", () => {
-	async function withGitRepo<T>(fn: (dir: string, baseline: string) => Promise<T>): Promise<T> {
-		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "gate-verification-git-"));
-		try {
-			await $`git init -q`.cwd(dir).quiet().nothrow();
-			await $`git config user.email test@example.com`.cwd(dir).quiet().nothrow();
-			await $`git config user.name Test`.cwd(dir).quiet().nothrow();
-			await fs.writeFile(path.join(dir, "a.txt"), "x");
-			await $`git add . && git commit -q -m baseline`.cwd(dir).quiet().nothrow();
-			const baseline = (await $`git rev-parse HEAD`.cwd(dir).quiet().nothrow().text()).trim();
-			return await fn(dir, baseline);
-		} finally {
-			await fs.rm(dir, { recursive: true, force: true });
-		}
-	}
-
-	it("passes when HEAD advanced past baseline even with no executions", async () => {
-		await withGitRepo(async (dir, baseline) => {
-			await fs.writeFile(path.join(dir, "b.txt"), "y");
-			await $`git add . && git commit -q -m advance`.cwd(dir).quiet().nothrow();
-			const result = await verifyGates({
-				gateCommit: true,
-				executions: [],
-				cwd: dir,
-				baselineHeadCommit: baseline,
-			});
-			expect(result.passed).toBe(true);
-		});
-	});
-
-	it("fails when HEAD did not advance, even with bash entries mentioning git commit", async () => {
-		await withGitRepo(async (dir, baseline) => {
-			const result = await verifyGates({
-				gateCommit: true,
-				executions: [{ command: "git commit -m noop", exitCode: 0 }],
-				cwd: dir,
-				baselineHeadCommit: baseline,
-			});
-			expect(result.passed).toBe(false);
-			expect(result.failures[0]?.gate).toBe("gateCommit");
 		});
 	});
 });

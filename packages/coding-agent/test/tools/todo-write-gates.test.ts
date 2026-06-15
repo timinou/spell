@@ -681,7 +681,7 @@ describe("two-phase gated completion via TodoWriteTool.execute", () => {
 
 	test("completing a gated node with verified: true succeeds", async () => {
 		const tool = new TodoWriteTool(
-			createSession([], { getBashHistory: () => [{ command: "bun test", exitCode: 0, cwd: "/tmp/test" }] }),
+			createSession([], { getExecutionHistory: () => [{ command: "bun test", exitCode: 0, cwd: "/tmp/test" }] }),
 		);
 		await tool.execute("call-1", {
 			reset: true,
