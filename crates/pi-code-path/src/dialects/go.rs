@@ -543,7 +543,7 @@ pub fn go_dialect() -> LanguageDialect {
 			},
 		],
 		edge_kinds:   EdgeKindSet::default(),
-		kind_aliases: std::collections::HashMap::from([
+		kind_aliases: crate::dialect::kind_aliases([
 			("function", vec!["function_declaration", "func_literal"]),
 			("method", vec!["method_declaration"]),
 			("class", vec!["type_declaration"]),

@@ -691,7 +691,7 @@ pub fn rust_dialect() -> LanguageDialect {
 			},
 		],
 		edge_kinds:   EdgeKindSet::default(),
-		kind_aliases: std::collections::HashMap::from([
+		kind_aliases: crate::dialect::kind_aliases([
 			("function", vec!["function_item", "function_signature_item"]),
 			("method", vec!["function_item"]),
 			("class", vec!["struct_item", "enum_item", "union_item", "trait_item"]),

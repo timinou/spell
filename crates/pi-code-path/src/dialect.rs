@@ -1,4 +1,8 @@
-use std::{collections::HashSet, ops::Range, sync::Arc};
+use std::{
+	collections::{HashMap, HashSet},
+	ops::Range,
+	sync::Arc,
+};
 
 use tree_sitter::Node;
 
@@ -91,6 +95,17 @@ impl Default for EdgeKindSet {
 	}
 }
 
+pub type KindAliasMap = HashMap<String, Vec<String>>;
+
+pub fn kind_aliases<const N: usize>(
+	entries: [(&'static str, Vec<&'static str>); N],
+) -> KindAliasMap {
+	entries
+		.into_iter()
+		.map(|(alias, kinds)| (alias.to_string(), kinds.into_iter().map(str::to_string).collect()))
+		.collect()
+}
+
 // ── LanguageDialect ──────────────────────────────────────────────
 
 /// The complete dialect definition for one language.
@@ -109,7 +124,7 @@ pub struct LanguageDialect {
 	/// Canonical alias set: `function`, `method`, `class`, `decl`, `call`,
 	/// `import`, `binding`, `identifier`. Dialects may extend (e.g.
 	/// Rust `trait`, Python `decorator`) or omit aliases they don't have.
-	pub kind_aliases: std::collections::HashMap<&'static str, Vec<&'static str>>,
+	pub kind_aliases: KindAliasMap,
 }
 
 impl std::fmt::Debug for LanguageDialect {

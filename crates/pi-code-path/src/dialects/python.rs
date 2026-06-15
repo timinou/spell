@@ -439,7 +439,7 @@ pub fn python_dialect() -> LanguageDialect {
 			// TODO: type→/inherits→/override→ deferred until EdgeKind extension
 			set
 		},
-		kind_aliases: std::collections::HashMap::from([
+		kind_aliases: crate::dialect::kind_aliases([
 			("function", vec!["function_definition"]),
 			("method", vec!["function_definition"]),
 			("class", vec!["class_definition"]),

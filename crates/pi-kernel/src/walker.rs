@@ -646,7 +646,7 @@ fn head_matches(head: &Head, node: Node<'_>, src: &str, dialect: &LanguageDialec
 				return true;
 			}
 			if let Some(raw_kinds) = dialect.kind_aliases.get(kind.as_str()) {
-				return raw_kinds.iter().any(|&rk| node.kind() == rk);
+				return raw_kinds.iter().any(|rk| node.kind() == rk.as_str());
 			}
 			false
 		},
