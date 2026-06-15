@@ -1,0 +1,132 @@
+#+TITLE: Episodes 2026-06-15
+
+** ITEM Investigated cross-project file leak in ~/code/ora/verse (Spacetime compiler repo). Commits 4f734a0b + 4dfc2069 (Jun 15) deleted ~470 foreign files that had leaked in over Jun 1–14 via commits 0667a224, 500b3d35, b1dc4b0c, 2c930677, d03a1d92. Two leak classes: (1) Spell tool artifacts written CWD-relative into verse root — puppeteer_dev_chrome_profile-* (Chrome default userDataDir, browser.ts launch() passes no userDataDir → defaults to process.cwd()), spell-image-*.png, spell-qml-test-*.png, board_*.png screenshots, better-ccflare/models.dev.json (provider model cache); (2) whole foreign scratch website projects (rv, rel_site, cmstest, agentmaker_build_3626480, ampout) — output of Spell sessions that built OTHER projects while verse was the session cwd, then got swept up by git add -A. Root cause = BUG-029 family: unanchored relative paths resolve against session cwd, not the agent's mental git-root anchor. Fixed across BUG-358/360/361 (resolveCwdRelativePath + detectCwdPrefixDuplication in path-resolution.ts, cwd-tail coalescing) and the repo:// anchor proposal. browser.ts screenshot default → os.tmpdir since March. The puppeteer process.cwd() default-profile leak is NOT fully closed — launch() still omits userDataDir.
+:PROPERTIES:
+:CUSTOM_ID: EP-78e926524e57047
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-15T10:48:59Z
+:END:
+:RELATIONS:
+ABOUT: BUG-029
+ABOUT: BUG-361
+:END:
+** ITEM Fixed find/get tool dead-end on binary scheme:// URLs (artifact://, agent://, etc.). Root cause: get.ts renderSchemeNode dropped node.metadata.source_path and rendered `[§empty]` + the kernel note "Use sourcePath-aware tools to inspect it" — without ever surfacing the resolved fs path. Agent then scanned `find /` → 300s timeout. Kernel (napi.rs ~L1181) DOES forward source_path in metadata for fs-backed schemes; the TS renderer just ignored it. Fix: made renderSchemeNode a GetTool method that (1) for content.kind==="bytes" with a source_path, re-classifies off the resolved path and behaves like a real file read — image→image block via readImageFile, other binary→marker naming the path; (2) always attaches sourcePath meta; (3) fallback names the path instead of bare [§empty]. Single chokepoint covers both `find` (FindTool delegates to GetTool) and `get`. Tests in packages/coding-agent/test/get.test.ts.
+:PROPERTIES:
+:CUSTOM_ID: EP-7255e404b2b550f2
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-15T11:57:36Z
+:END:
+:RELATIONS:
+ABOUT: packages/coding-agent/src/tools/get.ts
+:END:
+** ITEM puppeteer.launch omits userDataDir; Chrome writes profile dir to process.cwd()
+
+Fixed in commit 582238069. puppeteer.launch now receives an explicit userDataDir = ~/.spell/puppeteer/profiles/<snowflake>, unique per launch (no profile-lock contention across concurrent in-process browsers), best-effort removed on #closeBrowser. Chrome can no longer create puppeteer_dev_chrome_profile-* in process.cwd(). tsgo clean; browser + send-file tests green (14/14).
+:PROPERTIES:
+:CUSTOM_ID: EP-4d569a1fa39bdfa3
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-15T12:10:48Z
+:END:
+:RELATIONS:
+ABOUT: BUG-482-puppeteer-launch-omits-userdatadir-chrom
+:END:
+** ITEM resolveCwdRelativePath blind to sibling/new-top-level shape; cross-project file leak
+
+Fixed in commit 582238069. Added 'unanchored-new' decision to resolveCwdRelativePath: a brand-new nested write whose first segment is a sibling project (peer of cwd or ancestor up to projectRoot) now emits a strong warning naming the sibling + absolute alternative. Fixed CwdResolutionDecision type drift (added 'project-root' + 'unanchored-new'). Threaded session git-root as projectRoot via new ToolSession.getRepoRoot (cached per cwd) into create/edit/send-file/browser-screenshot. 10 new unit tests; 26/26 path-resolution tests green; tsgo clean on touched files.
+:PROPERTIES:
+:CUSTOM_ID: EP-5b27d21e9d632c63
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-15T12:11:08Z
+:END:
+:RELATIONS:
+ABOUT: BUG-481-resolvecwdrelativepath-blind-to-sibling
+:END:
+** ITEM Debugged "pi-knowledge-worker stuck at 0 + hogging computer (4.2GB RSS, 60min CPU, zombie)". Three INDEPENDENT root causes, none was the embed logic (which was correct + tested):
+
+1. STALE DEPLOYED BINARY (primary). The deployed packages/natives/native/pi-knowledge-worker and the cargo release artifact were both built ~13min BEFORE the four fix commits (69cbeade8 persist/chunked-progress/CPU-cap, f6231e40d recency, d7469f7da graph-once, 159876028 title-fix) landed. Diagnosed by `strings <binary> | grep -F 'org_vec_meta|recency gate|affinity cap'` → all ABSENT in deployed, PRESENT in source. So none of the "recent improvements" were actually running. Fix = cargo build --release + cp to native/. Lesson: when a fix "doesn't work", FIRST verify the deployed binary actually contains it (strings probe + mtime vs commit date) before re-debugging logic. Related deploy gap: BUG-471 (build-native reads ./target/debug, cargo emits to ~/.cache).
+
+2. IDLE-EXIT KILLS LONG COLD WARM (BUG-483). Warm-load runs on a detached thread touching neither INFLIGHT nor LAST_REQUEST_AT. Cold warm of 4148 org items under the CPU-affinity cap takes ~1h, but build_vec_index_with only persists the vector cache at END of a complete build. The 30min idle-exit fires mid-embed → discards everything → re-embed from scratch next lifetime. THIS is why ~/.cache/spell/knowledge/<repo-hash>/ never appeared despite the daemon reaching warm/4147-in-RAM repeatedly. Fix: ACTIVE_WARMS atomic + RAII WarmActiveGuard, idle gate also checks !warm_in_flight().
+
+3. ZOMBIE ON EVERY SPAWN. embedding_worker::spawn_daemon did Command::spawn() then dropped Child without wait(). --daemonize double-forks; the fork-parent exit(0)s immediately → <defunct> reparented to the spell process, never reaped. Fix: child.wait() (returns in ms; real daemon setsid'd away).
+
+Verification technique that nailed it: query the LIVE daemon over its unix socket with socat (`printf '{"command":"stats"}\n' | socat - UNIX-CONNECT:/run/user/1000/spell/knowledge.sock`) — showed status=warm, item_count=4147, but the on-disk cache dir for that exact repo_hash was MISSING. RAM-warm + disk-empty = the smoking gun. Then proved the fix: cold warm persisted a 17.5MB vectors.uidx (4148×1024×4), and a close+reopen re-warm jumped to done=4129 instantly (carry-forward) embedding only ~28 new items → warm in seconds not 55min.
+
+Two hashers to not confuse: daemon handle = repo_cache::repo_hash → "fnv:%016x"; cache dir = pi-knowledge-core::cache::repo_hash → "%012x". Different widths/prefix over the same FNV-1a of the canonical path.
+:PROPERTIES:
+:CUSTOM_ID: EP-ea0f296eae928432
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-15T12:57:35Z
+:END:
+:RELATIONS:
+:END:
+** ITEM Release-rebuild + redeploy pi-knowledge-worker once pi-code-path compiles (BUG-483 fixes 2+3)
+
+Unblocked + completed. pi-code-path now compiles (concurrent work fixed the E0061 in dialects/fs). Release-built pi-knowledge-worker (fix 2: idle-gate) and rebuilt the pi-natives modern addon via `bun run build:native` (fix 3: spawn_daemon child.wait() zombie reap). Both deployed to packages/natives/native/. Verified end-to-end: fresh daemon fast-warms from the persisted 17.5MB cache in ~30s (done 0→4139 carry-forward, embeds only new items) vs 55min cold; one clean daemon, socket responsive, no new zombie from the proper spawn path. NB: already-running bun sessions still hold the pre-fix addon in memory and will leak a zombie per daemon-spawn until they restart — harmless (0 resources), clears on session exit. New sessions load the fixed addon.
+:PROPERTIES:
+:CUSTOM_ID: EP-45009bde2001e2d6
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-15T13:29:33Z
+:END:
+:RELATIONS:
+ABOUT: FUP-144-release-rebuild-redeploy-pi-knowledge-wo
+:END:
+** ITEM Unify gate-evaluation substrate — durable tool-agnostic evidence + single commit evaluator
+
+COMPLETE — 2 commits + reviewer-swarm hardening.
+:PROPERTIES:
+:CUSTOM_ID: EP-8f29e60412dbe6d3
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-15T14:50:06Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-817-unify-gate-evaluation-substrate-durable
+:END:
+** ITEM Implemented Spell B-small embedding backend: keep all consumers behind pi-knowledge-worker::EmbeddingEngine, add env-gated auto/cpu/vitis/off selection, use ort::ep::Vitis availability as the NPU gate, fall back to fastembed CPU in auto mode, expose embedder status in repo_cache stats/org_lane, and render TUI memory-status suffixes. Current machine still degrades to CPU until Vitis-enabled ORT provider is installed.
+:PROPERTIES:
+:CUSTOM_ID: EP-9d0082b46a43b825
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-15T15:54:17Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-818-embedding-backend-auto-selection-and-tui
+:END:
+** ITEM Hardening review for FEAT-818 found that PI_KNOWLEDGE_EMBED_BACKEND=off must not make EmbeddingEngine::new fail, because daemon init failure disables all knowledge protocol capability. Fixed by making off initialize a disabled backend status/runtime; lexical BM25/graph recall remains available while direct embedding calls return 'embeddings disabled'.
+:PROPERTIES:
+:CUSTOM_ID: EP-be0a81d339ef4683
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-15T16:59:24Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-818-embedding-backend-auto-selection-and-tui
+:END:
+** ITEM Implemented PLAN-340 Harbor hardening: spell_harbor/spell_agent.py now writes /logs/artifacts transcript/exit metadata/app deliverables/smoke output and raises on non-zero Spell or missing required paths; spell.autonomous.kdl harbor prompt now includes Terminal-Bench inspect→test→repair workflow and security guidance; modelStrict added to domain types/KDL parser/manifest and main exact model validation. Verification passed targeted py_compile, kdl-domain tests, and touched-file biome; full repo check remains red from unrelated pre-existing diagnostics.
+:PROPERTIES:
+:CUSTOM_ID: EP-34a38693784a16f2
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-15T18:02:57Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-340-harden-spell-harbor-for-terminal-bench-t
+ABOUT: CON-harbor-terminal-bench-failures-need-arti
+:END:
+** ITEM PLAN-340 final verification: fixed `spell_harbor/build-portable-native.sh` to overlay dirty/untracked source over `git archive HEAD`, restored executable bit, rebuilt `spell_harbor/dist`, and confirmed compiled dist rejects `HARBOR_MODEL=openai-codex/gpt-5-5` with strict exact-model error + suggestions before agent execution. Targeted py_compile, kdl-domain tests, touched-file biome pass.
+:PROPERTIES:
+:CUSTOM_ID: EP-c74bc82c6869daf8
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-15T18:34:28Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-340-harden-spell-harbor-for-terminal-bench-t
+ABOUT: CON-harbor-terminal-bench-failures-need-arti
+:END:
