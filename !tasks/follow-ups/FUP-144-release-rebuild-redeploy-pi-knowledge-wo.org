@@ -1,0 +1,48 @@
+#+TITLE: Release-rebuild + redeploy pi-knowledge-worker once pi-code-path compiles (BUG-483 fixes 2+3)
+#+STATE: BLOCKED
+#+SESSION_ID: 150a077d508122ea
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-15T10-51-44-834Z_150a077d508122ea.jsonl]]
+#+CUSTOM_ID: FUP-144-release-rebuild-redeploy-pi-knowledge-wo
+
+* Initial Message
+
+Despite the recent improvements to pi-knowledge-worker, it is still stuck at 0 in sessions that are embedding stuff, and it is hogging the whole computer...
+
+user     2963209  0.0  0.0      0     0 pts/31   Z+   Jun14   0:00 [pi-knowledge-wo] <defunct>
+user     2963211  7.8  9.4 9956584 4613864 ?     Ssl  Jun14  60:57 /home/user/code/ora/spell/crates/pi-natives/../../packages/natives/native/pi-knowledge-worker --socket /run/user/1000/spell/knowledge.sock --daemonize
+
+[Image #1]
+
+* BLOCKED Release-rebuild + redeploy pi-knowledge-worker once pi-code-path compiles
+:PROPERTIES:
+:CUSTOM_ID: FUP-144-release-rebuild-redeploy-pi-knowledge-wo::FUP-knowledge-worker-release-redeploy
+:KIND: follow-up
+:END:
+
+BUG-483 fixes 2 (idle-gate on in-flight warm) and 3 (zombie reap) are committed
+in source and pass ~cargo check~/tests, but the optimized release binary that
+ships to ~packages/natives/native/pi-knowledge-worker~ could not be relinked at
+fix time: an UNRELATED, pre-existing compile break in ~pi-code-path~ (dirty
+~src/dialects/fs/{qualifiers,walker}.rs~, ~E0061~: ~resolve_listing~ called with
+3 args, defined with 2 — edited by a concurrent process) fails the workspace
+release build, and pi-knowledge-worker transitively depends on pi-code-path.
+
+The currently-deployed binary (manually redeployed during BUG-483) DOES contain
+fix 1 (persistence/progress/recency/affinity) — verified via ~strings~ — so the
+user-visible "stuck at 0 / re-embed hog" is already resolved. It does NOT yet
+contain fixes 2+3.
+
+** Action when unblocked
+1. Confirm pi-code-path compiles (dirty files reverted/fixed by owner):
+   ~cargo check -p pi-code-path~.
+2. ~cargo build -p pi-knowledge-worker --release~.
+3. Verify: ~strings ~/.cache/cargo-target/release/pi-knowledge-worker | grep -E
+   'org_vec_meta|affinity cap'~ → present.
+4. Deploy: ~cp ~/.cache/cargo-target/release/pi-knowledge-worker
+   packages/natives/native/pi-knowledge-worker~ (or run
+   ~packages/natives/scripts/build-native.ts~).
+5. Restart daemon: SIGTERM the running worker, ~rm~ socket+pidfile; next session
+   respawns the fresh binary.
+
+Prefer wiring this into the normal native build/deploy pipeline (see BUG-471)
+rather than a manual cp.

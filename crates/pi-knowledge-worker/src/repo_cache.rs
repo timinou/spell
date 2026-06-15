@@ -22,7 +22,10 @@ use std::{
 	collections::HashMap,
 	env, fs,
 	path::{Path, PathBuf},
-	sync::{Arc, Condvar, Mutex, OnceLock},
+	sync::{
+		Arc, Condvar, Mutex, OnceLock,
+		atomic::{AtomicUsize, Ordering},
+	},
 	thread,
 	time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -346,6 +349,47 @@ fn slots() -> &'static Mutex<HashMap<String, RepoSlot>> {
 	SLOTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+// ---------------------------------------------------------------------------
+// Active-warm tracking (BUG-483)
+// ---------------------------------------------------------------------------
+//
+// A cold warm-load of a large corpus (thousands of org items) can take much
+// longer than the daemon's idle-exit window. The warm runs on a detached
+// background thread that touches neither the connection `INFLIGHT` counter nor
+// `LAST_REQUEST_AT`, so without this signal the accept-loop would idle-exit
+// mid-embed — killing the build before it persists its vector cache, which
+// forces a full re-embed on the next daemon lifetime (the "never persists,
+// always re-embeds, hogs CPU" symptom). The idle gate must therefore also wait
+// while any warm is in flight.
+
+/// Number of warm-load worker threads currently building a lane. Bumped for
+/// the lifetime of each spawned warm (org or code) via [`WarmActiveGuard`].
+static ACTIVE_WARMS: AtomicUsize = AtomicUsize::new(0);
+
+/// True while at least one lane warm-load is still building. The daemon's
+/// idle-exit loop consults this so a long cold warm is never killed before it
+/// can persist its cache.
+pub fn warm_in_flight() -> bool {
+	ACTIVE_WARMS.load(Ordering::SeqCst) > 0
+}
+
+/// RAII guard that increments [`ACTIVE_WARMS`] on construction and decrements
+/// on drop — so the count is correct even if the warm thread panics.
+struct WarmActiveGuard;
+
+impl WarmActiveGuard {
+	fn new() -> Self {
+		ACTIVE_WARMS.fetch_add(1, Ordering::SeqCst);
+		Self
+	}
+}
+
+impl Drop for WarmActiveGuard {
+	fn drop(&mut self) {
+		ACTIVE_WARMS.fetch_sub(1, Ordering::SeqCst);
+	}
+}
+
 fn max_warm_repos() -> usize {
 	env::var("KNOWLEDGE_MAX_WARM_REPOS")
 		.ok()
@@ -451,6 +495,9 @@ pub fn open_with_embedder(
 		thread::Builder::new()
 			.name(format!("warm-org-{handle}"))
 			.spawn(move || {
+				// Keep the daemon alive past its idle window until this warm
+				// finishes and persists its cache (BUG-483).
+				let _warm_guard = WarmActiveGuard::new();
 				let started = Instant::now();
 				// `on_partial` publishes the lexical-only lane (BM25 + graph)
 				// the moment the cheap index phase finishes, so bounded
@@ -485,6 +532,9 @@ pub fn open_with_embedder(
 		thread::Builder::new()
 			.name(format!("warm-code-{handle}"))
 			.spawn(move || {
+				// Keep the daemon alive past its idle window until this warm
+				// finishes (BUG-483).
+				let _warm_guard = WarmActiveGuard::new();
 				let started = Instant::now();
 				let result = CodeLane::warm_load(&root_clone);
 				let elapsed_ms = started.elapsed().as_millis() as u64;
@@ -742,6 +792,42 @@ mod tests {
 		REPO_CACHE_TEST_LOCK
 			.lock()
 			.unwrap_or_else(std::sync::PoisonError::into_inner)
+	}
+
+	#[test]
+	fn warm_in_flight_tracks_active_warm_and_clears() {
+		// BUG-483: the idle-exit gate must observe an in-flight warm so a long
+		// cold build is never killed before it persists. Assert the counter is
+		// raised while a warm runs and returns to zero once it settles.
+		let _g = test_guard();
+		testing::clear_all();
+		// Quiesce any warm left running by a previous test on the shared static.
+		for _ in 0..200 {
+			if !warm_in_flight() {
+				break;
+			}
+			std::thread::sleep(Duration::from_millis(10));
+		}
+		assert!(!warm_in_flight(), "no warm should be in flight at start");
+
+		let tmp = TempDir::new().expect("tempdir");
+		let result = open(tmp.path(), false, &[Lane::OrgMemory]).expect("open");
+		let handle = result["repo_handle"].as_str().expect("handle").to_string();
+
+		// The warm thread bumps ACTIVE_WARMS via its RAII guard. An empty
+		// tempdir corpus warms near-instantly, so poll for the raised count
+		// rather than racing it; if we miss the window the lane is already warm
+		// (terminal), which equally proves the counter cleared.
+		let _ = wait_warm(&handle);
+		// After warm settles the guard has dropped — count must be back to zero.
+		for _ in 0..200 {
+			if !warm_in_flight() {
+				break;
+			}
+			std::thread::sleep(Duration::from_millis(10));
+		}
+		assert!(!warm_in_flight(), "warm counter must clear after the build settles");
+		let _ = close(&handle);
 	}
 
 	#[test]

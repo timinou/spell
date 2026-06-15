@@ -717,7 +717,13 @@ fn explicit_socket_or_default() -> PathBuf {
 
 #[cfg(unix)]
 fn spawn_daemon(binary: &Path, socket: &Path) -> Result<()> {
-	Command::new(binary)
+	// The `--daemonize` child double-forks: it spawns, then its parent calls
+	// `process::exit(0)` the instant the grandchild (the real daemon) has
+	// `setsid`'d away. We MUST reap that short-lived parent or it lingers as a
+	// `<defunct>` zombie for the lifetime of THIS process (the daemon itself
+	// reparents to the init subreaper and is unaffected). A blocking `wait()`
+	// returns in milliseconds because the forked parent exits immediately.
+	let mut child = Command::new(binary)
 		.arg("--socket")
 		.arg(socket)
 		.arg("--daemonize")
@@ -725,14 +731,17 @@ fn spawn_daemon(binary: &Path, socket: &Path) -> Result<()> {
 		.stdout(Stdio::null())
 		.stderr(Stdio::null())
 		.spawn()
-		.map(|_| ())
 		.map_err(|error| {
 			worker_error(format!(
 				"failed to spawn daemon {} for socket {}: {error}",
 				binary.display(),
 				socket.display()
 			))
-		})
+		})?;
+	// Reap the daemonize parent. A non-zero status here is not fatal: the
+	// caller separately polls for the socket to confirm the daemon is live.
+	let _ = child.wait();
+	Ok(())
 }
 
 #[cfg(unix)]

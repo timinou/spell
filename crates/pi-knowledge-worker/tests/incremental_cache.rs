@@ -105,8 +105,20 @@ fn setup_corpus(root: &Path) {
 	}
 }
 
+/// Both tests mutate the process-global `XDG_CACHE_HOME`; serialise them so
+/// cargo's default parallelism can't let one test's env clobber the other's
+/// cache base mid-run (mirrors `warm_progress::WARM_TEST_LOCK`).
+static CACHE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn cache_env_guard() -> std::sync::MutexGuard<'static, ()> {
+	CACHE_ENV_LOCK
+		.lock()
+		.unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[test]
 fn warm_corpus_embeds_zero_on_second_load() {
+	let _env = cache_env_guard();
 	// Isolate the cache base so we never touch the real ~/.cache/spell.
 	let cache_home = tempfile::TempDir::new().expect("cache home");
 	// SAFETY: single-threaded test setup; this test owns the env for its body.
@@ -142,6 +154,7 @@ fn warm_corpus_embeds_zero_on_second_load() {
 
 #[test]
 fn editing_one_file_reembeds_only_its_items() {
+	let _env = cache_env_guard();
 	let cache_home = tempfile::TempDir::new().expect("cache home");
 	// SAFETY: test owns env for its body.
 	unsafe { std::env::set_var("XDG_CACHE_HOME", cache_home.path()) };

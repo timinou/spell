@@ -1,0 +1,95 @@
+#+TITLE: knowledge worker idle-exits mid-warm (never persists) + leaks zombie on spawn
+#+STATE: DONE
+#+SESSION_ID: 150a077d508122ea
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-15T10-51-44-834Z_150a077d508122ea.jsonl]]
+#+CUSTOM_ID: BUG-483-knowledge-worker-idle-exits-mid-warm-nev
+
+* Initial Message
+
+Despite the recent improvements to pi-knowledge-worker, it is still stuck at 0 in sessions that are embedding stuff, and it is hogging the whole computer...
+
+user     2963209  0.0  0.0      0     0 pts/31   Z+   Jun14   0:00 [pi-knowledge-wo] <defunct>
+user     2963211  7.8  9.4 9956584 4613864 ?     Ssl  Jun14  60:57 /home/user/code/ora/spell/crates/pi-natives/../../packages/natives/native/pi-knowledge-worker --socket /run/user/1000/spell/knowledge.sock --daemonize
+
+[Image #1]
+
+* DONE knowledge worker idle-exits mid-warm (never persists) + leaks zombie on spawn
+:PROPERTIES:
+:CUSTOM_ID: BUG-483-knowledge-worker-idle-exits-mid-warm-nev::BUG-483-knowledge-worker-idle-exits-mid-warm
+:KIND: bug
+:END:
+
+** Symptom (user report)
+- pi-knowledge-worker "stuck at 0" in sessions that are embedding.
+- Worker "hogging the whole computer": RSS ~4.2 GB, ~424% CPU, ~60 min CPU time.
+- A ~[pi-knowledge-wo] <defunct>~ zombie sits next to the live daemon.
+
+** Root causes (three independent defects)
+
+*** 1. Stale deployed binary (primary cause of "stuck at 0" + re-embed hog)
+The deployed ~packages/natives/native/pi-knowledge-worker~ (and the cargo
+release artifact) were built at 23:16, BEFORE the four fix commits that landed
+13–66 min later:
+- 69cbeade8 (23:29) persist + incremental org embed, chunked progress, CPU cap
+- f6231e40d (23:39) recency-gated auto-embed
+- d7469f7da (23:44) build typed graph once
+- 159876028 (00:22) title-only embed fix
+Verified by ~strings~: deployed binary lacks ~org_vec_meta~, ~recency gate~,
+~carry-forward~, ~affinity cap~, ~KNOWLEDGE_EMBED_RECENCY_DAYS~. The running
+daemon therefore had NONE of the recent improvements: progress never chunked
+(stuck at 0), no cache persistence (full re-embed every lifetime), no CPU cap
+(pegs cores). Fix = rebuild + redeploy. Root deploy bug already tracked as
+BUG-471 (build-native reads ./target/debug but cargo emits to ~/.cache); the
+manual redeploy here was the stopgap.
+
+*** 2. Idle-exit kills a long cold warm before it can persist (BUG-483 proper)
+The warm-load runs on a detached background thread (~repo_cache::open~) that
+touches neither ~INFLIGHT~ nor ~LAST_REQUEST_AT~. A cold warm of the spell
+corpus (4148 org items) under the CPU-affinity cap takes ~1 h — far longer than
+the 30 min idle-exit window. With no client traffic, ~accept_loop~ idle-exits
+MID-EMBED. ~build_vec_index_with~ only persists the vector cache at the END of a
+complete, embedder-healthy build, so a mid-warm exit discards everything and the
+next daemon lifetime re-embeds from scratch. This is why the live repo's cache
+dir (~~/.cache/spell/knowledge/3fd04aa5a3ec6f01/~) NEVER appeared despite the
+daemon repeatedly reaching warm/4147-items in RAM: warm-in-RAM, never-on-disk,
+re-embed-forever — the CPU + RAM hog.
+
+Fix: an ~ACTIVE_WARMS~ atomic counter (RAII ~WarmActiveGuard~, panic-safe),
+bumped for the lifetime of each spawned org/code warm thread. ~accept_loop~'s
+idle gate now also requires ~!repo_cache::warm_in_flight()~ before exiting, so a
+long cold warm always runs to completion + persistence.
+
+*** 3. Zombie on every daemon spawn
+~embedding_worker::spawn_daemon~ called ~Command::spawn()~ and dropped the
+~Child~ without ~wait()~. With ~--daemonize~ the spawned process double-forks and
+its fork-parent ~exit(0)~s immediately, becoming a ~<defunct>~ zombie reparented
+to whatever spell process spawned it — never reaped for that process's lifetime.
+Fix: ~child.wait()~ on the daemonize parent (returns in ms; the real daemon has
+already ~setsid~'d away and keeps running; ~wait_for_socket~ separately confirms
+liveness).
+
+** Files changed
+- crates/pi-knowledge-worker/src/repo_cache.rs — ACTIVE_WARMS counter +
+  WarmActiveGuard + warm_in_flight(); guard inserted at both warm spawn sites;
+  regression test warm_in_flight_tracks_active_warm_and_clears.
+- crates/pi-knowledge-worker/src/main.rs — idle gate consults warm_in_flight().
+- crates/pi-natives/src/embedding_worker.rs — spawn_daemon reaps the daemonize
+  parent via child.wait().
+- crates/pi-knowledge-worker/tests/incremental_cache.rs — CACHE_ENV_LOCK
+  serialises the two XDG_CACHE_HOME-mutating tests (pre-existing parallel race
+  that surfaced while verifying; mirrors warm_progress::WARM_TEST_LOCK).
+
+** Verification
+- cargo check -p pi-natives, -p pi-knowledge-worker: clean.
+- cargo test -p pi-knowledge-worker --lib: 39 passed (incl. new test).
+- incremental_cache + warm_progress: green parallel + serial.
+- Empirical: redeployed worker climbs progress 0→256→…→2304/4148 (NOT stuck at
+  0); will persist at completion. Pre-fix binary's cache dir never existed.
+
+** Deploy note
+Final binary (fixes 2+3) release-rebuild was blocked at fix time by an
+UNRELATED, pre-existing compile break in pi-code-path (dirty
+dialects/fs/{qualifiers,walker}.rs, E0061, edited by a concurrent process —
+not part of this work). The knowledge-worker crate itself compiles and tests
+pass; release link + redeploy must be re-run once pi-code-path builds. Tracked
+as follow-up.

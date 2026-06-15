@@ -722,7 +722,14 @@ fn accept_loop(listener: &UnixListener, idle_secs: u64) {
 		}
 		let last = LAST_REQUEST_AT.load(Ordering::SeqCst);
 		let idle = now_unix().saturating_sub(last);
-		if idle >= idle_secs && INFLIGHT.load(Ordering::SeqCst) == 0 {
+		// BUG-483: never idle-exit while a lane warm-load is still building.
+		// A cold warm of a large corpus outlasts the idle window; exiting
+		// mid-embed would discard the build before it persists, forcing a
+		// full re-embed (CPU + RAM hog) on the next daemon lifetime.
+		if idle >= idle_secs
+			&& INFLIGHT.load(Ordering::SeqCst) == 0
+			&& !repo_cache::warm_in_flight()
+		{
 			break;
 		}
 
