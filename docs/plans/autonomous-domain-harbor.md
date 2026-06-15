@@ -60,7 +60,7 @@ build-config, not research. build-native.ts already supports CROSS_TARGET.
 - packages/coding-agent/src/main.ts (activation wiring)
 - crates/pi-knowledge-worker/src/{lib.rs,lane_org.rs} (embeddings skip gate)
 - spell.autonomous.kdl (NEW — the domain spec)
-- packaging/harbor/{Dockerfile,entrypoint.ts} (NEW)
+- spell_harbor/{Dockerfile,entrypoint.ts} (NEW)
 - tests under packages/coding-agent/test/
 
 ## Acceptance

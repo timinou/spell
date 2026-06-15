@@ -8,7 +8,7 @@ gated off, model pinned to the harness-injected $HARBOR_MODEL.
 Register with Harbor:
 
     harbor run -d terminal-bench/terminal-bench-2 \
-      --agent-import-path packaging.harbor.spell_agent:SpellAgent \
+      --agent-import-path spell_harbor.spell_agent:SpellAgent \
       -m anthropic/claude-opus-4-x
 
 Contract: harbor.agents.installed.base.BaseInstalledAgent
@@ -56,7 +56,7 @@ _HOST_AGENT_DB = Path(
 )
 
 # Host dir holding the built dist (binary + domain spec). Built by
-# packaging/harbor/build-portable-native.sh. Override with SPELL_DIST_DIR.
+# spell_harbor/build-portable-native.sh. Override with SPELL_DIST_DIR.
 _DIST_DIR = Path(os.environ.get("SPELL_DIST_DIR") or (Path(__file__).parent / "dist"))
 
 
@@ -83,7 +83,7 @@ class SpellAgent(BaseInstalledAgent):
         if not spell_bin.is_file() or not domain_spec.is_file():
             raise RuntimeError(
                 f"Spell dist missing in {_DIST_DIR}. Build it first:\n"
-                f"  packaging/harbor/build-portable-native.sh"
+                f"  spell_harbor/build-portable-native.sh"
             )
 
         # 1. binary + domain spec
@@ -112,7 +112,7 @@ class SpellAgent(BaseInstalledAgent):
         else:
             raise RuntimeError(
                 f"Native addon sidecar missing in {_DIST_DIR} (need pi_natives*.node "
-                f"+ .natives-version). Rebuild: packaging/harbor/build-portable-native.sh"
+                f"+ .natives-version). Rebuild: spell_harbor/build-portable-native.sh"
             )
         # Minimal user spell.kdl that imports the domain spec so `--domain
         # harbor` resolves. heredoc avoids nested-quote escaping.
@@ -147,8 +147,8 @@ class SpellAgent(BaseInstalledAgent):
             raise RuntimeError(
                 "Spell binary failed to load in this container — likely a libc "
                 "mismatch. Rebuild for this image's libc:\n"
-                "  glibc image (default): packaging/harbor/build-portable-native.sh\n"
-                "  musl/Alpine image:     TARGET=musl packaging/harbor/build-portable-native.sh"
+                "  glibc image (default): spell_harbor/build-portable-native.sh\n"
+                "  musl/Alpine image:     TARGET=musl spell_harbor/build-portable-native.sh"
             )
 
     @with_prompt_template

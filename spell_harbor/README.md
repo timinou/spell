@@ -7,20 +7,28 @@ via the [Harbor](https://harborframework.com) harness.
 
 ```bash
 # 1. one-time: build the portable dist (binary + domain spec). ~10–20 min first run.
-packaging/harbor/build-portable-native.sh
+spell_harbor/build-portable-native.sh
 
 # 2. sanity: prove the harness + task work with the oracle (no model, no Spell).
 uv run harbor run --dataset terminal-bench@2.0 --task build-pov-ray --agent oracle --n-concurrent 1
 
-# 3. run Spell on the task. Your login travels in automatically (see below).
-uv run harbor run --dataset terminal-bench@2.0 --task build-pov-ray \
-  --agent-import-path packaging.harbor.spell_agent:SpellAgent \
+# 3. run Spell on the task. Run from the REPO ROOT and put it on PYTHONPATH so
+#    Harbor's importlib can find the agent module. Login travels in automatically.
+cd /home/user/code/ora/spell
+PYTHONPATH="$PWD" SPELL_DIST_DIR="$PWD/spell_harbor/dist" \
+  uv run harbor run --dataset terminal-bench@2.0 --task build-pov-ray \
+  --agent-import-path spell_harbor.spell_agent:SpellAgent \
   --model anthropic/claude-opus-4-x --n-concurrent 1
 ```
 
-NB the flags (confirmed against `harbor run -h`): `--dataset terminal-bench@2.0`,
-single task is `--task <name>` (NOT `--task-id`), agent is `--agent-import-path
-module:Class`, model is `--model`.
+NB:
+- Module name is `spell_harbor` (NOT `packaging` — that collides with the
+  ubiquitous PyPI `packaging` library, which always shadows a local dir).
+- Harbor resolves `--agent-import-path module:Class` via `importlib` against
+  `sys.path` — it does NOT add the cwd. So `PYTHONPATH="$PWD"` (repo root) is
+  required for the import to resolve.
+- Flags (confirmed against `harbor run -h`): `--dataset terminal-bench@2.0`,
+  single task `--task <name>` (NOT `--task-id`), `--agent-import-path`, `--model`.
 
 ## Your login survives the run (no re-auth)
 
@@ -86,9 +94,9 @@ GLIBC floor dropped **2.43 → 2.28**; backward-compatible up to latest. Because
 the agent owns its container image, this is a settled build step, not research.
 
 ```
-packaging/harbor/build-portable-native.sh                  # glibc (default)
-packaging/harbor/build-portable-native.sh TARGET=musl      # Alpine tasks
-packaging/harbor/probe-libc.sh dist/pi_natives.*.node      # CI gate (exit 1 on fail)
+spell_harbor/build-portable-native.sh                  # glibc (default)
+spell_harbor/build-portable-native.sh TARGET=musl      # Alpine tasks
+spell_harbor/probe-libc.sh dist/pi_natives.*.node      # CI gate (exit 1 on fail)
 ```
 
 `install.sh` re-verifies the addon loads in the actual task container
@@ -115,10 +123,10 @@ a cheaper model for a full smoke pass:
 
 ```bash
 uv run harbor run --dataset terminal-bench@2.0 \
-  --agent-import-path packaging.harbor.spell_agent:SpellAgent \
+  --agent-import-path spell_harbor.spell_agent:SpellAgent \
   --model anthropic/claude-haiku-4-5 --n-concurrent 4
 ```
 
 Prove native portability across the libc matrix in CI:
-`packaging/harbor/probe-libc.sh packaging/harbor/dist/spell` (exits 1 on any
+`spell_harbor/probe-libc.sh spell_harbor/dist/spell` (exits 1 on any
 unresolved-symbol failure).

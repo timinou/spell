@@ -2,7 +2,7 @@
 # build-portable-native.sh — ONE command to produce a Spell dist that runs in
 # arbitrary Terminal-Bench task containers.
 #
-# Output: packaging/harbor/dist/
+# Output: spell_harbor/dist/
 #   spell                — self-contained binary (glibc-2.28 floor, baseline ISA)
 #   spell.autonomous.kdl — the autonomous + harbor domain spec
 #
@@ -24,12 +24,12 @@
 # embeddings off => org/memory run in-process via pi-natives BM25+graph; the
 # vector lane that would call the worker is weight-zeroed). org/memory still work.
 #
-# Usage:  packaging/harbor/build-portable-native.sh             # glibc (default)
-#         TARGET=musl packaging/harbor/build-portable-native.sh # Alpine tasks
+# Usage:  spell_harbor/build-portable-native.sh             # glibc (default)
+#         TARGET=musl spell_harbor/build-portable-native.sh # Alpine tasks
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-OUT_DIR="${REPO_ROOT}/packaging/harbor/dist"
+OUT_DIR="${REPO_ROOT}/spell_harbor/dist"
 TARGET="${TARGET:-glibc}"
 mkdir -p "${OUT_DIR}"
 
@@ -92,4 +92,4 @@ cp "${REPO_ROOT}/spell.autonomous.kdl" "${OUT_DIR}/spell.autonomous.kdl"
 chmod +x "${OUT_DIR}/spell"
 
 echo "Dist ready: ${OUT_DIR}/{spell, spell.autonomous.kdl}"
-echo "Prove it loads:  packaging/harbor/probe-libc.sh ${OUT_DIR}/spell ubuntu:24.04"
+echo "Prove it loads:  spell_harbor/probe-libc.sh ${OUT_DIR}/spell ubuntu:24.04"
