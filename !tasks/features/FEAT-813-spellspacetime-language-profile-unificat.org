@@ -65,3 +65,7 @@ Repo state validated against /home/user/code/ora/spell HEAD before implementatio
 
 Next design target:
 - Do NOT blindly wire ProfileYaml. Design a new ProfileBundle/adapter around current engine ProfileYaml + verse exporter reality: node-types.json -> GeneratedGrammar (now done), profile JSON -> declaration patterns + dynamic dialect/kind aliases + optional LSP semantic config. Then decide whether L1 is config-only spacetime LSP, a static .st profile, or the dynamic profile loader skeleton.
+
+NOTE [2026-06-15]: L1 bridge config landed (2026-06-15): pi-code-graph semantic defaults now include language "spacetime" -> server "spacetime-lsp" with command `spacetime`, args `lsp`, file-types `.st`, root markers `spacetime.toml`/`Cargo.toml`/`.git`. Added explicit defaults_compile_in_and_parse assertions. Verified: cargo test -p pi-code-graph semantic::config --lib = 17 passed.
+
+Scope note: this wires the semantic/LSP lane only. It does not make .st first-class in CodePath outline/edit yet because pi-code-engine has no spacetime LanguageProfile/ts_language and pi-kernel still requires profile.dialect for structural reads. Next steps remain: dynamic profile adapter + .st dialect/name lexer + static/WASM grammar source.

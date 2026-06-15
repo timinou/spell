@@ -35,6 +35,7 @@ semantic {
     language "haskell"    { lsp "haskell-language-server-wrapper" }
     language "java"       { lsp "jdtls" }
     language "clojure"    { lsp "clojure-lsp" }
+    language "spacetime"  { lsp "spacetime-lsp" }
     // Catch-all: no LSP, AnnotationSemanticBackend only.
     language "*" { }
 
@@ -202,6 +203,16 @@ semantic {
         request-timeout-secs 15
 
         install-hint "Install via: brew install clojure-lsp/brew/clojure-lsp-native"
+    }
+
+    server "spacetime-lsp" {
+        command "spacetime"
+        args "lsp"
+        file-types ".st"
+        root-markers "spacetime.toml" "Cargo.toml" ".git"
+        request-timeout-secs 10
+
+        install-hint "Install or build Spacetime so `spacetime lsp` is on PATH"
     }
 }
 

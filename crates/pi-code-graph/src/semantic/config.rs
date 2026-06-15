@@ -505,6 +505,22 @@ semantic {
 			cfg.language_backends.get("elixir").unwrap().lsp.as_deref(),
 			Some("expert")
 		);
+		assert_eq!(
+			cfg.language_backends
+				.get("spacetime")
+				.expect("defaults.kdl must wire Spacetime")
+				.lsp
+				.as_deref(),
+			Some("spacetime-lsp")
+		);
+		let spacetime = cfg
+			.server_specs
+			.get("spacetime-lsp")
+			.expect("spacetime-lsp spec");
+		assert_eq!(spacetime.command, "spacetime");
+		assert_eq!(spacetime.args, vec!["lsp".to_string()]);
+		assert_eq!(spacetime.file_extensions, vec![".st".to_string()]);
+
 		let expert = cfg.server_specs.get("expert").expect("expert spec");
 		assert_eq!(expert.command, "expert");
 		assert_eq!(expert.args, vec!["--stdio".to_string()]);
