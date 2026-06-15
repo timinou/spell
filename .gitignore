@@ -91,3 +91,7 @@ rust_out
 .lsp/
 .scratch/
 erl_crash.dump
+
+# Harbor adapter persistent build cache (cargo + target)
+spell_harbor/.build-cache/
+jobs/

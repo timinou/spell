@@ -1,0 +1,237 @@
+#+TITLE: Harden Spell Harbor for Terminal-Bench task strategy and observability
+#+STATE: ITEM
+#+SESSION_ID: 150a49435d581590
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-15T15-39-06-997Z_150a49435d581590.jsonl]]
+#+CREATED: 2026-06-15
+#+CUSTOM_ID: PLAN-340-harden-spell-harbor-for-terminal-bench-t
+#+LAYER: agent-harness
+#+SOURCE: harbor-failure-review
+#+TASK: terminal-bench/filter-js-from-html
+
+* Initial Message
+
+investigate why the latest two harbor jobs failed please
+
+* Context
+
+Latest two Harbor jobs failed on the same Terminal-Bench task, `terminal-bench/filter-js-from-html`, but they represent different failure classes.
+
+- Latest job: `jobs/2026-06-15__16-34-11/filter-js-from-html__YNuYCGn`, model `openai-codex/gpt-5-5`, reward 0.0. Verifier failed because `/app/filter.py` did not exist. Agent execution lasted ~5.4s and token metadata was null. This is likely startup/model/process failure masked as a scored task failure.
+- Previous job: `jobs/2026-06-15__14-13-41/filter-js-from-html__cf4QJ8A`, model `anthropic/claude-opus-4-8`, reward 0.0. Agent ran ~8.5min and produced `/app/filter.py`, but verifier failed 6 XSS alert batches and 5/12 clean HTML preservation samples. This is strategy/verification failure.
+
+Primary affected files:
+- `spell_harbor/spell_agent.py`
+- `spell.autonomous.kdl`
+- `spell_harbor/README.md`
+- `docs/plans/autonomous-domain-harbor.md`
+- likely tests under `packages/coding-agent/test/` and/or new Python tests for the adapter if a test harness is available.
+
+Reference evidence:
+- `spell_harbor/spell_agent.py`: `run()` builds a command that redirects stdout/stderr to `/tmp/spell-harbor-transcript.jsonl` inside the container and only does `await self.exec_as_agent(environment, command=cmd)` with no return-code check.
+- `spell_harbor/spell_agent.py`: `populate_context_post_run()` does `Path(TRANSCRIPT_PATH).read_text(...)`, which reads the host filesystem, not the task container, so the transcript is not harvested.
+- Harbor docs: files written to `/logs/artifacts/` inside the sandbox are automatically collected into `<trial_dir>/artifacts/logs/artifacts/`; Docker mounts this path directly. This is the simplest transcript/solution artifact channel.
+- Cached task verifier at `/home/user/.cache/harbor/tasks/packages/terminal-bench/filter-js-from-html/.../tests/test_outputs.py`: downloads `davidwagner/html-sanitizer-testbed`, runs filtered batches in headless Chrome/Selenium, and compares clean output to `str(BeautifulSoup(original, "html.parser"))` ignoring spaces/newlines.
+
+* Goal
+
+Make Spell Harbor reliable enough that a failed Terminal-Bench run is classifiable and actionable, and make the default Harbor agent loop substantially more verifier-oriented.
+
+Success means:
+1. Infrastructure/model/startup failures become Harbor exceptions or explicit metadata, not silent reward-0 completions.
+2. Every failed trial preserves enough evidence to inspect what Spell did: transcript, command exit code, `/app` snapshot, and smoke-gate output.
+3. Harbor domain prompt/scaffold makes agents inspect files/tests, create local checks, repair from failures, and verify deliverables before yielding.
+4. `filter-js-from-html` reruns use a valid model id and can be debugged from artifacts without keeping the container alive.
+
+* Non-goals
+
+- Do not bake a benchmark solution into Spell.
+- Do not hard-code `filter-js-from-html` solution logic into the harness.
+- Do not change Terminal-Bench verifier data.
+- Do not introduce multi-model scaffolds that break single-model leaderboard attribution unless guarded behind a non-leaderboard mode.
+
+* Phase 0 — stop false scored failures
+
+**Change:** Update `spell_harbor/spell_agent.py::SpellAgent.run()`.
+
+Implementation outline:
+
+1. Ensure `/logs/artifacts` exists before executing Spell.
+2. Replace the direct transcript path with a path under `/logs/artifacts`, e.g. `/logs/artifacts/spell-harbor-transcript.jsonl`.
+3. Run Spell through a shell wrapper that captures:
+   - transcript stdout/stderr
+   - exit code in `/logs/artifacts/spell-exit-code.txt`
+   - maybe command line metadata in `/logs/artifacts/spell-command.txt`
+4. Check the returned `exec_as_agent` result return code.
+5. If return code is non-zero, run a second bounded `tail -200 /logs/artifacts/spell-harbor-transcript.jsonl || true`, set `context.metadata["spell_exit_code"]`, and raise `RuntimeError` with the tail.
+6. Always write a small post-run metadata JSON to `/logs/artifacts/spell-run-metadata.json`.
+
+Acceptance:
+- Simulated command failure in a fake environment causes `run()` to raise.
+- Real invalid model run reports non-zero/error rather than missing `/app/filter.py` as the only evidence.
+- Trial artifacts include `artifacts/logs/artifacts/spell-harbor-transcript.jsonl` and `spell-exit-code.txt`.
+
+Risks:
+- If Harbor's `exec_as_agent` result shape differs by version, use `getattr(result, "return_code", 1)` as current code already does in `install()`.
+- Raising exceptions changes metrics: expected and desirable for infra failures.
+
+* Phase 1 — transcript and artifact capture
+
+**Change:** Keep `populate_context_post_run()` but stop depending on host `/tmp`.
+
+Options:
+- Preferred: parse transcript from `/logs/artifacts/spell-harbor-transcript.jsonl` if Docker volume makes it host-visible. Need identify exact host path from Harbor context if available.
+- Conservative: during `run()`, after Spell command returns, `cat` or `tail` the container transcript and set context output/metadata before container teardown. This avoids relying on post-run host path knowledge.
+- Artifact-first: if post-run parsing remains uncertain, at minimum write all telemetry to `/logs/artifacts` and make context metadata contain exit code + artifact path hint.
+
+Implementation outline:
+1. Extract transcript parsing into helper `parse_transcript(raw: str) -> {last_text, usage}`.
+2. During `run()`, after process completes, call `cat /logs/artifacts/spell-harbor-transcript.jsonl` or a bounded command if file may be large.
+3. Parse last assistant event and usage.
+4. Set `context.set_output(last_text)` and `context.metadata["usage"]`.
+5. Make `populate_context_post_run()` a best-effort fallback only, not the primary path.
+
+Acceptance:
+- A successful run with JSON events populates context output if Harbor surfaces it.
+- Token usage no longer remains null when transcript contains usage events.
+- Missing/partial transcript records an explicit `transcript_missing` or `transcript_parse_error` metadata field.
+
+* Phase 2 — capture solution state
+
+**Change:** Snapshot `/app` into artifacts after agent run and before verifier.
+
+Implementation outline:
+1. After Spell command returns, run a Python stdlib walk into `/logs/artifacts/app-file-list.txt`.
+2. Copy `/app/filter.py` if it exists to `/logs/artifacts/app/filter.py` for this class of task.
+3. Optionally tar `/app` with size cap: `/logs/artifacts/app-snapshot.tgz`.
+4. Write smoke output to `/logs/artifacts/spell-smoke.txt`.
+
+Acceptance:
+- Failed verifier trial contains generated `/app/filter.py` if it existed.
+- Missing file is visible from `app-file-list.txt` and smoke output.
+
+Risks:
+- Artifacts could become large for other tasks. Use a size cap or targeted snapshot policy.
+
+* Phase 3 — final smoke gates
+
+**Change:** Add generic and task-inferred smoke gates in `SpellAgent.run()` after Spell exits successfully.
+
+Minimal generic gates:
+- Check transcript exists and non-empty.
+- If instruction includes absolute paths like `/app/<name>`, verify those paths exist if wording contains `create`, `write`, or `script should`.
+
+For `filter-js-from-html` inferred gate:
+- Create `/tmp/spell-smoke.html` with `<script>alert(1)</script><p>ok</p>`.
+- Run `python /app/filter.py /tmp/spell-smoke.html`.
+- Assert file exists, process exit 0, output no `<script` and still contains `ok`.
+
+Do not fail passing tasks due to heuristic overreach. Start with existence checks + metadata; later promote high-confidence gates to exceptions.
+
+Acceptance:
+- Latest class of missing `/app/filter.py` fails before verifier with explicit smoke metadata.
+- Smoke failures are recorded in artifacts even if not raised.
+
+* Phase 4 — strict Harbor model validation
+
+Problem: the general resolver supports fuzzy matching/fallbacks, good for interactive use but bad for benchmark attribution. Harbor should be exact/canonical.
+
+Preferred design:
+- Add domain field `model { strict #true }` or `modelResolution "strict"` to avoid benchmark-specific CLI flags.
+- In strict mode, provider/model strings must exact-match registered models after env expansion. Fuzzy matching only allowed for interactive CLI.
+- Error should include top suggestions.
+
+Acceptance:
+- `openai-codex/gpt-5-5` fails before task execution with `Unknown model` and suggestions (`openai-codex/gpt-5`, `openai-codex/gpt-5-codex`, `openai-codex/gpt-5.3-codex`, ...).
+- Valid exact ids still run.
+- Existing interactive fuzzy model selection remains unchanged.
+
+* Phase 5 — Harbor-specific prompt/scaffold
+
+Current `harbor` domain inherits only the generic autonomous prompt. Add a Harbor-specific combined prompt.
+
+Proposed prompt content:
+
+```
+Terminal-Bench workflow:
+1. Inspect the working directory and task files before coding.
+2. Locate visible tests, README, task metadata, scripts, and installed deps.
+3. Infer verifier semantics from tests and task text.
+4. Implement the smallest robust solution.
+5. Create or run local smoke tests that exercise the deliverable path and core behavior.
+6. If tests fail, repair from the concrete failure. Use at most 3 focused repair cycles unless progress is clear.
+7. Before yielding, verify required output paths exist and the main command runs.
+8. Write final answer only after artifacts/files are in place.
+Security tasks: prefer parser/allowlist/library-backed defenses over regex blacklists; assume adversarial hidden cases.
+```
+
+Acceptance:
+- `spell.autonomous.kdl` includes a Harbor-specific workflow without losing no-human invariants.
+- Existing KDL domain parser/merge tests updated if prompt append/override semantics change. If KDL currently only scalar-overrides prompt, either fully duplicate autonomous prompt in harbor or add prompt append support deliberately.
+
+* Phase 6 — optional verify helper / benchmark ACI
+
+Longer-term affordance inspired by SWE-agent/ACI and ReAct feedback loops:
+
+- Add a built-in tool or prompt-level convention for `verify` in Harbor mode:
+  - discover test files
+  - run visible tests if cheap
+  - run deliverable smoke tests
+  - summarize first failures by class
+- This can initially be a prompt recipe, not a new tool, to reduce surface area.
+
+Acceptance:
+- Agent transcripts show inspect → implement → verify → repair behavior on at least one local Harbor rerun.
+
+* Phase 7 — rerun strategy for `filter-js-from-html`
+
+After Phase 0-3, rerun with a valid model:
+- `openai-codex/gpt-5.3-codex` or exact available desired id.
+- Keep artifacts on failure via `/logs/artifacts`; keep container on failure if Harbor run option supports it.
+
+Expected successful-agent strategy:
+- Read verifier or infer from task.
+- Use BeautifulSoup parser serialization (`str(soup)`) so clean output matches verifier normalization.
+- Remove dangerous tags and dangerous attrs/protocols conservatively.
+- Build local sample tests mirroring both alert blocking and clean normalization.
+
+Do not put this solution into the harness; use it to evaluate whether the new scaffold pushes the model toward the right approach.
+
+* Test plan
+
+Unit-ish tests:
+- Fake `BaseEnvironment`/agent execution returning return_code 1 → `SpellAgent.run()` raises and metadata/artifact commands are attempted.
+- Fake successful run with JSONL transcript → parser extracts final assistant text and usage.
+- Transcript parse tolerates non-JSON lines (stderr) mixed with JSON events.
+- Model strict-resolution tests if implemented in TS.
+- KDL domain tests for Harbor prompt/model strict field.
+
+Integration smoke:
+1. Build dist: `spell_harbor/build-portable-native.sh`.
+2. Run oracle sanity: `uv run harbor run --dataset terminal-bench@2.0 --task build-pov-ray --agent oracle --n-concurrent 1`.
+3. Run invalid model intentionally and verify Harbor records an exception, not reward-only missing file.
+4. Run `filter-js-from-html` with valid model and inspect artifacts.
+5. Optional: run a cheaper/easier task to ensure prompt changes do not regress general behavior.
+
+Repo gates:
+- `bun run check:ts` after TS/KDL changes.
+- `python -m py_compile spell_harbor/spell_agent.py`.
+- If Python tests are added: run them with the same environment used by Harbor, probably `uv run pytest <tests>` if deps available.
+
+* Open questions
+
+- Does the installed Harbor version expose a direct `download_file` method? Online docs confirm `/logs/artifacts`; prefer that over version-specific API.
+- How does `AgentContext` serialize `metadata` and `set_output` into `result.json` for installed agents? Need verify with a tiny fake/real run.
+- Should smoke gate failures raise exceptions or only metadata? Proposed staged rollout: existence/process startup failures raise; heuristic behavioral failures record metadata first.
+- Should `/app` snapshot be default-on? Proposed default-on with size cap for local debug; maybe opt-out for leaderboard-scale runs.
+
+* Definition of done
+
+- Latest failure class is impossible to misread: invalid model/process failure surfaces before verifier with transcript tail.
+- Previous failure class is inspectable: generated solution and transcript are preserved.
+- Harbor prompt guides the model through explicit Terminal-Bench workflow.
+- A rerun of `filter-js-from-html` produces artifacts sufficient for a one-pass postmortem without container access.
+- Documentation explains how to run debug vs leaderboard mode and where artifacts appear.
+
+NOTE [2026-06-15]: Implementation pass started/completed for all planned phases in working tree: spell_harbor/spell_agent.py now writes /logs/artifacts transcript/exit metadata, checks return codes, captures /app deliverables, and runs smoke gates; spell.autonomous.kdl now adds Harbor Terminal-Bench workflow prompt and model strict #true; domain types/parser/tests/main strict validation updated; README documents artifacts and failure classes. Verification pending in current session.
+
+NOTE [2026-06-15]: Final verification update: build-portable-native.sh now exports HEAD plus dirty/untracked source overlay so uncommitted Harbor hardening is included in local dist builds; executable bit restored. Built spell_harbor/dist successfully. Dist strict-model smoke with HARBOR_MODEL=openai-codex/gpt-5-5 now fails before agent execution with exact-model error and suggestions. Targeted checks passed again: py_compile, kdl-domains tests, touched-file biome.

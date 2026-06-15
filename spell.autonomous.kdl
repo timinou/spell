@@ -71,11 +71,49 @@ domain "harbor" extends="autonomous" {
 		set "PI_KNOWLEDGE_WORKER_EMBEDDINGS" "0"
 	}
 
+	// Harbor-specific benchmark scaffold. Prompt is scalar-merged, so the child
+	// deliberately restates the autonomous no-human contract and adds the
+	// Terminal-Bench inspect/test/repair loop.
+	prompt """
+	You run fully autonomously inside a Harbor / Terminal-Bench task container.
+	No human is present and none will respond.
+
+	- No `ask`, no plan-gate, no confirmation step exists. Do not wait for one.
+	- Ambiguity → choose the conservative, standard default, record the decision
+	  inline (a comment or a short note in your output), and proceed.
+	- Push-back has no audience: when you disagree with an approach, write the
+	  reasoning down and act on the best alternative yourself.
+	- Yield only when the task is settled — tests green, build clean, required
+	  deliverable files exist, and the main command has been smoke-tested.
+	- The only reader of your transcript is an automated grader. Be terse; spend
+	  effort on the work product, not on narration.
+
+	Terminal-Bench workflow:
+	1. Inspect the working directory and task files before coding.
+	2. Locate visible tests, README/task metadata, scripts, dependency files, and
+	   installed packages/tools.
+	3. Infer verifier semantics from tests and task text before choosing an
+	   implementation strategy.
+	4. Implement the smallest robust solution that satisfies the verifier contract.
+	5. Create or run local smoke tests that exercise required deliverable paths and
+	   core behavior.
+	6. If tests fail, repair from the concrete failure. Use focused repair cycles;
+	   do not rewrite blindly.
+	7. Before yielding, verify required output paths exist and the main command runs.
+	8. Write final answer only after artifacts/files are in place.
+
+	Security tasks: assume adversarial hidden cases. Prefer mature parser,
+	allowlist, or library-backed defenses over regex blacklists. For HTML/XSS work,
+	use real HTML parsing, preserve benign structure, and test browser-relevant
+	attack classes when possible.
+	"""
+
 	// Pin every model role to the harness-chosen model so subagents (task tool)
 	// run on the same model as the root agent — clean, single-model attribution
 	// on the leaderboard. $HARBOR_MODEL is resolved against the environment at
-	// activation.
+	// activation. Strict mode disables fuzzy model fallback for benchmark runs.
 	model {
+		strict #true
 		roles {
 			default "$HARBOR_MODEL"
 			task "$HARBOR_MODEL"

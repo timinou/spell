@@ -1,0 +1,14 @@
+#+TITLE: harbor-terminal-bench-failures-need-arti
+
+** ITEM Harbor Terminal-Bench failures need artifact-first strict harness
+
+2026-06-15 Harbor review: latest `filter-js-from-html` failures showed two distinct classes. Infra/model failures can be masked as reward-0 when `spell_harbor/spell_agent.py` ignores `exec_as_agent` return codes and stores transcript only inside the container; use `/logs/artifacts`, return-code checks, and solution snapshots. Strategy failures on adversarial tasks need a Harbor-specific inspect→test→repair→final-gate loop; `filter-js-from-html` verifier uses headless Chrome over davidwagner/html-sanitizer-testbed and clean output comparison against `str(BeautifulSoup(original, "html.parser"))` ignoring spaces/newlines.
+:PROPERTIES:
+:CUSTOM_ID: CON-harbor-terminal-bench-failures-need-arti
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-15T16:45:23Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-340-harden-spell-harbor-for-terminal-bench-t
+:END:

@@ -1,0 +1,48 @@
+#+TITLE: Review Spell repository health and architecture
+#+STATE: DONE
+#+SESSION_ID: 150a793ac97ef7d4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-15T19-08-41-125Z_150a793ac97ef7d4.jsonl]]
+#+CUSTOM_ID: PLAN-341-review-spell-repository-health-and-archi
+#+LAYER: review
+#+PRIORITY: B
+#+TYPE: PLAN
+
+* Initial Message
+
+review Spell and tell me what you think
+
+Objective: review the Spell monorepo at a high level and report concrete strengths, risks, and recommendations without changing code.
+
+Scope:
+- Repository structure and package layout.
+- Documentation/onboarding surface.
+- Test/check/lint/build affordances.
+- Selected architecture hotspots from source inspection.
+- Existing repo state from observable commands.
+
+Non-goals:
+- No code edits unless explicitly requested later.
+- No destructive git operations.
+
+Acceptance:
+- Final response separates observed facts from judgment.
+- Includes verification commands run and their outcomes.
+- Includes prioritized recommendations.
+
+* Result
+Review completed 2026-06-15.
+
+Evidence gathered:
+- Read root README/package/Cargo manifests and repository tree.
+- Inspected package/crate layouts for packages/coding-agent, packages/ai, packages/tui, crates/pi-natives, crates/pi-code-path.
+- Ran git status and health checks.
+
+Verification:
+- `bun run --parallel check:ts check:rs` failed. Rust side reported `cargo fmt --all -- --check` diffs, notably crates/pi-text-search/src/lib.rs and crates/pi-workspace-cache/src/lib.rs.
+- `bun run check:ts` failed. Biome reported 370 errors, 70 warnings, 52 infos across 2037 files, primarily formatting/import organization.
+
+Notes:
+- Repository had extensive pre-existing uncommitted changes before this review.
+- No source edits were made by the review aside from this org tracking item.
+
+NOTE [2026-06-15]: Late docs/DX scout completed. Main additions: contributor-facing docs gap (no root CONTRIBUTING.md or root ARCHITECTURE.md observed), install docs/scripts need clearer unified smoke-test path, skill/memory/release story should be documented as explicit contracts. Caveat: scout overstated some facts from incomplete inspection; repo does have packages/coding-agent/CHANGELOG.md and scripts/release.ts, but root-level release/user lifecycle docs remain unclear.

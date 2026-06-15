@@ -1,0 +1,105 @@
+#+TITLE: Session Capsules: .ptc envs + deterministic teleport
+#+STATE: ITEM
+#+SESSION_ID: 150a4f51f4cee035
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-15T16-05-34-803Z_150a4f51f4cee035.jsonl]]
+#+CUSTOM_ID: PLAN-339-session-capsules-ptc-envs-deterministic
+#+LAYER: architecture
+#+SOURCE: user-idea-2026-06-15
+
+* Initial Message
+
+i have a crazy idea: what if we used .ptc files to fully describe everything necessary to (1) run isolated environments (i.e. isolated ports, isolated db, etc. as a sort of mix between the PTC Lisp Sandbox
+ and some sort of light nix env, but super super light) and (2) an 'env bootstrap' so that I can e.g. send a serialised 'this is what my session has done so far' that uses git (or jujutsu or fossil or rsync) +
+ that descritpion + the session history to deterministically hand off a session to a server (e.g. when I want to go to sleep) and then hand it back in when I want to take it back on my computer?
+
+ Please understand the deeper intention behind this so that we can properly design a user experience and an architecture and an infrastructure that is both lean and powerful. Look at the transition to BEAM
+ design documents, as well as the current state of the sandbox, of spell server, of spell team chat, of the Firezone execution, etc.
+
+* Intent
+Design a lean, powerful substrate where a Spell session can be sealed on one machine, resumed on another, then sealed back again. The object must carry: conversation/session state, repository delta including uncommitted/staged work, isolated runtime environment shape (ports/db/scratch/services), toolchain assumptions, and enough history to continue deterministically.
+
+This is NOT ordinary /handoff. /handoff is lossy prose for another model. A capsule is lossless machine state for relocation.
+
+* Design name
+Session Capsule / Session Harbor.
+
+* Core judgment
+Use three materials, not one:
+- KDL for static declaration: human-diffable env shape, sandbox policy, services, toolchain references.
+- .ptc for pure seeded derivation: dynamic ports/db names/scratch dirs/service plan. PTC computes data only; host performs effects.
+- Content-addressed JSON/KDL manifest for relocation token: hashes, VCS bundle refs, session log refs, env seed, host metadata.
+
+* Existing substrate
+- BEAM vision: PtcRunner is sandboxed compute/policy lane; BEAM/OTP is eventual supervision host; Rust kernel stays single execution engine.
+- execute/PTC runtime: already has sandbox, tool bridge, capability policy, large-value handles, transactional file writes.
+- spell-server: already has SessionManager, scheduler, socket bridge, Telegram, web dashboard, sandbox-policy writer.
+- team chat/web: already lists live sessions, streams events, steers external sessions through duplex bridge RPC.
+- sandbox writer: declares paths-write/bash allow/deny, but does not realize ports/db/services.
+- remote control plan: Firezone currently intended as network boundary; app-level permissions are deferred but must be revisited before capsule mutation transport.
+
+* Proposed architecture
+1. EnvSpec / EnvManifest
+   - toolchain: nix ref+lock hash OR assert versions
+   - ports: named ranges and derivation policy
+   - data: db/scratch/cache declarations
+   - services: command, healthcheck, lifecycle, stateful? flag
+   - sandbox: pathsWrite/bashAllow/bashDeny
+   - secrets: names only; never values
+
+2. env.ptc realization
+   - Host computes cryptographic numeric seed (e.g. blake3 capsule seed) and passes it to PTC.
+   - PTC derives concrete candidates: ports, DB names, scratch dirs.
+   - Output is schema-validated EnvManifest delta.
+   - PTC never binds ports, opens DBs, reads secrets, hashes cryptographically, or shells out.
+
+3. EnvRealizer
+   - Host-side module in Node first, BEAM/OTP later.
+   - Reserves ports deterministically modulo availability.
+   - Creates dirs/dbs.
+   - Writes existing sandbox-policy JSON.
+   - Starts services with supervised lifecycle.
+   - Teardown/drain for seal.
+
+4. VcsBackend
+   - Trait: seal/apply/verify.
+   - git V1 uses thin three-tree snapshot bundle: base, index-tree, worktree-tree; preserves staged vs unstaged vs untracked; excludes base history.
+   - jj/fossil/rsync are backends, not architecture changes.
+
+5. SessionCapsule
+   - id = content hash of canonical history + repo bundle + env manifest + toolchain ref.
+   - history canonicalizes cwd/result metadata to $CAPSULE_ROOT so machine paths do not change id.
+   - resume verifies hash, applies repo delta, realizes env, loads session, adopts new owner id.
+
+6. Transport
+   - Control over existing socket bridge/web server: capsule_offer/capsule_claim/capsule_resumed/capsule_sealed.
+   - Bytes through CAS/object store/git remote/scp. Prefer CAS because capsule id is already a content hash.
+   - Firezone can remain the private network boundary for early deployments; app-level authz gate is still required before broad multi-user use.
+
+* UX sketch
+- `spell session seal --to home-server`: freezes local session, drains services, creates capsule, offers to server, local becomes sealed/read-only.
+- Server claims, verifies, realizes env, resumes as autonomous/headless session; asks route via Telegram/team-chat.
+- `spell session seal --back` or server automatic watermark: creates return capsule.
+- `spell session resume <id>` on laptop: verifies, realizes env, restores repo/history, continues.
+
+Team Chat should expose this as a visible lifecycle: Running here → Sealing → Running on home-server → Needs answer → Sealed back → Resume here.
+
+* Determinism contract
+Deterministic: repo delta, staged split, session history, env derivation, toolchain references.
+Modulo availability: concrete ports on a crowded host; deterministic search from seed, record actual allocation into resumed manifest.
+Fail-loud: missing toolchain, missing secrets, missing base rev, hash mismatch, unavailable required service.
+
+* Slices
+S0 EnvManifest type + parser/serializer.
+S1 env.ptc seeded realization, schema validation, example env programs.
+S2 EnvRealizer local: ports/dirs/db/sandbox/services lifecycle.
+S3 git VcsBackend thin three-tree snapshot + apply/verify tests.
+S4 SessionCapsule seal/resume locally between two dirs.
+S5 socket bridge transport + team-chat UX.
+S6 BEAM process resume host + additional VCS backends.
+
+* Open risks
+- Postgres/dev DB state: schema replay vs opt-in pg_dump.
+- Long-lived warm daemons: need drain/kill semantics before seal.
+- Unpushed base commits: thin bundle requires target has base; fallback fetch/push strategy needed.
+- Secrets: carry names only; target injects from its store.
+- Authorization: Firezone is network boundary, not object-level capability control.

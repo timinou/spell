@@ -1,0 +1,12 @@
+# Large/generated artifacts — not for version control.
+# NB: .gitignore does NOT support trailing inline comments; keep patterns bare.
+
+# cloned leaderboard datasets, parsed caches, generated reports (multi-GB)
+data/
+
+# built portable Spell bundle (binary + native addon + domain spec)
+dist/
+
+__pycache__/
+*.pyc
+.rsync.log

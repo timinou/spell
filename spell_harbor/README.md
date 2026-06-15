@@ -43,10 +43,13 @@ login is used with zero re-authentication. Override the source db with
 
 - `spell_agent.py` — Harbor `BaseInstalledAgent`. `install()` uploads the dist +
   your `agent.db` and fail-loud-verifies the binary loads; `run()` drives
-  `spell --domain harbor -p`; `populate_context_post_run()` harvests the
-  transcript + token usage.
+  `spell --domain harbor -p`, checks the process exit code, writes debug
+  artifacts under `/logs/artifacts`, snapshots required `/app` deliverables, and
+  runs lightweight smoke gates before the verifier.
 - `spell.autonomous.kdl` (repo root) — the **declarative** autonomous + harbor
-  domains. `harbor extends autonomous`, adds the `$HARBOR_MODEL` env contract.
+  domains. `harbor extends autonomous`, adds the `$HARBOR_MODEL` env contract,
+  strict exact model resolution, and a Terminal-Bench inspect→test→repair
+  scaffold prompt.
 - The `harbor` domain's `surface "none"` routes Spell headless and gates
   interactive tools; `knowledge { embeddings #false }` + env keep org/memory on
   BM25+graph (no fastembed RAM/download).
@@ -102,6 +105,50 @@ spell_harbor/probe-libc.sh dist/pi_natives.*.node      # CI gate (exit 1 on fail
 `install.sh` re-verifies the addon loads in the actual task container
 (`spell --version`) before the benchmark starts — a libc mismatch fails the
 install, not a tool call mid-run.
+
+## Debug artifacts and failure classification
+
+The adapter writes all run evidence to Harbor's convention artifact directory,
+`/logs/artifacts/`, which Harbor collects into each trial under
+`artifacts/logs/artifacts/`.
+
+Expected files:
+
+| artifact | meaning |
+|---|---|
+| `spell-harbor-transcript.jsonl` | Spell JSON event stream plus stderr; primary postmortem source |
+| `spell-exit-code.txt` | actual Spell process exit code |
+| `spell-run-metadata.json` | model, exit code, required paths, smoke summary |
+| `spell-command.txt` | exact command line wrapper executed in the task container |
+| `app-file-list.txt` | `/app` file listing after agent run |
+| `app/<path>` | copied required deliverable files, e.g. `app/filter.py` when present |
+| `spell-smoke.txt` | lightweight deliverable smoke output when a known gate ran |
+
+Failure classes are intentionally separated:
+
+- non-zero Spell process / invalid model / startup failure → adapter raises a
+  Harbor exception with transcript tail; this should not be misread as verifier
+  reward `0.0`.
+- missing required deliverable path, e.g. `/app/filter.py` → adapter raises with
+  the missing path and artifacts.
+- verifier/test failure after a completed run → remains a scored benchmark
+  failure, with generated solution and transcript preserved for strategy review.
+
+Model attribution: the adapter passes Harbor's `--model` through both
+`HARBOR_MODEL` and Spell's normal `--model` CLI flag. The adapter uploads the
+auth database, model-discovery cache (`~/.spell/agent/models.db`), first
+available `models.yml`, and forwards common provider API-key/base-url env vars,
+so it uses the same resolver as ordinary Spell runs, including static API-key
+providers and OAuth/dynamic provider models exposed by the installed Spell
+account. The `harbor` domain still sets
+`model { strict #true }` so benchmark runs do not silently fall back to another
+model when a requested model cannot be resolved after normal Spell model loading.
+
+For local debugging, prefer keeping trial artifacts and inspect:
+
+```bash
+find jobs/<run>/<task-trial>/artifacts/logs/artifacts -maxdepth 3 -type f -print
+```
 
 ## Scope-2 runtime decisions (settled)
 
