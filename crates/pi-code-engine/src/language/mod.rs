@@ -1,8 +1,11 @@
 mod generated;
+mod node_types;
 mod profile;
 
 use std::{collections::HashMap, path::Path, sync::Arc};
 
+pub use generated::GeneratedGrammar;
+pub use node_types::grammar_from_node_types;
 pub use profile::*;
 
 use crate::{

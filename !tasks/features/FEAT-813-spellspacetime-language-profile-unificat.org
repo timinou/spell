@@ -32,3 +32,36 @@ Unified seams — Spell: S1 single registry entry (dialect non-optional, kill pa
 Generalization goal: Spell onboards any {grammar+node-types.json+profile.json}; Spacetime serves any editor + any harness.
 
 NOTE [2026-06-14]: Decisions settled (user): (1) L0 = FULL cutover of verse LSP FormRegistry onto the single MetaRegistry (no thin bridge). (2) .st NameLexer investigated → bespoke thin SpacetimeNameLexer (CSS-class tier, ~40 lines), NOT the generic DefaultNameLexer. Finding: .st names are flat sigil-prefixed hyphenated idents (@react-to, %macro morph-to-color, &card, $color) + CSS selectors; ZERO ::/.-qualified symbol paths exist; sigil is a kind discriminator not a path separator. Model on pi-code-path/src/dialects/css.rs. Revised generalization: scalable seam = small library of composable NameLexer primitives (sigil_prefix/hyphenated_ident/path_split/selector) a data profile combines, NOT one parameterized lexer — so the exporter emits a lexer SPEC (data) not hand-written Rust. Spec §3.6 + §10 updated. Status: ready for autonomous implementation; start order L0+L1 parallel. User wants full autonomous build once settled.
+
+NOTE [2026-06-15]: Cluster B fresh investigation (2026-06-15) — ProfileYaml memo revised.
+
+Repo state validated against /home/user/code/ora/spell HEAD before implementation:
+
+1. ProfileYaml is NOT the central seam anymore.
+   - It still exists only at pi-code-engine/src/language/profile.rs:483 and load_profile_json only has a unit-test caller.
+   - But pi-code-graph has already grown EngineProfileExtractor (pi-code-graph/src/language/generic.rs) and with_defaults() now registers generic extractors for every pi-code-engine builtin except TS/Elixir/Clojure/EDN. So graph extraction is already partly unified behind engine LanguageProfile.
+   - Therefore Cluster B cannot be "revive ProfileYaml and done". The current real seam is: engine LanguageProfile remains canonical for tree-sitter/profile data; graph consumes engine profiles generically; kernel CodePath dialect and semantic LSP config still remain separate.
+
+2. Remaining separate language concepts:
+   - pi-code-engine LanguageRegistry: hardcoded builtins, LanguageProfile, tree-sitter Language, generated grammar metadata.
+   - pi-code-graph LanguageRegistry: TS/Elixir/Clojure special extractors + generic EngineProfileExtractor for engine profiles.
+   - pi-kernel dialect_registry::select_dialect: hardcoded extension→NameLexer map still exists and bypasses LanguageProfile.dialect.
+   - semantic defaults.kdl: LSP language/server mapping is KDL-only and extension-driven, not tied to engine profiles.
+
+3. Verse exporter shape does not match current ProfileYaml.
+   - verse export-spell-profile emits id/extensions/kind_aliases/ts_node_kinds/declarations/references/generated_by.
+   - current ProfileYaml expects language/extensions/capabilities/declaration-patterns/class_like/imports/exports/references/separators/embedded_regions.
+   - Adapter work must translate verse's registry-derived declaration inventory into current engine declaration patterns (likely filtered patterns for macro_def/primitive_def/capture_type_def), and also needs dynamic kind_aliases support (LanguageDialect.kind_aliases is currently HashMap<&'static str, Vec<&'static str>>).
+
+4. Namespacing changed the lexer decision.
+   - Older FEAT-813 note said .st had no path separator and needed a bespoke lexer.
+   - FEAT-118 module system makes / the namespace axis; exported profile now correctly says separators=["/"].
+   - Current direction: data/composable NameLexer spec remains viable, but current pi-code-path NameLexer trait is still Rust dyn object, so first implementation may need a SpacetimeNameLexer or a generic data-driven lexer type backed by owned strings.
+
+5. Safe first implementation step completed:
+   - Added pi-code-engine::language::grammar_from_node_types(json) runtime parser for tree-sitter node-types.json -> GeneratedGrammar.
+   - Re-exported GeneratedGrammar and grammar_from_node_types from pi-code-engine::language.
+   - Added parity test against generated org grammar (include tree-sitter-org node-types.json). Verified: CARGO_TARGET_DIR=/tmp/spell-clusterb-target cargo test -p pi-code-engine --lib = 219 passed.
+
+Next design target:
+- Do NOT blindly wire ProfileYaml. Design a new ProfileBundle/adapter around current engine ProfileYaml + verse exporter reality: node-types.json -> GeneratedGrammar (now done), profile JSON -> declaration patterns + dynamic dialect/kind aliases + optional LSP semantic config. Then decide whether L1 is config-only spacetime LSP, a static .st profile, or the dynamic profile loader skeleton.

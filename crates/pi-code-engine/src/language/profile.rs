@@ -470,7 +470,7 @@ pub type InverseRules = HashMap<String, Vec<String>>;
 
 /// A production rule: which fields a node type has and what child types each
 /// field accepts.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProductionRule {
 	/// Unnamed (positional) children types.
 	pub unnamed_children: Vec<String>,
