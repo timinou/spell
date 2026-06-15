@@ -1,0 +1,31 @@
+#+TITLE: puppeteer.launch omits userDataDir; Chrome writes profile dir to process.cwd()
+#+STATE: DONE
+#+SESSION_ID: 150a03262cd1a8d8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-15T10-32-47-027Z_150a03262cd1a8d8.jsonl]]
+#+CUSTOM_ID: BUG-482-puppeteer-launch-omits-userdatadir-chrom
+#+COMPLETION_HASH: ad1780bcc7037989
+
+* Initial Message
+
+look at commits 4f734a0b and maybe 4dfc2069 in ~/code/ora/verse and when the files were created. Please trace this back to a potential bug in spell that exposed files cross-project (either through the spell server or something else). Pinpoint what each file/folder was originally meant for and spelunk in the ~/.spell/agent directory to explain it in details
+
+* Initial Message
+
+Chrome profile dirs `puppeteer_dev_chrome_profile-*` leak into the session's project tree (40+ found in ~/code/ora/verse). This is the one confirmed Spell-INTERNAL cwd-write leak; all other internal writes correctly use ~/.spell dir helpers (model cache → getModelDbPath SQLite, images → os.tmpdir).
+
+* Root cause
+
+packages/coding-agent/src/tools/browser.ts =#resetBrowser= calls =puppeteer.launch({...})= WITHOUT a =userDataDir=. Puppeteer/Chrome then creates its default profile (`puppeteer_dev_chrome_profile-*`) in =process.cwd()=. Because the interactive CLI/TUI runs many sessions + all subagents in ONE process and =setProjectDir= does a process-global =process.chdir=, process.cwd() is whatever project was last selected — so the profile can even land in the WRONG project.
+
+* Fix
+
+Pass an explicit =userDataDir= under ~/.spell/puppeteer (helper getPuppeteerDir() already exists). Must be UNIQUE per live browser to avoid Chrome's single-writer profile lock when multiple in-process sessions/subagents run browsers concurrently → use a per-session subdir (sessionId, fallback per-instance Snowflake): =path.join(getPuppeteerDir(), "profiles", <discriminator>)=. Best-effort rm the dir on =dispose()= (session shutdown) to bound cache growth.
+
+* Acceptance
+
+- puppeteer.launch receives userDataDir pointing under ~/.spell/puppeteer/profiles/<id>.
+- No puppeteer_dev_chrome_profile-* can appear in cwd.
+- Concurrent in-process browsers get distinct profile dirs (no profile-lock contention).
+- tsgo check green; existing browser tests unaffected.
+
+NOTE [2026-06-15]: Fixed in commit 582238069. puppeteer.launch now receives an explicit userDataDir = ~/.spell/puppeteer/profiles/<snowflake>, unique per launch (no profile-lock contention across concurrent in-process browsers), best-effort removed on #closeBrowser. Chrome can no longer create puppeteer_dev_chrome_profile-* in process.cwd(). tsgo clean; browser + send-file tests green (14/14).

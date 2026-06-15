@@ -97,8 +97,26 @@ export function formatCwdPrefixDuplicationMessage(
  * - `degenerate`: the entire path equals the duplicated prefix (e.g. cwd ends
  *   with `apps/foo` and path is `apps/foo`); coalescing would leave an empty
  *   target. Callers must reject.
+ * - `project-root`: no duplication, the cwd-relative target did not exist, but
+ *   an ancestor of cwd (up to the git/project root) does contain it; we resolve
+ *   against that ancestor. No warning — this is the expected
+ *   project-root-relative read pattern for nested-cwd sessions.
+ * - `unanchored-new`: no duplication; a brand-new NESTED write whose first path
+ *   segment does not exist under cwd but DOES exist as a sibling project (peer
+ *   of cwd, or in an ancestor up to the project root). The cross-project leak
+ *   shape (cwd=/code/ora/verse + write `rv/data/x.json` while /code/ora/rv is a
+ *   sibling project): the file silently materialises in the wrong tree. We
+ *   still resolve against cwd (no hard block — paths are cwd-relative by
+ *   contract) but emit a strong warning naming the sibling so the agent gets
+ *   the feedback signal that was previously missing.
  */
-export type CwdResolutionDecision = "no-overlap" | "kept-nested" | "coalesced" | "degenerate";
+export type CwdResolutionDecision =
+	| "no-overlap"
+	| "kept-nested"
+	| "coalesced"
+	| "degenerate"
+	| "project-root"
+	| "unanchored-new";
 
 export interface ResolvedCwdRelativePath {
 	/** Final absolute path the caller should use. Empty when degenerate. */
@@ -121,6 +139,14 @@ export interface ResolveCwdRelativePathOptions {
 	 * is cheaper than threading an awaited helper through the guard.
 	 */
 	exists?: (p: string) => boolean;
+	/**
+	 * Absolute path of the owning project / git root, when known. Bounds the
+	 * `unanchored-new` sibling-collision walk: ancestors are inspected only up
+	 * to `projectRoot`. When omitted, the walk is capped by hop count alone
+	 * (still catches the common case where the sibling project is a peer of cwd,
+	 * e.g. cwd=/code/ora/verse + write `rv/...` while /code/ora/rv exists).
+	 */
+	projectRoot?: string;
 }
 
 /**
@@ -155,7 +181,8 @@ export function resolveCwdRelativePath(
 		// resolution produces a path that doesn't exist. Walk up from cwd to
 		// find the nearest ancestor containing the target path.
 		const exists = options.exists ?? defaultExists;
-		if (!exists(abs) && !exists(path.dirname(abs))) {
+		const isBrandNew = !exists(abs) && !exists(path.dirname(abs));
+		if (isBrandNew) {
 			const projectPath = resolveFromProjectRoot(cwd, suppliedPath, exists);
 			if (projectPath) {
 				return {
@@ -163,6 +190,38 @@ export function resolveCwdRelativePath(
 					relative: path.relative(cwd, projectPath) || suppliedPath,
 					decision: "project-root",
 					warning: null,
+				};
+			}
+			// Cross-project leak shape (BUG-029 family): a brand-new NESTED write
+			// whose first path segment names a directory that exists as a PEER of
+			// cwd (a sibling project) — the agent almost certainly meant that
+			// sibling project, not a new same-named subdir under cwd. Example:
+			//   cwd=/code/ora/verse, write `rv/data/todos.json`
+			//   /code/ora/rv exists (sibling project) → agent meant /code/ora/rv
+			//   path.resolve drops it at /code/ora/verse/rv/... (wrong tree) and the
+			//   success message echoes the input — the silent cross-project leak.
+			// We resolve against cwd anyway (no hard block — paths are cwd-relative
+			// by contract) but emit a strong feedback warning so the agent
+			// self-corrects with an absolute path next turn.
+			//
+			// Precision guards (avoid false positives on ordinary scaffolding):
+			//  - only NESTED writes (>= 2 segments): the leak signature is always
+			//    `project/subpath/file`; a bare new top-level file is ordinary.
+			//  - the sibling dir must actually EXIST: a genuinely-new `feature/`
+			//    dir under cwd has no peer collision and is never flagged.
+			const segs = suppliedPath.split(/[\\/]/).filter(Boolean);
+			const firstSeg = segs[0];
+			const siblingDir = firstSeg ? siblingProjectCollision(cwd, firstSeg, options.projectRoot, exists) : null;
+			if (segs.length >= 2 && firstSeg && siblingDir) {
+				return {
+					path: abs,
+					relative: suppliedPath,
+					decision: "unanchored-new",
+					warning:
+						`Path "${suppliedPath}" resolved to ${abs}, but "${firstSeg}" also exists as a sibling project at ${siblingDir}. ` +
+						`Tool paths resolve from cwd (${cwd}), NOT from a project name — if you meant the sibling project, pass an absolute path ` +
+						`(e.g. ${path.join(siblingDir, segs.slice(1).join("/"))}). ` +
+						`If a new "${firstSeg}/" dir under cwd is intended, ignore this note.`,
 				};
 			}
 		}
@@ -215,6 +274,56 @@ export function resolveCwdRelativePath(
 			`Tool paths resolve from cwd (${cwd}), not from project / git root. ` +
 			`Pass "${dup.strippedPath}" next time to avoid this warning.`,
 	};
+}
+
+/**
+ * Detect the cross-project confusion shape: the agent wrote `<firstSeg>/...`
+ * relative to `cwd`, but `<firstSeg>` does NOT exist under cwd while a
+ * directory of the same name DOES exist as a sibling (peer of cwd) or in an
+ * ancestor up to `projectRoot`. That is the BUG-029 signature — the agent
+ * meant the sibling project, not a new same-named subdir under cwd.
+ *
+ * Returns the absolute path of the colliding sibling directory when the shape
+ * matches, else null. Bounded walk (cwd's parent → projectRoot, capped at 8
+ * hops); existence probed via the injected predicate so tests stay hermetic.
+ *
+ * Conservative by construction — fires ONLY when:
+ *  - `cwd/<firstSeg>` does not exist (no valid local interpretation), AND
+ *  - some ancestor dir `A` (A ≠ cwd) has `A/<firstSeg>` existing.
+ * A genuinely-new `feature/` dir under cwd (no peer of that name) never fires.
+ */
+function siblingProjectCollision(
+	cwd: string,
+	firstSeg: string,
+	projectRoot: string | undefined,
+	exists: (p: string) => boolean,
+): string | null {
+	// A valid local dir means the cwd-relative interpretation is unambiguous.
+	if (exists(path.join(cwd, firstSeg))) return null;
+
+	let dir = path.dirname(cwd);
+	for (let i = 0; i < 8; i++) {
+		if (dir === cwd) break;
+		const candidate = path.join(dir, firstSeg);
+		if (exists(candidate)) return candidate;
+		// Stop once we've inspected projectRoot, or would step above it / hit fs root.
+		if (projectRoot && dir === projectRoot) break;
+		const parent = path.dirname(dir);
+		if (parent === dir) break;
+		if (projectRoot && !isPathInside(projectRoot, parent)) break;
+		dir = parent;
+	}
+	return null;
+}
+
+/**
+ * True when `inner` is `outer` or a descendant of it. Segment-aware so
+ * `/a/bc` is NOT considered inside `/a/b`.
+ */
+function isPathInside(outer: string, inner: string): boolean {
+	if (outer === inner) return true;
+	const rel = path.relative(outer, inner);
+	return rel.length > 0 && !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 
 /**

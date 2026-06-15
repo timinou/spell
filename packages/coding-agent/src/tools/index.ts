@@ -116,6 +116,12 @@ export type { DiscoverableMCPTool } from "../mcp/discoverable-tool-metadata";
 export interface ToolSession {
 	/** Current working directory */
 	cwd: string;
+	/**
+	 * Absolute git/project root for the session cwd, or null when not in a repo.
+	 * Bounds the cross-project sibling-leak guard in path resolution
+	 * (resolveCwdRelativePath). Cached per session; safe to call per tool op.
+	 */
+	getRepoRoot?: () => string | null;
 	/** Whether UI is available */
 	hasUI: boolean;
 

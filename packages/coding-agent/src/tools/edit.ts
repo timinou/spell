@@ -234,7 +234,10 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		const ops = params.operations
 			.map((op, i) => {
 				if (!op) return null;
-				const resolved = resolveCwdRelativePath(effectiveCwd, op.target, { mode: "file" });
+				const resolved = resolveCwdRelativePath(effectiveCwd, op.target, {
+					mode: "file",
+					projectRoot: this.session.getRepoRoot?.() ?? undefined,
+				});
 				// The on-disk file is the locator part only: strip the `::Symbol`
 				// query, the `#body`/`#sig` qualifier, and a trailing `:A-B` / `:A`
 				// / `:A-` line-slice suffix. The slice regex is end-anchored and

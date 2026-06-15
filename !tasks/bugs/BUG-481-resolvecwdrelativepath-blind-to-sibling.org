@@ -1,0 +1,48 @@
+#+TITLE: resolveCwdRelativePath blind to sibling/new-top-level shape; cross-project file leak
+#+STATE: DONE
+#+SESSION_ID: 150a03262cd1a8d8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-15T10-32-47-027Z_150a03262cd1a8d8.jsonl]]
+#+CUSTOM_ID: BUG-481-resolvecwdrelativepath-blind-to-sibling
+#+COMPLETION_HASH: 85bad549454d1a9d
+
+* Initial Message
+
+look at commits 4f734a0b and maybe 4dfc2069 in ~/code/ora/verse and when the files were created. Please trace this back to a potential bug in spell that exposed files cross-project (either through the spell server or something else). Pinpoint what each file/folder was originally meant for and spelunk in the ~/.spell/agent directory to explain it in details
+
+* Initial Message
+
+Cross-project file leak traced from ~/code/ora/verse (Spacetime compiler). Foreign files (rv/, cmstest/, better-ccflare/, agentmaker_build_*, screenshots/, puppeteer_dev_chrome_profile-*) leaked into the verse tree across Jun 1–14 2026 and were later mass-deleted in commits 4f734a0b + 4dfc2069. Root cause is the BUG-029/358/360/361 family: unanchored relative paths resolve against session.cwd, not the agent's mental git-root anchor.
+
+* Root cause (structural)
+
+The write-path guard =resolveCwdRelativePath= (packages/coding-agent/src/tools/path-resolution.ts) only detects ONE shape — the cwd-TAIL DUPLICATION pattern (cwd=/x/apps/foo + input=apps/foo/bar → double-prefix). It is BLIND to the *sibling / new-top-level* shape that hit verse:
+
+#+begin_src
+cwd  = /code/ora/verse            (== git root)
+write  rv/data/todos.json          (a DIFFERENT project's file)
+→ detectCwdPrefixDuplication returns null (first seg `rv` ≠ cwd tail)
+→ resolveFromProjectRoot walks up, finds nothing (brand-new path)
+→ falls through to decision:"no-overlap", path.resolve(cwd, p)
+→ silently creates /code/ora/verse/rv/data/todos.json
+→ success message echoes the INPUT string; agent gets NO feedback signal
+#+end_src
+
+The existing design philosophy (BUG-360/361) is "don't block, but always emit a feedback signal so the agent self-corrects." That signal exists for the cwd-tail case and is MISSING for the new-top-level/sibling case. Closing that signal gap is the structural completion of the existing guard.
+
+* Secondary bug: type drift
+
+=CwdResolutionDecision= union = "no-overlap" | "kept-nested" | "coalesced" | "degenerate" but =resolveCwdRelativePath= already returns decision:"project-root" (L161). The union is missing it → TS narrowing is unsound on that arm.
+
+* Fix
+
+1. Add "project-root" and "unanchored-new" to the =CwdResolutionDecision= union (type-truth).
+2. In the =!dup= branch, AFTER =resolveFromProjectRoot= returns null, detect the leak shape: a brand-new write (target + parent dir absent) whose FIRST path segment does not exist under cwd ⇒ return decision:"unanchored-new" with a warning naming the new top-level dir, the absolute resolved path, and the absolute/dot-anchored alternatives. SOFT warning (writes still proceed) — matches the no-block design. Uses only the injected =exists= predicate (no git spawn in the hot per-op path).
+3. All write tools (create, edit, send-file, browser screenshot, transaction) already surface =resolved.warning=, so they inherit the new signal with zero per-tool churn.
+
+* Acceptance
+
+- New unit tests in path-resolution.test.ts: sibling-shape fires unanchored-new; legit nested-under-existing-dir (src/new/x.ts where src/ exists) does NOT fire; absolute/dot-anchored bypass; existing cwd-tail/degenerate/coalesce behavior unchanged.
+- bun test path-resolution.test.ts green.
+- tsgo check green (union exhaustiveness).
+
+NOTE [2026-06-15]: Fixed in commit 582238069. Added 'unanchored-new' decision to resolveCwdRelativePath: a brand-new nested write whose first segment is a sibling project (peer of cwd or ancestor up to projectRoot) now emits a strong warning naming the sibling + absolute alternative. Fixed CwdResolutionDecision type drift (added 'project-root' + 'unanchored-new'). Threaded session git-root as projectRoot via new ToolSession.getRepoRoot (cached per cwd) into create/edit/send-file/browser-screenshot. 10 new unit tests; 26/26 path-resolution tests green; tsgo clean on touched files.

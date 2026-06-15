@@ -90,7 +90,10 @@ export class SendFileTool implements AgentTool<typeof sendFileSchema, SendFileDe
 		_onUpdate?: AgentToolUpdateCallback<SendFileDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<SendFileDetails>> {
-		const resolvedSendFile = resolveCwdRelativePath(this.session.cwd, params.path, { mode: "file" });
+		const resolvedSendFile = resolveCwdRelativePath(this.session.cwd, params.path, {
+			mode: "file",
+			projectRoot: this.session.getRepoRoot?.() ?? undefined,
+		});
 		const absolutePath = resolvedSendFile.path;
 
 		const stat = await fs.stat(absolutePath).catch((error: unknown) => {

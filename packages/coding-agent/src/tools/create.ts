@@ -54,7 +54,10 @@ export class CreateTool implements AgentTool<typeof createSchema> {
 		// when on-disk evidence supports the bug-pattern interpretation, and emits
 		// a warning we surface in the success text. Legit nested dirs are kept.
 		// Degenerate (path == cwd-tail) is the only hard-reject case.
-		const resolved = resolveCwdRelativePath(sessionCwd, params.path, { mode: "file" });
+		const resolved = resolveCwdRelativePath(sessionCwd, params.path, {
+			mode: "file",
+			projectRoot: this.session.getRepoRoot?.() ?? undefined,
+		});
 		if (resolved.decision === "degenerate") {
 			const r = toolResult<CreateToolResultDetails>({
 				path: params.path,

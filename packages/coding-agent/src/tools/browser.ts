@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Readability } from "@mozilla/readability";
@@ -132,14 +133,18 @@ interface ScreenshotPath {
 	warning: string | null;
 }
 
-function resolveScreenshotArtifactPath(requestedPath: string | undefined, cwd: string): ScreenshotPath {
+function resolveScreenshotArtifactPath(
+	requestedPath: string | undefined,
+	cwd: string,
+	projectRoot?: string,
+): ScreenshotPath {
 	if (!requestedPath?.trim()) {
 		return { path: path.join(os.tmpdir(), `spell-sshots-${Snowflake.next()}.png`), warning: null };
 	}
 
 	// Same cwd-prefix duplication guard as create.ts / edit.ts — screenshots
 	// were the *primary symptom* in 5/6 documented sessions (see proxy_create_nested_path_bug.md).
-	const resolved = resolveCwdRelativePath(cwd, requestedPath, { mode: "file" });
+	const resolved = resolveCwdRelativePath(cwd, requestedPath, { mode: "file", projectRoot });
 	const ext = path.extname(resolved.path);
 	if (ext && ext.toLowerCase() !== ".png") {
 		throw new ToolError("Screenshot path must end in .png because browser screenshots are saved as PNG files.");
@@ -512,6 +517,14 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 	#browser: Browser | null = null;
 	#page: Page | null = null;
 	#currentHeadless: boolean | null = null;
+	// Absolute Chrome profile dir for the live browser. Pinned under
+	// ~/.spell/puppeteer/profiles/<id> so Chrome never falls back to creating
+	// `puppeteer_dev_chrome_profile-*` in process.cwd() (which, in the shared
+	// in-process session model, can be the WRONG project tree — the BUG-482
+	// cross-project profile leak). Unique per launch so concurrent in-process
+	// browsers never contend on Chrome's single-writer profile lock. Removed on
+	// #closeBrowser so the cache stays bounded.
+	#userDataDir: string | null = null;
 	#browserSession: CDPSession | null = null;
 	#userAgentOverride: UserAgentOverride | null = null;
 	#elementIdCounter = 0;
@@ -527,11 +540,13 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 		await this.#clearElementCache();
 		const page = this.#page;
 		const browser = this.#browser;
+		const userDataDir = this.#userDataDir;
 		// Null out state eagerly so concurrent callers see a clean slate
 		this.#page = null;
 		this.#browser = null;
 		this.#browserSession = null;
 		this.#userAgentOverride = null;
+		this.#userDataDir = null;
 		try {
 			if (page && !page.isClosed()) {
 				await page.close();
@@ -545,6 +560,15 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 			}
 		} catch {
 			// Chrome may already be dead — swallow
+		}
+		// Best-effort removal of the pinned profile dir so ~/.spell/puppeteer/profiles
+		// stays bounded. Only runs after browser.close() released the profile lock.
+		if (userDataDir) {
+			try {
+				await fs.rm(userDataDir, { recursive: true, force: true });
+			} catch {
+				// Leftover profile is harmless (lives under ~/.spell, not a project tree) — swallow
+			}
 		}
 	}
 
@@ -589,11 +613,20 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 		if (ignoreCert === "true" || ignoreCert === "1" || ignoreCert === "yes" || ignoreCert === "on") {
 			launchArgs.push("--ignore-certificate-errors");
 		}
+		// Pin the Chrome profile under ~/.spell/puppeteer/profiles/<id>. Without an
+		// explicit userDataDir, Chrome creates `puppeteer_dev_chrome_profile-*` in
+		// process.cwd() — which, under the shared in-process session model, may be a
+		// DIFFERENT project than this session (BUG-482 cross-project leak). Unique
+		// per launch → no single-writer profile-lock contention across concurrent
+		// in-process browsers. Cleaned up in #closeBrowser.
+		const userDataDir = path.join(getPuppeteerDir(), "profiles", `${Snowflake.next()}`);
+		this.#userDataDir = userDataDir;
 		this.#browser = await puppeteer.launch({
 			headless: this.#currentHeadless,
 			defaultViewport: this.#currentHeadless ? initialViewport : null,
 			args: launchArgs,
 			ignoreDefaultArgs: [...STEALTH_IGNORE_DEFAULT_ARGS],
+			userDataDir,
 		});
 		// Listen for external Chrome death (kill, OOM, crash) — eagerly
 		// null out state so #ensurePage knows to re-launch.
@@ -1427,7 +1460,7 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 					const page = await this.#ensurePage(params);
 					const fullPage = params.selector ? false : (params.full_page ?? false);
 					const screenshotArtifact = params.path?.trim()
-						? resolveScreenshotArtifactPath(params.path, this.session.cwd)
+						? resolveScreenshotArtifactPath(params.path, this.session.cwd, this.session.getRepoRoot?.() ?? undefined)
 						: undefined;
 					const requestedScreenshotPath = screenshotArtifact?.path;
 					const artifact = await this.session.allocateOutputArtifact?.("screenshot", "png");

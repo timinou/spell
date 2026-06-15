@@ -87,6 +87,7 @@ import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "
 import { collectEnvSecrets, loadSecrets, obfuscateMessages, SecretObfuscator } from "./secrets";
 import { AgentSession } from "./session/agent-session";
 import { AuthStorage } from "./session/auth-storage";
+import { getGitToplevelSync } from "./session/git-baseline";
 import { convertToLlm } from "./session/messages";
 import { SessionManager } from "./session/session-manager";
 import type { SpellcastSessionContext } from "./spellcast";
@@ -991,10 +992,23 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// Load project-level task policies once per session (cached in the closure below)
 	const projectTaskPolicies = await loadTaskPolicies(cwd);
 
+	// Repo-root resolver for the cross-project sibling-leak guard. Cached by
+	// cwd so a `/move` that changes the session cwd recomputes; the common
+	// stable-cwd case pays one `git rev-parse` for the whole session.
+	let repoRootCache: { cwd: string; root: string | null } | undefined;
+	const getRepoRoot = (): string | null => {
+		const currentCwd = sessionManager.getCwd();
+		if (repoRootCache?.cwd === currentCwd) return repoRootCache.root;
+		const root = getGitToplevelSync(currentCwd);
+		repoRootCache = { cwd: currentCwd, root };
+		return root;
+	};
+
 	const toolSession: ToolSession = {
 		get cwd() {
 			return sessionManager.getCwd();
 		},
+		getRepoRoot,
 		hasUI: options.hasUI ?? false,
 
 		sandboxPolicy: options.sandboxPolicy,
