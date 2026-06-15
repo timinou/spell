@@ -46,18 +46,37 @@ import { clampTimeout } from "./tool-timeouts";
  * on malformed package.json files in the user's project tree.
  */
 let puppeteerModule: typeof Puppeteer | undefined;
+let puppeteerLoad: Promise<typeof Puppeteer> | undefined;
 async function loadPuppeteer(): Promise<typeof Puppeteer> {
 	if (puppeteerModule) return puppeteerModule;
-	const prev = process.cwd();
-	const safeDir = getPuppeteerDir();
-	await Bun.write(path.join(safeDir, "package.json"), "{}");
-	try {
-		process.chdir(safeDir);
-		puppeteerModule = (await import("puppeteer")).default;
-		return puppeteerModule;
-	} finally {
-		process.chdir(prev);
+	// Singleflight: memoize the in-flight load, not just the resolved module.
+	// The body temporarily process.chdir()s into a safe dir so puppeteer's
+	// cosmiconfig probe doesn't choke on a malformed package.json in the user's
+	// project tree. In the shared-process model (many sessions + subagents in
+	// ONE process), two concurrent first-callers would BOTH read `prev` and
+	// chdir — the second captures `prev` AFTER the first already chdir'd into
+	// safeDir, so its finally restores cwd to safeDir PERMANENTLY, redirecting
+	// every later cwd-relative write process-wide. Collapsing to a single shared
+	// promise makes the chdir/restore pair run exactly once.
+	if (!puppeteerLoad) {
+		puppeteerLoad = (async () => {
+			const prev = process.cwd();
+			const safeDir = getPuppeteerDir();
+			await Bun.write(path.join(safeDir, "package.json"), "{}");
+			try {
+				process.chdir(safeDir);
+				puppeteerModule = (await import("puppeteer")).default;
+				return puppeteerModule;
+			} finally {
+				process.chdir(prev);
+			}
+		})();
+		// On failure, clear the memo so a later call can retry the import.
+		puppeteerLoad.catch(() => {
+			puppeteerLoad = undefined;
+		});
 	}
+	return puppeteerLoad;
 }
 
 const DEFAULT_VIEWPORT = { width: 1365, height: 768, deviceScaleFactor: 1.25 };

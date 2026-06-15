@@ -1,0 +1,36 @@
+#+TITLE: loadPuppeteer process.chdir race permanently pins process.cwd() in shared-process model
+#+STATE: DONE
+#+SESSION_ID: 150a03262cd1a8d8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-15T10-32-47-027Z_150a03262cd1a8d8.jsonl]]
+#+CUSTOM_ID: BUG-484-loadpuppeteer-process-chdir-race-permane
+
+* Initial Message
+
+look at commits 4f734a0b and maybe 4dfc2069 in ~/code/ora/verse and when the files were created. Please trace this back to a potential bug in spell that exposed files cross-project (either through the spell server or something else). Pinpoint what each file/folder was originally meant for and spelunk in the ~/.spell/agent directory to explain it in details
+
+* Initial Message
+
+Discovered while hardening the cross-project file leak (BUG-481/482). browser.ts loadPuppeteer() temporarily process.chdir()s into a safe dir to import puppeteer (cosmiconfig probe safety), restoring the previous cwd in finally. It memoizes the resolved MODULE but not the in-flight LOAD.
+
+* Root cause (persistent corruption, not transient)
+
+In the shared-process model (interactive CLI/TUI runs many sessions + ALL subagents in ONE process), two concurrent first-callers race:
+
+#+begin_src
+Call A: puppeteerModule undefined → prev = A.cwd (real project) → chdir(safeDir) → await import…
+Call B (concurrent): puppeteerModule STILL undefined → prev = process.cwd() = safeDir (!!) → chdir(safeDir) → await…
+A.finally: chdir(A.cwd)   ✓ restores real cwd
+B.finally: chdir(safeDir) ✗ pins process.cwd() to ~/.spell/puppeteer PERMANENTLY
+#+end_src
+
+B captured `prev` AFTER A had already chdir'd, so B's restore sets cwd to safeDir for the rest of the process lifetime. Every subsequent cwd-relative write process-wide then lands in ~/.spell/puppeteer — a cross-project corruption vector distinct from BUG-482 (which was Chrome's own profile dir).
+
+* Fix (commit a9c85a7e7 / amend)
+
+Singleflight: memoize the in-flight Promise, not just the resolved module, so the chdir/restore pair runs EXACTLY ONCE regardless of concurrency. Clear the memo on failure so a later call can retry the import. A transient cwd window during the single first-load remains (inherent to process.chdir) but is bounded to one load, never a permanent pin.
+
+* Acceptance
+
+- Concurrent first-callers share one promise; only one chdir/restore pair executes.
+- Failed import clears the memo (retryable).
+- tsgo clean on browser.ts; browser tests green (3/3).
