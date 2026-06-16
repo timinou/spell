@@ -55,7 +55,7 @@ function getReasoningConfig(model: Model<Api>, options: CodexRequestOptions): Re
 	return {
 		effort:
 			options.reasoningEffort === "none" ? "none" : requireSupportedEffort(model, options.reasoningEffort as Effort),
-		summary: options.reasoningSummary ?? "detailed",
+		summary: options.reasoningSummary === undefined ? "detailed" : options.reasoningSummary,
 	};
 }
 

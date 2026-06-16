@@ -240,6 +240,8 @@ export interface StreamOptions {
 // Unified options with reasoning passed to streamSimple() and completeSimple()
 export interface SimpleStreamOptions extends StreamOptions {
 	reasoning?: Effort;
+	/** Explicitly disable provider-side reasoning for APIs where omitting reasoning uses provider defaults. */
+	disableReasoning?: boolean;
 	/** Custom token budgets for thinking levels (token-based providers only) */
 	thinkingBudgets?: ThinkingBudgets;
 	/** Cursor exec handlers for local tool execution */

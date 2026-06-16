@@ -1,0 +1,54 @@
+#+TITLE: Smol :off still burns Codex reasoning tokens
+#+STATE: DONE
+#+SESSION_ID: 150b1682f6e92a03
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-16T06-35-51-643Z_150b1682f6e92a03.jsonl]]
+#+CUSTOM_ID: BUG-488-smol-off-still-burns-codex-reasoning-tok
+#+agent: main
+#+impact: smol utility calls burn hidden reasoning tokens despite role configured off
+#+layer: coding-agent
+#+observed: 2026-06-16 logs: intention cards 13 calls / 24,331 tokens today; 59 calls / 97,803 tokens across two days
+#+root_cause: ThinkingLevel.Off maps to undefined; OpenAI Codex request transform omits body.reasoning, which lets Codex default to reasoning instead of effort:none
+#+COMPLETION_HASH: 5cd830f87706533a
+
+* Initial Message
+
+how many tokens do blocks like this one use?
+
+
+ ◆ awaiting you
+
+ DID: Replaced data-mcp-* with @mcp-host plus selector-scoped @mcp-click and verified events
+ ASK: Tell me if you want me to finalize docs, tests, or release tasks
+
+
+i'm talking about the SYSTEM that generates these blocks in the spell harness, look at how this info got generated
+
+* Problem
+The user's smol role is configured as `openai-codex/gpt-5.3-codex-spark:off`, but smol utility calls still burn large hidden reasoning output tokens.
+
+Evidence from `/home/user/.spell/logs/spell.2026-06-15*` and `/home/user/.spell/logs/spell.2026-06-16.log`:
+- 2026-06-16 intention cards: 13 calls, 24,331 total tokens, 15,611 output tokens, avg 1,872/call, cost $0.234.
+- 2026-06-15..16 intention cards: 59 calls, 97,803 total tokens, 59,908 output tokens, avg 1,658/call, cost $0.905.
+- A visible ~40-token card (`DID: Replaced data-mcp-* ...`) logged 1,671 total tokens / 1,045 output tokens.
+- `maxTokens: 120` does not cap hidden reasoning usage; output usage includes reasoning/summary tokens.
+
+* Root cause
+`packages/coding-agent/src/thinking.ts::toReasoningEffort` maps `ThinkingLevel.Off` to `undefined`. Smol utility code passes that into `completeSimple`:
+- `packages/coding-agent/src/utils/intention-summarizer.ts`
+- `packages/coding-agent/src/utils/title-generator.ts`
+
+For OpenAI Codex Responses, the provider transform currently does:
+- if `options.reasoningEffort !== undefined`, include `body.reasoning`
+- else delete `body.reasoning`
+
+For Codex, omitted reasoning means provider default reasoning, not no reasoning. The explicit off state is lost before provider serialization.
+
+* Required behavior
+When a caller explicitly configures a role as `:off`, Codex requests must send explicit no-reasoning semantics (`reasoning.effort = "none"`, and no reasoning summary if applicable), instead of omitting the field.
+
+* Acceptance
+- Add regression coverage proving smol `:off` utility calls send Codex no-reasoning rather than omit reasoning.
+- Existing supported-effort validation must still reject unsupported non-off efforts for Codex.
+- Run targeted tests and commit fix.
+
+NOTE [2026-06-16]: Fixed in commit 27deb9c38: explicit smol :off now propagates as disableReasoning, and OpenAI Codex serializes that as reasoning.effort none with null summary. Targeted tests pass.

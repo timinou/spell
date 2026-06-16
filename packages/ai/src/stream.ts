@@ -560,7 +560,8 @@ function mapOptionsForApi<TApi extends Api>(
 		case "openai-codex-responses":
 			return castApi<"openai-codex-responses">({
 				...base,
-				reasoning: resolveOpenAiReasoningEffort(model, options),
+				reasoning: options?.disableReasoning ? "none" : resolveOpenAiReasoningEffort(model, options),
+				reasoningSummary: options?.disableReasoning ? null : undefined,
 				toolChoice: mapOpenAiToolChoice(options?.toolChoice),
 				serviceTier: options?.serviceTier,
 				preferWebsockets: options?.preferWebsockets,

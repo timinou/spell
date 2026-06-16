@@ -531,7 +531,7 @@ async function buildTransformedCodexRequestBody(
 
 	const codexOptions: CodexRequestOptions = {
 		reasoningEffort: options?.reasoning,
-		reasoningSummary: options?.reasoningSummary ?? "auto",
+		reasoningSummary: options?.reasoningSummary === undefined ? "auto" : options.reasoningSummary,
 		textVerbosity: options?.textVerbosity,
 		include: options?.include,
 	};

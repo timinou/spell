@@ -79,6 +79,17 @@ describe("openai-codex request transformer", () => {
 });
 
 describe("openai-codex reasoning effort validation", () => {
+	it("preserves explicit no-reasoning requests", async () => {
+		const body: RequestBody = { model: "gpt-5.3-codex-spark", input: [] };
+
+		const transformed = await transformRequestBody(body, createCodexModel(body.model), {
+			reasoningEffort: "none",
+			reasoningSummary: null,
+		});
+
+		expect(transformed.reasoning).toEqual({ effort: "none", summary: null });
+	});
+
 	it("rejects gpt-5.1 xhigh when metadata does not list it", async () => {
 		const body: RequestBody = { model: "gpt-5.1", input: [] };
 		await expect(

@@ -1,7 +1,7 @@
 /**
  * Generate session titles using a smol, fast model.
  */
-import type { ThinkingLevel } from "@spell/pi-agent-core";
+import { ThinkingLevel } from "@spell/pi-agent-core";
 import type { Api, Model } from "@spell/pi-ai";
 import { completeSimple } from "@spell/pi-ai";
 import { logger } from "@spell/pi-utils";
@@ -96,6 +96,7 @@ ${truncatedMessage}
 				apiKey,
 				maxTokens: 30,
 				reasoning: toReasoningEffort(candidate.thinkingLevel),
+				disableReasoning: candidate.thinkingLevel === ThinkingLevel.Off,
 			},
 		);
 

@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, mock, vi } from "bun:test"
 import { getBundledModel } from "@spell/pi-ai";
 import {
 	generateIntentionSummary,
-	parseIntentionSummaryResponse,
 	type IntentionSummaryInput,
+	parseIntentionSummaryResponse,
 } from "../../src/utils/intention-summarizer";
 
 const completeSimpleMock = vi.fn();
@@ -39,9 +39,7 @@ afterEach(() => {
 
 describe("parseIntentionSummaryResponse", () => {
 	it("parses well-formed three-line output (T1)", () => {
-		const result = parseIntentionSummaryResponse(
-			"DID: Work done\nSTUCK: Blocked on X\nASK: Need your input",
-		);
+		const result = parseIntentionSummaryResponse("DID: Work done\nSTUCK: Blocked on X\nASK: Need your input");
 		expect(result).toEqual({ did: "Work done", stuck: "Blocked on X", ask: "Need your input" });
 	});
 
@@ -138,6 +136,34 @@ describe("generateIntentionSummary", () => {
 			ask: "Review the changes",
 		});
 		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("disables provider reasoning when smol role is explicitly off", async () => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		const settings = createSettings({ smol: `${model.provider}/${model.id}:off` });
+		const registry = {
+			getAvailable: () => [model],
+			getApiKey: async () => "test-key",
+		};
+		completeSimpleMock.mockResolvedValue({
+			stopReason: "end_turn",
+			content: [{ type: "text", text: "DID: Done\nASK: Continue" }],
+		} as never);
+
+		await generateIntentionSummary(
+			{
+				firstUserMessage: "Summarize",
+				recentAssistantTexts: [],
+				inProgressTodoTitles: [],
+			} as IntentionSummaryInput,
+			registry as never,
+			settings,
+		);
+
+		expect(completeSimpleMock.mock.calls[0]?.[2]).toMatchObject({
+			reasoning: undefined,
+			disableReasoning: true,
+		});
 	});
 
 	it("returns null when signal is pre-aborted (T11)", async () => {
