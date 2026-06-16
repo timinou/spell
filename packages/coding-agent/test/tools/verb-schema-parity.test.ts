@@ -57,6 +57,14 @@ test("replace optional fields are accepted", () => {
 		}),
 	).toBe(true);
 	expect(Value.Check(replaceVerb, { kind: "replace", content: "x", place: "after", at: 40 })).toBe(true);
+	expect(Value.Check(replaceVerb, { kind: "replace", content: "x", find: "anchor", place: "after" })).toBe(
+		true,
+	);
+});
+
+test("replace rejects stale optional-field pollution", () => {
+	expect(Value.Check(replaceVerb, { kind: "replace", content: "x", find: "old", place: "end" })).toBe(false);
+	expect(Value.Check(replaceVerb, { kind: "replace", content: "x", find: "old", place: "after", at: 40 })).toBe(false);
 });
 
 test("restructure flattened tagged-union variants validate", () => {

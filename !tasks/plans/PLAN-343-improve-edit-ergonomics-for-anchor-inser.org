@@ -1,0 +1,42 @@
+#+TITLE: Improve edit ergonomics for anchor insert
+#+STATE: DONE
+#+SESSION_ID: 150aa7a6f9a8ddca
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-15T22-31-30-534Z_150aa7a6f9a8ddca.jsonl]]
+#+CUSTOM_ID: PLAN-343-improve-edit-ergonomics-for-anchor-inser
+#+LAYER: coding-agent
+#+PRIORITY: B
+#+TYPE: PLAN
+#+COMPLETION_HASH: b80f43699735a176
+
+* Initial Message
+
+wtf is this error? 
+ Edit
+ ┌─── ✔ replace · crates/pi-kernel/src/parse.rs ─────────────────────────────────────────────────────┐
+ │ replace cannot combine `find` with `place`                                                        │
+ └───────────────────────────────────────────────────────────────
+
+* Goal
+Make `edit` ergonomic for the common operation: find an anchor, then insert content before/after it. Prevent model loops caused by the current `replace` shape rejecting `find` + `place`.
+
+* Observed incident
+Session `/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-15T21-23-37-748Z_150a981da51e09f3.jsonl` emitted 15 failed edit calls combining `find` + `place`. The intent was valid: locate an anchor and insert relative to it. The API made the invalid shape easy to emit and the diagnostic was not corrective.
+
+* Scope
+- Rust lowering: permit `replace { find, place: before|after, content }` as anchor-relative insertion by lowering to existing file/symbol find-replace operations with synthesized replacement content.
+- Diagnostics: keep rejecting nonsensical `find + place:start|end`, but explain both valid alternatives.
+- Prompt/schema docs: document anchor-relative insertion explicitly.
+- Tests: add regression coverage for accepted before/after and rejected start/end.
+
+* Non-goals
+- Do not add a new kernel Op unless existing find-replace lowering cannot express the behavior.
+- Do not rename the public `replace` verb in this wave; explicit `insert` can be a follow-up if schema/tool migration warrants it.
+- Do not make `find` ignored with `place:start|end`; that hides mistakes.
+
+* Verification
+- `cargo test -p pi-code-path replace_find`
+- targeted coding-agent tests if schema/prompt code changes require them
+
+NOTE [2026-06-15]: Implemented anchor-relative edit insertion. Changed `Verb::lower_replace` to allow `find + place:before|after` by synthesizing replacement content that preserves the matched anchor and inserts content before/after it. Kept `find + place:start|end` rejected with a corrective diagnostic. Updated edit prompt and TS schema descriptions. Added Rust regression tests for file-after, symbol-before, and start/end rejection. Verified with exact gate `bun test packages/coding-agent/test/edit.test.ts && cargo test -p pi-code-path replace_find`; also ran `cargo test -p pi-code-path verb::tests`.
+
+NOTE [2026-06-15]: Follow-up hardening after additional session evidence: function-call payloads continued to carry stale `find`/`place` keys even when the model claimed it was sending a minimal line-slice replace. Split `replaceVerb` TypeBox schema into mutually-exclusive variants (simple replace, find-replace, anchor insert, positional insert) so schemas do not advertise all optional keys in one object. Added regression tests that accept anchor insert but reject `find + place:end` and `find + place:after + at` pollution. Verified with `bun test packages/coding-agent/test/tools/verb-schema-parity.test.ts packages/coding-agent/test/edit.test.ts`. Full `bun run check` in packages/coding-agent remains red due unrelated existing test/type errors; no verb-schema errors were present.

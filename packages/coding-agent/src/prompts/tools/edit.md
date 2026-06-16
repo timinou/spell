@@ -49,6 +49,7 @@ Behaviour is selected by the target shape + which fields are present:
 |file::Sym|content, place:before\|after|insert before / after symbol|
 |file::§q[pred]|content (+ $vars)|structural replace ∀ matched|
 |any|find, content|find-and-replace in scope|
+|any|find, content, place:before\|after|insert before / after the matched anchor (`occurrence` selects the match)|
 |file.md::Heading|content|replace block under heading|
 
   find        pattern to locate within the target scope (triggers find-replace)
@@ -62,7 +63,12 @@ Behaviour is selected by the target shape + which fields are present:
 outer braces (C-likes) or `do … end` (Elixir). A braceless body is rejected by
 the post-edit parse gate and never written.
 
-`find` cannot combine with `place`.
+`find` combines with `place:before|after` for anchor-relative insertion: the
+matched anchor remains in place and `content` is inserted before or after it.
+Use `matching:"raw"` for byte-literal anchors like comments/section markers.
+`at` is ignored in this mode because the matched anchor is the position.
+
+`find` cannot combine with `place:start|end`; drop `find` for prepend/append.
 
 ═══════════════════════════════════════════════════════════════════════
 ## rename — identifier-aware
@@ -141,6 +147,7 @@ Escape literal `$` as `$$`. JS `${…}` passes through untouched.
 |find/replace in file|"f.ts"|replace · find, content|
 |literal find/replace|"f.ts"|replace · find, content, matching:"raw"|
 |structural replace ∀ files|"src/**/*.ts::§call[name=console.log]"|replace · content:"logger.info$2" (keeps args)|
+|insert after anchor text|"f.ts"|replace · find:"ANCHOR", place:"after", content:"\nNEW", matching:"raw"|
 |append to file|"f.ts"|replace · place:"end", content|
 |insert after line 40|"f.ts"|replace · place:"after", at:40, content|
 |insert after a symbol|"f.ts::foo"|replace · place:"after", content|

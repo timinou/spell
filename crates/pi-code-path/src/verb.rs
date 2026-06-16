@@ -250,6 +250,26 @@ fn incompatible(detail: impl Into<String>) -> Diagnostic {
 	}
 }
 
+fn anchor_insert_content(
+	find: &ActionContent,
+	content: &ActionContent,
+	place: Place,
+) -> Result<ActionContent, Diagnostic> {
+	match place {
+		Place::Before => {
+			Ok(ActionContent::Single(format!("{}{}", content.join("\n"), find.join("\n"))))
+		},
+		Place::After => {
+			Ok(ActionContent::Single(format!("{}{}", find.join("\n"), content.join("\n"))))
+		},
+		Place::Start | Place::End => Err(incompatible(
+			"replace with `find` can only combine with place:before|after for anchor-relative \
+			 insertion; use place:start|end without `find`, or use find+content without `place` for \
+			 find-and-replace",
+		)),
+	}
+}
+
 // ── Lowering ─────────────────────────────────────────────────────
 
 impl Verb {
@@ -348,10 +368,15 @@ impl Verb {
 		occurrence: Option<Occurrence>,
 	) -> Result<Op, Diagnostic> {
 		// 1. find-and-replace within scope — symbol vs file by target shape.
+		// With place:before|after, the same mechanism becomes anchor-relative
+		// insertion: replace the matched anchor with `content + anchor` or `anchor +
+		// content`.
 		if let Some(find) = find {
-			if place.is_some() {
-				return Err(incompatible("replace cannot combine `find` with `place`"));
-			}
+			let content = if let Some(place) = place {
+				anchor_insert_content(&find, &content, place)?
+			} else {
+				content
+			};
 			let is_symbol = target.has_target_query() && css_selector(target).is_none();
 			return Ok(match (is_symbol, matching) {
 				(true, Matching::Structural) => Op::SymbolFindReplace {
@@ -716,18 +741,67 @@ mod tests {
 	}
 
 	#[test]
-	fn replace_find_with_place_is_rejected() {
+	fn replace_find_with_place_after_file_inserts_after_anchor() {
+		let op = Verb::Replace {
+			content:    single("\nnew"),
+			find:       Some(single("anchor")),
+			matching:   Matching::Raw,
+			place:      Some(Place::After),
+			at:         Some(99),
+			occurrence: Some(Occurrence::First),
+		}
+		.lower(&cp("foo.ts"))
+		.unwrap();
+
+		match op {
+			Op::FileRawTextReplace { find, content, occurrence, .. } => {
+				assert_eq!(find, single("anchor"));
+				assert_eq!(content, single("anchor\nnew"));
+				assert_eq!(occurrence, Some(Occurrence::First));
+			},
+			other => panic!("{other:?}"),
+		}
+	}
+
+	#[test]
+	fn replace_find_with_place_before_symbol_inserts_before_anchor() {
+		let op = Verb::Replace {
+			content:    single("new\n"),
+			find:       Some(single("anchor")),
+			matching:   Matching::Structural,
+			place:      Some(Place::Before),
+			at:         None,
+			occurrence: Some(Occurrence::Last),
+		}
+		.lower(&cp("foo.ts::bar"))
+		.unwrap();
+
+		match op {
+			Op::SymbolFindReplace { find, content, occurrence, .. } => {
+				assert_eq!(find, single("anchor"));
+				assert_eq!(content, single("new\nanchor"));
+				assert_eq!(occurrence, Some(Occurrence::Last));
+			},
+			other => panic!("{other:?}"),
+		}
+	}
+
+	#[test]
+	fn replace_find_with_place_start_or_end_is_rejected() {
 		let err = Verb::Replace {
 			content:    single("x"),
 			find:       Some(single("y")),
 			matching:   Matching::Structural,
 			place:      Some(Place::End),
-			at:         None,
+			at:         Some(1),
 			occurrence: None,
 		}
 		.lower(&cp("foo.ts"))
 		.unwrap_err();
+
 		assert_eq!(err.variant, DiagnosticVariant::IncompatibleTargetShape);
+		assert!(err.message.contains("place:before|after"), "{}", err.message);
+		assert!(err.message.contains("place:start|end without `find`"), "{}", err.message);
 	}
 
 	// ── rename ──

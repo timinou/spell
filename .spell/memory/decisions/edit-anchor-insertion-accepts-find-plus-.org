@@ -1,0 +1,13 @@
+#+TITLE: edit-anchor-insertion-accepts-find-plus-
+
+** ITEM Edit anchor insertion accepts find plus place before/after
+:PROPERTIES:
+:CUSTOM_ID: DEC-edit-anchor-insertion-accepts-find-plus-
+:KIND: decision
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-15T22:51:50Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-343-improve-edit-ergonomics-for-anchor-inser
+:END:
+2026-06-15 decision: `edit` replace now treats `find + place:before|after` as anchor-relative insertion instead of rejecting it. The model failure mode was repeated/stale optional fields (`find` plus `place`) when trying to express “find this anchor, insert near it”. Kernel lowering synthesizes a find-replace payload preserving the anchor: before => content+find, after => find+content. `find + place:start|end` remains rejected with a corrective diagnostic. Prompt/schema docs include the anchor-insert idiom.

@@ -16,35 +16,74 @@ import { contentSchema, directionSchema, occurrenceSchema, spliceModeSchema } fr
 
 // ── replace ──
 // The workhorse: overwrite / body / sig / find-replace / structural / line-
-// range / insert / heading-block — selected by target shape + which optional
-// fields are present.
-export const replaceVerb = Type.Object(
-	{
-		kind: Type.Literal("replace"),
-		content: contentSchema,
-		find: Type.Optional(
-			Type.Union([contentSchema], { description: "Pattern to locate within the target scope (find-and-replace)" }),
+// range / insert / heading-block. Keep the schema as mutually-exclusive shapes
+// instead of one bag of optional fields: function-call decoders otherwise tend
+// to carry stale `find`/`place` keys across retries.
+const matchingSchema = Type.Union([Type.Literal("structural"), Type.Literal("raw")], {
+	description: "structural (default, tree-sitter/word-boundary aware) | raw (byte-literal)",
+});
+const placeSchema = Type.Union([Type.Literal("start"), Type.Literal("end"), Type.Literal("before"), Type.Literal("after")], {
+	description: "Insertion mode: start|end (file prepend/append) · before|after (symbol or file line with `at`)",
+});
+const anchorPlaceSchema = Type.Union([Type.Literal("before"), Type.Literal("after")], {
+	description: "Anchor-relative insertion mode: insert before/after the matched `find` text",
+});
+
+export const replaceVerb = Type.Union(
+	[
+		Type.Object(
+			{
+				kind: Type.Literal("replace"),
+				content: contentSchema,
+			},
+			{
+				additionalProperties: false,
+				description: "Replace target content (file overwrite, line range, symbol body/signature, heading block)",
+			},
 		),
-		matching: Type.Optional(
-			Type.Union([Type.Literal("structural"), Type.Literal("raw")], {
-				description: "structural (default, tree-sitter/word-boundary aware) | raw (byte-literal)",
-			}),
+		Type.Object(
+			{
+				kind: Type.Literal("replace"),
+				find: Type.Union([contentSchema], { description: "Pattern to locate within the target scope" }),
+				content: contentSchema,
+				matching: Type.Optional(matchingSchema),
+				occurrence: Type.Optional(occurrenceSchema),
+			},
+			{
+				additionalProperties: false,
+				description: "Find-and-replace within the target scope",
+			},
 		),
-		place: Type.Optional(
-			Type.Union([Type.Literal("start"), Type.Literal("end"), Type.Literal("before"), Type.Literal("after")], {
-				description:
-					"Insertion mode: start|end (file prepend/append) · before|after (symbol or, with `at`, a file line)",
-			}),
+		Type.Object(
+			{
+				kind: Type.Literal("replace"),
+				find: Type.Union([contentSchema], { description: "Anchor text to preserve" }),
+				place: anchorPlaceSchema,
+				content: contentSchema,
+				matching: Type.Optional(matchingSchema),
+				occurrence: Type.Optional(occurrenceSchema),
+			},
+			{
+				additionalProperties: false,
+				description: "Insert content before/after a matched anchor; `occurrence` selects the anchor",
+			},
 		),
-		at: Type.Optional(
-			Type.Integer({ minimum: 1, description: "1-indexed line anchor for place:before|after on a file target" }),
+		Type.Object(
+			{
+				kind: Type.Literal("replace"),
+				place: placeSchema,
+				content: contentSchema,
+				at: Type.Optional(
+					Type.Integer({ minimum: 1, description: "1-indexed line anchor for place:before|after on a file target" }),
+				),
+			},
+			{
+				additionalProperties: false,
+				description: "Insert/prepend/append content by target position (no find anchor)",
+			},
 		),
-		occurrence: Type.Optional(occurrenceSchema),
-	},
-	{
-		additionalProperties: false,
-		description: "Replace / insert / find-replace — behaviour selected by target shape + fields",
-	},
+	],
+	{ description: "Replace / insert / find-replace — mutually-exclusive shapes prevent stale optional fields" },
 );
 
 // ── rename ──
