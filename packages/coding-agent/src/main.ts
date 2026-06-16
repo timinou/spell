@@ -1091,7 +1091,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		return;
 	}
 
-	await runPrintMode(session, {
+	const printExitCode = await runPrintMode(session, {
 		mode: startupRoute.mode,
 		messages: parsedArgs.messages,
 		initialMessage,
@@ -1099,7 +1099,7 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	});
 	await session.dispose();
 	stopThemeWatcher();
-	await postmortem.quit(0);
+	await postmortem.quit(printExitCode);
 }
 
 export async function main(args: string[]): Promise<void> {

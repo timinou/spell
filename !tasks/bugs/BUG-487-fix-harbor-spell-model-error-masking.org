@@ -1,0 +1,55 @@
+#+TITLE: Fix Harbor Spell model-error masking
+#+STATE: DONE
+#+SESSION_ID: 150aaaa4118f4c9c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-15T22-44-33-990Z_150aaaa4118f4c9c.jsonl]]
+#+CUSTOM_ID: BUG-487-fix-harbor-spell-model-error-masking
+#+LAYER: harbor
+#+PRIORITY: A
+#+COMPLETION_HASH: d324c9f113e918fd
+
+* Initial Message
+
+adhoc • spell • gpt-5.5
+┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┓
+┃ Trials ┃ Exceptions ┃  Mean ┃
+┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━┩
+│      1 │          1 │ 0.000 │
+└────────┴────────────┴───────┘
+
+┏━━━━━━━━┳━━━━━━━┓
+┃ Reward ┃ Count ┃
+┡━━━━━━━━╇━━━━━━━┩
+│ 0.0    │     1 │
+└────────┴───────┘
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┓
+┃ Exception                 ┃ Count ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━┩
+│ NonZeroAgentExitCodeError │     1 │
+└───────────────────────────┴───────┘
+
+Job Info
+Total runtime: 13m 40s
+Results written to jobs/2026-06-15__23-29-40/result.json
+Inspect results by running `harbor view jobs`
+Share results by running `harbor upload jobs/2026-06-15__23-29-40`
+
+explain what happened
+
+* Problem
+Harbor trials with `spell --domain harbor -p --mode json` can fail model transport (`stopReason: "error"`, e.g. `Unable to connect. Is the computer able to access the url?`) while the Spell CLI exits 0. The Harbor adapter then proceeds to deliverable smoke gates and reports a secondary missing-file/non-zero smoke exception, hiding the real root cause.
+
+* Goals
+- `spell -p --mode json` must exit non-zero when the final assistant message is an error/aborted transport failure.
+- `spell_harbor.spell_agent.SpellAgent` must classify transcript model errors before missing-path/smoke gates and raise a clear Harbor exception with the provider/model/error tail.
+- Add focused regression coverage.
+
+* Evidence
+Observed failed trial `jobs/2026-06-15__23-29-40/filter-js-from-html__fx9yLBD`: transcript has repeated OpenAI Codex `stopReason: "error"` with `Unable to connect...`; artifact metadata has `spell_exit_code: 0`; smoke fails because `/app/filter.py` is absent.
+
+* Acceptance
+- Targeted tests pass.
+- Code path prevents smoke/missing-file masking when transcript records assistant `stopReason: "error"`.
+- Final explanation includes commands run and any unverified surfaces.
+
+NOTE [2026-06-16]: Implemented fix. `runPrintMode` now returns non-zero for assistant `stopReason: error|aborted` in both text and JSON modes, and `runRootCommand` passes that code to `postmortem.quit`. Added `spell_harbor.transcript` parser; Harbor adapter now detects transcript assistant/model failures and raises them before missing-path or smoke gates. Verification: targeted Bun print-mode tests, Python transcript unittest, and Python compile gate passed. Package-wide `bun run --cwd packages/coding-agent check` was attempted but currently fails on unrelated existing TS test errors; no errors referenced touched print/main files.

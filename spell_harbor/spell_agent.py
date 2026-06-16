@@ -24,10 +24,12 @@ import os
 import re
 import shlex
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from harbor.agents.installed.base import BaseInstalledAgent, with_prompt_template
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
+from spell_harbor.transcript import TranscriptFailure, parse_transcript, parse_transcript_failure
 
 # Spell's config root in the container. Layout MUST mirror a real install
 # (verified end-to-end in ubuntu:24.04):
@@ -98,6 +100,28 @@ _PROVIDER_ENV_NAMES = (
     "VOYAGE_API_KEY",
 )
 
+# Default model-API hosts per provider, for the fail-fast connectivity precheck.
+# Only providers whose host is verified against pi-ai source are listed; unknown
+# providers skip the precheck (never gate on a guess). openai-codex uses a
+# hardcoded CODEX_BASE_URL (chatgpt.com), not an env var.
+_PROVIDER_API_HOSTS = {
+    "openai-codex": "chatgpt.com",  # packages/ai/.../openai-codex/constants.ts
+    "openai": "api.openai.com",
+    "anthropic": "api.anthropic.com",
+    "zai": "api.z.ai",  # provider-models/openai-compat.ts
+    "groq": "api.groq.com",
+    "cerebras": "api.cerebras.ai",
+    "together": "api.together.xyz",
+    "xai": "api.x.ai",
+    "mistral": "api.mistral.ai",
+}
+# Providers whose base URL a forwarded env var can override. When set, the
+# override host wins — it's where Spell will actually dial.
+_PROVIDER_BASE_URL_ENV = {
+    "anthropic": "ANTHROPIC_BASE_URL",
+    "openai": "OPENAI_BASE_URL",
+}
+
 # Host dir holding the built dist (binary + domain spec). Built by
 # spell_harbor/build-portable-native.sh. Override with SPELL_DIST_DIR.
 _DIST_DIR = Path(os.environ.get("SPELL_DIST_DIR") or (Path(__file__).parent / "dist"))
@@ -110,29 +134,45 @@ def _merge_metadata(context: AgentContext, values: dict[str, object]) -> None:
     context.metadata.update(values)
 
 
-def _parse_transcript(raw: str) -> tuple[str | None, dict[str, int]]:
-    """Extract final assistant text + additive usage from Spell JSONL.
+def _set_context_output(context: AgentContext, output: str) -> None:
+    """Store final assistant text across Harbor AgentContext API versions."""
+    set_output = getattr(context, "set_output", None)
+    if callable(set_output):
+        set_output(output)
+        return
+    _merge_metadata(context, {"output": output})
 
-    The transcript intentionally captures stderr too, so tolerate non-JSON lines.
+
+def _host_from_url(url: str) -> str | None:
+    """Extract the hostname from a base-URL string."""
+    return urlsplit(url).hostname or None
+
+
+def _model_api_hosts(model: str) -> list[str]:
+    """Resolve the API host(s) Spell dials for this provider/model.
+
+    Best-effort: derived from the provider prefix plus any forwarded base-URL
+    env override. Loopback hosts are dropped (localhost proxies are
+    environment-specific and can't be probed generically from the agent
+    process). Returns [] for unknown providers so the precheck skips rather
+    than gates on a guess.
     """
-    last_text: str | None = None
-    usage: dict[str, int] = {}
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if event.get("type") == "assistant" and isinstance(event.get("text"), str):
-            last_text = event["text"]
-        ev_usage = event.get("usage")
-        if isinstance(ev_usage, dict):
-            for key, value in ev_usage.items():
-                if isinstance(value, int):
-                    usage[key] = usage.get(key, 0) + value
-    return last_text, usage
+    provider = model.split("/", 1)[0].lower() if "/" in model else ""
+    if not provider:
+        return []
+    host = _PROVIDER_API_HOSTS.get(provider)
+    env_name = _PROVIDER_BASE_URL_ENV.get(provider)
+    if env_name:
+        base = os.environ.get(env_name)
+        if base:
+            host = _host_from_url(base)
+    if not host:
+        return []
+    # Skip loopback: localhost proxies (e.g. ANTHROPIC_BASE_URL=http://localhost:8080)
+    # are container/host-specific and not reliably probeable from the agent process.
+    if host in ("localhost", "127.0.0.1", "::1") or host.startswith("127."):
+        return []
+    return [host]
 
 
 def _provider_env_exports() -> str:
@@ -310,6 +350,11 @@ class SpellAgent(BaseInstalledAgent):
         _merge_metadata(context, {"model": model, "artifact_dir": ARTIFACT_DIR})
         await self._prepare_artifact_dir(environment, model)
 
+        # Fail fast on a dead model API connection: without this, an unreachable
+        # provider endpoint silently burns the full agent budget (Bun fetch hangs
+        # ~13 min/attempt × 3 retries) and surfaces only as an opaque timeout.
+        await self._precheck_connectivity(environment, model)
+
         # PI_CODING_AGENT_DIR points Spell at the uploaded agent.db (login).
         spell_cmd = (
             f"PI_CODING_AGENT_DIR={shlex.quote(CONTAINER_AGENT_DIR)} "
@@ -346,9 +391,29 @@ class SpellAgent(BaseInstalledAgent):
             self._populate_context_from_raw(context, raw)
         else:
             _merge_metadata(context, {"transcript_missing": True})
+        transcript_failure = parse_transcript_failure(raw) if raw else None
+        if transcript_failure is not None:
+            _merge_metadata(context, {"transcript_failure": transcript_failure.to_metadata()})
 
         required_paths = _required_absolute_paths(instruction)
         await self._capture_solution_state(environment, required_paths)
+
+        if transcript_failure is not None:
+            tail = await self._tail_transcript(environment)
+            await self._write_run_metadata(
+                environment,
+                model,
+                return_code,
+                required_paths,
+                failed=True,
+                transcript_failure=transcript_failure,
+            )
+            raise RuntimeError(
+                "Spell assistant/model call failed before completing the Harbor task.\n"
+                f"Failure: {transcript_failure.format()}\n"
+                f"Transcript: {TRANSCRIPT_PATH}\n"
+                f"Last transcript lines:\n{tail}"
+            )
 
         if return_code != 0:
             tail = await self._tail_transcript(environment)
@@ -391,11 +456,11 @@ class SpellAgent(BaseInstalledAgent):
             return
 
     def _populate_context_from_raw(self, context: AgentContext, raw: str) -> None:
-        last_text, usage = _parse_transcript(raw)
+        last_text, usage = parse_transcript(raw)
         if last_text is not None:
-            context.set_output(last_text)
+            _set_context_output(context, last_text)
         if usage:
-            context.metadata.setdefault("usage", usage)
+            _merge_metadata(context, {"usage": usage})
 
     async def _prepare_artifact_dir(self, environment: BaseEnvironment, model: str) -> None:
         metadata = {"model": model, "spell_bin": SPELL_BIN, "transcript": TRANSCRIPT_PATH}
@@ -406,6 +471,55 @@ class SpellAgent(BaseInstalledAgent):
             "EOF\n"
         )
         await self.exec_as_agent(environment, command=f"sh -lc {shlex.quote(script)}")
+
+    async def _precheck_connectivity(
+        self, environment: BaseEnvironment, model: str, timeout_sec: float = 12.0
+    ) -> None:
+        """Fail fast if the model's API host is unreachable from the container.
+
+        Without this, a dead/black-holed provider connection silently burns the
+        entire agent budget: Bun's native fetch hangs ~13 min per attempt, and
+        Spell's 3 auto-retries consume the full 1800s wall before surfacing as an
+        opaque AgentTimeoutError. The precheck turns that into a ~12s clear
+        exception so the trial records a network failure, not a silent timeout.
+
+        Best-effort: only probes providers with a known API host; unknown
+        providers are skipped (never gate on a guess). Uses python (guaranteed
+        present in Terminal-Bench containers) for a plain TCP-connect probe.
+        """
+        hosts = _model_api_hosts(model)
+        if not hosts:
+            return
+        hosts_repr = repr(hosts)
+        probe = (
+            "python - <<'PY'\n"
+            "import socket, sys\n"
+            f"hosts = {hosts_repr}\n"
+            f"timeout = {timeout_sec}\n"
+            "dead = []\n"
+            "for h in hosts:\n"
+            "    try:\n"
+            "        socket.create_connection((h, 443), timeout=timeout).close()\n"
+            "    except OSError as e:\n"
+            "        dead.append(f'{h}: {e}')\n"
+            "if dead:\n"
+            "    print('UNREACHABLE: ' + '; '.join(dead), file=sys.stderr)\n"
+            "    sys.exit(1)\n"
+            "PY"
+        )
+        result = await self.exec_as_agent(
+            environment, command=f"sh -lc {shlex.quote(probe)}"
+        )
+        if getattr(result, "return_code", 1) != 0:
+            stderr = str(getattr(result, "stderr", "") or "").strip()
+            raise RuntimeError(
+                f"SpellAgent network precheck FAILED: model API host(s) for "
+                f"{model!r} ({', '.join(hosts)}) unreachable on :443 within "
+                f"{timeout_sec:.0f}s from the task container. The provider "
+                f"endpoint is not reachable — without this check the run would "
+                f"hang until the agent timeout. Verify container network/DNS/"
+                f"egress to the provider endpoint. Detail: {stderr}"
+            )
 
     async def _read_exit_code(self, environment: BaseEnvironment) -> int:
         result = await self.exec_as_agent(
@@ -536,6 +650,7 @@ raise SystemExit(0 if ok else 7)
         failed: bool = False,
         missing_paths: list[str] | None = None,
         smoke: dict[str, object] | None = None,
+        transcript_failure: TranscriptFailure | None = None,
     ) -> None:
         metadata = {
             "model": model,
@@ -546,6 +661,8 @@ raise SystemExit(0 if ok else 7)
             "smoke": smoke or {},
             "failed": failed,
         }
+        if transcript_failure is not None:
+            metadata["transcript_failure"] = transcript_failure.to_metadata()
         script = (
             f"cat > {shlex.quote(RUN_METADATA_PATH)} <<'EOF'\n"
             f"{json.dumps(metadata, sort_keys=True)}\n"

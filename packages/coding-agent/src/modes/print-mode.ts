@@ -23,11 +23,20 @@ export interface PrintModeOptions {
 	initialImages?: ImageContent[];
 }
 
+export function getPrintModeFailureMessage(
+	messages: readonly { role?: string; stopReason?: string; errorMessage?: string }[],
+): string | undefined {
+	const lastMessage = messages[messages.length - 1];
+	if (lastMessage?.role !== "assistant") return undefined;
+	if (lastMessage.stopReason !== "error" && lastMessage.stopReason !== "aborted") return undefined;
+	return lastMessage.errorMessage || `Request ${lastMessage.stopReason}`;
+}
+
 /**
  * Run in print (single-shot) mode.
  * Sends prompts to the agent and outputs the result.
  */
-export async function runPrintMode(session: AgentSession, options: PrintModeOptions): Promise<void> {
+export async function runPrintMode(session: AgentSession, options: PrintModeOptions): Promise<number> {
 	const { mode, messages = [], initialMessage, initialImages } = options;
 
 	// Emit session header for JSON mode
@@ -165,6 +174,8 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 		await session.prompt(message);
 	}
 
+	const failureMessage = getPrintModeFailureMessage(session.state.messages);
+
 	// In text mode, output final response
 	if (mode === "text") {
 		const state = session.state;
@@ -173,16 +184,14 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 		if (lastMessage?.role === "assistant") {
 			const assistantMsg = lastMessage as AssistantMessage;
 
-			// Check for error/aborted
-			if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-				process.stderr.write(`${assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`}\n`);
-				process.exit(1);
-			}
-
-			// Output text content
-			for (const content of assistantMsg.content) {
-				if (content.type === "text") {
-					process.stdout.write(`${content.text}\n`);
+			if (failureMessage) {
+				process.stderr.write(`${failureMessage}\n`);
+			} else {
+				// Output text content
+				for (const content of assistantMsg.content) {
+					if (content.type === "text") {
+						process.stdout.write(`${content.text}\n`);
+					}
 				}
 			}
 		}
@@ -198,4 +207,5 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 	});
 
 	await session.dispose();
+	return failureMessage ? 1 : 0;
 }
