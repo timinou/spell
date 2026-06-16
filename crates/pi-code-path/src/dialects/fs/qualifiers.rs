@@ -43,7 +43,8 @@ pub fn resolve(node: &NodeRef, qual: &Qualifier, root: &Path) -> Result<Vec<Node
 ///   `hidden`   — include dotfiles / hidden entries (default: excluded)
 ///   `all`      — shorthand for `ignored hidden`
 ///
-/// Examples: `#tree[depth=2]`, `#tree[ignored]`, `#tree[depth=3 ignored hidden]`.
+/// Examples: `#tree[depth=2]`, `#tree[ignored]`, `#tree[depth=3 ignored
+/// hidden]`.
 struct WalkFlags {
 	max_depth:       usize,
 	include_ignored: bool,
@@ -59,7 +60,10 @@ fn parse_walk_flags(args: Option<&str>, default_depth: usize) -> WalkFlags {
 		if tok.is_empty() {
 			continue;
 		}
-		if let Some(n) = tok.strip_prefix("depth=").or_else(|| tok.strip_prefix("depth =")) {
+		if let Some(n) = tok
+			.strip_prefix("depth=")
+			.or_else(|| tok.strip_prefix("depth ="))
+		{
 			if let Ok(d) = n.trim().parse::<usize>() {
 				flags.max_depth = d;
 			}
@@ -141,7 +145,11 @@ fn walk_fs_nodes(
 				span:    None,
 			});
 		}
-		let kind = if base_meta.is_symlink() { "§symlink" } else { "§file" };
+		let kind = if base_meta.is_symlink() {
+			"§symlink"
+		} else {
+			"§file"
+		};
 		let mut metadata = HashMap::new();
 		metadata.insert("depth".to_string(), serde_json::Value::from(0u64));
 		if let Some(name) = base_path.file_name() {
@@ -203,7 +211,9 @@ fn walk_fs_nodes(
 			continue;
 		}
 		let abs = entry.path();
-		let rel_from_base = abs.strip_prefix(&full_path).unwrap_or_else(|_| Path::new(""));
+		let rel_from_base = abs
+			.strip_prefix(&full_path)
+			.unwrap_or_else(|_| Path::new(""));
 		let display = if rel_from_base.as_os_str().is_empty() {
 			base_path.to_path_buf()
 		} else {
@@ -472,8 +482,7 @@ mod tests {
 			"hidden excluded by default: {locators:?}"
 		);
 
-		let qual_hidden =
-			Qualifier { name: "tree".to_string(), args: Some("hidden".to_string()) };
+		let qual_hidden = Qualifier { name: "tree".to_string(), args: Some("hidden".to_string()) };
 		let with_hidden = resolve(&n, &qual_hidden, &root).unwrap();
 		assert!(
 			with_hidden.iter().any(|r| r.locator.ends_with(".hidden")),

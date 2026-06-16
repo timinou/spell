@@ -60,6 +60,11 @@ target as header-path + row, e.g. header `foo.ts` + row `::Bar.method` →
 `file::Sym#body`, edit it with `edit { target: "file::Sym#body" }`. Reach for
 `#raw` only when you truly need the full text, and `:A-B` line slices only as a
 last resort — they drift and review worse than symbol targets.
+
+Multi-file code hits are symbol-aware when the kernel can resolve an enclosing
+symbol: output groups as `path` → `::Symbol` → line hits, with `::<file>` for
+top-level hits. Recompose the editable target the same way: header path + symbol
+header, then use the shown line only as local context.
 </symbol-first>
 
 <!-- @generated:find-recipes -→

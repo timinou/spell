@@ -37,13 +37,31 @@ impl EdgeResolverImpl {
 			// results later without repeatedly scanning the graph.
 			if let Some(node) = g.node_weight(idx) {
 				let node_ref = match node {
-					GraphNode::Symbol(sym) => NodeRef {
-						locator:     format!("{}:{}", sym.file.display(), sym.line),
-						range:       0..0,
-						kind:        format!("{:?}", sym.kind).to_ascii_lowercase(),
-						content:     None,
-						metadata:    Default::default(),
-						diagnostics: Vec::new(),
+					GraphNode::Symbol(sym) => {
+						let mut metadata = HashMap::new();
+						let file_prefix = format!("{}::", sym.file.display());
+						let symbol_path = sym
+							.qualified_name
+							.strip_prefix(&file_prefix)
+							.unwrap_or(&sym.qualified_name);
+						metadata.insert(
+							"symbolPath".to_string(),
+							serde_json::Value::String(symbol_path.to_string()),
+						);
+						metadata.insert(
+							"symbolKind".to_string(),
+							serde_json::Value::String(format!("{:?}", sym.kind).to_ascii_lowercase()),
+						);
+						metadata
+							.insert("symbolLine".to_string(), serde_json::Value::Number(sym.line.into()));
+						NodeRef {
+							locator: format!("{}:{}", sym.file.display(), sym.line),
+							range: 0..0,
+							kind: format!("{:?}", sym.kind).to_ascii_lowercase(),
+							content: None,
+							metadata,
+							diagnostics: Vec::new(),
+						}
 					},
 					GraphNode::File(file) => NodeRef {
 						locator:     file.path.display().to_string(),
@@ -536,6 +554,20 @@ mod tests {
 			.unwrap();
 		assert_eq!(results.len(), 1);
 		assert_eq!(results[0].locator, "src/b.ts:1");
+		assert_eq!(
+			results[0]
+				.metadata
+				.get("symbolPath")
+				.and_then(serde_json::Value::as_str),
+			Some("b1")
+		);
+		assert_eq!(
+			results[0]
+				.metadata
+				.get("symbolLine")
+				.and_then(serde_json::Value::as_u64),
+			Some(1)
+		);
 	}
 
 	#[test]

@@ -204,7 +204,9 @@ fn collapse_to_top_dirs(nodes: Vec<NodeRef>) -> Vec<NodeRef> {
 		return nodes;
 	}
 	fn segments(loc: &str) -> Vec<&str> {
-		loc.split('/').filter(|s| !s.is_empty() && *s != ".").collect()
+		loc.split('/')
+			.filter(|s| !s.is_empty() && *s != ".")
+			.collect()
 	}
 	fn is_ancestor(anc: &[&str], desc: &[&str]) -> bool {
 		anc.len() < desc.len() && desc.starts_with(anc)
@@ -218,9 +220,10 @@ fn collapse_to_top_dirs(nodes: Vec<NodeRef>) -> Vec<NodeRef> {
 			continue;
 		}
 		// Drop this node if any OTHER fs node is a strict path ancestor of it.
-		let contained = nodes.iter().enumerate().any(|(j, other)| {
-			j != i && is_fs(&other.kind) && is_ancestor(&seg_list[j], &seg_list[i])
-		});
+		let contained = nodes
+			.iter()
+			.enumerate()
+			.any(|(j, other)| j != i && is_fs(&other.kind) && is_ancestor(&seg_list[j], &seg_list[i]));
 		keep.push(!contained);
 	}
 	nodes

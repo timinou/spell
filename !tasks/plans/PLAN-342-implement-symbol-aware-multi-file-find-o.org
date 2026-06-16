@@ -1,0 +1,122 @@
+#+TITLE: Implement symbol-aware multi-file find output
+#+STATE: DONE
+#+SESSION_ID: 150a981da51e09f3
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-15T21-23-37-748Z_150a981da51e09f3.jsonl]]
+#+CUSTOM_ID: PLAN-342-implement-symbol-aware-multi-file-find-o
+#+LAYER: tooling
+#+PRIORITY: A
+#+SOURCE_FEAT: FEAT-820-review-find-formatter-variants-for-symbo
+
+* Initial Message
+
+i want the find tool to output symbols also during multi-file hits, and efficiently, and consistently across the variatns.
+
+e.g. first line i
+
+/.../...rs
+::Symbol (if several lines hit or several symbols hit within one file, otherwise full codepath on one line)
+<lineno>: ...
+
+or something like that. what do you think?
+
+* Goal
+
+Make `find`/CodePath location-style output carry and render enclosing symbols for multi-file hits consistently and efficiently.
+
+Desired model-facing shape for grep-like hits:
+
+#+begin_src text
+path/to/file.ts
+::Symbol
+  42:  matching line
+  47:  another hit
+
+::<file>
+  12:  top-level hit
+#+end_src
+
+For structural nodes with content:
+
+#+begin_src text
+path/to/file.ts
+::Symbol   [§function_declaration] L42
+function Symbol() { ... }
+#+end_src
+
+* Non-goals
+
+- No TypeScript-side parsing or alternate CodePath resolver.
+- No prompt inline strings generated in code beyond formatter literals.
+- No behavioral changes for filesystem listing/stat/tree/image outputs.
+- No git commit.
+
+* Architecture
+
+Producer metadata in Rust, renderer grouping in TypeScript.
+
+** Metadata contract
+
+Location-style `NodeRef.metadata` may include:
+
+- `symbolPath` — copy-pasteable symbol path without file prefix, e.g. `Foo.bar`, for nodes that are themselves symbols.
+- `symbolKind` — source symbol kind from outline/graph.
+- `symbolLine` — symbol declaration line.
+- `enclosingSymbolPath` — nearest/smallest enclosing named symbol for non-symbol hits.
+- `enclosingSymbolLine` — enclosing symbol declaration line.
+
+The renderer chooses `symbolPath` first, then `enclosingSymbolPath`, then `::<file>` fallback.
+
+** Rust enrichment
+
+- `crates/pi-kernel/src/walker.rs`: code resolver already parses each file once. Build outline entries from the same root/source/profile once per resolve, then attach symbol metadata to every query result using an interval lookup over outline byte/line spans.
+- `crates/pi-kernel/src/parse.rs`: pure text grep returns line nodes from `TextResolver`. Enrich only `shape=match` nodes after text resolution. Group hits by file, parse each code file at most once through the existing `CodeResolverImpl` outline path/registry helper, then attach nearest enclosing symbol by line. Non-code files remain unchanged.
+- `crates/pi-kernel/src/edge_resolver.rs`: graph symbols already know `qualified_name`, `kind`, and `line`; attach `symbolPath` metadata when converting graph symbols to `NodeRef`.
+
+** TypeScript rendering
+
+- `packages/coding-agent/src/tools/codepath-result.ts`: extend match grouping from `path -> hit` to `path -> symbol -> hit` when symbol metadata is present, with `::<file>` fallback for top-level/no-symbol rows.
+- Group structural/content nodes by `path -> symbol` when symbol metadata exists; preserve legacy generic node-list fallback when no symbol metadata exists.
+- Include symbol metadata in `CodePathNodeData` for programmatic consumers.
+
+* Test plan
+
+- `packages/coding-agent/test/codepath-result.test.ts`: unit coverage for symbol-grouped match rows, top-level fallback, mixed symbol groups, structural node symbol header, and data projection.
+- `crates/pi-kernel/src/walker.rs` tests: structural query metadata for a call inside a function and a top-level declaration symbol.
+- `crates/pi-kernel/src/parse.rs` or adjacent tests: grep match line inside function receives enclosing symbol metadata, code file parsed once per file by construction.
+- `crates/pi-kernel/src/edge_resolver.rs` tests: graph edge output carries `symbolPath`/`symbolLine`.
+
+* Verification
+
+Run focused formatter/kernel tests for touched areas and type/check gates appropriate to scope, respecting repo command guidance.
+
+* Implementation result 2026-06-15
+
+Changed files:
+- `crates/pi-kernel/src/walker.rs`
+  - Builds symbol spans from the already-parsed tree using `outline_from_root`.
+  - Attaches `symbolPath`/`symbolKind`/`symbolLine` or `enclosingSymbolPath`/`enclosingSymbolKind`/`enclosingSymbolLine` to code resolver results.
+  - Adds a named-node fallback for declaration-like nodes with a `name` field.
+  - Adds unit coverage for symbol span extraction and call-expression enclosing metadata.
+- `crates/pi-kernel/src/parse.rs`
+  - Enriches text match (`shape=match`) nodes after `TextResolver` returns, parsing each matched code file at most once via a per-file symbol-span cache.
+  - Adds unit coverage for `a.ts::§line[text~="TODO"]` receiving enclosing symbol metadata.
+- `crates/pi-kernel/src/edge_resolver.rs`
+  - Preserves graph symbol identity in `NodeRef.metadata` (`symbolPath`, `symbolKind`, `symbolLine`).
+  - Adds unit coverage on graph edge results.
+- `packages/coding-agent/src/tools/codepath-result.ts`
+  - Match rows now render as `path → ::Symbol → line` when symbol metadata exists; legacy file-heading shape remains for nodes without symbol metadata.
+  - Symbol-aware non-match nodes render symbol headers.
+  - `CodePathNodeData` now projects symbol metadata for programmatic consumers.
+- `packages/coding-agent/test/codepath-result.test.ts`
+  - Adds formatter tests for symbol-grouped matches, structural symbol headers, and data projection.
+- `packages/coding-agent/src/prompts/tools/find.md`
+  - Documents symbol-aware multi-file hit grouping.
+- `packages/coding-agent/CHANGELOG.md`
+  - Adds PLAN-342 Unreleased entry.
+
+Verification:
+- `cargo test -p pi-kernel` → PASS (56 tests).
+- `bun test packages/coding-agent/test/codepath-result.test.ts` → PASS (19 tests, 30 assertions).
+- `bunx biome check packages/coding-agent/src/tools/codepath-result.ts packages/coding-agent/test/codepath-result.test.ts packages/coding-agent/src/prompts/tools/find.md packages/coding-agent/CHANGELOG.md` → PASS for checked TS files (Biome checked 2 TS files; markdown ignored by config).
+- `bun check:ts` → FAIL due pre-existing/unrelated repo-wide Biome formatting issues outside touched files (first failures under `packages/agent/test/...`, `packages/ai/src/cassette/...`; 370 errors reported).
+- `bunx tsgo -p tsconfig.json` → FAIL due pre-existing/unrelated repo-wide type errors outside touched files (e.g. `packages/ai/test/cassette/cassette.test.ts`, `packages/coding-agent/src/tools/await-tool.ts`, `packages/spell-team-chat/...`).

@@ -1,10 +1,11 @@
 #+TITLE: Review find formatter variants for symbol-aware output
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 150a981da51e09f3
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-15T21-23-37-748Z_150a981da51e09f3.jsonl]]
 #+CUSTOM_ID: FEAT-820-review-find-formatter-variants-for-symbo
 #+LAYER: tooling
 #+PRIORITY: B
+#+COMPLETION_HASH: f031a1f68dea0c04
 
 * Initial Message
 
@@ -34,3 +35,71 @@ Non-goals:
 
 Constraints:
 - Follow repo AGENTS: packages/coding-agent primary; no console logging; Bun over Node; no commits unless asked; prompt text in .md; use project memory for priors.
+
+NOTE [2026-06-15]: Review findings:
+
+Formatting architecture:
+- `packages/coding-agent/src/tools/find.ts`: FindTool delegates to GetTool; no `format` option on find.
+- `packages/coding-agent/src/tools/get.ts`: normalizes targets/root, routes internal URLs/images, calls `executeCodePath`, then `formatCodePathResult`; TUI wrapper is `renderCodePathCell` (tabs sanitized, 2k preview cap) and does not change the LLM-facing text.
+- `packages/coding-agent/src/tools/codepath-result.ts`: central formatter. Modes: `node-list`, `locations`, `content-only`, `tree`, `simple-list`, `fs-listing`; default is `node-list` except pure FS nodes auto-promote to `fs-listing`.
+- NAPI DTO: `crates/pi-natives/src/code_path/napi.rs::NodeRefDto` carries `locator`, `range_start`, `range_end`, `kind`, `content`, `metadata`, `diagnostics`. TS projection exposes only locator/kind/path/line/text.
+- Kernel read lane: `pi_kernel::resolve_target`; pure text queries go through `TextResolver`, symbol/outline through `CodeResolverImpl`, edges through graph resolver, semantic qualifiers through host `semantic_dispatch`.
+
+Current shapes:
+- grep/text match (`metadata.shape="match"`): grouped by path only via `renderMatchGroups`: `path
+  line:  content`. Sorting is path then line. Single-hit files still use heading shape by design (FEAT-785).
+- non-match line/slice: generic node-list shape `locator [kind]
+text`; no file/symbol grouping.
+- structural/symbol query: CodeResolver emits locator=file only, `metadata.line`, byte range, kind, content. Formatter ignores metadata.line, so header is `path [§kind]` with body; multiple nodes in one file repeat the path and lack symbol handles.
+- outline: kernel emits one `§outline` node whose text is already a symbol-first outline (`file · outline`, rows `::Symbol`). TS node-list prepends another `path [§outline]`, so outline has a duplicate/generic wrapper.
+- graph edge results: graph resolver emits locator=`file:line`, kind=`method|function|file|...`, no content, no symbol name/qualified_name metadata. Formatter renders one generic line per node.
+- semantic qualifiers: host semantic dispatch emits locator=`file:line`, kind `§hover|§signature|§type_definition|§inlay|§diagnostics`, content body. File-scope diagnostics use line=1 and body contains real diagnostic lines. Glob diagnostics are documented but currently rejected by `locator_to_path` (`glob locators not supported for semantic qualifiers`).
+- fs/stat/tree/listing: separate fs-listing path; not symbol-relevant.
+
+Primary gap: no standard `symbol`/`enclosingSymbol` metadata exists. Some producers know enough locally: CodeResolver has the parsed tree and can build outline entries; graph resolver has `SymbolNode.qualified_name` but discards it; text fast grep has only file+byte/line and does not parse symbols.
+
+Recommended seam: add producer-side metadata in Rust, then group in TS. Avoid TS-side parsing/outline calls because `find.ts` is intentionally a transport envelope and TS should not become a parallel CodePath parser/resolver.
+
+* Review recommendation 2026-06-15
+
+Adopt a two-layer change:
+
+1. Producer metadata in Rust:
+   - Add a stable optional metadata contract on location-style `NodeRef`s, e.g. `symbolPath`, `symbolKind`, `symbolLine`, `enclosingSymbolPath`, `enclosingSymbolLine`.
+   - CodeResolver: while a file is already parsed, compute outline entries from the same tree (`outline_from_root`) and attach the smallest enclosing symbol to matched structural nodes. No second parse.
+   - TextResolver fast grep: for outline-capable code files, optionally parse each matched file once and build an interval/line index to attach enclosing symbols to `shape=match` line nodes. Do not parse per hit.
+   - EdgeResolver: attach `qualified_name`/symbol identity from `GraphNode::Symbol`; this is not an enclosing lookup, it is the target symbol itself.
+   - Semantic diagnostics: either keep file-scope body format or emit one node per diagnostic with locator at the diagnostic line and enclosing symbol metadata; the latter is needed for true multi-file grouping.
+
+2. Shared TS formatter grouping:
+   - Extend `matchRow`/`renderMatchGroups` into location grouping that can group by `path -> symbol -> hits` when metadata is present.
+   - Preserve existing path-only heading as fallback when no symbol metadata exists.
+   - Keep `fs-listing`, `content-only`, image/binary, and manage/status payloads out of symbol grouping.
+   - Include symbol fields in `CodePathNodeData` so programmatic `execute` users get the same context as chat.
+
+Preferred output contract:
+
+```
+path/to/file.ts
+::Symbol
+  42:  content
+  47:  content
+
+::<file>
+  12:  top-level content
+```
+
+For non-line structural nodes:
+
+```
+path/to/file.ts
+::Symbol   [§function_declaration] L42
+<content>
+```
+
+Key risk: TS-only enrichment would violate the current architecture (`find.ts` as transport; kernel owns grammar/resolution) and become slow/duplicative. The right boundary is Rust metadata + TS formatting.
+
+Test plan:
+- `packages/coding-agent/test/codepath-result.test.ts`: unit tests for metadata-driven `path -> symbol -> line` grouping, top-level fallback, mixed legacy fallback, data projection.
+- NAPI/kernel tests: code resolver attaches enclosing symbol without reparse; text match over multi-hit file parses once per file; graph edge nodes carry qualified symbol metadata.
+- Prompt docs: update find.md symbol-first section with multi-file hit shape; adjust FEAT-785-era expectations.

@@ -289,7 +289,11 @@ pub fn resolve_target(
 				if let Some(g) = gitignore {
 					resolver = resolver.with_gitignore(g);
 				}
-				resolver.resolve(&cp, cancel)?
+				let mut nodes = resolver.resolve(&cp, cancel)?;
+				crate::walker::enrich_line_match_nodes_with_symbols(
+					registry, &root, &mut nodes, cancel,
+				);
+				nodes
 			} else if is_symbol_query(&cp) || is_outline_qualifier(&cp) {
 				// Code query / outline: walk files, then code-resolve per file.
 				let qualifier = cp.qualifier.take();
@@ -365,5 +369,47 @@ pub fn fs_locator_to_path(locator: &Locator) -> String {
 			}
 		},
 		Locator::Uri(_) => ".".to_string(),
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn text_match_nodes_receive_enclosing_symbol_metadata() {
+		let dir = tempfile::tempdir().unwrap();
+		std::fs::write(
+			dir.path().join("a.ts"),
+			"function main() {\n  console.log('TODO');\n}\nconst top = 'TODO';\n",
+		)
+		.unwrap();
+		let registry = Arc::new(LanguageRegistry::with_builtins().expect("builtins"));
+		let extractors: Vec<Arc<dyn FormatExtractor>> = Vec::new();
+		let out = resolve_target(
+			&registry,
+			"a.ts::§line[text~=\"TODO\"]",
+			dir.path(),
+			&extractors,
+			Some(true),
+			&CancellationToken::new(),
+		)
+		.unwrap();
+
+		assert_eq!(out.nodes.len(), 2);
+		assert_eq!(
+			out.nodes[0]
+				.metadata
+				.get("enclosingSymbolPath")
+				.and_then(serde_json::Value::as_str),
+			Some("main")
+		);
+		assert_eq!(
+			out.nodes[1]
+				.metadata
+				.get("enclosingSymbolPath")
+				.and_then(serde_json::Value::as_str),
+			Some("top")
+		);
 	}
 }

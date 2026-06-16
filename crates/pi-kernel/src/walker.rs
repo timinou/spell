@@ -148,6 +148,7 @@ impl CodeResolver for CodeResolverImpl {
 		// not in the set) and for bodyless re-exports like `export * from "x"`
 		// (nothing nested matched), so those keep returning the wrapper.
 		let nodes = collapse_export_wrappers(nodes);
+		let symbol_spans = symbol_spans_from_root(root, &src, profile);
 
 		// FEAT-718: Extract a SymbolSlice predicate from the terminal step (if any).
 		// The slice transforms each resolved symbol node into a sliced text body.
@@ -167,10 +168,10 @@ impl CodeResolver for CodeResolverImpl {
 			let mut metadata = HashMap::new();
 			// PLAN-318 W1: expose 1-indexed line so the edge dispatcher can
 			// find this symbol in pi-code-graph (which keys symbols by file+line).
-			metadata.insert(
-				"line".to_string(),
-				serde_json::Value::Number(((node.start_position().row + 1) as u64).into()),
-			);
+			let line = (node.start_position().row + 1) as u32;
+			metadata.insert("line".to_string(), serde_json::Value::Number((line as u64).into()));
+			attach_node_symbol_metadata(&mut metadata, node.kind(), line, &symbol_spans);
+			attach_named_node_symbol_metadata(&mut metadata, node, &src, line);
 			let mut nref = NodeRef {
 				locator: locator.clone(),
 				range: node.start_byte()..node.end_byte(),
@@ -505,6 +506,179 @@ fn push_outline_entry(
 	for child in &entry.children {
 		push_outline_entry(lines, count, child, rel, Some(&symbol_path), depth + 1, max_depth);
 	}
+}
+
+#[derive(Debug, Clone)]
+struct SymbolSpan {
+	path:     String,
+	kind:     String,
+	line:     u32,
+	end_line: u32,
+}
+
+fn symbol_spans_from_root(
+	root: Node<'_>,
+	src: &str,
+	profile: &pi_code_engine::language::LanguageProfile,
+) -> Vec<SymbolSpan> {
+	use pi_code_engine::outline::{EnrichFlags, OutlineEntry, outline_from_root};
+
+	fn push_entry(out: &mut Vec<SymbolSpan>, entry: &OutlineEntry, parent_path: Option<&str>) {
+		let path = parent_path
+			.map_or_else(|| entry.name.clone(), |parent| format!("{parent}.{}", entry.name));
+		out.push(SymbolSpan {
+			path:     path.clone(),
+			kind:     entry.kind.clone(),
+			line:     entry.line,
+			end_line: entry.end_line,
+		});
+		for child in &entry.children {
+			push_entry(out, child, Some(&path));
+		}
+	}
+
+	let entries = outline_from_root(root, src, profile, EnrichFlags::default());
+	let mut spans = Vec::new();
+	for entry in &entries {
+		push_entry(&mut spans, entry, None);
+	}
+	spans
+}
+
+fn best_symbol_for_line(spans: &[SymbolSpan], line: u32) -> Option<&SymbolSpan> {
+	let mut best: Option<&SymbolSpan> = None;
+	for span in spans {
+		if line < span.line || line > span.end_line {
+			continue;
+		}
+		let span_width = span.end_line.saturating_sub(span.line);
+		let best_width = best.map(|candidate| candidate.end_line.saturating_sub(candidate.line));
+		if best_width.is_none_or(|width| span_width <= width) {
+			best = Some(span);
+		}
+	}
+	best
+}
+
+fn insert_symbol_metadata(
+	metadata: &mut HashMap<String, serde_json::Value>,
+	prefix: &str,
+	span: &SymbolSpan,
+) {
+	metadata.insert(format!("{prefix}SymbolPath"), serde_json::Value::String(span.path.clone()));
+	metadata.insert(format!("{prefix}SymbolKind"), serde_json::Value::String(span.kind.clone()));
+	metadata.insert(format!("{prefix}SymbolLine"), serde_json::Value::Number(span.line.into()));
+}
+
+fn attach_node_symbol_metadata(
+	metadata: &mut HashMap<String, serde_json::Value>,
+	node_kind: &str,
+	line: u32,
+	spans: &[SymbolSpan],
+) {
+	let Some(span) = best_symbol_for_line(spans, line) else {
+		return;
+	};
+	if span.line == line && (span.kind == node_kind || node_kind.contains(&span.kind)) {
+		insert_symbol_metadata(metadata, "", span);
+	} else {
+		insert_symbol_metadata(metadata, "enclosing", span);
+	}
+}
+
+fn has_attached_symbol_metadata(metadata: &HashMap<String, serde_json::Value>) -> bool {
+	metadata.contains_key("symbolPath") || metadata.contains_key("enclosingSymbolPath")
+}
+
+fn attach_named_node_symbol_metadata(
+	metadata: &mut HashMap<String, serde_json::Value>,
+	node: Node<'_>,
+	src: &str,
+	line: u32,
+) {
+	if has_attached_symbol_metadata(metadata) {
+		return;
+	}
+	let Some(name_child) = node.child_by_field_name("name") else {
+		return;
+	};
+	let Some(name) = src.get(name_child.start_byte()..name_child.end_byte()) else {
+		return;
+	};
+	if name.trim().is_empty() {
+		return;
+	}
+	metadata.insert("symbolPath".to_string(), serde_json::Value::String(name.to_string()));
+	metadata.insert("symbolKind".to_string(), serde_json::Value::String(node.kind().to_string()));
+	metadata.insert("symbolLine".to_string(), serde_json::Value::Number(line.into()));
+}
+
+fn is_match_shape_node(node: &NodeRef) -> bool {
+	node
+		.metadata
+		.get("shape")
+		.and_then(serde_json::Value::as_str)
+		== Some("match")
+}
+
+fn node_metadata_line(node: &NodeRef) -> Option<u32> {
+	node
+		.metadata
+		.get("line")
+		.and_then(serde_json::Value::as_u64)
+		.and_then(|line| u32::try_from(line).ok())
+}
+
+fn locator_file_part(locator: &str) -> &str {
+	locator.split_once("::").map_or(locator, |(path, _)| path)
+}
+
+pub(crate) fn enrich_line_match_nodes_with_symbols(
+	registry: &LanguageRegistry,
+	root: &Path,
+	nodes: &mut [NodeRef],
+	cancel: &CancellationToken,
+) {
+	let mut spans_by_file: HashMap<String, Option<Vec<SymbolSpan>>> = HashMap::new();
+	for node in nodes {
+		if cancel.is_cancelled() || !is_match_shape_node(node) {
+			continue;
+		}
+		let Some(line) = node_metadata_line(node) else {
+			continue;
+		};
+		let file_key = locator_file_part(&node.locator).to_string();
+		let spans = spans_by_file.entry(file_key.clone()).or_insert_with(|| {
+			let file_path = Path::new(&file_key);
+			let absolute = if file_path.is_absolute() {
+				file_path.to_path_buf()
+			} else {
+				root.join(file_path)
+			};
+			read_symbol_spans_for_file(registry, &absolute)
+		});
+		let Some(spans) = spans.as_ref() else {
+			continue;
+		};
+		if let Some(span) = best_symbol_for_line(spans, line) {
+			insert_symbol_metadata(&mut node.metadata, "enclosing", span);
+		}
+	}
+}
+
+fn read_symbol_spans_for_file(registry: &LanguageRegistry, file: &Path) -> Option<Vec<SymbolSpan>> {
+	let profile = registry.match_path(file)?;
+	profile.dialect.as_ref()?;
+	let src = match std::fs::read_to_string(file) {
+		Ok(src) => src,
+		Err(_) => return None,
+	};
+	let mut parser = tree_sitter::Parser::new();
+	if parser.set_language(&profile.ts_language).is_err() {
+		return None;
+	}
+	let tree = parser.parse(&src, None)?;
+	Some(symbol_spans_from_root(tree.root_node(), &src, profile))
 }
 
 // ---------------------------------------------------------------------------
@@ -882,6 +1056,24 @@ mod tests {
 		assert_eq!(parse_outline_depth(Some("garbage")), usize::MAX);
 	}
 
+	#[test]
+	fn symbol_spans_include_function_declarations() {
+		let resolver = resolver();
+		let f = temp_file(".ts", "export function foo() {\n  return 1;\n}\n");
+		let profile = resolver.registry.match_path(f.path()).expect("profile");
+		let src = std::fs::read_to_string(f.path()).unwrap();
+		let mut parser = tree_sitter::Parser::new();
+		parser.set_language(&profile.ts_language).unwrap();
+		let tree = parser.parse(&src, None).unwrap();
+		let spans = symbol_spans_from_root(tree.root_node(), &src, profile);
+		assert!(
+			spans
+				.iter()
+				.any(|span| span.path == "foo" && span.line == 1),
+			"spans: {spans:?}"
+		);
+	}
+
 	// ------------------------------------------------------------------
 	// TypeScript
 	// ------------------------------------------------------------------
@@ -914,7 +1106,7 @@ mod tests {
 	#[test]
 	fn ts_top_level_function() {
 		let resolver = resolver();
-		let f = temp_file(".ts", "function foo() {}\n");
+		let f = temp_file(".ts", "export function foo() {\n  return 1;\n}\n");
 		let query = Query::single(Step {
 			axis:       None,
 			head:       Head::Name(NamePayload::Raw("foo".into())),
@@ -923,6 +1115,13 @@ mod tests {
 		let results = run_query(&resolver, f.path(), query);
 		assert_eq!(results.len(), 1);
 		assert_eq!(results[0].kind, "§function_declaration");
+		assert_eq!(
+			results[0]
+				.metadata
+				.get("symbolPath")
+				.and_then(serde_json::Value::as_str),
+			Some("foo")
+		);
 	}
 
 	// BUG-443: a bare-name query against an EXPORTED declaration must resolve
@@ -1071,6 +1270,13 @@ mod tests {
 		let results = run_query(&resolver, f.path(), query);
 		assert!(!results.is_empty());
 		assert!(results.iter().all(|r| r.kind == "§call_expression"));
+		assert_eq!(
+			results[0]
+				.metadata
+				.get("enclosingSymbolPath")
+				.and_then(serde_json::Value::as_str),
+			Some("main")
+		);
 	}
 
 	#[test]

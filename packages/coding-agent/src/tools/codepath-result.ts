@@ -50,6 +50,18 @@ export interface CodePathNodeData {
 	path?: string;
 	/** 1-indexed line, when the locator encodes one. */
 	line?: number;
+	/** Symbol represented by this node, without the file prefix (e.g. `Foo.bar`). */
+	symbolPath?: string;
+	/** Kind of `symbolPath`, when the kernel provided it. */
+	symbolKind?: string;
+	/** Declaration line for `symbolPath`. */
+	symbolLine?: number;
+	/** Nearest enclosing symbol for non-symbol hits. */
+	enclosingSymbolPath?: string;
+	/** Kind of `enclosingSymbolPath`, when the kernel provided it. */
+	enclosingSymbolKind?: string;
+	/** Declaration line for `enclosingSymbolPath`. */
+	enclosingSymbolLine?: number;
 	/** Node text/content when present (file slice, grep line, symbol body). */
 	text?: string;
 }
@@ -104,6 +116,57 @@ function getNodeText(node: NodeRefDto): string | undefined {
 
 function getNodeKindLabel(node: NodeRefDto): string {
 	return node.kind ?? "node";
+}
+
+function nodeMetadata(node: NodeRefDto): Record<string, unknown> {
+	return (node.metadata ?? {}) as Record<string, unknown>;
+}
+
+function metadataString(node: NodeRefDto, key: string): string | undefined {
+	const value = nodeMetadata(node)[key];
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function metadataNumber(node: NodeRefDto, key: string): number | undefined {
+	const value = nodeMetadata(node)[key];
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeSymbolPath(value: string | undefined): string | undefined {
+	if (!value) return undefined;
+	const trimmed = value.trim();
+	if (!trimmed) return undefined;
+	const withoutPrefix = trimmed.startsWith("::") ? trimmed.slice(2) : trimmed;
+	const fileSeparator = withoutPrefix.indexOf("::");
+	return fileSeparator >= 0 ? withoutPrefix.slice(fileSeparator + 2) : withoutPrefix;
+}
+
+function nodeSymbolPath(node: NodeRefDto): string | undefined {
+	return normalizeSymbolPath(metadataString(node, "symbolPath"));
+}
+
+function nodeEnclosingSymbolPath(node: NodeRefDto): string | undefined {
+	return normalizeSymbolPath(metadataString(node, "enclosingSymbolPath"));
+}
+
+function nodeGroupSymbolPath(node: NodeRefDto): string | undefined {
+	return nodeSymbolPath(node) ?? nodeEnclosingSymbolPath(node);
+}
+
+function nodeSymbolLine(node: NodeRefDto): number | undefined {
+	return metadataNumber(node, "symbolLine") ?? metadataNumber(node, "enclosingSymbolLine");
+}
+
+function nodeLine(node: NodeRefDto): number | undefined {
+	return formatLocator(node.locator).line ?? metadataNumber(node, "line");
+}
+
+function hasSymbolMetadata(node: NodeRefDto): boolean {
+	return nodeGroupSymbolPath(node) !== undefined;
+}
+
+function formatSymbolHeader(symbolPath: string | undefined): string {
+	return symbolPath ? `::${symbolPath}` : "::<file>";
 }
 
 function localFormatBytes(bytes: number): string {
@@ -178,15 +241,17 @@ function isMatchShapeNode(node: NodeRefDto): boolean {
 interface MatchRow {
 	path: string;
 	line: number | undefined;
+	symbolPath: string | undefined;
 	content: string;
 }
 
 function matchRow(node: NodeRefDto): MatchRow {
-	const { path, line } = formatLocator(node.locator);
+	const { path } = formatLocator(node.locator);
 	const raw = getNodeText(node) ?? "";
 	return {
 		path: path ?? node.locator,
-		line,
+		line: nodeLine(node),
+		symbolPath: nodeGroupSymbolPath(node),
 		content: raw.replace(/\r?\n$/, ""),
 	};
 }
@@ -205,15 +270,31 @@ function matchRow(node: NodeRefDto): MatchRow {
  */
 function renderMatchGroups(nodes: NodeRefDto[]): string {
 	const rows = nodes.map(matchRow);
+	const symbolAware = rows.some(row => row.symbolPath !== undefined);
 	const blocks: string[] = [];
 	let i = 0;
 	while (i < rows.length) {
 		const path = rows[i].path;
 		const lines = [path];
-		while (i < rows.length && rows[i].path === path) {
-			const { line, content } = rows[i];
-			lines.push(line !== undefined ? `  ${line}:  ${content}` : `  ${content}`);
-			i++;
+		if (!symbolAware) {
+			while (i < rows.length && rows[i].path === path) {
+				const { line, content } = rows[i];
+				lines.push(line !== undefined ? `  ${line}:  ${content}` : `  ${content}`);
+				i++;
+			}
+		} else {
+			let firstSymbol = true;
+			while (i < rows.length && rows[i].path === path) {
+				const symbolPath = rows[i].symbolPath;
+				if (!firstSymbol) lines.push("");
+				lines.push(formatSymbolHeader(symbolPath));
+				firstSymbol = false;
+				while (i < rows.length && rows[i].path === path && rows[i].symbolPath === symbolPath) {
+					const { line, content } = rows[i];
+					lines.push(line !== undefined ? `  ${line}:  ${content}` : `  ${content}`);
+					i++;
+				}
+			}
 		}
 		blocks.push(lines.join("\n"));
 	}
@@ -226,7 +307,80 @@ function compareMatchNodes(a: NodeRefDto, b: NodeRefDto): number {
 	const pa = la.path ?? "";
 	const pb = lb.path ?? "";
 	if (pa !== pb) return pa < pb ? -1 : 1;
+	const sa = nodeSymbolLine(a) ?? Number.MAX_SAFE_INTEGER;
+	const sb = nodeSymbolLine(b) ?? Number.MAX_SAFE_INTEGER;
+	if (sa !== sb) return sa - sb;
+	const spa = nodeGroupSymbolPath(a) ?? "";
+	const spb = nodeGroupSymbolPath(b) ?? "";
+	if (spa !== spb) return spa < spb ? -1 : 1;
 	return (la.line ?? 0) - (lb.line ?? 0);
+}
+
+function compareSymbolNodes(a: NodeRefDto, b: NodeRefDto): number {
+	const la = formatLocator(a.locator);
+	const lb = formatLocator(b.locator);
+	const pa = la.path ?? "";
+	const pb = lb.path ?? "";
+	if (pa !== pb) return pa < pb ? -1 : 1;
+	const sa = nodeSymbolLine(a) ?? Number.MAX_SAFE_INTEGER;
+	const sb = nodeSymbolLine(b) ?? Number.MAX_SAFE_INTEGER;
+	if (sa !== sb) return sa - sb;
+	const spa = nodeGroupSymbolPath(a) ?? "";
+	const spb = nodeGroupSymbolPath(b) ?? "";
+	if (spa !== spb) return spa < spb ? -1 : 1;
+	return (nodeLine(a) ?? 0) - (nodeLine(b) ?? 0);
+}
+
+function renderSymbolNode(node: NodeRefDto, compactHeader: boolean): string[] {
+	const kind = getNodeKindLabel(node);
+	const text = getManagePayloadText(node) ?? getNodeText(node);
+	const line = nodeLine(node);
+	const linePart = line !== undefined ? ` L${line}` : "";
+	if (compactHeader) {
+		const header = `${formatSymbolHeader(nodeGroupSymbolPath(node))}  [${kind}]${linePart}`;
+		return text !== undefined ? [header, text] : [header];
+	}
+	const header = line !== undefined ? `  L${line}  [${kind}]` : `  [${kind}]`;
+	return text !== undefined ? [header, text] : [header];
+}
+
+function renderSymbolAwareNodeGroups(nodes: NodeRefDto[]): string {
+	const sorted = [...nodes].sort(compareSymbolNodes);
+	const blocks: string[] = [];
+	let i = 0;
+	while (i < sorted.length) {
+		const { path } = formatLocator(sorted[i].locator);
+		const pathKey = path ?? sorted[i].locator;
+		const lines = [pathKey];
+		let firstSymbol = true;
+		while (i < sorted.length) {
+			const { path: currentPath } = formatLocator(sorted[i].locator);
+			const currentPathKey = currentPath ?? sorted[i].locator;
+			if (currentPathKey !== pathKey) break;
+
+			const symbolPath = nodeGroupSymbolPath(sorted[i]);
+			const group: NodeRefDto[] = [];
+			while (i < sorted.length) {
+				const { path: groupPath } = formatLocator(sorted[i].locator);
+				const groupPathKey = groupPath ?? sorted[i].locator;
+				if (groupPathKey !== pathKey || nodeGroupSymbolPath(sorted[i]) !== symbolPath) break;
+				group.push(sorted[i]);
+				i++;
+			}
+
+			if (!firstSymbol) lines.push("");
+			firstSymbol = false;
+			if (group.length === 1) {
+				const only = group[0];
+				if (only) lines.push(...renderSymbolNode(only, true));
+			} else {
+				lines.push(formatSymbolHeader(symbolPath));
+				for (const node of group) lines.push(...renderSymbolNode(node, false));
+			}
+		}
+		blocks.push(lines.join("\n"));
+	}
+	return blocks.join("\n\n");
 }
 
 function buildNodeList(nodes: NodeRefDto[]): string {
@@ -235,18 +389,30 @@ function buildNodeList(nodes: NodeRefDto[]): string {
 	// node kinds in the same chunk batch.
 	const out: string[] = [];
 	let matchBuf: NodeRefDto[] = [];
+	let symbolBuf: NodeRefDto[] = [];
 	const flushMatches = () => {
 		if (matchBuf.length === 0) return;
 		const sorted = [...matchBuf].sort(compareMatchNodes);
 		out.push(renderMatchGroups(sorted));
 		matchBuf = [];
 	};
+	const flushSymbols = () => {
+		if (symbolBuf.length === 0) return;
+		out.push(renderSymbolAwareNodeGroups(symbolBuf));
+		symbolBuf = [];
+	};
 	for (const node of nodes) {
 		if (isMatchShapeNode(node)) {
+			flushSymbols();
 			matchBuf.push(node);
 			continue;
 		}
 		flushMatches();
+		if (hasSymbolMetadata(node)) {
+			symbolBuf.push(node);
+			continue;
+		}
+		flushSymbols();
 		const loc = nodeToLocation(node);
 		const text = getManagePayloadText(node) ?? getNodeText(node);
 		const kind = getNodeKindLabel(node);
@@ -257,6 +423,7 @@ function buildNodeList(nodes: NodeRefDto[]): string {
 		}
 	}
 	flushMatches();
+	flushSymbols();
 	return out.join("\n\n");
 }
 
@@ -565,11 +732,24 @@ export function formatCodePathResult(chunks: CodePathChunk[], options: CodePathR
  */
 function projectNodeData(nodes: NodeRefDto[]): CodePathNodeData[] {
 	return nodes.map(node => {
-		const { path, line } = formatLocator(node.locator);
+		const { path } = formatLocator(node.locator);
+		const line = nodeLine(node);
 		const text = getNodeText(node);
 		const out: CodePathNodeData = { locator: node.locator, kind: node.kind };
 		if (path !== undefined) out.path = path;
 		if (line !== undefined) out.line = line;
+		const symbolPath = nodeSymbolPath(node);
+		const symbolKind = metadataString(node, "symbolKind");
+		const symbolLine = metadataNumber(node, "symbolLine");
+		const enclosingSymbolPath = nodeEnclosingSymbolPath(node);
+		const enclosingSymbolKind = metadataString(node, "enclosingSymbolKind");
+		const enclosingSymbolLine = metadataNumber(node, "enclosingSymbolLine");
+		if (symbolPath !== undefined) out.symbolPath = symbolPath;
+		if (symbolKind !== undefined) out.symbolKind = symbolKind;
+		if (symbolLine !== undefined) out.symbolLine = symbolLine;
+		if (enclosingSymbolPath !== undefined) out.enclosingSymbolPath = enclosingSymbolPath;
+		if (enclosingSymbolKind !== undefined) out.enclosingSymbolKind = enclosingSymbolKind;
+		if (enclosingSymbolLine !== undefined) out.enclosingSymbolLine = enclosingSymbolLine;
 		if (text !== undefined) out.text = text;
 		return out;
 	});

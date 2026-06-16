@@ -142,11 +142,7 @@ impl Resolver for TextResolver {
 
 		let head_step = &query.head;
 		if let Some(pattern) = fast_line_search_pattern(query, path.qualifier.is_none()) {
-			return Ok(run_fast_line_search(
-				pattern,
-				&file_paths,
-				cancel,
-			));
+			return Ok(run_fast_line_search(pattern, &file_paths, cancel));
 		}
 
 		// Apply head step to every file in parallel. Per-file scans are pure
@@ -222,7 +218,10 @@ impl Resolver for TextResolver {
 	}
 }
 
-fn fast_line_search_pattern<'a>(query: &'a crate::ast::Query, no_qualifier: bool) -> Option<&'a str> {
+fn fast_line_search_pattern<'a>(
+	query: &'a crate::ast::Query,
+	no_qualifier: bool,
+) -> Option<&'a str> {
 	if !no_qualifier || !query.chain.is_empty() {
 		return None;
 	}
@@ -307,11 +306,7 @@ fn text_search_error(message: String) -> Vec<NodeRef> {
 		kind:        "§error".to_string(),
 		content:     None,
 		metadata:    HashMap::new(),
-		diagnostics: vec![Diagnostic {
-			variant: DiagnosticVariant::ParseError,
-			message,
-			span:    None,
-		}],
+		diagnostics: vec![Diagnostic { variant: DiagnosticVariant::ParseError, message, span: None }],
 	}]
 }
 

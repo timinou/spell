@@ -100,6 +100,23 @@ describe("buildNodeList grep shape (FEAT-719)", () => {
 		});
 	}
 
+	function symbolMatchLine(
+		path: string,
+		line: number,
+		symbolPath: string | undefined,
+		symbolLine: number,
+		body: string,
+	): NodeRefDto {
+		return makeNode({
+			locator: `${path}::<line ${line}>`,
+			kind: "\u00a7line",
+			content: { kind: "text", value: body },
+			metadata: symbolPath
+				? { shape: "match", line, enclosingSymbolPath: symbolPath, enclosingSymbolLine: symbolLine }
+				: { shape: "match", line },
+		});
+	}
+
 	// W5a (FEAT-785): single text-match renders as a one-file heading group,
 	// path on a heading line, hit indented beneath. No LINE#ID anchor.
 	it("W5a: text-match renders ripgrep heading shape without LINE#ID anchor", () => {
@@ -135,6 +152,30 @@ describe("buildNodeList grep shape (FEAT-719)", () => {
 		];
 		const out = formatNodes(nodes);
 		expect(out).toBe(["src/a.ts", "  2:  todo two", "  7:  todo seven", "", "src/b.ts", "  3:  todo"].join("\n"));
+	});
+
+	it("groups match rows by enclosing symbol when symbol metadata is present", () => {
+		const nodes = [
+			symbolMatchLine("src/foo.ts", 31, "second", 30, "TODO c"),
+			symbolMatchLine("src/foo.ts", 12, "first", 10, "TODO b"),
+			symbolMatchLine("src/foo.ts", 2, undefined, Number.MAX_SAFE_INTEGER, "TODO top"),
+			symbolMatchLine("src/foo.ts", 11, "first", 10, "TODO a"),
+		];
+		const out = formatNodes(nodes);
+		expect(out).toBe(
+			[
+				"src/foo.ts",
+				"::first",
+				"  11:  TODO a",
+				"  12:  TODO b",
+				"",
+				"::second",
+				"  31:  TODO c",
+				"",
+				"::<file>",
+				"  2:  TODO top",
+			].join("\n"),
+		);
 	});
 
 	// W5d: §line[N] (no shape metadata) keeps LINE#ID block (regression).
@@ -193,6 +234,51 @@ describe("buildNodeList grep shape (FEAT-719)", () => {
 		);
 		const out = formatNodes(nodes);
 		expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(1024);
+	});
+});
+
+describe("symbol-aware non-match node formatting", () => {
+	it("renders a symbol header for structural nodes with symbol metadata", () => {
+		const node = makeNode({
+			locator: "src/foo.ts",
+			kind: "\u00a7function_declaration",
+			content: { kind: "text", value: "function parse() {\n  return 1;\n}" },
+			metadata: { line: 10, symbolPath: "parse", symbolKind: "function_declaration", symbolLine: 10 },
+		});
+
+		const out = formatNodes([node]);
+		expect(out).toBe("src/foo.ts\n::parse  [\u00a7function_declaration] L10\nfunction parse() {\n  return 1;\n}");
+	});
+
+	it("projects symbol metadata into the data channel", () => {
+		const chunks: CodePathChunk[] = [
+			{
+				nodes: [
+					makeNode({
+						locator: "src/foo.ts::<line 12>",
+						kind: "\u00a7line",
+						content: { kind: "text", value: "TODO" },
+						metadata: {
+							line: 12,
+							enclosingSymbolPath: "parse",
+							enclosingSymbolKind: "function_declaration",
+							enclosingSymbolLine: 10,
+						},
+					}),
+				],
+				diagnostics: [],
+				done: true,
+			},
+		];
+
+		const result = formatCodePathResult(chunks, { format: "node-list" });
+		expect(result.data[0]).toMatchObject({
+			path: "src/foo.ts",
+			line: 12,
+			enclosingSymbolPath: "parse",
+			enclosingSymbolKind: "function_declaration",
+			enclosingSymbolLine: 10,
+		});
 	});
 });
 
