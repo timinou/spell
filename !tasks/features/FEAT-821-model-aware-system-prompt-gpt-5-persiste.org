@@ -1,0 +1,84 @@
+#+TITLE: Model-aware system prompt: GPT-5 persistence/verification/honesty conditioning
+#+STATE: DONE
+#+SESSION_ID: 150b0e572a6de528
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-16T06-00-09-641Z_150b0e572a6de528.jsonl]]
+#+CUSTOM_ID: FEAT-821-model-aware-system-prompt-gpt-5-persiste
+#+COMPLETION_HASH: e6b36f6e19c07098
+
+* Initial Message
+
+there's been a huge drop in quality, instruction following, honesty, rigour (and completeness), and relentlessness since switching from opus to gpt. please compare sesssions using text analysis and find out, in the way that the prompts are constructed and through developer feedback and documentation online, what to improve.
+
+* Problem
+Measured quality regression (instruction-following, honesty, rigour, completeness, relentlessness) after the default model switched from Anthropic Opus to OpenAI GPT (gpt-5.x / codex).
+
+Evidence (full local session corpus: 15,397 transcripts; 318k Opus vs 127k GPT assistant messages; rate-normalized, percentile-robust):
+- tool calls/session: Opus 80.6 vs GPT 53.5 (-34%)
+- assistant steps/session: 69.4 vs 39.4 (-43%); median 34 vs 26, p90 158 vs 102 (down across whole distribution)
+- share of <=10-tool sessions IDENTICAL (17.2% vs 16.9%) -> GPT is NOT bailing on easy tasks; it under-completes substantive ones
+- verify-command rate /100 tools: 7.0 vs 4.7 (-33%)
+- think-chars/msg: 55 vs 189 -> GPT thinks 3.4x MORE; reasoning effort is NOT the deficit
+- "done/fixed" claims /10k: 5.1 vs 8.9 (more); voiced-uncertainty /10k: 6.1 vs 0.03
+
+Root cause (verified in code + corroborated by OpenAI's own GPT-5/5.1/5.2/codex prompting guides):
+- buildSystemPrompt() (packages/coding-agent/src/system-prompt.ts:437) renders ONE template for ALL providers. Grep for anthropic|opus|claude|codex|gpt|openai|provider in builder + template = no prompt-level branching. The Claude-tuned prompt ships byte-identical to GPT.
+- Default reasoning already "high" (config/settings-schema.ts:462) -> not the lever.
+- OpenAI GPT-5 guide: "GPT-5 follows instructions with surgical precision; contradictory/vague instructions damage it MORE than other models, as it expends reasoning reconciling them." GPT-5.1 guide names the exact regression: "can err on the side of excessively concise at the cost of answer completeness ... emphasize persistence and completeness via prompting."
+- The shipped prompt has live contradictions GPT follows literally: terse-vs-complete (loud brevity examples win), one-off abstract persistence, push-back-vs-independence.
+- Corroborating: GPT bash-share 13% vs Opus 38% -> GPT obeys "prefer structured tools" BETTER. So the issue is literalism, not weak instruction-following: make the LETTER say what the SPIRIT wants.
+
+Full diagnosis: tmp/gpt-vs-opus-quality-regression.md
+
+* Scope
+- IN:
+  - Make buildSystemPrompt model/provider-aware (thread provider/api into BuildSystemPromptOptions + template data).
+  - Add a GPT-conditioned prompt block: <persistence> + <verification> (verify-before-claiming-done, anti-fabrication).
+  - Resolve the terse<->complete contradiction with an explicit precedence clause (brevity governs prose only; completeness wins conflicts).
+  - Tool-preamble + status-update cadence guidance for GPT long rollouts.
+  - Contradiction audit: give an explicit uncertainty threshold reconciling push-back/ask-trigger vs work-independently.
+  - Tests covering the conditioning (GPT branch present for openai providers, absent/Claude-dialect for anthropic).
+- OUT:
+  - Changing default reasoning effort (already high; not the deficit).
+  - Model selection / routing changes.
+  - Transport-layer (stream.ts) changes.
+  - Rewriting the Claude dialect for Claude (keep as-is).
+
+* Design
+Branch model: detect OpenAI-family (provider startsWith "openai" OR api startsWith "openai-codex" OR model id matches gpt-5/codex) -> isGptFamily flag in template data. Mirror existing {{#has tools ...}} / {{#if ...}} conditional pattern in system-prompt.md (no new templating machinery).
+
+Insertion points in prompts/system/system-prompt.md:
+1. After <communication> terseness boundary: append a GPT-only precedence clause (completeness > brevity on conflict).
+2. In/near <critical> (Now section): a GPT-only <persistence>/<verification> block.
+
+Builder (system-prompt.ts):
+- BuildSystemPromptOptions gains optional `modelProvider?: string` and `modelApi?: string` (or a single `model?: {provider; api; id}`); compute `isGptFamily` in buildSystemPrompt; add to `data`.
+- All call sites that have a model pass it; absent -> false (Claude dialect, current behavior preserved).
+
+Verbatim block content (adapted from OpenAI gpt-5.1 solution_persistence + gpt-5.2 uncertainty_and_ambiguity + codex verify guidance):
+<persistence>
+- Autonomous senior engineer: gather context, plan, implement, verify, refine -- within this turn. Do not hand back at analysis or a partial fix.
+- Never stop at uncertainty -- research/deduce the most reasonable path and continue. Only yield when the deliverable >= the full scope.
+- Biased for action: an ambiguous directive => proceed with the most reasonable interpretation and state the assumption; do not bounce it back as a question. Ask only for irreversible actions or >=2 materially different readings.
+</persistence>
+<verification>
+- Before claiming done/fixed/working, RUN the check (test - build - lint - reproduce) and cite the result. An unverified completion claim is a failure.
+- Never fabricate figures, line numbers, file paths, or command output. If unverified, say so and state how to verify.
+</verification>
+
+Terse<->complete precedence clause (GPT-only):
+"Brevity governs conversational prose only. It NEVER reduces work, verification, edge-case coverage, or deliverable scope. When brevity and completeness conflict, completeness wins."
+
+* Tests
+- packages/coding-agent/test/ (alongside existing system-prompt tests): assert buildSystemPrompt output
+  - contains "<persistence>" and "<verification>" when given an openai-codex/gpt-5 model
+  - does NOT contain them for an anthropic/opus model (Claude dialect preserved)
+  - terse<->complete precedence clause present only for GPT
+- Find existing system-prompt test file first; extend it.
+
+* Acceptance Criteria
+- buildSystemPrompt is model-aware; GPT-family models receive persistence + verification + anti-fabrication + completeness-precedence blocks; Anthropic models unchanged.
+- All existing call sites pass model info where available; default path (no model) preserves current Claude-dialect output.
+- New tests green; bun run check:ts passes; existing system-prompt tests still pass.
+- No change to reasoning effort defaults or transport layer.
+
+NOTE [2026-06-16]: Implemented + verified. Changes: (1) packages/coding-agent/src/system-prompt.ts — added isGptFamilyModel() detector (exported) + model field on BuildSystemPromptOptions + isGptFamily into template data. (2) prompts/system/system-prompt.md — GPT-only completeness-precedence clause in <communication>, and <persistence>+<verification> blocks after <critical>, all gated {{#if isGptFamily}}. (3) sdk.ts — threaded live model into both buildSystemPromptInternal calls in rebuildSystemPrompt + forwarded model through the public buildSystemPrompt wrapper. Verification: tsgo clean on all 3 touched files (86 remaining errors all pre-existing in untouched files: await-tool.ts, swarm-extension, utils, team-chat). bun test system-prompt-templates.test.ts = 23 pass/0 fail (6 new GPT-conditioning tests). Adjacent suites (gitroot, skill-globs) 5 pass. Detector edge-cases verified: deepseek/glm over openai-completions api correctly return false (transport-compatible but not GPT); only openai-codex* api / openai* provider / gpt-5|codex id trigger. End-to-end render inspected — blocks land correctly, no handlebars breakage. NOT changed: reasoning effort default (high; not the deficit), transport layer, Claude dialect. Diagnosis: tmp/gpt-vs-opus-quality-regression.md.

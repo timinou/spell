@@ -392,6 +392,8 @@ export interface BuildSystemPromptOptions {
 	autoRosterEnabled?: boolean;
 	settings?: Settings;
 	isSubagent?: boolean;
+	/** Active model identity; conditions provider-specific prompt blocks (GPT-5/codex). */
+	model?: { provider?: string; api?: string; id?: string };
 }
 
 /**
@@ -407,6 +409,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		autoRosterEnabled: options.autoRosterEnabled,
 		settings: options.settings,
 		isSubagent: options.isSubagent,
+		model: options.model,
 	});
 }
 
@@ -1490,6 +1493,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			autoRosterEnabled,
 			settings,
 			isSubagent: taskDepth > 0,
+			model: model ? { provider: model.provider, api: model.api, id: model.id } : undefined,
 		});
 		dbgStartup("sub:after:buildSystemPromptInternal(default)");
 
@@ -1521,6 +1525,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				autoRosterEnabled,
 				settings,
 				isSubagent: taskDepth > 0,
+				model: model ? { provider: model.provider, api: model.api, id: model.id } : undefined,
 			});
 		}
 		const result = options.systemPrompt(defaultPrompt);

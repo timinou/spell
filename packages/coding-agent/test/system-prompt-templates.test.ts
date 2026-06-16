@@ -328,3 +328,67 @@ describe("tool ordering stability", () => {
 		expect(hash1).not.toBe(hash2);
 	});
 });
+
+describe("GPT-family model conditioning (FEAT-821)", () => {
+	const PERSISTENCE = "<persistence>";
+	const VERIFICATION = "<verification>";
+	const PRECEDENCE = "completeness wins, always";
+
+	async function renderForModel(model?: { provider?: string; api?: string; id?: string }): Promise<string> {
+		const blocks = await buildSystemPrompt({
+			contextFiles: [],
+			cwd: import.meta.dir,
+			rules: [],
+			skills: [],
+			toolNames: ["read", "edit", "bash"],
+			model,
+		});
+		return blocks.map(block => block.text).join("\n");
+	}
+
+	test("renders persistence + verification + precedence blocks for openai-codex api", async () => {
+		const rendered = await renderForModel({ provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.4" });
+		expect(rendered).toContain(PERSISTENCE);
+		expect(rendered).toContain(VERIFICATION);
+		expect(rendered).toContain(PRECEDENCE);
+		expect(rendered).toContain("Verify before you claim");
+	});
+
+	test("renders GPT blocks for a gpt-5 id even under a generic provider", async () => {
+		const rendered = await renderForModel({ provider: "openrouter", api: "openai-completions", id: "gpt-5.5" });
+		expect(rendered).toContain(PERSISTENCE);
+		expect(rendered).toContain(VERIFICATION);
+	});
+
+	test("renders GPT blocks for a codex id", async () => {
+		const rendered = await renderForModel({ provider: "openai", api: "openai-completions", id: "gpt-5.3-codex" });
+		expect(rendered).toContain(PERSISTENCE);
+	});
+
+	test("omits GPT blocks for an Anthropic Opus model (Claude dialect preserved)", async () => {
+		const rendered = await renderForModel({ provider: "anthropic", api: "anthropic", id: "claude-opus-4-8" });
+		expect(rendered).not.toContain(PERSISTENCE);
+		expect(rendered).not.toContain(VERIFICATION);
+		expect(rendered).not.toContain(PRECEDENCE);
+		// Base discipline content must remain.
+		expect(rendered).toContain("<discipline>");
+	});
+
+	test("omits GPT blocks when no model is supplied (default path unchanged)", async () => {
+		const rendered = await renderForModel(undefined);
+		expect(rendered).not.toContain(PERSISTENCE);
+		expect(rendered).not.toContain(VERIFICATION);
+	});
+
+	test("template gates both blocks on isGptFamily", async () => {
+		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
+		const template = await Bun.file(templatePath).text();
+		const on = renderPromptTemplate(template, { ...baseRenderContext, isGptFamily: true });
+		const off = renderPromptTemplate(template, { ...baseRenderContext, isGptFamily: false });
+		expect(on).toContain(PERSISTENCE);
+		expect(on).toContain(VERIFICATION);
+		expect(off).not.toContain(PERSISTENCE);
+		expect(off).not.toContain(VERIFICATION);
+	});
+});
+

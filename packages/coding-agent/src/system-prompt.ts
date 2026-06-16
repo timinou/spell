@@ -431,6 +431,32 @@ export interface BuildSystemPromptOptions {
 	autoRosterEnabled?: boolean;
 	/** Tool names classified as specialized tier (get compact descriptions in prompt). */
 	specializedToolNames?: string[];
+	/**
+	 * Active model identity, used to condition provider-specific prompt blocks
+	 * (e.g. GPT-5/codex persistence + verification guidance). Absent → the
+	 * default (Claude-dialect) prompt is rendered, preserving prior behavior.
+	 */
+	model?: { provider?: string; api?: string; id?: string };
+}
+
+/**
+ * Detects the OpenAI GPT-5 / codex model family from a model identity.
+ *
+ * GPT-5+ follows instructions far more literally than Claude: it benefits from
+ * an explicit persistence + verification + anti-fabrication block and from
+ * resolving the terse↔complete tension that the Claude-tuned default leaves
+ * implicit. See FEAT-821. Matches on api (`openai-codex*`), provider
+ * (`openai*`), or model id (`gpt-5*` / `*codex*`).
+ */
+export function isGptFamilyModel(model: { provider?: string; api?: string; id?: string } | undefined): boolean {
+	if (!model) return false;
+	const api = (model.api ?? "").toLowerCase();
+	const provider = (model.provider ?? "").toLowerCase();
+	const id = (model.id ?? "").toLowerCase();
+	if (api.startsWith("openai-codex")) return true;
+	if (provider.startsWith("openai")) return true;
+	if (/\bgpt-5/.test(id) || id.includes("codex")) return true;
+	return false;
 }
 
 /** Build the system prompt with tools, guidelines, and context */
@@ -464,7 +490,9 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		eagerTasks,
 		autoRosterEnabled = false,
 		specializedToolNames = [],
+		model,
 	} = options;
+	const isGptFamily = isGptFamilyModel(model);
 	const resolvedCwd = cwd ?? getProjectDir();
 	const resolvedEagerTasks = eagerTasks ?? (settings?.get("task.eager") as boolean | undefined) ?? false;
 
@@ -602,6 +630,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		autoRosterEnabled,
 		specializedToolNames,
 		hasSpecializedTools: specializedToolNames.length > 0,
+		isGptFamily,
 	};
 	dbgStartup("bsp:before:renderPromptTemplate");
 	const rendered = renderPromptTemplate(
