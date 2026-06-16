@@ -1,0 +1,46 @@
+#+TITLE: Episodes 2026-06-16
+
+** ITEM Fix Harbor Spell model-error masking
+:PROPERTIES:
+:CUSTOM_ID: EP-4203a22213f44d6c
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-16T06:15:06Z
+:END:
+:RELATIONS:
+ABOUT: BUG-487-fix-harbor-spell-model-error-masking
+:END:
+Implemented fix. `runPrintMode` now returns non-zero for assistant `stopReason: error|aborted` in both text and JSON modes, and `runRootCommand` passes that code to `postmortem.quit`. Added `spell_harbor.transcript` parser; Harbor adapter now detects transcript assistant/model failures and raises them before missing-path or smoke gates. Verification: targeted Bun print-mode tests, Python transcript unittest, and Python compile gate passed. Package-wide `bun run --cwd packages/coding-agent check` was attempted but currently fails on unrelated existing TS test errors; no errors referenced touched print/main files.
+** ITEM Fixed Harbor Spell model-error masking: `spell -p --mode json` only checked assistant `stopReason:error|aborted` in text mode, while `runRootCommand` always `postmortem.quit(0)`. Result: provider transport failures in JSON mode were reported downstream as missing deliverables/smoke failures. Patch: `runPrintMode` returns an exit code for both modes; main propagates it; Harbor parses transcript assistant/auto-retry failures and raises before smoke. Tests: Bun print-mode helper/runPrintMode tests + Python transcript parser unittest.
+:PROPERTIES:
+:CUSTOM_ID: EP-75add73dac342df1
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-16T06:15:36Z
+:END:
+:RELATIONS:
+ABOUT: CON-harbor-terminal-bench-failures-need-arti
+ABOUT: BUG-487-fix-harbor-spell-model-error-masking
+:END:
+** ITEM Model-aware system prompt: GPT-5 persistence/verification/honesty conditioning
+:PROPERTIES:
+:CUSTOM_ID: EP-74c795d3d5296a52
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-16T06:42:59Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-821-model-aware-system-prompt-gpt-5-persiste
+:END:
+Implemented + verified. Changes: (1) packages/coding-agent/src/system-prompt.ts — added isGptFamilyModel() detector (exported) + model field on BuildSystemPromptOptions + isGptFamily into template data. (2) prompts/system/system-prompt.md — GPT-only completeness-precedence clause in <communication>, and <persistence>+<verification> blocks after <critical>, all gated {{#if isGptFamily}}. (3) sdk.ts — threaded live model into both buildSystemPromptInternal calls in rebuildSystemPrompt + forwarded model through the public buildSystemPrompt wrapper. Verification: tsgo clean on all 3 touched files (86 remaining errors all pre-existing in untouched files: await-tool.ts, swarm-extension, utils, team-chat). bun test system-prompt-templates.test.ts = 23 pass/0 fail (6 new GPT-conditioning tests). Adjacent suites (gitroot, skill-globs) 5 pass. Detector edge-cases verified: deepseek/glm over openai-completions api correctly return false (transport-compatible but not GPT); only openai-codex* api / openai* provider / gpt-5|codex id trigger. End-to-end render inspected — blocks land correctly, no handlebars breakage. NOT changed: reasoning effort default (high; not the deficit), transport layer, Claude dialect. Diagnosis: tmp/gpt-vs-opus-quality-regression.md.
+** ITEM Smol :off still burns Codex reasoning tokens
+:PROPERTIES:
+:CUSTOM_ID: EP-95940ad500c78b7b
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-16T07:11:35Z
+:END:
+:RELATIONS:
+ABOUT: BUG-488-smol-off-still-burns-codex-reasoning-tok
+:END:
+Fixed in commit 27deb9c38: explicit smol :off now propagates as disableReasoning, and OpenAI Codex serializes that as reasoning.effort none with null summary. Targeted tests pass.

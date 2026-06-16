@@ -130,3 +130,25 @@ ABOUT: CON-harbor-terminal-bench-failures-need-arti
 ABOUT: PLAN-340-harden-spell-harbor-for-terminal-bench-t
 ABOUT: CON-harbor-terminal-bench-failures-need-arti
 :END:
+** ITEM Review find formatter variants for symbol-aware output
+:PROPERTIES:
+:CUSTOM_ID: EP-f04a234bc19cc6f7
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-15T21:46:39Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-820-review-find-formatter-variants-for-symbo
+:END:
+Review findings:
+** ITEM Improve edit ergonomics for anchor insert
+:PROPERTIES:
+:CUSTOM_ID: EP-ec5bb940b1899dd7
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-15T22:51:30Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-343-improve-edit-ergonomics-for-anchor-inser
+:END:
+Implemented anchor-relative edit insertion. Changed `Verb::lower_replace` to allow `find + place:before|after` by synthesizing replacement content that preserves the matched anchor and inserts content before/after it. Kept `find + place:start|end` rejected with a corrective diagnostic. Updated edit prompt and TS schema descriptions. Added Rust regression tests for file-after, symbol-before, and start/end rejection. Verified with exact gate `bun test packages/coding-agent/test/edit.test.ts && cargo test -p pi-code-path replace_find`; also ran `cargo test -p pi-code-path verb::tests`.
