@@ -69,6 +69,13 @@ export interface OpenAIResponsesOptions extends StreamOptions {
 	 * Azure OpenAI and GitHub Copilot Responses paths require tool results to match prior tool calls.
 	 */
 	strictResponsesPairing?: boolean;
+	/**
+	 * Explicitly request non-reasoning behavior for reasoning-capable models that
+	 * default to reasoning when no reasoning block is sent. Falls back to the
+	 * documented `# Juice: 0 !important` developer prompt workaround for models
+	 * without a native `reasoning: false` option.
+	 */
+	disableReasoning?: boolean;
 }
 
 type OpenAIResponsesSamplingParams = ResponseCreateParamsStreaming & {
@@ -363,8 +370,11 @@ function buildParams(
 				effort: options?.reasoning || "medium",
 				summary: options?.reasoningSummary || "auto",
 			};
-		} else if (model.name.startsWith("gpt-5")) {
-			// Jesus Christ, see https://community.openai.com/t/need-reasoning-false-option-for-gpt-5/1351588/7
+		} else if (options?.disableReasoning) {
+			// Allow callers to request non-reasoning behavior on GPT-5 models where
+			// the provider defaults to reasoning when no reasoning block is sent.
+			// The "Juice" developer prompt is the documented community workaround for
+			// older GPT-5 snapshots that lack a native `reasoning: false` option.
 			messages.push({
 				role: "developer",
 				content: [
