@@ -37,11 +37,20 @@ defmodule SpellAgent.Session do
   @doc """
   Run a single mission to completion and return `{:ok, result}` or
   `{:error, reason}`. `result` is the agent's `step.return` (its final value).
+
+  Options:
+    * `:model`     — model id (default: live `Config.get("model")`).
+    * `:max_turns` — turn budget (default: 12).
+    * `:llm`       — an LLM callback `(map() -> {:ok, map()} | {:error, term()})`
+      or a `PtcRunner.SubAgent` llm registry atom. Injectable so the inspector
+      TUI and tests can drive a FAKE llm with zero network. Defaults to the real
+      Anthropic subscription adapter.
   """
   @spec run(String.t(), keyword()) :: {:ok, term()} | {:error, term()}
   def run(prompt, opts \\ []) when is_binary(prompt) do
     model = opts[:model] || Config.get("model")
     max_turns = opts[:max_turns] || 12
+    llm = opts[:llm] || Anthropic.callback(model)
 
     agent =
       PtcRunner.SubAgent.new(
@@ -52,7 +61,7 @@ defmodule SpellAgent.Session do
         max_turns: max_turns
       )
 
-    case PtcRunner.SubAgent.run(agent, llm: Anthropic.callback(model)) do
+    case PtcRunner.SubAgent.run(agent, llm: llm) do
       {:ok, step} -> {:ok, step.return}
       {:error, step} -> {:error, step.fail || step.return || :unknown_failure}
     end
@@ -66,5 +75,4 @@ defmodule SpellAgent.Session do
       _ -> @system_prompt
     end
   end
-
 end
