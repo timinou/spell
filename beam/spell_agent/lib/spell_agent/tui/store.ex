@@ -193,6 +193,18 @@ defmodule SpellAgent.Tui.Store do
     do_span_start(state, kind, meta[:span_id], meta[:parent_span_id], meta)
   end
 
+  # Span stop: close the node, merge stop metadata + token measurements, set status.
+  defp apply_event(state, [kind, :stop], meas, meta) when kind in @span_kinds do
+    close(state, meta[:span_id], status_from(meta), meta, meas)
+  end
+
+  # Span exception: close as error.
+  defp apply_event(state, [kind, :exception], meas, meta) when kind in @span_kinds do
+    close(state, meta[:span_id], :error, meta, meas)
+  end
+
+  defp apply_event(state, _suffix, _meas, _meta), do: state
+
   # Malformed start: no span_id means we can't key a node — ignore it rather than
   # create a phantom nil-keyed span (defends against malformed telemetry).
   defp do_span_start(state, _kind, nil, _parent_id, _meta), do: state
@@ -212,18 +224,6 @@ defmodule SpellAgent.Tui.Store do
     {spans, roots} = link_parent(spans, state.roots, id, parent_id)
     %{state | spans: spans, roots: roots}
   end
-
-  # Span stop: close the node, merge stop metadata + token measurements, set status.
-  defp apply_event(state, [kind, :stop], meas, meta) when kind in @span_kinds do
-    close(state, meta[:span_id], status_from(meta), meta, meas)
-  end
-
-  # Span exception: close as error.
-  defp apply_event(state, [kind, :exception], meas, meta) when kind in @span_kinds do
-    close(state, meta[:span_id], :error, meta, meas)
-  end
-
-  defp apply_event(state, _suffix, _meas, _meta), do: state
 
   defp link_parent(spans, roots, id, nil), do: {spans, [id | roots]}
 
