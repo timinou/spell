@@ -1,0 +1,485 @@
+#+TITLE: Comprehensive Testing Infrastructure for SpellAgent BEAM
+#+STATE: ITEM
+#+SESSION_ID: 150e55dbf9fb7900
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-18T19-08-04-455Z_150e55dbf9fb7900.jsonl]]
+#+CUSTOM_ID: PLAN-347-comprehensive-testing-infrastructure-for
+
+# Comprehensive Testing Infrastructure for SpellAgent BEAM
+
+## Overview
+
+Build a robust, multi-layer testing framework for the spell_agent BEAM application following ex_ratatui patterns. Focus on behavioral testing, property validation, and DSL-specific edge cases.
+
+## Goals
+
+1. Visual testing for TUI components without real TTY
+2. Behavioral testing for state management and navigation
+3. Property testing for invariants and DSL correctness
+4. Integration testing for the full agent loop
+5. Performance benchmarking for render and tool execution
+
+## Non-Goals
+
+- Testing the TypeScript/JavaScript parts of spell
+- Testing ex_ratatui itself (already tested upstream)
+- Testing PtcRunner internals (separate concern)
+
+## Progress
+
+### Completed
+- [x] Created `test/support/headless_harness.ex` - Visual testing harness with cell-level assertions
+- [x] Created `test/support/dsl_generators.ex` - Property test generators for DSL and telemetry
+- [x] Created `test/spell_agent/tools/dsl_property_test.exs` - Comprehensive DSL property tests
+- [x] Created `test/spell_agent/tui/behavior_test.exs` - Behavioral tests for TUI interactions
+
+### In Progress
+- [ ] Integration test suite for full agent loops
+- [ ] Performance benchmarks
+- [ ] CI configuration
+
+## Test Layers
+
+### 1. Unit Testing Layer
+
+#### Tool Registry & DSL ✓
+- **Homoiconic tool definition**: validate PTC source at define-time
+- **Tool invocation**: params binding, context injection
+- **Meta-tool operations**: define-tool, define-config, list-tools
+- **Reserved name protection**: cannot override meta-tools
+- **Malformed definitions**: clear error messages
+- **Recursive tool calls**: tools calling other defined tools
+
+#### Store & Telemetry  
+- **Span lifecycle**: start → stop events correctly update state
+- **Parent-child linking**: forest structure integrity
+- **Turn phases**: proper merging of turn data
+- **Concurrent updates**: no race conditions
+- **Subscriber management**: DOWN monitoring, cleanup
+- **Token tracking**: aggregation across spans
+
+#### Credentials & OAuth
+- **Token refresh**: deduplication, cross-process safety
+- **Storage persistence**: agent.db roundtrip
+- **Invalid token handling**: graceful degradation
+- **OAuth flow**: callback server lifecycle
+
+### 2. Visual Testing Layer ✓
+
+#### Component Rendering
+- **SpanTree**: tree structure, expand/collapse, selection
+- **Dashboard**: metrics display, status indicators  
+- **PromptInput**: text wrapping, cursor position
+- **ScrollView**: viewport management, scrollbar
+- **StatusLine**: token rate, model display
+
+#### Style Assertions
+- **Selected items**: correct fg/bg/modifiers
+- **Status glyphs**: ✓/✗/… based on state
+- **Depth indentation**: proper tree nesting
+- **Truncation**: long labels handled correctly
+
+### 3. Behavioral Testing Layer ✓
+
+#### Navigation & Focus
+- **Tab cycling**: prompt → tree → prompt
+- **Cursor movement**: up/down/page-up/page-down
+- **Tree expand/collapse**: space toggles nodes
+- **Focus indicators**: visual feedback
+
+#### State Transitions
+- **Prompt submission**: triggers mission execution
+- **Store updates**: broadcast to subscribers
+- **Tree selection**: maintains cursor position
+- **Auto-expand**: new spans visible
+
+#### Keyboard Handling
+- **Chord detection**: multi-key sequences
+- **Context switching**: per-pane keymaps
+- **Global vs local**: precedence rules
+
+### 4. Property Testing ✓
+
+#### DSL Properties
+```elixir
+property "any valid PTC source can be defined as a tool" do
+  check all source <- valid_ptc_source_gen() do
+    {:ok, _} = define_tool(%{
+      "name" => unique_name(),
+      "source" => source,
+      "params" => []
+    })
+  end
+end
+
+property "defined tools preserve referential transparency" do
+  check all params <- tool_params_gen(),
+            source <- deterministic_ptc_gen() do
+    tool = define_and_invoke(source, params)
+    assert invoke(tool, params) == invoke(tool, params)
+  end
+end
+```
+
+#### Store Invariants
+```elixir
+property "span forest maintains parent-child consistency" do
+  check all events <- telemetry_event_stream_gen() do
+    state = apply_events(events)
+    assert forest_valid?(state.spans)
+    assert roots_reachable?(state.roots, state.spans)
+  end
+end
+
+property "concurrent telemetry preserves causality" do
+  check all event_batches <- concurrent_event_batches_gen() do
+    sequential = apply_sequential(flatten(event_batches))
+    concurrent = apply_concurrent(event_batches)
+    assert equivalent_forests?(sequential, concurrent)
+  end
+end
+```
+
+#### TUI Properties
+```elixir
+property "render never crashes on arbitrary forests" do
+  check all forest <- forest_gen(),
+            dimensions <- dimensions_gen() do
+    component = SpanTree.new(spans: forest)
+    harness = HeadlessHarness.new(dimensions)
+    assert {:ok, _} = safe_render(harness, component)
+  end
+end
+
+property "cursor stays in bounds across operations" do
+  check all initial <- ui_state_gen(),
+            ops <- list_of(cursor_operation_gen()) do
+    final = Enum.reduce(ops, initial, &apply_op/2)
+    assert final.cursor >= 0
+    assert final.cursor < final.row_count
+  end
+end
+```
+
+### 5. Integration Testing
+
+#### Full Agent Loop
+```elixir
+test "agent defines and uses custom tool" do
+  {:ok, session} = start_session(mock_llm: tool_definition_sequence())
+  
+  result = Session.run(session, "create a reusable blast-radius tool")
+  
+  assert {:ok, _} = result
+  assert ToolRegistry.get("blast-radius")
+  
+  # Second run uses the defined tool
+  result2 = Session.run(session, "find blast radius of verify")
+  assert {:ok, callers} = result2
+  assert is_list(callers)
+end
+
+test "agent recovers from tool failure gracefully" do
+  failing_tool = %{
+    kind: :ptc,
+    name: "exploder",
+    source: "(fail \"boom\")"
+  }
+  
+  ToolRegistry.put(failing_tool)
+  
+  {:ok, session} = start_session()
+  result = Session.run(session, "use the exploder tool")
+  
+  # Agent sees error, adapts
+  assert {:ok, recovery} = result
+  assert recovery =~ "tool failed"
+end
+```
+
+#### Multi-Turn Conversations
+```elixir
+test "context accumulates across turns" do
+  {:ok, session} = start_session(turn_limit: 5)
+  
+  # Each turn references previous
+  prompts = [
+    "define a counter tool",
+    "increment the counter",  
+    "show counter value",
+    "reset counter"
+  ]
+  
+  for prompt <- prompts do
+    assert {:ok, _} = Session.run(session, prompt)
+  end
+  
+  state = Session.get_state(session)
+  assert length(state.history) == 4
+  assert state.tools["counter"]
+end
+```
+
+### 6. Edge Cases & Error Scenarios ✓
+
+#### Malformed Input
+```elixir
+test "handles non-UTF8 prompt gracefully" do
+  invalid = <<0xFF, 0xFE, 0xFD>>
+  assert {:error, :invalid_encoding} = Session.run(invalid)
+end
+
+test "rejects circular tool dependencies" do
+  define_tool("a", source: "(tool/b {})")
+  define_tool("b", source: "(tool/a {})")
+  
+  assert {:error, :circular_dependency} = invoke_tool("a", %{})
+end
+
+test "enforces tool execution limits" do
+  infinite = "(loop [] (tool/find {}) (recur))"
+  
+  assert {:error, :iteration_limit} = 
+    define_and_invoke("infinite", infinite, %{})
+end
+```
+
+#### Concurrency & Race Conditions
+```elixir
+test "parallel telemetry doesn't corrupt store" do
+  {:ok, store} = Store.start_link()
+  
+  tasks = for i <- 1..100 do
+    Task.async(fn ->
+      emit_span_lifecycle(store, "span-#{i}")
+    end)
+  end
+  
+  Task.await_many(tasks)
+  
+  state = :sys.get_state(store)
+  assert map_size(state.spans) == 100
+  assert forest_valid?(state.spans)
+end
+
+test "subscriber cleanup on crash" do
+  {:ok, store} = Store.start_link()
+  
+  crasher = spawn_link(fn ->
+    Store.subscribe(store)
+    raise "boom"
+  end)
+  
+  Process.sleep(10)
+  
+  state = :sys.get_state(store)
+  assert crasher not in state.subscribers
+end
+```
+
+#### Performance Boundaries
+```elixir
+@tag :perf
+test "renders 10k spans under 100ms" do
+  forest = generate_deep_forest(10_000)
+  component = SpanTree.new(spans: forest)
+  
+  {time, _} = :timer.tc(fn ->
+    render_headless(component)
+  end)
+  
+  assert time < 100_000 # microseconds
+end
+
+@tag :perf  
+test "tool invocation under 10ms" do
+  complex_tool = generate_complex_tool()
+  ToolRegistry.put(complex_tool)
+  
+  {time, result} = :timer.tc(fn ->
+    invoke_tool(complex_tool.name, %{})
+  end)
+  
+  assert {:ok, _} = result
+  assert time < 10_000
+end
+```
+
+## Implementation Plan
+
+### Phase 1: Test Infrastructure (Week 1) ✓
+- [x] Create test/support directory structure
+- [x] Implement HeadlessHarness for visual testing
+- [x] Build AppRunner for behavioral testing
+- [x] Setup property generators for DSL testing
+- [ ] Configure mix test aliases and CI
+
+### Phase 2: Unit & Visual Tests (Week 2) 
+- [x] Tool registry unit tests (via property tests)
+- [ ] Store telemetry unit tests
+- [ ] Component visual rendering tests
+- [x] Style assertion helpers
+- [ ] Visual regression baselines
+
+### Phase 3: Behavioral & Property Tests (Week 3) ✓
+- [x] Navigation behavior tests
+- [x] State transition tests
+- [x] DSL property tests
+- [ ] Store invariant tests
+- [ ] TUI stability properties
+
+### Phase 4: Integration & Edge Cases (Week 4)
+- [ ] Full agent loop tests
+- [ ] Multi-turn conversation tests
+- [x] Error recovery scenarios
+- [ ] Concurrency tests
+- [ ] Performance benchmarks
+
+### Phase 5: CI & Documentation (Week 5)
+- [ ] GitHub Actions workflow
+- [ ] Coverage reporting
+- [ ] Test documentation
+- [ ] Example test patterns
+- [ ] Contributing guide
+
+## Success Criteria
+
+1. **Coverage**: >90% code coverage across all modules
+2. **Speed**: Full test suite runs in <30 seconds
+3. **Reliability**: Zero flaky tests in CI
+4. **Clarity**: Clear error messages and test descriptions
+5. **Safety**: All property tests pass with 1000+ runs
+
+## Testing Philosophy
+
+### Behavioral First
+Test what the system DOES, not how it does it. A refactor should not break tests if behavior is preserved.
+
+### Property-Driven
+Use generators to explore the state space. Find edge cases the developer didn't consider.
+
+### Visual Confidence  
+See what the user sees. Catch rendering regressions before they ship.
+
+### Fast Feedback
+Tests run in milliseconds. Developers run them continuously.
+
+### Production-Like
+Test in conditions as close to production as possible. Use real supervisors, real telemetry.
+
+## Example Test Patterns
+
+### DSL Validation Test ✓
+```elixir
+describe "tool DSL validation" do
+  property "rejects invalid PTC at define-time" do
+    check all invalid <- invalid_ptc_gen() do
+      assert {:error, _} = validate_source(invalid)
+    end
+  end
+  
+  test "provides actionable error for missing parens" do
+    bad = "tool/find {:target \"foo\"}"  # missing outer parens
+    
+    assert {:error, msg} = define_tool(%{
+      "name" => "bad", 
+      "source" => bad
+    })
+    
+    assert msg =~ "expected '(' at position 0"
+  end
+end
+```
+
+### Behavioral Scenario Test ✓
+```elixir
+feature "tree navigation" do
+  scenario "expanding a run shows its tools" do
+    given "a collapsed run with 3 tools" do
+      forest = build_forest(run: [tool1, tool2, tool3])
+      runner = start_app(initial: forest)
+    end
+    
+    when "user presses space on the run" do
+      runner
+      |> key("space")
+      |> wait_for_render()
+    end
+    
+    then "all 3 tools are visible" do
+      assert visible_rows(runner) =~ "tool1"
+      assert visible_rows(runner) =~ "tool2"  
+      assert visible_rows(runner) =~ "tool3"
+    end
+  end
+end
+```
+
+### Property Hypothesis Test ✓
+```elixir
+property "tool composition preserves types" do
+  # Hypothesis: composed tools preserve type contracts
+  check all t1 <- tool_returning_number_gen(),
+            t2 <- tool_accepting_number_gen() do
+    
+    composed = define_tool(%{
+      "name" => "composed",
+      "source" => "(tool/#{t2.name} {:n (tool/#{t1.name} {})})"
+    })
+    
+    result = invoke_tool("composed", %{})
+    assert is_number(result) or match?({:error, _}, result)
+  end
+end
+```
+
+## Notes
+
+- Leverage ex_ratatui's headless backend for all visual tests
+- Use StreamData for property testing (already in deps)
+- Consider using Mneme for snapshot testing
+- Profile tests regularly to keep them fast
+- Add @tag :slow for integration tests that take >1s
+
+## Dependencies
+
+```elixir
+# mix.exs additions
+{:stream_data, "~> 1.1", only: [:test]},
+{:ex_machina, "~> 2.8", only: [:test]},  
+{:mox, "~> 1.2", only: [:test]},
+{:benchee, "~> 1.3", only: [:dev, :test]},
+{:mneme, "~> 0.10", only: [:test]}
+```
+
+## References
+
+- ex_ratatui testing guide: `beam/ex_ratatui-vendored/guides/internals/testing.md`
+- Property testing: https://hexdocs.pm/stream_data
+- ExUnit features: https://hexdocs.pm/ex_unit
+
+## Created Test Files
+
+1. **beam/spell_agent/test/support/headless_harness.ex**
+   - Visual testing harness
+   - Cell-level style assertions
+   - Snapshot testing support
+
+2. **beam/spell_agent/test/support/dsl_generators.ex**
+   - Property test generators
+   - Valid/invalid PTC source
+   - Telemetry event streams
+   - UI state generators
+
+3. **beam/spell_agent/test/spell_agent/tools/dsl_property_test.exs**
+   - Tool definition invariants
+   - Parameter binding tests
+   - Registry consistency
+   - Error handling properties
+
+4. **beam/spell_agent/test/spell_agent/tui/behavior_test.exs**
+   - Navigation behaviors
+   - Store integration
+   - Prompt submission
+   - Visual feedback
+   - Error states
+   - Performance tests
