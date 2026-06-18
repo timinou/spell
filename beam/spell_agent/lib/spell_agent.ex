@@ -20,18 +20,30 @@ defmodule SpellAgent do
   defdelegate run(prompt, opts \\ []), to: Session
 
   @doc """
-  Launch the live inspector TUI (PLAN-345): a terminal UI to type a mission and
-  watch everything happening inside the run — turns, llm calls, tools, and (when
-  a tool is itself a sub-agent) its nested run, arbitrarily deep.
+  Launch the live inspector TUI (PLAN-345) and BLOCK until you quit it.
 
-  Blocks the calling shell until you quit. Intended for `iex -S mix` or an
-  escript. The supervised `SpellAgent.Tui.Store` captures the span forest; this
-  starts the `ExRatatui.App` that renders it.
+  A terminal UI to type a mission and watch everything happening inside the run —
+  turns, llm calls, tools, and (when a tool is itself a sub-agent) its nested
+  run, arbitrarily deep — plus the final answer in the header.
+
+  The TUI takes over the terminal (alternate screen + raw mode), so it must be
+  the SOLE foreground consumer of stdin/stdout. Prefer `mix spell.tui` from a
+  real terminal. Calling this from inside an `iex` shell is NOT supported — iex
+  keeps reading stdin and printing its prompt, which corrupts the display
+  (BUG-489); use the mix task instead.
+
+  Returns `:ok` once the app stops (esc / ctrl-c to quit).
   """
   @spec tui(keyword()) :: :ok
   def tui(opts \\ []) do
-    {:ok, _pid} = SpellAgent.Tui.App.start_link(Keyword.put_new(opts, :store, SpellAgent.Tui.Store))
-    :ok
+    {:ok, pid} =
+      SpellAgent.Tui.App.start_link(Keyword.merge([name: nil, store: SpellAgent.Tui.Store], opts))
+
+    ref = Process.monitor(pid)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+    end
   end
 
   @doc """

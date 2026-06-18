@@ -71,6 +71,21 @@ SpellAgent.run("What is 17 + 25? Reply with just the number.")
 SpellAgent.repl()
 ```
 
+### Live inspector TUI
+
+A terminal UI (PLAN-345) to type a mission and watch everything happening inside
+the run — turns, llm calls, tools, and (when a tool is itself a sub-agent) its
+nested run, arbitrarily deep — with the final answer in the header. Launch it
+directly, NOT from iex (the TUI must own the terminal; iex would corrupt the
+display — BUG-489):
+
+```sh
+mix spell.tui
+```
+
+Type a prompt, press Enter to run; `↑`/`↓` scroll the span tree; `esc` (or
+ctrl-c) quits and restores the terminal.
+
 Requires a logged-in Anthropic subscription in `~/.spell/agent/agent.db` (run the
 TypeScript `spell` once to log in, or point `SPELL_AGENT_DB` at another db).
 
