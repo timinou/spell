@@ -27,7 +27,7 @@ defmodule SpellAgent.Tui.ScreenGallery do
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Style
   alias ExRatatui.Widgets.{Block, List, Paragraph}
-  alias SpellAgent.Tui.{Scenes, Ui}
+  alias SpellAgent.Tui.{Scenes, SceneRender}
   alias SpellAgent.Tui.Panes.SpanTree
 
   # ---- mount ----
@@ -42,8 +42,9 @@ defmodule SpellAgent.Tui.ScreenGallery do
        # Which scene in the index is selected.
        index: 0,
        # The gaze used to render the CURRENT scene's tree (cursor + collapse).
-       # Focus is :tree so cursor/expand reactions apply to the tree directly.
-       ui: Ui.new(focus: :tree, panes: [:tree])
+       # Focus :tree so cursor/expand reactions apply to the tree directly; fully
+       # expanded (the SceneRender default) so a scene opens showing everything.
+       ui: SceneRender.default_gaze()
      }}
   end
 
@@ -91,31 +92,11 @@ defmodule SpellAgent.Tui.ScreenGallery do
     }
   end
 
-  # Right pane: the selected scene rendered through the REAL SpanTree view path,
-  # materialized into the same List widget the inspector App builds.
+  # Right pane: the selected scene rendered through the ONE shared SceneRender
+  # path — the SAME function the snapshot baselines and perf test use, so the
+  # gallery is a faithful preview of what gets committed and measured.
   defp scene_widget(state, rect) do
-    scene = current_scene(state)
-    forest = scene.forest
-
-    vm = SpanTree.project(forest, %{ui: state.ui})
-    assigns = %{ui: state.ui, cursor: Ui.cursor_of(state.ui, :tree)}
-
-    [{{:list, desc}, _rect}] =
-      SpanTree.view(%{vm: vm, rect: rect, assigns: assigns, focused?: true})
-
-    items =
-      Enum.map(desc.lines, fn line ->
-        %ExRatatui.Text.Line{
-          spans: [%ExRatatui.Text.Span{content: line.text, style: %Style{fg: status_color(line.status)}}]
-        }
-      end)
-
-    %List{
-      items: items,
-      block: %Block{title: " #{desc.title} ", borders: [:all], border_type: :rounded},
-      highlight_style: %Style{modifiers: [:bold]},
-      selected: select_index(desc, length(items))
-    }
+    SceneRender.widget(current_scene(state), state.ui, rect: rect, focused?: true)
   end
 
   defp footer_widget(state) do
@@ -174,7 +155,7 @@ defmodule SpellAgent.Tui.ScreenGallery do
     n = length(state.scenes)
     index = state.index |> Kernel.+(delta) |> rem(n) |> wrap(n)
     # Fresh gaze per scene: expanded, cursor at the top.
-    %{state | index: index, ui: Ui.new(focus: :tree, panes: [:tree])}
+    %{state | index: index, ui: SceneRender.default_gaze()}
   end
 
   defp wrap(i, n) when i < 0, do: i + n
@@ -188,11 +169,4 @@ defmodule SpellAgent.Tui.ScreenGallery do
     %{state | ui: ui}
   end
 
-  defp select_index(_desc, 0), do: nil
-  defp select_index(%{focused?: true, cursor: c}, count), do: c |> max(0) |> min(count - 1)
-  defp select_index(_desc, _count), do: nil
-
-  defp status_color(:ok), do: :green
-  defp status_color(:error), do: :red
-  defp status_color(_), do: :yellow
 end
