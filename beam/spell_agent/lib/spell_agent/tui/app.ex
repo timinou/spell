@@ -33,10 +33,11 @@ defmodule SpellAgent.Tui.App do
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Style
   alias ExRatatui.Widgets.{Block, List, Paragraph}
-  alias SpellAgent.Tui.{Projection, Store}
+  alias SpellAgent.Tui.{Chord, Keys, Projection, Store, Ui}
+  alias SpellAgent.Tui.Keymap.{Global, TurnNav}
   alias SpellAgent.Tui.Panes.SpanTree
 
-  @default_panes [%{name: :tree, module: SpanTree, assigns: %{cursor: 0}}]
+  @default_panes [%{name: :tree, module: SpanTree, assigns: %{}}]
 
   # ---- mount ----
 
@@ -55,15 +56,24 @@ defmodule SpellAgent.Tui.App do
       running?: false,
       result: nil,
       last_prompt: nil,
-      # Which pane the scroll keys drive (Tab toggles). The answer + tree each
-      # scroll independently so a long answer or a deep forest is fully reachable
-      # despite a fixed-height terminal.
-      focus: :answer,
-      answer_scroll: 0
+      # The serializable gaze (PLAN-346) — ALL navigation state: focus ring,
+      # per-pane cursors, span collapse overrides, turn index, scroll. Replaces
+      # the old scattered focus/answer_scroll/assigns.cursor. Default focus is the
+      # answer pane so a finished run reads immediately; the ring is
+      # answer ↔ tree ↔ prompt under C-j/C-k.
+      ui: opts[:ui] || Ui.new(focus: :answer, panes: [:answer, :tree, :prompt])
     }
 
     {:ok, reproject(state, :all)}
   end
+
+  # The resolver context stack for the current focus (PLAN-346): the focused
+  # pane's context FIRST, then the global layer. The SAME chord (C-l/C-h) resolves
+  # differently by which context tops the stack — SpanTree (expand/contract) under
+  # tree focus, TurnNav (turn next/prev + scroll) under answer/prompt focus.
+  defp focus_stack(%{ui: %Ui{focus: :tree}}), do: [SpanTree, Global]
+  defp focus_stack(%{ui: %Ui{focus: f}}) when f in [:answer, :prompt], do: [TurnNav, Global]
+  defp focus_stack(_), do: [Global]
 
   # ---- render ----
 
@@ -85,8 +95,11 @@ defmodule SpellAgent.Tui.App do
       state.panes
       |> Enum.flat_map(fn pane ->
         vm = Map.get(state.vms, pane.name)
-        focused? = state.focus == :tree
-        pane.module.view(%{vm: vm, rect: tree_rect, assigns: pane.assigns, focused?: focused?})
+        focused? = state.ui.focus == pane.name
+        # The view needs the cursor + gaze: pass ui plus the focused pane's cursor
+        # so the highlighted row + collapse glyphs match what the resolver acts on.
+        assigns = Map.merge(pane.assigns, %{ui: state.ui, cursor: Ui.cursor_of(state.ui, pane.name)})
+        pane.module.view(%{vm: vm, rect: tree_rect, assigns: assigns, focused?: focused?})
       end)
       |> Enum.map(&materialize(&1, state))
 
@@ -94,12 +107,35 @@ defmodule SpellAgent.Tui.App do
       tree_widgets ++ [{composer_widget(state), composer}]
   end
 
-  # ---- events ----
+  # ---- events: the Reaction DSL resolver path (PLAN-346) ----
 
+  # Every key press becomes a %Chord{} and resolves against the focus context
+  # stack. The cascade decides the verb; the App only handles the two effects a
+  # pure Ui->Ui reaction cannot express (quit, submit). Composer text editing
+  # (enter/backspace/printables) is the LOWEST-priority sink: a chord that no
+  # context binds (`:unbound`) falls here, so typing into the prompt still works.
   @impl true
-  def handle_event(%ExRatatui.Event.Key{code: code, kind: kind}, state)
+  def handle_event(%ExRatatui.Event.Key{kind: kind} = key, state)
       when kind in ["press", "repeat"] do
-    handle_key(code, state)
+    chord = Chord.from_event(key)
+
+    case Keys.resolve(chord, focus_stack(state)) do
+      {:intent, :"app/quit", _ctx} ->
+        {:stop, state}
+
+      {:intent, :"app/submit", _ctx} ->
+        submit(state)
+
+      {:intent, _intent, _ctx} = resolution ->
+        forest = Store.spans(state.store)
+        ui = Keys.dispatch(resolution, state.ui, forest)
+        # Navigation changed the gaze → re-mirror every pane (cheap; the gaze
+        # feeds projection now that collapse/cursor live in Ui).
+        {:noreply, reproject(%{state | ui: ui}, :all)}
+
+      :unbound ->
+        {:noreply, compose(chord, state)}
+    end
   end
 
   def handle_event(_event, state), do: {:noreply, state}
@@ -115,9 +151,8 @@ defmodule SpellAgent.Tui.App do
   # reset its scroll so the start of the answer is visible immediately.
   def handle_info({ref, result}, state) when is_reference(ref) do
     Process.demonitor(ref, [:flush])
-
-    {:noreply,
-     reproject(%{state | running?: false, result: result, focus: :answer, answer_scroll: 0}, :all)}
+    ui = %{state.ui | focus: :answer} |> Map.update!(:scroll, &Map.put(&1, :answer, 0))
+    {:noreply, reproject(%{state | running?: false, result: result, ui: ui}, :all)}
   end
 
   def handle_info({:DOWN, _ref, :process, _pid, _reason}, state) do
@@ -126,11 +161,12 @@ defmodule SpellAgent.Tui.App do
 
   def handle_info(_msg, state), do: {:noreply, state}
 
-  # ---- key handling ----
+  # ---- effects the resolver delegates back to the App ----
 
-  defp handle_key("enter", %{composer: ""} = state), do: {:noreply, state}
+  # app/submit: run the composer's prompt as a mission. Empty composer = no-op.
+  defp submit(%{composer: ""} = state), do: {:noreply, state}
 
-  defp handle_key("enter", state) do
+  defp submit(state) do
     prompt = state.composer
     on_submit = state.on_submit
 
@@ -143,61 +179,30 @@ defmodule SpellAgent.Tui.App do
      reproject(%{state | composer: "", running?: true, result: nil, last_prompt: prompt}, :all)}
   end
 
-  # Esc (or Ctrl-C) quits the app and restores the terminal.
-  defp handle_key(code, state) when code in ["esc", "ctrl-c"], do: {:stop, state}
-
-  # Tab switches which pane the scroll keys drive.
-  defp handle_key("tab", state) do
-    {:noreply, %{state | focus: toggle_focus(state.focus)}}
+  # The composer text sink: backspace edits, a single printable char appends, and
+  # anything else is ignored. This is where `:unbound` chords land.
+  defp compose(%Chord{key: "backspace"}, state) do
+    %{state | composer: String.slice(state.composer, 0..-2//1)}
   end
 
-  defp handle_key("backspace", state) do
-    {:noreply, %{state | composer: String.slice(state.composer, 0..-2//1)}}
+  # A single printable char appends. Shift is the ONLY modifier allowed here:
+  # crossterm folds shift into the `code` ("A", "!"), so a shifted letter arrives
+  # as a printable with mods [:shift] — it must still type. ctrl/alt-printables are
+  # NOT text (they're chords); they reach compose only when unbound, and are
+  # dropped rather than inserted as a stray glyph.
+  defp compose(%Chord{key: <<_::utf8>> = ch, mods: mods}, state) when mods in [[], [:shift]] do
+    %{state | composer: state.composer <> ch}
   end
 
-  # Scroll keys act on the focused pane: the answer (text scroll) or the tree
-  # (cursor move, which the List auto-scrolls to follow).
-  defp handle_key("up", state), do: {:noreply, scroll(state, -1)}
-  defp handle_key("down", state), do: {:noreply, scroll(state, +1)}
-  defp handle_key("page_up", state), do: {:noreply, scroll(state, -10)}
-  defp handle_key("page_down", state), do: {:noreply, scroll(state, +10)}
-
-  # A single printable character.
-  defp handle_key(<<_::utf8>> = ch, state) do
-    {:noreply, %{state | composer: state.composer <> ch}}
-  end
-
-  defp handle_key(_other, state), do: {:noreply, state}
-
-  defp toggle_focus(:answer), do: :tree
-  defp toggle_focus(:tree), do: :answer
-
-  defp scroll(%{focus: :answer} = state, delta) do
-    %{state | answer_scroll: max((state.answer_scroll || 0) + delta, 0)}
-  end
-
-  defp scroll(%{focus: :tree} = state, delta), do: move_cursor(state, delta)
-
-  # ---- cursor / projection ----
-
-  # Move the focused pane's cursor and reproject (so {:selected,…} mirrors and
-  # the highlighted row update). Spike: the single tree pane is the focus.
-  defp move_cursor(state, delta) do
-    panes =
-      Enum.map(state.panes, fn
-        %{name: :tree, assigns: a} = p ->
-          %{p | assigns: Map.update(a, :cursor, 0, &max(&1 + delta, 0))}
-
-        p ->
-          p
-      end)
-
-    reproject(%{state | panes: panes}, :all)
-  end
+  defp compose(_chord, state), do: state
 
   defp reproject(state, fired) do
     forest = Store.spans(state.store)
-    vms = Projection.reconcile(forest, state.panes, fired, state.vms)
+    # Inject the live gaze into each pane's projection assigns so a gaze-aware
+    # projection (SpanTree, which prunes collapsed subtrees — D4) sees the current
+    # collapse/cursor state. Navigation reprojects with :all, so this stays fresh.
+    panes = Enum.map(state.panes, fn p -> %{p | assigns: Map.put(p.assigns, :ui, state.ui)} end)
+    vms = Projection.reconcile(forest, panes, fired, state.vms)
     %{state | vms: vms}
   end
 
@@ -276,12 +281,12 @@ defmodule SpellAgent.Tui.App do
         true -> {"(the model's answer will appear here)", :dark_gray}
       end
 
-    focus_tag = if state.focus == :answer, do: " ●", else: ""
+    focus_tag = if state.ui.focus == :answer, do: " ●", else: ""
 
     %Paragraph{
       text: body,
       wrap: true,
-      scroll: {state.answer_scroll || 0, 0},
+      scroll: {Ui.scroll_of(state.ui, :answer), 0},
       style: %Style{fg: color},
       block: %Block{title: " answer" <> focus_tag <> " ", borders: [:all], border_type: :rounded}
     }
@@ -317,7 +322,7 @@ defmodule SpellAgent.Tui.App do
     {title, hint} =
       if state.running?,
         do: {" running… ", ""},
-        else: {" prompt ", "↵ run · tab switch · ↑↓/pgup·pgdn scroll · esc quit"}
+        else: {" prompt ", "↵ run · ^j/^k pane · ^l/^h expand|turn · ↑↓ move · esc quit"}
 
     text = if state.composer == "", do: hint, else: state.composer <> "▎"
 

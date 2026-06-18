@@ -78,10 +78,11 @@ defmodule SpellAgent.Tui.Panes.SpanTreeTest do
 
     assert desc.cursor == 2
     assert desc.focused? == true
-    # the focused cursor row carries the ▸ marker.
-    assert Enum.at(desc.lines, 2).text =~ "▸"
+    # the focused cursor row carries the › cursor marker (PLAN-346 W2 changed it
+    # from ▸ so the disclosure glyph ▸/▾ can mean collapse state).
+    assert Enum.at(desc.lines, 2).text =~ "›"
     # a non-cursor row does not.
-    refute Enum.at(desc.lines, 0).text =~ "▸"
+    refute Enum.at(desc.lines, 0).text =~ "›"
   end
 
   test "events declares the suffixes that wake the pane (dirty filter)" do

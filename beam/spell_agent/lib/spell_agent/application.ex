@@ -22,7 +22,11 @@ defmodule SpellAgent.Application do
       # The inspector TUI's live span forest (PLAN-345). Long-lived + session-
       # global, attached to telemetry on first use; the App (which grabs the
       # terminal) is launched on demand via `SpellAgent.tui/0`.
-      SpellAgent.Tui.Store
+      SpellAgent.Tui.Store,
+      # Live keybinding overrides for the Reaction DSL (PLAN-346): runtime
+      # rebinds (keymap/bind) and authored reactions (keymap/define-reaction).
+      # Session-global, same posture as ToolRegistry.
+      SpellAgent.Tui.KeymapRegistry
     ]
 
     opts = [strategy: :one_for_one, name: SpellAgent.Supervisor]

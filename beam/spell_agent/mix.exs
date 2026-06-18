@@ -51,8 +51,16 @@ defmodule SpellAgent.MixProject do
       # Read Spell's agent.db (SQLite) for the subscription credential.
       {:exqlite, "~> 0.27"},
       {:jason, "~> 1.4"},
-      # The inspector TUI (PLAN-345). Precompiled NIF; renders the live span forest.
-      {:ex_ratatui, "~> 0.11"},
+      # The inspector TUI (PLAN-345/346). VENDORED as a git submodule (path dep,
+      # same as ptc_runner) so we can patch the Rust NIF — PLAN-346 W0 pushes
+      # kitty keyboard-protocol enhancement flags so ctrl+j/h disambiguate from
+      # Enter/Backspace. Pinned to upstream tag v0.11.0. Builds from source
+      # (rustler), not the precompiled hex package.
+      {:ex_ratatui, path: "../ex_ratatui-vendored"},
+      # rustler is OPTIONAL in ex_ratatui (it ships a precompiled NIF by default).
+      # We force a source build (config/config.exs) to apply our terminal.rs kitty
+      # patch, so we must pull rustler explicitly to compile the NIF.
+      {:rustler, "~> 0.36", runtime: false},
       # req_llm is intentionally NOT a dep in v0: one provider, direct adapter,
       # full request-body control. Revisit when porting many providers.
       {:stream_data, "~> 1.1", only: [:test]}

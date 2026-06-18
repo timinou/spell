@@ -52,6 +52,26 @@ defmodule SpellAgent.Tui.Pane do
   @doc "Render a view-model to `[{widget, rect}]`."
   @callback view(render_input()) :: [{term(), term()}]
 
+  @typedoc "An abstract verb in the app's vocabulary, e.g. `:\"span/expand\"`."
+  @type intent :: atom()
+
+  @doc """
+  Chord → intent for this pane's context (PLAN-346). The WRITE-mirror's vocabulary:
+  which chords this pane SPEAKS, and what abstract verb each names. Declared with
+  the `keymap/1` macro; defaults to `[]` (the pane binds nothing of its own, so
+  every chord falls through to the global layer).
+  """
+  @callback keymap() :: [{SpellAgent.Tui.Chord.t(), intent()}]
+
+  @doc """
+  Intent → new gaze (PLAN-346) — the REACTION, the dual of `project/2`. A pure
+  transform of the App's navigation state given the (read-only) forest, so the
+  pane can resolve the cursor's span id, walk descendants, etc. `react/3` clauses
+  ARE this pane's reaction vocabulary; an unmatched intent falls to the injected
+  identity default (no-op), so a pane only implements the verbs it owns.
+  """
+  @callback react(intent(), SpellAgent.Tui.Ui.t(), forest()) :: SpellAgent.Tui.Ui.t()
+
   defmacro __using__(_opts) do
     quote do
       @behaviour SpellAgent.Tui.Pane
@@ -62,10 +82,17 @@ defmodule SpellAgent.Tui.Pane do
       @impl true
       def project(_forest, _assigns), do: nil
 
-      defoverridable events: 0, project: 2
+      @impl true
+      def keymap, do: []
 
-      # Sugar: `events [[:turn, :stop]]` as a module attribute-style declaration.
-      import SpellAgent.Tui.Pane, only: [events: 1]
+      @impl true
+      def react(_intent, ui, _forest), do: ui
+
+      defoverridable events: 0, project: 2, keymap: 0, react: 3
+
+      # Sugar: `events [[:turn, :stop]]` and `keymap [{"C-l", :\"span/expand\"}]`
+      # as declarative module-level declarations.
+      import SpellAgent.Tui.Pane, only: [events: 1, keymap: 1]
     end
   end
 
@@ -78,6 +105,33 @@ defmodule SpellAgent.Tui.Pane do
     quote do
       @impl true
       def events, do: unquote(suffixes)
+    end
+  end
+
+  @doc """
+  Declare a pane's keymap inline as chord-STRING → intent pairs:
+
+      keymap [
+        {"C-l", :\"span/expand\"},
+        {"C-h", :\"span/contract\"},
+        {"up",  :\"cursor/prev\"}
+      ]
+
+  Each chord string is parsed to a `%Chord{}` AT COMPILE TIME via `Chord.parse/1`,
+  so the runtime `keymap/0` returns ready `[{Chord.t(), intent}]` with no per-keystroke
+  parsing. Expands to a `keymap/0` definition. The chord/intent split is the first
+  axis of the Reaction DSL's two-stage indirection (chord →[keymap]→ intent).
+  """
+  defmacro keymap(pairs) do
+    parsed =
+      Enum.map(pairs, fn {chord_str, intent} ->
+        chord = SpellAgent.Tui.Chord.parse(chord_str)
+        {Macro.escape(chord), intent}
+      end)
+
+    quote do
+      @impl true
+      def keymap, do: unquote(parsed)
     end
   end
 
