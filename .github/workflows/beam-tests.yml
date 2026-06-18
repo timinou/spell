@@ -1,0 +1,225 @@
+name: BEAM Tests
+
+on:
+  push:
+    paths:
+      - 'beam/**'
+      - '.github/workflows/beam-tests.yml'
+  pull_request:
+    paths:
+      - 'beam/**'
+
+env:
+  MIX_ENV: test
+  ELIXIR_VERSION: '1.17.2'
+  OTP_VERSION: '27.0'
+
+jobs:
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        include:
+          - otp: '27.0'
+            elixir: '1.17.2'
+          - otp: '26.2'
+            elixir: '1.16.3'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Erlang/Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.otp }}
+          elixir-version: ${{ matrix.elixir }}
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            beam/spell_agent/deps
+            beam/spell_agent/_build
+          key: ${{ runner.os }}-mix-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-${{ matrix.otp }}-${{ matrix.elixir }}-
+
+      - name: Install dependencies
+        run: |
+          cd beam/spell_agent
+          mix deps.get
+          mix deps.compile
+
+      - name: Check formatting
+        run: |
+          cd beam/spell_agent
+          mix format --check-formatted
+
+      - name: Run Credo
+        run: |
+          cd beam/spell_agent
+          mix credo --strict || true
+
+      - name: Run tests with coverage
+        run: |
+          cd beam/spell_agent
+          mix test --cover --warnings-as-errors
+
+      - name: Generate coverage report
+        run: |
+          cd beam/spell_agent
+          mix coveralls.html
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-${{ matrix.otp }}-${{ matrix.elixir }}
+          path: beam/spell_agent/cover/
+
+      - name: Upload visual test diffs
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: visual-diffs-${{ matrix.otp }}-${{ matrix.elixir }}
+          path: beam/spell_agent/test/visual/diff/
+
+  property-tests:
+    name: Property Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Erlang/Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            beam/spell_agent/deps
+            beam/spell_agent/_build
+          key: ${{ runner.os }}-mix-property-${{ hashFiles('**/mix.lock') }}
+
+      - name: Install dependencies
+        run: |
+          cd beam/spell_agent
+          mix deps.get
+
+      - name: Run property tests with seed
+        run: |
+          cd beam/spell_agent
+          mix test --only property --seed ${{ github.run_id }}
+
+  benchmarks:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Erlang/Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            beam/spell_agent/deps
+            beam/spell_agent/_build
+          key: ${{ runner.os }}-mix-bench-${{ hashFiles('**/mix.lock') }}
+
+      - name: Install dependencies
+        run: |
+          cd beam/spell_agent
+          mix deps.get
+
+      - name: Run benchmarks
+        run: |
+          cd beam/spell_agent
+          mix test --only benchmark
+
+      - name: Store benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: beam/spell_agent/bench/
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Erlang/Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            beam/spell_agent/deps
+            beam/spell_agent/_build
+          key: ${{ runner.os }}-mix-integration-${{ hashFiles('**/mix.lock') }}
+
+      - name: Install dependencies
+        run: |
+          cd beam/spell_agent
+          mix deps.get
+
+      - name: Run integration tests
+        run: |
+          cd beam/spell_agent
+          mix test test/spell_agent/integration --max-failures 1
+
+  dialyzer:
+    name: Dialyzer
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Erlang/Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+
+      - name: Cache PLT
+        uses: actions/cache@v4
+        with:
+          path: beam/spell_agent/priv/plts
+          key: ${{ runner.os }}-plt-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('**/mix.lock') }}
+
+      - name: Install dependencies
+        run: |
+          cd beam/spell_agent
+          mix deps.get
+
+      - name: Run dialyzer
+        run: |
+          cd beam/spell_agent
+          mix dialyzer --format github || true
