@@ -322,7 +322,7 @@ defmodule SpellAgent.Tui.App do
     {title, hint} =
       if state.running?,
         do: {" running… ", ""},
-        else: {" prompt ", "↵ run · ^j/^k pane · ^l/^h expand|turn · ↑↓ move · esc quit"}
+        else: {" prompt ", hint_for(state)}
 
     text = if state.composer == "", do: hint, else: state.composer <> "▎"
 
@@ -332,6 +332,60 @@ defmodule SpellAgent.Tui.App do
       block: %Block{title: title, borders: [:all], border_type: :rounded}
     }
   end
+
+  # The hint line is DERIVED from the live keymaps (PLAN-346 W4), focus-aware, so
+  # it never drifts from the actual bindings — and a runtime `keymap/bind` is
+  # reflected immediately. We show the chord currently bound to a few headline
+  # intents in the focused context, then the global ones.
+  defp hint_for(state) do
+    [focused | _] = focus_stack(state)
+    ctx = if function_exported?(focused, :context_name, 0), do: focused.context_name(), else: focused
+
+    focused_hints =
+      case state.ui.focus do
+        :tree -> [chord_hint(ctx, :"span/expand", "expand"), chord_hint(ctx, :"span/contract", "collapse"), chord_hint(ctx, :"cursor/next", "move")]
+        f when f in [:answer, :prompt] -> [chord_hint(ctx, :"turn/next", "next turn"), chord_hint(ctx, :"scroll/down", "scroll")]
+        _ -> []
+      end
+
+    global = [chord_hint(:global, :"focus/next", "pane"), chord_hint(:global, :"app/submit", "run"), chord_hint(:global, :"app/quit", "quit")]
+
+    (focused_hints ++ global)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" · ")
+  end
+
+  # "<chord> <label>" for the chord currently bound to `intent` in `context`
+  # (registry override first, then the compiled keymap), or nil if unbound.
+  defp chord_hint(context, intent, label) do
+    case chord_for(context, intent) do
+      nil -> nil
+      chord -> "#{Chord.to_string(chord)} #{label}"
+    end
+  end
+
+  # Find a chord that resolves to `intent` in `context`: prefer a live registry
+  # binding, else the compiled keymap. (First match wins; good enough for a hint.)
+  defp chord_for(context, intent) do
+    live = Enum.find_value(live_bindings(context), fn {c, i} -> if i == intent, do: c end)
+    live || compiled_chord_for(context, intent)
+  end
+
+  # Registry bindings if the registry is running, else [] — so the hint still
+  # renders (from compiled keymaps) when the App runs without the supervised
+  # KeymapRegistry (e.g. a headless render test).
+  defp live_bindings(context) do
+    if Process.whereis(SpellAgent.Tui.KeymapRegistry),
+      do: SpellAgent.Tui.KeymapRegistry.bindings(context),
+      else: []
+  end
+
+  defp compiled_chord_for(:global, intent), do: keymap_chord(Global.keymap(), intent)
+  defp compiled_chord_for(:tree, intent), do: keymap_chord(SpanTree.keymap(), intent)
+  defp compiled_chord_for(:turn_nav, intent), do: keymap_chord(TurnNav.keymap(), intent)
+  defp compiled_chord_for(_other, _intent), do: nil
+
+  defp keymap_chord(keymap, intent), do: Enum.find_value(keymap, fn {c, i} -> if i == intent, do: c end)
 
   defp default_submit(prompt), do: SpellAgent.Session.run(prompt)
 end

@@ -141,6 +141,22 @@ defmodule SpellAgent.Tui.AppTest do
   defp paragraph_text({%ExRatatui.Widgets.Paragraph{text: t}, _rect}), do: t
   defp status_text(widgets), do: paragraph_text(Enum.at(widgets, 0))
   defp answer_text(widgets), do: paragraph_text(Enum.at(widgets, 1))
+  defp composer_text(widgets), do: paragraph_text(List.last(widgets))
+
+  test "the composer hint is DERIVED from the live keymap, focus-aware (W4)", %{store: store} do
+    tree = state(%{store: store, ui: Ui.new(focus: :tree, panes: [:answer, :tree, :prompt])})
+    tree_hint = composer_text(App.render(tree, %Frame{width: 100, height: 24}))
+    # Under tree focus the hint shows the span verbs' ACTUAL chords + globals.
+    assert tree_hint =~ "C-l expand"
+    assert tree_hint =~ "C-h collapse"
+    assert tree_hint =~ "C-j pane"
+    assert tree_hint =~ "quit"
+
+    answer = state(%{store: store, ui: Ui.new(focus: :answer, panes: [:answer, :tree, :prompt])})
+    answer_hint = composer_text(App.render(answer, %Frame{width: 100, height: 24}))
+    # Under answer focus the SAME C-l now reads as turn navigation.
+    assert answer_hint =~ "C-l next turn"
+  end
 
   test "D2: the full final answer is shown in the scrollable answer pane", %{store: store} do
     long = String.duplicate("word ", 200) <> "END"
