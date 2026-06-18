@@ -115,16 +115,36 @@ defmodule SpellAgent.Harness do
 
   defp to_ui(m) when is_map(m) do
     %Ui{
-      focus: atomize(get(m, "focus")) || :tree,
-      panes: (get(m, "panes") || [:tree, :answer, :prompt]) |> Enum.map(&atomize/1),
+      focus: Ui.safe_pane(get(m, "focus")) || :tree,
+      panes: safe_panes(get(m, "panes")),
       cursors: keymapize(get(m, "cursors")),
-      auto_depth: get(m, "auto_depth") || 1,
+      auto_depth: safe_int(get(m, "auto_depth"), 1),
       overrides: stringkeyize(get(m, "overrides")),
-      turn: get(m, "turn") || 0,
+      turn: safe_int(get(m, "turn"), 0),
       scroll: keymapize(get(m, "scroll")),
-      leader: atomize(get(m, "leader"))
+      # leader is reserved (modal layers); only a known pane atom is accepted,
+      # else nil — never interned from a reaction string.
+      leader: Ui.safe_pane(get(m, "leader"))
     }
   end
+
+  # A pane list coerced to known panes (unknowns dropped), defaulting to the full
+  # ring when absent/empty.
+  defp safe_panes(nil), do: [:tree, :answer, :prompt]
+
+  defp safe_panes(list) when is_list(list) do
+    case Enum.flat_map(list, fn p -> List.wrap(Ui.safe_pane(p)) end) do
+      [] -> [:tree, :answer, :prompt]
+      panes -> panes
+    end
+  end
+
+  defp safe_panes(_), do: [:tree, :answer, :prompt]
+
+  # A non-negative integer, else the default — a reaction can't inject a non-int
+  # (e.g. a string) that would later crash a numeric comparison in the projection.
+  defp safe_int(n, _default) when is_integer(n) and n >= 0, do: n
+  defp safe_int(_, default), do: default
 
   # Render a %Ui{} back to a plain string-keyed map for the sandbox boundary.
   defp ui_map(%Ui{} = ui) do
@@ -167,46 +187,82 @@ defmodule SpellAgent.Harness do
   # ---- keymap/ meta-ops ----
 
   defp keymap_bind(args) do
-    ctx = require_atom(args, "context")
+    ctx = require_context(args)
     chord = Chord.parse(require_str(args, "chord"))
-    intent = require_atom(args, "intent")
+    intent = require_existing_intent(args)
     :ok = KeymapRegistry.bind(ctx, chord, intent)
     %{"ok" => true, "bound" => Chord.to_string(chord), "intent" => to_string(intent), "context" => to_string(ctx)}
   end
 
   defp keymap_unbind(args) do
-    ctx = require_atom(args, "context")
+    ctx = require_context(args)
     chord = Chord.parse(require_str(args, "chord"))
     :ok = KeymapRegistry.unbind(ctx, chord)
     %{"ok" => true, "unbound" => Chord.to_string(chord), "context" => to_string(ctx)}
   end
 
   defp keymap_show(args) do
-    ctx = require_atom(args, "context")
+    ctx = require_context(args)
 
     KeymapRegistry.bindings(ctx)
     |> Enum.map(fn {chord, intent} -> %{"chord" => Chord.to_string(chord), "intent" => to_string(intent)} end)
   end
 
   defp keymap_intents(args) do
-    ctx = require_atom(args, "context")
+    ctx = require_context(args)
     reactions = KeymapRegistry.reactions(ctx) |> Enum.map(fn {intent, _src} -> to_string(intent) end)
     %{"context" => to_string(ctx), "reactions" => reactions}
   end
 
   defp keymap_define_reaction(args) do
-    ctx = require_atom(args, "context")
-    intent = require_atom(args, "intent")
+    ctx = require_context(args)
     source = require_str(args, "source")
+    # define-reaction is the ONE place a NEW intent atom may be created. It is
+    # bounded: KeymapRegistry.define_intent/1 caps the number of runtime intents
+    # and requires the `domain/verb` shape, so a sandboxed reaction can't grow the
+    # atom table without limit (atom-table-DoS defense, PLAN-346 W3r).
+    case KeymapRegistry.define_intent(require_str(args, "intent")) do
+      {:ok, intent} ->
+        case PtcRunner.Lisp.validate(source) do
+          :ok ->
+            :ok = KeymapRegistry.put_reaction(ctx, intent, source)
+            %{"ok" => true, "defined" => to_string(intent), "context" => to_string(ctx)}
 
-    case PtcRunner.Lisp.validate(source) do
-      :ok ->
-        :ok = KeymapRegistry.put_reaction(ctx, intent, source)
-        %{"ok" => true, "defined" => to_string(intent), "context" => to_string(ctx)}
+          {:error, messages} ->
+            raise ArgumentError,
+                  "define-reaction #{inspect(to_string(intent))} has invalid PTC source: #{Enum.join(List.wrap(messages), "; ")}"
+        end
 
-      {:error, messages} ->
-        raise ArgumentError,
-              "define-reaction #{inspect(to_string(intent))} has invalid PTC source: #{Enum.join(List.wrap(messages), "; ")}"
+      {:error, reason} ->
+        raise ArgumentError, "define-reaction rejected intent: #{reason}"
+    end
+  end
+
+  # Known keymap contexts — a fixed, allowlisted set, so a reaction-supplied
+  # context string is matched by VALUE and never interned (atom-table DoS guard).
+  @contexts [:tree, :answer, :prompt, :turn_nav, :global]
+
+  defp require_context(args) do
+    s = require_str(args, "context")
+
+    case Enum.find(@contexts, &(Atom.to_string(&1) == s)) do
+      nil -> raise ArgumentError, "unknown context #{inspect(s)}; allowed: #{Enum.map_join(@contexts, ", ", &to_string/1)}"
+      ctx -> ctx
+    end
+  end
+
+  # An intent to BIND must already exist (a compiled verb or a previously-defined
+  # reaction): use to_existing_atom so a typo/attacker string can't intern.
+  defp require_existing_intent(args) do
+    s = require_str(args, "intent")
+
+    try do
+      String.to_existing_atom(s)
+    rescue
+      ArgumentError ->
+        reraise ArgumentError,
+                [message: "unknown intent #{inspect(s)}; define it first with keymap/define-reaction"],
+                __STACKTRACE__
     end
   end
 
@@ -218,20 +274,33 @@ defmodule SpellAgent.Harness do
 
   # Cursor delta: an int, or :first/:last (passed as strings from PTC).
   defp cursor_delta(n) when is_integer(n), do: n
-  defp cursor_delta("first"), do: :first
-  defp cursor_delta("last"), do: :last
-  defp cursor_delta(s) when is_binary(s), do: atomize(s)
+  defp cursor_delta(s) when is_binary(s), do: Ui.safe_dir(s) || 0
   defp cursor_delta(_), do: 0
 
+  # ATOM SAFETY (PLAN-346 W3r): a reaction's strings are untrusted; never
+  # `String.to_atom` them (atom-table DoS). These coercions go through Ui's
+  # bounded vocabularies, interning nothing.
   defp atomize(nil), do: nil
   defp atomize(a) when is_atom(a), do: a
-  defp atomize(s) when is_binary(s), do: String.to_atom(s)
+  # `atomize` is only ever used on pane/dir/visibility-domain values here, so
+  # route binaries through the bounded coercions (pane first, then dir).
+  defp atomize(s) when is_binary(s), do: Ui.safe_pane(s) || Ui.safe_dir(s)
 
+  # cursors/scroll maps are keyed by PANE atoms; coerce keys safely, dropping any
+  # unknown key rather than interning it.
   defp keymapize(nil), do: %{}
-  defp keymapize(m) when is_map(m), do: Map.new(m, fn {k, v} -> {atomize(k), v} end)
 
+  defp keymapize(m) when is_map(m) do
+    for {k, v} <- m, p = Ui.safe_pane(k), into: %{}, do: {p, v}
+  end
+
+  # overrides are keyed by span-id STRINGS (kept as strings — no atomization) with
+  # :expanded/:collapsed VALUES (bounded).
   defp stringkeyize(nil), do: %{}
-  defp stringkeyize(m) when is_map(m), do: Map.new(m, fn {k, v} -> {to_string(k), atomize(v)} end)
+
+  defp stringkeyize(m) when is_map(m) do
+    for {k, v} <- m, vis = Ui.safe_visibility(v), into: %{}, do: {to_string(k), vis}
+  end
 
   defp stringify_kv(m) when is_map(m), do: Map.new(m, fn {k, v} -> {to_string(k), stringify_val(v)} end)
   defp stringify_val(v) when is_atom(v) and not is_nil(v), do: to_string(v)
@@ -244,7 +313,7 @@ defmodule SpellAgent.Harness do
     end
   end
 
-  defp require_atom(args, key), do: args |> require_str(key) |> String.to_atom()
+
 
   defp safe_atom(key) when is_binary(key) do
     String.to_existing_atom(key)

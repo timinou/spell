@@ -30,9 +30,61 @@ defmodule SpellAgent.Tui.KeymapRegistry do
   @type intent :: atom()
   @type state :: %{bindings: %{{context(), Chord.t()} => intent()}, reactions: %{{context(), intent()} => String.t()}}
 
+  # Cap on how many DISTINCT runtime intent atoms may be created via
+  # `define_intent/1`. Atoms are never GC'd, so this bounds the atom-table growth
+  # a (sandboxed, untrusted) reaction can cause through keymap/define-reaction
+  # (atom-table-DoS defense, PLAN-346 W3r). The compiled intents already exist as
+  # atoms and don't count against this.
+  @max_runtime_intents 256
+
+  # A runtime intent must look like `domain/verb` (lowercase, hyphen/underscore),
+  # mirroring the compiled vocabulary — not an arbitrary string.
+  @intent_pattern ~r{\A[a-z][a-z0-9_-]*/[a-z][a-z0-9_-]*\z}
+
   @spec start_link(keyword()) :: Agent.on_start()
   def start_link(_opts \\ []) do
-    Agent.start_link(fn -> %{bindings: %{}, reactions: %{}} end, name: __MODULE__)
+    Agent.start_link(fn -> %{bindings: %{}, reactions: %{}, intents: MapSet.new()} end, name: __MODULE__)
+  end
+
+  @doc """
+  Resolve a runtime intent NAME (string) to an atom, creating the atom at most
+  once and only within bounds (the single controlled atom-creation point for
+  reaction-authored intents).
+
+  Returns `{:ok, atom}` or `{:error, reason}`. Rules:
+    * if the atom already exists (a compiled intent or one defined earlier),
+      reuse it — no new atom;
+    * else require the `domain/verb` shape AND that the runtime-intent count is
+      under `@max_runtime_intents`, then create + record it.
+  """
+  @spec define_intent(String.t()) :: {:ok, intent()} | {:error, String.t()}
+  def define_intent(name) when is_binary(name) do
+    case existing_atom(name) do
+      {:ok, atom} ->
+        {:ok, atom}
+
+      :error ->
+        cond do
+          not Regex.match?(@intent_pattern, name) ->
+            {:error, "intent must match domain/verb (got #{inspect(name)})"}
+
+          true ->
+            Agent.get_and_update(__MODULE__, fn s ->
+              if MapSet.size(s.intents) >= @max_runtime_intents do
+                {{:error, "runtime intent limit reached (#{@max_runtime_intents})"}, s}
+              else
+                atom = String.to_atom(name)
+                {{:ok, atom}, %{s | intents: MapSet.put(s.intents, atom)}}
+              end
+            end)
+        end
+    end
+  end
+
+  defp existing_atom(name) do
+    {:ok, String.to_existing_atom(name)}
+  rescue
+    ArgumentError -> :error
   end
 
   # ---- bindings (chord -> intent) ----
@@ -87,5 +139,5 @@ defmodule SpellAgent.Tui.KeymapRegistry do
 
   @doc "Wipe all overrides (e.g. between tests / sessions). Keeps the process."
   @spec reset() :: :ok
-  def reset, do: Agent.update(__MODULE__, fn _ -> %{bindings: %{}, reactions: %{}} end)
+  def reset, do: Agent.update(__MODULE__, fn _ -> %{bindings: %{}, reactions: %{}, intents: MapSet.new()} end)
 end

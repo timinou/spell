@@ -142,6 +142,55 @@ defmodule SpellAgent.HarnessTest do
     end
   end
 
+  describe "atom-table-DoS defenses (PLAN-346 W3r)" do
+    test "an unknown harness/ verb is rejected WITHOUT interning a new atom" do
+      tools = Harness.tools(forest(), tree_ui())
+      bogus = "harness_dos_#{System.unique_integer([:positive])}"
+      src = "(harness/#{bogus} {})"
+      # The analyzer rejects it; crucially the qualified name is never interned.
+      assert {:error, _} = PtcRunner.Lisp.run(src, tools: tools, caller: :in_process_v1)
+      assert_raise ArgumentError, fn -> String.to_existing_atom("harness/#{bogus}") end
+    end
+
+    test "a reaction returning an arbitrary focus string does NOT intern it" do
+      uniq = "pane_dos_#{System.unique_integer([:positive])}"
+      ui = tree_ui()
+      # The reaction returns a gaze map with a bogus focus; rehydrate must keep the
+      # prior focus and never create the atom.
+      result = Reaction.Ptc.run(~s|{"focus" "#{uniq}"}|, ui, forest())
+      assert result.focus == ui.focus
+      assert_raise ArgumentError, fn -> String.to_existing_atom(uniq) end
+    end
+
+    test "keymap/bind rejects an unknown intent without interning it" do
+      uniq = "intent_dos_#{System.unique_integer([:positive])}"
+      tools = Harness.tools(forest(), tree_ui())
+      src = ~s|(keymap/bind {:chord "z" :intent "#{uniq}/x" :context "tree"})|
+      assert {:error, _} = PtcRunner.Lisp.run(src, tools: tools, caller: :in_process_v1)
+      assert_raise ArgumentError, fn -> String.to_existing_atom("#{uniq}/x") end
+    end
+
+    test "keymap/bind rejects an unknown context" do
+      tools = Harness.tools(forest(), tree_ui())
+      src = ~s|(keymap/bind {:chord "z" :intent "span/expand" :context "bogus_ctx"})|
+      assert {:error, _} = PtcRunner.Lisp.run(src, tools: tools, caller: :in_process_v1)
+    end
+
+    test "define-reaction rejects an intent that isn't domain/verb shaped" do
+      tools = Harness.tools(forest(), tree_ui())
+      src = ~s|(keymap/define-reaction {:context "tree" :intent "NotValidShape!!" :source "(harness/expand {})"})|
+      assert {:error, _} = PtcRunner.Lisp.run(src, tools: tools, caller: :in_process_v1)
+    end
+
+    test "a reaction returning a non-integer auto_depth keeps the prior value (no corrupt gaze)" do
+      ui = %{tree_ui() | auto_depth: 3}
+      result = Reaction.Ptc.run(~s|{"auto_depth" "not-an-int"}|, ui, forest())
+      assert result.auto_depth == 3
+      # And it stays a usable gaze: expanded?/3 (numeric compare) doesn't crash.
+      assert is_boolean(SpellAgent.Tui.Ui.expanded?(result, 0, "root"))
+    end
+  end
+
   describe "the homoiconic loop closes: define a reaction, bind it, dispatch it" do
     test "an authored reaction drives the gaze when its bound chord fires" do
       # 1. Author a reaction as data.

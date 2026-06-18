@@ -180,4 +180,38 @@ defmodule SpellAgent.Tui.Ui do
     idx = Enum.find_index(panes, &(&1 == cur)) || 0
     Enum.at(panes, Integer.mod(idx + delta, length(panes)))
   end
+
+  # ---- bounded coercion (atom-table-DoS defense, PLAN-346 W3r) ----
+  #
+  # A reaction is sandboxed PTC and its string outputs are UNTRUSTED. BEAM atoms
+  # are never garbage-collected, so `String.to_atom/1` on attacker-controlled
+  # strings is a denial-of-service vector. These coercions map a string to an
+  # atom ONLY within a fixed, known vocabulary; anything else returns a safe
+  # default (or nil) WITHOUT interning. This is the single chokepoint the
+  # harness/reaction boundary funnels gaze-field strings through.
+
+  @panes [:tree, :answer, :prompt]
+  @dirs [:next, :prev, :first, :last]
+  @visibilities [:expanded, :collapsed]
+
+  @doc "Coerce a value to a known pane atom, or nil. Never interns a new atom."
+  @spec safe_pane(term()) :: pane() | nil
+  def safe_pane(p) when p in @panes, do: p
+  def safe_pane(s) when is_binary(s), do: lookup_known(s, @panes)
+  def safe_pane(_), do: nil
+
+  @doc "Coerce a value to a known direction atom (:next/:prev/:first/:last), or nil."
+  @spec safe_dir(term()) :: atom() | nil
+  def safe_dir(d) when d in @dirs, do: d
+  def safe_dir(s) when is_binary(s), do: lookup_known(s, @dirs)
+  def safe_dir(_), do: nil
+
+  @doc "Coerce a value to a known visibility atom (:expanded/:collapsed), or nil."
+  @spec safe_visibility(term()) :: visibility() | nil
+  def safe_visibility(v) when v in @visibilities, do: v
+  def safe_visibility(s) when is_binary(s), do: lookup_known(s, @visibilities)
+  def safe_visibility(_), do: nil
+
+  # Match a string against a fixed atom set by STRING comparison — no interning.
+  defp lookup_known(s, atoms), do: Enum.find(atoms, &(Atom.to_string(&1) == s))
 end
