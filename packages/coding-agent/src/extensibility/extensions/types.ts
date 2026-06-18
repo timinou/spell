@@ -41,7 +41,6 @@ import type {
 	SessionManager,
 } from "../../session/session-manager";
 import type { BashToolDetails, BashToolInput } from "../../tools";
-import type { TodoNode } from "../../tools/todo-write";
 import type { EventBus } from "../../utils/event-bus";
 import type { SlashCommandInfo } from "../slash-commands";
 
@@ -577,10 +576,10 @@ export interface TtsrTriggeredEvent {
 	rules: Rule[];
 }
 
-/** Fired when todo reminder logic detects unfinished todos */
-export interface TodoReminderEvent {
-	type: "todo_reminder";
-	todos: TodoNode[];
+/** Fired when a discipline yield-gate blocks the agent's stop (generic). */
+export interface YieldReminderEvent {
+	type: "yield_reminder";
+	disciplines: string[];
 	attempt: number;
 	maxAttempts: number;
 }
@@ -734,7 +733,7 @@ export type ExtensionEvent =
 	| AutoRetryStartEvent
 	| AutoRetryEndEvent
 	| TtsrTriggeredEvent
-	| TodoReminderEvent
+	| YieldReminderEvent
 	| UserBashEvent
 	| UserPythonEvent
 	| InputEvent
@@ -913,7 +912,7 @@ export interface ExtensionAPI {
 	on(event: "auto_retry_start", handler: ExtensionHandler<AutoRetryStartEvent>): void;
 	on(event: "auto_retry_end", handler: ExtensionHandler<AutoRetryEndEvent>): void;
 	on(event: "ttsr_triggered", handler: ExtensionHandler<TtsrTriggeredEvent>): void;
-	on(event: "todo_reminder", handler: ExtensionHandler<TodoReminderEvent>): void;
+	on(event: "yield_reminder", handler: ExtensionHandler<YieldReminderEvent>): void;
 	on(event: "input", handler: ExtensionHandler<InputEvent, InputEventResult>): void;
 	on(event: "tool_call", handler: ExtensionHandler<ToolCallEvent, ToolCallEventResult>): void;
 	on(event: "tool_result", handler: ExtensionHandler<ToolResultEvent, ToolResultEventResult>): void;

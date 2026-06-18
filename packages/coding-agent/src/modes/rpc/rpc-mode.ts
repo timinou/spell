@@ -521,6 +521,7 @@ export async function runRpcMode(session: AgentSession, eventBus?: EventBus): Pr
 					autoCompactionEnabled: session.autoCompactionEnabled,
 					messageCount: session.messages.length,
 					queuedMessageCount: session.queuedMessageCount,
+					disciplineStats: session.getDisciplineStats(),
 				};
 				return success(id, "get_state", state);
 			}

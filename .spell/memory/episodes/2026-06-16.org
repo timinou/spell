@@ -44,3 +44,15 @@ Implemented + verified. Changes: (1) packages/coding-agent/src/system-prompt.ts 
 ABOUT: BUG-488-smol-off-still-burns-codex-reasoning-tok
 :END:
 Fixed in commit 27deb9c38: explicit smol :off now propagates as disableReasoning, and OpenAI Codex serializes that as reasoning.effort none with null summary. Targeted tests pass.
+** ITEM Discipline yield-gates: replace vestigial todo-reminder system
+:PROPERTIES:
+:CUSTOM_ID: EP-2301bee2d7eaf679
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-16T16:54:48Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-822-discipline-yield-gates-replace-vestigial
+:END:
+Scope refinement after vestigial-vs-new feature audit.
+Implemented and verified.

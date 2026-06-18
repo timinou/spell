@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ArtifactRef, BlockingEventPayload, SessionSummary } from "../api/client";
+import type { ArtifactRef, BlockingEventPayload, SessionSummary, DisciplineRuntimeStat, DisciplineGateOutcome } from "../api/client";
 
 export type SessionStatus = "spawning" | "running" | "done" | "error";
 
@@ -9,6 +9,8 @@ export interface DerivedSession extends SessionSummary {
 	lastText?: string;
 	artifacts: ArtifactRef[];
 	logs: Array<{ kind: string; ts: number; text?: string; toolName?: string; meta?: Record<string, string | number | boolean> }>;
+	disciplineStats?: DisciplineRuntimeStat[] | null;
+	lastDisciplineOutcomes?: DisciplineGateOutcome[] | null;
 }
 
 interface SessionsState {
@@ -24,6 +26,7 @@ interface SessionsState {
 	noteEvent: (sessionId: string, event: { type: string; assistantMessageEvent?: { type: string; delta?: string; content?: string } }) => void;
 	markReady: (sessionId: string) => void;
 	setBlockingEvent: (sessionId: string, event: BlockingEventPayload | undefined) => void;
+	setDisciplineStats: (sessionId: string, stats: DisciplineRuntimeStat[] | null | undefined) => void;
 }
 
 function lift(summary: SessionSummary): DerivedSession {
@@ -105,7 +108,7 @@ export const useSessions = create<SessionsState>((set) => ({
 			});
 			return { sessions: next };
 		}),
-	noteEvent: (sessionId, event) =>
+	noteEvent: (sessionId, event: any) =>
 		set(state => {
 			const sess = state.sessions.get(sessionId);
 			if (!sess) return state;
@@ -127,6 +130,9 @@ export const useSessions = create<SessionsState>((set) => ({
 			if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_end") {
 				updated = { ...updated, lastText: (event.assistantMessageEvent.content ?? "").slice(-256) };
 			}
+			if (event.type === "yield_reminder" && event.stats) {
+				updated = { ...updated, disciplineStats: event.stats, lastDisciplineOutcomes: event.outcomes || null };
+			}
 			next.set(sessionId, updated);
 			return { sessions: next };
 		}),
@@ -144,6 +150,14 @@ export const useSessions = create<SessionsState>((set) => ({
 			if (!sess) return state;
 			const next = new Map(state.sessions);
 			next.set(sessionId, { ...sess, currentBlockingEvent: event });
+			return { sessions: next };
+		}),
+	setDisciplineStats: (sessionId, stats) =>
+		set(state => {
+			const sess = state.sessions.get(sessionId);
+			if (!sess) return state;
+			const next = new Map(state.sessions);
+			next.set(sessionId, { ...sess, disciplineStats: stats ?? null });
 			return { sessions: next };
 		}),
 }));

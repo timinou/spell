@@ -172,6 +172,7 @@ export function parseDisciplineNode(node: Node, warn: DisciplineWarn = noopWarn)
 	const readOnlyNode = getChildNode(node, "read-only");
 	const injectNode = getChildNode(node, "inject");
 	const verifyNode = getChildNode(node, "verify");
+	const guardNode = getChildNode(node, "guard");
 	const toolsNode = getChildNode(node, "tools");
 
 	const command = commandNode ? getStringArgument(commandNode) : undefined;
@@ -192,6 +193,14 @@ export function parseDisciplineNode(node: Node, warn: DisciplineWarn = noopWarn)
 	if (verifyNode) {
 		const verify = parseVerify(verifyNode);
 		if (verify) discipline.verify = verify;
+	}
+	if (guardNode) {
+		const g = getStringArgument(guardNode);
+		if (g === "open-work") {
+			discipline.guard = g;
+		} else {
+			warn(`discipline "${name}": unknown guard "${g}" — ignored.`);
+		}
 	}
 	if (toolsNode) {
 		const tools = parseTools(toolsNode);

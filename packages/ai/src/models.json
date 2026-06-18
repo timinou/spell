@@ -14780,6 +14780,74 @@
 				"minLevel": "minimal",
 				"maxLevel": "high"
 			}
+		},
+		"kimi-k2.7-code": {
+			"id": "kimi-k2.7-code",
+			"name": "Kimi K2.7 Code",
+			"api": "openai-completions",
+			"provider": "kimi-code",
+			"baseUrl": "https://api.kimi.com/coding/v1",
+			"headers": {
+				"User-Agent": "KimiCLI/1.0",
+				"X-Msh-Platform": "kimi_cli"
+			},
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.95,
+				"output": 4,
+				"cacheRead": 0.19,
+				"cacheWrite": 0.95
+			},
+			"contextWindow": 262144,
+			"maxTokens": 65536,
+			"compat": {
+				"thinkingFormat": "zai",
+				"reasoningContentField": "reasoning_content",
+				"supportsDeveloperRole": false
+			},
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
+		},
+		"kimi-k2.7-code-highspeed": {
+			"id": "kimi-k2.7-code-highspeed",
+			"name": "Kimi K2.7 Code HighSpeed",
+			"api": "openai-completions",
+			"provider": "kimi-code",
+			"baseUrl": "https://api.kimi.com/coding/v1",
+			"headers": {
+				"User-Agent": "KimiCLI/1.0",
+				"X-Msh-Platform": "kimi_cli"
+			},
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 1.9,
+				"output": 8,
+				"cacheRead": 0.38,
+				"cacheWrite": 1.9
+			},
+			"contextWindow": 262144,
+			"maxTokens": 65536,
+			"compat": {
+				"thinkingFormat": "zai",
+				"reasoningContentField": "reasoning_content",
+				"supportsDeveloperRole": false
+			},
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
 		}
 	},
 	"litellm": {
@@ -17186,6 +17254,56 @@
 					"medium",
 					"high"
 				]
+			}
+		},
+		"kimi-k2.7-code": {
+			"id": "kimi-k2.7-code",
+			"name": "Kimi K2.7 Code",
+			"api": "openai-completions",
+			"provider": "moonshot",
+			"baseUrl": "https://api.moonshot.ai/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.95,
+				"output": 4,
+				"cacheRead": 0.19,
+				"cacheWrite": 0.95
+			},
+			"contextWindow": 262144,
+			"maxTokens": 65536,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
+		},
+		"kimi-k2.7-code-highspeed": {
+			"id": "kimi-k2.7-code-highspeed",
+			"name": "Kimi K2.7 Code HighSpeed",
+			"api": "openai-completions",
+			"provider": "moonshot",
+			"baseUrl": "https://api.moonshot.ai/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 1.9,
+				"output": 8,
+				"cacheRead": 0.38,
+				"cacheWrite": 1.9
+			},
+			"contextWindow": 262144,
+			"maxTokens": 65536,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
 			}
 		}
 	},

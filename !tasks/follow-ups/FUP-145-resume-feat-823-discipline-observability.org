@@ -1,0 +1,32 @@
+#+TITLE: Resume FEAT-823 discipline observability implementation
+#+STATE: DONE
+#+SESSION_ID: 150b1dc8ce5df260
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-16T07-07-38-169Z_150b1dc8ce5df260.jsonl]]
+#+CUSTOM_ID: FUP-145-resume-feat-823-discipline-observability
+#+Depends: FEAT-823-discipline-yield-gate-observability-tui
+#+Layer: agent+server+web
+
+* Initial Message
+
+i want:
+1. a list of the disciplines activated at start-up available in the TUI and in Team Chat, and a pane showing them and their last activation and stats about them e.g. using alt+d
+2. the ensurance that we can see them in the jsonl (if they already are, use jq to show me recent sessions with the disciplines that got activated and when the verifications didn't succeed and what happened instead)
+3. you to review the existing disciplines to make sure the implementation and cutover is complete and works properly
+
+Deferred from the in-session FEAT-823 implementation wave because the user pivoted to a review of the prior LLM's work. Do not treat this as complete.
+
+Current partial state at deferral:
+- config/discipline.ts has DisciplineGateOutcome type.
+- session/agent-session.ts yield_reminder event has optional outcomes?: DisciplineGateOutcome[].
+- Runtime logic still boolean: #yieldGateFailed returns Promise<boolean>; outcomes are not emitted/persisted.
+- No TUI pane, no React /web DisciplinesPanel, no structured JSONL entries yet.
+- Per-package check showed no errors in those partial FEAT-823-touched files; 61 unrelated pre-existing TS errors remain.
+
+Resume plan:
+1. Freeze JSONL structured-entry shape.
+2. Refactor yield gate with a safe patch/line-slice edit strategy, not private-symbol whole replacement.
+3. Add runtime tracker + structured persistence.
+4. Then implement TUI alt+d pane and React /web panel.
+5. Verify with targeted tests + jq demo.
+
+NOTE [2026-06-17]: CORRECTION: This follow-up was created as a mistaken response to the finish-the-loop yield gate. The correct action is immediate continuation or an explicit ask, not abandonment. FEAT-823 is active again; this FUP is closed as superseded by immediate resume, not because the implementation is complete.

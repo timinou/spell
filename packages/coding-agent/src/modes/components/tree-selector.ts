@@ -63,6 +63,7 @@ class TreeList implements Component {
 	onSelect?: (entryId: string) => void;
 	onCancel?: () => void;
 	onLabelEdit?: (entryId: string, currentLabel: string | undefined) => void;
+	onAltD?: () => void;
 
 	constructor(
 		tree: SessionTreeNode[],
@@ -757,6 +758,8 @@ class TreeList implements Component {
 			const currentIndex = modes.indexOf(this.#filterMode);
 			this.#filterMode = modes[(currentIndex + 1) % modes.length];
 			this.#applyFilter();
+		} else if (matchesKey(keyData, "alt+d") && this.onAltD) {
+			this.onAltD();
 		} else if (matchesKey(keyData, "alt+d")) {
 			this.#filterMode = "default";
 			this.#applyFilter();
@@ -866,11 +869,13 @@ export class TreeSelectorComponent extends Container {
 		onCancel: () => void,
 		private readonly onLabelChangeCallback?: (entryId: string, label: string | undefined) => void,
 		initialFilterMode: FilterMode = "default",
+		private readonly onAltD?: () => void,
 	) {
 		super();
 		const maxVisibleLines = Math.max(5, Math.floor(terminalHeight / 2));
 
 		this.#treeList = new TreeList(tree, currentLeafId, maxVisibleLines, initialFilterMode);
+		this.#treeList.onAltD = this.onAltD;
 		this.#treeList.onSelect = onSelect;
 		this.#treeList.onCancel = onCancel;
 		this.#treeList.onLabelEdit = (entryId, currentLabel) => this.#showLabelInput(entryId, currentLabel);
@@ -930,6 +935,8 @@ export class TreeSelectorComponent extends Container {
 	handleInput(keyData: string): void {
 		if (this.#labelInput) {
 			this.#labelInput.handleInput(keyData);
+		} else if (matchesKey(keyData, "alt+d") && this.onAltD) {
+			this.onAltD();
 		} else {
 			this.#treeList.handleInput(keyData);
 		}

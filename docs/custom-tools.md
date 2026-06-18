@@ -169,7 +169,7 @@ Optional `onSession(event, ctx)` receives session lifecycle events, including:
 - `start`, `switch`, `branch`, `tree`, `shutdown`
 - `auto_compaction_start`, `auto_compaction_end`
 - `auto_retry_start`, `auto_retry_end`
-- `ttsr_triggered`, `todo_reminder`
+- `ttsr_triggered`, `yield_reminder`
 
 Use `ctx.sessionManager` to reconstruct state from history when branch/session context changes.
 

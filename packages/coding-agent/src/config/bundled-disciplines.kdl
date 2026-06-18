@@ -32,3 +32,43 @@ discipline "mock-critique" {
 		"""
 	}
 }
+
+// finish-the-loop: don't yield with unfinished work on the board. This is the
+// generic discipline that replaced the old hard-coded "remind 3× about
+// incomplete todos" system — same inject+continue+max loop, data-driven
+// condition. Always on (`on auto`); the `open-work` guard re-prompts whenever a
+// todo is still pending/in_progress at the agent's stopping point.
+discipline "finish-the-loop" {
+	description "Re-prompt before yielding with unfinished work"
+	on auto
+	guard "open-work"
+	inject cadence="once" {
+		instructions """
+		You stopped with unfinished work on the board.
+		Resume it, or explicitly close each remaining item (mark complete once done, or abandon with a reason).
+		A stale item left behind is a failure state, not a finish.
+		"""
+	}
+}
+
+// verify-before-claim: gate a completion claim on real, observed verification.
+// The closing half of the honesty norm — made mechanical. At yield (autonomous
+// sessions), a one-shot reviewer judges whether the agent's "done" claim rests
+// on verification actually observed this session, vs. assumption or a
+// hand-picked smoke test. On reject, the agent is re-prompted to verify for
+// real. Criteria are intentionally generic: no task, language, or domain specifics.
+discipline "verify-before-claim" {
+	description "Gate a completion claim on observed verification"
+	on auto
+	verify {
+		review "The agent claims the task is complete. REJECT unless the claim rests on verification observed THIS session: a command or test that was actually run with its real output cited, or a gate that passed. 'Should work' reasoning, unrun code paths, or a small set of self-authored happy-path cases are NOT verification — they are coverage at best. Accept only when the agent also states what it did NOT verify. Approve otherwise."
+	}
+	inject cadence="once" {
+		instructions """
+		Before claiming done: verification must be observed, not assumed.
+		State exactly what you ran, the real output you saw, and what you did NOT check.
+		A passing self-authored smoke test is evidence of coverage, not of correctness — it cannot bound behavior outside the cases you happened to write.
+		"""
+	}
+}
+

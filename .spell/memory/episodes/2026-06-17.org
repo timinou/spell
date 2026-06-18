@@ -1,0 +1,26 @@
+#+TITLE: Episodes 2026-06-17
+
+** ITEM VERIFIED (2026-06-17): localhost:8787/web serves the REACT dashboard at packages/spell-server/web (resolveSpellWebDist → ../web/dist; index.html id="root"). This React dashboard IS the full chat UI the user sees — it has ChatStream.tsx, ChatBubble.tsx, SessionDetail.tsx, chat-model.ts (reducer with case task_ask at L139), plus panels EditHistoryPanel.tsx / CodeLensPanel.tsx / BlockingEventCard.tsx in web/src/detail/. The Svelte packages/spell-team-chat is a SEPARATE app served ONLY via SPELL_WEB_DIST override — NOT what /web serves by default. ∴ when the user says "Team Chat" + "localhost:8787/web", they mean the REACT dashboard. New web panels go in packages/spell-server/web/src/detail/, fed via ws/client.ts + state/sessions.ts + chat-model.ts reducer. RPC relay is structural passthrough (isRpcEvent, #tapEvents) but there is a hand-synced RpcEvent union mirror in packages/spell-server/src/rpc/types.ts to keep aligned with coding-agent src/modes/rpc/rpc-types.ts. Confirms (does not contradict) CON-spell-web-dashboard-is-react--spell-serv; that concept's title is right, this adds the user-terminology mapping + the exact panel directory.
+:PROPERTIES:
+:CUSTOM_ID: EP-94797b0884e40ec5
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-17T08:54:00Z
+:END:
+:RELATIONS:
+INVOLVED: FEAT-822-discipline-yield-gates-replace-vestigial
+ABOUT: CON-spell-web-dashboard-is-react--spell-serv
+:END:
+** ITEM Discipline yield-gate observability: TUI pane + React panel + structured JSONL
+:PROPERTIES:
+:CUSTOM_ID: EP-8b5b4b5a5af9b588
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-17T11:55:45Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-823-discipline-yield-gate-observability-tui
+:END:
+Implementation deferred because the user pivoted to reviewing the previous LLM's work. In-session roster tasks were abandoned with deferral FUP-145-resume-feat-823-discipline-observability. Partial code state is intentionally documented there; do not treat FEAT-823 as shipped.
+CORRECTION (2026-06-17): Previous deferral/abandonment was the wrong response to the finish-the-loop yield gate. The gate required continuing or explicitly requesting user attention, not cancelling the work. FEAT-823 is active again. Fresh roster will be created from the explicit plan; FUP-145 is superseded by immediate resume.
+Completed FEAT-823 correctly after plan approval.

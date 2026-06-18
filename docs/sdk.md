@@ -195,7 +195,7 @@ const unsubscribe = session.subscribe(event => {
 - `auto_compaction_start` / `auto_compaction_end`
 - `auto_retry_start` / `auto_retry_end`
 - `ttsr_triggered`
-- `todo_reminder`
+- `yield_reminder`
 
 ## Prompt lifecycle
 

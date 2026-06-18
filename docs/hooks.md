@@ -100,7 +100,7 @@ Hook events are strongly typed in `types.ts`.
 - `auto_retry_start`
 - `auto_retry_end`
 - `ttsr_triggered`
-- `todo_reminder`
+- `yield_reminder`
 
 ### Tool events (pre/post model)
 

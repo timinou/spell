@@ -6,9 +6,9 @@ import { settings } from "../../config/settings";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { LiveToolBatchComponent } from "../../modes/components/live-tool-batch";
 import { ReadToolGroupComponent } from "../../modes/components/read-tool-group";
-import { TodoReminderComponent } from "../../modes/components/todo-reminder";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { TtsrNotificationComponent } from "../../modes/components/ttsr-notification";
+import { YieldReminderComponent } from "../../modes/components/yield-reminder";
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoNode } from "../../modes/types";
 import { finalizeOrphanPendingTools } from "../../modes/utils/finalize-pending-tools";
@@ -787,12 +787,13 @@ export class EventController {
 				break;
 			}
 
-			case "todo_reminder": {
-				const component = new TodoReminderComponent(event.todos, event.attempt, event.maxAttempts);
+			case "yield_reminder": {
+				const component = new YieldReminderComponent(event.disciplines, event.attempt, event.maxAttempts);
 				this.ctx.chatContainer.addChild(component);
 				this.ctx.ui.requestRender();
 				break;
 			}
+
 
 			case "todo_auto_clear":
 				await this.ctx.reloadTodos();

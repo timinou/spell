@@ -1,0 +1,217 @@
+#+TITLE: Discipline yield-gates: replace vestigial todo-reminder system
+#+STATE: DONE
+#+SESSION_ID: 150b1dc8ce5df260
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-16T07-07-38-169Z_150b1dc8ce5df260.jsonl]]
+#+CUSTOM_ID: FEAT-822-discipline-yield-gates-replace-vestigial
+#+COMPLETION_HASH: a41be078e1e9b790
+
+* Initial Message
+
+analyse the results of this work
+
+
+∙ uv run harbor run \
+           --dataset terminal-bench@2.0 \
+           --task terminal-bench/filter-js-from-html \
+           --agent-import-path spell_harbor.spell_agent:SpellAgent \
+           --model openai-codex/gpt-5.5 \
+           --n-concurrent 1
+  1/1 Mean: 0.000 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 0:10:18 0:00:00
+
+adhoc • spell • gpt-5.5
+┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┓
+┃ Trials ┃ Exceptions ┃  Mean ┃
+┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━┩
+│      1 │          0 │ 0.000 │
+└────────┴────────────┴───────┘
+
+┏━━━━━━━━┳━━━━━━━┓
+┃ Reward ┃ Count ┃
+┡━━━━━━━━╇━━━━━━━┩
+│ 0.0    │     1 │
+└────────┴───────┘
+
+Job Info
+Total runtime: 10m 18s
+Results written to jobs/2026-06-16__07-52-39/result.json
+Inspect results by running `harbor view jobs`
+Share results by running `harbor upload jobs/2026-06-16__07-52-39`
+
+# Discipline yield-gates: replace the vestigial todo-reminder system
+
+## Motivation (evidence)
+
+A harbor/Terminal-Bench run (jobs/2026-06-16__07-52-39, task
+filter-js-from-html) scored reward 0.0: the agent shipped a regex/HTMLParser
+sanitizer, claimed "Verified: ✓" on 12 hand-picked cases + 1 benign sample, and
+the hidden verifier proved it wrong (3/28 XSS batches fired alerts; 5/12 clean
+samples mutated).
+
+Root cause is NOT infra (0 exceptions, exit 0). It is an *enforcement gap*:
+
+1. The prose `<discipline>` honesty-trigger WAS in the system prompt (base
+   template used; domain appended) — and was ignored. Prose norms do not bind an
+   overconfident model.
+2. The FEAT-816 `verify` gate (the only *mechanical* loop-closer) has **no
+   enforcement hook at session yield** — it only fires on todo/task nodes
+   (`todo-write.ts`, `task/ref-resolver.ts`). A headless `-p` run has no roster,
+   so `verify` is dead code there.
+3. A vestigial hard-coded system (`#checkTodoCompletion`) reminds the session
+   up to 3× at yield when todos are incomplete — but only catches "unfinished
+   todos", never "weak verification". It is bespoke, not data-driven.
+
+## Goal
+
+One data-driven yield-evaluation path, sourced from disciplines, that replaces
+the vestigial system AND adds the missing mechanical verification gate.
+
+## Non-goals
+
+- No task/domain-specific logic. The XSS task is an *example* of a hard problem;
+  the fix is generic scaffolds. No HTML/XSS/parser specifics anywhere.
+- No changes to harbor or spell_harbor/. All work is in Spell core
+  (packages/coding-agent).
+- No task-classifier for `on auto` yet. `auto` ≙ always-on for now.
+- No `verify.swarm` at yield (needs session-diff plumbing) — FUP.
+
+## The unified primitive
+
+A discipline's loop-closing power extends from the todo-node to the **root
+session yield**. One function `#evaluateYieldDisciplines()` replaces
+`#checkTodoCompletion()`, reusing its proven inject + scheduleAgentContinue +
+max-reminders seam.
+
+Two primitive pieces:
+
+### (NEW) `Discipline.guard` — session-yield predicate
+Sibling to node-scoped `verify` (yield-guards are session-scoped, not
+node-scoped). Type `YieldGuard = "open-work"`. Cheap, always evaluated.
+- `open-work`: ∃ pending/in_progress todos → re-prompt. Reproduces the old
+  "incomplete todo" behavior generically.
+
+### (EXISTING, new site) `verify.cmd` / `verify.review` — evaluated at yield
+Only when the agent's final yield reads as a completion claim (conservative
+regex; bounds cost in interactive mode). This answers C3/C4:
+- **C4 shape** = `verify { cmd "…" }` at yield: Spell *runs* it; non-zero exit →
+  re-prompt. Domain guidance becomes a real gate, not prose.
+- **C3 shape** = `verify { review "…" }` at yield: the existing `review-judge.ts`
+  (`createModelReviewJudge`, fail-open) judges the agent's final claim against
+  generic criteria; reject → re-prompt. The Spell-native, fully-generic honesty
+  check. No message parsing as the gate itself; the regex only *gates whether to
+  spend* the review.
+
+### Trigger wiring
+`on auto` disciplines become session-active (always-on). `setDisciplines`
+filters them into `#yieldDisciplines`. (Tool/layer/manual triggers unchanged.)
+
+## Default always-on disciplines
+
+Location: `packages/coding-agent/src/config/bundled-disciplines.kdl`
+(the obvious, already-existing bundled-defaults location; `loadMergedDisciplines`
+already merges them into every repo, user/project override by name).
+
+1. `finish-the-loop` — `on auto`, `guard "open-work"`. Replaces the vestigial
+   behavior. Generic inject.
+2. `verify-before-claim` — `on auto`, `verify { review "…" }` with GENERIC
+   criteria (no task/language/domain specifics). The mechanical honesty gate.
+3. `mock-critique` — existing, unchanged.
+
+## File-by-file change list
+
+### DONE (additive, landed)
+- `config/discipline.ts`: `YieldGuard` type + `Discipline.guard` field.
+- `config/kdl-discipline.ts`: parse `guard "open-work"` child node (warn on unknown).
+- `config/bundled-disciplines.kdl`: `finish-the-loop` + `verify-before-claim`.
+- `session/agent-session.ts`: import `createModelReviewJudge`; `setDisciplines`
+  builds `#yieldDisciplines` (⚠ references a field not yet declared → tree
+  currently non-compiling).
+
+### REMAINING
+- `session/agent-session.ts`:
+  - Declare `#yieldDisciplines: Discipline[] = []` field.
+  - Rename `#todoReminderCount` → `#yieldReminderCount` (field decl + 3 reset
+    sites: L2342 new-prompt, L2967 newSession, L3690 handoff).
+  - Replace `::AgentSession.#checkTodoCompletion` (L3898) with
+    `#evaluateYieldDisciplines()` + helpers `#yieldGateFailed`,
+    `#yieldReadsAsCompletion`, `#runYieldCmdGate`, `#runYieldReviewGate`.
+  - Call site L947: `#checkTodoCompletion()` → `#evaluateYieldDisciplines()`.
+  - Remove `todo_reminder` from `AgentSessionEvent` union (L184) and the
+    `#emitExtensionEvent` handler branch (L1609).
+- `config/settings-schema.ts`: remove `todo.reminders` + `todo.reminders.max`;
+  add `discipline.yieldReminders` (bool, default true) +
+  `discipline.yieldReminders.max` (number, default 3).
+- `config/kdl-settings-map.ts`: remove the 2 `todo.reminders*` entries; add the
+  2 `discipline.yieldReminders*` entries.
+- `modes/components/todo-reminder.ts`: DELETE file.
+- `modes/controllers/event-controller.ts`: remove `todo_reminder` case (L790) +
+  `TodoReminderComponent` import.
+- `extensibility/extensions/types.ts`, `extensibility/hooks/types.ts`,
+  `extensibility/custom-tools/types.ts`, `sdk.ts`: remove `todo_reminder` event
+  wiring (on() overloads, event interfaces, sdk L554 forwarding).
+
+### TESTS
+- Update/replace any `todo-reminder` / `#checkTodoCompletion` tests.
+- Add tests: `#evaluateYieldDisciplines` fires on `open-work`; review-gate
+  fail-open; cmd-gate pass/fail; max-reminders bound; completion-claim regex.
+- `bundled-disciplines.kdl` parse test: assert the 2 new defaults parse with
+  expected guard/verify.
+
+## Acceptance criteria (observable)
+
+1. `bun run check:ts` clean.
+2. `bun run --filter @spell/coding-agent test` (discipline + todo suites) green.
+3. A session with an incomplete todo + `finish-the-loop` active re-prompts at
+   yield (old behavior preserved via the new path).
+4. `todo_reminder` / `todo.reminders` / `TodoReminderComponent` fully gone
+   (`rg` finds zero references in src).
+5. A `verify { cmd "exit 1" }` discipline blocks yield; `cmd "exit 0"` does not.
+6. `verify-before-claim` review: when the judge returns pass=false, the agent is
+   re-prompted; fail-open (judge error) never blocks.
+
+## Risks
+
+- **Breaking**: removes a public extension/hook event (`todo_reminder`) and two
+  settings. Mitigation: documented in changelog; the replacement is strictly
+  more general.
+- **Cost**: `verify-before-claim` adds one model-judge call per completion-claim
+  yield (bounded by max-reminders=3, fail-open, gated by completion-claim regex
+  so interactive chat is not judged). Reuses existing review-judge (no new infra).
+- **Central code**: agent-session yield path is high blast radius. Mitigation:
+  reuse the exact inject+continue+max seam; behavioral parity for the open-work
+  case.
+
+NOTE [2026-06-16]: Scope refinement after vestigial-vs-new feature audit.
+
+Two gaps found vs the old system, both now addressed:
+
+GAP 1 (reminder fidelity): the old reminder listed the specific incomplete
+todos; the new generic finish-the-loop prose did not. FIX: the open-work guard
+appends the actual unfinished item list (grouped) to the injected reminder —
+restores salience, stays data-driven.
+
+GAP 2 (observability) — user chose option B: emit a GENERIC `yield_reminder`
+event (failing discipline names + attempt/maxAttempts) through the
+extension/hook/custom-tools/sdk surface, with a TUI notification. This replaces
+the bespoke todo_reminder event with a discipline-shaped one — observability
+restored without resurrecting the old coupling.
+
+NOTE [2026-06-16]: Implemented and verified.
+
+Verification evidence:
+- tsgo check: 0 errors in any changed file (61 pre-existing errors all in
+  untouched test files — Effort/SecretEntrySchema/SourceMeta/etc.).
+- agent-session-auto-compaction-queue.test.ts: 2/2 pass (incl. the rewritten
+  yield-gate test — finish-the-loop + open-work fires yield_reminder + continue).
+- agent-session-eager-todo.test.ts: 2/2 pass.
+- config/discipline.test.ts: 18/18 pass.
+- bundled-disciplines.kdl parses: mock-critique(tool), finish-the-loop
+  (auto/guard=open-work), verify-before-claim (auto/verify.review).
+- Acceptance sweep: todo_reminder/TodoReminderEvent/todo.reminders all gone
+  from src+test+docs (only an intentional context comment in yield-reminder.ts).
+- docs index regenerated; yield_reminder documented across rpc/custom-tools/
+  extensions/hooks/sdk .md.
+
+Open follow-ups (not blocking):
+- A real task-classifier for `on auto` (currently auto ≙ always-on).
+- verify.swarm at yield (needs session-diff plumbing).
+- The pre-existing 61 tsgo errors are unrelated to this work.

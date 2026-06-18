@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, type ArtifactRef, type ManifestTemplate, type SessionSummary } from "./api/client";
+import { api, type ArtifactRef, type ManifestTemplate, type RpcSessionState, type SessionSummary } from "./api/client";
 import { AuthProvider, useAuth } from "./auth/AuthProvider";
 import { Login } from "./auth/Login";
 import { CommandBar } from "./cmd/CommandBar";
@@ -7,6 +7,7 @@ import { TemplateRunnerModal } from "./cmd/TemplateRunner";
 import { SessionDetail } from "./detail/SessionDetail";
 import { EditHistoryPanel } from "./detail/EditHistoryPanel";
 import { CodeLensPanel } from "./detail/CodeLensPanel";
+import { DisciplinesPanel } from "./detail/DisciplinesPanel";
 import { SessionList } from "./sidebar/SessionList";
 import { useSessions } from "./state/sessions";
 import { useTemplates } from "./state/templates";
@@ -39,6 +40,7 @@ function Shell() {
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [historyOpen, setHistoryOpen] = useState(false);
 	const [lensOpen, setLensOpen] = useState(false);
+	const [disciplinesOpen, setDisciplinesOpen] = useState(false);
 	const selected = sessions.selected ? sessions.sessions.get(sessions.selected) ?? null : null;
 
 	// On mobile the sidebar is a drawer; selecting a session closes it so the
@@ -271,6 +273,17 @@ function Shell() {
 		(sessionId: string, entryId?: string) => sendRpc(sessionId, { type: "redo", entryId }),
 		[sendRpc],
 	);
+	const refreshDisciplineStats = useCallback(
+		async (sessionId: string) => {
+			try {
+				const state = (await sendRpc(sessionId, { type: "get_state" })) as RpcSessionState;
+				sessions.setDisciplineStats(sessionId, state.disciplineStats ?? null);
+			} catch (err) {
+				console.warn("discipline get_state failed", err);
+			}
+		},
+		[sendRpc, sessions],
+	);
 	const requestCodeQuery = useCallback(
 		(sessionId: string, target: string) =>
 			sendRpc(sessionId, { type: "code_query", target }) as Promise<import("./detail/CodeLensPanel").CodeQueryData>,
@@ -353,7 +366,7 @@ function Shell() {
 	}, [selected, subscribeRpcEvents, submitPrompt, abort, answerBlockingEvent, runBash, mintUrl, loadArtifacts]);
 
 	return (
-		<div className={`shell${menuOpen ? " menu-open" : ""}${(historyOpen || lensOpen) && selected ? " has-history" : ""}`}>
+		<div className={`shell${menuOpen ? " menu-open" : ""}${(historyOpen || lensOpen || disciplinesOpen) && selected ? " has-history" : ""}`}>
 			<aside className="sidebar">
 				<header>
  				<h1>Spell</h1>
@@ -370,21 +383,39 @@ function Shell() {
  								History
  							</button>
  						)}
- 						{selected && (
- 							<button
- 								className={`btn${lensOpen ? " btn-primary" : ""}`}
- 								onClick={() => {
- 									setLensOpen(o => !o);
- 									setHistoryOpen(false);
- 								}}
- 								title="Code lens — callers, defs, types, diagnostics via pi-code-graph"
- 							>
- 								Lens
- 							</button>
- 						)}
- 						<button className="btn" onClick={signOut} title="Sign out">
- 							Sign out
- 						</button>
+  					{selected && (
+  						<button
+  							className={`btn${lensOpen ? " btn-primary" : ""}`}
+  							onClick={() => {
+  								setLensOpen(o => !o);
+  								setHistoryOpen(false);
+  								setDisciplinesOpen(false);
+  							}}
+  							title="Code lens — callers, defs, types, diagnostics via pi-code-graph"
+  						>
+  							Lens
+  						</button>
+  					)}
+  					{selected && (
+  						<button
+  							className={`btn${disciplinesOpen ? " btn-primary" : ""}`}
+  							onClick={() => {
+  								setDisciplinesOpen(o => {
+  									const next = !o;
+  									if (next) void refreshDisciplineStats(selected.sessionId);
+  									return next;
+  								});
+  								setHistoryOpen(false);
+  								setLensOpen(false);
+  							}}
+  							title="Armed discipline stats and yield outcomes"
+  						>
+  							Disciplines
+  						</button>
+  					)}
+  					<button className="btn" onClick={signOut} title="Sign out">
+  						Sign out
+  					</button>
  					</div>
 				</header>
 				<SessionList />
@@ -414,6 +445,14 @@ function Shell() {
 					sessionId={selected.sessionId}
 					runCodeQuery={requestCodeQuery}
 					onClose={() => setLensOpen(false)}
+				/>
+			)}
+			{disciplinesOpen && selected && (
+				<DisciplinesPanel
+					sessionId={selected.sessionId}
+					disciplineStats={selected.disciplineStats || null}
+					lastOutcomes={selected.lastDisciplineOutcomes || null}
+					onClose={() => setDisciplinesOpen(false)}
 				/>
 			)}
 			<CommandBar onPickTemplate={onPickTemplate} onKillSession={onKillSession} />

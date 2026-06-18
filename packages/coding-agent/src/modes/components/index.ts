@@ -26,7 +26,7 @@ export * from "./show-images-selector";
 export * from "./status-line";
 export * from "./theme-selector";
 export * from "./thinking-selector";
-export * from "./todo-reminder";
+export * from "./yield-reminder";
 export * from "./tool-execution";
 export * from "./tree-selector";
 export * from "./ttsr-notification";

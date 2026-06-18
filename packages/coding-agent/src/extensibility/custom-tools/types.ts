@@ -16,7 +16,6 @@ import type { HookUIContext } from "../../extensibility/hooks/types";
 import type { Theme } from "../../modes/theme/theme";
 import type { CompactionResult } from "../../session/compaction";
 import type { ReadonlySessionManager } from "../../session/session-manager";
-import type { TodoNode } from "../../tools/todo-write";
 
 /** Alias for clarity */
 export type CustomToolUIContext = HookUIContext;
@@ -120,8 +119,8 @@ export type CustomToolSessionEvent =
 			rules: Rule[];
 	  }
 	| {
-			reason: "todo_reminder";
-			todos: TodoNode[];
+			reason: "yield_reminder";
+			disciplines: string[];
 			attempt: number;
 			maxAttempts: number;
 	  };

@@ -551,11 +551,11 @@ function createCustomToolsExtension(tools: CustomTool[]): ExtensionFactory {
 		api.on("ttsr_triggered", async (event, ctx) =>
 			runOnSession({ reason: "ttsr_triggered", rules: event.rules }, ctx),
 		);
-		api.on("todo_reminder", async (event, ctx) =>
+		api.on("yield_reminder", async (event, ctx) =>
 			runOnSession(
 				{
-					reason: "todo_reminder",
-					todos: event.todos,
+					reason: "yield_reminder",
+					disciplines: event.disciplines,
 					attempt: event.attempt,
 					maxAttempts: event.maxAttempts,
 				},

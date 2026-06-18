@@ -20,7 +20,7 @@ import { AgentSession } from "@spell/pi-coding-agent/session/agent-session";
 
 import { AuthStorage } from "@spell/pi-coding-agent/session/auth-storage";
 
-import { SessionManager } from "@spell/pi-coding-agent/session/session-manager";
+import { type CustomEntry, SessionManager } from "@spell/pi-coding-agent/session/session-manager";
 
 import { getProjectAgentDir, TempDir, withTimeout } from "@spell/pi-utils";
 
@@ -76,10 +76,6 @@ describe("AgentSession auto-compaction queue resume", () => {
 				`\t\tconst signals = globalThis.${runtimeSignalStoreKey} ?? (globalThis.${runtimeSignalStoreKey} = []);`,
 				'\t\tsignals.push("compaction:end:" + (event.aborted ? "aborted" : "ok"));',
 				"\t});",
-				'\tpi.on("todo_reminder", async (event) => {',
-				`\t\tconst signals = globalThis.${runtimeSignalStoreKey} ?? (globalThis.${runtimeSignalStoreKey} = []);`,
-				'\t\tsignals.push("todo:" + event.attempt + "/" + event.maxAttempts);',
-				"\t});",
 				"}",
 			].join("\n"),
 		);
@@ -111,8 +107,8 @@ describe("AgentSession auto-compaction queue resume", () => {
 			sessionManager,
 			settings: Settings.isolated({
 				"compaction.autoContinue": false,
-				"todo.reminders": true,
-				"todo.reminders.max": 3,
+				"discipline.yieldReminders": true,
+				"discipline.yieldReminders.max": 3,
 			}),
 			modelRegistry,
 			extensionRunner,
@@ -182,16 +178,29 @@ describe("AgentSession auto-compaction queue resume", () => {
 		expect(runtimeSignals.some(signal => signal.startsWith("compaction:end:"))).toBe(true);
 	});
 
-	it("forwards todo reminder lifecycle signals to extensions", async () => {
+	it("re-prompts via the finish-the-loop yield gate when todos are incomplete", async () => {
 		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
 
+		session.setDisciplines([
+			{
+				name: "finish-the-loop",
+				on: { kind: "auto" },
+				guard: "open-work",
+				origin: "discipline",
+				inject: { cadence: "once", sections: { custom: {}, instructions: "resume unfinished work" } },
+			},
+		]);
 		session.setTodoNodes([
 			{ id: "task-1", content: "Finish pending task", status: "in_progress", group: "Execution" },
 		]);
 
+		let reminderEvent: Extract<Parameters<Parameters<typeof session.subscribe>[0]>[0], { type: "yield_reminder" }> | undefined;
 		const { promise: reminderDone, resolve: onReminderDone } = Promise.withResolvers<void>();
 		session.subscribe(event => {
-			if (event.type === "todo_reminder") onReminderDone();
+			if (event.type === "yield_reminder") {
+				reminderEvent = event;
+				onReminderDone();
+			}
 		});
 
 		const assistantMsg = {
@@ -214,10 +223,36 @@ describe("AgentSession auto-compaction queue resume", () => {
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
 
-		await withTimeout(reminderDone, 1000, "Todo reminder timed out");
+		await withTimeout(reminderDone, 1000, "yield-gate reminder timed out");
 		await Promise.resolve();
 
-		expect(getRuntimeSignals()).toContain("todo:1/3");
 		expect(continueSpy).toHaveBeenCalledTimes(1);
+		expect(reminderEvent?.outcomes).toEqual([
+			{
+				discipline: "finish-the-loop",
+				passed: false,
+				gate: "open-work",
+				incompleteCount: 1,
+				reason: "1 incomplete todo item(s) remain",
+			},
+		]);
+		expect(reminderEvent?.stats?.[0]?.activationCount).toBe(1);
+		expect(reminderEvent?.stats?.[0]?.lastOutcome?.gate).toBe("open-work");
+
+		const stats = session.getDisciplineStats();
+		expect(stats).toHaveLength(1);
+		expect(stats[0]?.name).toBe("finish-the-loop");
+		expect(stats[0]?.activationCount).toBe(1);
+		expect(stats[0]?.gateBreakdown["open-work"]).toBe(1);
+
+		const disciplineEntries = sessionManager
+			.getEntries()
+			.filter((entry): entry is CustomEntry => entry.type === "custom" && entry.customType === "discipline-event");
+		expect(disciplineEntries).toHaveLength(2);
+		expect(disciplineEntries.map(entry => (entry.data as { phase?: string } | undefined)?.phase)).toEqual([
+			"arm",
+			"yield-reminder",
+		]);
+		expect(sessionManager.buildSessionContext().messages.some(message => message.role === "custom")).toBe(false);
 	});
 });

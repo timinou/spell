@@ -158,8 +158,8 @@ const OPTION_PROVIDERS: Partial<Record<SettingPath, OptionProvider>> = {
 		{ value: "generic", label: "Generic", description: "Static commit message" },
 		{ value: "ai", label: "AI", description: "AI-generated commit message from diff" },
 	],
-	// Todo max reminders
-	"todo.reminders.max": [
+	// Yield-gate max reminders
+	"discipline.yieldReminders.max": [
 		{ value: "1", label: "1 reminder" },
 		{ value: "2", label: "2 reminders" },
 		{ value: "3", label: "3 reminders" },

@@ -995,23 +995,23 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"todo.reminders": {
+	"discipline.yieldReminders": {
 		type: "boolean",
 		default: true,
 		ui: {
 			tab: "tools",
-			label: "Todo Reminders",
-			description: "Remind agent to complete todos before stopping",
+			label: "Yield-Gate Reminders",
+			description: "Re-prompt via disciplines before the agent stops with an unsatisfied yield gate",
 		},
 	},
 
-	"todo.reminders.max": {
+	"discipline.yieldReminders.max": {
 		type: "number",
 		default: 3,
 		ui: {
 			tab: "tools",
-			label: "Todo Reminder Limit",
-			description: "Maximum reminders to complete todos before giving up",
+			label: "Yield-Gate Reminder Limit",
+			description: "Maximum yield-gate reminders before giving up",
 			submenu: true,
 		},
 	},

@@ -70,6 +70,73 @@ export interface DisciplineInject {
  */
 export type DisciplineVerify = TaskVerify;
 
+// Guard (session-yield predicate)
+// =============================================================================
+
+/**
+ * A session-yield predicate — evaluated at the agent's stopping point, before
+ * the turn is released. Sibling to the node-scoped {@link DisciplineVerify}
+ * gate: `verify` closes a todo/task sub-loop; `guard` closes the root session's
+ * loop. Evaluated by the shared yield-evaluation path that replaced the old
+ * hard-coded todo-reminder system.
+ *
+ * - `open-work`: one or more todos are still pending/in_progress → re-prompt
+ *   before yielding (the generic form of the old "incomplete todo" reminder).
+ *
+ * Extensible: add a literal here and a predicate in the yield evaluator.
+ */
+export type YieldGuard = "open-work";
+
+/**
+ * Result of evaluating one discipline's yield gate. Emitted on the
+ * {@link AgentSessionEvent} `yield_reminder` event and persisted to the session
+ * JSONL so activations and failed verifications are queryable after the fact.
+ * `passed: false` outcomes describe "what happened instead".
+ */
+export interface DisciplineGateOutcome {
+	discipline: string;
+	passed: boolean;
+	/** Which gate produced this outcome. */
+	gate: "open-work" | "verify-cmd" | "verify-review" | "guard";
+	/** One-line reason; on failure, why the gate was not satisfied. */
+	reason?: string;
+	/** `open-work`: number of pending/in_progress todos. */
+	incompleteCount?: number;
+	/** `verify-cmd`: captured exit code + stderr tail. */
+	exitCode?: number;
+	stderr?: string;
+	/** `verify-review`: the judge's reason. */
+	reasoning?: string;
+}
+
+export type DisciplineGateKind = DisciplineGateOutcome["gate"];
+
+/** Per-session runtime stats for one always-on discipline. */
+export interface DisciplineRuntimeStat {
+	name: string;
+	description?: string;
+	origin: Discipline["origin"];
+	on: DisciplineTrigger["kind"];
+	guard?: YieldGuard;
+	verifyCmd: boolean;
+	verifyReview: boolean;
+	armedAt: string;
+	activationCount: number;
+	lastFiredAt?: string;
+	lastOutcome?: DisciplineGateOutcome;
+	gateBreakdown: Partial<Record<DisciplineGateKind, number>>;
+}
+
+/** Structured session JSONL payload for discipline observability metadata. */
+export interface DisciplineEventData {
+	phase: "arm" | "yield-reminder";
+	timestamp: string;
+	disciplines: DisciplineRuntimeStat[];
+	outcomes?: DisciplineGateOutcome[];
+	attempt?: number;
+	maxAttempts?: number;
+}
+
 // Discipline
 // =============================================================================
 
@@ -91,6 +158,8 @@ export interface Discipline {
 	on: DisciplineTrigger;
 	inject?: DisciplineInject;
 	verify?: DisciplineVerify;
+	/** Session-yield predicate ({@link YieldGuard}); closes the root loop at yield. */
+	guard?: YieldGuard;
 	tools?: DisciplineTools;
 	readOnly?: boolean;
 	/** Where this discipline came from — for diagnostics and dedup. */

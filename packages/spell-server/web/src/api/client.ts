@@ -111,3 +111,36 @@ export interface EditHistoryData {
 	undoable: number;
 	redoable: number;
 }
+
+/** Discipline gate outcome from yield evaluation. */
+export interface DisciplineGateOutcome {
+	discipline: string;
+	passed: boolean;
+	gate: "open-work" | "verify-cmd" | "verify-review" | "guard";
+	reason?: string;
+	incompleteCount?: number;
+	exitCode?: number;
+	stderr?: string;
+	reasoning?: string;
+}
+
+/** Per-session runtime stats for one always-on discipline. */
+export interface DisciplineRuntimeStat {
+	name: string;
+	description?: string;
+	origin: "discipline" | "mode" | "policy" | "tool";
+	on: "manual" | "tool" | "layer" | "auto";
+	guard?: "open-work";
+	verifyCmd: boolean;
+	verifyReview: boolean;
+	armedAt: string;
+	activationCount: number;
+	lastFiredAt?: string;
+	lastOutcome?: DisciplineGateOutcome;
+	gateBreakdown: Partial<Record<"open-work" | "verify-cmd" | "verify-review" | "guard", number>>;
+}
+
+export interface RpcSessionState {
+	disciplineStats?: DisciplineRuntimeStat[];
+}
+

@@ -22,7 +22,6 @@ import type {
 	SessionManager,
 } from "../../session/session-manager";
 import type { BashToolDetails } from "../../tools";
-import type { TodoNode } from "../../tools/todo-write";
 
 // Re-export for backward compatibility
 export type { ExecOptions, ExecResult } from "../../exec/exec";
@@ -427,16 +426,15 @@ export interface AutoRetryEndEvent {
 	finalError?: string;
 }
 
-/** Event data for ttsr_triggered event. */
 export interface TtsrTriggeredEvent {
 	type: "ttsr_triggered";
 	rules: Rule[];
 }
 
-/** Event data for todo_reminder event. */
-export interface TodoReminderEvent {
-	type: "todo_reminder";
-	todos: TodoNode[];
+/** Event data for yield_reminder event. */
+export interface YieldReminderEvent {
+	type: "yield_reminder";
+	disciplines: string[];
 	attempt: number;
 	maxAttempts: number;
 }
@@ -511,7 +509,7 @@ export type HookEvent =
 	| AutoRetryStartEvent
 	| AutoRetryEndEvent
 	| TtsrTriggeredEvent
-	| TodoReminderEvent
+	| YieldReminderEvent
 	| ToolCallEvent
 	| ToolResultEvent;
 
@@ -690,7 +688,7 @@ export interface HookAPI {
 	on(event: "auto_retry_start", handler: HookHandler<AutoRetryStartEvent>): void;
 	on(event: "auto_retry_end", handler: HookHandler<AutoRetryEndEvent>): void;
 	on(event: "ttsr_triggered", handler: HookHandler<TtsrTriggeredEvent>): void;
-	on(event: "todo_reminder", handler: HookHandler<TodoReminderEvent>): void;
+	on(event: "yield_reminder", handler: HookHandler<YieldReminderEvent>): void;
 	on(event: "tool_call", handler: HookHandler<ToolCallEvent, ToolCallEventResult>): void;
 	on(event: "tool_result", handler: HookHandler<ToolResultEvent, ToolResultEventResult>): void;
 

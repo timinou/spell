@@ -1,0 +1,57 @@
+#+TITLE: Episodes 2026-06-18
+
+** ITEM agent.db credential reader (Exqlite) for BEAM agent
+:PROPERTIES:
+:CUSTOM_ID: EP-c64c5024a6440ade
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-18T14:29:20Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-824-agent-db-credential-reader-exqlite-for-b
+:END:
+Shipped. SpellAgent.Credentials reads agent.db read-only via Exqlite; 6/6 unit tests green (fixture SQLite). Verified against the REAL ~/.spell/agent/agent.db: loads the live anthropic oauth token (sk-ant-oat01-…, refresh present, expires 2027-05-07, expired?=false), zero Node. expires normalized as unix-millis; freshest-by-updated_at selection; disabled rows skipped.
+** ITEM Anthropic subscription LLM adapter (direct Req) for BEAM agent
+:PROPERTIES:
+:CUSTOM_ID: EP-fa46ccc90b4f355c
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-18T14:37:33Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-825-anthropic-subscription-llm-adapter-direc
+:END:
+Shipped + proven LIVE. SpellAgent.Anthropic is a direct Req adapter implementing PtcRunner.LLM; ports all subscription adaptations (Bearer OAuth, 6 claude-code betas, billing+identity system blocks with cch=sha256(body)[:5], proxy_ tool prefixing, cache_control<=4 cap, claude-cli UA, SSE fold). SpellAgent.OAuth seeds from agent.db; refresh-grant stubbed (token is 1yr, not yet needed — tracked as residual). 17/17 tests (15 unit + 2 live). LIVE PROOF zero Node: direct call -> "pong"; SubAgent.run("17+25") -> 42 through the full PTC-Lisp agentic loop on the real Claude subscription. NB OAuth refresh-token grant not yet implemented (FEAT-825 stub returns near-expiry token with warning) — fine for v0 (1-year token); file a FUP when persistence/refresh is needed.
+** ITEM Homoiconic tool registry + define-tool seam (PTC-Lisp)
+:PROPERTIES:
+:CUSTOM_ID: EP-f770f3ef45bedebe
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-18T14:41:28Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-826-homoiconic-tool-registry-define-tool-sea
+:END:
+Shipped + tested. The homoiconic core works. SpellAgent.ToolRegistry (Agent-backed) holds :native and :ptc entries; SpellAgent.Tools.build_tools_map/0 produces the SubAgent tools map (verified invoke_tool contract: args_map -> value). A :ptc tool stores PTC-Lisp SOURCE TEXT (code-as-data) and runs via PtcRunner.Lisp.run(source, context: args, tools: build_tools_map()) — args bound as data/<param>; native tools resolved in the SAME map. define-tool/define-config/list-tools are native meta-tools the agent calls as (tool/define-tool …). Source validated at define time via PtcRunner.Lisp.validate/2 (parse+analyze+undefined-var, bounded). SpellAgent.Config = whitelisted live config cell (model/thinking/system-addendum). 10/10 tests: (tool/double {:n 21})->42; defined-tool-calls-native; defined-tool-calls-defined-tool (inc2(40)->42); malformed rejected; reserved-name guard; immediate inventory visibility. Resolver checks registry then meta; recursion bounded by runner's tool-call/heap limits. v0 storage in-memory (ETS/Agent); durable org/memory stored-program persistence is a follow-up.
+** ITEM Wire SubAgent + CLI/REPL into playable node-free v0
+:PROPERTIES:
+:CUSTOM_ID: EP-dfe3c78faf353f36
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-18T14:48:13Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-827-wire-subagent-cli-repl-into-playable-nod
+:END:
+Shipped + proven LIVE end to end. beam/spell_agent app: SpellAgent.Session.run/2 builds a SubAgent (ptc_transport: :tool_call) with the registry-backed tools map + the Anthropic subscription adapter; SpellAgent.run/1 + SpellAgent.repl/0 facade. Supervision tree: Config, ToolRegistry, OAuth. README documents architecture + the homoiconic demo. 31/31 tests (27 unit + 4 live), zero warnings in our code.
+** ITEM Node-free BEAM agent — homoiconic self-coding substrate (v0)
+:PROPERTIES:
+:CUSTOM_ID: EP-101356a250bc487f
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-18T14:49:39Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-344-node-free-beam-agent-homoiconic-self-cod
+:END:
+v0 DELIVERED + proven live. All 4 FEATs done (824 creds, 825 adapter, 826 homoiconic registry, 827 wire-up). beam/spell_agent runs a coding agent with ZERO Node, authed by the real Claude Max subscription read from ~/.spell/agent/agent.db. 31/31 tests (27 unit + 4 live), zero warnings in our code.

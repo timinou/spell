@@ -37,6 +37,7 @@ import { SubagentViewerComponent } from "../components/subagent-viewer";
 import { ToolExecutionComponent } from "../components/tool-execution";
 import { TreeSelectorComponent } from "../components/tree-selector";
 import { UserMessageSelectorComponent } from "../components/user-message-selector";
+import { DisciplinesPaneComponent } from "../components/disciplines-pane";
 
 import {
 	MemoryBrowserComponent,
@@ -494,7 +495,7 @@ export class SelectorController {
 				tree,
 				realLeafId,
 				this.ctx.ui.terminal.rows,
-				async entryId => {
+				async (entryId: string) => {
 					// Selecting the current leaf is a no-op (already there)
 					if (entryId === realLeafId) {
 						done();
@@ -602,6 +603,7 @@ export class SelectorController {
 					this.ctx.ui.requestRender();
 				},
 				settings.get("treeFilterMode"),
+				() => this.showDisciplinesPane(),
 			);
 			return { component: selector, focus: selector };
 		});
@@ -867,6 +869,17 @@ export class SelectorController {
 			);
 
 			return { component: browser, focus: browser };
+		});
+	}
+
+	showDisciplinesPane(): void {
+		const stats = this.ctx.session.getDisciplineStats();
+		this.showSelector(done => {
+			const pane = new DisciplinesPaneComponent(stats, () => {
+				done();
+				this.ctx.ui.requestRender();
+			});
+			return { component: pane, focus: pane };
 		});
 	}
 }

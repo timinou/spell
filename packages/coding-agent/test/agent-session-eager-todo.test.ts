@@ -120,7 +120,7 @@ describe("AgentSession eager todo enforcement", () => {
 			"compaction.enabled": false,
 			"todo.enabled": true,
 			"todo.eager": true,
-			"todo.reminders": false,
+			"discipline.yieldReminders": false,
 		});
 		const sessionManager = SessionManager.inMemory(tempDir.path());
 

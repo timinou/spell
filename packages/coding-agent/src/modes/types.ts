@@ -193,6 +193,7 @@ export interface InteractiveModeContext {
 	showDebugSelector(): void;
 	showSubagentViewer(): void;
 	showMemoryBrowser(): void;
+	showDisciplinesPane(): void;
 
 	// Input handling
 	handleCtrlC(): void;

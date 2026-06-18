@@ -55,8 +55,9 @@ import {
 import { abortableSleep, getAgentDbPath, isEnoent, logger } from "@spell/pi-utils";
 import type { AsyncJob, AsyncJobManager } from "../async";
 import type { ResolvedModeConfig } from "../capability/mode";
-import type { Discipline } from "../config/discipline";
+import type { Discipline, DisciplineEventData, DisciplineGateOutcome, DisciplineRuntimeStat } from "../config/discipline";
 import { injectBody, modeToDiscipline, toolDisciplineMap } from "../config/discipline";
+import { createModelReviewJudge } from "../tools/review-judge";
 import type { Rule } from "../capability/rule";
 import { MODEL_ROLE_IDS, type ModelRegistry, type ModelRole } from "../config/model-registry";
 import { extractExplicitThinkingSelector, parseModelString, resolveModelRoleValue } from "../config/model-resolver";
@@ -181,7 +182,7 @@ export type AgentSessionEvent =
 	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
 	| { type: "ttsr_triggered"; rules: Rule[] }
-	| { type: "todo_reminder"; todos: TodoNode[]; attempt: number; maxAttempts: number }
+	| { type: "yield_reminder"; disciplines: string[]; attempt: number; maxAttempts: number; outcomes?: DisciplineGateOutcome[]; stats?: DisciplineRuntimeStat[] }
 	| { type: "todo_auto_clear" }
 	| { type: "audit_suggest" }
 	| { type: "audit_escalate"; auditContent: string };
@@ -421,8 +422,10 @@ export class AgentSession {
 	#retryPromise: Promise<void> | undefined = undefined;
 	#retryResolve: (() => void) | undefined = undefined;
 
-	// Todo completion reminder state
-	#todoReminderCount = 0;
+	// Discipline yield-gate reminder state (replaces the old todo-reminder counter)
+	#yieldReminderCount = 0;
+	#disciplineArmedAt: string | undefined = undefined;
+	#disciplineStats = new Map<string, DisciplineRuntimeStat>();
 	#todoNodes: TodoNode[] = [];
 	#waveSnapshots = new Set<string>();
 	#todoClearTimers = new Map<string, Timer>();
@@ -946,8 +949,8 @@ export class AgentSession {
 				if (this.#enforceRewindBeforeYield()) {
 					return;
 				}
-				const todoReminderSent = await this.#checkTodoCompletion();
-				if (!todoReminderSent) {
+				const yieldGateSent = await this.#evaluateYieldDisciplines();
+				if (!yieldGateSent) {
 					await this.#checkAuditPhase();
 				}
 			}
@@ -1606,13 +1609,6 @@ export class AgentSession {
 			});
 		} else if (event.type === "ttsr_triggered") {
 			await this.#extensionRunner.emit({ type: "ttsr_triggered", rules: event.rules });
-		} else if (event.type === "todo_reminder") {
-			await this.#extensionRunner.emit({
-				type: "todo_reminder",
-				todos: event.todos,
-				attempt: event.attempt,
-				maxAttempts: event.maxAttempts,
-			});
 		}
 	}
 
@@ -2140,9 +2136,62 @@ export class AgentSession {
 	#toolDisciplines = new Map<string, Discipline>();
 	/** Tool-discipline names already injected this session (inject-once ledger). */
 	#injectedToolDisciplines = new Set<string>();
+	/** Always-on (`on auto`) disciplines evaluated at the session yield point. */
+	#yieldDisciplines: Discipline[] = [];
 
 	setDisciplines(disciplines: Discipline[]): void {
 		this.#toolDisciplines = toolDisciplineMap(disciplines);
+		// `on auto` disciplines are session-active (always-on) and evaluated at the
+		// yield point. Until a task-classifier exists, `auto` ≙ always-on.
+		this.#yieldDisciplines = disciplines.filter(
+			d => d.on.kind === "auto" && (d.guard !== undefined || d.verify?.cmd !== undefined || !!d.verify?.review),
+		);
+		this.#disciplineArmedAt = new Date().toISOString();
+		this.#disciplineStats.clear();
+		for (const discipline of this.#yieldDisciplines) {
+			this.#disciplineStats.set(discipline.name, {
+				name: discipline.name,
+				description: discipline.description,
+				origin: discipline.origin,
+				on: discipline.on.kind,
+				guard: discipline.guard,
+				verifyCmd: discipline.verify?.cmd !== undefined,
+				verifyReview: !!discipline.verify?.review,
+				armedAt: this.#disciplineArmedAt,
+				activationCount: 0,
+				gateBreakdown: {},
+			});
+		}
+		if (this.#yieldDisciplines.length > 0) {
+			this.#appendDisciplineEvent({
+				phase: "arm",
+				timestamp: this.#disciplineArmedAt,
+				disciplines: this.getDisciplineStats(),
+			});
+		}
+	}
+
+	getDisciplineStats(): DisciplineRuntimeStat[] {
+		return [...this.#disciplineStats.values()].map(stat => ({
+			...stat,
+			gateBreakdown: { ...stat.gateBreakdown },
+			lastOutcome: stat.lastOutcome ? { ...stat.lastOutcome } : undefined,
+		}));
+	}
+
+	#appendDisciplineEvent(data: DisciplineEventData): void {
+		this.sessionManager.appendCustomEntry("discipline-event", data);
+	}
+
+	#recordDisciplineOutcome(outcome: DisciplineGateOutcome, timestamp: string): void {
+		const stat = this.#disciplineStats.get(outcome.discipline);
+		if (!stat) return;
+		stat.lastOutcome = { ...outcome };
+		if (!outcome.passed) {
+			stat.activationCount++;
+			stat.lastFiredAt = timestamp;
+			stat.gateBreakdown[outcome.gate] = (stat.gateBreakdown[outcome.gate] ?? 0) + 1;
+		}
 	}
 
 	/**
@@ -2339,7 +2388,7 @@ export class AgentSession {
 			this.#flushPendingBashMessages();
 
 			// Reset todo reminder count on new user prompt
-			this.#todoReminderCount = 0;
+			this.#yieldReminderCount = 0;
 
 			// Validate model
 			if (!this.model) {
@@ -2964,7 +3013,7 @@ export class AgentSession {
 		this.sessionManager.appendThinkingLevelChange(this.thinkingLevel);
 		this.sessionManager.appendServiceTierChange(this.serviceTier ?? null);
 
-		this.#todoReminderCount = 0;
+		this.#yieldReminderCount = 0;
 		this.#reconnectToAgent();
 
 		// Emit session_switch event with reason "new" to hooks
@@ -3687,7 +3736,7 @@ export class AgentSession {
 			this.#steeringMessages = [];
 			this.#followUpMessages = [];
 			this.#pendingNextTurnMessages = [];
-			this.#todoReminderCount = 0;
+			this.#yieldReminderCount = 0;
 
 			// Inject the handoff document as a custom message
 			const handoffContent = `<handoff-context>\n${handoffText}\n</handoff-context>\n\nThe above is a handoff document from a previous session. Use this context to continue the work seamlessly.`;
@@ -3892,68 +3941,90 @@ export class AgentSession {
 		};
 	}
 	/**
-	 * Check if agent stopped with incomplete todos and prompt to continue.
-	 * Returns true if a reminder was injected (agent will continue).
+	 * Discipline yield-gate evaluation (FEAT-816).
+	 *
+	 * Replaces the old hard-coded "remind N× about incomplete todos" system with
+	 * a data-driven loop: at a final text stop, evaluate every active yield
+	 * discipline ({@link Discipline.guard} predicates + {@link DisciplineVerify}
+	 * cmd/review gates). If any is unsatisfied, inject the discipline's guidance
+	 * and continue — the same inject + continue + max seam the old system used,
+	 * sourced from disciplines instead of a bespoke todo check.
+	 *
+	 * Returns true when a reminder was injected (the agent will continue).
 	 */
-	async #checkTodoCompletion(): Promise<boolean> {
-		const remindersEnabled = this.settings.get("todo.reminders");
-		const todosEnabled = this.settings.get("todo.enabled");
-		if (!remindersEnabled || !todosEnabled) {
-			this.#todoReminderCount = 0;
+	async #evaluateYieldDisciplines(): Promise<boolean> {
+		if (this.#yieldDisciplines.length === 0) {
+			this.#yieldReminderCount = 0;
+			return false;
+		}
+		if (this.settings.get("discipline.yieldReminders") === false) {
+			this.#yieldReminderCount = 0;
+			return false;
+		}
+		const max = this.settings.get("discipline.yieldReminders.max") ?? 3;
+		if (this.#yieldReminderCount >= max) {
+			logger.debug("discipline yield-gate: max reminders reached", { count: this.#yieldReminderCount });
 			return false;
 		}
 
-		const remindersMax = this.settings.get("todo.reminders.max");
-		if (this.#todoReminderCount >= remindersMax) {
-			logger.debug("Todo completion: max reminders reached", { count: this.#todoReminderCount });
+		const outcomes: DisciplineGateOutcome[] = [];
+		const failures: Discipline[] = [];
+		for (const discipline of this.#yieldDisciplines) {
+			const outcome = await this.#evaluateYieldGate(discipline);
+			outcomes.push(outcome);
+			if (!outcome.passed) failures.push(discipline);
+		}
+		if (failures.length === 0) {
+			this.#yieldReminderCount = 0;
 			return false;
 		}
 
-		const nodes = this.getTodoNodes();
-		if (nodes.length === 0) {
-			this.#todoReminderCount = 0;
-			return false;
+		const failedOutcomes = outcomes.filter(outcome => !outcome.passed);
+		const timestamp = new Date().toISOString();
+		this.#yieldReminderCount++;
+		for (const outcome of failedOutcomes) {
+			this.#recordDisciplineOutcome(outcome, timestamp);
 		}
-
-		const incomplete = nodes.filter(node => node.status === "pending" || node.status === "in_progress");
-		if (incomplete.length === 0) {
-			this.#todoReminderCount = 0;
-			return false;
-		}
-
-		// Build reminder message, clustered by the cosmetic group label.
-		this.#todoReminderCount++;
-		const byLabel = new Map<string, TodoNode[]>();
-		for (const node of incomplete) {
-			const label = node.group?.trim() || "Tasks";
-			const bucket = byLabel.get(label);
-			if (bucket) bucket.push(node);
-			else byLabel.set(label, [node]);
-		}
-		const todoList = [...byLabel.entries()]
-			.map(([label, items]) => `- ${label}\n${items.map(node => `  - ${node.content}`).join("\n")}`)
-			.join("\n");
+		const bodies = failures.map(d => {
+			let body = injectBody(d.inject) ?? "";
+			// The open-work guard is generic; append the actual unfinished items so
+			// the agent sees what remains (parity with the old todo-reminder detail).
+			if (d.guard === "open-work") {
+				const items = this.#incompleteTodoList();
+				if (items) body = `${body}\n${items}`.trim();
+			}
+			return `Discipline "${d.name}":\n${body || "yield gate is not satisfied."}`;
+		});
 		const reminder =
 			`<system-reminder>\n` +
-			`You stopped with ${incomplete.length} incomplete todo item(s):\n${todoList}\n\n` +
-			`Please continue working on these tasks or mark them complete if finished.\n` +
-			`(Reminder ${this.#todoReminderCount}/${remindersMax})\n` +
+			`A yield gate is not satisfied — do not stop yet.\n\n${bodies.join("\n\n")}\n\n` +
+			`(Reminder ${this.#yieldReminderCount}/${max})\n` +
 			`</system-reminder>`;
 
-		logger.debug("Todo completion: sending reminder", {
-			incomplete: incomplete.length,
-			attempt: this.#todoReminderCount,
+		logger.debug("discipline yield-gate: sending reminder", {
+			disciplines: failures.map(d => d.name),
+			attempt: this.#yieldReminderCount,
 		});
 
-		// Emit event for UI to render notification
+		const disciplineEvent: DisciplineEventData = {
+			phase: "yield-reminder",
+			timestamp,
+			disciplines: this.getDisciplineStats(),
+			outcomes: failedOutcomes,
+			attempt: this.#yieldReminderCount,
+			maxAttempts: max,
+		};
+		this.#appendDisciplineEvent(disciplineEvent);
+
 		await this.#emitSessionEvent({
-			type: "todo_reminder",
-			todos: incomplete,
-			attempt: this.#todoReminderCount,
-			maxAttempts: remindersMax,
+			type: "yield_reminder",
+			disciplines: failures.map(d => d.name),
+			attempt: this.#yieldReminderCount,
+			maxAttempts: max,
+			outcomes: failedOutcomes,
+			stats: disciplineEvent.disciplines,
 		});
 
-		// Inject reminder and continue the conversation
 		this.agent.appendMessage({
 			role: "developer",
 			content: [{ type: "text", text: reminder }],
@@ -3962,6 +4033,125 @@ export class AgentSession {
 		});
 		this.#scheduleAgentContinue({ generation: this.#promptGeneration });
 		return true;
+	}
+
+	/** Evaluate one discipline's yield gate and return structured outcome detail. */
+	async #evaluateYieldGate(discipline: Discipline): Promise<DisciplineGateOutcome> {
+		const name = discipline.name;
+		// Guards: cheap session predicates, always evaluated.
+		if (discipline.guard === "open-work") {
+			const incomplete = this.getTodoNodes().filter(
+				node => node.status === "pending" || node.status === "in_progress",
+			);
+			if (incomplete.length > 0) {
+				return {
+					discipline: name,
+					passed: false,
+					gate: "open-work",
+					incompleteCount: incomplete.length,
+					reason: incomplete.length + " incomplete todo item(s) remain",
+				};
+			}
+		}
+		// Verify gates are costly — only when the final yield reads as a completion
+		// claim, so conversational stops are not judged. Fail-open throughout.
+		const verify = discipline.verify;
+		if (verify && this.#yieldReadsAsCompletion()) {
+			if (verify.cmd !== undefined) {
+				const r = await this.#runYieldCmdGate(verify.cmd);
+				if (!r.passed) {
+					return {
+						discipline: name,
+						passed: false,
+						gate: "verify-cmd",
+						exitCode: r.exitCode,
+						stderr: r.stderr,
+						reason: "verify command exited " + r.exitCode,
+					};
+				}
+			}
+			if (verify.review) {
+				const r = await this.#runYieldReviewGate(discipline, verify.review);
+				if (!r.passed) {
+					return {
+						discipline: name,
+						passed: false,
+						gate: "verify-review",
+						reasoning: r.reasoning,
+						reason: r.reasoning
+							? "review judge rejected the claim: " + r.reasoning
+							: "review judge rejected the completion claim",
+					};
+				}
+			}
+		}
+		return { discipline: name, passed: true, gate: "guard" };
+	}
+
+	/**
+	 * Render the pending/in_progress todos as a grouped bullet list, or null when
+	 * there is no open work. Used to give the open-work yield guard concrete
+	 * detail in its re-prompt (parity with the old todo-reminder message).
+	 */
+	#incompleteTodoList(): string | null {
+		const incomplete = this.getTodoNodes().filter(
+			node => node.status === "pending" || node.status === "in_progress",
+		);
+		if (incomplete.length === 0) return null;
+		const byLabel = new Map<string, string[]>();
+		for (const node of incomplete) {
+			const label = node.group?.trim() || "Tasks";
+			const bucket = byLabel.get(label) ?? [];
+			bucket.push(node.content);
+			byLabel.set(label, bucket);
+		}
+		return [...byLabel.entries()]
+			.map(([label, items]) => `- ${label}\n${items.map(i => `  - ${i}`).join("\n")}`)
+			.join("\n");
+	}
+
+	/** Conservative completion-claim detector — bounds costly verify-gate runs. */
+	#yieldReadsAsCompletion(): boolean {
+		const text = this.#getLastAssistantText();
+		if (!text) return false;
+		return /(?:\b(?:done|complete[ds]?|finished|verified|passes|passing|all\s+green|shipped)\b|✓)/i.test(text);
+	}
+
+	/** Run a verify.cmd gate at yield. Returns pass + captured exit/stderr detail. Fail-open on error. */
+	async #runYieldCmdGate(cmd: string): Promise<{ passed: boolean; exitCode: number; stderr?: string }> {
+		try {
+			const proc = Bun.spawn(["sh", "-lc", cmd], { stdout: "pipe", stderr: "pipe" });
+			const [exitCode, stderrText] = await Promise.all([
+				proc.exited,
+				new Response(proc.stderr).text(),
+			]);
+			const passed = exitCode === 0;
+			return {
+				passed,
+				exitCode,
+				stderr: passed || !stderrText ? undefined : stderrText.slice(-500),
+			};
+		} catch (error) {
+			logger.warn("discipline yield cmd gate failed to run; failing open", { cmd, error: String(error) });
+			return { passed: true, exitCode: -1 };
+		}
+	}
+
+	/** Run a verify.review gate at yield via the shared review-judge. Returns pass + the judge's reason. */
+	async #runYieldReviewGate(
+		discipline: Discipline,
+		criteria: string,
+	): Promise<{ passed: boolean; reasoning?: string }> {
+		const model = this.model;
+		if (!model) return { passed: true }; // fail-open
+		const judge = createModelReviewJudge(model);
+		const verdict = await judge({
+			nodeId: "yield:" + discipline.name,
+			content: this.#getLastAssistantText() ?? "(no completion claim captured)",
+			criteria,
+			context: "",
+		});
+		return { passed: verdict.pass, reasoning: verdict.reason || undefined };
 	}
 
 	/**

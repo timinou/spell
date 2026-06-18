@@ -21,6 +21,7 @@ export class CustomEditor extends Editor {
 	onCapsLock?: () => void;
 	onAltP?: () => void;
 	onAltM?: () => void;
+	onAltD?: () => void;
 	/** Called when Alt+Shift+C is pressed to copy prompt to clipboard. */
 	onCopyPrompt?: () => void;
 	/** Called when Ctrl+V is pressed. Returns true if handled (image found), false to fall through to text paste. */
@@ -105,6 +106,12 @@ export class CustomEditor extends Editor {
 		// Intercept Alt+M for memory browser
 		if (matchesKey(data, "alt+m") && this.onAltM) {
 			this.onAltM();
+			return;
+		}
+
+		// Intercept Alt+D for disciplines pane
+		if (matchesKey(data, "alt+d") && this.onAltD) {
+			this.onAltD();
 			return;
 		}
 

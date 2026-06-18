@@ -434,8 +434,8 @@ export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> =
 	},
 
 	"todo.enabled": { block: "tools", nodePath: "todo", accessor: "property", propertyName: "enabled" },
-	"todo.reminders": { block: "tools", nodePath: "todo", accessor: "property", propertyName: "reminders" },
-	"todo.reminders.max": { block: "tools", nodePath: "todo", accessor: "property", propertyName: "reminders-max" },
+	"discipline.yieldReminders": { block: "tools", nodePath: "discipline", accessor: "property", propertyName: "yield-reminders" },
+	"discipline.yieldReminders.max": { block: "tools", nodePath: "discipline", accessor: "property", propertyName: "yield-reminders-max" },
 	"todo.eager": { block: "tools", nodePath: "todo", accessor: "property", propertyName: "eager" },
 	"todo.reviewJudge": { block: "tools", nodePath: "todo", accessor: "property", propertyName: "review-judge" },
 	"find.enabled": { block: "tools", nodePath: "find", accessor: "property", propertyName: "enabled" },

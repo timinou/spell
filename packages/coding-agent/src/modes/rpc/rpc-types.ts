@@ -9,6 +9,7 @@ import type { Effort, ImageContent, Model } from "@spell/pi-ai";
 import type { BashResult } from "../../exec/bash-executor";
 import type { SessionStats } from "../../session/agent-session";
 import type { CompactionResult } from "../../session/compaction";
+import type { DisciplineRuntimeStat } from "../../config/discipline";
 
 // ============================================================================
 // Edit history (PLAN-338 B)
@@ -208,6 +209,7 @@ export interface RpcSessionState {
 	autoCompactionEnabled: boolean;
 	messageCount: number;
 	queuedMessageCount: number;
+	disciplineStats?: DisciplineRuntimeStat[];
 }
 
 // ============================================================================
