@@ -1,0 +1,253 @@
+#+TITLE: Live Inspector TUI — declarative trace-mirroring DSL (Surface×Mirror×ExRatatui)
+#+STATE: ITEM
+#+SESSION_ID: 150e1d6c01512b85
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-18T15-01-29-733Z_150e1d6c01512b85.jsonl]]
+#+CUSTOM_ID: PLAN-345-live-inspector-tui-declarative-trace-mir
+
+* Initial Message
+
+look at PLAN-344, this was the latest plan that I decided to implement. Now I would like a basic TUI interface but I want to do it super declaratively, using a mix of the 'Mirror DSL' and 'Surface DSL' ideas in ~/code/ora/monorepo and ExRatatui, where you colocate the definition of components with the traces that PtcRunner provides. Specifically, for now, I want to be able to input a new chat thing, and then to see *everything* that's happening inside, and *inside the insides* of the model. I would like you to show me how you'd structure the code that is in charge of making this happen, as this is primarily DSL design (using Spark).
+
+* Intent
+
+A declarative terminal UI for SpellAgent (PLAN-344) that lets you (1) type a new
+chat/mission and (2) watch EVERYTHING happening inside the run — and *inside the
+insides* of the model: turn → llm (reasoning) → tool → (if the tool is a
+sub-agent) its own nested run → its turns → … arbitrarily deep.
+
+The whole UI is DSL design. Three borrowed ideas, fused:
+  - Surface DSL (DjinnUI): screen = data; ONE render contract; generic renderer
+    never branches on pane type — type logic lives in the pane.
+  - Mirror DSL (Djinn LiveView): a pane declaratively MIRRORS a slice of a
+    source-of-truth into its local view-model, `when:`-gated, re-evaluated after
+    every update batch.
+  - ExRatatui (callback runtime): `mount/render/handle_event/handle_info`;
+    render returns `[{widget, rect}]`; non-blocking DirtyIo; TextInput/Textarea
+    for the composer; Table/Gauge/BarChart/Chart for aggregates.
+
+The synthesis (the headline): a pane COLOCATES the PtcRunner traces it reflects
+with how it renders them — `events/0` (subscribe) + `project/2` (the mirror) +
+`view/1` (render), one module, one screenful.
+
+* Verified ground truth (file-checked 2026-06-18 — do not re-litigate)
+
+** The model's interior already exists as a telemetry span forest
+`PtcRunner.SubAgent.Telemetry` emits, all prefixed `[:ptc_runner, :sub_agent]`:
+  - `[:run,  start|stop|exception]`  agent, status, step
+  - `[:turn, start|stop]`            turn, program, result_preview, prints, tokens
+  - `[:llm,  start|stop]`            messages, response (raw reasoning), token deltas
+  - `[:tool, start|stop|exception]`  tool_name, args, result
+  - `[:compaction, :triggered]`      single emit, messages_before/after
+EVERY event carries `span_id` (8-hex) + `parent_span_id` (nil at root). Nested
+spans link parent→child → the events form a FOREST. That forest IS "inside the
+insides": a tool whose impl is a sub-agent emits its own nested `[:run,…]` subtree
+linked by parent_span_id. Recursion is free — no special code.
+(beam/ptc_runner-vendored/lib/ptc_runner/sub_agent/telemetry.ex)
+
+** Prior art that aggregation works on the forest
+`PtcRunner.TraceLog.Analyzer.summary/1` already folds events → counts/tokens/
+durations (count_events, extract_tokens). Aggregates are a different REDUCER at
+the same `project/2` seam, not a new construct.
+(beam/ptc_runner-vendored/lib/ptc_runner/trace_log/analyzer.ex)
+
+** ExRatatui callback runtime (dep: {:ex_ratatui, "~> 0.11"})
+  - `use ExRatatui.App`; callbacks mount/1, render/2 (→ [{widget,rect}]),
+    handle_event/2, handle_info/2 (PubSub/timer → render trigger).
+  - 25 widgets incl. Paragraph, List, Table, Gauge, BarChart, Chart, TextInput,
+    Textarea, Markdown, CodeBlock. Layout.split(area, dir, constraints).
+  - test_mode: {w,h} + Runtime.inject_event/2 + Runtime.snapshot/1 → headless,
+    async-safe tests with NO real TTY.
+  - render/2 raise is caught (frame skipped) — a render bug can't crash the app.
+
+** :telemetry is transitively available (finch/db_connection → telemetry 1.4.2)
+⇒ the risky loop (telemetry → forest → projection) is testable HEADLESS with a
+FAKE llm callback — zero network, zero NIF. (mix.lock)
+
+** Where it lives
+beam/spell_agent/  (the PLAN-344 v0 app). New code under lib/spell_agent/tui/.
+Session.run/1 currently hardcodes Anthropic.callback(model); add an injectable
+`:llm` opt so the TUI (and tests) can drive a fake or real LLM.
+
+* Architecture
+
+#+BEGIN_EXAMPLE
+beam/spell_agent/lib/spell_agent/tui/
+  store.ex              GenServer: :telemetry handler → live span forest (SoT)
+  store/span.ex         %Span{id,parent,kind,status,t0,t1,meta,children}
+  projection.ex         the "mirror reconciler": forest → per-pane view-models
+                        (dirty-filtered by each pane's events/0)
+  pane.ex               @behaviour: events/0 · project/2 · view/1  (THE contract)
+  panes/span_tree.ex    built-in panes; each COLOCATES events+project+view
+  panes/transcript.ex
+  panes/detail.ex
+  panes/stats.ex        aggregate pane (Table/Gauge/BarChart)
+  surface.ex            `use SpellAgent.Tui.Surface` — Spark DSL entry
+  surface/extension.ex  Spark.Dsl.Extension: sections + entities
+  surface/schema/*.ex   %Surface{} %Pane{} %Mirror{} %Composer{}
+  surface/transformer.ex compile DSL → __surface_config__/0
+  app.ex                ExRatatui.App: focus/cursor state, render loop, composer
+  inspector.ex          THE surface module (the screen, declared as data)
+
+Dataflow (one direction):
+  Session.run (in a Task) --emit telemetry--> Store (forest = SoT)
+       on batch --> Projection -- per-pane --> view-models (Mirror)
+            App.render(frame) --> pane.view --> [{widget,rect}] (Surface→ExRatatui)
+  keys --> App (focus/cursor/submit) --> Session.run (new mission) --> telemetry…
+#+END_EXAMPLE
+
+* The DSL surface (authoring target)
+
+#+BEGIN_SRC elixir
+defmodule SpellAgent.Tui.Inspector do
+  use SpellAgent.Tui.Surface
+
+  surface do
+    title  "spell · live inspector"
+    layout :three_column                       # transcript | span-forest | detail
+    composer :prompt, on_submit: &SpellAgent.Session.run/1
+  end
+
+  pane :transcript, region: :left,   component: Tui.Panes.Transcript
+  pane :tree,       region: :center, component: Tui.Panes.SpanTree, focusable: true
+
+  pane :detail, region: :right do
+    mirror :span, from: {:selected, :tree}     # follows the cursor in :tree
+    view fn %{span: span} -> [{Paragraph.new(SpanFmt.detail(span)), :fill}] end
+  end
+end
+#+END_SRC
+
+A colocated built-in pane:
+
+#+BEGIN_SRC elixir
+defmodule SpellAgent.Tui.Panes.Transcript do
+  use SpellAgent.Tui.Pane
+  events [[:turn, :stop], [:run, :stop]]       # dirty-filter: only these wake it
+  def project(forest, _),
+    do: %{turns: Store.turns(forest), final: Store.final_return(forest)}
+  def view(%{vm: %{turns: ts, final: f}, rect: r}),
+    do: [{List.new(Enum.map(ts, &TurnFmt.line/1) ++ [FinalFmt.line(f)]), r}]
+end
+#+END_SRC
+
+* Aggregates — pressure-test PASSED (same contract, zero new concepts)
+
+A pane is events/0 → project/2 → view/1. project/2 is an ARBITRARY fold over the
+forest: transcript folds → list of turns; an aggregate folds → a number /
+histogram / group-by. Same seam. Findings that became contract invariants:
+  1. project/2 returns ANY shape (forest → term()), never assume rows.
+  2. view/1 emits ANY widget; renderer never branches → aggregates just pick
+     Table/Gauge/BarChart.
+  3. SCOPE is the only new thing aggregates surface, and it's already expressible
+     by WHICH source you mirror: `from: :span_forest` (whole run) vs
+     `from: {:selected, :tree}` (selected subtree, recomputed as the cursor
+     moves). ⇒ an aggregate can be LIVE-SCOPED to your navigation with no new
+     primitive. Drilling "inside the insides" and aggregating over what you
+     drilled into are the SAME `from:`.
+Caveat (perf, not DSL): whole-forest recompute is O(spans)/batch — fine for a
+session; if it bites, Store keeps incremental tallies BEHIND project/2 (an
+optimization, invisible to the DSL). That hideability is itself proof the seam
+is right.
+
+Example aggregate pane:
+#+BEGIN_SRC elixir
+defmodule SpellAgent.Tui.Panes.TokenMeter do
+  use SpellAgent.Tui.Pane
+  events [[:llm, :stop], [:tool, :stop]]
+  def project(f, _), do: %{by_turn: Store.tokens_by_turn(f), ratio: Store.ctx_ratio(f)}
+  def view(%{vm: vm, rect: r}), do: [{BarChart.new(vm.by_turn), r}]
+end
+#+END_SRC
+
+* Spark entities (match repo convention: args:[:name], identifier::name, target: schema struct)
+
+  - @composer  name, on_submit (fun/1, required)
+  - @mirror    name; from (event-suffix | named derived source | {:selected,pane});
+               when (fun/1, gates re-eval); collect (:last|:list|:tree); default
+  - @pane      name; region (:left|:center|:right|:full); component (module) XOR
+               view (fun/1); focusable; entities: [mirrors: [@mirror]]
+  - @surface_section  title, layout; entities: [@composer]
+Transformer → `__surface_config__/0` → %Surface{panes, composer, layout} =
+the compile-time contract, tested directly (DjinnUI §10 pattern) — no runtime.
+
+* Runtime modules
+
+** Store (GenServer)
+attach_many to all sub_agent events → cast → upsert %Span{} keyed by span_id,
+linked by parent_span_id. start opens (t0,kind,meta); stop closes (t1, merge
+meta, status); exception → status:error. After each cast, broadcast
+{:store_updated, fired_suffixes} to subscribed App. Derived accessors: forest/0,
+turns/1, final_return/1, tool_spans/1, tokens_by_turn/1, subtree/2 (for selected).
+
+** Projection (the mirror reconciler)
+For each pane: if `when:` open AND the pane's events/0 intersect fired_suffixes,
+run project(forest, assigns) → cache vm; else keep cached. (Mirror's
+reconcile-after-every-batch, re-keyed from LV lifecycle to telemetry batches.)
+
+** App (ExRatatui.App, callback runtime)
+state = %{config: Inspector.__surface_config__(), focus, cursor (per-pane),
+composer_buf, vms}. mount: subscribe to Store. handle_info({:store_updated,…}):
+re-project dirty panes, re-render (coalesced ~30fps tick to absorb bursts).
+render/2: Layout.split by layout, call each pane.view, concat [{widget,rect}].
+handle_event: Tab cycles focus; arrows move focused pane cursor → re-derive
+{:selected,…} mirrors; Enter in composer → Task.start(on_submit, [buf]) so the
+new mission's telemetry streams back into the Store; never blocks the BEAM.
+UI state (focus/cursor) lives in App, NOT the Store (model SoT stays replayable).
+
+* Build order
+
+** B (SPIKE first — all the risk lives here): Store + one span_tree pane + composer
+1. tui/store/span.ex + tui/store.ex   — telemetry → forest. Headless test: feed
+   canned :telemetry.execute events (run/turn/llm/tool with span ids) → assert
+   forest shape + nesting depth.
+2. tui/pane.ex + tui/projection.ex    — contract + dirty-filtered reconcile.
+3. tui/panes/span_tree.ex             — colocated events/project/view; project is
+   PURE (forest → rows) → unit-tested with no NIF.
+4. Session.run/1 gains injectable `:llm` opt (fake llm for tests/spike).
+5. tui/app.ex (+ {:ex_ratatui,"~>0.11"} dep): span_tree pane + composer (TextInput);
+   Enter spawns Session.run in a Task; handle_info re-renders. Verify under
+   test_mode:{w,h} + Runtime.inject_event + Runtime.snapshot (no TTY).
+Spike acceptance: type a prompt → run executes via FAKE llm → span_tree pane
+shows run→turn→llm→tool live; arrows scroll the tree. All headless-tested.
+
+** A (the rest — pure DSL growth once the loop is live)
+6. Spark DSL: surface/extension.ex + schema/* + transformer + __surface_config__
+   test. Port Inspector + the 3 panes to the declarative form.
+7. tui/panes/transcript.ex (left) + tui/panes/detail.ex (right, mirrors
+   {:selected,:tree}) → the full three-column inspector.
+8. tui/panes/stats.ex aggregate pane (Table+Gauge+BarChart), proving the
+   aggregates finding end-to-end. Optionally live-scoped via {:selected,:tree}.
+9. Polish: focus ring (Tab), 30fps coalesce, compaction events surfaced,
+   colour/status styling, `mix spell.tui` task or SpellAgent.tui/0 entrypoint.
+
+Dependencies: 1→2→3; 4 independent; 5 needs 1-4 + dep. 6 needs the contract from
+2-3; 7-8 need 6; 9 last.
+
+* Open decisions (cheap, stated)
+- Inline `view:` fn vs component module: default panes to MODULE form (reuse +
+  testable); reserve inline for one-off detail (DjinnUI's extract-when-reusable).
+- Cursor/focus = App state, never Store (else record/replay breaks).
+- Render cadence: re-render on {:store_updated} + ~30fps cap (a chatty turn emits
+  dozens of events/ms; uncapped redraw wastes the NIF boundary).
+- ex_ratatui NIF download is network/precompiled; the SPIKE's risky core (1-4)
+  needs neither — only the App (5) needs the dep.
+
+* Reference
+- beam/ptc_runner-vendored/lib/ptc_runner/sub_agent/telemetry.ex (event table)
+- beam/ptc_runner-vendored/lib/ptc_runner/trace_log/{analyzer,event}.ex (aggregate prior art, flat shape)
+- beam/spell_agent/lib/spell_agent/session.ex (add :llm opt)
+- DjinnUI Surface DSL: monorepo packages/djinn_ui/docs/surface_dsl.md
+- Mirror DSL: monorepo packages/djinn/lib/djinn/live_view/{mirror_reconciler.ex, schema/assign_mirror.ex}
+- ExRatatui callback runtime: hexdocs ex_ratatui 0.11, guides/runtimes/callback_runtime.md
+
+NOTE [2026-06-18]: SPIKE (build order B) DELIVERED + proven headless, 2026-06-18. 17 new TUI tests, all green (44 passed / 4 live-excluded in the full spell_agent suite; zero warnings in tui/ code). Files under beam/spell_agent/lib/spell_agent/tui/: store/span.ex, store.ex, pane.ex, projection.ex, panes/span_tree.ex, app.ex; entrypoint SpellAgent.tui/0; Store added to the supervision tree; Session.run/1 gained the injectable :llm opt.
+
+Proven end-to-end with ZERO network/NIF-in-the-hot-path: a FAKE llm drives the REAL PtcRunner.SubAgent loop in :tool_call mode → genuine telemetry → Store reduces it into a live span forest (run → llm/tool, nested run under a sub-agent tool) → SpanTree.project folds it into depth-ordered rows → Projection dirty-filters by each pane's events/0 → ExRatatui App renders it. The homoiconic define-tool step is visible as a tool span inside the run. Supervised-tree boot verified: render_count=10, run+tool spans captured.
+
+Bugs the load-bearing integration test caught (why it mattered): (1) telemetry `model` meta can be a FUNCTION (llm ref echoed) → label_for crashed on String.Chars; fixed with a total printable/1. (2) Store.start_link(name: nil) collapsed nil→__MODULE__ via `||`; fixed to Keyword.get/3. (3) ExRatatui List.selected must be nil for an empty list (else raise at render); fixed select_index/2 with a count guard.
+
+Verified ptc_runner nuance (not guessed — observed): a tool defined mid-PROGRAM is registered but NOT callable in that same program — the agent's tools map is snapshot at run start (LispOpts.build passes a static `tools`). Same-session-later-turn callability still works (covered by the existing FEAT-826 live test). The TUI homoiconic-visibility test asserts on observable define-tool + list-tools spans, not same-program dispatch.
+
+Aggregates pressure-test PASSED (documented in body): a pane is events/0→project/2→view/1; project/2 is an arbitrary fold (list, number, histogram, group-by) and view/1 emits any widget (Table/Gauge/BarChart) — renderer never branches. The only new thing aggregates surface is SCOPE, already expressible via which source you mirror (:span_forest whole-run vs {:selected,:tree} subtree). No new construct.
+
+REMAINING (build order A, not yet built — pure DSL growth on the proven spine): step 6 Spark DSL (surface/extension + schema/* + transformer + __surface_config__ test) to replace the hand-wired App pane list with the declarative `surface do … end` form; step 7 transcript + detail panes (detail mirrors {:selected,:tree}); step 8 the aggregate stats pane (TokenMeter/by-tool Table) proving the aggregates finding live; step 9 polish (Tab focus ring, ~30fps coalesce, compaction events, q-to-quit). The spike deliberately hand-wires panes (@default_panes in app.ex) so the Spark layer lands on a working render loop.
