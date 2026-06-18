@@ -373,11 +373,16 @@ defmodule SpellAgent.Tui.App do
 
   # Registry bindings if the registry is running, else [] — so the hint still
   # renders (from compiled keymaps) when the App runs without the supervised
-  # KeymapRegistry (e.g. a headless render test).
+  # KeymapRegistry (e.g. a headless render test). try/rescue/catch rather than a
+  # Process.whereis pre-check: the check is TOCTOU — the registry could exit
+  # between whereis and the call, crashing the render path (final-review P2). The
+  # hint is best-effort, so any failure degrades to compiled-keymap hints.
   defp live_bindings(context) do
-    if Process.whereis(SpellAgent.Tui.KeymapRegistry),
-      do: SpellAgent.Tui.KeymapRegistry.bindings(context),
-      else: []
+    SpellAgent.Tui.KeymapRegistry.bindings(context)
+  rescue
+    _ -> []
+  catch
+    :exit, _ -> []
   end
 
   defp compiled_chord_for(:global, intent), do: keymap_chord(Global.keymap(), intent)

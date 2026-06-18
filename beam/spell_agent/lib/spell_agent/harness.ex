@@ -238,16 +238,26 @@ defmodule SpellAgent.Harness do
     end
   end
 
-  # Known keymap contexts — a fixed, allowlisted set, so a reaction-supplied
-  # context string is matched by VALUE and never interned (atom-table DoS guard).
-  @contexts [:tree, :answer, :prompt, :turn_nav, :global]
+  # Known keymap contexts — EXACTLY the contexts the resolver consults
+  # (App.focus_stack: SpanTree=:tree, TurnNav=:turn_nav for answer/prompt focus,
+  # and :global). A reaction-supplied context string is matched by VALUE (never
+  # interned — atom-table DoS guard). NB :answer/:prompt are deliberately NOT
+  # here: both panes resolve through :turn_nav, so a binding stored under :answer
+  # would be silently ignored by Keys.resolve (final-review P2). Bind those keys
+  # under "turn_nav".
+  @contexts [:tree, :turn_nav, :global]
 
   defp require_context(args) do
     s = require_str(args, "context")
 
     case Enum.find(@contexts, &(Atom.to_string(&1) == s)) do
-      nil -> raise ArgumentError, "unknown context #{inspect(s)}; allowed: #{Enum.map_join(@contexts, ", ", &to_string/1)}"
-      ctx -> ctx
+      nil ->
+        raise ArgumentError,
+              "unknown context #{inspect(s)}; allowed: #{Enum.map_join(@contexts, ", ", &to_string/1)} " <>
+                "(the answer + prompt panes both use \"turn_nav\")"
+
+      ctx ->
+        ctx
     end
   end
 

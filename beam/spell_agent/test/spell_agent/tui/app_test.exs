@@ -144,6 +144,10 @@ defmodule SpellAgent.Tui.AppTest do
   defp composer_text(widgets), do: paragraph_text(List.last(widgets))
 
   test "the composer hint is DERIVED from the live keymap, focus-aware (W4)", %{store: store} do
+    # Reset live overrides so this asserts the COMPILED keymap (other tests share
+    # the supervised KeymapRegistry and may have left rebinds that shadow it).
+    if Process.whereis(SpellAgent.Tui.KeymapRegistry), do: SpellAgent.Tui.KeymapRegistry.reset()
+
     tree = state(%{store: store, ui: Ui.new(focus: :tree, panes: [:answer, :tree, :prompt])})
     tree_hint = composer_text(App.render(tree, %Frame{width: 100, height: 24}))
     # Under tree focus the hint shows the span verbs' ACTUAL chords + globals.

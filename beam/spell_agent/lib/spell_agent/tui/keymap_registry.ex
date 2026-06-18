@@ -41,6 +41,12 @@ defmodule SpellAgent.Tui.KeymapRegistry do
   # mirroring the compiled vocabulary — not an arbitrary string.
   @intent_pattern ~r{\A[a-z][a-z0-9_-]*/[a-z][a-z0-9_-]*\z}
 
+  # Max intent-name length. `String.to_atom/1` RAISES for names past the VM atom
+  # limit (255 bytes), which would crash this Agent callback and restart the live
+  # registry (final-review P2). A real `domain/verb` intent is short; reject
+  # anything longer BEFORE interning.
+  @max_intent_bytes 128
+
   @spec start_link(keyword()) :: Agent.on_start()
   def start_link(_opts \\ []) do
     Agent.start_link(fn -> %{bindings: %{}, reactions: %{}, intents: MapSet.new()} end, name: __MODULE__)
@@ -65,6 +71,9 @@ defmodule SpellAgent.Tui.KeymapRegistry do
 
       :error ->
         cond do
+          byte_size(name) > @max_intent_bytes ->
+            {:error, "intent name too long (max #{@max_intent_bytes} bytes)"}
+
           not Regex.match?(@intent_pattern, name) ->
             {:error, "intent must match domain/verb (got #{inspect(name)})"}
 

@@ -189,6 +189,25 @@ defmodule SpellAgent.HarnessTest do
       # And it stays a usable gaze: expanded?/3 (numeric compare) doesn't crash.
       assert is_boolean(SpellAgent.Tui.Ui.expanded?(result, 0, "root"))
     end
+
+    test "keymap/bind rejects answer/prompt contexts (resolver uses turn_nav) — final-review P2" do
+      tools = Harness.tools(forest(), tree_ui())
+      # :answer is NOT a resolver context; binding there would be silently inert.
+      src = ~s|(keymap/bind {:chord "z" :intent "turn/next" :context "answer"})|
+      assert {:error, _} = PtcRunner.Lisp.run(src, tools: tools, caller: :in_process_v1)
+      # turn_nav IS valid (the answer/prompt panes resolve through it).
+      ok = ~s|(keymap/bind {:chord "z" :intent "turn/next" :context "turn_nav"})|
+      assert {:ok, _} = PtcRunner.Lisp.run(ok, tools: tools, caller: :in_process_v1)
+    end
+
+    test "define-reaction rejects an overlong intent name without crashing the registry — final-review P2" do
+      tools = Harness.tools(forest(), tree_ui())
+      long = "d/" <> String.duplicate("x", 300)
+      src = ~s|(keymap/define-reaction {:context "tree" :intent "#{long}" :source "(harness/expand {})"})|
+      assert {:error, _} = PtcRunner.Lisp.run(src, tools: tools, caller: :in_process_v1)
+      # The registry survived (didn't crash/restart): a normal op still works.
+      assert KeymapRegistry.lookup_binding(:tree, Chord.parse("q")) == nil
+    end
   end
 
   describe "the homoiconic loop closes: define a reaction, bind it, dispatch it" do
