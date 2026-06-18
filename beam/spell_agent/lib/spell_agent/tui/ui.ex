@@ -1,0 +1,183 @@
+defmodule SpellAgent.Tui.Ui do
+  @moduledoc """
+  The serializable gaze (PLAN-346) — App-side navigation state, the WRITE-mirror's
+  value.
+
+  The Store's span forest is the immutable truth of WHAT the model did. `Ui` is
+  WHERE the operator is looking at it: focus, cursors, collapse, turn, scroll.
+  PLAN-345 fixed the invariant that navigation lives in the App, never the Store;
+  this struct is that navigation, consolidated into ONE pure value.
+
+  Because it is pure data it is the dual of a projection's view-model:
+
+      project/2 : forest   -> view-model   (READ  side, telemetry clock)
+      react/3   : %Ui{}     -> %Ui{}        (WRITE side, keystroke clock)
+
+  A reaction is a pure `Ui.t() -> Ui.t()`; this module supplies the verbs
+  (`focus/2`, `cursor/3`, `expand/2`, …). `Ui` carries NO behaviour beyond those
+  transforms — it is the noun; reactions are the sentences. Being plain data, it
+  is also bindable as `data/ui` inside a PTC-Lisp reaction (W3).
+
+  ## Collapse-by-depth (PLAN-346 D4)
+
+  New spans stream in COLLAPSED past `auto_depth`; you expand to drill. Visibility
+  is a POLICY, not a flat hidden-set:
+
+      visible?(depth, id, ui) =
+        case ui.overrides[id] do
+          :expanded  -> true               # explicit open beats the depth rule
+          :collapsed -> false              # explicit close beats the depth rule
+          nil        -> depth < ui.auto_depth
+        end
+
+  So `overrides` is a property of your GAZE, not the forest — streaming spans never
+  disturb what you opened, and `auto_depth` sets the calm default (1 = top-level
+  runs visible, their children collapsed until you drill).
+  """
+
+  alias SpellAgent.Tui.Ui
+
+  @type pane :: :tree | :answer | :prompt
+  @type span_id :: String.t()
+  @type visibility :: :expanded | :collapsed
+
+  @type t :: %__MODULE__{
+          focus: pane(),
+          panes: [pane()],
+          cursors: %{optional(pane()) => non_neg_integer()},
+          auto_depth: non_neg_integer(),
+          overrides: %{optional(span_id()) => visibility()},
+          turn: non_neg_integer(),
+          scroll: %{optional(pane()) => non_neg_integer()},
+          leader: atom() | nil
+        }
+
+  defstruct focus: :tree,
+            panes: [:tree, :answer, :prompt],
+            cursors: %{},
+            auto_depth: 1,
+            overrides: %{},
+            turn: 0,
+            scroll: %{},
+            leader: nil
+
+  @doc "A fresh gaze (defaults)."
+  @spec new(keyword()) :: t()
+  def new(opts \\ []), do: struct(__MODULE__, opts)
+
+  # ---- visibility policy (D4) ----
+
+  @doc """
+  Whether span `id` (at tree `depth`) shows its CHILDREN under this gaze — the
+  single predicate the span-tree projection folds on: it recurses into a node's
+  children iff this returns true.
+
+  Explicit per-span overrides beat the `auto_depth` default. With the default
+  `auto_depth: 1`: depth-0 runs are expanded (their turns + direct llm/tool rows
+  show) but depth-1 nodes are collapsed (a tool's nested sub-run stays folded
+  until you drill). See moduledoc.
+  """
+  @spec expanded?(t(), non_neg_integer(), span_id()) :: boolean()
+  def expanded?(%Ui{overrides: ov, auto_depth: d}, depth, id) do
+    case Map.get(ov, id) do
+      :expanded -> true
+      :collapsed -> false
+      nil -> depth < d
+    end
+  end
+
+  # ---- focus ring ----
+
+  @doc """
+  Move focus through the pane ring, or jump to a named pane.
+
+      focus(ui, :next) | focus(ui, :prev) | focus(ui, :answer)
+  """
+  @spec focus(t(), :next | :prev | pane()) :: t()
+  # An empty ring has nothing to move to — identity, keeping the transform TOTAL
+  # (a pure reaction must never crash on a degenerate-but-valid gaze).
+  def focus(%Ui{panes: []} = ui, dir) when dir in [:next, :prev], do: ui
+
+  def focus(%Ui{panes: panes, focus: cur} = ui, :next) do
+    %{ui | focus: ring_at(panes, cur, +1)}
+  end
+
+  def focus(%Ui{panes: panes, focus: cur} = ui, :prev) do
+    %{ui | focus: ring_at(panes, cur, -1)}
+  end
+
+  def focus(%Ui{panes: panes} = ui, pane) when is_atom(pane) do
+    if pane in panes, do: %{ui | focus: pane}, else: ui
+  end
+
+  # ---- cursor (within the focused pane) ----
+
+  @doc """
+  Move the focused pane's row cursor. Delta is an integer step, or `:first`.
+  Clamps at 0 below; the upper bound is enforced by the pane at render time
+  (the gaze doesn't know the row count). `:last` is represented as a large
+  sentinel the pane clamps down — kept simple here as +1_000_000.
+  """
+  @spec cursor(t(), integer() | :first | :last) :: t()
+  def cursor(%Ui{} = ui, :first), do: put_cursor(ui, 0)
+  def cursor(%Ui{} = ui, :last), do: put_cursor(ui, 1_000_000)
+
+  def cursor(%Ui{} = ui, delta) when is_integer(delta) do
+    put_cursor(ui, max(cursor_of(ui, ui.focus) + delta, 0))
+  end
+
+  @doc "The focused pane's current cursor (0 if unset)."
+  @spec cursor_of(t(), pane()) :: non_neg_integer()
+  def cursor_of(%Ui{cursors: c}, pane), do: Map.get(c, pane, 0)
+
+  defp put_cursor(%Ui{focus: pane, cursors: c} = ui, n) do
+    %{ui | cursors: Map.put(c, pane, n)}
+  end
+
+  # ---- collapse / expand (span overrides) ----
+
+  @doc "Mark a span expanded (children shown), beating the depth default."
+  @spec expand(t(), span_id()) :: t()
+  def expand(%Ui{overrides: ov} = ui, id), do: %{ui | overrides: Map.put(ov, id, :expanded)}
+
+  @doc "Mark a span collapsed (children hidden), beating the depth default."
+  @spec collapse(t(), span_id()) :: t()
+  def collapse(%Ui{overrides: ov} = ui, id), do: %{ui | overrides: Map.put(ov, id, :collapsed)}
+
+  @doc """
+  Toggle a span between expanded/collapsed. The flip is relative to its current
+  EFFECTIVE state at `depth` (so a never-touched span past auto_depth toggles to
+  :expanded, and one inside the window toggles to :collapsed).
+  """
+  @spec toggle(t(), non_neg_integer(), span_id()) :: t()
+  def toggle(%Ui{} = ui, depth, id) do
+    if expanded?(ui, depth, id), do: collapse(ui, id), else: expand(ui, id)
+  end
+
+  # ---- turn navigation (answer / prompt focus) ----
+
+  @doc "Move the selected turn index. Clamps at 0; upper bound enforced by the pane."
+  @spec turn(t(), :next | :prev) :: t()
+  def turn(%Ui{turn: t} = ui, :next), do: %{ui | turn: t + 1}
+  def turn(%Ui{turn: t} = ui, :prev), do: %{ui | turn: max(t - 1, 0)}
+
+  # ---- scroll (per-pane text scroll) ----
+
+  @doc "Scroll a pane's text by `delta`, clamping at 0."
+  @spec scroll(t(), pane(), integer()) :: t()
+  def scroll(%Ui{scroll: s} = ui, pane, delta) do
+    %{ui | scroll: Map.put(s, pane, max(Map.get(s, pane, 0) + delta, 0))}
+  end
+
+  @doc "A pane's current scroll offset (0 if unset)."
+  @spec scroll_of(t(), pane()) :: non_neg_integer()
+  def scroll_of(%Ui{scroll: s}, pane), do: Map.get(s, pane, 0)
+
+  # ---- ring helper ----
+
+  # Step `delta` positions around the pane ring from `cur` (wraps).
+  defp ring_at(panes, cur, delta) do
+    idx = Enum.find_index(panes, &(&1 == cur)) || 0
+    Enum.at(panes, Integer.mod(idx + delta, length(panes)))
+  end
+end

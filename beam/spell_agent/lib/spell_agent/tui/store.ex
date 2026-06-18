@@ -190,9 +190,14 @@ defmodule SpellAgent.Tui.Store do
 
   # Span start: open a node, link to parent, register as root or child.
   defp apply_event(state, [kind, :start], _meas, meta) when kind in @span_kinds do
-    id = meta[:span_id]
-    parent_id = meta[:parent_span_id]
+    do_span_start(state, kind, meta[:span_id], meta[:parent_span_id], meta)
+  end
 
+  # Malformed start: no span_id means we can't key a node — ignore it rather than
+  # create a phantom nil-keyed span (defends against malformed telemetry).
+  defp do_span_start(state, _kind, nil, _parent_id, _meta), do: state
+
+  defp do_span_start(state, kind, id, parent_id, meta) do
     span = %Span{
       id: id,
       parent_id: parent_id,
