@@ -25,6 +25,9 @@ defmodule SpellAgent.Tui.Store.Span do
           status: status()
         }
 
+  @typedoc "Token tallies captured from telemetry measurements (nil until known)."
+  @type tokens :: %{optional(:tokens) => integer(), optional(:input) => integer(), optional(:output) => integer()} | nil
+
   @type t :: %__MODULE__{
           id: String.t(),
           parent_id: String.t() | nil,
@@ -34,6 +37,7 @@ defmodule SpellAgent.Tui.Store.Span do
           t0: integer() | nil,
           t1: integer() | nil,
           meta: map(),
+          tokens: tokens(),
           children: [String.t()],
           turns: [turn()]
         }
@@ -47,6 +51,7 @@ defmodule SpellAgent.Tui.Store.Span do
             t0: nil,
             t1: nil,
             meta: %{},
+            tokens: nil,
             children: [],
             turns: []
 

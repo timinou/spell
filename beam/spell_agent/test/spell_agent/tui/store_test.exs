@@ -83,6 +83,48 @@ defmodule SpellAgent.Tui.StoreTest do
     assert_receive {:store_updated, [:run, :stop]}
   end
 
+  test "llm label shows tokens, never the callback fn (regression)", %{store: pid} do
+    a_fn = fn _ -> :ok end
+    emit([:run, :start], %{span_id: "r", parent_span_id: nil, agent_name: "root"})
+    emit([:llm, :start], %{span_id: "l", parent_span_id: "r", model: a_fn})
+    # tokens arrive in MEASUREMENTS (2nd arg), not metadata.
+    emit([:llm, :stop], %{span_id: "l", parent_span_id: "r", model: a_fn}, %{
+      tokens: 400,
+      input_tokens: 312,
+      output_tokens: 88
+    })
+
+    spans = sync(pid)
+    llm = spans["l"]
+
+    refute llm.label =~ "Function", "the callback fn must never leak into the label"
+    assert llm.label =~ "312→88 tok"
+    assert llm.tokens == %{tokens: 400, input: 312, output: 88}
+  end
+
+  test "turn start program survives the stop (fields merge, no clobber)", %{store: pid} do
+    emit([:run, :start], %{span_id: "r", parent_span_id: nil, agent_name: "root"})
+    # start sets the program; stop carries the result but NO program.
+    emit([:turn, :start], %{span_id: "r", turn: 1, program: "(tool/list-tools {})"})
+    emit([:turn, :stop], %{span_id: "r", turn: 1, result_preview: "3"})
+
+    spans = sync(pid)
+    [turn] = spans["r"].turns
+    assert turn.program == "(tool/list-tools {})", "program from :start must not be clobbered by :stop"
+    assert turn.result_preview == "3"
+    assert turn.status == :ok
+  end
+
+  test "tool label shows the result summary", %{store: pid} do
+    emit([:run, :start], %{span_id: "r", parent_span_id: nil, agent_name: "root"})
+    emit([:tool, :start], %{span_id: "t", parent_span_id: "r", tool_name: "list-tools", args: %{}})
+    emit([:tool, :stop], %{span_id: "t", parent_span_id: "r", tool_name: "list-tools", result: "4"})
+
+    spans = sync(pid)
+    assert spans["t"].label =~ "list-tools"
+    assert spans["t"].label =~ "→ 4"
+  end
+
   test "reset clears the forest but keeps subscriptions", %{store: pid} do
     :ok = Store.subscribe(pid)
     emit([:run, :start], %{span_id: "r", parent_span_id: nil, agent_name: "x"})

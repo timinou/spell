@@ -66,9 +66,9 @@ defmodule SpellAgent.Tui.App do
   def render(state, frame) do
     area = %Rect{x: 0, y: 0, width: frame.width, height: frame.height}
 
-    # header (status + final answer) · body (span tree) · composer (input)
+    # header (status + final answer, wraps) · body (span tree) · composer (input)
     [header, body, composer] =
-      Layout.split(area, :vertical, [{:length, 3}, {:min, 0}, {:length, 3}])
+      Layout.split(area, :vertical, [{:length, 5}, {:min, 0}, {:length, 3}])
 
     pane_widgets =
       state.panes
@@ -223,6 +223,7 @@ defmodule SpellAgent.Tui.App do
 
     %Paragraph{
       text: label,
+      wrap: true,
       style: %Style{fg: color, modifiers: [:bold]},
       block: %Block{title: " spell · inspector ", borders: [:all], border_type: :rounded}
     }

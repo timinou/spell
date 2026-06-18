@@ -208,14 +208,14 @@ defmodule SpellAgent.Tui.Store do
     %{state | spans: spans, roots: roots}
   end
 
-  # Span stop: close the node, merge stop metadata, set status.
-  defp apply_event(state, [kind, :stop], _meas, meta) when kind in @span_kinds do
-    close(state, meta[:span_id], status_from(meta), meta)
+  # Span stop: close the node, merge stop metadata + token measurements, set status.
+  defp apply_event(state, [kind, :stop], meas, meta) when kind in @span_kinds do
+    close(state, meta[:span_id], status_from(meta), meta, meas)
   end
 
   # Span exception: close as error.
-  defp apply_event(state, [kind, :exception], _meas, meta) when kind in @span_kinds do
-    close(state, meta[:span_id], :error, meta)
+  defp apply_event(state, [kind, :exception], meas, meta) when kind in @span_kinds do
+    close(state, meta[:span_id], :error, meta, meas)
   end
 
   defp apply_event(state, _suffix, _meas, _meta), do: state
@@ -234,58 +234,78 @@ defmodule SpellAgent.Tui.Store do
     end
   end
 
-  defp close(state, nil, _status, _meta), do: state
+  defp close(state, nil, _status, _meta, _meas), do: state
 
-  defp close(state, id, status, meta) do
+  defp close(state, id, status, meta, meas) do
     case state.spans[id] do
       %Span{} = span ->
+        merged_meta = Map.merge(span.meta, strip(meta))
+
         closed = %{
           span
           | status: status,
             t1: System.monotonic_time(),
-            meta: Map.merge(span.meta, strip(meta))
+            meta: merged_meta,
+            tokens: tokens_from(meas)
         }
 
-        %{state | spans: Map.put(state.spans, id, closed)}
+        %{state | spans: Map.put(state.spans, id, %{closed | label: label_for(span.kind, merged_meta, closed)})}
 
       nil ->
         state
     end
   end
 
-  defp merge_turn(%Span{turns: turns} = run, :start, meta) do
-    turn = %{
+  # Token tallies live in telemetry MEASUREMENTS, not metadata. Keep the useful
+  # keys; nil when the event carried none (e.g. a start, or a tool call).
+  defp tokens_from(meas) when is_map(meas) do
+    picked =
+      meas
+      |> Map.take([:tokens, :input_tokens, :output_tokens])
+      |> Enum.into(%{}, fn
+        {:input_tokens, v} -> {:input, v}
+        {:output_tokens, v} -> {:output, v}
+        {k, v} -> {k, v}
+      end)
+
+    if map_size(picked) == 0, do: nil, else: picked
+  end
+
+  defp tokens_from(_), do: nil
+
+  defp merge_turn(%Span{turns: turns} = run, phase, meta) do
+    incoming = %{
       number: meta[:turn],
       program: meta[:program],
       result_preview: meta[:result_preview],
       response: meta[:raw_response] || meta[:response],
-      status: :running
+      status: if(phase == :stop, do: :ok, else: :running)
     }
 
-    %{run | turns: upsert_turn(turns, turn)}
+    %{run | turns: upsert_turn(turns, incoming)}
   end
 
-  defp merge_turn(%Span{turns: turns} = run, :stop, meta) do
-    turn = %{
-      number: meta[:turn],
-      program: meta[:program],
-      result_preview: meta[:result_preview],
-      response: meta[:raw_response] || meta[:response],
-      status: :ok
-    }
-
-    %{run | turns: upsert_turn(turns, turn)}
-  end
-
-  # Replace the turn with the same number, else append; keep ordered by number.
-  defp upsert_turn(turns, %{number: n} = turn) do
-    {replaced, acc} =
+  # Merge into the turn with the same number (start sets program; stop adds the
+  # result — non-nil incoming fields win, so neither phase clobbers the other),
+  # else append; keep ordered by number.
+  defp upsert_turn(turns, %{number: n} = incoming) do
+    {merged, hit?} =
       Enum.map_reduce(turns, false, fn
-        %{number: ^n} = _old, _hit -> {turn, true}
+        %{number: ^n} = old, _ -> {merge_turn_fields(old, incoming), true}
         other, hit -> {other, hit}
       end)
 
-    if acc, do: replaced, else: Enum.sort_by(replaced ++ [turn], &(&1.number || 0))
+    if hit?, do: merged, else: Enum.sort_by(merged ++ [incoming], &(&1.number || 0))
+  end
+
+  # Field-wise merge: a non-nil incoming value overwrites; nil leaves the prior.
+  # Status always advances to the incoming phase (running → ok).
+  defp merge_turn_fields(old, incoming) do
+    Map.merge(old, incoming, fn
+      :status, _o, n -> n
+      _k, o, nil -> o
+      _k, _o, n -> n
+    end)
   end
 
   defp status_from(meta) do
@@ -296,16 +316,58 @@ defmodule SpellAgent.Tui.Store do
     end
   end
 
-  defp label_for(:run, meta), do: String.trim("run " <> printable(meta[:agent_name]))
-  defp label_for(:llm, meta), do: String.trim("llm " <> printable(meta[:model]))
-  defp label_for(:tool, meta), do: String.trim("tool " <> printable(meta[:tool_name]))
+  # Label at START — only metadata is known yet (no tokens, no result).
+  defp label_for(kind, meta), do: label_for(kind, meta, nil)
 
-  # Telemetry metadata values are arbitrary terms (e.g. `model` may be an llm
-  # callback fn under tests). Render anything to a short, safe string.
+  # Label at STOP — enrich with tokens (llm/run) and the result (tool).
+  defp label_for(:run, meta, span) do
+    name = printable(meta[:agent_name])
+    join(["run", name, tok(span)])
+  end
+
+  # NB: llm metadata's `:model` is the llm CALLBACK fn, not a model name — never
+  # render it. Show the token cost instead, which is what's actually useful.
+  defp label_for(:llm, _meta, span) do
+    join(["llm", tok(span) || "…"])
+  end
+
+  defp label_for(:tool, meta, _span) do
+    name = printable(meta[:tool_name])
+    detail = result_or_args(meta)
+    join(["tool", name, detail])
+  end
+
+  # Prefer the result (set at stop) over the args (set at start) for the inline
+  # one-liner; both are already summarized by PtcRunner.
+  defp result_or_args(meta) do
+    cond do
+      meta[:result] != nil -> "→ " <> clip(printable(meta[:result]), 48)
+      meta[:args] not in [nil, %{}] -> clip(printable(meta[:args]), 48)
+      true -> nil
+    end
+  end
+
+  # Compact token suffix, e.g. "1.2k tok" or "312→88".
+  defp tok(%Span{tokens: %{input: i, output: o}}) when is_integer(i) and is_integer(o),
+    do: "#{i}→#{o} tok"
+
+  defp tok(%Span{tokens: %{tokens: t}}) when is_integer(t), do: "#{t} tok"
+  defp tok(_), do: nil
+
+  defp join(parts), do: parts |> Enum.reject(&(&1 in [nil, ""])) |> Enum.join("  ")
+
+  defp clip(s, n) when is_binary(s) do
+    flat = s |> String.replace(~r/\s+/, " ") |> String.trim()
+    if String.length(flat) > n, do: String.slice(flat, 0, n - 1) <> "…", else: flat
+  end
+
+  # Telemetry metadata values are arbitrary terms (e.g. a summarized result map).
+  # Render anything to a short, safe string; NEVER leak a raw function.
   defp printable(nil), do: ""
   defp printable(s) when is_binary(s), do: s
   defp printable(a) when is_atom(a), do: Atom.to_string(a)
-  defp printable(other), do: inspect(other)
+  defp printable(f) when is_function(f), do: ""
+  defp printable(other), do: inspect(other, limit: 6, printable_limit: 200)
 
   # Drop internal span-correlation keys + the bulky `agent` struct from stored
   # metadata; everything else (program, result, args, response, turn, …) stays.
