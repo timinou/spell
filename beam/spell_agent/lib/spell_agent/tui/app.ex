@@ -52,7 +52,9 @@ defmodule SpellAgent.Tui.App do
       vms: %{},
       composer: "",
       on_submit: opts[:on_submit] || (&default_submit/1),
-      running?: false
+      running?: false,
+      result: nil,
+      last_prompt: nil
     }
 
     {:ok, reproject(state, :all)}
@@ -64,8 +66,9 @@ defmodule SpellAgent.Tui.App do
   def render(state, frame) do
     area = %Rect{x: 0, y: 0, width: frame.width, height: frame.height}
 
-    [body, composer] =
-      Layout.split(area, :vertical, [{:min, 0}, {:length, 3}])
+    # header (status + final answer) · body (span tree) · composer (input)
+    [header, body, composer] =
+      Layout.split(area, :vertical, [{:length, 3}, {:min, 0}, {:length, 3}])
 
     pane_widgets =
       state.panes
@@ -77,7 +80,7 @@ defmodule SpellAgent.Tui.App do
       end)
       |> Enum.map(&materialize(&1, state))
 
-    pane_widgets ++ [{composer_widget(state), composer}]
+    [{header_widget(state), header} | pane_widgets] ++ [{composer_widget(state), composer}]
   end
 
   # ---- events ----
@@ -97,10 +100,11 @@ defmodule SpellAgent.Tui.App do
     {:noreply, reproject(state, [suffix])}
   end
 
-  # Mission Task finished — clear the running flag, force a final reproject.
-  def handle_info({ref, _result}, state) when is_reference(ref) do
+  # Mission Task finished — capture its final answer and force a final reproject
+  # so the header shows the result (D2).
+  def handle_info({ref, result}, state) when is_reference(ref) do
     Process.demonitor(ref, [:flush])
-    {:noreply, reproject(%{state | running?: false}, :all)}
+    {:noreply, reproject(%{state | running?: false, result: result}, :all)}
   end
 
   def handle_info({:DOWN, _ref, :process, _pid, _reason}, state) do
@@ -117,11 +121,17 @@ defmodule SpellAgent.Tui.App do
     prompt = state.composer
     on_submit = state.on_submit
 
-    # Run the mission off the App process so telemetry streams in live.
+    # A fresh mission: clear the prior forest + result so the view reflects this
+    # run only, then run it off the App process so telemetry streams in live.
+    Store.reset(state.store)
     Task.async(fn -> on_submit.(prompt) end)
 
-    {:noreply, %{state | composer: "", running?: true}}
+    {:noreply,
+     reproject(%{state | composer: "", running?: true, result: nil, last_prompt: prompt}, :all)}
   end
+
+  # Esc (or Ctrl-C) quits the app and restores the terminal.
+  defp handle_key(code, state) when code in ["esc", "ctrl-c"], do: {:stop, state}
 
   defp handle_key("backspace", state) do
     {:noreply, %{state | composer: String.slice(state.composer, 0..-2//1)}}
@@ -195,11 +205,43 @@ defmodule SpellAgent.Tui.App do
   defp status_color(:error), do: :red
   defp status_color(_), do: :yellow
 
+  # ---- header (status + final answer) ----
+
+  # A one-line summary of the active run plus the final answer once it lands (D3).
+  defp header_widget(state) do
+    spans = Store.spans(state.store)
+    runs = Store.run_spans(spans)
+    tools = length(Store.tool_spans(spans))
+    turns = runs |> Enum.flat_map(& &1.turns) |> length()
+
+    {label, color} =
+      cond do
+        state.running? -> {"● running…  turns #{turns} · tools #{tools}", :yellow}
+        state.result -> result_summary(state.result)
+        true -> {"idle — type a prompt below, then ↵", :dark_gray}
+      end
+
+    %Paragraph{
+      text: label,
+      style: %Style{fg: color, modifiers: [:bold]},
+      block: %Block{title: " spell · inspector ", borders: [:all], border_type: :rounded}
+    }
+  end
+
+  defp result_summary({:ok, answer}), do: {"✓ " <> to_text(answer), :green}
+  defp result_summary({:error, reason}), do: {"✗ error: " <> to_text(reason), :red}
+  defp result_summary(other), do: {"✓ " <> to_text(other), :green}
+
+  defp to_text(v) when is_binary(v), do: v
+  defp to_text(v), do: inspect(v, pretty: false, limit: 8)
+
   # ---- composer ----
 
   defp composer_widget(state) do
     {title, hint} =
-      if state.running?, do: {" running… ", ""}, else: {" prompt ", "↵ run · ↑↓ scroll"}
+      if state.running?,
+        do: {" running… ", ""},
+        else: {" prompt ", "↵ run · ↑↓ scroll · esc quit"}
 
     text = if state.composer == "", do: hint, else: state.composer <> "▎"
 

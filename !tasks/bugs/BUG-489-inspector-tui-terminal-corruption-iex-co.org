@@ -1,0 +1,70 @@
+#+TITLE: Inspector TUI: terminal corruption (iex co-tenancy), final answer dropped, low readability
+#+STATE: ITEM
+#+SESSION_ID: 150e1d6c01512b85
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-18T15-01-29-733Z_150e1d6c01512b85.jsonl]]
+#+CUSTOM_ID: BUG-489-inspector-tui-terminal-corruption-iex-co
+
+* Initial Message
+
+look at PLAN-344, this was the latest plan that I decided to implement. Now I would like a basic TUI interface but I want to do it super declaratively, using a mix of the 'Mirror DSL' and 'Surface DSL' ideas in ~/code/ora/monorepo and ExRatatui, where you colocate the definition of components with the traces that PtcRunner provides. Specifically, for now, I want to be able to input a new chat thing, and then to see *everything* that's happening inside, and *inside the insides* of the model. I would like you to show me how you'd structure the code that is in charge of making this happen, as this is primarily DSL design (using Spark).
+
+* Context
+PLAN-345 spike (beam/spell_agent inspector TUI). Three defects observed live by
+the user when launching via `iex -S mix` then `SpellAgent.tui()`.
+
+* Defects
+
+** D1 — terminal corruption + doubled composer (HIGH)
+Symptom (user screenshots): the bordered "prompt" composer box renders TWICE at
+different vertical offsets, and garbage/scrollback bleeds above the TUI frame.
+
+Root cause (reasoned from source — a real TTY could not be driven in the agent
+sandbox to observe directly, so labeled a strong hypothesis, not a confirmed
+repro): `SpellAgent.tui/0` calls `App.start_link` and RETURNS immediately to the
+iex shell. ExRatatui's local Server then runs in the alternate screen + raw mode
+polling stdin on the DirtyIo scheduler, WHILE the iex shell process keeps doing
+its own `IO.gets` on stdin and printing `iex>` prompts to stdout. Two concurrent
+readers of stdin and two writers of stdout on the same TTY ⇒ frames land at
+drifting cursor offsets (the doubled composer) and the shell's output bleeds
+through (the garbage band). Confirmed in deps: native `init_terminal` does
+`enable_raw_mode` + `EnterAlternateScreen` (terminal.rs:92-94), so a clean
+FOREGROUND run would not corrupt — the corruption is the iex co-tenancy.
+
+Fix: the TUI must own the TTY exclusively. Provide a foreground entrypoint that
+BLOCKS until the app stops (a `mix spell.tui` task and/or `tui/0` that monitors
+the server pid and waits), instead of returning to a live iex shell. Update the
+README to stop recommending `SpellAgent.tui()` from inside iex.
+
+** D2 — final answer never shown (HIGH, confirmed)
+Confirmed in lib/spell_agent/tui/app.ex: the mission runs in a Task; its result
+arrives as `handle_info({ref, _result}, state)` but `_result` (the `{:ok,
+answer}` / `{:error, reason}` from `Session.run/1`) is DISCARDED — the handler
+only sets `running?: false`. So the user watches the whole run but never sees the
+model's final answer.
+
+Fix: capture the Task result and surface it — a dedicated result line/area
+showing the final answer (or error), styled prominently.
+
+** D3 — low readability (MEDIUM)
+The span-tree pane is the only output; no run status summary, no result line,
+rows are terse and uncoloured beyond status glyph. The user explicitly asked for
+output "that's easier for me".
+
+Fix: add a header/status line (running… / done in Nms, turns, tool count) and a
+result line; keep the tree but make the active run obvious. Optionally print a
+plain final summary to stdout on quit.
+
+* Acceptance
+- D1: launching the TUI takes over the terminal as the sole foreground consumer;
+  no iex prompt interleaving; quitting restores the terminal. (Manual: real TTY.)
+- D2: after a mission completes, the final answer is rendered in the TUI.
+  (Headless: drive App with a fake on_submit returning {:ok, "42"}; assert the
+  rendered buffer via ExRatatui.get_buffer_content contains "42".)
+- D3: a status/result line is present and the final answer is legible.
+- Full spell_agent suite stays green; zero warnings in tui/.
+
+* Reference
+- lib/spell_agent/tui/app.ex (handle_info Task result; render/2; tui entry)
+- lib/spell_agent.ex (tui/0), README.md
+- deps/ex_ratatui/native/ex_ratatui/src/terminal.rs (alt-screen proof)
+- deps/ex_ratatui get_buffer_content/1 (headless buffer readback for D2 test)

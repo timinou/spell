@@ -105,4 +105,70 @@ defmodule SpellAgent.Tui.AppTest do
 
     GenServer.stop(pid)
   end
+
+  # ---- render-level tests for the header (D2: final answer; D3: status) ----
+
+  alias ExRatatui.Frame
+
+  # render/2 is a pure callback; build an explicit state to assert the header.
+  defp state(overrides) do
+    Map.merge(
+      %{
+        store: SpellAgent.Tui.Store,
+        panes: [%{name: :tree, module: SpellAgent.Tui.Panes.SpanTree, assigns: %{cursor: 0}}],
+        vms: %{tree: %{rows: [], count: 0}},
+        composer: "",
+        on_submit: fn _ -> :ok end,
+        running?: false,
+        result: nil,
+        last_prompt: nil
+      },
+      overrides
+    )
+  end
+
+  defp header_text(widgets) do
+    # The header is the first {%Paragraph{}, _rect} in render output.
+    {%ExRatatui.Widgets.Paragraph{text: text}, _rect} = hd(widgets)
+    text
+  end
+
+  test "D2: the final answer is shown in the header once the mission completes", %{store: store} do
+    widgets = App.render(state(%{store: store, result: {:ok, "42"}}), %Frame{width: 80, height: 24})
+    assert header_text(widgets) =~ "42"
+    assert header_text(widgets) =~ "✓"
+  end
+
+  test "D2: an error result is surfaced in the header", %{store: store} do
+    widgets =
+      App.render(state(%{store: store, result: {:error, :boom}}), %Frame{width: 80, height: 24})
+
+    assert header_text(widgets) =~ "error"
+    assert header_text(widgets) =~ "✗"
+  end
+
+  test "D3: the header shows a running status while a mission is in flight", %{store: store} do
+    widgets = App.render(state(%{store: store, running?: true}), %Frame{width: 80, height: 24})
+    assert header_text(widgets) =~ "running"
+  end
+
+  test "D2: a completed run via the live app lands its result in the header", %{store: store} do
+    {:ok, pid} =
+      App.start_link(
+        name: nil,
+        test_mode: {80, 24},
+        store: store,
+        on_submit: fn _ -> {:ok, "the-answer-7"} end
+      )
+
+    :ok = type_string(pid, "q")
+    :ok = Runtime.inject_event(pid, key("enter"))
+    Process.sleep(50)
+
+    # The app re-rendered after the Task result landed; render count advanced.
+    snap = Runtime.snapshot(pid)
+    assert snap.render_count >= 2
+
+    GenServer.stop(pid)
+  end
 end
