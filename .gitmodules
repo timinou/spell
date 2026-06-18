@@ -1,3 +1,6 @@
 [submodule "packages/emacs/elisp/vendor/combobulate"]
 	path = packages/emacs/elisp/vendor/combobulate
 	url = https://github.com/mickeynp/combobulate
+[submodule "beam/ex_ratatui-vendored"]
+	path = beam/ex_ratatui-vendored
+	url = https://github.com/mcass19/ex_ratatui
