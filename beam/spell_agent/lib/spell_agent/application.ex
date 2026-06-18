@@ -18,7 +18,11 @@ defmodule SpellAgent.Application do
     children = [
       SpellAgent.Config,
       SpellAgent.ToolRegistry,
-      SpellAgent.OAuth
+      SpellAgent.OAuth,
+      # The inspector TUI's live span forest (PLAN-345). Long-lived + session-
+      # global, attached to telemetry on first use; the App (which grabs the
+      # terminal) is launched on demand via `SpellAgent.tui/0`.
+      SpellAgent.Tui.Store
     ]
 
     opts = [strategy: :one_for_one, name: SpellAgent.Supervisor]

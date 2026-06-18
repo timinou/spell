@@ -20,6 +20,21 @@ defmodule SpellAgent do
   defdelegate run(prompt, opts \\ []), to: Session
 
   @doc """
+  Launch the live inspector TUI (PLAN-345): a terminal UI to type a mission and
+  watch everything happening inside the run — turns, llm calls, tools, and (when
+  a tool is itself a sub-agent) its nested run, arbitrarily deep.
+
+  Blocks the calling shell until you quit. Intended for `iex -S mix` or an
+  escript. The supervised `SpellAgent.Tui.Store` captures the span forest; this
+  starts the `ExRatatui.App` that renders it.
+  """
+  @spec tui(keyword()) :: :ok
+  def tui(opts \\ []) do
+    {:ok, _pid} = SpellAgent.Tui.App.start_link(Keyword.put_new(opts, :store, SpellAgent.Tui.Store))
+    :ok
+  end
+
+  @doc """
   Interactive REPL. Reads a prompt per line, runs it, prints the result. Type
   `exit` (or send EOF) to quit. Intended for `iex -S mix`.
   """

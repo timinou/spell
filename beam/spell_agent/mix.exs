@@ -51,6 +51,8 @@ defmodule SpellAgent.MixProject do
       # Read Spell's agent.db (SQLite) for the subscription credential.
       {:exqlite, "~> 0.27"},
       {:jason, "~> 1.4"},
+      # The inspector TUI (PLAN-345). Precompiled NIF; renders the live span forest.
+      {:ex_ratatui, "~> 0.11"},
       # req_llm is intentionally NOT a dep in v0: one provider, direct adapter,
       # full request-body control. Revisit when porting many providers.
       {:stream_data, "~> 1.1", only: [:test]}
