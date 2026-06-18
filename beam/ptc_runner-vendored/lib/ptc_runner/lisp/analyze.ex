@@ -242,6 +242,15 @@ defmodule PtcRunner.Lisp.Analyze do
     {:ok, {:runtime_callable, :tool, name}}
   end
 
+  # SPELL PATCH (PLAN-346 W3): harness/ and keymap/ in VALUE position, e.g.
+  # `(reduce harness/expand (harness/state) ids)` passes harness/expand as a fn.
+  # Mirror the tool/ runtime-callable so they can be used higher-order. The host
+  # binds the qualified name ("harness/expand") in the tools map; RuntimeCallable
+  # routes a :harness/:keymap callable to a {:tool_call, "<ns>/<name>", _} form.
+  defp do_analyze({:ns_symbol, ns, name}, _tail?) when ns in [:harness, :keymap] do
+    {:ok, {:runtime_callable, ns, :"#{ns}/#{name}"}}
+  end
+
   # Budget introspection: (budget/remaining) returns budget info map
   defp do_analyze({:ns_symbol, :budget, :remaining}, _tail?), do: {:ok, {:budget_remaining}}
 
@@ -459,6 +468,18 @@ defmodule PtcRunner.Lisp.Analyze do
   # Tool invocation via tool/ namespace: (tool/name args...)
   defp dispatch_list_form({:ns_symbol, :tool, tool_name}, rest, _list, tail?),
     do: analyze_tool_call(tool_name, rest, tail?)
+
+  # SPELL PATCH (PLAN-346 W3): harness/ and keymap/ namespaces. The spell_agent
+  # inspector's Reaction DSL exposes two sibling namespaces alongside tool/:
+  #   harness/  pure gaze-transform + forest-query verbs used INSIDE a reaction
+  #   keymap/   live-rebinding meta-ops (bind / define-reaction / show / intents)
+  # Both are routed through the existing tool-call machinery as QUALIFIED tool
+  # names ("harness/<name>", "keymap/<name>") so they reuse all of its limits,
+  # tracing, caching and undefined-var analysis with no new eval path — the host
+  # registers the qualified names in the tools map. This keeps tool/ uncluttered
+  # (the harness controls itself in its own namespace).
+  defp dispatch_list_form({:ns_symbol, ns, name}, rest, _list, tail?) when ns in [:harness, :keymap],
+    do: analyze_tool_call(:"#{ns}/#{name}", rest, tail?)
 
   # MCP REPL discovery via mcp/ namespace
   defp dispatch_list_form({:ns_symbol, :mcp, :servers}, [], _list, _tail?),

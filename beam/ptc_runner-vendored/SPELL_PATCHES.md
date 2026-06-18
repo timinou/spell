@@ -462,3 +462,30 @@ arm. (4) top-level `(return v)`/`(fail v)` surface as `{:__ptc_return__, v}` /
    files when it lands).
 3. Re-run `cd beam/ptc_runtime && mix deps.get && mix test`.
 4. Update the version suffix in `mix.exs` and this header.
+
+## PATCH-N (PLAN-346 W3): `harness/` + `keymap/` namespaces ✅ LANDED
+
+**Disposition**: spell-specific (the spell_agent inspector's Reaction DSL).
+
+Two sibling namespaces alongside `tool/`/`data/`/`budget/`, for the homoiconic
+keybinding system (PLAN-346). Both route through the EXISTING tool-call machinery
+as qualified tool names (`"harness/<name>"`, `"keymap/<name>"`), so they inherit
+all of its limits/tracing/caching/undefined-var analysis with no new eval path.
+
+- `lib/ptc_runner/lisp/source_atoms.ex`: add `harness keymap` to
+  `@bounded_namespaces` (so `ns/key` interns as `{:ns_symbol, ns, key}`), and the
+  verb names (`state cursor-id descendants ancestors expand collapse toggle focus
+  cursor scroll turn`, `bind unbind show intents define-reaction`) to
+  `@qualified_keys`.
+- `lib/ptc_runner/lisp/analyze.ex`: in `dispatch_list_form/4` (call position) and
+  `do_analyze/2` (value position), route `{:ns_symbol, ns, name}` for
+  `ns in [:harness, :keymap]` to a `{:tool_call, "<ns>/<name>", …}` /
+  `{:runtime_callable, ns, :"<ns>/<name>"}`.
+- `lib/ptc_runner/lisp/runtime_callable.ex`: extend `@type namespace` and add a
+  `core_call/2` clause for `:harness`/`:keymap` (name is already qualified).
+- `lib/ptc_runner/lisp.ex`: `collect_tool_names/2` collects the qualified names
+  for the two namespaces (value-position callables) like `tool/`.
+
+The host (`SpellAgent.Harness.tools/2`) registers the qualified names in the
+tools map; `SpellAgent.Tui.Reaction.Ptc` runs a stored reaction with the gaze
+bound as `data/ui` and the forest as `data/forest`.
