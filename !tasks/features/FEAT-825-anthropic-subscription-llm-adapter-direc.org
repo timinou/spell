@@ -1,0 +1,95 @@
+#+TITLE: Anthropic subscription LLM adapter (direct Req) for BEAM agent
+#+STATE: DONE
+#+SESSION_ID: 150e091816528f5b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-18T13-32-40-921Z_150e091816528f5b.jsonl]]
+#+CUSTOM_ID: FEAT-825-anthropic-subscription-llm-adapter-direc
+#+COMPLETION_HASH: f33ddb9b7060f1b3
+
+* Initial Message
+
+i want to move away from TypeScript (completely) and, if I use pi, it's only (1) rebased onto main, and (2) using its extensive set of connectors to AI providers, unless you find a better solution that is just as feature-complete with the stack that I am trying to build.
+
+The features that I want to build should contain:
+- Using the BEAM to orchestrate and execute
+- Configuration as data, potentially using PTC Lisp as both the code execution runner *and* the userland configurator, with a lot of the logic that is currently existing in Typescript and the configuration in kdl to become fully specified in a homoiconic format. But this needs to be sitting on strong foundations
+- Rust for the speed and the optimisation. I think I want to make the seams easier to connect and I want to make the Rust part simpler to manage and more powerful to query (there are probably ergonomics improvements in the code tools).
+
+Right now the tools are not ergonomic enough, the codebase is really really hard to navigate, and I just don't see how I can reach this idea of a live self-coding (and self-coded environment).
+
+Please help me understand.
+
+Parent: PLAN-344. Build order #2. Blocks FEAT (CLI/REPL wire-up). Depends on FEAT-824 (credential reader).
+
+* Target
+NEW modules `SpellAgent.Anthropic` (impl `PtcRunner.LLM`) + `SpellAgent.OAuth` (refresh GenServer)
+in `beam/spell_agent/`.
+
+* Change
+A DIRECT Req adapter to https://api.anthropic.com/v1/messages implementing the
+`PtcRunner.LLM` behaviour (`call/2`, optional `stream/2`), so `SubAgent.run(agent, llm: adapter)`
+works. Chosen over a req_llm plugin because v0 is ONE provider and full request-body control
+is the stronger foundation; req_llm is the right move only when porting many providers.
+
+Deps: `{:req, "~> 0.5"}` (pulls Finch/Mint). NOT req_llm in v0.
+
+** PtcRunner.LLM behaviour (verified contract, beam/ptc_runner-vendored/lib/ptc_runner/llm.ex)
+- `@callback call(model :: String.t(), request :: map()) :: {:ok, response} | {:error, term}`
+- `@callback stream(model, request)` optional.
+- response shape: `%{content: String.t(), tokens: %{input,output,cache_read,cache_creation,total_cost}, ...}`.
+- The `llm:` opt on SubAgent.run also accepts a plain 1-arity fn `(request -> {:ok, ptc_source_string})`
+  — confirm whether SubAgent expects the behaviour module or the callback fn; mirror what
+  `PtcRunner.LLM.callback/2` produces. Read sub_agent.ex run/2 + llm.ex callback/2 before finalizing the shape.
+
+** The 9 subscription adaptations (port from packages/ai/src/providers/anthropic.ts — verified)
+1. Headers: `authorization: "Bearer #{access}"`, `anthropic-version: "2023-06-01"`,
+   `anthropic-beta:` join of
+   ["claude-code-20250219","oauth-2025-04-20","interleaved-thinking-2025-05-14",
+    "context-management-2025-06-27","prompt-caching-scope-2026-01-05","token-efficient-tools-2025-02-19"],
+   `user-agent: "claude-cli/2.1.63 (external, cli)"`,
+   `accept: "text/event-stream"`.
+2. System blocks: PREPEND two text blocks before the real system prompt:
+   (a) billing: "x-anthropic-billing-header: cc_version=2.1.63.<rand3hex>; cc_entrypoint=cli; cch=<cch>;"
+       where cch = Base16-lower(sha256(JSON.encode(params)))[0..4] (first 5 hex chars of the body payload hash),
+       rand3hex = first 3 hex chars of 2 random bytes.
+   (b) identity: "You are a Claude agent, built on Anthropic's Claude Agent SDK."
+   (Only inject when model.id does NOT start with "claude-3-5-haiku".)
+3. Tool names: prefix every tool name + assistant tool_use name with "proxy_" on the way OUT;
+   strip "proxy_" from tool_use names on the way IN. (applyClaudeToolPrefix/stripClaudeToolPrefix)
+4. metadata.user_id cloaking — port resolveAnthropicMetadataUserId (only set when present + oauth).
+5. cache_control: ≤4 breakpoints, drop 5-min ttl ordering conflicts (port enforceCacheControlLimit +
+   normalizeCacheControlTtlOrdering). For v0 a SIMPLE policy (cache system + last tool block) is acceptable;
+   note the cap of 4 must hold or the API 400s.
+6. TLS: Req/Finch `connect_options: [transport_opts: [...]]` — default ciphers + SNI are fine.
+   Do NOT add JA3 spoofing (verified unnecessary).
+7. max_tokens: ensure ≥ thinking.budget_tokens + buffer when thinking enabled (port ensureMaxTokensForThinking).
+8. Streaming: parse SSE events message_start/content_block_start/delta/stop, message_delta —
+   accumulate text + tool_use blocks; map stop_reason (end_turn→stop, tool_use→toolUse, max_tokens→length).
+9. Map Spell message roles → Anthropic messages (user/assistant/tool_result). For v0, SubAgent gives
+   the request already in a normalized shape — read what `request` map actually contains (system, messages, tools)
+   and convert to the v1/messages body. Verify against an actual SubAgent request dump before locking format.
+
+** SpellAgent.OAuth (refresh)
+- GenServer holding current creds (seeded from FEAT-824 `Credentials.load`).
+- Before each request (or on a timer), if `Credentials.expired?/1`, POST refresh:
+  TOKEN_URL = "https://api.anthropic.com/v1/oauth/token",
+  body {grant_type: "refresh_token", client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+        refresh_token: <refresh>}. Response {access_token, refresh_token, expires_in} →
+  new expires_ms = now_ms + expires_in*1000 - 300_000.
+- v0: keep refreshed token IN MEMORY (do not yet UPDATE agent.db — avoid clobbering TS Spell).
+  Persisting back is a follow-up once proven safe.
+
+* Edge
+- A signed `thinking` block with empty text is rejected (HMAC) — drop empties (port the guard).
+- Trailing assistant message with no user turn → append a "Continue." user turn (port convertAnthropicMessages tail).
+- Stream stall: a simple idle timeout is enough for v0; full diagnostic classification is out of scope.
+- client_id is the PUBLIC Claude Code OAuth client id (already in the TS source, base64-wrapped) — fine to inline.
+
+* Accept
+- A live `SpellAgent.Anthropic.call("claude-…", request)` with a real subscription token returns
+  `{:ok, %{content: <text>}}` for a trivial prompt (manual run; gated on a valid agent.db token).
+- A unit test with a MOCK Req (Req.Test / bypass) asserts: bearer header set, the 6 beta values present,
+  billing+identity system blocks prepended, tool names "proxy_"-prefixed, cache breakpoints ≤4.
+- `SpellAgent.OAuth.ensure_fresh/0` refreshes when `expired?/1` and returns a non-expired cred (mock token endpoint).
+- `SubAgent.run("What is 2+2?", llm: SpellAgent.Anthropic.callback(...), max_turns: 1)` returns a step (live, manual).
+
+NOTE [2026-06-18]: Shipped + proven LIVE. SpellAgent.Anthropic is a direct Req adapter implementing PtcRunner.LLM; ports all subscription adaptations (Bearer OAuth, 6 claude-code betas, billing+identity system blocks with cch=sha256(body)[:5], proxy_ tool prefixing, cache_control<=4 cap, claude-cli UA, SSE fold). SpellAgent.OAuth seeds from agent.db; refresh-grant stubbed (token is 1yr, not yet needed — tracked as residual). 17/17 tests (15 unit + 2 live). LIVE PROOF zero Node: direct call -> "pong"; SubAgent.run("17+25") -> 42 through the full PTC-Lisp agentic loop on the real Claude subscription. NB OAuth refresh-token grant not yet implemented (FEAT-825 stub returns near-expiry token with warning) — fine for v0 (1-year token); file a FUP when persistence/refresh is needed.

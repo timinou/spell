@@ -1,0 +1,153 @@
+#+TITLE: Node-free BEAM agent — homoiconic self-coding substrate (v0)
+#+STATE: DONE
+#+SESSION_ID: 150e091816528f5b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-18T13-32-40-921Z_150e091816528f5b.jsonl]]
+#+CUSTOM_ID: PLAN-344-node-free-beam-agent-homoiconic-self-cod
+#+COMPLETION_HASH: 569c4ab8a0bdf0a9
+
+* Initial Message
+
+i want to move away from TypeScript (completely) and, if I use pi, it's only (1) rebased onto main, and (2) using its extensive set of connectors to AI providers, unless you find a better solution that is just as feature-complete with the stack that I am trying to build.
+
+The features that I want to build should contain:
+- Using the BEAM to orchestrate and execute
+- Configuration as data, potentially using PTC Lisp as both the code execution runner *and* the userland configurator, with a lot of the logic that is currently existing in Typescript and the configuration in kdl to become fully specified in a homoiconic format. But this needs to be sitting on strong foundations
+- Rust for the speed and the optimisation. I think I want to make the seams easier to connect and I want to make the Rust part simpler to manage and more powerful to query (there are probably ergonomics improvements in the code tools).
+
+Right now the tools are not ergonomic enough, the codebase is really really hard to navigate, and I just don't see how I can reach this idea of a live self-coding (and self-coded environment).
+
+Please help me understand.
+
+* Intent
+
+Build a coding agent that runs with ZERO Node, on the BEAM, authed by one ported
+subscription credential (Anthropic Claude Pro/Max OAuth) read directly from Spell's
+existing `~/.spell/agent/agent.db`. The agent's defining capability is HOMOICONICITY:
+new tools and config are authored at runtime as PTC-Lisp values (code-as-data,
+durable, diffable), not compiled in. This is the seed of a live self-coding
+environment.
+
+The existing TS Spell stays untouched — this is built IN PARALLEL beside it under
+`beam/`. The user will test/play with v0 to form intuition, then decide what else
+to port from the TS harness (see the feature catalog in this plan's notes).
+
+** Non-goals (v0)
+- NOT porting the 274k-LOC TS harness. Re-wire the Rust + Elixir that already exist.
+- NOT multi-provider. ONE subscription (Anthropic OAuth) end-to-end first.
+- NOT the full tool surface. `execute` (PTC compute, in-process) + a `define-tool` /
+  `define-config` homoiconic surface. Breadth of built-in tools is deliberately deferred.
+- NOT a TLS/JA3 spoof. Verified unnecessary for Anthropic subscription (see Findings).
+- NOT touching `beam/ptc_runner-vendored` eval internals. The `tool_exec` seam suffices.
+
+* Verified ground truth (file-checked this session — do not re-litigate)
+
+** The substrate already exists (~40% of the destination is built)
+- `beam/ptc_runner-vendored/` — 52k LOC Elixir: a FULL agentic loop (`PtcRunner.SubAgent`:
+  multi-turn tool calling, text mode, signatures, chat/history, compaction, validators,
+  system-prompt assembly, an `llm_registry`, and a `req_llm` adapter). The agent loop is
+  NOT something to build.
+- PTC-Lisp evaluator with FIRST-CLASS CLOSURES (`{:closure, params, body, env, turn_history, meta}`)
+  — a tool body can be a Lisp value. (`beam/ptc_runner-vendored/lib/ptc_runner/lisp/eval.ex`)
+- `beam/ptc_runtime/` — host app embedding `ptc_runner` as a path dep, JSON-RPC Peer.
+  The new agent app slots in beside it under `beam/`.
+- Rust kernel carved + rustler NIF proven (P3, 3 gates green: correctness, panic-safety,
+  lock-liveness) — `beam/pi_kernel_nif/`. find/edit over the code-graph callable from BEAM.
+
+** The tool dispatch seam (THE hook for homoiconicity)
+- LLM only ever calls ONE native tool: `lisp_eval`. Everything else is `(tool/name …)`
+  INSIDE a PTC-Lisp program. The agent writes Lisp; Lisp calls tools.
+  (`beam/ptc_runner-vendored/lib/ptc_runner/sub_agent/loop/ptc_tool_call.ex`)
+- `(tool/name args)` → `{:tool_call, name, arg_asts}` → `EvalContext.tool_exec :: (name, args) -> result`.
+  tool_exec is a SINGLE host callback (`eval.ex:723`, `record_tool_call` at :996).
+  ⇒ `define-tool` = route tool_exec through a runtime registry checked BEFORE native tools.
+  ONE seam, no evaluator surgery. This is the strong foundation.
+- `SubAgent.run(agent, llm: cb, tools: %{"name" => fn})` — tools is a plain map of
+  name→callable; `tool_exec` is built from it. Adding a registry-backed resolver is additive.
+
+** Subscription auth is FULLY portable — no Rust HTTP layer, no req_llm dependency required
+The "subtle adaptations" for Anthropic Claude Pro/Max OAuth are ALL application-layer
+(verified in `packages/ai/src/providers/anthropic.ts`):
+  1. Bearer auth (not x-api-key) + beta headers
+     ["claude-code-20250219","oauth-2025-04-20","interleaved-thinking-2025-05-14",
+      "context-management-2025-06-27","prompt-caching-scope-2026-01-05",
+      "token-efficient-tools-2025-02-19"]
+  2. Claude-Code billing header injected as a system text block:
+     "x-anthropic-billing-header: cc_version=2.1.63.<rand3hex>; cc_entrypoint=cli; cch=<sha256(payloadJSON)[:5]>;"
+  3. System instruction injected: "You are a Claude agent, built on Anthropic's Claude Agent SDK."
+  4. Tool-name prefix out / strip in: prefix = "proxy_" (applyClaudeToolPrefix / stripClaudeToolPrefix)
+  5. metadata.user_id cloaking (resolveAnthropicMetadataUserId)
+  6. cache_control <=4 breakpoints + 1h-TTL ordering
+  7. "TLS spoof" is NOT a spoof: only SNI (serverName) + tls.DEFAULT_CIPHERS + rejectUnauthorized.
+     No JA3, no fingerprinting. Finch/Mint transport_opts matches it trivially.
+  8. User-Agent: "claude-cli/2.1.63 (external, cli)"
+  9. OAuth refresh: token has {access, refresh, expires(unix-ms)}; refresh when now > expires-5min.
+     PKCE login flow (claude.ai/oauth/authorize, api.anthropic.com/v1/oauth/token, client_id known).
+∴ A direct `Req` POST to https://api.anthropic.com/v1/messages with SSE streaming +
+  the 9 adaptations above implements subscription auth in pure Elixir. For ONE provider,
+  a DIRECT adapter (full request-body control) is a STRONGER foundation than a req_llm
+  plugin; req_llm becomes worthwhile only when porting many providers later.
+
+** Credentials: zero-migration read of agent.db
+- Table `auth_credentials(provider, credential_type, data TEXT /*JSON*/, identity_key, …)`.
+- Anthropic rows: credential_type="oauth", data = {"access":"sk-ant-oat01…","refresh":…,"expires":<unix ms>}.
+- Elixir reads with Exqlite + Jason directly. v0 opens agent.db READ-ONLY (no schema change,
+  TS Spell unaffected). Refreshed tokens persisted later (UPDATE) once proven.
+
+* Architecture (v0 target)
+
+#+BEGIN_EXAMPLE
+  beam/spell_agent/                         (NEW Elixir app, path-dep on ptc_runner-vendored)
+   |- SpellAgent.Credentials  — Exqlite read agent.db -> %{access,refresh,expires}
+   |- SpellAgent.Anthropic    — direct Req adapter implementing PtcRunner.LLM behaviour:
+   |                            the 9 subscription adaptations + SSE stream -> llm callback shape
+   |- SpellAgent.OAuth        — GenServer: refresh-when-expiring; (later) PKCE login
+   |- SpellAgent.ToolRegistry — GenServer/ETS: name -> {:ptc, source} | {:native, fun}
+   |                            tool_exec resolver checks registry FIRST, native SECOND
+   |- SpellAgent.Tools.Define — define-tool / define-config / list-tools as PTC-callable host fns
+   |                            a defined tool = a STORED PTC-Lisp program (W4 vision realized)
+   |- SpellAgent.CLI / REPL   — IEx or a tiny escript: prompt -> SubAgent.run -> tools -> answer
+
+  Homoiconic loop (the whole point):
+    (define-tool {:name "blast-radius" :params [:sym]
+                  :source "(tool/find {:target (str data/sym \" def->\")})"})
+    -> stored as text in ToolRegistry
+    (tool/blast-radius {:sym "verify"})
+    -> resolver finds it -> runs stored PTC source via sandboxed execute, data/sym bound from args
+    -> agent just authored a NEW tool at runtime, as data.
+#+END_EXAMPLE
+
+* Open decisions (resolve as we build)
+- REPL surface: IEx session vs standalone escript CLI. Lean IEx for v0 (fastest to play with).
+- define-config scope: which config keys are live-rebindable in v0 (model, thinking, system-prompt addendum).
+- Persistence of defined tools: in-memory (ETS) for v0; later durable as org/memory stored programs.
+
+* Build order (see child FEAT items)
+1. FEAT: agent.db credential reader (Exqlite)            — foundation, no deps
+2. FEAT: Anthropic subscription LLM adapter (direct Req) — the load-bearing port
+3. FEAT: homoiconic tool registry + define-tool seam     — the headline capability
+4. FEAT: wire SubAgent + CLI/REPL end-to-end             — the playable v0
+(1 and 3 are independent; 2 gates 4; 3 gates 4.)
+
+* Notes — TS harness feature catalog (for the user's later port decisions)
+Tier1 Core: session/persistence(MODERATE->Exqlite) · context-compaction(EXISTS in SubAgent) ·
+  tool-dispatch+132 handlers(per-tool) · modes/TUI(HARD; rpc mode is the portable seam) · kdl-config(MODERATE).
+Tier2 Orchestration: task/swarm/batch/retry/heartbeat schedulers -> REPLACED by OTP supervision (rewrite not port).
+Tier3 Extensibility: MCP client(MODERATE) · custom tools/commands/hooks(TRIVIAL if authored in PTC-Lisp — the homoiconic win) · skills/rules(TRIVIAL, data).
+Tier4 Integrations: ai/29 providers(port to req_llm or direct, incrementally) · web UI(HARD->Phoenix LiveView later) · browser/stt/ssh/commit(HARD/niche, defer).
+Tier5 Knowledge: memory + org engine ALREADY RUST (pi-knowledge-*, pi-org-engine) -> NIF them · discovery(MODERATE).
+Pattern: knowledge=Rust, agent-loop=Elixir, the TS middle=harness glue+UI+provider plumbing. v0 re-wires what exists.
+
+* Reference (read before executing any child)
+- specs/beam-orchestrator/01-vision.md · 03-roadmap.md · 07-execute-substrate-status.md · 09-p3-pi-kernel-carve-out.md
+- beam/ptc_runner-vendored/lib/ptc_runner/sub_agent.ex (run/2, opts) · llm.ex (PtcRunner.LLM behaviour)
+- beam/ptc_runner-vendored/lib/ptc_runner/lisp/eval.ex:723 (tool_call dispatch) · eval/context.ex (tool_exec)
+- packages/ai/src/providers/anthropic.ts (the 9 adaptations, lines noted above)
+- beam/ptc_runtime/mix.exs (host app pattern to mirror)
+
+NOTE [2026-06-18]: v0 DELIVERED + proven live. All 4 FEATs done (824 creds, 825 adapter, 826 homoiconic registry, 827 wire-up). beam/spell_agent runs a coding agent with ZERO Node, authed by the real Claude Max subscription read from ~/.spell/agent/agent.db. 31/31 tests (27 unit + 4 live), zero warnings in our code.
+
+PROVEN LIVE end to end: SpellAgent.run("17+25")=>"42" through the full PtcRunner agentic loop; and the HOMOICONIC DEMO — the agent called define-tool to author a new tool ((* 3 data/n)) at runtime, then invoked (tool/triple {:n 14})=>42, with the agent-authored tool now in the registry. A tool that did not exist at session start, written by the model as data and immediately callable — the self-coding seed works.
+
+Key proven findings: (1) subscription OAuth is FULLY portable to BEAM — all "subtle adaptations" are application-layer (headers, system-block injection, proxy_ tool-prefix, sha256 billing cch); NO TLS/JA3 spoof (just SNI+default ciphers); NO Rust HTTP layer needed. (2) agent.db reads zero-migration via Exqlite read-only (TS Spell untouched). (3) The homoiconic seam = EvalContext.tool_exec single host callback; define-tool routes a registry checked before native tools; a defined tool is STORED PTC SOURCE re-run via Lisp.run with args bound as data/<param> — no evaluator surgery.
+
+Deferred (filed): FUP-147 OAuth refresh+writeback (token is 1yr, not urgent); FUP-148 wire Rust find/edit NIF as native tools + durable defined-tool persistence; FUP-146 parse-gate false-reject (tooling). The TS feature catalog for the user's later port decisions is in this item's body. TS Spell remains untouched — this is the parallel BEAM build.

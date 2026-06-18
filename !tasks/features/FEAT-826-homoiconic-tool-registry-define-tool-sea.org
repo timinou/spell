@@ -1,0 +1,81 @@
+#+TITLE: Homoiconic tool registry + define-tool seam (PTC-Lisp)
+#+STATE: DONE
+#+SESSION_ID: 150e091816528f5b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-18T13-32-40-921Z_150e091816528f5b.jsonl]]
+#+CUSTOM_ID: FEAT-826-homoiconic-tool-registry-define-tool-sea
+#+COMPLETION_HASH: a57ac5ccc363e3ee
+
+* Initial Message
+
+i want to move away from TypeScript (completely) and, if I use pi, it's only (1) rebased onto main, and (2) using its extensive set of connectors to AI providers, unless you find a better solution that is just as feature-complete with the stack that I am trying to build.
+
+The features that I want to build should contain:
+- Using the BEAM to orchestrate and execute
+- Configuration as data, potentially using PTC Lisp as both the code execution runner *and* the userland configurator, with a lot of the logic that is currently existing in Typescript and the configuration in kdl to become fully specified in a homoiconic format. But this needs to be sitting on strong foundations
+- Rust for the speed and the optimisation. I think I want to make the seams easier to connect and I want to make the Rust part simpler to manage and more powerful to query (there are probably ergonomics improvements in the code tools).
+
+Right now the tools are not ergonomic enough, the codebase is really really hard to navigate, and I just don't see how I can reach this idea of a live self-coding (and self-coded environment).
+
+Please help me understand.
+
+Parent: PLAN-344. Build order #3. The HEADLINE capability. Independent of FEAT-824/825 (can build + unit-test
+with a mock LLM); gates FEAT (CLI wire-up) alongside #2.
+
+* Target
+NEW modules `SpellAgent.ToolRegistry` (state) + `SpellAgent.Tools.Define` (the define-tool/define-config/
+list-tools host functions) in `beam/spell_agent/`.
+
+* The seam (verified, do not re-discover)
+- PTC-Lisp `(tool/name args)` → `{:tool_call, name, arg_asts}` (eval.ex:723) → resolves via
+  `EvalContext.tool_exec :: (String.t(), map()) -> term()` (eval/context.ex; record_tool_call eval.ex:996).
+- `SubAgent.run(agent, tools: %{...})` builds tool_exec from the tools map. The host controls the WHOLE map.
+⇒ We provide a tool_exec/tools map whose resolver checks the runtime ToolRegistry FIRST, then native tools.
+  NO change to beam/ptc_runner-vendored. ONE seam.
+
+* Change
+** SpellAgent.ToolRegistry (ETS or Agent-backed, process-global for the session)
+- entry: `%{name, params :: [atom], source :: String.t() (PTC-Lisp), doc :: String.t(), kind: :ptc}`
+  (also support `kind: :native, fun: (map -> term)` so built-ins live in the same table).
+- API: `put(entry)`, `get(name)`, `all()`, `remove(name)`.
+- Seed with native tools (e.g. an `execute`-style passthrough; later find/edit via NIF).
+
+** A defined tool IS a stored PTC-Lisp program (homoiconic, = W4 vision)
+- `define-tool` does NOT capture an Elixir closure. It stores SOURCE TEXT. This makes a tool
+  code-as-data: durable, diffable, inspectable, re-runnable. Strong foundation > closure capture.
+- Resolver for a `:ptc` tool: when `(tool/NAME args)` fires, look up NAME in the registry; run its
+  `source` through the SAME sandboxed PTC execution path the `execute` tool uses
+  (Lisp.run/2 or the runtime's program executor — read beam/ptc_runtime peer.ex for how `execute`
+  invokes a program), with `args` bound as `data/` context (so the source reads `data/sym` etc.).
+  Return the program's value to the caller. Tool-call limits / heap caps / psettled all still apply.
+
+** Host functions exposed to the agent (callable from inside any PTC program)
+- `(define-tool {:name "x" :params [:a :b] :doc "…" :source "<ptc-lisp string>"})` → registers; returns :ok/name.
+- `(define-config {:key "model" :value "…"})` → sets a live config cell (model id, thinking level,
+  system-prompt addendum). v0 scope: a small whitelist of keys; reads feed back into SubAgent.run opts.
+- `(list-tools)` → returns the registry as data (name/params/doc) so the agent can introspect what it built.
+- These are themselves entries in the tools map (native kind), so the agent invokes them as `(tool/define-tool …)`.
+
+** System-prompt rendering
+- The defined tools must appear in the agent's tool inventory so the LLM knows they exist.
+  PtcRunner renders tools via `SubAgent.Namespace.Tool` (verified). Ensure registry entries
+  (params+doc+name) flow into the rendered inventory each turn (re-render from registry, not a static snapshot),
+  so a tool defined in turn N is callable in turn N+1.
+
+* Edge
+- Recursion / cycles: a defined tool whose source calls itself or another defined tool — rely on the
+  existing `max_tool_calls` / loop limits to bound it; document that cycles are the user's responsibility in v0.
+- Name collision with a native tool → registry resolver order is define-FIRST; warn (or reject) on shadowing a native.
+- Bad source (parse error) at define time: VALIDATE by attempting to parse the PTC source on `define-tool`;
+  reject with a clear error rather than failing at first call. (Reuse the preflight/parse pass if exposed.)
+- args→data binding: confirm how the execute path binds the `context` map to `data/<key>`; bind each param by name.
+- Persistence: v0 = in-memory only (lost on restart). Durable storage (org/memory stored program) is a follow-up.
+
+* Accept
+- Unit (no LLM): register `(define-tool {:name "double" :params [:n] :source "(* 2 data/n)"})`,
+  then resolving `(tool/double {:n 21})` returns 42.
+- A defined tool that calls a NATIVE tool works: e.g. source `"(tool/execute {:program \"(+ 1 1)\"})"` resolves.
+- `(list-tools)` returns the newly defined tool in its data.
+- Defining a tool with malformed PTC source returns a clear `{:error, …}`, not a crash.
+- A tool defined in one turn appears in the rendered tool inventory for the next turn (assert the rendered string contains the name).
+
+NOTE [2026-06-18]: Shipped + tested. The homoiconic core works. SpellAgent.ToolRegistry (Agent-backed) holds :native and :ptc entries; SpellAgent.Tools.build_tools_map/0 produces the SubAgent tools map (verified invoke_tool contract: args_map -> value). A :ptc tool stores PTC-Lisp SOURCE TEXT (code-as-data) and runs via PtcRunner.Lisp.run(source, context: args, tools: build_tools_map()) — args bound as data/<param>; native tools resolved in the SAME map. define-tool/define-config/list-tools are native meta-tools the agent calls as (tool/define-tool …). Source validated at define time via PtcRunner.Lisp.validate/2 (parse+analyze+undefined-var, bounded). SpellAgent.Config = whitelisted live config cell (model/thinking/system-addendum). 10/10 tests: (tool/double {:n 21})->42; defined-tool-calls-native; defined-tool-calls-defined-tool (inc2(40)->42); malformed rejected; reserved-name guard; immediate inventory visibility. Resolver checks registry then meta; recursion bounded by runner's tool-call/heap limits. v0 storage in-memory (ETS/Agent); durable org/memory stored-program persistence is a follow-up.

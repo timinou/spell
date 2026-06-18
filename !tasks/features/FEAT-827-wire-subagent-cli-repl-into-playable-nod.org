@@ -1,0 +1,75 @@
+#+TITLE: Wire SubAgent + CLI/REPL into playable node-free v0
+#+STATE: DONE
+#+SESSION_ID: 150e091816528f5b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-18T13-32-40-921Z_150e091816528f5b.jsonl]]
+#+CUSTOM_ID: FEAT-827-wire-subagent-cli-repl-into-playable-nod
+#+COMPLETION_HASH: c68ae2269434220e
+
+* Initial Message
+
+i want to move away from TypeScript (completely) and, if I use pi, it's only (1) rebased onto main, and (2) using its extensive set of connectors to AI providers, unless you find a better solution that is just as feature-complete with the stack that I am trying to build.
+
+The features that I want to build should contain:
+- Using the BEAM to orchestrate and execute
+- Configuration as data, potentially using PTC Lisp as both the code execution runner *and* the userland configurator, with a lot of the logic that is currently existing in Typescript and the configuration in kdl to become fully specified in a homoiconic format. But this needs to be sitting on strong foundations
+- Rust for the speed and the optimisation. I think I want to make the seams easier to connect and I want to make the Rust part simpler to manage and more powerful to query (there are probably ergonomics improvements in the code tools).
+
+Right now the tools are not ergonomic enough, the codebase is really really hard to navigate, and I just don't see how I can reach this idea of a live self-coding (and self-coded environment).
+
+Please help me understand.
+
+Parent: PLAN-344. Build order #4 (LAST). Blocked by FEAT-825 (adapter) AND FEAT-826 (registry).
+Depends transitively on FEAT-824 (creds).
+
+* Target
+NEW `beam/spell_agent/` app skeleton (mix.exs, application.ex, supervision tree) + a CLI/REPL entrypoint
+that ties Credentials + Anthropic adapter + ToolRegistry + SubAgent into one runnable thing.
+
+* Change
+** App scaffold
+- `mix new spell_agent` under `beam/` (NOT inside an existing app). mix.exs deps:
+  `{:ptc_runner, path: "../ptc_runner-vendored"}`, `{:req, "~> 0.5"}`, `{:exqlite, "~> 0.27"}`, `{:jason, "~> 1.4"}`.
+- `SpellAgent.Application` supervision tree starts: OAuth GenServer (FEAT-825), ToolRegistry (FEAT-826).
+- Mirror the structure/conventions of `beam/ptc_runtime/` (path dep, elixirc_paths, releases stanza).
+
+** The wire-up (SpellAgent.Session or SpellAgent.run/1)
+- Build the agent: `SubAgent.new(prompt: <system>, ptc_transport: :tool_call, tools: <registry-backed map>, …)`.
+  - tools map = native host fns (define-tool/define-config/list-tools + an `execute` passthrough)
+    MERGED with a resolver that dispatches `:ptc` registry entries (FEAT-826).
+  - llm: `SpellAgent.Anthropic` adapter/callback seeded from OAuth creds (FEAT-825).
+  - model: read from the live config cell (define-config) with a sane default (a claude sonnet/haiku id present
+    in agent.db's usable subscription set).
+- `run(prompt)` → `SubAgent.run(agent, llm: …)` → return `step.return` (or text) to the REPL.
+
+** REPL surface (v0 decision: IEx-first, fastest to play with)
+- Provide `SpellAgent.repl/0` usable from `iex -S mix`: reads a line, calls run/1, prints the answer +
+  any tool calls made. Also expose `SpellAgent.run/1` for one-shot use.
+- Optionally a thin `escript`/`mix run -e` entry for `prompt` from argv (nice-to-have, not gating).
+
+** The demo that proves the thesis (put in README of beam/spell_agent)
+A scripted session showing the homoiconic loop end-to-end with ZERO Node:
+  1. ask a question → answered via the Anthropic subscription (proves auth+loop).
+  2. ask it to DEFINE a tool (agent calls define-tool with PTC source).
+  3. ask it to USE that tool → it invokes the tool it just authored.
+  4. `(list-tools)` shows the runtime-grown surface.
+
+* Edge
+- First-run UX: if agent.db has no anthropic oauth row → a clear message ("run `spell` once to log in, or
+  add a credential"), not a stacktrace.
+- Keep it SINGLE-provider, SINGLE-session. No persistence of conversation across restarts in v0.
+- Do not start any Node process. Verify the running BEAM node has no node_modules/child_process dependency.
+
+* Accept
+- `cd beam/spell_agent && iex -S mix` then `SpellAgent.run("What is 2+2?")` returns "4" (or equivalent) — LIVE,
+  using the real subscription token from agent.db, zero Node.
+- The 4-step homoiconic demo runs: define a tool mid-conversation, then successfully call it.
+- `mix test` green for the app's own unit tests (creds mock, adapter mock, registry).
+- README documents the run + the demo transcript.
+
+NOTE [2026-06-18]: Shipped + proven LIVE end to end. beam/spell_agent app: SpellAgent.Session.run/2 builds a SubAgent (ptc_transport: :tool_call) with the registry-backed tools map + the Anthropic subscription adapter; SpellAgent.run/1 + SpellAgent.repl/0 facade. Supervision tree: Config, ToolRegistry, OAuth. README documents architecture + the homoiconic demo. 31/31 tests (27 unit + 4 live), zero warnings in our code.
+
+Two real bugs found + fixed against the LIVE API during wire-up (both in the adapter's request mapping, NOT guessed): (1) SubAgent passes tools in OpenAI function-calling envelope %{"type"=>"function","function"=>%{...}} — convert_tools now unwraps it; (2) tool results arrive as role: :tool / assistant-with-tool_calls — convert_messages now maps to Anthropic tool_result-on-user + tool_use blocks with proxy_ prefixing.
+
+LIVE PROOF (zero Node, real Claude subscription from agent.db):
+- SpellAgent.run("17+25") => "42" through the full loop.
+- HOMOICONIC DEMO: agent called define-tool to author "triple" ((* 3 data/n)) at runtime, then called (tool/triple {:n 14}) => 42; ToolRegistry.all() => ["triple"]. A tool that did not exist at session start, written by the model as data and immediately invoked. The self-coding seed works.

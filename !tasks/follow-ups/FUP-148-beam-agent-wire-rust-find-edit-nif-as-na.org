@@ -1,0 +1,44 @@
+#+TITLE: BEAM agent: wire Rust find/edit NIF as native tools + durable defined-tool persistence
+#+STATE: ITEM
+#+SESSION_ID: 150e091816528f5b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-18T13-32-40-921Z_150e091816528f5b.jsonl]]
+#+CUSTOM_ID: FUP-148-beam-agent-wire-rust-find-edit-nif-as-na
+
+* Initial Message
+
+i want to move away from TypeScript (completely) and, if I use pi, it's only (1) rebased onto main, and (2) using its extensive set of connectors to AI providers, unless you find a better solution that is just as feature-complete with the stack that I am trying to build.
+
+The features that I want to build should contain:
+- Using the BEAM to orchestrate and execute
+- Configuration as data, potentially using PTC Lisp as both the code execution runner *and* the userland configurator, with a lot of the logic that is currently existing in Typescript and the configuration in kdl to become fully specified in a homoiconic format. But this needs to be sitting on strong foundations
+- Rust for the speed and the optimisation. I think I want to make the seams easier to connect and I want to make the Rust part simpler to manage and more powerful to query (there are probably ergonomics improvements in the code tools).
+
+Right now the tools are not ergonomic enough, the codebase is really really hard to navigate, and I just don't see how I can reach this idea of a live self-coding (and self-coded environment).
+
+Please help me understand.
+
+Parent: PLAN-344. The two highest-value extensions after v0, for actually USING the agent on code.
+
+* (A) Wire the Rust kernel as native tools
+v0 has only the homoiconic meta-tools + PTC compute. To make it a real CODING agent,
+expose the proven pi-kernel NIF (beam/pi_kernel_nif, P3 — 3 gates green) as native
+ToolRegistry entries:
+- `find` (read/search/outline over the code-graph) — the read lane is already NIF-proven.
+- `edit` — deferred to P5 in the roadmap (writes + lock-liveness); start with find.
+Add them in SpellAgent.Tools as kind: :native entries calling the NIF, so the agent can
+navigate + read code. Acceptance: (tool/find {:target "…"}) from inside a program returns
+chunks identical to the napi path (the P3 gate-1 corpus).
+
+* (B) Durable persistence of agent-defined tools
+v0 stores defined tools in-memory (ToolRegistry Agent), lost on restart. Make a defined
+tool a DURABLE stored program (the W4 vision, specs/beam-orchestrator/07):
+- persist {name, params, doc, source} to org (a tools.org) or memory (kind: playbook with
+  a :source block).
+- on boot, hydrate ToolRegistry from the durable store.
+Acceptance: define a tool, restart the app, the tool is still callable. A defined tool is
+inspectable + diffable in git (code-as-data, the whole point).
+
+* Notes
+These are the natural next steps the user will reach for once playing with v0. (A) makes it
+useful on real repos; (B) makes the self-coding persistent. Neither blocks v0 — both are
+additive on the shipped substrate.

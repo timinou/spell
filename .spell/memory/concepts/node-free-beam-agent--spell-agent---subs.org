@@ -1,0 +1,27 @@
+#+TITLE: node-free-beam-agent--spell-agent---subs
+
+** ITEM Node-free BEAM agent (spell_agent): subscription auth + homoiconic tools
+:PROPERTIES:
+:CUSTOM_ID: CON-node-free-beam-agent--spell-agent---subs
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-18T14:50:17Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-344-node-free-beam-agent-homoiconic-self-cod
+:END:
+beam/spell_agent is a coding agent running ZERO Node on the BEAM, authed by a Claude Pro/Max SUBSCRIPTION read from ~/.spell/agent/agent.db. Built in parallel beside the TS Spell (untouched). PLAN-344; v0 DONE + live-proven.
+
+KEY ARCHITECTURE FACTS (verified, reusable):
+- The agentic loop already EXISTS in Elixir: PtcRunner.SubAgent (beam/ptc_runner-vendored). Do NOT rebuild it. `SubAgent.run(agent, llm: cb)`; agent built with `SubAgent.new(prompt:, system_prompt:, tools:, ptc_transport: :tool_call, max_turns:)`.
+- The LLM contract: `llm:` is a 1-arity fn `(request -> {:ok, %{content|tool_calls, tokens}})`. PtcRunner.LLM behaviour = call/2 (+ optional stream/2). Request map keys: :system, :messages, :tools, :schema, :cache.
+- THE HOMOICONIC SEAM: PTC-Lisp `(tool/name args)` -> `{:tool_call,name,args}` -> `EvalContext.tool_exec :: (name,args)->result` (eval.ex:723). SubAgent builds tool_exec from a plain `tools: %{name => (args_map -> value)}` map (verified invoke_tool contract: a tool fn takes ONE args map, returns a value, raises on error). In :tool_call transport the LLM only calls ONE native tool `lisp_eval`; all app tools resolve in-process. So: control the tools map = control everything; define-tool just routes a runtime registry checked before native tools. NO evaluator surgery.
+- A defined tool = STORED PTC-LISP SOURCE (code-as-data), re-run via `PtcRunner.Lisp.run(source, context: args, tools: build_tools_map(), caller: :in_process_v1)` with args bound as data/<param>. Returns a Step struct (.return / .fail). Validate source at define-time with `PtcRunner.Lisp.validate/2` (:ok | {:error,[msgs]}). This is the W4 stored-program vision.
+
+SUBSCRIPTION AUTH (the load-bearing finding): Claude Pro/Max OAuth is FULLY portable to BEAM with a direct Req adapter — NO req_llm needed for one provider, NO Rust HTTP layer, NO TLS/JA3 spoof. All "subtle adaptations" are application-layer (from packages/ai/src/providers/anthropic.ts): Bearer auth + 6 claude-code beta headers + user-agent "claude-cli/2.1.63 (external, cli)"; TWO prepended system text blocks (billing "x-anthropic-billing-header: cc_version=2.1.63.<rand3>; cc_entrypoint=cli; cch=<sha256(bodyJSON)[:5]>;" + identity "You are a Claude agent, built on Anthropic's Claude Agent SDK."); tool names prefixed "proxy_" out / stripped in; cache_control <=4 breakpoints. The TS "TLS spoof" is just SNI + tls.DEFAULT_CIPHERS (no fingerprinting). client_id 9d1c250a-e61b-44d9-88ed-5944d1962f5e.
+
+TWO WIRE-MAPPING GOTCHAS (found against the live API, will recur): (1) SubAgent passes tools in OpenAI function-calling ENVELOPE %{"type"=>"function","function"=>%{name,description,parameters}} — must unwrap to Anthropic flat {name,description,input_schema}. (2) tool results come as `%{role: :tool, tool_call_id, content}` and assistant turns as `%{role: :assistant, tool_calls: [%{id, function: %{name, arguments}}]}` — Anthropic has NO tool/system role: map tool result -> user msg with tool_result block; assistant tool_calls -> assistant msg with tool_use blocks (proxy_ prefix on names).
+
+agent.db: table auth_credentials(provider, credential_type, data TEXT JSON, identity_key, updated_at). Anthropic oauth row data={access,refresh,expires(unix MILLIS)}. Read read-only via Exqlite (mode: :readonly) so TS Spell is never write-locked. Toolchain: Elixir 1.20/OTP 29, deps exqlite~>0.37 req~>0.6.
+
+LIVE PROOF: run("17+25")=>"42"; agent defined "triple" via define-tool then called it =>42. 31/31 tests.

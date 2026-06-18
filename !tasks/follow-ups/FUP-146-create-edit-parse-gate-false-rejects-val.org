@@ -1,0 +1,66 @@
+#+TITLE: create/edit parse gate false-rejects valid Elixir (~s sigil w/ parens, nested-escape strings)
+#+STATE: ITEM
+#+SESSION_ID: 150e091816528f5b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-18T13-32-40-921Z_150e091816528f5b.jsonl]]
+#+CUSTOM_ID: FUP-146-create-edit-parse-gate-false-rejects-val
+
+* Initial Message
+
+i want to move away from TypeScript (completely) and, if I use pi, it's only (1) rebased onto main, and (2) using its extensive set of connectors to AI providers, unless you find a better solution that is just as feature-complete with the stack that I am trying to build.
+
+The features that I want to build should contain:
+- Using the BEAM to orchestrate and execute
+- Configuration as data, potentially using PTC Lisp as both the code execution runner *and* the userland configurator, with a lot of the logic that is currently existing in Typescript and the configuration in kdl to become fully specified in a homoiconic format. But this needs to be sitting on strong foundations
+- Rust for the speed and the optimisation. I think I want to make the seams easier to connect and I want to make the Rust part simpler to manage and more powerful to query (there are probably ergonomics improvements in the code tools).
+
+Right now the tools are not ergonomic enough, the codebase is really really hard to navigate, and I just don't see how I can reach this idea of a live self-coding (and self-coded environment).
+
+Please help me understand.
+
+* Symptom
+The `create`/`edit` post-write parse-regression guard rejected VALID Elixir test
+content with `[unsupported_operation] Edit rejected: applying it would make the file
+unparseable`. The content was syntactically correct Elixir (compiled + ran fine once
+written by a different route).
+
+* Repro (observed this session, building beam/spell_agent/test/spell_agent/anthropic_test.exs)
+Two distinct triggers, both valid Elixir, both false-rejected:
+1. `~s(...)` string sigil with PARENTHESES inside the delimiter, e.g.
+   ~s("(+ 1 1)"}) — the inner `)` is read as closing the sigil by the gate's
+   parser, unbalancing the file.
+2. String literals with backslash-escaped double quotes inside a `data: "..."`
+   line — the nested escaped-quote sequence tripped the balance check.
+
+Workaround that succeeded: avoid `~s()` with inner parens; build the nested JSON
+with `Jason.encode!(%{...})` at runtime instead of hand-escaped string literals.
+So the GATE is the blocker, not the language — identical semantics expressed without
+those two lexical shapes wrote cleanly.
+
+* Likely cause
+The Elixir grammar used by the parse-regression guard mis-lexes:
+- `~s` (and presumably other `~X` sigils) with `(`/`)` delimiters — sigils can use
+  any of these delimiter pairs; a `)` inside a `~s(...)` that is itself part of the
+  string is being treated as the sigil terminator.
+- escaped quotes inside double-quoted strings — escape handling in the string rule.
+
+* Impact
+Authoring Elixir files (esp. tests with embedded JSON/Lisp string literals) via
+create/edit intermittently fails and forces awkward rewrites. Pure friction, not a
+correctness risk (the gate fails CLOSED — it never wrote bad content), but it taxes
+exactly the BEAM/PTC-Lisp work in PLAN-344 where embedded-source string literals are
+common.
+
+* Suggested fix
+- Check which tree-sitter Elixir grammar / dialect the parse gate loads
+  (`status { command: languages }`), and whether sigil-delimiter + string-escape
+  rules are current.
+- Add these two cases as regression fixtures for the gate:
+  1. a `~s` sigil with balanced inner parens
+  2. a double-quoted string containing escaped quotes
+- If the grammar is correct and the BALANCE heuristic is a separate pre-check,
+  teach the heuristic to skip bytes inside sigils/strings (or trust the
+  tree-sitter parse over a byte-balance scan).
+
+* Notes
+Found while building FEAT-825 (Anthropic adapter tests) under PLAN-344. Not blocking —
+the Jason.encode! workaround is clean enough — but it will recur across the BEAM work.

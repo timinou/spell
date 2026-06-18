@@ -1,0 +1,47 @@
+#+TITLE: BEAM agent: OAuth refresh-token grant + agent.db write-back
+#+STATE: ITEM
+#+SESSION_ID: 150e091816528f5b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-18T13-32-40-921Z_150e091816528f5b.jsonl]]
+#+CUSTOM_ID: FUP-147-beam-agent-oauth-refresh-token-grant-age
+
+* Initial Message
+
+i want to move away from TypeScript (completely) and, if I use pi, it's only (1) rebased onto main, and (2) using its extensive set of connectors to AI providers, unless you find a better solution that is just as feature-complete with the stack that I am trying to build.
+
+The features that I want to build should contain:
+- Using the BEAM to orchestrate and execute
+- Configuration as data, potentially using PTC Lisp as both the code execution runner *and* the userland configurator, with a lot of the logic that is currently existing in Typescript and the configuration in kdl to become fully specified in a homoiconic format. But this needs to be sitting on strong foundations
+- Rust for the speed and the optimisation. I think I want to make the seams easier to connect and I want to make the Rust part simpler to manage and more powerful to query (there are probably ergonomics improvements in the code tools).
+
+Right now the tools are not ergonomic enough, the codebase is really really hard to navigate, and I just don't see how I can reach this idea of a live self-coding (and self-coded environment).
+
+Please help me understand.
+
+Parent: PLAN-344. Deferred from FEAT-825 (v0 shipped a stub).
+
+* Why deferred
+The Anthropic subscription token in agent.db is a 1-YEAR token (verified: expires
+2027-05-07), so v0 never needs to refresh during normal use. SpellAgent.OAuth.maybe_refresh/2
+currently returns a near-expiry token unchanged with a warning.
+
+* What to build
+- Implement the refresh-token grant in SpellAgent.OAuth:
+  POST https://api.anthropic.com/v1/oauth/token
+  body {grant_type: "refresh_token", client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+        refresh_token: <refresh>}. Response {access_token, refresh_token, expires_in} →
+  new expires_ms = now_ms + expires_in*1000 - 300_000.
+- Decide write-back policy: v0 keeps the refreshed token IN MEMORY to avoid clobbering
+  the parallel TS Spell's agent.db. For a long-lived BEAM agent, persisting back is needed.
+  Options: (a) write to agent.db with an UPDATE (must match TS Spell's row format + updated_at);
+  (b) a separate spell_agent-owned credential store. Prefer (a) if the formats stay compatible —
+  one source of truth — but verify the TS AuthStorage round-trips what we write.
+
+* Acceptance
+- A mock token endpoint test: expired cred -> ensure_fresh/0 performs the grant -> returns a
+  non-expired cred with the new access token.
+- If write-back chosen: a refreshed token is readable by a fresh SpellAgent.Credentials.load/1
+  AND does not break TS Spell's reader (manual cross-check).
+
+* Reference
+- packages/ai/src/utils/oauth/anthropic.ts (TS refresh flow + client_id, base64-wrapped)
+- packages/ai/src/auth-storage.ts (how TS persists refreshed tokens to agent.db)
