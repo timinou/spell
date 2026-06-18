@@ -110,7 +110,7 @@ defmodule SpellAgent.Tui.AppTest do
 
   alias ExRatatui.Frame
 
-  # render/2 is a pure callback; build an explicit state to assert the header.
+  # render/2 is a pure callback; build an explicit state to assert the panes.
   defp state(overrides) do
     Map.merge(
       %{
@@ -121,38 +121,55 @@ defmodule SpellAgent.Tui.AppTest do
         on_submit: fn _ -> :ok end,
         running?: false,
         result: nil,
-        last_prompt: nil
+        last_prompt: nil,
+        focus: :answer,
+        answer_scroll: 0
       },
       overrides
     )
   end
 
-  defp header_text(widgets) do
-    # The header is the first {%Paragraph{}, _rect} in render output.
-    {%ExRatatui.Widgets.Paragraph{text: text}, _rect} = hd(widgets)
-    text
+  # Render order: [status, answer, tree…, composer]. Pull each Paragraph's text.
+  defp paragraph_text({%ExRatatui.Widgets.Paragraph{text: t}, _rect}), do: t
+  defp status_text(widgets), do: paragraph_text(Enum.at(widgets, 0))
+  defp answer_text(widgets), do: paragraph_text(Enum.at(widgets, 1))
+
+  test "D2: the full final answer is shown in the scrollable answer pane", %{store: store} do
+    long = String.duplicate("word ", 200) <> "END"
+    widgets = App.render(state(%{store: store, result: {:ok, long}}), %Frame{width: 80, height: 24})
+
+    # The answer pane carries the WHOLE answer untruncated (it scrolls to show all).
+    assert answer_text(widgets) =~ "END"
+    assert String.length(answer_text(widgets)) >= String.length(long)
+    # Status line summarizes the outcome separately.
+    assert status_text(widgets) =~ "done"
   end
 
-  test "D2: the final answer is shown in the header once the mission completes", %{store: store} do
-    widgets = App.render(state(%{store: store, result: {:ok, "42"}}), %Frame{width: 80, height: 24})
-    assert header_text(widgets) =~ "42"
-    assert header_text(widgets) =~ "✓"
-  end
-
-  test "D2: an error result is surfaced in the header", %{store: store} do
+  test "D2: an error result is surfaced in the answer pane and status", %{store: store} do
     widgets =
       App.render(state(%{store: store, result: {:error, :boom}}), %Frame{width: 80, height: 24})
 
-    assert header_text(widgets) =~ "error"
-    assert header_text(widgets) =~ "✗"
+    assert answer_text(widgets) =~ "error"
+    assert answer_text(widgets) =~ "boom"
+    assert status_text(widgets) =~ "✗"
   end
 
-  test "D3: the header shows a running status while a mission is in flight", %{store: store} do
+  test "D3: the status line shows running while a mission is in flight", %{store: store} do
     widgets = App.render(state(%{store: store, running?: true}), %Frame{width: 80, height: 24})
-    assert header_text(widgets) =~ "running"
+    assert status_text(widgets) =~ "running"
   end
 
-  test "D2: a completed run via the live app lands its result in the header", %{store: store} do
+  test "answer pane scroll offset reflects state (scrollable)", %{store: store} do
+    {%ExRatatui.Widgets.Paragraph{scroll: scroll}, _} =
+      Enum.at(
+        App.render(state(%{store: store, result: {:ok, "x"}, answer_scroll: 7}), %Frame{width: 80, height: 24}),
+        1
+      )
+
+    assert scroll == {7, 0}
+  end
+
+  test "D2: a completed run via the live app lands its result in the answer pane", %{store: store} do
     {:ok, pid} =
       App.start_link(
         name: nil,

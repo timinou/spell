@@ -54,7 +54,12 @@ defmodule SpellAgent.Tui.App do
       on_submit: opts[:on_submit] || (&default_submit/1),
       running?: false,
       result: nil,
-      last_prompt: nil
+      last_prompt: nil,
+      # Which pane the scroll keys drive (Tab toggles). The answer + tree each
+      # scroll independently so a long answer or a deep forest is fully reachable
+      # despite a fixed-height terminal.
+      focus: :answer,
+      answer_scroll: 0
     }
 
     {:ok, reproject(state, :all)}
@@ -66,21 +71,27 @@ defmodule SpellAgent.Tui.App do
   def render(state, frame) do
     area = %Rect{x: 0, y: 0, width: frame.width, height: frame.height}
 
-    # header (status + final answer, wraps) · body (span tree) · composer (input)
-    [header, body, composer] =
-      Layout.split(area, :vertical, [{:length, 5}, {:min, 0}, {:length, 3}])
+    # status (1 line) · body (answer | span tree) · composer (input)
+    [status, body, composer] =
+      Layout.split(area, :vertical, [{:length, 3}, {:min, 0}, {:length, 3}])
 
-    pane_widgets =
+    # Answer on the left (scrollable, wrapped), span tree on the right. Both
+    # take the FULL body height and scroll independently, so everything is
+    # reachable regardless of how tall the terminal is.
+    [answer_rect, tree_rect] =
+      Layout.split(body, :horizontal, [{:percentage, 50}, {:percentage, 50}])
+
+    tree_widgets =
       state.panes
       |> Enum.flat_map(fn pane ->
         vm = Map.get(state.vms, pane.name)
-        focused? = true
-
-        pane.module.view(%{vm: vm, rect: body, assigns: pane.assigns, focused?: focused?})
+        focused? = state.focus == :tree
+        pane.module.view(%{vm: vm, rect: tree_rect, assigns: pane.assigns, focused?: focused?})
       end)
       |> Enum.map(&materialize(&1, state))
 
-    [{header_widget(state), header} | pane_widgets] ++ [{composer_widget(state), composer}]
+    [{status_widget(state), status}, {answer_widget(state), answer_rect}] ++
+      tree_widgets ++ [{composer_widget(state), composer}]
   end
 
   # ---- events ----
@@ -100,11 +111,13 @@ defmodule SpellAgent.Tui.App do
     {:noreply, reproject(state, [suffix])}
   end
 
-  # Mission Task finished — capture its final answer and force a final reproject
-  # so the header shows the result (D2).
+  # Mission Task finished — capture its final answer, focus the answer pane and
+  # reset its scroll so the start of the answer is visible immediately.
   def handle_info({ref, result}, state) when is_reference(ref) do
     Process.demonitor(ref, [:flush])
-    {:noreply, reproject(%{state | running?: false, result: result}, :all)}
+
+    {:noreply,
+     reproject(%{state | running?: false, result: result, focus: :answer, answer_scroll: 0}, :all)}
   end
 
   def handle_info({:DOWN, _ref, :process, _pid, _reason}, state) do
@@ -133,12 +146,21 @@ defmodule SpellAgent.Tui.App do
   # Esc (or Ctrl-C) quits the app and restores the terminal.
   defp handle_key(code, state) when code in ["esc", "ctrl-c"], do: {:stop, state}
 
+  # Tab switches which pane the scroll keys drive.
+  defp handle_key("tab", state) do
+    {:noreply, %{state | focus: toggle_focus(state.focus)}}
+  end
+
   defp handle_key("backspace", state) do
     {:noreply, %{state | composer: String.slice(state.composer, 0..-2//1)}}
   end
 
-  defp handle_key("up", state), do: {:noreply, move_cursor(state, -1)}
-  defp handle_key("down", state), do: {:noreply, move_cursor(state, +1)}
+  # Scroll keys act on the focused pane: the answer (text scroll) or the tree
+  # (cursor move, which the List auto-scrolls to follow).
+  defp handle_key("up", state), do: {:noreply, scroll(state, -1)}
+  defp handle_key("down", state), do: {:noreply, scroll(state, +1)}
+  defp handle_key("page_up", state), do: {:noreply, scroll(state, -10)}
+  defp handle_key("page_down", state), do: {:noreply, scroll(state, +10)}
 
   # A single printable character.
   defp handle_key(<<_::utf8>> = ch, state) do
@@ -146,6 +168,15 @@ defmodule SpellAgent.Tui.App do
   end
 
   defp handle_key(_other, state), do: {:noreply, state}
+
+  defp toggle_focus(:answer), do: :tree
+  defp toggle_focus(:tree), do: :answer
+
+  defp scroll(%{focus: :answer} = state, delta) do
+    %{state | answer_scroll: max((state.answer_scroll || 0) + delta, 0)}
+  end
+
+  defp scroll(%{focus: :tree} = state, delta), do: move_cursor(state, delta)
 
   # ---- cursor / projection ----
 
@@ -205,10 +236,11 @@ defmodule SpellAgent.Tui.App do
   defp status_color(:error), do: :red
   defp status_color(_), do: :yellow
 
-  # ---- header (status + final answer) ----
+  # ---- status (one line) ----
 
-  # A one-line summary of the active run plus the final answer once it lands (D3).
-  defp header_widget(state) do
+  # A single-line run summary across the top: running with counts, or the
+  # outcome glyph once done. The FULL answer lives in the scrollable answer pane.
+  defp status_widget(state) do
     spans = Store.spans(state.store)
     runs = Store.run_spans(spans)
     tools = length(Store.tool_spans(spans))
@@ -217,24 +249,67 @@ defmodule SpellAgent.Tui.App do
     {label, color} =
       cond do
         state.running? -> {"● running…  turns #{turns} · tools #{tools}", :yellow}
-        state.result -> result_summary(state.result)
+        match?({:ok, _}, state.result) -> {"✓ done  turns #{turns} · tools #{tools}", :green}
+        match?({:error, _}, state.result) -> {"✗ failed  turns #{turns} · tools #{tools}", :red}
+        state.result != nil -> {"✓ done  turns #{turns} · tools #{tools}", :green}
         true -> {"idle — type a prompt below, then ↵", :dark_gray}
       end
 
     %Paragraph{
       text: label,
-      wrap: true,
       style: %Style{fg: color, modifiers: [:bold]},
       block: %Block{title: " spell · inspector ", borders: [:all], border_type: :rounded}
     }
   end
 
-  defp result_summary({:ok, answer}), do: {"✓ " <> to_text(answer), :green}
-  defp result_summary({:error, reason}), do: {"✗ error: " <> to_text(reason), :red}
-  defp result_summary(other), do: {"✓ " <> to_text(other), :green}
+  # ---- answer (scrollable, wrapped — shows EVERYTHING) ----
 
+  # The full final answer, wrapped to the pane width and vertically scrollable
+  # (↑↓ / PgUp·PgDn when focused) so a long response is fully reachable in a
+  # fixed-height terminal. While running, shows the latest turn's program/result
+  # so there is always something live to read.
+  defp answer_widget(state) do
+    {body, color} =
+      cond do
+        state.result != nil -> answer_body(state.result)
+        state.running? -> {live_preview(state), :yellow}
+        true -> {"(the model's answer will appear here)", :dark_gray}
+      end
+
+    focus_tag = if state.focus == :answer, do: " ●", else: ""
+
+    %Paragraph{
+      text: body,
+      wrap: true,
+      scroll: {state.answer_scroll || 0, 0},
+      style: %Style{fg: color},
+      block: %Block{title: " answer" <> focus_tag <> " ", borders: [:all], border_type: :rounded}
+    }
+  end
+
+  defp answer_body({:ok, answer}), do: {to_text(answer), :white}
+  defp answer_body({:error, reason}), do: {"error: " <> to_text(reason), :red}
+  defp answer_body(other), do: {to_text(other), :white}
+
+  # Latest turn's program + result, so the answer pane is never blank mid-run.
+  defp live_preview(state) do
+    state.store
+    |> Store.spans()
+    |> Store.run_spans()
+    |> Enum.flat_map(& &1.turns)
+    |> Enum.at(-1)
+    |> case do
+      %{program: p, result_preview: r} when is_binary(p) ->
+        "running…\n\n" <> p <> if(is_binary(r), do: "\n→ " <> r, else: "")
+
+      _ ->
+        "running…"
+    end
+  end
+
+  # Full text — NOT truncated; the answer pane scrolls to show all of it.
   defp to_text(v) when is_binary(v), do: v
-  defp to_text(v), do: inspect(v, pretty: false, limit: 8)
+  defp to_text(v), do: inspect(v, pretty: true, limit: :infinity, printable_limit: :infinity)
 
   # ---- composer ----
 
@@ -242,7 +317,7 @@ defmodule SpellAgent.Tui.App do
     {title, hint} =
       if state.running?,
         do: {" running… ", ""},
-        else: {" prompt ", "↵ run · ↑↓ scroll · esc quit"}
+        else: {" prompt ", "↵ run · tab switch · ↑↓/pgup·pgdn scroll · esc quit"}
 
     text = if state.composer == "", do: hint, else: state.composer <> "▎"
 
