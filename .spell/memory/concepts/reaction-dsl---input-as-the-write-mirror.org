@@ -1,0 +1,33 @@
+#+TITLE: reaction-dsl---input-as-the-write-mirror
+
+** ITEM Reaction DSL — input as the write-mirror dual of Projection (spell_agent TUI)
+:PROPERTIES:
+:CUSTOM_ID: CON-reaction-dsl---input-as-the-write-mirror
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-06-18T17:44:41Z
+:END:
+:RELATIONS:
+:END:
+For beam/spell_agent's inspector TUI (PLAN-345/346). The design language for intent-based keybindings.
+
+KEYSTONE: Reaction is the dual of Projection.
+  project/2 : forest   -> view-model  (READ  side, telemetry clock)  [PLAN-345 mirror]
+  react/3   : ui-state -> ui-state'    (WRITE side, keystroke clock)  [PLAN-346]
+Both pure, both colocate in the Pane module, both live-rebindable data, both authorable from PTC-Lisp.
+
+TWO-STAGE INDIRECTION (the modifiability): three ORTHOGONAL axes, each pure data —
+  chord --[keymap]--> intent --[reaction]--> ui-state'
+Rebinding a key never touches behaviour; redefining behaviour never touches keys; adding a context (focused pane / modal leader / global) touches neither.
+
+CONTEXTUAL RESOLUTION (Emacs major/minor/global cascade, all data): same chord -> different intent by focus. Resolver checks focused pane's keymap first, falls through to global. No `if focus==` anywhere. e.g. C-l = span/expand under tree focus, turn/next under answer focus; C-j = focus/next globally.
+
+NAMESPACE SPLIT BY EFFECT PROFILE (PTC-Lisp): harness/ = pure gaze transforms (Ui->Ui); keymap/ = live-rebinding meta-ops (mutate registry). Both single-segment siblings of tool//data//budget/ in PTC-Lisp's namespace algebra (analyze.ex ns_symbol dispatch). NOT tool/ — harness controls itself in its own namespace; tool/ is for world-work.
+
+HOMOICONIC SYMMETRY: a reaction IS a tool whose param is your gaze. define-tool stores PTC source, re-runs via Lisp.run with args as data/<p>. keymap/define-reaction does the same with gaze as data/ui, forest as data/forest, returning Ui'. So expand-all is one `reduce harness/expand (descendants (cursor-id))`.
+
+Ui = the serializable gaze (focus, panes ring, cursors, auto_depth + overrides for collapse-by-depth, turn, scroll, leader). Carries no behaviour — it's the noun; reactions are the verbs.
+
+KEY CONSTRAINT (verified): legacy terminal byte parser aliases ctrl+j->enter(0x0A), ctrl+h->backspace(0x08); only ctrl+k(0x0B)/ctrl+l(0x0C) survive. Fix = kitty keyboard progressive-enhancement protocol (Ghostty supports it) via PushKeyboardEnhancementFlags in vendored ex_ratatui terminal.rs. ex_ratatui now a git submodule at beam/ex_ratatui-vendored pinned v0.11.0.
+
+One sentence: a keystroke is a sentence — a chord NAMES an intent, whoever has focus INTERPRETS it; chords/intents/interpretations are all live data, so the grammar is rewritable mid-conversation.

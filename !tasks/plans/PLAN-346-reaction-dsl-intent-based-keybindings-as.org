@@ -1,0 +1,360 @@
+#+TITLE: Reaction DSL — intent-based keybindings as the write-mirror (Chord×Intent×Reaction, harness/ + keymap/ namespaces)
+#+STATE: DOING
+#+SESSION_ID: 150e325effca1a94
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-18T16-33-01-439Z_150e325effca1a94.jsonl]]
+#+CUSTOM_ID: PLAN-346-reaction-dsl-intent-based-keybindings-as
+#+DEPENDS: PLAN-345-live-inspector-tui-declarative-trace-mir
+
+* Initial Message
+
+in beam/spell_agent, please design a new DSL-like system that lets me define shortcuts easily, and in a way that is in line with the design of spell_agent and the homoiconicity of ptc-lisp as userland virtual machine, as described in earlier sessions. whatever makes sense to play with 
+
+the specific use is: ctrl+j/k to move up and down a pane, and ctrl+h/l to expand/collapse a span (when the span view is focused) or navigate turns (when the result or prompt pane are focused)
+
+show me DSL on the elixir side and on the ptc-lisp side and make me dream in terms of the possibilities opened up by our design. show me how the integration with ratatui and show me how you register shortcuts based on *intent*, so that it is supremely modifiable (show me how)
+
+this is an opportunity to define important concepts and design language patterns for later expansion, so take your time and go back and forth with me
+
+* Initial Message
+
+In beam/spell_agent, design a DSL-like system to define shortcuts easily, in line
+with spell_agent's design and the homoiconicity of ptc-lisp as userland VM. Specific
+use: ctrl+j/k move up/down a pane; ctrl+h/l expand/collapse a span (when span view
+focused) OR navigate turns (when result/prompt pane focused). Show the DSL on the
+Elixir side AND the ptc-lisp side. Show integration with ratatui. Show how shortcuts
+are registered based on *intent*, so it is supremely modifiable. Define important
+concepts and design-language patterns for later expansion.
+
+* Intent
+
+Add the WRITE half of PLAN-345's mirror. PLAN-345 made a pane a READ mirror
+(forest --project/2--> vm --view/1--> widgets, telemetry-clocked). This plan makes
+input its dual: a REACTION (gaze --react--> gaze', keystroke-clocked). Both are pure,
+both colocate in the pane, both are live-rebindable data, and both are authorable
+from PTC-Lisp — extending spell_agent's homoiconicity from "the agent writes its own
+tools" to "the agent (or operator) rewrites its own editor, live."
+
+The keystone insight (the design language to expand later):
+
+    Reaction is the dual of Projection.
+    project/2 : forest  -> view-model   (READ  side, telemetry clock)  [PLAN-345]
+    react/3   : ui-state -> ui-state'    (WRITE side, input clock)      [THIS PLAN]
+
+Two-stage indirection is the load-bearing move — three ORTHOGONAL axes, each pure data:
+
+    chord --[keymap]--> intent --[reaction]--> ui-state'
+          ^ rebind keys           ^ redefine behaviour
+          (independent)           (independent)
+
+Rebinding a key never touches behaviour; redefining behaviour never touches keys;
+adding a context (focused pane / modal leader / global) touches neither. That triad
+IS "supremely modifiable", made concrete.
+
+The user's ctrl+h/l requirement falls out for free because intent resolution is
+CONTEXTUAL — the same chord names a different intent depending on who has focus:
+  focus=span-tree     : C-l -> span/expand    C-h -> span/contract
+  focus=answer|prompt : C-l -> turn/next      C-h -> turn/prev
+  focus=anywhere      : C-j -> focus/next     C-k -> focus/prev   (global fall-through)
+This is the Emacs major/minor/global cascade — but every layer is data, homoiconic.
+
+* Design decisions (settled with the user this session — do not re-litigate)
+
+** D1. ctrl+j/k/h/l via the kitty keyboard protocol (NOT a remap, NOT a leader key)
+The legacy-terminal byte parser aliases the requested chords: ctrl+j -> "enter"
+(0x0A), ctrl+h -> "backspace" (0x08); only ctrl+k (0x0B) and ctrl+l (0x0C) survive
+as code+[ctrl]. (Verified: deps/ex_ratatui native session_input.rs:108-121, and the
+crossterm path events.rs convert_modifiers.) The user's terminal is Ghostty, which
+supports the kitty keyboard progressive-enhancement protocol; enabling it
+disambiguates ctrl+j from Enter. DECISION: patch the vendored ex_ratatui NIF to push
+keyboard-enhancement flags on enter, pop on exit. This is why we vendored ex_ratatui
+as a submodule (see D5).
+
+** D2. Plain engine names — Chord / Intent / Keymap / Reaction / Context
+No spell-flavored aliases ("cast"/"sigil"/"incantation"). Keep the vocabulary
+grounded so it extends the existing PLAN-345 "Mirror / Projection / Surface" language.
+
+** D3. Two PTC-Lisp namespaces, split by EFFECT PROFILE (not one flat namespace)
+  - harness/  — PURE gaze transforms: Ui -> Ui. (harness/expand, harness/cursor,
+                harness/focus, harness/turn, harness/state, harness/cursor-id, ...)
+  - keymap/   — the live-rebinding meta-ops that MUTATE the registry:
+                (keymap/bind ...), (keymap/unbind ...), (keymap/define-reaction ...),
+                (keymap/show ...), (keymap/intents ...).
+Rationale: effect profile is legible at the call site, mirroring the tool/ vs
+define-* meta distinction. Both are single-segment namespaces (a dotted
+"harness.keys" would NOT parse cleanly — see Verified ground truth on ns_symbol).
+NB explicitly NOT tool/: the harness controls itself in its own namespace; tool/ is
+reserved for work the agent does in the world. PTC-Lisp already has a namespace
+ALGEBRA — tool/ (work), data/ (inputs), budget/ (introspection) — so harness/ and
+keymap/ join as true siblings, not faked prefixes.
+
+** D4. Collapse-by-depth default (NOT expanded-by-default, NOT a flat collapsed set)
+New spans stream collapsed past an auto-depth N; you expand to drill. Calmer
+firehose. This requires a VISIBILITY POLICY, not a flat MapSet of hidden ids:
+  visible?(span, ui) = case overrides[span.id] do
+                          :expanded  -> true
+                          :collapsed -> false
+                          nil        -> span.depth < ui.auto_depth
+                        end
+So Ui carries auto_depth (default 1: top-level runs visible, children collapsed) plus
+an overrides map (explicit per-span :expanded | :collapsed that beats the depth rule).
+C-l on a collapsed span sets overrides[id]=:expanded; C-h sets :collapsed.
+
+** D5. Vendor ex_ratatui as a git submodule (DONE this session)
+Added at beam/ex_ratatui-vendored, pinned to tag v0.11.0 (commit 29835985),
+mirroring beam/ptc_runner-vendored. Verified byte-identical to the hex 0.11.0
+package currently building. .gitmodules updated; gitlink staged at v0.11.0. The
+mix.exs dep swap (hex -> path) is a build step in W1 (see Build sequence) — it flips
+the NIF from rustler_precompiled to a source rustler compile, which D1's patch needs.
+
+* Verified ground truth (file-checked 2026-06-18 — do not re-litigate)
+
+** The Pane contract is the seam to extend (PLAN-345)
+beam/spell_agent/lib/spell_agent/tui/pane.ex defines a @behaviour with
+events/0 (wake suffixes), project/2 (forest+assigns -> vm), view/1 (vm -> widgets),
+and a `use SpellAgent.Tui.Pane` macro that injects defaults + an `events/1` sugar
+macro. THIS plan adds two callbacks (keymap/0, react/3) with injected defaults, so a
+pure-render pane still implements nothing new. The `events/1` macro is the exact
+template for the new `keymap do ... end` and `react/2` macros.
+
+** Navigation already lives in the App, never the Store (PLAN-345 decision)
+app.ex holds focus (:answer|:tree), answer_scroll, and per-pane assigns.cursor; the
+Store forest is a clean replayable source of truth. THIS plan consolidates that
+scattered nav-state into one serializable %Ui{} struct — the value a reaction
+transforms. app.ex handle_key/2 (~70 lines of per-key clauses, L131-170) collapses
+into one resolver call.
+
+** The key event shape (verified deps/ex_ratatui/lib/ex_ratatui/event/key.ex)
+%ExRatatui.Event.Key{code: String.t(), kind: "press"|"repeat"|"release",
+modifiers: [String.t()]} where modifiers come from the native convert_modifiers as
+"shift"|"ctrl"|"alt"|"super"|"hyper"|"meta". NB app.ex currently matches
+`code in ["esc","ctrl-c"]` — that "ctrl-c" clause is DEAD: the parser emits ctrl-c as
+code:"c", modifiers:["ctrl"]. The new Chord.from_event/1 (reading modifiers) fixes
+this for free.
+
+** PTC-Lisp has a namespace algebra with per-namespace dispatch
+beam/ptc_runner-vendored/lib/ptc_runner/lisp/analyze.ex do_analyze/2:
+  {:ns_symbol, :data, key}   -> {:data, key}
+  {:ns_symbol, :tool, name}  -> {:runtime_callable, :tool, name}
+  {:ns_symbol, :budget, :remaining} -> {:budget_remaining}
+  {:ns_symbol, ns, key} (fallback) -> clojure-namespace normalize / error
+eval.ex do_eval/2 turns {:runtime_callable, ns, name} into RuntimeCallable.new(ns,name).
+runtime_callable.ex core_call/2 currently ONLY implements namespace :tool (others
+return {:invalid_form,...}). SO: adding harness/ + keymap/ as evaluable namespaces is
+a SMALL, LOCALIZED change at three sites (analyze recognize, runtime_callable.core_call,
+collect_tool_names/collect_undefined_vars passthroughs already accept _namespace). This
+is the vendored ptc_runner — edits there are governed by SPELL_PATCHES.md (record the
+patch). Validation (PtcRunner.Lisp.validate/1) and collect_undefined_vars already
+treat {:runtime_callable, _ns, _name} as recognized (not free vars), so reaction
+bodies referencing harness//keymap/ validate cleanly — same path define-tool uses.
+
+** The homoiconic precedent to mirror exactly (FEAT-826)
+tools.ex: define_tool validates PTC source via PtcRunner.Lisp.validate/1 then stores
+{kind: :ptc, name, params, doc, source} in ToolRegistry (an Agent-backed map). A :ptc
+tool becomes a closure that runs the stored source via PtcRunner.Lisp.run(source,
+context: args_as_data, tools: build_tools_map(), caller: :in_process_v1) and returns
+step.return. define-reaction is the SAME pattern: validate source, store
+{context, intent, doc, source}, and at dispatch run it with the gaze bound as data/ui
+and forest as data/forest, returning the new gaze. Config.ex (whitelisted live cell)
+is the model for any global reaction policy (e.g. auto_depth default).
+
+** ExRatatui terminal setup is the kitty-patch site (verified)
+beam/ex_ratatui-vendored/native/ex_ratatui/src/terminal.rs init_terminal (L88-) calls
+enable_raw_mode + EnterAlternateScreen + EnableBracketedPaste; the cleanup path
+(L130-165) does LeaveAlternateScreen + disable_raw_mode. D1's patch adds
+PushKeyboardEnhancementFlags(DISAMBIGUATE_ESCAPE_CODES) after EnterAlternateScreen and
+PopKeyboardEnhancementFlags before LeaveAlternateScreen, both best-effort (terminals
+without support ignore them — graceful degrade to today's behaviour). crossterm
+exposes these in crossterm::event. The native session-input parser (PTY/SSH path,
+session_input.rs) does NOT decode kitty sequences ("out of scope", L19); the
+crossterm poll_event path (the mix-task TTY path the user runs) DOES once flags are
+pushed. So the patch fixes the real `mix spell.tui` path; headless tests inject
+synthetic Chord-shaped events and don't depend on it.
+
+* The three pinned artifacts (the design, ready to build)
+
+** Artifact 1 — the %Ui{} nav-state struct (the serializable gaze)
+File: beam/spell_agent/lib/spell_agent/tui/ui.ex (NEW)
+Replaces scattered app.ex nav-state. Pure data ⇒ bindable as data/ui in a reaction.
+
+  @type pane :: :tree | :answer | :prompt
+  @type t :: %Ui{
+    focus:      pane,                 # which pane resolves chords first
+    panes:      [pane],               # focus ring order (C-j/C-k cycle through this)
+    cursors:    %{pane => non_neg_integer},   # per-pane row cursor
+    auto_depth: non_neg_integer,      # spans with depth < auto_depth visible by default (D4)
+    overrides:  %{span_id => :expanded | :collapsed},  # explicit per-span, beats auto_depth
+    turn:       non_neg_integer,      # selected turn index (turn/next|prev)
+    scroll:     %{pane => non_neg_integer},   # per-pane text scroll
+    leader:     atom | nil            # active modal context; nil = none (seed of modal layers)
+  }
+  defstruct focus: :tree, panes: [:tree,:answer,:prompt], cursors: %{},
+            auto_depth: 1, overrides: %{}, turn: 0, scroll: %{}, leader: nil
+
+Field rationale:
+  - focus + panes = the focus RING. C-j/C-k rotate focus through panes. Makes
+    "move up/down a pane" a one-line reaction.
+  - auto_depth + overrides = the D4 collapse-by-depth visibility POLICY. overrides
+    is a property of the GAZE not the forest, so streaming spans never disturb what
+    you opened. (visible? rule in D4.)
+  - turn = the second reading of C-h/C-l (turn nav when answer/prompt focused).
+  - leader = costs one field now, unlocks which-key/vim-operator-pending modal layers
+    later with ZERO engine change (resolver already cascades contexts).
+Ui carries NO behaviour — it is the noun. Reactions are the verbs.
+
+** Artifact 2 — the Intent namespace (the vocabulary; domain/verb)
+Intents are abstract verbs grouped by domain; the grouping IS the design language
+(tells you where new verbs go). Default bindings in parens.
+
+  focus/    (global, focus-independent — fall-through layer)
+    focus/next        next pane in ring     C-j
+    focus/prev        prev pane in ring     C-k
+    focus/goto        jump to named pane    (unbound; for macros)
+  cursor/   (within the focused pane)
+    cursor/next       row +1                down
+    cursor/prev       row -1                up
+    cursor/page-next  row +page             pgdn
+    cursor/page-prev  row -page             pgup
+    cursor/first / cursor/last              (unbound)
+  span/     (act on span under tree cursor — tree focus)
+    span/expand       reveal children       C-l   (tree focus)
+    span/contract     hide children         C-h   (tree focus)
+    span/toggle                             (unbound)
+    span/expand-all   whole subtree         (homoiconic example, see Artifact 3)
+    span/collapse-all                       (unbound)
+  turn/     (answer/prompt focus)
+    turn/next         turn index +1         C-l   (answer/prompt focus)
+    turn/prev         turn index -1         C-h   (answer/prompt focus)
+  app/      (lifecycle, global)
+    app/quit          stop, restore term    esc, C-c
+    app/submit        run composer mission  enter
+
+The contextual resolution table (THIS is the user's spec, as data):
+  chord | tree focus     | answer/prompt focus | resolved where
+  C-l   | span/expand    | turn/next           | focused pane's keymap
+  C-h   | span/contract  | turn/prev           | focused pane's keymap
+  C-j   | focus/next     | focus/next          | global fall-through
+  C-k   | focus/prev     | focus/prev          | global fall-through
+No `if focus == ...` anywhere — the resolver cascade does it.
+
+** Artifact 3 — the harness/ + keymap/ PTC-Lisp surfaces (D3)
+harness/ — pure gaze transforms (inside a reaction: gaze is data/ui, forest is data/forest):
+  (harness/state)                  -> current Ui map
+  (harness/cursor-id)              -> span id under tree cursor (reads forest)
+  (harness/descendants id)         -> [span-id] below id
+  (harness/ancestors id)           -> [span-id] above id
+  (harness/focus :next|:prev|pane) -> Ui'   move focus in ring / jump
+  (harness/cursor +1|-1|:first|:last) -> Ui'
+  (harness/expand id)              -> Ui'   overrides[id]=:expanded
+  (harness/collapse id)            -> Ui'   overrides[id]=:collapsed
+  (harness/toggle id)              -> Ui'
+  (harness/turn :next|:prev)       -> Ui'
+  (harness/scroll pane delta)      -> Ui'
+keymap/ — live rebinding meta-ops (mutate the registry; homoiconic surface):
+  (keymap/bind   {:chord "C-l" :intent "span/expand" :context "span-tree"})
+  (keymap/unbind {:chord "C-l" :context "span-tree"})
+  (keymap/show   {:context "span-tree"})   -> the live keymap as data
+  (keymap/intents {:context "span-tree"})  -> vocabulary available here
+  (keymap/define-reaction
+    {:context "span-tree" :intent "span/expand-all"
+     :doc "expand the whole subtree under the cursor"
+     :source "(reduce harness/expand (harness/state)
+                      (harness/descendants (harness/cursor-id)))"})
+
+The homoiconic symmetry (why a reaction IS a tool whose param is your gaze):
+  define-tool             : param data/<p>          -> a value | stored PTC | Lisp.run
+  keymap/define-reaction  : param data/ui,data/forest -> a gaze  | stored PTC | Lisp.run
+harness/expand-all is ONE reduce over the gaze — navigation verbs compose in the same
+Lisp as everything else. The inspector becomes editable by the thing it inspects, in
+the language it inspects it with.
+
+* Architecture — new + changed modules
+
+NEW:
+  lib/spell_agent/tui/ui.ex            %Ui{} struct + visible?/2 (D4 policy) + pure helpers
+  lib/spell_agent/tui/chord.ex         %Chord{key,mods}; from_event/1, parse/1 ("C-j"), to_string/1
+  lib/spell_agent/tui/keys.ex          the resolver: resolve/3 (chord->intent via context stack)
+                                       + dispatch/4 (intent->Ui' via reaction stack: compiled OR :ptc)
+  lib/spell_agent/tui/keymap/global.ex the global context (focus/*, app/*)
+  lib/spell_agent/tui/keymap_registry.ex  Agent-backed live overrides: {context,chord}->intent
+                                          and {context,intent}->ptc-source (keymap/* writes here)
+  lib/spell_agent/tui/reaction/ptc.ex  run a :ptc reaction source via PtcRunner.Lisp.run,
+                                       gaze bound as data/ui, forest as data/forest, ret Ui'
+  lib/spell_agent/harness.ex           the harness/ + keymap/ native handlers (gaze prims + meta-ops)
+
+CHANGED:
+  lib/spell_agent/tui/pane.ex          add @callback keymap/0, react/3; inject defaults in
+                                       __using__ (keymap []  / react(_,ui,_)->ui); add keymap/2
+                                       + react/2 sugar macros (clone the events/1 macro)
+  lib/spell_agent/tui/panes/span_tree.ex  declare keymap (C-l/C-h/up/down) + react clauses
+                                       (span/expand|contract, cursor/next|prev); project/2 honors
+                                       Ui.visible?/2 (prune collapsed subtrees — D4); a parallel
+                                       answer/prompt pane (or the tree pane under answer focus)
+                                       binds C-l/C-h to turn/next|prev
+  lib/spell_agent/tui/app.ex           replace handle_key/2 clause-pile with one Keys.resolve +
+                                       Keys.dispatch; hold %Ui{} in state (replacing focus/
+                                       answer_scroll/assigns.cursor); focus_stack/1 =
+                                       [pane_for(ui.focus), Keymap.Global]; reproject on nav change
+  beam/ptc_runner-vendored/.../analyze.ex  recognize {:ns_symbol, :harness, n} and
+                                       {:ns_symbol, :keymap, n} -> {:runtime_callable, ns, n}
+  beam/ptc_runner-vendored/.../runtime_callable.ex  core_call/2 for :harness and :keymap
+                                       (build {:tool_call,...}-shaped dispatch into the handlers map)
+  beam/ptc_runner-vendored/SPELL_PATCHES.md  record the namespace-extension patch
+  beam/ex_ratatui-vendored/native/ex_ratatui/src/terminal.rs  D1 kitty flags push/pop
+  beam/spell_agent/mix.exs             ex_ratatui hex dep -> {path: "../ex_ratatui-vendored"} (D5)
+  lib/spell_agent/application.ex       supervise SpellAgent.Tui.KeymapRegistry
+
+* Build sequence (waves)
+
+W0  Submodule swap + kitty patch (unblocks the real chords).
+    - mix.exs: ex_ratatui -> path dep on ../ex_ratatui-vendored; mix deps.get; confirm
+      source rustler compile works (rustler, not rustler_precompiled).
+    - terminal.rs: Push/PopKeyboardEnhancementFlags (best-effort). Rebuild NIF.
+    - Manual accept: `mix spell.tui` in Ghostty; ctrl+j arrives as code:"j",
+      modifiers:["ctrl"] (not "enter"). (Headless tests don't need this.)
+W1  Engine (no behaviour change yet): Chord, Ui (+visible?/2), Keys resolver + dispatch,
+    KeymapRegistry, Keymap.Global. Pane contract gains keymap/0 + react/3 + macros.
+    Unit tests: Chord round-trip + from_event modifiers; Ui.visible?/2 depth+override
+    matrix; Keys.resolve cascade (focused-pane hit shadows global; miss falls through);
+    Keys.dispatch compiled reaction.
+W2  Wire SpanTree + App: SpanTree keymap/react + project/2 honoring visible?/2; App holds
+    %Ui{}, handle_event -> resolve/dispatch. The 4 chords work end to end:
+    C-j/C-k focus ring; C-l/C-h expand/contract under tree focus, turn next/prev under
+    answer/prompt focus. Headless app_test: inject Chord events, assert Ui + render.
+W3  PTC namespaces: analyze + runtime_callable for harness/ + keymap/; harness.ex handlers;
+    Reaction.Ptc runner; keymap/define-reaction + bind/unbind/show/intents. SPELL_PATCHES.md.
+    Tests: a ptc reaction (expand-all) runs and returns Ui'; keymap/bind shadows the compiled
+    keymap; a bound ptc intent dispatches; validate/1 accepts a harness/-referencing body.
+W4  Polish + docs: README "Reaction DSL" section; composer hint line lists live chords from
+    the registry (not hardcoded); auto_depth as a Config-style live cell.
+
+* Acceptance
+
+- `mix spell.tui` in Ghostty: ctrl+j/k move pane focus; ctrl+l/h expand/collapse a span
+  when the span tree is focused, and navigate turns when the answer/prompt pane is focused.
+- Rebinding is live data: (keymap/bind {:chord "l" :intent "span/expand" :context "span-tree"})
+  takes effect on the next keystroke with no recompile; (keymap/show {...}) returns it as data.
+- A NEW verb is authorable at runtime: (keymap/define-reaction {... :source "<ptc>"}) then
+  (keymap/bind ...) binds it; the chord then drives the new behaviour.
+- mix test green (headless: Chord/Ui/Keys unit + app_test injected-chord e2e + ptc-reaction +
+  namespace-dispatch tests). mix test --include live unaffected.
+- The three orthogonal axes are independently modifiable: a test rebinds a chord without
+  touching reactions, redefines a reaction without touching chords, and resolves the same
+  chord to different intents under different focus.
+
+* Possibilities this opens (the design language, for later expansion)
+
+- Self-modifying editor: agent offers (keymap/bind) when you hit an unbound chord; live this keystroke.
+- Navigation macros: :goto/deepest-error = a reaction that folds the forest for the lowest
+  :error span and sets the cursor — a verb written in the same Lisp as everything else.
+- The inspector inspects its own input: dispatched intents can emit [:intent, :dispatch]
+  telemetry -> they appear in the span tree you're navigating. The homoiconic loop closes.
+- Modal layers for free: which-key leader / vim operator-pending / jump-mode = pushing a
+  keymap context onto focus_stack via Ui.leader. No new machinery.
+- Portable muscle memory: a keymap is a value — ship spell-vim.ptc, load a config as an org
+  item, diff two keymaps, time-travel bindings.
+- The agent rebinds itself for a task: "walking 40 tool spans — bind n/p to next/prev error
+  for this session", then unbinds. Ephemeral, intentional tooling.
+
+One sentence to hold: a keystroke is a sentence — a chord NAMES an intent, and whoever has
+focus INTERPRETS it; chords, intents, and interpretations are all live data, so you (and the
+agent) rewrite the grammar mid-conversation.

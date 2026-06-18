@@ -1,0 +1,55 @@
+#+TITLE: PLAN-346 W0: push ex_ratatui spell-patches branch to a reachable remote for fresh-clone durability
+#+STATE: ITEM
+#+SESSION_ID: 150e325effca1a94
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-18T16-33-01-439Z_150e325effca1a94.jsonl]]
+#+CUSTOM_ID: FUP-149-plan-346-w0-push-ex-ratatui-spell-patche
+
+* Initial Message
+
+in beam/spell_agent, please design a new DSL-like system that lets me define shortcuts easily, and in a way that is in line with the design of spell_agent and the homoiconicity of ptc-lisp as userland virtual machine, as described in earlier sessions. whatever makes sense to play with 
+
+the specific use is: ctrl+j/k to move up and down a pane, and ctrl+h/l to expand/collapse a span (when the span view is focused) or navigate turns (when the result or prompt pane are focused)
+
+show me DSL on the elixir side and on the ptc-lisp side and make me dream in terms of the possibilities opened up by our design. show me how the integration with ratatui and show me how you register shortcuts based on *intent*, so that it is supremely modifiable (show me how)
+
+this is an opportunity to define important concepts and design language patterns for later expansion, so take your time and go back and forth with me
+
+* Intent
+
+W0 of PLAN-346 vendored ex_ratatui as a git submodule (beam/ex_ratatui-vendored)
+and patched its Rust NIF for the kitty keyboard protocol. The patch is committed
+INSIDE the submodule as commit 9156549 on a local branch `spell-patches` (forked
+from upstream tag v0.11.0 / 29835985), and the superproject gitlink records 9156549.
+
+* The gap (raised by W0 reviewer swarm, P1, confidence 0.98)
+
+The patch commit 9156549 exists ONLY in the local submodule clone. The submodule's
+`url` in .gitmodules is https://github.com/mcass19/ex_ratatui (upstream), which does
+NOT contain 9156549. So a fresh `git submodule update --init` ON ANOTHER MACHINE
+cannot fetch the gitlink commit and will fail (or silently check out upstream
+v0.11.0 = unpatched NIF, leaving ctrl+j/ctrl+h aliased to Enter/Backspace).
+
+On THIS machine the build is fully correct and verified (cold mix compile + mix test
+green, 52 pass) because 9156549 is present locally.
+
+* The fix (needs a human decision — where to push)
+
+Push the `spell-patches` branch (and/or commit 9156549) to a remote the team
+controls, then point the submodule there:
+  Option A: fork mcass19/ex_ratatui under the org, push spell-patches, update
+            .gitmodules `url` to the fork, re-pin the gitlink.
+  Option B: mirror it into an internal/self-hosted git remote; update url likewise.
+  Option C: if the monorepo prefers, convert from submodule to a fully in-tree
+            vendored copy (like beam/ptc_runner-vendored, which is plain tracked
+            files, not a submodule) — sidesteps remote-reachability entirely but
+            loses the clean upstream-rebase story.
+
+After choosing: verify by cloning fresh (or `git submodule update --init` in a
+clean worktree) and running `cd beam/spell_agent && mix deps.get && mix compile`
+cold — confirm the NIF builds WITH the patch (grep terminal.rs for
+PushKeyboardEnhancementFlags in the checked-out submodule).
+
+* Why deferred, not blocking
+
+W1-W4 of PLAN-346 build against the local submodule state and are unaffected. This
+is purely a multi-machine / CI reproducibility concern. Tracked so it is not lost.
