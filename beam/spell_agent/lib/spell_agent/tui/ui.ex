@@ -225,6 +225,14 @@ defmodule SpellAgent.Tui.Ui do
   def safe_visibility(s) when is_binary(s), do: lookup_known(s, @visibilities)
   def safe_visibility(_), do: nil
 
+  @modes [:normal, :insert]
+
+  @doc "Coerce a value to a known mode atom (:normal/:insert), or nil. No interning."
+  @spec safe_mode(term()) :: mode() | nil
+  def safe_mode(m) when m in @modes, do: m
+  def safe_mode(s) when is_binary(s), do: lookup_known(s, @modes)
+  def safe_mode(_), do: nil
+
   # Match a string against a fixed atom set by STRING comparison — no interning.
   defp lookup_known(s, atoms), do: Enum.find(atoms, &(Atom.to_string(&1) == s))
 end

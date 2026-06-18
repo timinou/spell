@@ -92,30 +92,40 @@ defmodule SpellAgent.Tui.Panes.SpanTree do
   def react(:"cursor/page-next", %Ui{} = ui, forest), do: move_cursor(ui, forest, +10)
   def react(:"cursor/page-prev", %Ui{} = ui, forest), do: move_cursor(ui, forest, -10)
 
-  # l — descend INTO the cursor span: if it has hidden children, expand it (its
-  # first child becomes the next visible row); then move the cursor onto that
-  # child. If already expanded (or a leaf), just step to the first child row.
+  # l — descend INTO the selected node. A run/tool with children (CHILD SPANS or,
+  # for a run, inline TURNS) expands (if collapsed) and the cursor steps to the
+  # first child row. A turn row or a leaf has nothing to descend into — stay put.
   def react(:"nav/child", %Ui{} = ui, forest) do
-    case cursor_span_id(forest, ui) do
-      nil ->
-        ui
+    case selected_row(forest, ui) do
+      %{span: %Span{id: id} = span, turn: nil} ->
+        if drillable?(forest, span) do
+          ui = Ui.expand(ui, id)
+          # Recompute under the post-expand gaze: the first child is the next row.
+          move_cursor(ui, forest, +1)
+        else
+          ui
+        end
 
-      id ->
-        ui = if has_children?(forest, id), do: Ui.expand(ui, id), else: ui
-        # After expanding, the first child is the row immediately below the parent.
-        if has_children?(forest, id), do: move_cursor(ui, forest, +1), else: ui
+      _ ->
+        ui
     end
   end
 
-  # h — ascend OUT to the cursor span's parent: set the cursor to the parent's
-  # row. At a root, stay put.
+  # h — ascend OUT to the selected node's parent row. A turn row ascends to its
+  # OWNING RUN (turn ids are synthetic `<run>#t<n>`, not span ids); a child span
+  # ascends to its parent span. At a root, stay put.
   def react(:"nav/parent", %Ui{} = ui, forest) do
-    with id when is_binary(id) <- cursor_span_id(forest, ui),
-         %Span{parent_id: pid} when is_binary(pid) <- forest[id],
-         row when is_integer(row) <- row_index_of(forest, ui, pid) do
-      put_cursor(ui, row)
-    else
-      _ -> ui
+    case selected_row(forest, ui) do
+      # A turn row: jump to its run (the turn's `span` field is the run span).
+      %{turn: %{}, span: %Span{id: run_id}} ->
+        goto_row(ui, forest, run_id)
+
+      # A child span: jump to its parent span.
+      %{span: %Span{parent_id: pid}, turn: nil} when is_binary(pid) ->
+        goto_row(ui, forest, pid)
+
+      _ ->
+        ui
     end
   end
 
@@ -123,6 +133,21 @@ defmodule SpellAgent.Tui.Panes.SpanTree do
   def react(:"span/expand", %Ui{} = ui, forest), do: with_cursor_span(ui, forest, &Ui.expand/2)
   def react(:"span/contract", %Ui{} = ui, forest), do: with_cursor_span(ui, forest, &Ui.collapse/2)
   def react(_intent, %Ui{} = ui, _forest), do: ui
+
+  # Set the cursor to the visible row of `id`, or stay put if it isn't shown.
+  defp goto_row(ui, forest, id) do
+    case row_index_of(forest, ui, id) do
+      row when is_integer(row) -> put_cursor(ui, row)
+      _ -> ui
+    end
+  end
+
+  # A node is drillable if it has child SPANS, or (for a run) inline TURNS — both
+  # render as child rows below it.
+  defp drillable?(forest, %Span{kind: :run, turns: turns} = span),
+    do: turns != [] or has_children?(forest, span.id)
+
+  defp drillable?(forest, %Span{} = span), do: has_children?(forest, span.id)
 
   # Move the tree cursor by `delta`, clamped to [0, last visible row].
   defp move_cursor(%Ui{} = ui, forest, delta) do

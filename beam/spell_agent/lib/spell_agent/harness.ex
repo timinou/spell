@@ -117,6 +117,7 @@ defmodule SpellAgent.Harness do
     %Ui{
       focus: Ui.safe_pane(get(m, "focus")) || :tree,
       panes: safe_panes(get(m, "panes")),
+      mode: Ui.safe_mode(get(m, "mode")) || :normal,
       cursors: keymapize(get(m, "cursors")),
       auto_depth: safe_int(get(m, "auto_depth"), 1),
       overrides: stringkeyize(get(m, "overrides")),
@@ -151,6 +152,7 @@ defmodule SpellAgent.Harness do
     %{
       "focus" => to_string(ui.focus),
       "panes" => Enum.map(ui.panes, &to_string/1),
+      "mode" => to_string(ui.mode),
       "cursors" => stringify_kv(ui.cursors),
       "auto_depth" => ui.auto_depth,
       "overrides" => stringify_kv(ui.overrides),

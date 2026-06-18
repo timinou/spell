@@ -128,6 +128,29 @@ defmodule SpellAgent.Tui.Panes.SpanTreeTest do
       assert SpanTree.react(:"nav/child", tree_ui(0), %{}) |> cur() == 0
       assert SpanTree.react(:"nav/parent", tree_ui(0), %{}) |> cur() == 0
     end
+
+    test "nav/parent from a TURN row ascends to its owning run (W5r)" do
+      f = forest()
+      # row 1 = turn 1 under run1 (synthetic id run1#t1, not a span id).
+      assert SpanTree.selected_row(f, tree_ui(1)).turn.number == 1
+      # h must land back on the run row (0), not no-op.
+      assert SpanTree.react(:"nav/parent", tree_ui(1), f) |> cur() == 0
+    end
+
+    test "nav/child into a run with turns drills to its first turn (W5r)" do
+      # A run with turns but NO child spans — l must still descend to the turn.
+      f = %{
+        "only" => %Span{
+          id: "only", parent_id: nil, kind: :run, status: :ok, label: "r",
+          turns: [%{number: 1, program: "(x)", result_preview: "1", response: nil, status: :ok}],
+          children: []
+        }
+      }
+
+      ui = Ui.new(focus: :tree, auto_depth: 1) |> Map.put(:cursors, %{tree: 0})
+      # cursor on the run (row 0); l descends to its turn (row 1).
+      assert SpanTree.react(:"nav/child", ui, f) |> cur() == 1
+    end
   end
 
   test "selected_row returns the full row under the cursor (for the detail pane)" do

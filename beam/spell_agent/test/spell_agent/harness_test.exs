@@ -192,11 +192,12 @@ defmodule SpellAgent.HarnessTest do
 
     test "keymap/bind rejects answer/prompt contexts (resolver uses turn_nav) — final-review P2" do
       tools = Harness.tools(forest(), tree_ui())
-      # :answer is NOT a resolver context; binding there would be silently inert.
-      src = ~s|(keymap/bind {:chord "z" :intent "turn/next" :context "answer"})|
+      # :answer is NOT a resolver context (W5 renamed it to :detail); a bind there
+      # would be silently inert, so it's rejected.
+      src = ~s|(keymap/bind {:chord "z" :intent "span/expand" :context "answer"})|
       assert {:error, _} = PtcRunner.Lisp.run(src, tools: tools, caller: :in_process_v1)
-      # turn_nav IS valid (the answer/prompt panes resolve through it).
-      ok = ~s|(keymap/bind {:chord "z" :intent "turn/next" :context "turn_nav"})|
+      # :tree IS a resolver context; span/expand is a real compiled intent there.
+      ok = ~s|(keymap/bind {:chord "z" :intent "span/expand" :context "tree"})|
       assert {:ok, _} = PtcRunner.Lisp.run(ok, tools: tools, caller: :in_process_v1)
     end
 
@@ -207,6 +208,24 @@ defmodule SpellAgent.HarnessTest do
       assert {:error, _} = PtcRunner.Lisp.run(src, tools: tools, caller: :in_process_v1)
       # The registry survived (didn't crash/restart): a normal op still works.
       assert KeymapRegistry.lookup_binding(:tree, Chord.parse("q")) == nil
+    end
+  end
+
+  describe "modal mode round-trips through a reaction (W5r)" do
+    test "a reaction can set the mode, and it survives the round-trip" do
+      ui = tree_ui()
+      assert ui.mode == :normal
+      # A reaction returns a gaze with mode flipped to insert.
+      result = Reaction.Ptc.run(~s|{"mode" "insert" "focus" "prompt"}|, ui, forest())
+      assert result.mode == :insert
+      assert result.focus == :prompt
+    end
+
+    test "an invalid mode string is coerced away (never interned), keeps prior" do
+      ui = %{tree_ui() | mode: :insert}
+      result = Reaction.Ptc.run(~s|{"mode" "bogus_mode_xyz"}|, ui, forest())
+      assert result.mode == :insert
+      assert_raise ArgumentError, fn -> String.to_existing_atom("bogus_mode_xyz") end
     end
   end
 

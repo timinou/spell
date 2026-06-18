@@ -59,6 +59,7 @@ defmodule SpellAgent.Tui.Reaction.Ptc do
     %Ui{
       focus: Ui.safe_pane(fetch(result, "focus")) || ui.focus,
       panes: panes(fetch(result, "panes"), ui.panes),
+      mode: Ui.safe_mode(fetch(result, "mode")) || ui.mode,
       cursors: pane_keyed(fetch(result, "cursors"), ui.cursors),
       auto_depth: non_neg_int(fetch(result, "auto_depth"), ui.auto_depth),
       overrides: overrides(fetch(result, "overrides"), ui.overrides),
@@ -75,6 +76,7 @@ defmodule SpellAgent.Tui.Reaction.Ptc do
     %{
       "focus" => to_string(ui.focus),
       "panes" => Enum.map(ui.panes, &to_string/1),
+      "mode" => to_string(ui.mode),
       "cursors" => stringify_kv(ui.cursors),
       "auto_depth" => ui.auto_depth,
       "overrides" => stringify_kv(ui.overrides),
