@@ -358,3 +358,50 @@ W4  Polish + docs: README "Reaction DSL" section; composer hint line lists live 
 One sentence to hold: a keystroke is a sentence — a chord NAMES an intent, and whoever has
 focus INTERPRETS it; chords, intents, and interpretations are all live data, so you (and the
 agent) rewrite the grammar mid-conversation.
+
+* W5 — PIVOT: modal tree-navigation + detail pane (user redirection 2026-06-18)
+
+After W0-W4 shipped, the user redirected based on living with it + a screenshot:
+
+** Problem 1: "can't see what's inside the turn"
+The left pane shows the final answer / live preview, but the turn ROWS in the tree
+are truncated one-liners. There's no way to see a selected turn/span's FULL content
+(program + result + reasoning). FIX: the left pane becomes a DETAIL/INSPECTOR pane
+that renders the full content of whatever the tree cursor is on (the selected span
+or turn), replacing the answer-only view. turn/next + turn/prev become "move the
+tree cursor among turns" and the detail mirrors it. (This also subsumes the W2r
+deferred findings: turn-nav-not-rendered + turn-row-synthetic-id — both resolve
+because landing the cursor on a turn row and seeing it in the detail pane is now
+the intended behavior.)
+
+** Problem 2: remap to vim-style tree navigation
+- j / k  : move to prev/next SIBLING (as shown to the user) within the tree
+- h / l  : move OUT/IN the tree — h -> parent, l -> first child
+- ctrl+j / ctrl+k : cycle pane focus (cross-pane); Tab also cycles
+DECISION (user): keep modal-ish stuff EASY; if h/l fold semantics get complicated,
+file an FUP. Chosen: l = descend to first child (auto-expanding the gaze so the
+child is visible); h = ascend to parent. Manual collapse stays available but is
+secondary. The plain j/k/h/l are free to be navigation because of modal mode (P3).
+
+** Problem 3: modal
+- NORMAL mode (default): keys navigate (j/k/h/l, etc.)
+- INSERT mode: typing into the prompt composer; entered by Enter on the prompt
+  pane, exited by Esc (back to NORMAL).
+- Launch: focus = prompt, NORMAL. Flow: launch -> Enter (->insert) -> type ->
+  Enter (submit, ->normal) -> run streams -> focus auto-moves to tree to explore
+  with j/k/h/l, detail pane mirrors each node.
+This makes the composer-as-unbound-sink (W2) obsolete: text only flows in INSERT
+mode; in NORMAL every key is a chord. Mode lives in %Ui{} (e.g. :mode field) and
+gates the resolver (NORMAL: full keymap; INSERT: only Esc + text).
+
+** W5 build notes
+- %Ui{} gains :mode (:normal | :insert). Resolver consults it: INSERT mode routes
+  everything except Esc to the composer; NORMAL resolves chords.
+- New intents: nav/sibling-next|prev (j/k), nav/parent|child (h/l), mode/insert
+  (Enter on prompt), mode/normal (Esc).
+- SpanTree react: sibling/parent/child cursor moves operate on the forest TREE
+  structure (not flat row index) — cursor tracks a span id, derive row from it.
+- New DetailPane (or repurpose the answer pane): project the selected span/turn to
+  full content; view renders it scrollably.
+- Keep ctrl+j/k (kitty) for cross-pane; they still work in NORMAL.
+- Reviewer swarm after.

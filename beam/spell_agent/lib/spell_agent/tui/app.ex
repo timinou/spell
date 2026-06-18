@@ -34,10 +34,16 @@ defmodule SpellAgent.Tui.App do
   alias ExRatatui.Style
   alias ExRatatui.Widgets.{Block, List, Paragraph}
   alias SpellAgent.Tui.{Chord, Keys, Projection, Store, Ui}
-  alias SpellAgent.Tui.Keymap.{Global, TurnNav}
-  alias SpellAgent.Tui.Panes.SpanTree
+  alias SpellAgent.Tui.Keymap.{Global, Prompt, TurnNav}
+  alias SpellAgent.Tui.Panes.{Detail, SpanTree}
 
-  @default_panes [%{name: :tree, module: SpanTree, assigns: %{}}]
+  # PLAN-346 W5: two projected panes — the span TREE (navigate) and the DETAIL
+  # inspector (full content of the selected node). The prompt/composer is rendered
+  # by the App directly, not as a projected pane.
+  @default_panes [
+    %{name: :tree, module: SpanTree, assigns: %{}},
+    %{name: :detail, module: Detail, assigns: %{}}
+  ]
 
   # ---- mount ----
 
@@ -56,23 +62,22 @@ defmodule SpellAgent.Tui.App do
       running?: false,
       result: nil,
       last_prompt: nil,
-      # The serializable gaze (PLAN-346) — ALL navigation state: focus ring,
-      # per-pane cursors, span collapse overrides, turn index, scroll. Replaces
-      # the old scattered focus/answer_scroll/assigns.cursor. Default focus is the
-      # answer pane so a finished run reads immediately; the ring is
-      # answer ↔ tree ↔ prompt under C-j/C-k.
-      ui: opts[:ui] || Ui.new(focus: :answer, panes: [:answer, :tree, :prompt])
+      # The serializable gaze (PLAN-346 W5) — ALL navigation state incl. the modal
+      # `mode`. Launch is PROMPT focus in NORMAL mode: press Enter to enter INSERT
+      # and type a mission. The ring is prompt ↔ tree ↔ detail under C-j/C-k.
+      ui: opts[:ui] || Ui.new(focus: :prompt, mode: :normal, panes: [:prompt, :tree, :detail])
     }
 
     {:ok, reproject(state, :all)}
   end
 
-  # The resolver context stack for the current focus (PLAN-346): the focused
-  # pane's context FIRST, then the global layer. The SAME chord (C-l/C-h) resolves
-  # differently by which context tops the stack — SpanTree (expand/contract) under
-  # tree focus, TurnNav (turn next/prev + scroll) under answer/prompt focus.
+  # The resolver context stack for the current focus (PLAN-346 W5): the focused
+  # pane's context FIRST, then the global layer. The SAME chord (h/l) resolves
+  # differently by which context tops the stack — SpanTree (tree nav) under tree
+  # focus, TurnNav (turn nav + scroll) under detail/prompt focus.
   defp focus_stack(%{ui: %Ui{focus: :tree}}), do: [SpanTree, Global]
-  defp focus_stack(%{ui: %Ui{focus: f}}) when f in [:answer, :prompt], do: [TurnNav, Global]
+  defp focus_stack(%{ui: %Ui{focus: :prompt}}), do: [Prompt, Global]
+  defp focus_stack(%{ui: %Ui{focus: :detail}}), do: [TurnNav, Global]
   defp focus_stack(_), do: [Global]
 
   # ---- render ----
@@ -81,41 +86,59 @@ defmodule SpellAgent.Tui.App do
   def render(state, frame) do
     area = %Rect{x: 0, y: 0, width: frame.width, height: frame.height}
 
-    # status (1 line) · body (answer | span tree) · composer (input)
+    # status (1 line) · body (span tree | detail) · composer (input)
     [status, body, composer] =
       Layout.split(area, :vertical, [{:length, 3}, {:min, 0}, {:length, 3}])
 
-    # Answer on the left (scrollable, wrapped), span tree on the right. Both
-    # take the FULL body height and scroll independently, so everything is
-    # reachable regardless of how tall the terminal is.
-    [answer_rect, tree_rect] =
-      Layout.split(body, :horizontal, [{:percentage, 50}, {:percentage, 50}])
+    # The span TREE on the left (navigate with j/k/h/l), the DETAIL inspector on
+    # the right (full content of the selected node — "see inside the turn").
+    [tree_rect, detail_rect] =
+      Layout.split(body, :horizontal, [{:percentage, 45}, {:percentage, 55}])
 
-    tree_widgets =
+    rect_for = fn :tree -> tree_rect; :detail -> detail_rect; _ -> tree_rect end
+
+    pane_widgets =
       state.panes
       |> Enum.flat_map(fn pane ->
         vm = Map.get(state.vms, pane.name)
         focused? = state.ui.focus == pane.name
+        rect = rect_for.(pane.name)
         # The view needs the cursor + gaze: pass ui plus the focused pane's cursor
         # so the highlighted row + collapse glyphs match what the resolver acts on.
         assigns = Map.merge(pane.assigns, %{ui: state.ui, cursor: Ui.cursor_of(state.ui, pane.name)})
-        pane.module.view(%{vm: vm, rect: tree_rect, assigns: assigns, focused?: focused?})
+        pane.module.view(%{vm: vm, rect: rect, assigns: assigns, focused?: focused?})
       end)
       |> Enum.map(&materialize(&1, state))
 
-    [{status_widget(state), status}, {answer_widget(state), answer_rect}] ++
-      tree_widgets ++ [{composer_widget(state), composer}]
+    [{status_widget(state), status}] ++
+      pane_widgets ++ [{composer_widget(state), composer}]
   end
 
-  # ---- events: the Reaction DSL resolver path (PLAN-346) ----
+  # ---- events: MODAL resolver path (PLAN-346 W5) ----
 
-  # Every key press becomes a %Chord{} and resolves against the focus context
-  # stack. The cascade decides the verb; the App only handles the two effects a
-  # pure Ui->Ui reaction cannot express (quit, submit). Composer text editing
-  # (enter/backspace/printables) is the LOWEST-priority sink: a chord that no
-  # context binds (`:unbound`) falls here, so typing into the prompt still works.
+  # Mode gates everything. INSERT: the composer owns the keyboard — Esc returns to
+  # NORMAL, Enter submits, everything else edits text. NORMAL: every key is a
+  # %Chord{} resolved against the focus context stack (no key types text). This
+  # is why plain j/k/h/l can be navigation — they're only text in INSERT mode.
   @impl true
-  def handle_event(%ExRatatui.Event.Key{kind: kind} = key, state)
+  def handle_event(%ExRatatui.Event.Key{kind: kind} = key, %{ui: %Ui{mode: :insert}} = state)
+      when kind in ["press", "repeat"] do
+    chord = Chord.from_event(key)
+
+    cond do
+      chord.key == "esc" ->
+        # Leave INSERT without submitting; keep the composer buffer.
+        {:noreply, %{state | ui: Ui.mode(state.ui, :normal)}}
+
+      chord.key == "enter" and chord.mods == [] ->
+        submit(state)
+
+      true ->
+        {:noreply, compose(chord, state)}
+    end
+  end
+
+  def handle_event(%ExRatatui.Event.Key{kind: kind} = key, %{ui: %Ui{mode: :normal}} = state)
       when kind in ["press", "repeat"] do
     chord = Chord.from_event(key)
 
@@ -123,18 +146,26 @@ defmodule SpellAgent.Tui.App do
       {:intent, :"app/quit", _ctx} ->
         {:stop, state}
 
+      {:intent, :"mode/insert", _ctx} ->
+        # Enter INSERT — only meaningful on the prompt; focus it so typing is
+        # visibly directed there.
+        {:noreply, %{state | ui: state.ui |> Ui.focus(:prompt) |> Ui.mode(:insert)}}
+
       {:intent, :"app/submit", _ctx} ->
+        # `enter` on a non-prompt pane (where mode/insert isn't bound) runs the
+        # current composer buffer directly.
         submit(state)
 
       {:intent, _intent, _ctx} = resolution ->
         forest = Store.spans(state.store)
         ui = Keys.dispatch(resolution, state.ui, forest)
-        # Navigation changed the gaze → re-mirror every pane (cheap; the gaze
-        # feeds projection now that collapse/cursor live in Ui).
+        # Navigation changed the gaze → re-mirror every pane (the detail pane
+        # mirrors the new selection; cheap, gaze-fed projection).
         {:noreply, reproject(%{state | ui: ui}, :all)}
 
       :unbound ->
-        {:noreply, compose(chord, state)}
+        # In NORMAL an unbound key does NOTHING (no stray text — that's INSERT).
+        {:noreply, state}
     end
   end
 
@@ -147,12 +178,12 @@ defmodule SpellAgent.Tui.App do
     {:noreply, reproject(state, [suffix])}
   end
 
-  # Mission Task finished — capture its final answer, focus the answer pane and
-  # reset its scroll so the start of the answer is visible immediately.
+  # Mission Task finished — capture the final result. Focus stays on the TREE (set
+  # at submit) so the operator keeps exploring the completed run; the detail pane
+  # shows whatever is selected. The status line reflects done/failed.
   def handle_info({ref, result}, state) when is_reference(ref) do
     Process.demonitor(ref, [:flush])
-    ui = %{state.ui | focus: :answer} |> Map.update!(:scroll, &Map.put(&1, :answer, 0))
-    {:noreply, reproject(%{state | running?: false, result: result, ui: ui}, :all)}
+    {:noreply, reproject(%{state | running?: false, result: result}, :all)}
   end
 
   def handle_info({:DOWN, _ref, :process, _pid, _reason}, state) do
@@ -175,8 +206,12 @@ defmodule SpellAgent.Tui.App do
     Store.reset(state.store)
     Task.async(fn -> on_submit.(prompt) end)
 
+    # Back to NORMAL mode and move focus to the TREE so j/k/h/l explore the run as
+    # it streams in (the detail pane mirrors the selection) — PLAN-346 W5 flow.
+    ui = state.ui |> Ui.mode(:normal) |> Ui.focus(:tree)
+
     {:noreply,
-     reproject(%{state | composer: "", running?: true, result: nil, last_prompt: prompt}, :all)}
+     reproject(%{state | composer: "", running?: true, result: nil, last_prompt: prompt, ui: ui}, :all)}
   end
 
   # The composer text sink: backspace edits, a single printable char appends, and
@@ -218,6 +253,22 @@ defmodule SpellAgent.Tui.App do
       block: %Block{title: " #{desc.title} ", borders: [:all], border_type: :rounded},
       highlight_style: %Style{modifiers: [:bold]},
       selected: select_index(desc, length(items))
+    }
+
+    {widget, rect}
+  end
+
+  # Detail.view returns a {:detail, %{title, body, scroll, focused?}} descriptor;
+  # the App turns it into a scrollable, wrapped Paragraph (the "see inside" pane).
+  defp materialize({{:detail, desc}, rect}, _state) do
+    focus_tag = if desc.focused?, do: " ●", else: ""
+
+    widget = %Paragraph{
+      text: desc.body,
+      wrap: true,
+      scroll: {desc.scroll, 0},
+      style: %Style{fg: :white},
+      block: %Block{title: " #{desc.title}#{focus_tag} ", borders: [:all], border_type: :rounded}
     }
 
     {widget, rect}
@@ -267,68 +318,29 @@ defmodule SpellAgent.Tui.App do
     }
   end
 
-  # ---- answer (scrollable, wrapped — shows EVERYTHING) ----
 
-  # The full final answer, wrapped to the pane width and vertically scrollable
-  # (↑↓ / PgUp·PgDn when focused) so a long response is fully reachable in a
-  # fixed-height terminal. While running, shows the latest turn's program/result
-  # so there is always something live to read.
-  defp answer_widget(state) do
-    {body, color} =
-      cond do
-        state.result != nil -> answer_body(state.result)
-        state.running? -> {live_preview(state), :yellow}
-        true -> {"(the model's answer will appear here)", :dark_gray}
-      end
-
-    focus_tag = if state.ui.focus == :answer, do: " ●", else: ""
-
-    %Paragraph{
-      text: body,
-      wrap: true,
-      scroll: {Ui.scroll_of(state.ui, :answer), 0},
-      style: %Style{fg: color},
-      block: %Block{title: " answer" <> focus_tag <> " ", borders: [:all], border_type: :rounded}
-    }
-  end
-
-  defp answer_body({:ok, answer}), do: {to_text(answer), :white}
-  defp answer_body({:error, reason}), do: {"error: " <> to_text(reason), :red}
-  defp answer_body(other), do: {to_text(other), :white}
-
-  # Latest turn's program + result, so the answer pane is never blank mid-run.
-  defp live_preview(state) do
-    state.store
-    |> Store.spans()
-    |> Store.run_spans()
-    |> Enum.flat_map(& &1.turns)
-    |> Enum.at(-1)
-    |> case do
-      %{program: p, result_preview: r} when is_binary(p) ->
-        "running…\n\n" <> p <> if(is_binary(r), do: "\n→ " <> r, else: "")
-
-      _ ->
-        "running…"
-    end
-  end
-
-  # Full text — NOT truncated; the answer pane scrolls to show all of it.
-  defp to_text(v) when is_binary(v), do: v
-  defp to_text(v), do: inspect(v, pretty: true, limit: :infinity, printable_limit: :infinity)
 
   # ---- composer ----
 
   defp composer_widget(state) do
-    {title, hint} =
-      if state.running?,
-        do: {" running… ", ""},
-        else: {" prompt ", hint_for(state)}
+    insert? = state.ui.mode == :insert
+    # Title carries the modal indicator so the mode is always visible.
+    title = if insert?, do: " prompt — INSERT ", else: " prompt — NORMAL "
 
-    text = if state.composer == "", do: hint, else: state.composer <> "▎"
+    text =
+      cond do
+        # In INSERT, show the live buffer + cursor (always, even when empty).
+        insert? -> state.composer <> "▎"
+        # In NORMAL with a buffer, show it (un-submitted); else the keymap hint.
+        state.composer != "" -> state.composer
+        true -> hint_for(state)
+      end
+
+    fg = if insert? or state.composer != "", do: :white, else: :dark_gray
 
     %Paragraph{
       text: text,
-      style: %Style{fg: if(state.composer == "", do: :dark_gray, else: :white)},
+      style: %Style{fg: fg},
       block: %Block{title: title, borders: [:all], border_type: :rounded}
     }
   end
@@ -343,12 +355,13 @@ defmodule SpellAgent.Tui.App do
 
     focused_hints =
       case state.ui.focus do
-        :tree -> [chord_hint(ctx, :"span/expand", "expand"), chord_hint(ctx, :"span/contract", "collapse"), chord_hint(ctx, :"cursor/next", "move")]
-        f when f in [:answer, :prompt] -> [chord_hint(ctx, :"turn/next", "next turn"), chord_hint(ctx, :"scroll/down", "scroll")]
+        :tree -> [chord_hint(ctx, :"nav/next", "next"), chord_hint(ctx, :"nav/child", "in"), chord_hint(ctx, :"nav/parent", "out")]
+        :detail -> [chord_hint(ctx, :"scroll/down", "scroll")]
+        :prompt -> [chord_hint(ctx, :"mode/insert", "type")]
         _ -> []
       end
 
-    global = [chord_hint(:global, :"focus/next", "pane"), chord_hint(:global, :"app/submit", "run"), chord_hint(:global, :"app/quit", "quit")]
+    global = [chord_hint(:global, :"focus/next", "pane"), chord_hint(:global, :"app/quit", "quit")]
 
     (focused_hints ++ global)
     |> Enum.reject(&is_nil/1)
@@ -388,6 +401,7 @@ defmodule SpellAgent.Tui.App do
   defp compiled_chord_for(:global, intent), do: keymap_chord(Global.keymap(), intent)
   defp compiled_chord_for(:tree, intent), do: keymap_chord(SpanTree.keymap(), intent)
   defp compiled_chord_for(:turn_nav, intent), do: keymap_chord(TurnNav.keymap(), intent)
+  defp compiled_chord_for(:prompt, intent), do: keymap_chord(Prompt.keymap(), intent)
   defp compiled_chord_for(_other, _intent), do: nil
 
   defp keymap_chord(keymap, intent), do: Enum.find_value(keymap, fn {c, i} -> if i == intent, do: c end)

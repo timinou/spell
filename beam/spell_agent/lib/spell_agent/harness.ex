@@ -245,7 +245,7 @@ defmodule SpellAgent.Harness do
   # here: both panes resolve through :turn_nav, so a binding stored under :answer
   # would be silently ignored by Keys.resolve (final-review P2). Bind those keys
   # under "turn_nav".
-  @contexts [:tree, :turn_nav, :global]
+  @contexts [:tree, :turn_nav, :prompt, :global]
 
   defp require_context(args) do
     s = require_str(args, "context")

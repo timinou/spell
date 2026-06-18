@@ -111,22 +111,35 @@ keys; adding a context (focused pane / global) touches neither. Resolution is
 via a context cascade (focused pane first, then global), with no `if focus ==`
 anywhere.
 
-### Default chords
+### Modal navigation (W5)
 
-| chord | tree focus | answer / prompt focus | resolved in |
-|---|---|---|---|
-| `ctrl+j` / `ctrl+k` | next / prev pane | next / prev pane | global (fall-through) |
-| `ctrl+l` / `ctrl+h` | expand / collapse the span under the cursor | next / prev turn | focused pane |
-| `↑` / `↓` | move the tree cursor | scroll the pane | focused pane |
-| `tab` / `shift+tab` | cycle panes | cycle panes | global |
-| `enter` | submit the composer | submit the composer | global |
-| `esc` / `ctrl+c` | quit | quit | global |
+The inspector is **modal**, like vim. Launch lands on the prompt in **NORMAL**
+mode; press `enter` to enter **INSERT** mode and type a mission, `enter` again to
+submit (which returns to NORMAL and moves focus to the tree so you can explore the
+run as it streams). The layout is the span **tree** on the left and a **detail**
+inspector on the right that shows the FULL content of whatever the tree cursor is
+on — so navigating IS inspecting (a clipped turn row expands in the detail pane).
 
-`ctrl+j/k/h/l` are reachable because the vendored ExRatatui NIF enables the
-**kitty keyboard protocol** (otherwise `ctrl+j`≡Enter and `ctrl+h`≡Backspace at
-the legacy-terminal byte level). The composer's hint line is *derived from the
-live keymap*, so it always reflects what is actually bound — including runtime
-rebinds.
+| chord | mode | tree focus | detail focus | prompt focus |
+|---|---|---|---|---|
+| `j` / `k` | NORMAL | next / prev row | scroll down / up | — |
+| `l` | NORMAL | descend into the node (expand + first child) | — | — |
+| `h` | NORMAL | ascend to the parent | — | — |
+| `ctrl+j` / `ctrl+k` | NORMAL | cycle pane focus | cycle pane focus | cycle pane focus |
+| `tab` / `shift+tab` | NORMAL | cycle panes | cycle panes | cycle panes |
+| `enter` | NORMAL | — | — | enter INSERT (type) |
+| `enter` | INSERT | — | — | submit the mission |
+| `esc` | INSERT | — | — | back to NORMAL |
+| `esc` / `ctrl+c` | NORMAL | quit | quit | quit |
+| `C-l` / `C-h` | NORMAL | expand / collapse (explicit) | — | — |
+
+`ctrl+j/k` (and the explicit `C-l`/`C-h`) are reachable because the vendored
+ExRatatui NIF enables the **kitty keyboard protocol** (otherwise `ctrl+j`≡Enter
+and `ctrl+h`≡Backspace at the legacy-terminal byte level). In NORMAL mode a plain
+key is a chord, never text — which is exactly why `j/k/h/l` are free to navigate.
+The composer's hint line + the `NORMAL`/`INSERT` indicator are *derived from the
+live keymap + mode*, so they always reflect what is actually bound — including
+runtime rebinds.
 
 ### Reshape the editor at runtime, in PTC-Lisp
 

@@ -29,16 +29,25 @@ defmodule SpellAgent.Tui.Panes.SpanTree do
   @spec context_name() :: :tree
   def context_name, do: :tree
 
-  # The tree's vocabulary (PLAN-346): C-l/C-h expand/contract the span under the
-  # cursor; arrows move the cursor. C-j/C-k (focus ring) are NOT here — they fall
-  # through to Keymap.Global, so they work under every focus.
+  # The tree's vocabulary (PLAN-346 W5 — vim tree-nav, NORMAL mode):
+  #   j / k  move to the next / prev VISIBLE row (sibling-or-cousin as shown)
+  #   l      descend INTO the cursor span (expand it + move to its first child)
+  #   h      ascend OUT to the cursor span's parent
+  # Arrows mirror j/k for discoverability. C-j/C-k (focus ring) fall through to
+  # Keymap.Global so they work under every focus. (The detail pane mirrors the
+  # cursor, so moving the cursor IS "seeing inside" — the screenshot problem.)
   keymap([
-    {"C-l", :"span/expand"},
-    {"C-h", :"span/contract"},
-    {"up", :"cursor/prev"},
-    {"down", :"cursor/next"},
+    {"j", :"nav/next"},
+    {"k", :"nav/prev"},
+    {"l", :"nav/child"},
+    {"h", :"nav/parent"},
+    {"down", :"nav/next"},
+    {"up", :"nav/prev"},
     {"page_up", :"cursor/page-prev"},
-    {"page_down", :"cursor/page-next"}
+    {"page_down", :"cursor/page-next"},
+    # explicit expand/collapse stay available on C-l/C-h (secondary to h/l nav).
+    {"C-l", :"span/expand"},
+    {"C-h", :"span/contract"}
   ])
 
   events([
@@ -76,13 +85,68 @@ defmodule SpellAgent.Tui.Panes.SpanTree do
   # ---- reactions (intent -> gaze') ----
 
   @impl true
+  # j/k — move among VISIBLE rows. Clamp to the row count so the cursor never
+  # points past the end (which would make cursor_span_id nil).
+  def react(:"nav/next", %Ui{} = ui, forest), do: move_cursor(ui, forest, +1)
+  def react(:"nav/prev", %Ui{} = ui, forest), do: move_cursor(ui, forest, -1)
+  def react(:"cursor/page-next", %Ui{} = ui, forest), do: move_cursor(ui, forest, +10)
+  def react(:"cursor/page-prev", %Ui{} = ui, forest), do: move_cursor(ui, forest, -10)
+
+  # l — descend INTO the cursor span: if it has hidden children, expand it (its
+  # first child becomes the next visible row); then move the cursor onto that
+  # child. If already expanded (or a leaf), just step to the first child row.
+  def react(:"nav/child", %Ui{} = ui, forest) do
+    case cursor_span_id(forest, ui) do
+      nil ->
+        ui
+
+      id ->
+        ui = if has_children?(forest, id), do: Ui.expand(ui, id), else: ui
+        # After expanding, the first child is the row immediately below the parent.
+        if has_children?(forest, id), do: move_cursor(ui, forest, +1), else: ui
+    end
+  end
+
+  # h — ascend OUT to the cursor span's parent: set the cursor to the parent's
+  # row. At a root, stay put.
+  def react(:"nav/parent", %Ui{} = ui, forest) do
+    with id when is_binary(id) <- cursor_span_id(forest, ui),
+         %Span{parent_id: pid} when is_binary(pid) <- forest[id],
+         row when is_integer(row) <- row_index_of(forest, ui, pid) do
+      put_cursor(ui, row)
+    else
+      _ -> ui
+    end
+  end
+
+  # explicit expand/collapse (C-l/C-h) — secondary to h/l nav.
   def react(:"span/expand", %Ui{} = ui, forest), do: with_cursor_span(ui, forest, &Ui.expand/2)
   def react(:"span/contract", %Ui{} = ui, forest), do: with_cursor_span(ui, forest, &Ui.collapse/2)
-  def react(:"cursor/next", %Ui{} = ui, _forest), do: Ui.cursor(ui, +1)
-  def react(:"cursor/prev", %Ui{} = ui, _forest), do: Ui.cursor(ui, -1)
-  def react(:"cursor/page-next", %Ui{} = ui, _forest), do: Ui.cursor(ui, +10)
-  def react(:"cursor/page-prev", %Ui{} = ui, _forest), do: Ui.cursor(ui, -10)
   def react(_intent, %Ui{} = ui, _forest), do: ui
+
+  # Move the tree cursor by `delta`, clamped to [0, last visible row].
+  defp move_cursor(%Ui{} = ui, forest, delta) do
+    n = row_count(forest, ui)
+    cur = Ui.cursor_of(ui, :tree)
+    put_cursor(ui, clamp(cur + delta, 0, max(n - 1, 0)))
+  end
+
+  defp put_cursor(%Ui{cursors: c} = ui, n), do: %{ui | cursors: Map.put(c, :tree, n)}
+  defp clamp(v, lo, hi), do: v |> max(lo) |> min(hi)
+
+  defp has_children?(forest, id), do: Store.children(forest, id) != []
+
+  defp row_count(forest, ui) do
+    forest |> Store.roots_from() |> Enum.flat_map(&rows_for(forest, &1, 0, ui)) |> length()
+  end
+
+  # The visible-row index of span `id` under the current gaze, or nil if not shown.
+  defp row_index_of(forest, ui, id) do
+    forest
+    |> Store.roots_from()
+    |> Enum.flat_map(&rows_for(forest, &1, 0, ui))
+    |> Enum.find_index(fn row -> row.id == id end)
+  end
 
   # Apply a collapse/expand transform to the span under the tree cursor. The
   # cursor indexes the ROWS as projected UNDER THE CURRENT GAZE (so the id lines
@@ -101,17 +165,25 @@ defmodule SpellAgent.Tui.Panes.SpanTree do
   """
   @spec cursor_span_id(map(), Ui.t()) :: String.t() | nil
   def cursor_span_id(forest, %Ui{} = ui) do
+    case selected_row(forest, ui) do
+      %{id: id} -> id
+      _ -> nil
+    end
+  end
+
+  @doc """
+  The full ROW under the tree cursor (`%{depth, span, turn, id, ...}`) given the
+  live forest + gaze — the source the detail pane renders. A run/llm/tool row
+  carries its `:span`; a turn row also carries `:turn`. nil on an empty forest.
+  """
+  @spec selected_row(map(), Ui.t()) :: map() | nil
+  def selected_row(forest, %Ui{} = ui) do
     rows =
       forest
       |> Store.roots_from()
       |> Enum.flat_map(&rows_for(forest, &1, 0, ui))
 
-    cursor = clamp_cursor(Ui.cursor_of(ui, :tree), rows)
-
-    case Enum.at(rows, cursor) do
-      %{id: id} -> id
-      _ -> nil
-    end
+    Enum.at(rows, clamp_cursor(Ui.cursor_of(ui, :tree), rows))
   end
 
   @impl true

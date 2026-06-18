@@ -6,8 +6,8 @@ defmodule SpellAgent.Tui.UiTest do
 
   describe "focus ring" do
     test "next/prev cycle through the pane ring and wrap" do
-      ui = Ui.new(panes: [:tree, :answer, :prompt], focus: :tree)
-      assert Ui.focus(ui, :next).focus == :answer
+      ui = Ui.new(panes: [:tree, :detail, :prompt], focus: :tree)
+      assert Ui.focus(ui, :next).focus == :detail
       assert ui |> Ui.focus(:next) |> Ui.focus(:next) |> Map.get(:focus) == :prompt
       # wrap forward
       assert ui |> Ui.focus(:next) |> Ui.focus(:next) |> Ui.focus(:next) |> Map.get(:focus) == :tree
@@ -17,7 +17,7 @@ defmodule SpellAgent.Tui.UiTest do
 
     test "jump to a named pane (only if in the ring)" do
       ui = Ui.new(focus: :tree)
-      assert Ui.focus(ui, :answer).focus == :answer
+      assert Ui.focus(ui, :detail).focus == :detail
       assert Ui.focus(ui, :nonexistent).focus == :tree
     end
 
@@ -44,7 +44,7 @@ defmodule SpellAgent.Tui.UiTest do
     test "cursor is per-pane (moving tree doesn't touch answer)" do
       ui = Ui.new(focus: :tree) |> Ui.cursor(+3)
       assert Ui.cursor_of(ui, :tree) == 3
-      assert Ui.cursor_of(ui, :answer) == 0
+      assert Ui.cursor_of(ui, :detail) == 0
     end
 
     test ":first and :last sentinels" do
@@ -105,19 +105,26 @@ defmodule SpellAgent.Tui.UiTest do
   describe "scroll" do
     test "per-pane, clamps at 0" do
       ui = Ui.new()
-      assert Ui.scroll(ui, :answer, +5) |> Ui.scroll_of(:answer) == 5
-      assert Ui.scroll(ui, :answer, -100) |> Ui.scroll_of(:answer) == 0
-      assert Ui.scroll(ui, :answer, +5) |> Ui.scroll_of(:tree) == 0
+      assert Ui.scroll(ui, :detail, +5) |> Ui.scroll_of(:detail) == 5
+      assert Ui.scroll(ui, :detail, -100) |> Ui.scroll_of(:detail) == 0
+      assert Ui.scroll(ui, :detail, +5) |> Ui.scroll_of(:tree) == 0
     end
   end
 
   test "a fresh gaze has the documented defaults" do
     ui = Ui.new()
     assert ui.focus == :tree
-    assert ui.panes == [:tree, :answer, :prompt]
+    assert ui.panes == [:tree, :detail, :prompt]
+    assert ui.mode == :normal
     assert ui.auto_depth == 1
     assert ui.overrides == %{}
     assert ui.turn == 0
     assert ui.leader == nil
+  end
+
+  test "mode toggles between :normal and :insert" do
+    ui = Ui.new()
+    assert Ui.mode(ui, :insert).mode == :insert
+    assert ui |> Ui.mode(:insert) |> Ui.mode(:normal) |> Map.get(:mode) == :normal
   end
 end

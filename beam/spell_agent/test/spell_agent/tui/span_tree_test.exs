@@ -89,4 +89,53 @@ defmodule SpellAgent.Tui.Panes.SpanTreeTest do
     assert [:tool, :stop] in SpanTree.events()
     assert [:run, :start] in SpanTree.events()
   end
+
+  # ---- W5: vim tree-navigation reactions ----
+
+  alias SpellAgent.Tui.Ui
+
+  defp tree_ui(row), do: Ui.new(focus: :tree, auto_depth: 1_000_000) |> Map.put(:cursors, %{tree: row})
+  defp cur(ui), do: Ui.cursor_of(ui, :tree)
+
+  describe "vim tree-nav (W5)" do
+    test "nav/next and nav/prev move among visible rows, clamped" do
+      f = forest()
+      # rows: run1(0) turn1(1) tool1(2) run2(3) llm2(4)
+      assert SpanTree.react(:"nav/next", tree_ui(0), f) |> cur() == 1
+      assert SpanTree.react(:"nav/prev", tree_ui(0), f) |> cur() == 0, "clamps at top"
+      assert SpanTree.react(:"nav/next", tree_ui(4), f) |> cur() == 4, "clamps at bottom"
+    end
+
+    test "nav/child descends into the cursor span's first child" do
+      f = forest()
+      # cursor on run1 (row 0); its first child row is 1.
+      assert SpanTree.react(:"nav/child", tree_ui(0), f) |> cur() == 1
+    end
+
+    test "nav/parent ascends to the cursor span's parent row" do
+      f = forest()
+      # cursor on llm2 (row 4); parent run2 is at row 3.
+      assert SpanTree.react(:"nav/parent", tree_ui(4), f) |> cur() == 3
+    end
+
+    test "nav/parent at a root stays put" do
+      f = forest()
+      assert SpanTree.react(:"nav/parent", tree_ui(0), f) |> cur() == 0
+    end
+
+    test "nav on an empty forest is a no-op (never crashes)" do
+      assert SpanTree.react(:"nav/next", tree_ui(0), %{}) |> cur() == 0
+      assert SpanTree.react(:"nav/child", tree_ui(0), %{}) |> cur() == 0
+      assert SpanTree.react(:"nav/parent", tree_ui(0), %{}) |> cur() == 0
+    end
+  end
+
+  test "selected_row returns the full row under the cursor (for the detail pane)" do
+    f = forest()
+    # row 1 = turn 1 under run1.
+    row = SpanTree.selected_row(f, tree_ui(1))
+    assert row.turn.number == 1
+    # row 0 = the run span.
+    assert SpanTree.selected_row(f, tree_ui(0)).span.id == "run1"
+  end
 end

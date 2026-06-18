@@ -30,7 +30,6 @@ defmodule SpellAgent.Tui.Keymap.Global do
       # alongside the ctrl chords.
       {Chord.parse("tab"), :"focus/next"},
       {Chord.parse("S-tab"), :"focus/prev"},
-      {Chord.parse("enter"), :"app/submit"},
       {Chord.parse("esc"), :"app/quit"},
       {Chord.parse("C-c"), :"app/quit"}
     ]

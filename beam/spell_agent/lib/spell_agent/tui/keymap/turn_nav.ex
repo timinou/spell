@@ -1,18 +1,15 @@
 defmodule SpellAgent.Tui.Keymap.TurnNav do
   @moduledoc """
-  The answer/prompt focus context (PLAN-346) — the OTHER reading of `C-l`/`C-h`.
+  The detail-pane focus context (PLAN-346 W5).
 
-  This is the contextual-resolution payoff made concrete: when the result
-  (answer) or prompt pane is focused, `C-l`/`C-h` navigate TURNS instead of
-  expanding/collapsing a span (which is what they mean under tree focus, in
-  `SpellAgent.Tui.Panes.SpanTree`). Same chords, different intent — selected by
-  which context the App puts at the top of the resolver stack.
+  When the DETAIL inspector is focused, the content can exceed the pane height, so
+  the chords scroll it: `j`/`k` (and arrows) by a line, page keys by ten. The tree
+  cursor (which selects WHAT the detail shows) is driven from the tree pane; here
+  we only move WITHIN the shown content. `react/3` reads `ui.focus` so scroll
+  targets the focused pane (the detail, normally).
 
-  Like `Keymap.Global` it is a CONTEXT, not a render pane: it supplies only
-  `keymap/0` + `react/3` + `context_name/0`, the trio the resolver needs. Both the
-  `:answer` and `:prompt` focuses resolve through this one context (they share the
-  turn-navigation vocabulary); `react/3` reads `ui.focus` so `scroll/*` targets
-  whichever of the two is actually focused.
+  A CONTEXT, not a render pane: `keymap/0` + `react/3` + `context_name/0` only.
+  Registry key stays `:turn_nav` for binding-override continuity.
   """
 
   use SpellAgent.Tui.Pane
@@ -24,10 +21,10 @@ defmodule SpellAgent.Tui.Keymap.TurnNav do
   def context_name, do: :turn_nav
 
   keymap([
-    {"C-l", :"turn/next"},
-    {"C-h", :"turn/prev"},
-    {"up", :"scroll/up"},
+    {"j", :"scroll/down"},
+    {"k", :"scroll/up"},
     {"down", :"scroll/down"},
+    {"up", :"scroll/up"},
     {"page_up", :"scroll/page-up"},
     {"page_down", :"scroll/page-down"}
   ])
@@ -37,9 +34,7 @@ defmodule SpellAgent.Tui.Keymap.TurnNav do
   def view(_), do: []
 
   @impl true
-  def react(:"turn/next", %Ui{} = ui, _forest), do: Ui.turn(ui, :next)
-  def react(:"turn/prev", %Ui{} = ui, _forest), do: Ui.turn(ui, :prev)
-  # Scroll the FOCUSED pane's text (answer or prompt) — ui.focus tells us which.
+  # Scroll the FOCUSED pane's text — ui.focus tells us which (detail, normally).
   def react(:"scroll/up", %Ui{focus: f} = ui, _forest), do: Ui.scroll(ui, f, -1)
   def react(:"scroll/down", %Ui{focus: f} = ui, _forest), do: Ui.scroll(ui, f, +1)
   def react(:"scroll/page-up", %Ui{focus: f} = ui, _forest), do: Ui.scroll(ui, f, -10)

@@ -37,13 +37,15 @@ defmodule SpellAgent.Tui.Ui do
 
   alias SpellAgent.Tui.Ui
 
-  @type pane :: :tree | :answer | :prompt
+  @type pane :: :tree | :detail | :prompt
   @type span_id :: String.t()
   @type visibility :: :expanded | :collapsed
+  @type mode :: :normal | :insert
 
   @type t :: %__MODULE__{
           focus: pane(),
           panes: [pane()],
+          mode: mode(),
           cursors: %{optional(pane()) => non_neg_integer()},
           auto_depth: non_neg_integer(),
           overrides: %{optional(span_id()) => visibility()},
@@ -52,8 +54,13 @@ defmodule SpellAgent.Tui.Ui do
           leader: atom() | nil
         }
 
+  # PLAN-346 W5 pivot: panes are tree (navigate) / detail (full content of the
+  # selected node) / prompt (the composer). `mode` is the modal layer — NORMAL
+  # keys navigate, INSERT keys type into the composer. Launch is prompt+NORMAL
+  # (the App overrides focus); the struct default keeps :tree for pure-unit ease.
   defstruct focus: :tree,
-            panes: [:tree, :answer, :prompt],
+            panes: [:tree, :detail, :prompt],
+            mode: :normal,
             cursors: %{},
             auto_depth: 1,
             overrides: %{},
@@ -169,6 +176,12 @@ defmodule SpellAgent.Tui.Ui do
     %{ui | scroll: Map.put(s, pane, max(Map.get(s, pane, 0) + delta, 0))}
   end
 
+  # ---- mode (the modal layer, W5) ----
+
+  @doc "Set the modal mode (:normal | :insert)."
+  @spec mode(t(), mode()) :: t()
+  def mode(%Ui{} = ui, m) when m in [:normal, :insert], do: %{ui | mode: m}
+
   @doc "A pane's current scroll offset (0 if unset)."
   @spec scroll_of(t(), pane()) :: non_neg_integer()
   def scroll_of(%Ui{scroll: s}, pane), do: Map.get(s, pane, 0)
@@ -190,7 +203,7 @@ defmodule SpellAgent.Tui.Ui do
   # default (or nil) WITHOUT interning. This is the single chokepoint the
   # harness/reaction boundary funnels gaze-field strings through.
 
-  @panes [:tree, :answer, :prompt]
+  @panes [:tree, :detail, :prompt]
   @dirs [:next, :prev, :first, :last]
   @visibilities [:expanded, :collapsed]
 

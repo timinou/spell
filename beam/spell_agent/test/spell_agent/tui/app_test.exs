@@ -58,6 +58,10 @@ defmodule SpellAgent.Tui.AppTest do
     end
   end
 
+  # Enter INSERT mode (Enter on the prompt) so plain typing fills the composer —
+  # PLAN-346 W5 modal flow. Launch is prompt+NORMAL.
+  defp enter_insert(pid), do: Runtime.inject_event(pid, key("enter"))
+
   test "type a prompt, Enter runs the mission, the forest renders in the tree pane", %{store: store} do
     {:ok, pid} =
       App.start_link(
@@ -67,7 +71,8 @@ defmodule SpellAgent.Tui.AppTest do
         on_submit: fake_mission_emitting(store)
       )
 
-    # The app subscribed + attached on mount; type and submit.
+    # Launch is prompt+NORMAL: Enter -> INSERT, type, Enter -> submit.
+    :ok = enter_insert(pid)
     :ok = type_string(pid, "hello")
     :ok = Runtime.inject_event(pid, key("enter"))
 
@@ -88,9 +93,11 @@ defmodule SpellAgent.Tui.AppTest do
     {:ok, pid} =
       App.start_link(name: nil, test_mode: {80, 24}, store: store, on_submit: fn _ -> :noop end)
 
+    :ok = enter_insert(pid)
     :ok = type_string(pid, "abc")
     :ok = Runtime.inject_event(pid, key("backspace"))
     # No submit yet → no spans; buffer is "ab". Render must not crash.
+    assert app_state(pid).composer == "ab"
     snap = Runtime.snapshot(pid)
     assert snap.render_count >= 1
     assert Store.spans(store) == %{}
@@ -119,81 +126,115 @@ defmodule SpellAgent.Tui.AppTest do
   alias SpellAgent.Tui.Ui
 
   # render/2 is a pure callback; build an explicit state to assert the panes.
-  # PLAN-346: navigation lives in a %Ui{} gaze (was scattered focus/answer_scroll).
+  # PLAN-346 W5: two projected panes (tree + detail) + the composer.
   defp state(overrides) do
     Map.merge(
       %{
         store: SpellAgent.Tui.Store,
-        panes: [%{name: :tree, module: SpellAgent.Tui.Panes.SpanTree, assigns: %{}}],
-        vms: %{tree: %{rows: [], count: 0}},
+        panes: [
+          %{name: :tree, module: SpellAgent.Tui.Panes.SpanTree, assigns: %{}},
+          %{name: :detail, module: SpellAgent.Tui.Panes.Detail, assigns: %{}}
+        ],
+        vms: %{tree: %{rows: [], count: 0}, detail: %{title: "detail", body: "(empty)"}},
         composer: "",
         on_submit: fn _ -> :ok end,
         running?: false,
         result: nil,
         last_prompt: nil,
-        ui: Ui.new(focus: :answer, panes: [:answer, :tree, :prompt])
+        ui: Ui.new(focus: :tree, panes: [:prompt, :tree, :detail])
       },
       overrides
     )
   end
 
-  # Render order: [status, answer, tree…, composer]. Pull each Paragraph's text.
+  # Render order: [status, tree, detail, composer]. Pull each Paragraph's text
+  # (the tree is a List, not a Paragraph, so index past it for detail/composer).
   defp paragraph_text({%ExRatatui.Widgets.Paragraph{text: t}, _rect}), do: t
   defp status_text(widgets), do: paragraph_text(Enum.at(widgets, 0))
-  defp answer_text(widgets), do: paragraph_text(Enum.at(widgets, 1))
+  defp detail_text(widgets), do: paragraph_text(Enum.at(widgets, 2))
   defp composer_text(widgets), do: paragraph_text(List.last(widgets))
+  defp composer_title(widgets) do
+    {%ExRatatui.Widgets.Paragraph{block: %ExRatatui.Widgets.Block{title: t}}, _} = List.last(widgets)
+    t
+  end
 
-  test "the composer hint is DERIVED from the live keymap, focus-aware (W4)", %{store: store} do
+  test "the composer hint is DERIVED from the live keymap, focus-aware (W5)", %{store: store} do
     # Reset live overrides so this asserts the COMPILED keymap (other tests share
     # the supervised KeymapRegistry and may have left rebinds that shadow it).
     if Process.whereis(SpellAgent.Tui.KeymapRegistry), do: SpellAgent.Tui.KeymapRegistry.reset()
 
-    tree = state(%{store: store, ui: Ui.new(focus: :tree, panes: [:answer, :tree, :prompt])})
-    tree_hint = composer_text(App.render(tree, %Frame{width: 100, height: 24}))
-    # Under tree focus the hint shows the span verbs' ACTUAL chords + globals.
-    assert tree_hint =~ "C-l expand"
-    assert tree_hint =~ "C-h collapse"
+    tree = state(%{store: store, ui: Ui.new(focus: :tree, panes: [:prompt, :tree, :detail])})
+    tree_hint = composer_text(App.render(tree, %Frame{width: 120, height: 24}))
+    # Under tree focus the hint shows the vim-nav chords + globals.
+    assert tree_hint =~ "j next"
+    assert tree_hint =~ "l in"
+    assert tree_hint =~ "h out"
     assert tree_hint =~ "C-j pane"
     assert tree_hint =~ "quit"
+    # Title carries the modal indicator.
+    assert composer_title(App.render(tree, %Frame{width: 120, height: 24})) =~ "NORMAL"
 
-    answer = state(%{store: store, ui: Ui.new(focus: :answer, panes: [:answer, :tree, :prompt])})
-    answer_hint = composer_text(App.render(answer, %Frame{width: 100, height: 24}))
-    # Under answer focus the SAME C-l now reads as turn navigation.
-    assert answer_hint =~ "C-l next turn"
+    prompt = state(%{store: store, ui: Ui.new(focus: :prompt, panes: [:prompt, :tree, :detail])})
+    prompt_hint = composer_text(App.render(prompt, %Frame{width: 120, height: 24}))
+    # Under prompt focus, Enter is the "type" affordance (mode/insert).
+    assert prompt_hint =~ "enter type"
   end
 
-  test "D2: the full final answer is shown in the scrollable answer pane", %{store: store} do
-    long = String.duplicate("word ", 200) <> "END"
-    widgets = App.render(state(%{store: store, result: {:ok, long}}), %Frame{width: 80, height: 24})
-
-    # The answer pane carries the WHOLE answer untruncated (it scrolls to show all).
-    assert answer_text(widgets) =~ "END"
-    assert String.length(answer_text(widgets)) >= String.length(long)
-    # Status line summarizes the outcome separately.
-    assert status_text(widgets) =~ "done"
+  test "the composer title shows INSERT when in insert mode", %{store: store} do
+    ui = Ui.new(focus: :prompt, mode: :insert, panes: [:prompt, :tree, :detail])
+    widgets = App.render(state(%{store: store, composer: "hi", ui: ui}), %Frame{width: 80, height: 24})
+    assert composer_title(widgets) =~ "INSERT"
+    assert composer_text(widgets) =~ "hi"
   end
 
-  test "D2: an error result is surfaced in the answer pane and status", %{store: store} do
+  test "the detail pane renders the selected node's full content (see inside the turn)", %{store: store} do
+    # A run with one turn whose program is long; selecting it shows the FULL text.
+    long = "(do " <> String.duplicate("x ", 100) <> "END)"
+    forest = %{
+      "r" => %SpellAgent.Tui.Store.Span{
+        id: "r", parent_id: nil, kind: :run, status: :ok, label: "root",
+        turns: [%{number: 1, program: long, result_preview: "42", response: nil, status: :ok}]
+      }
+    }
+
+    # Cursor on row 1 = the turn. Build the detail vm from the real projection.
+    ui = Ui.new(focus: :tree, panes: [:prompt, :tree, :detail]) |> Map.put(:cursors, %{tree: 1})
+    detail_vm = SpellAgent.Tui.Panes.Detail.project(forest, %{ui: ui})
+
+    panes = [
+      %{name: :tree, module: SpellAgent.Tui.Panes.SpanTree, assigns: %{}},
+      %{name: :detail, module: SpellAgent.Tui.Panes.Detail, assigns: %{}}
+    ]
+
     widgets =
-      App.render(state(%{store: store, result: {:error, :boom}}), %Frame{width: 80, height: 24})
+      App.render(
+        state(%{store: store, ui: ui, panes: panes, vms: %{tree: %{rows: [], count: 0}, detail: detail_vm}}),
+        %Frame{width: 80, height: 24}
+      )
 
-    assert answer_text(widgets) =~ "error"
-    assert answer_text(widgets) =~ "boom"
-    assert status_text(widgets) =~ "✗"
+    # The detail pane carries the WHOLE program untruncated (scrolls to show all).
+    assert detail_text(widgets) =~ "END"
+    assert detail_text(widgets) =~ "program"
   end
 
-  test "D3: the status line shows running while a mission is in flight", %{store: store} do
-    widgets = App.render(state(%{store: store, running?: true}), %Frame{width: 80, height: 24})
-    assert status_text(widgets) =~ "running"
+  test "D3: the status line shows the outcome (running / done / failed)", %{store: store} do
+    running = App.render(state(%{store: store, running?: true}), %Frame{width: 80, height: 24})
+    assert status_text(running) =~ "running"
+
+    done = App.render(state(%{store: store, result: {:ok, "x"}}), %Frame{width: 80, height: 24})
+    assert status_text(done) =~ "done"
+
+    failed = App.render(state(%{store: store, result: {:error, :boom}}), %Frame{width: 80, height: 24})
+    assert status_text(failed) =~ "✗"
   end
 
-  test "answer pane scroll offset reflects the gaze (scrollable)", %{store: store} do
-    ui = Ui.new(focus: :answer, panes: [:answer, :tree, :prompt]) |> Ui.scroll(:answer, +7)
+  test "the detail pane scroll offset reflects the gaze (scrollable)", %{store: store} do
+    ui = Ui.new(focus: :detail, panes: [:prompt, :tree, :detail]) |> Ui.scroll(:detail, +7)
 
     {%ExRatatui.Widgets.Paragraph{scroll: scroll}, _} =
       Enum.at(
-        App.render(state(%{store: store, result: {:ok, "x"}, ui: ui}), %Frame{width: 80, height: 24}),
-        1
+        App.render(state(%{store: store, ui: ui}), %Frame{width: 80, height: 24}),
+        2
       )
 
     assert scroll == {7, 0}
@@ -221,7 +262,7 @@ defmodule SpellAgent.Tui.AppTest do
     :ok
   end
 
-  describe "intent-based navigation chords (PLAN-346 W2)" do
+  describe "modal navigation chords (PLAN-346 W5)" do
     setup %{store: store} do
       SpellAgent.Tui.KeymapRegistry.reset()
       :ok = seed_forest(store)
@@ -232,85 +273,75 @@ defmodule SpellAgent.Tui.AppTest do
       %{pid: pid}
     end
 
+    test "launch is prompt focus in NORMAL mode", %{pid: pid} do
+      assert ui(pid).focus == :prompt
+      assert ui(pid).mode == :normal
+    end
+
     test "ctrl-j / ctrl-k move focus around the pane ring", %{pid: pid} do
-      # default focus is :answer; ring is [answer, tree, prompt].
-      assert ui(pid).focus == :answer
+      # ring is [prompt, tree, detail].
+      assert ui(pid).focus == :prompt
       :ok = Runtime.inject_event(pid, ctrl("j"))
       assert ui(pid).focus == :tree
       :ok = Runtime.inject_event(pid, ctrl("j"))
-      assert ui(pid).focus == :prompt
-      # wrap, then back
+      assert ui(pid).focus == :detail
       :ok = Runtime.inject_event(pid, ctrl("j"))
-      assert ui(pid).focus == :answer
+      assert ui(pid).focus == :prompt
       :ok = Runtime.inject_event(pid, ctrl("k"))
-      assert ui(pid).focus == :prompt
+      assert ui(pid).focus == :detail
     end
 
-    test "the SAME chord (ctrl-l/ctrl-h) means expand under tree focus, turn-nav under answer focus", %{pid: pid} do
-      # Under ANSWER focus, ctrl-l navigates turns.
-      assert ui(pid).focus == :answer
-      :ok = Runtime.inject_event(pid, ctrl("l"))
-      assert ui(pid).turn == 1
-      :ok = Runtime.inject_event(pid, ctrl("h"))
-      assert ui(pid).turn == 0
-      refute Map.has_key?(ui(pid).overrides, "r"), "answer focus did not touch span collapse"
-
-      # Focus the tree; now ctrl-l/ctrl-h expand/collapse the span under the cursor.
-      :ok = Runtime.inject_event(pid, ctrl("j"))
-      assert ui(pid).focus == :tree
-      # cursor at row 0 = the root run "r". ctrl-h collapses it, ctrl-l expands it.
-      :ok = Runtime.inject_event(pid, ctrl("h"))
-      assert ui(pid).overrides["r"] == :collapsed
-      assert ui(pid).turn == 0, "tree focus did not touch the turn index"
-      :ok = Runtime.inject_event(pid, ctrl("l"))
-      assert ui(pid).overrides["r"] == :expanded
-    end
-
-    test "arrows move the tree cursor under tree focus", %{pid: pid} do
-      :ok = Runtime.inject_event(pid, ctrl("j"))
-      assert ui(pid).focus == :tree
-      :ok = Runtime.inject_event(pid, key("down"))
-      assert SpellAgent.Tui.Ui.cursor_of(ui(pid), :tree) == 1
-      :ok = Runtime.inject_event(pid, key("up"))
-      assert SpellAgent.Tui.Ui.cursor_of(ui(pid), :tree) == 0
-    end
-
-    test "a live keymap/bind rebind shadows the compiled chord (AXIS 2)", %{pid: pid} do
-      :ok = Runtime.inject_event(pid, ctrl("j"))
-      assert ui(pid).focus == :tree
-      # rebind ctrl-l in the tree context to CONTRACT instead of expand.
-      SpellAgent.Tui.KeymapRegistry.bind(:tree, SpellAgent.Tui.Chord.parse("C-l"), :"span/contract")
-      :ok = Runtime.inject_event(pid, ctrl("l"))
-      assert ui(pid).overrides["r"] == :collapsed, "rebound chord fired the contract reaction"
-    end
-
-    test "an unbound printable falls through to the composer", %{pid: pid} do
+    test "modal: Enter on the prompt enters INSERT; typing fills the composer; Esc returns to NORMAL", %{pid: pid} do
+      assert ui(pid).mode == :normal
+      # In NORMAL, plain letters do NOT type (they're chords / no-ops).
+      :ok = type_string(pid, "x")
+      assert app_state(pid).composer == ""
+      # Enter (on the prompt) -> INSERT.
+      :ok = Runtime.inject_event(pid, key("enter"))
+      assert ui(pid).mode == :insert
+      # now typing fills the composer.
       :ok = type_string(pid, "hi")
+      assert app_state(pid).composer == "hi"
+      # Esc -> NORMAL, buffer kept.
+      :ok = Runtime.inject_event(pid, key("esc"))
+      assert ui(pid).mode == :normal
       assert app_state(pid).composer == "hi"
     end
 
-    test "a shifted printable (uppercase / shifted punct) still types into the composer", %{pid: pid} do
-      # crossterm folds shift into the code: "H" arrives as code "H" with [:shift].
+    test "vim tree-nav: j/k move the cursor, l descends, h ascends", %{pid: pid} do
+      # focus the tree (ctrl-j from prompt).
+      :ok = Runtime.inject_event(pid, ctrl("j"))
+      assert ui(pid).focus == :tree
+      # forest: run "r" (row 0) -> tool "t" (row 1). j moves down, k up.
+      :ok = Runtime.inject_event(pid, key("j"))
+      assert SpellAgent.Tui.Ui.cursor_of(ui(pid), :tree) == 1
+      :ok = Runtime.inject_event(pid, key("k"))
+      assert SpellAgent.Tui.Ui.cursor_of(ui(pid), :tree) == 0
+      # l on the root (has a child) descends to the first child (row 1).
+      :ok = Runtime.inject_event(pid, key("l"))
+      assert SpellAgent.Tui.Ui.cursor_of(ui(pid), :tree) == 1
+      # h ascends back to the parent (row 0).
+      :ok = Runtime.inject_event(pid, key("h"))
+      assert SpellAgent.Tui.Ui.cursor_of(ui(pid), :tree) == 0
+    end
+
+    test "a shifted printable types in INSERT mode", %{pid: pid} do
+      :ok = Runtime.inject_event(pid, key("enter"))
+      assert ui(pid).mode == :insert
       :ok = Runtime.inject_event(pid, %Key{code: "H", kind: "press", modifiers: ["shift"]})
       :ok = Runtime.inject_event(pid, %Key{code: "i", kind: "press", modifiers: []})
       :ok = Runtime.inject_event(pid, %Key{code: "!", kind: "press", modifiers: ["shift"]})
       assert app_state(pid).composer == "Hi!"
     end
 
-    test "a ctrl-printable that is unbound does NOT leak into the composer", %{pid: pid} do
-      # ctrl+z is bound nowhere; it must be dropped, not inserted as a glyph.
-      :ok = Runtime.inject_event(pid, ctrl("z"))
-      assert app_state(pid).composer == ""
-    end
-
-    test "esc quits (stops the app)", %{pid: pid} do
+    test "esc in NORMAL quits (stops the app)", %{pid: pid} do
       ref = Process.monitor(pid)
       :ok = Runtime.inject_event(pid, key("esc"))
       assert_receive {:DOWN, ^ref, :process, ^pid, _}, 1000
     end
   end
 
-  test "D2: a completed run via the live app lands its result in the answer pane", %{store: store} do
+  test "a completed run via the live app lands its result (status reflects done)", %{store: store} do
     {:ok, pid} =
       App.start_link(
         name: nil,
@@ -319,6 +350,8 @@ defmodule SpellAgent.Tui.AppTest do
         on_submit: fn _ -> {:ok, "the-answer-7"} end
       )
 
+    # Modal flow: Enter -> INSERT, type, Enter -> submit.
+    :ok = enter_insert(pid)
     :ok = type_string(pid, "q")
     :ok = Runtime.inject_event(pid, key("enter"))
     Process.sleep(50)
