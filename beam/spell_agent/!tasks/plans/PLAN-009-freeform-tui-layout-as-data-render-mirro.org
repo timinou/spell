@@ -1,0 +1,250 @@
+#+TITLE: Freeform TUI: layout-as-data, render mirror, gaze-as-lens
+#+STATE: ITEM
+#+SESSION_ID: 1511029ec58e9d42
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-20T20-59-50-422Z_1511029ec58e9d42.jsonl]]
+#+CUSTOM_ID: PLAN-009-freeform-tui-layout-as-data-render-mirro
+
+* Initial Message
+
+I want to give the agent full self-editing capabilities when I run it with `mix spell.tui --freeform` (or `mix spell.tui -f`). That means (for the v1) that in the context, you inject the prelude that corresponds to the defaults that are self-modifiable. and that the full TUI layout is shapeable through PTC Lisp, in a way that feels natural to it, in the appropriate harness/ namespace (or another if you have good reasons).
+
+Let's imagine together
+
+* Intention
+
+Give the agent full self-editing of the live TUI, GENERALLY AVAILABLE (no flag),
+by making the render surface the third live-data mirror beside the two that
+already exist:
+
+    project/2 : forest -> view-model   READ   mirror (telemetry clock)   EXISTS
+    react/3   : gaze   -> gaze'         WRITE  mirror (keystroke clock)   EXISTS (harness/ + keymap/)
+    layout    : tree   -> widgets       RENDER mirror (frame clock)       THIS PLAN
+
+The keystone realization (user): the gaze and the render tree UNIFY. There is no
+separate %Ui{} side-struct in the target design — there is ONE layout tree, and
+navigation is a LENS OPERATION that re-tags its nodes (focus/cursor/scroll/expand
+become tags ON the node they describe). chord -> intent -> named tree traversal
+-> re-tagged tree -> render. No gaze/layout sync is possible because there is
+nothing to sync.
+
+* Why this is achievable cheaply (grounded facts)
+
+1. ex_ratatui's NIF boundary ALREADY speaks PTC's language. ExRatatui.draw/2 ->
+   ExRatatui.Bridge.encode_commands! turns every %Widget{} struct into a
+   STRING-KEYED MAP (%{"type"=>"paragraph","text"=>...,"style"=>...}) before
+   crossing to Rust. PTC-Lisp emits string-keyed maps natively. The struct layer
+   is a typed skin over a map protocol. => reflection, not hand-written bindings.
+
+2. Every widget is a plain defstruct (~22 widgets under ExRatatui.Widgets.*). A
+   compile-time registry built by reflection (:application.get_key(:ex_ratatui,
+   :modules)) gives {name => %{module, fields}} with the field whitelist taken
+   FROM the struct itself. Upstream adds a widget/field -> it appears in the PTC
+   surface AND the prelude automatically (no drift, no magic).
+
+3. The Lens layer (lib/spell_agent/hist/lens.ex + priv/hist/lenses/*.ptc) is the
+   EXACT template: "Elixir materializes, PTC transforms." Plain .ptc files loaded
+   via @external_resource at compile, run through PtcRunner.Lisp.run. Layout is
+   the same shape, one clock over (frame instead of query).
+
+4. ex_rose_tree (~> 0.1) is already a dep — a zipper ("a cursor into a tree") —
+   exactly the primitive lens traversals over the layout tree need.
+
+5. render/2 (app.ex:100) + materialize/2 (app.ex:295) are the un-extracted render
+   mirror: materialize/2 INLINE-injects live state (selected: cursor, focus glyph)
+   into widget structs. That inline injection is precisely what becomes the
+   data/* bindings a slot program receives.
+
+* The layout tree (one shape, plain PTC maps)
+
+Three structural kinds + a universal :tags bag:
+
+  ;; SPLIT — divides its rect (Layout.split), holds children (the spine)
+  {:type "split" :dir "vertical"
+   :constraints [[:length 3] [:min 0] [:length 3]]   ;; +flex/spacing/margin opts
+   :children [...] :slot "frame"}
+
+  ;; PANE — a focusable region; :render is a view/ program over data/
+  {:type "pane" :slot "pane/tree" :focusable true
+   :tags {:focused false :cursor 0 :scroll 0 :overrides {}}
+   :render "(view/list {:items (get data/vms :tree) ...})"}
+
+  ;; LEAF — a concrete widget (reflected from ex_ratatui)
+  {:type "paragraph" :text "..." :style {:fg "green"}}
+
+:tags is where the old %Ui{} fields live now — ON the node they describe. cursor
+belongs to the pane it scrolls; :focused is a tag at most one node carries.
+
+Layout.split constraint grammar (confirmed, ex_ratatui/layout.ex):
+  {:length n}|{:percentage n}|{:min n}|{:max n}|{:ratio n d}|{:fill n}
+  opts: :flex (:legacy|:start|:end|:center|:space_between|:space_around)
+        :spacing n · :margin n · :horizontal_margin n · :vertical_margin n
+
+* Slots (named, independently shadowable, lens-addressable)
+
+  frame                      root — composes the regions
+  - status                   header strip (length 3)
+  - body                     pane arrangement (min 0) — THE ARBITRARY-INTERFACE SLOT
+    - pane/history
+    - pane/tree
+    - pane/detail
+  - composer                 input (length 3)
+
+Default = native-as-data (a shipped, snapshot-tested .ptc). Override = shadow the
+slot in LayoutRegistry. Exact ToolRegistry/KeymapRegistry pattern, third instance.
+frame is the root whose default CALLS status/body/composer (decided: nested, not
+flat — sub-slot override needs no frame edit; frame override is the ditch-everything
+escape).
+
+Pressure-test (every usecase -> cheapest slot; cost scales with ambition):
+  recolor errors/borders         -> theme cell (Edge T)        one-liner
+  status shows cost+model        -> status                     one-liner
+  restyle / re-render tree pane  -> pane/tree                  one-liner
+  add a pane (display)           -> body (+1 child)            medium
+  add cost-histogram pane        -> body (projects data/forest) medium
+  rearrange columns              -> body                       one-liner
+  ditch inspector -> dashboard   -> body or frame              full program
+  move composer to top           -> frame                      one-liner
+Nothing unreachable; the 90% case is a one-liner. Body-as-a-slot is the
+arbitrary-interface unlock (owns splits AND can project data/forest itself, so a
+new region needs no Elixir project/2).
+
+* Data environment each slot program sees (data/*)
+
+  data/area    {:x :y :width :height}                 rect this slot fills
+  data/ui      gaze map (focus/cursors/mode/overrides/turn/scroll/panes)
+  data/vms     {pane-name => view-model}              the READ mirror, already projected
+  data/forest  {span-id => span}                      arbitrary new projections
+  data/status  {:running? :result :last-prompt :model :cost}
+  data/tree    the live layout tree (for lens ops)
+
+Namespaces inside a slot: view/ (reflected builders) + harness/* read queries
+(descendants/ancestors/cursor-id, already pure) + lens/* + pure PTC. NO
+side-effecting tool/ — render is pure over injected data.
+
+* Render contract (one recursive walk)
+
+split node -> Layout.split(rect, dir, constraints, opts), zip children to sub-rects
+             recursively
+pane node  -> run :render (view/ program) with data/* incl. this node's :tags ->
+             a placement subtree, recurse
+leaf       -> Materialize.to_struct(map) -> %Widget{} -> existing Bridge path
+             (keeps ALL Bridge validation, text coercion, custom-widget expansion)
+
+* Navigation = lens ops (lens/ namespace) — the user's keystone
+
+Intents are NAMED TRAVERSALS, pure tree->tree (same signature as react/3, value
+type is now the tree). A focus keymap IS "differently tag the layout tree to
+reflect the new state":
+
+  ;; "focus/next" — move :focused tag to next focusable node (zipper-ordered)
+  (lens/retag-focus data/tree :next)
+  ;; "cursor/down" — inc :cursor on the node holding :focused
+  (lens/update-focused data/tree (fn [n] (update-in n [:tags :cursor] inc)))
+  ;; "span/expand" — set override on the focused pane's cursored span
+  (lens/update-focused data/tree
+    (fn [p] (assoc-in p [:tags :overrides (harness/cursor-id)] "expanded")))
+
+lens/* primitives (~6, thin Elixir over ex_rose_tree zipper, all pure):
+  lens/focused (find tagged node) · lens/retag-focus (move focus tag) ·
+  lens/update-focused · lens/at-slot (address by slot) · lens/update-at ·
+  lens/focusables (ordered focusable list)
+Agent can author NEW traversals as PTC (e.g. "focus the pane with most error
+spans") because the intent body is a lens program over the live tree.
+
+* Failure ladder (Edge B — confirmed, per slot)
+
+  slot program ok            -> use its tree
+  raises/garbage/wrong shape -> last-good tree for THAT slot (cached)
+  none ever succeeded        -> native default .ptc for that slot
+  (native default is snapshot-tested; cannot fail) -> status strip shows the error
+Per-slot scope: a bad :status never touches :body. Reuse SceneRender headless
+buffer snapshots to test the native defaults.
+
+* In-scope deliverables (v1)
+
+1. SpellAgent.Tui.LayoutRegistry — Agent, mirrors KeymapRegistry; default tree as
+   data; slot shadowing; last-good cache.
+2. SpellAgent.Tui.Reflect — compile-time widget registry from ex_ratatui structs
+   (the no-drift engine). Also reflect ExRatatui.Theme slots (Edge T).
+3. SpellAgent.Tui.Materialize — PTC map -> %Widget{} (+ nested :style/:block auto-
+   coerce when a field's struct default is itself a struct), then Bridge unchanged.
+4. view/ namespace — reflected builders + view/split. PLAIN PTC primitives
+   (user pref + Edge P): builders are pure fns, not tool-call-routed.
+5. layout/ namespace — set · show · tree · reset (homoiconic surface).
+6. lens/ namespace — the ~6 traversal primitives; PORT %Ui{} navigation to
+   tags-on-tree.
+7. Default layout + nav reactions rewritten as .ptc under priv/ (dogfood).
+8. render/2 -> ONE path: resolve tree from LayoutRegistry -> walk -> Bridge.
+   Collapses the has_history?/two-path branch that exists today.
+9. theme/ namespace (Edge T) — reflected from ExRatatui.Theme; view/ builders read
+   theme defaults.
+10. In-scope SAME-NODE inspector view: layout tree as live PTC code-as-data,
+    refreshing as the run streams (debounce from render clock OK). Narrow version;
+    cross-session is FUP-INSPECTOR.
+11. Prelude: static .md + Handlebars over Reflect registry; ALWAYS-INJECTED.
+12. Snapshot + unit tests via existing SceneRender path.
+
+* Build order (DAG)
+
+  Reflect --> Materialize --> view/ --> LayoutRegistry --> render/2 cutover
+                                 |                              ^
+                         lens/ (tags-on-tree) -- default .ptc --+
+  theme/ parallels view/. Inspector + prelude after render/2 cutover.
+
+* Boundaries / non-goals (v1)
+
+- A pane ADDED in body renders (display) but focus/navigation for a NEW pane name
+  is OUT: gaze panes list + Ui.safe_pane atom whitelist + focus_stack/keymaps
+  don't know it. New NAVIGABLE panes = FUP-NAVPANES (extend the bounded-coercion
+  vocabulary + focus ring). keymap/ + reactions already cover behaviour for panes
+  the gaze knows.
+- Cross-session inspector = FUP-INSPECTOR.
+- Atom-DoS hardening of the widened surface = FUP-ATOMS (experiment-first per
+  user; secure refactor tracked, not blocking).
+- Prelude surface-on-first-UI-intent = FUP-SURFACING.
+- Durable authored layouts across sessions = FUP-DURABLE-LAYOUTS.
+
+* References (code, verified this session)
+
+- Render mirror seam: lib/spell_agent/tui/app.ex render/2 (L100), materialize/2 (L295)
+- Bridge struct->map: ../ex_ratatui-vendored/lib/ex_ratatui/bridge.ex encode_widget/1
+- Layout grammar: ../ex_ratatui-vendored/lib/ex_ratatui/layout.ex split/4
+- Lens template: lib/spell_agent/hist/lens.ex (project/run, @external_resource .ptc)
+- Reaction DSL: lib/spell_agent/tui/{keys.ex,keymap_registry.ex,reaction/ptc.ex},
+  harness.ex, README "The Reaction DSL" section
+- Gaze today: lib/spell_agent/tui/ui.ex (%Ui{} — the struct that becomes tags)
+- Config surface: lib/spell_agent/config.ex (define-config pattern)
+
+* Settled decisions (user, this session)
+
+D1. UNIFY FROM THE START. Do not sequence additive-render-mirror first then
+    gaze-as-lens later. The %Ui{} side-struct is REPLACED by tags-on-tree in v1;
+    keys.ex dispatch + every pane react/3 are ported to lens/ traversals as part
+    of v1, not a fast-follow. Rationale: experimental, single-user (us), go bold
+    and apply the full vision. The unified tree (shape/navigate/render = one
+    value) is the whole point; a half-step that keeps %Ui{} would carry the very
+    sync seam the design exists to delete.
+
+D2. REFLECT ExRatatui.Theme NOW (Edge T in v1, not deferred). theme/ namespace is
+    built by reflection over ExRatatui.Theme's named slots, same engine as the
+    widget Reflect registry. view/ builders read theme defaults (a builder with no
+    explicit :style resolves its color from the theme slot for its role). theme/set
+    re-tags the theme cell; cross-cutting recolor ("errors magenta") is one op, not
+    a per-slot edit. Accept the slight builder<->theme coupling — it is the correct
+    home for cross-cutting color and keeps recolor O(1).
+
+* Consequence of D1 on build order (revised DAG)
+
+  Reflect ──> Materialize ──> view/ ─┐
+       └────> theme/ ───────────────┤
+  ex_rose_tree zipper ──> lens/ ─────┼──> LayoutRegistry ──> render/2 cutover
+  (tags-on-tree REPLACES %Ui{})      │         (single render path)
+  default layout + nav .ptc ─────────┘──> inspector view ──> prelude
+
+  The %Ui{} -> tags migration is on the critical path (lens/ + render/2 cutover),
+  not parallel. ui.ex transforms (focus/cursor/expand/turn/scroll) become lens/
+  ops over node :tags; ui.ex's safe_* bounded coercions are RETAINED (still the
+  atom chokepoint, now guarding tag/slot vocab). Keys.dispatch routes intent ->
+  lens traversal of data/tree instead of Ui transform. Reaction.Ptc binds
+  data/tree (not data/ui) — though a compat data/ui projection MAY be kept as a
+  read-only convenience view derived from the tree's tags.

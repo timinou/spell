@@ -1,0 +1,71 @@
+#+TITLE: Cross-session live inspector: spell.inspector --session ID
+#+STATE: ITEM
+#+SESSION_ID: 1511029ec58e9d42
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-20T20-59-50-422Z_1511029ec58e9d42.jsonl]]
+#+CUSTOM_ID: FUP-006-cross-session-live-inspector-spell-inspe
+
+* Initial Message
+
+I want to give the agent full self-editing capabilities when I run it with `mix spell.tui --freeform` (or `mix spell.tui -f`). That means (for the v1) that in the context, you inject the prelude that corresponds to the defaults that are self-modifiable. and that the full TUI layout is shapeable through PTC Lisp, in a way that feels natural to it, in the appropriate harness/ namespace (or another if you have good reasons).
+
+Let's imagine together
+
+* Parent
+PLAN-009 (Freeform TUI). The in-scope inspector is SAME-NODE/narrow (reads the
+registries in-process). This FUP is the CROSS-SESSION, separate-process version.
+
+* Vision (user)
+Point a NEW session at the session id of a RUNNING session and inspect it LIVE —
+"because it is the BEAM." A mix task `spell.inspector --session <id>` (or
+`spell.tui --inspect <id>`) attaches read-only to a live agent run and renders
+its layout tree as homoiconic PTC code-as-data: the interface DEFINITION and its
+CURRENT STATE (tags + the live data/* inside it), updating as the inspected
+session streams (e.g. updates as the user types — debounce from the inspected
+TUI's render clock if char-by-char is too chatty).
+
+* Why the BEAM makes this cheap
+A second OS process / node can observe a running session's state with no IPC
+ceremony beyond process registry + telemetry. The layout tree IS plain data
+(PLAN-009), so "show the layout instance as data" is a pretty-print of a value
+already in memory. No serialization protocol to invent — it's the same map the
+renderer walks.
+
+* What v1 inspector (in PLAN-009 scope) already gives
+- Same-node: read LayoutRegistry + live forest + gaze directly, render the tree
+  as PTC source in a pane. Proves the "interface as inspectable code-as-data"
+  idea with zero transport work.
+
+* What THIS FUP adds (the cross-session delta)
+1. Session addressability by id: a registry mapping session_id -> the App /
+   Store / registries pids of the running session (Hist already threads a stable
+   session_id; Tui.Store is a named/attachable process). Likely a Registry or a
+   :global/:pg registration keyed by session_id.
+2. Read-only attach: the inspector subscribes to the target Store's
+   {:store_updated} telemetry and reads its LayoutRegistry, WITHOUT being able to
+   mutate it (inspector is a viewer; it may fork a layout into ITS OWN registry).
+3. Transport: same-node first (shared BEAM, direct pid). Cross-node via
+   ExRatatui.Distributed (already vendored) or :erpc is a later sub-step.
+4. Debounce policy: coalesce high-frequency updates (typing) to a render budget;
+   the inspected session's render clock is the natural source.
+5. The inspector view itself is a freeform layout (dogfood): it is just a
+   spell.tui whose body slot renders the TARGET session's tree-as-data.
+
+* Open questions
+- Discovery: list inspectable sessions (a `spell.inspector` with no id shows a
+  picker of live session_ids). Needs the session registry from (1).
+- Security/consent: any session inspectable, or opt-in? Experiment-first: allow
+  all local sessions; revisit.
+- Two-way: can the inspector PUSH a layout to the inspected session (live
+  pairing / teaching)? Tempting, out of scope here — viewer only.
+
+* Acceptance
+- Two spell sessions running; `spell.inspector --session <id-of-A>` from B.
+- B renders A's layout tree as PTC code-as-data, with current tags + live data.
+- As A streams spans / the user types in A, B's view updates (debounced).
+- B cannot mutate A's registries (read-only proven by attempt -> no effect).
+
+* References
+- lib/spell_agent/tui/store.ex (attach/subscribe — the telemetry mirror)
+- lib/spell_agent/hist/session.ex / hist.ex (stable session_id threading)
+- ../ex_ratatui-vendored/lib/ex_ratatui/distributed.ex (cross-node transport, vendored)
+- PLAN-009 deliverable 10 (the in-scope same-node inspector this extends)

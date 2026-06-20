@@ -1,0 +1,65 @@
+#+TITLE: Prelude surface-on-first-UI-intent mechanism
+#+STATE: ITEM
+#+SESSION_ID: 1511029ec58e9d42
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-20T20-59-50-422Z_1511029ec58e9d42.jsonl]]
+#+CUSTOM_ID: FUP-008-prelude-surface-on-first-ui-intent-mecha
+
+* Initial Message
+
+I want to give the agent full self-editing capabilities when I run it with `mix spell.tui --freeform` (or `mix spell.tui -f`). That means (for the v1) that in the context, you inject the prelude that corresponds to the defaults that are self-modifiable. and that the full TUI layout is shapeable through PTC Lisp, in a way that feels natural to it, in the appropriate harness/ namespace (or another if you have good reasons).
+
+Let's imagine together
+
+* Parent
+PLAN-009 (Freeform TUI). v1 ALWAYS-INJECTS the freeform prelude. This FUP makes
+injection LAZY — surfaced on first UI-intent — to save context tokens.
+
+* Context
+The freeform capability is always wired (no flag). But TELLING the agent about it
+every session costs context tokens. v1 keeps it simple: always-inject the
+(compact, reflected) prelude. This FUP adds a SURFACING mechanism so the prelude
+(or the heavy parts: the full reflected widget table) appears only when the agent
+actually shows UI intent.
+
+* The missing piece (user): "you'd need a mechanism to make things surface"
+There is no current hook to inject context mid-session in response to a detected
+intent. Design that hook.
+
+* Design sketch
+1. Tiered prelude: a TINY always-on stub ("this TUI is reshapeable; call
+   (layout/help {}) or (layout/show ...) to learn the surface") + the FULL
+   reflected table delivered on demand.
+2. Surfacing triggers (any):
+   - explicit: agent calls (layout/help {}) / (view/help {}) -> returns the full
+     reflected prelude as a tool RESULT (cheapest, no new mechanism — just a
+     help verb). THIS ALONE may suffice; evaluate before building more.
+   - implicit: the session loop detects a UI-intent signal (agent references a
+     view//layout//theme/ verb, or a user message matches a UI-intent classifier)
+     and injects the full prelude as a system addendum for subsequent turns.
+3. Injection hook: extend SpellAgent.Session (system_prompt assembly already
+   supports a live "system-addendum" via Config) to support a DYNAMIC,
+   event-triggered addendum that turns on once UI-intent is seen and persists for
+   the session.
+4. Idempotency: inject once per session; subsequent turns see it via the
+   continuation tape (Hist) without re-injection.
+
+* Recommendation
+Start with the explicit (layout/help {}) verb — it is a tool result, needs NO new
+plumbing, and is discoverable from the tiny stub. Only build the implicit
+classifier+addendum hook if measurement shows the stub alone underperforms.
+
+* Acceptance
+- Tiny stub present every session (cheap).
+- (layout/help {}) returns the full reflected prelude (slot table + widget table +
+  examples) as a tool result.
+- (optional) implicit trigger injects the full prelude as a persistent addendum
+  on first detected UI-intent, once per session, visible in later turns via the
+  continuation tape.
+- Token measurement: average session prelude cost drops vs always-inject, with no
+  loss of freeform usage success rate.
+
+* References
+- lib/spell_agent/session.ex (system_prompt/0, "system-addendum" via Config)
+- lib/spell_agent/config.ex (live addendum cell)
+- lib/spell_agent/hist (continuation tape — addendum persistence across turns)
+- PLAN-009 deliverable 11 (the always-inject prelude this optimizes)

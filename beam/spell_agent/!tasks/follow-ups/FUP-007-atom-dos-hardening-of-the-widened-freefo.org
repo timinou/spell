@@ -1,0 +1,72 @@
+#+TITLE: Atom-DoS hardening of the widened freeform PTC surface
+#+STATE: ITEM
+#+SESSION_ID: 1511029ec58e9d42
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-20T20-59-50-422Z_1511029ec58e9d42.jsonl]]
+#+CUSTOM_ID: FUP-007-atom-dos-hardening-of-the-widened-freefo
+
+* Initial Message
+
+I want to give the agent full self-editing capabilities when I run it with `mix spell.tui --freeform` (or `mix spell.tui -f`). That means (for the v1) that in the context, you inject the prelude that corresponds to the defaults that are self-modifiable. and that the full TUI layout is shapeable through PTC Lisp, in a way that feels natural to it, in the appropriate harness/ namespace (or another if you have good reasons).
+
+Let's imagine together
+
+* Parent
+PLAN-009 (Freeform TUI). User directive: "we're experimenting, delight first,
+security second, as long as the secure refactor is in an FUP." This is that FUP.
+
+* Context
+PLAN-009 widens the PTC->Elixir surface substantially: view/ builders, layout/
+ops, lens/ traversals, theme/ ops, and the Materialize map->struct path. Each
+introduces new string->atom coercion points (widget type strings, field names,
+slot names, constraint kinds, style colors/modifiers, theme slot names). BEAM
+atoms are never GC'd, so any String.to_atom on attacker/agent-controlled strings
+is an atom-table-DoS vector. The codebase ALREADY has the right defense pattern;
+this FUP makes the freeform surface conform to it everywhere.
+
+* The existing pattern to conform to (do not reinvent)
+- lib/spell_agent/tui/ui.ex: safe_pane/safe_dir/safe_visibility/safe_mode —
+  lookup_known/2 compares STRINGS against a fixed atom set, never interns.
+- lib/spell_agent/tui/keymap_registry.ex: define_intent/1 — bounded count
+  (@max_runtime_intents 256), domain/verb shape regex, length cap
+  (@max_intent_bytes), intern-once via String.to_existing_atom-then-create.
+
+* Hardening checklist (each must funnel through a bounded chokepoint)
+1. Widget type strings -> module: resolve via the Reflect registry (a FIXED map
+   built at compile from ex_ratatui structs). Unknown type -> error value, never
+   intern. (Naturally safe — registry is closed.)
+2. Field names -> struct keys: whitelist = the struct's OWN keys (from Reflect).
+   Coerce only known field strings to the existing atoms; drop unknown. Use
+   String.to_existing_atom guarded, or pre-build a string->atom map per widget.
+3. Style colors/modifiers/border types/alignments/flex: these are FIXED atom
+   vocabularies in ex_ratatui (Style.color, border_type, etc.). Build safe_*
+   coercions exactly like Ui.safe_pane from those known sets.
+4. Slot names: closed set in v1 (frame/status/body/composer/pane/*). Bounded
+   registry if/when runtime slots are added (see FUP-005 pane registry — same
+   mechanism).
+5. Constraint kinds (length/percentage/min/max/ratio/fill) + dir
+   (horizontal/vertical): fixed sets -> safe coercion.
+6. lens/ intent names: already covered by KeymapRegistry.define_intent bounds.
+
+* Acceptance
+- A fuzz/property test (stream_data already a test dep) feeds random strings into
+  every freeform coercion point and asserts :erlang.system_info(:atom_count) does
+  NOT grow beyond a fixed delta after N iterations.
+- Every map->struct / view/ / layout/ / theme/ coercion uses a known-set lookup
+  or the Reflect-derived whitelist; grep shows no raw String.to_atom on
+  agent-controlled input in the freeform modules.
+- Materialize rejects unknown widget types / fields with a value error (surfaced
+  in the failure ladder), never a crash, never an intern.
+
+* Notes
+- Reflect makes most of this FALL OUT for free (closed registry + struct-key
+  whitelist). The manual work is the fixed-vocabulary safe_* coercions for
+  style/border/constraint enums — mechanical, mirrors Ui.safe_*.
+- Keep delight-first during PLAN-009 build; land this before any non-experimental
+  exposure.
+
+* References
+- lib/spell_agent/tui/ui.ex (safe_* / lookup_known — the template)
+- lib/spell_agent/tui/keymap_registry.ex (bounded intern — the template)
+- ../ex_ratatui-vendored/lib/ex_ratatui/style.ex (fixed color/modifier vocab)
+- ../ex_ratatui-vendored/lib/ex_ratatui/widgets/block.ex (border_type vocab)
+- ../ex_ratatui-vendored/lib/ex_ratatui/layout.ex (constraint/flex vocab)

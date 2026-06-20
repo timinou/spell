@@ -1,0 +1,66 @@
+#+TITLE: Durable authored layouts: persist freeform slots across sessions
+#+STATE: ITEM
+#+SESSION_ID: 1511029ec58e9d42
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-20T20-59-50-422Z_1511029ec58e9d42.jsonl]]
+#+CUSTOM_ID: FUP-009-durable-authored-layouts-persist-freefor
+
+* Initial Message
+
+I want to give the agent full self-editing capabilities when I run it with `mix spell.tui --freeform` (or `mix spell.tui -f`). That means (for the v1) that in the context, you inject the prelude that corresponds to the defaults that are self-modifiable. and that the full TUI layout is shapeable through PTC Lisp, in a way that feels natural to it, in the appropriate harness/ namespace (or another if you have good reasons).
+
+Let's imagine together
+
+* Parent
+PLAN-009 (Freeform TUI). v1 LayoutRegistry is in-memory, session-scoped (same
+posture as ToolRegistry + KeymapRegistry today). This FUP makes authored layouts
+DURABLE across sessions.
+
+* Context
+PLAN-009 ships LayoutRegistry as an Agent (in-memory), so a layout the agent (or
+user) authors is lost on exit — identical to the deferred tool-persistence and
+keymap-persistence follow-ups already noted for ToolRegistry/KeymapRegistry. This
+FUP persists all three classes of authored runtime data, since they share a
+storage need and a substrate already exists.
+
+* The substrate already exists
+Hist (PLAN-001) is a durable, homoiconic store on Khepri (tree-like on-disk, Ra
+WAL). Authored layouts are PTC SOURCE TEXT — exactly the code-as-data Hist is
+built to store. Persisting a layout = storing its slot->source map under a stable
+key (per-project, or per-session-lineage).
+
+* Design questions
+1. Scope of durability: global (this user's default layout everywhere), per
+   project (cwd), or per session-lineage (resumed conversation keeps its UI)?
+   Likely per-project default + per-session override, mirroring how Hist resumes
+   the most recent session.
+2. What persists: LayoutRegistry slot overrides, KeymapRegistry bindings +
+   reactions, ToolRegistry defined tools, Config (model/thinking/addendum). A
+   unified "authored runtime state" snapshot vs per-registry stores.
+3. Load timing: on App mount (like Hist resume_session_id), hydrate the
+   registries from the durable store before first render.
+4. Reset/scratch: a way to start from native defaults (ignore persisted layout)
+   for debugging — `spell.tui --fresh`.
+
+* Proposed change
+- LayoutRegistry gains save/load against a Hist-backed (Khepri) store, keyed by
+  project + optional session lineage.
+- On mount, hydrate slot overrides from the store (falling through the PLAN-009
+  failure ladder if a persisted slot is now invalid — e.g. references a widget a
+  newer ex_ratatui renamed: last-good -> native default still protects).
+- Consider unifying with ToolRegistry/KeymapRegistry persistence into one
+  "authored state" snapshot, since they share substrate + lifecycle.
+
+* Acceptance
+- Author a layout (layout/set on status), quit, relaunch -> the custom status
+  persists.
+- A persisted slot that no longer materializes (stale widget) degrades via the
+  failure ladder (native default), never bricks mount.
+- `spell.tui --fresh` ignores persisted layout and starts native.
+- Persistence is per-project (different cwd -> different default layout).
+
+* References
+- lib/spell_agent/hist/store/khepri.ex (durable substrate)
+- lib/spell_agent/hist.ex (session lineage / resume model)
+- lib/spell_agent/tui/app.ex (mount hydration point, resume_session_id pattern)
+- README "Status (v0)" — notes durable persistence of defined tools as a deferred
+  follow-up; this generalizes it to all authored runtime state.

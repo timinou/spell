@@ -1,0 +1,65 @@
+#+TITLE: Navigable agent-added panes: extend safe_pane vocabulary + focus ring
+#+STATE: ITEM
+#+SESSION_ID: 1511029ec58e9d42
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-20T20-59-50-422Z_1511029ec58e9d42.jsonl]]
+#+CUSTOM_ID: FUP-005-navigable-agent-added-panes-extend-safe
+
+* Initial Message
+
+I want to give the agent full self-editing capabilities when I run it with `mix spell.tui --freeform` (or `mix spell.tui -f`). That means (for the v1) that in the context, you inject the prelude that corresponds to the defaults that are self-modifiable. and that the full TUI layout is shapeable through PTC Lisp, in a way that feels natural to it, in the appropriate harness/ namespace (or another if you have good reasons).
+
+Let's imagine together
+
+* Parent
+PLAN-009 (Freeform TUI). This is the explicit v1 BOUNDARY: body slots render
+arbitrary visuals, but a pane the agent ADDS is not navigable/focusable.
+
+* Problem
+In PLAN-009 v1 the agent can add a pane to the `body` slot and it RENDERS, but it
+cannot receive focus or keyboard navigation. Three hard walls, all by design
+(atom-DoS defense + compiled focus routing):
+
+1. Gaze pane vocabulary is a FIXED whitelist. lib/spell_agent/tui/ui.ex:
+   @panes [:tree, :detail, :prompt] and safe_pane/1 maps strings to atoms ONLY
+   within that set (never interns) — the W3r atom-table-DoS chokepoint. A new
+   pane name "cost-histo" coerces to nil, so focus(ui, "cost-histo") is a no-op.
+2. focus_stack/1 (lib/spell_agent/tui/app.ex:90-95) is a compiled dispatch on
+   pane atom -> context module list. A new pane has no clause -> falls to [Global]
+   -> no pane-local keymap.
+3. Keymap contexts are compiled pane modules (SpanTree/Detail/...). A runtime pane
+   has no module, so no compiled keymap/0 or react/3.
+
+* Why deferred (not a v1 blocker)
+keymap/ + reactions ALREADY cover behaviour for panes the gaze knows. The
+arbitrary-INTERFACE goal (display any widget tree in body) is met in v1. Only
+INTERACTIVITY of a brand-new pane identity is deferred. Clean seam.
+
+* Proposed change
+Make the pane vocabulary RUNTIME-EXTENSIBLE through the same bounded-coercion
+chokepoint, not a compiled list:
+
+- Replace the fixed @panes whitelist with a runtime pane REGISTRY (mirror
+  KeymapRegistry.define_intent/1: bounded count, domain-shaped name, intern-once,
+  capped — the existing @max_runtime_intents pattern). safe_pane/1 consults it.
+- focus_stack/1 becomes data: a pane registry entry carries its context-stack
+  (which keymap contexts apply). Default new pane -> [Global] + an optional
+  agent-authored reaction context.
+- A runtime pane's keymap/react come from KeymapRegistry (already supports
+  per-context reactions as PTC source) keyed by the new pane name as context.
+- Once gaze-as-lens (PLAN-009) lands, "focusable" is a TAG on the layout node, so
+  the focus ring is lens/focusables over the tree — the registry mainly needs to
+  bless the pane NAME atom + cursor/scroll tag handling. Re-evaluate whether a
+  separate registry is even needed, or whether the tree tags subsume it.
+
+* Acceptance
+- Agent adds a pane via layout/set on body with :focusable true + a name.
+- That name coerces through safe_pane (now registry-backed) without unbounded
+  atom creation.
+- ctrl+j/k focus ring includes the new pane (lens/focusables sees it).
+- A keymap/define-reaction bound in the new pane's context fires when focused.
+- Atom table cannot grow unboundedly (bounded registry; cap enforced + tested).
+
+* References
+- lib/spell_agent/tui/ui.ex (safe_pane/1, @panes, @dirs — bounded coercion)
+- lib/spell_agent/tui/app.ex (focus_stack/1 L90, @default_panes L43)
+- lib/spell_agent/tui/keymap_registry.ex (define_intent/1 — the bounded-intern template)
