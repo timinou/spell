@@ -1,0 +1,40 @@
+;; form_tree lens (PLAN-008 FUP-002) — STRUCTURAL queries over past programs.
+;;
+;; MOVE-C put the executed CoreAST on each node; Hist projects it to a PTC-native
+;; tree ("form_tree") of {"node" KIND, "name" ?, "value" ?, "children" [...]}.
+;; Because the tree is plain data (no Elixir tuples), a lens can walk it and ask
+;; STRUCTURAL questions the four built-in lenses can't — without an Elixir change.
+;;
+;; This lens answers: "every node of kind `data/find` that appears ANYWHERE inside
+;; a node of kind `data/within`, across the session." E.g. {within: "let", find:
+;; "tool_call"} = "tool calls nested in a let". `data/within` may be omitted (nil)
+;; to search the whole tree.
+;;
+;; Returns: [{"node_id" .. "seq" .. "name" ..} ...] — one hit per matching subtree
+;; node, tagged with the turn it came from.
+(let [within data/within
+      find   data/find
+      ;; collect every descendant node (pre-order) of a tree as a flat list
+      flatten (fn flatten [t]
+                (if (map? t)
+                  (cons t (mapcat flatten (get t "children")))
+                  []))
+      ;; hits of kind `find` anywhere under tree `t`
+      finds (fn [t] (filter (fn [n] (= (get n "node") find)) (flatten t)))
+      ;; for one node's form_tree, the matching hits: if `within` is set, only
+      ;; those under a `within`-kind subtree; else anywhere in the tree.
+      hits-in (fn [tree]
+                (if within
+                  (->> (flatten tree)
+                       (filter (fn [n] (= (get n "node") within)))
+                       (mapcat finds))
+                  (finds tree)))]
+  (->> data/nodes
+       (mapcat (fn [n]
+                 (let [tree (get n "form_tree")]
+                   (if tree
+                     (map (fn [h] {"node_id" (get n "id")
+                                   "seq"     (get n "seq")
+                                   "name"    (get h "name")})
+                          (hits-in tree))
+                     []))))))

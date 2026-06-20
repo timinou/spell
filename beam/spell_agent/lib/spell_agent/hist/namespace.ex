@@ -18,6 +18,7 @@ defmodule SpellAgent.Hist.Namespace do
       (hist/forms {:tool "edit"})        ; turns whose program calls (tool/edit ...) (C4, PTC lens)
       (hist/defs {:sym "plan"})          ; where a symbol was defined (C4, PTC lens)
       (hist/provenance {:sym "plan"})    ; where `plan` was FIRST bound + later rebinds (FUP-001 lens)
+      (hist/form_tree {:within "let" :find "tool_call"})  ; structural query over the program AST (FUP-002 lens)
       (hist/cost {})                     ; token spend across the session (C4/C5, PTC lens)
       (hist/lens {:source "(->> data/nodes ...)"})  ; run an AGENT-AUTHORED lens (PLAN-005)
       (hist/forms! {...})                ; the Elixir fast-path / parity oracle for any lens

@@ -37,6 +37,7 @@ defmodule SpellAgent.Hist.Lens do
         "defs"       => [String.t()],             # symbols defined in the form AST
         "introduced" => [String.t()],             # names this turn FIRST bound (FUP-001)
         "bound"      => [String.t()],             # ALL names in the turn's delta (FUP-001)
+        "form_tree"  => map() | nil,              # the program as a PTC-native tree (FUP-002)
         "tokens"     => %{"input" => int, "output" => int}
       }
 
@@ -60,7 +61,8 @@ defmodule SpellAgent.Hist.Lens do
     "defs" => "defs.ptc",
     "tool_calls" => "tool_calls.ptc",
     "cost" => "cost.ptc",
-    "provenance" => "provenance.ptc"
+    "provenance" => "provenance.ptc",
+    "form_tree" => "form_tree.ptc"
   }
 
   for {_name, file} <- @lenses do
@@ -160,6 +162,10 @@ defmodule SpellAgent.Hist.Lens do
       # to find first-definition and `bound` to find rebinds, with no env fold.
       "introduced" => Enum.map(n.introduced, &to_string/1),
       "bound" => n.binds |> Map.keys() |> Enum.map(&to_string/1),
+      # FUP-002: the program AS A WALKABLE TREE (PTC-native, no tuples). Lets a
+      # lens ask structural questions of past programs ("tool calls inside a
+      # let", "defs whose value is a fn") without an Elixir change per question.
+      "form_tree" => form_tree(n.form),
       # `has_tokens` mirrors Query.cost's count rule: only nodes with a valid
       # integer token map are counted. A default {0,0} would be indistinguishable
       # from a real zero, so the flag preserves nodes_counted parity.
@@ -218,6 +224,58 @@ defmodule SpellAgent.Hist.Lens do
   defp name_str(n) when is_atom(n), do: Atom.to_string(n)
   defp name_str(n) when is_binary(n), do: n
   defp name_str(n), do: inspect(n)
+
+  @doc """
+  Project a CoreAST `form` into a PTC-NATIVE nested tree (FUP-002).
+
+  The executed AST (`Node.form`, MOVE-C) is an Elixir tuple shape — `{:def, name,
+  val, meta}`, `{:tool_call, name, args}`, `{:call, {:var, n}, args}`, `{:var,
+  n}`, `{:literal, v}`, and the compound forms (`:do`/`:let`/`:if`/`:fn`/...).
+  PTC has NO tuple type, so the tree is projected to JSON-able maps a sandboxed
+  lens can walk:
+
+      {:def, "x", {:literal, 1}}
+        => %{"node" => "def", "name" => "x",
+             "children" => [%{"node" => "literal", "value" => 1}]}
+
+  Leaves carry their datum: a `:var` its `"name"`, a `:literal`/`:quoted_symbol`
+  its `"value"`. Every other node is generic `%{"node" => kind, "children" =>
+  [...]}` — so an UPSTREAM AST RESHAPE still projects (unknown kinds included),
+  it never crashes a lens. The output contains NO tuples (the PTC-safety contract).
+  A non-AST `form` (a synthetic turn's source string, or nil) projects to nil.
+  """
+  @spec form_tree(term()) :: map() | nil
+  def form_tree({:var, name}), do: %{"node" => "var", "name" => name_str(name)}
+  def form_tree({:literal, value}), do: %{"node" => "literal", "value" => jsonable(value)}
+
+  def form_tree({:quoted_symbol, name}),
+    do: %{"node" => "quoted_symbol", "value" => name_str(name)}
+
+  def form_tree({:def, name, value, _meta}),
+    do: %{"node" => "def", "name" => name_str(name), "children" => [form_tree(value)]}
+
+  def form_tree({:tool_call, name, args}),
+    do: %{"node" => "tool_call", "name" => name_str(name), "children" => child_trees(args)}
+
+  def form_tree({:call, {:var, name}, args}),
+    do: %{"node" => "call", "name" => name_str(name), "children" => child_trees(args)}
+
+  # Generic AST node: a tagged tuple whose head is the kind. Drift-resilient — a
+  # node kind this projector has never seen still becomes a walkable subtree.
+  def form_tree(node) when is_tuple(node) and tuple_size(node) > 0 do
+    [kind | rest] = Tuple.to_list(node)
+    %{"node" => name_str(kind), "children" => child_trees(rest)}
+  end
+
+  def form_tree(list) when is_list(list), do: %{"node" => "seq", "children" => child_trees(list)}
+  def form_tree(_other), do: nil
+
+  # Project a list of child forms, dropping the nils (metadata maps, empty slots)
+  # so the tree carries only real structural children.
+  defp child_trees(args) when is_list(args),
+    do: args |> Enum.map(&form_tree/1) |> Enum.reject(&is_nil/1)
+
+  defp child_trees(other), do: other |> List.wrap() |> child_trees()
 
   # Collect every tool-call NAME present in the form AST (`{:tool_call, name, _}`),
   # as strings. The form-AST analogue of `def_names/1`; the basis of the `forms`
