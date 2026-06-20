@@ -11,7 +11,7 @@ defmodule SpellAgent.Session do
   backed tools map. So a tool authored mid-conversation is immediately callable.
   """
 
-  alias SpellAgent.{Anthropic, Config, Tools}
+  alias SpellAgent.{Anthropic, Config, Hist, Tools}
 
   @system_prompt """
   You are a node-free coding agent running on the BEAM (Elixir), powered by a
@@ -51,20 +51,92 @@ defmodule SpellAgent.Session do
     model = opts[:model] || Config.get("model")
     max_turns = opts[:max_turns] || 12
     llm = opts[:llm] || Anthropic.callback(model)
+    # A session id threads the conversation's durable history (PLAN-003 SEAM 1).
+    # The TUI passes a stable id so runs append to one conversation; a bare call
+    # mints a fresh one. `:hist` selects the store (default per Hist config).
+    session_id = opts[:session_id] || Hist.new_session_id()
+    hist_store = opts[:hist] || Hist.default_store()
+
+    # SEAM 0 (PLAN-006): load the L0 continuation — the verbatim replay tape +
+    # threaded def env from this session's PRIOR turns. This is the wire the TUI
+    # was missing: without it every turn starts cold and the agent forgets the
+    # conversation (it named itself one thing, then answered as another). Empty
+    # for turn 1 (a cold start, exactly right).
+    #
+    # Best-effort, same posture as recording (SEAM 1): a sick/oversized store must
+    # DEGRADE to a cold start, never crash the mission. History is an enhancement,
+    # never a dependency of answering.
+    %{tape: tape, memory: memory} = load_continuation(session_id, hist_store)
 
     agent =
       PtcRunner.SubAgent.new(
         prompt: prompt,
         system_prompt: system_prompt(),
-        tools: Tools.build_tools_map(),
+        # SEAM 5: merge the hist/* verbs so the agent can interrogate its OWN past
+        # mid-conversation ((hist/cost {}), (hist/forms {...}), authored lenses).
+        tools: Map.merge(Tools.build_tools_map(), Hist.verbs(session_id, store: hist_store)),
         ptc_transport: :tool_call,
         max_turns: max_turns
       )
 
-    case PtcRunner.SubAgent.run(agent, llm: llm) do
+    # `collect_messages: true` makes the loop populate `step.messages` (the full
+    # tape including tool_use/tool_result blocks) so this turn becomes the next
+    # turn's replay. `initial_messages`/`initial_memory` feed the prior tape +
+    # env IN, closing the loop.
+    result =
+      PtcRunner.SubAgent.run(agent,
+        llm: llm,
+        collect_messages: true,
+        initial_messages: tape,
+        initial_memory: memory
+      )
+
+    record_history(result, session_id, hist_store, prompt, model)
+
+    case result do
       {:ok, step} -> {:ok, step.return}
       {:error, step} -> {:error, step.fail || step.return || :unknown_failure}
     end
+  end
+
+  # Load the L0 continuation defensively: any store failure yields a cold start.
+  defp load_continuation(session_id, store) do
+    try do
+      Hist.continuation(session_id, store: store)
+    rescue
+      _ -> %{tape: [], memory: %{}}
+    catch
+      _, _ -> %{tape: [], memory: %{}}
+    end
+  end
+
+  # SEAM 1: persist the finished run into durable history, on BOTH success and
+  # failure (a failed run is history too). Recording is best-effort — a history
+  # write must never change the mission's outcome — so any error is swallowed.
+  defp record_history(result, session_id, store, prompt, model) do
+    step =
+      case result do
+        {:ok, s} -> s
+        {:error, s} -> s
+      end
+
+    if match?(%PtcRunner.Step{}, step) do
+      try do
+        # PLAN-008 SEAM 2: freeze the Step AT THE OWNER, synchronously here in the
+        # post-run path where every parked handle is still live, BEFORE handing
+        # it to the recorder. This materializes handles (tombstoning any that are
+        # unrealizable) so the recorder no longer races the HandleStore reaper
+        # from outside (the old `Hist.Realize.walk` hot path is gone).
+        frozen = PtcRunner.Step.freeze(step)
+        Hist.record(session_id, frozen, store: store, prompt: prompt, model: model)
+      rescue
+        _ -> :ok
+      catch
+        _, _ -> :ok
+      end
+    end
+
+    :ok
   end
 
   @doc "Assemble the system prompt, appending any live `system-addendum` config."

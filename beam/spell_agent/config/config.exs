@@ -16,3 +16,9 @@ import Config
 # (exqlite builds via elixir_make), so this only forces the ex_ratatui source
 # build — no other NIF is affected.
 config :rustler_precompiled, force_build_all: true
+
+# Load environment-specific config (test.exs quiets Khepri/Ra boot logs).
+if File.exists?(Path.join(__DIR__, "#{config_env()}.exs")) do
+  import_config "#{config_env()}.exs"
+end
+

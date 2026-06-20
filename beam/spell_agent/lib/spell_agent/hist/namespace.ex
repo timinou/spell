@@ -1,0 +1,203 @@
+defmodule SpellAgent.Hist.Namespace do
+  @moduledoc """
+  The `hist/*` PTC-Lisp tool namespace (PLAN-001, W4) — the homoiconic payoff.
+
+  Just as `SpellAgent.Harness` exposes `harness/*` (pure gaze transforms) and
+  `keymap/*` (live rebinding) as a string→fn tool map merged into the agent's
+  tools, this module exposes `hist/*` so the agent interrogates and operates on its
+  OWN conversation history in the same language it thinks in. History becomes a
+  first-class tool surface alongside `tool/*` and `harness/*`.
+
+  The verbs are thin adapters over the capability modules, closing over a
+  `Hist.Store` impl + the current `session_id`:
+
+      (hist/env {})                      ; reconstituted def-env at the cursor (C1)
+      (hist/tools {})                    ; runtime-authored tools live now (C1/C3)
+      (hist/messages {})                 ; the chat-lens slice (C1)
+      (hist/tool_calls {:name "edit" :status "error"})  ; realized tool calls, filtered (C4, PTC lens)
+      (hist/forms {:tool "edit"})        ; turns whose program calls (tool/edit ...) (C4, PTC lens)
+      (hist/defs {:sym "plan"})          ; where a symbol was defined (C4, PTC lens)
+      (hist/cost {})                     ; token spend across the session (C4/C5, PTC lens)
+      (hist/lens {:source "(->> data/nodes ...)"})  ; run an AGENT-AUTHORED lens (PLAN-005)
+      (hist/forms! {...})                ; the Elixir fast-path / parity oracle for any lens
+      (hist/spans {:node "<id>"})        ; the execution interior of a turn (C5)
+      (hist/window {:keep 3})            ; the compacted view; trimmed stay in store (C6)
+      (hist/recall {:like "postgres"})   ; pull a trimmed turn back (C6)
+      (hist/inventory {})                ; authored-tool inventory + usage (C3)
+      (hist/promote {:tool "blast"})     ; session tool -> durable (C3)
+      (hist/crystallize {:nodes [...] :name "hot" :source "..."})  ; slice -> Crystal (C2)
+
+  Results are plain data (maps/lists), so a program pipes them like any tool
+  result. A recall query is itself a PTC-Lisp program — the substrate and the
+  stored thing speak one tongue.
+  """
+
+  alias SpellAgent.Hist.{Crystallize, Lens, Query, Reconstitute, Spans, Tools, Window}
+  alias SpellAgent.Hist.Store
+
+  @doc """
+  The `hist/*` tool entries (qualified-name => `(args -> value)`), to merge into
+  the tools map a session runs with. Closes over the `impl` store module and the
+  `session_id` whose history these verbs read.
+  """
+  @spec tools(module(), String.t()) :: %{optional(String.t()) => (map() -> term())}
+  def tools(impl, session_id) do
+    # The PURE query lenses ship as PTC-Lisp (PLAN-005): hist/forms, hist/defs,
+    # hist/tool_calls, hist/cost + hist/lens (runtime authorship). They take the
+    # primary names. The Elixir Query verbs are kept under a `!` suffix as fast
+    # paths and parity oracles. Everything else (state/effect/invariant verbs)
+    # stays Elixir per the PLAN-004 boundary.
+    elixir = %{
+      "hist/env" => fn _args -> reconstitute_field(impl, session_id, :env) end,
+      "hist/tools" => fn _args -> reconstitute_field(impl, session_id, :tools) end,
+      "hist/messages" => fn _args -> reconstitute_field(impl, session_id, :messages) end,
+      "hist/find!" => fn args -> Query.tool_calls(impl, session_id, find_opts(args)) end,
+      "hist/forms!" => fn args -> forms(impl, session_id, args) end,
+      "hist/def!" => fn args -> Query.defq(impl, session_id, arg(args, "sym")) end,
+      "hist/cost!" => fn args -> Query.cost(impl, session_id, cost_opts(args)) end,
+      "hist/spans" => fn args -> spans(impl, session_id, args) end,
+      "hist/window" => fn args -> window(impl, session_id, args) end,
+      "hist/recall" => fn args -> Window.recall(impl, session_id, arg(args, "like") || "") end,
+      "hist/inventory" => fn _args -> inventory(impl, session_id) end,
+      "hist/promote" => fn args -> promote(impl, args) end,
+      "hist/crystallize" => fn args -> crystallize(impl, session_id, args) end
+    }
+
+    Map.merge(elixir, Lens.tools(impl, session_id))
+  end
+
+  # --- adapters ---
+
+  defp reconstitute_field(impl, session_id, field) do
+    case Reconstitute.at(impl, session_id) do
+      {:ok, state} -> Map.get(state, field)
+      {:error, reason} -> %{"err" => to_string(reason)}
+    end
+  end
+
+  defp find_opts(args) do
+    []
+    |> put_opt(:name, arg(args, "tool"))
+    |> put_opt(:status, status_atom(arg(args, "status")))
+  end
+
+  defp cost_opts(args) do
+    put_opt([], :since_mark, arg(args, "since_mark"))
+  end
+
+  defp forms(impl, session_id, args) do
+    case arg(args, "tool") do
+      nil -> []
+      name -> Query.forms(impl, session_id, {:tool_call, name})
+    end
+  end
+
+  defp spans(impl, session_id, args) do
+    case arg(args, "node") do
+      nil ->
+        []
+
+      nid ->
+        case Store.fetch(impl, {:node, session_id, nid}) do
+          {:ok, node} -> %{spans: Spans.spans(node), cost: Spans.cost(node)}
+          :error -> %{"err" => "no such node"}
+        end
+    end
+  end
+
+  defp window(impl, session_id, args) do
+    keep = arg(args, "keep") || 3
+
+    case Window.window(impl, session_id, keep_recent: keep) do
+      {:ok, %{shown: shown, trimmed: trimmed}} ->
+        %{shown: Enum.map(shown, & &1.id), trimmed: Enum.map(trimmed, & &1.id)}
+
+      {:error, reason} ->
+        %{"err" => to_string(reason)}
+    end
+  end
+
+  # inventory/promote reach SpellAgent.ToolRegistry (a GenServer); if it isn't
+  # running, Agent.get EXITS :noproc and would crash the PTC sandbox. Guard with
+  # a registered-process check and normalize all failures to an error map
+  # (BUG-003 B3, B4) so these verbs always return data.
+  defp inventory(impl, session_id) do
+    require_registry(fn -> Tools.inventory(impl, session_id) end)
+  end
+
+  defp promote(impl, args) do
+    case arg(args, "tool") do
+      nil ->
+        %{"err" => "tool name required"}
+
+      name ->
+        require_registry(fn -> normalize_err(Tools.promote(impl, name)) end)
+    end
+  end
+
+  defp require_registry(fun) do
+    if Process.whereis(SpellAgent.ToolRegistry),
+      do: fun.(),
+      else: %{"err" => "tool registry not running"}
+  end
+
+  defp normalize_err({:error, reason}), do: %{"err" => to_string(reason)}
+  defp normalize_err(other), do: other
+
+  defp crystallize(impl, session_id, args) do
+    node_ids = arg(args, "nodes") || []
+    name = arg(args, "name")
+    source = arg(args, "source")
+
+    cond do
+      is_nil(name) ->
+        %{"err" => "name required"}
+
+      is_binary(source) ->
+        do_crystallize(impl, session_id, node_ids, name, source, args)
+
+      true ->
+        # No explicit source: derive the deterministic slice source from the nodes.
+        derived = Crystallize.slice_source(impl, session_id, node_ids)
+        do_crystallize(impl, session_id, node_ids, name, derived, args)
+    end
+  end
+
+  defp do_crystallize(impl, session_id, node_ids, name, source, args) do
+    attrs = %{name: name, signature: arg(args, "signature"), compile: {:source, source}}
+
+    case Crystallize.crystallize(impl, session_id, node_ids, attrs) do
+      {:ok, crystal} -> crystal
+      {:error, reason} -> %{"err" => to_string(reason)}
+    end
+  end
+
+  # --- arg helpers ---
+
+  # PTC-Lisp tool args arrive string-keyed; also tolerate an existing atom key
+  # (never CREATE one — String.to_atom on tool input would reopen atom-table
+  # growth, the vuln PtcRunner's SourceAtoms guards against).
+  defp arg(args, key) when is_map(args) do
+    case Map.fetch(args, key) do
+      {:ok, v} -> v
+      :error -> safe_atom_get(args, key)
+    end
+  end
+
+  defp arg(_args, _key), do: nil
+
+  defp safe_atom_get(args, key) do
+    atom = String.to_existing_atom(key)
+    Map.get(args, atom)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp put_opt(opts, _key, nil), do: opts
+  defp put_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp status_atom("ok"), do: :ok
+  defp status_atom("error"), do: :error
+  defp status_atom(s) when s in [:ok, :error], do: s
+  defp status_atom(_), do: nil
+end

@@ -1,0 +1,12 @@
+;; defs lens (PLAN-005) — where a symbol was defined.
+;;
+;; Mirrors SpellAgent.Hist.Query.defq: returns, seq-ordered, the nodes whose form
+;; AST contains a (def <sym> ...) for `data/sym`, projected to the same shape
+;; Query.defq emits: {"node_id","seq","form_src"}.
+;;
+;; A node's "defs" is the pre-extracted list of symbol names defined in its AST.
+(->> data/nodes
+     (filter (fn [n] (contains? (get n "defs") data/sym)))
+     (map (fn [n] {"node_id" (get n "id")
+                   "seq"     (get n "seq")
+                   "form_src" (get n "form_src")})))

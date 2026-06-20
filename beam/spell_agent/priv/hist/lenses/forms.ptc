@@ -1,0 +1,11 @@
+;; forms lens (PLAN-005) — turns whose PROGRAM calls a given tool.
+;;
+;; Mirrors SpellAgent.Hist.Query.forms({:tool_call, name}): returns the nodes
+;; (seq-ordered, as projected maps) whose form AST contains a (tool/<name> ...)
+;; call anywhere. Pure transform over the injected `data/nodes` projection;
+;; `data/tool` is the tool name to match.
+;;
+;; A node's "form_tools" is the pre-extracted list of tool-call names in its AST
+;; (Elixir cannot pass the raw AST into the sandbox, so the names are surfaced).
+(->> data/nodes
+     (filter (fn [n] (contains? (get n "form_tools") data/tool))))

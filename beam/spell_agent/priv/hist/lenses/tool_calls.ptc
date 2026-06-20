@@ -1,0 +1,18 @@
+;; tool_calls lens (PLAN-005) — every realized tool call, optionally filtered.
+;;
+;; Mirrors SpellAgent.Hist.Query.tool_calls: flattens each node's realized
+;; "tool_calls" (the `sees`), seq-ordered, into one list of
+;; {"node_id","tool","args","result","status"}. Optional args:
+;;   data/name   — keep only calls whose tool == this string
+;;   data/status — keep only calls whose status == this string ("ok"|"error")
+;; A missing arg is nil; the (or ... ) guards make the filter a no-op then.
+(->> data/nodes
+     (mapcat (fn [n]
+       (map (fn [c] {"node_id" (get n "id")
+                     "tool"    (get c "name")
+                     "args"    (get c "args")
+                     "result"  (get c "result")
+                     "status"  (get c "status")})
+            (get n "tool_calls"))))
+     (filter (fn [c] (or (nil? data/name)   (= (get c "tool")   data/name))))
+     (filter (fn [c] (or (nil? data/status) (= (get c "status") data/status)))))

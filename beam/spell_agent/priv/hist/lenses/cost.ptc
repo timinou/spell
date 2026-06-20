@@ -1,0 +1,16 @@
+;; cost lens (PLAN-005) — token spend across the session.
+;;
+;; Mirrors SpellAgent.Hist.Query.cost: sums input/output tokens over nodes that
+;; have a valid token map, returning
+;;   {"input" I "output" O "total" I+O "nodes_counted" N}.
+;; Only nodes flagged "has_tokens" are counted (a node without recorded tokens is
+;; skipped, not summed as zero), preserving nodes_counted parity. Scoping
+;; (`since_seq` / `since_mark`) is resolved in Elixir and applied to the projection
+;; BEFORE injection, so here we simply sum every node given.
+(let [counted (filter (fn [n] (get n "has_tokens")) data/nodes)
+      input  (reduce (fn [a n] (+ a (get-in n ["tokens" "input"])))  0 counted)
+      output (reduce (fn [a n] (+ a (get-in n ["tokens" "output"]))) 0 counted)]
+  {"input" input
+   "output" output
+   "total" (+ input output)
+   "nodes_counted" (count counted)})

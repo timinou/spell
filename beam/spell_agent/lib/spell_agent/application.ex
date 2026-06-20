@@ -23,6 +23,14 @@ defmodule SpellAgent.Application do
       # global, attached to telemetry on first use; the App (which grabs the
       # terminal) is launched on demand via `SpellAgent.tui/0`.
       SpellAgent.Tui.Store,
+      # The conversation-history substrate's default store (PLAN-001/PLAN-003).
+      # Store.Memory is a named-singleton ETS GenServer: it makes a conversation
+      # survive ACROSS runs within one BEAM sitting (the core TUI win) with zero
+      # infra. Cross-restart durability is opt-in via
+      # `config :spell_agent, SpellAgent.Hist, store: SpellAgent.Hist.Store.Khepri`
+      # (which boots a Ra system); the default stays Memory so app boot never
+      # depends on Khepri being healthy.
+      SpellAgent.Hist.Store.Memory,
       # Live keybinding overrides for the Reaction DSL (PLAN-346): runtime
       # rebinds (keymap/bind) and authored reactions (keymap/define-reaction).
       # Session-global, same posture as ToolRegistry.
