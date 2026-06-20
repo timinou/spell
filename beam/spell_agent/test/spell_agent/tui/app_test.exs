@@ -54,6 +54,7 @@ defmodule SpellAgent.Tui.AppTest do
       })
 
       :telemetry.execute([:ptc_runner, :sub_agent, :run, :stop], %{}, %{span_id: "r", status: :ok})
+
       :done
     end
   end
@@ -62,7 +63,9 @@ defmodule SpellAgent.Tui.AppTest do
   # PLAN-346 W5 modal flow. Launch is prompt+NORMAL.
   defp enter_insert(pid), do: Runtime.inject_event(pid, key("enter"))
 
-  test "type a prompt, Enter runs the mission, the forest renders in the tree pane", %{store: store} do
+  test "type a prompt, Enter runs the mission, the forest renders in the tree pane", %{
+    store: store
+  } do
     {:ok, pid} =
       App.start_link(
         name: nil,
@@ -153,8 +156,11 @@ defmodule SpellAgent.Tui.AppTest do
   defp status_text(widgets), do: paragraph_text(Enum.at(widgets, 0))
   defp detail_text(widgets), do: paragraph_text(Enum.at(widgets, 2))
   defp composer_text(widgets), do: paragraph_text(List.last(widgets))
+
   defp composer_title(widgets) do
-    {%ExRatatui.Widgets.Paragraph{block: %ExRatatui.Widgets.Block{title: t}}, _} = List.last(widgets)
+    {%ExRatatui.Widgets.Paragraph{block: %ExRatatui.Widgets.Block{title: t}}, _} =
+      List.last(widgets)
+
     t
   end
 
@@ -182,17 +188,27 @@ defmodule SpellAgent.Tui.AppTest do
 
   test "the composer title shows INSERT when in insert mode", %{store: store} do
     ui = Ui.new(focus: :prompt, mode: :insert, panes: [:prompt, :tree, :detail])
-    widgets = App.render(state(%{store: store, composer: "hi", ui: ui}), %Frame{width: 80, height: 24})
+
+    widgets =
+      App.render(state(%{store: store, composer: "hi", ui: ui}), %Frame{width: 80, height: 24})
+
     assert composer_title(widgets) =~ "INSERT"
     assert composer_text(widgets) =~ "hi"
   end
 
-  test "the detail pane renders the selected node's full content (see inside the turn)", %{store: store} do
+  test "the detail pane renders the selected node's full content (see inside the turn)", %{
+    store: store
+  } do
     # A run with one turn whose program is long; selecting it shows the FULL text.
     long = "(do " <> String.duplicate("x ", 100) <> "END)"
+
     forest = %{
       "r" => %SpellAgent.Tui.Store.Span{
-        id: "r", parent_id: nil, kind: :run, status: :ok, label: "root",
+        id: "r",
+        parent_id: nil,
+        kind: :run,
+        status: :ok,
+        label: "root",
         turns: [%{number: 1, program: long, result_preview: "42", response: nil, status: :ok}]
       }
     }
@@ -208,7 +224,12 @@ defmodule SpellAgent.Tui.AppTest do
 
     widgets =
       App.render(
-        state(%{store: store, ui: ui, panes: panes, vms: %{tree: %{rows: [], count: 0}, detail: detail_vm}}),
+        state(%{
+          store: store,
+          ui: ui,
+          panes: panes,
+          vms: %{tree: %{rows: [], count: 0}, detail: detail_vm}
+        }),
         %Frame{width: 80, height: 24}
       )
 
@@ -224,7 +245,9 @@ defmodule SpellAgent.Tui.AppTest do
     done = App.render(state(%{store: store, result: {:ok, "x"}}), %Frame{width: 80, height: 24})
     assert status_text(done) =~ "done"
 
-    failed = App.render(state(%{store: store, result: {:error, :boom}}), %Frame{width: 80, height: 24})
+    failed =
+      App.render(state(%{store: store, result: {:error, :boom}}), %Frame{width: 80, height: 24})
+
     assert status_text(failed) =~ "✗"
   end
 
@@ -246,15 +269,33 @@ defmodule SpellAgent.Tui.AppTest do
   # so the tree pane has rows to navigate without running a mission.
   defp seed_forest(store) do
     h = "spell-tui-app-test-#{:erlang.unique_integer([:positive])}"
+
     events =
       for kind <- [:run, :tool], phase <- [:start, :stop] do
         [:ptc_runner, :sub_agent, kind, phase]
       end
 
-    :ok = :telemetry.attach_many(h, events, &SpellAgent.Tui.Store.handle_telemetry/4, %{pid: store})
-    :telemetry.execute([:ptc_runner, :sub_agent, :run, :start], %{}, %{span_id: "r", parent_span_id: nil, agent_name: "root"})
-    :telemetry.execute([:ptc_runner, :sub_agent, :tool, :start], %{}, %{span_id: "t", parent_span_id: "r", tool_name: "find"})
-    :telemetry.execute([:ptc_runner, :sub_agent, :tool, :stop], %{}, %{span_id: "t", parent_span_id: "r", tool_name: "find"})
+    :ok =
+      :telemetry.attach_many(h, events, &SpellAgent.Tui.Store.handle_telemetry/4, %{pid: store})
+
+    :telemetry.execute([:ptc_runner, :sub_agent, :run, :start], %{}, %{
+      span_id: "r",
+      parent_span_id: nil,
+      agent_name: "root"
+    })
+
+    :telemetry.execute([:ptc_runner, :sub_agent, :tool, :start], %{}, %{
+      span_id: "t",
+      parent_span_id: "r",
+      tool_name: "find"
+    })
+
+    :telemetry.execute([:ptc_runner, :sub_agent, :tool, :stop], %{}, %{
+      span_id: "t",
+      parent_span_id: "r",
+      tool_name: "find"
+    })
+
     :telemetry.execute([:ptc_runner, :sub_agent, :run, :stop], %{}, %{span_id: "r", status: :ok})
     :telemetry.detach(h)
     # let the casts land
@@ -279,8 +320,10 @@ defmodule SpellAgent.Tui.AppTest do
     end
 
     test "ctrl-j / ctrl-k move focus around the pane ring", %{pid: pid} do
-      # ring is [prompt, tree, detail].
+      # ring is [prompt, history, tree, detail] (PLAN-003 added :history).
       assert ui(pid).focus == :prompt
+      :ok = Runtime.inject_event(pid, ctrl("j"))
+      assert ui(pid).focus == :history
       :ok = Runtime.inject_event(pid, ctrl("j"))
       assert ui(pid).focus == :tree
       :ok = Runtime.inject_event(pid, ctrl("j"))
@@ -291,7 +334,8 @@ defmodule SpellAgent.Tui.AppTest do
       assert ui(pid).focus == :detail
     end
 
-    test "modal: Enter on the prompt enters INSERT; typing fills the composer; Esc returns to NORMAL", %{pid: pid} do
+    test "modal: Enter on the prompt enters INSERT; typing fills the composer; Esc returns to NORMAL",
+         %{pid: pid} do
       assert ui(pid).mode == :normal
       # In NORMAL, plain letters do NOT type (they're chords / no-ops).
       :ok = type_string(pid, "x")
@@ -309,7 +353,8 @@ defmodule SpellAgent.Tui.AppTest do
     end
 
     test "vim tree-nav: j/k move the cursor, l descends, h ascends", %{pid: pid} do
-      # focus the tree (ctrl-j from prompt).
+      # focus the tree (ctrl-j twice from prompt: prompt -> history -> tree).
+      :ok = Runtime.inject_event(pid, ctrl("j"))
       :ok = Runtime.inject_event(pid, ctrl("j"))
       assert ui(pid).focus == :tree
       # forest: run "r" (row 0) -> tool "t" (row 1). j moves down, k up.
@@ -359,6 +404,111 @@ defmodule SpellAgent.Tui.AppTest do
     # The app re-rendered after the Task result landed; render count advanced.
     snap = Runtime.snapshot(pid)
     assert snap.render_count >= 2
+
+    GenServer.stop(pid)
+  end
+
+  # ---- PLAN-003 SEAM 3+4: the History pane resumes a durable conversation ----
+
+  alias SpellAgent.Hist.Recorder
+  alias SpellAgent.Hist.Store, as: HistStore
+  alias SpellAgent.Hist.Store.Memory, as: HistMemory
+  alias SpellAgent.Tui.Panes.History
+
+  test "mounting with a recorded session resumes its transcript in the History pane", %{
+    store: store
+  } do
+    HistStore.clear(HistMemory)
+
+    a =
+      Recorder.record_node(
+        HistMemory,
+        "resumed",
+        %{program: "(w)", memory: %{}, result: "did the thing", prompt: "do the thing"},
+        nil
+      )
+
+    {:ok, sess} = HistStore.fetch(HistMemory, {:session, "resumed"})
+    HistStore.put(HistMemory, {:session, "resumed"}, %{sess | cursors: %{main: a.id}})
+
+    {:ok, pid} =
+      App.start_link(
+        name: nil,
+        test_mode: {80, 24},
+        store: store,
+        hist_store: HistMemory,
+        hist_session: "resumed",
+        on_submit: fn _ -> :noop end
+      )
+
+    # SEAM 4: the App bound the durable session; SEAM 3: the History pane projected
+    # its transcript from the store, not the (empty) span forest.
+    vm = :sys.get_state(pid).user_state.vms.history
+    refute vm.empty?
+    assert Enum.map(vm.lines, & &1.role) == [:user, :assistant]
+    assert Enum.map(vm.lines, & &1.text) == ["do the thing", "did the thing"]
+
+    GenServer.stop(pid)
+  end
+
+  test "mounting with no recorded history shows the History empty state", %{store: store} do
+    HistStore.clear(HistMemory)
+
+    {:ok, pid} =
+      App.start_link(
+        name: nil,
+        test_mode: {80, 24},
+        store: store,
+        hist_store: HistMemory,
+        hist_session: "fresh-empty",
+        on_submit: fn _ -> :noop end
+      )
+
+    vm = :sys.get_state(pid).user_state.vms.history
+    assert vm.empty?
+    assert vm.lines == []
+
+    GenServer.stop(pid)
+  end
+
+  test "the History pane is in the default pane set + focus ring", %{store: store} do
+    HistStore.clear(HistMemory)
+
+    {:ok, pid} =
+      App.start_link(
+        name: nil,
+        test_mode: {80, 24},
+        store: store,
+        hist_store: HistMemory,
+        on_submit: fn _ -> :noop end
+      )
+
+    st = :sys.get_state(pid).user_state
+    assert Enum.any?(st.panes, &(&1.name == :history and &1.module == History))
+    assert :history in st.ui.panes
+
+    GenServer.stop(pid)
+  end
+
+  # BUG-004 T2: a focused History pane scrolls via TurnNav (j/k), like Detail.
+  test "j scrolls the History transcript when History is focused", %{store: store} do
+    HistStore.clear(HistMemory)
+
+    {:ok, pid} =
+      App.start_link(
+        name: nil,
+        test_mode: {80, 24},
+        store: store,
+        hist_store: HistMemory,
+        on_submit: fn _ -> :noop end
+      )
+
+    # prompt -> history (one ctrl-j in the [prompt, history, tree, detail] ring).
+    :ok = Runtime.inject_event(pid, ctrl("j"))
+    assert ui(pid).focus == :history
+    before = SpellAgent.Tui.Ui.scroll_of(ui(pid), :history)
+    :ok = Runtime.inject_event(pid, key("j"))
+    assert SpellAgent.Tui.Ui.scroll_of(ui(pid), :history) == before + 1
 
     GenServer.stop(pid)
   end

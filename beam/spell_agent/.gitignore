@@ -7,3 +7,6 @@ erl_crash.dump
 *.beam
 /cover/
 spell_agent-*.tar
+
+.local
+.spell

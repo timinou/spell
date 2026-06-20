@@ -33,14 +33,16 @@ defmodule SpellAgent.Tui.App do
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Style
   alias ExRatatui.Widgets.{Block, List, Paragraph}
+  alias SpellAgent.Hist
   alias SpellAgent.Tui.{Chord, Keys, Projection, Store, Ui}
   alias SpellAgent.Tui.Keymap.{Global, Prompt, TurnNav}
-  alias SpellAgent.Tui.Panes.{Detail, SpanTree}
+  alias SpellAgent.Tui.Panes.{Detail, History, SpanTree}
 
   # PLAN-346 W5: two projected panes — the span TREE (navigate) and the DETAIL
   # inspector (full content of the selected node). The prompt/composer is rendered
   # by the App directly, not as a projected pane.
   @default_panes [
+    %{name: :history, module: History, assigns: %{}},
     %{name: :tree, module: SpanTree, assigns: %{}},
     %{name: :detail, module: Detail, assigns: %{}}
   ]
@@ -53,19 +55,29 @@ defmodule SpellAgent.Tui.App do
     Store.attach(store)
     Store.subscribe(store)
 
+    # PLAN-003 SEAM 4 (RESUME): bind a durable conversation. Reopen the most recent
+    # recorded session, or mint a fresh id when there is none / history is off.
+    # `:hist_store` lets tests inject Store.Memory; `:hist_session` pins an id.
+    hist_store = opts[:hist_store] || Hist.default_store()
+    hist_session = opts[:hist_session] || resume_session_id(hist_store)
+
     state = %{
       store: store,
+      hist_store: hist_store,
+      hist_session: hist_session,
       panes: opts[:panes] || @default_panes,
       vms: %{},
       composer: "",
-      on_submit: opts[:on_submit] || (&default_submit/1),
+      on_submit: opts[:on_submit] || (&default_submit(&1, hist_session, hist_store)),
       running?: false,
       result: nil,
       last_prompt: nil,
       # The serializable gaze (PLAN-346 W5) — ALL navigation state incl. the modal
       # `mode`. Launch is PROMPT focus in NORMAL mode: press Enter to enter INSERT
       # and type a mission. The ring is prompt ↔ tree ↔ detail under C-j/C-k.
-      ui: opts[:ui] || Ui.new(focus: :prompt, mode: :normal, panes: [:prompt, :tree, :detail])
+      ui:
+        opts[:ui] ||
+          Ui.new(focus: :prompt, mode: :normal, panes: [:prompt, :history, :tree, :detail])
     }
 
     {:ok, reproject(state, :all)}
@@ -78,6 +90,8 @@ defmodule SpellAgent.Tui.App do
   defp focus_stack(%{ui: %Ui{focus: :tree}}), do: [SpanTree, Global]
   defp focus_stack(%{ui: %Ui{focus: :prompt}}), do: [Prompt, Global]
   defp focus_stack(%{ui: %Ui{focus: :detail}}), do: [TurnNav, Global]
+  # History is a scrollable transcript like Detail — j/k/page scroll via TurnNav.
+  defp focus_stack(%{ui: %Ui{focus: :history}}), do: [TurnNav, Global]
   defp focus_stack(_), do: [Global]
 
   # ---- render ----
@@ -90,12 +104,37 @@ defmodule SpellAgent.Tui.App do
     [status, body, composer] =
       Layout.split(area, :vertical, [{:length, 3}, {:min, 0}, {:length, 3}])
 
-    # The span TREE on the left (navigate with j/k/h/l), the DETAIL inspector on
-    # the right (full content of the selected node — "see inside the turn").
-    [tree_rect, detail_rect] =
-      Layout.split(body, :horizontal, [{:percentage, 45}, {:percentage, 55}])
+    # Layout adapts to the active panes. With a HISTORY pane present (PLAN-003
+    # SEAM 3) the body is three columns — the durable conversation on the left,
+    # then the live run's span TREE and DETAIL inspector. Without it, the original
+    # two-column inspector layout is preserved (back-compat for tests/galleries).
+    has_history? = Enum.any?(state.panes, &(&1.name == :history))
 
-    rect_for = fn :tree -> tree_rect; :detail -> detail_rect; _ -> tree_rect end
+    rect_for =
+      if has_history? do
+        [history_rect, tree_rect, detail_rect] =
+          Layout.split(body, :horizontal, [
+            {:percentage, 34},
+            {:percentage, 30},
+            {:percentage, 36}
+          ])
+
+        fn
+          :history -> history_rect
+          :tree -> tree_rect
+          :detail -> detail_rect
+          _ -> tree_rect
+        end
+      else
+        [tree_rect, detail_rect] =
+          Layout.split(body, :horizontal, [{:percentage, 45}, {:percentage, 55}])
+
+        fn
+          :tree -> tree_rect
+          :detail -> detail_rect
+          _ -> tree_rect
+        end
+      end
 
     pane_widgets =
       state.panes
@@ -105,7 +144,9 @@ defmodule SpellAgent.Tui.App do
         rect = rect_for.(pane.name)
         # The view needs the cursor + gaze: pass ui plus the focused pane's cursor
         # so the highlighted row + collapse glyphs match what the resolver acts on.
-        assigns = Map.merge(pane.assigns, %{ui: state.ui, cursor: Ui.cursor_of(state.ui, pane.name)})
+        assigns =
+          Map.merge(pane.assigns, %{ui: state.ui, cursor: Ui.cursor_of(state.ui, pane.name)})
+
         pane.module.view(%{vm: vm, rect: rect, assigns: assigns, focused?: focused?})
       end)
       |> Enum.map(&materialize(&1, state))
@@ -211,7 +252,10 @@ defmodule SpellAgent.Tui.App do
     ui = state.ui |> Ui.mode(:normal) |> Ui.focus(:tree)
 
     {:noreply,
-     reproject(%{state | composer: "", running?: true, result: nil, last_prompt: prompt, ui: ui}, :all)}
+     reproject(
+       %{state | composer: "", running?: true, result: nil, last_prompt: prompt, ui: ui},
+       :all
+     )}
   end
 
   # The composer text sink: backspace edits, a single printable char appends, and
@@ -236,7 +280,10 @@ defmodule SpellAgent.Tui.App do
     # Inject the live gaze into each pane's projection assigns so a gaze-aware
     # projection (SpanTree, which prunes collapsed subtrees — D4) sees the current
     # collapse/cursor state. Navigation reprojects with :all, so this stays fresh.
-    panes = Enum.map(state.panes, fn p -> %{p | assigns: Map.put(p.assigns, :ui, state.ui)} end)
+    # Inject the gaze + the durable history binding (PLAN-003 SEAM 3) so the
+    # History pane's project/2 can reconstitute the conversation from the store.
+    hist_assigns = %{ui: state.ui, hist_session: state.hist_session, hist_store: state.hist_store}
+    panes = Enum.map(state.panes, fn p -> %{p | assigns: Map.merge(p.assigns, hist_assigns)} end)
     vms = Projection.reconcile(forest, panes, fired, state.vms)
     %{state | vms: vms}
   end
@@ -269,6 +316,32 @@ defmodule SpellAgent.Tui.App do
       scroll: {desc.scroll, 0},
       style: %Style{fg: :white},
       block: %Block{title: " #{desc.title}#{focus_tag} ", borders: [:all], border_type: :rounded}
+    }
+
+    {widget, rect}
+  end
+
+  # The history pane (PLAN-003 SEAM 3): a durable user<->assistant scrollback,
+  # rendered as a scrollable Paragraph (NIF-free, same contract as Detail).
+  defp materialize({{:history, desc}, rect}, _state) do
+    focus_tag = if desc.focused?, do: " ●", else: ""
+
+    text =
+      if desc.empty? do
+        "(no history yet — run a mission; it persists across runs and reopen)"
+      else
+        Enum.map_join(desc.lines, "\n", fn
+          %{role: :user, text: t} -> "› you  " <> t
+          %{role: :assistant, text: t} -> "‹ agent " <> t
+        end)
+      end
+
+    widget = %Paragraph{
+      text: text,
+      wrap: true,
+      scroll: {desc.scroll, 0},
+      style: %Style{fg: :white},
+      block: %Block{title: " history#{focus_tag} ", borders: [:all], border_type: :rounded}
     }
 
     {widget, rect}
@@ -318,8 +391,6 @@ defmodule SpellAgent.Tui.App do
     }
   end
 
-
-
   # ---- composer ----
 
   defp composer_widget(state) do
@@ -351,17 +422,33 @@ defmodule SpellAgent.Tui.App do
   # intents in the focused context, then the global ones.
   defp hint_for(state) do
     [focused | _] = focus_stack(state)
-    ctx = if function_exported?(focused, :context_name, 0), do: focused.context_name(), else: focused
+
+    ctx =
+      if function_exported?(focused, :context_name, 0), do: focused.context_name(), else: focused
 
     focused_hints =
       case state.ui.focus do
-        :tree -> [chord_hint(ctx, :"nav/next", "next"), chord_hint(ctx, :"nav/child", "in"), chord_hint(ctx, :"nav/parent", "out")]
-        :detail -> [chord_hint(ctx, :"scroll/down", "scroll")]
-        :prompt -> [chord_hint(ctx, :"mode/insert", "type")]
-        _ -> []
+        :tree ->
+          [
+            chord_hint(ctx, :"nav/next", "next"),
+            chord_hint(ctx, :"nav/child", "in"),
+            chord_hint(ctx, :"nav/parent", "out")
+          ]
+
+        :detail ->
+          [chord_hint(ctx, :"scroll/down", "scroll")]
+
+        :prompt ->
+          [chord_hint(ctx, :"mode/insert", "type")]
+
+        _ ->
+          []
       end
 
-    global = [chord_hint(:global, :"focus/next", "pane"), chord_hint(:global, :"app/quit", "quit")]
+    global = [
+      chord_hint(:global, :"focus/next", "pane"),
+      chord_hint(:global, :"app/quit", "quit")
+    ]
 
     (focused_hints ++ global)
     |> Enum.reject(&is_nil/1)
@@ -404,7 +491,28 @@ defmodule SpellAgent.Tui.App do
   defp compiled_chord_for(:prompt, intent), do: keymap_chord(Prompt.keymap(), intent)
   defp compiled_chord_for(_other, _intent), do: nil
 
-  defp keymap_chord(keymap, intent), do: Enum.find_value(keymap, fn {c, i} -> if i == intent, do: c end)
+  defp keymap_chord(keymap, intent),
+    do: Enum.find_value(keymap, fn {c, i} -> if i == intent, do: c end)
 
-  defp default_submit(prompt), do: SpellAgent.Session.run(prompt)
+  # SEAM 4 (default submit): drive a real mission, threading the App's durable
+  # session id so each run APPENDS to one conversation instead of a fresh one.
+  defp default_submit(prompt, session_id, store) do
+    SpellAgent.Session.run(prompt, session_id: session_id, hist: store)
+  end
+
+  # SEAM 4 helper: the most-recently-recorded session id, or a fresh one. Tolerant
+  # of a store that is down/empty (history is a best-effort enhancement, never a
+  # boot dependency) — any failure yields a new id.
+  defp resume_session_id(store) do
+    try do
+      case Hist.latest(store: store) do
+        %{id: id} -> id
+        _ -> Hist.new_session_id()
+      end
+    rescue
+      _ -> Hist.new_session_id()
+    catch
+      _, _ -> Hist.new_session_id()
+    end
+  end
 end
