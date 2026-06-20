@@ -74,8 +74,11 @@ defmodule SpellAgent.Tui.Store do
   @spec children(map(), String.t()) :: [Span.t()]
   def children(spans, id) do
     case spans[id] do
-      %Span{children: ids} -> ids |> Enum.reverse() |> Enum.map(&spans[&1]) |> Enum.reject(&is_nil/1)
-      _ -> []
+      %Span{children: ids} ->
+        ids |> Enum.reverse() |> Enum.map(&spans[&1]) |> Enum.reject(&is_nil/1)
+
+      _ ->
+        []
     end
   end
 
@@ -95,6 +98,7 @@ defmodule SpellAgent.Tui.Store do
       %Span{} = node -> [node | Enum.flat_map(children(spans, id), &subtree(spans, &1.id))]
     end
   end
+
   @doc """
   Root span ids from a forest MAP (pure; for use inside `project/2`), oldest
   first. A root has `parent_id == nil`, or a `parent_id` not present in the map
@@ -107,7 +111,104 @@ defmodule SpellAgent.Tui.Store do
     |> Enum.filter(fn %Span{parent_id: p} -> is_nil(p) or not Map.has_key?(spans, p) end)
     |> sort()
   end
+
   defp sort(list), do: Enum.sort_by(list, & &1.t0)
+
+  # ---- persistence bridge (FUP-003): flat live forest <-> nested span_root ----
+
+  @doc """
+  Snapshot the subtree rooted at `root_id` into a nested `span_root` map
+  (FUP-003).
+
+  The live forest is FLAT (`%{span_id => Span}` linked by `parent_id`); a durable
+  `SpellAgent.Hist.Node.span_root` is a NESTED tree with inline `:children`, the
+  shape `SpellAgent.Hist.Spans` reads. This is the capture direction: a finished
+  run's interior is frozen into self-contained data so the recorded turn carries
+  its execution tree, not just a live-telemetry pointer that vanishes at mission
+  end.
+
+  Children are ordered oldest-first (matching `children/2`). Returns `nil` when
+  `root_id` is absent.
+  """
+  @spec to_span_root(map(), String.t()) :: map() | nil
+  def to_span_root(spans, root_id) do
+    case spans[root_id] do
+      %Span{} = span -> span_to_node(spans, span)
+      _ -> nil
+    end
+  end
+
+  defp span_to_node(spans, %Span{} = s) do
+    %{
+      id: s.id,
+      kind: s.kind,
+      status: s.status,
+      label: s.label,
+      t0: s.t0,
+      t1: s.t1,
+      meta: s.meta,
+      tokens: s.tokens,
+      turns: s.turns,
+      children: spans |> children(s.id) |> Enum.map(&span_to_node(spans, &1))
+    }
+  end
+
+  @doc """
+  Hydrate a flat `%{span_id => Span}` forest from a persisted nested `span_root`
+  map (FUP-003) — the inverse of `to_span_root/2`.
+
+  This is the replay direction: a RECORDED run's interior (read back from durable
+  history) is rebuilt into the same flat forest the live telemetry path produces,
+  so the inspector TUI renders a past run's spans exactly like a live one. The TUI
+  no longer only shows the run in flight; it can drill any turn's recorded
+  interior.
+
+  Tolerant of string- or atom-keyed span maps (live structs vs persisted data).
+  Returns `%{span_id => Span.t()}`.
+  """
+  @spec from_span_root(map() | nil) :: %{optional(String.t()) => Span.t()}
+  def from_span_root(nil), do: %{}
+
+  def from_span_root(root) when is_map(root) do
+    build_flat(root, nil, %{})
+  end
+
+  defp build_flat(node, parent_id, acc) when is_map(node) do
+    id = node_get(node, :id)
+    kids = node_get(node, :children) || []
+    child_ids = Enum.map(kids, &node_get(&1, :id)) |> Enum.reject(&is_nil/1)
+
+    span = %Span{
+      id: id,
+      parent_id: parent_id,
+      kind: node_get(node, :kind),
+      status: node_get(node, :status) || :ok,
+      label: node_get(node, :label) || "",
+      t0: node_get(node, :t0),
+      t1: node_get(node, :t1),
+      meta: node_get(node, :meta) || %{},
+      tokens: node_get(node, :tokens),
+      # `children/2` reverses (live spans prepend), so store reversed to round-trip
+      # oldest-first ordering through that accessor.
+      children: Enum.reverse(child_ids),
+      turns: node_get(node, :turns) || []
+    }
+
+    acc = Map.put(acc, id, span)
+    Enum.reduce(kids, acc, fn child, a -> build_flat(child, id, a) end)
+  end
+
+  defp build_flat(_node, _parent_id, acc), do: acc
+
+  # Read a key that may be atom- or string-keyed (live struct vs persisted map).
+  defp node_get(map, key) when is_map(map) do
+    case Map.fetch(map, key) do
+      {:ok, v} -> v
+      :error -> Map.get(map, to_string(key))
+    end
+  end
+
+  defp node_get(_map, _key), do: nil
 
   # ---- telemetry handler (runs in the emitting process; just casts) ----
 
@@ -254,7 +355,14 @@ defmodule SpellAgent.Tui.Store do
             tokens: tokens_from(meas)
         }
 
-        %{state | spans: Map.put(state.spans, id, %{closed | label: label_for(span.kind, merged_meta, closed)})}
+        %{
+          state
+          | spans:
+              Map.put(state.spans, id, %{
+                closed
+                | label: label_for(span.kind, merged_meta, closed)
+              })
+        }
 
       nil ->
         state
