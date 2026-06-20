@@ -248,3 +248,50 @@ D2. REFLECT ExRatatui.Theme NOW (Edge T in v1, not deferred). theme/ namespace i
   lens traversal of data/tree instead of Ui transform. Reaction.Ptc binds
   data/tree (not data/ui) — though a compat data/ui projection MAY be kept as a
   read-only convenience view derived from the tree's tags.
+
+* Progress (build session 1)
+
+LANDED (commits 7f1aa463 ptc_runner / 6dfb55824 spell_agent):
+- [x] D3: SpellAgent.Tui.Reflect — compile-time widget registry from ex_ratatui
+      structs. KEY DISCOVERY: enum values that aren't struct defaults (:rounded,
+      :bottom_to_top) aren't interned at runtime, so existing-atom coercion would
+      drop them. Fixed by harvesting atom literals from each module's TYPESPECS at
+      compile (301 enum atoms) — pure no-drift, the vocabulary lives in
+      ex_ratatui's own @type specs. Reflects Theme slots too (Edge T).
+- [x] D2 (Materialize): PTC map -> %Widget{}. Coercion rule read from each field's
+      struct DEFAULT (struct->recurse, atom->enum, tuple->list). Refinements found
+      by test: (a) recurse on any nested map carrying a resolvable "type" (nilable
+      :block default is nil, so default alone can't signal recursion); (b) only
+      :borders/:modifiers are enum-LISTS — every other list field is content
+      (items/rows/data) and must pass through (a default of [] can't distinguish).
+- [x] Surface — recursive split/leaf walk -> [{widget,rect}] via Layout.split.
+      Per-node skip-on-failure (the failure-ladder precondition). Proven: the
+      ENTIRE native inspector layout (status / tree+detail / composer) renders from
+      one pure data tree.
+- [x] view/ namespace (reflected builders + view/split) + theme/set + ThemeRegistry
+      (supervised). Builders are thin data-taggers; heavy lifting is Materialize.
+- [x] PATCH-O in ptc_runner: view/theme/lens/layout namespaces routed like tool/
+      but with STRING qualified names (open reflected verb set, atom-DoS-safe).
+- [x] 15 freeform contract tests + 168 existing TUI/harness tests green.
+
+PROVEN: a view/ program through the REAL PtcRunner.Lisp.run sandbox -> rendered
+frame, via the EXISTING Bridge path, zero hand-written widget bindings. The
+reflection thesis holds end to end.
+
+NEXT (critical path, D1 unify-from-start):
+- [ ] lens/ namespace + the layout TREE with :tags (gaze-as-tags). Port %Ui{}
+      navigation (focus/cursor/expand/turn/scroll) to lens traversals over node
+      tags. ex_rose_tree zipper for the walk.
+- [ ] LayoutRegistry (Agent) — default tree as data, slot shadowing, last-good
+      cache. layout/ namespace (set/show/tree/reset).
+- [ ] Default layout + nav reactions rewritten as priv/*.ptc (dogfood).
+- [ ] render/2 cutover -> single path (resolve tree -> Surface -> Bridge),
+      collapsing the has_history? two-path branch.
+- [ ] L-2 recording seam (authored layouts -> hist spans).
+- [ ] inspector view + reflected prelude (.md + Handlebars over Reflect).
+
+NOTE on Surface vs panes: by the time Surface walks the tree, a pane has been
+reduced to widget leaves (its :render view/ program already run). The tree the
+LayoutRegistry holds carries pane NODES (with :render + :tags); resolving a pane
+node = run its :render with data/* incl. its tags -> a leaf subtree. That
+resolution step lands with LayoutRegistry + render/2 cutover.
