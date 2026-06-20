@@ -45,12 +45,17 @@ defmodule SpellAgent.MixProject do
   defp deps do
     [
       # The vendored agentic loop + PTC-Lisp sandbox (path dep, same as ptc_runtime).
-      {:ptc_runner, path: "../ptc_runner-vendored"},
+      {:ptc_runner, path: "../ptc_runner"},
       # Direct HTTP for the Anthropic subscription adapter (pulls Finch/Mint).
       {:req, "~> 0.5"},
       # Read Spell's agent.db (SQLite) for the subscription credential.
       {:exqlite, "~> 0.27"},
       {:jason, "~> 1.4"},
+      # Hist: durable homoiconic conversation-history substrate (PLAN-001).
+      # Khepri = tree-like on-disk store (single-node Ra = ordered crash-safe WAL
+      # + materialized view). ex_rose_tree = zipper view for cursor navigation.
+      {:khepri, "~> 0.18"},
+      {:ex_rose_tree, "~> 0.1"},
       # The inspector TUI (PLAN-345/346). VENDORED as a git submodule (path dep,
       # same as ptc_runner) so we can patch the Rust NIF — PLAN-346 W0 pushes
       # kitty keyboard-protocol enhancement flags so ctrl+j/h disambiguate from

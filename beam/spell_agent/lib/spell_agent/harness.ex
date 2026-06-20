@@ -5,7 +5,7 @@ defmodule SpellAgent.Harness do
 
   Two sibling namespaces alongside `tool/` (routed through the same tool-call
   machinery by the vendored ptc_runner SPELL PATCH — see
-  `ptc_runner-vendored/SPELL_PATCHES.md`), split by EFFECT PROFILE:
+  `ptc_runner/SPELL_PATCHES.md`), split by EFFECT PROFILE:
 
     * `harness/` — PURE gaze transforms + forest queries used INSIDE a reaction.
       A reaction body runs with the current gaze bound as `data/ui` and the span

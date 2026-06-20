@@ -46,8 +46,14 @@ defmodule PtcRuntime.MixProject do
     [
       # Spell-owned vendored fork (F0, specs/beam-orchestrator/06-execute-substrate.md):
       # handle-aware builtins, psettled, and preflight lint land in the fork's eval
-      # layer. Divergence ledger: beam/ptc_runner-vendored/SPELL_PATCHES.md.
-      {:ptc_runner, path: "../ptc_runner-vendored"},
+      # layer. Divergence ledger: beam/ptc_runner/SPELL_PATCHES.md.
+      {:ptc_runner, path: "../ptc_runner"},
+      # ptc_runner 0.12 added the upstream OpenAPI/MCP-HTTP transports, whose
+      # modules reference Req structs (Req is `optional: true` in the fork). We
+      # never call those transports, but Elixir compiles every module in the
+      # path dep, so Req must be resolvable. Pull it explicitly (spell_agent
+      # already does, for its Anthropic adapter).
+      {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
       # Property-based testing for the P0' verification lane.
       {:stream_data, "~> 1.1", only: [:test]}

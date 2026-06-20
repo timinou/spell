@@ -4,3 +4,7 @@
 [submodule "beam/ex_ratatui-vendored"]
 	path = beam/ex_ratatui-vendored
 	url = https://github.com/mcass19/ex_ratatui
+[submodule "beam/ptc_runner"]
+	path = beam/ptc_runner
+	url = git@github.com:timinou/ptc_runner.git
+	branch = spell
