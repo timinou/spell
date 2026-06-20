@@ -10,3 +10,7 @@ spell_agent-*.tar
 
 .local
 .spell
+
+# Hist test cassettes are regenerated deterministically by SpellAgent.HistCassette
+# (record-then-load) on every run, so they are reproducible artifacts, not source.
+/test/fixtures/hist/*.cassette
