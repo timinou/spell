@@ -141,6 +141,10 @@ defmodule SpellAgent.Hist.Recorder do
     # `turn.def_delta` (introduced ∪ changed) directly; fall back to a snapshot
     # diff only for synthetic/legacy turns that carry no def_delta (record_node).
     binds = binds_of(turn, prev_mem)
+    # FUP-001 (PLAN-008): the names this turn FIRST defined (def_delta.introduced).
+    # A pure projection of the runtime delta — provenance ("where was x first
+    # bound?") becomes an O(chain) scan with no env folding.
+    introduced = introduced_of(turn, prev_mem)
     # SEAM 3 (PLAN-008): the executed CoreAST is on the Turn (MOVE-C/C'), so the
     # node's `form` is real structure a lens can walk — not the re-parsed source
     # string. `form_src` stays the human-readable source for display. Synthetic
@@ -164,6 +168,7 @@ defmodule SpellAgent.Hist.Recorder do
       form: form,
       form_src: form_src,
       binds: binds,
+      introduced: introduced,
       result: turn.result,
       sees: turn.tool_calls || [],
       prints: turn.prints || [],
@@ -258,6 +263,26 @@ defmodule SpellAgent.Hist.Recorder do
 
       _ ->
         map_delta(prev_mem, turn.memory || %{})
+    end
+  end
+
+  # FUP-001 (PLAN-008): the names a turn FIRST introduced, as strings, from the
+  # runtime delta (`def_delta.introduced` keys). For a synthetic turn with no
+  # def_delta, derive it the only honest way: keys present AFTER but absent from
+  # the entering env (a first binding). Returns binary names to match the
+  # source-emitted contract (0.12 def names are binary).
+  defp introduced_of(turn, prev_mem) do
+    case Map.get(turn, :def_delta) do
+      %{introduced: intro} when is_map(intro) ->
+        intro |> Map.keys() |> Enum.map(&to_string/1)
+
+      _ ->
+        mem = turn.memory || %{}
+
+        mem
+        |> Map.keys()
+        |> Enum.reject(&Map.has_key?(prev_mem, &1))
+        |> Enum.map(&to_string/1)
     end
   end
 

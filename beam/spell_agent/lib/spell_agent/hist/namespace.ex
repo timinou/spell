@@ -17,6 +17,7 @@ defmodule SpellAgent.Hist.Namespace do
       (hist/tool_calls {:name "edit" :status "error"})  ; realized tool calls, filtered (C4, PTC lens)
       (hist/forms {:tool "edit"})        ; turns whose program calls (tool/edit ...) (C4, PTC lens)
       (hist/defs {:sym "plan"})          ; where a symbol was defined (C4, PTC lens)
+      (hist/provenance {:sym "plan"})    ; where `plan` was FIRST bound + later rebinds (FUP-001 lens)
       (hist/cost {})                     ; token spend across the session (C4/C5, PTC lens)
       (hist/lens {:source "(->> data/nodes ...)"})  ; run an AGENT-AUTHORED lens (PLAN-005)
       (hist/forms! {...})                ; the Elixir fast-path / parity oracle for any lens
@@ -54,6 +55,7 @@ defmodule SpellAgent.Hist.Namespace do
       "hist/find!" => fn args -> Query.tool_calls(impl, session_id, find_opts(args)) end,
       "hist/forms!" => fn args -> forms(impl, session_id, args) end,
       "hist/def!" => fn args -> Query.defq(impl, session_id, arg(args, "sym")) end,
+      "hist/provenance!" => fn args -> provenance(impl, session_id, arg(args, "sym")) end,
       "hist/cost!" => fn args -> Query.cost(impl, session_id, cost_opts(args)) end,
       "hist/spans" => fn args -> spans(impl, session_id, args) end,
       "hist/window" => fn args -> window(impl, session_id, args) end,
@@ -90,6 +92,31 @@ defmodule SpellAgent.Hist.Namespace do
       nil -> []
       name -> Query.forms(impl, session_id, {:tool_call, name})
     end
+  end
+
+  # FUP-001 parity oracle: the Elixir twin of provenance.ptc. Same string-keyed
+  # shape, so a test can assert hist/provenance == hist/provenance! exactly.
+  # Reads the projected `introduced`/`bound` sets the lens sees, in seq order.
+  defp provenance(_impl, _session_id, nil), do: %{"err" => "sym required"}
+
+  defp provenance(impl, session_id, sym) when is_binary(sym) do
+    nodes = Lens.project(impl, session_id)
+
+    origin =
+      Enum.find(nodes, fn n -> sym in (n["introduced"] || []) end)
+
+    rebound =
+      nodes
+      |> Enum.filter(fn n ->
+        sym in (n["bound"] || []) and sym not in (n["introduced"] || [])
+      end)
+      |> Enum.map(fn n -> %{"id" => n["id"], "seq" => n["seq"]} end)
+
+    %{
+      "sym" => sym,
+      "introduced_at" => origin && %{"id" => origin["id"], "seq" => origin["seq"]},
+      "rebound_at" => rebound
+    }
   end
 
   defp spans(impl, session_id, args) do

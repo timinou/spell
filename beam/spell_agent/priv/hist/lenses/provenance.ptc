@@ -1,0 +1,27 @@
+;; provenance lens (PLAN-008 FUP-001) — where a symbol was FIRST defined, and
+;; which later turns rebound it.
+;;
+;; The runtime emits a per-turn def-delta (MOVE-A/A'), split into the names a turn
+;; FIRST introduced vs the ones it rebound. Hist projects that onto every node as
+;; "introduced" (first-bindings) and "bound" (introduced + rebinds). So "where was
+;; `x` born, and where did it mutate?" is a single O(chain) scan — no env folding,
+;; no diffing of two memory snapshots.
+;;
+;; Args:  data/sym  — the symbol name (string) to trace.
+;; Returns:
+;;   {"sym" S
+;;    "introduced_at" {"id" .. "seq" ..} | nil   ; the node that first bound S
+;;    "rebound_at" [{"id" .. "seq" ..} ...]}      ; later nodes that rebound S
+(let [sym data/sym
+      ;; the node that first introduced sym (there is at most one, by construction)
+      origin (->> data/nodes
+                  (filter (fn [n] (contains? (get n "introduced") sym)))
+                  first)
+      ;; nodes that bound sym but did NOT introduce it -> rebinds, seq-ordered
+      rebinds (->> data/nodes
+                   (filter (fn [n] (and (contains? (get n "bound") sym)
+                                        (not (contains? (get n "introduced") sym)))))
+                   (map (fn [n] {"id" (get n "id") "seq" (get n "seq")})))]
+  {"sym" sym
+   "introduced_at" (if origin {"id" (get origin "id") "seq" (get origin "seq")} nil)
+   "rebound_at" rebinds})

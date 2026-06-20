@@ -35,6 +35,8 @@ defmodule SpellAgent.Hist.Lens do
         "form_src"   => String.t() | nil,         # the rendered program
         "tool_calls" => [%{"name","args","result","status"}],  # realized sees
         "defs"       => [String.t()],             # symbols defined in the form AST
+        "introduced" => [String.t()],             # names this turn FIRST bound (FUP-001)
+        "bound"      => [String.t()],             # ALL names in the turn's delta (FUP-001)
         "tokens"     => %{"input" => int, "output" => int}
       }
 
@@ -57,7 +59,8 @@ defmodule SpellAgent.Hist.Lens do
     "forms" => "forms.ptc",
     "defs" => "defs.ptc",
     "tool_calls" => "tool_calls.ptc",
-    "cost" => "cost.ptc"
+    "cost" => "cost.ptc",
+    "provenance" => "provenance.ptc"
   }
 
   for {_name, file} <- @lenses do
@@ -152,6 +155,11 @@ defmodule SpellAgent.Hist.Lens do
       "tool_calls" => project_tool_calls(n.sees),
       "form_tools" => tool_call_names(n.form),
       "defs" => def_names(n.form),
+      # FUP-001: `introduced` = names this turn FIRST bound; `bound` = ALL names
+      # in its delta (introduced + rebinds). A provenance lens reads `introduced`
+      # to find first-definition and `bound` to find rebinds, with no env fold.
+      "introduced" => Enum.map(n.introduced, &to_string/1),
+      "bound" => n.binds |> Map.keys() |> Enum.map(&to_string/1),
       # `has_tokens` mirrors Query.cost's count rule: only nodes with a valid
       # integer token map are counted. A default {0,0} would be indistinguishable
       # from a real zero, so the flag preserves nodes_counted parity.

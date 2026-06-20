@@ -50,6 +50,7 @@ defmodule SpellAgent.Hist.Node do
           form: term(),
           form_src: String.t() | nil,
           binds: map(),
+          introduced: [String.t()],
           result: term(),
           sees: [map()],
           prints: [String.t()],
@@ -88,6 +89,10 @@ defmodule SpellAgent.Hist.Node do
             form: nil,
             form_src: nil,
             binds: %{},
+            # PLAN-008 FUP-001: the names this turn FIRST defined (def_delta.introduced
+            # keys, binary). `binds` merges introduced+changed; `introduced` keeps the
+            # split so "which turn first bound x?" is a cheap projection, not a fold.
+            introduced: [],
             result: nil,
             sees: [],
             prints: [],
