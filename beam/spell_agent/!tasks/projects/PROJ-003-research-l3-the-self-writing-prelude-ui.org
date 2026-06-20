@@ -1,0 +1,79 @@
+#+TITLE: RESEARCH L−3: The self-writing prelude — UI idioms distilled from prior self
+#+STATE: ITEM
+#+SESSION_ID: 1511029ec58e9d42
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-20T20-59-50-422Z_1511029ec58e9d42.jsonl]]
+#+CUSTOM_ID: PROJ-003-research-l3-the-self-writing-prelude-ui
+
+* Initial Message
+
+I want to give the agent full self-editing capabilities when I run it with `mix spell.tui --freeform` (or `mix spell.tui -f`). That means (for the v1) that in the context, you inject the prelude that corresponds to the defaults that are self-modifiable. and that the full TUI layout is shapeable through PTC Lisp, in a way that feels natural to it, in the appropriate harness/ namespace (or another if you have good reasons).
+
+Let's imagine together
+
+#+FILETAGS: :research:freeform:vision:memory:
+
+* Lineage
+Builds on PLAN-009 + PROJ-002 (layouts as spans) + the memory tool. Research-track,
+NOT v1. Read docs/freeform-tui-architecture.md and docs/freeform-tui-philosophy.md.
+
+* The boundary this dissolves
+TAUGHT vs LEARNED. Today the prelude (what the agent knows about its UI surface)
+is authored by us and reflected from struct shape — a fixed teaching. This layer
+makes the prelude partly authored by the agent's OWN PRIOR SUCCESS: idioms it
+discovered, distilled back into what it is told next time.
+
+* Premise
+- The widget vocabulary is reflected from ex_ratatui structs (PLAN-009 Reflect):
+  this is the GRAMMAR and it is fixed/correct by construction.
+- But IDIOMS — "a cost-histogram pane", "a 3-up diff board", "the focus-most-errors
+  traversal" — are discovered by the agent at runtime and (PROJ-002) recorded in
+  hist with provenance, including whether they WORKED (the turn succeeded, the
+  layout materialized, the human kept it).
+- The memory tool already distills episodes into concepts/playbooks with
+  DISTILLED_FROM / DERIVED_FROM provenance edges.
+
+* The move
+Close the loop: a successful, reused layout becomes a MEMORY playbook
+("cost-histogram pane: <ptc source>, used 4x, never reverted"), and the prelude
+includes a DISTILLED IDIOMS section drawn from memory — "here are views you built
+before that worked." The teaching surface becomes:
+  GRAMMAR (reflected, ours) + IDIOMS (distilled, prior-self's).
+The agent bootstraps its own UI component library. Reflection gives the words;
+memory gives the sentences worth saying.
+
+* Why it is reachable
+- memory save/link with DISTILLED_FROM edges already exists; a layout episode is
+  just an episode.
+- PROJ-002 gives the provenance signal (did it work? reused? reverted?) that
+  decides what is worth distilling.
+- The prelude is already Handlebars over a registry (PLAN-009 deliverable 11);
+  adding an idioms partial fed from memory search is mechanical.
+
+* Open questions
+- Distillation trigger: automatic (a layout reused N times auto-promotes to a
+  playbook) or curated (the agent decides "this view is worth keeping")? Likely
+  both: auto-surface candidates, agent confirms.
+- Decay/eviction: idioms that stop being used should fade from the prelude (token
+  budget). Memory's recency/usage signals drive this.
+- Cross-session vs cross-project: is the cost-histogram idiom global to the agent,
+  or scoped to a project's UI conventions? (Ties to FUP-009 durability scoping.)
+- Trust: a distilled idiom is the agent teaching itself — a bad idiom self-
+  reinforces. Need a "this view actually helped" signal beyond "it rendered."
+
+* Security/cost notes (FUP-track, non-blocking)
+- Self-reinforcing bad idioms are a quality risk, not a security one, but note:
+  a distilled idiom is agent-authored text injected into future preludes — the
+  prompt-injection surface of "the agent teaches its future self" should be a
+  deliberate FUP when built.
+
+* Acceptance (when someday built)
+- The agent builds a useful pane, it is recorded (PROJ-002), reused across
+  sessions, auto-distilled to a memory playbook, and appears in a later session's
+  prelude idioms section — and the agent re-uses it by name without re-deriving.
+
+* References
+- docs/freeform-tui-philosophy.md (Layer −3 section)
+- memory tool (save/link, DISTILLED_FROM/DERIVED_FROM edges)
+- PROJ-002 (layouts as spans — the provenance signal)
+- PLAN-009 deliverable 11 (reflected prelude — the grammar half)
+- FUP-008 (prelude surfacing mechanism — the injection hook this rides)

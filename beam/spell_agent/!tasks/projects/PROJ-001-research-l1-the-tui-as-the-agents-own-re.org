@@ -1,0 +1,79 @@
+#+TITLE: RESEARCH L−1: The TUI as the agent's own reasoning workspace
+#+STATE: ITEM
+#+SESSION_ID: 1511029ec58e9d42
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-20T20-59-50-422Z_1511029ec58e9d42.jsonl]]
+#+CUSTOM_ID: PROJ-001-research-l1-the-tui-as-the-agents-own-re
+
+* Initial Message
+
+I want to give the agent full self-editing capabilities when I run it with `mix spell.tui --freeform` (or `mix spell.tui -f`). That means (for the v1) that in the context, you inject the prelude that corresponds to the defaults that are self-modifiable. and that the full TUI layout is shapeable through PTC Lisp, in a way that feels natural to it, in the appropriate harness/ namespace (or another if you have good reasons).
+
+Let's imagine together
+
+#+FILETAGS: :research:freeform:vision:
+
+* Lineage
+Builds on PLAN-009 (freeform layout-as-data). Research-track: NOT v1 scope. Read
+docs/freeform-tui-architecture.md and docs/freeform-tui-philosophy.md first.
+
+* The boundary this dissolves
+OUTPUT vs WORKSPACE. Today a TUI is something an agent renders FOR A HUMAN to
+look at — a one-way display. This layer makes the rendered interface a surface
+the agent shapes FOR ITSELF, to think with.
+
+* Premise
+In PLAN-009 the layout tree is plain data and `data/forest` is the agent's OWN
+run-trace (its turns, tool calls, def env, errors). The renderer already turns a
+tree into pixels; nothing forces those pixels to be for a human. The agent can
+author a layout whose PURPOSE is to organize its own attention.
+
+* The move
+When the agent is stuck (a failing test, a tangled diff, a lost thread), it lays
+out a view to reason over:
+  - a 3-up of "tool calls that errored | the def env at that turn | the source
+    span they touched"
+  - a focus-ring it drives itself (lens/retag-focus) to walk its own trace
+  - a scratch pane it writes intermediate conclusions into and reads back
+The TUI stops being an output channel and becomes EXTERNAL WORKING MEMORY. The
+agent renders, reads its own render back as data, re-renders — a render/reason
+loop where the interface is scratch memory.
+
+* Why it is reachable (not a rewrite)
+- The inspector (FUP-006) is already "an agent reasoning over a rendered
+  projection of a session." Point that lens at the agent's OWN session and the
+  seed exists.
+- lens/ traversals are pure tree->tree; the agent can drive its own focus without
+  a human keystroke (an intent fired programmatically, not from a chord).
+- data/forest + harness/* read-queries already expose the trace the agent would
+  lay out.
+
+* Open questions
+- The render/reason loop needs a way for the agent to READ its current rendered
+  tree back into a turn (layout/tree {} returns it — but as deliberate reasoning
+  input, not just inspection). What is the cleanest "render -> observe -> act"
+  cycle that does not burn context on every frame?
+- Does the agent's self-view share the human's terminal, or is it a headless
+  render (ExRatatui.init_test_terminal + get_buffer_content) the agent reads as
+  text without ever painting a screen? Headless self-render is likely the right
+  primitive: the agent "draws to think" with zero display.
+- Attention economics: a self-laid-out view is only useful if it COMPRESSES the
+  trace better than reading raw forest. What is the projection that earns its
+  tokens?
+
+* Security/cost notes (FUP-track, non-blocking)
+- A render/reason loop can spin (render -> observe -> render ...). Needs an
+  iteration budget / fixpoint detector. File as a hardening FUP when built.
+- Headless renders are cheap (no NIF paint) but still cost tokens to read back;
+  measure before making it a default reflex.
+
+* Acceptance (when someday built)
+- The agent, mid-task, authors a headless layout over its own forest, reads the
+  rendered buffer as reasoning input, and demonstrably uses it to resolve a task
+  it failed without it (A/B: same task with/without the self-view affordance).
+
+* References
+- docs/freeform-tui-philosophy.md (Layer −1 section, full derivation)
+- FUP-006 (inspector — the seed)
+- lib/spell_agent/harness.ex (read-queries the self-view projects)
+- ../ex_ratatui-vendored/lib/ex_ratatui.ex (init_test_terminal/get_buffer_content
+  — headless render primitive)

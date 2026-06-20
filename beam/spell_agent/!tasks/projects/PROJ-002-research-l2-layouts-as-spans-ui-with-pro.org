@@ -1,0 +1,84 @@
+#+TITLE: RESEARCH L−2: Layouts as spans — UI with provenance and time-travel
+#+STATE: ITEM
+#+SESSION_ID: 1511029ec58e9d42
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-20T20-59-50-422Z_1511029ec58e9d42.jsonl]]
+#+CUSTOM_ID: PROJ-002-research-l2-layouts-as-spans-ui-with-pro
+
+* Initial Message
+
+I want to give the agent full self-editing capabilities when I run it with `mix spell.tui --freeform` (or `mix spell.tui -f`). That means (for the v1) that in the context, you inject the prelude that corresponds to the defaults that are self-modifiable. and that the full TUI layout is shapeable through PTC Lisp, in a way that feels natural to it, in the appropriate harness/ namespace (or another if you have good reasons).
+
+Let's imagine together
+
+#+FILETAGS: :research:freeform:vision:hist:
+
+* Lineage
+Builds on PLAN-009. PARTIALLY FOLDED INTO V1: the RECORDING SEAM (authored
+layouts recorded as hist spans) is in PLAN-009 scope; full time-travel scrubbing
++ structural layout lenses are research-track here. Read
+docs/freeform-tui-architecture.md and docs/freeform-tui-philosophy.md first.
+
+* The boundary this dissolves
+PRESENT vs HISTORY. Today an interface is only ever its current frame; past
+states are gone unless explicitly snapshotted. This layer makes every layout the
+agent ever rendered a queryable, walkable, time-indexed node in the same forest
+as everything else.
+
+* Premise
+The hist layer (PLAN-001, lib/spell_agent/hist/) records every PTC program the
+agent runs as a node in a forest, with full provenance (def delta, tool calls,
+tokens, the executed CoreAST as a walkable tree via FUP-002 form_tree). A layout
+tree IS a PTC value produced by a program. Therefore a layout is already the
+SHAPE hist is built to store. Recording it is nearly free.
+
+* The moves (shallow -> deep)
+1. SHALLOW (folded into PLAN-009 v1): when layout/set authors a slot, record the
+   slot->source as a hist node. The layout gains provenance: which turn authored
+   it, what the agent was doing, what it cost.
+2. MEDIUM (this project): the form_tree lens (FUP-002) already walks PTC programs
+   structurally. Point it at recorded layouts: "every layout that used a split
+   inside a pane", "panes whose :render called harness/descendants", "layouts
+   authored in turns that also called tool/edit". Structural queries over the
+   agent's own UI history, with zero Elixir per question.
+3. DEEP (this project): TIME-TRAVEL. The layout at turn N is just the layout node
+   at seq N. Scrub the session timeline and the UI REWINDS WITH IT — because the
+   interface state at any past moment is a value already in the store. Undo
+   history for the interface, for free, in the same substrate as conversation
+   history. Replaying a session replays its interface.
+
+* Why it is reachable
+- hist already records PTC values + projects them to PTC-native trees (no Elixir
+  change per query — the form_tree anti-corruption pattern).
+- LayoutRegistry slot overrides are exactly the {slot => source} map a node would
+  carry.
+- FUP-009 (durable layouts) becomes the SHALLOW version of this; this project is
+  the deep version where layouts are not *saved* but *remembered with provenance*.
+
+* Open questions
+- Granularity: record every layout/set, or coalesce a turn's UI edits into one
+  node? (Mirror how hist coalesces a turn's def delta.)
+- Time-travel UX: is scrubbing a first-class TUI gesture (a timeline pane whose
+  cursor re-resolves the whole layout from hist at that seq), and does the
+  inspector (FUP-006) get scrubbing for free since it already reads the tree as
+  data?
+- Does recording the layout that RENDERS the hist create a loop (the UI showing
+  hist is itself in hist)? Likely fine (it is just another node) but worth a
+  deliberate decision — the self-referential frame is a feature (Layer −1) not a
+  bug.
+
+* Security/cost notes (FUP-track, non-blocking)
+- Recording every frame would flood hist; only record AUTHORED layouts (layout/set),
+  never per-frame renders. Tag clearly.
+
+* Acceptance (deep version)
+- Scrub a finished session backward; the TUI's layout at each past turn is
+  reconstructed from hist and rendered, matching what was shown then.
+- form_tree-style lens answers a structural question about the agent's layout
+  history without an Elixir change.
+
+* References
+- docs/freeform-tui-philosophy.md (Layer −2 section)
+- lib/spell_agent/hist/lens.ex (form_tree projector + .ptc lens template)
+- !tasks/follow-ups/FUP-002 (form_tree structural lens — the query engine)
+- FUP-009 (durable layouts — the shallow cousin)
+- PLAN-009 (the recording seam folded into v1)

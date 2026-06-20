@@ -1,0 +1,80 @@
+#+TITLE: RESEARCH L−5: One tree, many minds — co-edited live interface over the BEAM
+#+STATE: ITEM
+#+SESSION_ID: 1511029ec58e9d42
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-20T20-59-50-422Z_1511029ec58e9d42.jsonl]]
+#+CUSTOM_ID: PROJ-005-research-l5-one-tree-many-minds-co-edite
+
+* Initial Message
+
+I want to give the agent full self-editing capabilities when I run it with `mix spell.tui --freeform` (or `mix spell.tui -f`). That means (for the v1) that in the context, you inject the prelude that corresponds to the defaults that are self-modifiable. and that the full TUI layout is shapeable through PTC Lisp, in a way that feels natural to it, in the appropriate harness/ namespace (or another if you have good reasons).
+
+Let's imagine together
+
+#+FILETAGS: :research:freeform:vision:distributed:
+
+* Lineage
+Builds on PLAN-009 + FUP-006 (cross-session inspector). Research-track, NOT v1.
+The deepest layer — spends the BEAM dividend fully. Read
+docs/freeform-tui-architecture.md and docs/freeform-tui-philosophy.md first.
+
+* The boundary this dissolves
+MINE vs OURS. FUP-006 lets one session inspect another READ-ONLY. Drop
+"read-only": two agents (or agent + human) CO-EDIT one layout tree across the
+BEAM. The interface becomes a shared medium of thought between minds.
+
+* Premise
+The layout tree is plain data; the BEAM is built for sharing data between
+processes and nodes via message passing. FUP-006 already establishes read-only
+attach by session id. The shared-editing version is the same attach with write
+merged in.
+
+* The move
+Two participants point at one tree:
+  - one re-tags focus (lens/retag-focus) -> the other sees the cursor move
+  - one authors a pane (layout/set) -> it appears for both
+  - a human drives navigation while an agent reshapes the panes around them
+Pair programming where the shared artifact is the LIVE INTERFACE ITSELF, edited
+in the language both inspect it with. The endgame of the whole vision: the UI as
+a shared cognition medium, human and model, homoiconic on both ends.
+
+* Why it is reachable
+- FUP-006 builds session addressability + telemetry attach; this adds a merge.
+- The tree is small (a handful of slots + tags), so the merge problem is bounded.
+- ExRatatui.Distributed is already vendored (cross-node transport).
+- The BEAM's message-passing + process registry are the exact substrate for
+  multi-writer shared state.
+
+* The hard problem
+- CONCURRENT EDIT MERGE. Two writers re-tag/author the same tree. Need a merge
+  discipline: last-writer-wins per slot (coarse, probably fine for a handful of
+  slots), or a CRDT-ish per-node tag merge (focus is single-holder -> a token;
+  tags are per-node -> per-key LWW; slot authorship -> per-slot LWW). The tree's
+  smallness makes coarse LWW likely sufficient — start there.
+- FOCUS is special: at most one :focused per participant? Or one shared focus?
+  Probably PER-PARTICIPANT focus (each has their own cursor tag namespace) so two
+  minds can look at different parts of the same tree — which is more useful than a
+  single shared cursor anyway.
+
+* Open questions
+- Per-participant view vs single shared view: likely the tree is shared but FOCUS/
+  CURSOR tags are per-participant (namespaced), so "ours" applies to STRUCTURE and
+  CONTENT, "mine" applies to WHERE I LOOK. This split may be the elegant resolution
+  of mine-vs-ours: the artifact is ours, the gaze is mine.
+- Transport: same-node (shared BEAM, direct) first; cross-node (Distributed) later.
+- Consent/identity: who may attach-with-write? Experiment-first: local trusted.
+
+* Security/cost notes (FUP-track, non-blocking now, load-bearing later)
+- Write-attach is a remote-mutation surface. For experiments: local, trusted,
+  same-node only. File the auth/consent model as a blocking FUP before any
+  cross-node or untrusted write-attach.
+
+* Acceptance (when someday built)
+- Two local sessions attach to one tree; participant A authors a pane and moves
+  structure, participant B sees it; each has independent focus; no lost-update
+  on concurrent slot edits (LWW resolves deterministically).
+
+* References
+- docs/freeform-tui-philosophy.md (Layer −5 section — the endgame)
+- FUP-006 (read-only cross-session attach — the base this extends to read-write)
+- ../ex_ratatui-vendored/lib/ex_ratatui/distributed.ex (cross-node transport)
+- lib/spell_agent/tui/store.ex (telemetry attach/subscribe model)

@@ -1,0 +1,90 @@
+#+TITLE: RESEARCH L−4: Collapse view/ and tool/ — rendering is just another effect
+#+STATE: ITEM
+#+SESSION_ID: 1511029ec58e9d42
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-20T20-59-50-422Z_1511029ec58e9d42.jsonl]]
+#+CUSTOM_ID: PROJ-004-research-l4-collapse-view-and-tool-rende
+
+* Initial Message
+
+I want to give the agent full self-editing capabilities when I run it with `mix spell.tui --freeform` (or `mix spell.tui -f`). That means (for the v1) that in the context, you inject the prelude that corresponds to the defaults that are self-modifiable. and that the full TUI layout is shapeable through PTC Lisp, in a way that feels natural to it, in the appropriate harness/ namespace (or another if you have good reasons).
+
+Let's imagine together
+
+#+FILETAGS: :research:freeform:vision:effects:
+
+* Lineage
+Builds on PLAN-009. Research-track, NOT v1. EXPLICITLY breaks a v1 safety
+boundary by design — read the security notes. Read
+docs/freeform-tui-architecture.md and docs/freeform-tui-philosophy.md first.
+
+* The boundary this dissolves
+LOOKING vs ACTING. Today (PLAN-009 v1) a slot's :render is PURE: view/ + lens/ +
+harness/ read-queries over injected data, NO side-effecting tool/. This layer
+removes that wall: a widget can BE a live tool call. The interface stops being a
+view of state and becomes an active surface that queries and acts as it renders.
+
+* Premise
+v1 keeps view/ pure for safety (a render must not loop, cost, or mutate). That is
+a deliberate boundary, not a law of the design. The render contract is
+"node -> placement subtree"; nothing structural forbids a pane whose :render
+performs effects.
+
+* The move
+A pane whose render is live:
+  {:type "pane" :slot "pane/callers"
+   :render "(view/list {:items (map :name (tool/find {:target (str (harness/cursor-id) \" def->\")}))})"}
+Now "show callers of the symbol under my cursor" is a LAYOUT, not a workflow.
+"Show the diff of the file I am hovering" is a pane. The codebase is queried AS
+the UI renders; acting on it is the same gesture as looking at it. The render
+clock and the effect system merge.
+
+* Why it is reachable
+- view/ builders and tool/ already coexist in the same PtcRunner.Lisp sandbox;
+  the only thing stopping it is the deliberate tools-map restriction in the slot
+  runner. Removing the restriction is a one-line policy change — the DANGER is
+  why it is research, not the difficulty.
+
+* The danger (this is the whole point of the layer being deep)
+- A render with effects can: loop (render triggers a tool that changes state that
+  triggers a re-render), cost real money/time per frame, and MUTATE (tool/edit in
+  a render = the UI edits the codebase by being displayed).
+- The frame clock is fast; effects on the frame clock are catastrophic without
+  governors.
+
+* What it needs before it is safe to even prototype
+- A render-effect CAPABILITY tier: which tools may appear in a render (read-only
+  query tools yes; mutating tools NEVER, or only behind explicit user gesture).
+- A per-frame effect BUDGET (cost ceiling, call-count cap) enforced by the slot
+  runner.
+- Memoization/debounce so a stable cursor does not re-run tool/find every frame
+  (PROJ caching from PLAN-009 Fork D applies; here it is mandatory not optional).
+- Loop/fixpoint detection (shared with PROJ-001's render/reason loop).
+
+* Open questions
+- Is the right primitive "effects in render" at all, or "a render that DECLARES a
+  data dependency the runtime satisfies once and caches" (a reactive cell, like a
+  LiveView assign) — which gives the same UX (live callers pane) WITHOUT effects
+  on the frame clock? The reactive-cell framing may dissolve the danger entirely:
+  the pane declares `needs (tool/find ...)`, the runtime runs it on cursor-change
+  (keystroke clock, debounced) and injects the result as data/. Then render stays
+  pure and the boundary moves rather than vanishes. STRONGLY PREFER exploring
+  this framing first.
+- This is arguably where "the interface IS the agent" terminates: no line between
+  inspecting the codebase and operating on it.
+
+* Security/cost notes (FUP-track — but here security is load-bearing, not secondary)
+- tool/edit (or any mutator) in a render is the highest-risk idea in the whole
+  vision. If prototyped, START read-only-tools-only, behind the reactive-cell
+  framing, with a hard per-frame budget. File the capability-tier + budget as a
+  blocking prerequisite FUP before any mutation is allowed.
+
+* Acceptance (reactive-cell framing, the safe form)
+- A pane declares a data dependency on a read-only query keyed by the cursor; the
+  runtime satisfies it on cursor-change (debounced), injects as data/, render
+  stays pure; the "live callers pane" works with zero per-frame effects.
+
+* References
+- docs/freeform-tui-philosophy.md (Layer −4 section — the terminal boundary)
+- PLAN-009 §6 (the pure-render boundary this breaks), Fork D (render caching)
+- PtcRunner.Lisp.run (the shared sandbox; tools-map is the restriction point)
+- PROJ-001 (loop detection — shared concern)
