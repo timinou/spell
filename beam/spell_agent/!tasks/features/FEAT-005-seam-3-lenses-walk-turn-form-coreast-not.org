@@ -1,0 +1,94 @@
+#+TITLE: SEAM 3: lenses walk turn.form CoreAST (not re-parsed string)
+#+STATE: DONE
+#+SESSION_ID: 150fca134364ee8b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
+#+CUSTOM_ID: FEAT-005-seam-3-lenses-walk-turn-form-coreast-not
+#+COMPLETION_HASH: 3299b9d28abe5ff7
+
+* Initial Message
+
+kk give me your plan for PLAN-008 and any other payoff that you see along the way
+
+* Parent
+PLAN-008. Consumer seam 3. Depends on FEAT-001 (turn.form) + submodule bump.
+Independent of SEAM 1/2 except the shared build_node edit.
+
+* Problem
+Node.form is currently set to `turn.program` — a STRING (the raw emitted source).
+The lens form-walkers (Lens.collect_defs/collect_calls, lens.ex:196/221) match
+tuple AST shapes {:def,name,val,meta} and {:tool_call,name,args}. On a STRING
+they match nothing -> silently return [] (the string/tuple ambiguity the prior
+session flagged: "defs"/"form_tools" lens fields are quietly empty). Move C
+(turn.form, via FEAT-001) gives the real executed CoreAST. Point Node.form at it
+so the walkers operate on the actual tree.
+
+* Where (beam/spell_agent)
+- lib/spell_agent/hist/recorder.ex
+  - build_node/5: currently
+      form:     turn.program,          # the STRING
+      form_src: form_src,              # = render(turn.program) for display
+    CHANGE to:
+      form:     turn.form || turn.program,   # real CoreAST; fall back to string
+                                             # for synthetic turns lacking form
+      form_src: form_src,                     # unchanged — display source string
+    Keep form_src derivation (render/1 -> CoreToSource.format or passthrough for a
+    string) untouched; form_src stays the human-readable source.
+  - tools_defined/1 (line ~?): currently inspects turn.tool_calls for
+    "define-tool"/"tool/define-tool". Could ALSO derive from the form AST now, but
+    that is a consolidation — keep tool_calls-based for SEAM 3 (it reads realized
+    effects, not the program), and note the option for FUP-002. Do NOT change it
+    here unless a test demands it.
+- lib/spell_agent/hist/lens.ex
+  - collect_defs/collect_calls (lines 194-233) need NO change — they already walk
+    tuples/lists/maps. They simply START WORKING once Node.form is a real AST.
+  - project_node/1 (line 141): "form_tools" => tool_call_names(n.form) and
+    "defs" => def_names(n.form) (lines 153/154) now return correct results.
+  - name_str/1 helper: confirm it handles BINARY def names ("x") — 0.12 emits
+    binary names, not atoms (carried PLAN-007 fact). If name_str assumes atom,
+    fix it to pass binaries through (to_string is safe for both).
+- lib/spell_agent/hist/node.ex
+  - @type form: currently `term()` — already correct for an AST. Update the field
+    @doc to say "the executed CoreAST (Move C) when available, else the raw
+    source string for synthetic turns" so the dual nature is documented.
+
+* Edge cases
+- Synthetic/test turns (record_node) have turn.form == nil -> Node.form falls
+  back to the string program -> lens walkers return [] for those (same as today;
+  acceptable, synthetic turns have no real AST). Document this.
+- A form holding a nested define-tool or a tool call inside a let/do: the
+  recursive walkers already descend lists/tuples/maps -> caught correctly. Add a
+  test for a NESTED tool call (regression vs the flat-only assumption).
+- form_src (string) and form (AST) must stay CONSISTENT for non-synthetic turns:
+  CoreToSource.format(form) should ~= form_src. Add a round-trip drift test (a
+  weaker mirror of FEAT-001's, on the Hist side).
+- Binary vs atom def names: assert def_names returns the binary "x", and that any
+  lens .ptc consuming "defs" expects strings (the namespace already treats them
+  as strings per AGENTS/lens design).
+
+* Tests (beam/spell_agent test/spell_agent/hist/)
+1. REGRESSION (the headline): a node from a turn that did `(def x 1) (tool/foo {})`
+   has lens "defs" == ["x"] and "form_tools" == ["foo"] — NON-empty. (Today this
+   silently returns []; this test would fail before SEAM 3 and pass after.)
+2. NESTED: a turn with `(let [...] (tool/bar {}))` surfaces "bar" in form_tools.
+3. synthetic turn (form == nil): lens defs/form_tools == [] without crashing.
+4. binary def name: def_names yields "x" (string), not :x or "":x.
+5. form_src/form consistency: for a real turn, CoreToSource.format(node.form)
+   parses to an AST equal to node.form (no drift between display + structure).
+6. Update the 14 existing lens tests (PLAN-005) if any asserted the empty-[]
+   behaviour as "expected" — they were asserting the BUG; convert to the correct
+   non-empty expectation.
+
+* Acceptance
+- `mix test test/spell_agent/hist/ --no-deps-check` green incl. the lens suite.
+- Node.form is the real CoreAST for live turns; lens defs/form_tools correct;
+  the string-path silent-[] bug is gone.
+- form_src unchanged (display still shows source).
+- showcases c1..c8 exit 0 (c8 is the lens showcase — verify defs/form_tools now
+  render real data).
+
+* Payoff unlocked
+turn.form IS the form_tree. This makes FUP-002 (form_tree PTC structural lens,
+the deferred PLAN-005 power-lens) trivial: a PTC lens receives node.form as data
+and walks it natively. Note in FUP-002 that SEAM 3 is its enabler.
+
+NOTE [2026-06-20]: DONE (spell commit 8f46355ee). build_node sets form via turn_form/1 = turn.form (executed CoreAST, MOVE-C') || turn.program (synthetic fallback); form_src unchanged (display source). Lens.collect_defs/collect_calls now walk real tuples -> defs/form_tools non-empty (the string-path silent-[] bug gone). name_str already handled binary names (0.12). node.ex form @doc updated. plan008_seams_test SEAM 3 group: defs/form_tools non-empty from real AST, nested-in-let tool call surfaced, synthetic turn (form==nil) falls back without crash. VERIFIED in c8 showcase: lens now renders "defs" => ["plan"] (was [] pre-seam). Subsumes the PLAN-005 deferred form_tree (turn.form IS the tree) -> FUP-002.

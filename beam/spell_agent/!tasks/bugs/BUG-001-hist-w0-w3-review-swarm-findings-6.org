@@ -1,0 +1,71 @@
+#+TITLE: Hist W0-W3 review-swarm findings (6)
+#+STATE: DONE
+#+SESSION_ID: 150fca134364ee8b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
+#+CUSTOM_ID: BUG-001-hist-w0-w3-review-swarm-findings-6
+#+COMPLETION_HASH: d2cc8c5d2262dd74
+
+* Initial Message
+
+think about the most adapted memory substrate for conversations conducted on the spell agent. Consider minigraf amongst other options. Give me the thread offs
+
+* Source
+Reviewer swarm over PLAN-001 waves W0-W3, run between W3 and W4. All 6 are real
+correctness issues; none are style. Fixed in-flight before W4 integration.
+
+* Findings
+
+** B1 [P1] Recorder binds delta loses nil and deleted bindings
+File: lib/spell_agent/hist/recorder.ex  (map_delta/2)
+`Map.get(before, k) == v` conflates an absent key with a present `nil` key, so a
+turn whose memory binds `x` to `nil` records NO delta for x; resume sees x unbound.
+Worse, the delta format cannot represent a key that DISAPPEARS from turn.memory
+(a rollback/revert continuation), so folding ancestors resurrects a value the live
+env dropped. FIX: detect new-or-changed via Map.has_key?/value compare; emit an
+explicit deletion tombstone for keys present in `before` but absent in `after`;
+Reconstitute.fold_env removes tombstoned keys during the merge.
+
+** B2 [P2] record_step reuses seq numbers across appended steps
+File: lib/spell_agent/hist/recorder.ex  (record_step/4 + build_node/5)
+PtcRunner numbers each run's turns from 1, and build_node stores turn.number as
+seq directly. A second record_step in the same session creates nodes with seq
+colliding with the first step's (1,2,3 again). Seq-sorted queries + any
+find-node-by-seq become ambiguous/misordered. FIX: offset by the session's current
+max seq before recording a step's turns.
+
+** B3 [P2] Store.Memory list(:session, sid) ignores session scope
+File: lib/spell_agent/hist/store/memory.ex  (list/2, :session clause)
+The behaviour docs say a binary session filters; only :tool/:crystal ignore it.
+The :session match clause ignores the arg, returning ALL sessions. (Low live
+impact - sessions are the top-level kind - but violates the documented contract
+and the cross-session-no-leak invariant the other kinds uphold.) FIX: split into
+{:session, nil} (all) and {:session, s} (single key) patterns.
+
+** B4 [P2] Id.node_id collides nil parent with empty-string parent
+File: lib/spell_agent/hist/id.ex  (node_id/2)
+`parent_id || ""` encodes a root (nil parent) identically to a node whose parent
+id is "". Same form_src recorded once as root and once with parent "" yields the
+same content id, overwriting/dedup-ing two distinct DAG positions. FIX: tag
+presence explicitly (e.g. distinct sentinel/iodata for nil vs a real binary).
+
+** B5 [P2] Tools.inventory error heuristic diverges from Query
+File: lib/spell_agent/hist/tools.ex  (error_result?/1)
+inventory recognizes only {:error,_} and %{error: _}; Query.status_of_result also
+treats %{"err"=>_}, %{"error"=>_}, %{err: _} as errors. Authored-tool failure
+counts underreport, skewing promote/prune decisions. FIX: extract ONE shared
+result-status classifier and use it in both Query and Tools.
+
+** B6 [P2] Spans.cost ignores string-keyed token maps
+File: lib/spell_agent/hist/spans.ex  (cost/1)
+cost/1 matches token payloads with ATOM keys only (%{input:..} / %{tokens:..}),
+but the module documents mixed atom/string span maps and persisted telemetry is
+string-keyed. A %{"tokens" => %{"input"=>..,"output"=>..}} subtree sums to zero -
+silent cost loss. FIX: read input/output/tokens through a mixed-key accessor (the
+same `get/2` helper spans.ex already uses for :tokens) or normalize first.
+
+* Resolution
+Fix all 6, add regression tests per finding, re-run full hist suite + showcases.
+B1 and B5 are shared-semantics fixes (deletion tombstones; one error classifier) -
+do them as shared helpers, not local patches, to prevent re-divergence.
+
+NOTE [2026-06-20]: All 6 fixed + 7 regression tests (bug001_regression_test.exs). B1/B5 fixed as shared helpers (Node.apply_binds deletion-aware fold + Hist.Result one classifier) to prevent re-divergence. B4 uses 0x00/0x01 parent-presence tag. Full hist suite 60 passed; all 5 showcases exit 0; zero warnings in hist code.

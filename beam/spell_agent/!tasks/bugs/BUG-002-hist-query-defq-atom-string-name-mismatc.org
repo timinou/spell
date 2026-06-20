@@ -1,0 +1,29 @@
+#+TITLE: Hist Query.defq atom/string name mismatch
+#+STATE: DONE
+#+SESSION_ID: 150fca134364ee8b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
+#+CUSTOM_ID: BUG-002-hist-query-defq-atom-string-name-mismatc
+#+COMPLETION_HASH: 748505e077ea53ec
+
+* Initial Message
+
+think about the most adapted memory substrate for conversations conducted on the spell agent. Consider minigraf amongst other options. Give me the thread offs
+
+* Symptom
+`Query.defq/3` (and its `contains_def?/2`) compares the def name with `==`, so a
+def whose AST name is an ATOM (`{:def, :plan, ...}` — how PTC-Lisp programs render)
+never matches a STRING `sym` arg. The `hist/def` namespace verb receives tool args
+as strings (`"plan"`), so `(hist/def {:sym "plan"})` always returns []. Surfaced by
+namespace_test; query_test only passed because it calls `defq(..., :foo)` with an
+atom.
+
+* Fix
+Normalize both the form name and the wanted sym to a common string form before
+comparing in `contains_def?/2`, so :plan and "plan" match. Keep accepting either
+atom or string at the defq/3 boundary.
+
+* Test
+namespace_test "hist/def locates a definition" (string sym vs atom def) + keep
+query_test's atom-sym case green.
+
+NOTE [2026-06-20]: Fixed: contains_def?/2 now compares names via name_str/1 (atom|string -> string), and recurses the def value on no-match so nested defs are still found. namespace_test "hist/def" (string sym vs atom def) green; query_test atom-sym case stays green. Full hist suite 80 passed.

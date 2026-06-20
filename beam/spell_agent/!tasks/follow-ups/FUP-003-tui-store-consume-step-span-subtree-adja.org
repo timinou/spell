@@ -1,0 +1,62 @@
+#+TITLE: Tui.Store consume Step span subtree (adjacent, not gated by A/B/C)
+#+STATE: ITEM
+#+SESSION_ID: 150fca134364ee8b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
+#+CUSTOM_ID: FUP-003-tui-store-consume-step-span-subtree-adja
+
+* Initial Message
+
+kk give me your plan for PLAN-008 and any other payoff that you see along the way
+
+* Parent
+PLAN-008. Deferred — and FLAGGED AS OUT OF SCOPE for the A/B/C cutover. Tracked
+here so it is not lost, but it does NOT depend on Moves A/B/C and must not be
+bundled into the seams.
+
+* Opportunity
+Tui.Store currently RE-REDUCES a span subtree from telemetry/events to display a
+run's execution structure (the prior session's finding: span subtree is
+re-derived rather than read). The runtime already has the span/journal structure
+on the %Step{} (`:journal` is a %Step{} field; span_root flows onto Node). A
+clean version would ATTACH the span subtree to the Step at the source (a
+Move-C-adjacent "structured trace" addition) and let Tui.Store READ it instead of
+re-deriving — the same outside-in-reconstruction smell A/B/C target, but in the
+TUI layer.
+
+* Why it is SEPARATE from A/B/C
+- A/B/C cover def-delta, handle realization, and the program AST. The span/trace
+  SUBTREE (per-step child spans, tool/pmap nesting, timings) is a DIFFERENT
+  structure. Move C ships the program form, not the execution trace tree.
+- 0.12's TraceLog subsystem (PtcRunner.TraceLog, added by the maintainer —
+  PLAN-007 finding) may ALREADY deliver most of this. INVESTIGATE FIRST: does
+  TraceLog.TurnEvent / the TraceLog tree give Tui.Store a ready span subtree? If
+  so this FUP is mostly wiring Tui.Store to consume TraceLog, not a new fork Move.
+- Needs its own fork change (Step span-subtree attach) ONLY if TraceLog doesn't
+  cover it. Decide after reading TraceLog.
+
+* Proposed approach (investigate -> decide)
+1. Read fork lib/ptc_runner/trace_log/ (TurnEvent, the TraceLog tree builder) —
+   determine if it exposes a per-step span subtree with tool/pmap nesting.
+2. If YES: wire Tui.Store (beam/spell_agent/lib/spell_agent/tui/store.ex or
+   wherever the span reduction lives) to read TraceLog instead of re-reducing
+   events. Delete the re-derivation.
+3. If NO: file a small fork FEAT (Move-C-adjacent): attach the span subtree to
+   %Step{} (or %Turn{}) at assembly, mirror it onto Node.span_root, let Tui.Store
+   read it.
+
+* Tests
+- Tui.Store renders the same span structure it does today, sourced from the
+  attached subtree (snapshot/structure-equality test against the current
+  re-derived output).
+- A multi-tool / pmap run's nesting is preserved (depth + ordering).
+
+* Acceptance
+- Tui.Store reads an attached span subtree (from TraceLog or an attached field)
+  rather than re-reducing events; output unchanged; the re-derivation deleted.
+- spell_agent suite + TUI tests green.
+
+* Why deferred + flagged
+Adjacent architecture cleanup in a different layer with a different data
+structure. Bundling it into A/B/C would conflate two unrelated reconstructions
+and bloat the cutover. Do the A/B/C payoff first; revisit this after, starting
+with the TraceLog investigation (it may already be 80% done by the maintainer).

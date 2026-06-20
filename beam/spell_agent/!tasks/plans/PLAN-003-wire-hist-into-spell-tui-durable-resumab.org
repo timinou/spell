@@ -1,0 +1,102 @@
+#+TITLE: Wire Hist into spell.tui: durable resumable conversation
+#+STATE: DONE
+#+SESSION_ID: 150fca134364ee8b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
+#+CUSTOM_ID: PLAN-003-wire-hist-into-spell-tui-durable-resumab
+#+COMPLETION_HASH: da2346fcca901cf4
+
+* Initial Message
+
+how can you integrate these features in the spell.tui so that the conversation gains history?
+
+* GOAL
+Make the spell.tui conversation gain durable, resumable history by wiring the
+SpellAgent.Hist facade into the live agent loop + TUI. Today the TUI is amnesiac:
+Tui.Store is an in-memory span forest reset per submit (app.ex:206 Store.reset),
+Session.run discards step.turns (session.ex:65 keeps only step.return), and nothing
+survives app close. Hist is built + tested (PLAN-001) and its consumption surface is
+ready (PLAN-002: facade + View + transcript). This FEAT is the four-seam wiring.
+
+Depends on: PLAN-001 (DONE), PLAN-002 (DONE).
+
+* CURRENT WIRING (verified)
+  composer --Enter--> App.default_submit (app.ex:409) --> Session.run (session.ex:50)
+    in a Task --telemetry [:ptc_runner,:sub_agent,*]--> Tui.Store (span forest)
+    --{:store_updated}--> re-project panes --> render
+  - app.ex:206 calls Store.reset on submit (destroys prior forest)
+  - session.ex:65: case SubAgent.run -> {:ok, step.return} (step.turns dropped)
+  - Tui.Store has no disk; mount (app.ex:51) starts cold
+
+* THE FOUR SEAMS (all additive; no PtcRunner change)
+
+** SEAM 1 WRITE  (lib/spell_agent/session.ex)
+Give run/2 a session_id (opt or Hist.new_session_id()). After SubAgent.run, on BOTH
+{:ok,step} and {:error,step} branches (a failed run is history too), call
+  Hist.record(sid, step, prompt: prompt, model: model)
+prompt: is the user message -> lands on Node.prompt (head node) -> faithful
+transcript. Store choice via Hist.default_store (config: Store.Khepri prod, Memory
+test). ACCEPTANCE: after two runs in one sid, Store.list(:node, sid) has both runs'
+turns with monotonic seq; Hist.resume(sid).messages interleaves both prompts.
+
+** SEAM 2 WINDOW  (lib/spell_agent/tui/app.ex ~206)
+Replace destructive Store.reset on submit with non-destructive windowing:
+  {:ok, %{shown: nodes}} = Hist.window(sid, keep_recent: 8, keep_initial: true)
+Span forest may stay run-scoped (execution interior); the CONVERSATION view becomes
+cumulative + recallable (Hist.recall). ACCEPTANCE: submitting a 2nd mission does not
+wipe the 1st from the history view; a trimmed turn returns via hist/recall.
+
+** SEAM 3 HISTORY PANE  (lib/spell_agent/tui/panes/history.ex, mirror detail.ex)
+New pane waking on [:turn,:stop]; projects from Hist not the span store:
+  {:ok, %View{messages: msgs, tip: tip}} = Hist.resume(sid)
+Render msgs as a user<->assistant scrollback (now faithful via U2), highlight tip.
+ACCEPTANCE: pane shows interleaved user+assistant lines spanning every run in the
+session; survives a SpanTree reset.
+
+** SEAM 4 RESUME ON MOUNT  (lib/spell_agent/tui/app.ex ~51 mount/1)
+  sid = case Hist.latest() do %Session{id: id} -> id; nil -> Hist.new_session_id() end
+  scrollback = case Hist.resume(sid) do {:ok, %View{messages: m}} -> m; _ -> [] end
+Seed the History pane from scrollback. ACCEPTANCE: close TUI mid-conversation,
+reopen -> the prior conversation's transcript is present before any new run.
+
+* OPEN DECISION (see DEC item)
+session_id strategy: (a) one sid per TUI process lifetime (simplest), vs (b) one sid
+per mission + a session-list pane (richer, more wiring). Start with (a).
+
+* STORE LIFECYCLE
+Hist.Store.Khepri needs the Ra system booted once per BEAM (single data dir, e.g.
+.spell/forest). Boot from Application.start or lazily on first durable session. Tests
++ headless use Store.Memory (zero infra) via the store: opt / config.
+
+* NON-GOALS
+Full re-eval of stored forms (FUP-REEVAL). Branch/cursor UI beyond :main. Multi-pane
+session switching if decision (a) is chosen.
+
+* ADDENDUM — the full SIX seams (table parity)
+The body above listed 4 seams but the capability table has 6. The two missing,
+now first-class:
+
+** SEAM 5 VERBS — agent self-query in the conversation (lib/spell_agent/tools.ex)
+Merge Hist.verbs(sid) into build_tools_map so the running agent can call
+(hist/find {...}), (hist/forms {...}), (hist/cost {}), (hist/env {}), etc. IN-BAND,
+mid-conversation. This is the homoiconic payoff at the TUI layer: the agent
+interrogates its own past while working. Without it the history is durable but the
+agent is still blind to it. ACCEPTANCE: a program run in a session can call
+(hist/cost {}) and get this session's token total; (hist/find {:status "error"})
+returns prior errored tool calls.
+
+** SEAM 6 STORE CHOICE + LIFECYCLE — (lib/spell_agent/application.ex, config)
+config :spell_agent, SpellAgent.Hist, store: SpellAgent.Hist.Store.Khepri (prod);
+tests/headless pass store: Store.Memory via opt. Boot the Khepri Ra system once per
+BEAM (single data dir .spell/hist) from Application.start, lazily-tolerant if absent
+(fall back to Memory + log). ACCEPTANCE: prod run persists across BEAM restart; test
+run uses Memory with zero infra; a Khepri-down boot degrades to Memory, never crashes.
+
+* SEAM->CAPABILITY MAP (the 6)
+1 WRITE     -> persist each run            Hist.record/3
+2 WINDOW    -> non-destructive compaction  Hist.window/2
+3 PANE      -> typed resume + scrollback   Hist.resume/2 -> %View{}
+4 RESUME    -> reopen last convo           Hist.latest/1 + resume
+5 VERBS     -> agent self-query in pane    Hist.verbs/2 (merged into tools)
+6 STORE     -> store choice                config / Application lifecycle
+
+NOTE [2026-06-20]: All six seams wired + tested. SEAM1 (session.ex record on success+failure best-effort), SEAM2 (app.ex span-only reset; history survives submit), SEAM3 (Panes.History pure project over Hist + history-aware 3-col layout + reproject assigns + materialize), SEAM4 (mount resume_session_id->latest, fresh on empty/error), SEAM5 (Hist.verbs merged into Session tools map), SEAM6 (Application supervises Store.Memory; Khepri opt-in via config). Tests: history_test (7), session_recording_test (4), app_test resume+empty+ring+scroll (4). Full suite 326 passed. Review swarm (2 reviewers) -> BUG-004 (4 P2) all fixed+regressed. NB: 13 existing hist tests had start_supervised!(Memory) removed since Memory is now app-supervised; 8 showcases tolerate already-started.

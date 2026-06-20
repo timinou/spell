@@ -1,0 +1,69 @@
+#+TITLE: Hist interface upgrade: View, Node.prompt, facade
+#+STATE: DONE
+#+SESSION_ID: 150fca134364ee8b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
+#+CUSTOM_ID: PLAN-002-hist-interface-upgrade-view-node-prompt
+
+* Initial Message
+
+how can you integrate these features in the spell.tui so that the conversation gains history?
+
+* WHAT (done this session)
+
+Interface refinements to SpellAgent.Hist, motivated by designing the spell.tui
+integration. The integration revealed three gaps; rather than wire around them in
+the TUI, the interfaces themselves were improved so consumers (TUI, headless
+drivers, the hist/* namespace) consume them naturally.
+
+Parent: PLAN-001-hist-homoiconic-conversation-history-sub.
+
+* THE THREE UPGRADES
+
+** U1 — Hist.View typed struct (lib/spell_agent/hist/view.ex)
+Reconstitute.at/3 returned a naked %{} map; the namespace did Map.get(state, field)
+with no type. Now returns %SpellAgent.Hist.View{session_id, cursor, tip, env, tools,
+messages, nodes}. A struct is still a map, so existing %{env: env} = view
+destructuring keeps working (verified: all prior tests green unchanged). New `tip`
+field = the cursor node, so a renderer can highlight "you are here" for free.
+
+** U2 — Node.prompt + interleaved transcript
+to_messages/1 was assistant-only (for %Node{say}), so it could NOT render a faithful
+user<->assistant scrollback - the exact thing a TUI history pane needs. Added
+Node.prompt (String.t | nil), carried ONLY on a step's HEAD node (idx==1 in
+Recorder.record_step, sourced from the prompt: opt). to_messages/1 now flat_maps each
+node to [user prompt?] ++ [assistant say?] in path order, yielding a faithful
+user->assistant->user->assistant transcript across many recorded runs. Model
+rationale: a prompt is an ATTRIBUTE of where a step begins, not a node kind - no
+schema pollution, no synthetic :user nodes.
+
+** U3 — SpellAgent.Hist facade (lib/spell_agent/hist.ex)
+Callers had to reach into 9 submodules and hand-roll "latest session" (I had even
+invented Session.current/0 / last/1 in an earlier sketch - they did not exist). Now
+one front door closing over a Store impl:
+- new_session_id/0, default_store/0 (config :spell_agent, SpellAgent.Hist, store:;
+  falls back to Store.Memory)
+- record/3, resume/2 (-> {:ok, %View{}}), window/2, recall/3, distill/3
+- verbs/2 (the hist/* tool map), sessions/1 (newest-first), latest/1 (or nil)
+default_store + per-call store: opt means callers never thread impl by hand.
+
+* VERIFICATION
+- mix test test/spell_agent/hist/ --no-deps-check => 93 passed (was 85; +8).
+- New: test/spell_agent/hist/interface_test.exs (8 tests): View typing +
+  map-compat, interleaved transcript, head-only prompt tagging, facade
+  default_store fallback + override, sessions/latest ordering, latest=nil empty,
+  facade resume == Reconstitute.at.
+- New showcase: scripts/hist/c7_facade_transcript.exs (exit 0) - records 3 missions
+  through the facade, reopens via latest, resumes a typed View, prints the
+  cross-run interleaved transcript. This is the TUI consumption surface demonstrated.
+- All 6 prior showcases still exit 0. Zero hist compile warnings.
+
+* GOTCHA CAPTURED
+Node.say derives from turn.result (extract_say/1), NOT a :say key. Tests/scripts
+seeding a node's say MUST pass result:. (Cost one failed test iteration.)
+
+* FILES
+Created: lib/spell_agent/hist/view.ex, lib/spell_agent/hist.ex,
+test/spell_agent/hist/interface_test.exs, scripts/hist/c7_facade_transcript.exs.
+Modified: lib/spell_agent/hist/node.ex (prompt field + typedoc),
+lib/spell_agent/hist/recorder.ex (head-turn prompt injection),
+lib/spell_agent/hist/reconstitute.ex (View return, interleaved to_messages, moduledoc).

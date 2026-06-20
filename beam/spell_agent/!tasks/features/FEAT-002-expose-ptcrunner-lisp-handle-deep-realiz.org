@@ -1,0 +1,84 @@
+#+TITLE: Expose PtcRunner.Lisp.Handle.deep_realize/1 (fork)
+#+STATE: DONE
+#+SESSION_ID: 150fca134364ee8b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
+#+CUSTOM_ID: FEAT-002-expose-ptcrunner-lisp-handle-deep-realiz
+#+COMPLETION_HASH: ea33e63e12f4bc8b
+
+* Initial Message
+
+kk give me your plan for PLAN-008 and any other payoff that you see along the way
+
+* Parent
+PLAN-008. Fork prereq #2. Lets Hist delete its ENTIRE Realize module (including
+the continuation-tape path that Step.freeze cannot reach).
+
+* Problem
+Two handle-realization deep-walkers exist:
+  - Hist.Realize.walk/1 (beam/spell_agent/lib/spell_agent/hist/realize.ex) — used
+    on Hist's write path for node fields AND for the L0 continuation tape/memory
+    (recorder.ex maybe_record_cont).
+  - PtcRunner.Step.freeze/1's private freeze_term/1 (fork step.ex:471) — realizes
+    handles inside a %Step{}.
+They are the SAME algorithm (realize %Handle{} via HandleStore, recurse maps/
+lists/tuples/struct-fields, tombstone on failure). Move B replaces Hist.Realize
+for the Step path, but the CONT tape is not part of a Step, so Hist would still
+need a walker for it. Solution: expose ONE public realization walker in the
+runtime; freeze delegates to it; Hist calls it for the cont tape; Hist.Realize
+is deleted entirely.
+
+* Where (fork: beam/ptc_runner, branch `spell`)
+- lib/ptc_runner/lisp/handle.ex (the Handle module — spell-original, PATCH-3):
+  ADD a public `deep_realize/1`:
+    @doc "Deep-walk a term, realizing every %Handle{} via HandleStore; recurse
+    into maps/lists/tuples/struct public fields; tombstone an unrealizable handle
+    as {:__frozen_unrealized__, reason, meta} instead of crashing."
+    @spec deep_realize(term()) :: term()
+    def deep_realize(term), do: ...  (lift the exact body of Step.freeze's
+    freeze_term/1 + freeze_handle/1 + freeze_struct/1)
+  Use the SAME tombstone tag the Step path uses: {:__frozen_unrealized__,...}
+  (canonical — see FEAT-004 tombstone reconciliation). Keep an `unrealized?/1`
+  predicate here too (or reuse Step.unrealized?/1 — pick ONE home; Handle is the
+  better home since freeze delegates to it).
+- lib/ptc_runner/step.ex (freeze/1, line 449): REPLACE the private
+  freeze_term/freeze_handle/freeze_struct bodies with delegation:
+    defp freeze_term(term), do: PtcRunner.Lisp.Handle.deep_realize(term)
+  (or inline `Handle.deep_realize` at each field in freeze/1). Step.freeze's
+  public contract is UNCHANGED — it still returns a %Step{} with all handle-
+  bearing fields realized; only the implementation now lives in Handle.
+  Keep Step.unrealized?/1 as a thin delegate to Handle.unrealized?/1 for back-compat
+  (don't break existing Move-B callers/tests).
+
+* Edge cases
+- Handle struct itself must NOT be walked field-wise (its `store` is a pid/name).
+  deep_realize realizes THROUGH the store then walks the materialized value —
+  preserve that exactly (freeze_handle already does this).
+- A realized value can nest further handles -> recurse on the realized term
+  (freeze_term already does this; keep it).
+- Non-Handle struct: realize public fields, preserve struct type (freeze_struct).
+- Evicted/tombstoned handle: {:error, reason} from HandleStore.realize ->
+  {:__frozen_unrealized__, reason, meta}. Never crash.
+
+* Tests (fork)
+1. deep_realize on a bare %Handle{} returns the realized term.
+2. deep_realize on a nested map/list/tuple containing handles realizes all,
+   preserving structure and non-handle leaves.
+3. deep_realize on an evicted handle yields {:__frozen_unrealized__, reason, meta}
+   (force eviction or stub HandleStore.realize to return {:error, :evicted}).
+4. Step.freeze/1 still passes its existing Move-B tests unchanged (delegation is
+   behaviour-preserving) — run step_freeze_test.exs.
+5. unrealized?/1 recognizes the tombstone, rejects normal values.
+
+* Acceptance
+- `cd beam/ptc_runner && mix test --no-deps-check` green incl. existing
+  step_freeze_test.exs (6 tests) unchanged.
+- Handle.deep_realize/1 public + documented; Step.freeze delegates; one tombstone
+  tag {:__frozen_unrealized__,...} in the runtime.
+- Neat commit on `spell`: "feat(handle): expose deep_realize/1; Step.freeze
+  delegates". FORK_CHANGES.md + SPELL_PATCHES.md updated.
+
+* Notes
+Behaviour-preserving refactor + one new public fn. Independent of FEAT-001 (no
+file overlap) -> land both fork prereqs, then bump the submodule once.
+
+NOTE [2026-06-20]: DONE on fork (commit b3fd78d4). PtcRunner.Lisp.Handle.deep_realize/1 + unrealized?/1 + tombstone type added; Step.freeze/1 and Step.unrealized?/1 delegate (private freeze_term/freeze_handle/freeze_struct deleted). Public contract unchanged — existing step_freeze_test.exs (6) pass verbatim. New handle_deep_realize_test.exs (8 passed): bare/nested-map/list-tuple/struct/recursive realize, evicted-term tombstone {:__frozen_unrealized__,...}, identity on plain data. Enables Hist to delete its entire Realize module (Step path uses freeze, cont/tape path calls deep_realize directly).

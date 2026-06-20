@@ -1,0 +1,102 @@
+#+TITLE: SEAM 1: Recorder reads turn.def_delta; delete map_delta + deleted_marker
+#+STATE: DONE
+#+SESSION_ID: 150fca134364ee8b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
+#+CUSTOM_ID: FEAT-003-seam-1-recorder-reads-turn-def-delta-del
+#+COMPLETION_HASH: 90f279bcaa5d77ac
+
+* Initial Message
+
+kk give me your plan for PLAN-008 and any other payoff that you see along the way
+
+* Parent
+PLAN-008. Consumer seam 1 — the riskiest, do it FIRST. Depends on FEAT-001
+(turn.def_delta must exist) + submodule bump.
+
+* Problem
+Recorder.build_node computes a node's env delta by SNAPSHOT-DIFFING two full
+memory maps: `binds = map_delta(prev_mem, turn.memory)` (recorder.ex:248). This
+re-derives what the runtime already computed at eval time (now on turn.def_delta
+via FEAT-001). The snapshot-diff approach also forced BUG-001 B1's deletion-by-
+omission hack (deleted_marker), which is unrepresentable garbage now that
+def_delta has no `removed` set (PTC has no undef).
+
+* Where (beam/spell_agent)
+- lib/spell_agent/hist/recorder.ex
+  - build_node/5 (line ~169): currently
+      `binds = map_delta(prev_mem, mem)` where `mem = turn.memory || %{}`.
+    REPLACE with: read turn.def_delta when present, fold introduced ∪ changed:
+      binds =
+        case turn.def_delta do
+          %{introduced: intro, changed: chg} -> Map.merge(intro || %{}, chg || %{})
+          _ -> map_delta(prev_mem, mem)   # guarded fallback for synthetic turns
+        end
+    Keep `prev_mem`/`mem` only if the fallback is retained (see decision below).
+  - map_delta/2 (line ~243-249): DELETE if no live path needs it; else keep ONLY
+    as the documented synthetic-turn fallback above, and strip its `removed`/
+    deleted_marker arm (the `removed = Map.keys(before) -- Map.keys(after_)` +
+    `Enum.reduce(removed, ..., deleted_marker())` lines) — that arm is now dead.
+    Decision: KEEP a minimal map_delta (introduced/changed only, no removed) as
+    the synthetic fallback, because record_node/synthetic_turn paths (tests, live
+    tee, synthetic history) produce turns with def_delta == nil. Document why.
+- lib/spell_agent/hist/node.ex
+  - DELETE deleted_marker/0 (line ~?) and the @deleted module attr, IF nothing
+    else references them after this seam. grep first.
+  - apply_binds/2: SIMPLIFY. Current body:
+      {dels, sets} = Map.split(binds, for {k,v} <- binds, v == @deleted, do: k)
+      env |> Map.merge(sets) |> Map.drop(Map.keys(dels))
+    Since binds never contains @deleted anymore, collapse to:
+      def apply_binds(env, binds), do: Map.merge(env, binds)
+    Update the @doc to drop the BUG-001 B1 deletion narrative (now impossible).
+  - Update the @moduledoc "Realization invariant"/binds prose if it references
+    snapshot-diff semantics.
+- lib/spell_agent/hist/reconstitute.ex
+  - reconstitute.ex:108 calls Node.apply_binds(env, binds) — still correct after
+    simplification (merge-only). No change needed unless it special-cases
+    deleted_marker anywhere (grep; remove if so).
+
+* Edge cases
+- Synthetic/test/live-tee turns (record_node -> synthetic_turn) have def_delta ==
+  nil -> the guarded map_delta fallback handles them. Their `binds` is still a
+  correct introduced∪changed delta vs prev_mem (no removed arm needed: synthetic
+  turns don't delete bindings either).
+- A turn that defines x to nil: def_delta.introduced must contain {"x" => nil}
+  (Map distinguishes absent from present-nil). Verify FEAT-001 preserves this;
+  test it here too.
+- A turn that REBINDS x (already in env, new value): lands in def_delta.changed,
+  folds correctly. introduced vs changed distinction is preserved on Node only if
+  FUP-001 is done; for SEAM 1 we merge them into one `binds` map (current Node
+  shape). Do NOT widen Node here — that's FUP-001.
+
+* Tests (beam/spell_agent test/spell_agent/hist/)
+1. EQUIVALENCE regression: record a real 2-turn step; for each node assert
+   `binds == fold(turn.def_delta)` and that folding all nodes' binds from root ==
+   final step.memory. (The contract FEAT-001 test asserts upstream; assert it
+   survives the Hist round-trip.)
+2. def-to-nil: a turn binding x to nil yields a node whose binds has {"x"=>nil}
+   and reconstitute restores x=nil (not absent).
+3. rebind: turn 1 defs x=1, turn 2 rebinds x=2; reconstitute at turn-2 cursor
+   gives x=2; at turn-1 cursor gives x=1.
+4. NO deleted_marker anywhere: grep the codebase test asserts deleted_marker/0 is
+   gone (or, if kept-as-dead is rejected, a type-level absence). A node's binds
+   never contains :__hist_deleted__.
+5. synthetic turn (record_node) still records correct binds via fallback.
+6. Existing BUG-001 regression tests: update or delete the B1 deleted_marker test
+   — the bug is now UNREPRESENTABLE; convert it to a test asserting the deletion
+   arm is gone (def_delta has no removed). Do NOT silently drop coverage; replace
+   with the stronger invariant.
+
+* Acceptance
+- `mix test test/spell_agent/hist/ --no-deps-check` green.
+- map_delta either deleted or reduced to documented synthetic fallback (no
+  removed/deleted_marker arm).
+- Node.apply_binds is merge-only; deleted_marker/@deleted gone.
+- Equivalence test green; BUG-001 B1 test converted to the stronger invariant.
+- showcases c1..c8 still exit 0.
+
+* Risk
+The equivalence proof (PLAN-008 body) is algebraic; this seam's test #1 makes it
+empirical before any deletion is trusted. If test #1 ever fails, STOP — it means
+initial_user_ns != prev_mem in the loop (a FEAT-001 plumbing bug), fix there.
+
+NOTE [2026-06-20]: DONE (spell commit 8f46355ee). Recorder.build_node reads binds via binds_of/2 (turn.def_delta introduced ∪ changed); map_delta kept as synthetic-turn fallback with the removed/deleted_marker arm DELETED. Node.deleted_marker/0 + @deleted removed; apply_binds is now Map.merge/2 (merge-only). bug001 B1 test converted from "deletion marker" assertion to the stronger "deletion-by-omission is unrepresentable" invariant. New plan008_seams_test.exs SEAM 1 group: binds==introduced∪changed, def-to-nil recorded, no deletion sentinel, merge fold. Equivalence (fold==memory) proven upstream in fork turn_move_propagation_test + holds through the Hist round-trip. 124 hist tests green.

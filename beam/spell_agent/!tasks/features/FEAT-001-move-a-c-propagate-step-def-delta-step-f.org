@@ -1,0 +1,90 @@
+#+TITLE: MOVE-A'/C': propagate Step.def_delta + Step.form to Turn (fork)
+#+STATE: DONE
+#+SESSION_ID: 150fca134364ee8b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
+#+CUSTOM_ID: FEAT-001-move-a-c-propagate-step-def-delta-step-f
+#+COMPLETION_HASH: 5a03a0f1f3d179cf
+
+* Initial Message
+
+kk give me your plan for PLAN-008 and any other payoff that you see along the way
+
+* Parent
+PLAN-008 (Hist consumes Step.def_delta/freeze/form). This is fork prereq #1.
+
+* Problem
+Moves A (Step.def_delta) and C (Step.form) live on a per-RUN %PtcRunner.Step{}.
+Hist.Recorder iterates step.turns PER-TURN (%PtcRunner.Turn{}), which does NOT
+carry def_delta or form. So the per-turn consumer cannot reach the Move data and
+is forced to re-diff (map_delta) and re-parse (string program). Carry the two
+fields one hop down: Step -> Turn.
+
+* Where (all in fork: beam/ptc_runner, branch `spell`)
+- lib/ptc_runner/turn.ex
+  - defstruct (line ~36): currently
+      [:number,:raw_response,:program,:result,:prints,:tool_calls,:memory,
+       :success?,:messages,:system_prompt,:prelude_trace, type: :normal]
+    ADD `:def_delta` and `:form`.
+  - @type t (line ~81): add `def_delta: %{introduced: map(), changed: map()} | nil`
+    and `form: term() | nil` (executed CoreAST). Mirror the doc style of the
+    Step fields (step.ex:202 def_delta, step.ex:209 form) — SPELL MOVE-A'/C'
+    comment block explaining these are the per-turn projection of the Step Moves.
+  - Turn.success/Turn.failure constructors: ensure both thread `def_delta` and
+    `form` out of their `params` map into the struct (same way they already
+    thread `memory`/`prints`/`tool_calls`). Read those fns before editing — they
+    take (turn_number, raw_response, program, result, params); add the two keys
+    to whatever Map.merge / struct build they do.
+- lib/ptc_runner/sub_agent/loop/metrics.ex
+  - build_turn/5 (line 397): the `params = %{...}` map (line ~418) copies
+    prints/tool_calls/memory/messages/system_prompt/prelude_trace/type. ADD:
+      def_delta: Keyword.get(opts, :def_delta),
+      form:      Keyword.get(opts, :form)
+    so callers can pass them through.
+- lib/ptc_runner/sub_agent/loop.ex
+  - build_success_turn/4 (line 1157): the Metrics.build_turn call already passes
+    `memory: lisp_step.memory`. ADD `def_delta: lisp_step.def_delta` and
+    `form: lisp_step.form` (lisp_step is the per-run %Step{} in scope).
+  - error turn (line ~864-871): same Metrics.build_turn call with
+    `memory: lisp_step.memory`. ADD the same two opts.
+  - Audit for any OTHER Metrics.build_turn call sites that have a `lisp_step` in
+    scope and should carry the fields (grep `Metrics.build_turn` in
+    lib/ptc_runner/sub_agent/). Sites WITHOUT a lisp_step (synthetic/budget/
+    terminal-attach turns) correctly leave def_delta/form nil.
+
+* Edge cases
+- A turn built without a lisp_step (compile-error-before-eval, budget-exhausted,
+  prelude attach failure) has no def_delta/form -> nil. Downstream (FEAT-003)
+  must treat nil as "fall back to map_delta / re-parse". Do NOT fabricate empty
+  deltas; nil is the honest signal.
+- def names in 0.12 are BINARY ("x") not atom (carried fact from PLAN-007 Move
+  work). def_delta keys are therefore binary. Keep them binary end to end; do
+  NOT atomize.
+- form is the raw CoreAST tuple shape {:def,name,val,meta}/{:tool_call,name,args}/
+  {:call,{:var,a},args}. Pass through verbatim; no normalization here.
+
+* Tests (fork: test/ptc_runner/ or wherever Turn/loop tests live)
+1. A 2-turn run: each %Turn{} in step.turns carries its OWN def_delta and form
+   (non-nil, distinct per turn).
+2. EQUIVALENCE (the load-bearing test): fold the per-turn def_deltas
+   (introduced ∪ changed, in order) and assert it equals step.memory. This is
+   the contract FEAT-003 relies on to delete map_delta.
+3. A synthetic/no-eval turn (e.g. compile error before run) has def_delta == nil
+   and form == nil (the honest-nil contract).
+4. form round-trips: PtcRunner.Lisp.CoreToSource.format(turn.form) parses back to
+   an equivalent AST (guards against passing a mangled form).
+
+* Acceptance
+- `cd beam/ptc_runner && mix test --no-deps-check` green (filter ra_/khepri noise
+  not needed in fork; just compile + run the Turn/loop tests).
+- New fields visible: a live 2-turn run yields turns each with non-nil
+  def_delta/form; fold == memory.
+- Commit on branch `spell` as a neat single commit:
+  "feat(turn): propagate Step.def_delta + Step.form to Turn (MOVE-A'/C')".
+- Update FORK_CHANGES.md ledger + SPELL_PATCHES.md MOVE section.
+
+* Notes
+Small, upstreamable change (just plumbs two existing Step fields onto the
+per-turn record). Keep it isolated from FEAT-002 (different file set) so the two
+fork prereqs can land in parallel and bump the submodule once.
+
+NOTE [2026-06-20]: DONE on fork (commit 7e885c8a). Turn gains :def_delta + :form (+ @type), threaded through Turn.success/failure params and Metrics.build_turn opts; all 15 build_turn callers holding a lisp_step pass lisp_step.def_delta/form (loop.ex x8, ptc_tool_call.ex x6, runner.ex x1). Synthetic/text-mode/budget turns leave both nil. Test turn_move_propagation_test.exs (3 passed) incl. the load-bearing equivalence: fold of per-turn def_deltas == step.memory. Full fork suite 6595 passed.

@@ -1,0 +1,64 @@
+#+TITLE: form_tree PTC structural lens (subsumes PLAN-005 deferred power-lens)
+#+STATE: ITEM
+#+SESSION_ID: 150fca134364ee8b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
+#+CUSTOM_ID: FUP-002-form-tree-ptc-structural-lens-subsumes-p
+
+* Initial Message
+
+kk give me your plan for PLAN-008 and any other payoff that you see along the way
+
+* Parent
+PLAN-008. Deferred additive payoff. ENABLED BY FEAT-005 (SEAM 3) — once Node.form
+is the real CoreAST, the form IS the tree.
+
+* History
+PLAN-005 (FUP-PTC-LENSES) shipped forms/defs/tool_calls/cost lenses but DEFERRED
+a `form_tree` power-lens because Node.form was a STRING — a PTC lens couldn't walk
+it structurally without re-parsing in Elixir first. SEAM 3 makes Node.form the
+executed CoreAST (data). The deferral condition is now resolved.
+
+* Opportunity
+Expose the form AST to PTC lenses as a navigable tree so the homoiconic dividend
+becomes real: an agent can write a PTC lens that asks structural questions of its
+own past programs — "every tool call inside a let", "defs whose value is a fn",
+"forms that call tool/foo with a literal map arg" — without an Elixir change per
+question. This is the "code-as-data, structurally queryable" promise from
+Node's moduledoc, finally usable from PTC.
+
+* Proposed change (beam/spell_agent)
+- Decide the wire shape of the AST for PTC: CoreAST tuples are not directly PTC
+  values (PTC has no tuple type — eval.ex:42, confirmed). Two options:
+    A) project the AST to a PTC-native nested vector/map form ({:def,n,v,m} ->
+       {"node" "def", "name" n, "value" <recur>, "children" [...]}), a
+       form_tree/1 projector in lens.ex producing JSON-able maps. PREFERRED —
+       matches the existing project/3 anti-corruption pattern, PTC-safe.
+    B) expose a set of Elixir oracle walkers (!-suffixed) the PTC lens calls.
+       Less homoiconic; fallback only.
+  Go with A: `form_tree` projector + a `form_tree.ptc` lens.
+- lib/spell_agent/hist/lens.ex: add form_tree/1 :: CoreAST -> nested PTC map/vector
+  (the projection). Reuse name_str + CoreToSource for leaf rendering.
+- priv (or wherever the .ptc lenses live): add form_tree.ptc that consumes the
+  projected tree and demonstrates a structural query (e.g. "tool calls nested
+  inside a let").
+- Namespace wiring: register form_tree as a PTC-primary lens with a `!` Elixir
+  oracle, like the PLAN-005 four.
+
+* Tests
+1. form_tree projection of `(def f (fn [x] (tool/foo {})))` yields a nested map
+   whose structure mirrors the AST (def -> fn -> tool_call foo).
+2. a PTC structural lens query over form_tree returns the nested tool call
+   (proves the data is walkable from PTC, not just Elixir).
+3. round-trip sanity: form_tree is JSON-serializable (no tuples leak) — assert no
+   tuple in the projected output (PTC-safety contract).
+4. synthetic turn (form == nil / string): form_tree returns nil/empty gracefully.
+
+* Acceptance
+- form_tree lens projects the CoreAST to a PTC-native tree; a PTC lens walks it.
+- No tuples in the projected output (PTC value-model safety).
+- mix test test/spell_agent/hist/ green; showcase demos a structural self-query.
+
+* Why deferred
+Additive power feature, not part of the correctness cutover. SEAM 3 is the hard
+prerequisite; this FUP cashes the structural-lens promise once the AST is real.
+Subsumes the PLAN-005 deferred form_tree note — close that thread here.

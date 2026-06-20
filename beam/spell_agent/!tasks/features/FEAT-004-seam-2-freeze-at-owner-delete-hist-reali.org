@@ -1,0 +1,109 @@
+#+TITLE: SEAM 2: freeze at owner; delete Hist.Realize; reconcile tombstone
+#+STATE: DONE
+#+SESSION_ID: 150fca134364ee8b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
+#+CUSTOM_ID: FEAT-004-seam-2-freeze-at-owner-delete-hist-reali
+#+COMPLETION_HASH: 120eab21b082908c
+
+* Initial Message
+
+kk give me your plan for PLAN-008 and any other payoff that you see along the way
+
+* Parent
+PLAN-008. Consumer seam 2. Depends on FEAT-002 (Handle.deep_realize) + FEAT-001
+submodule bump. Independent of SEAM 1 file-wise (can land in parallel) but
+coordinate the recorder.ex edits (both touch build_node) — do SEAM 1 then SEAM 2
+on recorder, or merge the build_node edits.
+
+* Problem
+Hist realizes handles from OUTSIDE the runtime, on its own write path
+(Hist.Realize.walk/1 wrapped around binds/result/sees in build_node, and around
+the cont tape/memory in maybe_record_cont). The HandleStore session bucket cold-
+evicts + tombstones parked terms, so Hist.Realize races the reaper: by the time
+Recorder walks, a term may already be gone. Move B (Step.freeze/1) realizes at
+the OWNER, synchronously post-run while the term is guaranteed live. Cut Hist
+over to freeze-at-the-boundary and DELETE Hist.Realize entirely.
+
+* Where (beam/spell_agent)
+- lib/spell_agent/session.ex
+  - record_history/5 (line ~116): after extracting `step` from {:ok|:error, s}
+    and BEFORE `Hist.record(...)` (line 125), insert:
+      step = PtcRunner.Step.freeze(step)
+    This runs synchronously in the post-run path (handles live — confirmed
+    session.ex:117). Keep the existing try/rescue best-effort wrapper around the
+    whole thing (a freeze failure must not change mission outcome).
+- lib/spell_agent/hist/recorder.ex
+  - build_node/5: DROP the three Realize.walk wrappers — currently
+      binds:  Realize.walk(binds)
+      result: Realize.walk(turn.result)
+      sees:   Realize.walk(turn.tool_calls || [])
+    becomes
+      binds:  binds            # already frozen upstream by Step.freeze
+      result: turn.result
+      sees:   turn.tool_calls || []
+    (binds itself comes from turn.def_delta per SEAM 1, also already frozen since
+    Step.freeze walks def_delta.)
+  - maybe_record_cont/3 (line ~133): the cont tape/memory are NOT part of the
+    %Step{} (collected separately as opts[:tape]/opts[:memory]), so Step.freeze
+    does not reach them. REPLACE Realize.walk with the runtime walker:
+      tape:   PtcRunner.Lisp.Handle.deep_realize(strip_system(tape)),
+      memory: PtcRunner.Lisp.Handle.deep_realize(Keyword.get(opts, :memory, %{}) || %{})
+  - Remove the `alias ...Realize` and any Realize references.
+- lib/spell_agent/hist/realize.ex
+  - DELETE the module entirely once no references remain.
+- Tombstone reconciliation (the cross-cutting cleanup):
+  - Hist used {:__hist_unrealized__, reason, meta} (realize.ex). The runtime uses
+    {:__frozen_unrealized__, reason, meta} (Step/Handle). Standardize on the
+    RUNTIME tag {:__frozen_unrealized__,...} everywhere in Hist.
+  - grep for :__hist_unrealized__ across beam/spell_agent — update every
+    recognizer:
+      * lib/spell_agent/hist/reconstitute.ex (if it skips/handles tombstones)
+      * lib/spell_agent/hist/view.ex (if View renders/flags them)
+      * lib/spell_agent/hist/lens.ex (if a lens surfaces unrealized markers)
+      * any pane/tui code that displays "unrealized"
+    Point them all at Handle.unrealized?/1 (or Step.unrealized?/1) +
+    {:__frozen_unrealized__,...}.
+
+* Edge cases
+- A failed run ({:error, step}): still freeze it (a failed run is history). Step
+  may have partial handle fields; freeze tombstones the dead ones, keeps the rest.
+- step.turns handles: Step.freeze already deep-walks `turns`, so per-turn
+  result/tool_calls/memory inside step.turns are frozen by the single
+  Session-level freeze call. Verify Recorder reads the FROZEN step (it iterates
+  step.turns of the frozen step) — order matters: freeze in session.ex BEFORE
+  Hist.record passes the step to Recorder. (It does — freeze is on the same
+  reference.)
+- cont tape: deep_realize on tape (list of message maps possibly holding handles
+  in tool results) + memory map. Same realize-while-live timing (record_history
+  is synchronous post-run).
+- Non-handle terms pass through unchanged (deep_realize identity on non-handles).
+
+* Tests (beam/spell_agent test/spell_agent/hist/)
+1. A step whose result/binds/sees hold a live handle records a node with the
+   handle REALIZED (full value), no %Handle{} persisted. (Move the assertion that
+   used to prove Hist.Realize; now it proves freeze-at-owner.)
+2. An evicted handle (force HandleStore eviction or stub) records a node with
+   {:__frozen_unrealized__, reason, meta} — NOT {:__hist_unrealized__,...}, NOT a
+   crash.
+3. cont tape with a handle in a tool result is realized in the persisted Cont.
+4. reconstitute/View recognizes {:__frozen_unrealized__,...} (round-trip a node
+   with a tombstone; assert the recognizer flags it).
+5. NO :__hist_unrealized__ anywhere: grep-test or absence assertion.
+6. Hist.Realize module is gone: a compile/reference check (no alias resolves).
+
+* Acceptance
+- `mix test test/spell_agent/hist/ --no-deps-check` green.
+- Hist.Realize deleted; session.ex freezes the step at the live boundary; cont
+  uses Handle.deep_realize; one tombstone tag {:__frozen_unrealized__,...}.
+- The realize-before-GC race is structurally impossible (realization happens at
+  the owner, synchronously, while the term is live).
+- showcases c1..c8 exit 0; full spell_agent suite green.
+
+* Risk
+- Freeze must happen on the SAME step reference Recorder later iterates. Confirm
+  ordering in session.ex (freeze line strictly before Hist.record). Test #1 fails
+  loudly if a live handle leaks through.
+- best-effort wrapper: freeze must not break the mission. Keep it inside the
+  existing try/rescue in record_history.
+
+NOTE [2026-06-20]: DONE (spell commit 8f46355ee). Session.record_history calls PtcRunner.Step.freeze(step) synchronously post-run (handles live) BEFORE Hist.record. build_node dropped all 3 Realize.walk wrappers (binds/result/sees arrive pre-frozen; Step.freeze deep-walks turns). maybe_record_cont uses Handle.deep_realize for the tape/memory (not part of the Step). lib/spell_agent/hist/realize.ex DELETED; realize_test.exs DELETED (coverage moved to fork handle_deep_realize_test). Tombstone reconciled to the runtime tag {:__frozen_unrealized__,...} (Handle.unrealized?/1); node.ex moduledoc + cont.ex prose updated. plan008_seams_test SEAM 2 group: live handle realized at owner, evicted handle -> frozen tombstone. The realize-before-GC race is structurally impossible now.

@@ -1,0 +1,76 @@
+#+TITLE: Migrate ptc_runner: vendored 0.11 -> fork submodule 0.12 + Moves A/B/C
+#+STATE: DONE
+#+SESSION_ID: 150fca134364ee8b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
+#+CUSTOM_ID: PLAN-007-migrate-ptc-runner-vendored-0-11-fork-su
+#+COMPLETION_HASH: 9510f7ed751b7b67
+
+* Initial Message
+
+how much more leverage would we get if PTC could walk Elixir tuples? Would that simplify the architecture?
+
+* Goal
+Turn the stripped, git-less `beam/ptc_runner-vendored/` (upstream 0.11.0 + ~11 spell patches) into a proper git submodule of the official fork `git@github.com:timinou/ptc_runner.git`, rebased onto the maintainer's latest `main` (0.12.0), with the existing spell patches ported as NEAT, individually-reviewable commits, then add three new runtime capabilities (Moves A/B/C) that let SpellAgent.Hist stop reconstructing structure the runtime already computes.
+
+* Decisions (user-confirmed)
+- BASE: rebase onto 0.12.0 NOW (absorb heavy drift; gain TraceLog, PtcRunner.Session, Clojure conformance, MCP->tool/call). Verified spell's PTC surface does NOT use renamed tool/mcp-call / mcp/servers, so breaking renames are safe for us.
+- SUBMODULE: new path `beam/ptc_runner` (full fork tree), update `mix.exs` path dep from `../ptc_runner-vendored` to `../ptc_runner`, delete old vendored dir.
+- TRACKING: keep SPELL_PATCHES.md as the semantic patch ledger; ADD FORK_CHANGES.md at fork root as the commit-series ledger.
+
+* Terrain (verified this session)
+- vendored = NOT a git repo; stripped snapshot (no test/demo/docs/mix tasks) of upstream 0.11.0 + patches, committed as plain files into spell monorepo. Wired `{:ptc_runner, path: "../ptc_runner-vendored"}` in beam/spell_agent/mix.exs:48.
+- fork `timinou/ptc_runner` HEAD (74af3a23) == upstream `andreasronge/main` EXACTLY (0 divergence) at 0.12.0. So fork is pristine upstream; our patches are NOT yet on it.
+- 0.11.0 base commit in fork = c9880bd7 ("prepare release 0.11.0"); 0.12.0 = 377b1a1e ("prepare 0.12.0").
+- Existing patches (SPELL_PATCHES.md): PATCH-0 vendoring scaffold, 1 psettled, 2 preflight lint hints, 3 handle-aware builtins (handle.ex/handle_store.ex/handle_ops.ex + apply/context/lisp threading), 4 session bindings (handle rehome), 5 session-store reaper, 6 get!/get-in!, 7 validate peer method (lives in beam/ptc_runtime NOT the fork — skip for fork), 8 try/catch/finally, N harness/keymap namespaces. Plus discrete spell commits in spell history: probe special form, BUG-462/463/465 error ergonomics, unknown/denied tool-call errors.
+- spell monorepo squashed PATCH-0..7 into one commit (7e23eef16); later patches discrete. So no faithful per-commit replay from spell history; reconstruct from SPELL_PATCHES.md file-lists.
+- DRIFT 0.11->0.12 on patched files (numstat +/-): eval.ex 149/71, analyze.ex 148/72, lisp.ex 58/11, env.ex 10/359 (heavy refactor), apply.ex 31/31, map_ops.ex 75/23, predicates.ex 21/25, source_atoms.ex 10/8, core_to_source.ex 4/4, helpers.ex 2/2, context.ex 0/29, closure_capture.ex 0/0 (clean), runtime_callable.ex 0/0 (clean).
+
+* Maintainer's 0.12 work relevant to us
+- TraceLog.TurnEvent: structured per-turn trace (program, result_preview, prints, memory_diff, tool_calls, committed:false for WASTED work). memory_diff/2 = SAME snapshot-diff as Hist.map_delta AND carries the SAME BUG-001 deletion blind spot (iterates `after` only; an undef'd key is invisible). => Move A (def-delta at eval source) still real; Move C should EXTEND TurnEvent, not invent a parallel trace; TurnEvent.committed:false overlaps deferred FUP-UNREALIZED.
+- PtcRunner.Session: REPL state (def memory + *1/*2/*3). Overlaps PATCH-4 mechanism; reconcile (PATCH-4's value is the handle REHOME + peer threading, not the def->memory machinery).
+
+* Moves (new capabilities; all WRITE-path / Elixir-core; sandbox still cannot reach state)
+** Move A - Turn.def_delta at the eval source
+PtcRunner already computes the def-delta at {:def name val} (eval.ex builds new_user_ns) then throws it away; Turn.memory is a full env SNAPSHOT, so Hist.map_delta + TurnEvent.memory_diff both reverse-engineer it and inherit the BUG-001 deletion blind spot. Emit `def_delta: %{introduced: %{name=>val}, removed: [name]}` on Turn. Deletes Hist.map_delta + the B1 deleted_marker dance; deletion becomes explicit (an undef is reported, not inferred from omission). Generally useful to any Step consumer; fixes a bug CLASS at source.
+** Move B - Step.freeze/1 at the handle owner
+Realize.walk exists because Hist, from OUTSIDE, must materialize handles before the runtime GCs their backing store (a race won only by timing). The runtime owns HandleStore and knows lifetimes. `PtcRunner.Step.freeze(step) :: %Step{}` inlines/tombstones handles at the right moment. Deletes Realize.walk from Hist's hot path; kills the race. Clean "Step safe to persist/serialize" API.
+** Move C - native AST on Turn + lossless trace (extend TurnEvent)
+turn.program is a STRING; the runtime parsed it to CoreAST to run it then handed back the string, so Lens structural walkers re-parse/re-walk and only work when something already holds the tuple form. Carry the executed CoreAST on Turn (+ attach span subtree). Collapses Recorder.build_node toward 1:1 Step->Node; makes Lens defs/form_tools extraction trivial+correct; subsumes the deferred `form_tree` (Move D). FRAMING (load-bearing): the runtime emits a lossless structured trace it ALREADY computes internally; it MUST NOT know about Hist. "Stop discarding structure," not "emit Hist nodes." Ship with an AST-drift contract test.
+
+* Non-goals (this plan)
+- PATCH-7 (validate peer method) lives in beam/ptc_runtime, not the fork — out of scope here.
+- Hist-side consumption refactor (delete map_delta / Realize hot path / simplify build_node) is the PAYOFF but filed as its own follow-up once A/B/C land and spell compiles green against the submodule.
+
+* Acceptance
+- `beam/ptc_runner` is a submodule of timinou/ptc_runner on a `spell` branch off 0.12.0; pushed.
+- Spell patches ported as neat, named, individually-compiling commits; fork's own `mix test` green.
+- Moves A/B/C landed as their own commits with tests + an AST-drift contract test for C.
+- mix.exs path dep -> ../ptc_runner; old vendored dir deleted; `cd beam/spell_agent && mix compile && mix test` green (hist + tui + session suites).
+- FORK_CHANGES.md at fork root lists the commit series; SPELL_PATCHES.md updated for A/B/C + the 0.12 rebase.
+
+* Waves
+- W0 infra: branch `spell` off 0.12.0; reconstruct per-patch hunks (0.11 base c9880bd7 vs vendored, sliced by SPELL_PATCHES.md file-lists).
+- W1 port isolated patches (disjoint files): get!/get-in! (PATCH-6), preflight hints (PATCH-2), harness/keymap (PATCH-N), error ergonomics, unknown-tool errors.
+- W2 port eval-core patches (shared eval.ex/analyze.ex): psettled (PATCH-1), try/catch/finally (PATCH-8), probe.
+- W3 port handle system (PATCH-3/4/5): handle*.ex + apply/context/lisp threading + reaper; reconcile vs 0.12 PtcRunner.Session.
+- W4 push fork branch; wire submodule at beam/ptc_runner; mix.exs; delete vendored; validate spell compiles + hist/tui/session suites green.
+- W5 Move A (Turn.def_delta) + test.
+- W6 Move B (Step.freeze/1) + test.
+- W7 Move C (Turn CoreAST + TurnEvent extension) + AST-drift contract test.
+- W8 FORK_CHANGES.md + SPELL_PATCHES.md update; final full-suite verification.
+
+NOTE [2026-06-20]: COMPLETE. Migrated vendored ptc_runner 0.11 (stripped, git-less plain files) -> git submodule beam/ptc_runner of timinou/ptc_runner branch 'spell', rebased onto upstream 0.12.0. All spell patches re-applied as a neat dependency-ordered per-patch commit series (3-way merge: base 0.11 c9880bd7, theirs vendored, ours 0.12; cumulative apply verified byte-identical to a snapshot; each commit compiles standalone). PATCH-3 ordered before PATCH-1 (handle? predicate needs Handle struct).
+
+Ported: PATCH-0 scaffold, PATCH-3 handles, PATCH-1 psettled(+probe), PATCH-2 hints, PATCH-6 get!/get-in!, PATCH-8 try/catch, PATCH-N harness/keymap, BUG-462/463 err-ergonomics, + upstream-test reconciliation.
+
+0.12 integration fixes found+fixed: (1) ptc_runtime needed {:req,~>0.5} because 0.12 added upstream/ OpenAPI/MCP modules referencing optional Req; (2) DEEP BUG (oracle-diagnosed): 0.12's new ledger compaction (append_tool_call->referenced_binary_size) Enum.reduce'd over %Handle{} (is_map true but not Enumerable), crashing ANY program calling a tool with a large parked result even if discarded — fixed with %Handle{} clauses in compact_ledger_entry + referenced_binary_size; (3) session_bindings + 2 message tests updated to 0.12 contract.
+
+Moves A/B/C SHIPPED (new runtime capabilities so Hist stops reconstructing structure the runtime discards): MOVE-A Step.def_delta (per-run def-delta at source; EvalContext.initial_user_ns snapshot; folds back to Step.memory exactly; 9 tests incl property). MOVE-B Step.freeze/1 (materialize parked handles at the owner, kills the reaper race Hist.Realize.walk worked around; tombstone on unrealizable; 6 tests). MOVE-C Step.form (executed CoreAST as data so lenses walk a tree not a re-parsed string; AST-DRIFT CONTRACT test = form == independent parse+analyze, 7 sources + CoreToSource round-trip; 12 tests).
+
+Docs: FORK_CHANGES.md (new, fork root — chronological commit ledger + rebase procedure) and SPELL_PATCHES.md (updated header for 0.12+submodule, added PATCH-3 follow-up + MOVE-A/B/C sections).
+
+Wiring: .gitmodules + submodule beam/ptc_runner@8d729357; spell_agent + ptc_runtime mix.exs path dep ../ptc_runner-vendored -> ../ptc_runner; old vendored dir deleted.
+
+FINAL VERIFICATION: fork lisp 3400, ptc_runtime 135, spell_agent 331 = 3866 tests, 0 failures. Fork pushed to origin/spell. NOT touched: prior-session PLAN-003 TUI/Hist uncommitted work (app_test.exs + untracked hist files) left as-is.
+
+FOLLOW-UP (not done, the payoff): Hist-side consumption refactor — delete Recorder.map_delta (read Step.def_delta), drop Realize.walk hot path (call Step.freeze), use Step.form in lenses instead of re-parsing. File as its own plan.

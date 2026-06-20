@@ -1,0 +1,89 @@
+#+TITLE: DEC: PTC-Lisp vs Elixir boundary for Hist
+#+STATE: DONE
+#+SESSION_ID: 150fca134364ee8b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
+#+CUSTOM_ID: PLAN-004-dec-ptc-lisp-vs-elixir-boundary-for-hist
+
+* Initial Message
+
+how can you integrate these features in the spell.tui so that the conversation gains history?
+
+* DECISION
+Where does each part of the Hist substrate live: Elixir (compiled infra) vs
+PTC-Lisp tools injected into the conversation (source-as-data, re-run in the
+sandbox)? Principle adopted: ELIXIR OWNS PRIMITIVES + INVARIANTS; PTC OWNS POLICIES
++ LENSES. The boundary test: "does it touch state / effects / an invariant?" -> Elixir.
+"Is it a pure interpretation the agent might want to reshape at runtime?" -> PTC.
+
+* GROUND TRUTH (verified, lib/spell_agent/tools.ex)
+A :ptc tool is stored SOURCE TEXT, re-run through PtcRunner.Lisp.run/2 with call args
+bound as data/<param>, carrying the execute path's safety (heap caps, tool-call
+limits). The sandbox has NO fs/net/process; it reaches Elixir only by calling
+(tool/<x> {...}). So PTC can compute over data and call exposed verbs, but cannot
+open Khepri, manage Ra, realize handles, or hold the live %Step{}.
+
+* LAYERS AND VERDICT
+
+** MUST be Elixir (state / effects / invariants - dumb to inject as PTC)
+- Storage: Khepri/Memory, Store behaviour, key space. Sandbox can't do persistence.
+- Recorder / WRITE path: runs in the agent loop OUTSIDE any program's sandbox, needs
+  the live %Step{}/%Turn{} and HandleStore at write time. If recording were a PTC turn
+  in the conversation, a turn could fail to record itself or record wrong - you'd lose
+  the very history you're keeping. Recording must be automatic infra, beyond the
+  agent's reach.
+- Realize (handle materialization): runtime-coupled; realize-at-write invariant.
+- Content-addressing (Id), the Hist.Result error classifier (3 bugs converged on it),
+  Window partition + distill NODE CREATION (store mutations). Invariants you do NOT
+  want the agent able to break.
+
+** SHOULD be PTC (pure + agent-facing - smart to inject; the homoiconic dividend)
+- Query lenses: forms / defq / diff / cost are PURE transforms over node data.
+  Reframe: Elixir exposes a PRIMITIVE hist/nodes (returns the slice as data, large
+  results auto-park as handles - the execute heap-safety story), and the lenses ship
+  as DEFAULT crystallized PTC tools. The agent can then write NEW lenses inline
+  ((->> (hist/nodes {}) (filter ...)) ) with zero Elixir deploy. A recall query is
+  itself a program. The Elixir versions remain as a fast path.
+- Crystallize BODIES, recall predicates, distill SUMMARIZERS: naturally PTC/LLM.
+- The agent's self-queries: inherently PTC (this is the whole point).
+
+** Injection POINT
+Inject as VERBS in the tools map (hist/*), NOT as seeded turns in the conversation.
+Verbs are clean, durable, and not skippable; bookkeeping turns pollute the log and
+the agent could break them.
+
+* SMART vs DUMB - the calculus
+SMART to push a lens to PTC when: pure transform over already-materialized data; you
+want runtime authorship/editing of lenses; per-query data fits the sandbox heap (or
+the Elixir primitive windows/projects/handles it).
+DUMB when: it must stream/enumerate large data repeatedly (heap caps - keep heavy
+joins in Elixir, expose a projected slice); it is hot-path latency-sensitive (parse +
+sandboxed run per call has real cost); it is an invariant you must guarantee.
+Blast radius of a bad PTC lens = a wrong QUERY, never a corrupt store (all store
+writes go through validated Elixir verbs). Acceptable.
+
+* CHOSEN SHAPE (target; partially FUP)
+Floor (Elixir, done): storage, Recorder, Realize, Id, Result, Window mechanism,
+Store behaviour. Primitive read verbs (Elixir, hist/nodes|node|env|slice|sessions).
+Lens layer (PTC default-crystals over the primitives): forms, defq, diff, cost as
+stored PTC tools - so they are inspectable, hot-editable, agent-extensible. Today
+these are Elixir verbs (fine + fast); migrating the pure ones to default PTC crystals
+is FUP-PTC-LENSES below.
+
+* FUP-PTC-LENSES (comprehensive, deferred)
+Goal: ship the pure query lenses (forms/defq/diff/cost) as DEFAULT crystallized PTC
+tools layered over an Elixir hist/nodes primitive, keeping the current Elixir verbs
+as a fast path under a different name (hist/forms! etc).
+Steps: (1) add Elixir primitive verb hist/nodes (impl, sid, opts) -> [node-as-map]
+(map a Node to string-keyed data; large results park as handles). (2) Write the four
+lenses as PTC source in priv/hist/lenses/*.ptc using (hist/nodes {}) + core builtins
+(filter/group-by/frequencies). (3) On session start, register them as :ptc
+ToolRegistry entries (or Crystals) so they appear in hist/*. (4) Keep Query.* Elixir
+as hist/<lens>! fast paths. (5) Test parity: PTC lens result == Elixir lens result on
+the same fixture. (6) Showcase: agent edits a lens at runtime (define-tool over a
+copy) and runs the variant - proving runtime authorship. ACCEPTANCE: a PTC forms
+lens returns the same nodes as Query.forms on a seeded session; an agent-authored
+variant lens runs in the sandbox without Elixir changes.
+
+* RELATION
+Parent PLAN-001. Sibling PLAN-003 (TUI wiring) uses the Elixir facade regardless of
+this split - the TUI consumes verbs/View, agnostic to whether a verb is Elixir or PTC.

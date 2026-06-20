@@ -1,0 +1,132 @@
+#+TITLE: Hist linear continuation: feed history into the next turn
+#+STATE: DONE
+#+SESSION_ID: 15105c5d6727a5ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-20T08-53-27-580Z_15105c5d6727a5ef.jsonl]]
+#+CUSTOM_ID: PLAN-006-hist-linear-continuation-feed-history-in
+
+* Initial Message
+
+[Image #1]
+
+As you can see, it seems like history isn't wired yet. Do a thorough investigation that is both about the design of the DSLs in Elixir, the seam with PTC Lisp, and the history feeding into the next turn. Include a reflection around caching for anthropic checkpoints, if possible.
+
+Ask me questions and challenge me, I want to spend quite a bit of time on architecture
+
+* Problem (the screenshot)
+The inspector showed turn 1 naming itself "Recursion", turn 2 answering "Claude".
+History was RECORDED (L1 nodes) and DISPLAYED (history pane reads the store), but
+NEVER fed back into the LLM call. Every turn started cold.
+
+Root cause: =Session.run/2= always built the agent via =SubAgent.new(prompt:)=
+with no prior context, then recorded AFTER. History flowed one way: into the
+store + pane, never into the next request. The six PLAN-003 seams covered
+persist/display/verbs — none was "feed history into the next turn." That
+capability was never built.
+
+* The two-representation model (decision C)
+A conversation is kept at TWO fidelities, NOT interchangeable:
+
+| Layer | What | Durable | Editable | Feeds next turn |
+|-------|------|---------|----------|-----------------|
+| L1 nodes (existing) | homoiconic form/binds/say DAG | yes | yes | NO (lossy) |
+| L0 Cont (NEW) | verbatim tape + def env | yes | no | YES |
+
+=Reconstitute.to_messages/1= (the chat lens) is a DISPLAY projection: user
+prompt + assistant say only. It DROPS tool calls, tool results, and programs —
+fine for a scrollback pane, catastrophic as an LLM feed (the agent would forget
+every action it took). So feed-forward cannot use the existing lens.
+
+Decision (user): store BOTH. L0 verbatim tape is the feed-forward source of
+truth in the common (linear) case; an edited/branched suffix reconstructing the
+tape from L1 is deferred (FUP-EDIT-REFOLD). edit-affects-model = LATER. Caching =
+SEPARATE measured FUP (do not conflate with continuation correctness).
+
+* What shipped
+- =SpellAgent.Hist.Cont= (lib/spell_agent/hist/cont.ex): the L0 buffer struct —
+  =session=, =tape= ([message]), =memory= (def env), =t=. Single-valued per
+  session.
+- Store key kind =：cont= added to the behaviour (=Store.key/value/kind=) and
+  BOTH impls (Memory ETS match clause + Khepri path/list_pattern). put/fetch/
+  delete are generic; only list/2 enumerates by kind.
+- =Recorder.record_step/4= now persists ={:cont, sid}= from =：tape=/=：memory=
+  opts (handle-free via =Realize.walk=, system message stripped — it is
+  regenerated each turn). Absent opts => no-op (synthetic/test records leave any
+  prior Cont untouched).
+- =Hist.record/3= defaults =：tape= from =step.messages= and =：memory= from
+  =step.memory= (Keyword.put_new — explicit opt still wins). So any caller using
+  =collect_messages: true= gets durable continuation for free.
+- =Hist.continuation/2= => =%{tape, memory}= (empty for an unrecorded session =
+  correct cold start).
+- =Session.run/2= SEAM 0: loads continuation BEFORE the run (best-effort, wrapped
+  — a sick store degrades to cold start, never crashes the mission), passes
+  =collect_messages: true=, =initial_messages: tape=, =initial_memory: memory=,
+  records the new tape after. The wire is closed.
+
+* The PtcRunner seam (already existed; we were not using it)
+=SubAgent.run/2= accepts =：initial_messages=, =：initial_memory=,
+=：collect_messages=; the Loop threads them (loop.ex:136-209). =step.messages=
+(when collecting) is the full tape incl. tool_use/tool_result blocks;
+=step.memory= is the def env. The Anthropic adapter already has =convert_message=
+clauses for the exact three SubAgent shapes (assistant+tool_calls,
+tool+tool_call_id, plain). So the substrate was complete — only =Session.run= had
+to use it.
+
+* Verification
+- test/spell_agent/hist/continuation_test.exs (6): turn 2's LLM request replays
+  turn 1's prompt+answer (the screenshot regression, asserted at the LLM
+  boundary); continuation/2 round-trip; cold start empty; READ-path best-effort
+  (a raising store degrades, not crashes); cont buffer overwritten not appended;
+  ordering.
+- scripts/hist/c9_continuation.exs (exit 0): reproduces the screenshot scenario
+  with an HONEST fake llm that answers only from the transcript it is shown —
+  turn 2 recalls "Recursion"; a fresh session correctly sees nothing.
+- Full suite 331 passed (11 properties), 0 failures. All 9 showcases exit 0.
+
+* GOTCHA captured
+In =：tool_call= transport a FENCED program response is rejected ("call lisp_eval
+instead") and loops to max_turns; a PLAIN-text assistant answer completes the
+turn as the direct final answer. Test/showcase fakes must return plain text for a
+clean {:ok, answer} one-shot. (The earlier fenced fakes still "passed" message-
+inspection tests because step.messages populates even on max_turns — but the
+return was {:error, max_turns}, which is misleading.)
+
+* Deferred (comprehensive FUPs)
+** FUP-EDIT-REFOLD — edit a term in L1 => the model sees the change next turn
+When a node is edited or a branch forked, the L0 tape for the suffix from the
+fork point must be RECONSTRUCTED from L1 (a non-lossy =to_llm_messages= lens that
+emits tool_use/tool_result faithfully), not replayed verbatim. The unedited
+prefix still replays from L0. This is the homoiconic "operable memory" payoff.
+Requires: (1) Recorder captures tool_use/tool_result with enough fidelity to
+rebuild Anthropic-shaped blocks; (2) a new full-fidelity lens (distinct from the
+display chat lens); (3) fork-point detection via =Node.parent_id=. Blast radius
+of a bad reconstruction = a wrong continuation, never a corrupt store.
+
+** FUP-PROMPT-CACHE — Anthropic checkpoints, measured
+Findings from reading anthropic.ex (UNVERIFIED — confirm via =merge_usage=
+cache_read/cache_creation telemetry FIRST):
+- Messages are never cached: =apply_cache_control_cap= only ever sets
+  cache_control on the LAST SYSTEM block; the growing transcript carries no
+  breakpoint => every turn re-bills the whole conversation at full input price.
+  The multi-turn win (a moving breakpoint at the last completed turn) is
+  unimplemented.
+- The system cache likely never hits: =billing_header= injects
+  =strong_rand_bytes= (random per request) into the FIRST system block, which is
+  INSIDE the cached span (breakpoint on the last block) => prefix bytes differ
+  every request => cache write every time, read never.
+- TTL: interactive turns often pause >5min (human thinking) => default 5min cache
+  expires between turns. The 1h beta (2x write vs 1.25x) likely wins for a coding
+  agent; measurable.
+Caching ⊥ editing on the same bytes: caching wants a stable append-only prefix;
+editing changes the prefix. RESOLUTION = the branch DAG IS the cache structure —
+shared prefix + divergent suffix is exactly Anthropic's cache-prefix shape. Put
+the cache breakpoint at the fork boundary (=parent_id= tells you where): cache the
+unedited prefix, recompute+re-cache from the first edited node. Editing is
+"expensive" only for the suffix you actually changed — semantically right.
+
+* PTC vs Elixir boundary (per PLAN-004)
+Elixir owns the continuation invariants: building/validating the message list,
+the realize-before-persist invariant, cache-breakpoint placement (FUP), fork =>
+invalidation (FUP). PTC owns the windowing/compaction POLICY — which nodes enter
+the window, where to summarize (a future =hist/window= .ptc default the agent can
+author). Elixir materializes the tape + guards the invariant; PTC shapes the
+window. A bad PTC window = a worse context, never a corrupt request.

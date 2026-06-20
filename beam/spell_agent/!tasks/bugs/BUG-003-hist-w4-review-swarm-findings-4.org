@@ -1,0 +1,51 @@
+#+TITLE: Hist W4 review-swarm findings (4)
+#+STATE: DONE
+#+SESSION_ID: 150fca134364ee8b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
+#+CUSTOM_ID: BUG-003-hist-w4-review-swarm-findings-4
+#+COMPLETION_HASH: f6e255bf215a43ec
+
+* Initial Message
+
+think about the most adapted memory substrate for conversations conducted on the spell agent. Consider minigraf amongst other options. Give me the thread offs
+
+* Source
+W4 reviewer swarm (Window/Khepri/Namespace). Khepri clean. 4 real issues; fixed
+in-flight.
+
+* Findings
+
+** B1 [P2] Window.distill summary-node id collides on repeated distill
+File: lib/spell_agent/hist/window.ex (~L91-94)
+The summary node id derives from `src` (built only from node_ids) + parent_id, so
+distilling the SAME ids twice with different summaries overwrites the first summary
+node (same content key) and mutates the prior mark's target. A second distillation
+must APPEND, not overwrite. FIX: include the summary text (and/or a distill nonce)
+in the synthetic node's identity so distinct distillations get distinct ids.
+
+** B2 [P2] Window.distill accepts nonexistent node ids -> dangling summary
+File: lib/spell_agent/hist/window.ex (~L89)
+parent_id defaults to List.last(node_ids) with no existence check, so distilling
+["ghost"] yields {:ok, ...} with a summary whose parent_id fetches :error, plus a
+clearing mark pointing at detached history. FIX: fetch all node_ids (and explicit
+parent) first; return {:error, :unknown_nodes} before any write if any is missing.
+
+** B3 [P2] hist/inventory + hist/promote crash sandbox when ToolRegistry down
+File: lib/spell_agent/hist/namespace.ex (~L53-54, promote ~L111)
+Both delegate into Tools.* which call SpellAgent.ToolRegistry.get/1 -> Agent.get,
+which EXITS :noproc if the registry GenServer isn't running. A PTC `hist/promote`
+or `hist/inventory` (after a node has tools_defined) then crashes the sandbox
+instead of returning data. FIX: guard the registry verbs (Process.whereis check or
+caught exit) -> return %{"err"=>...} when the registry is absent.
+
+** B4 [P2] hist/promote leaks raw {:error, reason} tuple into PTC surface
+File: lib/spell_agent/hist/namespace.ex (~L113)
+For a present tool arg, hist/promote returns Tools.promote/2 verbatim; on
+{:error,:unknown_tool}/{:error,:native_tool} it leaks a raw tuple, unlike every
+other verb that normalizes to %{"err"=>...}. FIX: wrap and convert {:error,reason}
+-> %{"err"=>to_string(reason)}.
+
+* Resolution
+Fix all 4, add regression tests, re-run full hist suite + showcases.
+
+NOTE [2026-06-20]: All 4 fixed + 5 regression tests (bug003_regression_test.exs). Distill: identity now includes summary+seq (append not overwrite), and validates all node_ids+parent exist before any write ({:error,:unknown_nodes}). Namespace: inventory/promote guarded by Process.whereis(ToolRegistry) -> error map when down; promote errors normalized to %{"err"=>...}. Full hist suite 85 passed; all 6 showcases (incl new c6_window) exit 0.

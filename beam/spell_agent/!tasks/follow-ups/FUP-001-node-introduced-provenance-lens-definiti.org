@@ -1,0 +1,53 @@
+#+TITLE: Node.introduced provenance lens (definition-first-seen timeline)
+#+STATE: ITEM
+#+SESSION_ID: 150fca134364ee8b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
+#+CUSTOM_ID: FUP-001-node-introduced-provenance-lens-definiti
+
+* Initial Message
+
+kk give me your plan for PLAN-008 and any other payoff that you see along the way
+
+* Parent
+PLAN-008. Deferred additive payoff. Depends on FEAT-003 (SEAM 1) being green.
+NOT required for the cutover — pure new capability.
+
+* Opportunity
+def_delta distinguishes `introduced` (a name absent from entering memory) from
+`changed` (a name rebound). SEAM 1 MERGES them into one Node.binds map (preserves
+the current Node shape, lowest-risk cutover). But the introduced/changed split is
+free provenance: it answers "which turn FIRST defined x?" vs "which turns rebound
+x?" without any graph walk. Today Hist can only answer that by folding the whole
+chain and diffing — the same outside-in reconstruction A/B/C exist to kill.
+
+* Proposed change (beam/spell_agent)
+- lib/spell_agent/hist/node.ex: ADD an optional field `introduced :: [String.t()]`
+  (the names this node's turn FIRST defined — def_delta.introduced keys). Keep
+  `binds` as the merged delta (unchanged). introduced is a cheap projection
+  stored alongside.
+- lib/spell_agent/hist/recorder.ex build_node: set
+    introduced: (turn.def_delta && Map.keys(turn.def_delta.introduced || %{})) || []
+- A new lens .ptc + Elixir oracle (mirror the PLAN-005 lens pattern: PTC primary
+  name, `!`-suffixed Elixir oracle): `provenance` / `where_defined`:
+    given a session + a name, return the node id/seq where it was first introduced
+    and the list of nodes that rebound it. Built by scanning nodes' introduced +
+    binds — O(chain) but with no diffing.
+- Namespace wiring in the lens namespace (like forms/defs/tool_calls/cost).
+
+* Tests
+1. session: turn1 defs x, turn3 rebinds x -> provenance("x") = {introduced_at:
+   turn1_node, rebound_at: [turn3_node]}.
+2. a name never defined -> nil/empty.
+3. introduced field on a node == def_delta.introduced keys (binary names).
+4. property: for any name in final memory, exactly one node has it in `introduced`.
+
+* Acceptance
+- New lens returns correct first-defined provenance with no chain-diffing.
+- mix test test/spell_agent/hist/ green; a showcase (c9 or extend c8) demos
+  "where was x defined".
+
+* Why deferred
+SEAM 1 deliberately does NOT widen Node (keeps the cutover minimal + reversible).
+This FUP adds the provenance capability once the core cutover is proven. Skipping
+it costs nothing structural; doing it turns a free byproduct of Move A into a
+user-facing query.

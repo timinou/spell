@@ -1,0 +1,265 @@
+#+TITLE: Hist: homoiconic conversation history substrate
+#+STATE: DOING
+#+SESSION_ID: 150fca134364ee8b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
+#+CUSTOM_ID: PLAN-001-hist-homoiconic-conversation-history-sub
+
+* Initial Message
+
+think about the most adapted memory substrate for conversations conducted on the spell agent. Give me the thread offs
+
+* Overview
+
+`SpellAgent.Hist` — a durable, homoiconic record of a PTC-Lisp agent session that
+turns a raw conversation into OPERABLE memory. Not a transcript store: the things
+it persists (the per-turn PTC-Lisp `program`, the threaded `def` environment, the
+runtime-defined tools, the execution spans) are all *code-as-data*, so the agent
+can query, replay, reconstitute, and crystallize its own past in the same language
+it thinks in.
+
+The module is defined by CAPABILITIES (what it lets the agent do), each anchored to
+a concrete PtcRunner feature — implemented, planned-in-code, or possible.
+
+** Why this exists (the gap)
+
+PtcRunner threads `memory` (the def env) turn-to-turn, lets the agent author tools
+at runtime via `define-tool`, parks big values in `HandleStore`, and nests
+execution as run/llm/tool spans. But ALL of it is ephemeral: mission ends → env
+gone, defined tools gone, spans reset (`SpellAgent.Tui.Store` resets between
+missions). Resume today = re-feed a transcript; the agent is amnesiac about its own
+COMPUTED state and SELF-AUTHORED tools. And `SubAgent.Compaction` Phase-2
+(`:summarize`) is explicitly unimplemented because there is nowhere to keep the
+originals when you compress the window.
+
+Hist fills exactly these holes.
+
+* Capabilities (each tied to a PtcRunner feature)
+
+** C1 RESUME — rebuild live state, defeat amnesia
+- PtcRunner anchor: SubAgent `memory` threading (✅), `ToolRegistry` :ptc entries
+  (✅, "durable storage is a follow-up"), `HandleStore` session bucket (✅).
+- What: `reconstitute/1` deterministically rebuilds {env, tools, messages, handles}
+  from the log — folds `binds` along root→cursor, re-registers `tools_defined`
+  sources, rebinds realized values. NO tool execution (pure replay).
+- Use-case script: close session mid-task with `(def plan ...)` + a define-tool'd
+  `blast-radius`; reconstitute → both are live again without re-derivation.
+
+** C2 CRYSTALLIZE — session history becomes mid/long-term memory  [NEAR-TERM]
+- PtcRunner anchor: `SubAgent.compile/2` → `CompiledAgent` (✅): run a multi-turn
+  agent once via LLM to DERIVE a PTC-Lisp program, then execute many times with NO
+  LLM. The history is the corpus compile mines.
+- What: `crystallize/1` takes a successful slice of turns (a working investigation)
+  and turns it into a durable `Crystal` (a CompiledAgent persisted as memory) —
+  a deterministic, LLM-free tool distilled from lived experience. THIS is the
+  transform from episodic session log → semantic long-term memory.
+- Use-case script: a 3-turn "find callers, filter tests, rank by churn" investigation
+  → crystallize → a one-shot `hot-callers` tool callable in future sessions, no LLM.
+
+** C3 TOOL LIFECYCLE — defined-mid-conversation → durable
+- PtcRunner anchor: `define-tool` + `ToolRegistry` (✅, data-shaped entries).
+- What: `tool_inventory/1` (which tools authored, call/error counts from spans),
+  `promote/2` (session tool → durable, cross-session). Dead tools pruned, useful
+  ones kept.
+- Use-case script: author `blast-radius` in session A; promote; it resolves in
+  session B as if built-in.
+
+** C4 QUERY — the agent interrogates its past in PTC-Lisp
+- PtcRunner anchor: the `harness/*` pattern (✅, pure verbs over a value),
+  `core_to_source.format/1` + parser round-trip (✅, structural not string match).
+- What: `find` (tool calls by status/name), `forms` (STRUCTURAL match over stored
+  programs, e.g. `(tool/edit _)`), `defq` (where/when a sym was defined), `diff`
+  (structural diff of two turns' programs), `cost` (token spend since a mark).
+- Use-case script: "show every `tool/edit` I ran that errored" → structural query
+  over the AST log, not a grep.
+
+** C5 SPANS — execution interior + cost accounting
+- PtcRunner anchor: `SubAgent.Telemetry` spans + `SpellAgent.Tui.Store` reducer
+  (✅), "inside the insides" nested run spans.
+- What: persist the SAME span map the live Store builds; `spans/1`, `cost/1`,
+  `trace/1`. One reducer, two feeds (live telemetry / replayed log).
+- Use-case script: per-turn token tally + nested sub-agent interior for one turn.
+
+** C6 WINDOW — lossless compaction (fills PtcRunner Phase-2)
+- PtcRunner anchor: `SubAgent.Compaction` — Phase-1 `:trim` (✅) DELETES old turns;
+  Phase-2 `:summarize` (🔜 UNIMPLEMENTED) needs the originals kept somewhere.
+- What: `window/1` (what the LLM sees — the compacted slice), `recall/2` (pull a
+  trimmed turn back when relevant), `distill/2` (Phase-2 summarize: swap visible
+  node, ORIGINALS preserved). Trim becomes reversible windowing, not destruction.
+- Use-case script: 12-turn session, window keep-recent-3; recall turn 5 by query;
+  verify the trimmed originals are still in the log.
+
+* Data model  (REALIZED — no live handles ever persisted)
+
+All structs are plain data; the one hazard (a `%PtcRunner.Lisp.Handle{}` in
+binds/result/sees) is eliminated at WRITE time by `Hist.Realize.walk/1`, which
+replaces every handle with `HandleStore.realize/1`'s full term. Confirmed: handles
+are cold-evicted + tombstoned, so a stored ref would dangle on resume.
+
+** Node (the cell — one realized turn)
+: id            content hash: blake3(form_src <> parent_id) — stable, dedup/union key
+: session       session id
+: parent_id     branch structure (nil = root child); the DAG is in this field, not Khepri nesting
+: seq          turn number within session
+: kind         :turn  (:run/:llm/:tool reserved; interior rides in span_root)
+: status       :ok | :error | :retry   (PtcRunner Turn.type already tags :retry)
+: form         PTC-Lisp AST (the program) — serializable term
+: form_src     rendered source via CoreToSource.format/1 (cache, derivable)
+: binds        env DELTA introduced this turn — REALIZED
+: result       turn return value — REALIZED
+: sees         [%{tool, args, result}] from Turn.tool_calls — REALIZED
+: prints       captured println output
+: says         assistant prose (chat lens)
+: raw_response full LLM output incl reasoning (FUP unrealized-completions hangs here)
+: tools_defined [name] define-tool'd this turn
+: span_root    the interior run/llm/tool span map (persisted Store subtree) | nil
+: tokens       %{input, output} | nil
+: t            unix ms
+
+** Session
+: id · prompt (opening) · t0 · model · cursors %{atom => node_id} (:main = live) · meta
+
+** Mark (the mark-ring)
+: id · session · node_id · kind :decision|:scar|:clearing|:checkpoint · note · t
+
+** Snapshot (env keyframe — accelerates reconstitute)
+: session · node_id · env (FULL folded, realized) · tools [name] · t
+
+** ToolDef (durable runtime tool — C3 promote target)
+: name · params · doc · source (PTC-Lisp) · origin %{session,node_id} · scope :session|:durable · stats %{calls,errors} · t
+
+** Crystal (crystallized slice — C2, long-term memory)
+: id · name · signature · source (compiled PTC-Lisp) · origin %{session,nodes[]} · metadata %{compiled_at,tokens_used,turns,llm_model} · t
+
+** Storage keys (store-agnostic logical paths)
+: [:hist,:session,sid]        Session
+: [:hist,:node,sid,nid]       Node
+: [:hist,:mark,sid,mid]       Mark
+: [:hist,:snap,sid,nid]       Snapshot
+: [:hist,:tool,name]          ToolDef (cross-session)
+: [:hist,:crystal,id]         Crystal (long-term memory)
+: [:hist,:index,:hash,h]      [node-ref]  (dedup / multi-session union)
+
+* Architecture / seams
+
+** Store behaviour (de-risks Khepri-beta)
+`Hist.Store` behaviour with two impls:
+- `Hist.Store.Memory` (ETS/map) — isolation tests, zero infra.
+- `Hist.Store.Khepri` — durable, transactional, in-mem+on-disk dual. Khepri 0.18,
+  single-node Ra = an ordered crash-safe WAL with a materialized view; consensus
+  degenerates to durable ordering on one node.
+Core logic is store-agnostic; every capability is tested against Memory.
+
+** ex_rose_tree (navigation view, NOT persistence)
+The branch DAG lives in `parent_id` fields. `Hist.Zip` hydrates an
+`ExRoseTree.Zipper` over a subtree for ergonomic cursor motion
+(parent/sibling/next/prev) when the interactive layer needs it. Thin, optional,
+never load-bearing for storage.
+
+** Integration seams to the live agent (how it fits natively)
+
+1. WRITE seam — `Hist.Recorder`. The live `SpellAgent.Tui.Store` already reduces
+   `SubAgent.Telemetry` into a span forest. Recorder tees the SAME telemetry
+   (`:run/:llm/:tool/:turn` events) PLUS each completed `PtcRunner.Turn` into a
+   `Node`, realizes handles, and persists. One telemetry bus, two subscribers —
+   the live inspector and the durable log. No change to PtcRunner; pure addition.
+
+2. RESUME seam — `SpellAgent.Session.run/2`. Today it seeds a fresh SubAgent.
+   `reconstitute/1` produces {env, tools, messages} that map onto SubAgent's
+   `context`/`memory` + `ToolRegistry.put` + the resumed message list. Resuming a
+   session = reconstitute → seed loop. The bridge is `messages/1` (slice → message
+   list) matching what `SubAgent.run` expects.
+
+3. NAMESPACE seam — `hist/*` PTC-Lisp verbs, merged into the tools map exactly like
+   `harness/*` / `keymap/*` (Session.ex routes define-* and runtime tools through one
+   registry). The agent calls `(hist/reconstitute {...})`, `(hist/crystallize {...})`,
+   `(hist/forms {:matching '(tool/edit _)})` natively — history becomes a first-class
+   tool surface, same shape as tool/ and harness/.
+
+4. COMPACTION seam — `Hist.Window` feeds `SubAgent.Compaction`. When the compaction
+   trigger fires, Hist supplies the windowed message list (trim = narrow visible,
+   not delete) and becomes the Phase-2 `:summarize` backing store.
+
+* Build waves
+
+** W0 deps + foundation
+- add {:khepri,"~> 0.18"}, {:ex_rose_tree} to mix.exs
+- structs: Node, Session, Mark, Snapshot, ToolDef, Crystal
+- `Hist.Store` behaviour + `Hist.Store.Memory`
+- `Hist.Realize.walk/1` (handle realization — the (a) finding)
+- isolation tests: struct round-trip, realize replaces handles, store CRUD
+
+** W1 record + reconstitute (C1)
+- `Hist.Recorder` (Step/Turn → Node, via telemetry tee or direct record/2)
+- `Hist.Reconstitute` (deterministic env/tool/messages rebuild; snapshot-accelerated)
+- isolation tests + showcase: resume-after-close
+
+** W2 query lenses (C4) + spans (C5)
+- `Hist.Query` find/forms/defq/diff/cost
+- span persistence + `spans/1` cost/1 trace/1
+- isolation tests + showcase: "errored tool/edit calls"
+
+** W3 crystallize (C2) + tool lifecycle (C3)
+- `Hist.Crystallize` (slice → CompiledAgent → Crystal)
+- `Hist.Tools` inventory/promote
+- isolation tests + showcase: investigation → hot-callers tool
+
+** W4 window (C6) + Khepri impl + hist/* namespace
+- `Hist.Window` window/recall/distill
+- `Hist.Store.Khepri`
+- `hist/*` namespace wiring (mirror harness/)
+- isolation tests + showcase: lossless compaction
+
+* FUPs (comprehensive — no extra context needed to execute)
+
+** FUP-REEVAL  full counterfactual re-execution
+VISION: `reeval/2` re-EXECUTES stored program forms LIVE (tools fire — side effects
+permitted, internal data) to grow a NEW branch off any node, `:main` untouched.
+Two lenses on one log: REPLAY (reconstitute — pure, folds recorded binds/sees, no
+effects — BUILT IN W1) vs REEVAL (impure, runs forms). The quote↔eval boundary is
+the safety valve: viewing/replaying any node is free; re-running is an explicit verb.
+
+WHY DEFERRED: reconstitute delivers deterministic state rebuild NOW (the resume need);
+reeval adds the alternate-history power later. reeval needs: (a) a dry/live flag —
+"internal data is fine" ≠ "re-running tool/edit against the real FS is fine"; tool
+calls during reeval must route through a sandbox or a recorded-effect oracle to stay
+safe; (b) form EDITING before re-run (`reeval {:node n :with {form ...}}`) for
+"what if I'd done X instead"; (c) branch attribution (reeval output is a new cursor,
+content-addressed off the edited form). 
+
+IMPLEMENTATION SKETCH: reuse `PtcRunner.Lisp.run/2` with the reconstituted env as the
+binding seed + a tool map that either (live) calls real tools or (oracle) returns the
+node's recorded `sees` results. Parallelize counterfactual fan-out (N arg variants)
+with `psettled` (settles per-variant failure). Output: a new Node with parent_id =
+the reeval source, status :reeval, plus a Mark :clearing if it converges with an
+existing branch (content-hash collision in [:hist,:index,:hash]).
+ACCEPTANCE: re-run turn N live → new branch node, original untouched; oracle mode
+reproduces recorded result deterministically; edited-form re-run diverges as expected.
+
+** FUP-UNREALIZED  capture sampled-but-discarded completions
+VISION: the "tree of possibles" includes roads NOT taken — completions the model
+sampled but never emitted, and user-discarded drafts. Stored as point-LESS branch
+Nodes (a `grow` no cursor ever reaches), status :unrealized, parent_id = the fork
+node. Enables "what else could the model have said here" and negative-knowledge recall.
+
+WHY DEFERRED: realized branches (retries/edits/dead-ends) come free from the existing
+`Turn` stream (PtcRunner tags `:retry`); unrealized needs a NEW capture surface —
+PtcRunner exposes `raw_response` per turn but not rejected samples. Requires a sampler
+tap (n>1 sampling or logprob capture) that does not exist in the loop today.
+
+IMPLEMENTATION SKETCH: (a) extend the Anthropic adapter / SubAgent.Loop to optionally
+request/retain alternative completions per turn; (b) Recorder writes each as an
+:unrealized Node hanging off the same parent, with its logprob/rank in meta; (c)
+Query gains `roads-not-taken/1`; recall becomes branch-aware over realized vs
+unrealized (never surface unrealized as truth). The data model already supports this:
+an :unrealized Node is just one no cursor references. NO schema change — only a
+capture-surface + a writer clause.
+ACCEPTANCE: with sampler tap on, a turn records its alternative completions as sibling
+:unrealized nodes; default lenses (chat/messages) exclude them; `roads-not-taken`
+surfaces them; reconstitute never folds an :unrealized node.
+
+* Acceptance (whole module)
+- every capability has an isolation test (against Store.Memory) AND a showcase script
+  in `scripts/hist/` demonstrating one named use-case end-to-end.
+- `mix compile` clean; `mix test test/spell_agent/hist/` green.
+- module is self-contained (Store.Memory) — integration to the live agent is the
+  documented seams, switched on separately.

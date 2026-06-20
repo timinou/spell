@@ -1,0 +1,110 @@
+#+TITLE: Hist consumes Step.def_delta/freeze/form (cash in Moves A/B/C)
+#+STATE: DONE
+#+SESSION_ID: 150fca134364ee8b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
+#+CUSTOM_ID: PLAN-008-fup-hist-consumes-step-def-delta-freeze
+#+COMPLETION_HASH: e96d1986bb0a6d2e
+
+* Why
+PLAN-007 landed Moves A/B/C on the ptc_runner fork: the runtime now EMITS at the
+source the structure Hist used to reverse-engineer from outside. Those Moves are
+inert leverage until Hist consumes them. This plan is the PAYOFF half — cut Hist
+over to the runtime-emitted structure and DELETE the parallel reconstruction.
+
+The architectural thesis (PLAN-004 boundary): Hist's hard ~70% Elixir core is an
+outside-in reconstructor. Moves A/B/C shrink and harden it. This plan executes
+that shrink: three reconstructors deleted, one bug-class made unrepresentable.
+
+* Verified mechanism (investigation done, NOT a guess)
+Traced fork %Step{} -> agent loop -> Hist per-turn %Node{} end to end.
+
+** The granularity gap (the load-bearing finding)
+- Fork: PtcRunner.Lisp.run -> %Step{def_delta, form, memory} is ONE run. Moves
+  A/B/C live on %Step{}. BOTH %Step{} build sites (lisp.ex ~836, ~1030) set
+  `turns: nil`.
+- Loop: PtcRunner.SubAgent multi-turn loop accumulates per-run results into
+  step.turns as %PtcRunner.Turn{}. build_continuation_state (loop.ex:398)
+  prepends to state.turns. The Turn factory is Metrics.build_turn
+  (loop/metrics.ex:397), called by build_success_turn (loop.ex:1157) and the
+  error path (loop.ex:869).
+- Hist: Recorder.record_step iterates step.turns PER-TURN. So Recorder only ever
+  sees %Turn{} — which has memory/program/result/tool_calls but NOT def_delta or
+  form. Left alone, Recorder can only re-diff (map_delta) and re-parse (string
+  program). The Moves never reach it.
+- Bridge: every turn-build site ALREADY holds the per-run `lisp_step` and copies
+  `lisp_step.memory`. `.def_delta` and `.form` sit right beside it, dropped on
+  the floor. Carrying them one hop (Step -> Turn) is the only fork prerequisite.
+
+** Equivalence proof (so deletion is safe)
+- `lisp_step.def_delta = compute_def_delta(ctx.initial_user_ns, ctx.user_ns)`.
+  In the loop each turn's Lisp.run is seeded with accumulated memory, so
+  `initial_user_ns ≡ prev_mem` (the cumulative env entering the turn).
+- Therefore `def_delta.introduced ∪ changed ≡ map_delta(prev_mem, turn.memory)`
+  MINUS map_delta's `removed` arm.
+- PTC has NO `undef` (eval.ex value model: nil|bool|number|string|atom|list|map|
+  MapSet|fn|closure — no removal primitive). A def can only add or rebind. So
+  map_delta's `removed` set is ALWAYS empty in practice.
+- => the cutover is exact, and BUG-001 B1's `deleted_marker` / the deletion arm
+  of Node.apply_binds become PROVABLY DEAD CODE (unrepresentable, not just
+  unfixed).
+
+** Freeze timing (so Move B is real)
+Session.record_history (session.ex:117) runs SYNCHRONOUSLY post-run, handles
+still live (confirmed). Step.freeze/1 at that boundary realizes while the
+HandleStore term is guaranteed live — kills the realize-before-GC race that
+Hist.Realize.walk worked around from outside. Step.freeze already deep-walks
+`turns`, so one call covers every turn's handles.
+
+* Sub-items (execution order)
+Fork prereqs (parallel):
+  - FEAT-001  MOVE-A'/C': propagate Step.def_delta + Step.form -> Turn (fork)
+  - FEAT-002  expose PtcRunner.Lisp.Handle.deep_realize/1 (fork)
+Consumer seams (after fork bump; SEAM 1 first — riskiest):
+  - FEAT-003  SEAM 1: Recorder reads turn.def_delta; delete map_delta + deleted_marker
+  - FEAT-004  SEAM 2: freeze at owner; delete Hist.Realize; reconcile tombstone
+  - FEAT-005  SEAM 3: lenses walk turn.form CoreAST (not re-parsed string)
+Deferred payoffs (additive, after the cutover is green):
+  - FUP-001  Node.introduced provenance lens (definition-first-seen timeline)
+  - FUP-002  form_tree PTC structural lens (subsumes PLAN-005 deferred power-lens)
+  - FUP-003  Tui.Store consume Step span subtree (adjacent; NOT gated by A/B/C)
+
+* Acceptance (whole plan)
+- Hist suite green with map_delta deleted (or demoted to guarded fallback for
+  synthetic turns only), Hist.Realize module deleted, one tombstone marker.
+- A def-heavy / tool-heavy node's lens returns correct `defs`/`form_tools`
+  sourced from the real AST (the string-path silent-[] bug gone).
+- Equivalence test: fold of per-turn def_delta == step.memory (lands in SEAM 1
+  BEFORE any deletion).
+- Full spell_agent suite green; showcases scripts/hist/c1..c8 exit 0.
+- Fork `spell` branch green; submodule pointer bumped; FORK_CHANGES.md updated.
+
+* Risk register
+- def_delta <-> map_delta equivalence: proven algebraically above; SEAM 1 lands
+  the fold-equality test before deleting anything.
+- synthetic/test turns lack def_delta/form: keep map_delta as a GUARDED fallback
+  (turn.def_delta && ... || map_delta(...)) or backfill fixtures — decided in
+  FEAT-003.
+- fork rebase surface: FEAT-001/002 are small, upstreamable; commit them neatly
+  on branch `spell` and bump the submodule (mirror PLAN-007 procedure).
+
+* Out of scope (flagged, not bundled)
+- FUP-003 Tui.Store span re-derivation is ADJACENT — not gated by A/B/C; needs a
+  separate Step->span-subtree attach. Tracked as a FUP, not a seam.
+
+NOTE [2026-06-20]: COMPLETE. The payoff cutover is cashed in: Hist now CONSUMES the ptc_runner fork's source-emitted structure (Moves A/B/C) instead of reconstructing it.
+
+FORK PREREQS (fork branch spell, pushed; submodule @69624b27):
+- FEAT-001 (7e885c8a) MOVE-A'/C': Step.def_delta + Step.form projected onto Turn; equivalence fold(def_deltas)==memory proven.
+- FEAT-002 (b3fd78d4): Handle.deep_realize/1 single walker; Step.freeze delegates.
+- BUG-005 (6f733c3a): fixed 3 deterministic pre-existing 0.12-rebase failures (tool-error double-wrap, stale hint test, schema regen) found by the stricter full-suite gate PLAN-007 skipped. Full fork suite 6595 passed.
+
+CONSUMER SEAMS (spell commit 8f46355ee):
+- FEAT-003 SEAM 1: binds from turn.def_delta; map_delta -> synthetic fallback (no removed arm); deleted_marker + apply_binds deletion arm DELETED (B1 class unrepresentable).
+- FEAT-004 SEAM 2: Step.freeze at the owner in Session.record_history; Hist.Realize module DELETED; cont path uses Handle.deep_realize; one tombstone tag.
+- FEAT-005 SEAM 3: node.form = executed CoreAST; lens defs/form_tools walk real structure (silent-[] gone). c8 shows "defs"=>["plan"].
+
+VERIFY: hist 124 + full spell_agent 335 passed; scripts/hist/c1..c9 exit 0. The granularity risk (per-turn Node vs per-Step Move) was resolved by MOVE-A'/C' (Step->Turn propagation), exactly as the plan's risk register anticipated.
+
+Deferred (filed): FUP-001 (introduced provenance lens), FUP-002 (form_tree PTC lens, now enabled by SEAM 3), FUP-003 (Tui.Store span subtree — adjacent, not A/B/C-gated). All remain ITEM.
+
+Commit boundary note: the prior session left the whole Hist substrate uncommitted; per user direction this commit consolidates that substrate WITH the PLAN-008 cutover. PLAN-003 TUI files (tui/app.ex, panes/history.ex, app_test) left uncommitted as the prior session intended.

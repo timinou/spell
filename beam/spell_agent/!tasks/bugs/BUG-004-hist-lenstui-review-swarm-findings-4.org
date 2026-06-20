@@ -1,0 +1,44 @@
+#+TITLE: Hist lens+TUI review swarm findings (4)
+#+STATE: DONE
+#+SESSION_ID: 150fca134364ee8b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
+#+CUSTOM_ID: BUG-004-hist-lenstui-review-swarm-findings-4
+#+COMPLETION_HASH: 201e3aac41238104
+
+* Initial Message
+
+how can you integrate these features in the spell.tui so that the conversation gains history?
+
+* SOURCE
+Review swarm over PLAN-005 (PTC lenses) + PLAN-003 (TUI wiring). 4 P2 findings,
+all high-confidence real defects.
+
+* L1 — cost lens ignores since_mark (parity break)
+lib/spell_agent/hist/lens.ex project_opts/1 only recognizes since_seq; Query.cost
+honors since_mark (resolves mark->seq). hist/cost with a bookmark sums the whole
+session while hist/cost!/Query.cost start at the mark. FIX: resolve since_mark to a
+seq in Elixir (Lens.run or a cost-specific path) before injecting, OR pass the
+mark's seq as since_seq. Keep the lens pure (it only sees data/nodes).
+
+* L2 — projection drops false/nil tool results
+lib/spell_agent/hist/lens.ex project_tool_calls uses see[:result] || see["result"];
+a real `false` result becomes nil. FIX: presence-aware fetch (Map.get with a check
+across atom+string keys) so false is preserved. Same pattern for :args/:name.
+
+* T1 — History pane can crash the App on a bad store
+lib/spell_agent/tui/panes/history.ex resume/project: Hist.resume can raise if the
+store is down; mount tolerates it but reproject does not -> render crash. FIX: wrap
+the resume in try/rescue/catch -> empty state, so a sick store degrades gracefully.
+
+* T2 — History focus has no scroll context
+lib/spell_agent/tui/app.ex focus_stack/1 maps :tree/:prompt/:detail but not
+:history; focused History resolves only Global, so j/k/page can't scroll the
+transcript. FIX: add focus_stack(%{ui: %Ui{focus: :history}}) -> [TurnNav, Global]
+(same as :detail, which scrolls).
+
+* VERIFY
+After fixes: full hist + tui suite green; add regression tests for L1 (cost with
+mark via PTC == Elixir), L2 (false result preserved), T1 (History.project on a
+raising store -> empty), T2 (focus_stack :history includes TurnNav).
+
+NOTE [2026-06-20]: All 4 fixed + regression-tested. L1: Lens.project_opts/3 now resolves since_mark->seq via the store (mirrors Query.cost) so hist/cost honors a bookmark. L2: project_tool_calls uses mixed_get/2 (presence-aware atom+string fetch) so a false/nil tool result survives instead of being nilled by ||. T1: History.resume wraps Hist.resume in try/rescue/catch -> empty state, so a sick store degrades not crashes. T2: focus_stack(:history) -> [TurnNav, Global] so j/k/page scroll the focused transcript. Regressions: lens_test L1+L2 (2), history_test T1 (1, RaisingStore), app_test T2 (1, scroll). Full suite 326 passed (11 properties). All showcases green.

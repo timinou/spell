@@ -1,0 +1,88 @@
+#+TITLE: FUP-PTC-LENSES: query lenses as injectable PTC tools
+#+STATE: DONE
+#+SESSION_ID: 150fca134364ee8b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
+#+CUSTOM_ID: PLAN-005-fup-ptc-lenses-query-lenses-as-injectabl
+#+COMPLETION_HASH: e6642b2de4f63b62
+
+* Initial Message
+
+how can you integrate these features in the spell.tui so that the conversation gains history?
+
+* GOAL
+Ship the PURE query lenses (forms / defq / tool-calls / cost) as PTC-Lisp tools
+layered over a thin Elixir primitive, so the agent can run them AND author NEW
+lenses at runtime with zero Elixir deploy. Realizes the homoiconic dividend from
+PLAN-004 (DEC: PTC vs Elixir boundary): Elixir owns the primitive (materialize +
+project + heap-safety), PTC owns the lens (pure transform the agent can reshape).
+
+Parent: PLAN-001. Decision: PLAN-004.
+
+* DESIGN — "Elixir materializes, PTC transforms"
+The lens does NOT call a tool to fetch nodes (that needs session-scoped tool
+plumbing and re-enters the sandbox). Instead the Elixir primitive projects the
+session's nodes to plain string-keyed maps and INJECTS them as context data/nodes;
+the lens is then a pure (->> data/nodes ...) program. This matches PtcRunner.Lisp.run
+semantics (verified lib/ptc_runner/lisp.ex:189): context data/* keys are bound and
+auto-filtered; large values park as handles, so a big session stays heap-safe.
+
+** Node projection (the data contract handed to a lens)
+A node -> %{"id","seq","tool_calls"=>[%{"name","args","result","status"}],
+"defs"=>["sym"...],"form_src","tokens"=>%{"input","output"},"status"} where:
+- tool_calls = realized sees with status via Hist.Result.status (the ONE classifier)
+- defs = symbol names defined anywhere in the form AST (pre-extracted in Elixir,
+  because AST tuples are not PTC values; we surface the names as strings)
+- everything string-keyed (PTC convention) and JSON-serializable
+This is the stable interface a lens sees; the AST itself stays in Elixir.
+
+* COMPONENTS
+1. Elixir primitive  SpellAgent.Hist.Lens.project(impl, sid, opts) :: [map]
+   - the node projection above; ordered by seq; opt :since_seq.
+   And Lens.run(impl, sid, lens_source, args) :: term — fetch projection, inject as
+   data/nodes + args as data/*, PtcRunner.Lisp.run, return step.return.
+2. Lens sources in priv/hist/lenses/*.ptc (text imports), one per lens:
+   forms.ptc, defs.ptc, tool_calls.ptc, cost.ptc. Pure programs over data/nodes.
+3. Registration: SpellAgent.Hist.Lens.tools(impl, sid) -> %{"hist/forms"=>fn,...}
+   closing each lens source over Lens.run. Merged INTO Hist.Namespace.tools so the
+   agent sees them in hist/*. The existing Elixir Query verbs stay as hist/<lens>!
+   fast paths (kept, not deleted — fast path + parity oracle).
+4. Runtime authorship: because a lens is just a :ptc tool source, the agent can
+   (tool/define-tool {:name "hist/my-lens" :source "(->> data/nodes ...)"}) — but
+   data/nodes injection only happens via Lens.run, so authored lenses go through a
+   (hist/lens {:source "..."}) meta-verb that runs arbitrary lens source over the
+   projection. That meta-verb is the runtime-authorship surface.
+
+* TESTS (exquisite + property-based)
+A. Parity (the core contract): for each lens, on a seeded + on a GENERATED session,
+   PTC lens result == corresponding Query.* Elixir result. StreamData generator
+   produces random node DAGs (varied tool calls, defs, statuses, tokens); assert
+   forms/defs/tool_calls/cost parity across hundreds of cases. This is the property
+   that lets us trust the PTC reimpl.
+B. Projection invariants (property): project/3 output is always string-keyed,
+   JSON-serializable, seq-ordered; tool_calls status in {"ok","error"}; round-trips
+   through Jason without loss.
+C. Heap safety: a large generated session (e.g. 2k nodes) runs a lens via Lens.run
+   without memory_exceeded (projection parks as a handle; lens projects a slice).
+D. Runtime authorship: an agent-authored lens source over data/nodes runs through
+   (hist/lens {:source ...}) and returns expected data — no Elixir change.
+E. Namespace integration: Hist.verbs(sid) now contains hist/forms (PTC) and
+   hist/forms! (Elixir); both return equal results on the same session.
+
+* SHOWCASE  scripts/hist/c8_ptc_lenses.exs
+Seed a session; show (1) hist/forms via PTC == Query.forms; (2) the agent AUTHORS a
+novel lens at runtime ("turns that defined a symbol AND errored a tool call") and
+runs it over the projection with zero Elixir code; (3) the projection of a big
+session stays heap-safe. Prints PROOF lines, exit 0.
+
+* ACCEPTANCE
+- mix test test/spell_agent/hist/lens_test.exs green incl. property parity (A) over
+  >=200 generated sessions per lens.
+- Hist.verbs(sid) exposes hist/forms..hist/cost (PTC) + !-suffixed Elixir fast paths.
+- scripts/hist/c8_ptc_lenses.exs exit 0.
+- No regression: full hist suite stays green.
+
+* NON-GOALS
+Migrating diff (needs two specific seqs; trivial, keep Elixir). Deleting the Elixir
+Query verbs (kept as fast path + oracle). Touching storage/recorder (Elixir floor).
+
+NOTE [2026-06-20]: Complete. Hist.Lens primitive (project/3 + run/4), 4 PTC lens sources in priv/hist/lenses/ (forms/defs/tool_calls/cost) + hist/lens runtime-authorship verb. Wired into Namespace: PTC lenses take primary names, Elixir Query kept as hist/*! fast-paths + parity oracles. Tests: lens_test.exs 14 (5 properties incl generative parity over node DAGs + projection invariants + 2000-node heap safety + runtime authorship + graceful failure). namespace_test updated to new verb surface. Full hist suite 109 passed. Showcase c8_ptc_lenses.exs exit 0. All 8 showcases green.
