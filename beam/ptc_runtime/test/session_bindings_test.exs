@@ -84,11 +84,13 @@ defmodule PtcRuntime.SessionBindingsTest do
       assert {:ok, 99} = run_execute(peer, 3, ~S|x|)
     end
 
-    test "a bare (def x v) still binds even though its wire return is the Var", %{peer: peer} do
-      # Canonical REPL idiom: the wire return is the non-encodable Var (#'x),
-      # so the wire result is an unencodable error — but the binding persists.
-      assert {:error, err} = run_execute(peer, 1, ~S|(def k 7)|)
-      assert err["data"]["reason"] == "unencodable_return"
+    test "a bare (def x v) still binds; ptc_runner 0.12 returns the var-quote form", %{peer: peer} do
+      # Canonical REPL idiom. The load-bearing contract is that the BINDING
+      # PERSISTS to the next execute. ptc_runner 0.12 changed the wire RETURN of
+      # a bare `(def k v)` from a non-encodable Var (which surfaced as an
+      # `unencodable_return` error) to the encodable Clojure var-quote string
+      # `#'k` (a successful return). Either way the binding must commit.
+      assert {:ok, "#'k"} = run_execute(peer, 1, ~S|(def k 7)|)
       assert {:ok, 7} = run_execute(peer, 2, ~S|k|)
     end
   end
