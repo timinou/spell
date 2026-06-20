@@ -34,7 +34,11 @@ defmodule SpellAgent.Application do
       # Live keybinding overrides for the Reaction DSL (PLAN-346): runtime
       # rebinds (keymap/bind) and authored reactions (keymap/define-reaction).
       # Session-global, same posture as ToolRegistry.
-      SpellAgent.Tui.KeymapRegistry
+      SpellAgent.Tui.KeymapRegistry,
+      # Live theme palette for the freeform render mirror (PLAN-009, Edge T):
+      # theme/set recolors a named slot; view/ builders read defaults from it.
+      # Session-global, same posture as KeymapRegistry.
+      SpellAgent.Tui.ThemeRegistry
     ]
 
     opts = [strategy: :one_for_one, name: SpellAgent.Supervisor]
