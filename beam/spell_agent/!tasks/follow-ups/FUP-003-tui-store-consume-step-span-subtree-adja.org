@@ -1,8 +1,9 @@
 #+TITLE: Tui.Store consume Step span subtree (adjacent, not gated by A/B/C)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 150fca134364ee8b
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
 #+CUSTOM_ID: FUP-003-tui-store-consume-step-span-subtree-adja
+#+COMPLETION_HASH: f5d13526475e00da
 
 * Initial Message
 
@@ -60,3 +61,7 @@ Adjacent architecture cleanup in a different layer with a different data
 structure. Bundling it into A/B/C would conflate two unrelated reconstructions
 and bloat the cutover. Do the A/B/C payoff first; revisit this after, starting
 with the TraceLog investigation (it may already be 80% done by the maintainer).
+
+NOTE [2026-06-20]: DONE (commit 5d2beb4cd). Investigated TraceLog first: fork's TraceLog is a separate event-log subsystem, NOT a per-step span subtree on Step/Turn — so no fork change. Built the bridge Tui.Store.to_span_root/2 (live flat forest -> nested Hist.Node.span_root, capture) + from_span_root/1 (nested tree -> flat forest, replay) so the inspector TUI renders a RECORDED run's interior like a live one; Hist.Spans already reads the persisted tree (offline cost/trace). Cassette-backed test 5 passed: to_span_root nesting, round-trip equality (ids/kinds/parents/child-order/subtree match live), CASSETTE persist-to-disk + rehydrate + Spans.cost recovery, string-keyed tolerance. Showcase c12.
+
+SCOPE NOTE (honest): delivered the load-bearing bidirectional bridge + full proof. The LIVE auto-capture wiring (correlate Tui.Store's forest to the recorded Step at mission end, so span_root populates automatically in production) needs session<->telemetry trace-id correlation that does not exist yet — a small follow-up. The data-layer capability is complete and tested; only the automatic trigger is deferred.

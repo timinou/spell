@@ -1,0 +1,43 @@
+#+TITLE: Live span-root auto-capture: wire Tui.Store.to_span_root into the record path
+#+STATE: ITEM
+#+SESSION_ID: 150fca134364ee8b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
+#+CUSTOM_ID: FUP-004-live-span-root-auto-capture-wire-tui-sto
+
+* Initial Message
+
+kk give me your plan for PLAN-008 and any other payoff that you see along the way
+
+* Parent
+FUP-003 follow-up. The bidirectional bridge (Tui.Store.to_span_root/from_span_root)
+landed + tested (commit 5d2beb4cd), but the LIVE auto-capture is not wired.
+
+* Gap
+Node.span_root is populated only when a turn map carries :span_root (tests,
+synthetic). In production, Session.record_history records a finished Step but does
+NOT snapshot the live Tui.Store forest into the recorded node, so a real run's
+span interior is not persisted automatically.
+
+* What's needed
+Correlate the run's root span_id to the recorded Step/turn so record_history can
+call Tui.Store.to_span_root(spans, root_id) and attach it. Requires a
+session<->telemetry trace-id correlation that does not exist yet:
+  - PtcRunner.SubAgent.Telemetry tags spans with span_id/parent_span_id; the Step
+    has trace_id/parent_trace_id (see step.ex). Determine whether the run's root
+    span_id == the Step trace_id, or thread a correlation id from Session.run
+    through the loop telemetry.
+  - In Session.record_history (after Step.freeze, before/with Hist.record): look up
+    the run's root span in Tui.Store, to_span_root it, and pass it as the per-turn
+    :span_root opt (Recorder already reads Map.get(turn, :span_root)).
+  - Guard: Tui.Store may not be running (headless) -> nil span_root, no crash.
+
+* Acceptance
+- A real Session.run with the inspector store active records nodes whose
+  span_root is the captured interior (Hist.Spans.spans(node) non-empty).
+- from_span_root rehydrates it (already proven by FUP-003 tests).
+- Headless (no Tui.Store) still records with span_root nil, no crash.
+
+* Why deferred
+The data-layer capability (the bridge + offline read + replay) is complete and
+tested. This is purely the automatic trigger, which needs a correlation-id design
+decision; out of scope for the FUP-003 bridge itself.

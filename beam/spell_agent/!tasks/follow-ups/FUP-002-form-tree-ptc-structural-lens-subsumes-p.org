@@ -1,8 +1,9 @@
 #+TITLE: form_tree PTC structural lens (subsumes PLAN-005 deferred power-lens)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 150fca134364ee8b
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
 #+CUSTOM_ID: FUP-002-form-tree-ptc-structural-lens-subsumes-p
+#+COMPLETION_HASH: 821f33abadaea780
 
 * Initial Message
 
@@ -62,3 +63,5 @@ Node's moduledoc, finally usable from PTC.
 Additive power feature, not part of the correctness cutover. SEAM 3 is the hard
 prerequisite; this FUP cashes the structural-lens promise once the AST is real.
 Subsumes the PLAN-005 deferred form_tree note — close that thread here.
+
+NOTE [2026-06-20]: DONE (commit cf7df8892). Lens.form_tree/1: CoreAST->PTC-native nested tree (tuple-free, drift-resilient). form_tree.ptc + hist/form_tree structural queries with zero Elixir deploy. Subsumes PLAN-005 deferred form_tree. Cassette-backed test 9 passed incl. END-TO-END via real Parser+Analyze + PTC-no-tuples invariant. Showcase c11 incl. runtime-authored novel structural lens.

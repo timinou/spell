@@ -1,8 +1,9 @@
 #+TITLE: Node.introduced provenance lens (definition-first-seen timeline)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 150fca134364ee8b
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
 #+CUSTOM_ID: FUP-001-node-introduced-provenance-lens-definiti
+#+COMPLETION_HASH: b41afd510f8b7f65
 
 * Initial Message
 
@@ -51,3 +52,5 @@ SEAM 1 deliberately does NOT widen Node (keeps the cutover minimal + reversible)
 This FUP adds the provenance capability once the core cutover is proven. Skipping
 it costs nothing structural; doing it turns a free byproduct of Move A into a
 user-facing query.
+
+NOTE [2026-06-20]: DONE (commit 8b083a0ec). Node.introduced + projection introduced/bound; provenance.ptc + hist/provenance (PTC) + hist/provenance! (Elixir parity oracle): birth+rebinds as O(chain) scan, no env fold. Cassette-backed test 8 passed (replay-determinism, semantics, parity, one-introducer property). Showcase c10. Built the cassette mechanism test/support/hist_cassette.ex (record session->disk fixture->replay).
