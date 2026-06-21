@@ -295,3 +295,50 @@ reduced to widget leaves (its :render view/ program already run). The tree the
 LayoutRegistry holds carries pane NODES (with :render + :tags); resolving a pane
 node = run its :render with data/* incl. its tags -> a leaf subtree. That
 resolution step lands with LayoutRegistry + render/2 cutover.
+
+* Progress (build session 2 — gaze-as-lens + render cutover, TEST-DRIVABLE)
+
+LANDED (commits: lens cutover + prelude):
+- [x] Lens (D1 unification): the layout TREE is canonical; %Ui{} is a derived,
+      round-tripping VIEW (to_ui/from_ui). Focus/cursor/scroll/mode/ring are tags
+      ON the tree. lens/ traversal verbs (focus ring = pure tree re-tag). The
+      168-test reaction algebra keeps speaking %Ui{}; ZERO desync possible.
+      Round-trip proven exact (lens_test).
+- [x] LayoutRegistry: canonical tree as live data. Default-as-data, slot
+      shadowing, last-good failure ladder (a non-renderable shadow rejected per
+      SLOT subtree, prior kept). layout/ PTC surface. 16 tests.
+- [x] DefaultLayout: native inspector UI AS the data the agent writes (dogfood).
+      Accepts the active pane list so 2-pane tests and 3-pane prod both work.
+- [x] Surface split into layout/2 (resolve, no materialize) + render/2, so the
+      App mixes native pane nodes + agent widget leaves in ONE walk.
+- [x] App.render CUTOVER to ONE path: build tree from panes+gaze -> Surface.layout
+      -> resolve pane nodes (existing project/view machinery) + widget leaves
+      (Materialize). Agent slot shadows win over native fill (native_placeholder?).
+      Collapsed the has_history? two-path branch. reproject folds gaze into the
+      registry tree (single chokepoint) so lens/+layout/show see live focus.
+- [x] Tools.build_tools_map merges view/+layout/+lens/+theme/ into the agent
+      surface. App seeds LayoutRegistry at mount.
+- [x] Prelude (deliverable 11): reflected .md frame + generated builder table,
+      always-injected. The agent now KNOWS it can reshape the UI.
+- [x] mix spell.tui -f/--freeform accepted (capability always-on, no gate).
+- [x] BUG-006 fixed (function_exported? on unloaded module dropped context_name;
+      flaked the hint). Load-safe Keys.context_name/1, regression tested.
+
+PROVEN END TO END (no network):
+- loop_integration FREEFORM test: scripted LLM drives the REAL Session.run loop,
+  emits (layout/set {... (view/paragraph ...)}), registry holds the shadow.
+- Live headless boot (mix spell.tui path): app boots, registry seeded with native
+  panes, agent reshapes status/body/theme through its real tools, render survives,
+  render_count advances. "DASHBOARD MODE" body replacement works.
+
+Full suite: 396 passed, deterministic across repeated runs. Zero regressions.
+
+REMAINING (deferred, tracked):
+- [ ] L-2 recording seam (authored layouts -> hist spans) — folded scope, not yet
+      wired. Next natural step.
+- [ ] Same-node inspector view (deliverable 10) — layout tree as live PTC code.
+- [ ] lens/ inside keystroke REACTIONS (currently lens/ is on the agent tool
+      surface; wiring it into Reaction.Ptc so a keybind can re-tag via lens/ is a
+      small follow-on).
+- [ ] FUP-005 (navigable agent-added panes), FUP-007 (atom hardening),
+      FUP-008 (lazy prelude), FUP-009 (durable layouts) — as filed.
