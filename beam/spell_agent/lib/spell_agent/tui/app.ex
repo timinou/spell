@@ -29,6 +29,8 @@ defmodule SpellAgent.Tui.App do
 
   use ExRatatui.App
 
+  require Logger
+
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Style
   alias ExRatatui.Widgets.{Block, List, Paragraph}
@@ -142,16 +144,39 @@ defmodule SpellAgent.Tui.App do
 
     tree
     |> Surface.layout(area)
-    |> Enum.flat_map(fn {node, rect} -> resolve_node(node, rect, state) end)
+    |> Enum.flat_map(fn {node, rect} -> safe_resolve_node(node, rect, state) end)
     |> Enum.filter(&encodable_placement?/1)
   end
 
-  # Belt-and-braces (BUG-008): the LayoutRegistry probes AGENT shadows at set-time,
-  # but native pane content (project/view/materialize) is never probed, and a deep
-  # nested widget can still carry a value the Bridge rejects. ExRatatui.draw encodes
-  # ALL placements in one pass, so a SINGLE unencodable widget raises and the WHOLE
-  # frame is dropped -- a black/frozen screen. Drop just the offending placement
-  # instead: one missing widget is always better than no frame.
+  # The SINGLE render contract (BUG-009 + BUG-010): every node's resolution is
+  # TOTAL. Two failure modes used to escape:
+  #
+  #   * BUG-010: `resolve_node` (or the pane `view/1` / `Materialize.to_struct`
+  #     it calls) RAISES on a malformed node, killing the whole `render/2` — and
+  #     because tests call the pure `render/2` directly (no Server `rescue`), the
+  #     test blows up with "bad layout"/"bad body" instead of degrading.
+  #   * BUG-009: even when resolution succeeds, an unencodable widget raises at
+  #     `ExRatatui.draw` time; the Server drops the WHOLE frame (frozen screen).
+  #
+  # Guard BOTH here: `safe_resolve_node` makes resolution total (a raise -> drop
+  # just this node's leaves), and the trailing `encodable_placement?` filter makes
+  # the encode total (an unencodable leaf -> dropped, not raised). A malformed
+  # node becomes a GAP; the rest of the frame always renders. This holds on the
+  # direct `render/2` path AND under the Server, so `render/2` is safe to unit-test.
+  defp safe_resolve_node(node, rect, state) do
+    resolve_node(node, rect, state)
+  rescue
+    e ->
+      Logger.warning("render: dropped node #{inspect(Lens.slot(node) || Map.get(node, "type"))}: #{Exception.message(e)}")
+      []
+  catch
+    _, _ -> []
+  end
+
+  # The encode gate (BUG-008): a placed widget the Bridge cannot encode would make
+  # `ExRatatui.draw` raise and drop the frame. Probe each leaf with the SAME call
+  # the draw loop makes and drop the offenders — one missing widget always beats
+  # no frame.
   defp encodable_placement?({widget, %Rect{} = rect}) do
     ExRatatui.Bridge.encode_command({widget, rect})
     true
