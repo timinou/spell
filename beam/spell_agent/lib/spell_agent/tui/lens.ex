@@ -205,6 +205,17 @@ defmodule SpellAgent.Tui.Lens do
 
   def at(_tree, _slot), do: nil
 
+  @doc """
+  Replace the node at `slot` with `replacement` (slot tag preserved). Pure
+  tree -> tree; the tree is returned unchanged if the slot is absent. The mirror
+  of `at/2` for writes.
+  """
+  @spec put_at(node_map(), String.t(), node_map()) :: node_map()
+  def put_at(tree, slot_name, replacement)
+      when is_binary(slot_name) and is_map(replacement) do
+    update_node(tree, slot_name, fn _old -> Map.put(replacement, "slot", slot_name) end)
+  end
+
   @doc "Set a tag on the focused pane node. Pure tree -> tree."
   @spec tag_focused(node_map(), term(), term()) :: node_map()
   def tag_focused(tree, key, value) when is_binary(key) do

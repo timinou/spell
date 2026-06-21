@@ -226,14 +226,34 @@ defmodule SpellAgent.Tui.LayoutRegistry do
   end
 
   # A placed leaf is renderable if it is a native pane node (App resolves it) or a
-  # widget map that materializes to a real struct.
+  # widget map that materializes to a real struct AND that struct actually ENCODES
+  # through the ex_ratatui Bridge. The encode check is load-bearing: a struct can
+  # materialize with a poisoned field (e.g. a nilable `:style` left as a raw map)
+  # that only raises at draw time -- so checking "is a struct" is NOT enough; the
+  # render contract is "the Bridge can encode it". Probing it here keeps a
+  # crash-inducing shadow out of the tree (last-good stays) instead of bricking
+  # the live render every frame (BUG-008).
   defp resolvable_leaf?(node) do
     case Map.get(node, "type") || Map.get(node, :type) do
       "pane" -> true
       "split" -> true
-      _ -> match?(%{__struct__: _}, SpellAgent.Tui.Materialize.to_struct(node))
+      _ -> encodable?(SpellAgent.Tui.Materialize.to_struct(node))
     end
   end
+
+  # The struct encodes iff the Bridge accepts it (the same call the render loop
+  # makes). Any raise -> not renderable.
+  defp encodable?(%{__struct__: _} = widget) do
+    probe = %Rect{x: 0, y: 0, width: 80, height: 24}
+    ExRatatui.Bridge.encode_command({widget, probe})
+    true
+  rescue
+    _ -> false
+  catch
+    _, _ -> false
+  end
+
+  defp encodable?(_), do: false
 
   defp strget(m, key) when is_map(m), do: Map.get(m, key) || Map.get(m, safe_atom(key))
   defp strget(_m, _key), do: nil

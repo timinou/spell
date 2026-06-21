@@ -141,6 +141,64 @@ defmodule SpellAgent.Tui.Reflect do
                end)
               |> MapSet.to_list()
 
+  # ---- struct-typed field harvest (the nilable-struct-field fix, BUG-008) ----
+  #
+  # `Materialize` decides whether to recurse a nested map into a struct by looking
+  # at the field's DEFAULT value's `__struct__`. That works for `:style` on
+  # Paragraph/Block (default `%Style{}`), but FAILS for a NILABLE struct field —
+  # Sparkline's `:style` defaults to `nil`, so the default reveals no type and the
+  # raw agent map passes straight through to the Bridge, which raises
+  # (`expected %ExRatatui.Style{}, got: %{...}`) and the whole frame is dropped.
+  #
+  # The type IS knowable: it lives in the struct's `@type t` spec as a
+  # `remote_type` (e.g. `style: ExRatatui.Style.t() | nil`). Harvest, per module,
+  # a `field => struct_module` map at COMPILE time (same mechanism as the enum
+  # harvest), so Materialize can coerce a typeless nested map to the right struct
+  # regardless of the default. No drift: a new struct field upstream is picked up
+  # automatically.
+  @struct_field_walk fn walk, node ->
+    case node do
+      # A remote `Mod.t()` reference -> that module is the field's struct type.
+      {:remote_type, _, [{:atom, _, mod}, {:atom, _, :t}, _]} when is_atom(mod) ->
+        mod
+
+      tuple when is_tuple(tuple) ->
+        Enum.find_value(Tuple.to_list(tuple), fn child -> walk.(walk, child) end)
+
+      list when is_list(list) ->
+        Enum.find_value(list, fn child -> walk.(walk, child) end)
+
+      _ ->
+        nil
+    end
+  end
+
+  @field_structs (for {name, %{module: mod}} <- @registry, into: %{} do
+                    pairs =
+                      case Code.Typespec.fetch_types(mod) do
+                        {:ok, types} ->
+                          fields =
+                            for {_kind, {:t, def, _args}} <- types,
+                                {:type, _, :map_field_exact, [{:atom, _, field}, ftype]} <-
+                                  (case def do
+                                     {:type, _, :map, entries} when is_list(entries) -> entries
+                                     _ -> []
+                                   end),
+                                struct_mod = @struct_field_walk.(@struct_field_walk, ftype),
+                                not is_nil(struct_mod),
+                                into: %{} do
+                              {field, struct_mod}
+                            end
+
+                          fields
+
+                        _ ->
+                          %{}
+                      end
+
+                    {name, pairs}
+                  end)
+
   # Reverse index: module => wire name, for any code holding a struct.
   @by_module for {name, %{module: mod}} <- @registry, into: %{}, do: {mod, name}
 
@@ -186,6 +244,16 @@ defmodule SpellAgent.Tui.Reflect do
   @doc "The Theme palette slot names (reflected from `ExRatatui.Theme`)."
   @spec theme_slots() :: [atom()]
   def theme_slots, do: @theme_slots
+
+  @doc """
+  The struct-typed fields of a wire name: `field => struct_module`, harvested from
+  the struct's `@type t` spec (so NILABLE struct fields like Sparkline's `:style`
+  are still known despite a `nil` default). Drives Materialize's coercion of a
+  bare nested map (e.g. `style: %{fg: ...}`) into the right struct. Empty map for
+  an unknown name or a struct with no struct-typed fields.
+  """
+  @spec field_structs(String.t()) :: %{optional(atom()) => module()}
+  def field_structs(name) when is_binary(name), do: Map.get(@field_structs, name, %{})
 
   @doc """
   Every enum atom harvested from the reflected modules' typespecs (border types,

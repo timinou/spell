@@ -70,10 +70,18 @@ defmodule SpellAgent.Tui.Materialize do
   # ---- build a struct from a reflected entry + the PTC map ----
 
   defp build(%{module: mod, defaults: defaults}, map) do
+    # Struct-typed fields whose DEFAULT is nil (nilable struct fields like
+    # Sparkline's `:style`) carry no type in their default, so coercion of a bare
+    # nested map would pass it through raw -> Bridge crash. Reflect harvests the
+    # field's struct type from the typespec; substitute an empty instance as the
+    # coercion default so the typeless-map path recurses into the right struct.
+    # (Only affects coercion of a PRESENT field; an ABSENT field keeps nil.)
+    fstructs = Reflect.field_structs(Reflect.name_for(mod) || "")
+
     fields =
       for {field, default} <- defaults, into: %{} do
         case fetch_field(map, field) do
-          {:ok, raw} -> {field, coerce(field, raw, default, mod)}
+          {:ok, raw} -> {field, coerce(field, raw, coerce_default(default, field, fstructs), mod)}
           :error -> {field, default}
         end
       end
@@ -82,6 +90,18 @@ defmodule SpellAgent.Tui.Materialize do
   rescue
     e -> {:error, {:materialize_failed, mod, Exception.message(e)}}
   end
+
+  # The default value the coercion rule keys off. A real non-nil default is used
+  # as-is; a nil default for a known struct-typed field is replaced by an empty
+  # instance of that struct so a bare nested map coerces to it.
+  defp coerce_default(nil, field, fstructs) do
+    case Map.fetch(fstructs, field) do
+      {:ok, struct_mod} -> struct(struct_mod)
+      :error -> nil
+    end
+  end
+
+  defp coerce_default(default, _field, _fstructs), do: default
 
   # ---- per-field coercion, rule chosen by the field's DEFAULT ----
 

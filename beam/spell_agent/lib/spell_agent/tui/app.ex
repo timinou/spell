@@ -143,7 +143,25 @@ defmodule SpellAgent.Tui.App do
     tree
     |> Surface.layout(area)
     |> Enum.flat_map(fn {node, rect} -> resolve_node(node, rect, state) end)
+    |> Enum.filter(&encodable_placement?/1)
   end
+
+  # Belt-and-braces (BUG-008): the LayoutRegistry probes AGENT shadows at set-time,
+  # but native pane content (project/view/materialize) is never probed, and a deep
+  # nested widget can still carry a value the Bridge rejects. ExRatatui.draw encodes
+  # ALL placements in one pass, so a SINGLE unencodable widget raises and the WHOLE
+  # frame is dropped -- a black/frozen screen. Drop just the offending placement
+  # instead: one missing widget is always better than no frame.
+  defp encodable_placement?({widget, %Rect{} = rect}) do
+    ExRatatui.Bridge.encode_command({widget, rect})
+    true
+  rescue
+    _ -> false
+  catch
+    _, _ -> false
+  end
+
+  defp encodable_placement?(_), do: false
 
   # The tree to render: the agent-shadowed tree from LayoutRegistry if it is
   # running AND its pane set matches the App's current panes; otherwise the native

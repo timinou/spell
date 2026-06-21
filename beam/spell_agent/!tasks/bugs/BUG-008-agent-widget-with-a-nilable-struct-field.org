@@ -1,0 +1,91 @@
+#+TITLE: Agent widget with a nilable struct field crashes the live render
+#+STATE: DONE
+#+SESSION_ID: 1511029ec58e9d42
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-20T20-59-50-422Z_1511029ec58e9d42.jsonl]]
+#+CUSTOM_ID: BUG-008-agent-widget-with-a-nilable-struct-field
+
+* Initial Message
+
+can you look at the latest session? the llm was able to query using view/* and layout/set but nothing changed
+
+* Symptom
+
+Live `mix spell.tui`: as soon as the agent emitted a widget carrying a style on a
+field whose struct default is nil (e.g. `view/sparkline` with a `:style`), the
+render loop spammed:
+
+  ExRatatui render error: sparkline.style expected %ExRatatui.Style{},
+  got: %{"fg" => "magenta", "modifiers" => ["bold"]}
+
+every frame, and the screen froze (the whole frame was dropped on each draw).
+
+* Three compounding root causes (defense in depth, fixed each)
+
+** RC-1 (the real defect): style coercion keyed on the DEFAULT VALUE, nil for nilable fields
+
+`Materialize.build/2` chose per-field coercion from the field's DEFAULT value:
+a struct default (`%Style{}`) -> recurse a bare map into that struct. But a
+NILABLE struct field defaults to `nil`, which reveals no type, so the raw agent
+map passed straight through. Sparkline's `:style` defaults to nil (unlike
+Paragraph/Block/Gauge which default to `%Style{}`) -> the raw map reached the
+Bridge, which raised. Blast radius: every nilable struct-typed field across the
+widget set (`:style`, all `*_style`, `:block`, `:label`, `:header`, ...).
+
+Fix (no-drift): `Reflect.field_structs/1` harvests `field => struct_module` from
+each struct's `@type t` spec at COMPILE time (same mechanism as the enum-atom
+harvest) -- the `remote_type` node carries `ExRatatui.Style.t()` even when the
+default is nil. `Materialize.coerce_default/3` substitutes an empty instance of
+that struct as the coercion default for a present field, so a bare nested map
+recurses into the right struct regardless of the default.
+
+** RC-2 (defense gap): the failure ladder accepted a struct that cannot ENCODE
+
+`LayoutRegistry.resolvable_leaf?/1` only checked `match?(%{__struct__: _}, ...)`
+-- "did it produce A struct?". A Sparkline with a poisoned `:style` IS a struct,
+so `set/2` returned `:ok` and the crash-inducing shadow was installed; it only
+blew up later at draw time. The render contract is not "is a struct" but "the
+Bridge can encode it".
+
+Fix: `resolvable_leaf?` now probes `ExRatatui.Bridge.encode_command/1` (the same
+call the render loop makes); any raise -> not renderable -> set rejected with
+`{:error, {:bad_layout, slot}}`, last-good kept.
+
+** RC-3 (last-resort): one bad widget dropped the WHOLE frame
+
+The LayoutRegistry probe covers AGENT shadows, but native pane content
+(project/view/materialize) is never probed, and a deeply nested widget can still
+carry a Bridge-rejected value. `ExRatatui.draw` encodes ALL placements in one
+pass, so a single bad widget raises and the entire frame is dropped (black /
+frozen screen). The moduledoc claimed render "degrades a node that throws at
+paint time" -- it did not.
+
+Fix: `App.render/2` filters placements through an encode probe
+(`encodable_placement?/1`), dropping only the offending widget. One missing
+widget always beats no frame; the moduledoc claim is now true.
+
+* Files
+- lib/spell_agent/tui/reflect.ex      (+ struct-field typespec harvest, field_structs/1)
+- lib/spell_agent/tui/materialize.ex  (coerce_default/3 from reflected field structs)
+- lib/spell_agent/tui/layout_registry.ex (resolvable_leaf? -> encode probe)
+- lib/spell_agent/tui/app.ex          (render encode-filter safety net)
+- lib/spell_agent/tui/lens.ex         (+ put_at/3, mirror of at/2, for the test)
+
+* TDD (one element each)
+- freeform_test: nilable Sparkline.style coerces to %Style{} (RC-1); the coerced
+  widget ENCODES through the Bridge; Reflect.field_structs harvests nilable
+  struct fields from typespecs.
+- layout_registry_test: a shadow that BUILDS but fails to ENCODE is rejected,
+  last-good kept (RC-2) -- distinct from the unknown-widget (fails-to-build) case.
+- app_test: an unencodable widget forced into the live tree is dropped from
+  render, the frame survives and every surviving placement encodes (RC-3).
+
+* Verification
+- Live repro through the real App loop: agent emits a magenta-bold sparkline ->
+  no RENDER DROPPED telemetry, app alive, render_count advances, the sparkline
+  placement encodes cleanly.
+- Full suite 402 passed, deterministic x2.
+
+* Follow-on
+- RC-3's encode-filter double-encodes each frame (filter probe + the draw
+  encode). Fine for ~5-8 widgets; if the widget count grows, fuse the probe into
+  draw (a `draw_lenient` that skips bad commands) -- FUP candidate, not needed now.

@@ -77,6 +77,29 @@ defmodule SpellAgent.Tui.LayoutRegistryTest do
       {:ok, shown} = LayoutRegistry.show("status")
       refute shown["text"] == "X"
     end
+
+    # BUG-008: a shadow that MATERIALIZES to a struct but cannot ENCODE through the
+    # Bridge (a poisoned field that only raises at draw time) must be rejected by
+    # the failure ladder -- NOT installed to crash the live render every frame.
+    # This is distinct from the unknown-widget case above (which fails to
+    # materialize at all); here the struct builds but the Bridge refuses it.
+    test "a shadow that builds but fails to ENCODE is rejected (last-good kept)" do
+      :ok =
+        LayoutRegistry.set("status", %{
+          "type" => "paragraph",
+          "slot" => "status",
+          "text" => "GOOD"
+        })
+
+      # A sparkline with non-numeric data materializes to a %Sparkline{} but the
+      # Bridge raises when encoding it.
+      bad = %{"type" => "sparkline", "slot" => "status", "data" => ["not", "numbers"]}
+      assert match?(%{__struct__: _}, SpellAgent.Tui.Materialize.to_struct(bad))
+      assert {:error, {:bad_layout, "status"}} = LayoutRegistry.set("status", bad)
+
+      assert {:ok, shown} = LayoutRegistry.show("status")
+      assert shown["text"] == "GOOD"
+    end
   end
 
   describe "layout/ PTC surface" do

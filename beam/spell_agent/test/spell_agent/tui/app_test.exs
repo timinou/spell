@@ -305,6 +305,45 @@ defmodule SpellAgent.Tui.AppTest do
     assert rendered =~ "AGENT-RESHAPED-DETAIL"
   end
 
+  # BUG-008: render must never let one unencodable widget drop the WHOLE frame.
+  # ExRatatui.draw encodes all placements in one pass; a single bad one raises and
+  # the live render logs + drops the frame (black/frozen screen). App.render now
+  # filters to encodable placements, so a bad shadow costs ONE widget, not the UI.
+  test "BUG-008: an unencodable shadow is dropped from render, the frame survives",
+       %{store: store} do
+    alias SpellAgent.Tui.{DefaultLayout, LayoutRegistry, Lens}
+
+    st = state(%{store: store})
+    pane_names = Enum.map(st.panes, &Atom.to_string(&1.name))
+    ui = Ui.new(focus: :tree, panes: [:prompt | Enum.map(st.panes, & &1.name)])
+    default = DefaultLayout.tree(ui, pane_names)
+
+    case Process.whereis(LayoutRegistry) do
+      nil -> start_supervised!({LayoutRegistry, default: default})
+      _ -> LayoutRegistry.seed_default(default)
+    end
+
+    # Force an unencodable widget directly into the live tree, bypassing the
+    # set/2 ladder (simulating a paint-time-only failure the probe didn't catch).
+    bad = %{"type" => "sparkline", "slot" => "detail", "data" => ["x", "y"]}
+    poisoned = Lens.put_at(LayoutRegistry.tree(), "detail", bad)
+    :ok = LayoutRegistry.replace(poisoned)
+
+    # Render must NOT raise, and must still produce the other (good) widgets.
+    widgets = App.render(st, %Frame{width: 120, height: 24})
+    assert is_list(widgets)
+    assert length(widgets) >= 1
+    # Every surviving placement encodes cleanly (the bad one was filtered).
+    assert Enum.all?(widgets, fn {w, r} ->
+             try do
+               ExRatatui.Bridge.encode_command({w, r})
+               true
+             rescue
+               _ -> false
+             end
+           end)
+  end
+
   # ---- W2: the Reaction DSL chords, end to end through the App ----
 
   # Emit a small forest straight into a store (root run "r" with a child tool "t")

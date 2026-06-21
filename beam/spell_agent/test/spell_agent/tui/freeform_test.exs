@@ -111,6 +111,44 @@ defmodule SpellAgent.Tui.FreeformTest do
       p = %ExRatatui.Widgets.Paragraph{text: "native"}
       assert Materialize.to_struct(p) == p
     end
+
+    # BUG-008: a NILABLE struct-typed field (default nil) must still coerce a bare
+    # nested map to the right struct. Sparkline's `:style` defaults to nil (unlike
+    # Paragraph's `%Style{}`), so the old default-driven coercion left the raw map
+    # in place -> the Bridge raised at draw time and the whole frame was dropped.
+    test "coerces a nilable struct field (Sparkline.style) despite a nil default" do
+      s =
+        Materialize.to_struct(%{
+          "type" => "sparkline",
+          "data" => [1, 2, 3],
+          "style" => %{"fg" => "magenta", "modifiers" => ["bold"]}
+        })
+
+      assert %ExRatatui.Widgets.Sparkline{} = s
+      assert %ExRatatui.Style{} = s.style
+      assert s.style.fg == :magenta
+      assert s.style.modifiers == [:bold]
+    end
+
+    test "a coerced nilable-style widget actually ENCODES through the Bridge" do
+      s =
+        Materialize.to_struct(%{
+          "type" => "sparkline",
+          "data" => [1, 2, 3],
+          "style" => %{"fg" => "magenta"}
+        })
+
+      # The render contract: the Bridge accepts it without raising. This is the
+      # exact call that crashed live (encode_style expected %Style{}, got a map).
+      assert ExRatatui.Bridge.encode_command({s, %Rect{x: 0, y: 0, width: 10, height: 3}})
+    end
+
+    test "Reflect harvests struct-typed fields from typespecs (incl. nilable)" do
+      # The no-drift source of the fix: the field->struct map comes from the
+      # @type t spec, so a nilable `style: Style.t() | nil` is still known.
+      assert Reflect.field_structs("sparkline")[:style] == ExRatatui.Style
+      assert Reflect.field_structs("paragraph")[:block] == ExRatatui.Widgets.Block
+    end
   end
 
   describe "Surface — layout tree -> placements -> buffer" do
