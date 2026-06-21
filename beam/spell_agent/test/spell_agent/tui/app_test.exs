@@ -263,6 +263,48 @@ defmodule SpellAgent.Tui.AppTest do
     assert scroll == {7, 0}
   end
 
+  # BUG-007: when the agent shadows a PANE slot (not just status/composer) with a
+  # custom widget, the shadowed node keeps its `slot` but loses `type: "pane"`, so
+  # it falls out of `Lens.focusables/1`. The old adoption gate keyed on focusables,
+  # so the focusable set shrank, the equality check failed, and the WHOLE agent
+  # tree silently un-adopted -> the live render fell back to the native default and
+  # nothing changed on screen. The gate now keys on the STABLE body-slot identities
+  # (`Lens.body_pane_slots/1`), so a reshaped pane still renders. This asserts the
+  # render OUTPUT through the gate, not just registry state.
+  test "BUG-007: an agent shadow on a PANE slot survives the render-adoption gate",
+       %{store: store} do
+    alias SpellAgent.Tui.{DefaultLayout, LayoutRegistry, Lens}
+
+    st = state(%{store: store})
+    pane_names = Enum.map(st.panes, &Atom.to_string(&1.name))
+    ui = Ui.new(focus: :tree, panes: [:prompt | Enum.map(st.panes, & &1.name)])
+
+    # Seed the registry with the tree for THIS app's pane set (tree, detail), so
+    # the adoption gate can match.
+    default = DefaultLayout.tree(ui, pane_names)
+
+    case Process.whereis(LayoutRegistry) do
+      nil -> start_supervised!({LayoutRegistry, default: default})
+      _ -> LayoutRegistry.seed_default(default)
+    end
+
+    # The agent reshapes the `detail` PANE into a custom dashboard widget.
+    assert :ok =
+             LayoutRegistry.set("detail", %{
+               "type" => "paragraph",
+               "text" => "AGENT-RESHAPED-DETAIL"
+             })
+
+    # focusables shrank (the reshaped pane is no longer a pane node)...
+    refute "detail" in Lens.focusables(LayoutRegistry.tree())
+    # ...but the STABLE body slots still match the app's panes, so the gate adopts.
+    assert Lens.body_pane_slots(LayoutRegistry.tree()) == pane_names
+
+    widgets = App.render(st, %Frame{width: 120, height: 24})
+    rendered = Enum.map_join(widgets, "\n", fn {w, _r} -> inspect(w) end)
+    assert rendered =~ "AGENT-RESHAPED-DETAIL"
+  end
+
   # ---- W2: the Reaction DSL chords, end to end through the App ----
 
   # Emit a small forest straight into a store (root run "r" with a child tool "t")

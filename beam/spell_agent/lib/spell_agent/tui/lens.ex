@@ -174,6 +174,29 @@ defmodule SpellAgent.Tui.Lens do
     tree |> pane_nodes() |> Enum.map(&slot/1) |> Enum.reject(&is_nil/1)
   end
 
+  @doc """
+  The ordered slot names of the BODY split's direct children -- the STABLE pane
+  identities, in tree order.
+
+  Unlike `focusables/1`, this does not depend on a child still being a `"pane"`
+  node: when the agent shadows a pane slot (e.g. `detail`) with a custom widget,
+  the widget keeps the slot name but loses `type: "pane"`, so it drops out of
+  `focusables/1`. The render-adoption gate must key off this stable identity, or
+  a pane shadow silently un-adopts the whole live tree (PLAN-009 / BUG-007).
+
+  Returns `[]` when there is no `body` split (degraded / unexpected tree).
+  """
+  @spec body_pane_slots(node_map()) :: [String.t()]
+  def body_pane_slots(tree) do
+    case at(tree, "body") do
+      %{} = body ->
+        body |> children() |> List.wrap() |> Enum.map(&slot/1) |> Enum.reject(&is_nil/1)
+
+      _ ->
+        []
+    end
+  end
+
   @doc "The node at `slot`, or nil."
   @spec at(node_map(), term()) :: node_map() | nil
   def at(tree, slot_name) when is_binary(slot_name) do

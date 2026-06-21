@@ -1,0 +1,67 @@
+#+TITLE: Pane-slot shadow silently un-adopts the whole live layout tree
+#+STATE: DONE
+#+SESSION_ID: 1511029ec58e9d42
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-20T20-59-50-422Z_1511029ec58e9d42.jsonl]]
+#+CUSTOM_ID: BUG-007-pane-slot-shadow-silently-un-adopts-the
+
+* Initial Message
+
+can you look at the latest session? the llm was able to query using view/* and layout/set but nothing changed
+
+* Symptom
+
+Live `mix spell.tui`: the agent runs `view/*` + `layout/set` successfully (tool
+returns ok, LayoutRegistry holds the new shadow), but the screen does not change.
+"Queried fine, nothing changed." Reported by the operator after a real session.
+
+* Root cause
+
+`App.live_layout_tree/1` gated tree adoption on
+`Lens.focusables(tree) == pane_names`. `focusables/1` collects only nodes with
+`type: "pane"`. When the agent shadows a PANE slot (e.g. `detail`) with a custom
+widget (`view/paragraph`, a split, etc.), the shadowed node keeps its `slot` but
+loses `type: "pane"` -> it drops out of `focusables/1`. The focusable set shrank
+from `["history","tree","detail"]` to `["history","tree"]`, the equality gate
+failed, `live_layout_tree` returned `nil`, and `render_tree` fell back to the
+NATIVE default -- discarding the agent's entire shadow on every frame.
+
+The `status`/`composer` slots worked because they are not focusables, so
+shadowing them never changed the focusable set -- which is why the earlier
+end-to-end tests (all targeting `status`) passed and masked the bug.
+
+* Why the tests missed it
+
+Prior PLAN-009 tests asserted REGISTRY state (`LayoutRegistry.show(slot)`), never
+that `App.render` OUTPUT changed through the adoption gate, and only ever
+shadowed `status`. The gate -- the actual render chokepoint -- was never
+exercised with a pane-slot shadow.
+
+* Fix
+
+Add `Lens.body_pane_slots/1`: the slot names of the BODY split's direct children
+-- the STABLE pane identities that persist through shadowing (a reshaped pane
+keeps its slot name even after losing `type: "pane"`). Switch the gate to
+`Lens.body_pane_slots(tree) == pane_names`. This still answers "is this the tree
+for THESE panes" (so a 2-pane test never adopts a 3-pane live tree) without
+caring whether a pane was reshaped into a widget.
+
+Files:
+- lib/spell_agent/tui/lens.ex  (+ body_pane_slots/1)
+- lib/spell_agent/tui/app.ex   (live_layout_tree gate)
+
+* Verification
+
+- Repro before fix: `CUSTOM-DETAIL visible in render? false`.
+- After fix: `true`; full nav + from_ui round-trip stable; body_pane_slots stays
+  `["history","tree","detail"]` across gaze folds.
+- Regression test in app_test.exs: agent shadows a PANE slot, assert the custom
+  widget appears in `App.render` output (the gate is honored).
+- Full suite: 396 passed.
+
+* Notes / follow-on
+
+A shadowed pane is no longer in the nav focus ring (it is a widget, not an
+interactive pane). That is the correct default: a static dashboard widget has no
+pane projection to navigate. If the operator later wants a reshaped pane to stay
+navigable, that is a separate feature (focusable agent widgets) -- already
+tracked as FUP-005.

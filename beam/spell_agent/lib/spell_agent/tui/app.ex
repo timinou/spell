@@ -160,12 +160,20 @@ defmodule SpellAgent.Tui.App do
     end
   end
 
-  # The LayoutRegistry's tree, but only when its focusable pane set matches the
-  # App's current panes (so a 2-pane test never picks up a 3-pane live tree, and
-  # the registry being absent in a headless test degrades to the native default).
+  # The LayoutRegistry's tree, but only when its BODY pane SLOTS match the App's
+  # current panes (so a 2-pane test never picks up a 3-pane live tree, and the
+  # registry being absent in a headless test degrades to the native default).
+  #
+  # We gate on `body_pane_slots/1`, the STABLE slot identities, NOT `focusables/1`:
+  # when the agent shadows a pane slot (e.g. `detail`) with a custom widget the
+  # node keeps its slot but loses `type: "pane"`, so it falls out of `focusables`.
+  # Gating on focusables there made the set shrink, the equality fail, and the
+  # whole agent tree silently un-adopt -- the "layout/set ran but nothing changed"
+  # bug (BUG-007). The slot identity is the right invariant: it answers "is this
+  # the tree for THESE panes" without caring whether a pane was reshaped.
   defp live_layout_tree(pane_names) do
     tree = LayoutRegistry.tree()
-    if Lens.focusables(tree) == pane_names, do: tree
+    if Lens.body_pane_slots(tree) == pane_names, do: tree
   rescue
     _ -> nil
   catch
