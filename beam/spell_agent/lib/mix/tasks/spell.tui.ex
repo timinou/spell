@@ -18,14 +18,31 @@ defmodule Mix.Tasks.Spell.Tui do
   This boots the full `:spell_agent` application (so the supervised
   `SpellAgent.Tui.Store`, tool registry, and OAuth holder are running), then
   blocks until you quit.
+
+  ## Freeform self-editing (PLAN-009)
+
+  The TUI is layout-as-data: the agent can reshape any slot of the live screen by
+  calling `view/`/`layout/`/`theme/`/`lens/` from a PTC program. This capability
+  is GENERALLY AVAILABLE — always on, no flag. The `--freeform` / `-f` switch is
+  accepted for discoverability (and to bias the prelude toward UI self-editing),
+  but the render mirror is wired unconditionally:
+
+      mix spell.tui            # freeform capability is live
+      mix spell.tui -f         # same; explicit intent (a hint, not a gate)
   """
 
   use Mix.Task
 
   @requirements ["app.start"]
 
+  @switches [freeform: :boolean]
+  @aliases [f: :freeform]
+
   @impl Mix.Task
-  def run(_args) do
-    SpellAgent.tui()
+  def run(args) do
+    {opts, _rest, _invalid} = OptionParser.parse(args, switches: @switches, aliases: @aliases)
+    # Freeform is always-on; the flag is a forward-looking hint (prelude bias),
+    # threaded so the launcher can surface UI-editing affordances first.
+    SpellAgent.tui(freeform: Keyword.get(opts, :freeform, false))
   end
 end

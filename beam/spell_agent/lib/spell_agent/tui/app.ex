@@ -29,12 +29,24 @@ defmodule SpellAgent.Tui.App do
 
   use ExRatatui.App
 
-  alias ExRatatui.Layout
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Style
   alias ExRatatui.Widgets.{Block, List, Paragraph}
   alias SpellAgent.Hist
-  alias SpellAgent.Tui.{Chord, Keys, Projection, Store, Ui}
+
+  alias SpellAgent.Tui.{
+    Chord,
+    DefaultLayout,
+    Keys,
+    Lens,
+    LayoutRegistry,
+    Materialize,
+    Projection,
+    Store,
+    Surface,
+    Ui
+  }
+
   alias SpellAgent.Tui.Keymap.{Global, Prompt, TurnNav}
   alias SpellAgent.Tui.Panes.{Detail, History, SpanTree}
 
@@ -80,7 +92,25 @@ defmodule SpellAgent.Tui.App do
           Ui.new(focus: :prompt, mode: :normal, panes: [:prompt, :history, :tree, :detail])
     }
 
+    # Seed the canonical layout tree (PLAN-009) from the native default + the
+    # starting gaze, so the LayoutRegistry the agent reshapes and the App render
+    # share ONE tree. Best-effort: a headless test may run without the supervised
+    # registry, in which case render falls back to the native default built from
+    # state (so mount never depends on the registry being up).
+    seed_layout(state)
+
     {:ok, reproject(state, :all)}
+  end
+
+  # Install the native default tree (structure + initial gaze tags) as the
+  # LayoutRegistry's default + current tree. Tolerant of an absent registry.
+  defp seed_layout(state) do
+    pane_names = Enum.map(state.panes, &Atom.to_string(&1.name))
+    LayoutRegistry.seed_default(DefaultLayout.tree(state.ui, pane_names))
+  rescue
+    _ -> :ok
+  catch
+    :exit, _ -> :ok
   end
 
   # The resolver context stack for the current focus (PLAN-346 W5): the focused
@@ -96,64 +126,124 @@ defmodule SpellAgent.Tui.App do
 
   # ---- render ----
 
+  # The render mirror (PLAN-009): ONE path. Build the layout TREE from the active
+  # panes + the live gaze, walk it (`Surface.layout`), and resolve each placed
+  # node — a native `"pane"` node through the existing project/view/materialize
+  # machinery, the status/composer widget leaves with their dynamic content filled
+  # from live run state. The agent can shadow any slot in `LayoutRegistry`; when it
+  # has, that subtree is used in place of the native default (same walk).
+  #
+  # The result order is [status, panes-in-tree-order, composer] — preserved by the
+  # tree's structure (status first child, body panes, composer last).
   @impl true
   def render(state, frame) do
     area = %Rect{x: 0, y: 0, width: frame.width, height: frame.height}
+    tree = render_tree(state)
 
-    # status (1 line) · body (span tree | detail) · composer (input)
-    [status, body, composer] =
-      Layout.split(area, :vertical, [{:length, 3}, {:min, 0}, {:length, 3}])
-
-    # Layout adapts to the active panes. With a HISTORY pane present (PLAN-003
-    # SEAM 3) the body is three columns — the durable conversation on the left,
-    # then the live run's span TREE and DETAIL inspector. Without it, the original
-    # two-column inspector layout is preserved (back-compat for tests/galleries).
-    has_history? = Enum.any?(state.panes, &(&1.name == :history))
-
-    rect_for =
-      if has_history? do
-        [history_rect, tree_rect, detail_rect] =
-          Layout.split(body, :horizontal, [
-            {:percentage, 34},
-            {:percentage, 30},
-            {:percentage, 36}
-          ])
-
-        fn
-          :history -> history_rect
-          :tree -> tree_rect
-          :detail -> detail_rect
-          _ -> tree_rect
-        end
-      else
-        [tree_rect, detail_rect] =
-          Layout.split(body, :horizontal, [{:percentage, 45}, {:percentage, 55}])
-
-        fn
-          :tree -> tree_rect
-          :detail -> detail_rect
-          _ -> tree_rect
-        end
-      end
-
-    pane_widgets =
-      state.panes
-      |> Enum.flat_map(fn pane ->
-        vm = Map.get(state.vms, pane.name)
-        focused? = state.ui.focus == pane.name
-        rect = rect_for.(pane.name)
-        # The view needs the cursor + gaze: pass ui plus the focused pane's cursor
-        # so the highlighted row + collapse glyphs match what the resolver acts on.
-        assigns =
-          Map.merge(pane.assigns, %{ui: state.ui, cursor: Ui.cursor_of(state.ui, pane.name)})
-
-        pane.module.view(%{vm: vm, rect: rect, assigns: assigns, focused?: focused?})
-      end)
-      |> Enum.map(&materialize(&1, state))
-
-    [{status_widget(state), status}] ++
-      pane_widgets ++ [{composer_widget(state), composer}]
+    tree
+    |> Surface.layout(area)
+    |> Enum.flat_map(fn {node, rect} -> resolve_node(node, rect, state) end)
   end
+
+  # The tree to render: the agent-shadowed tree from LayoutRegistry if it is
+  # running AND its pane set matches the App's current panes; otherwise the native
+  # default built fresh from state (the always-available baseline + the test path,
+  # which runs without the supervised registry). Either way the gaze is folded in
+  # from `state.ui` so navigation is reflected.
+  defp render_tree(state) do
+    pane_names = Enum.map(state.panes, &Atom.to_string(&1.name))
+    native = DefaultLayout.tree(state.ui, pane_names)
+
+    case live_layout_tree(pane_names) do
+      nil -> native
+      shadowed -> Lens.from_ui(shadowed, state.ui)
+    end
+  end
+
+  # The LayoutRegistry's tree, but only when its focusable pane set matches the
+  # App's current panes (so a 2-pane test never picks up a 3-pane live tree, and
+  # the registry being absent in a headless test degrades to the native default).
+  defp live_layout_tree(pane_names) do
+    tree = LayoutRegistry.tree()
+    if Lens.focusables(tree) == pane_names, do: tree
+  rescue
+    _ -> nil
+  catch
+    :exit, _ -> nil
+  end
+
+  # Resolve a placed leaf node to [{widget, rect}].
+  #
+  # A "pane" node delegates to its pane module's project/view (the existing,
+  # tested machinery) with the gaze + cursor injected, then materializes the
+  # descriptor. The status/composer slots are widget leaves whose dynamic content
+  # we fill here from live state. Anything else is an agent-authored widget leaf
+  # routed straight through Materialize (Surface already did that in render/2, but
+  # we walk via layout/2 to intercept the native slots, so handle it here too).
+  # The native status/composer slots carry only a static frame (no content) in the
+  # default tree, so the App fills their dynamic text. But if the AGENT has
+  # shadowed the slot with its own content (a widget leaf carrying :text), that
+  # wins — the shadow is the whole point. `native_placeholder?/1` distinguishes:
+  # the default node has no "text"; an agent paragraph does.
+  defp resolve_node(node, rect, state) do
+    case Lens.slot(node) do
+      "status" -> resolve_filled(node, rect, state, &status_widget/1)
+      "composer" -> resolve_filled(node, rect, state, &composer_widget/1)
+      _ -> resolve_by_type(node, rect, state)
+    end
+  end
+
+  defp resolve_filled(node, rect, state, native_fill) do
+    if native_placeholder?(node) do
+      [{native_fill.(state), rect}]
+    else
+      resolve_by_type(node, rect, state)
+    end
+  end
+
+  # The native status/composer placeholders carry no content key; an agent shadow
+  # does (e.g. a paragraph with :text, or any non-paragraph widget).
+  defp native_placeholder?(node) do
+    Map.get(node, "type") in ["paragraph", nil] and
+      is_nil(Map.get(node, "text")) and is_nil(Map.get(node, :text))
+  end
+
+  defp resolve_by_type(node, rect, state) do
+    case Map.get(node, "type") do
+      "pane" -> resolve_pane(node, rect, state)
+      _ -> materialize_widget(node, rect)
+    end
+  end
+
+  # A native pane node -> run its module's view over the projected vm + gaze.
+  defp resolve_pane(node, rect, state) do
+    slot = Lens.slot(node)
+    name = safe_pane_name(slot)
+    mod = DefaultLayout.pane_module(slot)
+
+    if is_nil(name) or is_nil(mod) do
+      []
+    else
+      vm = Map.get(state.vms, name)
+      focused? = state.ui.focus == name
+      assigns = %{ui: state.ui, cursor: Ui.cursor_of(state.ui, name)}
+
+      %{vm: vm, rect: rect, assigns: assigns, focused?: focused?}
+      |> mod.view()
+      |> Enum.map(&materialize(&1, state))
+    end
+  end
+
+  # An agent-authored widget leaf -> Materialize -> %Widget{} (or skip on error).
+  defp materialize_widget(node, rect) do
+    case Materialize.to_struct(node) do
+      {:error, _} -> []
+      widget -> [{widget, rect}]
+    end
+  end
+
+  defp safe_pane_name(slot) when is_binary(slot), do: Ui.safe_pane(slot)
+  defp safe_pane_name(_), do: nil
 
   # ---- events: MODAL resolver path (PLAN-346 W5) ----
 
@@ -285,7 +375,21 @@ defmodule SpellAgent.Tui.App do
     hist_assigns = %{ui: state.ui, hist_session: state.hist_session, hist_store: state.hist_store}
     panes = Enum.map(state.panes, fn p -> %{p | assigns: Map.merge(p.assigns, hist_assigns)} end)
     vms = Projection.reconcile(forest, panes, fired, state.vms)
+    # Keep the canonical layout tree's gaze tags in step with state.ui (PLAN-009):
+    # fold the current gaze into the LayoutRegistry tree so the agent's lens/ +
+    # layout/show see the live focus/cursor, and any slot shadow it authored
+    # persists across navigation. Single chokepoint: every gaze/forest change
+    # flows through reproject. Best-effort (no registry in a headless test).
+    sync_layout_gaze(state.ui)
     %{state | vms: vms}
+  end
+
+  defp sync_layout_gaze(ui) do
+    LayoutRegistry.replace(Lens.from_ui(LayoutRegistry.tree(), ui))
+  rescue
+    _ -> :ok
+  catch
+    :exit, _ -> :ok
   end
 
   # ---- widget materialization ----
@@ -423,8 +527,9 @@ defmodule SpellAgent.Tui.App do
   defp hint_for(state) do
     [focused | _] = focus_stack(state)
 
-    ctx =
-      if function_exported?(focused, :context_name, 0), do: focused.context_name(), else: focused
+    # Load-safe context-name (BUG-006): function_exported?/3 is false for an
+    # unloaded module, so resolve via Keys.context_name (which ensure_loads first).
+    ctx = Keys.context_name(focused)
 
     focused_hints =
       case state.ui.focus do

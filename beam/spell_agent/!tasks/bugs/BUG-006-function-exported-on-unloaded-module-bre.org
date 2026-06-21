@@ -1,0 +1,49 @@
+#+TITLE: function_exported? on unloaded module breaks context_name resolution
+#+STATE: DONE
+#+SESSION_ID: 1511029ec58e9d42
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-20T20-59-50-422Z_1511029ec58e9d42.jsonl]]
+#+CUSTOM_ID: BUG-006-function-exported-on-unloaded-module-bre
+#+COMPLETION_HASH: 3060388fa8dbd385
+
+* Initial Message
+
+I want to give the agent full self-editing capabilities when I run it with `mix spell.tui --freeform` (or `mix spell.tui -f`). That means (for the v1) that in the context, you inject the prelude that corresponds to the defaults that are self-modifiable. and that the full TUI layout is shapeable through PTC Lisp, in a way that feels natural to it, in the appropriate harness/ namespace (or another if you have good reasons).
+
+Let's imagine together
+
+* Symptom
+The composer hint under PROMPT focus intermittently omits the focused-context
+chord ("enter type"), showing only globals ("C-j pane · esc quit"). Flaky:
+passes in isolation, fails after a full-suite run. Surfaced by the PLAN-009
+render cutover (which changed module load timing), but the bug is PRE-EXISTING.
+
+* Root cause
+`SpellAgent.Tui.App.hint_for/1` and `SpellAgent.Tui.Keys.default_context_name/1`
+both do:
+
+    if function_exported?(ctx, :context_name, 0), do: ctx.context_name(), else: ctx
+
+`function_exported?/3` returns FALSE for a module that is not yet LOADED (BEAM
+lazy code loading), even though the function exists. So when `Keymap.Prompt`
+hasn't been loaded yet at hint time, `function_exported?(Prompt, :context_name,
+0)` is false, `ctx` falls back to the MODULE `Prompt` instead of the atom
+`:prompt`, and `compiled_chord_for(Prompt, _)` hits the `_other -> nil` clause —
+the chord is dropped.
+
+Verified: `function_exported?(Prompt, :context_name, 0)` => false before
+`Code.ensure_loaded(Prompt)`, true after.
+
+* Fix
+Guard with `Code.ensure_loaded?/1` before `function_exported?/3` (or
+`ensure_loaded` + match), at BOTH sites:
+  - lib/spell_agent/tui/app.ex hint_for/1 (the `ctx =` binding)
+  - lib/spell_agent/tui/keys.ex default_context_name/1
+Centralize into a single helper so the pattern can't rot again.
+
+* Acceptance
+- The TUI suite passes DETERMINISTICALLY across repeated full runs (the flake is
+  gone): `mix test test/spell_agent/tui/` green 5x in a row.
+- A focused unit test asserts context-name resolution works when the context
+  module is not pre-loaded (purge the module, then resolve).
+
+NOTE [2026-06-21]: Fixed: centralized load-safe Keys.context_name/1 (Code.ensure_loaded? before function_exported?), used by both Keys.default_context_name and App.hint_for. Regression test in keys_test.exs purges the real SpanTree module then asserts :tree resolves. Flake gone: TUI suite green 5x consecutive; full suite 394 passed 3x.

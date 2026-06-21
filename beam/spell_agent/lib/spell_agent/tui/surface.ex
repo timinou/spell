@@ -46,10 +46,30 @@ defmodule SpellAgent.Tui.Surface do
   @doc """
   Render a layout `tree` into the `rect`, returning `[{widget, rect}]`.
 
+  Splits are resolved and every leaf is materialized to a `%Widget{}`. Use this
+  for a PURE view tree (all leaves are reflected widgets). For a tree that also
+  carries native `"pane"` nodes the App resolves itself, use `layout/2` and
+  materialize the widget leaves yourself.
+
   Never raises: a malformed subtree yields fewer placements, never a crash.
   """
   @spec render(term(), Rect.t()) :: [placement()]
-  def render(tree, %Rect{} = rect), do: place(tree, rect)
+  def render(tree, %Rect{} = rect) do
+    for {node, r} <- layout(tree, rect), widget = materialize_leaf(node), do: {widget, r}
+  end
+
+  @doc """
+  Resolve the layout `tree` into `[{leaf_node, rect}]` WITHOUT materializing —
+  splits are divided and recursed, every NON-split node is paired with the rect it
+  occupies and returned AS-IS (a widget-leaf map, or a `"pane"` node the App
+  resolves through the existing project/view machinery).
+
+  This is the seam that lets one tree mix agent-authored widget leaves and native
+  pane nodes: the App walks `layout/2`, sends pane nodes to the pane modules and
+  widget leaves to `Materialize`. Never raises.
+  """
+  @spec layout(term(), Rect.t()) :: [{map(), Rect.t()}]
+  def layout(tree, %Rect{} = rect), do: place(tree, rect)
 
   # ---- the recursive walk ----
 
@@ -57,7 +77,7 @@ defmodule SpellAgent.Tui.Surface do
     case kind(node) do
       "split" -> place_split(node, rect)
       nil -> []
-      _widget_type -> place_leaf(node, rect)
+      _leaf -> [{node, rect}]
     end
   rescue
     # A node that blows up contributes nothing rather than killing the frame.
@@ -70,6 +90,15 @@ defmodule SpellAgent.Tui.Surface do
     do: Enum.flat_map(list, &place(&1, rect))
 
   defp place(_other, _rect), do: []
+
+  # Materialize a leaf node to a widget, or nil if it isn't a renderable widget
+  # (e.g. a "pane" node, which the App resolves itself). Used by render/2.
+  defp materialize_leaf(node) do
+    case Materialize.to_struct(node) do
+      {:error, _} -> nil
+      widget -> widget
+    end
+  end
 
   # ---- split: divide the rect, recurse into children ----
 
@@ -87,15 +116,6 @@ defmodule SpellAgent.Tui.Surface do
 
       {:error, _} ->
         []
-    end
-  end
-
-  # ---- leaf: materialize to a widget struct ----
-
-  defp place_leaf(node, rect) do
-    case Materialize.to_struct(node) do
-      {:error, _} -> []
-      widget -> [{widget, rect}]
     end
   end
 

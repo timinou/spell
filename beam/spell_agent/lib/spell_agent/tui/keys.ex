@@ -107,7 +107,24 @@ defmodule SpellAgent.Tui.Keys do
 
   # Default: a context module exposes its registry key via `context_name/0`
   # (panes will; Global answers :global). Falls back to the module itself.
-  defp default_context_name(ctx) do
-    if function_exported?(ctx, :context_name, 0), do: ctx.context_name(), else: ctx
+  defp default_context_name(ctx), do: context_name(ctx)
+
+  @doc """
+  The registry key for a context module — its `context_name/0` if it exports one,
+  else the module itself.
+
+  MUST guard with `Code.ensure_loaded?/1` before `function_exported?/3`:
+  `function_exported?` returns FALSE for a module the BEAM has not LAZILY LOADED
+  yet (BUG-006). Without the guard, a not-yet-loaded pane context resolves to the
+  module instead of its `:atom` key, silently dropping registry lookups and hint
+  chords. Public so the App's hint path shares the one correct implementation.
+  """
+  @spec context_name(module()) :: atom() | module()
+  def context_name(ctx) when is_atom(ctx) do
+    if Code.ensure_loaded?(ctx) and function_exported?(ctx, :context_name, 0) do
+      ctx.context_name()
+    else
+      ctx
+    end
   end
 end

@@ -38,7 +38,25 @@ defmodule SpellAgent.Tools do
       ToolRegistry.all()
       |> Map.new(fn entry -> {entry.name, to_callable(entry)} end)
 
-    Map.merge(meta_tools(), registry_tools)
+    meta_tools()
+    |> Map.merge(freeform_tools())
+    |> Map.merge(registry_tools)
+  end
+
+  # The freeform render-mirror surface (PLAN-009): view/ builders, theme/ palette,
+  # layout/ slot ops, and lens/ tree traversals. Registered as ordinary tool-map
+  # entries (the ptc_runner PATCH-O namespaces route ns/verb to these qualified
+  # names). lens/ closes over the LIVE layout tree so a traversal called with `{}`
+  # acts on the current UI. Degrades to no freeform tools if the registries aren't
+  # running (e.g. a bare unit test), so the agent surface never crashes to build.
+  defp freeform_tools do
+    SpellAgent.Tui.View.tools()
+    |> Map.merge(SpellAgent.Tui.LayoutRegistry.tools())
+    |> Map.merge(SpellAgent.Tui.Lens.tools(SpellAgent.Tui.LayoutRegistry.tree()))
+  rescue
+    _ -> %{}
+  catch
+    :exit, _ -> %{}
   end
 
   @doc """
@@ -48,9 +66,24 @@ defmodule SpellAgent.Tools do
   @spec inventory() :: [map()]
   def inventory do
     meta = [
-      %{"name" => "define-tool", "params" => ["name", "params", "doc", "source"], "doc" => "Define a new tool whose body is a PTC-Lisp program (code-as-data).", "kind" => "native"},
-      %{"name" => "define-config", "params" => ["key", "value"], "doc" => "Set a live config value (e.g. model, thinking, system-addendum).", "kind" => "native"},
-      %{"name" => "list-tools", "params" => [], "doc" => "List all tools currently available, including ones defined at runtime.", "kind" => "native"}
+      %{
+        "name" => "define-tool",
+        "params" => ["name", "params", "doc", "source"],
+        "doc" => "Define a new tool whose body is a PTC-Lisp program (code-as-data).",
+        "kind" => "native"
+      },
+      %{
+        "name" => "define-config",
+        "params" => ["key", "value"],
+        "doc" => "Set a live config value (e.g. model, thinking, system-addendum).",
+        "kind" => "native"
+      },
+      %{
+        "name" => "list-tools",
+        "params" => [],
+        "doc" => "List all tools currently available, including ones defined at runtime.",
+        "kind" => "native"
+      }
     ]
 
     defined =
@@ -129,7 +162,11 @@ defmodule SpellAgent.Tools do
     fn args ->
       context = stringify_keys(args)
 
-      case PtcRunner.Lisp.run(source, context: context, tools: build_tools_map(), caller: :in_process_v1) do
+      case PtcRunner.Lisp.run(source,
+             context: context,
+             tools: build_tools_map(),
+             caller: :in_process_v1
+           ) do
         {:ok, step} ->
           step.return
 
@@ -155,7 +192,6 @@ defmodule SpellAgent.Tools do
     end
   end
 
-
   defp reserved_name?(name), do: name in ["define-tool", "define-config", "list-tools"]
 
   defp require_string(args, key) do
@@ -167,11 +203,15 @@ defmodule SpellAgent.Tools do
 
   defp normalize_params(nil), do: []
   defp normalize_params(list) when is_list(list), do: Enum.map(list, &param_atom/1)
-  defp normalize_params(other), do: raise(ArgumentError, "params must be a list, got #{inspect(other)}")
+
+  defp normalize_params(other),
+    do: raise(ArgumentError, "params must be a list, got #{inspect(other)}")
 
   defp param_atom(p) when is_atom(p), do: p
   defp param_atom(p) when is_binary(p), do: String.to_atom(p)
-  defp param_atom(p), do: raise(ArgumentError, "param must be an atom or string, got #{inspect(p)}")
+
+  defp param_atom(p),
+    do: raise(ArgumentError, "param must be an atom or string, got #{inspect(p)}")
 
   defp to_doc(nil), do: ""
   defp to_doc(d) when is_binary(d), do: d

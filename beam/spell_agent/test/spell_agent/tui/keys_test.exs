@@ -60,7 +60,9 @@ defmodule SpellAgent.Tui.KeysTest do
     test "the focused pane shadows global for a chord both bind" do
       # global binds esc->app/quit; give the pane its own esc to prove precedence
       KeymapRegistry.bind(:tree, Chord.parse("esc"), :"cursor/prev")
-      assert {:intent, :"cursor/prev", TreeCtx} = Keys.resolve(Chord.parse("esc"), [TreeCtx, Global], &name/1)
+
+      assert {:intent, :"cursor/prev", TreeCtx} =
+               Keys.resolve(Chord.parse("esc"), [TreeCtx, Global], &name/1)
     end
 
     test "an unbound chord resolves to :unbound (composer text sink)" do
@@ -77,6 +79,33 @@ defmodule SpellAgent.Tui.KeysTest do
       # unbind reveals the compiled binding again
       KeymapRegistry.unbind(:tree, cl)
       assert {:intent, :"span/expand", TreeCtx} = Keys.resolve(cl, [TreeCtx, Global], &name/1)
+    end
+  end
+
+  describe "context_name/1 — load-safe (BUG-006)" do
+    test "resolves context_name/0 even when the module is UNLOADED (on-disk beam)" do
+      # The bug: function_exported?/3 is FALSE for a module the BEAM hasn't lazily
+      # loaded yet, so context_name/1 must ensure_loaded? FIRST or it drops to the
+      # module fallback. Use a REAL pane module (it has a .beam on disk, so it
+      # reloads): purge it to force the not-loaded state, then resolve.
+      mod = SpellAgent.Tui.Panes.SpanTree
+      :code.purge(mod)
+      :code.delete(mod)
+
+      refute :erlang.function_exported(mod, :context_name, 0),
+             "precondition: module must be unloaded for this to test the guard"
+
+      # Without the ensure_loaded? guard this returns the MODULE; with it, :tree.
+      assert Keys.context_name(mod) == :tree
+    end
+
+    test "uses context_name/0 for a loaded module that exports it (Global -> :global)" do
+      assert Keys.context_name(Global) == :global
+    end
+
+    test "falls back to the module itself when it exports no context_name/0" do
+      # An arbitrary module with no context_name/0 is its own key.
+      assert Keys.context_name(Enum) == Enum
     end
   end
 

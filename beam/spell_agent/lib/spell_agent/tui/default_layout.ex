@@ -1,0 +1,129 @@
+defmodule SpellAgent.Tui.DefaultLayout do
+  @moduledoc """
+  The native inspector UI expressed AS THE DATA the agent would write (PLAN-009) —
+  the dogfood proof that the freeform surface is complete: the default layout is a
+  layout tree, not a hardcoded `render/2`.
+
+  The tree mixes two leaf kinds the App's render resolves differently:
+
+    * `"pane"` nodes — native panes (`history`/`tree`/`detail`), each carrying
+      `slot`, `pane` (which `SpellAgent.Tui.Panes.*` module renders it), and the
+      gaze `tags` (`focused`/`cursor`/`scroll`). The App runs the pane's
+      `project/view` and materializes the descriptor (the existing machinery).
+    * widget leaves (`"paragraph"`) — the status strip and composer, rendered by
+      `Materialize` like any agent-authored widget. Their CONTENT is dynamic, so
+      the App fills their `:text`/`:style` at render time from live state; the
+      tree node carries only the static frame (block/borders).
+
+  The frame is the slot spine:
+
+      frame (split, vertical)
+      ├── status   (length 3)  — widget leaf, content filled by the App
+      ├── body     (min 0)     — split, horizontal: the three panes
+      │   ├── pane/history (34%)
+      │   ├── pane/tree    (30%)
+      │   └── pane/detail  (36%)
+      └── composer (length 3)  — widget leaf, content filled by the App
+
+  `tree/1` seeds the gaze tags from a starting `%Ui{}` via `Lens`, so the App
+  installs both structure AND initial gaze in one value.
+  """
+
+  alias SpellAgent.Tui.Lens
+  alias SpellAgent.Tui.Panes.{Detail, History, SpanTree}
+  alias SpellAgent.Tui.Ui
+
+  @doc """
+  The native default tree, seeded with `ui`'s gaze and the ACTIVE pane list.
+
+  `pane_names` are the body panes in render order (e.g. `["history", "tree",
+  "detail"]` live, or `["tree", "detail"]` in a 2-pane test) — the body splits
+  evenly-by-default unless a known arrangement matches. The App calls this at
+  mount and per-render so the tree always reflects the current panes + gaze.
+  """
+  @spec tree(Ui.t(), [String.t()]) :: map()
+  def tree(%Ui{} = ui, pane_names \\ ["history", "tree", "detail"]) do
+    %{
+      "type" => "split",
+      "slot" => "frame",
+      "dir" => "vertical",
+      "constraints" => [["length", 3], ["min", 0], ["length", 3]],
+      "tags" => Lens.root_tags(ui),
+      "children" => [
+        status_node(),
+        body_node(ui, pane_names),
+        composer_node()
+      ]
+    }
+  end
+
+  @doc "The pane module a `pane/*` slot delegates to (App render dispatch)."
+  @spec pane_module(String.t()) :: module() | nil
+  def pane_module("history"), do: History
+  def pane_module("tree"), do: SpanTree
+  def pane_module("detail"), do: Detail
+  def pane_module(_), do: nil
+
+  # ---- slot nodes ----
+
+  defp status_node do
+    %{
+      "type" => "paragraph",
+      "slot" => "status",
+      # content (:text/:style) filled by the App at render from live run state.
+      "block" => %{
+        "type" => "block",
+        "title" => " spell · inspector ",
+        "borders" => ["all"],
+        "border_type" => "rounded"
+      }
+    }
+  end
+
+  defp body_node(%Ui{} = ui, pane_names) do
+    %{
+      "type" => "split",
+      "slot" => "body",
+      "dir" => "horizontal",
+      "constraints" => body_constraints(pane_names),
+      "children" => Enum.map(pane_names, &pane_node(&1, ui))
+    }
+  end
+
+  # Preserve the hand-tuned native column widths for the known arrangements; any
+  # other pane set splits evenly (fill 1 each).
+  defp body_constraints(["history", "tree", "detail"]),
+    do: [["percentage", 34], ["percentage", 30], ["percentage", 36]]
+
+  defp body_constraints(["tree", "detail"]),
+    do: [["percentage", 45], ["percentage", 55]]
+
+  defp body_constraints(names), do: Enum.map(names, fn _ -> ["fill", 1] end)
+
+  defp composer_node do
+    %{
+      "type" => "paragraph",
+      "slot" => "composer",
+      "block" => %{
+        "type" => "block",
+        "title" => " prompt — NORMAL ",
+        "borders" => ["all"],
+        "border_type" => "rounded"
+      }
+    }
+  end
+
+  # A native pane node: focusable, carries which module renders it + the gaze tags
+  # for its slot (focused/cursor/scroll), seeded from the starting gaze.
+  defp pane_node(name, %Ui{} = ui) do
+    pane_atom = Ui.safe_pane(name)
+
+    %{
+      "type" => "pane",
+      "slot" => name,
+      "pane" => name,
+      "focusable" => true,
+      "tags" => Lens.pane_tags(ui, pane_atom)
+    }
+  end
+end

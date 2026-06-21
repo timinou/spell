@@ -38,7 +38,11 @@ defmodule SpellAgent.Application do
       # Live theme palette for the freeform render mirror (PLAN-009, Edge T):
       # theme/set recolors a named slot; view/ builders read defaults from it.
       # Session-global, same posture as KeymapRegistry.
-      SpellAgent.Tui.ThemeRegistry
+      SpellAgent.Tui.ThemeRegistry,
+      # The canonical layout TREE (PLAN-009): the render mirror as live data. The
+      # App seeds the native default at mount; the agent shadows slots; navigation
+      # re-tags it. Session-global, same posture as the sibling registries.
+      SpellAgent.Tui.LayoutRegistry
     ]
 
     opts = [strategy: :one_for_one, name: SpellAgent.Supervisor]
