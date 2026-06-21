@@ -80,6 +80,17 @@ defmodule SpellAgent.Anthropic do
     end
   end
 
+  # The test seam (FEAT-006, LLM cassettes). Production returns [] so the live
+  # request is byte-for-byte unchanged. A test sets
+  # `Application.put_env(:spell_agent, :anthropic_req_options, plug: {Req.Test, Name})`
+  # (scoped + cleaned up by `SpellAgent.LlmCassette`) to redirect the request
+  # through a Req.Test stub that replays a recorded SSE cassette — no network, and
+  # the SAME `parse_response/1` path runs on replay. Using app env rather than
+  # threading an option keeps the `PtcRunner.LLM` callback signature untouched.
+  defp extra_req_options do
+    Application.get_env(:spell_agent, :anthropic_req_options, [])
+  end
+
   # --- request construction --------------------------------------------------
 
   @doc false
@@ -88,13 +99,15 @@ defmodule SpellAgent.Anthropic do
     body = build_body(model, request)
     headers = build_headers(access_token, body)
 
-    case Req.post(@messages_url,
-           json: body,
-           headers: headers,
-           receive_timeout: @receive_timeout,
-           # Plain TLS: default ciphers + SNI. No fingerprint spoof needed.
-           connect_options: [protocols: [:http1]]
-         ) do
+    base_opts = [
+      json: body,
+      headers: headers,
+      receive_timeout: @receive_timeout,
+      # Plain TLS: default ciphers + SNI. No fingerprint spoof needed.
+      connect_options: [protocols: [:http1]]
+    ]
+
+    case Req.post(@messages_url, Keyword.merge(base_opts, extra_req_options())) do
       {:ok, %Req.Response{status: 200, body: raw}} ->
         {:ok, parse_response(raw)}
 

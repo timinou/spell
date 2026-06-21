@@ -68,7 +68,10 @@ defmodule SpellAgent.MixProject do
       {:rustler, "~> 0.36", runtime: false},
       # req_llm is intentionally NOT a dep in v0: one provider, direct adapter,
       # full request-body control. Revisit when porting many providers.
-      {:stream_data, "~> 1.1", only: [:test]}
+      {:stream_data, "~> 1.1", only: [:test]},
+      # plug is an OPTIONAL Req dependency; pulling it (test-only) enables
+      # `Req.Test` plug stubs for the LLM cassette layer (FEAT-006).
+      {:plug, "~> 1.16", only: [:test]}
     ]
   end
 
