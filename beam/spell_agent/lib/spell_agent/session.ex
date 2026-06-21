@@ -139,12 +139,21 @@ defmodule SpellAgent.Session do
     :ok
   end
 
-  @doc "Assemble the system prompt, appending any live `system-addendum` config."
+  @doc """
+  Assemble the system prompt: the base prompt + the freeform-TUI prelude
+  (PLAN-009, reflected) + any live `system-addendum` config.
+
+  The freeform prelude is ALWAYS injected (the capability is generally available),
+  and is reflected from the widget registry so it never drifts from ex_ratatui.
+  Lazy surfacing (inject only on first UI-intent) is FUP-008.
+  """
   @spec system_prompt() :: String.t()
   def system_prompt do
+    base = @system_prompt <> "\n\n" <> SpellAgent.Tui.Prelude.text()
+
     case Config.get("system-addendum") do
-      add when is_binary(add) and add != "" -> @system_prompt <> "\n\n" <> add
-      _ -> @system_prompt
+      add when is_binary(add) and add != "" -> base <> "\n\n" <> add
+      _ -> base
     end
   end
 end

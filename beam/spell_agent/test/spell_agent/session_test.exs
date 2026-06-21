@@ -15,6 +15,18 @@ defmodule SpellAgent.SessionTest do
     assert sp =~ "data/"
   end
 
+  test "system_prompt includes the reflected freeform-TUI prelude (PLAN-009)" do
+    sp = Session.system_prompt()
+    # The capability is always advertised, and the builder table is reflected
+    # from the widget registry (no drift).
+    assert sp =~ "layout/set"
+    assert sp =~ "view/paragraph"
+    assert sp =~ "theme/set"
+    # A reflected widget that is NOT in the static frame proves the table is
+    # generated from Reflect, not hand-written.
+    assert sp =~ "view/gauge"
+  end
+
   test "system_prompt appends a live config addendum" do
     Config.put("system-addendum", "EXTRA-DIRECTIVE-XYZ")
     assert Session.system_prompt() =~ "EXTRA-DIRECTIVE-XYZ"

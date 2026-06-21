@@ -44,7 +44,15 @@ defmodule SpellAgent.Tui.LoopIntegrationTest do
   end
 
   defp lisp_eval(program) do
-    %{tool_calls: [%{id: "call_#{System.unique_integer([:positive])}", name: "lisp_eval", args: %{"program" => program}}]}
+    %{
+      tool_calls: [
+        %{
+          id: "call_#{System.unique_integer([:positive])}",
+          name: "lisp_eval",
+          args: %{"program" => program}
+        }
+      ]
+    }
   end
 
   test "a real run with a tool call is captured as a span forest", %{store: store} do
@@ -72,12 +80,14 @@ defmodule SpellAgent.Tui.LoopIntegrationTest do
 
     # The SpanTree pane projects the forest into depth-ordered rows.
     %{rows: rows} = SpanTree.project(spans, %{})
-    assert Enum.any?(rows, &(&1.span && &1.span.kind == :run and &1.depth == 0))
+    assert Enum.any?(rows, &((&1.span && &1.span.kind == :run) and &1.depth == 0))
     # The run's turn shows up indented beneath it.
     assert Enum.any?(rows, &(&1.turn != nil and &1.depth == 1))
   end
 
-  test "the homoiconic path is visible: define-tool runs as a tool span in the forest", %{store: store} do
+  test "the homoiconic path is visible: define-tool runs as a tool span in the forest", %{
+    store: store
+  } do
     # One program authors a new tool (the homoiconic meta-tool) and inspects the
     # inventory. Both are real `(tool/…)` calls ⇒ tool spans the Store captures.
     # (NB: a tool defined mid-program is registered but not callable in the SAME
@@ -107,5 +117,35 @@ defmodule SpellAgent.Tui.LoopIntegrationTest do
     vms = Projection.reconcile(spans, panes, [[:tool, :stop]], %{})
     assert %{tree: %{rows: rows}} = vms
     assert Enum.any?(rows, fn r -> r.span && r.span.kind == :tool end)
+  end
+
+  test "FREEFORM: the agent reshapes the live TUI through the real loop (PLAN-009)", %{
+    store: _store
+  } do
+    # Seed the canonical layout tree so layout/set has a slot to shadow.
+    alias SpellAgent.Tui.{DefaultLayout, LayoutRegistry, Ui}
+
+    default =
+      DefaultLayout.tree(Ui.new(panes: [:tree, :detail], focus: :tree), ["tree", "detail"])
+
+    case Process.whereis(LayoutRegistry) do
+      nil -> start_supervised!({LayoutRegistry, default: default})
+      _ -> LayoutRegistry.seed_default(default)
+    end
+
+    # A program the agent emits after reading the freeform prelude: build a widget
+    # with view/ and install it at the status slot via layout/set. This exercises
+    # the WHOLE path — prelude advertises it, the loop's tools map carries the
+    # view/+layout/ namespaces, the program runs, the registry holds the shadow.
+    program =
+      ~s|(do (layout/set {:slot "status" :source (view/paragraph {:text "RESHAPED BY THE AGENT"})}) (return "ok"))|
+
+    llm = scripted_llm([lisp_eval(program)])
+
+    assert {:ok, _result} = Session.run("reshape the header", llm: llm, max_turns: 6)
+
+    # The live tree now carries the agent's shadow at the status slot.
+    assert {:ok, shown} = LayoutRegistry.show("status")
+    assert shown["text"] == "RESHAPED BY THE AGENT"
   end
 end
