@@ -127,15 +127,34 @@ defmodule SpellAgent.Tui.HoleDiffTest do
       assert HoleDiff.tree(c2) == HoleDiff.tree(c1)
     end
 
-    test "a fingerprint change (reshaped skeleton) forces a full re-resolve" do
+    test "a reshaped skeleton (added hole) re-resolves correctly" do
       t1 = frozen(~S|(tmpl:: {:a ~(get data/s :m)})|)
       t2 = frozen(~S|(tmpl:: {:a ~(get data/s :m) :b ~(get data/s :n)})|)
       c1 = HoleDiff.resolve(t1, %{"s" => %{"m" => "x", "n" => "y"}})
-      # different tree -> fingerprint differs -> full resolve, still correct.
       c2 = HoleDiff.resolve(t2, %{"s" => %{"m" => "x", "n" => "y"}}, c1)
 
       assert HoleDiff.tree(c2) ==
                HoleResolver.resolve_holes(t2, %{"s" => %{"m" => "x", "n" => "y"}})
+    end
+  end
+
+  describe "W5/W6 reviewer-swarm regressions" do
+    test "a CHANGED hole form at the same path is NOT reused (review #1)" do
+      # Same tree shape, different hole expression: the prior value must NOT be
+      # reused — reuse keys on {path, frozen} identity, not tree shape.
+      a = frozen(~S|(tmpl:: {:x ~data/a})|)
+      b = frozen(~S|(tmpl:: {:x ~data/b})|)
+      c1 = HoleDiff.resolve(a, %{"a" => 1, "b" => 10})
+      c2 = HoleDiff.resolve(b, %{"a" => 1, "b" => 20}, c1)
+      assert HoleDiff.tree(c2) == HoleResolver.resolve_holes(b, %{"a" => 1, "b" => 20})
+      assert (HoleDiff.tree(c2)["x"] || HoleDiff.tree(c2)[:x]) == 20
+    end
+
+    test "a splice resolving to a non-list degrades to the placeholder, cached too (review #3)" do
+      tree = frozen(~S|(tmpl:: {:x ~@data/xs})|)
+      c1 = HoleDiff.resolve(tree, %{"xs" => [1, 2]})
+      c2 = HoleDiff.resolve(tree, %{"xs" => 42}, c1)
+      assert HoleDiff.tree(c2) == HoleResolver.resolve_holes(tree, %{"xs" => 42})
     end
   end
 
