@@ -58,3 +58,69 @@ That is a memory/provenance design, separate from the shell mechanics.
 * Not a bug
 Durable tools fully work and persist; this adds a curated long-term tier with
 provenance on top.
+
+* INVESTIGATION (2026-06-21): what a Crystal IS, and why this waits
+
+** What a Crystal actually is (read SpellAgent.Hist.Crystal)
+A Crystal is NOT "a saved tool." It is a DISTILLATION of lived experience: a slice
+of session nodes that WORKED (a successful multi-turn investigation) compiled —
+via PtcRunner.SubAgent.compile/2 -> CompiledAgent — into ONE deterministic
+PTC-Lisp program that reproduces the outcome with NO further LLM calls. The
+docstring: "Lived experience becomes a reusable, LLM-free tool." Stored as
+source + signature + origin{session, nodes} (the DISTILLED_FROM provenance chain
+back to the turns it came from). crystallize/4 takes node_ids, compiles the slice,
+stores it.
+
+** Why a durable sh tool is NOT yet a Crystal
+A durable sh tool (W3) is source the AGENT WROTE ON PURPOSE (define-tool). A
+Crystal is a slice of HISTORY THAT HAPPENED, distilled after the fact. They are
+different epistemics:
+  - durable tool: "I am authoring a reusable command." (intent-first)
+  - crystal:      "this sequence of turns succeeded; compile it into a tool."
+                  (evidence-first, with provenance back to the turns)
+Promotion = giving a durable tool a Crystal's EVIDENCE TIER: a DISTILLED_FROM
+lineage to the episodes that proved it useful, LLM-free re-run guarantee, and a
+SUPERSEDES relationship so the crystal replaces (not duplicates) the durable
+record.
+
+** Why it is genuinely deferrable (the honest "why leave it")
+1. NO USER-FACING GAP. Durable tools already persist and rehydrate and run. A
+   user who writes (define-tool … :scope "durable") gets everything they asked
+   for. Crystal promotion adds a curation/provenance TIER on top — it changes
+   nothing about whether the tool works or survives.
+2. IT IS A MEMORY DECISION, NOT A SHELL ONE. The hard parts are all in the
+   provenance graph, not in sh+brush:
+     - the TRIGGER: who decides a tool is crystal-worthy? Manual? A usage
+       threshold (ToolDef carries a `stats` field — calls/errors)? This is a
+       policy question with no obvious right answer yet.
+     - the LINEAGE: a durable tool was AUTHORED, so its origin.nodes is "the turn
+       where define-tool was called" — a thin, possibly uninteresting provenance.
+       A real Crystal's value is distilling MANY turns; a single define-tool turn
+       barely justifies the machinery. The interesting case (promote a tool the
+       agent CONVERGED on across many uses) needs usage history we are not yet
+       recording per-tool.
+     - SUPERSEDES semantics + dedup across the registry and the crystal store.
+3. IT COUPLES TO UNBUILT THINGS. The natural trigger (usage stats over time) and
+   the natural payoff (expand a crystal back to its evidence) both want a
+   maturity of the history/memory layer that is itself still moving. Building
+   promotion now would hard-code a trigger we would likely redo.
+
+** When it becomes worth doing
+When there IS per-tool usage history (so "this tool proved useful" is a real,
+queryable signal, not a guess) AND a concrete need to expand a tool back to its
+evidence. Until then, promotion would be machinery in search of a trigger.
+
+** If we DID take it now (the minimal shape)
+- a `promote-to-crystal {:tool NAME}` verb: read the durable ToolDef, wrap its
+  source as a Crystal (source + signature), set origin.nodes to the turns that
+  called it (requires recording tool->turn usage first — the missing prerequisite),
+  link DISTILLED_FROM, SUPERSEDES the durable record.
+- prerequisite that is actually the real work: record which turns invoked which
+  tool (a tool-usage index), so origin.nodes is meaningful.
+
+** Modules of record
+- model: SpellAgent.Hist.Crystal (source+signature+origin) ; store {:crystal, id}.
+- distill: SpellAgent.Hist.Crystallize.crystallize/4 (compiles a node slice).
+- existing promotion: SpellAgent.Hist.Tools.promote (session->durable, the tier below).
+- edges: DISTILLED_FROM, SUPERSEDES (memory tool).
+- MISSING PREREQUISITE: per-tool usage->turn index (none today).

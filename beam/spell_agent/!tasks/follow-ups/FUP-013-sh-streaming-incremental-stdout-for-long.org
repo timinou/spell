@@ -62,3 +62,74 @@ deferred-holes direction) rather than as a standalone sh feature.
 * Not a bug
 Bounded commands (the overwhelming majority) work perfectly with the current
 synchronous model. This is an additive capability for the streaming minority.
+
+* INVESTIGATION (2026-06-21): PLAN-012/FEAT-011 spawn-session makes this easy
+
+** The user's hunch is right: the spawn machinery is the streaming machinery
+FEAT-011 (tool/spawn-session — "the reflexive seam") + the new (untracked)
+SpellAgent.SessionRegistry are precisely the process-lifecycle primitives
+streaming needs. The hard part of streaming was never "read a pipe" — it was
+"manage an async producer process with cancellation + backpressure + delivery."
+The mesh work already builds that.
+
+** What exists (verified)
+- SpellAgent.SessionRegistry (lib/spell_agent/session_registry.ex): a GenServer
+  tracking LIVE sessions by pid, with register/finish/live/live? and {:DOWN, …}
+  monitoring (handle_info on process death). I.e. a supervised live-process
+  registry with automatic teardown — exactly the lifecycle a streaming command
+  process needs.
+- SpellAgent.Session (session.ex): the session runner process model.
+- FEAT-011 spawn-session: a native tool that spawns a CHILD session as a
+  supervised process, budget-bounded (ParallelBudget.try_acquire), handed an
+  attenuated tool set + a region. It is "eval(eval) as a tool" — the runtime
+  spawning a managed sub-process and streaming its activity.
+
+** Why this unlocks streaming cheaply
+A streaming command IS a spawned, supervised producer process. Map the analogy:
+  spawn-session: child session process, budget-acquired, monitored, streams
+                 turns/activity back to the parent, cancellable, auto-reaped on
+                 DOWN.
+  sh/stream:     child COMMAND process (brush), budget-acquired, monitored,
+                 streams stdout CHUNKS back to the caller, cancellable, reaped on
+                 timeout/DOWN.
+Same shape. So instead of inventing streaming lifecycle in the NIF, sh/stream
+should REUSE:
+  - SessionRegistry-style monitoring (or a sibling CommandRegistry) for the
+    running command process + automatic teardown on death.
+  - the ParallelBudget gate (a streaming command holds a slot like a child
+    session does) — prevents unbounded concurrent streamers.
+  - the same {:DOWN, …}/cancel teardown the W0 timeout fix already proved
+    (child reaped, no leak).
+
+** Revised design direction (supersedes the "open question" in the draft above)
+The draft asked "does the synchronous PTC tool-call model accommodate streaming?"
+FEAT-011 answers it: a spawned session does NOT return a synchronous value — it
+streams activity to a process and the parent observes it. sh/stream should follow
+the SAME pattern rather than trying to make a tool call return a lazy stream:
+  - sh/stream spawns the brush command under a monitored process (the dirty NIF
+    holds a pid and sends {chunk, data} messages to the BEAM, or brush writes to a
+    pipe drained by a dedicated Elixir reader process).
+  - the consumer is a BEAM process / the session's render clock, not a Lisp lazy
+    seq. (Char-by-char chatty? debounce off a clock, exactly like the inspector
+    FUP-006 does for live session inspection.)
+∴ sh/stream is a SIBLING of spawn-session, not a new sandbox primitive.
+
+** Dependency
+This now DEPENDS ON (or at least should land after) FEAT-011/the mesh
+process-lifecycle work, to reuse SessionRegistry + ParallelBudget rather than
+duplicate them. Doing it before means building throwaway lifecycle code.
+
+** Revised acceptance
+- sh/stream spawns a brush command as a MONITORED process (SessionRegistry-style),
+  budget-gated, streaming stdout chunks to a BEAM consumer.
+- cancellation / timeout reaps the child (reuse W0 no-leak machinery, sentinel test).
+- automatic teardown on process DOWN (no orphan, no registry leak).
+- a final {:exit …} summary on stream end.
+
+** Modules of record
+- lifecycle precedent: lib/spell_agent/session_registry.ex (live-proc registry +
+  DOWN teardown), FEAT-011 spawn-session (budget-bounded supervised spawn).
+- budget: ParallelBudget (FEAT-013 wiring).
+- engine: beam/brush_nif-vendored/native/brush_nif/src/run.rs (temp-file capture
+  becomes a pipe + chunked sends for the streaming variant).
+- debounce precedent: FUP-006 (live inspector off the render clock).

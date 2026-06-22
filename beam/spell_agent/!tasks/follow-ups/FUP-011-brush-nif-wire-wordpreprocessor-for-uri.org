@@ -70,3 +70,60 @@ prerequisite).
 * Not a bug
 The shell works without URI tokens; this is an ergonomic integration that brings
 the BEAM path to parity with the TS path.
+
+* INVESTIGATION (2026-06-21): who resolves a skill, and the gating finding
+
+** The gating finding: skill resolution is TS-ONLY. The BEAM has no resolver.
+- grep for "skill" across beam/spell_agent/lib/ -> ZERO hits. The BEAM agent has
+  no skill concept, no SchemeRegistry, no internal-URL router.
+- The canonical resolver lives in TS: packages/coding-agent/src/internal-urls/
+  router.ts (InternalUrlRouter.resolve/1) dispatching per-scheme handlers
+  (agent-protocol.ts, local-protocol.ts, memory-protocol.ts, …). skill:// is a
+  KERNEL_OWNED_SCHEME (router.ts:21-35): "skill -> dynamic callback bridges to
+  session.skills + sub-path fs read" (BUG-394). So even in TS it short-circuits to
+  the kernel (a callback into session.skills), not a pure-fs read.
+- The Rust precedent (crates/pi-natives/src/exec/scheme_preprocessor.rs,
+  SchemeWordPreprocessor) resolves <scheme>://<body> via an Arc<SchemeRegistry>
+  + SessionContext — but that registry is the KERNEL's, populated TS-side. It is
+  not constructed in the BEAM runtime.
+
+** What "presence of a skill" actually means
+A skill is NOT a static file path. It is `session.skills` — a per-session
+registry of installed skills, each with a SKILL.md and a directory. skill://NAME
+resolves to that skill's dir; skill://NAME/sub/path reads a file under it. So
+"does skill X exist" = "is X in this session's skills set", a SESSION-STATE
+question, not a filesystem stat. (This is why TS makes it a kernel callback, not
+a path rule.)
+
+** Consequence for the design — option (a) is NOT free
+My FUP draft assumed option (a): "resolve in Elixir before the NIF, using the
+existing Elixir scheme resolver." THAT RESOLVER DOES NOT EXIST. So FUP-011 is
+really two layers:
+  1. PREREQUISITE: a BEAM-side notion of "this session's skills" + a resolver for
+     skill:// (and the fs-backed schemes local://, agent://). Either:
+       (i)  port the per-scheme handlers to Elixir (a SpellAgent.InternalUrls
+            module mirroring internal-urls/router.ts), seeded from wherever the
+            BEAM session learns its skills, OR
+       (ii) the BEAM session simply has no skills yet (is that true? verify how a
+            BEAM session is launched and whether skills are even installed for it).
+  2. THEN the easy part: SpellAgent.Sh maps over argv expanding resolvable
+     scheme tokens before BrushNif.run (still inject-proof: a resolved path is one
+     escaped word).
+
+** Revised scope / honesty
+This is NOT a half-day. The blocker is "does the BEAM agent have skills at all,
+and if so where is that state?" If the BEAM agent has no skill system yet, FUP-011
+is premature — skill:// has nothing to resolve TO. local:// (finalized-plan
+artifacts) and agent:// (subagent output) may be the realistic first schemes,
+since those are fs/store-backed and session-local.
+
+** First question to answer before any code
+Does a BEAM-launched session (mix spell.tui) install/track skills? If no, this
+FUP narrows to local://-style fs-backed schemes only, and skill:// waits for a
+BEAM skill system. If yes, find that state and build the resolver against it.
+
+** Modules of record
+- TS canonical: packages/coding-agent/src/internal-urls/router.ts + *-protocol.ts.
+- Rust precedent: crates/pi-natives/src/exec/scheme_preprocessor.rs.
+- BEAM target (to CREATE): a SpellAgent.InternalUrls resolver + the skills-state
+  source it reads.

@@ -56,3 +56,75 @@ That deserves its own design + reviewer pass:
 * Not a bug
 Nothing is broken; this is unbuilt scope. The current path (capture :out in Lisp,
 write via a file tool) works for the common case.
+
+* INVESTIGATION (2026-06-21): the ideal NIF + pi-edit-broker integration
+
+** The ideal Rustler NIF surface
+Redirects ride the EXISTING fd-capture machinery in run.rs (execute already sets
+OpenFiles::STDOUT_FD / STDERR_FD on ExecutionParameters; today they point at temp
+files we read back). A redirect just points one of those fds at a REAL file
+instead. So the NIF change is minimal — extend the opts map:
+
+  run(argv, env, %{
+    cwd, timeout_ms, stdin,
+    out:  "hits.txt",   # redirect stdout -> file (instead of temp capture)
+    err:  "build.log",
+    in:   "input.txt",  # stdin <- file
+    append: true        # O_APPEND vs O_TRUNC for out/err
+  })
+
+Implementation: when out/err is set, open the file (O_WRONLY|O_CREAT, plus
+O_APPEND or O_TRUNC) and OpenFile::from(that file) -> set_fd. When `in` is set,
+open O_RDONLY -> STDIN_FD. The {:exit :out :err :lines} contract still holds:
+a redirected stream returns "" in the result (it went to the file), which is
+honest. No new NIF function — just opts. ~30 lines in run.rs.
+
+** Why pi-edit-broker matters here (the real design question)
+A redirect WRITES a file. spell already has a cross-session write-coordination
+daemon: crates/pi-edit-broker (intent -> commit -> conflict). Its protocol
+(protocol.rs) has exactly the right shapes:
+  - FileIntent { file, code_paths, base_revision }  — "I intend to write F"
+  - FileCommit { file, revision, parent_revision, diff_hash, byte_len }  — "I wrote F"
+  - PeerCommittedFile / IntentConflictItem  — "someone else touched F first"
+  - ClientMessage::{Hello, Intent, Commit, …} / ServerMessage  (server.rs run_server)
+A shell redirect that clobbers hits.txt while another session edits it is EXACTLY
+the conflict the broker exists to catch. So the friendly integration:
+  BEFORE a redirect write -> announce a FileIntent to the broker (the path, no
+  code_paths since it's a whole-file write); on a PeerConflict, surface it in the
+  {:exit :err} contract ("redirect target F is being edited by session S") instead
+  of silently overwriting. AFTER the write -> a FileCommit so peers see it.
+
+** How to use it friendlily (and improve it)
+- The broker today is reached from pi-code-engine (Rust) over its conn protocol.
+  The brush NIF is also Rust -> it can speak the same conn::Client. So the NIF
+  links pi-edit-broker as a dep and does intent/commit around a redirect write.
+- IMPROVEMENT to pi-edit-broker (justified): FileIntent.code_paths is symbol-level
+  (for structural edits). A redirect is a WHOLE-FILE blind write — add an intent
+  KIND or a `whole_file: bool` so the broker can distinguish "structural edit of
+  span X" from "blind overwrite of the file" and apply a stricter conflict rule
+  to the latter (a blind overwrite conflicts with ANY concurrent intent on the
+  file, not just an overlapping code_path). This is a small protocol addition
+  (protocol.rs FileIntent) + a conflict-rule branch (server.rs).
+- ALTERNATIVE / simpler v1: do the broker dance ELIXIR-side (SpellAgent.Sh
+  announces intent via whatever Elixir bridge reaches the broker) before calling
+  the NIF, keeping the NIF a dumb fd-wirer. Decide based on whether the BEAM has
+  a broker client (verify) or only TS/pi-code-engine does.
+
+** Path policy (still required, orthogonal to the broker)
+The broker catches CONCURRENCY conflicts, not POLICY (traversal, symlink clobber,
+writing outside the workspace). Those guards live in SpellAgent.Sh validation
+regardless: resolve+canonicalize the path, reject `..` escape / symlink-to-outside,
+default to workspace-relative. The broker is the "who else is writing" layer; the
+policy is the "is this write allowed at all" layer. Both needed.
+
+** Revised acceptance (adds the broker leg)
+- redirect opts wire fds (the easy NIF part), with :append vs truncate distinct.
+- path policy enforced (traversal/symlink rejected) BEFORE any open.
+- a redirect target under concurrent edit surfaces a broker conflict in :err,
+  not a silent overwrite (the friendly pi-edit-broker integration).
+- pi-edit-broker gains a whole-file intent kind (the justified improvement).
+
+** Modules of record
+- NIF: beam/brush_nif-vendored/native/brush_nif/src/run.rs (execute fd-setting).
+- broker: crates/pi-edit-broker/src/{protocol.rs, server.rs, conn.rs}.
+- surface/policy: SpellAgent.Sh (validation + opts).
