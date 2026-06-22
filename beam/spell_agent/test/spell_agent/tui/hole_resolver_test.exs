@@ -162,6 +162,27 @@ defmodule SpellAgent.Tui.HoleResolverTest do
   # idempotence / non-hole trees
   # ============================================================
 
+  describe "W3/W4 reviewer-swarm regressions" do
+    test "splice keeps resolved data INERT — a hole-shaped data item is not executed (#2)" do
+      # A list value containing a {"__hole__" …} map must be flattened VERBATIM,
+      # never re-walked/executed (single-pass + capability invariant).
+      tree = frozen(~S|(tmpl:: {:items [~@data/xs]})|)
+      evil = [%{"__hole__" => %{"node" => "sym", "value" => "x"}}, 5]
+      out = HoleResolver.resolve_holes(tree, %{"xs" => evil})
+      assert (out["items"] || out[:items]) == evil
+    end
+
+    test "a runaway hole degrades to the placeholder within the frame budget (#5)" do
+      # An infinite loop must be bounded (iteration + 200ms timeout) -> placeholder,
+      # not a stalled frame.
+      tree = frozen(~S|(tmpl:: {:x ~(loop [n 0] (recur (+ n 1)))})|)
+
+      assert (HoleResolver.resolve_holes(tree, %{})[:x] ||
+                HoleResolver.resolve_holes(tree, %{})["x"]) ==
+               HoleResolver.placeholder()
+    end
+  end
+
   describe "trees without holes" do
     test "a plain tree is returned unchanged" do
       tree = %{"type" => "split", "children" => [%{"type" => "paragraph", "text" => "x"}]}

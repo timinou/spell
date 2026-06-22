@@ -65,8 +65,9 @@ defmodule SpellAgent.Tui.HoleResolver do
   # NOT re-walked, so a hole that resolves to hole-shaped data is left as data).
   defp walk(%{@hole_key => frozen}, env), do: eval_hole(frozen, env)
 
-  # A splice hole OUTSIDE a list context (a bare map value): resolve to its list,
-  # but with no parent sequence to flatten into it stays a list value.
+  # A splice hole OUTSIDE a list context (a bare map value): resolve to its list.
+  # The resolved elements are DATA — they are NOT re-walked, so a value that
+  # happens to be hole-shaped is left inert (single-pass invariant; W3 review #2).
   defp walk(%{@splice_key => frozen}, env) do
     case eval_hole_raw(frozen, env) do
       {:ok, list} when is_list(list) -> list
@@ -86,9 +87,14 @@ defmodule SpellAgent.Tui.HoleResolver do
 
   # A list element: a `__splice__` flattens its resolved list into the parent; any
   # other element resolves to exactly one element.
+  #
+  # The spliced list's elements are EVALUATION RESULTS (data), so they are NOT
+  # re-walked — re-walking would EXECUTE a hole-shaped value that came from
+  # `data/*` rather than the frozen template, escaping the single-pass invariant
+  # and the capability boundary (W3 review #2). Splice = flatten data, full stop.
   defp walk_seq_elem(%{@splice_key => frozen}, env) do
     case eval_hole_raw(frozen, env) do
-      {:ok, list} when is_list(list) -> Enum.map(list, &walk(&1, env))
+      {:ok, list} when is_list(list) -> list
       _ -> [@placeholder]
     end
   end
@@ -105,12 +111,20 @@ defmodule SpellAgent.Tui.HoleResolver do
     end
   end
 
+  # The render-frame budget for a single hole. A hole evaluates SYNCHRONOUSLY
+  # inside the render loop, so a slow/runaway pure hole must degrade FAST rather
+  # than stall the frame for the Lisp default (1000ms). 200ms clears the sandbox
+  # cold-start (sub-ms once warm) while bounding a runaway hole to a brief blink
+  # before the placeholder shows — a 5× cut from the default. (W3 review #5.)
+  @hole_timeout_ms 200
+
   # Thaw the frozen codec data to source and evaluate it with `data/*` bound and
-  # NO tools (capability boundary). Returns {:ok, value} | :error. Total.
+  # NO tools (capability boundary). Returns {:ok, value} | :error. Total + bounded.
   defp eval_hole_raw(frozen, env) do
     with {:ok, raw} <- QuoteData.from_data_safe(frozen),
          source when is_binary(source) <- Formatter.format(raw),
-         {:ok, step} <- Lisp.run(source, context: env, caller: :in_process_v1) do
+         {:ok, step} <-
+           Lisp.run(source, context: env, caller: :in_process_v1, timeout: @hole_timeout_ms) do
       {:ok, step.return}
     else
       _ -> :error
