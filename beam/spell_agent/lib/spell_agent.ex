@@ -32,17 +32,37 @@ defmodule SpellAgent do
   keeps reading stdin and printing its prompt, which corrupts the display
   (BUG-489); use the mix task instead.
 
+  Logger output is redirected to `~/.spell/logs/spell-agent.<date>.log` for the
+  TUI's lifetime so background debug logs cannot tear the screen; the path is
+  printed on exit. See `SpellAgent.Tui.LogRedirect`.
+
   Returns `:ok` once the app stops (esc / ctrl-c to quit).
   """
   @spec tui(keyword()) :: :ok
   def tui(opts \\ []) do
-    {:ok, pid} =
-      SpellAgent.Tui.App.start_link(Keyword.merge([name: nil, store: SpellAgent.Tui.Store], opts))
+    # Relocate Logger's console output to a file for the TUI's lifetime: the TUI
+    # owns the terminal (raw mode + alternate screen), and any stdout/stderr byte
+    # a background Logger.debug/1 emits tears the display. Restored on exit; the
+    # path is printed so the logs are reviewable once back at the shell.
+    {log_path, snapshot} = SpellAgent.Tui.LogRedirect.start()
 
-    ref = Process.monitor(pid)
+    try do
+      {:ok, pid} =
+        SpellAgent.Tui.App.start_link(
+          Keyword.merge([name: nil, store: SpellAgent.Tui.Store], opts)
+        )
 
-    receive do
-      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+      ref = Process.monitor(pid)
+
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+      end
+    after
+      SpellAgent.Tui.LogRedirect.stop(snapshot)
+
+      if log_path do
+        IO.puts("[spell] logs saved to #{log_path}")
+      end
     end
   end
 
