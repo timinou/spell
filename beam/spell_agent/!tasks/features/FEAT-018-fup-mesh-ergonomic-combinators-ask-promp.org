@@ -173,3 +173,51 @@ produced (region). Both avoid tape inheritance; both are cache-friendly.
   prompt bytes are identical with and without :inherit-memory.
 - selection: only the named keys cross; unnamed parent bindings do NOT leak.
 - default (no :inherit-memory) = cold child, unchanged from today.
+
+* S-E REFRAME (this review) — memory threading is FOLD-OF-SOURCES, not a flat copy
+The user corrected the framing: memory is not just "copy the parent's def-env." Memory
+is HOW the bindings were FOLDED for that turn, and the fold can draw on stigmergic +
+historical SOURCES. So S-E is bigger than a sugar sub-item — it is a FOLD over context
+sources, sibling to FEAT-017 (context projection). The flat select-keys copy is the
+SIMPLEST source; the real surface is a pluggable fold.
+
+** The sources a child's memory can be folded from (all VERIFIED present in Hist.Node)
+A hist Node records `sees` = the recorded tool effects of a turn (node.ex:55), plus
+prompt/form/binds/tokens. So a fold over a session's nodes can derive:
+- EDITED-FILE HISTORY: fold `sees` for edit/write tool-effects -> the set of files this
+  lineage changed (and their latest content/diff).
+- IMPORTANT-FILES-READ: fold `sees` for find/get/read effects -> the files the parent
+  found worth reading -> seed the child so it does not re-discover them.
+- RAW CONVERSATION HISTORY: in some cases the child SHOULD get the tape (verbatim
+  messages) — e.g. a continuation/refinement child, not a fan-out worker. This is the
+  one case where tape-inheritance is correct (it is the SAME mind continuing, like
+  SubAgent.chat), and it is a SOURCE the fold may choose.
+- DEF-ENV bindings: the flat select-keys slice (the original S-E).
+- STIGMERGIC: a fold over black/* (region findings) -> seed the child with the cohort's
+  conclusions as bindings (overlaps FEAT-017; here it lands as def-env, not prompt).
+
+** The shape — memory is a FOLD the spawner chooses, not a fixed channel
+  :memory (fn [parent-ctx] -> bindings)         ; a fold over sources, producing the seed
+where parent-ctx exposes: hist nodes (with `sees`), the region projection, the def-env,
+the tape. The spawner picks WHAT to fold and HOW:
+  :memory (fold/edited-files)                    ; bindings = {edited [...]}
+  :memory (fold/files-read :important? true)     ; bindings = {read [...]}
+  :memory (fold/raw-conversation)                ; bindings = the tape (continuation child)
+  :memory (select-keys parent-mem ["callers"])   ; the flat slice (simplest)
+  :memory (merge (fold/edited-files) (fold/findings region))  ; composed sources
+
+** Why this belongs with FEAT-017, not as a flat sugar
+FEAT-017 PULLS a lens over hist+black at a watermark (context as injected data/*).
+Memory-fold PUSHES a folded seed into the child's def-env. Same SOURCES (hist `sees`,
+black records, tape), same watermark discipline, different delivery (pull-as-context
+vs push-as-bindings). They should share the source-projection layer. RECOMMENDATION:
+move the SOURCE-FOLD machinery (edited-files, files-read, raw-conversation, findings)
+into FEAT-017's projection layer, and let BOTH the context lens (pull) and memory-fold
+(push) consume it. S-E in this FUP becomes just the spawn-arg surface (:memory <fold>)
+over that shared layer.
+
+** Status: PENDING the FEAT-017 reframe (not flat-FUPed)
+The flat select-keys copy stays here as the trivial case. The FOLD-of-sources surface
+is promoted to ride FEAT-017's source layer (see FEAT-017 addendum). So: memory
+threading is FUPed AS A SURFACE, but its substance (the source folds) is pending the
+FEAT-017 projection layer it shares with context injection.

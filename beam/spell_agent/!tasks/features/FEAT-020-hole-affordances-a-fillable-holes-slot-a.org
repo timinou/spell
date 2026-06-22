@@ -1,0 +1,96 @@
+#+TITLE: Hole affordances — a fillable hole's :slot auto-generates keymap bindings + reactions that post black/* resolutions
+#+STATE: ITEM
+#+SESSION_ID: 151269c91db37358
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T23-09-03-478Z_151269c91db37358.jsonl]]
+#+CUSTOM_ID: FEAT-020-hole-affordances-a-fillable-holes-slot-a
+#+BLOCKED_BY: FEAT-019
+
+* Initial Message
+
+what are distributed agents in a mesh network, really? please look into network theory, not hype. i want us to think about that deeply and from first principles, in order to let the BEAM lisp runtime call itself and create meshed sub-sessions. But I want strong theoretical backing beforehand
+
+* Goal
+Close the human loop: a render hole declares a fillable :slot (an answer-schema + which
+black/* record its fill writes); the render walk AUTO-GENERATES the TUI affordances
+(keymap bindings) and the reactions (keystroke -> black/post a resolution). The human
+fills the hole by a keystroke; the hole re-resolves from the medium on the next cell
+tick. Input is just a hole whose resolver is a person.
+
+Read first: docs/agent-mesh-theory/17-the-human-surface.org (the full thread + HS-1..6),
+16-decisions-and-the-human-surface.org (the :decision/:resolution records this fills).
+
+* Why this is small (the mechanism is already two-level)
+The keymap registry (PLAN-346, keymap_registry.ex) is ALREADY:
+  BINDINGS  {context, Chord}  => intent
+  REACTIONS {context, intent} => ptc-source
+That indirection IS the affordance->fill loop. This FEAT DERIVES bindings+reactions
+from a hole's :slot instead of hand-authoring them. The DSL already turns a keystroke
+into a black/post; the new part is the schema -> [bindings, reactions] generator.
+
+* Wave / deps
+BLOCKED BY FEAT-019 (:decision/:resolution records) + FEAT-013 (the watcher fires the
+queued :on-answer). Rides PLAN-012 (holes as data, BUILT), PROJ-004 (cell re-resolve,
+BUILT), keymap DSL (BUILT). Independent of FEAT-011/012.
+
+* The :slot convention (a field a hole carries)
+  :slot {:answer-schema <schema>   ; the flexible structure the answer must match
+         :resolves <decision-ref>  ; which black/* :decision this fill resolves
+         :tier <:human|:policy|:agent|:any>}  ; who may fill (the capability descriptor)
+The render walk recognizes :slot and invokes the generator for the focus context.
+
+* The generator (the one real new logic — a PURE function)
+  affordances(slot, context) -> {bindings, reactions}
+  by schema kind:
+   - enum {:choice [:a :b :c]} -> one binding per variant (a->:a …) + a reaction each
+     posting (black/post {:kind :resolution :payload {:decision ref :answer {:choice v}}})
+   - :string -> a binding opening a minibuffer; reaction posts the typed value
+   - :bool   -> a toggle binding
+   - nested map -> a sub-form (compose generators; defer deep nesting to a FUP)
+  Pure: (schema, ref, context) -> data. Unit-testable with zero TUI.
+
+* Modules / edits (proposed)
+- lib/spell_agent/tui/hole_affordance.ex (NEW): the generator (pure).
+- the render walk (Surface/Materialize): on a node with :slot, register the generated
+  bindings/reactions in KeymapRegistry for that node's focus context; tear them down
+  when the node leaves the tree (lifecycle = the hole's presence).
+- Mesh: the :resolution post the reaction emits (rides FEAT-019).
+
+* CodePaths
+- lib/spell_agent/tui/keymap_registry.ex (bindings + reactions; define_intent cap) - the
+  target the generator writes into.
+- PLAN-012 hole codec ({"__hole__" form}) - where :slot rides.
+- PROJ-004 Cell - re-resolves the hole from the medium after the fill.
+- FEAT-019 :decision/:resolution - the records the reaction posts/reads.
+- FEAT-013 watcher - fires the queued :on-answer once the resolution lands.
+
+* Edge cases
+- runtime-intent atom cap (keymap @max_runtime_intents=256): generated intents must
+  REUSE a small fixed set (e.g. slot/choice-N parameterized) NOT mint a new atom per
+  decision (atom-table DoS, PLAN-346 W3r). Generate intents from a bounded pool.
+- a slot whose schema variant count exceeds available chords: page/scroll the choices
+  (a list affordance), do not exhaust the keyspace.
+- slot leaves the tree mid-fill: tear down its bindings/reactions (no dangling chords).
+- :tier :policy on a slot with no human present: the affordance is not rendered; a
+  policy resolver handles it (doc 16 symmetry) - the generator emits nothing human-facing.
+- two slots competing for the same chord in one context: last-registered wins OR the
+  generator namespaces by focus - decide + test.
+
+* Acceptance (observable)
+- a hole with an enum :slot renders affordances; pressing the variant key posts a
+  :resolution with that choice; the watch fires :on-answer; the hole re-renders the answer.
+- a :string slot opens input and posts the typed value.
+- generated intents reuse the bounded pool (assert atom count does not grow per decision).
+- slot teardown removes its bindings when the node leaves the tree.
+- a :tier :policy slot renders NO human affordance.
+- mix check clean.
+
+* Tests
+- generator: schema -> expected {bindings, reactions} for enum/string/bool (pure).
+- end-to-end: slot -> keystroke -> :resolution -> :on-answer fires -> hole re-resolves.
+- atom-cap: N decisions do not mint N intents (bounded pool).
+- teardown on node removal.
+
+* Out of scope (-> FUPs)
+- deep nested-map sub-forms (compose later).
+- HS-5 shared-gaze surfacing (rides PROJ-005).
+- HS-6 answer-template policy-from-history (a fold FUP).

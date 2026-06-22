@@ -111,3 +111,40 @@ not this FEAT's. If caching vanished, this FEAT is unchanged and still wanted.
 The "smart passing — snapshot + live pull" section: keep the SNAPSHOT (it is the
 deterministic cohort baseline — a context correctness property) but read "cacheable"
 there as "deterministic/reproducible", not as a caching mandate.
+
+* ADDENDUM (this review) — generalize to a SOURCE-FOLD layer (shared with memory threading)
+The user noted memory is HOW bindings were folded, drawing on stigmergic + historical
+SOURCES. That fold and this context lens are the SAME source layer with two deliveries.
+Generalize FEAT-017 from "a lens" to a SOURCE-PROJECTION LAYER that both consume:
+
+** The sources (all over append-only stores at a watermark)
+- hist `sees` per node (node.ex:55) -> EDITED FILES (edit/write effects), FILES READ
+  (find/get/read effects), TOOL-CALL history. A fold over a session's `sees`.
+- black records -> findings/goals/verdicts (the cohort's conclusions).
+- the tape (verbatim messages) -> raw conversation (for continuation children only).
+- the def-env -> named bindings.
+Each is a projection over an append-only source at seq<=W (deterministic, reproducible).
+
+** Two deliveries over the ONE source layer
+- PULL (context lens, this FEAT's original scope): project sources -> injected data/*
+  the child's prompt holes read. Lazy, rich, for discovery.
+- PUSH (memory fold, FEAT-018 S-E): fold sources -> a seed merged into the child's
+  def-env (Session.run :inherit_memory). Eager, small, for precomputed reuse.
+
+** Build implication
+Build a `Mesh.Sources` (or extend context_lens) module exposing the source folds:
+  edited_files(session|lineage, watermark) -> [%{file, diff|content}]
+  files_read(session, watermark, opts) -> [path]
+  tool_history(session, watermark, kind?) -> [effect]
+  findings(region, watermark, match?) -> [record]      (overlaps black/query)
+  conversation(session) -> tape                          (continuation only)
+Then: context lens = these folds -> data/* (pull); memory fold = these folds -> def-env
+seed (push). One source layer, two consumers. This is U1/U3 of doc 15 (one projection,
+read many ways) applied to the spawn-context seam.
+
+** Acceptance delta
+- edited_files folds a lineage's `sees` into the changed-file set (assert it matches a
+  known sequence of edits).
+- files_read excludes files only edited (not read) and vice versa.
+- the SAME source fold feeds both a pull (data/*) and a push (def-env) in a test,
+  proving the shared layer.

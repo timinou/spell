@@ -1,0 +1,164 @@
+#+TITLE: The human surface — holes that become decisions, affordances, and filled-back answers
+#+SUBTITLE: A bidirectional stigmergic loop: render a hole -> bind an affordance -> the human fills it -> it flows back as black/*
+#+OPTIONS: toc:2 num:t
+
+* The thread
+
+Doc 16 made the human a blackboard participant (a :decision asks, a :resolution
+answers). This doc pulls the thread the user named: *a hole that is filled BECOMES a
+black/* thing, gets a TUI affordance, and the keymap/intent DSL fills it out
+automatically* — plus the surfaces past that one idea. The unifying claim:
+
+#+begin_quote
+A render hole and a human input are the same object seen from two sides. A hole is
+"a value the runtime will resolve"; an affordance is "a value the HUMAN will resolve."
+Bind them and the human becomes a resolver of holes — their keystroke writes the
+black/* record the hole was waiting for. Input is just a hole whose resolver is a person.
+#+end_quote
+
+* The mechanism is ALREADY two-level (verified) — that is why this is easy
+
+The keymap registry (PLAN-346, verified keymap_registry.ex) is TWO maps:
+
+: BINDINGS  {context, Chord}  => intent        ; a keystroke names an intent
+: REACTIONS {context, intent} => ptc-source    ; an intent runs frozen ptc (code-as-data)
+
+This indirection is EXACTLY the hole->affordance->fill loop, already built:
+- a HOLE renders a value AND declares "I am awaiting X" (a decision/slot).
+- an AFFORDANCE = a BINDING: a chord in the hole's context names an intent.
+- the FILL = a REACTION: the intent runs ptc that posts the black/* record.
+So "assign a TUI affordance to a hole and have the intent DSL fill it" is: emit a
+binding + a reaction WHEN the hole is a fillable slot. The DSL already turns a
+keystroke into a black/post; the new part is DERIVING the binding+reaction FROM the
+hole's declared slot, instead of authoring them by hand.
+
+* The core idea — a fillable hole auto-generates its affordance + fill
+
+A hole can carry a SLOT declaration: "this value is awaiting a human answer of shape S."
+Given PLAN-012 (holes are data) + PROJ-004 (cells resolve them) + the keymap DSL:
+
+: (tmpl:: {:type "row"
+:          :text ~(decision-question data/decision)
+:          :slot {:answer-schema {:choice [:proceed :skip :defer]}   ; the fillable slot
+:                 :resolves data/decision}})                          ; which decision it fills
+
+The render walk, seeing a :slot, AUTO-EMITS (no hand-authoring):
+1. AFFORDANCES (bindings): one chord per choice in the schema — e.g. p->proceed,
+   s->skip, d->defer — in the row's focus context. (For a :string slot: an input
+   intent that opens a minibuffer; for a :int: a number prompt.)
+2. A REACTION per intent: ptc that posts the resolution -
+   (black/post {:kind :resolution :payload {:decision <id> :answer {:choice :proceed}}}).
+The schema DRIVES the affordance: an enum -> one key per variant; a string -> text
+input; a bool -> toggle; a nested map -> a sub-form. The human's keystroke fills the
+hole by writing the black/* record the hole declared it was awaiting. The hole is
+filled-back FROM the medium on the next cell resolve (PROJ-004) -> the row now renders
+the answer. Round trip, all data.
+
+* Why this is stigmergic (not a form library)
+
+A normal form library WIRES a widget to a callback (a direct edge: widget -> handler).
+Here there is NO edge: the hole declares a slot (data); the human's keystroke posts a
+record (data); a watch fires the queued task (data); the hole re-resolves from the
+medium (data). The human and the agent that posted the decision NEVER reference each
+other. The affordance is not "bound to the agent"; it is bound to the BLACKBOARD. So
+the same filled answer flows to: the agent waiting on it (its watch), the audit trail
+(the record persists), any OTHER view of the same decision (a second human, a log),
+and a policy that might have answered instead. Identity- and time-decoupled, like
+every mesh edge. It is a form whose submit target is an append-only medium.
+
+* The bidirectional completion — holes carry their own fill capability
+
+The deepest version: a hole is not just "a value awaiting resolution" but "a value
+that KNOWS how it can be resolved." The slot declaration is a CAPABILITY descriptor:
+- :answer-schema -> what shape resolves me
+- :resolves -> which black/* record my fill writes
+- :tier -> who may fill me (human-only? policy-allowed? agent-escalation?)
+This makes the hole self-describing for ALL resolvers (doc 16's symmetry): the SAME
+slot is fillable by a human keystroke (affordance), a policy (auto-match the schema),
+or an agent (post a resolution). The affordance generation is just the human-facing
+PROJECTION of the slot's capability. One declaration, three resolvers, rendered for
+whichever is present.
+
+* How implemented — the honest ledger
+
+| piece | status | evidence |
+|-------+--------+----------|
+| holes are data with declarable fields | *built* | PLAN-012 (tmpl::, {"__hole__" form}) |
+| a hole re-resolves from live data | *built* | PROJ-004 Cell (off-frame, read-only) |
+| keystroke -> intent -> ptc -> effect | *built* | keymap BINDINGS + REACTIONS (PLAN-346) |
+| black/post a resolution from a reaction | *built* | mesh write verb + reaction tier (doc 16) |
+| a :slot field on a hole | *new* (small) | a convention the render walk recognizes |
+| schema -> affordances generator | *new* | derive bindings+reactions from :answer-schema |
+| the watch firing the queued task | *specced* | FEAT-013 |
+So: the LOOP is built end-to-end EXCEPT (a) the :slot convention, (b) the schema->
+affordance generator, (c) FEAT-013. The generator is the only real new logic, and it
+is a pure function (schema -> [bindings, reactions]) — unit-testable, small.
+
+* The surfaces past the one idea (what else the human surface unlocks)
+
+** HS-1 — the decision queue as a worklist
+The decisions pane (doc 16) becomes a HUMAN WORKLIST: open decisions sorted by
+urgency/age, each with auto-generated affordances. The human triages a stream of agent
+questions like an inbox — answer, defer (post a :resolution {:choice :defer} -> the
+watch re-queues with a later ttl), or escalate (re-post to a wider region). The
+worklist is a cell over black/query {:kind :decision :unresolved}; triage is reactions.
+
+** HS-2 — steering, not just answering (the human posts findings/goals)
+The human is a full writer, not just a resolver. A human-authored :goal supersedes a
+region's objective (doc 02 DC-3 owner rules apply — the human is an owner). A
+human-posted :finding injects ground truth the cohort folds ("this file is off-limits").
+The human STEERS the mesh by writing the same records agents do. Affordances for these:
+a key to post a goal, a key to flag a finding on the focused item.
+
+** HS-3 — provenance on demand (drill from answer to reasoning)
+Because a :resolution and the :decision carry author+seq, and findings join back to
+hist (FEAT-017), the human can DRILL: from a decision, see the findings that motivated
+it (black), and from each finding, the reasoning trace that produced it (hist `sees`/
+form). The affordance: a key that expands the focused decision into its evidence lens.
+The human audits the WHY behind every choice they are asked to make.
+
+** HS-4 — live diff as a hole (review edits stigmergically)
+An agent about to apply an edit posts a :decision whose payload is the DIFF and whose
+schema is {:choice [:approve :reject :amend] :amend :string}. The diff renders as a
+hole (a tmpl:: over the edit data); the affordances are approve/reject/amend; the
+queued :on-answer applies-or-discards the edit. Code review becomes a stigmergic
+decision over a diff-shaped hole. (This is the everyday human-in-the-loop case,
+expressed with zero bespoke approval machinery.)
+
+** HS-5 — the human's gaze is a value too (PROJ-005 convergence)
+PROJ-005 (one tree, many minds) makes the layout a shared tree with per-mind gaze.
+The human's CURSOR/focus is itself a value on that tree. So an agent can SEE what the
+human is looking at (a gaze record) and surface the most relevant decision THERE -
+context-sensitive surfacing. And two humans share the dashboard, each with their own
+gaze, answering different decisions on the same board. The human surface is multi-
+participant by the same mechanism the agent mesh is.
+
+** HS-6 — answer-templates (the human teaches a policy by example)
+When a human answers N similar decisions the same way, that pattern IS a policy. A
+fold over resolutions (black/query {:kind :resolution}) grouped by decision-shape ->
+"you always :proceed when risk=:low" -> offer to auto-resolve future matches. The human
+PROMOTES their repeated keystrokes into a policy resolver (doc 16's third resolver),
+authored from their own answer history. Teaching by example, folded from the medium.
+
+* Why the whole human surface is one mechanism
+
+Every surface above is the SAME loop: a hole declares a fillable slot -> the schema
+generates affordances -> a keystroke posts a black/* record -> a watch queues the work
+-> the hole re-resolves from the medium. Decisions (16), the dashboard (16), this
+doc's auto-affordances, the worklist, steering, provenance-drill, diff-review, shared
+gaze, and answer-templates are NOT nine features. They are nine readings of: the human
+is a resolver of holes, and holes resolve through the append-only medium. We do not
+build a UI framework; we let the human write and read the same blackboard the agents
+do, and we PROJECT the fillable holes as affordances the keymap DSL already knows how
+to run. The interface the human uses to steer the mesh is made of the same stuff as
+the mesh - which is the philosophy-doc thesis (the interface is the same stuff as the
+mind), now reaching the human.
+
+* The minimal build to light it up
+
+1. a :slot convention on a hole (data the render walk recognizes) - XS.
+2. schema -> [bindings, reactions] generator (pure fn) - S, the only real new logic.
+3. FEAT-013 watcher (fires the queued :on-answer) - specced.
+4. FEAT-019 :decision/:resolution records - filed.
+5. grant black/query to the read-only cell tier - XS (doc 16).
+With these, HS-1..HS-4 are immediate; HS-5 rides PROJ-005; HS-6 is a fold (a later FUP).
