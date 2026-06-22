@@ -60,6 +60,30 @@ defmodule SpellAgent.Tui.DataBagTest do
     end
   end
 
+  describe "sanitization (capability boundary, W3/W4 review #1)" do
+    test "a function value anywhere in state is stripped from the bag" do
+      f = fn _ -> :PWNED end
+      bag = DataBag.build(state(%{vms: %{"p" => %{"cb" => f, "name" => "ok"}}}), area())
+      # the vms map is exposed, but the fn within is gone (nil), the data kept.
+      assert get_in(bag, ["vms", "p", "cb"]) == nil
+      assert get_in(bag, ["vms", "p", "name"]) == "ok"
+    end
+
+    test "a pid/ref is stripped" do
+      bag = DataBag.build(state(%{vms: %{"p" => %{"pid" => self()}}}), area())
+      assert get_in(bag, ["vms", "p", "pid"]) == nil
+    end
+
+    test "a hole cannot recover an executable from the bag" do
+      f = fn _ -> :PWNED end
+      bag = DataBag.build(state(%{vms: %{"p" => %{"cb" => f}}}), area())
+      {:ok, frozen} = Lisp.run(~S|(tmpl:: {:x ~(get (get data/vms "p") :cb)})|)
+      tree = HoleResolver.resolve_holes(frozen.return, bag)
+      # the callback is nil in the bag; the hole resolves to nil, never a fn.
+      refute is_function(tree[:x] || tree["x"])
+    end
+  end
+
   describe "totality" do
     test "an empty state map degrades, never raises" do
       assert %{} = DataBag.build(%{}, area())
