@@ -1,0 +1,523 @@
+#+TITLE: sh+brush: homoiconic shell scripting via PTC reader + brush NIF
+#+STATE: DOING
+#+SESSION_ID: 151267329fcc2e66
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T22-57-45-087Z_151267329fcc2e66.jsonl]]
+#+CUSTOM_ID: PLAN-011-shbrush-homoiconic-shell-scripting-via-p
+
+* Intention
+
+The cleanest interface to write ANY script the runtime would ever need, with three
+properties: (1) WRITE almost-native shell with no quoting/escaping ceremony; (2)
+COMPOSE scripts with the full Lisp combinator library; (3) REMEMBER a script as a
+durable, diffable entry in the toolset. The shell is only the LEAF; Lisp is the
+composition layer; results are structured values.
+
+Companion specs (settled, read first):
+- docs/sh-reader-spec.md   — the `sh::` reader form, token rules, desugar, `sh` contract.
+- docs/quoting-spec.md     — why `~` matters beyond shell; quasiquote is LATER, not here.
+
+This PLAN covers the FULL sh+brush vision end-to-end and its test strategy
+(unit + property/fuzz + round-trip + integration + demos). Full quasiquote is
+explicitly OUT OF SCOPE (tracked in docs/quoting-spec.md §10).
+
+* The three-language seam — Lisp ↔ Elixir ↔ brush (Rust)
+
+This is the heart of the design and the source of TOTAL MODULARITY. Each language
+owns exactly one concern, and the boundaries are plain DATA (vectors, maps, terms),
+never embedded code. Because every seam is data, any layer is replaceable without
+touching the others.
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ LISP (PTC, the agent's mind)                                           │
+│   • surface syntax:  (sh:: rg -l TODO ~dir)                            │
+│   • desugars to DATA: (sh ["rg" "-l" "TODO" dir])     ← a plain vector  │
+│   • composition:     ->> pmap for filter group-by      ← values only    │
+│   • a remembered script = a :ptc tool whose body is (sh …)             │
+└───────────────┬────────────────────────────────────────────────────────┘
+                │  argv = a vector of STRINGS  (no shell string, ever)
+                │  result = a MAP {:exit :out :err :lines}
+                ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ ELIXIR (PtcRunner + SpellAgent, the orchestrator)                      │
+│   • `sh` builtin: validates argv is [string], calls the NIF            │
+│   • marshals argv (BEAM list→Rust Vec<String>) and result (struct→map) │
+│   • owns lifecycle: timeout, cancel token, supervision, failure ladder │
+│   • owns durability: registry → Khepri; recall → hist/crystal          │
+│   • NEVER parses shell; NEVER formats Lisp — pure marshalling + policy  │
+└───────────────┬────────────────────────────────────────────────────────┘
+                │  NIF boundary: Vec<String> argv, env map, opts  →  ExecutionResult
+                │  (rustler terms; dirty scheduler; catch_unwind)
+                ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ BRUSH (Rust, the execution engine)                                     │
+│   • runs argv WITHOUT shell-parsing it (inject-proof by construction)  │
+│   • owns: process spawn, pipes, redirects, glob expansion, builtins    │
+│   • WordPreprocessor bridge resolves skill:// local:// … in argv elems │
+│   • returns ExecutionResult {exit, stdout, stderr}                     │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+** Why this is total modularity (the load-bearing claim)
+
+Each boundary is a DATA CONTRACT, so each layer swaps independently:
+
+| boundary           | contract (data)                    | swap freely without touching neighbours |
+|--------------------+------------------------------------+-----------------------------------------|
+| Lisp → Elixir      | `(sh [argv])` vector + result map  | change reader sugar (`sh::`→other) — `sh` builtin unchanged |
+| Elixir → brush     | `Vec<String>` + `ExecutionResult`  | swap brush for another exec engine — Lisp/Elixir unchanged |
+| reader → analyzer  | desugar to ordinary `(sh …)` call  | reader is pure sugar — analyzer/eval need ZERO change |
+| script → toolset   | `:ptc` tool body is `(sh …)`       | durability/recall layer is generic — no shell special-case |
+
+The modularity test (proven by the test suite, §Testing):
+- "`sh::` desugars to the SAME data as hand-written `(sh [...])`" → reader is replaceable.
+- "the `sh` builtin treats argv as opaque strings" → engine is replaceable.
+- "a remembered `(sh …)` tool composes/recalls exactly like a Lisp tool" → toolset is generic.
+
+** The data-contract invariants (what every layer agrees on)
+
+1. argv is ALWAYS `[String.t()]` after desugaring — a hole is exactly one element.
+2. the result is ALWAYS a string-keyed map `{:exit int, :out str, :err str, :lines [str]}`.
+3. no layer up-leaks the layer below: Lisp never sees a Rust struct; brush never
+   sees a Lisp form; Elixir never parses shell or formats Lisp.
+4. failure is DATA, never a crash: a panicking/timing-out command returns
+   `{:exit nonzero, :err …}`; the agent loop survives (never-brick discipline).
+
+* Architecture deliverables (W0–W6)
+
+** W0 — `brush_nif` rustler crate (the engine seam)
+
+Target: beam/brush_nif-vendored/ (mirror ex_ratatui-vendored layout exactly).
+- Cargo: rustler 0.38 (default-features=false, features=["derive"]),
+  nif_version features; path deps to crates/brush-core-vendored +
+  crates/brush-builtins-vendored.
+- mix dep: {:brush_nif, path: "../brush_nif-vendored"} + rustler compile (config.exs),
+  mirroring the ex_ratatui source-build pattern.
+- NIFs (rustler::init!("Elixir.SpellAgent.BrushNif")):
+  - `run(argv :: [String], env :: %{String=>String}, opts :: map) :: result_map`
+    - opts: %{cwd, timeout_ms, stdin, redirects: %{out, err, append}}
+    - DIRTY SCHEDULER (DirtyCpu/DirtyIo) — brush run is blocking.
+    - std::panic::catch_unwind around the brush call → never crash the scheduler.
+    - cancellation via brush ExecutionParameters cancel token, wired to timeout_ms.
+  - `pipe(stages :: [[String]], env, opts) :: result_map`  — N argv vectors, one brush pipeline.
+  - `parse(src :: String) :: ptc_tree`  — bash text → PTC-native nested map (DEFERRED to W5; stub returns {:error "unimplemented"}).
+  - `unparse(tree) :: String`           — inverse (DEFERRED to W5).
+- Acceptance: `SpellAgent.BrushNif.run(["echo","hi"], %{}, %{})` → `%{"exit"=>0,"out"=>"hi
+",...}`.
+
+** W1 — `sh` builtin (the orchestrator seam, value form)
+
+Target: SpellAgent tool surface (tools.ex) + a new SpellAgent.Sh module.
+- Register native tool `sh`: args `{argv | command}`; argv = vector path (preferred).
+- Validate argv is `[binary]`; reject non-string elements with a clear LLM-facing error.
+- Call BrushNif.run; map ExecutionResult → `{:exit :out :err :lines}` (lines = split :out on "
+").
+- Lazy `:json` accessor convention: caller does `(json/parse (:out r))`; do not auto-parse.
+- Liveness: enforce timeout_ms (config default), surface cancel as `{:exit 124 :err "timeout"}`.
+- Acceptance: `(sh ["rg" "-l" "TODO" "lib"])` returns structured map; injection probe
+  `(sh ["echo" "; rm -rf /"])` prints the literal string (no shell metachar execution).
+
+** W2 — `sh::` reader form (the syntax seam)
+
+Target: beam/ptc_runner/lib/ptc_runner/lisp/fast_parser.ex (+ parser.ex if a second reader exists).
+- Add ONE branch in do_parse_expr `(`-case: if head is `sh::`, call `parse_sh_list`.
+- `parse_sh_list` reads whitespace-separated tokens until matching `)`:
+  - bare word → `{:string, word}`
+  - `~form`   → recurse parse_expr (unquote one form)
+  - `~@form`  → `{:splice, form}` (splice a list)
+  - `"…"`     → normal string reader
+- Desugar to an ordinary call: `{:list, [{:symbol, :sh}, {:vector, parts}]}`, with
+  `{:splice, _}` lowered via `(into [] (concat …))` segments. NO new AST node escapes the reader.
+- VERIFIED preconditions (do not re-litigate): `:` ∉ symbol/keyword char classes (`sh::` is free);
+  `~` is an unused reader char; analyzer/eval unchanged because target is a plain call.
+- Acceptance: `(sh:: rg -l TODO ~dir)` parses to the SAME AST as `(sh ["rg" "-l" "TODO" dir])`.
+
+** W3 — durability: remembered scripts (the toolset seam)
+
+Target: SpellAgent.ToolRegistry (back with Khepri; dep already present) + rehydrate-on-boot.
+- `(tool/define-tool {:name :params :source})` where source contains `(sh::/sh …)` — already works
+  via the :ptc spine; the new work is DURABILITY (registry currently in-memory Agent).
+- Mirror every put/remove to Khepri `scriptset/<name>`; rehydrate the registry on Application boot.
+- Promotion path: a session-authored tool that proved useful → Crystal (durable + DISTILLED_FROM provenance).
+- Acceptance: define `todo-files`, restart the node, `(tool/todo-files {:dir "lib"})` still resolves.
+
+** W4 — pipelines + redirects in Lisp (composition seam)
+
+- `sh/|` builtin: `(sh/| (sh:: cat ~f) (sh:: grep ERR) (sh:: wc -l))` → BrushNif.pipe; one pipeline, argv per stage.
+- redirects as opts on the vector: `(sh ["rg" "TODO"] {:out "hits.txt" :append true})` — brush wires fds.
+- VALUE-pipe stays pure Lisp: `(->> (sh:: …) :lines (pmap …))`.
+- Acceptance: byte-pipe `(sh/| …)` equals the shell `cat f | grep ERR | wc -l` result; value-pipe
+  fan-out via pmap is order-independent and concurrent.
+
+** W5 — `sh/parse` + `sh/unparse` (homoiconic completion, OPTIONAL)
+
+- Implement the W0-stubbed parse/unparse: bash text ↔ PTC-native tree, projected through the SAME
+  `form_tree` contract used by Hist.Lens (lens.ex) so a bash pipeline and a Lisp program land in ONE recall layer.
+- Acceptance: `(sh/parse "rg -l TODO | head")` → walkable PTC map; `(sh/unparse (sh/parse x))` round-trips
+  semantically (see property tests).
+
+** W6 — recall + demos (proof seam)
+
+- `hist/forms {:shell "rg"}` finds turns whose program calls `(sh …)` with that argv head (extend the existing lens).
+- Demo suite (§Demos) exercised end-to-end.
+
+* Testing strategy — extensive, property-first
+
+Precedent VERIFIED present: `stream_data` dep + ExUnitProperties + PtcRunner.TestSupport.LispGenerators
+(test/support/lisp_generators.ex). Extend that generator suite; do not invent infra.
+
+** Layer 1 — reader unit + property tests (Elixir, ptc_runner)
+
+- Unit: `(sh:: …)` desugars to expected `(sh [vector])` AST for: bare words, ~unquote, ~@splice,
+  quoted strings with spaces, globs kept literal, empty body, nested ~(f x).
+- PROPERTY (the modularity oracle): for a generator of {bare-words ∪ ~holes ∪ ~@splices},
+  `parse("(sh:: " <> render(tokens) <> ")")` ≡ `parse("(sh [" <> render_vector(tokens) <> "])")`.
+  This PROVES `sh::` is pure sugar — the central modularity claim.
+- PROPERTY (injection-safety): ∀ generated string s, `(sh:: echo ~s)` desugars so s is exactly ONE
+  argv element; no metacharacter in s can split it. Assert vector length invariant.
+- FUZZ (reader robustness): feed random byte strings after `sh::`; the reader must return {:ok,_} or
+  {:error, msg} — never crash, never infinite-loop (bounded by @max_nesting_depth).
+
+** Layer 2 — `sh` builtin contract tests (Elixir, spell_agent)
+
+- Result-shape contract: keys `:exit :out :err :lines` always present; types fixed.
+- argv validation: non-string element → clear error, not a NIF crash.
+- INJECTION integration: `(sh ["echo" "; rm -rf /"])` → stdout is the literal text; fs untouched.
+  `(sh ["sh" "-c" "echo hi"])` runs only because the caller EXPLICITLY chose `sh -c` (documents the escape hatch).
+- Liveness: a `sleep 999` argv with timeout_ms=50 returns `{:exit 124}` within ~budget; loop survives.
+- never-brick: a command that makes brush panic (fuzzed argv) returns an :err map, GenServer/loop alive.
+
+** Layer 3 — round-trip property tests (W5, the homoiconic proof)
+
+- `unparse(parse(bash)) ≡semantic bash` for a generator of well-formed pipelines (commands, pipes,
+  redirects, quoting). "≡semantic" = re-parse equality, not byte equality.
+- `parse` output is a valid PTC-native tree (no tuples; JSON-serializable) — the form_tree contract,
+  reusing the existing tuple-free assertion from lens tests.
+
+** Layer 4 — brush NIF property/fuzz tests (Rust, in crates/brush_nif)
+
+- argv exec ≡ a reference: for generated argv of safe builtins (echo/printf/true/false/seq),
+  `run(argv)` exit+stdout matches an independent expectation.
+- catch_unwind: a NIF-level fuzz harness feeds adversarial argv/env; the NIF never aborts the VM
+  (proptest with `#[should_panic]`-free contract: always Ok(result_map) or Err(term)).
+- pipe associativity where defined: `pipe([a,b,c])` stdout ≡ nesting where semantics allow.
+
+** Layer 5 — end-to-end demos as executable tests (§Demos)
+
+Each demo is BOTH a doctest-style example in docs AND an ExUnit integration test asserting the
+observable result, so the vision is continuously proven, not aspirational.
+
+* Demos (executable, double as integration tests)
+
+1. WRITE: `(sh:: rg -l TODO lib)` → returns files; assert :lines non-empty on a fixture tree.
+2. COMPOSE (value pipe): `(->> (sh:: rg -l TODO src) :lines (pmap #(sh:: wc -l ~%)) (map :out))`
+   → per-file line counts; assert concurrent + order-independent.
+3. COMPOSE (byte pipe): `(sh/| (sh:: cat ~f) (sh:: grep ERR) (sh:: wc -l))` ≡ shell equivalent.
+4. REMEMBER: define `todo-files`, restart node, re-invoke → still resolves (Khepri rehydrate).
+5. COMPOSE remembered: `(->> (tool/todo-files {:dir "lib"}) (pmap #(tool/blame-summary {:file %})) (sort-by :age))`.
+6. INJECTION-SAFE: `(sh:: echo ~user-input)` with `user-input="; rm -rf ~"` prints literal; fs intact.
+7. URI token: `(sh:: cat skill://my-skill/SKILL.md)` resolves via WordPreprocessor.
+8. HOMOICONIC (W5): `(sh/parse "rg -l TODO | head")` → tree; mutate a node; `(sh/unparse …)` → new bash; run it.
+9. RECALL: after several `(sh …)` turns, `(hist/forms {:shell "rg"})` lists exactly those turns.
+10. MODULARITY: a test that the SAME `(sh [...])` data runs whether produced by `sh::` sugar OR
+    hand-written OR generated by code — one engine, three sources.
+
+* Risks / open verifications (label honestly)
+
+- R1 (must verify before W0): brush `run_program`/`run_string` argv semantics — confirm an argv vector
+  executes WITHOUT a shell-parse pass (the inject-proof claim). The NAPI shell.rs only used run_string
+  on full command strings; the pure-argv path is new territory here. SPIKE: a 20-line Rust test against
+  brush-core running ["echo","; ls"] and asserting one arg.
+- R2: dirty-scheduler + catch_unwind correctness under cancellation (no leaked child processes on timeout).
+- R3: Khepri rehydrate ordering at boot (registry must be ready before first tool call).
+- R4: WordPreprocessor reuse from a BEAM NIF context (it was built for the NAPI/TS path) — confirm the
+  SchemeRegistry can be constructed BEAM-side or is bridged via callback.
+- R5 (deferred, not this PLAN): general quasiquote/eval — see docs/quoting-spec.md; do NOT scope-creep.
+
+* Build order summary
+
+W0 brush_nif (engine) → W1 sh builtin (value form, usable TODAY) → W2 sh:: reader (sugar)
+→ W3 Khepri durability (remember) → W4 pipelines/redirects (compose) → W5 parse/unparse (homoiconic, optional)
+→ W6 recall + demos. Usable shell-in-Lisp at W1; native feel at W2; durable toolset at W3.
+
+* Lineage
+
+Distilled from the session designing "babashka on the BEAM" → narrowed to `sh::` (argv-vector,
+inject-proof, Lisp-composed). Specs: docs/sh-reader-spec.md (approved), docs/quoting-spec.md (concept).
+Sibling to the freeform-TUI research set (PROJ-001..005); shares the homoiconic-dissolution thesis
+(adds rows: shell-vs-program, process-vs-value).
+
+* W0–W2 EXPANDED — wave-by-wave deliverables
+
+Architecture (this section + all early-wave setup) stays in the MAIN THREAD; only
+leaf implementation/test tasks are delegated, each gated by a reviewer swarm and a
+transitional gap-implementation wave (see :Execution discipline:).
+
+** W0 — brush_nif rustler crate (engine seam)
+
+*** Goal
+A Rustler NIF crate exposing brush execution to the BEAM, INJECT-PROOF by construction.
+
+*** R1 RESOLVED — the inject-proof mechanism (architectural crux)
+Verified against brush-parser 0.3.0 + brush-core-vendored:
+- `Shell::run_program(program, params)` runs an ALREADY-PARSED `brush_parser::ast::Program`,
+  bypassing `parse_string`. ∴ shell metacharacters (`;` `|` `&`) in an argv element never
+  re-tokenize into operators. GOOD, but NOT sufficient alone.
+- CAVEAT (the real risk): brush still EXPANDS each `Word.value` at execution
+  (`expansion.rs::basic_expand_word` runs `$(...)`, `${...}`, `*`, `~`). A naive
+  `Word{value:"$(date)"}` WOULD execute `date`. argv→AST alone is NOT safe.
+- FIX (decision): single-quote-escape EACH argv element into its `Word.value`
+  (`x` → `'x'`, inner `'` → `'\''`). brush disables ALL expansion inside single quotes.
+  Precedent reused verbatim: `shell_escape/1` in crates/pi-natives/src/exec/scheme_preprocessor.rs.
+- ∴ argv element → shell_escape → one `Word` → `SimpleCommand` → `Pipeline{seq:[Simple]}` →
+  `AndOrList{first}` → `CompoundList` → `CompleteCommand` → `Program`. Build the struct directly;
+  never touch the string parser. Expansion is neutralized by quoting.
+- A future opt-in `{:expand true}` flag MAY skip escaping per-element when the caller WANTS
+  globbing; default is escaped/literal. (Deferred; v1 is always-escaped.)
+
+*** Output capture (verified constraint)
+`ExecutionResult` carries only `exit_code` (results.rs). stdout/stderr are captured via fd
+redirection: set `OpenFiles::STDOUT_FD`/`STDERR_FD` to in-memory pipe files on
+`ExecutionParameters`, run, then drain the buffers (pattern proven in pi-natives/src/shell.rs).
+NIF returns `%{exit, out, err}`; Elixir adds `:lines`.
+
+*** Deliverables
+- beam/brush_nif-vendored/ — mirror ex_ratatui-vendored layout:
+  - native/brush_nif/Cargo.toml: rustler 0.38 {default-features=false, features=["derive"]};
+    nif_version features (default nif_version_2_16); path deps brush-core-vendored +
+    brush-builtins-vendored + brush-parser "0.3"; tokio (brush run is async → block_on in dirty NIF).
+  - native/brush_nif/src/lib.rs: `rustler::init!("Elixir.SpellAgent.BrushNif")`.
+  - native/brush_nif/src/argv.rs: `argv_to_program(&[String]) -> Program` via shell_escape (Rust-unit-tested).
+  - native/brush_nif/src/run.rs: `run/3` NIF + fd-capture + timeout + catch_unwind.
+  - lib/spell_agent/brush_nif.ex: `use Rustler, otp_app: :spell_agent, crate: "brush_nif"`; NIF stubs.
+- mix.exs: {:brush_nif, path: "../brush_nif-vendored"}; config/config.exs rustler crate compile entry.
+
+*** NIF surface (v1)
+- `run(argv :: [binary], env :: %{binary=>binary}, opts :: map) :: %{...}`
+  - opts: %{cwd, timeout_ms, stdin}; (redirects deferred to W4)
+  - SCHEDULER: `#[rustler::nif(schedule = "DirtyCpu")]` — brush run is blocking.
+  - SAFETY: whole body in `std::panic::catch_unwind` → on panic return
+    `%{exit: -1, out: "", err: "<panic msg>"}`. Never let a panic cross the NIF boundary.
+  - TIMEOUT: brush future under tokio `time::timeout(timeout_ms)`; on elapse fire the cancel
+    token (ExecutionParameters), return `%{exit: 124, err: "timeout"}`.
+  - returns string-keyed `%{exit: integer, out: binary, err: binary}`.
+- `parse/1`, `unparse/1`: STUBS returning `{:error, "unimplemented"}` (real impl in W5).
+
+*** Acceptance (observable)
+- Rust unit (argv.rs): `argv_to_program(["echo","; rm -rf /"])` → one SimpleCommand whose escaped
+  suffix Word contains the literal `; rm -rf /`.
+- Rust proptest (R1 oracle): ∀ argv of safe builtins (echo/printf/true/seq), the built Program
+  never spawns a second command; `["echo","$(date)"]` stdout is the literal `$(date)`.
+- Elixir: `SpellAgent.BrushNif.run(["echo","hi"], %{}, %{})` → `%{"exit"=>0,"out"=>"hi\n","err"=>""}`.
+- Elixir liveness: `run(["sleep","999"], %{}, %{"timeout_ms"=>50})` → exit 124 within ~200ms; VM alive.
+- Gate: `mix compile` (NIF builds) + `mix test test/brush_nif_test.exs`.
+
+*** Files
+- beam/brush_nif-vendored/native/brush_nif/{Cargo.toml,src/lib.rs,src/argv.rs,src/run.rs}
+- beam/spell_agent/lib/spell_agent/brush_nif.ex · mix.exs · config/config.exs · test/brush_nif_test.exs
+
+** W1 — sh builtin (orchestrator seam, value form)
+
+*** Goal
+The `sh` tool: argv vector in → structured map out. Usable shell-in-Lisp TODAY, no reader change.
+
+*** Design
+- New module SpellAgent.Sh: `run(argv, opts)` validates argv is `[binary]`, calls BrushNif.run,
+  maps `%{exit,out,err}` → `%{"exit"=>i,"out"=>s,"err"=>s,"lines"=>String.split(out, "\n", trim:true)}`.
+- Register native tool `sh` in tools.ex meta/native set:
+  `(sh ["rg" "-l" "TODO" "lib"])` AND `(sh {:argv [...] :cwd "…" :timeout-ms 5000})`.
+  Accept a bare vector (argv) OR a map with `:argv` + opts. NEVER accept a single command string in v1
+  (that would invite the string-parse path we are avoiding); a string arg is a validation error with a
+  message pointing at argv form.
+- `:lines`/`:out`/`:err`/`:exit` are plain map keys → compose with `(:lines (sh …))`, `->>`, `pmap`.
+- `:json` is NOT auto-parsed; caller does `(json/parse (:out r))` (documented convention).
+
+*** Edge cases
+- non-string argv element → `{:error, "sh: argv element N must be a string, got …"}` (no NIF call).
+- empty argv → error (no command).
+- timeout opt floor/ceiling from Config; default 30_000ms.
+- argv with embedded NUL → reject (brush/OS can't carry it).
+
+*** Acceptance (observable)
+- `(sh ["echo" "hi"])` → `%{"exit"=>0,"out"=>"hi\n","lines"=>["hi"], …}`.
+- INJECTION: `(sh ["echo" "; rm -rf /"])` → out is the literal `; rm -rf /\n`; a tmp sentinel file untouched.
+- `(sh ["echo" "$(date)"])` → out is the literal `$(date)` (expansion neutralized).
+- bad arg: `(sh ["echo" 5])` → error map naming the offending index; no crash.
+- Gate: `mix test test/sh_test.exs`.
+
+*** Files
+- beam/spell_agent/lib/spell_agent/sh.ex
+- beam/spell_agent/lib/spell_agent/tools.ex (register `sh`)
+- beam/spell_agent/test/sh_test.exs
+
+** W2 — sh:: reader form (syntax seam)
+
+*** Goal
+`(sh:: rg -l TODO ~dir)` desugars to the SAME AST as `(tool/sh {:argv ["rg" "-l" "TODO" dir]})`. Pure sugar.
+
+*** CONTRACT UPDATE (discovered in W1)
+The PTC tool boundary (`build_args_map` in eval.ex) accepts a MAP only — positional
+vectors like `(sh [...])` are REJECTED ("named arguments required"). And native
+tools dispatch via the `tool/` namespace. ∴ the desugar target is
+`(tool/sh {:argv [...]})`, NOT `(sh [...])`. The `sh::` reader builds that map form.
+
+*** Design (verified preconditions — do NOT re-litigate)
+- `:` ∉ symbol_rest_char? ∧ ∉ keyword_char? → `sh::` is a free token (no Clojure ::kw collision).
+- `~` is an unused reader char.
+- analyzer/eval need ZERO change: the desugar target is an ordinary `(sh [vector])` call.
+
+*** Reader change (fast_parser.ex)
+- In `do_parse_expr/2`, the `"("` branch: after consuming `(` and ws, peek for `sh::`. If matched,
+  delegate to `parse_sh_list(cursor_after_sh::, depth)`; else fall through to `parse_sequence` UNCHANGED.
+- `parse_sh_list` reads tokens until the matching `)`:
+  - whitespace-separated bare word → `{:string, word}` (word = run of non-ws, non-`)`, non-`~`, non-`"` bytes;
+    also stops at `~`).
+  - `~` then one form → recurse `parse_expr` (unquote). Splice form `~@` → wrap `{:sh_splice, form}`.
+  - `"…"` → existing `parse_string` (a token containing spaces).
+  - close `)` → finish.
+- Desugar (in the reader, before returning AST): build
+  `{:list, [{:symbol, :sh}, {:vector, parts'}]}` where parts' lowers any `{:sh_splice, f}` by emitting
+  `(into [] (concat seg …))` segmentation. SIMPLEST correct lowering: if no splices, emit a plain
+  `{:vector, parts}`; if splices present, emit `{:list,[{:symbol,:concat}|segments]}` wrapped to a vector
+  via `(vec (concat …))`. Keep the no-splice path allocation-free and obvious.
+- NO new AST node escapes the reader; `{:sh_splice,_}` is consumed during desugar.
+
+*** Edge cases
+- empty body `(sh::)` → `(sh [])` → W1 error path (documented).
+- `~` at end with no form → reader error "sh:: unquote needs a form".
+- nested parens via `~(f x)` → recursion handles it; bare `(` inside argv (not after `~`) is a literal
+  word char? NO — to keep it simple, a bare `(` inside sh:: body is a reader error directing the user to
+  `~(…)` for evaluation or a quoted string for a literal paren. (Documented; keeps tokenizer trivial.)
+- a bare word containing `~` mid-token (e.g. `a~b`) → split at `~`: `"a"` then unquote `b`. Documented;
+  use a quoted string `"a~b"` for a literal tilde.
+
+*** Acceptance (observable, property-first)
+- Unit: `parse("(sh:: rg -l TODO ~dir)")` ≡ `parse("(sh [\"rg\" \"-l\" \"TODO\" dir])")`.
+- Unit: `~@flags` splice desugars to a concat producing one flat vector.
+- PROPERTY (modularity oracle): ∀ generated token lists (bare words ∪ ~holes ∪ ~@splices),
+  `parse("(sh:: "<>render<>")")` ≡ `parse("(sh ["<>render_vec<>"])")`.
+- PROPERTY (injection-safety): ∀ string s, in `(sh:: echo ~s)` the value s is exactly ONE vector element
+  (assert vector length invariant across random s).
+- FUZZ: random bytes after `sh::` → reader returns {:ok,_} | {:error,_}, never crash / never loop.
+- Gate: `mix test test/ptc_runner/lisp/sh_reader_test.exs` (+ property test file).
+
+*** Files
+- beam/ptc_runner/lib/ptc_runner/lisp/fast_parser.ex (one added branch + parse_sh_list)
+- beam/ptc_runner/test/ptc_runner/lisp/sh_reader_test.exs
+- beam/ptc_runner/test/ptc_runner/lisp/sh_reader_property_test.exs
+- beam/ptc_runner/test/support/lisp_generators.ex (extend with sh-token generators)
+
+** Execution discipline (all waves)
+:PROPERTIES:
+:CUSTOM_ID: PLAN-011-execution-discipline
+:END:
+- Architecture + early-wave setup: MAIN THREAD only (crate skeleton, AST builder design, reader hook,
+  data contracts). Never delegated.
+- Parallelize only disjoint LEAF tasks (e.g. Rust argv builder ∥ Elixir wrapper test scaffold) with
+  non-overlapping filesDeps.
+- Every implementation wave is followed by a REVIEWER SWARM over its diff (≥2 reviewers) and a
+  TRANSITIONAL gap-implementation wave that fixes review findings before the next wave starts.
+- Gates are observable commands (mix compile / mix test <file>), never "looks done".
+- Global `mix compile` + full suite run in the MAIN THREAD after each wave's swarm clears.
+
+* STATUS: W0–W2 COMPLETE (2026-06-21)
+
+W0 (brush_nif engine), W1 (sh tool), W2 (sh:: reader) shipped, reviewed, green.
+
+** Delivered
+- crates: beam/brush_nif-vendored (rustler NIF, inject-proof argv→brush AST).
+- elixir: SpellAgent.BrushNif, SpellAgent.Sh, `sh` native tool (reserved).
+- reader: `sh::` in ptc_runner fast_parser.ex → desugars to (tool/sh {:argv [...]}).
+- tests: 11 Rust (9 unit + 2 proptest@512), 16 brush_nif_test, 14 sh_test, 17 sh_reader_test, 4 sh_reader_property. Full: spell_agent 499/0; ptc_runner 6598/6599 (1 pre-existing flaky timeout, passes isolated).
+
+** Review findings fixed (swarms run in MAIN THREAD — delegation backend down all session, 402)
+- W0 HIGH: tokio::time::timeout dropped the brush future on elapse → orphaned child. brush only kills the child when its own cancel select! arm runs. Fixed: select! over future + sleep; on deadline fire cancel then keep awaiting. Regression test: sentinel-file orphan guard.
+- W2: `;` in a bare sh:: word was consumed as a Lisp comment by skip_ws. Fixed with skip_sh_ws (`;`|`&` are literal shell bytes in argv mode).
+- W2: `~@` splice tripped the deref-guard regex `@[a-zA-Z]`. Fixed: `(?<!~)@[a-zA-Z]`.
+
+** Contract changes discovered (affect later waves)
+- PTC tool boundary accepts MAP args only (build_args_map rejects positional vectors). So the public surface is `(tool/sh {:argv [...]})` and `sh::` desugars to that, NOT `(sh [...])`.
+- `~` unquote + `~@` splice reader machinery now exists in fast_parser.ex — the structural groundwork for general quasiquote (docs/quoting-spec.md).
+
+** Next: W3 (Khepri durability) → W4 (pipelines/redirects) → W5 (parse/unparse) → W6 (recall+demos).
+
+** Caveat / honesty
+- Reviews were self-run in main thread (no independent reviewer agents) because the subagent backend returned 402 Insufficient Balance for the whole session. Findings are real and fixed, but a fresh independent review of the brush_nif unsafe/NIF code is still advisable when delegation is available.
+
+* STATUS: W3 COMPLETE (2026-06-21) — durable toolset
+
+ToolRegistry is now a PROJECTION of Hist.Store for `scope: :durable` :ptc tools.
+define-tool threads scope (case-insensitive); app boot reordered so the registry
+rehydrates AFTER the store is up. Doc: docs/durable-toolset.md.
+
+** Reviewer swarm (delegation restored): 2 independent reviewers, 7 real bugs, all fixed
+- P1 store write outside Agent serialization → map/store drift. Fix: write INSIDE the Agent callback.
+- P1 Khepri not started at boot → rehydrate empty. Fix: ensure_store_started via function_exported?(start/0|1).
+- P1 from_tool_def hardcoded :durable → promoted session ToolDefs (Hist.Tools/Reconstitute write scope:session,source:nil). Fix: read td.scope, skip non-durable/source-less.
+- P1 normalize_scope silent downgrade of "Durable"/"true". Fix: case-insensitive.
+- P2 one corrupt store value crashed the reduce → whole registry emptied. Fix: per-value skip.
+- P2 to_tool_def clobbered origin/stats/t provenance. Fix: merge onto existing ToolDef (registry owns source/params/doc; store owns provenance).
+- P2 nil-source crash. Fix: guard binary source before mirroring.
+Exposed durable_map/1 (public) for direct rehydrate-contract testing. 16 durability tests (8 from review).
+
+** Lesson (saved to memory)
+When a store key kind is SHARED across writers, a rehydrate MUST filter by the record's own
+discriminator (scope) and validate required fields — never assume all records under the kind are yours.
+
+** Next: W4 (pipelines/redirects) → W5 (parse/unparse) → W6 (recall + demos).
+
+* STATUS: W4 COMPLETE (2026-06-21) — byte-pipelines
+
+`pipe` NIF + `tool/sh-pipe` ({:stages [[argv]...]}) run N argv stages as one brush
+pipeline (stdout->stdin), each stage escaped independently (inject-proof per stage).
+Result shape identical to `sh`; exit = last stage. run.rs refactored: block_on_program
+shared by run+pipe. Redirects DEFERRED (own wave; fd-overwrite review). VALUE pipe stays
+ordinary Lisp (->>/pmap over :lines).
+
+** Reviewer swarm: 2 reviewers, 4 findings, all fixed
+- P1 multi-stage pipeline timeout returned exit 1 ("brush: interrupted") not 124 — brush surfaces
+  pipeline cancellation as Err(Interrupted). Fixed: Err-after-deadline → timeout (124). Verified +
+  no child leak (later-stage sentinel never written).
+- P1 spec drift: docs/sh-reader-spec.md §6 said `sh/|` but `|` can't be a PTC symbol; shipped
+  `tool/sh-pipe`. Doc reconciled.
+- P2 sh-pipe opt errors said "sh:" — threaded label through build_opts.
+- P2 test gaps — added: multi-stage-timeout→124, orphan-child guard, large-payload streaming, cwd/env/NUL-in-stage.
+
+** Test stability lesson (saved to memory)
+NIF-heavy tests (dirty scheduler) MUST be async:false — competing with 32 async cases under load
+caused flaky timeouts. Setting brush_nif/sh_pipe/sh/sh_reader tests async:false stabilized the WHOLE
+suite: 533/533 (the pre-existing flaky TUI tests pass now too). Also replaced a hand-rolled test probe
+(crashed on shared-store values from concurrent tests) with the real durable_map/1.
+
+** Next: W5 (parse/unparse — homoiconic completion) → W6 (recall + demos).
+
+* STATUS: W5 COMPLETE (2026-06-21) — shell as data
+
+`tool/sh-parse` (bash -> PTC form_tree tree) + `tool/sh-unparse` (tree -> bash),
+projecting brush's AST into the SAME walkable shape Lisp history uses. Words carry
+LOGICAL (quote-removed) values; unparse re-escapes. Exotic bash (for/if/functions/
+prefix-assignments) degrades to a safe `raw` leaf (Display verbatim). Idempotent
+re-parse-equality round-trip. Doc: docs/shell-as-data.md.
+
+** Reviewer swarm: 2 reviewers, 9 findings (incl a P0), all addressed
+- P0 unparse decode + parse encode recursed UNBOUNDED before/outside catch_unwind → a Rust stack
+  overflow (which catch_unwind CANNOT catch) aborts the BEAM. Fixed: MAX_DEPTH=256 bound in decode.
+- P1 round-trip broke for words whose logical value contains a single quote ('it's'); unquote_word
+  skipped bare-escapes when a quote was present. Root cause: 'fully-quoted-or-bail' logic. REWROTE
+  unquote_word as a single-pass POSIX tokenizer that inverts shell_escape's '\\'' run → full idempotency.
+- P1 `raw` nodes bypass unparse escaping (hand-built injection hatch). Documented trust boundary:
+  unparse returns a STRING; running needs explicit `sh -c` opt-in; the inject-proof guarantee covers
+  `word` nodes, not `raw`. `raw` from parse is valid bash by definition.
+- P1 prefix assignments (FOO=bar echo) emitted after the name → wrong semantics. Fixed: a command WITH
+  a prefix degrades to `raw` (Display renders exact source).
+- P1 HONESTY: the 'one recall layer' claim was OVERCLAIMED. hist/forms reads a precomputed form_tools
+  field from Lisp nodes; sh-parse trees are not recorded Hist nodes. Corrected the doc: the STRUCTURAL
+  shape is shared today (form_tree walks both); the concrete hist/forms shell QUERY is a W6 follow-up.
+- P2 non-string decode loses data; backslash-newline; test gaps → added 14 tests (deep-nesting panic
+  guard, quote round-trips, prefix-raw, raw-verbatim, decode robustness).
+
+** Lesson (saved to memory)
+A NIF's recursion over AGENT-SUPPLIED data MUST be depth-bounded — catch_unwind cannot save you from a
+Rust stack overflow (it aborts the emulator). Bound before you recurse.
+
+** Next: W6 — recall wiring (hist/forms over shell calls, the deferred query) + comprehensive demo suite.
