@@ -39,8 +39,20 @@ defmodule SpellAgent.Tools do
       |> Map.new(fn entry -> {entry.name, to_callable(entry)} end)
 
     meta_tools()
+    |> Map.merge(native_tools())
     |> Map.merge(freeform_tools())
     |> Map.merge(registry_tools)
+  end
+
+  # Built-in native tools that are not meta-tools (define-*) and not part of the
+  # freeform render surface. `sh` runs an argv vector on brush (PLAN-011 W1).
+  defp native_tools do
+    %{
+      "sh" => &SpellAgent.Sh.tool/1,
+      "sh-pipe" => &SpellAgent.Sh.pipe_tool/1,
+      "sh-parse" => &SpellAgent.Sh.parse_tool/1,
+      "sh-unparse" => &SpellAgent.Sh.unparse_tool/1
+    }
   end
 
   # The freeform render-mirror surface (PLAN-009): view/ builders, theme/ palette,
@@ -68,8 +80,10 @@ defmodule SpellAgent.Tools do
     meta = [
       %{
         "name" => "define-tool",
-        "params" => ["name", "params", "doc", "source"],
-        "doc" => "Define a new tool whose body is a PTC-Lisp program (code-as-data).",
+        "params" => ["name", "params", "doc", "source", "scope"],
+        "doc" =>
+          "Define a new tool whose body is a PTC-Lisp program (code-as-data). " <>
+            "scope \"durable\" persists it across sessions (default \"session\", in-memory).",
         "kind" => "native"
       },
       %{
@@ -82,6 +96,40 @@ defmodule SpellAgent.Tools do
         "name" => "list-tools",
         "params" => [],
         "doc" => "List all tools currently available, including ones defined at runtime.",
+        "kind" => "native"
+      },
+      %{
+        "name" => "sh",
+        "params" => ["argv", "cwd", "timeout-ms", "env"],
+        "doc" =>
+          "Run a command as an argv vector on brush; returns %{exit out err lines}. " <>
+            "argv is a list of strings (NOT a command string) — inject-proof. " <>
+            "e.g. (tool/sh {:argv [\"rg\" \"-l\" \"TODO\" \"lib\"]}).",
+        "kind" => "native"
+      },
+      %{
+        "name" => "sh-pipe",
+        "params" => ["stages", "cwd", "timeout-ms", "env"],
+        "doc" =>
+          "Run a byte-pipeline of argv stages on brush (a | b | c); same result " <>
+            "shape as sh. stages is a list of argv lists, each inject-proof. " <>
+            "e.g. (tool/sh-pipe {:stages [[\"cat\" \"f\"] [\"grep\" \"ERR\"] [\"wc\" \"-l\"]]}).",
+        "kind" => "native"
+      },
+      %{
+        "name" => "sh-parse",
+        "params" => ["src"],
+        "doc" =>
+          "Parse a bash string into a walkable PTC-native tree (same shape as Lisp " <>
+            "history). e.g. (tool/sh-parse {:src \"rg -l TODO | head\"}).",
+        "kind" => "native"
+      },
+      %{
+        "name" => "sh-unparse",
+        "params" => ["tree"],
+        "doc" =>
+          "Render a parsed bash tree back to a bash string (words re-escaped, " <>
+            "injection-safe). e.g. (tool/sh-unparse {:tree t}) -> %{bash}.",
         "kind" => "native"
       }
     ]
@@ -128,10 +176,25 @@ defmodule SpellAgent.Tools do
       raise ArgumentError, "cannot redefine reserved tool #{inspect(name)}"
     end
 
+    scope = normalize_scope(flex_get(args, "scope"))
+
     case validate_source(source) do
       :ok ->
-        ToolRegistry.put(%{kind: :ptc, name: name, params: params, doc: doc, source: source})
-        %{"ok" => true, "defined" => name, "params" => Enum.map(params, &to_string/1)}
+        ToolRegistry.put(%{
+          kind: :ptc,
+          name: name,
+          params: params,
+          doc: doc,
+          source: source,
+          scope: scope
+        })
+
+        %{
+          "ok" => true,
+          "defined" => name,
+          "params" => Enum.map(params, &to_string/1),
+          "scope" => to_string(scope)
+        }
 
       {:error, reason} ->
         raise ArgumentError, "define-tool #{inspect(name)} has invalid PTC source: #{reason}"
@@ -192,7 +255,17 @@ defmodule SpellAgent.Tools do
     end
   end
 
-  defp reserved_name?(name), do: name in ["define-tool", "define-config", "list-tools"]
+  defp reserved_name?(name),
+    do:
+      name in [
+        "define-tool",
+        "define-config",
+        "list-tools",
+        "sh",
+        "sh-pipe",
+        "sh-parse",
+        "sh-unparse"
+      ]
 
   defp require_string(args, key) do
     case flex_get(args, key) do
@@ -216,6 +289,30 @@ defmodule SpellAgent.Tools do
   defp to_doc(nil), do: ""
   defp to_doc(d) when is_binary(d), do: d
   defp to_doc(d), do: to_string(d)
+
+  # Tool persistence scope (PLAN-011 W3). Default `:session` (in-memory, gone on
+  # restart); `:durable` mirrors the tool to the history store so it survives.
+  # Case-insensitive on strings/atoms so "Durable"/"DURABLE"/:Durable/"true" all
+  # resolve to :durable — the agent should never silently lose persistence to a
+  # casing variant. `define-tool` echoes the resolved scope so a genuinely
+  # unrecognized value (→ :session) is visible in the response.
+  defp normalize_scope(:durable), do: :durable
+  defp normalize_scope(:session), do: :session
+  defp normalize_scope(true), do: :durable
+
+  defp normalize_scope(value) when is_binary(value) do
+    case String.downcase(String.trim(value)) do
+      "durable" -> :durable
+      "true" -> :durable
+      _ -> :session
+    end
+  end
+
+  defp normalize_scope(value) when is_atom(value) and not is_nil(value) do
+    value |> Atom.to_string() |> normalize_scope()
+  end
+
+  defp normalize_scope(_), do: :session
 
   # Args arrive with string OR atom keys (and LispKeyword-derived atoms);
   # tolerate both, normalizing to string lookups.

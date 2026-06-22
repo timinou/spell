@@ -3,8 +3,9 @@ defmodule SpellAgent.Application do
   OTP application + supervision tree for the node-free BEAM agent (PLAN-344).
 
   Starts, in order:
-    * `SpellAgent.ToolRegistry` — the homoiconic tool registry (FEAT-826).
-    * `SpellAgent.OAuth`        — subscription credential holder + refresher (FEAT-825).
+    * `SpellAgent.ToolRegistry`   — the homoiconic tool registry (FEAT-826).
+    * `SpellAgent.OAuth`          — subscription credential holder + refresher (FEAT-825).
+    * `SpellAgent.SessionRegistry` — live (in-flight) session tracker (PLAN-010).
 
   Both are long-lived, session-global GenServers. The agent loop itself is
   invoked per-prompt via `SpellAgent.run/1` (FEAT-827) and is not supervised
@@ -17,8 +18,13 @@ defmodule SpellAgent.Application do
   def start(_type, _args) do
     children = [
       SpellAgent.Config,
-      SpellAgent.ToolRegistry,
       SpellAgent.OAuth,
+      # Live-session tracker (PLAN-010): which conversations are RUNNING right now.
+      # The Hist store only knows PAST sessions (recorded on mission exit); this
+      # registry is the present half, so a session listing can union open + past.
+      # Session-global + long-lived, same posture as ToolRegistry. Best-effort:
+      # Session.run wiring tolerates it being absent, so boot never depends on it.
+      SpellAgent.SessionRegistry,
       # The inspector TUI's live span forest (PLAN-345). Long-lived + session-
       # global, attached to telemetry on first use; the App (which grabs the
       # terminal) is launched on demand via `SpellAgent.tui/0`.
@@ -31,6 +37,12 @@ defmodule SpellAgent.Application do
       # (which boots a Ra system); the default stays Memory so app boot never
       # depends on Khepri being healthy.
       SpellAgent.Hist.Store.Memory,
+      # The homoiconic tool registry (FEAT-826, PLAN-011 W3). Started AFTER the
+      # Hist store because it REHYDRATES durable (`scope: :durable`) tools from
+      # that store on boot — a `:ptc` tool the agent authored in a prior sitting
+      # resolves again as if built in. Rehydration is best-effort (sick store ->
+      # empty registry), so boot still never depends on the store being healthy.
+      SpellAgent.ToolRegistry,
       # Live keybinding overrides for the Reaction DSL (PLAN-346): runtime
       # rebinds (keymap/bind) and authored reactions (keymap/define-reaction).
       # Session-global, same posture as ToolRegistry.

@@ -25,8 +25,9 @@ defmodule SpellAgent.ToolsTest do
 
     test "a defined tool can call a NATIVE tool (list-tools) — composition" do
       Tools.define_tool(%{"name" => "count-tools", "params" => [], "source" => "(count (tool/list-tools {}))"})
-      # list-tools itself (3 meta) + count-tools just defined = 4
-      assert call("count-tools", %{}) == 4
+      # 3 meta (define-tool, define-config, list-tools) + sh + sh-pipe + sh-parse
+      # + sh-unparse (native, PLAN-011) + count-tools just defined = 8
+      assert call("count-tools", %{}) == 8
     end
 
     test "a defined tool can call ANOTHER defined tool" do
