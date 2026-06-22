@@ -54,7 +54,11 @@ defmodule SpellAgent.Application do
       # The canonical layout TREE (PLAN-009): the render mirror as live data. The
       # App seeds the native default at mount; the agent shadows slots; navigation
       # re-tags it. Session-global, same posture as the sibling registries.
-      SpellAgent.Tui.LayoutRegistry
+      SpellAgent.Tui.LayoutRegistry,
+      # Reactive cells (PROJ-004): declared read-only data dependencies the slow
+      # clock resolves off-frame and the data bag merges into data/*. Session-
+      # global, same posture as the sibling registries.
+      SpellAgent.Tui.Cell.Registry
     ]
 
     opts = [strategy: :one_for_one, name: SpellAgent.Supervisor]

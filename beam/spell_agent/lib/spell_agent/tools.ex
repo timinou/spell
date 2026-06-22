@@ -65,6 +65,7 @@ defmodule SpellAgent.Tools do
     SpellAgent.Tui.View.tools()
     |> Map.merge(SpellAgent.Tui.LayoutRegistry.tools())
     |> Map.merge(SpellAgent.Tui.Lens.tools(SpellAgent.Tui.LayoutRegistry.tree()))
+    |> Map.merge(SpellAgent.Tui.Cell.Verb.tools())
   rescue
     _ -> %{}
   catch

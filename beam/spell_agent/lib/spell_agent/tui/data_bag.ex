@@ -44,7 +44,30 @@ defmodule SpellAgent.Tui.DataBag do
   """
   @spec build(map(), map()) :: t()
   def build(state, area) when is_map(state) do
-    state |> assemble(area) |> Sanitize.term()
+    state |> assemble(area) |> Sanitize.term() |> merge_cells()
+  end
+
+  # Merge the reactive cells' last off-frame-resolved values into the bag
+  # (PROJ-004 W2). This is a PURE READ of the cell registry — no eval on the frame
+  # clock — so the zero-per-frame-effects contract holds: the SLOW clock (W3) does
+  # the resolving; here a render hole sees the result as ordinary `data/<cell>`.
+  #
+  # Core bag keys WIN over cells: a cell may ADD a new `data/*` key but must never
+  # SHADOW a canonical one (`data/status`, `data/ui`, …). Values from the registry
+  # are already sanitized at the cell boundary; we re-strip defensively so the bag
+  # has ONE invariant regardless of the source. Resilient: a down/absent registry
+  # (headless render test) yields no cells, never a raise.
+  defp merge_cells(bag) do
+    cells = resolved_cells()
+    Map.merge(cells, bag)
+  end
+
+  defp resolved_cells do
+    SpellAgent.Tui.Cell.Registry.resolved_values() |> Sanitize.term()
+  rescue
+    _ -> %{}
+  catch
+    :exit, _ -> %{}
   end
 
   defp assemble(state, area) when is_map(state) do
