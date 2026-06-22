@@ -219,7 +219,14 @@ defmodule SpellAgent.Tui.LayoutRegistry do
   defp renderable?(node) do
     rect = %Rect{x: 0, y: 0, width: 80, height: 24}
 
-    placements = Surface.layout(node, rect)
+    # Resolve any deferred tmpl:: holes against an EMPTY data env first (PLAN-012
+    # W3 review #4): an agent-authored slot is full of `{"__hole__" …}` maps that
+    # would not materialize to a widget. With no data, holes resolve to the `·`
+    # placeholder — valid text — so the probe validates the SKELETON's shape, not
+    # the (data-dependent) hole values. Without this, a valid templated slot is
+    # rejected as :bad_layout and never installs.
+    resolved = Surface.resolve_holes(node, %{})
+    placements = Surface.layout(resolved, rect)
     placements != [] and Enum.all?(placements, fn {n, _r} -> resolvable_leaf?(n) end)
   rescue
     _ -> false
