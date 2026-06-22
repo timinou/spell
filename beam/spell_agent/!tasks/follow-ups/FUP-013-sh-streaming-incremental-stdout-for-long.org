@@ -1,0 +1,64 @@
+#+TITLE: sh streaming: incremental stdout for long-running commands
+#+STATE: ITEM
+#+SESSION_ID: 151267329fcc2e66
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T22-57-45-087Z_151267329fcc2e66.jsonl]]
+#+CUSTOM_ID: FUP-013-sh-streaming-incremental-stdout-for-long
+
+* Initial Message
+
+what would a 'babashka on the BEAM' look like? you may consider wiring brush through rust NIFs too. Show me alternative designs and how they fit the current intention and enable homoiconic representations for everything
+
+* Parent
+PLAN-011 (sh+brush). Deferred from W0: the brush NIF is REQUEST/RESPONSE only —
+it runs a command to completion, captures all stdout/stderr into temp files, and
+returns one {:exit :out :err :lines} value. There is no incremental/streaming
+output.
+
+* What is deferred
+A streaming variant where a long-running command's stdout is delivered to the
+BEAM as it is produced (line- or chunk-wise), rather than only as a final buffer:
+
+    (sh/stream ["tail" "-f" "log"] (fn [line] …))     ; or a channel/stream value
+    (sh/stream ["cargo" "build"]   …)                 ; see progress live
+
+* Current state (verified)
+- run/pipe capture output to TEMP FILES and read them back AFTER completion
+  (beam/brush_nif-vendored/native/brush_nif/src/run.rs — finish/2 seeks+reads the
+  temp file post-run). This was a deliberate W0 choice: temp files avoid the
+  ~64KB pipe-buffer deadlock with no concurrent drainer. It is correct for
+  bounded commands but cannot stream.
+- timeout bounds runtime; a `tail -f` would just hit the timeout and return its
+  buffered prefix.
+
+* Why it was deferred
+Streaming is real machinery, not a flag:
+- the NIF must message the BEAM with chunks as they arrive (a dirty NIF holding a
+  pid, or an enif-managed resource + scheduled sends) — lifecycle + backpressure.
+- a BEAM-side stream/channel abstraction and how PTC-Lisp consumes it (does the
+  sandbox even model an async stream? today tool calls are synchronous values).
+- cancellation mid-stream, and how a partial stream maps into the result contract.
+- ordering vs stderr interleaving.
+W0 explicitly shipped the synchronous value model first; this is the async upgrade.
+
+* Open design question
+Does the PTC evaluator's synchronous tool-call model accommodate a streaming
+result at all, or does this need a new primitive (a channel value, or a
+callback-per-chunk that re-enters the sandbox)? Settle this BEFORE building —
+it may belong with the broader reactive/effects work (PROJ-004 / PLAN-012's
+deferred-holes direction) rather than as a standalone sh feature.
+
+* Acceptance (when taken on)
+- a long-running command streams stdout to the BEAM incrementally (no waiting
+  for completion, no 64KB deadlock).
+- cancellation stops the stream and reaps the child (reuse the W0 timeout/cancel
+  + no-leak machinery, verified by a sentinel test).
+- a final summary {:exit …} still arrives at stream end.
+
+* Pointers
+- engine: beam/brush_nif-vendored/native/brush_nif/src/run.rs (temp-file capture
+  is the thing that would change to a pipe + chunked sends).
+- the W0 child-reaping-on-cancel fix is the precedent for clean teardown.
+
+* Not a bug
+Bounded commands (the overwhelming majority) work perfectly with the current
+synchronous model. This is an additive capability for the streaming minority.

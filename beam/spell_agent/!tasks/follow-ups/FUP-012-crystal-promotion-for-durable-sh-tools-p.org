@@ -1,0 +1,60 @@
+#+TITLE: Crystal promotion for durable sh tools (provenance tier)
+#+STATE: ITEM
+#+SESSION_ID: 151267329fcc2e66
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T22-57-45-087Z_151267329fcc2e66.jsonl]]
+#+CUSTOM_ID: FUP-012-crystal-promotion-for-durable-sh-tools-p
+
+* Initial Message
+
+what would a 'babashka on the BEAM' look like? you may consider wiring brush through rust NIFs too. Show me alternative designs and how they fit the current intention and enable homoiconic representations for everything
+
+* Parent
+PLAN-011 (sh+brush). Deferred from W3 (durable toolset). W3 shipped the
+scope:session -> scope:durable ladder (a tool mirrors to the Hist store and
+rehydrates on boot). The NEXT permanence tier — promotion to a Crystal with
+DISTILLED_FROM provenance — was named in docs/durable-toolset.md §5 but not built.
+
+* What is deferred
+A path that takes a durable :ptc tool which PROVED USEFUL and promotes it to a
+long-term Crystal: a distilled, LLM-free program carrying a provenance lineage
+(DISTILLED_FROM) back to the turns/episodes that earned it.
+
+    durable tool (scope:durable)  --promote-->  Crystal (long-term + provenance)
+
+* Current state (verified)
+- W3 durability: SpellAgent.ToolRegistry mirrors durable tools to Hist.Store as
+  %ToolDef{}; rehydrates on boot. (Shipped.)
+- A Crystal model EXISTS (SpellAgent.Hist.Crystal — "a reusable PTC-Lisp program
+  stored as source + signature + provenance, re-run with no LLM") and the store
+  has a {:crystal, id} key. (Pre-existing substrate.)
+- Hist.Tools.promote exists for session -> durable promotion. There is NO durable
+  -> Crystal promotion wired for sh tools.
+
+* Why it was deferred
+W3's job was "survive the session." Crystal promotion is a curation decision
+("this is worth keeping forever, with evidence"), which needs:
+- the trigger: who/what decides a tool is Crystal-worthy (manual? usage stats —
+  ToolDef already carries a stats field; a threshold?).
+- the provenance edge: DISTILLED_FROM from the Crystal to the episodes/turns that
+  used the tool (the memory graph already has this edge kind).
+- dedup: a promoted Crystal should supersede the durable ToolDef, not duplicate it
+  (SUPERSEDES edge?).
+That is a memory/provenance design, separate from the shell mechanics.
+
+* Acceptance (when taken on)
+- a durable sh tool can be promoted to a Crystal with a DISTILLED_FROM lineage to
+  its source turns.
+- the Crystal is re-runnable with no LLM (the existing Crystal contract).
+- promotion is idempotent and supersedes (not duplicates) the durable record.
+- a query can find "tools promoted from session X" via the provenance graph.
+
+* Pointers
+- model: SpellAgent.Hist.Crystal; store key {:crystal, id}.
+- existing promotion: SpellAgent.Hist.Tools.promote (session -> durable).
+- registry: SpellAgent.ToolRegistry (durable tools live here + in the store).
+- doc: docs/durable-toolset.md §5 ("Promotion to a Crystal").
+- memory edges: DISTILLED_FROM, SUPERSEDES (memory tool).
+
+* Not a bug
+Durable tools fully work and persist; this adds a curated long-term tier with
+provenance on top.

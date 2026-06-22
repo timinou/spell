@@ -1,0 +1,58 @@
+#+TITLE: sh redirects: structured fd opts (:out :err :append :in)
+#+STATE: ITEM
+#+SESSION_ID: 151267329fcc2e66
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T22-57-45-087Z_151267329fcc2e66.jsonl]]
+#+CUSTOM_ID: FUP-010-sh-redirects-structured-fd-opts-out-err
+
+* Initial Message
+
+what would a 'babashka on the BEAM' look like? you may consider wiring brush through rust NIFs too. Show me alternative designs and how they fit the current intention and enable homoiconic representations for everything
+
+* Parent
+PLAN-011 (sh+brush). Deferred from W4 (pipelines/redirects): pipelines shipped,
+redirects were explicitly scoped out for a focused wave with its own review,
+because the fd-overwrite surface is the riskiest part of the shell seam.
+
+* What is deferred
+Structured redirect options on a shell command/pipeline, expressed as DATA on the
+call (never >/>>/< operator tokens, keeping the no-operator inject-proof rule):
+
+    (tool/sh ["rg" "TODO"] {:out "hits.txt" :append true})
+    (tool/sh ["sort"]       {:in  "input.txt"})
+    (tool/sh ["build"]      {:err "build.log"})
+
+brush wires the fds; the argv stays pure (each element one literal argument).
+The same opts shape should extend to tool/sh-pipe (redirect the pipeline's final
+stdout / first stdin).
+
+* Why it was deferred (the real risk)
+Writing to an arbitrary :out path is a genuine side effect with a blast radius
+(overwrite an unintended file, traverse outside the workspace, clobber a symlink
+target). Unlike argv (inert until executed), a redirect MUTATES the filesystem.
+That deserves its own design + reviewer pass:
+- path policy: absolute vs workspace-relative; refuse traversal / symlink games?
+- :append vs truncate semantics, and the default (truncate is destructive).
+- :in must exist / be readable; error mapping into the {:exit :out :err} contract.
+- interaction with cwd (relative redirect paths resolve against which dir?).
+- whether redirects are even the right abstraction vs "write :out from Lisp".
+
+* Acceptance (when taken on)
+- redirects as opts on the vector, validated (path policy enforced, clear errors).
+- brush fd wiring verified: (tool/sh ["echo" "hi"] {:out f}) writes "hi
+" to f.
+- :append vs truncate proven distinct; missing :in surfaces a clean error.
+- a path-traversal / symlink-clobber attempt is rejected (or explicitly allowed by
+  documented policy) — reviewer swarm on the fd-overwrite surface.
+- result contract unchanged (still {:exit :out :err :lines}).
+
+* Pointers
+- engine: beam/brush_nif-vendored/native/brush_nif/src/run.rs (execute already
+  sets STDOUT_FD/STDERR_FD on ExecutionParameters; redirect = point those at a
+  real file instead of a temp capture, or layer a second redirect).
+- surface: SpellAgent.Sh.build_opts / tool/1 (opts plumbing exists for
+  cwd/timeout/env — add :out/:err/:append/:in).
+- spec: docs/sh-reader-spec.md §6 currently says "Redirects are DEFERRED".
+
+* Not a bug
+Nothing is broken; this is unbuilt scope. The current path (capture :out in Lisp,
+write via a file tool) works for the common case.

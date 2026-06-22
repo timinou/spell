@@ -1,0 +1,72 @@
+#+TITLE: brush NIF: wire WordPreprocessor for URI tokens (skill:// local://)
+#+STATE: ITEM
+#+SESSION_ID: 151267329fcc2e66
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T22-57-45-087Z_151267329fcc2e66.jsonl]]
+#+CUSTOM_ID: FUP-011-brush-nif-wire-wordpreprocessor-for-uri
+
+* Initial Message
+
+what would a 'babashka on the BEAM' look like? you may consider wiring brush through rust NIFs too. Show me alternative designs and how they fit the current intention and enable homoiconic representations for everything
+
+* Parent
+PLAN-011 (sh+brush). Deferred (risk R4): the BEAM brush NIF does NOT resolve URI
+tokens (skill://, local://, agent://, …) inside argv. This blocks demo 7, which
+is documented as intentionally absent in test/sh_demos_test.exs.
+
+* What is deferred
+URI-scheme resolution inside a shell argv element, so:
+
+    (sh:: cat skill://my-skill/SKILL.md)
+    (tool/sh {:argv ["cat" "local://PLAN.md"]})
+
+resolve the URI to a filesystem path (or content) before brush runs the command —
+the same way the rest of Spell auto-resolves these schemes.
+
+* Current state (verified)
+- The TS/NAPI brush path HAS this: crates/pi-natives/src/exec/scheme_preprocessor.rs
+  (WordPreprocessor + SchemeCallback, the W5 work referenced in the original
+  babashka design), resolving scheme:// tokens through the kernel SchemeRegistry.
+- The BEAM NIF (beam/brush_nif-vendored) does NOT wire any WordPreprocessor —
+  argv elements are escaped and passed verbatim. A skill:// token reaches the
+  command as the literal string "skill://…", which the command then can't open.
+  (Confirmed: no WordPreprocessor/SchemeRegistry refs in the NIF src.)
+
+* Why it was deferred
+The WordPreprocessor was built for the NAPI/TS host. Reaching it from a BEAM NIF
+needs one of:
+- construct the kernel SchemeRegistry BEAM-side (does it exist in the Elixir
+  runtime, or only TS?), OR
+- bridge resolution back to the BEAM via a host callback (the NIF messages an
+  Erlang process to resolve a token, like the SchemeCallback precedent) — this is
+  the more BEAM-native design but adds a NIF<->BEAM round-trip per token.
+Neither is a small bolt-on; it is a focused integration with its own review.
+
+* Design question to settle first
+WHERE does resolution happen?
+  (a) Elixir-side, BEFORE the NIF call: SpellAgent.Sh expands URI tokens in argv
+      (a pure Elixir pass over the vector) before handing argv to BrushNif.run.
+      Simplest, no NIF change, no callback — probably the right v1.
+  (b) Rust-side, via a WordPreprocessor in the NIF with a BEAM callback.
+      Matches the brush WordPreprocessor model, but heavier.
+Option (a) likely wins: argv is already a vector of strings in Elixir; resolving
+skill:// there is a map over the vector with the existing Elixir scheme resolver
+(if one exists — verify SpellAgent has a scheme/URI resolver, else that's a
+prerequisite).
+
+* Acceptance (when taken on)
+- (sh:: cat skill://NAME/SKILL.md) reads the skill file content.
+- resolution happens for EACH argv element independently (still one arg each,
+  still inject-proof — a resolved path is one escaped word).
+- unresolvable / unknown scheme → clean error in the {:exit :err} contract,
+  never a crash.
+- enable demo 7 in test/sh_demos_test.exs (currently a documented-absent note).
+
+* Pointers
+- precedent: crates/pi-natives/src/exec/scheme_preprocessor.rs (shell_escape +
+  scheme resolution already coexist there).
+- surface: SpellAgent.Sh (option a — preprocess argv before BrushNif.run).
+- demo: test/sh_demos_test.exs "Demo 7" comment block.
+
+* Not a bug
+The shell works without URI tokens; this is an ergonomic integration that brings
+the BEAM path to parity with the TS path.
