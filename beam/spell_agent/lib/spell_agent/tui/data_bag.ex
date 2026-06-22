@@ -30,7 +30,7 @@ defmodule SpellAgent.Tui.DataBag do
   -> `"forest-count"`).
   """
 
-  alias SpellAgent.Tui.Store
+  alias SpellAgent.Tui.{Sanitize, Store}
 
   @typedoc "The `data/*` environment: string-keyed bindings a hole sees."
   @type t :: %{optional(String.t()) => term()}
@@ -44,7 +44,7 @@ defmodule SpellAgent.Tui.DataBag do
   """
   @spec build(map(), map()) :: t()
   def build(state, area) when is_map(state) do
-    state |> assemble(area) |> sanitize()
+    state |> assemble(area) |> Sanitize.term()
   end
 
   defp assemble(state, area) when is_map(state) do
@@ -131,42 +131,6 @@ defmodule SpellAgent.Tui.DataBag do
       _ -> nil
     end
   end
-
-  # ---- sanitization (capability boundary, W3 review #1) ----
-  #
-  # A hole evaluates against `data/*` with no tools, but PTC can still CALL a
-  # function value reachable from the context (and a span's `meta` can carry the
-  # live LLM callback). So before exposing the bag we DEEP-STRIP every
-  # non-serializable term — functions, pids, refs, ports — replacing it with nil.
-  # What remains is plain data: maps, lists, scalars. A hole can read the shape of
-  # the forest but can never recover an executable to invoke. Looking never acts.
-  defp sanitize(term) when is_function(term), do: nil
-  defp sanitize(term) when is_pid(term) or is_reference(term) or is_port(term), do: nil
-
-  defp sanitize(%MapSet{} = set),
-    do: set |> MapSet.to_list() |> Enum.map(&sanitize/1) |> MapSet.new()
-
-  defp sanitize(%_{} = struct) do
-    # A struct (e.g. a Span) -> a plain string-keyed map with each field stripped,
-    # dropping the __struct__ tag so no module/behaviour leaks and the result is
-    # pure data a hole can only read.
-    struct
-    |> Map.from_struct()
-    |> Map.new(fn {k, v} -> {to_string_safe(k), sanitize(v)} end)
-  end
-
-  defp sanitize(map) when is_map(map),
-    do: Map.new(map, fn {k, v} -> {sanitize_key(k), sanitize(v)} end)
-
-  defp sanitize(list) when is_list(list), do: Enum.map(list, &sanitize/1)
-  defp sanitize(tuple) when is_tuple(tuple), do: tuple |> Tuple.to_list() |> Enum.map(&sanitize/1)
-  defp sanitize(other), do: other
-
-  # Map keys must stay scalar (a stripped fn-key would collide on nil); coerce
-  # atoms/strings, drop anything else to its inspected form.
-  defp sanitize_key(k) when is_binary(k) or is_integer(k), do: k
-  defp sanitize_key(k) when is_atom(k) and not is_nil(k), do: Atom.to_string(k)
-  defp sanitize_key(k), do: inspect(k)
 
   # ---- helpers ----
 

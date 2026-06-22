@@ -123,6 +123,35 @@ defmodule SpellAgent.Tui.CellTest do
   # author-shape robustness — bare form vs hole/splice wrapper
   # ============================================================
 
+  describe "W0r hardening: fail-sentinel, non-map boundary, value sanitization" do
+    test "a top-level (fail …) collapses to :error, not a sentinel value" do
+      # Lisp.run returns {:ok, %Step{return: {:__ptc_fail__, _}}} for an uncaught
+      # fail; the cell must NOT write that sentinel into data/*. (finding #1)
+      assert :error = resolve(~S|(fail "stale")|, %{})
+    end
+
+    test "a non-map env degrades to :error instead of crashing" do
+      # The slow-clock caller (W3) must never get a FunctionClauseError. (finding #2)
+      assert :error = Cell.resolve(frozen(~S|(get data/x :v)|), "not-a-map")
+    end
+
+    test "a non-map tools tier degrades to :error instead of crashing" do
+      assert :error = Cell.resolve(frozen(~S|(get data/x :v)|), %{}, "not-a-map")
+    end
+
+    test "a granted tool returning a function is stripped to nil (no capability smuggle)" do
+      # The heart of finding #3: a read-only cell must never surface an executable
+      # into data/*, where a later no-tools hole could invoke it.
+      tools = %{"find" => fn _args -> %{"callback" => fn -> :boom end, "name" => "ok"} end}
+      assert {:ok, %{"callback" => nil, "name" => "ok"}} = resolve(~S|(tool/find {})|, %{}, tools)
+    end
+
+    test "a granted tool returning a pid is stripped to nil" do
+      tools = %{"find" => fn _args -> %{"pid" => self()} end}
+      assert {:ok, %{"pid" => nil}} = resolve(~S|(tool/find {})|, %{}, tools)
+    end
+  end
+
   describe "both author shapes of a frozen query resolve identically" do
     test "a query wrapped as a __hole__ leaf unwraps and resolves" do
       inner = frozen(~S|(get data/x :v)|)

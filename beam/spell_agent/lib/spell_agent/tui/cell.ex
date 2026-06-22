@@ -49,6 +49,7 @@ defmodule SpellAgent.Tui.Cell do
 
   alias PtcRunner.Lisp
   alias PtcRunner.Lisp.{Formatter, QuoteData}
+  alias SpellAgent.Tui.Sanitize
 
   @hole_key "__hole__"
   @splice_key "__splice__"
@@ -80,9 +81,16 @@ defmodule SpellAgent.Tui.Cell do
   tool) collapses to `:error`. Never raises.
   """
   @spec resolve(term(), data_env(), tools()) :: {:ok, term()} | :error
-  def resolve(frozen, env, tools \\ %{}) when is_map(env) and is_map(tools) do
+  def resolve(frozen, env, tools \\ %{})
+
+  def resolve(frozen, env, tools) when is_map(env) and is_map(tools) do
     eval(unwrap(frozen), env, tools)
   end
+
+  # A malformed data bag or tools tier (not a map) is a host bug, not a query
+  # failure — but the resolver contract is TOTAL: degrade to :error rather than
+  # crash the slow-clock caller (W3) with a FunctionClauseError. (W0r finding #2.)
+  def resolve(_frozen, _env, _tools), do: :error
 
   # A query authored as `(tmpl:: <form>)` may arrive wrapped as a hole/splice
   # leaf (when the reader lowered a top-level `~form`) or as a bare frozen form
@@ -105,7 +113,7 @@ defmodule SpellAgent.Tui.Cell do
              caller: :in_process_v1,
              timeout: @cell_timeout_ms
            ) do
-      {:ok, step.return}
+      finalize(step.return)
     else
       _ -> :error
     end
@@ -114,6 +122,22 @@ defmodule SpellAgent.Tui.Cell do
   catch
     _, _ -> :error
   end
+
+  # The resolved value, after two boundary obligations the data bag depends on:
+  #
+  #   * A top-level PTC `(fail …)` returns `{:ok, %Step{return: {:__ptc_fail__,
+  #     reason}}}` from `Lisp.run/2` — a SUCCESSFUL run carrying a failure
+  #     sentinel, NOT an `{:error, _}`. A cell that deliberately fails must NOT
+  #     write that sentinel into `data/*`; collapse it to `:error` so the clock
+  #     layer keeps the last-good value. (W0r finding #1.)
+  #   * A granted read-only tool can RETURN any BEAM term — including a function,
+  #     pid, or struct carrying a live callback. Deep-strip the value at the cell
+  #     boundary so a nominally read-only cell can NEVER smuggle an executable
+  #     into `data/*`, where a later no-tools hole could invoke it. Defense in
+  #     depth: the bag also strips, but the cell guarantees it regardless of how
+  #     W2 merges. (W0r finding #3.)
+  defp finalize({:__ptc_fail__, _reason}), do: :error
+  defp finalize(value), do: {:ok, Sanitize.term(value)}
 
   @doc "The off-frame resolve budget in milliseconds."
   @spec timeout_ms() :: pos_integer()
