@@ -38,6 +38,7 @@ defmodule SpellAgent.Tui.App do
 
   alias SpellAgent.Tui.{
     Chord,
+    DataBag,
     DefaultLayout,
     Keys,
     Lens,
@@ -140,9 +141,16 @@ defmodule SpellAgent.Tui.App do
   @impl true
   def render(state, frame) do
     area = %Rect{x: 0, y: 0, width: frame.width, height: frame.height}
-    tree = render_tree(state)
 
-    tree
+    # Resolve any deferred tmpl:: holes against the generic data/* bag (PLAN-012
+    # W3/W4) BEFORE layout: an agent-authored slot may carry live holes, and this
+    # is the one place a frozen form becomes a value. Native nodes carry no holes,
+    # so the walk is a cheap identity for them; it never raises (per-hole ladder).
+    data_bag = DataBag.build(state, area)
+
+    state
+    |> render_tree()
+    |> Surface.resolve_holes(data_bag)
     |> Surface.layout(area)
     |> Enum.flat_map(fn {node, rect} -> safe_resolve_node(node, rect, state) end)
     |> Enum.filter(&encodable_placement?/1)
