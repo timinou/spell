@@ -1,0 +1,113 @@
+#+TITLE: Context projection — inject a child's context as a lens over sibling hists + region blackboard at a watermark
+#+STATE: ITEM
+#+SESSION_ID: 151269c91db37358
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T23-09-03-478Z_151269c91db37358.jsonl]]
+#+CUSTOM_ID: FEAT-017-context-projection-inject-a-childs-conte
+#+BLOCKED_BY: FEAT-011
+
+* Initial Message
+
+what are distributed agents in a mesh network, really? please look into network theory, not hype. i want us to think about that deeply and from first principles, in order to let the BEAM lisp runtime call itself and create meshed sub-sessions. But I want strong theoretical backing beforehand
+
+* Goal
+A spawned child's context is not PUSHED to it — it is a LENS (projection) over the
+append-only stores at its spawn watermark: its own hist, its siblings' hists, and
+the region blackboard. This is the "rich context" seam: black/* gives WHAT the
+cohort found (findings/goals/verdicts), hist/* gives WHY/HOW (the reasoning Node.form
+that produced each), and a context lens JOINS them, scoped to the cohort, at seq<=W.
+
+Read first: docs/agent-mesh-theory/15-context-projection-cache.org (U1: hist/* and
+black/* are the same projection at two scopes; context = projection over their union).
+
+* Wave / deps
+Post-foundation. BLOCKED BY FEAT-011 (the handle's :watermark + :parent + region).
+Feeds FEAT-016 (cache-strategy consumes the lens's shared/per-child segments).
+Independent of consensus/watcher.
+
+* The core idea — context = projection(stores, watermark, scope)
+- hist/* projection (Hist.Lens.project, hist/lens.ex) = SESSION scope = a mind's past.
+- black/* projection (Mesh.Store.region/by_match, FEAT-009) = REGION scope = the
+  collective present.
+- a CONTEXT LENS projects over the UNION at the child's spawn watermark W:
+  (own hist) ∪ (sibling hists @W) ∪ (region records @ seq<=W).
+
+* The join that makes it RICH (the user's nudge: black/* as context source too)
+- a black :finding carries :author (a session_id) + :seq. That is a HANDLE back into
+  the producer's hist. So the lens can join:
+    finding(author=S, seq=N)  ⟕  Hist node(s) of session S
+  → inject "the high-risk findings AND the reasoning traces that produced them."
+- neither store alone is the context; the projection over BOTH, joined by
+  author/seq, is. black = the conclusions; hist = the derivations.
+
+* Smart passing — snapshot (cacheable) + live pull (fresh)
+- CACHEABLE BASELINE: project region@W + sibling hists@W → a uniform, immutable
+  prefix across a burst (→ FEAT-016 caches it once). Static.
+- LIVE PULL: the child still has black/query at runtime for fresh, per-child,
+  uncached, only-when-needed reads. Dynamic.
+- the split is the tmpl:: statics/dynamics split applied to CONTEXT (doc 15).
+
+* Use cases
+- cohort-aware fan-out: child K sees siblings 1..K-1's findings @W WITHOUT a message
+  edge (banned) — stigmergic context, cacheable up to W.
+- reasoning-joined findings: WHAT (black) + WHY (hist), one lens.
+- deterministic replay: same W → same projection → same context (reproducible).
+- selective injection: a lens predicate ("only :high risk", "only my subsystem")
+  keeps the injected context small AND cacheable.
+
+* Modules / edits (proposed)
+- lib/spell_agent/mesh/context_lens.ex (NEW): build_context(handle, opts) ->
+  a projected, string-keyed, JSON-serializable context bag (the data/* the child's
+  prompt holes read). Projects own+sibling hist (via Hist.Lens.project) + region
+  (via Mesh.Store), joins findings→hist by author/seq, applies a scope predicate.
+- the child's Session.run gets this bag as injected data/* (the bag the prompt holes
+  resolve against — same data/* mechanism PLAN-012's resolver already uses).
+- a lens predicate arg on spawn (e.g. :context {:scope :siblings :where {:risk :high}}).
+
+* CodePaths
+- lib/spell_agent/hist/lens.ex project/3 + run/4 (the session projection + lens host).
+- lib/spell_agent/mesh/store.ex region/by_match/claims_for (the region projection).
+- lib/spell_agent/mesh/record.ex (:author, :seq — the join keys).
+- FEAT-011 MissionHandle (:watermark, :parent, :region — the scope inputs).
+- PLAN-012 data/* resolver (the bag the injected context populates).
+
+* Edge cases
+- no siblings yet (first child of a burst): sibling projection empty; own+region only.
+- a sibling still RUNNING at W: project its findings posted ≤W (monotone, safe); its
+  in-flight reasoning is simply absent (no partial-state hazard — append-only).
+- large cohort: the scope predicate + watermark bound the projection size; never
+  project an unbounded union (cost + cache-size discipline).
+- a finding whose author hist is GC'd/windowed: join yields the finding alone (WHAT
+  without WHY) — degrade, never fail.
+
+* Acceptance (observable)
+- build_context over a handle returns a bag containing region records ≤ W and sibling
+  findings ≤ W; excludes records > W (the watermark boundary holds).
+- finding→hist join: a finding's injected entry carries the producer's reasoning when
+  the hist node exists, the finding alone when it doesn't.
+- two children spawned at the SAME W get byte-identical baseline context (the cache
+  precondition for FEAT-016).
+- a scope predicate narrows the projection (only :high risk → only those findings).
+- mix check clean.
+
+* Tests
+- watermark boundary: records > W excluded, ≤ W included.
+- the WHAT+WHY join (with and without the hist node present).
+- baseline determinism at equal W (FEAT-016 precondition).
+- scope predicate narrowing.
+- empty-sibling degenerate case.
+
+* Out of scope
+- breakpoint placement / cache_control (FEAT-016 consumes this lens).
+- the ergonomic sugars that CALL this (the sugar FUP).
+
+* SCOPE NOTE (this review) — context-projection stands ALONE, caching is incidental
+This FEAT is justified entirely by RICH CONTEXT (the WHAT+WHY join over hist+black at
+a watermark), NOT by caching. The fact that a watermark projection is immutable and
+therefore cacheable is a downstream BONUS exploited by the spawn-site-introspection
+sugar (FEAT-018 S-F) — it is not a reason this FEAT exists and must not drive its
+design. Build the lens to be CORRECT and RICH (right scope, right join, right
+watermark boundary); whether its output happens to cache well is the sugar's concern,
+not this FEAT's. If caching vanished, this FEAT is unchanged and still wanted.
+The "smart passing — snapshot + live pull" section: keep the SNAPSHOT (it is the
+deterministic cohort baseline — a context correctness property) but read "cacheable"
+there as "deterministic/reproducible", not as a caching mandate.

@@ -1,0 +1,193 @@
+#+TITLE: The projection-cache correspondence — context, caching, and reactivity are one mechanism
+#+SUBTITLE: hist/* and black/* as a unified context lens at a watermark; cache breakpoints = sharing topology
+#+OPTIONS: toc:2 num:t
+
+* DEMOTION NOTE (review) — caching is provider-incidental, not a primitive
+
+Caching exists only because API providers (Anthropic et al.) reward prefix
+stability. This doc's CACHING framing (U2, the cache-strategy machinery) is
+therefore DEMOTED: caching is ONE downstream beneficiary of immutable projections,
+exploited by a sugar (spawn-site introspection, FEAT-018 S-F), NOT a primitive and
+NOT its own FEAT (the standalone cache FEAT-016 was CANCELLED and absorbed).
+
+What survives as load-bearing, independent of any provider's caching:
+- U1: hist/* and black/* are the SAME projection at two scopes; context = a lens over
+  their union at a watermark. (FEAT-017, justified by RICH CONTEXT alone.)
+- U3: ONE hole-dependency pass, read three ways (dirty-set / sharing-scope / injection).
+- the immutable-projection-at-a-watermark (handle :watermark, FEAT-011) — the real
+  primitive; cache placement is merely a readout of which segments are shared.
+
+Read U2 below as "if a provider rewards prefix stability, here is how the sharing
+topology maps onto it" — an optimization a sugar performs, never a foundation. If
+caching vanished tomorrow, U1, U3, the watermark, and context-projection are all
+unchanged. The eventual sugar will introspect the spawn site to guess caching
+strategy AND model AND budget AND tools together; caching is one field of that bundle.
+
+* The breakthrough in one sentence
+
+#+begin_quote
+A spawned child does not RECEIVE context — it is given a LENS over an append-only
+store at a WATERMARK, and that lens's stability boundary IS the prompt-cache
+breakpoint, the reactive-resolution trigger, and the injected context, all at once.
+#+end_quote
+
+Context injection, prompt caching, and reactive holes have been three separate
+concerns. They are one: *a projection over an immutable store value at a watermark.*
+The projection's CONTENT is the context; its STABILITY (immutable below the
+watermark) is the cache key; its watermark ADVANCING is the reactive trigger.
+This is the Datomic insight (a database value at time T) applied to agent context.
+
+* The three unifications
+
+** U1 — hist/* and black/* are the SAME operation at two scopes
+
+Verified substrate:
+- =Hist.Lens.project(impl, session_id)= materializes a session's nodes into
+  string-keyed JSON maps, ordered by =seq=, then runs a PTC lens over them
+  (=lib/spell_agent/hist/lens.ex=). SESSION-scoped projection of an append-only store.
+- =Mesh.Store.by_match / region(impl, region)= projects a region's records, ordered
+  by store-=seq= (FEAT-009). REGION-scoped projection of an append-only store.
+
+These are the same operation — project an append-only, content-addressed store into
+plain data — at two scopes:
+
+: hist/*   → SESSION scope  → a mind's OWN past      (forms, tool_calls, binds, tokens)
+: black/*  → REGION scope   → the collective PRESENT  (goals, findings, claims, verdicts)
+
+∴ a child's injected context = a projection over the UNION:
+  (my hist) ∪ (sibling hists) ∪ (region blackboard), each at a watermark.
+
+The richness the user pointed at: a black =:finding= carries =author= + =seq= — a
+HANDLE back into the producer's hist node. So black/* gives WHAT was found; hist/*
+gives WHY/HOW (the =Node.form= reasoning that produced it). A context lens JOINS
+them: "every high-risk finding (black) AND the reasoning trace that produced it
+(hist), for my cohort, at spawn-time." Neither store alone is the context; the
+projection over both is.
+
+** U2 — the cache breakpoint = the watermark = the sharing boundary
+
+Anthropic prompt caching is a PREFIX cache with ≤4 =cache_control= breakpoints
+(verified: =anthropic.ex= =apply_cache_control_cap=, currently caps to ONE on the
+system block — headroom for 3 more). A cache hits when the prefix is byte-identical
+across calls. Because the mesh stores are APPEND-ONLY, a projection at =seq ≤ W= is
+IMMUTABLE — byte-stable forever — so it is a perfect cache key BY CONSTRUCTION.
+
+The consequence: the mesh's sharing topology IS the cache hierarchy.
+
+: shared by ALL sessions    → system prompt            → breakpoint 1 (longest-lived)
+: shared by a region cohort  → black/query @ seq≤W       → breakpoint 2 (the fan-out snapshot)
+: shared by a sub-cohort     → sibling hist projection    → breakpoint 3
+: unique to this child       → its task                  → uncached tail
+
+What is shared by N children is projected ONCE at a watermark and cached; what is
+unique is the tail. A burst of 100 fan-out children sharing =region@W= = 1 cache
+WRITE + 99 cache READS, instead of 100 full prefixes. Caching stops being an
+optimization you bolt on and becomes a READOUT of who-shares-what. The monotone
+medium (doc 02) gives cache-stability for free: findings ≤ seq W never change.
+
+** U3 — one hole-dependency analysis, three consumers
+
+The static pass that walks a tmpl::/prompt's holes and computes each hole's
+dependency set (quoting-spec §8c.1) is the SAME analysis that places cache
+breakpoints and classifies context. One pass, three readouts:
+
+: hole deps → DIRTY-SET     : which holes re-resolve per frame      (reactivity, §8c)
+: hole deps → SHARING-SCOPE : which segments cache, where breakpoints (caching, this doc)
+: hole deps → INJECTION     : what context each child needs          (context, this doc)
+
+A hole depending on =data/region@seq≤W= is simultaneously: a cache segment (stable
+while W fixed), a dirty-trigger (re-resolve when W advances), and an injected-context
+source. The dependency IS all three. We do not build three analyses; we build one
+and read it three ways.
+
+* The watermark in the handle (the deterministic hook)
+
+The mission handle carries the watermark so the whole correspondence is
+deterministic and cacheable:
+
+: %MissionHandle{
+:   session:   child_sid,    # the child's hist scope (join to its reasoning)
+:   region:    region_id,    # the shared blackboard it coordinates in
+:   ref:       task_ref,     # BEAM Task — await / monitor / liveness
+:   watermark: seq,          # region seq AT SPAWN — projection & cache boundary
+:   parent:    parent_sid,   # provenance
+:   status:    :running | :done | {:error, _}
+: }
+
+=watermark = Mesh.Store.max_seq(region)= at spawn (cheap, already built). It makes
+"project everything my cohort knew at spawn time" a deterministic, cacheable value:
+=region@watermark= is uniform across a burst → one cached prefix. FEAT-011 captures
+it even though the tight build does not USE it (forward-compat, like await-free) so
+the cache FEAT layers on with zero rework.
+
+* The cache-strategy introspection (the new FEAT)
+
+A function =cache_plan(prompt_holes, watermark) -> segmented_prompt=:
+
+1. WALK the prompt's holes; CLASSIFY each hole's dependency:
+   =static= | =system= | =region@W= | =siblings@W= | =per-child=.
+2. ORDER segments most-shared → least-shared (longest-lived prefix first).
+3. PLACE ≤4 =cache_control= breakpoints at scope transitions. Because Anthropic caps
+   at 4 but there may be more scopes, CHOOSE the 4 that maximize
+   =Σ (segment_tokens × children_sharing_it)= — a greedy optimization (breakpoint the
+   biggest-shared segments first; coalesce the rest).
+4. EMIT the segmented prompt with breakpoints.
+
+The author writes ONE prompt with holes; introspection DERIVES the split, because it
+knows which holes depend on shared (cacheable) vs per-child (unique) data. This is
+the answer to "what does a cache-aware split look like" — it is computed, never
+hand-specified.
+
+** The statics/dynamics tension and its resolution
+
+Freshest context (=region@now=) gives the best information but the WORST caching
+(every child sees a different watermark → no shared prefix). The spawn-time snapshot
+(=region@W=, W = burst start) is uniform across the burst → BEST caching, slightly
+stale. Resolution (the tmpl:: statics/dynamics split, applied to context):
+
+: CACHEABLE BASELINE : region@W + sibling projection@W → the shared, cached PREFIX
+: LIVE PULL          : black/query at runtime → lazy, per-child, uncached, only-when-needed
+
+The snapshot is static (cached, uniform); the live query is dynamic (per-child,
+fresh). A child gets a cached cohort baseline AND can pull fresh data when it needs
+it. "Smart passing" = post shared context to R once → uniform cacheable children →
+each pulls fresh only what it needs.
+
+* Use cases this unlocks
+
+- *cohort-aware fan-out*: child K is injected with a projection over siblings 1..K-1's
+  findings @W — "what has my cohort discovered" — WITHOUT messaging them (the banned
+  edge), and cacheable up to W.
+- *reasoning-joined findings*: inject not just WHAT was found (black) but the hist
+  reasoning that produced it (join finding.author+seq → hist node.form).
+- *deterministic replay*: a handle's watermark makes a child's context reproducible —
+  re-spawn at the same W → identical cached prefix → identical context.
+- *cost observability*: the cache plan reports Σ cached tokens per breakpoint = a
+  direct readout of how much the mesh's sharing structure is saving.
+
+* Why this is the keystone
+
+The mesh (doc 02) gave us a value-oriented, append-only, content-addressed medium.
+We have been using it for COORDINATION (post/query/claim/fold). This doc shows the
+SAME medium is the substrate for CONTEXT, CACHING, and REACTIVITY — because all three
+are projections over an immutable store at a watermark. We do not build a context
+system, a cache system, and a reactivity system; we build ONE projection-at-a-
+watermark and read it three ways. That is the Datomic move (a value at time T) and
+it is why the monotone, content-addressed choices in doc 02 — which looked like
+"just" coordination hygiene — were actually the foundation of the entire context and
+caching story. The least-clever part (append-only facts) turned out to be the most
+load-bearing.
+
+* Grounding ledger
+
+| capability | status | gated by |
+|-----------+--------+----------|
+| session-scoped projection | *real* | Hist.Lens.project (hist/lens.ex) |
+| region-scoped projection | *real* | Mesh.Store.region/by_match (FEAT-009) |
+| watermark (region max seq) | *real* | Mesh.Store.max_seq (FEAT-009) |
+| append-only cache stability | *real* | store-seq + content_hash (FEAT-008/009) |
+| ≤4 cache_control breakpoints | *real* | anthropic.ex apply_cache_control_cap (headroom: uses 1 of 4) |
+| handle carries watermark | *new* | FEAT-011 (cheap capture) |
+| cache_plan introspection | *new* | the new FEAT (hole-classification pass) |
+| sibling/region context injection | *new* | a context-lens builder over the union |
+| hole-dep analysis (shared with tmpl::) | *real* | PLAN-012 §8c (implemented) |

@@ -28,6 +28,7 @@ It is written to be /read and learned from/, not skimmed. Five files:
 | =12-prompt-form.org= | the LLM seam as DATA + a host: =ask= (the function, 90%) + =prompt::= (the freeze, 10%); de-ASTed. What it does to S1-21 + new doors S22-30 (typed ask, RAG-as-=~@=, semantic reconcile, meta-prompting, the mesh that writes the mesh) |
 | =13-prompt-arguments.org= | checks =ask=/=prompt::= against ALL ~35 SubAgent options: content INFERRED, authority GRANTED (never from prose), output narrowed-or-declared; the three output-reliability regimes |
 | =14-reconciliation.org= | *the settled decisions* (post-Hickey-review). One seam at three altitudes; await dissolved into consumption; the three-contract law; narrowing = shape not types; the mind is an untrusted host. THIS doc wins over 10-13 where they disagree |
+| =15-context-projection-cache.org= | the projection correspondence: =hist/*= and =black/*= are one lens at two scopes; context = a projection over their union at a WATERMARK. Caching is DEMOTED (provider-incidental, one downstream beneficiary, not a primitive) — see the doc's demotion note. Load-bearing: the watermark + the unified projection + one hole-dep pass read three ways |
 
 Tracking item: =PROJ-006= in =!tasks/projects/=.
 

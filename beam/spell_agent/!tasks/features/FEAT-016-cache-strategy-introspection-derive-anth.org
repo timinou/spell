@@ -1,0 +1,101 @@
+#+TITLE: Cache-strategy introspection — derive Anthropic cache breakpoints from prompt hole-dependency analysis
+#+STATE: CANCELLED
+#+SESSION_ID: 151269c91db37358
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T23-09-03-478Z_151269c91db37358.jsonl]]
+#+CUSTOM_ID: FEAT-016-cache-strategy-introspection-derive-anth
+
+* Initial Message
+
+what are distributed agents in a mesh network, really? please look into network theory, not hype. i want us to think about that deeply and from first principles, in order to let the BEAM lisp runtime call itself and create meshed sub-sessions. But I want strong theoretical backing beforehand
+
+* Goal
+Maximize prompt-cache reuse across spawned minds by INTROSPECTING a prompt's holes
+to derive where Anthropic cache_control breakpoints go. The mesh's sharing topology
+(system → region@W → siblings@W → per-child) IS the cache hierarchy (append-only
+stores → a projection at seq≤W is immutable → a perfect cache key). One static pass
+over hole-dependencies places ≤4 breakpoints to maximize Σ(tokens × children-sharing).
+
+Read first: docs/agent-mesh-theory/15-context-projection-cache.org (the full
+correspondence: context = cache = reactivity, all projections at a watermark).
+
+* Wave / deps
+Post-foundation. BLOCKED BY FEAT-011 (the mission handle's :watermark) and the
+context-projection FEAT (the lens that produces shared segments). Uses PLAN-012's
+hole-dependency analysis (§8c.1, implemented) — same pass, different readout.
+
+* The mechanism — cache_plan(prompt_holes, watermark) -> segmented_prompt
+1. WALK the prompt's holes; CLASSIFY each hole's dependency scope:
+   :static | :system | :region@W | :siblings@W | :per-child.
+2. ORDER segments most-shared → least-shared (longest-lived prefix FIRST — prefix
+   caching requires the stable part leads).
+3. PLACE <=4 cache_control breakpoints at scope transitions. Anthropic caps at 4
+   (anthropic.ex apply_cache_control_cap, currently uses 1 of 4 on the system block).
+   When scopes > 4, CHOOSE the 4 maximizing Σ(segment_tokens × children_sharing) —
+   greedy: breakpoint the biggest-shared segments, coalesce the rest.
+4. EMIT the segmented prompt with breakpoints.
+
+* Why append-only makes the cache key free
+A projection "region R, seq <= W" is IMMUTABLE (store-seq + content_hash never
+mutate, FEAT-008/009) → byte-stable forever → a valid prefix cache key by
+construction. No cache-invalidation logic needed: the watermark IS the version.
+
+* Anthropic caching model to honor (introspect how it actually works)
+- prefix cache: a hit requires the prefix byte-identical to a prior call.
+- <=4 cache_control breakpoints; each marks "cache up to here".
+- longer-lived (more-shared) content must come EARLIER in the prompt.
+- a per-child unique tail must come LAST (uncached) or it poisons the shared prefix.
+- INVARIANT this FEAT enforces: never place a per-child segment before a shared one
+  (it would make the shared prefix differ per child → zero hits). Order is correctness.
+
+* Modules / edits (proposed)
+- lib/spell_agent/mesh/cache_plan.ex (NEW): cache_plan/2; the hole-classification +
+  breakpoint-placement + greedy-4-selection. Pure, unit-testable.
+- reuse PLAN-012's hole-dependency walker (do NOT reimplement — same pass as the
+  tmpl:: dirty-set; cite its module).
+- lib/spell_agent/anthropic.ex (EDIT): generalize apply_cache_control_cap to accept
+  a PLACEMENT (the segmented breakpoints) instead of only capping to the last system
+  block — honor up to 4 from cache_plan.
+
+* CodePaths
+- lib/spell_agent/anthropic.ex apply_cache_control_cap / @max_cache_breakpoints — the
+  4-breakpoint enforcement to generalize.
+- ptc_runner system_prompt.ex (the cacheable static system section — breakpoint 1).
+- PLAN-012 §8c.1 hole-dependency analysis (the shared walker).
+- Mesh.Store.max_seq + the context-projection FEAT (the lens producing segments).
+
+* Edge cases
+- a prompt with NO shared holes (all per-child): no breakpoints beyond system; correct.
+- > 4 sharing scopes: greedy selection; assert it picks max Σ tokens×sharing.
+- a per-child hole accidentally ordered early: the placement MUST reorder or refuse
+  (correctness invariant above) — test this explicitly.
+- token estimation: use a cheap length proxy; the optimization is approximate, the
+  CORRECTNESS (ordering) is exact.
+
+* Acceptance (observable)
+- cache_plan over a fan-out prompt places the region@W segment in a shared prefix
+  breakpoint; the per-child task in the uncached tail.
+- a 100-child burst sharing region@W yields ONE distinct cached prefix (assert all
+  100 segmented prompts share a byte-identical prefix up to the breakpoint).
+- never emits a plan where a per-child segment precedes a shared one.
+- > 4 scopes → exactly 4 breakpoints, chosen by max Σ tokens×sharing.
+- mix check clean.
+
+* Tests
+- ordering correctness (shared-before-unique) — the load-bearing invariant.
+- greedy 4-selection picks the max-saving breakpoints.
+- byte-identical shared prefix across a simulated burst.
+- degenerate cases (no shared / all shared / one child).
+
+* Out of scope
+- the context lens itself (the context-projection FEAT) — this FEAT consumes its
+  output; it does not build it.
+- runtime cache hit/miss telemetry (a later observability FUP).
+
+NOTE [2026-06-22]: ABSORBED into FEAT-018 (sugar FUP) as sub-item S-F "spawn-site introspection".
+Reason: caching is provider-incidental (exists only because Anthropic rewards prefix
+stability) — making cache_plan a standalone primitive over-elevates an API artifact.
+The real generalization: spawn-site introspection infers a BUNDLE (model + cache
+layout + budget + tools + output shape) from WHERE / to-do-WHAT an agent was spawned.
+Caching is ONE output of that sugar, not its own FEAT. The genuinely architectural
+pieces survive as FEAT-011 (watermark in handle) + FEAT-017 (context projection),
+both of which stand alone with no caching framing.

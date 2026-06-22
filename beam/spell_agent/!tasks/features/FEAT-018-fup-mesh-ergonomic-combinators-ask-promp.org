@@ -1,0 +1,112 @@
+#+TITLE: FUP: mesh ergonomic combinators — ask/prompt::, scatter/gather/mesh-map, narrowing, memory threading
+#+STATE: ITEM
+#+SESSION_ID: 151269c91db37358
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T23-09-03-478Z_151269c91db37358.jsonl]]
+#+CUSTOM_ID: FEAT-018-fup-mesh-ergonomic-combinators-ask-promp
+#+BLOCKED_BY: FEAT-011
+
+* Initial Message
+
+what are distributed agents in a mesh network, really? please look into network theory, not hype. i want us to think about that deeply and from first principles, in order to let the BEAM lisp runtime call itself and create meshed sub-sessions. But I want strong theoretical backing beforehand
+
+* Goal (FOLLOW-UP — deferred from tight FEAT-011)
+The ergonomic layer over the await-free spawn primitives (FEAT-011) and the context/
+cache machinery (FEAT-016/017). Per the doc-14 reconciliation, FEAT-011 ships ONLY
+tool/spawn-session + await-session (await-free primitives). Everything ergonomic is
+deferred here so each piece lands over a PROVEN primitive (no sugar before its base).
+
+Read first: docs/agent-mesh-theory/11-sugars.org (the DSL), 12-prompt-form.org
+(ask vs prompt::), 13-prompt-arguments.org (the three contracts), 14-reconciliation.org
+(THE SETTLED DECISIONS — this FUP implements them), 10 (narrowing), 15 (context/cache).
+
+* Sub-items (each independently shippable over FEAT-011/016/017)
+
+** S-A: ask (the function) + prompt:: (the freeze)  [doc 12, 14 Decision 4]
+- ask: a STRICT function (ask template bindings) -> runs a SubAgent mission, returns
+  DATA. The 90% LLM call. Desugars to spawn + await-session (the sync altitude).
+- prompt::: a reader form that FREEZES holes as data (deferred/quoted) — ONLY for what
+  a function cannot do (a watch :do, a deferred view, a posted-prompt finding).
+  Sibling of tmpl::; reuses PLAN-012 reader machinery.
+- NO :await flag (Decision 2); authority (tools/region) GRANTED not inferred (Decision 5).
+
+** S-B: scatter / gather / mesh-map (the fan-out combinators)  [doc 11, 14 Decision 1/2]
+- scatter [x xs] prompt-template -> spawn (await-free) N children into a region,
+  return handles. = spawn lifted over a collection.
+- gather handles -> await-session each, collect results (the fan-in join).
+- mesh-map = scatter + gather fused (the 90% fan-out). All FUNCTIONS over mission
+  VALUES, not reader forms (Decision: keep sugars as functions).
+- cache-aware: scatter posts shared context to the region ONCE + uniform children
+  (FEAT-017 lens + FEAT-016 plan) — the "smart passing".
+
+** S-C: on / reconcile / mesh-view  [doc 11]
+- on = black/watch sugar (a quoted :do); reconcile = rendezvous + decide; mesh-view =
+  a tmpl:: over black/query. Need FEAT-012 (decide) + FEAT-013 (watch) first.
+
+** S-D: narrowing — Narrow.signature_at(form, path)  [doc 10, 13 regimes]
+- derive a spawned child's expected output SHAPE from its call site (view/table :rows
+  -> Row via Tui.Reflect; tool param specs; declared signatures). HONEST CEILING
+  (doc 13/14 Decision 6): yields SHAPE (container/keys/arity), rarely leaf types;
+  load-bearing leaf types need explicit :returns. NOT "the type is the guardrail".
+
+** S-E: memory threading (the cheap third channel)  [doc 15, Q1]
+- thread a slice of parent memory (def-env bindings) into a child via Session.run
+  initial_memory (currently derived from session_id only — add an opt). Pure data,
+  no LLM tokens, does NOT break caching. Opt-in (:inherit-memory). Lets a child reuse
+  (def callers …) without re-deriving.
+- REQUIRES a small Session.run change: accept opts[:initial_memory] override.
+
+* Decisions this FUP MUST honor (from doc 14)
+- one seam, three altitudes (ask -> spawn/scatter -> spawn-session); no parallel impls.
+- strict by default, explicit detach; serial-by-default let (no magic parallelism).
+- infer content, GRANT authority, narrow-or-declare output.
+- the mind is an untrusted host: trust != shape (a critic/check/consensus before any
+  irreversible effect driven by a mind's output).
+- sugars are FUNCTIONS; only prompt:: is a reader form (it earns it via freeze).
+
+* Out of scope (stays in the vision docs until pulled)
+- the self-extending / supervisor scenarios (S20/S21) — research horizon.
+- general eval / macros — permanently out (hosts close the loop).
+
+* Acceptance (when pulled, per sub-item)
+- S-A: (ask t b) returns data; prompt:: produces a frozen value a host resolves.
+- S-B: mesh-map fan-out + fold end-to-end; one cached shared prefix across the burst.
+- S-D: Narrow.signature_at returns shape for a typed call site, :any for untyped.
+- S-E: a child reuses a threaded binding; caching unaffected.
+
+* S-F: spawn-site introspection (absorbs the cancelled FEAT-016)
+The general sugar caching is just ONE instance of. Introspect WHERE an agent was
+spawned (the call site's enclosing form + scope) and to-do-WHAT (the prompt/holes),
+and infer a BUNDLE of run parameters — NOT just cache layout:
+
+  spawn_profile(call_site, prompt_holes, handle) ->
+    {:model     m,            ; cheap classify @ fan-out -> Haiku; deep refactor -> Opus
+     :budget    {:max_turns}, ; shallow ask -> 2; open mission -> 12
+     :tools     [..],         ; the attenuated set the site implies (still GRANTED, doc 14)
+     :cache     placement,    ; <=4 prefix breakpoints over shared (region@W) vs per-child
+     :returns   shape}        ; narrowed from the splice site (S-D)
+
+KEY STANCE (per the user, this review): caching is PROVIDER-INCIDENTAL — it exists
+only because API providers reward prefix stability. It is therefore NOT a primitive
+and NOT its own FEAT; it is one OUTPUT of spawn-site introspection, exploited by this
+sugar, derived from the immutable-projection-at-a-watermark the stores already give
+for free (FEAT-008/009 + FEAT-011 watermark). If a provider stopped rewarding
+prefixes tomorrow, only the :cache field of the bundle goes away; everything else
+(model/budget/tools/returns inference) stands.
+
+- the immutable projection at a watermark (handle :watermark, FEAT-011) is the real
+  thing; :cache placement is a readout of which projection segments are shared.
+- reuse PLAN-012 hole-dependency analysis for the shared/per-child split (same pass
+  as the tmpl:: dirty-set — do NOT reimplement).
+- generalize anthropic.ex apply_cache_control_cap to accept a placement (it currently
+  caps to 1 of 4) — but ONLY as the executor of the :cache field, never as a primitive.
+
+Acceptance (when pulled): spawn_profile returns a sensible bundle for a fan-out site
+(small model, cached shared prefix) vs a top-level site (large model, no cache
+bother); the :cache field is OPTIONAL and absent when projection sharing is trivial.
+
+* Doc note
+docs/agent-mesh-theory/15-context-projection-cache.org documents the projection=cache=
+reactivity correspondence. Per this review its CACHING framing is demoted: read U2
+(cache breakpoints) as "one downstream beneficiary of immutable projections", not as a
+primitive. U1 (hist/black unified projection) + U3 (one hole-dep pass, three readouts)
+remain the load-bearing insights; caching is the provider-incidental third reader.

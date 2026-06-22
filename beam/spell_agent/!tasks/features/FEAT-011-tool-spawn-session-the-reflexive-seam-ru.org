@@ -103,3 +103,79 @@ black/* verbs merged) and FEAT-008 (Region.fork_a). Independent of Consensus/Wat
 - Worked scenarios that are this FEAT's behavioural acceptance: S1 (fanout+fold),
   S2 (dispatcherless claim queue), S5 (speculative race). See doc 09 §FEAT-011 +
   §Integration for the exact assertions and the scripted-child test shape.
+
+* DOC-14 RESHAPE (await-free; supersedes the :await steps above)
+The Hickey-pass reconciliation (docs/agent-mesh-theory/14-reconciliation.org,
+Decision 2) DISSOLVES the :await flag. This FEAT is now TIGHT: ship only the
+native tool/spawn-session primitive, await-free. The ask/scatter/gather sugars are
+deferred to a FUP (see PROJ-006 / the filed FUP). Concretely:
+
+** tool/spawn-session ALWAYS DETACHES — returns a handle, never blocks
+- spawn_session(args) runs Session.run under a supervised Task and returns
+  IMMEDIATELY: {"session" => child_sid, "region" => region, "handle" => ref}.
+  There is NO :await arg. "Block and use the result" is expressed by the caller
+  awaiting the handle (the gather-of-one case), NOT by a flag on the spec.
+- include a companion native verb to REJOIN a handle: "await-session" (args
+  {"handle"|"session"}) -> blocks on that Task and returns the child's result.
+  This is the minimal join primitive the FUP's gather/scatter will build on; one
+  handle = the sync case, a list = fan-in. (Name it await-session to avoid
+  clashing with any future bare `await`/`gather` sugar.)
+- rationale: a primitive that always detaches is already doc-14-shaped, so the
+  FUP sugars are PURE ADDITION over it — no rework, no :await to rip out later
+  (the churn we explicitly avoided by going tight + await-free).
+
+** the handle
+- the Task ref (or child_sid) is the handle. ParallelBudget slot is acquired
+  BEFORE the Task starts and released on the Task's exit (normal OR crash, via the
+  Task monitor) — so a detached child that crashes still frees its slot and its
+  posted findings PERSIST (PT-4). await-session on a crashed child returns a
+  clear {:error, reason}, never hangs.
+
+** inventory params (corrected)
+- spawn-session params: ["prompt","region","tools","budget"] (NO "await").
+- await-session params: ["handle","session"].
+
+** acceptance deltas (replace the await:true/false bullets)
+- spawn-session returns {session, region, handle} immediately; the child runs to
+  completion writing to the shared region.
+- await-session on that handle returns the child's result (the sync case = spawn
+  then await-session).
+- end-to-end Fork-A: parent posts goal, spawns 3 children (await-free) that each
+  post a finding, parent black/fold's 3 — zero sibling messages. (Test waits via
+  a black/watch :count 3 threshold OR awaits the 3 handles — both valid.)
+- everything else (budget acquire/release no-leak, capacity-exceeded raise,
+  capability attenuation, :llm threading, SessionRegistry membership) UNCHANGED.
+
+** explicitly OUT of scope (→ FUP: mesh ergonomic combinators)
+- ask (the strict LLM function), prompt:: reader form, scatter/gather/mesh/map,
+  on/reconcile/mesh/view, narrowing. All deferred. This FEAT ships ONLY
+  spawn-session + await-session as await-free primitives.
+
+* HANDLE carries the watermark (forward-compat, doc 15)
+The mission handle returned by spawn-session captures the region's seq AT SPAWN —
+the one architectural survivor of the (cancelled) caching FEAT. It is cheap
+(Mesh.Store.max_seq(region), already built) and deterministic, and it is the hook
+context-projection (FEAT-017) and any later spawn-site-introspection sugar
+(FEAT-018 S-F) hang on. Tight FEAT-011 CAPTURES it but does not USE it (same
+forward-compat stance as await-free).
+
+  %MissionHandle{
+    session:   child_sid,     # the child's hist scope
+    region:    region_id,     # the shared blackboard
+    ref:       task_ref,      # BEAM Task — await-session / monitor / liveness
+    watermark: seq,           # = Mesh.Store.max_seq(region) at spawn (deterministic)
+    parent:    parent_sid,    # provenance (sibling-context scope for FEAT-017)
+    status:    :running | :done | {:error, reason}
+  }
+
+- spawn-session returns this struct (string-keyed for PTC); await-session takes
+  {handle|session} and rejoins via ref.
+- NO caching logic in FEAT-011 — just capture the watermark as a field. Caching is
+  provider-incidental and lives in the FEAT-018 sugar, never in this primitive.
+
+* BUDGET wiring (this FEAT stands up the holder)
+FEAT-011 adds a small app-supervised ParallelBudget holder (not deferred to 013), so
+spawn is not blocked on the watcher. Created once
+(ParallelBudget.new(Config "mesh.budget")) in application.ex children, read by
+spawn-session. FEAT-013 reuses the same holder for watch-fire slots. (Decision: wire
+the budget here, end-to-end, as originally intended.)
