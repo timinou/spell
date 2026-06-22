@@ -1,5 +1,5 @@
 #+TITLE: sh+brush: homoiconic shell scripting via PTC reader + brush NIF
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 151267329fcc2e66
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T22-57-45-087Z_151267329fcc2e66.jsonl]]
 #+CUSTOM_ID: PLAN-011-shbrush-homoiconic-shell-scripting-via-p
@@ -521,3 +521,36 @@ A NIF's recursion over AGENT-SUPPLIED data MUST be depth-bounded — catch_unwin
 Rust stack overflow (it aborts the emulator). Bound before you recurse.
 
 ** Next: W6 — recall wiring (hist/forms over shell calls, the deferred query) + comprehensive demo suite.
+
+* STATUS: W6 COMPLETE + PLAN DONE (2026-06-21) — recall + demos
+
+`form_shells` projection + `hist/forms {:shell "rg"}` query (the deferred W5
+'one recall layer' debt, now paid): a turn's shell command heads are extracted
+from tool/sh/tool/sh-pipe argv literals; the Namespace fast path and the forms.ptc
+lens share one shell-first/blank-guarded dispatch (parity on equal id lists). Nine
+executable demos prove write/compose/remember/parse/recall/modularity + an
+injection sentinel check; demo 7 (URI tokens) documented as deferred.
+
+** Reviewer swarm: 2 reviewers, all findings fixed
+- P1 Namespace.forms dispatched tool-before-shell, opposite the PTC lens → parity break when both
+  args given. Fixed: both shell-first + non-empty-string guard, mirrored in forms.ptc.
+- P1 demos leaked ToolRegistry state across tests → setup now resets the registry.
+- P2 shell parity test asserted only length → now equal id lists.
+- P2 demo 8 round-trip was a substring tautology → now unparses and RUNS via sh -c, asserts output.
+- P2 demo 6 injection → now writes a sentinel and asserts it survives (payload never executed).
+- P3 demo 4 → asserts scope: :durable on the stored ToolDef.
+- P3 demo 7 (URI tokens) → documented as intentionally deferred (WordPreprocessor not wired into the NIF).
+
+** Committed (semantic commits, after the fact — should have been per-wave)
+ptc_runner submodule: sh:: reader. Main repo: docs+PLAN, brush_nif engine crate, sh tool surface,
+durable toolset+registration, recall+demos, submodule bump, gitignore for priv/native .so.
+
+** Shipped surface
+tool/sh · tool/sh-pipe · tool/sh-parse · tool/sh-unparse · sh:: reader form · durable scope on
+define-tool · hist/forms {:shell …}. Full suite green (2 pre-existing flaky TUI tests aside).
+
+** Deferred (filed, not done)
+- Redirects as structured opts (own wave, fd-overwrite review).
+- WordPreprocessor/URI-token resolution in the BEAM NIF (risk R4) — blocks demo 7.
+- General quasiquote / templates-with-holes (docs/quoting-spec.md; PLAN-012 exists).
+- Crystal promotion path for durable tools (provenance tier).
