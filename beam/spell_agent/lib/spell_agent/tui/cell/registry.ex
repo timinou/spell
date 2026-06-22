@@ -47,7 +47,7 @@ defmodule SpellAgent.Tui.Cell.Registry do
 
   use Agent
 
-  alias SpellAgent.Tui.HoleDiff
+  alias SpellAgent.Tui.{DataBag, HoleDiff}
 
   # A cell name must look like a bare `data/*` key segment: lowercase, hyphen/
   # underscore, no slash (the name becomes `data/<name>`, and bag keys never
@@ -124,7 +124,7 @@ defmodule SpellAgent.Tui.Cell.Registry do
             # put_resolved cannot be clobbered by a stale read.
             resolved =
               case Map.get(state, name) do
-                %{query: ^query, resolved: prior} -> prior
+                %{query: ^query, resolved: r} -> r
                 _ -> :unresolved
               end
 
@@ -178,6 +178,23 @@ defmodule SpellAgent.Tui.Cell.Registry do
   end
 
   @doc """
+  Mark cell `name` as `:failed` — its last resolve errored (W3r busy-loop fix).
+
+  A failed cell is NOT always-dirty (unlike `:unresolved`), so it stops re-running
+  every slow-clock tick; it re-resolves only when a real dependency changes (which
+  resets it through the normal dirty path). Idempotent for an absent cell.
+  """
+  @spec mark_failed(String.t()) :: :ok
+  def mark_failed(name) when is_binary(name) do
+    Agent.update(__MODULE__, fn state ->
+      case Map.get(state, name) do
+        nil -> state
+        cell -> Map.put(state, name, %{cell | resolved: :failed})
+      end
+    end)
+  end
+
+  @doc """
   The resolved cell values as a `name => value` map, for the `DataBag` merge.
 
   Only cells that have been resolved at least once are included (`:unresolved`
@@ -190,6 +207,7 @@ defmodule SpellAgent.Tui.Cell.Registry do
     all()
     |> Enum.flat_map(fn
       {_name, %{resolved: :unresolved}} -> []
+      {_name, %{resolved: :failed}} -> []
       {name, %{resolved: value}} -> [{name, value}]
     end)
     |> Map.new()
@@ -222,45 +240,47 @@ defmodule SpellAgent.Tui.Cell.Registry do
 
   # Would adding cell `name` (with `deps`) close a cycle in the cell-dependency
   # graph? Edges are cell->cell: a cell X has an edge to Y iff X depends on the
-  # key `data/Y` AND Y is itself a cell. A cycle through `name` exists iff, from
-  # any of `name`'s cell-deps, the graph (with `name` mapped to `deps`) can reach
-  # `name` again. DFS with a visited set; bounded by @max_cells, so it always
-  # terminates. Only CELL keys form edges — a dep on a core bag key (data/ui) is a
-  # leaf and can never cycle.
+  # key `data/Y`, Y is itself a cell, AND Y is NOT a core bag key. A cycle through
+  # `name` exists iff, from any of `name`'s cell-deps, the graph (with `name`
+  # mapped to `deps`) can reach `name` again.
+  #
+  # Iterative BFS with a SINGLE shared visited set (W3r finding: a per-path DFS
+  # re-explores shared subgraphs exponentially on a dense DAG). Each node is
+  # expanded at most once, so the walk is O(V+E) and always terminates within
+  # @max_cells.
+  #
+  # Core bag keys are EXCLUDED from the node set (W3r finding): a cell named
+  # `status` is inert at runtime (merge_cells lets the core data/status win), so a
+  # dep on `data/status` is a LEAF (the core map), never an edge to that cell. A
+  # false cycle through a shadowed core name is thus impossible.
   defp would_cycle?(name, deps, state) do
+    core = DataBag.core_keys()
     graph = Map.put(Map.new(state, fn {n, %{deps: d}} -> {n, d} end), name, deps)
-    cell_names = MapSet.new(Map.keys(graph))
+    # Nodes are cells that are NOT shadowed by a core key. `name` itself is a node
+    # (it is the cell being added); a core-named cell is not a graph node.
+    cell_names = graph |> Map.keys() |> MapSet.new() |> MapSet.difference(core)
 
-    # Seed the walk with `name`'s cell-valued deps; if the walk reaches `name`,
-    # there is a path name -> … -> name (a cycle).
-    deps
-    |> MapSet.intersection(cell_names)
-    |> Enum.reduce_while(MapSet.new(), fn start, visited ->
-      if reaches?(start, name, graph, cell_names, visited) do
-        {:halt, :cycle}
-      else
-        {:cont, MapSet.put(visited, start)}
-      end
-    end)
-    |> Kernel.==(:cycle)
+    seeds = deps |> MapSet.intersection(cell_names) |> MapSet.to_list()
+    reaches?(seeds, name, graph, cell_names, MapSet.new(seeds))
   end
 
-  # Depth-first: can `node` reach `target` following cell->cell edges?
-  defp reaches?(node, target, _graph, _cells, _visited) when node == target, do: true
+  # Iterative reachability: does the frontier reach `target` following cell->cell
+  # edges? `visited` already contains the frontier (seeded by the caller), so a
+  # node is never enqueued or expanded twice.
+  defp reaches?([], _target, _graph, _cells, _visited), do: false
 
-  defp reaches?(node, target, graph, cells, visited) do
-    cond do
-      MapSet.member?(visited, node) ->
-        false
+  defp reaches?([node | rest], target, graph, cells, visited) do
+    if node == target do
+      true
+    else
+      next =
+        graph
+        |> Map.get(node, MapSet.new())
+        |> MapSet.intersection(cells)
+        |> MapSet.difference(visited)
+        |> MapSet.to_list()
 
-      true ->
-        next =
-          graph
-          |> Map.get(node, MapSet.new())
-          |> MapSet.intersection(cells)
-
-        seen = MapSet.put(visited, node)
-        Enum.any?(next, fn n -> reaches?(n, target, graph, cells, seen) end)
+      reaches?(rest ++ next, target, graph, cells, MapSet.union(visited, MapSet.new(next)))
     end
   end
 

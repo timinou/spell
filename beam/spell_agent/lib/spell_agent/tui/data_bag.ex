@@ -32,6 +32,20 @@ defmodule SpellAgent.Tui.DataBag do
 
   alias SpellAgent.Tui.{Sanitize, Store}
 
+  # The canonical bag keys the assembler always produces. A reactive cell may ADD
+  # a new data/* key but never SHADOW one of these (merge_cells lets core win), so
+  # the cell-dependency cycle check must treat a dep on one of these as a LEAF
+  # (the value is the core map, not a cell) even if a same-named cell exists.
+  @core_keys MapSet.new(~w(
+    area status ui vms forest
+    running? turns tools forest-count composer
+    status-label status-color composer-text composer-title composer-fg
+  ))
+
+  @doc "The canonical (core) bag keys — the keys the assembler always produces."
+  @spec core_keys() :: MapSet.t()
+  def core_keys, do: @core_keys
+
   @typedoc "The `data/*` environment: string-keyed bindings a hole sees."
   @type t :: %{optional(String.t()) => term()}
 

@@ -159,6 +159,33 @@ defmodule SpellAgent.Tui.Cell.ClockTest do
       {:ok, _} = Registry.define("a", query(~S|(get data/ui :v)|))
       assert {:ok, _} = Registry.define("a2", query(~S|(get data/ui :v)|))
     end
+
+    test "a cell named after a CORE key does not create a false cycle (W3r)" do
+      # A cell literally named 'status' is inert at runtime (core data/status wins
+      # in the bag merge), so a dep on data/status must be a LEAF, not an edge to
+      # that cell. Without the core-key exclusion this would falsely reject 'a'.
+      {:ok, _} = Registry.define("status", query(~S|(get data/a :v)|))
+      assert {:ok, _} = Registry.define("a", query(~S|(get data/status :v)|))
+    end
+
+    test "a dense DAG defines without exponential blowup (W3r memoization)" do
+      # d1 depends on d2..d20, d2 on d3..d20, etc. — a dense acyclic graph with
+      # heavily shared subpaths. A per-path DFS would explode; the BFS with a
+      # shared visited set defines all of them quickly (bounded-time smoke).
+      for i <- 20..1//-1 do
+        deps_src =
+          (i + 1)..20//1
+          |> Enum.map(fn j -> "(get data/d#{j} :v)" end)
+          |> Enum.join(" ")
+
+        src = if i == 20, do: "(get data/leaf :v)", else: "(str #{deps_src})"
+        assert {:ok, _} = Registry.define("d#{i}", query(src))
+      end
+
+      assert map_size(Registry.all()) == 20
+      # Closing the loop (d20 -> d1) must still be caught.
+      assert {:error, :cyclic_dependency} = Registry.define("d20", query(~S|(get data/d1 :v)|))
+    end
   end
 
   # ============================================================
@@ -239,6 +266,37 @@ defmodule SpellAgent.Tui.Cell.ClockTest do
       :ok = Runtime.inject_event(app, %Key{code: "j", kind: "press", modifiers: []})
 
       assert eventually(fn -> Registry.get("row").resolved end, fn r -> r == 2 end)
+    end
+
+    test "a cell whose query always fails settles to :failed, not a busy-loop", %{store: store} do
+      ui = Ui.new(focus: :tree, auto_depth: 10) |> Map.put(:cursors, %{tree: 0})
+
+      {:ok, app} =
+        App.start_link(
+          name: nil,
+          store: store,
+          test_mode: {80, 24},
+          ui: ui,
+          on_submit: fn _ -> :ok end
+        )
+
+      # A cell needing a mutator the read-only tier denies -> Cell.resolve :error
+      # every time. It must settle to :failed (so it is NOT unconditionally dirty),
+      # not retry forever on each reproject tick.
+      {:ok, _} =
+        Registry.define(
+          "bad",
+          query(~S|(keymap/bind {:chord "x" :intent "app/quit" :context "tree"})|),
+          debounce: 5
+        )
+
+      :ok = Runtime.inject_event(app, %Key{code: "j", kind: "press", modifiers: []})
+      assert eventually(fn -> Registry.get("bad").resolved end, fn r -> r == :failed end)
+
+      # It stays :failed across further ticks (no dep change re-arms it).
+      :ok = Runtime.inject_event(app, %Key{code: "k", kind: "press", modifiers: []})
+      Process.sleep(40)
+      assert Registry.get("bad").resolved == :failed
     end
   end
 

@@ -95,9 +95,15 @@ defmodule SpellAgent.Tui.App do
         opts[:ui] ||
           Ui.new(focus: :prompt, mode: :normal, panes: [:prompt, :history, :tree, :detail]),
       # PROJ-004 reactive cells: the last data/* bag (for slow-clock dep-change
-      # detection) and the per-cell debounce timers (chord -> coalesced resolve).
+      # detection), the per-cell debounce timers (chord -> coalesced resolve), the
+      # per-cell dispatch GENERATION (orders overlapping resolves of the same query
+      # + drops stale ticks — W3r), and the last frame area (so the cell bag sees
+      # the real terminal size, not a zero rect — W3r). Area defaults to a sane
+      # non-zero size until the first render/resize.
       cell_bag: nil,
-      cell_timers: %{}
+      cell_timers: %{},
+      cell_gens: %{},
+      last_area: %Rect{x: 0, y: 0, width: 80, height: 24}
     }
 
     # Seed the canonical layout tree (PLAN-009) from the native default + the
@@ -380,35 +386,65 @@ defmodule SpellAgent.Tui.App do
   # never blocks the UI. The Task reads the live forest + gaze + bag NOW (the
   # quiescent state) and sends {:cell_resolved, …} back. Unlinked + result-routed:
   # a crashing resolve cannot take down the App (Cell.Clock.resolve is itself
-  # total, but the spawn is defensive). The timer ref is cleared.
-  def handle_info({:cell_tick, name}, state) do
-    timers = Map.delete(state.cell_timers, name)
-    env = state.cell_bag || %{}
-    ctx = {Store.spans(state.store), state.ui}
-    me = self()
+  # total, but the spawn is defensive).
+  #
+  # Generation (W3r): each dispatch carries a per-cell monotonic `gen`. The CAS at
+  # completion writes only if `gen` is still the cell's CURRENT generation, so when
+  # two ticks for the SAME query overlap (e.g. cursor A then B, same debounce
+  # window race), the OLDER resolve's result is discarded even though the query
+  # matches — the env it computed against is stale. A stale {:cell_tick} that beat
+  # Process.cancel_timer to the mailbox is likewise ignored (its gen is behind).
+  def handle_info({:cell_tick, name, gen}, state) do
+    if gen == Map.get(state.cell_gens, name) do
+      env = state.cell_bag || %{}
+      ctx = {Store.spans(state.store), state.ui}
+      me = self()
 
-    spawn(fn ->
-      case Cell.Clock.resolve(name, env, ctx) do
-        {:ok, query, value} -> send(me, {:cell_resolved, name, query, value})
-        :error -> :ok
-      end
-    end)
+      spawn(fn ->
+        result = Cell.Clock.resolve(name, env, ctx)
+        send(me, {:cell_resolved, name, gen, result})
+      end)
 
-    {:noreply, %{state | cell_timers: timers}}
+      {:noreply, %{state | cell_timers: Map.delete(state.cell_timers, name)}}
+    else
+      # A superseded tick: a newer arm already bumped the gen. Do nothing (the
+      # newer timer owns the resolve), and do NOT touch cell_timers (it holds the
+      # newer ref).
+      {:noreply, state}
+    end
   end
 
-  # A cell resolve finished: CAS the value into the registry (discarded if the
-  # cell was redefined to a different query meanwhile — W2r finding #2), then
-  # reproject so the bag picks up the new data/<name> and the pane re-renders.
-  # reproject re-diffs, so a cell whose result CHANGED another cell's dep cascades
-  # correctly (and the cycle guard at define time bounds the cascade).
-  def handle_info({:cell_resolved, name, query, value}, state) do
-    Cell.Registry.put_resolved(name, query, value)
-    {:noreply, reproject(state, :all)}
+  # A cell resolve finished. Write only if this result is for the cell's CURRENT
+  # generation (a stale/superseded resolve is dropped — W3r). On success, CAS the
+  # value into the registry (also discarded if the cell was redefined to a
+  # different query meanwhile — W2r) and reproject so the bag picks up data/<name>;
+  # the re-diff makes a cell-feeds-cell cascade work (bounded by the cycle guard).
+  # On :error, mark the cell :failed so it stops being unconditionally dirty (W3r
+  # busy-loop): it will re-resolve only when a real dependency changes.
+  def handle_info({:cell_resolved, name, gen, result}, state) do
+    if gen == Map.get(state.cell_gens, name) do
+      case result do
+        {:ok, query, value} -> Cell.Registry.put_resolved(name, query, value)
+        :error -> Cell.Registry.mark_failed(name)
+      end
+
+      {:noreply, reproject(state, :all)}
+    else
+      {:noreply, state}
+    end
   rescue
     _ -> {:noreply, state}
   catch
     :exit, _ -> {:noreply, state}
+  end
+
+  # Terminal resized: remember the new area so the cell bag (and its dep-diff)
+  # reflects the real frame size — a cell reading data/area then sees true
+  # dimensions and a resize dirties area-dependent cells (W3r). Then reproject so
+  # the slow clock ticks with the new area.
+  def handle_info(%ExRatatui.Event.Resize{width: w, height: h}, state)
+      when is_integer(w) and is_integer(h) do
+    {:noreply, reproject(%{state | last_area: %Rect{x: 0, y: 0, width: w, height: h}}, :all)}
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
@@ -485,8 +521,8 @@ defmodule SpellAgent.Tui.App do
   defp tick_cells(state) do
     bag = cell_bag(state)
     dirty = Cell.Clock.dirty(state.cell_bag, bag)
-    timers = Enum.reduce(dirty, state.cell_timers, &arm_cell_timer/2)
-    %{state | cell_bag: bag, cell_timers: timers}
+    state = Enum.reduce(dirty, %{state | cell_bag: bag}, &arm_cell_timer/2)
+    state
   rescue
     # A down cell registry (headless test) or any clock error must never break
     # reproject — the UI degrades to no cells, never a crash.
@@ -495,24 +531,21 @@ defmodule SpellAgent.Tui.App do
     :exit, _ -> state
   end
 
-  # The data/* bag used for cell dep-diffing. Area is fixed (cells keyed on the
-  # frame rect are an edge case the slow clock does not chase); the render path
-  # still builds the true-area bag for hole resolution.
+  # The data/* bag used for cell dep-diffing. Uses the last known frame area (W3r:
+  # a zero rect would make a cell reading data/area see zeros and never re-trigger
+  # on resize). The render path still builds its own true-area bag for holes.
   defp cell_bag(state) do
-    DataBag.build(Map.put(state, :composer_hint, hint_for(state)), %Rect{
-      x: 0,
-      y: 0,
-      width: 0,
-      height: 0
-    })
+    DataBag.build(Map.put(state, :composer_hint, hint_for(state)), state.last_area)
   end
 
   # Arm (or re-arm) a debounce timer for one dirty cell: cancel any pending timer
   # for it (coalesce a fast-moving dependency, e.g. a cursor sweep, into a single
-  # resolve at quiescence) and schedule a fresh {:cell_tick, name}. The debounce
-  # window is the cell's own (Registry default otherwise).
-  defp arm_cell_timer(name, timers) do
-    case Map.get(timers, name) do
+  # resolve at quiescence), BUMP the cell's dispatch generation, and schedule a
+  # fresh {:cell_tick, name, gen}. The bumped gen makes any in-flight resolve OR an
+  # already-mailboxed stale tick from a superseded timer a no-op at completion
+  # (W3r): only the newest dispatch's result can land. Returns the updated state.
+  defp arm_cell_timer(name, state) do
+    case Map.get(state.cell_timers, name) do
       nil -> :ok
       ref -> Process.cancel_timer(ref)
     end
@@ -523,8 +556,14 @@ defmodule SpellAgent.Tui.App do
         _ -> Cell.Registry.default_debounce_ms()
       end
 
-    ref = Process.send_after(self(), {:cell_tick, name}, debounce)
-    Map.put(timers, name, ref)
+    gen = Map.get(state.cell_gens, name, 0) + 1
+    ref = Process.send_after(self(), {:cell_tick, name, gen}, debounce)
+
+    %{
+      state
+      | cell_timers: Map.put(state.cell_timers, name, ref),
+        cell_gens: Map.put(state.cell_gens, name, gen)
+    }
   end
 
   defp sync_layout_gaze(ui) do

@@ -152,6 +152,17 @@ defmodule SpellAgent.Tui.Cell.RegistryTest do
       assert :ok = Registry.put_resolved("ghost", query(~S|(get data/x :v)|), 1)
       assert Registry.resolved_values() == %{}
     end
+
+    test "a :failed cell is omitted from resolved_values (W3r busy-loop fix)" do
+      {:ok, _} = Registry.define("c", query(~S|(get data/x :v)|))
+      Registry.mark_failed("c")
+      assert Registry.get("c").resolved == :failed
+      assert Registry.resolved_values() == %{}
+    end
+
+    test "mark_failed on an absent cell is a no-op" do
+      assert :ok = Registry.mark_failed("ghost")
+    end
   end
 
   # ============================================================
