@@ -129,12 +129,13 @@ defmodule SpellAgent.Tui.App do
 
   # ---- render ----
 
-  # The render mirror (PLAN-009): ONE path. Build the layout TREE from the active
-  # panes + the live gaze, walk it (`Surface.layout`), and resolve each placed
-  # node — a native `"pane"` node through the existing project/view/materialize
-  # machinery, the status/composer widget leaves with their dynamic content filled
-  # from live run state. The agent can shadow any slot in `LayoutRegistry`; when it
-  # has, that subtree is used in place of the native default (same walk).
+  # The render mirror (PLAN-009 + PLAN-012): ONE path. Build the layout TREE from
+  # the active panes + the live gaze, RESOLVE its tmpl:: holes against the data/*
+  # bag (W3/W4), walk it (`Surface.layout`), and resolve each placed node — a
+  # native `"pane"` node through the project/view/materialize machinery, every
+  # other leaf (incl. the status/composer slots, now hole-bearing data — W5
+  # dogfood) straight through `Materialize`. The agent can shadow any slot in
+  # `LayoutRegistry`; when it has, that subtree is used (same walk).
   #
   # The result order is [status, panes-in-tree-order, composer] — preserved by the
   # tree's structure (status first child, body panes, composer last).
@@ -146,7 +147,10 @@ defmodule SpellAgent.Tui.App do
     # W3/W4) BEFORE layout: an agent-authored slot may carry live holes, and this
     # is the one place a frozen form becomes a value. Native nodes carry no holes,
     # so the walk is a cheap identity for them; it never raises (per-hole ladder).
-    data_bag = DataBag.build(state, area)
+    # The composer hint is keymap-derived (live registry + compiled keymaps), so it
+    # stays an App projection; inject it so DataBag can expose data/composer-text
+    # without DataBag needing the keymap layer.
+    data_bag = DataBag.build(Map.put(state, :composer_hint, hint_for(state)), area)
 
     state
     |> render_tree()
@@ -175,7 +179,10 @@ defmodule SpellAgent.Tui.App do
     resolve_node(node, rect, state)
   rescue
     e ->
-      Logger.warning("render: dropped node #{inspect(Lens.slot(node) || Map.get(node, "type"))}: #{Exception.message(e)}")
+      Logger.warning(
+        "render: dropped node #{inspect(Lens.slot(node) || Map.get(node, "type"))}: #{Exception.message(e)}"
+      )
+
       []
   catch
     _, _ -> []
@@ -241,30 +248,14 @@ defmodule SpellAgent.Tui.App do
   # we walk via layout/2 to intercept the native slots, so handle it here too).
   # The native status/composer slots carry only a static frame (no content) in the
   # default tree, so the App fills their dynamic text. But if the AGENT has
-  # shadowed the slot with its own content (a widget leaf carrying :text), that
-  # wins — the shadow is the whole point. `native_placeholder?/1` distinguishes:
-  # the default node has no "text"; an agent paragraph does.
+  # ONE resolution path (PLAN-012 W5 dogfood): every node — status, composer, an
+  # agent shadow, a pane — resolves by its TYPE. The status/composer slots used to
+  # be filled by hardcoded `status_widget`/`composer_widget`; now their default
+  # nodes carry tmpl:: holes over the data/* bag (DefaultLayout), already resolved
+  # by `Surface.resolve_holes` before this point, so they materialize like any
+  # widget. The special-case branch (and the two fill fns) are gone.
   defp resolve_node(node, rect, state) do
-    case Lens.slot(node) do
-      "status" -> resolve_filled(node, rect, state, &status_widget/1)
-      "composer" -> resolve_filled(node, rect, state, &composer_widget/1)
-      _ -> resolve_by_type(node, rect, state)
-    end
-  end
-
-  defp resolve_filled(node, rect, state, native_fill) do
-    if native_placeholder?(node) do
-      [{native_fill.(state), rect}]
-    else
-      resolve_by_type(node, rect, state)
-    end
-  end
-
-  # The native status/composer placeholders carry no content key; an agent shadow
-  # does (e.g. a paragraph with :text, or any non-paragraph widget).
-  defp native_placeholder?(node) do
-    Map.get(node, "type") in ["paragraph", nil] and
-      is_nil(Map.get(node, "text")) and is_nil(Map.get(node, :text))
+    resolve_by_type(node, rect, state)
   end
 
   defp resolve_by_type(node, rect, state) do
@@ -532,52 +523,7 @@ defmodule SpellAgent.Tui.App do
 
   # A single-line run summary across the top: running with counts, or the
   # outcome glyph once done. The FULL answer lives in the scrollable answer pane.
-  defp status_widget(state) do
-    spans = Store.spans(state.store)
-    runs = Store.run_spans(spans)
-    tools = length(Store.tool_spans(spans))
-    turns = runs |> Enum.flat_map(& &1.turns) |> length()
-
-    {label, color} =
-      cond do
-        state.running? -> {"● running…  turns #{turns} · tools #{tools}", :yellow}
-        match?({:ok, _}, state.result) -> {"✓ done  turns #{turns} · tools #{tools}", :green}
-        match?({:error, _}, state.result) -> {"✗ failed  turns #{turns} · tools #{tools}", :red}
-        state.result != nil -> {"✓ done  turns #{turns} · tools #{tools}", :green}
-        true -> {"idle — type a prompt below, then ↵", :dark_gray}
-      end
-
-    %Paragraph{
-      text: label,
-      style: %Style{fg: color, modifiers: [:bold]},
-      block: %Block{title: " spell · inspector ", borders: [:all], border_type: :rounded}
-    }
-  end
-
-  # ---- composer ----
-
-  defp composer_widget(state) do
-    insert? = state.ui.mode == :insert
-    # Title carries the modal indicator so the mode is always visible.
-    title = if insert?, do: " prompt — INSERT ", else: " prompt — NORMAL "
-
-    text =
-      cond do
-        # In INSERT, show the live buffer + cursor (always, even when empty).
-        insert? -> state.composer <> "▎"
-        # In NORMAL with a buffer, show it (un-submitted); else the keymap hint.
-        state.composer != "" -> state.composer
-        true -> hint_for(state)
-      end
-
-    fg = if insert? or state.composer != "", do: :white, else: :dark_gray
-
-    %Paragraph{
-      text: text,
-      style: %Style{fg: fg},
-      block: %Block{title: title, borders: [:all], border_type: :rounded}
-    }
-  end
+  # ---- composer hint (keymap-derived projection, feeds data/composer-text) ----
 
   # The hint line is DERIVED from the live keymaps (PLAN-346 W4), focus-aware, so
   # it never drifts from the actual bindings — and a runtime `keymap/bind` is

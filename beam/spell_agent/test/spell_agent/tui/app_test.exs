@@ -164,6 +164,60 @@ defmodule SpellAgent.Tui.AppTest do
     t
   end
 
+  defp status_style(widgets) do
+    {%ExRatatui.Widgets.Paragraph{style: style}, _} = Enum.at(widgets, 0)
+    style
+  end
+
+  defp composer_style(widgets) do
+    {%ExRatatui.Widgets.Paragraph{style: style}, _} = List.last(widgets)
+    style
+  end
+
+  # W5 dogfood parity: the status/composer now render from tmpl:: holes over the
+  # data/* bag (no more hardcoded status_widget/composer_widget). The exact label
+  # STRINGS, COLORS, modal title, and cursor glyph must be byte-identical to the
+  # retired fills — this pins the colors the text-only assertions miss.
+  test "W5: status label + color survive the hole path exactly", %{store: store} do
+    running = App.render(state(%{store: store, running?: true}), %Frame{width: 80, height: 24})
+    assert status_text(running) == "● running…  turns 0 · tools 0"
+    assert status_style(running).fg == :yellow
+    assert :bold in status_style(running).modifiers
+
+    done = App.render(state(%{store: store, result: {:ok, "x"}}), %Frame{width: 80, height: 24})
+    assert status_text(done) == "✓ done  turns 0 · tools 0"
+    assert status_style(done).fg == :green
+
+    failed =
+      App.render(state(%{store: store, result: {:error, :boom}}), %Frame{width: 80, height: 24})
+
+    assert status_text(failed) == "✗ failed  turns 0 · tools 0"
+    assert status_style(failed).fg == :red
+
+    idle = App.render(state(%{store: store}), %Frame{width: 80, height: 24})
+    assert status_text(idle) =~ "idle"
+    assert status_style(idle).fg == :dark_gray
+  end
+
+  test "W5: composer text + fg + modal title survive the hole path exactly", %{store: store} do
+    insert_ui = Ui.new(focus: :prompt, mode: :insert, panes: [:prompt, :tree, :detail])
+
+    ins =
+      App.render(state(%{store: store, composer: "hi", ui: insert_ui}), %Frame{
+        width: 80,
+        height: 24
+      })
+
+    assert composer_text(ins) == "hi▎"
+    assert composer_title(ins) =~ "INSERT"
+    assert composer_style(ins).fg == :white
+
+    normal_ui = Ui.new(focus: :tree, mode: :normal, panes: [:prompt, :tree, :detail])
+    norm = App.render(state(%{store: store, ui: normal_ui}), %Frame{width: 80, height: 24})
+    assert composer_title(norm) =~ "NORMAL"
+    assert composer_style(norm).fg == :dark_gray
+  end
+
   test "the composer hint is DERIVED from the live keymap, focus-aware (W5)", %{store: store} do
     # Reset live overrides so this asserts the COMPILED keymap (other tests share
     # the supervised KeymapRegistry and may have left rebinds that shadow it).
