@@ -110,3 +110,66 @@ reactivity correspondence. Per this review its CACHING framing is demoted: read 
 (cache breakpoints) as "one downstream beneficiary of immutable projections", not as a
 primitive. U1 (hist/black unified projection) + U3 (one hole-dep pass, three readouts)
 remain the load-bearing insights; caching is the provider-incidental third reader.
+
+* S-E DETAIL — memory threading (the def-env channel), fully specified
+
+** What "memory" is here (verified, ptc_runner sub_agent.ex)
+A PtcRunner mission has TWO private context channels, both session-keyed:
+- tape (initial_messages) = the verbatim LLM message replay (the CONVERSATION). Big,
+  token-expensive, breaks prompt caching if a child inherits a slice (different prefix
+  per child). A child must NOT inherit this (start cold; read the region instead).
+- memory (initial_memory) = the def-ENV: the map of bindings created by (def x …)
+  across a session's turns. PURE DATA (no LLM tokens). SubAgent.run threads it via
+  opts[:initial_memory]; step.memory comes back out (sub_agent.ex:503,507,522).
+  SubAgent.chat already round-trips it (chat/3 :memory arg). So the PLUMBING EXISTS
+  in ptc_runner; what is missing is a Session.run passthrough.
+
+** The gap (verified, spell_agent session.ex)
+Session.run DERIVES memory from the session_id via load_continuation -> Hist.continuation
+(session.ex:76,103-104), then passes initial_memory: memory. There is NO opt to OVERRIDE
+or SEED it from outside. So a freshly-spawned child (new session_id) gets EMPTY memory
+and starts cold. Correct as a default; the FUP adds an OPT-IN override.
+
+** The change (small, surgical)
+- session.ex run/2: accept opts[:inherit_memory] (a map) and, when present, MERGE it
+  into the loaded continuation memory before SubAgent.run:
+    base = load_continuation(session_id).memory        # usually %{} for a fresh child
+    seed = opts[:inherit_memory] || %{}
+    initial_memory = Map.merge(base, seed)             # seed wins on conflict
+- spawn-session / scatter: an optional :inherit-memory arg → threaded to the child's
+  Session.run as opts[:inherit_memory].
+
+** Why thread memory but NOT tape (the design rule)
+- tape = the PAST CONVERSATION → private, stale for a child, and CACHE-POISONING
+  (per-child prefix divergence). Never inherit. A child reads the PRESENT (region)
+  instead — the stigmergic principle (read the convergent medium, don't replay history).
+- memory = NAMED DATA BINDINGS → cheap, reusable, cache-NEUTRAL (it is not in the
+  prompt prefix; it is the def-env the PTC sandbox sees). Inheriting (def callers …)
+  lets a child REUSE a computed value without re-deriving it. This is the cheap,
+  correct channel for "hand the child the data it needs" — superior to baking the data
+  into the prompt (which IS cache-poisoning).
+
+** What to thread (selectivity — the smart part)
+NOT the whole parent memory (could be large / irrelevant / leak). The combinator
+selects a SLICE by key:
+  (scatter [f files] {:inherit-memory (select-keys mem ["callers" "config"]) :prompt …})
+So each child gets exactly the precomputed bindings it needs, uniform across the burst
+(→ cache-neutral AND identical, no prefix divergence). Selection keeps the slice small
+and intentional (same discipline as the context lens's scope predicate, FEAT-017).
+
+** Relationship to context-projection (FEAT-017)
+Two complementary "hand the child what it needs" channels:
+- memory threading = PUSH a small slice of PRECOMPUTED parent bindings (def-env). Eager,
+  tiny, for values the parent ALREADY computed.
+- context projection = PULL a lens over hist+black at a watermark. Lazy, richer, for the
+  collective's state the child discovers.
+Rule of thumb: push a binding the parent computed (memory); pull a fact the cohort
+produced (region). Both avoid tape inheritance; both are cache-friendly.
+
+** Acceptance
+- a child spawned with :inherit-memory {"callers" […]} can reference (get data-or-binding
+  callers) without re-deriving — assert the binding is present in its def-env.
+- threading memory does NOT alter the child's prompt prefix (cache-neutral) — assert the
+  prompt bytes are identical with and without :inherit-memory.
+- selection: only the named keys cross; unnamed parent bindings do NOT leak.
+- default (no :inherit-memory) = cold child, unchanged from today.

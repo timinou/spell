@@ -1,0 +1,109 @@
+#+TITLE: Decisions as stigmergy — :decision/:resolution records + the human's reactive mesh dashboard
+#+STATE: ITEM
+#+SESSION_ID: 151269c91db37358
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T23-09-03-478Z_151269c91db37358.jsonl]]
+#+CUSTOM_ID: FEAT-019-decisions-as-stigmergy-decision-resoluti
+#+BLOCKED_BY: FEAT-013
+
+* Initial Message
+
+what are distributed agents in a mesh network, really? please look into network theory, not hype. i want us to think about that deeply and from first principles, in order to let the BEAM lisp runtime call itself and create meshed sub-sessions. But I want strong theoretical backing beforehand
+
+* Goal
+Let an agent surface a decision to the human (or another agent, or a policy) by
+POSTING a :decision record, and queue a task that runs when a matching :resolution
+is posted — unconditionally, or gated on a creator-defined answer schema. Plus the
+stigmergic dashboard that surfaces open decisions AND shows what the agents are doing,
+built from already-shipped parts (PLAN-012 holes + PROJ-004 reactive cells + the mesh).
+
+Read first: docs/agent-mesh-theory/16-decisions-and-the-human-surface.org (the full
+design + the honest implemented-ledger), 07-screens.org (the pane set this re-points).
+
+* Why this is stigmergic (the framing that makes it small)
+The human is just another participant on the blackboard. Agent posts a question
+(:decision); human/agent/policy posts an answer (:resolution); a watch fires the
+queued task. No "human-in-the-loop" subsystem — the EXISTING mesh primitives
+(post/query/watch + a resolution record) express the whole flow. This is scenario S4
+(stigmergic unblocking) with a person as the resolver.
+
+* Wave / deps
+BLOCKED BY FEAT-013 (the watcher fires :on-answer). Records ride FEAT-008/009/010
+(built). Dashboard rides PLAN-012 (built) + PROJ-004 reactive cells (built) +
+LayoutRegistry/Reaction DSL (built). Independent of FEAT-011/012.
+
+* The records (two kinds; creator defines the answer schema)
+- :decision {:question, :answer-schema, :on-answer <frozen ptc>, :gate? }
+  - :answer-schema = the flexible-ish structured format the answer must match
+    (e.g. {:choice [:proceed :skip :defer] :note :string}). DEFINED BY THE CREATOR.
+  - :on-answer = a FROZEN ptc form (PLAN-012 quote/tmpl::) = the queued task.
+  - :gate (optional) = run :on-answer only if the answer matches (e.g. choice=:proceed).
+- :resolution {:decision <seq>, :answer <matches answer-schema>}
+  - posted by the human (dashboard reaction), or an agent, or a policy. Opaque resolver.
+
+* The flow (all existing verbs)
+1. (black/post {:kind :decision :payload {…}})
+2. (black/watch {:when {:kind :resolution :where {:decision <seq>}} :do <on-answer>
+                 :fuel 1 :ttl <long>})
+3. resolver: (black/post {:kind :resolution :payload {:answer …}})
+4. watch fires :on-answer — unconditionally, OR the :when carries the gate predicate
+   over the answer map (regardless-of vs gated-on, both expressible).
+
+* The dashboard (the doc-07 panes, fed by mesh cells)
+- READ (what agents are up to): reactive cells (PROJ-004 Cell, BUILT) whose query is
+  (black/query {:match …}); the result lands in data/* (data_bag, BUILT); tmpl:: holes
+  render it (PLAN-012, BUILT). Panes: decisions / findings / spawn-tree / claims /
+  verdicts / cohort (FEAT-017 lens).
+- WRITE (answer a decision): a Reaction (keymap DSL, BUILT) whose keystroke action is
+  (black/post {:kind :resolution …}). The write lives in the REACTION tier (deliberate
+  keystroke), NOT the read-only cell tier — the existing Cell-vs-Reaction capability
+  split is exactly right.
+
+* The ONE capability wire-up
+- grant black/query (mesh READ verbs) to the read-only cell tools tier (Cell W1 tier
+  is find/get/hist-reads today). One-line addition; cells stay read-only (no mutators).
+
+* Modules / edits (proposed)
+- Mesh.Record: add :decision, :resolution to the kind set (or a payload convention;
+  distinct kinds cleaner). lib/spell_agent/mesh/record.ex.
+- a :decision answer-schema -> choice-affordances renderer (tmpl:: over the schema).
+- a Reaction binding: keystroke -> black/post :resolution for the focused decision.
+- mesh cells for the panes (cell/registry, BUILT) + the read-only-tier black/query grant.
+- the watcher (FEAT-013) handles :on-answer firing + the gate predicate (no new control flow).
+
+* CodePaths
+- lib/spell_agent/tui/cell.ex + cell/registry.ex (PROJ-004, reactive cells — BUILT).
+- lib/spell_agent/tui/data_bag.ex (the data/* bag — BUILT).
+- lib/spell_agent/tui/layout_registry.ex set/2 (agent authors the dashboard — BUILT).
+- lib/spell_agent/tui/keymap_registry.ex + Reaction DSL (keystroke->action — BUILT).
+- Mesh.Store by_match / black/query (the cell's query — BUILT, FEAT-009/010).
+- FEAT-013 watcher (:on-answer firing — specced).
+
+* Edge cases
+- a decision resolved twice (two resolutions): the watch fuel 1 fires once; the gate/
+  fold takes the first (lowest seq) resolution — claim-style determinism.
+- a decision that EXPIRES unanswered: the watch ttl lapses; the :on-answer with a
+  default branch (or a timeout policy) handles it — surface as "expired" in the pane.
+- answer does NOT match the schema: the resolution is posted but the gate predicate
+  fails -> :on-answer does not fire; the pane shows "answer rejected (schema)".
+- policy + human race: a policy auto-resolves before the human; first resolution wins;
+  the decision disappears from the human's open-decisions cell on next resolve.
+
+* Acceptance (observable)
+- post a :decision, post a matching :resolution -> :on-answer runs once (gated path:
+  runs only when the answer matches :gate; ungated: runs on any resolution).
+- the decisions cell shows open decisions and hides resolved ones (live, off-frame).
+- a dashboard reaction posts a :resolution for the focused decision; the queued task
+  fires; the agent's work proceeds — human and agent never referenced each other.
+- a policy can resolve a decision with no human action (interchangeable resolver).
+- mix check clean.
+
+* Tests
+- decision->resolution->on-answer fires once; gated vs ungated both correct.
+- schema-mismatch answer does not fire the gated task.
+- the open-decisions projection excludes resolved decisions.
+- the resolver-symmetry: human / agent / policy resolutions all fire identically.
+
+* The deepest point
+No human-in-the-loop framework. The human is one more reader/writer of the append-only
+medium; the dashboard is the mesh's own screens turned toward a person. A decision is a
+finding that asks; a resolution is a finding that answers; a watch carries the rest.

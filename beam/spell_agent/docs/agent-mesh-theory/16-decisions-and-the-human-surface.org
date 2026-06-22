@@ -1,0 +1,180 @@
+#+TITLE: Decisions as stigmergy — surfacing choices to the human, queuing on the answer
+#+SUBTITLE: A :decision record + a reactive dashboard, almost entirely from parts already built
+#+OPTIONS: toc:2 num:t
+
+* The question
+
+"Express: surface a decision to the human, and queue a task to run when they answer
+(either regardless of the answer, or gated on a flexibly-structured answer the
+decision's creator defined). Is that stigmergic? And how easily, given PLAN-012 +
+PROJ-004 done, could we build a stigmergic dashboard that surfaces decisions AND
+shows what the agents are doing?"
+
+Short answers: *yes, it is stigmergic — exactly so.* And *the dashboard is mostly
+already built* — it is the doc-07 screens pointed at the mesh, with the human added
+as one more participant who reads and writes the same blackboard.
+
+* Is it stigmergic? Yes — the human is just another agent on the blackboard
+
+Stigmergy = coordinate through a shared medium, not by addressing each other; time-
+and identity-decoupled (doc 01 §3). A decision-to-a-human fits PERFECTLY:
+
+: agent posts a :decision record to a region        (a question left in the medium)
+: human reads the blackboard, posts a :resolution    (an answer left in the medium)
+: a watch fires the queued task on the resolution     (the medium carried the causality)
+
+The agent never holds a handle to "the human"; it posts a question and walks away
+(or yields). The human never messages the agent; they answer into the shared store.
+A standing watch connects them. This is EXACTLY scenario S4 (stigmergic unblocking,
+doc 09) — only the entity that posts the awaited record is a person, not another
+agent. The mesh already treats "the thing that resolves my block" as opaque; a human
+is a valid filler. *The human is a participant in the blackboard, not a special case.*
+
+This is the deepest point: we do NOT build a "human-in-the-loop" subsystem. We
+notice the human is an agent that reads/writes the same medium, and the EXISTING
+mesh primitives (post / watch / a resolution record) already express the whole flow.
+
+* The shape — a :decision record + a :resolution, both on the blackboard
+
+A sixth mesh record kind (or a payload convention on :finding; a distinct kind is
+cleaner). The decision's CREATOR defines the answer schema — the "flexible-ish
+structured format" the question asks for:
+
+: :decision  {:question "Rename verify/1 across 12 call sites?"
+:             :answer-schema {:choice [:proceed :skip :defer]    ; the flexible structure
+:                             :note :string}                      ; creator-defined shape
+:             :on-answer "<frozen ptc>"                           ; the queued task (PLAN-012 freeze)
+:             :gate :proceed}                                     ; OPTIONAL: run :on-answer only if choice=:proceed
+:
+: :resolution {:decision <seq>                                    ; which decision it answers
+:              :answer {:choice :proceed :note "looks safe"}}     ; matches answer-schema
+:             ; posted by the HUMAN (via the dashboard) — or by an agent, or a policy
+
+The flow, entirely in existing verbs:
+1. agent: (black/post {:kind :decision :payload {…}}) — append, monotone.
+2. agent: (black/watch {:when {:kind :resolution :where {:decision <seq>}} :do <on-answer>})
+   — a standing intention (FEAT-013), fuel 1, a long ttl.
+3. human (or agent/policy): (black/post {:kind :resolution :payload {:answer …}}).
+4. the watch fires; :on-answer runs — UNCONDITIONALLY, or GATED on the answer:
+   - regardless of the answer: :do runs on any matching resolution.
+   - gated: the :do (or the watch :when) tests :gate against :answer — e.g.
+     :when {:kind :resolution :where {:decision <seq> :answer {:choice :proceed}}}.
+     The flexible structure means the gate is any predicate over the creator's schema.
+
+That is the WHOLE mechanism. No new control flow — a decision is a finding that
+asks, a resolution is a finding that answers, a watch is the queue, the gate is a
+predicate over a creator-defined answer shape.
+
+* Who can answer — the symmetry that makes it powerful
+
+Because the resolution is just a record, the ANSWERER is opaque:
+- a HUMAN answers via the dashboard (below) → human-in-the-loop.
+- ANOTHER AGENT answers (a more-capable mind, a specialist) → agent escalation.
+- a POLICY answers automatically (a rule: "auto-:proceed if risk < medium") → automation.
+The decision does not know or care which. The same :decision can be auto-resolved by
+a policy when confident and ESCALATED to a human when not — by simply not having a
+policy match, leaving the record for the human's dashboard to surface. *Human,
+specialist agent, and policy are interchangeable resolvers of the same record.* That
+is the doc-02 §4 "decision vs agreement" split applied to human choice: the human
+supplies JUDGMENT (the answer); the watch supplies the MECHANISM (the queued task).
+
+* How implemented is this? (the honest ledger)
+
+| piece | status | evidence |
+|-------+--------+----------|
+| append a question/answer record | *built* | Mesh.Store.put + black/post (FEAT-008/009/010) |
+| query open decisions | *built* | Mesh.Store.by_match / black/query |
+| a standing watch fires :on-answer | *specced* | FEAT-013 (watcher); not yet built |
+| freeze :on-answer as data | *built* | PLAN-012 (tmpl::/quote — frozen ptc as data) |
+| gate on a flexible answer schema | *built* (as a predicate) | by_match :where over the answer map |
+| the human reading/writing the board | *needs a surface* | the dashboard (below) |
+
+So the LOGIC is ~80% present today: decisions and resolutions are ordinary mesh
+records; the gate is a query predicate; the queued task is a frozen ptc (PLAN-012).
+The two missing pieces are (a) FEAT-013's watcher to fire :on-answer, and (b) a
+dashboard surface for the human. Neither is new architecture.
+
+* The stigmergic dashboard — how easily, given PLAN-012 + PROJ-004 done
+
+VERY easily, because it is the doc-07 mesh screens + the human as a writer, and BOTH
+halves of "live read" and "let the human act" are already built primitives:
+
+** Live READ (what the agents are up to) — PROJ-004 reactive cells, verified built
+- SpellAgent.Tui.Cell (PROJ-004 W0, BUILT): a reactive cell = "a frozen tmpl:: query
+  + a name", resolved OFF the frame clock (debounced), injected into data/* as
+  ordinary data a render hole reads. It has a READ-ONLY tools tier (W1) — find/get/
+  HIST-READS/harness-reads. (lib/spell_agent/tui/cell.ex, verified.)
+- ∴ a cell whose query is (black/query {:region R :match …}) gives a LIVE view of the
+  blackboard with ZERO new machinery: the cell re-resolves on a slow clock, the
+  dashboard's tmpl:: holes read data/<cell> as plain data. The "mesh-view" sugar
+  (doc 11) is literally a black/query cell + a tmpl:: layout.
+- the data/* bag (PLAN-012 W4, BUILT, data_bag.ex) is where the cell's result lands;
+  adding a mesh view = adding cells, NOT render-path Elixir.
+- one caveat to wire: the cell's read-only tier must include the mesh READ verbs
+  (black/query, Mesh.Store reads). Today the tier is find/get/hist-reads (W1); adding
+  black/query to the read-only tier is a one-line capability grant (FEAT-017-adjacent).
+
+** Live WRITE (surface decisions + let the human answer) — layout/set + a write verb
+- the agent AUTHORS the dashboard as data: layout/set over a tmpl:: tree (LayoutRegistry,
+  BUILT — layout_registry.ex set/2). The decisions pane is a cell over
+  (black/query {:match {:kind :decision}}); each row renders the question + the
+  answer-schema as choice affordances.
+- the human ANSWERS by a keybinding/reaction that posts a :resolution. The Reaction
+  DSL + KeymapRegistry (PLAN-346, in-tree) already turn a keystroke into a ptc action;
+  that action is (black/post {:kind :resolution …}). The ONLY new capability: the
+  human-facing surface needs a WRITE verb (black/post) where cells are read-only —
+  so the human's resolution write lives in the REACTION tier (a deliberate keystroke),
+  not the cell tier (passive render). That capability boundary is exactly the
+  Cell-vs-Reaction split that already exists (render = read-only; keystroke = may act).
+
+** Net: the dashboard is
+: a layout (tmpl::, built) of cells (reactive black/query, built) for READING,
+: + reactions (keystroke -> black/post :resolution, built DSL) for ANSWERING.
+Everything structural exists. What is NEW is small and named: grant black/query to the
+read-only cell tier; a couple of authored panes (decisions / findings / spawn-tree /
+claims) — which is exactly the doc-07 §1 screen set, now fed by mesh cells instead of
+span cells.
+
+* The surfaces (from doc 07, now as the human's stigmergic dashboard)
+
+| pane | cell query (read) | the human sees |
+|------+-------------------+----------------|
+| decisions | black/query {:kind :decision} minus resolved | open questions + their answer-schema affordances |
+| findings | black/query {:kind :finding} | what the cohort has discovered, live |
+| spawn-tree | session/region projection (hist+registry) | who spawned whom, who is live |
+| claims | black/query {:kind :claim} + fold | who owns what work (winner lit, losers dim) |
+| verdicts | black/query {:kind :verdict} | committed collective decisions |
+| cohort | FEAT-017 context lens across a goal | every session toward a goal + its state (the doc-07 §4 cohort pane) |
+
+Each pane is a cell + a tmpl:: row spec. The decisions pane is the only one with a
+WRITE affordance (a reaction that posts a resolution); the rest are read-only views.
+The human is now a first-class node on the blackboard: they SEE the stigmergy (the
+findings/claims/verdicts filling in) and they PARTICIPATE in it (answering decisions),
+through the same medium the agents use.
+
+* Effort estimate (honest)
+
+| task | size | why |
+|------+------+-----|
+| :decision / :resolution record kinds + black/post conventions | S | a record kind + a payload schema; rides FEAT-008/009 |
+| watcher fires :on-answer, gated on answer predicate | (FEAT-013) | the watch already does pattern+gate; a resolution is just a matchable record |
+| grant black/query to the read-only cell tier | XS | a one-line capability addition to the W1 read-only tools map |
+| decisions/findings/claims panes as mesh cells | S | doc-07 panes re-pointed at black/query cells (PROJ-004 + PLAN-012, built) |
+| a reaction: keystroke -> black/post :resolution | S | Reaction DSL (built) + the mesh write verb (built) |
+| the answer-schema -> choice affordances renderer | S | render the creator's :answer-schema as selectable rows (tmpl:: over the schema) |
+
+No item is L. Nothing needs new architecture. The dashboard is the convergence of
+three things ALREADY built (PLAN-012 holes, PROJ-004 reactive cells, the mesh stores)
+plus FEAT-013 (the watcher, already specced) — surfaced through the doc-07 screen set.
+
+* Why this is the loop closing
+
+The mesh let agents coordinate without messaging. PLAN-012 let interfaces be data
+with live holes. PROJ-004 let those holes resolve effectfully off-frame, read-only.
+Put them together and the HUMAN becomes a participant in the same stigmergic medium:
+they watch the blackboard fill (reactive cells over black/query) and they answer
+questions left for them (a reaction posting a resolution), and a watch turns their
+answer into queued agent work. No human-in-the-loop framework — just the human as one
+more reader/writer of the append-only medium, with a dashboard that is the mesh's own
+screens turned toward a person. The decision is a finding that asks; the answer is a
+finding that replies; the medium carries the rest.
