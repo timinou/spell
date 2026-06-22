@@ -13,11 +13,40 @@ defmodule SpellAgent.Tui.Cell.ToolsTest do
   alias PtcRunner.Lisp
   alias SpellAgent.Tui.Cell
   alias SpellAgent.Tui.Cell.Tools
+  alias SpellAgent.Tui.Store.Span
+  alias SpellAgent.Tui.Ui
 
   defp frozen(src) do
     {:ok, step} = Lisp.run("(quote #{src})")
     step.return
   end
+
+  # A minimal live span forest + a tree gaze whose cursor sits on "root", so a
+  # cell can resolve a REAL forest read (cursor-id -> descendants) end to end
+  # (mirrors the harness_test fixture).
+  defp forest do
+    %{
+      "root" => %Span{
+        id: "root",
+        parent_id: nil,
+        kind: :run,
+        status: :ok,
+        label: "r",
+        children: ["c"]
+      },
+      "c" => %Span{
+        id: "c",
+        parent_id: "root",
+        kind: :tool,
+        status: :ok,
+        label: "t",
+        children: ["g"]
+      },
+      "g" => %Span{id: "g", parent_id: "c", kind: :llm, status: :ok, label: "llm"}
+    }
+  end
+
+  defp tree_ui, do: Ui.new(focus: :tree, auto_depth: 10) |> Map.put(:cursors, %{tree: 0})
 
   # ============================================================
   # allowlist / denylist shape
@@ -30,9 +59,23 @@ defmodule SpellAgent.Tui.Cell.ToolsTest do
       assert Tools.allowed?("harness/ancestors")
     end
 
-    test "excludes every known mutator" do
-      for verb <- Tools.forbidden_verbs() do
+    test "excludes named mutators (pinned literally, not derived from the set)" do
+      # Pin the mutator names HERE so deleting a verb from the production
+      # @forbidden set cannot silently delete its assertion (the reviewer's
+      # tautology concern). Every namespace a cell must never reach is represented.
+      for verb <- ~w(
+            keymap/bind keymap/unbind keymap/define-reaction
+            hist/promote hist/crystallize
+            define-tool define-config
+            sh sh-pipe layout/set theme/set
+          ) do
         refute Tools.allowed?(verb), "mutator #{verb} must not be cell-callable"
+      end
+    end
+
+    test "every forbidden-set member is also denied (set-level guard)" do
+      for verb <- Tools.forbidden_verbs() do
+        refute Tools.allowed?(verb), "forbidden #{verb} must not be cell-callable"
       end
     end
 
@@ -60,10 +103,13 @@ defmodule SpellAgent.Tui.Cell.ToolsTest do
       end
     end
 
-    test "no keymap mutator survives the filter" do
-      tier = Tools.read_only(%{})
-      refute Map.has_key?(tier, "keymap/bind")
-      refute Map.has_key?(tier, "keymap/define-reaction")
+    test "no keymap mutator survives the filter (every keymap/* key absent)" do
+      # Assert the built tier contains NO key under the mutating keymap/* namespace
+      # — stronger than naming two verbs, catches a future allowlisted keymap verb.
+      tier = Tools.read_only(forest(), tree_ui())
+
+      keymap_keys = for {name, _} <- tier, String.starts_with?(name, "keymap/"), do: name
+      assert keymap_keys == [], "keymap mutators leaked into the tier: #{inspect(keymap_keys)}"
     end
 
     test "the harness reads survive the filter" do
@@ -78,12 +124,21 @@ defmodule SpellAgent.Tui.Cell.ToolsTest do
   # ============================================================
 
   describe "a cell resolves through the read-only tier" do
-    test "a read verb in the tier resolves to live forest data" do
-      # harness/state returns the gaze as a map; a cell can read it. This proves
-      # the tier is not just shape-correct but actually CALLABLE from a cell.
-      tier = Tools.read_only(%{})
-      assert {:ok, value} = Cell.resolve(frozen(~S|(harness/state {})|), %{}, tier)
-      assert is_map(value)
+    test "a forest read resolves to LIVE forest data through the tier" do
+      # The acceptance mechanic in miniature: a cell reads the cursor span and
+      # walks its descendants — a REAL forest query, not the forest-ignoring
+      # harness/state. Proves the tier is wired to live data, not just callable.
+      tier = Tools.read_only(forest(), tree_ui())
+
+      assert {:ok, [_ | _] = descendants} =
+               Cell.resolve(
+                 frozen(~S|(harness/descendants {:id (harness/cursor-id)})|),
+                 %{},
+                 tier
+               )
+
+      # cursor sits on "root"; its descendants are c + g.
+      assert Enum.sort(descendants) == ["c", "g"]
     end
 
     test "a mutating verb is unreachable through the tier (degrades to :error)" do
