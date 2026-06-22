@@ -95,3 +95,6 @@ erl_crash.dump
 # Harbor adapter persistent build cache (cargo + target)
 spell_harbor/.build-cache/
 jobs/
+
+# Rustler NIF build artifacts (compiled .so copied to priv/native at build)
+beam/*/priv/native/
