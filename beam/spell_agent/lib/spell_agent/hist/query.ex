@@ -29,6 +29,7 @@ defmodule SpellAgent.Hist.Query do
   re-executing or re-prompting a model.
   """
 
+  alias SpellAgent.Hist.Lens
   alias SpellAgent.Hist.Node
   alias SpellAgent.Hist.Store
 
@@ -86,7 +87,9 @@ defmodule SpellAgent.Hist.Query do
   The public helper `contains_tool_call?/2` is used internally and exposed for
   custom predicates.
   """
-  @spec forms(module(), String.t(), (term() -> boolean()) | {:tool_call, String.t()}) :: [Node.t()]
+  @spec forms(module(), String.t(), (term() -> boolean()) | {:tool_call, String.t()}) :: [
+          Node.t()
+        ]
   def forms(impl, session_id, matcher) when is_function(matcher, 1) do
     Store.list(impl, :node, session_id)
     |> Enum.filter(fn %Node{form: form} -> matcher.(form) end)
@@ -95,6 +98,12 @@ defmodule SpellAgent.Hist.Query do
 
   def forms(impl, session_id, {:tool_call, name}) do
     forms(impl, session_id, &contains_tool_call?(&1, name))
+  end
+
+  # PLAN-011 W6: turns whose program runs a shell command with the given HEAD
+  # (rg, git, …) via (tool/sh {:argv [head …]}) or (tool/sh-pipe {:stages …}).
+  def forms(impl, session_id, {:shell, head}) do
+    forms(impl, session_id, fn form -> head in Lens.shell_heads(form) end)
   end
 
   @doc """
@@ -168,8 +177,10 @@ defmodule SpellAgent.Hist.Query do
       Store.list(impl, :node, session_id)
       |> Enum.filter(fn %Node{seq: seq} -> is_nil(min_seq) or seq >= min_seq end)
 
-    Enum.reduce(nodes, %{input: 0, output: 0, total: 0, nodes_counted: 0}, fn %Node{tokens: tokens},
-                                                                               acc ->
+    Enum.reduce(nodes, %{input: 0, output: 0, total: 0, nodes_counted: 0}, fn %Node{
+                                                                                tokens: tokens
+                                                                              },
+                                                                              acc ->
       case tokens do
         %{input: i, output: o} when is_integer(i) and is_integer(o) ->
           %{

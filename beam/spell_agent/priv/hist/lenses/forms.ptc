@@ -1,11 +1,21 @@
-;; forms lens (PLAN-005) — turns whose PROGRAM calls a given tool.
+;; forms lens (PLAN-005, PLAN-011 W6) — turns whose PROGRAM calls a given tool
+;; OR runs a given shell command head.
 ;;
-;; Mirrors SpellAgent.Hist.Query.forms({:tool_call, name}): returns the nodes
-;; (seq-ordered, as projected maps) whose form AST contains a (tool/<name> ...)
-;; call anywhere. Pure transform over the injected `data/nodes` projection;
-;; `data/tool` is the tool name to match.
+;; Mirrors SpellAgent.Hist.Query.forms: returns the nodes (seq-ordered, as
+;; projected maps) whose form AST contains either a (tool/<name> ...) call
+;; (when data/tool is set) or a shell command with the given head run via
+;; (tool/sh {:argv [head ...]}) / (tool/sh-pipe {:stages ...}) (when data/shell
+;; is set). Pure transform over the injected `data/nodes` projection.
 ;;
-;; A node's "form_tools" is the pre-extracted list of tool-call names in its AST
-;; (Elixir cannot pass the raw AST into the sandbox, so the names are surfaced).
+;; Each node carries two pre-extracted lists (Elixir cannot pass the raw AST
+;; into the sandbox, so the names are surfaced):
+;;   "form_tools"  — Lisp tool-call names in the AST    (matched by data/tool)
+;;   "form_shells" — shell command heads in the AST      (matched by data/shell)
+;; Dispatch order (shell first) and the blank-guard MUST mirror
+;; SpellAgent.Hist.Namespace.forms/3 exactly so the PTC lens and the Elixir
+;; fast path return identical nodes for identical args (the parity contract).
 (->> data/nodes
-     (filter (fn [n] (contains? (get n "form_tools") data/tool))))
+     (filter (fn [n]
+               (if (and data/shell (not= data/shell ""))
+                 (contains? (get n "form_shells") data/shell)
+                 (contains? (get n "form_tools") data/tool)))))

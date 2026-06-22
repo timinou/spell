@@ -102,6 +102,22 @@ defmodule SpellAgent.Hist.NamespaceTest do
     assert is_list(hits)
   end
 
+  test "hist/sessions returns the unified listing as data", %{verbs: v} do
+    rows = v["hist/sessions"].(%{})
+    assert is_list(rows)
+    assert Enum.any?(rows, &(&1.session_id == "s"))
+  end
+
+  test "hist/trace defaults to the current session; :session targets another", %{verbs: v} do
+    # no arg -> this namespace's session ("s"), which has 3 recorded turns
+    rows = v["hist/trace"].(%{})
+    assert length(rows) == 3
+    assert Enum.map(rows, & &1.seq) == Enum.sort(Enum.map(rows, & &1.seq))
+
+    # an unknown session id -> empty, never a crash
+    assert v["hist/trace"].(%{"session" => "nope"}) == []
+  end
+
   test "hist/spans needs a node id and returns spans+cost", %{verbs: v, nodes: {a, _b, _c}} do
     out = v["hist/spans"].(%{"node" => a.id})
     assert %{spans: _, cost: %{input: _, output: _}} = out

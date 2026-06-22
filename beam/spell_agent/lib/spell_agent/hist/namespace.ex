@@ -22,6 +22,8 @@ defmodule SpellAgent.Hist.Namespace do
       (hist/cost {})                     ; token spend across the session (C4/C5, PTC lens)
       (hist/lens {:source "(->> data/nodes ...)"})  ; run an AGENT-AUTHORED lens (PLAN-005)
       (hist/forms! {...})                ; the Elixir fast-path / parity oracle for any lens
+      (hist/sessions {})                 ; all sessions, open + past, enriched (PLAN-010)
+      (hist/trace {:session "<id>"})     ; a session's conversation trace as node rows (PLAN-010)
       (hist/spans {:node "<id>"})        ; the execution interior of a turn (C5)
       (hist/window {:keep 3})            ; the compacted view; trimmed stay in store (C6)
       (hist/recall {:like "postgres"})   ; pull a trimmed turn back (C6)
@@ -58,6 +60,8 @@ defmodule SpellAgent.Hist.Namespace do
       "hist/def!" => fn args -> Query.defq(impl, session_id, arg(args, "sym")) end,
       "hist/provenance!" => fn args -> provenance(impl, session_id, arg(args, "sym")) end,
       "hist/cost!" => fn args -> Query.cost(impl, session_id, cost_opts(args)) end,
+      "hist/sessions" => fn _args -> sessions(impl) end,
+      "hist/trace" => fn args -> trace(impl, session_id, args) end,
       "hist/spans" => fn args -> spans(impl, session_id, args) end,
       "hist/window" => fn args -> window(impl, session_id, args) end,
       "hist/recall" => fn args -> Window.recall(impl, session_id, arg(args, "like") || "") end,
@@ -89,9 +93,18 @@ defmodule SpellAgent.Hist.Namespace do
   end
 
   defp forms(impl, session_id, args) do
-    case arg(args, "tool") do
-      nil -> []
-      name -> Query.forms(impl, session_id, {:tool_call, name})
+    # `{:tool name}` matches a Lisp tool call; `{:shell head}` matches a shell
+    # command head run via tool/sh or tool/sh-pipe (PLAN-011 W6). Dispatch order
+    # (shell first) and the non-empty-string guard MUST match priv/hist/lenses/
+    # forms.ptc exactly, or the Elixir fast path and the PTC lens diverge for the
+    # same args (the parity contract). A blank/non-string arg is not a matcher.
+    shell = arg(args, "shell")
+    tool = arg(args, "tool")
+
+    cond do
+      is_binary(shell) and shell != "" -> Query.forms(impl, session_id, {:shell, shell})
+      is_binary(tool) and tool != "" -> Query.forms(impl, session_id, {:tool_call, tool})
+      true -> []
     end
   end
 
@@ -118,6 +131,22 @@ defmodule SpellAgent.Hist.Namespace do
       "introduced_at" => origin && %{"id" => origin["id"], "seq" => origin["seq"]},
       "rebound_at" => rebound
     }
+  end
+
+  # PLAN-010: the unified session listing (open + past) as plain data. Reads the
+  # live tracker via SessionList's default, so the agent sees what is running now
+  # alongside what was recorded.
+  defp sessions(impl) do
+    SpellAgent.Hist.SessionList.rows(store: impl)
+  end
+
+  # PLAN-010: a session's conversation trace as node rows. Defaults to THIS
+  # session when no :session arg is given, so `(hist/trace {})` reads the current
+  # conversation; pass `{:session "id"}` to read another. Interior rows for a
+  # node are one `(hist/spans {:node id})` away.
+  defp trace(impl, session_id, args) do
+    target = arg(args, "session") || session_id
+    SpellAgent.Hist.Trace.rows(impl, target)
   end
 
   defp spans(impl, session_id, args) do

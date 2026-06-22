@@ -156,6 +156,11 @@ defmodule SpellAgent.Hist.Lens do
       # Query.forms exactly.
       "tool_calls" => project_tool_calls(n.sees),
       "form_tools" => tool_call_names(n.form),
+      # PLAN-011 W6: shell-command HEADS the program runs (rg, git, …) extracted
+      # from `(tool/sh {:argv …})` / `(tool/sh-pipe {:stages …})` literals. The
+      # shell analogue of `form_tools`: lets `hist/forms {:shell "rg"}` recall
+      # turns by command, matching `{:tool "edit"}` for Lisp calls.
+      "form_shells" => shell_heads(n.form),
       "defs" => def_names(n.form),
       # FUP-001: `introduced` = names this turn FIRST bound; `bound` = ALL names
       # in its delta (introduced + rebinds). A provenance lens reads `introduced`
@@ -297,6 +302,85 @@ defmodule SpellAgent.Hist.Lens do
     do: Enum.reduce(form, acc, fn {_k, v}, a -> collect_calls(v, a) end)
 
   defp collect_calls(_form, acc), do: acc
+
+  @doc """
+  Shell-command heads invoked by a turn's program (PLAN-011 W6).
+
+  Where `form_tools` records the TOOL name (`"sh"`, `"sh-pipe"`), this records
+  the COMMAND head a shell call runs — `rg`, `head`, `git` — by reading the
+  `:argv` (for `sh`) or `:stages` (for `sh-pipe`) literal in the call. It lets
+  `hist/forms {:shell "rg"}` find turns that ran a specific command, the shell
+  analogue of `{:tool "edit"}` (docs/shell-as-data.md §5). Only LITERAL heads are
+  captured; a computed argv (`~expr` in head position) is not statically known
+  and is skipped.
+  """
+  @spec shell_heads(term()) :: [String.t()]
+  def shell_heads(form), do: form |> collect_shells([]) |> Enum.reverse() |> Enum.uniq()
+
+  # (tool/sh {:argv ["rg" …]}) -> "rg"
+  defp collect_shells({:tool_call, "sh", args}, acc),
+    do: collect_shells(args, prepend_head(argv_head(args), acc))
+
+  # (tool/sh-pipe {:stages [["cat" …] ["grep" …]]}) -> "cat", "grep"
+  defp collect_shells({:tool_call, "sh-pipe", args}, acc),
+    do: collect_shells(args, prepend_heads(stages_heads(args), acc))
+
+  defp collect_shells(form, acc) when is_tuple(form),
+    do: form |> Tuple.to_list() |> Enum.reduce(acc, &collect_shells/2)
+
+  defp collect_shells(form, acc) when is_list(form),
+    do: Enum.reduce(form, acc, &collect_shells/2)
+
+  defp collect_shells(form, acc) when is_map(form),
+    do: Enum.reduce(form, acc, fn {_k, v}, a -> collect_shells(v, a) end)
+
+  defp collect_shells(_form, acc), do: acc
+
+  defp prepend_head(nil, acc), do: acc
+  defp prepend_head(head, acc), do: [head | acc]
+
+  defp prepend_heads(heads, acc), do: Enum.reduce(heads, acc, &[&1 | &2])
+
+  # Extract the literal head of an `:argv` vector from a tool-call's args.
+  defp argv_head(args) do
+    case find_map_value(args, "argv") do
+      {:vector, [{:string, head} | _]} -> head
+      _ -> nil
+    end
+  end
+
+  # Extract the literal heads of each stage in a `:stages` vector.
+  defp stages_heads(args) do
+    case find_map_value(args, "stages") do
+      {:vector, stages} ->
+        stages
+        |> Enum.map(fn
+          {:vector, [{:string, head} | _]} -> head
+          _ -> nil
+        end)
+        |> Enum.reject(&is_nil/1)
+
+      _ ->
+        []
+    end
+  end
+
+  # Find the value bound to `key` in the first `{:map, pairs}` of a call's args.
+  defp find_map_value(args, key) when is_list(args) do
+    Enum.find_value(args, fn
+      {:map, pairs} -> map_pair_value(pairs, key)
+      _ -> nil
+    end)
+  end
+
+  defp find_map_value(_args, _key), do: nil
+
+  defp map_pair_value(pairs, key) do
+    Enum.find_value(pairs, fn
+      {{:keyword, ^key}, value} -> value
+      _ -> nil
+    end)
+  end
 
   defp valid_tokens?(%{input: i, output: o}) when is_integer(i) and is_integer(o), do: true
 
