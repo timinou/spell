@@ -43,3 +43,41 @@ Worked example — a brand-new body arrangement (display):
 Slots you can shadow: `frame` (whole screen), `status` (header), `body` (the pane
 arrangement — your canvas for any interface), `composer` (input), and each
 `pane/<name>`. Inspect before you change: `(layout/show {:slot "body"})`.
+
+## Live interfaces — `tmpl::` deferred holes
+
+A `view/` builder freezes its args: `(view/paragraph {:text "hi"})` always shows
+"hi". To make content UPDATE AS THE RUN GOES, write the slot as a `tmpl::`
+template whose `~holes` are re-resolved every frame against the live `data/*`
+environment. The skeleton is fixed; the holes are live.
+
+    (layout/set {:slot "status"
+      :source (tmpl:: {:type "paragraph"
+                       :text ~(get data/status :label)
+                       :style {:fg ~(get data/status :color) :modifiers ["bold"]}
+                       :block {:type "block" :title " my header " :borders ["all"]}})})
+
+`~form` freezes `form` as a hole; the render host evaluates it against `data/*`
+each frame (pure — no `tool/`, no effects, no var lookups beyond `data/*`). A
+splice `~@form` flattens a list into the surrounding sequence — the way to build
+a variable-length list of rows from live data:
+
+    (layout/set {:slot "body"
+      :source (tmpl:: {:type "list"
+                       :items [~@(map (fn [s] (get s :title)) (vals data/forest))]})})
+
+`~(now expr)` is the escape hatch: evaluate ONCE at author time (a constant baked
+into the skeleton), instead of freezing. A failed hole renders as `·` and never
+breaks the frame.
+
+The `data/*` environment (read in a hole as `data/<key>`):
+
+- `data/status` — `{:running? :result :turns :tools :label :color :composer …}`
+- `data/area` — `{:x :y :width :height}` (the slot's rect)
+- `data/ui` — the gaze (`{:focus :mode :turn}`)
+- `data/vms` — per-pane view-models · `data/forest` — the span map
+- fine-grained: `data/turns`, `data/tools`, `data/forest-count`, `data/running?`,
+  `data/composer`, `data/status-label`, `data/status-color`, `data/composer-text`
+
+Adding a new live value is one bag key; a hole references it like any other —
+zero extra render cost. Inspect a frozen slot with `(layout/show {:slot "status"})`.
