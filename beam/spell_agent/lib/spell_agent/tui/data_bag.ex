@@ -182,10 +182,20 @@ defmodule SpellAgent.Tui.DataBag do
   defp ui_map(nil), do: %{}
 
   defp ui_map(ui) when is_map(ui) do
+    focus = Map.get(ui, :focus)
+    cursors = Map.get(ui, :cursors, %{})
+
     %{
-      "focus" => to_string_safe(Map.get(ui, :focus)),
+      "focus" => to_string_safe(focus),
       "mode" => to_string_safe(Map.get(ui, :mode)),
-      "turn" => Map.get(ui, :turn, 0)
+      "turn" => Map.get(ui, :turn, 0),
+      # The focused pane's row cursor + the full per-pane cursor map. Exposed so a
+      # reactive cell keyed on the cursor (the headline PROJ-004 case) re-triggers
+      # when the operator moves: a cursor move changes data/ui, which the slow
+      # clock's dep-diff sees. Without this, data/ui would not reflect navigation
+      # and cursor-keyed cells could never go live.
+      "cursor" => Map.get(cursors, focus, 0),
+      "cursors" => Map.new(cursors, fn {pane, idx} -> {to_string_safe(pane), idx} end)
     }
   end
 

@@ -102,13 +102,20 @@ defmodule SpellAgent.Tui.Cell.Registry do
     # between the decision and the write. (W2r findings #1 + #3.)
     with :ok <- validate_name(name),
          deps = HoleDiff.dependencies(query),
-         :ok <- guard_cycle(name, deps) do
+         :ok <- guard_self(name, deps) do
       Agent.get_and_update(__MODULE__, fn state ->
         cond do
           # Capacity is checked AGAINST THE STATE BEING WRITTEN: a NEW name when
           # the table is full is rejected; replacing an existing name is always ok.
           not Map.has_key?(state, name) and map_size(state) >= @max_cells ->
             {{:error, :too_many_cells}, state}
+
+          # Multi-cell cycle: adding this cell would close a loop A->B->...->A in
+          # the cell-dependency graph (a cell reads data/<other-cell>). Such a loop
+          # would re-resolve forever on the slow clock. Checked against the FULL
+          # graph in-callback (it needs every cell's deps). (PROJ-004 W3.)
+          would_cycle?(name, deps, state) ->
+            {{:error, :cyclic_dependency}, state}
 
           true ->
             # Preserve a prior resolved value across a re-define with the SAME
@@ -207,9 +214,54 @@ defmodule SpellAgent.Tui.Cell.Registry do
   end
 
   # A cell may not depend on its own output key — that is a guaranteed slow-clock
-  # loop (see moduledoc). The output key is the cell's own name.
-  defp guard_cycle(name, deps) do
+  # loop (see moduledoc). The output key is the cell's own name. State-free, so it
+  # runs BEFORE the Agent callback.
+  defp guard_self(name, deps) do
     if MapSet.member?(deps, name), do: {:error, :self_dependency}, else: :ok
+  end
+
+  # Would adding cell `name` (with `deps`) close a cycle in the cell-dependency
+  # graph? Edges are cell->cell: a cell X has an edge to Y iff X depends on the
+  # key `data/Y` AND Y is itself a cell. A cycle through `name` exists iff, from
+  # any of `name`'s cell-deps, the graph (with `name` mapped to `deps`) can reach
+  # `name` again. DFS with a visited set; bounded by @max_cells, so it always
+  # terminates. Only CELL keys form edges — a dep on a core bag key (data/ui) is a
+  # leaf and can never cycle.
+  defp would_cycle?(name, deps, state) do
+    graph = Map.put(Map.new(state, fn {n, %{deps: d}} -> {n, d} end), name, deps)
+    cell_names = MapSet.new(Map.keys(graph))
+
+    # Seed the walk with `name`'s cell-valued deps; if the walk reaches `name`,
+    # there is a path name -> … -> name (a cycle).
+    deps
+    |> MapSet.intersection(cell_names)
+    |> Enum.reduce_while(MapSet.new(), fn start, visited ->
+      if reaches?(start, name, graph, cell_names, visited) do
+        {:halt, :cycle}
+      else
+        {:cont, MapSet.put(visited, start)}
+      end
+    end)
+    |> Kernel.==(:cycle)
+  end
+
+  # Depth-first: can `node` reach `target` following cell->cell edges?
+  defp reaches?(node, target, _graph, _cells, _visited) when node == target, do: true
+
+  defp reaches?(node, target, graph, cells, visited) do
+    cond do
+      MapSet.member?(visited, node) ->
+        false
+
+      true ->
+        next =
+          graph
+          |> Map.get(node, MapSet.new())
+          |> MapSet.intersection(cells)
+
+        seen = MapSet.put(visited, node)
+        Enum.any?(next, fn n -> reaches?(n, target, graph, cells, seen) end)
+    end
   end
 
   defp normalize_debounce(ms) when is_integer(ms) and ms >= 0, do: ms

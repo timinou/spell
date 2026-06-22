@@ -37,6 +37,7 @@ defmodule SpellAgent.Tui.App do
   alias SpellAgent.Hist
 
   alias SpellAgent.Tui.{
+    Cell,
     Chord,
     DataBag,
     DefaultLayout,
@@ -92,7 +93,11 @@ defmodule SpellAgent.Tui.App do
       # and type a mission. The ring is prompt ↔ tree ↔ detail under C-j/C-k.
       ui:
         opts[:ui] ||
-          Ui.new(focus: :prompt, mode: :normal, panes: [:prompt, :history, :tree, :detail])
+          Ui.new(focus: :prompt, mode: :normal, panes: [:prompt, :history, :tree, :detail]),
+      # PROJ-004 reactive cells: the last data/* bag (for slow-clock dep-change
+      # detection) and the per-cell debounce timers (chord -> coalesced resolve).
+      cell_bag: nil,
+      cell_timers: %{}
     }
 
     # Seed the canonical layout tree (PLAN-009) from the native default + the
@@ -371,6 +376,41 @@ defmodule SpellAgent.Tui.App do
     {:noreply, %{state | running?: false}}
   end
 
+  # A cell's debounce window elapsed: resolve it OFF this process so a slow query
+  # never blocks the UI. The Task reads the live forest + gaze + bag NOW (the
+  # quiescent state) and sends {:cell_resolved, …} back. Unlinked + result-routed:
+  # a crashing resolve cannot take down the App (Cell.Clock.resolve is itself
+  # total, but the spawn is defensive). The timer ref is cleared.
+  def handle_info({:cell_tick, name}, state) do
+    timers = Map.delete(state.cell_timers, name)
+    env = state.cell_bag || %{}
+    ctx = {Store.spans(state.store), state.ui}
+    me = self()
+
+    spawn(fn ->
+      case Cell.Clock.resolve(name, env, ctx) do
+        {:ok, query, value} -> send(me, {:cell_resolved, name, query, value})
+        :error -> :ok
+      end
+    end)
+
+    {:noreply, %{state | cell_timers: timers}}
+  end
+
+  # A cell resolve finished: CAS the value into the registry (discarded if the
+  # cell was redefined to a different query meanwhile — W2r finding #2), then
+  # reproject so the bag picks up the new data/<name> and the pane re-renders.
+  # reproject re-diffs, so a cell whose result CHANGED another cell's dep cascades
+  # correctly (and the cycle guard at define time bounds the cascade).
+  def handle_info({:cell_resolved, name, query, value}, state) do
+    Cell.Registry.put_resolved(name, query, value)
+    {:noreply, reproject(state, :all)}
+  rescue
+    _ -> {:noreply, state}
+  catch
+    :exit, _ -> {:noreply, state}
+  end
+
   def handle_info(_msg, state), do: {:noreply, state}
 
   # ---- effects the resolver delegates back to the App ----
@@ -431,7 +471,60 @@ defmodule SpellAgent.Tui.App do
     # persists across navigation. Single chokepoint: every gaze/forest change
     # flows through reproject. Best-effort (no registry in a headless test).
     sync_layout_gaze(state.ui)
-    %{state | vms: vms}
+    tick_cells(%{state | vms: vms})
+  end
+
+  # ---- reactive cells: the SLOW clock (PROJ-004 W3) ----
+  #
+  # reproject/2 is the chokepoint for every gaze/forest/store change — a keystroke
+  # or a streamed span, NOT a frame. So it is the right clock for reactive cells:
+  # build the current data/* bag, diff it against the last one, and for each cell
+  # whose deps changed, ARM a debounce timer. The actual resolve happens off this
+  # process (a Task, fired by the timer) so the slow clock never blocks on a query
+  # either. Looking never acts on the frame clock; it acts here, debounced, once.
+  defp tick_cells(state) do
+    bag = cell_bag(state)
+    dirty = Cell.Clock.dirty(state.cell_bag, bag)
+    timers = Enum.reduce(dirty, state.cell_timers, &arm_cell_timer/2)
+    %{state | cell_bag: bag, cell_timers: timers}
+  rescue
+    # A down cell registry (headless test) or any clock error must never break
+    # reproject — the UI degrades to no cells, never a crash.
+    _ -> state
+  catch
+    :exit, _ -> state
+  end
+
+  # The data/* bag used for cell dep-diffing. Area is fixed (cells keyed on the
+  # frame rect are an edge case the slow clock does not chase); the render path
+  # still builds the true-area bag for hole resolution.
+  defp cell_bag(state) do
+    DataBag.build(Map.put(state, :composer_hint, hint_for(state)), %Rect{
+      x: 0,
+      y: 0,
+      width: 0,
+      height: 0
+    })
+  end
+
+  # Arm (or re-arm) a debounce timer for one dirty cell: cancel any pending timer
+  # for it (coalesce a fast-moving dependency, e.g. a cursor sweep, into a single
+  # resolve at quiescence) and schedule a fresh {:cell_tick, name}. The debounce
+  # window is the cell's own (Registry default otherwise).
+  defp arm_cell_timer(name, timers) do
+    case Map.get(timers, name) do
+      nil -> :ok
+      ref -> Process.cancel_timer(ref)
+    end
+
+    debounce =
+      case Cell.Registry.get(name) do
+        %{debounce: ms} -> ms
+        _ -> Cell.Registry.default_debounce_ms()
+      end
+
+    ref = Process.send_after(self(), {:cell_tick, name}, debounce)
+    Map.put(timers, name, ref)
   end
 
   defp sync_layout_gaze(ui) do
