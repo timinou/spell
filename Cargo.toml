@@ -7,6 +7,11 @@ exclude = [
     # workspace (vendor/render3d, vendor/ratatui-3d). Excluded so the BEAM
     # rustler build treats it as standalone, not a member of this workspace.
     "beam/ex_ratatui-vendored/native/ex_ratatui",
+    # brush_nif (PLAN-011): a standalone rustler NIF crate. Excluded so the root
+    # release profile's `panic = "abort"` does NOT apply — the NIF relies on
+    # `panic = "unwind"` + catch_unwind to trap a brush panic instead of
+    # aborting the BEAM VM. Builds standalone via rustler, like ex_ratatui.
+    "beam/brush_nif-vendored/native/brush_nif",
 ]
 resolver = "3"
 

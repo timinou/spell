@@ -1,0 +1,64 @@
+[package]
+name = "brush_nif"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+publish = false
+
+# ---------------------------------------------------------------------------
+# brush_nif — a Rustler NIF exposing brush (a Rust bash) execution to the BEAM
+# (PLAN-011 W0). The DEFINING property is INJECT-PROOF execution: argv is run
+# by constructing a brush AST `Program` directly from the argument vector,
+# single-quote-escaping each element so brush performs NO expansion ($(),
+# ${}, *, ~) and NO re-tokenization (;, |, &). See `src/argv.rs`.
+#
+# Standalone crate, EXCLUDED from the root cargo workspace (see root
+# Cargo.toml `exclude`), for two reasons that are load-bearing:
+#   1. the root release profile sets `panic = "abort"`, which would defeat the
+#      `catch_unwind` safety net in `src/run.rs`; this crate sets
+#      `panic = "unwind"` explicitly.
+#   2. it mirrors how `ex_ratatui` is vendored — a self-contained NIF build.
+# ---------------------------------------------------------------------------
+
+[lib]
+name = "brush_nif"
+crate-type = ["cdylib"]
+
+[dependencies]
+rustler = { version = "0.38.0", default-features = false, features = ["derive"] }
+# brush execution engine + builtins, vendored at the repo root.
+brush-core = { path = "../../../../crates/brush-core-vendored" }
+brush-builtins = { path = "../../../../crates/brush-builtins-vendored" }
+brush-parser = "0.3"
+# brush `run_*` is async; we block_on inside the dirty NIF. `net` is required
+# transitively by brush-core (unix pipe plumbing).
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "macros", "sync", "io-util", "net"] }
+tokio-util = "0.7"
+tempfile = "3"
+
+# CRITICAL: redirect brush-core / brush-builtins to the repo-root vendored
+# copies. Without this, brush-builtins resolves brush-core 0.4.0 from crates.io
+# (API mismatch: cancel_token / wait signatures differ). The root workspace
+# Cargo.toml has this same patch, but a standalone crate does not inherit it.
+[patch.crates-io]
+brush-core = { path = "../../../../crates/brush-core-vendored" }
+brush-builtins = { path = "../../../../crates/brush-builtins-vendored" }
+
+[dev-dependencies]
+proptest = "1"
+
+[features]
+# Mirror ex_ratatui's NIF-version feature gate so the loaded BEAM picks a
+# compatible ABI. Default targets the widely-available 2.16 ABI.
+default = ["nif_version_2_16"]
+nif_version_2_16 = ["rustler/nif_version_2_16"]
+nif_version_2_17 = ["rustler/nif_version_2_17"]
+
+# A standalone profile: `panic = "unwind"` is REQUIRED so std::panic::catch_unwind
+# in the NIF actually traps a brush panic instead of aborting the whole BEAM VM.
+[profile.release]
+opt-level = 3
+panic = "unwind"
+
+[profile.dev]
+panic = "unwind"
