@@ -74,10 +74,59 @@ The `data/*` environment (read in a hole as `data/<key>`):
 
 - `data/status` — `{:running? :result :turns :tools :label :color :composer …}`
 - `data/area` — `{:x :y :width :height}` (the slot's rect)
-- `data/ui` — the gaze (`{:focus :mode :turn}`)
+- `data/ui` — the gaze (`{:focus :mode :turn :cursor :cursors}`; `cursor` is the
+  focused pane's row, `cursors` the per-pane map)
 - `data/vms` — per-pane view-models · `data/forest` — the span map
 - fine-grained: `data/turns`, `data/tools`, `data/forest-count`, `data/running?`,
   `data/composer`, `data/status-label`, `data/status-color`, `data/composer-text`
 
 Adding a new live value is one bag key; a hole references it like any other —
 zero extra render cost. Inspect a frozen slot with `(layout/show {:slot "status"})`.
+
+## Reactive cells — `cell/define` (live data the runtime computes for you)
+
+A `tmpl::` hole is PURE: it can only READ `data/*`, never run a `tool/`. When a
+pane needs LIVE data that requires a query — "the callers of the span under the
+cursor", "the cost of this turn" — declare a CELL. A cell is a named, read-only
+query the runtime resolves OFF the frame clock (debounced, on dependency change)
+and injects back into `data/*` under its name. Your hole then reads the result as
+ordinary data. You declare the dependency; the runtime keeps it live.
+
+    ;; DECLARE: a cell named "callers", re-resolved when its data/* deps change.
+    ;; The `let` binding on (get data/ui :cursor) is the TRIGGER — it makes data/ui
+    ;; a dependency, so a cursor move re-resolves the cell. harness/cursor-id maps
+    ;; the cursor ROW to the span id the forest walk needs.
+    (cell/define {:name "callers"
+                  :query (quote (let [_ (get data/ui :cursor)]
+                                  (harness/descendants {:id (harness/cursor-id)})))
+                  :debounce 80})
+
+    ;; REFERENCE: an ordinary pure hole. The pane does not know it is live.
+    (layout/set {:slot "body"
+      :source (tmpl:: {:type "list" :items [~@data/callers]})})
+
+Move the cursor → `data/ui` changes → the runtime re-runs the cell off-frame →
+`data/callers` updates → the pane re-renders. ZERO per-frame cost: the render
+path only ever READS `data/callers`.
+
+Rules that matter:
+
+- `:query` MUST be `(quote …)` — a deferred, inert form (it reads `data/*` that
+  only exists at resolve time). A bare query would evaluate now and fail.
+- The trigger flows THROUGH `data/*`. A cell re-resolves when a `data/<key>` it
+  reads changes — the dependency set is extracted from the `data/<key>` leaves in
+  the query. An out-of-band read like `(harness/cursor-id)` reads the gaze
+  DIRECTLY (not through `data/*`), so a query that ONLY calls it has no
+  dependency: it resolves once and never goes live. Combine the two: bind the
+  `data/*` value you want to track (the trigger) AND call the read you need (the
+  computation), as the `callers` example does with `(get data/ui :cursor)` +
+  `(harness/cursor-id)`. NB `data/ui :cursor` is the cursor ROW; `harness/cursor-id`
+  is the span id under it.
+- READ-ONLY only. A cell may call forest/history reads; a mutator (`keymap/bind`,
+  `layout/set`, `tool/edit`, `sh`) is denied and the cell resolves to nothing.
+- No cycles: a cell may not depend on its own key, nor close a loop
+  A→B→…→A across cells (rejected at define time).
+- `(cell/list {})` shows declared cells + deps; `(cell/remove {:name …})` drops one.
+
+The same one-key-equals-one-live-value economy as `tmpl::`, extended to data the
+runtime must COMPUTE: add a cell, reference its name, and the interface is live.
