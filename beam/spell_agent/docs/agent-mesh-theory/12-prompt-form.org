@@ -1,0 +1,387 @@
+#+TITLE: Asking a mind — ask (the function) and prompt:: (the freeze)
+#+SUBTITLE: The LLM seam as DATA + a host, not a mega-form; what it does to S1-21 and the doors past them
+#+OPTIONS: toc:2 num:t
+
+* The Hickey correction (read first — this doc was rewritten)
+
+An earlier draft sold ONE form, =prompt::=, that was "strings AND structured data
+AND AST AND self-feedback" — four faces, three contracts, one name. That is a
+*braid* (complecting): you cannot vary the output contract without touching the
+authority story; you cannot explain the thing in one sentence. The tell was that
+=13-prompt-arguments.org= had to SPLIT it into three contracts (input / authority /
+output) just to describe it. A thing that needs three contracts to explain is three
+things.
+
+This doc is the de-braided version. Two decisions:
+
+1. *The 90% case is a FUNCTION, not a reader form.* Interpolating eager values into
+   a prompt and running it is =(ask template bindings)= — a plain function over
+   data. No reader machinery, no new grammar. A reader form must EARN its existence
+   by doing something a function cannot.
+2. *=prompt::= exists ONLY for what a function cannot do: FREEZE.* A deferred prompt
+   (re-resolves later) or a quoted prompt (handled as data) genuinely cannot be a
+   function call, because a function evaluates its arguments before it runs. That
+   is the same and only justification =tmpl::= has over =hash-map=. So =prompt::= is
+   the sibling of =tmpl::= (deferred), and =ask= is the sibling of a constructor
+   call (eager).
+
+And the deeper correction (Hickey on homoiconicity): a mind returns *DATA*, and a
+*HOST* interprets it. We will NOT call a returned edit-description "AST" or a tool
+body "macro expansion." An edit-op is a map; =edit/transaction= interprets it. A
+tool body is data; =define-tool='s host installs it. Data + interpreter is the
+architecture; "code-as-data / AST / homoiconic" was dressing the same data up as a
+parlor trick. We keep the architecture and drop the dressing (the quoting-spec §6
+doctrine, held).
+
+* The two surfaces
+
+#+begin_quote
+=ask= : a FUNCTION. eager holes, run now, return data. The 90%. No new syntax.
+=prompt::= : a READER FORM. freezes its holes as data (deferred or quoted), so the
+             prompt can re-resolve later or be handled as a value. The 10% that a
+             function cannot express — exactly =tmpl::='s relationship to a literal.
+#+end_quote
+
+Both lower to the SAME host: =PtcRunner.SubAgent= run by an LLM. =ask= builds the
+spec and runs it; =prompt::= builds a FROZEN spec that something else runs later.
+The host is the mind; the result is data; a typed slot at the call site checks the
+data's SHAPE (not its truth — §trust). This is the seam the whole project is about:
+deterministic code handing intent to a mind and folding the data it returns.
+
+Where they sit in the reader family (=prompt::= is one leaf; =ask= is not a leaf at
+all, it is a function):
+
+#+begin_src
+  sh::     literal text → argv          → SHELL host   (a process)        [reader form]
+  tmpl::   literal data → layout+holes   → RENDER host  (the screen)       [reader form]
+  prompt:: literal text → FROZEN prompt   → LLM host     (a mind), later    [reader form]
+  ask      (fn template bindings)         → LLM host     (a mind), now      [FUNCTION]
+#+end_src
+
+Every reader leaf infers its literal CONTENT for free and gets its effect AUTHORITY
+from the host/context, never from its own text (=13=). =ask= obeys the same law: it
+infers nothing about authority — tools/region are arguments, not prose inferences.
+
+* What they desugar to (so it is grounded, not magic)
+
+=PtcRunner.SubAgent= already binds =prompt= placeholders (={{user}}=) to a parsed
+=signature= and VALIDATES that placeholders match signature params (verified,
+=sub_agent.ex=). =ask= is the legible front of exactly that; =prompt::= is the same,
+frozen:
+
+#+begin_src clojure
+;; ask — the function (eager). Holes are just arguments interpolated now.
+(ask "Assess the rename risk of {{sym}} at its call in {{file}}" {:sym sym :file file})
+;; ≡ a SubAgent run: :prompt the template, :bindings the map, run by the LLM host.
+;;   hole types (sym:string, file:string) populate the signature INPUT side.
+
+;; prompt:: — the reader form (frozen). ~holes are FROZEN as data; nothing runs yet.
+(prompt:: "Assess rename risk of " ~sym " at " ~file)
+;; ≡ {:__prompt__ "Assess rename risk of {{sym}} at {{file}}" :holes {sym 'sym file 'file}}
+;;   — a VALUE. A host (a watch :do, a deferred view, a later run) resolves + runs it.
+#+end_src
+
+Neither adds a new evaluator. =ask= is the SubAgent prompt-template machinery as a
+function; =prompt::= is the same spec FROZEN as data (the =tmpl::= freeze, applied
+to prompt text). Construction, not =eval=. The mind that runs it is the host — the
+quoting-spec §6 doctrine, where the "host" is an LLM.
+
+* Output is DATA; the call site checks its SHAPE
+
+The earlier "four faces" framing claimed one form returns strings, maps, AND "AST."
+The honest version: *a mind always returns DATA.* What varies is only the SHAPE the
+call site expects, and whether a HOST then interprets that data as instructions.
+
+#+begin_src clojure
+;; SHAPE: string — no typed destination → the result is text (the everyday ask).
+(ask "Summarize {{doc}} in one sentence." {:doc doc})            ; -> a string
+
+;; SHAPE: map — a typed call site (destructure) → the result is a map of that shape.
+(let [{risk "risk" evidence "evidence"} (ask "Assess rename risk of {{f}}" {:f file})]
+  …)                                                              ; -> {risk … evidence …}
+
+;; DATA A HOST INTERPRETS — the result is an edit-DESCRIPTION (a map), and
+;; edit/transaction is the HOST that interprets it. NOT "AST", NOT a macro — data + a host.
+(edit/transaction {:ops [(ask "Describe the edit that migrates {{f}} to the new API" {:f file})]
+                   :mode "strict"})
+;; the ask returns {:op "wrap" :target … :with …}; edit/transaction validates it against
+;; the edit-op schema of :ops and applies it. The schema is the guardrail (doc 10, de-ASTed).
+
+;; SELF-FEEDBACK — one ask's RESULT is the next ask's argument. Just data flow.
+(loop [draft (ask "Draft a fix for {{bug}}" {:bug bug})]
+  (let [crit (ask "Critique this fix; return \"done\" if correct:\n{{d}}" {:d draft})]
+    (if (= crit "done") draft
+        (recur (ask "Improve the fix given this critique:\n{{c}}\nprior:\n{{d}}"
+                    {:c crit :d draft})))))
+#+end_src
+
+The unification, corrected: *=ask= is a function from data to data, run by a mind.*
+String / map are just the SHAPE the call site expects (§output-regimes for when that
+shape is reliably known). "Returns code" is not a fourth kind — it is a map a HOST
+interprets as instructions (=edit/transaction=, =define-tool=). Self-feedback is
+ordinary data flow (a result becomes an argument). No "AST", no fourth face: data
+in, data out, a host where data becomes effect.
+
+* Reading the rest of this doc (scoping note)
+
+The sections below (self-feedback depths, S22-30, the unifying picture) were
+written in the original =prompt::=-does-everything voice. Read them through the
+correction above with two mechanical substitutions:
+- *=prompt::= → =ask=* everywhere the holes are EAGER (run now). Reserve the
+  literal =prompt::= form only where a prompt is FROZEN (a watch =:do=, a deferred
+  view, a posted finding, a prompt handled as data).
+- *"returns AST / homoiconic / macro" → "returns DATA a host interprets."* A
+  child returns a map; =edit/transaction= / =define-tool= / =run-mesh-program= is
+  the host that turns that map into effect. The schema at the host is the guardrail.
+The scenarios' VALUE is unchanged; only the framing is de-braided. They remain a
+faithful catalogue of what asking-a-mind-as-data unlocks.
+
+* Self-feedback — a result becomes an argument (no "homoiconic" needed)
+
+"Feed itself back" has three depths, each a door:
+
+** Depth 1 — output → input (the refinement loop, FACE 4 above)
+A prompt's hole is a prior prompt's answer. Iterative refinement, critique loops,
+chain-of-thought-as-data. The fixpoint is explicit and inspectable (each draft is a
+value), not hidden inside one mega-prompt.
+
+** Depth 2 — prompt → prompt (a prompt whose hole is another prompt)
+Because =prompt::= is a VALUE (a template + holes, frozen until run), a hole can be
+another =prompt::=. A meta-prompt composes sub-prompts:
+#+begin_src clojure
+(prompt:: "You are routing a request. Pick the best sub-task prompt and run it:\n"
+          ~@(map (fn [t] (prompt:: "Handle the " ~t " aspect of " ~req)) aspects))
+;; the OUTER mind receives candidate INNER prompts as data, chooses, and the chosen
+;; one runs. A prompt that reasons about prompts — legible because they are values.
+#+end_src
+
+** Depth 3 — prompt → its own AST (a prompt that quotes itself for meta-reasoning)
+=quote=→collections (PLAN-012) means a =prompt::= can be handed its OWN form as
+data: "here is the prompt I am about to run; critique/repair it first."
+#+begin_src clojure
+(let [p `(prompt:: "Migrate " ~file " to the new API")]   ; the prompt AS data (not run)
+  (prompt:: "Improve this prompt for clarity and safety, return the improved form:\n" ~p))
+;; → a mind edits a prompt-as-AST before another mind runs it. self-modifying prompting,
+;;   type-bounded (the returned form must still be a valid prompt::). homoiconic, no eval.
+#+end_src
+
+This is the homoiconic tower closing on the LLM seam itself: prompts are data,
+prompts contain prompts, prompts rewrite prompts — and every rung is construction +
+a host, never =eval=.
+
+* What prompt:: does to S1-21 (it upgrades the whole stack uniformly)
+
+=prompt::= is not a new layer bolted on — it is the thing the existing sugars were
+already building prompts FOR. Every place S1-21 wrote a prompt string, =prompt::=
+makes it a typed, legible, composable form. The change is uniform and free:
+
+| where S1-21 had | becomes | what's gained |
+|-----------------+---------+---------------|
+| =scatter {:prompt #(str "assess " %)}= (S1) | =scatter {:prompt (fn [f] (prompt:: "assess " ~f))}= | the worker prompt is typed; its return is narrowed by =:reduce=/the splice |
+| =mesh/map= worker spec (S12 pipeline) | each stage's worker is a =prompt::= | stage I/O types thread through the prompts (S17 narrowing, now at the prompt) |
+| =on {:do `(spawn …)}= (S4, S14) | the spawned mission is a =prompt::= | the trigger's action is a typed prompt, not a string |
+| =reconcile :via :merge-results= (S3, S19) | the merge is a =prompt::= over the findings | the consensus *fold* can be a MIND ("synthesize these N findings"), typed to the verdict schema |
+| =grow-tool= body synth (S10, S20) | the synth prompt is a =prompt::= returning AST | FACE 3 — the tool body is type-checked CODE from a typed prompt |
+| =~@spawn[…]= typed splice (S6) | each spawned child IS a =prompt::= | the call site narrows the prompt's return — doc 10's keystone, now at the syntax |
+
+So =prompt::= is the *missing typed atom* under the entire sugar layer: =scatter=,
+=mesh/map=, =on=, =reconcile=, =grow-tool= all CONSTRUCT prompts; making that
+construction a =prompt::= form gives every one of them typed inputs (holes) and
+narrowed outputs (signature) with zero new mechanism. The mesh DSL was building
+prompts all along; =prompt::= is what it was building them *with*.
+
+Two specific upgrades worth naming:
+
+- *S3/S19 reconcile becomes semantic.* Today =:via :merge-results= is a structural
+  fold. With =prompt::=, the verdict can be SYNTHESIZED by a mind:
+  =:via (fn [fs] (prompt:: "Reconcile these findings into one decision:\n" ~@fs))= —
+  the consensus *content* is a mind's judgment, the consensus *commit* is still Ra
+  (doc 02 §4.3). Decision = mind; agreement = protocol. Cleanly separated.
+- *S17 typed pipeline becomes a chain of typed minds.* Each stage's =prompt::=
+  return type narrows the next stage's =prompt::= holes — a pipeline where the type
+  contract threads through the PROMPTS, checked at every seam, no type written twice.
+
+* New scenarios — the doors prompt:: opens (S22-30)
+
+Each is possible ONLY because =prompt::= unifies typed-holes-in / narrowed-out /
+self-feed in one form. (The series is unbounded; these are the load-bearing ones.)
+
+** S22 — the typed ask (prompt:: as a first-class typed function)
+*Dream:* "Call an LLM like a typed function — inputs checked, output shaped, in one
+literal line, no prompt-engineering ceremony."
+#+begin_src clojure
+(defn risk-of [sym file]
+  (prompt:: "Assess the rename risk of " ~sym " at its call in " ~file))
+;; signature auto: "(sym :string, file :string) -> {risk :keyword, evidence :string}"
+;;   inputs typed from holes; output narrowed from how callers destructure it.
+(risk-of "verify" "lib/x.ex")   ; → {risk :high, evidence "arity-sensitive pattern match"}
+#+end_src
+*Door:* the LLM call loses its special status — it is a typed fn like any other.
+Mixed deterministic/LLM pipelines compose with no seam ("looking vs acting"
+dissolved at the call level).
+
+** S23 — context-splicing prompt (RAG as ~@, no framework)
+*Dream:* "Answer using the most relevant prior findings — splice them in as
+context, however many there are."
+#+begin_src clojure
+(prompt:: "Given these prior findings:\n"
+          ~@(map #(get-in % ["payload" "summary"]) (black/query {:region r :match {:kind :finding}}))
+          "\nAnswer: " ~question)
+;; ~@ splices a VARIABLE number of context items — retrieval-augmented generation
+;; is just unquote-splice over a black/query. No RAG framework; it is the reader.
+#+end_src
+*Door:* retrieval-augmentation is a language feature, not a library. The context is
+mesh state (=black/query=), so the prompt is grounded in the COLLECTIVE's findings.
+
+** S24 — the deferred prompt (a standing instruction that re-resolves)
+*Dream:* "A monitoring agent whose instructions stay fixed but whose CONTEXT updates
+every cycle — like =tmpl::= for a mind." =prompt::= with deferred holes (the
+=tmpl::= timing fork, doc PLAN-012 §8b.3):
+#+begin_src clojure
+(watch-loop
+  (prompt:: "Given the CURRENT system state:\n" ~(deferred (system-snapshot))
+            "\nFlag any regression vs the goal: " ~goal))
+;; the snapshot hole re-resolves each cycle (deferred, like a tmpl:: hole); the
+;; instruction skeleton is constant. "updates as it goes" — for a mind.
+#+end_src
+*Door:* a standing agent (S14 service) whose prompt is LIVE. The "present vs
+history" dissolution at the prompt: the instruction is fixed, the world-hole flows.
+
+** S25 — prompt as the consensus fold (semantic reconcile, FACE 2 + mesh)
+*Dream:* "Three agents disagree; let a mind synthesize the verdict — but commit it
+through real consensus." (The S3/S19 upgrade, as its own scenario.)
+#+begin_src clojure
+(reconcile {:slug "design/api"} :when 3
+  :via (fn [findings] (prompt:: "These three proposals conflict:\n" ~@findings
+                                "\nSynthesize one coherent decision with rationale.")))
+;; the FOLD is a mind (judgment); the COMMIT is Ra (agreement). decision ≠ agreement.
+#+end_src
+*Door:* consensus gets a brain. Mechanical folds (count/group) and judgment folds
+(a synthesizing mind) are the SAME =black/decide= seam — the fold is just typed
+=prompt::= instead of =group-by=.
+
+** S26 — the self-improving prompt (Depth 3, meta-reasoning on prompt-AST)
+*Dream:* "Before running an expensive fan-out, have a mind critique and repair the
+prompt I'm about to send 200 times."
+#+begin_src clojure
+(let [base `(prompt:: "Analyze " ~file " for " ~concern)               ; prompt as DATA
+      tuned (prompt:: "Improve this analysis prompt for precision; return the form:\n" ~base)]
+  (scatter [f files] {:prompt (instantiate tuned f)}))                  ; run the tuned prompt ×200
+;; one mind improves the prompt; 200 minds run the improved version. meta-prompting,
+;; type-bounded (tuned must still be a valid prompt:: form). homoiconic, no eval.
+#+end_src
+*Door:* prompt optimization is in-band — a mind tunes a prompt-as-AST before it
+scales out. The "taught vs learned" dissolution (philosophy): the agent improves
+its own instructions.
+
+** S27 — bidirectional prompt (holes that are themselves asks)
+*Dream:* "A prompt whose context it must GATHER first — the holes are sub-asks the
+outer mind resolves before answering."
+#+begin_src clojure
+(prompt:: "Decide whether to ship, given:\n"
+          "- test status: " ~(prompt:: "Summarize the CI results: " ~ci-log)
+          "- risk: "        ~(prompt:: "Rate deploy risk 1-5: " ~diff))
+;; the holes are prompt::s — sub-minds resolve them, the outer mind decides on the
+;; structured results. Depth 2 (prompt→prompt) as a decision tree of minds.
+#+end_src
+*Door:* hierarchical reasoning as nested =prompt::=. The decomposition is STRUCTURAL
+(the form shows the sub-questions), not buried in one prompt's prose.
+
+** S28 — prompt as a mesh finding (a posted prompt others can run)
+*Dream:* "Agent A doesn't know how to do X, but knows the PROMPT that would. It
+posts the prompt as a finding; whoever can, runs it." =prompt::= as a frozen value
+on the blackboard (the S11 template-finding, now a prompt):
+#+begin_src clojure
+(black/post {:region r :kind :finding
+             :payload {:about "needs-running" :prompt `(prompt:: "Backfill " ~table " from " ~source)}})
+;; a capable agent: (run (fill (get-in finding ["payload" "prompt"]) {:table … :source …}))
+#+end_src
+*Door:* minds exchange ASKS, not just answers. The blackboard carries deferred
+intentions-as-prompts; the mesh becomes a market of typed questions (stigmergy over
+prompts, doc 10 S11 at the LLM seam).
+
+** S29 — ensemble (scatter the SAME prompt, fold the spread)
+*Dream:* "Ask five minds the same hard question; surface the consensus and the
+disagreement." =scatter= a single =prompt::=, fold the distribution:
+#+begin_src clojure
+(let [answers (mesh/map (range 5) {:prompt (fn [_] (prompt:: "Best fix for " ~bug))} :reduce identity)]
+  (prompt:: "Five engineers proposed these; identify agreement and dissent:\n" ~@answers))
+;; ensemble + a judge prompt — both prompt::, the judge's holes spliced from the ensemble.
+#+end_src
+*Door:* ensemble methods (self-consistency, debate) are =scatter= + a fold-prompt.
+No special machinery — sampling is fan-out, aggregation is a =prompt::= over the
+fan-out.
+
+** S30 — the prompt that writes the mesh program (full reflexivity)
+*Dream:* "Describe a goal; have a mind WRITE the mesh program (scatter/gather/
+reconcile) to achieve it, type-checked, then run it." =prompt::= FACE 3 returning a
+mesh-DSL form:
+#+begin_src clojure
+(let [plan (prompt:: "Write a mesh program (scatter/gather/reconcile) to: " ~goal
+                     :returns :ast)]            ; → a CoreAST mesh-DSL form, validated
+  (run-mesh-program plan))                      ; a host runs it (typed, no eval)
+;; a mind authors the coordination program; the sugar layer (doc 11) is its vocabulary;
+;; a host runs the result. the mesh writes the mesh.
+#+end_src
+*Door:* the reflexive apex — =prompt::= + the sugar DSL + narrowing means a mind can
+author a typed coordination program in the language the collective already speaks,
+and a host runs it. Doc 11's "the mesh DSL is mesh-authored" becomes "the mesh
+PROGRAM is mind-authored" — the whole tower (primitives → sugars → prompt::) closing
+on itself.
+
+* The unifying picture — prompt:: completes the reader family
+
+#+begin_src
+  sh::     literal text → argv          → SHELL host    (a process)
+  tmpl::   literal data → layout+holes   → RENDER host   (the screen)
+  prompt:: literal text → prompt+holes   → LLM host      (a MIND)
+  `…`      literal form → data           → eager value / any host
+  ───────────────────────────────────────────────────────────────
+  ONE reader primitive ("literal region, ~ escapes to a typed hole"),
+  FOUR hosts. prompt:: is the leaf whose host is another agent — which is
+  why it is the syntax of the mesh: code handing typed intent to a mind.
+#+end_src
+
+The four faces (string / structured / AST / self-feed) are not four features —
+they are the OUTPUT side of one typed form (the narrowed signature) crossed with the
+INPUT side (typed holes). And because a =prompt::= is a VALUE, it composes with
+itself (Depth 1-3): prompts feed prompts feed their own AST. The homoiconic tower,
+which dissolved template-vs-instance (tmpl::) and worker-vs-macro (doc 10), now
+dissolves its last wall:
+
+| boundary | dissolved by | here |
+|----------+--------------+------|
+| code vs. prompt | =prompt::= as a typed form | an LLM call is a typed fn; the seam is a reader leaf |
+| asking vs. answering | self-feed (Depth 1) | a prompt's input is a prompt's output |
+| prompt vs. prompt-about-prompts | prompt-as-AST (Depth 3) | a mind reasons over prompts as data |
+| writing the program vs. running it | FACE 3 + hosts | a mind writes the mesh program; a host runs it (no eval) |
+
+* Grounding + honesty (the ledger)
+
+| capability | status | gated by |
+|-----------+--------+----------|
+| prompt template + bound holes + signature validation | *real* | =SubAgent= ={{placeholder}}= ↔ =signature= (verified, =sub_agent.ex=) |
+| =prompt::= reader form (=~=/=~@= over prompt text) | *new* | PLAN-012 reader machinery (granted landed); a third lowering beside =sh::=/=tmpl::= |
+| input holes typed → signature INPUT side | *new* | the lowering reads hole types → signature params |
+| output narrowed → signature RETURN side | *new* | the narrowing pass (doc 10 keystone) |
+| FACE 3 (=:returns :ast=) | *new* | =quote=→collections + AST↔data codec (PLAN-012 F2) |
+| deferred prompt (S24) | *new* | the =tmpl::= deferral fork applied to prompt text |
+| prompt-as-finding / self-feed | *new* | =prompt::= is a frozen value (PLAN-012); rides =black/post= / =let= |
+
+What we do NOT add: a general =eval=. A =prompt::= result that is AST (FACE 3) runs
+through a typed host (=edit/transaction=, =define-tool=, =run-mesh-program=), exactly
+the quoting-spec §6 line. The mind is a host; its output is typed; the type is the
+guardrail. =prompt::= is construction + a host, like every other leaf.
+
+* The deepest point
+
+=sh::= taught the codebase that a shell command is a literal with holes. =tmpl::=
+taught it that an interface is a literal with holes. =prompt::= teaches it the last
+one: *an instruction to a mind is a literal with holes* — and because the mind's
+output is typed (narrowed by where it lands) and the form is a value (composes with
+itself), the boundary between "code that computes" and "a mind that judges" stops
+being a wall and becomes a function call. The mesh was always code handing intent to
+minds and folding what they return; =prompt::= is simply the *syntax* of that
+handing, in the one language the whole system already writes. Every S — from S1's
+fan-out to S30's self-authoring mesh — was building, passing, or folding prompts.
+=prompt::= is what they were made of all along.

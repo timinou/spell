@@ -1,0 +1,143 @@
+#+TITLE: Reconciliation — the settled decisions after the Hickey pass
+#+SUBTITLE: One seam at three altitudes; the three-contract law; await dissolved
+#+OPTIONS: toc:2 num:t
+
+This is the capstone the design converged to after an adversarial "what would
+Hickey say" review of docs 10-13. It records what we DECIDED, so a reader does not
+have to reconstruct it from five drafts. Where a prior doc disagrees, THIS wins;
+the prior docs carry correction banners pointing here.
+
+* Decision 1 — one seam, three altitudes (no parallel impls)
+
+=ask=, =spawn=/=scatter=, and =tool/spawn-session= are NOT three mechanisms. They
+are one seam — "run a typed mission on a mind" — at three ergonomic altitudes,
+each desugaring to the next:
+
+: ask / prompt::         construct a typed mission VALUE (+ inherited authority)
+:       v desugars to
+: spawn / scatter        detach that value as a session (1 / N), into a region
+:       v desugars to
+: tool/spawn-session     the native tool: budget-acquire + Session.run + register
+:       v desugars to
+: PtcRunner.SubAgent.run the BEAM mission loop
+
+You never hand-write the lower layer once the higher one exists — the same way you
+never write =SubAgent.new= once =spawn-session= exists. This is the anti-parallel-impl
+rule: each layer is the next's invisible plumbing, ONE definition deep.
+
+* Decision 2 — await is not a flag; consumption decides
+
+=:await true|false= is removed as a parameter. Whether you block is a property of
+how you CONSUME the mission value, not of the mission:
+
+: force it (use the result)  -> run, block, return data    == old :await true  (1x sync)
+: (spawn p)                   -> detach -> a handle          == old :await false (1x async)
+: (scatter [x xs] p)          -> detach for all x, a region  == old :await false (Nx async)
+: (gather hs) / (await hs)    -> rejoin handles -> results    == the join
+
+So =:await= dissolves into the verb you choose. =scatter= is just =spawn= lifted
+over a collection; =mesh/map= (doc 11) is =scatter= + =gather=. The whole fan-out
+family is ONE combinator (=spawn=) at different arities — not separate inventions.
+
+* Decision 3 — strict by default, explicit detach (Fork X, the BEAM vote)
+
+A forced =ask= RUNS AND BLOCKS (await is the default); =spawn= is the verb that
+detaches. This is =Task.async=/=Task.await= exactly — and =spawn-session :await
+false= is already literally a Task. No lazy-future evaluation model, no surprising
+eval order. Cost: detaching a mind is an EXPLICIT act (=spawn=/=scatter=), never a
+byproduct of laziness — which is correct (spawning should be visible).
+
+Consequence: =scatter= takes its prompt UNEVALUATED (a frozen =prompt::= template
+it instantiates per item) — because a strict =ask= would run once before =scatter=
+saw it. So: =ask= forced now; =prompt::= frozen for =scatter=/deferral. The
+eager/frozen split that justifies =prompt::='s existence is the SAME split that
+makes detach work. (That rhyme is why the factoring is right.)
+
+Serial-by-default: =(let [a (ask ...) b (ask ...)] ...)= runs a THEN b. Concurrency
+is EXPLICIT (=scatter=/=spawn= + =gather=), never magic =let=-parallelism. We chose
+no cleverness here on purpose.
+
+* Decision 4 — ask is a function; prompt:: is the freeze (one form, honestly)
+
+The "one form for everything" =prompt::= was a braid. De-braided:
+- =ask= — a FUNCTION: =(ask template bindings)=. Eager holes, run now, return data.
+  The 90%. No reader machinery, no grammar to learn.
+- =prompt::= — a READER FORM, only for what a function cannot do: FREEZE its holes
+  (deferred re-resolution, or a prompt handled as data). The sibling of =tmpl::=.
+
+A reader form must earn its keep by doing something a function cannot; =prompt::=
+earns it ONLY via freeze. The common path pays no syntax for the rare path's need.
+
+* Decision 5 — the three-contract law (promoted above prompt:: — it governs the family)
+
+The deepest result of the review. Every reader leaf — and =ask= — has THREE
+separate contracts from THREE separate sources. Conflating them (especially
+inferring authority from prose) is the canonical bug:
+
+:              literal CONTENT     effect AUTHORITY          OUTPUT
+: sh::         argv (inferred)     files/env (the shell)     exit + stdout
+: tmpl::       layout (inferred)   data/* it may read (host) widgets
+: prompt::/ask text (inferred)     tools+region (GRANTED)    shape narrowed-or-declared
+: ---------------------------------------------------------------------------------
+: CONTENT   = inferred from the literal + holes              [free]
+: AUTHORITY = granted by the host / ambient context          [never inferred from text]
+: OUTPUT    = narrowed by the call site, else declared, else default
+
+The law: *infer content, GRANT authority, narrow-or-declare output.* A leaf infers
+WHAT IT SAYS for free; it gets WHAT IT MAY TOUCH from a host, never from its own
+words; its RESULT shape comes from where it lands or an annotation. =sh::= does not
+infer which files it may delete; =tmpl::= does not infer which =data/*= it may read;
+=ask= does not infer its tools/region. That symmetry is the family's spine and the
+reason prose-inferred authority was rejected (doc 13).
+
+* Decision 6 — narrowing yields SHAPE, not leaf types (honest ceiling)
+
+Output narrowing reliably delivers container kind + required keys + arity; it
+rarely delivers leaf types (=:keyword= vs =:string= at a field), because PTC is
+dynamically typed and a destructure proves key PRESENCE, not type. So: "the SHAPE
+is the guardrail"; load-bearing leaf types need an explicit =:returns=. =:returns=
+is needed more often than early optimism implied (doc 13 down-scope section).
+
+* Decision 7 — the mind is the untrusted host (trust /= shape)
+
+The family symmetry holds for BUILDING and breaks for TRUSTING. =sh::='s host fails
+loud (exit code); =tmpl::='s host is deterministic; the LLM host is nondeterministic
+and can return correctly-SHAPED garbage. The type checks shape, never truth. So the
+LLM seam needs something its siblings do not: *validation beyond shape* — a critic
+pass / check fn / consensus fold. S26 (self-critique) and S25 (semantic reconcile
+with a Ra commit) are not decoration; they are the TRUST mechanism. State this
+plainly wherever a mind's output drives an irreversible effect: shape-check at
+construction, content-check (a second mind, a test, a human) before commit.
+
+* What stays exactly as built (the keepers)
+
+The review ENDORSED the value-oriented core; do not let the corrections above cast
+doubt on it:
+- the *mesh blackboard* — append-only, content-addressed, store-seq as a value,
+  time as a number you hold. Datomic-shaped. The least clever, best part. Build
+  MORE that looks like this.
+- the *sugars as functions* (doc 11) — =scatter=/=gather=/=mesh/map= are functions
+  over values, exactly the preferred shape; naming a recurring fold is good naming,
+  not complecting. Keep them — as functions, never as reader forms.
+- *FEAT-008/009/010* (built, green) — unaffected; the corrections are about the
+  vision-track docs (10-13), not the shipped foundation.
+
+* The corrected build implication
+
+When FEAT-011 (spawn) lands, it should expose:
+- =spawn= / =scatter= / =gather= combinators over mission VALUES (Decision 1/2),
+- a strict =ask= FUNCTION (Decision 4) as the default LLM call,
+- =prompt::= reader form ONLY for frozen/deferred prompts (Decision 4),
+and it must NOT add an =:await= flag (Decision 2) or infer authority from prose
+(Decision 5). "Spawn returns data; a host interprets it" (doc 10/12) — no
+=:returns :ast= mode that implies code; a =:returns <schema>= that declares a SHAPE.
+
+* The one-line settlement
+
+#+begin_quote
+One seam (ask a mind) at three altitudes (ask -> spawn/scatter -> spawn-session),
+strict by default with explicit detach, where content is inferred, authority is
+granted, output shape is narrowed-or-declared, and trust beyond shape is a separate,
+explicit mechanism. The mesh exchanges DATA; hosts turn data into effect; no eval,
+no macros, no "AST."
+#+end_quote

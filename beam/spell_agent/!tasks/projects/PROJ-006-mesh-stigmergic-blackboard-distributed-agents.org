@@ -196,3 +196,26 @@ First end-to-end slice = FEAT-008→009→010 (Fork A, single-node, no consensus
 Wave 4 fans out: spawn(011) / decide(012) / watch(013) / screens(014,015) are independent.
 The two-node Khepri distribution gate is folded into FEAT-012 (PT-3 partition, PT-4
 dead-author across nodes) — it gates the "distribution works" claim (02 §7).
+
+* HORIZON: homoiconic spawning (docs/agent-mesh-theory/10-homoiconic-spawning.org)
+A vision-track doc (runs AHEAD of the build) exploring spawn-session + black/* +
+tmpl:: quoting (PLAN-012) composed. Six new scenarios (6-11): type-narrowed fan-out,
+homoiconic refactor (children return edit-AST), live mesh dashboard, the screen that
+watches itself fill, recursive tool synthesis, findings-as-templates.
+
+THE KEYSTONE INSIGHT (a candidate FUP/research artifact): NARROWING BY INTROSPECTION
+— a spawn result's required output TYPE is derived from the SPLICE SITE where it
+lands (view/table :rows -> Row type via Tui.Reflect; tool/edit :action -> edit-op
+spec; define-tool return -> declared signature). The call site becomes the spec;
+format separates from intent. Build = Narrow.signature_at(form, path): a static pass
+over CoreAST, sibling to the hole dependency analysis in quoting-spec §8c.1, joining
+Tui.Reflect + tool param specs + the signature parser (all in-tree).
+
+Grounding ledger: spawn-returns-typed-DATA is REAL today (SubAgent signature +
+:ptc_lisp return); spawn-returns-AST + tmpl:: holes need PLAN-012 (quote->collections,
+AST<->data codec); narrowing is the one genuinely-new research pass. The doc's thesis:
+the mesh (006), homoiconic quoting (PLAN-012), and typed sub-agents are THE SAME TRACK
+seen from three sides — compose them and an agent authors its own structure, spawns
+minds to fill it with typed code, and runs the result through hosts (never eval).
+Not filed as FEATs (depends on PLAN-012 landing first); captured as the north star
+011/012/013 build toward.

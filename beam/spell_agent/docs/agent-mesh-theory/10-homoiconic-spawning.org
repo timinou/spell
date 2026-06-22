@@ -1,0 +1,404 @@
+#+TITLE: Typed spawning — when a spawned mind returns DATA and the call site shapes it
+#+SUBTITLE: spawn-session + black/* + the call-site-narrows-the-child principle
+#+OPTIONS: toc:2 num:t
+
+* The Hickey correction (read first — this doc was reframed)
+
+The original title was "homoiconic spawning — spawn returns AST." That framing is
+dropped. A spawned mind returns *DATA* (a map / vector / scalar), and a *HOST*
+interprets that data where it must become an effect (=edit/transaction= reads an
+edit-DESCRIPTION; =define-tool= installs a body; =run-mesh-program= runs a coord
+spec). Data + interpreter is the architecture; "AST / homoiconic / macro
+expansion" was the same data dressed as a parlor trick — more conceptual weight,
+zero extra power (the quoting-spec §6 doctrine, which this doc had quietly walked
+back). Throughout, read "returns AST" as "returns data a host interprets," and
+"the child IS a macro expansion" as "the child produces data the parent's host
+consumes." The SCENARIOS stand; only the vocabulary is corrected. The one genuinely
+new mechanism — the call site narrowing the child's expected SHAPE — is real and
+unchanged (see §narrowing, and §13 for its three reliability regimes).
+
+* Premise
+
+This file dreams one step past =09-worked-scenarios.org=, under two assumptions
+the user asked us to grant:
+
+1. *=tool/spawn-session= returns structured data and valid AST*, not text — which
+   is HALF-TRUE today: =PtcRunner.SubAgent= already takes a =signature=
+   (="(user :string) -> {count :int, ids [:int]}"=, verified) and returns a typed
+   map in =:ptc_lisp= mode. The new part is returning *quoted CoreAST* (code), and
+   *narrowing the required output type by introspecting where the result is used*.
+2. *The full =tmpl::= quoting vision (PLAN-012 / docs/quoting-spec.md) is shipped*:
+   backtick quasiquote (eager), =tmpl::= deferred holes persisted as
+   ={"__hole__" 'form}=, =~= / =~@= as general reader chars, and =quote=→collections.
+
+Grant both and a new thing appears: *the boundary between "spawn a worker" and
+"write a macro" dissolves.* A child stops returning an answer and starts returning
+*a piece of the parent's program*, shaped by the hole it will fill. Spawning
+becomes metaprogramming whose expansion is performed by an LLM — but kept SAFE,
+because the expansion is (a) typed by the splice site and (b) executed through a
+host, never a blank =eval= (the quoting-spec §6 doctrine).
+
+The throughline:
+
+#+begin_quote
+=black/*= shares VALUES through the medium. =tmpl::= templates STRUCTURE with
+holes. =spawn-session= makes MINDS. Compose all three and a parent writes a
+skeleton with holes, spawns minds to fill the holes with typed code, and splices
+their AST back into itself — the call site dictating what each child must produce.
+The mesh stops exchanging findings and starts exchanging PROGRAM.
+#+end_quote
+
+* The load-bearing new mechanism — narrowing by introspection
+
+Before the scenarios, the mechanism they all rest on. Today a spawned child's
+output contract is a hand-written =:signature=. The dream: *the contract is
+inferred from where the result is spliced.*
+
+** The principle: a hole has a type, and the type flows backward
+
+Every position a spawn result can land in is TYPED, and the type is already
+knowable in-tree:
+
+| splice site | its element type | known from |
+|-------------+------------------+------------|
+| =view/table :rows= hole | a Row (cells + style) | =Tui.Reflect= (ratatui widget reflection) |
+| =view/list :items= hole | a ListItem | =Tui.Reflect= |
+| =tool/edit :action= arg | an edit-op map ({kind, content, …}) | the =edit= tool param spec |
+| =define-tool= =:signature= return | the declared return type | the signature the agent just wrote |
+| =black/post :payload= for a typed region | the region's finding schema | a region-declared goal schema |
+| a =`(f ~hole)= quasiquote slot | f's parameter type | the callee's signature |
+
+So when a parent writes =~@(spawn-fanout … )= INSIDE a =view/table :rows= hole,
+the splice site's element type (Row) is a *constraint on what each child must
+return*. The narrowing engine reads the enclosing form, finds the typed slot, and
+*synthesizes the child's =:signature= automatically*: ="-> {cells [:string], style :map}"=.
+
+#+begin_src
+parent writes the SKELETON with a typed hole
+        │
+        ▼
+narrowing reads the hole's position → derives the element type T
+        │
+        ▼
+spawn-session is given :signature "(…) -> T"  (NOT hand-written)
+        │
+        ▼
+child MUST return a value of type T (validated by the existing signature checker)
+        │
+        ▼
+result splices into the hole — type-correct BY CONSTRUCTION
+#+end_src
+
+** Why this is profound, not just convenient
+
+- *the prompt no longer specifies the output format.* Today half a sub-agent
+  prompt is "return JSON shaped like …". With narrowing, the SHAPE comes from the
+  call site; the prompt is pure INTENT ("assess risk of this file"). Format and
+  intent separate cleanly — the format is a type, the intent is a sentence.
+- *mismatches are caught at the boundary, not downstream.* A child that returns
+  the wrong shape fails the signature check at the splice, not three folds later
+  as a malformed render. The type is the contract and the contract is enforced.
+- *it is bidirectional metaprogramming.* The parent's structure constrains the
+  child's code; the child's code completes the parent's structure. Neither is
+  written in full by either party — the SHAPE is the parent's, the CONTENT is the
+  child's, the TYPE bridges them. That is exactly macro expansion, with an LLM as
+  the expander and a type as the guardrail.
+
+** Grounding: what makes this real vs. aspirational
+
+- *real today:* =SubAgent= =signature= + structured =:ptc_lisp= return + the
+  signature validator (=lib/ptc_runner/lisp/discovery.ex=, =registry.ex=).
+- *needs PLAN-012:* =quote=→collections + the AST↔data codec (so a child can
+  return a FORM, not just a data map) + =tmpl::= holes (the typed splice sites).
+- *the genuinely new build:* the *narrowing pass* — a function that, given a
+  splice site's enclosing form + position, derives the element type from
+  =Tui.Reflect= / tool param specs / signatures. This is a static analysis over
+  the parent's CoreAST, sibling to the hole dependency analysis in
+  quoting-spec §8c.1. Call it =Narrow.signature_at(form, path)=.
+
+* Scenario 6 — the call site is the spec (type-narrowed fan-out)
+
+** Dream
+"Build me a risk table for the rename. I'll write the TABLE; the cells come from
+children — and I shouldn't have to tell each child what shape to return, because
+the table already knows."
+
+** The code
+#+begin_src clojure
+;; The parent writes a LIVE table skeleton (tmpl:: → deferred holes). The :rows
+;; hole is spliced from a fan-out spawn. spawn-fanout is given NO :signature — it
+;; is NARROWED from the :rows slot of a view/table (element type = Row).
+(tmpl:: {:type "table"
+         :header ["file" "risk" "evidence"]
+         :rows ~@(spawn-fanout
+                   (distinct (map #(get % "file") (tool/find {:target "…::verify def→"})))
+                   {:prompt  (fn [f] (str "Assess rename risk for verify/1 at " f))
+                    :region  region          ; children ALSO post to the mesh (audit trail)
+                    :budget  {:max_turns 4}})})
+;; each child's :signature is auto-derived: "(file :string) -> {cells [:string :string :string]}"
+;; because the splice lands in a view/table :rows hole whose element type is a 3-cell Row.
+;; A child returning the wrong shape FAILS at the splice, not as a broken frame.
+#+end_src
+
+** What's new vs. Scenario 1
+S1's children posted free-form findings the parent had to fold. Here the children
+return *exactly the row type the table needs*, derived from the table. The fold is
+gone — the splice IS the fold, and it's type-checked. The parent never wrote a
+format string; the table did.
+
+* Scenario 7 — homoiconic refactor (children return edit-AST, parent splices a transaction)
+
+** Dream
+"Apply the same structural fix across 12 files. Each child figures out the precise
+edit for ITS file and hands me back the EDIT ITSELF — not a description of it. I
+splice all twelve into one atomic transaction and apply it."
+
+** The code
+#+begin_src clojure
+;; Children return QUOTED edit-AST (code as data). The parent splices them into one
+;; transaction form via ~@ and runs it through the edit host (NOT a blank eval —
+;; edit/transaction is a typed host, quoting-spec §6).
+(let [edits (spawn-fanout target-files
+              {:prompt (fn [f] (str "Produce the edit that migrates the deprecated call in " f))
+               ;; narrowed from edit/transaction's :ops slot → each child returns an edit-op AST
+               :returns :ast})]              ; :ast mode → child output is CoreAST, validated as an edit-op
+  ;; backtick quasiquote builds the transaction skeleton; ~@edits splices the children's forms
+  (edit/transaction `{:ops ~@edits :mode "strict"}))
+;; map  = each child writes ONE edit-op form for its file (the parallel part)
+;; reduce = the parent splices the forms into one atomic strict transaction (the join)
+;; this is map-reduce over CODE: the unit of exchange is a program fragment, type-checked
+;; against the edit-op schema before it is ever executed.
+#+end_src
+
+** What's new
+The unit of mesh exchange is no longer a *finding* (data about the world) but a
+*program fragment* (a change to the world), and it is type-safe because the
+=edit/transaction :ops= slot narrows each fragment to an edit-op. =eval(eval)=
+made concrete and SAFE: the child writes code, the parent composes it, a typed
+host runs it. No child ran anything; the parent's single transaction did, atomically.
+
+* Scenario 8 — the live mesh dashboard (tmpl:: holes read the region)
+
+** Dream
+"Show me the cohort working on feature-X — every session, what it has found, what
+it's claimed, the pending verdict — and keep it LIVE as the mesh fills in, without
+me writing a single render function." This is =07-screens.org= §4 (=pane/cohort=),
+now expressible as PURE DATA because tmpl:: holes can read the mesh bag.
+
+** The code
+#+begin_src clojure
+;; A layout authored entirely as data. The holes are black/* reads over the mesh
+;; region exposed as data/region. Deferred (tmpl::), so they re-resolve every frame
+;; → the dashboard is LIVE as children post, with NO render-path Elixir (the §0
+;; zero-cost demand). Atomic diff (quoting-spec §8c): only changed region rows repaint.
+(tmpl:: {:type "split" :dir "vertical"
+  :children
+  [{:type "paragraph" :slot "goal"
+    :text ~(get-in (first (black/query {:region data/region :match {:kind :goal}}))
+                   ["payload" "objective"])}            ; live goal
+   {:type "table" :slot "findings"
+    :header ["author" "about" "risk"]
+    ;; ~@ splice: one keyed row per finding; re-resolves as findings arrive
+    :rows ~@(map (fn [f] (tmpl:: {:cells [~(get f "author")
+                                          ~(get-in f ["payload" "about"])
+                                          ~(get-in f ["payload" "risk"])]}))
+                 (black/query {:region data/region :match {:kind :finding}}))}
+   {:type "paragraph" :slot "verdict"
+    :text ~(or (get-in (first (black/query {:region data/region :match {:kind :verdict}}))
+                       ["payload" "summary"])
+               "… awaiting reconciliation")}]})         ; live verdict, with a placeholder
+#+end_src
+
+** What's new
+The mesh (006) and the freeform TUI (009/012) UNIFY: a region is just =data/region=,
+and a screen of the region is a =tmpl::= over =black/query=. The cohort dashboard —
+previously a deferred FEAT needing custom panes — collapses to a single authored
+data value. "The mesh is observable because coordination is a value" (07 §4) becomes
+literal: the OBSERVER is also a value, and it's live for free (deferred holes
+re-resolve per frame; the atomic diff repaints only the rows that changed).
+
+* Scenario 9 — the screen that watches itself being built (spawn + tmpl + the filling region)
+
+** Dream
+"Launch the blast-radius assessment AND open its dashboard in the same breath. As
+the children I just spawned post their findings, I watch the table fill in, row by
+row, in real time — the spawn and the view are one act."
+
+** The code
+#+begin_src clojure
+(let [region (get (black/post {:region :auto :kind :goal
+                               :payload {:objective "rank rename risk"}}) "region")]
+  ;; 1. fan out (fire-and-forget) — children will post findings over the next seconds
+  (doseq [f files]
+    (tool/spawn-session {:prompt (str "assess " f) :region region
+                         :tools ["find" "black/post"] :await false}))
+  ;; 2. install a LIVE view of the SAME region, bound as data/region. The table's
+  ;;    rows hole re-resolves every frame, so the screen fills as step 1's children
+  ;;    post — spawn and observation are the SAME region, two apertures.
+  (layout/set
+    (tmpl:: {:type "table" :header ["file" "risk"]
+             :rows ~@(map (fn [f] (tmpl:: {:cells [~(get-in f ["payload" "file"])
+                                                   ~(get-in f ["payload" "risk"])]}))
+                          (black/query {:region data/region :match {:kind :finding}}))})
+    {:data {:region region}}))
+;; The human sees an empty table that grows a row each time a child finishes —
+;; the mesh's progress rendered as a side effect of the deferred holes re-reading it.
+#+end_src
+
+** What's new
+Time becomes visible. The dashboard isn't built AFTER the work; it's a deferred
+view of a region being filled CONCURRENTLY. The "present vs. history" and "output
+vs. workspace" dissolutions (philosophy doc) meet the mesh: the agent renders, for
+itself and the human, the live unfolding of minds it spawned — through nothing but
+a quasiquoted read of a shared value.
+
+* Scenario 10 — recursive tool synthesis (the child writes a tool body to a signature)
+
+** Dream
+"I'm authoring a new tool =blast-radius=. I've declared its signature. Spawn a
+child to WRITE THE BODY — and the body it returns must match the signature I
+declared, automatically." The tool's own type narrows the synthesizing child.
+
+** The code
+#+begin_src clojure
+;; The parent declares the tool's CONTRACT, then spawns a child to fill the body.
+;; The child's output signature is NARROWED from the tool's declared return type —
+;; the body must produce {files [:string], max_risk :keyword} or it fails validation.
+(let [sig "(sym :string) -> {files [:string], max_risk :keyword}"
+      body (spawn-session
+             {:prompt "Write the PTC body for blast-radius: find callers of sym, rank risk."
+              :returns :ast                  ; → CoreAST, validated against sig's return type
+              :narrow-to sig})]              ; explicit narrowing target (the tool's contract)
+  ;; define-tool installs the child-authored body as a first-class tool. The body is
+  ;; data (CoreAST) the registry stores exactly like any :ptc tool (ToolRegistry).
+  (define-tool {:name "blast-radius" :signature sig :body body}))
+;; Now (tool/blast-radius {:sym "verify"}) runs LLM-authored code that is
+;; type-guaranteed to return the declared shape. The agent grew a new verb by
+;; spawning a mind to write it — homoiconic self-extension, type-bounded.
+#+end_src
+
+** What's new
+The reflexive loop closes on the TOOL surface. The agent doesn't just spawn minds
+to do work — it spawns minds to *write the verbs it will use*, and the verb's
+declared type keeps the synthesized body honest. This is =define-tool= (homoiconic
+authorship, already in-tree) + spawn (reflexivity) + narrowing (the type bridge).
+The agent's vocabulary becomes self-extending under type discipline.
+
+* Scenario 11 — findings as templates (a child returns a skeleton the parent completes)
+
+** Dream
+"A child found the fix but it doesn't know my module's exact names. Let it hand me
+a fix SKELETON with holes, and I'll fill the holes with my local context before
+applying." The finding is a =tmpl::= the parent finishes.
+
+** The code
+#+begin_src clojure
+;; CHILD posts a finding whose payload is a QUASIQUOTED fix skeleton with holes for
+;; context only it lacks (the concrete module/alias the parent will bind).
+(black/post {:region region :kind :finding
+             :payload {:about "fix-template"
+                       :skeleton `{:op "wrap" :with "try/catch"
+                                   :module ~(hole :module)        ; parent fills
+                                   :body ~(hole :failing-expr)}}})
+
+;; PARENT folds the skeletons and completes each with its own bindings, then applies.
+(doseq [f (black/query {:region region :match {:kind :finding :where {:about "fix-template"}}})]
+  (edit/apply (fill-holes (get-in f ["payload" "skeleton"])
+                          {:module my-module :failing-expr (locate-failure f)})))
+#+end_src
+
+** What's new
+A finding stops being inert data ABOUT the world and becomes a PARTIAL PROGRAM —
+code with holes, awaiting the context the author couldn't see. The =tmpl::= hole
+mechanism (deferred, fillable) becomes the lingua franca of the mesh: minds
+exchange skeletons, each filling what it knows, none needing the whole picture.
+This is stigmergy at the level of CODE — the blackboard carries programs-with-holes
+that compose as they pass between minds.
+
+* The unifying picture — three primitives, one act
+
+#+begin_src
+  spawn-session   makes MINDS            (reflexivity: the runtime calls itself)
+  black/*         shares through a MEDIUM (stigmergy: coordinate without messaging)
+  tmpl:: / ~ / ~@ templates STRUCTURE     (homoiconicity: skeleton + typed holes)
+  ─────────────────────────────────────────────────────────────────────────────
+  narrowing       lets the SPLICE SITE dictate the child's output TYPE
+                  (the call site is the spec; format separates from intent)
+#+end_src
+
+Composed, they yield a single new act: *the parent writes a typed skeleton with
+holes, spawns minds to fill the holes with code, and splices their AST back into
+itself — the medium carrying program fragments, the types keeping them honest, the
+hosts running them safely.* Five dissolutions stack:
+
+| boundary | dissolved by | here |
+|----------+--------------+------|
+| worker vs. macro | spawn returns AST | a child IS a deferred macro expansion |
+| format vs. intent | narrowing | the prompt says WHY; the type says WHAT-SHAPE |
+| data vs. program | findings-as-AST | the blackboard carries code, not just facts |
+| building vs. running | typed hosts | spliced AST runs through edit/define-tool/layout, never eval |
+| present vs. unfolding | deferred holes over a filling region | the screen IS the live mesh |
+
+* Honest grounding — what each scenario presupposes
+
+Per the user's grant ("imagine the full vision implemented"), these run AHEAD of
+the build. The ledger, so we never confuse dream with done:
+
+| capability | status | gated by |
+|-----------+--------+----------|
+| spawn returns a typed DATA map | *real* | =SubAgent= signature + =:ptc_lisp= return (in-tree) |
+| spawn returns quoted AST (=:returns :ast=) | *new* | =quote=→collections + AST↔data codec (PLAN-012 F2) |
+| =tmpl::= deferred holes / =~= / =~@= | *new* | PLAN-012 (W1/W2) |
+| backtick quasiquote (eager) | *new* | PLAN-012 (W1) |
+| holes read =data/region= live | *new* | PLAN-012 resolver host + the mesh bag (a new =data/= key) |
+| *narrowing* =signature_at(form, path)= | *new, the keystone* | a static pass over CoreAST using =Tui.Reflect= + tool param specs + signatures |
+| spawn + mesh (006) | *foundation green* | FEAT-008..010 done; 011/012/013 specced |
+
+The narrowing pass is the one genuinely new RESEARCH artifact — everything else is
+a named, planned build. It is tractable: it is the same shape as the hole
+dependency analysis (quoting-spec §8c.1) — walk a CoreAST, but instead of
+collecting =data/<k>= references, resolve the TYPE of the enclosing typed slot.
+Reflection already exposes widget types (=Tui.Reflect=); tool param specs already
+exist (=inventory/0=); signatures already parse (=discovery.ex=). Narrowing JOINS
+them: position → slot → type → child signature.
+
+* Tests these scenarios imply (when the substrate lands)
+
+Narrowing and AST-spawning need their own contracts; sketching them keeps the
+dream buildable rather than hand-wavy.
+
+** Narrowing pass (test/ptc_runner or test/spell_agent/mesh/narrow_test.exs)
+| contract | test |
+|----------+------|
+| a =view/table :rows= splice derives a Row signature | =Narrow.signature_at= on a known form returns the 3-cell Row type |
+| a =tool/edit :action= splice derives the edit-op type | same, against the edit param spec |
+| a =define-tool= return narrows the body | the declared signature's return type flows to =:narrow-to= |
+| an UNtyped position degrades gracefully | a splice into a free =black/post :payload= returns =:any= (no narrowing, not an error) |
+
+** AST-returning spawn (test/spell_agent/mesh/spawn_ast_test.exs)
+| contract | test |
+|----------+------|
+| =:returns :ast= yields CoreAST, not text | a scripted child returns a form; the result is a valid CoreAST node |
+| AST validated against the narrowed signature | a child returning the WRONG shape fails the signature check at the boundary |
+| spliced AST runs through the host, not eval | the result reaches =edit/transaction= / =define-tool=; no =eval= builtin is touched (assert =eval= still absent) |
+
+** tmpl:: + mesh integration (test/spell_agent/integration/mesh_live_view_test.exs)
+| contract | test |
+|----------+------|
+| a tmpl:: over =black/query= renders the region | seed a region with 2 findings, resolve the layout, assert 2 rows |
+| deferred holes re-resolve as the region fills | post a 3rd finding, re-resolve, assert 3 rows (live) |
+| atomic diff repaints only changed rows | change one finding, assert only that row's hole re-evaluated (the dirty-set, §8c) |
+| failure ladder | a hole whose =black/query= raises shows the placeholder, frame still renders (never bricks) |
+
+* The deepest point
+
+These scenarios are not "more features." They are the moment three independent
+research tracks — the mesh (PROJ-006), homoiconic quoting (PLAN-012), and
+typed sub-agents (=SubAgent= signatures) — turn out to be *the same track seen
+from three sides*. The mesh wanted a richer unit of exchange than data; quoting
+gave it one (AST-with-holes); signatures + narrowing kept it safe (the call site
+types the child). Compose them and an agent does the thing the whole codebase has
+been building toward: *it authors its own structure, spawns minds to fill it with
+typed code, and runs the result through hosts it can trust* — homoiconic
+dissolution, now at the scale of a collective. The wall between "using a tool,"
+"writing a tool," and "being a tool another mind writes" was only ever chalk.

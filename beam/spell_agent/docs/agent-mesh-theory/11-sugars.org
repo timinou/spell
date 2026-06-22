@@ -1,0 +1,397 @@
+#+TITLE: Sugars — the ergonomic mesh, and what it unlocks (S12-21)
+#+SUBTITLE: A coordination DSL over spawn-session + black/* + tmpl::, now that PLAN-012 has landed
+#+OPTIONS: toc:2 num:t
+
+* The unlock PLAN-012 gives us (read this first)
+
+With =tmpl::= / backtick / =~= / =~@= / =quote=→collections LANDED, the mesh gets
+a thing it could not have before: *a way to pass an UNEVALUATED body around without
+a macro system.* Every coordination sugar needs exactly one capability — hand a
+form to a host that runs it later (a watch's =:do=, a fold's reducer, a typed hole's
+content). That is precisely deferral, and quoting is deferral. So:
+
+#+begin_quote
+The sugars below are NOT macros and need NO new evaluator. They are prelude FORMS:
+higher-order functions over worker-fns, plus =tmpl::=/=quote= wherever a body must
+stay frozen until a host runs it. PLAN-012 landing is the entire reason this layer
+is buildable now — it supplied the one missing primitive (frozen, re-runnable
+forms-as-data) that sugar requires. This is the quoting-spec §6 doctrine in action:
+hosts + quoting replace eval/macros.
+#+end_quote
+
+So: no =eval=, no macro expander. =scatter=/=mesh/map=/=race= are higher-order fns
+(they take a worker-fn); =on=/=gather=/=mesh/view= take a =tmpl::= or =`quoted=
+body that a mesh host re-runs. Every sugar desugars (=≡=) to the FEAT-010..013
+primitives. Nothing here is new POWER — it is new LEGIBILITY, the same bet the
+quoting-spec makes for templates.
+
+* Part 1 — the recurring shapes in S1-11 (what to sugar)
+
+Reading =09= and =10= back, eight shapes recur. Each is a sugar candidate.
+
+| shape | appears in | the longhand pattern |
+|-------+------------+----------------------|
+| A *scatter/gather* | S1, S6 | mint region → spawn N over a coll → threshold-watch → fold |
+| B *work queue* | S2 | N workers each loop: query-open → claim → do → post-done |
+| C *reconcile* | S3 | rendezvous slug → count-watch → decide |
+| D *reactive trigger* | S4, S9 | =black/watch {:when … :do …}= |
+| E *race* | S5 | spawn N approaches → first to claim wins |
+| F *typed splice* | S6, S7 | =~@(spawn …)= into a typed hole; signature narrowed |
+| G *live region view* | S8, S9 | =tmpl::= over =black/query= bound to =data/region= |
+| H *tool synthesis* | S10 | spawn body to a signature → =define-tool= |
+
+* Part 2 — the sugar surface
+
+A small, coherent family. Control-flow sugars are higher-order fns; deferral rides
+=tmpl::=/quote. All live in a =mesh/= prelude namespace (+ two bare verbs =on=/=race=
+common enough to go unqualified). Each shown with its desugaring.
+
+** =mesh/region= — scoped region binding (the =with-open= of meshes)
+#+begin_src clojure
+(mesh/region [r {:goal "rank rename risk"}]
+  body…)                       ; r is bound; black/* in body default to region r
+;; ≡
+(let [r (get (black/post {:region :auto :kind :goal
+                          :payload {:objective "rank rename risk"}}) "region")]
+  body…)                       ; this session is recorded owner (P1.3)
+#+end_src
+Binds a fresh Fork-A region, records the goal+owner, scopes the body. The single
+most common preamble in S1/S5/S6/S9 becomes one line.
+
+** =scatter= — fan-out spawn over a collection
+#+begin_src clojure
+(scatter [f files] {:prompt #(str "assess " %) :tools ["find" "black/post"] :budget {:max_turns 4}})
+;; ≡
+(doseq [f files]
+  (tool/spawn-session {:prompt (str "assess " f) :region *region*
+                       :tools ["find" "black/post"] :budget {:max_turns 4} :await false}))
+#+end_src
+Fire-and-forget fan-out into the ambient region. Returns the spawn handles (for an
+explicit =gather= later). =*region*= is the =mesh/region= binding in scope.
+
+** =gather= — the threshold-wait + fold join
+#+begin_src clojure
+(gather :count (count files) :over :finding :reduce :group-by :field :risk :timeout 120000)
+;; ≡
+(do (black/watch {:region *region* :when {:kind :finding :count (count files)}
+                  :do `(return :all-in) :fuel 1 :ttl 120000})
+    (black/fold {:region *region* :over :finding :reduce :group-by :field :risk}))
+#+end_src
+Note the =:do `(return :all-in)= — the watch body is a QUOTED form (PLAN-012); the
+watcher host runs it. No macro needed; quoting carried the deferral.
+
+** =mesh/map= — the fused 90% case (scatter + gather in one)
+#+begin_src clojure
+(mesh/map files
+          {:prompt #(str "assess " %) :tools ["find" "black/post"]}
+          :reduce (fn [findings] (group-by #(get-in % ["payload" "risk"]) findings)))
+;; ≡ (mesh/region [r {...}] (scatter [f files] …) (gather :count (count files) :reduce …))
+#+end_src
+S1 — the entire fanout-fold mission — collapses to ONE form. This is the workhorse.
+
+** =mesh/queue= — claim-based work queue (no dispatcher)
+#+begin_src clojure
+(mesh/queue sites (fn [site] (do-migration site)) :workers 5)
+;; ≡ spawn 5 workers, each running the claim-loop from S2 (query open → claim → do → post done)
+#+end_src
+The dispatcherless queue (S2) as one form; the claim-fold (store-seq, FEAT-010) is
+the only arbiter, hidden inside.
+
+** =race= — first-to-finish wins, rest stand down
+#+begin_src clojure
+(race [approach ["retry-backoff" "fix-setup-race" "isolate-tempdir"]]
+      {:prompt #(str "try " %) :tools ["edit" "run" "black/claim" "black/post"]})
+;; ≡ scatter the approaches; each claims :work "resolution" on success; return the winning finding
+#+end_src
+
+** =on= — reactive-trigger sugar (the watch, legible)
+#+begin_src clojure
+(on {:kind :finding :where {:about "migration-done"}}
+    `(tool/spawn-session {:prompt "resume backfill" :region (event-region) :await false}))
+;; ≡ (black/watch {:region *region* :when <pattern> :do <quoted-body> :fuel 1 :ttl …})
+;; (on-count N pattern body) sets :count N for fan-in thresholds.
+#+end_src
+The =:do= is a backtick-quoted form — frozen, re-run by the watcher. =on= is the
+single most reused sugar (S4, S9, and every Fork-B threshold).
+
+** =reconcile= — rendezvous + decide (Fork B, one form)
+#+begin_src clojure
+(reconcile {:slug "feature-x/ship"} :when 3 :via :merge-results)
+;; ≡ post to fork_b({:slug …}); (on-count 3 {:kind :finding :where {:status "done"}}
+;;     `(black/decide {:region … :quorum :majority :fold `(black/fold {… :reduce :merge-results})}))
+#+end_src
+
+** =mesh/view= — a live region view (tmpl:: pre-wired to a region)
+#+begin_src clojure
+(mesh/view region
+  {:findings (row-of [:author :about :risk])    ; a row spec per finding kind
+   :verdict  :summary})
+;; ≡ a tmpl:: layout whose holes are black/query reads over data/region, deferred
+;;   (re-resolve every frame), with the failure ladder per hole (quoting-spec §8b.8)
+#+end_src
+S8's dashboard as a declarative spec; the =tmpl::= + =black/query= plumbing is generated.
+
+** =~@spawn= — narrowing-aware typed splice (the homoiconic sugar)
+#+begin_src clojure
+(tmpl:: {:type "table" :header [...] :rows ~@spawn[files #(str "assess " %)]})
+;; ≡ ~@(spawn-fanout files …) where the child :signature is NARROWED from the
+;;   enclosing :rows hole's element type (Row, via Tui.Reflect) — doc 10's keystone.
+#+end_src
+=~@spawn[…]= is sugar for "splice a fan-out here, and let the hole type the children."
+The call site is the spec — no signature written.
+
+** =grow-tool= — synthesize a tool body to its signature (S10)
+#+begin_src clojure
+(grow-tool "blast-radius" "(sym :string) -> {files [:string], max_risk :keyword}"
+           "find callers of sym, rank risk")
+;; ≡ (define-tool {:name … :signature sig
+;;       :body (spawn-session {:prompt … :returns :ast :narrow-to sig})})
+#+end_src
+
+** =fill= — complete a template-finding's holes (S11)
+#+begin_src clojure
+(fill skeleton {:module my-mod :failing-expr expr})   ; resolve a posted `quoted skeleton
+;; ≡ resolve_holes(skeleton, bindings) — the PLAN-012 host, applied to a finding payload
+#+end_src
+
+* Part 3 — S1-11 in sugar (the compression)
+
+Representative rewrites. The point: intent survives, plumbing vanishes.
+
+** S1 (was ~25 lines) → 1 form
+#+begin_src clojure
+(mesh/map (caller-files "verify/1")
+          {:prompt #(str "assess rename risk at " %) :tools ["find" "black/post"]}
+          :reduce #(group-by (risk-of) %))
+#+end_src
+
+** S3 (Fork-B reconcile) → 2 forms
+#+begin_src clojure
+(black/post {:region {:slug "feature-x/ship"} :kind :finding :payload {:slice s :status "done"}})
+(reconcile {:slug "feature-x/ship"} :when 3 :via :merge-results)
+#+end_src
+
+** S4 (unblock) → 1 form
+#+begin_src clojure
+(on {:kind :finding :where {:about "migration-done"}}
+    `(tool/spawn-session {:prompt "resume backfill" :region (event-region) :await false}))
+#+end_src
+
+** S6 (typed fanout) → the table IS the program
+#+begin_src clojure
+(tmpl:: {:type "table" :header ["file" "risk" "evidence"]
+         :rows ~@spawn[(caller-files "verify/1") #(str "assess " %)]})
+#+end_src
+
+** S9 (spawn + watch it fill) → 2 forms
+#+begin_src clojure
+(mesh/region [r {:goal "rank rename risk"}]
+  (scatter [f files] {:prompt #(str "assess " %) :tools ["find" "black/post"]})
+  (layout/set (mesh/view r {:findings (row-of [:file :risk])})))
+#+end_src
+
+* Part 4 — what the sugar UNLOCKS: S12-21
+
+Sugar is not just shorter — it makes COMPOSITIONS tractable that were unthinkable
+longhand. These are second-order: each is natural ONLY because the sugar exists.
+
+** S12 — mesh pipelines (scatter→gather→scatter as dataflow)
+*Dream:* "Analyze 200 files, cluster the findings, then deep-dive each cluster — a
+three-stage pipeline, each stage a mesh." Because =mesh/map= returns a value, it
+THREADS:
+#+begin_src clojure
+(-> (mesh/map files       analyze-spec   :reduce cluster-findings)   ; stage 1: fan-out analysis
+    (mesh/map :over-keys  deepen-spec    :reduce merge-reports)      ; stage 2: fan-out per cluster
+    (mesh/view-report))                                              ; stage 3: render
+#+end_src
+*Unlocked by:* =mesh/map= being a plain fn (composes with =->=). The mesh becomes a
+DATAFLOW DAG; each stage's output types the next (narrowing chains, doc 10). What
+was an un-writable tangle of nested regions+watches is a thread macro.
+
+** S13 — fractal mesh (a worker that scatters)
+*Dream:* "Sort/merge/summarize a huge tree by divide-and-conquer — workers that
+split their slice and spawn sub-workers, recursively." A worker-fn that itself calls
+=mesh/map=:
+#+begin_src clojure
+(defn summarize [node]
+  (if (leaf? node)
+    (summary-of node)
+    (mesh/map (children node) {:prompt summarize} :reduce merge-summaries)))  ; recursion
+(summarize root)
+#+end_src
+*Unlocked by:* =mesh/map= nesting + =ParallelBudget= bounding total live sessions
+across ALL depths (FEAT-011). Mergesort-shaped agent recursion; the budget is the
+well-founded floor (doc 02 §8). Impossible to write safely longhand (you'd hand-roll
+depth budgeting); the sugar inherits it.
+
+** S14 — the standing mesh (a service, not a one-shot)
+*Dream:* "A mesh that LIVES — reacting to a stream of webhooks forever, spawning a
+handler per event, reconciling bursts." =on= without a fuel cap becomes a daemon:
+#+begin_src clojure
+(mesh/region [ops {:goal "CI ops"}]
+  (on {:kind :finding :where {:about "ci-event"}} :fuel :∞
+      `(scatter [job (jobs-of event)] {:prompt #(str "handle " %)}))
+  (on-count :burst {:kind :finding :where {:about "deploy"}} `(reconcile … :via :one-deploy)))
+#+end_src
+*Unlocked by:* =on= sugar + per-node watcher (FEAT-013). The mesh stops being a
+function call and becomes a long-lived REACTIVE SERVICE — the webhook-driven Fork-B
+of doc 02 §5, now a one-liner. (A standing =:fuel :∞= watch is the deliberate
+daemon case; ttl still bounds it.)
+
+** S15 — self-balancing queue (the mesh feels its own backlog)
+*Dream:* "A work queue that adds workers when the backlog grows and lets them idle
+out when it shrinks." =mesh/queue= + an =on= watching its own depth:
+#+begin_src clojure
+(mesh/queue sites migrate :workers 3
+  :rebalance (on {:kind :finding :where {:about "backlog-high"}}
+                 `(scatter [_ (range 2)] {:prompt migrate})))   ; spawn 2 more on pressure
+#+end_src
+*Unlocked by:* =on= over the queue's OWN findings + budget. This is doc 03's deferred
+EF-12 (salience/attentional allocation) — the mesh allocating its own attention,
+expressible because a mesh can watch itself.
+
+** S16 — the mesh that renders itself
+*Dream:* "Every scatter I launch should auto-open a live dashboard of itself." Make
+=mesh/map= take =:watch true= and it =mesh/view='s its region automatically:
+#+begin_src clojure
+(mesh/map files analyze-spec :reduce rank :watch true)   ; opens a live table of findings as they land
+#+end_src
+*Unlocked by:* =mesh/view= + =mesh/map= composition. Observation becomes a DEFAULT
+of coordination, not a separate build — the "output vs workspace" dissolution
+(philosophy) applied to the mesh: to spawn is to see.
+
+** S17 — typed pipeline with stage contracts (narrowing threads through stages)
+*Dream:* "A 3-stage pipeline where stage 2 only accepts what stage 1 is typed to
+produce — checked at every seam." Each =mesh/map= stage carries a row signature;
+narrowing (doc 10) threads the type stage-to-stage:
+#+begin_src clojure
+(mesh/pipeline
+  [analyze   :-> "{file :string, symbols [:string]}"]      ; stage 1 output type
+  [resolve   :-> "{file :string, refs [:map]}"]            ; stage 2 input narrowed from stage 1
+  [report    :-> "{summary :string}"])
+#+end_src
+*Unlocked by:* narrowing + =mesh/map= threading. A stage that returns the wrong
+shape fails at the SEAM, not three stages later. The pipeline is type-safe
+end-to-end with no type written twice — each =:-> T= narrows the next stage's spawns.
+
+** S18 — cross-region join (fold across two independent fan-outs)
+*Dream:* "I ran a security scan and a perf scan as separate meshes; now correlate
+their findings by file." A =mesh/join= folds across regions:
+#+begin_src clojure
+(mesh/join [sec-region perf-region]
+           :on #(get-in % ["payload" "file"])              ; join key
+           :reduce correlate)                              ; per-file {sec perf} → risk
+;; ≡ (black/fold) over the UNION of two regions, grouped by the join key
+#+end_src
+*Unlocked by:* =black/query= being region-parametric + a join fold. The SQL-join of
+meshes — two independent collectives' findings reconciled by content, never by
+referencing each other. Stigmergy across regions.
+
+** S19 — reconcile-of-reconciles (hierarchical consensus)
+*Dream:* "Three teams each reconcile their own sub-feature (Fork B within a team),
+then the three team-verdicts reconcile into a release decision (Fork B across
+teams)." =reconcile= whose findings are themselves verdicts:
+#+begin_src clojure
+(reconcile {:slug "release/v2"} :when 3
+  :of (fn [team] (reconcile {:slug (str "team/" team)} :when (team-size team) :via :team-merge))
+  :via :release-decision)
+#+end_src
+*Unlocked by:* =reconcile= composing (a verdict is a finding to the next tier).
+Hierarchical Raft-over-Raft — consensus trees — expressible because a verdict is
+just another monotone record a higher reconcile folds (doc 02 §4.3).
+
+** S20 — the self-extending agent (grow a vocabulary, then use it)
+*Dream:* "To solve this, I need three verbs I don't have. Grow them — each spawned
+and type-checked — then compose them into the solution." =grow-tool= in a loop:
+#+begin_src clojure
+(doseq [[name sig intent] needed-verbs] (grow-tool name sig intent))   ; spawn minds to write verbs
+(solve-with (map :name needed-verbs))                                  ; compose the grown vocabulary
+#+end_src
+*Unlocked by:* =grow-tool= + =define-tool= (in-tree) + narrowing. The agent GROWS
+its own toolset under type discipline, then programs against it — homoiconic
+self-extension at the scale of a vocabulary, not a single tool (doc 10 S10 squared).
+
+** S21 — the reactive supervisor (the SAS, finally expressible)
+*Dream:* "A meta-mesh that watches the finding-streams of ALL active meshes, spots
+thrash (a region whose goal keeps superseding) or stall (no findings in T), and
+intervenes — re-budgets, kills a cycle, re-goals." The Norman-Shallice Supervisory
+Attentional System (doc 03, deferred) becomes a standing =on= over a cohort:
+#+begin_src clojure
+(mesh/supervise
+  (on {:kind :goal :rate-above 5}  `(throttle (event-region)))          ; thrash → damp
+  (on {:kind :finding :silent-for 60000} `(nudge (event-region)))       ; stall → nudge
+  (on {:about "budget-exhausted"} `(rebalance-global)))                 ; pressure → rebalance
+#+end_src
+*Unlocked by:* =on= over cross-region streams + =mesh/view= + budget control. Doc
+03's executive-function apex — metacognition, the mesh monitoring and overriding its
+own coordination — is a supervisor mesh of =on= rules. It was "deferred research"
+in doc 03; the sugar makes it a config of reactive triggers.
+
+* Part 5 — the through-line S1-11 → S12-21
+
+#+begin_src
+  S1-11   PRIMITIVE compositions — spawn + black/* + tmpl:: by hand.
+            you SEE the plumbing; each scenario is a paragraph of verbs.
+  sugar   names the 8 recurring shapes as prelude forms (deferral via quoting,
+            no macros, no eval — PLAN-012 supplied the one missing primitive).
+  S12-21  SECOND-ORDER compositions — pipelines, recursion, services, joins,
+            consensus-trees, self-extension, supervision.
+            tractable ONLY because the shape is now a single composable form.
+#+end_src
+
+The pattern across S12-21: every one is a COMPOSITION OF SUGARS that would be an
+un-writable tangle of regions/watches/folds longhand. Threading (=->=) gives
+pipelines (S12); nesting gives recursion (S13) and consensus-trees (S19); a fuel-less
+=on= gives services (S14); =on= over a mesh's own output gives self-balancing (S15)
+and supervision (S21); =mesh/map= composing with =mesh/view= gives self-rendering
+(S16); narrowing threading gives typed pipelines (S17); region-parametric =black/query=
+gives joins (S18); =grow-tool= looping gives self-extension (S20).
+
+This is the signature of a good DSL: *the primitives were Turing-complete, but the
+sugar is what made the high-value programs WRITABLE.* The mesh could always express
+S12-21 — no new power was added — but no one could hold them in their head as
+nested =black/watch= callbacks. The sugar is the affordance (principle 4: abstraction
+= mental affordance) that turns "possible" into "fluent."
+
+* Part 6 — grounding + honesty
+
+** What each sugar actually IS (no magic)
+| sugar | kind | desugars to | deferral via |
+|-------+------+-------------+--------------|
+| =mesh/region= | macro-like binding form | =let= + =black/post= goal | — |
+| =scatter=/=mesh/map=/=mesh/queue=/=race= | higher-order fn (takes worker-fn) | =spawn-session= + =black/claim=/=fold= | worker-fn is a closure |
+| =gather= | fn | =black/watch= + =black/fold= | =:do= is a =`quoted= form |
+| =on=/=reconcile= | fn taking a quoted body | =black/watch= (+ =decide=) | body is =`quoted= / =tmpl::= |
+| =mesh/view= | fn returning a layout | =tmpl::= over =black/query= | the whole layout is deferred holes |
+| =~@spawn= / =grow-tool= | narrowing-aware spawn | =spawn-session :returns :ast= + =define-tool= | signature from the splice site |
+| =fill= | fn | =resolve_holes= (PLAN-012 host) | — |
+
+** What we deliberately do NOT sugar (over-sugaring is noise)
+- one-off coordination — if a mission uses a verb ONCE, write the verb; a sugar
+  earns its place only by recurring (the 8 shapes do; a bespoke 2-step does not).
+- the consensus internals — =decide='s Ra round stays a verb, never a sugar; you
+  should SEE when you cross into consensus (it is the expensive, rare path, doc 02).
+- anything needing a real macro (code that rewrites code at parse time). The sugars
+  are fns + quoting; if a "sugar" can't be expressed that way, it wants a host or a
+  =define-tool=, not a macro — the quoting-spec §6 line holds (eval/macros stay out).
+
+** The honest dependency
+Every S12-21 presupposes FEAT-011/012/013 (spawn/decide/watch — specced, not built)
+AND PLAN-012 (granted landed) AND the narrowing pass (doc 10, the one new research
+artifact, needed by S6/S7/S17/S20). The sugars themselves are then a PRELUDE —
+authored as PTC forms in the mesh prelude (=lib/.../mesh/prelude.*= or a =:ptc=
+crystal), NOT compiled Elixir. That is the homoiconic payoff: the sugar layer is
+itself data the agent could read, edit, and extend — the mesh DSL is mesh-authored.
+
+* The deepest point
+
+The primitives (=black/*=, =spawn-session=) are the PHYSICS of the mesh — minimal,
+complete, unopinionated. The sugars are its LANGUAGE — the small set of shapes a
+coordinating mind actually thinks in (scatter, gather, race, react, reconcile, view,
+grow). S1-11 proved the physics; the sugars name the language; S12-21 are the
+SENTENCES the language makes speakable. And because the sugars are themselves PTC
+forms riding quoting + hosts (never eval), the language is open: a mind that finds a
+new recurring shape adds a new word. The mesh DSL is not a fixed grammar handed down
+— it is a vocabulary the collective grows, in the one language it already writes.
+That is the homoiconic dissolution, one level up: *the boundary between using the
+coordination language and extending it was only ever chalk.*

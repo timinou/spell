@@ -23,6 +23,11 @@ It is written to be /read and learned from/, not skimmed. Five files:
 | =07-screens.org= | three =mix spell.mesh*= screens over the freeform surface, each authorable as a PTC layout tree |
 | =08-implementation.org= | the full module-by-module build plan + CodePaths; source for FEAT-008..015 |
 | =09-worked-scenarios.org= | =spawn-session= + =black/*= together on realistic missions; the per-phase + integration test plan |
+| =10-homoiconic-spawning.org= | the horizon: spawn returns AST, =tmpl::= quoting, and type-narrowing-by-introspection (the call site is the spec). Runs AHEAD of the build — grants PLAN-012 + AST-returning spawn |
+| =11-sugars.org= | the ergonomic mesh: a coordination DSL (=scatter=/=gather=/=mesh/map=/=on=/=reconcile=/=mesh/view=/…) over the primitives, and the second-order programs (S12-21: pipelines, fractal mesh, services, joins, consensus-trees, self-extension, supervision) it unlocks. Sugars = prelude forms via quoting, NO macros/eval |
+| =12-prompt-form.org= | the LLM seam as DATA + a host: =ask= (the function, 90%) + =prompt::= (the freeze, 10%); de-ASTed. What it does to S1-21 + new doors S22-30 (typed ask, RAG-as-=~@=, semantic reconcile, meta-prompting, the mesh that writes the mesh) |
+| =13-prompt-arguments.org= | checks =ask=/=prompt::= against ALL ~35 SubAgent options: content INFERRED, authority GRANTED (never from prose), output narrowed-or-declared; the three output-reliability regimes |
+| =14-reconciliation.org= | *the settled decisions* (post-Hickey-review). One seam at three altitudes; await dissolved into consumption; the three-contract law; narrowing = shape not types; the mind is an untrusted host. THIS doc wins over 10-13 where they disagree |
 
 Tracking item: =PROJ-006= in =!tasks/projects/=.
 

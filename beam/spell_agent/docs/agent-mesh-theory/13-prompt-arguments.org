@@ -1,0 +1,281 @@
+#+TITLE: prompt:: argument surface — inference, inheritance, and what must be carried
+#+SUBTITLE: Checking prompt:: against EVERY way a PtcRunner.SubAgent runs (not just prompt-only)
+#+OPTIONS: toc:2 num:t
+
+* Why this doc exists
+
+=12-prompt-form.org= showed =prompt::= with only a prompt and inferred holes. But a
+=PtcRunner.SubAgent= takes *~35 options* (verified in =sub_agent.ex= =new/1=). A
+=prompt::= that carried only text would SILENTLY DROP tools, region capability,
+recursion depth, output mode, memory, budget — i.e. it would be a toy. This doc
+checks =prompt::= against the FULL surface and answers three questions per argument:
+
+1. *Inferable* from the form/holes? (free)
+2. *Inheritable* from ambient context (the enclosing sugar / region / depth)? (sugared-in)
+3. *Must be carried* explicitly on the form? (an opts map)
+
+And it tells the honest truth about S22 output-type resolution: it does NOT work
+reliably all the time — there are *three regimes*, and the doc that claimed
+otherwise (=12=) is corrected here.
+
+* The design that falls out: prompt:: has an OPTIONS slot
+
+A bare =(prompt:: "text " ~hole)= cannot be the whole story. The form carries the
+TEXT + HOLES (its literal nature); everything non-inferable rides an optional opts
+map, exactly like =tool/spawn-session= already does:
+
+#+begin_src clojure
+(prompt:: {:tools ["find" "edit"] :returns :ast :max-depth 2}   ; opts map (optional, leading)
+          "Migrate " ~file " to the new API")                    ; the literal + holes
+;; ≡ a SubAgent spec where :prompt/:signature-inputs come from the form,
+;;   the opts map overrides, and the REST is inherited from ambient context.
+#+end_src
+
+The resolution order for every option (most-specific wins):
+
+#+begin_src
+  form (text, hole types)           → :prompt, signature INPUT side        [inferred]
+  call site (how result is used)    → signature RETURN side, :output       [narrowed, §S22]
+  explicit opts map on prompt::     → any override                          [carried]
+  ambient context (mesh/region,     → :tools, region cap, :llm, :max_depth, [inherited]
+    enclosing scatter, depth)          budget, prelude, memory
+  SubAgent defaults                 → everything else                       [defaulted]
+#+end_src
+
+* The full argument ledger (every SubAgent option)
+
+Verified against =sub_agent.ex= =new/1= docs. Class: =INFER= (from form) ·
+=NARROW= (from call site) · =INHERIT= (ambient) · =CARRY= (explicit opts) ·
+=DEFAULT= (leave it).
+
+| SubAgent option | class | how prompt:: handles it |
+|-----------------+-------+-------------------------|
+| =prompt= | *INFER* | IS the =prompt::= literal (text + holes → ={{placeholder}}= template) |
+| =signature= (input side) | *INFER* | hole types → signature params (=~file= where file:string → =(file :string)=) |
+| =signature= (return side) | *NARROW* | from the call site (§S22) — the hard one; falls back to text |
+| =output= (:ptc_lisp/:text) | *NARROW* | :text when no return-narrowing target; :ptc_lisp when a typed return is needed |
+| =tools= | *INHERIT* / CARRY | from the enclosing =scatter=/=mesh/region= capability set; opts map overrides. NEVER inferred from prose (§Tools) |
+| =llm= | *INHERIT* | the caller's llm (resolution: parent-opt → opts override → default), like spawn-session |
+| =max_depth= | *INHERIT* | DECREMENTED from the parent's remaining depth (the recursion floor, doc 02 §8) |
+| =max_turns= / =turn_budget= / =retry_turns= | INHERIT / DEFAULT | from the enclosing sugar's =:budget=, else SubAgent default (5 / 20 / 0) |
+| =timeout= / =mission_timeout= / =max_heap= | DEFAULT / CARRY | SubAgent defaults; opts map for a heavy/long ask |
+| =memory_limit= / =memory_strategy= | DEFAULT / CARRY | defaults; opts for a memory-heavy mission |
+| =name= | *INFER* (weak) / CARRY | a short name derived from the prompt's verb, or carried (trace label) |
+| =description= | CARRY / DEFAULT | optional doc; defaults to the prompt's first line |
+| =field_descriptions= | CARRY | per-signature-field docs — only when authored |
+| =context_descriptions= | *INHERIT* | the =data/*= bag keys in scope (Data Inventory) — ambient |
+| =system_prompt= | INHERIT / CARRY | the mesh's shared system prompt, or opts override |
+| =builtin_tools= (=:grep=) | CARRY | explicit opt-in (a capability choice, never inferred) |
+| =plan= | CARRY | explicit multi-step plan, when authored |
+| =thinking= / =llm_query= | CARRY / DEFAULT | explicit booleans; default false |
+| =compaction= / =prompt_limit= / =format_options= / =float_precision= | DEFAULT / CARRY | rendering+pressure knobs; defaults fine, opts to tune |
+| =llm_retry= | DEFAULT | infra retry; default |
+| =pmap_timeout= / =pmap_max_concurrency= | INHERIT / DEFAULT | from the budget; default otherwise |
+| =runtime_prelude= / =prelude_store= / =preludes= | *INHERIT* | the mesh prelude (the sugar DSL itself, doc 11) attaches here |
+| =ptc_reference= | DEFAULT | :compact (only value) |
+
+Three options deserve their own treatment — they are where "can it be inferred?"
+has a non-obvious answer: *tools*, *region capability*, and *output type*.
+
+* Tools — INHERITED or CARRIED, never inferred from prose
+
+*Question:* can =prompt::= infer which tools a mission needs from its text?
+
+*Answer: NO, and it must not try.* "Migrate the file" does not reliably imply
+={edit, find, run}= — inferring capability from prose is both unreliable AND a
+security hole (prose is agent-authored, untrusted for correctness — AGENTS.md). So:
+
+- inside a =scatter=/=mesh/map=/=mesh/queue= (doc 11), the worker's tools come from
+  the sugar's =:tools= (the parent ATTENUATES — doc 02 §6, capability passing). The
+  =prompt::= inherits that set.
+- a bare =(prompt:: "…")= with NO ambient sugar and NO opts =:tools= gets the *empty
+  tool set* — a PURE ASK (FACE 1, string-in/string-out, no effects). This is the
+  safe default: a prompt with no granted capability can only reason, not act.
+- =:tools= on the opts map overrides, but only to NARROW or RE-GRANT within what the
+  parent holds (you cannot grant a child a tool you lack — ocap).
+
+#+begin_src clojure
+(scatter [f files] {:tools ["find" "black/post"]      ; ← capability set lives HERE
+                    :prompt (fn [f] (prompt:: "assess " ~f))})  ; prompt inherits it
+(prompt:: "Summarize " ~doc)                          ; bare → NO tools → pure ask
+(prompt:: {:tools ["find"]} "Locate the bug in " ~file) ; explicit, must be ⊆ parent's tools
+#+end_src
+
+*∴ tools are a CAPABILITY, sugared-in or carried — never a prose inference.* This is
+the single most important correction: the input contract (holes) is inferable; the
+AUTHORITY contract (tools, region) is not, by design.
+
+* Region — INHERITED from the ambient mesh/region binding
+
+*Question:* does a =prompt::= post to / read from a region automatically?
+
+*Answer: only if it is GIVEN region capability* (doc 02 §6 — writing a region needs
+its id). So:
+
+- inside =(mesh/region [r …] …)= or a =scatter= into region =r=, the =prompt::='s
+  spawned mind inherits =r= as its ambient region (its =black/*= verbs are merged for
+  =r=, the session.ex seam). It can post findings / query the medium.
+- a bare =prompt::= with no ambient region gets NO region — it cannot =black/post=
+  (no capability) and =black/query= only reads what is ambient (nothing). A pure ask
+  is region-less by default.
+- =:region= on the opts map joins an explicit region (rendezvous / Fork B), exactly
+  =spawn-session='s =:region= arg.
+
+#+begin_src clojure
+(mesh/region [r {:goal "audit"}]
+  (prompt:: "Find auth issues in " ~file))     ; inherits region r → CAN black/post findings
+(prompt:: {:region shared} "Reconcile " ~slice) ; explicit rendezvous (Fork B)
+(prompt:: "What is 2+2?")                        ; no region → pure ask, no mesh access
+#+end_src
+
+So *region is INHERIT/CARRY, identical to tools* — both are authority, both ride the
+ambient sugar or an explicit opt, neither is inferred. A =prompt::= is a mind; what
+it may TOUCH (tools, region) is granted, not guessed.
+
+* Output type resolution — the honest truth (S22 corrected)
+
+=12-prompt-form.org= S22 implied output narrowing "works." *It does not work
+reliably all the time.* Here is the real story — THREE regimes with a fallback
+ladder. This corrects the overclaim.
+
+** Regime 1 — call-site-typed: narrowing WORKS (reliable)
+The result lands in a position with a KNOWN type:
+- destructured into named fields: =(let [{risk "risk"} (prompt:: …)] …)= → return has
+  a =:risk= field;
+- spliced into a typed hole: =~@(… (prompt:: …))= inside =view/table :rows= → Row type;
+- passed to a typed param: =(edit/transaction `{:ops ~(prompt:: …)})= → edit-op type;
+- bound to a =define-tool= return: → the declared signature.
+
+Here =Narrow.signature_at(form, path)= (doc 10) reads the slot type and SETS the
+return signature; the SubAgent signature validator (in-tree) ENFORCES it. Reliable
+because the type is STATICALLY present at the call site.
+
+** Regime 2 — ambiguous: narrowing is PARTIAL → must annotate
+The result is used in a way that constrains it loosely or not statically:
+- bound to a variable used polymorphically: =(let [x (prompt:: …)] (f x) (g x))= —
+  x's type is the intersection of f's and g's params, often uninferable;
+- returned directly: =(defn risk-of [..] (prompt:: …))= — the return type is
+  whatever risk-of's callers expect, a non-local inference;
+- partial/dynamic destructure: =(get (prompt:: …) dynamic-key)= — key not static.
+
+Here narrowing CANNOT reliably derive the full return type. The form must CARRY it:
+=(prompt:: {:returns "{risk :keyword, evidence :string}"} …)=. The opts =:returns= is
+the explicit signature when the call site can't supply one. *This is the common case
+for reusable functions* (S22's =risk-of= is actually Regime 2 — it is a =defn=, so
+its return is non-local; the doc-12 example should carry =:returns= or the caller
+must destructure at every call).
+
+** Regime 3 — free: no narrowing target → DEFAULT to text
+The result is used as a string / not constrained:
+- =(prompt:: "Summarize " ~doc)= as the last expr, or printed, or concatenated.
+
+Here there is no type to narrow to; =output= defaults to =:text= (FACE 1). Correct
+and safe — a prompt with no typed destination is a string.
+
+** Down-scope: narrowing gives SHAPE, rarely leaf types (the honest ceiling)
+
+Even in Regime 1, be precise about WHAT narrowing delivers. PTC is dynamically
+typed. A =let= destructure ={risk "risk"}= proves the key ="risk"= is ACCESSED —
+i.e. the result must be a map CONTAINING that key. It does NOT prove =risk= is a
+=:keyword=. =Tui.Reflect= gives a widget's STRUCTURE (a Row has cells), not the
+leaf type of each cell. So:
+
+#+begin_src
+narrowing reliably yields:  container kind (map/vector), required KEYS, arity
+narrowing rarely yields:    leaf types (:keyword vs :string vs :int at a field)
+#+end_src
+
+That is still valuable — shape-presence catches the gross errors (wrong container,
+missing field, wrong arity), which is most of what goes wrong at a spawn boundary.
+But "the type is the guardrail" overclaims; the honest statement is *"the SHAPE is
+the guardrail; leaf types need an explicit =:returns= when they matter."* So
+=:returns= is needed MORE often than Regime-1 optimism suggests — any time a leaf
+type (not just presence) is load-bearing, annotate it. The validator enforces what
+it is given; narrowing supplies shape; the author supplies the rest.
+
+** The fallback ladder (never a silent wrong type)
+#+begin_src
+call site is statically typed   → narrow the return, validate, enforce      [Regime 1]
+opts :returns is given          → use it (explicit always wins)              [author override]
+ambiguous, no :returns          → WARN at construction + default :text       [Regime 2 unannotated]
+no typed destination            → :text                                       [Regime 3]
+#+end_src
+
+*∴ S22 as written (a reusable =defn= relying on inferred return) is Regime 2 and
+must carry =:returns=, OR be inlined at a typed call site.* The doc-12 claim "output
+narrowed from how callers destructure it" is true ONLY at a concrete typed call site
+(Regime 1), NOT for a reusable function whose callers vary. The honest rule:
+
+#+begin_quote
+Output-type narrowing is RELIABLE exactly when the result lands in a statically-typed
+slot (a destructure, a typed hole, a typed param, a declared return). Everywhere else
+it is best-effort and must be annotated with =:returns=, or it degrades to text. The
+type system is the guardrail; where there is no static type, the author supplies one
+or accepts a string.
+#+end_quote
+
+* What this means for the sugars (doc 11) and scenarios (S1-30)
+
+The sugars already carry the authority context, so =prompt::= inside them inherits
+correctly — the analysis VALIDATES the sugar layer:
+
+- =scatter=/=mesh/map= carry =:tools= and the ambient =:region= → their worker
+  =prompt::=s inherit tools + region (no per-prompt authority needed). ✓
+- =mesh/map :reduce= and =~@spawn= give the worker prompt a TYPED call site (the
+  reduce's input type / the splice's element type) → Regime 1, narrowing reliable. ✓
+- =grow-tool= declares the signature explicitly → =:returns= carried → Regime 1. ✓
+- a BARE =prompt::= (S22's =defn=) is Regime 2 → must carry =:returns=. *Correction
+  applied below.*
+
+Scenario corrections (small, honesty-preserving):
+- *S22*: the =risk-of= =defn= must carry =:returns "{risk :keyword, evidence :string}"=
+  (it is Regime 2). Either annotate, or define it INLINE where destructured.
+- *S25/S29* (semantic reconcile / ensemble): the fold-prompt's return is narrowed by
+  the verdict/aggregate schema at the =reconcile=/fold call site → Regime 1, fine.
+- *S30* (=:returns :ast=): explicitly carried → fine.
+- all =scatter=/=mesh/map= worker prompts: tools+region inherited, return narrowed by
+  =:reduce= → fine.
+
+* The corrected prompt:: contract (the buildable spec)
+
+#+begin_src
+(prompt:: opts? text-and-holes…)
+
+opts (optional map, all keys optional):
+  :tools     [..]   capability subset (⊆ parent's tools); else inherit ambient / empty
+  :region    id     region capability; else inherit mesh/region binding / none
+  :returns   sig    explicit return type (REQUIRED in Regime 2; else narrowed/text)
+  :max-depth n      override (else inherited, decremented)
+  :budget    {..}   turns/timeout/heap (else inherited / default)
+  :llm       fn     override (else inherited)
+  :name :description :plan :thinking :builtin-tools …  carried when authored
+
+inference (free):
+  :prompt              = the literal text with ~holes → {{placeholder}} template
+  signature INPUTS     = hole types
+inheritance (ambient):
+  tools, region, llm, max-depth, budget, prelude, system-prompt, context-descriptions
+narrowing (call site):
+  signature RETURN, output mode   (Regime 1 reliable; Regime 2 needs :returns; Regime 3 = text)
+#+end_src
+
+* The deepest correction
+
+The clean story "=prompt::= infers everything" is FALSE and would be unsafe. The
+true story is sharper and better:
+
+#+begin_quote
+=prompt::= infers its INPUT contract (text + typed holes) for free, inherits its
+AUTHORITY (tools, region, depth) from the ambient sugar — never from prose — and
+narrows its OUTPUT contract from the call site when one is statically present, else
+the author annotates =:returns= or accepts text. Input is inferred; authority is
+granted; output is narrowed-or-declared. Three contracts, three different sources —
+and conflating them (especially inferring authority from text) is the bug this
+analysis exists to prevent.
+#+end_quote
+
+This is why =prompt::= is a faithful sibling of =sh::=/=tmpl::=: each infers its
+literal content, but each gets its EFFECT capability from a host/context, not from
+its own text. =sh::= does not infer which files it may touch; =tmpl::= does not infer
+which =data/*= it may read; =prompt::= does not infer which tools/region it may use.
+The literal is free; the authority is bounded. That symmetry is the whole point.
