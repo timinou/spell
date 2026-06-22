@@ -95,23 +95,36 @@ defmodule SpellAgent.Tui.Cell.Registry do
   def define(name, query, opts \\ []) when is_binary(name) do
     debounce = normalize_debounce(Keyword.get(opts, :debounce, @default_debounce_ms))
 
+    # The pure, state-free guards run BEFORE touching the Agent (no point locking
+    # the registry to reject a bad name). Capacity, prior-resolved preservation,
+    # and the insert are then ONE atomic `get_and_update` callback so no concurrent
+    # writer (the W3 slow clock's put_resolved, or a parallel define) can slip
+    # between the decision and the write. (W2r findings #1 + #3.)
     with :ok <- validate_name(name),
          deps = HoleDiff.dependencies(query),
-         :ok <- guard_cycle(name, deps),
-         :ok <- guard_capacity(name) do
-      # Preserve a prior resolved value across a re-define with the SAME query, so
-      # re-declaring an identical cell does not blank the pane until the next
-      # off-frame resolve. A changed query resets to :unresolved (the old value is
-      # for a different question).
-      resolved =
-        case Agent.get(__MODULE__, &Map.get(&1, name)) do
-          %{query: ^query, resolved: prior} -> prior
-          _ -> :unresolved
-        end
+         :ok <- guard_cycle(name, deps) do
+      Agent.get_and_update(__MODULE__, fn state ->
+        cond do
+          # Capacity is checked AGAINST THE STATE BEING WRITTEN: a NEW name when
+          # the table is full is rejected; replacing an existing name is always ok.
+          not Map.has_key?(state, name) and map_size(state) >= @max_cells ->
+            {{:error, :too_many_cells}, state}
 
-      cell = %{query: query, deps: deps, debounce: debounce, resolved: resolved}
-      Agent.update(__MODULE__, &Map.put(&1, name, cell))
-      {:ok, cell}
+          true ->
+            # Preserve a prior resolved value across a re-define with the SAME
+            # query (no pane blink); a changed query resets to :unresolved. The
+            # prior value is read from the SAME state we write, so a concurrent
+            # put_resolved cannot be clobbered by a stale read.
+            resolved =
+              case Map.get(state, name) do
+                %{query: ^query, resolved: prior} -> prior
+                _ -> :unresolved
+              end
+
+            cell = %{query: query, deps: deps, debounce: debounce, resolved: resolved}
+            {{:ok, cell}, Map.put(state, name, cell)}
+        end
+      end)
     end
   end
 
@@ -134,18 +147,25 @@ defmodule SpellAgent.Tui.Cell.Registry do
   def reset, do: Agent.update(__MODULE__, fn _ -> %{} end)
 
   @doc """
-  Store the off-frame `value` resolved for cell `name` (the W3 slow-clock write).
+  Store the off-frame `value` resolved for cell `name`, but ONLY if the cell still
+  carries `expected_query` (the W3 slow-clock write — a compare-and-set).
 
-  Idempotent for an absent cell (a cell removed between resolve dispatch and
-  completion is simply not updated). The value is whatever `Cell.resolve/3`
-  returned (already sanitized at the cell boundary).
+  W3 dispatches a resolve for a cell's CURRENT query asynchronously. By the time
+  it finishes, the cell may have been removed (no-op) or REDEFINED with a different
+  query (the result is for the OLD question and must be discarded — otherwise it
+  would defeat the changed-query `:unresolved` reset and surface a value for the
+  wrong declaration). Guarding on `expected_query` makes the write a CAS: it lands
+  iff the declaration it was computed against is still current. (W2r finding #2.)
+
+  The value is whatever `Cell.resolve/3` returned (already sanitized at the cell
+  boundary).
   """
-  @spec put_resolved(String.t(), term()) :: :ok
-  def put_resolved(name, value) when is_binary(name) do
+  @spec put_resolved(String.t(), term(), term()) :: :ok
+  def put_resolved(name, expected_query, value) when is_binary(name) do
     Agent.update(__MODULE__, fn state ->
       case Map.get(state, name) do
-        nil -> state
-        cell -> Map.put(state, name, %{cell | resolved: value})
+        %{query: ^expected_query} = cell -> Map.put(state, name, %{cell | resolved: value})
+        _ -> state
       end
     end)
   end
@@ -190,16 +210,6 @@ defmodule SpellAgent.Tui.Cell.Registry do
   # loop (see moduledoc). The output key is the cell's own name.
   defp guard_cycle(name, deps) do
     if MapSet.member?(deps, name), do: {:error, :self_dependency}, else: :ok
-  end
-
-  defp guard_capacity(name) do
-    state = all()
-
-    cond do
-      Map.has_key?(state, name) -> :ok
-      map_size(state) < @max_cells -> :ok
-      true -> {:error, :too_many_cells}
-    end
   end
 
   defp normalize_debounce(ms) when is_integer(ms) and ms >= 0, do: ms

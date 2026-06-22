@@ -89,6 +89,15 @@ defmodule SpellAgent.Tui.Cell.RegistryTest do
     test "a cell may depend on a DIFFERENT cell's key (not a self-cycle)" do
       assert {:ok, _} = Registry.define("b", query(~S|(get data/a :v)|))
     end
+
+    test "the capacity bound rejects a new cell past the limit; replace still ok" do
+      q = query(~S|(get data/x :v)|)
+      for i <- 1..128, do: {:ok, _} = Registry.define("c#{i}", q)
+      # 128 cells now declared; a NEW name is rejected.
+      assert {:error, :too_many_cells} = Registry.define("overflow", q)
+      # but REPLACING an existing name is always allowed (not a new slot).
+      assert {:ok, _} = Registry.define("c1", query(~S|(get data/y :v)|))
+    end
   end
 
   # ============================================================
@@ -102,28 +111,45 @@ defmodule SpellAgent.Tui.Cell.RegistryTest do
     end
 
     test "put_resolved makes the value appear in resolved_values" do
-      {:ok, _} = Registry.define("c", query(~S|(get data/x :v)|))
-      Registry.put_resolved("c", ["a", "b"])
+      q = query(~S|(get data/x :v)|)
+      {:ok, _} = Registry.define("c", q)
+      Registry.put_resolved("c", q, ["a", "b"])
       assert Registry.resolved_values() == %{"c" => ["a", "b"]}
     end
 
     test "re-defining with the SAME query preserves the resolved value" do
       q = query(~S|(get data/x :v)|)
       {:ok, _} = Registry.define("c", q)
-      Registry.put_resolved("c", 42)
+      Registry.put_resolved("c", q, 42)
       {:ok, _} = Registry.define("c", q)
       assert Registry.get("c").resolved == 42
     end
 
     test "re-defining with a DIFFERENT query resets to :unresolved" do
-      {:ok, _} = Registry.define("c", query(~S|(get data/x :v)|))
-      Registry.put_resolved("c", 42)
+      q1 = query(~S|(get data/x :v)|)
+      {:ok, _} = Registry.define("c", q1)
+      Registry.put_resolved("c", q1, 42)
       {:ok, _} = Registry.define("c", query(~S|(get data/y :v)|))
       assert Registry.get("c").resolved == :unresolved
     end
 
+    test "a stale resolve for the OLD query is discarded after redefine (CAS)" do
+      # W2r finding #2: an async resolve dispatched for query A finishes AFTER the
+      # cell was redefined with query B. put_resolved must reject A's value because
+      # expected_query (A) no longer matches the current declaration (B).
+      qa = query(~S|(get data/x :v)|)
+      qb = query(~S|(get data/y :v)|)
+      {:ok, _} = Registry.define("c", qa)
+      {:ok, _} = Registry.define("c", qb)
+      Registry.put_resolved("c", qa, "STALE")
+      assert Registry.get("c").resolved == :unresolved
+      # the CURRENT query's resolve still lands
+      Registry.put_resolved("c", qb, "fresh")
+      assert Registry.get("c").resolved == "fresh"
+    end
+
     test "put_resolved on an absent cell is a no-op (not a crash)" do
-      assert :ok = Registry.put_resolved("ghost", 1)
+      assert :ok = Registry.put_resolved("ghost", query(~S|(get data/x :v)|), 1)
       assert Registry.resolved_values() == %{}
     end
   end
@@ -195,8 +221,9 @@ defmodule SpellAgent.Tui.Cell.RegistryTest do
 
   describe "DataBag merges resolved cells into data/*" do
     test "a resolved cell appears in the bag under its name" do
-      {:ok, _} = Registry.define("callers", query(~S|(get data/ui :cursor-id)|))
-      Registry.put_resolved("callers", ["foo", "bar"])
+      q = query(~S|(get data/ui :cursor-id)|)
+      {:ok, _} = Registry.define("callers", q)
+      Registry.put_resolved("callers", q, ["foo", "bar"])
 
       bag = DataBag.build(%{}, %{x: 0, y: 0, width: 80, height: 24})
       assert bag["callers"] == ["foo", "bar"]
@@ -211,8 +238,9 @@ defmodule SpellAgent.Tui.Cell.RegistryTest do
     test "a cell may NOT shadow a core bag key (core wins)" do
       # Declare a cell literally named 'status' and resolve it to a sentinel; the
       # canonical data/status map must still win.
-      {:ok, _} = Registry.define("status", query(~S|(get data/x :v)|))
-      Registry.put_resolved("status", "HIJACKED")
+      q = query(~S|(get data/x :v)|)
+      {:ok, _} = Registry.define("status", q)
+      Registry.put_resolved("status", q, "HIJACKED")
 
       bag = DataBag.build(%{}, %{x: 0, y: 0, width: 80, height: 24})
       assert is_map(bag["status"]), "core data/status must win over a cell of the same name"
