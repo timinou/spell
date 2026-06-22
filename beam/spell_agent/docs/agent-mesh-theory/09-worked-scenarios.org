@@ -1,0 +1,338 @@
+#+TITLE: Worked scenarios — spawn-session + black/* together
+#+SUBTITLE: Realistic missions, grounded code, and the test plan across FEAT-011/012/013 + integration
+#+OPTIONS: toc:2 num:t
+
+The foundation (FEAT-008/009/010) is built and green: a session can =black/post=,
+=black/query=, =black/claim=, =black/fold= against a shared region. This file shows
+what the NEXT wave — =tool/spawn-session= (FEAT-011), =black/decide= (012),
+=black/watch= (013) — does WITH those verbs, on missions you'd actually run. Each
+scenario is a "dream" (what it feels like) grounded in "the code" (real PTC against
+real seams) and "what's exercised" (the tests that pin it).
+
+All code is PTC-Lisp the agent writes. The verbs resolve through the SAME map
+=Session.run/2= merges (=lib/spell_agent/session.ex= tools merge: =Tools.build_tools_map=
++ =Hist.verbs= + =Mesh.verbs=). =tool/spawn-session= is a native meta-tool
+(=lib/spell_agent/tools.ex= =meta_tools/0=, beside =define-tool=).
+
+* The mental model in one paragraph
+
+=tool/spawn-session= is how a mind makes *more minds*; =black/*= is the *only* way
+those minds touch. A parent spawns children into a region and reads the region
+back — it never holds a child's pid for communication. Children write monotone
+findings; whoever needs a decision folds. Spawning is *reflexivity* (the runtime
+calling itself); the blackboard is *coordination* (stigmergy). Neither alone is the
+mesh — together they are: **spawn to widen, post to share, claim to divide, fold to
+decide, watch to wait, decide to commit.**
+
+* Scenario 1 — Fork A: parallel blast-radius assessment (the everyday case)
+
+** Dream
+"Before I rename =verify/1=, I want to know every caller and how risky each change
+is — assessed in parallel, ranked, in one pass." The parent fans out one child per
+caller file; each child studies its file in isolation and drops a finding; the
+parent folds a ranked verdict. No child knows another exists.
+
+** The code (parent program, one PTC form)
+#+begin_src clojure
+(let [;; 1. DISCOVER the work via the existing graph tool (find def→ callers)
+      callers (tool/find {:target "lib/spell_agent/session.ex::verify def→"})
+      files   (distinct (map #(get % "file") callers))
+
+      ;; 2. MINT a private Fork-A region by posting the goal. :region :auto tells
+      ;;    spawn-session to mint hash(goal<>parent<>nonce); the goal's first post
+      ;;    records THIS session as owner (only it may re-goal — P1.3).
+      region  (get (black/post {:region :auto
+                                :kind   :goal
+                                :payload {:objective "rank rename risk of verify/1"
+                                          :success   "one finding per caller file"}})
+                   "region")]
+
+  ;; 3. FAN OUT — one bounded child per file, fire-and-forget, into the SAME region.
+  ;;    Each child gets an ATTENUATED tool set: it can read + post, nothing else.
+  (doseq [f files]
+    (tool/spawn-session
+      {:prompt (str "Assess the risk of renaming verify/1 at its use in " f ". "
+                    "Post ONE finding {:about \"caller\" :file :risk :evidence} to your region.")
+       :region region
+       :tools  ["find" "get" "black/post" "black/query"]
+       :budget {:max_turns 4}
+       :await  false}))
+
+  ;; 4. WAIT for the monotone threshold (a finding per file), bounded by a ttl so a
+  ;;    crashed/slow child cannot hang the parent (PT-4 shortfall → fold what arrived).
+  (black/watch {:region region
+                :when   {:kind :finding :count (count files)}
+                :do     "(return :all-in)"
+                :fuel 1 :ttl 120000})
+
+  ;; 5. FOLD — the parent's non-monotone synthesis. Pure read over the medium.
+  (black/fold {:region region :over :finding :reduce :group-by :field :risk}))
+;; → {"high" [{file:"..." evidence:"pattern-match arity"} ...] "medium" [...] "low" [...]}
+#+end_src
+
+** What's exercised
+- FEAT-011: spawn under budget, =:await false=, =:region= join, tool attenuation.
+- FEAT-010 (built): =post= (goal+findings), =fold= (group-by).
+- FEAT-013: a =:count= threshold =watch= as a fan-in barrier.
+- the property that matters: *children that finished and EXITED still contributed*
+  — their findings persist in the region; the parent folds the medium, not the pids.
+
+* Scenario 2 — Fork A with claim: a shared work queue (divide without a dispatcher)
+
+** Dream
+"Migrate 40 call-sites. I'll spawn 5 workers; they should divide the 40 among
+themselves with no central dispatcher and no two workers touching the same site."
+Each worker loops: query open sites, claim one, do it, post done, repeat. The claim
+fold (argmin by store-seq) is the only arbiter — and it's consensus-free.
+
+** The code (the worker program each spawned child runs)
+#+begin_src clojure
+;; WORKER loop — claim-and-work until no unclaimed sites remain.
+(loop []
+  (let [open (black/query {:region region :match {:kind :finding :where {:status "todo"}}})
+        site (first open)]
+    (when site
+      (let [work (get-in site ["payload" "site-id"])
+            ;; CLAIM: append a claim + fold argmin(seq, author). won? is provisional
+            ;; (local snapshot), which is FINE here — the work is monotone-effect
+            ;; (an edit + a post), and a rare double-edit is idempotent (DC-1).
+            {won? "won?"} (black/claim {:region region :work work})]
+        (when won?
+          (tool/edit {:target (get-in site ["payload" "target"]) :action {...}})
+          (black/post {:region region :kind :finding
+                       :payload {:about "migrated" :site-id work :status "done"}}))
+        (recur)))))
+#+end_src
+
+** What's exercised
+- FEAT-010 (built): =claim= arbitration by store-seq, =query= discovery, =post=.
+- FEAT-011: 5 workers spawned into one region; the parent later folds
+  =count {:status "done"}= vs the original 40 to confirm completion.
+- the contract: *no dispatcher*. The medium + claim-fold divide the work. The
+  100-way concurrent-seq test (FEAT-009, already green) is the unit-level proof
+  this scales; Scenario 2's integration test is the behavioural proof.
+
+* Scenario 3 — Fork B: reconciling three human-launched agents (consensus)
+
+** Dream
+"I launched three agents on three slices of one feature — backend, migration, docs.
+They don't know about each other. When all three finish, I want ONE merged
+verdict — exactly once, even though all three will notice completion at the same
+moment." No parent spawned them; they meet by NAMING the work, and exactly one
+Ra-elected node commits the verdict.
+
+** The code (the identical tail each of the 3 independent agents runs)
+#+begin_src clojure
+;; rendezvous by an EXPLICIT slug (NOT hashed prose — DC-4). All three compute the
+;; SAME region id from the SAME slug, meeting without referencing each other.
+(let [region (get (black/post
+                    {:region {:slug "feature-x/ship"}     ; → Region.fork_b({:slug, ...})
+                     :kind   :finding
+                     :payload {:slice (data/my-slice) :result (data/my-result) :status "done"}})
+                  "region")]
+  ;; Each registers the SAME reconciliation intention. When the 3rd finding lands,
+  ;; every watcher matches the :count 3 threshold — but decide elects ONE leader on
+  ;; the NODE cluster (DC-7), so exactly one verdict commits (idempotent on its
+  ;; content id + sealed watermark, DC-8). The other two read it back.
+  (black/watch
+    {:region region
+     :when {:kind :finding :where {:status "done"} :count 3}
+     :do "(black/decide {:region (get data/event \"region\")
+                         :question :feature-x-reconciled?
+                         :quorum :majority
+                         :fold \"(black/fold {:region R :over :finding :reduce :merge-results})\"})"
+     :fuel 1 :ttl 600000}))
+#+end_src
+
+** What's exercised
+- FEAT-013: the =:count 3= rendezvous threshold; the per-node watcher firing.
+- FEAT-012: =decide= — Ra leader-election over NODES, sealed-watermark fold,
+  idempotent verdict id. The HARD test: all three watches fire, exactly ONE
+  verdict commits.
+- FEAT-008 (built): =fork_b({:slug, _})= rendezvous; the NL-rejection guard means a
+  fuzzy "ship feature X" can't accidentally fork the rendezvous.
+
+* Scenario 4 — stigmergic unblocking (webhook + cross-agent, no references)
+
+** Dream
+"Agent A is blocked: it can't run the DB migration itself. Instead of polling or
+holding a reference, it leaves a standing note: *when the migration is done, resume
+me.* Later — maybe an hour later — a webhook-spawned agent B finishes the migration
+and posts the fact. A's note fires and A's continuation spawns. A never knew B; B
+never knew A was waiting. The medium carried the causality across time."
+
+** The code
+#+begin_src clojure
+;; AGENT A — blocked. Register prospective memory, then yield this turn.
+(black/watch
+  {:region {:slug "db/subsystem"}
+   :when   {:kind :finding :where {:about "migration-done"}}
+   :do "(tool/spawn-session {:prompt \"Resume: run the backfill now the migration is applied.\"
+                             :region (get data/event \"region\")
+                             :tools [\"find\" \"edit\" \"black/post\"]
+                             :await false})"
+   :fuel 1 :ttl 86400000})       ; a 24h standing intention
+
+;; WEBHOOK-SPAWNED AGENT B — finishes the migration, posts the fact, exits.
+(black/post {:region {:slug "db/subsystem"}
+             :kind :finding
+             :payload {:about "migration-done" :version 47}})
+;; → the per-node watcher matches A's intention, claims the firing (exactly-once,
+;;   DC-6), and runs A's :do — spawning A's continuation. Stigmergic unblocking.
+#+end_src
+
+** What's exercised
+- FEAT-013: an EVENT-based (not count) watch; fuel/ttl lifetime; claim-deduped
+  firing; a =:do= that itself calls =spawn-session= (the recursion the budget bounds).
+- FEAT-011: the continuation spawn, budget-acquired.
+- the deepest property: *time + identity decoupling*. A's note outlives A's turn;
+  B's post has no idea a waiter exists. Impossible with direct messaging.
+
+* Scenario 5 — speculative racing (spawn + claim + the first-to-win)
+
+** Dream
+"Try three approaches to the flaky test in parallel; take the first that goes green;
+abandon the rest." Three children race; the first to find a fix posts =:solved= and
+claims the =resolution=; the parent reads the winner and the losers stand down.
+
+** The code (parent)
+#+begin_src clojure
+(let [region (get (black/post {:region :auto :kind :goal
+                               :payload {:objective "fix flaky test_foo"}}) "region")]
+  (doseq [approach ["retry-with-backoff" "fix-race-in-setup" "isolate-tempdir"]]
+    (tool/spawn-session {:prompt (str "Try approach: " approach ". If the test passes, "
+                                      "claim :work \"resolution\" then post :solved with your diff.")
+                         :region region :tools ["find" "edit" "run" "black/claim" "black/post"]
+                         :budget {:max_turns 8} :await false}))
+  ;; wait for the FIRST solved finding (count 1), then take the winner's diff.
+  (black/watch {:region region :when {:kind :finding :where {:about "solved"} :count 1}
+                :do "(return :winner-in)" :fuel 1 :ttl 300000})
+  (first (black/query {:region region :match {:kind :finding :where {:about "solved"}}})))
+#+end_src
+
+** What's exercised
+- the =claim "resolution"= ensures only the first approach to finish "owns" the win;
+  late finishers see =won? false= and don't post a competing solved (or post and the
+  parent takes the lowest-seq). FEAT-011 + 010 together; no new verb.
+
+* The cross-cutting invariants every scenario relies on (and tests assert)
+
+1. *Budget bounds everything* — every spawn (including a =:do= that spawns) acquires
+   a =ParallelBudget= slot; exhaustion fails fast, never melts the BEAM (PT-1).
+2. *No live reference between siblings* — coordination is region-only; a dead author
+   still contributed (PT-4).
+3. *Claim is provisional, decide is committed* — monotone-effect work claims;
+   non-deduped external effects decide (DC-1).
+4. *Watch firing is bounded + exactly-once* — fuel/ttl bound cascades; claim/decide
+   dedups across nodes (DC-6).
+5. *Best-effort* — a sick mesh component degrades; the mission never crashes on it.
+
+* ───────────────────────────────────────────────────────────────────────
+* The test plan — per phase, then integration
+
+The testing philosophy (AGENTS.md): test the observable CONTRACT, one invariant
+per test, trigger the real failure path. Below, every phase lists UNIT contracts
+(narrow, fast, fake-LLM or no-LLM) and the SCENARIO it must make real.
+
+** FEAT-011 — tool/spawn-session (test/spell_agent/mesh/spawn_session_test.exs)
+
+Drive with a FAKE llm (=Session.run/2= =:llm= opt — a =(map -> {:ok, map})= callback
+that returns a scripted program, ZERO network), the pattern =Session.run= already
+supports for the inspector.
+
+| contract | test |
+|----------+------|
+| budget acquire/release, both await modes | spawn N≤cap children; assert =ParallelBudget.held/1= returns to baseline after each completes (no slot leak) |
+| capacity exceeded fails fast | set budget cap=2, spawn 3; the 3rd returns =parallel_capacity_exceeded=, BEAM intact (PT-1) |
+| =:await true= returns the child result | fake-llm child returns =42=; parent gets =42= synchronously |
+| =:await false= returns ={session, region}= + child runs | assert the return shape immediately; then poll the region until the child's finding lands |
+| region resolution | =:region :auto= mints a Fork-A id (owner recorded); a passed =:region= joins it (the child writes the SAME region) |
+| capability attenuation | child given =:tools ["find"]= cannot call =tool/edit= (resolve fails) but CAN call its merged =black/*= |
+| child registered in SessionRegistry | =SessionRegistry.live?/1= true while running, false after exit |
+
+** FEAT-012 — black/decide (test/spell_agent/mesh/consensus_test.exs)
+
+Single-node (=Store.Memory=) first; then a real two-node Khepri test as the
+distribution GATE.
+
+| contract | test |
+|----------+------|
+| single-node verdict | seal + fold + write ONE verdict; assert payload + sealed flag |
+| idempotent across re-election | run decide twice with the same sealed watermark seq → SAME verdict id (no second commit). Simulate by calling the seal+fold path twice |
+| watermark is a STORE SEQ, not lamport | post findings, seal at seq=N, post MORE findings (seq>N), re-fold → identical verdict (later findings excluded, DC-8) |
+| sealing latches region | after a terminal verdict, =Mesh.Store.put= a finding → ={:error, :sealed}= |
+| DISTRIBUTION GATE (2-node Khepri) | 3 findings across 2 nodes; one decide commits one verdict visible on BOTH; simulate a 2\|1 partition → minority =:pending=, heals to convergence (PT-3, PT-4 cross-node) |
+
+** FEAT-013 — black/watch (test/spell_agent/mesh/watcher_test.exs)
+
+| contract | test |
+|----------+------|
+| event watch fires :do once | register watch, post matching finding → =:do= ran exactly once (assert a side-effect record) |
+| count threshold | =:count 3= fires only on the 3rd matching post, not before |
+| fuel + ttl bound cascades | a =:do= that posts a finding matching its OWN =:when= burns fuel and HALTS (PT-1); a ttl-expired intention never fires |
+| exactly-once under duplicate observation | simulate two watchers seeing the same event (two node tailers) → claim-dedup ⇒ ONE =:do= (DC-6) |
+| best-effort | =black/watch= POSTS the intention even with no watcher running (durable); fired later when one starts |
+| crash-safe re-fire | winning node "dies" before =:do= → lease expiry lets another fire (bounded by fuel, PT-5) |
+
+** Integration — the scenarios as end-to-end tests (test/spell_agent/integration/mesh_*.exs)
+
+These wire the REAL Session loop + REAL store + FAKE llm, and assert the scenario's
+observable outcome — the proof the pieces compose.
+
+| scenario | integration test asserts |
+|----------+--------------------------|
+| S1 Fork-A fanout | parent spawns 3 fake-llm children that each post a finding; parent's =fold group-by :risk= returns all 3 grouped; ZERO inter-child references (assert no sibling pid ever passed) |
+| S2 work queue | 5 workers, 12 sites; after all idle, EXACTLY 12 =:done= findings, no site claimed twice (assert distinct owners per site-id) |
+| S3 Fork-B reconcile | 3 independent sessions (no parent) post to =fork_b({:slug,...})=; all 3 watches fire; EXACTLY ONE verdict exists; the other two read it |
+| S4 unblock | A registers a watch + yields; B (separate) posts the awaited finding; A's continuation spawns; assert A's resume finding appears, A & B never shared a ref |
+| S5 race | 3 children race; first to post :solved claims resolution; assert exactly one winner, losers =won? false= |
+| safety | a spawn cycle (=:do= spawns a child whose =:do= spawns…) is bounded by budget+fuel; assert live-session count never exceeds cap, run terminates |
+
+** What we deliberately do NOT test (scope honesty)
+- LLM QUALITY (whether a child's finding is *correct*) — that's agent-quality, not
+  mesh correctness; fake-llm scripts the finding.
+- multi-node performance / latency — distribution test asserts CORRECTNESS
+  (one verdict, no split-brain), not throughput.
+- Byzantine behaviour — out of scope (crash-fault model, PT-7).
+
+* The shape of a fake-llm scenario test (so the plan is concrete)
+
+#+begin_src elixir
+# A child whose "reasoning" is a scripted PTC program: the fake llm returns one
+# tool_use that runs the program, then stops. Zero network, deterministic.
+defp scripted_child(program) do
+  fn _req ->
+    {:ok, %{content: [%{type: "tool_use", name: "ptc", input: %{"program" => program}}],
+            stop_reason: "tool_use"}}
+  end
+end
+
+test "S1: fork-a fanout folds three findings, no sibling references" do
+  parent_prog = ~S"""
+  (let [region (get (black/post {:region :auto :kind :goal
+                                 :payload {:objective "rank"}}) "region")]
+    (doseq [f ["a.ex" "b.ex" "c.ex"]]
+      (tool/spawn-session {:prompt (str "study " f) :region region
+                           :tools ["black/post"] :budget {:max_turns 2} :await false
+                           :llm :scripted_finding}))
+    (black/watch {:region region :when {:kind :finding :count 3}
+                  :do "(return :in)" :fuel 1 :ttl 5000})
+    (black/fold {:region region :over :finding :reduce :count}))
+  """
+  {:ok, result} = Session.run(parent_prog, llm: scripted_child(parent_prog), max_turns: 6)
+  assert result == 3        # three findings folded; the medium carried them
+end
+#+end_src
+
+(The child's =:llm= is itself a scripted finding-poster; the harness injects it via
+the spawn path's llm inheritance — FEAT-011 must thread =:llm= to the child so tests
+can drive deterministic children. That threading is itself a FEAT-011 contract.)
+
+* Why this is both dream and ground
+
+The dreams are real workloads: parallel review, a dispatcherless queue, reconciling
+independent agents, unblocking across time, racing approaches. The ground is that
+EVERY line resolves to a verb that exists (008-010, green) or one with a written
+contract + test (011-013). Nothing here needs a mechanism not already specified.
+The mesh is not a metaphor we're reaching for — it's the next three FEATs, and these
+scenarios are their acceptance criteria.

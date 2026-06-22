@@ -1,0 +1,128 @@
+#+TITLE: Mesh.Watcher — per-node trigger engine for black/watch (claim-deduped, fuel+ttl) + supervision
+#+STATE: ITEM
+#+SESSION_ID: 151269c91db37358
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T23-09-03-478Z_151269c91db37358.jsonl]]
+#+CUSTOM_ID: FEAT-013-mesh-watcher-per-node-trigger-engine-for
+#+BLOCKED_BY: FEAT-010
+
+* Initial Message
+
+what are distributed agents in a mesh network, really? please look into network theory, not hype. i want us to think about that deeply and from first principles, in order to let the BEAM lisp runtime call itself and create meshed sub-sessions. But I want strong theoretical backing beforehand
+
+* Goal
+The prospective-memory engine: black/watch registers an :intention; a PER-NODE
+watcher tails its node's mesh write stream and, on a matching post, fires the
+intention's :do EXACTLY ONCE across the cluster (dedup via black/claim — DC-6),
+bounded by fuel + ttl (D10). This powers Fork B's stigmergic unblocking +
+webhook-driven agents. Also wires the mesh's supervision + ParallelBudget.
+
+Read first: docs/agent-mesh-theory/08-implementation.org §C (Watcher, Supervision),
+04-surface.org §1 (black/watch) + §5 (unblock showcase), 06 DC-6 (per-node +
+claim-dedup), 02 §8 (fuel/ttl/budget termination).
+
+* Wave / deps
+Wave 4 (parallel with FEAT-011/012). BLOCKED BY FEAT-010 (watch posts :intention;
+firing calls black/claim + the :do may call post/spawn). Uses FEAT-009 store events.
+
+* Modules / edits
+** lib/spell_agent/mesh/watcher.ex  (NEW — SpellAgent.Mesh.Watcher, GenServer)
+- ONE per BEAM node (DC-6) — local infra, the SAME posture as
+  lib/spell_agent/tui/store.ex (a long-lived session-global GenServer that attaches
+  to a live event stream). NOT a global cross-node singleton (that was the SPOF).
+- subscribes to mesh writes:
+  - Memory mode: Mesh.Store.put emits a :telemetry event ([:mesh, :post]); the
+    watcher attaches a handler (mirror the Pane.events/0 dirty-filter idea in
+    pane.ex + how Tui.Store attaches telemetry).
+  - Khepri mode: a Khepri TRIGGER on path [:hist, :mesh, *] (Khepri supports
+    stored-proc triggers) notifies the watcher. (Memory mode is enough for v1;
+    spec the Khepri trigger, implement if the test harness supports it.)
+- on each observed post P: scan stored :intention records (Mesh.Store.by_kind
+  region :intention) whose :when matches P (kind + :where field predicate, and the
+  :count threshold form for fan-in). For each match:
+  1. black/claim the firing, work := hash(intention_id <> P.id) — ONLY the claim
+     winner proceeds (exactly-once across nodes, DC-6).
+  2. winner: ParallelBudget.try_acquire (if :do spawns); run :do via
+     PtcRunner.Lisp.run (sandboxed, data/event bound to P); release after.
+  3. decrement the intention's :fuel (a monotone counter record / supersede);
+     drop the intention at fuel 0 or when now > registered_at + :ttl.
+- fuel + ttl bound a self-retriggering cascade (A->B->A) — it burns fuel and stops
+  (02 §8, PT-1). A ttl-expired intention is ignored + GC'd.
+
+** lib/spell_agent/application.ex  (EDIT — supervision)
+- add to the children list (same best-effort posture as SessionRegistry/Tui.Store):
+  - Mesh.Watcher (per-node).
+  - a holder for the mesh ParallelBudget (ParallelBudget.new(Config mesh.budget))
+    — a tiny Agent or app-env, read by spawn-session (FEAT-011) + the watcher.
+  - (when Khepri configured) ensure the Ra cluster is started for Consensus.
+- all wrapped so a sick mesh component NEVER fails app boot or a mission (F.2).
+
+** lib/spell_agent/config.ex  (EDIT — whitelist mesh cells)
+- add "mesh.budget", "mesh.lease_ms", "mesh.default_store" to @whitelist so they
+  are live-settable via define-config (the verified Config.put whitelist gate).
+
+** wiring (lib/spell_agent/mesh/namespace.ex EDIT)
+- replace the FEAT-010 black/watch stub: post the :intention record (so it is
+  durable + claimable), which the watcher then observes. (watch is itself a
+  monotone post — registering is CALM-clean.)
+
+* CodePaths (existing) to mirror / reference
+- lib/spell_agent/tui/store.ex — a long-lived GenServer attaching to a live
+  telemetry stream (the per-node tailer pattern).
+- lib/spell_agent/tui/pane.ex::dirty?/2 + events/0 — the suffix-match dirty filter
+  to mirror for :when matching.
+- lib/spell_agent/session_registry.ex — the best-effort, pid-monitored,
+  no-op-when-down GenServer posture to copy (call_if_up, rescue/catch -> :ok).
+- lib/spell_agent/application.ex::start/2 — the children list + ordering comments.
+- ptc_runner/.../parallel_budget.ex — try_acquire/release for the :do spawn.
+- ptc_runner/lib/ptc_runner/lisp.ex::run/2 — the sandbox for :do.
+
+* Edge cases
+- two nodes both see the same post (Khepri replicates): both attempt to fire ->
+  the claim dedup ensures ONE runs :do (DC-6). The headline correctness test.
+- :do crashes: the firing claim's lease expires -> another node may re-fire
+  (crash-safe, PT-5). Bound re-fire by fuel so a permanently-failing :do stops.
+- watcher down (not started in a headless test): black/watch still POSTS the
+  intention (durable); it simply isn't fired until a watcher runs — best-effort (F.2).
+- :count threshold watch: fires when by_match count >= N (monotone threshold,
+  04 §3); pair with :ttl so a never-reached threshold expires (PT-4 shortfall).
+
+* Acceptance (observable)
+- `mix test test/mesh/watcher_test.exs` passes.
+- single-node: register a watch, post a matching finding -> :do runs once;
+  post again past fuel -> does not run.
+- exactly-once under simulated two-node duplication (the DC-6 contract): one :do
+  execution despite both nodes observing the post.
+- the unblock end-to-end (04 §5): agent A registers a watch, a webhook-style post
+  fires A's :do which spawns A's continuation — A and B never referenced each other.
+- a self-retriggering watch burns fuel and halts (PT-1).
+- `mix check` clean; app boots with Mesh.Watcher supervised; boot survives the
+  watcher being absent.
+
+* Tests
+- exactly-once firing across duplicated observation (claim-dedup).
+- fuel decrement + ttl expiry halts cascades.
+- best-effort: watch posts the intention even with no watcher running.
+- crash-safe re-fire via lease expiry (bounded by fuel).
+
+* PRE-CODING CORRECTION (oracle MeshFinalCheck, agent://1-MeshFinalCheck — P1.1)
+Watch-firing exactly-once CANNOT rest on a session-plane claim alone across nodes.
+- The crack: per-node watchers W1@N1, W2@N2 both observe the replicated event E,
+  both claim the firing, and because Khepri reads are LOCAL (read-your-writes only,
+  not linearizable for other writers), each sees only its own claim and both run
+  :do → double fire. Exactly-once firing is a NON-MONOTONE (Layer-3) decision; a
+  session-plane optimistic claim (Layer-2) cannot provide it under partition.
+- FIX (choose at build, default A):
+  - Option A (clean, preferred when Khepri is the store): firing is a NODE-PLANE
+    micro-decide — a Ra command on the node cluster that atomically marks
+    (intention_id, event_seq) as fired and commits exactly once. Reuses
+    Mesh.Consensus (FEAT-012) machinery, not a new mechanism.
+  - Option B (single-node / Memory, or Khepri-trigger mode): keep claim-dedup but
+    make it best-effort with a mandatory :settle_ms + leader-consistent re-fold
+    before :do, and DOCUMENT it as best-effort exactly-once (not guaranteed under
+    partition). Acceptable because :do actions are themselves idempotent-or-decided
+    (a :do that spawns is fine to occasionally double; a :do with irreversible
+    effect must itself route through decide).
+- Single-node (Store.Memory, one ETS table, one watcher) is already exactly-once
+  (no replication window) — Option B suffices there. Multi-node Khepri uses Option A.
+- net: FEAT-013 depends on FEAT-012 for Option A. Update the DAG: 013 ⟸ 010 AND
+  (for the multi-node exactly-once path) ⟸ 012. Single-node 013 needs only 010.

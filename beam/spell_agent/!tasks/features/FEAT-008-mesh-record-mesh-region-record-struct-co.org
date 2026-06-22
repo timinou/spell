@@ -1,0 +1,125 @@
+#+TITLE: Mesh.Record + Mesh.Region — record struct, content identity, A/B region minting
+#+STATE: DONE
+#+SESSION_ID: 151269c91db37358
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T23-09-03-478Z_151269c91db37358.jsonl]]
+#+CUSTOM_ID: FEAT-008-mesh-record-mesh-region-record-struct-co
+#+COMPLETION_HASH: f5f3f8a719977e47
+
+* Initial Message
+
+what are distributed agents in a mesh network, really? please look into network theory, not hype. i want us to think about that deeply and from first principles, in order to let the BEAM lisp runtime call itself and create meshed sub-sessions. But I want strong theoretical backing beforehand
+
+* Goal
+The pure foundation of the agent mesh (PROJ-006): the %MeshRecord{} struct, its
+content-addressed identity, and the A/B region-id minting that distinguishes Fork
+A (isolated, reflexive spawn) from Fork B (parentless rendezvous). No store, no
+verbs, no processes — just two pure modules, fully unit-testable in isolation.
+
+Read first: docs/agent-mesh-theory/08-implementation.org (§C, the build spec),
+02-blackboard-substrate.org §2-§3 (record taxonomy + region minting),
+06-pressure-tests-deep.org DC-3/DC-4 (the corrections this FEAT must honor).
+
+* Wave / deps
+Wave 1. No blockers. Blocks FEAT-829 (Store+Clock) and FEAT-831 (spawn-session
+uses Region.fork_a).
+
+* Modules to create
+** lib/spell_agent/mesh/record.ex  (SpellAgent.Mesh.Record)
+- defstruct [:region, :kind, :id, :author, :lamport, :t, :payload, :parent,
+  :watermark, :sealed]. The envelope from 02 §2 + DC-8 (:watermark, verdict-only)
+  + DC-9 (:sealed, region flag).
+- @type kind :: :goal | :finding | :claim | :verdict | :intention.
+- id/1 : content hash, MIRRORING lib/spell_agent/hist/node.ex identity
+  (id = hash(form_src <> parent_id)). Here:
+  :crypto.hash(:sha256, canonical(payload) <> region) |> Base.encode16(case: :lower).
+- canonical/1 : :erlang.term_to_binary(term, [:deterministic]) — a DETERMINISTIC
+  term encoding. NOT natural-language normalization (that is the DC-4 trap; this
+  is binary canonicalization of an already-structured payload map).
+- new/1 : build + stamp :author (session id from arg), :t
+  (System.system_time(:millisecond)), :lamport (passed in from the clock, FEAT-829;
+  accept it as an arg here so Record stays pure/clockless).
+- INVARIANT (08 §F.1): new/1 MUST reject any payload containing a live pid,
+  reference, or PtcRunner.Lisp.Handle — every record is frozen pure data, exactly
+  the realization invariant in node.ex ("No node ever holds a live Handle").
+  A simple deep-walk guard raising on non-serializable terms.
+
+** lib/spell_agent/mesh/region.ex  (SpellAgent.Mesh.Region)
+- fork_a(goal, parent_session) : hash(goal <> parent_session <> nonce) where
+  nonce = :crypto.strong_rand_bytes(16). Returns an UNFORGEABLE region id — this
+  id IS the write-capability token (02 §6, D12). Isolated per spawn.
+- fork_b(key) : the rendezvous mint, DC-4-correct:
+  - fork_b({:structured, term}) -> hash(canonical(term)) — for a PR#, path, sha,
+    ticket id (a structured subject that content-addresses reliably).
+  - fork_b({:slug, binary}) -> hash("slug:" <> binary) — an explicit human
+    coordination key.
+  - fork_b(raw_binary) when a bare natural-language string -> RAISE ArgumentError
+    with a clear message: NL prose must not be hashed (false neg/pos, DC-4); pass
+    {:structured, _} or {:slug, _}.
+- write_cap?(region_id, held_caps) : boolean cap check used at black/post time
+  (the actual enforcement lands in FEAT-830; expose the predicate here).
+
+* CodePaths (existing) to mirror / reference
+- lib/spell_agent/hist/node.ex (Identity docstring) — the content-hash pattern.
+- lib/spell_agent/hist/recorder.ex:199-208 (index_hash/2) — how content ids dedup.
+- 08-implementation.org §C (Record, Region) — exact contracts.
+
+* Edge cases
+- payload with atom vs string keys: canonicalize key types before hashing so
+  {:risk => :high} and {"risk" => "high"} do not produce different ids if they
+  are meant to be the same (decide a rule and document it; recommend: stringify
+  keys + stringify atom values in canonical/1, matching the stringify_keys pattern
+  in lib/spell_agent/tools.ex).
+- empty payload: valid (a bare goal may have only :objective); id still stable.
+- :verdict/:claim records are NOT built via the public post path — but Record.new
+  must still construct them (Consensus + claim fold use it). Keep new/1 kind-agnostic.
+
+* Acceptance (observable)
+- bun-equivalent: `mix test test/mesh/record_test.exs test/mesh/region_test.exs`
+  (new tests) passes; `mix check` (or `mix compile --warnings-as-errors`) clean.
+- Record.id/1 is deterministic: same payload+region -> same id across calls and
+  across two BEAM processes (the G-Set collapse property).
+- Region.fork_a yields distinct ids on repeated calls (nonce); fork_b({:slug,s})
+  is stable across calls; fork_b(raw_string) raises.
+- Record.new rejects a payload carrying self() (a pid) with a clear error.
+
+* Tests (contract-level, per AGENTS.md testing guidance)
+- id determinism + cross-process stability (the convergence contract).
+- fork_a uniqueness, fork_b structured/slug stability, fork_b NL-rejection (DC-4).
+- frozen-data invariant: new/1 raises on a pid/ref/handle in payload.
+- canonical key/value normalization (the atom-vs-string id-equality rule).
+
+* PRE-CODING CORRECTIONS (oracle MeshFinalCheck, agent://1-MeshFinalCheck)
+A final adversarial review found a FATAL id-scheme flaw. The record design changes
+as follows BEFORE coding (this supersedes the original §C/Mesh.Record spec):
+
+** P2.2 (FATAL) — records are keyed by per-region SEQ, not by content hash
+- The store key is {:mesh, region, seq} where seq is a per-region monotonic
+  integer ASSIGNED BY THE STORE at put time (FEAT-009), NOT a content hash.
+  Rationale: two :claim records for the same work MUST coexist (arbitration needs
+  to see contention); a content-hash key would collapse them and make the fold
+  blind. And the existing {:hash,h} kind is OWNED by Hist nodes
+  (lib/spell_agent/hist/store.ex:25-30) — reusing it corrupts the node index.
+- content_hash is a RECORD FIELD (for dedup of findings/goal/verdict), never the
+  store key. Dedup, when wanted, uses a SEPARATE index kind {:mesh_hash, region, h}
+  (FEAT-009) — the {:hash,_} kind is never touched by mesh code.
+
+** Revised struct + identity
+- defstruct [:region, :kind, :seq, :content_hash, :author, :t, :payload, :parent,
+  :watermark, :sealed]. seq is nil at new/1 (the store stamps it on put). NO
+  :lamport field (per-session Lamport is dropped — see FEAT-009 P2.1).
+- content_hash/1 : hash(canonical(payload) <> region) — a FIELD used only for
+  finding/goal/verdict dedup. canonical/1 unchanged (deterministic term encode,
+  not NL normalization).
+- new/1 : build with seq: nil, stamp :author, :t, :content_hash. Frozen-data guard
+  unchanged (reject pid/ref/handle in payload).
+- dedup applicability: content collapse is correct for :finding, FIRST :goal,
+  :verdict. :claim and :intention NEVER dedup (each is a distinct event) — they
+  rely on the unique seq key, so two identical-payload claims still get distinct
+  seqs and both persist.
+
+** Acceptance delta
+- Record.new yields seq: nil (store-assigned); two :claim records with identical
+  payload are DISTINCT once the store assigns seqs (the contract that makes
+  arbitration possible). content_hash is stable for identical payload+region.
+
+NOTE [2026-06-22]: Implemented: lib/spell_agent/mesh/record.ex + region.ex; tests test/spell_agent/mesh/{record,region}_test.exs (25 pass). Store-seq identity (P2.2), frozen-data guard, fork_a nonce / fork_b structured|slug with NL rejection (DC-4). Clean compile + format.

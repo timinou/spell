@@ -1,0 +1,105 @@
+#+TITLE: tool/spawn-session — the reflexive seam (runtime calls itself, budget-bounded)
+#+STATE: ITEM
+#+SESSION_ID: 151269c91db37358
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T23-09-03-478Z_151269c91db37358.jsonl]]
+#+CUSTOM_ID: FEAT-011-tool-spawn-session-the-reflexive-seam-ru
+#+BLOCKED_BY: FEAT-010
+
+* Initial Message
+
+what are distributed agents in a mesh network, really? please look into network theory, not hype. i want us to think about that deeply and from first principles, in order to let the BEAM lisp runtime call itself and create meshed sub-sessions. But I want strong theoretical backing beforehand
+
+* Goal
+The reflexive self-call: a native tool that lets a running session spawn a child
+session, bounded by the global ParallelBudget, handing the child an attenuated
+capability set and a region. This is the Fork-A initiator and the thing webhooks/
+watches invoke for Fork B. The fixed point eval(eval) made a first-class tool.
+
+Read first: docs/agent-mesh-theory/08-implementation.org §C (spawn-session),
+04-surface.org §2 (the contract) + §3/§5 (showcases), 02 §8 (budget/termination),
+06 DC-7 (a spawned session WRITES; it never becomes a Raft member).
+
+* Wave / deps
+Wave 4 (parallel with FEAT-012/013). BLOCKED BY FEAT-010 (the child needs the
+black/* verbs merged) and FEAT-008 (Region.fork_a). Independent of Consensus/Watcher.
+
+* Modules / edits
+** lib/spell_agent/tools.ex  (EDIT — add a native meta-tool)
+- add "spawn-session" => &spawn_session/1 to meta_tools/0 (beside define-tool/
+  define-config/list-tools — the verified native-tool seam at tools.ex meta_tools/0).
+- add it to inventory/0's meta list (so list-tools shows it, params
+  ["prompt","region","tools","budget","await"]).
+- spawn_session(args):
+  1. ParallelBudget.try_acquire(budget) where budget is the app's mesh budget
+     (FEAT-013 wiring / app state). On :no_budget -> raise
+     "parallel_capacity_exceeded" (the invoke_tool contract turns a raise into an
+     LLM-facing error — same as define_tool's raises). D11.
+  2. region: args["region"] present -> join it (rendezvous / Fork B); :auto or
+     absent -> Mesh.Region.fork_a(goal, session_id) (Fork A). The minted id is the
+     child's write-capability.
+  3. attenuate tools (D12): child_tools = Map.take(build_tools_map(), args["tools"])
+     |> Map.merge(Mesh.verbs(child_sid, region: region, store: store)). The child
+     gets ONLY the named subset + its mesh verbs — capability attenuation.
+  4. await:
+     - true  -> Session.run(prompt, llm: ..., max_turns: budget.max_turns,
+                  session_id: child_sid, region: region) synchronously; return the
+                  child's result; ParallelBudget.release in an after: block.
+     - false -> spawn under a linked Task (or Task.Supervisor) that runs
+                  Session.run and releases the slot on exit; return
+                  {:session child_sid, :region region} immediately (fire-and-forget).
+- the child is a FULL Session.run/2 (lib/spell_agent/session.ex) so it gets its own
+  Hist history + auto-registers in SessionRegistry (register/2, pid-monitored) —
+  no extra membership code; a crashed child self-unregisters.
+
+** lib/spell_agent/session.ex  (EDIT — thread :region + :session_id through run/2)
+- run/2 already accepts opts[:session_id] and merges Hist.verbs. Add opts[:region]
+  passed to the Mesh.verbs merge (the FEAT-010 edit). spawn_session sets both.
+
+* CodePaths (existing) to mirror / reference
+- lib/spell_agent/tools.ex::meta_tools/0 + define_tool/1 (the raise-on-error
+  native-tool contract) — spawn_session follows the same shape.
+- lib/spell_agent/session.ex::run/2 (session_id, llm, max_turns, the verbs merge).
+- lib/spell_agent/session_registry.ex::register/2 (auto-membership, pid monitor).
+- ptc_runner/lib/ptc_runner/lisp/eval/parallel_budget.ex (new/1, try_acquire/1,
+  release/1) — the exact budget API (verified: returns :ok | :no_budget).
+- 04-surface.org §3 (Fork-A fan-out) + §5 (webhook unblock) — the call patterns.
+
+* Edge cases
+- budget exhausted mid-fan-out: the Nth spawn fails fast; the parent's fold simply
+  sees fewer findings (a threshold watch with a ttl handles the shortfall, PT-1/PT-4).
+- await:false child crashes: the Task's exit releases the slot (link/monitor);
+  SessionRegistry drops it; its already-posted findings PERSIST (PT-4 dead author).
+- recursion: a child that itself spawns acquires its OWN slot from the same global
+  budget — the cap holds across all depths (D11, the ParallelBudget invariant).
+- llm inheritance: the child inherits the parent's llm callback (pass opts[:llm]
+  through) unless overridden — same resolution order as SubAgent.as_tool.
+
+* Acceptance (observable)
+- `mix test test/mesh/spawn_session_test.exs` passes (drive with a FAKE llm, the
+  zero-network pattern Session.run already supports via opts[:llm]).
+- await:true returns the child's result; await:false returns {:session, :region}
+  and the child runs to completion writing to the shared region.
+- spawning past the budget capacity raises parallel_capacity_exceeded (PT-1).
+- a spawned child appears in SessionRegistry.live/0 while running, gone after.
+- end-to-end Fork-A (with FEAT-010): parent posts goal, spawns 3 await:false
+  children that each post a finding, parent folds 3 — zero sibling messages.
+- `mix check` clean.
+
+* Tests
+- budget acquire/release on both await modes (no slot leak — assert held/0 returns
+  to baseline after).
+- capacity-exceeded raise (PT-1 containment).
+- capability attenuation: a child given :tools ["find"] cannot call a tool outside
+  that set + its black/* verbs.
+- the full Fork-A fan-out+fold integration (the headline contract).
+
+* TEST-DERIVED CONTRACT (from docs/agent-mesh-theory/09-worked-scenarios.org)
+- spawn_session MUST thread :llm to the child Session.run when provided in args or
+  inherited from the parent's run opts. Rationale: integration + unit tests drive
+  DETERMINISTIC children via a fake llm callback (Session.run :llm opt, zero
+  network — the inspector pattern). Without :llm threading, children cannot be
+  scripted and the S1-S5 scenarios are untestable offline. Default: inherit the
+  parent's llm (resolution order parent-opt → arg-override → Anthropic.callback).
+- Worked scenarios that are this FEAT's behavioural acceptance: S1 (fanout+fold),
+  S2 (dispatcherless claim queue), S5 (speculative race). See doc 09 §FEAT-011 +
+  §Integration for the exact assertions and the scripted-child test shape.

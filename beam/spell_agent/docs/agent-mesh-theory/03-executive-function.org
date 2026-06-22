@@ -1,0 +1,156 @@
+#+TITLE: Executive function as the architecture of the mesh
+#+SUBTITLE: Cognitive-neurology backing for the record taxonomy and the black/* verbs
+#+OPTIONS: toc:2 num:t
+
+* Why this lens
+
+The mesh needs a /principled/ answer to "what records, what verbs?" — not an
+ad-hoc list. Cognitive neurology has spent decades decomposing exactly the
+faculty we are building: *executive function* — the brain's machinery for
+coordinating multiple sub-processes toward a goal under limited resources. That is
+/precisely/ the mesh's job. So we borrow its decomposition as an independent
+backing for the surface, and check that our verbs are complete and well-carved.
+
+This is not metaphor-for-flavour. Two of the mappings are structurally exact
+(claim ≡ basal-ganglia gating; watch ≡ frontopolar prospective memory), and they
+/predicted/ verbs the pure-CS derivation under-weighted. Where the analogy is
+loose, it is flagged and deferred — per the user's instruction, it is fine to
+defer what is not already in line with the build; it remains as backing for future
+reflection.
+
+* The canonical decomposition
+
+Two complementary models, unified for our purposes:
+
+- *Miyake & Friedman's unity/diversity* — three separable-but-correlated core EFs:
+  /updating/ working memory, /inhibition/, /shifting/ (set-switching).
+- *Diamond's framework* — the three cores plus higher-order EFs built on them:
+  /reasoning/, /planning/, /problem-solving/.
+- plus the regulatory/monitoring layer from the /Norman–Shallice SAS/ (Supervisory
+  Attentional System) and the /conflict-monitoring/ account of anterior cingulate.
+
+From these, the executive functions relevant to a coordinating agent collective,
+each with its dominant neural substrate and its mesh mapping:
+
+| # | executive function | neural substrate | mesh record / verb | mapping rigor |
+|---+--------------------+------------------+--------------------+---------------|
+| 1 | *goal maintenance* (keep the objective active) | dorsolateral PFC | =:goal= record / =black/post= | strong |
+| 2 | *working-memory updating* (revise the active set with new facts) | dlPFC + posterior parietal | =:finding= record / =post= + =query= | strong — the G-Set IS this |
+| 3 | *action selection / response gating* (let exactly one action cross threshold) | *basal ganglia* (direct/indirect, go/no-go) | =:claim= record / =black/claim= + Lamport-min fold | *exact* |
+| 4 | *conflict monitoring* (detect competing responses) | anterior cingulate / pMFC | conflict detection inside =black/fold= | strong |
+| 5 | *inhibitory control* (suppress the losing/pre-potent response) | right IFG, pre-SMA | claim-loss stand-down + lease expiry | strong |
+| 6 | *prospective memory* (do A when future condition P) | *frontopolar cortex (BA10)* | =:intention= record / =black/watch= | *exact* |
+| 7 | *task initiation* (start a sub-process) | pre-SMA / SMA | =tool/spawn-session= | strong |
+| 8 | *integration / synthesis* (combine sub-results into a decision) | frontopolar / rostral PFC | =black/fold= (Fork A) | strong |
+| 9 | *collective decision under conflict* (one authoritative verdict) | (no single region; distributed) | =:verdict= / =black/decide= (Ra) | analogy (deferred depth) |
+| 10 | *error / performance monitoring* (notice a failed action) | ACC (error-related negativity) | =:finding{status: :error}= | strong — =Node.status= carries it |
+| 11 | *set shifting / reconfiguration* (switch the active task-set) | dlPFC + parietal | region re-targeting / goal supersession | medium |
+| 12 | *attentional gating / salience* (what deserves resources now) | SAS; fronto-parietal + locus-coeruleus | budget allocation = =ParallelBudget= | medium |
+
+* The two exact mappings (the load-bearing ones)
+
+** Claim ≡ basal-ganglia action gating
+
+The basal ganglia implement /action selection/: many cortical motor plans compete;
+the BG's *direct pathway* ("go") disinhibits the chosen plan while the *indirect
+pathway* ("no-go") suppresses the rest, so /exactly one/ action crosses the
+threshold into execution. This is not loosely "like" claiming — it is the same
+computation:
+
+| basal ganglia | mesh claim |
+|---------------+------------|
+| competing motor plans | competing =:claim= records for one work id |
+| direct pathway disinhibits the winner | Lamport-min fold elects the winning claim |
+| indirect pathway suppresses the rest | losing claimants /inhibit/ (stand down) |
+| thalamic gate: one action proceeds | one session owns the work, others release |
+| no homunculus decides — it is a network resolution | no lock/leader — a pure fold every contender computes |
+
+The BG resolve selection /without a central decider/, by a distributed
+winner-take-all over a shared substrate. That is exactly the consensus-free claim
+arbitration of =02= §4.2. The neurology /validates/ the choice of "resolve by
+fold, not by lock": brains gate actions this way precisely because central locking
+does not scale to a body acting in real time.
+
+** Watch ≡ frontopolar prospective memory
+
+*Prospective memory* — remembering to do something /at a future moment or on a
+future cue/ — is localized to frontopolar cortex (BA10), the most anterior PFC. It
+maintains an intention in a latent state and fires it when the trigger condition is
+met, /without occupying active attention in the meantime/. That is /exactly/
+=black/watch=:
+
+| prospective memory | mesh watch |
+|--------------------+------------|
+| a stored intention ("when I see the pharmacy, buy aspirin") | an =:intention= record (="when :finding{about: X}, run <ptc>"=) |
+| latent — not in active WM, costs nothing while dormant | a record on the blackboard, no live process spinning |
+| event-based cue fires it | a matching =post= fires the watch engine |
+| fires, then completes | watch fires its action, burns fuel |
+
+This mapping /predicted/ the surface that the user independently named — webhooks
+and cross-agent unblocking are prospective memory at the collective scale: "when
+the migration finding appears, proceed." The brain unblocks deferred intentions
+through environmental cues; the mesh unblocks deferred agent actions through
+blackboard cues. Same mechanism, same decoupling (the cue-poster need not know the
+intention exists). =02= §5 trigger 3 is collective prospective memory.
+
+* Why exactly these five record kinds (completeness check)
+
+Run the EF decomposition against the record taxonomy and it /carves the same
+joints/:
+
+- a coordinating mind must *hold a goal* → =:goal= (EF 1)
+- it must *update a shared working set with new facts* → =:finding= (EF 2, 10)
+- it must *gate which sub-process owns which action* → =:claim= (EF 3, 5)
+- it must *defer intentions to future conditions* → =:intention= (EF 6)
+- it must *commit one collective decision when facts conflict irreducibly* →
+  =:verdict= (EF 4, 9)
+
+The monotone four (=goal=, =finding=, =claim=, =intention=) are the faculties a
+/single/ executive uses to coordinate /its own/ sub-processes; the one
+non-monotone kind (=verdict=) is the faculty a /collective/ needs when no single
+executive presides. That is the Fork A / Fork B line, re-derived from neurology:
+*Fork A is one executive coordinating its sub-processes; Fork B is a collective
+synthesizing without a central executive.* The five kinds are necessary (each an
+irreducible EF) and — to the resolution we are building at — sufficient.
+
+* The fold is the prefrontal synthesis
+
+=black/fold= is *integration* (EF 8) — rostral-PFC synthesis of sub-results into a
+super-ordinate representation. The CALM insight and the neurology agree: synthesis
+(non-monotone) is /localized/. In the brain it is rostral PFC; in Fork A it is the
+parent; in Fork B it is the elected leader. You do not synthesize "everywhere at
+once" — that is the homunculus fallacy in CS clothing (every node deciding
+globally = divergence). One place integrates; the rest contribute monotone facts.
+
+* What we defer (honest scope, kept as backing)
+
+Per instruction, these EF mappings are /backing for future reflection/, not v1
+build targets. Captured so the reasoning compounds:
+
+- *EF 11 set-shifting* as a first-class verb. Today region re-targeting + =:goal=
+  supersession cover it implicitly. A dedicated =black/shift= (atomically retire a
+  goal and install its successor, re-pointing watchers) may earn its place later.
+  Deferred.
+- *EF 12 salience / attentional budget* as /learned/ allocation. Today
+  =ParallelBudget= is a flat semaphore (uniform attention). A salience model
+  (weight budget toward high-=:finding=-yield regions, like locus-coeruleus gain
+  control) is a research direction, not v1. Deferred.
+- *EF 9 collective decision* beyond crash-fault Raft. The neurology of /group/
+  decision (drift-diffusion to a threshold, social-consensus dynamics) suggests
+  richer protocols (weighted votes, confidence-pooling). Raft gives correct
+  crash-fault agreement now; confidence-weighted collective decision is deferred
+  research.
+- *metacognition / SAS as a distinct layer.* The Norman–Shallice supervisory
+  system that /monitors and overrides/ routine schemas maps to a future
+  "meta-agent" that watches the mesh's own =:finding= stream for thrash and
+  intervenes (re-budget, kill a cycle, re-goal). This is the natural home for a
+  later "mesh supervisor". Deferred, but it is where EF 4 (conflict monitoring) and
+  EF 12 (salience) would unify.
+
+* One-line takeaways
+
+- *claim = go/no-go gating* → resolve by distributed fold, never a lock (brains don't lock).
+- *watch = prospective memory* → deferred intentions fired by environmental cues = webhooks + unblocking.
+- *fold = prefrontal synthesis* → integration is localized; contribution is everywhere.
+- *Fork A = one executive; Fork B = a collective with no central executive* → the
+  monotone/non-monotone line is the with/without-executive line.

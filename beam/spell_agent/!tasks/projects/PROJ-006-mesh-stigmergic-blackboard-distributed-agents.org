@@ -1,0 +1,198 @@
+#+TITLE: MESH: distributed sub-sessions over a stigmergic blackboard (Fork A + Fork B)
+#+STATE: ITEM
+#+CUSTOM_ID: PROJ-006-mesh-stigmergic-blackboard-distributed-agents
+#+FILETAGS: :research:mesh:distributed:blackboard:vision:
+
+* Initial Message
+
+Let the BEAM-Lisp runtime call itself and create meshed sub-sessions, with strong
+theoretical backing. Network theory, not hype. Go full stigmergic blackboard.
+Implement BOTH Fork A (an agent spinning up other agents) AND Fork B (independent
+agents — human-launched, webhook-spawned, or unblocking each other — that must be
+reconciled). Back the coordination surface with cognitive neurology / executive
+function. Sketch the black/* verbs and a tool/spawn-session showcase.
+
+* Lineage
+The runtime-side dual of PROJ-005 (one tree, many minds). PROJ-005 dissolves
+MINE vs OURS for the UI tree; this dissolves it for the AGENT — sessions
+coordinating as a collective. Builds on the Hist substrate (PLAN-001), the
+ParallelBudget (ptc_runner), SessionRegistry (PLAN-010), and Khepri/Ra (vendored).
+
+FULL THEORY + DESIGN: docs/agent-mesh-theory/00..05.org. Read those first; this
+item is the buildable extract, not the argument.
+
+* The thesis (one sentence)
+Distributed agents do not coordinate by messaging each other; they coordinate by
+reading/writing a shared, append-only medium that converges on its own — and that
+medium ALREADY EXISTS here as the Hist store's content-addressed G-Set hash index.
+
+* The boundary this dissolves
+MINE vs OURS, at the agent level. Today a session is an island: it runs, records
+its OWN history, and a parent can only nest children synchronously in-process.
+Drop the island: sessions contribute monotone findings to a shared region and
+fold them — coordinating without a single direct message between siblings. The
+comm graph among siblings is the EMPTY graph; all flow is through the medium.
+
+* Why it is reachable (what is already built)
+The blackboard is not to be poured — it is to be apertured. VERIFIED in code:
+- append-only monotone medium  -> hist/recorder.ex (one node/turn, monotonic seq)
+- content-addressed dedup       -> hist/node.ex (id = hash(form_src <> parent_id))
+- multi-writer union index (G-Set) -> hist/store.ex ({:hash,h} => [{sid,nid}…])
+- pure message-passable entries -> hist/node.ex realization invariant (no live handles)
+- local->distributed seam       -> Hist.Store behaviour (Memory | Khepri impls)
+- Raft consensus engine          -> Khepri on Ra (khepri_cluster.erl, vendored)
+- liveness/membership monitor    -> SessionRegistry (pid-monitored, self-cleaning)
+- global termination budget       -> ParallelBudget (token bucket, all depths)
+What is NEW is small: a black/* verb namespace (the cross-session generalization
+of the self-scoped hist/* verbs), one tool/spawn-session, a Mesh.Watcher engine,
+and a thin Ra front for black/decide.
+
+* The record taxonomy (what lives on the blackboard)
+A region-scoped %MeshRecord{region, kind, id=content-hash, author, lamport, t, payload}.
+Five kinds, four monotone (CALM-free), one consensus-only:
+  :goal       monotone (supersede-by-newer) — an objective kept active
+  :finding    monotone (pure G-Set)          — a contributed result/observation
+  :claim      monotone (append; resolve-by-fold) — "S intends to own work W"
+  :intention  monotone (standing trigger)     — "when P holds, do A" (prospective memory)
+  :verdict    NON-monotone (consensus only)   — a collective decision ("done"/"winner")
+
+* The six verbs (full contracts in docs/agent-mesh-theory/04-surface.org)
+  black/post    monotone write (PUT)        — goal | finding | intention
+  black/query   content discovery (QUERY)   — predicate over region records (ambient read)
+  black/claim   optimistic claim (CLAIM)    — append + Lamport-min fold; never locks
+  black/fold    read-time reduce (FOLD)     — count/group/rank/satisfied? (the parent's job)
+  black/watch   register intention          — Mesh.Watcher fires :do on matching post; fuel+ttl
+  black/decide  consensus verdict           — Ra leader-election + quorum; the ONLY round
+
+* The A/B switch is ONE parameter (region minting)
+  Fork A: region_id = hash(goal <> parent_session <> nonce)   -> isolated, capability handed
+  Fork B: region_id = hash(canonical(goal))                    -> rendezvous, content-addressed
+Independent sessions naming the same goal compute the same region and MEET without
+ever referencing each other. Isolation-by-unguessable-id vs rendezvous-by-content-id.
+
+* The consensus stack (three layers, only the top is consensus)
+  L1 monotone state   -> NO consensus (single Raft log = total order; CALM confluence)
+  L2 claim arbitration -> deterministic Lamport-min fold (consensus-free, every reader agrees)
+  L3 non-monotone verdict -> Ra leader-election + quorum (crash-fault, not Byzantine)
+Claim gates IDEMPOTENT work; decide gates IRREVERSIBLE work. (See PT-2.)
+
+* Executive-function backing (docs/agent-mesh-theory/03)
+Two structurally EXACT mappings drove the surface:
+  claim ≡ basal-ganglia action gating (go/no-go winner-take-all, no central lock)
+  watch ≡ frontopolar prospective memory (deferred intention fired by a cue)
+The latter PREDICTED the webhook + cross-agent-unblock surface. Five record kinds =
+the five executive functions a coordinating mind needs; the monotone/non-monotone
+line IS the with/without-central-executive line (Fork A = one executive; Fork B =
+a collective synthesizing without one). Deferred (kept as backing): set-shifting
+verb, salience/attention budget, confidence-weighted collective decision, an
+SAS-style mesh supervisor.
+
+* Build outline (proposed FEAT breakdown — not yet split)
+1. FEAT — Mesh.Record + Mesh.Region: the record struct + A/B region-id minting,
+   over a new :mesh kind in Hist.Store (Memory impl first). Pure, unit-testable.
+2. FEAT — Mesh.Namespace: black/post, query, claim, fold as a verb map (mirror
+   hist/Namespace.tools/2). Lamport clock + claim fold. Single-node, ETS.
+3. FEAT — tool/spawn-session: native tool over Session.run + ParallelBudget +
+   SessionRegistry; :await and :region params; capability-attenuated :tools.
+4. FEAT — Mesh.Watcher: supervised GenServer subscribing to region writes; fires
+   :intention :do sandboxed; fuel + ttl. Powers Fork B unblocking + webhooks.
+5. FEAT — Mesh.Consensus: thin Ra front for black/decide (leader-election +
+   quorum verdict). Requires Khepri store enabled; degrade-to-Fork-A when single-node.
+6. FEAT — distribution validation: a real two-node Khepri test (PT-3 partition,
+   PT-4 dead author across nodes). Gate before claiming distribution works.
+
+* Acceptance (when someday built)
+- Fork A: a parent spawns N children into a private region; children post findings
+  and exit; parent folds a ranked result with ZERO sibling messages (showcase 04 §3).
+- Fork B: three independently-launched sessions rendezvous on hash(goal), reach a
+  single committed verdict via one Ra round despite all three watches firing
+  (showcase 04 §4); no split-brain under a 2|1 partition (PT-3).
+- Unblocking: a blocked agent's standing watch fires when a webhook-spawned agent
+  posts the awaited finding; neither referenced the other (showcase 04 §5).
+- Safety: a spawn cycle degrades via ParallelBudget + fuel/ttl, never melts the
+  BEAM (PT-1). A crashed claim-owner's work is reclaimed via lease expiry (PT-5).
+
+* Open risks (FUP candidates, non-blocking)
+- PT-8 read amplification on huge regions -> incremental fold via lamport-watermark
+  + windowed regions (reuse Hist.Window).
+- adaptive spawn-rate throttle (PT-1) and adaptive lease = f(turn latency) (PT-5).
+- BFT posture for untrusted cross-org meshes (PT-7) — dormant; crash-fault is the
+  current, correct model for trusted BEAM peers.
+- distribution is ARCHITECTURALLY ready but not TESTED cross-node (FEAT 6 gates it).
+
+* References
+- docs/agent-mesh-theory/00-overview.org ........ thesis, two-graph model, architecture
+- docs/agent-mesh-theory/01-network-theory.org .. topology, Brooks, CALM, stigmergy, actors, CAP
+- docs/agent-mesh-theory/02-blackboard-substrate.org  the "already built" proof, regions, consensus stack
+- docs/agent-mesh-theory/03-executive-function.org .. cognitive-neurology backing + EF map
+- docs/agent-mesh-theory/04-surface.org ......... black/* contracts + tool/spawn-session showcases
+- docs/agent-mesh-theory/05-pressure-tests.org .. 10 adversarial scenarios + verdicts
+- lib/spell_agent/hist/{store,node,recorder,namespace}.ex  the substrate the verbs ride on
+- ../ptc_runner/lib/ptc_runner/lisp/eval/parallel_runner.ex  ParallelBudget (termination)
+- lib/spell_agent/session_registry.ex  liveness/membership
+- deps/khepri, deps/ra  the Raft engine for black/decide
+
+* Second-pass corrections (docs/agent-mesh-theory/06-pressure-tests-deep.org)
+A deep adversarial pass found two STRUCTURAL corrections (neither fatal; both
+strengthen the design by reusing its own primitives) plus CALM sharpenings:
+
+- DC-7 TWO PLANES (the key correction): consensus membership is over stable BEAM
+  NODES (the Khepri/Ra cluster), NOT ephemeral sessions. Sessions WRITE monotone
+  records + READ the medium; they never vote. black/decide runs Raft on the node
+  cluster, so a session may post-then-exit and its finding still folds. Resolves
+  the Fork-B quorum deadlock (sessions come/go) AND the watch-SPOF (per-node infra
+  on the same node cluster). Single-node = trivial 1-member cluster = local fold.
+- DC-4 RENDEZVOUS is discovery, not NL hashing: hash STRUCTURED keys (PR#, path,
+  sha, ticket — the common webhook/resource trigger); for human/NL goals use an
+  EXPLICIT coordination slug discoverable via black/query. NEVER hash raw prose
+  (false neg: same goal phrased differently → no rendezvous; false pos: collisions).
+- DC-1 claim/decide re-cut on EFFECTS: claim gates work whose only effects are
+  monotone blackboard writes (or externally-deduped); ANY non-deduped external
+  effect → decide. Partially-idempotent work is DECOMPOSED (monotone part claimed,
+  irreversible tail decided).
+- DC-3 goal supersession is a non-monotone RETRACT: re-goaling is owner-only
+  (Fork A parent) or via decide (Fork B); "active goal" = owner-serialized
+  LWW-register. Keeps finding/claim/intention purely monotone.
+- DC-6 watch firing dedups via claim (exactly-once across nodes); Mesh.Watcher is
+  PER-NODE infra, not a global SPOF.
+- DC-8 decide folds a SEALED watermark snapshot (idempotent across leader
+  re-election; a region can have successive verdicts v1≤w1, v2∈(w1,w2]).
+- DC-9 a terminal verdict latches region :sealed (monotone); archive via Hist.Window.
+- DC-2/DC-5/DC-10: settle_ms barrier for expensive claims; Lamport-min is
+  deterministic-not-fair (suffices); watch :do depends on event + re-query only.
+
+Build impact: FEAT-5 (Mesh.Consensus) is explicitly NODE-level Raft over the Ra
+cluster; FEAT-4 (Mesh.Watcher) is per-node + claim-deduplicated; region minting
+(FEAT-1) takes a structured-key | explicit-slug, never NL hash.
+
+* Screens (docs/agent-mesh-theory/07-screens.org)
+Three mix spell.* screens over the EXISTING TUI surface (Pane project/2 + view/1,
+DefaultLayout tree, Scenes fixtures), each authorable as a PTC view/ layout tree:
+- mix spell.mesh         — live region inspector (panes: regions | board | spawn),
+                           the mesh analog of mix spell.tui.
+- mix spell.mesh.gallery — fixture region scenes + snapshot baselines (Mesh.Scenes,
+                           shaped like Tui.Scenes); the headless test harness.
+- mix spell.mesh.watch ID — single-region tail; --list/--tail/--fold plain modes
+                           (scriptable into CI) + an interactive 2-pane reader.
+- pane/cohort (deferred) — cross-region fold: the executive-function dashboard
+                           (goals/findings/claims/watches/verdict on one screen).
+New code is thin: Panes.{Regions,Board,Spawn} (project/2 folds of the mesh forest)
++ a view/pane builder + Mesh.Scenes + the mix tasks. Proposed as FEAT-7.
+
+* FILED FEATs (the build, in dependency order)
+NB: org-local IDs are FEAT-008..015 (the org counter; the README's 824-827 are TS-
+spell global IDs, a separate space). Full breakdown: docs/agent-mesh-theory/08-implementation.org.
+
+- FEAT-008  Mesh.Record + Mesh.Region — struct, content id, A/B region minting   [Wave 1]
+- FEAT-009  Mesh.Store + Mesh.Clock — :mesh kind over Hist.Store, Lamport clock   [Wave 2, ⟸008]
+- FEAT-010  Mesh.Namespace — post/query/claim/fold + loop wiring (Fork-A core)    [Wave 3, ⟸009]
+- FEAT-011  tool/spawn-session — reflexive seam, budget-bounded                    [Wave 4, ⟸010]
+- FEAT-012  Mesh.Consensus — black/decide, node-quorum Ra, sealed watermark        [Wave 4, ⟸010]
+- FEAT-013  Mesh.Watcher — per-node watch engine, claim-deduped, fuel+ttl + supervision [Wave 4, ⟸010]
+- FEAT-014  mix spell.mesh — Regions/Board/Spawn panes + view/pane builder         [Wave 4, ⟸009]
+- FEAT-015  mix spell.mesh.gallery + .watch — scenes, snapshots, region tail       [Wave 4, ⟸014]
+
+First end-to-end slice = FEAT-008→009→010 (Fork A, single-node, no consensus/watcher).
+Wave 4 fans out: spawn(011) / decide(012) / watch(013) / screens(014,015) are independent.
+The two-node Khepri distribution gate is folded into FEAT-012 (PT-3 partition, PT-4
+dead-author across nodes) — it gates the "distribution works" claim (02 §7).

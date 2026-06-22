@@ -1,0 +1,74 @@
+#+TITLE: LLM-driven terminal test suites: Design C (loop) + A (visual transcript)
+#+STATE: DONE
+#+SESSION_ID: 150e55dbf9fb7900
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-18T19-08-04-455Z_150e55dbf9fb7900.jsonl]]
+#+CUSTOM_ID: FEAT-007-llm-driven-terminal-test-suites-design-c
+#+COMPLETION_HASH: 539d06aaf8c036c2
+
+* Initial Message
+
+check out how ex_ratatui prefers doing unit and visual tests and tell me how you would do it here. let's design a sturdy testing infra first
+
+* Goal
+Ship the PLAN-347 LLM integration test layer: drive the REAL agent loop +
+inspector App from an LLM cassette through a REAL headless terminal, asserting on
+both semantics (the Store forest) and appearance (the rendered buffer).
+
+Two complementary suites sharing one cassette (FEAT: LLM cassettes) and one
+buffer accessor (ex_ratatui PATCH-2, =Runtime.buffer/1=, LANDED):
+
+** Design C — loop-correctness (structured + visual, dual-channel)
+Per cassette scenario: run =Session.run(prompt, llm: LlmCassette.llm(name))=
+under the App in =test_mode=, then assert:
+- STRUCTURED: the Store forest shape (runs/tools/llm spans, turns, statuses) —
+  the =scene_store_test= style already shipped in PLAN-347.
+- VISUAL: a final =Runtime.buffer/1= snapshot shows the expected end state.
+Decouples "did the loop do the right thing" from "did it render right": when one
+breaks you know which.
+
+** Design A — visual regression (golden transcript)
+Capture =Runtime.buffer/1= at QUIESCENCE (after the run Task exits; NOT every
+tick, to avoid frame-count coupling) and commit the frame(s) as a =.transcript=
+text baseline under =test/snapshots/llm/=. Extends the PLAN-347 snapshot infra
+(=Snapshot=, =mix spell.gallery --snapshot=) with an =--record-llm= flow. Text
+diffs in review; regenerate intentionally.
+
+* Prerequisites (ordering)
+1. ex_ratatui PATCH-2 — =Runtime.buffer/1=. ✅ LANDED.
+2. BUG-009 + BUG-010 — render robustness (malformed widget degrades to a gap, not
+   a dropped frame / a raise). REQUIRED: otherwise a real run that emits a
+   poisoned widget makes these suites flaky/red for the wrong reason.
+3. FEAT: LLM cassettes — the offline transcript source.
+
+* API surface (documented)
+- =LlmTerminal.run_scenario(name, opts)= — boots App in test_mode with a
+  cassette llm + a fresh Store, runs the prompt, waits for quiescence, returns
+  =%{store_forest, buffer, result}=. The single entry both designs build on.
+- =LlmTerminal.await_quiescence(app, timeout)= — blocks until the mission Task
+  exits and the final render settled (monitors the Task ref the App tracks).
+- =assert_forest/2=, =assert_screen/2= — thin assertion helpers (Design B sugar)
+  over the returned forest + buffer.
+Each with @doc/@spec + a =docs/llm-terminal-tests.md= guide describing the
+record→run→assert→commit loop and the quiescence model (WHY we snapshot at
+quiescence, not per frame).
+
+* Acceptance
+- A two-turn tool-use cassette drives a green Design-C test: forest has the
+  expected run+tool+llm spans AND the buffer shows the final answer.
+- A Design-A =.transcript= baseline exists, asserted equal on replay; tampering
+  fails, regeneration restores (mirror the PLAN-347 snapshot drift test).
+- Suites are offline + async-friendly; default =mix test= needs no network.
+- A run that emits a (previously) unencodable widget renders a degraded-but-valid
+  frame (depends on BUG-009/010) rather than freezing/raising.
+
+* Non-goals
+- Token-by-token streaming UI (=Anthropic.stream/2=) — separate later nicety.
+- Multi-provider cassettes — v0 is Anthropic-only, matching the adapter.
+
+* Related
+- PLAN-347 (parent), FEAT: LLM cassettes (dependency), BUG-009/010 (dependency),
+  ex_ratatui PATCH-2 (dependency, LANDED).
+- Reuses PLAN-347 shipped infra: SceneRender/Snapshot (visual), scene_store_test
+  (structured round-trip pattern).
+
+NOTE [2026-06-21]: Shipped. LlmTerminal.run_scenario/2 drives the real App in test_mode through a cassette-backed loop, returns {store_forest, buffer, result} at quiescence. Design C asserts forest (run+llm spans, ok) AND buffer; Design A asserts the normalized golden transcript (answer_42.transcript). normalize_transcript/1 masks durations + span ids. Verified: 2 passed, stable across 3 reruns, drift-detecting. Prereqs all landed: PATCH-2 (Runtime.buffer), BUG-009/010 (total render contract), FEAT-006 (cassettes). NB: record mode for live capture is the FEAT-006 follow-up; multi-turn scenarios work (capture records N digests) — the shipped fixture is single-turn since (return 42) ends the loop.

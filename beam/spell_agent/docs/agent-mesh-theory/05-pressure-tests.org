@@ -1,0 +1,203 @@
+#+TITLE: Pressure tests
+#+SUBTITLE: Adversarial scenarios the design must survive — and the answer each forces
+#+OPTIONS: toc:2 num:t
+
+A design is only as good as the attacks it withstands. Each test states a failure
+scenario, what naively breaks, and the /specific mechanism/ in this design that
+contains it. Where the design does not yet fully answer, it is flagged as an open
+risk with a proposed direction (an FUP candidate).
+
+* PT-1 — The spawn bomb (unbounded reflexive recursion)
+
+*Scenario:* an agent writes a tool that spawns a session whose prompt spawns a
+session… or a watch whose =:do= posts a finding that fires the same watch, which
+spawns again. The tree-depth guard (=max_depth: 3=) does NOT help — the cycle runs
+through the /medium/, not the call stack.
+
+*Naive break:* the BEAM fills with sessions; heap exhausts; the node dies.
+
+*Contained by:* two independent bounds (=02= §8).
+- *space:* every =spawn-session= acquires one =ParallelBudget= slot before
+  starting; with none free it fails fast (=:parallel_capacity_exceeded=). Live
+  sessions are hard-capped at =max_parallel_workers= across all depths and all
+  forks. The bomb /degrades/ (new spawns refused) instead of melting.
+- *time:* every =:intention= carries =:fuel= (max firings) and =:ttl=. A
+  self-retriggering watch burns fuel and dies; an abandoned watch expires.
+
+*Residual risk:* a budget set too high still allows a large-but-bounded blast.
+Mitigation: the budget is global and configurable; a "mesh supervisor" (=03= SAS,
+deferred) could detect spawn-rate spikes and throttle. *FUP candidate:* adaptive
+spawn-rate limiting.
+
+* PT-2 — The claim race (two sessions claim the same work simultaneously)
+
+*Scenario:* sessions S1 and S2 both =black/claim= work =W= within the same
+millisecond, on different BEAM nodes, before either sees the other's claim.
+
+*Naive break:* both do the work (double-spend) or a lock deadlocks them.
+
+*Contained by:* claims are /monotone appends, not locks/ (=02= §4.2). Both claim
+records land in the convergent set. Both sessions fold =claims_for(W)= and compute
+=argmin(lamport, author_sid)= — a /deterministic/ function. They independently
+reach the /same/ winner. The loser inhibits (stands down). No lock, no round-trip,
+no deadlock possible (≡ basal-ganglia gating, =03=).
+
+*Subtlety — the visibility window:* if S2 has not /yet/ replicated S1's claim
+(partition/lag), S2 may transiently believe it won and start work. This is the
+optimistic part. Two answers by work type:
+- /idempotent/ work (most agent work — search, analysis, posting findings): a
+  transient double-execution is harmless; the duplicate finding collapses by
+  content hash. Accept it.
+- /irreversible/ work (spend, send, push): MUST NOT go through =claim=; it goes
+  through =decide= (Ra quorum, exactly-once). The rule: *claim gates idempotent
+  work; decide gates irreversible work.* Stated in =02= §4.
+
+* PT-3 — Network partition during a Fork-B reconciliation
+
+*Scenario:* three rendezvous agents; the network splits 2|1 mid-=decide=.
+
+*Naive break:* split-brain — each side elects its own leader, two verdicts.
+
+*Contained by:* Ra/Raft is *CP* (=01= §6). =decide= needs a quorum (majority). The
+2-side has quorum and commits one verdict; the 1-side cannot reach quorum and its
+=decide= /blocks/ (returns =:pending=, retries). No split-brain: at most one
+verdict commits. When the partition heals, the 1-side learns the committed verdict
+and converges.
+
+*The cost, stated honestly:* the minority side is /unavailable for verdicts/ during
+the partition. That is the deliberate CAP choice — consistency over availability
+for the rare non-monotone decision. The monotone 99% (post/query/claim/fold)
+/stays available/ on both sides; only =decide= waits. Acceptable because =decide=
+is rare and a stalled verdict loses nothing.
+
+* PT-4 — The dead author (a session contributes, then crashes)
+
+*Scenario:* a child posts findings, then its BEAM process crashes before the parent
+folds.
+
+*Naive break:* in a message-mesh, the parent waiting on the dead child's =send=
+hangs or errors; the contribution is lost.
+
+*Contained by:* *time/identity decoupling* — the blackboard's defining property
+(=01= §3). The findings are frozen records in the region; they persist after the
+author dies. The parent folds the region, not the child — it never references the
+child process at all. A dead author /still contributes/. =SessionRegistry='s pid
+monitor drops the dead session from /liveness/, but its /records remain/. This is
+the single strongest argument for blackboard-over-messaging, and the test it wins
+cleanly.
+
+*Corner:* a child that crashed /mid-finding/ (partial work) simply posted fewer
+records; the parent's threshold watch (=:count N=) never fires. Answer: thresholds
+need a /deadline/ companion (=:ttl= on the watch) so the parent folds "what
+arrived by T" rather than waiting forever. Already in the watch contract (=04= §1).
+
+* PT-5 — Claim leak (owner crashes holding a claim)
+
+*Scenario:* S1 wins claim =W=, starts work, crashes. =W= is now "owned" by a dead
+session and never gets done.
+
+*Contained by:* claims carry a =:lease_ms= (=04= §1). An unrenewed lease /expires/;
+the fold ignores expired claims, so =W= becomes claimable again — another session
+wins on the next claim. This is *inhibitory release* (EF 5, =03=): the gate
+reopens when the holder stops asserting. The owner renews by re-posting (a
+heartbeat claim) while working.
+
+*Tuning risk:* lease too short → premature reclaim + double work; too long → slow
+recovery. Lease should exceed a turn's expected duration. *FUP candidate:*
+adaptive lease = f(observed turn latency).
+
+* PT-6 — Goal thrash (the objective keeps changing under the workers)
+
+*Scenario:* the parent supersedes the =:goal= repeatedly; children are working
+against stale goals.
+
+*Contained by:* goals are monotone /supersede-by-newer/ (=02= §2). A child =query='s
+the active goal at each turn; if superseded, it sees the new one and shifts (EF 11
+set-shifting, =03=). Findings against a stale goal are not /wrong/ — they are
+tagged with the goal they served (provenance), and the fold scopes to the current
+goal's findings. Stale work is /partitioned out/ by the fold, not corrupted.
+
+*Residual:* rapid thrash wastes work (children chase a moving target). This is a
+/prompt-design/ problem (don't supersede goals every turn), not a substrate bug.
+The deferred mesh-supervisor (=03= SAS) is the place to detect and damp thrash.
+
+* PT-7 — The Byzantine question (a "lying" node)
+
+*Scenario:* could a malicious or buggy session post false findings or forge a
+verdict?
+
+*Contained by / scoped:* the threat model (AGENTS.md, =02= §4.3) is /crash-fault,
+not Byzantine/: the BEAM peers are /ours/, trusted for correctness; agent-authored
+/data/ is untrusted /for correctness/ but runs sandboxed. So:
+- *forged verdict:* impossible — a verdict only commits through Ra quorum; a single
+  node cannot fabricate one.
+- *false finding:* possible (a buggy agent posts a wrong finding). This is the
+  /same/ risk as a single agent being wrong; the fold/parent applies judgment, as
+  it would to any tool output. Not a distributed-systems problem — an agent-quality
+  problem.
+- *region-write without capability:* prevented — writing a Fork-A region needs its
+  unforgeable id (=02= §6).
+
+*Explicitly out of scope:* true Byzantine fault tolerance (malicious nodes,
+3f+1 replicas, PBFT). Unjustified for a trusted-peer mesh; revisit only if the mesh
+ever spans untrusted machines. *FUP candidate (dormant):* BFT posture for untrusted
+cross-org meshes.
+
+* PT-8 — Read amplification (every session folding the whole region every turn)
+
+*Scenario:* a large region with thousands of findings; N sessions each fold the
+full set every turn → O(N × region_size) reads.
+
+*Contained by / open:* partially answered.
+- the store's =list/2= is scoped per region (=store.ex=), and Khepri reads hit RAM
+  (the materialized tree), so a fold is a bounded in-memory pass, not disk I/O.
+- content-addressing dedups, bounding region growth (re-posts collapse).
+- BUT a genuinely huge region is still a large fold. *Open risk.* Directions:
+  /incremental fold/ (cache the fold, update with records since last =lamport=
+  seen — a monotone delta, CALM-clean), and /windowed regions/ (the existing
+  =Window= compaction, =hist.ex=, applied to regions). *FUP candidate:* incremental
+  region fold via lamport-watermark.
+
+* PT-9 — Lamport ties and clock skew
+
+*Scenario:* two claims with the /identical/ Lamport value; or wall-clock skew
+across nodes.
+
+*Contained by:* resolution never uses wall-clock =t= (it is human-facing only,
+=02= §2). Lamport clocks give a /causal partial order/ that needs no synchronized
+time. Ties break on =author_session_id= (a total, deterministic order). So a tie is
+resolved identically by every reader. Wall-clock skew cannot affect correctness
+because no decision reads the wall clock.
+
+* PT-10 — The empty rendezvous (Fork B agent arrives first / alone)
+
+*Scenario:* a webhook spawns one agent into =hash(goal)= but no peers ever join
+(misfire, or it is genuinely solo).
+
+*Contained by:* a lone agent in a rendezvous region is just a session writing
+findings nobody folds yet. Its =:count N= watch never fires (TTL expires → it
+proceeds solo or reports "no peers"). No hang (TTL), no error (a region with one
+member is valid). Fork B /degrades to Fork A with one participant/, which degrades
+to a plain session. The design has no special-case for "alone" — it is the n=1
+point of the same machinery. Graceful by construction.
+
+* Summary — what the design wins, what stays open
+
+| test | verdict |
+|------+---------|
+| PT-1 spawn bomb | *contained* (budget + fuel/ttl); adaptive throttle = FUP |
+| PT-2 claim race | *contained* (monotone fold; claim vs decide rule) |
+| PT-3 partition | *contained* (Raft CP; minority waits, no split-brain) |
+| PT-4 dead author | *won cleanly* (time/identity decoupling — the core advantage) |
+| PT-5 claim leak | *contained* (lease expiry = inhibitory release); adaptive lease = FUP |
+| PT-6 goal thrash | *contained* (supersede + provenance fold); damping = deferred supervisor |
+| PT-7 Byzantine | *scoped out* (crash-fault model; BFT = dormant FUP) |
+| PT-8 read amplification | *partial* — incremental fold + windowing = FUP |
+| PT-9 lamport/skew | *won cleanly* (causal order, no wall-clock dependency) |
+| PT-10 empty rendezvous | *won by construction* (n=1 of the same machinery) |
+
+Three clean wins (PT-4, PT-9, PT-10) are exactly the properties a message-mesh
+/cannot/ have — they come from choosing a convergent medium over edges. Two open
+items (PT-8 read amplification, adaptive tuning in PT-1/PT-5) are performance
+refinements, not correctness gaps, and have clear CALM-clean directions. One
+(PT-7 Byzantine) is a deliberate scope boundary. The design holds.

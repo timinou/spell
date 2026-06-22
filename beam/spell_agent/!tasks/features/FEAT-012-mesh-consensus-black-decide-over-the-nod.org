@@ -1,0 +1,104 @@
+#+TITLE: Mesh.Consensus — black/decide over the NODE cluster (Ra leader-election, sealed watermark)
+#+STATE: ITEM
+#+SESSION_ID: 151269c91db37358
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T23-09-03-478Z_151269c91db37358.jsonl]]
+#+CUSTOM_ID: FEAT-012-mesh-consensus-black-decide-over-the-nod
+#+BLOCKED_BY: FEAT-010
+
+* Initial Message
+
+what are distributed agents in a mesh network, really? please look into network theory, not hype. i want us to think about that deeply and from first principles, in order to let the BEAM lisp runtime call itself and create meshed sub-sessions. But I want strong theoretical backing beforehand
+
+* Goal
+The one true consensus round: black/decide commits a non-monotone :verdict via Ra
+leader-election + quorum OVER THE NODE CLUSTER (not sessions — DC-7), folding a
+SEALED watermark snapshot so re-election is idempotent (DC-8). This is Fork B's
+reconciliation verdict and the exactly-once gate for irreversible work (DC-1).
+
+Read first: docs/agent-mesh-theory/08-implementation.org §C (Consensus),
+02-blackboard-substrate.org §4.3 (the consensus stack, two-plane + watermark),
+06 DC-7 (two planes) + DC-8 (sealed fold) + DC-1 (decide gates irreversible).
+
+* Wave / deps
+Wave 4 (parallel with FEAT-011/013). BLOCKED BY FEAT-010 (decide reads/folds the
+region via black/fold + posts a :verdict). Distribution path needs Store.Khepri
+(Ra); single-node path works on Store.Memory.
+
+* Modules / edits
+** lib/spell_agent/mesh/consensus.ex  (NEW — SpellAgent.Mesh.Consensus)
+- decide(%{region, question, quorum, fold, store}) -> {:verdict id, :leader node,
+  :payload} | {:pending reason}:
+  1. SEAL (DC-8): watermark := max lamport currently in region (Mesh.Store.region).
+     Commit the watermark as the FIRST Ra step so every leader agrees on the
+     boundary.
+  2. verdict id := hash(region <> to_string(question) <> watermark) — idempotent:
+     a re-elected leader commits the SAME id (a second commit is a no-op collapse).
+  3. NODE-level Ra leader-election (the cluster Khepri already runs via
+     khepri_cluster.erl). The leader evaluates :fold ONCE
+     (PtcRunner.Lisp.run, sandboxed, over findings WHERE lamport <= watermark),
+     then Mesh.Store.put the :verdict record (kind :verdict, :watermark set).
+  4. quorum := NODE quorum (:majority default). Sub-quorum -> {:pending}, caller
+     retries. A session that triggered decide may EXIT immediately after — its
+     finding persists and is folded regardless (DC-7).
+- SINGLE-NODE MODE: with Store.Memory (no Ra) OR a 1-member Ra cluster, decide
+  degenerates to: seal watermark, fold locally, write the verdict directly — no
+  real election (PT-10 graceful n=1). The SAME code path; the cluster size decides.
+- a terminal verdict (question marks region complete) latches region :sealed
+  (DC-9) via a Mesh.Store flag write; subsequent posts rejected (FEAT-009/010).
+
+** wiring (lib/spell_agent/mesh/namespace.ex EDIT)
+- replace the FEAT-010 black/decide stub with a real delegation to
+  Consensus.decide/1, binding region+store from the closure.
+
+* CodePaths (existing) to reference
+- deps/khepri/src/khepri_cluster.erl + deps/ra — the Ra cluster Khepri runs on;
+  decide's node-plane IS this cluster (no new consensus engine — D8/02 §4.3).
+- lib/spell_agent/hist/store/khepri.ex::start/1 — how the Ra system is booted
+  (decide requires it for multi-node; reuse the same store).
+- ptc_runner/lib/ptc_runner/lisp.ex::run/2 (caller: :in_process_v1) — the sandbox
+  the :fold runs in (same as tools.ex :ptc execution).
+- lib/spell_agent/mesh/store.ex (FEAT-009) region/2, put/2 — fold input + verdict out.
+
+* Edge cases
+- leader crash AFTER election BEFORE verdict commit: re-election folds the SAME
+  sealed watermark -> SAME verdict id -> idempotent (DC-8). Assert this.
+- partition 2|1 (PT-3): majority side commits one verdict; minority side decide
+  returns {:pending}, converges on heal. No split-brain (Ra is CP).
+- concurrent decide on the same (region, question): both seal the same watermark
+  (max lamport is deterministic at a quiescent moment) -> same verdict id -> one
+  commit. If watermarks differ (a finding arrived between), the later is a NEW
+  round (v2 over (w1,w2]) — document this is intended, not a bug.
+- Store.Memory has no Ra: decide MUST still work single-node (local fold + write),
+  so the verb is usable in dev/test without a cluster.
+
+* Acceptance (observable)
+- `mix test test/mesh/consensus_test.exs` passes single-node (Store.Memory): decide
+  seals, folds, writes one verdict; a second decide with the same watermark is a
+  no-op (idempotent id).
+- DISTRIBUTION GATE (folded in here): a real TWO-NODE Khepri test — three findings
+  across two nodes, one decide commits one verdict visible on both; a simulated
+  partition leaves the minority {:pending}, healed convergence (PT-3, PT-4 across
+  nodes). This test gates the "distribution works" claim (02 §7 caveat).
+- `mix check` clean.
+
+* Tests
+- idempotent verdict id across simulated re-election (the DC-8 contract).
+- single-node degeneration (n=1, no election) writes a correct verdict.
+- two-node commit + partition {:pending} (the distribution + CP contract).
+- decide gating: an irreversible-effect :fold runs exactly once (DC-1).
+
+* PRE-CODING CORRECTION (oracle MeshFinalCheck, agent://1-MeshFinalCheck — P1.2)
+The sealed watermark is a STORE SEQUENCE / LOG INDEX, not a Lamport scalar.
+- "max lamport in region" is NOT a stable frontier: a late record can carry a
+  lamport below a previously-sealed watermark (records arrive in the Raft log out
+  of lamport order), so folding lamport ≤ w is non-deterministic across leader
+  re-election → broken verdict idempotency.
+- FIX: decide seals against the per-region monotonic SEQ the store assigns
+  (FEAT-009). watermark = the committed store seq at seal time (in Khepri, the
+  Raft log index of the seal command; in Memory, the per-region counter value).
+  The fold takes records WHERE seq <= watermark — a stable, totally-ordered set,
+  so any re-elected leader folds the identical set → identical verdict id.
+- verdict id = hash(region <> question <> watermark_seq). %MeshRecord :watermark
+  field holds the SEQ (integer), not a lamport.
+- seal MUST be the first committed Ra step (Khepri) or an atomic counter read
+  (Memory) so the frontier is fixed before any fold.

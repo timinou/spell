@@ -1,0 +1,278 @@
+#+TITLE: The surface — black/* verb contracts and tool/spawn-session
+#+SUBTITLE: The concrete API the agent writes, with worked PTC-Lisp programs
+#+OPTIONS: toc:2 num:t
+
+This is the buildable surface. Six =black/*= verbs + one =tool/spawn-session=,
+all riding the /existing/ =Hist.Store= (=02= §1). Contracts first, then worked
+programs for Fork A and Fork B.
+
+*The contracts below incorporate the =06= deep-pressure corrections inline* (claim
+gates monotone-effect work + =:settle_ms=; watch is per-node + claim-deduped;
+decide is node-quorum + sealed watermark; rendezvous is structured-key/slug). Read
+=06= for the derivations.
+
+* 0. Design rules the surface obeys
+
+- *Every write is a frozen, pure map* (=node.ex= realization invariant). No pids,
+  no handles on the blackboard.
+- *Reads are ambient; region writes need the region id* (object-capability, =02= §6).
+- *Four verbs are monotone* (=post=, =query=, =claim=, =watch=-register); =fold=
+  is a pure read-time reduce; only =decide= runs a consensus round.
+- *Verbs mirror the self-scoped =hist/*= namespace* (=namespace.ex=), generalized
+  from "my history" to "a shared region". Same store, new aperture.
+
+* 1. The six verbs
+
+** =black/post= — monotone write (PUT)
+
+#+begin_src
+(black/post {:region R :kind :finding :payload {…}})           ; → {:id <hash> :region R}
+(black/post {:region R :kind :goal    :payload {:objective "…" :success "…"}})
+(black/post {:region R :kind :intention :payload {:when {…} :do "<ptc src>" :fuel 3 :ttl 60000}})
+#+end_src
+
+- appends a =%MeshRecord{}= (=02= §2). =id = hash(canonical(payload) <> region)=, so a
+  duplicate post is idempotent (collapses to one id — the G-Set property).
+- requires the region-write capability (holding =R=). =kind ∈ {:goal :finding :intention}=
+  (a =:claim= goes through =claim=; a =:verdict= only through =decide=).
+- stamps =author= (= calling session id), =lamport=, =t=. Returns the content id.
+
+** =black/query= — content-addressed discovery (QUERY)
+
+#+begin_src
+(black/query {:region R :match {:kind :finding :where {:risk :high}}})  ; → [record …]
+(black/query {:region R :match {:kind :goal :active true}})            ; → [record]
+(black/query {:match {:kind :finding :about "caller"}})                 ; → cross-region (ambient read)
+#+end_src
+
+- a /pure read/ over region records (or global, if =:region= omitted). Monotone, no
+  authority needed — this is "discover the entity by what it is".
+- =:match= is a predicate map (kind + field constraints). Returns matching frozen
+  records, newest =lamport= first. Never blocks.
+
+** =black/claim= — optimistic monotone claim (CLAIM)
+
+#+begin_src
+(black/claim {:region R :work "rank-file:lib/x.ex"})  ; → {:claim <id> :won? <bool> :owner <sid>}
+#+end_src
+
+- appends a =:claim= record for =work= and /immediately folds/ the claim set for that
+  work id, returning whether /this/ session won (Lamport-min, =02= §4.2).
+- *never blocks, never locks.* Losing is normal and cheap; a loser simply does not
+  do the work. Contention is resolved, not prevented (≡ basal-ganglia gating, =03=).
+- a claim carries an optional =:lease_ms=; an unrenewed claim expires (inhibitory
+  release, EF 5), so a crashed owner's work becomes claimable again.
+- *what claim gates* (=06= DC-1): work whose ONLY effects are monotone blackboard
+  writes (or an external effect carrying a dedup/idempotency key the remote
+  honours). ANY non-deduped external effect (spend, send, irreversible push) goes
+  through =decide=, NOT =claim=. Partially-idempotent work is DECOMPOSED: the
+  monotone part claimed, the irreversible tail decided. "Idempotent vs
+  irreversible" was a lossy proxy for "monotone-effects vs not".
+- optional =:settle_ms= (=06= DC-2): for EXPENSIVE idempotent work, post the
+  claim, wait =settle_ms= (> the replication bound), re-fold, proceed only if still
+  the winner — a cheap confirmation barrier against duplicate expensive work under
+  the optimistic visibility window. No lock, no round.
+
+** =black/fold= — non-monotone read-time reduce (FOLD)
+
+#+begin_src
+(black/fold {:region R :over :finding :reduce :count})
+(black/fold {:region R :over :finding :reduce :group-by :field :risk})
+(black/fold {:region R :reduce :goal-satisfied?})            ; pure predicate over goal + findings
+#+end_src
+
+- a /pure function/ of the append-only records — every reader who folds the same
+  records gets the same answer. This is where =count=, =group-by=, =rank=,
+  "is the goal met?" live (the parent's job in Fork A).
+- the fold does /not/ write. Turning a fold result into a committed collective fact
+  is =decide= (below). Fold = "what do the facts say?"; decide = "we now declare X".
+
+** =black/watch= — register a deferred intention (prospective memory)
+
+#+begin_src
+(black/watch {:region R :when {:kind :finding :where {:about "migration-done"}}
+              :do "<ptc source>" :fuel 1 :ttl 300000})       ; → {:watch <id>}
+#+end_src
+
+- registers an =:intention= record; the *Mesh.Watcher* is *per-node local infra*
+  (=06= DC-6) — NOT a global GenServer SPOF — that tails its own node's write
+  stream. When a =post= matches =:when=, the watcher does NOT run =:do= directly:
+  it =black/claim='s the firing (work id =hash(intention_id <> event_id)=), and
+  ONLY the claim winner runs =:do= (sandboxed =PtcRunner.Lisp.run=, the matched
+  record bound as =data/event=). The claim CRDT makes firing EXACTLY-ONCE across
+  all nodes with no central coordinator; if the winning node dies before running
+  =:do=, the claim lease expires and another node re-fires (crash-safe).
+- =:fuel= caps firings; =:ttl= caps lifetime → a self-retriggering cascade burns
+  fuel and stops (=02= §8). The action may itself =spawn-session=, =post=, or
+  =decide=. This is the Fork-B trigger for webhooks + cross-agent unblocking.
+
+** =black/decide= — the consensus verdict (the only true round)
+
+#+begin_src
+(black/decide {:region R :question :all-tasks-reconciled?
+               :quorum :majority :fold "<ptc that computes the verdict payload>"})
+;; → {:verdict <id> :leader <sid> :payload {…}}   ; or {:pending …} if quorum not yet met
+#+end_src
+
+- runs a *Ra leader-election + quorum commit over the NODE cluster* (=02= §4.3,
+  =06= DC-7) — the calling session triggers it; the node it runs on executes the
+  round. Quorum is NODE quorum (stable), never session quorum (ephemeral), so a
+  session may post-then-exit and its finding still folds. =decide= first seals a
+  =:watermark= lamport (=06= DC-8) and folds only findings ≤ watermark, so a
+  re-elected leader after a crash computes the SAME verdict (idempotent). The
+  leader evaluates =:fold= once, posts the =:verdict=, and it replicates to all
+  nodes. Crash-fault, not Byzantine (peers are ours).
+- used only for non-monotone collective facts: "all N reconciled", "refactor
+  complete", an exactly-once irreversible action. After commit the verdict is just
+  another monotone cell everyone =query='s.
+
+* 2. tool/spawn-session — the reflexive seam
+
+The native tool that lets the runtime call itself. Wraps =SpellAgent.Session.run=
+under the global budget, mints/receives a region, hands the child a scoped
+capability.
+
+#+begin_src
+(tool/spawn-session
+  {:prompt  "Assess rename risk for verify/1 in lib/x.ex"
+   :region  R                 ; omit → Fork A mints hash(goal<>parent<>nonce);
+                              ; pass an existing id → join that region (rendezvous)
+   :tools   ["find" "black/post" "black/query"]   ; attenuated capability set
+   :budget  {:max_turns 6}    ; bounded sub-mission
+   :await   false})           ; false → fire-and-forget (returns {:session sid :region R});
+                              ; true  → block on the child's return (Fork A synchronous fold)
+#+end_src
+
+Contract:
+- acquires one =ParallelBudget= slot before spawning; fails fast
+  (=:parallel_capacity_exceeded=) if none free — never melts the BEAM (=02= §8).
+- =:await false= returns immediately with the child's =session= + =region= (the
+  parent later =fold='s the region). =:await true= blocks and returns the child's
+  result (the simple Fork-A synchronous case).
+- the child is a /full session/ (its own Hist history, its own loop), reachable
+  later by session id and visible in =SessionRegistry.live/0=. It coordinates
+  /only/ through =region=, never by a reference to a sibling.
+
+* 3. Showcase — Fork A: parent fans out, folds findings
+
+A parent assesses the blast radius of a rename by spawning one child per caller
+file, each writing findings to a private region, then folds.
+
+#+begin_src clojure
+;; PARENT program (one PTC-Lisp form the agent writes)
+(let [;; 1. discover the work: callers of the symbol (existing find tool)
+      callers (tool/find {:target "lib/x.ex::verify def->"})
+      files   (distinct (map #(get % "file") callers))
+      ;; 2. mint a private Fork-A region by posting the goal (nonce minted by spawn)
+      region  (get (black/post {:region :auto
+                                :kind :goal
+                                :payload {:objective "rank rename risk of verify/1"
+                                          :success "one :finding per caller file"}})
+                   "region")]
+  ;; 3. fan out: one bounded child per file, fire-and-forget, into the SAME region
+  (doseq [f files]
+    (tool/spawn-session
+      {:prompt (str "Assess risk of renaming verify/1 at its use in " f
+                    ". Post a :finding {about:\"caller\" file risk evidence} to your region.")
+       :region region
+       :tools  ["find" "get" "black/post"]
+       :budget {:max_turns 4}
+       :await  false}))
+  ;; 4. wait for the monotone threshold: a finding per file (poll the medium)
+  (black/watch {:region region
+                :when {:kind :finding :count (count files)}
+                :do "(return :all-in)" :fuel 1 :ttl 120000})
+  ;; 5. FOLD — the parent's non-monotone synthesis (rank by risk)
+  (black/fold {:region region :over :finding :reduce :group-by :field :risk}))
+;; → {:high [...] :medium [...] :low [...]}   the ranked blast radius
+#+end_src
+
+Note: no child ever references another. Children that /finished and exited/ still
+contributed — their findings persist in =region=. Brooks's term never appears (N
+writes to a medium, not N² messages). The only non-monotone step (the rank) is the
+parent's alone. CALM-clean.
+
+* 4. Showcase — Fork B: parentless reconciliation via rendezvous + decide
+
+The user launches three agents on three tasks of one feature. None spawned the
+others. They rendezvous by /naming the goal/ and reconcile by consensus.
+
+#+begin_src clojure
+;; EACH of the 3 independently-launched agents runs this tail after its task:
+(let [;; rendezvous region = hash(SLUG) — an explicit coordination key (NOT hashed
+      ;; prose, 06 DC-4), so all three independently compute the SAME id
+      region (get (black/post {:region {:rendezvous "ship-feature-X"}
+                               :kind :finding
+                               :payload {:task (data/my-task)
+                                         :result (data/my-result)
+                                         :status :done}})
+                  "region")]
+  ;; register interest in the reconciliation the moment all three are in
+  (black/watch
+    {:region region
+     :when {:kind :finding :where {:status :done} :count 3}
+     ;; when the threshold is met, ONE leader is elected to synthesize the verdict
+     :do "(black/decide {:region (get data/event \"region\")
+                         :question :feature-X-reconciled?
+                         :quorum :majority
+                         :fold \"(black/fold {:region (get data/event \\\"region\\\")
+                                              :over :finding :reduce :merge-results})\"})"
+     :fuel 1 :ttl 600000}))
+;; Whichever agent's watch fires first triggers a Ra round; exactly ONE becomes
+;; leader, folds the 3 findings into a merged :verdict, which replicates to all.
+;; The other two read the verdict via (black/query {:region R :match {:kind :verdict}}).
+#+end_src
+
+Why this is correct:
+- *rendezvous without references*: three processes meet on =hash("ship-feature-X")=
+  having never named each other — content-addressing applied to the coordination
+  space (=02= §3).
+- *the threshold is monotone* (=:count 3= over append-only findings) → detectable
+  by every watcher independently, no coordination to /notice/ completion.
+- *the verdict is non-monotone* ("reconciled — emit merged result, once") → exactly
+  one =decide= round, Ra-elected leader, quorum commit. Even though all three
+  watches fire, Ra guarantees a single leader and a single committed verdict
+  (idempotent on the content-addressed verdict id).
+
+* 5. Showcase — stigmergic unblocking (webhook + cross-agent)
+
+Agent A is blocked on a migration it cannot run. It posts a standing intention and
+exits its current step. Later, a webhook-spawned agent B finishes the migration and
+posts a finding — which fires A's intention, spawning A's continuation. Neither
+knew the other.
+
+#+begin_src clojure
+;; AGENT A, blocked, registers prospective memory then yields:
+(black/watch {:region {:rendezvous "db-subsystem"}
+              :when {:kind :finding :where {:about "migration-done"}}
+              :do "(tool/spawn-session {:prompt \"Resume: run the backfill now that
+                                                 the migration is applied.\"
+                                        :region (get data/event \"region\")
+                                        :tools [\"find\" \"edit\" \"black/post\"]
+                                        :await false})"
+              :fuel 1 :ttl 86400000})
+
+;; WEBHOOK-spawned AGENT B, on the migration-finished event, simply posts the fact:
+(black/post {:region {:rendezvous "db-subsystem"}
+             :kind :finding
+             :payload {:about "migration-done" :version 47 :at (now)}})
+;; → the watcher engine matches A's intention and fires its :do, spawning A's
+;;   continuation. The medium carried the causality; A and B never referenced
+;;   each other. (≡ frontopolar prospective memory, 03.)
+#+end_src
+
+* 6. Mapping the surface to existing modules (build seams)
+
+| surface piece | rides on (existing) | new code |
+|---------------+---------------------+----------|
+| =black/post= / =query= / =claim= / =fold= | =Hist.Store= K/V + ={:hash,h}= index; mirror =hist/Namespace.tools/2= | a =Mesh.Namespace= verb map + a =:mesh= record kind in =Store= |
+| region minting (A/B) | content-hash like =Node.id= | a =Mesh.Region= id function (Fork-A nonce vs Fork-B structured-key/explicit-slug, DC-4) |
+| =black/watch= engine | telemetry attach like =Tui.Store=; Khepri triggers/projections | a *per-node* =Mesh.Watcher= tailer (DC-6) firing via =claim= (exactly-once) + fuel/TTL |
+| =black/decide= | Ra/Khepri (=khepri_cluster.erl=, already vendored) | a thin =Mesh.Consensus= front over Ra leader-election, quorum over the *NODE cluster* (DC-7), sealed =:watermark= fold (DC-8) |
+| =tool/spawn-session= | =Session.run/2=, =ParallelBudget=, =SessionRegistry= | a native tool in =SpellAgent.Tools= |
+| capability scoping | unforgeable region id + attenuated =:tools= list | enforced at =black/post= write |
+| termination | =ParallelBudget= (exists) | route =spawn-session= + watch-fire through it |
+
+The surface is a /namespace and a few GenServers over machinery that exists/. That
+is the measure of how much of this is "already built": the verbs are new words for
+operations the store already supports, plus one watcher engine and a thin Ra front.

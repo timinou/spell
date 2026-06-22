@@ -1,0 +1,81 @@
+#+TITLE: App.render/2 encode raises on the direct (pure) test path: "bad layout"/"bad body"
+#+STATE: DONE
+#+SESSION_ID: 150e55dbf9fb7900
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-18T19-08-04-455Z_150e55dbf9fb7900.jsonl]]
+#+CUSTOM_ID: BUG-010-app-render-2-encode-raises-on-the-direct
+#+COMPLETION_HASH: 58832926a894871d
+
+* Initial Message
+
+check out how ex_ratatui prefers doing unit and visual tests and tell me how you would do it here. let's design a sturdy testing infra first
+
+* Summary
+Calling =SpellAgent.Tui.App.render/2= directly (the natural way to unit-test a
+pure render callback) can RAISE =ArgumentError= from the ExRatatui Bridge —
+"cannot coerce N into %ExRatatui.Text{}" (the "bad body") or
+"invalid layout constraint" / ={:unknown_widget, _}= (the "bad layout"). The
+server's draw-time =rescue= does NOT protect this path because the test calls the
+callback directly, bypassing the Server. So the same tree that degrades
+gracefully in production blows up in a test, which is why PLAN-347's terminal
+tests fail with "bad layout"/"bad body".
+
+* Root cause (verified by reproduction)
+=App.render/2= maps the layout tree through =Surface.layout/2= →
+=resolve_node/3= → =materialize_widget/2= / pane =view/1=, then filters with
+=encodable_placement?/1=. Two gaps:
+
+1. =encodable_placement?/1= rescues =Bridge.encode_command/1=, but it is applied
+   only to the FINAL App placements. Intermediate steps can raise FIRST:
+   =Materialize.to_struct/1= on a bad layout node returns ={:error,
+   {:unknown_widget, "split"}}= for =%{"type"=>"split","dir"=>"sideways"}= — but
+   other malformed nodes raise inside =to_struct= or inside =view/1= before the
+   filter runs.
+2. The encode probe in =LayoutRegistry= (=renderable?/1=, =resolvable_leaf?/1=,
+   =encodable?/1=) guards AGENT shadows at =set/2= time, but native pane content
+   and status/composer fills are never probed — so a poisoned field reaches the
+   Bridge at render.
+
+Reproduced 2026-06-21 (session transcript), probing =Materialize.to_struct/1= +
+=Bridge.encode_command/1= directly:
+
+| node                                              | result                                   |
+|---------------------------------------------------+------------------------------------------|
+| =%{"type"=>"paragraph","text"=>123}=              | RAISE: cannot coerce 123 into %Text{}    |
+| =%{"type"=>"list","items"=>"not-a-list"}=         | RAISE at NIF                             |
+| =%{"type"=>"split","dir"=>"sideways"}=            | materialize error {:unknown_widget}     |
+| =%{"type"=>"paragraph","body"=>"x"}=              | encoded OK (wrong key silently ignored) |
+
+* Steps to reproduce
+1. Build an App state whose pane/fill yields one of the malformed nodes above.
+2. Call =App.render(state, %Frame{width: 80, height: 24})= directly (as
+   freeform_integration_test.exs does via =status_text(widgets)=).
+3. Observe an =ArgumentError= from =ExRatatui.Bridge= ("bad body"/"bad layout")
+   instead of a degraded-but-valid placement list.
+
+* Fixing strategy
+Same single-contract fix as the sibling frame-drop BUG, applied so it holds on
+the DIRECT path too:
+
+1. Every node that can reach the Bridge goes through ONE total function that
+   returns ={:ok, {widget, rect}} | :drop= and never raises (wrap =to_struct= +
+   =encode_command= in the rescue, at the leaf, before App assembles the list).
+2. =App.render/2= returns only =:ok= leaves; a malformed node is dropped to a gap.
+   This makes =render/2= TOTAL — safe to call directly in tests.
+3. Add a typed validation layer (see FEAT: widget/layout validation) so the
+   common authoring mistakes (wrong key =body= vs =text=, non-string text, bad
+   constraint dir) surface as a STRUCTURED ={:error, reason}= the agent/test can
+   read, instead of a deep Bridge raise.
+
+* Acceptance
+- =App.render/2= never raises for any tree; malformed leaves become gaps.
+- A unit test feeds each malformed node from the table and asserts
+  =render/2= returns a list (no raise), missing only the bad leaf.
+- =freeform_integration_test.exs=-style direct-render assertions are stable.
+
+* Related
+- Sibling BUG: server drops the whole frame on encode raise.
+- FEAT: typed widget/layout validation surface.
+- LayoutRegistry failure ladder (BUG-007, BUG-008) — the agent-shadow half that
+  already works; this extends the same idea to native content + the direct path.
+
+NOTE [2026-06-21]: Fixed alongside BUG-009 by the same total render contract. The actual unguarded raise was pane view/1 (not Materialize.to_struct, which is already total returning {:error,_}); safe_resolve_node/3 makes render/2 total so the direct test path no longer raises. Verified RED→GREEN in render_robustness_test.exs.

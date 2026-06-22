@@ -1,0 +1,299 @@
+#+TITLE: Implementation breakdown — the full mesh build, module by module
+#+SUBTITLE: Everything decided, every CodePath, the FEAT decomposition with seams
+#+OPTIONS: toc:2 num:t
+
+This is the complete, buildable plan. It restates every DECISION (with its
+rationale in one line) and specifies HOW each is implemented against named
+CodePaths in the current tree. It is the source for the filed FEAT items
+(*=FEAT-008..015=* — the org-local counter; this doc's earlier =FEAT-828..835=
+labels were placeholders, the README's 824-827 are TS-spell global IDs in a
+separate space). Read =00=–=07= for the theory; read THIS to build.
+
+| doc placeholder | FILED org id | module |
+|-----------------+--------------+--------|
+| FEAT-828 | *FEAT-008* | Mesh.Record + Mesh.Region |
+| FEAT-829 | *FEAT-009* | Mesh.Store + Mesh.Clock |
+| FEAT-830 | *FEAT-010* | Mesh.Namespace (4 monotone verbs) |
+| FEAT-831 | *FEAT-011* | tool/spawn-session |
+| FEAT-832 | *FEAT-012* | Mesh.Consensus (black/decide) |
+| FEAT-833 | *FEAT-013* | Mesh.Watcher (black/watch) + supervision |
+| FEAT-834 | *FEAT-014* | mix spell.mesh + panes |
+| FEAT-835 | *FEAT-015* | mix spell.mesh.gallery + .watch |
+
+* A0. Oracle final-check corrections (agent://1-MeshFinalCheck) — READ FIRST
+
+A pre-coding adversarial review found a FATAL id flaw + several composition cracks
+where a session-plane mechanism was asked for a node-plane guarantee. The
+corrections, now binding on the FEATs:
+
+| id | sev | correction |
+|----+-----+-----------|
+| P2.2 | FATAL | records keyed by store-assigned per-region =seq= ({:mesh,region,seq}), NOT content hash. content_hash is a FIELD; dedup uses a SEPARATE ={:mesh_hash,region,h}= index; the Hist ={:hash,_}= kind is never touched. :claim/:intention never dedup. |
+| P2.1 | SERIOUS | DROP per-session Lamport (=Mesh.Clock= deleted). The store assigns a per-region monotonic seq atomically (ETS update_counter / Khepri R/W txn) — a true total order, no retrograde values. |
+| P2.3 | SERIOUS | claim =:won?= is PROVISIONAL (local snapshot). Monotone-effect work tolerates it; expensive → mandatory =:settle_ms=; irreversible → =decide=. |
+| P1.3 | SERIOUS | Fork-A re-goal accepted only from the recorded =:owner= while =SessionRegistry.live?(owner)=; dead owner → promote to Fork-B + =decide=. |
+| P1.2 | SERIOUS | =decide= watermark = a store SEQ / log index (stable frontier), not a lamport scalar. verdict id = hash(region<>question<>watermark_seq). |
+| P1.1 | SERIOUS | watch-firing exactly-once = node-plane micro-=decide= (Khepri) OR documented best-effort lease+settle (single-node/Memory). NOT unconditional claim-dedup across nodes. |
+
+The single best move: *a store-owned per-region seq replaces the per-session
+Lamport clock and resolves P2.1, P2.3, and P1.2's watermark at once* — and it is
+exactly how =recorder.ex= already assigns node seq (=max_seq + idx=). It deletes a
+module (=Mesh.Clock=) rather than adding one. The FEAT items (008-013) carry these
+corrections inline under their "PRE-CODING CORRECTIONS" headings.
+
+* A. The decisions, consolidated (the spec)
+
+Every decision we converged on, each with its disposition:
+
+| # | decision | where justified |
+|---+----------+-----------------|
+| D1 | *Full stigmergic blackboard; ZERO sibling message edges.* All coordination flows through the shared medium. | =00=, =01= §3/§6 |
+| D2 | *The medium is the existing Hist store* (append-only nodes + ={:hash,h}= G-Set). New = an aperture (=black/*= verbs), not a new store. | =02= §1 |
+| D3 | *Five record kinds:* =:goal :finding :claim :verdict :intention=. Findings/claims/intentions purely monotone; verdict consensus-only; goal monotone-on-create, owner-serialized on re-goal. | =02= §2, =06= DC-3 |
+| D4 | *Six verbs:* =post query claim fold watch decide=. | =04= §1 |
+| D5 | *Region minting is the A/B switch:* Fork-A =hash(goal<>parent<>nonce)= (isolated, capability); Fork-B =hash(structured-key)= or explicit slug (rendezvous). NEVER hash NL prose. | =02= §3, =06= DC-4 |
+| D6 | *Claim arbitration is consensus-free:* =argmin(lamport, sid)= over the append-only claim set; deterministic, not fair (suffices). Optional =:settle_ms= barrier for expensive work. | =02= §4.2, =06= DC-5/DC-2 |
+| D7 | *claim gates monotone-effect (or externally-deduped) work; decide gates non-deduped external effects.* Partially-idempotent work is decomposed. | =06= DC-1 |
+| D8 | *Two planes: sessions WRITE + READ (ephemeral); NODES decide (stable Ra cluster).* Quorum is node quorum. | =06= DC-7 |
+| D9 | *decide seals a =:watermark= lamport* and folds findings ≤ watermark → idempotent across leader re-election; successive verdicts per sealed window. | =06= DC-8 |
+| D10 | *Watcher is per-node infra; firing dedups via =claim= (exactly-once); fuel + ttl bound cascades.* | =04= §1, =06= DC-6, =02= §8 |
+| D11 | *Termination via the existing ParallelBudget* token bucket; every spawn + watch-fire acquires a slot. | =02= §8 |
+| D12 | *Object-capability:* reads ambient; region WRITE needs the region id; parents hand attenuated caps (tool subset, budget). | =02= §6 |
+| D13 | *Location transparency via the Store behaviour:* =Store.Memory= → =Store.Khepri= is local→cluster, zero session-code change. | =02= §7 |
+| D14 | *Three screens* (=mix spell.mesh{,.gallery,.watch}=) over the existing Pane/view surface, each authorable as a PTC layout tree. | =07= |
+| D15 | *Region lifecycle:* a terminal verdict latches region =:sealed= (monotone); sealed rejects posts; archive via =Hist.Window=. | =06= DC-9 |
+
+* B. The substrate we build on (CodePaths, verified)
+
+| capability | CodePath | how the mesh uses it |
+|-----------+----------+----------------------|
+| typed K/V store behaviour | =lib/spell_agent/hist/store.ex= (=@callback put/fetch/delete/list/clear=) | add a =:mesh= kind; mesh records are values at ={:mesh, region, rid}= |
+| in-mem impl | =lib/spell_agent/hist/store/memory.ex= (ETS, =put/2= =list/2=) | the single-node default for all mesh dev/test |
+| durable+Raft impl | =lib/spell_agent/hist/store/khepri.ex= (=start/1= =put/2= =list/2=) | the distributed substrate; its Ra cluster IS the decide node-plane |
+| content-addressed id | =lib/spell_agent/hist/node.ex= (=id = hash(form_src <> parent_id)=) | the pattern =Mesh.Record.id/1= copies (=hash(canonical(payload) <> region)=) |
+| G-Set union index | =lib/spell_agent/hist/recorder.ex:199-208= (=index_hash/2=, ={:hash,h}=>refs=) | the convergence proof; mesh records dedup the same way |
+| self-scoped verb closures | =lib/spell_agent/hist/namespace.ex::tools/2= (=fn args -> … end= over =impl,session_id=) | =Mesh.Namespace.tools/2= mirrors this EXACT shape |
+| verb injection into the loop | =lib/spell_agent/session.ex::run/2= (=Map.merge(Tools.build_tools_map(), Hist.verbs(session_id, …))=) | add =Map.merge(…, Mesh.verbs(session_id, region: R, store: store))= |
+| native tool map | =lib/spell_agent/tools.ex::build_tools_map/0= + =meta_tools/0= | =tool/spawn-session= registers here beside =define-tool= |
+| tool registry | =lib/spell_agent/tool_registry.ex= (=put/1= =all/0=) | unchanged; spawn-session is native, not :ptc |
+| sandboxed re-entry | =ptc_runner/lib/ptc_runner/lisp.ex::run/2= (=caller: :in_process_v1=) | watch =:do= and =:ptc= folds re-enter here (as =tools.ex= already does) |
+| session spawn | =lib/spell_agent/session.ex::run/2= | =tool/spawn-session= calls this for the child mission |
+| liveness/membership | =lib/spell_agent/session_registry.ex= (=register/2= =live/0=, pid-monitored) | union with region membership for the cohort/screens |
+| global budget | =ptc_runner/lib/ptc_runner/lisp/eval/parallel_budget.ex= (=new/1= =try_acquire/1= =release/1=) | every spawn + watch-fire =try_acquire= before, =release= after |
+| supervision | =lib/spell_agent/application.ex::start/2= (children list) | add =Mesh.Store= seed, =Mesh.Watcher= (per-node), =Mesh.Consensus= |
+| config cells | =lib/spell_agent/config.ex= (=get/1= =put/2= =@whitelist=) | add =mesh.budget=, =mesh.default_store=, =mesh.lease_ms= cells |
+| PTC layout builders | =lib/spell_agent/tui/view.ex::tools/0= (reflected =view/*=) | screens authored via =view/split= + a new =view/pane= |
+| pane contract | =lib/spell_agent/tui/pane.ex= (=project/2= + =view/1= + =events/0=) | mesh panes fold the region forest |
+| default layout spine | =lib/spell_agent/tui/default_layout.ex::tree/2= + =pane_module/1= | the mesh screen's frame; register mesh panes |
+| gallery + snapshot | =lib/spell_agent/tui/scenes.ex=, =lib/mix/tasks/spell.gallery.ex= | =Mesh.Scenes= fixtures + =mix spell.mesh.gallery= |
+| session browser | =lib/spell_agent/tui/session_browser.ex=, =lib/mix/tasks/spell.sessions.ex= | the =mix spell.mesh.watch= reader template |
+
+* C. New modules (the build), each with its contract + CodePath seams
+
+** =SpellAgent.Mesh.Record= — the record struct + identity (FEAT-828)
+
+#+begin_src
+lib/spell_agent/mesh/record.ex
+#+end_src
+
+- =defstruct [:region, :kind, :id, :author, :lamport, :t, :payload, :parent,
+  :watermark, :sealed]= (envelope from =02= §2, +DC-8/DC-9 fields).
+- =id/1= : =:crypto.hash(:sha256, canonical(payload) <> region) |> Base.encode16=
+  — mirrors =hist/node.ex= identity. =canonical/1= = deterministic term encode
+  (=:erlang.term_to_binary(term, [:deterministic])=), NOT NL normalization.
+- =new/1= : build + stamp =author= (session id), =t= (=System.system_time/1=),
+  =lamport= (from the per-session clock, §F).
+- pure, no deps beyond =:crypto=. Unit-testable in isolation (like =node.ex=).
+
+** =SpellAgent.Mesh.Region= — A/B region minting + capability (FEAT-828)
+
+#+begin_src
+lib/spell_agent/mesh/region.ex
+#+end_src
+
+- =fork_a(goal, parent_session)= : =hash(goal <> parent_session <> nonce)= where
+  =nonce = :crypto.strong_rand_bytes(16)=. Unforgeable → the capability token.
+- =fork_b(key)= : =hash(canonical_structured(key))= for a structured key (a map/
+  tuple — PR#, path, sha), OR =hash("slug:" <> slug)= for an explicit slug.
+  *Rejects a bare natural-language string* with a clear error (DC-4 guard):
+  callers must pass ={:structured, term}= or ={:slug, binary}=, never raw prose.
+- =write_cap?(region_id, held)= : capability check at =post= time (D12).
+
+** =SpellAgent.Mesh.Store= — the =:mesh= kind over =Hist.Store= (FEAT-829)
+
+#+begin_src
+lib/spell_agent/mesh/store.ex
+#+end_src
+
+- thin functions over the EXISTING =Hist.Store= behaviour (=store.ex=): NO new
+  engine. Adds the =:mesh= kind to the key space:
+  - =put(impl, %Record{})= → =Store.put(impl, {:mesh, region, rid}, record)= +
+    index ={:hash, rid}= (reuse the recorder's =index_hash= idea, =recorder.ex:199=).
+  - =region(impl, region_id)= → =Store.list(impl, :mesh, region_id)= (scoped list,
+    exactly how =recorder.ex::max_seq= enumerates a session's nodes).
+  - =by_kind/by_match/claims_for= : pure filters over =region/2= output.
+- the =:mesh= kind is added to =store.ex= =@type kind= + both impls'
+  =list/2= (Memory =list.ex=, Khepri path map =[:hist, :mesh, region, rid]=).
+
+** =SpellAgent.Mesh.Clock= — per-session Lamport clock (FEAT-829)
+
+#+begin_src
+lib/spell_agent/mesh/clock.ex
+#+end_src
+
+- a tiny process-dictionary (or session-keyed ETS) Lamport counter:
+  =tick_on_read(max_seen)= = =max(local, max_seen)+1=; =tick_on_write= = =local+1=
+  (=02= §4.2, DC-5). Bound into every =post= (write) and =query= (read) so the
+  =query=-then-=claim= pattern yields a valid causal order.
+
+** =SpellAgent.Mesh.Namespace= — the six verbs (FEAT-830)
+
+#+begin_src
+lib/spell_agent/mesh/namespace.ex
+#+end_src
+
+- =tools(impl, session_id, region)= → a =%{"black/post" => fn args -> … end, …}=
+  map, *mirroring =hist/namespace.ex::tools/2= exactly* (closures over
+  =impl,session_id,region=). The six:
+  - =black/post= → cap-check (D12) → =Mesh.Record.new= → =Mesh.Store.put= (monotone).
+    Rejects =post= to a =:sealed= region (DC-9).
+  - =black/query= → =Mesh.Store.by_match=; ambient (no cap). Ticks the read clock.
+  - =black/claim= → append a =:claim= via =post=, then =fold= =argmin(lamport,sid)=
+    over =claims_for(work)= (filtering expired leases); return =:won?=. Optional
+    =:settle_ms= sleep+re-fold (DC-2).
+  - =black/fold= → pure reduce over =region/2= (=count=/=group-by=/=rank=/predicate).
+  - =black/watch= → =post= an =:intention=; the per-node =Mesh.Watcher= picks it up.
+  - =black/decide= → delegate to =Mesh.Consensus.decide/1= (FEAT-832).
+- *wired into the loop* by extending =session.ex::run/2='s tools merge:
+  =Map.merge(…, Mesh.verbs(session_id, region: region, store: hist_store))= — the
+  same seam =Hist.verbs= already uses.
+
+** =SpellAgent.Tools= addition — =tool/spawn-session= (FEAT-831)
+
+#+begin_src
+lib/spell_agent/tools.ex  (add to meta_tools/0 + a spawn_session/1 host fn)
+#+end_src
+
+- a NATIVE tool (=meta_tools/0= map, beside =define-tool=). =spawn_session(args)=:
+  1. =ParallelBudget.try_acquire(budget)= (the app's mesh budget) — on
+     =:no_budget= raise =:parallel_capacity_exceeded= (D11).
+  2. resolve region: =args["region"]= present → join (rendezvous); =:auto= →
+     =Mesh.Region.fork_a(goal, session_id)=.
+  3. attenuate tools: build the child's tools map = the named =:tools= subset of
+     =build_tools_map()= + =Mesh.verbs(child_sid, region: region)= (D12).
+  4. =:await true= → =Session.run(prompt, …)= synchronously, =ParallelBudget.release=
+     in an =after=; =:await false= → spawn under a Task, return ={session, region}=
+     immediately, release on the task's exit.
+- the child is a full =Session.run/2= (=session.ex=), so it gets its own Hist
+  history + appears in =SessionRegistry.live/0= for free.
+
+** =SpellAgent.Mesh.Consensus= — =black/decide= over the node cluster (FEAT-832)
+
+#+begin_src
+lib/spell_agent/mesh/consensus.ex
+#+end_src
+
+- =decide(%{region, question, quorum, fold, watermark})=: a thin front over Ra
+  (the cluster Khepri already runs, =khepri_cluster.erl=). Algorithm (DC-7/DC-8):
+  1. seal: fix =watermark = max lamport in region= as the first committed step.
+  2. the verdict id = =hash(region <> question <> watermark)= → idempotent: any
+     leader (after re-election) commits the SAME id (DC-8).
+  3. Ra leader-election among NODES; the leader evaluates =:fold= once (sandboxed
+     =Lisp.run=, findings ≤ watermark), =Mesh.Store.put= the =:verdict=, commit.
+  4. quorum = NODE quorum; non-quorum → ={:pending}=, retried by the caller.
+- *single-node degeneration:* a 1-member Ra cluster commits locally with no real
+  election (PT-10 graceful n=1). Distribution lights up when nodes join, zero
+  session-code change (D13).
+- requires =Store.Khepri= enabled; with =Store.Memory= (no Ra), =decide= runs the
+  local fold + writes the verdict directly (single-node mode).
+
+** =SpellAgent.Mesh.Watcher= — per-node trigger engine (FEAT-833)
+
+#+begin_src
+lib/spell_agent/mesh/watcher.ex
+#+end_src
+
+- a supervised GenServer, *one per BEAM node* (DC-6) — local infra, like
+  =Tui.Store= attaches telemetry (=lib/spell_agent/tui/store.ex=). It tails the
+  node's mesh write stream:
+  - *Memory mode:* =Mesh.Store.put= broadcasts via =Phoenix.PubSub=-style
+    =Registry= / a simple =:telemetry= event the watcher subscribes to (mirror the
+    =Pane.events/0= dirty-filter pattern, =pane.ex=).
+  - *Khepri mode:* a Khepri /trigger/ on the =[:hist, :mesh, *]= path (Khepri
+    supports stored-procedure triggers) fires the watcher.
+- on a matching =post= vs a stored =:intention='s =:when=: =black/claim= the firing
+  (work = =hash(intention_id <> event_id)=) → only the winner runs =:do=
+  (=Lisp.run=, =data/event= bound) → exactly-once across nodes (DC-6). Decrement
+  =:fuel=; drop on fuel=0 or ttl-expiry. The =:do= action acquires a
+  =ParallelBudget= slot if it spawns (D11).
+
+** Supervision wiring (FEAT-833)
+
+#+begin_src
+lib/spell_agent/application.ex::start/2   (children list)
+#+end_src
+
+- add (same posture as =SessionRegistry=/=Tui.Store=, all best-effort):
+  =Mesh.Watcher= (per-node), and (when Khepri enabled) ensure the Ra cluster is up
+  for =Mesh.Consensus=. The =ParallelBudget= for mesh spawns is created once
+  (=ParallelBudget.new(cfg)=) and held in app state / a tiny Agent.
+
+** Screens (FEAT-834 + FEAT-835)
+
+- =FEAT-834= panes + =mix spell.mesh=: =lib/spell_agent/tui/panes/{regions,board,spawn}.ex=
+  (each =use SpellAgent.Tui.Pane=, =project/2= folds =Mesh.Store.region/2=,
+  =view/1= renders), register in =default_layout.ex::pane_module/1=, add a
+  =view/pane= builder in =tui/view.ex=, and =lib/mix/tasks/spell.mesh.ex= (clone
+  =spell.tui.ex=).
+- =FEAT-835= gallery + watch + snapshots: =lib/spell_agent/mesh/scenes.ex= (clone
+  =tui/scenes.ex= shape), =lib/mix/tasks/spell.mesh.gallery.ex=,
+  =lib/mix/tasks/spell.mesh.watch.ex= (clone =spell.sessions.ex= plain+TUI modes),
+  snapshot baselines under =test/snapshots/=.
+
+* D. The FEAT dependency DAG (build order)
+
+#+begin_src
+FEAT-828 Record+Region ──┬─→ FEAT-829 Store+Clock ──→ FEAT-830 Namespace (4 monotone verbs)
+                          │                                    │
+                          │                                    ├─→ FEAT-831 spawn-session ─┐
+                          │                                    │                            │
+                          │                                    ├─→ FEAT-832 Consensus(decide)┤
+                          │                                    │                            │
+                          │                                    └─→ FEAT-833 Watcher(watch) ─┤
+                          │                                                                 │
+                          └────────────────────────────→ FEAT-834 panes + mix spell.mesh ──┤
+                                                          FEAT-835 gallery/watch/snapshots ─┘
+#+end_src
+
+- *Wave 1:* FEAT-828 (pure, no deps).
+- *Wave 2:* FEAT-829 (needs the record + store kind).
+- *Wave 3:* FEAT-830 (the four monotone verbs — post/query/claim/fold — fully
+  usable single-node WITHOUT consensus or watcher; this is the first end-to-end
+  Fork-A slice).
+- *Wave 4 (parallel):* FEAT-831 (spawn), FEAT-832 (decide), FEAT-833 (watch) —
+  independent; each completes a capability. FEAT-834/835 (screens) can start once
+  FEAT-829's read API exists (they only READ).
+- *Validation (folded into FEAT-832/833):* a real two-node Khepri test (PT-3
+  partition, PT-4 dead-author across nodes) gates the distribution claim (=02= §7).
+
+* E. What is explicitly DEFERRED (FUP candidates, not in these FEATs)
+
+- adaptive spawn-rate throttle (PT-1) + adaptive lease = f(turn latency) (PT-5).
+- incremental region fold via lamport-watermark + windowed regions (PT-8).
+- =pane/cohort= cross-region executive dashboard (=07= §4).
+- goal-embedding fuzzy rendezvous (=06= DC-4 extension).
+- BFT posture for untrusted cross-org meshes (PT-7) — dormant.
+- the deferred EF verbs: =black/shift= (set-shifting), salience-weighted budget,
+  confidence-weighted collective decision, the SAS mesh-supervisor (=03=).
+
+* F. Cross-cutting invariants every FEAT must preserve
+
+1. *No live handle/pid on the blackboard* — every record is frozen pure data
+   (=node.ex= realization invariant). Enforce in =Mesh.Record.new=.
+2. *Best-effort posture* — a sick mesh component NEVER fails a mission (the
+   =SessionRegistry=/=Hist= posture: =rescue/catch → :ok=). Mesh is an enhancement.
+3. *Monotone writes only via post; the one retract (re-goal) via owner/decide* (D3).
+4. *Every spawn + watch-fire through ParallelBudget* (D11) — no exceptions.
+5. *Reads ambient, region writes cap-gated* (D12) — enforce at =black/post=.
+6. *Store-behaviour purity* — mesh logic written against =Hist.Store=, never a
+   concrete engine, so Memory/Khepri swap is free (D13, the =store.ex= contract).

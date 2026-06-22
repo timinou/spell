@@ -1,0 +1,286 @@
+defmodule SpellAgent.Mesh.Namespace do
+  @moduledoc """
+  The `black/*` PTC-Lisp verb surface (PROJ-006, FEAT-010) — the cross-session
+  generalization of the self-scoped `hist/*` verbs (`SpellAgent.Hist.Namespace`).
+
+  `tools/3` returns a `%{"black/post" => fn args -> ... end, ...}` map whose
+  closures capture the store `impl`, the calling `session_id`, and the `region`
+  this session is coordinating in — exactly the shape `Hist.Namespace.tools/2`
+  uses. The map is merged into the agent's tools in `SpellAgent.Session.run/2`.
+
+  ## The four monotone verbs (FEAT-010 scope)
+
+    * `black/post`  — append a monotone record (goal | finding | intention).
+    * `black/query` — content-addressed discovery; an ambient read.
+    * `black/claim` — optimistic claim; append + resolve-by-fold (seq, author).
+    * `black/fold`  — a pure read-time reduce (count | group-by | rank | predicate).
+
+  `black/watch` and `black/decide` are STUBBED here (they need the watcher and the
+  consensus node-plane, FEAT-013/012); they return an explanatory error so a
+  program that calls them fails clearly rather than silently.
+
+  ## Corrections baked in (oracle MeshFinalCheck)
+
+    * ordering is the STORE's per-region `seq`, never a per-session Lamport clock
+      (P2.1/P2.3) — claim arbitration folds `argmin(seq, author)`.
+    * `:won?` is PROVISIONAL — authoritative single-node, best-effort multi-node;
+      callers route irreversible work through `decide`, expensive work uses
+      `:settle_ms` (P2.3).
+    * Fork-A re-goal is accepted only from the recorded owner while that owner is
+      live (`SessionRegistry.live?/1`) — else it must go through `decide` (P1.3).
+
+  Best-effort posture: a store error inside a verb is returned as `%{"err" => _}`
+  (like `Hist.Namespace.normalize_err`), never crashing the agent turn.
+  """
+
+  alias SpellAgent.Mesh.{Record, Region, Store}
+  alias SpellAgent.SessionRegistry
+
+  @doc """
+  The `black/*` tool map for a `session_id` coordinating in `region`, over store
+  `impl`. `held` is the session's write-capability set (the region ids it may
+  write); defaults to `[region]` (it holds the region it was handed).
+  """
+  @spec tools(module(), String.t(), String.t(), keyword()) ::
+          %{optional(String.t()) => (map() -> term())}
+  def tools(impl, session_id, region, opts \\ []) do
+    held = opts[:held] || [region]
+
+    %{
+      "black/post" => fn args -> guard(fn -> post(impl, session_id, region, held, args) end) end,
+      "black/query" => fn args -> guard(fn -> query(impl, region, args) end) end,
+      "black/claim" => fn args -> guard(fn -> claim(impl, session_id, region, held, args) end) end,
+      "black/fold" => fn args -> guard(fn -> fold(impl, region, args) end) end,
+      "black/watch" => fn _args -> not_yet("black/watch", "FEAT-013 (Mesh.Watcher)") end,
+      "black/decide" => fn _args -> not_yet("black/decide", "FEAT-012 (Mesh.Consensus)") end
+    }
+  end
+
+  # --- black/post ---
+
+  defp post(impl, session_id, region, held, args) do
+    kind = args |> get(["kind"]) |> to_kind()
+    payload = get(args, ["payload"]) || %{}
+
+    cond do
+      kind not in [:goal, :finding, :intention] ->
+        %{
+          "err" =>
+            "black/post kind must be :goal, :finding, or :intention (got #{inspect(kind)}); " <>
+              "claims go through black/claim, verdicts through black/decide"
+        }
+
+      not Region.write_cap?(region, held) ->
+        %{"err" => "no write capability for region #{inspect(region)}"}
+
+      kind == :goal and not goal_ok?(impl, session_id, region) ->
+        %{
+          "err" =>
+            "re-goaling rejected: only the live region owner may supersede the goal; " <>
+              "promote to Fork-B and use black/decide to re-goal a parentless region"
+        }
+
+      true ->
+        rec = Record.new(kind, region, stringify(payload), author: session_id)
+
+        case Store.put(impl, rec) do
+          {:ok, stored} -> %{"id" => stored.seq, "region" => region, "kind" => to_string(kind)}
+          {:error, :sealed} -> %{"err" => "region #{inspect(region)} is sealed; no further posts"}
+        end
+    end
+  end
+
+  # First goal is a free create; a subsequent goal (re-goal) is owner+liveness gated.
+  defp goal_ok?(impl, session_id, region) do
+    case Store.by_kind(impl, region, :goal) do
+      [] ->
+        true
+
+      goals ->
+        owner = goals |> Enum.min_by(& &1.seq) |> Map.get(:author)
+        owner == session_id and owner != nil and SessionRegistry.live?(owner)
+    end
+  end
+
+  # --- black/query ---
+
+  defp query(impl, region, args) do
+    match = get(args, ["match"]) || %{}
+    target = get(args, ["region"]) || region
+
+    impl
+    |> Store.by_match(target, normalize_match(match))
+    |> Enum.reverse()
+    |> Enum.map(&render(&1))
+  end
+
+  # --- black/claim ---
+
+  defp claim(impl, session_id, region, held, args) do
+    work = get(args, ["work"])
+    lease_ms = get(args, ["lease_ms"])
+    settle_ms = get(args, ["settle_ms"])
+
+    cond do
+      is_nil(work) ->
+        %{"err" => "black/claim requires :work"}
+
+      not Region.write_cap?(region, held) ->
+        %{"err" => "no write capability for region #{inspect(region)}"}
+
+      true ->
+        payload = %{"work" => work, "claimed_at" => System.system_time(:millisecond)}
+        payload = if lease_ms, do: Map.put(payload, "lease_ms", lease_ms), else: payload
+
+        case Store.put(impl, Record.new(:claim, region, payload, author: session_id)) do
+          {:ok, mine} ->
+            if is_integer(settle_ms) and settle_ms > 0, do: Process.sleep(settle_ms)
+            resolve_claim(impl, region, work, session_id, mine.seq)
+
+          {:error, :sealed} ->
+            %{"err" => "region #{inspect(region)} is sealed"}
+        end
+    end
+  end
+
+  # Winner = argmin(seq, author) over non-expired claims for the work id.
+  defp resolve_claim(impl, region, work, session_id, my_seq) do
+    now = System.system_time(:millisecond)
+
+    winner =
+      impl
+      |> Store.claims_for(region, work)
+      |> Enum.reject(&expired?(&1, now))
+      |> Enum.min_by(fn c -> {c.seq, c.author || ""} end, fn -> nil end)
+
+    owner = if winner, do: winner.author, else: session_id
+
+    %{
+      "claim" => my_seq,
+      "won?" => winner != nil and winner.author == session_id,
+      "owner" => owner,
+      "provisional" => true
+    }
+  end
+
+  defp expired?(%Record{payload: p, t: t}, now) do
+    case fetch(p, "lease_ms") do
+      ms when is_integer(ms) and ms > 0 -> now > t + ms
+      _ -> false
+    end
+  end
+
+  # --- black/fold ---
+
+  defp fold(impl, region, args) do
+    over = args |> get(["over"]) |> to_kind()
+    reduce = get(args, ["reduce"])
+    recs = if over, do: Store.by_kind(impl, region, over), else: Store.region(impl, region)
+
+    case to_reduce(reduce) do
+      :count ->
+        length(recs)
+
+      :"group-by" ->
+        field = get(args, ["field"])
+
+        recs
+        |> Enum.group_by(fn r -> fetch(r.payload, to_string(field)) end)
+        |> Enum.map(fn {k, v} -> {k, Enum.map(v, &render/1)} end)
+        |> Map.new()
+
+      :rank ->
+        field = get(args, ["field"])
+
+        recs
+        |> Enum.sort_by(fn r -> fetch(r.payload, to_string(field)) end)
+        |> Enum.map(&render/1)
+
+      :"goal-satisfied?" ->
+        goal_satisfied?(impl, region)
+
+      _ ->
+        %{"err" => "black/fold :reduce must be :count, :group-by, :rank, or :goal-satisfied?"}
+    end
+  end
+
+  # A goal is "satisfied" when at least one finding exists per the goal's declared
+  # success criterion's count, if any; else simply when any finding exists. Kept
+  # deliberately simple in v1 (the fold is pure; richer predicates are agent-authored).
+  defp goal_satisfied?(impl, region) do
+    findings = Store.by_kind(impl, region, :finding)
+    findings != []
+  end
+
+  # --- rendering + helpers ---
+
+  defp render(%Record{} = r) do
+    %{
+      "seq" => r.seq,
+      "kind" => to_string(r.kind),
+      "author" => r.author,
+      "payload" => r.payload,
+      "t" => r.t
+    }
+  end
+
+  defp normalize_match(match) when is_map(match) do
+    match
+    |> stringify()
+    |> then(fn m ->
+      %{}
+      |> put_if(:kind, m["kind"])
+      |> put_if(:where, m["where"])
+    end)
+  end
+
+  defp put_if(map, _k, nil), do: map
+  defp put_if(map, k, v), do: Map.put(map, k, v)
+
+  defp not_yet(verb, owner) do
+    %{
+      "err" =>
+        "#{verb} is not wired yet (lands in #{owner}); the four monotone verbs " <>
+          "(post/query/claim/fold) are available now"
+    }
+  end
+
+  # Run a verb body, converting any raise/exit into a best-effort {"err" ...} so a
+  # sick store never crashes the agent turn (mirrors Hist.Namespace posture).
+  defp guard(fun) do
+    fun.()
+  rescue
+    e -> %{"err" => Exception.message(e)}
+  catch
+    :exit, reason -> %{"err" => "mesh verb exit: #{inspect(reason)}"}
+  end
+
+  # arg access tolerant of string OR atom keys (LispKeyword), like Tools.flex_get.
+  defp get(args, [key]) when is_map(args), do: fetch(args, key)
+
+  defp fetch(map, key) when is_map(map) and is_binary(key) do
+    case Map.fetch(map, key) do
+      {:ok, v} -> v
+      :error -> Map.get(map, safe_atom(key))
+    end
+  end
+
+  defp fetch(_map, _key), do: nil
+
+  defp to_kind(nil), do: nil
+  defp to_kind(k) when is_atom(k), do: k
+  defp to_kind(k) when is_binary(k), do: safe_atom(k)
+
+  defp to_reduce(nil), do: nil
+  defp to_reduce(r) when is_atom(r), do: r
+  defp to_reduce(r) when is_binary(r), do: safe_atom(r)
+
+  defp stringify(map) when is_map(map), do: Map.new(map, fn {k, v} -> {to_string(k), v} end)
+  defp stringify(other), do: other
+
+  defp safe_atom(k) when is_binary(k) do
+    String.to_existing_atom(k)
+  rescue
+    ArgumentError -> nil
+  end
+end

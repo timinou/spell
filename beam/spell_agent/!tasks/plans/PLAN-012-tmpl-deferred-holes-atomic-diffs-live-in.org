@@ -1,0 +1,581 @@
+#+TITLE: tmpl:: deferred holes + atomic diffs — live interfaces as data
+#+STATE: ITEM
+#+SESSION_ID: 15131f74dcf291df
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-22T12-22-47-411Z_15131f74dcf291df.jsonl]]
+#+CUSTOM_ID: PLAN-012-tmpl-deferred-holes-atomic-diffs-live-in
+#+DEPENDS: PLAN-011-shbrush-homoiconic-shell-scripting-via-p
+
+* Initial Message
+
+I would like all interfaces to be definable from ratatui data + whatever we built recently + holes to fill in with dynamic data.
+
+is the last part implemented, and what is the canonical lisp way (with examples and how they would be persisted and saved). I want full extensibility at ZERO cost to the Phoenix runtime, sending a new value should be taken dynamically like the others, through dynamic hole re-interpretation kind of thing.
+
+read docs/quoting-spec.md, it may be limited. How would you implement this? Feel free to propose your changes to ptc lisp, as deeply as they may go, to achieve it. let's design the syntax first though, and weight tradeoffs, to reach a nice design
+
+* Intention
+
+Make a TUI interface fully definable from ratatui-widget data + the PLAN-009 freeform
+layer + HOLES filled with dynamic data at render time — at ZERO marginal cost to the
+Phoenix/BEAM runtime. "Sending a new value" must be taken dynamically like every other
+value, through generic hole re-interpretation: add one `data/*` key, reference it from
+any number of holes, and NO new render-path Elixir is written or recompiled.
+
+The freeform floor (PLAN-009) shipped layout-as-data, but interfaces are STATIC: a
+`view/` builder freezes its args, and every dynamic value reaches the screen through
+hardcoded Elixir (`app.ex` `status_widget/1`, `composer_widget/1`, compiled `Panes.*`).
+This PLAN adds the missing "holes that update as it goes" — the §0 use case of
+docs/quoting-spec.md, promoted from research-horizon to buildable.
+
+Companion specs (settled, read first):
+- docs/quoting-spec.md §8b (the tmpl:: design, both forks chosen), §8c (atomic diffs),
+  §10 (build sequence: NEXT row = this PLAN).
+- docs/sh-reader-spec.md  — the sibling `~`/`~@` reader machinery this REUSES.
+
+Two forks are SETTLED (do not re-litigate):
+- F1 timing-by-FORM: a dedicated `tmpl::` reader form carries DEFERRED holes (skeleton
+  stays marker-clean); the rare build-time hole uses `~(now expr)`. Backtick quasiquote
+  (eager, snapshot) is the sibling form built alongside.
+- F2 persistence = QUOTED-AST-as-data: a frozen hole stores `{"__hole__" <form-as-data>}`,
+  homoiconic and structurally diffable, the SAME shape any :ptc tool body has (one recall
+  layer). Requires `quote` lifted from symbols-only to collections + an AST<->data codec.
+
+* The layering — one reader primitive, three lowerings
+
+`~`/`~@` is ONE reader primitive ("escape a literal region, capture the following form").
+VERIFIED STATE (read fast_parser.ex, 2026-06-22): PLAN-011 W2 (sh::) HAS LANDED — `(sh::`
+is a head-position branch (L61) and `~`/`~@` are handled INLINE inside `parse_sh_tokens`
+(L210-219) as ~6 sh-specific lines that recurse `parse_expr` and keep/splice the
+EVALUATED form. So the reader CHAR and the `(form::` hook are proven; the freeze
+machinery is not. The other lowerings do NOT share code with sh:: yet.
+
+The three lowerings differ ONLY at desugar — same char detection, totally different fate:
+
+```
+form           ~ captures →  desugars to              when ~ runs       built by
+─────────────  ────────────  ───────────────────────  ────────────────  ────────
+sh:: …         the form      EVALUATED argv element    once (build)      PLAN-011 (inline)
+`{…} backtick  the form      EVALUATED via constructor once (build)      this PLAN (W1)
+tmpl:: {…}     the form      FROZEN {"__hole__" 'form} EVERY FRAME (host) this PLAN (W2+)
+```
+
+The split that matters: sh:: and backtick EVALUATE the unquoted form (eager); tmpl::
+FREEZES it as quoted data and the host re-resolves it per frame (deferred). They share
+reader-char detection and diverge COMPLETELY at lowering. ∴ the right move (③, see
+:Design decisions:) is to promote `~`/`~@` to a GENERAL reader char emitting
+`{:unquote, form}`/`{:unquote_splice, form}` AST, then let each form pick its desugar.
+
+** Clojure mapping (where this sits relative to the language it descends from)
+
+Clojure expresses all of this with ONE mechanism (syntax-quote) PLUS `eval`:
+
+```
+this PLAN                          Clojure equivalent
+─────────────────────────────────  ─────────────────────────────────────
+` backtick (eager quasiquote, W1)  ` syntax-quote                  (1:1)
+~ unquote (evaluate a hole)        ~ unquote                       (1:1, same char/meaning)
+~@ splice                          ~@ unquote-splicing             (1:1)
+tmpl:: (deferred holes as data)    NO direct equivalent — the novel rung
+```
+
+The gap IS the point of tmpl::. Clojure's syntax-quote is EAGER: `` `(a ~x) `` evaluates
+`~x` once, now; there is no built-in "freeze the holes as data and re-resolve later." To
+get deferral in Clojure you hand-roll it: store a quoted form `'(str model …)` and call
+`(eval …)` per frame — EXACTLY the general `eval` this spec refuses (quoting-spec §6).
+tmpl:: replaces that `eval` with the capability-bounded `resolve_holes` host (W3).
+
+Two deliberate SIMPLIFICATIONS vs Clojure's `~` (do not implement these):
+- NO symbol auto-qualification (Clojure `` `x `` → `user/x`). Ours is a plain data
+  template; a symbol stays the symbol it was written as.
+- NO gensym (`foo#`). Templates build DATA, not hygienic macro code, so there is no
+  capture to avoid.
+These omissions are correct: tmpl:: is data-templating, not a macro system.
+
+The deferred timing is the genuinely new design. Everything else maps 1:1 to Clojure.
+
+* Design decisions (settled this review, 2026-06-22 — verified against code)
+
+Four decisions taken after reading the landed sh:: implementation. They are SETTLED;
+later waves implement them, do not re-open.
+
+** ① sh:: has landed — but `~` is INLINE, not shared (R1 resolved, extraction still owed)
+VERIFIED: `parse_sh_tokens` handles `~`/`~@` as sh-specific inline clauses (fast_parser.ex
+L210-219). The reader CHAR is proven free and working; there is NO reusable sub-reader.
+∴ W1/W2 do NOT "reuse a shared sub-reader" (it does not exist) — they must FIRST extract
+one (see ③). R1 downgraded from "dependency/blocker" to "precondition proven, refactor owed."
+
+** ② sh:: `~` EVALUATES; tmpl:: `~` must FREEZE — the load-bearing divergence
+In sh::, `~form` recurses `parse_expr` and the form is EVALUATED at call time (a live argv
+element). tmpl:: needs the OPPOSITE: `~form` freezes as `{"__hole__" 'form}`, never
+evaluated at build. They share char detection and diverge TOTALLY at lowering. An
+implementer who copies sh::'s "parse_expr-and-keep" gets eager holes — the bug this note
+exists to prevent. W2 states this as an invariant.
+
+** ③ Promote `~`/`~@` to GENERAL reader chars (unify the reader work)
+Instead of three bespoke `~` handlers (sh, backtick, tmpl), make `~`/`~@` general reader
+chars in `do_parse_expr/2` emitting `{:unquote, form}` / `{:unquote_splice, form}` AST
+(Clojure's model). Then:
+  - sh:: is RE-EXPRESSED on them (its inline clauses become: read a form, get an unquote
+    node, lower it sh-style). Behavior-preserving refactor, gated by the existing sh:: tests.
+  - backtick `` ` `` (W1) = quasiquote: desugar unquote nodes -> EAGER constructor calls.
+  - `tmpl::` (W2) = quasiquote-to-data: desugar unquote nodes -> `{"__hole__" 'form}` via codec.
+Net: ONE `~`-char addition + per-form desugar strategy, REPLACING the bespoke tokenizer
+tmpl:: would otherwise need (`parse_expr` handles nested data for free). Strictly less
+code, strictly more uniform. NB: a bare `{:unquote,_}` OUTSIDE any quote/template is a
+reader-or-analyze error ("unquote outside quasiquote") — mirror Clojure.
+
+** ④ W0 codec may already exist — reuse `Step.form` before writing fresh
+Commits `effe383b` (Step.form — executed CoreAST as data) + MOVE-A/B/C produce
+CoreAST-as-data already. W0 MUST first check whether `Step.form`'s AST->data path (and any
+inverse) is reusable as the QuoteData codec before authoring a new module. Verify, don't
+assume; if reusable, W0 shrinks to "lift analyze_quote + adopt the existing codec."
+
+
+* The data-contract invariants (what every layer agrees on)
+
+1. A frozen hole is ALWAYS a string-keyed map `{"__hole__" form}` (or
+   `{"__splice__" form}` for variable-length), where `form` is quoted-AST-as-data:
+   plain maps/vectors/scalars, JSON-serializable, no tuples, no closures.
+2. The persisted layout tree is ALWAYS inert data — it rides the existing
+   LayoutRegistry/Khepri path with ZERO storage-schema change.
+3. `Surface.resolve_holes/2` is the ONLY place a hole's form is evaluated, and it is
+   CAPABILITY-BOUNDED: pure builtins + `data/*` + `view/`/`harness` read fns only. No
+   `tool/`, no `layout/set`, no effects (render-purity; philosophy Layer -4).
+4. Failure is DATA, never a crash: a hole that raises or yields a wrong-typed value
+   falls to its cached last-good value, then a "·" placeholder; the rest of the frame
+   always renders (never-brick discipline; mirrors `safe_resolve_node`/`encodable_placement?`).
+5. The App fills a GENERIC `data/*` bag ONCE per frame; adding a value = adding one bag
+   key. No hole references a value by a bespoke Elixir path.
+
+* The three-language seam (where each concern lives)
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ PTC reader (fast_parser.ex)                                           │
+│   • PROMOTE ~ / ~@ to GENERAL reader chars -> {:unquote,f}/{:unquote_splice,f}│
+│     (extracted from the inline sh:: handlers; sh:: re-expressed on them)│
+│   • backtick + tmpl:: = head/prefix forms, ONE added branch each       │
+│   • backtick desugar: unquote -> EAGER constructor call (W1)           │
+│   • tmpl:: desugar:   unquote -> {"__hole__" 'form} via codec (W2)      │
+└───────────────┬────────────────────────────────────────────────────────┘
+                │ a layout node = inert data with {"__hole__" form} leaves
+                ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ PTC analyzer/eval (analyze.ex, eval.ex)                               │
+│   • quote → collections: lift "symbols-only" so a form freezes as DATA │
+│   • AST<->data codec: {:list,…}/{:vector,…}/{:map,…} <-> plain maps     │
+│   • the codec is the substrate F2 persistence rides on                 │
+└───────────────┬────────────────────────────────────────────────────────┘
+                │ frozen form = quoted-AST-as-data
+                ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ SpellAgent.Tui render host (surface.ex, app.ex, a new HoleResolver)   │
+│   • Surface.resolve_holes(tree, data_env): scoped, pure-only eval      │
+│   • App assembles the generic data/* bag ONCE; retires status_widget/  │
+│     composer_widget into holes in the default layout .ptc              │
+│   • per-hole dirty-tracking: hole table (path→form), dep set per hole, │
+│     re-eval only dirty holes (the atomic-diff substrate)               │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+Modularity test (proven by tests): the reader is pure sugar (tmpl:: parses to the same
+node data a hand-written `{"__hole__" '(…)}` would); the resolver treats every hole
+identically (no value is special-cased); a new `data/*` key needs no resolver change.
+
+* Architecture deliverables (W0–W7)
+
+** W0 — quote → collections + the AST<->data codec (PTC substrate)
+
+*** Goal
+Lift `quote` from symbols-only so a non-trivial form can be frozen as DATA, and provide
+the codec that turns an analyzed form into plain serializable data and back. This is the
+F2 persistence substrate; nothing downstream can store a hole without it.
+
+*** Design
+- STEP 0 (decision ④ — do this FIRST): spike whether `Step.form` (commit effe383b,
+  "executed CoreAST as data") + MOVE-A/B/C already give an AST->data (and inverse) path
+  reusable as this codec. Read hist/* and the Step modules. If reusable, ADOPT it and this
+  wave shrinks to "lift analyze_quote + thin wrapper"; if not, write QuoteData fresh below.
+  Record the finding in the wave's notes either way.
+- analyze.ex: `analyze_quote/1` currently accepts only symbol/ns_symbol/quoted_symbol
+  (VERIFIED line 872-877, raises "quote only supports symbols in this phase"). Extend to
+  collections + literals: a quoted list/vector/map/scalar analyzes to a `{:quoted_data, t}`
+  core node carrying the AST verbatim (NO evaluation of its contents). Guard against the
+  existing discovery-ref auto-quote path (analyze.ex ~882) and keep `(quote sym)` REPL
+  forms working — both symbol and collection quote must coexist + stay distinguishable.
+- A codec module (PtcRunner.Lisp.QuoteData or the reused Step.form path): `to_data/1` maps an AST term
+  to plain data — `{:string,s}`→s, `{:keyword,k}`→a tagged keyword repr, `{:vector,xs}`→
+  list, `{:map,prs}`→string-keyed map, `{:list,xs}`→a tagged call form, `{:symbol,n}`→a
+  tagged symbol repr; `from_data/1` is the inverse. The repr MUST be JSON-serializable
+  and tuple-free (reuse the form_tree contract Hist.Lens already enforces — see lens.ex).
+- The codec is the single source of truth for "a frozen form as data"; both the reader
+  desugar (W3) and the resolver (W4) go through it.
+
+*** Edge cases
+- nested quote, quoted keyword/number/string/bool/nil, empty collections.
+- a quoted symbol must remain distinguishable from a quoted string after round-trip.
+- round-trip identity: `from_data(to_data(ast)) == ast` for all quotable forms.
+
+*** Acceptance (observable)
+- `(quote (a b c))` no longer raises; analyzes to quoted-data.
+- Unit: `(quote {:a 1 :b [2 3]})` → a string-keyed data map; round-trips through the codec.
+- PROPERTY: ∀ generated quotable AST, `from_data(to_data(ast)) ≡ ast` (extend
+  test/support/lisp_generators.ex).
+- PROPERTY: `to_data(ast)` is tuple-free + JSON-serializable (reuse the lens tuple-free assertion).
+- Gate: `mix test test/ptc_runner/lisp/quote_data_test.exs` (+ property file).
+
+*** Files
+- beam/ptc_runner/lib/ptc_runner/lisp/analyze.ex (extend analyze_quote)
+- beam/ptc_runner/lib/ptc_runner/lisp/quote_data.ex (NEW codec)
+- beam/ptc_runner/lib/ptc_runner/lisp/core_ast.ex (add {:quoted_data, _} if needed)
+- beam/ptc_runner/lib/ptc_runner/lisp/eval.ex (eval {:quoted_data,_} → the data)
+- beam/ptc_runner/test/ptc_runner/lisp/quote_data_test.exs (+ property test)
+- beam/ptc_runner/test/support/lisp_generators.ex (quotable-AST generator)
+
+** W1 — backtick quasiquote (eager, rungs 2–4)
+
+*** Goal
+`` `{:a ~x :b ~@xs} `` reads as a template with EAGER holes: the skeleton is data, `~x`
+evaluates inline once, `~@xs` splices a list. Pure construction, no eval. This is the
+spec's rung-2 work and the legibility win for §0; it is the SIBLING of tmpl:: and shares
+its sub-reader.
+
+*** Design (verified preconditions — do NOT re-litigate)
+- backtick `` ` `` is an unused reader char (VERIFIED: no branch in do_parse_expr/2).
+- PREREQUISITE (decision ③): this wave first PROMOTES `~`/`~@` to general reader chars in
+  `do_parse_expr/2`, emitting `{:unquote, form}` / `{:unquote_splice, form}` AST, and
+  RE-EXPRESSES the inline sh:: handlers (fast_parser.ex L210-219) on top of them — a
+  behavior-preserving refactor GATED by the existing sh:: reader tests (run them green
+  before/after). There is NO pre-existing shared sub-reader to reuse (decision ①); this
+  wave creates it.
+- A bare `{:unquote,_}` OUTSIDE a quasiquote/template context is an error
+  ("unquote outside quasiquote") — mirror Clojure; assert it.
+- backtick desugar target is ordinary constructors (EAGER): `` `{:a ~x} `` → `(hash-map :a x)`;
+  `` `[~@xs 9] `` → `(into [] (concat xs [9]))`. Analyzer/eval need ZERO new node.
+- NO Clojure symbol auto-qualification, NO gensym (decision in :The layering:) — a symbol
+  in a template stays as written; this is data-templating, not a macro system.
+- P2 (W0 review finding): the `'(form)` READER SUGAR must agree with `(quote (form))`.
+  Today `'(a b)` is rejected (fast_parser `parse_quoted_symbol` accepts only symbols;
+  parser.ex has a "quoted collections not supported" preflight guard) while
+  `(quote (a b))` now freezes via W0. This wave makes `'form` desugar through the SAME
+  single-arg `quote` path (remove the quoted-collection parser guard + lift
+  `parse_quoted_symbol` to read one general form), so `'(str x)` — the spec's hole
+  persistence spelling — works identically to `(quote (str x))`. Gate: a test asserting
+  `'(a b)` ≡ `(quote (a b))` and `'[1 2]` ≡ `(quote [1 2])`.
+
+*** Edge cases
+- quasiquote with no holes ≡ plain quote-data (a constant).
+- nested quasiquote (rare) — document as out-of-scope-for-v1 or handle one level.
+- `~@` at non-seq position → reader error.
+
+*** Acceptance (observable)
+- `` `(a ~x c) `` with x=5 → the list/value `(a 5 c)` data; `` `[~@xs] `` flattens xs.
+- PROPERTY (eager-snapshot): the value equals the constructor form it desugars to.
+- Gate: `mix test test/ptc_runner/lisp/quasiquote_test.exs`.
+
+*** Files
+- beam/ptc_runner/lib/ptc_runner/lisp/fast_parser.ex (promote ~/~@ to general reader chars; re-express sh:: on them; backtick branch)
+- beam/ptc_runner/test/ptc_runner/lisp/sh_reader_test.exs (MUST stay green across the refactor — the regression gate)
+- beam/ptc_runner/test/ptc_runner/lisp/quasiquote_test.exs
+
+** W2 — `tmpl::` reader form (deferred holes, the syntax seam)
+
+*** Goal
+`(tmpl:: {:type "paragraph" :text ~(str …)})` reads to a layout node where each `~form`
+is FROZEN as `{"__hole__" <quoted-form-data>}` and `~@form` as `{"__splice__" <form>}`,
+via the W0 codec. The skeleton is otherwise literal data. `~(now expr)` forces an eager
+hole (evaluates at build via the W1 path).
+
+*** Design (verified preconditions)
+- `tmpl::` is a free token: `:` ∉ symbol_rest_char? ∧ ∉ keyword_char? (same proof as sh::).
+- Head-position reader form, detected after `(` like sh:: (VERIFIED hook: the `(sh::`
+  branch at fast_parser.ex L61 is the exact template to copy).
+- BUILT ON the general `~` reader char from W1 (decision ③): inside the tmpl:: region,
+  `parse_expr` reads NESTED data for free, and `{:unquote, form}` / `{:unquote_splice, form}`
+  nodes mark the holes — tmpl:: needs NO bespoke tokenizer.
+- INVARIANT (decision ② — the load-bearing divergence): tmpl::'s unquote desugar FREEZES,
+  it does NOT evaluate. `{:unquote, form}` -> `{"__hole__" <to_data(form)>}` via the W0
+  codec; `{:unquote_splice, form}` -> `{"__splice__" <to_data(form)>}`. This is the OPPOSITE
+  of sh:: and backtick (which evaluate). Do NOT copy sh::'s parse_expr-and-keep — that
+  yields eager holes, the exact bug to avoid.
+- `~(now expr)` is the eager escape — the one place a tmpl:: hole evaluates at build, via
+  the W1 constructor path (a literal value baked into the skeleton, no `__hole__`).
+- NO new AST node escapes the reader: the result is ordinary data-literal AST (maps with
+  `{"__hole__" …}` leaves), which the analyzer/eval already handle.
+
+*** Edge cases
+- empty `(tmpl::)` → empty/error (documented).
+- `~` at end with no form → reader error.
+- a hole as a map VALUE vs inside a VECTOR vs as a whole subtree — all must freeze.
+- `~@` splice only valid in a seq position (vector / children list).
+
+*** Acceptance (observable, property-first)
+- Unit: `(tmpl:: {:text ~(f x)})` parses to data `{"text" {"__hole__" '(f x)}}` (codec form).
+- Unit: `~@` produces a `{"__splice__" '(…)}` leaf in the enclosing seq.
+- Unit: `~(now (+ 1 2))` freezes nothing — the node carries literal `3`.
+- PROPERTY (skeleton fidelity): a tmpl:: with all holes removed equals the same literal map.
+- FUZZ: random bytes after `tmpl::` → {:ok,_}|{:error,_}, never crash/loop.
+- Gate: `mix test test/ptc_runner/lisp/tmpl_reader_test.exs` (+ property file).
+
+*** Files
+- beam/ptc_runner/lib/ptc_runner/lisp/fast_parser.ex (tmpl:: branch; built on the W1 general ~ + W0 codec, FREEZE lowering)
+- beam/ptc_runner/test/ptc_runner/lisp/tmpl_reader_test.exs (+ property test)
+
+** W3 — `Surface.resolve_holes/2` (the render host, scoped eval)
+
+*** Goal
+A pure, capability-bounded walk that resolves every `{"__hole__" form}` /
+`{"__splice__" form}` in a layout tree against a `data/*` env, BEFORE Materialize. This
+is the render domain's small evaluator (sibling of Tui.Materialize, Reaction.Ptc).
+
+*** Design
+- New module SpellAgent.Tui.HoleResolver (or Surface.resolve_holes/2 delegating to it).
+- Walk the node tree: `{"__hole__" form}` → run `from_data(form)` (W0) through
+  PtcRunner.Lisp.run with an env binding `data/*` + the pure/render-only builtin allowlist;
+  substitute the resulting value. `{"__splice__" form}` → eval to a list, flatten into the
+  parent's child slot. Plain maps/vectors recurse; scalars pass through.
+- CAPABILITY BOUNDARY: construct the eval env with ONLY pure builtins + `data/*` +
+  `view/`/`harness` read fns. Reuse Reaction.Ptc's env-construction pattern (reaction/ptc.ex
+  already binds data/forest read-only). Explicitly EXCLUDE tool/, layout/set, theme/set,
+  any effecting verb.
+- FAILURE LADDER (per hole): wrap each hole eval; on raise/timeout/wrong-shape, use the
+  cached last-good value for that hole's path, else a "·" placeholder. Never raise.
+- Wire into app.ex render/2: call resolve_holes(tree, data_bag) after render_tree, before
+  Surface.layout. Holes inside native pane subtrees are out of scope here (panes keep their
+  module path in v1); holes live in agent-authored widget leaves + status/composer (W5).
+
+*** Edge cases
+- a hole that returns a map shaped like a hole → do NOT re-resolve (single pass; mark resolved).
+- a splice returning non-list → treat as failure (last-good/placeholder).
+- deeply nested holes; a hole inside a spliced item.
+
+*** Acceptance (observable)
+- Unit: `resolve_holes({"text" {"__hole__" '(get data/status :model)}}, %{"status"=>%{"model"=>"opus"}})`
+  → `{"text" "opus"}`.
+- Unit: splice flattens N items into a children/items list.
+- Unit (capability): a hole calling `(tool/…)` or `(layout/set …)` resolves to the failure
+  placeholder, NOT an effect (assert no side effect + placeholder value).
+- Unit (failure ladder): a raising hole → last-good, then "·"; sibling holes still resolve.
+- Gate: `mix test test/spell_agent/tui/hole_resolver_test.exs`.
+
+*** Files
+- beam/spell_agent/lib/spell_agent/tui/hole_resolver.ex (NEW)
+- beam/spell_agent/lib/spell_agent/tui/surface.ex (resolve_holes/2 entry)
+- beam/spell_agent/lib/spell_agent/tui/app.ex (call site in render/2)
+- beam/spell_agent/test/spell_agent/tui/hole_resolver_test.exs
+
+** W4 — the generic `data/*` bag (the zero-cost seam)
+
+*** Goal
+Assemble ONE generic `data/*` env per frame from live state, so a hole references any
+value uniformly and adding a value is one bag key. This is what makes the design
+zero-cost to the runtime.
+
+*** Design
+- In app.ex render/2, build a `data_bag` map from already-projected state:
+  `data/area` (the frame rect), `data/status` (`{running? result last-prompt model cost}`),
+  `data/vms` (pane view-models), `data/forest` (span map), `data/ui` (read-only gaze proj).
+  These projections already exist (app.ex/projection.ex) — this wave COLLECTS them into one
+  bag, it does not invent new projections.
+- FINE-GRAINED keys (the §8c.3 tuning knob): also expose split keys that holes commonly
+  need alone — `data/status-cost`, `data/forest-count`, `data/cursor-span` — so a hole on a
+  narrow value doesn't depend on a coarse map. Seed a few; the set grows by adding a bag key
+  (the ONE place the design grows).
+- Pass the bag to resolve_holes (W3). Document the contract in the module + prelude.
+
+*** Acceptance (observable)
+- Unit: the bag contains the documented keys with the documented shapes for a fixture state.
+- Unit (zero-cost proof): a NEW key added to the bag is referenceable by a hole with NO
+  change to resolve_holes (assert by adding a test-only key and resolving a hole on it).
+- Gate: `mix test test/spell_agent/tui/data_bag_test.exs`.
+
+*** Files
+- beam/spell_agent/lib/spell_agent/tui/app.ex (assemble data_bag)
+- beam/spell_agent/lib/spell_agent/tui/projection.ex (split-key projections if needed)
+- beam/spell_agent/test/spell_agent/tui/data_bag_test.exs
+
+** W5 — dogfood: retire hardcoded status/composer into holes
+
+*** Goal
+Prove completeness by expressing the native status + composer dynamic content AS HOLES in
+the default layout, deleting the bespoke `status_widget/1` / `composer_widget/1` fill path.
+This is the PLAN-009-style dogfood: the default IS the data the agent would write.
+
+*** Design
+- Author the status + composer slots in the default layout (default_layout.ex, or a
+  priv/.ptc if the default migrates there) as `tmpl::` nodes whose `:text`/`:style` are
+  holes over `data/status`.
+- Remove `resolve_filled/native_placeholder?/status_widget/composer_widget` from app.ex
+  once holes cover them; the single render path becomes: render_tree → resolve_holes →
+  Surface.layout → Materialize → Bridge. (Pane nodes keep their module path in v1.)
+- ASK-GATE: deleting status_widget/composer_widget removes intentional code — confirm the
+  hole versions are visually equivalent via the SceneRender snapshot before deleting.
+
+*** Acceptance (observable)
+- The status strip + composer render identically (SceneRender snapshot parity before/after).
+- `status_widget/1` and `composer_widget/1` are GONE; render path has one branch fewer.
+- Gate: `mix test test/spell_agent/tui/scene_render_test.exs` (snapshot) + grep proves the
+  fns are removed.
+
+*** Files
+- beam/spell_agent/lib/spell_agent/tui/default_layout.ex (status/composer as tmpl:: holes)
+- beam/spell_agent/lib/spell_agent/tui/app.ex (delete resolve_filled + the two fill fns)
+- beam/spell_agent/test/spell_agent/tui/scene_render_test.exs (snapshot parity)
+
+** W6 — per-hole dirty-tracking (the atomic-diff substrate)
+
+*** Goal
+Re-eval only the holes whose `data/*` dependencies changed this frame — LiveView's
+statics/dynamics split, derived structurally (no compile pass). The substrate for §8c
+atomic diffs and the seam PROJ-004 reactivity later optimizes.
+
+*** Design
+- Build a HOLE TABLE once per skeleton (cached by structural fingerprint): walk the tree →
+  `path -> form`. For each form, STATIC dependency analysis → the set of `data/<k>` symbols
+  it references (walk the quoted form for ns_symbol "data/…").
+- Per frame: `changed = keys where data[k] !== prev[k]` (shallow struct compare);
+  `dirty = holes where deps ∩ changed ≠ ∅`. Re-eval only dirty holes; reuse cached value
+  for the rest; the resolved tree reuses cached `%Widget{}` placements for hole-free /
+  clean subtrees (skip Materialize + Bridge.encode for those).
+- Splice holes keyed by item identity (e.g. span-id) for keyed list diffing (§8c.1.5);
+  a changed row patches one row, not the list.
+- This is an OPTIMIZATION layer over W3 — correctness must not depend on it (resolve_holes
+  without the cache must produce the identical tree). Gate that invariant in tests.
+
+*** Acceptance (observable)
+- Unit: dep analysis of `'(get data/status :model)` → `#{"data/status"}` (and the split-key
+  form → the narrow key).
+- Unit: with only `data/forest` changed, a `data/status` hole is NOT re-evaluated (assert via
+  an eval-counter/instrumented form).
+- Unit (correctness invariant): resolve-with-cache ≡ resolve-without-cache for random
+  data/* deltas (PROPERTY).
+- Unit (keyed splice): changing one item's value emits a one-row patch, not a full list rebuild.
+- Gate: `mix test test/spell_agent/tui/hole_diff_test.exs`.
+
+*** Files
+- beam/spell_agent/lib/spell_agent/tui/hole_resolver.ex (hole table + dep analysis + cache)
+- beam/spell_agent/test/spell_agent/tui/hole_diff_test.exs
+
+** W7 — prelude + demos (proof seam)
+
+*** Goal
+Surface the tmpl:: + data/* + hole vocabulary in the reflected prelude, and prove the
+end-to-end vision with executable demos that double as integration tests.
+
+*** Design
+- Extend the TUI prelude (prelude.ex / its .md + Handlebars) with: the tmpl:: form, the
+  data/* bag key table (generated where possible), a `layout/set` example using a hole, and
+  the failure-ladder note. Keep it compact (reflected, not prose).
+- Demos as ExUnit integration tests (mirror PLAN-011 §Demos posture).
+
+*** Demos (executable, double as integration tests)
+1. HOLE: `(layout/set {:slot "status" :node (tmpl:: {:type "paragraph" :text ~(get data/status :model)})})`
+   → status shows the live model; change model in fixture → text updates with no re-set.
+2. ZERO-COST: add a test-only `data/tokens` bag key; a hole on it renders with NO resolver/
+   render-path change (the central claim).
+3. STYLE HOLE: `:style {:fg ~(if (get data/status :running?) "yellow" "green")}` flips color
+   with run state.
+4. SPLICE: a list whose `:items ~@(map row (vals data/forest))` grows/shrinks with the forest.
+5. ATOMIC DIFF: with only data/forest changed, assert the status hole did not re-evaluate
+   (eval counter) — LiveView-style dynamic invalidation.
+6. KEYED SPLICE: change one span's title → one-row patch (assert patch shape).
+7. FAILURE LADDER: a hole that raises → "·" placeholder; siblings + rest of frame intact.
+8. CAPABILITY: a hole calling `(tool/…)` → placeholder, no effect (security boundary holds).
+9. DOGFOOD: the native status/composer (W5 holes) render identical to the pre-hole snapshot.
+10. PERSIST/RECALL: a tmpl:: node round-trips through the codec (W0) — serialized form
+    re-resolves to the same widget; one recall layer with :ptc tools.
+
+*** Acceptance
+- Each demo is an ExUnit test asserting the observable result.
+- Gate: `mix test test/spell_agent/tui/tmpl_demos_test.exs`.
+
+*** Files
+- beam/spell_agent/lib/spell_agent/tui/prelude.ex (+ its .md/Handlebars)
+- beam/spell_agent/test/spell_agent/tui/tmpl_demos_test.exs
+
+* Testing strategy — property-first, parity-gated
+
+Precedent reused (VERIFIED present): stream_data + ExUnitProperties +
+PtcRunner.TestSupport.LispGenerators (test/support/lisp_generators.ex); the SceneRender
+headless-buffer path for snapshot parity; the lens tuple-free/JSON-serializable assertion.
+
+- Layer 1 (reader, ptc_runner): quote→collections round-trip property (W0); quasiquote
+  eager-snapshot equality (W1); tmpl:: skeleton-fidelity + freeze-shape + fuzz (W2).
+- Layer 2 (codec, ptc_runner): `from_data(to_data(ast)) ≡ ast` ∀ quotable AST; tuple-free
+  + JSON-serializable (the form_tree contract).
+- Layer 3 (resolver, spell_agent): substitution correctness; capability boundary (no
+  effects); per-hole failure ladder; splice flattening.
+- Layer 4 (diff, spell_agent): dep-analysis correctness; resolve-with-cache ≡
+  resolve-without-cache PROPERTY (the load-bearing correctness invariant); keyed splice
+  one-row patch.
+- Layer 5 (dogfood + demos): SceneRender snapshot parity for status/composer before/after
+  W5; the 10 demos as integration tests.
+
+* Risks / open verifications (label honestly)
+
+- R1 (RESOLVED — decision ①, verified 2026-06-22): PLAN-011 W2 (sh::) HAS LANDED. `(sh::`
+  is a head-position branch (fast_parser.ex L61) and `~`/`~@` work — but INLINE in
+  `parse_sh_tokens` (L210-219), sh-specific, NOT a reusable sub-reader. ∴ the reader char
+  + the `(form::` hook are proven free and working (no longer a blocker), but W1 still owes
+  the EXTRACTION: promote `~`/`~@` to general reader chars (decision ③) and re-express the
+  sh:: clauses on them, gated by the existing sh:: tests. NB the freeze-vs-eval divergence
+  (decision ②): sh:: EVALUATES the unquoted form, tmpl:: must FREEZE it — shared detection,
+  opposite lowering.
+- R2 (codec scope): `quote → collections` is a real PTC-language change (analyze.ex +
+  eval.ex + a new core node). Verify it does not collide with the existing
+  auto-quote-in-discovery-ref path (analyze.ex ~882) or the symbols-only `(quote sym)`
+  REPL forms. SPIKE: a focused test that `(quote foo)` (symbol) and `(quote (a b))`
+  (collection) both work and stay distinguishable.
+- R3 (resolver env): confirm Reaction.Ptc's env-construction can be reused/parameterized to
+  produce a PURE render env (no tool/effecting verbs). If its env leaks effecting builtins,
+  build a dedicated allowlist env. Verify by the capability demo (#8).
+- R4 (perf): per-frame resolve over the whole tree must be cheap enough at the frame clock
+  BEFORE W6's dirty cache exists (W3–W5 run without it). Measure on the live inspector
+  layout; if the uncached pass is too slow, prioritize W6.
+- R5 (pane holes deferred): native pane subtrees keep their compiled `Panes.*` path in v1;
+  holes live in agent-authored leaves + status/composer. Converting panes to holes is a
+  FUP, not this PLAN (avoid scope creep).
+- R6 (durable layouts): persistence of authored hole-bearing layouts across sessions rides
+  FUP-009 (durable layouts); this PLAN proves serialize/round-trip (demo #10) but does not
+  wire Khepri durability.
+
+* Build order summary
+
+W0 quote→collections + codec (substrate) → W1 backtick quasiquote (eager sibling) →
+W2 tmpl:: reader (deferred holes) → W3 resolve_holes host (scoped eval) →
+W4 generic data/* bag (zero-cost seam) → W5 dogfood (retire hardcoded fills) →
+W6 per-hole dirty-tracking (atomic-diff substrate) → W7 prelude + demos (proof).
+
+Usable holes at W3+W4; dogfood-complete at W5; LiveView-style atomic diffs at W6.
+
+* Execution discipline (all waves)
+- Architecture + PTC-language changes (W0/W1/W2 reader+codec): MAIN THREAD only; never
+  delegated. These are the load-bearing seams.
+- Parallelize only disjoint LEAF tasks with non-overlapping filesDeps (e.g. a resolver
+  test scaffold ∥ a codec property test) — and only after the seam they test is settled.
+- Every implementation wave is followed by a REVIEWER SWARM over its diff (≥2 reviewers)
+  and a transitional gap-implementation wave that fixes findings before the next wave.
+- Gates are observable commands (mix compile / mix test <file>), never "looks done".
+- Global `mix compile` + full suite run in the MAIN THREAD after each wave's swarm clears.
+- ASK-GATE before deleting status_widget/composer_widget (W5) — removing intentional code.
+
+* Lineage
+
+Distilled from the session designing "interfaces definable from ratatui data + freeform
+layer + dynamic holes, at zero runtime cost." Specs: docs/quoting-spec.md §8b/§8c
+(settled here), docs/sh-reader-spec.md (sibling reader). Sibling to PLAN-011 (sh::,
+shares the ~ reader machinery) and the freeform-TUI set (PLAN-009 floor; PROJ-004
+reactivity is the W6 optimization horizon). Adds homoiconic-dissolution rows:
+template-vs-instance, building-vs-running (quoting-spec §9).
+
+NOTE [2026-06-22]: W0 STEP-0 spike (decision ④) DONE 2026-06-22. Verdict: a reusable AST→data path EXISTS but is one-way + lossy, NOT a drop-in codec.
+- core_to_source.format/1 = CoreAST→source STRING (display, one-way).
+- Hist.Lens.form_tree/1 (lens.ex:252) = CoreAST→PTC-native data tree {"node"=>"var"/"literal"/"def"/"tool_call"/"call"/"seq"…} (FUP-002), one-way, NO inverse, lossy display shape; has reusable tuple-free/jsonable helpers.
+- Step.form (hist/node.ex) stores raw CoreAST term + form_src string; CONSUMES form_tree, provides no round-trip.
+∴ W0 does NOT shrink to "adopt existing". It shrinks to: model to_data/1 on form_tree's shape (reuse its jsonable/tuple-free helpers), ADD the missing from_data/1 inverse, and lift analyze_quote to collections. The {"__hole__" form} frozen value should use a round-trippable variant of the form_tree node-shape (not the lossy display one). Round-trip property (from_data∘to_data ≡ id) is the W0 gate.
+Launch readiness: PLAN-011 sh:: W0/W1/W2 all present; sh_reader_property_test green (4 passed). PLAN-012 launchable NOW. W0 is independent of sh:: files; W1 refactors the (uncommitted) sh:: reader — committing sh:: first gives a cleaner W1 baseline but is not a blocker.
+
+NOTE [2026-06-22]: W0 reviewer swarm (3 reviewers) DONE 2026-06-22. Two real findings:
+- P1 (2 reviewers, high-conf): FIXED. core_to_source.format({:quoted_data,data}) re-quoted the codec MAP -> (quote {"node" "vec"...}), double-encoding on reload, corrupting serialize_closure/export_namespace for any closure holding a quoted collection. Fix: format the data literal directly (a quoted collection evaluates to its codec data; serializing AS that data re-evaluates to the equal value; idempotent). Regression test added (serialize→reload value-equality + stable second round). 100 tests green incl. core_to_source_test + step_form_test.
+- P2 (1 reviewer): DEFERRED TO W1 (correct scope). '(a b) reader sugar still rejects collection delimiters (fast_parser parse_quoted_symbol + parser.ex preflight guard) while (quote (a b)) now works → asymmetry; spec examples persist holes as '(str …). W1 is the reader wave and owns fast_parser; it must make '(form) desugar through the same single-arg quote path (or remove the quoted-collection parser guard) so '(...) and (quote (...)) agree. Added to W1 scope below.
+Codec round-trip + walker-coverage otherwise clean: other CoreAST walkers (closure_capture, symbol_counter, data_keys, discovery, validators, collect_tool_names) have safe inert fallbacks for the new {:quoted_data,_} leaf or cannot encounter it.

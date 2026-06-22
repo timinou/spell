@@ -1,0 +1,83 @@
+#+TITLE: mix spell.mesh.gallery + spell.mesh.watch — fixture scenes, snapshots, single-region tail
+#+STATE: ITEM
+#+SESSION_ID: 151269c91db37358
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T23-09-03-478Z_151269c91db37358.jsonl]]
+#+CUSTOM_ID: FEAT-015-mix-spell-mesh-gallery-spell-mesh-watch
+#+BLOCKED_BY: FEAT-014
+
+* Initial Message
+
+what are distributed agents in a mesh network, really? please look into network theory, not hype. i want us to think about that deeply and from first principles, in order to let the BEAM lisp runtime call itself and create meshed sub-sessions. But I want strong theoretical backing beforehand
+
+* Goal
+The mesh's test harness + debug surface: curated fixture region scenes rendered
+headless (the gallery + snapshot baselines, the way the inspector is developed
+without a live mesh), and a single-region tail (plain --list/--tail/--fold modes
+for scripting + an interactive 2-pane reader) — the indispensable Fork-B debug tool.
+
+Read first: docs/agent-mesh-theory/07-screens.org §2-§3 (gallery + watch specs),
+08-implementation.org §C (Screens, FEAT-835 row).
+
+* Wave / deps
+Wave 4 (screens). BLOCKED BY FEAT-014 (reuses the mesh panes + SceneRender path)
+and FEAT-009 (Mesh.Store read API for the watch tail). Scenes are pure fixtures —
+the gallery part can start as soon as the panes (FEAT-014) exist.
+
+* Modules / edits
+** lib/spell_agent/mesh/scenes.ex  (NEW — SpellAgent.Mesh.Scenes)
+- clone the SHAPE of lib/spell_agent/tui/scenes.ex: all/0 -> a list of
+  %{name, about, forest} where forest is a mesh region forest (MeshRecord fixtures
+  with FIXED lamport/t so snapshots are deterministic). The curated set (07 §2):
+  empty, fork-a-fanout, claim-contention, fork-b-rendezvous, verdict-sealed,
+  watch-pending, partition. Each exercises ONE shape a mesh pane must handle.
+
+** lib/mix/tasks/spell.mesh.gallery.ex  (NEW — Mix.Tasks.Spell.Mesh.Gallery)
+- clone lib/mix/tasks/spell.gallery.ex: interactive browser cycling the scenes
+  through the production project/2 + render path (FEAT-014 panes), AND a --snapshot
+  mode that renders every scene headless and writes baselines under test/snapshots/
+  (asserted by a SnapshotTest, mirroring SpellAgent.Tui.SnapshotTest). j/k scenes,
+  n/p cursor, l/h expand/collapse, esc/q quit; terminal restored on exit.
+
+** lib/mix/tasks/spell.mesh.watch.ex  (NEW — Mix.Tasks.Spell.Mesh.Watch)
+- clone lib/mix/tasks/spell.sessions.ex's three-mode shape:
+  - `mix spell.mesh.watch REGION`            interactive single-region tail (TUI).
+  - `mix spell.mesh.watch --list`            print all regions to stdout, exit.
+  - `mix spell.mesh.watch --tail REGION`     stream REGION records to stdout (tail -f).
+  - `mix spell.mesh.watch --fold REGION:kind:reduce`  print a fold result, exit
+    (e.g. ship-x:finding:count — scriptable into a CI gate).
+- plain modes are Mix.shell().info (safe anywhere, like spell.sessions --list);
+  interactive is a 2-pane reader (records left, selected-record payload right) —
+  literally SessionBrowser with a mesh project/2. Reuse SessionView formatting.
+
+* CodePaths (existing) to mirror / reference
+- lib/spell_agent/tui/scenes.ex — the fixture-forest shape (copy, swap Span->MeshRecord).
+- lib/mix/tasks/spell.gallery.ex — the gallery + --snapshot template.
+- lib/spell_agent/tui/snapshot.ex + SpellAgent.Tui.SnapshotTest — the baseline harness.
+- lib/mix/tasks/spell.sessions.ex — the --list/--trace plain + interactive template.
+- lib/spell_agent/tui/session_browser.ex + session_view.ex — the 2-pane reader +
+  formatting to reuse.
+- lib/spell_agent/mesh/namespace.ex (FEAT-010) query/fold — the Elixir side --fold uses.
+
+* Edge cases
+- --fold parse: "REGION:kind:reduce" must validate the kind + reduce against the
+  known sets; a bad spec prints a clear usage error, not a crash.
+- empty region / unknown region id in --tail: print "no records" / "unknown region",
+  exit 0 (not a crash).
+- snapshot determinism: fixtures MUST use fixed lamport/t (like Scenes' fixed
+  t0/t1) so baselines are stable across runs.
+- all rendered text sanitized (replaceTabs/truncate/shortenPath, AGENTS.md).
+
+* Acceptance (observable)
+- `mix spell.mesh.gallery --snapshot` writes baselines; `mix test` SnapshotTest
+  asserts them; a render change shows a reviewable text diff under test/snapshots/.
+- `mix spell.mesh.gallery` browses all 7 scenes through the real render path.
+- `mix spell.mesh.watch --list` prints regions; `--fold ship-x:finding:count`
+  prints an integer; `--tail REGION` streams records; interactive mode opens the
+  2-pane reader and quits cleanly.
+- `mix check` clean.
+
+* Tests
+- Mesh.Scenes.all/0 forests fold through each pane's project/2 without crashing
+  (every scene is a valid render input — the gallery contract).
+- snapshot baselines exist + are deterministic (re-running --snapshot is a no-op diff).
+- --fold spec parsing (valid -> result, invalid -> usage error).

@@ -67,6 +67,10 @@ defmodule SpellAgent.Hist.Store.Memory do
         {:crystal, _} -> {{:crystal, :_}, :"$1"}
         {:cont, nil} -> {{:cont, :_}, :"$1"}
         {:cont, s} -> {{:cont, s}, :"$1"}
+        {:mesh, nil} -> {{:mesh, :_, :_}, :"$1"}
+        {:mesh, region} -> {{:mesh, region, :_}, :"$1"}
+        {:mesh_hash, nil} -> {{:mesh_hash, :_, :_}, :"$1"}
+        {:mesh_hash, region} -> {{:mesh_hash, region, :_}, :"$1"}
       end
 
     :ets.select(@table, [{match, [], [:"$1"]}])
@@ -76,5 +80,14 @@ defmodule SpellAgent.Hist.Store.Memory do
   def clear do
     :ets.delete_all_objects(@table)
     :ok
+  end
+
+  @impl SpellAgent.Hist.Store
+  def incr(key) do
+    # Atomic increment-and-fetch on the public ETS table. The stored object is
+    # `{key, count}`; update_counter with a default seeds an absent counter at 0
+    # then applies +1, so the first call returns 1. This is the per-region mesh
+    # sequence's atomicity guarantee (no get-then-put race).
+    :ets.update_counter(@table, key, {2, 1}, {key, 0})
   end
 end

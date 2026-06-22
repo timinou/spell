@@ -168,6 +168,29 @@ defmodule SpellAgent.Hist do
     Namespace.tools(impl, session_id)
   end
 
+  @doc """
+  The unified session listing — open (running now) AND past (recorded), newest
+  first (PLAN-010). Each row is enriched with turn count + token cost and tagged
+  `live?`. Unions `sessions/1` with `SessionRegistry.live/0`; pass `:live` to
+  inject a snapshot in tests.
+  """
+  @spec session_list(keyword()) :: [SpellAgent.Hist.SessionList.row()]
+  def session_list(opts \\ []) do
+    {impl, rest} = pop_store(opts)
+    SpellAgent.Hist.SessionList.rows([store: impl] ++ rest)
+  end
+
+  @doc """
+  One session's conversation TRACE as flat node rows (PLAN-010), oldest turn
+  first. Each row carries `form_src`/`say`/`result`/`tokens` + `has_interior?`;
+  drill a node's execution interior with `SpellAgent.Hist.Trace.interior/1`.
+  """
+  @spec trace(String.t(), keyword()) :: [SpellAgent.Hist.Trace.node_row()]
+  def trace(session_id, opts \\ []) do
+    {impl, _opts} = pop_store(opts)
+    SpellAgent.Hist.Trace.rows(impl, session_id)
+  end
+
   @doc "Every recorded session, newest first (by `t0`)."
   @spec sessions(keyword()) :: [Session.t()]
   def sessions(opts \\ []) do

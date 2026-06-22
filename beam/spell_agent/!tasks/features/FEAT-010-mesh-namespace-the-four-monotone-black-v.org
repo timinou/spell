@@ -1,0 +1,137 @@
+#+TITLE: Mesh.Namespace — the four monotone black/* verbs (post, query, claim, fold) + loop wiring
+#+STATE: DONE
+#+SESSION_ID: 151269c91db37358
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T23-09-03-478Z_151269c91db37358.jsonl]]
+#+CUSTOM_ID: FEAT-010-mesh-namespace-the-four-monotone-black-v
+#+BLOCKED_BY: FEAT-009
+#+COMPLETION_HASH: 23396f448f13a5cb
+
+* Initial Message
+
+what are distributed agents in a mesh network, really? please look into network theory, not hype. i want us to think about that deeply and from first principles, in order to let the BEAM lisp runtime call itself and create meshed sub-sessions. But I want strong theoretical backing beforehand
+
+* Goal
+The first end-to-end mesh slice: the four monotone verbs (black/post, black/query,
+black/claim, black/fold) as a PTC-Lisp tool map, wired into the agent loop. This
+ALONE makes Fork A fully usable single-node WITHOUT consensus or the watcher — a
+parent can post a goal, spawn children (FEAT-011) that post findings, and fold
+them. post/query/claim/fold are the CALM-monotone core (D6, D7).
+
+Read first: docs/agent-mesh-theory/08-implementation.org §C (Namespace),
+04-surface.org §1 (the verb contracts, already corrected for 06), 02 §4.2 (claim
+fold), 06 DC-1/DC-2 (claim gating + settle_ms).
+
+* Wave / deps
+Wave 3. BLOCKED BY FEAT-009 (Store + Clock). Blocks FEAT-011 (spawn-session merges
+these verbs into the child), FEAT-013 (watcher fires :do which calls post/claim),
+and is the read API FEAT-014/015 (screens) consume.
+black/watch and black/decide are STUBBED here (delegate to FEAT-013/012); this
+FEAT ships the four monotone verbs complete.
+
+* Modules / edits
+** lib/spell_agent/mesh/namespace.ex  (NEW — SpellAgent.Mesh.Namespace)
+- tools(impl, session_id, region) -> %{"black/post" => fn args -> ... end, ...},
+  MIRRORING lib/spell_agent/hist/namespace.ex::tools/2 EXACTLY (closures over
+  impl, session_id, region — the verified pattern at namespace.ex:48-74).
+- the four verbs:
+  - "black/post" : cap-check Region.write_cap?(region, held) (D12) -> build via
+    Mesh.Record.new (stamp lamport := Clock.tick_write(session_id)) -> Mesh.Store.put.
+    kind must be in {:goal :finding :intention}; :claim routes through claim,
+    :verdict only via decide. Reject post to a sealed region (DC-9). Returns
+    {:id, :region}.
+    GOAL SUPERSESSION (DC-3): a second :goal post to a region with an active goal
+    is an owner-only op — in Fork A only the region owner (parent session) may
+    re-goal; reject a non-owner re-goal with a clear error. (Fork B re-goal -> decide.)
+  - "black/query" : Mesh.Store.by_match(impl, region, match); ambient (NO cap).
+    Advance Clock.tick_read with the max lamport seen. Omitting :region -> a
+    cross-region read (global discovery). Returns [record], newest lamport first.
+  - "black/claim" : post a :claim (work id), then fold claims_for(work) by
+    argmin(lamport, author_sid) IGNORING expired leases (now > t + lease_ms);
+    return {:claim, :won?, :owner}. Optional :settle_ms -> Process.sleep then
+    re-fold (DC-2). NEVER blocks/locks. Gating doc per DC-1 (monotone-effect work
+    only; external effects -> decide).
+  - "black/fold" : pure reduce over Mesh.Store.region — :count, :group-by (by
+    :field), :rank, and predicate folds (:goal-satisfied?). No write.
+  - "black/watch" / "black/decide" : thin delegators (full impl FEAT-013/012);
+    here they may return {:error, :not_yet_wired} OR call the modules if those
+    land first — keep the delegation seam clean.
+- verbs(session_id, opts) facade (mirror Hist.verbs/2 in hist.ex) returning the
+  tools map for a given region+store, so the loop merges it in one call.
+
+** lib/spell_agent/session.ex  (EDIT — wire verbs into the loop)
+- in run/2, the tools merge currently is:
+    Map.merge(Tools.build_tools_map(), Hist.verbs(session_id, store: hist_store))
+  add the mesh verbs when a region is in scope (opts[:region]):
+    |> Map.merge(Mesh.verbs(session_id, region: region, store: hist_store))
+  This is the SAME injection seam Hist.verbs already uses (session.ex run/2,
+  the SEAM 5 comment). A session with no region (a plain run) merges nothing.
+
+* CodePaths (existing) to mirror / reference
+- lib/spell_agent/hist/namespace.ex:48-74 (tools/2 closure shape) — copy exactly.
+- lib/spell_agent/hist.ex::verbs/2 (the facade) — mirror as Mesh.verbs/2.
+- lib/spell_agent/session.ex::run/2 (the Map.merge tools seam) — extend.
+- lib/spell_agent/tools.ex::stringify_keys/1, flex_get/2 — arg-key tolerance to reuse.
+
+* Edge cases
+- args arrive with string OR atom keys (LispKeyword) — reuse the flex_get/
+  stringify_keys tolerance from tools.ex.
+- claim with no prior claims: the claimant wins trivially.
+- fold over an empty region: :count -> 0, :group-by -> %{}, predicate -> false.
+- query :match with an unknown kind: returns [] (not an error).
+- best-effort posture (F.2): a store error inside a verb returns an {"err" ...}
+  map (like hist/namespace normalize_err), NEVER crashes the agent turn.
+
+* Acceptance (observable)
+- `mix test test/mesh/namespace_test.exs` passes.
+- A single-process integration test: post a goal + 3 findings to a region, then
+  black/fold :group-by :risk returns the 3 grouped — the Fork-A core WITHOUT any
+  consensus/watcher/spawn (proves the monotone slice stands alone).
+- two concurrent black/claim of the same work in one BEAM: exactly one :won? true,
+  both agree on :owner (the deterministic-fold contract, PT-2).
+- a non-owner re-goal is rejected (DC-3).
+- post to a sealed region rejected (DC-9).
+- `mix check` clean.
+
+* Tests
+- the four verbs' contracts (post idempotency, query predicate, claim determinism,
+  fold reduces).
+- claim lease expiry -> reclaimable (the inhibitory-release contract, PT-5).
+- loop wiring: a Session.run with a :region exposes black/* in its tools map.
+
+* PRE-CODING CORRECTIONS (oracle MeshFinalCheck, agent://1-MeshFinalCheck)
+
+** Seq replaces lamport everywhere (P2.1/P2.3)
+- black/post: no Clock.tick_write — the store assigns seq atomically (FEAT-009).
+- black/claim: fold claims_for(work) by argmin(SEQ, author_sid) over the
+  store-assigned per-region total order (was argmin(lamport,sid)). Deterministic
+  AND causally sound because seq is a real total order, not a per-session scalar.
+- black/query: no tick_read; returns records by descending seq.
+
+** won? is PROVISIONAL, documented (P2.3)
+- black/claim's :won? is computed from the CALLER'S CURRENTLY-VISIBLE claim set,
+  which single-node (Store.Memory, one ETS table) is authoritative but multi-node
+  (Khepri local reads) may be stale. Document :won? as provisional:
+  - monotone-effect work (the claim use case, DC-1): a transient double-win is
+    harmless (dup findings collapse) — accept it.
+  - expensive idempotent work: :settle_ms is REQUIRED (re-fold after the
+    replication bound before acting).
+  - non-deduped external effect: MUST route through decide, never claim.
+- FEAT-013 (watcher) MUST NOT build unconditional exactly-once on claim alone —
+  see FEAT-013 correction (node-plane micro-decide OR documented best-effort).
+
+** Fork-A goal ownership is liveness-gated (P1.3)
+- the FIRST :goal in a region records :owner = author session id.
+- black/post of a SUBSEQUENT :goal (re-goal) is accepted ONLY if
+  author == owner AND SessionRegistry.live?(owner) (lib/spell_agent/session_registry.ex).
+  If the owner is dead, reject with a clear error directing the caller to promote
+  the region to Fork-B and re-goal via decide. This prevents both two-active-goals
+  (accept-any) and frozen-region (reject-all) when the ephemeral parent exits.
+
+** Acceptance delta
+- claim arbitration uses store seq; two concurrent same-work claims in one BEAM
+  agree on exactly one winner by (seq, sid).
+- a re-goal by a live owner succeeds; by a non-owner OR after the owner died, it
+  is rejected with the documented message.
+- :won? is documented provisional in the verb's doc string.
+
+NOTE [2026-06-22]: Implemented: lib/spell_agent/mesh/namespace.ex (post/query/claim/fold; watch/decide stubbed) + lib/spell_agent/mesh.ex facade; wired into session.ex run/2 tools merge (region-gated). claim folds argmin(seq,author) w/ lease expiry; re-goal owner+SessionRegistry.live? gated (P1.3); :won? provisional. Tests namespace_test.exs (10 pass incl full Fork-A slice). 46 mesh tests total, clean.

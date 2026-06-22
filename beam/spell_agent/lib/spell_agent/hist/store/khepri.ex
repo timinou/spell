@@ -96,6 +96,32 @@ defmodule SpellAgent.Hist.Store.Khepri do
   end
 
   @impl SpellAgent.Hist.Store
+  def incr(key) do
+    # Atomic increment-and-fetch via a Khepri R/W transaction: the read+increment
+    # commit as ONE Raft command, so the returned sequence is the committed log
+    # position — a true total order across nodes (the mesh per-region seq). A
+    # get-then-put across two calls could not give this under replication.
+    p = path(key)
+
+    fun = fn ->
+      next =
+        case :khepri_tx.get(p) do
+          {:ok, n} when is_integer(n) -> n + 1
+          _ -> 1
+        end
+
+      :ok = :khepri_tx.put(p, next)
+      next
+    end
+
+    case :khepri.transaction(@store, fun, :rw) do
+      {:ok, next} -> next
+      {:atomic, next} -> next
+      other -> raise "mesh seq incr failed for #{inspect(key)}: #{inspect(other)}"
+    end
+  end
+
+  @impl SpellAgent.Hist.Store
   def clear do
     # `#if_path_matches{regex = any}` as an Erlang record tuple: matches every
     # descendant path under the root.
@@ -113,6 +139,9 @@ defmodule SpellAgent.Hist.Store.Khepri do
   defp path({:crystal, id}), do: [@root, :crystal, id]
   defp path({:cont, sid}), do: [@root, :cont, sid]
   defp path({:hash, h}), do: [@root, :hash, h]
+  defp path({:mesh, region, seq}), do: [@root, :mesh, region, seq]
+  defp path({:mesh_seq, region}), do: [@root, :mesh_seq, region]
+  defp path({:mesh_hash, region, h}), do: [@root, :mesh_hash, region, h]
 
   # Wildcard patterns for list/2. Session-global kinds ignore the session arg.
   defp list_pattern(:session, nil), do: [@root, :session, star()]
@@ -127,6 +156,10 @@ defmodule SpellAgent.Hist.Store.Khepri do
   defp list_pattern(:crystal, _), do: [@root, :crystal, star()]
   defp list_pattern(:cont, nil), do: [@root, :cont, star()]
   defp list_pattern(:cont, s), do: [@root, :cont, s]
+  defp list_pattern(:mesh, nil), do: [@root, :mesh, star(), star()]
+  defp list_pattern(:mesh, region), do: [@root, :mesh, region, star()]
+  defp list_pattern(:mesh_hash, nil), do: [@root, :mesh_hash, star(), star()]
+  defp list_pattern(:mesh_hash, region), do: [@root, :mesh_hash, region, star()]
 
   # `#if_name_matches{regex = any}` as an Erlang record tuple (record has two
   # fields: regex + compiled). This is the single-level `*` wildcard; the atom

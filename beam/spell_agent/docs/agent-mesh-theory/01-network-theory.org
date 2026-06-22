@@ -1,0 +1,163 @@
+#+TITLE: The theory that constrains the design
+#+SUBTITLE: Network science, the actor model, Brooks, CALM, stigmergy, CAP
+#+OPTIONS: toc:2 num:t
+
+This file is the /why/. Every design decision in =02=–=04= traces to a result
+here. Read it once; reach back when a verb contract surprises you.
+
+* 1. Topology vs capability, and why a full mesh is an anti-pattern
+
+A network is a graph: nodes (agents) and edges (channels). "Mesh" names the
+/edge set's shape/, nothing more. The governing tension across all topologies is
+*diameter vs degree*:
+
+| topology | edges | diameter | degree/node | failure mode |
+|----------+-------+----------+-------------+--------------|
+| tree / arborescence | n−1 | O(log n) | O(1) | root is a *cut vertex* (SPOF) |
+| star (depth-1 tree) | n−1 | 2 | center = n−1 | center SPOF + bottleneck |
+| full mesh Kₙ | *n(n−1)/2* | 1 | n−1 | none topological, but O(n²) state + msgs |
+| small-world (Watts–Strogatz) | O(n) | *O(log n)* | O(1) | graceful |
+| expander | O(n) | O(log n) | *O(1)* | *robust* (high spectral gap) |
+| scale-free (Barabási–Albert) | O(n) | O(log log n) | power-law | robust to /random/ loss, *fragile to hub attack* |
+
+Three results matter:
+
+1. *A full mesh is almost never wanted.* Kₙ buys diameter-1 at O(n²) edges and
+   O(n²) state, with no failure benefit a sparse graph lacks. When "mesh" means
+   something good, it means an *expander* or *small-world*: O(1) degree, O(log n)
+   diameter, robust. Sparse, not complete.
+2. *Intelligence is in the nodes.* No topology makes a node smarter. Edges move
+   latency, robustness, coordination cost — never capability.
+3. *A growing graph does not become an expander by itself.* Hand out references
+   uniformly → tends to Kₙ (degree explosion). Hand them out preferentially →
+   scale-free (hub fragility). Neither is the robust target. The graph's shape
+   must be a /constrained output of the spawn rule/, not an emergent accident
+   (=02= §6, object-capability).
+
+* 2. The actor model — the BEAM is not a metaphor
+
+An agent = private state + a decision function + a message interface. That is
+/exactly/ Hewitt's *actor*: a process that (1) communicates only by async
+messages, (2) can spawn more actors, (3) can change its behaviour for the next
+message. Erlang was built /on/ the actor model, so "distributed agents" here is
+the native computational model of the substrate, not an imported analogy. Three
+actor facts become design law for free:
+
+- *No shared mutable state — message passing over immutable values only.* This is
+  why the medium must be immutable data (=02= §1, the realization invariant).
+- *Location transparency.* A pid behaves the same whether the actor is a nested
+  call or on another BEAM node. This is what makes "mesh sub-sessions" tractable;
+  it also means the /medium/ can span nodes without the agent naming a machine
+  (=02= §7).
+- *Supervision is a tree, on purpose.* "Let it crash" needs clear ownership.
+  Hence the two-graph split (=00=): control = tree, data = blackboard.
+
+* 3. Brooks's Law, Metcalfe's lie, and stigmergy
+
+*Metcalfe* says network value ∝ n² (every pair a potential connection). It counts
+only the /benefit/ of edges, never their /cost/. For any system requiring
+coordination, cost also grows superlinearly: communication paths = n(n−1)/2. That
+is *Brooks's Law* — past a point, adding workers (agents) /slows/ the project,
+because coordination overhead outpaces added throughput. An all-to-all agent
+mesh has Brooks's Law structurally baked in. The honest value curve is
+=value(n) − cost(n)=, concave, with a small optimum.
+
+*Stigmergy* is the escape. Canonical "swarm intelligence" — ant trails, termite
+mounds, slime-mold networks, Reynolds's boids — coordinates through a shared
+modifiable /environment/, not through all-to-all messaging. An ant does not
+message other ants; it deposits pheromone and reads pheromone. Properties:
+
+- O(n) writes/reads against a medium, /not/ O(n²) messages — Brooks's term vanishes.
+- *time-decoupled*: a contribution persists; later agents use it after the author
+  is gone.
+- *identity-decoupled*: an agent uses a contribution without knowing who made it.
+
+The *blackboard architecture* (Hayes-Roth, HEARSAY-II) is stigmergy for software:
+independent knowledge sources read and write one shared structure; control
+emerges from the medium's state, not from a call graph. This is the design's
+backbone (=02=).
+
+* 4. Linda tuple spaces — the formal root of "query for an entity"
+
+Gelernter's *Linda* gives the rigorous vocabulary for /associative/ (content)
+addressing, the "discover the entity by what it is" intuition:
+
+| Linda op | meaning | mesh analog |
+|----------+---------+-------------|
+| =out(t)= | write tuple =t= to the space | =black/post= |
+| =rd(p)=  | read a tuple matching pattern =p= (non-destructive) | =black/query= |
+| =in(p)=  | /remove/ a tuple matching =p= (destructive take) | =black/claim= (a monotone, non-destructive variant) |
+| =eval(t)= | spawn a process that computes a tuple | =tool/spawn-session= |
+
+Two namespaces fall out, and the design uses /both/ deliberately:
+- *capability* (handed): an unforgeable reference = authority to act on a specific
+  entity. Edge-creation = capability-passing.
+- *content* (queried): name a /predicate/, ask the medium who satisfies it.
+  Discovery by what-you-are, not who-you-are.
+
+The subtle move the user intuited — "claim stuff /after/ querying state" — is
+*two-phase optimistic claiming*: query (content discovery, monotone read) →
+claim (monotone append) → resolve (deterministic fold over the claim set). Safety
+comes from /resolution-by-fold/, never a lock (=02= §4, =03= action-selection).
+
+* 5. CALM — the load-bearing theorem
+
+Hellerstein & Ameloot, the *CALM theorem* (Consistency As Logical Monotonicity):
+
+#+begin_quote
+A program has a consistent, coordination-free distributed implementation /if and
+only if/ it is *monotone* — its output only grows as its input grows; it never
+retracts a fact already emitted.
+#+end_quote
+
+This partitions /all/ mesh work cleanly:
+
+| | monotone work | non-monotone work |
+|-+---------------+-------------------|
+| examples | append a finding, union a set, "∃ a caller", set a goal, register an intention | count, aggregate, "I am DONE", "no more results", negation, an irreversible action |
+| coordination | *none* — confluent under any order/delay | *required* — a barrier / consensus round |
+| mesh placement | flows freely across the medium | isolated to a single owner (Fork A parent) or a consensus verdict (Fork B) |
+
+CALM is the design's compass: *make sibling-visible work monotone; isolate every
+non-monotone "decide/aggregate/done" to one place.* The codebase already obeys it
+by accident — =psettled= accumulates ={:ok}/{:err}= per element (monotone), and
+the /parent/ performs the non-monotone reduce (=count=, =group-by=). Preserve
+that split and the mesh is correct by the theorem, not by hope.
+
+* 6. CAP / PACELC — the consistency you must choose
+
+*CAP*: under a network *P*artition you may keep *C*onsistency or *A*vailability,
+not both. *PACELC* extends it: /else/ (no partition) you still trade *L*atency vs
+*C*onsistency.
+
+For monotone data, CALM lets you have /both/ C and A — a CRDT merges any way the
+partition healed. For the non-monotone verdict (=decide=), you must choose, and
+the design chooses *CP via Raft*: a partitioned minority blocks /writes/ (a
+stalled =decide= retries; nothing is lost) while reads of already-committed data
+continue. This is acceptable precisely because =decide= is rare and the monotone
+99% stays available. Detail: =02= §5.
+
+* 7. Termination — the measure changes when the graph gains cycles
+
+A pure spawn /tree/ terminates because depth is a well-founded decreasing measure
+(the codebase floors it at =max_depth: 3=). The moment siblings can influence each
+other (even indirectly, through the medium — A's finding triggers B's =watch=
+which spawns C which posts a finding that triggers A's =watch=…), the /effective
+call graph has cycles/ and depth is no longer a measure. The replacement is a
+*global token bucket*: every spawn — nested or triggered — acquires one slot from
+a single shared semaphore, and the bucket's capacity is the termination
+guarantee. The codebase already has this exact primitive: =ParallelBudget=, which
+caps total live workers across all nesting depths with the invariant
+=max live heap ≈ max_parallel_workers × worker_max_heap=. The mesh routes /all/
+spawning through it. Detail: =02= §8.
+
+* 8. The debunk table (theory vs hype)
+
+| hype claim | first-principles reality |
+|-----------+--------------------------|
+| mesh → emergent intelligence | topology ≠ capability; intelligence is in nodes; edges only move latency/robustness/cost |
+| value ∝ n² (Metcalfe) | ignores coordination cost; net value is concave (Brooks); optimal team is /small/ |
+| more agents = more power | past a point, more agents = more comm paths = /slower/ (Brooks, structurally) |
+| full mesh = robust | Kₙ is an anti-pattern: O(n²) state, no failure benefit over a sparse expander |
+| swarm = chatty all-to-all | emergence is /stigmergy/ (a shared medium) + simple agents, not messaging |
+| consensus = alignment magic | consensus is expensive and usually /unnecessary/ (CALM: monotone work needs none) — avoid it, don't celebrate it |

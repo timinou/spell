@@ -11,7 +11,7 @@ defmodule SpellAgent.Session do
   backed tools map. So a tool authored mid-conversation is immediately callable.
   """
 
-  alias SpellAgent.{Anthropic, Config, Hist, Tools}
+  alias SpellAgent.{Anthropic, Config, Hist, Mesh, Tools}
 
   @system_prompt """
   You are a node-free coding agent running on the BEAM (Elixir), powered by a
@@ -57,6 +57,13 @@ defmodule SpellAgent.Session do
     session_id = opts[:session_id] || Hist.new_session_id()
     hist_store = opts[:hist] || Hist.default_store()
 
+    # PLAN-010: announce this mission as RUNNING so a session listing can show it
+    # as "open" while it streams (the Hist store only learns it AFTER the run).
+    # Best-effort and self-cleaning: the registry monitors this process, so a
+    # crash still unregisters; `finish` below covers the normal exit. Wrapped so
+    # a sick registry can never fail the mission (same posture as recording).
+    mark_session_live(session_id, prompt, model)
+
     # SEAM 0 (PLAN-006): load the L0 continuation — the verbatim replay tape +
     # threaded def env from this session's PRIOR turns. This is the wire the TUI
     # was missing: without it every turn starts cold and the agent forgets the
@@ -74,7 +81,13 @@ defmodule SpellAgent.Session do
         system_prompt: system_prompt(),
         # SEAM 5: merge the hist/* verbs so the agent can interrogate its OWN past
         # mid-conversation ((hist/cost {}), (hist/forms {...}), authored lenses).
-        tools: Map.merge(Tools.build_tools_map(), Hist.verbs(session_id, store: hist_store)),
+        # PROJ-006: when this session coordinates in a mesh `region`, also merge the
+        # black/* verbs (the same injection seam) so it can post/query/claim/fold on
+        # the shared blackboard. No region -> Mesh.verbs returns %{} (a plain session).
+        tools:
+          Tools.build_tools_map()
+          |> Map.merge(Hist.verbs(session_id, store: hist_store))
+          |> Map.merge(Mesh.verbs(session_id, region: opts[:region], store: hist_store)),
         ptc_transport: :tool_call,
         max_turns: max_turns
       )
@@ -92,11 +105,32 @@ defmodule SpellAgent.Session do
       )
 
     record_history(result, session_id, hist_store, prompt, model)
+    mark_session_done(session_id)
 
     case result do
       {:ok, step} -> {:ok, step.return}
       {:error, step} -> {:error, step.fail || step.return || :unknown_failure}
     end
+  end
+
+  # Register/unregister this run with the live-session tracker. Best-effort: the
+  # registry client already no-ops when the registry is down, and we additionally
+  # swallow any error here so liveness tracking can never change the outcome of a
+  # mission (history/liveness are enhancements, never dependencies of answering).
+  defp mark_session_live(session_id, prompt, model) do
+    SpellAgent.SessionRegistry.register(session_id, %{prompt: prompt, model: model})
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
+  end
+
+  defp mark_session_done(session_id) do
+    SpellAgent.SessionRegistry.finish(session_id)
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
   end
 
   # Load the L0 continuation defensively: any store failure yields a cold start.

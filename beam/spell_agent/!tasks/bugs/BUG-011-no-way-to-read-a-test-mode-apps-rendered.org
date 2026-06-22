@@ -1,0 +1,58 @@
+#+TITLE: No way to read a test_mode app's rendered buffer (blind visual tests)
+#+STATE: DONE
+#+SESSION_ID: 150e55dbf9fb7900
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-18T19-08-04-455Z_150e55dbf9fb7900.jsonl]]
+#+CUSTOM_ID: BUG-011-no-way-to-read-a-test-mode-apps-rendered
+#+COMPLETION_HASH: b1d95a24ef132759
+
+* Initial Message
+
+check out how ex_ratatui prefers doing unit and visual tests and tell me how you would do it here. let's design a sturdy testing infra first
+
+* Summary
+A supervised ExRatatui app running under =test_mode= drew into a private test
+terminal the runtime Server held in =terminal_ref=, but there was NO accessor to
+read it back. =Runtime.snapshot/1= exposed =render_count= and =dimensions= but
+not the buffer. So a test driving the real App could prove a frame FIRED but
+never assert WHAT it rendered — visual tests were structurally blind.
+
+This is the third root cause behind PLAN-347's "doesn't update" report: people
+worked around the blindness by calling the pure =App.render/2= directly, which
+(a) bypasses the server's draw-time rescue (so encode raises surface as the
+sibling "bad layout/body" BUG) and (b) snapshots a frame the running app never
+actually drew (so live =\{:store_updated\}=-driven updates appeared frozen).
+
+* Status: FIXED by ex_ratatui-vendored PATCH-2 (PLAN-347)
+Resolved at the dep level. Recorded here for traceability and to anchor the two
+sibling BUGs.
+
+* Root cause
+=ExRatatui.Server= state carried =:terminal_ref= but =runtime_snapshot/1= did not
+include buffer content and no =handle_call= read it. Confirmed by probing
+=Runtime.snapshot/1= keys (no buffer field) and grepping the server for any
+buffer accessor (none).
+
+* Fix (LANDED)
+SPELL PATCH-2 (commit on beam/ex_ratatui-vendored):
+- =Server.handle_call(:ex_ratatui_runtime_buffer_content)= → =buffer_content/1=,
+  guarded to =transport: :local= + =test_mode: {_,_}= + non-nil =terminal_ref=;
+  all other shapes return ={:error, :no_test_terminal}= (never touches a real
+  TTY).
+- =Runtime.buffer/1= public API: ={:ok, content} | {:error, :no_test_terminal} |
+  {:error, reason}=, content identical in shape to =get_buffer_content/1=.
+- Self-tested in =runtime_test.exs= (ServerApps.Echo: asserts =count: 0= in the
+  buffer, then =count: 1= after an injected event).
+- Documented in =SPELL_PATCHES.md= PATCH-2.
+
+* Verification
+Live probe (session 2026-06-21): drove the real App headless, emitted run/tool
+telemetry, =Runtime.buffer/1= returned the rendered span-tree frame (1943 chars,
+borders + "spans (2)" + "run main" visible). Gallery + snapshot suites (13 tests)
+pass reading through the patched runtime.
+
+* Related
+- ex_ratatui PATCH-2 (the fix).
+- Sibling BUGs: frame-drop on encode raise; direct-render encode raise.
+- PLAN-347 (consumes Runtime.buffer/1 for Design A/C visual tests).
+
+NOTE [2026-06-21]: Fixed by ex_ratatui-vendored PATCH-2 (Runtime.buffer/1), committed at submodule + parent pointer bump. Verified live + via gallery/snapshot suites.

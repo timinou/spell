@@ -1,0 +1,186 @@
+#+TITLE: Screens for the mesh — mix spell.* tasks over the freeform surface
+#+SUBTITLE: Three inspector screens, each expressible as a PTC-Lisp layout tree
+#+OPTIONS: toc:2 num:t
+
+The mesh is invisible without a way to /watch/ it. This file specifies three
+screens in the =mix spell.*= namespace, each built on the EXISTING TUI surface
+(=Pane= contract, =view/*= builders, =DefaultLayout= tree, =Scenes= fixtures) so
+they are buildable the same way the inspector already is — and, per the bonus,
+each is expressible as a *PTC-Lisp layout tree* the agent could author itself.
+
+* 0. How the existing surface works (the three facts the screens stand on)
+
+Verified in code, so the screens point at real functions:
+
+1. *A pane is =project/2= + =view/1=* (=tui/pane.ex=). =project(forest, assigns)=
+   folds the live span/record forest into a view-model of ANY shape (a list, a
+   number, a histogram — "aggregates need no new construct"); =view/1= renders the
+   view-model to ExRatatui widgets. =events/0= is the dirty filter (which
+   telemetry suffixes wake the pane).
+2. *A layout is a tree of plain maps* (=tui/default_layout.ex=). =split= nodes with
+   =constraints= + =children=; =pane= leaves carrying =slot=/=pane=/=tags=; widget
+   leaves (=paragraph=, =block=) built by =view/*=. The whole inspector is already
+   "the data the agent would write" — =DefaultLayout.tree/2= is that proof.
+3. *=view/*= builders make tree nodes from PTC* (=tui/view.ex=): =view/split=,
+   =view/paragraph=, =view/list=, =view/table=, … (reflected, one per ex_ratatui
+   widget) + =theme/set=. So a screen's layout is authorable as a PTC value.
+
+The mesh screens add THREE things to this surface:
+- new *panes* (=project/2= folds the mesh /region/ forest, not the span forest),
+- new *fixture scenes* (=Scenes=-style region forests for a gallery + snapshot tests),
+- new *mix tasks* that mount a mesh layout tree (mirroring =spell.sessions= /
+  =spell.gallery= exactly).
+
+* 1. =mix spell.mesh= — the live region inspector
+
+The flagship. Watch regions fill with findings/claims/verdicts in real time, the
+spawn tree, and pending watches. The mesh analog of =mix spell.tui=.
+
+** Layout (three panes, the DefaultLayout spine)
+
+#+begin_src
+frame (split vertical)
+├── status   (length 3)  — "spell · mesh"  + live region/session/budget counts
+├── body     (min 0, split horizontal)
+│   ├── pane/regions  (28%)  — the region index (one row per region, live counts)
+│   ├── pane/board    (40%)  — the SELECTED region's records, grouped by kind
+│   └── pane/spawn    (32%)  — the spawn tree (who spawned whom) + watches pending
+└── composer (length 3)  — region filter / action line
+#+end_src
+
+** The three panes (each a =Pane= via =project/2= + =view/1=)
+
+- *=Panes.Regions=* — =project/2= folds the mesh forest into one row per region:
+  ={region, goal_excerpt, n_findings, n_claims, sealed?, last_lamport}=. =view/1=
+  renders a =view/list=; the cursor selects the region the board pane reads.
+  =events/0= wakes on =[[:mesh, :post], [:mesh, :decide]]=.
+- *=Panes.Board=* — =project/2= folds the SELECTED region's records grouped by
+  =kind= (goal · findings · claims · verdict), each a section. =view/1= renders a
+  =view/table= per kind (finding rows: =about | author | lamport | payload-excerpt=;
+  claim rows show the FOLD outcome — winner highlighted, losers dimmed, exactly
+  the basal-ganglia gating made visible, =03=). The verdict section shows the
+  sealed snapshot watermark (DC-8) when present.
+- *=Panes.Spawn=* — =project/2= folds the spawn edges (parent_session → child)
+  into a tree (reuse =SpanTree='s indentation projection — the spawn tree IS a
+  span tree shape), plus a pending-watches list (=:intention= records not yet
+  fired, with fuel/ttl remaining). =view/1= renders the tree + a =view/list= of
+  watches.
+
+** Data source
+
+A =Mesh.Store= read API (the =black/query= verb's Elixir side), folded exactly
+like =Tui.Store= folds spans today. Liveness from =SessionRegistry.live/0=
+(already exists) unioned with region membership — the same union =Hist.session_list/1=
+already does for sessions.
+
+** As a PTC layout tree (the bonus — authorable by the agent)
+
+#+begin_src clojure
+;; The agent could author this exact screen at runtime via the view/ surface:
+(view/split
+  {:dir "vertical" :constraints [["length" 3] ["min" 0] ["length" 3]]
+   :children
+   [(view/paragraph {:slot "status"
+                     :block (view/block {:title " spell · mesh " :borders ["all"]})})
+    (view/split
+      {:dir "horizontal" :constraints [["percentage" 28] ["percentage" 40] ["percentage" 32]]
+       :children
+       [(view/pane {:slot "regions" :pane "regions" :focusable true})
+        (view/pane {:slot "board"   :pane "board"})
+        (view/pane {:slot "spawn"   :pane "spawn"})]})
+    (view/paragraph {:slot "composer"
+                     :block (view/block {:title " region filter " :borders ["all"]})})]})
+#+end_src
+
+Pointers: =view/split=, =view/paragraph=, =view/pane=, =view/block= are the
+=Tui.View= builders (=view/pane= is the one NEW builder needed — a thin tagger
+={"type"=>"pane"}=, trivial to add beside =view/split=). The panes themselves
+(=regions=/=board=/=spawn=) are registered in =DefaultLayout.pane_module/1=
+exactly like =history=/=tree=/=detail=.
+
+* 2. =mix spell.mesh.gallery= — fixture scenes for every mesh state
+
+The =spell.gallery= analog: cycle curated region forests through the production
+=project/2= + render path, zero network, zero agent loop. Doubles as snapshot
+baselines (the gallery already has =--snapshot= + =SnapshotTest=).
+
+** Scenes (a =Mesh.Scenes= module, shaped like =Tui.Scenes=)
+
+Each scene is =%{name, about, forest}= where =forest= is a mesh region forest the
+=project/2= panes fold. The curated set — one per shape a mesh pane must handle:
+
+| scene | about (the shape it exercises) |
+|-------+--------------------------------|
+| =empty= | no regions — the idle mesh inspector (zero-row, no crash) |
+| =fork-a-fanout= | one private region, a goal + N findings from N children, parent folding (showcase 04 §3) |
+| =claim-contention= | one work id, 3 claims, the Lamport-min fold — winner lit, losers dimmed |
+| =fork-b-rendezvous= | a rendezvous region, 3 findings from independent sessions, a pending decide |
+| =verdict-sealed= | a committed verdict over a sealed watermark (DC-8), region marked sealed (DC-9) |
+| =watch-pending= | intentions registered, fuel/ttl counting down, none fired yet |
+| =partition= | a region split-view: minority side =decide= pending (PT-3 / DC-7 visualization) |
+
+These are exactly =Scenes.all/0='s pattern (fixed =lamport=/=t= for deterministic
+snapshots) — copy the structure, swap =Span= fixtures for =MeshRecord= fixtures.
+
+** Why this matters for the build
+
+The gallery + snapshot test is how the inspector is developed WITHOUT a live mesh:
+you render every mesh state headless and assert the bytes (=SnapshotTest=). It is
+the test harness for the screens AND a living spec of "what each mesh state looks
+like". Build the scenes first; they pin the pane contracts before any live wiring.
+
+* 3. =mix spell.mesh.watch ID= — a single region's live tail (plain + TUI)
+
+The =spell.sessions= analog: =--list= / =--trace=-style plain modes for scripting
++ an interactive tail. Indispensable for debugging Fork B (you want to =tail -f= a
+rendezvous region from a shell while three agents converge on it).
+
+#+begin_src
+mix spell.mesh.watch REGION            # interactive single-region tail (TUI)
+mix spell.mesh.watch --list            # print all regions to stdout, exit
+mix spell.mesh.watch --tail REGION     # stream REGION's records to stdout (tail -f style)
+mix spell.mesh.watch --fold REGION:kind:reduce   # print a fold result, exit (e.g. findings:group-by:risk)
+#+end_src
+
+- =--list= / =--tail= / =--fold= are plain =Mix.shell().info= (safe anywhere, like
+  =spell.sessions --list=), reusing =Mesh.Namespace='s =query=/=fold= Elixir side.
+- interactive mode is a 2-pane reader (records left, selected-record detail right)
+  — literally =SessionBrowser= with a mesh =project/2=. =j/k= move, =l/↵= expand a
+  record's payload, =f= fold the current kind, =r= refresh, =esc/q= quit (the
+  =spell.sessions= chord set, unchanged).
+- =--fold= on the CLI is the killer debug verb: =mix spell.mesh.watch --fold
+  ship-x:finding:count= answers "how many findings has the rendezvous collected"
+  from a shell, scriptable into a CI gate.
+
+* 4. One screen the mesh makes possible that nothing else does — =pane/cohort=
+
+A bonus screen worth naming because it is /only/ expressible once coordination is
+data: a *cohort lens* — fold ACROSS regions to show "every session working toward
+goal G right now, what each has contributed, and what's blocking each". This is
+the executive-function dashboard (=03=): goals (dlPFC), findings (WM), claims
+(gating), pending intentions (prospective memory), the pending verdict
+(integration) — the whole coordinating mind on one screen.
+
+=project/2= folds the global mesh forest filtered to a goal; =view/1= renders a
+=view/table=: one row per session, columns =task | findings-posted | claims-held |
+watching-for | status=. It is a =project/2= over the medium — no new construct, the
+same "aggregates are just a fold" insight (=Pane= moduledoc). Defer the build;
+specify it as the proof that *the mesh is observable because coordination is a
+value*, which is the same thesis as the philosophy doc's "the interface is made of
+the same stuff as the mind" — here, the /coordination/ is too.
+
+* 5. Build seams (where each screen attaches)
+
+| screen | rides on (existing) | new code |
+|--------+---------------------+----------|
+| =spell.mesh= | =DefaultLayout= spine, =App= mount, =Pane= contract | =Panes.{Regions,Board,Spawn}= + a mesh =Store= read-fold + register in =pane_module/1= |
+| =spell.mesh.gallery= | =ScreenGallery=, =Snapshot=, =SnapshotTest= | =Mesh.Scenes= (fixture region forests) |
+| =spell.mesh.watch= | =SessionBrowser=/=SessionView=, =Mesh.Namespace= query/fold | a =Mix.Tasks.Spell.Mesh.Watch= task (plain + interactive modes) |
+| =view/pane= builder | =Tui.View.tools/0= (reflected builders) | one thin tagger beside =view/split= |
+| =pane/cohort= (deferred) | =Pane= =project/2= (cross-region fold) | a =Panes.Cohort= later |
+
+Every screen is the inspector's existing machinery pointed at the mesh forest
+instead of the span forest. That is the dividend of building the mesh on the SAME
+homoiconic substrate: the screens are not new infrastructure, they are new
+=project/2= folds + a layout tree — and the layout tree is itself a PTC value the
+agent can author, inspect, and reshape with =view/*=, exactly as PLAN-009 intended.

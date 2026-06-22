@@ -1,0 +1,187 @@
+#+TITLE: The Mesh is the Medium — distributed agents over a stigmergic blackboard
+#+SUBTITLE: A first-principles design for the BEAM-Lisp runtime calling itself into meshed sub-sessions
+#+OPTIONS: toc:2 num:t
+
+* What this is
+
+A companion to =docs/freeform-tui-philosophy.md=. The philosophy doc dissolves
+the boundaries of the /interface/. This set dissolves the boundary of the
+/agent itself/: one running session calls the runtime that runs it, spawning
+sub-sessions that coordinate without ever talking to each other directly.
+
+It is written to be /read and learned from/, not skimmed. Five files:
+
+| file | what it gives you |
+|------+-------------------|
+| =00-overview.org= (this) | the thesis, the two-graph model, the resolved architecture at a glance |
+| =01-network-theory.org= | the theory that constrains the design — topology, Brooks, CALM, stigmergy, actors, CAP |
+| =02-blackboard-substrate.org= | why the Hist store /already is/ a stigmergic blackboard (line-by-line proof), region creation, the consensus stack |
+| =03-executive-function.org= | the cognitive-neurology backing: executive functions mapped to mesh records and verbs |
+| =04-surface.org= | the =black/*= verb contracts + the =tool/spawn-session= showcase, with worked programs |
+| =05-pressure-tests.org= | adversarial scenarios and failure modes that the design must survive |
+| =06-pressure-tests-deep.org= | second adversarial pass — claim/decide boundary, CALM-of-the-verbs, clocks, rendezvous, the two-plane consensus correction |
+| =07-screens.org= | three =mix spell.mesh*= screens over the freeform surface, each authorable as a PTC layout tree |
+| =08-implementation.org= | the full module-by-module build plan + CodePaths; source for FEAT-008..015 |
+| =09-worked-scenarios.org= | =spawn-session= + =black/*= together on realistic missions; the per-phase + integration test plan |
+
+Tracking item: =PROJ-006= in =!tasks/projects/=.
+
+* The one sentence
+
+#+begin_quote
+Distributed agents do not coordinate by talking to each other; they coordinate
+by /reading and writing a shared, append-only medium that converges on its own/
+— and that medium already exists in this codebase as the Hist store.
+#+end_quote
+
+Everything below is the unpacking of that sentence and the argument that it is
+the bold-correct design rather than the timid middle.
+
+* The thesis, in three moves
+
+** Move 1 — "mesh" is a claim about edges, and a full mesh is an anti-pattern
+
+A mesh is a /topology/: who can talk to whom directly. Network theory's first
+gift is forcing a separation the hype erases:
+
+#+begin_src
+TOPOLOGY (the wiring)     ≠     CAPABILITY (what the wiring achieves)
+#+end_src
+
+Intelligence lives in the /nodes/ (an agent = LLM + tools + private state). An
+edge is just a wire; no topology ever made a node smarter — it only moves
+latency, robustness, and /coordination cost/ between nodes. A *full mesh* (Kₙ,
+everyone wired to everyone) buys diameter-1 routing at O(n²) edges and O(n²)
+messages, with no failure benefit a sparse graph lacks. It is what people /say/
+when they mean something good (a robust sparse expander) but it is not what they
+should /build/. See =01= §1.
+
+** Move 2 — coordination cost is Brooks's Law, and the escape is a shared medium
+
+Any all-to-all coordination has n(n−1)/2 communication paths. That is *Brooks's
+Law* made structural: past a small n, adding agents /slows/ the system. The
+hype's value model (Metcalfe, value ∝ n²) counts only the /benefit/ of edges and
+never their /cost/. The honest curve =value(n) − cost(n)= is concave: there is an
+optimal team size and it is small.
+
+Nature's swarms (ants, slime molds, boids) escape this not by chattering but by
+*stigmergy* — coordinating through a shared modifiable environment (pheromone,
+the blackboard). Stigmergy turns an O(n²) /messaging/ problem into an O(n)
+/read-write-against-a-medium/ problem, and decouples agents in /time and
+identity/: agent B uses A's contribution without knowing A exists, /even after A
+has terminated/. See =01= §3 and §6.
+
+** Move 3 — the medium is a CRDT, and CALM says that needs no consensus
+
+Hellerstein's *CALM theorem*: a computation has a coordination-free, consistent
+distributed implementation /iff it is monotone/ (it only ever adds facts, never
+retracts). Structure the shared medium as append-only monotone records (a G-Set
+CRDT) and convergence is /free/ — no locks, no consensus, order-independent.
+Reserve consensus for the rare genuinely non-monotone step ("we are done", "no
+more work exists", an irreversible action). See =01= §5.
+
+* The resolved architecture (one screen)
+
+#+begin_src
+  MEDIUM        the Hist blackboard — VERIFIED already built (02 §1):
+                  append-only nodes + content-addressed ids
+                  + {:hash, h} => [{sid,nid}…]  ← a G-Set CRDT, in the hot path
+  COMM EDGES    NONE between siblings. Zero. All flow goes through the medium.
+                  → Brooks's Law structurally voided (no edges = no n² term)
+  DISCOVERY     content-query the medium by predicate (open, monotone, ambient read)
+  AUTHORITY     object-capability — agents are HANDED scoped write-capabilities;
+                  reading is ambient, writing into a region needs a capability
+  CLAIMING      monotone append + resolve-by-fold (Lamport-min), never a lock
+                  ≡ basal-ganglia action gating (03)
+  LOCATION      logical/content keys via the Hist.Store behaviour;
+                  Store.Memory → Store.Khepri is the local → cluster axis,
+                  ZERO agent-code change; Raft owns cross-node convergence
+  TRIGGERS      black/watch — deferred condition-gated intentions
+                  ≡ frontopolar prospective memory (03); powers webhooks + unblocking
+  FORK A        a spawning parent folds its children's monotone findings (default)
+  FORK B        parentless peers reconcile via rendezvous + Ra consensus verdict
+  TWO PLANES    sessions WRITE monotone records + READ the medium (ephemeral, many);
+                  BEAM NODES decide (the stable Khepri/Ra cluster). Consensus
+                  membership is over NODES, never sessions (06 DC-7). A session
+                  may post-then-exit; its finding still folds.
+  TERMINATION   the global ParallelBudget token bucket (exists) — the measure,
+                  since sibling reachability makes the call graph cyclic
+#+end_src
+
+The whole mesh reduces to: *a shared append-only tree that converges by Raft,
+addressed by content, written under capability, folded by whoever needs a
+decision.* No sibling talks to a sibling, ever. The medium is the mesh.
+
+* The two graphs (the distinction the hype erases)
+
+There are *two different edge sets over the same agents*, and conflating them is
+the root confusion:
+
+| graph | edges mean | wants to be | who provides it |
+|-------+-----------+------------+-----------------|
+| *control / supervision* | who restarts / owns / folds whom | a *tree* (clear ownership, "let it crash", well-founded termination) | OTP supervision + ParallelBudget |
+| *data / coordination* | who shares results with whom | *no direct edges at all* — a shared *blackboard* | the Hist store (G-Set) + Khepri/Raft |
+
+You keep a strict control tree AND a sparse (here: /empty/) communication
+overlay, simultaneously, on one vertex set. The mistake is thinking the two are
+one graph.
+
+* Fork A and Fork B — both are in scope
+
+Both are committed. They differ only in /whether a parent exists to own the
+non-monotone fold/.
+
+** Fork A — reflexive spawning (a parent exists)
+
+The usual case: an agent spins up other agents. The spawner is the parent; it
+created the region, handed children scoped write-capabilities, and /folds/ their
+findings into its decision. The parent is the sole non-monotone actor. CALM-clean
+with zero consensus. Covers the large majority of work (fan-out search, parallel
+review, map-reduce, speculative racing). Detail: =02= §3, =04= §4.
+
+** Fork B — parentless reconciliation (no single owner)
+
+Three triggers, all real for this project:
+- *human launches several agents on different tasks* that must later be
+  reconciled — no parent spawned them;
+- *webhooks spawn agents* — an external event, not an agent, initiates;
+- *an agent unblocks an action for another agent* — stigmergic unblocking via a
+  standing =watch=.
+
+With no parent, the peers must (a) /rendezvous/ on a shared region by naming
+/what it is about/ (content-addressed, not who-made-it), and (b) when a genuinely
+non-monotone collective fact is needed ("all tasks reconciled", "the refactor is
+complete"), reach it by *consensus* — Ra leader-election + quorum, the only true
+consensus round in the system. Detail: =02= §4-§5, =04= §6.
+
+* The reflexive seam
+
+"Let the runtime call itself" is a fixed point =eval(eval)=: a tool whose body
+re-enters the runtime. The codebase already does this twice (a =:ptc= tool
+re-enters =PtcRunner.Lisp.run=; a nested =SubAgent= re-enters the loop).
+Homoiconicity makes self-spawning /natural/ rather than special — the child's
+program is data the parent authors at runtime, the same mechanism as
+=define-tool=. The new surface is one tool (=tool/spawn-session=) plus the
+=black/*= verbs. Nothing in the core loop changes. Showcase: =04= §3.
+
+* What is genuinely new vs already present
+
+| piece | status | evidence |
+|-------+--------+----------|
+| append-only monotone medium | *present* | =recorder.ex= appends one node/turn, monotone =seq= |
+| content-addressed dedup | *present* | =node.ex= =id = hash(form_src <> parent_id)= |
+| multi-writer union index (G-Set) | *present* | =store.ex= ={:hash,h} => [{sid,nid}…]= |
+| pure, message-passable entries | *present* | =node.ex= realization invariant (no live handles) |
+| local→distributed transparency seam | *present* | =Hist.Store= behaviour, Memory/Khepri impls |
+| Raft consensus engine | *present* (vendored) | Khepri on Ra (=khepri_cluster.erl=) |
+| liveness / membership monitor | *present* | =SessionRegistry= monitors pids, drops dead |
+| global termination budget | *present* | =ParallelBudget= token bucket |
+| cross-session =black/*= verbs | *new* | generalize self-scoped =hist/*= to a shared region |
+| =tool/spawn-session= | *new* | a native tool wrapping =Session.run= under budget |
+| =watch= trigger engine | *new* | Khepri triggers/projections + a =Mesh.Watcher= |
+| =decide= consensus verb | *new* | a thin front over Ra leader-election + quorum |
+
+The substrate is built. What is missing is the /aperture/ (the verbs are
+self-scoped today) and the /reflexive seam/ (one tool). That is a small,
+identifiable build, not a foundation to pour — which is exactly why this design
+is worth trusting.

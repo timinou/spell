@@ -1,0 +1,137 @@
+#+TITLE: Session listing + trace reading (open & past)
+#+STATE: DOING
+#+SESSION_ID: 1511b963aa347f4e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T10-18-22-248Z_1511b963aa347f4e.jsonl]]
+#+CUSTOM_ID: PLAN-010-session-listing-trace-reading-open-past
+
+* Initial Message
+
+can you make a simple system to list sessions (open and past) and read their traces (like the traces that we talked about in the Layer -1..-5 in earlier design documents? Please start with a thorough architecture investigation
+
+* Goal
+
+A simple system to LIST sessions (open + past) and READ their traces — the
+Layer -1..-5 trace data from the Hist substrate (recorded node DAG + each node's
+span_root execution interior). Two surfaces: a human TUI browser
+(`mix spell.sessions`, mirroring `mix spell.tui`/`mix spell.gallery`) AND in-band
+`hist/*` PTC verbs (`hist/sessions`, `hist/trace`) + a plain-text mode of the
+same mix task.
+
+* What already exists (substrate — reuse, do not rebuild)
+- ~Hist.sessions/1~ — every recorded session, newest-first (NO callers today).
+- ~Hist.resume/2~ -> ~%Hist.View{}~ (env, tools, messages, nodes slice).
+- ~Hist.Query~ (tool_calls, forms, defs, cost, diff), ~Hist.Spans~ (flatten
+  span_root, cost, trace by tool) — read any session's trace.
+- Two stores behind ~Hist.Store~: Memory (default, ETS, per-BEAM-sitting) and
+  Khepri (durable, opt-in via config). The list reflects the configured store.
+- Pane/projection conventions: pure ~project/2~ + ~view/1~ (NIF-free,
+  unit-testable), self-contained App pattern (~ScreenGallery~), headless render
+  via ~SceneRender~/~init_test_terminal~.
+
+* The gap
+1. No surface lists sessions (Hist.sessions has zero callers).
+2. No reader renders an arbitrary session's node/span trace.
+3. "Open" sessions are unrepresented: no session-process registry; Session.run
+   is unsupervised and records to Hist only AFTER a mission completes.
+
+* Decisions (user)
+- Add a minimal supervised session registry NOW (live/open tracking), sibling of
+  ToolRegistry/OAuth in the app supervision tree.
+- Surface = BOTH a dedicated `mix spell.sessions` TUI browser AND `hist/*` PTC
+  verbs + a plain-text mix mode.
+- Assess/advance FUP-006 (cross-session live inspector) in line with the
+  architecture (see "FUP-006 stance" below).
+
+* Design — components
+
+** C1. SpellAgent.SessionRegistry (NEW, supervised GenServer)
+Tracks IN-FLIGHT sessions. Sibling of ToolRegistry.
+- ~register(session_id, meta)~ — meta %{prompt, model, t0}; monitors the CALLER
+  pid so a crashed/killed run auto-unregisters (never a stale "open" row).
+- ~finish(session_id)~ — explicit unregister at run end.
+- ~live/0~ -> [%{session_id, prompt, model, t0, pid}] (running now).
+- ~live?/1~.
+- Client funcs are best-effort: guard on Process.whereis, no-op / [] if the
+  registry is down (history/liveness is an enhancement, never a boot dep — same
+  posture as Hist recording). DOWN messages clean up by monitor ref.
+
+** C2. Session.run wiring (best-effort, never changes outcome)
+register at start, finish in an after/try. Wrapped so a sick registry can never
+fail a mission (mirrors record_history's try/catch swallow).
+
+** C3. SpellAgent.Hist.SessionList (NEW, pure capability module)
+~rows(opts)~ -> the unified session list: UNION of Hist.sessions(store) (past)
+and SessionRegistry.live() (open), keyed by id, each enriched with turn count +
+token cost (Query.cost) and a ~live?~ flag. Sort: live first, then t0 desc. Pure
+(store + registry snapshot -> rows) => unit-testable with injected store and a
+fake live list.
+
+** C4. SpellAgent.Hist.Trace (NEW, pure capability module)
+~rows(impl, session_id)~ -> the conversation trace as flat rows. Two levels:
+- node rows (the root->cursor slice via Reconstitute/View.nodes, else seq-sorted
+  Store.list): %{seq, kind, status, prompt, form_src, say, result, tokens,
+  node_id, has_interior?}.
+- interior rows: each node's span_root flattened (reuse Hist.Spans.spans/1) with
+  depth, for drill-in.
+~interior(node)~ -> the span rows for one node. Pure => unit-testable.
+
+** C5. hist/sessions + hist/trace PTC verbs (Hist.Namespace)
+- ~(hist/sessions {})~ -> SessionList.rows over the namespace's store + live.
+- ~(hist/trace {:session "id"})~ -> Trace.rows; defaults to the current session.
+Atom-keyed Elixir maps, consistent with sibling Elixir verbs (hist/spans,
+hist/window). Plus facade conveniences Hist.session_list/1 + Hist.trace/2.
+
+** C6. SpellAgent.Tui.SessionBrowser (NEW ExRatatui.App) + Mix.Tasks.Spell.Sessions
+Self-contained App (ScreenGallery pattern). Two panes: LEFT session list, RIGHT
+trace of the selected session.
+- left focus: j/k select, l/enter -> focus trace.
+- trace focus: j/k move cursor, l expand a node's interior, h collapse / back to
+  list, esc/q quit.
+- a periodic refresh tick (+ `r`) re-reads SessionList/Trace so open sessions and
+  newly-recorded turns appear live.
+- materializes via List/Paragraph like the gallery; pure projections from C3/C4.
+Mix task modes:
+- `mix spell.sessions`            -> TUI browser
+- `mix spell.sessions --list`     -> plain-text session list (stdout)
+- `mix spell.sessions --trace ID` -> plain-text trace dump (stdout)
+
+* FUP-006 stance (honest, architecture-aligned)
+FUP-006's CORE is inspecting a RUNNING session's freeform LAYOUT TREE as
+code-as-data from another process. Today the Layout/Keymap/Theme/Tui.Store
+registries are session-GLOBAL singletons and Session.run is headless (no
+per-session layout tree); two `mix` invocations are two BEAM nodes (distribution,
+not same-node). So the layout-tree cross-process half does NOT map cleanly yet —
+it needs per-session registries (a PLAN-009 evolution) + BEAM distribution.
+THIS WORK DELIVERS the aligned, useful half: session ADDRESSABILITY (C1 registry,
+FUP-006 req 1) + live + durable TRACE inspection (C3/C4/C6). The layout-tree
+pretty-print-across-process remains deferred; FUP-006 to be annotated with what
+is now done vs still open. No overclaiming.
+
+* Non-goals (v1)
+- Per-session layout-tree cross-process inspection (FUP-006 remainder).
+- Mid-run streaming of a live session's PARTIAL span forest into the browser
+  (needs same-node Tui.Store coupling); v1 shows live status + trace as turns
+  record. Tracked as a follow-up if wanted.
+- Mutating/deleting sessions from the browser (read-only viewer).
+
+* Acceptance
+- `mix spell.sessions --list` prints recorded + running sessions (live tagged).
+- `mix spell.sessions --trace <id>` prints that session's node+interior trace.
+- `mix spell.sessions` TUI boots headless under test_mode, lists sessions,
+  drills a trace, never crashes on empty/missing.
+- `(hist/sessions {})` and `(hist/trace {:session id})` return plain data.
+- A running Session.run shows as live via SessionRegistry; a crashed run
+  auto-unregisters (monitor cleanup) — proven by test.
+- All new pure modules unit-tested against Store.Memory; `mix compile` clean;
+  focused tests green.
+
+* References
+- lib/spell_agent/hist.ex (facade: sessions/1, resume/2, latest/1)
+- lib/spell_agent/hist/{query,spans,reconstitute,view,session,node}.ex
+- lib/spell_agent/application.ex (supervision tree — add registry child)
+- lib/spell_agent/session.ex (run/2 — register/finish wiring)
+- lib/spell_agent/tui/{screen_gallery,scene_render,default_layout}.ex (App pattern)
+- lib/mix/tasks/spell.{tui,gallery}.ex (mix task pattern)
+- FUP-006 (cross-session live inspector — partially addressed here)
+
+NOTE [2026-06-21]: Implemented + green. New modules: SpellAgent.SessionRegistry (supervised, monitor-cleanup), Hist.SessionList, Hist.Trace (+ interior_of/3), Tui.SessionView (pure formatter), Tui.SessionBrowser (ExRatatui.App), Mix.Tasks.Spell.Sessions (TUI + --list + --trace). Wired: SessionRegistry into supervision tree + Session.run register/finish (best-effort); hist/sessions + hist/trace verbs; Hist.session_list/1 + Hist.trace/2 facade. Tests: 49 new (registry monitor-cleanup, list union/sort/enrich, trace fold + interior DFS, view formatting, browser headless drive). Full suite 440 passed. mix compile clean for all new files (sole warning is pre-existing harness.ex:285, untouched). FUP-006 annotated: addressability + trace half delivered; cross-process layout-tree half remains (needs per-session registries + BEAM distribution).

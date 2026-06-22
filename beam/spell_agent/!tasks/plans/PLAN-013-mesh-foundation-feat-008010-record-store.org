@@ -1,0 +1,109 @@
+#+TITLE: Mesh foundation — FEAT-008→010 (record, store-seq, monotone verbs): the single-node Fork-A core
+#+STATE: DONE
+#+SESSION_ID: 151269c91db37358
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T23-09-03-478Z_151269c91db37358.jsonl]]
+#+CUSTOM_ID: PLAN-013-mesh-foundation-feat-008010-record-store
+#+COMPLETION_HASH: 1ed98b05bac567ab
+
+* Initial Message
+
+what are distributed agents in a mesh network, really? please look into network theory, not hype. i want us to think about that deeply and from first principles, in order to let the BEAM lisp runtime call itself and create meshed sub-sessions. But I want strong theoretical backing beforehand
+
+* Goal
+Build the bottom three layers of the agent mesh (PROJ-006): the record + region
+minting (FEAT-008), the :mesh store kind with a store-owned per-region sequence
+(FEAT-009), and the four monotone black/* verbs wired into the agent loop
+(FEAT-010). When done, a single BEAM node runs the FULL Fork-A coordination core
+WITHOUT consensus or the watcher: a parent posts a goal, (later) spawns children
+that post findings, and folds them — zero sibling messages, all through the shared
+medium. This PLAN is the first end-to-end slice and the foundation every later
+FEAT (011-015) stands on.
+
+ALL oracle pre-coding corrections (agent://1-MeshFinalCheck) are BAKED IN below —
+the design is the corrected one, not the original doc-04 sketch.
+
+* Source of truth
+- docs/agent-mesh-theory/08-implementation.org (§A0 corrections, §B CodePaths, §C modules)
+- FEAT-008 / FEAT-009 / FEAT-010 org items (each has a PRE-CODING CORRECTIONS section)
+- the design docs 00-07 for theory; THIS plan + those three FEATs to build.
+
+* The corrected architecture (what changed from the docs, why)
+1. RECORDS KEYED BY STORE SEQ, not content hash (P2.2 FATAL). {:mesh, region, seq};
+   seq assigned atomically by the store. content_hash is a FIELD; dedup (findings/
+   goal/verdict only) uses a SEPARATE {:mesh_hash, region, h} index. The Hist
+   {:hash,_} node index is NEVER touched. :claim/:intention never dedup.
+2. NO per-session Lamport clock (P2.1). The store's per-region monotonic seq IS the
+   total order — mirrors recorder.ex max_seq. Mesh.Clock is NOT built.
+3. claim :won? is PROVISIONAL (P2.3) — documented; single-node ETS is authoritative,
+   multi-node is best-effort (that is FEAT-012/013's problem, not this PLAN's).
+4. Fork-A re-goal is owner+liveness gated (P1.3): SessionRegistry.live?(owner).
+
+* Steps (in order; each is a FEAT)
+
+** Step 1 — FEAT-008: Mesh.Record + Mesh.Region (Wave 1, pure)
+- lib/spell_agent/mesh/record.ex: defstruct [:region,:kind,:seq,:content_hash,
+  :author,:t,:payload,:parent,:watermark,:sealed]; new/1 (seq: nil, stamp author/
+  t/content_hash, frozen-data guard); content_hash/1 = hash(canonical(payload)<>region).
+- lib/spell_agent/mesh/region.ex: fork_a(goal,parent) = hash(goal<>parent<>nonce);
+  fork_b({:structured,t}) | fork_b({:slug,s}); raise on bare NL string; write_cap?/2.
+- test/mesh/record_test.exs, region_test.exs.
+- ACCEPT: mix test those files; mix check clean; seq nil at new; fork_a unique;
+  fork_b slug stable; NL raises; frozen guard raises on a pid.
+
+** Step 2 — FEAT-009: Mesh.Store + per-region seq (Wave 2, ⟸008)
+- EDIT hist/store.ex: add :mesh, :mesh_seq, :mesh_hash to @type kind + key space.
+- EDIT hist/store/memory.ex list/2: add match arms for the three new kinds.
+- EDIT hist/store/khepri.ex: path map + list/2 for the three new kinds.
+- NEW lib/spell_agent/mesh/store.ex: put/2 (next_seq atomically → stamp → Store.put
+  → index_content for finding/goal/verdict), region/2, by_kind/3, by_match/3,
+  claims_for/3, sealed?/2. next_seq: Memory = :ets.update_counter on {:mesh_seq,r};
+  Khepri = R/W txn on [:hist,:mesh_seq,r].
+- test/mesh/store_test.exs (run against Store.Memory; the same body is the D13
+  contract for Khepri later).
+- ACCEPT: seq strictly monotonic per region, store-assigned; identical :finding
+  collapses via {:mesh_hash}; identical :claim does NOT; a mesh put leaves the
+  {:hash,_} Hist index intact; mix check clean.
+
+** Step 3 — FEAT-010: Mesh.Namespace + loop wiring (Wave 3, ⟸009)
+- NEW lib/spell_agent/mesh/namespace.ex: tools(impl,session_id,region) mirroring
+  hist/namespace.ex tools/2 closures. black/post (cap-check, owner-gated re-goal,
+  reject sealed), black/query (ambient, by descending seq), black/claim (append +
+  argmin(seq,sid) fold ignoring expired leases, optional settle_ms, :won?
+  provisional), black/fold (count/group-by/rank/predicate). watch/decide STUBBED.
+  verbs(session_id,opts) facade mirroring Hist.verbs.
+- EDIT session.ex run/2: merge Mesh.verbs when opts[:region] present (the SEAM-5
+  Map.merge seam).
+- test/mesh/namespace_test.exs: post goal + 3 findings → fold group-by returns 3;
+  two concurrent claims → exactly one :won?; non-owner/ dead-owner re-goal rejected;
+  post to sealed rejected.
+- ACCEPT: the Fork-A monotone core works single-node WITHOUT consensus/watcher/
+  spawn; mix check clean.
+
+* Cross-cutting invariants (every step preserves — doc 08 §F)
+- no live handle/pid/ref on the blackboard (Record.new guard).
+- best-effort posture: a store error inside a verb returns {"err" ...}, never
+  crashes the turn (mirror hist/namespace normalize_err + session.ex rescue/catch).
+- mesh logic written against the Hist.Store BEHAVIOUR, never a concrete engine
+  (so Memory→Khepri is free — D13).
+- mesh NEVER writes a {:hash,_} key (P2.2).
+
+* Verification
+- `mix test test/mesh/` (the three new test files) — the contract suite.
+- `mix check` (Biome/format n.a. for Elixir; here = mix compile --warnings-as-errors
+  + mix format --check-only + the project's check alias) clean.
+- NB per AGENTS.md: do NOT run the full `mix test` or `bun test` suites unless asked;
+  run the focused test/mesh/ files.
+
+* Out of scope (later FEATs, do NOT build here)
+- consensus / black/decide (FEAT-012), watcher / black/watch (FEAT-013),
+  tool/spawn-session (FEAT-011), screens (FEAT-014/015). black/watch + black/decide
+  are STUBS in FEAT-010.
+- multi-node / Khepri distribution validation (folded into FEAT-012).
+
+* Orchestration through FEAT-015 (what each step unlocks) — see the session
+  narrative + PROJ-006 "FILED FEATs" for the full DAG. Summary:
+  008 record+region → 009 store-seq medium → 010 monotone verbs (FORK-A CORE works)
+  → then 011 spawn (reflexive fan-out), 012 decide (Fork-B verdict, distribution
+  gate), 013 watch (triggers/unblocking), 014/015 screens (observe the mesh).
+
+NOTE [2026-06-22]: All three steps shipped + green. FEAT-008/009/010 DONE. The single-node Fork-A monotone core works end-to-end: post goal + findings, fold ranked result, deterministic claim arbitration by store-seq, owner-gated re-goal — zero sibling messages, no consensus/watcher. 46 mesh tests pass; 154 hist tests still green; mesh files compile + format clean. Oracle pre-coding corrections (P2.1/P2.2/P2.3/P1.3) all baked in (store-seq replaced Mesh.Clock). Next: FEAT-011 (spawn) / 012 (decide) / 013 (watch) wave.

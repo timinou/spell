@@ -71,6 +71,15 @@ defmodule SpellAgent.Tui.Surface do
   @spec layout(term(), Rect.t()) :: [{map(), Rect.t()}]
   def layout(tree, %Rect{} = rect), do: place(tree, rect)
 
+  @doc """
+  Resolve every deferred `tmpl::` hole in `tree` against the live `data_env`
+  (PLAN-012 W3), BEFORE laying it out. A `__hole__` becomes its evaluated value;
+  a `__splice__` is flattened into its parent sequence. Capability-bounded + total
+  — see `SpellAgent.Tui.HoleResolver`. Call this on a tree before `layout/2`.
+  """
+  @spec resolve_holes(term(), map()) :: term()
+  defdelegate resolve_holes(tree, data_env), to: SpellAgent.Tui.HoleResolver
+
   # ---- the recursive walk ----
 
   defp place(node, %Rect{} = rect) when is_map(node) do

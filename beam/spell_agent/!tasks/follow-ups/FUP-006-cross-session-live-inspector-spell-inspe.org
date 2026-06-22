@@ -69,3 +69,34 @@ renderer walks.
 - lib/spell_agent/hist/session.ex / hist.ex (stable session_id threading)
 - ../ex_ratatui-vendored/lib/ex_ratatui/distributed.ex (cross-node transport, vendored)
 - PLAN-009 deliverable 10 (the in-scope same-node inspector this extends)
+
+* Partially addressed by PLAN-010 (session listing + trace reading)
+
+PLAN-010 delivers the ALIGNED, buildable-now half of this FUP and documents the
+precise remainder.
+
+** Delivered by PLAN-010
+- Session ADDRESSABILITY (this FUP's req 1): ~SpellAgent.SessionRegistry~, a
+  supervised GenServer mapping session_id -> the running run's owner pid, with
+  monitor-driven auto-cleanup (a crashed run leaves no stale "open" row). Wired
+  into ~Session.run~ (register on start / finish on exit, best-effort).
+- Discovery picker (this FUP's "Open questions: Discovery"): ~mix spell.sessions~
+  lists live + past sessions; ~Hist.SessionList~ unions registry-live with
+  Hist-recorded.
+- Live + durable TRACE inspection: ~Hist.Trace~ + the ~SessionBrowser~ TUI read
+  any session's node DAG + each node's span_root interior, refreshing on a tick
+  so open sessions and new turns appear live. Plus ~(hist/sessions {})~ /
+  ~(hist/trace {...})~ PTC verbs (in-band agent access).
+
+** Still open (the cross-process LAYOUT-TREE half)
+The CORE remaining vision — point a SECOND process at a RUNNING session and
+pretty-print ITS live freeform LAYOUT TREE as code-as-data — is NOT yet
+buildable cleanly, and PLAN-010 deliberately does not fake it:
+- The Layout/Keymap/Theme/Tui.Store registries are session-GLOBAL singletons,
+  not per-session, so there is no per-session layout tree to address yet.
+- ~Session.run~ is headless (no layout tree); only ~spell.tui~ builds one.
+- Two ~mix~ invocations are two BEAM nodes => needs BEAM distribution
+  (ExRatatui.Distributed / :erpc), not same-node pid sharing.
+Prerequisite: per-session registries (a PLAN-009 evolution) + a session<->App
+addressing scheme. The trace browser from PLAN-010 is the natural shell to host
+that layout-as-data pane once those land.

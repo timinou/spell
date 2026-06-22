@@ -1,0 +1,91 @@
+#+TITLE: LLM HTTP cassettes: record/replay Anthropic SSE at the Req seam
+#+STATE: DONE
+#+SESSION_ID: 150e55dbf9fb7900
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-18T19-08-04-455Z_150e55dbf9fb7900.jsonl]]
+#+CUSTOM_ID: FEAT-006-llm-http-cassettes-record-replay-anthrop
+#+COMPLETION_HASH: 8586f7835f43ff28
+
+* Initial Message
+
+check out how ex_ratatui prefers doing unit and visual tests and tell me how you would do it here. let's design a sturdy testing infra first
+
+* Goal
+Deterministic, offline, async-safe record/replay of real Anthropic
+=/v1/messages= responses so the agent loop + inspector TUI can be driven by a
+REAL wire transcript (not a hand-written fn-fake), at zero network cost in CI.
+
+This is the LLM half of PLAN-347's Design "C (loop-correctness) + A (visual
+regression)". The terminal/visual half is unblocked by ex_ratatui PATCH-2
+(=Runtime.buffer/1=, LANDED).
+
+* Decision: Req.Test + a thin spell-owned cassette (NOT a hex VCR lib)
+Investigated (2026-06-21):
+- =req_cassette= (lostbean): async-safe, built on Req.Test, has ReqLLM support —
+  BUT pins =req ~> 0.5.15=; we are on =req 0.6.1=. Version conflict; would need a
+  forced override and risks drift.
+- =reqord=, =req_vcr=: similar VCR-style, also Req-version sensitive, impose their
+  own =Case= module.
+- Our adapter (=SpellAgent.Anthropic=) is NOT generic: subscription OAuth, custom
+  Claude-Code headers, system-block injection, =proxy_= tool prefixing, and SSE
+  collected-then-folded. We want to exercise =parse_response/1= (the SSE folder)
+  too — so wire-level recording is the right granularity.
+
+∴ Build on =Req.Test= (ships with req 0.6.1, async-safe, no global mock) plus a
+small =SpellAgent.LlmCassette= owning the record/replay + on-disk format. No new
+runtime dep; full control over the subscription specifics.
+
+* Design
+** Injectable Req options seam
+=Anthropic.call_with_token/3= currently calls =Req.post(@messages_url, ...)= with
+fixed options. Add an injectable =:req_options= (threaded from =call/2= via the
+request map or app config) so a test can pass =plug: {Req.Test, CassetteStub}=.
+Production passes nothing → real Finch transport unchanged.
+
+** Cassette format (wire-level)
+=test/fixtures/llm/<name>.cassette= — a term/JSON file holding an ORDERED list of
+interactions, each:
+- =request_digest=: =sha256= of the canonicalized request body (model + messages
+  + tools + system), the match key. Canonicalization must strip the volatile
+  billing-header =cch= + =rand3= so the digest is stable across runs.
+- =status=, =response_headers=, =sse_body=: the RAW =text/event-stream= bytes, so
+  replay drives the SAME =parse_response/1= path as production.
+Sensitive-data filtering: redact =authorization: Bearer ...= and any token before
+write (a =filter/1= callback, mirroring req_cassette's posture).
+
+** Modes
+- =:replay= (default in CI): serve from cassette; error if the digest is missing.
+- =:record_missing=: hit the real subscription once (gated =@tag :live= +
+  credential present), write the cassette, then replay thereafter.
+- =:record=: force overwrite (intentional refresh of a transcript).
+Selected by env (=LLM_CASSETTE=record_missing=) so default =mix test= is offline.
+
+** Replay mechanics
+=Req.Test.stub(CassetteStub, fn conn -> ... end)= reads the request body, computes
+the digest, looks up the interaction, and returns the recorded SSE with the
+recorded status/headers. =Anthropic.callback/1= bound to this stub becomes the
+=llm:= for =Session.run/2=.
+
+* API surface (to be documented in moduledoc + a guide)
+- =LlmCassette.with_cassette(name, opts, fn -> ... end)= — scopes a stub for the
+  block; returns the block value.
+- =LlmCassette.llm(name)= — an =llm:= callback bound to a cassette, for
+  =Session.run(prompt, llm: LlmCassette.llm("two_turn_tool_use"))=.
+- =LlmCassette.record?/0=, =LlmCassette.mode/0= — env-driven mode.
+- =LlmCassette.path/1=, =LlmCassette.digest/1= — introspection.
+Each with @doc + @spec; a =docs/llm-cassettes.md= guide with the record→commit
+workflow and the redaction guarantee.
+
+* Acceptance
+- =Session.run(prompt, llm: LlmCassette.llm(name))= drives the real
+  =PtcRunner.SubAgent= loop offline from a committed cassette, exercising
+  =Anthropic.parse_response/1= (SSE fold) on replay.
+- A recorded cassette contains NO bearer token (redaction verified by a test).
+- Default =mix test= needs no network/credential; =--include live= +
+  =LLM_CASSETTE=record_missing= records.
+- Digest is stable across runs despite the volatile billing header.
+
+* Related
+- PLAN-347 (parent), BUG-009/010 (render robustness), ex_ratatui PATCH-2.
+- Consumed by FEAT: LLM-driven terminal test suites (Design C + A).
+
+NOTE [2026-06-21]: Shipped. Req.Test wire-level cassette (rejected req_cassette: pins req ~>0.5.15 vs our 0.6.1). Anthropic.call_with_token gains an app-env Req-options seam; LlmCassette provides with_cassette/capture/digest/assert_no_secrets. capture/3 records digests from the real requests offline so fixtures stay consistent. Verified: capture->replay identity through the REAL two-turn SubAgent loop ({:ok,42}); unknown-digest raises; no secret on disk; digest stable across the volatile billing header. llm_cassette_test.exs 4 passed. NB: live record mode (record/3) is a documented follow-up; replay + offline capture are the shipped default.

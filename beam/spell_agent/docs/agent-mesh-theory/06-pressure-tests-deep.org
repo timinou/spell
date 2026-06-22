@@ -1,0 +1,290 @@
+#+TITLE: Deep pressure tests — the cracks the first pass missed
+#+SUBTITLE: Adversarial second pass on the claim/decide boundary, CALM-of-the-verbs, clocks, rendezvous, membership
+#+OPTIONS: toc:2 num:t
+
+The first pass (=05=) tested the design as built. This pass attacks the
+/foundations/ of the coordination model itself — the places where the prose in
+=02=/=04= was confident but under-justified. Two findings force real spec
+corrections (DC-4 rendezvous, DC-7 membership); the rest sharpen rules. None is
+fatal to "go full stigmergic + both forks", but the design as originally written
+had two soft spots that this pass hardens.
+
+Severity scale: *FATAL* (breaks the core decision) · *SERIOUS* (spec must change)
+· *MINOR* (honesty/wording or a tunable).
+
+* DC-1 — The claim/decide boundary is not binary (SERIOUS)
+
+*The original rule:* "claim gates idempotent work; decide gates irreversible work."
+
+*The crack:* "idempotent vs irreversible" is not a partition — real work falls
+between:
+- *partially-idempotent*: an idempotent core + a non-idempotent tail (analyze a
+  file = idempotent; append the result to an external ticket = not). Routed via
+  =claim=, the visibility window (DC-2) lets two winners both append → a double
+  ticket.
+- *idempotent-but-expensive*: a 10-minute compile, a costly LLM chain. =claim=
+  /permits/ duplicate execution under the visibility window — correct but wasteful;
+  =decide= is overkill (needs quorum + a live node cluster).
+- *retryable-with-dedup*: an external call carrying an idempotency key — safe to
+  double-fire because the remote dedups.
+
+*The fix — re-cut the boundary on EFFECTS, not on "idempotence":*
+
+#+begin_src
+  effect class of the work          → gating primitive
+  ─────────────────────────────────────────────────────
+  only monotone blackboard writes   → claim         (duplication is harmless;
+                                                      dup findings collapse by hash)
+  external effect WITH dedup key    → claim          (remote dedups the dup)
+  external effect WITHOUT dedup     → decide         (exactly-once, quorum)
+  expensive but blackboard-only     → claim + settle (DC-2: a settle delay so the
+                                                      duplicate almost never starts)
+#+end_src
+
+So the rule sharpens to: *=claim= gates work whose only effects are monotone
+blackboard writes (or externally-deduped); ANY non-deduped external effect goes
+through =decide=.* "Idempotent vs irreversible" was a lossy proxy for "monotone
+effects vs not". =04= §1 (=black/claim=) and =05= PT-2 must adopt this wording.
+No new primitive needed — but partially-idempotent work must be /decomposed/: the
+monotone part under =claim=, the irreversible tail under =decide=.
+
+* DC-2 — The claim visibility window needs a settle delay for expensive work (MINOR)
+
+*The crack:* =claim= folds /currently visible/ claims. Under replication lag two
+sessions on different nodes can each fold an incomplete claim set and both believe
+they won (the optimistic window). =05= PT-2 accepted this for idempotent work, but
+for /expensive/ idempotent work the wasted duplicate is real cost.
+
+*The fix:* an optional =:settle_ms= on =claim=. The claimant posts its claim, waits
+=settle_ms= (> the expected replication bound), re-folds, and proceeds only if
+still the winner. This converts "optimistic" to "optimistic with a confirmation
+barrier" — cheap insurance against duplicate expensive work, without a lock or a
+consensus round. A tunable, not a redesign. Add to the =black/claim= contract.
+
+* DC-3 — Goal supersession is a hidden non-monotone retract (SERIOUS)
+
+*The crack — the sharpest CALM violation in the original taxonomy.* =02= §2 lists
+=:goal= as "monotone (supersede-by-newer)". But /supersession is retraction/:
+after superseding, the old goal is no longer active. Retraction is non-monotone;
+CALM says it needs coordination. Two sessions that supersede the same goal
+concurrently produce two "active" goals until they observe each other — a child
+=query='ing "the active goal" may see either. The original design let any session
+=post= a new goal freely, which is a free non-monotone write. That is wrong.
+
+*The fix — split goal-posting by monotonicity:*
+- the *first* =:goal= in a region is a monotone create (no prior to retract) →
+  stays a free =post=.
+- *re-goaling* (superseding an active goal) is a *control-plane* op, NOT a free
+  monotone write. It belongs to an owner:
+  - *Fork A*: only the spawning parent re-goals (it owns the region's control).
+  - *Fork B*: re-goaling goes through =decide= (a consensus verdict that installs
+    the new goal), because no single session owns a rendezvous region.
+- "active goal" is then resolved as an *LWW-register over a total order the owner
+  controls* (parent's sequence, or the Raft log for Fork B) — a register CRDT
+  whose updates are serialized by the owner, so concurrent supersession cannot
+  produce two active goals.
+
+This keeps =:finding=, =:claim=, =:intention= purely monotone (CALM-free) and
+isolates the one genuinely non-monotone control op to an owner — exactly the
+CALM discipline the design preaches, now applied to its own taxonomy. =02= §2 and
+=03='s "supersede-by-newer" claim must be corrected.
+
+* DC-4 — Rendezvous-by-hash is fragile for natural-language goals (SERIOUS)
+
+*The crack — the softest spot in Fork B.* =02= §3: =region_id = hash(canonical(goal))=.
+For a /natural-language/ goal this is fundamentally unreliable:
+- *false negatives:* "ship feature X" / "Ship Feature X" / "deploy feature X" →
+  three hashes → sessions that SHOULD meet never rendezvous. Fork B silently
+  fails to its n=1 degenerate (=05= PT-10) when it should have meshed.
+- *false positives:* aggressive canonicalization (lowercase + stem + stopword
+  drop) collides "fix the auth bug" with "fix the auth flow".
+
+NL does not content-address. =canonical(goal)= was hand-waved and cannot be made
+robust for free text.
+
+*The fix — rendezvous is a DISCOVERY problem, not a hashing problem* (and the
+design already has the verb for it):
+- *structured subjects content-address perfectly* — a PR number, a file path, a
+  ticket id, a commit sha. When the rendezvous key is structured, =hash(key)= is
+  exactly right. /Most webhook and cross-agent-unblock rendezvous are structured/
+  (event subjects, resource ids). Keep hashing for these.
+- *for human/NL goals, rendezvous by =black/query= + an explicit coordination
+  key:* a joining session =query='s existing region goals and either joins a
+  matching region (exact slug, or human/owner confirmation) or creates a new one
+  with an explicit slug. Rendezvous becomes "discover the region", which is the
+  =query= verb the design is built on — not a brittle hash of prose.
+- optional later: goal /embeddings/ + nearest-neighbour for fuzzy auto-join (a
+  research extension; needs a similarity threshold and can still mis-cluster —
+  defer).
+
+*Revised rule:* =region_id= = =hash(structured_key)= when a structured subject
+exists (webhooks, resources — the common Fork-B trigger); else an *explicit
+coordination key* (slug) the launcher supplies, discoverable via =black/query=.
+Never =hash(raw_natural_language)=. =02= §3 must be corrected; =04='s Fork-B
+showcase should use an explicit ="ship-feature-X"= slug (it already does — make it
+normative, not incidental).
+
+* DC-5 — Lamport-min gives a DETERMINISTIC winner, not a FAIR one (MINOR, honesty)
+
+*The crack:* Lamport clocks advance via causal message passing. On a stigmergic
+blackboard sessions don't message each other — so what advances the clock, and is
+the "winner" meaningful?
+
+*The analysis:*
+- *the blackboard IS the causal channel.* A session advances its clock to
+  =max(local, max lamport of records it READ) + 1= on read, and increments on
+  write. Reads are "receives", writes are "sends". This is a valid Lamport clock
+  /iff sessions observe the medium before acting/ (read-before-write) — which the
+  =query=-then-=claim= pattern enforces.
+- *but truly concurrent claims* (two sessions claim having never observed each
+  other) have incomparable causal history; their Lamport values reflect only their
+  own local histories. =argmin(lamport, sid)= is then *deterministic* (every
+  reader agrees) but *not fair/temporal* — for equal lamports the winner is the
+  lexicographically-smaller session id, which has nothing to do with who claimed
+  "first".
+
+*The verdict:* this is FINE for correctness — claim arbitration needs only that
+/all readers agree on one winner/ (no double-ownership of monotone work), which
+determinism delivers. Fairness is irrelevant to safety. *But the docs overstated
+it:* =02= §4.2 implies a meaningful "first" winner. Correct to: "Lamport-min +
+sid-tiebreak yields a *deterministic* winner — sufficient for exactly-one
+ownership; it makes *no fairness/temporal-order guarantee* for causally-concurrent
+claims, and needs none."
+
+*Do we need vector clocks / Raft sequence?* No. Vector clocks would /detect/
+concurrency, but we resolve all claims identically (min), so detection buys
+nothing. A Raft-assigned total order would give a "real" first-writer but defeats
+the consensus-free design. Lamport + deterministic tiebreak is the correct,
+cheapest choice — just described honestly.
+
+* DC-6 — The watch engine must not be a central SPOF; firing dedups via claim (SERIOUS → elegant fix)
+
+*The crack:* =04= §1 calls =Mesh.Watcher= "a single supervised GenServer". A
+single global watcher contradicts the no-central-coordination thesis: it is a SPOF
+and a bottleneck. But a /per-node/ watcher, once the store is distributed
+(Khepri replicates every write to every node), would see each write on every node
+and fire each intention *N times* (once per node).
+
+*The fix — firing is itself a claim* (dissolve the SPOF with the design's own
+primitive):
+- the watcher is *per-node local infrastructure* (like an ETS table or the Raft
+  log) — not a coordinator, just a process that tails its node's write stream.
+- when a watcher matches an =:intention= against a =post=, it does NOT run =:do=
+  directly. It =black/claim='s the firing (work id = =hash(intention_id <>
+  event_id)=). Only the claim winner runs =:do=. The claim CRDT guarantees
+  *exactly-once* firing across all nodes — no central watcher, no N-fold fire.
+- this also makes watch-firing crash-safe: if the winning node dies before running
+  =:do=, the claim lease (DC-2 / PT-5) expires and another node re-fires.
+
+So "the watcher" is N independent per-node tailers whose mutual exclusion is the
+claim mechanism. The SPOF vanishes and the fix reuses machinery already in the
+design. =04= §1 (=black/watch=) and =04= §6 (build seam) must be corrected:
+=Mesh.Watcher= is /per-node/, firing is /claim-deduplicated/.
+
+* DC-7 — Consensus membership is over NODES, not sessions (SERIOUS, the structural correction)
+
+*The crack — the deepest one, and it cascades.* =04='s =black/decide= runs "Ra
+leader-election + quorum". Raft quorum is over a /stable member set/. But Fork-B
+sessions are *ephemeral*: a session posts its finding and EXITS (=02= §5 trigger 1
+explicitly: "post its sub-results … then"). Consequences if quorum is over
+/sessions/:
+- *deadlock:* sessions post-then-exit, so when =decide= runs there may be zero (or
+  sub-quorum) live sessions → quorum never reached → the verdict never commits
+  (=05= PT-3's "whichever fires first" assumed live members).
+- *dynamic membership hell:* sessions come and go every few seconds; dynamic Raft
+  reconfiguration on that timescale is notoriously fragile.
+
+*The fix — two planes, and the substrate already implies it:*
+
+#+begin_src
+  CONSENSUS / MEMBERSHIP plane   = the BEAM NODE cluster (the Ra cluster).
+                                   Stable, long-lived, few. Khepri's Ra cluster
+                                   IS this — already vendored. decide's quorum is
+                                   the NODE quorum, independent of which sessions live.
+  COORDINATION plane             = SESSIONS. Ephemeral, many, come and go. They
+                                   only ever WRITE monotone records + READ the
+                                   medium. They are NOT Raft members and never vote.
+#+end_src
+
+A session does not "reach quorum"; it *triggers* a =decide=, and the *node it runs
+on* executes the Raft round on the stable node cluster. The "leader" in =decide=
+is a Ra leader among *nodes*, not sessions. A session can post its finding and exit
+immediately — its finding persists (PT-4 dead author), and =decide= later folds it
+on the node cluster regardless of whether the author still lives.
+
+This *simultaneously resolves DC-6* (watchers are per-node infra on the same node
+cluster), *DC-7* (membership = stable nodes), and *DC-6's crash case* (node
+quorum survives a node loss up to f failures). And it is /already how Khepri/Ra
+works/ — the Ra cluster is a node cluster. The original docs erred only in
+/describing/ consensus as session-level. =00=, =02= §4.3, and =04= §6 must state
+the two-plane model explicitly: *sessions write; nodes decide.*
+
+*Single-node consequence:* with one node, the "cluster" is trivially one member;
+=decide= degenerates to "the local node computes the verdict" (no real election) —
+which is exactly the right behaviour for the single-node default (=05= PT-10's
+graceful n=1). Distribution lights up when nodes join the Ra cluster, with zero
+change to session-level code (the location-transparency payoff, =02= §7).
+
+* DC-8 — decide must fold a SEALED snapshot, not "current" findings (SERIOUS)
+
+*The crack:* if =decide= folds "current" region findings and the elected leader
+crashes mid-fold, the re-elected leader folds a /larger/ set (findings arrived
+meanwhile) → a /different/ verdict with a different content-id. Two distinct
+verdicts can exist across a re-election; "idempotent across re-election" (claimed
+in the DC-6/PT-3 reasoning) fails.
+
+*The fix — seal the input.* =decide= folds findings up to a *watermark lamport*
+fixed at the start of the round (committed to the Raft log as the first step). Any
+leader, original or re-elected, folds the /same sealed set/ → the same verdict →
+the same content-id → idempotent commit. Findings arriving after the watermark
+belong to the /next/ round (a region can have successive verdicts:
+=v1= over findings ≤ w1, =v2= over findings in (w1, w2]). Add =:watermark= to the
+=black/decide= contract and state that a verdict is /always/ relative to a sealed
+finding-set.
+
+* DC-9 — Region lifecycle: sealing + GC (MINOR)
+
+*The crack:* regions are append-only and never die; Fork-B rendezvous regions
+accumulate forever (=05= PT-8 touched read-amplification but not lifecycle —
+who ends a region?).
+
+*The fix:* a committed *terminal verdict* may mark a region =:sealed= (a monotone
+flag — sealing only ever happens once, latches true). A sealed region rejects
+further =post=s and becomes archivable via the existing =Hist.Window= compaction
+(=hist.ex=). This gives regions a well-defined end without a non-monotone "delete".
+Defer the archival wiring; specify the sealed flag now.
+
+* DC-10 — Watch :do causal expectations (MINOR, usage discipline)
+
+*The crack:* a watch fires on finding =F=; its =:do= may assume =F='s
+/consequences/ are also visible, but only =F= (the trigger) is guaranteed present.
+
+*The fix — discipline, not mechanism:* =:do= receives =F= bound as =data/event=
+and may depend only on =F= plus a fresh monotone =query= (which may legitimately
+return more over time). A =:do= that needs a /set/ of preconditions should itself
+be a threshold watch (=:count N=), not a single-event watch. Document in the
+=black/watch= contract; no code change.
+
+* Summary — second-pass verdicts
+
+| id | crack | severity | disposition |
+|----+-------+----------+-------------|
+| DC-1 | claim/decide not binary | SERIOUS | re-cut boundary on EFFECTS (monotone-writes vs external) |
+| DC-2 | claim visibility window (expensive work) | MINOR | add =:settle_ms= confirmation barrier |
+| DC-3 | goal supersession = hidden retract | SERIOUS | re-goaling is owner/decide-only; goal = owner-serialized LWW-register |
+| DC-4 | rendezvous-by-hash fragile for NL | SERIOUS | hash STRUCTURED keys; NL → explicit slug + =query= discovery |
+| DC-5 | Lamport "winner" overstated | MINOR | honesty: deterministic ≠ fair; determinism suffices |
+| DC-6 | watch engine SPOF | SERIOUS | per-node watchers; firing dedups via =claim= (exactly-once) |
+| DC-7 | consensus over ephemeral sessions | SERIOUS | TWO PLANES: nodes decide, sessions write |
+| DC-8 | decide folds moving target | SERIOUS | seal a watermark snapshot; verdict is per-sealed-set |
+| DC-9 | regions never end | MINOR | terminal verdict latches =:sealed=; archive via Window |
+| DC-10 | watch :do causal assumptions | MINOR | discipline: depend on event + re-query only |
+
+*Is any FATAL to "go full stigmergic, both forks"?* No. The core decision
+survives intact — and is /strengthened/: every fix reuses the design's own
+primitives (claim dedups watch-firing; the node cluster is already Khepri's Ra
+cluster; sealing is a monotone latch). The two real structural corrections are
+*DC-7 (two planes: sessions write, nodes decide)* and *DC-4 (rendezvous by
+structured-key/discovery, never by NL hash)*. With those, Fork B is sound. DC-1/
+DC-3 sharpen the CALM discipline the design already lives by. The blackboard
+thesis holds; it is now honest about where the one consensus plane actually lives.

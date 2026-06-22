@@ -1,0 +1,144 @@
+#+TITLE: Mesh.Store + Mesh.Clock — the :mesh kind over Hist.Store, per-session Lamport clock
+#+STATE: DONE
+#+SESSION_ID: 151269c91db37358
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T23-09-03-478Z_151269c91db37358.jsonl]]
+#+CUSTOM_ID: FEAT-009-mesh-store-mesh-clock-the-mesh-kind-over
+#+BLOCKED_BY: FEAT-008
+#+COMPLETION_HASH: 78666ff0524bb67c
+
+* Initial Message
+
+what are distributed agents in a mesh network, really? please look into network theory, not hype. i want us to think about that deeply and from first principles, in order to let the BEAM lisp runtime call itself and create meshed sub-sessions. But I want strong theoretical backing beforehand
+
+* Goal
+Give the mesh its persistence aperture and its logical clock. NO new storage
+engine: add a :mesh record kind to the EXISTING Hist.Store behaviour so mesh
+records ride Memory (ETS, single-node) and Khepri (Ra, distributed) unchanged —
+the location-transparency payoff (D13). Plus a per-session Lamport clock so claim
+arbitration has a causal order (D6, DC-5).
+
+Read first: docs/agent-mesh-theory/08-implementation.org §C (Store, Clock) + §B
+(CodePaths), 02-blackboard-substrate.org §1 (the store IS the medium) + §4.2
+(Lamport), 06 DC-5 (clock honesty).
+
+* Wave / deps
+Wave 2. BLOCKED BY FEAT-008 (needs %MeshRecord{}). Blocks FEAT-010 (Namespace),
+FEAT-012 (Consensus reads the region), FEAT-013 (Watcher tails writes),
+FEAT-014/015 (screens read the region).
+
+* Modules / edits
+** lib/spell_agent/hist/store.ex  (EDIT — extend the behaviour's key space)
+- add :mesh to @type kind and a new key shape {:mesh, region, rid} to @type key
+  (alongside the existing {:node, sid, nid} etc). The docstring's logical key
+  space table gets a {:mesh, region, rid} => %MeshRecord{} row.
+- NO behaviour-callback change (put/fetch/delete/list/clear already cover it).
+
+** lib/spell_agent/hist/store/memory.ex  (EDIT — list/2 for :mesh)
+- list(:mesh, region) must enumerate that region's records, exactly how it scopes
+  {:node, sid, _} by session today (see the existing list/2 + the ETS match).
+
+** lib/spell_agent/hist/store/khepri.ex  (EDIT — path map for :mesh)
+- map {:mesh, region, rid} -> [:hist, :mesh, region, rid] in the key->path
+  function (mirror the existing {:node,sid,nid} -> [:hist,:node,sid,nid] mapping
+  shown in the moduledoc); list(:mesh, region) uses :khepri_wildcard_star for rid.
+
+** lib/spell_agent/mesh/store.ex  (NEW — SpellAgent.Mesh.Store)
+- thin functions over Hist.Store (the behaviour, never a concrete impl — D13/F.6):
+  - put(impl, %Record{region: r, id: rid} = rec) ->
+      Store.put(impl, {:mesh, r, rid}, rec) AND index {:hash, rid} via the same
+      union-list pattern as recorder.ex:199-208 (index_hash/2) so duplicate
+      records collapse (G-Set).
+  - region(impl, region_id) -> Store.list(impl, :mesh, region_id).
+  - by_kind(impl, region, kind), by_match(impl, region, match_map),
+    claims_for(impl, region, work) — PURE filters over region/2.
+  - sealed?(impl, region) -> any :verdict with terminal flag latched (DC-9).
+- reject put into a sealed region (return {:error, :sealed}); enforced again at
+  the verb layer (FEAT-010).
+
+** lib/spell_agent/mesh/clock.ex  (NEW — SpellAgent.Mesh.Clock)
+- a per-session Lamport counter (process-dictionary keyed by session_id, or a
+  small ETS table). API:
+  - tick_write(session_id) -> local := local+1; returns it (stamp on post).
+  - tick_read(session_id, max_seen) -> local := max(local, max_seen)+1; returns it
+    (called on query, advancing the clock by observed records — DC-5 causal channel).
+- documented honesty (DC-5): this yields a DETERMINISTIC order sufficient for
+  exactly-one claim ownership, NOT a fair/temporal order. No vector clocks.
+
+* CodePaths (existing) to mirror / reference
+- lib/spell_agent/hist/store.ex (behaviour + key space) — extend, don't replace.
+- lib/spell_agent/hist/store/memory.ex list/2, khepri.ex key->path — the two impls.
+- lib/spell_agent/hist/recorder.ex:199-208 index_hash/2 — the {:hash,h} union idea.
+
+* Edge cases
+- region with zero records: region/2 -> []; by_match -> []; sealed? -> false.
+- the {:hash, rid} index is shared with Hist nodes — namespace mesh hashes so a
+  mesh rid never collides with a node id (prefix the hash input with "mesh:" in
+  Record.id, OR use a separate {:mesh_hash, h} index; recommend the latter to keep
+  the node index pure). DECIDE and document.
+- Khepri path segments must be atoms or binaries: region ids are binaries (ok),
+  :mesh is an atom (ok).
+
+* Acceptance (observable)
+- `mix test test/mesh/store_test.exs test/mesh/clock_test.exs` passes against
+  BOTH Store.Memory and (if Khepri test harness exists) Store.Khepri — the same
+  test body, two impls, proving D13 (this is how hist capabilities are already
+  tested per store.ex moduledoc).
+- put then region/2 returns the record; a duplicate put collapses (one entry).
+- a put into a sealed region returns {:error, :sealed}.
+- tick_write strictly increases per session; tick_read advances past an observed
+  max.
+
+* Tests
+- store round-trip on both impls (the D13 contract — the headline test).
+- G-Set collapse: two puts of an identical record -> one region entry.
+- sealed-region rejection.
+- Lamport monotonicity + read-advance (the causal-order contract).
+
+* PRE-CODING CORRECTIONS (oracle MeshFinalCheck, agent://1-MeshFinalCheck)
+The per-session Lamport clock is REMOVED. A store-owned per-region monotonic
+sequence replaces it — this kills three issues at once (P2.1 retrograde lamports,
+P2.3 stale claim fold ordering, and FEAT-012 P1.2 watermark) and mirrors exactly
+how recorder.ex already assigns node seq (max_seq + idx, recorder.ex:51-54).
+
+** DROP lib/spell_agent/mesh/clock.ex entirely
+- No Mesh.Clock module. No per-session Lamport. The original DC-5 clock design is
+  superseded: a per-session scalar starting at 0 emits retrograde values across
+  nodes (a late joiner posts lamport 1 though causally later), corrupting both
+  claim arbitration and the sealed watermark.
+
+** Mesh.Store assigns a per-region monotonic seq ATOMICALLY at put
+- put(impl, %Record{region: r} = rec):
+    seq = next_seq(impl, r)            ; atomic, per region
+    rec = %{rec | seq: seq}
+    Store.put(impl, {:mesh, r, seq}, rec)
+    if rec.kind in [:finding, :goal, :verdict]:           ; dedup only these
+      index_content(impl, r, rec.content_hash, seq)        ; {:mesh_hash, r, h} => [seq]
+- next_seq:
+    - Store.Memory: :ets.update_counter on a per-region counter row
+      {:mesh_seq, region} (atomic, single-node total order). Add this counter row
+      to memory.ex; it is the per-region analog of recorder.ex max_seq but O(1).
+    - Store.Khepri: the Raft log IS the total order — use a Khepri R/W transaction
+      that reads-and-increments a [:hist, :mesh_seq, region] node, so seq is the
+      committed log position (linearizable across nodes). This is also what
+      FEAT-012's watermark seals against (a store seq, not a lamport).
+- ordering: records sort by seq (a true per-region total order), replacing
+  "newest lamport first". query returns by descending seq.
+
+** New store kinds (added to hist/store.ex @type kind + both impls' list/2)
+- {:mesh, region, seq}        => %MeshRecord{}       (the record)
+- {:mesh_seq, region}          => integer            (the per-region counter)
+- {:mesh_hash, region, h}      => [seq]              (content dedup index; SEPARATE
+                                                      from the Hist {:hash,h} kind)
+- the existing {:hash, h} Hist node index is NEVER written by mesh code (P2.2).
+
+** Acceptance delta
+- seq is strictly monotonic per region and assigned by the store (not the caller);
+  two concurrent puts to one region get distinct seqs (the contract claim
+  arbitration depends on).
+- two identical-payload :finding records collapse via {:mesh_hash,...}; two
+  identical-payload :claim records do NOT collapse (distinct seqs).
+- a mesh put NEVER touches a {:hash, _} key (assert the Hist node index is intact
+  after mesh writes).
+- claim fold ordering uses seq, deterministic and total per region.
+
+NOTE [2026-06-22]: Implemented: :mesh/:mesh_seq/:mesh_hash kinds added to hist/store.ex behaviour + Memory + Khepri impls; Store.incr/2 callback (ETS update_counter / Khepri rw txn); lib/spell_agent/mesh/store.ex. Mesh.Clock DROPPED (store-seq replaces per-session Lamport). Tests store_test.exs (11 pass incl 100-way concurrent distinct-seq + Hist {:hash} untouched). 154 hist tests still green.

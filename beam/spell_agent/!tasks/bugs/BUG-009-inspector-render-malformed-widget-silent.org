@@ -1,0 +1,89 @@
+#+TITLE: Inspector render: malformed widget silently drops frame (no visible update)
+#+STATE: DONE
+#+SESSION_ID: 150e55dbf9fb7900
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-18T19-08-04-455Z_150e55dbf9fb7900.jsonl]]
+#+CUSTOM_ID: BUG-009-inspector-render-malformed-widget-silent
+#+COMPLETION_HASH: d2bd0c3a9302b909
+
+* Initial Message
+
+check out how ex_ratatui prefers doing unit and visual tests and tell me how you would do it here. let's design a sturdy testing infra first
+
+* Summary
+A render that raises (e.g. a widget the ExRatatui Bridge cannot encode) is
+swallowed by the runtime Server's draw-time =rescue=, which emits
+=[:ex_ratatui, :render, :dropped]= telemetry, logs, and KEEPS THE OLD FRAME. To
+the user this reads as "the TUI doesn't update at all" — the agent did work, the
+Store updated, a render fired, but the screen never changed because the frame was
+dropped on an encode error.
+
+This is one of the three defects behind the PLAN-347 report ("bad layout / bad
+body / doesn't update"). The other two are filed separately (encode raises on
+the direct =App.render/2= path; no buffer accessor — now fixed by ex_ratatui
+PATCH-2).
+
+* Root cause (verified by reproduction)
+=ExRatatui.Server.do_render/1= (deps/ex_ratatui-vendored/lib/ex_ratatui/server.ex)
+wraps =state.mod.render/2= + =draw_widgets/2= in:
+
+#+begin_src elixir
+:telemetry.span([:ex_ratatui, :render, :frame], meta, fn -> ... end)
+rescue
+  e ->
+    Telemetry.execute([:render, :dropped], %{}, %{reason: {:exception, ...}})
+    Logger.error("ExRatatui render error: ...")
+    state            # <- old state returned, frame NOT redrawn
+#+end_src
+
+When =App.render/2= returns a placement whose widget fails =Bridge.encode_command/1=,
+=ExRatatui.draw/2= raises; the rescue catches it and returns the prior state, so
+the terminal keeps showing the previous frame. =render_count= still increments in
+the happy path, so naive tests (asserting only =render_count=) see "renders are
+happening" while the screen is frozen.
+
+App.render/2 already has =encodable_placement?/1= (BUG-008 belt-and-braces) that
+filters unencodable placements, but it is NOT comprehensive: it runs only over
+the placements App produces, and a status/composer fill or a pane =view/1=
+descriptor can still carry a poisoned field (e.g. a non-string =:text=, see the
+sibling BUG) that materializes to a struct yet raises at NIF encode.
+
+* Steps to reproduce
+1. Drive the real App headless: =App.start_link(test_mode: {80,24}, store: store)=.
+2. Cause a pane/fill to emit a widget with a poisoned field (e.g. a Paragraph
+   whose =:text= is an integer — observed via =Materialize.to_struct/1= on
+   =%{"type"=>"paragraph","text"=>123}= → struct that raises
+   "cannot coerce 123 into %ExRatatui.Text{}" at =Bridge.encode_command/1=).
+3. Observe: =render_count= increments, =[:ex_ratatui, :render, :dropped]= fires,
+   the buffer (now readable via =Runtime.buffer/1=) is UNCHANGED.
+
+Reproduced 2026-06-21 against ex_ratatui-vendored at PATCH-1; confirmed the
+encode raises are real (probe in session transcript).
+
+* Fixing strategy
+Single render contract, both paths guarded (the App path AND the server path):
+
+1. Add =Surface.safe_placements/2= (or extend =encodable_placement?=) as the ONE
+   place that filters unencodable leaves, returning ={kept, dropped}=. App.render
+   returns =kept=; a degraded leaf becomes a GAP, never a dropped FRAME.
+2. Extend the filter to cover ALL placement sources: native pane =view/1= output
+   and the dynamic status/composer fills, not just agent shadows.
+3. Make =[:render, :dropped]= observable in tests (it already fires) so a
+   regression that reintroduces whole-frame drops is caught: a visual test
+   asserts =dropped == 0= for the frame.
+4. Keep the server =rescue= as the final backstop, but it should be UNREACHABLE
+   in normal operation once leaves are filtered upstream.
+
+* Acceptance
+- A malformed widget from any source degrades to a gap; the rest of the frame
+  renders and the screen UPDATES.
+- A PLAN-347 visual test drives a run that (previously) produced an unencodable
+  widget and asserts the buffer reflects the new state.
+- =[:ex_ratatui, :render, :dropped]= count is assertable and zero in the happy
+  path.
+
+* Related
+- Sibling BUG: =App.render/2= encode raises on the direct (pure) test path.
+- ex_ratatui PATCH-2 (Runtime.buffer/1) — prerequisite observability, LANDED.
+- PLAN-347 (testing infra), BUG-008 (the original belt-and-braces encode filter).
+
+NOTE [2026-06-21]: Fixed by the total render contract (safe_resolve_node/3 in app.ex): a node whose resolution raises drops just that node, never the frame. Verified: render_robustness_test.exs goes RED without the fix (FunctionClauseError in Detail.view/1 on nil vm), GREEN with it. The live-buffer test confirms the frame is no longer dropped.

@@ -35,6 +35,9 @@ defmodule SpellAgent.Hist.Store do
           | {:crystal, String.t()}
           | {:cont, String.t()}
           | {:hash, String.t()}
+          | {:mesh, String.t(), non_neg_integer()}
+          | {:mesh_seq, String.t()}
+          | {:mesh_hash, String.t(), String.t()}
 
   @type value ::
           Session.t()
@@ -46,7 +49,7 @@ defmodule SpellAgent.Hist.Store do
           | Cont.t()
           | [term()]
 
-  @type kind :: :session | :node | :mark | :snap | :tool | :crystal | :cont
+  @type kind :: :session | :node | :mark | :snap | :tool | :crystal | :cont | :mesh | :mesh_seq | :mesh_hash
 
   @doc "Store a value at a logical key. Overwrites."
   @callback put(key(), value()) :: :ok
@@ -66,6 +69,16 @@ defmodule SpellAgent.Hist.Store do
 
   @doc "Remove everything (test/reset). Optional; defaults via reflection in impls."
   @callback clear() :: :ok
+
+  @doc """
+  Atomically increment the integer counter stored at `key` and return the NEW
+  value (starting at 1 for an absent counter). Used by the mesh substrate to
+  assign a per-region monotonic sequence (`{:mesh_seq, region}`) that totally
+  orders a region's records without a per-session clock — the store IS the order.
+  Must be atomic under concurrent callers (ETS `update_counter` / a Khepri
+  transaction); a get-then-put cannot satisfy this.
+  """
+  @callback incr(key()) :: integer()
 
   # --- convenience indirection so callers say `Store.put(impl, ...)` ---
 
@@ -88,4 +101,8 @@ defmodule SpellAgent.Hist.Store do
   @doc "Dispatch `clear`."
   @spec clear(module()) :: :ok
   def clear(impl), do: impl.clear()
+
+  @doc "Dispatch `incr` — atomic counter increment, returns the new value."
+  @spec incr(module(), key()) :: integer()
+  def incr(impl, key), do: impl.incr(key)
 end

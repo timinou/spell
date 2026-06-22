@@ -1,0 +1,340 @@
+#+TITLE: The blackboard substrate
+#+SUBTITLE: Why Hist already is a stigmergic blackboard, how regions are created, and the consensus stack
+#+OPTIONS: toc:2 num:t
+
+* 1. "Already built" — the line-by-line proof
+
+A stigmergic blackboard needs exactly five properties. Each maps to /verified/
+code in the Hist substrate. This is the claim's proof, not its assertion.
+
+| blackboard requirement | what Hist already is | evidence (file) |
+|-----------------------+----------------------+-----------------|
+| *shared medium* all agents read/write | =Hist.Store= behaviour: one typed K/V key space, any session reads/writes any key | =hist/store.ex= |
+| *append-only / monotone* (CALM) | =record= appends one node per turn; =seq= monotonic (=max_seq + idx=); write path never mutates/deletes | =hist/recorder.ex:51-54,129= |
+| *content-addressed* (idempotent merge) | node =id = hash(form_src <> parent_id)=; two sessions running the same program on the same parent /collapse to one id/ | =hist/node.ex= (Identity) |
+| *multi-writer union index* (the CRDT core) | ={:hash, h} => [{sid,nid}…]= — "dedup / multi-session union key" | =hist/store.ex=, =recorder.ex:199-208= |
+| *provenance* (who/when/cost) | every node carries =parent_id=, =seq=, =binds=, =sees=, =tools_defined=, prompt, model | =hist/node.ex= |
+
+** The decisive property: the hash index is a G-Set CRDT
+
+#+begin_src
+{:hash, h} => [{sid₁, nid₁}, {sid₂, nid₂}, …]
+#+end_src
+
+This is /literally/ a grow-only set keyed by content hash. A *G-Set* is the
+simplest convergent replicated data type that exists: two sessions writing the
+same finding converge to one hash entry whose ref-list is the union; merge is set
+union, which is associative, commutative, idempotent → order-independent, conflict-free.
+That is not "like" a blackboard substrate — it /is/ the canonical convergent
+medium, already in the recorder's hot path.
+
+** The enabling invariant: entries are pure data
+
+=node.ex= realization invariant: /"No node ever holds a live Handle … =binds=,
+=result=, =sees= are always self-contained data."/ A blackboard entry must be
+message-passable across processes and nodes — you cannot put a live pid or a
+parked handle on a shared medium. Hist forbids it /by construction/: the Step is
+frozen at the owner before recording, unrealizable handles become tombstones. So
+every blackboard cell is frozen, pure, replicable data. Exactly the requirement.
+
+** ∴ The conclusion
+
+The blackboard is built. What is missing is the *aperture*: today the =hist/*=
+verbs (=namespace.ex=) are /self-scoped/ — a session interrogates its /own/ past.
+The mesh needs the same operations /scoped to a shared region/ that many sessions
+target. That is a new verb namespace (=black/*=) over the /same/ store, not a new
+store. Small, identifiable, not a foundation to pour.
+
+* 2. What lives on the blackboard — the record taxonomy
+
+The store today keys =:session | :node | :mark | :snap | :tool | :crystal | :cont=.
+The mesh adds a region-scoped record kind. Every mesh record is a frozen map with
+a common envelope and a =kind=:
+
+#+begin_src
+%MeshRecord{
+  region:   region_id,          ; which shared blackboard (see §3)
+  kind:     :goal | :finding | :claim | :verdict | :intention,
+  id:       content_hash,       ; = hash(canonical(payload) <> region)  → idempotent
+  watermark: lamport | nil,     ; (:verdict only) the sealed fold boundary (§4.3, 06 DC-8)
+  sealed:   bool,               ; (region flag) a terminal verdict latches this true (06 DC-9)
+  author:   session_id,         ; provenance (who) — never used for addressing
+  lamport:  non_neg_integer,    ; logical clock for deterministic ordering (§4)
+  t:        wall_ms,            ; human-facing only, NOT used for resolution
+  payload:  map,                ; kind-specific (below)
+  parent:   record_id | nil     ; supersession / threading
+}
+#+end_src
+
+The five kinds (the EF mapping in =03= justifies /why these five/):
+
+| kind | monotone? | meaning | EF analog (=03=) | put by | read by |
+|------+-----------+---------+------------------+--------+---------|
+| =:goal= | first post monotone; *re-goaling is non-monotone* (owner-serialized LWW-register, =06= DC-3) | an objective posted to the region, kept active | goal maintenance (dlPFC) | initiator / owner | all |
+| =:finding= | *yes* (pure G-Set) | a result/observation contributed to the region | working-memory updating | any member | any member, the folder |
+| =:claim= | *yes* (append; resolve-by-fold) | "session S intends to own work W" | action gating (basal ganglia) | a member | the folder, contenders |
+| =:verdict= | *no* (consensus only) | a collective non-monotone decision ("done", "winner is X") | integration / collective decision | =decide= (Ra) | all |
+| =:intention= | yes (a standing trigger) | "when predicate P holds, do action A" | prospective memory (frontopolar) | any member | the watcher engine |
+
+Crucially: *findings, claims, and intentions are purely monotone* (CALM-free).
+=:verdict= needs consensus. =:goal= is monotone on FIRST post but its supersession
+is a non-monotone retract (=06= DC-3): the /first/ goal is a free monotone create;
+*re-goaling* (replacing an active goal) is an owner-only control op — the Fork-A
+parent serializes it, or Fork B routes it through =decide=. "Active goal" then
+resolves as an LWW-register over the owner's total order, so concurrent
+supersession cannot produce two active goals. This keeps the monotone three
+genuinely monotone and isolates the one retract to an owner.
+
+** What you PUT, QUERY, CLAIM, FOLD — concretely
+
+- *PUT* (=black/post=): a =:goal=, a =:finding=, or an =:intention=. Always a
+  monotone append. Example payloads:
+  - goal :: ={objective: "assess blast-radius of renaming verify/1", success: "ranked risk list"}=
+  - finding :: ={about: "caller", file: "lib/x.ex", line: 88, risk: :high, evidence: "..."}=
+  - intention :: ={when: {kind: :finding, match: {about: "build-broken"}}, do: "<ptc source>"}=
+- *QUERY* (=black/query=): content-addressed discovery. A predicate over region
+  records: ="all :finding where risk = :high"=, ="the active :goal"=, ="open work
+  not yet claimed"=. Monotone read, needs no authority. This is "discover the
+  entity by what it is."
+- *CLAIM* (=black/claim=): a monotone =:claim= append for a work id. Multiple
+  sessions may claim the same id; contention is /not/ prevented — it is /resolved/
+  (§4). This is the rigorous form of "claim stuff after querying state."
+- *FOLD* (=black/fold=): the non-monotone reduce, computed at /read time/ by
+  whoever needs a decision. =count=, =group-by=, =rank=, "who won claim W",
+  "is the goal satisfied". In Fork A the parent folds. The fold is /pure/ over the
+  append-only records, so every reader who folds the same records gets the same
+  answer — which is why most "decisions" stop being decisions (they are reads).
+
+* 3. How a region is created — the A/B switch is one parameter
+
+A *region* is a named sub-blackboard: the set of records sharing a =region= key.
+It is created by /naming it/ — the first =post= to a region id brings it into
+being (lazy, like =Session= records). The /only/ difference between Fork A and
+Fork B is *how the region id is minted*:
+
+#+begin_src
+FORK A (reflexive, parent exists):
+    region_id = hash(goal <> parent_session <> nonce)
+    → unique per spawn. Children are handed this id by the parent (capability).
+      No other session can guess it. An ISOLATED region: the parent's private
+      coordination space for the children it spawned.
+
+FORK B (parentless rendezvous):
+    region_id = hash(STRUCTURED_KEY)   |   explicit slug   ; NO nonce, NO parent
+    → DETERMINISTIC from a key both sides can independently derive. Independent
+      sessions (human-launched, webhook-spawned) that name the SAME key compute
+      the SAME region_id and MEET on one blackboard without referencing each other.
+      A RENDEZVOUS region: content-addressing applied to the coordination space.
+
+      CRITICAL (=06= DC-4): the key MUST content-address reliably. A structured
+      subject does (a PR number, file path, commit sha, ticket id) — and these are
+      MOST Fork-B triggers (webhook event subjects, resource ids). For a
+      human/natural-language goal, hashing raw prose is FORBIDDEN: "ship X" vs
+      "Ship Feature X" → different hashes → no rendezvous (false negative); over-
+      canonicalization → collisions (false positive). NL goals rendezvous by an
+      EXPLICIT coordination slug the launcher supplies, discoverable via
+      =black/query= ("rendezvous is a discovery problem, not a hashing problem").
+#+end_src
+
+That single =nonce / no-nonce= decision /is/ the Fork A vs Fork B distinction,
+made rigorous: *isolation by unguessable id* vs *rendezvous by content-addressed
+id*. Both use the identical =black/*= verbs and the identical store. The fork is
+not two code paths; it is one parameter to region-minting.
+
+** Capability scoping rides on the region id
+
+Because a Fork-A region id is =hash(… <> nonce)=, it is /unforgeable/ — holding it
+is the capability to write to that region. The parent hands it to children
+(object-capability: §6). Reading the global blackboard is ambient; /writing into a
+region/ requires holding its id. For Fork B the id is derivable from the rendezvous
+KEY (structured subject or explicit slug, =06= DC-4), so the "capability" is
+"knowing the key" — exactly right for an open rendezvous (anyone working on that
+subject belongs there).
+
+* 4. The consensus stack — three layers, only the top is "consensus"
+
+The hardest question — "what consensus algorithm?" — dissolves into three layers,
+and only the third is a consensus round.
+
+** Layer 1 — monotone state: NO consensus (free)
+
+Goals, findings, intentions are G-Set / supersede-by-newer records. Under a single
+Khepri/Raft log they get a /total order for free/ (Raft is a replicated log =
+total order of writes). Across a partition they still merge by set union when
+healed. CALM guarantees confluence. *Zero coordination.* This is the 99% path.
+
+** Layer 2 — claim arbitration: deterministic fold, NOT consensus
+
+When several sessions claim the same work id, the winner is decided by a /pure
+function/ of the append-only claim set, computed identically by every reader:
+
+#+begin_src
+winner(claims_for(W)) = argmin over claims of (lamport, author_session_id)
+                        ; Lamport clock first, session id as deterministic tiebreak
+#+end_src
+
+This is *optimistic concurrency on a CRDT*. No lock, no round-trip, no leader.
+Every contender folds the same claim set and independently agrees who won; losers
+/inhibit/ (stand down) — the basal-ganglia analogy in =03=. The blackboard IS the
+causal channel: a session advances its Lamport clock to =max(local, max-read)+1=
+on read and increments on write, so the =query=-then-=claim= pattern (read before
+act) makes it a valid Lamport clock. *Honesty (=06= DC-5):* for causally-concurrent
+claims the =argmin(lamport, sid)= winner is *deterministic* (every reader agrees)
+but NOT *fair/temporal* — an equal-lamport tie breaks on the lexicographically-
+smaller session id, unrelated to who "really" claimed first. Determinism is all
+safety needs (exactly-one ownership); fairness is irrelevant here, and vector
+clocks would only /detect/ concurrency we already resolve by min. *Still no
+consensus protocol.*
+
+** Layer 3 — the non-monotone verdict: Ra leader-election + quorum
+
+Only a genuinely non-monotone /collective/ fact needs true consensus:
+- "all of the human's N tasks are reconciled — emit the merged result"
+- "the refactor is globally complete — no more work exists" (negation)
+- an /irreversible/ action exactly once (spend money, send email, push a tag)
+
+Here you cannot let two sessions optimistically both act and reconcile. *Exactly
+one* must be authoritative. The algorithm is *Raft* — already vendored, as Ra
+under Khepri (=khepri_cluster.erl=). Use it directly; never hand-roll consensus.
+
+- *Why Raft, not Paxos:* Raft is the comprehensible one, it is /already in the
+  dependency tree/ (Khepri /is/ a Ra state machine), and it gives leader-election
+  + a replicated log + quorum commits out of the box.
+- *Why crash-fault, not Byzantine:* the mesh's nodes are /our own/ BEAM
+  processes/nodes, trusted-for-correctness (the AGENTS.md security posture:
+  agent-authored /data/ is untrusted, but the runtime peers are ours). Byzantine
+  fault tolerance (PBFT/Tendermint) solves /malicious/ nodes and costs 3f+1
+  replicas + extra rounds — unjustified here. Raft's crash-fault model (a node
+  may die or partition, never lie) is the correct, cheaper fit.
+- *The verdict is itself a monotone record* once committed: =decide= runs the Ra
+  round, and the elected leader /posts a =:verdict= record/ to the region. After
+  commit, the verdict is just another append-only cell everyone reads. Consensus
+  is the /act of writing one specific record/; reading it afterward is monotone.
+- *The verdict folds a SEALED snapshot* (=06= DC-8): =decide= fixes a =watermark=
+  lamport as its first Raft step and folds only findings ≤ watermark. So any
+  leader — original or re-elected after a crash — folds the /same/ sealed set → the
+  same content-addressed verdict → idempotent commit. Findings arriving later
+  belong to the NEXT round; a region may carry successive verdicts (=v1= over
+  ≤w1, =v2= over (w1,w2]).
+
+*** The two planes — sessions write, NODES decide (=06= DC-7)
+
+The single most important consensus correction. Raft quorum is over a STABLE
+member set, but mesh /sessions/ are ephemeral (a Fork-B session posts its finding
+and EXITS). Quorum-over-sessions would deadlock and demand fragile per-second
+membership churn. So consensus membership is NOT over sessions:
+
+#+begin_src
+  CONSENSUS / MEMBERSHIP plane = the BEAM NODE cluster (the Khepri/Ra cluster).
+                                 Stable, long-lived, few. decide's quorum is the
+                                 NODE quorum — independent of which sessions live.
+  COORDINATION plane           = SESSIONS. Ephemeral, many. They only WRITE
+                                 monotone records + READ the medium. They are NOT
+                                 Raft members and never vote.
+#+end_src
+
+A session does not "reach quorum"; it /triggers/ a =decide=, and the NODE it runs
+on executes the Raft round on the stable node cluster. The "leader" is a Ra leader
+among NODES, not sessions. A session may post-then-exit — its finding persists
+(PT-4 dead author) and =decide= folds it on the node cluster regardless. This is
+/already how Khepri/Ra works/ (the Ra cluster IS a node cluster); the original
+prose erred only in describing consensus at the session layer. Single-node = a
+trivial 1-member cluster = a local fold (the graceful n=1, PT-10). Distribution
+lights up when nodes join the Ra cluster, zero session-code change (=02= §7).
+
+#+begin_src
+                 monotone? → Layer 1 (Raft log total-order, free)
+record write ──→ a claim?  → Layer 2 (Lamport-min fold, consensus-free)
+                 a verdict? → Layer 3 (Ra leader-election + quorum, the only round)
+#+end_src
+
+* 5. Fork B reconciliation in full — the three triggers
+
+Fork B fires when /no parent owns the fold/. Three real triggers for this project,
+all handled by the same machinery (rendezvous region + watch + decide):
+
+1. *Human launches several agents on different tasks.* Each is told the shared
+   rendezvous /slug/ ("ship-feature-X" — an explicit coordination key, NOT hashed
+   prose, =06= DC-4). Each computes =region_id = hash(slug)= and posts its
+   sub-results as =:finding= records to that rendezvous region. Reconciliation:
+   when the region holds a finding from each expected task (a monotone
+   /threshold/, detectable by a =watch=), a =decide= round elects one session to
+   =fold= the findings into a merged =:verdict=. No agent ever referenced another.
+2. *Webhooks spawn agents.* An external event (CI failed, PR opened) spawns an
+   agent via =tool/spawn-session=. It joins the rendezvous region for that
+   subject. If its action must reconcile with concurrent agents (e.g. two webhooks
+   both trigger a deploy), the irreversible step goes through =decide= (exactly-once).
+3. *An agent unblocks an action for another.* Agent A is waiting on a precondition
+   it cannot satisfy. It posts an =:intention= (="when a :finding{about: 'migration-done'}
+   appears, run <ptc>"=). Agent B, working elsewhere, posts that finding. The
+   watch engine fires A's intention — /stigmergic unblocking/: A never knew B
+   existed; B never knew A was waiting. The medium carried the causality.
+
+* 6. Object-capability — the topology control
+
+To keep the comm graph sparse (=01= §1.3), authority is /not ambient/:
+
+- *reading* the global blackboard is ambient and safe (monotone, no side effects).
+- *writing into a region* requires holding the region id. A Fork-A id is
+  unforgeable (=hash(… <> nonce)=); the parent /hands/ it to children. A Fork-B id
+  is derivable from the goal (knowing the goal = belonging to the rendezvous).
+- a parent may hand a child an /attenuated/ capability: write-only to a
+  sub-region, a bounded budget token, a read-only view. Capability-passing /is/
+  edge-creation, and gating it keeps the graph from collapsing to Kₙ.
+
+This is the discovery-vs-authority resolution: *discover openly (query is
+ambient), act under capability (writing a region needs its id).*
+
+* 7. Location transparency — what it means architecturally
+
+A location-transparent reference does not change form whether the referent is
+local or on another node, and the same operations behave identically (modulo
+latency/failure). For this design it applies to the *medium*, not to peer pids
+(we banned peer edges). Three layers:
+
+1. *Logical addressing.* A record is addressed by =region= + content hash — never
+   by a node name. The address says /what/ and /where-in-the-tree/, never /which
+   machine/. =store.ex= keys already have this shape.
+2. *The store behaviour as the indirection seam.* =Hist.Store= is a behaviour with
+   swappable impls. =Store.Memory= (ETS) resolves keys in local RAM; =Store.Khepri=
+   (Ra/Raft) resolves the /same key tuples/ against a replicated tree across a
+   cluster. The caller (=Hist.put(impl, key, value)=) is byte-identical either way.
+   The =default_store/0= config switch (=Memory= → =Khepri=) /is/ the
+   local → distributed toggle.
+3. *Consistency as the store's job.* When =Store.Khepri= spans nodes, "is my write
+   visible to a session on another node?" is answered by Raft, inside Khepri,
+   transparently. The agent never writes replication logic.
+
+#+begin_quote
+Write the entire mesh against =Hist.Store= logical keys today, single-node,
+=Store.Memory=. The day you want a real multi-machine mesh, start a Ra cluster and
+flip =default_store= to =Khepri=. *Zero agent-code changes.* Sessions that were
+coordinating through local ETS now coordinate across a continent, because they
+named content, never a machine.
+#+end_quote
+
+*Honest caveat:* single-node Khepri ≠ distribution /tested/. The architecture is
+ready (logical keys, behaviour seam, Raft backing), but cross-node convergence
+under partition has edge cases (Raft needs quorum; a minority partition blocks
+writes — the CP horn of CAP). For monotone findings that is acceptable (a stalled
+writer retries; nothing is lost or conflicted). Validate with a real two-node test
+before claiming distribution works — but nothing in the design must change to get
+there.
+
+* 8. Termination and resource safety — route every spawn through the budget
+
+Sibling influence through the medium makes the effective call graph cyclic
+(=01= §7), so depth is no longer a termination measure. The replacement is the
+existing *ParallelBudget* token bucket:
+
+- every spawn — Fork A nested, Fork B webhook, watch-triggered — acquires one slot
+  before it starts; releases on every termination path.
+- the bucket capacity =max_parallel_workers= is the hard global cap on live
+  sessions at every depth; the invariant
+  =max live heap ≈ max_parallel_workers × worker_max_heap= holds across the mesh.
+- a spawn with no slot free fails fast (=:parallel_capacity_exceeded=), never
+  blocks — so a watch storm or a spawn cycle /degrades/, it does not melt the BEAM.
+
+Watches add one more guard: an =:intention= carries a *fuel* count (max firings)
+and a *TTL*; a self-retriggering watch (A→B→A) burns fuel and stops. The bucket
+bounds /space/ (live sessions); fuel + TTL bound /time/ (trigger cascades).
