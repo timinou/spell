@@ -66,11 +66,21 @@ defmodule SpellAgent.Tui.DefaultLayout do
 
   # ---- slot nodes ----
 
+  # A deferred hole referencing a single `data/<key>` (PLAN-012 W5 dogfood). Equal
+  # to what `(tmpl:: … ~data/<key> …)` freezes for that ref — the codec encoding of
+  # the `data/<key>` symbol — but written directly so the default layout needs no
+  # runtime parse. The HoleResolver thaws + evaluates it against the data/* bag.
+  defp hole(ref), do: %{"__hole__" => %{"node" => "sym", "value" => ref}}
+
+  # The status strip as DATA (W5 dogfood): its dynamic text + color are holes over
+  # the data/* bag's presentation keys, so the App no longer fills it from a
+  # hardcoded `status_widget`. The block frame is static.
   defp status_node do
     %{
       "type" => "paragraph",
       "slot" => "status",
-      # content (:text/:style) filled by the App at render from live run state.
+      "text" => hole("data/status-label"),
+      "style" => %{"fg" => hole("data/status-color"), "modifiers" => ["bold"]},
       "block" => %{
         "type" => "block",
         "title" => " spell · inspector ",
@@ -100,13 +110,19 @@ defmodule SpellAgent.Tui.DefaultLayout do
 
   defp body_constraints(names), do: Enum.map(names, fn _ -> ["fill", 1] end)
 
+  # The composer as DATA (W5 dogfood): text, fg, and the modal block title are
+  # holes over the data/* bag, so the App no longer fills it from a hardcoded
+  # `composer_widget`. The block frame (borders/type) is static; only the title
+  # is dynamic (INSERT/NORMAL), so it is a hole.
   defp composer_node do
     %{
       "type" => "paragraph",
       "slot" => "composer",
+      "text" => hole("data/composer-text"),
+      "style" => %{"fg" => hole("data/composer-fg")},
       "block" => %{
         "type" => "block",
-        "title" => " prompt — NORMAL ",
+        "title" => hole("data/composer-title"),
         "borders" => ["all"],
         "border_type" => "rounded"
       }
