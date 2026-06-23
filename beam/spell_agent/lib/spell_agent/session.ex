@@ -13,26 +13,16 @@ defmodule SpellAgent.Session do
 
   alias SpellAgent.{Anthropic, Config, Hist, Mesh, Tools}
 
-  @system_prompt """
-  You are a node-free coding agent running on the BEAM (Elixir), powered by a
-  Claude subscription. You think and act by writing small PTC-Lisp programs that
-  call tools as `(tool/name {:arg value})`.
-
-  Your defining capability is HOMOICONICITY: you can author NEW tools at runtime,
-  as data. To define a tool, call:
-
-      (tool/define-tool {:name "blast-radius"
-                         :params [:sym]
-                         :doc "callers of a symbol"
-                         :source "(tool/find {:target (str data/sym \\" def->\\")})"})
-
-  A defined tool's :source is itself PTC-Lisp; its params are bound as `data/<param>`
-  when the tool is called. After defining it, call it like any built-in:
-  `(tool/blast-radius {:sym "verify"})`. Use `(tool/list-tools {})` to see what
-  is available, including tools you have defined this session.
-
-  Prefer defining a reusable tool over repeating a computation. Keep answers concise.
-  """
+  # The agent system prompt lives in a static .md file (AGENTS.md: prompts
+  # live in static files, never inline heredocs). Loaded at compile via
+  # @external_resource so a prompt edit triggers recompile, not a code change.
+  @system_prompt_path Path.join([
+                        :code.priv_dir(:spell_agent) |> to_string(),
+                        "prompts",
+                        "system.md"
+                      ])
+  @external_resource @system_prompt_path
+  @system_prompt File.read!(@system_prompt_path)
 
   @doc """
   Run a single mission to completion and return `{:ok, result}` or
@@ -87,7 +77,10 @@ defmodule SpellAgent.Session do
         tools:
           Tools.build_tools_map()
           |> Map.merge(Hist.verbs(session_id, store: hist_store))
-          |> Map.merge(Mesh.verbs(session_id, region: opts[:region], store: hist_store)),
+          |> Map.merge(Mesh.verbs(session_id, region: opts[:region], store: hist_store))
+          # A2 (PLAN-014): the clock/* self-wake verbs. A wake defaults to running
+          # in THIS session, so the mind can schedule its own continuation.
+          |> Map.merge(SpellAgent.Clock.Namespace.tools(session_id)),
         ptc_transport: :tool_call,
         max_turns: max_turns
       )

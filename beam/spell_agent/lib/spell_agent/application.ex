@@ -37,12 +37,26 @@ defmodule SpellAgent.Application do
       # (which boots a Ra system); the default stays Memory so app boot never
       # depends on Khepri being healthy.
       SpellAgent.Hist.Store.Memory,
+      # Boots the Khepri Ra system WHEN Khepri is the configured Hist store (see
+      # Hist.Store.KhepriBoot for the best-effort posture + the cross-restart
+      # durability gap). Started after Memory and BEFORE ToolRegistry so the
+      # store is live before durable tools rehydrate from it. Returns :ignore when
+      # the store is Memory (the default) or when Khepri fails to boot, so app
+      # start never depends on Khepri being healthy.
+      SpellAgent.Hist.Store.KhepriBoot,
       # The homoiconic tool registry (FEAT-826, PLAN-011 W3). Started AFTER the
       # Hist store because it REHYDRATES durable (`scope: :durable`) tools from
       # that store on boot — a `:ptc` tool the agent authored in a prior sitting
       # resolves again as if built in. Rehydration is best-effort (sick store ->
       # empty registry), so boot still never depends on the store being healthy.
       SpellAgent.ToolRegistry,
+      # The self-wake scheduler (A2, PLAN-014): the first agency organ. Started
+      # AFTER the Hist store (like ToolRegistry) because it REHYDRATES persisted
+      # wakes (`{:clock, id}`) on boot and re-arms their timers — a wake the agent
+      # scheduled in a prior sitting fires again. Rehydration is best-effort (sick
+      # store -> empty schedule), so boot never depends on the store being healthy.
+      # Session-global + long-lived, same posture as ToolRegistry.
+      SpellAgent.Clock,
       # Live keybinding overrides for the Reaction DSL (PLAN-346): runtime
       # rebinds (keymap/bind) and authored reactions (keymap/define-reaction).
       # Session-global, same posture as ToolRegistry.
