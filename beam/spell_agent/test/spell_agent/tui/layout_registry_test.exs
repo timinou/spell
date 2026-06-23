@@ -61,8 +61,12 @@ defmodule SpellAgent.Tui.LayoutRegistryTest do
 
       # Then attempt garbage: a node of an unknown widget type can't materialize,
       # and as the SOLE slot content yields no placements -> rejected.
-      assert {:error, {:bad_layout, "status"}} =
+      assert {:error, {:bad_layout, "status", diagnostic}} =
                LayoutRegistry.set("status", %{"type" => "no_such_widget", "slot" => "status"})
+
+      assert diagnostic["path"] == "source.type"
+      assert diagnostic["reason"] == "unknown_widget"
+      assert diagnostic["detail"] =~ "no_such_widget"
 
       # last-good preserved.
       assert {:ok, shown} = LayoutRegistry.show("status")
@@ -76,6 +80,32 @@ defmodule SpellAgent.Tui.LayoutRegistryTest do
       assert :ok = LayoutRegistry.reset("status")
       {:ok, shown} = LayoutRegistry.show("status")
       refute shown["text"] == "X"
+    end
+
+    test "a shadow with an invalid boolean widget field is rejected with a field diagnostic" do
+      :ok =
+        LayoutRegistry.set("status", %{
+          "type" => "paragraph",
+          "slot" => "status",
+          "text" => "GOOD"
+        })
+
+      bad = %{"type" => "paragraph", "slot" => "status", "text" => "BAD", "wrap" => "word"}
+
+      assert {:error, {:bad_layout, "status", diagnostic}} = LayoutRegistry.set("status", bad)
+      assert diagnostic["path"] == "source.wrap"
+      assert diagnostic["reason"] == "invalid_field"
+      assert diagnostic["field"] == "wrap"
+      assert diagnostic["expected_type"] == "boolean"
+      assert diagnostic["actual_type"] == "string"
+      assert diagnostic["actual_value"] == "\"word\""
+      assert diagnostic["detail"] =~ "expected boolean"
+      assert diagnostic["expected"] =~ "true"
+      assert diagnostic["expected"] =~ "false"
+      assert diagnostic["hint"] =~ "omit"
+
+      assert {:ok, shown} = LayoutRegistry.show("status")
+      assert shown["text"] == "GOOD"
     end
 
     # BUG-008: a shadow that MATERIALIZES to a struct but cannot ENCODE through the
@@ -95,10 +125,32 @@ defmodule SpellAgent.Tui.LayoutRegistryTest do
       # Bridge raises when encoding it.
       bad = %{"type" => "sparkline", "slot" => "status", "data" => ["not", "numbers"]}
       assert match?(%{__struct__: _}, SpellAgent.Tui.Materialize.to_struct(bad))
-      assert {:error, {:bad_layout, "status"}} = LayoutRegistry.set("status", bad)
+      assert {:error, {:bad_layout, "status", diagnostic}} = LayoutRegistry.set("status", bad)
+      assert diagnostic["reason"] == "encode_failed"
+      assert diagnostic["path"] == "source"
 
       assert {:ok, shown} = LayoutRegistry.show("status")
       assert shown["text"] == "GOOD"
+    end
+
+    # REGRESSION (PROJ-005): a tmpl:: template whose holes reference data/* keys
+    # absent from the probe's EMPTY env must NOT be rejected. Before the
+    # nil->placeholder fix in HoleResolver.eval_hole, every data-hole resolved to
+    # nil, which failed to materialize/encode -> :bad_layout -> the agent could
+    # never install a templated slot, so cells and any live data never reached
+    # the screen. The probe must validate the SKELETON's shape, treating a
+    # missing-data hole as the `·` placeholder (valid text), not nil.
+    test "a tmpl:: template with data holes is accepted (holes degrade, not reject)" do
+      {:ok, step} =
+        PtcRunner.Lisp.run(~S'(tmpl:: {:type "paragraph" :text ~(get data/status :label)})')
+
+      assert :ok = LayoutRegistry.set("status", step.return)
+
+      # The frozen template was installed (not last-good): the slot now carries a
+      # __hole__ leaf, which resolves to the placeholder against empty data.
+      assert {:ok, shown} = LayoutRegistry.show("status")
+      resolved = SpellAgent.Tui.HoleResolver.resolve_holes(shown, %{})
+      assert resolved[:text] == "·"
     end
   end
 
@@ -116,6 +168,42 @@ defmodule SpellAgent.Tui.LayoutRegistryTest do
 
       shown = show.(%{"slot" => "status"})
       assert shown["text"] == "VIA-PTC"
+    end
+
+    test "layout/set reports slot, path, and reason for a bad frame source" do
+      tools = LayoutRegistry.tools()
+      set = tools["layout/set"]
+
+      result = set.(%{"slot" => "frame", "source" => %{"type" => "frame"}})
+
+      assert result["reason"] == "bad_layout"
+      assert result["slot"] == "frame"
+      assert result["diagnostic"]["path"] == "source.type"
+      assert result["diagnostic"]["reason"] == "unknown_widget"
+      assert result["err"] =~ "bad layout for slot \"frame\""
+      assert result["err"] =~ "unknown widget type \"frame\""
+    end
+
+    test "layout/set reports actionable field errors for invalid boolean fields" do
+      tools = LayoutRegistry.tools()
+      set = tools["layout/set"]
+
+      result =
+        set.(%{
+          "slot" => "status",
+          "source" => %{"type" => "paragraph", "text" => "BAD", "wrap" => "word"}
+        })
+
+      assert result["reason"] == "bad_layout"
+      assert result["slot"] == "status"
+      assert result["diagnostic"]["path"] == "source.wrap"
+      assert result["diagnostic"]["reason"] == "invalid_field"
+      assert result["diagnostic"]["actual_type"] == "string"
+      assert result["err"] =~ "source.wrap"
+      assert result["err"] =~ "expected boolean"
+      assert result["err"] =~ "\"word\""
+      assert result["err"] =~ "true"
+      assert result["err"] =~ "false"
     end
 
     test "layout/tree returns the whole live tree" do

@@ -1,8 +1,9 @@
 #+TITLE: RESEARCH L−4: Collapse view/ and tool/ — rendering is just another effect
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 1511029ec58e9d42
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-20T20-59-50-422Z_1511029ec58e9d42.jsonl]]
 #+CUSTOM_ID: PROJ-004-research-l4-collapse-view-and-tool-rende
+#+COMPLETION_HASH: 622aea3c673080ea
 
 * Initial Message
 
@@ -88,3 +89,144 @@ clock and the effect system merge.
 - PLAN-009 §6 (the pure-render boundary this breaks), Fork D (render caching)
 - PtcRunner.Lisp.run (the shared sandbox; tools-map is the restriction point)
 - PROJ-001 (loop detection — shared concern)
+
+* Design of Record — Reactive Cells (the safe form)   :design:
+
+Adopted framing: REACTIVE CELLS (spec's strongly-preferred form). Render stays
+pure; the looking/acting boundary RELOCATES from "render vs workflow" to
+"declare vs resolve". Effects never touch the frame clock.
+
+** Core symmetry (the design in one line)
+A hole is a PURE cell: deps -> value, FRAME clock, ZERO tools (HoleResolver, W3).
+A reactive cell is an EFFECTFUL hole: deps -> value, SLOW clock (reproject /
+keystroke / store-update), READ-ONLY tools, async + cached.
+Same HoleDiff dependency machinery (W6). Different clock + capability tier.
+
+Existing seams reused (nothing new invented at the substrate level):
+- HoleResolver (lib/spell_agent/tui/hole_resolver.ex)  — pure frame-clock host, zero tools.
+- Reaction.Ptc (lib/spell_agent/tui/reaction/ptc.ex)   — off-frame host w/ tools map + fail-safe; the model for the cell resolver.
+- HoleDiff (lib/spell_agent/tui/hole_diff.ex)          — changed_keys/2 + per-hole dep tracking; the trigger.
+- DataBag.build (lib/spell_agent/tui/data_bag.ex)      — the data/* injection point; cells merge here.
+- reproject (app.ex:342) + handle_info({ref,result}) (app.ex:365) — the slow clock + async-task completion path.
+
+** Syntax — declare-and-reference (render never sees the effect)
+Declare (a named data dependency, resolved off-frame):
+  (cell/define {:name    "callers"
+                :query   (tmpl:: (tool/find {:target (str ~(get data/ui :cursor-id) " def->")}))
+                :debounce 80})
+Reference (an ORDINARY pure hole; render does not know it is live):
+  (layout/set {:slot "pane/callers"
+    :source (tmpl:: {:type "list"
+                     :items [~@(map (fn [c] (get c :name)) data/callers)]})})
+
+The :query is itself a frozen tmpl:: — its ~holes are deps on OTHER data/* keys.
+When HoleDiff.changed_keys sees data/ui change, the cell re-resolves on the slow
+clock and writes data/callers. The render hole ~…data/callers stays pure,
+zero-tools. Cursor moves -> callers pane updates -> ZERO per-frame effects.
+
+** The four governors (security is load-bearing here, not secondary)
+1. Capability tier: cells get a NEW, SEPARATE read-only tools map (find/get/
+   hist-queries/harness-reads). Mutators (edit/create/bash-write) NEVER
+   registered. Render holes keep their zero-tools map untouched. (Inverts the
+   spec's "remove the restriction" into "add a narrower one".)
+2. Async + debounced: resolve runs in a Task (mirrors the mission {ref,result}
+   path at app.ex:365), coalesced on cursor quiescence. Off the frame clock AND
+   off the synchronous reproject path.
+3. Memoized: HoleDiff reuse — deps unchanged -> the tool never re-runs.
+4. Loop guard: static cycle check at cell/define — a cell may not depend on a
+   data/* key it writes (shared concern w/ PROJ-001 render/reason loop).
+
+** Syntax decision (fork resolved)
+Chose `cell/define` (prelude verb, peer of the existing keymap/define-reaction)
+over (a) folding into layout/set metadata, (b) a new reader sigil ~!.
+Rationale: mirrors the shipped reaction vocabulary, keeps declaration separate
+from layout (single responsibility), adds no reader-level surface. Open: an
+implicit-lift form (render hole ~(tool/find …) auto-promoted to a cell) is more
+magical but removes the explicit declare; deferred unless requested.
+
+** Wave plan
+W0  SpellAgent.Tui.Cell resolver — frozen query + env -> value via read-only
+    tools (mirror Reaction.Ptc, read-only, returns a data value not a gaze).
+W1  Cell.Tools read-only capability tier — whitelist, mutators excluded, static guard.
+W2  Cell registry in App state + cell/define prelude verb; DataBag merges
+    resolved cell values into data/*.
+W3  Slow-clock wiring — dep-change detection (HoleDiff.changed_keys) -> debounced
+    async resolve -> merge on completion; cycle guard at define time.
+W4  Prelude vocabulary + executable "live callers pane" demo (acceptance test).
+Reviewer swarm between each wave (PLAN-012 discipline).
+
+** Acceptance (from spec, reactive-cell form)
+A pane declares a data dependency on a read-only query keyed by the cursor; the
+runtime satisfies it on cursor-change (debounced), injects as data/*, render
+stays pure; the live callers pane works with ZERO per-frame effects.
+
+NOTE [2026-06-22]: Adopted reactive-cell design as design-of-record; moving PROJ-004 to DOING. Starting W0 (Cell resolver).
+
+* PROJ-004 COMPLETE — reactive cells shipped   :done:
+
+The looking/acting boundary is RELOCATED, not erased: render stays pure on the
+frame clock; a cell's read-only query resolves on the SLOW clock, debounced +
+async, and lands in data/* as ordinary data a pure hole reads. "Live data the
+runtime computes for you", at zero per-frame cost.
+
+** Waves (each: impl + reviewer swarm + fixes, all committed file-specific)
+W0  Cell resolver (read-only off-frame host)      19dbfb687 ; W0r 3010ecb58
+W1  read-only capability tier (fail-closed)       df3bf9239 ; W1r 11a9fa84a
+W2  registry + cell/define verb + DataBag merge   4a0f52639 ; W2r e2b3072ad
+W3  slow-clock wiring (the reactive loop)         b39ebd55b ; W3r c5d05e658
+W4  prelude vocabulary + acceptance demos         9aae03ec0 ; W4r 5af32ac48
+ptc_runner SPELL PATCH (cell/ namespace)          afb39be2 (separate repo/commit)
+
+** Reviewer swarms: 5 swarms (9 reviewers), 16 findings, ALL fixed
+- W0r (2): fail-sentinel leak, non-map boundary crash, capability smuggle via
+  tool-returned function -> shared SpellAgent.Tui.Sanitize at the cell boundary.
+- W1r (2): test exercised a forest-ignoring read; tautological mutator pin.
+- W2r (3): registry read-modify-write races (lost resolved value, stale-after-
+  redefine, capacity bypass) -> single get_and_update + query-CAS put_resolved/3.
+- W3r (6): stale-resolve ordering (per-cell generation), stale mailboxed tick,
+  failed-cell busy-loop (:failed state), cycle-check exponential DFS (-> BFS),
+  false cycle via core-named cell (core-key exclusion), zero-area cell bag.
+- W4r (4): prelude over-promised hist/* reads; quote-required not enforced
+  (valid_query? now checks codec shape); demo 2 didn't prove zero-per-frame
+  (poison-query rewrite); missing core-name-shadow caveat.
+
+** Architecture (the seams, all reused not reinvented)
+- SpellAgent.Tui.Cell            — off-frame read-only resolver (dual of HoleResolver).
+- SpellAgent.Tui.Cell.Tools      — fail-closed read-only allowlist + compile-time
+                                   disjointness guard (mutators provably excluded).
+- SpellAgent.Tui.Cell.Registry   — Agent-backed; query+deps+debounce+resolved;
+                                   atomic define (get_and_update), CAS put_resolved,
+                                   self + multi-cell cycle guard (BFS, core-key-aware),
+                                   :failed backoff, capacity bound.
+- SpellAgent.Tui.Cell.Clock      — pure dirty/2 (HoleDiff.changed_keys + unresolved
+                                   fold) + bounded resolve/3.
+- SpellAgent.Tui.Cell.Verb       — cell/define · cell/list · cell/remove.
+- SpellAgent.Tui.Sanitize        — shared capability deep-strip (extracted from DataBag).
+- App reproject -> tick_cells: builds the cell bag, diffs, arms per-cell debounce
+  timers (generation-stamped); {:cell_tick} spawns the resolve off-process;
+  {:cell_resolved} CAS-writes + reprojects; Resize tracks the real area.
+- DataBag: ui_map exposes :cursor/:cursors (the reactivity trigger); core_keys/0;
+  merge_cells (pure read, core wins).
+- ptc_runner: cell/ namespace SPELL-PATCHed into the analyzer (5 sites, string-
+  routed, atom-DoS-safe), mirroring the PLAN-009 view/theme/lens/layout patch.
+
+** The honest reactive idiom (discovered + documented)
+A cell's trigger MUST flow through data/* (the dep set is extracted from
+data/<key> leaves in the quoted query). An out-of-band gaze read (harness/
+cursor-id) has no data/* dep -> resolves once, never live. Combine the data/*
+trigger with the read for computation:
+  (quote (let [_ (get data/ui :cursor)] (harness/descendants {:id (harness/cursor-id)})))
+
+** Verification
+- spell_agent full suite: 766 passed (12 properties), 0 failures (seed 0).
+- ptc_runner analyze/atom/tmpl/quote suites green; both repos format-clean.
+- 6 dedicated PROJ-004 test files: cell, cell_tools, cell_registry, cell_clock,
+  cell_demos (10 acceptance demos), + the data_bag/app integration paths.
+
+** Acceptance criterion: MET
+A pane declares a read-only data dependency keyed by the cursor; the runtime
+satisfies it on cursor-change (debounced), injects it as data/*, render stays
+pure, the live data updates with ZERO per-frame effects. Proven end-to-end in
+cell_clock_test (App-level cursor-move re-resolution) and the 10 cell demos.
+
+NOTE [2026-06-23]: PROJ-004 complete: reactive cells shipped across 5 waves + ptc_runner patch, 5 reviewer swarms / 16 findings all fixed, 766 spell_agent tests green, both repos clean. Closing DONE.

@@ -78,17 +78,29 @@ defmodule SpellAgent.Tui.Materialize do
     # (Only affects coercion of a PRESENT field; an ABSENT field keeps nil.)
     fstructs = Reflect.field_structs(Reflect.name_for(mod) || "")
 
-    fields =
-      for {field, default} <- defaults, into: %{} do
-        case fetch_field(map, field) do
-          {:ok, raw} -> {field, coerce(field, raw, coerce_default(default, field, fstructs), mod)}
-          :error -> {field, default}
-        end
-      end
-
-    struct(mod, fields)
+    case fields(defaults, map, fstructs, mod) do
+      {:ok, fields} -> struct(mod, fields)
+      {:error, reason} -> {:error, reason}
+    end
   rescue
     e -> {:error, {:materialize_failed, mod, Exception.message(e)}}
+  end
+
+  defp fields(defaults, map, fstructs, mod) do
+    Enum.reduce_while(defaults, {:ok, %{}}, fn {field, default}, {:ok, acc} ->
+      case fetch_field(map, field) do
+        {:ok, raw} ->
+          coerced = coerce(field, raw, coerce_default(default, field, fstructs), mod)
+
+          case coerced do
+            {:__field_error__, reason} -> {:halt, {:error, reason}}
+            value -> {:cont, {:ok, Map.put(acc, field, value)}}
+          end
+
+        :error ->
+          {:cont, {:ok, Map.put(acc, field, default)}}
+      end
+    end)
   end
 
   # The default value the coercion rule keys off. A real non-nil default is used
@@ -131,6 +143,20 @@ defmodule SpellAgent.Tui.Materialize do
 
   # Already a struct in any slot -> pass through (idempotent compose).
   defp coerce(_field, %{__struct__: _} = raw, _default, _parent), do: raw
+
+  # Boolean fields must stay boolean. Letting e.g. paragraph.wrap = "word" pass
+  # through builds a struct but fails later in native draw, dropping every frame.
+  # Reject at materialization so layout/set preserves last-good and can tell the
+  # agent exactly which field is wrong.
+  defp coerce(field, raw, default, parent) when is_boolean(default) do
+    if is_boolean(raw) do
+      raw
+    else
+      {:__field_error__,
+       {:invalid_field, parent, field, :boolean, raw,
+        "use true or false, or omit the field to keep the default"}}
+    end
+  end
 
   # A tuple-typed field (scroll {0,0}, padding {0,0,0,0}) <- a PTC list.
   defp coerce(_field, raw, default, _parent) when is_tuple(default) and is_list(raw),

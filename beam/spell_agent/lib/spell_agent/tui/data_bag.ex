@@ -37,7 +37,7 @@ defmodule SpellAgent.Tui.DataBag do
   # the cell-dependency cycle check must treat a dep on one of these as a LEAF
   # (the value is the core map, not a cell) even if a same-named cell exists.
   @core_keys MapSet.new(~w(
-    area status ui vms forest
+    area status ui vms forest cells
     running? turns tools forest-count composer
     status-label status-color composer-text composer-title composer-fg
   ))
@@ -84,6 +84,21 @@ defmodule SpellAgent.Tui.DataBag do
     :exit, _ -> %{}
   end
 
+  # The declared cell list as data (PROJ-005): a tmpl:: hole reads data/cells
+  # to render a cell browser/drawer. Mirrors cell/list's shape so the runtime
+  # listing and the data projection never drift.
+  defp cell_listing do
+    SpellAgent.Tui.Cell.Registry.all()
+    |> Enum.map(fn {name, cell} ->
+      %{"name" => name, "deps" => MapSet.to_list(cell.deps),
+        "debounce" => cell.debounce, "resolved" => cell.resolved != :unresolved}
+    end)
+  rescue
+    _ -> []
+  catch
+    :exit, _ -> []
+  end
+
   defp assemble(state, area) when is_map(state) do
     spans = safe_spans(state)
     runs = Store.run_spans(spans)
@@ -115,6 +130,7 @@ defmodule SpellAgent.Tui.DataBag do
       "ui" => ui_map(Map.get(state, :ui)),
       "vms" => stringify_vms(Map.get(state, :vms, %{})),
       "forest" => spans,
+      "cells" => cell_listing(),
       # ---- fine-grained scalars (sharper diff keys; §8c.3) ----
       "running?" => running?,
       "turns" => turns,
@@ -209,7 +225,8 @@ defmodule SpellAgent.Tui.DataBag do
       # clock's dep-diff sees. Without this, data/ui would not reflect navigation
       # and cursor-keyed cells could never go live.
       "cursor" => Map.get(cursors, focus, 0),
-      "cursors" => Map.new(cursors, fn {pane, idx} -> {to_string_safe(pane), idx} end)
+      "cursors" => Map.new(cursors, fn {pane, idx} -> {to_string_safe(pane), idx} end),
+      "flags" => Map.new(Map.get(ui, :flags, %{}), fn {k, v} -> {to_string_safe(k), v} end)
     }
   end
 

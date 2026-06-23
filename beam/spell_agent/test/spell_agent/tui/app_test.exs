@@ -21,6 +21,25 @@ defmodule SpellAgent.Tui.AppTest do
   defp key(code), do: %Key{code: code, kind: "press", modifiers: []}
   defp ctrl(code), do: %Key{code: code, kind: "press", modifiers: ["ctrl"]}
 
+  # Restore the shared supervised LayoutRegistry to its boot state (the empty
+  # placeholder the supervisor starts it with -- no :default opt -> frozen pane
+  # identity []). Any test that seeds/reshapes the global registry MUST call this
+  # on exit, or a later cross-file render test adopts the leftover tree (the
+  # registry is session-global, not per-test). Tolerant of an absent registry.
+  defp restore_layout_registry do
+    case Process.whereis(SpellAgent.Tui.LayoutRegistry) do
+      nil ->
+        :ok
+
+      _ ->
+        SpellAgent.Tui.LayoutRegistry.seed_default(%{
+          "type" => "split",
+          "dir" => "vertical",
+          "children" => []
+        })
+    end
+  end
+
   # The App's callback map lives under the ExRatatui server's `:user_state`; read
   # it to assert navigation outcomes (PLAN-346 W2).
   defp app_state(pid), do: :sys.get_state(pid).user_state
@@ -144,6 +163,7 @@ defmodule SpellAgent.Tui.AppTest do
         running?: false,
         result: nil,
         last_prompt: nil,
+        pending_leader: false,
         ui: Ui.new(focus: :tree, panes: [:prompt, :tree, :detail])
       },
       overrides
@@ -342,6 +362,8 @@ defmodule SpellAgent.Tui.AppTest do
       _ -> LayoutRegistry.seed_default(default)
     end
 
+    on_exit(&restore_layout_registry/0)
+
     # The agent reshapes the `detail` PANE into a custom dashboard widget.
     assert :ok =
              LayoutRegistry.set("detail", %{
@@ -357,6 +379,136 @@ defmodule SpellAgent.Tui.AppTest do
     widgets = App.render(st, %Frame{width: 120, height: 24})
     rendered = Enum.map_join(widgets, "\n", fn {w, _r} -> inspect(w) end)
     assert rendered =~ "AGENT-RESHAPED-DETAIL"
+  end
+
+  # BUG-012: shadowing the BODY slot itself (not just a pane) silently un-adopted
+  # the WHOLE live tree. The old gate recomputed `body_pane_slots/1` of the LIVE
+  # tree; a `view/split` body has fresh widget children with NO slot, so the
+  # recompute was `[]`, the equality failed, and render fell back to the native
+  # default every frame -- the agent's `layout/set` returned ok yet nothing
+  # changed. The gate now keys on the FROZEN pane identity captured at seed time,
+  # which a body reshape cannot move. This asserts the body reshape reaches the
+  # render OUTPUT (the operator's actual screen), which BUG-007's test could not
+  # catch (it only shadowed a pane, which keeps the body slots).
+  test "BUG-012: an agent shadow on the BODY slot survives the render-adoption gate",
+       %{store: store} do
+    alias SpellAgent.Tui.{DefaultLayout, LayoutRegistry, Lens}
+
+    st = state(%{store: store})
+    pane_names = Enum.map(st.panes, &Atom.to_string(&1.name))
+    ui = Ui.new(focus: :tree, panes: [:prompt | Enum.map(st.panes, & &1.name)])
+    default = DefaultLayout.tree(ui, pane_names)
+
+    case Process.whereis(LayoutRegistry) do
+      nil -> start_supervised!({LayoutRegistry, default: default})
+      _ -> LayoutRegistry.seed_default(default)
+    end
+
+    # Restore the shared supervised registry to its boot default on exit: this
+    # test reshapes the global registry, and a later cross-file test that renders
+    # without re-seeding would otherwise adopt this polluted tree.
+    on_exit(&restore_layout_registry/0)
+
+    # The agent reshapes the ENTIRE body into a custom message-history panel --
+    # the exact operation from the reported session (a view/split of fresh
+    # widgets, none carrying a pane slot).
+    assert :ok =
+             LayoutRegistry.set("body", %{
+               "type" => "split",
+               "dir" => "horizontal",
+               "constraints" => [["percentage", 100]],
+               "children" => [
+                 %{
+                   "type" => "list",
+                   "items" => ["you: hi", "agent: BODY-RESHAPED-PANEL"],
+                   "block" => %{
+                     "type" => "block",
+                     "title" => "Message History",
+                     "borders" => ["all"]
+                   }
+                 }
+               ]
+             })
+
+    # The LIVE body's pane slots are now empty (fresh widget children, no slot) --
+    # exactly the state the old gate rejected...
+    assert Lens.body_pane_slots(LayoutRegistry.tree()) == []
+    # ...but the FROZEN identity is untouched, so the gate still adopts.
+    assert LayoutRegistry.pane_identity() == pane_names
+
+    widgets = App.render(st, %Frame{width: 120, height: 24})
+    rendered = Enum.map_join(widgets, "\n", fn {w, _r} -> inspect(w) end)
+    assert rendered =~ "BODY-RESHAPED-PANEL"
+  end
+
+  test "C-r resets an agent-authored layout to the default even in insert mode", %{store: store} do
+    alias SpellAgent.Tui.{DefaultLayout, LayoutRegistry}
+
+    st = state(%{store: store})
+    pane_names = Enum.map(st.panes, &Atom.to_string(&1.name))
+    ui = Ui.new(focus: :tree, panes: [:prompt | Enum.map(st.panes, & &1.name)])
+    default = DefaultLayout.tree(ui, pane_names)
+
+    case Process.whereis(LayoutRegistry) do
+      nil -> start_supervised!({LayoutRegistry, default: default})
+      _ -> LayoutRegistry.seed_default(default)
+    end
+
+    on_exit(&restore_layout_registry/0)
+
+    assert :ok =
+             LayoutRegistry.set("body", %{
+               "type" => "paragraph",
+               "text" => "CUSTOM-LAYOUT"
+             })
+
+    widgets = App.render(st, %Frame{width: 120, height: 24})
+    assert Enum.map_join(widgets, "\n", fn {w, _r} -> inspect(w) end) =~ "CUSTOM-LAYOUT"
+
+    insert_state = %{st | ui: Ui.mode(st.ui, :insert), pending_leader: true}
+    assert {:noreply, reset_state} = App.handle_event(ctrl("r"), insert_state)
+    refute reset_state.pending_leader
+    assert reset_state.ui.mode == :insert
+
+    widgets = App.render(reset_state, %Frame{width: 120, height: 24})
+    rendered = Enum.map_join(widgets, "\n", fn {w, _r} -> inspect(w) end)
+    refute rendered =~ "CUSTOM-LAYOUT"
+    assert rendered =~ "detail"
+  end
+
+  # BUG-012 honesty (fix B): on a registry that was never seeded with a real
+  # layout (frozen identity []), the App's gate can NEVER adopt, so any shadow is
+  # futile. set/2 must REJECT loudly instead of returning a hollow ok the agent
+  # trusts. The `layout/set` tool surfaces this as an `err` map, not a silent
+  # success.
+  test "BUG-012: layout/set on an unseeded (non-adoptable) registry rejects honestly" do
+    alias SpellAgent.Tui.LayoutRegistry
+
+    # An unseeded registry: the empty-placeholder default has no body -> identity [].
+    case Process.whereis(LayoutRegistry) do
+      nil ->
+        start_supervised!({LayoutRegistry, []})
+
+      _ ->
+        LayoutRegistry.seed_default(%{"type" => "split", "dir" => "vertical", "children" => []})
+    end
+
+    on_exit(&restore_layout_registry/0)
+
+    refute LayoutRegistry.adoptable?()
+
+    assert {:error, {:not_adoptable, "body"}} =
+             LayoutRegistry.set("body", %{"type" => "paragraph", "text" => "x"})
+
+    # The tool surface returns an err map (not a tree), naming the reason.
+    result =
+      LayoutRegistry.tools()["layout/set"].(%{
+        "slot" => "body",
+        "source" => %{"type" => "paragraph", "text" => "x"}
+      })
+
+    assert Map.get(result, "reason") == "not_adoptable"
+    assert Map.get(result, "err") =~ "would not render"
   end
 
   # BUG-008: render must never let one unencodable widget drop the WHOLE frame.
@@ -376,6 +528,8 @@ defmodule SpellAgent.Tui.AppTest do
       nil -> start_supervised!({LayoutRegistry, default: default})
       _ -> LayoutRegistry.seed_default(default)
     end
+
+    on_exit(&restore_layout_registry/0)
 
     # Force an unencodable widget directly into the live tree, bypassing the
     # set/2 ladder (simulating a paint-time-only failure the probe didn't catch).
@@ -644,6 +798,61 @@ defmodule SpellAgent.Tui.AppTest do
     before = SpellAgent.Tui.Ui.scroll_of(ui(pid), :history)
     :ok = Runtime.inject_event(pid, key("j"))
     assert SpellAgent.Tui.Ui.scroll_of(ui(pid), :history) == before + 1
+
+    GenServer.stop(pid)
+  end
+
+  # ---- C-w frame leader: spatial region selection (geometry-driven) ----
+
+  defp ctrl_w(pid), do: Runtime.inject_event(pid, ctrl("w"))
+
+  test "C-w l focuses the most-RIGHTWARD region by layout geometry", %{store: store} do
+    {:ok, pid} =
+      App.start_link(name: nil, test_mode: {80, 24}, store: store, on_submit: fn _ -> :noop end)
+
+    # Body is history | tree | detail, left to right. C-w l = rightmost = detail,
+    # resolved from the placed rects (not a hardcoded slot).
+    :ok = ctrl_w(pid)
+    :ok = Runtime.inject_event(pid, key("l"))
+    assert ui(pid).focus == :detail
+
+    # C-w h = leftmost = history.
+    :ok = ctrl_w(pid)
+    :ok = Runtime.inject_event(pid, key("h"))
+    assert ui(pid).focus == :history
+
+    GenServer.stop(pid)
+  end
+
+  test "C-w l lands on the C-e cells drawer when it is shown (rightmost overlay)", %{
+    store: store
+  } do
+    {:ok, pid} =
+      App.start_link(name: nil, test_mode: {80, 24}, store: store, on_submit: fn _ -> :noop end)
+
+    # Open the cells drawer (C-e). It is drawn as the rightmost column, so it now
+    # IS the most-rightward region — C-w l must select it, by position.
+    :ok = Runtime.inject_event(pid, ctrl("e"))
+    assert app_state(pid).ui.flags["cells-drawer"] == true
+
+    :ok = ctrl_w(pid)
+    :ok = Runtime.inject_event(pid, key("l"))
+    assert ui(pid).focus == :cells
+
+    GenServer.stop(pid)
+  end
+
+  test "the leader is one-shot: a non-direction key cancels with no move", %{store: store} do
+    {:ok, pid} =
+      App.start_link(name: nil, test_mode: {80, 24}, store: store, on_submit: fn _ -> :noop end)
+
+    focus0 = ui(pid).focus
+    :ok = ctrl_w(pid)
+    assert app_state(pid).pending_leader == true
+    # 'x' is not a direction → cancel, consume, no focus change.
+    :ok = Runtime.inject_event(pid, key("x"))
+    assert app_state(pid).pending_leader == false
+    assert ui(pid).focus == focus0
 
     GenServer.stop(pid)
   end

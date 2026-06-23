@@ -1,0 +1,39 @@
+#+TITLE: PLAN: harden freeform layout validation and reset chord
+#+STATE: DONE
+#+SESSION_ID: 1514ec09644c0411
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-23T21-55-05-746Z_1514ec09644c0411.jsonl]]
+#+CUSTOM_ID: PLAN-015-plan-harden-freeform-layout-validation-a
+#+LAYER: tui
+#+STATUS: planned
+
+* Initial Message
+
+look at this:
+/home/user/.spell/traces/sess-9c59a45a418e78cd.20260623-215447.txt
+
+
+I wish it showed the enhanced mission! but it froze after I sent my last message :( why?
+
+* Goal
+Prevent agent-authored freeform layouts from freezing the TUI when widget fields carry invalid values that pass `layout/set` validation but fail at draw time.
+
+* Problem
+A paragraph node with `:wrap "word"` was accepted by `layout/set`, but ExRatatui draw later raised `paragraph.wrap: unexpected value`, freezing screen updates. Validation currently probes materialization + bridge encoding, but the bridge accepts the malformed value while the native draw rejects it.
+
+* Scope
+- Harden `SpellAgent.Tui.Materialize` and/or `SpellAgent.Tui.LayoutDiagnostic` so invalid boolean widget fields are rejected or coerced before `layout/set` commits.
+- Improve diagnostic messages for rejected widget fields: include path, field, expected type, actual value/type, and remediation where possible.
+- Add an always-available key chord to reset/fallback to the default TUI layout even after an authored layout breaks.
+- Add focused tests proving the regression and the recovery affordance.
+
+* Non-goals
+- No broad rewrite of the reflection/materialization model.
+- No changes to ex_ratatui vendored code unless unavoidable.
+- No new persistent layout storage.
+
+* Acceptance
+- `layout/set` with a paragraph `wrap: "word"` returns a structured error and leaves last-good layout intact.
+- Error text clearly identifies `source.wrap`, expected `boolean`, actual string `"word"`, and suggests `true/false` or omit the field.
+- A key chord resets `LayoutRegistry` to default regardless of current focus/mode.
+- Tests cover invalid bool rejection, diagnostic quality, and reset chord behavior.
+- Focused test command passes.

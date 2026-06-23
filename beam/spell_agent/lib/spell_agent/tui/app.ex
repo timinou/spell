@@ -46,6 +46,7 @@ defmodule SpellAgent.Tui.App do
     LayoutRegistry,
     Materialize,
     Projection,
+    Spatial,
     Store,
     Surface,
     Ui
@@ -103,7 +104,11 @@ defmodule SpellAgent.Tui.App do
       cell_bag: nil,
       cell_timers: %{},
       cell_gens: %{},
-      last_area: %Rect{x: 0, y: 0, width: 80, height: 24}
+      last_area: %Rect{x: 0, y: 0, width: 80, height: 24},
+      # The FRAME leader's one-shot pending flag (C-w): set when C-w is pressed,
+      # consumed by the very next key (resolved spatially against the placed
+      # tree), then cleared. nil = no leader armed.
+      pending_leader: false
     }
 
     # Seed the canonical layout tree (PLAN-009) from the native default + the
@@ -169,6 +174,56 @@ defmodule SpellAgent.Tui.App do
     |> Surface.layout(area)
     |> Enum.flat_map(fn {node, rect} -> safe_resolve_node(node, rect, state) end)
     |> Enum.filter(&encodable_placement?/1)
+    |> maybe_cells_drawer(state, data_bag, area)
+  end
+
+  # The cells drawer (default: Ctrl-e): a right-side card overlay listing every
+  # declared reactive cell + its resolve status + deps. The toggle is a keymap
+  # reaction that flips ui.flags["cells-drawer"]; the content is derived from
+  # data/cells each frame — pure data in, widget out, nothing to sync. Degrades to
+  # no overlay when the flag is unset or Materialize fails (never bricks a frame).
+  defp maybe_cells_drawer(placements, state, data_bag, area) do
+    if Map.get(state.ui.flags, "cells-drawer", false) do
+      placements ++ cells_drawer_placements(data_bag, area)
+    else
+      placements
+    end
+  end
+
+  defp cells_drawer_placements(data_bag, area) do
+    cells = Map.get(data_bag, "cells", [])
+
+    items =
+      case cells do
+        [] ->
+          ["(no cells defined)"]
+
+        _ ->
+          Enum.map(cells, fn c ->
+            mark = if Map.get(c, "resolved"), do: "✓", else: "·"
+            deps = Map.get(c, "deps", []) |> Enum.join(" ")
+            deps_str = if deps == "", do: "", else: "  [#{deps}]"
+            "#{mark} #{Map.get(c, "name", "?")}#{deps_str}"
+          end)
+      end
+
+    node = %{
+      "type" => "list",
+      "items" => items,
+      "block" => %{"type" => "block", "title" => " cells ", "borders" => ["all"]}
+    }
+
+    case SpellAgent.Tui.Materialize.to_struct(node) do
+      %{__struct__: _} = widget ->
+        w = min(34, area.width)
+        rect = %Rect{x: max(0, area.width - w), y: 0, width: w, height: area.height}
+        [{widget, rect}]
+
+      _ ->
+        []
+    end
+  rescue
+    _ -> []
   end
 
   # The SINGLE render contract (BUG-009 + BUG-010): every node's resolution is
@@ -229,20 +284,43 @@ defmodule SpellAgent.Tui.App do
     end
   end
 
-  # The LayoutRegistry's tree, but only when its BODY pane SLOTS match the App's
-  # current panes (so a 2-pane test never picks up a 3-pane live tree, and the
-  # registry being absent in a headless test degrades to the native default).
+  # The LayoutRegistry's tree, but only when it is the tree for the App's CURRENT
+  # pane set (so a 2-pane test never picks up a 3-pane live tree, and the registry
+  # being absent in a headless test degrades to the native default).
   #
-  # We gate on `body_pane_slots/1`, the STABLE slot identities, NOT `focusables/1`:
-  # when the agent shadows a pane slot (e.g. `detail`) with a custom widget the
-  # node keeps its slot but loses `type: "pane"`, so it falls out of `focusables`.
-  # Gating on focusables there made the set shrink, the equality fail, and the
-  # whole agent tree silently un-adopt -- the "layout/set ran but nothing changed"
-  # bug (BUG-007). The slot identity is the right invariant: it answers "is this
-  # the tree for THESE panes" without caring whether a pane was reshaped.
+  # The gate keys on the registry's FROZEN pane identity (`pane_identity/0`),
+  # captured at seed time, NOT on a recomputed `body_pane_slots/1` of the LIVE
+  # tree. The live tree's body changes shape under the agent's reshapes:
+  #
+  #   * BUG-007: shadowing a PANE slot (e.g. `detail`) with a widget drops it from
+  #     `focusables/1`. Fixed by switching to `body_pane_slots/1`.
+  #   * BUG-012: shadowing the BODY slot itself with a `view/split` whose children
+  #     are fresh widgets (NO slot) makes `body_pane_slots/1` of the live tree `[]`
+  #     -- so a live recompute fails the equality and the WHOLE reshape silently
+  #     un-adopts, every frame. The very feature the prompt advertises ("body is
+  #     your canvas") was structurally forbidden by gating on the mutable body.
+  #
+  # The frozen identity is the stable invariant: it answers "is this the registry
+  # for THESE panes" once, at seed, and never moves under a reshape. Read the tree
+  # and its identity ATOMICALLY so they can't tear across a concurrent set/2.
   defp live_layout_tree(pane_names) do
-    tree = LayoutRegistry.tree()
-    if Lens.body_pane_slots(tree) == pane_names, do: tree
+    {tree, identity} = LayoutRegistry.tree_with_identity()
+
+    cond do
+      identity == pane_names ->
+        tree
+
+      true ->
+        # The registry is for a different pane set (or unseeded). Fall back to the
+        # native default -- but say so: a SILENT discard is the BUG-012 trap (the
+        # agent's set/2 returned ok yet nothing rendered, with no signal anywhere).
+        Logger.debug(
+          "render: layout registry not adopted -- pane identity #{inspect(identity)} " <>
+            "!= app panes #{inspect(pane_names)}; using native default"
+        )
+
+        nil
+    end
   rescue
     _ -> nil
   catch
@@ -312,11 +390,41 @@ defmodule SpellAgent.Tui.App do
   # NORMAL, Enter submits, everything else edits text. NORMAL: every key is a
   # %Chord{} resolved against the focus context stack (no key types text). This
   # is why plain j/k/h/l can be navigation — they're only text in INSERT mode.
+  # FRAME leader consume (C-w armed): the NEXT key is a spatial direction. Resolve
+  # it against the LIVE placed tree (real rect geometry, the C-e drawer included
+  # when shown) and focus the extreme region. Any non-direction key just disarms
+  # (a harmless cancel). One-shot: pending_leader is always cleared here. This
+  # clause precedes the modal handlers so the leader wins over text/nav.
   @impl true
-  def handle_event(%ExRatatui.Event.Key{kind: kind} = key, %{ui: %Ui{mode: :insert}} = state)
+  def handle_event(%ExRatatui.Event.Key{kind: kind} = key, state)
       when kind in ["press", "repeat"] do
     chord = Chord.from_event(key)
 
+    if reset_layout_chord?(chord) do
+      {:noreply, reset_layout(state)}
+    else
+      handle_key_event(chord, state)
+    end
+  end
+
+  def handle_event(_event, state), do: {:noreply, state}
+
+  defp handle_key_event(%Chord{} = chord, %{pending_leader: true} = state) do
+    state = %{state | pending_leader: false}
+
+    case Spatial.direction(chord.key) do
+      nil ->
+        # Not a direction — cancel the leader, consume the key (no stray action).
+        {:noreply, state}
+
+      dir ->
+        target = Ui.safe_pane(frame_target(state, dir))
+        ui = Ui.focus_pane(state.ui, target)
+        {:noreply, reproject(%{state | ui: ui}, :all)}
+    end
+  end
+
+  defp handle_key_event(%Chord{} = chord, %{ui: %Ui{mode: :insert}} = state) do
     cond do
       chord.key == "esc" ->
         # Leave INSERT without submitting; keep the composer buffer.
@@ -330,13 +438,14 @@ defmodule SpellAgent.Tui.App do
     end
   end
 
-  def handle_event(%ExRatatui.Event.Key{kind: kind} = key, %{ui: %Ui{mode: :normal}} = state)
-      when kind in ["press", "repeat"] do
-    chord = Chord.from_event(key)
-
+  defp handle_key_event(%Chord{} = chord, %{ui: %Ui{mode: :normal}} = state) do
     case Keys.resolve(chord, focus_stack(state)) do
       {:intent, :"app/quit", _ctx} ->
         {:stop, state}
+
+      {:intent, :"frame/leader", _ctx} ->
+        # Arm the FRAME leader (C-w): the next key picks a region spatially.
+        {:noreply, %{state | pending_leader: true}}
 
       {:intent, :"mode/insert", _ctx} ->
         # Enter INSERT — only meaningful on the prompt; focus it so typing is
@@ -347,6 +456,9 @@ defmodule SpellAgent.Tui.App do
         # `enter` on a non-prompt pane (where mode/insert isn't bound) runs the
         # current composer buffer directly.
         submit(state)
+
+      {:intent, :"app/reset-layout", _ctx} ->
+        reset_layout(state) |> then(&{:noreply, &1})
 
       {:intent, _intent, _ctx} = resolution ->
         forest = Store.spans(state.store)
@@ -361,7 +473,72 @@ defmodule SpellAgent.Tui.App do
     end
   end
 
-  def handle_event(_event, state), do: {:noreply, state}
+  defp handle_key_event(%Chord{}, state), do: {:noreply, state}
+
+  defp reset_layout_chord?(%Chord{key: "r", mods: [:ctrl]}), do: true
+  defp reset_layout_chord?(_chord), do: false
+
+  defp reset_layout(state) do
+    LayoutRegistry.reset(nil)
+    %{state | pending_leader: false} |> reproject(:all)
+  rescue
+    _ -> %{state | pending_leader: false}
+  catch
+    :exit, _ -> %{state | pending_leader: false}
+  end
+
+  # ---- frame leader: spatial region resolution (C-w) ----
+
+  # The slot of the region in `dir` (left/right/up/down), resolved PURELY from the
+  # live tree's geometry: lay the current tree into the last known frame area, pair
+  # each focusable region with the rect it occupies THIS frame, add the C-e cells
+  # drawer as a region when it is shown (rightmost overlay), and ask `Spatial` for
+  # the extreme. So "most rightward" is whichever region the layout placed furthest
+  # right — the cells drawer when open, else the rightmost body pane. nil when
+  # there is nothing placed (degraded tree) → focus_pane is then identity.
+  defp frame_target(state, dir) do
+    state |> frame_regions() |> Spatial.extreme(dir)
+  end
+
+  # `[{slot, %Rect{}}]` for every focusable region under the live gaze: the body
+  # panes from the placed tree, plus the cells overlay when its flag is set. Reuses
+  # the exact render geometry (resolve_holes → layout) so a region's position here
+  # matches where it is actually drawn. Best-effort: a layout failure yields the
+  # panes it could place (never raises into the event loop).
+  defp frame_regions(state) do
+    area = state.last_area
+    data_bag = DataBag.build(Map.put(state, :composer_hint, hint_for(state)), area)
+
+    pane_regions =
+      state
+      |> render_tree()
+      |> Surface.resolve_holes(data_bag)
+      |> Surface.layout(area)
+      |> Enum.flat_map(fn {node, rect} ->
+        case Lens.slot(node) do
+          slot when is_binary(slot) -> if Ui.safe_pane(slot), do: [{slot, rect}], else: []
+          _ -> []
+        end
+      end)
+
+    pane_regions ++ cells_region(state, area)
+  rescue
+    _ -> []
+  catch
+    :exit, _ -> []
+  end
+
+  # The cells drawer as a spatial region (slot "cells"), only when shown. Its rect
+  # mirrors `cells_drawer_placements/2` so the leader sees it exactly where it is
+  # drawn — the rightmost column.
+  defp cells_region(state, area) do
+    if Map.get(state.ui.flags, "cells-drawer", false) and area.width > 0 do
+      w = min(34, area.width)
+      [{"cells", %Rect{x: max(0, area.width - w), y: 0, width: w, height: area.height}}]
+    else
+      []
+    end
+  end
 
   # ---- store updates ----
 
@@ -689,6 +866,7 @@ defmodule SpellAgent.Tui.App do
 
     global = [
       chord_hint(:global, :"focus/next", "pane"),
+      chord_hint(:global, :"app/reset-layout", "reset layout"),
       chord_hint(:global, :"app/quit", "quit")
     ]
 

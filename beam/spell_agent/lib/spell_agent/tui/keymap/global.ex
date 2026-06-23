@@ -31,7 +31,15 @@ defmodule SpellAgent.Tui.Keymap.Global do
       {Chord.parse("tab"), :"focus/next"},
       {Chord.parse("S-tab"), :"focus/prev"},
       {Chord.parse("esc"), :"app/quit"},
-      {Chord.parse("C-c"), :"app/quit"}
+      {Chord.parse("C-c"), :"app/quit"},
+      {Chord.parse("C-r"), :"app/reset-layout"},
+      {Chord.parse("C-e"), :"app/toggle-cells"},
+      # C-w opens the FRAME leader: the next key (h/j/k/l) selects a region by
+      # SPATIAL position in the layout tree (leftmost/rightmost/top/bottom),
+      # resolved from live rect geometry. C-j/C-k cycle WITHIN a frame; C-w moves
+      # BETWEEN regions. The App holds the one-shot pending state (the follow-up
+      # key is not a static binding — it is resolved against the placed tree).
+      {Chord.parse("C-w"), :"frame/leader"}
     ]
   end
 
@@ -46,5 +54,20 @@ defmodule SpellAgent.Tui.Keymap.Global do
   # app/submit is likewise App-intercepted (it starts a Task + resets the Store);
   # identity here so a stray dispatch can't corrupt the gaze.
   def react(:"app/submit", %Ui{} = ui, _forest), do: ui
+  # app/reset-layout is App-intercepted because it mutates the LayoutRegistry;
+  # identity here so a stray dispatch can't corrupt the gaze.
+  def react(:"app/reset-layout", %Ui{} = ui, _forest), do: ui
+  # frame/leader is App-intercepted: it arms a one-shot pending state, then the
+  # NEXT key is resolved spatially against the placed tree (geometry the pure
+  # Ui->Ui reaction cannot see). Identity here so a stray dispatch is harmless.
+  def react(:"frame/leader", %Ui{} = ui, _forest), do: ui
+  # Toggle the cells drawer: flip the free-form flag a tmpl:: hole or the render
+  # overlay reads. The flag is the ONLY state — the drawer content is derived from
+  # data/cells each frame, so there is nothing to sync.
+  def react(:"app/toggle-cells", %Ui{} = ui, _forest) do
+    open = Map.get(ui.flags, "cells-drawer", false)
+    %{ui | flags: Map.put(ui.flags, "cells-drawer", not open)}
+  end
+
   def react(_intent, %Ui{} = ui, _forest), do: ui
 end

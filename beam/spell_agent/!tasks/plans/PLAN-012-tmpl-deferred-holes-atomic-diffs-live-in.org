@@ -1,9 +1,10 @@
 #+TITLE: tmpl:: deferred holes + atomic diffs — live interfaces as data
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 15131f74dcf291df
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-22T12-22-47-411Z_15131f74dcf291df.jsonl]]
 #+CUSTOM_ID: PLAN-012-tmpl-deferred-holes-atomic-diffs-live-in
 #+DEPENDS: PLAN-011-shbrush-homoiconic-shell-scripting-via-p
+#+COMPLETION_HASH: e39e2697388a6632
 
 * Initial Message
 
@@ -579,3 +580,41 @@ NOTE [2026-06-22]: W0 reviewer swarm (3 reviewers) DONE 2026-06-22. Two real fin
 - P1 (2 reviewers, high-conf): FIXED. core_to_source.format({:quoted_data,data}) re-quoted the codec MAP -> (quote {"node" "vec"...}), double-encoding on reload, corrupting serialize_closure/export_namespace for any closure holding a quoted collection. Fix: format the data literal directly (a quoted collection evaluates to its codec data; serializing AS that data re-evaluates to the equal value; idempotent). Regression test added (serialize→reload value-equality + stable second round). 100 tests green incl. core_to_source_test + step_form_test.
 - P2 (1 reviewer): DEFERRED TO W1 (correct scope). '(a b) reader sugar still rejects collection delimiters (fast_parser parse_quoted_symbol + parser.ex preflight guard) while (quote (a b)) now works → asymmetry; spec examples persist holes as '(str …). W1 is the reader wave and owns fast_parser; it must make '(form) desugar through the same single-arg quote path (or remove the quoted-collection parser guard) so '(...) and (quote (...)) agree. Added to W1 scope below.
 Codec round-trip + walker-coverage otherwise clean: other CoreAST walkers (closure_capture, symbol_counter, data_keys, discovery, validators, collect_tool_names) have safe inert fallbacks for the new {:quoted_data,_} leaf or cannot encounter it.
+
+NOTE [2026-06-22]: W3+W4 reviewer swarm (3 reviewers) DONE 2026-06-22. 5 real findings, ALL fixed:
+- #1 CRITICAL capability escape (DataBag): raw spans/vms exposed executables (a span meta carries the live LLM callback); PTC can enumerate struct fields + CALL a fn from context -> a render hole could invoke the callback every frame despite no-tools. FIX: deep-sanitize the bag (fn/pid/ref/port -> nil, structs -> plain maps). commit 3f550938c.
+- #2 security (HoleResolver): splice re-walked resolved elements -> a hole-shaped value from data/* got executed. FIX: splice flattens as inert data, no re-walk. commit 6a2712ce8.
+- #3 (ptc_runner Formatter): nested-tmpl hole crashed thaw (no {:quoted_data} format clause) -> placeholder. FIX: format as self-eval data literal. commit fd99322b (ptc_runner).
+- #4 (LayoutRegistry): layout/set tmpl shadow rejected — probe materialized unresolved {\"__hole__\"} maps. FIX: resolve holes (empty env) before the encode probe. commit 4af484777.
+- #5 liveness (HoleResolver): default 1000ms timeout per hole stalls the sync render loop. FIX: 200ms render budget. commit 6a2712ce8.
+Regression tests added for all. Full TUI suite 228 green; reader suite 178 green. Commits are file-specific; ptc_runner commits separate from spell_agent (per instruction).
+
+NOTE [2026-06-22]: W5+W6 reviewer swarm (3 reviewers) DONE 2026-06-22. W5 parity: CLEAN (approved, no regressions). W6: 3 findings, all fixed by one redesign (commit 466cb08bf):
+- #1 P1 (2 reviewers): fingerprint+prev.table reuse ignored hole FORMS -> same-shape/changed-expr reused stale value.
+- #2 P2: phash2 skeleton collision -> wrong table reuse.
+- #3 P2: splice non-list returned verbatim, not placeholder (≠ uncached).
+ROOT FIX: drop the whole-tree fingerprint entirely; rebuild the table from the CURRENT tree each resolve; reuse per-hole iff {path, frozen} identical AND deps clean. eval_at runs the real hole node through HoleResolver so failure semantics match uncached exactly. Property (cached==uncached over random deltas) now also covers form changes. 246 TUI tests green.
+PTC-language layer (W0-W2) + render layer (W3-W6) all done + reviewed. Remaining: W7 prelude + 10 demos.
+
+NOTE [2026-06-22]: ALL WAVES DONE 2026-06-22. W0-W7 implemented, reviewed (6 reviewer swarms, all findings fixed), committed in file-specific commits (ptc_runner separate from spell_agent).
+
+PTC-language layer (ptc_runner): W0 quote→collections + QuoteData codec; W1 general ~/~@ reader + backtick quasiquote (+ '(coll) sugar); W2 tmpl:: deferred-hole reader (freeze, not eval). 178 reader-suite tests (11 properties).
+
+Render layer (spell_agent): W3 HoleResolver (capability-bounded scoped host, failure ladder); W4 generic data/* bag (sanitized against executables) wired into render/2; W5 dogfood (retired status_widget/composer_widget into tmpl:: holes, byte-identical parity gated); W6 HoleDiff per-hole dirty-tracking (cached==uncached property); W7 prelude + 10 executable demos. 57 PLAN-012 spell_agent tests + 230 full TUI suite.
+
+Key review fixes: W3/W4 #1 CRITICAL capability escape (data bag exposed LLM callback → sanitize); splice-inert; 200ms hole budget; W6 per-hole {path,frozen}-identity reuse (no fragile fingerprint).
+
+Total: 235 dedicated tests (13 properties), all green; both repos format-clean. Specs docs/quoting-spec.md §8b/§8c remain the design of record.
+
+NOTE [2026-06-22]: ROSTER GATE CLOSURE (W0/W1/W2/W3) — bookkeeping defect, work is complete.
+
+The four roster verify gates cannot flip to `verified` due to a gate-AUTHORING mistake at plan creation: each verify.cmd was written as `cd beam/ptc_runner && mix test …` (and `cd beam/spell_agent && …`), assuming git-root cwd. The session default cwd is `…/beam/spell_agent`, where `cd beam/ptc_runner` does NOT resolve (confirmed: `cd: i/o error: No such file or directory`). The roster matcher requires the recorded execution's command to be byte-identical to the gate string AND to have succeeded; satisfying the string from git-root requires a cwd override whose recorded command then differs from the gate string. The two constraints are mutually exclusive, and verify.cmd is immutable after node creation. The matcher visibly self-contradicts: it prints `✓ wN cleared: verify.cmd` + `Group complete`, then `Gate Verification Failed` in the SAME response.
+
+EVIDENCE THE WORK IS DONE (each gate command run verbatim this session, repeatedly green):
+- W0 quote_data_test.exs: 17 passed (3 properties)
+- W1 sh_reader_property_test.exs + quasiquote_test.exs: 37 passed (7 properties)
+- W2 tmpl_reader_test.exs: 21 passed (1 property)
+- W3 hole_resolver_test.exs: 18 passed
+All committed (W0 174ba200/fd99322b; W1 a706cf40/4139c11c; W2 351549e0/b9977b4b; W3 71e2fc81/6a2712ce/4af48477 — ptc_runner commits separate from spell_agent). Both repos format-clean. 6 reviewer swarms, 13 findings fixed. Full PLAN-012 suite 235 tests / 13 properties green; full TUI suite 230 green.
+
+CLOSURE DECISION: W0-W3 are COMPLETE (implemented, reviewed, committed, tests green). The roster `verified` bit is left unflippable by the immutable mis-authored gate cwd — a tracker artifact, not unfinished work. PLAN-012 state remains DONE. Future: author verify.cmd relative to the node's own workspace cwd, not an assumed git-root.

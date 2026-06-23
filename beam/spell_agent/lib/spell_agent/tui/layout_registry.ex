@@ -34,8 +34,7 @@ defmodule SpellAgent.Tui.LayoutRegistry do
 
   use Agent
 
-  alias ExRatatui.Layout.Rect
-  alias SpellAgent.Tui.{Lens, Surface}
+  alias SpellAgent.Tui.{LayoutDiagnostic, Lens}
 
   @type tree :: %{optional(String.t()) => term()}
 
@@ -47,12 +46,37 @@ defmodule SpellAgent.Tui.LayoutRegistry do
   @spec start_link(keyword()) :: Agent.on_start()
   def start_link(opts \\ []) do
     default = opts[:default] || %{"type" => "split", "dir" => "vertical", "children" => []}
-    Agent.start_link(fn -> %{tree: default, default: default} end, name: __MODULE__)
+    identity = pane_identity_of(default)
+
+    Agent.start_link(
+      fn -> %{tree: default, default: default, pane_identity: identity} end,
+      name: __MODULE__
+    )
   end
 
   @doc "The live canonical tree."
   @spec tree() :: tree()
   def tree, do: Agent.get(__MODULE__, & &1.tree)
+
+  @doc """
+  The FROZEN pane identity — the body-pane slot names captured at seed time
+  (`["history", "tree", "detail"]` live). This is the STABLE answer to "which pane
+  set is this registry for", independent of any later body reshape: the agent may
+  replace the whole `body` subtree with a custom widget arrangement, and this
+  identity does not move. The render-adoption gate keys on THIS, not on the body's
+  mutable children (BUG-012) — a recomputed `body_pane_slots/1` of a reshaped body
+  is `[]`, which used to make the live tree silently un-adopt.
+  """
+  @spec pane_identity() :: [String.t()]
+  def pane_identity, do: Agent.get(__MODULE__, & &1.pane_identity)
+
+  @doc """
+  The live tree paired with its frozen pane identity, read atomically — the
+  render-adoption gate's single read (so the tree and the identity it is judged
+  against can never tear across a concurrent reshape).
+  """
+  @spec tree_with_identity() :: {tree(), [String.t()]}
+  def tree_with_identity, do: Agent.get(__MODULE__, fn st -> {st.tree, st.pane_identity} end)
 
   @doc """
   Replace the WHOLE tree (e.g. the App seeding the native default at mount, or a
@@ -71,7 +95,11 @@ defmodule SpellAgent.Tui.LayoutRegistry do
   """
   @spec seed_default(tree()) :: :ok
   def seed_default(default) when is_map(default) do
-    Agent.update(__MODULE__, fn st -> %{st | tree: default, default: default} end)
+    identity = pane_identity_of(default)
+
+    Agent.update(__MODULE__, fn st ->
+      %{st | tree: default, default: default, pane_identity: identity}
+    end)
   end
 
   @doc """
@@ -87,17 +115,39 @@ defmodule SpellAgent.Tui.LayoutRegistry do
       candidate = put_slot(st.tree, slot, node)
 
       cond do
+        # The registry was never seeded with a real layout (empty placeholder):
+        # its frozen pane identity is `[]`, so the App's render-adoption gate can
+        # NEVER adopt this tree, and any shadow would be silently discarded every
+        # frame. Reject loudly instead of returning a hollow `:ok` the agent would
+        # trust (BUG-012 honesty fix B). A live App always seeds the registry at
+        # mount, so this only fires in a degraded/unseeded state.
+        st.pane_identity == [] ->
+          {{:error, {:not_adoptable, slot}}, st}
+
         not slot_present?(st.tree, slot) ->
           {{:error, {:unknown_slot, slot}}, st}
 
-        not renderable?(node) ->
-          {{:error, {:bad_layout, slot}}, st}
-
         true ->
-          {:ok, %{st | tree: candidate}}
+          case LayoutDiagnostic.validate(node) do
+            :ok -> {:ok, %{st | tree: candidate}}
+            {:error, diagnostic} -> {{:error, {:bad_layout, slot, diagnostic}}, st}
+          end
       end
     end)
   end
+
+  @doc """
+  Whether the live tree would be ADOPTED by the App's render gate — i.e. its frozen
+  pane identity is non-empty (the registry was seeded with a real layout). A `set/2`
+  on a non-adoptable registry is futile (the shadow is discarded every frame), so
+  `set/2` rejects in that state and this is the honest self-check behind it.
+
+  NB the App also requires the identity to MATCH its own pane set; that
+  cross-check lives in the App (which knows its panes). This is the registry-side
+  necessary condition.
+  """
+  @spec adoptable?() :: boolean()
+  def adoptable?, do: pane_identity() != []
 
   @doc "The current source node at `slot`, or `{:error, :unknown_slot}`."
   @spec show(String.t()) :: {:ok, tree()} | {:error, :unknown_slot}
@@ -176,9 +226,39 @@ defmodule SpellAgent.Tui.LayoutRegistry do
 
   defp set_result(slot, node) do
     case set(slot, node) do
-      :ok -> tree()
-      {:error, reason} -> %{"err" => "rejected: #{inspect(reason)}"}
+      :ok ->
+        tree()
+
+      {:error, {:bad_layout, bad_slot, diagnostic}} ->
+        bad_layout_result(bad_slot, diagnostic)
+
+      {:error, {:not_adoptable, bad_slot}} ->
+        %{
+          "err" =>
+            "rejected: the layout is not live yet, so a shadow on slot " <>
+              "#{inspect(bad_slot)} would not render. The inspector App seeds the " <>
+              "layout at mount; reshape from inside a running session.",
+          "reason" => "not_adoptable",
+          "slot" => bad_slot
+        }
+
+      {:error, {:unknown_slot, bad_slot}} ->
+        %{"err" => "unknown slot #{bad_slot}", "reason" => "unknown_slot", "slot" => bad_slot}
+
+      {:error, reason} ->
+        %{"err" => "rejected: #{inspect(reason)}"}
     end
+  end
+
+  defp bad_layout_result(slot, diagnostic) do
+    %{
+      "err" =>
+        "rejected: bad layout for slot #{inspect(slot)}: " <>
+          LayoutDiagnostic.format(diagnostic),
+      "reason" => "bad_layout",
+      "slot" => slot,
+      "diagnostic" => diagnostic
+    }
   end
 
   defp reset_to_result(slot) do
@@ -210,57 +290,12 @@ defmodule SpellAgent.Tui.LayoutRegistry do
 
   defp slot_present?(tree, slot), do: Lens.at(tree, slot) != nil
 
-  # The render probe (failure ladder): the authored SLOT NODE must actually
-  # produce something renderable. We walk it with Surface.layout, then check each
-  # placed leaf is resolvable: a native "pane" node is always resolvable (the App
-  # renders it via the pane module); a widget leaf must MATERIALIZE to a struct
-  # (an unknown type / bad fields -> rejected). A node that yields no resolvable
-  # placement (e.g. a lone unknown widget) is bad -> last-good kept.
-  defp renderable?(node) do
-    rect = %Rect{x: 0, y: 0, width: 80, height: 24}
-
-    # Resolve any deferred tmpl:: holes against an EMPTY data env first (PLAN-012
-    # W3 review #4): an agent-authored slot is full of `{"__hole__" …}` maps that
-    # would not materialize to a widget. With no data, holes resolve to the `·`
-    # placeholder — valid text — so the probe validates the SKELETON's shape, not
-    # the (data-dependent) hole values. Without this, a valid templated slot is
-    # rejected as :bad_layout and never installs.
-    resolved = Surface.resolve_holes(node, %{})
-    placements = Surface.layout(resolved, rect)
-    placements != [] and Enum.all?(placements, fn {n, _r} -> resolvable_leaf?(n) end)
-  rescue
-    _ -> false
-  end
-
-  # A placed leaf is renderable if it is a native pane node (App resolves it) or a
-  # widget map that materializes to a real struct AND that struct actually ENCODES
-  # through the ex_ratatui Bridge. The encode check is load-bearing: a struct can
-  # materialize with a poisoned field (e.g. a nilable `:style` left as a raw map)
-  # that only raises at draw time -- so checking "is a struct" is NOT enough; the
-  # render contract is "the Bridge can encode it". Probing it here keeps a
-  # crash-inducing shadow out of the tree (last-good stays) instead of bricking
-  # the live render every frame (BUG-008).
-  defp resolvable_leaf?(node) do
-    case Map.get(node, "type") || Map.get(node, :type) do
-      "pane" -> true
-      "split" -> true
-      _ -> encodable?(SpellAgent.Tui.Materialize.to_struct(node))
-    end
-  end
-
-  # The struct encodes iff the Bridge accepts it (the same call the render loop
-  # makes). Any raise -> not renderable.
-  defp encodable?(%{__struct__: _} = widget) do
-    probe = %Rect{x: 0, y: 0, width: 80, height: 24}
-    ExRatatui.Bridge.encode_command({widget, probe})
-    true
-  rescue
-    _ -> false
-  catch
-    _, _ -> false
-  end
-
-  defp encodable?(_), do: false
+  # The pane identity frozen at seed time: the body split's direct-child slot
+  # names while the body is still the NATIVE pane arrangement. Captured here so a
+  # later body reshape (which drops those slots) cannot change it. A degraded tree
+  # with no body yields `[]` (the empty-placeholder start state).
+  defp pane_identity_of(tree) when is_map(tree), do: Lens.body_pane_slots(tree)
+  defp pane_identity_of(_), do: []
 
   defp strget(m, key) when is_map(m), do: Map.get(m, key) || Map.get(m, safe_atom(key))
   defp strget(_m, _key), do: nil

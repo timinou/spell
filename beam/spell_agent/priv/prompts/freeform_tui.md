@@ -13,9 +13,7 @@ Four namespaces drive it, all called like tools:
 - `view/split` — the layout spine: `{:dir :constraints :children}`. Divides a
   region; `:constraints` are pairs like `["length" 3]`, `["percentage" 50]`,
   `["min" 0]`, `["fill" 1]`.
-- `layout/set` — shadow a slot: `(layout/set {:slot "status" :source <node>})`.
-  `layout/show` reads a slot's current node; `layout/tree` returns the whole live
-  tree; `layout/reset` restores a slot (or all) to the native default.
+- `layout/set` — shadow a slot: `(layout/set {:slot "status" :source <node>})`. `layout/show` reads a slot's current node; `layout/tree` returns the whole live tree; `layout/reset` restores a slot (or all) to the native default. `layout/render` renders a slot or a node to an ASCII preview so you can SEE what it looks like before or after setting it: `(layout/render {:slot "body"})` or `(layout/render {:source <node>})`.
 - `theme/set` — recolor a palette slot once, cross-cutting:
   `(theme/set {:slot "danger" :fg "magenta"})`. `view/` builders read these.
 - `lens/focus` / `lens/focused` / `lens/focusables` — navigation as tree ops
@@ -40,9 +38,9 @@ Worked example — a brand-new body arrangement (display):
                                       (view/paragraph {:text "right pane"
                                                        :block {:type "block" :borders ["all"]}})]})})
 
-Slots you can shadow: `frame` (whole screen), `status` (header), `body` (the pane
-arrangement — your canvas for any interface), `composer` (input), and each
-`pane/<name>`. Inspect before you change: `(layout/show {:slot "body"})`.
+**See it before you trust it.** After any `layout/set`, confirm it actually rendered by calling `(layout/render {:slot "body"})` and reading the returned `"buffer"` string — the ASCII the screen will show. `layout/set` returning ok means the node is valid and adopted; `layout/render` shows you the pixels. It re-renders the node standalone and returns a map with `"buffer"` plus `"width"` and `"height"`; it is faithful for `view/*` widgets, but a native `pane` node previews empty. Do not assume — verify with a peek.
+
+Slots you can shadow: `frame` (whole screen), `status` (header), `body` (the pane arrangement — your canvas for any interface), `composer` (input), and each `pane/<name>`. These are SLOT names, not node `:type` values: there is no `{:type "frame"}`. Containers use `(view/split ...)` / `{:type "split"}`; leaves use `view/<widget>`. Inspect before you change: `(layout/show {:slot "body"})`. Reshaping `body` replaces the entire pane arrangement — it is fully supported, and the reshaped body is adopted by the live render as long as the `body` slot itself is present.
 
 ## Live interfaces — `tmpl::` deferred holes
 
@@ -66,15 +64,13 @@ a variable-length list of rows from live data:
       :source (tmpl:: {:type "list"
                        :items [~@(map (fn [s] (get s :title)) (vals data/forest))]})})
 
-`~(now expr)` is the escape hatch: evaluate ONCE at author time (a constant baked
-into the skeleton), instead of freezing. A failed hole renders as `·` and never
-breaks the frame.
+A failed hole renders as `·` and never breaks the frame.
 
 The `data/*` environment (read in a hole as `data/<key>`):
 
 - `data/status` — `{:running? :result :turns :tools :label :color :composer …}`
 - `data/area` — `{:x :y :width :height}` (the slot's rect)
-- `data/ui` — the gaze (`{:focus :mode :turn :cursor :cursors}`; `cursor` is the
+- `data/ui` — the gaze (`{:focus :mode :turn :cursor :cursors :flags}`; `cursor` is the
   focused pane's row, `cursors` the per-pane map)
 - `data/vms` — per-pane view-models · `data/forest` — the span map
 - fine-grained: `data/turns`, `data/tools`, `data/forest-count`, `data/running?`,
@@ -124,7 +120,7 @@ Rules that matter:
   is the span id under it.
 - READ-ONLY only. A cell may call the `harness/*` forest reads (`harness/state`,
   `harness/cursor-id`, `harness/descendants`, `harness/ancestors`, …); a mutator
-  (`keymap/bind`, `layout/set`, `tool/edit`, `sh`) is denied and the cell resolves
+  (`keymap/bind`, `layout/set`, `theme/set`, `sh`, `define-tool`) is denied and the cell resolves
   to nothing. (History `hist/*` reads are not in the cell tier yet.)
 - A cell name must be NEW — it cannot shadow a core bag key (`status`, `ui`,
   `area`, `forest`, `vms`, `running?`, `turns`, `tools`, `composer`, …). A cell
@@ -135,3 +131,13 @@ Rules that matter:
 
 The same one-key-equals-one-live-value economy as `tmpl::`, extended to data the
 runtime must COMPUTE: add a cell, reference its name, and the interface is live.
+
+## The cells drawer (default: Ctrl-e)
+
+A built-in card drawer lists every declared cell — its name, resolve status
+(`\u2713` resolved / `\u00b7` pending), and dependencies — as a right-side
+overlay. Toggle it with `Ctrl-e` (the `app/toggle-cells` intent). The drawer
+reads `data/cells` (a core bag key: `[{:name :deps :debounce :resolved}]`) every
+frame, so it is always current — no sync. The toggle state lives in
+`data/ui :flags :cells-drawer` (a free-form flag a reaction sets and a hole reads);
+`flags` is the general mechanism for keymap-driven visibility toggles.

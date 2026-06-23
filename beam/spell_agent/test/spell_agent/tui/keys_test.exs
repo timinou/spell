@@ -136,6 +136,17 @@ defmodule SpellAgent.Tui.KeysTest do
       assert Keys.dispatch(:unbound, ui, %{}, &name/1) == ui
     end
 
+    test "C-e toggles the cells-drawer flag via the global keymap" do
+      ui = Ui.new()
+      res = Keys.resolve(Chord.parse("C-e"), [Global], &name/1)
+      assert {:intent, :"app/toggle-cells", Global} = res
+      ui1 = Keys.dispatch(res, ui, %{}, &name/1)
+      assert ui1.flags["cells-drawer"] == true
+      # toggle again -> off
+      ui2 = Keys.dispatch(res, ui1, %{}, &name/1)
+      assert ui2.flags["cells-drawer"] == false
+    end
+
     test "axes are independent: rebinding a key changes WHICH reaction fires, not the reactions" do
       ui = Ui.new()
       # rebind C-l to the contract intent; dispatch now collapses, expand reaction untouched

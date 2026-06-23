@@ -65,7 +65,8 @@ defmodule SpellAgent.Tui.Reaction.Ptc do
       overrides: overrides(fetch(result, "overrides"), ui.overrides),
       turn: non_neg_int(fetch(result, "turn"), ui.turn),
       scroll: pane_keyed(fetch(result, "scroll"), ui.scroll),
-      leader: Ui.safe_pane(fetch(result, "leader"))
+      leader: Ui.safe_pane(fetch(result, "leader")),
+      flags: Ui.safe_flags(fetch(result, "flags")) || ui.flags
     }
   end
 

@@ -1,0 +1,90 @@
+#+TITLE: Body-slot shadow silently discarded at render (BUG-007 incomplete)
+#+STATE: DOING
+#+SESSION_ID: 1514e1cb0e0b8cdc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-23T21-10-20-472Z_1514e1cb0e0b8cdc.jsonl]]
+#+CUSTOM_ID: BUG-012-body-slot-shadow-silently-discarded-at-r
+
+* Initial Message
+
+[Image #1]
+traces here: /home/user/.spell/traces/sess-1bca14312e6bb5ae.20260623-211012.txt
+
+explain the root cause and uncover everything that prevents a delightful experience. EVERYTHING
+
+* Initial Message
+
+User (operator of live =mix spell.tui=) asked the agent to add a message-history
+panel. Agent built it, called =layout/set {:slot "body" …}=, got SUCCESS, verified
+via =layout/show= the registry HELD it — and the user still saw nothing. 26 turns
+of flailing, then the agent confabulated a confident description of a panel that
+was never on screen.
+
+Trace: /home/user/.spell/traces/sess-1bca14312e6bb5ae.20260623-211012.txt
+
+* Symptom
+
+=layout/set {:slot "body" :source (view/split …)}= returns ok, =layout/show= shows
+the new node, but =App.render= output never contains it. Identical to BUG-007 but
+for the =body= slot instead of a pane slot.
+
+* Root cause (confirmed empirically)
+
+=App.live_layout_tree/1= gates tree adoption on
+=Lens.body_pane_slots(tree) == pane_names=. =body_pane_slots/1= reads the =slot=
+of each direct child of the =body= split. The native body's children are =pane=
+nodes with slots =["history","tree","detail"]= → gate passes. But the agent
+reshapes =body= with =view/split=, whose children are widget nodes carrying NO
+=slot= key →
+
+  native body_pane_slots: ["history","tree","detail"]   gate: true
+  after body shadow:      []                             gate: false → tree DISCARDED
+
+When the gate fails, =render_tree= falls back to the native default EVERY FRAME —
+the agent's whole shadow is thrown away. The gate's invariant ("body children ==
+original pane names") structurally FORBIDS the exact feature the prompt advertises
+(=body= = "your canvas for any interface").
+
+BUG-007 fixed the pane-slot case (=set("detail", widget)= — the pane keeps its
+slot) but never tested =set("body", split-with-fresh-children)= — the most natural,
+most-documented operation. Its regression test cements the blind spot.
+
+* The wider hostile experience (each an independent defect)
+
+1. =layout/set= LIES — success without effect. =set/2= validates the node in
+   isolation (lays out fine on an 80x24 probe) and returns =:ok=, but NEVER checks
+   adoption. A node can be valid AND guaranteed-invisible. Both agent signals
+   (=set= → ok, =show= → present) point the wrong way. Root of the whole flail.
+
+2. The agent CANNOT SEE the screen. =Runtime.buffer/1= exists (BUG-011, landed)
+   but is exposed only to tests, not as an agent tool. The agent reshaping the
+   live UI has zero read-back of what rendered. Every diagnosis was a guess
+   because observation was impossible.
+
+3. The gate fails SILENTLY — no log, no telemetry, no agent-readable signal. The
+   one place the system knows "I'm discarding your tree" says nothing.
+
+4. The PROMPT teaches the broken path. =freeform_tui.md='s worked example IS the
+   failing op (=layout/set {:slot "body" :source (view/split …)}=) and promises
+   body is "your canvas for any interface."
+
+5. Phantom diagnosis: agent blamed =["min" 0]= (the native body's own constraint,
+   renders fine) — superstition bred by absence of evidence.
+
+7. Terminal confabulation: turn 26 returned a confident description of a UI that
+   does not exist and told the user to look for it. Honesty-trigger failing under
+   pressure, CAUSED by defects 1-3.
+
+* Fix plan (A-E)
+
+- A: gate logic — adopt the agent tree whenever the =body= slot exists, regardless
+  of children shape. Re-key the "stale test tree" guard on something stable.
+- B: make =layout/set= honest — validate ADOPTION, not just isolated layout.
+- C: expose =Runtime.buffer= as an agent tool (=layout/render= / =screen/peek=).
+- D: log the discard in =live_layout_tree=.
+- E: fix the prompt once A lands.
+
+* Verification
+
+- Repro before fix: body shadow → =body_pane_slots == []= → gate false → not in
+  =App.render= output (confirmed via mix run).
+- After fix: agent body shadow appears in =App.render= output; full suite green.

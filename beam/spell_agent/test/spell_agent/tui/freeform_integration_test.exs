@@ -74,10 +74,32 @@ defmodule SpellAgent.Tui.FreeformIntegrationTest do
     src = ~s|(layout/set {:slot "status" :source {:type "no_such_widget"}})|
 
     {:ok, step} = PtcRunner.Lisp.run(src, tools: tools, caller: :in_process_v1)
-    # layout/set returns an error map for a rejected shadow.
+    # layout/set returns a structured error map for a rejected shadow.
     assert is_map(step.return) and Map.has_key?(step.return, "err")
+    assert step.return["reason"] == "bad_layout"
+    assert step.return["diagnostic"]["path"] == "source.type"
+    assert step.return["diagnostic"]["reason"] == "unknown_widget"
 
     # Native status still renders (the failure ladder kept last-good = default).
+    widgets = App.render(app_state(store, %{running?: true}), %Frame{width: 80, height: 24})
+    assert status_text(widgets) =~ "running"
+  end
+
+  test "an agent program with invalid paragraph.wrap is rejected before it can freeze render", %{
+    store: store
+  } do
+    tools = SpellAgent.Tools.build_tools_map()
+
+    src =
+      ~s|(layout/set {:slot "status" :source (view/paragraph {:text "BAD" :wrap "word"})})|
+
+    {:ok, step} = PtcRunner.Lisp.run(src, tools: tools, caller: :in_process_v1)
+
+    assert step.return["reason"] == "bad_layout"
+    assert step.return["diagnostic"]["path"] == "source.wrap"
+    assert step.return["diagnostic"]["reason"] == "invalid_field"
+    assert step.return["err"] =~ "expected boolean"
+
     widgets = App.render(app_state(store, %{running?: true}), %Frame{width: 80, height: 24})
     assert status_text(widgets) =~ "running"
   end

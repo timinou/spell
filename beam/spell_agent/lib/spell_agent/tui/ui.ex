@@ -37,7 +37,7 @@ defmodule SpellAgent.Tui.Ui do
 
   alias SpellAgent.Tui.Ui
 
-  @type pane :: :tree | :detail | :prompt
+  @type pane :: :tree | :detail | :prompt | :history | :cells
   @type span_id :: String.t()
   @type visibility :: :expanded | :collapsed
   @type mode :: :normal | :insert
@@ -51,7 +51,8 @@ defmodule SpellAgent.Tui.Ui do
           overrides: %{optional(span_id()) => visibility()},
           turn: non_neg_integer(),
           scroll: %{optional(pane()) => non_neg_integer()},
-          leader: atom() | nil
+          leader: atom() | nil,
+          flags: %{optional(String.t()) => term()}
         }
 
   # PLAN-346 W5 pivot: panes are tree (navigate) / detail (full content of the
@@ -66,7 +67,8 @@ defmodule SpellAgent.Tui.Ui do
             overrides: %{},
             turn: 0,
             scroll: %{},
-            leader: nil
+            leader: nil,
+            flags: %{}
 
   @doc "A fresh gaze (defaults)."
   @spec new(keyword()) :: t()
@@ -116,6 +118,19 @@ defmodule SpellAgent.Tui.Ui do
   def focus(%Ui{panes: panes} = ui, pane) when is_atom(pane) do
     if pane in panes, do: %{ui | focus: pane}, else: ui
   end
+
+  @doc """
+  Set focus to a region directly, bypassing the ring-membership check.
+
+  The C-j/C-k cycle (`focus/2`) only steps the `panes` ring; spatial `C-w` focus
+  resolves a target by GEOMETRY and may legitimately land on a region OUTSIDE the
+  ring (the `:cells` drawer, or `:history` before it joins the ring — FUP-005).
+  Bounded the same way: `nil` (an unresolvable direction) is identity, so the
+  transform stays total.
+  """
+  @spec focus_pane(t(), pane() | nil) :: t()
+  def focus_pane(%Ui{} = ui, nil), do: ui
+  def focus_pane(%Ui{} = ui, pane) when is_atom(pane), do: %{ui | focus: pane}
 
   # ---- cursor (within the focused pane) ----
 
@@ -203,7 +218,11 @@ defmodule SpellAgent.Tui.Ui do
   # default (or nil) WITHOUT interning. This is the single chokepoint the
   # harness/reaction boundary funnels gaze-field strings through.
 
-  @panes [:tree, :detail, :prompt]
+  # The full region vocabulary spatial focus (`C-w`) can land on — a superset of
+  # the C-j/C-k cycle ring (`panes`). `:history` and `:cells` are reachable by
+  # geometry (leftmost / the C-e drawer on the right) even when they sit outside
+  # the ring, so `safe_pane/1` must accept them without interning (FUP-005).
+  @panes [:tree, :detail, :prompt, :history, :cells]
   @dirs [:next, :prev, :first, :last]
   @visibilities [:expanded, :collapsed]
 
@@ -232,6 +251,27 @@ defmodule SpellAgent.Tui.Ui do
   def safe_mode(m) when m in @modes, do: m
   def safe_mode(s) when is_binary(s), do: lookup_known(s, @modes)
   def safe_mode(_), do: nil
+
+  @doc """
+  Coerce a value to a bounded string-keyed flags map, or nil.
+
+  Flags are free-form UI toggle state a runtime reaction sets and a tmpl:: hole
+  reads — the mechanism for keymap-driven visibility toggles without a compiled
+  widget per toggle. Bounded: caps at 32 entries, stringifies keys (no atom-table
+  growth from agent-authored data).
+  """
+  @spec safe_flags(term()) :: %{optional(String.t()) => term()} | nil
+  def safe_flags(m) when is_map(m) do
+    m
+    |> Enum.take(32)
+    |> Map.new(fn
+      {k, v} when is_binary(k) -> {k, v}
+      {k, v} when is_atom(k) -> {Atom.to_string(k), v}
+      _ -> {"_", nil}
+    end)
+  end
+
+  def safe_flags(_), do: nil
 
   # Match a string against a fixed atom set by STRING comparison — no interning.
   defp lookup_known(s, atoms), do: Enum.find(atoms, &(Atom.to_string(&1) == s))

@@ -104,8 +104,17 @@ defmodule SpellAgent.Tui.HoleResolver do
   # ---- hole evaluation (capability-bounded) ----
 
   # Resolve a value hole to its value, or the placeholder on any failure.
+  #
+  # A hole that evaluates to nil is a MISSING-DATA signal (the `data/*` key was
+  # absent), not a real value: nil in a widget field (text, items, …) is never
+  # useful and bricks materialization. Coalesce it to the placeholder so the
+  # frame degrades instead of crashing — the same "never brick the surface"
+  # contract a raised hole meets. This also fixes the layout/set render PROBE:
+  # it validates against an empty data env, so every data-hole would otherwise
+  # resolve to nil and reject a structurally-valid templated slot (PROJ-005).
   defp eval_hole(frozen, env) do
     case eval_hole_raw(frozen, env) do
+      {:ok, nil} -> @placeholder
       {:ok, value} -> value
       :error -> @placeholder
     end
