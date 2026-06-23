@@ -64,6 +64,7 @@ defmodule SpellAgent.Hist.Store.Memory do
         {:snap, nil} -> {{:snap, :_, :_}, :"$1"}
         {:snap, s} -> {{:snap, s, :_}, :"$1"}
         {:tool, _} -> {{:tool, :_}, :"$1"}
+        {:clock, _} -> {{:clock, :_}, :"$1"}
         {:crystal, _} -> {{:crystal, :_}, :"$1"}
         {:cont, nil} -> {{:cont, :_}, :"$1"}
         {:cont, s} -> {{:cont, s}, :"$1"}

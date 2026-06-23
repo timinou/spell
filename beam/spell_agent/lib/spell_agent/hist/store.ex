@@ -16,6 +16,7 @@ defmodule SpellAgent.Hist.Store do
       {:mark, sid, mid}      => %Mark{}
       {:snap, sid, nid}      => %Snapshot{}
       {:tool, name}          => %ToolDef{}     (cross-session)
+      {:clock, id}           => %Clock.Wake{}  (cross-session, durable self-wakes — A2)
       {:crystal, id}         => %Crystal{}     (long-term memory)
       {:cont, sid}           => %Cont{}        (L0 replay tape + def env, one per session)
       {:hash, h}             => [node-ref]     (dedup / multi-session union index)
@@ -32,6 +33,7 @@ defmodule SpellAgent.Hist.Store do
           | {:mark, String.t(), String.t()}
           | {:snap, String.t(), String.t()}
           | {:tool, String.t()}
+          | {:clock, String.t()}
           | {:crystal, String.t()}
           | {:cont, String.t()}
           | {:hash, String.t()}
@@ -49,7 +51,8 @@ defmodule SpellAgent.Hist.Store do
           | Cont.t()
           | [term()]
 
-  @type kind :: :session | :node | :mark | :snap | :tool | :crystal | :cont | :mesh | :mesh_seq | :mesh_hash
+  @type kind ::
+          :session | :node | :mark | :snap | :tool | :clock | :crystal | :cont | :mesh | :mesh_seq | :mesh_hash
 
   @doc "Store a value at a logical key. Overwrites."
   @callback put(key(), value()) :: :ok
