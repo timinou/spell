@@ -181,3 +181,68 @@ spawn-session. FEAT-013 reuses the same holder for watch-fire slots. (Decision: 
 the budget here, end-to-end, as originally intended.)
 
 NOTE [2026-06-23]: Composes with A2 SpellAgent.Clock (PLAN-014) for the A4 executive-loop / A6 self-spawn rungs. Two connections: (1) the :budget field this seam takes when spawning a child is the SAME budget arg Clock threads into SpellAgent.run/2 on a wake — A5 (self-budgeting) folds into a budget arg on whatever creates a future execution (clock/at, loop/continue, self/spawn), clamped once in Session.run against a body ceiling the mind cannot raise. (2) A self-initiating loop (loop/continue) re-enters via the same synthetic-caller mechanism Clock establishes, and MUST pass through Clock's wake-budget + a monotone-progress guard so it cannot spin forever. DurableServer (FUP-014) is the right primitive ONLY if this loop must survive node death in a multi-node mesh; single-node, Khepri rehydrate covers it.
+
+* A6 (agency ladder) — desired interface + open decisions [2026-06-23]
+
+This FEAT *is* agency rung A6 (self-spawn): the mind launching a sub-mind toward a
+goal it set. Honest status: SPEC-COMPLETE, NOT IMPLEMENTED — the design above
+(await-free `spawn-session` + `await-session`, `%MissionHandle{}` with watermark,
+ParallelBudget) is thorough and ready; no code is written yet (still ITEM). The
+sections below frame it in the agency-ladder terms (A1/A2/A3/A4) and flag what is
+NOT yet decided.
+
+** Desired interface (the mind's view)
+
+From the mind's side A6 should read as a peer of the other agency verbs — same
+arg-shaping, same budget field, same best-effort guard posture as `clock/*`:
+
+#+begin_src clojure
+;; this goal is parallelizable — spawn a sub-mind scoped to it, get a handle back
+(let [h (tool/spawn-session
+          {:prompt "Audit native_tools; list each as PTC-able or effect-irreducible."
+           :region "effect-floor-refactor"
+           :tools  ["find" "sh"]              ;; capability attenuation (D12)
+           :budget {:turns 20}})]             ;; SAME budget arg as clock/at, self/spawn
+  ;; later, rejoin (the gather-of-one case):
+  (tool/await-session {:handle h}))
+#+end_src
+
+Naming note: the agency-ladder analysis called this `self/spawn`; the mesh design
+calls it `tool/spawn-session` + `tool/await-session`. These are the SAME rung. The
+mesh names ship (they predate the ladder framing and carry the await-free +
+MissionHandle design). If a `self/*` namespace lands for A1, consider whether
+`self/spawn` becomes an alias/sugar over `spawn-session` — see open decisions.
+
+** What is already designed (do NOT re-litigate)
+- await-free: spawn ALWAYS detaches, returns `%MissionHandle{}`; `await-session`
+  joins. (doc-14 reconciliation — settled.)
+- capability attenuation: child gets only the named `:tools` subset + its mesh verbs.
+- ParallelBudget: slot acquired before the Task, released on exit (crash-safe);
+  the cap holds across recursion depth.
+- watermark captured in the handle (forward-compat for FEAT-017/018).
+
+** Further design decisions NEEDED (before/while implementing)
+1. *Budget unification with A2/A5.* The `:budget` here MUST be the same shape
+   Clock threads into `run/2` (`{:turns :cost_ceiling}`) and clamp to the same
+   body ceiling. Today Clock passes budget but `Session.run` does not yet ENFORCE
+   a ceiling (noted in PLAN-014). A6 should not invent a second budget path —
+   decide the single clamp point in `Session.run` first. CROSS-CUTS A2/A5.
+2. *self/spawn vs spawn-session naming.* One verb or an alias? Decide when A1's
+   `self/*` namespace exists (FUP-015). Avoid two names for one rung.
+3. *Who calls spawn — human-prompted vs executive (A4).* Today a child needs a
+   prompt the mind authored THIS turn. When A4 (FUP-016) lands, the executive may
+   spawn children autonomously; the budget + progress-guard interaction across
+   parent-loop AND child-spawns is unspecified. Defer the autonomous-spawn path to
+   A4; ship the human-in-the-loop spawn now.
+4. *Relationship to loop/continue (A4).* spawn = CHILD (parallelism, new session);
+   loop/continue = SAME session (continuity). Both may be used by the executive.
+   Keep them distinct primitives (already the stance — restate so it survives).
+5. *Recursion + DurableServer.* A child that spawns acquires its own slot (cap
+   holds). If deep spawn-trees must survive node death in a multi-node mesh,
+   DurableServer (FUP-014) is the primitive; single-node Khepri rehydrate suffices.
+   Out of scope for v1 (single-node), noted for the multi-node revisit.
+
+** Dependencies (agency framing)
+- Composes with: A2 `Clock` (PLAN-014, done) for the shared budget arg; A1
+  SelfStore (FUP-015) for goal-scoped spawns; A4 executive (FUP-016) for
+  autonomous spawning. Original mesh deps (FEAT-010/008) unchanged.

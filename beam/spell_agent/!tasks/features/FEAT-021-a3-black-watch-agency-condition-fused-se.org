@@ -1,0 +1,155 @@
+#+TITLE: A3: black/watch (agency) — condition-fused self-wake on the blackboard, single-node, Clock-backed
+#+STATE: DOING
+#+SESSION_ID: 1514dbb097c44599
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-23T20-43-40-511Z_1514dbb097c44599.jsonl]]
+#+CUSTOM_ID: FEAT-021-a3-black-watch-agency-condition-fused-se
+
+* Initial Message
+
+Spell is an agent that can think about itself, and modify all aspects of itself, through code.
+Spell's live environment gives its runtime a life.
+
+^ how is that true, how is that not true?
+
+* Initial Message
+
+Agency rung A3. A2 (`SpellAgent.Clock`, PLAN-014) wakes the mind on a *time* fuse.
+A3 wakes it on a *condition* fuse: "wake me when a matching record is posted to a
+region." Both detonate the SAME charge — a Clock wake re-entering `SpellAgent.run/2`.
+A3 is the watcher that observes mesh writes, evaluates registered predicates, and
+on a match schedules an immediate wake. This is the mind acting in response to
+events no human relayed.
+
+** Scope: this is the SINGLE-NODE, AGENCY core of black/watch — NOT FEAT-013
+
+FEAT-013 (`Mesh.Watcher`) is the FULL distributed engine: per-node tailer,
+claim-dedup exactly-once across a Khepri cluster, Consensus dependency (FEAT-012),
+fuel+ttl, and it fires a `:do` (inline PTC action). That is heavy and blocked.
+
+A3 is the agency-shaped subset that ships NOW:
+- SINGLE NODE (Store.Memory or single-node Khepri). No replication window, so
+  firing is already exactly-once without consensus (FEAT-013's own note: "Single
+  node is already exactly-once; Option B suffices"). NO FEAT-012 dependency.
+- the detonator is a WAKE (re-enter run/2 via Clock), NOT an inline `:do`. This is
+  the crucial difference: A3 reuses Clock's synthetic-caller + wake-budget +
+  durable persist, instead of running a sandboxed action inline. The mind wakes
+  with a fresh turn and its full toolset; it does not execute a stunted `:do`.
+- when FEAT-013 lands, it GENERALIZES this: swap the single-node telemetry tailer
+  for the per-node claim-deduped one and add the `:do` form. A3's predicate-eval +
+  wake-scheduling code is the reusable core. A3 is FEAT-013 minus consensus minus
+  inline-do.
+
+** The mechanism (three pieces)
+
+*** 1. black/watch registers a durable :intention (replaces the FEAT-010 stub)
+`Mesh.Namespace`'s `black/watch` is currently a `not_yet/2` stub. Replace it with a
+real monotone post: a `:intention` record (the kind already exists in
+`Record.@kinds`) whose payload carries:
+  - `:when`  — the predicate: `%{kind: k, where: %{field => value}}` (the same
+    shape `Mesh.Store.by_match/3` already evaluates) OR the threshold form
+    `%{kind: k, count: N}` (fan-in: fire when N matching records exist).
+  - `:wake`  — the wake payload handed to Clock on fire: `%{prompt, session_id?,
+    budget?}` (exactly `clock/at`'s shape).
+  - `:region` — the region to watch (defaults to the caller's region).
+  - `:ttl_ms` — optional expiry (a never-satisfied watch must not live forever).
+  - `:once`  — fire once then retire (default true), vs. re-fire on each match.
+
+Registering is a pure monotone post — durable + claimable + CALM-clean. A watch
+survives a restart because it is a stored `:intention`.
+
+*** 2. SpellAgent.Mesh.Watcher — the single-node tailer (NEW GenServer)
+ONE per BEAM node, long-lived, session-global, supervised beside Clock — same
+posture as `Tui.Store` (attach to a live telemetry stream) and `SessionRegistry`
+(best-effort, no-op when down).
+  - `Mesh.Store.put/2` emits a `:telemetry` event `[:spell, :mesh, :post]` carrying
+    the stored record (ADD this emit to Mesh.Store.put — one line, the FEAT-013
+    plan already calls for it). The Watcher attaches a handler.
+  - on each observed post P in region R: scan `Mesh.Store.by_kind(R, :intention)`;
+    for each intention whose `:when` matches P (reuse `Mesh.Store` match logic for
+    the where-form; count the region for the threshold form):
+      1. fire: `Clock.at(intention.wake ++ {in: 0})` — schedule an immediate wake
+         through the EXISTING A2 scheduler. The wake budget, durability, and
+         synthetic-caller re-entry all come from Clock for free.
+      2. retire the intention if `:once` (delete the `:intention` record) or
+         decrement a fire-count; drop on ttl expiry.
+  - best-effort: a sick store / a bad predicate is swallowed (the watcher never
+    crashes the poster). A watch with no watcher running still POSTS (durable) and
+    fires whenever a watcher next runs.
+
+*** 3. Clock is the detonator (NO new scheduler)
+The Watcher does NOT wake the mind itself. It calls `Clock.at`. So there is exactly
+ONE place that re-enters run/2 (the A2 invariant), one wake budget, one durable
+wake store. A3 adds the *condition*; A2 owns the *firing*. This is the "fuse swap"
+the FEAT-013 cross-link predicted.
+
+** The mind's view (worked example)
+#+begin_src clojure
+;; wake me when a sibling posts a finding tagged done to my region
+(tool/black/watch
+  {:when {:kind "finding" :where {:status "done"}}
+   :wake {:prompt "A sibling finished; fold the region and decide my next step."}
+   :ttl_ms 3600000})
+
+;; fan-in: wake me once THREE findings exist (a threshold join)
+(tool/black/watch
+  {:when {:kind "finding" :count 3}
+   :wake {:prompt "Three findings are in; black/fold and summarize."}})
+#+end_src
+
+A sibling session (or this one) later does `(tool/black/post {:kind "finding"
+:payload {:status "done"}})` → the Watcher observes it → `Clock.at {:in 0 ...}` →
+the mind wakes with the watch's prompt, in its session, with its full toolset.
+
+** Modules / edits
+- lib/spell_agent/mesh/namespace.ex (EDIT): replace `black/watch` stub with a real
+  `:intention` post; validate `:when` + `:wake`; default region/once. Keep
+  `black/decide` stubbed (that is FEAT-012).
+- lib/spell_agent/mesh/store.ex (EDIT): emit `[:spell, :mesh, :post]` telemetry in
+  `put/2` after a successful store (one `:telemetry.execute`).
+- lib/spell_agent/mesh/watcher.ex (NEW): the single-node tailer GenServer
+  (attach/detach telemetry, predicate eval, fire-via-Clock, ttl/once retirement).
+  Injectable Clock server name + store for tests (same pattern as Clock tests).
+- lib/spell_agent/application.ex (EDIT): supervise Mesh.Watcher after Clock (it
+  fires via Clock, so Clock must be up first). Best-effort; boot never depends on it.
+
+** Edge cases
+- watch with no watcher running: black/watch still posts the durable :intention;
+  it simply does not fire until a watcher runs (best-effort, F.2).
+- a predicate that never matches: bounded by `:ttl_ms` → the intention is dropped
+  on expiry (a never-satisfied watch must not leak).
+- self-retrigger (a wake whose run posts a record that matches the same watch):
+  bounded TWICE — `:once` retires the intention after first fire, AND Clock's wake
+  budget throttles a storm. A cascade burns out.
+- the wake itself runs through Clock's budget: a flood of matching posts cannot
+  spawn unbounded wakes (the A2 safety ladder covers A3 for free).
+- single vs multi-node: A3 is single-node exactly-once by construction (one ETS
+  table, one watcher, no replication). Multi-node exactly-once is FEAT-013 +
+  FEAT-012 (claim-dedup / node-plane decide) — explicitly out of scope.
+
+** Acceptance (observable)
+- `mix test test/spell_agent/mesh/watch_test.exs` green (single-node, fake Clock
+  capturing fires — zero network).
+- register a watch, post a matching finding → exactly one wake scheduled with the
+  watch's prompt; post a non-matching record → no wake.
+- threshold form: N-1 posts → no fire; the Nth → one wake.
+- `:once` retires the intention (a second matching post does not re-fire); a
+  re-fire watch (`:once false`) fires again.
+- ttl: an expired intention does not fire and is dropped.
+- best-effort: black/watch posts the intention even with no watcher; a bad
+  predicate does not crash the poster.
+- the wake genuinely routes through Clock (assert Clock.pending / a fake Clock
+  receives the {in:0, prompt} wake) — proving the single-detonator invariant.
+
+** Build order (waves)
+1. Mesh.Store telemetry emit + black/watch real post (namespace) + validation.
+2. Mesh.Watcher GenServer (attach, predicate eval, fire-via-Clock, once/ttl).
+3. Supervise + wire; full watch_test.exs.
+
+** Dependencies / relationships
+- Hard-depends: A2 `Clock` (PLAN-014, DONE) — the detonator.
+- Builds on: FEAT-008/009/010 (Record/Store/Namespace — all DONE).
+- Generalized later by: FEAT-013 (`Mesh.Watcher` full distributed) + FEAT-012
+  (Consensus) for multi-node exactly-once + the inline `:do` form. A3's
+  predicate-eval + wake-scheduling is that work's reusable single-node core.
+- Pairs with: A1 SelfStore (FUP-015) — a watch's wake prompt often reads
+  self/intentions; A4 (FUP-016) — a rested executive loop wakes on a watch.

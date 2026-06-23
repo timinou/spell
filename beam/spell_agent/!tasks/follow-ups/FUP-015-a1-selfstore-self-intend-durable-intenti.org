@@ -1,0 +1,117 @@
+#+TITLE: A1: SelfStore + self/intend — durable intentions the mind acts toward
+#+STATE: ITEM
+#+SESSION_ID: 1514dbb097c44599
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-23T20-43-40-511Z_1514dbb097c44599.jsonl]]
+#+CUSTOM_ID: FUP-015-a1-selfstore-self-intend-durable-intenti
+
+* Initial Message
+
+Spell is an agent that can think about itself, and modify all aspects of itself, through code.
+Spell's live environment gives its runtime a life.
+
+^ how is that true, how is that not true?
+
+* Initial Message
+
+Agency rung A1. The mind can persist a *tool* (`define-tool {:scope "durable"}`)
+but has nowhere to persist an *intention* — a goal it sets for its future self.
+`define-config` is whitelisted to `model | thinking | system-addendum` only. A2
+(`SpellAgent.Clock`, PLAN-014) can now wake the mind on a schedule, but a wake's
+prompt is still words a human wrote once; there is no durable place the mind keeps
+"what I am trying to do" between awakenings. A1 is that place. It is the cheapest
+rung and the most foundational: A2/A3/A4 all need something to act *toward*.
+
+Status: DESIGN ONLY — filed as a FUP because the full shape wants more thought
+(see Open Questions). Capturing as much design as is known now so it does not live
+only in a chat transcript.
+
+** The gap, concretely
+
+- `Config` (`lib/spell_agent/config.ex`) is a 3-key whitelist; not an intention store.
+- `Hist` records what *happened* (turns, def-env, tools, spans). An intention is
+  not a past turn — it is a *standing commitment* with a lifecycle (open ->
+  in-progress -> resolved/abandoned) that outlives any single turn.
+- A wake (`Clock.Wake`) carries a one-shot prompt, not a goal with state.
+
+** Proposed design (v1 sketch — mirror ToolRegistry's rehydrate pattern)
+
+A long-lived, session-global GenServer `SpellAgent.SelfStore`, supervised beside
+`ToolRegistry`/`Clock`, whose durable state is a PROJECTION of the Hist store —
+exactly the four properties ToolRegistry/Clock already prove: in-memory cache +
+durable mirror, rehydrate-on-boot, best-effort (sick store -> empty, never crash),
+store is source of truth.
+
+*** Store key kind
+- New logical key `{:intent, id} => %SelfStore.Intent{}`, session-global like
+  `{:tool, name}` / `{:clock, id}`. Add `:intent` to the `Hist.Store` behaviour
+  `@type kind`, the Memory `list/2` match clauses, and the Khepri `path/1` +
+  `list_pattern/2`. (This is the same 3-file change A2 made for `{:clock, id}`.)
+
+*** The Intent record
+`%SelfStore.Intent{id, goal, why, status, priority, next_check_ms, created_ms,
+updated_ms, evidence}` where:
+  - `status` :: `:open | :active | :resolved | :abandoned` (a small lifecycle FSM).
+  - `next_check_ms` — when the mind next wants to look at this (the natural join
+    with A2: a Clock wake whose prompt is "advance intent <id>").
+  - `evidence` — node-ids / mesh seqs that bear on this goal (provenance, optional).
+  - `priority` — for "which open goal first" ordering (the A4 executive picks here).
+
+*** self/* verb namespace (PTC-Lisp surface)
+A `SpellAgent.SelfStore.Namespace` returning `%{"self/intend" => fn, ...}`, merged
+into the tools map in `Session.run/2` beside `hist/*`, `clock/*`, `black/*`. Same
+guard posture as `Clock.Namespace`/`Mesh.Namespace` (raise/exit -> `%{"err"=>m}`).
+
+Verbs (v1 proposal):
+  - `self/intend  {:goal :why? :priority? :next-check?}` -> creates an Intent
+    (`status: :open`). Returns its id. `:next-check` accepts a duration string,
+    resolved to `next_check_ms`.
+  - `self/intentions {:status?}` -> list (filterable by status), priority order.
+  - `self/resolve {:id :note?}` -> mark `:resolved` (lossless: keep the record as
+    its own evidence, like Hist's distill).
+  - `self/abandon {:id :why}` -> mark `:abandoned` (why required — no silent drop).
+  - `self/touch {:id :status? :next-check? :note?}` -> update status / reschedule.
+
+Worked shape:
+#+begin_src clojure
+;; record an intention my future self will act on
+(tool/self/intend {:goal "harden the effect-floor: re-express native tools as PTC"
+                   :why  "shrink the native arm — see docs/body-and-mind.md"
+                   :priority 2
+                   :next-check "1d"})
+
+;; A2 wakes me tomorrow; the wake prompt reads my own goals and advances one
+(tool/clock/at {:in "1d" :prompt "Read (self/intentions {:status \"open\"}); advance the highest-priority one a single step; (self/touch ...) it."})
+#+end_src
+
+** Why a FUP and not a FEAT yet — Open Questions (need design + the full picture)
+
+1. *Intent vs. Hist crystal vs. memory concept.* The repo already has
+   `Hist.Crystal` (long-term memory) and a `.spell/memory` graph (concepts,
+   playbooks, decisions). Is an Intent a NEW kind, or a status-bearing view over a
+   crystal / a memory `decision` node? Risk of a parallel store. MUST reconcile
+   against `Hist.Crystallize` + the memory tool before adding `{:intent, id}`.
+2. *Session scope.* Intentions feel cross-session (a standing goal), but a goal
+   may belong to one conversation. Session-global (like tools) or session-keyed?
+3. *Who advances an intent?* A1 is just the store. The loop that PICKS an open
+   intent and acts is A4 (executive). A1 must not smuggle scheduling logic.
+4. *Mesh overlap.* `black/post {:kind :intention}` already exists on the mesh
+   (PROJ-006) — a CROSS-session intention on a shared blackboard. A1 is the
+   SELF-scoped analogue. Define the relationship (self/* = my private goals;
+   black/* = goals I publish to a region) so they are one idea wearing two scopes,
+   not two stores.
+5. *Lifecycle richness.* Is `:active` needed, or is open/resolved/abandoned
+   enough? Does an Intent need sub-goals (a tree)? Defer until A4 shows what the
+   executive actually needs to read.
+
+** Dependencies / relationships
+- Pairs with A2 (`PLAN-014`): the natural wake prompt is "advance my intentions".
+- Read by A4 (`FUP for executive loop`): the executive's "pick the oldest open
+  goal" reads `self/intentions`.
+- Reconcile with: `Hist.Crystal` / `Crystallize`, the `.spell/memory` graph, and
+  mesh `black/post {:kind :intention}` (PROJ-006) before building.
+
+** Acceptance (when promoted to a FEAT)
+- `{:intent, id}` kind round-trips in Memory + Khepri (store contract test).
+- self/* verbs create/list/resolve/abandon with the lifecycle enforced.
+- Rehydrate-on-boot: an intention set in a prior sitting is readable next session.
+- Best-effort: a sick store degrades to an empty intention set, never a crash.

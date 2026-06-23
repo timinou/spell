@@ -1,0 +1,102 @@
+#+TITLE: A4: executive loop — loop/continue + loop/rest + monotone-progress guard
+#+STATE: ITEM
+#+SESSION_ID: 1514dbb097c44599
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-23T20-43-40-511Z_1514dbb097c44599.jsonl]]
+#+CUSTOM_ID: FUP-016-a4-executive-loop-loop-continue-loop-res
+
+* Initial Message
+
+Spell is an agent that can think about itself, and modify all aspects of itself, through code.
+Spell's live environment gives its runtime a life.
+
+^ how is that true, how is that not true?
+
+* Initial Message
+
+Agency rung A4 — the deepest and highest-stakes rung. A2 (`Clock`) and A3
+(`Watch`) still need a PROMPT in the wake payload: a human wrote the words once.
+True self-initiation is the mind generating its OWN next prompt from its own
+goals, and the body running a turn whose prompt is the mind's output from the
+prior turn. This is where "responds" becomes "pursues."
+
+Status: DESIGN ONLY — filed as a FUP deliberately. This is the `docs/body-and-mind.md`
+"−4 / moving-fast-is-reckless" rung: building it carelessly yields a loop that
+spends money and mutates files forever. It MUST land behind a flag, read-mostly
+first, with the safety model designed before the mechanism. Capturing current +
+needed design so it is durable, not chat-only.
+
+** The gap, concretely
+
+`SpellAgent.Session.run/2` is `prompt -> answer`, bounded by `max_turns`. After it
+returns the mind goes dark. Nothing lets the mind say "I am not done; run another
+turn with THIS prompt I just authored." A2/A3 can re-enter run/2, but only with a
+pre-written prompt. A4 closes the loop: the prompt becomes endogenous.
+
+** Desired interface (v1 sketch)
+
+Two verbs in a `loop/*` namespace (merged like `clock/*`):
+
+#+begin_src clojure
+;; the executive turn the mind runs: look at my goals, advance one, decide to continue
+(let [open (filter #(= "open" (get % "status")) (tool/self/intentions {}))   ;; A1
+      goal (first (sort-by #(get % "priority") open))]
+  (if (nil? goal)
+    (tool/loop/rest {:why "no open goals; sleep until a watch fires"})
+    (let [step (advance-one-step goal)]            ;; a tool the mind authored
+      (tool/self/touch {:id (get goal "id") :note (get step "note")})
+      (if (get step "more?")
+        (tool/loop/continue {:prompt (get step "next-prompt")})  ;; re-enter with MY prompt
+        (tool/loop/rest {:why "goal advanced; nothing pressing"})))))
+#+end_src
+
+- `loop/continue {:prompt :budget?}` — the mind hands the body its NEXT prompt;
+  the body immediately runs another `Session.run` turn with it (a self-authored
+  re-entry). Routed through the SAME synthetic-caller seam A2 established (likely
+  literally `Clock.at {:in 0 :prompt ...}`), so it inherits durability + the wake
+  budget for free.
+- `loop/rest {:why}` — the mind voluntarily yields the BEAM (no busy-wait) until a
+  `clock`/`watch` wakes it. Records why it parked (telemetry / human review).
+
+** Current mechanism that already exists to build on
+- A2 `Clock` (PLAN-014): the synthetic-caller re-entry + wake budget + durable
+  wake. `loop/continue` is `clock/at` with `in: 0` plus the safety additions below.
+- A1 SelfStore (FUP): the goals the executive reads to author its next prompt.
+- A3 `Watch` (this batch's FEAT): the condition-fuse that wakes a rested loop.
+- Hist continuation: the loop's turns already thread `def`-env + tape across
+  re-entries (SEAM 0/1), so a continued loop keeps its working memory.
+
+** Needed design (the safety model IS the feature) — Open Questions
+
+1. *Monotone-progress guard.* A loop that re-enters WITHOUT progress must be
+   throttled then parked. Define "progress": did `self/intentions` shrink? did a
+   mesh finding get posted? did cost/turns advance toward a declared milestone?
+   Without a real progress metric, A4 is a fork bomb with extra steps. THIS is the
+   crux and is unsolved.
+2. *Budget ceiling.* `loop/continue {:budget}` must clamp to a body ceiling the
+   mind cannot raise (A5 folds in here, same as Clock/spawn). Per-loop cumulative
+   cost cap + turn cap across the WHOLE loop, not per re-entry.
+3. *Flag + read-mostly first.* Ship inert behind a config flag; first version
+   should be allowed to think/plan/post but NOT mutate files / spend on tools
+   until the guard is trusted. Mirror PROJ-004's "start read-only" stance.
+4. *Stuck-loop surfacing.* A parked-for-no-progress loop must surface to the human
+   (a record + a TUI affordance), not vanish. Reuse Clock's dropped-wake telemetry
+   shape.
+5. *Relationship to spawn (A6/FEAT-011).* `loop/continue` re-enters the SAME
+   session (continuity of self); `self/spawn` launches a CHILD (parallelism).
+   Keep them distinct verbs; the executive may use both.
+6. *Termination proof.* Want a static-ish argument that every loop terminates or
+   parks: fuel (max re-entries) + TTL (wall-clock deadline) + the progress guard,
+   any of which fires -> park. Design the interaction of the three.
+
+** Dependencies
+- Hard-depends: A2 (`PLAN-014`, done), A1 (SelfStore FUP), A3 (Watch FEAT).
+- Distinct from: A6 `tool/spawn-session` (`FEAT-011`) — spawn != self-continue.
+- DurableServer (`FUP-014`) is the right primitive ONLY if a loop must survive
+  node death in a multi-node mesh; single-node, Khepri rehydrate covers it.
+
+** Acceptance (when promoted to a FEAT)
+- `loop/continue` re-enters run/2 with a mind-authored prompt, behind a flag.
+- The progress guard throttles + parks a no-progress loop; never spins.
+- Cumulative budget ceiling enforced across the whole loop, body-clamped.
+- A parked loop is recorded + surfaced; a rested loop wakes on a clock/watch.
+- Read-mostly mode proven before any write-enabled mode is allowed.
