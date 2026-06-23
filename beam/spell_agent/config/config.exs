@@ -17,8 +17,18 @@ import Config
 # build — no other NIF is affected.
 config :rustler_precompiled, force_build_all: true
 
+# Conversation-history store. Defaults to the ephemeral `Store.Memory` (an ETS
+# table that survives across `Session.run` calls within one BEAM sitting) so app
+# boot never depends on a Ra system. Opt into `Store.Khepri` for an on-disk WAL
+# (in-session persistence to `.spell/forest`; `Hist.Store.KhepriBoot` boots it
+# best-effort). NOTE: cross-BEAM-restart durability is a KNOWN GAP — each fresh
+# `:khepri.start` mints a new Ra uid and orphans prior segments — so Khepri does
+# not yet persist traces across TUI sittings on its own. The at-exit trace dump
+# (see `SpellAgent.tui/1`) is what makes a conversation survive a session today.
+#
+# config :spell_agent, SpellAgent.Hist, store: SpellAgent.Hist.Store.Khepri
+
 # Load environment-specific config (test.exs quiets Khepri/Ra boot logs).
 if File.exists?(Path.join(__DIR__, "#{config_env()}.exs")) do
   import_config "#{config_env()}.exs"
 end
-
