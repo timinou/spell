@@ -1,0 +1,49 @@
+#+TITLE: Stale golden transcript: answer_42 baseline 54 commits behind the live render
+#+STATE: ITEM
+#+SESSION_ID: 15131f74dcf291df
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-22T12-22-47-411Z_15131f74dcf291df.jsonl]]
+#+CUSTOM_ID: FUP-017-stale-golden-transcript-answer-42-baseli
+
+* Initial Message
+
+which dissolution will have more impact now?
+
+* What
+`test/spell_agent/tui/llm_terminal_test.exs` "Design A — visual regression (golden
+transcript)" fails: the committed baseline
+`test/snapshots/llm/answer_42.transcript` no longer matches the live inspector
+render.
+
+* Why (root cause — verified, NOT a PLAN-016 regression)
+The baseline was last written at commit `7d1de20d2` (FEAT-007). Between it and now,
+54 commits changed the rendered screen, including:
+- PLAN-012 W4/W5 (`65ca9a5e2`, `aefc5fcf2`, `aef8d7f2f`): status/composer rendered
+  from tmpl:: holes over data/* — the status line text changed.
+- PLAN-009 D1 (`f904f753e`): the history pane (the golden has no `history` pane; the
+  live render does).
+- BUG-012 / cells drawer (`c9baa84e2`): the footer gained `C-r reset layout`.
+- clock/* wiring (`3e84605a9`) + others: the cassette run now takes a 2nd turn that
+  errors (`✗ run`, `turn 2`, `✗ llm`) where the baseline shows a clean 1-turn ok.
+
+The PLAN-016 self-view work is provably uninvolved: the transcript test references
+none of its symbols (`view/think`, `SelfView`, `Budget`), and SelfView/Budget only
+add a tool + a supervised GenServer — neither touches the inspector's golden screen.
+`grep view/think|Budget|SelfView|build_tools` over the test + harness = 0 matches.
+
+* The real question this defers
+The divergence includes a BEHAVIORAL change (the cassette run now takes a 2nd,
+erroring turn) — that is NOT obviously cosmetic. Before regenerating the baseline,
+someone must decide whether the 2nd-turn error is INTENDED (a loop/cassette change)
+or a latent bug the stale snapshot was masking. Do NOT blind-regenerate.
+
+* Fix (when picked up)
+1. Investigate the `turn 2 / ✗ llm` divergence: is the answer_42 cassette now driving
+   a second turn that errors? If unintended, fix the loop/cassette; if intended,
+   proceed.
+2. Once the run behavior is correct, regenerate: delete
+   `test/snapshots/llm/answer_42.transcript`, re-run the test (it rewrites the
+   baseline), `git diff` to review, commit.
+
+* Pre-existing
+This failure exists independent of PLAN-016 and was surfaced (not caused) by running
+the full suite during PLAN-016 W4. Filed so it is not lost.

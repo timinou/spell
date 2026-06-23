@@ -1,8 +1,9 @@
 #+TITLE: RESEARCH L−1: The TUI as the agent's own reasoning workspace
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 1511029ec58e9d42
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-20T20-59-50-422Z_1511029ec58e9d42.jsonl]]
 #+CUSTOM_ID: PROJ-001-research-l1-the-tui-as-the-agents-own-re
+#+COMPLETION_HASH: c0b37b74990473fa
 
 * Initial Message
 
@@ -77,3 +78,52 @@ loop where the interface is scratch memory.
 - lib/spell_agent/harness.ex (read-queries the self-view projects)
 - ../ex_ratatui-vendored/lib/ex_ratatui.ex (init_test_terminal/get_buffer_content
   — headless render primitive)
+
+* PROJ-001 DELIVERED via PLAN-016 — the renderer reads its own output   :done:
+
+The OUTPUT vs WORKSPACE boundary is dissolved: a UI was something rendered FOR a
+human to look at, one-way. Now the agent renders a view over its OWN run-trace,
+headless (no screen), reads the ASCII buffer back as reasoning input, and acts.
+The interface is external working memory.
+
+** The open questions in this PROJ body — answered
+- "What is the cleanest render→observe→act cycle that does not burn context every
+  frame?" → A REACTIVE-CELL-shaped seam was NOT needed; the answer is a SYNCHRONOUS
+  read-only tool (view/think) the agent calls deliberately, off the frame clock,
+  guarded by a per-mission budget. Render is on-demand, not per-frame.
+- "Headless self-render or shared terminal?" → HEADLESS, as predicted: reuses
+  ExRatatui.init_test_terminal + draw + get_buffer_content via the existing
+  RenderProbe, drawing to a throwaway terminal the agent reads as text, never
+  painting a screen.
+- "What projection earns its tokens?" → three curated idioms that COMPRESS the
+  trace: errors-board (just what broke + why), tool-calls (the working set),
+  trace-summary (one-line counts). Plus the authored-node path for anything else.
+- "Iteration budget / fixpoint detector?" (the security note) → SelfView.Budget:
+  per-mission render cap (hard cut) + fixpoint detection (soft note), keyed to the
+  mission pid, self-cleaning via process monitors.
+
+** What shipped (see PLAN-016 for the full wave-by-wave record + commits)
+- SpellAgent.Tui.SelfView — the seam: live_bag (trace→data via DataBag.build over
+  the global Store) + render (headless via RenderProbe) + view/think tool.
+- SpellAgent.Tui.SelfView.Idioms — the curated trace projections.
+- SpellAgent.Tui.SelfView.Budget — the render→observe→act loop guard.
+- priv/prompts/freeform_tui.md — the "Draw to think" prelude section.
+- 40 tests (unit + 7 acceptance demos), 5 reviewer swarms, all findings fixed.
+
+** Reachability proven, not assumed
+Every load-bearing fact was verified with running code before building on it: the
+forest is reachable by global name from the mission process (Session.run mounts the
+global Store); sanitized-bag atoms (:error/:tool) compare correctly in tmpl filters;
+the W3 P1 (view/think runs in a transient PTC sandbox process, not the mission) was
+caught by review and fixed by capturing the mission pid at tool-build time.
+
+** Out of scope (filed)
+- Recording self-views as hist nodes with provenance → PROJ-002.
+- Distilling reused self-views into prelude idioms → PROJ-003 (needs PROJ-002).
+- A pre-existing stale golden transcript surfaced during W4 → FUP-017 (not a
+  PLAN-016 regression; the transcript references none of the self-view symbols).
+
+NOTE [2026-06-23]: Delivered via PLAN-016 (5 waves + 5 reviewer swarms, all findings fixed). The TUIm
+is now the agent's own reasoning workspace: view/think renders a view over the live
+run-trace headless to ASCII, the agent reads it back, bounded by a per-mission loop
+budget. 40 self-view tests green. Closing DONE.

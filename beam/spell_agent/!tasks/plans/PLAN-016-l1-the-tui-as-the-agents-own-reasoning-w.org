@@ -1,0 +1,185 @@
+#+TITLE: L−1: The TUI as the agent's own reasoning workspace — draws to think
+#+STATE: DONE
+#+SESSION_ID: 15131f74dcf291df
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-22T12-22-47-411Z_15131f74dcf291df.jsonl]]
+#+CUSTOM_ID: PLAN-016-l1-the-tui-as-the-agents-own-reasoning-w
+#+COMPLETION_HASH: 5ea57cef7d34a867
+
+* Initial Message
+
+which dissolution will have more impact now?
+
+Execution PLAN for PROJ-001 (RESEARCH L−1: output vs. workspace). The PROJ is the
+vision of record; this PLAN is the driven artifact — concrete waves, acceptance
+gates, reviewer swarms. Closes PROJ-001 when W4 lands.
+
+* The boundary dissolved
+OUTPUT vs WORKSPACE. A UI is something rendered FOR a human to look at — one-way.
+This makes the rendered interface a surface the agent shapes FOR ITSELF, to think
+with: it authors a headless view over its OWN run-trace, renders it to an ASCII
+buffer (no screen), and reads that buffer back as reasoning input. The renderer
+reads its own output. The TUI becomes EXTERNAL WORKING MEMORY.
+
+* What already exists (grounding — verified in code this session)
+- SpellAgent.Tui.RenderProbe (`layout/render` tool): renders an agent-authored
+  layout NODE to headless ASCII via ExRatatui.init_test_terminal/2 + draw/2 +
+  get_buffer_content/1 + Native.restore_terminal. Total + bounded. BUT it resolves
+  tmpl:: holes against a CALLER-SUPPLIED data_env (the agent passes `{}`), and a
+  "pane" node renders empty (needs live App state it does not have).
+- DataBag.build(state, area): builds the full live data/* bag — data/forest (the
+  run-trace: turns, tool calls, errors, def-env), data/ui (gaze: focus, cursor,
+  cursors), data/status, data/vms. THIS bag is the agent's trace projected to data.
+- Surface.resolve_holes/2 + Surface.render/2 + Surface.layout/2: the node→placement
+  pipeline render/2 uses every frame.
+- Cell tier (PROJ-004): read-only capability discipline + the slow-clock forest
+  read (App passes Store.spans into Cell.Tools.read_only per tick) — the proof
+  that forest access from a runtime-tool context is reachable and already wired.
+- Headless-buffer test harness: test/support/llm_terminal.ex (Runtime.buffer/1).
+
+* The precise gap (what L−1 adds, nothing more)
+1. Render over the agent's OWN LIVE trace bag (DataBag.build of live state), NOT a
+   caller-supplied empty env. The data the view shows IS the run-trace.
+2. A defined RENDER -> OBSERVE -> ACT cycle: the buffer returns as a tool result
+   the agent reads back as reasoning input, within a turn.
+3. A budget/fixpoint guard so the loop cannot spin (PROJ security note).
+
+* The load-bearing seam (W0 proves this with running code FIRST)
+A tool the agent calls mid-turn runs in the Session/mission process. The live
+trace lives elsewhere: the FOREST in Tui.Store (separate process, reachable by
+pid via Store.spans/1), the GAZE in App GenServer state (App-local). W0 decides
++ builds the cleanest provider seam:
+  Option A (App-call): App injects a self-view provider closure into the mission's
+    tool set capturing the App pid; the tool does GenServer.call(app, :self_view_bag)
+    -> App builds DataBag.build(current_state, area) -> returns the live bag.
+    Faithful to gaze + forest. One narrow handler.
+  Option B (Store-pid read): provider captures the Store pid; reads Store.spans
+    + a default gaze; builds a trace-focused bag. No App round-trip, no gaze
+    fidelity. Sufficient for the trace-board demo.
+W0 builds the SMALLEST end-to-end proof (render a list of data/forest span labels
+over the LIVE forest, read the ASCII back) and PICKS the option from evidence.
+Until W0 proves the round-trip, no wave builds on top.
+
+* Capability discipline (inherited from PROJ-004, non-negotiable)
+The self-view tool RENDERS; it never mutates. It is READ-ONLY by construction:
+it builds a bag from live state and draws it to a throwaway terminal. No keymap
+bind, no store write, no shell — same asymmetric-danger reasoning as the cell
+tier. The render path is total (a malformed widget degrades to a gap; the
+throwaway terminal is always restored).
+
+* Waves (each: impl + reviewer swarm + fixes; small file-specific commits)
+** W0 — the seam (spike -> proof, then harden)
+Build SpellAgent.Tui.SelfView provider + the smallest round-trip: a tool call
+renders data/forest span labels over the LIVE forest to ASCII and returns it.
+Decide Option A vs B from the running spike. Reviewer swarm on the seam.
+Acceptance: a test boots App with a seeded forest, calls the provider, asserts the
+returned ASCII buffer contains the seeded span labels. Zero screen painted.
+
+** W1 — `view/think` tool (the render->observe primitive)
+The tool surface: agent passes a layout node (or a built-in idiom name); the tool
+resolves its holes against the LIVE self-bag (W0 provider), renders headless,
+returns %{"buffer","width","height"} (or %{"err"}). Total + bounded (reuse
+RenderProbe.render machinery + a size budget). Registered in freeform_tools.
+Reviewer swarm. Acceptance: agent-authored list-of-errors node renders over a
+forest with errored spans; buffer contains the error labels.
+
+** W2 — trace projections (the views worth rendering)
+The built-in idioms that COMPRESS the trace (the PROJ open question: "what
+projection earns its tokens"): an errors-board ("errored tool calls | def-env at
+that turn | the source span they touched"), a focus-most-errors traversal. These
+are data/forest -> widget templates (Handlebars/tmpl over the bag), reflecting the
+forest, no Elixir per view. Reviewer swarm. Acceptance: each idiom renders over a
+representative forest fixture and the buffer shows the projected, compressed trace.
+
+** W3 — the loop + budget (render->observe->act, bounded)
+The render/reason cycle as a usable affordance + a fixpoint/iteration budget so it
+cannot spin (PROJ security note). The agent calls view/think, reads the buffer,
+optionally re-tags focus (read-only gaze transform) and re-renders — bounded by a
+per-turn budget. Loop guard + measurement (a self-render costs tokens to read
+back; cheap to paint). Reviewer swarm. Acceptance: a scripted render->observe->
+render sequence terminates under budget; an over-budget loop is cut deterministically.
+
+** W4 — prelude vocab + acceptance demo (closesRef)
+Teach the self-view idiom in priv/prompts/freeform_tui.md (the honest pattern:
+author a view over data/forest, render headless, read the buffer back). Executable
+acceptance demos (test/spell_agent/tui/self_view_demos_test.exs). The PROJ A/B
+acceptance ("resolve a task it failed without the self-view") is demonstrated as a
+SCRIPTED scenario: a forest with a tangled error, view/think over it returns a
+buffer that surfaces the failing call + its def-env, and a follow-up step keys off
+that buffer. (Honest scope: the deterministic test asserts the round-trip + the
+projection content; the "demonstrably reasons better" claim is shown by the
+scripted scenario, not a statistical A/B.) Reviewer swarm. Marks PROJ-001 DONE.
+
+* Out of scope (filed, not built here)
+- Recording self-views as hist nodes with provenance = PROJ-002 (present vs
+  history). A self-view IS a PTC value hist is built to store; recording is a
+  separate seam. FUP it when W4 lands.
+- Distilling reused self-views into prelude idioms = PROJ-003 (taught vs learned);
+  needs PROJ-002's provenance signal first.
+- Shared/co-edited self-views = PROJ-005.
+
+* Verification discipline
+- Each wave: dedicated test file, mix test green, mix format --check-formatted,
+  file-specific commit. Reviewer swarm (2 reviewers) between waves: prod soundness
+  + test-contract quality, accept findings at medium+ confidence, fix before next.
+- Full spell_agent suite green at seed 0 before W4 closes.
+- ptc_runner: no changes expected (no new bounded namespace — view/think rides the
+  existing freeform tool surface); if a namespace patch proves needed, it is a
+  SEPARATE ptc_runner commit (per standing instruction).
+
+* References
+- PROJ-001 body (vision, open questions, A/B acceptance)
+- docs/freeform-tui-philosophy.md §"Layer −1: output vs. workspace"
+- lib/spell_agent/tui/render_probe.ex (the headless-render seed)
+- lib/spell_agent/tui/data_bag.ex (DataBag.build — the live trace bag)
+- lib/spell_agent/tui/app.ex (render/2 pipeline; reproject/2 forest+gaze chokepoint)
+- lib/spell_agent/tui/cell/tools.ex (read-only capability tier to mirror)
+- ../ex_ratatui-vendored/lib/ex_ratatui.ex (init_test_terminal/draw/get_buffer_content)
+- test/support/llm_terminal.ex (headless-buffer harness pattern)
+
+* PLAN-016 COMPLETE — L−1 shipped   :done:
+
+** Waves (each: impl + 2-reviewer swarm + fixes; small file-specific commits)
+W0  SelfView seam (renderer reads its own output)   bfc1e4962 ; W0r 908dec352
+W1  view/think tool (render→observe primitive)        874febc38 ; W1r 044a9d281
+W2  trace projections (errors-board/tool-calls/...)   f7fbf8a4d ; W2r 57b68b707
+W3  render→observe→act loop guard (budget+fixpoint)   918a02fab ; W3r c841d09e6
+W4  prelude vocab + acceptance demos                  050e48d33 ; W4r 6c4825be5
+
+** Reviewer swarms: 5 swarms (10 reviewers), findings ALL fixed
+- W0r (4): data/area desynced from render dims; default-Store path untested;
+  liveness test re-authored the node; render-failure totality untested.
+- W1r (correct/correct): one hardening — pin read-only via the registered callable.
+- W2r (1): trace-summary counts proven live-derived over two forest states; empty
+  board frame asserted.
+- W3r (P1, the big one): view/think runs in a TRANSIENT PtcRunner.Sandbox process
+  (Process.spawn per Lisp.run), so charging the budget against self() reset every
+  turn → the cross-turn cap never fired in production. Fixed by capturing the
+  MISSION pid at tools/0 build time (Session.run runs in the mission Task) and
+  threading it to Budget.charge/2. Self-cleaning test strengthened to prove entry
+  removal via :sys.get_state.
+- W4r (1): demo 3 (the PROJ acceptance) made its ACT step real — parses the failing
+  line out of the rendered ASCII and decides the retry from it, not from the forest.
+
+** Architecture (all reuse, not reinvention)
+- SelfView.live_bag → DataBag.build over the global Store (the ONE trace projection).
+- SelfView.render → RenderProbe (the existing headless node→ASCII path).
+- SelfView.Idioms → tmpl:: templates compiled once at load (the layout-data producer).
+- SelfView.Budget → the SessionRegistry monitor-and-clean-on-:DOWN pattern.
+- view/think rides the existing `view` bounded namespace → ZERO ptc_runner change.
+
+** Verification
+- 40 self-view tests (33 unit + 7 acceptance demos) green at seed 0.
+- Full spell_agent suite: 881/882 (the 1 failure = FUP-017, pre-existing stale
+  golden transcript, references none of the self-view symbols — surfaced, not caused).
+- Every load-bearing seam proven with running code before building on it.
+
+** Acceptance: MET
+A self-view renders over the agent's own live trace, headless, read back as
+reasoning input, bounded against spinning, read-only — demonstrated end-to-end in
+the 7 acceptance demos (incl. the scripted PROJ-001 A/B: a tangled run, the
+errors-board surfaces the failing call + site, a follow-up decision keys off the
+buffer). Closes PROJ-001.
+
+NOTE [2026-06-23]: All 5 waves + 5 reviewer swarms complete, all findings fixed. 40 self-view tests
+green at seed 0; full spell_agent suite 881/882 (the one failure is FUP-017, a
+pre-existing stale golden transcript, provably unrelated). PROJ-001 closed DONE.
