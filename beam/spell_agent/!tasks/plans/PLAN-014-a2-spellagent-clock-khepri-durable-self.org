@@ -1,0 +1,96 @@
+#+TITLE: A2: SpellAgent.Clock — Khepri-durable self-wake scheduler + clock/ verbs
+#+STATE: DOING
+#+SESSION_ID: 1514dbb097c44599
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-23T20-43-40-511Z_1514dbb097c44599.jsonl]]
+#+CUSTOM_ID: PLAN-014-a2-spellagent-clock-khepri-durable-self
+
+* Initial Message
+
+Spell is an agent that can think about itself, and modify all aspects of itself, through code.
+Spell's live environment gives its runtime a life.
+
+^ how is that true, how is that not true?
+
+* Initial Message
+
+The first agency organ (rung A2 of the agency ladder). Turns the body from
+purely reactive (`Session.run` = human-prompt -> answer) into *self-callable*: the
+mind schedules its own future awakening, and the body re-enters `SpellAgent.run/2`
+on its behalf. A fired wake IS a synthetic caller — the keystone everything above
+A2 composes on (A3 `black/watch` swaps the time-fuse for a condition-fuse; A4
+`loop/continue` lets the mind write its own next prompt; A6 `self/spawn` points it
+at a child).
+
+Context: see `docs/body-and-mind.md` (the body/mind freedom argument) and the
+agency-ladder analysis. A3 is FEAT-013 (Mesh.Watcher), A4/A6 ride FEAT-011
+(tool/spawn-session). DurableServer was evaluated and rejected for single-node;
+see FUP-014.
+
+** Design — mirror ToolRegistry's rehydrate pattern exactly
+
+A long-lived, session-global GenServer supervised beside `ToolRegistry`, whose
+durable state is a PROJECTION of the Hist store. Same four properties as
+ToolRegistry: in-memory cache + durable mirror, rehydrate-on-boot, best-effort
+(sick store -> empty schedule, never a crash), store is source of truth.
+
+*** Store key kind (extend Hist.Store behaviour)
+- New logical key `{:clock, id}` => `%SpellAgent.Clock.Wake{}`, session-global
+  like `{:tool, name}`.
+- Add `:clock` to `@type kind`, the Memory `list/2` match clauses, and the Khepri
+  `path/1` + `list_pattern/2` (`[:hist, :clock, id]`, star wildcard). One-level
+  key, mirrors `{:tool, name}` precisely.
+
+*** The Wake record
+`%Clock.Wake{id, fire_at_ms, session_id, prompt, budget, repeat_ms, created_ms}`.
+`id` from `Hist.Id.rand("wake")`. `budget` is the A5 field (turns / cost-ceiling),
+threaded into the `SpellAgent.run/2` opts on fire and clamped there (A5 folds into
+a budget arg — no separate organ).
+
+*** GenServer
+- `start_link(opts)`: `:store` (default `Hist.default_store/0`), `:runner`
+  (default `&SpellAgent.run/2`, injected so tests never hit network), `:budget`
+  (the wake-budget window cfg). On init: rehydrate every persisted Wake, and for
+  each either fire-now (overdue) or `Process.send_after` the remaining delay.
+- `at(args)` / `every(args)` / `cancel(id)` / `pending()`: the public API the
+  `clock/` verbs wrap. `at`/`every` persist the Wake to the store THEN arm a timer
+  (durable-first, so a crash between persist and arm self-heals on next boot).
+- `handle_info({:fire, id}, st)`: load the Wake, check the wake-budget, and if OK
+  `Task.start` the runner with `session_id:`/`budget:`. Then re-arm (repeat) or
+  forget (one-shot -> delete from store). Budget-exhausted => DROP + record, never
+  crash (the safety ladder that EARNS the mind the rope).
+
+*** Wake budget (the safety organ — body-enforced, mind cannot raise)
+- N self-wakes per rolling wall-clock window (cfg, e.g. 20 / 60s). Enforced in the
+  GenServer before firing. Exhaustion is recorded (a dropped-wake mark) and
+  surfaced via `pending()`/telemetry, NOT a crash. This is the body buying the
+  mind more rope by making each rope safe (body-and-mind.md rung 4).
+
+*** clock/ verb namespace (PTC-Lisp surface)
+A `SpellAgent.Clock.Namespace` returning `%{"clock/at" => fn, ...}`, merged into
+the tools map in `Session.run/2` beside `Hist.verbs` / `Mesh.verbs`. Same guard
+posture as `Mesh.Namespace` (a raise/exit inside a verb -> `%{"err" => msg}`,
+never crashes the turn). Verbs: `clock/at`, `clock/every`, `clock/cancel`,
+`clock/pending`. The wake payload carries `:prompt`, `:session_id` (defaults to
+the calling session), and an optional `:budget`.
+
+** Acceptance
+- `mix test test/spell_agent/clock_test.exs` green (unit, zero network — fake
+  runner captures fires).
+- `mix test test/spell_agent/clock_namespace_test.exs` green (verb surface).
+- Durability: a Wake persisted, the GenServer restarted, the Wake rehydrates and
+  still fires (Memory store across a GenServer restart within one BEAM).
+- Budget: a runaway `clock/every` is throttled — fires up to the window cap, drops
+  the rest, records the drop, never crashes.
+- `bun`-free: this is the BEAM app; gate is `mix compile --warnings-as-errors`
+  clean + the two test files.
+
+** Build order (waves)
+1. Store kind `{:clock, id}` in behaviour + Memory + Khepri (+ a store-roundtrip
+   test for the new kind).
+2. `Clock.Wake` struct + `SpellAgent.Clock` GenServer (at/every/cancel/pending,
+   rehydrate, fire, budget). Unit tests with an injected runner + injected clock.
+3. `Clock.Namespace` (`clock/` verbs) + wire into `Session.run/2` +
+   `application.ex` child. Namespace tests.
+4. README "agency" section + worked examples; cross-link body-and-mind.md.
+
+Commit per wave.

@@ -1,0 +1,58 @@
+#+TITLE: DurableServer (McCord) — revisit for multi-node A4 loop + PROJ-005 shared tree
+#+STATE: ITEM
+#+SESSION_ID: 1514dbb097c44599
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-23T20-43-40-511Z_1514dbb097c44599.jsonl]]
+#+CUSTOM_ID: FUP-014-durableserver-mccord-revisit-for-multi-n
+
+* Initial Message
+
+Spell is an agent that can think about itself, and modify all aspects of itself, through code.
+Spell's live environment gives its runtime a life.
+
+^ how is that true, how is that not true?
+
+* Initial Message
+
+`durable_server` (Chris McCord, hex v0.1.4, MIT) provides durable, *distributed,
+cluster-aware* GenServers: state persisted to **object storage** (S3 / Tigris via
+`req_s3`), processes that **rehome across cluster nodes** on node death, with
+capacity-aware + sticky placement and a graceful-shutdown handoff protocol
+(`DurableServer.Supervisor.rehome_child`, `current_capacity`, `global_members`,
+`Terminator`). Tagline: "Always Running Somewhere."
+
+** Why it is NOT used for the Clock (A2)
+
+`SpellAgent.Clock` (A2) is the single-node self-wake scheduler. Match
+DurableServer against this app's stated posture (`application.ex`, `mix.exs`):
+
+| axis            | spell_agent                          | DurableServer            | fit |
+|-----------------+--------------------------------------+--------------------------+-----|
+| topology        | single-node, zero-Node, laptop BEAM  | distributed cluster      | ✗   |
+| durable store   | Khepri (single-node Ra WAL), ONE     | object storage (S3)      | ✗   |
+| boot posture    | "boot never depends on store health" | S3 reachability required | ✗   |
+| maturity        | load-bearing agency organ            | v0.1.4, ~weeks old, 1.1K | ✗   |
+
+Its entire value prop — rehoming a singleton across nodes that die — is *moot* on
+one node. Adopting it for "wake me in 10m" would import a cluster-failover engine
++ a second durable substrate (object storage) + a network dependency, breaking
+the degrade-on-boot invariant. The Khepri-backed `Clock` (rehydrate-on-boot, same
+pattern as `ToolRegistry`) covers single-node durability with zero new infra.
+
+** Where it WOULD matter (revisit triggers)
+
+DurableServer's "always running somewhere" is the right primitive for two
+deferred items, *if and only if* the agent mesh ever goes genuinely multi-node:
+
+- *A4 executive loop surviving node death* (FEAT-011 lineage): a self-initiating
+  mind that must keep running "somewhere" across a crash/restart is literally
+  what DurableServer guarantees. On single-node, Khepri rehydrate covers it; on a
+  multi-node mesh it would not.
+- *PROJ-005 — the shared cross-session tree* ("distributed merge, because it's the
+  BEAM"): long-lived session processes co-editing one tree across machines is
+  exactly DurableServer's capacity-aware placement + object-storage state.
+
+** Decision
+
+Deferred. NOT for the Clock, NOT now. Bookmark for the day the mesh stops being
+single-BEAM. Re-evaluate object-storage vs. multi-node Khepri (Ra/Raft already in
+the tree via `khepri`) as the state backend at that point.

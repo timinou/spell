@@ -78,3 +78,5 @@ a shared cognition medium, human and model, homoiconic on both ends.
 - FUP-006 (read-only cross-session attach — the base this extends to read-write)
 - ../ex_ratatui-vendored/lib/ex_ratatui/distributed.ex (cross-node transport)
 - lib/spell_agent/tui/store.ex (telemetry attach/subscribe model)
+
+NOTE [2026-06-23]: DurableServer (Chris McCord, hex `durable_server` v0.1.4): for the multi-node form of this layer — long-lived session processes co-editing one shared tree ACROSS machines — DurableServer is a serious candidate for hosting those processes. It gives cluster-aware + sticky placement, automatic rehoming on node death, and state persisted to object storage (S3/Tigris). Its "always running somewhere" guarantee is exactly the "because it's the BEAM" distributed-merge endgame this PROJ describes. NOT relevant single-node (Khepri rehydrate suffices). Revisit when/if the mesh genuinely spans nodes; weigh object-storage state vs. multi-node Khepri (Ra/Raft, already a dep). Tracked: FUP-014.

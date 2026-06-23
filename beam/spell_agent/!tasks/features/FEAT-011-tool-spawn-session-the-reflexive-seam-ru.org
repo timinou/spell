@@ -179,3 +179,5 @@ spawn is not blocked on the watcher. Created once
 (ParallelBudget.new(Config "mesh.budget")) in application.ex children, read by
 spawn-session. FEAT-013 reuses the same holder for watch-fire slots. (Decision: wire
 the budget here, end-to-end, as originally intended.)
+
+NOTE [2026-06-23]: Composes with A2 SpellAgent.Clock (PLAN-014) for the A4 executive-loop / A6 self-spawn rungs. Two connections: (1) the :budget field this seam takes when spawning a child is the SAME budget arg Clock threads into SpellAgent.run/2 on a wake — A5 (self-budgeting) folds into a budget arg on whatever creates a future execution (clock/at, loop/continue, self/spawn), clamped once in Session.run against a body ceiling the mind cannot raise. (2) A self-initiating loop (loop/continue) re-enters via the same synthetic-caller mechanism Clock establishes, and MUST pass through Clock's wake-budget + a monotone-progress guard so it cannot spin forever. DurableServer (FUP-014) is the right primitive ONLY if this loop must survive node death in a multi-node mesh; single-node, Khepri rehydrate covers it.

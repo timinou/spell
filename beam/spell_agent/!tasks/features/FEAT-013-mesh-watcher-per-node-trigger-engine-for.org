@@ -126,3 +126,5 @@ Watch-firing exactly-once CANNOT rest on a session-plane claim alone across node
   (no replication window) — Option B suffices there. Multi-node Khepri uses Option A.
 - net: FEAT-013 depends on FEAT-012 for Option A. Update the DAG: 013 ⟸ 010 AND
   (for the multi-node exactly-once path) ⟸ 012. Single-node 013 needs only 010.
+
+NOTE [2026-06-23]: Depends on / composes with A2 SpellAgent.Clock (PLAN-014). black/watch is the condition-fuse variant of clock/at: instead of firing on a wall-clock delay, it fires when a predicate over Mesh.Store writes (a post/claim) is satisfied. Reuse Clock's wake machinery — the Wake record, the wake-budget, the durable persist+rehydrate, and the synthetic-caller re-entry into SpellAgent.run/2. The Watcher's job is the per-node trigger/predicate eval on write; the actual "wake the mind" mechanism should be Clock's, not a second parallel scheduler. Build A2 first, then this is a fuse swap.
