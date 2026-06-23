@@ -111,12 +111,28 @@ defmodule SpellAgent.Tui.SelfViewDemosTest do
 
     # OBSERVE: render the board and read the buffer back as reasoning input.
     assert %{"buffer" => buffer} = think.(%{"name" => "errors-board"})
-
-    # ACT: a follow-up step keys off what the buffer revealed. We assert the buffer
-    # carries the exact, actionable detail (the tool + the failure site) — without
-    # the self-view the agent would have to re-walk the forest to recover it.
     assert buffer =~ "apply_patch"
     assert buffer =~ "line 42"
+
+    # ACT: a follow-up step keys off the buffer — NOT off the forest. To prove the
+    # render→observe→act loop is real (the buffer is genuine reasoning input, not
+    # just displayed text), the decision below reads ONLY the rendered ASCII: parse
+    # the failing line number out of the buffer the agent "saw", and pick the
+    # retry target from it. A projection that merely displayed the text without it
+    # being recoverable from the buffer could not pass this.
+    retry_line =
+      buffer
+      |> String.split(~r/\s+/)
+      |> Enum.find_value(fn tok ->
+        case Integer.parse(tok) do
+          {n, ""} -> n
+          _ -> nil
+        end
+      end)
+
+    # The agent's next action (retry the patch at the failing site) is decided
+    # entirely from what the self-view surfaced.
+    assert retry_line == 42
   end
 
   # ============================================================
