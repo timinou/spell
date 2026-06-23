@@ -51,7 +51,7 @@ defmodule SpellAgent.Mesh.Namespace do
       "black/query" => fn args -> guard(fn -> query(impl, region, args) end) end,
       "black/claim" => fn args -> guard(fn -> claim(impl, session_id, region, held, args) end) end,
       "black/fold" => fn args -> guard(fn -> fold(impl, region, args) end) end,
-      "black/watch" => fn _args -> not_yet("black/watch", "FEAT-013 (Mesh.Watcher)") end,
+      "black/watch" => fn args -> guard(fn -> watch(impl, session_id, region, held, args) end) end,
       "black/decide" => fn _args -> not_yet("black/decide", "FEAT-012 (Mesh.Consensus)") end
     }
   end
@@ -99,6 +99,97 @@ defmodule SpellAgent.Mesh.Namespace do
       goals ->
         owner = goals |> Enum.min_by(& &1.seq) |> Map.get(:author)
         owner == session_id and owner != nil and SessionRegistry.live?(owner)
+    end
+  end
+
+  # --- black/watch (A3, FEAT-021) ---
+
+  # Register a standing trigger as a durable, claimable :intention record: "when a
+  # record matching :when is posted to :region, schedule a Clock wake from :wake."
+  # Registering is a pure monotone post (CALM-clean); the single-node Mesh.Watcher
+  # observes posts and fires via Clock. A watch with no watcher still persists and
+  # fires whenever a watcher next runs (best-effort, F.2).
+  defp watch(impl, session_id, region, held, args) do
+    when_pred = get(args, ["when"])
+    wake = get(args, ["wake"])
+    target = get(args, ["region"]) || region
+
+    cond do
+      not Region.write_cap?(target, held) ->
+        %{"err" => "no write capability for region #{inspect(target)}"}
+
+      not valid_when?(when_pred) ->
+        %{
+          "err" =>
+            "black/watch requires :when as %{:kind k :where {...}} or %{:kind k :count N}"
+        }
+
+      not valid_wake?(wake) ->
+        %{"err" => "black/watch requires :wake with a non-empty :prompt"}
+
+      true ->
+        payload =
+          %{
+            "when" => stringify(when_pred),
+            "wake" => normalize_wake(wake, session_id),
+            "once" => once_flag(args),
+            "registered_at" => System.system_time(:millisecond)
+          }
+          |> put_if("ttl_ms", ttl_ms(args))
+
+        case Store.put(impl, Record.new(:intention, target, payload, author: session_id)) do
+          {:ok, stored} ->
+            %{"id" => stored.seq, "region" => target, "watching" => payload["when"]}
+
+          {:error, :sealed} ->
+            %{"err" => "region #{inspect(target)} is sealed; no further posts"}
+        end
+    end
+  end
+
+  # A :when predicate is the where-form (%{kind, where}) or the threshold form
+  # (%{kind, count}); kind is optional in both (nil kind = match any kind).
+  defp valid_when?(w) when is_map(w) do
+    has_where = is_map(get(w, ["where"]))
+    has_count = is_integer(get(w, ["count"]))
+    has_kind = not is_nil(get(w, ["kind"]))
+    has_where or has_count or has_kind
+  end
+
+  defp valid_when?(_), do: false
+
+  defp valid_wake?(w) when is_map(w) do
+    case get(w, ["prompt"]) do
+      p when is_binary(p) and p != "" -> true
+      _ -> false
+    end
+  end
+
+  defp valid_wake?(_), do: false
+
+  # The wake payload handed to Clock on fire: prompt (+ optional budget), with
+  # session_id defaulting to the registering session so the wake continues THIS
+  # conversation unless the agent targets another.
+  defp normalize_wake(wake, session_id) do
+    base = %{"prompt" => get(wake, ["prompt"]), "session_id" => get(wake, ["session_id"]) || session_id}
+    case get(wake, ["budget"]) do
+      b when is_map(b) -> Map.put(base, "budget", stringify(b))
+      _ -> base
+    end
+  end
+
+  # :once defaults TRUE (retire after first fire); explicit false re-fires.
+  defp once_flag(args) do
+    case get(args, ["once"]) do
+      false -> false
+      _ -> true
+    end
+  end
+
+  defp ttl_ms(args) do
+    case get(args, ["ttl_ms"]) do
+      n when is_integer(n) and n > 0 -> n
+      _ -> nil
     end
   end
 

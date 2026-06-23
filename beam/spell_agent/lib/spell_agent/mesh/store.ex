@@ -47,6 +47,11 @@ defmodule SpellAgent.Mesh.Store do
       stored = %{rec | seq: seq}
       :ok = Store.put(impl, {:mesh, region, seq}, stored)
       maybe_index_content(impl, stored)
+      # A3 (FEAT-021): announce the post so the single-node Mesh.Watcher can eval
+      # registered :intention predicates and fire a condition-fused self-wake. The
+      # event carries the stored record + its region; emit is best-effort (a
+      # handler failure can never fail the write — :telemetry isolates handlers).
+      :telemetry.execute([:spell, :mesh, :post], %{seq: seq}, %{region: region, record: stored})
       {:ok, stored}
     end
   end
