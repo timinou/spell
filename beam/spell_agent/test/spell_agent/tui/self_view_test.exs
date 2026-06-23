@@ -442,15 +442,28 @@ defmodule SpellAgent.Tui.SelfViewTest do
       assert_received {:child, {:ok, %{renders: 1}}}
     end
 
-    test "a charged pid's budget is dropped when the process exits (self-cleaning)" do
-      {pid, ref} = spawn_monitor(fn -> Budget.charge("ephemeral") end)
-      assert_receive {:DOWN, ^ref, :process, ^pid, _}, 1000
-      # Give the budget's own :DOWN handler a beat, then prove a NEW process at no
-      # cost reuse: we can't reuse the dead pid, but we CAN assert the budget did
-      # not accumulate unbounded — the dead pid's entry is gone. A fresh charge for
-      # a brand-new pid starts at 1 (covered above); here we assert the registry
-      # survived the monitored exit without crashing.
-      assert {:ok, %{renders: _}} = Budget.charge("after-down")
+    test "a charged pid's budget entry is removed when the process exits (self-cleaning)" do
+      # Charge from a child that STAYS ALIVE so its entry is observable in the
+      # budget's state, then kill it and prove the :DOWN handler actually DELETED
+      # the entry — not merely that the GenServer survived.
+      parent = self()
+
+      child =
+        spawn(fn ->
+          Budget.charge("held")
+          send(parent, :charged)
+          receive do: (:stop -> :ok)
+        end)
+
+      assert_receive :charged, 1000
+      assert Map.has_key?(:sys.get_state(Budget), child)
+
+      ref = Process.monitor(child)
+      send(child, :stop)
+      assert_receive {:DOWN, ^ref, :process, ^child, _}, 1000
+
+      # The budget's :DOWN handler is async; poll until the entry is gone.
+      assert eventually(fn -> not Map.has_key?(:sys.get_state(Budget), child) end)
     end
 
     test "view/think surfaces a renders count on a normal render", %{think: think} do
@@ -475,6 +488,53 @@ defmodule SpellAgent.Tui.SelfViewTest do
       assert %{"buffer" => _} = think.(%{"name" => "trace-summary"})
       assert %{"buffer" => _, "note" => note} = think.(%{"name" => "trace-summary"})
       assert note =~ "fixpoint"
+    end
+
+    test "the budget is charged to the BUILD-TIME owner pid, not the call-time pid" do
+      # This is the P1 fix: view/think runs in a transient PTC sandbox process per
+      # turn, so it MUST charge the mission pid captured when tools/0 was built —
+      # not self() at call time. Build the closure in a dedicated owner process,
+      # then invoke it from DIFFERENT processes: every render must accumulate on the
+      # owner's budget, so two calls from two different pids reach renders 1 then 2.
+      owner =
+        spawn(fn ->
+          receive do
+            {:build, reply} ->
+              send(reply, {:tool, SelfView.tools()["view/think"]})
+              receive do: (:stop -> :ok)
+          end
+        end)
+
+      Budget.reset(owner)
+      send(owner, {:build, self()})
+      assert_receive {:tool, think}, 1000
+
+      # Invoke from two distinct transient processes (mimicking per-turn sandboxes).
+      r1 = Task.async(fn -> think.(%{"name" => "tool-calls"}) end) |> Task.await()
+      r2 = Task.async(fn -> think.(%{"name" => "errors-board"}) end) |> Task.await()
+
+      # Different idioms -> different buffers -> no fixpoint; the counts accumulate
+      # on the OWNER's budget despite the two calls coming from different pids.
+      assert %{"renders" => 1} = r1
+      assert %{"renders" => 2} = r2
+
+      send(owner, :stop)
+    end
+  end
+
+  # Poll a 0-arity predicate until it returns true or the attempts run out (the
+  # budget's :DOWN cleanup is async, so a state assertion must give it a beat).
+  defp eventually(pred, attempts \\ 50) do
+    cond do
+      pred.() ->
+        true
+
+      attempts <= 0 ->
+        false
+
+      true ->
+        Process.sleep(2)
+        eventually(pred, attempts - 1)
     end
   end
 

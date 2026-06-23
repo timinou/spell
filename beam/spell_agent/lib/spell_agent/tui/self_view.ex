@@ -143,13 +143,23 @@ defmodule SpellAgent.Tui.SelfView do
   """
   @spec tools() :: %{optional(String.t()) => (map() -> term())}
   def tools do
+    # Capture the OWNER pid at build time. `tools/0` is called by
+    # `Tools.build_tools_map/0` inside `Session.run/1`, which runs in the MISSION
+    # Task process — so `self()` here is the mission pid: stable across every turn
+    # of this mission, fresh per mission. The `view/think` closure itself runs in
+    # a TRANSIENT per-program PTC sandbox process (`PtcRunner.Sandbox.execute`
+    # spawns a fresh process per `Lisp.run`), so charging the budget against the
+    # sandbox's `self()` would reset every turn and the loop cap would never bite.
+    # Closing over the mission pid is what makes the cross-turn render budget real.
+    owner = self()
+
     %{
       "view/think" => fn args ->
         width = strget(args, "width")
         height = strget(args, "height")
 
         case resolve_node(args) do
-          {:ok, node} -> think_to_tool(node, width, height)
+          {:ok, node} -> think_to_tool(node, width, height, owner)
           {:error, msg} -> %{"err" => msg}
         end
       end
@@ -193,7 +203,7 @@ defmodule SpellAgent.Tui.SelfView do
   # a loop, and a loop can spin. Charging the budget BEFORE returning a buffer lets
   # a runaway self-view loop be cut deterministically (over-budget → %{err}) and a
   # stable view be flagged (fixpoint → a note), per the PROJ-001 security note.
-  defp think_to_tool(node, width, height) do
+  defp think_to_tool(node, width, height, owner) do
     opts =
       [store: @default_store]
       |> maybe_put(:width, width)
@@ -201,7 +211,7 @@ defmodule SpellAgent.Tui.SelfView do
 
     case render(node, opts) do
       {:ok, %{buffer: buffer, width: w, height: h}} ->
-        guard_render(buffer, w, h)
+        guard_render(buffer, w, h, owner)
 
       {:error, :empty_render} ->
         %{
@@ -219,10 +229,10 @@ defmodule SpellAgent.Tui.SelfView do
   # HARD cut (no buffer, an %{err} naming the cap); a fixpoint (same buffer as the
   # previous render) is a SOFT signal (the buffer plus a "note") so the agent knows
   # re-rendering an unchanged view teaches it nothing new.
-  defp guard_render(buffer, w, h) do
+  defp guard_render(buffer, w, h, owner) do
     base = %{"buffer" => buffer, "width" => w, "height" => h}
 
-    case Budget.charge(buffer) do
+    case Budget.charge(buffer, owner) do
       {:ok, %{renders: n}} ->
         Map.put(base, "renders", n)
 
