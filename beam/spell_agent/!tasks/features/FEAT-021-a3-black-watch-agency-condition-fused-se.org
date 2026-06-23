@@ -1,8 +1,9 @@
 #+TITLE: A3: black/watch (agency) — condition-fused self-wake on the blackboard, single-node, Clock-backed
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 1514dbb097c44599
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-23T20-43-40-511Z_1514dbb097c44599.jsonl]]
 #+CUSTOM_ID: FEAT-021-a3-black-watch-agency-condition-fused-se
+#+COMPLETION_HASH: 2360542b20ca622b
 
 * Initial Message
 
@@ -153,3 +154,5 @@ the mind wakes with the watch's prompt, in its session, with its full toolset.
   predicate-eval + wake-scheduling is that work's reusable single-node core.
 - Pairs with: A1 SelfStore (FUP-015) — a watch's wake prompt often reads
   self/intentions; A4 (FUP-016) — a rested executive loop wakes on a watch.
+
+NOTE [2026-06-23]: Shipped (3 waves). w1: Mesh.Store emits [:spell,:mesh,:post] telemetry; black/watch replaced its stub with a real durable :intention post (when/wake/once/ttl, validated, cap-gated). w2: SpellAgent.Mesh.Watcher GenServer — tails the post stream, evals where-form + count-threshold predicates via Mesh.Store.by_match, fires an immediate Clock wake (in:0) on match, retires on once/ttl. w3: supervised after Clock; `enabled?` gate (per-instance opt > app config > default-on) keeps the default Watcher OFF in :test so it cannot fire the default Clock->real run/2 off the shared test store. 11 watch tests + updated namespace stub test; 93 green in the mesh+clock+session sweep. README updated. Single-node agency core; FEAT-013 generalizes to multi-node claim-dedup + inline :do. Commits 1f3cc69a4..HEAD.

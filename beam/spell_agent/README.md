@@ -247,6 +247,32 @@ SpellAgent.Clock.pending()
 #=> %{"wakes" => [...], "dropped" => 0, "fired" => 0}
 ```
 
+### Condition-fused wakes: `black/watch` (A3, FEAT-021)
+
+`clock/at` fires on a *time* fuse; `black/watch` fires on a *condition* fuse — a
+record posted to the stigmergic blackboard. Both detonate the **same charge**: a
+Clock wake re-entering `run/2`. So the mind acts in response to events no human
+relayed, and there is still exactly one detonator (the Clock) with one wake budget.
+
+```clojure
+;; wake me when a sibling posts a finished finding to my region
+(tool/black/watch
+  {:when {:kind "finding" :where {:status "done"}}
+   :wake {:prompt "A sibling finished; fold the region and decide my next step."}
+   :ttl_ms 3600000})
+
+;; fan-in: wake me once THREE findings exist
+(tool/black/watch {:when {:kind "finding" :count 3}
+                   :wake {:prompt "Three findings are in; black/fold and summarize."}})
+```
+
+`black/watch` registers a durable `:intention` on the blackboard; the per-node
+`SpellAgent.Mesh.Watcher` tails mesh writes and, on a matching `black/post`,
+schedules an immediate Clock wake. A `:once` watch (default) retires after firing;
+`:ttl_ms` bounds a never-satisfied watch; the Clock budget bounds a cascade. This
+is the single-node, agency core of the watcher — the full distributed engine
+(per-node claim-deduped exactly-once + inline actions) is FEAT-013.
+
 ## Tests
 
 ```sh
