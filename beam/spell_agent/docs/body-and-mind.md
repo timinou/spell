@@ -43,6 +43,14 @@ reachable from Elixir that isn't an entry in that map.** Today `sh`, `view/`,
 feature: *did it land as a map entry, or as a special case the mind can't name?*
 If the latter, the cage grew.
 
+> **Realized (A2, PLAN-014):** the first of these organs now exists —
+> `SpellAgent.Clock`, a Khepri-durable self-wake scheduler. The mind writes
+> `(tool/clock/at {:in "10m" :prompt …})` and the body re-enters `SpellAgent.run/2`
+> when the timer fires — a *synthetic caller*. It is built exactly as this doc
+> argues: a wake is persisted + rehydrated like a durable tool, and a body-enforced
+> **wake budget** makes the rope safe (a runaway schedule throttles, never
+> crashes). See the README "Agency" section. A3/A4/A6 (FEAT-013/011) compose on it.
+
 **2. Effects as data, not as the body's secret.** The body owns IO, the NIF, the
 network, the clock — it *must*, that's what a body is. Freedom isn't the mind
 doing IO directly (that's not freedom, that's removing the sandbox). Freedom is

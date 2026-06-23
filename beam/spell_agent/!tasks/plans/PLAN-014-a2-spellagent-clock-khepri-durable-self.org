@@ -6,6 +6,17 @@
 
 * Initial Message
 
+#+begin_comment
+STATUS 2026-06-23: SHIPPED (waves 1-4). {:clock,id} store kind (behaviour +
+Memory + Khepri); SpellAgent.Clock GenServer + Clock.Wake (at/every/cancel/
+pending, rehydrate-on-boot, fire-as-synthetic-caller, wake-budget w/ backoff);
+Clock.Namespace clock/* verbs merged into Session.run; supervised after the
+Hist store. Tests: 15 clock_test + 9 clock_namespace_test + 1 store clock-kind
+contract, all green (35 in the combined sweep incl. session). README "Agency"
+section + body-and-mind.md cross-link. Downstream A3=FEAT-013, A4/A6=FEAT-011
+noted to reuse this Clock's wake machinery.
+#+end_comment
+
 Spell is an agent that can think about itself, and modify all aspects of itself, through code.
 Spell's live environment gives its runtime a life.
 

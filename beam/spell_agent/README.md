@@ -195,6 +195,58 @@ SpellAgent.ToolRegistry.all() |> Enum.map(& &1.name)
 The agent authored a tool that did not exist when the session started, stored it
 as data, and invoked it — the self-coding loop, working.
 
+## Agency: the self-wake scheduler (A2, PLAN-014)
+
+The agent loop is otherwise purely reactive — a human hands `SpellAgent.run/2` a
+prompt, the mind runs a bounded loop, returns, and goes dark. `SpellAgent.Clock`
+is the first **agency organ**: the mind schedules its own future awakening, and
+when the timer fires the Clock **re-enters `SpellAgent.run/2` on the mind's
+behalf**. A fired wake is a *synthetic caller* — the keystone the rest of the
+agency ladder composes on (A3 `black/watch` swaps the time-fuse for a
+condition-fuse; A4 `loop/continue` lets the mind author its own next prompt; A6
+`self/spawn` aims a wake at a child session). See `docs/body-and-mind.md` for the
+body/mind freedom argument this realizes.
+
+Four `clock/*` verbs are merged into the agent's tool map (beside `hist/*` and
+`black/*`), so the mind schedules itself in the language it thinks in:
+
+```clojure
+;; one-shot: wake me in 10 minutes to advance a goal
+(tool/clock/at {:in "10m" :prompt "Re-read my open goals; advance the oldest one step."})
+
+;; repeating: sweep for stuck work every hour, with a turn budget
+(tool/clock/every {:every "1h"
+                   :prompt "Sweep the mesh for stuck goals; summarize."
+                   :budget {:turns 20}})
+
+;; introspect + cancel
+(tool/clock/pending {})              ;; => {"wakes" [...] "dropped" 0 "fired" 3}
+(tool/clock/cancel {:id "wake-..."})
+```
+
+`:in` / `:at` / `:every` accept a ms integer or a duration string (`"500ms"`,
+`"90s"`, `"10m"`, `"2h"`, `"1d"`). A wake defaults to running in the **calling
+session** (override with `:session_id` to wake a different conversation). The
+optional `:budget` (`{:turns N :cost_ceiling F}`) is threaded into the woken
+`run/2` and clamped to a body ceiling the mind cannot raise.
+
+**Durable + safe by construction.** A wake is persisted to `Hist.Store` at
+`{:clock, id}` and **rehydrated + re-armed on boot** (same projection pattern as
+the durable tool registry), so a wake scheduled in a prior sitting fires again —
+on `Store.Khepri`, even across a BEAM restart. A **wake budget** caps fires per
+rolling window: a runaway `clock/every` is throttled (it backs off to the budget
+rate, records the drop, and **never crashes the scheduler**). This is the body
+buying the mind more rope by making each rope safe — the mind is free to
+self-schedule *because* the schedule provably cannot run away.
+
+```elixir
+# drive the scheduler directly (the verbs wrap these)
+SpellAgent.Clock.at(%{"in" => "10m", "prompt" => "check goals"})
+#=> %{"ok" => true, "id" => "wake-…", "fire_at" => 1750000000000}
+SpellAgent.Clock.pending()
+#=> %{"wakes" => [...], "dropped" => 0, "fired" => 0}
+```
+
 ## Tests
 
 ```sh
@@ -205,7 +257,9 @@ mix test --include live  # also hits the real subscription + network
 ## Status (v0)
 
 Shipped: credential read, subscription adapter (live-proven), homoiconic tool
-registry + `define-tool`/`define-config`/`list-tools`, SubAgent wire-up, REPL.
+registry + `define-tool`/`define-config`/`list-tools`, SubAgent wire-up, REPL,
+and the A2 self-wake scheduler (`SpellAgent.Clock` + `clock/*` verbs — durable,
+budget-bounded; the first agency organ, PLAN-014).
 
 Deferred (follow-ups): OAuth refresh-token grant (token is 1-year, not yet
 needed); durable persistence of defined tools (org/memory stored programs);
