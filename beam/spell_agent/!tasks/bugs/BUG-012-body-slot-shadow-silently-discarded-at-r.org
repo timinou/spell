@@ -1,5 +1,5 @@
 #+TITLE: Body-slot shadow silently discarded at render (BUG-007 incomplete)
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 1514e1cb0e0b8cdc
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-23T21-10-20-472Z_1514e1cb0e0b8cdc.jsonl]]
 #+CUSTOM_ID: BUG-012-body-slot-shadow-silently-discarded-at-r
@@ -88,3 +88,57 @@ most-documented operation. Its regression test cements the blind spot.
 - Repro before fix: body shadow → =body_pane_slots == []= → gate false → not in
   =App.render= output (confirmed via mix run).
 - After fix: agent body shadow appears in =App.render= output; full suite green.
+
+* Resolution (DONE)
+
+Fixes A-E all landed in commit c9baa84e2 (fix(tui): freeform layout).
+
+** A — adoption gate (the bug)
+`App.live_layout_tree/1` now keys on the registry's FROZEN pane identity
+(`LayoutRegistry.pane_identity/0`), captured at seed time, read atomically with
+the tree via `tree_with_identity/0`. A body reshape drops the body's child slots
+but cannot move the frozen identity, so the reshaped body is adopted. The old
+gate recomputed `body_pane_slots/1` of the live tree (= [] after a view/split
+reshape) and discarded everything.
+
+** B — honest layout/set
+`LayoutRegistry.set/2` rejects with `{:error, {:not_adoptable, slot}}` when the
+registry's frozen identity is [] (unseeded → the App gate can never adopt → any
+shadow is futile). The `layout/set` tool surfaces an err map naming the reason,
+instead of a hollow ok. `adoptable?/0` is the self-check.
+
+** C — screen-peek tool
+New `SpellAgent.Tui.RenderProbe` + `layout/render` tool: renders a slot or node
+to an ASCII buffer (re-renders standalone on a headless terminal; faithful for
+view/* trees, pane nodes preview empty). Wired into `Tools.freeform_tools/0`.
+
+** D — discard log
+`live_layout_tree/1` logs the pane-identity mismatch instead of silently
+falling back.
+
+** E — prompt
+`freeform_tui.md`: documents `layout/render`, adds 'see it before you trust it'
+(verify a set with a peek), and states body reshaping is fully supported.
+
+* Verification
+
+- Repro before fix (mix run): body shadow → body_pane_slots == [] → gate false →
+  not in App.render output.
+- After fix: regression test "BUG-012: an agent shadow on the BODY slot survives
+  the render-adoption gate" asserts BODY-RESHAPED-PANEL reaches App.render output;
+  "layout/set on an unseeded registry rejects honestly" pins fix B; 13 RenderProbe
+  tests pin fix C.
+- Test pollution found + fixed: the new + pre-existing BUG-007/008 tests reshape
+  the shared supervised LayoutRegistry; added `restore_layout_registry/0` on_exit
+  so a later cross-file render test no longer adopts a leftover tree.
+- TUI suite: 369/370 green. 79/79 across the touched files.
+
+* Known unrelated failure (NOT this bug)
+
+`test/spell_agent/tui/llm_terminal_test.exs:95` fails on a STALE golden
+transcript: the baseline `test/snapshots/llm/answer_42.transcript` has 0
+`history` references — it was committed before the History pane was added to
+`@default_panes` (which is at HEAD, untouched by this fix). Proven independent:
+the current render shows 3 panes (history+spans+detail), the baseline shows 2.
+Regenerating that golden is a separate concern (AGENTS.md: golden regen needs
+review) and is entangled with concurrent-session WIP. Left untouched.
