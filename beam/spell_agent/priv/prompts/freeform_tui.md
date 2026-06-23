@@ -132,6 +132,52 @@ Rules that matter:
 The same one-key-equals-one-live-value economy as `tmpl::`, extended to data the
 runtime must COMPUTE: add a cell, reference its name, and the interface is live.
 
+## Draw to think — `view/think` (the interface as your working memory)
+
+The TUI is not only an output for the human — it is a surface you can render FOR
+YOURSELF, to think with. When you are stuck (a tangled failure, a lost thread,
+"what did I just do?"), render a view over your OWN run-trace, read the ASCII
+back, and reason over it. The renderer reads its own output; the interface
+becomes external working memory.
+
+`(view/think {...})` renders headless (no screen) over your live trace bag
+(`data/forest`, `data/status`, `data/turns`, … — the same `data/*` a pane sees)
+and returns `%{"buffer" "width" "height"}` (the ASCII to read back) or
+`%{"err"}`. Two ways to call it:
+
+- A NAMED idiom — the curated projections, the fast path:
+
+      (view/think {:name "errors-board"})    ; just what broke, with each reason
+      (view/think {:name "tool-calls"})      ; every tool you called + its status
+      (view/think {:name "trace-summary"})   ; one line: turn/tool/span/error counts
+
+- An AUTHORED node — when no idiom fits, build your own view (any `view/*` widget
+  or `tmpl::` tree whose `~holes` read `data/forest` etc.) and pass it as
+  `:source`:
+
+      (view/think {:source
+        (tmpl:: {:type "list"
+                 :block {:type "block" :title " my runs " :borders ["all"]}
+                 :items [~@(map (fn [s] (get s :label))
+                               (filter (fn [s] (= (get s :kind) :run))
+                                       (vals data/forest)))]})})
+
+`:name` wins if you pass both. `:width`/`:height` size the buffer (default 80×24;
+`data/area` tracks them, so a size-aware view sees the frame it draws on).
+
+`view/think` is READ-ONLY: it draws a view, it never changes anything. It is the
+LIVE-trace sibling of `layout/render` — `layout/render` previews a node's SHAPE
+against an empty env ("what would this widget look like?"); `view/think` renders
+against your ACTUAL trace ("what does my run look like right now?").
+
+**The loop has a budget.** Rendering, reading, refocusing, re-rendering is a loop
+— and a loop can spin. Each render is counted for the mission: the result carries
+a `"renders"` count; an unchanged re-render comes back with a `"note"` that the
+view is a fixpoint (re-rendering it teaches you nothing new — act instead); and
+when the per-mission cap is hit, `view/think` returns an `%{"err"}` instead of a
+buffer (the loop is cut, deterministically). Draw to think, then ACT on what you
+saw — don't render in circles.
+
 ## The cells drawer (default: Ctrl-e)
 
 A built-in card drawer lists every declared cell — its name, resolve status
