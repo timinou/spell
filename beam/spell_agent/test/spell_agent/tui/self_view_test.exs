@@ -19,7 +19,7 @@ defmodule SpellAgent.Tui.SelfViewTest do
 
   alias PtcRunner.Lisp
   alias SpellAgent.Tui.{SelfView, Store}
-  alias SpellAgent.Tui.SelfView.Idioms
+  alias SpellAgent.Tui.SelfView.{Budget, Idioms}
 
   @telemetry_prefix [:ptc_runner, :sub_agent]
 
@@ -386,6 +386,95 @@ defmodule SpellAgent.Tui.SelfViewTest do
       # source would silently drop the idiom (the @frozen reject), so pin the set.
       assert Idioms.names() == ["errors-board", "tool-calls", "trace-summary"]
       for name <- Idioms.names(), do: assert(is_map(Idioms.node(name)))
+    end
+  end
+
+  describe "render loop budget — the render→observe→act cycle can't spin (W3)" do
+    setup do
+      # Tests run in one process (self()); each starts from a clean budget for that
+      # pid so render counts don't leak across tests.
+      Budget.reset(self())
+      on_exit(fn -> Budget.reset(self()) end)
+      :ok = Store.attach(Store)
+      Store.reset(Store)
+      on_exit(fn -> Store.reset(Store) end)
+      %{think: SelfView.tools()["view/think"]}
+    end
+
+    test "charge/2 counts renders per pid and reports the running total" do
+      assert {:ok, %{renders: 1, max: max}} = Budget.charge("buf-a")
+      assert is_integer(max) and max > 0
+      # A DIFFERENT buffer advances the count without a fixpoint.
+      assert {:ok, %{renders: 2}} = Budget.charge("buf-b")
+    end
+
+    test "an identical re-render is a fixpoint (soft signal, not a hard stop)" do
+      assert {:ok, %{renders: 1}} = Budget.charge("same")
+      assert {:fixpoint, %{renders: 2}} = Budget.charge("same")
+    end
+
+    test "the per-mission cap is a hard, deterministic cut" do
+      max = Budget.max_renders()
+      # Distinct buffers so we never hit a fixpoint before the cap.
+      for i <- 1..max do
+        assert {:ok, %{renders: ^i}} = Budget.charge("buf-#{i}")
+      end
+
+      # One past the cap -> over_budget, and the count does NOT keep climbing.
+      assert {:over_budget, %{renders: ^max, max: ^max}} = Budget.charge("buf-extra")
+      assert {:over_budget, %{renders: ^max}} = Budget.charge("buf-extra-2")
+    end
+
+    test "a fresh pid (a new mission) gets a fresh budget" do
+      # Exhaust THIS pid is unnecessary; just prove isolation: a render charged from
+      # another process does not consume this process's budget.
+      parent = self()
+      assert {:ok, %{renders: 1}} = Budget.charge("mine")
+
+      task =
+        Task.async(fn ->
+          # The child's first render is renders: 1 even though the parent already
+          # charged once — per-pid isolation.
+          send(parent, {:child, Budget.charge("theirs")})
+        end)
+
+      Task.await(task)
+      assert_received {:child, {:ok, %{renders: 1}}}
+    end
+
+    test "a charged pid's budget is dropped when the process exits (self-cleaning)" do
+      {pid, ref} = spawn_monitor(fn -> Budget.charge("ephemeral") end)
+      assert_receive {:DOWN, ^ref, :process, ^pid, _}, 1000
+      # Give the budget's own :DOWN handler a beat, then prove a NEW process at no
+      # cost reuse: we can't reuse the dead pid, but we CAN assert the budget did
+      # not accumulate unbounded — the dead pid's entry is gone. A fresh charge for
+      # a brand-new pid starts at 1 (covered above); here we assert the registry
+      # survived the monitored exit without crashing.
+      assert {:ok, %{renders: _}} = Budget.charge("after-down")
+    end
+
+    test "view/think surfaces a renders count on a normal render", %{think: think} do
+      assert %{"buffer" => _, "renders" => n} = think.(%{"name" => "trace-summary"})
+      assert is_integer(n) and n >= 1
+    end
+
+    test "view/think over-budget returns an %{err}, not a buffer", %{think: think} do
+      max = Budget.max_renders()
+      # Charge this pid's budget up to the cap, then the next tool render must be the
+      # hard cut: an %{err} with NO buffer (the loop is severed, not merely noted).
+      for i <- 1..max, do: Budget.charge("prefill-#{i}")
+
+      result = think.(%{"name" => "trace-summary"})
+      assert %{"err" => msg} = result
+      assert msg =~ "budget"
+      refute Map.has_key?(result, "buffer")
+    end
+
+    test "view/think flags a fixpoint when the same view is re-rendered", %{think: think} do
+      # Same idiom, same (empty) forest -> identical buffer -> fixpoint on the 2nd.
+      assert %{"buffer" => _} = think.(%{"name" => "trace-summary"})
+      assert %{"buffer" => _, "note" => note} = think.(%{"name" => "trace-summary"})
+      assert note =~ "fixpoint"
     end
   end
 

@@ -50,7 +50,7 @@ defmodule SpellAgent.Tui.SelfView do
   """
 
   alias SpellAgent.Tui.{DataBag, RenderProbe}
-  alias SpellAgent.Tui.SelfView.Idioms
+  alias SpellAgent.Tui.SelfView.{Budget, Idioms}
 
   @default_store SpellAgent.Tui.Store
 
@@ -188,6 +188,11 @@ defmodule SpellAgent.Tui.SelfView do
   # Render an agent-authored node over the live self-bag and shape the result for
   # the tool surface (string-keyed map / %{"err"}). `width`/`height` may be nil
   # (use defaults), an integer, or a string (normalize_dim handles all three).
+  #
+  # The render is GUARDED by the loop budget (W3): the render→observe→act cycle is
+  # a loop, and a loop can spin. Charging the budget BEFORE returning a buffer lets
+  # a runaway self-view loop be cut deterministically (over-budget → %{err}) and a
+  # stable view be flagged (fixpoint → a note), per the PROJ-001 security note.
   defp think_to_tool(node, width, height) do
     opts =
       [store: @default_store]
@@ -196,7 +201,7 @@ defmodule SpellAgent.Tui.SelfView do
 
     case render(node, opts) do
       {:ok, %{buffer: buffer, width: w, height: h}} ->
-        %{"buffer" => buffer, "width" => w, "height" => h}
+        guard_render(buffer, w, h)
 
       {:error, :empty_render} ->
         %{
@@ -207,6 +212,35 @@ defmodule SpellAgent.Tui.SelfView do
 
       {:error, reason} ->
         %{"err" => "view/think failed: #{format_reason(reason)}"}
+    end
+  end
+
+  # Charge the loop budget for this render and shape the result. Over budget is a
+  # HARD cut (no buffer, an %{err} naming the cap); a fixpoint (same buffer as the
+  # previous render) is a SOFT signal (the buffer plus a "note") so the agent knows
+  # re-rendering an unchanged view teaches it nothing new.
+  defp guard_render(buffer, w, h) do
+    base = %{"buffer" => buffer, "width" => w, "height" => h}
+
+    case Budget.charge(buffer) do
+      {:ok, %{renders: n}} ->
+        Map.put(base, "renders", n)
+
+      {:fixpoint, %{renders: n}} ->
+        base
+        |> Map.put("renders", n)
+        |> Map.put(
+          "note",
+          "this view is unchanged from your last render — a fixpoint; " <>
+            "re-rendering it will not show anything new"
+        )
+
+      {:over_budget, %{renders: n, max: max}} ->
+        %{
+          "err" =>
+            "view/think render budget exhausted (#{n}/#{max} this mission); " <>
+              "the render→observe loop was cut to protect the turn budget"
+        }
     end
   end
 

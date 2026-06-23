@@ -79,7 +79,12 @@ defmodule SpellAgent.Application do
       # Reactive cells (PROJ-004): declared read-only data dependencies the slow
       # clock resolves off-frame and the data bag merges into data/*. Session-
       # global, same posture as the sibling registries.
-      SpellAgent.Tui.Cell.Registry
+      SpellAgent.Tui.Cell.Registry,
+      # The L−1 self-view render loop guard (PLAN-016 W3): per-mission render
+      # accounting (iteration cap + fixpoint detection) so the render→observe→act
+      # cycle can't spin. Self-cleaning via pid monitors. Same posture as the
+      # sibling registries.
+      SpellAgent.Tui.SelfView.Budget
     ]
 
     opts = [strategy: :one_for_one, name: SpellAgent.Supervisor]
