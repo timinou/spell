@@ -1,6 +1,9 @@
 # spell_agent — Agent Notes
 
-Node-free coding agent on the BEAM. See `README.md` for architecture and
+Spell is an agent that can think about itself, and modify all aspects of itself, through code.
+Spell's live environment gives its runtime a life.
+
+See `README.md` for architecture and
 `docs/` for the freeform-TUI design + philosophy.
 
 # Principles
