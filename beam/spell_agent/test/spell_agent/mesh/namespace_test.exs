@@ -157,11 +157,25 @@ defmodule SpellAgent.Mesh.NamespaceTest do
   end
 
   describe "stubs" do
-    test "watch and decide return a clear not-yet-wired error" do
-      assert %{"err" => w} = call("s", "reg", "black/watch", %{})
-      assert w =~ "FEAT-013"
+    test "decide returns a clear not-yet-wired error (FEAT-012)" do
       assert %{"err" => d} = call("s", "reg", "black/decide", %{})
       assert d =~ "FEAT-012"
+    end
+
+    test "watch is LIVE (A3, FEAT-021) — validates rather than stubbing" do
+      # black/watch is no longer a stub: an empty call is rejected for a missing
+      # :when (not a not-yet-wired message), and a well-formed call registers.
+      assert %{"err" => w} = call("s", "reg", "black/watch", %{})
+      assert w =~ ":when"
+      refute w =~ "FEAT-013"
+
+      assert %{"id" => id} =
+               call("s", "reg", "black/watch", %{
+                 "when" => %{"kind" => "finding"},
+                 "wake" => %{"prompt" => "go"}
+               })
+
+      assert is_integer(id)
     end
   end
 

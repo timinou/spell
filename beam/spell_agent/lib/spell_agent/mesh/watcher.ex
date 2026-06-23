@@ -78,15 +78,35 @@ defmodule SpellAgent.Mesh.Watcher do
 
   @impl GenServer
   def init(opts) do
-    store = Keyword.get(opts, :store, Hist.default_store())
-    clock = Keyword.get(opts, :clock, Clock)
+    if enabled?(opts) do
+      store = Keyword.get(opts, :store, Hist.default_store())
+      clock = Keyword.get(opts, :clock, Clock)
 
-    # A unique handler id so multiple Watchers (e.g. in async:false tests) attach
-    # without colliding, and each detaches its own handler on terminate.
-    handler_id = {__MODULE__, self()}
-    :telemetry.attach(handler_id, @event, &__MODULE__.handle_event/4, %{pid: self()})
+      # A unique handler id so multiple Watchers (e.g. in async:false tests) attach
+      # without colliding, and each detaches its own handler on terminate.
+      handler_id = {__MODULE__, self()}
+      :telemetry.attach(handler_id, @event, &__MODULE__.handle_event/4, %{pid: self()})
 
-    {:ok, %{store: store, clock: clock, handler_id: handler_id, fired: 0}}
+      {:ok, %{store: store, clock: clock, handler_id: handler_id, fired: 0}}
+    else
+      # Disabled (e.g. the :test env): do not attach, do not fire. A black/watch
+      # still POSTS its durable intention; it just is not detonated here. This is
+      # the load-bearing safety gate — the app-supervised default Watcher must NOT
+      # fire real run/2 missions off blackboard data written by the test suite
+      # (which shares the default Memory store). Tests start their OWN named
+      # Watcher with `enabled: true` against an injected Clock + fake runner.
+      :ignore
+    end
+  end
+
+  # Start unless explicitly disabled. Per-instance `:enabled` opt wins; else the
+  # app config (`config :spell_agent, SpellAgent.Mesh.Watcher, enabled: false`),
+  # defaulting ON. Mirrors KhepriBoot's config-gated `:ignore` posture.
+  defp enabled?(opts) do
+    case Keyword.fetch(opts, :enabled) do
+      {:ok, v} -> v
+      :error -> Application.get_env(:spell_agent, __MODULE__, [])[:enabled] != false
+    end
   end
 
   @impl GenServer
@@ -94,6 +114,8 @@ defmodule SpellAgent.Mesh.Watcher do
     :telemetry.detach(handler_id)
     :ok
   end
+
+  def terminate(_reason, _state), do: :ok
 
   @impl GenServer
   def handle_info({:mesh_post, region, record}, state) do

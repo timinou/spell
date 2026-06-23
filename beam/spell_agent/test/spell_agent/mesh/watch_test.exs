@@ -34,7 +34,8 @@ defmodule SpellAgent.Mesh.WatchTest do
     watcher_name = :"watcher_#{System.unique_integer([:positive])}"
 
     start_supervised!(
-      {SpellAgent.Mesh.Watcher, [name: watcher_name, store: Memory, clock: clock_name]},
+      {SpellAgent.Mesh.Watcher,
+       [name: watcher_name, store: Memory, clock: clock_name, enabled: true]},
       id: watcher_name
     )
 

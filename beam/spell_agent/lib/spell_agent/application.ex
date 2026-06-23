@@ -57,6 +57,13 @@ defmodule SpellAgent.Application do
       # store -> empty schedule), so boot never depends on the store being healthy.
       # Session-global + long-lived, same posture as ToolRegistry.
       SpellAgent.Clock,
+      # The single-node condition-fuse for black/watch (A3, FEAT-021). Tails the
+      # mesh write stream ([:spell, :mesh, :post] telemetry) and, on a post that
+      # satisfies a registered :intention predicate, fires an immediate wake
+      # THROUGH the Clock above (one detonator, one wake budget) — so it is started
+      # AFTER Clock. Best-effort, session-global; boot never depends on it, and a
+      # black/watch still persists its durable intention if the watcher is absent.
+      SpellAgent.Mesh.Watcher,
       # Live keybinding overrides for the Reaction DSL (PLAN-346): runtime
       # rebinds (keymap/bind) and authored reactions (keymap/define-reaction).
       # Session-global, same posture as ToolRegistry.
