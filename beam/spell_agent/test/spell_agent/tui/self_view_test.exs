@@ -273,6 +273,20 @@ defmodule SpellAgent.Tui.SelfViewTest do
       # remove the affordance.
       assert Map.has_key?(SpellAgent.Tools.build_tools_map(), "view/think")
     end
+
+    test "the REGISTERED callable renders the live trace and never mutates the forest" do
+      # Exercise the tool exactly as the agent reaches it — by name from the live
+      # tool map — and pin the load-bearing capability claim: a self-view only ever
+      # LOOKS. Rendering must leave the forest byte-identical (read-only).
+      seed_global()
+      before = Store.spans(Store)
+
+      think = SpellAgent.Tools.build_tools_map()["view/think"]
+      assert %{"buffer" => buffer} = think.(%{"source" => forest_board_src()})
+      assert buffer =~ "THINK_SEEDED"
+
+      assert Store.spans(Store) == before
+    end
   end
 
   # The forest board as a frozen tmpl:: node (re-usable across describe blocks).
