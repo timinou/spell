@@ -337,18 +337,28 @@ defmodule SpellAgent.Tui.SelfViewTest do
       assert buffer =~ "error"
     end
 
-    test "trace-summary compresses the run to one line (counts + error tally)", %{think: think} do
+    test "trace-summary's counts are derived from the LIVE forest, not hardcoded",
+         %{think: think} do
+      # Render over an EMPTY forest first: zero tools, zero errors.
+      assert %{"buffer" => empty} = think.(%{"name" => "trace-summary"})
+      assert empty =~ "tools 0"
+      assert empty =~ "errors 0"
+
+      # Then over a mixed forest (1 error + 1 ok tool): the tally MUST move with the
+      # trace — a projection that ignored data/forest and hardcoded a suffix could
+      # not pass both states.
       seed_mixed()
-      assert %{"buffer" => buffer} = think.(%{"name" => "trace-summary"})
-      assert buffer =~ "tools"
-      assert buffer =~ "errors 1"
+      assert %{"buffer" => mixed} = think.(%{"name" => "trace-summary"})
+      assert mixed =~ "tools 2"
+      assert mixed =~ "errors 1"
     end
 
-    test "an idiom renders empty-but-valid over an empty trace (no crash)", %{think: think} do
-      # No seed: the forest is empty. A filter-based idiom must still render a
-      # valid (empty) board, never raise.
+    test "an idiom renders a valid EMPTY board over an empty trace (no crash)", %{think: think} do
+      # No seed: the forest is empty. A filter-based idiom must still render the
+      # board STRUCTURE (its titled frame), not merely 'some string' — is_binary
+      # alone would pass a blank buffer or even the wrong idiom.
       assert %{"buffer" => buffer} = think.(%{"name" => "errors-board"})
-      assert is_binary(buffer)
+      assert buffer =~ "errors"
       refute buffer =~ "BOOM_REASON"
     end
 
