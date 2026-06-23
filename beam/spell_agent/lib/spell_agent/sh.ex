@@ -28,7 +28,7 @@ defmodule SpellAgent.Sh do
       %{"exit" => 0, "out" => "…", "err" => "", "lines" => ["…", …]}
 
   `lines` is `out` split on newlines (trimmed). `json` is NOT auto-parsed; a
-  caller does `(json/parse (:out r))` when it wants structured output.
+  caller does `(json/parse-string (:out r))` when it wants structured output.
   """
 
   alias SpellAgent.BrushNif
