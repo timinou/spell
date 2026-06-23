@@ -98,14 +98,37 @@ defmodule SpellAgent.Tui.SelfView do
   """
   @spec render(term(), keyword()) :: {:ok, render_result()} | {:error, term()}
   def render(node, opts \\ []) do
-    bag = live_bag(opts)
+    width = normalize_dim(Keyword.get(opts, :width), 80)
+    height = normalize_dim(Keyword.get(opts, :height), 24)
 
-    RenderProbe.render(node,
-      width: Keyword.get(opts, :width, 80),
-      height: Keyword.get(opts, :height, 24),
-      data_env: bag
-    )
+    # data/area MUST reflect the buffer the node actually renders INTO, so a view
+    # that branches on data/area observes the same frame it is drawn on. Derive
+    # the bag's area from the (normalized) render dimensions unless the caller
+    # pinned an explicit :area. Without this, a 50×8 render would still report
+    # 80×24 in data/area — a view lying to itself about its own size.
+    area =
+      Keyword.get(opts, :area) || %ExRatatui.Layout.Rect{x: 0, y: 0, width: width, height: height}
+
+    bag = live_bag(Keyword.put(opts, :area, area))
+
+    RenderProbe.render(node, width: width, height: height, data_env: bag)
   end
 
   defp default_area, do: %ExRatatui.Layout.Rect{x: 0, y: 0, width: 80, height: 24}
+
+  # Mirror RenderProbe's dimension contract: a positive integer is honored, a
+  # binary positive integer is parsed, anything else falls back to the default —
+  # so the bag's data/area and the actual render size can never disagree.
+  defp normalize_dim(n, _default) when is_integer(n) and n > 0, do: n
+
+  defp normalize_dim(s, default) when is_binary(s) do
+    case Integer.parse(String.trim(s)) do
+      {n, ""} when n > 0 -> n
+      _ -> default
+    end
+  rescue
+    _ -> default
+  end
+
+  defp normalize_dim(_, default), do: default
 end

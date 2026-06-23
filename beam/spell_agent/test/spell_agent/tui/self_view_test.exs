@@ -102,15 +102,19 @@ defmodule SpellAgent.Tui.SelfViewTest do
       assert buffer =~ "SEEDED_TOOL"
     end
 
-    test "the buffer reflects the forest at render time (live, not static)", %{store: store} do
-      # Before any trace: the board renders empty (no labels to join).
-      {:ok, %{buffer: before_buf}} = SelfView.render(forest_board(), store: store)
+    test "the SAME pre-authored node reflects the forest at render time (live, not static)",
+         %{store: store} do
+      # Author the node ONCE, BEFORE any trace exists. If the layout path snapshots
+      # data/forest at author time, the post-seed render would still be empty — so
+      # re-authoring after seeding would mask that bug. Binding one node and
+      # rendering it twice is the honest proof of RENDER-time liveness.
+      board = forest_board()
+
+      {:ok, %{buffer: before_buf}} = SelfView.render(board, store: store)
       refute before_buf =~ "SEEDED_TOOL"
 
-      # After seeding: the SAME node now shows the new span — proving the view
-      # reads the trace live, not a snapshot captured at author time.
       seed_trace()
-      {:ok, %{buffer: after_buf}} = SelfView.render(forest_board(), store: store)
+      {:ok, %{buffer: after_buf}} = SelfView.render(board, store: store)
       assert after_buf =~ "SEEDED_TOOL"
     end
 
@@ -121,11 +125,76 @@ defmodule SpellAgent.Tui.SelfViewTest do
                SelfView.render(forest_board(), store: store, width: 50, height: 8)
     end
 
+    test "data/area tracks the render dimensions (a view sees the frame it draws on)",
+         %{store: store} do
+      # A self-view that branches on its own size must observe the SAME frame it is
+      # drawn into. render/2 derives data/area from the render dims, so a 50-wide
+      # render reports width 50 to the view — not the 80×24 default.
+      {:ok, step} =
+        Lisp.run(~S|(tmpl:: {:type "paragraph" :text ~(str "W" (get data/area :width))})|)
+
+      node = step.return
+
+      {:ok, %{buffer: sized}} = SelfView.render(node, store: store, width: 50, height: 8)
+      assert sized =~ "W50"
+
+      {:ok, %{buffer: default}} = SelfView.render(node, store: store)
+      assert default =~ "W80"
+    end
+
     test "a pane-only node (needs live app state) reports empty, never crashes", %{store: store} do
       # A bare "pane" node cannot render standalone (RenderProbe contract) — the
       # seam surfaces that as an error tuple rather than raising.
       assert {:error, :empty_render} =
                SelfView.render(%{"type" => "pane", "slot" => "tree"}, store: store)
+    end
+
+    test "a node that raises at draw time is caught, never crashes the caller", %{store: store} do
+      # The totality claim covers malformed widgets, not just empty renders: a
+      # sparkline over non-numeric data materializes but raises inside ExRatatui's
+      # draw. The seam must return an error tuple, not propagate the raise into the
+      # mission process (a self-view can never take the agent down).
+      node = %{"type" => "sparkline", "data" => ["not", "numbers"]}
+      assert {:error, {:render_failed, _message}} = SelfView.render(node, store: store)
+    end
+  end
+
+  describe "the production seam — the default global Store, no :store injected" do
+    # The mission tool that calls a self-view runs in a process that cannot capture
+    # an App pid; it reaches the forest by GLOBAL NAME (SpellAgent.Tui.Store). Every
+    # other test injects :store, so this is the ONE test that defends the actual
+    # production path: seed the NAMED global Store and render with no :store at all.
+    setup do
+      # The global Store is supervised app-wide; ensure it is attached + clean so
+      # this test's seeded trace is the only forest it sees.
+      :ok = Store.attach(Store)
+      Store.reset(Store)
+      on_exit(fn -> Store.reset(Store) end)
+      :ok
+    end
+
+    test "render/2 with no :store reads the global Store and shows its live trace" do
+      # Seed the NAMED store (default args -> SpellAgent.Tui.Store).
+      emit([:run, :start], %{span_id: "grun", parent_span_id: nil, agent_name: "root"})
+
+      emit([:tool, :start], %{
+        span_id: "gtool",
+        parent_span_id: "grun",
+        tool_name: "GLOBAL_SEEDED"
+      })
+
+      emit([:tool, :stop], %{
+        span_id: "gtool",
+        parent_span_id: "grun",
+        tool_name: "GLOBAL_SEEDED",
+        result: %{}
+      })
+
+      # Force the cast to drain before asserting (a call to the same GenServer).
+      assert map_size(Store.spans(Store)) > 0
+
+      assert {:ok, %{buffer: buffer}} = SelfView.render(forest_board())
+      assert buffer =~ "GLOBAL_SEEDED"
     end
   end
 end
