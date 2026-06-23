@@ -103,12 +103,15 @@ defmodule SpellAgent.Tui.Cell.Verb do
 
   # ---- helpers ----
 
-  # A frozen query is codec data: a map carrying a "node" tag (the quote shape),
-  # OR a hole/splice wrapper. We accept any map here and let the resolver's
-  # from_data_safe reject genuine garbage at resolve time (total + bounded); the
-  # point of THIS check is to reject obviously-wrong shapes (a string, a number,
-  # a bare keyword) with a clear authoring error.
-  defp valid_query?(q) when is_map(q), do: true
+  # A frozen query is QUOTE codec data: a map carrying a "node" tag (the shape
+  # `quote` produces), OR a hole/splice wrapper (a tmpl::-style frozen leaf). We
+  # check the shape HERE so a non-deferred query — a string, a number, or a plain
+  # map literal that is NOT codec data — is rejected with a clear authoring error
+  # at define time, rather than silently registering a cell that resolves to
+  # nothing. (W4r: the quote-required contract must be enforced, not deferred.)
+  defp valid_query?(%{"node" => _}), do: true
+  defp valid_query?(%{"__hole__" => _}), do: true
+  defp valid_query?(%{"__splice__" => _}), do: true
   defp valid_query?(_), do: false
 
   defp strget(args, key), do: Map.get(args, key) || Map.get(args, safe_atom(key))

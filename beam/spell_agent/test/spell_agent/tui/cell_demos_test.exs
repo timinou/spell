@@ -17,7 +17,7 @@ defmodule SpellAgent.Tui.CellDemosTest do
 
   alias PtcRunner.Lisp
   alias SpellAgent.Tui.{DataBag, HoleResolver}
-  alias SpellAgent.Tui.Cell.{Clock, Registry, Tools, Verb}
+  alias SpellAgent.Tui.Cell.{Clock, Registry, Verb}
   alias SpellAgent.Tui.Store.Span
   alias SpellAgent.Tui.Ui
 
@@ -95,16 +95,23 @@ defmodule SpellAgent.Tui.CellDemosTest do
     assert Enum.sort(rendered["items"]) == ["c", "g"]
   end
 
-  # 2. ZERO PER-FRAME COST — the render path only READS the resolved value; no
-  #    eval, no tool, happens when the bag is built.
-  test "demo 2: a resolved cell appears in data/* as a pure read (no frame effect)" do
-    q = quote_query(~S|(get data/ui :cursor)|)
-    {:ok, _} = Registry.define("row", q)
-    Registry.put_resolved("row", q, 7)
+  # 2. ZERO PER-FRAME COST — the render path only READS the resolved value; it
+  #    NEVER evaluates the cell's query. Proven with a POISON query: a query that
+  #    calls a mutator (denied by the read-only tier) would resolve to :error if
+  #    it were ever evaluated. We pre-store a good value, then assert the bag build
+  #    surfaces that value UNCHANGED — if DataBag.build resolved the query per
+  #    frame, the poison query would overwrite/erase it.
+  test "demo 2: the bag merges a resolved cell as a pure read, never re-resolving" do
+    poison = quote_query(~S|(keymap/bind {:chord "x" :intent "app/quit" :context "tree"})|)
+    {:ok, _} = Registry.define("row", poison)
+    Registry.put_resolved("row", poison, 7)
 
-    # Building the bag is a pure merge — it surfaces data/row without resolving.
-    bag = DataBag.build(%{vms: %{}, ui: %{}}, %{x: 0, y: 0, width: 1, height: 1})
-    assert bag["row"] == 7
+    # Building the bag many times must keep returning the stored 7 — it is a pure
+    # read of the registry, not a (re-)evaluation of the poison query.
+    for _ <- 1..3 do
+      bag = DataBag.build(%{vms: %{}, ui: %{}}, %{x: 0, y: 0, width: 1, height: 1})
+      assert bag["row"] == 7
+    end
   end
 
   # 3. LIVE RE-RESOLUTION — when the dependency changes, the cell is dirty.
@@ -128,19 +135,26 @@ defmodule SpellAgent.Tui.CellDemosTest do
         quote_query(~S|(keymap/bind {:chord "x" :intent "app/quit" :context "tree"})|)
       )
 
-    tier = Tools.read_only(forest(), tree_ui())
     assert {:ok, _q, descendants} = Clock.resolve("ok", %{}, {forest(), tree_ui()})
     assert Enum.sort(descendants) == ["c", "g"]
     # The mutator cell resolves to :error — the keymap is never bound by a cell.
     assert :error = Clock.resolve("evil", %{}, {forest(), tree_ui()})
   end
 
-  # 5. QUOTE REQUIRED — a non-quoted (bare value) query is rejected with a clear
-  #    error, matching the prelude rule ":query MUST be (quote …)".
-  test "demo 5: a non-deferred query is rejected" do
-    {:ok, step} = run(~S|(cell/define {:name "bad" :query "literal"})|, tools())
-    assert step.return["err"] =~ "query"
-    assert Registry.get("bad") == nil
+  # 5. QUOTE REQUIRED — a query that is not QUOTE codec data is rejected at define
+  #    time, matching the prelude rule ":query MUST be (quote …)". Both a scalar
+  #    AND a plain (non-codec) map literal are rejected — the check is on the codec
+  #    shape, not merely is_map.
+  test "demo 5: a non-deferred query is rejected (scalar and non-codec map)" do
+    {:ok, s1} = run(~S|(cell/define {:name "bad1" :query "literal"})|, tools())
+    assert s1.return["err"] =~ "query"
+    assert Registry.get("bad1") == nil
+
+    # A plain map literal is NOT quote codec data (no "node"/hole/splice tag) — it
+    # must be rejected, not silently registered with empty deps.
+    {:ok, s2} = run(~S|(cell/define {:name "bad2" :query {:not "codec"}})|, tools())
+    assert s2.return["err"] =~ "query"
+    assert Registry.get("bad2") == nil
   end
 
   # 6. NO CYCLES — a cell may not depend on its own key.

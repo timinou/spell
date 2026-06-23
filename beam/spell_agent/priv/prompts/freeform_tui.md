@@ -122,8 +122,13 @@ Rules that matter:
   computation), as the `callers` example does with `(get data/ui :cursor)` +
   `(harness/cursor-id)`. NB `data/ui :cursor` is the cursor ROW; `harness/cursor-id`
   is the span id under it.
-- READ-ONLY only. A cell may call forest/history reads; a mutator (`keymap/bind`,
-  `layout/set`, `tool/edit`, `sh`) is denied and the cell resolves to nothing.
+- READ-ONLY only. A cell may call the `harness/*` forest reads (`harness/state`,
+  `harness/cursor-id`, `harness/descendants`, `harness/ancestors`, …); a mutator
+  (`keymap/bind`, `layout/set`, `tool/edit`, `sh`) is denied and the cell resolves
+  to nothing. (History `hist/*` reads are not in the cell tier yet.)
+- A cell name must be NEW — it cannot shadow a core bag key (`status`, `ui`,
+  `area`, `forest`, `vms`, `running?`, `turns`, `tools`, `composer`, …). A cell
+  named after one is inert (the core value wins in the bag), so pick a fresh name.
 - No cycles: a cell may not depend on its own key, nor close a loop
   A→B→…→A across cells (rejected at define time).
 - `(cell/list {})` shows declared cells + deps; `(cell/remove {:name …})` drops one.
