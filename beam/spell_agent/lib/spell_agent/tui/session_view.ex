@@ -18,6 +18,8 @@ defmodule SpellAgent.Tui.SessionView do
 
 
 
+  alias SpellAgent.Hist.Trace
+
   @typedoc "A formatted line tagged for styling (status drives color in the TUI)."
   @type line :: %{text: String.t(), status: :ok | :error | :neutral, kind: atom()}
 
@@ -71,6 +73,29 @@ defmodule SpellAgent.Tui.SessionView do
 
   def trace_lines(rows, interiors) when is_list(rows) do
     Enum.flat_map(rows, fn row -> node_lines(row, Map.get(interiors, row.node_id)) end)
+  end
+
+  @doc """
+  One session's COMPLETE trace as a single plain-text string: a header line plus
+  every turn with its execution interior INLINED (the expanded view, not the
+  collapsed one). This is the canonical "dump the whole conversation" shape,
+  shared by `mix spell.sessions --trace` (stdout) and the TUI exit dump (file) so
+  the two can never drift — a session read here reads identically there.
+
+  `store` is the `Hist.Store` impl to read from; an unrecorded session yields a
+  `0 turns` header + the empty-state line. Pure (data -> string): no IO, no LLM.
+  """
+  @spec trace_text(module(), String.t()) :: String.t()
+  def trace_text(store, session_id) do
+    rows = Trace.rows(store, session_id)
+
+    interiors =
+      rows
+      |> Enum.filter(& &1.has_interior?)
+      |> Map.new(fn row -> {row.node_id, Trace.interior_of(store, session_id, row.node_id)} end)
+
+    "trace \u00b7 #{session_id}  (#{length(rows)} turns)\n" <>
+      to_text(trace_lines(rows, interiors))
   end
 
   defp node_lines(row, interior) do

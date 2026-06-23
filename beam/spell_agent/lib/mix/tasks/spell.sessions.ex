@@ -55,24 +55,11 @@ defmodule Mix.Tasks.Spell.Sessions do
   end
 
   defp print_trace(session_id) do
+    # The full trace (header + every turn + every interior inlined) is now the
+    # one canonical shape: SessionView.trace_text/2, shared with the TUI exit
+    # dump so stdout and the dump file can never drift.
     store = Hist.default_store()
-    rows = Hist.Trace.rows(store, session_id)
-
-    # Plain-text trace shows EVERY turn's interior inline (no interactive
-    # collapse), so the dump is complete: build the interiors map for all nodes.
-    interiors =
-      rows
-      |> Enum.filter(& &1.has_interior?)
-      |> Map.new(fn row -> {row.node_id, Hist.Trace.interior_of(store, session_id, row.node_id)} end)
-
-    header = "trace · #{session_id}  (#{length(rows)} turns)"
-
-    body =
-      rows
-      |> SessionView.trace_lines(interiors)
-      |> SessionView.to_text()
-
-    Mix.shell().info(header <> "\n" <> body)
+    Mix.shell().info(SessionView.trace_text(store, session_id))
   end
 
   # ---- interactive browser ----

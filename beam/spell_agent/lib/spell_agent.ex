@@ -13,7 +13,8 @@ defmodule SpellAgent do
   homoiconic registry.
   """
 
-  alias SpellAgent.Session
+  alias SpellAgent.{Hist, Session}
+  alias SpellAgent.Tui.{SessionView, Transcript}
 
   @doc "Run a single mission. Returns `{:ok, result}` or `{:error, reason}`."
   @spec run(String.t(), keyword()) :: {:ok, term()} | {:error, term()}
@@ -35,6 +36,12 @@ defmodule SpellAgent do
   Logger output is redirected to `~/.spell/logs/spell-agent.<date>.log` for the
   TUI's lifetime so background debug logs cannot tear the screen; the path is
   printed on exit. See `SpellAgent.Tui.LogRedirect`.
+
+  On exit the whole conversation is also dumped to `~/.spell/traces/<sid>.<ts>.txt`
+  — the verbatim transcript (full prompts, tool calls + args, results, replies),
+  not a one-line summary — so it survives as a reviewable artifact even though
+  the in-memory store dies with the BEAM. Best-effort: a failure never blocks
+  teardown.
 
   Returns `:ok` once the app stops (esc / ctrl-c to quit).
   """
@@ -63,6 +70,49 @@ defmodule SpellAgent do
       if log_path do
         IO.puts("[spell] logs saved to #{log_path}")
       end
+
+      # Dump every recorded session's full trace to a file, so the whole
+      # conversation survives the TUI exit as a reviewable artifact (mirrors the
+      # log-path dump above). Best-effort: a failure never blocks teardown.
+      dump_traces()
+    end
+  end
+
+  # The trace dump writes one file per recorded session to `~/.spell/traces/`
+  # (the logs convention). Each file carries the VERBATIM conversation transcript
+  # (full prompts, tool calls + args, results, replies) via Transcript.text/2,
+  # falling back to the structural turn trace (SessionView.trace_text/2) when a
+  # session recorded no continuation tape. Best-effort throughout: a sick store
+  # or an unwritable dir degrades to a no-op, never a teardown failure.
+  defp dump_traces do
+    try do
+      store = Hist.default_store()
+      dir = Path.expand("~/.spell/traces")
+      stamp = Calendar.strftime(DateTime.utc_now(), "%Y%m%d-%H%M%S")
+      :ok = File.mkdir_p(dir)
+
+      paths =
+        for session <- Hist.sessions(store: store) do
+          # Prefer the VERBATIM transcript (full prompts, tool calls+args,
+          # results, replies); fall back to the structural turn trace when a
+          # session recorded no continuation tape.
+          text = Transcript.text(store, session.id) || SessionView.trace_text(store, session.id)
+          path = Path.join(dir, "#{session.id}.#{stamp}.txt")
+          :ok = File.write!(path, text)
+          path
+        end
+
+      case paths do
+        [] -> :ok
+        _ ->
+          IO.puts("[spell] traces saved to:")
+          IO.puts("  " <> Enum.join(paths, "\n  "))
+          :ok
+      end
+    rescue
+      _ -> :ok
+    catch
+      _, _ -> :ok
     end
   end
 

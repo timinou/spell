@@ -8,6 +8,7 @@ defmodule SpellAgent.Hist.TraceTest do
 
   alias SpellAgent.Hist.{Recorder, Store, Trace}
   alias SpellAgent.Hist.Store.Memory
+  alias SpellAgent.Tui.SessionView
 
   setup do
     Store.clear(Memory)
@@ -110,5 +111,37 @@ defmodule SpellAgent.Hist.TraceTest do
 
     assert by_id[with_root.id] == true
     assert by_id[without.id] == false
+  end
+
+  describe "trace_text/2 full dump" do
+    test "renders header, turn line, and inlined interior for a recorded session" do
+      interior = %{
+        kind: :run,
+        status: :ok,
+        name: "root",
+        children: [%{kind: :tool, status: :ok, meta: %{tool_name: "edit"}, children: []}]
+      }
+
+      Recorder.record_node(
+        Memory,
+        "s",
+        %{program: nil, memory: %{}, prompt: "hello", result: "hi", span_root: interior},
+        nil
+      )
+
+      text = SessionView.trace_text(Memory, "s")
+
+      assert text =~ "trace \u00b7 s  (1 turns)"
+      assert text =~ "#1"
+      assert text =~ "hello"
+      assert text =~ "run root"
+      assert text =~ "tool edit"
+    end
+
+    test "an unrecorded session yields a zero-turns header and empty-state line" do
+      text = SessionView.trace_text(Memory, "nope")
+      assert text =~ "trace \u00b7 nope  (0 turns)"
+      assert text =~ "no trace"
+    end
   end
 end
