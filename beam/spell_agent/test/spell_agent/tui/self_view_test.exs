@@ -19,6 +19,7 @@ defmodule SpellAgent.Tui.SelfViewTest do
 
   alias PtcRunner.Lisp
   alias SpellAgent.Tui.{SelfView, Store}
+  alias SpellAgent.Tui.SelfView.Idioms
 
   @telemetry_prefix [:ptc_runner, :sub_agent]
 
@@ -286,6 +287,95 @@ defmodule SpellAgent.Tui.SelfViewTest do
       assert buffer =~ "THINK_SEEDED"
 
       assert Store.spans(Store) == before
+    end
+  end
+
+  describe "trace idioms — the named projections worth rendering (W2)" do
+    setup do
+      :ok = Store.attach(Store)
+      Store.reset(Store)
+      on_exit(fn -> Store.reset(Store) end)
+      %{think: SelfView.tools()["view/think"]}
+    end
+
+    # A trace with ONE errored tool (reason BOOM) and one ok tool, so a projection
+    # that filters errors can be distinguished from one that shows everything.
+    defp seed_mixed do
+      emit([:run, :start], %{span_id: "r", parent_span_id: nil, agent_name: "root"})
+      emit([:tool, :start], %{span_id: "bad", parent_span_id: "r", tool_name: "edit"})
+
+      emit([:tool, :exception], %{
+        span_id: "bad",
+        parent_span_id: "r",
+        tool_name: "edit",
+        kind: :error,
+        reason: "BOOM_REASON"
+      })
+
+      emit([:tool, :start], %{span_id: "good", parent_span_id: "r", tool_name: "find"})
+
+      emit([:tool, :stop], %{span_id: "good", parent_span_id: "r", tool_name: "find", result: %{}})
+
+      assert map_size(Store.spans(Store)) > 0
+    end
+
+    test "errors-board shows ONLY errored spans, with their reason", %{think: think} do
+      seed_mixed()
+      assert %{"buffer" => buffer} = think.(%{"name" => "errors-board"})
+      # The errored tool + its reason appear …
+      assert buffer =~ "edit"
+      assert buffer =~ "BOOM_REASON"
+      # … and the OK tool does NOT (the whole point of an errors projection).
+      refute buffer =~ "find"
+    end
+
+    test "tool-calls shows every tool span with its status", %{think: think} do
+      seed_mixed()
+      assert %{"buffer" => buffer} = think.(%{"name" => "tool-calls"})
+      assert buffer =~ "edit"
+      assert buffer =~ "find"
+      assert buffer =~ "error"
+    end
+
+    test "trace-summary compresses the run to one line (counts + error tally)", %{think: think} do
+      seed_mixed()
+      assert %{"buffer" => buffer} = think.(%{"name" => "trace-summary"})
+      assert buffer =~ "tools"
+      assert buffer =~ "errors 1"
+    end
+
+    test "an idiom renders empty-but-valid over an empty trace (no crash)", %{think: think} do
+      # No seed: the forest is empty. A filter-based idiom must still render a
+      # valid (empty) board, never raise.
+      assert %{"buffer" => buffer} = think.(%{"name" => "errors-board"})
+      assert is_binary(buffer)
+      refute buffer =~ "BOOM_REASON"
+    end
+
+    test "an unknown idiom name returns an %{err} listing the available ones", %{think: think} do
+      assert %{"err" => msg} = think.(%{"name" => "no-such-idiom"})
+      assert msg =~ "errors-board"
+      assert msg =~ "unknown"
+    end
+
+    test ":name wins over :source when both are given", %{think: think} do
+      seed_mixed()
+      # A :source that would render TANGENT_LABEL, plus :name errors-board: the
+      # NAMED idiom must win, so the buffer shows the error reason, not the tangent.
+      {:ok, step} = Lisp.run(~S|(tmpl:: {:type "paragraph" :text "TANGENT_LABEL"})|)
+
+      assert %{"buffer" => buffer} =
+               think.(%{"name" => "errors-board", "source" => step.return})
+
+      assert buffer =~ "BOOM_REASON"
+      refute buffer =~ "TANGENT_LABEL"
+    end
+
+    test "Idioms.names/0 lists exactly the compiled idioms" do
+      # Every declared template must compile to a frozen node — a typo in a tmpl::
+      # source would silently drop the idiom (the @frozen reject), so pin the set.
+      assert Idioms.names() == ["errors-board", "tool-calls", "trace-summary"]
+      for name <- Idioms.names(), do: assert(is_map(Idioms.node(name)))
     end
   end
 

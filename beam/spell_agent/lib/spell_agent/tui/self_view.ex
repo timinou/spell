@@ -50,6 +50,7 @@ defmodule SpellAgent.Tui.SelfView do
   """
 
   alias SpellAgent.Tui.{DataBag, RenderProbe}
+  alias SpellAgent.Tui.SelfView.Idioms
 
   @default_store SpellAgent.Tui.Store
 
@@ -127,8 +128,11 @@ defmodule SpellAgent.Tui.SelfView do
   look like right now?"), so a node whose holes read `data/forest`/`data/status`
   shows the actual run.
 
-  Args (string or atom keys):
-    * `:source` or `:node` — the layout node to render (required). Author it with
+  Args (string or atom keys), ONE of `:name` / `:source` required:
+    * `:name` — a built-in trace idiom (W2): one of
+      `#{Enum.join(Idioms.names(), "`, `")}`. The curated, token-earning
+      projection — `(view/think {:name "errors-board"})`. Wins over `:source`.
+    * `:source` or `:node` — an agent-authored layout node (W1). Author it with
       `tmpl::` so its `~holes` read `data/forest`, `data/status`, `data/turns`, …
     * `:width` / `:height` — optional positive integers (default 80×24); `data/area`
       tracks them so a size-aware view sees the frame it draws on.
@@ -141,17 +145,44 @@ defmodule SpellAgent.Tui.SelfView do
   def tools do
     %{
       "view/think" => fn args ->
-        node = strget(args, "source") || strget(args, "node")
         width = strget(args, "width")
         height = strget(args, "height")
 
-        if is_map(node) do
-          think_to_tool(node, width, height)
-        else
-          %{"err" => "view/think requires a :source (or :node) layout node"}
+        case resolve_node(args) do
+          {:ok, node} -> think_to_tool(node, width, height)
+          {:error, msg} -> %{"err" => msg}
         end
       end
     }
+  end
+
+  # The node to render: a NAMED built-in idiom (:name, W2) or an agent-authored
+  # node (:source/:node, W1). :name wins when both are given (the curated
+  # projection is the more specific intent). An unknown :name lists what IS
+  # available rather than silently falling through to "missing source".
+  defp resolve_node(args) do
+    name = strget(args, "name")
+    authored = strget(args, "source") || strget(args, "node")
+
+    cond do
+      is_binary(name) ->
+        case Idioms.node(name) do
+          nil ->
+            {:error,
+             "view/think: unknown idiom #{inspect(name)}; available: #{Enum.join(Idioms.names(), ", ")}"}
+
+          node ->
+            {:ok, node}
+        end
+
+      is_map(authored) ->
+        {:ok, authored}
+
+      true ->
+        {:error,
+         "view/think requires a :name (a built-in idiom: #{Enum.join(Idioms.names(), ", ")}) " <>
+           "or a :source (an authored layout node)"}
+    end
   end
 
   # Render an agent-authored node over the live self-bag and shape the result for
