@@ -197,4 +197,91 @@ defmodule SpellAgent.Tui.SelfViewTest do
       assert buffer =~ "GLOBAL_SEEDED"
     end
   end
+
+  describe "view/think tool — the L−1 primitive on the freeform surface" do
+    # The tool reaches the forest by GLOBAL NAME (a mission tool cannot inject a
+    # store), so these drive the named global Store exactly like a real call.
+    setup do
+      :ok = Store.attach(Store)
+      Store.reset(Store)
+      on_exit(fn -> Store.reset(Store) end)
+      %{think: SelfView.tools()["view/think"]}
+    end
+
+    defp seed_global do
+      emit([:run, :start], %{span_id: "trun", parent_span_id: nil, agent_name: "root"})
+
+      emit([:tool, :start], %{span_id: "ttool", parent_span_id: "trun", tool_name: "THINK_SEEDED"})
+
+      emit([:tool, :stop], %{
+        span_id: "ttool",
+        parent_span_id: "trun",
+        tool_name: "THINK_SEEDED",
+        result: %{}
+      })
+
+      assert map_size(Store.spans(Store)) > 0
+    end
+
+    test "renders an authored node over the live trace, returning a string-keyed buffer",
+         %{think: think} do
+      seed_global()
+
+      board =
+        forest_board_src()
+
+      result = think.(%{"source" => board})
+      assert %{"buffer" => buffer, "width" => 80, "height" => 24} = result
+      assert buffer =~ "THINK_SEEDED"
+    end
+
+    test "accepts :node as an alias for :source", %{think: think} do
+      seed_global()
+      assert %{"buffer" => buffer} = think.(%{"node" => forest_board_src()})
+      assert buffer =~ "THINK_SEEDED"
+    end
+
+    test "honors :width/:height and the buffer's data/area tracks them", %{think: think} do
+      {:ok, step} =
+        Lisp.run(~S|(tmpl:: {:type "paragraph" :text ~(str "W" (get data/area :width))})|)
+
+      assert %{"buffer" => buffer, "width" => 50, "height" => 8} =
+               think.(%{"source" => step.return, "width" => 50, "height" => 8})
+
+      assert buffer =~ "W50"
+    end
+
+    test "a missing :source returns an %{err} map, not a crash", %{think: think} do
+      assert %{"err" => msg} = think.(%{})
+      assert msg =~ "source"
+    end
+
+    test "a pane-only node returns an %{err} explaining it needs the live app", %{think: think} do
+      assert %{"err" => msg} = think.(%{"source" => %{"type" => "pane", "slot" => "tree"}})
+      assert msg =~ "pane" or msg =~ "renderable"
+    end
+
+    test "a draw-time raise returns an %{err}, never propagating", %{think: think} do
+      node = %{"type" => "sparkline", "data" => ["not", "numbers"]}
+      assert %{"err" => msg} = think.(%{"source" => node})
+      assert is_binary(msg)
+    end
+
+    test "view/think is registered on the freeform tool surface" do
+      # The L−1 primitive must actually be reachable by name from the agent's
+      # tool map, not merely defined — a registration regression would silently
+      # remove the affordance.
+      assert Map.has_key?(SpellAgent.Tools.build_tools_map(), "view/think")
+    end
+  end
+
+  # The forest board as a frozen tmpl:: node (re-usable across describe blocks).
+  defp forest_board_src do
+    {:ok, step} =
+      Lisp.run(
+        ~S|(tmpl:: {:type "paragraph" :text ~(join " " (map (fn [s] (get s :label)) (vals data/forest)))})|
+      )
+
+    step.return
+  end
 end

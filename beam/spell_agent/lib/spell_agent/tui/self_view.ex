@@ -114,6 +114,87 @@ defmodule SpellAgent.Tui.SelfView do
     RenderProbe.render(node, width: width, height: height, data_env: bag)
   end
 
+  @doc """
+  The `view/think` tool entry (qualified name => `(args -> value)`).
+
+  This is the L−1 PRIMITIVE on the freeform tool surface: the agent authors a
+  layout node over its OWN run-trace and renders it headless to ASCII, reading the
+  buffer back as reasoning input. The renderer reads its own output.
+
+  It is the LIVE-BAG sibling of `layout/render` (`RenderProbe`): `layout/render`
+  previews a node's SHAPE against an empty env ("what does this widget look
+  like?"); `view/think` renders against the live self-bag ("what does my trace
+  look like right now?"), so a node whose holes read `data/forest`/`data/status`
+  shows the actual run.
+
+  Args (string or atom keys):
+    * `:source` or `:node` — the layout node to render (required). Author it with
+      `tmpl::` so its `~holes` read `data/forest`, `data/status`, `data/turns`, …
+    * `:width` / `:height` — optional positive integers (default 80×24); `data/area`
+      tracks them so a size-aware view sees the frame it draws on.
+
+  Returns a string-keyed map: `%{"buffer" => ascii, "width" => w, "height" => h}`
+  on success, or `%{"err" => "..."}` on any failure. Read-only + total by
+  construction (see the module doc).
+  """
+  @spec tools() :: %{optional(String.t()) => (map() -> term())}
+  def tools do
+    %{
+      "view/think" => fn args ->
+        node = strget(args, "source") || strget(args, "node")
+        width = strget(args, "width")
+        height = strget(args, "height")
+
+        if is_map(node) do
+          think_to_tool(node, width, height)
+        else
+          %{"err" => "view/think requires a :source (or :node) layout node"}
+        end
+      end
+    }
+  end
+
+  # Render an agent-authored node over the live self-bag and shape the result for
+  # the tool surface (string-keyed map / %{"err"}). `width`/`height` may be nil
+  # (use defaults), an integer, or a string (normalize_dim handles all three).
+  defp think_to_tool(node, width, height) do
+    opts =
+      [store: @default_store]
+      |> maybe_put(:width, width)
+      |> maybe_put(:height, height)
+
+    case render(node, opts) do
+      {:ok, %{buffer: buffer, width: w, height: h}} ->
+        %{"buffer" => buffer, "width" => w, "height" => h}
+
+      {:error, :empty_render} ->
+        %{
+          "err" =>
+            "view/think produced no renderable widgets; a node must be a view/* " <>
+              "widget or split tree (a native `pane` node needs the live app)"
+        }
+
+      {:error, reason} ->
+        %{"err" => "view/think failed: #{format_reason(reason)}"}
+    end
+  end
+
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp format_reason({:render_failed, message}), do: message
+
+  defp strget(m, key) when is_map(m), do: Map.get(m, key) || Map.get(m, safe_atom(key))
+  defp strget(_m, _key), do: nil
+
+  defp safe_atom(key) when is_binary(key) do
+    String.to_existing_atom(key)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp safe_atom(_), do: nil
+
   defp default_area, do: %ExRatatui.Layout.Rect{x: 0, y: 0, width: 80, height: 24}
 
   # Mirror RenderProbe's dimension contract: a positive integer is honored, a
