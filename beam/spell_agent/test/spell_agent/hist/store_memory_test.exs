@@ -8,6 +8,7 @@ defmodule SpellAgent.Hist.Store.MemoryTest do
   """
   use ExUnit.Case, async: false
 
+  alias SpellAgent.Clock.Wake
   alias SpellAgent.Hist.{Crystal, Mark, Node, Session, ToolDef}
   alias SpellAgent.Hist.Store
   alias SpellAgent.Hist.Store.Memory
@@ -52,6 +53,17 @@ defmodule SpellAgent.Hist.Store.MemoryTest do
 
     assert [%ToolDef{name: "blast"}] = Store.list(Memory, :tool, nil)
     assert [%Crystal{id: "c1"}] = Store.list(Memory, :crystal, "s-anything")
+  end
+
+  test "session-global :clock kind round-trips and ignores session scope (A2)" do
+    wake = %Wake{id: "wake-1", fire_at_ms: 123, session_id: "s1", prompt: "check goals"}
+    Store.put(Memory, {:clock, "wake-1"}, wake)
+
+    assert {:ok, ^wake} = Store.fetch(Memory, {:clock, "wake-1"})
+    assert [%Wake{id: "wake-1"}] = Store.list(Memory, :clock, "s-anything")
+
+    :ok = Store.delete(Memory, {:clock, "wake-1"})
+    assert :error = Store.fetch(Memory, {:clock, "wake-1"})
   end
 
   test "list of an empty kind is []" do
