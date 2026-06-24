@@ -1,0 +1,62 @@
+#+TITLE: BUG: flag rejected tool results with is_error so the model can't narrate past them
+#+STATE: DONE
+#+SESSION_ID: 1514f4cfb32f784f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-23T22-33-25-964Z_1514f4cfb32f784f.jsonl]]
+#+CUSTOM_ID: BUG-014-bug-flag-rejected-tool-results-with-is-e
+#+LAYER: tui
+#+PLAN: PLAN-017
+#+STATUS: planned
+#+COMPLETION_HASH: 303dea675b2440fd
+
+* Initial Message
+
+/home/user/.spell/traces/sess-142c16bc2d70cf90.20260623-223318.txt why did it only change the interface the second time? what does that mean about the alignment of the prompt and the system and the code?
+
+* Symptom
+Every rejected `layout/set` in the trace is marked transport-`ok`; the `err`/`reason`/
+`diagnostic` ride INSIDE the returned map. `Hist.Result.error?/1` already classifies
+`%{"err" => _}` as `:error` — but that classifier feeds ONLY history/transcript display
+(hist/lens, hist/query, tui/transcript). The tool_result→model path never consults it.
+`anthropic.ex` `convert_message/1` builds the `tool_result` block with NO `is_error`
+field (verified: `is_error` has zero call sites in lib/). So a rejection lands at the
+model as an ordinary successful tool_result, and the agent narrated past it.
+
+* Fix (contained, additive)
+In `lib/spell_agent/anthropic.ex`, the `:tool`-role branch of `convert_message/1`
+(line ~262): classify the raw result via `SpellAgent.Hist.Result.error?/1` and, when
+true, add `"is_error" => true` to the `tool_result` block.
+
+  content = Map.get(msg, :content)
+  block = %{"type" => "tool_result", "tool_use_id" => id,
+            "content" => to_result_content(content)}
+  block = if SpellAgent.Hist.Result.error?(content), do: Map.put(block, "is_error", true), else: block
+  %{"role" => "user", "content" => [block]}
+
+Check the raw `content` BEFORE `to_result_content` encodes it (error? inspects the map/
+tuple; a pre-encoded JSON binary would not be caught — but tool results are stored as
+the raw term, encoded only here).
+
+* Why this is safe
+- Additive field on the model-facing block. Gated on the EXISTING classifier — no new
+  heuristic, no drift with hist/transcript's notion of error.
+- Applies uniformly to EVERY tool that returns `%{"err" => _}` / `{:error, _}` (layout,
+  cell, clock, mesh, hist, …), not just layout. One seam, system-wide win.
+- Anthropic API documents `is_error` on tool_result; models are trained to treat it as
+  failure and not skim past it.
+
+* Acceptance (observable)
+- A message whose `:content` is `%{"err" => …}` converts to a `tool_result` block
+  carrying `"is_error" => true`.
+- A normal map result (no err key) converts WITHOUT `is_error`.
+- A `{:error, _}` tuple content → `is_error: true` (matches Result.error?).
+- Focused test passes; mix check clean.
+
+* Test
+- `convert_message(%{role: :tool, tool_call_id: id, content: %{"err" => "x"}})` →
+  assert the block has `is_error: true`.
+- Success content → no `is_error` key.
+
+* Out of scope
+- Changing what tools RETURN (keep the `%{"err" => _}` convention). Only the envelope.
+
+NOTE [2026-06-24]: anthropic.ex convert_message(:tool) now flags is_error:true via Hist.Result.error?/1 (decodes JSON-binary content first). Applies to every err-map/error-tuple tool result system-wide. Tests: err->is_error, normal->no flag. 30 passed.

@@ -1,0 +1,52 @@
+#+TITLE: FEAT: teach the tmpl:: quasiquote invariant + anti-pattern in the prelude
+#+STATE: DONE
+#+SESSION_ID: 1514f4cfb32f784f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-23T22-33-25-964Z_1514f4cfb32f784f.jsonl]]
+#+CUSTOM_ID: FEAT-023-feat-teach-the-tmpl-quasiquote-invariant
+#+LAYER: tui
+#+PLAN: PLAN-017
+#+STATUS: planned
+#+BLOCKED_BY: BUG-013-bug-detect-unevaluated-forms-in-tmpl-lay, FEAT-022-feat-layout-set-success-carries-a-render
+#+COMPLETION_HASH: 732f7bb385aac0af
+
+* Initial Message
+
+/home/user/.spell/traces/sess-142c16bc2d70cf90.20260623-223318.txt why did it only change the interface the second time? what does that mean about the alignment of the prompt and the system and the code?
+
+* Symptom
+`priv/prompts/freeform_tui.md`'s "Live interfaces — tmpl:: deferred holes" section shows
+only BARE data reads (`~(get data/status :label)`), states `~form` "freezes form as a
+hole" one-directionally, and has NO anti-pattern. The agent reached for the natural
+`(str … ~(get …) …)` interpolation and nothing warned it off — because the bidirectional
+invariant ("`~` is the ONLY thing that evaluates; bare calls freeze") never appears.
+
+* Fix (prose, in freeform_tui.md, the tmpl:: section)
+Three additions right after the existing `~form` paragraph:
+1. The invariant, stated bidirectionally (one sentence): inside `tmpl::`, a `~form` is
+   frozen as a hole and evaluated against `data/*` at render; EVERYTHING ELSE is frozen
+   as inert data and never runs — including function calls like `str` / `map`.
+2. A positive COMPUTATION example (the case the doc omits): to build a string from data,
+   wrap the WHOLE expression in one `~`:
+     (tmpl:: {:type "paragraph" :text ~(str "turn " (get data/status :turns))})
+3. The anti-pattern, WRONG/RIGHT side by side — the exact shape that bit the session:
+     ;; WRONG — `str` has no `~`, freezes as data → rejected (unevaluated_form)
+     (tmpl:: {:text (str "turn " ~(get data/status :turns))})
+     ;; RIGHT — one `~` over the whole call → evaluates to a string at render
+     (tmpl:: {:text ~(str "turn " (get data/status :turns))})
+
+Also (now that BUG-013 + FEAT-023 land): one line noting that a rejected slot returns a
+named `unevaluated_form` diagnostic naming the frozen call + the fix, and that a
+successful `layout/set` returns a `peek` to confirm rendering. Cite both so the agent
+knows the feedback it will get.
+
+* Acceptance (observable)
+- The section contains the bidirectional invariant sentence.
+- The WRONG/RIGHT `(str …)` pair is present verbatim.
+- The doc cites `unevaluated_form` and `peek`.
+- `Prelude.text/0` still compiles (the .md is loaded via @external_resource); no build
+  regression. (Static text — no unit test; verify via mix check + a read-back.)
+
+* Out of scope
+- No other section of the prelude. No prompt-file restructure.
+
+NOTE [2026-06-24]: freeform_tui.md tmpl:: section now states the bidirectional invariant ("~ is the only thing that evaluates"), shows the WRONG/RIGHT (str …) pair, and cites the unevaluated_form diagnostic + peek. Verified Prelude.text/0 loads with the new content (PRELUDE_OK).

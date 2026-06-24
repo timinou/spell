@@ -34,7 +34,7 @@ defmodule SpellAgent.Tui.LayoutRegistry do
 
   use Agent
 
-  alias SpellAgent.Tui.{LayoutDiagnostic, Lens}
+  alias SpellAgent.Tui.{LayoutDiagnostic, Lens, RenderProbe}
 
   @type tree :: %{optional(String.t()) => term()}
 
@@ -227,7 +227,12 @@ defmodule SpellAgent.Tui.LayoutRegistry do
   defp set_result(slot, node) do
     case set(slot, node) do
       :ok ->
-        tree()
+        result = tree()
+
+        case peek(node) do
+          nil -> result
+          ascii -> Map.put(result, "peek", ascii)
+        end
 
       {:error, {:bad_layout, bad_slot, diagnostic}} ->
         bad_layout_result(bad_slot, diagnostic)
@@ -259,6 +264,25 @@ defmodule SpellAgent.Tui.LayoutRegistry do
       "slot" => slot,
       "diagnostic" => diagnostic
     }
+  end
+
+  # A best-effort ASCII preview of the just-set node, folded into the success
+  # result so the agent can confirm rendering inline (PLAN-017 / FEAT-022). Holes
+  # resolve against an empty env (a `tmpl::` slot shows the `·` placeholder —
+  # shape ok, holes live); a pane-only node returns :empty_render; any render
+  # failure simply omits the peek. It NEVER gates a successful set.
+  @peek_width 64
+  @peek_height 8
+
+  defp peek(node) do
+    case RenderProbe.render(node, width: @peek_width, height: @peek_height) do
+      {:ok, %{buffer: buffer}} -> buffer
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  catch
+    _, _ -> nil
   end
 
   defp reset_to_result(slot) do

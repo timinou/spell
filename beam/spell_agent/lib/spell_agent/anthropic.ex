@@ -261,12 +261,26 @@ defmodule SpellAgent.Anthropic do
 
   # tool result -> a user message carrying a tool_result block
   defp convert_message(%{role: :tool, tool_call_id: id} = msg) do
-    %{
-      "role" => "user",
-      "content" => [
-        %{"type" => "tool_result", "tool_use_id" => id, "content" => to_result_content(Map.get(msg, :content))}
-      ]
+    content = Map.get(msg, :content)
+
+    block = %{
+      "type" => "tool_result",
+      "tool_use_id" => id,
+      "content" => to_result_content(content)
     }
+
+    # A rejected tool (layout/set, cell, clock, mesh, …) returns a `%{"err" => _}`
+    # map or `{:error, _}`. Classify it once here and flag the block, so the model
+    # cannot narrate past a rejection as if it succeeded (PLAN-017 / BUG-014).
+    # `Hist.Result.error?/1` is the single classifier the rest of the system shares.
+    block =
+      if tool_result_error?(content) do
+        Map.put(block, "is_error", true)
+      else
+        block
+      end
+
+    %{"role" => "user", "content" => [block]}
   end
 
   defp convert_message(%{role: role, content: content}),
@@ -292,6 +306,22 @@ defmodule SpellAgent.Anthropic do
 
   defp to_result_content(c) when is_binary(c), do: c
   defp to_result_content(c), do: Jason.encode!(c)
+
+  # A tool result is an error when the conventional error map/tuple is present.
+  # `content` is normally a JSON binary (see convert_message), so decode first;
+  # a non-decodable binary or a non-error shape classifies as ok.
+  defp tool_result_error?(content) do
+    SpellAgent.Hist.Result.error?(decode_result_if_binary(content))
+  end
+
+  defp decode_result_if_binary(content) when is_binary(content) do
+    case Jason.decode(content) do
+      {:ok, decoded} -> decoded
+      _ -> content
+    end
+  end
+
+  defp decode_result_if_binary(content), do: content
 
   defp convert_content(text) when is_binary(text), do: text
 

@@ -1,0 +1,105 @@
+#+TITLE: PLAN: self-describing freeform-layout feedback — teach + detect + verify
+#+STATE: DONE
+#+SESSION_ID: 1514f4cfb32f784f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-23T22-33-25-964Z_1514f4cfb32f784f.jsonl]]
+#+CUSTOM_ID: PLAN-017-plan-self-describing-freeform-layout-fee
+#+LAYER: tui
+#+STATUS: planned
+#+COMPLETION_HASH: bea3007a9e82e9de
+
+* Initial Message
+
+/home/user/.spell/traces/sess-142c16bc2d70cf90.20260623-223318.txt why did it only change the interface the second time? what does that mean about the alignment of the prompt and the system and the code?
+
+* Initial Message
+
+/home/user/.spell/traces/sess-142c16bc2d70cf90.20260623-223318.txt — the agent tried
+to "make the interface cooler" via `tmpl::` + `str` interpolation. Every `layout/set`
+was REJECTED (encode_failed), the visible tree never changed, yet the agent claimed
+"The interface is now live!" twice. It only worked the second attempt because the
+agent happened to switch to literal `view/*` builders. Three independent gaps caused
+one bad session.
+
+* The boundary dissolved (theme)
+PROMPT vs SYSTEM vs CODE alignment. The runtime KNEW the cause (the rejection payload
+carried the `{:symbol_ref, "str"}` fingerprint; `hole_resolver.ex` states the quasiquote
+invariant precisely) but that knowledge never reached the agent in a usable form:
+  - the prelude states the `tmpl::` rule one-directionally (no anti-pattern),
+  - the diagnostic leaks the fingerprint as a raw coercion exception,
+  - the rejection rides inside a transport-`ok` envelope with no `is_error` flag,
+  - and success carries no evidence the agent can check its claim against.
+
+* What already exists (verified in code this session)
+- `tmpl::` quasiquote (PLAN-012): `~form` → frozen `__hole__`, thawed+evaluated at
+  render via `HoleResolver` (pure builtins + `data/*`, no tools). Everything else in a
+  template is INERT DATA — never evaluated. This is the invariant the agent violated.
+- `LayoutDiagnostic.validate/1` (PLAN-015): resolve_holes → place → validate_leaf →
+  `Materialize.to_struct` → `encodable/2` (tries `ExRatatui.Bridge.encode_command`,
+  rescues → `encode_failed` diagnostic). Sibling to this work: PLAN-015 already hardened
+  the *invalid-bool-field* class (e.g. `:wrap "word"`); THIS plan handles the
+  *unevaluated-form* class — same diagnostic scaffolding, new reason code.
+- `Hist.Result.error?/1` (BUG-001 B5): single classifier — `%{"err" => _}` / `{:error,_}`
+  → `:error`. Currently consumed ONLY by history/transcript DISPLAY (hist/lens,
+  hist/query, tui/transcript). NOT by the tool_result→model path.
+- `anthropic.ex` `convert_message/1` for `:tool` role (line ~262): builds the
+  `tool_result` block. `is_error` appears NOWHERE in lib/ — rejected results reach the
+  model as a plain successful tool_result.
+- `layout/set` success returns the whole live `tree()` (no rendered evidence).
+- `RenderProbe` (`layout/render`): renders a node/slot to headless ASCII, resolves
+  holes against a caller env. Reusable for a success peek.
+
+* The three gaps (one item each)
+- DOC (FEAT-022): the prelude's `tmpl::` section shows only bare data reads
+  (`~(get data/status :label)`); it never states the bidirectional invariant, never
+  shows computation inside a hole, and has NO anti-pattern for `(str … ~x …)`.
+- DETECTOR (BUG-013): `encode_failed` passes the raw bridge exception through
+  ("cannot coerce [{:symbol_ref,"str"},…] into %Text{}"). The `{:symbol_ref, _}` head is
+  a 100%-reliable fingerprint of "a call froze unevaluated" — detect it pre-encode and
+  emit a named `unevaluated_form` diagnostic that states the cause + the one-char fix
+  (`~` wrapping the whole expression).
+- VERIFY (FEAT-023 + BUG-014): (C1) `layout/set` ok result carries a `peek` — a small
+  ASCII render of the just-set slot — so the agent reads pixels inline and its claim is
+  testable, not assertable. (C2) `anthropic.ex` flags the `tool_result` block with
+  `"is_error" => true` when `Hist.Result.error?/1` holds, so a rejection can no longer
+  be narrated past as a success.
+
+* Non-goals
+- No change to `tmpl::` quasiquote semantics (it is correct + capability-safe).
+- No change to the hole eval capability boundary (still pure, no tools).
+- No new persistent storage; no ex_ratatui vendored edits.
+- Do NOT auto-evaluate bare calls in `tmpl::` (that would dissolve the boundary
+  differently and is out of scope — the fix is to TEACH + DETECT, not to change the rule).
+
+* Waves (all independent / file-disjoint; A lands last because it cites B+C1 output)
+  W1 (parallel): BUG-013 (detector, layout_diagnostic.ex) · FEAT-023 (peek,
+  layout_registry.ex) · BUG-014 (is_error, anthropic.ex)
+  W2: FEAT-022 (prelude doc, freeform_tui.md) — blocked by BUG-013 + FEAT-023 so it can
+  cite the exact `unevaluated_form` reason code and `peek` field.
+
+* Acceptance (observable, per item; aggregated here)
+- A `tmpl::` slot with `(str … ~(get …) …)` is rejected with reason `unevaluated_form`,
+  naming `str`, the field, and the fix `:text ~(str …)`; last-good layout intact.
+- A bare ref `:fg data/status-color` (no `~`) is caught by the SAME detector.
+- `layout/set` success result includes a `peek` string (best-effort; absent only if the
+  peek render itself fails, never blocking the set).
+- A rejected `layout/set` reaches the model as a `tool_result` with `"is_error": true`.
+- The prelude's `tmpl::` section states "`~` is the only thing that evaluates" and shows
+  the WRONG/RIGHT `(str …)` pair.
+- `mix check` clean; focused tests cover the detector, the peek, and the is_error flag.
+
+* Risk
+- C2 (is_error) touches the model-facing envelope. Contained: additive field, gated on
+  the existing `Result.error?/1` classifier (no new heuristic). Verified `is_error` has
+  zero current call sites, so no collision.
+- C1 (peek) adds a headless draw per `layout/set` (authoring-frequency, not per-frame) —
+  acceptable; wrapped so a peek failure never fails the set.
+- B (detector) is additive: finds-no-frozen-call → `:ok` → existing path unchanged.
+
+NOTE [2026-06-24]: Canonical item map (numbers assigned by creation order):
+  BUG-013 = (B) detector → unevaluated_form diagnostic            [W1]
+  FEAT-022 = (C1) layout/set success carries a `peek`              [W1]
+  BUG-014 = (C2) is_error flag on rejected tool_result             [W1]
+  FEAT-023 = (A) prelude doc: invariant + anti-pattern             [W2, blocked by BUG-013 + FEAT-022]
+(PLAN prose above referred to A as FEAT-022 and C1 as FEAT-023; the creation order inverted the two. This note is canonical.)
+
+NOTE [2026-06-24]: All 4 children DONE. Edits: layout_diagnostic.ex (detector), layout_registry.ex (peek), anthropic.ex (is_error), freeform_tui.md (doc). Tests: layout_diagnostic_test.exs (new, 4 cases), +3 in layout_registry_test.exs, +2 in anthropic_test.exs. 30/30 targeted pass; broader tui+anthropic sweep 427/428 — the one failure is the pre-existing stale golden transcript (FUP-017, 54 commits behind, documented non-regression). anthropic.ex format-check flags only pre-existing untouched lines; my added code is formatted.

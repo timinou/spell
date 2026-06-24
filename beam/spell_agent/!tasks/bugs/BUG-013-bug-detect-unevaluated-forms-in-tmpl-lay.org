@@ -1,0 +1,66 @@
+#+TITLE: BUG: detect unevaluated forms in tmpl:: layouts, emit named diagnostic
+#+STATE: DONE
+#+SESSION_ID: 1514f4cfb32f784f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-23T22-33-25-964Z_1514f4cfb32f784f.jsonl]]
+#+CUSTOM_ID: BUG-013-bug-detect-unevaluated-forms-in-tmpl-lay
+#+LAYER: tui
+#+PLAN: PLAN-017
+#+STATUS: planned
+#+COMPLETION_HASH: a081e36a3e181fcd
+
+* Initial Message
+
+/home/user/.spell/traces/sess-142c16bc2d70cf90.20260623-223318.txt why did it only change the interface the second time? what does that mean about the alignment of the prompt and the system and the code?
+
+* Symptom (trace evidence)
+`sess-142c16bc2d70cf90` turn 1: `(tmpl:: {:text (str "⚡…" ~(get data/status :label) …)})`
+was rejected as:
+  source: encode_failed: cannot coerce [{:symbol_ref, "str"}, "⚡…", "·", …]
+          into %ExRatatui.Text{}
+The `{:symbol_ref, "str"}` fingerprint is RIGHT THERE but the diagnostic passes the raw
+bridge exception through instead of interpreting it. The agent could not act on it.
+
+* Root cause
+`tmpl::` is a quasiquote: only `~`-marked forms evaluate; a bare `(str …)` freezes as
+inert data (`{:symbol_ref, "str"}` heading a list). After `HoleResolver.resolve_holes`
+runs, that frozen form is still in the leaf field; `Materialize`/`encode` then fails with
+the opaque coercion error. The invariant is correct — the DIAGNOSTIC is what's broken.
+
+* Fix (additive, pre-encode)
+In `lib/spell_agent/tui/layout_diagnostic.ex`, add a detector that runs in `validate/1`
+right after `resolve_holes(node, %{})`, BEFORE the `place`/encode walk:
+  - walk the resolved node (maps + lists);
+  - recognize a frozen call = a list whose head is `{:symbol_ref, name}`;
+    recognize a frozen bare ref = the `{:symbol_ref, name}` tuple itself;
+  - on hit, emit a `unevaluated_form` diagnostic (path.to.field, the `name`, the field)
+    whose detail + expected name the cause and the one-char fix.
+
+Proposed diagnostic text:
+  `<path>`: unevaluated_form: `(<name> …)` inside tmpl:: froze as data — only ~-marked
+  forms evaluate. Wrap the whole expression in ~:  `:<field> ~(<name> …)`
+  expected: a literal, or a single ~-wrapped expression for field `:<field>`
+
+Plug-in:
+  with {:ok, resolved} <- resolve_holes(node),
+       :ok <- detect_unevaluated_forms(resolved),   # NEW
+       {:ok, leaves} <- place(resolved, @probe_rect, "source") do ...
+
+Happy paths find no frozen call → `:ok` → existing logic unchanged (non-breaking). This
+SUBSUMES the lone-bare-ref case (`:fg data/status-color` with no `~`) — same fingerprint.
+
+* Acceptance (observable)
+- The trace's `(str … ~(get …) …)` slot is rejected with reason `unevaluated_form`,
+  naming `str`, field `text`, and the `~(str …)` fix; last-good intact.
+- A bare `:fg data/status-color` (no `~`) is caught by the same detector.
+- A VALID `~(str … (get …))` (whole expr wrapped) is ACCEPTED (regression guard).
+- A static literal slot is unaffected (no false positives).
+- Focused test passes; mix check clean.
+
+* Test
+- `LayoutDiagnostic.validate/1` on the four shapes above → assert reason / :ok.
+- Co-locate with existing PLAN-015 diagnostic tests.
+
+* Out of scope
+- No `tmpl::` semantics change. No auto-eval of bare calls. Doc is FEAT-022.
+
+NOTE [2026-06-24]: Detector added in LayoutDiagnostic.validate/1 (scan after resolve_holes, before encode). Catches frozen call ([{:symbol_ref,_}|_]) and bare ref ({:symbol_ref,_}); emits unevaluated_form naming the call + the ~ fix. Tests: layout_diagnostic_test.exs (4 shapes) + layout_registry_test.exs e2e. 30 passed.

@@ -211,5 +211,52 @@ defmodule SpellAgent.Tui.LayoutRegistryTest do
       t = tools["layout/tree"].(%{})
       assert t["slot"] == "frame"
     end
+
+    # FEAT-022 (PLAN-017): a successful set folds a best-effort ASCII `peek` of
+    # the just-set node into the result, so the agent can confirm rendering inline
+    # instead of asserting success without evidence.
+    test "layout/set carries a peek of the just-set node on success" do
+      tools = LayoutRegistry.tools()
+
+      result =
+        tools["layout/set"].(%{
+          "slot" => "status",
+          "source" => %{"type" => "paragraph", "text" => "PEEK-ME"}
+        })
+
+      refute Map.has_key?(result, "err")
+      assert result["peek"] =~ "PEEK-ME"
+    end
+
+    test "layout/set omits peek (but still succeeds) for a node that can't render standalone" do
+      tools = LayoutRegistry.tools()
+
+      result =
+        tools["layout/set"].(%{
+          "slot" => "status",
+          "source" => %{"type" => "pane", "pane" => "x", "focusable" => true}
+        })
+
+      refute Map.has_key?(result, "err")
+      refute Map.has_key?(result, "peek")
+    end
+
+    # BUG-013 (PLAN-017): a bare `(str … ~x …)` inside tmpl:: is delivered to the
+    # agent as a named `unevaluated_form` diagnostic, not an opaque encode error.
+    test "layout/set reports unevaluated_form for a bare (str …) inside tmpl::" do
+      tools = LayoutRegistry.tools()
+
+      {:ok, step} =
+        PtcRunner.Lisp.run(
+          ~S'(tmpl:: {:type "paragraph" :text (str "turn " ~(get data/status :label))})'
+        )
+
+      result = tools["layout/set"].(%{"slot" => "status", "source" => step.return})
+
+      assert result["reason"] == "bad_layout"
+      assert result["diagnostic"]["reason"] == "unevaluated_form"
+      assert result["diagnostic"]["detail"] =~ "str"
+      assert result["err"] =~ "unevaluated_form"
+    end
   end
 end

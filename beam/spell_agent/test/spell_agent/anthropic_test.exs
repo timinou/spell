@@ -67,6 +67,36 @@ defmodule SpellAgent.AnthropicTest do
     end
   end
 
+  describe "tool_result is_error flag (BUG-014)" do
+    # A rejected tool returns %{"err" => _}; the shared Hist.Result.error?/1
+    # classifier must flag the tool_result block so the model cannot narrate past
+    # a rejection as if it succeeded. Content reaches here as a JSON binary.
+    test "a rejected tool result is flagged is_error on the tool_result block" do
+      body =
+        Anthropic.build_body("claude-sonnet-4", %{
+          messages: [
+            %{role: :tool, tool_call_id: "t1", content: Jason.encode!(%{"err" => "bad layout"})}
+          ]
+        })
+
+      [block] = hd(body["messages"])["content"]
+      assert block["type"] == "tool_result"
+      assert block["is_error"] == true
+    end
+
+    test "a normal tool result is not flagged" do
+      body =
+        Anthropic.build_body("claude-sonnet-4", %{
+          messages: [
+            %{role: :tool, tool_call_id: "t1", content: Jason.encode!(%{"text" => "ok"})}
+          ]
+        })
+
+      [block] = hd(body["messages"])["content"]
+      refute Map.has_key?(block, "is_error")
+    end
+  end
+
   describe "tool prefix helpers" do
     test "apply/strip round-trip" do
       assert Anthropic.apply_tool_prefix("find") == "proxy_find"

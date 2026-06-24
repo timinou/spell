@@ -1,0 +1,54 @@
+#+TITLE: FEAT: layout/set success carries a rendered peek of the just-set slot
+#+STATE: DONE
+#+SESSION_ID: 1514f4cfb32f784f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-23T22-33-25-964Z_1514f4cfb32f784f.jsonl]]
+#+CUSTOM_ID: FEAT-022-feat-layout-set-success-carries-a-render
+#+LAYER: tui
+#+PLAN: PLAN-017
+#+STATUS: planned
+#+COMPLETION_HASH: 2e68623c1de00f10
+
+* Initial Message
+
+/home/user/.spell/traces/sess-142c16bc2d70cf90.20260623-223318.txt why did it only change the interface the second time? what does that mean about the alignment of the prompt and the system and the code?
+
+* Symptom
+`layout/set` success returns the whole live tree but NO rendered evidence. The agent
+asserted "the interface is now live!" without anything to check the claim against. The
+prelude already says "see it before you trust it" (call `layout/render` after) — the agent
+skipped it. Fold a trimmed preview INTO the success result so verification is unavoidable.
+
+* Fix
+In `lib/spell_agent/tui/layout_registry.ex` `set_result/2`, on the `:ok` branch (currently
+`tree()`), ALSO render the just-set slot via the existing `RenderProbe` machinery and add a
+`"peek"` key: a small ASCII string (cap width/height, e.g. the slot rect or a fixed
+~60×8) of what the screen will show.
+
+Shape: keep returning the tree (do NOT change existing contract — additive only):
+  %{...tree..., "peek" => "<ascii lines>", "slot" => slot}
+  (or a top-level `"peek"` alongside the tree map)
+
+Reuse `RenderProbe` (the `layout/render` tool path). It resolves holes against an empty
+env (so a `tmpl::` slot shows `·` placeholders — acceptable + informative: "shape ok,
+holes live"). Pane nodes preview empty (existing limitation, fine).
+
+* Best-effort contract
+- A peek failure MUST NOT fail the set. Wrap in try/catch; on any failure, omit `peek`
+  (the set already succeeded). The peek is a courtesy, never a gate.
+- Cost: one headless draw per `layout/set` — authoring-frequency, not per-frame. Fine.
+
+* Acceptance (observable)
+- A successful `layout/set` of a static paragraph returns a `"peek"` whose ASCII contains
+  the paragraph's text.
+- A successful `layout/set` of a `tmpl::` slot returns a `"peek"` (holes as `·`).
+- A peek render failure leaves the set result valid (tree returned, no `err`).
+- Focused test passes; mix check clean.
+
+* Test
+- `layout/set` a known paragraph → assert `peek` is present and contains expected text.
+- Force a peek failure (e.g. malformed-but-accepted node if reachable) → set still ok.
+
+* Out of scope
+- Full-fidelity pane previews (needs live App state). Per-cell/scrolling peeks.
+
+NOTE [2026-06-24]: peek/1 added to layout_registry set_result :ok branch via RenderProbe.render (64x8). Best-effort: render failure/empty omits the key, never gates the set. Tests: peek present for paragraph, omitted for pane. 30 passed.

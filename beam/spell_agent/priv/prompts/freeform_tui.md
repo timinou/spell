@@ -66,6 +66,25 @@ a variable-length list of rows from live data:
 
 A failed hole renders as `·` and never breaks the frame.
 
+**`~` is the only thing that evaluates.** Inside `tmpl::`, a `~form` is frozen as
+a hole and evaluated against `data/*` at render; *everything else is frozen as
+inert data and never runs* — including function calls like `str`, `map`, `join`.
+To COMPUTE a value from data, wrap the WHOLE expression in one `~`, not just the
+variables inside it:
+
+    ;; WRONG — `str` has no `~`, so it freezes as an unevaluated form. The slot is
+    ;; rejected with an `unevaluated_form` diagnostic ("a (str …) inside tmpl::
+    ;; froze as inert data … wrap the whole expression in ~").
+    (tmpl:: {:type "paragraph" :text (str "turn " ~(get data/status :turns))})
+
+    ;; RIGHT — one `~` over the whole call; it evaluates to a string at render.
+    (tmpl:: {:type "paragraph" :text ~(str "turn " (get data/status :turns))})
+
+When a `layout/set` is rejected, read the `diagnostic` it returns — it names the
+field, the cause, and the fix. When it succeeds, the result carries a `peek`: an
+ASCII preview of the slot you just set, so you can CONFIRM it rendered instead of
+assuming it did.
+
 The `data/*` environment (read in a hole as `data/<key>`):
 
 - `data/status` — `{:running? :result :turns :tools :label :color :composer …}`
