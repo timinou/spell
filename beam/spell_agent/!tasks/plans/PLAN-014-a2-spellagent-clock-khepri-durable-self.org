@@ -1,8 +1,9 @@
 #+TITLE: A2: SpellAgent.Clock — Khepri-durable self-wake scheduler + clock/ verbs
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 1514dbb097c44599
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-23T20-43-40-511Z_1514dbb097c44599.jsonl]]
 #+CUSTOM_ID: PLAN-014-a2-spellagent-clock-khepri-durable-self
+#+COMPLETION_HASH: de2373b2aad358fb
 
 * Initial Message
 
@@ -105,3 +106,5 @@ the calling session), and an optional `:budget`.
 4. README "agency" section + worked examples; cross-link body-and-mind.md.
 
 Commit per wave.
+
+NOTE [2026-06-23]: Shipped waves 1-4: {:clock,id} store kind; SpellAgent.Clock + Clock.Wake (durable rehydrate, fire-as-synthetic-caller, wake-budget w/ backoff); clock/* verbs wired into Session.run + supervised. 25 tests green (15 clock + 9 namespace + 1 store contract). README Agency section + body-and-mind.md cross-link. Commits d8bf78127..1f3cc69a4.

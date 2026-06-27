@@ -1,0 +1,590 @@
+#+TITLE: MESH milestones: spawn-session → consensus → watcher → decisions (execution roadmap)
+#+STATE: DOING
+#+SESSION_ID: 15195d97dff3d090
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-27T08-45-09-375Z_15195d97dff3d090.jsonl]]
+#+CUSTOM_ID: PLAN-019-mesh-milestones-spawn-session-consensus
+
+* Initial Message
+
+what's pending in this folder's work?
+
+* Purpose
+
+A milestone-by-milestone execution roadmap for the MESH feature cluster
+(PROJ-006), sequenced from the single highest-leverage unstarted primitive
+(FEAT-011 spawn-session) through the consensus, watcher, and human-surface layers.
+
+This plan was authored after a full 6-agent codebase verification swarm
+[2026-06-27] that mapped every MESH org item to actual code. It supersedes the
+loose "all wave-0" backlog ordering with a real dependency DAG and concrete,
+evidence-grounded acceptance gates.
+
+It does NOT restate each FEAT's full design — each milestone POINTS at the
+authoritative FEAT org body + the docs/agent-mesh-theory/ chapters. It adds:
+the true current-state delta, the corrected integration points, the build order,
+and the cross-FEAT gates the individual specs do not encode.
+
+* Verified current state (the ground truth this plan builds on)
+
+Built + tested (FEAT-008/009/010, the mesh foundation — PLAN-013):
+- lib/spell_agent/mesh/record.ex   — MeshRecord struct, content-hash, canonical
+  forms. @kinds = [:goal, :finding, :claim, :verdict, :intention].
+  dedup_kinds/0 = [:goal, :finding, :verdict].
+- lib/spell_agent/mesh/store.ex    — per-region monotone SEQ, dedup-by-hash,
+  region/2, by_kind, by_match, claims_for, sealed?.
+- lib/spell_agent/mesh/region.ex   — fork_a (goal+parent → hashed region id),
+  fork_b (structured|slug → content-addressed), write_cap?.
+- lib/spell_agent/mesh/namespace.ex — black/* verbs.
+- lib/spell_agent/mesh.ex          — facade, threads region+store via Namespace.
+
+black/* verb status (namespace.ex):
+- black/post   ✓ live (kinds :goal|:finding|:intention)
+- black/query  ✓ live
+- black/claim  ✓ live (seq-ordered winner, expired-lease handling)
+- black/fold   ✓ live
+- black/watch  ✓ LIVE (namespace.ex:54 → watch/5; posts :intention, validates
+  :when/:wake). NOTE: the FEAT-013 org body calls this "stubbed" — that is STALE.
+  The single-node condition-fuse already ships as A3/FEAT-021.
+- black/decide ✗ STUB → not_yet("black/decide", "FEAT-012") at namespace.ex:55.
+  This is the ONLY stubbed verb.
+
+Already supervised (lib/spell_agent/application.ex start/2 children):
+- SpellAgent.Mesh.Watcher — per-node, tails [:spell, :mesh, :post] telemetry,
+  fires a matching :intention's wake THROUGH SpellAgent.Clock (one detonator,
+  one wake budget). Started after Clock. Best-effort. This is FEAT-021 (A3),
+  the single-node slice of FEAT-013.
+- SpellAgent.Clock (A2, PLAN-014, done) — durable wake scheduler, rehydrate on
+  boot, synthetic-caller re-entry into SpellAgent.run/2.
+
+Dependencies already present (no new deps needed for the consensus path):
+- :ra 3.1.2 — transitive via {:khepri, "~> 0.18"} (mix.lock). FEAT-012's
+  node-plane Ra election runs on THIS cluster; do NOT add a second ra dep.
+- PtcRunner.Lisp.Eval.ParallelBudget (beam/ptc_runner/.../parallel_budget.ex):
+  new(capacity::pos_integer) → t; try_acquire(t) → :ok | :full;  ← CORRECTION:
+  the FEAT-011 org says :no_budget; the REAL return is :full. held/1, available/1.
+  Slot model is :atomics-backed, lock-free.
+
+Absent (the work this plan sequences):
+- tool/spawn-session + tool/await-session (FEAT-011) — no code.
+- Mesh.Consensus / black/decide real impl (FEAT-012) — only the stub.
+- FEAT-013 multi-node exactly-once path (the single-node watcher exists).
+- :decision / :resolution record kinds (FEAT-019) — absent from @kinds.
+- Config whitelist mesh cells: config.ex @whitelist = ~w(model thinking
+  system-addendum). Missing mesh.budget, mesh.lease_ms, mesh.default_store.
+- mix spell.mesh + mesh panes (FEAT-014), gallery/watch tasks (FEAT-015),
+  context_lens (FEAT-017 — projection.ex is the generic PLAN-345 reconciler,
+  NOT this), ergonomic combinators (FEAT-018), hole affordances (FEAT-020).
+
+* The dependency DAG (why this order)
+
+  FEAT-010 (done) ─┬─> M1 FEAT-011 spawn-session ─┬─> M5 FEAT-018 combinators
+                   │                              ├─> (FUP-013 sh streaming)
+                   │                              └─> M4 FEAT-014/015 (spawn pane)
+                   ├─> M2 FEAT-012 consensus ─────┬─> M3 FEAT-013 multi-node path
+                   │   (decide verb)              └─> M6 FEAT-019 (decide gate)
+                   └─> M0 Config cells + budget holder (tiny enabler, unblocks M1+M3)
+
+  M6 FEAT-019 decisions  <─ needs M3 watcher firing + :decision/:resolution kinds
+  M4 mesh inspector      <─ needs M1 (spawn pane shows children) + reads M2/M3 state
+  M7 FEAT-017 context_lens <─ needs M1 (watermark in MissionHandle) — independent of M2/M3
+
+  Critical path: M0 → M1 → {M2 → M3 → M6}. M4/M5/M7 hang off M1 and parallelize.
+
+FEAT-011 is the single highest-leverage unstarted item: it unblocks M3 (budget),
+M4 (spawn pane), M5 (sugars build on spawn/await), and FUP-013 (streaming reuses
+the budget + SessionRegistry). Build it first.
+
+* Milestone M0 — Config cells + ParallelBudget holder (the tiny enabler)
+
+Rationale: both M1 (spawn) and M3 (watcher fire-slots) read a shared mesh budget
+and live-settable mesh cells. Standing this up first removes a shared blocker and
+is ~1 file-touch each. Do it as its own small commit.
+
+Edits:
+- lib/spell_agent/config.ex: add "mesh.budget", "mesh.lease_ms",
+  "mesh.default_store" to @whitelist (the verified Config.put whitelist gate at
+  config.ex:44). Keep them STRING keys, same as the existing cells.
+- lib/spell_agent/application.ex: add an app-supervised ParallelBudget holder
+  (a tiny Agent or :persistent_term) created once from
+  ParallelBudget.new(Config.get("mesh.budget") || default). Read by spawn-session
+  (M1) and the watcher fire path (M3). Place it AFTER SpellAgent.Config and before
+  Mesh.Watcher in the children list (the watcher reads it). Best-effort posture:
+  a missing holder degrades spawn to "capacity 1" or a clear raise, never a boot
+  failure.
+
+Acceptance:
+- (tool/define-config {:key "mesh.budget" :value 8}) succeeds (whitelisted).
+- the holder is readable at app runtime; held/0 returns 0 at boot.
+- mix check clean; app boots with the holder supervised; boot survives the holder
+  being absent (best-effort).
+
+* Milestone M1 — FEAT-011 tool/spawn-session + tool/await-session (THE keystone)
+
+Authoritative spec: !tasks/features/FEAT-011-tool-spawn-session-the-reflexive-seam-ru.org
+Read the DOC-14 RESHAPE section (await-free) + the HANDLE-carries-watermark
+section — those SUPERSEDE the early :await design. Docs: 08-implementation.org §C,
+04-surface.org §2/§3/§5, 14-reconciliation.org (Decision 2), 09-worked-scenarios.org
+(S1/S2/S5 are the behavioural acceptance).
+
+Shape (await-free, per doc-14 — this is settled, do not re-litigate):
+- tool/spawn-session ALWAYS DETACHES. Runs a full SpellAgent.Session.run/2 under a
+  supervised Task; returns a %MissionHandle{} IMMEDIATELY (string-keyed for PTC):
+  %MissionHandle{session, region, ref (Task ref), watermark, parent, status}.
+  NO :await arg.
+- tool/await-session {handle|session} → blocks on the Task ref, returns the child's
+  result; a crashed child returns {:error, reason}, never hangs.
+
+Modules / edits (mirror the verified native-tool seam):
+- lib/spell_agent/tools.ex meta_tools/0 (tools.ex:156): add "spawn-session" =>
+  &spawn_session/1 and "await-session" => &await_session/1 beside "define-tool".
+  Add both to inventory/0's meta list so list-tools shows them. Params:
+  spawn-session ["prompt","region","tools","budget"];  await-session ["handle","session"].
+- spawn_session(args):
+  1. budget := the M0 holder. ParallelBudget.try_acquire(budget). On :full →
+     raise "parallel_capacity_exceeded" (the invoke_tool contract turns a raise
+     into an LLM-facing error, same as define_tool). ← CORRECTION: match on :full,
+     NOT :no_budget (the org body is wrong; verified parallel_budget.ex).
+  2. region := args["region"] present → join it (Fork B rendezvous); :auto/absent
+     → Mesh.Region.fork_a(goal, session_id) (Fork A). The minted id is the child's
+     write-capability.
+  3. attenuate (D12): child_tools = Map.take(Tools.build_tools_map(), args["tools"])
+     |> Map.merge(Mesh.verbs(child_sid, region: region, store: store)). Child gets
+     ONLY the named subset + its mesh verbs.
+  4. watermark := Mesh.Store.max_seq(region) (or the store's region seq) AT SPAWN —
+     capture in the handle, do NOT use it (forward-compat for M7/FEAT-017).
+  5. Acquire the slot BEFORE the Task starts; release on the Task's exit (normal OR
+     crash, via Task monitor) so a detached crash still frees the slot and its
+     posted findings PERSIST (PT-4).
+  6. Thread :llm to the child Session.run (from args or inherited from parent run
+     opts). REQUIRED — deterministic tests script children via a fake llm
+     (zero-network). Resolution order: parent-opt → arg-override → Anthropic.callback.
+- lib/spell_agent/session.ex run/2: thread opts[:region] into the Mesh.verbs merge
+  (run/2 already takes opts[:session_id] + merges Hist.verbs). spawn_session sets
+  both session_id and region.
+- The child is a full Session.run/2 → gets its own Hist history + auto-registers in
+  SessionRegistry (pid-monitored). No extra membership code; a crashed child
+  self-unregisters.
+
+Budget unification note (cross-cuts A2/A5, from the FEAT-011 A6 section): the
+:budget field here MUST be the same shape Clock threads into run/2
+({:turns, :cost_ceiling}) and clamp to the same body ceiling. Today Session.run
+does not yet ENFORCE a ceiling (PLAN-014 open). Decide the SINGLE clamp point in
+Session.run before inventing a second budget path. If unclear at build time, ship
+spawn with the turns cap it can enforce and FILE a FUP for the unified clamp —
+do not fork the budget logic.
+
+Edge cases (from spec): budget exhausted mid-fan-out (Nth spawn fails fast, a
+threshold watch with ttl covers the shortfall); await-session on a crashed child
+returns {:error}; recursion (a child that spawns takes its OWN slot from the same
+global budget — cap holds across depth); llm inheritance.
+
+Acceptance (observable):
+- mix test test/mesh/spawn_session_test.exs passes (FAKE llm via opts[:llm]).
+- spawn-session returns {session, region, handle} immediately; child runs to
+  completion writing the shared region.
+- await-session on that handle returns the child's result (the sync case).
+- spawning past budget capacity raises parallel_capacity_exceeded (PT-1).
+- a spawned child appears in SessionRegistry.live/0 while running, gone after.
+- capability attenuation: a child given :tools ["find"] cannot call a tool outside
+  that set + its black/* verbs.
+- end-to-end Fork-A: parent posts goal, spawns 3 children (await-free) each posting
+  a finding, parent black/fold's 3 — ZERO sibling messages (the headline contract).
+- no slot leak: held/0 returns to baseline after both success and crash paths.
+- mix check clean.
+
+Out of scope (→ M5 / FEAT-018): ask, prompt::, scatter/gather/mesh/map,
+on/reconcile, narrowing. M1 ships ONLY spawn-session + await-session.
+
+* Milestone M2 — FEAT-012 Mesh.Consensus + real black/decide
+
+Authoritative spec: !tasks/features/FEAT-012-mesh-consensus-black-decide-over-the-nod.org
+READ the PRE-CODING CORRECTION (P1.2) — the sealed watermark is a STORE SEQ /
+Raft log index, NOT a Lamport scalar. This is load-bearing for idempotency.
+Docs: 08-implementation.org §C (Consensus), 02-blackboard-substrate.org §4.3,
+06 DC-7/DC-8/DC-1.
+
+Modules / edits:
+- lib/spell_agent/mesh/consensus.ex (NEW — SpellAgent.Mesh.Consensus):
+  decide(%{region, question, quorum, fold, store}) → {:verdict id, :leader node,
+  :payload} | {:pending reason}:
+  1. SEAL (DC-8): watermark := the committed per-region STORE SEQ at seal time
+     (Khepri: the Raft log index of the seal command; Memory: the region counter
+     value). Seal MUST be the first committed Ra step (Khepri) or an atomic counter
+     read (Memory) so the frontier is fixed before any fold. ← per P1.2, NOT max
+     lamport.
+  2. verdict id := hash(region <> question <> watermark_seq) — idempotent: a
+     re-elected leader commits the SAME id; a second commit is a no-op collapse.
+     %MeshRecord :watermark field holds the SEQ (integer).
+  3. NODE-level Ra leader-election on the cluster Khepri already runs (do NOT build
+     a new consensus engine — reuse the khepri_cluster Ra system). Leader evaluates
+     :fold ONCE (PtcRunner.Lisp.run, sandboxed) over records WHERE seq <= watermark
+     (a stable, totally-ordered set → identical verdict across re-election), then
+     Mesh.Store.put the :verdict record.
+  4. quorum := NODE quorum (:majority default). Sub-quorum → {:pending}, caller
+     retries.
+  5. SINGLE-NODE MODE (Store.Memory or 1-member Ra): degenerate to seal-fold-write
+     locally, no real election (PT-10 graceful n=1). SAME code path; cluster size
+     decides.
+  6. a terminal verdict latches region :sealed (DC-9) via a Mesh.Store flag write;
+     subsequent posts rejected.
+- lib/spell_agent/mesh/namespace.ex: REPLACE the black/decide not_yet stub
+  (namespace.ex:55) with a real delegation to Consensus.decide/1, binding
+  region+store from the closure.
+
+Edge cases (assert): leader crash after election before commit → re-election folds
+the SAME sealed watermark → SAME id (idempotent); partition 2|1 → majority commits,
+minority {:pending}, converges on heal (Ra is CP, no split-brain); concurrent
+decide on same (region, question) → same watermark → one commit; Store.Memory has
+no Ra → MUST still work single-node.
+
+Acceptance (observable):
+- mix test test/mesh/consensus_test.exs passes single-node (Store.Memory): decide
+  seals, folds, writes one verdict; a second decide with the same watermark is a
+  no-op (idempotent id).
+- DISTRIBUTION GATE: a real TWO-NODE Khepri test — three findings across two nodes,
+  one decide commits one verdict visible on both; a simulated partition leaves the
+  minority {:pending}; healed convergence (PT-3/PT-4 across nodes). This test gates
+  the "distribution works" claim. If the test harness cannot stand up two nodes,
+  ship single-node + FILE a FUP for the two-node gate; do NOT claim distribution
+  without the test.
+- decide gating: an irreversible-effect :fold runs exactly once (DC-1).
+- mix check clean.
+
+* Milestone M3 — FEAT-013 multi-node exactly-once watcher path
+
+Authoritative spec: !tasks/features/FEAT-013-mesh-watcher-per-node-trigger-engine-for.org
+READ the PRE-CODING CORRECTION (P1.1) — multi-node exactly-once firing CANNOT rest
+on a session-plane claim alone (Khepri reads are local, not linearizable; two
+per-node watchers both claim + both fire). Docs: 08 §C, 04-surface.org §1/§5,
+06 DC-6, 02 §8.
+
+SCOPE CORRECTION vs the org body: the single-node watcher ALREADY SHIPS
+(SpellAgent.Mesh.Watcher, supervised, FEAT-021/A3 — fires through Clock). So M3 is
+NOT "build the watcher" — it is "add the multi-node exactly-once firing path +
+fuel/ttl cascade bounding + the claim-dedup correctness the single-node version
+does not need." Verify what watcher.ex already does (228 LOC, fires :intention on
+matching post) before adding.
+
+What remains to build:
+- Multi-node exactly-once firing (choose at build, default Option A):
+  - Option A (preferred when Khepri is the store): firing is a NODE-PLANE
+    micro-decide — a Ra command on the node cluster that atomically marks
+    (intention_id, event_seq) fired and commits exactly once. REUSES Mesh.Consensus
+    (M2) — that is why M3 depends on M2 for the multi-node path. Not a new mechanism.
+  - Option B (single-node/Memory or Khepri-trigger mode): keep claim-dedup,
+    best-effort, with a mandatory :settle_ms + leader-consistent re-fold before :do,
+    DOCUMENTED as best-effort exactly-once (acceptable because :do is itself
+    idempotent-or-decided; a :do with irreversible effect routes through M2 decide).
+  - Single-node (one ETS table, one watcher) is ALREADY exactly-once (no replication
+    window) — Option B suffices there.
+- fuel + ttl bounding: decrement the intention's :fuel on each fire (monotone
+  counter / supersede); drop at fuel 0 or now > registered_at + :ttl. This bounds a
+  self-retriggering cascade A→B→A (burns fuel, stops). Verify whether the shipped
+  watcher already does this; add if missing.
+- ParallelBudget on the :do spawn path: try_acquire before a :do that spawns,
+  release after — reuse the M0 holder.
+
+Edge cases: two nodes both see a replicated post → claim/micro-decide ensures ONE
+:do (DC-6, the headline test); :do crashes → claim lease expires → another node may
+re-fire, bounded by fuel; watcher absent in a headless test → black/watch still
+POSTS the durable intention (best-effort).
+
+Acceptance (observable):
+- mix test test/mesh/watcher_test.exs passes.
+- single-node: register a watch, post a matching finding → :do runs once; post
+  again past fuel → does not run.
+- exactly-once under simulated two-node duplication (DC-6): one :do execution
+  despite both nodes observing the post.
+- a self-retriggering watch burns fuel and halts (PT-1).
+- mix check clean; app still boots with Mesh.Watcher supervised; boot survives the
+  watcher being absent.
+
+* Milestone M4 — FEAT-014 mix spell.mesh inspector + FEAT-015 gallery/watch
+
+Authoritative specs:
+!tasks/features/FEAT-014-mix-spell-mesh-live-region-inspector-reg.org
+!tasks/features/FEAT-015-mix-spell-mesh-gallery-spell-mesh-watch.org
+Docs: 07-screens.org (the pane set). Depends on M1 (the spawn pane shows live
+children) and READS M2/M3 state (verdicts, intentions). Mirrors the existing
+spell.tui / spell.gallery / spell.sessions tasks (lib/mix/tasks/).
+
+FEAT-014 (0/4 modules today):
+- lib/mix/tasks/spell.mesh.ex (NEW) — mirror spell.tui.ex / spell.sessions.ex shape.
+- Three mesh panes (PURE projections, no view/* builders yet):
+  - Regions pane: fold the mesh forest by region (Mesh.Store.region/2 read).
+  - Board pane: fold the selected region's records by kind
+    (goal/findings/claims/verdicts).
+  - Spawn pane: reuse SpanTree indentation + an intention-watches list.
+- Wiring the panes needs: a view/pane builder (thin tagger) in tui/view.ex, and 3
+  new clauses in tui/default_layout.ex pane_module/1 (regions/board/spawn → modules).
+
+FEAT-015 (0/3 modules today):
+- lib/spell_agent/tui/mesh_scenes.ex (NEW) — clone tui/scenes.ex shape, PURE fixture
+  definitions with FIXED seq/t (deterministic, like Scenes.fixed t0/t1).
+- lib/mix/tasks/spell.mesh.gallery.ex (NEW) — interactive + --snapshot mode,
+  mirrors spell.gallery.ex. --snapshot writes test/snapshots baselines.
+- lib/mix/tasks/spell.mesh.watch.ex (NEW) — --list/--tail/--fold/interactive modes,
+  mirrors spell.sessions.ex. CRITICAL: --fold REGION:kind:reduce parsing + empty
+  region / unknown id edge cases.
+
+Acceptance: the three panes render a live region's forest; spell.mesh.gallery
+--snapshot produces deterministic baselines (re-run = no-op diff = determinism
+proof, the CI gate); spell.mesh.watch --fold reduces a region correctly; mix check
+clean.
+
+* Milestone M5 — FEAT-018 ergonomic combinators (the spawn sugars)
+
+Authoritative spec: !tasks/features/FEAT-018-fup-mesh-ergonomic-combinators-ask-promp.org
+PURE ADDITION over M1's await-free primitives (doc-14 made M1 the right shape so
+these are sugar, no rework). Depends on M1. Some sub-parts (on/reconcile/mesh/view)
+need M2/M3.
+
+Sub-parts (per spec S-A..S-F):
+- S-A ask / prompt:: — ask = spawn + await-session (the strict LLM fn);
+  prompt:: = reader freeze.
+- S-B scatter/gather/mesh-map — spawn N children, await results; cache-aware shared
+  prefix.
+- S-C on/reconcile/mesh-view — NEEDS M2/M3 (consensus/watcher) first.
+- S-D narrowing — Narrow.signature_at derives output shape.
+- S-E memory threading — Session.run accepts opts[:inherit_memory] override (SMALL
+  change, currently absent: base = load_continuation(sid).memory; seed =
+  opts[:inherit_memory] || %{}; initial = Map.merge(base, seed)). Memory is a
+  source-fold (see FEAT-017 addendum), NOT a flat copy.
+- S-F spawn-site introspection — infer model/budget/tools/cache/returns bundle
+  (absorbed the cancelled FEAT-016 caching via the handle watermark from M1).
+
+Acceptance: ask returns a child result synchronously; scatter/gather fans out N +
+folds; opts[:inherit_memory] seeds a child's memory; mix check clean. Ship S-A/S-B/
+S-E first (they only need M1); defer S-C to after M3.
+
+* Milestone M6 — FEAT-019 decisions as stigmergy + human surface
+
+Authoritative spec: !tasks/features/FEAT-019-decisions-as-stigmergy-decision-resoluti.org
+Docs: 16-decisions-and-the-human-surface.org (full design + honest ledger),
+07-screens.org. Depends on M3 (the watcher fires :on-answer) + the record-kind
+addition. Dashboard rides PLAN-012 holes (built) + PROJ-004 reactive cells (built)
++ LayoutRegistry/Reaction DSL (built).
+
+The records (two new kinds; creator defines the answer schema):
+- :decision {:question, :answer-schema, :on-answer <frozen ptc>, :gate?}
+- :resolution {:decision <seq>, :answer <matches schema>}
+
+Modules / edits:
+- lib/spell_agent/mesh/record.ex: add :decision, :resolution to @kinds (record.ex:68)
+  AND decide their dedup posture — dedup_kinds/0 (record.ex:72) is currently
+  [:goal,:finding,:verdict]. OPEN DECISION (resolve before coding): are decisions
+  dedup'd (identical question collapses) or append-only (every decision unique by
+  intent)? The org assumes dedup. This affects store efficiency + dashboard
+  group-by/count. Also update new/4's @kinds guard (record.ex:88,105) + the store
+  hash-index (maybe_index_content).
+- the ONE capability wire-up: grant black/query (mesh READ verbs) to the read-only
+  Cell W1 tier (find/get/hist-reads today). One-line addition; cells stay read-only.
+- a :decision answer-schema → choice-affordances renderer (tmpl:: over the schema).
+- a Reaction binding: keystroke → black/post :resolution for the focused decision
+  (lives in the REACTION tier, deliberate keystroke — NOT the read-only cell tier).
+- the watcher (M3) handles :on-answer firing + the gate predicate (no new control
+  flow): (black/watch {:when {:kind :resolution :where {:decision <seq>}}
+  :do <on-answer> :fuel 1 :ttl <long>}).
+
+Edge cases: decision resolved twice (watch fuel 1 fires once, lowest-seq resolution
+wins); decision expires unanswered (ttl lapses, default branch / "expired" pane);
+answer fails schema (gate predicate fails, "answer rejected" pane); policy+human
+race (first resolution wins, interchangeable resolver).
+
+Acceptance: post :decision + matching :resolution → :on-answer runs once (gated +
+ungated both correct); the decisions cell shows open decisions and hides resolved;
+a dashboard reaction posts a :resolution and the queued task fires; a policy can
+resolve with no human action; schema-mismatch does not fire the gated task; mix
+check clean.
+
+* Milestone M7 — FEAT-017 context projection (the cohort lens) [parallel, off M1]
+
+Authoritative spec: !tasks/features/FEAT-017-context-projection-inject-a-childs-conte.org
+Independent of M2/M3/M6 — hangs off M1's MissionHandle watermark. Can be built any
+time after M1.
+
+CRITICAL NAMING GUARD: lib/spell_agent/tui/projection.ex EXISTS but is the GENERIC
+PLAN-345 pane-reconciler (decides which panes are dirty per event). It is NOT this
+feature. Build FEAT-017 as a NEW module (e.g. context_lens.ex) — do NOT extend or
+collide with projection.ex. Keep the two strictly separate (pane reconciliation vs
+context injection).
+
+Core: project the union of (own hist + sibling hists @ the spawn watermark + region
+records <= W) into a data bag. Key seam: a black :finding carries :author/:seq →
+join to the finding source's hist nodes (WHAT + WHY). Reuses Hist.Lens.project +
+Mesh.Store queries. Deterministic @ W (the watermark M1 captures). See the org
+addendum: generalize to a SOURCE-FOLD layer (edited_files/files_read/tool_history/
+findings/conversation folds) shared between the context lens (pull) and memory fold
+(push, FEAT-018 S-E).
+
+Edge cases: no siblings yet / sibling still running / author hist GC'd.
+
+Acceptance: a child's context bag includes a sibling's finding + the originating
+hist nodes at the watermark; deterministic for a fixed W; mix check clean.
+
+* Cross-milestone gates (the contract no single FEAT encodes)
+
+- Every milestone ends GREEN: its own mix test target + mix check clean. No
+  milestone lands red.
+- Single-node first, always. Every multi-node behaviour (M2 distribution, M3
+  exactly-once) ships behind a degenerate single-node path that works without Ra,
+  so dev/test never needs a cluster. The two-node test is the distribution GATE;
+  if the harness can't run it, ship single-node + FILE a FUP, never claim
+  distribution without the test.
+- Best-effort boot posture (F.2): every supervised mesh component (budget holder,
+  watcher, future consensus boot) wraps so a sick component NEVER fails app boot or
+  a mission. Copy the SessionRegistry/Tui.Store posture (call_if_up, rescue/catch
+  → :ok / no-op when down).
+- No second scheduler / no second budget path. black/watch fires THROUGH Clock
+  (one detonator). spawn + watch-fire share the ONE M0 ParallelBudget holder. If a
+  unified budget clamp in Session.run is unresolved, FILE a FUP — do not fork the
+  logic (see M1 budget-unification note).
+- Capability tiers stay honest: cells read-only (black/query only), reactions write
+  (black/post). Never grant a mutator to the cell tier (M6).
+- Determinism for tests: children driven by a fake llm (opts[:llm], zero-network);
+  consensus/watcher folds over seq-ordered sets; gallery fixtures have fixed seq/t.
+
+* Org-state corrections already applied [2026-06-27]
+
+These three were stale and have been flipped (verification-confirmed):
+- PLAN-001 (hist substrate) DOING → DONE.
+- PLAN-010 (session listing + trace) DOING → DONE.
+- PLAN-009 (freeform TUI v1) ITEM → DONE (research continuation PROJ-002/003/005
+  remains separate, ITEM).
+
+* Backlog NOT in this plan's critical path (for completeness)
+
+Research track (docs only, no code; a real dependency chain):
+- PROJ-002 (L-2 layouts-as-spans / time-travel) → PROJ-003 (L-3 self-writing
+  prelude) → PROJ-005 (L-5 co-edited tree). PROJ-005 also needs FUP-006
+  (cross-session attach) + an unfiled security/consent FUP before write-attach.
+
+FEAT-020 (hole affordances — :slot → keymap bindings + reactions): ABSENT,
+no hole_affordance.ex. Substrate (hole_resolver, hole_diff, keymap_registry) exists.
+Independent of the mesh critical path; can slot after M6 (it consumes the same
+Reaction tier + the bounded intent-atom pool — DoS guard, PLAN-346 W3r).
+
+Followups (independent quick-to-mid wins, see the verification report):
+- FUP-004 span-root auto-capture (bridge done+tested, wire into record_history).
+- FUP-007 atom-DoS fuzz test (safe coercions exist, property test absent).
+- FUP-017 stale golden transcript (CONFIRMED stale; VERIFY the 2nd-turn error is
+  intended before regenerating — could mask a latent bug).
+- FUP-013 sh streaming — deferred until M1 (reuses budget + SessionRegistry).
+- FUP-012 crystal promotion — deferred (needs per-tool usage→turn index first).
+- FUP-014 DurableServer — correctly deferred to genuine multi-node.
+- FUP-015 SelfStore + self/intend, FUP-016 executive loop — design-only; reconcile
+  SelfStore against Crystal + memory + black/* before coding; FUP-016 needs a
+  monotone-progress guard (fork-bomb risk) before any impl.
+
+* BOUNDARY REFINEMENTS [2026-06-27] (after docs/elixir-ptc-boundary.md)
+
+The Elixir/PTC boundary doc (two end-to-end traces) sharpens the milestone specs
+along three axes it makes explicit: (1) the ONE sandbox primitive
+PtcRunner.Lisp.run(source, context:, tools:, caller: :in_process_v1) that every
+userland surface routes through; (2) "Elixir materializes, PTC transforms"; (3)
+the four transparent Elixir jobs — materialize private shapes → JSON-safe data,
+inject as data/* + tools map, bound-coerce the return, fail soft. Apply per
+milestone:
+
+** M1 (FEAT-011 spawn-session) — three hard contracts the boundary makes explicit
+- %MissionHandle{} MUST cross the PTC boundary STRING-KEYED (materialize job #1).
+  spawn-session returns the handle to a PTC program, so it is a plain string-keyed
+  map ("session","region","ref","watermark","parent","status"), NOT a bare struct.
+  await-session accepts {handle|session} where handle is that map (or its
+  "session" string). Mirror Tools.to_callable's stringify_keys + Harness.ui_map
+  pattern: a struct is an Elixir-internal convenience; the value that touches the
+  sandbox is data.
+- spawn-session + await-session are NATIVE meta-tools that join Tools.meta_tools/0
+  beside define-tool, under the SAME raise-on-error contract (boundary trace 2A ①:
+  "meta-tools are themselves ordinary tool-map entries"). Budget-exhausted →
+  raise "parallel_capacity_exceeded"; the invoke_tool contract renders it as an
+  LLM-facing error, EXACTLY as define_tool's raises do. Do not invent a second
+  error channel.
+- capability attenuation = Map.take(Tools.build_tools_map(), args["tools"]) |>
+  Map.merge(Mesh.verbs(child_sid, …)) IS the inject job #2 (hand the child a
+  bounded tools map). The child Session.run receives args as a stringify_keys
+  context, same as to_callable. Fail-soft: a child crash frees its slot (Task
+  monitor) and its posted findings persist — the surface never bricks.
+
+** M2 (FEAT-012 black/decide) — the :fold is userland PTC, reuse Hist.Lens exactly
+- black/decide's :fold is a POLICY (which findings, how reduced) = userland PTC,
+  run through the SAME sandbox via the SAME pattern Hist.Lens uses: materialize the
+  region's findings WHERE seq <= watermark into string-keyed, JSON-safe maps
+  (mirror Lens.project/3 — pre-extract the structural facts a fold needs, never
+  pass an Elixir struct/tuple into the sandbox), inject as data/findings, run the
+  :fold source with caller: :in_process_v1, then read step.return. A bad :fold is a
+  bad verdict payload, never a corrupt commit.
+- the INVARIANT half stays compiled Elixir: seal (store seq frontier), verdict id =
+  hash(region<>question<>watermark_seq), Ra node-election, the exactly-once commit.
+  Materialize+inject+coerce around a PTC transform; the consensus mechanism is the
+  primitive beneath it. This is hist/lens.ex's "Elixir owns primitives+invariants;
+  PTC owns policies+lenses" applied to consensus.
+- ACTION: build a small Mesh.Consensus.project_findings/2 (the Lens.project analogue
+  for mesh records) so the fold sandbox sees only data. Do NOT let the :fold touch
+  %MeshRecord{} structs directly.
+
+** M3 (FEAT-013 watch :do) — already boundary-clean, restate the contract
+- the :do fired on a matching post is frozen PTC run through the sandbox with
+  data/event bound to the post (the reaction dual: event → effects). The watcher
+  (Elixir) owns the exactly-once invariant (claim / node-plane micro-decide); the
+  :do BEHAVIOUR is userland. No refinement to the split — but ensure the post P is
+  materialized to a string-keyed map before binding as data/event (same job #1), so
+  the :do never sees a %MeshRecord{} struct.
+
+** M4 (FEAT-014/015 panes) — compiled panes for v1, note the data path
+- The shipped panes (history/tree/detail) are compiled pane modules; the mesh panes
+  (regions/board/spawn) follow that SAME compiled pattern for v1 (consistency over a
+  premature data-authoring detour). BUT the eventual boundary-correct form is a
+  PTC-authored layout (view/pane builder + layout/set), per PLAN-009's render
+  mirror. Build compiled now; FILE a FUP to re-express the mesh panes as authored
+  layout data once the view/pane builder lands. Do not block M4 on it.
+
+** M5 (FEAT-018 combinators) — SHIP AS PTC SOURCE, not compiled Elixir (biggest shift)
+- The ergonomic combinators are PURE COMPOSITIONS of the M1 primitives, so by the
+  boundary doctrine ("reach for data, not code") they ship AS PTC SOURCE — default
+  :ptc tools registered from priv/mesh/*.ptc (the hist/lenses precedent:
+  @external_resource .ptc files loaded as data, runnable + forkable by the agent),
+  NOT compiled Elixir verbs:
+  - scatter  = (map (fn p -> (tool/spawn-session …)) prompts)   ; fan-out
+  - gather   = (map (fn h -> (tool/await-session {:handle h})) handles)  ; fan-in
+  - mesh-map = scatter then gather                              ; the common case
+  - ask      = (tool/await-session {:handle (tool/spawn-session …)})  ; gather-of-one
+  These are userland Lisp over spawn/await; writing them in Elixir would re-trap
+  policy in compiled code the agent can't read/fork — the exact anti-pattern the
+  boundary doc warns against.
+- ONLY the parts that need an Elixir PRIMITIVE stay compiled: narrowing
+  (Narrow.signature_at derives an output shape — a structural fact the sandbox
+  cannot compute), and the opts[:inherit_memory] passthrough in Session.run (S-E,
+  an Elixir merge point). Everything else is .ptc.
+- prompt:: reader form is a ptc_runner reader macro (vendored), not an Elixir verb.
+
+** M7 (FEAT-017 context_lens) — materialize in Elixir, transform as a .ptc lens
+- The cohort projection MATERIALIZES in Elixir (the union of own hist + sibling
+  hists @ watermark + region records <= W → one string-keyed data bag), reusing
+  Hist.Lens.project + Mesh.Store queries — the materialize job. The actual COHORT
+  SHAPE (which folds: edited_files / files_read / tool_history / findings /
+  conversation) is a TRANSFORM, so it ships as a .ptc lens over that bag (the
+  SOURCE-FOLD layer in the FEAT-017 addendum), shared pull/push with memory fold.
+  Build the Elixir materializer + one default .ptc cohort lens; the agent can fork
+  the lens without an Elixir deploy.
+
+** Cross-cutting: the materialize boundary is now a NAMED contract
+- Every mesh value that crosses into the sandbox (MissionHandle, a fold's findings,
+  a :do's event, the context bag) goes through a project/materialize function that
+  emits string-keyed, JSON-round-trippable maps with NO structs/tuples/pids — the
+  Lens.project contract. Add these as the mesh analogue of Hist.Lens.project_node/1.
+  Every value that crosses back (a fold's verdict payload, a reaction's gaze) is
+  bound-coerced before it touches an invariant. This is not new work — it is naming
+  the pattern the boundary doc extracted, so each milestone implements it
+  consistently instead of ad hoc.
+
+* EXECUTION LOG
+- [2026-06-27] Refinements above recorded. Beginning execution in main thread,
+  M0 → M1 → …, with a specialised reviewer swarm as a transitional gate between
+  milestones. Reviewer findings recorded as FEAT/BUG and fixed mid-flight before
+  the next milestone starts. Baseline: 58 mesh tests green; app compiles (exit 0)
+  with 2 pre-existing warnings from uncommitted PLAN-017 work (app.ex ThemeRegistry
+  alias omission) — recorded as BUG-015, fixed first since it blocks the mix-check
+  gate.
+
+NOTE [2026-06-27]: Boundary refinements applied to M1/M2/M5/M7 (M3/M4/M6 confirmed clean). Key shifts: MissionHandle string-keyed materialization contract (M1); decide :fold reuses Hist.Lens project→inject→run pattern (M2); combinators ship as .ptc source not compiled Elixir (M5); context_lens materializes Elixir + transforms via .ptc lens (M7).

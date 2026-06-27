@@ -1,0 +1,556 @@
+#+TITLE: Cache-stable mission start + data-transform history reduction (beam-lisp policy, Elixir mechanism)
+#+STATE: ITEM
+#+SESSION_ID: 15195dad122fb703
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-27T08-45-31-080Z_15195dad122fb703.jsonl]]
+#+CUSTOM_ID: PLAN-018-cache-stable-mission-start-data-transfor
+
+* Goal
+
+Make multi-turn missions cheap and coherent WITHOUT LLM-driven compaction, by
+exploiting what spell_agent's history IS: not a prose transcript but an
+append-only, content-addressed DAG of CoreAST nodes carrying def-env deltas and
+realized tool_calls. Two mechanisms, one decision:
+
+1. CACHE-STABLE MISSION START — close the prompt-cache leak (today: the growing
+   message tape is re-read at FULL price every turn; only the system block is
+   cached). Freeze a byte-stable prefix; roll a message-level cache breakpoint
+   forward each turn.
+
+2. DATA-TRANSFORM REDUCTION — compaction as a PURE FOLD over the node DAG
+   (dead-bind elimination, tool-call CSE, stale-read collapse, restorable
+   payload spill), not an LLM summary. Deterministic, zero-inference, provably
+   lossless for the lossless tier, restorable for the lossy tier.
+
+3. THE RATE-CONTROLLER — a mission-start harness that decides, per turn, from
+   cheap token estimates (no inference): roll the cache forward (P-frame) vs.
+   reduce + reanchor the cache (I-frame). Reduction is a keyframe; caching is
+   the delta between keyframes.
+
+The policy lives as beam-lisp .ptc files (editable, forkable, durable-promotable
+by the agent itself); Elixir is a thin mechanism that executes the policy and
+owns only what the sandbox cannot (the HTTP body / cache_control, and the
+node->tape refold).
+
+Design-only item: review the architecture before any code lands.
+
+* Why this is the right shape (the BEAM-Lisp uniqueness)
+
+Every mainstream harness compacts a PROSE transcript. The only operation prose
+admits is "summarize" -> an LLM call: lossy, nondeterministic, an extra
+inference, and it mutates the prefix (busting cache) without a provable gain.
+
+spell_agent's tape is NOT prose. Each Hist.Node (lib/spell_agent/hist/node.ex,
+recorder.ex) carries:
+  - form      : the executed CoreAST (a tree a lens walks; NOT a re-parsed string)
+  - binds     : the def-env DELTA the turn introduced (introduced ∪ changed)
+  - sees      : realized tool_calls (name, args, result, status)
+  - result / prints / say / tokens
+  - a content hash (Id.node_id), indexed at {:hash, h}
+
+Five already-built substrate properties, each unlocking a reduction prose can't do:
+
+| substrate property                         | reduction it enables                                   |
+|--------------------------------------------+--------------------------------------------------------|
+| env is deltaized + reconstructible         | DEAD-BIND ELIM: a (def x v1) rebound before any read   |
+|   (Reconstitute.fold_env)                  |   -> drop the value AND its computation; the fold       |
+|                                            |   recovers final env. Compiler dead-store elimination. |
+| content-addressed nodes ({:hash,h} index)  | TOOL-CSE: hash-identical (tool/sh ...) calls -> keep   |
+|                                            |   one, reference the rest. Exact, not heuristic.       |
+| structured tool_calls (sees)               | STALE-READ COLLAPSE: N reads of a path, only the last  |
+|                                            |   feeds current state -> collapse to last (keep errors).|
+| append-only + retained store               | RESTORABLE COMPRESSION is a PROPERTY not a discipline: |
+|                                            |   reduced tape holds a node-id stub; original stays in |
+|                                            |   the store; hist/recall (built) pulls it back.        |
+| the reducer is a lens in the same language | the agent FORKS its own compaction policy at runtime,  |
+|                                            |   like hist/lens forks a query. Homoiconic.            |
+
+LLM-driven compaction GUESSES what to forget; data-transform compaction PROVES
+what is redundant.
+
+| axis             | LLM compaction            | data-transform compaction          |
+|------------------+---------------------------+------------------------------------|
+| cost             | an extra inference        | zero — a fold                      |
+| determinism      | nondeterministic          | same watermark W -> same bytes     |
+| reversibility    | explicit discipline       | free (store retains; tape refs)    |
+| cache interaction| mutates prefix, busts     | output is content-addressed ->     |
+|                  | cache, no gain back       | itself a cache key                 |
+| exploits         | only prose meaning        | env-recoverability, hashes, AST    |
+
+* Current state (verified 2026-06-27)
+
+PRUNING: none in the live loop. PtcRunner.SubAgent ships Compaction.Trim
+(keep first user msg + last keep_recent*2, drop middle), gated behind
+`compaction:` opt, DEFAULT false. SpellAgent.Session.run/2 never passes it.
+Hist.Window (window/recall/distill) EXISTS and is exposed as hist/* verbs, but
+is a VIEW computation for the TUI / agent introspection — NOT wired into the
+feed. Its moduledoc claims it "feeds SubAgent.Compaction instead of a
+destructive trim"; that wiring was never made.
+
+So every turn replays the FULL cumulative tape:
+  Session.run -> load_continuation (Cont.tape, OVERWRITTEN each turn, never
+  windowed) -> SubAgent.run(initial_messages: tape, collect_messages: true) ->
+  next turn tape = prior tape + this turn (monotonic growth).
+
+CACHING: message-level prompt caching is ENTIRELY UNUSED — the cost leak.
+anthropic.ex apply_cache_control_cap puts exactly ONE cache_control breakpoint,
+on the LAST SYSTEM BLOCK. convert_messages adds none. So:
+  [ system+tools ]   <- cached (1 of 4 breakpoints)
+  [ msg 1 .. msg N ] <- NO breakpoint -> re-read at FULL price every turn
+At ~100:1 read:write, the growing tape IS the bill.
+
+TWO CACHE KILLERS already in the adapter:
+  - billing_header injects cch=<sha256(body)>+rand3 into a system block PREPENDED
+    at position 0 EVERY call (build_system_blocks) -> the cached prefix is never
+    byte-stable. Must move out of the cached region.
+  - a mid-session (tool/define-tool ...) mutates the `tools` array -> cache
+    invalidation from the tool region onward. Must mask, not mutate.
+
+Net: worst of both — full tape replayed (no pruning) AND re-read uncached.
+Fixing ONLY the message cache, with zero pruning, is the single biggest $ win.
+
+* External grounding (compaction-free harnesses)
+
+Primary sources read; principles + their status here:
+
+| principle (Manus / KV-cache playbook / Anthropic)        | status in spell_agent          |
+|----------------------------------------------------------+--------------------------------|
+| KV-cache hit rate is THE metric (100:1; read ~0.1x fresh)| not measured, not exploited    |
+| stable prefix, append-only, byte-identical from token 0  | tape append-only OK; system    |
+|                                                          |   block volatile (cch/rand3) X |
+| mask tools, don't remove (add/drop busts prefix)         | runtime define-tool mutates X  |
+| filesystem = infinite context; "restorable compression" | sh+files+hist present; not a   |
+|                                                          |   loop discipline yet          |
+| recite the goal at the TAIL (todo.md in recency zone)    | nothing does this              |
+| preserve errors (recovery needs the evidence)            | tape keeps them OK; adapter    |
+|                                                          |   flags is_error OK            |
+| compact, don't truncate (summarize+reinit, keep a path)  | Window.distill exists, unwired |
+
+Sources:
+  - Manus, "Context Engineering for AI Agents" (manus.im/blog, 2025-07-18)
+  - "KV-Cache Hit Rate" playbook (mnemoverse.com, 2026-06)
+  - "Six Context Engineering Techniques That Make Manus Work" (tianpan.co, 2026-03)
+  - Anthropic, "Effective context engineering for AI agents" (2025-09-29)
+  - this repo: docs/agent-mesh-theory/15-context-projection-cache.org; cancelled
+    FEAT-016 (cache_plan); FEAT-017 (context projection); PLAN-006 cont.ex
+    FUP-EDIT-REFOLD note.
+
+The repo already wrote the unifying theory (doc 15): context = cache =
+reactivity = ONE projection over an append-only store at a watermark. Doc 15
+DEMOTED the caching framing as "provider-incidental" — correct as a PRIMITIVE
+judgment — but the load-bearing primitive it was circling is exactly the
+data-transform REDUCTION over the immutable projection, which stands with zero
+provider framing. This PLAN builds that primitive and treats caching as its
+(valuable) readout.
+
+* Architecture — Elixir mechanism / beam-lisp policy split
+
+Consistent with the repo law "Elixir materializes, PTC transforms"
+(hist/lens.ex) and homoiconic dissolution (AGENTS.md):
+
+ELIXIR (mechanism — minimal, invariant, what the sandbox cannot do):
+  - assemble the wire request: stable-prefix ordering + breakpoint placement
+    (touch the HTTP body / cache_control)
+  - REFOLD: node-DAG -> replayable native message tape (the inverse of Recorder;
+    the one genuinely new primitive)
+  - memoize a reduction at {:reduced, S, W, policy_hash}
+  - call policy programs to DECIDE; never decides shape itself
+
+BEAM-LISP (.ptc policy files — editable data, forkable, durable-promotable):
+  - reduce.ptc        : [node] -> [node]   the structural fold (lossless + lossy tiers)
+  - reducibility.ptc  : [node] -> {tok_full tok_reduced reducible_tokens ...}  cheap estimate, NO reduction
+  - cache_plan.ptc    : segments -> <=4 breakpoint positions (maximize Σ tokens×reuse)
+  - recite.ptc        : [node] -> tail goal-restatement (todo.md analogue, appended NEVER in prefix)
+  - (later) offload.ptc: which tool-results spill to a path + stub
+
+These live beside priv/hist/lenses/*.ptc, loaded by the SAME @external_resource
+harness in lens.ex (extend @lenses or add a sibling @reducers map). Policy is
+data the agent reads, forks via hist/lens-style authorship, and promotes durable.
+
+* The reduction primitives (the data transformations)
+
+A reduction is node-space [node]->[node], then projected to tape-space. Two tiers.
+
+LOSSLESS (env + reasoning provably preserved; safe to apply silently):
+  - dead-bind-elim     : drop computations whose ONLY output is a binding
+                         overwritten before any read. Fold recovers final env.
+  - tool-cse           : collapse hash-identical tool calls to one + references.
+  - stale-read-collapse: last read of a path wins; intermediate reads dropped
+                         (ERRORS EXEMPT — Manus: preserve failures).
+  - print-prune        : prints no later form references -> drop from tape, keep
+                         in store.
+
+LOSSY-BUT-RESTORABLE (drop payload, keep a structural handle):
+  - result-spill       : tool_result over a token threshold -> replace inline
+                         with {node_id, path, digest}; agent re-fetches. Restorable
+                         STRUCTURALLY (the store + hist/recall is the path back).
+  - span-fold          : a run of turns under a :clearing mark -> replace with a
+                         STRUCTURAL digest computed by a lens (tools called, files
+                         touched, defs introduced, net env delta) — NOT an LLM
+                         prose summary. Window.distill already drops the :clearing
+                         mark; this gives its body a data-driven shape.
+
+
+
+** Effect taxonomy — the precondition for sound reduction
+
+The primitives above implicitly assume READ-IDEMPOTENCE (tool-cse and
+stale-read-collapse are valid only for calls that don't change the world and
+re-run to the same answer). Edits and test runs violate both. Reducibility is a
+function of a call's EFFECT CLASS, not its token size:
+
+| class    | examples              | idempotent | result value          | reduction                                  |
+|----------+-----------------------+------------+-----------------------+--------------------------------------------|
+| read     | cat, grep, ls         | yes        | content snapshot      | CSE + stale-collapse + spill (re-runnable) |
+| mutation | edit, write, rm, mkdir| no         | confirmation (low)    | dead-store elim; spill body, keep the fact |
+| check    | mix test, cargo, lint | no (light) | verdict + diagnostics | structural distillation; collapse superseded|
+| external | curl, date, random    | no         | unrepeatable          | NEVER spill (no path back); keep/digest    |
+
+The `external` row is the guardrail: a network/clock/random result has NO
+restorable handle — re-running yields a different answer — so it can never be
+marked re-fetchable. Restorable compression is valid ONLY when the world can
+reproduce the payload.
+
+*** Edits = dead-store elimination on the filesystem
+
+Deep symmetry: a FILE is a binding in the "world env"; successive edits are
+REBINDS. dead-bind-elim (for the def-env) has an exact filesystem twin.
+
+  turn 1: edit A (patch P1)   <- dead store IF its span is overwritten before any read of A
+  turn 3: edit A (patch P2)
+  turn 5: read A              <- live: observes the composed result
+
+An edit's RESULT observation ("applied, 3 lines") is near-worthless — the real
+effect is on disk, recoverable by (read A). So:
+  - a run of edits to A, no intervening read, where a later edit PROVABLY
+    overwrites the earlier span -> the earlier patch body is a dead store: spill
+    it, keep the fact "A modified @ {seqs}".
+  - edit targets carry span info (foo.ex::Bar.method) -> overlap is decidable.
+    NO provable overlap -> keep both (non-overlapping edits compose; conservative).
+  - failed edits STAY (error evidence).
+
+Asymmetry vs reads: an edit's restorable handle is NOT "re-run it" (patches are
+not idempotent) — it is "the CURRENT file reflects it." The reduced tape asserts
+"A is at its current on-disk state"; the path back is the file itself.
+
+*** Test/check runs = structural diagnostic distillation (NOT LLM)
+
+Test logs are the dominant token sink in a coding tape. The reduction is a
+DETERMINISTIC parser keyed to the runner's output grammar (mix/cargo/pytest emit
+structured results):
+
+  "5 tests, 2 failures
+  test foo (file.ex:42) ** (MatchError)..."
+    -> a .ptc extractor (a lens over the result string; zero inference)
+    -> {passed: 3, failed: 2, failures: [{test, file, line, kind}]}
+
+  - superseded runs collapse to their digest — a 5->2->0 failure trajectory
+    survives as {verdict, counts, delta} (tiny; keeps the recovery story Manus
+    says to preserve); full logs spill to the store.
+  - the LAST run stays high-fidelity (it describes current state).
+  - distinction from LLM compaction: the digest comes from a PARSER, not "ask the
+    model what mattered" — same determinism guarantee as the rest of the regime.
+
+*** The correctness core — cannot collapse reads across a write (world-epoch model)
+
+Naive stale-read-collapse is a BUG here:
+
+  read A  ->  edit A  ->  read A
+  (epoch 0)           (epoch 1)   <- different worlds; BOTH may be load-bearing
+                                     (read v1, change, verify v2)
+
+The reducer needs a WORLD-VERSION (epoch) model: per path, order all read/write
+events by seq; a WRITE bumps the path's epoch. Reads collapse ONLY within a
+maximal write-free run of the same path — last wins, earlier spill. Provably
+safe: same-epoch reads returned identical content, and that content is restorable.
+
+This is the SAME dirty-set / hole-dependency analysis doc 15 names (U3: one pass,
+read three ways): a read DEPENDS ON its path's world-version; a write INVALIDATES.
+Reduction, reactivity, and cache-invalidation are one dependency graph.
+
+*** How the reducer learns a call's effect class
+
+  1. DECLARED — define-tool carries :effect :read|:write|:check|:external;
+     built-ins get classes. Clean, homoiconic (effect class is tool metadata the
+     projection exposes).
+  2. INFERRED from argv head — in this agent EVERYTHING is sh (read/grep/write are
+     sh compositions), so reduction must classify by the underlying command head:
+     cat/rg/ls->read, >/rm->write, mix test/cargo->check, curl->external. The
+     substrate EXISTS: hist/forms {:shell head} already projects turns by shell
+     command head (Query.forms(..., {:shell, head}) in namespace.ex); the effect
+     classifier is that same projection, head -> class. sh-parse makes argv walkable.
+
+*** Rate-controller tie-in
+
+Edit/test loops are precisely WHY you reduce: they manufacture huge
+low-residual-value payloads (patch bodies, test logs). So hist/reducibility is
+EFFECT-CLASS-WEIGHTED — a tape thick with superseded test logs and overwritten
+edits scores high reducible_tokens, lowering the break-even K* -> reduce SOONER.
+The thing that bloats the tape is the thing cheapest to shed, and the estimate
+sees that without doing the work.
+
+*** Added invariants (fold into the Edge cases section)
+
+  - EFFECT SOUNDNESS: a reduction MUST consult effect class; never CSE/collapse a
+    mutation or external call as if it were an idempotent read.
+  - WRITE BARRIER: reads are collapsible only within one world-epoch of their path;
+    a write between two reads forbids collapsing across it.
+  - NO-SPILL FOR EXTERNAL: a network/clock/random result is never marked
+    restorable (no reproducible path back); keep verbatim or digest in place.
+  - EDIT OVERLAP: collapse an edit body only on PROVABLE span overwrite with no
+    intervening read; otherwise keep the fact and both bodies.
+  - CHECK DIGEST FIDELITY: the last check run stays high-fidelity; only superseded
+    runs reduce to a parsed digest.
+* Wiring through hist/* (FUP-EDIT-REFOLD realized as a reduction)
+
+cont.ex documents the L0/L1 duality and names the deferred upgrade: "an
+edited/branched suffix reconstructing the tape from L1 is the deferred upgrade
+(PLAN-006 FUP-EDIT-REFOLD)." Data-transform compaction IS that upgrade:
+
+  project nodes [0..W]        ; Lens.project — BUILT
+    -> reduce.ptc (node->node); the structural fold — NEW (a lens; pure; forkable)
+    -> refold     (node->tape); rebuild native messages with tool_use/tool_result
+                              ; fidelity — NEW Elixir primitive. NOT
+                              ; Reconstitute.to_messages (that is the LOSSY chat lens).
+    -> Cont.tape'             ; the shrunk, replayable, content-addressed L0
+
+Reduction happens in NODE-space (where dead-bind-elim and CSE are EXPRESSIBLE),
+then projects to TAPE-space (replayable). refold is the inverse of Recorder:
+build messages from form_src + sees, preserving tool_use/tool_result pairing the
+provider requires (the same pairing Compaction.Trim's align_user_leading guards).
+
+New hist/* verbs (same (impl, session_id) closure as the lens verbs):
+  (hist/reducibility {})            ; cheap analysis: tok_full, tok_reduced,
+                                    ; reducible_tokens — NO reduction performed
+  (hist/reduce {:policy "lossless"}); run the fold -> {tape', recall_index}
+
+* The rate-controller — reduce vs. cache-a-previous-header (NO inference)
+
+The crux. The two routes are in genuine tension: caching WANTS a frozen prefix;
+reducing CHANGES the prefix, busting the cache it was enjoying. Model it as
+video encoding: a reduction is an I-FRAME (keyframe — expensive, content-
+addressed, becomes the new cache anchor); a normal turn is a P-FRAME (append +
+cache-read off the last keyframe). The harness is the rate-controller deciding
+keyframe placement.
+
+State at mission-start (session S, turn T):
+  W  = watermark (Mesh/Hist max seq)
+  A  = seq of last cache anchor (last keyframe)
+  F  = est tokens of full prior tape          ) from hist/reducibility — a cheap
+  R  = est tokens after reduction             ) lens that estimates WITHOUT
+  reducible_tokens                            ) doing the reduction
+  K  = expected remaining turns (max_turns - T)
+
+Economics (Anthropic-shaped: read ~0.1x, cache-write ~1.25x base):
+  savings(K) = K · 0.1 · (F − R)  −  max(0, 1.25R − 0.1F)
+  break-even  K* = (1.25R − 0.1F) / (0.1 · (F − R))
+
+Decision ladder:
+  tok_full > window_HARD  -> REDUCE incl. lossy ops   (overflow: can't cache out of it)
+  tok_full > window_SOFT  -> REDUCE lossless only
+  K > K*                  -> REDUCE now (amortizes)    <- the pure economic trigger
+  else                    -> CACHE: roll breakpoint forward, append tail
+
+All inputs are cheap estimates; K from the budget. ZERO inference in the
+decision.
+
+"Cache a previously-used header" composes with reduce — TWO cache layers:
+  1. STORE-SIDE memo of the reduction. A reduction at (S, W, policy_hash) is a
+     deterministic value -> memoize at {:reduced, S, W, policy_hash} in Hist. A
+     revisit at the same watermark+policy is a FREE lookup, not a recompute.
+     This is literally "reuse a previously-used header."
+  2. PROVIDER-SIDE KV cache of the bytes. The reduced prefix is immutable +
+     content-addressed -> byte-stable -> the Anthropic prefix cache hits on it
+     for every P-frame until the next keyframe.
+
+Strategy: REDUCE RARELY (only when K>K* or pressure), MEMOIZE each reduction
+(free recompute on revisit), CACHE CONTINUOUSLY between keyframes. Keyframes are
+the only turns that pay a cache-write; everything between is a 0.1x delta off a
+content-addressed anchor.
+
+This is one readout of the projection-at-a-watermark doc 15 identified: context
+= cache = reduction, all the same immutable-projection-at-W.
+
+* Proposed modules / edits
+
+NEW (beam-lisp policy, priv/hist/):
+  - priv/hist/reducers/reduce.ptc          ; the structural fold (both tiers)
+  - priv/hist/reducers/reducibility.ptc    ; cheap estimate, no reduction
+  - priv/hist/reducers/cache_plan.ptc      ; <=4 breakpoint placement (FEAT-016 algo, as data)
+  - priv/hist/reducers/recite.ptc          ; tail goal-restatement
+
+NEW (Elixir mechanism):
+  - lib/spell_agent/mission.ex             ; Mission.start/2 — the rate-controller;
+                                           ; produces a cache-stable, policy-shaped
+                                           ; request {system, tools, tape, breakpoints, recital}
+  - lib/spell_agent/hist/refold.ex         ; node-DAG -> replayable native tape
+                                           ; (inverse of Recorder; preserves
+                                           ; tool_use/tool_result pairing)
+  - {:reduced, S, W, policy_hash} store kind ; memo of a reduction (behaviour +
+                                           ; Memory + Khepri, same pattern as
+                                           ; {:clock,id} in PLAN-014)
+
+EDIT:
+  - lib/spell_agent/anthropic.ex           ; generalize apply_cache_control_cap to
+                                           ; accept a PLACEMENT (<=4 positions) over
+                                           ; system AND messages, not just last
+                                           ; system block; move cch/rand3 OUT of the
+                                           ; cached region; canonicalize tool order
+                                           ; + JSON key order for byte-stability
+  - lib/spell_agent/session.ex             ; route mission start through Mission.start;
+                                           ; feed the shaped tape + breakpoints
+  - lib/spell_agent/hist/lens.ex           ; extend the @external_resource loader to
+                                           ; the reducers/ dir (or a sibling @reducers)
+  - lib/spell_agent/hist/namespace.ex      ; add hist/reduce + hist/reducibility verbs
+  - priv/prompts/system.md                 ; (optional) teach recite + restorable
+                                           ; compression as a working discipline
+
+* Build sequence (waves; each independently shippable)
+
+W1 — CACHE THE TAPE (pure mechanism, biggest $ win, no policy files, lowest risk):
+  anthropic.ex: add a rolling message-level breakpoint on the last block of the
+  prior turn (system + last-stable-message = 2 of 4 breakpoints); move cch/rand3
+  out of the cached prefix. VERIFY cache_read tokens climb (the response usage
+  already parses cache_read_input_tokens — merge_usage). This alone recovers most
+  of the spend with zero pruning.
+
+W2 — CANONICALIZE: stable tool ordering + deterministic JSON key order so the
+  prefix is genuinely byte-stable; mask runtime-defined tools instead of mutating
+  the tools array. Verify a mid-session define-tool no longer busts the prefix.
+
+W3 — REFOLD primitive + hist/reducibility: build node->tape refold with
+  tool_use/tool_result fidelity; ship reducibility.ptc (estimate only). Test
+  refold round-trips a recorded session to a provider-valid tape.
+
+W4 — REDUCE (lossless tier): reduce.ptc with dead-bind-elim + tool-cse +
+  stale-read-collapse + print-prune; hist/reduce verb; {:reduced,...} memo store
+  kind. Test each transform is lossless (Reconstitute.fold_env over reduced ==
+  over full) and provider-valid.
+
+W5 — MISSION rate-controller: Mission.start computes the reduce-vs-cache decision
+  from hist/reducibility + budget; route Session.run through it; cache_plan.ptc
+  places the breakpoints. Test the decision ladder + I-frame/P-frame placement.
+
+W6 — LOSSY tier + recite: result-spill + span-fold (restorable); recite.ptc tail
+  restatement. Test restorability (hist/recall reconstructs a spilled payload).
+
+* Edge cases / invariants
+
+  - PROVIDER VALIDITY: every reduced/refolded tape must keep tool_use<->tool_result
+    pairing (Anthropic rejects orphans). refold MUST guarantee it; reduce MUST NOT
+    drop a tool_result whose tool_use survives (or vice-versa).
+  - ERRORS EXEMPT: stale-read-collapse and dead-bind-elim never drop a failed
+    tool_call or its evidence (Manus: error recovery needs the failure in context).
+  - LOSSLESS PROOF: for the lossless tier, Reconstitute.fold_env over the reduced
+    slice MUST equal the fold over the full slice — the test that defines "lossless".
+  - RESTORABILITY: a lossy spill MUST leave a node-id/path stub that hist/recall
+    resolves to the original (the store is retained; the tape only references).
+  - CACHE ORDERING (from FEAT-016): never place a per-turn-unique segment before a
+    shared one; a shared prefix must lead. Order is correctness, not optimization.
+  - DEGENERATE: turn 1 (cold start) — no tape, no reduction, no message breakpoint;
+    must behave exactly as today.
+  - DETERMINISM: same (S, W, policy_hash) -> byte-identical reduced tape (the memo
+    key depends on it).
+  - BEST-EFFORT POSTURE: a failing reducer/refold/policy MUST degrade to the full
+    cached tape, never crash the mission (same posture as Session.record_history /
+    load_continuation today). A bad policy is a worse cache, not a dead agent.
+
+* Acceptance (observable, when built)
+
+  - W1: across a >=5-turn session, response usage shows cache_read_input_tokens
+    growing turn-over-turn (today it is ~0 on the message region).
+  - W2: a mid-session define-tool does NOT drop cache_read to zero on the next turn.
+  - W3: refold(record(session)) is a provider-valid tape (no orphan tool blocks).
+  - W4: for a session with a rebound-before-read def, hist/reduce drops the dead
+    computation AND Reconstitute.fold_env(reduced) == fold_env(full). tool-cse
+    collapses a duplicated (tool/sh ...) to one. No failed tool_call is dropped.
+  - W5: Mission.start chooses REDUCE when K>K* (assert against the closed-form
+    break-even) and CACHE otherwise; a re-entry at the same watermark hits the
+    {:reduced,...} memo (free recompute).
+  - W6: a result-spill leaves a stub; hist/recall reconstructs the original payload.
+  - mix check clean at every wave.
+
+* Out of scope
+
+  - LLM-driven summarization (this PLAN's thesis is that the data transform
+    replaces it for the lossless tier; an LLM span-summary could be a FUTURE
+    lossy reducer but is not built here).
+  - the mesh context lens (FEAT-017) — independent; this reduces a SINGLE
+    session's tape. The two compose later (reduce a projected sibling-union).
+  - token-streaming to the REPL/TUI (unrelated).
+  - logit-mask tool gating at the provider (W2 masks by keeping the array stable;
+    true decode-time logit masking needs provider support not in scope).
+
+* Cross-link: edit-reduction depends on lispy code/edit (form_tree as shared substrate)
+
+A sibling design (UNFILED as of 2026-06-27; explored in session
+15164b2a4dd1a55b, "if CodePath were lispy") proposes code/parse -> q/* selector
+combinators -> code/unparse, with quasiquote pattern-matching as the
+match-and-rewrite surface and codemods promotable via define-tool {:scope
+:durable}. That design and THIS reducer are two readouts of ONE substrate:
+form_tree (the walkable node shape that already unifies Lisp history, shell, and
+— under code/parse — source), quasiquote capture/splice, and durable tool
+promotion.
+
+Five load-bearing consequences for PLAN-018:
+
+1. THE REDUCER MATCHER IS q/*, NOT BESPOKE. reduce.ptc operates on Node.form,
+   which IS form_tree. Its transforms are q/match instances:
+     - dead-bind-elim   = match `(def ~name ~_)` whose ~name is rebound-before-read
+     - tool-cse         = group nodes by q/match-equal form (the {:hash,h} index
+                          is the coarse key; q/match is the exact test)
+     - effect-classify  = match `(sh {:argv [~head ~@_]})` over the same tree
+   Do NOT build a separate reduction matcher; it is the same q/* library used at
+   the history scope. (Corroborates FUP-002: form_tree subsumes the PTC lens.)
+
+2. ONE LENS, THREE SURFACES — the effect classifier is an instance. The sibling
+   thesis ("one q/match walks source, shell, history") is exactly what the
+   effect-classifier does: walk shell-history-as-form_tree (hist/forms {:shell
+   head}) to decide reducibility. PLAN-018's reduction IS the "structural
+   crystallizer written once, works over all three," realized at session scope.
+
+3. THE UPGRADE — edit-reduction becomes ALGEBRAIC, not heuristic span-overlap.
+   The effect-taxonomy section reduces edits by PROVABLE SPAN OVERWRITE — fragile
+   on raw patch text. IF edit becomes code/edit {:xf tree->tree} with re-parse
+   equality, a recorded edit is no longer opaque patch text but a TRANSFORM
+   VALUE, and transforms compose:
+     edit1: tree->tree'   edit2: tree'->tree''   reduced == (comp edit2 edit1)
+   Edit dead-store elimination stops being "do spans overlap?" and becomes
+   FUNCTION COMPOSITION + CANCELLATION (two region-edits compose to one; an edit
+   then its inverse cancels to identity) — provable the way def-env dead-bind-elim
+   is. The "a file is a binding, edits are rebinds" analogy becomes LITERAL:
+   composed rebinds reduce by algebra. This is a strictly stronger correctness
+   story that EXISTS ONLY IF edits are structural transforms.
+   => DEPENDENCY: the edit-reduction tier's algebraic form is gated on lispy
+      code/edit. Without it, edit-reduction stays in the heuristic (span-overlap)
+      tier. Reframe the tiers accordingly (see #5).
+
+4. CORRECTNESS CURRENCY = STRUCTURAL INVARIANCE, NOT BYTE INVARIANCE (shared law).
+   The sibling round-trip contract is re-parse equality (formatter canonicalizes;
+   meaning invariant; exotic nodes -> raw leaf, never lost). That is the SAME
+   shape as PLAN-018's lossless proof (fold_env(reduced) == fold_env(full)).
+   State once as a shared law: correctness is structural invariance. It is what
+   lets reduction touch the tape without the cache caring — the cache wants
+   byte-stable OUTPUT, the reducer guarantees structure-stable MEANING, and the
+   content-address bridges them.
+
+5. TIER REFRAME: structured (algebraic) vs raw (heuristic), NOT lossless vs lossy.
+   The sibling raw-leaf fallback means an edit/result that only structures as a
+   raw leaf is OPAQUE to algebraic reduction and degrades to the span-heuristic.
+   So the real axis is structured-vs-raw: a structured node reduces by algebra
+   (provable), a raw node by heuristic (conservative). Lossless/lossy is a
+   SECONDARY axis within "structured." Fold this into the primitives section when
+   code/edit firms up.
+
+6. THE REDUCER POLICY IS A DURABLE CODEMOD. "A rewrite is a PTC value ->
+   define-tool {:scope :durable}" applies directly: an authored reduce.ptc is not
+   merely forkable, it is PROMOTABLE by the identical mechanism a codemod is. A
+   project-specific reducer (e.g. a tuned test-log parser) promotes durable and
+   rehydrates next session. The promotion path is already built and is the same
+   path.
+
+ACTION when code/edit is planned: re-ground the edit-reduction tier on
+transform-composition; keep the span-overlap heuristic only as the raw-node
+fallback. Until then, PLAN-018 W4 ships edit-reduction in heuristic form and
+notes this upgrade path.
+
+NOTE [2026-06-27]: The sibling "lispy code/edit" design is now FILED as PLAN-020 (lispy-code-edit-form-tree-as-the-shared). It commits to the three constraints this plan's planner asked for: (1) code/edit :xf is canonically a reifiable data-ops list (not an opaque closure) and the RECORDED form retains structured ops, so the reducer can compose/cancel edits algebraically; (2) q/equal? (re-parse / structural equality) is a public, tested primitive — the shared correctness currency with fold_env(reduced)==fold_env(full), exposed standalone so the reducer calls it; (3) q/match + q/* is a standalone library over form_tree (built W1, before code/parse/edit), explicitly tested over sh/parse + Lens.form_tree fixtures to prove the three-surface generality, so PLAN-018's matchers link it without dragging in the editor. LAW 3 (raw-leaf opacity) is documented: PLAN-020 treats parse coverage as downstream-driven BECAUSE this reducer's reduction reach grows as fewer nodes fall to raw. PROTOTYPE (beam-lisp, in PLAN-020) already proved comp(e2,e1)≡direct and edit∘inverse≡identity via q/equal? — the reducer's edit-algebra is sound on form_tree. ACTION for PLAN-018 W4: ship edit-reduction in heuristic (span-overlap) form, note the algebraic upgrade is gated on PLAN-020 W5 (code/edit recording structural transforms).

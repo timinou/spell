@@ -1,8 +1,9 @@
 #+TITLE: Session listing + trace reading (open & past)
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 1511b963aa347f4e
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T10-18-22-248Z_1511b963aa347f4e.jsonl]]
 #+CUSTOM_ID: PLAN-010-session-listing-trace-reading-open-past
+#+COMPLETION_HASH: 07f57fc106c81156
 
 * Initial Message
 
@@ -135,3 +136,5 @@ is now done vs still open. No overclaiming.
 - FUP-006 (cross-session live inspector — partially addressed here)
 
 NOTE [2026-06-21]: Implemented + green. New modules: SpellAgent.SessionRegistry (supervised, monitor-cleanup), Hist.SessionList, Hist.Trace (+ interior_of/3), Tui.SessionView (pure formatter), Tui.SessionBrowser (ExRatatui.App), Mix.Tasks.Spell.Sessions (TUI + --list + --trace). Wired: SessionRegistry into supervision tree + Session.run register/finish (best-effort); hist/sessions + hist/trace verbs; Hist.session_list/1 + Hist.trace/2 facade. Tests: 49 new (registry monitor-cleanup, list union/sort/enrich, trace fold + interior DFS, view formatting, browser headless drive). Full suite 440 passed. mix compile clean for all new files (sole warning is pre-existing harness.ex:285, untouched). FUP-006 annotated: addressability + trace half delivered; cross-process layout-tree half remains (needs per-session registries + BEAM distribution).
+
+NOTE [2026-06-27]: State corrected to DONE [2026-06-27]. Verification confirms all 6 components shipped: SessionRegistry (supervised GenServer, monitor cleanup), Session.run register/finish, Hist.SessionList (live∪past union + cost/turn enrichment), Hist.Trace (node fold + span-interior flatten), hist/sessions + hist/trace verbs, SessionBrowser TUI + SessionView formatter + mix spell.sessions. Org note 2026-06-21 already recorded "49 new tests, full suite 440 passed." Was stale at DOING.

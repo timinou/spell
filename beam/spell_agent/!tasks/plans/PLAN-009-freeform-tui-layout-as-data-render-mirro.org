@@ -1,8 +1,9 @@
 #+TITLE: Freeform TUI: layout-as-data, render mirror, gaze-as-lens
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 1511029ec58e9d42
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-20T20-59-50-422Z_1511029ec58e9d42.jsonl]]
 #+CUSTOM_ID: PLAN-009-freeform-tui-layout-as-data-render-mirro
+#+COMPLETION_HASH: d43dd12aed91250b
 
 * Initial Message
 
@@ -342,3 +343,5 @@ REMAINING (deferred, tracked):
       small follow-on).
 - [ ] FUP-005 (navigable agent-added panes), FUP-007 (atom hardening),
       FUP-008 (lazy prelude), FUP-009 (durable layouts) — as filed.
+
+NOTE [2026-06-27]: State corrected to DONE at v1 scope [2026-06-27]. Verification confirms the critical-path unification is complete + production-ready (396 tests): LayoutRegistry (slot shadow + last-good failure ladder), Reflect (compile-time widget/theme registry), Materialize (map→struct coercion), Lens (to_ui/from_ui gaze round-trip), one render path in app.ex render/2, DefaultLayout (native-as-data), Prelude. Research continuation is tracked separately and is NOT part of v1: PROJ-002 (L-2 layouts-as-spans/time-travel), PROJ-003 (L-3 self-writing prelude), PROJ-005 (L-5 co-edited tree). Was stale at ITEM despite being shipped.

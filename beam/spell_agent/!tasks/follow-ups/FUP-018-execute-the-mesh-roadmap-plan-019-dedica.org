@@ -1,0 +1,41 @@
+#+TITLE: Execute the MESH roadmap (PLAN-019) — dedicated build sessions, M0→M6
+#+STATE: ITEM
+#+SESSION_ID: 15195d97dff3d090
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-27T08-45-09-375Z_15195d97dff3d090.jsonl]]
+#+CUSTOM_ID: FUP-018-execute-the-mesh-roadmap-plan-019-dedica
+
+* Initial Message
+
+what's pending in this folder's work?
+
+* Purpose
+Deferral anchor for executing the MESH milestone roadmap authored in
+PLAN-019-mesh-milestones-spawn-session-consensus.
+
+This session's scope was VERIFICATION + PLANNING (correct stale org states, draft
+a sequenced milestone-by-milestone roadmap). That deliverable is complete. Actual
+implementation of M0–M7 is multi-session build work and is intentionally NOT
+started here — it wants dedicated build sessions (and possibly staffed fan-out),
+sequenced against the DAG below.
+
+* Durable tracking (where the real work lives)
+- PLAN-019 — the roadmap: build order, integration points, acceptance gates,
+  cross-milestone contracts, and the spec-drift corrections.
+- The 8 FEAT items it sequences (all ITEM, ready): FEAT-011 (M1 keystone),
+  FEAT-012 (M2), FEAT-013 (M3), FEAT-014/015 (M4), FEAT-018 (M5), FEAT-019 (M6),
+  FEAT-017 (M7).
+
+* Execution order (waves, from PLAN-019)
+- w1: M0 Config mesh cells + ParallelBudget holder (the tiny enabler).
+- w2: M1 FEAT-011 spawn-session (keystone), M2 FEAT-012 consensus/decide.
+- w3: M3 FEAT-013 multi-node watcher, M4 inspector+gallery, M5 sugars, M7 context lens.
+- w4: M6 FEAT-019 decisions + human surface.
+Critical path: M0 → M1 → M2 → M3 → M6.
+
+* Start here when resuming
+M0 (config.ex @whitelist + an app-supervised ParallelBudget holder) — small,
+self-contained, unblocks M1 and M3. Then M1, the highest-leverage primitive.
+
+* Why deferred (not abandoned)
+The work is real, specced, and dependency-ordered; it is simply out of scope for a
+planning session. Resume by picking M0 from PLAN-019 and proceeding down the DAG.

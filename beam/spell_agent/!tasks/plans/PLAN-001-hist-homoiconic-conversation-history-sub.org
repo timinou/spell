@@ -1,8 +1,9 @@
 #+TITLE: Hist: homoiconic conversation history substrate
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 150fca134364ee8b
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-19T22-14-18-637Z_150fca134364ee8b.jsonl]]
 #+CUSTOM_ID: PLAN-001-hist-homoiconic-conversation-history-sub
+#+COMPLETION_HASH: 5fc60f18309ad531
 
 * Initial Message
 
@@ -263,3 +264,5 @@ surfaces them; reconstitute never folds an :unrealized node.
 - `mix compile` clean; `mix test test/spell_agent/hist/` green.
 - module is self-contained (Store.Memory) — integration to the live agent is the
   documented seams, switched on separately.
+
+NOTE [2026-06-27]: State corrected to DONE [2026-06-27]. Codebase verification (6-agent swarm) confirms all 4 waves + W4 shipped: Node/Session/Mark/Snapshot/ToolDef/Crystal data model, Store behaviour (Memory+Khepri), C1 reconstitute, C2 crystallize, C3 tool lifecycle, C4 query lenses, C5 span persistence, C6 compaction, hist/* PTC verbs, SessionRegistry. 23 hist test files green. Two child FUPs (REEVAL + UNREALIZED) remain properly deferred and are tracked separately. Was stale at DOING.

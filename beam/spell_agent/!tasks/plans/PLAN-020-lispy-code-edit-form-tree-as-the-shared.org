@@ -1,0 +1,395 @@
+#+TITLE: Lispy code/edit: form_tree as the shared structural-transform algebra (q/* engine, code/parse·unparse·edit)
+#+STATE: ITEM
+#+SESSION_ID: 15164b2a4dd1a55b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-24T23-29-11-991Z_15164b2a4dd1a55b.jsonl]]
+#+CUSTOM_ID: PLAN-020-lispy-code-edit-form-tree-as-the-shared
+
+* Initial Message
+
+how would you mkae this spell_agent work well with the edit tool? with an interface that just *makes sense* for this? e.g. if CodePath were lispy, how would edit be done?
+
+* Goal
+
+Make =code/edit= *make sense* for spell_agent by deleting the string-DSL CodePath
+layer and letting source code be the PTC value it secretly already is. The string
+grammar (=foo.ex::Bar.method#body=, =§call[name=log]=, =def→=) is a DSL crammed
+into a string; the lispy version is not a rewrite of that grammar but its
+*dissolution*: parse source into the SAME =form_tree= shape brush already projects
+bash and the Lens already projects Lisp history into, then transform-as-data with
+one structural algebra, then unparse — exactly the =sh/parse → transform → sh/unparse=
+contract (PLAN-011 W5), aimed at tree-sitter instead of brush.
+
+The thesis (verified by prototype, see "Prototype evidence"):
+
+#+begin_quote
+One =form_tree=, one =q/*= algebra, three surfaces — source, shell-history, and
+Lisp-history. The editor and PLAN-018's history-reducer are TWO READOUTS of one
+shared engine, not two engines.
+#+end_quote
+
+This is a DESIGN + PROTOTYPE-VALIDATED build plan. The =q/*= algebra is proven
+expressible and correct in pure beam-lisp today (the execute sandbox is the same
+PTC family). The only genuinely new mechanism is =code/parse= (tree-sitter →
+=form_tree=); everything else reuses shipped substrate.
+
+* Why this shape — the homoiconic bet, cashed at the code layer
+
+spell_agent already built three-quarters of a lispy CodePath and never pointed it
+at source:
+
+| shipped substrate                              | what it gives                                              | evidence                         |
+|------------------------------------------------+------------------------------------------------------------+----------------------------------|
+| =Hist.Lens.form_tree/1=                        | ONE walkable node shape for Lisp history AND bash          | lib/spell_agent/hist/lens.ex     |
+| =sh/parse= → =sh/unparse=                      | text → transform-as-data → text, re-escaped, inject-proof  | lib/spell_agent/sh.ex (W5)       |
+| quasiquote ` / ~ / ~@, =tmpl::= holes          | quoted code with capture/splice slots                      | docs/quoting-spec.md             |
+| =define-tool {:scope :durable}=                | a recipe authored at runtime outlives its session          | docs/durable-toolset.md          |
+| =(tool/x {…})=                                 | every capability is a data-call                            | lib/spell_agent/tools.ex         |
+
+The canonical =form_tree= node (lens.ex moduledoc, brush_nif.ex):
+
+#+begin_src
+%{"node" => <kind>, "name"? => <string>, "value"? => <jsonable>, "children"? => [<node>]}
+#+end_src
+
+Tuple-free, JSON-safe, drift-resilient (an unknown kind still walks). =code/parse=
+emits *exactly* this shape, so a structural search/diff/rewrite written once works
+over source, shell, and recorded turns unchanged. That is the W5 thesis
+("bash is now the same kind of data as Lisp") completed for source code.
+
+* The whole surface (beam-lisp-maximal)
+
+Three Elixir-thin verbs + one pure beam-lisp library. The split obeys the repo law
+"Elixir materializes, PTC transforms": Elixir owns only parse/unparse (the NIF the
+sandbox cannot do) and the parse-gated write; ALL selection and rewriting is data.
+
+** Tier 1 — Elixir mechanism (3 verbs, minimal)
+
+#+begin_src
+(code/parse   {:path "foo.ex"})            ; → form_tree   (tree-sitter; the one new NIF-ish piece)
+(code/parse   {:src "def f, do: 1" :lang "elixir"})  ; parse a string
+(code/unparse {:tree <form_tree>})          ; → %{"src" => "…"}   (re-emit; words/leaves re-escaped)
+(code/edit    {:path "foo.ex" :xf <fn-or-data>})     ; parse → apply xf → parse-gate → write (transactional)
+#+end_src
+
+- =code/parse= degrades exotic/unparseable constructs to =%{"node"=>"raw","value"=><source-span>}=
+  leaves (the brush drift-resilient fallback, applied to tree-sitter error nodes).
+  Parse coverage is a TUNABLE that sets the reducer's reach (see cross-plan §).
+- =code/unparse= is the inverse; round-trip contract is *re-parse equality* (§Laws),
+  not byte equality — a formatter canonicalizes, structure + logical leaf values
+  are invariant.
+- =code/edit :xf= accepts EITHER a function =tree→tree= OR a reified transform
+  value (a list of =q/*= ops as data) — the latter is mandatory for PLAN-018
+  (see "Reified transforms").
+
+** Tier 2 — =q/*= the structural algebra (pure beam-lisp, standalone library)
+
+This is the SHARED ENGINE. It is a first-class library over =form_tree= — NOT a
+private helper inside =code/edit= — because two consumers use it at three scopes
+(source via =code/parse=, shell via =sh/parse=, Lisp-history via =Lens.form_tree=).
+Ships as a =.ptc= file beside =priv/hist/lenses/= , loaded by the existing
+=@external_resource= harness, forkable + durable-promotable like any lens.
+
+*** Holes (the pattern vocabulary — prototype-validated)
+
+| hole syntax (as form_tree)         | role                                            |
+|------------------------------------+-------------------------------------------------|
+| ={"node"=>"~","name"=>n}=          | node-capture; binds subtree to n (n="_" ⇒ wildcard, no bind) |
+| ={"node"=>"~@","name"=>n}=         | splice; binds 0+ remaining CHILDREN to n        |
+| ={"$" => n}= in a name/value FIELD | field-capture; binds a SCALAR (name/value) to n  |
+
+Critical shape fact (found in prototype): =name= and =value= are SCALAR FIELDS in
+=form_tree=, not children. So capturing a node's name needs a distinct ={$ n}=
+field sigil — a child-position hole cannot reach it. This is non-obvious and is
+the kind of thing the string DSL hid.
+
+*** Selection + equality
+
+#+begin_src
+(q/match   pattern subject)      ; → bindings-map | :no-match   (non-linear: repeated ~x must bind equal)
+(q/equal?  a b)                  ; → bool   ≡ (match with NO holes); THE correctness law (§Laws)
+(q/descendant pattern subject)   ; → [bindings-map …]   recursive; every matching subtree
+(q/child   pattern subject)      ; → [bindings-map …]   direct children only
+(q/select  pattern subject)      ; → [subtree …]        the matched nodes themselves
+(q/where   pred)                 ; → a predicate hole usable inside a pattern (escape hatch for non-structural tests)
+#+end_src
+
+*** Construction + rewrite
+
+#+begin_src
+(q/emit      template bindings)        ; instantiate a template against bindings (inverse of match)
+(q/rewrite   pattern template subject) ; match → emit on hit, else unchanged (top node)
+(q/update    subject pattern f)        ; replace every matching subtree with (f bindings) — the workhorse
+(q/wrap      subject pattern tmpl)     ; wrap matches: tmpl with ~_ = the original (try/catch, etc.)
+(q/splice    subject pattern op)       ; insert/delete among a node's children
+#+end_src
+
+*** Projections (replace the #qualifiers)
+
+#+begin_src
+(q/body tree)   ; the body span of a def/fn      ≡  foo.ex::f#body
+(q/sig  tree)   ; the signature span             ≡  foo.ex::f#sig
+(q/name tree)   ; the name field
+#+end_src
+
+*** The selector reads as what it IS — a narrowing pipeline
+
+#+begin_src clojure
+(->> (code/parse {:path "foo.ex"})
+     (q/descendant {"node" "def" "name" {"$" "fname"}})   ; every def, capture its name
+     (filter #(str/starts-with? (get % "fname") "handle_")))
+;; ≡  foo.ex::handle_*  but composable, threadable, inspectable
+#+end_src
+
+*** The match-and-rewrite surface is quoted code (the literal answer to the question)
+
+=§call[name=console.log]= is a string DESCRIBING a code shape. Lispify it and the
+matcher BECOMES the shape — and is inject-proof by construction (a captured hole is
+one node, never re-parsed text — the same guarantee =sh/unparse= gives =word= nodes):
+
+#+begin_src clojure
+;; the whole "find + structural replace, keep args" surface, as data:
+(code/edit {:path "log.ex"
+            :xf [[:update {"node" "call" "name" "console.log" "children" [{"node" "~@" "name" "args"}]}
+                          {"node" "call" "name" "logger.info"  "children" [{"node" "~@" "name" "args"}]}]]})
+#+end_src
+
+No =find:= / =content:= / =matching:"structural"= / =occurrence:= fields. The
+pattern's structure is the match; the template's structure is the result. console.log
+→ logger.info across a repo is two quasiquotes, not a four-field action object.
+
+** Tier 3 — durable codemods (zero new mechanism)
+
+A rewrite is a PTC value ⇒ =define-tool {:scope :durable}=. "The codemod you wrote
+once becomes a tool you keep" — verbatim the durable-toolset promise, now for
+refactors. =(tool/wrap-handlers-in-try)= rehydrates next session as if built-in.
+Multi-file = =(pmap code/edit files)= — the language IS the batch engine; no new
+batch/transaction DSL.
+
+* Reified transforms — the constraint PLAN-018 imposes on this plan
+
+PLAN-018's history-reducer has a use-case THIS plan's editor-UX never surfaces:
+it reads recorded edits back and composes/cancels them algebraically to shrink the
+tape (=reduced ≡ comp(edit₂,edit₁)=; =edit∘inverse → identity=). That only works if
+a recorded =:xf= is a REIFIABLE VALUE the reducer can compose — not an opaque
+closure. Therefore this plan commits to:
+
+1. =code/edit :xf= is *expressible as composable data ops* — a list of
+   ={:update | :wrap | :splice pattern …}= forms (the =q/*= ops as data), not only
+   an Elixir/PTC closure. The closure form stays as sugar; the DATA form is
+   canonical and is what gets recorded.
+2. The RECORDED form of an applied edit retains the structured ops (pattern +
+   template as =form_tree=), so the reducer can compose them. An edit recorded as a
+   rendered patch string is composition-dead and is explicitly disallowed as the
+   record representation.
+3. =q/match=, =q/equal?=, and the reify path are built STANDALONE and tested
+   independently of =code/edit=, so the reducer links them without dragging the
+   editor in. (Verified two consumers ⇒ the abstraction boundary is real.)
+
+PROTOTYPE PROOF (already done): =comp(e₂,e₁) ≡ direct= and =edit∘inverse ≡ identity=
+both hold over =form_tree= via =q/equal?= — the reducer's algebra is sound on this
+substrate.
+
+* The shared laws (cross-plan correctness currency)
+
+Stated once, tested as PUBLIC primitives both plans call:
+
+** LAW 1 — Structural invariance, not byte invariance
+
+Correctness is STRUCTURAL equality, not byte equality. =code/unparse → code/parse=
+canonicalizes presentation (formatting, quoting: =a|b ≡ 'a'|'b'=) while preserving
+structure + logical leaf values. This is the SAME currency as PLAN-018's lossless
+proof =fold_env(reduced) == fold_env(full)=. It is what lets a reduction touch the
+tape without the cache caring: the cache wants byte-stable OUTPUT, the transform
+guarantees structure-stable MEANING, and the content-address bridges them.
+
+** LAW 2 — =q/equal?= is the public, tested predicate for LAW 1
+
+=q/equal?= (≡ match with no holes) is exposed as a first-class primitive, NOT buried
+inside the edit parse-gate, because PLAN-018's reducer must call it to prove a
+reduction sound. Re-parse equality is a TESTED CONTRACT (a per-construct
+re-parse-equality test set, mirroring sh_parse_test.exs), not an implementation
+detail.
+
+** LAW 3 — raw-leaf boundary sets reduction reach
+
+A =raw= leaf is STRUCTURALLY OPAQUE: =q/match= can only whole-node-capture it
+(prototype-confirmed). Algebra degrades to heuristic at raw leaves. ⇒ the wider
+=code/parse= structures the long tail (fewer raw leaves), the more of BOTH the
+editor's refactors AND the reducer's tape reduces *provably*. This plan therefore
+treats parse coverage as a first-class, downstream-driven goal — pushing =raw=
+coverage beyond what edit-UX alone would justify, because PLAN-018 benefits.
+Tier axis is *structured (algebraic) vs raw (heuristic)*, with lossless/lossy a
+secondary axis within "structured".
+
+* Prototype evidence (beam-lisp, validated 2026-06-24)
+
+Built the entire =q/*= algebra in the execute sandbox (same PTC family) against
+fixtures mirroring real brush + lens output. ALL PASSED:
+
+- =q/match=: node-hole, =~@= splice (prefix/middle/suffix), ={$ n}= field-capture,
+  =_= wildcard, non-linear repeated captures (pass on equal, fail on differ).
+- =q/equal?=: identical ⇒ true, differ ⇒ false; canonicalization (=a|b ≡ 'a'|'b'=).
+- =q/descendant=: recursive, collects all binding-maps (2 nested sh-calls found).
+- =q/emit= / =q/rewrite=: console.log→logger.info keeping spliced args; emit-after-
+  match-with-same-template ≡ identity.
+- THE TWO REDUCER LAWS: =comp(e₂,e₁) ≡ direct rename= and =edit∘inverse ≡ id=, both
+  via =q/equal?=.
+- Recursion safe to depth ≥1000.
+
+EDGE CASES discovered (each becomes a documented invariant / test):
+1. *No forward refs / mutual recursion in this PTC* (no =declare=). ⇒ fold
+   child-list matching INTO the self-recursive =m-node= via inner =loop/recur=; do
+   not split =m-node= / =m-children= into mutually-recursive defs.
+2. *name/value are scalar FIELDS* ⇒ field-capture needs the distinct ={$ n}= sigil;
+   a child-position hole cannot capture a name.
+3. *raw nodes are structurally opaque* ⇒ only whole-node capture; LAW 3.
+4. *Two adjacent splices =[~@a ~@b]= are ambiguous* ⇒ greedy-from-right picks ONE
+   deterministic partition. Document; reducer memo-key soundness depends on this
+   determinism (verified: same inputs ⇒ identical output, 3×).
+5. *Deep-tree heap*: building a 3000-deep fixture OOM'd the sandbox; the MATCHER is
+   fine to ≥1000. ⇒ =code/parse= caps depth like brush unparse (MAX_DEPTH=256) and
+   degrades over-deep nodes to =raw=.
+
+* Build sequence — waves with swarm reviewers between architecture waves
+
+Each architecture wave is followed by a verification/review gate before the next.
+"Main thread" waves (W1, W3, W5, W7) are the architecture; even waves are
+test+swarm-review gates. Reviewers run over the wave's diff with explicit criteria.
+
+** W1 — =q/*= STANDALONE library (the shared engine first, no parse/edit yet)
+
+Build =q/match=, =q/equal?=, =q/descendant=, =q/child=, =q/select=, =q/emit=,
+=q/rewrite=, =q/update=, =q/wrap=, =q/splice=, =q/body=, =q/sig= as a pure beam-lisp
+=.ptc= over =form_tree=, loaded via the =@external_resource= harness in lens.ex
+(add a sibling =@queries= map). NO dependency on code/parse — test against
+hand-built + =Lens.form_tree= + =sh/parse= fixtures (proves three-surface generality
+on day one). Port the prototype verbatim; fold in the 5 edge-case fixes.
+
+Acceptance: =q/equal?= reflexive/symmetric; =q/match= passes the prototype's full
+table; =comp= + =cancellation= laws hold via =q/equal?=; non-linear + splice +
+field-capture covered. =mix check= clean.
+
+** W2 — GATE: test + swarm review (3 reviewers)
+
+Reviewer criteria (parallel, over the W1 diff):
+- (a) ALGEBRA SOUNDNESS: is =q/equal?= a true equivalence (reflexive, symmetric,
+  transitive on closed trees)? does non-linear binding hold? any way a hole leaks a
+  =:no-match= sentinel into a bindings map?
+- (b) THREE-SURFACE GENERALITY: does =q/match= work UNCHANGED over =sh/parse= and
+  =Lens.form_tree= output, or did source-shaped assumptions sneak in?
+- (c) REDUCER-READINESS: can a recorded list-of-ops be composed by an external
+  caller WITHOUT importing code/edit? is the reify boundary clean?
+
+** W3 — =code/parse= + =code/unparse= (the one new NIF piece) + LAW tests
+
+Tree-sitter → =form_tree= for one language first (Elixir — the repo's own), via the
+same vendored-NIF pattern as brush_nif (or a pure-Elixir tree-sitter binding if
+present; investigate first). =code/unparse= the inverse. Depth-cap → =raw= over
+MAX_DEPTH. Exotic/error nodes → =raw= leaf.
+
+Acceptance: re-parse equality test set (per construct: def, defp, call, pipe,
+case, fn, module) mirroring sh_parse_test.exs; =q/equal?(parse(unparse(t)), t)=;
+exotic construct → =raw=, round-trips verbatim; =mix check= clean.
+
+** W4 — GATE: test + swarm review (3 reviewers)
+
+- (a) ROUND-TRIP FIDELITY: is re-parse equality genuinely structural? any construct
+  that loses logical content (not just formatting)?
+- (b) RAW COVERAGE (LAW 3): inventory which Elixir constructs fall to =raw=; is the
+  structured/raw boundary documented and is coverage pushed where PLAN-018 benefits?
+- (c) INJECTION SAFETY: can a hand-built tree with a hostile =value= produce unsafe
+  source on unparse? (the =sh/unparse= word-vs-raw trust boundary, ported.)
+
+** W5 — =code/edit= (parse-gated, transactional, REIFIED-xf canonical)
+
+=code/edit {:path :xf}=: parse → apply =:xf= (data-ops list OR closure) → parse-gate
+(reject if result doesn't =code/parse= back) → transactional write (roll back on a
+bad tree, like the execute file-write rollback). Record the STRUCTURED ops form, not
+a patch string (the PLAN-018 constraint). =(pmap code/edit files)= for multi-file.
+
+Acceptance: a =:update= rewrite applies + round-trips; a bad transform is rejected
+and the file is unchanged; the recorded edit is a reifiable ops-list a test can
+re-compose via =q/=; =mix check= clean.
+
+** W6 — GATE: test + swarm review (3 reviewers)
+
+- (a) PARSE-GATE SOUNDNESS: can any =:xf= slip an unparseable tree to disk? is
+  rollback total?
+- (b) RECORDED-TRANSFORM REIFIABILITY: take a recorded =code/edit=, hand it to a
+  standalone composer, prove =comp= + =cancellation= on REAL recorded edits (the
+  PLAN-018 acceptance, exercised here first).
+- (c) CONVENTION FIT: does the surface match repo idiom (no =any=, star re-exports,
+  Bun/Elixir conventions, no prompt-in-code)?
+
+** W7 — durable codemods + the full CodePath-as-data surface
+
+=define-tool {:scope :durable}= over a =code/edit= xf; rehydration test (authored
+codemod resolves next session). Ship the threading-pipeline selector sugar
+(=->>= over =code/parse= + =q/descendant=) and =q/body= / =q/sig= projections as the
+ergonomic CodePath replacement. Optional: second language to prove =code/parse= is
+not Elixir-shaped.
+
+Acceptance: a durable codemod rehydrates and re-runs; selector pipeline replaces a
+representative string-CodePath query; =mix check= clean.
+
+** W8 — GATE: final swarm review (3 reviewers) + cross-plan handshake
+
+- (a) WHOLE-SURFACE COHERENCE: is this ONE algebra with thin verbs, or did parallel
+  impls creep in? (harmonious: one need, one impl.)
+- (b) PLAN-018 CONTRACT: confirm =q/match= / =q/equal?= / reified-xf are consumable
+  by the reducer standalone; sign off LAW 1–3 as shared.
+- (c) DURABILITY + DEGRADATION: bad parse / bad xf / bad policy degrade (never brick);
+  durable codemod best-effort rehydrate like durable tools.
+
+* Edge cases / invariants (from prototype + design)
+
+- SELF-RECURSIVE MATCHER: no mutual recursion in PTC; child-matching folds into
+  =m-node= via =loop/recur=. (W1)
+- FIELD vs CHILD: name/value capture uses ={$ n}=, never a child hole. (W1)
+- RAW OPACITY (LAW 3): =q/match= only whole-captures a =raw= node; algebra ⇒
+  heuristic there. (W1, W3)
+- AMBIGUOUS SPLICE: =[~@a ~@b]= ⇒ one deterministic greedy-from-right partition;
+  determinism is a TESTED property (memo-key soundness). (W1)
+- DEPTH CAP: =code/parse= caps at MAX_DEPTH, over-deep ⇒ =raw=; matcher safe ≥1000. (W3)
+- PARSE-GATE TOTALITY: a transform yielding an unparseable tree is rejected, file
+  rolled back. (W5)
+- REIFIABLE RECORD: recorded =:xf= is structured ops, never a patch string. (W5)
+- INJECTION: unparse re-escapes leaf values; =raw= renders verbatim (trust boundary
+  ported from sh/unparse). (W3)
+- RE-PARSE EQUALITY: structural, not byte; a tested per-construct contract. (W3)
+- BEST-EFFORT: every live-data path (parse, edit, durable rehydrate) degrades to a
+  safe default, never crashes. (all waves)
+
+* Acceptance (observable, when built)
+
+- W1: the prototype's full =q/match= table passes as ExUnit over the =.ptc= library;
+  =comp= + =cancellation= laws hold via =q/equal?=; works over sh/parse + lens fixtures.
+- W3: =q/equal?(parse(unparse(t)), t)= for every construct in the test set; exotic ⇒
+  =raw= round-trips verbatim.
+- W5: =code/edit= applies a structural rewrite + round-trips; a bad xf leaves the
+  file unchanged; the recorded edit re-composes via =q/=.
+- W7: a durable codemod rehydrates next session and re-runs; a selector pipeline
+  replaces a string-CodePath query.
+- W8: PLAN-018 signs the =q/*= / =q/equal?= / reified-xf contract; LAW 1–3 shared.
+- =mix check= clean at every wave.
+
+* Out of scope
+
+- The history-reducer itself (PLAN-018 W4+ consumes this; not built here).
+- LSP-backed semantic edges (=def→= / =ref→= / =implements→=): this plan is
+  structural (tree-sitter); cross-file semantic graph is a later layer.
+- Every language at once: W3 ships ONE (Elixir), W7 optionally proves a second;
+  exhaustive language coverage is incremental after the shape is fixed.
+- The =tmpl::= reactive-hole dimension (a CodePath that re-renders on data change) —
+  named as a future readout, not built here.
+
+* Cross-link: PLAN-018 (history reduction) is the second consumer
+
+PLAN-018's reducer matchers (dead-bind-elim, tool-cse, effect-classify) are all
+=q/match= over =Node.form= (already =form_tree=). This plan builds =q/*=, =q/equal?=,
+and reified-xf as STANDALONE testable primitives precisely so both the editor and
+the reducer fall out of them. The dependency is explicit: PLAN-018's edit-reduction
+tier becomes ALGEBRAIC (composition + cancellation) only once =code/edit= records
+structural transforms (W5); until then it stays in PLAN-018's heuristic span-overlap
+tier. LAW 1–3 are the shared correctness currency. See PLAN-018 "Cross-link:
+edit-reduction depends on lispy code/edit".
