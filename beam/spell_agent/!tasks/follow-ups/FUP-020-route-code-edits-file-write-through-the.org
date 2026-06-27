@@ -1,0 +1,66 @@
+#+TITLE: Route code-edit's file write through the execute transactional-rollback layer
+#+STATE: ITEM
+#+SESSION_ID: 15164b2a4dd1a55b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan-020-lispy-code-edit-beam-spell_agent/2026-06-24T23-29-11-991Z_15164b2a4dd1a55b.jsonl]]
+#+CUSTOM_ID: FUP-020-route-code-edits-file-write-through-the
+
+* Initial Message
+
+how would you mkae this spell_agent work well with the edit tool? with an interface that just *makes sense* for this? e.g. if CodePath were lispy, how would edit be done?
+
+* Summary
+
+=code/edit= (PLAN-020 W5) writes the edited file with a native, FS-atomic
+=File.write= + rename. It is NOT covered by the PTC =execute= layer's
+transactional file-write rollback, which tracks the =edit=/=create= PTC tools \u2014
+not an arbitrary native tool's =File= write. So a program that calls =code-edit=
+and then =(fail ...)= leaves the file changed. W6 review flagged this; the W5
+moduledoc was corrected from an overclaim ("transactional by construction") to an
+honest boundary, and this FUP tracks the real fix.
+
+* What is deferred
+
+Make a successful =code-edit= write participate in the SAME all-or-nothing
+rollback the =execute= tool gives =edit=/=create=, so a later failure in the
+enclosing program restores the pre-edit file.
+
+* Options (decide when taken on)
+
+  1. ROUTE THROUGH THE TRACKED PRIMITIVE. Have =code-edit= perform its write via
+     whatever the =execute= layer records for rollback (the same seam =edit=/
+     =create= use), instead of a bare =File.write=. Cleanest if that seam is
+     reachable from a native tool; investigate where the execute layer journals a
+     file write and whether a native tool can enlist in it.
+  2. SNAPSHOT/RESTORE JOURNAL. =code-edit= snapshots the target's prior bytes
+     before writing and registers a restore thunk the run executes on failure.
+     Self-contained but duplicates the execute layer's journal.
+  3. ROUTE THROUGH =pi_kernel_nif::apply_edit= + the edit broker. The broker
+     (=crates/pi-edit-broker=, intent->commit->conflict, =txn_journal=) already
+     does transactional, multi-session-coordinated writes. =code-edit= could
+     unparse the edited tree and hand a whole-file replace action to =apply_edit=.
+     This is the architecturally richest path (cross-session conflict detection
+     for free) but needs =apply_edit= to accept a whole-file/form-tree
+     replacement action, which is its own design (today it takes CodePath edit
+     actions). PLAN-020 W5 SUBSTRATE NOTE already names this.
+
+* Why deferred (not blocking)
+
+The W6 fixes made the write SAFE in isolation: FS-atomic (temp+rename, no partial
+file), parse-gated (no invalid source), empty-guarded (no truncation). The ONLY
+remaining gap is cross-effect rollback within one failing program \u2014 a real but
+narrower property. The honest moduledoc tells a caller to sequence =code-edit=
+last or restore from VCS until this lands.
+
+* Acceptance (when taken on)
+
+  - A program =(do (tool/code-edit {...}) (fail "x"))= leaves the target file at
+    its PRE-edit content.
+  - Multiple =code-edit= calls in one program are all-or-nothing on a later fail.
+  - No regression to the W5/W6 safety properties (atomic, gated, empty-guarded).
+
+* Module of record
+
+=beam/spell_agent/lib/spell_agent/code.ex= (=edit_tool=/=gate_write=). The
+execute-layer rollback seam (in =ptc_runner=) is the integration target; option 3
+involves =beam/pi_kernel_nif= =apply_edit= + =crates/pi-edit-broker=.
+Discovered: PLAN-020 W6 swarm review.

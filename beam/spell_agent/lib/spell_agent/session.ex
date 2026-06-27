@@ -81,6 +81,11 @@ defmodule SpellAgent.Session do
           # A2 (PLAN-014): the clock/* self-wake verbs. A wake defaults to running
           # in THIS session, so the mind can schedule its own continuation.
           |> Map.merge(SpellAgent.Clock.Namespace.tools(session_id)),
+        # PLAN-020 W7: attach the q/* structural-transform prelude so the agent can
+        # author codemods inline ((q/update (tool/code-parse {...}) pattern f),
+        # (q/apply-ops ...)) and walk source/shell/history with one algebra. nil
+        # when the prelude fails to compile (best-effort) -> agent runs without q/*.
+        runtime_prelude: SpellAgent.Code.Prelude.compiled(),
         ptc_transport: :tool_call,
         max_turns: max_turns
       )

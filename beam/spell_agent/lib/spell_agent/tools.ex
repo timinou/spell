@@ -262,6 +262,10 @@ defmodule SpellAgent.Tools do
       case PtcRunner.Lisp.run(source,
              context: context,
              tools: build_tools_map(),
+             # PLAN-020 W7: attach the q/* prelude so an authored/durable codemod
+             # tool can call q/update, q/apply-ops, etc. (same surface the main
+             # loop gets). nil when compilation failed -> tool runs without q/*.
+             prelude: SpellAgent.Code.Prelude.compiled(),
              caller: :in_process_v1
            ) do
         {:ok, step} ->
@@ -283,7 +287,10 @@ defmodule SpellAgent.Tools do
     # check, all under a heap/timeout cap. `data/<param>` references are a
     # recognized special form, not free vars, so a tool body that reads its
     # params validates cleanly. Returns :ok | {:error, [messages]}.
-    case PtcRunner.Lisp.validate(source) do
+    # Validate WITH the q/* prelude attached so a codemod tool that calls
+    # q/update / q/apply-ops validates (the analyzer knows the `q/` namespace),
+    # mirroring how `to_callable` runs the tool with the prelude (PLAN-020 W7).
+    case PtcRunner.Lisp.validate(source, prelude: SpellAgent.Code.Prelude.compiled()) do
       :ok -> :ok
       {:error, messages} -> {:error, Enum.join(List.wrap(messages), "; ")}
     end

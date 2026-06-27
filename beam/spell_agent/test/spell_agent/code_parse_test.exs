@@ -168,6 +168,38 @@ defmodule SpellAgent.CodeParseTest do
     end
   end
 
+  describe "selector pipeline (W7) — the ergonomic CodePath replacement" do
+    test "->> threads code-parse into q/descendant + projections", %{prelude: prelude} do
+      tree = parse("def f(a, b), do: a + b")
+
+      # the lispy CodePath: parse a file, select every call node, count them.
+      # ->> (code-parse) (q/descendant {...}) reads as a narrowing pipeline,
+      # replacing a string selector like `foo.ex::§call`.
+      n =
+        q(
+          prelude,
+          ~S|(->> data/tree (q/descendant {"node" "call" "children" [{"node" "~@" "name" "_"}]}) count)|,
+          %{"tree" => tree}
+        )
+
+      assert n >= 1
+    end
+
+    test "q/select returns matched subtrees for further threading", %{prelude: prelude} do
+      tree = parse("a + b + c")
+
+      # every identifier subtree, as nodes (not bindings)
+      names =
+        q(
+          prelude,
+          ~S|(->> data/tree (q/select {"node" "identifier" "children" []}) (map (fn [n] (get n "value"))) sort)|,
+          %{"tree" => tree}
+        )
+
+      assert names == ["a", "b", "c"]
+    end
+  end
+
   describe "THREE-SURFACE — the SAME q/* prelude matches a real code/parse tree" do
     test "q/descendant finds an identifier in parsed source", %{prelude: prelude} do
       tree = parse("foo + bar")
