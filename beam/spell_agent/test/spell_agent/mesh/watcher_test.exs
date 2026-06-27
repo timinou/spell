@@ -122,9 +122,33 @@ defmodule SpellAgent.Mesh.WatcherTest do
       assert %{"id" => _} = verbs["black/post"].(%{"kind" => "finding", "payload" => %{"x" => 1}})
 
       assert count_wakes() == 1
-      # A claim record was written for the firing (the cross-node dedup substrate).
+      # BUG-019: the firing dedup is a CONTROL key, NOT a mesh record — so it must
+      # NOT pollute the region. No fire: claim record exists, and black/query sees
+      # only the user's finding (never an internal fire-claim).
       claims = MeshStore.by_kind(Memory, region, :claim)
-      assert Enum.any?(claims, fn c -> String.starts_with?(c.payload["work"] || "", "fire:") end)
+      refute Enum.any?(claims, fn c -> String.starts_with?(c.payload["work"] || "", "fire:") end)
+      all = MeshStore.region(Memory, region)
+      assert Enum.all?(all, fn r -> r.kind in [:finding, :intention] end)
+    end
+
+    test "a kindless once:false watch does NOT re-fire on its own dedup (no feedback loop)",
+         %{verbs: verbs, region: region} do
+      # The regression for BUG-019: a kindless/any-match watch must not observe an
+      # internal firing record and re-trigger itself. One real post -> one fire,
+      # not a fuel-burning cascade off its own dedup writes.
+      verbs["black/watch"].(%{
+        "when" => %{"count" => 1},
+        "wake" => %{"prompt" => "loop?"},
+        "once" => false,
+        "fuel" => 5
+      })
+
+      verbs["black/post"].(%{"kind" => "finding", "payload" => %{"x" => 1}})
+
+      # Exactly one fire — no self-triggered cascade burning the fuel down.
+      assert count_wakes() == 1
+      # The watch is still alive (fuel not burned out by a feedback loop).
+      assert [_] = MeshStore.by_kind(Memory, region, :intention)
     end
   end
 

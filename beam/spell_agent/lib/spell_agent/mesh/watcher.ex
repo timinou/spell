@@ -102,11 +102,23 @@ defmodule SpellAgent.Mesh.Watcher do
       # fuel: remaining fire budget per intention seq (lazily seeded from the
       #   intention's :fuel payload, default 1 for a :once watch / unbounded-ish
       #   for an explicit-refire watch with no :fuel).
-      # done: the set of (intention_seq, event_seq) firings already claimed by THIS
-      #   watcher — the local half of claim-dedup, so the same post never
-      #   double-fires one intention within a node even on a telemetry re-deliver.
+      # done: %{intention_seq => MapSet of event_seqs} already fired locally — the
+      #   local half of dedup, so a telemetry re-deliver of the SAME post never
+      #   double-fires one intention. Bucketed per intention so the WHOLE bucket
+      #   drops when the intention retires (no unbounded growth, BUG-019).
+      # retired: intention seqs that have fired out their fuel / expired. A
+      #   tombstone short-circuits maybe_fire so a post arriving before retire's
+      #   best-effort Store.delete propagates cannot re-seed full fuel (BUG-019).
       {:ok,
-       %{store: store, clock: clock, handler_id: handler_id, fired: 0, fuel: %{}, done: MapSet.new()}}
+       %{
+         store: store,
+         clock: clock,
+         handler_id: handler_id,
+         fired: 0,
+         fuel: %{},
+         done: %{},
+         retired: MapSet.new()
+       }}
     else
       # Disabled (e.g. the :test env): do not attach, do not fire. A black/watch
       # still POSTS its durable intention; it just is not detonated here. This is
@@ -154,9 +166,13 @@ defmodule SpellAgent.Mesh.Watcher do
 
     Enum.reduce(intentions, state, fn intention, acc ->
       cond do
-        expired?(intention, now) ->
+        MapSet.member?(acc.retired, intention.seq) ->
+          # Already retired (tombstone) — ensure it's gone from the store, ignore.
           retire(acc, region, intention)
-          %{acc | fuel: Map.delete(acc.fuel, intention.seq)}
+          acc
+
+        expired?(intention, now) ->
+          retire_state(acc, region, intention)
 
         fires?(acc.store, region, record, intention) ->
           maybe_fire(acc, region, record, intention)
@@ -175,41 +191,68 @@ defmodule SpellAgent.Mesh.Watcher do
       state
   end
 
-  # Gate a candidate firing through (1) local dedup, (2) cross-node claim-dedup,
-  # and (3) fuel, then fire + retire when fuel is spent.
+  # Gate a candidate firing through (1) local dedup, (2) fuel, (3) cross-node
+  # claim-dedup, then fire + retire when fuel is spent.
   defp maybe_fire(state, region, %{seq: event_seq}, %{seq: int_seq} = intention) do
-    firing_key = {int_seq, event_seq}
-
     cond do
       # (1) Already fired this exact (intention, event) on THIS node — a telemetry
       #     re-deliver or a duplicate observation. Never double-fire locally.
-      MapSet.member?(state.done, firing_key) ->
+      done?(state, int_seq, event_seq) ->
         state
 
-      # (3) Fuel exhausted — retire and stop (cascade bound).
+      # (2) Fuel exhausted — retire and stop (cascade bound).
       remaining_fuel(state, intention) <= 0 ->
-        retire(state, region, intention)
-        %{state | fuel: Map.delete(state.fuel, int_seq)}
+        retire_state(state, region, intention)
 
-      # (2) Claim the firing across nodes (DC-6). Only the winner fires. Single
-      #     node: the claim trivially wins (no replication window).
+      # (3) Claim the firing across nodes (DC-6). Only the winner fires. Single
+      #     node: the CAS on the control key trivially wins (no replication window).
       not claim_firing(state, region, int_seq, event_seq) ->
         # Lost the claim (another node fired) — record local done so we don't retry.
-        %{state | done: MapSet.put(state.done, firing_key)}
+        mark_done(state, int_seq, event_seq)
 
       true ->
         fire(state, intention)
         fuel_left = remaining_fuel(state, intention) - 1
-        state = %{state | fired: state.fired + 1, done: MapSet.put(state.done, firing_key)}
-        state = %{state | fuel: Map.put(state.fuel, int_seq, fuel_left)}
 
-        if fuel_left <= 0 do
-          retire(state, region, intention)
-          %{state | fuel: Map.delete(state.fuel, int_seq)}
-        else
+        state =
           state
-        end
+          |> Map.put(:fired, state.fired + 1)
+          |> mark_done(int_seq, event_seq)
+          |> put_fuel(int_seq, fuel_left)
+
+        if fuel_left <= 0, do: retire_state(state, region, intention), else: state
     end
+  end
+
+  # --- per-intention local dedup + fuel + retire bookkeeping ---
+
+  defp done?(state, int_seq, event_seq) do
+    case Map.get(state.done, int_seq) do
+      %MapSet{} = set -> MapSet.member?(set, event_seq)
+      _ -> false
+    end
+  end
+
+  defp mark_done(state, int_seq, event_seq) do
+    bucket = Map.get(state.done, int_seq, MapSet.new())
+    %{state | done: Map.put(state.done, int_seq, MapSet.put(bucket, event_seq))}
+  end
+
+  defp put_fuel(state, int_seq, n), do: %{state | fuel: Map.put(state.fuel, int_seq, n)}
+
+  # Retire an intention: delete it from the store (best-effort) AND drop ALL its
+  # in-memory bookkeeping (fuel entry + the whole done bucket, so neither leaks),
+  # then tombstone its seq so a post arriving before the store delete propagates
+  # cannot re-seed full fuel.
+  defp retire_state(state, region, %{seq: seq} = intention) do
+    retire(state, region, intention)
+
+    %{
+      state
+      | fuel: Map.delete(state.fuel, seq),
+        done: Map.delete(state.done, seq),
+        retired: MapSet.put(state.retired, seq)
+    }
   end
 
   # The remaining fire budget for an intention: the in-memory counter if seen, else
@@ -231,54 +274,55 @@ defmodule SpellAgent.Mesh.Watcher do
     end
   end
 
-  # Claim the firing (intention_seq, event_seq) so exactly one node fires it (DC-6).
-  # Uses the store's claim arbitration via a dedicated :claim record whose work id
-  # is the firing key; the winner is argmin(seq, author). On a single node this
-  # always wins. Best-effort: a claim error degrades to "fire" (better a rare
-  # double-fire of an idempotent :do than a missed fire — an irreversible :do must
-  # route through black/decide anyway, per the P1.1 correction).
+  # Claim the firing (intention_seq, event_seq) so exactly one firer proceeds
+  # (DC-6). CRITICAL: this dedup must NOT write a mesh RECORD into the watched
+  # region — doing so emits [:spell,:mesh,:post] telemetry the watcher re-observes,
+  # and a kindless/:count/:claim watch would then re-fire on its own dedup record
+  # (a feedback loop) AND the fire-claims would pollute black/query|fold (BUG-019).
+  #
+  # Instead the firing is an atomic CAS on a CONTROL key {:mesh_fire, region,
+  # firing_key} via Store.incr (lock-free, NOT query-visible, NO telemetry). The
+  # first incr returns 1; exactly one caller sees 1 and fires. Single-node
+  # exactly-once is then guaranteed by the atomic counter. (The HARD multi-node
+  # path is a node-plane decide, Option A / FUP-021; this control key is the
+  # single-node authoritative dedup.) Best-effort: a sick store degrades to "fire"
+  # (better a rare double-fire of an idempotent :do than a missed fire — an
+  # irreversible :do routes through black/decide regardless, P1.1).
   defp claim_firing(state, region, int_seq, event_seq) do
-    work = "fire:#{int_seq}:#{event_seq}"
-    author = firing_author()
-
-    case MeshStore.put(
-           state.store,
-           SpellAgent.Mesh.Record.new(:claim, region, %{"work" => work}, author: author)
-         ) do
-      {:ok, mine} ->
-        winner =
-          state.store
-          |> MeshStore.claims_for(region, work)
-          |> Enum.min_by(fn c -> {c.seq, c.author || ""} end, fn -> nil end)
-
-        winner == nil or (winner.author == author and winner.seq == mine.seq)
-
-      {:error, _} ->
-        true
-    end
+    key = {:mesh_fire, region, "#{int_seq}:#{event_seq}"}
+    Store.incr(state.store, key) == 1
   rescue
     _ -> true
   catch
     :exit, _ -> true
   end
 
-  # This node's firing author id: a stable per-node identity so claim arbitration
-  # distinguishes nodes. node() is the BEAM node name (one Watcher per node).
-  defp firing_author, do: "watcher@#{node()}"
-
   # Does the posted record satisfy the intention's :when? Reuses Mesh.Store.by_match
   # (the SINGLE source of predicate logic) so watch matching can never drift from
-  # query matching. Two forms:
-  #   where/kind  — fire when the JUST-POSTED record P is itself a match.
-  #   count       — fire when the region holds >= N matching records (fan-in).
-  defp fires?(store, region, %{seq: posted_seq}, intention) do
+  # query matching. Two forms, BOTH gated on the JUST-POSTED record being a match:
+  #   where/kind  — fire when the posted record P is itself a match.
+  #   count       — fire when the posted record is a match AND the region now holds
+  #                  >= N matching records (fan-in threshold). Gating on P being a
+  #                  match means the watch fires once PER new matching post, never
+  #                  spuriously on an unrelated post while the threshold holds.
+  #
+  # :intention records are EXCLUDED from the match set — they are triggers, not
+  # events, so a kindless/:count watch must never count or fire on an intention
+  # post (including the watch's OWN intention, which would otherwise self-fire).
+  defp fires?(store, region, %{seq: posted_seq} = posted, intention) do
     when_pred = get_in_payload(intention, "when") || %{}
     match = %{"kind" => Map.get(when_pred, "kind"), "where" => Map.get(when_pred, "where")}
-    matches = MeshStore.by_match(store, region, match)
+
+    matches =
+      store
+      |> MeshStore.by_match(region, match)
+      |> Enum.reject(fn r -> r.kind == :intention end)
+
+    posted_matches? = posted.kind != :intention and Enum.any?(matches, &(&1.seq == posted_seq))
 
     case Map.get(when_pred, "count") do
-      n when is_integer(n) and n > 0 -> length(matches) >= n
-      _ -> Enum.any?(matches, &(&1.seq == posted_seq))
+      n when is_integer(n) and n > 0 -> posted_matches? and length(matches) >= n
+      _ -> posted_matches?
     end
   end
 

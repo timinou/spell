@@ -1,0 +1,64 @@
+#+TITLE: Watcher fire-claims pollute + re-trigger the watched region; unbounded done-set; no claim expiry
+#+STATE: DONE
+#+SESSION_ID: 15195d97dff3d090
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-27T08-45-09-375Z_15195d97dff3d090.jsonl]]
+#+CUSTOM_ID: BUG-019-watcher-fire-claims-pollute-re-trigger-t
+
+* Initial Message
+
+what's pending in this folder's work?
+
+* Source
+M3 reviewer swarm (PLAN-019), agents 13-RevWatcherFuel + 14-RevWatcherDedup. Both
+independently flagged the fire-claim feedback loop as the central bug. Fixed
+mid-flight before M4.
+
+* Finding 1 (P2, BOTH reviewers) \u2014 fire-claims re-enter the watched stream (feedback loop)
+claim_firing/4 wrote its dedup :claim into the WATCHED region via MeshStore.put,
+which emits [:spell,:mesh,:post] telemetry. The watcher re-observes its own
+fire:int:event claim as a new post; a kindless / :count / kind:"claim" watch then
+treats it as a match -> fires again -> burns fuel on spurious wakes. The same
+fire-claims also surface in black/query (no kind) and black/fold over :claim,
+polluting the agent-facing region.
+
+** Fix
+Move the firing-dedup OUT of the mesh record stream entirely. Use a dedicated
+store key {:mesh_fire, region, firing_key} via Store.put/fetch (NOT Store.put/2
+which assigns a seq + emits telemetry + is query-visible). Single-node
+exactly-once becomes a compare-and-set on that key: fetch -> if absent, claim by
+writing {author, t}; fire iff we wrote it. No telemetry, no query pollution, no
+feedback loop. (Multi-node hard exactly-once is still FUP-021 / Option A via
+node-plane decide; this control key is the single-node authoritative dedup and
+the Option-B substrate.)
+
+* Finding 2 (P2, RevWatcherFuel) \u2014 done MapSet grows unbounded
+state.done accumulated {int_seq, event_seq} forever; retire only cleaned
+state.fuel. A long-lived watcher leaks one entry per fired event.
+
+** Fix
+Prune all done entries for an intention seq when it retires (its keys are dead
+once the intention is gone). Track done per-intention so the whole bucket drops on
+retire.
+
+* Finding 3 (P2, RevWatcherFuel) \u2014 retire/re-seed race re-grants full fuel
+After the last fire, fuel state is deleted immediately; if retire's best-effort
+Store.delete is ineffective and a NEW matching post (new event_seq) arrives before
+the intention disappears, remaining_fuel re-seeds from the payload -> full fuel
+again.
+
+** Fix
+Keep a retired tombstone: on retire, mark the intention seq retired (a MapSet) and
+short-circuit maybe_fire for a retired seq, instead of deleting the fuel entry. The
+tombstone is pruned only when the intention truly leaves the store.
+
+* Finding 4 (P2, RevWatcherDedup) \u2014 fire-claims never expire
+Deferred to FUP-021 (the multi-node crash-refire path). With the control-key fix
+(Finding 1), single-node firing is a CAS on a key the same watcher owns; the
+crash-before-fire re-fire path is inherently multi-node (another node/watcher) and
+belongs with Option A. Noted, not fixed now (single-node has one watcher, no
+contention).
+
+* Acceptance
+mix test watcher_test.exs + watch_test.exs green incl. a new regression: a
+kindless once:false watch does NOT re-fire on its own internal dedup record (no
+feedback loop); fire-dedup records do NOT appear in black/query. 95+ mesh green.
