@@ -282,7 +282,6 @@ defmodule SpellAgent.Harness do
 
   defp arg(args, key) when is_map(args), do: Map.get(args, key) || Map.get(args, safe_atom(key))
   defp get(m, key) when is_map(m), do: Map.get(m, key) || Map.get(m, safe_atom(key))
-  defp get(_m, _key), do: nil
 
   # Cursor delta: an int, or :first/:last (passed as strings from PTC).
   defp cursor_delta(n) when is_integer(n), do: n

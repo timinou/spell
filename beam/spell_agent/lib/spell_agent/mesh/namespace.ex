@@ -65,11 +65,12 @@ defmodule SpellAgent.Mesh.Namespace do
     payload = get(args, ["payload"]) || %{}
 
     cond do
-      kind not in [:goal, :finding, :intention] ->
+      kind not in [:goal, :finding, :intention, :decision, :resolution] ->
         %{
           "err" =>
-            "black/post kind must be :goal, :finding, or :intention (got #{inspect(kind)}); " <>
-              "claims go through black/claim, verdicts through black/decide"
+            "black/post kind must be :goal, :finding, :intention, :decision, or " <>
+              ":resolution (got #{inspect(kind)}); claims go through black/claim, " <>
+              "verdicts through black/decide"
         }
 
       not Region.write_cap?(region, held) ->

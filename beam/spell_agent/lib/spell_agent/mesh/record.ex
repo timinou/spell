@@ -38,7 +38,8 @@ defmodule SpellAgent.Mesh.Record do
 
   alias SpellAgent.Mesh.Record
 
-  @type kind :: :goal | :finding | :claim | :verdict | :intention
+  @type kind ::
+          :goal | :finding | :claim | :verdict | :intention | :decision | :resolution
 
   @type t :: %__MODULE__{
           region: String.t(),
@@ -65,8 +66,13 @@ defmodule SpellAgent.Mesh.Record do
             watermark: nil,
             sealed: false
 
-  @kinds [:goal, :finding, :claim, :verdict, :intention]
+  @kinds [:goal, :finding, :claim, :verdict, :intention, :decision, :resolution]
 
+  # FEAT-019 (decisions as stigmergy): a :decision is a question an agent surfaces
+  # to a resolver (human/agent/policy); a :resolution is the answer posted back.
+  # Both are APPEND-ONLY events, NOT dedup kinds — two identical questions are two
+  # distinct decisions to answer, and every resolution is a distinct answer event
+  # (a decision resolved twice keeps both; the watch fuel/fold picks the first).
   @doc "The kinds whose identical content should DEDUP (collapse) in the store."
   @spec dedup_kinds() :: [kind()]
   def dedup_kinds, do: [:goal, :finding, :verdict]

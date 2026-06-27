@@ -1,0 +1,59 @@
+#+TITLE: Decisions dashboard: black/query grant to cell tier + reaction resolution-post binding
+#+STATE: ITEM
+#+SESSION_ID: 15195d97dff3d090
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-27T08-45-09-375Z_15195d97dff3d090.jsonl]]
+#+CUSTOM_ID: FUP-024-decisions-dashboard-black-query-grant-to
+
+* Initial Message
+
+what's pending in this folder's work?
+
+* Source
+Deferred from M6 (PLAN-019, FEAT-019). M6 shipped the decision SUBSTRATE (record
+kinds + the decision->resolution->wake flow over existing verbs). The human-facing
+DASHBOARD (the reactive read + the resolve-write) remains \u2014 a TUI surface that
+overlaps M4 (mesh inspector). Build with M4.
+
+* Shipped (M6)
+- :decision / :resolution record kinds (Record.@kinds; append-only, not dedup).
+- black/post accepts :decision / :resolution.
+- The flow end-to-end over existing primitives (the FEAT's "no new control flow"):
+  post :decision -> black/watch {:when {:kind :resolution :where {:decision N}}
+  :wake ...} -> resolver posts :resolution -> the watcher fires the wake. Gate via
+  the :where over the answer payload. Resolver symmetry (human/agent/policy).
+- 5 tests: post kinds, the fire flow, the gate predicate, resolver symmetry, the
+  open-decisions projection (decisions minus resolved seqs).
+
+* Deferred (the dashboard \u2014 build with M4 FEAT-014/015)
+** READ: grant the mesh read verbs to the reactive cell tier
+- lib/spell_agent/tui/cell/tools.ex is a FAIL-CLOSED allowlist currently admitting
+  only harness/* reads. Grant black/query + black/context (READ verbs) so a cell's
+  query can project open decisions / findings / the spawn-tree off-frame.
+- BUT: the cell tier filters Harness.tools(forest, gaze) \u2014 it has no region/store.
+  Wiring mesh reads into a cell needs the cell to close over a region+store (a
+  small Cell.Tools extension: read_only/2 -> read_only/3 with a mesh source, or a
+  separate mesh-cell tier). Keep cells READ-ONLY (no mutators); add black/query +
+  black/context to the allowlist, assert they stay disjoint from @forbidden.
+** WRITE: a Reaction binding that posts a :resolution
+- a keystroke action (keymap/define-reaction) whose body is
+  (black/post {:kind :resolution :payload {:decision N :answer ...}}). The write
+  lives in the REACTION tier (deliberate keystroke), NOT the read-only cell tier \u2014
+  the existing Cell-vs-Reaction capability split is exactly right.
+- a :decision :answer-schema -> choice-affordances renderer (tmpl:: over the schema).
+** The dashboard panes (doc-07, fed by mesh cells)
+- decisions / findings / spawn-tree / claims / verdicts / cohort (the FEAT-017
+  context lens). Reactive cells whose query is (black/query {...}); the result lands
+  in data/* (data_bag); tmpl:: holes render it. All BUILT substrate (PLAN-012 holes
+  + PROJ-004 cells + LayoutRegistry + Reaction DSL); this is the wiring.
+
+* Acceptance (when built with M4)
+- a decisions cell shows open decisions and hides resolved ones (live, off-frame).
+- a dashboard reaction posts a :resolution for the focused decision; the queued
+  task fires; the agent's work proceeds \u2014 human and agent never referenced each
+  other.
+- the cell tier grants black/query + black/context, stays disjoint from @forbidden
+  (no mutator grantable).
+
+* Dependencies
+Rides M4 (FEAT-014/015 mesh panes/inspector). The substrate (M6) is complete and
+independently usable by an agent via the verbs; the dashboard is the human surface.

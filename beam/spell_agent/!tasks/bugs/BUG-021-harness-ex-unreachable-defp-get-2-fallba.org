@@ -1,0 +1,29 @@
+#+TITLE: harness.ex: unreachable defp get/2 fallback clause (compile warning blocks strict gate)
+#+STATE: DONE
+#+SESSION_ID: 15195d97dff3d090
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-27T08-45-09-375Z_15195d97dff3d090.jsonl]]
+#+CUSTOM_ID: BUG-021-harness-ex-unreachable-defp-get-2-fallba
+
+* Initial Message
+
+what's pending in this folder's work?
+
+* Symptom
+mix compile --warnings-as-errors fails: "this clause of defp get/2 is never used"
+at lib/spell_agent/harness.ex:285.
+
+* Root cause
+PLAN-346 left a fallback `defp get(_m, _key), do: nil` after
+`defp get(m, key) when is_map(m)`. `get/2` is only ever called with a map arg, and
+the guarded clause matches every map, so the fallback is provably unreachable. Pre-
+existing (not introduced by the mesh work), surfaced when establishing a warning-
+free compile for the MESH milestone gates (PLAN-019).
+
+* Fix
+Remove the dead clause. `arg/2` (the sibling helper) has only the is_map clause and
+no fallback, so dropping the get/2 fallback makes the two consistent. No behaviour
+change \u2014 the clause never executed.
+
+* Discovery
+Found running the M6 verify gate (PLAN-019). It is the LAST warning blocking a
+warning-free mesh compile; every other mesh module compiles clean.
