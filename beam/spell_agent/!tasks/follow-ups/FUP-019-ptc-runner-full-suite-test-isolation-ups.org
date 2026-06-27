@@ -1,0 +1,65 @@
+#+TITLE: ptc_runner full-suite test isolation: upstream_roundtrip + error_handling fail only in aggregate
+#+STATE: ITEM
+#+SESSION_ID: 15164b2a4dd1a55b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan-020-lispy-code-edit-beam-spell_agent/2026-06-24T23-29-11-991Z_15164b2a4dd1a55b.jsonl]]
+#+CUSTOM_ID: FUP-019-ptc-runner-full-suite-test-isolation-ups
+
+* Initial Message
+
+how would you mkae this spell_agent work well with the edit tool? with an interface that just *makes sense* for this? e.g. if CodePath were lispy, how would edit be done?
+
+* Summary
+
+Pre-existing test-isolation flakiness in the =beam/ptc_runner= suite, surfaced
+(NOT caused) during PLAN-020 W1 / BUG-017. Two failure families fail ONLY when
+the full suite runs, pass in isolation, and the count varies run-to-run at a
+FIXED seed (=--seed 0=) \u2014 the signature of shared global/process state leaking
+across files, not a logic bug.
+
+* Evidence (verified 2026-06-27)
+
+  - =test/ptc_runner/lisp/prelude/upstream_roundtrip_test.exs= \u2014 3 tests
+    ("tool-backed prelude export against a reachable upstream"). In isolation:
+    =mix test <file>= \u2192 3/3 pass, repeatedly. In the full suite at =--seed 0=:
+    2\u20133 of them fail, the COUNT VARYING between identical-seed runs. A varying
+    failure count at a fixed seed implies nondeterministic shared state (an
+    upstream Runtime / persistent_term / named process not reset between files),
+    not ordering alone.
+  - =test/ptc_runner/lisp/integration/error_handling_test.exs:299= ("using quoted
+    list syntax instead of vector") \u2014 expects =​'(1 2 3)= to be a =parse_error=,
+    but it now returns ={"node" => "list", "children" => [1,2,3]}=. Fails on the
+    PRISTINE tree too (confirmed by git-stash comparison), so it is a stale
+    assertion against since-changed quoted-collection behavior (PLAN-012 W1 lifted
+    the quoted-collection restriction). Likely a simple assertion update, but
+    out of scope for the keyword work.
+
+* Why this is filed, not fixed here
+
+Orthogonal to BUG-017 (namespaced keywords). Confirmed unrelated by running the
+SAME failing files on the pristine submodule commit (afb39be2) \u2014 they fail there
+too, identically. Fixing the isolation leak is its own focused task (find the
+unreset upstream-runtime state; add a setup/on_exit teardown or unique names);
+fixing the error_handling assertion is a one-line update to match current
+quoted-list semantics. Neither belongs inside the keyword substrate change.
+
+* Acceptance (when taken on)
+
+  - =mix test --seed 0= (and a few other seeds) is GREEN with no per-run variance.
+  - upstream_roundtrip teardown resets whatever global it shares (Runtime handle,
+    persistent_term key, or named process) so cross-file runs are deterministic.
+  - error_handling:299 asserts the CURRENT =​'(1 2 3)= behavior (a value, not a
+    parse error) or is moved/removed if the case is obsolete.
+
+* Pointers
+
+  - =test/ptc_runner/lisp/prelude/upstream_roundtrip_test.exs= (setup/Runtime).
+  - =test/ptc_runner/lisp/integration/error_handling_test.exs:299=.
+  - PLAN-012 W1 (quoted collections desugar to =(quote ...)=) \u2014 the behavior the
+    stale error_handling assertion predates.
+
+* Not a regression from BUG-017
+
+The namespaced-keyword change touches ONLY keyword tokenization
+(=fast_parser=/=keyword=/=predicates=); it cannot affect prelude-upstream-runtime
+ordering. Verified: the keyword-area suites (parser, name_keyword, predicates,
+validator, conformance) are fully green.
