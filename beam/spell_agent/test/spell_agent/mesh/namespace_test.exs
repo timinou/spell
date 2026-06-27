@@ -157,9 +157,16 @@ defmodule SpellAgent.Mesh.NamespaceTest do
   end
 
   describe "stubs" do
-    test "decide returns a clear not-yet-wired error (FEAT-012)" do
+    test "decide is LIVE (FEAT-012) — validates + commits rather than stubbing" do
+      # black/decide is no longer a stub: an empty call is rejected for a missing
+      # :question (not a not-yet-wired message), and a well-formed call commits a
+      # verdict. (Full consensus contracts live in consensus_test.exs.)
       assert %{"err" => d} = call("s", "reg", "black/decide", %{})
-      assert d =~ "FEAT-012"
+      assert d =~ "question"
+      refute d =~ "FEAT-012"
+
+      assert %{"verdict" => id} = call("s", "reg", "black/decide", %{"question" => "done?"})
+      assert is_binary(id)
     end
 
     test "watch is LIVE (A3, FEAT-021) — validates rather than stubbing" do

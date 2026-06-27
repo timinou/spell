@@ -15,9 +15,10 @@ defmodule SpellAgent.Mesh.Namespace do
     * `black/claim` — optimistic claim; append + resolve-by-fold (seq, author).
     * `black/fold`  — a pure read-time reduce (count | group-by | rank | predicate).
 
-  `black/watch` and `black/decide` are STUBBED here (they need the watcher and the
-  consensus node-plane, FEAT-013/012); they return an explanatory error so a
-  program that calls them fails clearly rather than silently.
+  `black/watch` fires a condition-fused self-wake via the single-node
+  `Mesh.Watcher` (A3, FEAT-021). `black/decide` seals + folds + commits an
+  idempotent `:verdict` via `Mesh.Consensus` (FEAT-012, single-node path; the
+  multi-node Ra election is FUP-020).
 
   ## Corrections baked in (oracle MeshFinalCheck)
 
@@ -33,7 +34,7 @@ defmodule SpellAgent.Mesh.Namespace do
   (like `Hist.Namespace.normalize_err`), never crashing the agent turn.
   """
 
-  alias SpellAgent.Mesh.{Record, Region, Store}
+  alias SpellAgent.Mesh.{Consensus, Record, Region, Store}
   alias SpellAgent.SessionRegistry
 
   @doc """
@@ -52,7 +53,7 @@ defmodule SpellAgent.Mesh.Namespace do
       "black/claim" => fn args -> guard(fn -> claim(impl, session_id, region, held, args) end) end,
       "black/fold" => fn args -> guard(fn -> fold(impl, region, args) end) end,
       "black/watch" => fn args -> guard(fn -> watch(impl, session_id, region, held, args) end) end,
-      "black/decide" => fn _args -> not_yet("black/decide", "FEAT-012 (Mesh.Consensus)") end
+      "black/decide" => fn args -> guard(fn -> decide(impl, session_id, region, held, args) end) end
     }
   end
 
@@ -261,6 +262,42 @@ defmodule SpellAgent.Mesh.Namespace do
     end
   end
 
+  # --- black/decide (FEAT-012, Mesh.Consensus) ---
+
+  # Seal the region frontier, fold the sealed findings (optionally via an
+  # agent-authored PTC :fold over data/findings), and commit an idempotent
+  # :verdict. Single-node degenerates to a local seal+fold+write (no Ra).
+  defp decide(impl, session_id, region, held, args) do
+    cond do
+      not Region.write_cap?(region, held) ->
+        %{"err" => "no write capability for region #{inspect(region)}"}
+
+      not is_binary(get(args, ["question"])) or get(args, ["question"]) == "" ->
+        %{"err" => "black/decide requires a non-empty :question"}
+
+      true ->
+        decide_args = %{
+          region: region,
+          question: get(args, ["question"]),
+          fold: get(args, ["fold"]),
+          terminal: get(args, ["terminal"]) || false,
+          store: impl,
+          author: session_id
+        }
+
+        # NB: the single-node path returns {:verdict, _} | {:error, _}. The
+        # {:pending, _} outcome (sub-quorum) only arises on the multi-node Ra
+        # path (FUP-020); it is handled there when that path lands.
+        case Consensus.decide(decide_args) do
+          {:verdict, id, payload} ->
+            %{"verdict" => id, "region" => region, "payload" => payload}
+
+          {:error, reason} ->
+            %{"err" => "black/decide failed: #{inspect(reason)}"}
+        end
+    end
+  end
+
   # --- black/fold ---
 
   defp fold(impl, region, args) do
@@ -328,13 +365,6 @@ defmodule SpellAgent.Mesh.Namespace do
   defp put_if(map, _k, nil), do: map
   defp put_if(map, k, v), do: Map.put(map, k, v)
 
-  defp not_yet(verb, owner) do
-    %{
-      "err" =>
-        "#{verb} is not wired yet (lands in #{owner}); the four monotone verbs " <>
-          "(post/query/claim/fold) are available now"
-    }
-  end
 
   # Run a verb body, converting any raise/exit into a best-effort {"err" ...} so a
   # sick store never crashes the agent turn (mirrors Hist.Namespace posture).

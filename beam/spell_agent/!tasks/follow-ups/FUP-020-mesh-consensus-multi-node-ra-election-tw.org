@@ -1,0 +1,48 @@
+#+TITLE: Mesh.Consensus multi-node Ra election + two-node distribution gate
+#+STATE: ITEM
+#+SESSION_ID: 15195d97dff3d090
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-27T08-45-09-375Z_15195d97dff3d090.jsonl]]
+#+CUSTOM_ID: FUP-020-mesh-consensus-multi-node-ra-election-tw
+
+* Initial Message
+
+what's pending in this folder's work?
+
+* Source
+Deferred from M2 (PLAN-019, FEAT-012). The single-node black/decide path shipped:
+seal (decidable frontier) -> fold (userland PTC) -> idempotent verdict commit ->
+optional terminal seal, all on Store.Memory. The MULTI-NODE path remains.
+
+* Shipped (M2, single-node)
+- Mesh.Consensus.decide/1: seal at the decidable (non-verdict) store frontier;
+  verdict_id = hash(region<>question<>watermark); idempotent re-decide collapses
+  onto the existing id; PTC :fold over materialized findings (project_findings);
+  terminal verdict seals the region.
+- black/decide wired in Namespace (replaces the not_yet stub).
+- 12 consensus tests + namespace decide-is-live test.
+
+* Deferred (multi-node)
+- NODE-plane Ra leader-election on the Khepri cluster (the cluster Khepri already
+  runs via :ra 3.1.2, transitive dep \u2014 reuse it, no new engine). The leader
+  evaluates the :fold ONCE and commits; followers see the replicated verdict.
+- quorum := node :majority; sub-quorum -> {:pending, reason} (the outcome type
+  already declares this; the namespace decide/5 must re-add the {:pending, _}
+  branch when this lands \u2014 it was removed as dead code in the single-node path).
+- seal as the FIRST committed Ra step (Khepri) so the frontier is fixed before any
+  fold across leaders (DC-8). Single-node uses the atomic max-seq read.
+- THE DISTRIBUTION GATE (the acceptance that proves "distribution works"): a real
+  TWO-NODE Khepri test \u2014 three findings across two nodes, one decide commits one
+  verdict visible on both; a simulated partition leaves the minority {:pending};
+  healed convergence (PT-3/PT-4). Until this test exists, do NOT claim distribution.
+
+* Edge cases (from FEAT-012)
+- leader crash after election before commit -> re-election folds the SAME sealed
+  watermark -> SAME id (idempotent). Assert across simulated re-election.
+- concurrent decide on the same (region, question) at a quiescent frontier ->
+  same watermark -> one commit.
+
+* Dependencies
+Reuses the M2 seal/id/commit core unchanged (it already works on either store
+impl). Needs a two-node Khepri test harness; if unavailable, the gate itself is a
+sub-FUP. Cross-cuts M3 (FEAT-013) Option A, which reuses this node-plane decide for
+multi-node exactly-once watch-firing.
