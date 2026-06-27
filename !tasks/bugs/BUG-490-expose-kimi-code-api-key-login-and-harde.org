@@ -1,0 +1,43 @@
+#+TITLE: Expose Kimi Code API key login and harden OAuth refresh
+#+STATE: DONE
+#+SESSION_ID: 15156dc4eded8ab9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-06-24T07-21-54-359Z_15156dc4eded8ab9.jsonl]]
+#+CUSTOM_ID: BUG-490-expose-kimi-code-api-key-login-and-harde
+
+* Initial Message
+
+bro keep looking into why kimi auth has issues with login and maybe let's move to API calls?
+
+* Problem
+
+Users report Kimi Code OAuth login repeatedly becoming invalid (~12h). The existing API-key alternative (`packages/ai/src/utils/oauth/kimi-api-key.ts`) is implemented but not wired into the provider list or CLI, so users cannot opt out of the fragile OAuth device flow.
+
+* Root causes found
+
+1. API key path is hidden. `loginKimiApiKey` exists and stores credentials under the `kimi-code` provider, but:
+   - `builtInOAuthProviders` in `packages/ai/src/utils/oauth/index.ts` does not list `"kimi"`.
+   - `packages/ai/src/cli.ts` does not import or handle `"kimi"`.
+   - `loginKimiApiKey` is not exported from `packages/ai/src/utils/oauth/index.ts`.
+
+2. OAuth refresh may over-disable. Upstream Kimi CLI fixed a similar issue (PR #1996): a single 401 from the refresh endpoint is not sufficient evidence to destroy persistent credentials, because access tokens expire every ~15 min and multi-instance races are common. Our `AuthStorage.#tryOAuthCredential` classifies 401/403 as permanent revocation. This can disable a valid credential after one transient/racy failure, forcing re-login.
+
+* Work to do
+
+1. Expose API key login
+   - Add `{ id: "kimi", name: "Kimi Code (API Key)", available: true, storageId: "kimi-code" }` to `builtInOAuthProviders`.
+   - Export `loginKimiApiKey` from `packages/ai/src/utils/oauth/index.ts`.
+   - Add `case "kimi"` to `packages/ai/src/cli.ts` login switch; save API key via `storage.saveApiKey("kimi-code", apiKey)` (consistent with auth-storage).
+   - Update CLI help text provider list.
+   - Add/adjust tests.
+
+2. Harden OAuth refresh
+   - Before classifying a 401/403 refresh failure as permanently revoked, reload credentials from disk and retry the refresh once. This recovers from cross-instance rotation races without destroying credentials.
+   - If the retry still fails with 401/403, classify as revoked as before.
+   - Add regression tests covering:
+     - 401 refresh recovers when disk now holds a rotated token.
+     - 401 refresh still disables permanently when no rotation exists (if we keep permanent disable) OR downgrades to long-term block.
+
+3. Verify
+   - `bun test packages/ai/test/auth-storage-oauth-refresh-*.test.ts` passes.
+   - `bun test packages/ai/test/kimi-models.test.ts` passes.
+   - `bun run --filter @spell/pi-ai check:ts` passes.

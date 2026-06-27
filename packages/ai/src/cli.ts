@@ -10,6 +10,7 @@ import { loginGeminiCli } from "./utils/oauth/google-gemini-cli";
 import { loginKagi } from "./utils/oauth/kagi";
 import { loginKilo } from "./utils/oauth/kilo";
 import { loginKimi } from "./utils/oauth/kimi";
+import { loginKimiApiKey } from "./utils/oauth/kimi-api-key";
 import { loginMiniMaxCode, loginMiniMaxCodeCn } from "./utils/oauth/minimax-code";
 import { loginNanoGPT } from "./utils/oauth/nanogpt";
 import { loginOpenAICodex } from "./utils/oauth/openai-codex";
@@ -151,6 +152,22 @@ async function login(provider: OAuthProvider): Promise<void> {
 					},
 				});
 				break;
+			case "kimi": {
+				const apiKey = await loginKimiApiKey({
+					onAuth(info) {
+						const { url, instructions } = info;
+						console.log(`\nOpen this URL in your browser:\n${url}`);
+						if (instructions) console.log(instructions);
+						console.log();
+					},
+					onPrompt(p) {
+						return promptFn(`${p.message}${p.placeholder ? ` (${p.placeholder})` : ""}:`);
+					},
+				});
+				storage.saveApiKey("kimi-code", apiKey);
+				console.log(`\nAPI key saved to ~/.spell/agent/agent.db`);
+				return;
+			}
 			case "kilo":
 				credentials = await loginKilo({
 					onAuth(info) {
@@ -338,6 +355,7 @@ Providers:
   google-antigravity Antigravity (Gemini 3, Claude, GPT-OSS)
   openai-codex      OpenAI Codex (ChatGPT Plus/Pro)
   kimi-code         Kimi Code
+  kimi              Kimi Code (API Key)
   kilo              Kilo Gateway
   kagi              Kagi
   tavily            Tavily

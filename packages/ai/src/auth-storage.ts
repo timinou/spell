@@ -1996,13 +1996,17 @@ export class AuthStorage {
 				return recovered;
 			}
 
-			// Categorize the failure to decide between permanent disable vs. long block
-			// invalid_grant on refresh = refresh token expired → needs re-login, not perm disable
-			const isRefreshTokenExpired = /invalid_grant|expired.*refresh|refresh.*expired/i.test(errorMsg);
-			const isCredentialRevoked =
-				!isRefreshTokenExpired &&
-				(/invalid_token|revoked|unauthorized/i.test(errorMsg) ||
-					(/\b(401|403)\b/.test(errorMsg) && !/timeout|network|fetch failed|ECONNREFUSED/i.test(errorMsg)));
+			// Categorize the failure to decide between permanent disable vs. long block.
+			// invalid_grant on refresh = refresh token expired → needs re-login, not perm disable.
+			// A bare 401/403 without explicit revocation language is treated the same way:
+			// upstream Kimi CLI showed that a single transient/racy 401 from the refresh
+			// endpoint is not sufficient evidence to destroy persistent credentials.
+			const hasRevocationText = /invalid_token|revoked|unauthorized/i.test(errorMsg);
+			const hasAuthStatusCode =
+				/\b(401|403)\b/.test(errorMsg) && !/timeout|network|fetch failed|ECONNREFUSED/i.test(errorMsg);
+			const isRefreshTokenExpired =
+				/invalid_grant|expired.*refresh|refresh.*expired/i.test(errorMsg) || (hasAuthStatusCode && !hasRevocationText);
+			const isCredentialRevoked = !isRefreshTokenExpired && hasRevocationText;
 
 			logger.warn("OAuth token refresh failed", {
 				provider,

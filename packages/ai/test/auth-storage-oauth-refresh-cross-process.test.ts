@@ -124,4 +124,47 @@ describe("AuthStorage cross-process OAuth refresh race recovery", () => {
 		// Subsequent calls must remain blocked (no recovery loophole).
 		expect(await authA.getApiKey("kimi-code", "sess-a")).toBeUndefined();
 	});
+
+	it("long-term blocks (not disables) on a bare 401 from the refresh endpoint", async () => {
+		// A single 401 without explicit revocation language should not destroy
+		// the credential. Upstream Kimi CLI treats this as a transient/racy
+		// failure; we long-term block so the user can re-login without losing
+		// visibility into the provider.
+		storeA = await AuthCredentialStore.open(dbPath);
+		authA = new AuthStorage(storeA);
+		await authA.set("kimi-code", expiredCredential("rt0", "at0"));
+
+		vi.spyOn(oauthUtils, "refreshOAuthToken").mockImplementation(async () => {
+			throw new Error("Kimi token refresh failed: 401: API Key appears to be invalid");
+		});
+
+		expect(await authA.getApiKey("kimi-code", "sess-a")).toBeUndefined();
+
+		// The credential must still be present (not disabled/deleted) and
+		// blocked so the env fallback guard remains active.
+		const oauth = storeA.getOAuth("kimi-code");
+		expect(oauth).not.toBeNull();
+		expect(oauth?.refresh).toBe("rt0");
+
+		// Re-attempts continue to fail without disabling the credential.
+		expect(await authA.getApiKey("kimi-code", "sess-a")).toBeUndefined();
+		expect(storeA.getOAuth("kimi-code")).not.toBeNull();
+	});
+
+	it("permanently disables when the refresh error explicitly says revoked/unauthorized", async () => {
+		// When the provider explicitly tells us the token is revoked, permanent
+		// disable is the right behaviour.
+		storeA = await AuthCredentialStore.open(dbPath);
+		authA = new AuthStorage(storeA);
+		await authA.set("kimi-code", expiredCredential("rt0", "at0"));
+
+		vi.spyOn(oauthUtils, "refreshOAuthToken").mockImplementation(async () => {
+			throw new Error("token refresh failed: 401: unauthorized - token has been revoked");
+		});
+
+		expect(await authA.getApiKey("kimi-code", "sess-a")).toBeUndefined();
+
+		// The credential should have been disabled/removed from active rows.
+		expect(storeA.getOAuth("kimi-code")).toBeNull();
+	});
 });

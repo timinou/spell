@@ -79,6 +79,7 @@ export { loginKagi } from "./kagi";
 export { loginKilo } from "./kilo";
 // Kimi Code
 export { loginKimi, refreshKimiToken } from "./kimi";
+export { loginKimiApiKey } from "./kimi-api-key";
 // LiteLLM (API key)
 export { loginLiteLLM } from "./litellm";
 // LM Studio (optional API key)
@@ -149,6 +150,12 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		id: "kimi-code",
 		name: "Kimi Code",
 		available: true,
+	},
+	{
+		id: "kimi",
+		name: "Kimi Code (API Key)",
+		available: true,
+		storageId: "kimi-code",
 	},
 	{
 		id: "kilo",
