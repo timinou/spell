@@ -74,13 +74,7 @@ defmodule SpellAgent.Session do
         # PROJ-006: when this session coordinates in a mesh `region`, also merge the
         # black/* verbs (the same injection seam) so it can post/query/claim/fold on
         # the shared blackboard. No region -> Mesh.verbs returns %{} (a plain session).
-        tools:
-          Tools.build_tools_map()
-          |> Map.merge(Hist.verbs(session_id, store: hist_store))
-          |> Map.merge(Mesh.verbs(session_id, region: opts[:region], store: hist_store))
-          # A2 (PLAN-014): the clock/* self-wake verbs. A wake defaults to running
-          # in THIS session, so the mind can schedule its own continuation.
-          |> Map.merge(SpellAgent.Clock.Namespace.tools(session_id)),
+        tools: build_session_tools(session_id, hist_store, llm, max_turns, opts),
         ptc_transport: :tool_call,
         max_turns: max_turns
       )
@@ -165,6 +159,56 @@ defmodule SpellAgent.Session do
 
     :ok
   end
+
+  # Assemble the tools map for a mission. The BASE surface (Tools.build_tools_map:
+  # find/sh/define-*/freeform/registry) may be attenuated by opts[:tools] (a
+  # capability subset a spawned child was handed, D12); the session's OWN verbs
+  # (hist/*, mesh black/*, clock/*, spawn-session/await-session) are ALWAYS merged
+  # for this session_id + region, never filtered — attenuation governs only the
+  # inherited base tools, so a child can still coordinate + spawn.
+  defp build_session_tools(session_id, hist_store, llm, max_turns, opts) do
+    base = attenuate_base(Tools.build_tools_map(), opts[:tools])
+    # This session's OWN allowed base-tool ceiling: :all for the unrestricted root
+    # (opts[:tools] absent), or exactly the base names it holds for an attenuated
+    # child. spawn-session clamps a child's :tools to this so capability can only
+    # NARROW down the spawn tree (D12) — a child can't grant what it lacks.
+    allowed = if is_nil(opts[:tools]), do: :all, else: Map.keys(base)
+    attenuated? = not is_nil(opts[:tools])
+
+    base
+    # SEAM 5: the hist/* verbs (interrogate own past mid-conversation).
+    |> Map.merge(Hist.verbs(session_id, store: hist_store))
+    # PROJ-006: the black/* verbs when coordinating in a region (else %{}).
+    |> Map.merge(Mesh.verbs(session_id, region: opts[:region], store: hist_store))
+    # A2 (PLAN-014): the clock/* self-wake verbs (default-run in THIS session).
+    # OMITTED for an attenuated child: a clock wake re-enters run/2 with no :tools
+    # ceiling and would restore the full base surface (escape). The root keeps
+    # clock. Threading the ceiling through wakes is FUP-019.
+    |> merge_unless(attenuated?, fn -> SpellAgent.Clock.Namespace.tools(session_id) end)
+    # FEAT-011 (M1): the reflexive seam — spawn-session + await-session. The
+    # parent's resolved llm is inherited by children; :allowed is the capability
+    # ceiling a child's :tools is clamped to.
+    |> Map.merge(
+      SpellAgent.Mesh.Spawn.verbs(session_id,
+        llm: llm,
+        store: hist_store,
+        max_turns: max_turns,
+        allowed: allowed
+      )
+    )
+  end
+
+  # opts[:tools] absent (nil) -> the full base surface; a list of names -> only
+  # those base tools (Map.take); anything else -> full surface. An explicit [] is
+  # a list, so it correctly yields an empty base subset.
+  defp attenuate_base(base, nil), do: base
+  defp attenuate_base(base, names) when is_list(names), do: Map.take(base, Enum.map(names, &to_string/1))
+  defp attenuate_base(base, _), do: base
+
+  # Merge the (lazily-built) tool map only when the condition is false — used to
+  # OMIT clock verbs from attenuated children without building them.
+  defp merge_unless(map, true, _build), do: map
+  defp merge_unless(map, false, build), do: Map.merge(map, build.())
 
   @doc """
   Assemble the system prompt: the base prompt + the freeform-TUI prelude

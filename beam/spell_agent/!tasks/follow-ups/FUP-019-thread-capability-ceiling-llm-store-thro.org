@@ -1,0 +1,39 @@
+#+TITLE: Thread capability ceiling + llm/store through clock wakes (re-entry attenuation)
+#+STATE: ITEM
+#+SESSION_ID: 15195d97dff3d090
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-27T08-45-09-375Z_15195d97dff3d090.jsonl]]
+#+CUSTOM_ID: FUP-019-thread-capability-ceiling-llm-store-thro
+
+* Initial Message
+
+what's pending in this folder's work?
+
+* Source
+Deferred from BUG-017 (M1 reviewer swarm, agent 9-RevBoundaryCap, P1). Clock wakes
+re-enter SpellAgent.run/2 with only session_id, so opts[:tools] is nil and the
+woken turn restores the FULL base tool surface.
+
+* Current mitigation (shipped in M1)
+Attenuated children (spawn-session with :tools set) do NOT receive clock/* verbs,
+so they cannot schedule a wake that escapes their ceiling. The ROOT session keeps
+clock/* (unrestricted, correct). This closes the escape conservatively.
+
+* The deferred work
+A child SHOULD be able to use clock/* within its capability ceiling. That needs
+the wake to carry the allowed tool set (+ resolved llm, store, region) so
+Clock.run_wake re-enters Session.run with opts[:tools] = the ceiling, opts[:llm]
+= the inherited callback, etc. This is the SAME ceiling-threading BUG-017 added to
+the spawn seam, applied to the clock re-entry seam.
+
+* Approach
+- Clock.Namespace.tools/N takes an :allowed (+ :llm/:store/:region) option.
+- A persisted Wake record carries the ceiling so a rehydrated wake re-enters with
+  it (durable across restart). NB: tool maps are not serializable \u2014 persist the
+  ALLOWED NAME LIST + region + store hint, rebuild the tools in run_wake.
+- run_wake passes them into SpellAgent.run/2.
+- Then clock/* can be restored to attenuated children safely.
+
+* Acceptance
+An attenuated child (:tools ["find"]) with clock/* restored can schedule a wake
+whose woken turn can call ONLY find + its own ceiling verbs, never sh/define-tool.
+Cross-cuts PLAN-014 (Clock) + FEAT-016 (FUP-016 executive loop).

@@ -1,0 +1,74 @@
+#+TITLE: spawn-session: non-transitive capability attenuation (escape) + budget-leak + crash-reason crash
+#+STATE: DONE
+#+SESSION_ID: 15195d97dff3d090
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-27T08-45-09-375Z_15195d97dff3d090.jsonl]]
+#+CUSTOM_ID: BUG-017-spawn-session-non-transitive-capability
+
+* Initial Message
+
+what's pending in this folder's work?
+
+* Source
+M1 reviewer swarm (PLAN-019), agents 8-RevJoinLifecycle + 9-RevBoundaryCap +
+10-RevSessionWiring. All three independently flagged the same P1 capability
+escape. Fixed mid-flight before M2.
+
+* Finding 1 (P1, all three reviewers) — capability attenuation is NOT transitive
+A child spawned with :tools ["find"] still receives spawn-session in its tool
+floor. attenuate/2 derived the GRANDCHILD's tools from the new call args alone,
+applied against a FRESH Tools.build_tools_map() in Session.run \u2014 so the child
+could call (tool/spawn-session {:tools ["sh"]}) (or omit :tools) and hand the
+grandchild shell/define-tool access the parent never had. Violates D12 (monotone
+attenuation): capability can only NARROW down the spawn tree, never widen.
+
+** Fix
+- Thread an ALLOWED CEILING through the spawn seam. Session.run computes the
+  attenuated base, then passes Map.keys(base) (or :all for the root) as :allowed
+  into Spawn.verbs/2.
+- spawn_session clamps the child's requested :tools to the ceiling:
+  allowed == :all (root) -> requested list as-is, or :all when absent;
+  allowed == list        -> intersect(requested || allowed, allowed) \u2014 absent
+                            :tools means INHERIT the ceiling, never widen to root.
+- run_opts[:tools] = the clamped list (or nil when :all), so the grandchild's
+  Session.run attenuates against the same ceiling.
+
+* Finding 2 (P1, RevBoundaryCap) — clock wakes restore full tools
+An attenuated child still got clock/* verbs; Clock.run_wake re-enters
+SpellAgent.run/2 with only session_id (opts[:tools] nil) -> attenuate_base
+restores the FULL base surface. A :tools [] child could clock/at a wake whose
+prompt calls sh.
+
+** Fix
+Omit clock/* from ATTENUATED children (opts[:tools] != nil). The root keeps
+clock (unrestricted). Threading the ceiling through clock wakes is a larger change
+deferred to a FUP (FUP-019); omission is the conservative correct-now posture.
+
+* Finding 3 (P2, RevJoinLifecycle + RevSessionWiring) — budget leak on Join restart
+Budget release lived only in Join's in-memory entry. A Join crash/restart while a
+child runs under Mesh.TaskSupervisor orphaned the slot (no releaser on child exit).
+
+** Fix
+Move budget release into the CHILD TASK CLOSURE (try fun() after
+Budget.release_if(budget)), so the releaser is the child itself \u2014 it survives a
+Join restart (the Task runs under the independent TaskSupervisor). Join no longer
+releases (no double-release); it only records done/crash + replies to waiters.
+
+* Finding 4 (P2, RevJoinLifecycle) — slot leak if Join.spawn fails after acquire
+If Join.spawn exits between acquire and task-start, the slot was never released.
+
+** Fix
+spawn_session wraps the post-acquire Join.spawn in try/rescue/catch and releases
+the slot before re-raising.
+
+* Finding 5 (P2, RevSessionWiring) — to_string(reason) on crashed child can raise
+await-session's {:error, reason} branch called to_string(reason); a crash reason
+can be a tuple/map (exception + stacktrace), so to_string raises \u2014 await-session
+itself fails instead of reporting the crash. Fixed to inspect(reason).
+
+* Finding 6 (P1 test gap, RevBoundaryCap) — no negative attenuation test
+Added a regression test: a child given :tools ["find"] CANNOT call sh, and a
+grandchild cannot be granted a tool outside the parent's ceiling.
+
+* Acceptance
+mix test test/spell_agent/mesh/spawn_session_test.exs green incl. the new
+attenuation-escape tests; full mesh suite green; hist/tui regression green.

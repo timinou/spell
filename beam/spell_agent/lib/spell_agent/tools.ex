@@ -135,7 +135,7 @@ defmodule SpellAgent.Tools do
             "injection-safe). e.g. (tool/sh-unparse {:tree t}) -> %{bash}.",
         "kind" => "native"
       }
-    ]
+    ] ++ SpellAgent.Mesh.Spawn.inventory()
 
     defined =
       ToolRegistry.all()
@@ -267,7 +267,9 @@ defmodule SpellAgent.Tools do
         "sh",
         "sh-pipe",
         "sh-parse",
-        "sh-unparse"
+        "sh-unparse",
+        "spawn-session",
+        "await-session"
       ]
 
   defp require_string(args, key) do

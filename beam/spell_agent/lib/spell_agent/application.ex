@@ -26,6 +26,18 @@ defmodule SpellAgent.Application do
       # default capacity, and an absent holder degrades spawn to :no_budget —
       # boot never depends on it.
       SpellAgent.Mesh.Budget,
+      # The supervisor for detached child-session Tasks (FEAT-011 M1). Children
+      # spawned by tool/spawn-session run under here via Task.Supervisor
+      # async_nolink, so a child crash is isolated and its slot is freed by the
+      # child task's own `after` (survives a Join restart). Named so Mesh.Join
+      # can target it.
+      {Task.Supervisor, name: SpellAgent.Mesh.TaskSupervisor},
+      # The owner-independent join registry for spawned children (FEAT-011 M1).
+      # tool/await-session rejoins a detached child by session id across turn
+      # processes (BEAM Task.await is owner-restricted, so it cannot). Started
+      # after the Task supervisor it spawns into. Best-effort: absent -> spawn
+      # detaches with no join, await -> {:error}.
+      SpellAgent.Mesh.Join,
       SpellAgent.OAuth,
       # Live-session tracker (PLAN-010): which conversations are RUNNING right now.
       # The Hist store only knows PAST sessions (recorded on mission exit); this
