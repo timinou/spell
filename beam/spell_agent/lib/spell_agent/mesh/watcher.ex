@@ -17,13 +17,25 @@ defmodule SpellAgent.Mesh.Watcher do
   Clock budget throttles it for free. A self-retriggering watch is bounded twice:
   `:once` retires the intention after the first fire, and the budget caps the rate.
 
-  ## Scope: SINGLE NODE (no consensus)
+  ## Exactly-once + fuel (FEAT-013, M3)
 
   One Watcher per BEAM node, attached to a `:telemetry` event `Mesh.Store.put/2`
-  emits. On a single node there is no replication window, so firing is exactly-once
-  by construction — no claim-dedup, no `Mesh.Consensus`. The full distributed
-  engine (per-node claim-deduped exactly-once + the inline `:do` form) is FEAT-013;
-  this is its reusable single-node core.
+  emits. Two bounds keep a firing well-behaved:
+
+    * **fuel** — an intention may carry `:fuel` (a max fire count). Each fire
+      decrements an in-memory per-intention counter; at 0 the intention retires.
+      This bounds a self-retriggering cascade (A->B->A): it burns fuel and stops.
+      `:once` is the `fuel: 1` special case (retire after the first fire).
+    * **claim-dedup (exactly-once across nodes, DC-6)** — before firing, the
+      Watcher `black/claim`s the firing keyed by `hash(intention_seq, event_seq)`.
+      Only the claim WINNER fires. On a single node (one ETS table, one Watcher)
+      there is no replication window, so the claim trivially succeeds and firing is
+      exactly-once by construction. On multiple Khepri nodes two per-node Watchers
+      both observe the replicated post; the claim arbitration elects ONE firer
+      (best-effort exactly-once — Option B of the P1.1 correction). The HARD
+      multi-node guarantee (a node-plane micro-decide via `Mesh.Consensus`, Option
+      A) reuses M2 and is filed as FUP-021; an irreversible `:do` must itself route
+      through `black/decide` regardless.
 
   ## Best-effort posture ("never brick the surface")
 
@@ -87,7 +99,14 @@ defmodule SpellAgent.Mesh.Watcher do
       handler_id = {__MODULE__, self()}
       :telemetry.attach(handler_id, @event, &__MODULE__.handle_event/4, %{pid: self()})
 
-      {:ok, %{store: store, clock: clock, handler_id: handler_id, fired: 0}}
+      # fuel: remaining fire budget per intention seq (lazily seeded from the
+      #   intention's :fuel payload, default 1 for a :once watch / unbounded-ish
+      #   for an explicit-refire watch with no :fuel).
+      # done: the set of (intention_seq, event_seq) firings already claimed by THIS
+      #   watcher — the local half of claim-dedup, so the same post never
+      #   double-fires one intention within a node even on a telemetry re-deliver.
+      {:ok,
+       %{store: store, clock: clock, handler_id: handler_id, fired: 0, fuel: %{}, done: MapSet.new()}}
     else
       # Disabled (e.g. the :test env): do not attach, do not fire. A black/watch
       # still POSTS its durable intention; it just is not detonated here. This is
@@ -137,12 +156,10 @@ defmodule SpellAgent.Mesh.Watcher do
       cond do
         expired?(intention, now) ->
           retire(acc, region, intention)
-          acc
+          %{acc | fuel: Map.delete(acc.fuel, intention.seq)}
 
         fires?(acc.store, region, record, intention) ->
-          fire(acc, intention)
-          if once?(intention), do: retire(acc, region, intention)
-          %{acc | fired: acc.fired + 1}
+          maybe_fire(acc, region, record, intention)
 
         true ->
           acc
@@ -157,6 +174,97 @@ defmodule SpellAgent.Mesh.Watcher do
       Logger.warning("[mesh.watcher] evaluate exit: #{inspect(reason)}")
       state
   end
+
+  # Gate a candidate firing through (1) local dedup, (2) cross-node claim-dedup,
+  # and (3) fuel, then fire + retire when fuel is spent.
+  defp maybe_fire(state, region, %{seq: event_seq}, %{seq: int_seq} = intention) do
+    firing_key = {int_seq, event_seq}
+
+    cond do
+      # (1) Already fired this exact (intention, event) on THIS node — a telemetry
+      #     re-deliver or a duplicate observation. Never double-fire locally.
+      MapSet.member?(state.done, firing_key) ->
+        state
+
+      # (3) Fuel exhausted — retire and stop (cascade bound).
+      remaining_fuel(state, intention) <= 0 ->
+        retire(state, region, intention)
+        %{state | fuel: Map.delete(state.fuel, int_seq)}
+
+      # (2) Claim the firing across nodes (DC-6). Only the winner fires. Single
+      #     node: the claim trivially wins (no replication window).
+      not claim_firing(state, region, int_seq, event_seq) ->
+        # Lost the claim (another node fired) — record local done so we don't retry.
+        %{state | done: MapSet.put(state.done, firing_key)}
+
+      true ->
+        fire(state, intention)
+        fuel_left = remaining_fuel(state, intention) - 1
+        state = %{state | fired: state.fired + 1, done: MapSet.put(state.done, firing_key)}
+        state = %{state | fuel: Map.put(state.fuel, int_seq, fuel_left)}
+
+        if fuel_left <= 0 do
+          retire(state, region, intention)
+          %{state | fuel: Map.delete(state.fuel, int_seq)}
+        else
+          state
+        end
+    end
+  end
+
+  # The remaining fire budget for an intention: the in-memory counter if seen, else
+  # seed from the :fuel payload. :once (default true) caps at 1; an explicit
+  # once:false with no :fuel gets a large default ceiling (still bounded, so a
+  # runaway cascade halts) — the agent sets :fuel for a precise bound.
+  @default_refire_fuel 1000
+  defp remaining_fuel(state, %{seq: seq} = intention) do
+    case Map.get(state.fuel, seq) do
+      n when is_integer(n) -> n
+      nil -> seed_fuel(intention)
+    end
+  end
+
+  defp seed_fuel(intention) do
+    case get_in_payload(intention, "fuel") do
+      n when is_integer(n) and n > 0 -> n
+      _ -> if once?(intention), do: 1, else: @default_refire_fuel
+    end
+  end
+
+  # Claim the firing (intention_seq, event_seq) so exactly one node fires it (DC-6).
+  # Uses the store's claim arbitration via a dedicated :claim record whose work id
+  # is the firing key; the winner is argmin(seq, author). On a single node this
+  # always wins. Best-effort: a claim error degrades to "fire" (better a rare
+  # double-fire of an idempotent :do than a missed fire — an irreversible :do must
+  # route through black/decide anyway, per the P1.1 correction).
+  defp claim_firing(state, region, int_seq, event_seq) do
+    work = "fire:#{int_seq}:#{event_seq}"
+    author = firing_author()
+
+    case MeshStore.put(
+           state.store,
+           SpellAgent.Mesh.Record.new(:claim, region, %{"work" => work}, author: author)
+         ) do
+      {:ok, mine} ->
+        winner =
+          state.store
+          |> MeshStore.claims_for(region, work)
+          |> Enum.min_by(fn c -> {c.seq, c.author || ""} end, fn -> nil end)
+
+        winner == nil or (winner.author == author and winner.seq == mine.seq)
+
+      {:error, _} ->
+        true
+    end
+  rescue
+    _ -> true
+  catch
+    :exit, _ -> true
+  end
+
+  # This node's firing author id: a stable per-node identity so claim arbitration
+  # distinguishes nodes. node() is the BEAM node name (one Watcher per node).
+  defp firing_author, do: "watcher@#{node()}"
 
   # Does the posted record satisfy the intention's :when? Reuses Mesh.Store.by_match
   # (the SINGLE source of predicate logic) so watch matching can never drift from

@@ -137,6 +137,7 @@ defmodule SpellAgent.Mesh.Namespace do
             "registered_at" => System.system_time(:millisecond)
           }
           |> put_if("ttl_ms", ttl_ms(args))
+          |> put_if("fuel", fuel(args))
 
         case Store.put(impl, Record.new(:intention, target, payload, author: session_id)) do
           {:ok, stored} ->
@@ -189,6 +190,15 @@ defmodule SpellAgent.Mesh.Namespace do
 
   defp ttl_ms(args) do
     case get(args, ["ttl_ms"]) do
+      n when is_integer(n) and n > 0 -> n
+      _ -> nil
+    end
+  end
+
+  # :fuel = the max number of times this watch may fire before retiring (FEAT-013).
+  # Bounds a self-retriggering cascade. Absent -> the Watcher defaults from :once.
+  defp fuel(args) do
+    case get(args, ["fuel"]) do
       n when is_integer(n) and n > 0 -> n
       _ -> nil
     end

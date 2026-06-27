@@ -1,0 +1,51 @@
+#+TITLE: Watcher hard multi-node exactly-once via node-plane micro-decide (Option A)
+#+STATE: ITEM
+#+SESSION_ID: 15195d97dff3d090
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-27T08-45-09-375Z_15195d97dff3d090.jsonl]]
+#+CUSTOM_ID: FUP-021-watcher-hard-multi-node-exactly-once-via
+
+* Initial Message
+
+what's pending in this folder's work?
+
+* Source
+Deferred from M3 (PLAN-019, FEAT-013). The watcher's exactly-once firing shipped
+as Option B (claim-dedup, best-effort) per the P1.1 oracle correction. The HARD
+multi-node guarantee (Option A) remains.
+
+* Shipped (M3, Option B)
+- fuel-bounded firing: an intention's :fuel caps its fire count (in-memory
+  per-intention counter; :once = fuel 1; default ceiling for explicit refire).
+  Bounds a self-retriggering cascade (PT-1).
+- claim-dedup: before firing, the watcher writes a :claim keyed by
+  hash(intention_seq, event_seq) and fires only if it wins argmin(seq, author).
+  Single-node: trivially wins (no replication window) -> exactly-once by
+  construction. Multi-node Khepri: two per-node watchers both claim; arbitration
+  elects one firer (BEST-EFFORT exactly-once).
+- local dedup: a (intention_seq, event_seq) done-set prevents a telemetry
+  re-deliver double-firing on one node.
+
+* The crack Option B does not fully close (P1.1)
+Khepri reads are LOCAL (read-your-writes, not linearizable for other writers), so
+under partition two nodes' claims may not see each other -> both fire. Option B is
+documented best-effort; acceptable because a :do that spawns is fine to
+occasionally double, and an irreversible :do must route through black/decide.
+
+* Deferred (Option A — the hard guarantee)
+Firing becomes a NODE-PLANE micro-decide: a Ra command on the node cluster that
+atomically marks (intention_id, event_seq) as fired and commits exactly once.
+REUSES Mesh.Consensus (M2 / FEAT-012) machinery, not a new mechanism:
+- a tiny Consensus round keyed by the firing id, terminal (the firing is a
+  one-shot decision).
+- the winner runs the :do / fires the wake; followers see the committed firing
+  record and do not fire.
+- depends on FUP-020 (the multi-node Ra election landing in Consensus).
+
+* The distribution gate (acceptance)
+A real TWO-NODE test: one matching post replicated to both nodes -> EXACTLY ONE
+:do execution despite both observing it (DC-6), including under a simulated
+partition. Until this exists, multi-node exactly-once is best-effort (Option B).
+
+* Dependencies
+Composes with FUP-020 (multi-node Consensus). The single-node path (shipped) needs
+neither. Cross-cuts FEAT-019 (decisions) which fires :on-answer through the watcher.
