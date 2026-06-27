@@ -96,6 +96,31 @@ defmodule SpellAgent.CodeEditTest do
       assert File.read!(path) == original
     end
 
+    test "preserves the target file's mode (executable bit survives an edit)", %{
+      prelude: prelude,
+      dir: dir
+    } do
+      path = Path.join(dir, "script.exs")
+      File.write!(path, "x + 1")
+      File.chmod!(path, 0o755)
+
+      tree = Code.parse_tool(%{"src" => "x + 1", "lang" => "elixir"})
+
+      edited =
+        run(
+          prelude,
+          ~S|(q/update data/tree {"node" "identifier" "value" "x"} (fn [_b n] (assoc n "value" "y")))|,
+          %{"tree" => tree}
+        )
+
+      assert %{"src" => _} =
+               Code.edit_tool(%{"path" => path, "lang" => "elixir", "tree" => edited})
+
+      # the 0755 mode is preserved through the atomic temp+rename write
+      assert {:ok, %File.Stat{mode: mode}} = File.stat(path)
+      assert Bitwise.band(mode, 0o777) == 0o755
+    end
+
     test "an edit that unparses to empty source is REFUSED (no truncation)", %{dir: dir} do
       path = Path.join(dir, "empty.ex")
       original = "def f, do: 1"

@@ -149,6 +149,28 @@ defmodule SpellAgent.Hist.FormTreeLensTest do
     assert Enum.any?(hits, &(&1["name"] == "bar"))
   end
 
+  # PLAN-020 W8 cross-plan contract: PLAN-018's effect classifier must read the
+  # shell argv HEAD out of a recorded (tool/sh {:argv ["rg" ...]}) via q/match.
+  # That requires form_tree to PRESERVE literal string values (the generic tuple
+  # clause used to drop them). This is the sign-off evidence for the reducer.
+  test "PLAN-018 contract: a real (tool/sh {:argv [...]}) preserves the argv head value" do
+    {:ok, raw} = PtcRunner.Lisp.Parser.parse(~S|(tool/sh {:argv ["rg" "-l" "TODO"]})|)
+    {:ok, real_ast} = PtcRunner.Lisp.Analyze.analyze(raw)
+    tree = Lens.form_tree(real_ast)
+
+    refute has_tuple?(tree)
+    # the string "rg" must survive as a value-bearing `string` node (not dropped)
+    rg = find_string_value(tree, "rg")
+    assert rg != nil, "argv head 'rg' must be a value-bearing node, got: #{inspect(tree)}"
+  end
+
+  defp find_string_value(%{"node" => "string", "value" => v}, v), do: v
+
+  defp find_string_value(%{"children" => kids}, target),
+    do: Enum.find_value(kids, fn c -> find_string_value(c, target) end)
+
+  defp find_string_value(_, _), do: nil
+
   # --- helpers ---
 
   defp find_kind(tree, kind) when is_map(tree) do

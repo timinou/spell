@@ -46,25 +46,25 @@
 ;; downstream as a cryptic "malformed def". Tracked as BUG-017.
 (def no-match :no-match)
 
-(defn no-match?
+(defn- no-match?
   "True if x is the no-match sentinel."
   [x]
   (= x no-match))
 
 ;; ── hole predicates ──────────────────────────────────────────────────────────
-(defn hole?
+(defn- hole?
   "True if pattern node p is a node-hole (~) or splice-hole (~@)."
   [p]
   (and (map? p)
        (let [k (get p "node")]
          (or (= k "~") (= k "~@")))))
 
-(defn splice?
+(defn- splice?
   "True if pattern node p is a splice-hole (~@)."
   [p]
   (and (map? p) (= (get p "node") "~@")))
 
-(defn field-capture?
+(defn- field-capture?
   "True if a name/value field value v is a field-capture form {\"$\" n}."
   [v]
   (and (map? v) (contains? v "$")))
@@ -80,7 +80,7 @@
 ;; maps compare by FULL key set (so {node command name rg} and
 ;; {node command name rg children [...]} are NOT equal — the missing-children
 ;; laxness of q/match must never leak into equality).
-(defn tree-equal? [a b]
+(defn- tree-equal? [a b]
   (cond
     (and (map? a) (map? b))
     (let [ka (keys a) kb (keys b)]
@@ -94,7 +94,7 @@
     :else (= a b)))
 
 ;; ── binding accumulation (non-linear) ────────────────────────────────────────
-(defn bind
+(defn- bind
   "Add binding nm => val to env, enforcing non-linearity: a repeated name must
   bind a STRUCTURALLY-equal value (tree-equal?, the same notion q/equal? uses) or
   the whole match collapses to no-match. nm = \"_\" is the wildcard — it binds
@@ -107,7 +107,7 @@
     :else (assoc env nm val)))
 
 ;; ── field matching ───────────────────────────────────────────────────────────
-(defn match-field
+(defn- match-field
   "Match a single scalar field k (\"name\"|\"value\") of pattern p against subject
   s, threading env. A field-capture {\"$\" n} binds the subject's scalar; a plain
   field must equal; an absent pattern field is a no-op (don't constrain it).
@@ -143,7 +143,7 @@
   [p s]
   (match-node p s {}))
 
-(defn match-node
+(defn- match-node
   "Core matcher: pattern p vs subject s, threading bindings env."
   [p s env]
   (cond
@@ -174,7 +174,7 @@
           (match-children (get p "children") (or (get s "children") []) e3)
           e3)))))
 
-(defn match-children
+(defn- match-children
   "Match a pattern child-list ps against a subject child-list ss, threading env,
   honoring splice (~@) holes greedily-from-right."
   [ps ss env]
@@ -221,7 +221,7 @@
   (tree-equal? a b))
 
 ;; ── recursive search ──────────────────────────────────────────────────────────
-(defn descend-acc
+(defn- descend-acc
   "Helper: accumulate bindings-maps for every subtree of s matching p, pre-order."
   [p s acc]
   (let [hit (match p s)
@@ -258,7 +258,7 @@
     (collect s [])))
 
 ;; ── construction / emit (inverse of match) ───────────────────────────────────
-(defn subst-field
+(defn- subst-field
   "Resolve a template field value against env: a field-capture {\"$\" n} becomes
   env[n]; a plain scalar passes through."
   [tpl env k]

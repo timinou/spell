@@ -34,8 +34,13 @@ defmodule SpellAgent.Tools do
   """
   @spec build_tools_map() :: %{optional(String.t()) => (map() -> term())}
   def build_tools_map do
+    # A registry (define-tool) entry must NEVER shadow a reserved native tool —
+    # otherwise a stored/rehydrated durable tool named e.g. `code-edit` would win
+    # (registry merges last) and bypass the parse-gated writer. Drop reserved
+    # names from the registry projection so the native built-in always resolves.
     registry_tools =
       ToolRegistry.all()
+      |> Enum.reject(fn entry -> reserved_name?(entry.name) end)
       |> Map.new(fn entry -> {entry.name, to_callable(entry)} end)
 
     meta_tools()

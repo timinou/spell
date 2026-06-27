@@ -211,17 +211,31 @@ defmodule SpellAgent.Code do
   # ATOMIC write: write to a temp sibling in the SAME directory (so rename is a
   # cheap same-filesystem op), then rename over the target. The target is never
   # observed truncated/partial — a disk-full or crash mid-write leaves the temp
-  # file (cleaned up) and the original intact.
+  # file (cleaned up) and the original intact. The target's existing FILE MODE is
+  # preserved (a fresh temp would otherwise default to the umask, silently
+  # dropping an executable bit on a script/hook).
   defp gate_write(path, src) do
     tmp = path <> ".code-edit.#{System.unique_integer([:positive])}.tmp"
 
     with :ok <- File.write(tmp, src),
+         :ok <- preserve_mode(path, tmp),
          :ok <- File.rename(tmp, path) do
       :ok
     else
       {:error, reason} ->
         _ = File.rm(tmp)
         {:error, "code-edit: write failed (#{:file.format_error(reason)})"}
+    end
+  end
+
+  # Copy the target's mode onto the temp file so the rename preserves permissions.
+  # If the target does not exist (a new file) or cannot be stat'd, leave the temp
+  # at its default mode — a missing target has no mode to preserve.
+  defp preserve_mode(path, tmp) do
+    case File.stat(path) do
+      {:ok, %File.Stat{mode: mode}} -> File.chmod(tmp, mode)
+      {:error, :enoent} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   end
 

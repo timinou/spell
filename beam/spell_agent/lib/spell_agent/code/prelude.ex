@@ -32,7 +32,13 @@ defmodule SpellAgent.Code.Prelude do
   """
   @spec compiled() :: PtcRunner.Lisp.Prelude.t() | nil
   def compiled do
-    case :persistent_term.get({__MODULE__, :compiled}, :unset) do
+    # Cache keyed by a hash of the CURRENT source: if `q.clj` changes and this
+    # module recompiles (@q_source is re-read at compile time), the key changes
+    # and a stale artifact is never returned. (`@external_resource` triggers the
+    # recompile.) In a hot-reload/dev loop this rebuilds; in prod it is stable.
+    key = {__MODULE__, :compiled, source_hash()}
+
+    case :persistent_term.get(key, :unset) do
       :unset ->
         result =
           case PtcRunner.Lisp.Prelude.Compiler.compile(@q_source) do
@@ -40,11 +46,14 @@ defmodule SpellAgent.Code.Prelude do
             {:error, _} -> nil
           end
 
-        :persistent_term.put({__MODULE__, :compiled}, result)
+        :persistent_term.put(key, result)
         result
 
       cached ->
         cached
     end
   end
+
+  @source_hash :crypto.hash(:sha256, @q_source) |> Base.encode16(case: :lower)
+  defp source_hash, do: @source_hash
 end

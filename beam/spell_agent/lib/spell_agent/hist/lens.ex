@@ -265,6 +265,21 @@ defmodule SpellAgent.Hist.Lens do
   def form_tree({:call, {:var, name}, args}),
     do: %{"node" => "call", "name" => name_str(name), "children" => child_trees(args)}
 
+  # Literal collection / scalar AST nodes. These carry a VALUE that a structural
+  # query needs to bind — e.g. PLAN-018's effect classifier must read the shell
+  # argv head out of `(tool/sh {:argv ["rg" ...]})`. The generic tuple clause
+  # below would drop a `:string`/`:keyword` payload (it treats the 2nd tuple
+  # element as a child, and a bare string has no node), so these explicit clauses
+  # preserve the value as a q-matchable `value` field.
+  def form_tree({:string, value}), do: %{"node" => "string", "value" => jsonable(value)}
+  def form_tree({:keyword, name}), do: %{"node" => "keyword", "value" => name_str(name)}
+
+  def form_tree({:vector, elems}),
+    do: %{"node" => "vector", "children" => child_trees(elems)}
+
+  def form_tree({:map, pairs}),
+    do: %{"node" => "map", "children" => Enum.map(pairs, &form_tree_pair/1)}
+
   # Generic AST node: a tagged tuple whose head is the kind. Drift-resilient — a
   # node kind this projector has never seen still becomes a walkable subtree.
   def form_tree(node) when is_tuple(node) and tuple_size(node) > 0 do
@@ -281,6 +296,14 @@ defmodule SpellAgent.Hist.Lens do
     do: args |> Enum.map(&form_tree/1) |> Enum.reject(&is_nil/1)
 
   defp child_trees(other), do: other |> List.wrap() |> child_trees()
+
+  # A `:map` AST pair `{key, value}` -> a `pair` node carrying the projected key
+  # and value as children, so a query can address either. The key is typically a
+  # `:keyword` (now value-bearing), the value any form.
+  defp form_tree_pair({key, value}),
+    do: %{"node" => "pair", "children" => child_trees([key, value])}
+
+  defp form_tree_pair(other), do: form_tree(other)
 
   # Collect every tool-call NAME present in the form AST (`{:tool_call, name, _}`),
   # as strings. The form-AST analogue of `def_names/1`; the basis of the `forms`
