@@ -162,3 +162,101 @@ mind), now reaching the human.
 4. FEAT-019 :decision/:resolution records - filed.
 5. grant black/query to the read-only cell tier - XS (doc 16).
 With these, HS-1..HS-4 are immediate; HS-5 rides PROJ-005; HS-6 is a fold (a later FUP).
+
+* More surfaces, mined from the milestone substrate (HS-7..11)
+
+The first six surfaces (HS-1..6) read the decision/affordance loop. These five read
+the OTHER mesh verbs (decide, claim, the budget holder, intention fuel, the monotone
+seq) as human surfaces — each is the SAME stigmergic loop (a record/hole declares an
+affordance; a keystroke posts to the medium; the mesh re-resolves) pointed at a
+different primitive. All are grounded in the PLAN-019 verified substrate.
+
+** HS-7 — the human as a quorum member (co-sign a verdict)
+M2 black/decide commits a :verdict over a NODE quorum. Unify it with M6: a human
+:resolution becomes a REQUIRED SIGNER on an irreversible :fold's :gate. The human is
+not outside consensus asking a question — they are INSIDE it as a vote. This collapses
+decisions and consensus into one mechanism:
+- a verdict that needs a human signature IS a decision (the gate awaits a :resolution);
+- a decision answered by a policy IS a verdict (an auto-resolver folds it).
+So doc-16's "interchangeable resolver" and M2's "node quorum" are the same axis: who
+may sign. A human signer is just a quorum member whose vote arrives as a keystroke-
+posted :resolution. The gate predicate (M6) and the quorum check (M2) are one
+predicate over the signing records. Irreversible effects route through this gate —
+the human co-signs exactly the effects a critic/consensus pass would gate (doc-14:
+the mind is an untrusted host; some effects need a second signer). Grounded: M2
+sealing + M6 gate.
+
+** HS-8 — time-travel the blackboard (scrub the watermark)
+The store seq is monotone (M0/M2) and M1 captures a watermark in the MissionHandle;
+PROJ-002 (layouts-as-spans) is the time-travel substrate. A human scrubs a slider ->
+the dashboard re-PROJECTS the mesh at seq <= W: which findings existed, what the
+cohort knew, when a claim flipped, which verdict latched. The dashboard cells already
+project black/query at the LIVE frontier; bind the frontier to a human-controlled W
+and the SAME cells replay the mesh FORMING. This is HS-3 (provenance drill) widened
+from "why this finding" to "the whole board, rewound to any seq." The projection is
+deterministic at W (FEAT-017's discipline), so the replay is exact, not approximate.
+The affordance: a seq slider + a play/step binding; the reaction sets W on the cells'
+query. Grounded: monotone seq + the M1 watermark + FEAT-017 deterministic projection
++ PROJ-002 spans.
+
+** HS-9 — claim work off the board (human task-stealing)
+black/claim is seq-ordered arbitration that ALREADY dedups agents (one winner per
+claimable record, expired-lease handling — verified namespace.ex). A human posting a
+claim on a :goal or :finding competes through the SAME verb: they pull a task off the
+board to do MANUALLY, and the agents see it claimed (they back off, claim being
+monotone). Human and cohort cooperate for work through ONE arbitration primitive —
+there is no separate "assign to human" path; the human is a claimant. This is task-
+stealing in reverse: instead of the runtime handing work to a human, the human REACHES
+INTO the board and takes it. A claim the human later releases (or whose lease expires)
+returns the work to the cohort. The affordance: a claim binding on a focused board
+item; the reaction posts (black/claim …) as the human session. Grounded: black/claim
+seq-winner + lease semantics (verified).
+
+** HS-10 — the live budget dial (resource steering)
+M0 makes mesh.budget a WHITELISTED, live-settable config cell feeding the app-supervised
+ParallelBudget holder (read by spawn M1 + the watch-fire path M3). A dashboard dial ->
+(tool/define-config {:key "mesh.budget" :value n}) -> the holder resizes -> fan-out
+throttles LIVE, mid-mission, with no code change and no restart. The human steers the
+swarm's parallelism as a continuous control, not a config-file edit. Pairs with HS-11:
+budget is the swarm-wide throttle, intention-fuel is the per-watch throttle. The
+affordance: a +/- binding on a budget gauge cell; the reaction writes the config cell.
+Grounded: M0 whitelisted mesh.budget + the budget holder (verified config.ex whitelist
+gate + the M0 plan).
+
+** HS-11 — refuel / extinguish a standing intention (agency lifecycle)
+M3 intentions carry :fuel + :ttl and supersede monotonically; M2 verdicts latch a
+region :sealed (DC-9). A human can, from the board:
+- REFUEL an intention (post a superseding record with higher fuel) -> extend a watch
+  that was about to expire;
+- EXTINGUISH it (supersede to fuel 0 / a tombstone) -> cancel an agent's standing
+  watch — pause/resume/kill on agent AGENCY;
+- SEAL a region (post a terminal verdict) -> the emergency "stop this whole line of
+  work" kill-switch; subsequent posts rejected (DC-9).
+This is the human holding the throttle on agent persistence: an agent's standing
+intention is a value on the board, and the human edits its fuel like any other record.
+The affordance: refuel/extinguish/seal bindings on a focused intention or region; the
+reactions post the superseding records. Grounded: M3 fuel/ttl + monotone supersede +
+M2 region sealing (verified).
+
+* The catalogue is one mechanism at eleven verbs
+
+| HS | the verb it surfaces | the human's keystroke posts |
+|----+----------------------+------------------------------|
+| 1  | black/query (decisions) | a :resolution (triage)        |
+| 2  | black/post (goal/finding) | a :goal / :finding (steer)  |
+| 3  | hist join (provenance)  | (read-only drill, no write)   |
+| 4  | black/post over a diff  | a :resolution {:approve}      |
+| 5  | the gaze value (PROJ-005) | (gaze record; surfacing)    |
+| 6  | a fold over resolutions | a promoted policy resolver    |
+| 7  | black/decide (consensus) | a co-signing :resolution     |
+| 8  | the monotone seq (replay) | a watermark set (read-time)  |
+| 9  | black/claim (arbitration) | a :claim (task-stealing)     |
+| 10 | the budget cell (config) | a config write (throttle)     |
+| 11 | intention fuel/ttl      | a superseding record (agency) |
+
+Eleven surfaces, one loop: a record or hole declares an affordance; the human's
+keystroke posts to the append-only medium; a watch or a cell re-resolution carries the
+causality back. We never build a UI framework, an approval system, a job queue, a
+throttle panel, or a time-travel debugger. We let the human read and write the same
+blackboard the agents do, and PROJECT each fillable point as an affordance the keymap
+DSL already runs. The human surface is the mesh, seen by a person.

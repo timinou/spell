@@ -588,3 +588,54 @@ milestone:
   gate.
 
 NOTE [2026-06-27]: Boundary refinements applied to M1/M2/M5/M7 (M3/M4/M6 confirmed clean). Key shifts: MissionHandle string-keyed materialization contract (M1); decide :fold reuses Hist.Lens project→inject→run pattern (M2); combinators ship as .ptc source not compiled Elixir (M5); context_lens materializes Elixir + transforms via .ptc lens (M7).
+
+* M6 RECONCILE [this review] — the human surface is bigger than FEAT-019 alone
+The M6 milestone above was authored against doc 16 (the decision/resolution base loop)
+ONLY. Since then doc 17 (the human surface) + FEAT-020 (hole affordances) landed and
+this review mined FIVE more surfaces (HS-7..11) from the M0/M2/M3 substrate. M6 is the
+FLOOR of the human surface, not its ceiling. Corrections to the M6 scope:
+
+** FEAT-020 is PART OF M6, not backlog
+The "Backlog NOT in critical path" section demotes FEAT-020 (hole affordances) to
+"can slot after M6." That is WRONG ordering: FEAT-020's schema->affordance generator IS
+the renderer M6 lists as "a :decision answer-schema -> choice-affordances renderer."
+They are the same component. FEAT-020 should be built AS the affordance half of M6, not
+deferred after it. Revised M6 internal order:
+  1. record kinds (:decision/:resolution) + dedup posture decision (the OPEN DECISION).
+  2. grant black/query to the read-only Cell W1 tier (one line).
+  3. FEAT-020 generator: answer-schema -> {keymap bindings, reactions} (the pure fn) —
+     THIS is the "choice-affordances renderer"; build it here, reuse the bounded
+     intent-atom pool (PLAN-346 W3r DoS guard).
+  4. the watcher (M3) :on-answer firing + gate predicate.
+FEAT-020 stays a separate org item (its tests are unit-level on the generator) but it
+is SEQUENCED INSIDE M6, not after.
+
+** M6 references doc 17 now, not just doc 16
+Authoritative docs for M6 are 16 (decisions base loop) AND 17 (the human surface
+synthesis + HS-1..11 catalogue). doc 17 is the design overview; doc 16 is the
+record-level mechanism; FEAT-019 + FEAT-020 are the buildable items.
+
+** HS-1..11 — which ride M6, which are FUPs
+M6 delivers the LOOP (HS-1 worklist, HS-4 diff-review are immediate once the generator
++ watcher ship; HS-3 provenance-drill is read-only over FEAT-017's join). The rest are
+NEW surfaces this review found in the substrate — each a small addition on the SAME
+loop, to be filed as FUPs off M6 (NOT in M6's tight scope):
+- HS-2 steering (human posts goal/finding) — trivial, a write affordance; M6-adjacent.
+- HS-5 shared gaze surfacing — RIDES PROJ-005 (co-edited tree), a real dependency; FUP.
+- HS-6 answer-templates (policy from resolution history) — a fold FUP off M6.
+- HS-7 human-as-quorum-signer — unifies M2 decide gate + M6 resolution; FUP needs M2.
+- HS-8 time-travel/watermark-scrub — rides PROJ-002 spans + the M1 watermark; FUP.
+- HS-9 human task-stealing via black/claim — small, uses the shipped claim verb; FUP.
+- HS-10 live budget dial — tiny, writes the M0 mesh.budget cell; FUP (good first one).
+- HS-11 refuel/extinguish/seal an intention — uses M3 fuel/ttl + M2 seal; FUP.
+RECOMMENDATION: file one umbrella FUP "human-surface catalogue (HS-2,5,6,7,8,9,10,11)"
+off M6, with HS-10 (budget dial) + HS-9 (task-steal) as the quick first wins (they need
+no new substrate — M0 + the shipped claim verb). HS-5/HS-7/HS-8 carry real deps
+(PROJ-005 / M2 / PROJ-002) and wait on them.
+
+** Why M6's scope stays tight despite the bigger surface
+The eleven surfaces are ONE loop at eleven verbs (doc 17's closing table). M6 builds the
+loop ONCE (record kinds + generator + cell-read grant + watcher firing). Every HS beyond
+the base is then "point the same loop at another verb" — a small authored pane + a
+reaction, not new architecture. So the bigger surface does NOT bloat M6; it validates
+that M6's loop is the right primitive. Build M6 tight; the catalogue falls out as FUPs.
