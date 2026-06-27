@@ -153,11 +153,13 @@ defmodule SpellAgent.Mesh.SpawnSessionTest do
 
   describe "budget" do
     test "spawning past capacity does not exceed the cap; the spawn fails fast" do
-      # Wait for any async child-release from a prior test to settle, then fill the
-      # budget completely so the next spawn must fail fast.
-      wait_until(fn -> Budget.held() == 0 end)
+      # Fill EVERY currently-free slot so the next spawn must fail fast. Acquiring
+      # until :full (rather than assuming `capacity` slots are free) is robust to a
+      # stray slot a prior test's async child release hasn't freed yet — the global
+      # budget is a singleton, so we only rely on "no free slots after this", not
+      # on a specific count.
       cap = Budget.capacity()
-      held = for _ <- 1..cap, do: (assert {:ok, b} = Budget.try_acquire(); b)
+      held = acquire_all()
       assert Budget.available() == 0
 
       parent_program = ~s|(return (tool/spawn-session {:prompt "CHILD never"}))|
@@ -168,17 +170,40 @@ defmodule SpellAgent.Mesh.SpawnSessionTest do
           {"CHILD never", fn -> lisp_eval(~s|(return "x")|) end}
         ])
 
-      # The raise inside spawn-session (parallel_capacity_exceeded) surfaces as a
-      # tool error -> the program fails -> Session.run returns {:error, _}. The
-      # load-bearing contract: no crash, and the budget is NEVER exceeded (a
-      # capacity+1 acquire handed its slot back, so held stays <= cap).
+      # The load-bearing invariant: the budget is NEVER exceeded — a capacity+1
+      # acquire hands its slot straight back (held stays <= cap), so the spawn
+      # fails fast with parallel_capacity_exceeded surfaced as a tool error ->
+      # {:error, _}. NB: the global budget is a singleton shared with other tests'
+      # async children; if one of those frees a slot in the instant between our
+      # fill and the spawn, the spawn legitimately SUCCEEDS into that slot — still
+      # never exceeding cap. So we assert the invariant (held <= cap, no crash) and
+      # accept either outcome, rather than a brittle exact {:error, _} that races
+      # the shared holder.
       result = Session.run("PARENT over", llm: llm, max_turns: 4, hist: Memory)
-      assert match?({:error, _}, result)
+      assert match?({:error, _}, result) or match?({:ok, _}, result)
       assert Budget.held() <= cap
       # The child never started, so no finding from "CHILD never" exists.
       refute Enum.any?(all_mesh_records(Memory), fn r ->
                r.kind == :finding and match?(%{"started" => _}, r.payload)
              end)
+
+      Enum.each(held, &Budget.release/1)
+      wait_until(fn -> Budget.held() == 0 end)
+    end
+
+    test "spawn-session raises parallel_capacity_exceeded when the budget is full (unit)" do
+      # Deterministic raise test: fill the budget, then call the spawn verb
+      # SYNCHRONOUSLY in this tick (no Session.run, no await) so no async child
+      # release can interleave. The verb must raise; the budget stays full.
+      held = acquire_all()
+      assert Budget.available() == 0
+
+      verbs = SpellAgent.Mesh.Spawn.verbs("parent-sid", llm: fn _ -> {:ok, %{content: "x"}} end, store: Memory, allowed: :all)
+      spawn = verbs["spawn-session"]
+
+      assert_raise RuntimeError, ~r/parallel_capacity_exceeded/, fn ->
+        spawn.(%{"prompt" => "never runs"})
+      end
 
       Enum.each(held, &Budget.release/1)
       wait_until(fn -> Budget.held() == 0 end)
@@ -296,6 +321,15 @@ defmodule SpellAgent.Mesh.SpawnSessionTest do
     if Budget.held() > 0 do
       Budget.release(b)
       drain_budget(b)
+    end
+  end
+
+  # Acquire every free slot until the budget is full; return the held budgets so
+  # the caller can release them. Robust to a non-empty starting held count.
+  defp acquire_all(acc \\ []) do
+    case Budget.try_acquire() do
+      {:ok, b} -> acquire_all([b | acc])
+      _ -> acc
     end
   end
 

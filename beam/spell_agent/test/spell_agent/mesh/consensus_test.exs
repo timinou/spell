@@ -128,6 +128,51 @@ defmodule SpellAgent.Mesh.ConsensusTest do
     end
   end
 
+  describe "BUG-018 regressions" do
+    test "an intervening claim does NOT change the verdict id (watermark tracks findings)",
+         %{region: region} do
+      post_finding(region, %{"msg" => "a"})
+      assert {:verdict, id1, _} = Consensus.decide(%{region: region, question: "q", store: Memory})
+
+      # A claim posted between decides advances the raw region seq but NOT the
+      # finding frontier, so the re-decide must seal at the same watermark -> same id.
+      {:ok, _} = Store.put(Memory, Record.new(:claim, region, %{"work" => "W"}, author: "s2"))
+      assert {:verdict, id2, _} = Consensus.decide(%{region: region, question: "q", store: Memory})
+
+      assert id1 == id2
+      assert length(Store.by_kind(Memory, region, :verdict)) == 1
+    end
+
+    test "a malformed :fold (non-binary) errors without committing", %{region: region} do
+      post_finding(region, %{"msg" => "a"})
+
+      assert {:error, {:fold_failed, {:fold_invalid, 42}}} =
+               Consensus.decide(%{region: region, question: "q", fold: 42, store: Memory})
+
+      assert Store.by_kind(Memory, region, :verdict) == []
+    end
+
+    test "concurrent decides at the same watermark commit exactly one verdict",
+         %{region: region} do
+      post_finding(region, %{"msg" => "a"})
+      post_finding(region, %{"msg" => "b"})
+
+      # Fire many decides in parallel for the same (region, question). The server
+      # serializes them; exactly one verdict record must exist, all returning the
+      # same id. (Requires the app-supervised Consensus.Server.)
+      tasks =
+        for _ <- 1..20 do
+          Task.async(fn -> Consensus.decide(%{region: region, question: "race", store: Memory}) end)
+        end
+
+      results = Task.await_many(tasks, 30_000)
+      ids = results |> Enum.map(fn {:verdict, id, _} -> id end) |> Enum.uniq()
+
+      assert length(ids) == 1
+      assert length(Store.by_kind(Memory, region, :verdict)) == 1
+    end
+  end
+
   describe "black/decide verb (the PTC surface)" do
     test "decide via the namespace verb returns a verdict map", %{region: region} do
       post_finding(region, %{"msg" => "a"})

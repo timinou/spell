@@ -1,0 +1,59 @@
+#+TITLE: black/decide: watermark tracks non-folded records; non-atomic idempotency; malformed fold commits
+#+STATE: DONE
+#+SESSION_ID: 15195d97dff3d090
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-27T08-45-09-375Z_15195d97dff3d090.jsonl]]
+#+CUSTOM_ID: BUG-018-black-decide-watermark-tracks-non-folded
+
+* Initial Message
+
+what's pending in this folder's work?
+
+* Source
+M2 reviewer swarm (PLAN-019), agents 11-RevConsensusIdem + 12-RevConsensusBoundary.
+Both converged on the two P1s. Fixed mid-flight before M3.
+
+* Finding 1 (P1, both) \u2014 watermark advances on records the fold ignores
+decidable_frontier/2 = max seq of ALL non-verdict records (finding + claim + goal
++ intention), but project_findings/3 folds ONLY :finding records. So a
+black/claim or :intention or re-goal posted between two decides moves the
+watermark -> a new verdict id -> a SECOND verdict over an IDENTICAL finding set,
+re-running the fold. Breaks "one verdict / fold once per sealed finding set".
+
+** Fix
+The watermark must track exactly the set the fold materializes. Seal at the max
+seq of the FOLDABLE kinds (currently :finding). decidable_frontier ->
+finding_frontier (max seq among :finding records, 0 if none). Now an
+intervening claim/goal/intention does NOT move the watermark, so a re-decide over
+an unchanged finding set is idempotent. (When the fold boundary later widens to
+more kinds, widen the frontier to match \u2014 they must stay the same set.)
+
+* Finding 2 (P1, both) \u2014 non-atomic idempotency (TOCTOU)
+existing_verdict (read) THEN commit (Store.put) is not atomic: two sessions
+deciding the same (region, question, watermark) concurrently both see :none, both
+fold, both write a verdict with the same id. Store.put assigns a fresh seq and
+does not enforce verdict-id uniqueness -> duplicate verdicts, fold runs twice.
+Real single-node (two BEAM sessions are two processes).
+
+** Fix
+Serialize decide per region through a GenServer (SpellAgent.Mesh.Consensus.Server,
+app-supervised). decide/1 becomes a GenServer.call so the check+fold+commit runs
+in one serialized critical section per the server's mailbox. Best-effort: server
+absent -> fall back to the inline (unserialized) path (single-process tests),
+documented. A per-region lock would be finer-grained but the v1 single-node
+server-serialized path is correct + simple; finer locking is a FUP if contention
+matters. The multi-node atomic path is the Ra commit (FUP-020).
+
+* Finding 3 (P2, RevConsensusBoundary) \u2014 malformed :fold silently commits default
+run_fold's catch-all clause treated a non-nil, non-binary :fold (e.g. 42) as the
+DEFAULT fold and committed a verdict (possibly sealing). A malformed fold should
+error like a bad PTC program, never commit.
+
+** Fix
+run_fold(nil, ...) -> default; run_fold(source, ...) when is_binary -> sandbox;
+run_fold(other, ...) -> {:error, {:fold_invalid, other}} (no commit). The verb
+surfaces it as an err.
+
+* Acceptance
+mix test test/spell_agent/mesh/consensus_test.exs green incl. new tests: an
+intervening claim does NOT change the verdict id; a malformed fold errors without
+committing; concurrent decides commit exactly one verdict. Full mesh suite green.

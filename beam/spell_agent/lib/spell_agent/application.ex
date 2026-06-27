@@ -38,6 +38,10 @@ defmodule SpellAgent.Application do
       # after the Task supervisor it spawns into. Best-effort: absent -> spawn
       # detaches with no join, await -> {:error}.
       SpellAgent.Mesh.Join,
+      # Serializes black/decide so the idempotency check + fold + commit is one
+      # critical section (FEAT-012 M2, BUG-018). Best-effort: Consensus.decide
+      # falls back to the inline path when this is absent.
+      SpellAgent.Mesh.Consensus.Server,
       SpellAgent.OAuth,
       # Live-session tracker (PLAN-010): which conversations are RUNNING right now.
       # The Hist store only knows PAST sessions (recorded on mission exit); this

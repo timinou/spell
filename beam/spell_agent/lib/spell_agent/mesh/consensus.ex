@@ -65,15 +65,38 @@ defmodule SpellAgent.Mesh.Consensus do
   """
   @spec decide(map()) :: outcome()
   def decide(args) when is_map(args) do
+    # Serialize the check+fold+commit through the per-node server so two sessions
+    # deciding the same (region, question, watermark) concurrently cannot both
+    # miss the idempotency check and double-commit (the TOCTOU between
+    # existing_verdict and Store.put). The server runs decide_inline/1 in its
+    # single mailbox — one critical section at a time. Best-effort: an absent
+    # server (a bare unit test) falls back to the inline path (single-process, no
+    # contention). The multi-node atomic guarantee is the Ra commit (FUP-020).
+    case Process.whereis(SpellAgent.Mesh.Consensus.Server) do
+      nil -> decide_inline(args)
+      _pid -> SpellAgent.Mesh.Consensus.Server.decide(args)
+    end
+  catch
+    :exit, _ -> decide_inline(args)
+  end
+
+  @doc """
+  The unserialized decide body. Public so the serializing server can call it in
+  its own process; callers should use `decide/1` (which routes through the server).
+  """
+  @spec decide_inline(map()) :: outcome()
+  def decide_inline(args) when is_map(args) do
     with {:ok, region} <- require_str(args, :region),
          {:ok, question} <- require_str(args, :question),
          {:ok, store} <- require_store(args) do
-      # 1. SEAL: the frontier of DECIDABLE records (findings/goals/claims), fixed
-      #    BEFORE the fold so the folded set is stable (P1.2). NB: verdicts are
-      #    EXCLUDED from the frontier — a verdict commit bumps the region seq, and
-      #    if it counted toward the watermark a re-decide would seal at a higher
-      #    frontier and compute a different id, breaking idempotency (DC-8).
-      watermark = decidable_frontier(store, region)
+      # 1. SEAL: the frontier of the FOLDED set — the max seq among the records the
+      #    fold actually materializes (:finding). Fixed BEFORE the fold so the set
+      #    is stable (P1.2). The watermark MUST track exactly project_findings/3's
+      #    set: if it advanced on records the fold ignores (a claim/goal/intention,
+      #    or a verdict's own seq bump), a re-decide over an UNCHANGED finding set
+      #    would seal higher -> a different id -> a spurious second verdict over the
+      #    same findings (idempotency break, DC-8).
+      watermark = finding_frontier(store, region)
 
       # 2. The idempotent verdict id over the sealed frontier.
       id = verdict_id(region, question, watermark)
@@ -136,14 +159,15 @@ defmodule SpellAgent.Mesh.Consensus do
     end
   end
 
-  # The seal frontier = the max seq among NON-verdict records (the decidable set).
-  # Excluding verdicts makes a re-decide at an unchanged finding set seal at the
-  # SAME watermark -> the same idempotent id, even though the first verdict
-  # advanced the raw region seq.
-  defp decidable_frontier(store, region) do
+  # The seal frontier = the max seq among the FOLDED records (:finding), which is
+  # EXACTLY the set project_findings/3 materializes. Keeping these two in lockstep
+  # is the idempotency invariant: a re-decide whose finding set is unchanged seals
+  # at the same watermark -> the same id, regardless of any claim/goal/intention/
+  # verdict written in between (those advance the raw region seq but not this
+  # frontier). When the fold boundary widens to more kinds, widen this to match.
+  defp finding_frontier(store, region) do
     store
-    |> Store.region(region)
-    |> Enum.reject(fn r -> r.kind == :verdict end)
+    |> Store.by_kind(region, :finding)
     |> Enum.map(& &1.seq)
     |> Enum.max(fn -> 0 end)
   end
@@ -197,8 +221,9 @@ defmodule SpellAgent.Mesh.Consensus do
     :exit, reason -> {:error, {:fold_exit, reason}}
   end
 
-  defp run_fold(_other, findings),
-    do: {:ok, %{"findings" => findings, "count" => length(findings)}}
+  # A non-nil, non-binary :fold is MALFORMED — error like a bad PTC program rather
+  # than silently committing the default (a malformed fold must never decide).
+  defp run_fold(other, _findings), do: {:error, {:fold_invalid, other}}
 
   # ---- idempotency lookup ----
 
