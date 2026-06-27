@@ -53,7 +53,8 @@ defmodule SpellAgent.Tools do
       "sh-parse" => &SpellAgent.Sh.parse_tool/1,
       "sh-unparse" => &SpellAgent.Sh.unparse_tool/1,
       "code-parse" => &SpellAgent.Code.parse_tool/1,
-      "code-unparse" => &SpellAgent.Code.unparse_tool/1
+      "code-unparse" => &SpellAgent.Code.unparse_tool/1,
+      "code-edit" => &SpellAgent.Code.edit_tool/1
     }
   end
 
@@ -153,6 +154,16 @@ defmodule SpellAgent.Tools do
           "Render a form_tree back to source. An untouched subtree round-trips " <>
             "verbatim; an edited subtree rejoins its children (re-parse equality, " <>
             "not byte). e.g. (tool/code-unparse {:tree t}) -> %{src}.",
+        "kind" => "native"
+      },
+      %{
+        "name" => "code-edit",
+        "params" => ["path", "tree", "lang"],
+        "doc" =>
+          "Parse-gated transactional write: unparse the edited :tree, RE-PARSE it " <>
+            "(reject if the edit broke the grammar), then write :path. The agent " <>
+            "builds :tree via q/* (q/update / q/apply-ops) so the edit stays " <>
+            "reifiable data. e.g. (tool/code-edit {:path \"f.ex\" :lang \"elixir\" :tree t}).",
         "kind" => "native"
       }
     ]

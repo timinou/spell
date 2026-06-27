@@ -24,11 +24,26 @@ defmodule SpellAgent.Code do
 
       %{"node" => "source", "text" => "…", "children" => [ … ]}
 
-  Each node carries `node` (the tree-sitter kind), optional `name` (the field
-  role it fills in its parent), `value` (a leaf's source text), `text` (verbatim
-  source slice, for byte-exact round-trip of untouched subtrees), and `children`.
-  Exotic / error constructs degrade to a `%{"node" => "raw", "value" => src}`
-  leaf rather than failing.
+  Each node carries `node` (the tree-sitter kind), optional `field` (the role it
+  fills in its parent, e.g. `left`/`right`/`argument` — NOT `name`, which is
+  reserved for a semantic name across all form_tree producers), `value` (a leaf's
+  source text), `text` (verbatim source slice, for byte-exact round-trip of
+  untouched subtrees), and `children`. Exotic / error constructs degrade to a
+  `%{"node" => "raw", "value" => src}` leaf rather than failing.
+
+  ## Editing
+
+  `code-edit {:path :tree :lang}` is the parse-GATED, transactional write seam.
+  The agent produces the edited `:tree` in its OWN program (via the `q/*`
+  algebra: `(q/update (tool/code-parse {...}) pattern f)` or `(q/apply-ops ...)`),
+  keeping the edit a reifiable DATA value PLAN-018 can compose. `code-edit` then:
+
+    1. unparses `:tree` to source;
+    2. PARSE-GATES it — re-parses the source and requires it to round-trip
+       (re-parse equality); a tree that does not yield re-parseable source is
+       REJECTED and the file is left untouched;
+    3. writes the file (the PTC `execute` layer rolls the write back if the
+       enclosing program later fails — transactional by construction).
   """
 
   @doc """
@@ -92,6 +107,89 @@ defmodule SpellAgent.Code do
 
       _ ->
         %{"error" => "code-unparse: missing required :tree (a form_tree map)"}
+    end
+  end
+
+  @doc """
+  The native tool fn registered as `code-edit`. Parse-gated, transactional write.
+
+  Args: `:path` (file to write), `:tree` (the edited form_tree the agent built
+  via q/*), `:lang` (for the parse-gate). Returns `%{"path" => p, "bytes" => n,
+  "src" => s}` on success, or `%{"error" => _}` — and on ANY gate failure the
+  file is left UNTOUCHED.
+
+  The gate is the safety core: the edited tree is unparsed to source, then
+  RE-PARSED; if re-parsing fails (the edit produced unparseable source) the write
+  is refused. This is the structural-invariance contract — an edit may change
+  meaning, but it must still be valid source.
+  """
+  @spec edit_tool(map()) :: map()
+  def edit_tool(args) when is_map(args) do
+    with {:ok, path} <- require_string(args, "path"),
+         {:ok, lang} <- require_string(args, "lang"),
+         {:ok, tree} <- require_tree(args),
+         {:ok, src} <- gate_unparse(tree),
+         :ok <- gate_reparse(src, lang),
+         :ok <- gate_write(path, src) do
+      %{"path" => path, "bytes" => byte_size(src), "src" => src}
+    else
+      {:error, message} -> %{"error" => message}
+    end
+  end
+
+  defp require_tree(args) do
+    case Map.get(args, "tree") do
+      tree when is_map(tree) -> {:ok, tree}
+      _ -> {:error, "code-edit: missing required :tree (a form_tree map)"}
+    end
+  end
+
+  defp gate_unparse(tree) do
+    case safe_unparse(tree) do
+      {:ok, src} when is_binary(src) -> {:ok, src}
+      {:error, reason} -> {:error, "code-edit: unparse failed (#{to_string_reason(reason)})"}
+      other -> {:error, "code-edit: unparse unexpected (#{inspect(other)})"}
+    end
+  end
+
+  # The PARSE-GATE: the edited source MUST re-parse without producing a top-level
+  # error/raw region, or the edit yielded invalid source and is refused.
+  defp gate_reparse(src, lang) do
+    case safe_parse(src, lang) do
+      {:ok, %{"error" => reason}} ->
+        {:error, "code-edit: parse-gate rejected the edit (#{to_string_reason(reason)})"}
+
+      {:ok, tree} when is_map(tree) ->
+        if reparse_clean?(tree),
+          do: :ok,
+          else: {:error, "code-edit: parse-gate rejected the edit (unparseable result)"}
+
+      {:error, reason} ->
+        {:error, "code-edit: parse-gate failed (#{to_string_reason(reason)})"}
+
+      other ->
+        {:error, "code-edit: parse-gate unexpected (#{inspect(other)})"}
+    end
+  end
+
+  # A re-parsed tree is "clean" if it contains no ERROR node and no raw leaf that
+  # spans real content — i.e. the edit produced structurally valid source. A raw
+  # leaf or error:true anywhere means the edit broke the grammar.
+  defp reparse_clean?(node) when is_map(node) do
+    cond do
+      Map.get(node, "error") == true -> false
+      Map.get(node, "node") == "raw" -> false
+      true -> Enum.all?(Map.get(node, "children", []), &reparse_clean?/1)
+    end
+  end
+
+  defp reparse_clean?(_), do: true
+
+  defp gate_write(path, src) do
+    File.write(path, src)
+    |> case do
+      :ok -> :ok
+      {:error, reason} -> {:error, "code-edit: write failed (#{:file.format_error(reason)})"}
     end
   end
 
