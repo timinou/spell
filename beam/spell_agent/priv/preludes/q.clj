@@ -300,12 +300,23 @@
   composable edit (PLAN-018) use q/apply-ops with data {op pattern template}."
   [s p f]
   (let [walk (fn walk [node]
-               ;; rebuild children first (bottom-up)
-               (let [node2 (if (and (map? node) (contains? node "children"))
-                             (assoc node "children" (map walk (get node "children")))
-                             node)
-                     hit (match p node2)]
-                 (if (matched? hit) (f hit node2) node2)))]
+               (if (and (map? node) (contains? node "children"))
+                 ;; rebuild children first (bottom-up)
+                 (let [kids (get node "children")
+                       kids2 (map walk kids)
+                       ;; If any child changed, this node's verbatim `text` cache
+                       ;; (from code/parse) is STALE — drop it so code/unparse
+                       ;; rejoins from children instead of emitting old source.
+                       ;; The whole ancestor chain of an edit thus loses `text`,
+                       ;; while untouched siblings keep theirs (byte-exact).
+                       changed (not (tree-equal? kids2 kids))
+                       node2 (cond-> (assoc node "children" kids2)
+                               changed (dissoc "text"))
+                       hit (match p node2)]
+                   (if (matched? hit) (f hit node2) node2))
+                 ;; a leaf: just test/replace it
+                 (let [hit (match p node)]
+                   (if (matched? hit) (f hit node) node))))]
     (walk s)))
 
 (defn wrap

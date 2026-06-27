@@ -51,7 +51,9 @@ defmodule SpellAgent.Tools do
       "sh" => &SpellAgent.Sh.tool/1,
       "sh-pipe" => &SpellAgent.Sh.pipe_tool/1,
       "sh-parse" => &SpellAgent.Sh.parse_tool/1,
-      "sh-unparse" => &SpellAgent.Sh.unparse_tool/1
+      "sh-unparse" => &SpellAgent.Sh.unparse_tool/1,
+      "code-parse" => &SpellAgent.Code.parse_tool/1,
+      "code-unparse" => &SpellAgent.Code.unparse_tool/1
     }
   end
 
@@ -133,6 +135,24 @@ defmodule SpellAgent.Tools do
         "doc" =>
           "Render a parsed bash tree back to a bash string (words re-escaped, " <>
             "injection-safe). e.g. (tool/sh-unparse {:tree t}) -> %{bash}.",
+        "kind" => "native"
+      },
+      %{
+        "name" => "code-parse",
+        "params" => ["src", "lang"],
+        "doc" =>
+          "Parse source code into a walkable form_tree (same shape as sh-parse " <>
+            "and Lisp history), so the q/* algebra walks source structurally. " <>
+            "e.g. (tool/code-parse {:src \"def f, do: 1\" :lang \"elixir\"}).",
+        "kind" => "native"
+      },
+      %{
+        "name" => "code-unparse",
+        "params" => ["tree"],
+        "doc" =>
+          "Render a form_tree back to source. An untouched subtree round-trips " <>
+            "verbatim; an edited subtree rejoins its children (re-parse equality, " <>
+            "not byte). e.g. (tool/code-unparse {:tree t}) -> %{src}.",
         "kind" => "native"
       }
     ]
