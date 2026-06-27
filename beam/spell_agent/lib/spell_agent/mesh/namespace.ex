@@ -34,7 +34,7 @@ defmodule SpellAgent.Mesh.Namespace do
   (like `Hist.Namespace.normalize_err`), never crashing the agent turn.
   """
 
-  alias SpellAgent.Mesh.{Consensus, Record, Region, Store}
+  alias SpellAgent.Mesh.{Consensus, ContextLens, Record, Region, Store}
   alias SpellAgent.SessionRegistry
 
   @doc """
@@ -53,7 +53,8 @@ defmodule SpellAgent.Mesh.Namespace do
       "black/claim" => fn args -> guard(fn -> claim(impl, session_id, region, held, args) end) end,
       "black/fold" => fn args -> guard(fn -> fold(impl, region, args) end) end,
       "black/watch" => fn args -> guard(fn -> watch(impl, session_id, region, held, args) end) end,
-      "black/decide" => fn args -> guard(fn -> decide(impl, session_id, region, held, args) end) end
+      "black/decide" => fn args -> guard(fn -> decide(impl, session_id, region, held, args) end) end,
+      "black/context" => fn args -> guard(fn -> context(impl, session_id, region, args) end) end
     }
   end
 
@@ -271,6 +272,33 @@ defmodule SpellAgent.Mesh.Namespace do
       _ -> false
     end
   end
+
+  # --- black/context (FEAT-017, Mesh.ContextLens) ---
+
+  # Project this session's cohort context: the region's findings/goals/verdicts at
+  # seq<=W joined to the reasoning that produced them (WHAT+WHY). :watermark
+  # defaults to the region's current max seq (the live frontier); :where narrows
+  # the findings; :join sees the reasoning join (default true). Returns the
+  # string-keyed context bag (the data/* a child's prompt holes read).
+  defp context(impl, session_id, region, args) do
+    watermark =
+      case get(args, ["watermark"]) do
+        n when is_integer(n) -> n
+        _ -> Store.max_seq(impl, region)
+      end
+
+    handle = %{"region" => region, "session" => session_id, "watermark" => watermark}
+
+    opts =
+      [store: impl, join_hist: get(args, ["join"]) != false]
+      |> put_kw(:where, get(args, ["where"]))
+      |> put_kw(:siblings, get(args, ["siblings"]))
+
+    ContextLens.build_context(handle, opts)
+  end
+
+  defp put_kw(kw, _key, nil), do: kw
+  defp put_kw(kw, key, value), do: Keyword.put(kw, key, value)
 
   # --- black/decide (FEAT-012, Mesh.Consensus) ---
 

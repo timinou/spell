@@ -1,0 +1,62 @@
+#+TITLE: Context lens: push-at-spawn injection + full source-fold layer (memory-fold sharing)
+#+STATE: ITEM
+#+SESSION_ID: 15195d97dff3d090
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-27T08-45-09-375Z_15195d97dff3d090.jsonl]]
+#+CUSTOM_ID: FUP-023-context-lens-push-at-spawn-injection-ful
+
+* Initial Message
+
+what's pending in this folder's work?
+
+* Source
+Deferred from M7 (PLAN-019, FEAT-017). M7 shipped the PULL context lens (the verb
+a child calls) + the core source folds. The push-at-spawn delivery and the richer
+source layer remain.
+
+* Shipped (M7)
+- Mesh.ContextLens.build_context(handle, opts): projects region findings/goals/
+  verdicts at seq<=W, joins each finding to its author's hist reasoning (WHAT+WHY),
+  applies a :where scope predicate, derives siblings from record authors. String-
+  keyed bag (the materialize boundary).
+- Source-fold layer: findings/4, edited_files/3, files_read/3, tool_history/4 \u2014
+  projections over append-only stores at a watermark.
+- black/context verb (PULL): a session projects its cohort context at the live
+  frontier (or an explicit :watermark), :where-narrowed.
+- 8 tests: watermark boundary, WHAT+WHY join (with/without hist), determinism at
+  equal W, scope predicate, source folds, the verb.
+
+* Deferred
+** PUSH-at-spawn (inject the bag as the child's data/* at spawn time)
+The FEAT's headline "context is a LENS, not pushed" is satisfied by the verb
+(pull). The richer ergonomic is to BUILD the bag at spawn and seed it into the
+child's data/* so its prompt holes resolve against the cohort baseline WITHOUT a
+runtime call \u2014 the cacheable immutable prefix. Needs:
+- a :context arg on spawn-session ({:scope :siblings :where {...}}).
+- ContextLens.build_context at spawn (handle has watermark+region+parent).
+- thread the bag into the child Session.run as injected context (data/*), the same
+  data/* seam PLAN-012's resolver uses. (Distinct from :inherit_memory which seeds
+  the DEF-ENV; this seeds data/* context.)
+
+** Full source-fold layer (the FEAT-017 addendum + FEAT-018 S-E REFRAME)
+Generalize so BOTH deliveries share ONE source layer:
+- richer folds: conversation(session) -> tape (continuation children only);
+  edited_files with diffs/content (not just paths); cross-LINEAGE folds (a child's
+  parent chain, not one session).
+- memory-fold (FEAT-018 S-E push): :memory (fn [parent-ctx] -> bindings) folding the
+  SAME sources into a def-env seed. The flat select-keys slice shipped in M5; the
+  fold-of-sources surface rides THIS layer.
+- one Mesh.Sources module (or extend ContextLens) exposing the folds; the context
+  lens (pull->data/*) and memory-fold (push->def-env) both consume it (doc 15 U1/U3).
+
+** Acceptance delta (from FEAT-017 addendum)
+- edited_files folds a lineage's sees into the changed-file set (assert vs a known
+  edit sequence).
+- the SAME source fold feeds both a pull (data/*) and a push (def-env) in one test.
+- a child spawned with :context gets the cohort baseline in data/* with no runtime
+  black/context call.
+
+* Dependencies
+The hist-node seq vs mesh-region seq distinction (noted in context_lens.ex
+project_session): a sibling's hist is its reasoning to now; only its findings <=W
+are in the cohort. A precise cross-sequence watermark for hist nodes (if needed)
+is part of this FUP. Composes with FEAT-018 S-D/S-F (narrowing/introspection).
