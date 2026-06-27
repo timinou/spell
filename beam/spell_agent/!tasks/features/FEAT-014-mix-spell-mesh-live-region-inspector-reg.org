@@ -1,9 +1,10 @@
 #+TITLE: mix spell.mesh — live region inspector (Regions/Board/Spawn panes) over the freeform surface
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 151269c91db37358
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T23-09-03-478Z_151269c91db37358.jsonl]]
 #+CUSTOM_ID: FEAT-014-mix-spell-mesh-live-region-inspector-reg
 #+BLOCKED_BY: FEAT-009
+#+COMPLETION_HASH: ac1ed4f622452eb4
 
 * Initial Message
 
@@ -87,3 +88,5 @@ only — independent of FEAT-011/012/013 (it visualizes whatever state exists).
   (contract-level, like the span-tree projection tests).
 - view/pane builder produces the correct node map.
 - the empty-forest render (no crash, zero rows).
+
+NOTE [2026-06-27]: DONE [2026-06-27] via PLAN-019 M4 (commit d06bf07b) — STDOUT surface. Mesh.Store.regions/1 (region index), Mesh.MeshView (pure formatters shared CLI/TUI), mix spell.mesh (default index, --region board, --fold REGION:KIND:REDUCE[:FIELD] via the black/fold verb). 9 tests. The INTERACTIVE Regions/Board/Spawn TUI panes + spell.mesh.gallery/.watch (FEAT-015) + the decisions dashboard (FEAT-019 panes) are FUP-025 (they need the PLAN-009 view/pane builder).

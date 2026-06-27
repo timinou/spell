@@ -1,9 +1,10 @@
 #+TITLE: Mesh.Consensus — black/decide over the NODE cluster (Ra leader-election, sealed watermark)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 151269c91db37358
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T23-09-03-478Z_151269c91db37358.jsonl]]
 #+CUSTOM_ID: FEAT-012-mesh-consensus-black-decide-over-the-nod
 #+BLOCKED_BY: FEAT-010
+#+COMPLETION_HASH: 0a2881a84638357e
 
 * Initial Message
 
@@ -102,3 +103,5 @@ The sealed watermark is a STORE SEQUENCE / LOG INDEX, not a Lamport scalar.
   field holds the SEQ (integer), not a lamport.
 - seal MUST be the first committed Ra step (Khepri) or an atomic counter read
   (Memory) so the frontier is fixed before any fold.
+
+NOTE [2026-06-27]: DONE [2026-06-27] via PLAN-019 M2 (commits 0d5609f0 + d0dc24b3) — SINGLE-NODE path. black/decide seals (finding frontier, P1.2), folds via userland PTC over a materialized projection (the Hist.Lens pattern), commits an idempotent verdict (id = hash(region<>question<>watermark)), terminal verdict seals the region. Serialized through Mesh.Consensus.Server (no TOCTOU double-commit, BUG-018). 15 tests. The MULTI-NODE Ra election + two-node distribution gate is FUP-020 (the cluster Ra is already vendored via khepri).

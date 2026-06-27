@@ -1,9 +1,10 @@
 #+TITLE: FUP: mesh ergonomic combinators — ask/prompt::, scatter/gather/mesh-map, narrowing, memory threading
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 151269c91db37358
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T23-09-03-478Z_151269c91db37358.jsonl]]
 #+CUSTOM_ID: FEAT-018-fup-mesh-ergonomic-combinators-ask-promp
 #+BLOCKED_BY: FEAT-011
+#+COMPLETION_HASH: f217e94fe7061311
 
 * Initial Message
 
@@ -221,3 +222,5 @@ The flat select-keys copy stays here as the trivial case. The FOLD-of-sources su
 is promoted to ride FEAT-017's source layer (see FEAT-017 addendum). So: memory
 threading is FUPed AS A SURFACE, but its substance (the source folds) is pending the
 FEAT-017 projection layer it shares with context injection.
+
+NOTE [2026-06-27]: DONE [2026-06-27] via PLAN-019 M5 (commits 9cae90e7 + 0ae2fe1f) — S-A/S-B/S-E core. ask/scatter/gather/mesh-map shipped AS .ptc SOURCE (agent-forkable, the hist/lenses precedent), capacity-safe via psettled (BUG-020 — partial fan-out never orphans children). S-E inherit_memory: Session.run seeds the child def-env (cache-neutral, seed wins). 5 combinator tests. Deferred: S-C (on/reconcile/mesh-view, needs prompt:: reader), S-D (narrowing, a compiled primitive), S-F (spawn-site introspection), prompt:: freeze, and the fold-of-sources memory channel (rides M7's source layer) — all FUP-022.

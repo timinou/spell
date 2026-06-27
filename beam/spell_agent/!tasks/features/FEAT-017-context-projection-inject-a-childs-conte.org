@@ -1,9 +1,10 @@
 #+TITLE: Context projection — inject a child's context as a lens over sibling hists + region blackboard at a watermark
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 151269c91db37358
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T23-09-03-478Z_151269c91db37358.jsonl]]
 #+CUSTOM_ID: FEAT-017-context-projection-inject-a-childs-conte
 #+BLOCKED_BY: FEAT-011
+#+COMPLETION_HASH: 63cba412f4767bd3
 
 * Initial Message
 
@@ -148,3 +149,5 @@ read many ways) applied to the spawn-context seam.
 - files_read excludes files only edited (not read) and vice versa.
 - the SAME source fold feeds both a pull (data/*) and a push (def-env) in a test,
   proving the shared layer.
+
+NOTE [2026-06-27]: DONE [2026-06-27] via PLAN-019 M7 (commit d829649f) — PULL lens + source folds. Mesh.ContextLens.build_context projects region findings/goals/verdicts at seq<=W and joins each finding to its author's hist reasoning (WHAT+WHY), scope :where predicate, sibling derivation, string-keyed bag (materialize boundary). Source-fold layer (findings/edited_files/files_read/tool_history) shared pull/push. black/context verb. 8 tests (watermark boundary, the join with/without hist, determinism at equal W, scope predicate). Deferred: push-at-spawn data/* injection + the full cross-lineage source layer (memory fold-of-sources sharing) — FUP-023.

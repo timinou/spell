@@ -1,9 +1,10 @@
 #+TITLE: Decisions as stigmergy — :decision/:resolution records + the human's reactive mesh dashboard
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 151269c91db37358
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T23-09-03-478Z_151269c91db37358.jsonl]]
 #+CUSTOM_ID: FEAT-019-decisions-as-stigmergy-decision-resoluti
 #+BLOCKED_BY: FEAT-013
+#+COMPLETION_HASH: 864e062194f9ac7f
 
 * Initial Message
 
@@ -107,3 +108,5 @@ LayoutRegistry/Reaction DSL (built). Independent of FEAT-011/012.
 No human-in-the-loop framework. The human is one more reader/writer of the append-only
 medium; the dashboard is the mesh's own screens turned toward a person. A decision is a
 finding that asks; a resolution is a finding that answers; a watch carries the rest.
+
+NOTE [2026-06-27]: DONE [2026-06-27] via PLAN-019 M6 (commit d72c1e66) — SUBSTRATE. :decision/:resolution record kinds (append-only, not dedup); black/post accepts them; the decision->resolution->wake flow rides the EXISTING primitives (post + black/watch + the watcher firing) with no new control flow; gate via the :where over the answer; resolver symmetry (human/agent/policy). 5 tests. The human-facing DASHBOARD (cell black/query grant + reaction resolution-post binding + the panes) is FUP-024 (rides M4's TUI, FUP-025).

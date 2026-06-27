@@ -81,3 +81,5 @@ the gallery part can start as soon as the panes (FEAT-014) exist.
   (every scene is a valid render input — the gallery contract).
 - snapshot baselines exist + are deterministic (re-running --snapshot is a no-op diff).
 - --fold spec parsing (valid -> result, invalid -> usage error).
+
+NOTE [2026-06-27]: [2026-06-27] Deferred to FUP-025 (interactive mesh TUI). PLAN-019 M4 shipped the STDOUT inspector surface (mix spell.mesh: region index / --region board / --fold). The gallery (fixture scenes + --snapshot) and watch --tail (live telemetry stream) are interactive/TUI surfaces that need the PLAN-009 view/pane builder; tracked in FUP-025 alongside the FEAT-014 interactive panes. Kept ITEM (not done) — only the stdout half of the inspector cluster shipped.

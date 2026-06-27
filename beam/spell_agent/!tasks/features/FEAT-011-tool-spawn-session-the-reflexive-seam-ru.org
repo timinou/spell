@@ -1,9 +1,10 @@
 #+TITLE: tool/spawn-session — the reflexive seam (runtime calls itself, budget-bounded)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 151269c91db37358
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T23-09-03-478Z_151269c91db37358.jsonl]]
 #+CUSTOM_ID: FEAT-011-tool-spawn-session-the-reflexive-seam-ru
 #+BLOCKED_BY: FEAT-010
+#+COMPLETION_HASH: e52233536b6473b0
 
 * Initial Message
 
@@ -246,3 +247,5 @@ MissionHandle design). If a `self/*` namespace lands for A1, consider whether
 - Composes with: A2 `Clock` (PLAN-014, done) for the shared budget arg; A1
   SelfStore (FUP-015) for goal-scoped spawns; A4 executive (FUP-016) for
   autonomous spawning. Original mesh deps (FEAT-010/008) unchanged.
+
+NOTE [2026-06-27]: DONE [2026-06-27] via PLAN-019 M1 (commit 2753c11b). Await-free spawn-session + await-session shipped: %MissionHandle{} (string-keyed materialize), Mesh.Join (owner-independent join across turn processes), capability attenuation clamped transitively to the parent ceiling (D12, BUG-017), budget acquired-before-Task + released in the child's after (crash-safe), llm inheritance, watermark capture. 10 budget+spawn tests. Reviewer swarm (3 agents) findings all fixed (BUG-017). Single-node complete; recursion-depth cap holds via the shared budget. Multi-node deep-spawn survival is the DurableServer revisit (FUP-014), out of single-node scope.

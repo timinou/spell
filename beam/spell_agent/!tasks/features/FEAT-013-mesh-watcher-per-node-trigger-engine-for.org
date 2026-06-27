@@ -1,9 +1,10 @@
 #+TITLE: Mesh.Watcher — per-node trigger engine for black/watch (claim-deduped, fuel+ttl) + supervision
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 151269c91db37358
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T23-09-03-478Z_151269c91db37358.jsonl]]
 #+CUSTOM_ID: FEAT-013-mesh-watcher-per-node-trigger-engine-for
 #+BLOCKED_BY: FEAT-010
+#+COMPLETION_HASH: 69d397d5e9ed9683
 
 * Initial Message
 
@@ -128,3 +129,5 @@ Watch-firing exactly-once CANNOT rest on a session-plane claim alone across node
   (for the multi-node exactly-once path) ⟸ 012. Single-node 013 needs only 010.
 
 NOTE [2026-06-23]: Depends on / composes with A2 SpellAgent.Clock (PLAN-014). black/watch is the condition-fuse variant of clock/at: instead of firing on a wall-clock delay, it fires when a predicate over Mesh.Store writes (a post/claim) is satisfied. Reuse Clock's wake machinery — the Wake record, the wake-budget, the durable persist+rehydrate, and the synthetic-caller re-entry into SpellAgent.run/2. The Watcher's job is the per-node trigger/predicate eval on write; the actual "wake the mind" mechanism should be Clock's, not a second parallel scheduler. Build A2 first, then this is a fuse swap.
+
+NOTE [2026-06-27]: DONE [2026-06-27] via PLAN-019 M3 (commits 30802786 + 54325338). Built on the single-node condition-fuse (FEAT-021): fuel-bounded firing (cascade halts, PT-1), exactly-once via a CONTROL-KEY CAS ({:mesh_fire, region, key} via Store.incr — NOT a mesh record, so no telemetry feedback loop / query pollution, BUG-019), per-intention local dedup buckets + retired tombstone, fires? excludes :intention records. 6 watcher tests. Single-node exactly-once guaranteed; multi-node best-effort (Option B). The HARD multi-node node-plane micro-decide (Option A, reuses M2) is FUP-021.
