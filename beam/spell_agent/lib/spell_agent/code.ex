@@ -39,7 +39,7 @@ defmodule SpellAgent.Code do
   def parse_tool(args) when is_map(args) do
     with {:ok, src} <- require_string(args, "src"),
          {:ok, lang} <- require_string(args, "lang") do
-      case PiKernelNif.parse_code_decoded(src, lang) do
+      case safe_parse(src, lang) do
         {:ok, %{"error" => _} = err} -> err
         {:ok, tree} when is_map(tree) -> tree
         {:error, reason} -> %{"error" => to_string_reason(reason)}
@@ -50,15 +50,41 @@ defmodule SpellAgent.Code do
     end
   end
 
+  # Wrap the NIF call so a load failure (`:nif_not_loaded` raises an ErlangError)
+  # or any unexpected raise becomes a clean `{:error, _}` the tool turns into an
+  # `%{"error" => _}` map — the tool NEVER crashes the agent on a bad/missing NIF.
+  defp safe_parse(src, lang) do
+    PiKernelNif.parse_code_decoded(src, lang)
+  rescue
+    e -> {:error, "code-parse: NIF unavailable (#{Exception.message(e)})"}
+  end
+
+  defp safe_unparse(tree) do
+    PiKernelNif.unparse_code_decoded(tree)
+  rescue
+    e -> {:error, "code-unparse: NIF unavailable (#{Exception.message(e)})"}
+  end
+
   @doc """
   The native tool fn registered as `code-unparse`. Renders a `form_tree` `:tree`
   back to source, returning `%{"src" => "…"}` or an `%{"error" => _}` map.
+
+  ## Trust boundary (mirrors `sh/unparse`)
+
+  `code-unparse` output of an AGENT-CONSTRUCTED tree is UNTRUSTED SOURCE. A
+  `value`/`text` string renders VERBATIM, so a hand-built node like
+  `%{"node" => "token", "value" => "; rm -rf /"}` produces that text unchanged.
+  This is not itself an execution hole — `code-unparse` returns a STRING — but a
+  caller that WRITES the result to disk (W5 `code/edit`) or executes it MUST
+  treat it as untrusted: re-parse it (`code-parse`) and validate before commit.
+  Source produced by `code-parse` of REAL source is, by construction, valid; a
+  tree assembled by the agent is not.
   """
   @spec unparse_tool(map()) :: map()
   def unparse_tool(args) when is_map(args) do
     case Map.get(args, "tree") do
       tree when is_map(tree) ->
-        case PiKernelNif.unparse_code_decoded(tree) do
+        case safe_unparse(tree) do
           {:ok, src} when is_binary(src) -> %{"src" => src}
           {:error, reason} -> %{"error" => to_string_reason(reason)}
           other -> %{"error" => "code-unparse: unexpected result #{inspect(other)}"}

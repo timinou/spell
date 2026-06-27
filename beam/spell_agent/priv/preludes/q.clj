@@ -299,7 +299,24 @@
   the workhorse rewrite. NB: closure-based — NOT reifiable; for a recorded,
   composable edit (PLAN-018) use q/apply-ops with data {op pattern template}."
   [s p f]
-  (let [walk (fn walk [node]
+  ;; Apply f, then INVALIDATE the stale verbatim `text` cache on the result if
+  ;; it changed: a replacement that differs from the original node (in any field,
+  ;; including a leaf whose `value` changed) must NOT keep the old node's `text`,
+  ;; or code/unparse's text-fast-path would emit the OLD source and silently drop
+  ;; the edit. f may set a fresh `text` deliberately (e.g. a leaf rename that
+  ;; updates both value and text); only an UNCHANGED result keeps its text.
+  (let [apply-f (fn [hit node]
+                  (let [out (f hit node)]
+                    (if (tree-equal? out node)
+                      out
+                      ;; changed: drop stale text UNLESS f rewrote text itself to
+                      ;; something other than the original's.
+                      (if (and (map? out)
+                               (contains? out "text")
+                               (= (get out "text") (get node "text")))
+                        (dissoc out "text")
+                        out))))
+        walk (fn walk [node]
                (if (and (map? node) (contains? node "children"))
                  ;; rebuild children first (bottom-up)
                  (let [kids (get node "children")
@@ -313,10 +330,10 @@
                        node2 (cond-> (assoc node "children" kids2)
                                changed (dissoc "text"))
                        hit (match p node2)]
-                   (if (matched? hit) (f hit node2) node2))
+                   (if (matched? hit) (apply-f hit node2) node2))
                  ;; a leaf: just test/replace it
                  (let [hit (match p node)]
-                   (if (matched? hit) (f hit node) node))))]
+                   (if (matched? hit) (apply-f hit node) node))))]
     (walk s)))
 
 (defn wrap
@@ -360,19 +377,35 @@
   (reduce apply-op s ops))
 
 ;; ── projections (replace the #qualifiers) ────────────────────────────────────
-(defn body
-  "The body span of a def/fn/clause node: its last child (the value/body).
-  ≡ the #body qualifier (foo.ex::f#body)."
+(defn token?
+  "True if node is an anonymous-token leaf (punctuation/operator/keyword the
+  code/parse projector keeps for lossless unparse). Structural projections skip
+  these; they are presentation, not semantic children. Lisp-history and shell
+  form_trees never contain `token` nodes, so this is a no-op there."
+  [node]
+  (and (map? node) (= (get node "node") "token")))
+
+(defn structural-children
+  "A node's SEMANTIC children: its `children` with anonymous `token` leaves
+  removed. The basis of `body`/`sig` so a construct ending in `)`/`]`/`end`
+  doesn't report that delimiter as its body."
   [tree]
-  (let [kids (and (map? tree) (get tree "children"))]
-    (if (and kids (not (empty? kids))) (last kids) nil)))
+  (->> (and (map? tree) (get tree "children"))
+       (remove token?)))
+
+(defn body
+  "The body span of a def/fn/clause node: its last SEMANTIC child (the
+  value/body), skipping anonymous tokens. ≡ the #body qualifier (foo.ex::f#body)."
+  [tree]
+  (let [kids (structural-children tree)]
+    (if (empty? kids) nil (last kids))))
 
 (defn sig
-  "The signature span of a def/fn node: everything but the last child.
-  ≡ the #sig qualifier (foo.ex::f#sig)."
+  "The signature span of a def/fn node: every SEMANTIC child but the last,
+  skipping anonymous tokens. ≡ the #sig qualifier (foo.ex::f#sig)."
   [tree]
-  (let [kids (and (map? tree) (get tree "children"))]
-    (if (and kids (not (empty? kids))) (drop-last kids) [])))
+  (let [kids (structural-children tree)]
+    (if (empty? kids) [] (drop-last kids))))
 
 (defn node-name
   "The name field of a node (the #name projection)."

@@ -61,9 +61,16 @@ pub fn parse_to_form_tree(language: &tree_sitter::Language, src: &str) -> Result
 
 /// Project one tree-sitter node into a form_tree value.
 fn project_node(node: Node<'_>, src: &[u8], depth: usize) -> Value {
-	// Drift-resilient fallback: errors, missing nodes, and over-deep nodes
-	// become `raw` leaves carrying their exact source span.
-	if depth >= MAX_DEPTH || node.is_error() || node.is_missing() {
+	// Drift-resilient fallback. A MISSING (zero-width inserted) node and an
+	// over-deep node become `raw` leaves carrying their exact source span.
+	//
+	// An ERROR node is NOT collapsed wholesale: tree-sitter's error recovery
+	// often leaves a valid named subtree under an ERROR wrapper, and discarding
+	// it would make the whole span structurally opaque (it would degrade a
+	// PLAN-018 reduction / a q/* edit to the heuristic tier for no reason). So an
+	// ERROR node with children is projected like any internal node but tagged
+	// `"error": true`; only a CHILDLESS error (truly unwalkable) falls to `raw`.
+	if depth >= MAX_DEPTH || node.is_missing() || (node.is_error() && node.child_count() == 0) {
 		return raw_leaf(node, src);
 	}
 
@@ -97,8 +104,15 @@ fn project_node(node: Node<'_>, src: &[u8], depth: usize) -> Value {
 			if child.is_named() {
 				let field = child_cursor.field_name();
 				let mut projected = project_node(child, src, depth + 1);
-				if let (Some(name), Value::Object(map)) = (field, &mut projected) {
-					map.insert("name".into(), json!(name));
+				// Tag the child with the tree-sitter FIELD ROLE under `field` — NOT
+				// `name`. The `name` key is reserved across all three form_tree
+				// producers for a SEMANTIC name (a def's symbol in Lens, a command
+				// head in brush); a field role (`left`/`right`/`argument`) is a
+				// different concept, so it gets its own key. This keeps a
+				// surface-generic q/* pattern matching `name` consistent across
+				// source, shell, and history.
+				if let (Some(field), Value::Object(map)) = (field, &mut projected) {
+					map.insert("field".into(), json!(field));
 				}
 				children.push(projected);
 			} else {
@@ -115,6 +129,11 @@ fn project_node(node: Node<'_>, src: &[u8], depth: usize) -> Value {
 	map.insert("node".into(), json!(kind));
 	map.insert("text".into(), json!(text));
 	map.insert("children".into(), Value::Array(children));
+	// Mark a recovered ERROR subtree so a consumer can choose to treat it as
+	// algebra-opaque (PLAN-018) while still walking its recovered children.
+	if node.is_error() {
+		map.insert("error".into(), json!(true));
+	}
 	Value::Object(map)
 }
 
@@ -135,7 +154,10 @@ fn node_text(node: Node<'_>, src: &[u8]) -> String {
 /// - an UNTOUCHED node still carries its `text` -> emit it VERBATIM
 ///   (byte-exact).
 /// - an EDITED node (children changed, `text` dropped by the editor) -> rejoin
-///   its children with single spaces; a formatter canonicalizes presentation.
+///   its children with CONTEXT-AWARE spacing (see `join_pieces`): tight
+///   punctuation (`(` `)` `[` `]` `{` `}` `,` `.` etc.) binds to its neighbor
+///   so `foo(x)` does not become `foo ( x )` (which re-parses differently). A
+///   formatter canonicalizes the rest.
 /// - a `raw` leaf -> its `value` verbatim.
 /// - a leaf with `value` but no `text` (hand-built) -> the `value`.
 pub fn unparse_form_tree(node: &Value) -> String {
@@ -149,18 +171,71 @@ pub fn unparse_form_tree(node: &Value) -> String {
 			if let Some(Value::String(value)) = map.get("value") {
 				return value.clone();
 			}
-			// An edited internal node -> rejoin projected children.
+			// An edited internal node -> rejoin projected children with grammar-
+			// aware spacing so delimiters stay adjacent to their operand.
 			if let Some(Value::Array(children)) = map.get("children") {
-				return children
-					.iter()
-					.map(unparse_form_tree)
-					.collect::<Vec<_>>()
-					.join(" ");
+				let pieces: Vec<String> = children.iter().map(unparse_form_tree).collect();
+				return join_pieces(&pieces);
 			}
 			String::new()
 		},
 		Value::String(s) => s.clone(),
 		_ => String::new(),
+	}
+}
+
+/// Join rendered child pieces with re-parse-safe spacing. A space is inserted
+/// between two pieces UNLESS the boundary is "tight": an opening bracket binds
+/// to what follows, a closing bracket / separator binds to what precedes, and a
+/// dot binds both sides (`Enum.map`, `a.b`). This keeps `foo(x)`, `a.b`,
+/// `[1,2]`, and `%{a: 1}` adjacent after an edit instead of `foo ( x )` etc.
+fn join_pieces(pieces: &[String]) -> String {
+	let mut out = String::new();
+	let mut prev: Option<&str> = None;
+	for piece in pieces {
+		if piece.is_empty() {
+			continue;
+		}
+		if let Some(prev) = prev {
+			if needs_space(prev, piece) {
+				out.push(' ');
+			}
+		}
+		out.push_str(piece);
+		prev = Some(piece);
+	}
+	out
+}
+
+/// Whether a space belongs between rendered pieces `left` and `right`.
+fn needs_space(left: &str, right: &str) -> bool {
+	let lc = left.chars().last();
+	let rc = right.chars().next();
+	match (lc, rc) {
+		(_, None) | (None, _) => false,
+		(Some(l), Some(r)) => {
+			// A dot binds both sides: `Enum.map`, `a.b`.
+			if l == '.' || r == '.' {
+				return false;
+			}
+			// An opening bracket binds to what follows: `foo(`, `[1`, `{a`.
+			if matches!(l, '(' | '[' | '{') {
+				return false;
+			}
+			// A closing bracket / separator binds to what precedes: `x)`, `1]`,
+			// `a,` `b;` `k:`.
+			if matches!(r, ')' | ']' | '}' | ',' | ';' | ':') {
+				return false;
+			}
+			// A call/access bracket binds TIGHT to the operand it follows:
+			// `foo(`, `a[`, `x)(` — no space when an identifier/closing-bracket is
+			// immediately followed by `(` or `[`. (A space there would re-parse
+			// differently in Elixir: `foo (y)` is a space-call, not `foo(y)`.)
+			if matches!(r, '(' | '[') && (l.is_alphanumeric() || l == '_' || matches!(l, ')' | ']')) {
+				return false;
+			}
+			true
+		},
 	}
 }
 

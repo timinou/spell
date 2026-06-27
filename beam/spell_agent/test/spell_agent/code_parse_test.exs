@@ -57,6 +57,9 @@ defmodule SpellAgent.CodeParseTest do
       left = find_field(find_node(tree, "binary_operator"), "left")
       assert left["node"] == "identifier"
       assert left["value"] == "x"
+      # field role lives under `field`, NOT `name` (reserved for semantic names)
+      assert left["field"] == "left"
+      refute Map.has_key?(left, "name")
     end
 
     test "the tree is JSON-safe (no tuples, round-trips through Jason)" do
@@ -111,12 +114,15 @@ defmodule SpellAgent.CodeParseTest do
     test "a q/* rewrite of a leaf value re-renders through code/unparse", %{prelude: prelude} do
       tree = parse("x + 1")
 
-      # rename the identifier `x` -> `y` via q/update (data path), dropping stale
-      # ancestor `text` so unparse rejoins the edited region.
+      # rename the identifier `x` -> `y` via q/update, updating ONLY `value`.
+      # q/update must INVALIDATE the leaf's stale `text` cache itself (the edit
+      # changed the node), or code/unparse's text-fast-path would emit the old
+      # `x` and silently drop the change. This is the W4-review regression: a
+      # caller that forgets to also set `text` must still get a correct edit.
       program = ~S"""
       (q/update data/tree
                 {"node" "identifier" "value" "x"}
-                (fn [_b node] (assoc node "value" "y" "text" "y")))
+                (fn [_b node] (assoc node "value" "y")))
       """
 
       edited = q(prelude, program, %{"tree" => tree})
@@ -126,6 +132,23 @@ defmodule SpellAgent.CodeParseTest do
       assert back =~ "+"
       assert back =~ "1"
       refute back =~ "x"
+    end
+
+    test "token adjacency: editing inside a call keeps parens tight", %{prelude: prelude} do
+      tree = parse("foo(x)")
+
+      # rename x -> y inside the call; the rejoin must keep foo(y), NOT foo ( y )
+      program = ~S"""
+      (q/update data/tree
+                {"node" "identifier" "value" "x"}
+                (fn [_b node] (assoc node "value" "y")))
+      """
+
+      edited = q(prelude, program, %{"tree" => tree})
+      assert %{"src" => back} = unparse(edited)
+      # re-parse equality: the edited source must re-parse to the SAME structure.
+      reparsed = parse(back)
+      assert reparsed == parse("foo(y)")
     end
   end
 
@@ -170,7 +193,7 @@ defmodule SpellAgent.CodeParseTest do
   defp find_node(_, _), do: nil
 
   defp find_field(%{"children" => kids}, field) do
-    Enum.find(kids, fn c -> c["name"] == field end)
+    Enum.find(kids, fn c -> c["field"] == field end)
   end
 
   defp find_field(_, _), do: nil
