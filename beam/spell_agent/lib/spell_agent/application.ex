@@ -18,6 +18,14 @@ defmodule SpellAgent.Application do
   def start(_type, _args) do
     children = [
       SpellAgent.Config,
+      # The mesh's shared ParallelBudget holder (PLAN-019 M0). Bounds how many
+      # spawned child sessions (FEAT-011) + watch-fire workers (FEAT-013) are
+      # alive at once. Started right after Config because it reads the
+      # "mesh.budget" cell at boot, and BEFORE Mesh.Watcher (which acquires a
+      # slot to run a fired :do). Best-effort: a bad config value degrades to the
+      # default capacity, and an absent holder degrades spawn to :no_budget —
+      # boot never depends on it.
+      SpellAgent.Mesh.Budget,
       SpellAgent.OAuth,
       # Live-session tracker (PLAN-010): which conversations are RUNNING right now.
       # The Hist store only knows PAST sessions (recorded on mission exit); this

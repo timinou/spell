@@ -1,0 +1,52 @@
+#+TITLE: Mesh.Budget wrapper acquire/release not restart-safe; absent-holder path untested
+#+STATE: DONE
+#+SESSION_ID: 15195d97dff3d090
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-27T08-45-09-375Z_15195d97dff3d090.jsonl]]
+#+CUSTOM_ID: BUG-016-mesh-budget-wrapper-acquire-release-not
+
+* Initial Message
+
+what's pending in this folder's work?
+
+* Source
+M0 reviewer swarm (PLAN-019), agents 6-RevPosture + 7-RevConcurrency. Two P2
+findings against just-written lib/spell_agent/mesh/budget.ex + its test. Fixed
+mid-flight before M1 (FEAT-011 spawn-session) builds on the holder.
+
+* Finding 1 (RevPosture P2) — release loses the acquired budget identity
+try_acquire/0 returned only :ok; release/0 re-fetched whatever holder is
+registered AT RELEASE TIME. If the supervised Mesh.Budget restarts between a
+paired acquire and release, release/0 decrements a FRESH ParallelBudget counter:
+with nothing held it raises underflow (crashing a worker whose holder died — the
+exact best-effort violation the module claims to avoid), and with other work
+live it decrements the WRONG counter. The acquire/release pair must operate on
+the SAME atomics struct.
+
+** Fix
+- try_acquire/0 now returns {:ok, budget} | :full | :no_budget — handing back the
+  exact %ParallelBudget{} the slot was taken from.
+- release/1 takes that struct and releases THAT counter (correct across restart:
+  the old orphaned counter is decremented, the new holder's counter untouched).
+- release/1 is underflow-SAFE: it rescues ParallelBudget.release/1's underflow
+  RuntimeError and degrades to :ok, so a double-release or release-after-holder-
+  death on a crash path never bricks the surface (best-effort).
+- the footgun 0-arity release/0 is removed. The hot path (M1/M3) uses fetch/0 once
+  + ParallelBudget calls on the struct directly (zero round-trip); convenience
+  callers use {:ok, b} = try_acquire/0 ... release(b).
+
+* Finding 2 (RevConcurrency P2) — absent-holder degradation untested
+The rewrite that moved tests onto the live app-supervised singleton dropped the
+coverage for the holder being DOWN. PLAN-019 M0 requires fetch/0 -> :error,
+try_acquire/0 -> :no_budget, release/1 -> :ok when the holder is absent. A
+regression in fetch/0's catch :exit clause would pass every existing test and
+crash M1 spawn-session when the holder is down.
+
+** Fix
+Added a test that terminates the app-supervised Mesh.Budget child via
+Supervisor.terminate_child(SpellAgent.Supervisor, SpellAgent.Mesh.Budget),
+asserts the three wrappers degrade as documented, and restarts the child in
+on_exit so the singleton is restored for the rest of the suite.
+
+* Acceptance
+mix test test/spell_agent/mesh/budget_test.exs green (incl. the new absent-holder
+test); full mesh suite green; app still boots with the holder live.

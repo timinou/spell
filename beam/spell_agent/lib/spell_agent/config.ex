@@ -11,16 +11,23 @@ defmodule SpellAgent.Config do
     * `"model"`            — model id passed to the Anthropic adapter.
     * `"thinking"`         — thinking level hint (passed through to SubAgent).
     * `"system-addendum"`  — extra text appended to the system prompt.
+    * `"mesh.budget"`       — max parallel child sessions + watch-fire workers
+      alive at once (PLAN-019 M0; read once by `Mesh.Budget` at boot).
+    * `"mesh.lease_ms"`     — default claim-lease duration for `black/claim`.
+    * `"mesh.default_store"` — mesh store backend hint (`"memory"` | `"khepri"`).
   """
 
   use Agent
 
-  @whitelist ~w(model thinking system-addendum)
+  @whitelist ~w(model thinking system-addendum mesh.budget mesh.lease_ms mesh.default_store)
 
   @defaults %{
     "model" => "claude-sonnet-4-5-20250929",
     "thinking" => nil,
-    "system-addendum" => nil
+    "system-addendum" => nil,
+    "mesh.budget" => 8,
+    "mesh.lease_ms" => 30_000,
+    "mesh.default_store" => "memory"
   }
 
   @spec start_link(keyword()) :: Agent.on_start()
