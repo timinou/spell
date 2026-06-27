@@ -63,7 +63,18 @@ defmodule SpellAgent.Session do
     # Best-effort, same posture as recording (SEAM 1): a sick/oversized store must
     # DEGRADE to a cold start, never crash the mission. History is an enhancement,
     # never a dependency of answering.
-    %{tape: tape, memory: memory} = load_continuation(session_id, hist_store)
+    %{tape: tape, memory: base_memory} = load_continuation(session_id, hist_store)
+
+    # S-E (FEAT-018): an optional :inherit_memory map SEEDS the child's def-env
+    # (named bindings) WITHOUT inheriting the tape. Memory is pure data, not in
+    # the prompt prefix, so threading it is cache-neutral — a spawned child can
+    # reuse a binding the parent computed (e.g. (def callers …)) without
+    # re-deriving it. seed wins on conflict; absent -> the cold-start default.
+    memory =
+      case opts[:inherit_memory] do
+        seed when is_map(seed) -> Map.merge(base_memory, seed)
+        _ -> base_memory
+      end
 
     agent =
       PtcRunner.SubAgent.new(
@@ -175,27 +186,35 @@ defmodule SpellAgent.Session do
     allowed = if is_nil(opts[:tools]), do: :all, else: Map.keys(base)
     attenuated? = not is_nil(opts[:tools])
 
-    base
-    # SEAM 5: the hist/* verbs (interrogate own past mid-conversation).
-    |> Map.merge(Hist.verbs(session_id, store: hist_store))
-    # PROJ-006: the black/* verbs when coordinating in a region (else %{}).
-    |> Map.merge(Mesh.verbs(session_id, region: opts[:region], store: hist_store))
-    # A2 (PLAN-014): the clock/* self-wake verbs (default-run in THIS session).
-    # OMITTED for an attenuated child: a clock wake re-enters run/2 with no :tools
-    # ceiling and would restore the full base surface (escape). The root keeps
-    # clock. Threading the ceiling through wakes is FUP-019.
-    |> merge_unless(attenuated?, fn -> SpellAgent.Clock.Namespace.tools(session_id) end)
-    # FEAT-011 (M1): the reflexive seam — spawn-session + await-session. The
-    # parent's resolved llm is inherited by children; :allowed is the capability
-    # ceiling a child's :tools is clamped to.
-    |> Map.merge(
-      SpellAgent.Mesh.Spawn.verbs(session_id,
-        llm: llm,
-        store: hist_store,
-        max_turns: max_turns,
-        allowed: allowed
+    assembled =
+      base
+      # SEAM 5: the hist/* verbs (interrogate own past mid-conversation).
+      |> Map.merge(Hist.verbs(session_id, store: hist_store))
+      # PROJ-006: the black/* verbs when coordinating in a region (else %{}).
+      |> Map.merge(Mesh.verbs(session_id, region: opts[:region], store: hist_store))
+      # A2 (PLAN-014): the clock/* self-wake verbs (default-run in THIS session).
+      # OMITTED for an attenuated child: a clock wake re-enters run/2 with no :tools
+      # ceiling and would restore the full base surface (escape). The root keeps
+      # clock. Threading the ceiling through wakes is FUP-019.
+      |> merge_unless(attenuated?, fn -> SpellAgent.Clock.Namespace.tools(session_id) end)
+      # FEAT-011 (M1): the reflexive seam — spawn-session + await-session. The
+      # parent's resolved llm is inherited by children; :allowed is the capability
+      # ceiling a child's :tools is clamped to.
+      |> Map.merge(
+        SpellAgent.Mesh.Spawn.verbs(session_id,
+          llm: llm,
+          store: hist_store,
+          max_turns: max_turns,
+          allowed: allowed
+        )
       )
-    )
+
+    # FEAT-018 (M5): the mesh/* ergonomic combinators (ask/scatter/gather/mesh-map),
+    # shipped as .ptc source. Their bodies call tool/spawn-session etc., so they run
+    # with the ASSEMBLED tool map above (which holds the live spawn verbs). The
+    # tools_fun closes over `assembled` — the combinators are pure Lisp sugar over
+    # the primitives, never a parallel impl.
+    Map.merge(assembled, SpellAgent.Mesh.Combinators.verbs(fn -> assembled end))
   end
 
   # opts[:tools] absent (nil) -> the full base surface; a list of names -> only

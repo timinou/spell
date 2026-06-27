@@ -146,6 +146,9 @@ defmodule SpellAgent.Mesh.Spawn do
       # :all -> no :tools key (full base surface); a list -> attenuate to it.
       |> put_tools(child_tools)
       |> maybe_put(:llm, opts[:llm])
+      # S-E (FEAT-018): thread a precomputed binding slice into the child's def-env
+      # (cache-neutral; the child reuses it without re-deriving). Only a map crosses.
+      |> maybe_put(:inherit_memory, inherit_memory(args))
 
     # The child task itself releases the budget slot on exit (normal OR crash) via
     # its own `after` — so the slot is freed even if Mesh.Join restarts mid-child
@@ -298,6 +301,16 @@ defmodule SpellAgent.Mesh.Spawn do
     case get(args, ["prompt"]) do
       s when is_binary(s) and s != "" -> s
       other -> raise ArgumentError, "spawn-session requires a non-empty :prompt, got #{inspect(other)}"
+    end
+  end
+
+  # The :inherit-memory arg (a map of named bindings to seed the child's def-env).
+  # Only a map is threaded; anything else -> nil (no seed). Accepts the kebab arg
+  # name a PTC program writes (:inherit-memory) and the snake variant.
+  defp inherit_memory(args) do
+    case get(args, ["inherit-memory"]) || get(args, ["inherit_memory"]) do
+      m when is_map(m) -> m
+      _ -> nil
     end
   end
 

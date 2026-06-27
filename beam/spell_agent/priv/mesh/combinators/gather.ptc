@@ -1,0 +1,12 @@
+;; gather (FEAT-018 S-B) — fan-in: await each handle, collect results.
+;;
+;; The join half of the fan-out. Takes the handle list `scatter` returned and
+;; awaits each (await-session), collecting the results in order. A crashed child
+;; yields its {"err" ...} map in place rather than aborting the gather (errors are
+;; data — the caller folds over them).
+;;
+;; Args (data/*):
+;;   handles — the list of mission handles from scatter (required).
+;;
+;; Returns [result ...] — one awaited result per handle, in order.
+(map (fn [h] (tool/await-session {:handle h})) data/handles)

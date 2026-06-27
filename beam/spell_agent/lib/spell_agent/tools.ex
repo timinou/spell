@@ -135,7 +135,7 @@ defmodule SpellAgent.Tools do
             "injection-safe). e.g. (tool/sh-unparse {:tree t}) -> %{bash}.",
         "kind" => "native"
       }
-    ] ++ SpellAgent.Mesh.Spawn.inventory()
+    ] ++ SpellAgent.Mesh.Spawn.inventory() ++ SpellAgent.Mesh.Combinators.inventory()
 
     defined =
       ToolRegistry.all()

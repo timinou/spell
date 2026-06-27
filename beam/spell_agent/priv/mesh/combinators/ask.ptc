@@ -1,0 +1,20 @@
+;; ask (FEAT-018 S-A) — the strict synchronous mission function.
+;;
+;; The 90% LLM call: spawn a child toward `prompt`, await it, return its result
+;; DATA. The gather-of-one case over the await-free primitives (spawn-session +
+;; await-session). Authority is GRANTED, not inferred (doc-14 Decision 5): pass
+;; :tools to attenuate the child, :region to join one, :inherit-memory to seed it.
+;;
+;; Args (data/*):
+;;   prompt          — the child's mission prompt (required).
+;;   tools           — optional capability subset (clamped to this session's ceiling).
+;;   region          — optional region to join (else a fresh Fork-A region).
+;;   inherit-memory  — optional def-env slice to seed the child.
+;;
+;; Returns the child's result value (await-session unwraps {:ok v} -> v), or an
+;; {"err" ...} map if the child failed.
+(let [h (tool/spawn-session {:prompt data/prompt
+                             :tools data/tools
+                             :region data/region
+                             :inherit-memory data/inherit-memory})]
+  (tool/await-session {:handle h}))

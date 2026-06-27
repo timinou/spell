@@ -1,0 +1,28 @@
+;; scatter (FEAT-018 S-B) — fan-out: spawn one await-free child per item.
+;;
+;; `spawn-session` lifted over a collection. Each item's child gets a prompt built
+;; by concatenating the shared `prompt` prefix with the item (so the shared prefix
+;; is identical across the burst — cache-friendly, the "smart passing"). Returns
+;; the list of mission handles; the caller awaits them with `gather`.
+;;
+;; All children join the SAME region (a fresh Fork-A region when :region is absent
+;; would isolate each child — so scatter REQUIRES a shared :region to fan into,
+;; defaulting children to coordinate on one blackboard). The cohort posts findings
+;; there; the parent folds them.
+;;
+;; Args (data/*):
+;;   items           — the collection to fan out over (required, a list).
+;;   prompt          — the shared prompt prefix; each child gets (str prompt item).
+;;   region          — the shared region all children coordinate in (required for
+;;                     a meaningful fan-out+fold; absent -> each child isolated).
+;;   tools           — optional capability subset for every child.
+;;   inherit-memory  — optional def-env slice seeded into every child (uniform ->
+;;                     cache-neutral).
+;;
+;; Returns [handle ...] — one mission handle per item, in order.
+(map (fn [item]
+       (tool/spawn-session {:prompt (str data/prompt item)
+                            :region data/region
+                            :tools data/tools
+                            :inherit-memory data/inherit-memory}))
+     data/items)

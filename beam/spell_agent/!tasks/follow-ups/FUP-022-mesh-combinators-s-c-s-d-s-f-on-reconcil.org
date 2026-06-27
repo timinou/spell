@@ -1,0 +1,58 @@
+#+TITLE: Mesh combinators S-C/S-D/S-F: on/reconcile/mesh-view, narrowing, spawn-site introspection
+#+STATE: ITEM
+#+SESSION_ID: 15195d97dff3d090
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-27T08-45-09-375Z_15195d97dff3d090.jsonl]]
+#+CUSTOM_ID: FUP-022-mesh-combinators-s-c-s-d-s-f-on-reconcil
+
+* Initial Message
+
+what's pending in this folder's work?
+
+* Source
+Deferred from M5 (PLAN-019, FEAT-018). M5 shipped the boundary-correct core:
+S-A (ask) + S-B (scatter/gather/mesh-map) as .ptc SOURCE, and S-E (inherit_memory
+flat slice). The richer sub-items remain.
+
+* Shipped (M5)
+- priv/mesh/combinators/{ask,scatter,gather,mesh-map}.ptc \u2014 pure Lisp over the
+  FEAT-011 spawn primitives, agent-forkable (the hist/lenses precedent).
+- Mesh.Combinators: @external_resource load + verbs/1 (session-merged closures
+  running each .ptc through the one sandbox with the assembled session tools).
+  filter_context: false (so hyphenated args like data/inherit-memory inject),
+  600s timeout (combinators block on child missions).
+- mesh/* in list-tools inventory.
+- S-E flat: Session.run opts[:inherit_memory] merges a binding slice into the
+  child def-env (cache-neutral, seed wins); spawn-session threads :inherit-memory.
+- 4 combinator tests + the inherit-memory def-env test.
+
+* Deferred sub-items
+** S-C: on / reconcile / mesh-view  [doc 11]
+- on = black/watch sugar (a quoted :do); reconcile = rendezvous + decide;
+  mesh-view = a tmpl:: over black/query. Needs the prompt:: / quote freeze
+  (PLAN-012 reader machinery) for the :do form. Ships as .ptc once prompt:: lands.
+** S-D: narrowing \u2014 Narrow.signature_at(form, path)  [doc 10, 13]
+- derive a spawned child's output SHAPE from its call site (Tui.Reflect for
+  view/table :rows, tool param specs, declared sigs). HONEST CEILING: shape
+  (container/keys/arity), rarely leaf types; load-bearing leaf types need explicit
+  :returns. This is the ONE part that needs an Elixir PRIMITIVE (the sandbox
+  cannot introspect a call site's enclosing form) \u2014 stays compiled.
+** S-F: spawn-site introspection (absorbed cancelled FEAT-016)
+- spawn_profile(call_site, prompt_holes, handle) -> {model, budget, tools, cache,
+  returns}. Caching is PROVIDER-INCIDENTAL (one output, not a primitive), a readout
+  of the immutable projection at the handle watermark. Reuse PLAN-012 hole-dep
+  analysis. Needs S-D (returns) + the watermark (shipped, FEAT-011).
+** S-A prompt:: reader form
+- the freeze (quoted holes as data) for a watch :do / deferred view / posted-prompt
+  finding. A ptc_runner reader macro (vendored), sibling of tmpl:: (PLAN-012). The
+  ask FUNCTION shipped; the prompt:: FREEZE is deferred.
+
+* S-E fold-of-sources (the richer memory channel)
+The flat select-keys slice shipped. The FOLD-of-sources surface (:memory <fold>
+over edited-files / files-read / raw-conversation / findings) is promoted to ride
+FEAT-017's source-projection layer (M7) \u2014 see the FEAT-018 S-E REFRAME. Build the
+source folds once in M7, let both the context lens (pull) and memory-fold (push)
+consume them.
+
+* Dependencies
+S-C needs prompt:: (PLAN-012 reader) + decide/watch (M2/M3, shipped). S-D/S-F are
+independent compiled primitives. The memory fold rides M7 (FEAT-017).
