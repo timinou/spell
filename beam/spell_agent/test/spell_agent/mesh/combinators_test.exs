@@ -117,6 +117,34 @@ defmodule SpellAgent.Mesh.CombinatorsTest do
     end
   end
 
+  describe "BUG-020 capacity-safe fan-out" do
+    test "gather passes a settled err marker through and awaits real handles" do
+      # The parent scatters 2 children (both spawn fine), then prepends a synthetic
+      # err marker to the handle list and gathers. The err marker passes through
+      # unchanged; the real handles are awaited. Proves gather tolerates the
+      # per-item error markers scatter emits when a spawn hits capacity (so a
+      # partial fan-out never loses the children that did spawn).
+      child = ~s|(return "ok")|
+
+      parent =
+        ~s|(let [hs (tool/mesh/scatter {:items ["a" "b"] :prompt "FW item " :region "cap-region"}) mixed (cons {"err" "capacity"} hs)] (return (tool/mesh/gather {:handles mixed})))|
+
+      llm =
+        dispatch_llm([
+          {"PARENT cap", fn -> lisp_eval(parent) end},
+          {"FW item", fn -> lisp_eval(child) end}
+        ])
+
+      assert {:ok, results} = Session.run("PARENT cap", llm: llm, max_turns: 8, hist: Memory)
+      assert is_list(results)
+      assert length(results) == 3
+      # The first entry is the err marker, passed through unchanged.
+      assert %{"err" => "capacity"} = hd(results)
+      # The other two are awaited child results.
+      assert Enum.count(results, fn r -> match?(%{"ok" => true}, r) end) == 2
+    end
+  end
+
   describe "S-E inherit_memory" do
     test "a child spawned with :inherit-memory can reference the seeded binding" do
       # The child reads a binding it never defined — proving the seed reached its

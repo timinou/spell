@@ -5,6 +5,12 @@
 ;; collection of missions. Composes the two primitives directly (no new mechanism)
 ;; so it stays the same await-free shape FEAT-011 ships.
 ;;
+;; Capacity-safe (BUG-020): the spawn step is `psettled`, so an item whose spawn
+;; hits parallel_capacity_exceeded settles as {"err" reason} in place rather than
+;; aborting the whole fan-out and orphaning the children that already spawned. The
+;; await step skips the err markers and passes them through, so the result list is
+;; one entry per item (results + per-item error markers), never a lost child.
+;;
 ;; Args (data/*):
 ;;   items           — the collection to map missions over (required).
 ;;   prompt          — shared prompt prefix; each child gets (str prompt item).
@@ -12,11 +18,17 @@
 ;;   tools           — optional capability subset for every child.
 ;;   inherit-memory  — optional uniform def-env slice for every child.
 ;;
-;; Returns [result ...] — the awaited result of each item's child, in order.
-(let [handles (map (fn [item]
-                     (tool/spawn-session {:prompt (str data/prompt item)
-                                          :region data/region
-                                          :tools data/tools
-                                          :inherit-memory data/inherit-memory}))
-                   data/items)]
-  (map (fn [h] (tool/await-session {:handle h})) handles))
+;; Returns [result | {"err" ...} ...] — the awaited result of each item's child,
+;; in order, with a settled error marker for any item that could not spawn.
+(let [entries (map (fn [settled] (unwrap-or settled settled))
+                   (psettled (fn [item]
+                               (tool/spawn-session {:prompt (str data/prompt item)
+                                                    :region data/region
+                                                    :tools data/tools
+                                                    :inherit-memory data/inherit-memory}))
+                             data/items))]
+  (map (fn [entry]
+         (if (err? entry)
+           entry
+           (tool/await-session {:handle entry})))
+       entries))

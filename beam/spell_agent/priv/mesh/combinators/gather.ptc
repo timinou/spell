@@ -1,12 +1,18 @@
 ;; gather (FEAT-018 S-B) — fan-in: await each handle, collect results.
 ;;
-;; The join half of the fan-out. Takes the handle list `scatter` returned and
-;; awaits each (await-session), collecting the results in order. A crashed child
-;; yields its {"err" ...} map in place rather than aborting the gather (errors are
-;; data — the caller folds over them).
+;; The join half of the fan-out. Takes the entry list `scatter` returned and, for
+;; each entry, awaits it if it is a live mission handle, or passes a settled
+;; {"err" reason} marker through unchanged (an item whose spawn failed never
+;; spawned a child to await). A crashed child yields its own {"err" ...} map from
+;; await-session. So gather returns one result per entry, errors and all — the
+;; caller folds over them (errors are data).
 ;;
 ;; Args (data/*):
-;;   handles — the list of mission handles from scatter (required).
+;;   handles — the entry list from scatter (handles and/or {"err" ...} markers).
 ;;
-;; Returns [result ...] — one awaited result per handle, in order.
-(map (fn [h] (tool/await-session {:handle h})) data/handles)
+;; Returns [result | {"err" ...} ...] — one entry per input, in order.
+(map (fn [entry]
+       (if (err? entry)
+         entry
+         (tool/await-session {:handle entry})))
+     data/handles)

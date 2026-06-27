@@ -1,0 +1,40 @@
+#+TITLE: scatter/mesh-map abort whole fan-out on capacity-exceeded, orphaning spawned children
+#+STATE: DONE
+#+SESSION_ID: 15195d97dff3d090
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-27T08-45-09-375Z_15195d97dff3d090.jsonl]]
+#+CUSTOM_ID: BUG-020-scatter-mesh-map-abort-whole-fan-out-on
+
+* Initial Message
+
+what's pending in this folder's work?
+
+* Source
+M5 light reviewer (agent 15-RevM5, P2). Fixed mid-flight.
+
+* Finding
+scatter/mesh-map spawn children inside PTC's EAGER map. spawn-session RAISES
+parallel_capacity_exceeded when the shared mesh budget is full (default 8). For a
+fan-out with more items than free slots, the first children are already detached
+and running, but the Nth spawn raises -> the whole combinator aborts ->
+Combinators.run collapses it to a single {"err"} -> the already-spawned children
+are ORPHANED (running, but the caller lost their handles and can never await /
+fold them).
+
+* Fix
+Use psettled (the settled fan-out builtin) for the spawn step so a per-item spawn
+failure SETTLES as {"err" reason} in place rather than aborting the batch. The
+handles of children that DID spawn are preserved; the caller sees a list mixing
+handles and per-item error markers, and gather/await skips the errors (errors as
+data). This matches the FEAT-011 spec's stated intent ("the Nth spawn fails fast;
+the parent's fold simply sees fewer findings").
+- scatter.ptc: (psettled (fn [item] (tool/spawn-session ...)) items) -> a list of
+  settled results; unwrap ok -> handle, keep err markers.
+- mesh-map.ptc: psettled the spawn, then await only the ok handles.
+- gather already tolerates err entries (await-session on an err marker returns an
+  err map; map over them is fine).
+
+* Acceptance
+A fan-out of N > capacity items returns partial results (the spawned children's
+results) + per-item error markers for the ones that couldn't spawn; no orphaned
+child is unawaitable from the caller's perspective (the spawned ones are in the
+handle list). mesh tests green incl. a new over-capacity fan-out test.
