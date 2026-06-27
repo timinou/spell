@@ -1,0 +1,53 @@
+#+TITLE: Interactive mesh TUI inspector: Regions/Board/Spawn panes + spell.mesh.gallery/.watch
+#+STATE: ITEM
+#+SESSION_ID: 15195d97dff3d090
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-27T08-45-09-375Z_15195d97dff3d090.jsonl]]
+#+CUSTOM_ID: FUP-025-interactive-mesh-tui-inspector-regions-b
+
+* Initial Message
+
+what's pending in this folder's work?
+
+* Source
+Deferred from M4 (PLAN-019, FEAT-014/015). M4 shipped the queryable STDOUT surface
+(the data half); the INTERACTIVE TUI inspector + the gallery/watch tasks remain.
+
+* Shipped (M4)
+- Mesh.Store.regions/1: the region index (every region + per-kind counts).
+- Mesh.MeshView: pure text formatters (regions_text / board_text / fold_text) \u2014
+  the shared rendering both the CLI and a future TUI pane consume.
+- mix spell.mesh: stdout modes \u2014 default (region index), --region ID (one board),
+  --fold REGION:KIND:REDUCE (count|group-by:FIELD|rank:FIELD via the black/fold
+  verb, never a parallel impl). Robust REGION:KIND:REDUCE[:FIELD] parsing.
+- 9 tests (regions index, the three formatters, count/group-by folds, parse error).
+
+* Deferred (the interactive TUI \u2014 FEAT-014/015 panes)
+** FEAT-014: mix spell.mesh INTERACTIVE inspector (three panes)
+- a TUI app (mirror SessionBrowser / spell.tui) with:
+  - Regions pane: the region index, j/k navigable, drill into a region.
+  - Board pane: the selected region's records by kind (goal/finding/claim/verdict/
+    decision/resolution), live off-frame via a reactive cell (black/query).
+  - Spawn pane: the spawn-tree (SpanTree indentation) + the region's :intention
+    watches.
+- needs a view/pane builder (thin tagger) in tui/view.ex + pane_module/1 clauses
+  in tui/default_layout.ex for regions/board/spawn (the PLAN-009 render-mirror
+  territory the stdout core deliberately avoided).
+** FEAT-015: mix spell.mesh.gallery + spell.mesh.watch
+- spell.mesh.gallery: clone tui/scenes.ex with FIXED seq/t mesh fixtures
+  (deterministic), an interactive + --snapshot mode (writes test/snapshots
+  baselines; re-run = no-op diff = the determinism CI gate).
+- spell.mesh.watch: a --tail mode streaming [:spell,:mesh,:post] telemetry live;
+  --list/--fold already covered by spell.mesh.
+** The decisions dashboard (FUP-024) rides this
+- the decisions/findings/spawn-tree/cohort panes (FEAT-019) are this inspector's
+  panes fed by mesh cells; the cell black/query grant (FUP-024) lands here.
+
+* Acceptance (when built)
+- the three panes render a live region's forest; navigation works (j/k/l/h/tab).
+- spell.mesh.gallery --snapshot produces deterministic baselines (re-run no-op).
+- spell.mesh.watch --tail streams posts live.
+- the decisions dashboard (FUP-024) shows open decisions + a resolve reaction.
+
+* Dependencies
+Rides PLAN-009 view/pane builder + the reactive cell mesh grant (FUP-024). The
+stdout core (M4, shipped) is independently usable; the TUI is the human surface.

@@ -64,6 +64,25 @@ defmodule SpellAgent.Mesh.Store do
     |> Enum.sort_by(& &1.seq)
   end
 
+  @doc """
+  Every region id that holds at least one record, with a small summary per region
+  (record count + per-kind counts). The inspector's top-level index (FEAT-014).
+  """
+  @spec regions(module()) :: [%{region: String.t(), count: non_neg_integer(), kinds: map()}]
+  def regions(impl) do
+    impl
+    |> Store.list(:mesh, nil)
+    |> Enum.group_by(& &1.region)
+    |> Enum.map(fn {region, recs} ->
+      %{
+        region: region,
+        count: length(recs),
+        kinds: recs |> Enum.frequencies_by(& &1.kind)
+      }
+    end)
+    |> Enum.sort_by(& &1.region)
+  end
+
   @doc "Records of one kind in a region, ascending `seq`."
   @spec by_kind(module(), String.t(), Record.kind()) :: [Record.t()]
   def by_kind(impl, region, kind) do
