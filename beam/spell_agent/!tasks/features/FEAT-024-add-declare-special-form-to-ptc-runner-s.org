@@ -1,0 +1,117 @@
+#+TITLE: Add `declare` special form to ptc_runner — seed forward-ref names into the undefined-var gate
+#+STATE: ITEM
+#+SESSION_ID: 15164b2a4dd1a55b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-24T23-29-11-991Z_15164b2a4dd1a55b.jsonl]]
+#+CUSTOM_ID: FEAT-024-add-declare-special-form-to-ptc-runner-s
+
+* Initial Message
+
+how would you mkae this spell_agent work well with the edit tool? with an interface that just *makes sense* for this? e.g. if CodePath were lispy, how would edit be done?
+
+* Goal
+
+Add a Clojure-style =(declare a b …)= special form to the vendored ptc_runner
+fork (=beam/ptc_runner=) so mutually-recursive top-level =defn= s pass the
+pre-execution undefined-var gate. Enables readable hand-written mutual recursion
+(=expr ↔ clause ↔ expr=) for =code/unparse= and other =form_tree= walkers in
+PLAN-020.
+
+* Why — the capability already exists; only a static gate forbids it
+
+Verified by reading the fork's evaluator (2026-06-24):
+
+- RUNTIME is ALREADY late-binding. A closure body resolves a free name (a sibling
+  =defn=) against the LIVE =eval_context.user_ns= at call-time, not a snapshot at
+  =def= time (=lib/ptc_runner/lisp/eval/apply.ex= ~L794-797; var resolution order
+  in =eval.ex do_eval({:var,…})= → =resolve_user_ns=). So mutual recursion THROUGH
+  FUNCTION BODIES already works at runtime — by the time =even?= is called, both
+  =even?= and =odd?= are in =user_ns=.
+
+- The SOLE blocker is the static pre-execution gate
+  =SpellAgent/…/lisp.ex check_undefined_vars= → =collect_undefined_vars/2=. Its
+  ={:do, exprs}= clause threads =def= names LEFT-TO-RIGHT (a name enters scope only
+  for SUBSEQUENT exprs, via =extract_def_names= after each):
+
+  #+begin_src elixir
+  defp collect_undefined_vars({:do, exprs}, scope) do
+    Enum.reduce(exprs, {[], scope}, fn expr, {errs, sc} ->
+      new_errs = collect_undefined_vars(expr, sc)
+      new_sc   = Enum.reduce(extract_def_names(expr), sc, &MapSet.put(&2, &1))
+      {errs ++ new_errs, new_sc}
+    end)
+  end
+  #+end_src
+
+  ∴ =od?= referencing =ev?= (defined later) fails the gate even though the runtime
+  would resolve it fine. The gate's PURPOSE is to reject unbound vars before any
+  side-effecting tool runs (0 effects on a typo) — so we must NOT weaken it
+  globally; we seed specific names the author vouches for.
+
+* Why declare, not a whole-block hoist (the rejected alternative)
+
+A tempting "zero new syntax" fix is to pre-scan a =do= block for ALL =def= names
+before checking. REJECTED: PTC's =def= is late-bound through fn BODIES but EAGER in
+VALUE position. A hoist would also admit a genuinely-broken eager forward ref —
+=(def x (+ y 1))= with =y= defined later — which fails at runtime, defeating the
+gate's whole "no partial execution on a bad program" guarantee. =declare= punts
+exactly the unsafe case to an explicit human/author promise; the hoist masks it.
+
+* Scope — 3 small touch-points (~15-20 LOC), no runtime semantics change
+
+1. =lib/ptc_runner/lisp/analyze.ex= — recognize =(declare a b …)= → a CoreAST node
+   ={:declare, names}=. Names must be plain symbols; reject non-symbol args with a
+   clear analyze error.
+2. =lib/ptc_runner/lisp.ex= — =collect_undefined_vars/2=: add a ={:declare, names}=
+   clause returning =[]=; and in =extract_def_names/1= (or the ={:do,…}= fold) seed
+   declared names into scope UP-FRONT so later-and-earlier refs both resolve.
+3. =lib/ptc_runner/lisp/eval/eval.ex= — =do_eval({:declare, _}, ctx)= →
+   ={:ok, nil, ctx}=. Pure no-op; the runtime never needed it (it is already
+   late-binding). =declare= returns nil like Clojure.
+
+* Edge cases / invariants
+
+  - DECLARE-THEN-NEVER-DEFINE: =(declare foo)= with no later =(def foo …)= and a
+    reference to =foo= — the static gate now passes, but RUNTIME raises unbound at
+    the actual reference. ACCEPTABLE and Clojure-faithful: declare is a promise; a
+    broken promise fails at use, not at gate. Document it.
+  - VALUE-POSITION still eager: =(declare y)(def x (+ y 1))(def y 2)= — gate passes
+    (y declared) but runtime fails (y not yet bound when x evaluates). This is
+    CORRECT: declare only asserts resolvability, not initialization order. The only
+    safe forward use is from inside a fn body (deferred to call-time).
+  - REDECLARE / declare an already-bound name: no-op, no error (idempotent).
+  - SHADOWING: a declared name later shadowed by a =let=/=fn= param resolves
+    lexically as usual; declare only affects top-level gate scope.
+  - SYMBOL LIMIT: declared names count toward the unique-symbol budget like any
+    other (no special exemption).
+
+* Acceptance (observable)
+
+  - =(declare od? ev?) (defn ev? [n] (if (= n 0) true (od? (- n 1)))) (defn od? [n]
+    (if (= n 0) false (ev? (- n 1)))) (ev? 10)= → =true= (today: gate error
+    "Undefined variable: od?").
+  - =(declare foo) (+ 1 1)= → =2= and =declare= itself returns nil; no runtime cost.
+  - A reference to a declared-but-undefined name still raises unbound AT THE
+    REFERENCE (gate passes, runtime enforces).
+  - Existing undefined-var gate behavior unchanged for non-declared names (a typo
+    =map-vals= still fails preflight with the rich "Did you mean: update-vals" hint).
+  - =mix check= clean; ptc_runner test suite green; add a mutual-recursion test +
+    a declare-then-never-define test.
+
+* Out of scope
+
+  - =declare= with arglist metadata / =:arglists= (Clojure allows =(declare
+    (foo [x]))=) — names only here.
+  - Changing the runtime binding discipline (it already late-binds; nothing to do).
+  - Forward references in VALUE position working "magically" (they remain eager;
+    declare does not reorder evaluation).
+
+* Cross-link
+
+Enables PLAN-020-lispy-code-edit-form-tree-as-the-shared (lispy code/edit) W1 +
+edge-case #1: readable mutual recursion for
+=code/unparse= / =q/emit= grammar walkers (=expr ↔ clause ↔ expr=). PLAN-020 also
+documents the dispatch-table idiom (a ={kind → fn}= data map, the same shape as
+=tools.ex= =meta_tools=/=native_tools=) as the homoiconic, no-declare-needed
+alternative for walkers the agent forks at runtime. =declare= is for fixed library
+internals where plain-mutual-recursion readability wins; the table is for forkable
+data. Both are first-class; this FEAT supplies the former.

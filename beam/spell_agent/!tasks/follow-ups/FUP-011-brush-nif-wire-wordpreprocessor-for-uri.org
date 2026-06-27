@@ -127,3 +127,5 @@ BEAM skill system. If yes, find that state and build the resolver against it.
 - Rust precedent: crates/pi-natives/src/exec/scheme_preprocessor.rs.
 - BEAM target (to CREATE): a SpellAgent.InternalUrls resolver + the skills-state
   source it reads.
+
+NOTE [2026-06-27]: CROSS-LINK [2026-06-24]: PLAN-020-lispy-code-edit-form-tree-as-the-shared inherits this FUP's blocker. If code/parse {:path "skill://…"} (or local://, agent://) should accept internal-URI paths, it needs the SAME missing BEAM-side scheme resolver this FUP identified (the SpellAgent.InternalUrls module that does not yet exist; resolution is TS-only today). PLAN-020 v1 scopes code/parse to filesystem paths only and defers URI-path support to this FUP's prerequisite. A second consumer (code/parse) now also benefits from the BEAM resolver this FUP would build.

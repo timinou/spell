@@ -265,6 +265,15 @@ Build =q/match=, =q/equal?=, =q/descendant=, =q/child=, =q/select=, =q/emit=,
 hand-built + =Lens.form_tree= + =sh/parse= fixtures (proves three-surface generality
 on day one). Port the prototype verbatim; fold in the 5 edge-case fixes.
 
+DEPENDS ON FEAT-024 (=declare=) for the NON-uniform walkers (=q/emit= and later
+=code/unparse=): they are a true =expr ↔ clause ↔ expr= grammar and read cleanest
+as mutual recursion. Two ways to land W1 against this: ship the dispatch-table
+idiom (no language change, works today) for =q/emit=, OR land FEAT-024 first and
+write plain mutual =defn= s. FEAT-024 is ~20 LOC in the ptc_runner fork and gated
+only on the static undefined-var gate (runtime already late-binds). Either path is
+acceptable; the uniform matchers (=q/match=, =q/equal?=, =q/descendant=) need
+neither and land regardless.
+
 Acceptance: =q/equal?= reflexive/symmetric; =q/match= passes the prototype's full
 table; =comp= + =cancellation= laws hold via =q/equal?=; non-linear + splice +
 field-capture covered. =mix check= clean.
@@ -280,12 +289,33 @@ Reviewer criteria (parallel, over the W1 diff):
 - (c) REDUCER-READINESS: can a recorded list-of-ops be composed by an external
   caller WITHOUT importing code/edit? is the reify boundary clean?
 
-** W3 — =code/parse= + =code/unparse= (the one new NIF piece) + LAW tests
+** W3 — =code/parse= + =code/unparse= (project existing CodePath engine → form_tree) + LAW tests
 
-Tree-sitter → =form_tree= for one language first (Elixir — the repo's own), via the
-same vendored-NIF pattern as brush_nif (or a pure-Elixir tree-sitter binding if
-present; investigate first). =code/unparse= the inverse. Depth-cap → =raw= over
-MAX_DEPTH. Exotic/error nodes → =raw= leaf.
+MATERIALLY DE-RISKED by the crates survey (2026-06-24): the tree-sitter machinery
+ALREADY EXISTS and is ALREADY BEAM-reachable. =crates/pi-code-path= is the
+CodePath v3 query algebra with a per-language tree-sitter DIALECT system (elixir,
+typescript, rust, python, go, haskell, css, html, mdorg); =beam/pi_kernel_nif= is
+a rustler NIF that imports =pi_code_path= and links the grammars (incl. elixir +
+clojure), exposing =resolve_target/2=, =resolve_edges/2=, =apply_edit/3= to the
+BEAM today. So =code/parse= is NOT a greenfield NIF.
+
+THE PRECISE GAP (verified): =pi_code_path::types::NodeRef= is FLAT and span-based
+(={locator, range, kind, content, metadata}=, NO =children=). CodePath resolves a
+SELECTOR → byte-spans; it does NOT project a recursive =form_tree=. W3's real work
+is a TREE PROJECTOR over the tree-sitter cursor (the brush =parse= → =form_tree=
+projection, aimed at the existing per-language grammars), exposed as a new
+=pi_kernel_nif= entry (=parse_tree(src, lang) → form_tree JSON=) beside the
+resolve verbs, plus its inverse =unparse=. Reuse: grammar loading, dialect
+registry, depth/panic guards, =catch_unwind= BEAM-safety — all shipped. INVESTIGATE
+FIRST: does =pi-code-engine= already expose a cursor walk we project, or do we add
+one NIF fn? Either way the grammar plumbing is done.
+
+Projector contract: tree-sitter node → ={"node"=>kind, "name"?, "value"?,
+"children"?}= (the canonical =form_tree= shape). =code/unparse= the inverse.
+Depth-cap → =raw= over MAX_DEPTH. Exotic/error nodes (tree-sitter ERROR) → =raw=
+leaf carrying the source span (the brush drift-resilient fallback, exact same
+shape). This means three syntaxes now share ONE projector family: brush
+(=sh/parse=), Lisp history (=Lens.form_tree=), and source (=code/parse=).
 
 Acceptance: re-parse equality test set (per construct: def, defp, call, pipe,
 case, fn, module) mirroring sh_parse_test.exs; =q/equal?(parse(unparse(t)), t)=;
@@ -306,6 +336,16 @@ exotic construct → =raw=, round-trips verbatim; =mix check= clean.
 (reject if result doesn't =code/parse= back) → transactional write (roll back on a
 bad tree, like the execute file-write rollback). Record the STRUCTURED ops form, not
 a patch string (the PLAN-018 constraint). =(pmap code/edit files)= for multi-file.
+
+SUBSTRATE NOTE (crates survey): =pi_kernel_nif::apply_edit/3= + =crates/pi-edit-broker=
+(intent → commit → conflict, =txn_journal=, multi-session coordination) ALREADY
+implement transactional, broker-coordinated file writes for the TS/kernel CodePath
+edit path. W5 should EVALUATE routing =code/edit='s write through =apply_edit= /
+the edit broker rather than re-implementing rollback in Elixir — it gives
+cross-session conflict detection (PeerConflict) for free. Open question for W5:
+does =apply_edit= take a span+content (today's CodePath edit verbs) or can it take
+a form_tree replacement? If span-only, =code/edit= projects its =q/=-rewritten tree
+back to a span+content patch via =code/unparse= before handing to the broker.
 
 Acceptance: a =:update= rewrite applies + round-trips; a bad transform is rejected
 and the file is unchanged; the recorded edit is a reifiable ops-list a test can
@@ -343,8 +383,22 @@ representative string-CodePath query; =mix check= clean.
 
 * Edge cases / invariants (from prototype + design)
 
-- SELF-RECURSIVE MATCHER: no mutual recursion in PTC; child-matching folds into
-  =m-node= via =loop/recur=. (W1)
+- MUTUAL RECURSION: PTC has no =declare= today, so forward-refs fail the static
+  undefined-var gate (the RUNTIME already late-binds — verified in eval/apply.ex;
+  only the gate blocks it). THREE responses, by case: (a) =q/match= is UNIFORM
+  (every kind matches identically) ⇒ fold child-matching into the self-recursive
+  =m-node= via =loop/recur=, no mutual recursion needed (W1). (b) =q/emit= /
+  =code/unparse= are NON-uniform (=case= vs =clause= emit differently, a true
+  =expr ↔ clause ↔ expr= grammar) ⇒ use the DISPATCH-TABLE idiom: a ={kind → (fn
+  [tbl node] …)}= map looked up at call time — the same =name→fn= shape
+  =tools.ex= =meta_tools=/=native_tools= use, so the walker is forkable DATA,
+  promotable via =define-tool {:scope :durable}= (W3). (c) for fixed library
+  internals where plain mutual-recursion readability wins, use the new =declare=
+  special form — see FEAT-024 (cross-linked). Prefer the dispatch table for
+  anything the agent may re-author at runtime ("reach for data, not code"); use
+  =declare= for library code. REJECTED: a whole-=do=-block hoist (auto-scope all
+  def names) — it masks genuinely-broken EAGER value-position forward refs, which
+  the gate exists to catch. (W1, W3)
 - FIELD vs CHILD: name/value capture uses ={$ n}=, never a child hole. (W1)
 - RAW OPACITY (LAW 3): =q/match= only whole-captures a =raw= node; algebra ⇒
   heuristic there. (W1, W3)
@@ -382,6 +436,71 @@ representative string-CodePath query; =mix check= clean.
   exhaustive language coverage is incremental after the shape is fixed.
 - The =tmpl::= reactive-hole dimension (a CodePath that re-renders on data change) —
   named as a future readout, not built here.
+
+* Related work: prior FUPs + crates substrate (survey 2026-06-24)
+
+Surveyed all 18 FUPs and the =crates/*= tree for relevance. Findings:
+
+** DONE foundations this plan stands on (no action — already shipped)
+
+  - FUP-002 (form_tree PTC structural lens) — DONE. Built =Lens.form_tree/1=:
+    CoreAST → PTC-native tuple-free nested tree, drift-resilient, with a
+    runtime-authored structural-lens showcase. THIS IS THE SHARED SHAPE PLAN-020
+    EXTENDS to source code. Its no-tuples invariant + drift-resilient generic
+    clause are the contract =code/parse= must match. Directly load-bearing.
+  - FUP-001 (Node.introduced provenance) — DONE. Established the lens =.ptc= +
+    =!=-oracle parity pattern (a PTC-primary verb with an Elixir oracle) that the
+    =q/*= library + =code/*= verbs should mirror for namespace wiring.
+
+** Open FUPs with genuine overlap (fold in, do not duplicate)
+
+  - FUP-012 (Crystal promotion for durable tools) — SAME promotion path Tier 3
+    (durable codemods) rides. A =code/edit= xf promoted via =define-tool {:scope
+    :durable}= is the AUTHORED tier; FUP-012's Crystal is the EVIDENCE tier
+    (=DISTILLED_FROM= lineage, LLM-free re-run). PLAN-020 Tier 3 ships the
+    authored-durable rung; the Crystal rung for a codemod is FUP-012's concern,
+    and its noted PREREQUISITE (a per-tool usage→turn index) applies equally to a
+    promoted codemod. Cross-reference, don't rebuild.
+  - FUP-011 (brush NIF URI tokens) — PARTIAL relevance: its investigation
+    established that =crates/pi-natives/src/exec/scheme_preprocessor.rs= resolves
+    =scheme://= tokens TS-side but the BEAM has no resolver. If =code/parse {:path
+    "skill://…"}= should accept internal URIs it inherits the SAME missing-BEAM-
+    resolver blocker. v1 scope: filesystem paths only; URI-path support waits on
+    FUP-011's prerequisite (a =SpellAgent.InternalUrls= resolver). Noted, deferred.
+
+** Crates substrate — the material discovery (de-risks W3 + W5)
+
+The =crates/*= tree (now in scope) already contains the CodePath/tree-sitter
+engine, reachable from the BEAM:
+
+  - =crates/pi-code-path= — CodePath v3 query algebra (=ast=, =parser=, =resolver=,
+    =renderer=) + per-language tree-sitter DIALECTS (elixir, typescript, rust,
+    python, go, haskell, css, html, mdorg). This IS the string-DSL CodePath
+    PLAN-020 lispifies — and its dialect/grammar layer is exactly =code/parse='s
+    substrate. NB its =NodeRef= is FLAT (span-based, no =children=) — the tree
+    projector is the gap (see W3).
+  - =crates/pi-code-engine= / =pi-code-graph= — the resolution + code-graph layer
+    (the =def→=/=ref→=/=call→= edges). OUT OF PLAN-020 scope (structural, not
+    semantic) but the natural home for the deferred LSP-edge layer.
+  - =beam/pi_kernel_nif= — rustler NIF importing =pi_code_path=, grammars linked
+    (incl. elixir + clojure), exposing =resolve_target/2=, =resolve_edges/2=,
+    =apply_edit/3=. The BEAM bridge EXISTS; W3 adds a =parse_tree= projector beside
+    these verbs rather than standing up a new NIF.
+  - =crates/pi-edit-broker= — transactional, multi-session edit coordination
+    (intent→commit→conflict, =txn_journal=). W5's transactional-write substrate
+    (see W5 SUBSTRATE NOTE).
+
+CONSEQUENCE: PLAN-020's "one genuinely new NIF piece" framing is REVISED — the
+grammars, the BEAM bridge, and transactional writes already exist; the new work is
+the TREE PROJECTOR (tree-sitter cursor → form_tree) + its inverse, plus the pure
+beam-lisp =q/*= algebra. Smaller and lower-risk than the original framing.
+
+** No relevance (surveyed, excluded)
+
+FUP-003..010, 013..018 are TUI/mesh/clock/sh-streaming/session-inspector work with
+no structural-transform overlap. FEAT-024 (=declare=) is this plan's own spinoff
+(cross-linked in Edge cases + the build sequence), not a pre-existing FUP.
+
 
 * Cross-link: PLAN-018 (history reduction) is the second consumer
 

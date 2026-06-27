@@ -124,3 +124,5 @@ evidence. Until then, promotion would be machinery in search of a trigger.
 - existing promotion: SpellAgent.Hist.Tools.promote (session->durable, the tier below).
 - edges: DISTILLED_FROM, SUPERSEDES (memory tool).
 - MISSING PREREQUISITE: per-tool usage->turn index (none today).
+
+NOTE [2026-06-27]: CROSS-LINK [2026-06-24]: PLAN-020-lispy-code-edit-form-tree-as-the-shared (lispy code/edit) Tier 3 (durable codemods) rides the SAME promotion path this FUP curates. A code/edit xf promoted via define-tool {:scope :durable} is the AUTHORED tier; this FUP's Crystal is the EVIDENCE tier (DISTILLED_FROM lineage, LLM-free re-run). The prerequisite noted here (a per-tool usage→turn index) applies equally to a promoted codemod — so when this FUP is taken on, a promoted code/edit refactor is a first-class case to support, not just sh tools. PLAN-020 Tier 3 ships only the authored-durable rung and defers the Crystal rung to this FUP.
