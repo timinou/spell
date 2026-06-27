@@ -158,16 +158,21 @@
     ;; node kind must match
     (not (= (get p "node") (get s "node"))) no-match
     :else
+    ;; constrain each SCALAR field the pattern specifies: `name` (semantic name),
+    ;; `value` (leaf text), and `field` (the tree-sitter role from code/parse, so
+    ;; a codemod can select a child BY ROLE — e.g. {"node" "identifier" "field"
+    ;; "left"} matches only the left operand). Each supports a {"$" n} capture.
     (let [e1 (match-field p s env "name")
-          e2 (match-field p s e1 "value")]
-      (if (no-match? e2)
+          e2 (match-field p s e1 "value")
+          e3 (match-field p s e2 "field")]
+      (if (no-match? e3)
         no-match
         ;; only constrain children when the pattern SPECIFIES them; a pattern
         ;; with no "children" key matches regardless of the subject's children
-        ;; (lets you match on kind/name/value alone).
+        ;; (lets you match on kind/name/value/field alone).
         (if (contains? p "children")
-          (match-children (get p "children") (or (get s "children") []) e2)
-          e2)))))
+          (match-children (get p "children") (or (get s "children") []) e3)
+          e3)))))
 
 (defn match-children
   "Match a pattern child-list ps against a subject child-list ss, threading env,
@@ -272,7 +277,8 @@
     :else
     (let [base (cond-> {"node" (get tpl "node")}
                  (contains? tpl "name") (assoc "name" (subst-field tpl env "name"))
-                 (contains? tpl "value") (assoc "value" (subst-field tpl env "value")))
+                 (contains? tpl "value") (assoc "value" (subst-field tpl env "value"))
+                 (contains? tpl "field") (assoc "field" (subst-field tpl env "field")))
           kids (get tpl "children")]
       (if (nil? kids)
         base
@@ -358,7 +364,9 @@
 ;; op round-trips through JSON and through q/equal?. q/update's closure form
 ;; stays as sugar for one-off interactive edits.
 (defn apply-op
-  "Apply ONE data-op to subject s, returning the rewritten tree."
+  "Apply ONE data-op to subject s, returning the rewritten tree. An UNKNOWN op
+  kind FAILS LOUD (not a silent no-op) — a typo'd `:op` would otherwise pass the
+  code/edit parse-gate and write an unchanged file, masking a broken edit."
   [s op]
   (let [kind (get op "op")
         p (get op "pattern")
@@ -367,12 +375,20 @@
       (= kind "update") (update s p (fn [binds _node] (emit t binds)))
       (= kind "rewrite") (rewrite p t s)
       (= kind "wrap") (wrap s p t)
-      :else s)))
+      :else (fail (str "q/apply-op: unknown op kind " (pr-str kind)
+                       " (expected \"update\" | \"rewrite\" | \"wrap\")")))))
 
 (defn apply-ops
   "Apply a SEQUENCE of data-ops to subject s, left-to-right (op2 sees op1's
   output). The composition of the list IS the composed edit; PLAN-018 records a
-  tape edit as this ops list and reasons about it as data."
+  tape edit as this ops list and reasons about it as data.
+
+  COMPOSITION SEMANTICS (PLAN-018 must heed): each op rewrites EVERY current
+  match, so ops are only cleanly composable/cancellable when DISJOINT. Dependent
+  ops do NOT cancel — e.g. [a->b, b->a] on `a + b` yields `a + a` (the second op
+  catches both the original b AND the a-that-became-b), and [a->b, b->c] yields
+  `c + c`. The reducer must therefore only algebraically cancel/compose ops whose
+  match-sets are disjoint (the freshness precondition), or carry before-images."
   [s ops]
   (reduce apply-op s ops))
 

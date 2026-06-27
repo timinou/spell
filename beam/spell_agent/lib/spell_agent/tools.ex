@@ -298,7 +298,12 @@ defmodule SpellAgent.Tools do
         "sh",
         "sh-pipe",
         "sh-parse",
-        "sh-unparse"
+        "sh-unparse",
+        # code-edit is a parse-GATED safety seam; a runtime define-tool must not
+        # be able to shadow it (registry tools merge last) and bypass the gate.
+        "code-parse",
+        "code-unparse",
+        "code-edit"
       ]
 
   defp require_string(args, key) do

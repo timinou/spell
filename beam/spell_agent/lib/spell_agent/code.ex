@@ -39,11 +39,23 @@ defmodule SpellAgent.Code do
   keeping the edit a reifiable DATA value PLAN-018 can compose. `code-edit` then:
 
     1. unparses `:tree` to source;
-    2. PARSE-GATES it — re-parses the source and requires it to round-trip
-       (re-parse equality); a tree that does not yield re-parseable source is
-       REJECTED and the file is left untouched;
-    3. writes the file (the PTC `execute` layer rolls the write back if the
-       enclosing program later fails — transactional by construction).
+    2. PARSE-GATES it — re-parses the source and requires a CLEAN tree (no error
+       region, no `raw` leaf); a tree that does not yield valid source is REJECTED
+       and the file is left untouched. An empty/whitespace-only result is also
+       rejected (an edit must not silently truncate a file);
+    3. writes the file ATOMICALLY (write a temp sibling, then rename over the
+       target) so a mid-write failure can never leave a truncated/partial file.
+
+  ## Atomicity scope (honest boundary)
+
+  The write is ATOMIC at the filesystem level (temp + rename): the target is
+  either its old content or the full new content, never a partial. It is NOT,
+  however, rolled back by the PTC `execute` transactional layer — that layer
+  tracks the `edit`/`create` PTC tools, not a native tool's `File` write. So a
+  program that calls `code-edit` and then `(fail ...)` LEAVES the file changed.
+  A caller that needs all-or-nothing across multiple edits must sequence them so
+  `code-edit` is the last effect, or restore from VCS. (Routing the write through
+  the execute layer's tracked primitive is a tracked follow-up.)
   """
 
   @doc """
@@ -129,12 +141,23 @@ defmodule SpellAgent.Code do
          {:ok, lang} <- require_string(args, "lang"),
          {:ok, tree} <- require_tree(args),
          {:ok, src} <- gate_unparse(tree),
+         :ok <- gate_nonempty(src),
          :ok <- gate_reparse(src, lang),
          :ok <- gate_write(path, src) do
       %{"path" => path, "bytes" => byte_size(src), "src" => src}
     else
       {:error, message} -> %{"error" => message}
     end
+  end
+
+  # An edit that unparses to empty/whitespace-only source would TRUNCATE the file
+  # (empty source parses clean, so the parse-gate alone would not catch it). Refuse
+  # it — emptying a file is never an intended structural edit; a caller that truly
+  # wants to clear a file should not route through code-edit.
+  defp gate_nonempty(src) do
+    if String.trim(src) == "",
+      do: {:error, "code-edit: refused (edit unparses to empty source; would truncate the file)"},
+      else: :ok
   end
 
   defp require_tree(args) do
@@ -185,11 +208,20 @@ defmodule SpellAgent.Code do
 
   defp reparse_clean?(_), do: true
 
+  # ATOMIC write: write to a temp sibling in the SAME directory (so rename is a
+  # cheap same-filesystem op), then rename over the target. The target is never
+  # observed truncated/partial — a disk-full or crash mid-write leaves the temp
+  # file (cleaned up) and the original intact.
   defp gate_write(path, src) do
-    File.write(path, src)
-    |> case do
-      :ok -> :ok
-      {:error, reason} -> {:error, "code-edit: write failed (#{:file.format_error(reason)})"}
+    tmp = path <> ".code-edit.#{System.unique_integer([:positive])}.tmp"
+
+    with :ok <- File.write(tmp, src),
+         :ok <- File.rename(tmp, path) do
+      :ok
+    else
+      {:error, reason} ->
+        _ = File.rm(tmp)
+        {:error, "code-edit: write failed (#{:file.format_error(reason)})"}
     end
   end
 

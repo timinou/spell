@@ -383,6 +383,61 @@ defmodule SpellAgent.QTest do
     end
   end
 
+  describe "field-role matching (W6 swarm review) — the code/parse `field` key" do
+    test "a pattern with `field` matches ONLY the node in that role", %{prelude: prelude} do
+      # mirror code/parse output: binary_operator with left/right operands tagged
+      # by `field`, both identifiers named x.
+      tree = %{
+        "node" => "binary_operator",
+        "children" => [
+          %{"node" => "identifier", "value" => "x", "field" => "left"},
+          %{"node" => "token", "value" => "+"},
+          %{"node" => "identifier", "value" => "x", "field" => "right"}
+        ]
+      }
+
+      # selecting field=left must match exactly ONE identifier, not both
+      n =
+        q(prelude, ~S|(count (q/descendant {"node" "identifier" "field" "left"} data/s))|, %{
+          "s" => tree
+        })
+
+      assert n == 1
+    end
+
+    test "field capture {$ n} binds the role", %{prelude: prelude} do
+      node = %{"node" => "identifier", "value" => "x", "field" => "left"}
+
+      r =
+        q(prelude, ~S|(q/match data/p data/s)|, %{
+          "p" => %{"node" => "identifier", "field" => %{"$" => "role"}},
+          "s" => node
+        })
+
+      assert r["role"] == "left"
+    end
+  end
+
+  describe "apply-op error handling (W6 swarm review)" do
+    test "an unknown op kind fails loud, not a silent no-op", %{prelude: prelude} do
+      # A typo'd op kind must NOT silently return the subject unchanged (which
+      # would pass code-edit's parse-gate and write an unmodified file). It must
+      # surface a fail signal carrying the message.
+      program = ~S"""
+      (q/apply-ops {"node" "var" "name" "x"}
+        [{"op" "udpate" "pattern" {"node" "var" "name" "x"}
+          "template" {"node" "var" "name" "y"}}])
+      """
+
+      {:ok, step} = PtcRunner.Lisp.run(program, prelude: prelude, caller: :in_process_v1)
+      # (fail ...) surfaces as a __ptc_fail__ value carrying the reason; the key
+      # property is it is NOT the unchanged subject {"node" "var" "name" "x"}.
+      assert match?({:__ptc_fail__, _}, step.return)
+      {:__ptc_fail__, msg} = step.return
+      assert msg =~ "unknown op kind"
+    end
+  end
+
   describe "matcher soundness regressions (W2 swarm review)" do
     test "absent subject field is a no-match, not a nil-bind", %{prelude: prelude} do
       # A pattern asking for "name" must NOT match a literal leaf that has no name.

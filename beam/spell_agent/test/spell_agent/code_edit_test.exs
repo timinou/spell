@@ -96,6 +96,21 @@ defmodule SpellAgent.CodeEditTest do
       assert File.read!(path) == original
     end
 
+    test "an edit that unparses to empty source is REFUSED (no truncation)", %{dir: dir} do
+      path = Path.join(dir, "empty.ex")
+      original = "def f, do: 1"
+      File.write!(path, original)
+
+      # a tree that unparses to empty/whitespace
+      empty_tree = %{"node" => "source", "children" => []}
+
+      result = Code.edit_tool(%{"path" => path, "lang" => "elixir", "tree" => empty_tree})
+      assert %{"error" => msg} = result
+      assert msg =~ "empty"
+      # the file is NOT truncated
+      assert File.read!(path) == original
+    end
+
     test "missing path / tree / lang is an error map", %{dir: dir} do
       tree = Code.parse_tool(%{"src" => "x", "lang" => "elixir"})
       assert %{"error" => m1} = Code.edit_tool(%{"lang" => "elixir", "tree" => tree})
