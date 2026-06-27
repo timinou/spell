@@ -24,10 +24,21 @@ defmodule SpellAgent.ToolsTest do
     end
 
     test "a defined tool can call a NATIVE tool (list-tools) — composition" do
+      # The exact native-tool count grows as the surface does (spawn-session +
+      # await-session in FEAT-011, the mesh/* combinators in FEAT-018, …), so the
+      # contract here is COMPOSITION: a defined tool can call list-tools and see
+      # itself plus the always-present meta + sh tools — NOT a brittle magic total.
       Tools.define_tool(%{"name" => "count-tools", "params" => [], "source" => "(count (tool/list-tools {}))"})
-      # 3 meta (define-tool, define-config, list-tools) + sh + sh-pipe + sh-parse
-      # + sh-unparse (native, PLAN-011) + count-tools just defined = 8
-      assert call("count-tools", %{}) == 8
+      count = call("count-tools", %{})
+
+      # The seven always-present native tools (define-tool, define-config,
+      # list-tools, sh, sh-pipe, sh-parse, sh-unparse) plus count-tools itself.
+      assert is_integer(count)
+      assert count >= 8
+      # list-tools includes the just-defined tool (composition + self-visibility).
+      names = Enum.map(Tools.inventory(), & &1["name"])
+      assert "count-tools" in names
+      assert "list-tools" in names
     end
 
     test "a defined tool can call ANOTHER defined tool" do
