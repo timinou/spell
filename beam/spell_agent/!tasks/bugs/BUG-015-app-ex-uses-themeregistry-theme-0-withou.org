@@ -1,0 +1,30 @@
+#+TITLE: app.ex uses ThemeRegistry.theme/0 without aliasing the module (compile warning)
+#+STATE: DONE
+#+SESSION_ID: 15195d97dff3d090
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-27T08-45-09-375Z_15195d97dff3d090.jsonl]]
+#+CUSTOM_ID: BUG-015-app-ex-uses-themeregistry-theme-0-withou
+
+* Initial Message
+
+what's pending in this folder's work?
+
+* Symptom
+`mix compile --warnings-as-errors` fails with 2 warnings:
+  ThemeRegistry.theme/0 is undefined (module ThemeRegistry is not available...)
+  at lib/spell_agent/tui/app.ex:817 and :822 (SpellAgent.Tui.App.border_style_for/1).
+
+* Root cause
+Uncommitted PLAN-017 work added border_style_for/1 calling `ThemeRegistry.theme()`,
+but SpellAgent.Tui.ThemeRegistry was never added to the `alias SpellAgent.Tui.{...}`
+block (app.ex:39-54). The bare `ThemeRegistry` resolves to a nonexistent
+top-level module. The fully-qualified SpellAgent.Tui.ThemeRegistry exists and is
+correct; only the alias is missing.
+
+* Fix
+Add `ThemeRegistry` to the alias block (between Surface and Ui). One line. No
+behaviour change — the call site already intends the Tui.ThemeRegistry.
+
+* Discovery
+Found while establishing a clean-compile baseline before MESH milestone execution
+(PLAN-019). It blocked the `mix check` gate. Pre-existing in the working tree (not
+introduced by the mesh work); fixed opportunistically to unblock the gate.

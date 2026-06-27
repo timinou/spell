@@ -49,6 +49,7 @@ defmodule SpellAgent.Tui.App do
     Spatial,
     Store,
     Surface,
+    ThemeRegistry,
     Ui
   }
 
@@ -760,7 +761,7 @@ defmodule SpellAgent.Tui.App do
 
     widget = %List{
       items: items,
-      block: %Block{title: " #{desc.title} ", borders: [:all], border_type: :rounded},
+      block: %Block{title: " #{desc.title} ", borders: [:all], border_type: :rounded, border_style: border_style_for(desc.focused?)},
       highlight_style: %Style{modifiers: [:bold]},
       selected: select_index(desc, length(items))
     }
@@ -778,7 +779,7 @@ defmodule SpellAgent.Tui.App do
       wrap: true,
       scroll: {desc.scroll, 0},
       style: %Style{fg: :white},
-      block: %Block{title: " #{desc.title}#{focus_tag} ", borders: [:all], border_type: :rounded}
+      block: %Block{title: " #{desc.title}#{focus_tag} ", borders: [:all], border_type: :rounded, border_style: border_style_for(desc.focused?)}
     }
 
     {widget, rect}
@@ -804,13 +805,24 @@ defmodule SpellAgent.Tui.App do
       wrap: true,
       scroll: {desc.scroll, 0},
       style: %Style{fg: :white},
-      block: %Block{title: " history#{focus_tag} ", borders: [:all], border_type: :rounded}
+      block: %Block{title: " history#{focus_tag} ", borders: [:all], border_type: :rounded, border_style: border_style_for(desc.focused?)}
     }
 
     {widget, rect}
   end
 
   defp materialize({widget, rect}, _state), do: {widget, rect}
+
+  # Border styling based on focus — uses theme's border_focused color when active
+  defp border_style_for(true) do
+    theme = ThemeRegistry.theme()
+    %Style{fg: theme.border_focused, modifiers: [:bold]}
+  end
+
+  defp border_style_for(false) do
+    theme = ThemeRegistry.theme()
+    %Style{fg: theme.border}
+  end
 
   # `List.selected` MUST be nil or a valid 0-based index; an empty list has no
   # selection (else ExRatatui raises at render).
