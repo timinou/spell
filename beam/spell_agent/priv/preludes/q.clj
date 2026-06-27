@@ -69,31 +69,63 @@
   [v]
   (and (map? v) (contains? v "$")))
 
+;; ── structural equality (the ONE notion of "equal", used everywhere) ──────────
+;; tree-equal? is a SENTINEL-BLIND structural comparator: it compares two
+;; form_tree values as DATA, never interpreting `~` / `~@` / {"$" n} as pattern
+;; syntax (that is q/match's job, not equality's). It is the public q/equal?
+;; below AND the equality `bind` uses for non-linear repeated captures, so the
+;; algebra has exactly ONE notion of "the same tree" (PLAN-018 proof currency).
+;;
+;; Defined before `bind` because `bind` calls it. Self-recursive over children;
+;; maps compare by FULL key set (so {node command name rg} and
+;; {node command name rg children [...]} are NOT equal — the missing-children
+;; laxness of q/match must never leak into equality).
+(defn tree-equal? [a b]
+  (cond
+    (and (map? a) (map? b))
+    (let [ka (keys a) kb (keys b)]
+      (and (= (count ka) (count kb))
+           ;; every key present in both with structurally-equal values
+           (every? (fn [k] (and (contains? b k) (tree-equal? (get a k) (get b k)))) ka)))
+    (and (sequential? a) (sequential? b))
+    (and (= (count a) (count b))
+         (every? (fn [pair] (tree-equal? (first pair) (second pair)))
+                 (map (fn [x y] [x y]) a b)))
+    :else (= a b)))
+
 ;; ── binding accumulation (non-linear) ────────────────────────────────────────
 (defn bind
   "Add binding nm => val to env, enforcing non-linearity: a repeated name must
-  bind an equal value or the whole match collapses to no-match. nm = \"_\" is the
-  wildcard — it binds nothing. A no-match env stays no-match (monadic short-circuit)."
+  bind a STRUCTURALLY-equal value (tree-equal?, the same notion q/equal? uses) or
+  the whole match collapses to no-match. nm = \"_\" is the wildcard — it binds
+  nothing. A no-match env stays no-match (monadic short-circuit)."
   [env nm val]
   (cond
     (no-match? env) no-match
     (= nm "_") env
-    (contains? env nm) (if (= (get env nm) val) env no-match)
+    (contains? env nm) (if (tree-equal? (get env nm) val) env no-match)
     :else (assoc env nm val)))
 
 ;; ── field matching ───────────────────────────────────────────────────────────
 (defn match-field
   "Match a single scalar field k (\"name\"|\"value\") of pattern p against subject
   s, threading env. A field-capture {\"$\" n} binds the subject's scalar; a plain
-  field must equal; an absent pattern field is a no-op (don't constrain it)."
+  field must equal; an absent pattern field is a no-op (don't constrain it).
+
+  If the PATTERN specifies field k but the SUBJECT lacks it, that is a no-match,
+  not a nil-bind — a pattern asking for `name` must not silently match a Lens
+  `literal` leaf (no name) or an sh `raw`/`word` leaf by binding nil. A subject
+  field present with an explicit nil value still matches (absence != nil)."
   [p s e k]
   (if (contains? p k)
-    (let [pv (get p k)
-          sv (get s k)]
-      (cond
-        (field-capture? pv) (bind e (get pv "$") sv)
-        (= pv sv) e
-        :else no-match))
+    (if (not (contains? s k))
+      no-match
+      (let [pv (get p k)
+            sv (get s k)]
+        (cond
+          (field-capture? pv) (bind e (get pv "$") sv)
+          (= pv sv) e
+          :else no-match)))
     e))
 
 ;; ── the matcher ──────────────────────────────────────────────────────────────
@@ -146,10 +178,15 @@
       (no-match? e) no-match
       (empty? ps) (if (empty? ss) e no-match)
       (splice? (first ps))
-      ;; remaining fixed pattern after this splice consumes the suffix; the
-      ;; splice binds the prefix of length k = |ss| - |rest-pat|.
+      ;; A splice binds a prefix; the trailing fixed pattern consumes the suffix.
+      ;; The suffix length is the count of NON-splice children remaining (a
+      ;; trailing `~@` requires 0 subject children, not 1 — the earlier bug used
+      ;; `count rest-pat`, treating each later splice as needing one child). So
+      ;; the first splice takes the MAXIMAL prefix the trailing fixed nodes
+      ;; allow; any further splices then bind `[]` greedily-from-left. This is
+      ;; the documented deterministic partition for adjacent splices.
       (let [rest-pat (rest ps)
-            n (count rest-pat)
+            n (count (filter (fn [c] (not (splice? c))) rest-pat))
             k (- (count ss) n)]
         (if (< k 0)
           no-match
@@ -167,12 +204,16 @@
 
 ;; ── structural equality (LAW 1 / LAW 2) ──────────────────────────────────────
 (defn equal?
-  "Structural equality over form_tree: true iff a and b are the same tree.
-  Implemented as a hole-free match, so it shares the matcher's drift-resilience
-  and is the PUBLIC, tested predicate PLAN-018's reducer calls to prove a
-  reduction sound. This is STRUCTURAL invariance, not byte invariance (LAW 1)."
+  "Structural equality over form_tree: true iff a and b are the same tree, as
+  DATA. SENTINEL-BLIND — it never interprets `~` / `~@` / {\"$\" n} as pattern
+  syntax (that is q/match's role), and it requires the FULL key set to agree
+  (the missing-children laxness of q/match must never leak into equality). This
+  is the PUBLIC, tested predicate PLAN-018's reducer calls to prove a reduction
+  sound: STRUCTURAL invariance, not byte invariance (LAW 1). Delegates to the
+  one true comparator `tree-equal?` (also used by `bind` for non-linear
+  captures, so the algebra has a single notion of equal)."
   [a b]
-  (matched? (match-node a b {})))
+  (tree-equal? a b))
 
 ;; ── recursive search ──────────────────────────────────────────────────────────
 (defn descend-acc
@@ -252,9 +293,11 @@
     (if (matched? e) (emit t e) s)))
 
 (defn update
-  "Replace EVERY subtree of s matching pattern p with (f bindings), bottom-up so
-  a transform sees already-transformed children. f receives the bindings map and
-  returns the replacement node. This is the workhorse rewrite."
+  "Replace EVERY subtree of s matching pattern p with (f bindings node), bottom-up
+  so a transform sees already-transformed children. f receives the bindings map
+  AND the matched node itself (so a wrapper can re-embed the original). This is
+  the workhorse rewrite. NB: closure-based — NOT reifiable; for a recorded,
+  composable edit (PLAN-018) use q/apply-ops with data {op pattern template}."
   [s p f]
   (let [walk (fn walk [node]
                ;; rebuild children first (bottom-up)
@@ -262,14 +305,48 @@
                              (assoc node "children" (map walk (get node "children")))
                              node)
                      hit (match p node2)]
-                 (if (matched? hit) (f hit) node2)))]
+                 (if (matched? hit) (f hit node2) node2)))]
     (walk s)))
 
 (defn wrap
-  "Wrap every match of p in s with template tmpl, where the hole {\"~\" \"_\"} in
-  tmpl stands for the original matched node. E.g. wrap a risky call in try/catch."
+  "Wrap every match of p in s with template tmpl, where the node-hole
+  {\"node\" \"~\" \"name\" \"_\"} in tmpl stands for the ORIGINAL matched node.
+  E.g. wrap a risky call in try/catch. The `_` hole resolves to the matched
+  subtree (it is bound explicitly here — `bind` skips `_` during matching, so we
+  inject it into the emit env from the node update hands us)."
   [s p tmpl]
-  (update s p (fn [binds] (emit tmpl (assoc binds "_" (get binds "_"))))))
+  (update s p (fn [binds node] (emit tmpl (assoc binds "_" node)))))
+
+;; reifiable transforms (the DATA edit surface PLAN-018 composes).
+;; An OP is a plain-data form_tree edit, NOT a closure, so a recorded edit is a
+;; VALUE the reducer can compare (q/equal? on the ops), compose, and cancel
+;; algebraically (PLAN-018: reduced == comp(e2,e1); edit then inverse == id).
+;;
+;;   {"op" "update"  "pattern" <tpl> "template" <tpl>}  ; tree-wide find+replace
+;;   {"op" "rewrite" "pattern" <tpl> "template" <tpl>}  ; top-node only
+;;   {"op" "wrap"    "pattern" <tpl> "template" <tpl>}  ; wrap matches ({~ _}=orig)
+;;
+;; Both pattern and template are ordinary form_tree maps (holes allowed), so an
+;; op round-trips through JSON and through q/equal?. q/update's closure form
+;; stays as sugar for one-off interactive edits.
+(defn apply-op
+  "Apply ONE data-op to subject s, returning the rewritten tree."
+  [s op]
+  (let [kind (get op "op")
+        p (get op "pattern")
+        t (get op "template")]
+    (cond
+      (= kind "update") (update s p (fn [binds _node] (emit t binds)))
+      (= kind "rewrite") (rewrite p t s)
+      (= kind "wrap") (wrap s p t)
+      :else s)))
+
+(defn apply-ops
+  "Apply a SEQUENCE of data-ops to subject s, left-to-right (op2 sees op1's
+  output). The composition of the list IS the composed edit; PLAN-018 records a
+  tape edit as this ops list and reasons about it as data."
+  [s ops]
+  (reduce apply-op s ops))
 
 ;; ── projections (replace the #qualifiers) ────────────────────────────────────
 (defn body
