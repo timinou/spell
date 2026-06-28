@@ -86,6 +86,11 @@ defmodule SpellAgent.Session do
         # black/* verbs (the same injection seam) so it can post/query/claim/fold on
         # the shared blackboard. No region -> Mesh.verbs returns %{} (a plain session).
         tools: build_session_tools(session_id, hist_store, llm, max_turns, opts),
+        # PLAN-020 W7: attach the q/* structural-transform prelude so the agent can
+        # author codemods inline ((q/update (tool/code-parse {...}) pattern f),
+        # (q/apply-ops ...)) and walk source/shell/history with one algebra. nil
+        # when the prelude fails to compile (best-effort) -> agent runs without q/*.
+        runtime_prelude: SpellAgent.Code.Prelude.compiled(),
         ptc_transport: :tool_call,
         max_turns: max_turns
       )

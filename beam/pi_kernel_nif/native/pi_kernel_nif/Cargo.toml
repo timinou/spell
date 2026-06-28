@@ -24,6 +24,10 @@ crate-type = ["cdylib"]
 [dependencies]
 rustler = "0.38"
 serde_json = "1"
+# PLAN-020 W3: the code_tree projector walks a tree-sitter parse into form_tree.
+# Pinned to the SAME version pi-code-engine uses so `tree_sitter::Language` from
+# a LanguageProfile is the identical type.
+tree-sitter = "0.25"
 pi-kernel = { path = "../../../../crates/pi-kernel" }
 pi-code-engine = { path = "../../../../crates/pi-code-engine" }
 pi-code-path = { path = "../../../../crates/pi-code-path" }

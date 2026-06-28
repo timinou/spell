@@ -31,14 +31,17 @@ defmodule SpellAgent.ToolsTest do
       Tools.define_tool(%{"name" => "count-tools", "params" => [], "source" => "(count (tool/list-tools {}))"})
       count = call("count-tools", %{})
 
-      # The seven always-present native tools (define-tool, define-config,
-      # list-tools, sh, sh-pipe, sh-parse, sh-unparse) plus count-tools itself.
+      # Always-present native tools: 3 meta (define-tool, define-config,
+      # list-tools) + 4 sh (sh, sh-pipe, sh-parse, sh-unparse; PLAN-011) + 3 code
+      # (code-parse, code-unparse, code-edit; PLAN-020), plus count-tools itself.
+      # Asserted as a floor so inventory growth never breaks this test.
       assert is_integer(count)
-      assert count >= 8
+      assert count >= 11
       # list-tools includes the just-defined tool (composition + self-visibility).
       names = Enum.map(Tools.inventory(), & &1["name"])
       assert "count-tools" in names
       assert "list-tools" in names
+      assert "code-edit" in names
     end
 
     test "a defined tool can call ANOTHER defined tool" do

@@ -120,4 +120,46 @@ defmodule PiKernelNif do
       other -> {:error, {:unexpected, other}}
     end
   end
+
+  @doc """
+  Parse `src` (source in language `lang`) into a `form_tree` JSON STRING
+  (PLAN-020 W3). `lang` is a language id ("elixir", "rust", "typescript", ...).
+  Returns `{:ok, json}` or `{:error, reason}`. Prefer `parse_code_decoded/2`.
+
+  Replaced at load time by the NIF; this body only runs if the NIF failed to load.
+  """
+  @spec parse_code(String.t(), String.t()) :: {:ok, String.t()} | {:error, String.t()}
+  def parse_code(_src, _lang), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  Render a `form_tree` JSON STRING back to a source string (PLAN-020 W3).
+  Returns `{:ok, src}` or `{:error, reason}`. Prefer `unparse_code_decoded/1`.
+  """
+  @spec unparse_code(String.t()) :: {:ok, String.t()} | {:error, String.t()}
+  def unparse_code(_tree_json), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  Parse and decode in one step: `{:ok, form_tree_map}` or `{:error, reason}`.
+  The form_tree is the canonical walkable node shape the q/* algebra runs on.
+  """
+  @spec parse_code_decoded(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def parse_code_decoded(src, lang) do
+    case parse_code(src, lang) do
+      {:ok, json} when is_binary(json) -> Jason.decode(json)
+      {:error, _} = err -> err
+      other -> {:error, {:unexpected, other}}
+    end
+  end
+
+  @doc """
+  Encode a form_tree map and render it back to source: `{:ok, src}` or
+  `{:error, reason}`. The inverse of `parse_code_decoded/2`.
+  """
+  @spec unparse_code_decoded(map()) :: {:ok, String.t()} | {:error, term()}
+  def unparse_code_decoded(tree) when is_map(tree) do
+    case Jason.encode(tree) do
+      {:ok, json} -> unparse_code(json)
+      {:error, _} = err -> err
+    end
+  end
 end

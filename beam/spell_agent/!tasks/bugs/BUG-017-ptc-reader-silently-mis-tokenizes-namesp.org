@@ -1,0 +1,188 @@
+#+TITLE: Support namespaced keywords (:ns/name) — reclassify DIV-13 from "by design" to BUG
+#+STATE: DONE
+#+SESSION_ID: 15164b2a4dd1a55b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan-020-lispy-code-edit-beam-spell_agent/2026-06-24T23-29-11-991Z_15164b2a4dd1a55b.jsonl]]
+#+CUSTOM_ID: BUG-017-ptc-reader-silently-mis-tokenizes-namesp
+#+COMPLETION_HASH: e83d571cdd0438a3
+
+* Initial Message
+
+how would you mkae this spell_agent work well with the edit tool? with an interface that just *makes sense* for this? e.g. if CodePath were lispy, how would edit be done?
+
+* Summary
+
+The PTC-Lisp reader (=ptc_runner/lib/ptc_runner/lisp/fast_parser.ex=) does NOT
+support namespaced keywords (=:ns/name=, idiomatic Clojure). Worse, it fails
+SILENTLY: a namespaced keyword is split into a bare keyword + a stray symbol with
+NO error at the read site, so the malformation detonates downstream as a cryptic,
+location-shifted error.
+
+* Reproduction (verified 2026-06-27, reader probe)
+
+#+begin_src elixir
+PtcRunner.Lisp.FastParser.parse(":q/no-match")
+;; => {:program, [keyword: "q", symbol: "/no-match"]}     ← TWO tokens, no error
+PtcRunner.Lisp.FastParser.parse(":a/b/c")
+;; => {:program, [keyword: "a", symbol: "/b/c"]}          ← same
+PtcRunner.Lisp.FastParser.parse(":plain")    ;; => {:keyword, "plain"}   (ok)
+PtcRunner.Lisp.FastParser.parse(":foo-bar")  ;; => {:keyword, "foo-bar"} (ok)
+#+end_src
+
+How it surfaced: =(def no-match :q/no-match)= in a prelude (=priv/preludes/q.clj=,
+PLAN-020) failed to COMPILE with:
+
+#+begin_example
+%PtcRunner.Lisp.Prelude.ValidationError{reason: :invalid_signature,
+  message: "malformed def in prelude:
+            [symbol: \"no-match\", keyword: \"q\", symbol: \"/no-match\"]"}
+#+end_example
+
+The =def= macro received THREE forms where it expected two — because the single
+keyword had silently become =[keyword \"q\", symbol \"/no-match\"]=. The error
+names =def=, not the keyword, three tokens away from the real cause.
+
+* Root cause (verified in source)
+
+=fast_parser.ex=:
+- =parse_keyword/1= (L408): =take_while(..., &keyword_char?/1)= — reads keyword
+  chars after =:=, stops at the first non-keyword char.
+- =keyword_char?/1= (L829): =c in ?a..?z or ?A..?Z or ?0..?9 or [+, -, *, <, >,
+  =, ?, !, _]= — does NOT include =/=.
+- =symbol_rest_char?/1= (L831): DOES include =/=.
+
+So =:q/no-match= reads =:q= as a keyword, stops at =/=, then =/no-match= is
+consumed as a separate SYMBOL (=/= is a legal symbol char). No boundary check
+flags the adjacency; two tokens fall out of one lexeme.
+
+* Why this is a real bug (not just "unsupported")
+
+1. SILENT. Even if namespaced keywords are intentionally unsupported, the reader
+   MUST error at the read site (=could not parse keyword= or =unexpected '/' in
+   keyword=), not emit two tokens that corrupt an enclosing form and fail
+   elsewhere with an unrelated message. Silent token-splitting violates the
+   read-time error contract the rest of the parser holds (e.g. unterminated
+   keyword already errors at L411-412).
+2. CLOJURE-SUBSET CLAIM. PTC presents as a Clojure subset; =:ns/name= keywords
+   are everyday Clojure (=:db/id=, =:http/status=). An agent porting Clojure idiom
+   hits this with no usable diagnostic.
+3. DEBUGGABILITY. The error points at the wrong form (=def=), so the cost is
+   paid in confused debugging, exactly the failure mode the rich undefined-var
+   hint machinery (SPELL PATCH-2 D-5) was built to prevent elsewhere.
+
+* Two possible fixes (decide first — affects scope)
+
+(A) MINIMAL / SAFE — reject at the read site. Detect a =/= immediately following
+    keyword chars and return a clear =syntax error: namespaced keywords are not
+    supported (':' ... '/')= at that offset. Pure defensive guard; no new
+    semantics; no atom-table impact. Restores the read-time error contract.
+
+(B) FULL — support namespaced keywords. Extend =keyword_char?= (or add a
+    =keyword_ns_char?= phase) to admit a single =/= separating ns and name, and
+    intern the qualified keyword. NB this is a SEMANTICS decision with an
+    atom-interning dimension — must go through =SourceAtoms.intern= and respect
+    the bounded-vocab / atom-DoS posture (cf. FUP-007). Heavier; needs its own
+    review.
+
+RECOMMENDATION: ship (A) now (the silent-failure is the actual bug); file (B) as
+a follow-up if namespaced-keyword SUPPORT is wanted. (A) is a few lines in
+=parse_keyword/1= + a parser test; (B) is a language-feature change.
+
+* Acceptance
+
+- (A): =FastParser.parse(":q/x")= returns =​{:error, <clear message naming the
+  '/'>}=, not a silent two-token split. A parser test covers =:ns/name=,
+  =:a/b/c=, and confirms =:plain= / =:foo-bar= still parse.
+- (B, if taken): =:q/no-match= parses to a single qualified-keyword token;
+  round-trips; interns safely; atom-growth bounded.
+- =mix check= clean; ptc_runner suite green.
+
+* Workaround in place (PLAN-020)
+
+=priv/preludes/q.clj= uses the plain keyword =:no-match= (no slash) as its
+sentinel; an inline NB comment points here. No functional compromise — the slash
+was the only problem.
+
+* Module of record
+
+=beam/ptc_runner/lib/ptc_runner/lisp/fast_parser.ex= (=parse_keyword/1= L408,
+=keyword_char?/1= L829). Discovered during PLAN-020 W1 (q/* prelude).
+
+* RESCOPE (2026-06-27): from "fail loud" to FULL SUPPORT — DIV-13 reclassification
+
+Initial framing was minimal (fix (A): reject at the read site). On investigation
+the substrate-strengthening option is both correct and cheap, so this BUG now
+targets FULL namespaced-keyword support and the reclassification of DIV-13.
+
+** Why DIV-13 "by design" no longer holds (it fails its own classification test)
+
+The PTC design framework (docs/ptc-lisp-specification.md "Design Philosophy" +
+"Classifying a Divergence") says a difference is a legitimate DIV only if one of
+FOUR rules justifies it: (1) no try/catch → signal values; (2) eager not lazy;
+(3) Java-named conventions; (4) data-properties signal / program-faults raise.
+A divergence that REJECTS a supported, finite Clojure form WITHOUT a rule behind
+it is a BUG, not a DIV (the doc states this explicitly, and DIV-14 was already
+reclassified DIV→BUG on exactly this ground: "simplicity is not one of the four
+rules").
+
+DIV-13's stated rationale is: "Simplicity. No user-defined namespaces means
+namespace-qualified keywords have no use." BOTH clauses are now false:
+  - PTC HAS namespaces everywhere: tool/, data/, json/, budget/, clojure.string/,
+    and the prelude (ns NAME ...) system with qualified calls (crm/get-user,
+    q/match). Namespaced keywords are the natural DATA companion to a language
+    that already namespaces its CODE.
+  - No rule forbids them. They are finite, eager, deterministic, raise nothing
+    on the program. Rejecting them is an unmotivated rejection of a supported
+    finite form → BUG by the doc's own test.
+
+** Representation cost is ZERO (the atom-DoS worry does not apply)
+
+SourceAtoms.intern/1 already returns an ATOM only for the bounded vocabulary and
+a BINARY for everything else (issue #953 fix). A user keyword :my_kw is already
+{:keyword, "my_kw"} (binary) → keyword_value/1 → LispKeyword.new("my_kw"). A
+namespaced keyword rides the IDENTICAL path: {:keyword, "ns/name"} →
+LispKeyword.new("ns/name"). No atom-table growth, no new runtime type, and
+core_to_source already renders it (":#{k}" → :ns/name). The only gate is the
+character-class checks that currently exclude `/`.
+
+** Implementation scope (focused, multi-touch but small)
+
+  1. lib/ptc_runner/lisp/fast_parser.ex — parse_keyword/1: after the name, accept
+     an OPTIONAL single `/` + a second name segment, producing {:keyword,
+     "ns/name"}. Reject a trailing/empty/double-slash (`:a/`, `:a/b/c`) with a
+     clear read-site error (keep the (A) guard as the malformed-case floor).
+  2. lib/ptc_runner/lisp/keyword.ex — @valid_name regex: allow one `/` separating
+     two grammar segments (NOT a leading/trailing/repeated slash).
+  3. lib/ptc_runner/lisp/runtime/predicates.ex — runtime (keyword "ns/name")
+     coercion: allow the qualified form (it currently raises per DIV-13). Decide:
+     keep runtime stricter than literals? No — runtime + literal should agree for
+     the qualified form. Update @keyword_pattern accordingly.
+  4. DECIDE: `:a/b/c` (multi-slash) — Clojure rejects (a keyword has at most one
+     `/`). PTC should reject it too, with a clear error (NOT a silent split).
+  5. Tests to FLIP (currently assert rejection): name_keyword_test.exs "string
+     with slash raises (DIV-13)"; the manual conformance DIV-13 cases
+     (test/support/lisp_conformance_cases/manual.ex ~L6858-6876); any parser_test
+     keyword cases. Add: literal :ns/name parses; round-trips via core_to_source;
+     (keyword "ns" "name") 2-arity if that path exists; equality + map-key use;
+     `:a/` and `:a/b/c` error clearly.
+  6. DOCS: docs/clojure-conformance-gaps.md DIV-13 → reclassify to a fixed BUG
+     entry (renumber per the doc's "GAP-* later judged → renumber" convention);
+     docs/ptc-lisp-specification.md L180 (remove the "not supported" line);
+     docs/conformance/clojure-core-audit.md DIV-13 note.
+
+** Sequencing
+
+PLAN-020 W1 (the q/* prelude) does NOT block on this — q.clj uses the plain
+keyword :no-match (no slash) and is unaffected. This BUG is done as its OWN
+focused change (parser + keyword + predicates + docs + conformance tests) so it
+stays reviewable, ideally right after W1 lands or interleaved as a clean unit.
+The (A) read-site guard is ALREADY IN PLACE (fail-loud on `:ns/...`) as the floor
+until full support lands; it must be replaced (not just kept) by the accept path.
+
+** Cross-link
+
+Discovered during PLAN-020 W1. GAP family: this is GAP-S34 / DIV-13 territory
+(see docs/conformance/clojure-core-audit.md `keyword` row: "namespace/name arity
+is unsupported" + DIV-13). Fixing it also closes the (keyword ns name) 2-arity
+gap noted there.
+
+NOTE [2026-06-27]: DONE (mid-flight, PLAN-020 W1). Implemented FULL namespaced-keyword support, not just the read-site guard. Changes in beam/ptc_runner: (1) fast_parser.ex parse_qualified_keyword/4 — consumes one /-separated segment → {:keyword, "ns/name"}; :a/ and :a/b/c error clearly at the read site. (2) keyword.ex @valid_name — one-/ grammar via @segment. (3) runtime/predicates.ex keyword/1 — @keyword_pattern allows one /-separated segment, each following the runtime rule. Representation cost ZERO: qualified names ride the existing binary-keyword path (SourceAtoms leaves them binary → LispKeyword), no atom growth. Docs: clojure-conformance-gaps.md DIV-13 reclassified DIV→BUG (fixed); ptc-lisp-specification.md L180; clojure-core-audit.md keyword row. Tests flipped: parser_test (parse to one qualified kw + malformed errors), name_keyword_test, predicates_test, validator_test, manual.ex conformance cases (2 DIV→:match). Verified: literal parse, runtime coercion, equality, map-key, name round-trip, double-slash rejection all pass; 282 touched-area tests green; mix format clean. Still unsupported (separate features, noted in docs): :keys destructuring with namespaced keys, 2-arity (keyword ns name) constructor [GAP-S34]. Pre-existing full-suite test-isolation flakiness (error_handling '(1 2 3), upstream_roundtrip shared-runtime) is UNRELATED — confirmed by pristine-tree comparison — filed separately.

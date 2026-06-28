@@ -46,6 +46,10 @@ defmodule SpellAgent.MixProject do
     [
       # The vendored agentic loop + PTC-Lisp sandbox (path dep, same as ptc_runtime).
       {:ptc_runner, path: "../ptc_runner"},
+      # PLAN-020 W3: the kernel NIF skin over pi-code-engine/pi-code-path. Hosts
+      # the tree-sitter -> form_tree projector (parse_code/unparse_code) that
+      # `code/parse`/`code/unparse` build on, alongside resolve_target/apply_edit.
+      {:pi_kernel_nif, path: "../pi_kernel_nif"},
       # Direct HTTP for the Anthropic subscription adapter (pulls Finch/Mint).
       {:req, "~> 0.5"},
       # Read Spell's agent.db (SQLite) for the subscription credential.

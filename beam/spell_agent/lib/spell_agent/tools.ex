@@ -34,8 +34,13 @@ defmodule SpellAgent.Tools do
   """
   @spec build_tools_map() :: %{optional(String.t()) => (map() -> term())}
   def build_tools_map do
+    # A registry (define-tool) entry must NEVER shadow a reserved native tool —
+    # otherwise a stored/rehydrated durable tool named e.g. `code-edit` would win
+    # (registry merges last) and bypass the parse-gated writer. Drop reserved
+    # names from the registry projection so the native built-in always resolves.
     registry_tools =
       ToolRegistry.all()
+      |> Enum.reject(fn entry -> reserved_name?(entry.name) end)
       |> Map.new(fn entry -> {entry.name, to_callable(entry)} end)
 
     meta_tools()
@@ -51,7 +56,10 @@ defmodule SpellAgent.Tools do
       "sh" => &SpellAgent.Sh.tool/1,
       "sh-pipe" => &SpellAgent.Sh.pipe_tool/1,
       "sh-parse" => &SpellAgent.Sh.parse_tool/1,
-      "sh-unparse" => &SpellAgent.Sh.unparse_tool/1
+      "sh-unparse" => &SpellAgent.Sh.unparse_tool/1,
+      "code-parse" => &SpellAgent.Code.parse_tool/1,
+      "code-unparse" => &SpellAgent.Code.unparse_tool/1,
+      "code-edit" => &SpellAgent.Code.edit_tool/1
     }
   end
 
@@ -133,6 +141,34 @@ defmodule SpellAgent.Tools do
         "doc" =>
           "Render a parsed bash tree back to a bash string (words re-escaped, " <>
             "injection-safe). e.g. (tool/sh-unparse {:tree t}) -> %{bash}.",
+        "kind" => "native"
+      },
+      %{
+        "name" => "code-parse",
+        "params" => ["src", "lang"],
+        "doc" =>
+          "Parse source code into a walkable form_tree (same shape as sh-parse " <>
+            "and Lisp history), so the q/* algebra walks source structurally. " <>
+            "e.g. (tool/code-parse {:src \"def f, do: 1\" :lang \"elixir\"}).",
+        "kind" => "native"
+      },
+      %{
+        "name" => "code-unparse",
+        "params" => ["tree"],
+        "doc" =>
+          "Render a form_tree back to source. An untouched subtree round-trips " <>
+            "verbatim; an edited subtree rejoins its children (re-parse equality, " <>
+            "not byte). e.g. (tool/code-unparse {:tree t}) -> %{src}.",
+        "kind" => "native"
+      },
+      %{
+        "name" => "code-edit",
+        "params" => ["path", "tree", "lang"],
+        "doc" =>
+          "Parse-gated transactional write: unparse the edited :tree, RE-PARSE it " <>
+            "(reject if the edit broke the grammar), then write :path. The agent " <>
+            "builds :tree via q/* (q/update / q/apply-ops) so the edit stays " <>
+            "reifiable data. e.g. (tool/code-edit {:path \"f.ex\" :lang \"elixir\" :tree t}).",
         "kind" => "native"
       }
     ] ++ SpellAgent.Mesh.Spawn.inventory() ++ SpellAgent.Mesh.Combinators.inventory()
@@ -231,6 +267,10 @@ defmodule SpellAgent.Tools do
       case PtcRunner.Lisp.run(source,
              context: context,
              tools: build_tools_map(),
+             # PLAN-020 W7: attach the q/* prelude so an authored/durable codemod
+             # tool can call q/update, q/apply-ops, etc. (same surface the main
+             # loop gets). nil when compilation failed -> tool runs without q/*.
+             prelude: SpellAgent.Code.Prelude.compiled(),
              caller: :in_process_v1
            ) do
         {:ok, step} ->
@@ -252,7 +292,10 @@ defmodule SpellAgent.Tools do
     # check, all under a heap/timeout cap. `data/<param>` references are a
     # recognized special form, not free vars, so a tool body that reads its
     # params validates cleanly. Returns :ok | {:error, [messages]}.
-    case PtcRunner.Lisp.validate(source) do
+    # Validate WITH the q/* prelude attached so a codemod tool that calls
+    # q/update / q/apply-ops validates (the analyzer knows the `q/` namespace),
+    # mirroring how `to_callable` runs the tool with the prelude (PLAN-020 W7).
+    case PtcRunner.Lisp.validate(source, prelude: SpellAgent.Code.Prelude.compiled()) do
       :ok -> :ok
       {:error, messages} -> {:error, Enum.join(List.wrap(messages), "; ")}
     end
@@ -269,7 +312,12 @@ defmodule SpellAgent.Tools do
         "sh-parse",
         "sh-unparse",
         "spawn-session",
-        "await-session"
+        "await-session",
+        # code-edit is a parse-GATED safety seam; a runtime define-tool must not
+        # be able to shadow it (registry tools merge last) and bypass the gate.
+        "code-parse",
+        "code-unparse",
+        "code-edit"
       ]
 
   defp require_string(args, key) do

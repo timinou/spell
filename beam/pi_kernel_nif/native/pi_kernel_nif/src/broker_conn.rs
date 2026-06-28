@@ -1,11 +1,12 @@
 //! Gate 3 (P3.8 / PLAN-334): the BEAM-side trigger of the owner-reclaim path.
 //!
 //! P3.5 proved the BROKER end — a dropped connection reclaims its edit-intents
-//! so a second owner can acquire (crates/pi-edit-broker/tests/owner_reclaim.rs).
-//! This module wires the BEAM TRIGGER: an owner's broker connection is held
-//! open inside a rustler `ResourceArc` for the duration of the hold. When the
-//! owning BEAM process dies, rustler's `Resource::down` monitor callback fires
-//! and we drop the connection; the `UnixStream`'s `Drop` closes the socket; the
+//! so a second owner can acquire
+//! (crates/pi-edit-broker/tests/owner_reclaim.rs). This module wires the BEAM
+//! TRIGGER: an owner's broker connection is held open inside a rustler
+//! `ResourceArc` for the duration of the hold. When the owning BEAM process
+//! dies, rustler's `Resource::down` monitor callback fires and we drop the
+//! connection; the `UnixStream`'s `Drop` closes the socket; the
 //! broker's existing disconnect-deregister (conn.rs:134) frees that owner's
 //! intents. A second owner then acquires the same file — no deadlock.
 //!
@@ -26,7 +27,8 @@ use rustler::{Encoder, Env, LocalPid, Monitor, Resource, ResourceArc, Term};
 
 /// A held broker connection owned by one BEAM process. The `UnixStream` is kept
 /// open for the lifetime of the `ResourceArc`; dropping the resource (on the
-/// owner's `:DOWN` or GC) closes it and the broker reclaims the owner's intents.
+/// owner's `:DOWN` or GC) closes it and the broker reclaims the owner's
+/// intents.
 pub struct BrokerConnection {
 	/// The live stream. `None` once explicitly released. Behind a `Mutex` so the
 	/// `down` callback and an explicit release can't race on the close.
@@ -70,15 +72,15 @@ fn read_line(reader: &mut BufReader<UnixStream>) -> Option<ServerMessage> {
 /// HELD inside the resource; when the caller process dies, `down` closes it and
 /// the broker reclaims the intent.
 ///
-/// `socket` + `broker_bin` are passed explicitly (not via env): `System.put_env`
-/// on the Elixir side does NOT reliably reach the NIF's `std::env::var_os`, so
-/// the host hands the paths in directly. `broker_bin` empty = let the broker's
-/// own resolution (sibling exe / PATH) find it.
+/// `socket` + `broker_bin` are passed explicitly (not via env):
+/// `System.put_env` on the Elixir side does NOT reliably reach the NIF's
+/// `std::env::var_os`, so the host hands the paths in directly. `broker_bin`
+/// empty = let the broker's own resolution (sibling exe / PATH) find it.
 ///
-/// DirtyIo-scheduled: this does blocking socket I/O (a cold broker spawn polls up
-/// to ~2s, plus blocking connect + read_line for the Hello/Welcome + IntentAck).
-/// A regular-scheduler NIF must return in <1ms, so this MUST run on a dirty I/O
-/// scheduler to avoid stalling the BEAM scheduler it lands on.
+/// DirtyIo-scheduled: this does blocking socket I/O (a cold broker spawn polls
+/// up to ~2s, plus blocking connect + read_line for the Hello/Welcome +
+/// IntentAck). A regular-scheduler NIF must return in <1ms, so this MUST run on
+/// a dirty I/O scheduler to avoid stalling the BEAM scheduler it lands on.
 #[rustler::nif(schedule = "DirtyIo")]
 fn claim_intent<'a>(
 	env: Env<'a>,
@@ -89,7 +91,11 @@ fn claim_intent<'a>(
 	code_path: String,
 ) -> Result<Term<'a>, String> {
 	let socket = PathBuf::from(socket);
-	let bin = if broker_bin.is_empty() { None } else { Some(PathBuf::from(broker_bin)) };
+	let bin = if broker_bin.is_empty() {
+		None
+	} else {
+		Some(PathBuf::from(broker_bin))
+	};
 	spawn_broker_if_absent(&socket, bin.as_deref()).map_err(|e| format!("spawn broker: {e}"))?;
 
 	let stream = UnixStream::connect(&socket).map_err(|e| format!("connect: {e}"))?;

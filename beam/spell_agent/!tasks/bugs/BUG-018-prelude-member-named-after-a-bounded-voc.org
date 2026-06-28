@@ -1,0 +1,89 @@
+#+TITLE: Prelude member named after a bounded-vocab word (bind/name/find/...) is invisible to siblings
+#+STATE: DONE
+#+SESSION_ID: 15164b2a4dd1a55b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan-020-lispy-code-edit-beam-spell_agent/2026-06-24T23-29-11-991Z_15164b2a4dd1a55b.jsonl]]
+#+CUSTOM_ID: BUG-018-prelude-member-named-after-a-bounded-voc
+
+* Initial Message
+
+how would you mkae this spell_agent work well with the edit tool? with an interface that just *makes sense* for this? e.g. if CodePath were lispy, how would edit be done?
+
+* Summary
+
+A PTC prelude =(ns ...)= whose member is named after a BOUNDED-VOCABULARY word
+(=bind=, =name=, =find=, =key=, =map=, ... \u2014 the names =SourceAtoms.intern/1=
+maps to atoms) could not be referenced by a SIBLING member: compilation failed
+with "prelude body references undefined variable(s): <name>". Discovered + FIXED
+mid-flight during PLAN-020 W1 (the q/* prelude has a member named =bind=).
+
+* Root cause (verified)
+
+Two representations of the same name disagreed across the prelude compile gate:
+
+  - =compiler.ex check_prelude_vars/2= seeds the undefined-var scope from member
+    SYMBOLS as BINARIES: =scope = ns_specs |> Enum.map(& &1.symbol) |> MapSet.new()=
+    \u2014 so the set holds ="bind"=.
+  - The parser interns a var name that is in the bounded vocabulary to an ATOM
+    (=SourceAtoms.intern("bind") => :bind=; a non-vocab name like ="bnd"= stays a
+    binary). So a sibling call =(bind e)= appears in the CoreAST as =​{:var,
+    :bind}= \u2014 an atom.
+  - =lisp.ex scope_member?/2= handled only the STRING->atom direction (a binary
+    name also checked as =safe_to_existing_atom=), NOT the reverse. An ATOM name
+    (=:bind=) against a STRING-seeded scope (="bind"=) missed both branches \u2192
+    reported "undefined".
+
+Net: any prelude member whose name is in the bounded atom vocabulary was
+invisible to its siblings, while a non-vocab name (=bnd=, =emit=) worked. Reach
+is broad \u2014 =name=, =find=, =key=, =get=, =map=, =bind=, etc. are exactly the
+words a helper library wants to use.
+
+* Reproduction (before fix)
+
+#+begin_src elixir
+Compiler.compile(~S"""
+(ns t "t" {:visibility :prompt})
+(defn bind [e n v] (assoc e n v))
+(defn use-it [e] (bind e "k" 1))
+""")
+# => {:error, %ValidationError{reason: :compile_error,
+#       message: "prelude body references undefined variable(s): bind"}}
+
+# Control: a non-vocab name compiles fine.
+Compiler.compile("(ns t \"t\" {:visibility :prompt})
+                  (defn bnd [e] e) (defn use-it [e] (bnd e))")  # => {:ok, _}
+#+end_src
+
+* Fix (applied)
+
+=lib/ptc_runner/lisp.ex scope_member?/2= \u2014 made the binary/atom check SYMMETRIC:
+when =name= is an atom, also test =Atom.to_string(name)= against the scope. Two
+lines, no behavior change for any currently-passing case (it only makes a
+previously-missed atom-vs-string match succeed). Verified: the =bind= repro now
+compiles; =mix test test/ptc_runner/lisp/= green except the one PRE-EXISTING
+unrelated failure (FUP-019, =​'(1 2 3)= quoted-list assertion).
+
+* Why fixed mid-flight (not deferred)
+
+Two-line, correctness-only change to a real defect with broad reach; it directly
+unblocks PLAN-020 W1 (the q/* prelude names a member =bind=). It cannot regress a
+passing program \u2014 it only resolves a name that previously spuriously failed.
+
+* Alternative considered + rejected
+
+Renaming the q/* member to dodge the vocab word. Rejected: it leaves the trap
+armed for the next prelude author (=name=, =find=, =key= are all natural helper
+names) and hides a real substrate defect behind a cosmetic workaround \u2014 the
+opposite of strengthening the substrate.
+
+* Acceptance
+
+  - A prelude member named =bind= / =name= / =find= resolves for its siblings.
+  - =mix test test/ptc_runner/lisp/= green modulo FUP-019's pre-existing failure.
+  - No regression in the undefined-var gate for genuine typos (a non-member,
+    non-builtin reference still reports undefined).
+
+* Module of record
+
+=beam/ptc_runner/lib/ptc_runner/lisp.ex= (=scope_member?/2=),
+=lib/ptc_runner/lisp/prelude/compiler.ex= (=check_prelude_vars/2= seeding).
+Discovered during PLAN-020 W1.
