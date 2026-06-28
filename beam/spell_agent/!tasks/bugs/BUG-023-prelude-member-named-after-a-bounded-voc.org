@@ -2,7 +2,7 @@
 #+STATE: DONE
 #+SESSION_ID: 15164b2a4dd1a55b
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan-020-lispy-code-edit-beam-spell_agent/2026-06-24T23-29-11-991Z_15164b2a4dd1a55b.jsonl]]
-#+CUSTOM_ID: BUG-018-prelude-member-named-after-a-bounded-voc
+#+CUSTOM_ID: BUG-023-prelude-member-named-after-a-bounded-voc
 
 * Initial Message
 
@@ -60,7 +60,7 @@ when =name= is an atom, also test =Atom.to_string(name)= against the scope. Two
 lines, no behavior change for any currently-passing case (it only makes a
 previously-missed atom-vs-string match succeed). Verified: the =bind= repro now
 compiles; =mix test test/ptc_runner/lisp/= green except the one PRE-EXISTING
-unrelated failure (FUP-019, =​'(1 2 3)= quoted-list assertion).
+unrelated failure (FUP-026, =​'(1 2 3)= quoted-list assertion).
 
 * Why fixed mid-flight (not deferred)
 
@@ -78,7 +78,7 @@ opposite of strengthening the substrate.
 * Acceptance
 
   - A prelude member named =bind= / =name= / =find= resolves for its siblings.
-  - =mix test test/ptc_runner/lisp/= green modulo FUP-019's pre-existing failure.
+  - =mix test test/ptc_runner/lisp/= green modulo FUP-026's pre-existing failure.
   - No regression in the undefined-var gate for genuine typos (a non-member,
     non-builtin reference still reports undefined).
 

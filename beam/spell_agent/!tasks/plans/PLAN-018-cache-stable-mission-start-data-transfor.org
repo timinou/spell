@@ -567,4 +567,4 @@ NOTE [2026-06-27]: CROSS-PLAN HANDSHAKE [2026-06-27] — PLAN-020 (lispy code/ed
 
 5. code/edit records the edit as the agent's recorded program (the q/apply-ops call is the reifiable value); NOT re-run inside code-edit (no nested sandbox).
 
-REMAINING for your side: edit-reduction's ALGEBRAIC tier (compose/cancel recorded code-edits) is now UNBLOCKED — code/edit exists + records structural ops. The span-overlap heuristic is only the raw-node fallback. Also FUP-020 (route code-edit write through execute rollback) is open but doesn't affect the reduction algebra.
+REMAINING for your side: edit-reduction's ALGEBRAIC tier (compose/cancel recorded code-edits) is now UNBLOCKED — code/edit exists + records structural ops. The span-overlap heuristic is only the raw-node fallback. Also FUP-027 (route code-edit write through execute rollback) is open but doesn't affect the reduction algebra.

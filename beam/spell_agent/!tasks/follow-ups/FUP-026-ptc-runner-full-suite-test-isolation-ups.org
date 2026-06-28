@@ -2,7 +2,7 @@
 #+STATE: ITEM
 #+SESSION_ID: 15164b2a4dd1a55b
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan-020-lispy-code-edit-beam-spell_agent/2026-06-24T23-29-11-991Z_15164b2a4dd1a55b.jsonl]]
-#+CUSTOM_ID: FUP-019-ptc-runner-full-suite-test-isolation-ups
+#+CUSTOM_ID: FUP-026-ptc-runner-full-suite-test-isolation-ups
 
 * Initial Message
 
@@ -11,7 +11,7 @@ how would you mkae this spell_agent work well with the edit tool? with an interf
 * Summary
 
 Pre-existing test-isolation flakiness in the =beam/ptc_runner= suite, surfaced
-(NOT caused) during PLAN-020 W1 / BUG-017. Two failure families fail ONLY when
+(NOT caused) during PLAN-020 W1 / BUG-022. Two failure families fail ONLY when
 the full suite runs, pass in isolation, and the count varies run-to-run at a
 FIXED seed (=--seed 0=) \u2014 the signature of shared global/process state leaking
 across files, not a logic bug.
@@ -35,7 +35,7 @@ across files, not a logic bug.
 
 * Why this is filed, not fixed here
 
-Orthogonal to BUG-017 (namespaced keywords). Confirmed unrelated by running the
+Orthogonal to BUG-022 (namespaced keywords). Confirmed unrelated by running the
 SAME failing files on the pristine submodule commit (afb39be2) \u2014 they fail there
 too, identically. Fixing the isolation leak is its own focused task (find the
 unreset upstream-runtime state; add a setup/on_exit teardown or unique names);
@@ -57,7 +57,7 @@ quoted-list semantics. Neither belongs inside the keyword substrate change.
   - PLAN-012 W1 (quoted collections desugar to =(quote ...)=) \u2014 the behavior the
     stale error_handling assertion predates.
 
-* Not a regression from BUG-017
+* Not a regression from BUG-022
 
 The namespaced-keyword change touches ONLY keyword tokenization
 (=fast_parser=/=keyword=/=predicates=); it cannot affect prelude-upstream-runtime

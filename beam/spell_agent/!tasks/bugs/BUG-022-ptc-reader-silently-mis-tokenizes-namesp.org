@@ -2,7 +2,7 @@
 #+STATE: DONE
 #+SESSION_ID: 15164b2a4dd1a55b
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan-020-lispy-code-edit-beam-spell_agent/2026-06-24T23-29-11-991Z_15164b2a4dd1a55b.jsonl]]
-#+CUSTOM_ID: BUG-017-ptc-reader-silently-mis-tokenizes-namesp
+#+CUSTOM_ID: BUG-022-ptc-reader-silently-mis-tokenizes-namesp
 #+COMPLETION_HASH: e83d571cdd0438a3
 
 * Initial Message
