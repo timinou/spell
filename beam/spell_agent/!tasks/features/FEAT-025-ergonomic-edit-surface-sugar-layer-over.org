@@ -1,0 +1,93 @@
+#+TITLE: Ergonomic (edit …) surface — sugar layer over the q/* reifiable-data algebra
+#+STATE: ITEM
+#+SESSION_ID: 15164b2a4dd1a55b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan-020-lispy-code-edit-beam-spell_agent/2026-06-24T23-29-11-991Z_15164b2a4dd1a55b.jsonl]]
+#+CUSTOM_ID: FEAT-025-ergonomic-edit-surface-sugar-layer-over
+
+* Initial Message
+
+merge onto main
+
+SPIKE (design only — not yet implemented). Answers the open design question from PLAN-020: "should edit operations use s-expr syntax `(edit path :op :args)` or plain data structures?"
+
+* Resolution
+
+NOT either/or. **Plain data is the ground truth; s-expr is a thin authoring skin that desugars to it.** This FEAT specifies the skin. PLAN-020 already shipped the data ground (q/apply-ops over `[{op pattern template}]`); this is purely additive ergonomics — zero change to the gate, the NIF, or the recorded-edit contract.
+
+Proven precondition (PTC sandbox, this session): the proposed sugar constructors desugar to **byte-identical** op-data to what code_edit_test.exs hand-writes today (`(= sugar hand)` -> true, single + multi-op). ∴ reifiability (PLAN-018) is preserved by construction.
+
+* The friction today (why this FEAT exists)
+
+To rename `x`->`y` in `f.ex`, the agent today writes:
+
+#+begin_src clojure
+(tool/code-edit
+  {:path "f.ex" :lang "elixir"
+   :tree (q/apply-ops
+           (tool/code-parse {:src (slurp "f.ex") :lang "elixir"})
+           [{"op" "update"
+             "pattern" {"node" "identifier" "value" "x"}
+             "template" {"node" "identifier" "value" "y"}}])})
+#+end_src
+
+Four friction points:
+1. **Manual parse->edit->write plumbing** — the agent re-reads, re-parses, threads the tree by hand every time.
+2. **`lang` is redundant** — derivable from the path extension (`.ex`->elixir), yet must be passed twice (parse + edit).
+3. **Raw form_tree literals** — `{"node" "identifier" "value" "x"}` is verbose, string-keyed, easy to typo (a typo'd key silently no-ops past the gate).
+4. **No verb vocabulary** — "rename this identifier" is spelled as a generic update-op, not as intent.
+
+* Design: three layers, each a PTC value (homoiconic — nothing compiled)
+
+All ship as additions to `priv/preludes/q.clj` (or a sibling `edit.clj` prelude). No Elixir/Rust change for L1-L3; L4 is one optional NIF-adjacent helper.
+
+** L1 — node constructors (data -> data, pure)
+
+#+begin_src clojure
+(defn q-id   [v]      {"node" "identifier" "value" v})
+(defn q-call [f args] {"node" "call" "children" (into [(q-id f)] args)})
+;; one per high-frequency kind, derived by REFLECTION over the projector's kind
+;; vocabulary where possible (no-drift principle).
+#+end_src
+
+** L2 — verb sugar (intent -> ONE op, which is data)
+
+#+begin_src clojure
+(defn rename-id [from to] {"op" "update" "pattern" (q-id from) "template" (q-id to)})
+(defn rewrite   [pat tmpl] {"op" "rewrite" "pattern" pat "template" tmpl})
+(defn wrap-in   [pat tmpl] {"op" "wrap"    "pattern" pat "template" tmpl})
+#+end_src
+
+Agent writes intent (`(rename-id "x" "y")`); the value IS the op the reducer records. Proven identical to the hand-written op.
+
+** L3 — the `(edit …)` fn: collapse the parse->apply->write pipeline
+
+#+begin_src clojure
+;; (edit "f.ex" (rename-id "x" "y") (rename-id "a" "b"))
+(defn edit [path & ops]
+  (let [lang (lang-of path)
+        tree (tool/code-parse {:src (slurp path) :lang lang})]
+    (tool/code-edit {:path path :lang lang
+                     :tree (q/apply-ops tree (vec ops))})))
+#+end_src
+
+`(vec ops)` is exactly the recorded op-list. `edit` is sugar; `code-edit` stays the gated seam. A durable codemod stores the `ops` vector, not the closure.
+
+** L4 — `lang-of` (only new native-adjacent piece)
+
+Path-extension -> `pi_code_engine::LanguageId`:
+- a) pure-PTC ext->lang map in prelude — zero native change, must mirror engine set (drift risk).
+- b) expose `PiKernelNif.language_for_path/1` (engine has `LanguageId::new` + profile lookup at lib.rs:195) — single source of truth. PREFERRED.
+
+* Why NOT s-expr-as-primitive (rejected branch)
+
+If `(edit path :op :args)` were the *primitive* (a runtime special form), the recorded edit would be opaque syntax, not a value — breaking PLAN-018's contract that a recorded `:xf` be reifiable data the reducer can diff/compose/prove `q/equal?` over. Sugar-over-data keeps both. Same pattern as shipped `q/update` (closure, interactive) vs `q/apply-ops` (data, durable).
+
+* Acceptance (when implemented)
+- `(edit "f.ex" (rename-id "x" "y"))` writes through the existing gate; a broken edit still leaves the file untouched.
+- `(rename-id "x" "y")` returns data byte-identical to the W5 hand-written op (regression-asserted, as proven this session).
+- A durable codemod authored with the sugar rehydrates and replays from the stored op-list (not a closure).
+- `lang-of`/`language-for-path` agrees with the engine's profile lookup for ex/rs/py/js/ts at minimum.
+- No change to code-edit's gate, the projector NIF, or the recorded-edit shape.
+
+* Provenance
+Spike requested after PLAN-020 merge (commit 7b0263848) answering the STUCK/ASK on edit-interface design. Desugaring equality proven in PTC sandbox this session. Builds strictly on shipped W5/W7 surface.
