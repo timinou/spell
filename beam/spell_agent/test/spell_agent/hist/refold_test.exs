@@ -193,5 +193,27 @@ defmodule SpellAgent.Hist.RefoldTest do
       assert length(slice) == 2
       assert hd(slice).id == a.id
     end
+
+    test "hist/reduce degrades to the unreduced tape on a malformed node (best-effort)" do
+      # A node with a non-map sees entry would make Reduce.cse_sees raise; the
+      # verb must fall back to the unreduced refold, never crash the mission.
+      a =
+        Recorder.record_node(
+          Memory,
+          "s1",
+          %{prompt: "hi", program: "(def x 1)", result: "ok"},
+          nil
+        )
+
+      # corrupt the stored node's sees to a non-map shape.
+      {:ok, node} = SpellAgent.Hist.Store.fetch(Memory, {:node, "s1", a.id})
+      SpellAgent.Hist.Store.put(Memory, {:node, "s1", a.id}, %{node | sees: [:not_a_map]})
+      set_main(a.id)
+
+      verbs = SpellAgent.Hist.Namespace.tools(Memory, "s1")
+      result = verbs["hist/reduce"].(%{})
+      # either a valid tape (fallback refold) or an error map \u2014 never a crash.
+      assert is_list(result) or match?(%{"err" => _}, result)
+    end
   end
 end

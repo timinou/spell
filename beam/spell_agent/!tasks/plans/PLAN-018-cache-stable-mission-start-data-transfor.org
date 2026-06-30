@@ -1,5 +1,5 @@
 #+TITLE: Cache-stable mission start + data-transform history reduction (beam-lisp policy, Elixir mechanism)
-#+STATE: ITEM
+#+STATE: DOING
 #+SESSION_ID: 15195dad122fb703
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-27T08-45-31-080Z_15195dad122fb703.jsonl]]
 #+CUSTOM_ID: PLAN-018-cache-stable-mission-start-data-transfor
@@ -793,3 +793,48 @@ The resolution is earned incrementally; the cheapest win is tension-free:
      tension-free, highest-$ move.
 
 NOTE [2026-06-30]: Added a full first-principles design note resolving the caching<->compaction tension: stated both objectives exactly (V_cache freezes the prefix, V_compact rewrites it -> mechanical conflict); showed the tension is an artifact of prose+un-addressed representation, dissolved by a deterministic content-addressed fold; three resolution layers (amortization/CWL tau-ceiling, I-frame/P-frame rate control, content-addressing where compaction FEEDS the cache); the spell_agent superpower (restorability collapses CWL's 3-D tau dial to 2-D, both favoring a tighter+cheaper+better budget); the precise three-way context-distillation mapping (weights=discard, text=reject, span-fold/PROJ-003=only native sense); unified decision ladder; and the sequencing consequence that W1 is tension-free and ungated. Grounded in arXiv 2606.11213 (CWL), doc 15, and the existing rate-controller section.
+
+* L1 AUDIT FINDING [2026-06-30]: node-space reduction vs tape-space shedding
+
+The L1 integrated four-laws swarm (post-W4) surfaced a cross-wave interaction the
+per-wave gates could not see. ProviderValidity (0.88) and LosslessProof (0.91)
+passed; Determinism + BestEffort converged on one architectural truth:
+
+** The finding
+W4's lossless transforms (tool-cse, stale-read-collapse, print-prune) operate on
+a node's `sees` (inner PTC tool calls) and `prints`. But in ptc_transport:
+:tool_call mode, W3's Refold emits per node only `form_src` (the program) +
+`result` (the program's return) as the native tape; the `sees` and `prints` are
+recorded sub-structure that NEVER reach the wire. So reduce->refold currently
+sheds nothing the cache sees: the refolded tape is byte-identical with or without
+the sees/prints reduction.
+
+** The resolution (scope clarification, not a bug)
+This is the correct DIVISION OF LABOR, now made explicit:
+  - W4 (sees/prints/binds) = NODE-STORE compaction + the effect/idempotence
+    analysis. dead-bind-elim preserves the env proof; tool-cse/stale-collapse
+    shrink the stored node and classify what each turn did. These are sound and
+    load-bearing for the DECISION (what is reducible) and for store hygiene.
+  - W6 (result-spill + span-fold) = TAPE-SPACE shedding. The wire payload is
+    `node.result`; W6's result-spill replaces an over-threshold result inline with
+    a {node_id, path, digest} stub (restorable via hist/recall). THAT is what
+    shrinks the refolded tape. The W4 effect classifier + sees analysis feed the
+    spill decision (a read result is restorable; an external one is not).
+
+So the tape-shrink the rate-controller (W5) banks on lands in W6, not W4. W4 is
+the provably-lossless node-space tier + the soundness analysis W6's spill rides
+on. The plan already separates these (W4 = lossless, W6 = lossy-restorable); L1
+makes the consequence explicit: W4 does not move wire bytes by itself.
+
+** Actions taken
+  1. reducibility.ptc estimate corrected to model what actually sheds on the WIRE
+     (node.result duplicates/spillables), not the sees-level CSE, so the W5
+     controller decides on real wire savings. Also added the stale-read class to
+     the estimate (it was only counting exact (name,args,result) dups).
+  2. hist/reduce given a best-effort rescue: a malformed node degrades to the
+     unreduced refold (or an {"err"} map), never crashes the mission.
+  3. W6 scope sharpened: result-spill is THE tape-shrinking transform; it reads
+     the W4 effect class to decide restorability. The W5 estimate and the W6 spill
+     must agree on the same (node.result) token model.
+
+NOTE [2026-06-30]: L1 four-laws audit: ProviderValidity + LosslessProof PASS; Determinism + BestEffort surfaced that W4's sees/prints reductions shrink the node STORE but not the refolded TAPE (refold emits form_src+result, not sees). Clarified division of labor: W4 = node-space lossless + soundness analysis; W6 result-spill = tape-space shedding (the actual wire shrink). Fixed reducibility estimate to model wire (node.result) shedding + added stale-read class; added best-effort rescue to hist/reduce. No code bug \u2014 a scope clarification + estimate correction + posture hardening.

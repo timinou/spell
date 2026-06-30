@@ -262,11 +262,32 @@ defmodule SpellAgent.Hist.Namespace do
   # PLAN-018 W4: reduce the root->cursor slice (lossless tier) and refold it to a
   # replayable tape. Returns the message list, or an {"err" ...} map on a missing
   # session/cursor (mirrors hist/refold).
+  #
+  # BEST-EFFORT POSTURE: a malformed node could make Reduce/Refold raise; the
+  # mission must degrade to the UNREDUCED refold (or an error map), never crash.
+  # We rescue the reduce+refold pipeline and fall back to a plain refold; if even
+  # that fails, surface an {"err" ...} map. (L1 swarm finding.)
   defp reduce(impl, session_id, args) do
-    case Reconstitute.at(impl, session_id, cursor_arg(args)) do
-      {:ok, %{nodes: slice}} -> slice |> Reduce.lossless() |> Refold.slice_to_tape()
+    cursor = cursor_arg(args)
+
+    case Reconstitute.at(impl, session_id, cursor) do
+      {:ok, %{nodes: slice}} -> reduce_or_fallback(slice)
       {:error, reason} -> %{"err" => to_string(reason)}
     end
+  end
+
+  defp reduce_or_fallback(slice) do
+    slice |> Reduce.lossless() |> Refold.slice_to_tape()
+  rescue
+    _ ->
+      # the reducer/refold failed on a malformed node — degrade to the unreduced
+      # tape rather than crash the mission (a bad reduction is a worse cache, not
+      # a dead agent).
+      try do
+        Refold.slice_to_tape(slice)
+      rescue
+        _ -> %{"err" => "reduce+refold failed"}
+      end
   end
 
   # Resolve a :cursor arg to a known atom lane, defaulting to :main. Never mints a
