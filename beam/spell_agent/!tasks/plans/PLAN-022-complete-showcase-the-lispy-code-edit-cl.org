@@ -1,0 +1,188 @@
+#+TITLE: Complete + showcase the lispy code/edit cluster (FEAT-024, FUP-026/027, PLAN-020 close)
+#+STATE: ITEM
+#+SESSION_ID: 15195d97dff3d090
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-27T08-45-09-375Z_15195d97dff3d090.jsonl]]
+#+CUSTOM_ID: PLAN-022-complete-showcase-the-lispy-code-edit-cl
+
+* Initial Message
+
+explain the FUPs please, so that we prioritise their implementation, and yes, regenerating the FUP-017 golden transcript is fine.
+
+* Goal
+
+Finish the lispy code/edit cluster (PLAN-020 + its 4 satellites) to a clean,
+safe, closeable state, then SHOWCASE it through deterministic, network-free
+"cassette-like" demos visible BOTH in the spell TUI (golden rendered transcript)
+AND as terminal stdout (a codemod inspector). The showcase is the proof the whole
+q/* + code/* surface works end to end, rendered exactly as a user would see it.
+
+PLAN-020 already shipped substantially via the plan-020 merge (lib/spell_agent/code.ex
+407L, priv/preludes/q.clj 472L, code/prelude.ex, the pi_kernel_nif tree projector,
+and the q/code_* test suite — all green in the 1042-test full suite). FEAT-025
+(ergonomic (edit ...) sugar) is already DONE. What remains is: one safety gap
+(FUP-027), one cheap enabler (FEAT-024), test hygiene (FUP-026), a completion
+audit to close PLAN-020, and the showcase phase.
+
+* Non-goals
+
+- The history-reducer itself (PLAN-018 W4+ consumes this; not built here).
+- LSP-backed semantic edges (def->/ref->/implements->): structural only.
+- Exhaustive language coverage: Elixir is the proving language; a second is
+  optional in the showcase, not required.
+- Reviewer swarms per architecture wave: the cluster is small and already
+  largely shipped; a single review gate before closing PLAN-020 suffices (vs the
+  MESH per-wave swarm cadence).
+
+* The four pending items (recap, with current state)
+
+| id       | what                                                        | state |
+|----------+-------------------------------------------------------------+-------|
+| FUP-027  | route code/edit write through execute transactional rollback| ITEM  |
+| FEAT-024 | declare special form in ptc_runner (forward-ref gate seed)  | ITEM  |
+| FUP-026  | ptc_runner full-suite test isolation (aggregate-only fails) | ITEM  |
+| PLAN-020 | the umbrella plan — audit W1-W8 acceptance, then close       | ITEM  |
+
+* Build sequence — waves
+
+** Phase 1 (w1, PARALLEL) — the three independent satellites
+
+These touch disjoint files and have no inter-dependency, so they run together.
+
+*** P1a — FEAT-024: declare special form (the cheap enabler)
+Add (declare a b ...) to the vendored ptc_runner fork (beam/ptc_runner) so
+mutually-recursive top-level defns pass the pre-execution undefined-var gate. The
+RUNTIME already late-binds (verified: apply.ex resolves free names against the live
+user_ns at call time); the SOLE blocker is the static gate
+(lisp.ex collect_undefined_vars/2, the {:do, exprs} clause that threads def names
+left-to-right). declare seeds the names into scope up front. ~20 LOC + a focused
+test (mutual recursion that fails the gate today passes after declare; a genuinely
+undefined var still errors). Unblocks readable expr<->clause<->expr walkers for
+code/unparse and future form_tree walkers.
+Files: beam/ptc_runner/lib/ptc_runner/lisp/*.ex (the gate + special-form dispatch),
+its test dir.
+Accept: a mutual-recursion fixture passes the gate; an undefined-var still fails;
+ptc_runner suite green (modulo the FUP-026 pre-existing isolation flakes, fixed in P1c).
+
+*** P1b — FUP-027: transactional rollback for code/edit (the safety gap)
+Today code/edit (code.ex gate_write) does a bare File.write + rename; it is NOT
+covered by the execute layer's all-or-nothing file rollback (which tracks the
+edit/create PTC tools). So a program that calls code-edit then (fail)s leaves the
+file changed. Close it. INVESTIGATE the three FUP options first, then pick:
+  1. Route through the SAME seam edit/create enlist in (cleanest IF a native tool
+     can reach the execute layer's file-write journal — investigate where execute
+     journals a write and whether a native tool can enlist).
+  2. Snapshot/restore journal: code-edit snapshots prior bytes + registers a
+     restore thunk the run executes on failure (self-contained; duplicates the layer).
+  3. Route through pi_kernel_nif::apply_edit + the edit broker (crates/pi-edit-broker,
+     txn_journal) — richest (cross-session conflict detection) but needs apply_edit
+     to accept a whole-file/form-tree replace.
+Decision criterion: prefer (1) if reachable; fall back to (2) for a self-contained
+fix; (3) only if the broker path is already ergonomic. Record the decision in the
+FUP before coding.
+Files: lib/spell_agent/code.ex (the write path) + whatever execute-layer seam (1)
+needs; a focused test (code-edit then fail -> file restored; code-edit then succeed
+-> file kept).
+Accept: a program that code-edits then fails leaves the file at its pre-edit bytes;
+a successful program keeps the write; existing code_edit/code_apply tests green.
+
+*** P1c — FUP-026: ptc_runner test isolation (hygiene)
+Two failure families in beam/ptc_runner fail ONLY in the full suite at --seed 0,
+pass in isolation, count varies run-to-run (shared-global-state signature). Both
+are PRE-EXISTING (fail identically on pristine submodule afb39be2), surfaced not
+caused by this work. (a) upstream_roundtrip_test.exs (3 tests) — find the unreset
+upstream Runtime/persistent_term/named process; add setup/on_exit teardown or
+unique names. (b) error_handling_test.exs:299 — a stale assertion (expects '(1 2 3)
+to be a parse_error; it now returns a list node since PLAN-012 lifted the quoted-
+collection restriction); one-line update.
+Files: beam/ptc_runner/test/ptc_runner/lisp/{prelude/upstream_roundtrip,integration/error_handling}_test.exs
++ whatever shared-state source the leak traces to.
+Accept: mix test (full ptc_runner suite) at --seed 0 deterministic green across
+repeated runs.
+
+** Phase 2 (w2) — PLAN-020 completion audit + close
+
+Depends on P1a+P1b (the W-gate satellites) landing. AUDIT that PLAN-020's W1-W8
+acceptance actually holds on the merged code (the merge landed the code; this
+verifies the contracts):
+  - W1: q/equal? reflexive/symmetric; q/match passes the prototype table;
+    comp+cancellation laws hold; non-linear+splice+field-capture covered.
+  - W3: re-parse equality per construct; exotic -> raw round-trips verbatim.
+  - W5: a structural rewrite applies+round-trips; a bad xf leaves the file
+    unchanged (now BACKED by FUP-027's rollback); the recorded edit is a
+    reifiable ops list.
+  - W7: a durable codemod rehydrates next session (code_durable_test).
+Read the existing q/code_* tests, map them to the W-acceptance bullets, fill any
+gap with a focused test, confirm the recorded :xf is genuinely reifiable
+standalone (the PLAN-018 cross-plan contract). Single review gate (self-review or
+one reviewer agent over the cluster diff) for whole-surface coherence (one algebra
++ thin verbs, no parallel impls). Then close PLAN-020 DONE with a completion
+summary; fold FEAT-024/FUP-026/FUP-027 closure into the same summary.
+Accept: every W-acceptance bullet has a named passing test; PLAN-020 + the 3
+satellites DONE; mix check clean.
+
+** Phase 3 (w3) — SHOWCASE (the proof, two complementary surfaces)
+
+The headline ask: deterministic, network-free "cassette-like" demos of the
+code/edit surface, visible in the spell TUI AND as terminal stdout. Both reuse
+shipped substrate (no parallel harness).
+
+*** S1 — TUI golden transcript (see it in the spell inspector)
+Reuse the LlmTerminal seam (FEAT-007: drive the REAL inspector App through a REAL
+headless terminal). Instead of a recorded SSE cassette, inject a SCRIPTED llm (the
+mesh tests' dispatch_llm -> lisp_eval pattern, network-free + deterministic) that
+emits a code/edit codemod program — e.g. console.log -> logger.info via q/rewrite,
+or an Elixir identifier rename. The real agent loop runs it: code/parse -> q/rewrite
+-> code/edit -> parse-gate -> (rolled-back-safe) write, over a FIXTURE file in a
+tmp dir. Capture the rendered span tree + run detail as a golden .transcript
+(LlmTerminal.normalize_transcript masks volatile ids/durations), asserted on replay
+exactly like answer_42.transcript. This is the agent's codemod reasoning rendered
+exactly as the live TUI draws it.
+Substrate change needed: LlmTerminal.run_scenario already parameterizes llm
+(on_submit calls Session.run(p, llm: ...)); add a :llm opt so a scripted llm can
+be injected instead of LlmCassette.llm. Tiny, additive.
+Files: test/spell_agent/tui/code_edit_terminal_test.exs (new),
+test/snapshots/llm/code_edit_codemod.transcript (new golden),
+test/support/llm_terminal.ex (+ :llm injection opt), a fixture under test/fixtures/.
+Accept: the scenario runs offline+deterministic; the golden transcript shows the
+codemod span tree; replay asserts equality.
+
+*** S2 — stdout codemod inspector (see it as terminal output)
+A mix task sibling to spell.mesh: `mix spell.codemod` runs a real codemod over a
+fixture file and prints, to stdout, the BEFORE source, the q/* ops AS DATA (the
+reified transform), the AFTER source, and the parse-gate verdict — pure formatters
+over code/parse + q/rewrite + code/unparse, no agent loop, no network (the
+spell.mesh stdout-inspector pattern: pure MeshView-style formatters + a snapshot
+test). Modes: default (a built-in demo codemod), --file PATH --op OPSPEC (run a
+given codemod), maybe --diff (before/after unified). A snapshot test asserts the
+stdout (the mesh_view_test pattern).
+Files: lib/mix/tasks/spell.codemod.ex (new), lib/spell_agent/code/codemod_view.ex
+(new, pure formatters), test/spell_agent/code/codemod_view_test.exs (new).
+Accept: mix spell.codemod prints the before/ops/after/verdict for the demo codemod;
+the formatter snapshot test is green; no network.
+
+Optional stretch (only if cheap): a Scenes fixture forest for a code/edit run so
+`mix spell.gallery` browses it interactively — defer if it adds cost.
+
+* Acceptance (whole plan, observable)
+
+- Phase 1: FEAT-024 gate test + FUP-027 rollback test + FUP-026 deterministic
+  ptc_runner suite, all green; mix compile --warnings-as-errors exit 0.
+- Phase 2: every PLAN-020 W-acceptance bullet maps to a named passing test;
+  PLAN-020 + FEAT-024 + FUP-026 + FUP-027 all DONE.
+- Phase 3: S1 golden transcript asserts on replay (TUI); S2 stdout snapshot
+  asserts (terminal); both network-free + deterministic.
+- Full suite green; mix check clean. Commit incrementally (one commit per phase
+  item, per the standing "commit as you go" directive).
+
+* Dependencies / waves summary
+
+w1: P1a FEAT-024  ||  P1b FUP-027  ||  P1c FUP-026     (disjoint files, parallel)
+w2: P2 PLAN-020 audit + close        (needs P1a + P1b)
+w3: S1 TUI golden  ||  S2 stdout demo  (needs P1b for safe-write demo + P2 surface sign-off)
+
+* Cross-links
+- PLAN-020 (the umbrella this completes), FEAT-024/025, FUP-026/027.
+- PLAN-018 (second consumer of q/* + reified-xf; this plan's Phase 2 confirms the
+  standalone-reifiability contract it depends on).
+- FEAT-006/007 (LLM cassette + LlmTerminal — the S1 substrate).
+- spell.mesh / MeshView (the S2 stdout-inspector pattern).
