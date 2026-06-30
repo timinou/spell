@@ -64,3 +64,22 @@ last or restore from VCS until this lands.
 execute-layer rollback seam (in =ptc_runner=) is the integration target; option 3
 involves =beam/pi_kernel_nif= =apply_edit= + =crates/pi-edit-broker=.
 Discovered: PLAN-020 W6 swarm review.
+
+NOTE [2026-06-30]: [2026-06-27] INVESTIGATION + DECISION (PLAN-022 P1b). The FUP's three options were written in the Spell-HARNESS mental model. Verified facts in the BEAM ptc_runner project:
+
+1. There is NO execute-layer file-write rollback in the BEAM ptc_runner. The `journal` field in EvalContext is for (task) idempotent caching, not file rollback. There are NO tracked edit/create native tools here; `code-edit` is the ONLY file writer. So FUP option 1 ("route through the seam edit/create use") has no seam to route through. The transactional rollback the FUP references is the Spell harness's `execute` tool — a different system.
+
+2. Tool execution runs in a SPAWNED SANDBOX WORKER process (PtcRunner.Sandbox.execute -> Process.spawn), NOT the caller. EMPIRICALLY CONFIRMED with a probe: a tool calling Journal.record (process-dict) inside Lisp.run sees active?=false, and the caller draining after sees 0 records. So a caller-side process-dictionary journal CANNOT cross the boundary.
+
+3. For the AGENT path, spell_agent does NOT own the per-program Lisp.run boundary — the fork's loop (sub_agent/loop/ptc_tool_call.ex execute_program) does. So spell_agent cannot bracket each agent-authored program from outside.
+
+CONSEQUENCE: a correct, path-agnostic rollback must drain the journal IN THE WORKER, because code-edit's record AND the program's (fail) both occur in the same worker process (internally consistent process dict). The drain must be triggered by a post-eval verdict known in-worker.
+
+DECISION (option 2, worker-side, with a general fork hook): 
+  (a) SpellAgent.Code.Journal — a WORKER-SIDE process-dict stack: record/1 snapshots (path, prior-bytes|:absent) before each code-edit write; finalize/1 drains by verdict (:ok -> commit/drop; :fail|:error -> restore LIFO). Lives in spell_agent (owns the code-edit policy).
+  (b) A GENERAL post-eval finalizer capability in the fork: Lisp.run(..., on_complete: fn verdict -> ... end) runs the finalizer IN-WORKER after eval, before the worker exits. Default nil = current behavior (no rollback) = purely additive + best-effort. This is a legitimately general runner feature (saga/compensation), not code-edit-specific in the fork.
+  (c) spell_agent wires on_complete -> &Code.Journal.finalize/1 across the Lisp.run callsites it controls AND threads it through SubAgent -> LispOpts for the agent loop.
+
+SEQUENCING: the fork hook touches lisp.ex, which FEAT-024 (PLAN-022 P1a) is concurrently editing. To avoid a concurrent-edit conflict, the fork-hook portion of P1b is sequenced AFTER P1a lands (await), then done serially.
+
+DOCUMENTED LIMITATION (v1): rollback covers code-edits in the MAIN program flow. A code-edit inside a pmap/pcalls-spawned sub-worker records in THAT sub-worker's dict (separate process), outside the top-level finalizer's reach — a narrower follow-up if it ever matters (rare: agents rarely fan out file writes). The headline acceptance ((do (code-edit ...) (fail ...)) restores the file) is in the main-flow case and IS covered.

@@ -83,6 +83,8 @@ defmodule SpellAgent.Code do
   the execute layer's tracked primitive is a tracked follow-up.)
   """
 
+  alias SpellAgent.Code.Journal
+
   @doc """
   The native tool fn registered as `code-parse`. Parses `:src` under `:lang`
   into a `form_tree` map, or returns an `%{"error" => _}` map.
@@ -372,6 +374,13 @@ defmodule SpellAgent.Code do
   defp gate_write(path, src) do
     tmp = path <> ".code-edit.#{System.unique_integer([:positive])}.tmp"
 
+    # FUP-027: snapshot the target's PRIOR state into the program-scoped restore
+    # journal BEFORE overwriting, so a later (fail …) in the enclosing program
+    # rolls this write back. A no-op when no journal scope is active (a bare write
+    # keeps the pre-FUP-027 behaviour). Captured before the rename, while the old
+    # bytes still exist.
+    Journal.record(%{path: path, prior: prior_state(path)})
+
     with :ok <- File.write(tmp, src),
          :ok <- preserve_mode(path, tmp),
          :ok <- File.rename(tmp, path) do
@@ -380,6 +389,17 @@ defmodule SpellAgent.Code do
       {:error, reason} ->
         _ = File.rm(tmp)
         {:error, "code-edit: write failed (#{:file.format_error(reason)})"}
+    end
+  end
+
+  # The target's prior state for the rollback journal: its current bytes, or
+  # `:absent` when the target does not yet exist (a fresh create — rollback then
+  # deletes it). Best-effort: an unreadable target records `:absent` so a failed
+  # program at worst removes a file it could not snapshot, never crashes the write.
+  defp prior_state(path) do
+    case File.read(path) do
+      {:ok, bytes} -> {:bytes, bytes}
+      {:error, _} -> :absent
     end
   end
 
