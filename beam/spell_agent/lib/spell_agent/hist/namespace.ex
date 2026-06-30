@@ -36,7 +36,7 @@ defmodule SpellAgent.Hist.Namespace do
   stored thing speak one tongue.
   """
 
-  alias SpellAgent.Hist.{Crystallize, Lens, Query, Reconstitute, Refold, Spans, Tools, Window}
+  alias SpellAgent.Hist.{Crystallize, Lens, Query, Reconstitute, Reduce, Refold, Spans, Tools, Window}
   alias SpellAgent.Hist.Store
 
   @doc """
@@ -75,7 +75,12 @@ defmodule SpellAgent.Hist.Namespace do
       # PLAN-018 W3: the cheap reducibility ESTIMATE (tok_full/tok_reduced/
       # reducible_tokens) the rate-controller reads. Runs the reducibility.ptc
       # policy over the projection — estimate only, no reduction, no inference.
-      "hist/reducibility" => fn args -> reducibility(impl, session_id, args) end
+      "hist/reducibility" => fn args -> reducibility(impl, session_id, args) end,
+      # PLAN-018 W4: run the LOSSLESS reduction fold and return the reduced
+      # replayable tape. Reduces in node-space (dead-bind-elim, tool-cse,
+      # stale-read-collapse, print-prune) then refolds to native messages. The
+      # def-env is provably preserved (fold_env(reduced) == fold_env(full)).
+      "hist/reduce" => fn args -> reduce(impl, session_id, args) end
     }
 
     Map.merge(elixir, Lens.tools(impl, session_id))
@@ -252,6 +257,16 @@ defmodule SpellAgent.Hist.Namespace do
   defp reducibility(impl, session_id, args) do
     source = Map.get(Lens.reducer_sources(), "reducibility")
     Lens.run(impl, session_id, source, args || %{})
+  end
+
+  # PLAN-018 W4: reduce the root->cursor slice (lossless tier) and refold it to a
+  # replayable tape. Returns the message list, or an {"err" ...} map on a missing
+  # session/cursor (mirrors hist/refold).
+  defp reduce(impl, session_id, args) do
+    case Reconstitute.at(impl, session_id, cursor_arg(args)) do
+      {:ok, %{nodes: slice}} -> slice |> Reduce.lossless() |> Refold.slice_to_tape()
+      {:error, reason} -> %{"err" => to_string(reason)}
+    end
   end
 
   # Resolve a :cursor arg to a known atom lane, defaulting to :main. Never mints a
