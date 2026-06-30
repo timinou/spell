@@ -1,0 +1,54 @@
+#+TITLE: Hole-resolver 200ms frame budget starves under suite load (splice rows under-resolve)
+#+STATE: ITEM
+#+SESSION_ID: 151d93b55768f6df
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-30T15-15-30-781Z_151d93b55768f6df.jsonl]]
+#+CUSTOM_ID: FUP-029-hole-resolver-200ms-frame-budget-starves
+
+* Initial Message
+
+ok what's next, besides PLAN-021
+
+* Summary
+
+=lib/spell_agent/tui/hole_resolver.ex:136= runs each hole's PTC program with an
+EXPLICIT =timeout: @hole_timeout_ms= (200ms — the per-hole frame budget from
+PLAN-012 W3/W4, commit 6a2712ce8). Under heavy full-suite parallel load this budget
+is too tight: a splice that should resolve N rows resolves fewer (the eval is
+starved past 200ms and the partial hole degrades to a single row).
+
+Surfaced while fixing FUP-026 (the general eval-timeout de-flake). FUP-026's fix
+(wiring the =PtcRunner.Lisp.run/2= eval path to honor =config :ptc_runner,
+default_timeout=) does NOT help here: this call site passes an EXPLICIT timeout,
+which correctly overrides the config default. The explicit-over-config design is
+right; the 200ms value is just load-fragile.
+
+* Evidence
+
+  - =test/spell_agent/tui/hole_resolver_test.exs:146= and
+    =test/spell_agent/tui/tmpl_demos_test.exs:70= both assert =length(rows) == 2=
+    and intermittently get =1= under load.
+  - Pass 28/28 in ISOLATION (3x green). Fail only in the full =spell_agent= suite
+    at some seeds (seed 1 fails both; seed 0 passes). Not a timeout-error return —
+    a fewer-rows resolution (the hole degraded gracefully).
+
+* Why filed, not fixed here
+
+Owned by the concurrent PLAN-021 (lens-based layout / hole-resolver) workstream;
+the 200ms budget is an intentional frame-time choice there, not a bug to
+unilaterally widen.
+
+* Options for the owner
+
+  1. Raise =@hole_timeout_ms= (200 -> ~1000). Simplest; the production frame loop
+     already degrades gracefully on a slow hole, so the tight cap is mostly a
+     test-load artifact.
+  2. Tag these two tests to not run concurrently (=async: false= or a serial tag).
+  3. In the test, drive the resolver with an explicit larger timeout so the
+     assertion tests row-resolution logic, not frame-budget timing.
+
+* Pointers
+
+  - =lib/spell_agent/tui/hole_resolver.ex:128= (=@hole_timeout_ms 200=) and :136
+    (the =Lisp.run= call passing it).
+  - FUP-026 (the general eval-timeout fix; this is the explicit-budget residual it
+    explicitly does not cover).

@@ -1,8 +1,9 @@
 #+TITLE: ptc_runner full-suite test isolation: upstream_roundtrip + error_handling fail only in aggregate
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 15164b2a4dd1a55b
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan-020-lispy-code-edit-beam-spell_agent/2026-06-24T23-29-11-991Z_15164b2a4dd1a55b.jsonl]]
 #+CUSTOM_ID: FUP-026-ptc-runner-full-suite-test-isolation-ups
+#+COMPLETION_HASH: 803e18f14971eaeb
 
 * Initial Message
 
@@ -76,3 +77,51 @@ The aggregate-only failures are NOT a shared-STATE leak as first hypothesized �
 APPLIED (in scope, safe): error_handling_test.exs:299 stale assertion FIXED — `'(1 2 3)` is no longer a parse_error (PLAN-012 W1 lifted the quoted-collection restriction); it now returns %{"node"=>"list","children"=>[1,2,3]}. Updated the assertion to the current correct behavior (renamed to "a quoted list is inert quoted-data, not a parse error"). This was a genuine stale assertion, deterministic, now green.
 
 DEFERRED (out of PLAN-022 scope — a suite-architecture decision): the timeout-under-load flakiness. The real fix is one of: (a) raise the eval :timeout in the affected eval-heavy tests (e.g. 1000ms -> 5000ms), (b) cap suite async parallelism (max_cases), or (c) tag the eval-heavy tests to not run concurrently. (a) is the least invasive but touches many test files; the right call is a focused suite-hygiene pass, NOT smuggled into the code/edit cluster. Re-scoped: this FUP now tracks "raise eval timeouts / cap parallelism to de-flake the load-sensitive ptc_runner aggregate suite" — a clean, well-understood task with the root cause nailed down. The stale-assertion half is DONE; the timeout half stays open under this FUP.
+
+* RESOLVED [2026-06-30]
+
+The timeout half (the deferred remainder) is fixed. Both halves of this FUP are
+now done.
+
+** Root cause (confirmed) — a config that never reached the eval path
+config/test.exs ALREADY widened the budget (=config :ptc_runner, default_timeout:
+10_000=, commit d336737e), and =Sandbox.execute/run_bounded= ALREADY read it via
+=Application.get_env(:ptc_runner, :default_timeout)=. But =PtcRunner.Lisp.run/2='s
+=run_params/1= hardcoded =timeout: Keyword.get(opts, :timeout, 1000)= and passed
+that EXPLICIT 1000ms into the sandbox, shadowing the config-aware default. So every
+eval that did not pass an explicit =:timeout= capped at 1000ms regardless of the
+test-env widening. Under full-suite async parallelism the sandbox-worker children
+fight for schedulers and a trivially-fast program is starved past 1000ms ->
+={:error, reason: :timeout}= — the aggregate-only, count-varies-at-fixed-seed
+signature documented above.
+
+** Fix (ptc_runner fork commit 0ea476c4, on =spell= branch)
+  - =run_params/1= now falls back to the =:default_timeout= Application env (then
+    1000ms), mirroring the existing =default_max_heap= precedent at the compile
+    path and the Sandbox reads. PROD default unchanged (1000ms); test env gets its
+    intended widening.
+  - De-fragiled two =Session= demos (doctest + session_test) that picked an
+    arbitrary =timeout: 1_000= purely to show option storage/override (NOT timeout
+    behaviour) and were themselves load-fragile at exactly 1000ms -> 30_000.
+  - error_handling:299 stale-assertion half was already fixed (fork 89220fcd).
+
+** Verification (acceptance met)
+  - =mix test --seed {0,1,42,99,123}= in =beam/ptc_runner=: GREEN every time,
+    6696 passed, ZERO per-run variance (was ~23 aggregate-only failures, count
+    varying 56->4 at fixed seed 0).
+  - Parent =spell_agent= test env also given =config :ptc_runner, default_timeout:
+    30_000= (its eval-heavy TUI/cell/reaction tests have the same starvation): full
+    suite 1072 passed at seed 0, including the PLAN-022 S1 codemod showcase that was
+    previously load-fragile.
+  - Parent pointer bumped + config committed: c898081d5.
+
+** One honest residual (NOT this FUP — filed separately)
+Two splice tests (=HoleResolverTest:146=, =TmplDemosTest:70=) still fail under
+heavy load at some seeds (length(rows) 1 vs 2 — a fewer-rows resolution, NOT a
+timeout). They pass 28/28 in isolation. Root: =hole_resolver.ex:136= passes an
+EXPLICIT =timeout: @hole_timeout_ms= (200ms) — a deliberate per-hole frame budget
+owned by the concurrent PLAN-021 workstream. Explicit timeouts correctly override
+the config default; 200ms is simply tight under contention. Out of scope here
+(different mechanism, different owner). Filed as a follow-up for the PLAN-021 owner.
+
+NOTE [2026-06-30]: Timeout half fixed. Root cause: run_params/1 hardcoded a 1000ms fallback that shadowed the config-aware Sandbox default, so test.exs's default_timeout widening was dead on the eval path. Fork 0ea476c4 reads the Application env; ptc_runner suite green + zero variance across 5 seeds; spell_agent test env given the same config (1072 passed). One residual splice flake is PLAN-021's explicit 200ms hole budget — filed separately.
