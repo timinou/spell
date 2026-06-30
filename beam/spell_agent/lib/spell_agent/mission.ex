@@ -74,21 +74,31 @@ defmodule SpellAgent.Mission do
   it always caches unless it is over the HARD ceiling (where lossy spill is the
   only way back under budget).
   """
-  @spec decide(inputs()) :: decision()
-  def decide(%{
-        tok_full: f,
-        tok_reduced: r,
-        remaining_turns: k,
-        window_soft: soft,
-        window_hard: hard
-      }) do
+  @spec decide(inputs() | map()) :: decision()
+  def decide(stats) when is_map(stats) do
+    # Accept the reducer's STRING-keyed stats (hist/reducibility output) as well as
+    # atom-keyed inputs, and degrade a missing/garbage field to a neutral default
+    # so a failed estimate caches rather than crashing the mission (best-effort
+    # posture, S5 swarm finding).
+    f = num(stats, :tok_full, 0)
+    r = num(stats, :tok_reduced, 0)
+    k = num(stats, :remaining_turns, 0)
+    soft = num(stats, :window_soft, :infinity)
+    hard = num(stats, :window_hard, :infinity)
+
     cond do
-      f > hard -> {:reduce, :lossy}
-      f > soft -> {:reduce, :lossless}
+      over?(f, hard) -> {:reduce, :lossy}
+      # soft-overflow only warrants a lossless reduce if the tape can ACTUALLY
+      # shrink; a pathological estimate where the reduced tape is not smaller
+      # (F <= R) cannot relieve the overflow, so cache and let hard overflow force
+      # the lossy tier (S5 swarm finding).
+      over?(f, soft) and reducible?(f, r) -> {:reduce, :lossless}
       profitable?(f, r, k) -> {:reduce, :lossless}
       true -> :cache
     end
   end
+
+  def decide(_), do: :cache
 
   @doc """
   The break-even remaining-turn count `K*` above which a reduction amortizes.
@@ -129,6 +139,32 @@ defmodule SpellAgent.Mission do
     case break_even(f, r) do
       :infinity -> false
       kstar -> k > kstar
+    end
+  end
+
+  # There are reducible tokens iff the reduced estimate is strictly smaller.
+  defp reducible?(f, r), do: f > r
+
+  # `f > ceiling`, with an :infinity ceiling never exceeded (a missing/garbage
+  # ceiling defaults to :infinity -> the overflow rungs do not fire).
+  defp over?(_f, :infinity), do: false
+  defp over?(f, ceiling) when is_number(f) and is_number(ceiling), do: f > ceiling
+  defp over?(_f, _ceiling), do: false
+
+  # Read a numeric field by atom OR string key; a missing/non-numeric value
+  # degrades to `default` (so a failed/raw reducibility estimate never crashes
+  # decide/1 — it caches). `:infinity` is a valid ceiling default.
+  defp num(map, key, default) do
+    case fetch_either(map, key) do
+      n when is_number(n) -> n
+      _ -> default
+    end
+  end
+
+  defp fetch_either(map, key) do
+    case Map.fetch(map, key) do
+      {:ok, v} -> v
+      :error -> Map.get(map, Atom.to_string(key))
     end
   end
 

@@ -111,6 +111,49 @@ defmodule SpellAgent.MissionTest do
     end
   end
 
+  describe "S5: input tolerance + soft-rung guard" do
+    test "accepts the string-keyed hist/reducibility stats shape" do
+      # This is the actual reducer output; decide/1 must consume it directly.
+      stats = %{
+        "tok_full" => 150_000,
+        "tok_reduced" => 50_000,
+        "nodes" => 7
+      }
+
+      d = Mission.decide(Map.merge(%{"window_soft" => 100_000, "window_hard" => 300_000, "remaining_turns" => 0}, stats))
+      assert d == {:reduce, :lossless}
+    end
+
+    test "an error map or garbage input degrades to :cache (best-effort)" do
+      assert Mission.decide(%{"err" => "estimate failed"}) == :cache
+      assert Mission.decide(%{}) == :cache
+      assert Mission.decide(:not_a_map) == :cache
+      assert Mission.decide(nil) == :cache
+    end
+
+    test "soft overflow does NOT reduce when the tape cannot shrink (F <= R)" do
+      # pathological estimate: reduced is not smaller -> a lossless reduce cannot
+      # relieve the soft overflow -> cache (let hard overflow force lossy).
+      d =
+        Mission.decide(%{
+          tok_full: 150_000,
+          tok_reduced: 200_000,
+          remaining_turns: 0,
+          window_soft: 100_000,
+          window_hard: 300_000
+        })
+
+      assert d == :cache
+    end
+
+    test "missing ceilings default to no-overflow (only the economic trigger fires)" do
+      # no window_* fields -> ceilings :infinity -> overflow rungs never fire; with
+      # K below break-even and reducible tokens, the verdict is cache.
+      d = Mission.decide(%{tok_full: 10_000, tok_reduced: 2_000, remaining_turns: 0})
+      assert d == :cache
+    end
+  end
+
   describe "the reduction memo" do
     setup do
       Store.clear(Memory)
