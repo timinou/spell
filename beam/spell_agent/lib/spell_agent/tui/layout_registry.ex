@@ -34,7 +34,7 @@ defmodule SpellAgent.Tui.LayoutRegistry do
 
   use Agent
 
-  alias SpellAgent.Tui.{LayoutDiagnostic, Lens, RenderProbe}
+  alias SpellAgent.Tui.{LayoutDiagnostic, Lens, LensFn, RenderProbe, Tree}
 
   @type tree :: %{optional(String.t()) => term()}
 
@@ -187,6 +187,55 @@ defmodule SpellAgent.Tui.LayoutRegistry do
   def reset_all, do: Agent.update(__MODULE__, fn st -> %{st | tree: st.default} end)
 
   @doc """
+  Surgically replace the value at `path` WITHIN `slot`'s subtree (PLAN-021 W2) —
+  the path-addressed write behind `lens/put`/`lens/update`. `update_fn` receives
+  the value currently at the path and returns its replacement.
+
+  The candidate (slot subtree with the path rewritten) is validated by the SAME
+  render-probe failure ladder as `set/2`: a rewrite that cannot lay out is
+  rejected and the prior tree kept. Returns `{:ok, new_slot_node}` (the rewritten
+  slot subtree, for the receipt), or `{:error, reason}`.
+
+  Errors: `:unknown_slot` (no such slot), `{:path_missing, path}` (the path does
+  not resolve in the slot — no partial write), `{:bad_layout, slot, diagnostic}`
+  (the rewrite failed validation).
+  """
+  @spec update_path(String.t(), [Tree.segment()], (term() -> term())) ::
+          {:ok, tree()} | {:error, term()}
+  def update_path(slot, path, update_fn)
+      when is_binary(slot) and is_list(path) and is_function(update_fn, 1) do
+    Agent.get_and_update(__MODULE__, fn st ->
+      case Lens.at(st.tree, slot) do
+        nil ->
+          {{:error, {:unknown_slot, slot}}, st}
+
+        slot_node ->
+          # Guard: the path must resolve, AND the rewrite must actually change the
+          # subtree. `Tree.update_path` returns the subtree UNCHANGED on a missing
+          # segment, so equality after a rewrite that should have mutated is the
+          # honest "path missing" signal (no silent no-op masquerading as success).
+          new_slot = Tree.update_path(slot_node, path, update_fn)
+
+          cond do
+            not Tree.path?(slot_node, path) ->
+              {{:error, {:path_missing, path}}, st}
+
+            true ->
+              new_slot = Map.put(new_slot, "slot", slot)
+
+              case LayoutDiagnostic.validate(new_slot) do
+                :ok ->
+                  {{:ok, new_slot}, %{st | tree: put_slot(st.tree, slot, new_slot)}}
+
+                {:error, diagnostic} ->
+                  {{:error, {:bad_layout, slot, diagnostic}}, st}
+              end
+          end
+      end
+    end)
+  end
+
+  @doc """
   The `layout/` tool entries (qualified name => `(args -> term)`) — the homoiconic
   surface a slot program / the agent calls: `layout/set`, `layout/show`,
   `layout/tree`, `layout/reset`.
@@ -220,19 +269,102 @@ defmodule SpellAgent.Tui.LayoutRegistry do
       "layout/reset" => fn args ->
         slot = strget(args, "slot")
         if is_binary(slot), do: reset_to_result(slot), else: reset(nil) && tree()
-      end
+      end,
+      "lens/update" => fn args -> update_result(args) end,
+      "lens/put" => fn args -> put_result(args) end
     }
+  end
+
+  # ---- lens/update + lens/put: path-addressed surgical edits (PLAN-021 W2) ----
+
+  # `lens/update {:slot :path :fn}` — run a deferred, capability-bounded fn over
+  # the value at a path. `data/current` (and `%` sugar) is the value now; any
+  # render-time `~hole` the fn leaves survives live. See `LensFn`.
+  defp update_result(args) do
+    slot = strget(args, "slot")
+    path = normalize_path(strget(args, "path"))
+    frozen = strget(args, "fn")
+    env = data_env(strget(args, "data"))
+
+    cond do
+      not is_binary(slot) -> %{"err" => "lens/update requires a :slot string"}
+      is_nil(path) -> %{"err" => "lens/update requires a :path vector (strings / indices)"}
+      not is_map(frozen) -> %{"err" => "lens/update requires a :fn (quote …) form"}
+      true -> apply_path(slot, path, fn current -> LensFn.eval(frozen, current, env) end, "lens/update")
+    end
+  end
+
+  # `lens/put {:slot :path :value}` — replace the value at a path outright. The
+  # value may itself carry `tmpl::` holes (built with view/* or tmpl::); they
+  # render live like any other node content.
+  defp put_result(args) do
+    slot = strget(args, "slot")
+    path = normalize_path(strget(args, "path"))
+    has_value = is_map(args) and (Map.has_key?(args, "value") or Map.has_key?(args, :value))
+    value = strget(args, "value")
+
+    cond do
+      not is_binary(slot) -> %{"err" => "lens/put requires a :slot string"}
+      is_nil(path) -> %{"err" => "lens/put requires a :path vector (strings / indices)"}
+      not has_value -> %{"err" => "lens/put requires a :value"}
+      true -> apply_path(slot, path, fn _current -> {:ok, value} end, "lens/put")
+    end
+  end
+
+  # Shared body: evaluate `edit_fn` (returning {:ok, value} | {:error, msg})
+  # against the CURRENT value at the path — read-only, so a fn failure or an
+  # unresolvable path is surfaced BEFORE any mutation — then commit a pure
+  # replacement and shape the receipt. The two failure modes are kept DISTINCT
+  # (path_missing vs fn_failed) so the agent's fix is unambiguous: re-address vs
+  # fix the form.
+  defp apply_path(slot, path, edit_fn, verb) do
+    case eval_edit(slot, path, edit_fn) do
+      {:ok, new_value} -> commit_path(slot, path, new_value, verb)
+      {:error, :unknown_slot} -> path_error(slot, path, {:unknown_slot, slot}, verb)
+      {:error, :path_missing} -> path_error(slot, path, {:path_missing, path}, verb)
+      {:fn_error, msg} -> %{"err" => "#{verb} fn failed: #{msg}", "reason" => "fn_failed", "slot" => slot}
+    end
+  end
+
+  # Read-only pre-flight: resolve the slot + path, then run the edit fn on the
+  # current value. Returns {:ok, new_value} | {:error, :unknown_slot | :path_missing}
+  # | {:fn_error, msg}. NB the path check precedes the fn so a bad address never
+  # reads as a fn failure (W2 review).
+  defp eval_edit(slot, path, edit_fn) do
+    case show(slot) do
+      {:error, _} ->
+        {:error, :unknown_slot}
+
+      {:ok, slot_node} ->
+        if Tree.path?(slot_node, path) do
+          case edit_fn.(Tree.get_path(slot_node, path)) do
+            {:ok, value} -> {:ok, value}
+            {:error, msg} -> {:fn_error, msg}
+          end
+        else
+          {:error, :path_missing}
+        end
+    end
+  end
+
+  # Commit a pure path replacement and build the receipt.
+  defp commit_path(slot, path, new_value, verb) do
+    case update_path(slot, path, fn _old -> new_value end) do
+      {:ok, new_slot} -> edit_receipt(slot, path, new_slot, verb)
+      {:error, reason} -> path_error(slot, path, reason, verb)
+    end
   end
 
   defp set_result(slot, node) do
     case set(slot, node) do
       :ok ->
-        result = tree()
-
-        case peek(node) do
-          nil -> result
-          ascii -> Map.put(result, "peek", ascii)
-        end
+        # A compact receipt, NOT a whole-tree echo (PLAN-021 W2). The agent set
+        # one slot; it gets back confirmation + a render peek of THAT slot + a
+        # hint toward surgical follow-up edits. `layout/tree` is there for the
+        # rare time the whole tree is actually wanted.
+        %{"ok" => true, "slot" => slot}
+        |> maybe_peek(node)
+        |> Map.put("hint", set_hint(slot))
 
       {:error, {:bad_layout, bad_slot, diagnostic}} ->
         bad_layout_result(bad_slot, diagnostic)
@@ -292,25 +424,98 @@ defmodule SpellAgent.Tui.LayoutRegistry do
     end
   end
 
-  # ---- internals ----
+  # ---- edit receipts (PLAN-021 W2): a path-scoped confirmation, not a tree echo ----
 
-  # Replace the (first) node whose slot == `slot` with `node` (carrying the new
-  # node's contents but keeping it slotted), rebuilding the tree.
-  defp put_slot(node, slot, replacement) when is_map(node) do
-    if Map.get(node, "slot") == slot or Map.get(node, :slot) == slot do
-      Map.put(replacement, "slot", slot)
-    else
-      case Map.get(node, "children") || Map.get(node, :children) do
-        kids when is_list(kids) ->
-          Map.put(node, "children", Enum.map(kids, &put_slot(&1, slot, replacement)))
+  # The success receipt for a lens/* path edit. Carries WHAT changed (slot+path),
+  # a render PEEK of the rewritten slot (holes show as `·` — the FEAT-022 contract,
+  # so a live edit reads as live, not baked), and a one-line HINT naming the verb
+  # to tweak the same path again. It deliberately does NOT echo the whole tree:
+  # the agent addressed one path; the receipt answers at that granularity.
+  defp edit_receipt(slot, path, new_slot, verb) do
+    base = %{"ok" => true, "slot" => slot, "path" => path, "verb" => verb}
 
-        _ ->
-          node
-      end
+    base
+    |> maybe_peek(new_slot)
+    |> Map.put("hint", edit_hint(slot, path))
+  end
+
+  defp maybe_peek(receipt, node) do
+    case peek(node) do
+      nil -> receipt
+      ascii -> Map.put(receipt, "peek", ascii)
     end
   end
 
-  defp put_slot(other, _slot, _replacement), do: other
+  defp set_hint(slot) do
+    "set slot #{inspect(slot)} (whole subtree). To tweak ONE leaf next time — a " <>
+      "title, a color, one row — don't resend the slot: address it with " <>
+      "(lens/update {:slot #{inspect(slot)} :path […] :fn (quote ~…)}). " <>
+      "Inspect the shape first with (layout/show {:slot #{inspect(slot)}})."
+  end
+
+  defp edit_hint(slot, path) do
+    addr = ":slot #{inspect(slot)} :path #{inspect(path)}"
+    "edited #{slot}#{format_path(path)}. tweak this same leaf again with " <>
+      "(lens/update {#{addr} :fn (quote ~…)}) — wrap a ~hole to keep it live, " <>
+      "or replace it with (lens/put {#{addr} :value …})."
+  end
+
+  defp path_error(slot, path, reason, verb) do
+    case reason do
+      {:bad_layout, bad_slot, diagnostic} ->
+        bad_layout_result(bad_slot, diagnostic)
+
+      {:unknown_slot, bad_slot} ->
+        %{"err" => "unknown slot #{bad_slot}", "reason" => "unknown_slot", "slot" => bad_slot}
+
+      {:path_missing, miss} ->
+        %{
+          "err" =>
+            "#{verb}: path #{inspect(miss)} does not resolve in slot #{inspect(slot)}; " <>
+              "read the current shape with (layout/show {:slot #{inspect(slot)}}) and address an existing node",
+          "reason" => "path_missing",
+          "slot" => slot,
+          "path" => path
+        }
+
+      other ->
+        %{"err" => "#{verb} rejected: #{inspect(other)}", "slot" => slot}
+    end
+  end
+
+  # ---- path argument coercion ----
+
+  # A `:path` arrives as a PTC vector of string keys / integer indices. Accept a
+  # single scalar as a one-segment path for convenience. Any non-string/non-int
+  # segment rejects the whole path (nil) — a malformed address must not silently
+  # truncate to a shorter, valid-looking one.
+  defp normalize_path(nil), do: nil
+  defp normalize_path(seg) when is_binary(seg) or is_integer(seg), do: [seg]
+
+  defp normalize_path(list) when is_list(list) do
+    if Enum.all?(list, &valid_segment?/1), do: list, else: nil
+  end
+
+  defp normalize_path(_), do: nil
+
+  defp valid_segment?(seg), do: is_binary(seg) or (is_integer(seg) and seg >= 0)
+
+  # The optional `:data` arg — extra `data/*` bindings a lens/update fn may read
+  # alongside `data/current`. Only a string-keyed map passes; anything else is %{}.
+  defp data_env(m) when is_map(m), do: Map.new(m, fn {k, v} -> {to_string(k), v} end)
+  defp data_env(_), do: %{}
+
+  # A compact path rendering for hints/messages: `[1 "block" "title"]` -> `·1·block·title`.
+  defp format_path([]), do: ""
+  defp format_path(path), do: "·" <> Enum.map_join(path, "·", &to_string/1)
+
+  # ---- internals ----
+
+  # Replace the node whose slot == `slot` with `node` (carrying the new node's
+  # contents but keeping it slotted). Routed through the canonical Tree walk
+  # (PLAN-021 W1) -- the rose-tree recursion lives once.
+  defp put_slot(tree, slot, replacement),
+    do: Tree.update_slot(tree, slot, fn _old -> Map.put(replacement, "slot", slot) end)
 
   defp slot_present?(tree, slot), do: Lens.at(tree, slot) != nil
 
@@ -321,14 +526,5 @@ defmodule SpellAgent.Tui.LayoutRegistry do
   defp pane_identity_of(tree) when is_map(tree), do: Lens.body_pane_slots(tree)
   defp pane_identity_of(_), do: []
 
-  defp strget(m, key) when is_map(m), do: Map.get(m, key) || Map.get(m, safe_atom(key))
-  defp strget(_m, _key), do: nil
-
-  defp safe_atom(key) when is_binary(key) do
-    String.to_existing_atom(key)
-  rescue
-    ArgumentError -> nil
-  end
-
-  defp safe_atom(_), do: nil
+  defp strget(m, key), do: Tree.get(m, key)
 end

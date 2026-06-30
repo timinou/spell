@@ -45,6 +45,7 @@ defmodule SpellAgent.Tui.View do
     widget_builders()
     |> Map.put("view/split", &build_split/1)
     |> Map.put("theme/set", &theme_set/1)
+    |> Map.put("theme/set-many", &theme_set_many/1)
     |> Map.put("theme/show", fn _args -> ThemeRegistry.as_map() end)
   end
 
@@ -81,6 +82,10 @@ defmodule SpellAgent.Tui.View do
 
   # ---- theme/set ----
 
+  # theme/set returns a per-call DELTA (the one slot it changed), not the whole
+  # palette (PLAN-021 W2). Recoloring N slots used to echo the full palette N
+  # times; the agent set one slot, so it gets one slot back. `theme/show` is there
+  # for the whole map on demand.
   defp theme_set(args) do
     a = stringify_keys(args)
     slot = Map.get(a, "slot")
@@ -88,9 +93,31 @@ defmodule SpellAgent.Tui.View do
     color = Map.get(a, "fg") || Map.get(a, "color")
 
     case ThemeRegistry.put(slot, color) do
-      :ok -> ThemeRegistry.as_map()
+      :ok -> %{"ok" => true, "slot" => slot, "fg" => color}
       {:error, reason} -> %{"err" => reason}
     end
+  end
+
+  # theme/set-many recolors several slots in ONE call — the batch form for the
+  # common "retheme the palette" gesture, replacing N separate theme/set calls
+  # (each previously a full-palette echo). Returns a single delta of what changed
+  # plus any per-slot errors, never the whole palette.
+  defp theme_set_many(args) do
+    a = stringify_keys(args)
+    # Slots live either directly ({:danger "magenta" :accent "cyan"}) or under a
+    # :slots map. Direct keys win; an explicit :slots map is merged in.
+    slots = a |> Map.get("slots", %{}) |> stringify_keys() |> Map.merge(Map.delete(a, "slots"))
+
+    {changed, errors} =
+      Enum.reduce(slots, {%{}, %{}}, fn {slot, color}, {ok, err} ->
+        case ThemeRegistry.put(slot, color) do
+          :ok -> {Map.put(ok, slot, color), err}
+          {:error, reason} -> {ok, Map.put(err, slot, reason)}
+        end
+      end)
+
+    %{"ok" => errors == %{}, "changed" => changed}
+    |> then(fn r -> if errors == %{}, do: r, else: Map.put(r, "errors", errors) end)
   end
 
   # ---- theme defaults (Edge T) ----

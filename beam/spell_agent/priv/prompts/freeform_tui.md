@@ -18,6 +18,8 @@ Four namespaces drive it, all called like tools:
   `(theme/set {:slot "danger" :fg "magenta"})`. `view/` builders read these.
 - `lens/focus` / `lens/focused` / `lens/focusables` — navigation as tree ops
   (the focus ring re-tags the tree).
+- `lens/update` / `lens/put` — edit ONE leaf at a path inside a slot, instead of
+  re-sending the whole slot (see "Edit one leaf" below).
 
 Worked example — put the model + cost in the header:
 
@@ -97,6 +99,72 @@ The `data/*` environment (read in a hole as `data/<key>`):
 
 Adding a new live value is one bag key; a hole references it like any other —
 zero extra render cost. Inspect a frozen slot with `(layout/show {:slot "status"})`.
+
+## Edit one leaf — path lenses (`lens/update` / `lens/put`)
+
+`layout/set` replaces a WHOLE slot. Reach for it the first time you shape a
+region. But to change ONE leaf afterward — a title, a color, a single row —
+re-sending the entire slot is wasteful and error-prone. Address the leaf directly
+with a PATH and edit it in place.
+
+A path is a vector of segments into the slot's subtree:
+
+- a STRING indexes a map key — `"text"`, `"title"`, `"style"`;
+- an INTEGER indexes a split child OR a list item — `0`, `1`, `2`.
+
+So in a 3-pane `body` split, `[1 "block" "title"]` is "child 1 → its block → the
+title". Inspect the shape first with `(layout/show {:slot "body"})`, then:
+
+    ;; replace the value at a path outright
+    (lens/put {:slot "body" :path [1 "block" "title"] :value " Logs "})
+
+    ;; transform the value with a fn — `%` is the current value at the path
+    (lens/update {:slot "body" :path [1 "block" "title"]
+                  :fn (quote (str % " ·"))})
+
+Only the addressed leaf changes; every sibling stays byte-identical. The result
+is a small RECEIPT — `:slot`, `:path`, a `:peek` of the rewritten slot, and a
+`:hint` — not the whole tree.
+
+**The point is keeping it LIVE.** A path edit is not just for static tweaks — its
+real power is making a leaf live, in place. The `:fn` runs ONCE, now, at edit time
+(with `%` / `data/current` bound to the current value). But a `~hole` inside its
+result is NOT resolved now — it survives the edit and re-resolves every frame
+after, exactly like a `tmpl::` slot. So you can turn a dead leaf into a live one
+with a single surgical edit:
+
+    ;; a static title becomes a LIVE one — without rebuilding the slot
+    (lens/update {:slot "status" :path ["block" "title"]
+                  :fn (quote (tmpl:: ~(str " turn " (get data/status :turns) " ")))})
+
+After this, the title re-renders every turn. The edit changed the skeleton; the
+hole stays live. This is the canonical `lens/update`: `(quote (tmpl:: … ~hole …))`
+— `quote` defers the fn to edit time, the inner `tmpl::` emits the render-time
+hole.
+
+Two clocks, one form:
+
+- a value computed from `%` / `data/current` — evaluates at EDIT time, baked in
+  (the value you are editing, now).
+- `~expr` inside an inner `tmpl::` — stays a frozen hole, LIVE every frame after
+  (reads `data/status`, `data/ui`, … like any hole).
+
+*Anti-pattern* — re-sending a whole split to rename one pane:
+
+    ;; WRONG: rebuilds all three children to change one title
+    (layout/set {:slot "body" :source (view/split {:children [ … all 3 … ]})})
+
+    ;; RIGHT: address the one leaf
+    (lens/update {:slot "body" :path [1 "block" "title"] :fn (quote " Logs ")})
+
+If a path does not resolve, the edit is rejected with a `path_missing` diagnostic
+naming the path — read `(layout/show {:slot …})` and address an existing node. A
+rewrite that breaks rendering is rejected too; the prior tree is kept (last-good).
+
+**Recolor many slots at once** — `theme/set` changes one slot and returns just
+that delta; `theme/set-many` does a batch in one call:
+
+    (theme/set-many {:danger "magenta" :accent "cyan" :primary "blue"})
 
 ## Reactive cells — `cell/define` (live data the runtime computes for you)
 
