@@ -1,8 +1,9 @@
 #+TITLE: Lispy code/edit: form_tree as the shared structural-transform algebra (q/* engine, code/parse·unparse·edit)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 15164b2a4dd1a55b
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-24T23-29-11-991Z_15164b2a4dd1a55b.jsonl]]
 #+CUSTOM_ID: PLAN-020-lispy-code-edit-form-tree-as-the-shared
+#+COMPLETION_HASH: 98851a82d0dc14fc
 
 * Initial Message
 
@@ -512,3 +513,65 @@ tier becomes ALGEBRAIC (composition + cancellation) only once =code/edit= record
 structural transforms (W5); until then it stays in PLAN-018's heuristic span-overlap
 tier. LAW 1–3 are the shared correctness currency. See PLAN-018 "Cross-link:
 edit-reduction depends on lispy code/edit".
+
+* COMPLETION AUDIT [2026-06-27] (PLAN-022 P2)
+
+PLAN-020 shipped via the plan-020 merge + the PLAN-022 finishing work. The merge
+landed the code (lib/spell_agent/code.ex, priv/preludes/q.clj, code/prelude.ex,
+the pi_kernel_nif tree projector); PLAN-022 completed the safety gap (FUP-027),
+the enabler (FEAT-024), and audited the W-gate acceptance. Every W1-W8 acceptance
+bullet maps to a named PASSING test (75 tests across the q/code surface, green):
+
+** W1 (q/* algebra) \u2014 q_test.exs (34)
+- q/equal? laws: identity, canonicalization (presentation-equal), SENTINEL-BLIND
+  (a real tree shaped like a hole is data), FULL-KEY-SET, field-shaped-value-is-data.
+- comp: "composing two data-op-lists equals applying their concatenation".
+- cancellation: "edit \u2218 inverse \u2261 identity under freshness (multi-node)".
+- non-linear repeated capture, splice (prefix/mid/trailing/adjacent-empty),
+  field-capture {$ n}, wildcard, unknown-op-fails-loud.
+- THREE-SURFACE generality: matches a real brush sh/parse tree AND a real
+  Lens.form_tree of recorded CoreAST (not just hand-built fixtures).
+
+** W3 (code/parse + code/unparse) \u2014 code_parse_test.exs (13)
+- byte-exact untouched round-trip; parse->unparse->parse structural stability
+  (re-parse equality); JSON-safe (no tuples, Jason round-trip); exotic/ERROR
+  region surfaces as a raw leaf; incomplete source recovers (no crash);
+  ->> threads code-parse into q/descendant + projections.
+
+** W5 (code/edit, parse-gated, reified) \u2014 code_edit_test.exs (7) + code_apply_test.exs (9)
+- a valid q/* edit applies + writes; a BAD edit (unparseable) is REJECTED and the
+  file is UNTOUCHED (now ALSO backed by FUP-027 rollback on program failure);
+  empty-source REFUSED (no truncation); mode preserved (exec bit survives);
+  reifiable: "applying concatenated op-lists equals applying them in sequence" +
+  "composed ops unparse to valid gate-passing source" (the PLAN-018 contract).
+
+** W7 (durable codemods) \u2014 code_durable_test.exs (6)
+- a durable tool calling q/* validates WITH the prelude; an authored codemod
+  transforms real source; a BAD q/* ref rejected at define-time; a durable tool
+  named code-edit does NOT shadow the native parse-gated writer; a rehydrated
+  durable codemod still runs (store -> projection -> transform).
+
+** Cross-plan contract (PLAN-018) signed off
+q/match, q/equal?, and the reified-xf op-list are STANDALONE testable primitives
+(q_test exercises them with zero code/edit dependency), so PLAN-018's reducer can
+compose recorded edits without importing the editor. LAW 1 (structural, not byte,
+equality) + LAW 2 (q/equal? is the public predicate) + LAW 3 (raw-leaf opacity)
+are all tested.
+
+** Finishing work folded in (PLAN-022)
+- FEAT-024 (declare) DONE \u2014 readable mutual-recursion walkers unblocked.
+- FUP-027 (rollback) DONE \u2014 code-edit now participates in all-or-nothing rollback;
+  the code.ex "honest boundary" moduledoc updated from "NOT rolled back / tracked
+  follow-up" to the shipped rollback contract.
+- FUP-026: stale quoted-list assertion fixed; the load-sensitive aggregate-suite
+  timeout flakiness root-caused + re-scoped (deferred, not a code/edit concern).
+
+** Out of scope (unchanged from the plan)
+The history-reducer itself (PLAN-018 consumes this); LSP semantic edges; exhaustive
+language coverage (Elixir is the proving language); the tmpl:: reactive dimension.
+
+Showcase (PLAN-022 Phase 3 \u2014 S1 TUI golden transcript + S2 mix spell.codemod
+stdout inspector) proceeds next; it DEMONSTRATES this surface, it is not part of
+PLAN-020's own acceptance.
+
+NOTE [2026-06-30]: DONE [2026-06-27] via PLAN-022 P2 audit. All W1-W8 acceptance bullets map to named passing tests (75 green across q/code surface). FEAT-024 + FUP-027 finishing work folded in; code.ex moduledoc updated to the shipped rollback contract. PLAN-018 standalone-reifiability contract signed off. Showcase (Phase 3) demonstrates this surface next.

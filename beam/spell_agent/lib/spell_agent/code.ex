@@ -71,16 +71,22 @@ defmodule SpellAgent.Code do
   Elixir ("Elixir materializes, PTC transforms"); the pure data sugar stays in
   the `q/*` prelude.
 
-  ## Atomicity scope (honest boundary)
+  ## Atomicity scope
 
   The write is ATOMIC at the filesystem level (temp + rename): the target is
-  either its old content or the full new content, never a partial. It is NOT,
-  however, rolled back by the PTC `execute` transactional layer — that layer
-  tracks the `edit`/`create` PTC tools, not a native tool's `File` write. So a
-  program that calls `code-edit` and then `(fail ...)` LEAVES the file changed.
-  A caller that needs all-or-nothing across multiple edits must sequence them so
-  `code-edit` is the last effect, or restore from VCS. (Routing the write through
-  the execute layer's tracked primitive is a tracked follow-up.)
+  either its old content or the full new content, never a partial.
+
+  It also participates in ALL-OR-NOTHING rollback within a failing program
+  (FUP-027): before overwriting, `gate_write` snapshots the target's prior state
+  into `SpellAgent.Code.Journal` (a worker-side stack), and the runner's
+  `on_complete` finalizer drains it by the program's verdict — a `(fail …)` after
+  one or more `code-edit`s restores every touched file (a created file is
+  deleted), while a successful program keeps the writes. The finalizer is wired
+  onto the agent in `Session.run`; a `code-edit` run WITHOUT it (a bare
+  `Lisp.run`) keeps the plain FS-atomic write with no rollback (additive,
+  opt-in). LIMITATION (v1): rollback covers edits in the main program flow; an
+  edit inside a `pmap`/`pcalls` sub-worker records in that separate process,
+  outside the top-level finalizer — a narrow follow-up.
   """
 
   alias SpellAgent.Code.Journal

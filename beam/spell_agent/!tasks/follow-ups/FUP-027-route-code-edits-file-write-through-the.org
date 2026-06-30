@@ -1,8 +1,9 @@
 #+TITLE: Route code-edit's file write through the execute transactional-rollback layer
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 15164b2a4dd1a55b
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan-020-lispy-code-edit-beam-spell_agent/2026-06-24T23-29-11-991Z_15164b2a4dd1a55b.jsonl]]
 #+CUSTOM_ID: FUP-027-route-code-edits-file-write-through-the
+#+COMPLETION_HASH: df8582902591e6d9
 
 * Initial Message
 
@@ -83,3 +84,11 @@ DECISION (option 2, worker-side, with a general fork hook):
 SEQUENCING: the fork hook touches lisp.ex, which FEAT-024 (PLAN-022 P1a) is concurrently editing. To avoid a concurrent-edit conflict, the fork-hook portion of P1b is sequenced AFTER P1a lands (await), then done serially.
 
 DOCUMENTED LIMITATION (v1): rollback covers code-edits in the MAIN program flow. A code-edit inside a pmap/pcalls-spawned sub-worker records in THAT sub-worker's dict (separate process), outside the top-level finalizer's reach — a narrower follow-up if it ever matters (rare: agents rarely fan out file writes). The headline acceptance ((do (code-edit ...) (fail ...)) restores the file) is in the main-flow case and IS covered.
+
+NOTE [2026-06-30]: DONE [2026-06-27] via PLAN-022 P1b. code-edit writes now participate in all-or-nothing rollback when the enclosing program fails. The FUP's three options assumed a Spell-harness execute-rollback layer that does NOT exist in the BEAM ptc_runner (verified); and tools run in a SPAWNED SANDBOX WORKER (empirically confirmed), so the drain must be IN-WORKER. Implemented option 2 (snapshot/restore) with a general fork hook:
+- SpellAgent.Code.Journal (spell_agent): worker-side process-dict stack; record/1 snapshots (path, prior-bytes | :absent) before each code-edit write (gate_write covers both code-edit + code-apply); finalize/1 drains by verdict (:ok keeps; :fail/:error restores LIFO). 7 unit tests.
+- ptc_runner fork (commit 89220fcd): Lisp.run :on_complete — an in-worker post-eval finalizer run with the verdict (:ok|:fail|:error), best-effort. Threaded through SubAgent (:on_complete field) + LispOpts. A general saga/compensation seam, nil = inert.
+- session.ex wires on_complete: &Code.Journal.finalize/1 onto the agent.
+- 5 e2e tests (code_edit_rollback_test.exs): (do (code-edit) (fail)) restores the file; success keeps the write; a created file is deleted on rollback; multi-edit all-or-nothing; no-finalizer = additive no-op (pre-FUP-027 behaviour preserved).
+Acceptance MET (all three bullets). Compile warnings-as-errors clean; code+session suites green.
+DOCUMENTED LIMITATION (v1): rollback covers code-edits in the MAIN program flow. A code-edit inside a pmap/pcalls sub-worker records in that sub-worker's dict (separate process), outside the top-level finalizer — a narrow follow-up if it ever matters (agents rarely fan out file writes). The headline case is covered.
