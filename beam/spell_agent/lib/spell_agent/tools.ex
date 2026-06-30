@@ -59,7 +59,8 @@ defmodule SpellAgent.Tools do
       "sh-unparse" => &SpellAgent.Sh.unparse_tool/1,
       "code-parse" => &SpellAgent.Code.parse_tool/1,
       "code-unparse" => &SpellAgent.Code.unparse_tool/1,
-      "code-edit" => &SpellAgent.Code.edit_tool/1
+      "code-edit" => &SpellAgent.Code.edit_tool/1,
+      "code-apply" => &SpellAgent.Code.apply_tool/1
     }
   end
 
@@ -88,90 +89,102 @@ defmodule SpellAgent.Tools do
   """
   @spec inventory() :: [map()]
   def inventory do
-    meta = [
-      %{
-        "name" => "define-tool",
-        "params" => ["name", "params", "doc", "source", "scope"],
-        "doc" =>
-          "Define a new tool whose body is a PTC-Lisp program (code-as-data). " <>
-            "scope \"durable\" persists it across sessions (default \"session\", in-memory).",
-        "kind" => "native"
-      },
-      %{
-        "name" => "define-config",
-        "params" => ["key", "value"],
-        "doc" => "Set a live config value (e.g. model, thinking, system-addendum).",
-        "kind" => "native"
-      },
-      %{
-        "name" => "list-tools",
-        "params" => [],
-        "doc" => "List all tools currently available, including ones defined at runtime.",
-        "kind" => "native"
-      },
-      %{
-        "name" => "sh",
-        "params" => ["argv", "cwd", "timeout-ms", "env"],
-        "doc" =>
-          "Run a command as an argv vector on brush; returns %{exit out err lines}. " <>
-            "argv is a list of strings (NOT a command string) — inject-proof. " <>
-            "e.g. (tool/sh {:argv [\"rg\" \"-l\" \"TODO\" \"lib\"]}).",
-        "kind" => "native"
-      },
-      %{
-        "name" => "sh-pipe",
-        "params" => ["stages", "cwd", "timeout-ms", "env"],
-        "doc" =>
-          "Run a byte-pipeline of argv stages on brush (a | b | c); same result " <>
-            "shape as sh. stages is a list of argv lists, each inject-proof. " <>
-            "e.g. (tool/sh-pipe {:stages [[\"cat\" \"f\"] [\"grep\" \"ERR\"] [\"wc\" \"-l\"]]}).",
-        "kind" => "native"
-      },
-      %{
-        "name" => "sh-parse",
-        "params" => ["src"],
-        "doc" =>
-          "Parse a bash string into a walkable PTC-native tree (same shape as Lisp " <>
-            "history). e.g. (tool/sh-parse {:src \"rg -l TODO | head\"}).",
-        "kind" => "native"
-      },
-      %{
-        "name" => "sh-unparse",
-        "params" => ["tree"],
-        "doc" =>
-          "Render a parsed bash tree back to a bash string (words re-escaped, " <>
-            "injection-safe). e.g. (tool/sh-unparse {:tree t}) -> %{bash}.",
-        "kind" => "native"
-      },
-      %{
-        "name" => "code-parse",
-        "params" => ["src", "lang"],
-        "doc" =>
-          "Parse source code into a walkable form_tree (same shape as sh-parse " <>
-            "and Lisp history), so the q/* algebra walks source structurally. " <>
-            "e.g. (tool/code-parse {:src \"def f, do: 1\" :lang \"elixir\"}).",
-        "kind" => "native"
-      },
-      %{
-        "name" => "code-unparse",
-        "params" => ["tree"],
-        "doc" =>
-          "Render a form_tree back to source. An untouched subtree round-trips " <>
-            "verbatim; an edited subtree rejoins its children (re-parse equality, " <>
-            "not byte). e.g. (tool/code-unparse {:tree t}) -> %{src}.",
-        "kind" => "native"
-      },
-      %{
-        "name" => "code-edit",
-        "params" => ["path", "tree", "lang"],
-        "doc" =>
-          "Parse-gated transactional write: unparse the edited :tree, RE-PARSE it " <>
-            "(reject if the edit broke the grammar), then write :path. The agent " <>
-            "builds :tree via q/* (q/update / q/apply-ops) so the edit stays " <>
-            "reifiable data. e.g. (tool/code-edit {:path \"f.ex\" :lang \"elixir\" :tree t}).",
-        "kind" => "native"
-      }
-    ] ++ SpellAgent.Mesh.Spawn.inventory() ++ SpellAgent.Mesh.Combinators.inventory()
+    meta =
+      [
+        %{
+          "name" => "define-tool",
+          "params" => ["name", "params", "doc", "source", "scope"],
+          "doc" =>
+            "Define a new tool whose body is a PTC-Lisp program (code-as-data). " <>
+              "scope \"durable\" persists it across sessions (default \"session\", in-memory).",
+          "kind" => "native"
+        },
+        %{
+          "name" => "define-config",
+          "params" => ["key", "value"],
+          "doc" => "Set a live config value (e.g. model, thinking, system-addendum).",
+          "kind" => "native"
+        },
+        %{
+          "name" => "list-tools",
+          "params" => [],
+          "doc" => "List all tools currently available, including ones defined at runtime.",
+          "kind" => "native"
+        },
+        %{
+          "name" => "sh",
+          "params" => ["argv", "cwd", "timeout-ms", "env"],
+          "doc" =>
+            "Run a command as an argv vector on brush; returns %{exit out err lines}. " <>
+              "argv is a list of strings (NOT a command string) — inject-proof. " <>
+              "e.g. (tool/sh {:argv [\"rg\" \"-l\" \"TODO\" \"lib\"]}).",
+          "kind" => "native"
+        },
+        %{
+          "name" => "sh-pipe",
+          "params" => ["stages", "cwd", "timeout-ms", "env"],
+          "doc" =>
+            "Run a byte-pipeline of argv stages on brush (a | b | c); same result " <>
+              "shape as sh. stages is a list of argv lists, each inject-proof. " <>
+              "e.g. (tool/sh-pipe {:stages [[\"cat\" \"f\"] [\"grep\" \"ERR\"] [\"wc\" \"-l\"]]}).",
+          "kind" => "native"
+        },
+        %{
+          "name" => "sh-parse",
+          "params" => ["src"],
+          "doc" =>
+            "Parse a bash string into a walkable PTC-native tree (same shape as Lisp " <>
+              "history). e.g. (tool/sh-parse {:src \"rg -l TODO | head\"}).",
+          "kind" => "native"
+        },
+        %{
+          "name" => "sh-unparse",
+          "params" => ["tree"],
+          "doc" =>
+            "Render a parsed bash tree back to a bash string (words re-escaped, " <>
+              "injection-safe). e.g. (tool/sh-unparse {:tree t}) -> %{bash}.",
+          "kind" => "native"
+        },
+        %{
+          "name" => "code-parse",
+          "params" => ["src", "lang"],
+          "doc" =>
+            "Parse source code into a walkable form_tree (same shape as sh-parse " <>
+              "and Lisp history), so the q/* algebra walks source structurally. " <>
+              "e.g. (tool/code-parse {:src \"def f, do: 1\" :lang \"elixir\"}).",
+          "kind" => "native"
+        },
+        %{
+          "name" => "code-unparse",
+          "params" => ["tree"],
+          "doc" =>
+            "Render a form_tree back to source. An untouched subtree round-trips " <>
+              "verbatim; an edited subtree rejoins its children (re-parse equality, " <>
+              "not byte). e.g. (tool/code-unparse {:tree t}) -> %{src}.",
+          "kind" => "native"
+        },
+        %{
+          "name" => "code-edit",
+          "params" => ["path", "tree", "lang"],
+          "doc" =>
+            "Parse-gated transactional write: unparse the edited :tree, RE-PARSE it " <>
+              "(reject if the edit broke the grammar), then write :path. The agent " <>
+              "builds :tree via q/* (q/update / q/apply-ops) so the edit stays " <>
+              "reifiable data. e.g. (tool/code-edit {:path \"f.ex\" :lang \"elixir\" :tree t}).",
+          "kind" => "native"
+        },
+        %{
+          "name" => "code-apply",
+          "params" => ["path", "ops"],
+          "doc" =>
+            "One-call edit: infer lang from :path, read + parse the file, apply the " <>
+              ":ops data-list (q/apply-ops), then parse-gate + atomically write. :ops " <>
+              "is plain data, typically built by the q/* sugar (q/rename-id, " <>
+              "q/rewrite-op, q/wrap-op). e.g. " <>
+              "(tool/code-apply {:path \"f.ex\" :ops [(q/rename-id \"x\" \"y\")]}).",
+          "kind" => "native"
+        }
+      ] ++ SpellAgent.Mesh.Spawn.inventory() ++ SpellAgent.Mesh.Combinators.inventory()
 
     defined =
       ToolRegistry.all()
@@ -313,11 +326,13 @@ defmodule SpellAgent.Tools do
         "sh-unparse",
         "spawn-session",
         "await-session",
-        # code-edit is a parse-GATED safety seam; a runtime define-tool must not
-        # be able to shadow it (registry tools merge last) and bypass the gate.
+        # code-edit / code-apply are parse-GATED safety seams; a runtime
+        # define-tool must not be able to shadow one (registry tools merge last)
+        # and bypass the gate.
         "code-parse",
         "code-unparse",
-        "code-edit"
+        "code-edit",
+        "code-apply"
       ]
 
   defp require_string(args, key) do

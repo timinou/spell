@@ -46,6 +46,31 @@ defmodule SpellAgent.Code do
     3. writes the file ATOMICALLY (write a temp sibling, then rename over the
        target) so a mid-write failure can never leave a truncated/partial file.
 
+  ## One-call sugar: `code-apply`
+
+  `code-edit` makes the agent thread the whole parse->q/*->write pipeline by
+  hand (read the file, `code-parse` it, apply the edit, pass the tree back). The
+  `code-apply {:path :ops}` tool collapses that to ONE call (FEAT-025):
+
+      (tool/code-apply {:path "f.ex" :ops [(q/rename-id "x" "y")]})
+
+  It infers `:lang` from the path extension (the engine registry is the single
+  source of truth, via `PiKernelNif.language_for_path/1`), reads + parses the
+  file, applies the `:ops` data-list with `q/apply-ops`, then routes through the
+  EXACT SAME gate pipeline as `code-edit` (unparse -> nonempty -> parse-gate ->
+  atomic write). `:ops` is plain data built by the pure `q/*` sugar
+  (`q/rename-id`, `q/rewrite-op`, `q/wrap-op`) — so the recorded edit stays a
+  reifiable value (PLAN-018), exactly as with `code-edit`.
+
+  Why a NATIVE tool and not a `q/*` prelude fn: the pipeline is effectful
+  (reads + writes a file, calls other tools). A prelude fn that wrapped
+  `tool/code-parse`/`tool/code-edit` would (a) bypass the runner's preflight
+  side-effect guard (a tool hidden inside a prelude export is invisible to
+  `check_undefined_tools`) and (b) not even compile — a prelude namespace cannot
+  qualified-call a SIBLING prelude namespace's exports. Orchestration belongs in
+  Elixir ("Elixir materializes, PTC transforms"); the pure data sugar stays in
+  the `q/*` prelude.
+
   ## Atomicity scope (honest boundary)
 
   The write is ATOMIC at the filesystem level (temp + rename): the target is
@@ -149,6 +174,136 @@ defmodule SpellAgent.Code do
       {:error, message} -> %{"error" => message}
     end
   end
+
+  @doc """
+  The native tool fn registered as `code-apply` (FEAT-025). The one-call edit
+  sugar: resolve `:lang` from `:path`, read + parse the file, apply the `:ops`
+  data-list via `q/apply-ops`, then route the edited tree through the SAME gate
+  pipeline as `code-edit`. Returns `%{"path", "bytes", "src"}` on success or an
+  `%{"error" => _}` map; never raises for an edit-level outcome.
+
+  `:ops` is a list of op maps (`%{"op" => "update"|"rewrite"|"wrap", "pattern" =>
+  _, "template" => _}`) — plain data, typically built by the pure `q/*` sugar.
+  An empty `:ops` list is refused (a no-op edit is a caller mistake, not a write).
+  """
+  @spec apply_tool(map()) :: map()
+  def apply_tool(args) when is_map(args) do
+    with {:ok, path} <- require_string(args, "path"),
+         {:ok, ops} <- require_ops(args),
+         {:ok, lang} <- resolve_lang(args, path),
+         {:ok, src0} <- read_source(path),
+         {:ok, tree} <- parse_source(src0, lang),
+         {:ok, edited} <- apply_ops(tree, ops),
+         {:ok, out_src} <- gate_unparse(edited),
+         :ok <- gate_nonempty(out_src),
+         :ok <- gate_reparse(out_src, lang),
+         :ok <- gate_write(path, out_src) do
+      %{"path" => path, "bytes" => byte_size(out_src), "src" => out_src}
+    else
+      {:error, message} -> %{"error" => message}
+    end
+  end
+
+  # `:ops` must be a non-empty list of op maps. Empty is refused: applying no ops
+  # would re-write the file with a re-rendered (presentation-canonicalized) copy
+  # for no edit — a caller mistake, not an intended write.
+  defp require_ops(args) do
+    case Map.get(args, "ops") do
+      [_ | _] = ops -> {:ok, ops}
+      [] -> {:error, "code-apply: :ops is empty (no edit to apply)"}
+      nil -> {:error, "code-apply: missing required :ops (a non-empty list of op maps)"}
+      other -> {:error, "code-apply: :ops must be a list of op maps, got #{inspect(other)}"}
+    end
+  end
+
+  # Lang is inferred from the path extension via the engine registry (single
+  # source of truth), but an explicit `:lang` arg WINS (a caller editing a file
+  # with a non-standard extension can still name the grammar).
+  defp resolve_lang(args, path) do
+    case Map.get(args, "lang") do
+      lang when is_binary(lang) and lang != "" ->
+        {:ok, lang}
+
+      _ ->
+        case safe_language_for_path(path) do
+          {:ok, lang} -> {:ok, lang}
+          {:error, reason} -> {:error, "code-apply: #{to_string_reason(reason)}"}
+        end
+    end
+  end
+
+  defp safe_language_for_path(path) do
+    PiKernelNif.language_for_path(path)
+  rescue
+    e -> {:error, "language detection NIF unavailable (#{Exception.message(e)})"}
+  end
+
+  defp read_source(path) do
+    case File.read(path) do
+      {:ok, src} ->
+        {:ok, src}
+
+      {:error, reason} ->
+        {:error, "code-apply: cannot read #{path} (#{:file.format_error(reason)})"}
+    end
+  end
+
+  defp parse_source(src, lang) do
+    case safe_parse(src, lang) do
+      {:ok, %{"error" => reason}} ->
+        {:error, "code-apply: parse failed (#{to_string_reason(reason)})"}
+
+      {:ok, tree} when is_map(tree) ->
+        {:ok, tree}
+
+      {:error, reason} ->
+        {:error, "code-apply: parse failed (#{to_string_reason(reason)})"}
+
+      other ->
+        {:error, "code-apply: parse unexpected (#{inspect(other)})"}
+    end
+  end
+
+  # Apply the data-ops by running `(q/apply-ops data/tree data/ops)` in-process
+  # with the compiled q/* prelude — the SAME engine the agent's own programs use,
+  # so an op-list behaves identically whether the agent applies it inline or via
+  # this tool. A prelude that failed to compile (nil) is a hard error here: there
+  # is no meaningful fallback for an op-application tool without the algebra.
+  defp apply_ops(tree, ops) do
+    case SpellAgent.Code.Prelude.compiled() do
+      nil ->
+        {:error, "code-apply: q/* prelude unavailable (cannot apply ops)"}
+
+      prelude ->
+        run_apply(prelude, tree, ops)
+    end
+  end
+
+  defp run_apply(prelude, tree, ops) do
+    case PtcRunner.Lisp.run("(q/apply-ops data/tree data/ops)",
+           prelude: prelude,
+           context: %{"tree" => tree, "ops" => ops},
+           filter_context: false,
+           caller: :in_process_v1
+         ) do
+      {:ok, step} ->
+        classify_apply_return(step.return)
+
+      {:error, step} ->
+        {:error, "code-apply: ops application failed (#{inspect(step.fail || step.return)})"}
+    end
+  end
+
+  # `q/apply-op` calls `fail` on an unknown op kind, which surfaces as a
+  # `{:__ptc_fail__, msg}` value in step.return (NOT an {:error, step}); turn it
+  # into a clean error map so a typo'd op kind never silently writes the file.
+  defp classify_apply_return({:__ptc_fail__, msg}),
+    do: {:error, "code-apply: #{to_string_reason(msg)}"}
+
+  defp classify_apply_return(tree) when is_map(tree), do: {:ok, tree}
+
+  defp classify_apply_return(other),
+    do: {:error, "code-apply: ops did not yield a tree (#{inspect(other)})"}
 
   # An edit that unparses to empty/whitespace-only source would TRUNCATE the file
   # (empty source parses clean, so the parse-gate alone would not catch it). Refuse

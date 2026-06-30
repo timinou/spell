@@ -1,8 +1,9 @@
 #+TITLE: Ergonomic (edit …) surface — sugar layer over the q/* reifiable-data algebra
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 15164b2a4dd1a55b
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-plan-020-lispy-code-edit-beam-spell_agent/2026-06-24T23-29-11-991Z_15164b2a4dd1a55b.jsonl]]
 #+CUSTOM_ID: FEAT-025-ergonomic-edit-surface-sugar-layer-over
+#+COMPLETION_HASH: e9324d6f19d2c968
 
 * Initial Message
 
@@ -91,3 +92,26 @@ If `(edit path :op :args)` were the *primitive* (a runtime special form), the re
 
 * Provenance
 Spike requested after PLAN-020 merge (commit 7b0263848) answering the STUCK/ASK on edit-interface design. Desugaring equality proven in PTC sandbox this session. Builds strictly on shipped W5/W7 surface.
+
+NOTE [2026-06-30]: IMPLEMENTATION ARCHITECTURE REVISED (two assumptions in the original design falsified by sandbox probes before coding):
+
+1. **Cross-namespace prelude calls do NOT work in one bundle.** Proved: a prelude fn in ns `edit` calling `(q/apply-ops …)` fails compile with "unknown namespace q/" — the prelude compiler does not seed sibling namespaces' exports during analysis (only the built-in set + the current ns). ∴ L3 CANNOT be a prelude fn that calls q/*.
+
+2. **A prelude fn wrapping tool/* bypasses the preflight side-effect guard** (codex_regression_test P1 #2): `check_undefined_tools` can't see a tool hidden inside a prelude export, so effectful orchestration in a prelude defeats pre-execution safety. ∴ L3 should NOT be a prelude fn that calls tool/code-parse/code-edit either.
+
+REVISED LAYERING (cleaner — "Elixir materializes, PTC transforms"):
+- **L1/L2 (pure data sugar)** → ship as a NEW pure prelude namespace appended to q.clj OR a sibling. Constructors (`q-id`) + verb sugar (`rename-id`) return plain data, zero q//tool/ deps → compiles clean, stays side-effect-honest. KEEP q's existing public fns untouched (PLAN-018 standalone-link contract); add the sugar in the SAME file under the SAME `q` ns is fine since they're pure and q already depends on nothing.
+- **L3 (effectful pipeline)** → a NATIVE tool `code-apply` (Elixir, in SpellAgent.Code): args `{path, ops}` → read file, infer lang (L4), parse via PiKernelNif, q-apply the ops (call the compiled q prelude in-process, same path tools.ex already uses), route through the EXISTING gate_* pipeline. Orchestration in Elixir = visible to preflight, transactional, no prelude-guard bypass. The recorded edit is still the `ops` data list (reifiability preserved).
+- **L4 (lang-of)** → NIF `language_for_path/1` over engine `registry().match_path(Path)` → `profile.id.as_str()` (LanguageId has `as_str`/Display). Single source of truth, no ext-map drift.
+
+NET: the agent writes `(tool/code-apply {:path "f.ex" :ops [(q/rename-id "x" "y")]})` — one effectful call, ops are pure data built by pure sugar. Sugar-over-data contract intact; safety + reifiability strictly better than the filed prelude-fn L3.
+
+NOTE [2026-06-30]: IMPLEMENTED (as-built). Layers shipped:
+- L1/L2 (pure sugar) in priv/preludes/q.clj: q/id, q/tok (node ctors); q/rename-id, q/rewrite-op, q/wrap-op (verb sugar → op DATA). 4 sugar tests in q_test.exs incl the byte-identical-to-hand-op reifiability proof. q_test 34 green.
+- L4 NIF: PiKernelNif.language_for_path/1 over engine registry().match_path (single source of truth, no drift). Rust + Elixir wrapper. Smoke-verified ex/rs/py/ts + clean error on unknown.
+- L3 native tool: SpellAgent.Code.apply_tool/1 (code-apply). Resolves lang (explicit :lang wins, else infer), reads+parses, applies :ops via q/apply-ops in-process, routes through the EXISTING code-edit gate pipeline (unparse→nonempty→parse-gate→atomic mode-preserving write). Loud failures: unknown op kind, empty ops, missing args, unresolvable ext, missing file — all error maps, file untouched. 9 tests in code_apply_test.exs green.
+- Registered code-apply in tools.ex (native map + meta doc + reserved_name?). count-tools floor comment updated.
+
+ARCHITECTURE DELTA FROM ORIGINAL FILING: L3 is a NATIVE tool, not a prelude fn — forced by two sandbox-proven facts (recorded in the earlier note): a prelude ns cannot qualified-call a sibling prelude ns (compile error), and a prelude fn wrapping tool/* bypasses the preflight side-effect guard. Net result is STRICTLY better (orchestration visible to preflight, in Elixir per "materialize/transform"); sugar-over-data contract intact (ops are pure data; reifiability proven).
+
+VERIFICATION: full spell_agent suite 1032 passed / 0 failed (seed 0), +13 over pre-FEAT baseline. Rust fmt clean, no new clippy. Elixir formatted. Committed on main.

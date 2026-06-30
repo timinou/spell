@@ -139,6 +139,17 @@ defmodule PiKernelNif do
   def unparse_code(_tree_json), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
+  Resolve a file path to its language id by extension (FEAT-025 L4). Returns
+  `{:ok, "elixir"}` or `{:error, reason}` when the extension maps to no known
+  grammar. The engine's language registry is the single source of truth, so the
+  caller never carries a drifting extension->language map.
+
+  Replaced at load time by the NIF; this body only runs if the NIF failed to load.
+  """
+  @spec language_for_path(String.t()) :: {:ok, String.t()} | {:error, String.t()}
+  def language_for_path(_path), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
   Parse and decode in one step: `{:ok, form_tree_map}` or `{:error, reason}`.
   The form_tree is the canonical walkable node shape the q/* algebra runs on.
   """

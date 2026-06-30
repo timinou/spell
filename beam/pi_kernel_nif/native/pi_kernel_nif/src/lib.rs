@@ -226,6 +226,27 @@ fn unparse_code(tree_json: String) -> Result<String, String> {
 	}
 }
 
+/// Resolve a file path to its language id by extension (FEAT-025 L4).
+///
+/// The SINGLE source of truth for path->language is the engine's language
+/// registry (`match_path`), so the agent's `code-apply` sugar never carries a
+/// drifting extension map. Returns the language id string (`"elixir"`) or
+/// `{:error, reason}` when the extension maps to no known grammar.
+#[rustler::nif]
+fn language_for_path(path: String) -> Result<String, String> {
+	let outcome = catch_unwind(AssertUnwindSafe(|| {
+		registry()
+			.match_path(Path::new(&path))
+			.map(|profile| profile.id.as_str().to_string())
+			.ok_or_else(|| format!("no known language for path: {path}"))
+	}));
+
+	match outcome {
+		Ok(result) => result,
+		Err(panic) => Err(format!("panic caught in NIF: {}", panic_reason(panic))),
+	}
+}
+
 /// Extract a readable reason from a caught panic payload.
 fn panic_reason(panic: Box<dyn std::any::Any + Send>) -> String {
 	panic

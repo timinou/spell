@@ -427,3 +427,46 @@
   "The name field of a node (the #name projection)."
   [tree]
   (and (map? tree) (get tree "name")))
+
+;; ── ergonomic sugar (FEAT-025) ───────────────────────────────────────────────
+;; A thin, PURE authoring skin over the data algebra above. Two layers, both
+;; returning plain form_tree / op DATA — never closures, never tool/ calls — so
+;; the recorded edit a reducer (PLAN-018) stores is still a value, and the sugar
+;; stays side-effect-honest (a prelude fn that wrapped tool/* would bypass the
+;; preflight guard; one that called a sibling namespace would not compile). The
+;; effectful pipeline lives in the native `code-apply` tool, not here.
+
+;; L1 — node constructors: name the common form_tree shapes so callers never
+;; hand-write {"node" … "value" …} literals (verbose + a typo'd key silently
+;; no-ops past the parse-gate).
+(defn id
+  "An identifier node carrying value v. (q/id \"x\") => {node identifier, value x}."
+  [v]
+  {"node" "identifier" "value" v})
+
+(defn tok
+  "A literal token node carrying value v (operators, punctuation, keywords). The
+  unparser renders value/text VERBATIM, so a token is untrusted source until the
+  code-apply parse-gate re-parses it."
+  [v]
+  {"node" "token" "value" v})
+
+;; L2 — verb sugar: each returns ONE op map {op pattern template} — the exact
+;; shape q/apply-ops consumes and a reducer records. Intent in, data out.
+(defn rename-id
+  "Op: rename every identifier valued `from` to `to`. ≡ an update-op whose
+  pattern/template are id nodes. (q/rename-id \"x\" \"y\")."
+  [from to]
+  {"op" "update" "pattern" (id from) "template" (id to)})
+
+(defn rewrite-op
+  "Op: rewrite nodes matching `pat` to `tmpl` (the data form of q/rewrite). Both
+  are form_tree patterns/templates (may carry holes)."
+  [pat tmpl]
+  {"op" "rewrite" "pattern" pat "template" tmpl})
+
+(defn wrap-op
+  "Op: wrap nodes matching `pat` in `tmpl` (the data form of q/wrap). `tmpl`
+  should carry a node-hole the matched subtree is spliced into."
+  [pat tmpl]
+  {"op" "wrap" "pattern" pat "template" tmpl})

@@ -624,4 +624,61 @@ defmodule SpellAgent.QTest do
              ]
     end
   end
+
+  describe "ergonomic sugar (FEAT-025) — desugars to canonical data" do
+    test "q/id and q/tok build the literal node shapes", %{prelude: prelude} do
+      assert q(prelude, ~S|(q/id "x")|) == %{"node" => "identifier", "value" => "x"}
+      assert q(prelude, ~S|(q/tok "+")|) == %{"node" => "token", "value" => "+"}
+    end
+
+    test "q/rename-id is byte-identical to the hand-written update-op", %{prelude: prelude} do
+      # This is the PLAN-018 reifiability guarantee: the sugar produces the SAME
+      # plain data a recorded edit stores — not a closure, not a special form.
+      hand = %{
+        "op" => "update",
+        "pattern" => %{"node" => "identifier", "value" => "x"},
+        "template" => %{"node" => "identifier", "value" => "y"}
+      }
+
+      assert q(prelude, ~S|(q/rename-id "x" "y")|) == hand
+    end
+
+    test "rewrite-op / wrap-op carry the op kind + pattern/template through", %{prelude: prelude} do
+      assert q(prelude, ~S|(q/rewrite-op {"node" "a"} {"node" "b"})|) == %{
+               "op" => "rewrite",
+               "pattern" => %{"node" => "a"},
+               "template" => %{"node" => "b"}
+             }
+
+      assert q(prelude, ~S|(q/wrap-op {"node" "a"} {"node" "w"})|) == %{
+               "op" => "wrap",
+               "pattern" => %{"node" => "a"},
+               "template" => %{"node" => "w"}
+             }
+    end
+
+    test "sugar-built ops feed q/apply-ops and transform a real tree", %{prelude: prelude} do
+      # (a + b) with a->c via the sugar op == via a hand op (end-to-end).
+      tree = %{
+        "node" => "source",
+        "children" => [
+          %{"node" => "identifier", "value" => "a"},
+          %{"node" => "token", "value" => "+"},
+          %{"node" => "identifier", "value" => "b"}
+        ]
+      }
+
+      via_sugar = q(prelude, ~S|(q/apply-ops data/t [(q/rename-id "a" "c")])|, %{"t" => tree})
+
+      via_hand =
+        q(
+          prelude,
+          ~S|(q/apply-ops data/t [{"op" "update" "pattern" {"node" "identifier" "value" "a"} "template" {"node" "identifier" "value" "c"}}])|,
+          %{"t" => tree}
+        )
+
+      assert q(prelude, ~S|(q/equal? data/a data/b)|, %{"a" => via_sugar, "b" => via_hand}) ==
+               true
+    end
+  end
 end

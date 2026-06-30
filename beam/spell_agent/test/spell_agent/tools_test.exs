@@ -33,7 +33,8 @@ defmodule SpellAgent.ToolsTest do
 
       # Always-present native tools: 3 meta (define-tool, define-config,
       # list-tools) + 4 sh (sh, sh-pipe, sh-parse, sh-unparse; PLAN-011) + 3 code
-      # (code-parse, code-unparse, code-edit; PLAN-020), plus count-tools itself.
+      # (code-parse, code-unparse, code-edit; PLAN-020) + code-apply (FEAT-025),
+      # plus count-tools itself.
       # Asserted as a floor so inventory growth never breaks this test.
       assert is_integer(count)
       assert count >= 11
