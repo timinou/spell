@@ -48,7 +48,7 @@ defmodule SpellAgent.LlmTerminal do
     * `:timeout` — quiescence wait in ms (default 5000).
   """
   @spec run_scenario(String.t(), keyword()) :: %{store_forest: map(), buffer: String.t(), result: term()}
-  def run_scenario(cassette_name, opts \\ []) do
+  def run_scenario(_cassette_name, opts \\ []) do
     {w, h} = Keyword.get(opts, :dimensions, {100, 30})
     model = Keyword.get(opts, :model, @default_model)
     max_turns = Keyword.get(opts, :max_turns, 6)

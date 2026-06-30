@@ -41,8 +41,11 @@ defmodule SpellAgent.Anthropic do
   @anthropic_version "2023-06-01"
   @claude_code_version "2.1.63"
   @tool_prefix "proxy_"
-  @max_cache_breakpoints 4
   @default_max_tokens 8192
+
+  # A single ephemeral cache breakpoint marker. Anthropic allows <= 4 of these
+  # per request; placement is in apply_cache_control_cap/1 (PLAN-018 W1).
+  @ephemeral %{"type" => "ephemeral"}
   @receive_timeout 120_000
 
   @claude_code_betas [
@@ -151,10 +154,12 @@ defmodule SpellAgent.Anthropic do
       end
 
     if inject_claude_code?(model) do
-      digest_seed = %{
-        "system" => Map.get(request, :system),
-        "messages" => Map.get(request, :messages, [])
-      }
+      # Seed the cch digest on the STABLE system prompt ONLY — never the growing
+      # message tape. The billing block sits at system position 0, before the
+      # cached prefix; if its bytes change turn-over-turn the whole prefix cache
+      # is invalidated from token 0. (TS reference seeds on {system,
+      # extraInstructions} for the same reason.) (PLAN-018 W1.)
+      digest_seed = %{"system" => Map.get(request, :system)}
 
       [
         %{"type" => "text", "text" => billing_header(digest_seed)},
@@ -172,9 +177,16 @@ defmodule SpellAgent.Anthropic do
   defp billing_header(seed) do
     payload = Jason.encode!(seed)
     cch = :crypto.hash(:sha256, payload) |> Base.encode16(case: :lower) |> binary_part(0, 5)
-    rand3 = :crypto.strong_rand_bytes(2) |> Base.encode16(case: :lower) |> binary_part(0, 3)
 
-    "x-anthropic-billing-header: cc_version=#{@claude_code_version}.#{rand3}; cc_entrypoint=cli; cch=#{cch};"
+    # The build-hash suffix is DETERMINISTIC (derived from the version), not a
+    # per-call random. A random suffix would change the position-0 billing block
+    # every turn and invalidate the entire prefix cache; a real Claude Code build
+    # hash is itself stable per build, so a stable value is also more faithful
+    # mimicry. (PLAN-018 W1.)
+    build_hash =
+      :crypto.hash(:sha256, @claude_code_version) |> Base.encode16(case: :lower) |> binary_part(0, 3)
+
+    "x-anthropic-billing-header: cc_version=#{@claude_code_version}.#{build_hash}; cc_entrypoint=cli; cch=#{cch};"
   end
 
   defp max_tokens(request) do
@@ -493,29 +505,93 @@ defmodule SpellAgent.Anthropic do
 
   # --- cache control ---------------------------------------------------------
 
-  # Anthropic rejects > 4 cache_control breakpoints. v0 keeps a single
-  # breakpoint on the last system block (the stable prefix) and strips any
-  # others the caller may have set.
-  defp apply_cache_control_cap(%{"system" => blocks} = body) when is_list(blocks) and blocks != [] do
-    cleared = Enum.map(blocks, &Map.delete(&1, "cache_control"))
-    capped = List.update_at(cleared, length(cleared) - 1, &Map.put(&1, "cache_control", %{"type" => "ephemeral"}))
-    %{body | "system" => Enum.take(strip_excess_cache(capped), @max_cache_breakpoints + length(capped))}
+  # Prompt-cache breakpoint placement (PLAN-018 W1). Anthropic allows <= 4
+  # `cache_control` breakpoints; we place a ROLLING set so the growing prefix is
+  # re-read at the ~0.1x cache-read price instead of full price every turn:
+  #
+  #   1. last tools block     — the tool schema, stable across the whole session
+  #   2. last system block    — the system prompt, stable
+  #   3. penultimate user msg —\ the two most-recent user turns; this pair rolls
+  #   4. last user msg        —/ forward each turn, anchoring the tail delta.
+  #
+  # The two MESSAGE breakpoints are what was missing before: only the system
+  # block was cached, so the entire message tape was re-read at full price. By
+  # construction we place at most 1+1+2 = 4. Any caller-set cache_control is
+  # cleared first so placement is deterministic and the <=4 cap cannot be
+  # exceeded. Ported from packages/ai/src/providers/anthropic.ts
+  # applyPromptCaching.
+  defp apply_cache_control_cap(body) do
+    body
+    |> clear_all_cache_control()
+    |> mark_last("tools")
+    |> mark_last("system")
+    |> mark_recent_users()
   end
 
-  defp apply_cache_control_cap(body), do: body
+  defp clear_all_cache_control(body) do
+    body
+    |> maybe_update_list("system", fn blocks -> Enum.map(blocks, &Map.delete(&1, "cache_control")) end)
+    |> maybe_update_list("tools", fn tools -> Enum.map(tools, &Map.delete(&1, "cache_control")) end)
+    |> maybe_update_list("messages", fn msgs -> Enum.map(msgs, &clear_message_cache/1) end)
+  end
 
-  defp strip_excess_cache(blocks) do
-    {kept, _} =
-      Enum.reduce(blocks, {[], 0}, fn b, {acc, n} ->
-        if Map.has_key?(b, "cache_control") and n >= @max_cache_breakpoints do
-          {[Map.delete(b, "cache_control") | acc], n}
-        else
-          bump = if Map.has_key?(b, "cache_control"), do: n + 1, else: n
-          {[b | acc], bump}
-        end
-      end)
+  defp clear_message_cache(%{"content" => content} = msg) when is_list(content) do
+    %{msg | "content" => Enum.map(content, &Map.delete(&1, "cache_control"))}
+  end
 
-    Enum.reverse(kept)
+  defp clear_message_cache(msg), do: msg
+
+  # Mark the last block of a top-level list field (system blocks or tool defs).
+  defp mark_last(body, key) do
+    maybe_update_list(body, key, fn blocks ->
+      List.update_at(blocks, length(blocks) - 1, &Map.put(&1, "cache_control", @ephemeral))
+    end)
+  end
+
+  # Roll the tail breakpoints forward onto the two most-recent user messages.
+  defp mark_recent_users(body) do
+    maybe_update_list(body, "messages", fn msgs ->
+      targets =
+        msgs
+        |> Enum.with_index()
+        |> Enum.filter(fn {m, _} -> Map.get(m, "role") == "user" end)
+        |> Enum.map(&elem(&1, 1))
+        |> Enum.reverse()
+        |> Enum.take(2)
+
+      Enum.reduce(targets, msgs, fn idx, acc -> List.update_at(acc, idx, &mark_user_message/1) end)
+    end)
+  end
+
+  defp mark_user_message(%{"content" => content} = msg) when is_binary(content) do
+    %{msg | "content" => [%{"type" => "text", "text" => content, "cache_control" => @ephemeral}]}
+  end
+
+  defp mark_user_message(%{"content" => content} = msg) when is_list(content) and content != [] do
+    %{msg | "content" => mark_last_text_block(content)}
+  end
+
+  defp mark_user_message(msg), do: msg
+
+  # Prefer the last TEXT block; fall back to the last block (parity with the TS
+  # applyCacheControlToLastTextBlock helper). A tool_result block is a valid
+  # cache_control carrier, so the fallback is sound.
+  defp mark_last_text_block(blocks) do
+    last_text_idx =
+      blocks
+      |> Enum.with_index()
+      |> Enum.reverse()
+      |> Enum.find_value(fn {b, i} -> if Map.get(b, "type") == "text", do: i end)
+
+    idx = last_text_idx || length(blocks) - 1
+    List.update_at(blocks, idx, &Map.put(&1, "cache_control", @ephemeral))
+  end
+
+  defp maybe_update_list(body, key, fun) do
+    case Map.get(body, key) do
+      list when is_list(list) and list != [] -> Map.put(body, key, fun.(list))
+      _ -> body
+    end
   end
 
   # --- helpers ---------------------------------------------------------------

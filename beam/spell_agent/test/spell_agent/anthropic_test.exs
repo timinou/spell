@@ -67,6 +67,104 @@ defmodule SpellAgent.AnthropicTest do
     end
   end
 
+  # The cost win: the growing message tape must be re-read at the cache-read
+  # price, not full price, every turn. That requires (a) a byte-stable cached
+  # prefix — the position-0 billing block cannot change turn-over-turn — and
+  # (b) rolling breakpoints on the message tail, which were entirely absent
+  # before. (PLAN-018 W1.)
+  describe "prompt-cache breakpoint placement (PLAN-018 W1)" do
+    defp user(text), do: %{role: :user, content: text}
+    defp assistant(text), do: %{role: :assistant, content: text}
+
+    defp cache_marks(body) do
+      sys = Enum.count(body["system"] || [], &Map.has_key?(&1, "cache_control"))
+      tools = Enum.count(body["tools"] || [], &Map.has_key?(&1, "cache_control"))
+
+      msgs =
+        for m <- body["messages"] || [],
+            is_list(m["content"]),
+            b <- m["content"],
+            Map.has_key?(b, "cache_control"),
+            reduce: 0,
+            do: (acc -> acc + 1)
+
+      %{system: sys, tools: tools, messages: msgs, total: sys + tools + msgs}
+    end
+
+    test "the billing block is byte-stable as the message tape grows" do
+      turn1 = Anthropic.build_body("claude-sonnet-4", %{system: "S", messages: [user("hi")]})
+
+      turn5 =
+        Anthropic.build_body("claude-sonnet-4", %{
+          system: "S",
+          messages: [user("hi"), assistant("a1"), user("u2"), assistant("a2"), user("u3")]
+        })
+
+      [billing1 | _] = turn1["system"]
+      [billing5 | _] = turn5["system"]
+      # Same bytes regardless of how many messages have accumulated. A digest
+      # seeded on the tape (the old bug) or a random build-hash would differ.
+      assert billing1["text"] == billing5["text"]
+    end
+
+    test "the billing block does not carry a cache_control breakpoint" do
+      body = Anthropic.build_body("claude-sonnet-4", %{system: "S", messages: [user("hi")]})
+      [billing | _] = body["system"]
+      refute Map.has_key?(billing, "cache_control")
+    end
+
+    test "places a breakpoint on the message tail (not only the system block)" do
+      body =
+        Anthropic.build_body("claude-sonnet-4", %{
+          system: "S",
+          messages: [user("hi"), assistant("a1"), user("u2")]
+        })
+
+      marks = cache_marks(body)
+      assert marks.messages >= 1
+      assert marks.system >= 1
+      assert marks.total <= 4
+    end
+
+    test "marks the two most-recent user turns and at most four total" do
+      body =
+        Anthropic.build_body("claude-sonnet-4", %{
+          system: "S",
+          tools: [%{"name" => "t", "description" => "d", "input_schema" => %{}}],
+          messages: [user("u1"), assistant("a1"), user("u2"), assistant("a2"), user("u3")]
+        })
+
+      marks = cache_marks(body)
+      # tools + system + 2 recent users = the full 4-breakpoint budget.
+      assert marks.tools == 1
+      assert marks.system == 1
+      assert marks.messages == 2
+      assert marks.total == 4
+    end
+
+    test "never exceeds four breakpoints even when the caller pre-marked blocks" do
+      premarked =
+        for i <- 1..6,
+            do: %{"type" => "text", "text" => "b#{i}", "cache_control" => %{"type" => "ephemeral"}}
+
+      body =
+        Anthropic.build_body("claude-sonnet-4", %{
+          system: premarked,
+          messages: [user("u1"), assistant("a1"), user("u2")]
+        })
+
+      assert cache_marks(body).total <= 4
+    end
+
+    test "a user message given as a string is lifted to a marked text block" do
+      body = Anthropic.build_body("claude-sonnet-4", %{system: "S", messages: [user("only")]})
+
+      [msg] = body["messages"]
+      assert is_list(msg["content"])
+      assert Enum.any?(msg["content"], &Map.has_key?(&1, "cache_control"))
+    end
+  end
+
   describe "tool_result is_error flag (BUG-014)" do
     # A rejected tool returns %{"err" => _}; the shared Hist.Result.error?/1
     # classifier must flag the tool_result block so the model cannot narrate past
