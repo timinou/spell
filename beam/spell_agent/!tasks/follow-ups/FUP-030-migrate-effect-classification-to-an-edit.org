@@ -1,0 +1,80 @@
+#+TITLE: Migrate effect classification to an editable effect.ptc (homoiconic policy)
+#+STATE: ITEM
+#+SESSION_ID: 151d928449216b08
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-30T15-10-18-404Z_151d928449216b08.jsonl]]
+#+CUSTOM_ID: FUP-030-migrate-effect-classification-to-an-edit
+
+* Initial Message
+
+ok what's next, besides PLAN-021
+
+* Context
+
+Raised during PLAN-018 L2 (full-regime soundness). Across three L2 swarm rounds,
+the findings kept landing on the SAME surface: the effect command-head taxonomy
+(`@read_heads`, `@mutation_heads`, `@external_heads`, `@check_heads`,
+`@in_place_heads`) and shell path extraction in `SpellAgent.Hist.Effect` +
+`SpellAgent.Hist.Reduce`. These are PURE DATA + MATCHING (a policy), not
+primitives \u2014 yet they live in compiled Elixir, so every taxonomy gap (sed -ibak,
+env wrapper, touch multi-operand, grep -i) was a recompile + a swarm round.
+
+This violates the repo doctrine ("maximize userland logic in BEAM-Lisp; Elixir is
+a thin fail-soft harness"; "Elixir owns primitives + invariants, PTC owns policies
++ lenses"). A ~60% share of the reduce/effect/mission logic is PTC-shaped.
+
+* Goal
+
+Migrate effect classification (and the shell head/operand taxonomy) to an editable
+`priv/hist/reducers/effect.ptc` PTC policy, leaving in Elixir only the genuine
+primitives/invariants.
+
+* Why this is the right cut
+
+- The agent could fix a `sed -ibak`-class taxonomy gap at RUNTIME as a data edit
+  (define-tool {:scope :durable} on the policy), instead of a recompile.
+- It collapses an entire BUG CLASS: the estimate-vs-spill divergence (L2 found it
+  twice) exists ONLY because the reducibility estimate and the reducer/spill
+  reach effect class by different paths. If both read ONE `effect.ptc`
+  classifier, they cannot diverge by construction.
+- It matches the existing forms.ptc / `forms!` parity pattern: the PTC policy
+  transforms, an Elixir oracle proves. Here `fold_env` stays the Elixir lossless
+  PROOF oracle; the classification POLICY becomes data.
+
+* Stays in Elixir (do NOT migrate)
+
+- `Refold` (node->tape fidelity primitive: tool_use/tool_result pairing).
+- `Reduce.fold_env` (the lossless proof oracle).
+- `Anthropic` cache_control placement (the wire bytes).
+- The `{:reduced, S, W, hash}` store key + `Mission.memoized_reduce`.
+- `Spill.digest` / `byte_size` (byte primitives; PTC has no byte-size, which is
+  why the projection already exposes `result_bytes`).
+
+* Scope
+
+- Author `effect.ptc`: the command-head tables as data + a `classify` over a
+  projected `sees` entry (q/* matching). Port: read/mutation/check/external/
+  unknown heads, wrapper peeling (env/nice/sudo/...), head-specific in-place
+  detection (sed/awk/perl), find mutating predicates, multi-operand write paths.
+- `Effect` + `Reduce` call the policy (via `Lens.run` / the reducer-source
+  loader) instead of the compiled lists; keep the Elixir functions as a
+  thin shim or remove once the PTC path is proven.
+- Parity test: an Elixir `classify!` oracle vs the PTC `effect.ptc` over a corpus
+  of known commands (the forms.ptc / forms! pattern), so a policy edit that
+  breaks a known classification fails a test.
+
+* Close-safety note (carried from L2)
+
+The mechanism is already fail-safe in the conservative direction: unknown head ->
+:unknown -> barrier (never collapse); unlocalizable write -> global barrier. So
+this migration is a MAINTAINABILITY + single-source-of-truth win, NOT a
+correctness fix \u2014 the regime is sound today. The value is that the residual
+taxonomy-completeness surface becomes agent-editable data instead of a recompile.
+
+* Acceptance
+
+- `effect.ptc` exists and is the single classifier both the reducer (stale-read
+  effect gate, spill restorability) and the reducibility estimate consult.
+- The estimate-vs-spill divergence class is structurally impossible (one
+  classifier).
+- Parity test green over the known-command corpus.
+- `mix compile --warnings-as-errors` + the hist suite green.

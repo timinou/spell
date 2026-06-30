@@ -838,3 +838,68 @@ makes the consequence explicit: W4 does not move wire bytes by itself.
      must agree on the same (node.result) token model.
 
 NOTE [2026-06-30]: L1 four-laws audit: ProviderValidity + LosslessProof PASS; Determinism + BestEffort surfaced that W4's sees/prints reductions shrink the node STORE but not the refolded TAPE (refold emits form_src+result, not sees). Clarified division of labor: W4 = node-space lossless + soundness analysis; W6 result-spill = tape-space shedding (the actual wire shrink). Fixed reducibility estimate to model wire (node.result) shedding + added stale-read class; added best-effort rescue to hist/reduce. No code bug \u2014 a scope clarification + estimate correction + posture hardening.
+
+* L2 FINAL GATE [2026-06-30]: full-regime soundness \u2014 CLEARED
+
+Three L2 swarm rounds (5 reviewers, then 3, then 2) over the complete I/P-frame
+regime (W1->W6). Findings converged 7 -> 4 -> 2, each round narrower, all fixed.
+
+** Round 1 (7 findings, 3 P1) \u2014 the regime-coherence cluster
+- COST MODEL was deciding on garbage: the reducibility estimate read node.result
+  but Lens.project did NOT expose "result" (saw null, K* meaningless). The
+  soft/K>K* rungs triggered {:reduce, :lossless} which sheds nothing on the wire
+  (the L1 truth) \u2014 only lossy spill moves bytes. Fixed: projection exposes
+  result + restorable; rungs return {:reduce, :lossy}; estimate mirrors
+  Spill.spillable?.
+- WORLD-EPOCH barrier was specified but unimplemented (stale-read-collapse
+  dropped a read across a write to its path). Implemented per-path epoch model.
+- EFFECT holes: sed -i, env wrapper. RESTORE: no agent verb -> added
+  hist/recall-node.
+
+** Round 2 (re-review, 5 findings) \u2014 epoch barrier too optimistic
+The barrier was sound only for the narrow sh-cat/native-edit path. Root cause:
+optimistic path extraction. Fixed by making it CONSERVATIVE \u2014 unlocalizable write
+-> GLOBAL barrier; one args_path extractor for reads + writes; head-specific
+in-place detection (grep -i stays read); estimate/Spill token rendering aligned.
+
+** Round 3 (close-verification, 2 findings) \u2014 the last corners
+- multi-operand write (touch f g) localized to one operand: writes now barrier on
+  ALL operands.
+- UTF-8: estimate counted graphemes, Spill counts bytes: projection exposes
+  result_bytes (Spill.render_result |> byte_size), estimate reads it. One
+  byte-count, one truth \u2014 divergence impossible by construction.
+
+** The close-safety invariant (why the gate clears here)
+The reduction mechanism is now sound-by-construction in the conservative
+direction: a non-read effect ALWAYS barriers (write_see? = classify != :read); an
+unlocalizable write is a GLOBAL barrier; an unknown command head defaults to
+:unknown (not :read). Therefore the ONLY remaining way to get an UNSOUND collapse
+is a mutation EXPLICITLY MISLISTED as a read-head (e.g. a new mutating tool added
+to @read_heads by mistake) that also shares a read's key. That residue is a
+DATA-TABLE completeness question (one wrong entry in @read_heads / @mutation_heads
+/ @external_heads), not a logic defect in the mechanism \u2014 and it is exactly the
+classification policy that should migrate to an editable effect.ptc (see the
+homoiconic-doctrine note below). A swarm cannot exhaustively enumerate every shell
+command; the mechanism's job is to FAIL SAFE on the ones it doesn't know, which it
+now does (unknown -> barrier, never collapse).
+
+VERDICT: the I/P-frame regime is sound. cache<->reduce composition, restorability,
+the digest/recite/recall-node surface, and the cost model are coherent end-to-end.
+Residual taxonomy-completeness tracked as a follow-up (effect.ptc migration), not
+a blocker. L2 CLEARED.
+
+** Doctrine follow-up (raised during L2): effect classification wants to be PTC
+The swarm rounds kept landing on the SAME surface \u2014 the effect command-head lists
+and path extraction. These are pure data + matching (policy), not primitives. A
+~60% share of reduce/effect/mission logic is PTC-shaped (the transforms + the
+ladder + K*); the genuinely-Elixir 40% is refold (fidelity), fold_env (the
+lossless PROOF oracle), the anthropic wire bytes, the {:reduced,...} store key,
+and byte_size/digest. Migrating effect-classification to an editable effect.ptc
+(with fold_env kept as the Elixir parity oracle, exactly the forms.ptc/forms!
+pattern) would (a) let the agent fix a `sed -ibak`-class taxonomy gap at runtime
+as a data edit instead of a recompile, and (b) collapse the estimate-vs-spill
+divergence class by making both read ONE classifier. Filed as FUP for the
+code/edit-cluster successor work; out of PLAN-018's wave scope (W1-W6 ship the
+mechanism + the proof; the policy-as-data refinement is the next layer).
+
+NOTE [2026-06-30]: L2 final gate CLEARED after 3 swarm rounds (findings 7->4->2, all fixed). Cost model coherent (projection exposes result/restorable/result_bytes; rungs -> lossy; estimate mirrors Spill by construction). World-epoch barrier sound + conservative (unlocalizable/multi-operand/nil-path all barrier; unknown head -> never collapse). hist/recall-node restore verb added. Close-safety invariant: the only unsound direction is a mutation explicitly mislisted as a read-head (a data-table completeness question, fail-safe by default), filed as the effect.ptc-migration FUP. 277 tests green, warnings-as-errors clean.
