@@ -70,15 +70,6 @@ defmodule SpellAgent.Hist.Effect do
 
   # --- shell classification ---------------------------------------------------
 
-  # Read the command head from the call's recorded args (`:argv` head, or the
-  # first stage head for sh-pipe). A computed/absent head is :unknown.
-  defp classify_shell(see) do
-    case shell_head(get(see, :args)) do
-      nil -> :unknown
-      head -> head_class(head)
-    end
-  end
-
   defp head_class(head) do
     cond do
       head in @external_heads -> :external
@@ -89,22 +80,57 @@ defmodule SpellAgent.Hist.Effect do
     end
   end
 
-  # The recorded args of a `sees` entry are realized data (a plain map), not the
-  # AST literal the Lens reads. Pull the argv head (or sh-pipe first-stage head).
-  defp shell_head(args) when is_map(args) do
-    cond do
-      is_list(argv = get(args, :argv)) -> list_head(argv)
-      is_list(stages = get(args, :stages)) -> stages |> List.first() |> list_head()
-      true -> nil
+  # Classify a shell call by the MOST DANGEROUS class across all its command
+  # heads/predicates — a pipeline is only as safe as its least-safe stage. A
+  # `cat | tee dst` pipe mutates via `tee`; classifying it by the first head
+  # (`cat` -> read) would wrongly collapse a mutation (S4 swarm finding).
+  defp classify_shell(see) do
+    case shell_heads(get(see, :args)) do
+      [] -> :unknown
+      heads -> heads |> Enum.map(&head_class/1) |> most_dangerous()
     end
   end
 
-  defp shell_head(_), do: nil
+  # Combine stage classes by danger precedence: any external/mutation/check/unknown
+  # stage dominates a read. The result is :read ONLY if EVERY stage is a read.
+  @danger_order [:external, :mutation, :check, :unknown, :read]
+  defp most_dangerous(classes) do
+    Enum.find(@danger_order, :unknown, fn c -> c in classes end)
+  end
 
-  defp list_head([h | _]) when is_binary(h), do: h
-  defp list_head(_), do: nil
+  # Every command head a shell call runs: the argv head (sh) or each stage head
+  # (sh-pipe). A `find` with a mutating predicate (-delete / -exec) is reported as
+  # an extra "rm" head so it classifies :mutation, not :read.
+  defp shell_heads(args) when is_map(args) do
+    cond do
+      is_list(argv = get(args, :argv)) -> argv_heads(argv)
+      is_list(stages = get(args, :stages)) -> Enum.flat_map(stages, &argv_heads/1)
+      true -> []
+    end
+  end
 
-  # atom- or string-keyed read (never mints an atom).
-  defp get(map, key) when is_map(map), do: Map.get(map, key) || Map.get(map, to_string(key))
+  defp shell_heads(_), do: []
+
+  # The head of one argv vector, plus a synthetic "rm" head when the command
+  # carries a mutating predicate (so e.g. `find . -delete` is not a pure read).
+  defp argv_heads([h | rest]) when is_binary(h) do
+    if Enum.any?(rest, &mutating_predicate?/1), do: [h, "rm"], else: [h]
+  end
+
+  defp argv_heads(_), do: []
+
+  @mutating_predicates ~w(-delete -exec -execdir -fprint -fprintf > >> | tee)
+  defp mutating_predicate?(arg) when is_binary(arg), do: arg in @mutating_predicates
+  defp mutating_predicate?(_), do: false
+
+  # atom- or string-keyed read (never mints an atom). Presence-aware so a key
+  # bound to false/nil is not mistaken for absent.
+  defp get(map, key) when is_map(map) do
+    case Map.fetch(map, key) do
+      {:ok, v} -> v
+      :error -> Map.get(map, to_string(key))
+    end
+  end
+
   defp get(_map, _key), do: nil
 end

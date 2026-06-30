@@ -103,21 +103,39 @@ defmodule SpellAgent.Hist.ReduceTest do
   end
 
   describe "tool-cse" do
-    test "an exact-duplicate ok tool call drops its result payload and refs the keeper" do
+    test "two identical-result CHECK calls CSE: the duplicate refs the keeper" do
+      # A check (mix test) is not stale-collapsible (not :read), so identical
+      # results are de-duplicated by tool-cse: the FIRST is the keeper, the later
+      # identical copy drops its payload and points back. (A read with identical
+      # results is handled by stale-collapse instead; see the read tests.)
       slice = [
-        node(0, sees: [see("sh", %{"argv" => ["ls"]}, "OUT")]),
-        node(1, sees: [see("sh", %{"argv" => ["ls"]}, "OUT")])
+        node(0, sees: [see("sh", %{"argv" => ["mix", "test"]}, "0 failures")]),
+        node(1, sees: [see("sh", %{"argv" => ["mix", "test"]}, "0 failures")])
       ]
 
       reduced = Reduce.lossless(slice)
       [keeper] = Enum.at(reduced, 0).sees
       [dup] = Enum.at(reduced, 1).sees
 
-      assert keeper[:result] == "OUT" or keeper["result"] == "OUT"
-      # the duplicate dropped its result and points at the keeper node.
+      assert keeper[:result] == "0 failures" or keeper["result"] == "0 failures"
       refute Map.has_key?(dup, :result)
       refute Map.has_key?(dup, "result")
       assert dup["cse_ref"] == "n0"
+    end
+
+    test "two identical-result READ calls are stale-collapsed (earlier dropped, last kept)" do
+      slice = [
+        node(0, sees: [see("sh", %{"argv" => ["ls"]}, "OUT")]),
+        node(1, sees: [see("sh", %{"argv" => ["ls"]}, "OUT")])
+      ]
+
+      reduced = Reduce.lossless(slice)
+      [a] = Enum.at(reduced, 0).sees
+      [b] = Enum.at(reduced, 1).sees
+      # the earlier read is staled (recoverable: identical bytes live on the last),
+      # the last keeps its result.
+      assert a["stale"] == true
+      assert (b[:result] || b["result"]) == "OUT"
     end
 
     test "an external call (date) with different results is NEVER collapsed (effect-soundness)" do
@@ -192,6 +210,65 @@ defmodule SpellAgent.Hist.ReduceTest do
       slice = [node(0, binds: %{x: 1}, prints: ["a", "b"], form: {:def, :x, {:literal, 1}, %{}})]
       reduced = Reduce.lossless(slice)
       assert Enum.at(reduced, 0).prints == []
+    end
+  end
+
+  describe "S4 swarm regressions" do
+    test "the cse/stale interaction keeps the last read recoverable (v1 v2 v1)" do
+      # n0=v1, n1=v2, n2=v1 over the same read. The last read (n2) returns v1; the
+      # reduced tape must keep v1 recoverable. (Running cse before stale dropped it.)
+      slice = [
+        node(0, sees: [see("sh", %{"argv" => ["cat", "f"]}, "v1")]),
+        node(1, sees: [see("sh", %{"argv" => ["cat", "f"]}, "v2")]),
+        node(2, sees: [see("sh", %{"argv" => ["cat", "f"]}, "v1")])
+      ]
+
+      reduced = Reduce.lossless(slice)
+      # The last read keeps its actual result; it is not a dangling ref.
+      [c] = Enum.at(reduced, 2).sees
+      assert (c[:result] || c["result"]) == "v1"
+      refute Map.has_key?(c, "cse_ref")
+    end
+
+    test "an sh-pipe with a mutating stage (tee) is NOT stale-collapsed" do
+      slice = [
+        node(0, sees: [see("sh-pipe", %{"stages" => [["cat", "s"], ["tee", "d"]]}, "old")]),
+        node(1, sees: [see("sh-pipe", %{"stages" => [["cat", "s"], ["tee", "d"]]}, "new")])
+      ]
+
+      reduced = Reduce.lossless(slice)
+      [a] = Enum.at(reduced, 0).sees
+      refute Map.has_key?(a, "stale")
+      assert (a[:result] || a["result"]) == "old"
+    end
+
+    test "find with -delete is a mutation, not a collapsible read" do
+      slice = [
+        node(0, sees: [see("sh", %{"argv" => ["find", "tmp", "-delete"]}, %{"lines" => ["tmp/x"]})]),
+        node(1, sees: [see("sh", %{"argv" => ["find", "tmp", "-delete"]}, %{"lines" => []})])
+      ]
+
+      reduced = Reduce.lossless(slice)
+      [a] = Enum.at(reduced, 0).sees
+      # the first result (evidence tmp/x existed) must survive.
+      refute Map.has_key?(a, "stale")
+      assert (a[:result] || a["result"]) == %{"lines" => ["tmp/x"]}
+    end
+
+    test "a false result is distinct from a nil result (presence-aware CSE key)" do
+      # Use a :check call (not stale-collapsible) so this isolates tool-cse: false
+      # and nil are DIFFERENT results and must not share a CSE key.
+      slice = [
+        node(0, sees: [%{name: "sh", args: %{"argv" => ["mix", "test"]}, result: false}]),
+        node(1, sees: [%{name: "sh", args: %{"argv" => ["mix", "test"]}, result: nil}])
+      ]
+
+      reduced = Reduce.lossless(slice)
+      [a] = Enum.at(reduced, 0).sees
+      [b] = Enum.at(reduced, 1).sees
+      # distinct results -> not CSE'd; the false result survives, nil is not a ref.
+      assert Map.fetch(a, :result) == {:ok, false}
+      refute Map.has_key?(b, "cse_ref")
     end
   end
 

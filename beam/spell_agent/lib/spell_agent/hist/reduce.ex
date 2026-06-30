@@ -73,8 +73,14 @@ defmodule SpellAgent.Hist.Reduce do
   def lossless(slice) when is_list(slice) do
     slice
     |> dead_bind_elim()
-    |> tool_cse()
+    # stale-read BEFORE tool-cse: stale-collapse picks the TRUE last read of a
+    # path (over raw reads) and drops the superseded earlier payloads; tool-cse
+    # then dedups whatever identical results remain. Running cse first could turn
+    # the genuine last read into a cse_ref to an earlier node whose payload
+    # stale-collapse then drops, making the last result unrecoverable (S4 swarm
+    # finding). This order keeps each transform's keeper intact.
     |> stale_read_collapse()
+    |> tool_cse()
     |> print_prune()
   end
 
@@ -177,6 +183,12 @@ defmodule SpellAgent.Hist.Reduce do
   defp cse_sees(sees, node_id, seen) when is_list(sees) do
     Enum.map_reduce(sees, seen, fn see, acc ->
       cond do
+        # A stale-collapsed entry has already had its payload dropped — leave it
+        # alone (it carries no result to CSE). Only un-reduced ok calls are
+        # candidates for de-duplication.
+        Map.has_key?(see, "stale") ->
+          {see, acc}
+
         not ok_see?(see) ->
           {see, acc}
 
@@ -265,9 +277,15 @@ defmodule SpellAgent.Hist.Reduce do
   defp ok_see?(see), do: Result.status(mixed_get(see, :result)) == :ok
 
   # A `sees` entry may be atom- or string-keyed depending on its origin; read
-  # either (never mint an atom from data).
+  # either (never mint an atom from data). PRESENCE-AWARE: a real `false`/`nil`
+  # result must survive — a `||` fallback would fold `false` into "missing" and let
+  # two distinct results (`false` and `nil`) share a CSE key, corrupting the tape
+  # (S4 swarm finding). Probe the atom key first, then the string key, by presence.
   defp mixed_get(map, key) when is_map(map) do
-    Map.get(map, key) || Map.get(map, to_string(key))
+    case Map.fetch(map, key) do
+      {:ok, v} -> v
+      :error -> Map.get(map, to_string(key))
+    end
   end
 
   defp mixed_get(_map, _key), do: nil
