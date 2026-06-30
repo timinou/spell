@@ -61,14 +61,20 @@ defmodule SpellAgent.LlmTerminal do
 
     test_pid = self()
 
+    # The llm driving the loop: a SCRIPTED callback when `:llm` is given (network-
+    # free, no cassette — the mesh tests' dispatch_llm pattern, for a deterministic
+    # tool-driven scenario like a codemod), else the recorded cassette llm. Both
+    # are pure `(request -> {:ok, resp})` callbacks the SubAgent loop calls.
+    llm = Keyword.get(opts, :llm) || LlmCassette.llm(model)
+
     # The App submits the prompt as a Task running this fn; it executes inside the
     # cassette scope (set up by the caller via with_terminal/3) because the seam is
     # app-env global + Req.Test shared mode.
     # Session.run does NOT take a store: the run emits telemetry on the global bus
     # and the App's attached Store captures it. We just drive the loop with the
-    # cassette llm and report the result back for the quiescence wait.
+    # llm and report the result back for the quiescence wait.
     on_submit = fn p ->
-      result = Session.run(p, llm: LlmCassette.llm(model), max_turns: max_turns)
+      result = Session.run(p, llm: llm, max_turns: max_turns)
       send(test_pid, {:scenario_result, result})
       result
     end
