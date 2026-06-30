@@ -154,7 +154,13 @@ defmodule SpellAgent.Clock do
         prompt: prompt,
         budget: normalize_budget(flex(args, "budget")),
         repeat_ms: repeat_ms,
-        created_ms: now()
+        created_ms: now(),
+        # FUP-019: the capability ceiling + region the SCHEDULING session held,
+        # stamped server-side by Clock.Namespace (reserved `__allowed`/`__region`
+        # keys the mind cannot reach). The woken turn re-enters under this ceiling,
+        # so an attenuated child's wake can never restore the full base surface.
+        allowed: normalize_allowed(flex(args, "__allowed")),
+        region: normalize_region(flex(args, "__region"))
       }
 
       persist(state.store, wake)
@@ -220,10 +226,27 @@ defmodule SpellAgent.Clock do
   end
 
   defp run_wake(%{runner: runner}, %Wake{} = wake) do
-    opts = [session_id: wake.session_id] ++ budget_opts(wake.budget)
+    # FUP-019: re-enter under the wake's stored ceiling. `allowed` -> `:tools`
+    # (`:all` omits the key = the unrestricted root's full base surface; a name
+    # list attenuates the woken turn's base exactly as a spawned child is), and
+    # `region` -> `:region` (the mesh context the scheduling session held). So a
+    # wake scheduled by an attenuated child cannot widen past its ceiling.
+    opts =
+      ([session_id: wake.session_id] ++ budget_opts(wake.budget))
+      |> put_allowed(wake.allowed)
+      |> maybe_put(:region, wake.region)
+
     Task.start(fn -> runner.(wake.prompt, opts) end)
     :ok
   end
+
+  # `:all` -> no `:tools` key (full base surface, the root); a name list -> set
+  # `:tools` so Session.run attenuates the woken turn's base to it (D12).
+  defp put_allowed(opts, :all), do: opts
+  defp put_allowed(opts, names) when is_list(names), do: Keyword.put(opts, :tools, names)
+
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 
   # A repeat re-arms a fresh wake (new fire_at) under the SAME id and persists it;
   # a one-shot is deleted from the store and disappears from the schedule.
@@ -372,6 +395,19 @@ defmodule SpellAgent.Clock do
   end
 
   defp normalize_budget(_), do: %{}
+
+  # FUP-019: coerce the stamped capability ceiling. `:all` (the root) or a list of
+  # base-tool name strings; anything else (absent/garbage) -> `:all` (a missing
+  # stamp means an unrestricted scheduler, the pre-FUP-019 behaviour). Names are
+  # stringified so a PTC-supplied atom/string list both land as strings.
+  defp normalize_allowed(:all), do: :all
+  defp normalize_allowed(names) when is_list(names), do: Enum.map(names, &to_string/1)
+  defp normalize_allowed(_), do: :all
+
+  # The mesh region the woken turn coordinates in: a binary, else nil (a plain
+  # session with no blackboard context).
+  defp normalize_region(r) when is_binary(r), do: r
+  defp normalize_region(_), do: nil
 
   defp budget_opts(budget) when is_map(budget) do
     Enum.flat_map(budget, fn

@@ -88,4 +88,64 @@ defmodule SpellAgent.Clock.NamespaceTest do
     assert msg =~ "not running"
     assert %{"err" => _} = verbs["clock/pending"].(%{})
   end
+
+  # FUP-019: the namespace STAMPS the scheduling session's capability ceiling
+  # (:allowed) + region into the wake, server-side, from the closure-captured
+  # opts. An ATTENUATED child gets a clock surface whose wakes carry its ceiling,
+  # and the mind cannot widen it: a `__allowed` value in the agent's own args is
+  # OVERWRITTEN by the stamp. This is the security contract — the re-entry analogue
+  # of the spawn-seam clamp (BUG-017).
+  describe "capability ceiling stamp (FUP-019)" do
+    setup do
+      test_pid = self()
+      runner = fn prompt, opts -> send(test_pid, {:fired, prompt, opts}) end
+      name = :"clock_cap_#{System.unique_integer([:positive])}"
+      start_supervised!({Clock, [name: name, store: Memory, runner: runner]}, id: name)
+      {:ok, clock: name}
+    end
+
+    test "an attenuated session's clock verbs stamp its allowed-list onto the wake", %{clock: clock} do
+      # The session was handed a ["find"] base ceiling (what Session.build_session_tools
+      # passes for an attenuated child). Its wake must fire with :tools = ["find"].
+      verbs = Namespace.tools("sess-child", clock, allowed: ["find"])
+      verbs["clock/at"].(%{"in" => 20, "prompt" => "narrow"})
+
+      assert_receive {:fired, "narrow", opts}, 500
+      assert opts[:tools] == ["find"]
+    end
+
+    test "the root's :all ceiling stamps no :tools (full base surface)", %{clock: clock} do
+      verbs = Namespace.tools("sess-root", clock, allowed: :all)
+      verbs["clock/at"].(%{"in" => 20, "prompt" => "wide"})
+
+      assert_receive {:fired, "wide", opts}, 500
+      refute Keyword.has_key?(opts, :tools)
+    end
+
+    test "the mind CANNOT widen its ceiling by supplying its own __allowed", %{clock: clock} do
+      # A malicious/confused attenuated child tries to grant itself the full
+      # surface by passing __allowed: :all in its OWN args. The server-side stamp
+      # must OVERWRITE it with the real ceiling (["find"]).
+      verbs = Namespace.tools("sess-evil", clock, allowed: ["find"])
+      verbs["clock/at"].(%{"in" => 20, "prompt" => "escape", "__allowed" => :all})
+
+      assert_receive {:fired, "escape", opts}, 500
+      assert opts[:tools] == ["find"]
+    end
+
+    test "the scheduling session's region is stamped onto the wake", %{clock: clock} do
+      verbs = Namespace.tools("sess-rg", clock, allowed: ["find"], region: "region-X")
+      verbs["clock/at"].(%{"in" => 20, "prompt" => "coord"})
+
+      assert_receive {:fired, "coord", opts}, 500
+      assert opts[:region] == "region-X"
+    end
+
+    test "clock/pending surfaces the wake's allowed ceiling for telemetry", %{clock: clock} do
+      verbs = Namespace.tools("sess-tel", clock, allowed: ["find"])
+      verbs["clock/at"].(%{"in" => 5_000, "prompt" => "pending"})
+
+      assert %{"wakes" => [%{"allowed" => ["find"]}]} = verbs["clock/pending"].(%{})
+    end
+  end
 end

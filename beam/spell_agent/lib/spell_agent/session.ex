@@ -189,7 +189,6 @@ defmodule SpellAgent.Session do
     # child. spawn-session clamps a child's :tools to this so capability can only
     # NARROW down the spawn tree (D12) — a child can't grant what it lacks.
     allowed = if is_nil(opts[:tools]), do: :all, else: Map.keys(base)
-    attenuated? = not is_nil(opts[:tools])
 
     assembled =
       base
@@ -198,10 +197,18 @@ defmodule SpellAgent.Session do
       # PROJ-006: the black/* verbs when coordinating in a region (else %{}).
       |> Map.merge(Mesh.verbs(session_id, region: opts[:region], store: hist_store))
       # A2 (PLAN-014): the clock/* self-wake verbs (default-run in THIS session).
-      # OMITTED for an attenuated child: a clock wake re-enters run/2 with no :tools
-      # ceiling and would restore the full base surface (escape). The root keeps
-      # clock. Threading the ceiling through wakes is FUP-019.
-      |> merge_unless(attenuated?, fn -> SpellAgent.Clock.Namespace.tools(session_id) end)
+      # FUP-019: an attenuated child KEEPS clock/* now — the wake carries this
+      # session's ceiling (:allowed) + region so the woken turn re-enters under the
+      # same capability subset, never the full base surface. The root passes :all
+      # (unrestricted, correct). This is the re-entry analogue of the spawn-seam
+      # clamp (BUG-017): capability only narrows down BOTH the spawn AND the wake
+      # tree.
+      |> Map.merge(
+        SpellAgent.Clock.Namespace.tools(session_id, SpellAgent.Clock,
+          allowed: allowed,
+          region: opts[:region]
+        )
+      )
       # FEAT-011 (M1): the reflexive seam — spawn-session + await-session. The
       # parent's resolved llm is inherited by children; :allowed is the capability
       # ceiling a child's :tools is clamped to.
@@ -228,11 +235,6 @@ defmodule SpellAgent.Session do
   defp attenuate_base(base, nil), do: base
   defp attenuate_base(base, names) when is_list(names), do: Map.take(base, Enum.map(names, &to_string/1))
   defp attenuate_base(base, _), do: base
-
-  # Merge the (lazily-built) tool map only when the condition is false — used to
-  # OMIT clock verbs from attenuated children without building them.
-  defp merge_unless(map, true, _build), do: map
-  defp merge_unless(map, false, build), do: Map.merge(map, build.())
 
   @doc """
   Assemble the system prompt: the base prompt + the freeform-TUI prelude

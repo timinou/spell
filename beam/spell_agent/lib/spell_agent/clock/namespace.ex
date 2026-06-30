@@ -39,11 +39,11 @@ defmodule SpellAgent.Clock.Namespace do
   (default `SpellAgent.Clock`). A wake scheduled without an explicit
   `:session_id` runs in `session_id`.
   """
-  @spec tools(String.t(), GenServer.server()) :: %{optional(String.t()) => (map() -> term())}
-  def tools(session_id, server \\ Clock) do
+  @spec tools(String.t(), GenServer.server(), keyword()) :: %{optional(String.t()) => (map() -> term())}
+  def tools(session_id, server \\ Clock, opts \\ []) do
     %{
-      "clock/at" => fn args -> guard(server, fn -> Clock.at(default_session(args, session_id), server) end) end,
-      "clock/every" => fn args -> guard(server, fn -> Clock.every(default_session(args, session_id), server) end) end,
+      "clock/at" => fn args -> guard(server, fn -> Clock.at(prepare(args, session_id, opts), server) end) end,
+      "clock/every" => fn args -> guard(server, fn -> Clock.every(prepare(args, session_id, opts), server) end) end,
       "clock/cancel" => fn args -> guard(server, fn -> cancel(args, server) end) end,
       "clock/pending" => fn _args -> guard(server, fn -> Clock.pending(server) end) end
     }
@@ -56,6 +56,18 @@ defmodule SpellAgent.Clock.Namespace do
     end
   end
 
+  # Prepare a wake's scheduling args: default the :session_id to the calling
+  # session, then STAMP the capability ceiling (:allowed) + mesh :region the
+  # scheduling session holds. The stamp uses reserved keys the mind cannot reach
+  # from PTC — they come from the closure-captured `opts`, not the agent's args —
+  # so a wake an ATTENUATED child schedules re-enters under that child's ceiling,
+  # never wider (FUP-019, the re-entry analogue of the spawn-seam clamp).
+  defp prepare(args, session_id, opts) do
+    args
+    |> default_session(session_id)
+    |> stamp_ceiling(opts)
+  end
+
   # Default a wake's :session_id to the calling session so a self-scheduled wake
   # continues THIS conversation unless the agent explicitly targets another.
   defp default_session(args, session_id) when is_map(args) do
@@ -63,6 +75,19 @@ defmodule SpellAgent.Clock.Namespace do
   end
 
   defp default_session(_args, session_id), do: %{"session_id" => session_id}
+
+  # Stamp the scheduling session's capability ceiling + region into reserved
+  # wake-arg keys. `:allowed` defaults to `:all` (the root, unrestricted) when the
+  # caller passes no ceiling; an attenuated child passes its own base-name list.
+  # The schedule handler (Clock) reads these to build the persisted Wake's
+  # ceiling. Reserved keys (`__allowed`/`__region`) are server-stamped, so an
+  # agent-supplied value of the same name is OVERWRITTEN — the mind cannot widen
+  # its own ceiling.
+  defp stamp_ceiling(args, opts) do
+    args
+    |> Map.put("__allowed", Keyword.get(opts, :allowed, :all))
+    |> Map.put("__region", Keyword.get(opts, :region))
+  end
 
   # Run a verb body. If the Clock server is not alive, surface a clear error
   # instead of an exit; any other raise/exit becomes a best-effort {"err" …}.

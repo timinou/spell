@@ -165,6 +165,83 @@ defmodule SpellAgent.ClockTest do
     end
   end
 
+  # FUP-019: a wake carries the CAPABILITY CEILING (+ region) the scheduling
+  # session held, so the woken turn re-enters under that ceiling — an attenuated
+  # child's wake cannot restore the full base surface (the re-entry analogue of
+  # the spawn-seam clamp, BUG-017). The ceiling reaches run_wake as run opts:
+  # `allowed` -> `:tools` (a name list attenuates; `:all` omits the key), and
+  # `region` -> `:region`.
+  describe "capability ceiling on the wake (FUP-019)" do
+    test "an attenuated wake fires with :tools clamped to its allowed names", ctx do
+      {_pid, clock} = start_clock(ctx)
+
+      # A wake scheduled with a NAME-LIST ceiling (what an attenuated child's
+      # namespace stamps): the woken turn must re-enter with :tools = that list.
+      Clock.at(
+        %{"in" => 20, "prompt" => "narrow", "session_id" => "sess-att", "__allowed" => ["find"]},
+        clock
+      )
+
+      assert_receive {:fired, "narrow", opts}, 500
+      assert opts[:tools] == ["find"]
+    end
+
+    test "a root wake (:all ceiling) fires with NO :tools key (full base surface)", ctx do
+      {_pid, clock} = start_clock(ctx)
+
+      Clock.at(
+        %{"in" => 20, "prompt" => "root", "session_id" => "sess-root", "__allowed" => :all},
+        clock
+      )
+
+      assert_receive {:fired, "root", opts}, 500
+      refute Keyword.has_key?(opts, :tools)
+    end
+
+    test "a missing ceiling stamp defaults to :all (pre-FUP-019 unrestricted root)", ctx do
+      {_pid, clock} = start_clock(ctx)
+
+      Clock.at(%{"in" => 20, "prompt" => "legacy", "session_id" => "sess-legacy"}, clock)
+
+      assert_receive {:fired, "legacy", opts}, 500
+      refute Keyword.has_key?(opts, :tools)
+    end
+
+    test "the wake's region is threaded into the woken turn's run opts", ctx do
+      {_pid, clock} = start_clock(ctx)
+
+      Clock.at(
+        %{"in" => 20, "prompt" => "in-region", "session_id" => "sess-rg", "__region" => "region-A"},
+        clock
+      )
+
+      assert_receive {:fired, "in-region", opts}, 500
+      assert opts[:region] == "region-A"
+    end
+
+    test "the persisted Wake carries the ceiling so it survives a scheduler restart", ctx do
+      # The ceiling must be DURABLE: a wake persisted before boot rehydrates WITH
+      # its allowed-list, so a restart cannot widen an attenuated child's wake to
+      # the full surface.
+      future = System.system_time(:millisecond) + 30
+
+      Store.put(Memory, {:clock, "wake-ceiling"}, %Wake{
+        id: "wake-ceiling",
+        fire_at_ms: future,
+        session_id: "sess-durable",
+        prompt: "durable narrow",
+        allowed: ["find", "sh"],
+        region: "region-D"
+      })
+
+      {_pid, _clock} = start_clock(ctx)
+
+      assert_receive {:fired, "durable narrow", opts}, 1000
+      assert opts[:tools] == ["find", "sh"]
+      assert opts[:region] == "region-D"
+    end
+  end
+
   describe "wake budget (the safety organ)" do
     test "a runaway repeat is throttled to the budget cap and never crashes", ctx do
       # Cap at 3 fires per a wide window, then hammer with a 5ms repeat. The

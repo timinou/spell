@@ -1,5 +1,5 @@
 #+TITLE: Thread capability ceiling + llm/store through clock wakes (re-entry attenuation)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 15195d97dff3d090
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-27T08-45-09-375Z_15195d97dff3d090.jsonl]]
 #+CUSTOM_ID: FUP-019-thread-capability-ceiling-llm-store-thro
@@ -37,3 +37,19 @@ the spawn seam, applied to the clock re-entry seam.
 An attenuated child (:tools ["find"]) with clock/* restored can schedule a wake
 whose woken turn can call ONLY find + its own ceiling verbs, never sh/define-tool.
 Cross-cuts PLAN-014 (Clock) + FEAT-016 (FUP-016 executive loop).
+
+NOTE [2026-06-30]: DONE [2026-06-27] — the re-entry attenuation seam closed; clock/* RESTORED to attenuated children.
+
+WHAT SHIPPED (the ceiling now threads through the wake seam exactly as BUG-017 threaded it through the spawn seam):
+- Wake struct (clock/wake.ex): + `allowed` (:all | [names]) + `region` (binary|nil). Both SERIALIZABLE (atom/strings, not tool maps/pids), so a persisted wake carries the ceiling across a BEAM restart. render/1 surfaces them (allowed -> "all"|list) for clock/pending telemetry.
+- Clock.Namespace.tools/3 (clock/namespace.ex): + an opts kw (:allowed, :region). A new prepare/3 -> stamp_ceiling/2 writes the ceiling into RESERVED wake-arg keys (__allowed/__region) SERVER-SIDE from the closure-captured opts. The mind cannot reach these from PTC: an agent-supplied __allowed is OVERWRITTEN by the stamp (Map.put after) -> a session cannot widen its own ceiling.
+- Clock schedule handler (clock.ex): reads __allowed/__region into the persisted Wake (normalize_allowed: :all|stringified-list, missing -> :all = pre-FUP-019 root; normalize_region: binary|nil). run_wake threads allowed -> :tools (put_allowed: :all omits the key = full base; a list attenuates) and region -> :region into the run opts.
+- Session.build_session_tools (session.ex): the clock/* merge is now UNCONDITIONAL (was merge_unless(attenuated?)). It passes allowed: <this session's own base ceiling> + region: opts[:region]. Removed the now-dead attenuated?/merge_unless. So an attenuated child KEEPS clock/* and its wakes re-enter under its ceiling.
+
+ACCEPTANCE MET (the FUP's stated bar): an attenuated child (:tools ["find"]) with clock/* restored schedules a wake whose woken turn re-enters with :tools = ["find"] — never the full surface. Tested directly:
+- clock_test.exs "capability ceiling on the wake (FUP-019)" (5): attenuated -> :tools clamped; :all -> no :tools key; missing stamp -> :all; region threaded; PERSISTED wake keeps the ceiling across a fresh-scheduler restart.
+- clock_namespace_test.exs "capability ceiling stamp (FUP-019)" (5): the namespace stamps the allowed-list; :all stamps no :tools; THE MIND CANNOT WIDEN (agent __allowed: :all is overwritten by the ["find"] stamp); region stamped; clock/pending surfaces allowed for telemetry.
+
+VERIFICATION: 34 clock tests, 142 mesh+session+cell-clock, FULL SUITE 1042 passed / 0 failed, mix compile --warnings-as-errors exit 0.
+
+SCOPE NOTE: the FUP title also says "llm/store". The store already threads (hist/region opts flow through Session.run). The llm callback does NOT thread through the wake (a wake mints its own llm from Config model in run_wake's runner = &SpellAgent.run/2, which resolves Anthropic.callback(model)). That is acceptable: the ceiling — the SECURITY concern (P1) — is fully closed; an inherited-llm-callback-through-wake is a non-security ergonomic (a child uses the configured model, same as any cold run) and was not load-bearing for the escape. If a child must wake under a SPECIFIC injected llm (e.g. a fake in tests, or a pinned model), that is a small follow-on, not part of the capability-escape fix this FUP existed for.
