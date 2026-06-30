@@ -568,3 +568,228 @@ NOTE [2026-06-27]: CROSS-PLAN HANDSHAKE [2026-06-27] — PLAN-020 (lispy code/ed
 5. code/edit records the edit as the agent's recorded program (the q/apply-ops call is the reifiable value); NOT re-run inside code-edit (no nested sandbox).
 
 REMAINING for your side: edit-reduction's ALGEBRAIC tier (compose/cancel recorded code-edits) is now UNBLOCKED — code/edit exists + records structural ops. The span-overlap heuristic is only the raw-node fallback. Also FUP-027 (route code-edit write through execute rollback) is open but doesn't affect the reduction algebra.
+
+* DESIGN NOTE [2026-06-30]: Resolving the caching <-> compaction tension from first principles
+
+Grounded in: the CWL paper (arXiv 2606.11213, "Beyond Compaction: Structured
+Context Eviction for Long-Horizon Agents", Semenov & Dorofeev, 2026-06-11), this
+repo's doc 15 (context-projection-cache), and the existing rate-controller
+section of this PLAN. Written to settle the architecture before W1 code lands.
+
+** 1. The two objectives, stated exactly
+
+Both are functions over the MESSAGE TAPE — the growing prefix sent every turn.
+Let the tape at turn T be bytes [0..N_T].
+
+CACHING maximizes prefix reuse:
+  V_cache = Σ_T  longest_common_prefix(tape_T, tape_{T-1}) × read_discount
+  read_discount ≈ 0.1  (cache-read ~10% of fresh).
+  => MAXIMIZED by FREEZING the past: never touch a byte already sent.
+
+COMPACTION minimizes carried tokens (subject to N_T ≤ window):
+  V_compact = Σ_T  N_T × fresh_price
+  + two non-token terms: keep N_T in the ATTENTION-HEALTHY regime (CWL: below
+    ~30% window) and avoid the per-turn RE-READ of dead weight.
+  => MAXIMIZED by REWRITING the past: drop/fold what is no longer load-bearing.
+
+The conflict is mechanical and exact: every compaction edit at byte position p
+sets longest_common_prefix = p, ZEROING V_cache for [p..N]. Caching rewards a
+frozen history; compaction rewrites history. Move the boundary, burn the cache
+below it.
+
+** 2. Why it FEELS fundamental — and why it is not
+
+It feels like a law because of two assumptions that are artifacts of
+REPRESENTATION, not of the problem:
+
+  (a) the tape is PROSE -> the only compaction prose admits is "summarize" -> an
+      LLM call: lossy, nondeterministic, mutates the prefix with no way to PROVE
+      the mutation safe or to REUSE it.
+  (b) compaction's output is a fresh, un-addressable thing -> it can never itself
+      be a cache key.
+
+Both are FALSE in spell_agent. The tape is a content-addressed DAG of CoreAST
+nodes (Hist.Node: form, binds delta, sees tool_calls, content hash). The moment
+compaction is a PURE DETERMINISTIC FOLD over addressed nodes, both walls
+dissolve. That is the bet of this PLAN, and it is correct.
+
+** 3. The resolution, in three deepening layers
+
+*** Layer 1 — Amortization (the CWL answer, and its failure mode)
+
+CWL meets this tension head-on (§5 "KV cache invalidation") and is honest:
+
+  "CWL's graduated, incremental eviction fragments the prefix more frequently...
+   In the worst case, CWL at maximum utilization is NET-NEGATIVE for caching:
+   more is spent on cache writes immediately discarded than would have been spent
+   on uncached inference. This is, in a narrow sense, WORSE than compaction,
+   which produces a single stable prefix after each pass."
+
+Their fix is AMORTIZATION: cap the budget at τ ≈ 80k (~30% of window). Eviction
+holds active size CONSTANT near τ, so the bulk below the eviction head stops
+moving — new at the tail, equal volume dropped at the head, stable middle accrues
+hits. Measured: 20-70% cost reduction, best on "repetitive, structurally similar
+turns (iterative code editing)", worst on highly variable tool outputs.
+
+LESSON: caching cost amortizes over the INTER-COMPACTION INTERVAL. Compact every
+turn -> no interval -> no amortization -> net-negative. The FREQUENCY of
+boundary-moves is the dial.
+
+*** Layer 2 — Rate control (this PLAN's I-frame/P-frame model — the generalization)
+
+This PLAN already frames it better than CWL, as VIDEO ENCODING:
+  - compaction = I-FRAME (keyframe): expensive, mutates prefix, pays a cache
+    WRITE, becomes the new anchor.
+  - normal turn = P-FRAME: append at tail, pays a cache READ off the last keyframe.
+  - the mission-start harness is the RATE-CONTROLLER choosing keyframe placement.
+
+This DISSOLVES "cache vs compact": they are the delta and the keyframe of ONE
+encoding, not two competing policies. You never pick one globally — you SCHEDULE
+keyframes so caching runs free between them. Closed-form economic trigger
+(Anthropic-shaped: read 0.1×, cache-write 1.25×):
+
+  savings(K) = K·0.1·(F − R)  −  max(0, 1.25R − 0.1F)
+  K*         = (1.25R − 0.1F) / (0.1·(F − R))
+  F = full-tape tokens, R = reduced tokens, K = expected remaining turns.
+
+REDUCE only when K > K* (enough future turns to amortize the keyframe write);
+else roll the breakpoint forward and append. CWL's τ-ceiling is the OVERFLOW
+GUARD on top of this — the window_HARD/window_SOFT rungs of the same ladder.
+
+*** Layer 3 — Content-addressing (the deepest layer: compaction FEEDS the cache)
+
+The part neither CWL nor mainstream harnesses can reach. If the reduction is
+DETERMINISTIC + CONTENT-ADDRESSED — same (session S, watermark W, policy_hash) ->
+BYTE-IDENTICAL output — then the compacted output is ITSELF a cache key, twice:
+
+  1. STORE-SIDE memo: memoize the reduction at {:reduced, S, W, policy_hash}.
+     Re-entry at the same watermark is a FREE LOOKUP, not a recompute. (Literally
+     "reuse a previously-used header.")
+  2. PROVIDER-SIDE KV: the reduced prefix is immutable + addressed -> byte-stable
+     -> the Anthropic prefix cache hits it for every P-frame until the next
+     keyframe.
+
+So compaction stops FIGHTING the cache and starts PRODUCING cache anchors. doc 15
+already wrote the unification this implies:
+
+  context = cache = reduction = reactivity
+  — all one immutable projection over an append-only store at a watermark.
+    cache hit ≡ projection at W' shares a prefix with projection at W
+    reduction ≡ a pure fold from projection at W to a smaller EQUIVALENT
+    reactivity ≡ recompute only the holes whose deps changed since W
+
+Three names, one operation: project an append-only store at a watermark; reuse
+what didn't change. The tension was only ever between two READOUTS of the same
+projection.
+
+** 4. The spell_agent superpower — why it strictly beats CWL on this axis
+
+CWL's KV-invalidation is IRREDUCIBLE for it: prose eviction is a destructive
+in-place mutation with no content-address, and its correctness currency is "the
+agent annotated it" (CWL Principle 2 — agent declares episode types + deps, and
+§5 admits mis-declaration degrades the policy). spell_agent flips both:
+
+| axis                  | CWL (prose + annotation)        | PLAN-018 (addressed fold)                     |
+|-----------------------+---------------------------------+-----------------------------------------------|
+| what compaction IS    | drop annotated spans            | pure fold: dead-bind-elim, tool-CSE,          |
+|                       |                                 |   stale-read-collapse                          |
+| correctness currency  | agent annotation (mis-declarable)| STRUCTURAL INVARIANCE: fold_env(reduced) ==   |
+|                       |                                 |   fold_env(full), PROVED                       |
+| output addressable?   | no -> invalidates cache         | YES -> IS a cache key                          |
+| cost of a pass        | zero inference                  | zero inference                                 |
+| redundancy detection  | guesses (which span?)           | PROVES (rebound-before-read, hash-identical)   |
+
+THE DECISIVE ONE — restorability collapses CWL's central dial. CWL's τ is a 3-D
+tradeoff (their §5): cost (↓ better), model quality (↓ better), look-back (↓
+WORSE — the ONLY dimension pulling up). spell_agent's RESTORABLE compression
+(spill payload -> {node_id, path, digest}, re-fetch via hist/recall) engineers
+away the look-back dimension: a dropped payload is recoverable from the retained
+store.
+
+  => CWL's 3-D dial collapses to 2-D, BOTH favoring a tighter ceiling.
+     spell_agent can safely run a LOWER τ than CWL — cheaper AND better-attention
+     — because its eviction is RESTORABLE, not destructive.
+
+This is the novel synthesis: RESTORABILITY BUYS A TIGHTER BUDGET FOR FREE. It
+strengthens CWL's own empirical conclusion ("err toward a lower τ") by removing
+the single dimension that argued against it.
+
+** 5. Where "context distillation" fits (and where it is a trap)
+
+The literature splits into two senses; only one is relevant and it is a trap:
+
+  (a) DISTILL CONTEXT -> WEIGHTS (Askell 2021, Anthropic HHH RLHF appendix;
+      "prompt baking"). Bakes a long prompt into params via fine-tuning. NOT
+      APPLICABLE — model-agnostic harness, no weight access. Discard.
+  (b) DISTILL CONTEXT -> SHORTER TEXT (LLMLingua-2; "use the model to compress").
+      This IS LLM-summarization compaction — exactly what this PLAN REJECTS for
+      the lossless tier (the four CWL limitations: unpredictable lossiness,
+      structure destruction, blocking cost, hallucination-at-the-worst-moment).
+
+Honest mapping: this PLAN's reduction is NOT distillation in either sense — it is
+a STRUCTURAL FOLD, not inference. The one legitimate entry point is the lossy
+span-fold reducer (W6): a run of :clearing-marked turns -> a STRUCTURAL DIGEST
+(tools called, files touched, defs introduced, net env delta) computed by a
+LENS/PARSER, ZERO inference — not "ask the model what mattered." Same determinism
+guarantee as the rest of the regime.
+
+The DEEPEST distillation connection is PROJ-003 (the self-writing prelude): the
+reducer policy is itself a PTC value the agent forks and define-tool
+{:scope :durable}-promotes. A project-tuned reducer (e.g. a sharper mix-test
+digester) is DISTILLED FROM THE AGENT'S OWN PRIOR EXPERIENCE and rehydrated next
+session — distillation of COMPACTION POLICY, learned from prior self. That is the
+only sense of "distillation" both novel and native here (the "taught vs learned"
+boundary dissolving, AGENTS.md homoiconic-dissolution table).
+
+** 6. The balance, made concrete — the unified decision ladder
+
+Synthesizing this PLAN's ladder with CWL's τ lesson, per turn at mission-start
+(all inputs cheap estimates from hist/reducibility; ZERO inference in decision):
+
+  tok_full > window_HARD  -> REDUCE incl. lossy   (overflow; CWL τ-ceiling rung)
+  tok_full > window_SOFT  -> REDUCE lossless only (attention-regime guard)
+  K > K*                  -> REDUCE now           (pure economic trigger; keyframe amortizes)
+  else                    -> CACHE                (roll breakpoint forward, append tail; P-frame)
+
+STRATEGY: reduce RARELY, MEMOIZE every reduction (free recompute on revisit),
+CACHE CONTINUOUSLY between keyframes. Keyframes are the only turns that pay a
+cache-write; everything between is a 0.1× delta off a content-addressed anchor.
+The tension is SCHEDULED AWAY, not fought.
+
+** 7. Sequencing consequence — the tension does NOT gate W1
+
+The resolution is earned incrementally; the cheapest win is tension-free:
+
+  - W1 alone resolves ~80% of the COST asymmetry and is PURE CACHING, NO
+    COMPACTION: close the message-cache leak (today only the system block is
+    cached; the growing tape re-reads at full price every turn) + evict the two
+    cache-killers (cch/rand3 billing header at position 0; mid-session define-tool
+    mutating the tools array). No policy files, lowest risk, biggest $. The
+    tension does not even ARISE yet — you are only stopping the bleed.
+  - The tension PROPER (when to mutate the prefix) first appears at W4-W5 (the
+    fold + the rate-controller). That is where the I/P-frame economics and the K*
+    trigger live.
+
+=> You need not "resolve" the tension before shipping. W1/W2 are tension-free
+   caching; the Layer-2/3 resolution is earned at W4/W5. The conceptual answer
+   above is what makes W5's controller PRINCIPLED rather than a tuned heuristic.
+
+** 8. Actions folded back into the PLAN body
+
+  1. External grounding table: ADD the CWL paper (arXiv 2606.11213) as the
+     strongest external corroboration of the data-transform thesis, and import its
+     τ-ceiling AMORTIZATION argument (the empirical 20-70% + "tighter budget is
+     cost-AND-quality positive") — the one piece the Manus/Anthropic-only table
+     underweighted.
+  2. Rate-controller section: ADD the "restorability collapses CWL's 3-D dial to
+     2-D" synthesis (§4 above) as the correctness-economics justification for
+     erring toward a LOWER τ than a destructive-eviction harness could.
+  3. Out of scope: SHARPEN the LLM-summarization exclusion to the precise
+     three-way distillation mapping (§5: (a) discard weights-distillation, (b)
+     reject text-distillation for lossless tier, (c) span-fold/PROJ-003 are the
+     only native senses).
+  4. No new waves. The ladder (§6) is the existing W5 controller; this note gives
+     it its first-principles derivation and external proof. W1 remains the first,
+     tension-free, highest-$ move.
+
+NOTE [2026-06-30]: Added a full first-principles design note resolving the caching<->compaction tension: stated both objectives exactly (V_cache freezes the prefix, V_compact rewrites it -> mechanical conflict); showed the tension is an artifact of prose+un-addressed representation, dissolved by a deterministic content-addressed fold; three resolution layers (amortization/CWL tau-ceiling, I-frame/P-frame rate control, content-addressing where compaction FEEDS the cache); the spell_agent superpower (restorability collapses CWL's 3-D tau dial to 2-D, both favoring a tighter+cheaper+better budget); the precise three-way context-distillation mapping (weights=discard, text=reject, span-fold/PROJ-003=only native sense); unified decision ladder; and the sequencing consequence that W1 is tension-free and ungated. Grounded in arXiv 2606.11213 (CWL), doc 15, and the existing rate-controller section.
