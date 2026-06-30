@@ -216,7 +216,18 @@ defmodule SpellAgent.Anthropic do
   # Unwrap that envelope (tolerating a flat shape too) and emit Anthropic's flat
   # {name, description, input_schema}, prefixing the name with `proxy_`.
   defp convert_tools([]), do: []
-  defp convert_tools(tools) when is_list(tools), do: Enum.map(tools, &convert_tool/1)
+
+  defp convert_tools(tools) when is_list(tools) do
+    # Sort by name so the outgoing tools array is byte-stable regardless of the
+    # caller's insertion order (a map-derived list has no guaranteed order). The
+    # tools block leads the cached prefix; an unstable order would silently bust
+    # the cache every turn. Defense-in-depth: upstream (SubAgent.Exposure) already
+    # sorts, but the adapter must not depend on that. (PLAN-018 W2.)
+    tools
+    |> Enum.map(&convert_tool/1)
+    |> Enum.sort_by(& &1["name"])
+  end
+
   defp convert_tools(_), do: []
 
   defp convert_tool(%{"function" => fun}) when is_map(fun), do: convert_tool(fun)

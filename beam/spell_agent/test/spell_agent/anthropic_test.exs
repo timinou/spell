@@ -322,4 +322,63 @@ defmodule SpellAgent.AnthropicTest do
       assert step.return in [42, "42"]
     end
   end
+
+  # Byte-stability of the cached prefix (PLAN-018 W2). Prefix caching reuses a
+  # request only when its leading bytes are identical to a prior request. The
+  # tools block leads the cached region, so its serialization must be canonical
+  # and order-independent. JSON key order is already canonical (Jason sorts map
+  # keys); this wave pins TOOL ORDER, which convert_tools does not get for free
+  # from a map-derived caller list.
+  describe "byte-stable prefix (PLAN-018 W2)" do
+    defp tool(name), do: %{"name" => name, "description" => "d", "input_schema" => %{"type" => "object"}}
+
+    test "the outgoing tools array is sorted by name regardless of input order" do
+      forward = Anthropic.build_body("claude-sonnet-4", %{tools: [tool("a"), tool("b"), tool("c")]})
+      reverse = Anthropic.build_body("claude-sonnet-4", %{tools: [tool("c"), tool("b"), tool("a")]})
+
+      names = fn body -> Enum.map(body["tools"], & &1["name"]) end
+      # Same set in either input order -> same wire order.
+      assert names.(forward) == names.(reverse)
+      assert names.(forward) == ["proxy_a", "proxy_b", "proxy_c"]
+    end
+
+    test "the full encoded body is byte-identical across two builds of one request" do
+      req = %{
+        system: "S",
+        tools: [tool("z"), tool("a")],
+        messages: [
+          %{role: :user, content: "u1"},
+          %{role: :assistant, content: "a1"},
+          %{role: :user, content: "u2"}
+        ]
+      }
+
+      b1 = Anthropic.build_body("claude-sonnet-4", req) |> Jason.encode!()
+      b2 = Anthropic.build_body("claude-sonnet-4", req) |> Jason.encode!()
+      assert b1 == b2
+    end
+
+    test "adding a tool preserves the order of the existing tools (append-stable prefix)" do
+      before = Anthropic.build_body("claude-sonnet-4", %{tools: [tool("apple"), tool("cherry")]})
+
+      after_add =
+        Anthropic.build_body("claude-sonnet-4", %{tools: [tool("apple"), tool("cherry"), tool("banana")]})
+
+      names = fn body -> Enum.map(body["tools"], & &1["name"]) end
+      # The new tool slots in by sort position; the relative order of the others
+      # is unchanged, so the prefix up to the insertion point stays byte-stable.
+      assert names.(before) == ["proxy_apple", "proxy_cherry"]
+      assert names.(after_add) == ["proxy_apple", "proxy_banana", "proxy_cherry"]
+    end
+
+    test "JSON key order within a tool is canonical (Jason sorts keys)" do
+      a = Anthropic.build_body("claude-sonnet-4", %{tools: [tool("x")]}) |> Jason.encode!()
+
+      # Same tool, keys supplied in a different insertion order.
+      reordered = %{"input_schema" => %{"type" => "object"}, "description" => "d", "name" => "x"}
+      b = Anthropic.build_body("claude-sonnet-4", %{tools: [reordered]}) |> Jason.encode!()
+      assert a == b
+    end
+  end
+
 end
