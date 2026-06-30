@@ -326,9 +326,11 @@ defmodule SpellAgent.AnthropicTest do
   # Byte-stability of the cached prefix (PLAN-018 W2). Prefix caching reuses a
   # request only when its leading bytes are identical to a prior request. The
   # tools block leads the cached region, so its serialization must be canonical
-  # and order-independent. JSON key order is already canonical (Jason sorts map
-  # keys); this wave pins TOOL ORDER, which convert_tools does not get for free
-  # from a map-derived caller list.
+  # and order-independent. JSON object-key order is byte-stable turn-over-turn:
+  # for a fixed key set the BEAM emits map pairs in a deterministic hash order
+  # (not insertion order), and the prefix-cache window is a single VM, so the
+  # same logical schema encodes identically each turn. This wave pins TOOL ORDER,
+  # which convert_tools does not get for free from a map-derived caller list.
   describe "byte-stable prefix (PLAN-018 W2)" do
     defp tool(name), do: %{"name" => name, "description" => "d", "input_schema" => %{"type" => "object"}}
 
@@ -371,13 +373,28 @@ defmodule SpellAgent.AnthropicTest do
       assert names.(after_add) == ["proxy_apple", "proxy_banana", "proxy_cherry"]
     end
 
-    test "JSON key order within a tool is canonical (Jason sorts keys)" do
+    test "a tool encodes identically regardless of key insertion order" do
       a = Anthropic.build_body("claude-sonnet-4", %{tools: [tool("x")]}) |> Jason.encode!()
 
-      # Same tool, keys supplied in a different insertion order.
+      # Same tool, keys supplied in a different insertion order. The BEAM emits a
+      # fixed key set in deterministic hash order, so the bytes match (this is the
+      # turn-over-turn stability the prefix cache needs, NOT Jason key-sorting).
       reordered = %{"input_schema" => %{"type" => "object"}, "description" => "d", "name" => "x"}
       b = Anthropic.build_body("claude-sonnet-4", %{tools: [reordered]}) |> Jason.encode!()
       assert a == b
+    end
+
+    test "tools whose proxy-prefixed names collide still sort to a stable order" do
+      # `find` and `proxy_find` both become `proxy_find`; a name-only sort key
+      # would keep their unstable input order. Distinct bodies (different desc)
+      # make the collision observable: the whole-block tiebreak must order them
+      # identically regardless of input order, so the encoded bytes match.
+      a = %{"name" => "find", "description" => "aaa", "input_schema" => %{}}
+      b = %{"name" => "proxy_find", "description" => "bbb", "input_schema" => %{}}
+
+      forward = Anthropic.build_body("claude-sonnet-4", %{tools: [a, b]}) |> Jason.encode!()
+      reverse = Anthropic.build_body("claude-sonnet-4", %{tools: [b, a]}) |> Jason.encode!()
+      assert forward == reverse
     end
   end
 

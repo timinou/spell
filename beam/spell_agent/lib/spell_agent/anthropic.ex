@@ -223,9 +223,15 @@ defmodule SpellAgent.Anthropic do
     # tools block leads the cached prefix; an unstable order would silently bust
     # the cache every turn. Defense-in-depth: upstream (SubAgent.Exposure) already
     # sorts, but the adapter must not depend on that. (PLAN-018 W2.)
+    #
+    # The sort key is {name, full_block} with a nil-safe name: two tools whose
+    # proxy_-prefixed names COLLIDE (e.g. caller `find` and `proxy_find`, or
+    # malformed tools whose name is nil) would otherwise keep their unstable input
+    # order on a name-only key. The whole-block secondary key makes the order
+    # total and deterministic even on a name tie (S2 swarm finding).
     tools
     |> Enum.map(&convert_tool/1)
-    |> Enum.sort_by(& &1["name"])
+    |> Enum.sort_by(fn t -> {to_string(t["name"]), t} end)
   end
 
   defp convert_tools(_), do: []
