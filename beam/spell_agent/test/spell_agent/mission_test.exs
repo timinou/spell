@@ -24,7 +24,7 @@ defmodule SpellAgent.MissionTest do
 
       # one turn past break-even -> reduce.
       d = Mission.decide(inputs(%{tok_full: f, tok_reduced: r, remaining_turns: ceil(kstar) + 1}))
-      assert d == {:reduce, :lossless}
+      assert d == {:reduce, :lossy}
     end
 
     test "caches when remaining turns are below the break-even" do
@@ -52,7 +52,7 @@ defmodule SpellAgent.MissionTest do
       assert Mission.decide(inputs(%{tok_full: f, tok_reduced: r, remaining_turns: below})) == :cache
 
       assert Mission.decide(inputs(%{tok_full: f, tok_reduced: r, remaining_turns: above})) ==
-               {:reduce, :lossless}
+               {:reduce, :lossy}
     end
   end
 
@@ -70,7 +70,7 @@ defmodule SpellAgent.MissionTest do
       assert d == {:reduce, :lossy}
     end
 
-    test "a soft-overflow tape reduces lossless even with no remaining turns" do
+    test "a soft-overflow tape reduces (lossy) even with no remaining turns" do
       d =
         Mission.decide(%{
           tok_full: 150_000,
@@ -80,7 +80,7 @@ defmodule SpellAgent.MissionTest do
           window_hard: 300_000
         })
 
-      assert d == {:reduce, :lossless}
+      assert d == {:reduce, :lossy}
     end
 
     test "hard overflow dominates the economic trigger" do
@@ -121,7 +121,7 @@ defmodule SpellAgent.MissionTest do
       }
 
       d = Mission.decide(Map.merge(%{"window_soft" => 100_000, "window_hard" => 300_000, "remaining_turns" => 0}, stats))
-      assert d == {:reduce, :lossless}
+      assert d == {:reduce, :lossy}
     end
 
     test "an error map or garbage input degrades to :cache (best-effort)" do
@@ -132,7 +132,7 @@ defmodule SpellAgent.MissionTest do
     end
 
     test "soft overflow does NOT reduce when the tape cannot shrink (F <= R)" do
-      # pathological estimate: reduced is not smaller -> a lossless reduce cannot
+      # pathological estimate: reduced is not smaller -> a reduce cannot
       # relieve the soft overflow -> cache (let hard overflow force lossy).
       d =
         Mission.decide(%{

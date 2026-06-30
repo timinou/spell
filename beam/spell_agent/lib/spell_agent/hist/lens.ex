@@ -175,6 +175,17 @@ defmodule SpellAgent.Hist.Lens do
       # PLAN-018 W6: the user prompt that OPENED this step (head nodes only; nil
       # on interior turns). The recite policy reads it to restate the mission goal.
       "prompt" => n.prompt,
+      # PLAN-018 W5: the program's RESULT — the tool_result payload Refold emits to
+      # the wire and the dominant token sink. The reducibility estimate counts it
+      # to size F/R; without it the estimate sees null and K* is meaningless
+      # (L2 cost-proof finding). JSON-coerced so an exotic result never breaks the
+      # projection's serializable contract.
+      "result" => jsonable(n.result),
+      # PLAN-018 W6: whether this node's result is RESTORABLE (a pure-:read node),
+      # the precondition for result-spill. The reducibility estimate must count
+      # ONLY restorable results as sheddable, matching Spill.spillable? exactly
+      # (L2 cost-proof: estimate and spill must agree on the shed byte-set).
+      "restorable" => SpellAgent.Hist.Effect.restorable_node?(n.sees),
       # `tool_calls` = REALIZED effects (from `sees`); `form_tools` = tool-call
       # names present in the program AST. They differ (a call can be in the form
       # but error before emitting a see), so the `tool_calls` lens reads the former

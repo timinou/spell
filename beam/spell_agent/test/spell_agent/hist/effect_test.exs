@@ -62,6 +62,21 @@ defmodule SpellAgent.Hist.EffectTest do
     assert Effect.classify(see("sh-pipe", %{"stages" => [["cat", "f"], ["grep", "x"]]})) == :read
   end
 
+  test "sed -i (in-place edit) classifies :mutation, not :read" do
+    assert Effect.classify(see("sh", %{"argv" => ["sed", "-i", "s/a/b/", "f"]})) == :mutation
+    assert Effect.classify(see("sh", %{"argv" => ["sed", "--in-place", "s/a/b/", "f"]})) == :mutation
+    assert Effect.classify(see("sh", %{"argv" => ["sed", "-i.bak", "s/a/b/", "f"]})) == :mutation
+    # a plain sed (no in-place) is still a read.
+    assert Effect.classify(see("sh", %{"argv" => ["sed", "s/a/b/", "f"]})) == :read
+  end
+
+  test "an env wrapper is peeled to classify the inner command" do
+    assert Effect.classify(see("sh", %{"argv" => ["env", "MIX_ENV=test", "mix", "test"]})) == :check
+    assert Effect.classify(see("sh", %{"argv" => ["env", "rm", "f"]})) == :mutation
+    assert Effect.classify(see("sh", %{"argv" => ["env", "curl", "x"]})) == :external
+    assert Effect.classify(see("sh", %{"argv" => ["env", "cat", "f"]})) == :read
+  end
+
   test "atom-keyed sees entries are read too" do
     assert Effect.classify(%{name: "sh", args: %{argv: ["cat", "f"]}}) == :read
   end

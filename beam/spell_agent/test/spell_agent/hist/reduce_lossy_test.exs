@@ -167,5 +167,31 @@ defmodule SpellAgent.Hist.ReduceLossyTest do
       verbs = Namespace.tools(Memory, "empty")
       assert verbs["hist/recite"].(%{}) == ""
     end
+
+    test "hist/recall-node restores a spilled result by its node id (L2 restore verb)" do
+      # record a big read node, spill it, then recover via the agent-callable verb.
+      node =
+        Recorder.record_node(
+          Memory,
+          "r",
+          %{program: "(tool/sh {:argv [\"cat\" \"f\"]})", result: @big, tool_calls: [%{name: "sh", args: %{"argv" => ["cat", "f"]}, result: @big}]},
+          nil
+        )
+
+      [spilled] = Spill.spill([%{node | sees: [%{name: "sh", args: %{"argv" => ["cat", "f"]}, result: @big}]}])
+      node_id = spilled.result["node_id"]
+
+      verbs = Namespace.tools(Memory, "r")
+      restored = verbs["hist/recall-node"].(%{"node" => node_id})
+      assert restored["result"] == @big
+      # the digest matches what the stub advertised (verification).
+      assert restored["digest"] == spilled.result["digest"]
+    end
+
+    test "hist/recall-node on a missing node returns an error, not a crash" do
+      verbs = Namespace.tools(Memory, "r")
+      assert %{"err" => _} = verbs["hist/recall-node"].(%{"node" => "ghost"})
+      assert %{"err" => _} = verbs["hist/recall-node"].(%{})
+    end
   end
 end

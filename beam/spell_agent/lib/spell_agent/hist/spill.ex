@@ -99,13 +99,19 @@ defmodule SpellAgent.Hist.Spill do
       "node_id" => id,
       "digest" => digest(rendered),
       "bytes" => byte_size(rendered),
-      "hint" => "re-fetch via (hist/recall ...) or re-run the program"
+      "hint" => "(hist/recall-node {:node \"" <> id <> "\"}) restores the full result"
     }
   end
 
-  defp digest(rendered) do
+  @doc "The short content digest of a rendered result (for spill-stub verification)."
+  @spec digest(binary()) :: String.t()
+  def digest(rendered) do
     :crypto.hash(:sha256, rendered) |> Base.encode16(case: :lower) |> binary_part(0, 12)
   end
+
+  @doc "Render a result to the canonical bytes the digest + byte count are taken over."
+  @spec render_result(term()) :: binary()
+  def render_result(result), do: render(result)
 
   # ~4 chars/token (Metrics.estimate_tokens), over the rendered result.
   defp result_tokens(result) do

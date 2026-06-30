@@ -1,10 +1,11 @@
 defmodule SpellAgent.Hist.ReducibilityTest do
   @moduledoc """
-  Reducibility estimate contract (PLAN-018 W3, L1-corrected): the
-  `hist/reducibility` verb is a CHEAP analysis the rate-controller reads to decide
-  reduce-vs-cache. It estimates tok_full / tok_reduced / reducible_tokens over the
-  WIRE MODEL (form_src + result per node), WITHOUT performing any reduction and
-  WITHOUT inference. Errors exempt.
+  Reducibility estimate contract (PLAN-018, L2-corrected): the `hist/reducibility`
+  verb estimates what the LOSSY spill tier would shed from the wire, so the
+  rate-controller decides on real savings. It must AGREE with Spill.spillable?: a
+  result sheds iff its node is restorable (a pure :read) AND its rendered result
+  exceeds the spill threshold (~512 tokens). Non-restorable, failed, and small
+  results shed nothing. Zero inference.
   """
   use ExUnit.Case, async: false
 
@@ -22,64 +23,59 @@ defmodule SpellAgent.Hist.ReducibilityTest do
     verbs["hist/reducibility"].(%{})
   end
 
-  # Seed a chain of program turns; each `{program, result}` becomes a wire node.
-  defp seed(session_id, turns) do
-    Enum.reduce(turns, nil, fn {program, result}, parent ->
-      Recorder.record_node(
-        Memory,
-        session_id,
-        %{program: program, result: result},
-        parent && parent.id
-      )
-    end)
-  end
+  # A read see (cat) so the node classifies restorable.
+  defp read_see, do: [%{name: "sh", args: %{"argv" => ["cat", "f"]}, result: "ok"}]
 
-  test "a tape with distinct programs is irreducible (reducible_tokens == 0)" do
-    seed("s", [
-      {"(tool/sh {:argv [\"ls\"]})", "out1"},
-      {"(tool/sh {:argv [\"pwd\"]})", "out2"}
-    ])
+  # ~3000 chars -> ~750 tokens, over the 512 spill threshold.
+  @big String.duplicate("x", 3_000)
 
-    r = reducibility("s")
-    assert r["reducible_tokens"] == 0
-    assert r["tok_reduced"] == r["tok_full"]
-    assert r["nodes"] == 2
-  end
-
-  test "the same program re-run sheds the earlier result (stale-result-collapse)" do
-    big = String.duplicate("x", 400)
-
-    seed("s", [
-      {"(tool/sh {:argv [\"cat\" \"f\"]})", big},
-      {"(tool/sh {:argv [\"cat\" \"f\"]})", big}
-    ])
-
-    r = reducibility("s")
-    # one copy's result (~100 tokens for 400 chars) sheds; the other stays.
-    assert r["reducible_tokens"] > 0
-    assert r["tok_reduced"] < r["tok_full"]
-    assert r["tok_reduced"] >= 0
-  end
-
-  test "a FAILED turn (status :error) never sheds its result (errors exempt)" do
-    big = String.duplicate("y", 400)
-
-    # both turns FAILED (success?: false -> status :error) -> excluded from the
-    # wire-ok set, so their (identical) results are never shed. This is the
-    # recovery-evidence invariant: a failed turn's output stays in the tape.
-    a =
-      Recorder.record_node(
-        Memory,
-        "s",
-        %{program: "(tool/x {})", result: big, success?: false},
-        nil
-      )
-
+  test "a big RESTORABLE read result is estimated sheddable" do
     Recorder.record_node(
       Memory,
       "s",
-      %{program: "(tool/x {})", result: big, success?: false},
-      a.id
+      %{program: "(tool/sh {:argv [\"cat\" \"f\"]})", result: @big, tool_calls: read_see()},
+      nil
+    )
+
+    r = reducibility("s")
+    assert r["reducible_tokens"] > 0
+    assert r["tok_reduced"] < r["tok_full"]
+  end
+
+  test "a big NON-restorable (external) result sheds nothing" do
+    Recorder.record_node(
+      Memory,
+      "s",
+      %{
+        program: "(tool/sh {:argv [\"date\"]})",
+        result: @big,
+        tool_calls: [%{name: "sh", args: %{"argv" => ["date"]}, result: @big}]
+      },
+      nil
+    )
+
+    r = reducibility("s")
+    assert r["reducible_tokens"] == 0
+  end
+
+  test "a SMALL restorable result sheds nothing (below threshold)" do
+    Recorder.record_node(
+      Memory,
+      "s",
+      %{program: "(tool/sh {:argv [\"cat\" \"f\"]})", result: "tiny", tool_calls: read_see()},
+      nil
+    )
+
+    r = reducibility("s")
+    assert r["reducible_tokens"] == 0
+  end
+
+  test "a FAILED turn's big result sheds nothing (errors exempt)" do
+    Recorder.record_node(
+      Memory,
+      "s",
+      %{program: "(tool/sh {:argv [\"cat\" \"f\"]})", result: @big, success?: false, tool_calls: read_see()},
+      nil
     )
 
     r = reducibility("s")
@@ -87,10 +83,12 @@ defmodule SpellAgent.Hist.ReducibilityTest do
   end
 
   test "the estimate is deterministic for a fixed tape" do
-    seed("s", [
-      {"(tool/sh {:argv [\"ls\"]})", "out"},
-      {"(tool/sh {:argv [\"ls\"]})", "out"}
-    ])
+    Recorder.record_node(
+      Memory,
+      "s",
+      %{program: "(tool/sh {:argv [\"cat\" \"f\"]})", result: @big, tool_calls: read_see()},
+      nil
+    )
 
     assert reducibility("s") == reducibility("s")
   end
@@ -105,13 +103,20 @@ defmodule SpellAgent.Hist.ReducibilityTest do
   end
 
   test "reducible_tokens never exceeds tok_full (sound bound)" do
-    big = String.duplicate("z", 800)
+    a =
+      Recorder.record_node(
+        Memory,
+        "s",
+        %{program: "(tool/sh {:argv [\"cat\" \"f\"]})", result: @big, tool_calls: read_see()},
+        nil
+      )
 
-    seed("s", [
-      {"(tool/sh {:argv [\"cat\" \"f\"]})", big},
-      {"(tool/sh {:argv [\"cat\" \"f\"]})", big},
-      {"(tool/sh {:argv [\"cat\" \"f\"]})", big}
-    ])
+    Recorder.record_node(
+      Memory,
+      "s",
+      %{program: "(tool/sh {:argv [\"cat\" \"g\"]})", result: @big, tool_calls: [%{name: "sh", args: %{"argv" => ["cat", "g"]}, result: @big}]},
+      a.id
+    )
 
     r = reducibility("s")
     assert r["reducible_tokens"] <= r["tok_full"]

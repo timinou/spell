@@ -39,7 +39,16 @@ defmodule SpellAgent.Hist.Effect do
   @mutation_tools ~w(edit write code-edit code-apply define-tool define-config)
 
   # Shell command heads, by class. Conservative: an unlisted head is :unknown.
-  @read_heads ~w(cat rg grep ls find head tail wc sed awk sort uniq cut tr echo pwd stat file dirname basename realpath which env printenv date_unused)
+  # Heads that READ when invoked plainly. `sed`/`awk` are reads UNLESS they carry
+  # an in-place flag (handled as a mutating predicate below). `env` is NOT here:
+  # it is a wrapper whose real effect is the command it runs, peeled before
+  # classification (L2 finding).
+  @read_heads ~w(cat rg grep ls find head tail wc sed awk sort uniq cut tr echo pwd stat file dirname basename realpath which printenv)
+
+  # Wrapper commands whose effect is the WRAPPED command, not themselves: peel the
+  # leading wrapper (+ its assignments/flags) and classify the inner head (L2
+  # finding: `env MIX_ENV=test mix test` is a :check, `env rm f` a :mutation).
+  @wrapper_heads ~w(env nice nohup timeout xargs sudo doas stdbuf time)
   @check_heads ~w(mix cargo npm bun pytest eslint clippy rustc tsc dialyzer credo)
   @external_heads ~w(curl wget date random uuidgen ssh ping nc dig host)
   @mutation_heads ~w(rm mkdir mv cp touch chmod chown ln tee dd truncate)
@@ -150,16 +159,49 @@ defmodule SpellAgent.Hist.Effect do
 
   defp shell_heads(_), do: []
 
-  # The head of one argv vector, plus a synthetic "rm" head when the command
-  # carries a mutating predicate (so e.g. `find . -delete` is not a pure read).
+  # The head(s) of one argv vector. Three refinements (all L2-hardened):
+  #   * a WRAPPER head (env/nice/sudo/...) is peeled — classify the command it
+  #     runs, not the wrapper, by recursing on the remaining argv past the
+  #     wrapper's VAR=val assignments and flags;
+  #   * a mutating predicate (-delete, sed -i, >, tee) adds a synthetic "rm" head
+  #     so the call classifies :mutation;
+  #   * a bare read head returns itself.
   defp argv_heads([h | rest]) when is_binary(h) do
-    if Enum.any?(rest, &mutating_predicate?/1), do: [h, "rm"], else: [h]
+    cond do
+      h in @wrapper_heads ->
+        # peel the wrapper + its assignments/flags, classify the inner command.
+        case strip_wrapper_args(rest) do
+          [] -> [h]
+          inner -> argv_heads(inner)
+        end
+
+      Enum.any?(rest, &mutating_predicate?/1) ->
+        [h, "rm"]
+
+      true ->
+        [h]
+    end
   end
 
   defp argv_heads(_), do: []
 
-  @mutating_predicates ~w(-delete -exec -execdir -fprint -fprintf > >> | tee)
-  defp mutating_predicate?(arg) when is_binary(arg), do: arg in @mutating_predicates
+  # Drop a wrapper's leading `VAR=val` assignments and `-flags` to reach the inner
+  # command head (`env MIX_ENV=test mix test` -> `mix test`).
+  defp strip_wrapper_args(args) do
+    Enum.drop_while(args, fn a ->
+      is_binary(a) and (String.contains?(a, "=") or String.starts_with?(a, "-"))
+    end)
+  end
+
+  # Flags/predicates that turn an otherwise-read command into a MUTATION: find's
+  # -delete/-exec, an in-place sed/awk edit (-i / --in-place / -i.bak), a redirect,
+  # or a tee. Presence of any makes the call classify :mutation (L2 finding).
+  @mutating_predicates ~w(-delete -exec -execdir -fprint -fprintf > >> | tee -i --in-place)
+  defp mutating_predicate?(arg) when is_binary(arg) do
+    arg in @mutating_predicates or String.starts_with?(arg, "-i.") or
+      String.starts_with?(arg, "--in-place=")
+  end
+
   defp mutating_predicate?(_), do: false
 
   # atom- or string-keyed read (never mints an atom). Presence-aware so a key

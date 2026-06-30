@@ -1,33 +1,31 @@
-;; reducibility estimate (PLAN-018 W3, corrected per L1 audit) — a CHEAP analysis,
-;; NOT a reduction.
+;; reducibility estimate (PLAN-018, L2-corrected) — a CHEAP analysis, NOT a
+;; reduction.
 ;;
-;; Answers "how much could shedding remove from the REPLAYED WIRE TAPE, and is it
-;; worth a keyframe?" WITHOUT performing any reduction and WITHOUT any inference.
-;; The rate-controller (W5) reads this every turn to decide reduce-vs-cache.
+;; Answers "how much could the LOSSY tier shed from the replayed wire tape, and is
+;; it worth a keyframe?" WITHOUT performing any reduction and WITHOUT inference.
+;; The rate-controller (W5) reads this to decide reduce-vs-cache.
 ;;
-;; WIRE MODEL (the L1 correction): in tool_call mode the refolded tape emits, per
-;; node, the program text (`form_src`) + the program RESULT (`result`). The `sees`
-;; (inner tool calls) and `prints` never reach the wire. So the estimate counts
-;; what sheds from `form_src` + `result`, NOT the sees-level CSE — otherwise the
-;; controller would decide on bytes that are not actually on the feed.
+;; THE CONTRACT (L2 cost-proof): the estimate must agree with what Spill.spill/2
+;; actually sheds, or K* is computed on the wrong byte set. Spill replaces a
+;; node.result with a tiny stub IFF the node is RESTORABLE (a pure-:read node, the
+;; "restorable" projection flag) AND its rendered result exceeds the spill
+;; threshold (~512 tokens). So the shed estimate is: for each spillable node, its
+;; result tokens minus the small stub cost. Non-restorable, failed, or
+;; below-threshold results shed NOTHING (Spill keeps them verbatim).
 ;;
 ;; Returns:
 ;;   {"tok_full"          F   ; est tokens of the full refolded tape (form_src + result)
-;;    "tok_reduced"       R   ; est tokens after shedding duplicate/superseded results
-;;    "reducible_tokens"  F-R ; the shed estimate (>= 0)
-;;    "nodes"             N}  ; nodes considered
-;;
-;; Token estimate mirrors the runtime len/4 rule (Metrics.estimate_tokens).
-;; Two inference-free shed signals over `node.result`:
-;;   * result-CSE           : identical (form_src, result) — same program, same
-;;                            bytes; each copy beyond the first sheds its result.
-;;   * stale-result-collapse: same read program (form_src) re-run; earlier results
-;;                            shed, last kept. The Elixir reducer applies the
-;;                            effect-class gate; the estimate is a signal, not a
-;;                            contract, and never exceeds tok_full.
-;; Errors are exempt: a node whose status is "error" never sheds its result.
+;;    "tok_reduced"       R   ; est tokens after the lossy spill
+;;    "reducible_tokens"  F-R
+;;    "nodes"             N}
 
 (let [nodes data/nodes
+
+      ;; spill threshold in TOKENS (mirrors Spill @default_threshold_tokens 512).
+      threshold 512
+      ;; a spilled stub costs ~a few tokens; charge a flat 32 so the estimate is a
+      ;; slight under-promise rather than over-promise.
+      stub-tokens 32
 
       est-tokens (fn [s]
                    (if (and (string? s) (> (count s) 0))
@@ -37,6 +35,7 @@
       result-tokens (fn [n] (est-tokens (json/generate-string (get n "result"))))
       form-tokens   (fn [n] (est-tokens (get n "form_src")))
 
+      ;; nodes that emit a program turn on the wire AND succeeded.
       wire-nodes (filter (fn [n]
                            (and (string? (get n "form_src"))
                                 (> (count (get n "form_src")) 0)
@@ -45,19 +44,17 @@
 
       tok-full (reduce (fn [a n] (+ a (form-tokens n) (result-tokens n))) 0 wire-nodes)
 
-      ;; stale-result-collapse subsumes result-CSE (same form_src is coarser than
-      ;; same form_src+result), so it is the dominant shed signal: a group of k
-      ;; same-program nodes sheds the result tokens of all but the LAST.
-      by-form (group-by (fn [n] (get n "form_src")) wire-nodes)
-      stale-shed (reduce (fn [a [_k ns]]
-                           (if (> (count ns) 1)
-                             (let [butlast (take (- (count ns) 1) ns)]
-                               (+ a (reduce (fn [b n] (+ b (result-tokens n))) 0 butlast)))
-                             a))
+      ;; a node is SPILLABLE exactly as Spill.spillable? judges it: restorable +
+      ;; over the token threshold. Its shed = result tokens minus the stub cost.
+      spill-shed (reduce (fn [a n]
+                           (let [rt (result-tokens n)]
+                             (if (and (get n "restorable") (> rt threshold))
+                               (+ a (max 0 (- rt stub-tokens)))
+                               a)))
                          0
-                         by-form)
+                         wire-nodes)
 
-      reducible (min (max 0 stale-shed) tok-full)
+      reducible (min (max 0 spill-shed) tok-full)
       tok-reduced (max 0 (- tok-full reducible))]
 
   {"tok_full" tok-full

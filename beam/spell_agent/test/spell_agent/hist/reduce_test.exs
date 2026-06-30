@@ -272,6 +272,49 @@ defmodule SpellAgent.Hist.ReduceTest do
     end
   end
 
+  describe "L2: world-epoch barrier" do
+    test "a read is NOT stale-collapsed across an intervening write to the same path" do
+      # cat f (v1) -> edit f (write) -> cat f (v2): both reads are load-bearing
+      # (the agent compared pre- and post-edit state), so v1 must survive.
+      slice = [
+        node(0, sees: [see("sh", %{"argv" => ["cat", "f"]}, "v1")]),
+        node(1, sees: [see("edit", %{"path" => "f"}, "applied")]),
+        node(2, sees: [see("sh", %{"argv" => ["cat", "f"]}, "v2")])
+      ]
+
+      reduced = Reduce.lossless(slice)
+      [a] = Enum.at(reduced, 0).sees
+      # the pre-write read kept its result (not staled across the edit).
+      refute Map.has_key?(a, "stale")
+      assert (a[:result] || a["result"]) == "v1"
+    end
+
+    test "reads in the SAME epoch (no intervening write) still collapse" do
+      # two cat f with NO write between -> the earlier is stale (same epoch).
+      slice = [
+        node(0, sees: [see("sh", %{"argv" => ["cat", "f"]}, "v1")]),
+        node(1, sees: [see("sh", %{"argv" => ["cat", "f"]}, "v2")])
+      ]
+
+      reduced = Reduce.lossless(slice)
+      [a] = Enum.at(reduced, 0).sees
+      assert a["stale"] == true
+    end
+
+    test "a write to a DIFFERENT path does not protect a read" do
+      # cat f, edit g, cat f: the write is to g, not f, so f's reads still collapse.
+      slice = [
+        node(0, sees: [see("sh", %{"argv" => ["cat", "f"]}, "v1")]),
+        node(1, sees: [see("edit", %{"path" => "g"}, "applied")]),
+        node(2, sees: [see("sh", %{"argv" => ["cat", "f"]}, "v2")])
+      ]
+
+      reduced = Reduce.lossless(slice)
+      [a] = Enum.at(reduced, 0).sees
+      assert a["stale"] == true
+    end
+  end
+
   describe "determinism" do
     test "the same slice reduces identically every time" do
       slice = [

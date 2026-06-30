@@ -245,16 +245,32 @@ defmodule SpellAgent.Hist.Reduce do
   # conservative — anything not positively a read is left intact. Errors exempt; a
   # call already CSE-referenced is left alone.
   defp stale_read_collapse(slice) do
-    # Index the LAST occurrence position of each (name,args) key over ok, read-
-    # class, non-cse sees, so we keep that one and stale the earlier copies.
-    flat =
-      for {node, ni} <- Enum.with_index(slice),
-          {see, si} <- Enum.with_index(node.sees),
-          collapsible_read?(see),
-          do: {read_key(see), {ni, si}}
+    # Flatten every see to a global ordinal so "between" is a simple comparison.
+    flat = flatten_sees(slice)
 
-    last_pos =
-      Enum.reduce(flat, %{}, fn {key, pos}, acc -> Map.put(acc, key, pos) end)
+    # WORLD-EPOCH BARRIER: a path's epoch is bumped by any WRITE (a non-read
+    # effect — mutation/external/check/unknown — whose args touch that path). A
+    # read may be staled only by a later read of the same key in the SAME epoch:
+    # if a write to the path falls between them, both reads are load-bearing (read
+    # v1, change, read v2), so the earlier MUST survive. We compute, per read key,
+    # the set of write ordinals to its path, then stale a read only when a later
+    # same-key read exists with no write ordinal strictly between them.
+    write_ords = write_ordinals_by_path(flat)
+
+    # group collapsible reads by key, in ordinal order.
+    reads_by_key =
+      flat
+      |> Enum.filter(fn {_ord, _ni, _si, see} -> collapsible_read?(see) end)
+      |> Enum.group_by(fn {_ord, _ni, _si, see} -> read_key(see) end)
+
+    # the set of {ni, si} positions to stale: a read staled iff a LATER same-key
+    # read shares its epoch (no write to the path strictly between the two).
+    stale_pos =
+      Enum.reduce(reads_by_key, MapSet.new(), fn {key, reads}, acc ->
+        path = key_path(key)
+        writes = Map.get(write_ords, path, [])
+        collect_stale(reads, writes, acc)
+      end)
 
     slice
     |> Enum.with_index()
@@ -263,7 +279,7 @@ defmodule SpellAgent.Hist.Reduce do
         node.sees
         |> Enum.with_index()
         |> Enum.map(fn {see, si} ->
-          if collapsible_read?(see) and Map.get(last_pos, read_key(see)) != {ni, si} do
+          if MapSet.member?(stale_pos, {ni, si}) do
             see |> mixed_drop(:result) |> Map.put("stale", true)
           else
             see
@@ -273,6 +289,87 @@ defmodule SpellAgent.Hist.Reduce do
       %{node | sees: new_sees}
     end)
   end
+
+  # Every see across the slice as {global_ordinal, node_index, see_index, see}.
+  defp flatten_sees(slice) do
+    slice
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {node, ni} ->
+      node.sees |> Enum.with_index() |> Enum.map(fn {see, si} -> {ni, si, see} end)
+    end)
+    |> Enum.with_index()
+    |> Enum.map(fn {{ni, si, see}, ord} -> {ord, ni, si, see} end)
+  end
+
+  # For each path, the ascending ordinals at which a WRITE (any non-read,
+  # non-error effect touching that path) occurs. A write bumps the path's epoch.
+  defp write_ordinals_by_path(flat) do
+    flat
+    |> Enum.filter(fn {_ord, _ni, _si, see} -> write_see?(see) end)
+    |> Enum.reduce(%{}, fn {ord, _ni, _si, see}, acc ->
+      case see_path(see) do
+        nil -> acc
+        path -> Map.update(acc, path, [ord], &[ord | &1])
+      end
+    end)
+    |> Map.new(fn {p, ords} -> {p, Enum.sort(ords)} end)
+  end
+
+  # Stale a read iff a strictly-later same-key read exists in the SAME epoch (no
+  # write ordinal strictly between them). Walk reads in ordinal order; the LAST
+  # read of each maximal write-free run is the keeper, earlier ones in that run
+  # stale.
+  defp collect_stale(reads, writes, acc) do
+    ords = Enum.map(reads, fn {ord, ni, si, _see} -> {ord, {ni, si}} end) |> Enum.sort()
+
+    Enum.reduce(Enum.with_index(ords), acc, fn {{ord, pos}, idx}, set ->
+      later = Enum.drop(ords, idx + 1)
+
+      same_epoch_later? =
+        Enum.any?(later, fn {lord, _lpos} -> not write_between?(writes, ord, lord) end)
+
+      if same_epoch_later?, do: MapSet.put(set, pos), else: set
+    end)
+  end
+
+  defp write_between?(writes, a, b) do
+    Enum.any?(writes, fn w -> w > a and w < b end)
+  end
+
+  # A see is a WRITE (epoch-bumping) when it is not a read and not an error
+  # (errors are exempt evidence, never treated as state mutations here).
+  defp write_see?(see) do
+    Result.status(mixed_get(see, :result)) == :ok and Effect.classify(see) != :read
+  end
+
+  # The path a see touches: a native tool's `:path`/`:target` arg, or the file
+  # operand of an sh `:argv` (the first non-flag after the head). nil when not
+  # statically known. Conservative — an unknown path groups under nil and never
+  # matches a real path's writes (so a read with an unknown path is collapsible
+  # only against other unknown-path reads, which is sound: same key).
+  defp see_path(see) do
+    case mixed_get(see, :args) do
+      %{} = args ->
+        mixed_get_in(args, :path) || mixed_get_in(args, :target) ||
+          argv_path(mixed_get_in(args, :argv))
+
+      _ ->
+        nil
+    end
+  end
+
+  defp argv_path([_head | rest]) when is_list(rest) do
+    Enum.find(rest, fn a -> is_binary(a) and not String.starts_with?(a, "-") end)
+  end
+
+  defp argv_path(_), do: nil
+
+  # The path component of a read key (for matching against write paths). The key
+  # is {name, args}; reuse see_path's logic on the args.
+  defp key_path({_name, args}) when is_map(args), do: argv_path(mixed_get_in(args, :argv))
+  defp key_path(_), do: nil
+
+  defp mixed_get_in(map, key) when is_map(map), do: Map.get(map, key) || Map.get(map, to_string(key))
 
   defp read_key(see), do: {to_string(mixed_get(see, :name)), mixed_get(see, :args)}
 

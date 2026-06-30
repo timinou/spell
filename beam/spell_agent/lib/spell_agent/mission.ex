@@ -88,12 +88,16 @@ defmodule SpellAgent.Mission do
 
     cond do
       over?(f, hard) -> {:reduce, :lossy}
-      # soft-overflow only warrants a lossless reduce if the tape can ACTUALLY
-      # shrink; a pathological estimate where the reduced tape is not smaller
-      # (F <= R) cannot relieve the overflow, so cache and let hard overflow force
-      # the lossy tier (S5 swarm finding).
-      over?(f, soft) and reducible?(f, r) -> {:reduce, :lossless}
-      profitable?(f, r, k) -> {:reduce, :lossless}
+      # Soft-overflow and the economic trigger both aim to shrink the WIRE, and
+      # only the LOSSY tier (result-spill) sheds wire bytes — the lossless tier
+      # shrinks the node store but leaves the refolded tape byte-identical (the L1
+      # finding). The reducibility estimate is itself a wire (node.result) model,
+      # so a profitable estimate is realized only by lossy. Triggering lossless
+      # here would pay a cache-write for an unchanged tape and re-fire every turn
+      # (the L2 cost-proof net-negative regime). Reduce only when the tape can
+      # actually shrink (reducible?); else cache.
+      over?(f, soft) and reducible?(f, r) -> {:reduce, :lossy}
+      profitable?(f, r, k) -> {:reduce, :lossy}
       true -> :cache
     end
   end

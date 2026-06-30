@@ -86,7 +86,13 @@ defmodule SpellAgent.Hist.Namespace do
       # PLAN-018 W6: the tail goal-restatement (todo.md analogue) to APPEND after
       # the tape — never in the cached prefix. A data projection of the goal +
       # progress, zero inference.
-      "hist/recite" => fn args -> recite(impl, session_id, args) end
+      "hist/recite" => fn args -> recite(impl, session_id, args) end,
+      # PLAN-018 W6: the RESTORE path for a spilled result. A lossy tape carries a
+      # {node_id, digest, bytes} stub; this verb fetches that node by id and
+      # returns its full original result (with the digest for verification). The
+      # agent-callable inverse of result-spill (L2 finding: the stub needs a real
+      # recovery verb, not just hist/recall text-search).
+      "hist/recall-node" => fn args -> recall_node(impl, session_id, args) end
     }
 
     Map.merge(elixir, Lens.tools(impl, session_id))
@@ -270,6 +276,32 @@ defmodule SpellAgent.Hist.Namespace do
   defp recite(impl, session_id, args) do
     source = Map.get(Lens.reducer_sources(), "recite")
     Lens.run(impl, session_id, source, args || %{})
+  end
+
+  # PLAN-018 W6: restore a spilled result by its node id. Returns {result, digest,
+  # bytes} for the stub's node, or an {"err" ...} map when the node is gone. The
+  # digest lets a caller verify the recovered payload matches what was shed.
+  defp recall_node(impl, session_id, args) do
+    case arg(args, "node") do
+      nid when is_binary(nid) ->
+        case Store.fetch(impl, {:node, session_id, nid}) do
+          {:ok, node} ->
+            rendered = SpellAgent.Hist.Spill.render_result(node.result)
+
+            %{
+              "node_id" => nid,
+              "result" => node.result,
+              "digest" => SpellAgent.Hist.Spill.digest(rendered),
+              "bytes" => byte_size(rendered)
+            }
+
+          :error ->
+            %{"err" => "no such node: " <> nid}
+        end
+
+      _ ->
+        %{"err" => "hist/recall-node requires a string :node id"}
+    end
   end
 
   # PLAN-018 W4: reduce the root->cursor slice (lossless tier) and refold it to a
