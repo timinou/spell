@@ -32,6 +32,7 @@ defmodule SpellAgent.Tui.Cell.Verb do
   """
 
   alias SpellAgent.Tui.Cell.Registry
+  alias SpellAgent.Tui.Tree
 
   @doc "The `cell/` verb tool map (qualified string names)."
   @spec tools() :: %{optional(String.t()) => (map() -> term())}
@@ -114,11 +115,5 @@ defmodule SpellAgent.Tui.Cell.Verb do
   defp valid_query?(%{"__splice__" => _}), do: true
   defp valid_query?(_), do: false
 
-  defp strget(args, key), do: Map.get(args, key) || Map.get(args, safe_atom(key))
-
-  defp safe_atom(key) when is_binary(key) do
-    String.to_existing_atom(key)
-  rescue
-    ArgumentError -> nil
-  end
+  defp strget(args, key), do: Tree.get(args, key)
 end

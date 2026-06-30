@@ -22,7 +22,7 @@ defmodule SpellAgent.Tui.Reaction.Ptc do
   """
 
   alias SpellAgent.Harness
-  alias SpellAgent.Tui.Ui
+  alias SpellAgent.Tui.{Tree, Ui}
 
   @doc """
   Evaluate `source` as a reaction over `ui` (the current gaze) given `forest`.
@@ -89,7 +89,7 @@ defmodule SpellAgent.Tui.Reaction.Ptc do
 
   # ---- coercion helpers ----
 
-  defp fetch(m, key) when is_map(m), do: Map.get(m, key) || Map.get(m, safe_atom(key))
+  defp fetch(m, key) when is_map(m), do: Map.get(m, key) || Map.get(m, Tree.safe_atom(key))
 
   # Panes: keep only known pane atoms; fall back to the prior ring if empty/invalid.
   defp panes(nil, fallback), do: fallback
@@ -128,10 +128,4 @@ defmodule SpellAgent.Tui.Reaction.Ptc do
   defp stringify_kv(m) when is_map(m), do: Map.new(m, fn {k, v} -> {to_string(k), stringify_val(v)} end)
   defp stringify_val(v) when is_atom(v) and not is_nil(v), do: to_string(v)
   defp stringify_val(v), do: v
-
-  defp safe_atom(key) when is_binary(key) do
-    String.to_existing_atom(key)
-  rescue
-    ArgumentError -> nil
-  end
 end

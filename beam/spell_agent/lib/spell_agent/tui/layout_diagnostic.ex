@@ -10,7 +10,7 @@ defmodule SpellAgent.Tui.LayoutDiagnostic do
 
   alias ExRatatui.Layout
   alias ExRatatui.Layout.Rect
-  alias SpellAgent.Tui.{Materialize, Surface}
+  alias SpellAgent.Tui.{Materialize, SplitSpec, Surface, Tree}
 
   @type diagnostic :: %{
           required(String.t()) => term()
@@ -219,9 +219,9 @@ defmodule SpellAgent.Tui.LayoutDiagnostic do
         rects =
           rect
           |> Layout.split(
-            direction(get(node, "dir")),
-            constraints(children, get(node, "constraints")),
-            split_opts(get(node, "opts"))
+            SplitSpec.direction(get(node, "dir")),
+            SplitSpec.constraints(children, get(node, "constraints")),
+            SplitSpec.split_opts(get(node, "opts"))
           )
           |> split_result()
 
@@ -401,96 +401,9 @@ defmodule SpellAgent.Tui.LayoutDiagnostic do
   defp type_name(value) when is_tuple(value), do: "tuple"
   defp type_name(_value), do: "value"
 
-  # ---- coercion helpers kept in sync with Surface ----
+  # ---- node accessors (PLAN-021 W1: split coercion -> SplitSpec, key access -> Tree) ----
 
-  defp kind(node) do
-    case get(node, "type") do
-      t when is_binary(t) -> t
-      t when is_atom(t) and not is_nil(t) -> Atom.to_string(t)
-      _ -> nil
-    end
-  end
+  defp kind(node), do: Tree.kind(node)
 
-  defp direction("horizontal"), do: :horizontal
-  defp direction(:horizontal), do: :horizontal
-  defp direction(_), do: :vertical
-
-  defp constraints(_children, list) when is_list(list) and list != [],
-    do: Enum.map(list, &constraint/1)
-
-  defp constraints(children, _none) when is_list(children),
-    do: List.duplicate({:fill, 1}, length(children))
-
-  defp constraint([kind, a, b]), do: build_constraint(to_kind(kind), a, b)
-  defp constraint([kind, a]), do: build_constraint(to_kind(kind), a, nil)
-  defp constraint({kind, a}), do: build_constraint(to_kind(kind), a, nil)
-  defp constraint({kind, a, b}), do: build_constraint(to_kind(kind), a, b)
-  defp constraint(_), do: {:fill, 1}
-
-  defp build_constraint(:length, n, _) when is_integer(n), do: {:length, n}
-  defp build_constraint(:percentage, n, _) when is_integer(n), do: {:percentage, n}
-  defp build_constraint(:min, n, _) when is_integer(n), do: {:min, n}
-  defp build_constraint(:max, n, _) when is_integer(n), do: {:max, n}
-  defp build_constraint(:fill, n, _) when is_integer(n), do: {:fill, n}
-  defp build_constraint(:ratio, n, d) when is_integer(n) and is_integer(d), do: {:ratio, n, d}
-  defp build_constraint(_, _, _), do: {:fill, 1}
-
-  @constraint_kinds %{
-    "length" => :length,
-    "percentage" => :percentage,
-    "min" => :min,
-    "max" => :max,
-    "fill" => :fill,
-    "ratio" => :ratio
-  }
-
-  defp to_kind(k) when is_atom(k) and not is_nil(k), do: k
-  defp to_kind(k) when is_binary(k), do: Map.get(@constraint_kinds, k)
-  defp to_kind(_), do: nil
-
-  defp split_opts(m) when is_map(m) do
-    []
-    |> put_flex(get(m, "flex"))
-    |> put_nni(:spacing, get(m, "spacing"))
-    |> put_nni(:margin, get(m, "margin"))
-    |> put_nni(:horizontal_margin, get(m, "horizontal_margin"))
-    |> put_nni(:vertical_margin, get(m, "vertical_margin"))
-  end
-
-  defp split_opts(_), do: []
-
-  @flexes %{
-    "legacy" => :legacy,
-    "start" => :start,
-    "end" => :end,
-    "center" => :center,
-    "space_between" => :space_between,
-    "space_around" => :space_around
-  }
-
-  defp put_flex(opts, f) when is_binary(f) do
-    case Map.get(@flexes, f) do
-      nil -> opts
-      flex -> Keyword.put(opts, :flex, flex)
-    end
-  end
-
-  defp put_flex(opts, _), do: opts
-
-  defp put_nni(opts, key, n) when is_integer(n) and n >= 0, do: Keyword.put(opts, key, n)
-  defp put_nni(opts, _key, _), do: opts
-
-  defp get(m, key) when is_map(m) do
-    Map.get(m, key) || Map.get(m, safe_atom(key))
-  end
-
-  defp get(_m, _key), do: nil
-
-  defp safe_atom(key) when is_binary(key) do
-    String.to_existing_atom(key)
-  rescue
-    ArgumentError -> nil
-  end
-
-  defp safe_atom(_), do: nil
+  defp get(m, key), do: Tree.get(m, key)
 end

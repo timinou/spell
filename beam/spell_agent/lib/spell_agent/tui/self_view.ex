@@ -49,7 +49,7 @@ defmodule SpellAgent.Tui.SelfView do
   process state — the same testability discipline as `SpellAgent.Tui.Cell`.
   """
 
-  alias SpellAgent.Tui.{DataBag, RenderProbe}
+  alias SpellAgent.Tui.{DataBag, RenderProbe, Tree}
   alias SpellAgent.Tui.SelfView.{Budget, Idioms}
 
   @default_store SpellAgent.Tui.Store
@@ -259,16 +259,7 @@ defmodule SpellAgent.Tui.SelfView do
 
   defp format_reason({:render_failed, message}), do: message
 
-  defp strget(m, key) when is_map(m), do: Map.get(m, key) || Map.get(m, safe_atom(key))
-  defp strget(_m, _key), do: nil
-
-  defp safe_atom(key) when is_binary(key) do
-    String.to_existing_atom(key)
-  rescue
-    ArgumentError -> nil
-  end
-
-  defp safe_atom(_), do: nil
+  defp strget(m, key), do: Tree.get(m, key)
 
   defp default_area, do: %ExRatatui.Layout.Rect{x: 0, y: 0, width: 80, height: 24}
 

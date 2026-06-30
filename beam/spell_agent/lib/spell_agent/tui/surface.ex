@@ -38,7 +38,7 @@ defmodule SpellAgent.Tui.Surface do
 
   alias ExRatatui.Layout
   alias ExRatatui.Layout.Rect
-  alias SpellAgent.Tui.Materialize
+  alias SpellAgent.Tui.{Materialize, SplitSpec, Tree}
 
   @typedoc "A placed widget ready for ExRatatui.draw/2."
   @type placement :: {struct(), Rect.t()}
@@ -112,9 +112,9 @@ defmodule SpellAgent.Tui.Surface do
   # ---- split: divide the rect, recurse into children ----
 
   defp place_split(node, rect) do
-    dir = direction(get(node, "dir"))
-    constraints = constraints(get(node, "children"), get(node, "constraints"))
-    opts = split_opts(get(node, "opts"))
+    dir = SplitSpec.direction(get(node, "dir"))
+    constraints = SplitSpec.constraints(get(node, "children"), get(node, "constraints"))
+    opts = SplitSpec.split_opts(get(node, "opts"))
     children = List.wrap(get(node, "children"))
 
     case Layout.split(rect, dir, constraints, opts) do
@@ -130,102 +130,8 @@ defmodule SpellAgent.Tui.Surface do
 
   # ---- coercion helpers (PTC-native -> ex_ratatui forms) ----
 
-  defp kind(node) do
-    case get(node, "type") do
-      t when is_binary(t) -> t
-      t when is_atom(t) and not is_nil(t) -> Atom.to_string(t)
-      _ -> nil
-    end
-  end
+  defp kind(node), do: Tree.kind(node)
 
-  defp direction("horizontal"), do: :horizontal
-  defp direction(:horizontal), do: :horizontal
-  defp direction(_), do: :vertical
-
-  # Constraints: an explicit list wins; otherwise default to an even fill per
-  # child so a split with children but no constraints still lays out sanely.
-  defp constraints(_children, list) when is_list(list) and list != [],
-    do: Enum.map(list, &constraint/1)
-
-  defp constraints(children, _none) when is_list(children),
-    do: List.duplicate({:fill, 1}, length(children))
-
-  defp constraints(_children, _none), do: []
-
-  # A constraint pair the agent writes: ["length", 3] / [:length, 3] /
-  # ["ratio", 1, 2]. Coerce the kind to a known atom; anything unknown -> a
-  # neutral fill so one bad entry doesn't sink the whole split.
-  defp constraint([kind, a, b]), do: build_constraint(to_kind(kind), a, b)
-  defp constraint([kind, a]), do: build_constraint(to_kind(kind), a, nil)
-  defp constraint({kind, a}), do: build_constraint(to_kind(kind), a, nil)
-  defp constraint({kind, a, b}), do: build_constraint(to_kind(kind), a, b)
-  defp constraint(_), do: {:fill, 1}
-
-  defp build_constraint(:length, n, _) when is_integer(n), do: {:length, n}
-  defp build_constraint(:percentage, n, _) when is_integer(n), do: {:percentage, n}
-  defp build_constraint(:min, n, _) when is_integer(n), do: {:min, n}
-  defp build_constraint(:max, n, _) when is_integer(n), do: {:max, n}
-  defp build_constraint(:fill, n, _) when is_integer(n), do: {:fill, n}
-  defp build_constraint(:ratio, n, d) when is_integer(n) and is_integer(d), do: {:ratio, n, d}
-  defp build_constraint(_, _, _), do: {:fill, 1}
-
-  @constraint_kinds %{
-    "length" => :length,
-    "percentage" => :percentage,
-    "min" => :min,
-    "max" => :max,
-    "fill" => :fill,
-    "ratio" => :ratio
-  }
-
-  defp to_kind(k) when is_atom(k) and not is_nil(k), do: k
-  defp to_kind(k) when is_binary(k), do: Map.get(@constraint_kinds, k)
-  defp to_kind(_), do: nil
-
-  # Split opts (flex/spacing/margin) — a string-keyed map from the agent. Only
-  # known keys with valid values pass through; everything else is dropped.
-  defp split_opts(m) when is_map(m) do
-    []
-    |> put_flex(get(m, "flex"))
-    |> put_nni(:spacing, get(m, "spacing"))
-    |> put_nni(:margin, get(m, "margin"))
-    |> put_nni(:horizontal_margin, get(m, "horizontal_margin"))
-    |> put_nni(:vertical_margin, get(m, "vertical_margin"))
-  end
-
-  defp split_opts(_), do: []
-
-  @flexes %{
-    "legacy" => :legacy,
-    "start" => :start,
-    "end" => :end,
-    "center" => :center,
-    "space_between" => :space_between,
-    "space_around" => :space_around
-  }
-
-  defp put_flex(opts, f) when is_binary(f) do
-    case Map.get(@flexes, f) do
-      nil -> opts
-      flex -> Keyword.put(opts, :flex, flex)
-    end
-  end
-
-  defp put_flex(opts, _), do: opts
-
-  defp put_nni(opts, key, n) when is_integer(n) and n >= 0, do: Keyword.put(opts, key, n)
-  defp put_nni(opts, _key, _), do: opts
-
-  # string- or atom-key fetch.
-  defp get(m, key) when is_map(m) do
-    Map.get(m, key) || Map.get(m, safe_atom(key))
-  end
-
-  defp get(_m, _key), do: nil
-
-  defp safe_atom(key) when is_binary(key) do
-    String.to_existing_atom(key)
-  rescue
-    ArgumentError -> nil
-  end
+  # string- or atom-key fetch (the canonical Node accessor, PLAN-021 W1).
+  defp get(m, key), do: Tree.get(m, key)
 end

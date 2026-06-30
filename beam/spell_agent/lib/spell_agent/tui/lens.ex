@@ -35,7 +35,7 @@ defmodule SpellAgent.Tui.Lens do
   interning), carrying the `Ui.safe_*` atom-DoS posture onto the tree.
   """
 
-  alias SpellAgent.Tui.Ui
+  alias SpellAgent.Tui.{Tree, Ui}
 
   @typedoc "A layout tree node (plain string-keyed map)."
   @type node_map :: %{optional(String.t()) => term()}
@@ -199,11 +199,7 @@ defmodule SpellAgent.Tui.Lens do
 
   @doc "The node at `slot`, or nil."
   @spec at(node_map(), term()) :: node_map() | nil
-  def at(tree, slot_name) when is_binary(slot_name) do
-    find_node(tree, fn n -> slot(n) == slot_name end)
-  end
-
-  def at(_tree, _slot), do: nil
+  defdelegate at(tree, slot_name), to: Tree
 
   @doc """
   Replace the node at `slot` with `replacement` (slot tag preserved). Pure
@@ -250,87 +246,37 @@ defmodule SpellAgent.Tui.Lens do
   end
 
   # ================================================================
-  # tree mechanics (hand-rolled over plain maps -- no zipper dependency)
+  # tree mechanics -- delegated to the canonical `Tui.Tree` (PLAN-021 W1)
   # ================================================================
+  #
+  # The rose-tree recursion + the string-or-atom Node accessor live ONCE, in
+  # `Tui.Tree`. Lens keeps only the gaze-specific wrappers (pane filtering, the
+  # focus ring) and delegates every walk/accessor to Tree -- so the four
+  # hand-rolled recursions (collect/find_node/map_pane_nodes/update_node) and the
+  # private `safe_atom`/`get` copy are gone.
 
   @doc "The tags map of a node (string-keyed; empty map if none)."
   @spec tags(node_map()) :: map()
-  def tags(node) when is_map(node), do: get(node, "tags") || %{}
-  def tags(_), do: %{}
+  defdelegate tags(node), to: Tree
 
   @doc "The slot name of a node, or nil."
   @spec slot(node_map()) :: String.t() | nil
-  def slot(node) when is_map(node) do
-    case get(node, "slot") do
-      s when is_binary(s) -> s
-      _ -> nil
-    end
-  end
+  defdelegate slot(node), to: Tree
 
-  def slot(_), do: nil
+  defp put_tags(node, t), do: Tree.put_tags(node, t)
 
-  defp put_tags(node, t), do: put(node, "tags", t)
+  defp children(node), do: Tree.children(node)
 
-  defp children(node), do: get(node, "children") || []
+  defp pane_nodes(tree), do: Tree.collect(tree, fn n -> kind(n) == "pane" end)
 
-  defp pane_nodes(tree), do: collect(tree, fn n -> kind(n) == "pane" end)
+  defp map_pane_nodes(tree, fun),
+    do: Tree.update(tree, fn n -> kind(n) == "pane" end, fun)
 
-  defp collect(node, pred) when is_map(node) do
-    here = if pred.(node), do: [node], else: []
-    here ++ Enum.flat_map(List.wrap(children(node)), fn c -> collect(c, pred) end)
-  end
-
-  defp collect(list, pred) when is_list(list),
-    do: Enum.flat_map(list, fn c -> collect(c, pred) end)
-
-  defp collect(_other, _pred), do: []
-
-  defp find_node(node, pred) when is_map(node) do
-    if pred.(node) do
-      node
-    else
-      Enum.find_value(List.wrap(children(node)), fn c -> find_node(c, pred) end)
-    end
-  end
-
-  defp find_node(list, pred) when is_list(list),
-    do: Enum.find_value(list, fn c -> find_node(c, pred) end)
-
-  defp find_node(_other, _pred), do: nil
-
-  defp map_pane_nodes(node, fun) when is_map(node) do
-    node = if kind(node) == "pane", do: fun.(node), else: node
-
-    case children(node) do
-      [] -> node
-      kids -> put(node, "children", Enum.map(kids, fn c -> map_pane_nodes(c, fun) end))
-    end
-  end
-
-  defp map_pane_nodes(other, _fun), do: other
-
-  defp update_node(node, slot_name, fun) when is_map(node) do
-    node = if slot(node) == slot_name, do: fun.(node), else: node
-
-    case children(node) do
-      [] -> node
-      kids -> put(node, "children", Enum.map(kids, fn c -> update_node(c, slot_name, fun) end))
-    end
-  end
-
-  defp update_node(other, _slot, _fun), do: other
+  defp update_node(tree, slot_name, fun), do: Tree.update_slot(tree, slot_name, fun)
 
   # ---- helpers ----
 
-  defp kind(node) when is_map(node) do
-    case get(node, "type") do
-      t when is_binary(t) -> t
-      t when is_atom(t) and not is_nil(t) -> Atom.to_string(t)
-      _ -> nil
-    end
-  end
-
-  defp kind(_), do: nil
+  defp kind(node), do: Tree.kind(node)
 
   defp dir_arg(args) do
     case get(args, "dir") do
@@ -343,10 +289,7 @@ defmodule SpellAgent.Tui.Lens do
     end
   end
 
-  defp get(m, key) when is_map(m), do: Map.get(m, key) || Map.get(m, safe_atom(key))
-  defp get(_m, _key), do: nil
-
-  defp put(m, key, value) when is_map(m), do: Map.put(m, key, value)
+  defp get(m, key), do: Tree.get(m, key)
 
   defp int(v, default)
   defp int(n, _default) when is_integer(n) and n >= 0, do: n
@@ -361,12 +304,4 @@ defmodule SpellAgent.Tui.Lens do
   end
 
   defp parse_overrides(_), do: %{}
-
-  defp safe_atom(key) when is_binary(key) do
-    String.to_existing_atom(key)
-  rescue
-    ArgumentError -> nil
-  end
-
-  defp safe_atom(_), do: nil
 end

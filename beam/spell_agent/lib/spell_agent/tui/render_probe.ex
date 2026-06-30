@@ -20,8 +20,7 @@ defmodule SpellAgent.Tui.RenderProbe do
   """
 
   alias ExRatatui.Layout.Rect
-  alias SpellAgent.Tui.Surface
-  alias SpellAgent.Tui.LayoutRegistry
+  alias SpellAgent.Tui.{LayoutRegistry, Surface, Tree}
 
   @default_width 80
   @default_height 24
@@ -150,14 +149,5 @@ defmodule SpellAgent.Tui.RenderProbe do
 
   defp parse_dimension(_), do: nil
 
-  defp strget(m, key) when is_map(m), do: Map.get(m, key) || Map.get(m, safe_atom(key))
-  defp strget(_m, _key), do: nil
-
-  defp safe_atom(key) when is_binary(key) do
-    String.to_existing_atom(key)
-  rescue
-    ArgumentError -> nil
-  end
-
-  defp safe_atom(_), do: nil
+  defp strget(m, key), do: Tree.get(m, key)
 end
