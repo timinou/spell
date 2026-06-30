@@ -1,0 +1,45 @@
+#+TITLE: W3: Zipper-based focus ring — retire the %Ui{} round-trip
+#+STATE: CANCELLED
+#+SESSION_ID: 151d6377a5c0a39b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-30T11-44-44-695Z_151d6377a5c0a39b.jsonl]]
+#+CUSTOM_ID: FEAT-028-w3-zipper-based-focus-ring-retire-the-ui
+
+* Initial Message
+
+can you use lenses to make the layout simpler and more correct by design? e.g. using the rose tree lenses and other stuff. look at the traces in ~/.spell/traces to see how unergonomic it still is (show me in chat in what ways, enlighten me)
+
+FEAT (PLAN-021 W3). Structural — biggest blast radius (touches the 168-test reaction algebra). Depends on W1, W2. Stage LAST; do not start until W1/W2 are green.
+
+## Target files
+- NEW: lib/spell_agent/tui/zipper.ex — a Huet zipper over the rose-tree (down/up/left/right/edit), focus ring = walk over focusable leaves.
+- lib/spell_agent/tui/lens.ex — focus/focused/focusables/to_ui/from_ui reframed as zipper ops; ideally retire to_ui/from_ui.
+- lib/spell_agent/tui/pane.ex + panes/*.ex — reaction algebra currently consumes %Ui{}; migrate intra-pane nav (cursor/scroll) to operate on the zipper-positioned node's tags.
+- Keys.dispatch / reaction wiring.
+
+## Change
+- Focus = zipper position. lens/focus next = Zipper.right over the focusable sub-ring; focused = the node at the cursor.
+- cursor/scroll become tags on the focused node, mutated in place via the zipper — no to_ui/from_ui marshalling per keystroke.
+- Retire to_ui/from_ui once the reaction algebra reads/writes the tree (via zipper) directly.
+
+## Edge cases
+- 168 reaction tests are written against %Ui{}. Either (a) keep a thin %Ui{} projection as a TEST-only shim, or (b) migrate tests. Decide explicitly; do NOT silently delete coverage (AGENTS.md: ask before removing intentional code/tests).
+- safe_pane atom vocabulary + focus-ring membership (FUP-005) interacts here.
+- Agent-shadowed panes that lose type:"pane" must still be addressable (BUG-007/012 stable identity).
+
+## Acceptance
+- to_ui/from_ui either gone or reduced to a single documented test shim.
+- Per-keystroke nav does no full-tree round-trip (assert via the path that re-tags only the focused node).
+- All 168 reaction-algebra tests green (migrated or shimmed).
+- mix test green; mix compile --warnings-as-errors clean.
+
+NOTE [2026-06-30]: ABANDONED — scoped on a faulty premise (honesty correction, not a deferral of real work).
+
+The W3 premise was that intra-pane navigation round-trips to_ui→react→from_ui per keystroke (a derived %Ui{} marshalled both ways). VERIFIED FALSE by tracing the actual data-flow:
+- Keystroke path: App.handle_key_event → Keys.dispatch({intent}, state.ui, forest) → %Ui{} → reproject. Keys.dispatch is %Ui{}→%Ui{}, PURE, no tree.
+- to_ui appears on ZERO keystroke-path call sites (only harness/* tools + layout_registry.reset).
+- from_ui is a ONE-DIRECTIONAL gaze→tree projection, written once per reproject (event) + once per render — not a both-ways per-keystroke round-trip.
+- ∴ state.ui is the CANONICAL gaze; the tree's gaze-tags are the derived projection. The inverse of the moduledoc framing.
+
+Applying playbook "Don't mirror canonical state in a side-struct" (the wrapped-vs-dissolved test: count round-trips on the event path = 0): retiring %Ui{} would force deriving it on-demand via to_ui for the 168-test reaction algebra, INTRODUCING the per-keystroke round-trip W3 claimed to remove. Net-negative churn across 17 test files. Correct move = do not execute.
+
+W1 (Tree/SplitSpec) + W2 (path lenses + lens/update) were genuine measured wins and ship. The one small real redundancy found while verifying (render_tree vs sync_layout_gaze double from_ui) is filed as FEAT-031 (low priority, non-structural). Plan PLAN-021 delivered its real value in W1+W2; W3 was a misread of the architecture and is correctly dropped rather than forced.

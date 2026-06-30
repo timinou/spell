@@ -1,0 +1,70 @@
+#+TITLE: Lens-based layout core: rose tree + optics collapse the hand-rolled walkers
+#+STATE: DONE
+#+SESSION_ID: 151d6377a5c0a39b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-30T11-44-44-695Z_151d6377a5c0a39b.jsonl]]
+#+CUSTOM_ID: PLAN-021-lens-based-layout-core-rose-tree-optics
+#+COMPLETION_HASH: f953d2ab4c9db822
+
+* Initial Message
+
+can you use lenses to make the layout simpler and more correct by design? e.g. using the rose tree lenses and other stuff. look at the traces in ~/.spell/traces to see how unergonomic it still is (show me in chat in what ways, enlighten me)
+
+PLAN: Make the freeform-TUI layout substrate *correct by design* by introducing a single rose-tree type and a composable lens/zipper optic, collapsing ~9 hand-rolled recursive walkers and 7 duplicated accessors, and exposing path-addressed update to the PTC `lens/` surface.
+
+## Root cause (from trace + code analysis)
+
+The layout is "plain string-keyed maps" with NO Node abstraction and NO optic. Every module re-discovers how to walk/read/update the tree. One concern (tree mechanics) wears nine shapes.
+
+Evidence (traces in ~/.spell/traces, code in lib/spell_agent/tui/):
+1. Every `layout/set` echoes the WHOLE tree back to the LLM, including hole codec maps (`%{"__hole__" => %{"node" => "sym", ...}}`). One slot set → ~370-line echo. (sess-555e turn 3.)
+2. `theme/set` ×9 in one `do` → 9 full-palette dumps; no batch verb, no delta result. (sess-555e turn 2.)
+3. No subtree addressing: `layout/set` replaces a WHOLE slot via `put_slot/3`. To change one leaf you re-emit the entire split. `Lens.put_at/3` exists in Elixir but is NOT exposed to PTC. The `lens/` surface has only focus·focused·focusables·at·tag (tag writes only the focused pane).
+4. 72 walker clauses re-implementing `is_map and not is_struct`/`is_list`/`other` dispatch across: lens.ex (collect·find_node·map_pane_nodes·update_node), surface.ex (place·place_split), layout_diagnostic.ex (scan·place·place_split — a SECOND copy of surface's), hole_diff.ex (collect_deps·do_rebuild·table_walk), hole_resolver.ex (walk·walk_seq_elem), layout_registry.ex (put_slot), materialize.ex.
+5. `Map.get(m, key) || Map.get(m, safe_atom(key))` + private `safe_atom/1` copied verbatim in 7 modules (lens·ptc·surface·render_probe·self_view·layout_registry·layout_diagnostic).
+6. The `%Ui{}` round-trip: lens.ex claims the tree is canonical with gaze-as-tags, but the reaction algebra still speaks `%Ui{}`, so every intra-pane nav is `to_ui(tree) → react → from_ui(tree, ui)`. The struct is a derived mirror marshalled both ways each keystroke — the "state in a side-struct" boundary the philosophy doc claims dissolved.
+
+## Design: lenses fix all six by design
+
+A: One rose-tree + one traversal. `Tree`/`Node` with generic fold/map/update_at/find over {value, children}. 72 walker clauses → ~6. place_split lives once. Children-always-a-list + one key convention enforced in the constructor, not re-checked in 7 safe_atom copies.
+
+B: Slot/path as composable lenses. lens = {get, put}; compose `slot("body") ∘ child(1) ∘ tag("focused")`. The whole layout/+lens/ surface becomes four ops over lenses: layout/set = put through slot(name); lens/at = get; lens/tag = put through focused∘tag(k); **lens/update {:path :fn} = over through a path lens** ← the missing verb (local edit, no whole-subtree resend). Lens laws (get∘put=id, put∘get=id) give the failure ladder a formal spine.
+
+C: Zipper for the focus ring — deletes the %Ui{} round-trip. The ring IS a zipper over focusable leaves: `lens/focus next` = Zipper.right. Focus/cursor/scroll = zipper position + node tags. No to_ui/from_ui marshalling.
+
+D: Small receipts, not tree echoes. Path-addressed over → set/tag return {slot, peek, changed-path}, not the whole tree. Holes print as `~form` tokens, never codec maps.
+
+## Net
+- 9 ad-hoc recursions → 1 Tree fold/map/update
+- 7 safe_atom copies → 1 canonical Node accessor
+- 2 place_split copies → 1
+- %Ui round-trip → zipper position (no mirror)
+- whole-slot resend → lens/update at path
+- whole-tree echo → path-scoped receipt
+
+"Correct by design": structural invariants (children-shape, key convention, get/put coherence) move from re-checked-everywhere to guaranteed-once by the Node type + lens laws.
+
+## Staging (waves)
+- W1 (FEAT, low-risk): Tree/Node module + collapse the 9 walkers; unify safe_atom/get accessor. Behavior-preserving, test-covered.
+- W2 (FEAT): expose lens/update + lens/put (path lenses) to PTC; shrink layout/set + theme/set result shapes (receipts, not echoes).
+- W3 (FEAT, structural): zipper-based focus, retire to_ui/from_ui. Touches the 168-test reaction algebra — biggest blast radius. Stage last.
+- Cross-cutting: playbooks (assumptions/approach for next time) + LLM surface (prompt + result hints) so the capability is communicated.
+
+## Acceptance
+- `bun`-equivalent: `mix compile --warnings-as-errors` clean; `mix test` green (esp. the 168 reaction-algebra tests across W3).
+- Walker-clause count in lib/spell_agent/tui drops materially (target: the 9 listed recursions route through Tree).
+- `safe_atom` defined once, referenced by the rest.
+- PTC `lens/update` demonstrably edits a node at a path without re-emitting its siblings.
+- layout/set + theme/set return compact receipts; verified against a fresh trace.
+
+NOTE [2026-06-30]: Delivered W1+W2 + both cross-cutting deliverables; W3 correctly abandoned (faulty premise, see FEAT-028).
+
+SHIPPED:
+- W1 (FEAT-026): Tui.Tree (rose-tree fold/find/update/collect + canonical Node accessor + the ONE safe_atom) + Tui.SplitSpec (constraint coercion, was byte-identical in 2 files). 9 hand-rolled walkers + 7 safe_atom copies → 1 each. Behavior byte-identical.
+- W2 (FEAT-027): Tree path lenses (get_path/put_path/update_path/path?), LensFn edit-eval host (data/current + % sugar, capability-bounded), lens/update + lens/put PTC verbs, compact receipts (no tree echo, no __hole__ leak), theme/set delta + theme/set-many. The missing "edit a leaf at a path" verb now exists; two-level liveness (edit-time fn + render-time hole) verified end-to-end.
+- Surface (FEAT-029): freeform_tui.md "Edit one leaf — path lenses" section + result hints steering toward surgical edits.
+- Playbooks (FEAT-030): 4 saved (rose-tree-first, optics lens/zipper, side-struct mirror [corrected post-W3], receipts-not-echoes).
+
+ABANDONED:
+- W3 (FEAT-028): premise that intra-pane nav round-trips %Ui per keystroke was verified FALSE (Keys.dispatch is %Ui→%Ui pure, state.ui canonical, tree-tags derived one-way). Retiring %Ui would INTRODUCE the round-trip it claimed to remove. Net-negative across 168 tests → dropped. Micro-redundancy found while verifying → FEAT-031 (low pri).
+
+VERIFICATION: mix compile --warnings-as-errors clean. Full suite 1064/1065 (the 1 failure is a pre-existing session_browser parallel-load flake — 9/9 in isolation, unrelated to layout). 19 new contract tests across lens_path_test (sibling-preservation, two-level liveness, % sugar, failure ladder, hint surface, no __hole__ leak). 0 defp safe_atom in tui/ (canonical Tree.safe_atom).

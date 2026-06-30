@@ -1,0 +1,28 @@
+#+TITLE: LLM surface: teach the lens/path capability in prompt + result hints
+#+STATE: DONE
+#+SESSION_ID: 151d6377a5c0a39b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-30T11-44-44-695Z_151d6377a5c0a39b.jsonl]]
+#+CUSTOM_ID: FEAT-029-llm-surface-teach-the-lens-path-capabili
+#+COMPLETION_HASH: a295b0610f719144
+
+* Initial Message
+
+can you use lenses to make the layout simpler and more correct by design? e.g. using the rose tree lenses and other stuff. look at the traces in ~/.spell/traces to see how unergonomic it still is (show me in chat in what ways, enlighten me)
+
+FEAT (PLAN-021, cross-cutting). Communicate the new capability + best practices to the LLM — both in the system prompt and in how results are shown/hinted through the conversation. Depends on W2 (the surface it teaches must exist). Design MUST be shown to the user before confirming/building.
+
+## Target files
+- priv/prompts/freeform_tui.md — add a section on path-addressed editing (lens/update vs whole-slot layout/set), with the "edit a leaf, don't resend the subtree" best practice + a worked example. Keep the reflected widget/theme tables (no drift).
+- lib/spell_agent/tui/layout_registry.ex + lens.ex result shapes — the in-conversation hint surface: receipts carry a one-line "what changed + how to address it next" nudge.
+- Possibly lib/spell_agent/tui/prelude.ex if the table needs a path-lens row.
+
+## Change
+- Prompt: a new "Edit in place — path lenses" subsection. Teach: layout/set = whole slot (first build); lens/update {:path :fn} = surgical edit (subsequent tweaks). Show the path vocabulary. Anti-pattern: re-emitting a whole split to change one title.
+- Result hints: success receipts include a compact `hint` field pointing at the path just touched and the verb to tweak it again — so the NEXT turn naturally reaches for lens/update. Holes shown as `~form`, never codec.
+
+## Acceptance
+- Prompt diff shown to user and approved BEFORE build.
+- A fresh trace shows: agent sets a slot, then edits a leaf via lens/update (not a full resend) — i.e. the surface successfully steers behavior.
+- No `__hole__` codec leaks in any result shown to the LLM.
+
+NOTE [2026-06-30]: Done. Added "Edit one leaf — path lenses" section to priv/prompts/freeform_tui.md (after tmpl::, before cells): path vocabulary, lens/put + lens/update, the LIVE-leaf emphasis (canonical `(quote (tmpl:: … ~hole …))` form, two-clocks explanation), WRONG/RIGHT anti-pattern, path_missing diagnostic, theme/set-many coda. Added lens/update|put to the namespace bullet list. Result hints: set_result + edit_receipt carry an :hint steering the next turn toward surgical edits; receipts are compact (no tree echo) and never leak __hole__ codec. 3 hint-surface tests added (11 total in lens_path_test, all green). Prompt flows through Prelude.text/0 reflection unchanged; session_test prompt assertions green. Two minor calls made solo per recommendation: one blessed fn form (inner-tmpl::, avoids ~~ trap), verbose hints retained.

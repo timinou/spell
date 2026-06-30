@@ -1,0 +1,25 @@
+#+TITLE: Playbooks: lens-first layout design — right assumptions for next time
+#+STATE: DONE
+#+SESSION_ID: 151d6377a5c0a39b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-30T11-44-44-695Z_151d6377a5c0a39b.jsonl]]
+#+CUSTOM_ID: FEAT-030-playbooks-lens-first-layout-design-right
+#+COMPLETION_HASH: 416deb346798c536
+
+* Initial Message
+
+can you use lenses to make the layout simpler and more correct by design? e.g. using the rose tree lenses and other stuff. look at the traces in ~/.spell/traces to see how unergonomic it still is (show me in chat in what ways, enlighten me)
+
+FEAT (PLAN-021, cross-cutting). Distil the assumptions + approach so a future implementation of a tree/render substrate is exquisite from the get-go. Written to project memory as playbooks (memory tool, kind=playbook), linked DISTILLED_FROM this plan + the W1/W2/W3 episodes.
+
+## Playbooks to write
+1. "Rose-tree substrates: define the Node + one traversal FIRST" — the anti-pattern is plain-map nodes with shape-dispatch re-derived per call site (we found 72 clauses, 9 recursions, 7 safe_atom copies). Lead with: one Node accessor, one generic fold/map/update, is_struct guard for leaf widgets, key convention in the constructor.
+2. "Optics over trees: lens = {get,put}, compose for paths; zipper for a moving cursor" — when to reach for a lens (addressable edit) vs a zipper (a position that moves: focus ring, cursor). Lens laws as the failure-ladder spine. The missing-verb smell: if every edit resends a whole subtree, you lack an `over`-at-path.
+3. "Don't mirror canonical state in a side-struct" — the %Ui{} round-trip lesson: if state is 'canonical on the tree' but a derived struct is marshalled both ways each event, the boundary wasn't dissolved, it was wrapped. Make the cursor a position INTO the canonical structure.
+4. "Agent-facing result shapes: receipts not echoes" — never echo a whole structure for a scoped change; never leak internal codec (`__hole__`) into an LLM-visible result; carry a path + a next-verb hint so the surface steers the next action.
+
+## Acceptance
+- 4 playbooks saved via memory tool (kind=playbook), each with a concrete trigger + move + the evidence from this work.
+- Linked to PLAN-021 and the implementation episodes via DISTILLED_FROM.
+- memory search for "rose tree" / "layout lens" / "side-struct mirror" surfaces them.
+
+NOTE [2026-06-30]: Done. 4 playbooks saved (kind=playbook, DISTILLED_FROM PLAN-021 + the wave FEATs): (1) Rose-tree substrates: define Node + one traversal first; (2) Optics over trees: lens for addressable edits, zipper for moving cursor (incl. the honest no-op trap); (3) Don't mirror canonical state in a side-struct (the %Ui round-trip lesson, wrapped-vs-dissolved test); (4) Agent-facing result shapes: receipts not echoes. Each carries trigger + move + measured evidence from this work. Files confirmed on disk in ~/.spell/personal/playbooks/. (memory search verification hit a transient embedding-daemon socket timeout — saves themselves all returned ids/paths.)

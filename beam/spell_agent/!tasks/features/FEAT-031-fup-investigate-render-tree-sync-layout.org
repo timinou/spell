@@ -1,0 +1,25 @@
+#+TITLE: FUP: investigate render_tree/sync_layout_gaze double from_ui (micro-redundancy)
+#+STATE: ITEM
+#+SESSION_ID: 151d6377a5c0a39b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-30T11-44-44-695Z_151d6377a5c0a39b.jsonl]]
+#+CUSTOM_ID: FEAT-031-fup-investigate-render-tree-sync-layout
+
+* Initial Message
+
+can you use lenses to make the layout simpler and more correct by design? e.g. using the rose tree lenses and other stuff. look at the traces in ~/.spell/traces to see how unergonomic it still is (show me in chat in what ways, enlighten me)
+
+FOLLOW-UP (deferred from PLAN-021 W3 abandonment).
+
+While verifying the W3 premise, found a SMALL real redundancy (not the W3 vision):
+- `App.sync_layout_gaze/1` (app.ex:748) writes the gaze into `LayoutRegistry.tree` via `from_ui` on every `reproject` (per event).
+- `App.render_tree/1` (app.ex:284) reads that same registry tree (`live_layout_tree`) and applies `from_ui` AGAIN per frame.
+
+If sync already wrote the tags, the second from_ui in render_tree may be partly redundant per frame. Eliminating it is a micro-optimization with real risk (the two paths can diverge — e.g. a frame without a preceding reproject), so it is explicitly NOT urgent and NOT structural.
+
+## Why this is a FUP, not W3
+W3 ("zipper focus ring, retire the %Ui round-trip") was scoped on a FAULTY premise: that intra-pane nav round-trips `to_ui→react→from_ui` per keystroke. Verified false — the keystroke path is `Keys.dispatch(%Ui{}) → %Ui{}`, pure, no tree; `to_ui` is on ZERO keystroke-path call sites (only harness/* tools + reset). `state.ui` is the CANONICAL gaze; the tree's gaze-tags are a one-directional derived projection (`from_ui`, once per event/frame). Retiring %Ui{} would force on-demand `to_ui` for the reaction algebra — INTRODUCING the round-trip W3 claimed to remove, across 17 test files / 168 reaction tests. ∴ W3 abandoned as net-negative.
+
+## Acceptance (if ever picked up)
+- Measure whether render_tree's from_ui is redundant given sync_layout_gaze (add a frame-without-reproject test first).
+- Only then consider collapsing, with the divergence case covered.
+- Do NOT retire %Ui{} or introduce a tree→Ui per-keystroke derivation.

@@ -1,0 +1,41 @@
+#+TITLE: W1: Tree/Node rose-tree + unified accessor — collapse 9 hand-rolled walkers
+#+STATE: DONE
+#+SESSION_ID: 151d6377a5c0a39b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-30T11-44-44-695Z_151d6377a5c0a39b.jsonl]]
+#+CUSTOM_ID: FEAT-026-w1-tree-node-rose-tree-unified-accessor
+#+COMPLETION_HASH: 7448b37cf9dff1af
+
+* Initial Message
+
+can you use lenses to make the layout simpler and more correct by design? e.g. using the rose tree lenses and other stuff. look at the traces in ~/.spell/traces to see how unergonomic it still is (show me in chat in what ways, enlighten me)
+
+FEAT (PLAN-021 W1). Behavior-preserving refactor. Introduce the canonical layout-node abstraction and one generic traversal; route the scattered hand-rolled recursions through it.
+
+## Target files
+- NEW: lib/spell_agent/tui/tree.ex — the rose-tree + generic fold/map/update_at/find/collect + canonical Node accessor (get/put/children/slot/tags/kind) with the string||atom key convention and ONE safe_atom.
+- lib/spell_agent/tui/lens.ex — replace collect·find_node·map_pane_nodes·update_node with Tree calls; drop local safe_atom/get/put.
+- lib/spell_agent/tui/surface.ex — route place/place_split children recursion through Tree; drop local get/safe_atom.
+- lib/spell_agent/tui/layout_diagnostic.ex — share the SAME place_split/constraint logic as surface (extract once); drop the second copy + local get/safe_atom.
+- lib/spell_agent/tui/hole_diff.ex, hole_resolver.ex — collect_deps/do_rebuild/table_walk/walk route through Tree generic walk where shape-dispatch is identical (keep hole-specific leaf handling).
+- lib/spell_agent/tui/layout_registry.ex — put_slot via Tree.update_at/lens; drop local strget/safe_atom.
+- render_probe.ex, self_view.ex, reaction/ptc.ex — drop duplicated strget/safe_atom, use Node accessor.
+
+## Change
+- Define a node as {type, slot, tags, children, ...fields} over string-keyed maps (no struct churn — keep wire shape). Tree fns operate on the map shape but centralize the recursion + key access.
+- One `Tree.walk/2`, `Tree.map/2`, `Tree.update_at/3` (path or predicate), `Tree.find/2`, `Tree.collect/2`.
+- One `Node.get/2` (string||atom), `Node.children/1`, `Node.slot/1`, `Node.tags/1`, `Node.kind/1`, `Node.safe_atom/1`.
+
+## Edge cases
+- is_struct guard MUST stay (widgets are structs — never recurse into them as maps).
+- Splice/hole leaves in hole_diff/hole_resolver are NOT plain nodes — their leaf clauses stay; only the map/list/other shape-dispatch is shared.
+- Materialize's struct walk is a different concern (map→struct), likely OUT of scope — confirm before touching.
+- Atom-DoS posture (Ui.safe_*) preserved: safe_atom uses to_existing_atom + rescue.
+
+## Acceptance
+- mix compile --warnings-as-errors clean.
+- mix test green (full suite).
+- safe_atom defined exactly once (grep shows 1 def + references).
+- The 4 lens.ex walkers, 2 surface place fns, layout_diagnostic's duplicate place_split, layout_registry put_slot all delegate to Tree.
+- No behavior change: layout/show, layout/set, lens/focus, render output byte-identical on existing tests.
+
+NOTE [2026-06-30]: Done. Created Tui.Tree (canonical rose-tree fold/find/update/collect + Node accessor + the ONE safe_atom) and Tui.SplitSpec (the constraint/direction/split coercion extracted from its two byte-identical copies). Delegated: lens.ex (4 walkers → Tree), layout_registry put_slot, surface place_split coercion, layout_diagnostic (dropped its "kept in sync with Surface" copy), render_probe/self_view/cell.verb accessors, reaction/ptc safe_atom. Result: 0 `defp safe_atom` left in tui/ (was 7); all 7 build_constraint clauses now in split_spec.ex only. mix compile --warnings-as-errors clean. TUI suite 417 pass (seed 0). 3 hole-eval-timeout flakes under full-suite parallel load are pre-existing (200ms PtcRunner hole budget), unrelated — pass green in isolation.

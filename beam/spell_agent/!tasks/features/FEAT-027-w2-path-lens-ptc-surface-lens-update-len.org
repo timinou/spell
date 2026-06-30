@@ -1,0 +1,53 @@
+#+TITLE: W2: Path-lens PTC surface — lens/update + lens/put + compact receipts
+#+STATE: DONE
+#+SESSION_ID: 151d6377a5c0a39b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-30T11-44-44-695Z_151d6377a5c0a39b.jsonl]]
+#+CUSTOM_ID: FEAT-027-w2-path-lens-ptc-surface-lens-update-len
+#+COMPLETION_HASH: a73664921501b816
+
+* Initial Message
+
+can you use lenses to make the layout simpler and more correct by design? e.g. using the rose tree lenses and other stuff. look at the traces in ~/.spell/traces to see how unergonomic it still is (show me in chat in what ways, enlighten me)
+
+FEAT (PLAN-021 W2). New ergonomics on top of W1's Tree/lens. Depends on W1.
+
+## Target files
+- lib/spell_agent/tui/lens.ex — add path-lens composition (slot ∘ child(i) ∘ tag(k)); expose put_at to PTC tools/1 as lens/put and lens/update.
+- lib/spell_agent/tui/layout_registry.ex — shrink set_result + theme result shapes to compact receipts.
+- PTC surface registration (wherever lens/* tools are wired).
+
+## Change
+- lens/update {:path [...] :fn <quoted form>} — apply a fn over the node at a path; return only the changed-path receipt.
+- lens/put {:path [...] :source <node>} — replace node at path (sibling-preserving).
+- A path = a vector addressing into the tree: ["body" 1 "tags" "focused"] style, resolved by composed lenses.
+- layout/set + lens/* success returns {:slot :path :peek} — NOT the whole tree. Holes rendered as `~form` tokens (reuse the tmpl formatter), never `__hole__` codec maps.
+- theme/set: return only the changed slot {slot, fg/bg} + optionally batch theme/set-many for the ×9 case.
+
+## Edge cases
+- Path out of range / wrong type → diagnostic naming the path segment, last-good preserved (reuse W1 failure ladder).
+- lens/update fn is a quoted, capability-bounded form (same posture as cell :query — no tool/, pure). Confirm the eval boundary matches HoleResolver.
+- A path into a hole leaf: reject with a clear message (can't address inside a frozen form).
+- Receipt peek must still run the render probe (FEAT-022 contract) — keep the peek, drop the tree echo.
+
+## Acceptance
+- lens/update edits a deep node without re-emitting siblings (test: set a 3-pane body, update pane[1] title via path, assert panes 0/2 byte-identical).
+- layout/set result has no `__hole__` substring; carries :peek + :path.
+- theme/set returns a per-call delta, not the full palette.
+- mix test green.
+
+## DECISION (current-value binding): `data/current` is the primitive; `%` is sugar.
+
+`lens/update`'s `:fn` is a deferred form, NOT a lambda — consistent with every other Spell transform (tmpl:: holes, cell :query, reactions) which receive input through the ambient `data/*` environment, never a positional param.
+
+The current value at the addressed path is bound as `data/current` in the eval env (same capability-bounded host as HoleResolver). `%` (bare, top-level) is READER SUGAR that expands to `data/current` BEFORE the form is frozen to codec data, so the persisted form is uniform `data/*`.
+
+Why this grounding (meta-programming vision):
+- ONE evaluation model — open terms over data/*, not a second lambda paradigm.
+- LEGIBILITY: HoleDiff.dependencies/1 statically reads `data/<k>` leaves to drive the cache/cell dependency machinery. Binding as `data/current` makes a transform's dependency on the focused value VISIBLE to that same analysis for free; a `%`-lambda arg would be opaque to it. The transform stays inspectable DATA, not opaque code.
+- COMPOSES: `data/current` sits in the same bag as `data/status`/`data/ui`, so a transform can read the current value AND run-state in one expression. `%` only yields the one arg — `data/current` is the general case, `%` the degenerate one-arg shortcut.
+
+Surface = `%` (terse, what the agent writes, primary). Ground = `data/current` (what it means, what the runtime/dep-analysis sees).
+
+Edge to handle: `%` already means anon-fn first-arg inside `#(…)`. Scope the sugar to a BARE top-level `%`; inside `#(…)` it keeps Clojure semantics. Pin with a test (`~(str % …)` expands; `~#(str %1 %2)` untouched).
+
+NOTE [2026-06-30]: Done. Tree path lenses (get_path/put_path/update_path/path?), LensFn edit-eval host (data/current bound + % sugar, capability-bounded, 200ms), lens/update + lens/put registry tools, compact receipts (set_result + edit_receipt: ok/slot/path/peek/hint — no tree echo, no __hole__ codec leak), theme/set delta + theme/set-many batch. 8 new contract tests (lens_path_test.exs) green: sibling-preservation, two-level liveness (canonical fn form `(quote (tmpl:: {… ~hole}))` — edit-time builds, inner ~hole stays live, re-resolves 11→12), % sugar, path_missing/unknown_slot/bad_layout ladder, path-scoped receipt. Verified lens/put routes through the real analyzer/tools map. TUI suite 424/425 (1 pre-existing session_browser flake, unrelated). Surface forms verified against live runtime before teaching.
