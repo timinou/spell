@@ -73,9 +73,31 @@ defmodule SpellAgent.Hist.Lens do
                    {name, File.read!(Path.join(@lens_dir, file))}
                  end)
 
+  # PLAN-018: the REDUCER policies ship as PTC-Lisp data beside the lenses, loaded
+  # by the same @external_resource harness so an edit recompiles and the agent can
+  # read/fork them at runtime (homoiconic compaction policy). `reducibility` is the
+  # cheap estimate the rate-controller reads; the actual `reduce` fold lands in W4.
+  @reducer_dir Path.join([:code.priv_dir(:spell_agent) |> to_string(), "hist", "reducers"])
+
+  @reducers %{
+    "reducibility" => "reducibility.ptc"
+  }
+
+  for {_name, file} <- @reducers do
+    @external_resource Path.join(@reducer_dir, file)
+  end
+
+  @reducer_sources (for {name, file} <- @reducers, into: %{} do
+                      {name, File.read!(Path.join(@reducer_dir, file))}
+                    end)
+
   @doc "The default lens library: verb name (no `hist/` prefix) => PTC-Lisp source."
   @spec sources() :: %{optional(String.t()) => String.t()}
   def sources, do: @lens_sources
+
+  @doc "The reducer-policy library: verb name (no `hist/` prefix) => PTC-Lisp source."
+  @spec reducer_sources() :: %{optional(String.t()) => String.t()}
+  def reducer_sources, do: @reducer_sources
 
   @doc """
   The `hist/*` lens verbs for a session, as a tool map to merge into the agent's

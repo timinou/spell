@@ -1,0 +1,81 @@
+;; reducibility estimate (PLAN-018 W3) — a CHEAP analysis, NOT a reduction.
+;;
+;; Answers "how much could the lossless fold shed, and is it worth a keyframe?"
+;; WITHOUT performing any reduction and WITHOUT any inference. The rate-controller
+;; (W5) reads this every turn to decide reduce-vs-cache from the closed-form
+;; break-even; doing the actual fold here would defeat the point (the estimate
+;; must be far cheaper than the thing it estimates).
+;;
+;; Returns:
+;;   {"tok_full"          F   ; estimated tokens of the full projected tape
+;;    "tok_reduced"       R   ; estimated tokens after the lossless tier
+;;    "reducible_tokens"  F-R ; the shed estimate (>= 0)
+;;    "nodes"             N   ; nodes considered
+;;    "tool_calls"        C}  ; realized tool calls across the tape
+;;
+;; Token estimate mirrors the runtime's len/4 rule (Metrics.estimate_tokens):
+;; ~4 chars per token. We approximate per-node content as form_src + each tool
+;; call's rendered result, since those dominate a coding tape.
+;;
+;; The reducible estimate is the sum of three CONSERVATIVE, inference-free signals
+;; that the W4 lossless transforms would act on:
+;;   * tool-CSE          : duplicate (name,args) tool calls beyond the first copy
+;;                         — their result payloads collapse to a reference.
+;;   * stale-read-collapse: repeated reads of the same (name,args) beyond the last
+;;                         — superseded reads drop (errors are NOT counted here,
+;;                         matching the errors-exempt invariant).
+;;   * dead-print        : prints are not modeled in the projection, so they are
+;;                         omitted from the estimate (conservative: under-counts,
+;;                         never over-promises).
+;; Counting duplicates is O(tape); it never realizes a reduction.
+
+(let [nodes data/nodes
+
+      ;; ~4 chars/token, min 1 for any non-empty string (Metrics.estimate_tokens).
+      est-tokens (fn [s]
+                   (if (and (string? s) (> (count s) 0))
+                     (max 1 (quot (count s) 4))
+                     0))
+
+      ;; A stable key for a tool call: name + a canonical render of its args.
+      ;; Identical keys are exact duplicates (the {:hash,h} coarse key the W4 CSE
+      ;; refines). pr-str gives a deterministic term rendering, no inference.
+      call-key (fn [c] (str (get c "name") " " (pr-str (get c "args"))))
+
+      ;; tokens a single tool call's result contributes.
+      result-tokens (fn [c] (est-tokens (json/generate-string (get c "result"))))
+
+      ;; every realized tool call across the tape, with its node seq for ordering.
+      all-calls (mapcat (fn [n]
+                          (map (fn [c] (assoc c "__seq" (get n "seq")))
+                               (get n "tool_calls")))
+                        nodes)
+
+      ;; full-tape token estimate: program text + every tool result.
+      tok-form  (reduce (fn [a n] (+ a (est-tokens (get n "form_src")))) 0 nodes)
+      tok-calls (reduce (fn [a c] (+ a (result-tokens c))) 0 all-calls)
+      tok-full  (+ tok-form tok-calls)
+
+      ;; group calls by identity; every COPY beyond the first is CSE-reducible
+      ;; (its result payload becomes a reference). Errors are exempt: a failed call
+      ;; is never collapsed, so we only group ok-status calls.
+      ok-calls   (filter (fn [c] (= (get c "status") "ok")) all-calls)
+      by-key     (group-by call-key ok-calls)
+      dup-tokens (reduce (fn [a [_k cs]]
+                           ;; shed = sum of result tokens of all-but-one copy.
+                           (if (> (count cs) 1)
+                             (+ a (reduce (fn [b c] (+ b (result-tokens c)))
+                                          0
+                                          (rest cs)))
+                             a))
+                         0
+                         by-key)
+
+      reducible (max 0 dup-tokens)
+      tok-reduced (max 0 (- tok-full reducible))]
+
+  {"tok_full" tok-full
+   "tok_reduced" tok-reduced
+   "reducible_tokens" reducible
+   "nodes" (count nodes)
+   "tool_calls" (count all-calls)})

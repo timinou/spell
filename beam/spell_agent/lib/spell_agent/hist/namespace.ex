@@ -36,7 +36,7 @@ defmodule SpellAgent.Hist.Namespace do
   stored thing speak one tongue.
   """
 
-  alias SpellAgent.Hist.{Crystallize, Lens, Query, Reconstitute, Spans, Tools, Window}
+  alias SpellAgent.Hist.{Crystallize, Lens, Query, Reconstitute, Refold, Spans, Tools, Window}
   alias SpellAgent.Hist.Store
 
   @doc """
@@ -67,7 +67,15 @@ defmodule SpellAgent.Hist.Namespace do
       "hist/recall" => fn args -> Window.recall(impl, session_id, arg(args, "like") || "") end,
       "hist/inventory" => fn _args -> inventory(impl, session_id) end,
       "hist/promote" => fn args -> promote(impl, args) end,
-      "hist/crystallize" => fn args -> crystallize(impl, session_id, args) end
+      "hist/crystallize" => fn args -> crystallize(impl, session_id, args) end,
+      # PLAN-018 W3: refold the node DAG back into a replayable native tape (the
+      # high-fidelity inverse of Recorder; NOT the lossy chat lens). Returns the
+      # message list, or an {"err" ...} map mirroring the other reconstitute verbs.
+      "hist/refold" => fn args -> refold(impl, session_id, args) end,
+      # PLAN-018 W3: the cheap reducibility ESTIMATE (tok_full/tok_reduced/
+      # reducible_tokens) the rate-controller reads. Runs the reducibility.ptc
+      # policy over the projection — estimate only, no reduction, no inference.
+      "hist/reducibility" => fn args -> reducibility(impl, session_id, args) end
     }
 
     Map.merge(elixir, Lens.tools(impl, session_id))
@@ -226,6 +234,33 @@ defmodule SpellAgent.Hist.Namespace do
     case Crystallize.crystallize(impl, session_id, node_ids, attrs) do
       {:ok, crystal} -> crystal
       {:error, reason} -> %{"err" => to_string(reason)}
+    end
+  end
+
+  # PLAN-018 W3: refold the node DAG -> a replayable native tape. `cursor`
+  # defaults to :main. Returns a plain message list (JSON-able) so a program pipes
+  # it like any tool result; an error becomes an {"err" ...} map, never a raise.
+  defp refold(impl, session_id, args) do
+    case Refold.to_tape(impl, session_id, cursor_arg(args)) do
+      {:ok, tape} -> tape
+      {:error, reason} -> %{"err" => to_string(reason)}
+    end
+  end
+
+  # PLAN-018 W3: run the reducibility ESTIMATE policy over the projection. A thin
+  # pass-through to the reducer .ptc via Lens.run (estimate only, no reduction).
+  defp reducibility(impl, session_id, args) do
+    source = Map.get(Lens.reducer_sources(), "reducibility")
+    Lens.run(impl, session_id, source, args || %{})
+  end
+
+  # Resolve a :cursor arg to a known atom lane, defaulting to :main. Never mints a
+  # new atom from agent input (atom-table safety, same posture as safe_atom_get).
+  defp cursor_arg(args) do
+    case arg(args, "cursor") do
+      "main" -> :main
+      :main -> :main
+      _ -> :main
     end
   end
 
