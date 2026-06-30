@@ -71,8 +71,13 @@ defmodule SpellAgent.Hist.Spill do
   program is restorable, and its rendered result exceeds the threshold.
   """
   @spec spillable?(Node.t(), non_neg_integer()) :: boolean()
-  def spillable?(%Node{status: status, form: form, result: result}, threshold) do
-    status == :ok and Effect.restorable_program?(form) and
+  def spillable?(%Node{status: status, sees: sees, result: result}, threshold) do
+    # Restorability is judged from the node's REALIZED tool calls (sees) via the
+    # hardened Effect.classify/1, NOT a re-derivation from the form AST: that
+    # reuses the one classifier (mutating-predicate detection, pipe most-dangerous
+    # rule, conservative :unknown) so a `find -delete`, an unparsed shell call, or
+    # a check-mixed-with-unknown is never wrongly judged restorable (S6 finding).
+    status == :ok and Effect.restorable_node?(sees) and
       result_tokens(result) > threshold
   end
 

@@ -69,51 +69,43 @@ defmodule SpellAgent.Hist.Effect do
   def read?(see), do: classify(see) == :read
 
   @doc """
-  Classify a NODE's program (its `form`) by its most-dangerous effect.
+  Classify a NODE by the most-dangerous effect across its REALIZED tool calls.
 
-  Unlike `classify/1` (one realized `sees` entry), this reads the whole program
-  AST: every shell command head (`Lens.shell_heads/1`) and every native tool call
-  (`Lens.tool_call_names/1`). A program is :read only if EVERY effect it performs
-  is a read; any mutation/check/external/unknown effect dominates. Used by W6's
-  result-spill to decide RESTORABILITY — only a `:read` (or `:check`) program's
-  output is reproducible, so only its result may be spilled to a re-fetchable stub.
+  Reads the node's `sees` (the actual calls it ran, with realized argv) and runs
+  each through `classify/1` — the SAME hardened classifier the W4 reducer uses, so
+  the mutating-predicate detection (find -delete), the most-dangerous-stage pipe
+  rule, and the conservative :unknown default all apply uniformly. A node is
+  classified by `most_dangerous/1` over its sees' classes; a node that ran NO tool
+  call (pure computation) is :unknown.
+
+  Why `sees`, not the form AST: the realized call carries the actual argv (so a
+  computed/dynamic shell head is concrete, not unparseable), and reusing
+  `classify/1` means there is ONE classifier, not a second, laxer one (the S6
+  swarm found the form-based variant under-detected mutations and unknowns).
   """
-  @spec classify_program(term()) :: class()
-  def classify_program(form) do
-    shell_classes = form |> SpellAgent.Hist.Lens.shell_heads() |> Enum.map(&head_class/1)
-
-    # The non-shell native tool calls. `sh`/`sh-pipe` are EXCLUDED here — they are
-    # shell wrappers already classified by their command head (shell_classes
-    # above); counting their bare name as an :unknown tool would wrongly dominate
-    # a real read program (e.g. `(tool/sh {:argv ["cat" ...]})` would become
-    # :unknown instead of :read).
-    tool_classes =
-      form
-      |> SpellAgent.Hist.Lens.tool_call_names()
-      |> Enum.reject(&(&1 in ["sh", "sh-pipe"]))
-      |> Enum.map(&tool_class/1)
-
-    case shell_classes ++ tool_classes do
+  @spec classify_node([map()]) :: class()
+  def classify_node(sees) when is_list(sees) do
+    case sees do
       [] -> :unknown
-      classes -> most_dangerous(classes)
+      _ -> sees |> Enum.map(&classify/1) |> most_dangerous()
     end
   end
+
+  def classify_node(_), do: :unknown
 
   @doc """
-  Whether a program's RESULT is restorable — reproducible by re-running, so it is
-  safe to spill to a re-fetchable stub (W6). A read or check is restorable; a
-  mutation, external, or unknown program is NOT (no reproducible path back).
-  """
-  @spec restorable_program?(term()) :: boolean()
-  def restorable_program?(form), do: classify_program(form) in [:read, :check]
+  Whether a node's RESULT is restorable — reproducible by re-running, so it is safe
+  to spill to a re-fetchable stub (W6). ONLY a pure-`:read` node qualifies: every
+  realized call is a read (idempotent + reproducible). A mutation, external,
+  check, or unknown effect makes it non-restorable.
 
-  defp tool_class(name) do
-    cond do
-      name in @read_tools -> :read
-      name in @mutation_tools -> :mutation
-      true -> :unknown
-    end
-  end
+  `:check` is deliberately EXCLUDED (unlike a first instinct): a test/lint run is
+  NOT reproducible byte-for-byte (flaky tests, timing, nondeterministic output),
+  so spilling its result to a re-fetchable stub could recover different bytes.
+  Only a read is safely restorable (S6 swarm finding).
+  """
+  @spec restorable_node?([map()]) :: boolean()
+  def restorable_node?(sees), do: classify_node(sees) == :read
 
   # --- shell classification ---------------------------------------------------
 

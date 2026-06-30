@@ -27,13 +27,18 @@ defmodule SpellAgent.Hist.ReduceLossyTest do
       form: Keyword.get(opts, :form, nil),
       form_src: Keyword.get(opts, :form_src, "(noop)"),
       binds: Keyword.get(opts, :binds, %{}),
+      sees: Keyword.get(opts, :sees, []),
       result: Keyword.get(opts, :result, nil)
     }
   end
 
+  defp see(name, argv, result \\ "ok") do
+    %{name: name, args: %{"argv" => argv}, result: result}
+  end
+
   # A big restorable read program (cat) + a big result that exceeds the threshold.
   defp big_read(seq, result) do
-    node(seq, form: {:tool_call, "sh", [{:map, [{{:keyword, "argv"}, {:vector, [{:string, "cat"}, {:string, "f"}]}}]}]}, result: result)
+    node(seq, form_src: "(tool/sh {:argv [\"cat\" \"f\"]})", sees: [see("sh", ["cat", "f"])], result: result)
   end
 
   @big String.duplicate("x", 4_000)
@@ -70,14 +75,14 @@ defmodule SpellAgent.Hist.ReduceLossyTest do
 
   describe "no-spill invariants" do
     test "an external program's big result is NEVER spilled (no path back)" do
-      external = node(0, form: {:tool_call, "sh", [{:map, [{{:keyword, "argv"}, {:vector, [{:string, "date"}]}}]}]}, result: @big)
+      external = node(0, sees: [see("sh", ["date"])], result: @big)
       [reduced] = Spill.spill([external])
       # date is :external -> not restorable -> kept verbatim.
       assert reduced.result == @big
     end
 
     test "a mutation program's big result is NEVER spilled" do
-      mutation = node(0, form: {:tool_call, "sh", [{:map, [{{:keyword, "argv"}, {:vector, [{:string, "rm"}, {:string, "f"}]}}]}]}, result: @big)
+      mutation = node(0, sees: [see("sh", ["rm", "f"])], result: @big)
       [reduced] = Spill.spill([mutation])
       assert reduced.result == @big
     end
@@ -85,6 +90,38 @@ defmodule SpellAgent.Hist.ReduceLossyTest do
     test "a FAILED turn's big result is kept verbatim (errors exempt)" do
       failed = %{big_read(0, @big) | status: :error}
       [reduced] = Spill.spill([failed])
+      assert reduced.result == @big
+    end
+  end
+
+  describe "S6 swarm: restorability is conservative" do
+    test "a find -delete (mutation) result is NOT spilled" do
+      n = node(0, sees: [see("sh", ["find", "tmp", "-delete"])], result: @big)
+      [reduced] = Spill.spill([n])
+      assert reduced.result == @big
+    end
+
+    test "a check (mix test) result is NOT spilled (not byte-reproducible)" do
+      n = node(0, sees: [see("sh", ["mix", "test"])], result: @big)
+      [reduced] = Spill.spill([n])
+      assert reduced.result == @big
+    end
+
+    test "a read MIXED with an external call is NOT spilled (external dominates)" do
+      n = node(0, sees: [see("sh", ["cat", "f"]), see("sh", ["curl", "x"])], result: @big)
+      [reduced] = Spill.spill([n])
+      assert reduced.result == @big
+    end
+
+    test "a read MIXED with an unknown tool is NOT spilled (unknown dominates)" do
+      n = node(0, sees: [see("sh", ["cat", "f"]), %{name: "mystery", args: %{}, result: "ok"}], result: @big)
+      [reduced] = Spill.spill([n])
+      assert reduced.result == @big
+    end
+
+    test "a node with NO realized tool call (pure computation) is NOT spilled" do
+      n = node(0, sees: [], result: @big)
+      [reduced] = Spill.spill([n])
       assert reduced.result == @big
     end
   end
