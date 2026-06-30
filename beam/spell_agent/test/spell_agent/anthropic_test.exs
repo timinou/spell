@@ -140,6 +140,18 @@ defmodule SpellAgent.AnthropicTest do
       assert marks.system == 1
       assert marks.messages == 2
       assert marks.total == 4
+
+      # The two MARKED user turns must be the most-recent pair (u2, u3) \u2014 the
+      # rolling tail anchor \u2014 not the oldest pair. An aggregate count alone would
+      # pass a regression that marked u1/u2 and lost the newest turn's cache.
+      marked_texts =
+        for m <- body["messages"],
+            is_list(m["content"]),
+            b <- m["content"],
+            Map.has_key?(b, "cache_control"),
+            do: b["text"]
+
+      assert Enum.sort(marked_texts) == ["u2", "u3"]
     end
 
     test "never exceeds four breakpoints even when the caller pre-marked blocks" do
@@ -162,6 +174,46 @@ defmodule SpellAgent.AnthropicTest do
       [msg] = body["messages"]
       assert is_list(msg["content"])
       assert Enum.any?(msg["content"], &Map.has_key?(&1, "cache_control"))
+    end
+
+    test "billing cch is stable when the caller pre-marks system blocks differently" do
+      # Same system TEXT, different cache_control metadata turn-to-turn. The cch
+      # digest must hash text only, so the position-0 billing block is identical.
+      # (S1 swarm finding: hashing raw blocks let stripped metadata perturb cch.)
+      turn_a =
+        Anthropic.build_body("claude-sonnet-4", %{
+          system: [%{"type" => "text", "text" => "S"}],
+          messages: [user("hi")]
+        })
+
+      turn_b =
+        Anthropic.build_body("claude-sonnet-4", %{
+          system: [%{"type" => "text", "text" => "S", "cache_control" => %{"type" => "ephemeral"}}],
+          messages: [user("hi")]
+        })
+
+      [billing_a | _] = turn_a["system"]
+      [billing_b | _] = turn_b["system"]
+      assert billing_a["text"] == billing_b["text"]
+    end
+
+    test "an atom-keyed caller cache_control is cleared so the cap cannot be exceeded" do
+      # A caller may hand system blocks with atom keys. If a non-last block keeps
+      # its :cache_control, the placed tool+system+2-user marks push past 4 and
+      # Anthropic hard-rejects. (S1 swarm finding.)
+      body =
+        Anthropic.build_body("claude-sonnet-4", %{
+          system: [
+            %{type: "text", text: "S0", cache_control: %{type: "ephemeral"}},
+            %{type: "text", text: "S1"}
+          ],
+          tools: [%{"name" => "t", "description" => "d", "input_schema" => %{}}],
+          messages: [user("u1"), assistant("a1"), user("u2")]
+        })
+
+      # No surviving atom-keyed breakpoint, and the total is within budget.
+      refute Enum.any?(body["system"], &Map.has_key?(&1, :cache_control))
+      assert cache_marks(body).total <= 4
     end
   end
 

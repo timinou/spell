@@ -154,12 +154,14 @@ defmodule SpellAgent.Anthropic do
       end
 
     if inject_claude_code?(model) do
-      # Seed the cch digest on the STABLE system prompt ONLY — never the growing
-      # message tape. The billing block sits at system position 0, before the
-      # cached prefix; if its bytes change turn-over-turn the whole prefix cache
-      # is invalidated from token 0. (TS reference seeds on {system,
-      # extraInstructions} for the same reason.) (PLAN-018 W1.)
-      digest_seed = %{"system" => Map.get(request, :system)}
+      # Seed the cch digest on the STABLE system prompt TEXT ONLY — never the
+      # growing message tape, and never the block METADATA. The billing block
+      # sits at system position 0, before the cached prefix; if its bytes change
+      # turn-over-turn the whole prefix cache is invalidated from token 0. We
+      # hash only the rendered text so that caller-set cache_control marks (which
+      # this adapter strips and re-places downstream) do not perturb the digest.
+      # (TS reference seeds on systemPromptText for the same reason.) (PLAN-018 W1.)
+      digest_seed = %{"system" => system_seed_text(Map.get(request, :system))}
 
       [
         %{"type" => "text", "text" => billing_header(digest_seed)},
@@ -172,6 +174,19 @@ defmodule SpellAgent.Anthropic do
   end
 
   defp inject_claude_code?(model), do: not String.starts_with?(model, "claude-3-5-haiku")
+
+  # Render the system prompt to the STABLE text the cch digest hashes: a string
+  # passes through; a block list contributes its text fields only (string or
+  # atom keyed), so caller-set cache_control metadata never perturbs the digest.
+  defp system_seed_text(text) when is_binary(text), do: text
+
+  defp system_seed_text(blocks) when is_list(blocks) do
+    blocks
+    |> Enum.map(fn b -> (is_map(b) && (Map.get(b, "text") || Map.get(b, :text))) || "" end)
+    |> Enum.join("\n")
+  end
+
+  defp system_seed_text(other), do: other
 
   # "x-anthropic-billing-header: cc_version=<ver>.<rand3>; cc_entrypoint=cli; cch=<sha256(seed)[0..4]>;"
   defp billing_header(seed) do
@@ -530,16 +545,27 @@ defmodule SpellAgent.Anthropic do
 
   defp clear_all_cache_control(body) do
     body
-    |> maybe_update_list("system", fn blocks -> Enum.map(blocks, &Map.delete(&1, "cache_control")) end)
-    |> maybe_update_list("tools", fn tools -> Enum.map(tools, &Map.delete(&1, "cache_control")) end)
+    |> maybe_update_list("system", fn blocks -> Enum.map(blocks, &drop_cache_control/1) end)
+    |> maybe_update_list("tools", fn tools -> Enum.map(tools, &drop_cache_control/1) end)
     |> maybe_update_list("messages", fn msgs -> Enum.map(msgs, &clear_message_cache/1) end)
   end
 
   defp clear_message_cache(%{"content" => content} = msg) when is_list(content) do
-    %{msg | "content" => Enum.map(content, &Map.delete(&1, "cache_control"))}
+    %{msg | "content" => Enum.map(content, &drop_cache_control/1)}
   end
 
   defp clear_message_cache(msg), do: msg
+
+  # Strip a cache_control breakpoint regardless of key style. Caller-supplied
+  # blocks may be atom-keyed (:cache_control) while this adapter writes string
+  # keys; a surviving atom-keyed mark would let total breakpoints exceed the
+  # Anthropic <=4 cap (and duplicate the key on JSON encode). (PLAN-018 W1, S1
+  # swarm finding.)
+  defp drop_cache_control(block) when is_map(block) do
+    block |> Map.delete("cache_control") |> Map.delete(:cache_control)
+  end
+
+  defp drop_cache_control(block), do: block
 
   # Mark the last block of a top-level list field (system blocks or tool defs).
   defp mark_last(body, key) do
