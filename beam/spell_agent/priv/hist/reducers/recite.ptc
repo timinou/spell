@@ -1,0 +1,43 @@
+;; recite (PLAN-018 W6) — a tail goal-restatement, the todo.md analogue.
+;;
+;; Manus: "recite the goal at the TAIL" — keep the mission's objective in the
+;; recency zone so a long tape does not let the model drift from what it was
+;; asked. This produces a COMPACT restatement to APPEND at the end of the tape
+;; (never in the cached prefix — it changes each turn as progress advances, so it
+;; must live after the last cache breakpoint, exactly like a rolling todo).
+;;
+;; ZERO inference: the restatement is a DATA projection of the recorded history —
+;; the opening user prompt (the goal) + a cheap progress tally (turns taken, files
+;; touched, the last few tool heads). NOT an LLM summary.
+;;
+;; Returns a string (the tail block), or "" when there is no goal yet.
+
+(let [nodes data/nodes
+
+      ;; the GOAL: the first user prompt that opened the mission.
+      goal (->> nodes
+                (filter (fn [n] (and (string? (get n "prompt"))
+                                     (> (count (get n "prompt")) 0))))
+                first
+                (#(if % (get % "prompt") "")))
+
+      ;; cheap progress signal: how many program turns, and the distinct shell
+      ;; command heads run across the tape (what the agent has been DOING).
+      turns (count nodes)
+
+      heads (->> nodes
+                 (mapcat (fn [n] (get n "form_shells")))
+                 (filter (fn [h] (and (string? h) (> (count h) 0))))
+                 distinct)
+
+      recent-heads (take 8 heads)]
+
+  (if (= goal "")
+    ""
+    (str "## Current objective (recited)\n"
+         goal "\n\n"
+         "Progress: " turns " turns"
+         (if (> (count recent-heads) 0)
+           (str " - commands used: " (join ", " recent-heads))
+           "")
+         "\n\nStay on this objective; do not drift.")))

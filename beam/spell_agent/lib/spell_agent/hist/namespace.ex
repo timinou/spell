@@ -80,7 +80,13 @@ defmodule SpellAgent.Hist.Namespace do
       # replayable tape. Reduces in node-space (dead-bind-elim, tool-cse,
       # stale-read-collapse, print-prune) then refolds to native messages. The
       # def-env is provably preserved (fold_env(reduced) == fold_env(full)).
-      "hist/reduce" => fn args -> reduce(impl, session_id, args) end
+      # PLAN-018 W6: pass {:tier "lossy"} to also spill over-threshold restorable
+      # results to re-fetchable stubs (the tape-shedding tier).
+      "hist/reduce" => fn args -> reduce(impl, session_id, args) end,
+      # PLAN-018 W6: the tail goal-restatement (todo.md analogue) to APPEND after
+      # the tape — never in the cached prefix. A data projection of the goal +
+      # progress, zero inference.
+      "hist/recite" => fn args -> recite(impl, session_id, args) end
     }
 
     Map.merge(elixir, Lens.tools(impl, session_id))
@@ -259,6 +265,13 @@ defmodule SpellAgent.Hist.Namespace do
     Lens.run(impl, session_id, source, args || %{})
   end
 
+  # PLAN-018 W6: run the recite policy over the projection -> the tail goal-
+  # restatement string. The caller appends it AFTER the tape (post-cache).
+  defp recite(impl, session_id, args) do
+    source = Map.get(Lens.reducer_sources(), "recite")
+    Lens.run(impl, session_id, source, args || %{})
+  end
+
   # PLAN-018 W4: reduce the root->cursor slice (lossless tier) and refold it to a
   # replayable tape. Returns the message list, or an {"err" ...} map on a missing
   # session/cursor (mirrors hist/refold).
@@ -271,13 +284,23 @@ defmodule SpellAgent.Hist.Namespace do
     cursor = cursor_arg(args)
 
     case Reconstitute.at(impl, session_id, cursor) do
-      {:ok, %{nodes: slice}} -> reduce_or_fallback(slice)
+      {:ok, %{nodes: slice}} -> reduce_or_fallback(slice, tier_arg(args))
       {:error, reason} -> %{"err" => to_string(reason)}
     end
   end
 
-  defp reduce_or_fallback(slice) do
-    slice |> Reduce.lossless() |> Refold.slice_to_tape()
+  # The reduction tier: :lossy when the agent asks (over-threshold restorable
+  # results spill to stubs), else the default :lossless.
+  defp tier_arg(args) do
+    case arg(args, "tier") do
+      "lossy" -> :lossy
+      _ -> :lossless
+    end
+  end
+
+  defp reduce_or_fallback(slice, tier) do
+    reduced = if tier == :lossy, do: Reduce.lossy(slice), else: Reduce.lossless(slice)
+    Refold.slice_to_tape(reduced)
   rescue
     _ ->
       # the reducer/refold failed on a malformed node — degrade to the unreduced

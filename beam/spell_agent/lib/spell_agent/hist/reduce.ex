@@ -61,7 +61,7 @@ defmodule SpellAgent.Hist.Reduce do
   is a follow-up.
   """
 
-  alias SpellAgent.Hist.{Effect, Node, Result}
+  alias SpellAgent.Hist.{Effect, Node, Result, Spill}
 
   @doc """
   Reduce a node slice (root-first) with the lossless tier.
@@ -95,6 +95,23 @@ defmodule SpellAgent.Hist.Reduce do
   @spec fold_env([Node.t()]) :: map()
   def fold_env(slice) when is_list(slice) do
     Enum.reduce(slice, %{}, fn %Node{binds: binds}, env -> Node.apply_binds(env, binds) end)
+  end
+
+  @doc """
+  Reduce a node slice with the LOSSY-but-restorable tier (PLAN-018 W6).
+
+  Runs the full lossless tier, then `Spill.spill/2` to rewrite over-threshold,
+  RESTORABLE `node.result`s into re-fetchable stubs — the transform that actually
+  sheds TAPE bytes (the lossless tier shrinks only the node store; see the L1
+  finding). The env proof still holds: spill touches `result`, never `binds`, so
+  `fold_env(lossy(slice)) == fold_env(slice)`. Restorability is the contract — a
+  spilled result is recoverable from the untouched store node via `hist/recall`.
+
+  Options forward to `Spill.spill/2` (e.g. `:threshold_tokens`).
+  """
+  @spec lossy([Node.t()], keyword()) :: [Node.t()]
+  def lossy(slice, opts \\ []) when is_list(slice) do
+    slice |> lossless() |> Spill.spill(opts)
   end
 
   # --- dead-bind-elim ---------------------------------------------------------

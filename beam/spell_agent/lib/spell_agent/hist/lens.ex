@@ -80,7 +80,8 @@ defmodule SpellAgent.Hist.Lens do
   @reducer_dir Path.join([:code.priv_dir(:spell_agent) |> to_string(), "hist", "reducers"])
 
   @reducers %{
-    "reducibility" => "reducibility.ptc"
+    "reducibility" => "reducibility.ptc",
+    "recite" => "recite.ptc"
   }
 
   for {_name, file} <- @reducers do
@@ -171,6 +172,9 @@ defmodule SpellAgent.Hist.Lens do
       "seq" => n.seq,
       "status" => Atom.to_string(n.status),
       "form_src" => n.form_src,
+      # PLAN-018 W6: the user prompt that OPENED this step (head nodes only; nil
+      # on interior turns). The recite policy reads it to restate the mission goal.
+      "prompt" => n.prompt,
       # `tool_calls` = REALIZED effects (from `sees`); `form_tools` = tool-call
       # names present in the program AST. They differ (a call can be in the form
       # but error before emitting a see), so the `tool_calls` lens reads the former

@@ -68,6 +68,53 @@ defmodule SpellAgent.Hist.Effect do
   @spec read?(map()) :: boolean()
   def read?(see), do: classify(see) == :read
 
+  @doc """
+  Classify a NODE's program (its `form`) by its most-dangerous effect.
+
+  Unlike `classify/1` (one realized `sees` entry), this reads the whole program
+  AST: every shell command head (`Lens.shell_heads/1`) and every native tool call
+  (`Lens.tool_call_names/1`). A program is :read only if EVERY effect it performs
+  is a read; any mutation/check/external/unknown effect dominates. Used by W6's
+  result-spill to decide RESTORABILITY — only a `:read` (or `:check`) program's
+  output is reproducible, so only its result may be spilled to a re-fetchable stub.
+  """
+  @spec classify_program(term()) :: class()
+  def classify_program(form) do
+    shell_classes = form |> SpellAgent.Hist.Lens.shell_heads() |> Enum.map(&head_class/1)
+
+    # The non-shell native tool calls. `sh`/`sh-pipe` are EXCLUDED here — they are
+    # shell wrappers already classified by their command head (shell_classes
+    # above); counting their bare name as an :unknown tool would wrongly dominate
+    # a real read program (e.g. `(tool/sh {:argv ["cat" ...]})` would become
+    # :unknown instead of :read).
+    tool_classes =
+      form
+      |> SpellAgent.Hist.Lens.tool_call_names()
+      |> Enum.reject(&(&1 in ["sh", "sh-pipe"]))
+      |> Enum.map(&tool_class/1)
+
+    case shell_classes ++ tool_classes do
+      [] -> :unknown
+      classes -> most_dangerous(classes)
+    end
+  end
+
+  @doc """
+  Whether a program's RESULT is restorable — reproducible by re-running, so it is
+  safe to spill to a re-fetchable stub (W6). A read or check is restorable; a
+  mutation, external, or unknown program is NOT (no reproducible path back).
+  """
+  @spec restorable_program?(term()) :: boolean()
+  def restorable_program?(form), do: classify_program(form) in [:read, :check]
+
+  defp tool_class(name) do
+    cond do
+      name in @read_tools -> :read
+      name in @mutation_tools -> :mutation
+      true -> :unknown
+    end
+  end
+
   # --- shell classification ---------------------------------------------------
 
   defp head_class(head) do
