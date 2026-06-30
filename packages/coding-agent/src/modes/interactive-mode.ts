@@ -733,8 +733,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		const { promise, resolve } = Promise.withResolvers<SubmittedUserInput>();
 		this.onInputCallback = input => {
 			this.onInputCallback = undefined;
+			// Turn is leaving the input-wait state — re-derive status (running/idle).
+			this.session.notifyStatusObservers();
 			resolve(input);
 		};
+		// The main loop just parked on user input: status flips to needs_input, but
+		// arming the callback emits no agent event, so status-derived observers
+		// (niri status file, intention briefing) would otherwise never re-evaluate.
+		// Nudge them explicitly.
+		this.session.notifyStatusObservers();
 		return promise;
 	}
 

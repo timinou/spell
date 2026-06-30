@@ -185,7 +185,13 @@ export type AgentSessionEvent =
 	| { type: "yield_reminder"; disciplines: string[]; attempt: number; maxAttempts: number; outcomes?: DisciplineGateOutcome[]; stats?: DisciplineRuntimeStat[] }
 	| { type: "todo_auto_clear" }
 	| { type: "audit_suggest" }
-	| { type: "audit_escalate"; auditContent: string };
+	| { type: "audit_escalate"; auditContent: string }
+	// Fired when a status-derivation input changes WITHOUT an accompanying agent
+	// event — e.g. the interactive main loop arming/clearing its input callback as
+	// a turn settles into (or leaves) the input-wait state. Status-derived
+	// observers (the niri status-file writer, the intention briefing) re-evaluate
+	// on it; everyone else may ignore it.
+	| { type: "status_observable_changed" };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
@@ -622,6 +628,16 @@ export class AgentSession {
 	async #emitSessionEvent(event: AgentSessionEvent): Promise<void> {
 		await this.#emitExtensionEvent(event);
 		this.#emit(event);
+	}
+
+	/**
+	 * Nudge status-derived observers to re-evaluate when a derivation input
+	 * changed outside the agent event stream (e.g. the interactive loop arming
+	 * its input callback as a turn ends awaiting input). Emits to local session
+	 * subscribers only — it is not an agent/extension event.
+	 */
+	notifyStatusObservers(): void {
+		this.#emit({ type: "status_observable_changed" });
 	}
 
 	// Track last assistant message for auto-compaction check
