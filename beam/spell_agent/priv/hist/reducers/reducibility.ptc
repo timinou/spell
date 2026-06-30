@@ -32,7 +32,14 @@
                      (max 1 (quot (count s) 4))
                      0))
 
-      result-tokens (fn [n] (est-tokens (json/generate-string (get n "result"))))
+      ;; Render a result EXACTLY as Spill does for the token count: a string passes
+      ;; through raw (Spill.render binary -> binary), everything else is JSON. A
+      ;; json/generate-string on a string would add quotes/escapes (~2x for
+      ;; newline-heavy output) and DIVERGE from Spill's byte_size, so the estimate
+      ;; would over-count and trigger a lossy reduce that spill then declines (L2
+      ;; re-review).
+      render-result (fn [r] (if (string? r) r (json/generate-string r)))
+      result-tokens (fn [n] (est-tokens (render-result (get n "result"))))
       form-tokens   (fn [n] (est-tokens (get n "form_src")))
 
       ;; nodes that emit a program turn on the wire AND succeeded.

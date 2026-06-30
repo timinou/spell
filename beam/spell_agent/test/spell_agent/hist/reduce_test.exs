@@ -301,6 +301,41 @@ defmodule SpellAgent.Hist.ReduceTest do
       assert a["stale"] == true
     end
 
+    test "an env-wrapped mutation (env rm f) barriers a read of f" do
+      slice = [
+        node(0, sees: [see("sh", %{"argv" => ["cat", "f"]}, "v1")]),
+        node(1, sees: [see("sh", %{"argv" => ["env", "rm", "f"]}, "")]),
+        node(2, sees: [see("sh", %{"argv" => ["cat", "f"]}, "v2")])
+      ]
+
+      [a | _] = Enum.at(Reduce.lossless(slice), 0).sees
+      refute Map.has_key?(a, "stale")
+    end
+
+    test "a native :path write barriers a native :target read of the same path" do
+      slice = [
+        node(0, sees: [%{name: "find", args: %{"target" => "f"}, result: "v1"}]),
+        node(1, sees: [%{name: "edit", args: %{"path" => "f"}, result: "applied"}]),
+        node(2, sees: [%{name: "find", args: %{"target" => "f"}, result: "v2"}])
+      ]
+
+      [a | _] = Enum.at(Reduce.lossless(slice), 0).sees
+      refute Map.has_key?(a, "stale")
+    end
+
+    test "an unlocalizable write (nil path) is a GLOBAL barrier (define-tool)" do
+      # list-tools (read) -> define-tool (mutation, no path) -> list-tools: the
+      # registry changed, so the earlier snapshot must survive.
+      slice = [
+        node(0, sees: [%{name: "list-tools", args: %{}, result: "v1"}]),
+        node(1, sees: [%{name: "define-tool", args: %{"name" => "t"}, result: "ok"}]),
+        node(2, sees: [%{name: "list-tools", args: %{}, result: "v2"}])
+      ]
+
+      [a | _] = Enum.at(Reduce.lossless(slice), 0).sees
+      refute Map.has_key?(a, "stale")
+    end
+
     test "a write to a DIFFERENT path does not protect a read" do
       # cat f, edit g, cat f: the write is to g, not f, so f's reads still collapse.
       slice = [

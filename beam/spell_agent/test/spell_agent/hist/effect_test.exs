@@ -70,6 +70,18 @@ defmodule SpellAgent.Hist.EffectTest do
     assert Effect.classify(see("sh", %{"argv" => ["sed", "s/a/b/", "f"]})) == :read
   end
 
+  test "grep -i (case-insensitive) stays a read; only sed-family -i is in-place" do
+    # -i is in-place ONLY for sed/awk/perl; for grep/ls it is harmless.
+    assert Effect.classify(see("sh", %{"argv" => ["grep", "-i", "x", "f"]})) == :read
+    assert Effect.classify(see("sh", %{"argv" => ["ls", "-i"]})) == :read
+  end
+
+  test "clustered and suffixless sed -i spellings classify :mutation" do
+    assert Effect.classify(see("sh", %{"argv" => ["sed", "-ibak", "s/a/b/", "f"]})) == :mutation
+    assert Effect.classify(see("sh", %{"argv" => ["sed", "-Ei", "s/a/b/", "f"]})) == :mutation
+    assert Effect.classify(see("sh", %{"argv" => ["perl", "-i", "-pe", "s/a/b/", "f"]})) == :mutation
+  end
+
   test "an env wrapper is peeled to classify the inner command" do
     assert Effect.classify(see("sh", %{"argv" => ["env", "MIX_ENV=test", "mix", "test"]})) == :check
     assert Effect.classify(see("sh", %{"argv" => ["env", "rm", "f"]})) == :mutation

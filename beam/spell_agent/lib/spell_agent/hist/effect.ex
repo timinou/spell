@@ -175,7 +175,7 @@ defmodule SpellAgent.Hist.Effect do
           inner -> argv_heads(inner)
         end
 
-      Enum.any?(rest, &mutating_predicate?/1) ->
+      Enum.any?(rest, &universal_mutating_predicate?/1) or in_place_edit?(h, rest) ->
         [h, "rm"]
 
       true ->
@@ -196,13 +196,30 @@ defmodule SpellAgent.Hist.Effect do
   # Flags/predicates that turn an otherwise-read command into a MUTATION: find's
   # -delete/-exec, an in-place sed/awk edit (-i / --in-place / -i.bak), a redirect,
   # or a tee. Presence of any makes the call classify :mutation (L2 finding).
-  @mutating_predicates ~w(-delete -exec -execdir -fprint -fprintf > >> | tee -i --in-place)
-  defp mutating_predicate?(arg) when is_binary(arg) do
-    arg in @mutating_predicates or String.starts_with?(arg, "-i.") or
-      String.starts_with?(arg, "--in-place=")
+  # Head-INDEPENDENT mutating predicates: find's -delete/-exec, a redirect, a tee.
+  # These mutate regardless of the command.
+  @mutating_predicates ~w(-delete -exec -execdir -fprint -fprintf > >> | tee)
+  defp universal_mutating_predicate?(arg) when is_binary(arg), do: arg in @mutating_predicates
+  defp universal_mutating_predicate?(_), do: false
+
+  # Commands whose -i flag means EDIT-IN-PLACE (a mutation). For other heads (grep
+  # -i case-insensitive, ls -i inode) -i is harmless, so in-place detection is
+  # head-specific (L2 re-review: do not flag `grep -i` as a mutation).
+  @in_place_heads ~w(sed awk perl gawk)
+  defp in_place_edit?(head, args) do
+    head in @in_place_heads and Enum.any?(args, &in_place_flag?/1)
   end
 
-  defp mutating_predicate?(_), do: false
+  # The in-place flag in any spelling: --in-place[=...], -i, -i.bak, -ibak, or a
+  # short-flag cluster containing i (-Ei, -nri). Conservative for the sed-family.
+  defp in_place_flag?("--in-place" <> _), do: true
+
+  defp in_place_flag?("-" <> rest) when rest != "" do
+    not String.starts_with?(rest, "-") and
+      (rest |> String.split(".", parts: 2) |> hd() |> String.contains?("i"))
+  end
+
+  defp in_place_flag?(_), do: false
 
   # atom- or string-keyed read (never mints an atom). Presence-aware so a key
   # bound to false/nil is not mistaken for absent.

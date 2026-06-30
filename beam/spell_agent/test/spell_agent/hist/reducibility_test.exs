@@ -102,6 +102,25 @@ defmodule SpellAgent.Hist.ReducibilityTest do
     assert r["nodes"] == 0
   end
 
+  test "a string result is tokenized raw (matching Spill, not JSON-escaped)" do
+    # A newline-heavy string: JSON-encoding would ~2x it via escapes and diverge
+    # from Spill's byte_size. The estimate must size it as Spill does so a lossy
+    # decision is one Spill actually realizes.
+    big_lines = String.duplicate("line\n", 700)
+
+    Recorder.record_node(
+      Memory,
+      "s",
+      %{program: "(tool/sh {:argv [\"cat\" \"f\"]})", result: big_lines, tool_calls: read_see()},
+      nil
+    )
+
+    r = reducibility("s")
+    # ~3500 bytes / 4 ~= 875 tokens of result; the estimate should treat it as
+    # sheddable (over 512) just as Spill will.
+    assert r["reducible_tokens"] > 0
+  end
+
   test "reducible_tokens never exceeds tok_full (sound bound)" do
     a =
       Recorder.record_node(
