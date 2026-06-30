@@ -1,0 +1,17 @@
+#+TITLE: Test writes timestamps.txt into cwd (clock/wake test hygiene leak)
+#+STATE: ITEM
+#+SESSION_ID: 15164b2a4dd1a55b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-24T23-29-11-991Z_15164b2a4dd1a55b.jsonl]]
+#+CUSTOM_ID: FUP-028-test-writes-timestamps-txt-into-cwd-cloc
+
+* Initial Message
+
+merge onto main
+
+Observed during FEAT-025 work (2026-06-28): running the full spell_agent suite leaves an untracked `beam/spell_agent/timestamps.txt` in the package root. Content is dated lines ("Timestamp 1: …", "Timestamp 3: …"), so a clock/self-wake test (PLAN-014 clock/* area) writes timestamps to a RELATIVE path resolved against cwd instead of a tmp dir + on_exit cleanup.
+
+Impact: low — pollutes `git status` with a stray file (a careless `git add -A` would commit it), and concurrent test runs could interleave writes. Not a correctness bug in shipped code.
+
+Fix: locate the test writing "timestamps.txt" (no lib/ source references it; grep test/ for the wake/clock scenario that emits "Timestamp N:") and route it through `System.tmp_dir!()` + `on_exit(&File.rm/1)`, mirroring code_edit_test/code_apply_test setup. Until fixed, exclude the file when staging.
+
+Provenance: noticed while staging FEAT-025 (commit e89967a7d); deliberately NOT committed.
