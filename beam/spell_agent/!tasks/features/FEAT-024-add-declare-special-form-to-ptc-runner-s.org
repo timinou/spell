@@ -1,8 +1,9 @@
 #+TITLE: Add `declare` special form to ptc_runner — seed forward-ref names into the undefined-var gate
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 15164b2a4dd1a55b
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-24T23-29-11-991Z_15164b2a4dd1a55b.jsonl]]
 #+CUSTOM_ID: FEAT-024-add-declare-special-form-to-ptc-runner-s
+#+COMPLETION_HASH: b6d625c71fd01cb7
 
 * Initial Message
 
@@ -115,3 +116,5 @@ documents the dispatch-table idiom (a ={kind → fn}= data map, the same shape a
 alternative for walkers the agent forks at runtime. =declare= is for fixed library
 internals where plain-mutual-recursion readability wins; the table is for forkable
 data. Both are first-class; this FEAT supplies the former.
+
+NOTE [2026-06-30]: DONE [2026-06-27] via PLAN-022 P1a. Added (declare a b ...) to the ptc_runner fork (commit f832b8b3 on the spell branch). Seeds top-level names into the static undefined-var gate so a forward-referenced defn passes preflight; the runtime already late-binds, so declare is a pure no-op at eval. 6 files: analyze.ex (dispatch + analyze_declare -> {:declare, names}), lisp.ex (collect_undefined_vars -> [], extract_def_names -> names), eval.ex (do_eval -> nil), core_ast.ex (union), core_to_source.ex (format), source_atoms.ex (token). 7 tests (declare_test.exs): a fn-body forward ref rejected without declare passes with it; multi-name seeding; empty (declare) legal; re-declare harmless; the gate STILL rejects a genuinely undefined name; non-symbol arg is a clear form error. NB the original spec's even?/odd? example already passes the gate without declare (param'd fn bodies aren't flagged) — the real gated case is a forward ref through a fn body, which the test uses. Verified: ptc_runner compiles warnings-as-errors clean; eval suite (149 tests) + error_handling/quote_collections/declare (65) green.

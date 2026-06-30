@@ -91,6 +91,11 @@ defmodule SpellAgent.Session do
         # (q/apply-ops ...)) and walk source/shell/history with one algebra. nil
         # when the prelude fails to compile (best-effort) -> agent runs without q/*.
         runtime_prelude: SpellAgent.Code.Prelude.compiled(),
+        # FUP-027: drain the code-edit restore journal IN-WORKER by the program's
+        # verdict. A turn that calls code-edit then (fail)s rolls the file back; a
+        # successful turn keeps the write. Runs in the same sandbox worker the
+        # edit recorded in — the only point with both the journal + verdict.
+        on_complete: &SpellAgent.Code.Journal.finalize/1,
         ptc_transport: :tool_call,
         max_turns: max_turns
       )

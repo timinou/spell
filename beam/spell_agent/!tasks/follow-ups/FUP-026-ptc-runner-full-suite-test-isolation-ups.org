@@ -63,3 +63,16 @@ The namespaced-keyword change touches ONLY keyword tokenization
 (=fast_parser=/=keyword=/=predicates=); it cannot affect prelude-upstream-runtime
 ordering. Verified: the keyword-area suites (parser, name_keyword, predicates,
 validator, conformance) are fully green.
+
+NOTE [2026-06-30]: [2026-06-27] ROOT CAUSE FOUND (PLAN-022 P1c investigation) + partial fix applied.
+
+The aggregate-only failures are NOT a shared-STATE leak as first hypothesized — they are LOAD-SENSITIVE TIMEOUTS. Captured the actual error of the aggregate failures: `execution exceeded 1000ms limit` / reason: :timeout. Evidence:
+- Each flaky file passes deterministically IN ISOLATION (3x green).
+- The 6 flaky files (closure_capture, eval_describe, eval_json, prelude/discovery, prelude/upstream_roundtrip, quote_collections + combinations) run GREEN TOGETHER (105 passed, 3x).
+- They fail ONLY in the full 6700-test suite, with a VARYING count run-to-run at fixed --seed 0 (56, then 4 on a re-run) — the signature of scheduler CONTENTION, not state.
+- Mechanism: PtcRunner.Lisp eval runs each program in a spawned sandbox worker with a DEFAULT 1000ms timeout (Lisp.run :timeout default). Under full-suite async parallelism, hundreds of async tests + their sandbox workers compete for schedulers; an eval that takes <1000ms in isolation exceeds 1000ms under load and the run returns {:error, reason: :timeout}. Confirmed: NO async test mutates Application env / persistent_term (ruled out the state-leak theory); the contaminating variable is CPU contention.
+- This is PRE-EXISTING + independent of PLAN-022 work: the pristine submodule (87468fa0, my changes stashed) showed 10 aggregate failures with the SAME timeout signature; my FEAT-024 + FUP-027 changes did not introduce it (mine swung 56->4 across two identical-seed runs).
+
+APPLIED (in scope, safe): error_handling_test.exs:299 stale assertion FIXED — `'(1 2 3)` is no longer a parse_error (PLAN-012 W1 lifted the quoted-collection restriction); it now returns %{"node"=>"list","children"=>[1,2,3]}. Updated the assertion to the current correct behavior (renamed to "a quoted list is inert quoted-data, not a parse error"). This was a genuine stale assertion, deterministic, now green.
+
+DEFERRED (out of PLAN-022 scope — a suite-architecture decision): the timeout-under-load flakiness. The real fix is one of: (a) raise the eval :timeout in the affected eval-heavy tests (e.g. 1000ms -> 5000ms), (b) cap suite async parallelism (max_cases), or (c) tag the eval-heavy tests to not run concurrently. (a) is the least invasive but touches many test files; the right call is a focused suite-hygiene pass, NOT smuggled into the code/edit cluster. Re-scoped: this FUP now tracks "raise eval timeouts / cap parallelism to de-flake the load-sensitive ptc_runner aggregate suite" — a clean, well-understood task with the root cause nailed down. The stale-assertion half is DONE; the timeout half stays open under this FUP.
