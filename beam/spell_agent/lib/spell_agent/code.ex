@@ -212,6 +212,32 @@ defmodule SpellAgent.Code do
     end
   end
 
+  @doc """
+  Run an op-list over `src` WITHOUT writing — the showcase/preview path (PLAN-022
+  S2). Parses `src` under `lang`, applies the reified `ops` via `q/apply-ops`,
+  unparses, and runs the same parse-GATE `code-edit` does, returning the
+  before/ops/after/verdict shape `Code.CodemodView` renders.
+
+  Pure w.r.t. the filesystem (no read, no write): the caller supplies the source.
+  `:after` is the rewritten source on success, `nil` when the transform or gate
+  rejected it (with `:verdict` carrying the reason) — so a reader sees exactly why
+  a codemod would be refused, never a partial write.
+  """
+  @spec dry_run_ops(String.t(), String.t(), [map()]) :: SpellAgent.Code.CodemodView.result()
+  def dry_run_ops(src, lang, ops) when is_binary(src) and is_binary(lang) and is_list(ops) do
+    base = %{lang: lang, ops: ops, before: src, after: nil, verdict: :ok}
+
+    with {:ok, tree} <- parse_source(src, lang),
+         {:ok, edited} <- apply_ops(tree, ops),
+         {:ok, out_src} <- gate_unparse(edited),
+         :ok <- gate_nonempty(out_src),
+         :ok <- gate_reparse(out_src, lang) do
+      %{base | after: out_src, verdict: :ok}
+    else
+      {:error, message} -> %{base | after: nil, verdict: {:error, message}}
+    end
+  end
+
   # `:ops` must be a non-empty list of op maps. Empty is refused: applying no ops
   # would re-write the file with a re-rendered (presentation-canonicalized) copy
   # for no edit — a caller mistake, not an intended write.
@@ -244,6 +270,19 @@ defmodule SpellAgent.Code do
     PiKernelNif.language_for_path(path)
   rescue
     e -> {:error, "language detection NIF unavailable (#{Exception.message(e)})"}
+  end
+
+  @doc """
+  The grammar name for `path` (by extension), raising on an unknown extension.
+  The bang variant for callers (e.g. `mix spell.codemod`) that want a hard failure
+  on a bad path rather than an error tuple.
+  """
+  @spec language_for_path!(String.t()) :: String.t()
+  def language_for_path!(path) do
+    case safe_language_for_path(path) do
+      {:ok, lang} -> lang
+      {:error, reason} -> raise ArgumentError, "code: #{to_string_reason(reason)}"
+    end
   end
 
   defp read_source(path) do
