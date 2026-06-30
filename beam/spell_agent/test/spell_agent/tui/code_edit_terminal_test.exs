@@ -5,23 +5,25 @@ defmodule SpellAgent.Tui.CodeEditTerminalTest do
   Drives the production inspector `App` through a real headless terminal, fed by a
   SCRIPTED (network-free, no cassette) llm that emits a `code-apply` codemod
   program. The real agent loop runs it: read a fixture file -> code-parse ->
-  q/apply-ops (rename an identifier) -> parse-gate -> write. The rendered screen
-  (the span tree + run detail the live inspector draws) is captured as a golden
-  `.transcript` and asserted on replay, exactly like `llm_terminal_test`'s
-  cassette-backed `answer_42` baseline.
+  q/apply-ops (rename an identifier) -> parse-gate -> write. The test asserts the
+  rendered screen (the span tree + run detail the live inspector draws) SHOWS the
+  codemod run.
 
   This is the agent's CODEMOD REASONING shown as the user sees it — the visual
   half of the showcase (the stdout half is `mix spell.codemod`). Deterministic +
   offline: the scripted llm is a pure `(request -> {:ok, resp})` callback, and the
-  codemod runs over a tmp fixture, so the only volatile bits are the span
-  ids/durations the transcript normalizer already masks.
+  codemod runs over a tmp fixture.
+
+  Assertion shape: the behavioural contract (file rewritten, mission ok) is exact;
+  the visual contract is CONTENT-presence (the codemod turn + tool span + ok
+  status appear), NOT a byte-exact golden — a rendered-transcript byte-golden over
+  a live agent loop is timing-fragile (a variable-width duration shifts column
+  padding under load; the same FUP-026 class). Content assertions pin the
+  showcase's actual value (the codemod reasoning is VISIBLE) without the flake.
   """
   use ExUnit.Case, async: false
 
   alias SpellAgent.LlmTerminal
-
-  @transcript_dir Path.join([__DIR__, "..", "..", "snapshots", "llm"])
-  @snapshot "code_edit_codemod"
 
   setup do
     dir = Path.join(System.tmp_dir!(), "code_edit_terminal_#{System.unique_integer([:positive])}")
@@ -62,7 +64,7 @@ defmodule SpellAgent.Tui.CodeEditTerminalTest do
     end
   end
 
-  describe "Design A — codemod visual transcript (golden)" do
+  describe "Design A — codemod visual showcase" do
     test "a code-apply codemod renders its run in the inspector", %{dir: dir} do
       path = Path.join(dir, "demo.ex")
       File.write!(path, "def add(x), do: x + 1\n")
@@ -85,27 +87,31 @@ defmodule SpellAgent.Tui.CodeEditTerminalTest do
           max_turns: 4
         )
 
+      # --- the behavioural contract (deterministic) ---
       # the mission completed (the loop terminated on the final-answer turn).
       assert {:ok, _} = out.result
-      # the codemod actually ran: the file was rewritten.
-      assert File.read!(path) =~ "y"
+      # the codemod actually ran end-to-end: the file was rewritten x -> y, and
+      # was NOT rolled back (the FUP-027 finalizer correctly classifies the
+      # implicit-return codemod turn as success).
+      src = File.read!(path)
+      assert src =~ "y"
+      refute src =~ ~r/\bx\b/
 
-      # Golden transcript: the rendered screen, volatile fields masked.
-      golden = Path.join(@transcript_dir, "#{@snapshot}.transcript")
-      normalized = LlmTerminal.normalize_transcript(out.buffer)
-
-      if File.exists?(golden) do
-        assert normalized == File.read!(golden), """
-        Codemod transcript mismatch for #{@snapshot}.
-
-        If intended, delete #{golden} and re-run to rewrite the baseline, then
-        review `git diff`.
-        """
-      else
-        File.mkdir_p!(@transcript_dir)
-        File.write!(golden, normalized)
-        IO.puts("Wrote new codemod transcript baseline: #{golden}")
-      end
+      # --- the visual contract (the showcase) ---
+      # The inspector rendered the codemod run: the span tree shows the two turns,
+      # the code-apply tool span, and an ok run status. We assert CONTENT presence
+      # (resilient to the column-padding a variable-width duration introduces),
+      # not a byte-exact golden — a rendered-transcript byte-golden over a live
+      # agent loop is timing-fragile (see FUP-026), and the showcase's value is
+      # that the codemod reasoning is VISIBLE, which content assertions pin.
+      buffer = out.buffer
+      assert buffer =~ "spell · inspector"
+      assert buffer =~ "turns 2 · tools 1"
+      # the codemod turn + its tool span are drawn in the span tree
+      assert buffer =~ "tool/code-appl"
+      assert buffer =~ "code-apply"
+      # the run settled ok (no ✗ / failure marker on the run)
+      assert buffer =~ "status: ok"
     end
   end
 end

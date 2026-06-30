@@ -326,11 +326,18 @@ defmodule SpellAgent.Code do
     end
   end
 
+  # Generous timeout for the structural transform: a codemod over a real tree is
+  # bounded work, but the default 1000ms sandbox cap is fragile under concurrent
+  # load (a busy suite or a parallel mesh fan-out). 30s lets a legitimate rewrite
+  # finish while still bounding a pathological transform.
+  @apply_timeout_ms 30_000
+
   defp run_apply(prelude, tree, ops) do
     case PtcRunner.Lisp.run("(q/apply-ops data/tree data/ops)",
            prelude: prelude,
            context: %{"tree" => tree, "ops" => ops},
            filter_context: false,
+           timeout: @apply_timeout_ms,
            caller: :in_process_v1
          ) do
       {:ok, step} ->
