@@ -323,6 +323,18 @@ defmodule SpellAgent.Hist.ReduceTest do
       refute Map.has_key?(a, "stale")
     end
 
+    test "a multi-operand mutation (touch f g) barriers BOTH operands' reads" do
+      slice = [
+        node(0, sees: [see("sh", %{"argv" => ["stat", "f"]}, "v1")]),
+        node(1, sees: [see("sh", %{"argv" => ["touch", "f", "g"]}, "")]),
+        node(2, sees: [see("sh", %{"argv" => ["stat", "f"]}, "v2")])
+      ]
+
+      [a | _] = Enum.at(Reduce.lossless(slice), 0).sees
+      # touch f g mutates f (the FIRST operand), so the stat f reads are separated.
+      refute Map.has_key?(a, "stale")
+    end
+
     test "an unlocalizable write (nil path) is a GLOBAL barrier (define-tool)" do
       # list-tools (read) -> define-tool (mutation, no path) -> list-tools: the
       # registry changed, so the earlier snapshot must survive.

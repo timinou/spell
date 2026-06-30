@@ -121,6 +121,23 @@ defmodule SpellAgent.Hist.ReducibilityTest do
     assert r["reducible_tokens"] > 0
   end
 
+  test "a multi-byte UTF-8 result is sized by BYTES, agreeing with Spill" do
+    # 1026 "é" = 2052 bytes -> ~513 tokens (over 512); grapheme-counting would see
+    # 1026 -> 256 and wrongly report nothing reducible. The estimate must agree
+    # with Spill's byte_size.
+    utf8 = String.duplicate("é", 1026)
+
+    Recorder.record_node(
+      Memory,
+      "s",
+      %{program: "(tool/sh {:argv [\"cat\" \"f\"]})", result: utf8, tool_calls: read_see()},
+      nil
+    )
+
+    r = reducibility("s")
+    assert r["reducible_tokens"] > 0
+  end
+
   test "reducible_tokens never exceeds tok_full (sound bound)" do
     a =
       Recorder.record_node(

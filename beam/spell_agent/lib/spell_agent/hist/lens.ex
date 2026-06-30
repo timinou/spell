@@ -186,6 +186,11 @@ defmodule SpellAgent.Hist.Lens do
       # ONLY restorable results as sheddable, matching Spill.spillable? exactly
       # (L2 cost-proof: estimate and spill must agree on the shed byte-set).
       "restorable" => SpellAgent.Hist.Effect.restorable_node?(n.sees),
+      # PLAN-018 W5: the rendered result's BYTE size, computed exactly as Spill
+      # measures it (Spill.render_result |> byte_size). The estimate sizes F/R from
+      # this so it and Spill agree even for multi-byte UTF-8 (PTC `count` would
+      # count graphemes and diverge — L2 re-review). One byte-count, one truth.
+      "result_bytes" => byte_size(SpellAgent.Hist.Spill.render_result(n.result)),
       # `tool_calls` = REALIZED effects (from `sees`); `form_tools` = tool-call
       # names present in the program AST. They differ (a call can be in the form
       # but error before emitting a see), so the `tool_calls` lens reads the former

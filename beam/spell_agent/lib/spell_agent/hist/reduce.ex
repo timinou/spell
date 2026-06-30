@@ -316,20 +316,26 @@ defmodule SpellAgent.Hist.Reduce do
   # closes the operand-extraction / nil-path / wrapper holes uniformly — when in
   # doubt, do not collapse (L2 re-review).
   defp write_ordinals_by_path(flat) do
+    # Each write contributes its ordinal to EVERY path it touches (a `touch f g`
+    # mutates both f and g), plus the GLOBAL bucket when it has no localizable
+    # path at all. Barrier on all operands, not just one (L2 re-review).
     writes =
       flat
       |> Enum.filter(fn {_ord, _ni, _si, see} -> write_see?(see) end)
-      |> Enum.map(fn {ord, _ni, _si, see} -> {ord, see_path(see)} end)
+      |> Enum.map(fn {ord, _ni, _si, see} -> {ord, write_paths(see)} end)
 
     by_path =
       writes
-      |> Enum.reduce(%{}, fn
-        {_ord, nil}, acc -> acc
-        {ord, path}, acc -> Map.update(acc, path, [ord], &[ord | &1])
+      |> Enum.reduce(%{}, fn {ord, paths}, acc ->
+        Enum.reduce(paths, acc, fn path, a -> Map.update(a, path, [ord], &[ord | &1]) end)
       end)
       |> Map.new(fn {p, ords} -> {p, Enum.sort(ords)} end)
 
-    global = writes |> Enum.filter(fn {_ord, p} -> is_nil(p) end) |> Enum.map(&elem(&1, 0)) |> Enum.sort()
+    global =
+      writes
+      |> Enum.filter(fn {_ord, paths} -> paths == [] end)
+      |> Enum.map(&elem(&1, 0))
+      |> Enum.sort()
 
     {by_path, global}
   end
@@ -366,40 +372,42 @@ defmodule SpellAgent.Hist.Reduce do
   # statically known. Conservative — an unknown path groups under nil and never
   # matches a real path's writes (so a read with an unknown path is collapsible
   # only against other unknown-path reads, which is sound: same key).
-  defp see_path(see) do
+  # The SINGLE path a READ targets (a read touches one file): a native tool's
+  # :path/:target, else the sh file operand (the last bare argv token). nil when
+  # unresolved.
+  defp args_path(args) do
+    mixed_get_in(args, :path) || mixed_get_in(args, :target) ||
+      List.last(argv_operands(mixed_get_in(args, :argv)))
+  end
+
+  # ALL paths a WRITE touches (a `touch f g` / `cp a b` mutates several). Returns
+  # [] when none can be resolved — making the write a global barrier. Used only for
+  # writes; reads key on their single args_path.
+  defp write_paths(see) do
     case mixed_get(see, :args) do
-      %{} = args -> args_path(args)
-      _ -> nil
+      %{} = args ->
+        native = [mixed_get_in(args, :path), mixed_get_in(args, :target)] |> Enum.reject(&is_nil/1)
+        operands = argv_operands(mixed_get_in(args, :argv))
+        Enum.uniq(native ++ operands)
+
+      _ ->
+        []
     end
   end
 
-  # ONE path extractor for both reads (key_path) and writes (see_path): a native
-  # tool's :path/:target, else the sh file operand. Returns nil when the operand
-  # cannot be statically resolved — and a nil WRITE then becomes a global barrier
-  # (write_ordinals_by_path), so an unresolved path is conservative, never a
-  # silent collapse.
-  defp args_path(args) do
-    mixed_get_in(args, :path) || mixed_get_in(args, :target) ||
-      argv_path(mixed_get_in(args, :argv))
+  # The bare (non-flag, non-assignment) operands of an sh argv, in order. The file
+  # operands of the command; patterns/expressions are indistinguishable statically
+  # so they are included too (conservative — an over-broad barrier only forgoes an
+  # optimization, never collapses unsoundly).
+  defp argv_operands([_head | rest]) when is_list(rest) do
+    Enum.filter(rest, fn a -> is_binary(a) and not String.starts_with?(a, "-") and not String.contains?(a, "=") end)
   end
 
-  # The file operand of an sh argv: the LAST bare (non-flag, non-assignment)
-  # token. The last operand is the file for the vast majority of shell forms
-  # (cat f, grep PATTERN f, sed -i s/a/b/ f, head -n 5 f), where earlier bare
-  # tokens are patterns/expressions. Returning nil (no bare operand) makes a write
-  # global — conservative. (L2 re-review: first-bare-token mis-keyed grep/sed.)
-  defp argv_path([_head | rest]) when is_list(rest) do
-    rest
-    |> Enum.filter(fn a -> is_binary(a) and not String.starts_with?(a, "-") and not String.contains?(a, "=") end)
-    |> List.last()
-  end
-
-  defp argv_path(_), do: nil
+  defp argv_operands(_), do: []
 
   # The path component of a read key (for matching against write paths). The key
-  # is {name, args}; reuse the SAME extraction as see_path so a native read keyed
-  # on :path/:target matches a write to that same path (L2 re-review: reads and
-  # writes MUST use one path extractor).
+  # is {name, args}; reuse args_path so a native read keyed on :path/:target
+  # matches a write to that same path (reads and writes share one extractor).
   defp key_path({_name, args}) when is_map(args), do: args_path(args)
   defp key_path(_), do: nil
 
