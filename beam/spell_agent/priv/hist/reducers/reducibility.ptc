@@ -37,10 +37,17 @@
                      (max 1 (quot (count s) 4))
                      0))
 
-      ;; A stable key for a tool call: name + a canonical render of its args.
-      ;; Identical keys are exact duplicates (the {:hash,h} coarse key the W4 CSE
-      ;; refines). pr-str gives a deterministic term rendering, no inference.
-      call-key (fn [c] (str (get c "name") " " (pr-str (get c "args"))))
+      ;; A stable key for a tool call: name + args + RESULT. Only calls that are
+      ;; identical in all three are true CSE duplicates: two same-args calls with
+      ;; DIFFERENT successful results cannot collapse to one reference without
+      ;; changing the replayed tape (an idempotent read returns the same bytes; a
+      ;; call that returned something new is not redundant). Including the result
+      ;; keeps the estimate honest — it never over-promises a reduction the
+      ;; lossless fold could not actually perform. (S3 swarm finding.)
+      call-key (fn [c]
+                 (str (get c "name") " "
+                      (pr-str (get c "args")) " "
+                      (pr-str (get c "result"))))
 
       ;; tokens a single tool call's result contributes.
       result-tokens (fn [c] (est-tokens (json/generate-string (get c "result"))))

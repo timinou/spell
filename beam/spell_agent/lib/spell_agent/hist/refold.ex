@@ -40,6 +40,25 @@ defmodule SpellAgent.Hist.Refold do
   pure-prose turn) contributes only its user/assistant prose, with no tool blocks
   — never a half-pair.
 
+  ## Fidelity boundary (what L1 can and cannot reproduce)
+
+  refold rebuilds a SEMANTICALLY FAITHFUL, provider-valid tape — NOT a
+  byte-identical copy of the original wire. The L1 node is a DISTILLATION: it
+  retains the program (`form_src`), the result, and the status, but DROPS the
+  live `PtcToolProtocol` result envelope (prints, feedback, memory deltas,
+  truncation fields) and the model's raw assistant prose emitted alongside a tool
+  call. So:
+
+    * the tool_result content is a MINIMAL reconstructed envelope `{"status",
+      "result"}` — the load-bearing signal (did the turn succeed, what did it
+      return), not the full live payload (which L1 never stored);
+    * a program turn's assistant content is `""` (the common live case: the model
+      emitted only the tool call), since the original prose is not retained.
+
+  This is the correct contract for a RESUME/REDUCE feed: the model re-enters
+  seeing its programs, their outcomes, and its conversation — enough to continue
+  coherently — without the harness pretending to reproduce bytes it discarded.
+
   ## Output shape
 
   Native SubAgent messages (`Hist.Cont.message/0` shape): `%{role:, content:}`
@@ -121,8 +140,15 @@ defmodule SpellAgent.Hist.Refold do
     id = call_id(n)
 
     assistant = %{
+      # A program turn's native assistant content is the model's prose ALONGSIDE
+      # the tool call, which the L1 node does NOT retain separately (`say` is
+      # result-derived, per Recorder.extract_say). Using `say` here would replay
+      # the tool RESULT as assistant prose — wrong. The faithful reconstruction is
+      # an empty assistant content (the common live case: the model emitted only
+      # the tool call), with the program carried in the tool_use below. (PLAN-018
+      # W3, S3 swarm finding.)
       role: :assistant,
-      content: n.say || "",
+      content: "",
       tool_calls: [
         %{
           "id" => id,
@@ -135,7 +161,7 @@ defmodule SpellAgent.Hist.Refold do
       ]
     }
 
-    tool = %{role: :tool, tool_call_id: id, content: result_content(n.result)}
+    tool = %{role: :tool, tool_call_id: id, content: result_content(n.status, n.result)}
 
     [assistant, tool]
   end
@@ -151,10 +177,29 @@ defmodule SpellAgent.Hist.Refold do
   # never collides with a live provider-issued id.
   defp call_id(%Node{id: id}), do: "call_" <> id
 
-  # Render a tool result to the string content a tool_result block carries. A
-  # binary passes through; everything else is JSON-encoded (the same rule as
-  # `Anthropic.to_result_content/1`), so the refolded result is provider-valid and
-  # stable.
-  defp result_content(content) when is_binary(content), do: content
-  defp result_content(content), do: Jason.encode!(content)
+  # Render a node's recorded result to the tool_result block content. The LIVE
+  # loop wraps each result in a PtcToolProtocol envelope (status + result +
+  # prints/feedback/memory deltas) before sending it; the L1 node does NOT retain
+  # that envelope (it keeps only the bare `result` + `status`), so a byte-identical
+  # reproduction is impossible from L1 alone. We reconstruct a MINIMAL faithful
+  # envelope — {"status", "result"} — so the replayed tape is provider-valid and
+  # carries the same load-bearing signal (did the turn succeed, and what did it
+  # return) the model needs, without inventing the unstored fields. (PLAN-018 W3,
+  # S3 swarm finding: do not pass the raw result as if it were the live payload.)
+  defp result_content(status, result) do
+    Jason.encode!(%{"status" => Atom.to_string(status || :ok), "result" => jsonable(result)})
+  end
+
+  # Coerce an arbitrary recorded result into a JSON-encodable term. A binary, nil,
+  # number, boolean, list, or map passes through; anything Jason cannot encode
+  # (an atom other than nil/booleans, a tuple, a PID, ...) degrades to its
+  # inspected string rather than raising — refold must never crash on a valid
+  # recorded history (a PTC turn can `(return :some_atom)`). (PLAN-018 W3, S3
+  # swarm finding.)
+  defp jsonable(term) do
+    case Jason.encode(term) do
+      {:ok, _} -> term
+      {:error, _} -> inspect(term)
+    end
+  end
 end

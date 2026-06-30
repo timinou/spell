@@ -97,12 +97,45 @@ defmodule SpellAgent.Hist.RefoldTest do
       assert "(tool/sh {:argv [\"ls\"]})" in programs
     end
 
-    test "the tool result content reflects the recorded result" do
+    test "the tool result content is a minimal {status, result} envelope" do
       seed_session()
       {:ok, tape} = Refold.to_tape(Memory, "s1")
-      contents = for %{role: :tool, content: c} <- tape, do: c
-      assert "ok-a" in contents
-      assert "file1\nfile2" in contents
+      contents = for %{role: :tool, content: c} <- tape, do: Jason.decode!(c)
+
+      # The L1 node retains result + status but not the full live PtcToolProtocol
+      # payload, so refold reconstructs the load-bearing {status, result} signal.
+      assert %{"status" => "ok", "result" => "ok-a"} in contents
+      assert %{"status" => "ok", "result" => "file1\nfile2"} in contents
+    end
+
+    test "a program turn's assistant content is empty (prose is not retained in L1)" do
+      seed_session()
+      {:ok, tape} = Refold.to_tape(Memory, "s1")
+
+      # Using the result-derived `say` here would replay the tool RESULT as
+      # assistant prose; the faithful reconstruction is empty content.
+      for %{role: :assistant, content: content, tool_calls: _} <- tape do
+        assert content == ""
+      end
+    end
+
+    test "a non-JSON-encodable result degrades instead of crashing" do
+      # A PTC turn can (return {:ok, 1}); Jason cannot encode a tuple. refold must
+      # not raise on a valid recorded history.
+      a =
+        Recorder.record_node(
+          Memory,
+          "s1",
+          %{program: "(return {:ok 1})", result: {:ok, 1}},
+          nil
+        )
+
+      set_main(a.id)
+      {:ok, tape} = Refold.to_tape(Memory, "s1")
+      [content] = for %{role: :tool, content: c} <- tape, do: Jason.decode!(c)
+      # the tuple degraded to its inspected string, inside the envelope.
+      assert content["status"] == "ok"
+      assert is_binary(content["result"])
     end
   end
 
