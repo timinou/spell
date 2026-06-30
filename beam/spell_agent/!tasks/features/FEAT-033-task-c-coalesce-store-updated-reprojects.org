@@ -1,0 +1,63 @@
+#+TITLE: Task C: coalesce {:store_updated} reprojects to bound renders during a run
+#+STATE: DONE
+#+SESSION_ID: 151d9298321ae2ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-30T15-10-38-792Z_151d9298321ae2ef.jsonl]]
+#+CUSTOM_ID: FEAT-033-task-c-coalesce-store-updated-reprojects
+
+* Initial Message
+
+kk dude, can you tell me why there is lag in the beam spell agent TUI? There's noticeable lag it's super annoying, it looks like characters are only shown on the next tick or sth.
+
+Parent: PLAN-023. Independent of Task A (FEAT-032); verify together.
+
+* Goal
+
+During an active mission, =Store= broadcasts ={:store_updated, suffix}= on EVERY telemetry event. Each currently triggers =reproject(:all)= + a full render. A telemetry burst therefore floods the App's single mailbox with heavy reprojects that interleave with =:poll= and keystrokes → input starvation ("char shows next tick"). Coalesce store-update reprojects so a burst produces at most one reproject+render per frame interval, not one per event.
+
+* Why
+
+The App is one GenServer; =:poll=, keystrokes, and ={:store_updated}= share the mailbox. A keystroke queued behind N heavy store-update renders is delayed by N*render_cost. Even with Task A flattening per-render cost, a burst of store updates still does N reprojects (VM rebuilds) when the screen can only show one. Collapse them.
+
+* Design
+
+Debounce/coalesce store-update reprojects on a short timer (one frame ~16ms, tunable). The first ={:store_updated}= arms a timer and marks a pending reproject; subsequent updates within the window coalesce the dirty =suffix= set rather than each reprojecting. On timer fire, do ONE reproject over the accumulated dirty set.
+
+** Concrete shape (adjust during impl)
+- App state gains coalescing fields, e.g. =:store_dirty= (accumulated suffixes / =:all=) and =:store_flush_timer= (timer ref or nil).
+- =handle_info({:store_updated, suffix}, state)=: merge =suffix= into =:store_dirty=; if no flush timer armed, =Process.send_after(self(), :flush_store, @store_coalesce_ms)=; do NOT reproject inline.
+- =handle_info(:flush_store, state)=: reproject over the accumulated dirty set, clear =:store_dirty= and =:store_flush_timer=.
+- Mission-finished (={ref, result}= handler) and explicit nav still reproject immediately (=:all=) — only the telemetry =:store_updated= stream is coalesced. Do not delay the terminal "done/failed" status update perceptibly (its reproject is on the result message, not the stream).
+- Choose a coalescing window that is invisible to humans for streamed spans (~16-33ms) but collapses a tight burst. Make it a module attribute.
+
+** Interaction with reactive cells
+- =reproject= already arms cell debounce timers; coalescing store updates simply means cells see the quiescent state once per window instead of per event — strictly better (matches the cell debounce intent). Confirm =tick_cells= still fires on the coalesced reproject.
+
+** Edge cases
+- A ={:store_updated}= arriving with a flush already armed must NOT re-arm (single in-flight timer); just accumulate dirty.
+- Dirty-set merge: =:all= dominates a specific suffix; two specific suffixes accumulate to a list (existing =reproject= already accepts a suffix list or =:all=).
+- On mission completion the final state must be rendered even if it lands mid-window — the result handler's immediate reproject covers this; ensure a pending store-flush timer does not later clobber it with stale dirty (clearing dirty on the immediate reproject is fine).
+- Headless tests that inject ={:store_updated}= then assert the buffer must account for the debounce: either flush deterministically or assert after the window. Prefer a test seam (send =:flush_store= directly, or a 0ms window in tests).
+
+* Files (likely)
+- =lib/spell_agent/tui/app.ex= — coalescing fields in =mount=; rework =handle_info({:store_updated, …})=; add =handle_info(:flush_store, …)=; module attr for the window.
+
+* Acceptance
+- Simulated burst: feed K ={:store_updated}= messages within one window → exactly ONE reproject+render occurs (assert via render_count or a reproject counter), not K.
+- A single store update still renders within ~one frame (not dropped, not perceptibly delayed).
+- Keystrokes during a simulated burst are not starved: interleaved keystroke render still reflects the typed char promptly (headless test).
+- Mission "done/failed" status still appears immediately on completion.
+- =mix compile --warnings-as-errors= clean; existing App handle_info / store tests pass.
+
+* Outcome (DONE)
+
+Implemented:
+- =handle_info({:store_updated, suffix})= now accumulates into =:store_dirty= + arms a one-shot =:flush_store= timer (=@store_coalesce_ms= = 16ms, overridable via the =store_coalesce_ms= mount opt) and returns =render?: false=. A telemetry burst of N events does ZERO inline renders and collapses to ONE reproject+render at flush.
+- Helpers =merge_store_dirty/2= (=:all= dominates; deduped suffix list), =arm_store_flush/1= (single in-flight timer), =cancel_store_flush/1=.
+- Mission completion (={ref, result}=) reprojects IMMEDIATELY and cancels the pending flush + dirty, so a stale =:flush_store= cannot clobber the final state. Keystrokes are never coalesced.
+
+Acceptance met:
+- Burst of 20 =:store_updated= → 0 renders before flush, collapses to ~1 render after (vs 20 un-coalesced).
+- A single update still renders within the window.
+- Keystrokes reach the composer during a burst (not starved).
+- Mission "done" renders immediately + clears pending flush.
+- 4 new app_test cases; full TUI suite 438 passed; =mix compile --warnings-as-errors= clean.

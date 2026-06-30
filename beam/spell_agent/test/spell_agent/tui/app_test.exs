@@ -141,6 +141,120 @@ defmodule SpellAgent.Tui.AppTest do
     GenServer.stop(pid)
   end
 
+  # ---- PLAN-023 Task C: store-update coalescing ----
+
+  describe "store-update coalescing (PLAN-023 Task C)" do
+    test "a burst of {:store_updated} collapses to ONE reproject + render", %{store: store} do
+      # A small but non-zero window so all messages in the burst land BEFORE the
+      # flush timer fires (the burst is synchronous, far faster than 50ms).
+      {:ok, pid} =
+        App.start_link(
+          name: nil,
+          test_mode: {80, 24},
+          store: store,
+          on_submit: fn _ -> :noop end,
+          store_coalesce_ms: 50
+        )
+
+      base = Runtime.snapshot(pid).render_count
+
+      # 20 telemetry-style store updates in a tight burst.
+      for _ <- 1..20, do: send(pid, {:store_updated, [:tool, :start]})
+
+      # Before the window elapses: the burst armed ONE timer and rendered ZERO
+      # times (each arming message returns render?: false).
+      :sys.get_state(pid)
+      mid = Runtime.snapshot(pid).render_count
+      assert mid == base, "the burst rendered #{mid - base} frames before flush, expected 0"
+
+      # After the window: the 20-event burst collapsed to ONE coalesced reproject
+      # + render. (A reactive cell armed by that reproject may add at most one more
+      # follow-up render via {:cell_resolved}; the contract is COLLAPSE — a small
+      # constant, never the 20 the un-coalesced path would draw.)
+      Process.sleep(80)
+      after_flush = Runtime.snapshot(pid).render_count
+
+      assert (after_flush - base) in 1..2,
+             "expected the 20-event burst to collapse to ~1 render, got #{after_flush - base}"
+
+      GenServer.stop(pid)
+    end
+
+    test "a single {:store_updated} still renders within the window", %{store: store} do
+      {:ok, pid} =
+        App.start_link(
+          name: nil,
+          test_mode: {80, 24},
+          store: store,
+          on_submit: fn _ -> :noop end,
+          store_coalesce_ms: 0
+        )
+
+      base = Runtime.snapshot(pid).render_count
+      send(pid, {:store_updated, [:tool, :start]})
+      Process.sleep(20)
+      assert Runtime.snapshot(pid).render_count == base + 1
+
+      GenServer.stop(pid)
+    end
+
+    test "keystrokes are not starved during a store-update burst", %{store: store} do
+      {:ok, pid} =
+        App.start_link(
+          name: nil,
+          test_mode: {80, 24},
+          store: store,
+          on_submit: fn _ -> :noop end,
+          store_coalesce_ms: 50
+        )
+
+      :ok = enter_insert(pid)
+      # Interleave a burst of store updates with keystrokes; the keystrokes must
+      # still reach the composer immediately (they are not deferred/coalesced).
+      for _ <- 1..10, do: send(pid, {:store_updated, [:llm, :start]})
+      :ok = type_string(pid, "hi")
+      for _ <- 1..10, do: send(pid, {:store_updated, [:tool, :start]})
+
+      assert app_state(pid).composer == "hi"
+
+      GenServer.stop(pid)
+    end
+
+    test "mission completion reprojects immediately and cancels a pending flush", %{
+      store: store
+    } do
+      {:ok, pid} =
+        App.start_link(
+          name: nil,
+          test_mode: {80, 24},
+          store: store,
+          on_submit: fn _ -> :noop end,
+          store_coalesce_ms: 5_000
+        )
+
+      # Arm a pending (long-window) flush, then deliver a mission-result message.
+      send(pid, {:store_updated, [:tool, :start]})
+      :sys.get_state(pid)
+      assert app_state(pid).store_flush_timer != nil
+
+      base = Runtime.snapshot(pid).render_count
+      ref = make_ref()
+      send(pid, {ref, {:ok, :finished}})
+      :sys.get_state(pid)
+
+      st = app_state(pid)
+      assert st.result == {:ok, :finished}
+      assert st.running? == false
+      # The immediate reproject rendered now (not deferred to the 5s window) and
+      # cleared the pending flush + dirty so a later :flush_store is a no-op.
+      assert Runtime.snapshot(pid).render_count == base + 1
+      assert st.store_flush_timer == nil
+      assert st.store_dirty == nil
+
+      GenServer.stop(pid)
+    end
+  end
+
   # ---- render-level tests for the header (D2: final answer; D3: status) ----
 
   alias ExRatatui.Frame

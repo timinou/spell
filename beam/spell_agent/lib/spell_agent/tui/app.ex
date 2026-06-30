@@ -65,6 +65,16 @@ defmodule SpellAgent.Tui.App do
     %{name: :detail, module: Detail, assigns: %{}}
   ]
 
+  # PLAN-023 Task C: the store-update COALESCING window (ms). A running mission
+  # broadcasts {:store_updated, suffix} on every telemetry event; reprojecting +
+  # rendering per event floods the App's single mailbox and starves keystrokes
+  # ("char shows next tick"). Instead the first update arms a one-shot flush timer
+  # and accumulates the dirty suffix set; all updates within the window collapse
+  # into ONE reproject when :flush_store fires. ~one frame (16ms) is invisible to a
+  # human for streamed spans but collapses a tight telemetry burst. Tests can pass
+  # `store_coalesce_ms: 0` to flush on the next mailbox turn (deterministic).
+  @store_coalesce_ms 16
+
   # ---- mount ----
 
   @impl true
@@ -106,6 +116,23 @@ defmodule SpellAgent.Tui.App do
       cell_timers: %{},
       cell_gens: %{},
       last_area: %Rect{x: 0, y: 0, width: 80, height: 24},
+      # PLAN-023 Task A: the cached, ALREADY-SANITIZED forest snapshot (sanitized
+      # span forest + vms + forest-derived scalars). Recomputed ONCE per reproject
+      # (store update / navigation) and reused by every keystroke render, so a
+      # render no longer re-reads Store.spans or re-runs the O(forest)
+      # Sanitize.term per frame. nil until the first reproject (mount runs one
+      # below, so it is warm before the first render); a nil cache degrades the
+      # render path to the eager DataBag.build/2 (totality).
+      data_cache: nil,
+      # PLAN-023 Task C: store-update coalescing. `store_dirty` accumulates the
+      # suffixes (or :all) of {:store_updated} messages seen since the last flush;
+      # `store_flush_timer` is the one-shot :flush_store timer ref (nil = none
+      # armed). A telemetry burst accumulates into store_dirty and reprojects ONCE
+      # when the timer fires, instead of once per event. `store_coalesce_ms` is the
+      # window (overridable for deterministic tests).
+      store_dirty: nil,
+      store_flush_timer: nil,
+      store_coalesce_ms: opts[:store_coalesce_ms] || @store_coalesce_ms,
       # The FRAME leader's one-shot pending flag (C-w): set when C-w is pressed,
       # consumed by the very next key (resolved spatially against the placed
       # tree), then cleared. nil = no leader armed.
@@ -167,7 +194,12 @@ defmodule SpellAgent.Tui.App do
     # The composer hint is keymap-derived (live registry + compiled keymaps), so it
     # stays an App projection; inject it so DataBag can expose data/composer-text
     # without DataBag needing the keymap layer.
-    data_bag = DataBag.build(Map.put(state, :composer_hint, hint_for(state)), area)
+    data_bag =
+      DataBag.build(
+        Map.put(state, :composer_hint, hint_for(state)),
+        area,
+        Map.get(state, :data_cache)
+      )
 
     state
     |> render_tree()
@@ -508,7 +540,13 @@ defmodule SpellAgent.Tui.App do
   # panes it could place (never raises into the event loop).
   defp frame_regions(state) do
     area = state.last_area
-    data_bag = DataBag.build(Map.put(state, :composer_hint, hint_for(state)), area)
+
+    data_bag =
+      DataBag.build(
+        Map.put(state, :composer_hint, hint_for(state)),
+        area,
+        Map.get(state, :data_cache)
+      )
 
     pane_regions =
       state
@@ -545,15 +583,45 @@ defmodule SpellAgent.Tui.App do
 
   @impl true
   def handle_info({:store_updated, suffix}, state) do
-    {:noreply, reproject(state, [suffix])}
+    # PLAN-023 Task C: COALESCE. Accumulate the dirty suffix and arm a one-shot
+    # flush timer if none is pending; do NOT reproject inline AND suppress this
+    # message's render (`render?: false`) — the runtime auto-renders after every
+    # transition, so without this a telemetry burst of N events would still draw N
+    # (cheap, but pointless) frames. Only :flush_store reprojects + renders, so a
+    # burst collapses to ONE reproject + ONE render. `store_coalesce_ms: 0` flushes
+    # on the next mailbox turn.
+    {:noreply, arm_store_flush(merge_store_dirty(state, suffix)), render?: false}
+  end
+
+  # The coalescing window elapsed — reproject ONCE over every suffix accumulated
+  # since the timer armed, then clear the dirty set + timer. `:all` dominates a
+  # specific-suffix list (it already forces a full re-projection). A nil dirty
+  # (e.g. an immediate reproject cleared it first) is a harmless no-op.
+  def handle_info(:flush_store, %{store_dirty: nil} = state) do
+    {:noreply, %{state | store_flush_timer: nil}}
+  end
+
+  def handle_info(:flush_store, state) do
+    fired = state.store_dirty
+    state = %{state | store_dirty: nil, store_flush_timer: nil}
+    {:noreply, reproject(state, fired)}
   end
 
   # Mission Task finished — capture the final result. Focus stays on the TREE (set
   # at submit) so the operator keeps exploring the completed run; the detail pane
-  # shows whatever is selected. The status line reflects done/failed.
+  # shows whatever is selected. The status line reflects done/failed. The final
+  # state must render NOW (not wait on the coalescing window), so this reprojects
+  # immediately and clears any pending store-flush so a later :flush_store can't
+  # clobber it with stale dirty (PLAN-023 Task C).
   def handle_info({ref, result}, state) when is_reference(ref) do
     Process.demonitor(ref, [:flush])
-    {:noreply, reproject(%{state | running?: false, result: result}, :all)}
+
+    state
+    |> cancel_store_flush()
+    |> Map.put(:running?, false)
+    |> Map.put(:result, result)
+    |> reproject(:all)
+    |> then(&{:noreply, &1})
   end
 
   def handle_info({:DOWN, _ref, :process, _pid, _reason}, state) do
@@ -669,6 +737,41 @@ defmodule SpellAgent.Tui.App do
 
   defp compose(_chord, state), do: state
 
+  # ---- store-update coalescing (PLAN-023 Task C) ----
+
+  # Merge a newly-seen {:store_updated} suffix into the accumulated dirty set.
+  # `:all` dominates (it already forces a full reproject); otherwise the suffix is
+  # accumulated into a deduped list `reproject/2` accepts. nil dirty starts a list.
+  defp merge_store_dirty(%{store_dirty: :all} = state, _suffix), do: state
+  defp merge_store_dirty(state, :all), do: %{state | store_dirty: :all}
+
+  defp merge_store_dirty(%{store_dirty: nil} = state, suffix),
+    do: %{state | store_dirty: [suffix]}
+
+  defp merge_store_dirty(%{store_dirty: list} = state, suffix) when is_list(list) do
+    if suffix in list, do: state, else: %{state | store_dirty: [suffix | list]}
+  end
+
+  # Arm the one-shot :flush_store timer iff none is pending (a single in-flight
+  # timer owns the window; later updates only accumulate dirty). A 0ms window
+  # still defers to the next mailbox turn, so a synchronous burst coalesces.
+  defp arm_store_flush(%{store_flush_timer: ref} = state) when is_reference(ref), do: state
+
+  defp arm_store_flush(state) do
+    ref = Process.send_after(self(), :flush_store, state.store_coalesce_ms)
+    %{state | store_flush_timer: ref}
+  end
+
+  # Cancel a pending flush and drop the accumulated dirty — used when an immediate
+  # reproject (mission completion) already covers every pending update, so a later
+  # :flush_store must not clobber the fresh state with stale dirty.
+  defp cancel_store_flush(%{store_flush_timer: ref} = state) when is_reference(ref) do
+    Process.cancel_timer(ref)
+    %{state | store_flush_timer: nil, store_dirty: nil}
+  end
+
+  defp cancel_store_flush(state), do: %{state | store_dirty: nil}
+
   defp reproject(state, fired) do
     forest = Store.spans(state.store)
     # Inject the live gaze into each pane's projection assigns so a gaze-aware
@@ -679,13 +782,20 @@ defmodule SpellAgent.Tui.App do
     hist_assigns = %{ui: state.ui, hist_session: state.hist_session, hist_store: state.hist_store}
     panes = Enum.map(state.panes, fn p -> %{p | assigns: Map.merge(p.assigns, hist_assigns)} end)
     vms = Projection.reconcile(forest, panes, fired, state.vms)
+    # PLAN-023 Task A: recompute the sanitized forest snapshot HERE (the single
+    # chokepoint for every forest/vms change) reusing the `forest` already read
+    # above — NO extra Store.spans round-trip. Every subsequent keystroke render
+    # reuses this cache, so the O(forest) Sanitize.term is paid once per store
+    # update / nav, not once per frame.
+    data_cache = DataBag.snapshot_from(forest, vms)
+    state = state |> Map.put(:vms, vms) |> Map.put(:data_cache, data_cache)
     # Keep the canonical layout tree's gaze tags in step with state.ui (PLAN-009):
     # fold the current gaze into the LayoutRegistry tree so the agent's lens/ +
     # layout/show see the live focus/cursor, and any slot shadow it authored
     # persists across navigation. Single chokepoint: every gaze/forest change
     # flows through reproject. Best-effort (no registry in a headless test).
     sync_layout_gaze(state.ui)
-    tick_cells(%{state | vms: vms})
+    tick_cells(state)
   end
 
   # ---- reactive cells: the SLOW clock (PROJ-004 W3) ----
@@ -713,7 +823,11 @@ defmodule SpellAgent.Tui.App do
   # a zero rect would make a cell reading data/area see zeros and never re-trigger
   # on resize). The render path still builds its own true-area bag for holes.
   defp cell_bag(state) do
-    DataBag.build(Map.put(state, :composer_hint, hint_for(state)), state.last_area)
+    DataBag.build(
+      Map.put(state, :composer_hint, hint_for(state)),
+      state.last_area,
+      Map.get(state, :data_cache)
+    )
   end
 
   # Arm (or re-arm) a debounce timer for one dirty cell: cancel any pending timer
@@ -761,7 +875,12 @@ defmodule SpellAgent.Tui.App do
 
     widget = %List{
       items: items,
-      block: %Block{title: " #{desc.title} ", borders: [:all], border_type: :rounded, border_style: border_style_for(desc.focused?)},
+      block: %Block{
+        title: " #{desc.title} ",
+        borders: [:all],
+        border_type: :rounded,
+        border_style: border_style_for(desc.focused?)
+      },
       highlight_style: %Style{modifiers: [:bold]},
       selected: select_index(desc, length(items))
     }
@@ -779,7 +898,12 @@ defmodule SpellAgent.Tui.App do
       wrap: true,
       scroll: {desc.scroll, 0},
       style: %Style{fg: :white},
-      block: %Block{title: " #{desc.title}#{focus_tag} ", borders: [:all], border_type: :rounded, border_style: border_style_for(desc.focused?)}
+      block: %Block{
+        title: " #{desc.title}#{focus_tag} ",
+        borders: [:all],
+        border_type: :rounded,
+        border_style: border_style_for(desc.focused?)
+      }
     }
 
     {widget, rect}
@@ -805,7 +929,12 @@ defmodule SpellAgent.Tui.App do
       wrap: true,
       scroll: {desc.scroll, 0},
       style: %Style{fg: :white},
-      block: %Block{title: " history#{focus_tag} ", borders: [:all], border_type: :rounded, border_style: border_style_for(desc.focused?)}
+      block: %Block{
+        title: " history#{focus_tag} ",
+        borders: [:all],
+        border_type: :rounded,
+        border_style: border_style_for(desc.focused?)
+      }
     }
 
     {widget, rect}

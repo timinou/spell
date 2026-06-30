@@ -1,0 +1,65 @@
+#+TITLE: Task A: cache sanitized forest/vms by identity in DataBag/App render
+#+STATE: DONE
+#+SESSION_ID: 151d9298321ae2ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-30T15-10-38-792Z_151d9298321ae2ef.jsonl]]
+#+CUSTOM_ID: FEAT-032-task-a-cache-sanitized-forest-vms-by-ide
+
+* Initial Message
+
+kk dude, can you tell me why there is lag in the beam spell agent TUI? There's noticeable lag it's super annoying, it looks like characters are only shown on the next tick or sth.
+
+Parent: PLAN-023.
+
+* Goal
+
+Stop paying O(forest size) =Sanitize.term= cost on every keystroke. Sanitize the heavy =data/*= members (=forest=, =vms=) ONCE when they change, cache the result in App state, and reuse the cached sanitized value across keystroke renders. A keystroke that does not change the forest must pay zero forest-sanitize cost.
+
+* Why
+
+=DataBag.build/2= deep-walks the entire span forest (=Sanitize.term=) every frame. The default layout never reads =data/forest= / =data/vms=, and the forest only changes on ={:store_updated}=, never on a keystroke. Measured: full =App.render= grows from 0.5ms (empty) to ~12ms (1200 spans) — entirely from the per-frame forest sanitize + cross-process =Store.spans= copy.
+
+* Design
+
+Two cost sources to eliminate from the keystroke render path:
+1. =Store.spans= GenServer.call (cross-process forest copy) inside =DataBag.assemble=.
+2. =Sanitize.term= over the forest + vms.
+
+Both inputs (=forest=, =vms=) change only on =reproject= (store update / navigation), which already runs OFF the keystroke-only path for the composer (insert-mode =compose= does not reproject). Cache the sanitized forest+vms in App state, computed in =reproject=, and feed it into =DataBag.build= so render reuses it.
+
+** Concrete shape (adjust to fit during impl)
+
+- App state gains a cached, already-sanitized snapshot, e.g. =:data_cache= holding ={sanitized_forest, sanitized_vms, forest_count}=, plus an identity token (the forest map reference / a monotonic store-version) to detect staleness.
+- =reproject/2= (the chokepoint for every forest/gaze change) computes the cache once: it already calls =Store.spans= for projection, so reuse that single read — sanitize forest+vms there, store in =:data_cache=.
+- =DataBag.build/2= grows a path that accepts the precomputed sanitized forest/vms instead of re-reading + re-sanitizing. Keep =build/2='s current behavior as the fallback (headless tests, no cache) so DataBag stays pure + total.
+- The cache must NOT change observable =data/*= values: =data/forest=, =data/vms=, =data/forest-count= resolve to exactly what an eager build would produce. A hole referencing =data/forest= sees the same sanitized data.
+- Insert-mode keystroke render must reuse the cache (no =Store.spans=, no forest sanitize). Verify =compose= path does not invalidate the cache.
+
+** Edge cases
+- First render before any reproject: cache may be empty → fall back to eager build (DataBag stays total). mount already calls =reproject(state, :all)=, so the cache is warm by first render.
+- Cells: =cell_bag/1= in =tick_cells= builds a SECOND bag for dep-diffing. It must reuse the SAME cached sanitized forest/vms, or the second sanitize re-introduces the cost on store updates. (Acceptable to keep the cost on store-update ticks since C coalesces those, but prefer reusing the cache.)
+- Sanitize identity: a NEW forest map each store update means a cheap reference/equality token suffices; do not deep-compare.
+- =data/forest-count= = =map_size(spans)= — keep deriving from the raw spans map (cheap), not the sanitized copy.
+
+* Files (likely)
+- =lib/spell_agent/tui/data_bag.ex= — accept precomputed sanitized forest/vms; keep eager fallback.
+- =lib/spell_agent/tui/app.ex= — compute + store =:data_cache= in =reproject=; thread into =render= and =cell_bag=; init the field in =mount=.
+
+* Acceptance
+- Re-run e2e bench (forest 0/200/600/1200): full =App.render= time is FLAT vs forest size for the default layout (no growth from forest sanitize).
+- A keystroke render performs zero =Store.spans= GenServer.call and zero forest =Sanitize.term= (verify by instrumentation or by the flat bench).
+- =data/forest= hole resolution unchanged: a layout hole reading =data/forest= yields the same sanitized value as before (add/keep a test).
+- =data/forest-count=, =data/turns=, =data/tools= still correct after store updates.
+- =mix compile --warnings-as-errors= clean; existing DataBag + App render tests pass.
+
+* Outcome (DONE)
+
+Implemented:
+- =DataBag.snapshot/1= + =snapshot_from/2= — the SINGLE O(forest) =Sanitize.term= site (sanitizes the span forest + stringified vms, plus forest-derived scalars turns/tools/forest-count).
+- =DataBag.build/3= — reuses a precomputed snapshot for the heavy =forest=/=vms= keys; only the light per-frame keys are assembled+sanitized per call. =build/2= now delegates via =snapshot/1=; a =nil= snap degrades to the eager path (totality).
+- =App= state field =:data_cache=, computed ONCE per =reproject= reusing the =forest= already read there (NO extra =Store.spans= round-trip), threaded into =render=, =frame_regions=, and =cell_bag= via =Map.get(state, :data_cache)= so a hand-built test state degrades gracefully.
+
+Acceptance met:
+- e2e bench (forest 0/200/600/1200): full =App.render= 11.9ms -> 0.57ms at 1200 spans; now FLAT vs forest size.
+- Keystroke render performs zero =Store.spans= + zero forest =Sanitize.term= (cache reused).
+- =data/forest=, =data/vms=, =data/forest-count=, =data/turns=, =data/tools= unchanged (5 new data_bag tests pin the snapshot contract incl. sanitization-through-cache).
+- =mix compile --warnings-as-errors= clean; 18 data_bag + 62 app/self_view tests pass.

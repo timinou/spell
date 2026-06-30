@@ -99,6 +99,77 @@ defmodule SpellAgent.Tui.DataBagTest do
   # the zero-cost claim — a hole resolves any bag key uniformly
   # ============================================================
 
+  # ============================================================
+  # PLAN-023 Task A: the cached snapshot path (build/3 + snapshot_from)
+  # ============================================================
+
+  describe "snapshot path (build/3) — caches the forest-derived heavy members" do
+    alias SpellAgent.Tui.Store.Span
+
+    defp forest(n) do
+      Map.new(1..n, fn i ->
+        {"s#{i}",
+         %Span{
+           id: "s#{i}",
+           parent_id: nil,
+           kind: Enum.at([:run, :llm, :tool], rem(i, 3)),
+           status: :ok,
+           t0: i,
+           t1: i + 1,
+           label: "span #{i}"
+         }}
+      end)
+    end
+
+    test "build/3 exposes the snapshot's sanitized heavy members + scalars verbatim" do
+      spans = forest(8)
+      vms = %{"tree" => %{"rows" => [1, 2, 3]}}
+      snap = DataBag.snapshot_from(spans, vms)
+      cached = DataBag.build(state(%{vms: vms}), area(), snap)
+
+      # The heavy keys come straight from the (already-sanitized) snapshot — the
+      # render path never re-derives them, so they must equal the snapshot's.
+      assert cached["forest"] == snap.forest
+      assert cached["vms"] == snap.vms
+      assert cached["forest-count"] == 8
+      assert cached["tools"] == snap.tools
+      assert cached["turns"] == snap.turns
+    end
+
+    test "forest-count and tools reflect the snapshot's forest, not the (empty) state store" do
+      spans = forest(6)
+      # 6 spans, kinds cycle run/llm/tool → tools = every 3rd starting at kind index 2
+      snap = DataBag.snapshot_from(spans, %{})
+      bag = DataBag.build(state(), area(), snap)
+      assert bag["forest-count"] == 6
+      assert bag["tools"] == Enum.count(Map.values(spans), &(&1.kind == :tool))
+    end
+
+    test "the cached forest is sanitized (a fn in vms is stripped through the snapshot)" do
+      f = fn _ -> :PWNED end
+      snap = DataBag.snapshot_from(%{}, %{"p" => %{"cb" => f, "name" => "ok"}})
+      bag = DataBag.build(state(), area(), snap)
+      assert get_in(bag, ["vms", "p", "cb"]) == nil
+      assert get_in(bag, ["vms", "p", "name"]) == "ok"
+    end
+
+    test "a nil snapshot degrades build/3 to the eager build/2 (totality)" do
+      bag = DataBag.build(state(), area(), nil)
+      assert bag["forest-count"] == 0
+      assert Map.has_key?(bag, "forest")
+      assert Map.has_key?(bag, "status")
+    end
+
+    test "build/3 still merges the light per-frame keys (status/composer presentation)" do
+      snap = DataBag.snapshot_from(forest(3), %{})
+      bag = DataBag.build(state(%{running?: true}), area(), snap)
+      assert bag["running?"] == true
+      assert bag["status"]["running?"] == true
+      assert is_binary(bag["status-label"])
+      assert Map.has_key?(bag, "composer-text")
+    end
+  end
+
   describe "holes resolve against the bag (the seam works)" do
     test "a hole reads a coarse key" do
       bag = DataBag.build(state(%{running?: true}), area())

@@ -58,7 +58,71 @@ defmodule SpellAgent.Tui.DataBag do
   """
   @spec build(map(), map()) :: t()
   def build(state, area) when is_map(state) do
-    state |> assemble(area) |> Sanitize.term() |> merge_cells()
+    build(state, area, snapshot(state))
+  end
+
+  @typedoc """
+  A precomputed, ALREADY-SANITIZED snapshot of the forest-derived (heavy) bag
+  members (PLAN-023 Task A). Holds the two O(forest) values — the sanitized span
+  `forest` and the sanitized `vms` — plus the cheap forest-derived scalars
+  (`turns`/`tools`/`forest-count`). These change ONLY when the store forest or the
+  pane view-models change (a `reproject`), never on a bare keystroke, so caching
+  them across keystroke renders removes the per-frame `Sanitize.term` + `Store.spans`
+  cost that scaled render time with conversation size.
+  """
+  @type snapshot :: %{
+          forest: term(),
+          vms: term(),
+          forest_count: non_neg_integer(),
+          turns: non_neg_integer(),
+          tools: non_neg_integer()
+        }
+
+  @doc """
+  Build the forest snapshot from App `state` (reads the store once).
+
+  Prefer `snapshot_from/2` when the caller already holds the spans map (the App's
+  `reproject` does) to avoid a second `Store.spans` round-trip. Pure + total.
+  """
+  @spec snapshot(map()) :: snapshot()
+  def snapshot(state) when is_map(state) do
+    snapshot_from(safe_spans(state), Map.get(state, :vms, %{}))
+  end
+
+  @doc """
+  Build the forest snapshot from an already-read `spans` map + `vms`.
+
+  This is the ONE place the O(forest) `Sanitize.term` runs on the heavy members;
+  the App calls it once per `reproject` and reuses the result across every
+  keystroke render. Pure + total.
+  """
+  @spec snapshot_from(map(), term()) :: snapshot()
+  def snapshot_from(spans, vms) when is_map(spans) do
+    %{
+      forest: Sanitize.term(spans),
+      vms: vms |> stringify_vms() |> Sanitize.term(),
+      forest_count: map_size(spans),
+      turns: spans |> Store.run_spans() |> Enum.flat_map(& &1.turns) |> length(),
+      tools: spans |> Store.tool_spans() |> length()
+    }
+  end
+
+  @doc """
+  Assemble the `data/*` bag reusing a precomputed forest `snap` (PLAN-023 Task A).
+
+  The heavy members (`forest`, `vms`) and the forest-derived scalars come from
+  `snap` ALREADY sanitized — render never re-sanitizes the forest. Only the light,
+  per-frame members (area, status, gaze, composer presentation) are assembled and
+  sanitized here, so a keystroke render's cost is independent of conversation size.
+  A `nil` snap degrades to the eager `build/2` path (totality for headless callers).
+  """
+  @spec build(map(), map(), snapshot() | nil) :: t()
+  def build(state, area, nil), do: build(state, area)
+
+  def build(state, area, %{} = snap) when is_map(state) do
+    light = state |> assemble_light(area, snap) |> Sanitize.term()
+    heavy = %{"forest" => snap.forest, "vms" => snap.vms}
+    light |> Map.merge(heavy) |> merge_cells()
   end
 
   # Merge the reactive cells' last off-frame-resolved values into the bag
@@ -90,8 +154,12 @@ defmodule SpellAgent.Tui.DataBag do
   defp cell_listing do
     SpellAgent.Tui.Cell.Registry.all()
     |> Enum.map(fn {name, cell} ->
-      %{"name" => name, "deps" => MapSet.to_list(cell.deps),
-        "debounce" => cell.debounce, "resolved" => cell.resolved != :unresolved}
+      %{
+        "name" => name,
+        "deps" => MapSet.to_list(cell.deps),
+        "debounce" => cell.debounce,
+        "resolved" => cell.resolved != :unresolved
+      }
     end)
   rescue
     _ -> []
@@ -99,13 +167,16 @@ defmodule SpellAgent.Tui.DataBag do
     :exit, _ -> []
   end
 
-  defp assemble(state, area) when is_map(state) do
-    spans = safe_spans(state)
-    runs = Store.run_spans(spans)
-    turns = runs |> Enum.flat_map(& &1.turns) |> length()
-    tools = length(Store.tool_spans(spans))
+  # The LIGHT, per-frame bag members (PLAN-023 Task A): everything that is cheap to
+  # derive on the frame clock — area, status, gaze, fine scalars, and the
+  # status/composer presentation. The HEAVY forest-derived members (`forest`,
+  # `vms`) and the forest-derived scalars (`turns`/`tools`/`forest-count`) come
+  # from the precomputed `snap`, so this runs in O(1) of conversation size.
+  defp assemble_light(state, area, snap) when is_map(state) do
     running? = Map.get(state, :running?, false)
     result = Map.get(state, :result)
+    turns = snap.turns
+    tools = snap.tools
 
     status = %{
       "running?" => running?,
@@ -124,18 +195,16 @@ defmodule SpellAgent.Tui.DataBag do
     {composer_text, composer_title, composer_fg} = composer_presentation(state)
 
     %{
-      # ---- coarse maps ----
+      # ---- coarse maps (forest/vms are merged in by build/3 from the snap) ----
       "area" => area_map(area),
       "status" => status,
       "ui" => ui_map(Map.get(state, :ui)),
-      "vms" => stringify_vms(Map.get(state, :vms, %{})),
-      "forest" => spans,
       "cells" => cell_listing(),
       # ---- fine-grained scalars (sharper diff keys; §8c.3) ----
       "running?" => running?,
       "turns" => turns,
       "tools" => tools,
-      "forest-count" => map_size(spans),
+      "forest-count" => snap.forest_count,
       "composer" => Map.get(state, :composer, ""),
       # ---- presentation keys (W5 dogfood: status/composer render from these) ----
       "status-label" => status_label,

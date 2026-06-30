@@ -1,0 +1,86 @@
+#+TITLE: TUI input lag — per-keystroke render cost scales with conversation size
+#+STATE: DONE
+#+SESSION_ID: 151d9298321ae2ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-30T15-10-38-792Z_151d9298321ae2ef.jsonl]]
+#+CUSTOM_ID: PLAN-023-tui-input-lag-per-keystroke-render-cost
+
+* Initial Message
+
+kk dude, can you tell me why there is lag in the beam spell agent TUI? There's noticeable lag it's super annoying, it looks like characters are only shown on the next tick or sth.
+
+* Problem
+
+Noticeable, growing input lag in the spell_agent live TUI: typed characters appear "a tick late". The lag worsens as a conversation/mission grows and is worst while the agent is actively running.
+
+** Diagnosis (verified, not guessed)
+
+The runtime loop is CORRECT — render fires synchronously after each event (=ExRatatui.Server.process_poll_result= -> =maybe_render=, no decoupled render timer). Proven headlessly via =test_mode= + =Runtime.inject_event=: a keystroke is reflected in the very next buffer (render_count 1->3 for 2 events, ~1.25ms round-trip, char visible immediately). There is NO off-by-one in the loop.
+
+The lag is render *cost*, and it is O(conversation size), paid on EVERY frame (every keystroke):
+
+#+begin_src
+handle_event (keystroke)
+  -> App.render/2
+    -> DataBag.build(state, area)
+      -> assemble: puts the ENTIRE span forest into the bag  ("forest" => spans)
+      -> Sanitize.term(bag): DEEP-WALKS every Span struct + every field, recursively
+    -> Store.spans  (GenServer.call copying the whole forest map cross-process)
+#+end_src
+
+=Sanitize.term= and =Store.spans= are both O(forest size) and run on every frame, even a plain insert-mode keystroke that only mutated the composer string.
+
+*** Measured (this repo, warm)
+
+| forest spans | Sanitize.term | full App.render |
+|            0 | ~0 ms         | 0.49 ms         |
+|          200 | 0.27 ms       | 1.0 ms          |
+|          600 | 2.2 ms        | 6.1 ms          |
+|         1200 | 5.7 ms        | 11.9 ms         |
+
+A real conversation reaches hundreds-thousands of spans, so each keystroke render climbs into multi-ms → the char paints a tick late.
+
+*** Why worse while running
+
+The App is a single GenServer. During a mission, =Store= broadcasts ={:store_updated, suffix}= on EVERY telemetry event → each triggers =reproject(:all)= (rebuild all pane VMs + a SECOND full-forest sanitize via =cell_bag=) PLUS a render. Those heavy messages interleave with =:poll= and keystrokes in one mailbox, so a keypress queues behind a backlog of growing-forest re-renders. Exactly the "only shown on the next tick" symptom.
+
+*** The waste
+
+The default layout's holes read only cheap scalars (=data/status-label/-color=, =data/composer-text/-fg/-title=). NOTHING in the default layout reads =data/forest= or =data/vms=, yet the whole forest is copied + deep-sanitized every frame regardless. The forest changes ONLY on ={:store_updated}=, never on a keystroke → re-sanitizing per keystroke is pure overhead. =data/forest= must still be AVAILABLE for agent-authored layouts that reference it (=priv/prompts/freeform_tui.md=, =reaction/ptc.ex=, =self_view/idioms.ex= all expose it).
+
+* Approach
+
+Two independent, low-risk work items, each its own org task. Both preserve the homoiconic =data/forest= contract.
+
+** Task A — cache the sanitized forest/vms by identity (kills per-keystroke scaling)
+
+Sanitize =forest= + =vms= ONCE when they change (on =reproject=, i.e. store update / nav), cache the result in App state, and reuse the cached sanitized value across keystroke renders. A keystroke that does not change the forest pays zero forest-sanitize cost.
+
+** Task C — coalesce store-update renders (kills input starvation during a run)
+
+Debounce/throttle ={:store_updated}= reprojects so a telemetry burst during a running mission produces at most one render per frame interval instead of one per event. Orthogonal to A; addresses the compounding-while-running case.
+
+* Non-goals
+- Do NOT change the runtime loop / poll cadence (it is correct).
+- Do NOT remove =data/forest= / =data/vms= from the bag — agent layouts depend on them.
+- Do NOT retire =%Ui{}= or alter the gaze model (see FEAT-031).
+
+* Acceptance (whole plan)
+- Per-keystroke =App.render= cost is flat (independent of forest size) for the default layout: re-run the e2e bench (forest 0/200/600/1200) → render time no longer grows with forest size.
+- During a simulated telemetry burst, the number of reprojects/renders is bounded (coalesced), not one-per-event.
+- =data/forest= still resolves correctly for a layout hole that references it (cache returns the same sanitized value an eager build would).
+- =bun check= equivalent for BEAM: =mix compile --warnings-as-errors= clean; relevant tests pass.
+
+* Build sequence
+1. Task A (caching) — independent, lands first.
+2. Task C (coalescing) — independent, can land in parallel; verify together at the end.
+
+* Outcome (DONE)
+
+Both tasks landed and verified together.
+
+- *Task A* (FEAT-032): cached sanitized forest/vms snapshot → per-keystroke =App.render= is now FLAT vs conversation size (11.9ms → 0.57ms at 1200 spans).
+- *Task C* (FEAT-033): coalesced ={:store_updated}= reprojects → a telemetry burst collapses to ~1 reproject+render instead of one-per-event, and keystrokes are no longer starved during a running mission.
+
+Combined effect: the "character shows a tick late" lag is removed both at rest (A) and under a running-mission telemetry stream (C). Render loop semantics unchanged; =data/forest=/=data/vms= contract preserved.
+
+Verification: full TUI suite 438 passed; =mix compile --warnings-as-errors= clean; e2e + sanitize benches confirm flat render and bounded burst renders.
