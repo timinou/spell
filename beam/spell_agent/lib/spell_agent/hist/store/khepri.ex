@@ -143,6 +143,7 @@ defmodule SpellAgent.Hist.Store.Khepri do
   defp path({:mesh, region, seq}), do: [@root, :mesh, region, seq]
   defp path({:mesh_seq, region}), do: [@root, :mesh_seq, region]
   defp path({:mesh_hash, region, h}), do: [@root, :mesh_hash, region, h]
+  defp path({:reduced, sid, w, hash}), do: [@root, :reduced, sid, w, hash]
 
   # Wildcard patterns for list/2. Session-global kinds ignore the session arg.
   defp list_pattern(:session, nil), do: [@root, :session, star()]

@@ -40,6 +40,10 @@ defmodule SpellAgent.Hist.Store do
           | {:mesh, String.t(), non_neg_integer()}
           | {:mesh_seq, String.t()}
           | {:mesh_hash, String.t(), String.t()}
+          # PLAN-018 W5: memo of a deterministic reduction at a (session, watermark,
+          # policy_hash). A revisit at the same key is a FREE lookup, not a
+          # recompute — the store-side half of "reuse a previously-used header".
+          | {:reduced, String.t(), non_neg_integer(), String.t()}
 
   @type value ::
           Session.t()
