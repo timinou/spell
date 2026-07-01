@@ -305,7 +305,17 @@ export interface McpServerKdlEntry {
 	env?: Record<string, string>;
 	url?: string;
 	headers?: Record<string, string>;
-	auth?: { type: "oauth" | "apikey"; credentialId?: string };
+	// `tokenUrl`/`clientId`/`clientSecret` are the OAuth refresh coordinates that
+	// `MCPManager.#resolveAuthConfig` needs to refresh an expiring token. They are
+	// non-secret coordinates safe to persist in spell.kdl; `clientSecret` MUST be
+	// an env-var NAME (resolved via resolveConfigValue), never a literal secret.
+	auth?: {
+		type: "oauth" | "apikey";
+		credentialId?: string;
+		tokenUrl?: string;
+		clientId?: string;
+		clientSecret?: string;
+	};
 	oauth?: { clientId?: string; callbackPort?: number };
 }
 
@@ -392,9 +402,15 @@ export function readMcpServers(node: Node): KdlCompatResult<Record<string, McpSe
 			const authType = authNode.getProperty("type");
 			if (authType === "oauth" || authType === "apikey") {
 				const credentialId = authNode.getProperty("credentialId");
+				const tokenUrl = authNode.getProperty("tokenUrl");
+				const clientId = authNode.getProperty("clientId");
+				const clientSecret = authNode.getProperty("clientSecret");
 				entry.auth = {
 					type: authType,
 					...(typeof credentialId === "string" ? { credentialId } : {}),
+					...(typeof tokenUrl === "string" ? { tokenUrl } : {}),
+					...(typeof clientId === "string" ? { clientId } : {}),
+					...(typeof clientSecret === "string" ? { clientSecret } : {}), // pragma: allowlist secret
 				};
 			}
 		}
@@ -447,6 +463,9 @@ export function writeMcpServers(node: Node, value: Record<string, McpServerKdlEn
 			const n = NodeClass.create("auth");
 			n.setProperty("type", entry.auth.type);
 			if (entry.auth.credentialId !== undefined) n.setProperty("credentialId", entry.auth.credentialId);
+			if (entry.auth.tokenUrl !== undefined) n.setProperty("tokenUrl", entry.auth.tokenUrl);
+			if (entry.auth.clientId !== undefined) n.setProperty("clientId", entry.auth.clientId);
+			if (entry.auth.clientSecret !== undefined) n.setProperty("clientSecret", entry.auth.clientSecret);
 			serverChildren.appendNode(n);
 		}
 		if (entry.oauth) {

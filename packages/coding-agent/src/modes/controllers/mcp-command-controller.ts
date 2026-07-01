@@ -6,6 +6,14 @@
 import { Spacer, Text } from "@spell/pi-tui";
 import { getMCPConfigPath, getProjectDir } from "@spell/pi-utils";
 import type { SourceMeta } from "../../capability/types";
+import type { McpServerKdlEntry } from "../../config/kdl-compatibility";
+import { settings, type WriteTier } from "../../config/settings";
+import {
+	configToEntry,
+	entryToConfig,
+	resolveMcpServer,
+	type TierServerMap,
+} from "../../mcp/kdl-server-resolver";
 import { analyzeAuthError, discoverOAuthEndpoints, MCPManager } from "../../mcp";
 import { connectToServer, disconnectServer, listTools } from "../../mcp/client";
 import {
@@ -14,7 +22,6 @@ import {
 	readMCPConfigFile,
 	removeMCPServer,
 	setServerDisabled,
-	updateMCPServer,
 } from "../../mcp/config-writer";
 import { MCPOAuthFlow } from "../../mcp/oauth-flow";
 import {
@@ -97,6 +104,9 @@ export class MCPCommandController {
 			case "test":
 				await this.#handleTest(parts[2]);
 				break;
+			case "login":
+				await this.#handleLogin(parts[2]);
+				break;
 			case "reauth":
 				await this.#handleReauth(parts[2]);
 				break;
@@ -151,6 +161,7 @@ export class MCPCommandController {
 			"  /mcp list             List all configured MCP servers",
 			"  /mcp remove <name> [--scope project|user]    Remove an MCP server (default: project)",
 			"  /mcp test <name>      Test connection to an MCP server",
+			"  /mcp login <name>     Authenticate an MCP server via OAuth (first-time login)",
 			"  /mcp reauth <name>    Reauthorize OAuth for an MCP server",
 			"  /mcp unauth <name>    Remove OAuth auth from an MCP server",
 			"  /mcp enable <name>    Enable an MCP server",
@@ -626,25 +637,67 @@ export class MCPCommandController {
 		await disconnectServer(connection);
 	}
 
+	/**
+	 * Resolve a server by name across spell.kdl settings tiers (primary) and
+	 * legacy mcp.json (fallback), returning its runtime config plus the scope
+	 * and source needed to persist an update. KDL wins over mcp.json; project
+	 * scope wins over user scope. See mcp/kdl-server-resolver.ts for precedence.
+	 */
 	async #findConfiguredServer(
 		name: string,
-	): Promise<{ filePath: string; scope: "user" | "project"; config: MCPServerConfig } | null> {
+	): Promise<{ scope: "user" | "project"; source: "kdl" | "legacy"; config: MCPServerConfig } | null> {
 		const cwd = getProjectDir();
 		const userPath = getMCPConfigPath("user", cwd);
 		const projectPath = getMCPConfigPath("project", cwd);
 
-		const [userConfig, projectConfig] = await Promise.all([
+		const tiers = settings.getPerTier("mcp.servers");
+		const [userLegacy, projectLegacy] = await Promise.all([
 			readMCPConfigFile(userPath),
 			readMCPConfigFile(projectPath),
 		]);
 
-		if (userConfig.mcpServers?.[name]) {
-			return { filePath: userPath, scope: "user", config: userConfig.mcpServers[name] };
-		}
-		if (projectConfig.mcpServers?.[name]) {
-			return { filePath: projectPath, scope: "project", config: projectConfig.mcpServers[name] };
-		}
-		return null;
+		const legacyToEntries = (servers: Record<string, MCPServerConfig> | undefined): TierServerMap => {
+			const out: TierServerMap = {};
+			for (const [key, cfg] of Object.entries(servers ?? {})) out[key] = configToEntry(cfg);
+			return out;
+		};
+
+		const resolved = resolveMcpServer(name, {
+			kdl: {
+				user: (tiers.user as TierServerMap) ?? {},
+				project: (tiers.project as TierServerMap) ?? {},
+			},
+			legacy: {
+				user: legacyToEntries(userLegacy.mcpServers),
+				project: legacyToEntries(projectLegacy.mcpServers),
+			},
+		});
+		if (!resolved) return null;
+		return { scope: resolved.scope, source: resolved.source, config: entryToConfig(resolved.entry) };
+	}
+
+	/**
+	 * Persist a server config to the appropriate spell.kdl tier (write-through
+	 * to the KDL settings source). Replaces the legacy updateMCPServer(filePath)
+	 * path so OAuth results and enable/disable flips land in spell.kdl.
+	 */
+	async #persistServer(name: string, scope: "user" | "project", config: MCPServerConfig): Promise<void> {
+		const tier: WriteTier = scope;
+		const current = (settings.getPerTier("mcp.servers")[tier] as TierServerMap) ?? {};
+		const next: Record<string, McpServerKdlEntry> = { ...current, [name]: configToEntry(config) };
+		settings.set("mcp.servers", next as unknown as Record<string, unknown>, tier);
+		await settings.flush();
+	}
+
+	/** Remove a server from its spell.kdl tier. */
+	async #removeServerFromKdl(name: string, scope: "user" | "project"): Promise<void> {
+		const tier: WriteTier = scope;
+		const current = (settings.getPerTier("mcp.servers")[tier] as TierServerMap) ?? {};
+		if (!(name in current)) return;
+		const next: Record<string, McpServerKdlEntry> = { ...current };
+		delete next[name];
+		settings.set("mcp.servers", next as unknown as Record<string, unknown>, tier);
+		await settings.flush();
 	}
 
 	async #removeManagedOAuthCredential(credentialId: string | undefined): Promise<void> {
@@ -1217,7 +1270,7 @@ export class MCPCommandController {
 			}
 
 			const updated: MCPServerConfig = { ...found.config, enabled };
-			await updateMCPServer(found.filePath, name, updated);
+			await this.#persistServer(name, found.scope, updated);
 			await this.#reloadMCP();
 
 			let status = "";
@@ -1269,7 +1322,7 @@ export class MCPCommandController {
 			}
 
 			const updated = this.#stripOAuthAuth(found.config);
-			await updateMCPServer(found.filePath, name, updated);
+			await this.#persistServer(name, found.scope, updated);
 			await this.#reloadMCP();
 
 			this.#showMessage(
@@ -1277,6 +1330,94 @@ export class MCPCommandController {
 			);
 		} catch (error) {
 			this.ctx.showError(`Failed to clear auth: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	/**
+	 * First-time OAuth login for an MCP server (FEAT-829). Unlike `reauth`, this
+	 * does NOT discard an existing credential; if one is already present and
+	 * valid it reports "already authenticated" and no-ops. Otherwise it discovers
+	 * the server's OAuth endpoints, runs the browser flow, persists the widened
+	 * `auth {}` block to the server's spell.kdl tier, and reloads.
+	 */
+	async #handleLogin(name: string | undefined): Promise<void> {
+		if (!name) {
+			this.ctx.showError("Server name required. Usage: /mcp login <name>");
+			return;
+		}
+
+		try {
+			const found = await this.#findConfiguredServer(name);
+			if (!found) {
+				this.ctx.showError(`Server "${name}" not found.`);
+				return;
+			}
+
+			if (found.config.enabled === false) {
+				this.ctx.showError(`Server "${name}" is disabled. Run /mcp enable ${name} first.`);
+				return;
+			}
+
+			// Already authenticated? No-op with a friendly message.
+			const currentAuth = (found.config as MCPServerConfig & { auth?: { type?: string; credentialId?: string } }).auth;
+			if (currentAuth?.type === "oauth" && currentAuth.credentialId) {
+				const existing = this.ctx.session.modelRegistry.authStorage.get(currentAuth.credentialId);
+				if (existing?.type === "oauth") {
+					this.#showMessage(
+						[
+							"",
+							theme.fg("muted", `Server "${name}" is already authenticated. Use /mcp reauth ${name} to re-run OAuth.`),
+							"",
+						].join("\n"),
+					);
+					return;
+				}
+			}
+
+			const baseConfig = this.#stripOAuthAuth(found.config);
+			const oauth = await this.#resolveOAuthEndpointsFromServer(baseConfig);
+
+			this.#showMessage(["", theme.fg("muted", `Authenticating "${name}"...`), ""].join("\n"));
+
+			const credentialId = await this.#handleOAuthFlow(
+				oauth.authorizationUrl,
+				oauth.tokenUrl,
+				oauth.clientId ?? found.config.oauth?.clientId ?? "",
+				"",
+				oauth.scopes ?? "",
+				found.config.oauth?.callbackPort,
+			);
+
+			const updated: MCPServerConfig = {
+				...baseConfig,
+				auth: {
+					type: "oauth",
+					credentialId,
+					tokenUrl: oauth.tokenUrl,
+					clientId: oauth.clientId ?? found.config.oauth?.clientId,
+				},
+			};
+			await this.#persistServer(name, found.scope, updated);
+			await this.#reloadMCP();
+			const state = await this.#waitForServerConnectionWithAnimation(name);
+
+			this.#showMessage(
+				[
+					"",
+					theme.fg("success", `✓ Authenticated "${name}" (${found.scope} config)`),
+					"",
+					`  Status: ${
+						state === "connected"
+							? theme.fg("success", "connected")
+							: state === "connecting"
+								? theme.fg("muted", "connecting")
+								: theme.fg("warning", "not connected")
+					}`,
+					"",
+				].join("\n"),
+			);
+		} catch (error) {
+			this.ctx.showError(`Failed to authenticate server: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 
@@ -1331,7 +1472,7 @@ export class MCPCommandController {
 					clientSecret: currentAuth?.clientSecret,
 				},
 			};
-			await updateMCPServer(found.filePath, name, updated);
+			await this.#persistServer(name, found.scope, updated);
 			await this.#reloadMCP();
 			const state = await this.#waitForServerConnectionWithAnimation(name);
 

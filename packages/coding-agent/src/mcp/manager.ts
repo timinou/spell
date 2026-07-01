@@ -27,6 +27,7 @@ import {
 	unsubscribeFromResources,
 } from "./client";
 import { loadAllMCPConfigs, validateServerConfig } from "./config";
+import { classifyConnectFailure } from "./connect-failure";
 import { refreshMCPOAuthToken } from "./oauth-flow";
 import type { MCPToolDetails } from "./tool-bridge";
 import { DeferredMCPTool, MCPTool } from "./tool-bridge";
@@ -488,9 +489,14 @@ export class MCPManager {
 					connectedServers.add(name);
 					allTools.push(...MCPTool.fromTools(connection, serverTools));
 				} else if (task.tracked.status === "rejected") {
-					const message =
-						task.tracked.reason instanceof Error ? task.tracked.reason.message : String(task.tracked.reason);
-					errors.set(name, message);
+					const reason =
+						task.tracked.reason instanceof Error ? task.tracked.reason : new Error(String(task.tracked.reason));
+					// Turn an unmet-OAuth 401 into an actionable "run /mcp login <name>"
+					// hint instead of a bare connection error (FEAT-829). A stored
+					// credential means the 401 is a real failure, not a missing login.
+					const hasCredential = this.#hasStoredCredential(task.config);
+					const verdict = classifyConnectFailure(name, reason, { hasCredential });
+					errors.set(name, verdict.hint ? `${verdict.hint} (${verdict.message})` : verdict.message);
 					reportedErrors.add(name);
 				} else {
 					const cached = cachedTools.get(name);
@@ -927,6 +933,17 @@ export class MCPManager {
 			enabled: this.#notificationsEnabled,
 			subscriptions: this.#subscribedResources as Map<string, ReadonlySet<string>>,
 		};
+	}
+
+	/**
+	 * Whether a usable OAuth credential is already stored for this server. Used
+	 * to distinguish an unmet login (no credential → actionable prompt) from a
+	 * genuine 401 despite having credentials (revoked/expired past refresh).
+	 */
+	#hasStoredCredential(config: MCPServerConfig): boolean {
+		const auth = config.auth;
+		if (auth?.type !== "oauth" || !auth.credentialId || !this.#authStorage) return false;
+		return this.#authStorage.get(auth.credentialId)?.type === "oauth";
 	}
 
 	/**
