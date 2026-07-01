@@ -1,0 +1,60 @@
+#+TITLE: /mcp command layer reads + writes KDL-declared servers via settings tiers
+#+STATE: DONE
+#+SESSION_ID: 151ef415875fcda7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-07-01T16-55-03-965Z_151ef415875fcda7.jsonl]]
+#+CUSTOM_ID: FEAT-828-mcp-command-layer-reads-writes-kdl-decla
+#+COMPLETION_HASH: 7449d84f0f931e4c
+
+* Initial Message
+
+i want you to create a notion mcp connection using spell.kdl so taht I can edit this: https://app.notion.com/p/limitlesslabs/Temporary-Wire-project-management-39004e33c4b98083a747c39455ce8a5d to add all the infromation about all the oth/* feature branches (you'll have to ask me a lot of questions about that).
+
+
+First start with the mcp connection
+
+Parent: PLAN-348. WAVE 2 — behavioral core. Depends on BUG-491 (WAVE 1).
+
+* Problem
+
+`/mcp reauth|unauth|test|enable|disable <name>` all funnel through `#findConfiguredServer` (packages/coding-agent/src/modes/controllers/mcp-command-controller.ts:629), which reads ONLY `mcp.json` files via `getMCPConfigPath("user"|"project")`. Servers declared in `spell.kdl` `mcp {}` blocks are invisible → "Server not found". This is the exact "Server notion not found" failure.
+
+Persistence side: `#handleReauth` writes results via `updateMCPServer(filePath, …)` → mcp.json. Must instead write to the KDL settings tier.
+
+* Fix
+
+1. `#findConfiguredServer(name)` — resolve from settings tiers instead of (or in addition to) mcp.json:
+   - Read `settings.getPerTier("mcp.servers")` → check `project` tier then `user` tier for `name`.
+   - Return `{ scope: "user"|"project", config, tier }` shape the callers expect. Map tier→scope: project tier→"project", user tier→"user".
+   - KEEP a legacy mcp.json read as a fallback (migration window) — but KDL/settings wins when both define the name (mirrors builtin.ts::loadMCPServers precedence + emits the same shadow warning semantics).
+
+2. Persist path (`#handleReauth`, quick-add in `#handleAdd`, `#handleUnauth`, remove) — replace `updateMCPServer(...)` with:
+   - Read current `settings.getPerTier("mcp.servers")[tier]` map (or {}).
+   - Set/merge `map[name] = updatedConfig` (including the widened `auth {}` from BUG-491).
+   - `settings.set("mcp.servers", map, tier)` where tier = user|project|local per `--scope`.
+   - `await settings.flush()` (or the existing persistence await) so spell.kdl is written before reload.
+
+3. `--scope` handling: user→user tier (~/.config/spell/spell.kdl), project→project tier (<cwd>/spell.kdl), (local→<cwd>/.local/spell.kdl if surfaced). Default scope = project per PLAN decision.
+
+* Non-goals
+
+- Don't remove mcp.json read yet (migration). Just make KDL the primary + writable source.
+- Don't touch the runtime `#resolveAuthConfig` — it already consumes the config correctly once the config carries the fields.
+
+* TDD — tests first (mcp-command-controller.test.ts or a focused config-resolution test)
+
+- RED: `#findConfiguredServer` (or an extracted pure resolver) returns a server defined ONLY in a project-tier spell.kdl `mcp {}` block. Fails today.
+- RED: persisting an `auth {}` update via the command path writes to the project spell.kdl (settings project tier), not mcp.json — assert the re-read settings map contains the auth block with all BUG-491 fields.
+- RED: precedence — a name defined in BOTH spell.kdl and mcp.json resolves to the spell.kdl entry.
+- GREEN: implement.
+- Edge: server absent everywhere → clean "not found". Disabled server → existing disabled-path message preserved.
+
+Prefer extracting a PURE resolver fn (settings map + mcp.json map → resolved entry) to test without a full controller/session harness. Keep the controller method a thin wrapper.
+
+* Acceptance
+
+- New resolver + persistence tests green.
+- `/mcp reauth notion` against a project-kdl-declared notion server no longer errors "not found" (covered by test double).
+- `bun test packages/coding-agent/src/modes/` (or the focused file) green.
+- No regression in existing mcp-command-controller tests.
+
+NOTE [2026-07-01]: GREEN. Extracted pure mcp/kdl-server-resolver.ts (resolveMcpServer tier-precedence + entryToConfig/configToEntry). Rewired #findConfiguredServer to read settings.getPerTier("mcp.servers") KDL tiers primary + legacy mcp.json fallback (KDL wins, project>user). Added #persistServer/#removeServerFromKdl writing via settings.set(tier)+flush; redirected all 3 updateMCPServer(found.filePath) callsites (reauth/unauth/enable). Removed unused updateMCPServer import. Tests kdl-server-resolver.test.ts: 9 pass (tier precedence x6, converter round-trip x3). Controller bundles clean (bun build exit 0), zero LSP diagnostics. Note: src/modes/ has no test runner surface (UI-heavy controller); testable logic extracted to pure resolver module — gate retargeted there.

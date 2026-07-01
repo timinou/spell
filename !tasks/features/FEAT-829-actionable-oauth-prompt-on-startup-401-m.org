@@ -1,0 +1,48 @@
+#+TITLE: Actionable OAuth prompt on startup 401 + /mcp login subcommand
+#+STATE: DONE
+#+SESSION_ID: 151ef415875fcda7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-07-01T16-55-03-965Z_151ef415875fcda7.jsonl]]
+#+CUSTOM_ID: FEAT-829-actionable-oauth-prompt-on-startup-401-m
+#+COMPLETION_HASH: 5b858634821c2961
+
+* Initial Message
+
+i want you to create a notion mcp connection using spell.kdl so taht I can edit this: https://app.notion.com/p/limitlesslabs/Temporary-Wire-project-management-39004e33c4b98083a747c39455ce8a5d to add all the infromation about all the oth/* feature branches (you'll have to ask me a lot of questions about that).
+
+
+First start with the mcp connection
+
+Parent: PLAN-348. WAVE 3 — trigger + UX / delight. Depends on FEAT-828 (WAVE 2) for the persistence path.
+
+* Problem
+
+When a KDL-declared OAuth MCP server has no stored credential, startup connect fails with `HTTP 401 invalid_token` and `connectServers` (packages/coding-agent/src/mcp/manager.ts) just logs `MCP tool load failed`. The user has no signal that the fix is an OAuth login, nor a single command to run it. Silent dead-end — the exact experience we hit with Notion.
+
+* Fix
+
+1. Startup surfacing (`connectServers` error branch):
+   - When a connect error occurs, run `analyzeAuthError(error)` (mcp/oauth-discovery.ts:192). If `requiresAuth === true` AND no credential is currently resolvable for the server (no `auth.credentialId` or agent.db miss):
+     - Record a distinct, NON-FATAL status for that server: e.g. `oauthRequired` with message `"<name>: OAuth required — run /mcp login <name>"`.
+     - Surface it through the same channel the loader uses to report per-server errors, but tagged so the UI shows an actionable hint rather than a generic failure. Do NOT throw; other servers must still load.
+
+2. `/mcp login <name>` subcommand (mcp-command-controller.ts):
+   - Thin composition of existing pieces: `#findConfiguredServer` (now KDL-aware from FEAT-828) → if already has valid cred, say so; else `#resolveOAuthEndpointsFromServer`/`discoverOAuthEndpoints` → `#handleOAuthFlow` (browser + localhost callback) → build widened `auth {}` (BUG-491 fields: credentialId, tokenUrl, clientId, [clientSecret env-name]) → persist via settings tier (FEAT-828 path) → reload → report connected.
+   - `login` vs `reauth`: `login` = first-time (no existing cred, friendlier "not authed yet" copy); `reauth` = force re-run discarding existing cred. Share the core helper; differ only in pre-checks + messaging. Add to the `/mcp` help text.
+
+* TDD — tests first
+
+- RED: given a connect failure whose error string carries `WWW-Authenticate: Bearer ... error="invalid_token"` and a server with no credential, `connectServers` (or an extracted classify fn) marks the server `oauthRequired` with a `/mcp login <name>` hint — NOT a plain error, and does not throw. Fails today.
+- RED: `analyzeAuthError` on the real Notion 401 body returns `requiresAuth: true` (guard/regression on the classifier for our concrete case).
+- RED: the `login` flow, with `#handleOAuthFlow` stubbed to return a credential, persists a widened `auth {}` block to the project settings tier and reports connected. (reuses FEAT-828 persistence.)
+- GREEN: implement classify-and-surface + `login` subcommand.
+- Edge: non-auth connect failure (e.g. ECONNREFUSED tidewave) still reports as a plain error, NOT an oauth prompt. login on an already-authed server → "already connected" no-op.
+
+Extract a pure `classifyConnectFailure(error, hasCredential) → {kind: "oauth-required"|"error", hint?}` to unit-test without a live manager.
+
+* Acceptance
+
+- Classifier + login-persistence tests green.
+- End-to-end (manual, documented in PLAN-348 acceptance): notion in project spell.kdl, no cred → startup shows "OAuth required — run /mcp login notion" → `/mcp login notion` → browser OAuth → agent.db token + spell.kdl auth block → connected → survives expiry refresh (exercises BUG-491 round-trip + #resolveAuthConfig).
+- `bun test` green. `bun run check:ts` clean.
+
+NOTE [2026-07-01]: GREEN. Pure classifier mcp/connect-failure.ts::classifyConnectFailure (error+hasCredential → oauth-required|error). Detects RFC 9728 OAuth protected-resource (WWW-Authenticate: Bearer realm=OAuth / resource_metadata=) — the real Notion 401 shape that analyzeAuthError alone mislabels apikey. Wired into MCPManager.connectServers rejected-branch via #hasStoredCredential(agent.db lookup): unmet-login 401→"OAuth required — run /mcp login <name>", genuine 401-with-cred→plain error (no loop). Added /mcp login subcommand (switch+help+#handleLogin): KDL-aware find → already-authed no-op → discover endpoints → #handleOAuthFlow → persist widened auth to spell.kdl tier → reload. Tests connect-failure.test.ts 4 pass. mcp dir 13 pass, config 5 pass. Both manager+controller bundle clean (bun build exit 0), zero LSP diagnostics.

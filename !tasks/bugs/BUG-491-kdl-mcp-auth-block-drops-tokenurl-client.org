@@ -1,0 +1,48 @@
+#+TITLE: KDL MCP auth block drops tokenUrl/clientId/clientSecret (lossy round-trip)
+#+STATE: DONE
+#+SESSION_ID: 151ef415875fcda7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-07-01T16-55-03-965Z_151ef415875fcda7.jsonl]]
+#+CUSTOM_ID: BUG-491-kdl-mcp-auth-block-drops-tokenurl-client
+#+COMPLETION_HASH: 9255991fc606f81d
+
+* Initial Message
+
+i want you to create a notion mcp connection using spell.kdl so taht I can edit this: https://app.notion.com/p/limitlesslabs/Temporary-Wire-project-management-39004e33c4b98083a747c39455ce8a5d to add all the infromation about all the oth/* feature branches (you'll have to ask me a lot of questions about that).
+
+
+First start with the mcp connection
+
+Parent: PLAN-348. WAVE 1 — foundation.
+
+* Defect
+
+`McpServerKdlEntry.auth` (packages/coding-agent/src/config/kdl-compatibility.ts:308) is typed `{ type: "oauth"|"apikey"; credentialId?: string }`. The runtime `MCPAuthConfig` (packages/coding-agent/src/mcp/types.ts:47) additionally carries `tokenUrl?`, `clientId?`, `clientSecret?` — all required by `MCPManager.#resolveAuthConfig` for proactive + forced token refresh. The KDL reader (`readMcpServers`, ~:391) and writer (`writeMcpServers`, ~:445) both silently drop these three fields.
+
+Consequence: a `auth {}` block serialized to spell.kdl loses the refresh coordinates. On next launch the token cannot be refreshed → 401 on expiry. Blocks the entire feature: WAVE 2 writes this block and WAVE 3 depends on it surviving a round-trip.
+
+* Fix (three edits, MUST move together)
+
+1. `McpServerKdlEntry.auth` type — add `tokenUrl?: string`, `clientId?: string`, `clientSecret?: string`.
+2. `readMcpServers` — read `tokenUrl`, `clientId`, `clientSecret` props off the `authNode` (mirror existing `credentialId` handling). Only accept strings.
+3. `writeMcpServers` — emit those three props on the `auth` node when present (mirror existing `credentialId` write).
+
+Note the existing reader/writer ALREADY handle the `auth {}` and `oauth {}` child nodes — this is purely widening which props are carried.
+
+* Secret handling
+
+`clientSecret` in KDL must be an env-var NAME, not a literal. Do NOT special-case here — `#resolveAuthConfig` already runs every header/env value through `resolveConfigValue` (env indirection). Just carry the string through faithfully. Document in a code comment that literal secrets must never be written.
+
+* TDD — tests first (packages/coding-agent/src/config/*.test.ts or kdl-compatibility.test.ts)
+
+- RED: `readMcpServers` on a KDL doc with `auth { type=oauth credentialId=c tokenUrl=t clientId=i clientSecret=SECRET_ENV }` returns all five fields. (fails today — 3 dropped)
+- RED: round-trip `writeMcpServers(readMcpServers(doc))` preserves all auth fields byte-equivalently in the re-read entry.
+- GREEN: implement the 3 edits.
+- Edge: `auth {}` with only `type`+`credentialId` (no refresh coords) still parses (backward-compat). `apikey` type unaffected.
+
+* Acceptance
+
+- New round-trip test passes.
+- `bun test packages/coding-agent/src/config/` green.
+- No change to existing kdl-compatibility tests (backward compatible).
+
+NOTE [2026-07-01]: GREEN. Widened McpServerKdlEntry.auth + readMcpServers + writeMcpServers with tokenUrl/clientId/clientSecret. New test kdl-compatibility.mcp-auth.test.ts: 5 pass (read-all-5, backward-compat minimal, apikey-no-coords, write-all-5, round-trip lossless). Gate `bun test packages/coding-agent/src/config/` green. Zero diagnostics on edited files.

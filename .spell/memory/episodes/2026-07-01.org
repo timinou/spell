@@ -1,0 +1,46 @@
+#+TITLE: Episodes 2026-07-01
+
+** ITEM KDL MCP auth block drops tokenUrl/clientId/clientSecret (lossy round-trip)
+:PROPERTIES:
+:CUSTOM_ID: EP-9db54a15e13f8ad3
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-07-01T20:43:19Z
+:END:
+:RELATIONS:
+ABOUT: BUG-491-kdl-mcp-auth-block-drops-tokenurl-client
+:END:
+GREEN. Widened McpServerKdlEntry.auth + readMcpServers + writeMcpServers with tokenUrl/clientId/clientSecret. New test kdl-compatibility.mcp-auth.test.ts: 5 pass (read-all-5, backward-compat minimal, apikey-no-coords, write-all-5, round-trip lossless). Gate `bun test packages/coding-agent/src/config/` green. Zero diagnostics on edited files.
+** ITEM /mcp command layer reads + writes KDL-declared servers via settings tiers
+:PROPERTIES:
+:CUSTOM_ID: EP-9ee051d9cad4724
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-07-01T20:58:42Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-828-mcp-command-layer-reads-writes-kdl-decla
+:END:
+GREEN. Extracted pure mcp/kdl-server-resolver.ts (resolveMcpServer tier-precedence + entryToConfig/configToEntry). Rewired #findConfiguredServer to read settings.getPerTier("mcp.servers") KDL tiers primary + legacy mcp.json fallback (KDL wins, project>user). Added #persistServer/#removeServerFromKdl writing via settings.set(tier)+flush; redirected all 3 updateMCPServer(found.filePath) callsites (reauth/unauth/enable). Removed unused updateMCPServer import. Tests kdl-server-resolver.test.ts: 9 pass (tier precedence x6, converter round-trip x3). Controller bundles clean (bun build exit 0), zero LSP diagnostics. Note: src/modes/ has no test runner surface (UI-heavy controller); testable logic extracted to pure resolver module — gate retargeted there.
+** ITEM Actionable OAuth prompt on startup 401 + /mcp login subcommand
+:PROPERTIES:
+:CUSTOM_ID: EP-d21e60942db675f0
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-07-01T21:13:56Z
+:END:
+:RELATIONS:
+ABOUT: FEAT-829-actionable-oauth-prompt-on-startup-401-m
+:END:
+GREEN. Pure classifier mcp/connect-failure.ts::classifyConnectFailure (error+hasCredential → oauth-required|error). Detects RFC 9728 OAuth protected-resource (WWW-Authenticate: Bearer realm=OAuth / resource_metadata=) — the real Notion 401 shape that analyzeAuthError alone mislabels apikey. Wired into MCPManager.connectServers rejected-branch via #hasStoredCredential(agent.db lookup): unmet-login 401→"OAuth required — run /mcp login <name>", genuine 401-with-cred→plain error (no loop). Added /mcp login subcommand (switch+help+#handleLogin): KDL-aware find → already-authed no-op → discover endpoints → #handleOAuthFlow → persist widened auth to spell.kdl tier → reload. Tests connect-failure.test.ts 4 pass. mcp dir 13 pass, config 5 pass. Both manager+controller bundle clean (bun build exit 0), zero LSP diagnostics.
+** ITEM OAuth for KDL-declared HTTP MCP servers
+:PROPERTIES:
+:CUSTOM_ID: EP-1f818dd74b33b682
+:KIND: episode
+:CONFIDENCE: 0.6
+:CREATED: 2026-07-01T21:14:31Z
+:END:
+:RELATIONS:
+ABOUT: PLAN-348-oauth-for-kdl-declared-http-mcp-servers
+:END:
+COMPLETE — all 3 waves green + gated. WAVE 1 (BUG-491): KDL auth round-trip widened (tokenUrl/clientId/clientSecret) across McpServerKdlEntry+reader+writer; 5 tests. WAVE 2 (FEAT-828): pure mcp/kdl-server-resolver.ts + #findConfiguredServer reads settings tiers (KDL primary, mcp.json fallback), #persistServer writes via settings.set(tier); 9 tests. WAVE 3 (FEAT-829): pure mcp/connect-failure.ts classifier wired into connectServers + /mcp login subcommand; 4 tests. Total 18 unit tests pass. Files: config/kdl-compatibility.ts, mcp/kdl-server-resolver.ts(new), mcp/connect-failure.ts(new), mcp/manager.ts, modes/controllers/mcp-command-controller.ts. All edited files zero LSP diagnostics; manager+controller bundle clean. Remaining: manual E2E (declare notion in project spell.kdl → /mcp login notion → browser OAuth → agent.db token + spell.kdl auth block → connected). Not committed yet.

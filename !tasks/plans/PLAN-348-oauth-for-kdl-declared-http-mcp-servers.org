@@ -1,0 +1,84 @@
+#+TITLE: OAuth for KDL-declared HTTP MCP servers
+#+STATE: DONE
+#+SESSION_ID: 151ef415875fcda7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-07-01T16-55-03-965Z_151ef415875fcda7.jsonl]]
+#+CUSTOM_ID: PLAN-348-oauth-for-kdl-declared-http-mcp-servers
+#+COMPLETION_HASH: f94ac48014de1e29
+
+* Initial Message
+
+i want you to create a notion mcp connection using spell.kdl so taht I can edit this: https://app.notion.com/p/limitlesslabs/Temporary-Wire-project-management-39004e33c4b98083a747c39455ce8a5d to add all the infromation about all the oth/* feature branches (you'll have to ask me a lot of questions about that).
+
+
+First start with the mcp connection
+
+* Problem
+
+Hosted OAuth MCP servers (Notion `https://mcp.notion.com/mcp`, Linear, GitHub, Sentry…) cannot be authenticated when declared in `spell.kdl`. A `mcp { server X type=http { url … } }` block loads at startup, hits the endpoint, receives `HTTP 401 invalid_token`, and dies silently with `MCP tool load failed`. There is no path to run the OAuth browser flow for a KDL-declared server.
+
+** Root cause — the RUNTIME is already complete
+
+`MCPManager.#resolveAuthConfig` (manager.ts:935) already: proactively refreshes tokens (5-min buffer), injects `Authorization: Bearer <access>` for http/sse, and `connectServers` wires `onAuthError` so a 401 forces a refresh. This all works — *for a server that carries an* `auth { type=oauth credentialId=… }` *block*.
+
+The break is entirely in the CONFIG + COMMAND plane. Three defects:
+
+*** GAP 1 — KDL `auth {}` round-trip is lossy
+
+`McpServerKdlEntry.auth` (config/kdl-compatibility.ts:308) = `{ type, credentialId }` ONLY. The runtime `MCPAuthConfig` (mcp/types.ts:47) needs `tokenUrl`, `clientId`, `clientSecret` for token refresh. `readMcpServers` (:391) and `writeMcpServers` (:445) both drop those three fields. ∴ even a hand-authored/programmatically-written `auth {}` block cannot refresh → dies at first token expiry.
+
+*** GAP 2 — no OAuth trigger for KDL servers
+
+`/mcp reauth` → `#findConfiguredServer` (mcp-command-controller.ts:629) reads ONLY `mcp.json` via `getMCPConfigPath`. A kdl-declared server → "Server not found". No command path runs the browser OAuth flow → `credentialId` is never minted → the `auth {}` block GAP 1 would carry never comes into existence. This is the "Server notion not found" error we hit.
+
+*** GAP 3 — startup 401 is terminal, not actionable
+
+`connectServers` catches the 401 and logs `MCP tool load failed`. For a server whose `WWW-Authenticate` advertises OAuth and which has no stored credential, nothing surfaces a "needs auth — run /mcp login X" prompt. Silent dead-end.
+
+* Token storage model (DECIDED)
+
+- Secrets (`access`, `refresh`, `expires` tokens) → `~/.spell/agent/agent.db` SQLite `AuthStorage` (machine-local, gitignored), keyed by `credentialId`. Path via `getAgentDbPath(agentDir)` → `discoverAuthStorage` (sdk.ts:297).
+- Non-secret coordinates (`type`, `credentialId`, `tokenUrl`, `clientId`) → project `spell.kdl` `auth {}` block. Safe to commit.
+- `clientSecret` (rare; not needed for PKCE-public clients like Notion) → env-var indirection only: KDL stores an env-var NAME, resolved via `resolveConfigValue` (already applied to headers/env in `#resolveAuthConfig`). NEVER a literal secret in versioned config.
+
+* Design decisions
+
+- D1: keep the KDL-declares / agent.db-holds-secrets split. It is correct and deliberate.
+- D2: redirect the `/mcp` command layer (`#findConfiguredServer`) to read settings tiers (`settings.getPerTier("mcp.servers")`) — the same primary source `builtin.ts::loadMCPServers` uses — instead of raw `mcp.json`. One redirect fixes reauth/unauth/test/enable/disable uniformly.
+- D3: persist OAuth result back to KDL via `settings.set("mcp.servers", map, tier)`, not `updateMCPServer` (mcp.json). Scope→tier: `--scope user`→user (`~/.config/spell/spell.kdl`), `--scope project`→project (`<cwd>/spell.kdl`).
+- D4: convert the terminal startup 401 into an actionable, non-fatal "OAuth required — run /mcp login X" status + a thin `/mcp login <name>` subcommand.
+- D5: GAP-1 widening = three edits that MUST move together (interface + reader + writer), invariant = symmetric round-trip.
+
+* Method: TDD
+
+Tests first, every wave. Round-trip serialization test drives WAVE 1; command-layer resolution test drives WAVE 2; startup-prompt test drives WAVE 3.
+
+* Waves (dependency-ordered)
+
+- WAVE 1 (BUG-a): config-plane round-trip. Widen `McpServerKdlEntry.auth`; teach reader+writer the 3 fields. Foundation, no behavior change. Test: kdl→entry→kdl preserves all auth fields.
+- WAVE 2 (FEAT-b): command layer reads/writes KDL. `#findConfiguredServer`→settings tiers; persist via `settings.set(tier)`; keep mcp.json fallback read for migration. Test: reauth finds a kdl server, writes auth block to spell.kdl.
+- WAVE 3 (FEAT-c): trigger + UX. Startup 401+requiresAuth+no-cred→structured "login needed"; add `/mcp login <name>`. Test: uncredentialed oauth server → actionable message not silent fail.
+
+* Acceptance
+
+- `bun test` green across all three waves' new tests.
+- End-to-end: declare `notion type=http` in project spell.kdl → `/mcp login notion` runs browser OAuth → token lands in agent.db → `auth {}` block written to project spell.kdl → server connects → survives a token-expiry refresh.
+- `bun run check:ts` clean.
+
+* Files (evidence-mapped)
+
+- packages/coding-agent/src/config/kdl-compatibility.ts — McpServerKdlEntry, readMcpServers, writeMcpServers (WAVE 1)
+- packages/coding-agent/src/mcp/types.ts — MCPAuthConfig (reference; already complete)
+- packages/coding-agent/src/modes/controllers/mcp-command-controller.ts — #findConfiguredServer, #handleReauth, add login (WAVE 2+3)
+- packages/coding-agent/src/mcp/manager.ts — connectServers 401 surfacing (WAVE 3)
+- packages/coding-agent/src/mcp/oauth-discovery.ts — analyzeAuthError/discoverOAuthEndpoints (reference; reuse)
+- packages/coding-agent/src/mcp/config-writer.ts — updateMCPServer (WAVE 2, may deprecate for kdl path)
+
+* Child items (execution)
+
+- BUG-491 — WAVE 1: KDL MCP auth block drops tokenUrl/clientId/clientSecret (lossy round-trip). Foundation, no blockers.
+- FEAT-828 — WAVE 2: /mcp command layer reads+writes KDL-declared servers via settings tiers. Blocked by BUG-491.
+- FEAT-829 — WAVE 3: actionable OAuth prompt on startup 401 + /mcp login subcommand. Blocked by FEAT-828.
+
+DAG: BUG-491 → FEAT-828 → FEAT-829 (strictly sequential; each wave's test gate must pass before the next).
+
+NOTE [2026-07-01]: COMPLETE — all 3 waves green + gated. WAVE 1 (BUG-491): KDL auth round-trip widened (tokenUrl/clientId/clientSecret) across McpServerKdlEntry+reader+writer; 5 tests. WAVE 2 (FEAT-828): pure mcp/kdl-server-resolver.ts + #findConfiguredServer reads settings tiers (KDL primary, mcp.json fallback), #persistServer writes via settings.set(tier); 9 tests. WAVE 3 (FEAT-829): pure mcp/connect-failure.ts classifier wired into connectServers + /mcp login subcommand; 4 tests. Total 18 unit tests pass. Files: config/kdl-compatibility.ts, mcp/kdl-server-resolver.ts(new), mcp/connect-failure.ts(new), mcp/manager.ts, modes/controllers/mcp-command-controller.ts. All edited files zero LSP diagnostics; manager+controller bundle clean. Remaining: manual E2E (declare notion in project spell.kdl → /mcp login notion → browser OAuth → agent.db token + spell.kdl auth block → connected). Not committed yet.

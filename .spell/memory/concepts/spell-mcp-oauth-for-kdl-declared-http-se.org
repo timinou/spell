@@ -1,0 +1,28 @@
+#+TITLE: spell-mcp-oauth-for-kdl-declared-http-se
+
+** ITEM Spell MCP OAuth for KDL-declared HTTP servers
+:PROPERTIES:
+:CUSTOM_ID: CON-spell-mcp-oauth-for-kdl-declared-http-se
+:KIND: concept
+:CONFIDENCE: 0.6
+:CREATED: 2026-07-01T21:15:07Z
+:END:
+:RELATIONS:
+DISTILLED_FROM: PLAN-348-oauth-for-kdl-declared-http-mcp-servers
+DISTILLED_FROM: BUG-491-kdl-mcp-auth-block-drops-tokenurl-client
+DISTILLED_FROM: FEAT-828-mcp-command-layer-reads-writes-kdl-decla
+DISTILLED_FROM: FEAT-829-actionable-oauth-prompt-on-startup-401-m
+:END:
+Spell's MCP runtime already supports OAuth (MCPManager.#resolveAuthConfig refreshes tokens + injects Bearer; connectServers wires onAuthError). The gap for spell.kdl-declared servers was in the CONFIG+COMMAND plane, three defects fixed in PLAN-348:
+
+1) config/kdl-compatibility.ts McpServerKdlEntry.auth was {type,credentialId} only — dropped tokenUrl/clientId/clientSecret needed for refresh. Widened interface+readMcpServers+writeMcpServers.
+2) /mcp reauth's #findConfiguredServer read only mcp.json via getMCPConfigPath, so KDL servers were "not found". Fixed with pure mcp/kdl-server-resolver.ts (resolveMcpServer: KDL settings tiers primary via settings.getPerTier('mcp.servers'), mcp.json fallback; project>user; KDL>legacy) + entryToConfig/configToEntry converters. Persist via settings.set('mcp.servers', map, tier)+flush, NOT updateMCPServer(filePath).
+3) Startup 401 was terminal/silent. Added pure mcp/connect-failure.ts classifyConnectFailure + /mcp login subcommand.
+
+KEY GOTCHA: hosted Notion MCP (mcp.notion.com/mcp) returns RFC 9728 protected-resource 401: `WWW-Authenticate: Bearer realm="OAuth", resource_metadata="…/.well-known/oauth-protected-resource/mcp"` with NO inline endpoints. analyzeAuthError() mislabels this "apikey" (message contains 'token'/'bearer'). Must detect realm="OAuth"/resource_metadata= markers. Endpoints then discovered via discoverOAuthEndpoints(url) well-known fallback.
+
+Token storage: agent.db SQLite AuthStorage (getAgentDbPath, discoverAuthStorage in sdk.ts) keyed by credentialId, machine-local. spell.kdl holds only non-secret coords. clientSecret must be env-var name (resolveConfigValue), never literal.
+
+Settings write tiers→files: user=~/.config/spell/spell.kdl, project=<cwd>/spell.kdl, local=<cwd>/.local/spell.kdl. builtin.ts::loadMCPServers treats spell.kdl as primary + shadows legacy mcp.json.
+
+Controller (modes/controllers/mcp-command-controller.ts) is UI-heavy (session/TUI) → not unit-testable directly; extract pure modules (resolver, classifier) as the test surface, controller = thin adapter. Verify controller via `bun build … --outfile=/dev/null` (import-time integration) + #diagnostics.
