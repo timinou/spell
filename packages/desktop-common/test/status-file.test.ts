@@ -126,6 +126,63 @@ describe("StatusFileWriter", () => {
 		const exists = await Bun.file(path.join(TEST_DIR, "77.json")).exists();
 		expect(exists).toBe(false);
 	});
+
+	it("retargetWindow moves the record to a new id and removes the stale file", async () => {
+		// A session that captured the wrong window id at boot and later self-heals:
+		// the old file must not linger (it would paint state on the wrong window).
+		const writer = new StatusFileWriter(TEST_DIR);
+		writer.setWindowId(60);
+		writer.writeIfChanged("running", "proj", "s1");
+		await Bun.sleep(50);
+		expect(await Bun.file(path.join(TEST_DIR, "60.json")).exists()).toBe(true);
+
+		const moved = await writer.retargetWindow(61);
+		expect(moved).toBe(true);
+		expect(await Bun.file(path.join(TEST_DIR, "60.json")).exists()).toBe(false);
+		writer.writeIfChanged("running", "proj", "s1");
+		await Bun.sleep(50);
+		const data = await Bun.file(path.join(TEST_DIR, "61.json")).json();
+		expect(data.windowId).toBe(61);
+		expect(data.status).toBe("running");
+	});
+
+	it("retargetWindow is a no-op when the id is unchanged", async () => {
+		const writer = new StatusFileWriter(TEST_DIR);
+		writer.setWindowId(62);
+		writer.writeIfChanged("running", "proj", "s1");
+		await Bun.sleep(50);
+		const filePath = path.join(TEST_DIR, "62.json");
+		const mtime1 = (await fs.stat(filePath)).mtimeMs;
+
+		expect(await writer.retargetWindow(62)).toBe(false);
+		// A redundant re-verify must not defeat write dedup.
+		writer.writeIfChanged("running", "proj", "s1");
+		await Bun.sleep(50);
+		expect((await fs.stat(filePath)).mtimeMs).toBe(mtime1);
+	});
+
+	it("setWorkspaceName is idempotent and does not force a rewrite", async () => {
+		const writer = new StatusFileWriter(TEST_DIR);
+		writer.setWindowId(63);
+		writer.setWorkspaceName("ws-a");
+		writer.writeIfChanged("running", "proj", "s1");
+		await Bun.sleep(50);
+		const filePath = path.join(TEST_DIR, "63.json");
+		const mtime1 = (await fs.stat(filePath)).mtimeMs;
+
+		// Same workspace again (as a periodic re-verify would do) -> no rewrite.
+		writer.setWorkspaceName("ws-a");
+		writer.writeIfChanged("running", "proj", "s1");
+		await Bun.sleep(50);
+		expect((await fs.stat(filePath)).mtimeMs).toBe(mtime1);
+
+		// A genuine change still re-writes.
+		writer.setWorkspaceName("ws-b");
+		writer.writeIfChanged("running", "proj", "s1");
+		await Bun.sleep(50);
+		expect((await Bun.file(filePath).json()).workspaceName).toBe("ws-b");
+	});
+
 	it("logs write failures instead of swallowing them", async () => {
 		const writer = new StatusFileWriter(TEST_DIR);
 		writer.setWindowId(88);

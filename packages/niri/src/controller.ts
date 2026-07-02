@@ -6,7 +6,7 @@ import { clearImagePlacements, setTerminalImageProtocol, TERMINAL } from "@spell
 import { logger } from "@spell/pi-utils";
 import { withLargerFont } from "./font-scaling";
 import { NiriEventStream } from "./ipc";
-import { queryFocusedWorkspace, queryNiriFocusedWindowId } from "./niri-query";
+import { queryFocusedWorkspace, queryNiriFocusedWindowId, queryNiriOwnWindowId } from "./niri-query";
 import { OverviewComponent, STATUS_COLORS } from "./overview-component";
 import type { AgentStatus, TodoItemSnapshot, TodoPhaseSnapshot } from "./types";
 
@@ -65,6 +65,14 @@ export interface NiriOverviewContext {
 // ─── Controller ──────────────────────────────────────────────────────────────
 
 const FONT_SCALE_FACTOR = 1.6;
+
+/**
+ * How often a running session re-verifies its own niri window id. niri window
+ * ids are stable, so this is a cheap no-op in steady state; it exists only to
+ * self-heal a session whose initial capture missed or mis-resolved (boot focus
+ * race, niri briefly unavailable, or the ancestry fallback path).
+ */
+const IDENTITY_REVERIFY_MS = 30_000;
 const OVERLAY_OPTIONS = {
 	width: "100%" as const,
 	maxHeight: "100%" as const,
@@ -90,6 +98,7 @@ export class NiriOverviewController {
 	#savedImageProtocol: ImageProtocol | null = null;
 	#destroyed = false;
 	#writer = new StatusFileWriter();
+	#identityTimer: ReturnType<typeof setInterval> | null = null;
 
 	constructor(socketPath: string, context: NiriOverviewContext) {
 		this.#context = context;
@@ -115,6 +124,10 @@ export class NiriOverviewController {
 	destroy(): void {
 		if (this.#destroyed) return;
 		this.#destroyed = true;
+		if (this.#identityTimer !== null) {
+			clearInterval(this.#identityTimer);
+			this.#identityTimer = null;
+		}
 		this.#stream.destroy();
 		this.#unsubscribeSession?.();
 		this.#hideOverview();
@@ -126,9 +139,6 @@ export class NiriOverviewController {
 	/** One-shot async init: discovers the niri window ID and writes the first status file. */
 	async #initWindowId(): Promise<void> {
 		await this.#writer.ensureDir();
-		const [id, workspace] = await Promise.all([queryNiriFocusedWindowId(), queryFocusedWorkspace()]);
-		if (id === null || this.#destroyed) return;
-		this.#writer.setWindowId(id);
 		const sessionFile = this.#context.sessionManager.getSessionFile();
 		if (sessionFile) {
 			this.#writer.setSessionInfo({
@@ -137,7 +147,33 @@ export class NiriOverviewController {
 				cwd: this.#context.sessionManager.getCwd(),
 			});
 		}
-		this.#writer.setWorkspaceName(workspace?.name ?? null);
+		await this.#refreshWindowIdentity();
+		// Periodically re-verify our window identity so a long-lived session self-
+		// heals if the initial capture missed or mis-resolved (boot focus race,
+		// niri briefly unavailable, or the ancestry fallback path). niri window ids
+		// are stable, so this is a no-op in the common case and cheap otherwise.
+		this.#identityTimer = setInterval(() => {
+			void this.#refreshWindowIdentity();
+		}, IDENTITY_REVERIFY_MS);
+	}
+
+	/**
+	 * Resolve this session's own niri window id (+ workspace) and point the
+	 * status writer at it. Prefers OUR OWN window (via process ancestry) so the
+	 * status file lands on this session's window regardless of what is focused;
+	 * falls back to the focused window only when ancestry cannot identify one
+	 * (e.g. niri unavailable or an unusual process tree). Idempotent: safe to
+	 * call repeatedly — it only rewrites when the id or workspace actually moved.
+	 */
+	async #refreshWindowIdentity(): Promise<void> {
+		if (this.#destroyed) return;
+		const [ownId, workspace] = await Promise.all([queryNiriOwnWindowId(), queryFocusedWorkspace()]);
+		const id = ownId ?? (await queryNiriFocusedWindowId());
+		if (id === null || this.#destroyed) return;
+		await this.#writer.retargetWindow(id);
+		// Only track the workspace once we have committed to a window id, and never
+		// overwrite a known workspace with null (a transient query miss).
+		if (workspace) this.#writer.setWorkspaceName(workspace.name ?? null);
 		this.#writeStatusIfChanged();
 	}
 

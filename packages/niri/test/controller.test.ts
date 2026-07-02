@@ -90,6 +90,9 @@ beforeEach(() => {
 	spyOn(fs, "rm").mockImplementation(async targetPath => {
 		removedFiles.push(String(targetPath));
 	});
+	// The controller prefers its OWN window (via process ancestry) and falls
+	// back to the focused window; mock both so tests drive the id deterministically.
+	spyOn(niriQuery, "queryNiriOwnWindowId").mockImplementation(async () => fakeWindowId);
 	spyOn(niriQuery, "queryNiriFocusedWindowId").mockImplementation(async () => fakeWindowId);
 	spyOn(niriQuery, "queryFocusedWorkspace").mockResolvedValue(null);
 });
@@ -614,6 +617,46 @@ describe("NiriOverviewController", () => {
 			const content = JSON.parse(writtenFiles[key!]);
 			expect(content.sessionTitle).toBe("second-title");
 			ctrl.destroy();
+		});
+
+		it("self-heals: a later re-verify tick retargets the status file to the corrected window", async () => {
+			// Capture the periodic re-verify callback the controller registers so we
+			// can fire it deterministically without waiting for the real interval.
+			let tick: (() => void) | null = null;
+			const intervalSpy = spyOn(globalThis, "setInterval").mockImplementation(((cb: () => void) => {
+				tick = cb;
+				return 0 as unknown as ReturnType<typeof setInterval>;
+			}) as typeof setInterval);
+
+			fakeWindowId = 42;
+			const { ctx } = makeCtx();
+			const ctrl = new NiriOverviewController("/fake.sock", ctx);
+			await Bun.sleep(10);
+			expect(Object.keys(writtenFiles).some(k => k.includes("42.json"))).toBe(true);
+			expect(intervalSpy).toHaveBeenCalled();
+
+			// The session's true window turns out to be 7; the next tick must move the
+			// record there and delete the stale 42.json.
+			fakeWindowId = 7;
+			tick?.();
+			await Bun.sleep(10);
+			expect(removedFiles.some(f => f.includes("42.json"))).toBe(true);
+			const key = Object.keys(writtenFiles).find(k => k.includes("7.json"));
+			expect(key).toBeDefined();
+			expect(JSON.parse(writtenFiles[key!]).windowId).toBe(7);
+			ctrl.destroy();
+		});
+
+		it("clears the re-verify interval on destroy()", async () => {
+			const handle = 12345 as unknown as ReturnType<typeof setInterval>;
+			spyOn(globalThis, "setInterval").mockImplementation((() => handle) as typeof setInterval);
+			const clearSpy = spyOn(globalThis, "clearInterval").mockImplementation(() => {});
+
+			const { ctx } = makeCtx();
+			const ctrl = new NiriOverviewController("/fake.sock", ctx);
+			await Bun.sleep(10);
+			ctrl.destroy();
+			expect(clearSpy).toHaveBeenCalledWith(handle);
 		});
 	});
 });

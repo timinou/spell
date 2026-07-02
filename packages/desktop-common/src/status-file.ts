@@ -52,8 +52,30 @@ export class StatusFileWriter {
 	}
 
 	setWorkspaceName(name: string | null): void {
+		if (this.#workspaceName === name) return;
 		this.#workspaceName = name;
 		this.#metadataVersion += 1;
+	}
+
+	/**
+	 * Point the writer at a (possibly new) window id. When the id changes, the
+	 * old status file is removed so a stale record can't linger on the previous
+	 * id, and the dedup key is reset so the next {@link writeIfChanged} re-emits
+	 * to the new path. No-op (returns false) when the id is unchanged, so this is
+	 * safe to call on a periodic self-heal tick. Returns true iff the target moved.
+	 */
+	async retargetWindow(id: number | string): Promise<boolean> {
+		if (this.#windowId === id) return false;
+		const previous = this.#windowId;
+		this.#windowId = id;
+		this.#lastWrittenDedup = null; // force the next write to emit to the new file
+		if (previous !== null) {
+			const oldPath = path.join(this.#statusDir, `${previous}.json`);
+			await fs.rm(oldPath, { force: true }).catch(err => {
+				logger.warn("StatusFileWriter: retarget cleanup failed", { path: oldPath, err: String(err) });
+			});
+		}
+		return true;
 	}
 
 	get windowId(): number | string | null {
