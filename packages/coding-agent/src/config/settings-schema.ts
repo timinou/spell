@@ -504,6 +504,10 @@ export const SETTINGS_SCHEMA = {
 
 	"retry.baseDelayMs": { type: "number", default: 2000 },
 
+	"retry.maxDelayMs": { type: "number", default: 60_000 },
+
+	"retry.infiniteOnRateLimit": { type: "boolean", default: true },
+
 	// ────────────────────────────────────────────────────────────────────────
 	// Interaction
 	// ────────────────────────────────────────────────────────────────────────
@@ -1811,6 +1815,10 @@ export interface RetrySettings {
 	enabled: boolean;
 	maxRetries: number;
 	baseDelayMs: number;
+	/** Upper bound for a single exponential-backoff wait (ms). Server retry-after hints may exceed it. */
+	maxDelayMs: number;
+	/** When true, overloaded/rate-limit errors retry forever (bounded cap still applies to other transient errors). */
+	infiniteOnRateLimit: boolean;
 }
 
 export interface MemoriesSettings {

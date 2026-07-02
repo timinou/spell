@@ -533,6 +533,7 @@ function createCustomToolsExtension(tools: CustomTool[]): ExtensionFactory {
 					maxAttempts: event.maxAttempts,
 					delayMs: event.delayMs,
 					errorMessage: event.errorMessage,
+					infinite: event.infinite,
 				},
 				ctx,
 			),

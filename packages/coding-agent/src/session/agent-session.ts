@@ -179,7 +179,7 @@ export type AgentSessionEvent =
 			/** True when compaction was skipped for a benign reason (no model, no candidates, nothing to compact). */
 			skipped?: boolean;
 	  }
-	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
+	| { type: "auto_retry_start"; attempt: number; maxAttempts: number | undefined; delayMs: number; errorMessage: string; infinite: boolean }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
 	| { type: "ttsr_triggered"; rules: Rule[] }
 	| { type: "yield_reminder"; disciplines: string[]; attempt: number; maxAttempts: number; outcomes?: DisciplineGateOutcome[]; stats?: DisciplineRuntimeStat[] }
@@ -424,6 +424,9 @@ export class AgentSession {
 	// Retry state
 	#retryAbortController: AbortController | undefined = undefined;
 	#retryAttempt = 0;
+	// Attempts that count toward the bounded give-up cap. Rate-limit/overloaded errors
+	// (infinite mode) advance #retryAttempt but NOT this, so they never exhaust the cap.
+	#boundedRetryAttempt = 0;
 	#taskDepth = 0;
 	#retryPromise: Promise<void> | undefined = undefined;
 	#retryResolve: (() => void) | undefined = undefined;
@@ -975,6 +978,7 @@ export class AgentSession {
 
 	/** Resolve the pending retry promise */
 	#resolveRetry(): void {
+		this.#boundedRetryAttempt = 0;
 		if (this.#retryResolve) {
 			this.#retryResolve();
 			this.#retryResolve = undefined;
@@ -1615,6 +1619,7 @@ export class AgentSession {
 				maxAttempts: event.maxAttempts,
 				delayMs: event.delayMs,
 				errorMessage: event.errorMessage,
+				infinite: event.infinite,
 			});
 		} else if (event.type === "auto_retry_end") {
 			await this.#extensionRunner.emit({
@@ -4832,6 +4837,19 @@ export class AgentSession {
 		return /usage.?limit|usage_limit_reached|limit_reached|quota.?exceeded|resource.?exhausted/i.test(errorMessage);
 	}
 
+	/**
+	 * Whether an error is an overloaded/capacity or rate-limit condition — the classes that
+	 * are retried forever when `retry.infiniteOnRateLimit` is enabled. Billing/quota exhaustion
+	 * (handled by account rotation + fallback) is deliberately excluded so it still gives up.
+	 */
+	#isRateLimitOrOverloadErrorMessage(errorMessage: string): boolean {
+		if (/overloaded|capacity|too many requests|\b429\b|\b529\b|resource.?exhausted/i.test(errorMessage)) {
+			return true;
+		}
+		const reason = parseRateLimitReason(errorMessage);
+		return reason === "MODEL_CAPACITY_EXHAUSTED" || reason === "RATE_LIMIT_EXCEEDED";
+	}
+
 	#parseRetryAfterMsFromError(errorMessage: string): number | undefined {
 		const now = Date.now();
 		const retryAfterMsMatch = /retry-after-ms\s*[:=]\s*(\d+)/i.exec(errorMessage);
@@ -4949,7 +4967,13 @@ export class AgentSession {
 		const maxAttempts = retrySettings.maxRetries;
 		const baseErrorMessage =
 			formatAssistantToolCallFailureMessage(message) ?? message.errorMessage ?? "Unknown error";
+		// Overloaded/rate-limit errors retry forever (no give-up cap) when enabled. Other transient
+		// errors stay bounded by maxAttempts so genuine faults still surface.
+		const infinite = retrySettings.infiniteOnRateLimit && this.#isRateLimitOrOverloadErrorMessage(baseErrorMessage);
+		// `undefined` denominator ⇒ infinite mode: formatter/event omit the "/max" suffix.
+		const displayMaxAttempts = infinite ? undefined : maxAttempts;
 		this.#retryAttempt++;
+		if (!infinite) this.#boundedRetryAttempt++;
 
 		// Create retry promise on first attempt so waitForRetry() can await it
 		// Ensure only one promise exists (avoid orphaned promises from concurrent calls)
@@ -4959,9 +4983,10 @@ export class AgentSession {
 			this.#retryResolve = resolve;
 		}
 
-		if (this.#retryAttempt > maxAttempts) {
+		// Give-up only applies to bounded (non-infinite) attempts.
+		if (!infinite && this.#boundedRetryAttempt > maxAttempts) {
 			// Max retries exceeded, emit final failure and reset
-			const finalAttempt = this.#retryAttempt - 1;
+			const finalAttempt = this.#boundedRetryAttempt - 1;
 			message.errorMessage = formatRetryableAssistantErrorMessage(message, {
 				attempt: finalAttempt,
 				maxAttempts,
@@ -4991,11 +5016,15 @@ export class AgentSession {
 
 		message.errorMessage = formatRetryableAssistantErrorMessage(message, {
 			attempt: this.#retryAttempt,
-			maxAttempts,
+			maxAttempts: displayMaxAttempts,
 			final: false,
 		});
 		const errorMessage = message.errorMessage;
-		let delayMs = retrySettings.baseDelayMs * 2 ** (this.#retryAttempt - 1);
+		// Exponential backoff clamped to maxDelayMs. Cap the exponent so the intermediate
+		// multiplication can't overflow to Infinity in infinite mode (unbounded #retryAttempt).
+		const maxDelayMs = retrySettings.maxDelayMs > 0 ? retrySettings.maxDelayMs : Number.POSITIVE_INFINITY;
+		const exponent = Math.min(this.#retryAttempt - 1, 30);
+		let delayMs = Math.min(retrySettings.baseDelayMs * 2 ** exponent, maxDelayMs);
 
 		if (this.model && this.#isUsageLimitErrorMessage(baseErrorMessage)) {
 			const reason = parseRateLimitReason(baseErrorMessage);
@@ -5034,14 +5063,22 @@ export class AgentSession {
 				// No more accounts to switch to — wait out the backoff
 				delayMs = retryAfterMs;
 			}
+		} else if (infinite) {
+			// Non-usage-limit rate-limit/overloaded error: honor a server retry-after hint if present.
+			// The server's hint takes precedence over the clamped backoff (it may exceed maxDelayMs).
+			const retryAfterMs = this.#parseRetryAfterMsFromError(baseErrorMessage);
+			if (retryAfterMs !== undefined && retryAfterMs > delayMs) {
+				delayMs = retryAfterMs;
+			}
 		}
 
 		await this.#emitSessionEvent({
 			type: "auto_retry_start",
 			attempt: this.#retryAttempt,
-			maxAttempts,
+			maxAttempts: displayMaxAttempts,
 			delayMs,
 			errorMessage,
+			infinite,
 		});
 
 		// Remove error message from agent state (keep in session for history)

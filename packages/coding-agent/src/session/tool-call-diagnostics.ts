@@ -1,6 +1,6 @@
 import { type AssistantMessage, formatToolCallStreamDiagnosticMessage } from "@spell/pi-ai";
 
-const RETRY_ATTEMPT_PREFIX_REGEX = /^(Attempt|Final attempt) \d+\/\d+ failed(?:; retrying\.|\.) /;
+const RETRY_ATTEMPT_PREFIX_REGEX = /^(Attempt|Final attempt) \d+(?:\/\d+)? failed(?:; retrying\.|\.) /;
 
 function getBaseAssistantFailureMessage(message: AssistantMessage): string | undefined {
 	const diagnostic = message.streamDiagnostics?.at(-1);
@@ -21,12 +21,14 @@ export function isRetryableAssistantStreamError(message: AssistantMessage): bool
 
 export function formatRetryableAssistantErrorMessage(
 	message: AssistantMessage,
-	options: { attempt: number; maxAttempts: number; final: boolean },
+	options: { attempt: number; maxAttempts: number | undefined; final: boolean },
 ): string {
 	const baseMessage = getBaseAssistantFailureMessage(message) ?? message.errorMessage ?? "Unknown error";
+	// `maxAttempts === undefined` ⇒ infinite retry (rate-limit/overloaded): omit the denominator.
+	const counter = options.maxAttempts === undefined ? `${options.attempt}` : `${options.attempt}/${options.maxAttempts}`;
 	const prefix = options.final
-		? `Final attempt ${options.attempt}/${options.maxAttempts} failed. `
-		: `Attempt ${options.attempt}/${options.maxAttempts} failed; retrying. `;
+		? `Final attempt ${counter} failed. `
+		: `Attempt ${counter} failed; retrying. `;
 	return `${prefix}${baseMessage}`;
 }
 

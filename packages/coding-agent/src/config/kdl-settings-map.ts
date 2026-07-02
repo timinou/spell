@@ -138,6 +138,8 @@ export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> =
 	"retry.enabled": { block: "model", nodePath: "retry", accessor: "property", propertyName: "enabled" },
 	"retry.maxRetries": { block: "model", nodePath: "retry", accessor: "property", propertyName: "max" },
 	"retry.baseDelayMs": { block: "model", nodePath: "retry", accessor: "property", propertyName: "backoff-ms" },
+	"retry.maxDelayMs": { block: "model", nodePath: "retry", accessor: "property", propertyName: "max-backoff-ms" },
+	"retry.infiniteOnRateLimit": { block: "model", nodePath: "retry", accessor: "property", propertyName: "infinite-on-rate-limit" },
 	repeatToolDescriptions: { block: "model", nodePath: "repeat-tool-descriptions", accessor: "argument" },
 	"compaction.enabled": { block: "model", nodePath: "compaction", accessor: "property", propertyName: "enabled" },
 	"compaction.strategy": { block: "model", nodePath: "compaction", accessor: "property", propertyName: "strategy" },

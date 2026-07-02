@@ -104,9 +104,10 @@ export type CustomToolSessionEvent =
 	| {
 			reason: "auto_retry_start";
 			attempt: number;
-			maxAttempts: number;
+			maxAttempts: number | undefined;
 			delayMs: number;
 			errorMessage: string;
+			infinite: boolean;
 	  }
 	| {
 			reason: "auto_retry_end";

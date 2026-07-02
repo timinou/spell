@@ -413,9 +413,12 @@ export interface AutoCompactionEndEvent {
 export interface AutoRetryStartEvent {
 	type: "auto_retry_start";
 	attempt: number;
-	maxAttempts: number;
+	/** `undefined` when retrying infinitely (rate-limit/overloaded errors). */
+	maxAttempts: number | undefined;
 	delayMs: number;
 	errorMessage: string;
+	/** True when this error class retries forever (no give-up cap). */
+	infinite: boolean;
 }
 
 /** Event data for auto_retry_end event. */

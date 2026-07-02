@@ -180,7 +180,8 @@ export interface AgentDefinition {
 /** Auto-retry state for a subagent waiting to retry a failed provider call */
 export interface AgentRetryState {
 	attempt: number;
-	maxAttempts: number;
+	/** `undefined` when retrying infinitely (rate-limit/overloaded errors). */
+	maxAttempts: number | undefined;
 	delayMs: number;
 	errorMessage: string;
 }

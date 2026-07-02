@@ -744,11 +744,13 @@ export class EventController {
 				};
 				this.ctx.statusContainer.clear();
 				const delaySeconds = Math.round(event.delayMs / 1000);
+				// Infinite mode (rate-limit/overloaded) has no denominator to show.
+				const attemptLabel = event.infinite ? `${event.attempt}` : `${event.attempt}/${event.maxAttempts}`;
 				this.ctx.retryLoader = new Loader(
 					this.ctx.ui,
 					spinner => theme.fg("warning", spinner),
 					text => theme.fg("muted", text),
-					`Retrying (${event.attempt}/${event.maxAttempts}) in ${delaySeconds}s… (esc to cancel)`,
+					`Retrying (${attemptLabel}) in ${delaySeconds}s… (esc to cancel)`,
 					getSymbolTheme().spinnerFrames,
 				);
 				this.ctx.statusContainer.addChild(this.ctx.retryLoader);
