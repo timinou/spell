@@ -17,17 +17,19 @@ afterEach(async () => {
 });
 
 describe("StatusFileWriter", () => {
-	it("writes a status file and deduplicates identical writes", async () => {
+	it("writes a status file keyed by session id and deduplicates identical writes", async () => {
 		const writer = new StatusFileWriter(TEST_DIR);
-		writer.setWindowId(42);
+		writer.setSessionId("sess-42");
 
 		writer.writeIfChanged("running", "myapp", "session-1");
 		await Bun.sleep(50);
 
-		const filePath = path.join(TEST_DIR, "42.json");
+		const filePath = path.join(TEST_DIR, "sess-42.json");
 		const data = await Bun.file(filePath).json();
 		expect(data.status).toBe("running");
-		expect(data.windowId).toBe(42);
+		expect(data.sessionId).toBe("sess-42");
+		// The producer no longer writes a window id.
+		expect(data.windowId).toBeUndefined();
 		expect(data.projectName).toBe("myapp");
 		expect(data.sessionTitle).toBe("session-1");
 		expect(data.pid).toBe(process.pid);
@@ -41,7 +43,7 @@ describe("StatusFileWriter", () => {
 
 	it("includes recovery metadata when provided", async () => {
 		const writer = new StatusFileWriter(TEST_DIR);
-		writer.setWindowId(43);
+		writer.setSessionId("session-123");
 		writer.setSessionInfo({
 			sessionId: "session-123",
 			sessionFile: "/tmp/session.jsonl",
@@ -52,7 +54,7 @@ describe("StatusFileWriter", () => {
 		writer.writeIfChanged("running", "myapp", "session-1");
 		await Bun.sleep(50);
 
-		const data = await Bun.file(path.join(TEST_DIR, "43.json")).json();
+		const data = await Bun.file(path.join(TEST_DIR, "session-123.json")).json();
 		expect(data.sessionId).toBe("session-123");
 		expect(data.sessionFile).toBe("/tmp/session.jsonl");
 		expect(data.cwd).toBe("/tmp/project");
@@ -61,13 +63,12 @@ describe("StatusFileWriter", () => {
 
 	it("re-writes when recovery metadata is set after the initial write", async () => {
 		const writer = new StatusFileWriter(TEST_DIR);
-		writer.setWindowId(50);
+		writer.setSessionId("sess-50");
 
 		writer.writeIfChanged("running", "myapp", "session-1");
 		await Bun.sleep(50);
 
-		let data = await Bun.file(path.join(TEST_DIR, "50.json")).json();
-		expect(data.sessionId).toBeUndefined();
+		let data = await Bun.file(path.join(TEST_DIR, "sess-50.json")).json();
 		expect(data.cwd).toBeUndefined();
 
 		writer.setSessionInfo({
@@ -78,99 +79,67 @@ describe("StatusFileWriter", () => {
 		writer.writeIfChanged("running", "myapp", "session-1");
 		await Bun.sleep(50);
 
-		data = await Bun.file(path.join(TEST_DIR, "50.json")).json();
+		data = await Bun.file(path.join(TEST_DIR, "sess-50.json")).json();
 		expect(data.sessionId).toBe("sess-50");
 		expect(data.cwd).toBe("/work/myapp");
 	});
 
 	it("re-writes when workspace name is set after the initial write", async () => {
 		const writer = new StatusFileWriter(TEST_DIR);
-		writer.setWindowId(51);
+		writer.setSessionId("sess-51");
 
 		writer.writeIfChanged("running", "myapp", "session-1");
 		await Bun.sleep(50);
 
-		let data = await Bun.file(path.join(TEST_DIR, "51.json")).json();
+		let data = await Bun.file(path.join(TEST_DIR, "sess-51.json")).json();
 		expect(data.workspaceName).toBeUndefined();
 
 		writer.setWorkspaceName("ws-dev");
 		writer.writeIfChanged("running", "myapp", "session-1");
 		await Bun.sleep(50);
 
-		data = await Bun.file(path.join(TEST_DIR, "51.json")).json();
+		data = await Bun.file(path.join(TEST_DIR, "sess-51.json")).json();
 		expect(data.workspaceName).toBe("ws-dev");
 	});
 
 	it("writes when status changes", async () => {
 		const writer = new StatusFileWriter(TEST_DIR);
-		writer.setWindowId(99);
+		writer.setSessionId("sess-99");
 
 		writer.writeIfChanged("idle", "proj", "s1");
 		await Bun.sleep(50);
-		let data = await Bun.file(path.join(TEST_DIR, "99.json")).json();
+		let data = await Bun.file(path.join(TEST_DIR, "sess-99.json")).json();
 		expect(data.status).toBe("idle");
 
 		writer.writeIfChanged("running", "proj", "s1");
 		await Bun.sleep(50);
-		data = await Bun.file(path.join(TEST_DIR, "99.json")).json();
+		data = await Bun.file(path.join(TEST_DIR, "sess-99.json")).json();
 		expect(data.status).toBe("running");
 	});
 
 	it("cleanup removes the status file", async () => {
 		const writer = new StatusFileWriter(TEST_DIR);
-		writer.setWindowId(77);
+		writer.setSessionId("sess-77");
 		writer.writeIfChanged("idle", "p", "s");
 		await Bun.sleep(50);
 
 		await writer.cleanup();
-		const exists = await Bun.file(path.join(TEST_DIR, "77.json")).exists();
+		const exists = await Bun.file(path.join(TEST_DIR, "sess-77.json")).exists();
 		expect(exists).toBe(false);
 	});
 
-	it("retargetWindow moves the record to a new id and removes the stale file", async () => {
-		// A session that captured the wrong window id at boot and later self-heals:
-		// the old file must not linger (it would paint state on the wrong window).
-		const writer = new StatusFileWriter(TEST_DIR);
-		writer.setWindowId(60);
-		writer.writeIfChanged("running", "proj", "s1");
-		await Bun.sleep(50);
-		expect(await Bun.file(path.join(TEST_DIR, "60.json")).exists()).toBe(true);
-
-		const moved = await writer.retargetWindow(61);
-		expect(moved).toBe(true);
-		expect(await Bun.file(path.join(TEST_DIR, "60.json")).exists()).toBe(false);
-		writer.writeIfChanged("running", "proj", "s1");
-		await Bun.sleep(50);
-		const data = await Bun.file(path.join(TEST_DIR, "61.json")).json();
-		expect(data.windowId).toBe(61);
-		expect(data.status).toBe("running");
-	});
-
-	it("retargetWindow is a no-op when the id is unchanged", async () => {
-		const writer = new StatusFileWriter(TEST_DIR);
-		writer.setWindowId(62);
-		writer.writeIfChanged("running", "proj", "s1");
-		await Bun.sleep(50);
-		const filePath = path.join(TEST_DIR, "62.json");
-		const mtime1 = (await fs.stat(filePath)).mtimeMs;
-
-		expect(await writer.retargetWindow(62)).toBe(false);
-		// A redundant re-verify must not defeat write dedup.
-		writer.writeIfChanged("running", "proj", "s1");
-		await Bun.sleep(50);
-		expect((await fs.stat(filePath)).mtimeMs).toBe(mtime1);
-	});
-
 	it("setWorkspaceName is idempotent and does not force a rewrite", async () => {
+		// The workspace snapshot may be (re)set to the same value across retries;
+		// that must not defeat write dedup.
 		const writer = new StatusFileWriter(TEST_DIR);
-		writer.setWindowId(63);
+		writer.setSessionId("sess-63");
 		writer.setWorkspaceName("ws-a");
 		writer.writeIfChanged("running", "proj", "s1");
 		await Bun.sleep(50);
-		const filePath = path.join(TEST_DIR, "63.json");
+		const filePath = path.join(TEST_DIR, "sess-63.json");
 		const mtime1 = (await fs.stat(filePath)).mtimeMs;
 
-		// Same workspace again (as a periodic re-verify would do) -> no rewrite.
+		// Same workspace again -> no rewrite.
 		writer.setWorkspaceName("ws-a");
 		writer.writeIfChanged("running", "proj", "s1");
 		await Bun.sleep(50);
@@ -185,7 +154,7 @@ describe("StatusFileWriter", () => {
 
 	it("logs write failures instead of swallowing them", async () => {
 		const writer = new StatusFileWriter(TEST_DIR);
-		writer.setWindowId(88);
+		writer.setSessionId("sess-88");
 		const warnSpy = spyOn(logger, "warn").mockImplementation(() => {});
 		spyOn(Bun, "write").mockImplementation(() => Promise.reject(new Error("disk full")));
 
@@ -195,7 +164,7 @@ describe("StatusFileWriter", () => {
 		expect(warnSpy).toHaveBeenCalledWith(
 			"StatusFileWriter: write failed",
 			expect.objectContaining({
-				path: path.join(TEST_DIR, "88.json"),
+				path: path.join(TEST_DIR, "sess-88.json"),
 				err: "Error: disk full",
 			}),
 		);
@@ -203,10 +172,10 @@ describe("StatusFileWriter", () => {
 
 	it("logs cleanup failures instead of swallowing them", async () => {
 		const writer = new StatusFileWriter(TEST_DIR);
-		writer.setWindowId(89);
+		writer.setSessionId("sess-89");
 		const warnSpy = spyOn(logger, "warn").mockImplementation(() => {});
 		spyOn(fs, "rm").mockImplementation(async targetPath => {
-			if (String(targetPath) === path.join(TEST_DIR, "89.json")) {
+			if (String(targetPath) === path.join(TEST_DIR, "sess-89.json")) {
 				throw new Error("permission denied");
 			}
 		});
@@ -216,7 +185,7 @@ describe("StatusFileWriter", () => {
 		expect(warnSpy).toHaveBeenCalledWith(
 			"StatusFileWriter: cleanup failed",
 			expect.objectContaining({
-				path: path.join(TEST_DIR, "89.json"),
+				path: path.join(TEST_DIR, "sess-89.json"),
 				err: "Error: permission denied",
 			}),
 		);

@@ -1,0 +1,109 @@
+#+TITLE: Invert session→window identity: title-token join (fix DMS state mismatch)
+#+STATE: DOING
+#+SESSION_ID: 152064dca1c712bb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-07-02T19-46-16-839Z_152064dca1c712bb.jsonl]]
+#+CUSTOM_ID: PLAN-349-invert-sessionwindow-identity-title-toke
+
+* Initial Message
+
+do they? look at what is in the Sales dep workspace, there's a mismatch again
+
+## Problem (root, not symptom)
+DMS top-bar chips show session states on the WRONG niri windows. Root cause: the
+session→window mapping is **guessed** by the producer from ambient state it does
+not own:
+- v0 (original): captured the FOCUSED window id once at boot → burst launches
+  (`spell recover --direct` spawns ~24 windows) race on focus → off-by-N.
+- v1 (my first fix, commit 73c09503b): process-ancestry match. BREAKS because
+  ghostty runs as a SHARED SERVER — measured pid 3769 owns 15 windows (incl. this
+  session) → ancestry collapses to one pid → falls back to focus → same race.
+- v1 also added a 30s re-verify timer + file retarget + ghost-file cleanup:
+  churn layered on a wrong foundation. Running sessions never loaded it (Bun
+  caches imports in-process at launch 20:34; fix committed 21:05).
+
+∴ No producer self-identification via focus/pid can be correct for shared-ghostty.
+
+## Correct architecture — INVERT it
+Producer stamps an identity it OWNS onto the window; consumer does the join LIVE.
+
+Keystone = a **title token**. spell already sets its window title via OSC (it owns
+this); niri echoes it as `windows[].title` (authoritative). Append the sessionId:
+`{project}: {title} ⟨{sessionId}⟩`. Now:
+
+- **Live bar (DMS):** consumer-side join. For each live niri window, parse the
+  ⟨token⟩ from its title → look up `~/.spell/status/{sessionId}.json` for state →
+  render on THAT window's workspace (`w.workspace_id`, already live). The
+  session→window mapping is DERIVED every 2s poll, never stored → immune to focus,
+  launch order, pid-sharing, window-id reuse. This is the fix.
+- **Recover (crashed sessions):** needs last-known workspace (window is dead →
+  can't derive live). Producer resolves its OWN workspace by the SAME token
+  self-join against niri (exact match, correct for all topologies), stored as a
+  snapshot only. No focus, no ancestry, no 30s timer.
+
+Principle: **derive live what you can (current window, for the bar); store only
+what you can't re-derive (last workspace, for dead sessions).**
+
+## Decisions (confirmed with user)
+- D1: token is a VISIBLE title suffix ` ⟨{sessionId}⟩` (user: don't care about
+  bar/alt-tab appearance). Bracket chars U+27E8/27E9 — regex `⟨([^⟩]+)⟩`.
+- D2: edit the dotfiles DMS QML too (`~/.dotfiles/wm/quickshell/dms/Services/SpellStatusService.qml`).
+- D3: both interim actions for already-running OLD-code sessions.
+
+## Graceful migration (no flag-day)
+Old running sessions have NO token in title (old in-memory code) and write
+`{windowId}.json`. New DMS must not drop them. DMS join = **token-primary,
+legacy-windowId fallback**:
+1. legacy pass: file has `windowId` + that window is live → place it (today's behavior).
+2. token pass: live window title has ⟨token⟩ matching a file's sessionId → place/override (wins).
+Old sessions keep working unchanged until restarted; new sessions are robust.
+
+## Work items
+
+### SPELL repo (/home/user/code/ora/spell) — runs from src, no build
+1. `packages/coding-agent/src/utils/title-generator.ts`
+   - module token state; `setSessionTitleToken(id)`; `setTerminalTitle` appends
+     ` ⟨token⟩` when set. Keep OSC-2 + BEL.
+2. `packages/coding-agent/src/modes/interactive-mode.ts`
+   - call `setSessionTitleToken(this.session.sessionId)` EARLY (before first
+     `setTitle("✦")` ~L592); route `this.ui.terminal.setTitle("✦")` through
+     `setTerminalTitle("✦")` so it carries the token. Other title sets already go
+     via `setTerminalTitle` → inherit token automatically.
+3. `packages/desktop-common/src/types.ts`
+   - `SessionStatusFile`: `sessionId` REQUIRED, `windowId` OPTIONAL (legacy).
+4. `packages/desktop-common/src/status-file.ts`
+   - key file by **sessionId** (`{sessionId}.json`); payload drops `windowId`,
+     keeps `sessionId` + `workspaceName?`. Remove setWindowId/retargetWindow/
+     #windowId; add sessionId via ctor/setSessionId; keep setWorkspaceName
+     idempotent; cleanup removes `{sessionId}.json`.
+5. `packages/niri/src/niri-query.ts`
+   - REMOVE queryNiriFocusedWindowId, queryNiriOwnWindowId, resolveOwnWindowId,
+     processAncestry, readParentPid, queryFocusedWorkspace.
+   - ADD queryOwnWorkspaceName(token) + pure resolveWorkspaceByToken(token,
+     windows, workspaces).
+6. `packages/niri/src/controller.ts`
+   - remove #identityTimer, focus/ancestry init, retargetWindow calls. Writer
+     keyed by sessionId. Resolve own workspace via token self-join at startup
+     (bounded retries for OSC→niri propagation), store for recover.
+7. `packages/coding-agent/src/commands/recover.ts`
+   - formatSessionLabel appends ` ⟨{sessionId}⟩`. workspaceName still from file.
+8. Tests: rewrite niri-query.test.ts (token resolver), fix controller.test.ts
+   (no timer/focus; sessionId keying), status-file.test.ts (sessionId keying).
+
+### DOTFILES repo (~/.dotfiles)
+9. `wm/quickshell/dms/Services/SpellStatusService.qml`
+   - poll → statusBySessionId. _rebuildByWindow(): legacy windowId pass + token
+     pass (override) → statusByWindowId (downstream unchanged). Recompute on poll
+     AND NiriService.windows change. Toast keyed by sessionId.
+
+### D3 interim (running OLD-code sessions)
+10. One-shot repair script: join existing `{windowId}.json` to live niri by TITLE
+    TEXT (old windows have no token) → rewrite windowId to correct live window.
+    Fixes bar NOW without restart. Durable = user restarts → token code.
+
+## Acceptance
+- bun run check clean (niri, desktop-common, coding-agent).
+- niri + desktop-common suites green.
+- Live: new session title shows ⟨id⟩; {sessionId}.json exists; DMS chip on correct
+  workspace (token-join replay vs live niri = 1:1).
+- Old running sessions still render (legacy fallback) until restarted.
+- Commit spell repo (user's call on dotfiles commit).

@@ -56,7 +56,10 @@ mock.module("../src/ipc.ts", () => ({
 const writtenFiles: Record<string, string> = {};
 const removedFiles: string[] = [];
 
-let fakeWindowId: number | null = 42;
+// The controller no longer resolves a window id; it keys status files by the
+// session id and best-effort snapshots its workspace via a title-token self-join
+// (queryOwnWorkspaceName). Tests drive that resolver's result deterministically.
+let fakeWorkspace: string | null = null;
 
 type MutableTerminalInfo = {
 	imageProtocol: ImageProtocol | null;
@@ -80,7 +83,7 @@ beforeEach(() => {
 		delete writtenFiles[key];
 	}
 	removedFiles.length = 0;
-	fakeWindowId = 42;
+	fakeWorkspace = null;
 	spyOn(Bun, "write").mockImplementation((filePath, content) => {
 		const rendered = typeof content === "string" ? content : String(content);
 		writtenFiles[String(filePath)] = rendered;
@@ -90,11 +93,9 @@ beforeEach(() => {
 	spyOn(fs, "rm").mockImplementation(async targetPath => {
 		removedFiles.push(String(targetPath));
 	});
-	// The controller prefers its OWN window (via process ancestry) and falls
-	// back to the focused window; mock both so tests drive the id deterministically.
-	spyOn(niriQuery, "queryNiriOwnWindowId").mockImplementation(async () => fakeWindowId);
-	spyOn(niriQuery, "queryNiriFocusedWindowId").mockImplementation(async () => fakeWindowId);
-	spyOn(niriQuery, "queryFocusedWorkspace").mockResolvedValue(null);
+	// The controller snapshots its workspace by matching its own title token
+	// against niri; mock the resolver so tests drive the result deterministically.
+	spyOn(niriQuery, "queryOwnWorkspaceName").mockImplementation(async () => fakeWorkspace);
 });
 
 afterEach(() => {
@@ -521,18 +522,20 @@ describe("NiriOverviewController", () => {
 			// Reset tracking state between tests
 			for (const k of Object.keys(writtenFiles)) delete writtenFiles[k];
 			removedFiles.length = 0;
-			fakeWindowId = 42;
+			fakeWorkspace = null;
 		});
 
-		it("writes a status file after window ID is discovered", async () => {
+		it("writes a status file keyed by the session id", async () => {
 			const { ctx } = makeCtx();
 			const ctrl = new NiriOverviewController("/fake.sock", ctx);
 			// Allow the async #initWindowId to complete
 			await Bun.sleep(10);
 			const keys = Object.keys(writtenFiles);
-			expect(keys.some(k => k.includes("42.json"))).toBe(true);
-			const content = JSON.parse(writtenFiles[keys.find(k => k.includes("42.json"))!]);
-			expect(content.windowId).toBe(42);
+			expect(keys.some(k => k.includes("session-test.json"))).toBe(true);
+			const content = JSON.parse(writtenFiles[keys.find(k => k.includes("session-test.json"))!]);
+			expect(content.sessionId).toBe("session-test");
+			// Window id is no longer resolved or written by the producer.
+			expect(content.windowId).toBeUndefined();
 			expect(content.status).toBe("idle");
 			expect(typeof content.pid).toBe("number");
 			expect(typeof content.updatedAt).toBe("number");
@@ -552,7 +555,7 @@ describe("NiriOverviewController", () => {
 			sessionListeners[0]?.();
 			await Bun.sleep(10);
 
-			const key = Object.keys(writtenFiles).find(k => k.includes("42.json"));
+			const key = Object.keys(writtenFiles).find(k => k.includes("session-test.json"));
 			expect(key).toBeDefined();
 			const content = JSON.parse(writtenFiles[key!]);
 			expect(content.status).toBe("needs_input");
@@ -578,15 +581,22 @@ describe("NiriOverviewController", () => {
 			const ctrl = new NiriOverviewController("/fake.sock", ctx);
 			await Bun.sleep(10);
 			ctrl.destroy();
-			expect(removedFiles.some(f => f.includes("42.json"))).toBe(true);
+			expect(removedFiles.some(f => f.includes("session-test.json"))).toBe(true);
 		});
 
-		it("skips status file when niri is not available", async () => {
-			fakeWindowId = null; // simulate niri query failure
+		it("still writes status even when niri (workspace snapshot) is unavailable", async () => {
+			// The status file is keyed by the session id, not a niri window, so it is
+			// written regardless of whether the workspace snapshot resolves. Workspace
+			// stays absent; everything else is present.
+			fakeWorkspace = null;
 			const { ctx } = makeCtx();
 			const ctrl = new NiriOverviewController("/fake.sock", ctx);
 			await Bun.sleep(10);
-			expect(Object.keys(writtenFiles).length).toBe(0);
+			const key = Object.keys(writtenFiles).find(k => k.includes("session-test.json"));
+			expect(key).toBeDefined();
+			const content = JSON.parse(writtenFiles[key!]);
+			expect(content.sessionId).toBe("session-test");
+			expect(content.workspaceName).toBeUndefined();
 			ctrl.destroy();
 		});
 
@@ -594,7 +604,7 @@ describe("NiriOverviewController", () => {
 			const { ctx } = makeCtx({ sessionName: "my-session" });
 			const ctrl = new NiriOverviewController("/fake.sock", ctx);
 			await Bun.sleep(10);
-			const key = Object.keys(writtenFiles).find(k => k.includes("42.json"));
+			const key = Object.keys(writtenFiles).find(k => k.includes("session-test.json"));
 			expect(key).toBeDefined();
 			const content = JSON.parse(writtenFiles[key!]);
 			expect(content.projectName).toBe("myapp");
@@ -612,51 +622,25 @@ describe("NiriOverviewController", () => {
 			overrides.sessionName = "second-title";
 			sessionListeners[0]?.();
 			await Bun.sleep(10);
-			const key = Object.keys(writtenFiles).find(k => k.includes("42.json"));
+			const key = Object.keys(writtenFiles).find(k => k.includes("session-test.json"));
 			expect(key).toBeDefined();
 			const content = JSON.parse(writtenFiles[key!]);
 			expect(content.sessionTitle).toBe("second-title");
 			ctrl.destroy();
 		});
 
-		it("self-heals: a later re-verify tick retargets the status file to the corrected window", async () => {
-			// Capture the periodic re-verify callback the controller registers so we
-			// can fire it deterministically without waiting for the real interval.
-			let tick: (() => void) | null = null;
-			const intervalSpy = spyOn(globalThis, "setInterval").mockImplementation(((cb: () => void) => {
-				tick = cb;
-				return 0 as unknown as ReturnType<typeof setInterval>;
-			}) as typeof setInterval);
-
-			fakeWindowId = 42;
+		it("snapshots the workspace name (for recover) via the title-token self-join", async () => {
+			// The controller resolves its OWN workspace by matching its title token
+			// against niri (mocked here). That name is stored so `spell recover` can
+			// respawn a crashed session on the right workspace.
+			fakeWorkspace = "Sales dep";
 			const { ctx } = makeCtx();
 			const ctrl = new NiriOverviewController("/fake.sock", ctx);
 			await Bun.sleep(10);
-			expect(Object.keys(writtenFiles).some(k => k.includes("42.json"))).toBe(true);
-			expect(intervalSpy).toHaveBeenCalled();
-
-			// The session's true window turns out to be 7; the next tick must move the
-			// record there and delete the stale 42.json.
-			fakeWindowId = 7;
-			tick?.();
-			await Bun.sleep(10);
-			expect(removedFiles.some(f => f.includes("42.json"))).toBe(true);
-			const key = Object.keys(writtenFiles).find(k => k.includes("7.json"));
+			const key = Object.keys(writtenFiles).find(k => k.includes("session-test.json"));
 			expect(key).toBeDefined();
-			expect(JSON.parse(writtenFiles[key!]).windowId).toBe(7);
+			expect(JSON.parse(writtenFiles[key!]).workspaceName).toBe("Sales dep");
 			ctrl.destroy();
-		});
-
-		it("clears the re-verify interval on destroy()", async () => {
-			const handle = 12345 as unknown as ReturnType<typeof setInterval>;
-			spyOn(globalThis, "setInterval").mockImplementation((() => handle) as typeof setInterval);
-			const clearSpy = spyOn(globalThis, "clearInterval").mockImplementation(() => {});
-
-			const { ctx } = makeCtx();
-			const ctrl = new NiriOverviewController("/fake.sock", ctx);
-			await Bun.sleep(10);
-			ctrl.destroy();
-			expect(clearSpy).toHaveBeenCalledWith(handle);
 		});
 	});
 });

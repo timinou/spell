@@ -97,7 +97,11 @@ async function activateWorkspace(workspaceName: string): Promise<boolean> {
 }
 
 function buildSpawnArgs(session: RecoverableStatusSession, direct: boolean): string[] {
-	const title = formatSessionLabel(session);
+	// Stamp the identity token into the initial window title so the desktop layer
+	// can join this window to its session immediately, even in the moment before
+	// the recovered spell process starts and re-emits its own titled OSC. Matches
+	// the producer format in title-generator (`⟨<sessionId>⟩`).
+	const title = `${formatSessionLabel(session)} ⟨${session.sessionId}⟩`;
 	if (direct) {
 		return [
 			"ghostty",

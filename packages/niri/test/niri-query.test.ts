@@ -1,74 +1,86 @@
 /**
- * resolveOwnWindowId tests.
+ * resolveWorkspaceByToken tests.
  *
- * The pure core of window-identity resolution: given this session's
- * process-ancestry chain (nearest-first) and the niri window list, return the
- * window ID the session owns. This is the fix for status files landing on the
- * wrong niri window — historically the id was taken from whatever window was
- * FOCUSED at boot, which races across concurrently-launched sessions.
+ * The pure core of the session→workspace self-join. Spell stamps its session id
+ * into its own window title as `⟨<sessionId>⟩`; niri echoes the title verbatim
+ * as `windows[].title`. Given this session's id, the live windows, and the
+ * workspaces, return the NAME of the workspace whose window carries the token.
+ *
+ * This replaces the old process-ancestry/focus resolution, which was ambiguous
+ * under a shared terminal server (one pid backing many windows) and raced on
+ * focus. Matching on an identity spell OWNS (its own title token) is correct
+ * regardless of focus, launch order, or pid sharing.
  *
  * Contracts:
- *  - Picks the ancestor that owns a window, ignoring focus.
- *  - Walks nearest-first: the closest owning ancestor wins.
- *  - Multiple windows per terminal pid → disambiguate by focus, else first.
- *  - No owning ancestor → null (caller keeps the focused-window fallback).
+ *  - Finds the window whose title contains the exact token, reads its workspace.
+ *  - Ignores focus and other sessions' windows entirely.
+ *  - Token absent from all titles → null (not yet propagated / no such window).
+ *  - Window found but workspace unnamed or unknown → null.
+ *  - Empty session id → null.
  */
 
 import { describe, expect, it } from "bun:test";
 
-import { type NiriWindowInfo, resolveOwnWindowId } from "../src/niri-query";
+import { type NiriWindowInfo, type NiriWorkspaceInfo, resolveWorkspaceByToken } from "../src/niri-query";
 
-describe("resolveOwnWindowId", () => {
-	// A realistic tree: agent (pid 500) → terminal (pid 200) → niri window 17.
-	// Window 42 is focused and owned by a DIFFERENT terminal (pid 999); the old
-	// focus-based logic would wrongly return 42.
-	const windows: NiriWindowInfo[] = [
-		{ id: 42, pid: 999, is_focused: true },
-		{ id: 17, pid: 200, is_focused: false },
-		{ id: 9, pid: 300, is_focused: false },
+describe("resolveWorkspaceByToken", () => {
+	const workspaces: NiriWorkspaceInfo[] = [
+		{ id: 1, name: "Sales dep", idx: 4 },
+		{ id: 2, name: "Spell", idx: 2 },
+		{ id: 3, name: null, idx: 9 },
 	];
 
-	it("returns the window owned by an ancestor, ignoring the focused window", () => {
-		const ancestry = [500, 200, 100, 1]; // agent → terminal(200) → shell → init
-		expect(resolveOwnWindowId(ancestry, windows)).toBe(17);
+	// Three windows across two workspaces. Only window 13 carries our token; the
+	// others belong to different sessions (and one is on the same workspace, to
+	// prove we match by token, not by co-location).
+	const windows: NiriWindowInfo[] = [
+		{ id: 12, title: "other: Something Else ⟨sess-OTHER⟩", workspace_id: 2 },
+		{ id: 13, title: "agentmaker: Issue triage ⟨sess-ABC⟩", workspace_id: 1 },
+		{ id: 14, title: "verse: 3D Text ⟨sess-XYZ⟩", workspace_id: 1 },
+	];
+
+	it("returns the workspace name of the window carrying this session's token", () => {
+		expect(resolveWorkspaceByToken("sess-ABC", windows, workspaces)).toBe("Sales dep");
 	});
 
-	it("does not fall for the focused window when it belongs to another process", () => {
-		// Ancestry never includes pid 999, so focused window 42 must be ignored.
-		const ancestry = [501, 300];
-		expect(resolveOwnWindowId(ancestry, windows)).toBe(9);
+	it("matches by token, not by focus or window order", () => {
+		expect(resolveWorkspaceByToken("sess-XYZ", windows, workspaces)).toBe("Sales dep");
+		expect(resolveWorkspaceByToken("sess-OTHER", windows, workspaces)).toBe("Spell");
 	});
 
-	it("walks nearest-first: the closest owning ancestor wins", () => {
-		// Both pid 200 (win 17) and pid 300 (win 9) are ancestors; 200 is nearer.
-		const ancestry = [500, 200, 300, 1];
-		expect(resolveOwnWindowId(ancestry, windows)).toBe(17);
+	it("returns null when no window carries the token (not yet propagated)", () => {
+		expect(resolveWorkspaceByToken("sess-NOPE", windows, workspaces)).toBeNull();
 	});
 
-	it("returns null when no ancestor owns a window", () => {
-		const ancestry = [500, 400, 100, 1];
-		expect(resolveOwnWindowId(ancestry, windows)).toBeNull();
+	it("returns null when the token's workspace has no name", () => {
+		const onUnnamed: NiriWindowInfo[] = [{ id: 20, title: "x: y ⟨sess-Q⟩", workspace_id: 3 }];
+		expect(resolveWorkspaceByToken("sess-Q", onUnnamed, workspaces)).toBeNull();
+	});
+
+	it("returns null when the token's window references an unknown workspace", () => {
+		const onGhost: NiriWindowInfo[] = [{ id: 21, title: "x: y ⟨sess-G⟩", workspace_id: 999 }];
+		expect(resolveWorkspaceByToken("sess-G", onGhost, workspaces)).toBeNull();
+	});
+
+	it("does not partial-match a token that is a substring of another id", () => {
+		// "sess-A" must not match the window titled with "sess-ABC" — the
+		// delimiters make the match exact.
+		expect(resolveWorkspaceByToken("sess-A", windows, workspaces)).toBeNull();
+	});
+
+	it("returns null for an empty session id", () => {
+		expect(resolveWorkspaceByToken("", windows, workspaces)).toBeNull();
 	});
 
 	it("returns null for an empty window list", () => {
-		expect(resolveOwnWindowId([500, 200], [])).toBeNull();
+		expect(resolveWorkspaceByToken("sess-ABC", [], workspaces)).toBeNull();
 	});
 
-	describe("one terminal process backing multiple windows", () => {
-		// e.g. a single ghostty instance (pid 200) hosting three niri windows.
-		const shared: NiriWindowInfo[] = [
-			{ id: 10, pid: 200, is_focused: false },
-			{ id: 11, pid: 200, is_focused: true },
-			{ id: 12, pid: 200, is_focused: false },
+	it("tolerates windows with a null title", () => {
+		const withNull: NiriWindowInfo[] = [
+			{ id: 30, title: null, workspace_id: 1 },
+			{ id: 31, title: "hit ⟨sess-N⟩", workspace_id: 2 },
 		];
-
-		it("disambiguates by focus (the just-launched window is focused at boot)", () => {
-			expect(resolveOwnWindowId([500, 200], shared)).toBe(11);
-		});
-
-		it("falls back to the first candidate when none is focused", () => {
-			const none = shared.map(w => ({ ...w, is_focused: false }));
-			expect(resolveOwnWindowId([500, 200], none)).toBe(10);
-		});
+		expect(resolveWorkspaceByToken("sess-N", withNull, workspaces)).toBe("Spell");
 	});
 });

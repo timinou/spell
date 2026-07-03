@@ -6,7 +6,7 @@ import { clearImagePlacements, setTerminalImageProtocol, TERMINAL } from "@spell
 import { logger } from "@spell/pi-utils";
 import { withLargerFont } from "./font-scaling";
 import { NiriEventStream } from "./ipc";
-import { queryFocusedWorkspace, queryNiriFocusedWindowId, queryNiriOwnWindowId } from "./niri-query";
+import { queryOwnWorkspaceName } from "./niri-query";
 import { OverviewComponent, STATUS_COLORS } from "./overview-component";
 import type { AgentStatus, TodoItemSnapshot, TodoPhaseSnapshot } from "./types";
 
@@ -67,12 +67,14 @@ export interface NiriOverviewContext {
 const FONT_SCALE_FACTOR = 1.6;
 
 /**
- * How often a running session re-verifies its own niri window id. niri window
- * ids are stable, so this is a cheap no-op in steady state; it exists only to
- * self-heal a session whose initial capture missed or mis-resolved (boot focus
- * race, niri briefly unavailable, or the ancestry fallback path).
+ * Bounded retry for the recover-workspace snapshot. After a window is created,
+ * spell's title (with the identity token) takes a beat to propagate through the
+ * terminal to niri's window list; we re-poll a few times so the snapshot lands
+ * even on a cold start. This is best-effort metadata for `spell recover` only —
+ * the live desktop bar never depends on it.
  */
-const IDENTITY_REVERIFY_MS = 30_000;
+const WORKSPACE_SNAPSHOT_RETRIES = 5;
+const WORKSPACE_SNAPSHOT_INTERVAL_MS = 2_000;
 const OVERLAY_OPTIONS = {
 	width: "100%" as const,
 	maxHeight: "100%" as const,
@@ -98,7 +100,6 @@ export class NiriOverviewController {
 	#savedImageProtocol: ImageProtocol | null = null;
 	#destroyed = false;
 	#writer = new StatusFileWriter();
-	#identityTimer: ReturnType<typeof setInterval> | null = null;
 
 	constructor(socketPath: string, context: NiriOverviewContext) {
 		this.#context = context;
@@ -124,10 +125,6 @@ export class NiriOverviewController {
 	destroy(): void {
 		if (this.#destroyed) return;
 		this.#destroyed = true;
-		if (this.#identityTimer !== null) {
-			clearInterval(this.#identityTimer);
-			this.#identityTimer = null;
-		}
 		this.#stream.destroy();
 		this.#unsubscribeSession?.();
 		this.#hideOverview();
@@ -136,48 +133,52 @@ export class NiriOverviewController {
 
 	// ── Private ───────────────────────────────────────────────────────────────
 
-	/** One-shot async init: discovers the niri window ID and writes the first status file. */
+	/**
+	 * One-shot async init: keys the status writer by this session's stable id,
+	 * writes the first status file, then snapshots the session's current workspace
+	 * (for `spell recover`). No niri window-id resolution happens here — the
+	 * window↔session mapping is derived live by the desktop layer from the title
+	 * token, so the writer needs only the session id.
+	 */
 	async #initWindowId(): Promise<void> {
 		await this.#writer.ensureDir();
+		const sessionId = this.#context.sessionManager.getSessionId();
+		this.#writer.setSessionId(sessionId);
 		const sessionFile = this.#context.sessionManager.getSessionFile();
 		if (sessionFile) {
 			this.#writer.setSessionInfo({
-				sessionId: this.#context.sessionManager.getSessionId(),
+				sessionId,
 				sessionFile,
 				cwd: this.#context.sessionManager.getCwd(),
 			});
 		}
-		await this.#refreshWindowIdentity();
-		// Periodically re-verify our window identity so a long-lived session self-
-		// heals if the initial capture missed or mis-resolved (boot focus race,
-		// niri briefly unavailable, or the ancestry fallback path). niri window ids
-		// are stable, so this is a no-op in the common case and cheap otherwise.
-		this.#identityTimer = setInterval(() => {
-			void this.#refreshWindowIdentity();
-		}, IDENTITY_REVERIFY_MS);
+		this.#writeStatusIfChanged();
+		void this.#snapshotWorkspace(sessionId);
 	}
 
 	/**
-	 * Resolve this session's own niri window id (+ workspace) and point the
-	 * status writer at it. Prefers OUR OWN window (via process ancestry) so the
-	 * status file lands on this session's window regardless of what is focused;
-	 * falls back to the focused window only when ancestry cannot identify one
-	 * (e.g. niri unavailable or an unusual process tree). Idempotent: safe to
-	 * call repeatedly — it only rewrites when the id or workspace actually moved.
+	 * Best-effort: record the name of the workspace this session's window sits on,
+	 * so `spell recover` can respawn a crashed session on the right workspace (a
+	 * dead window can't be located live). Resolved by matching this session's own
+	 * title token against niri's window list — an identity we OWN, so it is correct
+	 * regardless of focus or a shared terminal server. Retries briefly because the
+	 * token takes a moment to propagate into niri's window title after launch.
 	 */
-	async #refreshWindowIdentity(): Promise<void> {
-		if (this.#destroyed) return;
-		const [ownId, workspace] = await Promise.all([queryNiriOwnWindowId(), queryFocusedWorkspace()]);
-		const id = ownId ?? (await queryNiriFocusedWindowId());
-		if (id === null || this.#destroyed) return;
-		await this.#writer.retargetWindow(id);
-		// Only track the workspace once we have committed to a window id, and never
-		// overwrite a known workspace with null (a transient query miss).
-		if (workspace) this.#writer.setWorkspaceName(workspace.name ?? null);
-		this.#writeStatusIfChanged();
+	async #snapshotWorkspace(sessionId: string): Promise<void> {
+		for (let attempt = 0; attempt < WORKSPACE_SNAPSHOT_RETRIES; attempt++) {
+			if (this.#destroyed) return;
+			const name = await queryOwnWorkspaceName(sessionId);
+			if (this.#destroyed) return;
+			if (name !== null) {
+				this.#writer.setWorkspaceName(name);
+				this.#writeStatusIfChanged();
+				return;
+			}
+			await new Promise(resolve => setTimeout(resolve, WORKSPACE_SNAPSHOT_INTERVAL_MS));
+		}
 	}
 
-	/** Write status file if status changed since last write. No-op if no window ID. */
+	/** Write status file if status changed since last write. No-op if no session id. */
 	#writeStatusIfChanged(): void {
 		if (this.#destroyed) return;
 		const status = this.#deriveStatus();

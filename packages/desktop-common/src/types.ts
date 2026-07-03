@@ -59,16 +59,33 @@ export interface OverviewSnapshot {
 	agentStatus: AgentStatus;
 }
 
-/** Status file written per session to ~/.spell/status/<windowId>.json */
+/** Status file written per session to ~/.spell/status/<sessionId>.json */
 export interface SessionStatusFile {
 	status: AgentStatus;
-	windowId: number | string;
+	/**
+	 * Stable session identity — the primary key. Status files are named
+	 * `<sessionId>.json`, and the desktop layer joins a niri window to its
+	 * session by matching the `⟨sessionId⟩` token in the window title. Required
+	 * for all files this version writes.
+	 */
+	sessionId: string;
 	pid: number;
 	projectName: string;
 	sessionTitle: string;
 	updatedAt: number;
-	sessionId?: string;
+	/**
+	 * Legacy: the niri window id this session guessed for itself. No longer
+	 * written (the window↔session mapping is now derived live from title tokens),
+	 * but still read so status files from an older running spell keep rendering
+	 * until that session restarts.
+	 */
+	windowId?: number | string;
 	sessionFile?: string;
 	cwd?: string;
+	/**
+	 * Last-known workspace name, a snapshot for `spell recover` to respawn a
+	 * crashed session on the right workspace (its window is gone, so this can't be
+	 * derived live). Resolved by the session's own title-token self-join.
+	 */
 	workspaceName?: string | null;
 }

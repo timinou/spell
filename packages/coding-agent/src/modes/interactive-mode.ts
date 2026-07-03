@@ -82,7 +82,7 @@ function nodesToPhaseViews(nodes: TodoNodeT[]): TodoPhaseView[] {
 import type { ElicitationSchema, MCPElicitationParams, MCPElicitationResult } from "../mcp/types";
 import type { EventBus } from "../utils/event-bus";
 import type { BlockingEventLike } from "../utils/intention-summarizer";
-import { generateSessionTitle, setTerminalTitle } from "../utils/title-generator";
+import { generateSessionTitle, setSessionTitleToken, setTerminalTitle } from "../utils/title-generator";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import { AuditModeOverlay } from "./components/audit-mode-overlay";
 import type { BashExecutionComponent } from "./components/bash-execution";
@@ -552,6 +552,12 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 		}
 
+		// Stamp this session's identity onto every window title we emit, so the
+		// desktop layer (niri/DMS) can join a niri window back to this session
+		// without guessing from focus/process ancestry. Must precede the first
+		// setTitle below so the token is present from the very first emission.
+		setSessionTitleToken(this.session.sessionId);
+
 		// Set terminal title if session already has one (resumed session)
 		const existingTitle = this.sessionManager.getSessionName();
 		if (existingTitle) {
@@ -588,8 +594,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender(true);
 		dbgStartup("g:after:ui.requestRender(true) [post-init]");
 
-		// Set initial terminal title (will be updated when session title is generated)
-		this.ui.terminal.setTitle("✦");
+		// Set initial terminal title (will be updated when session title is generated).
+		// Route through setTerminalTitle so it carries the session identity token.
+		setTerminalTitle("✦");
 
 		dbgStartup("h:before:initHooksAndCustomTools");
 		// Initialize hooks with TUI-based UI context

@@ -138,10 +138,38 @@ ${truncatedMessage}
 	}
 }
 
+
 /**
- * Set the terminal title using ANSI escape sequences.
+ * Session identity token appended to every window title this process sets.
+ *
+ * The token is how the desktop layer (niri/DMS) maps a niri WINDOW back to a
+ * spell SESSION: spell owns its window title (OSC), niri echoes it verbatim as
+ * `windows[].title`, so a token spell stamps there is an identity spell OWNS
+ * rather than one it must guess from focus or process ancestry (both of which
+ * are ambiguous under a shared terminal server). Consumers parse it with the
+ * `⟨…⟩` delimiters and never need spell to resolve its own window id.
+ *
+ * Empty until {@link setSessionTitleToken} runs, so early titles set before the
+ * session id is known simply carry no suffix (harmless).
  */
+let sessionTitleToken = "";
+
+/** Wrap a session id in the title-token delimiters (U+27E8/U+27E9). */
+function formatTitleToken(id: string): string {
+	return `⟨${id}⟩`;
+}
+
+/**
+ * Set the session identity token appended to subsequent window titles. Call as
+ * early as the session id is known so every title spell emits carries it.
+ */
+export function setSessionTitleToken(sessionId: string): void {
+	sessionTitleToken = sessionId ? formatTitleToken(sessionId) : "";
+}
+
 export function setTerminalTitle(title: string): void {
-	// OSC 2 sets the window title
-	process.stdout.write(`]2;${title}`);
+	// OSC 2 sets the window title. Append the session identity token so the
+	// desktop layer can join this window to its session (see sessionTitleToken).
+	const full = sessionTitleToken ? `${title} ${sessionTitleToken}` : title;
+	process.stdout.write(`\x1b]2;${full}\x07`);
 }

@@ -31,7 +31,7 @@ export const STATUS_DIR = path.join(os.homedir(), ".spell", "status");
  */
 export class StatusFileWriter {
 	#statusDir: string;
-	#windowId: number | string | null = null;
+	#sessionId: string | null = null;
 	#lastWrittenDedup: string | null = null;
 	#sessionInfo: SessionRecoveryInfo | null = null;
 	#workspaceName: string | null | undefined;
@@ -41,9 +41,12 @@ export class StatusFileWriter {
 		this.#statusDir = statusDir;
 	}
 
-	/** Set the window ID. Must be called before write(). */
-	setWindowId(id: number | string): void {
-		this.#windowId = id;
+	/**
+	 * Set this session's stable id — the status file's primary key. Must be called
+	 * before {@link writeIfChanged}; the file is named `<sessionId>.json`.
+	 */
+	setSessionId(id: string): void {
+		this.#sessionId = id;
 	}
 
 	setSessionInfo(info: SessionRecoveryInfo): void {
@@ -57,29 +60,8 @@ export class StatusFileWriter {
 		this.#metadataVersion += 1;
 	}
 
-	/**
-	 * Point the writer at a (possibly new) window id. When the id changes, the
-	 * old status file is removed so a stale record can't linger on the previous
-	 * id, and the dedup key is reset so the next {@link writeIfChanged} re-emits
-	 * to the new path. No-op (returns false) when the id is unchanged, so this is
-	 * safe to call on a periodic self-heal tick. Returns true iff the target moved.
-	 */
-	async retargetWindow(id: number | string): Promise<boolean> {
-		if (this.#windowId === id) return false;
-		const previous = this.#windowId;
-		this.#windowId = id;
-		this.#lastWrittenDedup = null; // force the next write to emit to the new file
-		if (previous !== null) {
-			const oldPath = path.join(this.#statusDir, `${previous}.json`);
-			await fs.rm(oldPath, { force: true }).catch(err => {
-				logger.warn("StatusFileWriter: retarget cleanup failed", { path: oldPath, err: String(err) });
-			});
-		}
-		return true;
-	}
-
-	get windowId(): number | string | null {
-		return this.#windowId;
+	get sessionId(): string | null {
+		return this.#sessionId;
 	}
 
 	/** Ensure the status directory exists. */
@@ -93,17 +75,17 @@ export class StatusFileWriter {
 
 	/**
 	 * Write the session status file if it changed since last write.
-	 * No-op if no window ID is set or the dedup key matches.
+	 * No-op if no session id is set or the dedup key matches.
 	 */
 	writeIfChanged(status: AgentStatus, projectName: string, sessionTitle: string, pid = process.pid): void {
-		if (this.#windowId === null) return;
+		if (this.#sessionId === null) return;
 		const dedup = `${status}\0${sessionTitle}\0${this.#metadataVersion}`;
 		if (dedup === this.#lastWrittenDedup) return;
 		this.#lastWrittenDedup = dedup;
 
 		const payload: SessionStatusFile = {
 			status,
-			windowId: this.#windowId,
+			sessionId: this.#sessionId,
 			pid,
 			projectName,
 			sessionTitle,
@@ -111,7 +93,7 @@ export class StatusFileWriter {
 			...(this.#sessionInfo ?? {}),
 			...(this.#workspaceName !== undefined ? { workspaceName: this.#workspaceName } : {}),
 		};
-		const filePath = path.join(this.#statusDir, `${this.#windowId}.json`);
+		const filePath = path.join(this.#statusDir, `${this.#sessionId}.json`);
 		Bun.write(filePath, JSON.stringify(payload)).catch(err => {
 			logger.warn("StatusFileWriter: write failed", { path: filePath, err: String(err) });
 		});
@@ -119,12 +101,12 @@ export class StatusFileWriter {
 
 	/** Remove the status file on shutdown. */
 	async cleanup(): Promise<void> {
-		if (this.#windowId === null) return;
-		const filePath = path.join(this.#statusDir, `${this.#windowId}.json`);
+		if (this.#sessionId === null) return;
+		const filePath = path.join(this.#statusDir, `${this.#sessionId}.json`);
 		await fs.rm(filePath, { force: true }).catch(err => {
 			logger.warn("StatusFileWriter: cleanup failed", { path: filePath, err: String(err) });
 		});
-		this.#windowId = null;
+		this.#sessionId = null;
 	}
 }
 
