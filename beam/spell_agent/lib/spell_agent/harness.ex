@@ -35,6 +35,24 @@ defmodule SpellAgent.Harness do
              :source "(reduce harness/expand (harness/state)
                               (harness/descendants (harness/cursor-id)))"})
 
+      (harness/declare-pane {:name "cost-histo"}) -> {:ok true :pane "cost-histo"}
+
+  `harness/declare-pane` (PLAN-024 Wave 1 / FUP-005) opens a NEW pane name into
+  the bounded runtime vocabulary `SpellAgent.Tui.PaneRegistry` guards — the ONE
+  new primitive this surface adds. Everything a declared pane does from there is
+  ALREADY existing PTC: shadow it into `body` via `layout/set` with
+  `:focusable true`, bind its chords via `keymap/bind` (its declared NAME is a
+  valid `:context`, same as `"tree"`/`"prompt"`), author its behaviour via
+  `keymap/define-reaction`. No new Elixir policy — only the one bounded
+  name-space the atom-DoS discipline requires.
+
+  NB: adding a `harness/`/`keymap/` verb ALSO requires registering its name in
+  the vendored `ptc_runner` analyzer's bounded allowlist
+  (`PtcRunner.Lisp.SourceAtoms.@qualified_keys`) — the fixed-verb-allowlist
+  posture that namespace pair uses (unlike `view/`/`theme/`/`lens/`/`layout/`,
+  which are reflected and open by design). `declare-pane` was added there
+  alongside this verb (PLAN-024 Wave 1).
+
   ## How the gaze threads through
 
   `harness/*` verbs are pure on a Ui VALUE. Inside a reaction the "current" gaze
@@ -48,7 +66,7 @@ defmodule SpellAgent.Harness do
   final map back into a `%Ui{}`.
   """
 
-  alias SpellAgent.Tui.{Chord, KeymapRegistry, Ui}
+  alias SpellAgent.Tui.{Chord, KeymapRegistry, PaneRegistry, Ui}
   alias SpellAgent.Tui.Panes.SpanTree
   alias SpellAgent.Tui.Store
 
@@ -85,7 +103,10 @@ defmodule SpellAgent.Harness do
       "keymap/unbind" => &keymap_unbind/1,
       "keymap/show" => &keymap_show/1,
       "keymap/intents" => &keymap_intents/1,
-      "keymap/define-reaction" => &keymap_define_reaction/1
+      "keymap/define-reaction" => &keymap_define_reaction/1,
+
+      # ---- harness/declare-pane : the ONE new bounded meta-op (PLAN-024 W1) ----
+      "harness/declare-pane" => &declare_pane/1
     }
   end
 
@@ -131,16 +152,16 @@ defmodule SpellAgent.Harness do
 
   # A pane list coerced to known panes (unknowns dropped), defaulting to the full
   # ring when absent/empty.
-  defp safe_panes(nil), do: [:tree, :answer, :prompt]
+  defp safe_panes(nil), do: [:tree, :detail, :prompt]
 
   defp safe_panes(list) when is_list(list) do
     case Enum.flat_map(list, fn p -> List.wrap(Ui.safe_pane(p)) end) do
-      [] -> [:tree, :answer, :prompt]
+      [] -> [:tree, :detail, :prompt]
       panes -> panes
     end
   end
 
-  defp safe_panes(_), do: [:tree, :answer, :prompt]
+  defp safe_panes(_), do: [:tree, :detail, :prompt]
 
   # A non-negative integer, else the default — a reaction can't inject a non-int
   # (e.g. a string) that would later crash a numeric comparison in the projection.
@@ -216,6 +237,24 @@ defmodule SpellAgent.Harness do
     %{"context" => to_string(ctx), "reactions" => reactions}
   end
 
+  # `(harness/declare-pane {:name "cost-histo"})` — the agent's entry point to
+  # PLAN-024 Wave 1 (FUP-005): the ONE bounded meta-op that opens a NEW pane
+  # name into the atom vocabulary `Ui.safe_pane/1` and `App.focus_stack/1`
+  # recognize. Everything a declared pane DOES from here is already 100%
+  # existing PTC surface — this verb adds no new policy, only the bounded
+  # name-space: shadow it into `body` with `(layout/set {:slot "cost-histo" ...
+  # :focusable true})`, bind its chords with `keymap/bind`, author its
+  # behaviour with `keymap/define-reaction` (context = the declared name).
+  defp declare_pane(args) do
+    case PaneRegistry.define_pane(require_str(args, "name")) do
+      {:ok, atom} ->
+        %{"ok" => true, "pane" => to_string(atom)}
+
+      {:error, reason} ->
+        %{"err" => "declare-pane rejected: #{reason}"}
+    end
+  end
+
   defp keymap_define_reaction(args) do
     ctx = require_context(args)
     source = require_str(args, "source")
@@ -241,25 +280,40 @@ defmodule SpellAgent.Harness do
   end
 
   # Known keymap contexts — EXACTLY the contexts the resolver consults
-  # (App.focus_stack: SpanTree=:tree, TurnNav=:turn_nav for answer/prompt focus,
-  # and :global). A reaction-supplied context string is matched by VALUE (never
-  # interned — atom-table DoS guard). NB :answer/:prompt are deliberately NOT
-  # here: both panes resolve through :turn_nav, so a binding stored under :answer
-  # would be silently ignored by Keys.resolve (final-review P2). Bind those keys
-  # under "turn_nav".
+  # (App.focus_stack, W5 pivot: SpanTree=:tree for tree focus; TurnNav=:turn_nav
+  # for detail/history focus (both scroll the same way); Prompt=:prompt for
+  # composer focus; and :global). A reaction-supplied context string is matched
+  # by VALUE (never interned — atom-table DoS guard). NB :detail/:history are
+  # deliberately NOT their own entries here: both panes resolve through
+  # :turn_nav (App.focus_stack/1), so a binding stored under "detail" or
+  # "history" would be silently ignored by Keys.resolve (final-review P2). Bind
+  # those keys under "turn_nav" instead.
   @contexts [:tree, :turn_nav, :prompt, :global]
 
   defp require_context(args) do
     s = require_str(args, "context")
 
     case Enum.find(@contexts, &(Atom.to_string(&1) == s)) do
+      nil -> require_runtime_pane_context(s)
+      ctx -> ctx
+    end
+  end
+
+  # A runtime-declared pane name (PLAN-024 Wave 1 / FUP-005, via
+  # `harness/declare-pane`) is ALSO a valid keymap context — its own name is
+  # the `KeymapRegistry` key `App.focus_stack/1` pushes for it. Looked up BY
+  # VALUE through `PaneRegistry.lookup/1` (never interns); an undeclared name
+  # still raises exactly as before.
+  defp require_runtime_pane_context(s) do
+    case PaneRegistry.lookup(s) do
       nil ->
         raise ArgumentError,
-              "unknown context #{inspect(s)}; allowed: #{Enum.map_join(@contexts, ", ", &to_string/1)} " <>
-                "(the answer + prompt panes both use \"turn_nav\")"
+              "unknown context #{inspect(s)}; allowed: #{Enum.map_join(@contexts, ", ", &to_string/1)}, " <>
+                "or a name declared via (harness/declare-pane {:name #{inspect(s)}}) " <>
+                "(the detail + history panes both use \"turn_nav\"; prompt has its own context)"
 
-      ctx ->
-        ctx
+      atom ->
+        atom
     end
   end
 

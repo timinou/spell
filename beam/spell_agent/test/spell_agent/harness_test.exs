@@ -94,6 +94,66 @@ defmodule SpellAgent.HarnessTest do
       ui = tree_ui()
       assert Reaction.Ptc.run("42", ui, forest()) == ui
     end
+
+    test "run/4 merges lens/* into the tools map when a tree is given (PLAN-024 Wave 2)" do
+      tree = %{
+        "type" => "split",
+        "dir" => "horizontal",
+        "constraints" => [["percentage", 50], ["percentage", 50]],
+        "children" => [
+          %{"type" => "pane", "slot" => "tree", "tags" => %{}},
+          %{"type" => "pane", "slot" => "detail", "tags" => %{}}
+        ]
+      }
+
+      result =
+        Reaction.Ptc.run(
+          ~S|(harness/focus {:dir (lens/frame-target {:dir "right"})})|,
+          tree_ui(),
+          forest(),
+          tree
+        )
+
+      assert result.focus == :detail
+    end
+
+    test "run/3 (no tree, the pre-Wave-2 arity) never exposes lens/* — unknown tool degrades safely" do
+      ui = tree_ui()
+
+      result =
+        Reaction.Ptc.run(~S|(harness/focus {:dir (lens/frame-target {:dir "right"})})|, ui, forest())
+
+      assert result == ui
+    end
+
+    test "run/5 merges black/* into the tools map when mesh_opts is given (PLAN-024 Wave 3)" do
+      region = "reaction-mesh-#{System.unique_integer([:positive])}"
+
+      case Process.whereis(SpellAgent.Hist.Store.Memory) do
+        nil -> start_supervised!(SpellAgent.Hist.Store.Memory)
+        _ -> :ok
+      end
+
+      mesh_opts = %{session_id: "agent", region: region, store: SpellAgent.Hist.Store.Memory}
+
+      source = ~S|{"focus" (get (black/post {:kind "finding" :payload {:x 1}}) "kind")}|
+      result = Reaction.Ptc.run(source, tree_ui(), forest(), nil, mesh_opts)
+
+      # black/post ran (its return's "kind" key fed back into the gaze's focus
+      # field, coerced through Ui.safe_pane — "finding" isn't a known pane so the
+      # gaze's focus stays unchanged, but the absence of a crash + the record
+      # actually landing on the mesh store IS the proof black/* was reachable).
+      assert %SpellAgent.Tui.Ui{} = result
+
+      records = SpellAgent.Mesh.Store.by_kind(SpellAgent.Hist.Store.Memory, region, :finding)
+      assert length(records) == 1
+    end
+
+    test "run/4 (no mesh_opts, the pre-Wave-3 arity) never exposes black/* — unknown tool degrades safely" do
+      ui = tree_ui()
+      result = Reaction.Ptc.run(~S|(black/post {:kind "finding" :payload {}})|, ui, forest())
+      assert result == ui
+    end
   end
 
   describe "keymap/ namespace — live rebinding meta-ops" do

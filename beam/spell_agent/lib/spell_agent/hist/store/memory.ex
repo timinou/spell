@@ -72,6 +72,8 @@ defmodule SpellAgent.Hist.Store.Memory do
         {:mesh, region} -> {{:mesh, region, :_}, :"$1"}
         {:mesh_hash, nil} -> {{:mesh_hash, :_, :_}, :"$1"}
         {:mesh_hash, region} -> {{:mesh_hash, region, :_}, :"$1"}
+        {:layout, _} -> {{:layout, :_}, :"$1"}
+        {:keymap, _} -> {{:keymap, :_}, :"$1"}
       end
 
     :ets.select(@table, [{match, [], [:"$1"]}])

@@ -155,4 +155,35 @@ defmodule SpellAgent.Tui.KeysTest do
       assert Keys.dispatch(res, ui, %{}, &name/1).overrides == %{"X" => :collapsed}
     end
   end
+
+  describe "KeymapRegistry.clear_context/1 (PLAN-024 Wave 3 — the hole-affordance teardown primitive)" do
+    test "wipes only the target context's bindings + reactions, leaving other contexts untouched" do
+      KeymapRegistry.bind(:tree, Chord.parse("C-l"), :"span/expand")
+      KeymapRegistry.put_reaction(:tree, :"span/expand", "(harness/expand {})")
+      KeymapRegistry.bind(:hole_affordance, Chord.parse("1"), :"hole/fill-choice-0")
+      KeymapRegistry.put_reaction(:hole_affordance, :"hole/fill-choice-0", "(black/post {})")
+
+      KeymapRegistry.clear_context(:hole_affordance)
+
+      assert KeymapRegistry.bindings(:hole_affordance) == []
+      assert KeymapRegistry.reactions(:hole_affordance) == []
+      # :tree's own bindings/reactions survive untouched.
+      assert KeymapRegistry.bindings(:tree) == [{Chord.parse("C-l"), :"span/expand"}]
+      assert KeymapRegistry.reactions(:tree) == [{:"span/expand", "(harness/expand {})"}]
+    end
+
+    test "clearing an empty/never-used context is a harmless no-op" do
+      assert KeymapRegistry.bindings(:hole_affordance) == []
+      KeymapRegistry.clear_context(:hole_affordance)
+      assert KeymapRegistry.bindings(:hole_affordance) == []
+    end
+
+    test "re-clearing + reinstalling is idempotent (the re-sync pattern sync_hole_affordances/1 uses)" do
+      KeymapRegistry.bind(:hole_affordance, Chord.parse("t"), :"hole/fill-true")
+      KeymapRegistry.clear_context(:hole_affordance)
+      KeymapRegistry.bind(:hole_affordance, Chord.parse("f"), :"hole/fill-false")
+
+      assert KeymapRegistry.bindings(:hole_affordance) == [{Chord.parse("f"), :"hole/fill-false"}]
+    end
+  end
 end

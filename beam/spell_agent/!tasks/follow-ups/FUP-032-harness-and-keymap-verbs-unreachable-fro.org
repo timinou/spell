@@ -1,0 +1,100 @@
+#+TITLE: harness/ and keymap/ verbs unreachable from the main agent tool surface
+#+STATE: ITEM
+#+SESSION_ID: 1522b28d0259e523
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-04T14-42-40-265Z_1522b28d0259e523.jsonl]]
+#+CUSTOM_ID: FUP-032-harness-and-keymap-verbs-unreachable-fro
+
+* Initial Message
+
+ok your goal is to CONSOLIDATE around the vision of the spell agent so that we can keep building on a strong basis.
+
+i want every single action, every single chord, every single intent to be translatable to an operation on code, leveraging the homoiconicity of beam lisp.
+
+the `C-w h/j/k/l` is an example of such a thing. i want that logic to extend. Why? Because that allows the system to keep coming up with layouts and they will automatically inherit most of the shortcuts.
+i also want you to point out the design gaps that we have so that we can challenge each other and come up with the right ideas that we missed in the past.
+
+this is a review task. come back to me with an in-chat report of what you found out.
+
+* Context
+Discovered while building PLAN-024 Wave 1 (`harness/declare-pane`, FUP-005).
+
+`SpellAgent.Harness.tools/2` (the `harness/*` + `keymap/*` PTC verb map) is
+NEVER merged into `SpellAgent.Tools.build_tools_map/0` — the tools map every
+live mission turn actually calls through (`Session.run/2` ->
+`build_session_tools/5` -> `Tools.build_tools_map()`). Confirmed via full
+repo-wide search: the only 2 call sites of `Harness.tools/2` are:
+
+- `SpellAgent.Tui.Reaction.Ptc.run/3` — a REACTION's closed-over gaze/forest
+  (fires when a bound chord dispatches; the reaction body itself gets the
+  full `harness/`+`keymap/` surface).
+- `SpellAgent.Tui.Cell.Tools.read_only/2` — the CELL query tier, which
+  explicitly DENIES every mutator (`keymap/bind`, `layout/set`, `theme/set`,
+  `sh`, `define-tool` — see the module's own comment + `cell_tools_test.exs`).
+
+So today, a live agent mid-conversation (the main mission loop) has NO path to
+call `keymap/bind`, `keymap/define-reaction`, `harness/declare-pane`, or any
+other `harness/`/`keymap/` verb directly. It can only:
+1. Author a REACTION via `keymap/define-reaction` from... nowhere (chicken-egg:
+   that verb is itself a `keymap/*` verb, unreachable from the main loop) —
+   actually not even a reaction can call `keymap/define-reaction` since a
+   reaction is a *use* of harness/keymap, not necessarily their author.
+2. Author a CELL query that reads harness/* (read-only), but cannot bind/react.
+
+This means the ENTIRE "agent reshapes its own keybindings live" story (PLAN-346
+W3's stated goal, and this session's PLAN-024 thesis) is currently only
+testable/exercisable via direct `Harness.tools(forest, ui)` calls in a test
+harness — NOT by a real running mission. `layout/`+`view/`+`theme/`+`lens/`
+(the render-mirror surface) ARE correctly merged into `build_tools_map/0` via
+`freeform_tools/0` — only `harness/`+`keymap/` are missing.
+
+* Why this wasn't caught earlier
+Every existing test (`harness_test.exs`, `cell_tools_test.exs`,
+`cell_clock_test.exs`, `cell_demos_test.exs`) calls `Harness.tools(forest, ui)`
+DIRECTLY or goes through the cell tier — never through
+`SpellAgent.Tools.build_tools_map()`. So the gap has zero test-visible
+symptoms; it only surfaces when tracing "can a live mission actually author a
+keybinding," which nothing exercises today.
+
+* Open design question (why this is a FUP, not a quick fix)
+Merging `Harness.tools/2` into `build_tools_map/0` raises a real question the
+codebase hasn't answered: should the MAIN mission loop be able to mutate
+`KeymapRegistry`/gaze DIRECTLY (bypassing the reaction indirection), or should
+this remain reaction-scoped by design (a deliberate capability boundary: the
+agent authors reactions via a DIFFERENT verb it can't yet reach, and only a
+fired reaction gets the harness/keymap surface)? This has capability-
+attenuation implications (`spawn-session`'s child clamping, BUG-017's non-
+transitive escape lesson) that need a real decision, not a reflexive merge.
+
+* Proposed investigation
+1. Trace: was this deliberate (PLAN-346's own design) or an oversight? Check
+   PLAN-346 W3's acceptance criteria against what actually shipped.
+2. If deliberate: document WHY explicitly in `Harness`'s moduledoc (currently
+   silent on this) and in `docs/freeform-tui-architecture.md`.
+3. If an oversight: decide the right merge point — likely a NEW `harness/`-
+   scoped tools fn in `Tools.build_tools_map/0`'s `freeform_tools/0` (mirroring
+   how `layout/`+`view/` are merged), closing over the LIVE App gaze + forest
+   (needs a named/reachable gaze source, since `SelfView`'s own moduledoc notes
+   "the App-local cursor is not reachable by name" — this may need solving
+   first, or scoping the merge to gaze-less verbs like `keymap/bind`/
+   `keymap/define-reaction`/`harness/declare-pane` while leaving gaze-reading
+   verbs — `harness/state`, `harness/cursor-id`, etc — cell/reaction-scoped
+   since they legitimately need a bound gaze).
+
+* Acceptance
+- A design decision recorded (memory `decision` or an org DEC-item) on whether
+  harness/keymap should reach the main loop, and if so, exactly which verbs.
+- If yes: `keymap/bind`/`keymap/define-reaction`/`harness/declare-pane` (the
+  gaze-independent meta-ops) callable from a live mission turn, proven by an
+  integration test that runs a REAL `Session.run/2`-style tools map (not a
+  hand-assembled one) and successfully authors + fires a live keybinding.
+- If no: the boundary is documented as intentional in `Harness`'s moduledoc.
+
+* References
+- lib/spell_agent/harness.ex (the tools/2 surface)
+- lib/spell_agent/tools.ex (build_tools_map/0, freeform_tools/0 — the merge
+  point layout/view/theme/lens use, harness/keymap conspicuously absent)
+- lib/spell_agent/tui/reaction/ptc.ex (the only mutator-capable call site)
+- lib/spell_agent/tui/cell/tools.ex (the read-only call site + its own
+  comment confirming the mutator-denial boundary)
+- lib/spell_agent/session.ex (build_session_tools/5 — confirms Tools.build_tools_map
+  is THE assembled surface a real mission turn gets)

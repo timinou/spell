@@ -1,0 +1,54 @@
+#+TITLE: Lift Spatial (C-w h/j/k/l) into a lens/ PTC verb — agent-authorable spatial focus
+#+STATE: DONE
+#+SESSION_ID: 1522b28d0259e523
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-04T14-42-40-265Z_1522b28d0259e523.jsonl]]
+#+CUSTOM_ID: FUP-031-lift-spatial-c-w-h-j-k-l-into-a-lens-ptc
+#+COMPLETION_HASH: 6e78d2dbce87de1a
+
+* Initial Message
+
+ok your goal is to CONSOLIDATE around the vision of the spell agent so that we can keep building on a strong basis.
+
+i want every single action, every single chord, every single intent to be translatable to an operation on code, leveraging the homoiconicity of beam lisp.
+
+the `C-w h/j/k/l` is an example of such a thing. i want that logic to extend. Why? Because that allows the system to keep coming up with layouts and they will automatically inherit most of the shortcuts.
+i also want you to point out the design gaps that we have so that we can challenge each other and come up with the right ideas that we missed in the past.
+
+this is a review task. come back to me with an in-chat report of what you found out.
+
+* Parent
+PLAN-009 (Freeform TUI) / the "every chord generalizes to agent-authored layouts" consolidation (PLAN-024). Sibling of FUP-005 (pane-vocabulary generalization) — this is the OTHER half of C-w: the geometry, not the pane name.
+
+* Problem
+`SpellAgent.Tui.Spatial.extreme/2` (rank-by-rect-edge — "which placed region is furthest in direction D") is pure and generic: it takes `[{slot, %Rect{}}]` and a direction, returns a slot. But it is invoked ONLY from `App.frame_target/1` / `App.frame_regions/1` — compiled Elixir, not exposed as a `lens/` verb. Consequently:
+
+1. An agent that reshapes the body into a custom split arrangement has no way to QUERY "what's spatially adjacent to focus in direction D" from PTC — it can only use the tree-order ring (`lens/focus next/prev`), never a geometry-aware jump.
+2. A NEW spatial relation (e.g. "focus below-and-right", a diagonal jump, or "cycle only panes in this row") cannot be authored as a reaction — `Spatial` has no PTC-callable surface at all.
+3. `App.frame_regions/1` gates each candidate through `Ui.safe_pane(slot)` (line ~527: `if Ui.safe_pane(slot), do: [{slot, rect}], else: []`), so even once FUP-005's pane registry lands, `frame_regions` needs updating to consult the registry, not just `Ui.safe_pane`'s fixed atom set — these two FUPs must land together or a registry-backed pane will be spatially invisible to C-w even though it is nameable.
+
+* Why this matters for the "every intent generalizes" goal
+The RING (`C-j/k`) already generalizes for free (`Lens.focusables/1` collects any `type: "pane"` node, confirmed no gate on pane vocabulary). The SPATIAL jump (`C-w` + direction) is the one navigation primitive that stays compiled-only after FUP-005 ships — closing this is what makes "every chord ... automatically inherits" literally true for BOTH axes, not just the ring.
+
+* Proposed change
+- Add `lens/frame-target {:dir "left"|"right"|"up"|"down" :area {...}}` (or thread the frame area via `data/area`, mirroring `RenderProbe`'s convention) — a PTC-callable wrapper over `Surface.resolve_holes |> Surface.layout |> Spatial.extreme`, over the CURRENT tree (closed over like `lens/focus`).
+- Update `App.frame_regions/1`'s pane-candidate filter to consult the (post-FUP-005) pane registry instead of the bare `Ui.safe_pane/1` whitelist, so a registry-backed agent pane is a valid spatial target.
+- Consider whether `frame_target/frame_regions` in `App` should simply become thin callers of the new `Lens`/`Spatial` PTC-facing function (collapse the duplicate geometry logic into one place — the "one source of truth" principle), rather than keeping two call paths.
+- Reuse `Spatial.extreme/2` as-is; this is a NEW CALLER (a `lens/` verb), not a rewrite of the ranking algorithm.
+
+* Depends on
+FUP-005 (pane registry) should land first or alongside — `frame_regions`' pane-candidate gate needs the same registry-backed `safe_pane` this FUP already plans to build.
+
+* Acceptance
+- `(lens/frame-target {:dir "right"})` callable from a reaction/keymap `define-reaction`, returns the slot name of the spatially-extreme pane (or nil).
+- A `C-w l`-equivalent keymap/reaction authored entirely in PTC (via `keymap/define-reaction`) can reproduce today's native `C-w` behavior with zero Elixir changes — this is the acceptance proof that the primitive generalized.
+- A registry-backed agent pane (post FUP-005) is a valid `lens/frame-target` candidate (not silently excluded by a stale `Ui.safe_pane` gate).
+- No behavior change to the native `C-w` keybinding (same frame_target/frame_regions geometry, just re-routed through the new shared primitive if consolidated).
+- mix compile --warnings-as-errors clean; existing spatial/frame tests green.
+
+* References
+- lib/spell_agent/tui/spatial.ex (extreme/2 — the pure rank fn, unchanged)
+- lib/spell_agent/tui/app.ex (frame_target/1 L532, frame_regions/1 L541 — today's only callers)
+- lib/spell_agent/tui/lens.ex (tools/1 — where the new lens/frame-target verb is registered, mirrors lens/focus)
+- FUP-005-navigable-agent-added-panes-extend-safe (the pane-registry half this depends on)
+
+NOTE [2026-07-04]: Implemented as PLAN-024 Wave 2. Lens.pane_regions/3 + Lens.frame_target/4 collapse App's geometry logic and the new lens/frame-target PTC verb onto one source of truth. Round-1 review caught a P1: the verb was unreachable from a REAL dispatched reaction (Reaction.Ptc.run only merged Harness.tools). Fixed by threading an optional tree param through Reaction.Ptc.run/3->4, Keys.dispatch/4->5, and App's production call site (backward-compatible, nil-default). Round-2 review confirmed the fix is complete and correct, with negligible perf cost. 15 tests, acceptance proof genuinely runs through the production Keys.dispatch/5 path (no shortcuts).

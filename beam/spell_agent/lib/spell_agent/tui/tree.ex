@@ -62,9 +62,24 @@ defmodule SpellAgent.Tui.Tree do
   @doc """
   Read `key` (a string) off a node, trying the string key then the existing-atom
   key. `nil` for a non-map or an absent key. The one accessor the TUI shares.
+
+  PRESENCE-aware (PLAN-024 Wave 1 fix): a stored `false`/`nil` value under the
+  string key is returned AS-IS, never masked by falling through to the atom-key
+  check — the bug the naive `Map.get(m, key) || Map.get(m, safe_atom(key))` idiom
+  has (a `false`-valued flag, e.g. a node's `focusable: false` tag, is
+  indistinguishable from an ABSENT key under that idiom, since `false || x`
+  always evaluates `x`). Mirrors the presence-aware `has_key?/2` already used by
+  the path-lens machinery below — same discipline, now the DEFAULT accessor too.
   """
   @spec get(term(), String.t()) :: term()
-  def get(m, key) when is_map(m), do: Map.get(m, key) || Map.get(m, safe_atom(key))
+  def get(m, key) when is_map(m) do
+    cond do
+      Map.has_key?(m, key) -> Map.get(m, key)
+      (a = safe_atom(key)) != nil and Map.has_key?(m, a) -> Map.get(m, a)
+      true -> nil
+    end
+  end
+
   def get(_m, _key), do: nil
 
   @doc "Write `key` => `value` on a node (string key). Identity for a non-map."

@@ -75,4 +75,34 @@ defmodule SpellAgent.Hist.Store.MemoryTest do
     Store.put(Memory, {:session, "s1"}, sess)
     assert {:ok, %Session{cursors: %{main: "n2"}}} = Store.fetch(Memory, {:session, "s1"})
   end
+
+  describe ":layout / :keymap key kinds (PLAN-024 Wave 4 / FUP-009)" do
+    test "a durable layout map round-trips verbatim" do
+      layout = %{"status" => %{"type" => "paragraph", "text" => "custom"}}
+      :ok = Store.put(Memory, {:layout, "default"}, layout)
+      assert {:ok, ^layout} = Store.fetch(Memory, {:layout, "default"})
+    end
+
+    test "a durable keymap map round-trips verbatim" do
+      keymap = %{bindings: %{{:tree, "C-l"} => :"span/expand"}, reactions: %{}}
+      :ok = Store.put(Memory, {:keymap, "default"}, keymap)
+      assert {:ok, ^keymap} = Store.fetch(Memory, {:keymap, "default"})
+    end
+
+    test "list/2 enumerates :layout and :keymap kinds, session-global (ignores the session arg)" do
+      Store.put(Memory, {:layout, "default"}, %{"status" => %{}})
+      Store.put(Memory, {:keymap, "default"}, %{bindings: %{}})
+
+      assert [%{"status" => %{}}] = Store.list(Memory, :layout, nil)
+      assert [%{"status" => %{}}] = Store.list(Memory, :layout, "s-anything")
+      assert [%{bindings: %{}}] = Store.list(Memory, :keymap, nil)
+    end
+
+    test "delete removes a :layout key idempotently" do
+      Store.put(Memory, {:layout, "default"}, %{})
+      assert :ok = Store.delete(Memory, {:layout, "default"})
+      assert :error = Store.fetch(Memory, {:layout, "default"})
+      assert :ok = Store.delete(Memory, {:layout, "default"})
+    end
+  end
 end

@@ -35,7 +35,8 @@ defmodule SpellAgent.Tui.Lens do
   interning), carrying the `Ui.safe_*` atom-DoS posture onto the tree.
   """
 
-  alias SpellAgent.Tui.{Tree, Ui}
+  alias ExRatatui.Layout.Rect
+  alias SpellAgent.Tui.{Spatial, Surface, Tree, Ui}
 
   @typedoc "A layout tree node (plain string-keyed map)."
   @type node_map :: %{optional(String.t()) => term()}
@@ -144,9 +145,96 @@ defmodule SpellAgent.Tui.Lens do
       "lens/focused" => fn _args -> focused(tree) end,
       "lens/focusables" => fn _args -> focusables(tree) end,
       "lens/at" => fn args -> at(tree, get(args, "slot")) end,
-      "lens/tag" => fn args -> tag_focused(tree, get(args, "key"), get(args, "value")) end
+      "lens/tag" => fn args -> tag_focused(tree, get(args, "key"), get(args, "value")) end,
+      "lens/frame-target" => fn args -> frame_target_tool(tree, args) end
     }
   end
+
+  # ================================================================
+  # spatial focus (C-w) as a PTC verb -- PLAN-024 Wave 2 (FUP-031)
+  # ================================================================
+  #
+  # `App.frame_target/2` (the native C-w) and this verb are now BOTH thin
+  # callers of the SAME `pane_regions/3` + `Spatial.extreme/2` pair -- one
+  # source of truth for "which region is spatially extreme", reachable from
+  # BOTH the compiled keybinding and an agent-authored `keymap/define-reaction`.
+  # This is the concrete generalization: an agent can reproduce today's native
+  # `C-w l` PURELY in PTC (no Elixir change) by calling `lens/frame-target`.
+
+  @default_frame_width 80
+  @default_frame_height 24
+
+  @doc """
+  The slot of the region spatially EXTREME along `dir`, laid out from `tree`
+  into `area` (holes resolved against `data_env` first). Pure composition of
+  `pane_regions/3` + `Spatial.extreme/2` -- the SAME pair `App.frame_target/2`
+  calls, so a `lens/frame-target` verb and the native `C-w` keybinding can never
+  diverge (one source of truth, not two copies of the geometry logic).
+
+  `nil` when nothing is placed (a degraded tree) or `dir` doesn't parse --
+  total, never raises.
+  """
+  @spec frame_target(node_map(), Spatial.direction(), Rect.t(), map()) :: String.t() | nil
+  def frame_target(tree, dir, %Rect{} = area, data_env \\ %{}) when is_atom(dir) do
+    tree |> pane_regions(area, data_env) |> Spatial.extreme(dir)
+  end
+
+  @doc """
+  `[{slot, %Rect{}}]` for every FOCUSABLE region in `tree`, laid out into `area`
+  (`tmpl::` holes resolved against `data_env` first, default `%{}`). The shared
+  geometry primitive behind BOTH `App.frame_regions/1` (production, with the
+  App-only cells-drawer overlay appended by the caller) and `frame_target/4`
+  (the PTC verb, body panes only -- an authored program has no App-only
+  drawer-flag state to append).
+
+  A region qualifies the SAME way the ring does: `Lens.slot/1` present AND
+  `Ui.safe_pane/1` recognizes it (fixed vocabulary OR a `PaneRegistry`-declared
+  runtime pane -- PLAN-024 Wave 1). Best-effort: any layout failure degrades to
+  `[]` rather than raising into the caller's event loop.
+  """
+  @spec pane_regions(node_map(), Rect.t(), map()) :: [{String.t(), Rect.t()}]
+  def pane_regions(tree, %Rect{} = area, data_env \\ %{}) do
+    tree
+    |> Surface.resolve_holes(data_env)
+    |> Surface.layout(area)
+    |> Enum.flat_map(fn {node, rect} ->
+      case slot(node) do
+        s when is_binary(s) -> if Ui.safe_pane(s), do: [{s, rect}], else: []
+        _ -> []
+      end
+    end)
+  rescue
+    _ -> []
+  catch
+    :exit, _ -> []
+  end
+
+  # `lens/frame-target {:dir "left"|"right"|"up"|"down" :width :height :data}` --
+  # the PTC-callable form. `area` defaults to an 80x24 rect (mirrors
+  # `RenderProbe`'s convention) since a reaction has no live frame area to read;
+  # pass `:width`/`:height` to match the real terminal when it matters. An
+  # unparseable `:dir` yields nil rather than erroring (mirrors `Spatial.extreme`'s
+  # own totality).
+  defp frame_target_tool(tree, args) do
+    case Spatial.direction(get(args, "dir")) do
+      nil ->
+        nil
+
+      dir ->
+        area = %Rect{
+          x: 0,
+          y: 0,
+          width: positive_int(get(args, "width"), @default_frame_width),
+          height: positive_int(get(args, "height"), @default_frame_height)
+        }
+
+        data_env = get(args, "data") || %{}
+        frame_target(tree, dir, area, data_env)
+    end
+  end
+
+  defp positive_int(n, _default) when is_integer(n) and n > 0, do: n
+  defp positive_int(_n, default), do: default
 
   @doc """
   Move the `:focused` tag through the ring, or to a named slot. `:next` | `:prev`
@@ -267,10 +355,25 @@ defmodule SpellAgent.Tui.Lens do
 
   defp children(node), do: Tree.children(node)
 
-  defp pane_nodes(tree), do: Tree.collect(tree, fn n -> kind(n) == "pane" end)
+  # A node joins the focus ring iff `focusable?/1` says so (PLAN-024 Wave 1: a
+  # `tags["focusable"]` flag, now actually consulted). Native `"pane"` nodes are
+  # focusable BY DEFAULT (opt-out via an explicit `tags["focusable"] == false`);
+  # any OTHER node kind (an agent-authored `view/*` widget shadowing a body slot)
+  # is focusable only by explicit OPT-IN (`tags["focusable"] == true`) — a plain
+  # content widget never silently joins the ring.
+  defp focusable?(n) do
+    case {kind(n), get(tags(n), "focusable")} do
+      {"pane", false} -> false
+      {"pane", _} -> true
+      {_, true} -> true
+      _ -> false
+    end
+  end
+
+  defp pane_nodes(tree), do: Tree.collect(tree, &focusable?/1)
 
   defp map_pane_nodes(tree, fun),
-    do: Tree.update(tree, fn n -> kind(n) == "pane" end, fun)
+    do: Tree.update(tree, &focusable?/1, fun)
 
   defp update_node(tree, slot_name, fun), do: Tree.update_slot(tree, slot_name, fun)
 

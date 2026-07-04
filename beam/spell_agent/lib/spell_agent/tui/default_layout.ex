@@ -129,8 +129,13 @@ defmodule SpellAgent.Tui.DefaultLayout do
     }
   end
 
-  # A native pane node: focusable, carries which module renders it + the gaze tags
-  # for its slot (focused/cursor/scroll), seeded from the starting gaze.
+  # A native pane node: carries which module renders it + the gaze tags for its
+  # slot (focused/cursor/scroll), seeded from the starting gaze. Native "pane"
+  # nodes are focusable BY DEFAULT (Lens.focusable?/1 — PLAN-024 Wave 1); no
+  # explicit tag is needed here. (A prior top-level "focusable" => true key was
+  # dead — Lens.focusable?/1 reads the flag from `tags`, not the node's top
+  # level — and is removed rather than relocated, since the pane-default
+  # already covers this case.)
   defp pane_node(name, %Ui{} = ui) do
     pane_atom = Ui.safe_pane(name)
 
@@ -138,7 +143,6 @@ defmodule SpellAgent.Tui.DefaultLayout do
       "type" => "pane",
       "slot" => name,
       "pane" => name,
-      "focusable" => true,
       "tags" => Lens.pane_tags(ui, pane_atom)
     }
   end

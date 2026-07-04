@@ -100,7 +100,7 @@ defmodule SpellAgent.Tui.Ui do
   @doc """
   Move focus through the pane ring, or jump to a named pane.
 
-      focus(ui, :next) | focus(ui, :prev) | focus(ui, :answer)
+      focus(ui, :next) | focus(ui, :prev) | focus(ui, :detail)
   """
   @spec focus(t(), :next | :prev | pane()) :: t()
   # An empty ring has nothing to move to — identity, keeping the transform TOTAL
@@ -226,11 +226,41 @@ defmodule SpellAgent.Tui.Ui do
   @dirs [:next, :prev, :first, :last]
   @visibilities [:expanded, :collapsed]
 
-  @doc "Coerce a value to a known pane atom, or nil. Never interns a new atom."
-  @spec safe_pane(term()) :: pane() | nil
+  @doc """
+  Coerce a value to a known pane atom, or nil. Never interns a new atom.
+
+  Checks the fixed compiled vocabulary FIRST, then falls back to
+  `SpellAgent.Tui.PaneRegistry` — the bounded runtime pane-name registry
+  (PLAN-024 Wave 1 / FUP-005) that lets an agent declare a NEW focusable pane at
+  runtime. The registry lookup is BY VALUE only (`PaneRegistry.lookup/1`), so
+  this function still never interns; an unregistered/unknown name yields `nil`
+  exactly as before. Degrades to the fixed-vocabulary-only behavior if the
+  registry process is absent (e.g. a bare unit test) — never crashes.
+  """
+  @spec safe_pane(term()) :: pane() | atom() | nil
   def safe_pane(p) when p in @panes, do: p
-  def safe_pane(s) when is_binary(s), do: lookup_known(s, @panes)
+
+  def safe_pane(s) when is_binary(s) do
+    lookup_known(s, @panes) || runtime_pane(s)
+  end
+
+  def safe_pane(p) when is_atom(p) and not is_nil(p) do
+    if SpellAgent.Tui.PaneRegistry.known?(p), do: p, else: nil
+  rescue
+    _ -> nil
+  catch
+    :exit, _ -> nil
+  end
+
   def safe_pane(_), do: nil
+
+  defp runtime_pane(s) do
+    SpellAgent.Tui.PaneRegistry.lookup(s)
+  rescue
+    _ -> nil
+  catch
+    :exit, _ -> nil
+  end
 
   @doc "Coerce a value to a known direction atom (:next/:prev/:first/:last), or nil."
   @spec safe_dir(term()) :: atom() | nil

@@ -20,6 +20,8 @@ defmodule SpellAgent.Hist.Store do
       {:crystal, id}         => %Crystal{}     (long-term memory)
       {:cont, sid}           => %Cont{}        (L0 replay tape + def env, one per session)
       {:hash, h}             => [node-ref]     (dedup / multi-session union index)
+      {:layout, name}        => %{slot => source-node}  (PLAN-024 W4: durable TUI layout)
+      {:keymap, name}        => %{bindings:, reactions:} (PLAN-024 W4: durable TUI keymap)
 
   A node-ref is `{sid, nid}`. `list/2` enumerates a kind, optionally scoped to a
   session, which is how slices, inventories, and queries enumerate.
@@ -44,6 +46,13 @@ defmodule SpellAgent.Hist.Store do
           # policy_hash). A revisit at the same key is a FREE lookup, not a
           # recompute — the store-side half of "reuse a previously-used header".
           | {:reduced, String.t(), non_neg_integer(), String.t()}
+          # PLAN-024 Wave 4 (FUP-009): durable authored TUI state. `Store.Khepri`
+          # is ALREADY per-project (rooted at `File.cwd!()/.spell/forest`), so a
+          # single fixed name ("default") is per-project durability for free — no
+          # separate project-key scheme needed. `layout` mirrors LayoutRegistry's
+          # slot->source map; `keymap` mirrors KeymapRegistry's bindings+reactions.
+          | {:layout, String.t()}
+          | {:keymap, String.t()}
 
   @type value ::
           Session.t()
@@ -54,9 +63,22 @@ defmodule SpellAgent.Hist.Store do
           | Crystal.t()
           | Cont.t()
           | [term()]
+          | map()
 
   @type kind ::
-          :session | :node | :mark | :snap | :tool | :clock | :crystal | :cont | :mesh | :mesh_seq | :mesh_hash
+          :session
+          | :node
+          | :mark
+          | :snap
+          | :tool
+          | :clock
+          | :crystal
+          | :cont
+          | :mesh
+          | :mesh_seq
+          | :mesh_hash
+          | :layout
+          | :keymap
 
   @doc "Store a value at a logical key. Overwrites."
   @callback put(key(), value()) :: :ok

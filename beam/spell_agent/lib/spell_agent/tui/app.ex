@@ -41,7 +41,9 @@ defmodule SpellAgent.Tui.App do
     Chord,
     DataBag,
     DefaultLayout,
+    HoleAffordance,
     Keys,
+    KeymapRegistry,
     Lens,
     LayoutRegistry,
     Materialize,
@@ -74,6 +76,12 @@ defmodule SpellAgent.Tui.App do
   # human for streamed spans but collapses a tight telemetry burst. Tests can pass
   # `store_coalesce_ms: 0` to flush on the next mailbox turn (deterministic).
   @store_coalesce_ms 16
+
+  # PLAN-024 Wave 3 (FEAT-020): the registry context every generated hole-
+  # affordance binding/reaction lives under — pushed to the TOP of
+  # focus_stack/1 (most-specific-first) whenever the FOCUSED node carries a
+  # live hole-affordance declaration.
+  @hole_affordance_context :hole_affordance
 
   # ---- mount ----
 
@@ -164,12 +172,59 @@ defmodule SpellAgent.Tui.App do
   # pane's context FIRST, then the global layer. The SAME chord (h/l) resolves
   # differently by which context tops the stack — SpanTree (tree nav) under tree
   # focus, TurnNav (turn nav + scroll) under detail/prompt focus.
-  defp focus_stack(%{ui: %Ui{focus: :tree}}), do: [SpanTree, Global]
-  defp focus_stack(%{ui: %Ui{focus: :prompt}}), do: [Prompt, Global]
-  defp focus_stack(%{ui: %Ui{focus: :detail}}), do: [TurnNav, Global]
+  # PLAN-024 Wave 3 (FEAT-020): when the CURRENTLY FOCUSED node carries a live
+  # hole-affordance (`sync_hole_affordances/1` keeps the registry in lockstep
+  # with focus), its context is pushed to the TOP of the stack — most-specific-
+  # first, exactly the resolver's existing precedence rule. This is a data-
+  # driven prefix, not a new dispatch branch: every focus_stack/1 clause below
+  # is UNCHANGED, this just conses one more (already-live-data-driven) context
+  # in front when applicable.
+  defp focus_stack(state) do
+    case hole_affordance_active?(state) do
+      true -> [@hole_affordance_context | base_focus_stack(state)]
+      false -> base_focus_stack(state)
+    end
+  end
+
+  # The registry (kept in lockstep with the focused node by
+  # sync_hole_affordances/1 on every reproject/2) is the source of truth for
+  # "is there a live affordance right now" — no separate state check needed,
+  # by construction it can never be stale between two reprojects.
+  defp hole_affordance_active?(_state) do
+    KeymapRegistry.bindings(@hole_affordance_context) != []
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
+  end
+
+  defp base_focus_stack(%{ui: %Ui{focus: :tree}}), do: [SpanTree, Global]
+  defp base_focus_stack(%{ui: %Ui{focus: :prompt}}), do: [Prompt, Global]
+  defp base_focus_stack(%{ui: %Ui{focus: :detail}}), do: [TurnNav, Global]
   # History is a scrollable transcript like Detail — j/k/page scroll via TurnNav.
-  defp focus_stack(%{ui: %Ui{focus: :history}}), do: [TurnNav, Global]
-  defp focus_stack(_), do: [Global]
+  defp base_focus_stack(%{ui: %Ui{focus: :history}}), do: [TurnNav, Global]
+
+  # A PLAN-024 Wave 1 (FUP-005) runtime-declared pane: no compiled context
+  # module exists for it, so its OWN atom is pushed as the context — `Keys`
+  # resolves it purely against LIVE `KeymapRegistry` bindings/reactions keyed
+  # under that same atom (compiled_intent/compiled_react degrade to nil/no-op
+  # for an uncompiled context, guarded in `Keys`). Falls through to Global for
+  # any chord the pane hasn't bound itself. `PaneRegistry.known?/1` is the
+  # bounded membership check (never interns); anything else (a focus atom this
+  # session never declared) still degrades to Global-only, unchanged behavior.
+  defp base_focus_stack(%{ui: %Ui{focus: f}}) when is_atom(f) and not is_nil(f) do
+    if runtime_pane?(f), do: [f, Global], else: [Global]
+  end
+
+  defp base_focus_stack(_), do: [Global]
+
+  defp runtime_pane?(f) do
+    SpellAgent.Tui.PaneRegistry.known?(f)
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
+  end
 
   # ---- render ----
 
@@ -495,7 +550,19 @@ defmodule SpellAgent.Tui.App do
 
       {:intent, _intent, _ctx} = resolution ->
         forest = Store.spans(state.store)
-        ui = Keys.dispatch(resolution, state.ui, forest)
+        # PLAN-024 Wave 2 (FUP-031): thread the LIVE tree through so an authored
+        # reaction can call lens/frame-target (the same spatial primitive the
+        # native C-w keybinding uses) — without this, lens/* is unreachable from
+        # a real dispatched reaction (only harness/+keymap/ would be).
+        #
+        # PLAN-024 Wave 3 (FEAT-020): also thread mesh_opts so a hole-affordance
+        # reaction can call black/post (e.g. posting a :resolution when its bound
+        # chord fires). session_id = hist_session (already a stable per-session
+        # identifier — no new concept introduced); region = the SAME id, so a
+        # hole-affordance's decision/resolution records live in this session's
+        # own mesh region by default.
+        mesh_opts = %{session_id: state.hist_session, region: state.hist_session, store: state.hist_store}
+        ui = Keys.dispatch(resolution, state.ui, forest, &Keys.context_name/1, render_tree(state), mesh_opts)
         # Navigation changed the gaze → re-mirror every pane (the detail pane
         # mirrors the new selection; cheap, gaze-fed projection).
         {:noreply, reproject(%{state | ui: ui}, :all)}
@@ -529,15 +596,22 @@ defmodule SpellAgent.Tui.App do
   # the extreme. So "most rightward" is whichever region the layout placed furthest
   # right — the cells drawer when open, else the rightmost body pane. nil when
   # there is nothing placed (degraded tree) → focus_pane is then identity.
+  #
+  # PLAN-024 Wave 2 (FUP-031): `frame_regions/1` is now a THIN caller of
+  # `Lens.pane_regions/3` (the same primitive the `lens/frame-target` PTC verb
+  # calls) plus the App-only cells-drawer overlay `Lens` has no state to know
+  # about — one source of truth for the geometry, the App only adds what only
+  # the App can see.
   defp frame_target(state, dir) do
     state |> frame_regions() |> Spatial.extreme(dir)
   end
 
   # `[{slot, %Rect{}}]` for every focusable region under the live gaze: the body
-  # panes from the placed tree, plus the cells overlay when its flag is set. Reuses
-  # the exact render geometry (resolve_holes → layout) so a region's position here
-  # matches where it is actually drawn. Best-effort: a layout failure yields the
-  # panes it could place (never raises into the event loop).
+  # panes from the placed tree (via `Lens.pane_regions/3`), plus the cells overlay
+  # when its flag is set. Reuses the exact render geometry (resolve_holes →
+  # layout) so a region's position here matches where it is actually drawn.
+  # Best-effort: a layout failure yields the panes it could place (never raises
+  # into the event loop) — `Lens.pane_regions/3` already carries that guard.
   defp frame_regions(state) do
     area = state.last_area
 
@@ -548,23 +622,9 @@ defmodule SpellAgent.Tui.App do
         Map.get(state, :data_cache)
       )
 
-    pane_regions =
-      state
-      |> render_tree()
-      |> Surface.resolve_holes(data_bag)
-      |> Surface.layout(area)
-      |> Enum.flat_map(fn {node, rect} ->
-        case Lens.slot(node) do
-          slot when is_binary(slot) -> if Ui.safe_pane(slot), do: [{slot, rect}], else: []
-          _ -> []
-        end
-      end)
+    pane_regions = state |> render_tree() |> Lens.pane_regions(area, data_bag)
 
     pane_regions ++ cells_region(state, area)
-  rescue
-    _ -> []
-  catch
-    :exit, _ -> []
   end
 
   # The cells drawer as a spatial region (slot "cells"), only when shown. Its rect
@@ -795,6 +855,7 @@ defmodule SpellAgent.Tui.App do
     # persists across navigation. Single chokepoint: every gaze/forest change
     # flows through reproject. Best-effort (no registry in a headless test).
     sync_layout_gaze(state.ui)
+    sync_hole_affordances(state)
     tick_cells(state)
   end
 
@@ -864,6 +925,67 @@ defmodule SpellAgent.Tui.App do
     _ -> :ok
   catch
     :exit, _ -> :ok
+  end
+
+  # ---- hole affordances (PLAN-024 Wave 3, FEAT-020) ----
+  #
+  # @hole_affordance_context is defined near the module's other attributes
+  # (top of file) since Elixir requires an attribute in scope BEFORE its first
+  # textual use (focus_stack/1, above).
+
+  @doc false
+  @spec hole_affordance_context() :: :hole_affordance
+  def hole_affordance_context, do: @hole_affordance_context
+
+  # Re-derive the live hole-affordance bindings/reactions from the CURRENTLY
+  # FOCUSED node's declaration and write them into KeymapRegistry — called from
+  # reproject/2 (the single gaze/tree-change chokepoint), so a slot's
+  # affordances stay in lockstep with navigation: focus a fillable node ->
+  # its chords become live; move away -> they tear down (no dangling chords,
+  # FEAT-020's own edge case). Idempotent: re-syncing an unchanged slot is a
+  # harmless no-op rewrite. Best-effort (registry absent in a headless test
+  # degrades to a no-op, matching sync_layout_gaze's posture).
+  defp sync_hole_affordances(state) do
+    KeymapRegistry.clear_context(@hole_affordance_context)
+
+    case focused_affordance(state) do
+      nil ->
+        :ok
+
+      slot ->
+        {bindings, reactions} = HoleAffordance.generate(slot)
+        install_hole_affordances(bindings, reactions)
+    end
+  rescue
+    _ -> :ok
+  catch
+    :exit, _ -> :ok
+  end
+
+  # The `tags["affordance"]` declaration on the currently-focused pane/widget
+  # node in the LIVE layout tree, or `nil` if none/not focused/no registry.
+  defp focused_affordance(state) do
+    tree = render_tree(state)
+
+    case Lens.focused(tree) do
+      nil -> nil
+      node -> Lens.tags(node)["affordance"]
+    end
+  end
+
+  # Each generated binding/reaction pair is written into the registry under
+  # @hole_affordance_context; KeymapRegistry.bind/put_reaction already handle
+  # Chord.parse + the atom-safety of a PRE-BOUNDED intent (HoleAffordance only
+  # ever emits atoms from its own compiled pool, never a fresh one), so no
+  # additional guard is needed here.
+  defp install_hole_affordances(bindings, reactions) do
+    for {intent, source} <- reactions do
+      KeymapRegistry.put_reaction(@hole_affordance_context, intent, source)
+    end
+
+    for {chord_str, intent} <- bindings do
+      KeymapRegistry.bind(@hole_affordance_context, Chord.parse(chord_str), intent)
+    end
   end
 
   # ---- widget materialization ----

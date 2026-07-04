@@ -110,6 +110,42 @@ defmodule SpellAgent.Tui.LensTest do
     end
   end
 
+  describe "focusables — the `focusable` tag as a real predicate (PLAN-024 Wave 1)" do
+    test "a pane node with an explicit focusable=false opts OUT of the ring" do
+      t = tree()
+
+      children =
+        Enum.map(t["children"], fn p ->
+          if Lens.slot(p) == "detail", do: put_in(p, ["tags", "focusable"], false), else: p
+        end)
+
+      t = %{t | "children" => children}
+      assert Lens.focusables(t) == ["tree", "prompt"]
+    end
+
+    test "a non-pane widget node opts IN to the ring via focusable=true" do
+      t = tree()
+
+      shadow = %{
+        "type" => "paragraph",
+        "slot" => "cost-histo",
+        "tags" => %{"focusable" => true, "focused" => false, "cursor" => 0, "scroll" => 0},
+        "text" => "hi"
+      }
+
+      t = Map.update!(t, "children", &(&1 ++ [shadow]))
+      assert Lens.focusables(t) == ["tree", "detail", "prompt", "cost-histo"]
+    end
+
+    test "a non-pane widget node WITHOUT focusable stays out of the ring (no silent join)" do
+      t = tree()
+
+      plain = %{"type" => "paragraph", "slot" => "status", "text" => "hi"}
+      t = Map.update!(t, "children", &(&1 ++ [plain]))
+      assert Lens.focusables(t) == ["tree", "detail", "prompt"]
+    end
+  end
+
   describe "lens/ tools through the PTC sandbox" do
     test "lens/focus re-tags the closed-over tree" do
       tools = Lens.tools(tree())

@@ -29,20 +29,37 @@ defmodule Mix.Tasks.Spell.Tui do
 
       mix spell.tui            # freeform capability is live
       mix spell.tui -f         # same; explicit intent (a hint, not a gate)
+
+  ## Durable layouts + keymaps (PLAN-024 Wave 4 / FUP-009)
+
+  `--durable` / `-d` makes any layout shadow (`layout/set`) or keybinding
+  override (`keymap/bind`, `keymap/define-reaction`) authored THIS launch
+  survive to the next one — persisted per-project (via the same durable store
+  `Hist` uses, rooted at `.spell/forest` under the current directory). `--fresh`
+  starts from the native defaults for this launch WITHOUT discarding a
+  previously persisted layout/keymap (the next durable, non-fresh launch still
+  sees it):
+
+      mix spell.tui -d              # remember layout/keymap edits across launches
+      mix spell.tui -d --fresh      # this launch only: ignore persisted state
   """
 
   use Mix.Task
 
   @requirements ["app.start"]
 
-  @switches [freeform: :boolean]
-  @aliases [f: :freeform]
+  @switches [freeform: :boolean, durable: :boolean, fresh: :boolean]
+  @aliases [f: :freeform, d: :durable]
 
   @impl Mix.Task
   def run(args) do
     {opts, _rest, _invalid} = OptionParser.parse(args, switches: @switches, aliases: @aliases)
     # Freeform is always-on; the flag is a forward-looking hint (prelude bias),
     # threaded so the launcher can surface UI-editing affordances first.
-    SpellAgent.tui(freeform: Keyword.get(opts, :freeform, false))
+    SpellAgent.tui(
+      freeform: Keyword.get(opts, :freeform, false),
+      durable: Keyword.get(opts, :durable, false),
+      fresh: Keyword.get(opts, :fresh, false)
+    )
   end
 end

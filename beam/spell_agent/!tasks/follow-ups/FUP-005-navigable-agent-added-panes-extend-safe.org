@@ -1,8 +1,9 @@
 #+TITLE: Navigable agent-added panes: extend safe_pane vocabulary + focus ring
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 1511029ec58e9d42
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-20T20-59-50-422Z_1511029ec58e9d42.jsonl]]
 #+CUSTOM_ID: FUP-005-navigable-agent-added-panes-extend-safe
+#+COMPLETION_HASH: 333541fc419e7f1d
 
 * Initial Message
 
@@ -63,3 +64,5 @@ chokepoint, not a compiled list:
 - lib/spell_agent/tui/ui.ex (safe_pane/1, @panes, @dirs — bounded coercion)
 - lib/spell_agent/tui/app.ex (focus_stack/1 L90, @default_panes L43)
 - lib/spell_agent/tui/keymap_registry.ex (define_intent/1 — the bounded-intern template)
+
+NOTE [2026-07-04]: Implemented as PLAN-024 Wave 1. PaneRegistry (bounded intern, mirrors KeymapRegistry.define_intent), Ui.safe_pane extended, App.focus_stack/1 data-driven for runtime panes, Keys.ex guards for uncompiled contexts, harness/declare-pane verb (+ ptc_runner SourceAtoms allowlist entry). 4-reviewer swarm cleared all findings (0.95 confidence, correct). Found + fixed 2 latent bugs while building this: Tree.get/2's false-value presence blind spot, and DefaultLayout's focusable tag stamped at the wrong map level (dead in a new way). Filed FUP-032 separately for a related-but-distinct pre-existing gap (harness/keymap unreachable from main mission loop) rather than expanding this wave's scope. 21 new tests, all green.

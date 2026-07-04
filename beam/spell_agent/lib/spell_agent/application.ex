@@ -92,6 +92,11 @@ defmodule SpellAgent.Application do
       # rebinds (keymap/bind) and authored reactions (keymap/define-reaction).
       # Session-global, same posture as ToolRegistry.
       SpellAgent.Tui.KeymapRegistry,
+      # The runtime pane-name registry (PLAN-024 Wave 1 / FUP-005): a bounded
+      # intern chokepoint so an agent can declare a NEW focusable pane name at
+      # runtime, mirroring KeymapRegistry's define_intent bound-and-cap posture.
+      # Session-global, same posture as KeymapRegistry.
+      SpellAgent.Tui.PaneRegistry,
       # Live theme palette for the freeform render mirror (PLAN-009, Edge T):
       # theme/set recolors a named slot; view/ builders read defaults from it.
       # Session-global, same posture as KeymapRegistry.

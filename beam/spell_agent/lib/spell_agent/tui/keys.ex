@@ -58,48 +58,99 @@ defmodule SpellAgent.Tui.Keys do
     KeymapRegistry.lookup_binding(name, chord) || compiled_intent(ctx, chord)
   end
 
+  # A CONTEXT is normally a compiled module (a pane's context module, or
+  # Global) exporting `keymap/0`. PLAN-024 Wave 1 (FUP-005) lets `focus_stack/1`
+  # push a BARE ATOM for a runtime-declared pane (no compiled backing) so its
+  # OWN name doubles as its `KeymapRegistry` context key — that atom has no
+  # `keymap/0` to call. Guarded exactly like `context_name/1`'s BUG-006 fix
+  # (`Code.ensure_loaded?` before `function_exported?`, since the latter is
+  # FALSE for a not-yet-loaded module): an uncompiled context simply has no
+  # compiled keymap, so only its live `KeymapRegistry` bindings can resolve it.
   defp compiled_intent(ctx, chord) do
-    case List.keyfind(ctx.keymap(), chord, 0) do
-      {^chord, intent} -> intent
-      nil -> nil
+    if Code.ensure_loaded?(ctx) and function_exported?(ctx, :keymap, 0) do
+      case List.keyfind(ctx.keymap(), chord, 0) do
+        {^chord, intent} -> intent
+        nil -> nil
+      end
+    else
+      nil
     end
   end
 
   @doc """
   Dispatch a resolution to the new gaze. A `:unbound` resolution is identity (the
   App routes it elsewhere). A runtime PTC reaction wins over the compiled one.
+
+  `tree` (PLAN-024 Wave 2, FUP-031, optional) is the CURRENT layout tree,
+  threaded through to a PTC reaction's tools map (via `Reaction.Ptc.run/5`) so
+  an authored reaction can call `lens/*` spatial-focus verbs — the same
+  primitive the native `C-w` keybinding uses.
+
+  `mesh_opts` (PLAN-024 Wave 3, FEAT-020, optional) is `%{session_id: region:
+  store:}`, threaded through the same way so an authored reaction can call
+  `black/*` mesh verbs (e.g. posting a `:resolution` for a hole-affordance
+  binding).
+
+  Both default to `nil`, preserving the pre-Wave-2/3 behavior byte-for-byte for
+  every caller that doesn't pass them.
   """
-  @spec dispatch(resolution(), Ui.t(), map(), (context() -> atom())) :: Ui.t()
-  def dispatch(resolution, ui, forest, context_name \\ &default_context_name/1)
+  @spec dispatch(resolution(), Ui.t(), map(), (context() -> atom()), map() | nil, map() | nil) ::
+          Ui.t()
+  def dispatch(
+        resolution,
+        ui,
+        forest,
+        context_name \\ &default_context_name/1,
+        tree \\ nil,
+        mesh_opts \\ nil
+      )
 
-  def dispatch(:unbound, %Ui{} = ui, _forest, _name), do: ui
+  def dispatch(:unbound, %Ui{} = ui, _forest, _name, _tree, _mesh_opts), do: ui
 
-  def dispatch({:intent, intent, ctx}, %Ui{} = ui, forest, context_name) do
+  def dispatch({:intent, intent, ctx}, %Ui{} = ui, forest, context_name, tree, mesh_opts) do
     name = context_name.(ctx)
 
     case KeymapRegistry.lookup_reaction(name, intent) do
       nil ->
-        # Compiled reaction: the context's own react/3 clause.
-        ctx.react(intent, ui, forest)
+        # Compiled reaction: the context's own react/3 clause. A
+        # PLAN-024-Wave-1 runtime pane context (a bare atom, no compiled
+        # module) can only ever reach `:intent` via a LIVE KeymapRegistry
+        # binding (compiled_intent/2 returns nil for it), so its behaviour must
+        # come from a LIVE reaction too — there is no compiled react/3 to fall
+        # back to. Guarded identically to compiled_intent/2 (BUG-006 posture):
+        # identity (no-op) rather than an UndefinedFunctionError.
+        compiled_react(ctx, intent, ui, forest)
 
       source when is_binary(source) ->
-        run_ptc_reaction(source, ui, forest)
+        run_ptc_reaction(source, ui, forest, tree, mesh_opts)
+    end
+  end
+
+  defp compiled_react(ctx, intent, ui, forest) do
+    if Code.ensure_loaded?(ctx) and function_exported?(ctx, :react, 3) do
+      ctx.react(intent, ui, forest)
+    else
+      ui
     end
   end
 
   # The PTC reaction runner lands in W3 (SpellAgent.Tui.Reaction.Ptc). Until then,
   # a stored reaction is a no-op so the seam compiles and the compiled path is
   # fully exercised. Resolved at runtime (Code.ensure_loaded?) so W1 needs no stub
-  # module and W3 needs no edit here.
-  defp run_ptc_reaction(source, ui, forest) do
+  # module and W3 needs no edit here. `tree` (PLAN-024 Wave 2) and `mesh_opts`
+  # (PLAN-024 Wave 3) ride along as the 4th/5th args, present in
+  # Reaction.Ptc.run/5 since Wave 3 landed; still guarded via
+  # function_exported?/3 so a not-yet-loaded module degrades to identity exactly
+  # as before.
+  defp run_ptc_reaction(source, ui, forest, tree, mesh_opts) do
     mod = SpellAgent.Tui.Reaction.Ptc
 
-    if Code.ensure_loaded?(mod) and function_exported?(mod, :run, 3) do
-      # apply/3 (not mod.run/3) keeps this a RUNTIME dispatch: W1 compiles with no
+    if Code.ensure_loaded?(mod) and function_exported?(mod, :run, 5) do
+      # apply/3 (not mod.run/5) keeps this a RUNTIME dispatch: W1 compiles with no
       # reference to the W3 module, so no "undefined function" warning before it
-      # exists, and W3 needs no edit here — the seam resolves itself once the
-      # module is loaded.
-      apply(mod, :run, [source, ui, forest])
+      # exists, and later waves need no edit here — the seam resolves itself once
+      # the module is loaded.
+      apply(mod, :run, [source, ui, forest, tree, mesh_opts])
     else
       ui
     end

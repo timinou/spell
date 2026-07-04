@@ -1,0 +1,197 @@
+#+TITLE: Consolidate homoiconic navigation: pane registry, spatial lens, hole affordances, atom-DoS hardening, durability
+#+STATE: DONE
+#+SESSION_ID: 1522b28d0259e523
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-04T14-42-40-265Z_1522b28d0259e523.jsonl]]
+#+CUSTOM_ID: PLAN-024-consolidate-homoiconic-navigation-pane-r
+#+COMPLETION_HASH: b0931185281588fa
+
+* Initial Message
+
+ok your goal is to CONSOLIDATE around the vision of the spell agent so that we can keep building on a strong basis.
+
+i want every single action, every single chord, every single intent to be translatable to an operation on code, leveraging the homoiconicity of beam lisp.
+
+the `C-w h/j/k/l` is an example of such a thing. i want that logic to extend. Why? Because that allows the system to keep coming up with layouts and they will automatically inherit most of the shortcuts.
+i also want you to point out the design gaps that we have so that we can challenge each other and come up with the right ideas that we missed in the past.
+
+this is a review task. come back to me with an in-chat report of what you found out.
+
+* Initial Message
+
+ok your goal is to CONSOLIDATE around the vision of the spell agent so that we can keep building on a strong basis. i want every single action, every single chord, every single intent to be translatable to an operation on code, leveraging the homoiconicity of beam lisp. the `C-w h/j/k/l` is an example of such a thing. i want that logic to extend. Why? Because that allows the system to keep coming up with layouts and they will automatically inherit most of the shortcuts. i also want you to point out the design gaps that we have so that we can challenge each other and come up with the right ideas that we missed in the past.
+
+* Thesis
+
+`PLAN-009`/`PLAN-021`/`PLAN-346` already made the layout TREE, KEYMAP BINDINGS, and
+REACTIONS homoiconic (PTC data, `lens/`+`harness/`+`keymap/` verbs). This plan closes
+the remaining compiled boundary: NAVIGATION ROUTING (which pane can be focused, what
+"the pane to the left" means, what a fillable value's keystroke does) is still a
+closed, compiled dispatch. Close it so a NEW agent-authored layout automatically
+inherits the ring, the spatial C-w jump, and (longer-horizon) fillable-hole
+affordances — with the atom-DoS discipline and durability the substrate already
+demands, applied BEFORE the surface widens further.
+
+* Verified findings this plan is built from (2026-07-04 review)
+
+1. The RING (`C-j`/`C-k`) already generalizes for free today: `Lens.focusables/1`
+   collects every node where `type == "pane"`, with NO gate on pane name/vocabulary.
+   Confirmed: the `"focusable" => true` tag `DefaultLayout.pane_node/2` stamps is
+   NEVER READ anywhere in the codebase (dead data — a tag with a producer and no
+   consumer). Panes ARE focusable by default already; this tag should become a real
+   opt-out predicate or be deleted, not left as vestigial dead weight.
+2. The SPATIAL jump (`C-w` + h/j/k/l) does NOT generalize: `App.focus_stack/1` is a
+   hardcoded case dispatch (pane atom -> compiled context-module list); `Ui.safe_pane/1`
+   is a closed atom whitelist (`:tree/:detail/:prompt/:history/:cells`); `Spatial.extreme/2`
+   (the pure geometry rank) is only ever called from `App.frame_target/frame_regions`
+   (Elixir), with no `lens/` PTC surface. An agent-added pane renders (body-slot
+   shadow) but cannot be focused, receive a pane-local keymap, or be a spatial C-w
+   target.
+3. `Harness.safe_panes/1`/`to_ui/1` (harness.ex:134-148) default to a STALE pane atom
+   `:answer` (renamed to `:detail` in the W5 pivot) — real drift, filed as BUG-024.
+4. `FUP-020` (hole affordances, doc 17 "human as resolver of holes") is the deepest
+   unbuilt generalization: it extends "every chord is code" from NAVIGATION to ANY
+   declared fillable value (a decision, a diff review, a form) via a pure
+   `schema -> [bindings, reactions]` generator riding the EXISTING KeymapRegistry
+   two-map indirection. Small, high-leverage, currently blocked on FEAT-019 (now
+   DONE) — re-check its blocker status before starting.
+5. `FUP-007` (atom-DoS hardening) is filed but incomplete; a pane REGISTRY is
+   ANOTHER string->atom coercion chokepoint (bounded, but still a chokepoint) —
+   harden the EXISTING freeform surface's chokepoints before adding a new one, not
+   after.
+6. `FUP-009` (durability) — LayoutRegistry/KeymapRegistry/ToolRegistry are all
+   in-memory Agents. Every layout/shortcut an agent (or user) authors currently
+   evaporates on process exit. This undercuts "the system keeps coming up with
+   layouts" as a COMPOUNDING capability — without persistence, nothing survives to
+   compound.
+7. `FUP-025` (mesh TUI inspector) independently NEEDS the pane-registry generalization
+   (new Regions/Board/Spawn panes navigable via the SAME mechanism) — raising the
+   priority of Wave 1, since a second initiative is now blocked on it too.
+8. `FEAT-028` (zipper-based focus ring) was correctly CANCELLED after tracing the
+   real keystroke data-flow and finding the refactor's premise false (`%Ui{}` IS
+   canonical on that path, not the tree). Precedent for this plan's discipline:
+   VERIFY the actual call graph before generalizing a mechanism — do not assume
+   dissolving a boundary is free.
+
+* Non-goals (explicitly deferred, not forgotten)
+
+- PROJ-005 (one tree, many minds / shared gaze) — a separate research track;
+  Wave 1's pane registry should not foreclose it, but does not need to solve it.
+- The full HS-1..11 human-surface catalogue (docs/agent-mesh-theory/17) — only
+  the FEAT-020 slice (schema -> affordances) is in scope here; HS-5/6/7+ stay
+  their own FUPs.
+- Deep nested-map sub-forms for hole affordances (FEAT-020 already scopes this
+  out to its own FUP).
+
+* Waves (dependency-ordered; each wave is independently shippable + reviewable)
+
+** Wave 0 — hardening the chokepoint BEFORE widening it (FUP-007)
+Audit + close the atom-DoS hardening checklist for the EXISTING freeform surface
+(widget type/field coercions, style/border/constraint enums, slot names) per the
+FUP-007 checklist, with the fuzz/property test (stream_data) asserting
+`:erlang.system_info(:atom_count)` does not grow beyond a fixed delta. This is a
+PREREQUISITE for Wave 1: a new pane registry is itself a bounded-intern
+chokepoint, and it should be built to a codebase that has already proven out the
+discipline end-to-end, not be the FIRST place it's applied under pressure.
+- Reviewer swarm: security-focused pass over every `String.to_atom`/
+  `String.to_existing_atom` call site added or touched across PLAN-009's surface.
+
+** Wave 1 — navigable agent-added panes (FUP-005) + the dead focusable tag
+- Replace the fixed `Ui.@panes` whitelist with a bounded runtime pane REGISTRY
+  (mirror `KeymapRegistry.define_intent/1`: capped count, domain-shaped name,
+  intern-once). `safe_pane/1` consults it.
+- `focus_stack/1` becomes DATA: a registry entry carries its context-stack
+  (default `[Global]` + optional agent-authored reaction context).
+- Wire the `"focusable"` tag as a REAL predicate in `Lens.focusables/1` (or
+  remove it if the team decides "all pane nodes are focusable, no override" is
+  the permanent contract — decide explicitly, do not leave it dead).
+- Fix BUG-024 (stale `:answer` pane atom in harness.ex) in the same wave since
+  it touches the identical pane-vocabulary surface.
+- Reviewer swarm: correctness (registry bounds enforced + tested) + regression
+  (168-test reaction algebra still green) + the BUG-007/012 render-adoption-gate
+  lesson (pane identity must stay keyed on something a reshape can't move).
+
+** Wave 2 — spatial focus as a lens/ verb (FUP-031, depends on Wave 1)
+- Expose `lens/frame-target {:dir}` over `Surface.resolve_holes |> Surface.layout
+  |> Spatial.extreme` (the existing pure geometry, new PTC-callable caller).
+- Update `App.frame_regions/1`'s candidate filter to consult the Wave-1 pane
+  registry (not the bare old `Ui.safe_pane/1`), so a registry-backed pane is a
+  valid spatial target.
+- Consider collapsing `App.frame_target/frame_regions` into thin callers of the
+  new shared verb (one source of truth for the ranking call path) if it doesn't
+  destabilize the render-probe/no-App-state testability discipline `Spatial`
+  currently has.
+- Acceptance proof: reproduce today's native `C-w l` via a PURELY
+  PTC-authored `keymap/define-reaction`, zero Elixir changes, to demonstrate the
+  primitive actually generalized (not just "is callable").
+- Reviewer swarm: does this preserve `Spatial`'s pure-function testability;
+  does the collapsed call path risk a BUG-007-class silent divergence between
+  the native render path and the lens/ path.
+
+** Wave 3 — hole affordances (FEAT-020, re-verify blocker status first)
+- Re-check FEAT-019/FEAT-013 blocker state (FEAT-019 is DONE; confirm FEAT-013's
+  watcher-fire mechanism is far enough along, or scope Wave 3 to the
+  generator + manual-fire path only).
+- Build the pure `affordances(slot, context) -> {bindings, reactions}` generator
+  per FEAT-020's spec (enum/string/bool schema kinds; bounded intent pool reuse,
+  NOT one-atom-per-decision — same atom-DoS discipline as Wave 0/1).
+- Wire the render walk (Surface/Materialize) to register/teardown generated
+  bindings+reactions when a `:slot`-bearing hole enters/leaves the tree.
+- Reviewer swarm: atom-cap enforcement (N decisions must not mint N intents);
+  teardown-on-node-removal correctness; `:tier :policy` slots render no human
+  affordance (symmetry with doc 16).
+
+** Wave 4 — durability (FUP-009, can run in parallel with Wave 2/3 once Wave 1 lands)
+- `LayoutRegistry` (+ ideally `KeymapRegistry`/pane-registry) gain save/load
+  against `Hist.Store` (Memory rung free, Khepri rung opt-in), keyed by project
+  + optional session lineage, per the durable-toolset ladder already proven for
+  `ToolRegistry`.
+- Hydrate on App mount; a persisted-but-now-invalid slot degrades via the
+  existing failure ladder (last-good -> native default), never bricks mount.
+- `spell.tui --fresh` bypasses persisted state.
+- Reviewer swarm: boot-safety (a sick store yields empty/native, never a crash);
+  no new source-of-truth divergence between the in-memory registry and the
+  store (the registry stays a PROJECTION, per the durable-toolset doctrine).
+
+* Cross-cutting acceptance (checked at the end of every wave, not just the last)
+
+- `mix compile --warnings-as-errors` clean.
+- Full test suite green (flag any new flake immediately, do not accumulate).
+- No `String.to_atom` on agent/reaction-controlled input anywhere touched this
+  plan (only `String.to_existing_atom` behind a known-set/bounded-registry gate).
+- Every new PTC verb is reachable from a `keymap/define-reaction` with no
+  Elixir-side special case — the plan's own thesis, self-tested each wave.
+- A playbook/decision saved to memory at the end of each wave (mirroring
+  PLAN-021's FEAT-030 "playbooks" deliverable) so the next consolidation pass
+  inherits the lessons instead of re-deriving them.
+
+* Dependencies / sequencing
+
+Wave 0 -> Wave 1 -> Wave 2 (hard dependency: pane registry before spatial
+candidate-filter update). Wave 3 is independent of Wave 1/2 (different subsystem:
+holes, not panes) and can run in parallel with Wave 2 once Wave 0 lands (shares
+the atom-DoS discipline, not the pane registry). Wave 4 depends only on Wave 1
+being stable (persists what Wave 1 introduces) and can otherwise run in parallel
+with Wave 2/3.
+
+* Related items folded into this plan
+- FUP-005 (pane registry) — Wave 1
+- FUP-031 (spatial lens verb, NEW this session) — Wave 2
+- FEAT-020 (hole affordances) — Wave 3
+- FUP-007 (atom-DoS hardening) — Wave 0
+- FUP-009 (durable layouts) — Wave 4
+- BUG-024 (stale :answer pane atom, NEW this session) — Wave 1
+- FUP-025 (mesh TUI inspector) — NOT folded in (separate initiative), but named
+  as a downstream beneficiary/dependent of Wave 1 in its own file.
+
+NOTE [2026-07-04]: All 5 waves shipped and reviewer-swarm-cleared:
+Wave 0 (FUP-007 atom-DoS hardening audit) - DONE
+Wave 1 (FUP-005 pane registry + BUG-024 stale atom fix + dead focusable tag) - DONE
+Wave 2 (FUP-031 spatial lens verb) - DONE, with a critical mid-wave fix (production reachability wiring for lens/* in reactions)
+Wave 3 (FEAT-020 hole affordances) - DONE, grew to a full system per explicit directive to build the real thing (black/ namespace added to ptc_runner, full TUI-to-mesh reachability wiring)
+Wave 4 (FUP-009 durability) - DONE, with a P1 ordering bug found and fixed by the reviewer swarm
+
+Also filed and left for future work (correctly out of scope for this plan):
+- FUP-031's dependents noted on FUP-025 (mesh TUI inspector)
+- FUP-032 (harness/keymap unreachable from main mission loop) - a related but distinct architectural gap discovered during Wave 1/3, filed separately per its own scope
+
+Total: ~250 new tests across the 5 waves, 4 rounds of specialized reviewer swarms (14 individual reviewer dispatches), 3 real bugs found and fixed via review (Tree.get/2 presence blindness in Wave 1, the acceptance-test-vs-production-reachability gap in Wave 2, the seeded_durable? ordering bug in Wave 4), full test suite green throughout (only pre-existing, previously-identified flake clusters observed, verified unrelated to this plan's changes in every case).

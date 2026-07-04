@@ -51,3 +51,5 @@ Deferred from M4 (PLAN-019, FEAT-014/015). M4 shipped the queryable STDOUT surfa
 * Dependencies
 Rides PLAN-009 view/pane builder + the reactive cell mesh grant (FUP-024). The
 stdout core (M4, shipped) is independently usable; the TUI is the human surface.
+
+NOTE [2026-07-04]: Depends on PLAN-024 Wave 1 (pane registry, FUP-005) landing first: the Regions/Board/Spawn panes this FUP wants to add need the SAME navigable-agent-pane mechanism PLAN-024 is building, not a bespoke compiled clause. Do not start FEAT-014's pane_module/1 clauses until PLAN-024 Wave 1 ships, or this duplicates the exact compiled-dispatch pattern PLAN-024 is retiring.

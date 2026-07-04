@@ -1,0 +1,45 @@
+#+TITLE: Harness.safe_panes/to_ui default to stale :answer pane atom (W5 drift)
+#+STATE: DONE
+#+SESSION_ID: 1522b28d0259e523
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-04T14-42-40-265Z_1522b28d0259e523.jsonl]]
+#+CUSTOM_ID: BUG-024-harness-safe-panes-to-ui-default-to-stal
+#+COMPLETION_HASH: 28e6b2dbc2745f34
+
+* Initial Message
+
+ok your goal is to CONSOLIDATE around the vision of the spell agent so that we can keep building on a strong basis.
+
+i want every single action, every single chord, every single intent to be translatable to an operation on code, leveraging the homoiconicity of beam lisp.
+
+the `C-w h/j/k/l` is an example of such a thing. i want that logic to extend. Why? Because that allows the system to keep coming up with layouts and they will automatically inherit most of the shortcuts.
+i also want you to point out the design gaps that we have so that we can challenge each other and come up with the right ideas that we missed in the past.
+
+this is a review task. come back to me with an in-chat report of what you found out.
+
+* Problem
+`lib/spell_agent/harness.ex` still defaults the pane ring to `[:tree, :answer, :prompt]` in three places:
+  - `safe_panes(nil)` (L134)
+  - `safe_panes(list)` empty-fallback (L138)
+  - `safe_panes(_)` catch-all (L143)
+
+`:answer` was renamed to `:detail` in the PLAN-346 W5 pivot (`Ui.@panes` is `[:tree, :detail, :prompt]`; see `ui.ex` W5 pivot comment). `harness.ex:244-247` even documents that `:answer`/`:prompt` are *deliberately* not given their own keymap context because "both panes resolve through `:turn_nav`" — but that comment describes a pane identity (`:answer`) that no longer exists in `Ui.@panes`. A reaction whose gaze round-trips through `Harness.to_ui/1` with no explicit `:panes` (or an empty/invalid one) gets seeded with a dead atom in its ring instead of the live `:detail`.
+
+* Evidence
+- `lib/spell_agent/tui/ui.ex` — `@panes` / `safe_pane/1` known set: `:tree`, `:detail`, `:prompt`, `:history`, `:cells` (no `:answer`).
+- `lib/spell_agent/harness.ex:134,138,143` — `[:tree, :answer, :prompt]`.
+- `lib/spell_agent/tui/reaction/ptc.ex` — the sibling rehydration path (`rehydrate/2`) has no such default; it falls back to the PRIOR gaze's value, so this bug is isolated to `Harness.to_ui/1`'s bare-default path (used when a reaction round-trips through `harness/*` verbs with an absent/malformed `:panes`).
+
+* Fix
+Update the three `safe_panes` fallback clauses in `harness.ex` to `[:tree, :detail, :prompt]`, matching `Ui.new/0`'s actual default ring. Grep the file for any other stale pane-atom literals while in there (the file predates several pane renames).
+
+* Acceptance
+- `grep -rn ":answer" lib/spell_agent/harness.ex` returns zero pane-list literals (comment referencing why `:answer` has no context can stay only if updated to say why `:detail` doesn't need its own turn_nav bypass, or removed if no longer applicable).
+- A reaction calling `(harness/state)` with no gaze context defaults to the SAME ring `Ui.new/0` produces.
+- `mix test` green (harness_test.exs + reaction/ptc tests).
+
+* References
+- lib/spell_agent/harness.ex:134-148, 244-259
+- lib/spell_agent/tui/ui.ex (@panes, safe_pane/1)
+- lib/spell_agent/tui/reaction/ptc.ex (rehydrate/2 — the non-buggy sibling path)
+
+NOTE [2026-07-04]: Fixed in PLAN-024 Wave 1: the 3 safe_panes/1 fallback clauses in harness.ex now default to [:tree, :detail, :prompt] (matching Ui.new/0). Also fixed the stale doc comment (@contexts explanation) and error message in require_context/1 that referenced dead :answer/"answer" pane vocabulary. Verified via mix test test/spell_agent/harness_test.exs test/spell_agent/tui/ui_test.exs test/spell_agent/tui/keys_test.exs (55/55 passed).

@@ -28,28 +28,86 @@ defmodule SpellAgent.Tui.LayoutRegistry do
   has SOMETHING valid. (The App's render additionally degrades a node that throws
   at paint time — belt and braces.)
 
-  v0 storage is in-memory (`Agent`), session-scoped — same posture as the sibling
-  registries. Durable layouts are FUP-009.
+  ## Durability (PLAN-024 Wave 4 / FUP-009)
+
+  The registry is a fast IN-MEMORY cache, same posture as the sibling registries.
+  When durability is enabled (`:durable_name` given, or the default `"default"`
+  name is opted into via `persist/1`), the registry becomes a PROJECTION of the
+  history substrate exactly like `ToolRegistry`'s `docs/durable-toolset.md`
+  pattern:
+
+    * `persist/0` mirrors the CURRENT tree to `Hist.Store` under `{:layout, name}`;
+    * `start_link/1` REHYDRATES from that key on boot (best-effort: a sick/absent
+      store degrades to the passed-in `:default`, never crashes mount).
+
+  `Hist.Store.Khepri` is ALREADY per-project (rooted at `File.cwd!()/.spell/forest`
+  — see its moduledoc), so persisting under a single fixed name IS per-project
+  durability: a different `cwd` boots a different Khepri instance with its own
+  `{:layout, "default"}` slot. No separate project-key scheme needed. Persistence
+  is OPT-IN per boot (`durable: true` / `--freeform` does not imply persistence);
+  `mix spell.tui --fresh` skips rehydration and starts from the passed `:default`
+  unconditionally.
   """
 
   use Agent
 
+  alias SpellAgent.Hist
+  alias SpellAgent.Hist.Store
   alias SpellAgent.Tui.{LayoutDiagnostic, Lens, LensFn, RenderProbe, Tree}
 
   @type tree :: %{optional(String.t()) => term()}
+
+  # The fixed durable-slot name a plain `persist: true` boot uses — per-project
+  # durability comes from Khepri's OWN per-cwd data dir (see moduledoc), not from
+  # varying this name. A caller MAY pass a different `:durable_name` (e.g. to
+  # scope by session lineage instead of project-default) but the common case
+  # never needs to.
+  @default_durable_name "default"
 
   @doc """
   Start the registry. `:default` seeds the canonical tree (the App passes the
   native default from `DefaultLayout.tree/1`); without it, an empty placeholder
   tree is used until `replace/1`.
+
+  `:durable` (boolean, default `false`) opts into PLAN-024 Wave 4 durability: on
+  start, the registry attempts to REHYDRATE a previously-persisted tree from
+  `Hist.Store` (under `:durable_name`, default `"default"`) and use it as the
+  SEEDED default instead of the passed-in `:default` — falling back to the
+  passed-in default on any rehydrate failure (absent key, sick store, or a
+  persisted tree that no longer materializes — the SAME render-probe failure
+  ladder `set/2` uses, so a stale persisted slot degrades to native rather than
+  bricking mount). `:store` overrides the store module (defaults to
+  `Hist.default_store/0`).
   """
   @spec start_link(keyword()) :: Agent.on_start()
   def start_link(opts \\ []) do
-    default = opts[:default] || %{"type" => "split", "dir" => "vertical", "children" => []}
-    identity = pane_identity_of(default)
+    native_default = opts[:default] || %{"type" => "split", "dir" => "vertical", "children" => []}
+    durable? = Keyword.get(opts, :durable, false)
+    store = Keyword.get(opts, :store, Hist.default_store())
+    durable_name = Keyword.get(opts, :durable_name, @default_durable_name)
+
+    seeded = if durable?, do: rehydrate(store, durable_name, native_default), else: native_default
+    identity = pane_identity_of(seeded)
 
     Agent.start_link(
-      fn -> %{tree: default, default: default, pane_identity: identity} end,
+      fn ->
+        %{
+          tree: seeded,
+          default: native_default,
+          pane_identity: identity,
+          durable?: durable?,
+          durable_name: durable_name,
+          store: store,
+          # Set only when THIS start_link already rehydrated a durable tree
+          # (start_link's own `durable?` opt is a way to get the SAME effect
+          # enable_durability/1 gives, without a separate runtime call) — tells
+          # the FIRST seed_default/1 call (App.mount's seed_layout/1) not to
+          # clobber `seeded` with the plain native default. See seed_default/1's
+          # doc for the full ordering rationale. Always present in state (even
+          # when `false`) so `%{st | seeded_durable?: _}` updates never KeyError.
+          seeded_durable?: durable? and seeded != native_default
+        }
+      end,
       name: __MODULE__
     )
   end
@@ -82,6 +140,14 @@ defmodule SpellAgent.Tui.LayoutRegistry do
   Replace the WHOLE tree (e.g. the App seeding the native default at mount, or a
   navigation step re-tagging it). No validation — this is the trusted internal
   write path (App / Lens), not the agent surface. Use `set/2` for agent shadows.
+
+  Deliberately does NOT mirror to the durable store: `replace/1` is also the path
+  every navigation step's gaze re-tag takes (`App.sync_layout_gaze/1`, every
+  keystroke) — persisting on every keystroke would be wasteful AND would
+  "persist" ephemeral cursor/focus state as if it were authored structure.
+  Durability mirrors only AGENT-FACING structural mutations (`set/2`, `reset/2`,
+  `reset/1` with `nil`) — the moments FUP-009's acceptance criterion ("author a
+  layout, quit, relaunch, the custom status persists") actually names.
   """
   @spec replace(tree()) :: :ok
   def replace(new_tree) when is_map(new_tree) do
@@ -89,16 +155,34 @@ defmodule SpellAgent.Tui.LayoutRegistry do
   end
 
   @doc """
-  Seed the default tree (and current tree) — used by the App at mount to install
-  the native layout as the default both `reset/1` and the failure ladder fall
-  back to. Idempotent.
+  Seed the default tree — used by the App at mount to install the native layout
+  as the fallback both `reset/1` and the failure ladder fall back to.
+
+  Always updates `:default` (the native fallback must always be current). Updates
+  the LIVE `:tree` too, UNLESS this registry is durable AND already carries a
+  rehydrated tree from a PRIOR `enable_durability/1` call (PLAN-024 Wave 4) —
+  `App.mount/1` calls `seed_layout/1` -> `seed_default/1` on EVERY launch
+  regardless of durability, so a naive unconditional overwrite here would wipe
+  out whatever `SpellAgent.tui/1` just rehydrated before starting the App
+  (`enable_durability/1` runs BEFORE `App.start_link/1`, since the App's `mount`
+  callback has no CLI-flag visibility of its own). Detected via `st.seeded_durable?`
+  — set true by `enable_durability/1`'s rehydrate step, so THIS call (not a
+  later `seed_default/1`, e.g. a test re-seeding after a durable session) is the
+  one that must yield. Idempotent otherwise.
   """
   @spec seed_default(tree()) :: :ok
   def seed_default(default) when is_map(default) do
-    identity = pane_identity_of(default)
-
     Agent.update(__MODULE__, fn st ->
-      %{st | tree: default, default: default, pane_identity: identity}
+      if Map.get(st, :seeded_durable?, false) do
+        # A prior enable_durability/1 already adopted a rehydrated tree as the
+        # LIVE tree for this launch; keep it, but still refresh :default (the
+        # native fallback the failure ladder + reset/1 use must always be
+        # current) and consume the one-shot flag so a LATER seed_default/1 call
+        # (a test re-seeding, a fresh mount) behaves like the normal case.
+        %{st | default: default, seeded_durable?: false}
+      else
+        %{st | tree: default, default: default, pane_identity: pane_identity_of(default)}
+      end
     end)
   end
 
@@ -129,8 +213,18 @@ defmodule SpellAgent.Tui.LayoutRegistry do
 
         true ->
           case LayoutDiagnostic.validate(node) do
-            :ok -> {:ok, %{st | tree: candidate}}
-            {:error, diagnostic} -> {{:error, {:bad_layout, slot, diagnostic}}, st}
+            :ok ->
+              new_st = %{st | tree: candidate}
+              # PLAN-024 Wave 4: mirror the FULL new tree to the durable store
+              # (inside this SAME Agent callback, atomically with the map update
+              # — the ToolRegistry discipline). Only when this boot opted into
+              # durability; a no-op otherwise. Best-effort: a sick store never
+              # fails the set itself.
+              maybe_persist(new_st)
+              {:ok, new_st}
+
+            {:error, diagnostic} ->
+              {{:error, {:bad_layout, slot, diagnostic}}, st}
           end
       end
     end)
@@ -169,22 +263,38 @@ defmodule SpellAgent.Tui.LayoutRegistry do
   def reset(nil) do
     Agent.update(__MODULE__, fn st ->
       ui = Lens.to_ui(st.tree)
-      %{st | tree: Lens.from_ui(st.default, ui)}
+      new_st = %{st | tree: Lens.from_ui(st.default, ui)}
+      # PLAN-024 Wave 4: a whole-tree reset is "undo my customizations" —
+      # persist that intent too, so a durable boot doesn't resurrect the
+      # discarded shadows next launch.
+      maybe_persist(new_st)
+      new_st
     end)
   end
 
   def reset(slot) when is_binary(slot) do
     Agent.get_and_update(__MODULE__, fn st ->
       case Lens.at(st.default, slot) do
-        nil -> {{:error, :unknown_slot}, st}
-        default_node -> {:ok, %{st | tree: put_slot(st.tree, slot, default_node)}}
+        nil ->
+          {{:error, :unknown_slot}, st}
+
+        default_node ->
+          new_st = %{st | tree: put_slot(st.tree, slot, default_node)}
+          maybe_persist(new_st)
+          {:ok, new_st}
       end
     end)
   end
 
   @doc "Reset to the seeded default and forget shadows (tests / `--fresh`)."
   @spec reset_all() :: :ok
-  def reset_all, do: Agent.update(__MODULE__, fn st -> %{st | tree: st.default} end)
+  def reset_all do
+    Agent.update(__MODULE__, fn st ->
+      new_st = %{st | tree: st.default}
+      maybe_persist(new_st)
+      new_st
+    end)
+  end
 
   @doc """
   Surgically replace the value at `path` WITHIN `slot`'s subtree (PLAN-021 W2) —
@@ -225,7 +335,9 @@ defmodule SpellAgent.Tui.LayoutRegistry do
 
               case LayoutDiagnostic.validate(new_slot) do
                 :ok ->
-                  {{:ok, new_slot}, %{st | tree: put_slot(st.tree, slot, new_slot)}}
+                  new_st = %{st | tree: put_slot(st.tree, slot, new_slot)}
+                  maybe_persist(new_st)
+                  {{:ok, new_slot}, new_st}
 
                 {:error, diagnostic} ->
                   {{:error, {:bad_layout, slot, diagnostic}}, st}
@@ -527,4 +639,136 @@ defmodule SpellAgent.Tui.LayoutRegistry do
   defp pane_identity_of(_), do: []
 
   defp strget(m, key), do: Tree.get(m, key)
+
+  # ---- durability (PLAN-024 Wave 4 / FUP-009) ----
+
+  @doc """
+  Whether THIS registry process was booted with durability enabled
+  (`start_link(durable: true, ...)`). Introspection for tests/diagnostics.
+  """
+  @spec durable?() :: boolean()
+  def durable?, do: Agent.get(__MODULE__, & &1.durable?)
+
+  @doc """
+  Enable durability on the ALREADY-RUNNING supervised registry singleton, and
+  (unless `rehydrate: false`) immediately rehydrate + adopt a previously
+  persisted tree in place of the current one.
+
+  Exists because `LayoutRegistry` is started once, with fixed opts, by the app
+  supervisor at boot (`SpellAgent.Application`) — long before `mix spell.tui
+  --durable`'s CLI flag is known. Rather than restart the supervision tree per
+  invocation, `SpellAgent.tui/1` calls this to flip the ALREADY-STARTED
+  singleton into durable mode for this launch. `store`/`durable_name` mirror
+  `start_link/1`'s options.
+  """
+  @spec enable_durability(keyword()) :: :ok
+  def enable_durability(opts \\ []) do
+    store = Keyword.get(opts, :store, Hist.default_store())
+    durable_name = Keyword.get(opts, :durable_name, @default_durable_name)
+    rehydrate? = Keyword.get(opts, :rehydrate, true)
+
+    Agent.update(__MODULE__, fn st ->
+      seeded = if rehydrate?, do: rehydrate(store, durable_name, st.default), else: st.tree
+
+      %{
+        st
+        | durable?: true,
+          store: store,
+          durable_name: durable_name,
+          tree: seeded,
+          pane_identity: pane_identity_of(seeded),
+          # Tell the NEXT seed_default/1 call (App.mount's seed_layout/1, which
+          # always runs regardless of durability) whether to keep `seeded` in
+          # place of the REAL native default it's about to receive — see
+          # seed_default/1's doc for the full ordering rationale. One-shot:
+          # seed_default/1 consumes it.
+          #
+          # ONLY true when rehydrate/3 actually ADOPTED a genuinely-persisted
+          # tree (`seeded != st.default`): `rehydrate/3` falls back to its
+          # `native_default` ARGUMENT (here `st.default`, whatever this
+          # NOT-YET-MOUNTED registry happened to boot with — an empty
+          # placeholder, not the real native tree seed_default/1 will pass) on
+          # EVERY failure branch (absent key / sick store / invalid tree), so
+          # `seeded == st.default` reliably means "nothing durable was found"—
+          # matching `start_link/1`'s OWN identical `durable? and seeded !=
+          # native_default` condition. Getting this wrong (unconditional `true`)
+          # would make a FIRST `--durable` launch (nothing persisted yet) or a
+          # `--durable --fresh` launch (rehydrate? false, seeded == st.tree ==
+          # the placeholder) keep the placeholder tree forever — seed_default/1
+          # would never install the real DefaultLayout.
+          seeded_durable?: rehydrate? and seeded != st.default
+      }
+    end)
+  end
+
+  @doc """
+  Force-persist the CURRENT tree right now (independent of whether the last
+  mutating call happened to trigger it) — e.g. for `mix spell.tui`'s clean-exit
+  path, or a test asserting an explicit save point. No-op (returns `:ok`) when
+  this registry was not booted durable.
+  """
+  @spec persist() :: :ok
+  def persist, do: Agent.get(__MODULE__, &maybe_persist/1)
+
+  # Mirror `st.tree` to `{:layout, st.durable_name}` iff this boot is durable.
+  # Called from INSIDE the same Agent callback as the map update that produced
+  # `st` (set/2, reset/1, reset_all/0, update_path/3) so the store write is
+  # atomic with the in-memory commit — the ToolRegistry discipline. Best-effort:
+  # a sick store never fails the caller's mutation.
+  defp maybe_persist(%{durable?: true} = st) do
+    safe_store(fn -> Store.put(st.store, {:layout, st.durable_name}, st.tree) end)
+  end
+
+  defp maybe_persist(_st), do: :ok
+
+  @doc """
+  Rehydrate the durable tree for `name` from `store`, falling back to
+  `native_default` on ANY failure: absent key, a sick/unstarted store, OR a
+  persisted tree that no longer VALIDATES against a render probe (the SAME
+  failure-ladder discipline `set/2` uses — a stale persisted slot referencing a
+  widget a newer ex_ratatui renamed degrades to native, never bricks mount).
+
+  Public (mirrors `ToolRegistry.durable_map/1`'s reasoning): `LayoutRegistry` is
+  a NAMED singleton started once by the app supervisor, so a test cannot easily
+  drive `start_link/1`'s rehydration path directly — this is the SAME logic
+  `start_link/1` and `enable_durability/1` call, exposed so the projection is
+  independently testable against a pre-populated store.
+  """
+  @spec rehydrate(module(), String.t(), tree()) :: tree()
+  def rehydrate(store, name, native_default) do
+    ensure_store_started(store)
+
+    case safe_fetch(store, {:layout, name}) do
+      {:ok, persisted} when is_map(persisted) ->
+        if LayoutDiagnostic.validate(persisted) == :ok, do: persisted, else: native_default
+
+      _ ->
+        native_default
+    end
+  end
+
+  defp ensure_store_started(store) do
+    cond do
+      function_exported?(store, :start, 0) -> safe_store(fn -> store.start() end)
+      function_exported?(store, :start, 1) -> safe_store(fn -> store.start(nil) end)
+      true -> :ok
+    end
+  end
+
+  defp safe_fetch(store, key) do
+    Store.fetch(store, key)
+  rescue
+    _ -> :error
+  catch
+    :exit, _ -> :error
+  end
+
+  defp safe_store(fun) do
+    fun.()
+    :ok
+  rescue
+    _ -> :ok
+  catch
+    :exit, _ -> :ok
+  end
 end

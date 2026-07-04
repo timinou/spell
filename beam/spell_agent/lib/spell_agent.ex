@@ -43,6 +43,19 @@ defmodule SpellAgent do
   the in-memory store dies with the BEAM. Best-effort: a failure never blocks
   teardown.
 
+  ## Durable layouts + keymaps (PLAN-024 Wave 4 / FUP-009)
+
+  Pass `durable: true` to make agent- or user-authored layout shadows and
+  keybinding overrides survive across launches (persisted to the SAME durable
+  store `Hist` uses — `Hist.Store.Khepri` is already per-project, rooted at
+  `File.cwd!()/.spell/forest`, so this is per-project durability for free).
+  `fresh: true` skips rehydration for this launch (ignore whatever was
+  persisted, start from the native defaults) without discarding the persisted
+  record itself — the next non-fresh durable launch still sees it.
+
+      SpellAgent.tui(durable: true)              # remember layout/keymap edits
+      SpellAgent.tui(durable: true, fresh: true)  # this launch only: start native
+
   Returns `:ok` once the app stops (esc / ctrl-c to quit).
   """
   @spec tui(keyword()) :: :ok
@@ -53,10 +66,16 @@ defmodule SpellAgent do
     # path is printed so the logs are reviewable once back at the shell.
     {log_path, snapshot} = SpellAgent.Tui.LogRedirect.start()
 
+    # PLAN-024 Wave 4: flip the ALREADY-RUNNING LayoutRegistry/KeymapRegistry
+    # singletons into durable mode for THIS launch, before App.start_link/1 (its
+    # `mount` callback has no CLI-flag visibility of its own — see
+    # LayoutRegistry.seed_default/1's doc for why ordering matters here).
+    maybe_enable_durability(opts)
+
     try do
       {:ok, pid} =
         SpellAgent.Tui.App.start_link(
-          Keyword.merge([name: nil, store: SpellAgent.Tui.Store], opts)
+          Keyword.merge([name: nil, store: SpellAgent.Tui.Store], Keyword.drop(opts, [:durable, :fresh]))
         )
 
       ref = Process.monitor(pid)
@@ -76,6 +95,25 @@ defmodule SpellAgent do
       # log-path dump above). Best-effort: a failure never blocks teardown.
       dump_traces()
     end
+  end
+
+  @doc false
+  # Extracted so the exact CLI-flag semantics (`durable:`/`fresh:` -> which
+  # registries get enable_durability/1 called, with which rehydrate:) are
+  # independently testable without invoking the blocking `tui/1` (which takes
+  # over the terminal and blocks on a `:DOWN` receive). `fresh: true` enables
+  # durability WITHOUT rehydrating (so a later `set` during this session still
+  # persists, but THIS launch starts native) — `durable: false` (the default)
+  # is a complete no-op, touching neither registry.
+  @spec maybe_enable_durability(keyword()) :: :ok
+  def maybe_enable_durability(opts) do
+    if Keyword.get(opts, :durable, false) do
+      rehydrate? = not Keyword.get(opts, :fresh, false)
+      SpellAgent.Tui.LayoutRegistry.enable_durability(rehydrate: rehydrate?)
+      SpellAgent.Tui.KeymapRegistry.enable_durability(rehydrate: rehydrate?)
+    end
+
+    :ok
   end
 
   # The trace dump writes one file per recorded session to `~/.spell/traces/`

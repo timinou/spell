@@ -1,8 +1,9 @@
 #+TITLE: Durable authored layouts: persist freeform slots across sessions
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 1511029ec58e9d42
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-20T20-59-50-422Z_1511029ec58e9d42.jsonl]]
 #+CUSTOM_ID: FUP-009-durable-authored-layouts-persist-freefor
+#+COMPLETION_HASH: a9168d5343564c7f
 
 * Initial Message
 
@@ -64,3 +65,5 @@ key (per-project, or per-session-lineage).
 - lib/spell_agent/tui/app.ex (mount hydration point, resume_session_id pattern)
 - README "Status (v0)" — notes durable persistence of defined tools as a deferred
   follow-up; this generalizes it to all authored runtime state.
+
+NOTE [2026-07-04]: Implemented as PLAN-024 Wave 4 (final wave). Full FUP-009 acceptance delivered: Hist.Store gains :layout/:keymap key kinds (Memory + Khepri); LayoutRegistry/KeymapRegistry both gain start_link(durable: true) + a runtime enable_durability/1 toggle (since both are already-running supervised singletons with fixed boot opts); set/2, reset/1, reset_all/0, update_path/3, bind/3, unbind/2, put_reaction/3, clear_context/1 all mirror to the store atomically inside their Agent callback (ToolRegistry discipline); replace/1 and :hole_affordance (ephemeral per-navigation state) deliberately excluded from persistence; intent atoms serialized as strings, never persisted as bare atoms, re-interned via the same bounded pure_define_intent chokepoint on rehydrate. SpellAgent.tui/1 + mix spell.tui gain -d/--durable and --fresh flags. 2-round reviewer swarm (3 specialists + 1 focused re-review) found and fixed a genuine P1: enable_durability/1's seeded_durable? flag was unconditionally true, which would have made a FIRST --durable launch or --durable --fresh launch never install the real DefaultLayout (stuck on the placeholder tree forever) - fixed to match start_link's own condition (rehydrate? and seeded != default), verified via a temporarily-reverted-fix test proving the regression tests genuinely catch it. 63+ tests across store_memory/khepri, layout/keymap registry durability (via Supervisor.terminate_child/restart_child, not raw GenServer.stop which would race the :one_for_one supervisor), and the CLI wiring. Full FUP-009 acceptance proven against REAL Khepri (quit+relaunch survival, stale-widget graceful degradation). Full suite green.

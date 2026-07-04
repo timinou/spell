@@ -1,9 +1,10 @@
 #+TITLE: Hole affordances — a fillable hole's :slot auto-generates keymap bindings + reactions that post black/* resolutions
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 151269c91db37358
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-06-21T23-09-03-478Z_151269c91db37358.jsonl]]
 #+CUSTOM_ID: FEAT-020-hole-affordances-a-fillable-holes-slot-a
 #+BLOCKED_BY: FEAT-019
+#+COMPLETION_HASH: 307ff292937d423b
 
 * Initial Message
 
@@ -94,3 +95,11 @@ The render walk recognizes :slot and invokes the generator for the focus context
 - deep nested-map sub-forms (compose later).
 - HS-5 shared-gaze surfacing (rides PROJ-005).
 - HS-6 answer-template policy-from-history (a fold FUP).
+
+NOTE [2026-07-04]: Implemented as PLAN-024 Wave 3, with two deliberate deviations from this item's literal spec text, both reviewed/confirmed sound:
+
+1. NAMING: the spec's ":slot" declaration on a hole (answer-schema/resolves/tier) is stored as tags["affordance"] in the actual code, NOT tags["slot"] or a top-level "slot" key — to avoid colliding with the PRE-EXISTING layout-tree meaning of "slot" (a node's BODY-POSITION name, Tree.slot/1 / Lens.slot/1, used throughout PLAN-009/021). Same concept this FEAT describes, disambiguated placement. See lib/spell_agent/tui/hole_affordance.ex's moduledoc for the full rationale.
+
+2. SCOPE GROWTH beyond the original spec: discovered while implementing that black/* mesh verbs were not merely unmerged from a tools map (as this item anticipated for FEAT-019's dashboard) but were NOT RECOGNIZED AT ALL by the ptc_runner analyzer as a PTC namespace — (black/post ...) as literal PTC source failed "unknown namespace black/". Fixed by adding 'black' to the vendored ptc_runner fork's bounded-namespace allowlist (source_atoms.ex + analyze.ex), mirroring the existing harness/keymap SPELL PATCH pattern. Also wired full TUI-to-mesh reachability end-to-end: Reaction.Ptc.run/3->5 (mesh_opts param), Keys.dispatch/4->6, App's production call site now passes {session_id: hist_session, region: hist_session, store: hist_store} so a hole-affordance reaction's black/post is properly scoped to its own session's mesh region (verified: no cross-session write capability leak, Namespace.post enforces held-set).
+
+Delivered: SpellAgent.Tui.HoleAffordance (pure generator, bounded intent pool never grows with decision volume), App.sync_hole_affordances/1 (lifecycle wired into reproject/2, install-on-focus/teardown-on-defocus via KeymapRegistry.clear_context/1 NEW), focus_stack/1's data-driven :hole_affordance context prefix. 40 new tests, 3-round reviewer swarm all cleared at 0.95 confidence (atom-DoS bound, mesh capability scoping, render-purity boundary + lifecycle correctness). Full suite green.

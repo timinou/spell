@@ -21,19 +21,46 @@ defmodule SpellAgent.Tui.Reaction.Ptc do
   a reaction IS a tool whose param is your gaze and whose return is your next gaze.
   """
 
-  alias SpellAgent.Harness
-  alias SpellAgent.Tui.{Tree, Ui}
+  alias SpellAgent.{Harness, Mesh}
+  alias SpellAgent.Tui.{Lens, Tree, Ui}
 
   @doc """
   Evaluate `source` as a reaction over `ui` (the current gaze) given `forest`.
   Returns the new `%Ui{}`, or the unchanged `ui` if the program fails.
+
+  `tree` (PLAN-024 Wave 2, FUP-031) is the CURRENT layout tree, optional and
+  closed into the `lens/` namespace (e.g. `lens/frame-target`) alongside
+  `harness/`+`keymap/` — so an authored reaction can compose spatial-focus
+  logic (`(harness/focus {:dir (lens/frame-target {:dir "right"})})`) the SAME
+  way the native `C-w` keybinding does, with zero Elixir change.
+
+  `mesh_opts` (PLAN-024 Wave 3, FEAT-020) is `%{region: String.t(), store:
+  module()}` or `nil`, optional, closed into the `black/*` mesh verbs (e.g.
+  `black/post`) — so a hole-affordance reaction can post a `:resolution` record
+  when its bound chord fires, the SAME stigmergic mechanism a mission-loop
+  agent uses. `session_id` for the mesh verbs is the App's own `hist_session`
+  (already a stable per-session identifier; no new concept introduced).
+
+  Omitting `tree`/`mesh_opts` (the defaults, both `nil`) keeps every
+  pre-existing call site's behavior byte-identical — a reaction that never
+  calls `lens/*`/`black/*` never notices the difference; one that does gets a
+  clear `unknown tool` failure (never a crash) if the corresponding option was
+  not supplied.
   """
-  @spec run(String.t(), Ui.t(), map()) :: Ui.t()
-  def run(source, %Ui{} = ui, forest) when is_binary(source) and is_map(forest) do
+  @spec run(String.t(), Ui.t(), map(), map() | nil, map() | nil) :: Ui.t()
+  def run(source, %Ui{} = ui, forest, tree \\ nil, mesh_opts \\ nil)
+      when is_binary(source) and is_map(forest) do
     context = %{"ui" => ui_to_map(ui), "forest" => forest}
     # Close the CURRENT gaze into the harness tools so a verb called without an
     # explicit :ui (e.g. `(harness/expand {})` or `(harness/state)`) acts on it.
-    tools = Harness.tools(forest, ui)
+    # `lens/*` (spatial-focus) and `black/*` (mesh post/query/...) are merged in
+    # only when the corresponding option is given — never intern-required,
+    # both `Lens.tools/1` and `Mesh.verbs/2` are plain string-keyed maps.
+    tools =
+      forest
+      |> Harness.tools(ui)
+      |> maybe_merge_lens_tools(tree)
+      |> maybe_merge_mesh_tools(mesh_opts)
 
     case PtcRunner.Lisp.run(source, context: context, tools: tools, caller: :in_process_v1) do
       {:ok, step} -> rehydrate(step.return, ui)
@@ -43,6 +70,21 @@ defmodule SpellAgent.Tui.Reaction.Ptc do
     # A reaction must never crash the App; degrade to the unchanged gaze.
     _ -> ui
   end
+
+  defp maybe_merge_lens_tools(tools, tree) when is_map(tree), do: Map.merge(tools, Lens.tools(tree))
+  defp maybe_merge_lens_tools(tools, _tree), do: tools
+
+  # `mesh_opts` must carry a session_id + region (a bare region string with no
+  # writer identity would let a reaction post records under no attributable
+  # author); a malformed/absent map degrades to no mesh tools — never a crash,
+  # matching maybe_merge_lens_tools's totality posture.
+  defp maybe_merge_mesh_tools(tools, %{session_id: session_id, region: region} = opts)
+       when is_binary(session_id) and is_binary(region) do
+    store = Map.get(opts, :store) || SpellAgent.Hist.default_store()
+    Map.merge(tools, Mesh.verbs(session_id, region: region, store: store))
+  end
+
+  defp maybe_merge_mesh_tools(tools, _mesh_opts), do: tools
 
   # The program's return is a gaze map (string/atom keys) — rehydrate to %Ui{}.
   # Anything unrecognized (a non-map return) leaves the gaze untouched.

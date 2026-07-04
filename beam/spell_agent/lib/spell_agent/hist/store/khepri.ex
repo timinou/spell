@@ -144,6 +144,8 @@ defmodule SpellAgent.Hist.Store.Khepri do
   defp path({:mesh_seq, region}), do: [@root, :mesh_seq, region]
   defp path({:mesh_hash, region, h}), do: [@root, :mesh_hash, region, h]
   defp path({:reduced, sid, w, hash}), do: [@root, :reduced, sid, w, hash]
+  defp path({:layout, name}), do: [@root, :layout, name]
+  defp path({:keymap, name}), do: [@root, :keymap, name]
 
   # Wildcard patterns for list/2. Session-global kinds ignore the session arg.
   defp list_pattern(:session, nil), do: [@root, :session, star()]
@@ -163,6 +165,8 @@ defmodule SpellAgent.Hist.Store.Khepri do
   defp list_pattern(:mesh, region), do: [@root, :mesh, region, star()]
   defp list_pattern(:mesh_hash, nil), do: [@root, :mesh_hash, star(), star()]
   defp list_pattern(:mesh_hash, region), do: [@root, :mesh_hash, region, star()]
+  defp list_pattern(:layout, _), do: [@root, :layout, star()]
+  defp list_pattern(:keymap, _), do: [@root, :keymap, star()]
 
   # `#if_name_matches{regex = any}` as an Erlang record tuple (record has two
   # fields: regex + compiled). This is the single-level `*` wildcard; the atom
