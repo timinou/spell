@@ -65,6 +65,18 @@ describe("deriveAgentStatus", () => {
 		).toBe("user_paused");
 	});
 
+	it("returns 'user_paused' (not 'completed') when input callback is present, user-paused, and all todos are done", () => {
+		expect(
+			deriveAgentStatus(
+				makeCtx({
+					hasInputCallback: true,
+					isUserPaused: true,
+					todoPhases: [{ name: "p1", tasks: [{ id: "t1", content: "do x", status: "completed" }] }],
+				}),
+			),
+		).toBe("user_paused");
+	});
+
 	it("returns 'idle' when nothing is active", () => {
 		expect(deriveAgentStatus(makeCtx())).toBe("idle");
 	});

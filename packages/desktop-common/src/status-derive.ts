@@ -30,7 +30,8 @@ export interface AgentStatusContext {
  *  2. pending_approval
  *  3. needs_input / user_paused (hook input)
  *  4. running (streaming)
- *  5. needs_input / user_paused / completed (input callback)
+ *  5. user_paused / completed / needs_input (input callback) — an explicit
+ *     user pause always wins over the derived "all done" check.
  *  6. idle
  */
 export function deriveAgentStatus(ctx: AgentStatusContext): AgentStatus {
@@ -39,11 +40,16 @@ export function deriveAgentStatus(ctx: AgentStatusContext): AgentStatus {
 	if (ctx.isAwaitingHookInput) return ctx.isUserPaused ? "user_paused" : "needs_input";
 	if (ctx.isStreaming) return "running";
 	if (ctx.hasInputCallback) {
+		// An explicit user pause is a deliberate acknowledgement — it must win
+		// over the derived "all done" check, else a session paused after its
+		// last todo completes silently reverts to "completed" and its paused
+		// indicator (e.g. the dms workspace-chip circle) disappears.
+		if (ctx.isUserPaused) return "user_paused";
 		const allDone =
 			ctx.todoPhases.length > 0 &&
 			ctx.todoPhases.every(p => p.tasks.every(t => t.status === "completed" || t.status === "abandoned"));
 		if (allDone) return "completed";
-		return ctx.isUserPaused ? "user_paused" : "needs_input";
+		return "needs_input";
 	}
 	return "idle";
 }
