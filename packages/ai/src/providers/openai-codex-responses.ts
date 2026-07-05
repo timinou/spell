@@ -106,6 +106,7 @@ const CODEX_DEBUG = $env.PI_CODEX_DEBUG === "1" || $env.PI_CODEX_DEBUG === "true
 const CODEX_MAX_RETRIES = 5;
 const CODEX_RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 const CODEX_RETRY_DELAY_MS = 500;
+const CODEX_RETRY_MAX_DELAY_MS = 8000;
 const CODEX_WEBSOCKET_CONNECT_TIMEOUT_MS = 10000;
 const CODEX_WEBSOCKET_IDLE_TIMEOUT_MS = 300000;
 const CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS = 15000;
@@ -1249,7 +1250,7 @@ async function tryRetryCodexProviderError(
 	runtime.sawTerminalEvent = false;
 	resetOutputState(context.output);
 	context.firstTokenTime = undefined;
-	await abortableSleep(CODEX_RETRY_DELAY_MS * runtime.providerRetryAttempt, context.requestSetup.requestSignal);
+	await abortableSleep(codexExponentialBackoffMs(runtime.providerRetryAttempt), context.requestSetup.requestSignal);
 
 	if (runtime.transport === "websocket" && websocketState) {
 		await reopenCodexWebSocketRuntimeStream(context, runtime, websocketState);
@@ -1990,6 +1991,12 @@ function logCodexDebug(message: string, details?: Record<string, unknown>): void
 	logger.debug(`[codex] ${message}`, details ?? {});
 }
 
+/** Exponential backoff with full jitter, capped at CODEX_RETRY_MAX_DELAY_MS. `attempt` is 1-indexed. */
+function codexExponentialBackoffMs(attempt: number): number {
+	const exp = Math.min(CODEX_RETRY_DELAY_MS * 2 ** Math.max(0, attempt - 1), CODEX_RETRY_MAX_DELAY_MS);
+	return Math.round(exp * (0.5 + Math.random() * 0.5));
+}
+
 function getRetryDelayMs(
 	response: Response | null,
 	attempt: number,
@@ -2018,7 +2025,7 @@ function getRetryDelayMs(
 			if (Number.isFinite(seconds)) return { delay: Math.max(seconds * 1000, 100), serverProvided: true };
 		}
 	}
-	return { delay: CODEX_RETRY_DELAY_MS * (attempt + 1), serverProvided: false };
+	return { delay: codexExponentialBackoffMs(attempt + 1), serverProvided: false };
 }
 
 async function fetchWithRetry(url: string, init: RequestInit, signal?: AbortSignal): Promise<Response> {
@@ -2046,7 +2053,7 @@ async function fetchWithRetry(url: string, init: RequestInit, signal?: AbortSign
 			if (attempt >= CODEX_MAX_RETRIES || signal?.aborted) {
 				throw error;
 			}
-			const delay = CODEX_RETRY_DELAY_MS * (attempt + 1);
+			const delay = codexExponentialBackoffMs(attempt + 1);
 			await abortableSleep(delay, signal);
 		}
 		attempt += 1;

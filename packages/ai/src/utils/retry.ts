@@ -8,7 +8,7 @@ type ErrorLike = {
 };
 
 const TRANSIENT_MESSAGE_PATTERN =
-	/overloaded|rate.?limit|usage.?limit|too many requests|service.?unavailable|server error|internal error|connection.?error|unable to connect|fetch failed|stream stall/i;
+	/overloaded|rate.?limit|usage.?limit|too many requests|service.?unavailable|server[ _]?error|internal[ _]?error|model[ _]?error|connection.?error|unable to connect|fetch failed|stream stall|econnreset|etimedout|eai_again|socket hang up|temporar(?:y|ily)|please retry|processing your request|retry your request/i;
 
 const VALIDATION_MESSAGE_PATTERN =
 	/invalid|validation|bad request|unsupported|schema|missing required|not found|unauthorized|forbidden/i;
@@ -78,6 +78,7 @@ function extractStatusFromMessage(message: string): number | undefined {
 		/status\s*[:=]?\s*(\d{3})/i,
 		/\bhttp\s*(\d{3})\b/i,
 		/\b(\d{3})\s*(?:status|error)\b/i,
+		/\berror\s*[:#]?\s*(\d{3})\b/i,
 	];
 
 	for (const pattern of patterns) {

@@ -1,0 +1,136 @@
+#+TITLE: Session retry backstop misses retryable Codex/network errors (server_error, 408, ECONNRESET, …)
+#+STATE: DONE
+#+SESSION_ID: 1523f094f055bf9e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-07-05T13-52-10-177Z_1523f094f055bf9e.jsonl]]
+#+CUSTOM_ID: BUG-493-session-retry-backstop-misses-retryable
+#+COMPLETION_HASH: ebc297d74e7c25c2
+
+* Initial Message
+
+""""
+Error: Codex error event: An error occurred while processing your
+ request. You can retry your request, or contact us through our
+ help center at help.openai.com if the error persists. Please
+ include the request ID 4c5a67ac-7cc9-4e41-a6db-28e82c9f72cd in
+ your message. (code=server_error)
+""""
+
+This kind of error should be retried. All errors that aren't authentication or user-stuff (like the 40*) should have exponential backoff. Investigate and tell me which errors should be retried that aren't retried today
+
+## Symptom
+
+User-facing failure, not retried:
+
+```
+Codex error event: An error occurred while processing your request. You can
+retry your request, or contact us through our help center at help.openai.com
+if the error persists. Please include the request ID
+4c5a67ac-7cc9-4e41-a6db-28e82c9f72cd in your message. (code=server_error)
+```
+
+Expectation (user + repo convention): all transient/server-side errors (5xx,
+408, 429, connection resets, provider-declared transient codes) should be
+retried with exponential backoff. Only auth (401/403) and other 4xx
+user-input errors should NOT retry.
+
+## Root cause
+
+Three independent "is this retryable?" classifiers exist and have drifted:
+
+1. `packages/ai/src/utils/retry.ts::isRetryableError` — status-aware (retries
+   ≥500, 408, 429; blocks 4xx via `VALIDATION_MESSAGE_PATTERN`). This is the
+   *correct* semantics per the user's stated rule. **Exported but has zero
+   runtime consumers — dead code.**
+2. `packages/ai/src/providers/openai-codex-responses.ts` —
+   `CODEX_RETRYABLE_EVENT_CODES = {model_error, server_error, internal_error}`
+   + `CODEX_RETRYABLE_EVENT_MESSAGE` regex. Correctly classifies the reported
+   error as retryable, but only runs in-stream, gated off by
+   `context.output.content.length > 0` (any partial content already emitted
+   → no retry) and a 5-attempt cap (`CODEX_MAX_RETRIES`). Backoff here is
+   **linear** (`CODEX_RETRY_DELAY_MS * attempt`), not exponential.
+3. `packages/coding-agent/src/session/agent-session.ts` —
+   `#isRetryableErrorMessage` + `isProviderRetryableError` (from
+   `providers/anthropic.ts`). This is the **final backstop** once the
+   provider layer gives up / rethrows as a `stopReason:"error"` assistant
+   message. It is pure phrase-regex and is the weakest of the three — it
+   does NOT match the reported error.
+
+Verified empirically (node repro against the exact reported string):
+
+```
+PROVIDER code=server_error retryable: true
+PROVIDER msg regex match: true
+SESSION  #isRetryableErrorMessage match: false   ← backstop says NO
+SESSION  isProviderRetryableError match: false
+utils/retry TRANSIENT match: false (also misses it, missing "server_error" code token)
+```
+
+∴ Provider layer knows this is transient; the session backstop (which is
+what actually gates the user-visible retry loop after provider retries are
+exhausted or content had started streaming) does not, so the retry chain
+never starts and the raw error reaches the user.
+
+## Confirmed retryable-but-not-retried cases (session backstop)
+
+Tested via live regex extraction, session layer (`#isRetryableErrorMessage`
+∨ `isProviderRetryableError`):
+
+| error | retried today | should retry |
+|---|---|---|
+| `code=server_error` + "processing your request" (reported case) | ✗ | ✓ |
+| `code=model_error` | ✗ | ✓ |
+| "Please retry your request" / "temporarily unavailable" | ✗ | ✓ |
+| HTTP 408 (request timeout) | ✗ | ✓ |
+| HTTP 520/522/524 (Cloudflare edge) | ✗ | ✓ |
+| HTTP 529 (Anthropic overloaded, bare status w/o other keywords) | ✗ | ✓ |
+| `ECONNRESET` / `socket hang up` | ✗ | ✓ |
+| `ETIMEDOUT` / `EAI_AGAIN` (DNS) | ✗ | ✓ |
+
+429/500/502/503/504/"overloaded"/"rate limit" etc. already work correctly —
+do not regress those.
+
+4xx user errors (401/403/400/404/422) must remain non-retryable — preserve
+`VALIDATION_MESSAGE_PATTERN`-equivalent blocking.
+
+## Fix direction (agreed)
+
+1. Consolidate: make the session backstop (`#isRetryableErrorMessage`)
+   delegate to `packages/ai/src/utils/retry.ts::isRetryableError` (status
+   extraction) as the primary check, keeping today's phrase-regex as a
+   secondary fallback (don't lose existing matches).
+2. Extend the retryable token set (session + central classifier as
+   appropriate) to cover: `server_error`, `model_error`, `internal_error`,
+   `408`, `520`, `522`, `524`, `529`, `ECONNRESET`, `ETIMEDOUT`, `EAI_AGAIN`,
+   `socket hang up`, `please retry|processing your request|temporar(y|ily)`.
+3. Keep 401/403/400/404/422 non-retryable — do not weaken
+   `VALIDATION_MESSAGE_PATTERN` blocking semantics.
+4. (Secondary, lower priority) provider-layer Codex in-stream retry backoff
+   is linear (`CODEX_RETRY_DELAY_MS * attempt`) vs. session's exponential
+   (`baseDelayMs * 2^attempt`) — align to exponential + jitter for
+   consistency. Not the cause of this incident (session backstop gap is),
+   but worth fixing alongside.
+5. Add a regression test asserting the exact reported error string
+   (`"Codex error event: An error occurred while processing your request. …
+   (code=server_error)"`) is classified retryable by the session-level
+   classifier.
+
+## Files
+
+- `packages/ai/src/utils/retry.ts` (status-aware classifier, currently dead code — wire it in)
+- `packages/ai/src/providers/openai-codex-responses.ts` (`CODEX_RETRYABLE_EVENT_CODES`, `CODEX_RETRYABLE_EVENT_MESSAGE`, `CODEX_RETRY_DELAY_MS` linear backoff)
+- `packages/ai/src/providers/anthropic.ts` (`isProviderRetryableError` — used cross-provider by session as fallback)
+- `packages/coding-agent/src/session/agent-session.ts` (`#isRetryableError`, `#isRetryableErrorMessage`, `#isRateLimitOrOverloadErrorMessage`, `#handleRetryableError`)
+- Regression test target: wherever `agent-session` retry classification is unit-tested today (search `#isRetryableErrorMessage` / `isRetryableAssistantStreamError` test coverage).
+
+## Non-goals
+
+- Not touching context-overflow/compaction path (`isContextOverflow` short-circuit stays as-is).
+- Not touching usage-limit / rate-limit account-rotation logic (`#isRateLimitOrOverloadErrorMessage`, `markUsageLimitReached`) beyond ensuring 529 bare-status also satisfies the main retry gate.
+
+NOTE [2026-07-05]: Fixed. Changes:
+- packages/ai/src/utils/retry.ts: extended TRANSIENT_MESSAGE_PATTERN (server_error/model_error/internal_error codes, ECONNRESET/ETIMEDOUT/EAI_AGAIN/socket hang up, temporarily/please retry/processing your request wording) + added error-prefixed status extraction pattern (fixes bare `529`/`524` etc without other keywords).
+- packages/coding-agent/src/session/agent-session.ts: #isRetryableErrorMessage now delegates to isRetryableError (aliased isRetryableProviderErrorLike) as primary check before the existing phrase-regex fallback — this is the actual fix for the reported incident (session backstop was the layer that dropped the error).
+- packages/ai/src/providers/openai-codex-responses.ts: replaced linear backoff (CODEX_RETRY_DELAY_MS * attempt) with codexExponentialBackoffMs() (exponential + full jitter, capped at 8s) at all 3 in-stream/HTTP retry call sites.
+- Regression tests added: packages/ai/test/retry-classification.test.ts (unit, pins exact reported string + gap table + 4xx non-retry), packages/coding-agent/test/agent-session-retry-codex-server-error.test.ts (session-level, asserts auto_retry_start fires for the incident + does not fire for 401).
+
+Verified: new tests pass (11/11), existing retry suites unaffected (agent-session-infinite-retry, agent-session-retry-orphan, agent-session-stream-stall-retry, anthropic-retry, openai-codex* — all pass except one pre-existing unrelated timeout flake in openai-codex-stream.test.ts, confirmed via clean-HEAD worktree to predate this change). No new typecheck errors in touched files (tsgo on packages/ai and packages/coding-agent).

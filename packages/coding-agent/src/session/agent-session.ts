@@ -47,6 +47,7 @@ import {
 	getSupportedEfforts,
 	isContextOverflow,
 	isProviderRetryableError,
+	isRetryableError as isRetryableProviderErrorLike,
 	modelsAreEqual,
 	parseRateLimitReason,
 	systemPromptText,
@@ -4817,6 +4818,11 @@ export class AgentSession {
 	}
 
 	#isRetryableErrorMessage(errorMessage: string): boolean {
+		// Status-aware, code/syscall-aware classifier (shared with the non-stream retry paths):
+		// retries 5xx/408/429, blocks other 4xx (401/403/400/404/422), and recognizes provider
+		// transient codes (server_error/model_error/internal_error), OS-level connection resets
+		// (ECONNRESET/ETIMEDOUT/EAI_AGAIN/socket hang up), and "please retry/temporarily" wording.
+		if (isRetryableProviderErrorLike(new Error(errorMessage))) return true;
 		// Session-owned transient classes: overloaded_error, rate limit, usage limit, 429,
 		// 500, 502, 503, 504, service unavailable, connection error, fetch failed, retry
 		// delay exceeded, stream stall.
