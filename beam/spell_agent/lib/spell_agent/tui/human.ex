@@ -118,7 +118,10 @@ defmodule SpellAgent.Tui.Human do
     case strget(args, "id") do
       id when is_binary(id) and id != "" ->
         if SessionRegistry.live?(id) do
-          SessionRegistry.register(id, %{owner: :human})
+          # Re-parent IN PLACE (review Sβ P2): set_owner/3 changes lineage only,
+          # preserving the session's monitored pid — register/2 would re-monitor
+          # THIS (TUI/PTC) process and leave the real child unmonitored.
+          SessionRegistry.set_owner(id, :human, nil)
           %{"ok" => true, "id" => id}
         else
           %{"err" => "human/adopt: unknown session #{id}"}

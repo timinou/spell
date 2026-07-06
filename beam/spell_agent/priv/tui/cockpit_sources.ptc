@@ -16,6 +16,10 @@
 ;; registers it as the `sessions` source. A missing/malformed file falls back to
 ;; the compiled Elixir producer (never-brick — the body keeps a floor).
 
+;; BOUND the grid (review Sβ P2): take at most 12 sessions BEFORE tracing each
+;; — the old Elixir Cockpit.sessions/1 capped at @max_sessions before decorating.
+;; session-registry/lineage has no cap, so without `take` a reproject would call
+;; hist/trace-summary for every live session and build an unbounded card set.
 (data-source/register
   {:name "sessions"
    :program
@@ -23,4 +27,4 @@
      (map
        (fn [s]
          (merge s (tool/hist/trace-summary {:id (get s "id")})))
-       (tool/session-registry/lineage)))})
+       (take 12 (tool/session-registry/lineage))))})

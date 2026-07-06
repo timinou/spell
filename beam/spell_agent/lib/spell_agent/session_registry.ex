@@ -106,6 +106,22 @@ defmodule SpellAgent.SessionRegistry do
   end
 
   @doc """
+  Re-parent a live session's OWNER in place (PLAN-027 M6, review Sβ P2) —
+  changing only the `:owner`/`:parent_id` lineage fields while PRESERVING the
+  existing monitored pid + ref.
+
+  This is what `human/adopt` needs: `register/2` would re-monitor the CALLING
+  process (the TUI/PTC process, not the running child), so the registry would
+  stop watching the real session and a stale row would survive its exit. This
+  update touches lineage only; the monitor is untouched, so liveness stays
+  correct. Best-effort: unknown id / absent registry is a no-op.
+  """
+  @spec set_owner(String.t(), :human | {:session, String.t()}, String.t() | nil) :: :ok
+  def set_owner(session_id, owner, parent_id \\ nil) when is_binary(session_id) do
+    call_if_up({:set_owner, session_id, owner, parent_id})
+  end
+
+  @doc """
   The sessions running right now, newest-started first.
 
   Returns `[]` when the registry isn't running (headless test / not yet started),
@@ -207,6 +223,20 @@ defmodule SpellAgent.SessionRegistry do
 
   def handle_call({:finish, session_id}, _from, state) do
     {:reply, :ok, drop(state, session_id)}
+  end
+
+  def handle_call({:set_owner, session_id, owner, parent_id}, _from, state) do
+    # Update ONLY the lineage fields on an existing entry — pid + ref (the
+    # monitor) are preserved, so re-parenting never re-monitors the caller
+    # (review Sβ P2). Unknown id is a no-op.
+    case Map.get(state, session_id) do
+      %{} = entry ->
+        updated = %{entry | owner: owner, parent_id: parent_id}
+        {:reply, :ok, Map.put(state, session_id, updated)}
+
+      _ ->
+        {:reply, :ok, state}
+    end
   end
 
   def handle_call(:live, _from, state) do

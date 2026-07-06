@@ -44,6 +44,28 @@ defmodule SpellAgent.SessionRegistryTest do
     send(owner, :stop)
   end
 
+  test "set_owner re-parents lineage in place, PRESERVING the monitored pid (PLAN-027 M6)" do
+    owner = spawn_owner("t_adopt", %{prompt: "child work", owner: {:session, "parent-x"}, parent_id: "parent-x"})
+
+    # Re-parent to :human WITHOUT re-registering (which would re-monitor the
+    # caller, not `owner`). The pid must stay the original session pid.
+    :ok = Reg.set_owner("t_adopt", :human, nil)
+
+    entry = Enum.find(Reg.live(), &(&1.session_id == "t_adopt"))
+    assert entry.owner == :human
+    assert entry.parent_id == nil
+    # The monitored pid is UNCHANGED (still the real session owner, not self()).
+    assert entry.pid == owner
+    refute entry.pid == self()
+
+    send(owner, :stop)
+  end
+
+  test "set_owner on an unknown session is a no-op" do
+    assert Reg.set_owner("never_registered", :human, nil) == :ok
+    refute Reg.live?("never_registered")
+  end
+
   test "finish removes a live session" do
     owner = spawn_owner("t_finish", %{})
     assert Reg.live?("t_finish")

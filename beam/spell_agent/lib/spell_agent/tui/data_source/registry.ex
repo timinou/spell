@@ -122,14 +122,29 @@ defmodule SpellAgent.Tui.DataSource.Registry do
   end
 
   # A persisted blob is a `%{name => codec_data}` map of frozen programs. Restore
-  # each as a `{:frozen, program}` producer. A non-map blob is rejected (-> %{}).
+  # each as a `{:frozen, program}` producer, BUT enforce the SAME bounds
+  # `register/2` does (review Sβ P2): only BINARY names, and at most
+  # `@max_sources` entries — a corrupt/stale blob must not bypass the source cap
+  # (which would make every reproject iterate unbounded producers). An oversized
+  # or malformed blob is rejected by `valid_persisted?/1` before we get here; this
+  # additionally drops any non-binary-keyed entry defensively.
   defp restore_frozen(blob) when is_map(blob) do
-    Map.new(blob, fn {name, program} -> {name, {:frozen, program}} end)
+    blob
+    |> Enum.filter(fn {name, _program} -> is_binary(name) end)
+    |> Enum.take(@max_sources)
+    |> Map.new(fn {name, program} -> {name, {:frozen, program}} end)
   end
 
   defp restore_frozen(_), do: %{}
 
-  defp valid_persisted?(blob), do: is_map(blob)
+  # A persisted blob is valid only when it is a map within the source cap whose
+  # keys are all binary names. An oversized blob (> @max_sources) is REJECTED (->
+  # fall back to empty) rather than silently truncated, so a corrupt durability
+  # payload can never disable the bound — the never-brick + bounds invariant.
+  defp valid_persisted?(blob) do
+    is_map(blob) and map_size(blob) <= @max_sources and
+      Enum.all?(Map.keys(blob), &is_binary/1)
+  end
 
   @doc """
   Register (or replace) the producer for `name` — the periphery policy call that
@@ -272,12 +287,21 @@ defmodule SpellAgent.Tui.DataSource.Registry do
   @spec enable_durability(keyword()) :: :ok
   def enable_durability(opts \\ []) do
     store = Keyword.get(opts, :store, Durable.default_store())
+    # `rehydrate: false` (the `--fresh` launch) turns durability ON — so THIS
+    # session's mutations persist — WITHOUT adopting the previously persisted
+    # blob (this launch starts native). The persisted blob is left intact for a
+    # later non-fresh launch. Default true (adopt persisted sources).
+    rehydrate? = Keyword.get(opts, :rehydrate, true)
 
     if agent_up?() do
       Agent.update(__MODULE__, fn st ->
         restored =
-          Durable.rehydrate(store, {@durable_kind, @durable_name}, %{}, &valid_persisted?/1)
-          |> restore_frozen()
+          if rehydrate? do
+            Durable.rehydrate(store, {@durable_kind, @durable_name}, %{}, &valid_persisted?/1)
+            |> restore_frozen()
+          else
+            %{}
+          end
 
         # Merge restored frozen sources OVER the current (so a boot-registered
         # closure for the same name is replaced by its durable frozen version).

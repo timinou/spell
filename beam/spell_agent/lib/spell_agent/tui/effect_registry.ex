@@ -133,7 +133,15 @@ defmodule SpellAgent.Tui.EffectRegistry do
   @doc "The entry for `name`, or nil. Best-effort (nil when the registry is down)."
   @spec lookup(String.t()) :: entry() | nil
   def lookup(name) when is_binary(name) do
+    # TOCTOU guard (review Sβ P2): `agent_up?()` then `Agent.get/2` — if the
+    # registry exits BETWEEN them while a reaction-returned effect is being
+    # interpreted, `Agent.get/2` exits. This must degrade to nil (→ no-op effect),
+    # never propagate into the input path.
     if agent_up?(), do: Agent.get(__MODULE__, &Map.get(&1, name)), else: nil
+  rescue
+    _ -> nil
+  catch
+    _, _ -> nil
   end
 
   def lookup(_), do: nil

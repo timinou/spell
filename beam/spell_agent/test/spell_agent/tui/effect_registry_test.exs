@@ -100,6 +100,14 @@ defmodule SpellAgent.Tui.EffectRegistryTest do
       assert {:gaze, %Ui{}} = Ptc.run_effectful(src, ui, %{})
     end
 
+    test "SOLE-KEY: a gaze map with a STRAY __effect__ key does NOT fire the effect (review Sβ P2)", %{ui: ui} do
+      # A normal gaze return (sets focus) that ALSO carries an __effect__ key must
+      # be treated as a GAZE, not silently execute the effect — looking never acts
+      # by accident. Only a PURE {__effect__ [args]} envelope is an effect.
+      src = ~s|{"focus" "tree" "__effect__" "ui/set-flag"}|
+      assert {:gaze, %Ui{focus: :tree}} = Ptc.run_effectful(src, ui, %{})
+    end
+
     test "the Ui-only run/5 wrapper IGNORES an effect return (pre-M5 contract preserved)", %{ui: ui} do
       src = ~s|{"__effect__" "cockpit/drill"}|
       # run/5 must still return a %Ui{} (the unchanged gaze), never the effect.

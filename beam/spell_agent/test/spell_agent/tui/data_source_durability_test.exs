@@ -64,6 +64,25 @@ defmodule SpellAgent.Tui.DataSourceDurabilityTest do
       assert Agent.get(r, & &1.sources) == %{}
       Agent.stop(r)
     end
+
+    test "an OVERSIZED persisted blob (> cap) is REJECTED, not truncated (review Sβ P2)" do
+      # A corrupt/stale blob with more than @max_sources (32) entries must fall
+      # back to EMPTY rather than adopt an unbounded set that bypasses the cap.
+      big = for i <- 1..40, into: %{}, do: {"s#{i}", %{"node" => "sym", "value" => "x"}}
+      Durable.persist(Memory, {@kind, @name}, big)
+
+      {:ok, r} = Registry.start_link(durable: true, store: Memory, name: nil)
+      assert Agent.get(r, & &1.sources) == %{}
+      Agent.stop(r)
+    end
+
+    test "a blob with non-binary keys is rejected (review Sβ P2)" do
+      Durable.persist(Memory, {@kind, @name}, %{1 => %{"node" => "sym"}})
+
+      {:ok, r} = Registry.start_link(durable: true, store: Memory, name: nil)
+      assert Agent.get(r, & &1.sources) == %{}
+      Agent.stop(r)
+    end
   end
 
   describe "Registry.Durable helper contract" do

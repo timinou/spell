@@ -112,14 +112,26 @@ defmodule SpellAgent.Tui.Reaction.Ptc do
   # a non-empty string, and `"args"` (if present) a map — else it is treated as
   # ordinary gaze data (a reaction can't accidentally trip the effect path with a
   # stray key, and a malformed envelope degrades to a gaze, never a bad effect).
-  defp classify(%{@effect_key => name} = env, _ui) when is_binary(name) and name != "" do
-    args =
-      case Map.get(env, "args") do
-        m when is_map(m) -> m
-        _ -> %{}
-      end
+  defp classify(%{@effect_key => name} = env, ui) when is_binary(name) and name != "" do
+    # SOLE-KEY discipline (review Sβ P2): an effect envelope carries ONLY the
+    # effect fields — `"__effect__"` and (optionally) `"args"`. If the map also
+    # holds ordinary gaze keys, it is NOT an effect: a normal gaze return that
+    # happens to carry a stray `"__effect__"` must NOT silently fire an action.
+    # Treat only the pure envelope as an effect; anything else rehydrates to a
+    # gaze (the safe default — looking never acts by accident).
+    allowed = [@effect_key, "args"]
 
-    {:effect, name, args}
+    if env |> Map.keys() |> Enum.all?(&(&1 in allowed)) do
+      args =
+        case Map.get(env, "args") do
+          m when is_map(m) -> m
+          _ -> %{}
+        end
+
+      {:effect, name, args}
+    else
+      {:gaze, rehydrate(env, ui)}
+    end
   end
 
   defp classify(other, ui), do: {:gaze, rehydrate(other, ui)}

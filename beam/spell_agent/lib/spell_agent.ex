@@ -111,9 +111,21 @@ defmodule SpellAgent do
       rehydrate? = not Keyword.get(opts, :fresh, false)
       SpellAgent.Tui.LayoutRegistry.enable_durability(rehydrate: rehydrate?)
       SpellAgent.Tui.KeymapRegistry.enable_durability(rehydrate: rehydrate?)
+      # PLAN-027 M7 (review Sβ P2): the DataSource registry joins the durable
+      # launch — so agent-authored `data-source/register` frozen programs persist
+      # across launches, not just layout/keymap. `fresh: true` starts native
+      # (rehydrate suppressed) but still persists this session's mutations.
+      maybe_enable_data_source_durability(rehydrate?)
     end
 
     :ok
+  end
+
+  # Flip DataSource durability on the live singleton, honoring `--fresh`
+  # (rehydrate? false = enable persistence but start native, leaving the
+  # persisted blob intact for a later non-fresh launch). Best-effort.
+  defp maybe_enable_data_source_durability(rehydrate?) do
+    SpellAgent.Tui.DataSource.Registry.enable_durability(rehydrate: rehydrate?)
   end
 
   # The trace dump writes one file per recorded session to `~/.spell/traces/`

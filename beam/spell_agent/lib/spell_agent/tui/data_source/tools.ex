@@ -52,6 +52,11 @@ defmodule SpellAgent.Tui.DataSource.Tools do
   # (mirrors Cockpit's @snapshot_turns; the drill-in shows the full inspector).
   @summary_turns 3
 
+  # Hard cap on the lineage rows a producer receives (review Sβ P2): defense in
+  # depth so a source doesn't have to REMEMBER to `take` — the body bounds the
+  # cross-session read at the primitive. Mirrors Cockpit's @max_sessions.
+  @max_lineage 12
+
   # Fail-closed allowlist of read-only verbs a data-source producer may call.
   # Adding a new read verb means adding it HERE (deliberate; inert until vetted).
   @source_verbs MapSet.new(~w(
@@ -130,6 +135,7 @@ defmodule SpellAgent.Tui.DataSource.Tools do
   # "session:parent") so the producer sees plain strings.
   defp lineage do
     SessionRegistry.lineage()
+    |> Enum.take(@max_lineage)
     |> Enum.map(fn row ->
       %{
         "id" => Map.get(row, :session_id),
