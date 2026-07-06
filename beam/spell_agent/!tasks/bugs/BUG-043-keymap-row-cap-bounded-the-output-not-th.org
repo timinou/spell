@@ -1,0 +1,18 @@
+#+TITLE: Keymap row cap bounded the output, not the work, on a live keymap.bind flood
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: BUG-043-keymap-row-cap-bounded-the-output-not-th
+
+* Initial Message
+
+did you file a BUG about that?
+
+* Summary
+`KeymapIntrospect.rows/0` applied `Enum.take(@max_rows)` AFTER every context had been expanded, every live binding read, sorted, and deduped. `KeymapRegistry.bind/3` has no ceiling on distinct live chords per context, so a runaway `keymap/bind` loop could force every reproject/help/palette/hint reflection to build, sort, and dedup an unbounded number of rows before the cap ever applied — the advertised bound protected the OUTPUT, not the computation.
+
+* Fix (LANDED)
+`context_rows/1` now caps live bindings PER CONTEXT (`Enum.take(@max_rows)`) BEFORE the sort/map/reject work runs, not just at the final `rows/0` output. No well-behaved registry's observable output changes; only a hostile one's cost is bounded.
+
+* Note
+This is a defense-in-depth hardening (no test forces a live flood in this pass — doing so would require simulating thousands of `KeymapRegistry.bind/3` calls, which is expensive to assert cheaply in a unit test). Tracked here so the fix is recorded even without a dedicated flood test; worth a follow-up if `KeymapRegistry` itself ever gains a bind-count cap.

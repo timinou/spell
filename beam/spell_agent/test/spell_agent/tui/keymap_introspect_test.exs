@@ -16,6 +16,14 @@ defmodule SpellAgent.Tui.KeymapIntrospectTest do
 
   setup do
     KeymapRegistry.reset()
+
+    on_exit(fn ->
+      case Process.whereis(SpellAgent.Tui.PaneContext) do
+        nil -> :ok
+        _ -> SpellAgent.Tui.PaneContext.reset()
+      end
+    end)
+
     :ok
   end
 
@@ -93,6 +101,48 @@ defmodule SpellAgent.Tui.KeymapIntrospectTest do
 
     test "a non-binary intent yields an empty label (total)" do
       assert KeymapIntrospect.label_for(nil) == ""
+    end
+  end
+
+  describe "compiled_contexts/0 — reflects PaneContext.all/0, not a hand-list (the audit fix)" do
+    test "a context registered ONLY via PaneContext (no compiled-list entry) is discoverable" do
+      case Process.whereis(SpellAgent.Tui.PaneContext) do
+        nil ->
+          :ok
+
+        _ ->
+          SpellAgent.Tui.PaneContext.reset()
+          # Register a real compiled context module under a NOVEL focus atom —
+          # simulating a runtime-declared pane whose context was never on the
+          # old hand-written @compiled_contexts list.
+          SpellAgent.Tui.PaneContext.register(:a_runtime_declared_pane, SpellAgent.Tui.Keymap.TurnNav)
+
+          assert SpellAgent.Tui.Keymap.TurnNav in KeymapIntrospect.compiled_contexts()
+      end
+    end
+
+    test "is total when PaneContext is down: falls back to the native floor" do
+      # This IS the down-registry path every unit test exercises (PaneContext is
+      # not started in this test process) — assert the floor still includes the
+      # built-in panes so headless callers never see an empty reflection.
+      contexts = KeymapIntrospect.compiled_contexts()
+      assert SpellAgent.Tui.Panes.SpanTree in contexts
+      assert SpellAgent.Tui.Keymap.Global in contexts
+    end
+  end
+
+  describe "the C-r emergency reset never lies (the audit's Manipura fix)" do
+    test "a live rebind of C-r under :global does NOT change the reflected row's intent" do
+      KeymapRegistry.bind(:global, Chord.parse("C-r"), :"some/other-intent")
+
+      row =
+        KeymapIntrospect.rows()
+        |> Enum.find(&(&1["context"] == "global" and &1["chord"] == "C-r"))
+
+      # Pinned to the TRUE, unoverridable behavior (App.handle_event/2 hardcodes
+      # C-r as reset BEFORE the resolver ever runs) — never the live rebind that
+      # a real keystroke can never actually trigger.
+      assert row["intent"] == "app/reset-layout"
     end
   end
 

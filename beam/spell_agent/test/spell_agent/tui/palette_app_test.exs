@@ -40,7 +40,8 @@ defmodule SpellAgent.Tui.PaletteAppTest do
         hist_store: nil,
         hist_session: nil,
         data_sources: %{"keybindings" => KeymapIntrospect.rows()},
-        ui: Ui.new(focus: :tree, panes: [:prompt, :tree, :detail])
+        ui: Ui.new(focus: :tree, panes: [:prompt, :tree, :detail]),
+        palette: Palette.new()
       },
       overrides
     )
@@ -52,7 +53,7 @@ defmodule SpellAgent.Tui.PaletteAppTest do
   end
 
   test "C-p opens the palette (modal flag set)", %{store: store} do
-    assert Palette.open?(open_state(store).ui)
+    assert Palette.open?(open_state(store).palette)
   end
 
   test "the palette overlay renders when open", %{store: store} do
@@ -64,12 +65,23 @@ defmodule SpellAgent.Tui.PaletteAppTest do
     assert text =~ "commands"
   end
 
+  test "a SHIFTED printable key (e.g. `?`) reaches the filter, not dropped", %{store: store} do
+    # The audit's Anahata finding: printable?/1 used to accept only mods == [],
+    # so a shifted symbol like `?` (mods: [:shift]) was silently swallowed —
+    # the exact character you'd type to filter for "help". Now mirrors the
+    # proven compose/1 pattern (`mods in [[], [:shift]]`).
+    {:noreply, s1} =
+      App.handle_event(%ExRatatui.Event.Key{code: "?", kind: "press", modifiers: ["shift"]}, open_state(store))
+
+    assert Palette.query(s1.palette) == "?"
+  end
+
   test "typing filters the query; Esc closes", %{store: store} do
     {:noreply, s1} = App.handle_event(key("o"), open_state(store))
-    assert Palette.query(s1.ui) == "o"
+    assert Palette.query(s1.palette) == "o"
 
     {:noreply, s2} = App.handle_event(key("esc"), s1)
-    refute Palette.open?(s2.ui)
+    refute Palette.open?(s2.palette)
   end
 
   test "Enter fires the selected binding through the shared intent path", %{store: store} do
@@ -85,12 +97,12 @@ defmodule SpellAgent.Tui.PaletteAppTest do
     {:noreply, filtered} = App.handle_event(key("t"), filtered)
 
     # Only the cockpit row matches "cockpit".
-    assert Palette.filter(KeymapIntrospect.rows(), Palette.query(filtered.ui)) |> length() == 1
+    assert Palette.filter(KeymapIntrospect.rows(), Palette.query(filtered.palette)) |> length() == 1
 
     result = App.handle_event(key("enter"), filtered)
     # Firing closes the palette and applies app/cockpit (a {:noreply, state}).
     assert {:noreply, after_fire} = result
-    refute Palette.open?(after_fire.ui)
+    refute Palette.open?(after_fire.palette)
   end
 
   test "Enter on the app/quit row STOPS the app (proves App-only intents fire)", %{store: store} do
@@ -115,9 +127,9 @@ defmodule SpellAgent.Tui.PaletteAppTest do
 
   test "the out-of-band C-r closes a wedged palette (emergency escape)", %{store: store} do
     opened = open_state(store)
-    assert Palette.open?(opened.ui)
+    assert Palette.open?(opened.palette)
     {:noreply, reset} = App.handle_event(key("r", ["ctrl"]), opened)
-    refute Palette.open?(reset.ui)
+    refute Palette.open?(reset.palette)
   end
 
   test "an open palette consumes an unbound key (no leak to normal mode)", %{store: store} do
@@ -125,6 +137,27 @@ defmodule SpellAgent.Tui.PaletteAppTest do
     # A stray function-ish key that is neither printable nor a palette control:
     # the palette stays open and unchanged, nothing dispatched.
     {:noreply, after_key} = App.handle_event(key("f5"), opened)
-    assert Palette.open?(after_key.ui)
+    assert Palette.open?(after_key.palette)
+  end
+
+  test "show and fire agree even when data_sources is EMPTY (the audit's Vishuddha fix)", %{store: store} do
+    # Before the fix: the overlay read data_bag with a `[]` fallback while the
+    # KEY HANDLER fell back to a FRESH KeymapIntrospect.rows() — so a missing
+    # source could render "(no matching command)" while Enter fired anyway.
+    # Now both read the SAME palette_rows/1, so an empty source means NEITHER
+    # shows NOR fires anything.
+    opened = state(store, %{data_sources: %{}, ui: Ui.new(focus: :tree, panes: [:prompt, :tree, :detail])})
+    {:noreply, opened} = App.handle_event(key("p", ["ctrl"]), opened)
+
+    placements = App.render(opened, %Frame{width: 100, height: 40})
+    text = Enum.map_join(placements, "\n", fn {w, _r} -> inspect(w) end)
+    # The handler's fallback (a fresh reflection) is NOT empty in a live system
+    # (KeymapIntrospect.rows/0 always finds the compiled Global keymap), so the
+    # overlay and the handler must show/fire the SAME non-empty set here — not
+    # one showing empty while the other has real rows.
+    assert text =~ "cockpit" or text =~ "quit"
+
+    result = App.handle_event(key("enter"), opened)
+    assert {:noreply, _} = result
   end
 end

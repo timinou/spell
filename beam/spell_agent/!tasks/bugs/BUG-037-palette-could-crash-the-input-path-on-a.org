@@ -1,0 +1,25 @@
+#+TITLE: Palette could crash the input path on a malformed live keybindings row
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: BUG-037-palette-could-crash-the-input-path-on-a
+
+* Initial Message
+
+did you file a BUG about that?
+
+* Summary
+Two ways a malformed row in the live `data/keybindings` source (a producer bug or a hostile agent-authored one) could crash the proven input path — reachable ONLY through the palette, never through a real keystroke:
+
+1. `Palette.resolution/2` returned the row's `dispatch-ctx` unchecked. A row like `%{"intent" => "nav/next", "dispatch-ctx" => "tree"}` (a STRING, not a module/atom) would resolve to `{:intent, :"nav/next", "tree"}`; firing it walked into `Keys.context_name/1`, which is `is_atom`-only, raising `FunctionClauseError`.
+2. `Palette.filter/2`'s `haystack/1` called `to_string/1` on row fields unconditionally. A row like `%{"chord" => %{}}` raised `Protocol.UndefinedError` on `to_string(%{})` the instant the palette tried to filter or render it (on every keystroke while open).
+
+* Root cause
+The palette is the first place in this codebase where DATA crosses back into CONTROL FLOW (an intent gets fired). The reflection center (`KeymapIntrospect`) is fully never-brick (rescues, totality) because it only ever PROJECTS. The palette inherited that projection-grade discipline instead of building dispatch-grade discipline for the one boundary where untrusted data chooses what code runs.
+
+* Fix (LANDED)
+- `resolution/2` guards `is_atom(ctx)` before accepting a row's `dispatch-ctx`; a non-atom degrades to `nil` (no fire) instead of reaching `Keys.context_name/1`.
+- `haystack/1` normalizes every field through `str_field/2` (binary passthrough; atom/int stringified; anything else -> `""`) instead of raw `to_string/1` — a row survives filtering with an unmatchable field rather than crashing.
+
+* Verification
+`palette_test.exs`: "a row with a NON-ATOM dispatch-ctx yields nil, not a crash deeper in dispatch"; "a non-string field in a row is normalized, not passed to a crashing to_string/1". Both trigger the real failure shape (a hostile/malformed row), not a mocked assertion.

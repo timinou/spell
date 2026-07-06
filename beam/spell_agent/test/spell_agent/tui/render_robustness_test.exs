@@ -53,7 +53,8 @@ defmodule SpellAgent.Tui.RenderRobustnessTest do
       last_prompt: nil,
       ui: ui,
       hist_session: nil,
-      hist_store: nil
+      hist_store: nil,
+      palette: SpellAgent.Tui.Palette.new()
     }
   end
 

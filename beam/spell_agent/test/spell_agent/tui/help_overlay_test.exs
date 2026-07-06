@@ -33,7 +33,8 @@ defmodule SpellAgent.Tui.HelpOverlayTest do
         result: nil,
         last_prompt: nil,
         pending_leader: false,
-        ui: Ui.new(focus: :tree, panes: [:prompt, :tree, :detail])
+        ui: Ui.new(focus: :tree, panes: [:prompt, :tree, :detail]),
+        palette: SpellAgent.Tui.Palette.new()
       },
       overrides
     )

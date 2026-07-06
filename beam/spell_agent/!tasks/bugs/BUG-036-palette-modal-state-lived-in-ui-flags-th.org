@@ -1,0 +1,24 @@
+#+TITLE: Palette modal state lived in ui.flags — the mind's agent-writable bag, not the body's UI state
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: BUG-036-palette-modal-state-lived-in-ui-flags-th
+
+* Initial Message
+
+did you file a BUG about that?
+
+* Summary
+FEAT-047 W2's command palette held its modal state (open?/query/cursor) in `ui.flags` — the same bounded map a live PTC reaction writes via the `ui/set-flag` effect. `Ui.safe_flags/1` caps that map at 32 entries (an agent-writable-input bound). Because palette writes merged into the FULL flag map before capping, a bag already near 32 entries could have the palette's OWN keys evicted by `Enum.take(32)`, silently leaving the palette un-openable.
+
+* Root cause (category error, not just a missing guard)
+`ui.flags` exists so an agent-authored PTC program can carry NOVEL state across keystrokes (`Reaction.Ptc.rehydrate/2`: ten named gaze fields + `flags` as the ONE extension point). It is capped BECAUSE it is untrusted, agent-writable, adversarial-by-design surface. Palette state is not that — it is trusted, App-owned UI mechanism written only in direct response to a keystroke, exactly like `pending_leader` (which has always been a sibling field on `state`, never inside `Ui`). Putting palette state in the agent's bag meant a cap built to defend against the MIND could evict state owned by the BODY.
+
+* Fix (LANDED)
+`SpellAgent.Tui.Palette` rewritten as a dedicated struct (`%Palette{open?, query, cursor}`), stored at `state.palette` (a sibling of `pending_leader`), never touching `ui.flags`. Bounded by construction (one bool, one length-capped string, one clamped int) instead of by a shared, evictable cap. All 8 call sites in `app.ex` migrated from `state.ui`/`Palette.X(state.ui,...)` to `state.palette`/`Palette.X(state.palette,...)`. Test fixtures across 6 files updated to seed `palette: Palette.new()`.
+
+* How found
+Deep 7-reviewer "chakra" audit of FEAT-047 (Muladhara/Root finding), independently corroborated during a sober walkthrough with the user: "what is eviction FOR" surfaced that palette state was never the kind of thing the cap was meant to constrain.
+
+* Verification
+19 palette unit tests (rewritten for the struct API) + palette_app integration tests green. Full TUI suite 688/690 (the 2 failures are the pre-existing BUG-031 coalescing flakiness under parallelism, confirmed passing in isolation — not a regression).

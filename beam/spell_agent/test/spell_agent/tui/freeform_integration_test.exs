@@ -41,7 +41,8 @@ defmodule SpellAgent.Tui.FreeformIntegrationTest do
         running?: false,
         result: nil,
         last_prompt: nil,
-        ui: Ui.new(focus: :tree, panes: [:tree, :detail])
+        ui: Ui.new(focus: :tree, panes: [:tree, :detail]),
+        palette: SpellAgent.Tui.Palette.new()
       },
       overrides
     )

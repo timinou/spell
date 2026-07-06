@@ -40,9 +40,8 @@ defmodule SpellAgent.Tui.KeymapIntrospect do
   registry can never unbound the render surface.
   """
 
-  alias SpellAgent.Tui.{Chord, KeymapRegistry, Keys}
-  alias SpellAgent.Tui.Keymap.{Global, Prompt, TurnNav}
-  alias SpellAgent.Tui.Panes.{Detail, History, SpanTree}
+  alias SpellAgent.Tui.{Chord, KeymapRegistry, Keys, PaneContext}
+  alias SpellAgent.Tui.Keymap.Global
 
   @typedoc "A flat, string-keyed binding row."
   @type row :: %{optional(String.t()) => term()}
@@ -52,7 +51,23 @@ defmodule SpellAgent.Tui.KeymapIntrospect do
   # most-specific-first cascade). Each is a module exporting `context_name/0` +
   # `keymap/0`. A runtime-declared pane context (a bare atom, no compiled module)
   # is folded in via its LIVE registry bindings below.
-  @compiled_contexts [SpanTree, History, Detail, TurnNav, Prompt, Global]
+  # `Global` is not a per-focus context (it is the fallback layer every stack
+  # resolves through, never itself registered in PaneContext); the per-pane
+  # contexts are REFLECTED from `PaneContext.all/0` (see `compiled_contexts/0`
+  # below) instead of hand-listed here — the audit's Svadhisthana finding: a
+  # hand-maintained module list beside a live registry meant a runtime-declared
+  # pane context could be active for real keystrokes yet invisible to help/
+  # palette/hints. Reflecting `PaneContext.all/0` closes that gap; a context
+  # registered at ANY time (boot or runtime) is discoverable.
+  @global_context Global
+
+  # The NATIVE FLOOR (never-brick fallback only — NOT the primary source): if
+  # `PaneContext` is down or not yet seeded (a headless test, or a render before
+  # `App.mount/1`'s `PaneContext.register_all/1` has run), reflection still needs
+  # SOMETHING. Mirrors `App.@native_pane_contexts` exactly. Once the registry is
+  # up, `compiled_contexts/0` below reflects it and this floor is a UNION
+  # fallback, not a ceiling — a runtime-registered context is never masked by it.
+  @native_floor [SpellAgent.Tui.Panes.SpanTree, SpellAgent.Tui.Panes.History, SpellAgent.Tui.Panes.Detail, SpellAgent.Tui.Keymap.TurnNav, SpellAgent.Tui.Keymap.Prompt]
 
   # Hard cap on reflected rows — defense in depth so the help/palette surface is
   # bounded regardless of how many live bindings a client registered. Generous:
@@ -86,7 +101,7 @@ defmodule SpellAgent.Tui.KeymapIntrospect do
   def rows do
     runtime = runtime_context_names()
 
-    (@compiled_contexts ++ runtime)
+    (compiled_contexts() ++ runtime)
     |> Enum.flat_map(&context_rows/1)
     |> dedup_by_context_chord()
     |> Enum.take(@max_rows)
@@ -101,7 +116,14 @@ defmodule SpellAgent.Tui.KeymapIntrospect do
     name = Keys.context_name(ctx)
 
     compiled = compiled_pairs(ctx)
-    live = live_pairs(name)
+    # Cap live bindings PER CONTEXT before any sort/map/reject work runs — the
+    # audit's Third Eye finding: `Enum.take(@max_rows)` in rows/0 bounded only
+    # the OUTPUT, so an uncapped `keymap/bind` could still force a full sort +
+    # dedup over thousands of live bindings before the cap ever applied. No
+    # single context can contribute more rows than the global cap allows anyway,
+    # so capping the WORK here is free — it changes no observable output for a
+    # well-behaved registry, only the cost of a hostile one.
+    live = name |> live_pairs() |> Enum.take(@max_rows)
     live_by_chord = Map.new(live, fn {chord, intent} -> {Chord.to_string(chord), intent} end)
 
     # Compiled chords first, IN DECLARATION ORDER (so an intent's PRIMARY chord
@@ -110,7 +132,21 @@ defmodule SpellAgent.Tui.KeymapIntrospect do
     compiled_rows =
       Enum.map(compiled, fn {chord, intent} ->
         chord_s = Chord.to_string(chord)
-        row(name, ctx, chord_s, Map.get(live_by_chord, chord_s, intent))
+
+        # C-r under :global is HARDCODED in App.handle_event/2 as the emergency
+        # reset — it short-circuits BEFORE the resolver runs, so no live
+        # `keymap/bind` can ever actually change what the real key does (the
+        # audit's Manipura finding: "the map disagrees with the territory for
+        # exactly one chord"). Pin this ONE row to its true, unoverridable
+        # intent rather than let a live rebind make the reflection lie.
+        effective_intent =
+          if name == :global and chord_s == "C-r" do
+            intent
+          else
+            Map.get(live_by_chord, chord_s, intent)
+          end
+
+        row(name, ctx, chord_s, effective_intent)
       end)
 
     # Then any LIVE-ONLY chord (bound to a chord the compiled keymap does not
@@ -141,9 +177,22 @@ defmodule SpellAgent.Tui.KeymapIntrospect do
 
   def label_for(_), do: ""
 
-  @doc "The compiled contexts reflected (introspection/tests)."
+  @doc """
+  The per-pane context modules reflected right now: `Global` (the always-present
+  fallback layer) plus every module `PaneContext.all/0` reports — UNIONED with
+  the native floor so a headless caller (before `App.mount/1` has seeded the
+  registry) still sees the built-in panes. A context registered at runtime via
+  `PaneContext.register/2` appears here with NO edit to this module.
+  """
   @spec compiled_contexts() :: [module()]
-  def compiled_contexts, do: @compiled_contexts
+  def compiled_contexts do
+    registered = PaneContext.all() |> Map.values() |> Enum.uniq()
+    [@global_context | Enum.uniq(registered ++ @native_floor)]
+  rescue
+    _ -> [@global_context | @native_floor]
+  catch
+    :exit, _ -> [@global_context | @native_floor]
+  end
 
   @doc "The row cap."
   @spec max_rows() :: pos_integer()
@@ -189,11 +238,12 @@ defmodule SpellAgent.Tui.KeymapIntrospect do
   end
 
   # Runtime-declared context names that have LIVE bindings but no compiled module
-  # in @compiled_contexts (a keymap/bind to a fresh context atom). Reflected so a
-  # runtime binding is as discoverable as a compiled one. Best-effort: a down
-  # registry yields no extra contexts.
+  # in `compiled_contexts/0` (a keymap/bind to a fresh context atom with no
+  # PaneContext registration at all). Reflected so a runtime binding is as
+  # discoverable as a compiled one. Best-effort: a down registry yields no extra
+  # contexts.
   defp runtime_context_names do
-    compiled_names = MapSet.new(@compiled_contexts, &Keys.context_name/1)
+    compiled_names = MapSet.new(compiled_contexts(), &Keys.context_name/1)
 
     all_binding_context_names()
     |> Enum.reject(&MapSet.member?(compiled_names, &1))

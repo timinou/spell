@@ -85,16 +85,20 @@ defmodule SpellAgent.Tui.Keymap.Global do
   # data/cells each frame, so there is nothing to sync.
   def react(:"app/toggle-cells", %Ui{} = ui, _forest) do
     open = Map.get(ui.flags, "cells-drawer", false)
-    %{ui | flags: Map.put(ui.flags, "cells-drawer", not open)}
+    # Routed through the safe_flags chokepoint (post-audit hardening): a raw
+    # Map.put could push the bounded 32-entry flag bag to 33 if it was already
+    # full, silently breaking the ONE documented invariant of the bag. Every
+    # flag write goes through the same gate now.
+    %{ui | flags: Ui.safe_flags(Map.put(ui.flags, "cells-drawer", not open)) || ui.flags}
   end
 
   # Toggle the HELP overlay: flip the `help` flag the render overlay reads. The
   # flag is the ONLY state — the cheat-sheet content is derived from
   # data/keybindings each frame (nothing to sync), the same shape as the cells
-  # drawer (FEAT-047).
+  # drawer (FEAT-047). Routed through safe_flags for the same reason as above.
   def react(:"app/help", %Ui{} = ui, _forest) do
     open = Map.get(ui.flags, "help", false)
-    %{ui | flags: Map.put(ui.flags, "help", not open)}
+    %{ui | flags: Ui.safe_flags(Map.put(ui.flags, "help", not open)) || ui.flags}
   end
 
   def react(_intent, %Ui{} = ui, _forest), do: ui

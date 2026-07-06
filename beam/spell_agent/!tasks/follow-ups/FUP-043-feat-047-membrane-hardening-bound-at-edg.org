@@ -1,0 +1,61 @@
+#+TITLE: FEAT-047 membrane hardening: bound-at-edge + normalize-before-trust (chakra audit)
+#+STATE: ITEM
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: FUP-043-feat-047-membrane-hardening-bound-at-edg
+
+* Initial Message
+
+did you file a BUG about that?
+
+* Origin
+A deep seven-reviewer audit of FEAT-047 (keymap-as-data: hint bar, help overlay, command palette), framed as "chakra alignment". PDF: /tmp/chakra/chakra-review.pdf ("where-the-chakras-arent-aligned.pdf"). All 15 findings VERIFIED against real code (not reviewer speculation). Zero criticals; every finding is one of two boundary failures.
+
+* The one seam (both verbs fail at the membrane between trusted-inside and untrusted-live-data)
+- BOUND too late: caps applied AFTER the unbounded work, or AROUND a door that bypasses them.
+- TRUST too early: live-data shape read as if we wrote it, before normalization.
+
+* Findings (severity · locus)
+** Muladhara / Root \u2014 state bounds
+- [P2] palette.ex:188 put_flags/2 \u2014 the 32-entry safe_flags cap can EVICT the palette's own keys (open/append/move merge into the full map, take(32) may drop the modal keys \u2192 palette silently not-open). FIX: reserve palette keys, or drop palette state before capping, or hold palette state in a dedicated App field not ui.flags.
+- [P2] keymap/global.ex:95 react(:"app/help") \u2014 writes ui.flags via raw Map.put, bypassing safe_flags entirely \u2192 can produce a 33-entry map. FIX: route through Ui.safe_flags.
+- [P3] palette.ex:58 query/1 \u2014 reads any binary; the advertised 64-char @max_query is enforced only on append, not on read (another writer, ui/set-flag, only caps bytes). FIX: clamp to @max_query in query/1.
+** Svadhisthana / Sacral \u2014 reflection
+- [P2] keymap_introspect.ex:55 @compiled_contexts \u2014 a HAND-MAINTAINED module list beside the live PaneContext registry (register/2, all/0). A runtime-registered context with a compiled keymap is invisible to help/palette/hints; a live-only chord under it dispatches with a bare atom (skips compiled react/3). This is the exact "reflect, don't hand-list" sin the feature was built to kill, surviving in the corner. FIX: reflect PaneContext.all/0 (+ native floor) instead of the literal list.
+- [P2] keymap_introspect.ex:89 rows/0 \u2014 Enum.take(@max_rows) runs AFTER expanding/sorting/deduping every context + every live binding (keymap/bind is uncapped). FIX: cap per-context / at the registry read before sorting.
+** Manipura / Solar \u2014 will/dispatch
+- [P2] palette.ex:137 resolution/2 \u2014 returns the row's dispatch-ctx unchecked; a live source can emit a STRING ctx (intent atom exists), and Enter \u2192 dispatch_generic \u2192 Keys.context_name/1 (is_atom-only) RAISES FunctionClauseError, bricking the input path from the palette only. FIX: guard resolution to is_atom(ctx) (module or atom), else nil.
+- [P2] keymap_introspect.ex:109 context_rows/1 \u2014 applies live overrides to C-r, but handle_event/2 checks reset_layout_chord? BEFORE the resolver, so a rebound C-r shows/fires the new intent in the palette while the key still resets. One-source-of-truth has a one-chord exception. FIX: reflect the reset short-circuit (mark C-r as reset in the rows), or resolve C-r through the resolver.
+** Anahata / Heart \u2014 input
+- [P2] app.ex:722 printable?/1 \u2014 accepts only mods == []; the proven INSERT compose/1 accepts mods in [[], [:shift]]. Shifted printables (?, !) are SILENTLY DROPPED by the "type to filter" palette. FIX: accept [:shift] like compose/1.
+** Vishuddha / Throat \u2014 render
+- [P2] app.ex:506 palette_rows/1 vs palette_overlay_placements/3 \u2014 on missing/malformed data/keybindings the OVERLAY renders empty (from data_bag) but the KEY HANDLER falls back to a fresh KeymapIntrospect.rows(): shows one list, fires from another. FIX: one shared fallback for both paths.
+- [P2] app.ex:443 help/palette overlays \u2014 presentation (labels/colors/glyphs/copy) welded into Elixir, unlike default_layout.ptc's presentation-as-data. Doctrine-debt. FIX (later): move arrangement/copy to PTC, Elixir as bounded floor.
+** Ajna / Third Eye \u2014 doctrine
+- [P2] keymap_introspect.ex:93 \u2014 (same as Sacral row cap, seen from doctrine): the body must bound the mind's REACH before materializing, not bound the output after.
+- [P2] palette.ex:166 haystack/1 \u2014 filter/2 accepts any map; to_string on a field that a live source made a map (%{"chord" => %{}}) \u2192 Protocol.UndefinedError through the input path on move/resolution. FIX: normalize/guard row fields at the filter boundary.
+** Sahasrara / Crown \u2014 tests
+- [P2] help_overlay_test.exs:58 \u2014 help tested by SETTING the flag, never by pressing ?/C-g (the BUG-035 unreachable-feature failure mode). FIX: add an App.handle_event key transition test.
+- [P2] palette_app_test.exs:91 \u2014 cockpit-fire test asserts only palette-closed; since react(:"app/cockpit") is identity and fire closes before dispatch, a SKIPPED cockpit path still passes. FIX: assert an observable cockpit/layout effect.
+- [P3] palette_app_test.exs:116 + gaps \u2014 never-brick paths claimed not triggered: C-r-when-reset-raises, runtime-atom fire, cursor-clamp-at-fire, safe_intent_atom miss. FIX: force the real failures.
+
+* Disposition
+The center (keymap-as-data, one-source-three-views) is correct and should NOT be reworked. This is a membrane skin-graft: mostly single normalizing helpers at read edges + moving existing caps one line earlier. Recommend a focused hardening wave (BOUND-at-edge + TRUST-after-normalize) picking up the P2s first; the two doctrine-debts (hand-listed contexts, presentation-in-Elixir) can be their own follow-ons.
+
+* Disposition update (hardening wave landed)
+
+8 of the audit's findings are FIXED, verified, and filed as individual BUGs (DONE):
+- BUG-036: palette state moved out of ui.flags into a dedicated state.palette struct (the Muladhara/Root category-error fix — palette state is trusted App-owned UI mechanism, not agent-writable extension data; the real fix was recognizing it never belonged in the eviction-capped bag at all, not raising the cap).
+- BUG-037: malformed dispatch-ctx / row shape from a live source could crash the input path (Manipura + Ajna) \u2014 now guarded/normalized, degrades to no-fire instead of raising.
+- BUG-038: shifted printable keys (?, !) were dropped by the palette filter (Anahata) \u2014 now mirrors compose/1's mods pattern.
+- BUG-039: palette could show one list and fire from another on missing data (Vishuddha) \u2014 unified to one shared row-fallback.
+- BUG-040: two flag writes (help, cells-drawer toggles) bypassed safe_flags (Muladhara) \u2014 routed through the chokepoint.
+- BUG-041: hand-listed context modules beside the live PaneContext registry (Svadhisthana) \u2014 now reflects PaneContext.all/0 with a native-floor fallback.
+- BUG-042: C-r reflection could lie about a live rebind the real key never honors (Manipura) \u2014 pinned to true behavior.
+- BUG-043: row cap bounded output, not the work, on an unbounded keymap/bind (Ajna/Svadhisthana) \u2014 capped per-context before sort/dedup.
+
+Still OPEN (not fixed this pass \u2014 genuinely deferred, not forgotten):
+- Sahasrara/Crown (test-quality): help overlay tested by setting the flag directly rather than pressing ?/C-g; the cockpit-fire palette test can't distinguish a real fire from a no-op (react(:\"app/cockpit\") being identity means a skipped App-intercept would still pass); several never-brick paths (C-r-when-reset-raises, runtime-atom fire, safe_intent_atom miss) are claimed by the commit message but not forced by a test. Recommend a follow-up pass driving these through REAL key events / REAL induced failures rather than direct state construction.
+- Vishuddha doctrine-debt: overlay presentation (help/palette copy, colors, glyphs) is still welded into Elixir (app.ex literals) rather than data/PTC-authored like default_layout.ptc's presentation-as-data. Correctness-neutral, alignment-only; recommend its own small follow-on, not bundled with correctness fixes.
+
+Verification for the landed fixes: 19 palette unit tests (rewritten for the %Palette{} struct API) + palette_app integration tests (incl. new tests for the shifted-key fix and the show/fire-agreement fix) + keymap_introspect tests (incl. new tests for the PaneContext reflection and the C-r pin) all green. Full TUI suite 688/690 (the 2 failures are the pre-existing BUG-031 coalescing flakiness under parallelism, confirmed passing in isolation \u2014 not a regression from this work). mix compile --warnings-as-errors clean.

@@ -1,0 +1,18 @@
+#+TITLE: Keymap reflection hand-listed contexts beside a live PaneContext registry
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: BUG-041-keymap-reflection-hand-listed-contexts-b
+
+* Initial Message
+
+did you file a BUG about that?
+
+* Summary
+`KeymapIntrospect.rows/0` (the reflection feeding the hint bar, help overlay, and command palette) seeded from a literal, hand-written module list (`@compiled_contexts = [SpanTree, History, Detail, TurnNav, Prompt, Global]`) plus whatever context names already had LIVE bindings. But the resolver's real source of truth for which context governs a given focus is `PaneContext` (`register/2`, `all/0`), which exists specifically so a runtime-declared pane can be born after boot. A context registered ONLY via `PaneContext` (no entry in the hand-list) was ACTIVE for real keystrokes yet INVISIBLE to help/palette/hints — exactly the "reflect, don't hand-list" drift FEAT-047 was built to eliminate, recurring at its own boundary.
+
+* Fix (LANDED)
+`compiled_contexts/0` now reflects `PaneContext.all/0` (unioned with a native-floor fallback for the down-registry/headless case, mirroring `App.@native_pane_contexts`). `Global` remains explicit (it is the fallback layer every context stack resolves through, never itself a registered per-focus context). A context registered at runtime is now discoverable with zero edits to this module.
+
+* Verification
+`keymap_introspect_test.exs`: "a context registered ONLY via PaneContext (no compiled-list entry) is discoverable" (registers a real module under a novel focus atom, asserts it appears); "is total when PaneContext is down: falls back to the native floor" (the down-registry path every other unit test exercises).

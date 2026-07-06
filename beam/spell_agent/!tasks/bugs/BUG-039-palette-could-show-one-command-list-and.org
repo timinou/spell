@@ -1,0 +1,21 @@
+#+TITLE: Palette could show one command list and fire from another
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: BUG-039-palette-could-show-one-command-list-and
+
+* Initial Message
+
+did you file a BUG about that?
+
+* Summary
+When `data/keybindings` was missing or malformed, the palette's RENDER path (`palette_overlay_placements/3`) read `data_bag` with a `[]` fallback — showing "(no matching command)" — while the KEY HANDLER (`palette_rows/1`) fell back to a FRESH `KeymapIntrospect.rows()` — a full, non-empty list. A user could see an empty palette and still have Enter fire a real command, because the visible list and the fired list were computed by two different fallbacks answering the same question ("what commands exist right now?") differently.
+
+* Root cause
+Two independent read paths for one piece of state is the same "reflect, don't hand-list" violation the whole feature exists to prevent, recurring at the render/dispatch seam instead of the keymap seam.
+
+* Fix (LANDED)
+`palette_overlay_placements/3` now calls the SAME `palette_rows/1` the key handler uses, instead of reading `data_bag` directly. One function, one fallback, both callers.
+
+* Verification
+`palette_app_test.exs`: "show and fire agree even when data_sources is EMPTY" — opens the palette with an empty `data_sources`, asserts the render shows the same (non-empty, fallback-reflected) rows the handler would fire from.

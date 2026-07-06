@@ -1,0 +1,21 @@
+#+TITLE: Two flag writes bypassed the safe_flags bound (help toggle, cells-drawer toggle)
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: BUG-040-two-flag-writes-bypassed-the-safe-flags
+
+* Initial Message
+
+did you file a BUG about that?
+
+* Summary
+`Keymap.Global.react/3` clauses for `app/help` and `app/toggle-cells` wrote `ui.flags` via a raw `Map.put/3`, bypassing `Ui.safe_flags/1` (the one documented chokepoint enforcing the 32-entry cap on the agent-writable flag bag). If the bag already held 32 entries and lacked the toggled key, either toggle could push it to 33 — breaking the ONE invariant the bag exists to guarantee.
+
+* Root cause
+The guardian (`safe_flags`) is a convention, not a type-level enforcement — nothing stops a new `react/3` clause from writing `ui.flags` directly. Both clauses were written by copying an existing (also-unguarded) pattern rather than routing through the chokepoint.
+
+* Fix (LANDED)
+Both clauses now route their flag write through `Ui.safe_flags/1`.
+
+* Note
+This is a convention gap, not a one-off: any future `react/3` clause that touches `ui.flags` directly reintroduces the same class of bug. Worth a lint/review-checklist item, not filed separately here.

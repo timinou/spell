@@ -1,0 +1,21 @@
+#+TITLE: Palette silently dropped shifted printable keys (?, !) from the filter
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: BUG-038-palette-silently-dropped-shifted-printab
+
+* Initial Message
+
+did you file a BUG about that?
+
+* Summary
+`printable?/1` (the guard deciding whether a keystroke extends the palette's filter query) accepted only `mods == []`. A shifted printable character — `?`, `!`, any symbol typed with Shift — arrives as `mods: [:shift]` (per `Chord.from_event/1`), so it fell through to the catch-all "consumed, nothing happens" clause. The palette's entire pitch is "type to filter" and it silently ate the exact character (`?`) a user would type to find the help command.
+
+* Root cause
+INSERT mode's `compose/1` (the established, tested pattern for accepting typed text) already handles this correctly: `mods in [[], [:shift]]`. The palette's input handling was written fresh beside a solved problem instead of reusing it.
+
+* Fix (LANDED)
+`printable?/1` now accepts `mods in [[], [:shift]]`, mirroring `compose/1`.
+
+* Verification
+`palette_app_test.exs`: "a SHIFTED printable key (e.g. `?`) reaches the filter, not dropped" — sends a real `%Key{code: "?", modifiers: ["shift"]}` event through `App.handle_event/2` and asserts the query updates.
