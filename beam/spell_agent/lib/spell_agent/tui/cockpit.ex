@@ -45,6 +45,19 @@ defmodule SpellAgent.Tui.Cockpit do
   # The `data/*` binding this source produces. The layout reads `data/sessions`.
   @source_name "sessions"
 
+  # The cockpit's data source AS DATA (PLAN-027 M1): a frozen PTC program that
+  # unions the live lineage with each session's content summary. `install/0`
+  # freezes + registers this; the Elixir `sessions/1` below is the compiled
+  # fallback floor if the file is missing/malformed (never-brick). `@external_resource`
+  # recompiles on a file edit; `install/0` re-reads at runtime so a live edit is
+  # pickup-able without recompiling Elixir at all.
+  @sources_path Path.join([:code.priv_dir(:spell_agent) |> to_string(), "tui", "cockpit_sources.ptc"])
+  @external_resource @sources_path
+  @sources_source (case File.read(@sources_path) do
+                     {:ok, s} -> s
+                     _ -> ""
+                   end)
+
   # The grid is bounded: at most this many session cards. A hard floor on both the
   # render cost (N panes) and the atom/term cost of the projected data. Sessions
   # beyond this are not shown in the overview (newest-first from the registry).
@@ -70,20 +83,61 @@ defmodule SpellAgent.Tui.Cockpit do
   def source_name, do: @source_name
 
   @doc """
-  Register the cockpit as ONE query-clock data source (PLAN-027 M0).
+  Register the cockpit as ONE query-clock data source (PLAN-027 M0 → M1).
 
-  This is the PERIPHERY policy call — the one place that says "`data/sessions` is
-  produced by the cockpit materializer". The render loop (`App.reproject`) never
-  names this source; it resolves whatever is registered. The producer closes over
-  `sessions/1`, reading the `:hist_store` from the query-clock context the App
-  hands every source. Best-effort: a no-op if the registry is absent (headless).
+  This is the PERIPHERY policy call — the one place that says "`data/sessions`
+  exists". The render loop (`App.reproject`) never names this source; it resolves
+  whatever is registered.
 
-  M1 (FUP-036) dissolves even this Elixir producer into a frozen `.ptc` program;
-  until then this interim registration keeps the render loop feature-agnostic
-  while the materializer is still Elixir.
+  M1 (FUP-036): the producer is now DATA — the frozen PTC program in
+  `priv/tui/cockpit_sources.ptc`, which unions the live lineage with each
+  session's content summary via the read-only source tools. `install/0` runs
+  that `.ptc` (its `data-source/register` call installs the frozen program).
+  If the file is missing/malformed, fall back to registering the compiled Elixir
+  `sessions/1` closure (the never-brick floor — the body keeps the feature
+  working even when its data authoring is broken). Best-effort: a no-op if the
+  registry is absent (headless).
   """
   @spec install() :: :ok | {:error, String.t()}
   def install do
+    case install_from_data() do
+      :ok -> :ok
+      :error -> install_fallback()
+    end
+  end
+
+  # Run the cockpit_sources.ptc program: its `data-source/register` verb installs
+  # the frozen producer. Returns :ok only if the source is actually registered
+  # afterward (a parse/eval failure or a rejected registration falls through to
+  # the Elixir floor). Total.
+  defp install_from_data do
+    source =
+      case File.read(@sources_path) do
+        {:ok, s} -> s
+        _ -> @sources_source
+      end
+
+    with true <- is_binary(source) and source != "",
+         {:ok, _step} <-
+           PtcRunner.Lisp.run(source,
+             tools: DataSource.Verb.tools(),
+             caller: :in_process_v1
+           ),
+         true <- @source_name in DataSource.Registry.names() do
+      :ok
+    else
+      _ -> :error
+    end
+  rescue
+    _ -> :error
+  catch
+    _, _ -> :error
+  end
+
+  # The compiled floor: register the Elixir `sessions/1` closure (the M0 interim
+  # producer) so `data/sessions` still resolves when the `.ptc` authoring is
+  # missing/broken. Never-brick: the feature survives a bad data file.
+  defp install_fallback do
     DataSource.Registry.register(@source_name, fn ctx ->
       sessions(Map.get(ctx, :hist_store))
     end)

@@ -1,0 +1,26 @@
+;; The multi-session cockpit's data source — as DATA (PLAN-027 M1, FUP-036).
+;;
+;; This is the producer of `data/sessions`, the cross-session overview the
+;; cockpit layout projects into a grid of cards. It USED to be Elixir
+;; (`SpellAgent.Tui.Cockpit.sessions/1`) — the body naming the feature. Now it
+;; is a frozen PTC program the mind authored, registered via
+;; `data-source/register` and run on the query clock through the read-only
+;; `DataSource.Tools` tier (`tool/session-registry/lineage`,
+;; `tool/hist/trace-summary`).
+;;
+;; The UNION lives here, in data: for each live session (its lineage row), attach
+;; its bounded content summary. The body provides only the two read-only
+;; primitives; the SHAPE of the join — what a cockpit row is — is this program.
+;;
+;; `SpellAgent.Tui.Cockpit.install/0` reads this file, freezes the program, and
+;; registers it as the `sessions` source. A missing/malformed file falls back to
+;; the compiled Elixir producer (never-brick — the body keeps a floor).
+
+(data-source/register
+  {:name "sessions"
+   :program
+   (quote
+     (map
+       (fn [s]
+         (merge s (tool/hist/trace-summary {:id (get s "id")})))
+       (tool/session-registry/lineage)))})

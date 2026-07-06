@@ -67,13 +67,20 @@ defmodule SpellAgent.Tui.DataSource.Registry do
   use Agent
 
   @typedoc """
-  A data-source producer: a function from the query-clock CONTEXT to the value
-  bound as `data/<name>`. The context carries the read-only bindings a source
-  may need (`:hist_store`, `:store`, `:ui`, `:hist_session`) — a superset is
-  passed so new sources need no signature change. Pure + best-effort: a producer
-  that raises is dropped for that reproject (never-brick).
+  A data-source producer. Two shapes (PLAN-027 M0 then M1):
+
+    * an Elixir CLOSURE `(ctx -> value)` — the M0 interim form (`Cockpit.install/0`);
+    * a FROZEN PTC PROGRAM `{:frozen, codec_data}` — the M1 maximalist form: a
+      quoted program the mind authored via `data-source/register`, run on the
+      query clock through `Cell.resolve/3` with the read-only `DataSource.Tools`
+      tier. The body no longer names the feature; the mind registers its own.
+
+  Either way it maps the query-clock CONTEXT (carrying `:hist_store`, `:store`,
+  `:ui`, `:hist_session`, `:forest` — a superset, so new sources need no signature
+  change) to the value bound as `data/<name>`. Pure + best-effort: a producer
+  that fails is dropped for that reproject (never-brick).
   """
-  @type producer :: (map() -> term())
+  @type producer :: (map() -> term()) | {:frozen, term()}
 
   # Cap on distinct registered sources. Bounds the per-reproject producer count
   # (each is one query-clock evaluation). Generous: the render surface has a
@@ -97,7 +104,9 @@ defmodule SpellAgent.Tui.DataSource.Registry do
   """
   @spec register(String.t(), producer()) :: :ok | {:error, String.t()}
   def register(name, producer)
-      when is_binary(name) and is_function(producer, 1) do
+      when is_binary(name) and
+             (is_function(producer, 1) or
+                (is_tuple(producer) and tuple_size(producer) == 2 and elem(producer, 0) == :frozen)) do
     cond do
       name == "" ->
         {:error, "data-source name must not be empty"}
@@ -176,16 +185,46 @@ defmodule SpellAgent.Tui.DataSource.Registry do
 
   # ---- internal ----
 
-  defp safe_produce(producer, ctx) do
+  # Run a producer against the query-clock ctx, dispatching on its shape:
+  #   * a FROZEN PTC program runs through `Cell.resolve/3` (the exact off-frame
+  #     sandbox cells use) with the read-only `DataSource.Tools` tier built from
+  #     the ctx — the M1 maximalist path where the producer is data the mind
+  #     authored, not Elixir the body named;
+  #   * an Elixir CLOSURE is called directly (the M0 interim path).
+  # Either way total: any failure collapses to `:error` and the source is
+  # omitted. Catch EVERY non-local exit — not just `:exit` (review Sβ P1): a
+  # producer that `throw/1`s must not propagate out of `resolve_all/1` into the
+  # render loop. A sick source is DATA (omitted), never a crash.
+  defp safe_produce({:frozen, program}, ctx) do
+    tier = SpellAgent.Tui.DataSource.Tools.read_only(ctx)
+
+    case SpellAgent.Tui.Cell.resolve(program, stringify_ctx(ctx), tier) do
+      {:ok, value} -> {:ok, value}
+      :error -> :error
+    end
+  rescue
+    _ -> :error
+  catch
+    _, _ -> :error
+  end
+
+  defp safe_produce(producer, ctx) when is_function(producer, 1) do
     {:ok, producer.(ctx)}
   rescue
     _ -> :error
   catch
-    # Catch EVERY non-local exit — not just `:exit` (review Sβ P1): a producer
-    # that `throw/1`s (or a `:throw`/`:error` non-local exit) would otherwise
-    # bypass this clause and propagate out of `resolve_all/1` into the render
-    # loop. A sick source is DATA (omitted), never a crash.
     _, _ -> :error
+  end
+
+  defp safe_produce(_producer, _ctx), do: :error
+
+  # A frozen program reads its inputs as `data/*` (string keys), exactly like a
+  # cell / render hole. The query-clock ctx is atom-keyed (`:hist_store`, `:ui`,
+  # `:forest`) — string-key it so a program can read e.g. `data/forest`. The
+  # store handles (`:hist_store`/`:store`) stay reachable to the TOOLS (closed
+  # over the raw ctx in `DataSource.Tools.read_only/1`), not as data.
+  defp stringify_ctx(ctx) do
+    Map.new(ctx, fn {k, v} -> {to_string(k), v} end)
   end
 
   defp agent_up?, do: Process.whereis(__MODULE__) != nil

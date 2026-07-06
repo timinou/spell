@@ -407,7 +407,14 @@ defmodule SpellAgent.Namespace.Catalog do
           {"lens/update-at", ["slot", "fn"], "Apply a deferred fn to the node at a slot."},
           {"cell/define", ["name", "deps", "source"], "Define a reactive cell (dep-tracked recompute)."},
           {"cell/list", [], "List reactive cells."},
-          {"cell/remove", ["name"], "Remove a reactive cell."}
+          {"cell/remove", ["name"], "Remove a reactive cell."},
+          {"data-source/register", ["name", "program"],
+           "Register a query-clock data source: a frozen PTC program (read-only) " <>
+             "whose result is bound as data/<name>, resolved on each reproject. The " <>
+             "program may call the read-only source tools " <>
+             "(tool/session-registry/lineage, tool/hist/trace-summary)."},
+          {"data-source/list", [], "List registered query-clock data sources."},
+          {"data-source/remove", ["name"], "Remove a query-clock data source."}
         ])
     }
   end
