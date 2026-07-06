@@ -66,6 +66,12 @@ defmodule SpellAgent.Tui.DataSource.Registry do
 
   use Agent
 
+  alias SpellAgent.Tui.Registry.Durable
+
+  # The durable-store key for the frozen data-source programs (PLAN-027 M7).
+  @durable_kind :data_source
+  @durable_name "sources"
+
   @typedoc """
   A data-source producer. Two shapes (PLAN-027 M0 then M1):
 
@@ -88,9 +94,42 @@ defmodule SpellAgent.Tui.DataSource.Registry do
   @max_sources 32
 
   @spec start_link(keyword()) :: Agent.on_start()
-  def start_link(_opts \\ []) do
-    Agent.start_link(fn -> %{} end, name: __MODULE__)
+  def start_link(opts \\ []) do
+    # `:name` defaults to the module (the supervised singleton); a test may pass
+    # `name: nil` (or a custom name) to start an isolated instance against an
+    # injected store without colliding with the app singleton.
+    name = Keyword.get(opts, :name, __MODULE__)
+    Agent.start_link(fn -> init_state(opts) end, name: name)
   end
+
+  # State: the sources map + durability config (PLAN-027 M7). Durability is
+  # OPT-IN (`durable: true`) — same posture as LayoutRegistry — and when on, the
+  # FROZEN sources (plain codec data; closures can't persist) are mirrored to the
+  # store on every mutation and rehydrated here at boot.
+  defp init_state(opts) do
+    durable? = Keyword.get(opts, :durable, false)
+    store = Keyword.get(opts, :store, Durable.default_store())
+
+    sources =
+      if durable? do
+        Durable.rehydrate(store, {@durable_kind, @durable_name}, %{}, &valid_persisted?/1)
+        |> restore_frozen()
+      else
+        %{}
+      end
+
+    %{sources: sources, durable?: durable?, store: store}
+  end
+
+  # A persisted blob is a `%{name => codec_data}` map of frozen programs. Restore
+  # each as a `{:frozen, program}` producer. A non-map blob is rejected (-> %{}).
+  defp restore_frozen(blob) when is_map(blob) do
+    Map.new(blob, fn {name, program} -> {name, {:frozen, program}} end)
+  end
+
+  defp restore_frozen(_), do: %{}
+
+  defp valid_persisted?(blob), do: is_map(blob)
 
   @doc """
   Register (or replace) the producer for `name` — the periphery policy call that
@@ -115,16 +154,18 @@ defmodule SpellAgent.Tui.DataSource.Registry do
         :ok
 
       true ->
-        Agent.get_and_update(__MODULE__, fn sources ->
+        Agent.get_and_update(__MODULE__, fn st ->
+          sources = st.sources
+
           cond do
             Map.has_key?(sources, name) ->
-              {:ok, Map.put(sources, name, producer)}
+              commit(st, Map.put(sources, name, producer))
 
             map_size(sources) >= @max_sources ->
-              {{:error, "data-source limit reached (#{@max_sources})"}, sources}
+              {{:error, "data-source limit reached (#{@max_sources})"}, st}
 
             true ->
-              {:ok, Map.put(sources, name, producer)}
+              commit(st, Map.put(sources, name, producer))
           end
         end)
     end
@@ -132,16 +173,47 @@ defmodule SpellAgent.Tui.DataSource.Registry do
 
   def register(_name, _producer), do: {:error, "invalid data-source registration"}
 
+  # Commit a new sources map into the state and, when durable, mirror the FROZEN
+  # subset to the store INSIDE this same Agent callback (atomic with the in-memory
+  # commit — the LayoutRegistry/ToolRegistry discipline). Only frozen programs are
+  # persisted; an Elixir closure (the interim boot producer) can't serialize, so
+  # it is re-registered at boot regardless. Best-effort persist (never fails the
+  # mutation).
+  defp commit(st, sources) do
+    st = %{st | sources: sources}
+    maybe_persist(st)
+    {:ok, st}
+  end
+
+  defp maybe_persist(%{durable?: true, store: store} = st) do
+    frozen =
+      for {name, {:frozen, program}} <- st.sources, into: %{} do
+        {name, program}
+      end
+
+    Durable.persist(store, {@durable_kind, @durable_name}, frozen)
+  end
+
+  defp maybe_persist(_st), do: :ok
+
   @doc "Remove a source by name (tests / teardown). No-op if absent."
   @spec unregister(String.t()) :: :ok
   def unregister(name) when is_binary(name) do
-    if agent_up?(), do: Agent.update(__MODULE__, &Map.delete(&1, name)), else: :ok
+    if agent_up?() do
+      Agent.update(__MODULE__, fn st ->
+        st = %{st | sources: Map.delete(st.sources, name)}
+        maybe_persist(st)
+        st
+      end)
+    else
+      :ok
+    end
   end
 
   @doc "The registered producers, `%{name => producer}`. `%{}` if the registry is down."
   @spec all() :: %{optional(String.t()) => producer()}
   def all do
-    if agent_up?(), do: Agent.get(__MODULE__, & &1), else: %{}
+    if agent_up?(), do: Agent.get(__MODULE__, & &1.sources), else: %{}
   end
 
   @doc "The registered source names (introspection / a `data-sources` listing)."
@@ -180,7 +252,40 @@ defmodule SpellAgent.Tui.DataSource.Registry do
   @doc "Wipe all registered sources (test reset). Keeps the process."
   @spec reset() :: :ok
   def reset do
-    if agent_up?(), do: Agent.update(__MODULE__, fn _ -> %{} end), else: :ok
+    if agent_up?() do
+      Agent.update(__MODULE__, fn st ->
+        st = %{st | sources: %{}}
+        maybe_persist(st)
+        st
+      end)
+    else
+      :ok
+    end
+  end
+
+  @doc """
+  Enable durability on the already-running registry (PLAN-027 M7), rehydrating
+  any previously persisted frozen sources. Mirrors `LayoutRegistry.enable_durability/1`:
+  the registry boots once with fixed opts, so a `--durable` launch flips the
+  live singleton. Best-effort.
+  """
+  @spec enable_durability(keyword()) :: :ok
+  def enable_durability(opts \\ []) do
+    store = Keyword.get(opts, :store, Durable.default_store())
+
+    if agent_up?() do
+      Agent.update(__MODULE__, fn st ->
+        restored =
+          Durable.rehydrate(store, {@durable_kind, @durable_name}, %{}, &valid_persisted?/1)
+          |> restore_frozen()
+
+        # Merge restored frozen sources OVER the current (so a boot-registered
+        # closure for the same name is replaced by its durable frozen version).
+        %{st | durable?: true, store: store, sources: Map.merge(st.sources, restored)}
+      end)
+    else
+      :ok
+    end
   end
 
   # ---- internal ----
