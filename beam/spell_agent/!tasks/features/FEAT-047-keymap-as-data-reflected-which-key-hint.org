@@ -1,0 +1,52 @@
+#+TITLE: Keymap-as-data: reflected which-key hint bar, help overlay, command palette
+#+STATE: DOING
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: FEAT-047-keymap-as-data-reflected-which-key-hint
+
+* Initial Message
+
+did you file a BUG about that?
+
+* Why (the delight thesis)
+The TUI is powerful but not DISCOVERABLE: a new user at `mix spell.tui` cannot see what keys do what. Research on delightful TUIs converges on three levers, and this repo already holds the substrate for all three AS DATA:
+- **which-key hint bar** — show the chord next to the action, live.
+- **help overlay / cheat-sheet** — one toggle reveals every binding, grouped.
+- **command palette** — type to filter, Enter to fire; "commands are just data + functions."
+
+The keymap IS that data: `KeymapRegistry` holds `(context, chord, intent, reaction)` live, and each context module exposes `keymap/0` (compiled) + `context_name/0`. Today `HintBar` HAND-LISTS a hardcoded subset per focus — the exact "reflect, don't hand-list" drift AGENTS.md forbids. One reflection primitive (keymap introspection) feeds ALL THREE views off a single source of truth, zero drift.
+
+Doctrine (beam-lisp-maximalist): Elixir REFLECTS live bindings into `data/keybindings` rows; `.ptc` ARRANGES the three views (which-key line, help grid, palette overlay). The body materializes + bounds + falls back; the mind authors the words/arrangement.
+
+* Oracle gate (agent 30-PaletteInputGate)
+Conditional approve. Wave 1 (pure LOOK overlays) = zero input-path risk, ship first. Wave 2 (palette, touches the proven modal input path) approved WITH two corrections:
+1. Palette Enter MUST route through the SAME App-intercept logic as a normal-mode keystroke (extract `apply_intent/2`), NOT raw `dispatch_generic` — else App-only intents (quit/cockpit/reset/leader/mode-insert) silently no-op (their compiled `react/3` is identity).
+2. Palette flags are UNTRUSTED bounded data: sanitizing helpers (open/close/query/cursor/selected-row), and Esc/C-r escape ladders that do NOT depend on render succeeding.
+
+* Wave 1 — reflected LOOK (this wave)
+1. `SpellAgent.Tui.KeymapIntrospect`: reflect every context's compiled `keymap/0` UNIONED with its live `KeymapRegistry.bindings/1` (live override wins, mirrors `Keys.resolve`/`HintBar`) into rows `%{"context"=>name, "chord"=>str, "intent"=>str, "label"=>human}`. Human label derived from the intent's last path segment (`span/expand`\u2192"expand"), with a small curated override map for the ugly ones. Bounded, total (a down registry \u2192 compiled-only; a bad context \u2192 skipped).
+2. `data/keybindings` DataSource producer: Elixir closure registered via `DataSource.Registry.register/2` at TUI boot (the Cockpit.install pattern), resolved on the query clock into `data/keybindings`.
+3. Reflected `HintBar.render`: derive the focused-context + global hints from introspection instead of the hardcoded `chord_hint` list. Same output shape, now drift-free (a rebind or a new binding shows up automatically).
+4. Help overlay: `?` (and `C-g`) toggles `flags["help"]`; render derives a grouped-by-context binding grid from `data/keybindings`, via the PROVEN cells-drawer append-placement + never-brick rescue. `.ptc`-authored where the arrangement lives.
+
+* Wave 2 — command palette (separate, after Wave 1 lands + is verified live)
+5. Extract the normal-mode intent-application case body from `handle_key_event/2` into a shared `apply_intent(resolution, state)`; normal mode and palette-Enter both call it.
+6. Palette: `flags["palette"]` (bounded), `flags["palette-query"]` (binary, length-capped), `flags["palette-cursor"]` (int, clamped). `C-p` = Global intent `app/palette`, App-intercepted, opens + clears pending_leader. NEW FIRST clause in `handle_key_event/2`: esc closes (flags only), enter fires selected row via `apply_intent` then closes, up/down move cursor, backspace/printable edit query, all else consumed. `C-r` reset also clears palette flags. Rows carry a TRUSTED dispatch context term (module atom for compiled ctx, bare atom for runtime ctx) \u2014 never `String.to_atom` a display name.
+
+* Test strategy (leverage the headless render infra to make the TUI legible)
+`RenderProbe.render/2` turns a layout node + data env into an ASCII buffer headlessly. Use it as the READABLE SPEC:
+- introspection: rows reflect compiled + live, live override wins, bounded, total on a down registry.
+- hint bar: focused-context hints match the live bindings; a rebind changes the hint.
+- help overlay: `RenderProbe` snapshot of the grouped grid from a known `data/keybindings`; never-brick on malformed data.
+- palette (W2): `apply_intent` fires app/quit\u2192{:stop}, app/cockpit, reset, mode/insert, a generic pane intent, and a runtime-atom live reaction; Esc/C-r recovery; empty/malformed keybindings no crash; safe_flags string/int preservation + oversize\u2192nil.
+
+* Never-brick ladders (cardinal rule)
+- overlay content derive fails \u2192 no overlay, frame intact (cells-drawer rescue).
+- palette open swallowing keys \u2192 Esc closes from flags alone; C-r is the out-of-band emergency reset and clears palette flags.
+- filter/render crash \u2192 type-check keybindings(list)/query(binary)/cursor(int), rescue \u2192 existing placements.
+- unbounded state \u2192 safe_flags 32-entry/4096-byte cap + query length cap; clear all palette* on close/reset/fire.
+- fired intent corrupts gaze \u2192 shared apply_intent; invalid ctx/intent = no-op; EffectRegistry already no-ops unknown/protected effects.
+
+* Acceptance
+- Wave 1: `mix spell.tui` shows a live which-key hint line; `?` opens a grouped help overlay listing every binding; both reflect a runtime `keymap/bind` with no code change. Verified LIVE in tmux (not just unit tests \u2014 the BUG-035 lesson). `mix compile --warnings-as-errors` clean; focused suites green seed 0.
+- Wave 2: `C-p` opens the palette, type filters, Enter fires, Esc/C-r recover; every oracle test gate green; verified live in tmux.

@@ -187,7 +187,20 @@ defmodule SpellAgent.Tui.KeymapRegistry do
       for {{ctx, chord}, intent} <- s.bindings, ctx == context, do: {chord, intent}
     end)
   end
+  @doc """
+  The distinct context names that currently hold at least one live binding.
 
+  Introspection for `KeymapIntrospect` (FEAT-047): a runtime `keymap/bind` to a
+  fresh context atom (a declared-at-runtime pane with no compiled module) is
+  discoverable only if the reflector can ENUMERATE which contexts have live
+  bindings. Returns `[]` if the registry is down.
+  """
+  @spec binding_contexts() :: [atom()]
+  def binding_contexts do
+    Agent.get(__MODULE__, fn s ->
+      s.bindings |> Map.keys() |> Enum.map(fn {ctx, _chord} -> ctx end) |> Enum.uniq()
+    end)
+  end
   # ---- reactions (intent -> ptc source) ----
 
   @doc "Store a runtime-authored reaction (PTC source) for an intent in a context."

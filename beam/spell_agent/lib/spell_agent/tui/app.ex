@@ -191,6 +191,13 @@ defmodule SpellAgent.Tui.App do
   # Best-effort: an absent registry (headless) degrades to a no-op, never raises.
   defp install_data_sources do
     SpellAgent.Tui.Cockpit.install()
+    # FEAT-047: `data/keybindings` — the live keymap reflected into flat rows,
+    # the ONE source every discoverability surface (which-key hint, help overlay,
+    # command palette) projects. A query-clock Elixir closure (pure reflection is
+    # body work; the mind ARRANGES the rows in `.ptc`). Best-effort.
+    SpellAgent.Tui.DataSource.Registry.register("keybindings", fn _ctx ->
+      SpellAgent.Tui.KeymapIntrospect.rows()
+    end)
     # PLAN-027 M6: also install the cockpit's navigation reactions (drill/back),
     # authored as data returning effect envelopes. Best-effort.
     SpellAgent.Tui.Cockpit.install_reactions()
@@ -357,6 +364,7 @@ defmodule SpellAgent.Tui.App do
     |> Enum.flat_map(fn {node, rect} -> Render.safe_resolve_node(node, rect, state) end)
     |> Enum.filter(&Render.encodable_placement?/1)
     |> maybe_cells_drawer(state, data_bag, area)
+    |> maybe_help_overlay(state, data_bag, area)
   end
 
   # The cells drawer (default: Ctrl-e): a right-side card overlay listing every
@@ -408,6 +416,77 @@ defmodule SpellAgent.Tui.App do
     _ -> []
   end
 
+  # The help overlay (default: `?` or C-g): a centered cheat-sheet listing every
+  # LIVE binding, grouped by context, derived from `data/keybindings` (the ONE
+  # keymap reflection — FEAT-047). The toggle is a keymap reaction flipping
+  # ui.flags["help"]; the content is derived from data each frame (nothing to
+  # sync), the SAME never-brick discipline as the cells drawer. Degrades to no
+  # overlay when the flag is unset or the build fails (never bricks a frame).
+  defp maybe_help_overlay(placements, state, data_bag, area) do
+    if Map.get(state.ui.flags, "help", false) do
+      placements ++ help_overlay_placements(data_bag, area)
+    else
+      placements
+    end
+  end
+
+  defp help_overlay_placements(data_bag, area) do
+    rows = Map.get(data_bag, "keybindings", [])
+
+    items = help_lines(rows)
+
+    node = %{
+      "type" => "list",
+      "items" => items,
+      "block" => %{
+        "type" => "block",
+        "title" => " keys — ? or C-g to close ",
+        "borders" => ["all"],
+        "border_type" => "rounded",
+        "border_style" => %{"fg" => "cyan"}
+      }
+    }
+
+    case SpellAgent.Tui.Materialize.to_struct(node) do
+      %{__struct__: _} = widget ->
+        # Centered card, bounded to the frame. A comfortable cheat-sheet size that
+        # still leaves the surface visible behind it.
+        w = min(48, area.width)
+        h = min(max(length(items) + 2, 6), area.height)
+        x = max(0, div(area.width - w, 2))
+        y = max(0, div(area.height - h, 2))
+        [{widget, %Rect{x: x, y: y, width: w, height: h}}]
+
+      _ ->
+        []
+    end
+  rescue
+    _ -> []
+  end
+
+  # Group the flat keybinding rows by context into aligned `<chord>  <label>`
+  # lines with a context header each. Total: a non-list or malformed rows degrade
+  # to a single placeholder line (never raises the render).
+  defp help_lines(rows) when is_list(rows) and rows != [] do
+    rows
+    |> Enum.group_by(fn r -> Map.get(r, "context", "?") end)
+    |> Enum.sort_by(fn {ctx, _} -> ctx end)
+    |> Enum.flat_map(fn {ctx, ctx_rows} ->
+      header = "── #{ctx} " <> String.duplicate("─", max(0, 20 - String.length(ctx)))
+
+      lines =
+        ctx_rows
+        |> Enum.sort_by(fn r -> Map.get(r, "chord", "") end)
+        |> Enum.map(fn r ->
+          chord = r |> Map.get("chord", "") |> String.pad_trailing(10)
+          "  #{chord}#{Map.get(r, "label", "")}"
+        end)
+
+      [header | lines]
+    end)
+  end
+
+  defp help_lines(_), do: ["(no keybindings)"]
 
   # The tree to render: the agent-shadowed tree from LayoutRegistry if it is
   # running AND its pane set matches the App's current panes; otherwise the native

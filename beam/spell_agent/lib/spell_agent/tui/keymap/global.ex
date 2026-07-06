@@ -34,6 +34,11 @@ defmodule SpellAgent.Tui.Keymap.Global do
       {Chord.parse("C-c"), :"app/quit"},
       {Chord.parse("C-r"), :"app/reset-layout"},
       {Chord.parse("C-e"), :"app/toggle-cells"},
+      # `?` (and C-g) toggle the HELP overlay: a right-side cheat-sheet listing
+      # every live binding, grouped by context, derived from data/keybindings
+      # (FEAT-047). A pure flags flip — no App interception (like toggle-cells).
+      {Chord.parse("?"), :"app/help"},
+      {Chord.parse("C-g"), :"app/help"},
       # C-o opens the multi-session cockpit (FEAT-046): the `body` slot is shadowed
       # with the live per-session card grid. C-r (reset-layout) returns to the
       # default inspector.
@@ -74,6 +79,15 @@ defmodule SpellAgent.Tui.Keymap.Global do
   def react(:"app/toggle-cells", %Ui{} = ui, _forest) do
     open = Map.get(ui.flags, "cells-drawer", false)
     %{ui | flags: Map.put(ui.flags, "cells-drawer", not open)}
+  end
+
+  # Toggle the HELP overlay: flip the `help` flag the render overlay reads. The
+  # flag is the ONLY state — the cheat-sheet content is derived from
+  # data/keybindings each frame (nothing to sync), the same shape as the cells
+  # drawer (FEAT-047).
+  def react(:"app/help", %Ui{} = ui, _forest) do
+    open = Map.get(ui.flags, "help", false)
+    %{ui | flags: Map.put(ui.flags, "help", not open)}
   end
 
   def react(_intent, %Ui{} = ui, _forest), do: ui

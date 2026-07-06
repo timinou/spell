@@ -1,22 +1,24 @@
 defmodule SpellAgent.Tui.HintBar do
   @moduledoc """
   Render the one-line keybinding HINT bar shown under the composer (PLAN-025 W3,
-  FEAT-041).
+  FEAT-041; reflected in FEAT-047).
 
   Given the current `focus` (which pane is active) and the focused pane's keymap
-  `context`, produce `"<chord> <label> · …"` for the intents relevant to that
-  focus plus the always-present globals. Each chord is resolved LIVE: a runtime
-  `KeymapRegistry` binding wins, else the compiled keymap — so the hint always
-  reflects what the key actually does after a rebind.
+  `context`, produce `"<chord> <label> · …"` for a CURATED subset of the intents
+  relevant to that focus plus the always-present globals. The bar is a glance —
+  it names the few chords worth surfacing under each focus, with a terse label;
+  the FULL binding set lives in the help overlay (`?`) and the command palette
+  (`C-p`), which project every row.
 
-  Extracted verbatim from the former `SpellAgent.Tui.App` god-module so the
-  chord-resolution + hint-composition policy is unit-testable without a live
-  terminal. The App shell now just computes `{focus, context}` and delegates here.
+  Each chord is resolved LIVE from `SpellAgent.Tui.KeymapIntrospect` — the ONE
+  reflection of the keymap (compiled ⊕ live `KeymapRegistry` bindings, live
+  override wins) that the help overlay and palette also read. So the hint can
+  never drift from what the key actually does after a rebind, and adding a new
+  context needs NO edit here (the former per-context `compiled_chord_for/2`
+  dispatch — a clause-per-context hand-list — is gone).
   """
 
-  alias SpellAgent.Tui.{Chord, KeymapRegistry}
-  alias SpellAgent.Tui.Keymap.{Global, Prompt, TurnNav}
-  alias SpellAgent.Tui.Panes.SpanTree
+  alias SpellAgent.Tui.KeymapIntrospect
 
   @doc """
   The hint string for a given `focus` (`:tree | :detail | :prompt | …`) and the
@@ -45,6 +47,8 @@ defmodule SpellAgent.Tui.HintBar do
 
     global = [
       chord_hint(:global, :"focus/next", "pane"),
+      chord_hint(:global, :"app/help", "help"),
+      chord_hint(:global, :"app/palette", "commands"),
       chord_hint(:global, :"app/reset-layout", "reset layout"),
       chord_hint(:global, :"app/quit", "quit")
     ]
@@ -54,42 +58,25 @@ defmodule SpellAgent.Tui.HintBar do
     |> Enum.join(" · ")
   end
 
-  # "<chord> <label>" for the chord currently bound to `intent` in `context`
-  # (registry override first, then the compiled keymap), or nil if unbound.
+  # "<chord> <label>" for the chord currently bound to `intent` in `context`, or
+  # nil if unbound (so the hint is omitted rather than showing a dangling label).
   defp chord_hint(context, intent, label) do
     case chord_for(context, intent) do
       nil -> nil
-      chord -> "#{Chord.to_string(chord)} #{label}"
+      chord -> "#{chord} #{label}"
     end
   end
 
-  # Find a chord that resolves to `intent` in `context`: prefer a live registry
-  # binding, else the compiled keymap. (First match wins; good enough for a hint.)
+  # The chord bound to `intent` in `context`, reflected from the LIVE keymap via
+  # `KeymapIntrospect` (compiled ⊕ live, live override wins) — the SAME rows the
+  # help overlay and palette project. Returns the chord string, or nil. Total:
+  # `KeymapIntrospect.rows/0` already rescues a down registry to compiled-only.
   defp chord_for(context, intent) do
-    live = Enum.find_value(live_bindings(context), fn {c, i} -> if i == intent, do: c end)
-    live || compiled_chord_for(context, intent)
+    ctx_s = to_string(context)
+    intent_s = to_string(intent)
+
+    Enum.find_value(KeymapIntrospect.rows(), fn row ->
+      if row["context"] == ctx_s and row["intent"] == intent_s, do: row["chord"]
+    end)
   end
-
-  # Registry bindings if the registry is running, else [] — so the hint still
-  # renders (from compiled keymaps) when the App runs without the supervised
-  # KeymapRegistry (e.g. a headless render test). try/rescue/catch rather than a
-  # Process.whereis pre-check: the check is TOCTOU — the registry could exit
-  # between whereis and the call, crashing the render path. The hint is
-  # best-effort, so any failure degrades to compiled-keymap hints.
-  defp live_bindings(context) do
-    KeymapRegistry.bindings(context)
-  rescue
-    _ -> []
-  catch
-    :exit, _ -> []
-  end
-
-  defp compiled_chord_for(:global, intent), do: keymap_chord(Global.keymap(), intent)
-  defp compiled_chord_for(:tree, intent), do: keymap_chord(SpanTree.keymap(), intent)
-  defp compiled_chord_for(:turn_nav, intent), do: keymap_chord(TurnNav.keymap(), intent)
-  defp compiled_chord_for(:prompt, intent), do: keymap_chord(Prompt.keymap(), intent)
-  defp compiled_chord_for(_other, _intent), do: nil
-
-  defp keymap_chord(keymap, intent),
-    do: Enum.find_value(keymap, fn {c, i} -> if i == intent, do: c end)
 end
