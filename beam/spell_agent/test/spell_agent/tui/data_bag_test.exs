@@ -160,13 +160,21 @@ defmodule SpellAgent.Tui.DataBagTest do
       assert Map.has_key?(bag, "status")
     end
 
-    test "build/3 still merges the light per-frame keys (status/composer presentation)" do
+    test "build/3 merges the RAW presentation inputs, not the derived label/color (PLAN-027 M3)" do
       snap = DataBag.snapshot_from(forest(3), %{})
       bag = DataBag.build(state(%{running?: true}), area(), snap)
+      # The raw inputs the layout's presentation projection reads:
       assert bag["running?"] == true
       assert bag["status"]["running?"] == true
-      assert is_binary(bag["status-label"])
-      assert Map.has_key?(bag, "composer-text")
+      assert Map.has_key?(bag, "composer")
+      assert Map.has_key?(bag, "composer-hint")
+      # The DERIVED keys are GONE from the bag — the derivation moved to the
+      # layout data (default_layout.ptc `presentation`), no longer the body's job.
+      refute Map.has_key?(bag, "status-label")
+      refute Map.has_key?(bag, "status-color")
+      refute Map.has_key?(bag, "composer-text")
+      refute Map.has_key?(bag, "composer-title")
+      refute Map.has_key?(bag, "composer-fg")
     end
   end
 

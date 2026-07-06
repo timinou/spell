@@ -29,9 +29,109 @@ defmodule SpellAgent.Tui.DefaultLayout do
   installs both structure AND initial gaze in one value.
   """
 
+  alias PtcRunner.Lisp.{Parser, QuoteData}
   alias SpellAgent.Tui.Lens
   alias SpellAgent.Tui.Panes.{Detail, History, SpanTree}
   alias SpellAgent.Tui.Ui
+
+  # The default-layout data file (PLAN-025 W3, FEAT-040): the body-split
+  # constraints + pane-module dispatch as a PTC data literal, the SAME shape
+  # `layout/set` produces. `@external_resource` recompiles this module on a
+  # file edit; the module still re-reads the file at RUNTIME (`reload/0`) so a
+  # live edit is pickup-able without recompiling Elixir at all.
+  @data_path Path.join([:code.priv_dir(:spell_agent) |> to_string(), "tui", "default_layout.ptc"])
+  @external_resource @data_path
+  @data_source (case File.read(@data_path) do
+                  {:ok, s} -> s
+                  _ -> "{}"
+                end)
+
+  @doc """
+  The parsed default-layout data (`%{"body-constraints" => .., "pane-modules" =>
+  ..}`), loaded from `priv/tui/default_layout.ptc` and memoized in
+  `:persistent_term`. A missing/malformed file yields `%{}` — every consumer
+  (`body_constraints/1`, `pane_modules/0`) falls back to its compiled default
+  per-key (never-brick: last-good -> native default -> surfaced error never
+  applies here since there is no error surface on a layout read).
+  """
+  @spec data() :: map()
+  def data do
+    case :persistent_term.get({__MODULE__, :data}, :unset) do
+      :unset ->
+        d = build_data()
+        :persistent_term.put({__MODULE__, :data}, d)
+        d
+
+      d ->
+        d
+    end
+  end
+
+  @doc "Rebuild the memoized data from the current file on disk (test hook / runtime-edit pickup)."
+  @spec reload() :: map()
+  def reload do
+    d = build_data()
+    :persistent_term.put({__MODULE__, :data}, d)
+    d
+  end
+
+  defp build_data do
+    source =
+      case File.read(@data_path) do
+        {:ok, s} -> s
+        _ -> @data_source
+      end
+
+    parse_data(source)
+  end
+
+  # Parse the default_layout.ptc data map via the sandboxed PTC evaluator (the
+  # same posture as `Hist.Effect.parse_classes/1`). Any failure -> %{}, so every
+  # key falls back to its compiled default — a broken data file never bricks
+  # boot or render.
+  defp parse_data(source) when is_binary(source) do
+    case PtcRunner.Lisp.run(source, max_heap: 2_000_000) do
+      {:ok, %{return: map}} when is_map(map) -> stringify(map)
+      {:ok, map} when is_map(map) -> stringify(map)
+      _ -> %{}
+    end
+  rescue
+    _ -> %{}
+  catch
+    _, _ -> %{}
+  end
+
+  defp parse_data(_), do: %{}
+
+  # String-key the outer + nested maps; list values pass through unchanged.
+  defp stringify(map) when is_map(map) do
+    Map.new(map, fn {k, v} -> {to_string(k), stringify_value(v)} end)
+  rescue
+    _ -> %{}
+  end
+
+  defp stringify_value(v) when is_map(v), do: stringify(v)
+  defp stringify_value(v), do: v
+
+  defp body_constraints_data, do: Map.get(data(), "body-constraints", %{})
+
+  # Resolve the data file's pane-module name strings (`"Elixir.…"`) to atoms via
+  # `String.to_existing_atom/1` — NEVER interns a new atom (atom-table-DoS
+  # chokepoint discipline, mirrors `PaneRegistry`); an unknown/typo'd module
+  # name simply misses and the slot falls back to the compiled dispatch.
+  defp pane_modules do
+    data()
+    |> Map.get("pane-modules", %{})
+    |> Map.new(fn {slot, mod_name} -> {slot, safe_module_atom(mod_name)} end)
+  end
+
+  defp safe_module_atom(name) when is_binary(name) do
+    String.to_existing_atom(name)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp safe_module_atom(_), do: nil
 
   @doc """
   The native default tree, seeded with `ui`'s gaze and the ACTIVE pane list.
@@ -57,12 +157,21 @@ defmodule SpellAgent.Tui.DefaultLayout do
     }
   end
 
-  @doc "The pane module a `pane/*` slot delegates to (App render dispatch)."
+  @doc "The pane module a `pane/*` slot delegates to (App render dispatch); registry-backed with compiled-fallback (never-brick)."
   @spec pane_module(String.t()) :: module() | nil
-  def pane_module("history"), do: History
-  def pane_module("tree"), do: SpanTree
-  def pane_module("detail"), do: Detail
+  def pane_module(slot) when is_binary(slot) do
+    case Map.get(pane_modules(), slot) do
+      mod when is_atom(mod) and not is_nil(mod) -> mod
+      _ -> fallback_pane_module(slot)
+    end
+  end
+
   def pane_module(_), do: nil
+
+  defp fallback_pane_module("history"), do: History
+  defp fallback_pane_module("tree"), do: SpanTree
+  defp fallback_pane_module("detail"), do: Detail
+  defp fallback_pane_module(_), do: nil
 
   # ---- slot nodes ----
 
@@ -72,6 +181,72 @@ defmodule SpellAgent.Tui.DefaultLayout do
   # runtime parse. The HoleResolver thaws + evaluates it against the data/* bag.
   defp hole(ref), do: %{"__hole__" => %{"node" => "sym", "value" => ref}}
 
+  # ---- presentation derivation as data (PLAN-027 M3, FUP-038) ----
+  #
+  # The status label+color and composer text+title+fg USED to be derived in
+  # Elixir (`DataBag.status_presentation/composer_presentation`) — the body
+  # choosing the words the human reads and the colors they see. M3 moves that
+  # DERIVATION to data: each is a PTC source string in `default_layout.ptc`
+  # under `"presentation"`, frozen into a layout hole here at build time. An
+  # edit to the data file changes the wording/colors with no recompile; a
+  # missing/malformed entry falls back to the compiled `@fallback_presentation`
+  # floor (the original literal source), so the strip never bricks.
+
+  # The compiled floor: the ORIGINAL derivation logic as PTC source, byte-for-
+  # byte equivalent to the retired Elixir `*_presentation` functions. Used when
+  # the data file lacks a key or is malformed — never-brick.
+  @fallback_presentation %{
+    "status-label" =>
+      ~s|(let [s data/status r (get s "result")] (cond (get s "running?") (str "\u25cf running\u2026  turns " (get s "turns") " \u00b7 tools " (get s "tools")) (= r "error") (str "\u2717 failed  turns " (get s "turns") " \u00b7 tools " (get s "tools")) (not (= r nil)) (str "\u2713 done  turns " (get s "turns") " \u00b7 tools " (get s "tools")) :else "idle \u2014 type a prompt below, then \u21b5"))|,
+    "status-color" =>
+      ~s|(let [s data/status r (get s "result")] (cond (get s "running?") "yellow" (= r "error") "red" (not (= r nil)) "green" :else "dark_gray"))|,
+    "composer-text" =>
+      ~s|(let [c data/composer insert (= (get data/ui "mode") "insert")] (cond insert (str c "\u258e") (not (= c "")) c :else data/composer-hint))|,
+    "composer-title" =>
+      ~s|(if (= (get data/ui "mode") "insert") " prompt \u2014 INSERT " " prompt \u2014 NORMAL ")|,
+    "composer-fg" =>
+      ~s|(if (or (= (get data/ui "mode") "insert") (not (= data/composer ""))) "white" "dark_gray")|
+  }
+
+  # The presentation-derivation source for `key`: the data file's entry, or the
+  # compiled floor. A non-binary/empty data entry falls back (never-brick).
+  defp presentation_source(key) do
+    case data() |> Map.get("presentation", %{}) |> Map.get(key) do
+      src when is_binary(src) and src != "" -> src
+      _ -> Map.fetch!(@fallback_presentation, key)
+    end
+  end
+
+  # Freeze a PTC source string into a layout hole (the general form of `hole/1`,
+  # which only encodes a bare `data/<key>` symbol). Parse the source to a form
+  # and encode it as QuoteData the `HoleResolver` thaws + evaluates against the
+  # data/* bag every frame. A parse failure falls back to the compiled floor for
+  # `key`; if even THAT fails to parse, degrade to a plain `data/<key>` symbol
+  # ref (the old behavior) so the strip still renders SOMETHING — never a brick.
+  defp presentation_hole(key) do
+    case freeze_source(presentation_source(key)) do
+      {:ok, frozen} ->
+        %{"__hole__" => frozen}
+
+      :error ->
+        case freeze_source(Map.fetch!(@fallback_presentation, key)) do
+          {:ok, frozen} -> %{"__hole__" => frozen}
+          :error -> hole("data/#{key}")
+        end
+    end
+  end
+
+  defp freeze_source(source) when is_binary(source) do
+    case Parser.parse(source) do
+      {:ok, form} -> {:ok, QuoteData.to_data(form)}
+      _ -> :error
+    end
+  rescue
+    _ -> :error
+  catch
+    _, _ -> :error
+  end
+
   # The status strip as DATA (W5 dogfood): its dynamic text + color are holes over
   # the data/* bag's presentation keys, so the App no longer fills it from a
   # hardcoded `status_widget`. The block frame is static.
@@ -79,8 +254,8 @@ defmodule SpellAgent.Tui.DefaultLayout do
     %{
       "type" => "paragraph",
       "slot" => "status",
-      "text" => hole("data/status-label"),
-      "style" => %{"fg" => hole("data/status-color"), "modifiers" => ["bold"]},
+      "text" => presentation_hole("status-label"),
+      "style" => %{"fg" => presentation_hole("status-color"), "modifiers" => ["bold"]},
       "block" => %{
         "type" => "block",
         "title" => " spell · inspector ",
@@ -100,15 +275,27 @@ defmodule SpellAgent.Tui.DefaultLayout do
     }
   end
 
-  # Preserve the hand-tuned native column widths for the known arrangements; any
-  # other pane set splits evenly (fill 1 each).
-  defp body_constraints(["history", "tree", "detail"]),
+  # Preserve the hand-tuned native column widths for the known arrangements
+  # (data-backed, PLAN-025 W3, FEAT-040 — see `priv/tui/default_layout.ptc`);
+  # any other pane set splits evenly (fill 1 each). A missing/malformed data
+  # entry for a known arrangement falls back to the compiled constant
+  # (never-brick).
+  defp body_constraints(names) when is_list(names) do
+    key = Enum.join(names, ",")
+
+    case Map.get(body_constraints_data(), key) do
+      list when is_list(list) and list != [] -> list
+      _ -> fallback_body_constraints(names)
+    end
+  end
+
+  defp fallback_body_constraints(["history", "tree", "detail"]),
     do: [["percentage", 34], ["percentage", 30], ["percentage", 36]]
 
-  defp body_constraints(["tree", "detail"]),
+  defp fallback_body_constraints(["tree", "detail"]),
     do: [["percentage", 45], ["percentage", 55]]
 
-  defp body_constraints(names), do: Enum.map(names, fn _ -> ["fill", 1] end)
+  defp fallback_body_constraints(names), do: Enum.map(names, fn _ -> ["fill", 1] end)
 
   # The composer as DATA (W5 dogfood): text, fg, and the modal block title are
   # holes over the data/* bag, so the App no longer fills it from a hardcoded
@@ -118,11 +305,11 @@ defmodule SpellAgent.Tui.DefaultLayout do
     %{
       "type" => "paragraph",
       "slot" => "composer",
-      "text" => hole("data/composer-text"),
-      "style" => %{"fg" => hole("data/composer-fg")},
+      "text" => presentation_hole("composer-text"),
+      "style" => %{"fg" => presentation_hole("composer-fg")},
       "block" => %{
         "type" => "block",
-        "title" => hole("data/composer-title"),
+        "title" => presentation_hole("composer-title"),
         "borders" => ["all"],
         "border_type" => "rounded"
       }

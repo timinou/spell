@@ -38,8 +38,7 @@ defmodule SpellAgent.Tui.DataBag do
   # (the value is the core map, not a cell) even if a same-named cell exists.
   @core_keys MapSet.new(~w(
     area status ui vms forest cells
-    running? turns tools forest-count composer
-    status-label status-color composer-text composer-title composer-fg
+    running? turns tools forest-count composer composer-hint
   ))
 
   @doc "The canonical (core) bag keys — the keys the assembler always produces."
@@ -212,13 +211,6 @@ defmodule SpellAgent.Tui.DataBag do
       "composer" => Map.get(state, :composer, "")
     }
 
-    # Presentation projections (W5 dogfood): the status strip + composer render
-    # from these keys via tmpl:: holes in the default layout, retiring the
-    # hardcoded status_widget/composer_widget fills. The PRESENTATION lives in the
-    # layout (data); the DERIVATION (label/color/hint) stays here as a projection.
-    {status_label, status_color} = status_presentation(running?, result, turns, tools)
-    {composer_text, composer_title, composer_fg} = composer_presentation(state)
-
     %{
       # ---- coarse maps (forest/vms are merged in by build/3 from the snap) ----
       "area" => area_map(area),
@@ -231,52 +223,16 @@ defmodule SpellAgent.Tui.DataBag do
       "tools" => tools,
       "forest-count" => snap.forest_count,
       "composer" => Map.get(state, :composer, ""),
-      # ---- presentation keys (W5 dogfood: status/composer render from these) ----
-      "status-label" => status_label,
-      "status-color" => status_color,
-      "composer-text" => composer_text,
-      "composer-title" => composer_title,
-      "composer-fg" => composer_fg
+      # ---- raw presentation INPUTS (PLAN-027 M3, FUP-038) ----
+      # The status label+color and composer text+title+fg are no longer DERIVED
+      # here — the derivation moved to `default_layout.ptc` (`presentation`), a
+      # PTC projection over these raw scalars + `data/status`/`data/ui`. The body
+      # ships the inputs; the mind (the layout data) chooses the words + colors.
+      # `composer-hint` is the keymap-derived hint the composer shows when idle
+      # (still an App projection — it needs the live keymaps DataBag has no access
+      # to — injected via `state.composer_hint`).
+      "composer-hint" => Map.get(state, :composer_hint, "")
     }
-  end
-
-  # ---- presentation projections (W5) ----
-  #
-  # Mirror the retired status_widget/composer_widget EXACTLY: same label strings,
-  # colors, modal title, and cursor glyph. The layout holds the widget shape; these
-  # produce the dynamic content it shows.
-
-  defp status_presentation(running?, result, turns, tools) do
-    cond do
-      running? -> {"● running…  turns #{turns} · tools #{tools}", "yellow"}
-      match?({:ok, _}, result) -> {"✓ done  turns #{turns} · tools #{tools}", "green"}
-      match?({:error, _}, result) -> {"✗ failed  turns #{turns} · tools #{tools}", "red"}
-      result != nil -> {"✓ done  turns #{turns} · tools #{tools}", "green"}
-      true -> {"idle — type a prompt below, then ↵", "dark_gray"}
-    end
-  end
-
-  defp composer_presentation(state) do
-    composer = Map.get(state, :composer, "")
-    insert? = get_in_safe(state, [:ui, :mode]) == :insert
-    title = if insert?, do: " prompt — INSERT ", else: " prompt — NORMAL "
-
-    text =
-      cond do
-        insert? -> composer <> "▎"
-        composer != "" -> composer
-        true -> Map.get(state, :composer_hint, "")
-      end
-
-    fg = if insert? or composer != "", do: "white", else: "dark_gray"
-    {text, title, fg}
-  end
-
-  defp get_in_safe(state, [k1, k2]) do
-    case Map.get(state, k1) do
-      m when is_map(m) -> Map.get(m, k2)
-      _ -> nil
-    end
   end
 
   # ---- helpers ----

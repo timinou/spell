@@ -1,0 +1,56 @@
+;; The DEFAULT inspector layout — as data (PLAN-025 W3, FEAT-040).
+;;
+;; `SpellAgent.Tui.DefaultLayout` builds the native body-split constraints and
+;; the pane-module dispatch table from THIS file rather than hardcoded Elixir
+;; constants, so the default layout is the SAME kind of value `layout/set`
+;; produces: an agent can read it (`layout/show`) and rewrite it, and an edit
+;; here changes the shipped layout with no Elixir recompile.
+;;
+;; A missing/malformed file (or a missing/malformed key within it) falls back
+;; to the compiled default per-key (never-brick — `DefaultLayout`'s
+;; `@fallback_*` constants hold the ORIGINAL hardcoded values as the floor).
+;;
+;; Keys:
+;;   body-constraints : pane-name-set (comma-joined, in render order) => the
+;;                       ratatui constraint list for that arrangement. Any
+;;                       arrangement NOT listed here splits evenly (fill 1
+;;                       each) — the compiled `body_constraints/1` catch-all.
+;;   pane-modules     : pane slot name => the `SpellAgent.Tui.Panes.*` module,
+;;                       as its FULL Elixir module name string (`Elixir.…`).
+;;                       Resolved via `String.to_existing_atom/1` — an unknown
+;;                       module name never interns a new atom, it just misses
+;;                       and the slot falls back to the compiled dispatch.
+{"body-constraints"
+ {"history,tree,detail" [["percentage" 34] ["percentage" 30] ["percentage" 36]]
+  "tree,detail" [["percentage" 45] ["percentage" 55]]}
+
+ "pane-modules"
+ {"history" "Elixir.SpellAgent.Tui.Panes.History"
+  "tree" "Elixir.SpellAgent.Tui.Panes.SpanTree"
+  "detail" "Elixir.SpellAgent.Tui.Panes.Detail"}
+
+ ;; presentation : the DERIVATION of the status strip's label+color and the
+ ;;   composer's text+title+fg, as PTC source frozen into layout holes at load
+ ;;   (PLAN-027 M3, FUP-038). These used to be Elixir
+ ;;   (`DataBag.status_presentation/composer_presentation`) — the body choosing
+ ;;   the WORDS the human reads and the COLORS they see. Now the body ships only
+ ;;   the raw scalars (running?/result/turns/tools/mode/composer/composer-hint)
+ ;;   and the derivation is data an edit here changes with no recompile. Each
+ ;;   value is a source STRING parsed + frozen by `DefaultLayout`; a
+ ;;   missing/malformed key falls back to the compiled `@fallback_presentation`
+ ;;   floor (the original literal source), so the strip never bricks.
+ "presentation"
+ {"status-label"
+  "(let [s data/status r (get s \"result\")] (cond (get s \"running?\") (str \"● running…  turns \" (get s \"turns\") \" · tools \" (get s \"tools\")) (= r \"error\") (str \"✗ failed  turns \" (get s \"turns\") \" · tools \" (get s \"tools\")) (not (= r nil)) (str \"✓ done  turns \" (get s \"turns\") \" · tools \" (get s \"tools\")) :else \"idle — type a prompt below, then ↵\"))"
+
+  "status-color"
+  "(let [s data/status r (get s \"result\")] (cond (get s \"running?\") \"yellow\" (= r \"error\") \"red\" (not (= r nil)) \"green\" :else \"dark_gray\"))"
+
+  "composer-text"
+  "(let [c data/composer insert (= (get data/ui \"mode\") \"insert\")] (cond insert (str c \"▎\") (not (= c \"\")) c :else data/composer-hint))"
+
+  "composer-title"
+  "(if (= (get data/ui \"mode\") \"insert\") \" prompt — INSERT \" \" prompt — NORMAL \")"
+
+  "composer-fg"
+  "(if (or (= (get data/ui \"mode\") \"insert\") (not (= data/composer \"\"))) \"white\" \"dark_gray\")"}}
