@@ -116,6 +116,11 @@ defmodule SpellAgent.Application do
       # and merged as heavy `data/*` members. Session-global, same posture as the
       # sibling registries.
       SpellAgent.Tui.DataSource.Registry,
+      # The focus → keymap-context registry (PLAN-027 M4 / FUP-039): native panes
+      # register their default keymap context here at boot so `base_focus_stack/1`
+      # resolves it generically instead of enumerating specific panes in Elixir.
+      # Session-global, same posture as the sibling registries.
+      SpellAgent.Tui.PaneContext,
       # The L−1 self-view render loop guard (PLAN-016 W3): per-mission render
       # accounting (iteration cap + fixpoint detection) so the render→observe→act
       # cycle can't spin. Self-cleaning via pid monitors. Same posture as the

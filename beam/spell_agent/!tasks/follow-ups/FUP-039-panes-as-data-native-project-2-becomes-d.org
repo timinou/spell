@@ -1,5 +1,5 @@
 #+TITLE: Panes-as-data — native project/2 becomes default PTC projections, Elixir is the floor
-#+STATE: ITEM
+#+STATE: BLOCKED
 #+SESSION_ID: 1523e49fcb29d4e2
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
 #+CUSTOM_ID: FUP-039-panes-as-data-native-project-2-becomes-d
@@ -35,3 +35,14 @@ HIGH — Projection.reconcile + the incremental-reproject radius (FEAT-038) are 
 * Depends on
 - PLAN-027 M3 (presentation-as-data — the projection idiom proven on status/composer first).
 - Oracle design gate.
+
+NOTE [2026-07-06]: ORACLE DESIGN GATE (agent 25-M4PanesDataDesign) split the wave:
+
+SHIPPED (M4-GO, PLAN-027): the base_focus_stack COLLAPSE. New SpellAgent.Tui.PaneContext registry (focus atom -> keymap-context module); native panes seed their defaults at boot (tree->SpanTree, prompt->Prompt, detail/history->TurnNav); base_focus_stack/1 is now ONE generic clause reading the registry, with @native_pane_contexts as the never-brick compiled floor (identical behavior registry up or down). The body no longer enumerates native panes in the focus dispatch. 58 app/keys tests + 4 PaneContext tests green.
+
+DEFERRED (the projection-as-data move): the oracle's verdict is PARTIAL/DEFER, NOT because it can't be done but because the COST MODEL is unproven:
+- SpanTree.project/2 is gaze-coupled (prunes collapsed subtrees, reads deep collapse/cursor state) AND is the pane that would most benefit from FEAT-038 project_incremental/3 \u2014 but no native pane actually consumes the dirty radius today. A naive whole-pane PTC projection would be O(forest) in the interpreter EVERY reproject, regressing the PLAN-023 keystroke-cost + FEAT-038 incremental invariants. SpanTree stays the Elixir floor.
+- History is the only clean low-risk candidate, and ONLY if its transcript is supplied as data (data/forest alone is insufficient \u2014 it reconstitutes from the hist store). Detail is conditional on exposing the selected-row/current-tree VM as data.
+- CONCRETE SIGNAL to revisit: (a) a proven PTC projection cost model that receives the dirty radius (a project_incremental analogue for frozen programs), OR (b) an agent actually wanting to reshape a native pane's projection (the pull that justifies the risk). Until then the projection stays Elixir; the FOCUS-STACK win (the real chakra misalignment in the dispatch path) is banked.
+
+Reclassify: the focus-stack collapse is DONE; the projection move is a standing deferred sub-FUP with the signal above. Not blocking M5/M6/M7.

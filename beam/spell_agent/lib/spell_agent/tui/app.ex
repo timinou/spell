@@ -47,6 +47,7 @@ defmodule SpellAgent.Tui.App do
     KeymapRegistry,
     Lens,
     LayoutRegistry,
+    PaneContext,
     Projection,
     Render,
     Spatial,
@@ -82,6 +83,13 @@ defmodule SpellAgent.Tui.App do
   # focus_stack/1 (most-specific-first) whenever the FOCUSED node carries a
   # live hole-affordance declaration.
   @hole_affordance_context :hole_affordance
+
+  # The native panes' default focus → keymap-context map (PLAN-027 M4, FUP-039):
+  # the compiled FLOOR `base_focus_stack/1` falls back to when the `PaneContext`
+  # registry is down (headless test) or hasn't been seeded, and the seed the App
+  # registers into `PaneContext` at boot. `:tree` navigates via SpanTree; the
+  # prompt via Prompt; the scrollable `:detail`/`:history` transcripts via TurnNav.
+  @native_pane_contexts %{tree: SpanTree, prompt: Prompt, detail: TurnNav, history: TurnNav}
 
   # ---- mount ----
 
@@ -159,6 +167,7 @@ defmodule SpellAgent.Tui.App do
     # `Cockpit.install/0` registers `data/sessions` (the multi-session overview).
     # Best-effort: a headless test without the supervised registry no-ops.
     install_data_sources()
+    seed_pane_contexts()
 
     {:ok, reproject(state, :all)}
   end
@@ -179,6 +188,19 @@ defmodule SpellAgent.Tui.App do
   # Best-effort: an absent registry (headless) degrades to a no-op, never raises.
   defp install_data_sources do
     SpellAgent.Tui.Cockpit.install()
+  rescue
+    _ -> :ok
+  catch
+    :exit, _ -> :ok
+  end
+
+  # Seed the native panes' default focus → keymap-context into `PaneContext`
+  # (PLAN-027 M4), so `base_focus_stack/1` resolves them generically from the
+  # registry rather than a hardcoded clause. Best-effort: an absent registry
+  # (headless) is a no-op — `base_focus_stack/1` then uses the compiled
+  # `@native_pane_contexts` floor, so behavior is identical either way.
+  defp seed_pane_contexts do
+    PaneContext.register_all(@native_pane_contexts)
   rescue
     _ -> :ok
   catch
@@ -214,25 +236,42 @@ defmodule SpellAgent.Tui.App do
     :exit, _ -> false
   end
 
-  defp base_focus_stack(%{ui: %Ui{focus: :tree}}), do: [SpanTree, Global]
-  defp base_focus_stack(%{ui: %Ui{focus: :prompt}}), do: [Prompt, Global]
-  defp base_focus_stack(%{ui: %Ui{focus: :detail}}), do: [TurnNav, Global]
-  # History is a scrollable transcript like Detail — j/k/page scroll via TurnNav.
-  defp base_focus_stack(%{ui: %Ui{focus: :history}}), do: [TurnNav, Global]
-
-  # A PLAN-024 Wave 1 (FUP-005) runtime-declared pane: no compiled context
-  # module exists for it, so its OWN atom is pushed as the context — `Keys`
-  # resolves it purely against LIVE `KeymapRegistry` bindings/reactions keyed
-  # under that same atom (compiled_intent/compiled_react degrade to nil/no-op
-  # for an uncompiled context, guarded in `Keys`). Falls through to Global for
-  # any chord the pane hasn't bound itself. `PaneRegistry.known?/1` is the
-  # bounded membership check (never interns); anything else (a focus atom this
-  # session never declared) still degrades to Global-only, unchanged behavior.
+  # The focus → keymap-context resolution (PLAN-027 M4, FUP-039): ONE generic
+  # clause reading the `PaneContext` registry, instead of four hardcoded clauses
+  # enumerating the native panes. Native panes register their default context at
+  # boot (`seed_pane_contexts/0`); a runtime-declared pane routes by its own atom
+  # (FUP-005); an unknown focus falls through to Global-only. The `@native_pane_contexts`
+  # map is the never-brick FLOOR: if the registry is down (headless test), the
+  # native focus atoms still resolve to their compiled context, so behavior is
+  # identical whether or not the registry is up.
   defp base_focus_stack(%{ui: %Ui{focus: f}}) when is_atom(f) and not is_nil(f) do
-    if runtime_pane?(f), do: [f, Global], else: [Global]
+    case pane_context(f) do
+      nil ->
+        # No registered/compiled context for this focus. A runtime-declared pane
+        # pushes its OWN atom as the context (`Keys` resolves it against the live
+        # KeymapRegistry); anything else degrades to Global-only — the exact prior
+        # behavior for those cases.
+        if runtime_pane?(f), do: [f, Global], else: [Global]
+
+      module ->
+        [module, Global]
+    end
   end
 
   defp base_focus_stack(_), do: [Global]
+
+  # The keymap-context module for a native focus: the live `PaneContext` registry
+  # first (data — an agent/runtime could register a native focus's context), then
+  # the compiled `@native_pane_contexts` floor (never-brick: a down registry still
+  # resolves the native panes). Returns nil for a focus with neither — the signal
+  # to fall through to the runtime-pane path.
+  defp pane_context(f) do
+    PaneContext.lookup(f) || Map.get(@native_pane_contexts, f)
+  rescue
+    _ -> Map.get(@native_pane_contexts, f)
+  catch
+    :exit, _ -> Map.get(@native_pane_contexts, f)
+  end
 
   defp runtime_pane?(f) do
     SpellAgent.Tui.PaneRegistry.known?(f)
