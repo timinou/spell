@@ -32,3 +32,10 @@
   {:context "global"
    :intent "cockpit/back"
    :source "{\"__effect__\" \"ui/set-flag\" \"args\" {\"key\" \"cockpit-drilled\" \"value\" false}}"})
+
+;; Default binds for the drill/back intents (rebindable via keymap/bind). These
+;; live under :global so they resolve while the cockpit body is shown. C-d drills
+;; into the focused session; C-b returns to the overview. (C-o enters the cockpit;
+;; C-r resets to the inspector — both native Global binds.)
+(keymap/bind {:context "global" :chord "C-d" :intent "cockpit/drill"})
+(keymap/bind {:context "global" :chord "C-b" :intent "cockpit/back"})

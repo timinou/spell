@@ -37,6 +37,7 @@ defmodule SpellAgent.Tui.App do
   alias SpellAgent.Tui.{
     Cell,
     Chord,
+    Cockpit,
     DataBag,
     DataSource,
     DefaultLayout,
@@ -563,6 +564,14 @@ defmodule SpellAgent.Tui.App do
 
       {:intent, :"app/reset-layout", _ctx} ->
         reset_layout(state) |> then(&{:noreply, &1})
+
+      {:intent, :"app/cockpit", _ctx} ->
+        # FEAT-046: enter the multi-session cockpit — shadow the body slot with the
+        # live per-session card grid. Cockpit.show/0 is best-effort (a failure
+        # leaves the inspector intact); reproject so the new body renders. C-r
+        # (reset-layout) returns to the default inspector.
+        _ = Cockpit.show()
+        {:noreply, reproject(state, :all)}
 
       {:intent, _intent, _ctx} = resolution ->
         dispatch_generic(resolution, state)

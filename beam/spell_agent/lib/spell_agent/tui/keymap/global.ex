@@ -34,6 +34,10 @@ defmodule SpellAgent.Tui.Keymap.Global do
       {Chord.parse("C-c"), :"app/quit"},
       {Chord.parse("C-r"), :"app/reset-layout"},
       {Chord.parse("C-e"), :"app/toggle-cells"},
+      # C-o opens the multi-session cockpit (FEAT-046): the `body` slot is shadowed
+      # with the live per-session card grid. C-r (reset-layout) returns to the
+      # default inspector.
+      {Chord.parse("C-o"), :"app/cockpit"},
       # C-w opens the FRAME leader: the next key (h/j/k/l) selects a region by
       # SPATIAL position in the layout tree (leftmost/rightmost/top/bottom),
       # resolved from live rect geometry. C-j/C-k cycle WITHIN a frame; C-w moves
@@ -57,6 +61,9 @@ defmodule SpellAgent.Tui.Keymap.Global do
   # app/reset-layout is App-intercepted because it mutates the LayoutRegistry;
   # identity here so a stray dispatch can't corrupt the gaze.
   def react(:"app/reset-layout", %Ui{} = ui, _forest), do: ui
+  # app/cockpit is App-intercepted (it shadows the body slot via Cockpit.show/0,
+  # a LayoutRegistry mutation); identity here so a stray dispatch is harmless.
+  def react(:"app/cockpit", %Ui{} = ui, _forest), do: ui
   # frame/leader is App-intercepted: it arms a one-shot pending state, then the
   # NEXT key is resolved spatially against the placed tree (geometry the pure
   # Ui->Ui reaction cannot see). Identity here so a stray dispatch is harmless.
