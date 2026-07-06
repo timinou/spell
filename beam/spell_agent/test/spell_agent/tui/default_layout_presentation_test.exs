@@ -9,7 +9,11 @@ defmodule SpellAgent.Tui.DefaultLayoutPresentationTest do
   every branch (running/done/failed/idle, insert/normal), and never-brick when
   the data is malformed.
   """
-  use ExUnit.Case, async: true
+  # async: false — the never-brick test mutates the GLOBAL `:persistent_term`
+  # DefaultLayout data cache, which any other test reading `DefaultLayout.tree/*`
+  # shares. Running serially prevents that contamination (the demo-9 / hole-
+  # resolver splice tests read the default layout concurrently).
+  use ExUnit.Case, async: false
 
   alias SpellAgent.Tui.{DefaultLayout, HoleResolver, Lens, Ui}
 
@@ -102,7 +106,12 @@ defmodule SpellAgent.Tui.DefaultLayoutPresentationTest do
       on_exit(fn -> DefaultLayout.reload() end)
 
       env = status_env(%{"running?" => true, "turns" => 1, "tools" => 1})
-      assert resolve("status", :text, env) == "● running…  turns 1 · tools 1"
+      out = resolve("status", :text, env)
+      # Restore the GLOBAL persistent_term cache IMMEDIATELY (not just on_exit) so
+      # the corruption window can't contaminate a concurrent test reading the
+      # default layout.
+      DefaultLayout.reload()
+      assert out == "● running…  turns 1 · tools 1"
     end
 
     test "a NON-MAP presentation section falls back to the floor, never BadMapError (review Sβ P1)" do
@@ -114,11 +123,18 @@ defmodule SpellAgent.Tui.DefaultLayoutPresentationTest do
       on_exit(fn -> DefaultLayout.reload() end)
 
       env = status_env(%{"result" => "error", "turns" => 2, "tools" => 0})
-      assert resolve("status", :text, env) == "✗ failed  turns 2 · tools 0"
-      assert resolve("status", :color, env) == "red"
-      # And the composer side of the same malformed section:
       cenv = composer_env("insert", "hi", "h")
-      assert resolve("composer", :text, cenv) == "hi▎"
+      # Capture all three derivations against the corrupted cache, THEN restore
+      # the global immediately (before asserting) so a concurrent reader never
+      # sees the corrupt value.
+      status_text = resolve("status", :text, env)
+      status_color = resolve("status", :color, env)
+      composer_text = resolve("composer", :text, cenv)
+      DefaultLayout.reload()
+
+      assert status_text == "✗ failed  turns 2 · tools 0"
+      assert status_color == "red"
+      assert composer_text == "hi▎"
     end
   end
 end
