@@ -50,6 +50,7 @@ defmodule SpellAgent.Tui.App do
     Lens,
     LayoutRegistry,
     PaneContext,
+    Palette,
     Projection,
     Render,
     Spatial,
@@ -365,6 +366,7 @@ defmodule SpellAgent.Tui.App do
     |> Enum.filter(&Render.encodable_placement?/1)
     |> maybe_cells_drawer(state, data_bag, area)
     |> maybe_help_overlay(state, data_bag, area)
+    |> maybe_palette_overlay(state, data_bag, area)
   end
 
   # The cells drawer (default: Ctrl-e): a right-side card overlay listing every
@@ -488,6 +490,79 @@ defmodule SpellAgent.Tui.App do
 
   defp help_lines(_), do: ["(no keybindings)"]
 
+  # The command palette overlay (C-p): a centered filter box + the matching
+  # bindings, the selected row marked. Derived each frame from the palette flags
+  # (query/cursor) + the reflected keybindings — no separate state. Same
+  # never-brick discipline as the other overlays: a build failure yields no
+  # overlay, the frame survives. Present iff `ui.flags["palette"]` is set.
+  defp maybe_palette_overlay(placements, state, data_bag, area) do
+    if Palette.open?(state.ui) do
+      placements ++ palette_overlay_placements(state, data_bag, area)
+    else
+      placements
+    end
+  end
+
+  defp palette_overlay_placements(state, data_bag, area) do
+    rows = Map.get(data_bag, "keybindings", [])
+    query = Palette.query(state.ui)
+    filtered = Palette.filter(rows, query)
+    selected = Palette.selected_index(state.ui, rows)
+
+    items = palette_lines(query, filtered, selected)
+
+    node = %{
+      "type" => "list",
+      "items" => items,
+      "block" => %{
+        "type" => "block",
+        "title" => " commands — type to filter, ↵ run, esc close ",
+        "borders" => ["all"],
+        "border_type" => "rounded",
+        "border_style" => %{"fg" => "magenta"}
+      }
+    }
+
+    case SpellAgent.Tui.Materialize.to_struct(node) do
+      %{__struct__: _} = widget ->
+        w = min(60, area.width)
+        h = min(max(length(items) + 2, 6), area.height)
+        x = max(0, div(area.width - w, 2))
+        y = max(0, div(area.height - h, 2))
+        [{widget, %Rect{x: x, y: y, width: w, height: h}}]
+
+      _ ->
+        []
+    end
+  rescue
+    _ -> []
+  end
+
+  # The palette's lines: a query prompt row, then the filtered bindings with the
+  # selected one marked `›`. Total: an empty result set shows a hint.
+  defp palette_lines(query, filtered, selected) do
+    prompt = "› " <> if(query == "", do: "(type to filter)", else: query)
+
+    body =
+      case filtered do
+        [] ->
+          ["  (no matching command)"]
+
+        _ ->
+          filtered
+          |> Enum.with_index()
+          |> Enum.map(fn {row, i} ->
+            mark = if i == selected, do: "›", else: " "
+            chord = row |> Map.get("chord", "") |> to_string() |> String.pad_trailing(10)
+            ctx = row |> Map.get("context", "") |> to_string()
+            label = row |> Map.get("label", "") |> to_string()
+            "#{mark} #{chord}#{String.pad_trailing(label, 16)} #{ctx}"
+          end)
+      end
+
+    [prompt | body]
+  end
+
   # The tree to render: the agent-shadowed tree from LayoutRegistry if it is
   # running AND its pane set matches the App's current panes; otherwise the native
   # default built fresh from state (the always-available baseline + the test path,
@@ -572,7 +647,89 @@ defmodule SpellAgent.Tui.App do
 
   def handle_event(_event, state), do: {:noreply, state}
 
-  defp handle_key_event(%Chord{} = chord, %{pending_leader: true} = state) do
+  # PALETTE modal layer (FEAT-047 W2) — the FIRST clause, so an open palette owns
+  # the keyboard (like INSERT owns it for the composer). Esc/C-g close; Enter
+  # fires the selected binding through the SAME `apply_intent/2` a real keystroke
+  # uses (App-only intents included); ↑/↓ (and C-k/C-j) move the cursor;
+  # backspace trims the filter; any printable char extends it. EVERY key is
+  # consumed — nothing leaks to normal/insert while the palette is open. The
+  # close path depends only on flags, never on render succeeding (never-brick).
+  defp handle_key_event(%Chord{} = chord, state) do
+    if Palette.open?(state.ui) do
+      handle_palette_key(chord, state)
+    else
+      handle_key_event_modal(chord, state)
+    end
+  end
+
+  # Route a keystroke while the palette is OPEN. Returns the usual
+  # {:noreply|:stop, state}.
+  defp handle_palette_key(%Chord{} = chord, state) do
+    rows = palette_rows(state)
+
+    cond do
+      chord.key in ["esc"] or (chord.key == "g" and chord.mods == [:ctrl]) ->
+        {:noreply, %{state | ui: Palette.close(state.ui)}}
+
+      chord.key == "enter" and chord.mods == [] ->
+        fire_palette_selection(rows, state)
+
+      chord.key in ["up"] or (chord.key == "k" and chord.mods == [:ctrl]) ->
+        {:noreply, %{state | ui: Palette.move(state.ui, rows, -1)}}
+
+      chord.key in ["down"] or (chord.key == "j" and chord.mods == [:ctrl]) ->
+        {:noreply, %{state | ui: Palette.move(state.ui, rows, +1)}}
+
+      chord.key == "backspace" ->
+        {:noreply, %{state | ui: Palette.backspace(state.ui)}}
+
+      # A single printable character (no ctrl/alt) extends the filter.
+      printable?(chord) ->
+        {:noreply, %{state | ui: Palette.append(state.ui, chord.key)}}
+
+      # Everything else is consumed (no leak), palette stays open.
+      true ->
+        {:noreply, state}
+    end
+  end
+
+  # Fire the selected palette row: CLOSE the palette first (so the fired intent
+  # sees a clean modal state — e.g. a fired mode/insert focuses the prompt), then
+  # apply the resolution through the shared path. No valid selection → just close.
+  defp fire_palette_selection(rows, state) do
+    closed = %{state | ui: Palette.close(state.ui)}
+
+    case Palette.resolution(state.ui, rows) do
+      nil -> {:noreply, closed}
+      resolution -> apply_intent(resolution, closed)
+    end
+  end
+
+  # The palette's row set: the reflected keybindings from the live data bag if
+  # present (the query-clock source), else a fresh reflection (a headless path
+  # without the resolved source). Total: a bad value → [].
+  defp palette_rows(state) do
+    case Map.get(state, :data_sources) do
+      %{"keybindings" => rows} when is_list(rows) -> rows
+      _ -> SpellAgent.Tui.KeymapIntrospect.rows()
+    end
+  rescue
+    _ -> []
+  end
+
+  # A chord is a printable single character if its key is exactly one grapheme
+  # and it carries no modifiers (so C-x, arrows, "enter", "tab" are NOT printable).
+  defp printable?(%Chord{key: key, mods: mods}) do
+    mods == [] and is_binary(key) and String.length(key) == 1
+  end
+
+  # Open the palette (App-only modal flags). Clears pending_leader so an armed
+  # frame-leader cannot fire after the palette closes (oracle gate, agent 30).
+  defp open_palette(state) do
+    %{state | ui: Palette.open(state.ui), pending_leader: false}
+  end
+
+  defp handle_key_event_modal(%Chord{} = chord, %{pending_leader: true} = state) do
     state = %{state | pending_leader: false}
 
     case Spatial.direction(chord.key) do
@@ -587,7 +744,7 @@ defmodule SpellAgent.Tui.App do
     end
   end
 
-  defp handle_key_event(%Chord{} = chord, %{ui: %Ui{mode: :insert}} = state) do
+  defp handle_key_event_modal(%Chord{} = chord, %{ui: %Ui{mode: :insert}} = state) do
     cond do
       chord.key == "esc" ->
         # Leave INSERT without submitting; keep the composer buffer.
@@ -616,8 +773,25 @@ defmodule SpellAgent.Tui.App do
   # default, exactly like every other intent's dispatch (`Keys.dispatch`
   # already prefers a live reaction over the compiled `react/3` — this clause
   # now honors that same precedence instead of short-circuiting around it).
-  defp handle_key_event(%Chord{} = chord, %{ui: %Ui{mode: :normal}} = state) do
-    case Keys.resolve(chord, focus_stack(state)) do
+  defp handle_key_event_modal(%Chord{} = chord, %{ui: %Ui{mode: :normal}} = state) do
+    apply_intent(Keys.resolve(chord, focus_stack(state)), state)
+  end
+
+  defp handle_key_event_modal(%Chord{}, state), do: {:noreply, state}
+
+  # Apply a RESOLVED intent to the App state — the single interpretation of
+  # "what an intent does", shared by the NORMAL-mode key path AND the command
+  # palette (FEAT-047 W2). A palette selection is exactly a keystroke that was
+  # already resolved to `{:intent, intent, ctx}`, so firing it MUST go through
+  # here, not `dispatch_generic/2` directly: the App-only intents below
+  # (quit/leader/submit/reset/cockpit) are intercepted HERE and only reach a
+  # gaze-only `dispatch_generic` as the fallback — bypassing this would silently
+  # no-op them (their compiled react/3 is identity). Oracle-gated (agent 30).
+  #
+  # Returns the SAME shapes handle_event/2 does: `{:noreply, state}` |
+  # `{:stop, state}`.
+  defp apply_intent(resolution, state) do
+    case resolution do
       {:intent, :"app/quit", _ctx} ->
         # Intentionally protected (never redefinable) — see moduledoc note above.
         {:stop, state}
@@ -652,6 +826,11 @@ defmodule SpellAgent.Tui.App do
         _ = Cockpit.show()
         {:noreply, reproject(state, :all)}
 
+      {:intent, :"app/palette", _ctx} ->
+        # FEAT-047 W2: open the command palette (App-intercepted, like app/cockpit
+        # — it arms App-only modal flags a pure Ui->Ui reaction cannot).
+        {:noreply, open_palette(state)}
+
       {:intent, _intent, _ctx} = resolution ->
         dispatch_generic(resolution, state)
 
@@ -660,8 +839,6 @@ defmodule SpellAgent.Tui.App do
         {:noreply, state}
     end
   end
-
-  defp handle_key_event(%Chord{}, state), do: {:noreply, state}
 
   # Shared generic-intent dispatch path: run the resolved intent through
   # `Keys.dispatch/6` (compiled react/3 OR a live PTC reaction, whichever wins)
@@ -728,11 +905,21 @@ defmodule SpellAgent.Tui.App do
 
   defp reset_layout(state) do
     LayoutRegistry.reset(nil)
-    %{state | pending_leader: false} |> reproject(:all)
+    # C-r is the out-of-band emergency reset (intercepted in handle_event/2 before
+    # the modal clauses), so it ALSO clears the palette — the guaranteed escape if
+    # an open palette ever wedged (oracle gate, agent 30). pending_leader too.
+    %{state | ui: Palette.close(state.ui), pending_leader: false} |> reproject(:all)
   rescue
-    _ -> %{state | pending_leader: false}
+    _ -> reset_fallback(state)
   catch
-    :exit, _ -> %{state | pending_leader: false}
+    :exit, _ -> reset_fallback(state)
+  end
+
+  # The never-brick floor for C-r: even if the LayoutRegistry reset or reproject
+  # blows up, the palette + leader modal flags MUST still clear — C-r is the
+  # emergency escape and can never leave a wedged palette behind.
+  defp reset_fallback(state) do
+    %{state | ui: Palette.close(state.ui), pending_leader: false}
   end
 
   # ---- frame leader: spatial region resolution (C-w) ----
