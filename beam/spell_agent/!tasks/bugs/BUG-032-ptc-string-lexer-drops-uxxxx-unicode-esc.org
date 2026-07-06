@@ -1,0 +1,28 @@
+#+TITLE: PTC string lexer drops \uXXXX unicode escapes (leaks literal backslash)
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: BUG-032-ptc-string-lexer-drops-uxxxx-unicode-esc
+
+* Initial Message
+
+Let's pick up the multi-session cockpit UI. How would it be implemented and done using the Spell BEAM agent principles, and what could it look like? Maximum beam lisp usage. Include your methodology for the implementation
+
+* Summary
+The ptc_runner string lexer (`fast_parser.ex parse_string/3`) handled `\\` `\"` `
+` `	` `\r` but let ANY OTHER escape fall through KEEPING the literal backslash. So a `\uXXXX` unicode escape in a string literal leaked through as the literal 6 characters instead of decoding to the codepoint.
+
+* Impact
+General correctness bug (not spell-specific): any PTC string with a `\uXXXX` escape produced wrong text. Surfaced concretely in the multi-session cockpit \u2014 `priv/tui/cockpit_layout.ptc` used `"\u00b7"` for the middle-dot separator and it rendered as literal `\u00b7` in the live TUI header ("0 sessions \u00b7 0 running").
+
+* Root cause
+`parse_string/3`'s escape `case` had no `\uXXXX` clause; the generic `<<c::utf8, rest>>` fallthrough re-emitted `<<?\\, c::utf8>>` (backslash preserved). Correct for an unknown escape, wrong for `\u` which every JSON/Clojure/Java string decodes.
+
+* Fix (LANDED, ptc_runner commit 513b2c80)
+Added a fixed-4-hex-digit `\uXXXX` clause to `parse_string/3` decoding to `<<code::utf8>>`. `:regex_literal` strings excluded (regex has its own `\u` semantics). A non-hex sequence after `\u` is unchanged (no false decode). Test in `test/ptc_runner/lisp/parser_test.exs` ("unicode escapes \uXXXX decode…"). SPELL_PATCHES.md entry added (disposition: general \u2014 belongs upstream). 3517 lisp tests pass.
+
+* How found
+Running the cockpit in a live TUI via tmux (unit tests all passed \u2014 they used real UTF-8 glyphs, not `\u` escapes, so they never exercised the lexer path).
+
+* Follow-on
+Also swapped the cockpit `.ptc` files to real UTF-8 glyphs (belt-and-suspenders), so they render correctly regardless of the escape decode.

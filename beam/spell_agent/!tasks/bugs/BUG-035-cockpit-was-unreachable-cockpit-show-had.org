@@ -1,0 +1,27 @@
+#+TITLE: Cockpit was unreachable — Cockpit.show had no keybinding or command
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: BUG-035-cockpit-was-unreachable-cockpit-show-had
+
+* Initial Message
+
+Let's pick up the multi-session cockpit UI. How would it be implemented and done using the Spell BEAM agent principles, and what could it look like? Maximum beam lisp usage. Include your methodology for the implementation
+
+* Summary
+The cockpit substrate (Cockpit.show/0, the layout, the reactions) shipped complete but had NO way for a human to reach it from a running TUI \u2014 no key, no slash-command, no tool binding. It could only be invoked programmatically (`Cockpit.show()` in Elixir). The drill/back reactions (`cockpit/drill`, `cockpit/back`) were defined but bound to no chord.
+
+* Impact
+"How do I use it" had no answer: a user at `mix spell.tui` could not open the cockpit at all. The feature was, from the user's seat, invisible \u2014 despite passing every unit test (the tests called Cockpit.show/0 directly).
+
+* Root cause
+The last-mile wiring (key -> action) was never added. The M6 work built and tested the substrate + the show/0 entry point, but stopped short of binding it into the live keymap \u2014 and I claimed it "usable" without launching the TUI to confirm.
+
+* Fix (LANDED, spell_agent commits 726b775d4 + 243e67268)
+- `C-o` -> `app/cockpit`: a native Global keymap intent, App-intercepted in `handle_key_event/2` to run `Cockpit.show/0` + reproject (best-effort; a failure leaves the inspector intact).
+- `C-r` (existing reset-layout) returns to the default inspector.
+- `C-d` -> `cockpit/drill`, `C-b` -> `cockpit/back`: default binds in `cockpit_reactions.ptc` (rebindable via keymap/bind).
+Verified live in tmux: C-o opens the cockpit, C-r returns. 64 keys/app/cockpit tests green.
+
+* How found
+The user asked "how do I use it" \u2014 and the honest answer was "you can't yet." Filing this so the pattern is recorded: a feature is not done until its human entry point is wired AND exercised in the real surface, not just unit-tested.

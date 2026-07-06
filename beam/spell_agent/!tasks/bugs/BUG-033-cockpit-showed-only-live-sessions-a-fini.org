@@ -1,0 +1,31 @@
+#+TITLE: Cockpit showed only live sessions — a finished mission vanished from the view
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: BUG-033-cockpit-showed-only-live-sessions-a-fini
+
+* Initial Message
+
+Let's pick up the multi-session cockpit UI. How would it be implemented and done using the Spell BEAM agent principles, and what could it look like? Maximum beam lisp usage. Include your methodology for the implementation
+
+* Summary
+The multi-session cockpit read its session set from `SessionRegistry.lineage/0`, which returns ONLY currently-live sessions. But `Session.run` calls `SessionRegistry.finish(session_id)` on completion, which DROPS the session from the registry. So the instant a mission finished, it disappeared from the cockpit \u2014 a solo completed mission showed "0 sessions", even though its full trace was recorded and visible in the inspector.
+
+* Impact
+The cockpit was effectively useless for the common case (watching what your sessions DID): it could only ever show sessions running RIGHT NOW, and a finished one \u2014 the thing you most want to review \u2014 was gone. This is a design-level bug: "which sessions to show" was conflated with "which sessions are live" (the registry's liveness-monitoring concern).
+
+* Root cause
+`SessionRegistry` is a LIVENESS registry (monitors pids, drops on `:DOWN`/`finish`). The cockpit treated it as the authoritative session index. The persistent record lives in the Hist store (`Hist.sessions/1`), which the cockpit never consulted for its base set (only for per-session content).
+
+* Fix (LANDED, spell_agent commit 243e67268)
+`SpellAgent.Tui.DataSource.Tools.lineage/1` now UNIONS the two sources:
+- BASE: `Hist.sessions(store: store)` \u2014 the recorded set (finished + running), newest-first, the persistent truth.
+- ENRICH: `SessionRegistry.lineage/0` \u2014 live owner/parent/region + a "running" marker for sessions still in flight; a live session not yet flushed to the store surfaces via a live-only branch.
+- STATUS: derived from each session's trace (last turn -> ok/error), so a finished session shows its final \u2713/\u2717, not "running".
+One union implementation shared by the `.ptc` producer (via the read-only source tier) AND the Elixir floor (`Cockpit.sessions/1` delegates to the same tier) \u2014 no drift; ~140 lines of now-duplicated helpers deleted from cockpit.ex. Tests updated to the union contract (a finished-session-still-shows test added). 11 cockpit tests + 645 TUI green.
+
+* How found
+Live TUI test via tmux: ran a real mission, pressed C-o, saw "0 sessions". Every unit test passed because they registered a live session in the registry AND recorded to the store in the same test \u2014 never exercising the finish()-drops-it path.
+
+* Note
+The `@max_sessions`/`@max_lineage` bound + newest-first ordering are preserved; a sick source degrades to [] (never-brick).

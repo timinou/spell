@@ -1,0 +1,27 @@
+#+TITLE: Layout: a `block` with `children` renders only the border — nested widget silently dropped
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: BUG-034-layout-a-block-with-children-renders-onl
+
+* Initial Message
+
+Let's pick up the multi-session cockpit UI. How would it be implemented and done using the Spell BEAM agent principles, and what could it look like? Maximum beam lisp usage. Include your methodology for the implementation
+
+* Summary
+In the freeform layout render model, a `block` is a LEAF widget (a bordered box with an optional title) \u2014 NOT a container that lays out `children`. A layout node `{"type" "block" ... "children" [<widget>]}` renders only the border; the nested widget is silently dropped (never placed, no error).
+
+* Impact
+The cockpit cards were authored as `block` with a `children` list of a `list` widget. Result: cards showed the border + title but an EMPTY interior \u2014 no intent, no activity, no spans. A silent-drop failure (no diagnostic), so it looked like a data problem, not a structural one.
+
+* Root cause / the correct pattern
+To put content INSIDE a border, the widget carries a `block` FIELD (the border wraps the widget), it is not nested as a block's child. This is the pattern the composer + history panes already use: `{"type" "paragraph"/"list", ..., "block" {"type" "block" "title" ... "borders" ["all"]}}`. `Surface.layout` places the widget and applies its `block` field as the frame; a bare `block` node has no child-layout semantics.
+
+* Fix (LANDED, spell_agent commit 243e67268)
+Restructured the cockpit card in `priv/tui/cockpit_layout.ptc` from a `block`-with-children to a `list` widget carrying a `block` field (id+status title, status-colored border). Verified headless (the `list` widget materializes WITH its items + block) and live (card shows "\u2302 say hi / \u2937 hi / \u2713 hi" inside the border). The M6 `show/0` test updated to assert the list-with-block structure.
+
+* How found
+Live TUI via tmux: the card border rendered with the correct title but a blank body.
+
+* Follow-up (FUP candidate, not filed as blocking)
+`LayoutDiagnostic`/`Surface` could WARN when a leaf widget (block/paragraph/list) carries a `children` key that will be ignored \u2014 the silent drop cost real debugging time. A lint at author time would catch this class of mistake. Noted here; low priority.
