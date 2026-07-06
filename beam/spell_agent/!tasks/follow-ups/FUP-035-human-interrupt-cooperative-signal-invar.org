@@ -1,0 +1,34 @@
+#+TITLE: human/interrupt cooperative-signal invariant design (oracle-gated)
+#+STATE: ITEM
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: FUP-035-human-interrupt-cooperative-signal-invar
+
+* Initial Message
+
+Let's pick up the multi-session cockpit UI. How would it be implemented and done using the Spell BEAM agent principles, and what could it look like? Maximum beam lisp usage. Include your methodology for the implementation
+
+* Summary
+`human/interrupt {id}` (FEAT-046 part 5) lets a human halt a running session from the cockpit. Unlike the other `human/*` verbs (pure lens ops / gateway calls), interrupt needs a NEW runtime invariant, so it is gated on an oracle design pass before impl — the same discipline as the loop/continue design gate.
+
+* The risk
+A forced interrupt that lands mid-tool — specifically mid-NIF-edit (`SpellAgent.Find.edit_tool` → `PiKernelNif.apply_edit_decoded`) — is a partial-write hazard: a file half-written, a store half-committed. The stakes doctrine ("bugs → material impact") forbids shipping this on a naive `Process.exit`.
+
+* Design constraint (settled direction, to be validated by oracle)
+The interrupt MUST be COOPERATIVE and land ONLY at the turn boundary — the existing `check_termination` seam that `loop/continue` already gates at (ptc_runner turn gate). Mechanism: a per-session interrupt flag (registry meta or a lightweight signal to the run pid) that the mission loop reads at the SAME point it checks the budget/termination, between turns, never mid-tool. An in-flight tool call completes (or times out on its own bound); the interrupt is observed at the next gate.
+
+* Open questions for the oracle
+1. Signal transport: registry-meta flag polled at the gate vs. a message to the run pid drained at the gate — which is more robust under a registry-down / pid-race?
+2. Interaction with `loop/continue`: an interrupt during a continue trampoline must halt the WHOLE chain, not just the current mission — where does the flag get checked relative to `run_with_continue`?
+3. Idempotency + addressing: interrupt of an already-finished / unknown id is a no-op; interrupt of a session with live children — cascade or leave children running (adopt)?
+4. Feedback: how does the cockpit reflect "interrupt requested, waiting for the turn gate" vs "interrupted" (a status glyph on the card).
+
+* Acceptance (after oracle)
+- Interrupt lands ONLY at `check_termination`, never mid-NIF-edit — proven by a test that fires interrupt during a long tool and asserts the tool completed before the halt (no partial write).
+- Halts a loop/continue chain fully.
+- Best-effort: unknown/finished id → no-op; registry/pid down → no crash.
+- Cockpit card shows the requested→interrupted transition.
+
+* Depends on
+- FEAT-046 W-C4 (human/* namespace) landed first.
+- The loop/continue turn-gate (done, FEAT-045).

@@ -32,26 +32,26 @@ defmodule SpellAgent.Tui.App do
   require Logger
 
   alias ExRatatui.Layout.Rect
-  alias ExRatatui.Style
-  alias ExRatatui.Widgets.{Block, List, Paragraph}
   alias SpellAgent.Hist
 
   alias SpellAgent.Tui.{
     Cell,
     Chord,
     DataBag,
+    DataSource,
     DefaultLayout,
+    ForestDiff,
+    HintBar,
     HoleAffordance,
     Keys,
     KeymapRegistry,
     Lens,
     LayoutRegistry,
-    Materialize,
     Projection,
+    Render,
     Spatial,
     Store,
     Surface,
-    ThemeRegistry,
     Ui
   }
 
@@ -154,6 +154,12 @@ defmodule SpellAgent.Tui.App do
     # state (so mount never depends on the registry being up).
     seed_layout(state)
 
+    # PLAN-027 M0: register the query-clock data sources the surface ships with.
+    # The render loop names none of them — it resolves whatever is registered.
+    # `Cockpit.install/0` registers `data/sessions` (the multi-session overview).
+    # Best-effort: a headless test without the supervised registry no-ops.
+    install_data_sources()
+
     {:ok, reproject(state, :all)}
   end
 
@@ -167,7 +173,17 @@ defmodule SpellAgent.Tui.App do
   catch
     :exit, _ -> :ok
   end
-
+  # Register the query-clock data sources the surface ships with (PLAN-027 M0).
+  # Each is a PERIPHERY policy call; the render loop stays feature-agnostic — it
+  # resolves whatever DataSource.Registry holds, naming no specific source.
+  # Best-effort: an absent registry (headless) degrades to a no-op, never raises.
+  defp install_data_sources do
+    SpellAgent.Tui.Cockpit.install()
+  rescue
+    _ -> :ok
+  catch
+    :exit, _ -> :ok
+  end
   # The resolver context stack for the current focus (PLAN-346 W5): the focused
   # pane's context FIRST, then the global layer. The SAME chord (h/l) resolves
   # differently by which context tops the stack — SpanTree (tree nav) under tree
@@ -260,8 +276,8 @@ defmodule SpellAgent.Tui.App do
     |> render_tree()
     |> Surface.resolve_holes(data_bag)
     |> Surface.layout(area)
-    |> Enum.flat_map(fn {node, rect} -> safe_resolve_node(node, rect, state) end)
-    |> Enum.filter(&encodable_placement?/1)
+    |> Enum.flat_map(fn {node, rect} -> Render.safe_resolve_node(node, rect, state) end)
+    |> Enum.filter(&Render.encodable_placement?/1)
     |> maybe_cells_drawer(state, data_bag, area)
   end
 
@@ -314,48 +330,6 @@ defmodule SpellAgent.Tui.App do
     _ -> []
   end
 
-  # The SINGLE render contract (BUG-009 + BUG-010): every node's resolution is
-  # TOTAL. Two failure modes used to escape:
-  #
-  #   * BUG-010: `resolve_node` (or the pane `view/1` / `Materialize.to_struct`
-  #     it calls) RAISES on a malformed node, killing the whole `render/2` — and
-  #     because tests call the pure `render/2` directly (no Server `rescue`), the
-  #     test blows up with "bad layout"/"bad body" instead of degrading.
-  #   * BUG-009: even when resolution succeeds, an unencodable widget raises at
-  #     `ExRatatui.draw` time; the Server drops the WHOLE frame (frozen screen).
-  #
-  # Guard BOTH here: `safe_resolve_node` makes resolution total (a raise -> drop
-  # just this node's leaves), and the trailing `encodable_placement?` filter makes
-  # the encode total (an unencodable leaf -> dropped, not raised). A malformed
-  # node becomes a GAP; the rest of the frame always renders. This holds on the
-  # direct `render/2` path AND under the Server, so `render/2` is safe to unit-test.
-  defp safe_resolve_node(node, rect, state) do
-    resolve_node(node, rect, state)
-  rescue
-    e ->
-      Logger.warning(
-        "render: dropped node #{inspect(Lens.slot(node) || Map.get(node, "type"))}: #{Exception.message(e)}"
-      )
-
-      []
-  catch
-    _, _ -> []
-  end
-
-  # The encode gate (BUG-008): a placed widget the Bridge cannot encode would make
-  # `ExRatatui.draw` raise and drop the frame. Probe each leaf with the SAME call
-  # the draw loop makes and drop the offenders — one missing widget always beats
-  # no frame.
-  defp encodable_placement?({widget, %Rect{} = rect}) do
-    ExRatatui.Bridge.encode_command({widget, rect})
-    true
-  rescue
-    _ -> false
-  catch
-    _, _ -> false
-  end
-
-  defp encodable_placement?(_), do: false
 
   # The tree to render: the agent-shadowed tree from LayoutRegistry if it is
   # running AND its pane set matches the App's current panes; otherwise the native
@@ -415,62 +389,6 @@ defmodule SpellAgent.Tui.App do
     :exit, _ -> nil
   end
 
-  # Resolve a placed leaf node to [{widget, rect}].
-  #
-  # A "pane" node delegates to its pane module's project/view (the existing,
-  # tested machinery) with the gaze + cursor injected, then materializes the
-  # descriptor. The status/composer slots are widget leaves whose dynamic content
-  # we fill here from live state. Anything else is an agent-authored widget leaf
-  # routed straight through Materialize (Surface already did that in render/2, but
-  # we walk via layout/2 to intercept the native slots, so handle it here too).
-  # The native status/composer slots carry only a static frame (no content) in the
-  # default tree, so the App fills their dynamic text. But if the AGENT has
-  # ONE resolution path (PLAN-012 W5 dogfood): every node — status, composer, an
-  # agent shadow, a pane — resolves by its TYPE. The status/composer slots used to
-  # be filled by hardcoded `status_widget`/`composer_widget`; now their default
-  # nodes carry tmpl:: holes over the data/* bag (DefaultLayout), already resolved
-  # by `Surface.resolve_holes` before this point, so they materialize like any
-  # widget. The special-case branch (and the two fill fns) are gone.
-  defp resolve_node(node, rect, state) do
-    resolve_by_type(node, rect, state)
-  end
-
-  defp resolve_by_type(node, rect, state) do
-    case Map.get(node, "type") do
-      "pane" -> resolve_pane(node, rect, state)
-      _ -> materialize_widget(node, rect)
-    end
-  end
-
-  # A native pane node -> run its module's view over the projected vm + gaze.
-  defp resolve_pane(node, rect, state) do
-    slot = Lens.slot(node)
-    name = safe_pane_name(slot)
-    mod = DefaultLayout.pane_module(slot)
-
-    if is_nil(name) or is_nil(mod) do
-      []
-    else
-      vm = Map.get(state.vms, name)
-      focused? = state.ui.focus == name
-      assigns = %{ui: state.ui, cursor: Ui.cursor_of(state.ui, name)}
-
-      %{vm: vm, rect: rect, assigns: assigns, focused?: focused?}
-      |> mod.view()
-      |> Enum.map(&materialize(&1, state))
-    end
-  end
-
-  # An agent-authored widget leaf -> Materialize -> %Widget{} (or skip on error).
-  defp materialize_widget(node, rect) do
-    case Materialize.to_struct(node) do
-      {:error, _} -> []
-      widget -> [{widget, rect}]
-    end
-  end
-
-  defp safe_pane_name(slot) when is_binary(slot), do: Ui.safe_pane(slot)
-  defp safe_pane_name(_), do: nil
 
   # ---- events: MODAL resolver path (PLAN-346 W5) ----
 
@@ -526,19 +444,40 @@ defmodule SpellAgent.Tui.App do
     end
   end
 
+  # FEAT-039: system intents (app/quit, frame/leader, mode/insert) are resolved
+  # through the SAME `Keys.resolve/2` cascade as every other intent — a live
+  # `keymap/bind` already rebinds WHICH chord triggers them (KeymapRegistry is
+  # consulted before the compiled keymap, same as any pane intent). What these
+  # three clauses intercept is the REACTION side: `app/quit` stops the App (a
+  # pure Ui->Ui reaction cannot express `:stop` — no gaze value means "halt the
+  # runtime") and `frame/leader` arms App-only `pending_leader` state (not a
+  # tree/gaze field). Both are therefore PROTECTED — never redefinable via
+  # `keymap/define-reaction` — by design, documented in
+  # docs/freeform-tui-architecture.md #9. `mode/insert` has no such App-only
+  # need, so it is NOT protected: a live reaction registered via
+  # `keymap/define-reaction` for this ctx+intent wins over the hardcoded
+  # default, exactly like every other intent's dispatch (`Keys.dispatch`
+  # already prefers a live reaction over the compiled `react/3` — this clause
+  # now honors that same precedence instead of short-circuiting around it).
   defp handle_key_event(%Chord{} = chord, %{ui: %Ui{mode: :normal}} = state) do
     case Keys.resolve(chord, focus_stack(state)) do
       {:intent, :"app/quit", _ctx} ->
+        # Intentionally protected (never redefinable) — see moduledoc note above.
         {:stop, state}
 
       {:intent, :"frame/leader", _ctx} ->
+        # Intentionally protected (never redefinable) — see moduledoc note above.
         # Arm the FRAME leader (C-w): the next key picks a region spatially.
         {:noreply, %{state | pending_leader: true}}
 
-      {:intent, :"mode/insert", _ctx} ->
-        # Enter INSERT — only meaningful on the prompt; focus it so typing is
-        # visibly directed there.
-        {:noreply, %{state | ui: state.ui |> Ui.focus(:prompt) |> Ui.mode(:insert)}}
+      {:intent, :"mode/insert", ctx} = resolution ->
+        if live_reaction?(ctx, :"mode/insert") do
+          dispatch_generic(resolution, state)
+        else
+          # Default behavior: enter INSERT — only meaningful on the prompt; focus
+          # it so typing is visibly directed there.
+          {:noreply, %{state | ui: state.ui |> Ui.focus(:prompt) |> Ui.mode(:insert)}}
+        end
 
       {:intent, :"app/submit", _ctx} ->
         # `enter` on a non-prompt pane (where mode/insert isn't bound) runs the
@@ -549,23 +488,7 @@ defmodule SpellAgent.Tui.App do
         reset_layout(state) |> then(&{:noreply, &1})
 
       {:intent, _intent, _ctx} = resolution ->
-        forest = Store.spans(state.store)
-        # PLAN-024 Wave 2 (FUP-031): thread the LIVE tree through so an authored
-        # reaction can call lens/frame-target (the same spatial primitive the
-        # native C-w keybinding uses) — without this, lens/* is unreachable from
-        # a real dispatched reaction (only harness/+keymap/ would be).
-        #
-        # PLAN-024 Wave 3 (FEAT-020): also thread mesh_opts so a hole-affordance
-        # reaction can call black/post (e.g. posting a :resolution when its bound
-        # chord fires). session_id = hist_session (already a stable per-session
-        # identifier — no new concept introduced); region = the SAME id, so a
-        # hole-affordance's decision/resolution records live in this session's
-        # own mesh region by default.
-        mesh_opts = %{session_id: state.hist_session, region: state.hist_session, store: state.hist_store}
-        ui = Keys.dispatch(resolution, state.ui, forest, &Keys.context_name/1, render_tree(state), mesh_opts)
-        # Navigation changed the gaze → re-mirror every pane (the detail pane
-        # mirrors the new selection; cheap, gaze-fed projection).
-        {:noreply, reproject(%{state | ui: ui}, :all)}
+        dispatch_generic(resolution, state)
 
       :unbound ->
         # In NORMAL an unbound key does NOTHING (no stray text — that's INSERT).
@@ -574,6 +497,46 @@ defmodule SpellAgent.Tui.App do
   end
 
   defp handle_key_event(%Chord{}, state), do: {:noreply, state}
+
+  # Shared generic-intent dispatch path: run the resolved intent through
+  # `Keys.dispatch/6` (compiled react/3 OR a live PTC reaction, whichever wins)
+  # and re-mirror every pane off the resulting gaze. Used both by the fallback
+  # `{:intent, _intent, _ctx}` clause AND by `mode/insert` when a live reaction
+  # has been authored for it (FEAT-039) — one dispatch path, no duplication.
+  defp dispatch_generic(resolution, state) do
+    forest = Store.spans(state.store)
+    # PLAN-024 Wave 2 (FUP-031): thread the LIVE tree through so an authored
+    # reaction can call lens/frame-target (the same spatial primitive the
+    # native C-w keybinding uses) — without this, lens/* is unreachable from
+    # a real dispatched reaction (only harness/+keymap/ would be).
+    #
+    # PLAN-024 Wave 3 (FEAT-020): also thread mesh_opts so a hole-affordance
+    # reaction can call black/post (e.g. posting a :resolution when its bound
+    # chord fires). session_id = hist_session (already a stable per-session
+    # identifier — no new concept introduced); region = the SAME id, so a
+    # hole-affordance's decision/resolution records live in this session's
+    # own mesh region by default.
+    mesh_opts = %{session_id: state.hist_session, region: state.hist_session, store: state.hist_store}
+    ui = Keys.dispatch(resolution, state.ui, forest, &Keys.context_name/1, render_tree(state), mesh_opts)
+    # Navigation changed the gaze → re-mirror every pane (the detail pane
+    # mirrors the new selection; cheap, gaze-fed projection).
+    {:noreply, reproject(%{state | ui: ui}, :all)}
+  end
+
+  # Is there a LIVE (agent-authored) reaction registered for this ctx+intent?
+  # Used to decide whether `mode/insert` should run the hardcoded default
+  # (focus prompt + enter INSERT) or the agent's own redefinition — the same
+  # "live reaction wins" precedence `Keys.dispatch/6` already applies to every
+  # OTHER intent, made explicit here since this clause needs to pick its
+  # branch BEFORE calling dispatch.
+  defp live_reaction?(ctx, intent) do
+    name = Keys.context_name(ctx)
+    KeymapRegistry.lookup_reaction(name, intent) != nil
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
+  end
 
   defp reset_layout_chord?(%Chord{key: "r", mods: [:ctrl]}), do: true
   defp reset_layout_chord?(_chord), do: false
@@ -834,6 +797,15 @@ defmodule SpellAgent.Tui.App do
 
   defp reproject(state, fired) do
     forest = Store.spans(state.store)
+    # FEAT-038: compute the RADIUS of this batch's change — the root-paths of the
+    # spans that differ from the last reprojected forest — so a pane that opts into
+    # project_incremental/3 recomputes only affected subtrees. First reproject
+    # (no prior forest) or a navigation batch passes :all (recompute everything).
+    dirty_paths =
+      case Map.get(state, :last_forest) do
+        prev when is_map(prev) and fired != :all -> ForestDiff.dirty_paths(prev, forest)
+        _ -> :all
+      end
     # Inject the live gaze into each pane's projection assigns so a gaze-aware
     # projection (SpanTree, which prunes collapsed subtrees — D4) sees the current
     # collapse/cursor state. Navigation reprojects with :all, so this stays fresh.
@@ -841,14 +813,40 @@ defmodule SpellAgent.Tui.App do
     # History pane's project/2 can reconstitute the conversation from the store.
     hist_assigns = %{ui: state.ui, hist_session: state.hist_session, hist_store: state.hist_store}
     panes = Enum.map(state.panes, fn p -> %{p | assigns: Map.merge(p.assigns, hist_assigns)} end)
-    vms = Projection.reconcile(forest, panes, fired, state.vms)
+    vms = Projection.reconcile(forest, panes, fired, state.vms, dirty_paths)
     # PLAN-023 Task A: recompute the sanitized forest snapshot HERE (the single
     # chokepoint for every forest/vms change) reusing the `forest` already read
     # above — NO extra Store.spans round-trip. Every subsequent keystroke render
     # reuses this cache, so the O(forest) Sanitize.term is paid once per store
     # update / nav, not once per frame.
     data_cache = DataBag.snapshot_from(forest, vms)
-    state = state |> Map.put(:vms, vms) |> Map.put(:data_cache, data_cache)
+    # Retain this forest so the NEXT reproject can diff against it for the radius
+    # hint (FEAT-038). Cheap: it is the same map Store.spans already returned.
+    # FUP-030 / PLAN-027 M0: resolve every REGISTERED query-clock data source into
+    # a plain `%{name => value}` map, HERE on the query clock (a reproject), never
+    # on the frame clock — a per-keystroke cross-cutting read would regress the
+    # PLAN-023 keystroke-cost invariant. The render loop names NO specific source
+    # (no "sessions", no `Cockpit`): it hands each registered producer a read-only
+    # context and caches whatever they return. `DataSource.Registry.resolve_all/1`
+    # is bounded + per-producer best-effort, so a sick source is omitted, never a
+    # raise. `DataBag.build/3` merges the cache as heavy members, under the core
+    # keys. The multi-session cockpit's `data/sessions` is ONE such registered
+    # source (see `SpellAgent.Tui.Cockpit.install/0`), not a name this loop knows.
+    data_sources =
+      DataSource.Registry.resolve_all(%{
+        hist_store: state.hist_store,
+        hist_session: state.hist_session,
+        store: state.store,
+        ui: state.ui,
+        forest: forest
+      })
+
+    state =
+      state
+      |> Map.put(:vms, vms)
+      |> Map.put(:data_cache, data_cache)
+      |> Map.put(:data_sources, data_sources)
+      |> Map.put(:last_forest, forest)
     # Keep the canonical layout tree's gaze tags in step with state.ui (PLAN-009):
     # fold the current gaze into the LayoutRegistry tree so the agent's lens/ +
     # layout/show see the live focus/cursor, and any slot shadow it authored
@@ -990,106 +988,6 @@ defmodule SpellAgent.Tui.App do
 
   # ---- widget materialization ----
 
-  # SpanTree.view returns descriptor rows ({:list, %{…}}) so the pane stays
-  # NIF-free + unit-testable; the App turns them into real ExRatatui widgets.
-  defp materialize({{:list, desc}, rect}, _state) do
-    items = Enum.map(desc.lines, fn line -> style_line(line) end)
-
-    widget = %List{
-      items: items,
-      block: %Block{
-        title: " #{desc.title} ",
-        borders: [:all],
-        border_type: :rounded,
-        border_style: border_style_for(desc.focused?)
-      },
-      highlight_style: %Style{modifiers: [:bold]},
-      selected: select_index(desc, length(items))
-    }
-
-    {widget, rect}
-  end
-
-  # Detail.view returns a {:detail, %{title, body, scroll, focused?}} descriptor;
-  # the App turns it into a scrollable, wrapped Paragraph (the "see inside" pane).
-  defp materialize({{:detail, desc}, rect}, _state) do
-    focus_tag = if desc.focused?, do: " ●", else: ""
-
-    widget = %Paragraph{
-      text: desc.body,
-      wrap: true,
-      scroll: {desc.scroll, 0},
-      style: %Style{fg: :white},
-      block: %Block{
-        title: " #{desc.title}#{focus_tag} ",
-        borders: [:all],
-        border_type: :rounded,
-        border_style: border_style_for(desc.focused?)
-      }
-    }
-
-    {widget, rect}
-  end
-
-  # The history pane (PLAN-003 SEAM 3): a durable user<->assistant scrollback,
-  # rendered as a scrollable Paragraph (NIF-free, same contract as Detail).
-  defp materialize({{:history, desc}, rect}, _state) do
-    focus_tag = if desc.focused?, do: " ●", else: ""
-
-    text =
-      if desc.empty? do
-        "(no history yet — run a mission; it persists across runs and reopen)"
-      else
-        Enum.map_join(desc.lines, "\n", fn
-          %{role: :user, text: t} -> "› you  " <> t
-          %{role: :assistant, text: t} -> "‹ agent " <> t
-        end)
-      end
-
-    widget = %Paragraph{
-      text: text,
-      wrap: true,
-      scroll: {desc.scroll, 0},
-      style: %Style{fg: :white},
-      block: %Block{
-        title: " history#{focus_tag} ",
-        borders: [:all],
-        border_type: :rounded,
-        border_style: border_style_for(desc.focused?)
-      }
-    }
-
-    {widget, rect}
-  end
-
-  defp materialize({widget, rect}, _state), do: {widget, rect}
-
-  # Border styling based on focus — uses theme's border_focused color when active
-  defp border_style_for(true) do
-    theme = ThemeRegistry.theme()
-    %Style{fg: theme.border_focused, modifiers: [:bold]}
-  end
-
-  defp border_style_for(false) do
-    theme = ThemeRegistry.theme()
-    %Style{fg: theme.border}
-  end
-
-  # `List.selected` MUST be nil or a valid 0-based index; an empty list has no
-  # selection (else ExRatatui raises at render).
-  defp select_index(_desc, 0), do: nil
-  defp select_index(%{focused?: true, cursor: c}, count), do: c |> max(0) |> min(count - 1)
-  defp select_index(_desc, _count), do: nil
-
-  defp style_line(%{text: text, status: status}) do
-    %ExRatatui.Text.Line{
-      spans: [%ExRatatui.Text.Span{content: text, style: %Style{fg: status_color(status)}}]
-    }
-  end
-
-  defp status_color(:ok), do: :green
-  defp status_color(:error), do: :red
-  defp status_color(_), do: :yellow
 
   # ---- status (one line) ----
 
@@ -1101,81 +999,15 @@ defmodule SpellAgent.Tui.App do
   # it never drifts from the actual bindings — and a runtime `keymap/bind` is
   # reflected immediately. We show the chord currently bound to a few headline
   # intents in the focused context, then the global ones.
+  # Compute the focused pane's keymap context, then delegate the hint composition
+  # + chord resolution to SpellAgent.Tui.HintBar (FEAT-041 extraction). Load-safe
+  # context-name (BUG-006): function_exported?/3 is false for an unloaded module,
+  # so resolve via Keys.context_name (which ensure_loads first).
   defp hint_for(state) do
     [focused | _] = focus_stack(state)
-
-    # Load-safe context-name (BUG-006): function_exported?/3 is false for an
-    # unloaded module, so resolve via Keys.context_name (which ensure_loads first).
     ctx = Keys.context_name(focused)
-
-    focused_hints =
-      case state.ui.focus do
-        :tree ->
-          [
-            chord_hint(ctx, :"nav/next", "next"),
-            chord_hint(ctx, :"nav/child", "in"),
-            chord_hint(ctx, :"nav/parent", "out")
-          ]
-
-        :detail ->
-          [chord_hint(ctx, :"scroll/down", "scroll")]
-
-        :prompt ->
-          [chord_hint(ctx, :"mode/insert", "type")]
-
-        _ ->
-          []
-      end
-
-    global = [
-      chord_hint(:global, :"focus/next", "pane"),
-      chord_hint(:global, :"app/reset-layout", "reset layout"),
-      chord_hint(:global, :"app/quit", "quit")
-    ]
-
-    (focused_hints ++ global)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.join(" · ")
+    HintBar.render(state.ui.focus, ctx)
   end
-
-  # "<chord> <label>" for the chord currently bound to `intent` in `context`
-  # (registry override first, then the compiled keymap), or nil if unbound.
-  defp chord_hint(context, intent, label) do
-    case chord_for(context, intent) do
-      nil -> nil
-      chord -> "#{Chord.to_string(chord)} #{label}"
-    end
-  end
-
-  # Find a chord that resolves to `intent` in `context`: prefer a live registry
-  # binding, else the compiled keymap. (First match wins; good enough for a hint.)
-  defp chord_for(context, intent) do
-    live = Enum.find_value(live_bindings(context), fn {c, i} -> if i == intent, do: c end)
-    live || compiled_chord_for(context, intent)
-  end
-
-  # Registry bindings if the registry is running, else [] — so the hint still
-  # renders (from compiled keymaps) when the App runs without the supervised
-  # KeymapRegistry (e.g. a headless render test). try/rescue/catch rather than a
-  # Process.whereis pre-check: the check is TOCTOU — the registry could exit
-  # between whereis and the call, crashing the render path (final-review P2). The
-  # hint is best-effort, so any failure degrades to compiled-keymap hints.
-  defp live_bindings(context) do
-    SpellAgent.Tui.KeymapRegistry.bindings(context)
-  rescue
-    _ -> []
-  catch
-    :exit, _ -> []
-  end
-
-  defp compiled_chord_for(:global, intent), do: keymap_chord(Global.keymap(), intent)
-  defp compiled_chord_for(:tree, intent), do: keymap_chord(SpanTree.keymap(), intent)
-  defp compiled_chord_for(:turn_nav, intent), do: keymap_chord(TurnNav.keymap(), intent)
-  defp compiled_chord_for(:prompt, intent), do: keymap_chord(Prompt.keymap(), intent)
-  defp compiled_chord_for(_other, _intent), do: nil
-
-  defp keymap_chord(keymap, intent),
-    do: Enum.find_value(keymap, fn {c, i} -> if i == intent, do: c end)
 
   # SEAM 4 (default submit): drive a real mission, threading the App's durable
   # session id so each run APPENDS to one conversation instead of a fresh one.

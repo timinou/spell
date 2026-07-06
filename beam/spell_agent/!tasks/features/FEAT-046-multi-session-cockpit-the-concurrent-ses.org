@@ -1,0 +1,73 @@
+#+TITLE: Multi-session cockpit — the concurrent-session view as a body-slot layout value (FEAT-044 parts 3-5)
+#+STATE: ITEM
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: FEAT-046-multi-session-cockpit-the-concurrent-ses
+
+* Initial Message
+
+Let's pick up the multi-session cockpit UI. How would it be implemented and done using the Spell BEAM agent principles, and what could it look like? Maximum beam lisp usage. Include your methodology for the implementation
+
+* Summary
+
+Deliver FEAT-044 parts 3-5 (the live concurrent-session view + human-facing steering) the BEAM-Lisp-maximalist way: the cockpit is NOT a new Elixir app module (that is the SessionBrowser mistake, repeated bigger) — it is a `body`-slot LAYOUT VALUE (a `.ptc` program the agent authors) projecting one new bounded data binding. Elixir grows by ~1 materializer + 1 transport read; the mind (data) grows by 2 `.ptc` files + a `human/*` verb namespace. Every visual decision — grid breakpoints, card content, status colors, "doing now" line, ordering — is a PTC expression the agent edits live, no recompile.
+
+Doctrine: Elixir = body (materialize `data/sessions`, bound cost, fall back). BEAM Lisp = mind (arrange, project, navigate, steer). Friction today = the concurrent view would be body-logic doing a mind's job.
+
+* Verified substrate (grounded in-tree 2026-07-05)
+
+Everything the cockpit needs to READ already ships:
+- `SessionRegistry.lineage/0` → `[%{session_id, owner, parent_id, intent, region, status}]` (session_registry.ex:144) — who runs, who spawned whom, toward what, where. Includes the monitored `:pid`.
+- `DataBag.snapshot_from(spans, vms)` → string-keyed data map (data_bag.ex:100) — per-session content snapshot.
+- `SessionBrowser.safe_trace/2` + `SessionView.trace_lines/2` — read a session's trace by id (the OLD read-only surface to supersede, not extend).
+- `SpellAgent.Spawn.create/2` — the ONE spawn gateway (region + tools D12 + budget clamp + lineage register).
+- Freeform render surface is REAL and rich: `LayoutRegistry` (slot shadowing, frozen pane-identity gate, last-good cache, durability), reflected `View.tools/0` (`view/<widget>` + `view/split`), `Materialize.to_struct/1` (no-drift map→%Widget{}), `lens/*` traversals (lens.ex — retag-focus/update-focused/at-slot/update-at shipped in FEAT-039).
+- FUP-005 SHIPPED: `harness/declare-pane` + `PaneRegistry` + `Ui.safe_pane/1` accept runtime pane names WITHOUT interning; body-slot shadowing with fresh `view/split` children works (BUG-012 fixed via frozen identity).
+- `default_layout.ptc` — the layout-as-data precedent (per-key compiled fallback, `:persistent_term` memo). The cockpit layout is the same kind of value.
+
+∴ The cockpit is buildable on TODAY's substrate as a `body` projection. No blocking freeform gap.
+
+* Design (the maximalist shape)
+
+** 1. One new body primitive — SpellAgent.Tui.Cockpit.sessions/1 (the ONLY genuinely new read-Elixir)
+Read-only, bounded, best-effort materializer. Unions `SessionRegistry.lineage/0` (live meta) with per-session `DataBag.snapshot_from` (content) into `[map]`, each row string-keyed for PTC. Reads the shared Hist substrate (no pid attach — the FUP-006-preferred read-through path). Bounds: `@max_sessions 12` (atom/render floor), `@snapshot_turns 3` (bounded content per card). Per-row try/rescue so one sick session degrades that card only. Injected as `data/sessions` in DataBag exactly like `data/forest`/`data/vms`, on the existing refresh clock.
+
+** 2. The cockpit layout — priv/tui/cockpit_layout.ptc (the deliverable's heart, pure data)
+Rides the `body` slot. Projects `data/sessions` into an N-up responsive grid of per-session cards via PURE PTC: `grid-cols` breakpoints (1→1,2-4→2,5-9→3,>9→4), `session-card` (a focusable `view/pane` whose border/glyph reflect live status), `grid` geometry (`view/split` math over n). `:tags {:focus-session id :drilled bool}` on the body node carry cockpit state (tags-on-tree, no new %Ui{} field). Compiled fallback floor = a 1-column session-id list, snapshot-tested (never-brick).
+
+** 3. Navigation — the session-grid focus ring is lens/ ops (NO new nav code)
+`cockpit/next-session` = `(lens/retag-focus tree :next)`; `cockpit/drill` = set body `:drilled`+`:focus-session`; `cockpit/back` = clear `:drilled`. Authored as `keymap/define-reaction` (data), bound via `keymap/bind` (data) — rebindable/redefinable. Drill-in REUSES the single-session default layout unchanged (that session's snapshot as `data/forest`) → the existing inspector IS the drill view, for free. One render path.
+
+** 4. human/* — the mind surface for steering (parts 4-5)
+A `Namespace.Spec` in the catalog (Wave-1 pattern), addressing a session by id, analogous to `black/*` for agents:
+- `human/list` → `SessionRegistry.lineage/0` (lineage subtree as data)
+- `human/watch {id}` → set body drill tags (= the drill reaction, callable)
+- `human/spawn {intent, tools?, budget?}` → `Spawn.create(owner: :human)` — routes App.submit through the ONE gateway (closes part 4: human-started sessions get uniform lineage)
+- `human/interrupt {id}` → cooperative interrupt signal at the turn boundary (the loop/continue `check_termination` seam) — the ONE part needing new invariant design (see FUP)
+- `human/adopt {id}` → re-parent an orphaned child to `:human` (registry meta update)
+
+* Failure ladder (never brick the surface)
+- `Cockpit.sessions/1` raises → `data/sessions` = last-good cache → `[]`
+- cockpit `.ptc` raises/bad shape → last-good cockpit tree → compiled 1-col fallback (snapshot-tested)
+- a single session snapshot fails → that card shows "(snapshot unavailable)", others unaffected (per-row rescue)
+- registry down → `lineage/0` → `[]` → "(no live sessions)", never crash
+
+* Boundaries → FUPs
+- Cross-session is read-through-store (sub-second refresh-clock lag), NOT pid-attach/telemetry (heavier, deferred to FUP-006 lineage).
+- `human/interrupt` invariant design (forced-interrupt-mid-NIF-edit partial-write risk) → its own oracle-gated FUP (filed as FUP-035).
+- Multi-node stays out (FUP-020/021).
+
+* Acceptance
+- `Cockpit.sessions/1`: union correctness, `@max_sessions` bound, per-row rescue, registry-down → [] — unit-tested.
+- cockpit_layout.ptc: `SceneRender` headless snapshot at n∈{0,1,4,9}; malformed .ptc → compiled fallback (never-brick) — tested.
+- nav: retag-focus wraps the session ring; drill sets tags; back pops; bad focus id degrades — tested.
+- human/*: `human/spawn` registers owner:human lineage through the gateway (attenuation preserved); `human/watch` == drill — tested.
+- `mix compile --warnings-as-errors` clean; focused suites in isolation (BUG-031 flakiness noted); `--seed 0` determinism.
+- Doctrine gate per wave: no Elixir clause DECIDES layout/arrangement/content — that lives in `.ptc`. Elixir only materializes, bounds, transports, falls back.
+
+* References (verified)
+- session_registry.ex:144 (lineage/0), data_bag.ex:100 (snapshot_from), spawn.ex (create/2)
+- layout_registry.ex (set/show/reset/tree, frozen identity), view.ex (reflected builders), materialize.ex (to_struct), lens.ex (traversals)
+- app.ex:322 render_tree (body-slot resolution), ui.ex:240 safe_pane (runtime-pane vocab, FUP-005)
+- default_layout.ptc + default_layout.ex (layout-as-data precedent)
+- docs/multi-session-cockpit.md (settled vision), docs/freeform-tui-architecture.md (body-as-slot §5, tags-on-tree §9)

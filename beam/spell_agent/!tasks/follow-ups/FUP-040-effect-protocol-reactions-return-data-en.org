@@ -1,0 +1,35 @@
+#+TITLE: Effect protocol — reactions return data-encoded effects the body interprets
+#+STATE: ITEM
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: FUP-040-effect-protocol-reactions-return-data-en
+
+* Initial Message
+
+Let's pick up the multi-session cockpit UI. How would it be implemented and done using the Spell BEAM agent principles, and what could it look like? Maximum beam lisp usage. Include your methodology for the implementation
+
+* Summary (PLAN-027 M5)
+`app.handle_key_event/2` (the NORMAL-mode clause) hardcodes the App-level effects as Elixir match branches: `app/quit → {:stop}`, `frame/leader → pending_leader`, `mode/insert → focus+INSERT`, `app/submit → submit`, `app/reset-layout → reset`. A reaction that is a pure `Ui -> Ui` cannot express these (they are runtime effects, not gaze values), so they live as welded Elixir. M5 dissolves "looking vs acting": a reaction returns a DATA-ENCODED EFFECT from a bounded, REGISTERED effect table; the body interprets it. Adding an App-level effect becomes a registration, not a new dispatch clause.
+
+* The misalignment M5 closes
+The freeform doc (#9) documents app/quit as "INTENTIONALLY protected — a pure Ui->Ui reaction cannot express :stop." True — but the FIX is not "hardcode it in Elixir"; it is "effects are first-class DATA values a reaction can RETURN, and the body has a bounded interpreter for them." quit stays protected — as a registered PROTECTED effect (not redefinable), not a hardcoded clause. The distinction survives; the welding dissolves.
+
+* Design (oracle-gated — the input path)
+- An effect is a data value: `{:effect "app/quit"}`, `{:effect "frame/leader"}`, `{:effect "mode/insert" ...}`, etc. A reaction may RETURN one (in addition to a gaze/tree, or instead of).
+- An `EffectRegistry`: `%{name => %{handler, protected?}}` — handler is `(state, args -> {:noreply|:stop, state})`, the bounded set of things a reaction may ask the App to DO. Native effects (quit/leader/submit/reset/insert) register at boot; `protected?` marks quit un-redefinable.
+- `handle_key_event` NORMAL clause collapses to ONE generic path: resolve intent → dispatch → if the result carries an effect, look it up in EffectRegistry and interpret; else reproject the returned gaze. No per-effect match clause.
+- New effects (e.g. `human/interrupt` from FUP-035, cockpit drill) become REGISTRATIONS.
+
+* Risk
+HIGH — the input/event path is the most timing-sensitive surface (keystroke latency, modal correctness). Oracle design pass first. The effect interpreter must be bounded (only registered effects; an unknown effect is a no-op, never an arbitrary call) — this is the atom-safety/sandbox chokepoint for the ACT half, mirroring safe_pane for the LOOK half.
+
+* Acceptance
+- handle_key_event NORMAL mode is ONE generic effect-dispatch clause (no per-intent branch).
+- app/quit is a REGISTERED protected effect (still un-redefinable, proven by a hostile keymap/define-reaction that cannot override it).
+- A new App effect is added by registration, not by a new Elixir clause.
+- Keystroke latency + modal correctness unchanged (the AppTest modal + timing suite green).
+
+* Depends on
+- PLAN-027 M4 (panes-as-data — the generic dispatch path established).
+- FUP-035 (human/interrupt) folds in as a registered effect.
+- Oracle design gate.

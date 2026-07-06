@@ -1,0 +1,34 @@
+#+TITLE: Producer-as-data — data-source producers are frozen PTC programs, not Elixir
+#+STATE: ITEM
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: FUP-036-producer-as-data-data-source-producers-a
+
+* Initial Message
+
+Let's pick up the multi-session cockpit UI. How would it be implemented and done using the Spell BEAM agent principles, and what could it look like? Maximum beam lisp usage. Include your methodology for the implementation
+
+* Summary (PLAN-027 M1)
+The query-clock `DataSource.Registry` (M0) lets a `data/*` binding be produced by a registered client the render loop never names. M1 dissolves the NEXT boundary: the producer itself should be DATA, not an Elixir function. A producer becomes a FROZEN PTC program that calls read-only tools; the body provides the tools + the bounded evaluation tier, the mind authors WHAT to compute.
+
+* The misalignment M1 closes
+Today `SpellAgent.Tui.Cockpit.sessions/1` is Elixir that NAMES "sessions" and hardcodes the union (SessionRegistry.lineage ⋈ Hist.Trace.rows) + the bounds. The body still knows a specific mind-feature. Maximalist: the body knows only generic read-only tools; the cockpit's data-source is a `.ptc` the mind registered.
+
+* Design
+1. Body adds READ-ONLY tools (the tool tier a producer runs in, like Cell resolve): `session-registry/lineage` (the lineage rows as data), `hist/trace-summary {id, turns}` (a bounded per-session content summary — turns/cost/last/spans, the union half Cockpit.sessions does today but as a primitive over ONE session), and whatever else a source needs. These are pure, bounded, sandboxed.
+2. New PTC verb `data-source/register {name, program}` (+ `data-source/list`, `data-source/unregister`) — the mind registers its own query-clock sources as frozen programs. Mirrors `keymap/define-reaction` (frozen PTC an intent runs) and `cell/def` (a frozen query).
+3. The cockpit's producer moves to `priv/tui/cockpit_sources.ptc`: `(data-source/register "sessions" (frozen (map (fn [s] (hist/trace-summary {:id (get s "id")})) (session-registry/lineage))))`.
+4. Bounds: a producer runs in the read-only tool tier with the same size/time caps as a Cell resolve; @max_sources cap already in the registry; per-producer try/rescue already in resolve_all.
+
+* Never-brick
+A producer that raises/times-out is omitted for that reproject (registry already does this); the App-cache keeps the last-good. A malformed `.ptc` registration is rejected at register time (compile the frozen program, reject on parse error) — never installed.
+
+* Acceptance
+- `data-source/register` installs a frozen PTC producer; `data/<name>` reflects it on the next reproject.
+- Cockpit's `data/sessions` is produced by a priv `.ptc`, NOT by Elixir naming "sessions" — `grep -rn 'sessions' lib/spell_agent/tui/*.ex` finds no feature-named producer.
+- read-only tools session-registry/lineage + hist/trace-summary exist, bounded, sandboxed (a producer cannot mutate).
+- oracle-reviewed sandbox tier for producers (no write tools reachable).
+
+* Depends on
+- PLAN-027 M0 (DataSource.Registry) landed.
+- Cell resolve tool-tier (Tools.read_only) as the sandbox template.

@@ -1,0 +1,36 @@
+#+TITLE: Unify the two reactive clocks — Cell + DataSource into one Reactive.Binding
+#+STATE: ITEM
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: FUP-037-unify-the-two-reactive-clocks-cell-datas
+
+* Initial Message
+
+Let's pick up the multi-session cockpit UI. How would it be implemented and done using the Spell BEAM agent principles, and what could it look like? Maximum beam lisp usage. Include your methodology for the implementation
+
+* Summary (PLAN-027 M2)
+`Cell.Registry` (frame-local, debounced, off-process, dependency-diffed — tuned for a cursor-keyed reactive query) and `DataSource.Registry` (query-clock, synchronous, heavy cross-cutting members) are TWO clocks of ONE idea: a named `data/*` binding produced by a frozen program, re-evaluated when its inputs change. Two registries = a parallel impl. Unify into one `Reactive.Binding` abstraction with a DECLARED clock strategy.
+
+* The misalignment M2 closes
+Two dep-diff engines, two registries, two moduledocs describing "a named data/* binding from a frozen query." The harmonious-code principle (one need = one implementation) says collapse them.
+
+* Design (oracle-gated — touches the proven Cell path)
+- One `Reactive.Binding` record: `%{name, program, clock, deps, resolved, debounce}` where `clock ∈ {:frame, :query}`.
+  - `:frame` → the current Cell behavior: debounced, off-process Task, dep-diffed against the frame bag, generation-guarded.
+  - `:query` → the current DataSource behavior: synchronous, resolved on reproject, cached.
+- One registry (`Reactive.Registry`) storing both; the clock field selects the resolve strategy.
+- `Cell.Clock.dirty/resolve` generalize to the binding's clock; DataSource.resolve_all becomes the `:query` strategy.
+- `cell/def` and `data-source/register` become one verb `bind/def {name, program, clock}` (keep the old verbs as thin aliases for compat).
+
+* Risk
+HIGH — the Cell path is proven and load-bearing (PROJ-004, the reactive substrate). This is a refactor-as-cutover (no parallel impl left), so it must preserve every Cell invariant: generation guard (W3r), cycle guard, core-key-wins, off-process resolve. Oracle design pass BEFORE impl; port the full Cell test suite unchanged as the contract.
+
+* Acceptance
+- One registry, one dep-diff engine, two clock strategies.
+- Every existing Cell test passes unchanged (the contract).
+- A `:query` binding behaves as the M0 DataSource did (cockpit sessions still works).
+- No parallel impl: DataSource.Registry + Cell.Registry are collapsed, not both kept.
+
+* Depends on
+- PLAN-027 M1 (producer-as-data — so both clocks already take frozen PTC programs).
+- Oracle design gate.

@@ -1,0 +1,66 @@
+#+TITLE: Multi-session cockpit — waved execution of FEAT-046 (body-slot layout value, max BEAM-Lisp)
+#+STATE: ITEM
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: PLAN-026-multi-session-cockpit-waved-execution-of
+
+* Initial Message
+
+Let's pick up the multi-session cockpit UI. How would it be implemented and done using the Spell BEAM agent principles, and what could it look like? Maximum beam lisp usage. Include your methodology for the implementation
+
+* Goal
+Execute FEAT-046 (the multi-session cockpit = FEAT-044 parts 3-5) as a body-slot LAYOUT VALUE, not a new app module. Maximize logic-as-data: Elixir only materializes/bounds/transports/falls-back; every arrangement/projection/navigation/steering decision lives in `.ptc` or a lens reaction. Reviewer swarm gates each wave (S1-S4 cadence). Never brick the surface.
+
+* Doctrine gate (applied at EVERY wave)
+If a wave adds an Elixir clause that DECIDES layout, arrangement, or content → it is misplaced; that logic belongs in the `.ptc`. Elixir may only: materialize (`Cockpit.sessions/1`), bound (`@max_sessions`, `safe_*`), transport (read the store), fall back (the floor). Violation = wave fails its own gate.
+
+* Waves (dependency-ordered)
+
+** W-C1 — body seam (the only genuinely new read-Elixir)
+`SpellAgent.Tui.Cockpit.sessions/1` + `data/sessions` binding in DataBag (cost-guarded) + failure ladder.
+- dep: SessionRegistry.lineage/0 (done), DataBag.snapshot_from (done).
+- files: lib/spell_agent/tui/cockpit.ex (new), lib/spell_agent/tui/data_bag.ex (+1 key under guard), test/spell_agent/tui/cockpit_test.exs (new).
+- accept: union correctness; @max_sessions bound; per-row rescue (one sick session → one bad card); registry-down → []; mix compile --warnings-as-errors clean.
+
+** W-C2 — layout as data (the cockpit's heart)
+`priv/tui/cockpit_layout.ptc` (grid-cols breakpoints, session-card, grid geometry — all PTC) + compiled fallback floor (1-col session-id list) + a `cockpit/*` layout entry so `layout/set body <cockpit>` adopts it.
+- dep: W-C1; freeform body-as-slot projection (FUP-005 shipped); reflected view/ builders.
+- files: priv/tui/cockpit_layout.ptc (new), lib/spell_agent/tui/cockpit.ex (fallback floor + loader, mirrors DefaultLayout), test (SceneRender snapshots).
+- accept: SceneRender headless snapshot at n∈{0,1,4,9}; malformed .ptc → compiled fallback (never-brick); the grid math is data (no Elixir arrangement clause).
+
+** W-C3 — navigation (lens ring, no new nav code)
+Session-grid focus ring + drill/back as `keymap/define-reaction` + `keymap/bind` (data); safe_pane vocab accepts `session/*` runtime panes (via declare-pane); drill-in reuses the single-session default layout.
+- dep: W-C2; FUP-005 (declare-pane/PaneRegistry, shipped).
+- files: priv/tui/cockpit_reactions.ptc (new, or seed via keymap data), possibly a thin harness helper `focused-tag`, test.
+- accept: retag-focus wraps the session ring; drill sets tags; back pops; bad focus id degrades; the drill view is the existing inspector (one render path).
+
+** W-C4 — steering (human/* mind surface, parts 4-5)
+`human/*` Namespace.Spec (list/watch/spawn/adopt) in the catalog; App.submit routes through `Spawn.create(owner: :human)`.
+- dep: Spawn.create (done); W-C3.
+- files: lib/spell_agent/namespace/catalog.ex (+human spec), lib/spell_agent/human.ex (new, thin verbs), App.submit wiring, test.
+- accept: human/spawn owner:human lineage through the gateway (attenuation + budget clamp preserved); human/watch == drill; human/list == lineage; capability prompt regenerates to include human/*.
+
+** W-C5 — interrupt design gate (FUP-035, oracle FIRST)
+`human/interrupt` cooperative signal at the turn boundary — ORACLE design pass before impl (partial-write-mid-NIF-edit risk).
+- dep: W-C4; loop/continue turn-gate (done).
+- gate: oracle answers FUP-035 open questions; THEN impl.
+- accept: interrupt lands ONLY at check_termination (never mid-tool, proven); halts a continue chain fully; best-effort; cockpit shows requested→interrupted.
+
+** S-C — reviewer swarm over the whole cockpit diff
+Specialized reviewers: atom-DoS (session/* slot vocab), render-cost (N-up × refresh clock), transport-safety (cross-session read isolation), never-brick (every ladder rung). File + fix all findings mid-flight.
+
+* Verification discipline
+- mix compile --warnings-as-errors clean each wave.
+- Focused suites in ISOLATION (BUG-031 full-suite TUI flakiness is real — never attribute a cockpit failure to it without an isolated re-run).
+- SceneRender headless-buffer snapshots pin the visual contract as data.
+- --seed 0 determinism check.
+- Orchestrator runs the global gate only after all waves + S-C join.
+
+* Boundaries (→ FUPs, not scope-cuts)
+- Cross-session = read-through-store (refresh-clock lag), not telemetry attach → FUP-006.
+- human/interrupt invariant → FUP-035 (oracle-gated, in-plan as W-C5).
+- Durable authored cockpit layouts across sessions → FUP-009 (in-memory v1, like LayoutRegistry today).
+- Multi-node → FUP-020/021 (out of alpha scope).
+
+* Closes
+FEAT-046 (and thereby FEAT-044 parts 3-5). FUP-035 gated within (W-C5).

@@ -1,0 +1,31 @@
+#+TITLE: Presentation policy as data — status/composer derivation leaves DataBag for PTC
+#+STATE: ITEM
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: FUP-038-presentation-policy-as-data-status-compo
+
+* Initial Message
+
+Let's pick up the multi-session cockpit UI. How would it be implemented and done using the Spell BEAM agent principles, and what could it look like? Maximum beam lisp usage. Include your methodology for the implementation
+
+* Summary (PLAN-027 M3)
+`DataBag.assemble_light` bakes PRESENTATION POLICY into Elixir: `status_presentation/4` authors the status LABEL STRINGS ("● running…", "✓ done", "idle — type a prompt below") and COLORS ("yellow"/"green"/"red"/"dark_gray"); `composer_presentation/1` authors the modal TITLE (" prompt — INSERT ") and the cursor GLYPH ("▎"). These are pure mind-policy — what words, what colors — living in the body. The moduledoc even admits it: "the PRESENTATION lives in the layout (data); the DERIVATION (label/color/hint) stays here as a projection." M3 finishes the job: move the derivation to data too.
+
+* The misalignment M3 closes
+The body chooses the words the human reads and the colors they see. That is the mind's job. The inputs (running?, result, turns, tools, mode, composer) are already raw scalars in the bag; the DERIVATION from those to label+color+glyph is a pure projection that belongs in the default layout `.ptc`, not in Elixir.
+
+* Design
+- DataBag stops producing `status-label`/`status-color`/`composer-text`/`composer-title`/`composer-fg`. It keeps ONLY the raw inputs (`running?`, `result` tag, `turns`, `tools`, `mode`, `composer`, `composer-hint`).
+- The default layout `.ptc` gains the projection: a `view/*` builder that reads `data/status` + `data/ui` and composes the label string + color + cursor glyph in PTC (`(cond (get data/status "running?") ["● running… …" "yellow"] …)`).
+- Snapshot tests pin the EXACT strings/colors today; they must render IDENTICALLY after the move (the SceneRender headless path is the contract — byte-identical output).
+
+* Never-brick
+The default layout `.ptc` already has a compiled fallback floor (DefaultLayout @fallback_*). The status/composer projection joins it: a malformed projection → the compiled fallback strings (the current Elixir values become the floor, not the source).
+
+* Acceptance
+- No color literal ("yellow"/"green"/…) or label literal ("● running…"/"✓ done"/…) remains in data_bag.ex.
+- The status line + composer render byte-identically (SceneRender snapshot unchanged).
+- Editing the status wording/colors is a `.ptc` edit, no recompile.
+
+* Depends on
+- PLAN-027 M0 (data path generic) — independent of M1/M2, can run in parallel after M0.

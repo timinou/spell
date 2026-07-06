@@ -1,0 +1,30 @@
+#+TITLE: Durable registries — one persistence mechanism for all sibling registries
+#+STATE: ITEM
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: FUP-041-durable-registries-one-persistence-mecha
+
+* Initial Message
+
+Let's pick up the multi-session cockpit UI. How would it be implemented and done using the Spell BEAM agent principles, and what could it look like? Maximum beam lisp usage. Include your methodology for the implementation
+
+* Summary (PLAN-027 M7, generalizes FUP-009)
+Every sibling registry (Keymap, Pane, Theme, Layout, Cell, and the new DataSource + Effect) is in-memory `Agent`, session-scoped — so all agent-authored policy (bindings, panes, layouts, sources, effects) is re-derived every session. The mind cannot ACCUMULATE. M7 gives all of them ONE durable persistence mechanism via the Hist store, so authored policy survives across sessions. This is the "taught vs learned" boundary from freeform-tui-philosophy: knowledge should flow both ways and PERSIST.
+
+* Design
+- One `Registry.Durable` behaviour/mixin: `dump/0` (registry → serializable data), `load/1` (data → registry), keyed by a stable registry id.
+- On boot, each registry rehydrates from the Hist store (best-effort; a missing/corrupt blob → empty, never-brick); on mutation, debounced persist.
+- LayoutRegistry ALREADY has durability hooks (durable?/enable_durability/persist/rehydrate) — generalize that proven mechanism to the mixin, don't reinvent.
+- Bounds preserved: the per-registry caps (@max_runtime_panes etc.) still apply on load (a durable blob cannot exceed the live cap — reject overflow on rehydrate).
+
+* Never-brick
+A corrupt/oversized persisted blob → that registry boots empty (native defaults only), surfaced as a status note, never a crash. Persistence is an ENHANCEMENT, never a boot dependency (the LayoutRegistry posture, generalized).
+
+* Acceptance
+- An authored keymap bind / pane / layout / theme / data-source survives a session restart.
+- One durability mechanism (the generalized LayoutRegistry hooks), not per-registry bespoke code.
+- Caps enforced on rehydrate; corrupt blob → empty + note, never a crash.
+
+* Depends on
+- PLAN-027 M6 (the full data-authored surface exists to persist).
+- LayoutRegistry durability hooks as the template.

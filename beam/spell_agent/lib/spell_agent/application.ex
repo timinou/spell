@@ -109,6 +109,13 @@ defmodule SpellAgent.Application do
       # clock resolves off-frame and the data bag merges into data/*. Session-
       # global, same posture as the sibling registries.
       SpellAgent.Tui.Cell.Registry,
+      # The query-clock data-source registry (PLAN-027 M0 / FUP-030): the generic
+      # seam that lets a `data/*` binding be produced by a REGISTERED client the
+      # render loop never names (the multi-session cockpit's `data/sessions`, a
+      # cost histogram, a mesh view). Sources are resolved on the App's reproject
+      # and merged as heavy `data/*` members. Session-global, same posture as the
+      # sibling registries.
+      SpellAgent.Tui.DataSource.Registry,
       # The L−1 self-view render loop guard (PLAN-016 W3): per-mission render
       # accounting (iteration cap + fixpoint detection) so the render→observe→act
       # cycle can't spin. Self-cleaning via pid monitors. Same posture as the

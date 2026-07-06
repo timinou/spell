@@ -122,7 +122,32 @@ defmodule SpellAgent.Tui.DataBag do
   def build(state, area, %{} = snap) when is_map(state) do
     light = state |> assemble_light(area, snap) |> Sanitize.term()
     heavy = %{"forest" => snap.forest, "vms" => snap.vms}
-    light |> Map.merge(heavy) |> merge_cells()
+
+    light
+    |> Map.merge(heavy)
+    |> merge_data_sources(state)
+    |> merge_cells()
+  end
+
+  # Merge the QUERY-CLOCK data sources (FUP-030 / DataSource.Registry): heavy
+  # `data/*` members produced by REGISTERED clients — the multi-session cockpit's
+  # `data/sessions`, a cost histogram, a mesh view — resolved on the App's
+  # reproject and cached in `state.data_sources` (a plain `%{name => value}`).
+  # This is the seam that keeps the render loop from naming any SPECIFIC body: it
+  # merges whatever sources are registered, knowing none of them by name. They
+  # are NOT assembled on the frame clock (a per-keystroke cross-session read would
+  # regress the PLAN-023 keystroke-cost invariant) — the App resolves them once
+  # per reproject and passes the cached map through here.
+  #
+  # Core bag keys WIN (merged UNDER `light`+`heavy`): a source may ADD a new
+  # `data/*` key but never SHADOW a canonical one, the same discipline
+  # `merge_cells/1` applies to reactive cells. A missing/odd cache degrades to no
+  # extra members, never a raise.
+  defp merge_data_sources(bag, state) do
+    case Map.get(state, :data_sources) do
+      sources when is_map(sources) -> Map.merge(Sanitize.term(sources), bag)
+      _ -> bag
+    end
   end
 
   # Merge the reactive cells' last off-frame-resolved values into the bag

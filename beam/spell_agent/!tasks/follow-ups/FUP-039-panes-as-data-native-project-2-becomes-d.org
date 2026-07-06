@@ -1,0 +1,37 @@
+#+TITLE: Panes-as-data — native project/2 becomes default PTC projections, Elixir is the floor
+#+STATE: ITEM
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: FUP-039-panes-as-data-native-project-2-becomes-d
+
+* Initial Message
+
+Let's pick up the multi-session cockpit UI. How would it be implemented and done using the Spell BEAM agent principles, and what could it look like? Maximum beam lisp usage. Include your methodology for the implementation
+
+* Summary (PLAN-027 M4)
+The three native panes (`Panes.History`, `Panes.SpanTree`, `Panes.Detail`) implement `project/2` as COMPILED ELIXIR — a view-model derivation over `data/forest`. So "add a display pane" is NOT pure data (freeform §5 claims it is; it is only true for a NEW pane, while the three canonical ones are Elixir). M4 makes the DEFAULT panes data too: their projection becomes a `.ptc` over `data/forest`; the Elixir modules are RETAINED as the compiled fallback FLOOR (never-brick), exactly as DefaultLayout keeps @fallback_* for the layout.
+
+* The misalignment M4 closes
+The render surface's own default content is body-authored. To realize "the interface is data the mind shapes" for the DEFAULT surface (not just agent additions), the canonical panes must be data with an Elixir floor — the same primitive/policy split the layout already has.
+
+* Also: base_focus_stack collapse
+`app.base_focus_stack/1` hardcodes the pane→keymap-context map (tree→SpanTree, prompt→Prompt, detail/history→TurnNav). A runtime pane already routes generically (its own atom as context, resolved against KeymapRegistry). M4 collapses the native clauses INTO that generic path: native panes REGISTER their default context at boot (a registration, not a match clause), so base_focus_stack becomes ONE generic clause. The body stops enumerating specific panes.
+
+* Design (oracle-gated — the render core)
+- A pane's projection is a frozen `.ptc` over `data/forest` + the pane's assigns (gaze/cursor), registered in a Pane projection registry with the Elixir project/2 as the fallback.
+- Projection.reconcile resolves the `.ptc` projection; on failure → the compiled project/2 (floor).
+- Native panes register their (a) default projection `.ptc` and (b) default keymap context at boot — data the mind can then shadow.
+- base_focus_stack: one clause reading the pane→context registry (native + runtime unified).
+
+* Risk
+HIGH — Projection.reconcile + the incremental-reproject radius (FEAT-038) are load-bearing. Oracle design pass first; the SpanTree collapse-pruning (gaze-aware project) is the hard case (it reads gaze deeply) — verify the PTC projection can express it or keep SpanTree as a justified Elixir floor with a documented boundary.
+
+* Acceptance
+- History/Detail render from a `.ptc` projection; the Elixir module is the fallback floor (proven by corrupting the `.ptc` → identical render).
+- A display pane is addable with ZERO Elixir (the §5 promise, now true for the canonical surface too).
+- base_focus_stack is ONE generic registry-driven clause; native + runtime panes route identically.
+- FEAT-038 incremental-reproject invariants preserved (dirty-path radius still applies).
+
+* Depends on
+- PLAN-027 M3 (presentation-as-data — the projection idiom proven on status/composer first).
+- Oracle design gate.

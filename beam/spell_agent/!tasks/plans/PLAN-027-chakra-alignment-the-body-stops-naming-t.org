@@ -1,0 +1,73 @@
+#+TITLE: Chakra alignment — the body stops naming the mind (BEAM-Lisp maximalist substrate)
+#+STATE: ITEM
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: PLAN-027-chakra-alignment-the-body-stops-naming-t
+
+* Initial Message
+
+Let's pick up the multi-session cockpit UI. How would it be implemented and done using the Spell BEAM agent principles, and what could it look like? Maximum beam lisp usage. Include your methodology for the implementation
+
+* Goal
+Make the render/input/data substrate BEAM-Lisp maximalist end-to-end: the body (Elixir) exposes only a generic reactive substrate — read-only tools, bounded registries, sanitize, fallback — and every WORD, COLOR, ARRANGEMENT, PROJECTION, and EFFECT the human sees is DATA the mind authors. The render loop names NO specific body (no "sessions", no "Cockpit", no status label strings, no per-pane clauses, no per-effect branches). Doctrine: freeform-tui-philosophy.md ("every layer dissolves a boundary that looks fundamental"), body-and-mind.md, the primitive/policy split (FUP-030).
+
+* The misalignment map (grounded 2026-07-05)
+| seam | body names policy | wave |
+| reproject / DataBag → data/* | hardcoded forest·vms·"sessions"·Cockpit | M0 |
+| DataBag *_presentation | status LABEL STRINGS + COLORS + cursor glyph | M3 |
+| Panes.{History,SpanTree,Detail} project/2 | compiled Elixir; "add a pane" ≠ data | M4 |
+| app.base_focus_stack | pane→context map hardcoded | M4 |
+| app.handle_key_event | quit·insert·leader·submit as Elixir clauses | M5 |
+| Cell.Registry vs DataSource.Registry | two reactive clocks, one idea | M2 |
+| Cockpit.sessions/1 | Elixir union/bound NAMES "sessions" | M1→M6 |
+| all registries in-memory | policy re-derived every session | M7 |
+
+* Waves (dependency-ordered; M2/M4/M5 oracle-gated before impl)
+
+** M0 — Query-clock data-source seam (STARTED)
+`SpellAgent.Tui.DataSource.Registry` (generic query-clock producer registry); `reproject` resolves all sources into `state.data_sources`; `DataBag.build/3` merges them under core keys. Render loop names no source. forest/vms stay as the two canonical query-clock members; a NEW heavy member is a registration.
+- status: registry built; DataBag generalized (merge_data_sources). REMAINING: revert reproject to generic resolve_all (drop the Cockpit-specific call), supervise the registry, register the cockpit source at boot (interim Elixir producer until M1), test (registry unit + reproject integration + never-brick).
+- proof: `grep -c 'Cockpit\|sessions' lib/spell_agent/tui/{app,data_bag}.ex` == 0.
+
+** M1 — Producer-as-data (FUP-036)
+Body adds read-only tools (session-registry/lineage, hist/trace-summary); `data-source/register {name, program}` verb; the cockpit source becomes priv/tui/cockpit_sources.ptc. Elixir stops naming "sessions".
+- proof: cockpit's data-source is a `.ptc`; no feature-named producer in Elixir.
+
+** M2 — Unify the two reactive clocks (FUP-037, ORACLE)
+Cell.Registry + DataSource.Registry → one Reactive.Binding with a declared clock strategy (:frame debounced-off-process | :query sync-cached). Refactor-as-cutover; every Cell invariant preserved; full Cell test suite as the contract.
+- proof: one registry, two strategies, cell tests green, no parallel impl.
+
+** M3 — Presentation policy → data (FUP-038)
+status_presentation/composer_presentation (labels, colors, glyph) leave DataBag → PTC projection in the default layout; DataBag keeps only raw scalars. Compiled fallback floor retains the current strings.
+- proof: no color/label literal in data_bag.ex; SceneRender snapshot byte-identical.
+
+** M4 — Panes-as-data (FUP-039, ORACLE)
+Native project/2 (History/SpanTree/Detail) → default PTC projections over data/forest; Elixir modules become the compiled fallback floor. base_focus_stack collapses to ONE generic registry-driven clause (native panes register their default context).
+- proof: a display pane addable with zero Elixir; base_focus_stack is one clause.
+
+** M5 — Effect protocol (FUP-040, ORACLE)
+A reaction returns a data-encoded effect from a bounded registered EffectRegistry; the body interprets it. quit·leader·submit·reset·insert·interrupt become registrations. quit stays protected as a registered protected effect. Dissolves looking-vs-acting.
+- proof: handle_key_event NORMAL is one generic effect-dispatch clause; quit un-overridable.
+
+** M6 — The cockpit, fully as data (PAYOFF; completes FEAT-046 / PLAN-026)
+With M1·M3·M4·M5: cockpit = a .ptc producer + .ptc layout + .ptc reactions + thin human/* verbs. ZERO Elixir names "cockpit". The PLAN-026 cockpit waves fold in here as the dogfood proof of the aligned substrate.
+- proof: FEAT-046 acceptance met with no feature-named Elixir.
+
+** M7 — Durable registries (FUP-041, generalizes FUP-009)
+One persistence mechanism for ALL sibling registries via the Hist store; authored policy survives across sessions. Generalizes LayoutRegistry's durability hooks.
+- proof: an authored source/layout/binding reloads next session.
+
+** Sβ — Reviewer swarms between every wave
+atom-DoS · sandbox-escape (PTC producers/effects) · never-brick (every ladder rung) · keystroke-cost (no query on the frame clock) · determinism. File + fix all findings mid-flight.
+
+* Convergence with PLAN-026 (cockpit)
+M0-M1 unblock the cockpit's data as DATA; M3-M5 make its nav/steering pure data; M6 IS the cockpit's completion. The two plans converge — the cockpit is the proof the substrate is aligned. PLAN-026's Elixir-side waves (W-C1 Cockpit.sessions) are the INTERIM producer that M1 then dissolves into `.ptc`.
+
+* Ordering law
+M2/M4/M5 touch the proven core (cells, render, input). Each gets an ORACLE design pass before impl — the loop/continue + interrupt-gate discipline. Never surgery the core on a guess.
+
+* Doctrine gate (every wave)
+If a wave leaves an Elixir clause that DECIDES a word/color/arrangement/projection/effect for a SPECIFIC feature → misplaced. Elixir may only: expose read-only tools, bound (caps + sanitize + safe_* interning), transport, fall back. Everything else is data.
+
+* Tracks
+FUP-036 (M1), FUP-037 (M2), FUP-038 (M3), FUP-039 (M4), FUP-040 (M5), FUP-041 (M7). Completes FEAT-046 (M6) and thereby FEAT-044 parts 3-5.
