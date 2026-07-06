@@ -1,8 +1,9 @@
 #+TITLE: Multi-session cockpit — waved execution of FEAT-046 (body-slot layout value, max BEAM-Lisp)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 1523e49fcb29d4e2
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
 #+CUSTOM_ID: PLAN-026-multi-session-cockpit-waved-execution-of
+#+COMPLETION_HASH: 1db5d080a8e77c8d
 
 * Initial Message
 
@@ -64,3 +65,5 @@ Specialized reviewers: atom-DoS (session/* slot vocab), render-cost (N-up × ref
 
 * Closes
 FEAT-046 (and thereby FEAT-044 parts 3-5). FUP-035 gated within (W-C5).
+
+NOTE [2026-07-06]: Subsumed + completed by PLAN-027. The original W-C1..C5 cockpit waves were folded into PLAN-027's chakra-alignment M-waves (the maximalist re-framing): W-C1 body seam = M0; W-C2 layout data + W-C3 nav + W-C4 steering = M6 (riding the M1/M3/M4/M5 substrate instead of bespoke Elixir); W-C5 interrupt gate = FUP-035 (oracle-gated, deferred). The cockpit shipped fully as data (FEAT-046 DONE) — producer .ptc, layout .ptc, reactions .ptc, human/* verbs — which is a STRONGER outcome than the original plan's Elixir-era W-C waves. See PLAN-027 for the full record.

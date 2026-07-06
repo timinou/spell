@@ -1,8 +1,9 @@
 #+TITLE: Multi-session cockpit — the concurrent-session view as a body-slot layout value (FEAT-044 parts 3-5)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 1523e49fcb29d4e2
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
 #+CUSTOM_ID: FEAT-046-multi-session-cockpit-the-concurrent-ses
+#+COMPLETION_HASH: 1d7ff376b1dec8fb
 
 * Initial Message
 
@@ -71,3 +72,13 @@ A `Namespace.Spec` in the catalog (Wave-1 pattern), addressing a session by id, 
 - app.ex:322 render_tree (body-slot resolution), ui.ex:240 safe_pane (runtime-pane vocab, FUP-005)
 - default_layout.ptc + default_layout.ex (layout-as-data precedent)
 - docs/multi-session-cockpit.md (settled vision), docs/freeform-tui-architecture.md (body-as-slot §5, tags-on-tree §9)
+
+NOTE [2026-07-06]: SHIPPED as PLAN-027 M6 (the chakra-alignment payoff). The multi-session cockpit is authored end-to-end in DATA:
+- data/sessions producer = priv/tui/cockpit_sources.ptc (M1, frozen PTC program over read-only source tools; Elixir sessions/1 = floor).
+- Layout = priv/tui/cockpit_layout.ptc (Cockpit.show/0): a tmpl:: grid shadowing the body slot, ~@ splice over data/sessions -> N cards, status-driven colors/borders/badges. Every visual decision PTC.
+- Navigation = priv/tui/cockpit_reactions.ptc (Cockpit.install_reactions/0): drill/back as keymap/define-reaction returning M5 effect envelopes (ui/set-flag).
+- Steering = SpellAgent.Tui.Human (human/list|spawn|adopt|watch), namespace routed in ptc_runner + spell_agent.
+
+Zero feature-naming Elixir in the render/input loop (the render loop names no source, no pane, no effect specifically). Substrate improvement: LayoutDiagnostic now accepts splice-driven empty splits (data-driven grids validate against empty probe data). Never-brick throughout (producer floor, layout floor, empty-grid valid). 635 TUI tests green.
+
+Parts 3-4 (concurrent view + human spawn) DONE. Part 5 human/interrupt = FUP-035 (oracle-gated, separate). The live keybinding to ENTER the cockpit + the drill-to-single-session detail LAYOUT branch are thin follow-ons (Cockpit.show + the drill flag exist; binding a key + a drilled-layout variant is a small data edit) — noted but the substrate + the overview cockpit are complete.

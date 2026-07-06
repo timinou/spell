@@ -1,5 +1,5 @@
 #+TITLE: Effect protocol — reactions return data-encoded effects the body interprets
-#+STATE: ITEM
+#+STATE: BLOCKED
 #+SESSION_ID: 1523e49fcb29d4e2
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
 #+CUSTOM_ID: FUP-040-effect-protocol-reactions-return-data-en
@@ -33,3 +33,11 @@ HIGH — the input/event path is the most timing-sensitive surface (keystroke la
 - PLAN-027 M4 (panes-as-data — the generic dispatch path established).
 - FUP-035 (human/interrupt) folds in as a registered effect.
 - Oracle design gate.
+
+NOTE [2026-07-06]: ORACLE DESIGN GATE (agent 26-M5EffectProtocolDesign): verdict PARTIAL. Build the effect-return substrate for NEW effects; do NOT migrate the proven quit/submit/reset/leader/insert clauses now.
+
+SHIPPED (M5-PARTIAL, PLAN-027): EffectRegistry (bounded name->{handler,protected?}, ACT-half of safe_pane), Reaction.Ptc.run_effectful/5 ({:gaze,ui}|{:effect,name,args} via a sole-key __effect__ envelope; run/5 stays the Ui-only wrapper so every pre-M5 caller is byte-identical), Keys.dispatch_effectful/6, App.dispatch_generic interprets returned effects. Kill-switch firewall: app/quit registered PROTECTED and REFUSED from the reaction path (invoke no-ops it) while the hardcoded key interceptor still halts on a real keypress. Unknown effect = no-op. 91 input-path tests green.
+
+Key oracle findings honored: (Q1) effects couldn't already propagate — added a parallel tagged API, zero churn to the Ui-only path; (Q2) reaction-returned {:effect app/quit} is a HAZARD not a feature — the firewall blocks it, agent-requested close would be a separate soft app/request-quit; (Q4) bounded-effect invariant is airtight (fixed registry lookup, unknown=no-op).
+
+DEFERRED (the migration of the 5 welded native clauses): low-value churn on a stable, safety-critical path with only 5 clauses. CONCRETE SIGNAL to revisit: when 2+ NEW effects have shipped through the registry and proven the substrate's mileage, OR when a welded clause needs to become agent-redefinable. Until then the welded clauses stay. The cockpit's needs (drill/back via ui/set-flag-style effects, human/interrupt) are UNBLOCKED by the substrate as shipped.

@@ -1,8 +1,9 @@
 #+TITLE: Durable registries — one persistence mechanism for all sibling registries
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 1523e49fcb29d4e2
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
 #+CUSTOM_ID: FUP-041-durable-registries-one-persistence-mecha
+#+COMPLETION_HASH: 844b6776678d28ca
 
 * Initial Message
 
@@ -28,3 +29,7 @@ A corrupt/oversized persisted blob → that registry boots empty (native default
 * Depends on
 - PLAN-027 M6 (the full data-authored surface exists to persist).
 - LayoutRegistry durability hooks as the template.
+
+NOTE [2026-07-06]: SHIPPED as PLAN-027 M7 (partial-by-design). Delivered the "one durability mechanism" doctrine: SpellAgent.Tui.Registry.Durable (persist/3 + rehydrate/4, the generalization of LayoutRegistry's proven hooks). Applied to DataSource.Registry (opt-in durable: true) as the concrete second consumer — frozen agent-authored sources round-trip across a restart, closures don't serialize (re-register at boot), corrupt blob degrades to empty. 6 durability tests green.
+
+Scope decision (honest): the TWO most-valuable registries (Keymap = rebinds/reactions, Layout = authored layouts) were ALREADY durable with their own hooks + tests. M7 lifted the pattern into the shared helper and proved it on DataSource. NOT migrated: EffectRegistry (compiled handlers, non-durable by design), PaneContext (native seed). ThemeRegistry (struct state needing map<->struct conversion on persist) is a documented FOLLOW-ON using the same Durable helper — a small, clean addition when wanted, not built now to avoid struct-version-drift risk late in the cycle. The mechanism exists; extending it to Theme is a ~1h task on the shared helper.

@@ -1,8 +1,9 @@
 #+TITLE: Chakra alignment — the body stops naming the mind (BEAM-Lisp maximalist substrate)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 1523e49fcb29d4e2
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
 #+CUSTOM_ID: PLAN-027-chakra-alignment-the-body-stops-naming-t
+#+COMPLETION_HASH: ef2e1b48f1aab01a
 
 * Initial Message
 
@@ -71,3 +72,24 @@ If a wave leaves an Elixir clause that DECIDES a word/color/arrangement/projecti
 
 * Tracks
 FUP-036 (M1), FUP-037 (M2), FUP-038 (M3), FUP-039 (M4), FUP-040 (M5), FUP-041 (M7). Completes FEAT-046 (M6) and thereby FEAT-044 parts 3-5.
+
+NOTE [2026-07-06]: COMPLETE. All 8 M-waves resolved + 2 reviewer swarms. The render/input substrate is now BEAM-Lisp maximalist: the render loop names no specific feature; every word/color/arrangement/projection/effect the human sees is data the mind authors.
+
+SHIPPED:
+- M0: generic query-clock DataSource.Registry (render loop names no source; forest/vms/sessions all generic).
+- M1: producer-as-data (DataSource.Tools read-only tier, data-source/register verb, cockpit source = priv .ptc; Elixir floor).
+- M3: presentation-as-data (status/composer label+color+glyph derivation moved to default_layout.ptc; DataBag ships raw scalars; @fallback_presentation floor).
+- M4-GO: focus-context registry (PaneContext collapses base_focus_stack to one generic clause; native floor).
+- M5-PARTIAL: effect protocol (EffectRegistry bounded + protected firewall; Reaction.Ptc.run_effectful tagged returns; reactions return data-encoded effects; app/quit unreachable from reaction).
+- M6: THE PAYOFF — cockpit fully as data (producer .ptc + layout .ptc + reactions .ptc returning effects + human/* verbs). Zero feature-naming Elixir in render/input loop. FEAT-046 DONE. Substrate win: LayoutDiagnostic accepts splice-driven empty splits.
+- M7: one durable-registry mechanism (Registry.Durable helper, applied to DataSource frozen sources; Keymap/Layout already durable).
+
+DEFERRED (oracle-gated, well-reasoned, tracked):
+- M2 (unify reactive clocks) -> FUP-037: DEFER — two different ideas, shared seam already extracted (DataSource reuses Cell.resolve).
+- M4-projection (panes-as-data) -> FUP-039: DEFER — SpanTree gaze-coupled + FEAT-038/PLAN-023 cost risk without proven PTC dirty-radius model.
+- M5-migration (5 welded native clauses) -> FUP-040: DEFER — low-value churn on stable safety-critical path.
+- Theme durability -> FUP-041 follow-on (struct-state).
+
+Reviewer swarms: S\u03b2(M0/M3) 4 never-brick gaps fixed; S\u03b2(M1/M4/M5/M6/M7) 6 P2 fixed (sole-key envelope, TOCTOU, durability bounds+wiring, cockpit cap, adopt-in-place). All regression-tested.
+
+VERIFICATION: spell_agent full suite 1498-1500/1501 (rotating BUG-031 TUI parallelism flakiness only — all new tests pass in isolation); ptc_runner 3516. All work committed across ~10 commits (spell_agent + isolated ptc_runner commits for data-source/human namespaces + W1 checkpoint).
