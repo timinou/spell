@@ -1,0 +1,36 @@
+#+TITLE: OAuth token expiry is a silent hard-failure clock (no refresh, no actionable error)
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: BUG-025-oauth-token-expiry-is-a-silent-hard-fail
+#+COMPLETION_HASH: ae81caca6ef43f7f
+
+* Initial Message
+
+look at the recent work and work that was done and point out
+- architectural
+- functional
+- UX
+
+frictions in the code. Be comprehensive and thorough, you have unlimited budget. That's to surface important work that we need to consolidate and high-impact features that we can use to start using this app (go from PoC to alpha)
+
+* Summary
+`SpellAgent.OAuth.maybe_refresh/2` logs a `Logger.warning` and returns the expired credential UNCHANGED when the token is at/near expiry (FEAT-825 refresh-token grant deferred). The token is a 1-year subscription token today, which masks the problem — but for an alpha that real users log into once and run for months, this is a silent hard-failure clock: when it expires, the agent gets an opaque 401 from Anthropic with no actionable guidance.
+
+* Evidence
+- lib/spell_agent/oauth.ex:maybe_refresh/2 — warns + returns cred as-is on `Credentials.expired?`.
+- lib/spell_agent/credentials.ex — read-only against Spell's TS agent.db (correct; preserves parallel operation). No write-back path.
+- README "Deferred (follow-ups): OAuth refresh-token grant (token is 1-year, not yet needed)".
+
+* Two layers to fix
+1. MINIMUM (alpha bar): detect expiry BEFORE the request and surface an actionable error ("subscription token expired; re-run `spell` to log in") instead of a buried warning + downstream 401. This is small and closes the silent-failure.
+2. FULL (FEAT-825): real refresh-token grant + write-back to agent.db (coordinate with the TS Spell so the two don't fight over the row). Requires the OAuth refresh flow the TS side already implements — port it.
+
+* Acceptance
+- An expired/near-expired credential produces a clear, user-facing error at the call boundary, not a silent pass-through.
+- (Full) A refresh grant renews the token and persists it; a run that starts with an expired token self-heals.
+
+* Notes
+Filed as part of the PoC→alpha consolidation audit (2026-07-05). Blocks real-user alpha. See also the multi-provider question (anthropic.ex single-provider lock-in) — refresh is Anthropic-specific today.
+
+NOTE [2026-07-05]: Minimum tier done: OAuth.maybe_refresh returns {:error, :token_expired}; Anthropic.call translates to actionable messages (expired -> re-login, no-credential -> log in) at the call boundary, propagating through Session.run. Happy path unchanged. Full refresh grant (FEAT-825) remains deferred.

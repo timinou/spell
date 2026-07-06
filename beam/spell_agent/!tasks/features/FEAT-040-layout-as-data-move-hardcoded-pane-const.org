@@ -1,0 +1,36 @@
+#+TITLE: Layout as data — move hardcoded pane constraints + dispatch table into BEAM Lisp
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: FEAT-040-layout-as-data-move-hardcoded-pane-const
+#+COMPLETION_HASH: 9e7f31ae494b7bee
+
+* Initial Message
+
+look at the recent work and work that was done and point out
+- architectural
+- functional
+- UX
+
+frictions in the code. Be comprehensive and thorough, you have unlimited budget. That's to surface important work that we need to consolidate and high-impact features that we can use to start using this app (go from PoC to alpha)
+
+* Summary
+The layout is architected as a homoiconic tree (layout/* verbs) but the DEFAULTS remain hardcoded Elixir: pane width constraints (3-pane 34/30/36, 2-pane 45/55) and a pane_module dispatch table in default_layout.ex. For a system whose thesis is "the surface is editable data," the default layout itself should be BEAM Lisp data the agent can read and rewrite. Define it in BEAM Lisp.
+
+* Evidence
+- lib/spell_agent/tui/default_layout.ex:~L77-82 hardcoded constraints; L62-67 hardcoded pane_module dispatch (adding a pane needs a recompile despite harness/declare-pane existing for runtime panes).
+
+* Design
+- Express the default layout as a PTC/data value (a layout tree literal in priv/, loaded at boot), the same shape layout/set produces — so the "native fallback" and an agent-authored layout are the SAME kind of value (no special Elixir default).
+- The pane_module dispatch becomes a registry entry (tie into the PaneRegistry that harness/declare-pane already uses), so a declared pane and a built-in pane resolve through one table.
+- Keep a compiled last-good fallback (never-brick-the-surface): if the data layout fails to load, fall back to a minimal native default.
+
+* Acceptance
+- The default layout is a data value (BEAM Lisp / priv), editable without recompiling; the agent can read it via layout/show and rewrite it via layout/set.
+- Built-in and runtime-declared panes resolve through one registry.
+- A broken data layout degrades to a safe native default, never a crash.
+
+* Notes
+Filed from the PoC→alpha audit (2026-07-05). C3. User: "100%, define it in beam lisp." Pairs with the app.ex decomposition (the render/layout extraction) and the reaction write-mirror completion.
+
+NOTE [2026-07-05]: Default layout constraints + pane-module dispatch moved to priv/tui/default_layout.ptc, loaded at boot + persistent_term memo + per-key compiled fallback + runtime reload. DefaultLayout.tree/2 shape unchanged. Never-brick verified (corrupt file -> compiled fallback). String.to_existing_atom for slots (atom-safe). PaneRegistry untouched (different concern).

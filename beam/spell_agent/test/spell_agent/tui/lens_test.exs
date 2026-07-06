@@ -159,4 +159,97 @@ defmodule SpellAgent.Tui.LensTest do
       assert Lens.to_ui(step.return).focus == :detail
     end
   end
+
+  # FEAT-039: the docs/freeform-tui-architecture.md #9 table promises 6 verbs;
+  # only lens/focus + lens/focused + lens/focusables + lens/at + lens/tag +
+  # lens/frame-target shipped. These defend the 4 that were MISSING
+  # (lens/retag-focus, lens/update-focused, lens/at-slot, lens/update-at), each
+  # authored as a real reaction through the PTC sandbox -- the acceptance bar.
+  describe "lens/retag-focus, lens/update-focused, lens/at-slot, lens/update-at (FEAT-039)" do
+    test "lens/retag-focus moves the focus tag exactly like lens/focus" do
+      tools = Lens.tools(tree())
+
+      assert {:ok, step} =
+               PtcRunner.Lisp.run(~s|(lens/retag-focus {:dir "next"})|,
+                 tools: tools,
+                 caller: :in_process_v1
+               )
+
+      assert Lens.to_ui(step.return).focus == :detail
+    end
+
+    test "lens/at-slot addresses a node by slot name, same as lens/at" do
+      tools = Lens.tools(tree())
+
+      assert {:ok, step} =
+               PtcRunner.Lisp.run(~s|(lens/at-slot {:slot "detail"})|,
+                 tools: tools,
+                 caller: :in_process_v1
+               )
+
+      assert step.return["slot"] == "detail"
+    end
+
+    test "lens/update-focused applies a deferred fn to the focused node" do
+      tools = Lens.tools(tree())
+
+      program = ~S|
+        (lens/update-focused
+          {:fn (quote (assoc-in % ["tags" "cursor"] 99))})
+      |
+
+      assert {:ok, step} = PtcRunner.Lisp.run(program, tools: tools, caller: :in_process_v1)
+
+      focused = Lens.at(step.return, "tree")
+      assert focused["tags"]["cursor"] == 99
+    end
+
+    test "lens/update-focused degrades to the unchanged tree when there is no focused node" do
+      t = tree()
+      # clear every focused flag -- no node carries "focused" == true
+      children = Enum.map(t["children"], fn p -> put_in(p, ["tags", "focused"], false) end)
+      unfocused = %{t | "children" => children}
+      tools = Lens.tools(unfocused)
+
+      program = ~S|(lens/update-focused {:fn (quote (assoc-in % ["tags" "cursor"] 99))})|
+      assert {:ok, step} = PtcRunner.Lisp.run(program, tools: tools, caller: :in_process_v1)
+      assert step.return == unfocused
+    end
+
+    test "lens/update-at applies a deferred fn to the node at a slot" do
+      tools = Lens.tools(tree())
+
+      program = ~S|
+        (lens/update-at
+          {:slot "detail" :fn (quote (assoc-in % ["tags" "scroll"] 7))})
+      |
+
+      assert {:ok, step} = PtcRunner.Lisp.run(program, tools: tools, caller: :in_process_v1)
+
+      detail = Lens.at(step.return, "detail")
+      assert detail["tags"]["scroll"] == 7
+    end
+
+    test "lens/update-at degrades to the unchanged tree for an absent slot (never-brick)" do
+      tools = Lens.tools(tree())
+
+      program = ~S|(lens/update-at {:slot "nope" :fn (quote (assoc-in % ["tags" "scroll"] 7))})|
+      assert {:ok, step} = PtcRunner.Lisp.run(program, tools: tools, caller: :in_process_v1)
+      assert step.return == tree()
+    end
+
+    test "a reaction authoring EVERY documented lens/ verb round-trips cleanly" do
+      tools = Lens.tools(tree())
+
+      program = ~S|
+        (let [t0 (lens/retag-focus {:dir "next"})
+              t1 (lens/at-slot {:slot "detail"})]
+          {:moved-focus (get t0 "tags")
+           :addressed t1})
+      |
+
+      assert {:ok, step} = PtcRunner.Lisp.run(program, tools: tools, caller: :in_process_v1)
+      assert step.return["addressed"]["slot"] == "detail"
+    end
+  end
 end

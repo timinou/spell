@@ -61,8 +61,22 @@ defmodule SpellAgent.Hist.Spill do
   """
   @spec spill([Node.t()], keyword()) :: [Node.t()]
   def spill(slice, opts \\ []) when is_list(slice) do
-    threshold = Keyword.get(opts, :threshold_tokens, @default_threshold_tokens)
+    # FEAT-037: an explicit :threshold_tokens opt wins; otherwise the durable
+    # `hist.spill_threshold` config value (a policy the mind can retune live via
+    # define-config); otherwise the compiled default. No longer a magic constant.
+    threshold = Keyword.get(opts, :threshold_tokens, config_threshold())
     Enum.map(slice, &maybe_spill(&1, threshold))
+  end
+
+  # The configured spill threshold, or the compiled default when config is
+  # absent/invalid/unavailable (best-effort — a sick Config never breaks a reduce).
+  defp config_threshold do
+    case SpellAgent.Config.get("hist.spill_threshold") do
+      n when is_integer(n) and n > 0 -> n
+      _ -> @default_threshold_tokens
+    end
+  rescue
+    _ -> @default_threshold_tokens
   end
 
   @doc """

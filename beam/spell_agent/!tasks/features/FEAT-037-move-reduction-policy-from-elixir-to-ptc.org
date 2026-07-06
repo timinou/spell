@@ -1,0 +1,45 @@
+#+TITLE: Move reduction POLICY from Elixir to PTC data (reducer pipeline order + effect classifier + thresholds)
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: FEAT-037-move-reduction-policy-from-elixir-to-ptc
+#+COMPLETION_HASH: 9461bffcd605d7cc
+
+* Initial Message
+
+look at the recent work and work that was done and point out
+- architectural
+- functional
+- UX
+
+frictions in the code. Be comprehensive and thorough, you have unlimited budget. That's to surface important work that we need to consolidate and high-impact features that we can use to start using this app (go from PoC to alpha)
+
+* Summary
+The hist reducers INVERT the body/mind boundary: mechanism lives in PTC (the lenses cost.ptc/forms.ptc got it right) but POLICY is hardcoded in Elixir. Per the doctrine ("Elixir materializes, PTC transforms"), reduction policy — which transforms run, in what ORDER, what the effect taxonomy is, what the thresholds are — should be rewritable PTC data the mind can fork at runtime.
+
+* The inversions (verified)
+1. lib/spell_agent/hist/reduce.ex (458 LOC) hardcodes transform SELECTION and PRIORITY ORDER: `dead_bind_elim |> stale_read_collapse |> tool_cse |> print_prune`, with the stale-read-before-cse ordering baked in (an L2-swarm-derived decision). That ordering is POLICY.
+2. lib/spell_agent/hist/effect.ex (235 LOC) hardcodes the entire restorability taxonomy: @read_heads, @mutation_heads, @wrapper_heads, @check_heads, @external_heads, in-place-flag detection (sed -i), most-dangerous-pipe-stage rule. A new shell head or a refined exception = Elixir recompile. This is a CLASSIFIER (policy), not a mechanism.
+3. lib/spell_agent/hist/spill.ex — @default_threshold_tokens = 512 is a magic constant, not durable config.
+
+* What stays in Elixir (the body/invariant)
+- The reduction FOLD mechanics (the actual node rewrites) and the env-preservation PROOF (fold_env(reduced) == fold_env(full)) — this is a safety invariant, stays compiled.
+- The pure transform primitives (dead-bind-elim etc. as functions) stay; only their SELECTION/ORDER moves to data.
+
+* Design (mirror the lens pattern)
+- priv/hist/reducers/pipeline.ptc — a data list naming the transform sequence, run by an Elixir harness that maps names → the compiled primitive fns (closed vocabulary, atom-safe). The mind can reorder/subset by editing data.
+- priv/hist/reducers/effect_classes.ptc — the effect taxonomy as data (head → class tables + the predicate rules), consumed by a thin Elixir classifier that applies it. New head = edit data, no recompile.
+- Spill threshold → durable config (define-config key), read by Spill.
+- Keep the primitives + the env-preservation guard in Elixir; the harness REJECTS a data-authored pipeline that would break env-preservation (the body enforces the invariant even over mind-authored policy — never-brick-the-surface).
+
+* Acceptance
+- reduce.ex pipeline order is read from pipeline.ptc; reordering transforms needs only a data edit.
+- effect.ex classification tables are read from effect_classes.ptc; adding a shell head needs only a data edit.
+- The spill threshold is a config value.
+- The env-preservation invariant still holds (test: any data-authored pipeline that violates it is rejected, not applied).
+- A test proves a runtime-edited effect table changes classification without recompile.
+
+* Notes
+Filed from the PoC→alpha audit (2026-07-05). Pairs with the reduction-wiring FEAT (do the wiring first so there is a live consumer, then move the policy to data). This is the archetypal "free the representation" move — the lenses already prove the pattern works.
+
+NOTE [2026-07-05]: Reducer policy moved to PTC/config data. Pipeline ORDER -> pipeline.ptc (closed-vocabulary harness + fold_env-equality enforcement, canonical fallback). Effect TAXONOMY -> effect_classes.ptc (Effect.tables/0 via sandboxed PTC eval, persistent_term memo, per-key fallback, runtime re-read on reload). Spill THRESHOLD -> hist.spill_threshold config, threaded into the reducibility estimate too (S2: estimate/spill sync). Whitelisted all 4 hist.* config keys so the mind can retune live. env-preservation invariant enforced over mind-authored order. 8 reducer-policy tests + S2 regressions (comment-strip, threshold-sync).

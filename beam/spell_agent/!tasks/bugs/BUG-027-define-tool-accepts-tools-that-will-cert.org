@@ -1,0 +1,42 @@
+#+TITLE: define-tool accepts tools that will certainly fail (no runtime probe, silent scope/param footguns)
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: BUG-027-define-tool-accepts-tools-that-will-cert
+#+COMPLETION_HASH: 7d2dfeec9981eb0f
+
+* Initial Message
+
+look at the recent work and work that was done and point out
+- architectural
+- functional
+- UX
+
+frictions in the code. Be comprehensive and thorough, you have unlimited budget. That's to surface important work that we need to consolidate and high-impact features that we can use to start using this app (go from PoC to alpha)
+
+* Summary
+`define-tool` validates PTC SYNTAX + undefined-vars, but accepts several classes of definition that are guaranteed to fail or silently misbehave. The body should reject at DEFINE time what will certainly fail at CALL time — a tool the agent defines must be "indistinguishable from a built-in the moment after," and these gaps break that promise. Do NOT reduce scope; get all of them right.
+
+* The footguns (each must be closed)
+1. RUNTIME-CERTAIN failure accepted. A syntactically valid tool whose body ALWAYS raises (or references a tool that cannot exist) passes validation and only fails on first call. Add an optional/again-bounded define-time smoke: at minimum, validate that every `(tool/X)` / `(ns/verb)` the body calls resolves to a registered name (closed-world check against the assembled tools map), so a typo'd callee is caught at define time, not runtime.
+   - lib/spell_agent/tools.ex:validate_source/1 (currently PtcRunner.Lisp.validate only).
+2. SILENT scope degradation. `normalize_scope/1` maps an unrecognized scope (e.g. "permannet") to `:session` — a typo silently loses durability. The response echoes the resolved scope, but that is not enough. REJECT an unrecognized scope with a clear error listing the allowed values.
+   - lib/spell_agent/tools.ex:normalize_scope/1.
+3. RESERVED-atom param. A param named e.g. `:return` / `:fail` / other reserved special-form names normalizes fine, then fails at `data/<param>` bind time. Reject reserved/param-illegal names at define time with a clear message.
+   - lib/spell_agent/tools.ex:param_atom/1, normalize_params/1.
+4. RESERVED-name shadow already guarded (reserved_name?/1) — verify it also covers the `proxy_`-prefixed wire collision (a tool named `proxy_find` colliding with the wire-prefix of `find`). See anthropic.ex apply_tool_prefix/strip_tool_prefix. Add collision detection.
+
+* Why this matters more than it looks
+These are the difference between "the agent grows a reliable capability surface" and "the agent occasionally defines a tool that mysteriously fails three turns later." For a self-coding alpha, define-time integrity IS the trust boundary of the whole homoiconic loop.
+
+* Acceptance
+- A tool calling an unregistered tool/verb is rejected at define time naming the missing callee.
+- An unrecognized `:scope` is rejected (not silently `:session`).
+- A reserved/illegal param name is rejected at define time.
+- A `proxy_`-colliding tool name is rejected.
+- Tests cover each rejection path (real failure, asserted error message contract).
+
+* Notes
+Filed from the PoC→alpha audit (2026-07-05). User flagged this as under-scoped in the initial pass — MUST get right. Interacts with the namespace-registry work (the closed-world callee check is cleanest once the registry is the single source of truth).
+
+NOTE [2026-07-05]: All 4 footguns closed + S1-review-hardened: (1) closed-world callee check (new PtcRunner.Lisp.referenced_tools/2, walks all container forms incl defonce/try/probe; exact-name match admits registered slash-tools, rejects typo'd members of fixed namespaces, prefix-fallback only for open view/*+prelude); (2) strict scope rejects unrecognized values; (3) reserved/ill-formed param names rejected AND params kept as strings (no atom-table DoS); (4) proxy_ collision rejected. ~15 tests across spell_agent + ptc_runner. Follow-ups filed: BUG-030 (undefined-vars walker parity), BUG-031 (TUI test flakiness).

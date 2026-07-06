@@ -1,0 +1,34 @@
+#+TITLE: TUI cell/hole tests are flaky under full-suite parallelism (shared registry races)
+#+STATE: ITEM
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: BUG-031-tui-cell-hole-tests-are-flaky-under-full
+
+* Initial Message
+
+look at the recent work and work that was done and point out
+- architectural
+- functional
+- UX
+
+frictions in the code. Be comprehensive and thorough, you have unlimited budget. That's to surface important work that we need to consolidate and high-impact features that we can use to start using this app (go from PoC to alpha)
+
+* Summary
+A cluster of TUI tests (HoleResolverTest, TmplDemosTest, DataBagTest, HoleDiffTest, AppTest store-coalescing) fail intermittently ONLY under full-suite parallel load (`mix test`, max_cases: 32). Every one passes reliably in isolation. The failing set differs run-to-run and by seed \u2014 the signature of shared-state races, not a deterministic bug.
+
+* Evidence
+- `mix test --seed 0`: 8 failures, all in the above modules.
+- The SAME modules run alone: 95/95 pass.
+- Different seeds fail a different subset.
+- Root cause hypothesis: these tests share a process-registered reactive-cell registry / store GenServer (Cell.Registry, Tui.Store) and/or timer-based coalescing windows; under 32-way parallelism they observe each other's state or miss a debounce window.
+
+* Impact
+LOW for correctness (the code is fine \u2014 proven by isolated passes), but it ERODES CI signal: a green full-suite run is not reliable, and a real regression in these modules could hide behind the noise.
+
+* Fix options
+- Mark the shared-registry TUI tests `async: false` (serialize them), OR
+- Give each test an isolated registry/store instance (start_supervised a named-per-test GenServer) instead of a global singleton, OR
+- Make the coalescing-window assertions tolerant of scheduler jitter (assert eventual state, not exact timer counts).
+
+* Notes
+Filed 2026-07-05 during PLAN-025 W1 (noticed while running the full suite to verify Wave 1 caused no regression \u2014 it did not; these failures pre-date it and never touch the tools/namespace/session code Wave 1 changed). Out of W1 scope; tracked for a TUI test-hygiene pass (pairs naturally with FEAT-041 app.ex decomposition, which will make these units isolatable).

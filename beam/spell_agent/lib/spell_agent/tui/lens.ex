@@ -36,7 +36,7 @@ defmodule SpellAgent.Tui.Lens do
   """
 
   alias ExRatatui.Layout.Rect
-  alias SpellAgent.Tui.{Spatial, Surface, Tree, Ui}
+  alias SpellAgent.Tui.{LensFn, Spatial, Surface, Tree, Ui}
 
   @typedoc "A layout tree node (plain string-keyed map)."
   @type node_map :: %{optional(String.t()) => term()}
@@ -146,7 +146,17 @@ defmodule SpellAgent.Tui.Lens do
       "lens/focusables" => fn _args -> focusables(tree) end,
       "lens/at" => fn args -> at(tree, get(args, "slot")) end,
       "lens/tag" => fn args -> tag_focused(tree, get(args, "key"), get(args, "value")) end,
-      "lens/frame-target" => fn args -> frame_target_tool(tree, args) end
+      "lens/frame-target" => fn args -> frame_target_tool(tree, args) end,
+      # ---- docs/freeform-tui-architecture.md #9 verbs (FEAT-039) ----
+      # `lens/retag-focus` is the documented name for the ring-move re-tag;
+      # `focus/1` (above) is the SAME traversal -- one implementation, two
+      # PTC-callable spellings so the shipped surface matches the doc's table.
+      "lens/retag-focus" => fn args -> focus(tree, dir_arg(args)) end,
+      "lens/update-focused" => fn args -> update_focused(tree, get(args, "fn"), data_env(get(args, "data"))) end,
+      "lens/at-slot" => fn args -> at(tree, get(args, "slot")) end,
+      "lens/update-at" => fn args ->
+        update_at(tree, get(args, "slot"), get(args, "fn"), data_env(get(args, "data")))
+      end
     }
   end
 
@@ -311,6 +321,50 @@ defmodule SpellAgent.Tui.Lens do
 
   def tag_focused(tree, _key, _value), do: tree
 
+  @doc """
+  Apply a deferred `:fn` (a `LensFn`-shaped frozen form, same codec `lens/update`
+  uses over a layout path) to the FOCUSED node, replacing it in place. Pure
+  tree -> tree; a tree with no focused node, or a `:fn` that fails to evaluate,
+  is returned UNCHANGED (never-brick — a broken reaction fn degrades to a no-op
+  re-tag rather than crashing the event loop).
+
+  `env` is merged data (string-keyed) the `:fn` may read via `data/*` alongside
+  the node itself, bound as `data/current` (and its `%` sugar).
+  """
+  @spec update_focused(node_map(), term(), map()) :: node_map()
+  def update_focused(tree, frozen, env \\ %{}) do
+    case focused(tree) do
+      nil ->
+        tree
+
+      pane ->
+        case LensFn.eval(frozen, pane, env) do
+          {:ok, new_node} when is_map(new_node) -> update_node(tree, slot(pane), fn _ -> new_node end)
+          _ -> tree
+        end
+    end
+  end
+
+  @doc """
+  Apply a deferred `:fn` to the node at `slot_name`, replacing it in place.
+  The sibling of `update_focused/3`, addressed by slot rather than the focus
+  tag. A missing slot, or a `:fn` that fails to evaluate, degrades to the
+  UNCHANGED tree.
+  """
+  @spec update_at(node_map(), String.t(), term(), map()) :: node_map()
+  def update_at(tree, slot_name, frozen, env \\ %{}) when is_binary(slot_name) do
+    case at(tree, slot_name) do
+      nil ->
+        tree
+
+      node ->
+        case LensFn.eval(frozen, node, env) do
+          {:ok, new_node} when is_map(new_node) -> update_node(tree, slot_name, fn _ -> new_node end)
+          _ -> tree
+        end
+    end
+  end
+
   # ---- focus helpers ----
 
   defp target_slot(tree, ring, :next), do: ring_step(tree, ring, +1)
@@ -393,6 +447,11 @@ defmodule SpellAgent.Tui.Lens do
   end
 
   defp get(m, key), do: Tree.get(m, key)
+
+  # Stringify a `:data` arg map into the string-keyed `data/*` env `LensFn.eval/3`
+  # expects (mirrors `LayoutRegistry.data_env/1`). Anything else -> empty env.
+  defp data_env(m) when is_map(m), do: Map.new(m, fn {k, v} -> {to_string(k), v} end)
+  defp data_env(_), do: %{}
 
   defp int(v, default)
   defp int(n, _default) when is_integer(n) and n >= 0, do: n

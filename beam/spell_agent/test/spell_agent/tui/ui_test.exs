@@ -127,4 +127,28 @@ defmodule SpellAgent.Tui.UiTest do
     assert Ui.mode(ui, :insert).mode == :insert
     assert ui |> Ui.mode(:insert) |> Ui.mode(:normal) |> Map.get(:mode) == :normal
   end
+
+  describe "safe_flags (bounded UI toggle state)" do
+    test "caps at 32 entries and stringifies keys" do
+      big = for i <- 1..100, into: %{}, do: {"k#{i}", true}
+      flags = Ui.safe_flags(big)
+      assert map_size(flags) == 32
+      assert Enum.all?(Map.keys(flags), &is_binary/1)
+    end
+
+    test "an over-cap value is dropped to nil (review S3 P1: no unbounded flag growth)" do
+      # flags round-trips into reactions, so a reaction must not be able to accrete
+      # an ever-growing value under a key. A value past the byte cap becomes nil;
+      # the key survives as a presence marker.
+      huge = String.duplicate("x", 10_000)
+      flags = Ui.safe_flags(%{"big" => huge, "small" => "ok"})
+      assert flags["big"] == nil
+      assert flags["small"] == "ok"
+    end
+
+    test "a small value survives" do
+      flags = Ui.safe_flags(%{"cells-drawer" => true})
+      assert flags["cells-drawer"] == true
+    end
+  end
 end

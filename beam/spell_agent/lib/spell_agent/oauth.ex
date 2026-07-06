@@ -53,13 +53,19 @@ defmodule SpellAgent.OAuth do
     maybe_refresh(cred, state)
   end
 
-  # FEAT-825 will replace this with a real refresh-token grant. For now, surface
-  # a near-expiry token unchanged so the rest of the v0 loop is unblocked.
+  # FEAT-825 will replace this with a real refresh-token grant. For now, an
+  # expired/near-expiry credential is a first-class error at the call boundary
+  # (BUG-025) rather than a silently-returned stale token that only surfaces as
+  # an opaque downstream 401.
   defp maybe_refresh(cred, state) do
     if Credentials.expired?(cred) do
-      Logger.warning("[spell_agent] credential near/at expiry; refresh not yet implemented (FEAT-825)")
-    end
+      Logger.warning(
+        "[spell_agent] anthropic subscription token expired; refresh-token grant not yet implemented (FEAT-825)"
+      )
 
-    {:reply, {:ok, cred}, state}
+      {:reply, {:error, :token_expired}, state}
+    else
+      {:reply, {:ok, cred}, state}
+    end
   end
 end

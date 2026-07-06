@@ -57,10 +57,13 @@ defmodule SpellAgent.ToolRegistry do
 
   @type scope :: :session | :durable
 
+  # params are metadata (docs/list-tools display) kept as STRINGS to avoid an
+  # atom-table DoS on user-controlled names (PLAN-025 W1 / review S1 P1). Old
+  # durable tools may still carry atoms, so accept both on read.
   @type ptc_entry :: %{
           required(:kind) => :ptc,
           required(:name) => String.t(),
-          required(:params) => [atom()],
+          required(:params) => [String.t() | atom()],
           required(:doc) => String.t(),
           required(:source) => String.t(),
           optional(:scope) => scope()
@@ -69,7 +72,7 @@ defmodule SpellAgent.ToolRegistry do
   @type native_entry :: %{
           kind: :native,
           name: String.t(),
-          params: [atom()],
+          params: [String.t() | atom()],
           doc: String.t(),
           fun: (map() -> term())
         }

@@ -11,7 +11,7 @@ defmodule SpellAgent.Session do
   backed tools map. So a tool authored mid-conversation is immediately callable.
   """
 
-  alias SpellAgent.{Anthropic, Config, Hist, Mesh, Tools}
+  alias SpellAgent.{Anthropic, Config, Hist, Tools}
 
   # The agent system prompt lives in a static .md file (AGENTS.md: prompts
   # live in static files, never inline heredocs). Loaded at compile via
@@ -38,8 +38,86 @@ defmodule SpellAgent.Session do
   """
   @spec run(String.t(), keyword()) :: {:ok, term()} | {:error, term()}
   def run(prompt, opts \\ []) when is_binary(prompt) do
+    # FEAT-045: A4 self-continuation. Run the mission; if its terminal value is a
+    # `loop/continue` signal, RE-ENTER with the mind-authored next prompt (same
+    # session — the tape continues), bounded by a continue-depth cap so a runaway
+    # self-loop is impossible regardless of the token budget. `continues_left`
+    # threads the remaining depth; the SAME opts (session_id, budget) carry
+    # forward so every continued turn is budget-enforced (FEAT-043).
+    # PIN the session id up front (review S4 P2): every continue in the chain must
+    # run in the SAME session so the tape + def-env carry forward. A bare
+    # Session.run (no :session_id) otherwise mints a fresh id per continue and
+    # loses the conversation. Also pin ONE chain budget so the continues SHARE the
+    # ceiling instead of re-granting it each time (review S4 P1).
+    opts =
+      opts
+      |> Keyword.put_new(:session_id, Hist.new_session_id())
+
+    run_with_continue(prompt, opts, SpellAgent.Loop.max_continues())
+  end
+
+  # The self-continuation trampoline. Each iteration runs ONE mission; a
+  # `{:continue, next_prompt}` terminal signal re-enters with the next prompt, a
+  # decremented depth, AND a shrunk chain budget so the whole chain shares the
+  # original turn/token ceiling rather than re-granting it per continue (review S4
+  # P1). Depth exhaustion ends the chain with the last result plus a surfaced note
+  # (never a silent stall). Non-continue results pass through.
+  defp run_with_continue(prompt, opts, continues_left) do
+    result = run_mission(prompt, opts)
+
+    with {:ok, value} <- result,
+         {:continue, next_prompt} <- SpellAgent.Loop.signal(value) do
+      if continues_left > 0 do
+        run_with_continue(next_prompt, shrink_budget(opts, continues_left), continues_left - 1)
+      else
+        # The runaway guard fired: stop the chain, surface why (the mind asked to
+        # continue but the depth cap is reached), returning the request so the
+        # caller sees the loop was intentionally halted, not silently dropped.
+        {:ok,
+         %{
+           "loop_halted" => "continue-depth cap (#{SpellAgent.Loop.max_continues()}) reached",
+           "pending_prompt" => next_prompt
+         }}
+      end
+    else
+      _ -> result
+    end
+  end
+
+  # Shrink the chain's remaining token/turn budget for the NEXT continue so the
+  # whole chain shares the original ceiling (review S4 P1). We cannot cheaply
+  # measure the just-consumed amount, so we divide the REMAINING budget by the
+  # remaining continue slots — a conservative amortization that guarantees the sum
+  # across the chain never exceeds the original ceiling, and the per-continue
+  # allowance shrinks toward the tail. An unbounded axis (nil) stays unbounded
+  # (the depth cap still bounds the chain count).
+  defp shrink_budget(opts, continues_left) do
+    opts
+    |> shrink_axis(:max_tokens, continues_left)
+    |> shrink_axis(:cost_ceiling, continues_left)
+    |> shrink_axis(:max_turns, continues_left)
+  end
+
+  defp shrink_axis(opts, key, continues_left) do
+    case Keyword.get(opts, key) do
+      n when is_integer(n) and n > 0 ->
+        Keyword.put(opts, key, max(1, div(n * (continues_left - 1), continues_left)))
+
+      _ ->
+        opts
+    end
+  end
+
+  # One mission to completion (the former body of run/2).
+  @spec run_mission(String.t(), keyword()) :: {:ok, term()} | {:error, term()}
+  defp run_mission(prompt, opts) when is_binary(prompt) do
     model = opts[:model] || Config.get("model")
-    max_turns = opts[:max_turns] || 12
+    # FEAT-043: the session's resource ceiling (turns + tokens). max_turns keeps
+    # its historical default (12); a token ceiling (`:max_tokens`, or the
+    # `:cost_ceiling` a clock wake threads) is now ENFORCED, not dropped. The
+    # SubAgent already meters both — this wires the ceiling to those meters.
+    budget = SpellAgent.Budget.from_opts(opts)
+    max_turns = SpellAgent.Budget.turns(budget, 12)
     llm = opts[:llm] || Anthropic.callback(model)
     # A session id threads the conversation's durable history (PLAN-003 SEAM 1).
     # The TUI passes a stable id so runs append to one conversation; a bare call
@@ -63,7 +141,17 @@ defmodule SpellAgent.Session do
     # Best-effort, same posture as recording (SEAM 1): a sick/oversized store must
     # DEGRADE to a cold start, never crash the mission. History is an enhancement,
     # never a dependency of answering.
-    %{tape: tape, memory: base_memory} = load_continuation(session_id, hist_store)
+    %{tape: verbatim_tape, memory: base_memory} = load_continuation(session_id, hist_store)
+
+    # FEAT-036: ACTIVATE the reduction/compaction engine. At this mission boundary
+    # the rate-controller decides — zero inference — whether to feed the verbatim
+    # tape forward (a P-frame cache) or start from a reduced keyframe (an I-frame),
+    # from the cheap reducibility estimate + this session's remaining turn budget.
+    # Best-effort: any failure (or auto_reduce off) returns the verbatim tape, so
+    # activation can never break a mission. This is what turns the built-but-dormant
+    # PLAN-018 engine (Mission.decide + hist/reduce) into a live capability.
+    %{tape: tape} =
+      SpellAgent.Hist.RateController.run(hist_store, session_id, verbatim_tape, max_turns)
 
     # S-E (FEAT-018): an optional :inherit_memory map SEEDS the child's def-env
     # (named bindings) WITHOUT inheriting the tape. Memory is pure data, not in
@@ -105,11 +193,18 @@ defmodule SpellAgent.Session do
     # turn's replay. `initial_messages`/`initial_memory` feed the prior tape +
     # env IN, closing the loop.
     result =
-      PtcRunner.SubAgent.run(agent,
-        llm: llm,
-        collect_messages: true,
-        initial_messages: tape,
-        initial_memory: memory
+      PtcRunner.SubAgent.run(
+        agent,
+        # FEAT-043: the token ceiling is enforced per-turn by the SubAgent budget
+        # check (`token_limit` + `on_budget_exceeded: :fail`); exceeding it ends
+        # the run with a `:budget_callback_exceeded` error rather than silently
+        # over-running. `max_turns` is already applied on the agent struct above.
+        [
+          llm: llm,
+          collect_messages: true,
+          initial_messages: tape,
+          initial_memory: memory
+        ] ++ SpellAgent.Budget.run_opts(budget)
       )
 
     record_history(result, session_id, hist_store, prompt, model)
@@ -195,42 +290,37 @@ defmodule SpellAgent.Session do
     # NARROW down the spawn tree (D12) — a child can't grant what it lacks.
     allowed = if is_nil(opts[:tools]), do: :all, else: Map.keys(base)
 
+    # FEAT-035: the session namespaces (hist/ black/ clock/ spawn) are folded from
+    # the ONE catalog with a per-session Context, replacing the hand-written
+    # Map.merge chain. The Context carries the exact same wiring the chain did:
+    # the parent's resolved llm (children inherit it), the hist store, max_turns,
+    # the region, and `allowed` — this session's capability ceiling that clock/
+    # and spawn/ clamp a child/wake to (D12 / FUP-019: capability only NARROWS
+    # down both the spawn and the wake tree).
+    ctx = %SpellAgent.Namespace.Context{
+      session_id: session_id,
+      hist_store: hist_store,
+      llm: llm,
+      max_turns: max_turns,
+      region: opts[:region],
+      allowed: allowed,
+      # FEAT-043 + review S4 P1: this session's EFFECTIVE enforced ceiling, so
+      # spawn/ clamps a child by it. The budget must carry the effective max_turns
+      # (which defaults to 12 when unset) — NOT the raw opts where max_turns is nil
+      # — else a child could request `budget {turns: 100}` and the clamp would treat
+      # the parent's turn axis as unbounded, widening the child past the enforced 12.
+      budget: %{SpellAgent.Budget.from_opts(opts) | max_turns: max_turns}
+    }
+
     assembled =
-      base
-      # SEAM 5: the hist/* verbs (interrogate own past mid-conversation).
-      |> Map.merge(Hist.verbs(session_id, store: hist_store))
-      # PROJ-006: the black/* verbs when coordinating in a region (else %{}).
-      |> Map.merge(Mesh.verbs(session_id, region: opts[:region], store: hist_store))
-      # A2 (PLAN-014): the clock/* self-wake verbs (default-run in THIS session).
-      # FUP-019: an attenuated child KEEPS clock/* now — the wake carries this
-      # session's ceiling (:allowed) + region so the woken turn re-enters under the
-      # same capability subset, never the full base surface. The root passes :all
-      # (unrestricted, correct). This is the re-entry analogue of the spawn-seam
-      # clamp (BUG-017): capability only narrows down BOTH the spawn AND the wake
-      # tree.
-      |> Map.merge(
-        SpellAgent.Clock.Namespace.tools(session_id, SpellAgent.Clock,
-          allowed: allowed,
-          region: opts[:region]
-        )
-      )
-      # FEAT-011 (M1): the reflexive seam — spawn-session + await-session. The
-      # parent's resolved llm is inherited by children; :allowed is the capability
-      # ceiling a child's :tools is clamped to.
-      |> Map.merge(
-        SpellAgent.Mesh.Spawn.verbs(session_id,
-          llm: llm,
-          store: hist_store,
-          max_turns: max_turns,
-          allowed: allowed
-        )
-      )
+      Map.merge(base, SpellAgent.Namespace.session_tools_map(SpellAgent.Namespace.Catalog.specs(), ctx))
 
     # FEAT-018 (M5): the mesh/* ergonomic combinators (ask/scatter/gather/mesh-map),
     # shipped as .ptc source. Their bodies call tool/spawn-session etc., so they run
     # with the ASSEMBLED tool map above (which holds the live spawn verbs). The
     # tools_fun closes over `assembled` — the combinators are pure Lisp sugar over
-    # the primitives, never a parallel impl.
+    # the primitives, never a parallel impl. Kept as a POST step (not a catalog
+    # fold entry) because it must close over the fully-assembled map.
     Map.merge(assembled, SpellAgent.Mesh.Combinators.verbs(fn -> assembled end))
   end
 
@@ -251,7 +341,14 @@ defmodule SpellAgent.Session do
   """
   @spec system_prompt() :: String.t()
   def system_prompt do
-    base = @system_prompt <> "\n\n" <> SpellAgent.Tui.Prelude.text()
+    # FEAT-034: the capability description is DERIVED from the namespace registry
+    # (via Tools.inventory), so the prompt always reflects the ACTUAL callable
+    # surface — including hist/*, black/*, clock/*, the freeform verbs, spawn/await,
+    # and any tools defined at runtime. No hand-maintained list to drift.
+    base =
+      @system_prompt <>
+        "\n\n" <> SpellAgent.Namespace.Prompt.capability_text() <>
+        "\n\n" <> SpellAgent.Tui.Prelude.text()
 
     case Config.get("system-addendum") do
       add when is_binary(add) and add != "" -> base <> "\n\n" <> add

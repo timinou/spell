@@ -1,0 +1,43 @@
+;; The effect-classification taxonomy — as data (PLAN-025 W2, FEAT-037).
+;;
+;; `SpellAgent.Hist.Effect` classifies a tool call / shell head into an effect
+;; class (:read | :mutation | :check | :external | :unknown) to decide
+;; RESTORABILITY (only a pure :read node is safe to spill to a re-fetchable stub).
+;; The classification is a POLICY \u2014 which command heads count as reads vs
+;; mutations, which tools are restorable \u2014 and policy belongs to the mind as
+;; rewritable data. Adding a new shell head or refining an exception should be a
+;; data edit, not an Elixir recompile.
+;;
+;; The Elixir classifier reads these tables; the *rules* that combine them (peel a
+;; wrapper, take the most-dangerous pipe stage, add a synthetic "rm" head for a
+;; mutating predicate) stay compiled \u2014 they are mechanism, not policy. A missing
+;; or malformed table falls back to the compiled default (never-brick).
+;;
+;; Keys:
+;;   read-tools / mutation-tools : NON-shell tool names classified directly.
+;;   read/mutation/check/external-heads : shell command heads by class.
+;;   wrapper-heads : commands whose effect is the WRAPPED command (peeled).
+
+{"read-tools"
+ ["find" "grep" "grep-n" "code-parse" "list-tools" "hist/env" "hist/messages"]
+
+ "mutation-tools"
+ ["edit" "write" "code-edit" "code-apply" "define-tool" "define-config"]
+
+ "read-heads"
+ ["cat" "rg" "grep" "ls" "find" "head" "tail" "wc" "sed" "awk" "sort" "uniq"
+  "cut" "tr" "echo" "pwd" "stat" "file" "dirname" "basename" "realpath" "which"
+  "printenv"]
+
+ "wrapper-heads"
+ ["env" "nice" "nohup" "timeout" "xargs" "sudo" "doas" "stdbuf" "time"]
+
+ "check-heads"
+ ["mix" "cargo" "npm" "bun" "pytest" "eslint" "clippy" "rustc" "tsc" "dialyzer"
+  "credo"]
+
+ "external-heads"
+ ["curl" "wget" "date" "random" "uuidgen" "ssh" "ping" "nc" "dig" "host"]
+
+ "mutation-heads"
+ ["rm" "mkdir" "mv" "cp" "touch" "chmod" "chown" "ln" "tee" "dd" "truncate"]}

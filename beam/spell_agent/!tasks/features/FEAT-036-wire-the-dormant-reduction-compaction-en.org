@@ -1,0 +1,49 @@
+#+TITLE: Wire the dormant reduction/compaction engine into the live turn loop (activate Mission.decide)
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: FEAT-036-wire-the-dormant-reduction-compaction-en
+#+COMPLETION_HASH: 1ede44a11b14bc4c
+
+* Initial Message
+
+look at the recent work and work that was done and point out
+- architectural
+- functional
+- UX
+
+frictions in the code. Be comprehensive and thorough, you have unlimited budget. That's to surface important work that we need to consolidate and high-impact features that we can use to start using this app (go from PoC to alpha)
+
+* Summary
+The PLAN-018 reduction/compaction engine (video-encoding I-frame/P-frame model) is fully built, hardened across 6 commits, and tested — but NEVER CALLED by the live loop. `Mission.decide/1` has 0 non-test callers; session.ex has 0 references to reduce/reducibility/decide. Only Hist.record + Hist.continuation are wired, so every turn replays the full verbatim tape until the context window overflows. Wiring this is the single highest-ROI alpha feature: it already exists, tested, on the shelf.
+
+* Verified dormancy
+- (count Mission.decide non-test callers) = 0.
+- session.ex references to reduce|reducibility|decide = 0.
+- hist/reduce, hist/reducibility, hist/refold, Spill, Effect.classify reachable ONLY as agent-callable hist/* verbs; no scheduler drives them.
+- lib/spell_agent/mission.ex — the rate-controller (decide/1, memoized_reduce/5) sits complete and idle.
+
+* Design (the wiring)
+At the turn boundary in SpellAgent.Session.run (per-turn, zero inference):
+1. Compute the cheap estimate: run hist/reducibility (tok_full, tok_reduced, reducible_tokens) over the current node slice.
+2. Feed {tok_full, tok_reduced, remaining_turns (from max_turns - turn), window_soft, window_hard (config)} to Mission.decide/1.
+3. On :cache → do nothing (append tail; the existing verbatim path).
+4. On {:reduce, tier} → route the continuation tape through hist/reduce {tier}, memoized via Mission.memoized_reduce (session, watermark, policy_hash).
+5. The reduced tape becomes the next turn's initial_messages (the I-frame keyframe / new cache anchor).
+
+* The dependency: budget must be ENFORCED, not just threaded
+`remaining_turns` is the economic trigger input. Today max_turns is passed but the budget ceiling is not enforced as an early-exit (the A5 gap). This wiring needs a real remaining-turns signal. Confirm/close the budget-enforcement gap as part of this (or as a hard blocker sub-item) so decide/1 reads a truthful K.
+
+* Where the loop boundary is
+PtcRunner.SubAgent.run owns the turn loop; Session.run wraps it with initial_messages/initial_memory. The reduce decision belongs at the point where the NEXT turn's tape is assembled — either a per-turn hook in the SubAgent (preferred, so it fires every turn) or a re-entry seam. Investigate whether the vendored SubAgent exposes a per-turn tape hook; if not, this may need a ptc_runner patch (a `before_turn` callback that can rewrite the tape). Flag that in the design wave.
+
+* Acceptance
+- A long session (many turns) triggers a reduce keyframe when the ladder fires, and the wire tape shrinks (measured tokens drop after a reduce turn).
+- Mission.decide is called every turn with truthful inputs; the memo prevents recompute at the same watermark.
+- A test drives a synthetic multi-turn tape past window_soft and asserts a {:reduce, tier} decision + a shrunk next-turn tape.
+- No behavior change when caching (P-frame turns are byte-identical tail-appends).
+
+* Notes
+Filed from the PoC→alpha audit (2026-07-05). Central finding. Pairs with the reducer→PTC policy move (separate FEAT) and the budget-enforcement precondition. This is what makes the agent usable past ~a dozen turns.
+
+NOTE [2026-07-05]: The dormant compaction engine is LIVE. SpellAgent.Hist.RateController runs at the mission boundary in Session.run: hist/reducibility estimate -> Mission.decide -> memoized hist/reduce -> feeds reduced tape. Mission.decide went from 0 live callers to wired. auto_reduce defaults ON; fully best-effort (any failure -> verbatim tape). S2-hardened: genuine-reduction guard (cache-neutral fallback), full policy fingerprint in memo. Config: window_soft/hard, auto_reduce. 5 RateController tests.

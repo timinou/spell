@@ -1,0 +1,47 @@
+#+TITLE: Incremental reproject via path-radius, generalizing the Cell dep-tracking model
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: FEAT-038-incremental-reproject-via-path-radius-ge
+#+COMPLETION_HASH: 51d09cc6a4c0a797
+
+* Initial Message
+
+look at the recent work and work that was done and point out
+- architectural
+- functional
+- UX
+
+frictions in the code. Be comprehensive and thorough, you have unlimited budget. That's to surface important work that we need to consolidate and high-impact features that we can use to start using this app (go from PoC to alpha)
+
+* Summary
+`reproject(state, :all)` fires full pane reconciliation on navigation keystrokes, and each dirty pane re-walks the ENTIRE span forest even when one leaf changed. Make reproject incremental by computing the RADIUS of a change (the affected subtree path) and recomputing only affected panes/rows — REUSING the proven Cell dep-tracking model rather than inventing new machinery.
+
+* What already works (build on it, don't replace)
+- Suffix-keyed dirty filter: panes declare events/0; Pane.dirty?/2 skips panes whose declared telemetry suffixes did not fire (lib/spell_agent/tui/projection.ex:reconcile, pane.ex:dirty?). So it is NOT all-panes-always.
+- Store-update coalescing: N telemetry events collapse to ONE reproject (app.ex merge_store_dirty/arm_store_flush).
+- THE TEMPLATE: the reactive Cell system already does fine-grained incremental recompute — Cell.Clock.dirty/2 diffs prev/curr bag via HoleDiff.changed_keys (a MapSet of changed keys), then Registry.dirty(keys) returns only the cells depending on changed keys. This exact pattern generalizes to forest paths.
+
+* The gaps
+- The telemetry suffix is coarse (`[:run, :stop]` = "some run stopped", not "run id=X"). Inside project/2 a pane recomputes the whole forest; no pane knows WHICH span changed.
+- The span forest is a FLAT map %{id => span} linked by parent_id (NOT a rose tree; ex_rose_tree is a vestigial unused dep — remove it). A path is derivable by parent-chain walk (O(depth)); no zipper needed.
+
+* Design (3 phases, strengths-first)
+Phase 1 — path-scoped mutations (no pane API change): Store.apply_event returns the affected span id; derive affected_path (parent-chain walk); broadcast {:store_updated, suffix, path}. App accumulates {suffix, path}; reproject receives them.
+Phase 2 — opt-in incremental project: add an OPTIONAL Pane callback project_incremental(forest, assigns, dirty_paths); panes without it fall back to project/2 (backward-compatible). SpanTree recomputes only rows under a dirty path; Detail stays gaze-fed.
+Phase 3 — forest affinity registry (generalize Cell.Registry): a pane declares scope/0 (a predicate over spans); a reverse index path→[pane] answers "which panes care about this change," exactly like Registry.dirty(keys). reproject iterates only affected panes.
+
+* The wrapper (the user's "properly wrapped")
+A single Reconcile abstraction keyed by tree-path radius, shaped like Cell.Registry.dirty — the ONE place that maps a change to the minimal recompute set. No parallel dirty systems.
+
+* Acceptance
+- A cursor-move or single-span append recomputes only the affected pane rows, not the whole forest (measured: project calls / rows touched scale with radius, not forest size).
+- The Cell model is reused (same dirty→affected-set→recompute shape), not duplicated.
+- ex_rose_tree removed from mix.exs (confirmed unused).
+- Backward compat: panes without project_incremental still work.
+- A test asserts a leaf change touches O(depth) not O(forest).
+
+* Notes
+Filed from the PoC→alpha audit (2026-07-05). C5. The user's rose-tree intuition is right in spirit (know the radius) but the substrate is a parent_id map, not a rose tree — path-radius over the flat forest is the pragmatic form; the Cell dep-graph is the model to generalize.
+
+NOTE [2026-07-05]: Tui.ForestDiff (change radius: changed_ids/path_of/dirty_paths over the flat parent_id forest, reusing the HoleDiff/Cell dep-diff model). Optional Pane.project_incremental/3 (backward-compat default). Projection.reconcile/5 threads dirty_paths; App.reproject diffs last_forest. Removed vestigial ex_rose_tree. S3-fixed: deletion-only paths resolve against prev. 11 tests.

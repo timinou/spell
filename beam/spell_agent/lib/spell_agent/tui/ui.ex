@@ -290,18 +290,32 @@ defmodule SpellAgent.Tui.Ui do
   widget per toggle. Bounded: caps at 32 entries, stringifies keys (no atom-table
   growth from agent-authored data).
   """
+  # Cap each flag value's serialized size (review S3 P1). flags round-trips into
+  # reactions (a reaction reads its own prior flags via data/ui), so an unbounded
+  # value under one of the 32 keys could be grown every keypress and retained in
+  # %Ui{} forever — a memory-DoS. A value over the cap is dropped to nil (the key
+  # survives as a presence marker). Bounded value size + bounded entry count =
+  # bounded total flag state.
+  @max_flag_bytes 4_096
+
   @spec safe_flags(term()) :: %{optional(String.t()) => term()} | nil
   def safe_flags(m) when is_map(m) do
     m
     |> Enum.take(32)
     |> Map.new(fn
-      {k, v} when is_binary(k) -> {k, v}
-      {k, v} when is_atom(k) -> {Atom.to_string(k), v}
+      {k, v} when is_binary(k) -> {k, bound_flag_value(v)}
+      {k, v} when is_atom(k) -> {Atom.to_string(k), bound_flag_value(v)}
       _ -> {"_", nil}
     end)
   end
 
   def safe_flags(_), do: nil
+
+  defp bound_flag_value(v) do
+    if :erlang.external_size(v) <= @max_flag_bytes, do: v, else: nil
+  rescue
+    _ -> nil
+  end
 
   # Match a string against a fixed atom set by STRING comparison — no interning.
   defp lookup_known(s, atoms), do: Enum.find(atoms, &(Atom.to_string(&1) == s))

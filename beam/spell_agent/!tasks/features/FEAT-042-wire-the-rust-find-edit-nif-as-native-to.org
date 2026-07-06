@@ -1,0 +1,40 @@
+#+TITLE: Wire the Rust find/edit NIF as native tools (currently stubbed) — symbol-aware navigation surface
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: FEAT-042-wire-the-rust-find-edit-nif-as-native-to
+#+COMPLETION_HASH: 9c0b813a41799365
+
+* Initial Message
+
+look at the recent work and work that was done and point out
+- architectural
+- functional
+- UX
+
+frictions in the code. Be comprehensive and thorough, you have unlimited budget. That's to surface important work that we need to consolidate and high-impact features that we can use to start using this app (go from PoC to alpha)
+
+* Summary
+The Rust kernel find/edit NIF (pi_kernel_nif over pi-code-engine/pi-code-path) is not wired — stub NIFs exist but return hardcoded shapes. The agent's only file surface today is `sh` (cat/rg) + the parse-gated code-* tools. Wiring find/edit gives symbol-aware navigation (callers/defs/refs) and structural edits as first-class native tools, and forces the namespace-registry seam to be right (this is a concrete new native namespace to register cleanly).
+
+* Evidence
+- README "Deferred (follow-ups): wiring the Rust find/edit NIF as native tools".
+- The kernel NIF already hosts parse_code/unparse_code (code-* tools use it); find/edit are the missing verbs.
+
+* The B2 link (the "ugly seam" the user named)
+Wiring find/edit is the forcing function for FEAT-035 (the unified Namespace registry): registering a NEW native namespace (find/*, edit/*) should be ONE declaration, not another ad-hoc Map.merge + (if bare-routed) a ptc_runner allowlist edit. Do this AFTER the registry lands so it validates the abstraction, or do it as the registry's first real client.
+
+* Design
+- Expose find/* (glob/grep/symbol/graph edges) and edit/* (structural replace/rename/delete) as native verbs backed by the kernel NIF, registered via the unified Namespace registry.
+- Bound the NIF calls (see the NIF-sandbox bug) — size/time caps, crash → error tool result.
+- Teach them in the auto-generated capability description (FEAT-034) as the preferred navigation/edit surface alongside code-* and sh.
+
+* Acceptance
+- find/edit verbs are callable from PTC, backed by the real kernel NIF, returning real results (not stubs).
+- Registered through the unified namespace registry (one declaration).
+- Covered by the NIF-boundedness contract (bug) and appear in the capability prompt.
+
+* Notes
+Filed from the PoC→alpha audit (2026-07-05). B2 wider. Depends-on FEAT-035 (namespace registry) as its cleanest path; depends-on BUG-028 (NIF boundedness) for safety. Lower priority than the compaction wiring but a natural registry client.
+
+NOTE [2026-07-05]: SpellAgent.Find wires kernel NIF (resolve/resolve_edges/apply_edit) as find/find-edges/edit tools. BUG-028 bounds (target+root+action size gate before NIF, S4-hardened: edit rejects absolute/.. path traversal, action map term-size guard before encode). Registered via catalog + reserved. 12 tests.

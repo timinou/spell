@@ -1,0 +1,43 @@
+#+TITLE: Auto-generate the agent's capability description from the namespace registry (kill inventory drift)
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: FEAT-034-auto-generate-the-agents-capability-desc
+#+COMPLETION_HASH: 87ecea2ca2042f97
+
+* Initial Message
+
+look at the recent work and work that was done and point out
+- architectural
+- functional
+- UX
+
+frictions in the code. Be comprehensive and thorough, you have unlimited budget. That's to surface important work that we need to consolidate and high-impact features that we can use to start using this app (go from PoC to alpha)
+
+* Summary
+The capability list shown to the LLM (via the system prompt) is a SEPARATE, hand-maintained mirror that omits most of the agent's actual surface. It should be DERIVED from the same namespace registry that produces the tools map, so the prompt always reflects exactly what is callable — no drift, no omissions.
+
+* Current drift (verified)
+- lib/spell_agent/tools.ex:inventory/0 hand-builds %{name,params,doc,kind} for meta + native tools + Spawn.inventory + Combinators.inventory + ToolRegistry.all.
+- It OMITS entirely: all hist/*, all black/* (mesh), all clock/*, all cell/*, all view/theme/layout/lens (freeform), spawn/await. The agent CAN call these (runtime merge) but the LLM is never told they exist or shown their docs — so it discovers them by trial or authorship, not guidance.
+- The system prompt (priv/prompts/system.md) further preaches a "there is no read/edit/find, only sh + define-tool" story that contradicts the shipped code-* natives.
+
+* Design (depends on the namespace-registry unification, BUG-026)
+Once every namespace declares {prefix, verbs:[{name, params, doc, effect_profile}], ...} in ONE registry:
+- inventory/0 becomes a projection over the registry (+ ToolRegistry user tools) — no hand-maintained list.
+- The system prompt's "capability description" section is RENDERED from that inventory (Handlebars over the registry data — dynamic content, per the repo's no-inline-prompt rule), grouped by namespace + effect profile.
+- The purist emergence narrative (sh + define-tool as the generative core) stays as static prose; the CONCRETE capability list beneath it is generated, so it can never drift from the surface and always shows the safe code-* edit path.
+
+* The B2/B3 link
+B2 (registry seam) is the mechanism; B3 (this) is the payoff. The single namespace declaration feeds: tools map, analyzer legality, atom-safety, AND this capability description. One source of truth, four consumers.
+
+* Acceptance
+- inventory/0 is derived from the registry; adding a namespace/verb makes it appear in the capability prompt with zero extra edits.
+- The system prompt's capability section is generated from a static template + registry data (no inline strings, per AGENTS.md).
+- A test asserts every session-merged namespace (hist/clock/mesh/cell/freeform/spawn) appears in the rendered capability description.
+- The "no read/edit/find" contradiction is resolved: the prompt teaches the real surface including code-* as the preferred parse-gated edit path.
+
+* Notes
+Filed from the PoC→alpha audit (2026-07-05). Blocked-by BUG-026 (registry unification). Directly addresses the user's B3 insight: the capability description should be auto-generated from the registry the B2 work produces.
+
+NOTE [2026-07-05]: SpellAgent.Namespace.Prompt.capability_text/0 renders the capability description from the registry-derived Tools.inventory, grouped by namespace + effect profile + runtime 'your tools' group. Appended in Session.system_prompt/0. Covers the full surface the old hand-maintained prose omitted (hist/black/clock/spawn/mesh/freeform). The system.md 'no read/edit/find' contradiction was resolved in W0. Anti-drift test asserts the whole session+freeform surface appears in the prompt.

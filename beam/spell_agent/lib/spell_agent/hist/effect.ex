@@ -35,6 +35,12 @@ defmodule SpellAgent.Hist.Effect do
   verdict attached.
   """
 
+  # FEAT-037: the classification TABLES are POLICY, loaded from
+  # priv/hist/reducers/effect_classes.ptc (rewritable data). The compiled @*
+  # constants below are the FALLBACK — used verbatim when the data file is
+  # missing/malformed (never-brick), and as the default the loaded data supersedes.
+  # The COMBINING RULES (peel a wrapper, most-dangerous pipe stage, synthetic
+  # mutating-predicate head) stay compiled: they are mechanism, not policy.
   @read_tools ~w(find grep grep-n code-parse list-tools hist/env hist/messages)
   @mutation_tools ~w(edit write code-edit code-apply define-tool define-config)
 
@@ -53,7 +59,105 @@ defmodule SpellAgent.Hist.Effect do
   @external_heads ~w(curl wget date random uuidgen ssh ping nc dig host)
   @mutation_heads ~w(rm mkdir mv cp touch chmod chown ln tee dd truncate)
 
+  # The compiled fallback table set (name/key => the default list). Superseded
+  # per-key by the data file when it provides that key.
+  @fallback_tables %{
+    "read-tools" => @read_tools,
+    "mutation-tools" => @mutation_tools,
+    "read-heads" => @read_heads,
+    "wrapper-heads" => @wrapper_heads,
+    "check-heads" => @check_heads,
+    "external-heads" => @external_heads,
+    "mutation-heads" => @mutation_heads
+  }
+
+  @classes_path Path.join([
+                  :code.priv_dir(:spell_agent) |> to_string(),
+                  "hist",
+                  "reducers",
+                  "effect_classes.ptc"
+                ])
+  @external_resource @classes_path
+  @classes_source File.read!(@classes_path)
+
   @type class :: :read | :mutation | :check | :external | :unknown
+
+  @doc false
+  # The effect-class tables (key => MapSet of names), loaded from the .ptc data
+  # (superseding the compiled fallback per key) and memoized in :persistent_term.
+  # A missing/malformed data file degrades to the compiled fallback so
+  # classification never breaks (never-brick). Parsing failures per-key keep that
+  # key's fallback.
+  @spec tables() :: %{optional(String.t()) => MapSet.t(String.t())}
+  def tables do
+    case :persistent_term.get({__MODULE__, :tables}, :unset) do
+      :unset ->
+        t = build_tables()
+        :persistent_term.put({__MODULE__, :tables}, t)
+        t
+
+      t ->
+        t
+    end
+  end
+
+  # Rebuild the memoized tables from the current data file (test hook: after a
+  # runtime edit, call to pick up the change). Returns the fresh table set.
+  @doc false
+  def reload_tables do
+    t = build_tables()
+    :persistent_term.put({__MODULE__, :tables}, t)
+    t
+  end
+
+  defp build_tables do
+    # Re-READ the data file at runtime (review S2): the compiled @classes_source is
+    # only the boot default; a runtime edit + reload_tables/0 must pick up the new
+    # file. Falls back to the compiled source if the file is unreadable now.
+    source =
+      case File.read(@classes_path) do
+        {:ok, s} -> s
+        _ -> @classes_source
+      end
+
+    loaded = parse_classes(source)
+
+    Map.new(@fallback_tables, fn {key, fallback} ->
+      names =
+        case Map.get(loaded, key) do
+          list when is_list(list) and list != [] -> list
+          _ -> fallback
+        end
+
+      {key, MapSet.new(names)}
+    end)
+  end
+
+  # Parse the effect_classes.ptc data map (key-string => list-of-strings). Uses
+  # the sandboxed PTC evaluator on the pure data literal; any failure returns %{}
+  # so every key falls back to its compiled default.
+  defp parse_classes(source) when is_binary(source) do
+    case PtcRunner.Lisp.run(source, max_heap: 2_000_000) do
+      {:ok, %{return: map}} when is_map(map) -> stringify(map)
+      {:ok, map} when is_map(map) -> stringify(map)
+      _ -> %{}
+    end
+  rescue
+    _ -> %{}
+  catch
+    _, _ -> %{}
+  end
+
+  # Normalize a decoded map to string-keyed lists-of-strings.
+  defp stringify(map) do
+    Map.new(map, fn {k, v} ->
+      {to_string(k), Enum.map(List.wrap(v), &to_string/1)}
+    end)
+  rescue
+    _ -> %{}
+  end
+
+  defp member?(key, name), do: MapSet.member?(Map.get(tables(), key, MapSet.new()), name)
 
   @doc """
   Classify a realized `sees` tool-call entry (`%{name, args, ...}`, atom- or
@@ -65,8 +169,8 @@ defmodule SpellAgent.Hist.Effect do
 
     cond do
       name in ["sh", "sh-pipe"] -> classify_shell(see)
-      name in @read_tools -> :read
-      name in @mutation_tools -> :mutation
+      member?("read-tools", name) -> :read
+      member?("mutation-tools", name) -> :mutation
       true -> :unknown
     end
   end
@@ -120,10 +224,10 @@ defmodule SpellAgent.Hist.Effect do
 
   defp head_class(head) do
     cond do
-      head in @external_heads -> :external
-      head in @mutation_heads -> :mutation
-      head in @check_heads -> :check
-      head in @read_heads -> :read
+      member?("external-heads", head) -> :external
+      member?("mutation-heads", head) -> :mutation
+      member?("check-heads", head) -> :check
+      member?("read-heads", head) -> :read
       true -> :unknown
     end
   end
@@ -168,7 +272,7 @@ defmodule SpellAgent.Hist.Effect do
   #   * a bare read head returns itself.
   defp argv_heads([h | rest]) when is_binary(h) do
     cond do
-      h in @wrapper_heads ->
+      member?("wrapper-heads", h) ->
         # peel the wrapper + its assignments/flags, classify the inner command.
         case strip_wrapper_args(rest) do
           [] -> [h]

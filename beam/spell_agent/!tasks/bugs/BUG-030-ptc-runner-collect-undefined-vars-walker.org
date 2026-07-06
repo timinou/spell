@@ -1,0 +1,33 @@
+#+TITLE: ptc_runner collect_undefined_vars walker is incomplete for container forms (try/defonce/probe)
+#+STATE: ITEM
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: BUG-030-ptc-runner-collect-undefined-vars-walker
+
+* Initial Message
+
+look at the recent work and work that was done and point out
+- architectural
+- functional
+- UX
+
+frictions in the code. Be comprehensive and thorough, you have unlimited budget. That's to surface important work that we need to consolidate and high-impact features that we can use to start using this app (go from PoC to alpha)
+
+* Summary
+`PtcRunner.Lisp.collect_undefined_vars/2` (the undefined-variable checker used by `validate/2`) emits a `[debug] collect_undefined_vars: unhandled node {:try, ...}` and does NOT recurse into some container CoreAST forms (`:try`, likely `:defonce`, `:probe`). So an undefined VARIABLE hidden inside a `try`/`defonce`/`probe` body may not be caught by `validate/2` at define time.
+
+* How found
+Surfaced while implementing the BUG-027 closed-world callee check (PLAN-025 W1). The sibling `collect_tool_names/2` walker had the same gap for these forms and was fixed (PATCH-Q test coverage in compile_limits_test.exs). `collect_undefined_vars` was NOT touched \u2014 it is a separate walker with the same class of omission.
+
+* Evidence
+- Debug log `collect_undefined_vars: unhandled node {:try, {:tool_call, ...}, ...}` when validating `(try (tool/x {}) (catch e 1))`.
+- The fix pattern is the one already applied to `collect_tool_names` in `lib/ptc_runner/lisp.ex` (add `:try`/`:defonce`/`:probe` clauses walking their sub-expressions).
+
+* Impact
+LOW-MED. An undefined var inside these forms slips validate and fails at runtime instead of define time. Not a safety hole (it fails closed at runtime), just weaker define-time diagnostics. Scoped as a follow-up rather than expanding PLAN-025 W1.
+
+* Fix
+Mirror the `collect_tool_names` container-form clauses in `collect_undefined_vars`: recurse into `{:try, body, catch, finally}`, `{:defonce, _, value, _}`, `{:probe, pairs}`. Add a test in `compile_limits_test.exs` asserting an undefined var inside a `try` is reported by `validate/2`.
+
+* Notes
+Filed 2026-07-05 from the PLAN-025 W1 reviewer swarm (S1). The debug log is benign but indicates the walker's `_other` catch-all silently drops nodes \u2014 same anti-pattern the `collect_tool_names` fix addressed.

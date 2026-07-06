@@ -271,15 +271,19 @@ defmodule SpellAgent.ToolRegistryDurabilityTest do
       end
     end
 
-    test "an unrecognized scope reports session in the response (visible, not silent)" do
-      result =
-        SpellAgent.Tools.define_tool(%{
-          "name" => "weird-#{System.unique_integer([:positive])}",
-          "source" => "1",
-          "scope" => "permanent"
-        })
+    test "an unrecognized scope is REJECTED at define time (BUG-027: not silently session)" do
+      # BUG-027 hardened this: an explicitly-provided but unrecognized scope
+      # (e.g. a typo'd "permanent") used to silently degrade to :session, quietly
+      # losing durability. It is now rejected with a clear error so the mistake is
+      # visible, not swallowed.
+      name = "weird-#{System.unique_integer([:positive])}"
 
-      assert result["scope"] == "session"
+      assert_raise ArgumentError, ~r/unrecognized scope/, fn ->
+        SpellAgent.Tools.define_tool(%{"name" => name, "source" => "1", "scope" => "permanent"})
+      end
+
+      # rejected => never registered.
+      assert SpellAgent.ToolRegistry.get(name) == :error
     end
   end
 

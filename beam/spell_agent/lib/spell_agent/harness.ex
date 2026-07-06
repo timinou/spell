@@ -46,12 +46,14 @@ defmodule SpellAgent.Harness do
   `keymap/define-reaction`. No new Elixir policy — only the one bounded
   name-space the atom-DoS discipline requires.
 
-  NB: adding a `harness/`/`keymap/` verb ALSO requires registering its name in
-  the vendored `ptc_runner` analyzer's bounded allowlist
-  (`PtcRunner.Lisp.SourceAtoms.@qualified_keys`) — the fixed-verb-allowlist
-  posture that namespace pair uses (unlike `view/`/`theme/`/`lens/`/`layout/`,
-  which are reflected and open by design). `declare-pane` was added there
-  alongside this verb (PLAN-024 Wave 1).
+  NB (PLAN-025 W1): adding a `harness/`/`keymap/` verb no longer requires any
+  `ptc_runner` edit. The unified routing (SPELL_PATCHES.md PATCH-Q) made these
+  namespaces string-routed like `view/`/`theme/`/`lens/`/`layout/` — the member
+  verb is never interned, so the former `@qualified_keys` allowlist is gone. Add
+  the verb here AND declare its inventory metadata in
+  `SpellAgent.Namespace.Catalog` (the harness spec); a drift test asserts the two
+  agree. The `harness`/`keymap` PREFIXES remain bounded in `SourceAtoms` (the
+  one-time atom-safety guard for bare `(ns/verb)` syntax).
 
   ## How the gaze threads through
 

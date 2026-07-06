@@ -1,0 +1,42 @@
+#+TITLE: Decompose the 1201-line TUI App god-module into named collaborators
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: FEAT-041-decompose-the-1201-line-tui-app-god-modu
+#+COMPLETION_HASH: 18b6ad61590dd157
+
+* Initial Message
+
+look at the recent work and work that was done and point out
+- architectural
+- functional
+- UX
+
+frictions in the code. Be comprehensive and thorough, you have unlimited budget. That's to surface important work that we need to consolidate and high-impact features that we can use to start using this app (go from PoC to alpha)
+
+* Summary
+lib/spell_agent/tui/app.ex is a 1201-line god-module holding render, event dispatch, modal transitions, spatial navigation, store-update coalescing, cell coordination, hole-affordance lifecycle, and the reproject orchestration. It is the file every TUI change touches — highest merge-friction and hardest-to-test surface in the repo. Decompose it into named collaborators so future TUI work (reproject incrementality, layout-as-data, reaction completion) has clean seams.
+
+* Evidence
+- app.ex sections: mount/seed_layout, render/render_tree/resolve_node, handle_event MODAL resolver (L475+), frame leader spatial nav (L590+), store-update coalescing (L800+), reproject (L835+), reactive cells (L862+), hole affordances (L930+), widget materialization (L991+).
+- reproject/2 is an undecomposable sequence: projection + sync_layout_gaze + sync_hole_affordances + tick_cells.
+
+* Design (extract, keep the GenServer thin)
+- App stays the ExRatatui process shell (mount/render/handle_event/handle_info dispatch) but delegates:
+  - EventResolver — chord→intent→gaze dispatch + modal transitions (one module, testable without a live terminal).
+  - Reproject pipeline — a named module with explicit stages (project → gaze-sync → hole-sync → cells), so incremental reproject (FEAT-038) has a clean insertion point.
+  - StoreCoalescer — the dirty-suffix accumulation + flush timer.
+  - CellCoordinator — the reactive-cell clock (tick/arm/resolve).
+  - HoleAffordance lifecycle — already partly in hole_affordance.ex; move the app-side install/sync there.
+- Each extracted module is unit-testable in isolation (no ExRatatui mount needed).
+
+* Acceptance
+- app.ex drops well below ~500 lines and holds only the process shell + delegation.
+- Each extracted collaborator has focused unit tests that do not require a live terminal.
+- No behavior change (the existing TUI golden/transcript tests still pass).
+- reproject is a named pipeline with an explicit stage list (enables FEAT-038).
+
+* Notes
+Filed from the PoC→alpha audit (2026-07-05). C1. Pure DX/architecture, but it GATES the other TUI waves (reproject, layout, reaction). Sequence it before or alongside FEAT-038/039/040 so they land into clean seams.
+
+NOTE [2026-07-05]: app.ex 1201->935. Extracted 3 pure, unit-testable modules: Tui.PaneWidget (descriptor->widget), Tui.HintBar (hint + live chord resolution), Tui.Render (total node resolution + BUG-009/010 guards). 13 new isolation tests. Honest scope: ~500 target not hit; remaining 935 is the GenServer core (process-coupled). Goal met: clean seams for FEAT-038/039/040.

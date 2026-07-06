@@ -1,0 +1,29 @@
+;; The LOSSLESS reduction pipeline — ORDER as data (PLAN-025 W2, FEAT-037).
+;;
+;; The body/mind boundary for reduction: the transform PRIMITIVES
+;; (dead-bind-elim, tool-cse, stale-read-collapse, print-prune) stay compiled in
+;; Elixir — they carry the env-preservation INVARIANT (fold_env(reduced) ==
+;; fold_env(full)), a correctness property, not a policy. But their SELECTION and
+;; ORDER is a POLICY decision, and policy belongs to the mind as rewritable data.
+;;
+;; This list names the transforms to run, in order. The Elixir harness
+;; (`SpellAgent.Hist.Reduce.pipeline_steps/0`) maps each name to its compiled
+;; primitive and folds them left-to-right. A name not in the known primitive set
+;; is ignored (the body's closed vocabulary — no arbitrary code, atom-safe). If a
+;; data-authored order would BREAK env-preservation, the harness rejects it and
+;; falls back to the canonical order (the body enforces the invariant even over
+;; mind-authored policy — never brick the surface).
+;;
+;; ## Why THIS order (the invariant the order protects)
+;;
+;; stale-read-collapse MUST run BEFORE tool-cse: stale-collapse picks the TRUE
+;; last read of a path and drops superseded earlier payloads; tool-cse then dedups
+;; whatever identical results remain. Running cse first could turn the genuine
+;; last read into a cse_ref to an earlier node whose payload stale-collapse then
+;; drops, making the last result unrecoverable (S4 swarm finding). Reorder at your
+;; own risk — the harness will reject an order that fails the fold_env oracle.
+
+["dead-bind-elim"
+ "stale-read-collapse"
+ "tool-cse"
+ "print-prune"]

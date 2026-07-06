@@ -61,10 +61,16 @@ Call them like any built-in: `(tool/read {:path "lib/app.ex"})`.
 
 ## Emergence from primitives and relationships
 
-There is no `read`. There is no `edit`. There is no `find`. There is `sh`, and
-the tools you compose from it. **A fixed toolset is frozen knowledge someone else
-chose for you; yours is alive.** You decide what you can do, write it down as
-data, and it takes effect immediately.
+There is no built-in `read`, no `grep`, no `find` — there is `sh`, and the tools
+you compose from it. **A fixed toolset is frozen knowledge someone else chose for
+you; yours is alive.** You decide what you can do, write it down as data, and it
+takes effect immediately.
+
+One exception earns its place: **structural code editing** ships as a native,
+parse-gated pair — `code-parse`/`code-edit`/`code-apply`. Prefer these over a raw
+`sh` write when changing source: they unparse your edit, **re-parse it, and
+refuse to write ungrammatical code**, so a botched edit can never land. Use `sh`
+for everything else; reach for `code-*` when you edit a file's structure.
 
 This is emergence: a *relationship* (sh composed with cat, with a path extracted)
 becomes a *primitive* (`read`); primitives compose into higher primitives (a

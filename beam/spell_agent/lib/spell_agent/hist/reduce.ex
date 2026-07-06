@@ -63,6 +63,24 @@ defmodule SpellAgent.Hist.Reduce do
 
   alias SpellAgent.Hist.{Effect, Node, Result, Spill}
 
+  # FEAT-037: the reduction pipeline ORDER as data. The .ptc is a plain PTC-Lisp
+  # data list of transform names, loaded at compile via @external_resource so an
+  # edit recompiles (and the mind can fork it at runtime via the same file). Only
+  # names in the closed primitive vocabulary below are honored (atom-safe: no
+  # arbitrary code runs; an unknown name is skipped).
+  @pipeline_path Path.join([
+                   :code.priv_dir(:spell_agent) |> to_string(),
+                   "hist",
+                   "reducers",
+                   "pipeline.ptc"
+                 ])
+  @external_resource @pipeline_path
+  @pipeline_source File.read!(@pipeline_path)
+
+  # The canonical order — the invariant-safe fallback used when the data-authored
+  # pipeline is missing, unparseable, or would break env-preservation.
+  @canonical_pipeline ["dead-bind-elim", "stale-read-collapse", "tool-cse", "print-prune"]
+
   @doc """
   Reduce a node slice (root-first) with the lossless tier.
 
@@ -71,17 +89,19 @@ defmodule SpellAgent.Hist.Reduce do
   """
   @spec lossless([Node.t()]) :: [Node.t()]
   def lossless(slice) when is_list(slice) do
-    slice
-    |> dead_bind_elim()
-    # stale-read BEFORE tool-cse: stale-collapse picks the TRUE last read of a
-    # path (over raw reads) and drops the superseded earlier payloads; tool-cse
-    # then dedups whatever identical results remain. Running cse first could turn
-    # the genuine last read into a cse_ref to an earlier node whose payload
-    # stale-collapse then drops, making the last result unrecoverable (S4 swarm
-    # finding). This order keeps each transform's keeper intact.
-    |> stale_read_collapse()
-    |> tool_cse()
-    |> print_prune()
+    # FEAT-037: the transform ORDER is POLICY, loaded from priv/hist/reducers/
+    # pipeline.ptc (rewritable data). The transform PRIMITIVES stay compiled here
+    # (they carry the env-preservation INVARIANT). The harness folds the
+    # data-authored order, but ENFORCES the invariant: if the resulting reduction
+    # would break fold_env-equality, it is rejected and the canonical order is
+    # used instead (the body enforces correctness even over mind-authored policy).
+    reduced = apply_pipeline(slice, pipeline_order())
+
+    if fold_env(reduced) == fold_env(slice) do
+      reduced
+    else
+      apply_pipeline(slice, @canonical_pipeline)
+    end
   end
 
   @doc """
@@ -95,6 +115,67 @@ defmodule SpellAgent.Hist.Reduce do
   @spec fold_env([Node.t()]) :: map()
   def fold_env(slice) when is_list(slice) do
     Enum.reduce(slice, %{}, fn %Node{binds: binds}, env -> Node.apply_binds(env, binds) end)
+  end
+
+  # --- the pipeline harness (FEAT-037) ---------------------------------------
+
+  # The closed vocabulary: transform NAME -> the compiled primitive fn. This is
+  # the body's guarantee that a data-authored pipeline can only compose KNOWN,
+  # invariant-carrying transforms — never arbitrary code. An unknown name is
+  # skipped (identity), so a typo degrades to a smaller pipeline, never a crash.
+  @transforms %{
+    "dead-bind-elim" => &__MODULE__.dead_bind_elim/1,
+    "stale-read-collapse" => &__MODULE__.stale_read_collapse/1,
+    "tool-cse" => &__MODULE__.tool_cse/1,
+    "print-prune" => &__MODULE__.print_prune/1
+  }
+
+  @doc false
+  @spec pipeline_order() :: [String.t()]
+  def pipeline_order do
+    case parse_pipeline(@pipeline_source) do
+      [_ | _] = names -> names
+      _ -> @canonical_pipeline
+    end
+  end
+
+  # Fold the named transforms over the slice in order. A name not in @transforms
+  # is skipped (identity) so the closed vocabulary is enforced without crashing.
+  defp apply_pipeline(slice, names) do
+    Enum.reduce(names, slice, fn name, acc ->
+      case Map.get(@transforms, name) do
+        fun when is_function(fun, 1) -> fun.(acc)
+        _ -> acc
+      end
+    end)
+  end
+
+  # Parse the data list of transform names from the .ptc source. The file is a
+  # plain data literal (a vector of strings). Comment lines (`;;`) are STRIPPED
+  # first (review S2: a quoted word inside a comment must NOT be injected into the
+  # pipeline), then the quoted tokens of the actual vector are extracted — no
+  # evaluation. Returns [] on any failure -> the caller maps to the canonical order.
+  defp parse_pipeline(source) when is_binary(source) do
+    source
+    |> strip_comments()
+    |> then(&Regex.scan(~r/"([a-z][a-z0-9-]*)"/, &1))
+    |> Enum.map(fn [_, name] -> name end)
+  rescue
+    _ -> []
+  end
+
+  # Drop everything from a `;;` to end-of-line on each line (PTC line comments),
+  # so a transform name quoted inside a comment is never parsed as policy.
+  defp strip_comments(source) do
+    source
+    |> String.split("\n")
+    |> Enum.map(fn line ->
+      case :binary.match(line, ";;") do
+        {pos, _} -> binary_part(line, 0, pos)
+        :nomatch -> line
+      end
+    end)
+    |> Enum.join("\n")
   end
 
   @doc """
@@ -120,7 +201,8 @@ defmodule SpellAgent.Hist.Reduce do
   # intervening read. Walk left-to-right tracking, for each key, the set of seqs
   # at which it is later rebound and read; a bind at node i is dead if some j > i
   # rebinds it and no k in (i, j] reads it.
-  defp dead_bind_elim(slice) do
+  @doc false
+  def dead_bind_elim(slice) do
     indexed = Enum.with_index(slice)
 
     # For each index, the set of keys READ by that node's form.
@@ -187,7 +269,8 @@ defmodule SpellAgent.Hist.Reduce do
   # occurrence of a (name, args, result) triple is kept; every later identical
   # copy keeps its call record but drops the duplicated result payload and gains a
   # "cse_ref" pointing at the keeper's node. Errors are never grouped.
-  defp tool_cse(slice) do
+  @doc false
+  def tool_cse(slice) do
     {reduced, _seen} =
       Enum.map_reduce(slice, %{}, fn %Node{sees: sees} = node, seen ->
         {new_sees, seen2} = cse_sees(sees, node.id, seen)
@@ -244,7 +327,8 @@ defmodule SpellAgent.Hist.Reduce do
   # `mix test` runs), so collapsing them would drop real signal. The classifier is
   # conservative — anything not positively a read is left intact. Errors exempt; a
   # call already CSE-referenced is left alone.
-  defp stale_read_collapse(slice) do
+  @doc false
+  def stale_read_collapse(slice) do
     # Flatten every see to a global ordinal so "between" is a simple comparison.
     flat = flatten_sees(slice)
 
@@ -424,7 +508,8 @@ defmodule SpellAgent.Hist.Reduce do
 
   # --- print-prune ------------------------------------------------------------
 
-  defp print_prune(slice) do
+  @doc false
+  def print_prune(slice) do
     Enum.map(slice, fn node -> %{node | prints: []} end)
   end
 

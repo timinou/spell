@@ -1,5 +1,26 @@
 # Freeform TUI — Architecture
 
+> **Status: PARTIAL (~85%, FEAT-039 landed).** The render-mirror + Reaction DSL
+> ship and work. FEAT-039 closed three of the four original gaps:
+> `lens/*` now ships all 10 documented verbs (`lens/focus`, `lens/focused`,
+> `lens/focusables`, `lens/at`, `lens/tag`, `lens/frame-target`,
+> `lens/retag-focus`, `lens/update-focused`, `lens/at-slot`, `lens/update-at`);
+> `mode/insert` and `frame/leader` resolve through `Keys.resolve/2` (the SAME
+> cascade as any other intent) and are live-rebindable/redefinable via
+> `keymap/bind` + `keymap/define-reaction`; the gaze round-trip's `flags` field
+> is now a documented, bounded, two-way extension map (`Ui.safe_flags/1`,
+> 32-entry cap) that a reaction can read AND write across turns. `app/quit`
+> remains INTENTIONALLY protected (never redefinable — a pure `Ui.t() -> Ui.t()`
+> reaction cannot express `:stop`; a safe kill switch must survive any
+> misconfigured keymap). Still open: the gaze is the `%Ui{}` struct
+> (canonical), not a free tags-on-tree value — this doc's "navigation = lens
+> ops" section (#9) describes the TARGET shape (`data/tree` as the reaction's
+> primary value), which the shipped surface approximates via `Lens.to_ui`/
+> `from_ui` rather than replacing `%Ui{}` outright; INSERT mode is still
+> `:prompt`-only (not yet a first-class per-context concern — flagged as a
+> follow-up, not fixed by FEAT-039). Read claims here as the target the
+> consolidation lands, not all shipped today.
+
 > The agent self-edits its own live terminal UI, **generally available** (no
 > flag). The render surface becomes the third live-data mirror, and the
 > navigation gaze and the render tree **unify into one value**.

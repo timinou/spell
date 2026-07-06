@@ -1,5 +1,11 @@
 # The Dissolving Interface — a philosophy of the freeform TUI
 
+> **Status: VISION.** The horizon, not the current build. Several layers
+> described here are aspirational (layouts-as-history-spans, full tags-on-tree
+> unification); `%Ui{}` is canonical today. See
+> `freeform-tui-architecture.md` (PARTIAL) for what actually ships and
+> PLAN-025 / FEAT-038..041 for the consolidation toward this horizon.
+
 > An aspirational companion to `freeform-tui-architecture.md`. The architecture
 > doc says *what we are building*. This says *why it matters* and *how far it
 > goes*. Read it when you want the whole horizon, not the next commit.

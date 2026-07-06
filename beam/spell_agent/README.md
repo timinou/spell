@@ -280,13 +280,51 @@ mix test                 # unit tests (no network)
 mix test --include live  # also hits the real subscription + network
 ```
 
-## Status (v0)
+## Status
 
-Shipped: credential read, subscription adapter (live-proven), homoiconic tool
-registry + `define-tool`/`define-config`/`list-tools`, SubAgent wire-up, REPL,
-and the A2 self-wake scheduler (`SpellAgent.Clock` + `clock/*` verbs — durable,
-budget-bounded; the first agency organ, PLAN-014).
+> Reconciled against code 2026-07-05 (PLAN-025 Wave 0). Each row is cite-checked;
+> `PARTIAL` rows name the consolidation item that finishes them.
 
-Deferred (follow-ups): OAuth refresh-token grant (token is 1-year, not yet
-needed); durable persistence of defined tools (org/memory stored programs);
-wiring the Rust `find`/`edit` NIF as native tools; token-streaming to the REPL.
+**Shipped (real + tested):**
+
+| Capability | Notes |
+|---|---|
+| Credential read + subscription adapter | Live-proven against `agent.db`. |
+| Homoiconic tool registry + `define-*` | `define-tool`/`define-config`/`list-tools`. |
+| **Durable tool persistence** | Durable `:ptc` tools mirror to `Hist.Store`, rehydrate on boot (`test/tool_registry_durability_test.exs`). *(Previously mislabelled "deferred".)* |
+| **Shell-as-data** | `sh` / `sh-pipe` / `sh-parse` / `sh-unparse` — bash ↔ `form_tree` round-trip, inject-proof argv. |
+| Parse-gated code edit | `code-parse`/`unparse`/`edit`/`apply` — unparse → re-parse → reject-if-broken → atomic write. |
+| A2 self-wake clock | `SpellAgent.Clock` + `clock/*`, durable + budget-bounded (PLAN-014). |
+| A3 condition-fused wakes | `black/watch` — single-node (see below). |
+| `spawn-session`/`await-session` | Budget-bounded child sessions, capability attenuation. |
+| Inspector TUI + Reaction DSL | `mix spell.tui`; chord→intent→reaction, live-rebindable (~70%, see PARTIAL). |
+
+**Partial (built, being consolidated — PLAN-025):**
+
+| Capability | State | Finishes in |
+|---|---|---|
+| History reduction/compaction | Engine built + tested but **dormant** (not wired into the live loop) | FEAT-036 |
+| Reducer policy as data | Policy hardcoded in Elixir (should be PTC) | FEAT-037 |
+| Namespace registration | Three inconsistent conventions; drift-prone allowlist | BUG-026 / FEAT-035 |
+| Capability prompt | Hand-maintained; omits most namespaces | FEAT-034 |
+| Reaction write-mirror | System intents hardcoded; `lens/*` 6-of-10; lossy gaze round-trip | FEAT-039 |
+| Layout defaults | Hardcoded pane constraints (should be BEAM Lisp) | FEAT-040 |
+| Incremental reproject | Suffix-dirty only; no path-radius | FEAT-038 |
+| Multi-session cockpit | Read-only browser + solid primitives; no live concurrent view / human spawn | FEAT-044 |
+| Budget enforcement | Threaded, not enforced as early-exit | FEAT-043 |
+
+**Single-node only (multi-node is a separate track, NOT this alpha):**
+
+- Mesh watcher exactly-once, `black/decide` consensus — single-BEAM correct;
+  multi-node exactly-once (FUP-021) + distributed consensus (FUP-020) deferred.
+  The single-human-many-sessions capability (FEAT-044) needs single-BEAM only.
+
+**Deferred (follow-ups):**
+
+- OAuth refresh-token grant (FEAT-825 / BUG-025) — token is 1-year; Wave 0 ships
+  an actionable expiry error, the full grant is later.
+- Rust `find`/`edit` NIF as native tools (FEAT-042) — kernel NIF hosts
+  parse/unparse today; find/edit still stubbed.
+- A4 `loop/continue` (FEAT-045, design-gated), token-streaming to the REPL.
+- Multi-provider LLM (`req_llm`) — single-provider Anthropic by design;
+  default model `claude-sonnet-5`.

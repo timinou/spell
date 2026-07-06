@@ -2,6 +2,16 @@
 #+SUBTITLE: A first-principles design for the BEAM-Lisp runtime calling itself into meshed sub-sessions
 #+OPTIONS: toc:2 num:t
 
+#+BEGIN_QUOTE
+*Status: VISION + PARTIAL.* This set is the first-principles design horizon.
+Shipped today (single-BEAM): =spawn-session=/=await-session=, the blackboard
+(=black/*=), regions, budget + attenuation, A2/A3 wakes. NOT yet shipped: the
+human surface (docs 16/17), live multi-session cockpit, multi-node distributed
+exactly-once. The single-human-many-sessions capability (FEAT-044, PLAN-025)
+realizes the human surface on single-BEAM; multi-node consensus (FUP-020/021)
+is a separate track. Read as design intent, not a shipped inventory.
+#+END_QUOTE
+
 * What this is
 
 A companion to =docs/freeform-tui-philosophy.md=. The philosophy doc dissolves

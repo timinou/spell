@@ -1,5 +1,10 @@
 # The Elixir/PTC Boundary — Two End-to-End Traces
 
+> **Status: SHIPPED (doctrine + live traces).** The two traces reflect the real
+> keystroke→gaze and LLM→tool paths. The doctrine ("Elixir materializes, PTC
+> transforms") is aspirational where reducer policy still lives in Elixir
+> (FEAT-037 moves it to data).
+
 > **Doctrine** (stated in `lib/spell_agent/hist/lens.ex`): *"Elixir owns
 > primitives + invariants; PTC owns policies + lenses."* — *"Elixir
 > materializes, PTC transforms."*

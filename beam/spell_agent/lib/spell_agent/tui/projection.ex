@@ -37,10 +37,28 @@ defmodule SpellAgent.Tui.Projection do
   """
   @spec reconcile(map(), [pane_spec()], [Pane.suffix()] | :all, vms()) :: vms()
   def reconcile(forest, panes, fired, cache \\ %{}) do
+    reconcile(forest, panes, fired, cache, :all)
+  end
+
+  @doc """
+  Reconcile with a RADIUS hint (PLAN-025 W3, FEAT-038).
+
+  Same as `reconcile/4`, but `dirty_paths` (root-paths of the spans that changed
+  this batch, or `:all`) is threaded to each dirty pane's `project_incremental/3`
+  so a pane may recompute only the affected subtrees. A pane that does not
+  override `project_incremental/3` behaves exactly as before (full `project/2`),
+  so this is a strict superset of `reconcile/4` — nothing regresses.
+
+  The App computes `dirty_paths` from `SpellAgent.Tui.ForestDiff.dirty_paths/2`
+  (prev vs curr forest); on first mount / navigation it passes `:all`.
+  """
+  @spec reconcile(map(), [pane_spec()], [Pane.suffix()] | :all, vms(), [[String.t()]] | :all) ::
+          vms()
+  def reconcile(forest, panes, fired, cache, dirty_paths) do
     Enum.reduce(panes, %{}, fn %{name: name, module: mod, assigns: assigns}, acc ->
       vm =
         if reproject?(mod, fired) do
-          mod.project(forest, assigns)
+          mod.project_incremental(forest, assigns, dirty_paths)
         else
           Map.get(cache, name)
         end

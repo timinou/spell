@@ -94,6 +94,20 @@ defmodule SpellAgent.Tui.Reaction.Ptc do
   #   * visibility values   -> Ui.safe_visibility
   #   * auto_depth/turn     -> non-negative integer or the prior value
   #   * cursors/scroll keys -> known panes only
+  #
+  # DECISION (FEAT-039, gaze round-trip): the clip to these 10 named fields is
+  # INTENTIONAL and now EXPLICIT/documented -- `%Ui{}` is a closed, typed struct
+  # (focus/panes/mode/cursors/auto_depth/overrides/turn/scroll/leader/flags), not
+  # an open bag; a reaction cannot invent a NEW top-level %Ui{} field (no atom-
+  # table growth, no untyped struct drift). The escape hatch for "a reaction
+  # wants to carry novel state" is `flags` -- already a bounded (32-entry,
+  # string-keyed) namespaced extension map (`Ui.safe_flags/1`), and now (this
+  # fix) actually ROUND-TRIPS: `ui_to_map/1` sends it in as `data/ui.flags`, a
+  # reaction reads/writes it, and this fn restores it via `Ui.safe_flags/1`.
+  # Before this fix `flags` was missing from `ui_to_map/1` -- rehydrate restored
+  # it on the way OUT but a reaction could never see its OWN prior flags on the
+  # way IN, silently one-way. So: the closed 10-field set stays closed; `flags`
+  # is the bounded, validated, two-way extension point.
   # A field the reaction omits or sets to an invalid value keeps the PRIOR gaze's
   # value, so a malformed return can never produce a %Ui{} that crashes a later
   # render (e.g. a string auto_depth breaking `depth < auto_depth`).
@@ -125,7 +139,20 @@ defmodule SpellAgent.Tui.Reaction.Ptc do
       "overrides" => stringify_kv(ui.overrides),
       "turn" => ui.turn,
       "scroll" => stringify_kv(ui.scroll),
-      "leader" => ui.leader && to_string(ui.leader)
+      "leader" => ui.leader && to_string(ui.leader),
+      # `flags` IS the bounded extension map (FEAT-039): a reaction that wants to
+      # carry NOVEL state across the round-trip (beyond the 10 fixed gaze fields)
+      # sets a key here, not a new %Ui{} field. Was previously missing from the
+      # INPUT side of the round-trip (rehydrate/2 already restored it on the way
+      # OUT, via `Ui.safe_flags/1` below) -- a reaction reading `data/ui` could
+      # never see its own prior flags. Bounded by `Ui.safe_flags/1` (32 entries,
+      # string keys, no atom-table growth) on both directions -- one bag, one
+      # limit, closed at the SAME chokepoint the render tmpl:: holes already read.
+      # NB: unlike cursors/scroll/overrides (whose values are ALWAYS domain atoms),
+      # a flag's value is caller-defined data (bool/string/number) -- passed
+      # through as-is, not atom-stringified, so e.g. `true` doesn't silently
+      # become the string "true" on a reaction that round-trips it unchanged.
+      "flags" => ui.flags
     }
   end
 

@@ -970,4 +970,111 @@ defmodule SpellAgent.Tui.AppTest do
 
     GenServer.stop(pid)
   end
+
+  # FEAT-039: system intents now resolve through the SAME `Keys.resolve/2`
+  # cascade as any other intent. Defends the REBIND axis (a live `keymap/bind`
+  # changes WHICH chord triggers `mode/insert`) and the REDEFINE axis (a live
+  # `keymap/define-reaction` changes WHAT `mode/insert` does) -- both live,
+  # neither requiring an app.ex change. Also defends that `app/quit` +
+  # `frame/leader` stay PROTECTED (never redefinable) by design.
+  describe "system intents are reachable + rebindable through the resolver (FEAT-039)" do
+    setup %{store: store} do
+      SpellAgent.Tui.KeymapRegistry.reset()
+
+      {:ok, pid} =
+        App.start_link(name: nil, test_mode: {80, 24}, store: store, on_submit: fn _ -> :noop end)
+
+      %{pid: pid}
+    end
+
+    test "mode/insert is REBINDABLE: a live keymap/bind moves it off `enter` onto a fresh chord",
+         %{pid: pid} do
+      # Default: `enter` on the (focused) prompt triggers mode/insert.
+      assert ui(pid).mode == :normal
+
+      # Rebind: `enter` no longer maps to mode/insert (shadow the compiled
+      # binding with a harmless intent); `i` triggers mode/insert instead -- the
+      # SAME live registry every other intent's chord already goes through.
+      :ok = SpellAgent.Tui.KeymapRegistry.bind(:prompt, SpellAgent.Tui.Chord.parse("enter"), :"noop/rebound")
+      :ok = SpellAgent.Tui.KeymapRegistry.bind(:prompt, SpellAgent.Tui.Chord.parse("i"), :"mode/insert")
+
+      # `enter` now resolves to the harmless intent -> stays NORMAL.
+      :ok = Runtime.inject_event(pid, key("enter"))
+      assert ui(pid).mode == :normal
+
+      # The NEW chord reaches mode/insert's default behavior (focus prompt + INSERT).
+      :ok = Runtime.inject_event(pid, key("i"))
+      assert ui(pid).mode == :insert
+      assert ui(pid).focus == :prompt
+
+      GenServer.stop(pid)
+    end
+
+    test "mode/insert is REDEFINABLE: a live keymap/define-reaction wins over the hardcoded default",
+         %{pid: pid} do
+      # Redefine what mode/insert DOES: instead of focusing the prompt + entering
+      # INSERT, flip a flag and stay in NORMAL -- proves the live reaction (not
+      # the compiled default) ran.
+      :ok =
+        SpellAgent.Tui.KeymapRegistry.put_reaction(
+          :prompt,
+          :"mode/insert",
+          ~S|(assoc data/ui "flags" (assoc (get data/ui "flags") "redefined" true))|
+        )
+
+      :ok = Runtime.inject_event(pid, key("enter"))
+
+      assert ui(pid).flags["redefined"] == true
+      # The live reaction fully REPLACED the default -- mode stayed NORMAL
+      # (the reaction's return had no :mode key -> rehydrate keeps the prior mode).
+      assert ui(pid).mode == :normal
+
+      GenServer.stop(pid)
+    end
+
+    test "app/quit stays PROTECTED: rebinding its chord still stops the app (no lockout)", %{
+      pid: pid,
+      store: store
+    } do
+      # Even a live reaction registered against app/quit cannot prevent the
+      # App-level {:stop, state} intercept (protected by design, FEAT-039).
+      :ok =
+        SpellAgent.Tui.KeymapRegistry.put_reaction(
+          :global,
+          :"app/quit",
+          ~S|data/ui|
+        )
+
+      ref = Process.monitor(pid)
+      :ok = Runtime.inject_event(pid, key("esc"))
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 1000
+
+      # A fresh app still quits on esc even with NO reaction registered at all
+      # (KeymapRegistry.reset/0 already cleared it above at setup) -- the
+      # protected default survives an empty registry too.
+      {:ok, pid2} =
+        App.start_link(name: nil, test_mode: {80, 24}, store: store, on_submit: fn _ -> :noop end)
+
+      ref2 = Process.monitor(pid2)
+      :ok = Runtime.inject_event(pid2, key("esc"))
+      assert_receive {:DOWN, ^ref2, :process, ^pid2, _reason}, 1000
+    end
+
+    test "frame/leader stays PROTECTED: a live reaction cannot hijack the C-w leader arm", %{
+      pid: pid
+    } do
+      :ok =
+        SpellAgent.Tui.KeymapRegistry.put_reaction(
+          :global,
+          :"frame/leader",
+          ~S|data/ui|
+        )
+
+      :ok = Runtime.inject_event(pid, ctrl("w"))
+      # Still arms pending_leader (the App-only state a pure reaction can't see).
+      assert app_state(pid).pending_leader == true
+
+      GenServer.stop(pid)
+    end
+  end
 end

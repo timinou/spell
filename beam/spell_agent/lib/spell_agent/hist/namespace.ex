@@ -266,9 +266,29 @@ defmodule SpellAgent.Hist.Namespace do
 
   # PLAN-018 W3: run the reducibility ESTIMATE policy over the projection. A thin
   # pass-through to the reducer .ptc via Lens.run (estimate only, no reduction).
-  defp reducibility(impl, session_id, args) do
+  # PUBLIC (FEAT-036): the rate-controller (SpellAgent.Hist.RateController) calls
+  # this at the mission boundary to get the cheap reducibility estimate that feeds
+  # Mission.decide. Same function the `hist/reducibility` verb exposes to the
+  # agent — one implementation, two callers (the mind via the verb, the body via
+  # the controller).
+  @doc false
+  def reducibility(impl, session_id, args \\ %{}) do
     source = Map.get(Lens.reducer_sources(), "reducibility")
-    Lens.run(impl, session_id, source, args || %{})
+    # FEAT-037 (review S2): thread the LIVE spill threshold into the estimate so it
+    # sheds the same byte set Spill.spill actually would — unless the caller already
+    # provided one. Keeps Mission.decide's K* honest after a define-config retune.
+    args = args || %{}
+    args = Map.put_new(args, "threshold", spill_threshold())
+    Lens.run(impl, session_id, source, args)
+  end
+
+  defp spill_threshold do
+    case SpellAgent.Config.get("hist.spill_threshold") do
+      n when is_integer(n) and n > 0 -> n
+      _ -> 512
+    end
+  rescue
+    _ -> 512
   end
 
   # PLAN-018 W6: run the recite policy over the projection -> the tail goal-
@@ -312,7 +332,12 @@ defmodule SpellAgent.Hist.Namespace do
   # mission must degrade to the UNREDUCED refold (or an error map), never crash.
   # We rescue the reduce+refold pipeline and fall back to a plain refold; if even
   # that fails, surface an {"err" ...} map. (L1 swarm finding.)
-  defp reduce(impl, session_id, args) do
+  # PUBLIC (FEAT-036): the rate-controller calls this to realize a reduce decision
+  # — the same function `hist/reduce` exposes to the agent. Returns the reduced
+  # replayable tape (message list) or an {"err" ...} map (degrades to the
+  # unreduced tape on a malformed node, never crashes).
+  @doc false
+  def reduce(impl, session_id, args \\ %{}) do
     cursor = cursor_arg(args)
 
     case Reconstitute.at(impl, session_id, cursor) do

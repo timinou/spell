@@ -1,0 +1,80 @@
+#+TITLE: A4 loop/continue — the mind authors its own next prompt (architecture + design)
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: FEAT-045-a4-loop-continue-the-mind-authors-its-ow
+#+COMPLETION_HASH: ea317b87937c141f
+
+* Initial Message
+
+look at the recent work and work that was done and point out
+- architectural
+- functional
+- UX
+
+frictions in the code. Be comprehensive and thorough, you have unlimited budget. That's to surface important work that we need to consolidate and high-impact features that we can use to start using this app (go from PoC to alpha)
+
+* Summary
+A4 in the agency ladder: the mind ends a turn by authoring its OWN next prompt and re-entering the loop — self-directed continuation, distinct from A2 (Clock time-fuse) and A3 (black/watch condition-fuse). The user wants this ARCHITECTED properly before implementing. This item is DESIGN-FIRST: settle the surface, the detonator, and the safety precondition; implementation follows in a later wave once the design gate passes.
+
+* Grounding (the existing re-entry substrate)
+- Clock.fire → Session.run/2 with a new prompt is the proven "synthetic caller" re-entry seam (README A2). A4 reuses this detonator.
+- Mesh.Spawn re-enters run/2 for a CHILD; A4 is the SELF analogue (same session_id, new prompt, continued tape).
+- PtcRunner.SubAgent.run terminates a turn with step.return / step.fail; Session threads initial_messages/initial_memory for continuation.
+
+* The core design questions (argue, then decide at the gate)
+1. SURFACE: is loop/continue (a) a verb `(loop/continue {:prompt ... :budget ...})`, (b) a special return value `(return {:continue "next prompt"})`, or (c) a step signal? 
+   - A verb is the most homoiconic (continue is "a tool whose effect is my own re-entry"), consistent with clock/* and spawn-session.
+   - A return-signal couples continuation to the turn's terminal value (cleaner semantically: "my answer IS to continue").
+   - RECOMMEND arguing for the verb form (parallels clock/at {:in 0}), but decide at the design gate with the SubAgent's actual turn-termination contract in hand.
+2. DETONATOR: is A4 a NEW mechanism, or the SAME Clock wake with {:in 0, :prompt <mind-authored>}? 
+   - Strongly prefer REUSE: loop/continue == clock/at {:in 0 :prompt p :session_id self} — one detonator (Clock), one budget, one durable seam. A4 becomes sugar over A2 with a mind-authored prompt. Verify the Clock path accepts an immediate self-wake cleanly.
+3. CONTINUATION SEMANTICS: does continue carry the SAME tape (loop) or append a new prompt turn? It must continue the conversation (Hist.continuation replays the tape) with the mind's new prompt as the next user turn. Confirm the tape/memory threading matches spawn-session's child semantics vs a same-session append.
+
+* HARD PRECONDITION (do not ship A4 without it)
+A self-continuing loop is the classic runaway. A4 MUST NOT ship before budget enforcement (FEAT-043): the enforced turn+cost ceiling is the ONLY thing that bounds a self-continue. Depends-on FEAT-043. The wake budget (Clock) additionally bounds fire rate. State this dependency explicitly in the plan.
+
+* Open questions to resolve at the design gate (flag, do not guess)
+- Does PtcRunner.SubAgent expose a clean turn-termination hook, or does continuation require a ptc_runner patch? (Check MOVE-A/B/C in SPELL_PATCHES.md.)
+- Should continue be allowed mid-turn (author next prompt now, run after this turn) or only as the terminal act? Terminal-only is safer.
+- How does continue interact with the reduction rate-controller (FEAT-036)? A continue is a new turn → the same reduce/cache decision applies.
+
+* Acceptance (for the DESIGN gate)
+- A written design settling: surface (verb vs signal), detonator (reuse Clock vs new), continuation semantics (tape threading), and the FEAT-043 dependency.
+- The design is reviewed (oracle/architecture reviewer) before any impl wave.
+- Implementation is a SEPARATE follow-up gated on the approved design + FEAT-043 landed.
+
+* Notes
+Filed from the PoC→alpha audit (2026-07-05). A4. User: "architect this properly and not jump to conclusions just yet." Design-first; impl gated. Reuse-the-Clock-detonator is the leading hypothesis but must be validated against the SubAgent turn contract.
+
+* Design investigation refinement (2026-07-05, appended post-filing)
+A dedicated architecture investigation ran on this item. It SHARPENS the design and CORRECTS the initial "reuse Clock detonator with {:in 0}" hypothesis. Start the design gate from here, not from the original hypothesis above.
+
+** Corrected recommendation: NOT Clock-reuse — a `loop/continue` verb + in-process loop signal
+- Reusing `clock/at {:in 0}` (the original hypothesis, "Approach C") is REJECTED on semantics: it conflates "schedule a future wake" with "continue now," carries a needless Khepri persist, and has off-by-one fire semantics.
+- RECOMMENDED ("Approach B"): a homoiconic verb `(tool/loop/continue {:prompt "..."})` that surfaces an in-process signal the SubAgent loop recognizes — reusing the Wake MACHINERY (the run_wake re-entry path + the attenuation/region stamping) but NOT the time-fuse. Immediate in-process re-entry, no persist.
+- REJECTED ("Approach A", special return value like `(return {:continue ...})`): overloads `(return ...)` semantics; confusing. Keep the surface clean with an explicit verb.
+
+** Continuation semantics (settled by the investigation)
+- SAME session_id, SAME tape, SAME memory (def bindings carry forward). NOT a new session (that is spawn-session / A6).
+- The mind-authored prompt is APPENDED as a new user message (clean turn boundary), not embedded in the prior message.
+- Recommended: ONE merged mission (a continue is a turn CONTINUATION, not a new session-level entry); Hist.continuation logic UNCHANGED (the tape is the LLM conversation).
+- Capability ceiling: STRICTLY confined — the continue verb must stamp `__allowed`/`__region` from the loop's current attenuation exactly like Clock wakes + spawn, so the mind cannot widen its own ceiling via the continue path.
+
+** The A5 dependency, made precise
+- ptc_runner ALREADY has budget gates: `PtcRunner.SubAgent.Loop.check_termination` checks `work_turns_remaining`/`remaining_turns`/`mission_deadline` at the top of the loop. So turn-budget is partially enforced at the ptc_runner boundary.
+- The gap FEAT-043 must close: (a) the continue re-entry MUST pass through `check_termination` (no bypass), and (b) Session.run's COST ceiling (cost_ceiling) is not enforced at all today — only turns are. A4 needs both, so FEAT-043 remains a HARD blocker. Without it, `loop/continue` in a tight loop is a runaway/DoS vector.
+
+** Exact seams to touch (for the impl wave, post-design-gate)
+- NEW: a `loop/` namespace verb (register via the unified Namespace registry, FEAT-035) — `loop/continue`.
+- ptc_runner patch: the loop must recognize a continue SIGNAL. Recommended sentinel shape `{:__ptc_loop_continue__, prompt}` aligning with the existing `:__ptc_return__` / `:__ptc_fail__` sentinels. Lands in `../ptc_runner/lib/ptc_runner/sub_agent/loop.ex` (check_termination / driver_loop) — a new MOVE patch in SPELL_PATCHES.md.
+- Session.run: thread the continue back through the same run_wake-style re-entry with stamped ceiling.
+
+** Open questions still for the gate (do not pre-decide)
+- Sentinel vs a Step `:continue` field (recommendation: sentinel, to match PTC style).
+- Whether continue is terminal-only (safer) or may be emitted mid-program.
+- Interaction with the reduction rate-controller (FEAT-036): a continue is a new LLM cycle → the same reduce/cache decision applies to its tape.
+
+Net: the impl is a `loop/` verb (registry client) + a small ptc_runner loop-signal patch reusing the run_wake re-entry + attenuation machinery, gated on FEAT-043 (turn AND cost enforcement) and reviewed by oracle before build.
+
+NOTE [2026-07-05]: A4 loop/continue SHIPPED (terminal-return form). SpellAgent.Loop verb + Session run_with_continue trampoline reusing the Clock re-entry seam (in-body, no vendored-loop surgery). Hard safety: depth cap (25) + per-continue budget. S4-hardened: chain budget shrinks (shared ceiling), unforgeable sole-key signal, session_id pinned. docs/loop-continue.md. Mid-program continue = FUP-034 (needs ptc_runner multi-transport patch).

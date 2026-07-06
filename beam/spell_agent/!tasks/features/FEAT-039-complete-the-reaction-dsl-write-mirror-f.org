@@ -1,0 +1,38 @@
+#+TITLE: Complete the Reaction DSL write-mirror — fill the gaps so the homoiconic keybinding promise fully works
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: FEAT-039-complete-the-reaction-dsl-write-mirror-f
+#+COMPLETION_HASH: 5087e69164b66572
+
+* Initial Message
+
+look at the recent work and work that was done and point out
+- architectural
+- functional
+- UX
+
+frictions in the code. Be comprehensive and thorough, you have unlimited budget. That's to surface important work that we need to consolidate and high-impact features that we can use to start using this app (go from PoC to alpha)
+
+* Summary
+The Reaction DSL (chord→intent→reaction as live PTC data) is a strong ~70% but leaks in four places that break the "rebind keys and redefine behaviour as data, no if focus== anywhere" promise. Finish it: fill every gap so the write-mirror is genuinely complete and the docs' claims become true.
+
+* The gaps (verified)
+1. SYSTEM INTENTS hardcoded before reaction dispatch. app/quit, mode/insert, frame/leader are resolved in app.ex (handle_key_event, ~L368-410) BEFORE the keymap→intent→reaction path, so the agent cannot rebind or redefine them. Violates "no if focus==" for the system layer. FIX: route system intents through the SAME resolver as everything else (they become reactions with a protected/default binding the agent may override).
+2. lens/* ships 6 of ~10 documented verbs (missing update / retag / update-focused / put per the freeform docs). FIX: implement the missing verbs so documented reactions are authorable.
+3. GAZE ROUND-TRIP is lossy. Reaction.Ptc.rehydrate clips a PTC return to the 11 %Ui{} fields; extra keys dropped, so a reaction cannot carry novel state. FIX: allow a bounded extension map on the gaze (namespaced, atom-safe) so reactions can thread new state without a struct change — or document the closed set as intentional and make the clip explicit/validated.
+4. INSERT mode only works on :prompt. The modal table implies general modality. FIX: make mode a first-class per-context concern (or scope the claim).
+
+* Also
+- harness/* gaze transforms are Elixir closures, not PTC — the agent can COMPOSE them but not REDEFINE harness/expand. Decide + document: are these the fixed "body verbs" (pure primitives the mind composes) BY DESIGN, or should they be redefinable? If fixed, say so in the doc (they are the pure vocabulary, like builtins); if redefinable, that is a larger change — flag as a follow-up, do not silently leave the gap.
+
+* Acceptance
+- A system intent (e.g. quit) is reachable through the keymap resolver and REBINDABLE via keymap/bind (with a safe default so the agent can't lock itself out — a protected fallback).
+- The documented lens/* verbs all exist and are covered by a test authoring a reaction that uses each.
+- A reaction can return a gaze carrying bounded extra state that survives rehydrate (or the closed set is explicitly validated + documented).
+- The freeform-tui docs' claims match the shipped surface (coordinate with the doc-drift bug).
+
+* Notes
+Filed from the PoC→alpha audit (2026-07-05). C2. User: "choose the ambitious option that builds on the principles — finish this and make sure it works, fill the gaps." Pairs with the doc-drift fix (those doc claims become true when this lands) and the layout-as-data FEAT.
+
+NOTE [2026-07-05]: All 10 lens/* verbs ship. mode/insert rebindable+redefinable via Keys.resolve; app/quit + frame/leader intentionally protected. Gaze round-trip fixed (Ui.flags in ui_to_map). S3-fixed: flag values byte-bounded (4096) to prevent unbounded round-trip growth. Docs banner 70->85%. 2 scope-boundary FUPs (INSERT :prompt-only, %Ui{}-canonical) noted in the banner.

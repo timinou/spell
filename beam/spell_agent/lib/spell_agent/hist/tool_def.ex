@@ -16,7 +16,7 @@ defmodule SpellAgent.Hist.ToolDef do
 
   @type t :: %__MODULE__{
           name: String.t(),
-          params: [atom()],
+          params: [String.t() | atom()],
           doc: String.t() | nil,
           source: String.t(),
           origin: %{session: String.t(), node_id: String.t()} | nil,

@@ -1,5 +1,9 @@
 # Shell as data — `sh/parse` and `sh/unparse`
 
+> **Status: SHIPPED.** `sh-parse`/`sh-unparse` round-trip bash ↔ `form_tree`
+> (re-parse equality; exotic bash degrades to a `raw` node). Verified against
+> `BrushNif`. This doc matches the implementation.
+
 > PLAN-011 W5. The homoiconic completion. Up to W4 a shell command was *opaque
 > text* the moment it left the `sh::` reader. W5 makes bash itself **walkable
 > data**: `sh/parse` turns a bash string into a PTC-native tree (the same shape

@@ -1,0 +1,36 @@
+#+TITLE: loop/continue: support mid-program continue via a ptc_runner sentinel (not only terminal return)
+#+STATE: ITEM
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: FUP-034-loop-continue-support-mid-program-contin
+
+* Initial Message
+
+look at the recent work and work that was done and point out
+- architectural
+- functional
+- UX
+
+frictions in the code. Be comprehensive and thorough, you have unlimited budget. That's to surface important work that we need to consolidate and high-impact features that we can use to start using this app (go from PoC to alpha)
+
+* Summary
+FEAT-045 shipped loop/continue as a Session-level trampoline: the mind ends a turn with `(return (tool/loop/continue {:prompt ...}))` and Session re-enters. This covers the "author my next prompt" use case with a safe, in-body design (no vendored-loop surgery). The DEFERRED extension: allow a continue to be emitted MID-program (not only as the terminal return value), e.g. `(loop/continue {:prompt ...})` as a control-flow signal like `return`/`fail`.
+
+* Why deferred
+Mid-program continue requires a ptc_runner patch: a new `{:__ptc_loop_continue__, prompt}` sentinel (parallel to `{:return_signal, _}` / `{:fail_signal, _}`) produced by the sandbox and handled by the loop's `handle_lisp_success` across ALL THREE transports (ptc_tool_call, text_mode, single-shot), plus its interaction with the per-turn budget check. That is a core-loop control-flow change with high blast radius that warrants its own focused wave + review cycle \u2014 not appropriate to rush as the final item of PLAN-025 W4.
+
+* Design (from the FEAT-045 investigation)
+- Sandbox: a `(loop/continue v)` special form emits `{:continue_signal, prompt}` (mirroring `return`/`fail`).
+- Lisp.run: map it to `{:__ptc_loop_continue__, prompt}` (mirroring the __ptc_return__ mapping at lisp.ex ~914).
+- Loop: `handle_lisp_success` matches the sentinel and re-enters instead of terminating; parity across ptc_tool_call.ex, text_mode.ex, single-shot.
+- Budget: the continue MUST pass through check_termination (no bypass) so the turn/token ceiling still bounds it.
+- SPELL_PATCHES.md: document as a new MOVE patch.
+
+* Acceptance
+- A PTC program can call `(loop/continue {:prompt ...})` NOT as the terminal value and have the loop re-enter.
+- All three transports handle it identically.
+- The continue cannot bypass the budget/turn ceiling.
+- Reviewed (oracle/architecture) before merge \u2014 it is a core-loop change.
+
+* Notes
+Filed 2026-07-05 from PLAN-025 W4. The terminal-return form (shipped) is the safer subset; this is the power-user extension. See docs/loop-continue.md for the shipped design + this deferral.

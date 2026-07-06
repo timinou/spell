@@ -39,7 +39,7 @@ defmodule SpellAgent.Mesh.Spawn do
   """
 
   alias SpellAgent.Hist
-  alias SpellAgent.Mesh.{Budget, Join, Region, Store}
+  alias SpellAgent.Mesh.{Budget, Join, Store}
 
   defmodule MissionHandle do
     @moduledoc """
@@ -120,7 +120,6 @@ defmodule SpellAgent.Mesh.Spawn do
   defp spawn_session(parent_sid, opts, args) do
     prompt = require_prompt(args)
     store = opts[:store] || Hist.default_store()
-    region = resolve_region(args, parent_sid, prompt)
 
     # Acquire a slot BEFORE the Task — capacity enforced fail-fast at the spawn
     # site. :no_budget (holder down) degrades to nil (best-effort, no cap).
@@ -131,24 +130,28 @@ defmodule SpellAgent.Mesh.Spawn do
         :no_budget -> nil
       end
 
-    child_sid = Hist.new_session_id()
-    watermark = safe_max_seq(store, region)
-    child_tools = attenuate(args, opts)
-
-    run_opts =
-      [
-        session_id: child_sid,
-        region: region,
+    # FEAT-044: route through the ONE spawn gateway — it resolves the region,
+    # clamps :tools (D12) + the child's requested budget (FEAT-043) to this
+    # session's own ceilings, and registers lineage (owner: this session, this
+    # session's id as parent). The gateway does NOT itself run/spawn a process
+    # (this reflexive seam needs the detached-Task + Join posture below, which
+    # the gateway is agnostic to), so this call site still owns that part.
+    %{session_id: child_sid, region: region, run_opts: run_opts} =
+      SpellAgent.Spawn.create(prompt,
+        owner: {:session, parent_sid},
+        parent_id: parent_sid,
+        region: get(args, ["region"]),
+        tools: requested_tools(args),
+        allowed: opts[:allowed] || :all,
+        requested_budget: child_budget(args),
+        budget: opts[:budget],
         store: store,
-        hist: store,
-        max_turns: opts[:max_turns]
-      ]
-      # :all -> no :tools key (full base surface); a list -> attenuate to it.
-      |> put_tools(child_tools)
-      |> maybe_put(:llm, opts[:llm])
-      # S-E (FEAT-018): thread a precomputed binding slice into the child's def-env
-      # (cache-neutral; the child reuses it without re-deriving). Only a map crosses.
-      |> maybe_put(:inherit_memory, inherit_memory(args))
+        llm: opts[:llm],
+        max_turns: opts[:max_turns],
+        inherit_memory: inherit_memory(args)
+      )
+
+    watermark = safe_max_seq(store, region)
 
     # The child task itself releases the budget slot on exit (normal OR crash) via
     # its own `after` — so the slot is freed even if Mesh.Join restarts mid-child
@@ -213,55 +216,17 @@ defmodule SpellAgent.Mesh.Spawn do
     end
   end
 
-  # ---- region resolution ----
+  # ---- capability request (D12 clamp now lives in the SpellAgent.Spawn gateway) ----
 
-  # No region / "auto" -> Fork A (a fresh isolated region for this spawn). An
-  # explicit region id -> join it (Fork B rendezvous). A {:structured|:slug} form
-  # is passed through to Region.fork_b.
-  defp resolve_region(args, parent_sid, prompt) do
-    case get(args, ["region"]) do
-      nil -> Region.fork_a(prompt, parent_sid)
-      "auto" -> Region.fork_a(prompt, parent_sid)
-      "" -> Region.fork_a(prompt, parent_sid)
-      id when is_binary(id) -> id
-      {:structured, _} = s -> Region.fork_b(s)
-      {:slug, _} = s -> Region.fork_b(s)
-      _ -> Region.fork_a(prompt, parent_sid)
+  # The RAW :tools request from the agent's args (unclamped) — the gateway clamps
+  # it against this session's `:allowed` ceiling. `nil`/absent -> `:inherit`
+  # (the gateway then hands back the ceiling as-is, never widening it).
+  defp requested_tools(args) do
+    case get(args, ["tools"]) do
+      nil -> :inherit
+      list when is_list(list) -> Enum.map(list, &to_string/1)
+      _ -> :inherit
     end
-  end
-
-  # ---- capability attenuation (D12) ----
-
-  # The capability subset the child may call from its base tool surface
-  # (find/sh/define-*/...), CLAMPED to the parent's own ceiling (D12: capability
-  # only narrows down the spawn tree). Returns `:all` or a string list that
-  # Session.run applies via Map.take; the child's OWN session verbs are added
-  # unconditionally there, so this governs only the inherited base tools.
-  #
-  # ceiling (opts[:allowed]):
-  #   :all (root)  -> requested list as-is, or :all when absent.
-  #   list (child) -> intersect(requested, ceiling); an ABSENT :tools INHERITS the
-  #                   ceiling (never widens to root). An explicit list can only
-  #                   ever SHRINK it. So a child of `["find"]` can never hand a
-  #                   grandchild `"sh"`.
-  defp attenuate(args, opts) do
-    requested =
-      case get(args, ["tools"]) do
-        nil -> :inherit
-        list when is_list(list) -> Enum.map(list, &to_string/1)
-        _ -> :inherit
-      end
-
-    clamp(requested, opts[:allowed] || :all)
-  end
-
-  # Clamp a requested capability set to the parent's ceiling.
-  defp clamp(:inherit, ceiling), do: ceiling
-  defp clamp(requested, :all) when is_list(requested), do: requested
-
-  defp clamp(requested, ceiling) when is_list(requested) and is_list(ceiling) do
-    # Only names the parent itself holds survive (set intersection).
-    Enum.filter(requested, &(&1 in ceiling))
   end
 
   # ---- handle <-> data (the materialize boundary) ----
@@ -322,13 +287,38 @@ defmodule SpellAgent.Mesh.Spawn do
     _, _ -> 0
   end
 
-  defp maybe_put(opts, _key, nil), do: opts
-  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+  # FEAT-043: parse the agent's REQUESTED budget ceiling from its `:budget
+  # {turns, cost_ceiling}` (or `max_tokens`) arg. The gateway (SpellAgent.Spawn)
+  # clamps this against the parent's enforced budget — this call site only
+  # parses the raw request, it no longer clamps (single clamp site, in the
+  # gateway).
+  defp child_budget(args) do
+    SpellAgent.Budget.from_opts(budget_arg_opts(args))
+  end
 
-  # :all -> no :tools key (child gets the full base surface, attenuation a no-op).
-  # A list -> set :tools so Session.run attenuates the child's base to it.
-  defp put_tools(opts, :all), do: opts
-  defp put_tools(opts, list) when is_list(list), do: Keyword.put(opts, :tools, list)
+  # Normalize the agent's `:budget` arg (a string/atom-keyed map) into the keyword
+  # shape `Budget.from_opts/1` reads. Accepts "turns"/"max_tokens"/"cost_ceiling".
+  defp budget_arg_opts(args) do
+    case flex(args, "budget") do
+      m when is_map(m) ->
+        [
+          max_turns: flex(m, "turns") || flex(m, "max_turns"),
+          max_tokens: flex(m, "max_tokens") || flex(m, "cost_ceiling")
+        ]
+
+      _ ->
+        []
+    end
+  end
+
+  # Read a key from a map tolerating string OR atom keys (PTC args arrive either).
+  defp flex(m, key) when is_map(m) do
+    Map.get(m, key) || Map.get(m, String.to_existing_atom(key))
+  rescue
+    ArgumentError -> Map.get(m, key)
+  end
+
+  defp flex(_m, _key), do: nil
 
   defp get(args, [key]) when is_map(args) do
     Map.get(args, key) || Map.get(args, safe_atom(key))

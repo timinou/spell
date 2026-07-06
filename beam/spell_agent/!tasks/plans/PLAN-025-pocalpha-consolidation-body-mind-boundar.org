@@ -1,0 +1,74 @@
+#+TITLE: PoC→Alpha consolidation — body/mind boundary, dormant-engine activation, multi-session cockpit
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: PLAN-025-pocalpha-consolidation-body-mind-boundar
+#+COMPLETION_HASH: f559a25e29f86e8d
+
+* Initial Message
+
+look at the recent work and work that was done and point out
+- architectural
+- functional
+- UX
+
+frictions in the code. Be comprehensive and thorough, you have unlimited budget. That's to surface important work that we need to consolidate and high-impact features that we can use to start using this app (go from PoC to alpha)
+
+* Thesis
+The spell_agent substrate is real and strong (homoiconic loop, durable tools, shell-as-data, parse-gated code-edit, clock agency). The PoC→alpha gap is NOT missing capability — it is: (1) capability built-but-unwired (the compaction engine), (2) mind-logic trapped in the body (reducers, layout, seam), (3) an ugly namespace-registration seam that blocks clean growth, (4) docs that describe the aspiration as if shipped, and (5) a multi-session capability present in fragments. This plan consolidates all of it, deepening the "Elixir=body, BEAM Lisp=mind" boundary as it goes.
+
+Guiding rule for every wave: reach for DATA not code (move policy to PTC), REUSE existing affordances (Cell dep-graph, keymap two-level indirection, Clock detonator, blackboard) rather than adding parallel systems, and NEVER brick the surface (last-good → native default → surfaced error).
+
+* Filed work items (all created 2026-07-05 from the audit)
+Bugs: BUG-025 (OAuth expiry) · BUG-026 (namespace seam) · BUG-027 (define-tool integrity) · BUG-028 (NIF sandbox) · BUG-029 (doc drift).
+Features: FEAT-034 (capability prompt) · FEAT-035 (namespace registry) · FEAT-036 (reduction wiring) · FEAT-037 (reducer→PTC) · FEAT-038 (incremental reproject) · FEAT-039 (reaction write-mirror) · FEAT-040 (layout-as-data) · FEAT-041 (app.ex decompose) · FEAT-042 (find/edit NIF) · FEAT-043 (budget enforcement) · FEAT-044 (multi-session) · FEAT-045 (loop/continue design).
+Done in the planning turn: default model → claude-sonnet-5.
+
+* Wave DAG
+
+** Wave 0 — Truth + safety floor (parallel, no deps) [IN THIS SESSION where marked]
+- BUG-029 doc reconciliation — status banners on every doc, README Status table reconciled to code. [IN-SESSION per user]
+- Default model → claude-sonnet-5. [DONE]
+- BUG-025 (minimum tier) — expired-token → actionable error at the call boundary.
+Reviewer swarm S0: doc-vs-code accuracy audit (every banner claim spot-checked against code).
+
+** Wave 1 — The keystone seam (unblocks clean growth + the capability prompt)
+- FEAT-035 unified SpellAgent.Namespace registry (+ BUG-026 seam cleanup: generalize binary routing, delete @qualified_keys, feed ns prefixes from spell_agent). Touches vendored ../ptc_runner — update SPELL_PATCHES.md.
+- BUG-027 define-tool integrity (closed-world callee check is cleanest once the registry is SoT).
+- FEAT-034 capability prompt auto-generated from the registry (kills inventory drift; resolves the system.md "no read/edit/find" contradiction).
+Reviewer swarm S1: atom-safety (no interning regression), drift test (every verb PTC-callable), attenuation preserved, no capability omitted from the prompt.
+
+** Wave 2 — Activate the dormant compaction engine (highest ROI)
+- FEAT-043 budget enforcement (HARD precondition — truthful remaining_turns).
+- FEAT-036 wire Mission.decide into the turn loop (reduce/cache per turn; memoized). May need a ptc_runner before_turn tape hook — flag at design.
+- FEAT-037 move reducer policy to PTC (pipeline order + effect classifier + threshold), keeping the env-preservation invariant in the body.
+Reviewer swarm S2: env-preservation proof holds over data-authored pipelines; reduce actually shrinks the wire; no behavior change on cache turns; budget clamp on children.
+
+** Wave 3 — TUI foundation (decompose, then build on clean seams)
+- FEAT-041 decompose app.ex god-module (EventResolver, Reproject pipeline, StoreCoalescer, CellCoordinator, HoleAffordance) — GATES the rest.
+- FEAT-038 incremental reproject (path-radius, generalizing Cell dep-graph; remove vestigial ex_rose_tree).
+- FEAT-039 complete the reaction write-mirror (system intents through the resolver, missing lens/* verbs, gaze round-trip, modal).
+- FEAT-040 layout-as-data (default layout as BEAM Lisp; pane dispatch via registry).
+Reviewer swarm S3: no behavior regression (golden transcripts), reproject radius scales with change not forest size, reaction rebind end-to-end, layout degrades safely.
+
+** Wave 4 — Agency + the multi-session cockpit
+- FEAT-042 wire find/edit NIF as a registry client (+ BUG-028 NIF boundedness).
+- FEAT-044 multi-session substrate (one spawn gateway; live concurrent view folding SessionBrowser into the main TUI; human-facing mesh per docs 16/17; human-initiated spawn). Depends: FEAT-041 (seams), FEAT-035 (human/* verbs), FEAT-043 (bounded spawns).
+- FEAT-045 loop/continue DESIGN gate (reuse-Clock-detonator hypothesis; impl gated on approved design + FEAT-043). Design reviewed by oracle before any impl.
+Reviewer swarm S4: one spawn path (no bypass), concurrent focus-switch works, human helper is budget-bounded + attenuated, loop/continue design is runaway-safe.
+
+* Reviewer-swarm discipline
+Each wave ends with a specialised reviewer swarm over that wave's diff. Any NEW bug/feature a reviewer or the main thread finds mid-flight is FILED (bug/feat) and fixed in-wave or scheduled — no silent drift, no scope-creep-by-omission.
+
+* Sequencing rationale
+Truth first (docs) so later waves don't inherit misdirection. Seam second (registry) because every later namespace/verb/prompt derives from it. Compaction third (it's the shelf-ready ROI + needs only budget). TUI decompose fourth (gates the TUI features). Multi-session + agency last (they compose everything below). loop/continue is design-gated (user: architect properly, don't jump).
+
+* What stays OUT of this plan (explicit non-goals)
+- Multi-NODE distributed consensus / exactly-once (FUP-020/021) — the single-human-many-sessions capability is single-BEAM and does not need it; keep those as a separate track.
+- Multi-provider LLM abstraction (req_llm) — single-provider Anthropic is fine for alpha; Sonnet 5 defaulted. Flagged for later, not now.
+- Full OAuth refresh grant (FEAT-825) — Wave 0 ships the actionable-error minimum; the full grant is a follow-up.
+
+* Status
+Planning turn complete. Awaiting greenlight on the wave order before executing Wave 1+. Wave 0 doc reconciliation is being done in the planning session per the user's in-session mandate.
+
+NOTE [2026-07-05]: All 4 waves + 4 reviewer swarms complete (19/19 roster items). W0 truth+safety (model->sonnet-5, docs reconciled, OAuth). W1 keystone namespace registry (unified routing, define-tool integrity, capability prompt). W2 activated dormant compaction (budget enforcement, Mission.decide wired live, reducer policy->PTC). W3 TUI foundation (app.ex decomposed, incremental reproject, reaction write-mirror, layout-as-data). W4 cockpit+agency (find/edit NIF, multi-session gateway, loop/continue). Every wave's reviewer swarm found real issues, all fixed+regression-tested (S1: 4, S2: 6, S3: 2, S4: 8). Full suites green: spell_agent 1426, ptc_runner 3516. Mid-flight FUPs filed: BUG-030/031, FUP-033/034. Deferred (well-specified FUPs): multi-session live cockpit (parts 3-5), mid-program loop/continue, OAuth full refresh grant, reproject-K tuning.

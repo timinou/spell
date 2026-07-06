@@ -49,6 +49,18 @@ defmodule SpellAgent.Tui.Pane do
   @doc "Fold the forest (+ ui assigns) into a view-model."
   @callback project(forest(), assigns()) :: vm()
 
+  @doc """
+  Incremental projection (PLAN-025 W3, FEAT-038): fold the forest given the
+  `dirty_paths` (root-paths of the spans that changed this batch), so a pane may
+  recompute only the affected subtrees instead of re-walking the whole forest.
+
+  OPTIONAL and additive: the default (injected by `use Pane`) IGNORES
+  `dirty_paths` and delegates to the full `project/2`, so every existing pane is
+  unchanged. A pane overrides this only when it has a cheaper incremental path.
+  `dirty_paths` of `:all` means "recompute everything" (first mount / navigation).
+  """
+  @callback project_incremental(forest(), assigns(), [[String.t()]] | :all) :: vm()
+
   @doc "Render a view-model to `[{widget, rect}]`."
   @callback view(render_input()) :: [{term(), term()}]
 
@@ -82,13 +94,19 @@ defmodule SpellAgent.Tui.Pane do
       @impl true
       def project(_forest, _assigns), do: nil
 
+      # FEAT-038: default incremental projection = the full projection. A pane
+      # opts into radius-scoped work by overriding this; otherwise it behaves
+      # exactly as before (ignore the paths, re-project fully).
+      @impl true
+      def project_incremental(forest, assigns, _dirty_paths), do: project(forest, assigns)
+
       @impl true
       def keymap, do: []
 
       @impl true
       def react(_intent, ui, _forest), do: ui
 
-      defoverridable events: 0, project: 2, keymap: 0, react: 3
+      defoverridable events: 0, project: 2, project_incremental: 3, keymap: 0, react: 3
 
       # Sugar: `events [[:turn, :stop]]` and `keymap [{"C-l", :\"span/expand\"}]`
       # as declarative module-level declarations.

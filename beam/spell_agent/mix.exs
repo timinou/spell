@@ -57,9 +57,8 @@ defmodule SpellAgent.MixProject do
       {:jason, "~> 1.4"},
       # Hist: durable homoiconic conversation-history substrate (PLAN-001).
       # Khepri = tree-like on-disk store (single-node Ra = ordered crash-safe WAL
-      # + materialized view). ex_rose_tree = zipper view for cursor navigation.
+      # + materialized view).
       {:khepri, "~> 0.18"},
-      {:ex_rose_tree, "~> 0.1"},
       # The inspector TUI (PLAN-345/346). VENDORED as a git submodule (path dep,
       # same as ptc_runner) so we can patch the Rust NIF — PLAN-346 W0 pushes
       # kitty keyboard-protocol enhancement flags so ctrl+j/h disambiguate from

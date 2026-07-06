@@ -43,15 +43,20 @@ defmodule SpellAgent.Tools do
       |> Enum.reject(fn entry -> reserved_name?(entry.name) end)
       |> Map.new(fn entry -> {entry.name, to_callable(entry)} end)
 
-    meta_tools()
-    |> Map.merge(native_tools())
-    |> Map.merge(freeform_tools())
+    # FEAT-035: the static namespaces (meta, native, freeform) come from the ONE
+    # catalog. harness/keymap declare inventory metadata but build an empty map
+    # here (they are built per-render by the TUI app, closing over the live
+    # forest/gaze), so they don't pollute the base session map.
+    SpellAgent.Namespace.static_tools_map(SpellAgent.Namespace.Catalog.specs())
     |> Map.merge(registry_tools)
   end
 
   # Built-in native tools that are not meta-tools (define-*) and not part of the
   # freeform render surface. `sh` runs an argv vector on brush (PLAN-011 W1).
-  defp native_tools do
+  # Public so `SpellAgent.Namespace.Catalog` can declare this namespace's callable
+  # map from ONE place (FEAT-035).
+  @doc false
+  def native_tools do
     %{
       "sh" => &SpellAgent.Sh.tool/1,
       "sh-pipe" => &SpellAgent.Sh.pipe_tool/1,
@@ -60,8 +65,16 @@ defmodule SpellAgent.Tools do
       "code-parse" => &SpellAgent.Code.parse_tool/1,
       "code-unparse" => &SpellAgent.Code.unparse_tool/1,
       "code-edit" => &SpellAgent.Code.edit_tool/1,
-      "code-apply" => &SpellAgent.Code.apply_tool/1
+      "code-apply" => &SpellAgent.Code.apply_tool/1,
+      # FEAT-042: symbol-aware navigation + structural edit backed by the Rust
+      # kernel NIF (bounded + panic-safe in SpellAgent.Find). `edit` attributes to
+      # no session ("") at the base surface — the cross-runtime broker treats it as
+      # an anonymous transaction, same as a fresh CLI edit.
+      "find" => &SpellAgent.Find.find_tool/1,
+      "find-edges" => &SpellAgent.Find.find_edges_tool/1,
+      "edit" => &SpellAgent.Find.edit_tool/1
     }
+    |> Map.merge(SpellAgent.Loop.verbs())
   end
 
   # The freeform render-mirror surface (PLAN-009): view/ builders, theme/ palette,
@@ -70,7 +83,8 @@ defmodule SpellAgent.Tools do
   # names). lens/ closes over the LIVE layout tree so a traversal called with `{}`
   # acts on the current UI. Degrades to no freeform tools if the registries aren't
   # running (e.g. a bare unit test), so the agent surface never crashes to build.
-  defp freeform_tools do
+  @doc false
+  def freeform_tools do
     SpellAgent.Tui.View.tools()
     |> Map.merge(SpellAgent.Tui.LayoutRegistry.tools())
     |> Map.merge(SpellAgent.Tui.Lens.tools(SpellAgent.Tui.LayoutRegistry.tree()))
@@ -89,120 +103,31 @@ defmodule SpellAgent.Tools do
   """
   @spec inventory() :: [map()]
   def inventory do
-    meta =
-      [
-        %{
-          "name" => "define-tool",
-          "params" => ["name", "params", "doc", "source", "scope"],
-          "doc" =>
-            "Define a new tool whose body is a PTC-Lisp program (code-as-data). " <>
-              "scope \"durable\" persists it across sessions (default \"session\", in-memory).",
-          "kind" => "native"
-        },
-        %{
-          "name" => "define-config",
-          "params" => ["key", "value"],
-          "doc" => "Set a live config value (e.g. model, thinking, system-addendum).",
-          "kind" => "native"
-        },
-        %{
-          "name" => "list-tools",
-          "params" => [],
-          "doc" => "List all tools currently available, including ones defined at runtime.",
-          "kind" => "native"
-        },
-        %{
-          "name" => "sh",
-          "params" => ["argv", "cwd", "timeout-ms", "env"],
-          "doc" =>
-            "Run a command as an argv vector on brush; returns %{exit out err lines}. " <>
-              "argv is a list of strings (NOT a command string) — inject-proof. " <>
-              "e.g. (tool/sh {:argv [\"rg\" \"-l\" \"TODO\" \"lib\"]}).",
-          "kind" => "native"
-        },
-        %{
-          "name" => "sh-pipe",
-          "params" => ["stages", "cwd", "timeout-ms", "env"],
-          "doc" =>
-            "Run a byte-pipeline of argv stages on brush (a | b | c); same result " <>
-              "shape as sh. stages is a list of argv lists, each inject-proof. " <>
-              "e.g. (tool/sh-pipe {:stages [[\"cat\" \"f\"] [\"grep\" \"ERR\"] [\"wc\" \"-l\"]]}).",
-          "kind" => "native"
-        },
-        %{
-          "name" => "sh-parse",
-          "params" => ["src"],
-          "doc" =>
-            "Parse a bash string into a walkable PTC-native tree (same shape as Lisp " <>
-              "history). e.g. (tool/sh-parse {:src \"rg -l TODO | head\"}).",
-          "kind" => "native"
-        },
-        %{
-          "name" => "sh-unparse",
-          "params" => ["tree"],
-          "doc" =>
-            "Render a parsed bash tree back to a bash string (words re-escaped, " <>
-              "injection-safe). e.g. (tool/sh-unparse {:tree t}) -> %{bash}.",
-          "kind" => "native"
-        },
-        %{
-          "name" => "code-parse",
-          "params" => ["src", "lang"],
-          "doc" =>
-            "Parse source code into a walkable form_tree (same shape as sh-parse " <>
-              "and Lisp history), so the q/* algebra walks source structurally. " <>
-              "e.g. (tool/code-parse {:src \"def f, do: 1\" :lang \"elixir\"}).",
-          "kind" => "native"
-        },
-        %{
-          "name" => "code-unparse",
-          "params" => ["tree"],
-          "doc" =>
-            "Render a form_tree back to source. An untouched subtree round-trips " <>
-              "verbatim; an edited subtree rejoins its children (re-parse equality, " <>
-              "not byte). e.g. (tool/code-unparse {:tree t}) -> %{src}.",
-          "kind" => "native"
-        },
-        %{
-          "name" => "code-edit",
-          "params" => ["path", "tree", "lang"],
-          "doc" =>
-            "Parse-gated transactional write: unparse the edited :tree, RE-PARSE it " <>
-              "(reject if the edit broke the grammar), then write :path. The agent " <>
-              "builds :tree via q/* (q/update / q/apply-ops) so the edit stays " <>
-              "reifiable data. e.g. (tool/code-edit {:path \"f.ex\" :lang \"elixir\" :tree t}).",
-          "kind" => "native"
-        },
-        %{
-          "name" => "code-apply",
-          "params" => ["path", "ops"],
-          "doc" =>
-            "One-call edit: infer lang from :path, read + parse the file, apply the " <>
-              ":ops data-list (q/apply-ops), then parse-gate + atomically write. :ops " <>
-              "is plain data, typically built by the q/* sugar (q/rename-id, " <>
-              "q/rewrite-op, q/wrap-op). e.g. " <>
-              "(tool/code-apply {:path \"f.ex\" :ops [(q/rename-id \"x\" \"y\")]}).",
-          "kind" => "native"
-        }
-      ] ++ SpellAgent.Mesh.Spawn.inventory() ++ SpellAgent.Mesh.Combinators.inventory()
+    # FEAT-035: the built-in surface (meta, native, hist, black, clock, spawn,
+    # mesh, harness, freeform) is DERIVED from the ONE catalog — no hand-
+    # maintained mirror. Runtime define-tool entries are appended.
+    catalog = SpellAgent.Namespace.inventory(SpellAgent.Namespace.Catalog.specs())
 
     defined =
       ToolRegistry.all()
       |> Enum.map(fn e ->
         %{
-          "name" => e.name,
+          # Display in the form the agent types it: a runtime-defined tool is
+          # `tool/`-routed (called `(tool/<name> …)`), same as the native surface.
+          "name" => "tool/" <> e.name,
           "params" => Enum.map(Map.get(e, :params, []), &to_string/1),
           "doc" => Map.get(e, :doc, ""),
           "kind" => to_string(e.kind)
         }
       end)
 
-    meta ++ defined
+    catalog ++ defined
   end
 
   # --- meta-tools (native) ---------------------------------------------------
 
-  defp meta_tools do
+  @doc false
+  def meta_tools do
     %{
       "define-tool" => &define_tool/1,
       "define-config" => &define_config/1,
@@ -221,6 +146,8 @@ defmodule SpellAgent.Tools do
   def define_tool(args) do
     name = require_string(args, "name")
     source = require_string(args, "source")
+    # BUG-027 (3): reject reserved/illegal param names at DEFINE time (they would
+    # otherwise fail at data/<param> bind time on first call).
     params = args |> flex_get("params") |> normalize_params()
     doc = args |> flex_get("doc") |> to_doc()
 
@@ -228,28 +155,48 @@ defmodule SpellAgent.Tools do
       raise ArgumentError, "cannot redefine reserved tool #{inspect(name)}"
     end
 
-    scope = normalize_scope(flex_get(args, "scope"))
+    # BUG-027 (4): a tool named `proxy_<x>` collides with the wire tool-prefix the
+    # subscription adapter strips (anthropic.ex apply/strip_tool_prefix), so it
+    # could shadow or be shadowed by a prefixed native. Reject at define time.
+    if String.starts_with?(name, "proxy_") do
+      raise ArgumentError,
+            "tool name #{inspect(name)} is reserved: the `proxy_` prefix collides with the " <>
+              "wire tool-prefix; choose a name without that prefix"
+    end
 
-    case validate_source(source) do
-      :ok ->
-        ToolRegistry.put(%{
-          kind: :ptc,
-          name: name,
-          params: params,
-          doc: doc,
-          source: source,
-          scope: scope
-        })
+    # BUG-027 (2): reject an UNRECOGNIZED scope instead of silently degrading to
+    # :session (a typo like "permannet" must not quietly lose durability).
+    scope = strict_scope(flex_get(args, "scope"))
 
-        %{
-          "ok" => true,
-          "defined" => name,
-          "params" => Enum.map(params, &to_string/1),
-          "scope" => to_string(scope)
-        }
+    # BUG-027 (1): closed-world callee check. Parse the body and reject if it calls
+    # a tool name that is not (and cannot become) callable, so a typo'd callee
+    # fails HERE, not three turns later on first invocation.
+    with :ok <- validate_source(source),
+         :ok <- check_callees(name, source) do
+      ToolRegistry.put(%{
+        kind: :ptc,
+        name: name,
+        params: params,
+        doc: doc,
+        source: source,
+        scope: scope
+      })
 
-      {:error, reason} ->
+      %{
+        "ok" => true,
+        "defined" => name,
+        "params" => Enum.map(params, &to_string/1),
+        "scope" => to_string(scope)
+      }
+    else
+      {:error, {:source, reason}} ->
         raise ArgumentError, "define-tool #{inspect(name)} has invalid PTC source: #{reason}"
+
+      {:error, {:callees, unknown}} ->
+        raise ArgumentError,
+              "define-tool #{inspect(name)} calls unknown tool(s): " <>
+                "#{Enum.map_join(unknown, ", ", &inspect/1)}. " <>
+                "Define them first, or fix the name."
     end
   end
 
@@ -310,7 +257,88 @@ defmodule SpellAgent.Tools do
     # mirroring how `to_callable` runs the tool with the prelude (PLAN-020 W7).
     case PtcRunner.Lisp.validate(source, prelude: SpellAgent.Code.Prelude.compiled()) do
       :ok -> :ok
-      {:error, messages} -> {:error, Enum.join(List.wrap(messages), "; ")}
+      {:error, messages} -> {:error, {:source, Enum.join(List.wrap(messages), "; ")}}
+    end
+  end
+
+  # BUG-027 (1): closed-world callee check. Collect the tool names the body calls
+  # and reject any that is not in the known callable universe. Conservative to
+  # avoid false positives:
+  #   * BARE names (no `/`) are the typo-prone `tool/<name>` calls — checked
+  #     against the base tools map + every catalog verb + registry names + the
+  #     tool being defined itself (self-recursion is legal).
+  #   * NAMESPACED names (`ns/verb`) are allowed as long as `ns` is a KNOWN
+  #     namespace prefix (session verbs like `hist/x` aren't in the base map but
+  #     are valid; `q/x` is a prelude export). An unknown PREFIX is still a typo
+  #     and is rejected.
+  # If the source can't even be analyzed, `validate_source` already rejected it;
+  # `referenced_tools` returning an error here degrades to :ok (don't double-fail).
+  defp check_callees(defining_name, source) do
+    case PtcRunner.Lisp.referenced_tools(source, prelude: SpellAgent.Code.Prelude.compiled()) do
+      {:ok, refs} ->
+        # The EXACT callable universe: every base-map key + every catalog verb
+        # (session verbs like `hist/reduce`/`black/post`/`spawn-session` that
+        # aren't in the base map) + every registered runtime tool name (which may
+        # itself contain a `/`, e.g. `pkg/foo`) + the tool being defined (self-
+        # recursion is legal).
+        known = known_callable_names() |> MapSet.put(defining_name)
+
+        unknown =
+          refs
+          |> Enum.reject(fn ref ->
+            # 1. Exact match against a known callable key (bare OR slash-named).
+            #    This admits a registered `pkg/foo` and rejects `harness/typo`.
+            # 2. Else admit ONLY if the prefix is an OPEN namespace whose member
+            #    set is unbounded/reflected (view/theme/lens/layout/cell) or the
+            #    prelude (q/) — there we cannot enumerate, so a prefix match is the
+            #    best available check. A FIXED namespace (harness/keymap/black/
+            #    hist/clock) is fully enumerated by the catalog, so an unknown
+            #    member there is a typo and is rejected.
+            MapSet.member?(known, ref) or open_namespace_member?(ref)
+          end)
+          |> Enum.sort()
+
+        if unknown == [], do: :ok, else: {:error, {:callees, unknown}}
+
+      {:error, _messages} ->
+        # Unanalyzable source is the source-validator's job to reject; don't
+        # double-report here.
+        :ok
+    end
+  end
+
+  # The EXACT set of callable names a defined tool may call: the assembled base
+  # tools map (native + freeform + registry) plus every catalog-declared verb key
+  # (so session verbs like `spawn-session`, `hist/reduce`, `black/post` are known
+  # even though they aren't in the base map). Names are the exact tools-map keys
+  # (bare or slash-qualified), NOT the inventory display form.
+  defp known_callable_names do
+    base = build_tools_map() |> Map.keys() |> MapSet.new()
+    catalog = SpellAgent.Namespace.verb_names(SpellAgent.Namespace.Catalog.specs())
+    MapSet.union(base, catalog)
+  end
+
+  # OPEN namespaces have an unbounded/reflected member set we cannot enumerate
+  # (view/* is one verb per ex_ratatui widget; q/* is a prelude surface), so a
+  # `prefix/verb` callee under one of these is admitted on the PREFIX alone. A
+  # FIXED namespace (harness/keymap/black/hist/clock) is fully enumerated by the
+  # catalog and therefore checked by EXACT name, so a typo'd member is rejected.
+  @open_namespaces MapSet.new(["view", "theme", "lens", "layout", "cell"])
+
+  defp open_namespace_member?(ref) do
+    case String.split(ref, "/", parts: 2) do
+      [prefix, _member] ->
+        MapSet.member?(@open_namespaces, prefix) or MapSet.member?(prelude_namespaces(), prefix)
+
+      _ ->
+        false
+    end
+  end
+
+  defp prelude_namespaces do
+    case SpellAgent.Code.Prelude.compiled() do
+      %PtcRunner.Lisp.Prelude{namespaces: ns} -> MapSet.new(ns)
+      _ -> MapSet.new()
     end
   end
 
@@ -332,7 +360,14 @@ defmodule SpellAgent.Tools do
         "code-parse",
         "code-unparse",
         "code-edit",
-        "code-apply"
+        "code-apply",
+        # FEAT-042: find/edit are native NIF-backed tools; a define-tool must not
+        # shadow the structural-edit or navigation surface.
+        "find",
+        "find-edges",
+        "edit",
+        # FEAT-045: the A4 self-continuation signal.
+        "loop/continue"
       ]
 
   defp require_string(args, key) do
@@ -343,15 +378,44 @@ defmodule SpellAgent.Tools do
   end
 
   defp normalize_params(nil), do: []
-  defp normalize_params(list) when is_list(list), do: Enum.map(list, &param_atom/1)
+  defp normalize_params(list) when is_list(list), do: Enum.map(list, &param_name/1)
 
   defp normalize_params(other),
     do: raise(ArgumentError, "params must be a list, got #{inspect(other)}")
 
-  defp param_atom(p) when is_atom(p), do: p
-  defp param_atom(p) when is_binary(p), do: String.to_atom(p)
+  # PTC special-form / control names that would collide with a `data/<param>`
+  # binding or a reserved sigil. A param with one of these names normalizes fine
+  # but fails (or silently misbehaves) at bind time, so reject at define time.
+  @reserved_params ~w(return fail do fn def let if cond case when and or not)
 
-  defp param_atom(p),
+  # A param name is validated and kept as a STRING. It is metadata only (docs +
+  # `list-tools` display); the actual `data/<param>` binding at call time comes
+  # from the call's ARGS, not this list. So we MUST NOT `String.to_atom/1` a
+  # user-controlled param name — that permanently grows the BEAM atom table and,
+  # with enough unique define-tool param names, exhausts the VM (an atom-table
+  # DoS, review S1 P1). Strings carry the same information without the hazard.
+  defp param_name(p) when is_atom(p), do: p |> Atom.to_string() |> param_name()
+
+  defp param_name(p) when is_binary(p) do
+    cond do
+      p == "" ->
+        raise ArgumentError, "param name must be a non-empty string"
+
+      p in @reserved_params ->
+        raise ArgumentError,
+              "param name #{inspect(p)} is reserved (a PTC special form); choose another name"
+
+      not Regex.match?(~r/^[a-z][a-z0-9_-]*$/i, p) ->
+        raise ArgumentError,
+              "param name #{inspect(p)} is not a valid identifier " <>
+                "(letters, digits, _ and - only, starting with a letter)"
+
+      true ->
+        p
+    end
+  end
+
+  defp param_name(p),
     do: raise(ArgumentError, "param must be an atom or string, got #{inspect(p)}")
 
   defp to_doc(nil), do: ""
@@ -362,25 +426,32 @@ defmodule SpellAgent.Tools do
   # restart); `:durable` mirrors the tool to the history store so it survives.
   # Case-insensitive on strings/atoms so "Durable"/"DURABLE"/:Durable/"true" all
   # resolve to :durable — the agent should never silently lose persistence to a
-  # casing variant. `define-tool` echoes the resolved scope so a genuinely
-  # unrecognized value (→ :session) is visible in the response.
-  defp normalize_scope(:durable), do: :durable
-  defp normalize_scope(:session), do: :session
-  defp normalize_scope(true), do: :durable
+  # casing variant. `define-tool` echoes the resolved scope so the agent can
+  # confirm what it got.
+  # BUG-027 (2): STRICT scope resolution. An ABSENT scope defaults to :session
+  # (in-memory), but an explicitly-PROVIDED-but-unrecognized value (e.g. a typo'd
+  # "permannet") is REJECTED rather than silently degraded — the agent must never
+  # quietly lose durability to a casing/spelling variant.
+  defp strict_scope(nil), do: :session
 
-  defp normalize_scope(value) when is_binary(value) do
+  defp strict_scope(value) when is_atom(value) do
+    strict_scope(Atom.to_string(value))
+  end
+
+  defp strict_scope(value) when is_binary(value) do
     case String.downcase(String.trim(value)) do
       "durable" -> :durable
       "true" -> :durable
-      _ -> :session
+      "session" -> :session
+      "false" -> :session
+      other ->
+        raise ArgumentError,
+              "unrecognized scope #{inspect(other)}; expected \"durable\" or \"session\""
     end
   end
 
-  defp normalize_scope(value) when is_atom(value) and not is_nil(value) do
-    value |> Atom.to_string() |> normalize_scope()
-  end
-
-  defp normalize_scope(_), do: :session
+  defp strict_scope(other),
+    do: raise(ArgumentError, "scope must be a string (\"durable\"/\"session\"), got #{inspect(other)}")
 
   # Args arrive with string OR atom keys (and LispKeyword-derived atoms);
   # tolerate both, normalizing to string lookups.

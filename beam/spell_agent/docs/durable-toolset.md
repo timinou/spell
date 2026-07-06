@@ -1,5 +1,9 @@
 # The durable toolset — how a script you write becomes a tool you keep
 
+> **Status: SHIPPED.** Durable `:ptc` tools mirror to `Hist.Store` and rehydrate
+> on boot (`test/tool_registry_durability_test.exs`). This doc matches the
+> implementation.
+
 > PLAN-011 W3. The third of the three promises: **write** (`sh::`), **compose**
 > (`->>`/`pmap`), and now **remember**. A tool the agent authors at runtime
 > should outlive the session that authored it — without the agent learning a new

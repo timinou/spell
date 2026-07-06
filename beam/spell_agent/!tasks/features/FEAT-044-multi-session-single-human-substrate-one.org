@@ -1,0 +1,47 @@
+#+TITLE: Multi-session-single-human substrate — one spawn path, live concurrent view, human-facing mesh
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: FEAT-044-multi-session-single-human-substrate-one
+#+COMPLETION_HASH: ebdd6a258176d9a5
+
+* Initial Message
+
+look at the recent work and work that was done and point out
+- architectural
+- functional
+- UX
+
+frictions in the code. Be comprehensive and thorough, you have unlimited budget. That's to surface important work that we need to consolidate and high-impact features that we can use to start using this app (go from PoC to alpha)
+
+* Summary
+One human running and watching MULTIPLE concurrent agent sessions is a first-class alpha capability (NOT to be deferred). The primitives exist and are solid (spawn-session/await-session, ParallelBudget, Join, Region, blackboard, attenuation) and read-only viewers exist (SessionBrowser, SessionRegistry, mix spell.sessions/mesh), but they are fragmented: THREE spawn entry points, a read-only browser separate from the main TUI, no human-initiated spawn, and no live focus-switching between concurrent sessions. Consolidate into a coherent multi-session substrate. Multi-mesh coordination STAYS (it is the coordination fabric for the many sessions), it is just re-framed for the single-human-many-sessions use case rather than an autonomous swarm.
+
+* Verified current state
+- THREE spawn paths converging on Session.run: (a) agent PTC (tool/spawn-session → Mesh.Spawn), (b) human TUI (App.submit → default_submit → Session.run, NO budget/attenuation/region), (c) Clock wake. No single gateway.
+- SessionRegistry tracks liveness only (no ownership/parent/intent/region lineage).
+- SessionBrowser is a SEPARATE ExRatatui app (mix spell.sessions), read-only; the main TUI (mix spell.tui) shows only its one hist_session; no switching, no human spawn.
+- %Ui{} gaze is single-session (flat); N concurrent sessions need per-session gaze.
+- Rich prior design already exists: docs/agent-mesh-theory/16 + 17 (the human surface — holes↔affordances↔black/*), FUP-025 (interactive mesh TUI), PROJ-006 (mesh blackboard). EXTEND these, do not reinvent.
+
+* Design (consolidate, strengths-first)
+1. ONE spawn gateway: SpellAgent.Spawn.create(prompt, opts) that human (TUI), agent (spawn-session verb), and clock ALL route through — resolve_region, Budget.try_acquire, attenuate, SessionRegistry.register(with ownership+intent+parent+region), Join.spawn → Session.run. The current three entries become thin callers of this.
+2. SessionRegistry → session dashboard: track ownership (who spawned), parent-child lineage, intent, region — not just liveness.
+3. Main TUI multi-session projection: fold SessionBrowser INTO the main TUI as a SessionViewer pane; list live+recent sessions; focus-switch (enter / C-j-k); show the focused session's trace live. Gaze expands to {active_session, gaze_per_session} — reuse the per-context gaze machinery rather than a flat rewrite (coordinate with the app.ex decomposition + reaction work).
+4. Human-facing mesh: the human is a blackboard participant (docs 16/17) — human/post, human/query, human/watch (or a TUI affordance) so a human can steer/answer regions out-of-session. Route through the unified namespace registry.
+5. Human-initiated spawn UI: a composer/modal to launch a NEW session from the main TUI (using the ONE gateway, with budget + attenuation), so the human can run 3 helpers and watch them.
+
+* Acceptance
+- Human launches ≥2 sessions from the main TUI and switches focus between them while both run; each shows its own live trace.
+- All spawn paths (human/agent/clock) route through SpellAgent.Spawn.create (one gateway; verified no bypass).
+- SessionRegistry carries ownership/parent/intent/region; the dashboard shows lineage.
+- A human can post/answer a blackboard record (human surface) that a session observes.
+- Budget + attenuation apply to human-spawned sessions too (a human helper is bounded like an agent child).
+
+* Scope + sequencing
+Large; break into waves in the plan. Depends-on the app.ex decomposition (clean pane/gaze seams), the namespace registry (human/* verbs), and budget enforcement (bounded human spawns). Multi-node/distributed exactly-once (FUP-020/021) is a SEPARATE concern — the single-human-many-sessions capability is single-BEAM and does NOT need distributed consensus; keep those FUPs as their own track but do not block this.
+
+* Notes
+Filed from the PoC→alpha audit (2026-07-05). A3, RE-SCOPED per user: multi-session is first-class, multi-mesh stays. Anchored on the existing agent-mesh-theory docs 16/17 and FUP-025. This is the capability that makes the alpha feel like a cockpit, not a single REPL.
+
+NOTE [2026-07-05]: Substrate (parts 1-2): SpellAgent.Spawn.create/2 = ONE spawn gateway (region + :tools D12 clamp + Budget clamp + lineage register). SessionRegistry gained owner/parent/intent/region + lineage/0. Mesh.Spawn routes through gateway. S4-hardened: effective max_turns in clamp budget (no default-12 bypass), lineage preserved on re-register. Parts 3-5 (live cockpit, human spawn UI, human/* verbs) are FUPs needing gaze-per-session.

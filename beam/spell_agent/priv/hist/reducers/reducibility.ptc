@@ -21,8 +21,12 @@
 
 (let [nodes data/nodes
 
-      ;; spill threshold in TOKENS (mirrors Spill @default_threshold_tokens 512).
-      threshold 512
+;; spill threshold in TOKENS. Passed in as `data/threshold` from the caller
+      ;; (the live `hist.spill_threshold` config), so the ESTIMATE stays in sync
+      ;; with what Spill.spill actually sheds — a config retune changes both, never
+      ;; just one (review S2: a divergence makes Mission.decide compute K* on the
+      ;; wrong byte set). Falls back to 512 when absent.
+      threshold (or data/threshold 512)
       ;; a spilled stub costs ~a few tokens; charge a flat 32 so the estimate is a
       ;; slight under-promise rather than over-promise.
       stub-tokens 32

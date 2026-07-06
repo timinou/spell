@@ -34,7 +34,11 @@ defmodule SpellAgent.SessionRegistry do
   @type meta :: %{
           optional(:prompt) => String.t() | nil,
           optional(:model) => String.t() | nil,
-          optional(:t0) => integer()
+          optional(:t0) => integer(),
+          optional(:owner) => :human | {:session, String.t()},
+          optional(:parent_id) => String.t() | nil,
+          optional(:intent) => String.t() | nil,
+          optional(:region) => String.t() | nil
         }
 
   @typedoc "A live-session row, as `live/0` returns it."
@@ -43,7 +47,21 @@ defmodule SpellAgent.SessionRegistry do
           prompt: String.t() | nil,
           model: String.t() | nil,
           t0: integer(),
-          pid: pid()
+          pid: pid(),
+          owner: :human | {:session, String.t()},
+          parent_id: String.t() | nil,
+          intent: String.t() | nil,
+          region: String.t() | nil
+        }
+
+  @typedoc "A lineage row (`lineage/0`): the queryable spawn ancestry, no `pid`."
+  @type lineage_entry :: %{
+          session_id: String.t(),
+          owner: :human | {:session, String.t()},
+          parent_id: String.t() | nil,
+          intent: String.t() | nil,
+          region: String.t() | nil,
+          status: :running
         }
 
   # ---- client ----
@@ -57,9 +75,19 @@ defmodule SpellAgent.SessionRegistry do
   Mark `session_id` as RUNNING, owned by the calling process.
 
   `meta` carries the opening `:prompt`, the `:model`, and `:t0` (start time);
-  missing fields default (`t0` to now). The registry monitors `self()`, so when
-  the caller exits — normally or by crash — the entry is dropped without needing
-  `finish/1`. Best-effort: a no-op if the registry isn't running.
+  missing fields default (`t0` to now). FEAT-044 adds lineage fields, all
+  optional (a caller that doesn't pass them gets the root-session defaults):
+
+    * `:owner`     — `:human` (default) or `{:session, parent_id}` — who spawned
+      this session.
+    * `:parent_id` — the spawning session's id, or `nil` for a root session.
+    * `:intent`    — the prompt/goal this session was spawned toward (defaults
+      to `:prompt` when absent, since for a root session they're the same).
+    * `:region`    — the mesh region this session runs in, or `nil`.
+
+  The registry monitors `self()`, so when the caller exits — normally or by
+  crash — the entry is dropped without needing `finish/1`. Best-effort: a no-op
+  if the registry isn't running.
   """
   @spec register(String.t(), meta()) :: :ok
   def register(session_id, meta \\ %{}) when is_binary(session_id) do
@@ -100,6 +128,33 @@ defmodule SpellAgent.SessionRegistry do
     end
   end
 
+  @doc """
+  The spawn-lineage of every session running right now (FEAT-044), newest first.
+
+  Each row is `%{session_id, owner, parent_id, intent, region, status}` — the
+  ancestry query a live-TUI cockpit or a `mesh/dashboard` verb would read to
+  render "who spawned whom, toward what, in which region". `status` is always
+  `:running` today (a `live/0` row IS a running session); a follow-up that also
+  surfaces recently-finished sessions would extend this, not replace it.
+
+  Returns `[]` when the registry isn't running — same best-effort posture as
+  `live/0`.
+  """
+  @spec lineage() :: [lineage_entry()]
+  def lineage do
+    live()
+    |> Enum.map(fn entry ->
+      %{
+        session_id: entry.session_id,
+        owner: Map.get(entry, :owner, :human),
+        parent_id: Map.get(entry, :parent_id),
+        intent: Map.get(entry, :intent) || entry.prompt,
+        region: Map.get(entry, :region),
+        status: :running
+      }
+    end)
+  end
+
   # Call the registry only when it is registered + alive; otherwise return the
   # `down` sentinel (default `:ok`, the right no-op for register/finish). A
   # TOCTOU exit between whereis and call degrades to the sentinel, never a crash.
@@ -126,13 +181,25 @@ defmodule SpellAgent.SessionRegistry do
     state = demonitor_existing(state, session_id)
     ref = Process.monitor(pid)
 
+    # PRESERVE lineage from a prior registration (review S4 P2): the spawn gateway
+    # pre-registers a child with owner/parent/intent/region BEFORE the child's own
+    # Session.run re-registers with only prompt/model. Without this merge that
+    # second registration would clobber the lineage back to defaults (owner :human,
+    # nil parent). A meta value that is explicitly provided still wins; a MISSING
+    # lineage field falls back to the prior entry's value, not the bare default.
+    prior = Map.get(state, session_id, %{})
+
     entry = %{
       session_id: session_id,
-      prompt: Map.get(meta, :prompt),
-      model: Map.get(meta, :model),
-      t0: Map.get(meta, :t0) || System.system_time(:millisecond),
+      prompt: Map.get(meta, :prompt) || Map.get(prior, :prompt),
+      model: Map.get(meta, :model) || Map.get(prior, :model),
+      t0: Map.get(meta, :t0) || Map.get(prior, :t0) || System.system_time(:millisecond),
       pid: pid,
-      ref: ref
+      ref: ref,
+      owner: Map.get(meta, :owner) || Map.get(prior, :owner) || :human,
+      parent_id: Map.get(meta, :parent_id) || Map.get(prior, :parent_id),
+      intent: Map.get(meta, :intent) || Map.get(prior, :intent),
+      region: Map.get(meta, :region) || Map.get(prior, :region)
     }
 
     {:reply, :ok, Map.put(state, session_id, entry)}

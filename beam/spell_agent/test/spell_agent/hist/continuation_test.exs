@@ -11,12 +11,19 @@ defmodule SpellAgent.Hist.ContinuationTest do
   """
   use ExUnit.Case, async: false
 
-  alias SpellAgent.{Hist, Session}
+  alias SpellAgent.{Config, Hist, Session}
   alias SpellAgent.Hist.Store
   alias SpellAgent.Hist.Store.Memory
 
   setup do
     Store.clear(Memory)
+    # This suite asserts VERBATIM continuation-tape ordering, so pin the
+    # mission-boundary rate-controller OFF (FEAT-036 defaults it on): a reduce
+    # would legitimately rewrite the tape, which is a different concern tested by
+    # rate_controller_test. Restore the global value after (Config is a singleton).
+    prior_auto = Config.get("hist.auto_reduce")
+    Config.put("hist.auto_reduce", false)
+    on_exit(fn -> Config.put("hist.auto_reduce", prior_auto) end)
     :ok
   end
 

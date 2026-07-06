@@ -66,8 +66,28 @@ defmodule SpellAgent.Anthropic do
   def call(model, request) do
     with {:ok, cred} <- SpellAgent.OAuth.ensure_fresh() do
       call_with_token(model, request, cred.access)
+    else
+      {:error, reason} -> {:error, translate_credential_error(reason)}
     end
   end
+
+  # BUG-025: surface a clear, actionable message at the call boundary instead
+  # of letting an expired/missing credential fall through to an opaque
+  # downstream 401. Distinct message for "never logged in" vs "expired".
+  @spec translate_credential_error(term()) :: term()
+  defp translate_credential_error(:token_expired) do
+    {:token_expired, "Anthropic subscription token expired; re-run `spell` to log in again."}
+  end
+
+  defp translate_credential_error(:no_credential) do
+    {:no_credential, "No Anthropic subscription credential found; run `spell` to log in."}
+  end
+
+  defp translate_credential_error(:db_missing) do
+    {:no_credential, "No Anthropic subscription credential found; run `spell` to log in."}
+  end
+
+  defp translate_credential_error(other), do: other
 
   @doc """
   Build a SubAgent-compatible `llm:` callback bound to this adapter + model.

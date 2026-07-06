@@ -1,5 +1,10 @@
 # The Body and the Mind — what the body must do for the mind to be free
 
+> **Status: VISION / DOCTRINE.** The body/mind freedom argument. Partially
+> realized: A2 self-wake (PLAN-014) is the shipped example; much mind-logic is
+> still trapped in Elixir (reducers, layout, the namespace seam). The
+> PoC→alpha consolidation (PLAN-025) is the executable plan that closes the gap.
+
 > Elixir is the body, Beam Lisp is the mind. This is intelligence at its finest:
 > self-reflexivity.
 >

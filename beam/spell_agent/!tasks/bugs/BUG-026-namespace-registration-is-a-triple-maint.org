@@ -1,0 +1,53 @@
+#+TITLE: Namespace registration is a triple-maintained seam with three inconsistent conventions
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: BUG-026-namespace-registration-is-a-triple-maint
+#+COMPLETION_HASH: ffd87093644d8ac0
+
+* Initial Message
+
+look at the recent work and work that was done and point out
+- architectural
+- functional
+- UX
+
+frictions in the code. Be comprehensive and thorough, you have unlimited budget. That's to surface important work that we need to consolidate and high-impact features that we can use to start using this app (go from PoC to alpha)
+
+* Summary
+Registering an Elixir-defined function as a callable PTC verb goes through THREE different, inconsistent mechanisms. The worst (Convention 1) requires editing three files by hand and silently breaks on drift. This is the keystone seam the body/mind architecture rests on, and it is currently ad-hoc. Getting it clean also unblocks the auto-generated capability prompt (see FEAT for B3).
+
+* The three conventions (verified)
+1. BARE-NAMESPACE / TRIPLE registration (drift-prone) — `harness/`, `keymap/`.
+   - Elixir tools() map entry (lib/spell_agent/harness.ex:tools/2).
+   - ptc_runner `SourceAtoms.@bounded_namespaces` must list the ns prefix.
+   - ptc_runner `SourceAtoms.@qualified_keys` must list EVERY verb name (atom-interned).
+   - Analyzer (../ptc_runner PATCH-N) routes `ns/verb` → {tool_call, qualified_ATOM}.
+   - HAZARD: add a verb to tools() but forget @qualified_keys → silent parser `undefined-var` rejection at call time. Documented only in a harness.ex moduledoc NB (L40), not enforced.
+2. TOOL-ROUTED / single registration (clean) — `hist/`, `black/` (mesh), `clock/`, `cell/`, spawn/await, `mesh/` combinators.
+   - Only the Elixir map entry. Called as `(tool/hist/reduce {...})`; the slash-name is a plain STRING key under the already-bounded `tool/` prefix. No ptc_runner edit.
+3. REFLECTED / open (clean, string-routed) — `view/`, `theme/`, `layout/`, `lens/`.
+   - ns prefix in @bounded_namespaces, but verbs stay STRINGS (never interned); ../ptc_runner PATCH-O routes `ns/verb` → {tool_call, qualified_STRING}. Auto-tracks ex_ratatui widget names via reflection.
+
+* The root cause
+Convention 1 interns the verb as an atom (atom-table-DoS guard), which forces the hand-maintained allowlist. Conventions 2 and 3 prove the verb name can stay a BINARY end-to-end with no interning and no allowlist. There is no reason harness/keymap must intern verb atoms — the bounded-namespace guard (interning the NS prefix, not the verb) is sufficient.
+
+* Fix shape
+Generalize PATCH-O's binary routing to ALL runtime-registered namespaces: any `ns/verb` where `ns` is a registered namespace routes as a binary tool key, verb NEVER interned. Then:
+- kill `@qualified_keys` (the per-verb allowlist) entirely.
+- `@bounded_namespaces` becomes the ONLY ptc_runner-side knob (the set of legal ns prefixes), and even that should be feedable from a spell_agent-side registry rather than hardcoded in the vendored fork.
+- Introduce ONE `SpellAgent.Namespace` registry/behaviour: a namespace declares {prefix, verbs:[{name, params, doc, fn}], effect_profile}. From that single declaration derive (a) the tools-map entries, (b) analyzer legality (the ns prefix), (c) the inventory/doc (unblocks B3), (d) atom-safety (nothing interned).
+
+* Scope discipline
+This touches the vendored ../ptc_runner (a fork patch — update SPELL_PATCHES.md). Keep the ergonomic bare `(harness/expand)` syntax working (do not force `(tool/harness/expand)` on users) — the generalized binary routing preserves bare syntax WITHOUT the allowlist.
+
+* Acceptance
+- Adding a new harness/keymap verb requires editing ONE place (the namespace declaration), no ptc_runner edit.
+- No `@qualified_keys`; a verb name never grows the atom table.
+- A drift test proves every tools()-map verb is callable from PTC (no undefined-var) without a hand-maintained mirror.
+- SPELL_PATCHES.md updated to describe the unified routing.
+
+* Notes
+Filed from the PoC→alpha audit (2026-07-05). Keystone for the body/mind boundary. Enumerated drift risk: verbs in tools() missing from @qualified_keys fail silently. See the paired FEAT for the capability-prompt auto-generation this unblocks.
+
+NOTE [2026-07-05]: PLAN-025 W1 complete. Unified namespace routing (ptc_runner PATCH-Q): harness/keymap/black now string-routed like view/theme/lens/layout/cell; @qualified_keys per-verb allowlist deleted; atom-safety preserved (member never interned, only bounded prefix). Adding a harness/keymap/black verb now needs ZERO ptc_runner edits. SPELL_PATCHES.md PATCH-Q documents it. Verified: 3516 ptc_runner tests + direct analyzer proof a never-allowlisted verb routes cleanly.

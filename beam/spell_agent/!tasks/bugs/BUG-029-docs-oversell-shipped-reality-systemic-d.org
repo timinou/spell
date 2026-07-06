@@ -1,0 +1,41 @@
+#+TITLE: Docs oversell shipped reality — systemic doc-vs-code drift (must fix this session)
+#+STATE: DONE
+#+SESSION_ID: 1523e49fcb29d4e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
+#+CUSTOM_ID: BUG-029-docs-oversell-shipped-reality-systemic-d
+#+COMPLETION_HASH: 0e0f869e5156af51
+
+* Initial Message
+
+look at the recent work and work that was done and point out
+- architectural
+- functional
+- UX
+
+frictions in the code. Be comprehensive and thorough, you have unlimited budget. That's to surface important work that we need to consolidate and high-impact features that we can use to start using this app (go from PoC to alpha)
+
+* Summary
+Multiple docs describe the aspiration as if it were shipped, and the README "Status" contradicts the code in both directions (claims deferred things that shipped; claims shipped things that are single-node-only). A newcomer cannot tell live from aspirational. Cheapest high-value alpha task; the user wants it fixed WITHIN the consolidation session.
+
+* Confirmed contradictions (verified against code)
+1. README "Deferred (follow-ups): durable persistence of defined tools" — FALSE. It is SHIPPED and tested: ToolRegistry mirrors durable :ptc tools to Hist.Store on put/1, rehydrates on boot (test/tool_registry_durability_test.exs).
+2. README implies "FEAT-013 full distributed engine" for the watcher/mesh — it is SINGLE-NODE only (multi-node exactly-once is FUP-021 best-effort; distributed consensus FUP-020 not started).
+3. priv/prompts/system.md says twice "There is no read. There is no edit. There is no find." — but native_tools/0 ships code-parse/unparse/edit/apply as reserved natives. The purist "only sh + define-tool" story contradicts the shipped surface. (Fixing the PROMPT itself is the paired FEAT/B3; fixing the DOC claim is here.)
+4. docs/freeform-tui-architecture.md + philosophy.md claim tags-on-tree is canonical + a full lens/* surface + a reflected prelude — reality: %Ui{} struct is canonical, lens/ ships 6 of ~10 documented verbs, the prelude is prose. INSERT mode only works on :prompt.
+5. Several docs marked "approved spec, pre-implementation" (quoting-spec, sh-reader-spec) sit beside shipped features with no per-doc SHIPPED/SPEC banner.
+
+* Fix (this session)
+- Add a status banner to every doc under docs/: one of SHIPPED / PARTIAL / SPEC / VISION, with a one-line "what is real today" note.
+- Rewrite README "Status (v0)" into a true table reconciled against code: Shipped / Partial / Deferred, each row cite-checked.
+- Fix the four concrete contradictions above (either correct the doc or, where the doc describes a target we WILL hit in this consolidation, mark it PARTIAL with the wave that lands it).
+- Update ../ptc_runner/SPELL_PATCHES.md if the namespace-routing work changes PATCH-N/O.
+
+* Acceptance
+- Every docs/*.md and *.org opens with a status banner.
+- README Status table has no claim contradicted by code (spot-checked against the 5 items above).
+- system.md / freeform_tui.md drift resolved or explicitly marked PARTIAL-with-wave.
+
+* Notes
+Filed from the PoC→alpha audit (2026-07-05). Doc reconciliation is a first-wave task so later waves don't inherit misdirection. Some doc claims become TRUE as the consolidation lands (e.g. lens/ completion, reproject incrementality) — those get PARTIAL banners pointing at the wave, updated to SHIPPED when the wave completes.
+
+NOTE [2026-07-05]: Doc reconciliation completed in the planning session (2026-07-05, PLAN-025 Wave 0). Changes: README Status rewritten into a cite-checked Shipped/Partial/Single-node/Deferred table (durable-tool-persistence + shell-as-data corrected from "deferred" to SHIPPED; reduction engine marked dormant; mesh marked single-node). Status banners added to all 8 docs/*.md + the agent-mesh-theory/00 overview. freeform-tui-architecture marked PARTIAL(~70%) with the concrete gaps; philosophy marked VISION. system.md prompt corrected: the "there is no edit" claim now honestly teaches code-parse/edit/apply as the preferred parse-gated edit path while keeping the sh-emergence narrative for read/grep/find. Compile clean (system.md is an @external_resource; recompiled OK). Remaining doc updates that depend on later waves (SPELL_PATCHES.md for the namespace routing change; flipping PARTIAL→SHIPPED banners as FEATs land) are tracked in their respective items.
