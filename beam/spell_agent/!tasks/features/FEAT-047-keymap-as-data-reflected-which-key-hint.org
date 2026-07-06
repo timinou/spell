@@ -1,8 +1,9 @@
 #+TITLE: Keymap-as-data: reflected which-key hint bar, help overlay, command palette
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 1523e49fcb29d4e2
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell-beam-spell_agent/2026-07-05T12-59-55-564Z_1523e49fcb29d4e2.jsonl]]
 #+CUSTOM_ID: FEAT-047-keymap-as-data-reflected-which-key-hint
+#+COMPLETION_HASH: 6dcc5a7f26526781
 
 * Initial Message
 
@@ -50,3 +51,13 @@ Conditional approve. Wave 1 (pure LOOK overlays) = zero input-path risk, ship fi
 * Acceptance
 - Wave 1: `mix spell.tui` shows a live which-key hint line; `?` opens a grouped help overlay listing every binding; both reflect a runtime `keymap/bind` with no code change. Verified LIVE in tmux (not just unit tests \u2014 the BUG-035 lesson). `mix compile --warnings-as-errors` clean; focused suites green seed 0.
 - Wave 2: `C-p` opens the palette, type filters, Enter fires, Esc/C-r recover; every oracle test gate green; verified live in tmux.
+
+NOTE [2026-07-06]: SHIPPED both waves, verified live in tmux (BUG-035 lesson honored — not just unit tests).
+
+W1 (commit 4cfe9db10): KeymapIntrospect reflects compiled ⊕ live bindings into data/keybindings (one source of truth); HintBar's per-context hand-list removed (now generic reflection); help overlay (?/C-g) shows every binding grouped by context. Added KeymapRegistry.binding_contexts/0. 20 tests.
+
+W2 (commit 929c474c9): command palette (C-p) — filter/select/fire any binding. apply_intent/2 extracted so palette-Enter routes through the SAME App-interception a real keystroke does (App-only intents fire, not no-op — verified: Enter on cockpit row opens the cockpit, Enter on quit row returns {:stop}). SpellAgent.Tui.Palette holds untrusted bounded flag-state (query length-capped, cursor clamped, intent via to_existing_atom). C-r emergency-closes with a never-brick fallback. 22 tests. Regenerated answer_42 golden (hint bar now shows "? help · C-p commands").
+
+Live tmux verification passed for BOTH waves: reflected hint bar, help overlay open/close, palette open/filter/fire/Esc/C-r. Full TUI suite green in isolation (only the pre-existing BUG-031 coalescing flakiness under specific cross-file seeds, unrelated).
+
+Deferred (not lost): the palette matches on intent substring (so "cockpit" surfaces C-b back / C-d drill whose intents are cockpit/back — useful, by design). Theme/color of overlays could later move to .ptc presentation (like M3) but the arrangement already lives in the render floor with never-brick derivation.
