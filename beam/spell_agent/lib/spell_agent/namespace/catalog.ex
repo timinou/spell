@@ -414,7 +414,12 @@ defmodule SpellAgent.Namespace.Catalog do
              "program may call the read-only source tools " <>
              "(tool/session-registry/lineage, tool/hist/trace-summary)."},
           {"data-source/list", [], "List registered query-clock data sources."},
-          {"data-source/remove", ["name"], "Remove a query-clock data source."}
+          {"data-source/remove", ["name"], "Remove a query-clock data source."},
+          {"human/list", [], "The live spawn-lineage as data (id/owner/parent-id/intent/region/status)."},
+          {"human/spawn", ["intent", "tools?", "budget?"],
+           "Spawn a new session owned by the human, routed through the ONE spawn gateway."},
+          {"human/adopt", ["id"], "Re-parent an existing session to the human root."},
+          {"human/watch", ["id"], "Record intent to watch/drill into a session's stream."}
         ])
     }
   end

@@ -58,6 +58,26 @@ defmodule SpellAgent.Tui.Cockpit do
                      _ -> ""
                    end)
 
+  # The cockpit LAYOUT as data (PLAN-027 M6): the program that shadows the `body`
+  # slot with the live per-session card grid. `show/0` runs it. An edit here
+  # reshapes the cockpit with no recompile.
+  @layout_path Path.join([:code.priv_dir(:spell_agent) |> to_string(), "tui", "cockpit_layout.ptc"])
+  @external_resource @layout_path
+  @layout_source (case File.read(@layout_path) do
+                    {:ok, s} -> s
+                    _ -> ""
+                  end)
+
+  # The cockpit's NAVIGATION reactions as data (PLAN-027 M6): drill/back authored
+  # as keymap/define-reaction returning effect envelopes. `install_reactions/0`
+  # runs this at boot so the cockpit's navigation is live + rebindable.
+  @reactions_path Path.join([:code.priv_dir(:spell_agent) |> to_string(), "tui", "cockpit_reactions.ptc"])
+  @external_resource @reactions_path
+  @reactions_source (case File.read(@reactions_path) do
+                       {:ok, s} -> s
+                       _ -> ""
+                     end)
+
   # The grid is bounded: at most this many session cards. A hard floor on both the
   # render cost (N panes) and the atom/term cost of the projected data. Sessions
   # beyond this are not shown in the overview (newest-first from the registry).
@@ -141,6 +161,74 @@ defmodule SpellAgent.Tui.Cockpit do
     DataSource.Registry.register(@source_name, fn ctx ->
       sessions(Map.get(ctx, :hist_store))
     end)
+  end
+
+  @doc """
+  Install the cockpit's navigation reactions (PLAN-027 M6): run
+  `cockpit_reactions.ptc`, which registers the drill/back reactions (authored as
+  `keymap/define-reaction` returning effect envelopes). Idempotent + best-effort:
+  a missing/malformed file or an absent registry is a no-op, never raises. Bind a
+  key to `cockpit/drill` / `cockpit/back` (via `keymap/bind`) to drive them.
+  """
+  @spec install_reactions() :: :ok
+  def install_reactions do
+    source =
+      case File.read(@reactions_path) do
+        {:ok, s} -> s
+        _ -> @reactions_source
+      end
+
+    if is_binary(source) and source != "" do
+      # `keymap/define-reaction` lives in the harness tool tier (built per-render
+      # from forest + gaze), NOT the base tools map — supply an empty forest + a
+      # default gaze so the declaration verb is reachable at install time.
+      tools = SpellAgent.Harness.tools(%{}, SpellAgent.Tui.Ui.new())
+
+      PtcRunner.Lisp.run(source, tools: tools, caller: :in_process_v1)
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
+  end
+
+  @doc """
+  Enter the cockpit (PLAN-027 M6): run `cockpit_layout.ptc` to shadow the `body`
+  slot with the live per-session card grid.
+
+  Returns `:ok` when the body slot was shadowed, `{:error, reason}` otherwise
+  (the layout program failed, or `layout/set` rejected the node — e.g. the
+  registry is unseeded/not-adoptable in a degraded state). Total + best-effort:
+  a failure leaves the current layout untouched (the inspector stays), never
+  crashes. `layout/reset` returns to the default inspector.
+  """
+  @spec show() :: :ok | {:error, term()}
+  def show do
+    source =
+      case File.read(@layout_path) do
+        {:ok, s} -> s
+        _ -> @layout_source
+      end
+
+    with true <- is_binary(source) and source != "",
+         {:ok, step} <-
+           PtcRunner.Lisp.run(source,
+             tools: SpellAgent.Tools.freeform_tools(),
+             caller: :in_process_v1
+           ),
+         %{"ok" => true} <- step.return do
+      :ok
+    else
+      %{"err" => reason} -> {:error, reason}
+      {:error, step} -> {:error, Map.get(step, :fail, :cockpit_layout_failed)}
+      _ -> {:error, :cockpit_layout_failed}
+    end
+  rescue
+    e -> {:error, e}
+  catch
+    _, v -> {:error, v}
   end
 
   @doc """

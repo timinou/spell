@@ -89,20 +89,23 @@ defmodule SpellAgent.Tui.TmplDemosTest do
     assert k(HoleResolver.resolve_holes(tree, %{}), "bad") == HoleResolver.placeholder()
   end
 
-  # 9. DOGFOOD — the native status renders from holes, exactly as before.
-  test "demo 9: the native status label/color come from data/* holes" do
-    # The default-layout status node is a hole over data/status-label/color;
-    # resolving it against a running bag yields the running label + yellow.
+  # 9. DOGFOOD — the native status renders from a DERIVATION hole over data/status.
+  test "demo 9: the native status label/color are DERIVED in the layout from raw data" do
+    # PLAN-027 M3: the status label + color are no longer bag keys
+    # (data/status-label was retired) — the DERIVATION moved into the layout as a
+    # PTC projection over the raw `data/status` the bag still ships. Resolving the
+    # default layout's real status node against a running bag yields the running
+    # label + yellow, proving the derivation-as-data path end to end.
     bag =
       DataBag.build(%{running?: true, vms: %{}, ui: %{}}, %{x: 0, y: 0, width: 1, height: 1})
 
-    node = %{
-      "type" => "paragraph",
-      "text" => %{"__hole__" => %{"node" => "sym", "value" => "data/status-label"}},
-      "style" => %{"fg" => %{"__hole__" => %{"node" => "sym", "value" => "data/status-color"}}}
-    }
+    # The bag ships the RAW input, not the derived label.
+    refute Map.has_key?(bag, "status-label")
+    assert bag["status"]["running?"] == true
 
-    out = HoleResolver.resolve_holes(node, bag)
+    # The real status node from the default layout carries the derivation holes.
+    status = SpellAgent.Tui.Lens.at(SpellAgent.Tui.DefaultLayout.tree(SpellAgent.Tui.Ui.new()), "status")
+    out = HoleResolver.resolve_holes(status, bag)
     assert k(out, "text") =~ "running"
     assert k(out, "style")["fg"] == "yellow"
   end

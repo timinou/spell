@@ -21,24 +21,69 @@ defmodule SpellAgent.Tui.LayoutDiagnostic do
   @doc "Validate that a layout source produces encodable leaves."
   @spec validate(term()) :: :ok | {:error, diagnostic()}
   def validate(node) do
+    # DATA-DRIVEN LAYOUTS (PLAN-027 M6): a split whose `children` is a splice hole
+    # (`~@(map … data/x)`) produces its children from LIVE data at render time. The
+    # validator resolves holes against an EMPTY data env, so such a split resolves
+    # to zero children — a legitimate runtime state (e.g. no sessions yet), NOT a
+    # malformed layout. `dynamic_split_paths/1` records, from the ORIGINAL node,
+    # the paths whose children came from a splice, so `place/3` accepts an empty
+    # split THERE (only) instead of rejecting the whole authored layout. A split
+    # with STATIC empty children is still rejected — that is a real authoring bug.
+    dynamic = dynamic_split_paths(node)
+
     with {:ok, resolved} <- resolve_holes(node),
          :ok <- detect_unevaluated_forms(resolved),
-         {:ok, leaves} <- place(resolved, @probe_rect, "source") do
+         {:ok, leaves} <- place(resolved, @probe_rect, "source", dynamic) do
       case leaves do
         [] ->
-          {:error,
-           diagnostic(
-             "source",
-             "empty_layout",
-             "layout produced no renderable leaves",
-             "source must be a widget leaf, a pane, or a split with renderable children"
-           )}
+          # An all-dynamic layout (every split's children splice out empty against
+          # the empty probe env) is VALID — it renders fine once data arrives. Only
+          # a layout with NO dynamic splits and no leaves is a real empty-layout bug.
+          if MapSet.size(dynamic) > 0 do
+            :ok
+          else
+            {:error,
+             diagnostic(
+               "source",
+               "empty_layout",
+               "layout produced no renderable leaves",
+               "source must be a widget leaf, a pane, or a split with renderable children"
+             )}
+          end
 
         leaves ->
           validate_leaves(leaves)
       end
     end
   end
+
+  # Walk the ORIGINAL (pre-resolve) node and collect the diagnostic PATHS of every
+  # split whose `children` is a splice hole — those are data-driven and may legally
+  # resolve to an empty list. The path scheme mirrors `place/4`'s ("source",
+  # "source.children[i]", …) so the two agree on which split is which.
+  defp dynamic_split_paths(node), do: collect_dynamic(node, "source", MapSet.new())
+
+  defp collect_dynamic(node, path, acc) when is_map(node) and not is_struct(node) do
+    acc =
+      case Tree.get(node, "children") do
+        %{"__splice__" => _} -> MapSet.put(acc, path)
+        _ -> acc
+      end
+
+    children = Tree.get(node, "children")
+
+    if is_list(children) do
+      children
+      |> Enum.with_index()
+      |> Enum.reduce(acc, fn {child, i}, a ->
+        collect_dynamic(child, path <> ".children[#{i}]", a)
+      end)
+    else
+      acc
+    end
+  end
+
+  defp collect_dynamic(_other, _path, acc), do: acc
 
   @doc "Human-readable one-line summary for a diagnostic map."
   @spec format(diagnostic()) :: String.t()
@@ -160,9 +205,9 @@ defmodule SpellAgent.Tui.LayoutDiagnostic do
 
   # ---- layout walk with paths ----
 
-  defp place(node, %Rect{} = rect, path) when is_map(node) do
+  defp place(node, %Rect{} = rect, path, dynamic) when is_map(node) do
     case kind(node) do
-      "split" -> place_split(node, rect, path)
+      "split" -> place_split(node, rect, path, dynamic)
       nil -> {:error, missing_type(path, node)}
       _leaf -> {:ok, [{node, rect, path}]}
     end
@@ -172,18 +217,18 @@ defmodule SpellAgent.Tui.LayoutDiagnostic do
     kind, value -> {:error, layout_failed(path, Exception.format_banner(kind, value))}
   end
 
-  defp place(nodes, %Rect{} = rect, path) when is_list(nodes) do
+  defp place(nodes, %Rect{} = rect, path, dynamic) when is_list(nodes) do
     nodes
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, []}, fn {node, index}, {:ok, acc} ->
-      case place(node, rect, path <> "[#{index}]") do
+      case place(node, rect, path <> "[#{index}]", dynamic) do
         {:ok, leaves} -> {:cont, {:ok, acc ++ leaves}}
         {:error, _} = error -> {:halt, error}
       end
     end)
   end
 
-  defp place(_other, _rect, path) do
+  defp place(_other, _rect, path, _dynamic) do
     {:error,
      diagnostic(
        path,
@@ -193,7 +238,7 @@ defmodule SpellAgent.Tui.LayoutDiagnostic do
      )}
   end
 
-  defp place_split(node, rect, path) do
+  defp place_split(node, rect, path, dynamic) do
     children = get(node, "children")
 
     cond do
@@ -205,6 +250,12 @@ defmodule SpellAgent.Tui.LayoutDiagnostic do
            "split children must be a list",
            "a non-empty list of layout nodes"
          )}
+
+      children == [] and MapSet.member?(dynamic, path) ->
+        # A DATA-DRIVEN split (children came from a splice hole) that resolved to
+        # zero children against the empty probe env. Legitimate: it renders once
+        # its data arrives. Contributes no leaves to validate, but is NOT an error.
+        {:ok, []}
 
       children == [] ->
         {:error,
@@ -249,7 +300,7 @@ defmodule SpellAgent.Tui.LayoutDiagnostic do
             |> Enum.with_index()
             |> Enum.zip(rects)
             |> Enum.reduce_while({:ok, []}, fn {{child, index}, subrect}, {:ok, acc} ->
-              case place(child, subrect, path <> ".children[#{index}]") do
+              case place(child, subrect, path <> ".children[#{index}]", dynamic) do
                 {:ok, leaves} -> {:cont, {:ok, acc ++ leaves}}
                 {:error, _} = error -> {:halt, error}
               end

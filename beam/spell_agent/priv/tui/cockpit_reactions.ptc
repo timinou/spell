@@ -1,0 +1,34 @@
+;; The cockpit's NAVIGATION reactions — as data (PLAN-027 M6, FEAT-046).
+;;
+;; The cockpit's drill/back are AUTHORED reactions (keymap/define-reaction) that
+;; return data-encoded App EFFECTS (PLAN-027 M5): a reaction evaluates to an
+;; `{"__effect__" name "args" {..}}` envelope, and the body interprets it through
+;; the bounded EffectRegistry. Here the effect is `ui/set-flag` (a safe, bounded
+;; gaze-flag setter) carrying the drill state, so the cockpit layout can read
+;; `data/ui`'s flags to highlight the focused card / switch to a detail view.
+;;
+;; These are DATA: an edit here rebinds the cockpit's navigation with no Elixir
+;; recompile. `SpellAgent.Tui.Cockpit.install_reactions/0` runs this file.
+;;
+;; NB: the reactions are registered under the `:global` context so they are
+;; reachable while the cockpit body is shown; the drill target (which session)
+;; is carried in the effect args, resolved from the gaze at fire time.
+
+;; The reaction `:source` is a PTC SOURCE STRING (validated by
+;; PtcRunner.Lisp.validate + evaluated at fire time by Reaction.Ptc.run_effectful).
+;; It evaluates to an effect envelope, which the body interprets through the
+;; EffectRegistry — here `ui/set-flag`, a bounded gaze-flag setter.
+
+;; "cockpit/drill" — mark the cockpit as drilled into the focused session. The
+;; body layout can read data/ui's "cockpit-drilled" flag to switch from the grid
+;; to a single-session detail (a follow-up layout branches on it).
+(keymap/define-reaction
+  {:context "global"
+   :intent "cockpit/drill"
+   :source "{\"__effect__\" \"ui/set-flag\" \"args\" {\"key\" \"cockpit-drilled\" \"value\" true}}"})
+
+;; "cockpit/back" — leave the drill, return to the grid overview.
+(keymap/define-reaction
+  {:context "global"
+   :intent "cockpit/back"
+   :source "{\"__effect__\" \"ui/set-flag\" \"args\" {\"key\" \"cockpit-drilled\" \"value\" false}}"})

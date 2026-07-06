@@ -142,6 +142,63 @@ defmodule SpellAgent.Tui.CockpitTest do
     end
   end
 
+  describe "show/0 (the cockpit fully as data — M6 payoff)" do
+    alias SpellAgent.Tui.{LayoutRegistry, DefaultLayout, Ui, HoleResolver, Lens}
+
+    setup do
+      case Process.whereis(LayoutRegistry) do
+        nil -> start_supervised!({LayoutRegistry, []})
+        _ -> :ok
+      end
+
+      # Seed a real default so the body slot is present + adoptable.
+      ui = Ui.new(focus: :prompt, mode: :normal, panes: [:prompt, :history, :tree, :detail])
+      LayoutRegistry.seed_default(DefaultLayout.tree(ui, ["history", "tree", "detail"]))
+      on_exit(fn -> if Process.whereis(LayoutRegistry), do: LayoutRegistry.reset_all() end)
+      :ok
+    end
+
+    test "show/0 shadows the body slot with the data-driven card grid" do
+      assert Cockpit.show() == :ok
+
+      body = Lens.at(LayoutRegistry.tree(), "body")
+      assert is_map(body)
+
+      # Resolve the (frozen) cockpit body against a sample data/sessions: the
+      # grid must produce ONE card block per session, with a header — the whole
+      # view authored in cockpit_layout.ptc, not Elixir.
+      data = %{
+        "sessions" => [
+          %{"id" => "s1", "intent" => "refactor", "last" => "editing", "status" => "running", "running?" => true, "turns" => 3, "owner" => "human", "spans" => [%{"status" => "ok", "title" => "read"}]},
+          %{"id" => "s2", "intent" => "tests", "last" => "14 pass", "status" => "ok", "running?" => false, "turns" => 7, "owner" => "session:s1", "spans" => []}
+        ]
+      }
+
+      resolved = HoleResolver.resolve_holes(body, data)
+      children = Map.get(resolved, "children", [])
+      grid = Enum.at(children, 1, %{})
+      cards = Map.get(grid, "children", [])
+
+      assert length(cards) == 2
+      assert Map.get(Enum.at(cards, 0), "type") == "block"
+      # The card title carries the session id + a live running badge.
+      assert Map.get(Enum.at(cards, 0), "title") =~ "s1"
+      # The running card's border is yellow (status-driven color, from data).
+      assert get_in(Enum.at(cards, 0), ["border_style", "fg"]) == "yellow"
+    end
+
+    test "show/0 with ZERO sessions still validates + shadows (never-brick empty grid)" do
+      # The data-driven grid resolves to zero cards against an empty session list;
+      # the LayoutDiagnostic must accept the splice-empty split (M6 validation fix)
+      # rather than reject the whole cockpit layout.
+      assert Cockpit.show() == :ok
+      body = Lens.at(LayoutRegistry.tree(), "body")
+      resolved = HoleResolver.resolve_holes(body, %{"sessions" => []})
+      grid = Enum.at(Map.get(resolved, "children", []), 1, %{})
+      assert Map.get(grid, "children", []) == []
+    end
+  end
+
   describe "install/0 (periphery registration)" do
     test "registers exactly one data source under data/sessions" do
       :ok = Cockpit.install()

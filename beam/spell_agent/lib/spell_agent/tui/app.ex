@@ -190,6 +190,9 @@ defmodule SpellAgent.Tui.App do
   # Best-effort: an absent registry (headless) degrades to a no-op, never raises.
   defp install_data_sources do
     SpellAgent.Tui.Cockpit.install()
+    # PLAN-027 M6: also install the cockpit's navigation reactions (drill/back),
+    # authored as data returning effect envelopes. Best-effort.
+    SpellAgent.Tui.Cockpit.install_reactions()
   rescue
     _ -> :ok
   catch

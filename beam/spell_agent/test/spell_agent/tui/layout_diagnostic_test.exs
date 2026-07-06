@@ -53,4 +53,33 @@ defmodule SpellAgent.Tui.LayoutDiagnosticTest do
       assert :ok = LayoutDiagnostic.validate(%{"type" => "paragraph", "text" => "plain"})
     end
   end
+
+  describe "data-driven split children (PLAN-027 M6)" do
+    # A split whose children come from a SPLICE hole over live data (the cockpit's
+    # per-session card grid) resolves to ZERO children against the empty probe
+    # env. That is a legitimate runtime state (no data yet), NOT a malformed
+    # layout — the validator must ACCEPT it rather than reject the whole layout.
+    test "a split with splice-hole children validates even when empty against the probe env" do
+      {:ok, step} =
+        PtcRunner.Lisp.run(
+          ~S'(tmpl:: {"type" "split" "dir" "horizontal" "constraints" [] "children" ~@(map (fn [s] {"type" "block" "title" (get s "id")}) data/items)})'
+        )
+
+      assert :ok = LayoutDiagnostic.validate(step.return)
+    end
+
+    test "a split with a STATIC empty children list is STILL rejected (real authoring bug)" do
+      assert {:error, %{"reason" => "empty_children"}} =
+               LayoutDiagnostic.validate(%{"type" => "split", "dir" => "horizontal", "children" => []})
+    end
+
+    test "a split nesting a splice-hole child validates (the cockpit's outer+grid shape)" do
+      {:ok, step} =
+        PtcRunner.Lisp.run(
+          ~S'(tmpl:: {"type" "split" "dir" "vertical" "constraints" [["length" 1] ["min" 0]] "children" [{"type" "paragraph" "text" "header"} {"type" "split" "dir" "horizontal" "constraints" [] "children" ~@(map (fn [s] {"type" "block" "title" (get s "id")}) data/items)}]})'
+        )
+
+      assert :ok = LayoutDiagnostic.validate(step.return)
+    end
+  end
 end

@@ -90,6 +90,7 @@ defmodule SpellAgent.Tools do
     |> Map.merge(SpellAgent.Tui.Lens.tools(SpellAgent.Tui.LayoutRegistry.tree()))
     |> Map.merge(SpellAgent.Tui.Cell.Verb.tools())
     |> Map.merge(SpellAgent.Tui.DataSource.Verb.tools())
+    |> Map.merge(SpellAgent.Tui.Human.tools())
     |> Map.merge(SpellAgent.Tui.RenderProbe.tools())
     |> Map.merge(SpellAgent.Tui.SelfView.tools())
   rescue
@@ -324,7 +325,7 @@ defmodule SpellAgent.Tools do
   # `prefix/verb` callee under one of these is admitted on the PREFIX alone. A
   # FIXED namespace (harness/keymap/black/hist/clock) is fully enumerated by the
   # catalog and therefore checked by EXACT name, so a typo'd member is rejected.
-  @open_namespaces MapSet.new(["view", "theme", "lens", "layout", "cell", "data-source"])
+  @open_namespaces MapSet.new(["view", "theme", "lens", "layout", "cell", "data-source", "human"])
 
   defp open_namespace_member?(ref) do
     case String.split(ref, "/", parts: 2) do

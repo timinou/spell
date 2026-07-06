@@ -1,0 +1,63 @@
+;; The multi-session cockpit LAYOUT — as data (PLAN-027 M6, FEAT-046).
+;;
+;; Running this program shadows the `body` slot with a live grid of per-session
+;; cards, projected from `data/sessions` (the query-clock source M1 authored in
+;; cockpit_sources.ptc). It is the WHOLE cockpit view, as a value the agent reads
+;; with `layout/show` and rewrites with `layout/set` — an edit here reshapes the
+;; cockpit with no Elixir recompile.
+;;
+;; `SpellAgent.Tui.Cockpit.show/0` runs this to enter the cockpit;
+;; `layout/reset` returns to the default inspector.
+;;
+;; The grid is a `tmpl::` template: its cards are a SPLICE (`~@`) over
+;; `data/sessions`, so N live sessions become N card blocks, and an empty-
+;; constraints split fills them evenly. Each card's border reflects live status
+;; (running/ok/error) and shows the session's intent + one-line activity + last
+;; spans — every visual decision a PTC expression, not Elixir.
+
+(layout/set
+  {:slot "body"
+   :source
+  (tmpl::
+    {"type" "split"
+     "slot" "body"
+     "dir" "vertical"
+     "constraints" [["length" 1] ["min" 0]]
+     "children"
+     [;; ── header strip: session count + running count ──
+      {"type" "paragraph"
+       "text" ~(str (count data/sessions) " sessions \u00b7 "
+                    (count (filter (fn [s] (get s "running?")) data/sessions))
+                    " running")
+       "style" {"fg" "cyan"}}
+
+      ;; ── the card grid: one focusable card per live session ──
+      {"type" "split"
+       "dir" "horizontal"
+       "constraints" []
+       "children"
+       ~@(map
+           (fn [s]
+             {"type" "block"
+              "title" (str " " (get s "id") "  "
+                           (if (get s "running?")
+                               (str "\u25cf" (get s "turns") "t")
+                               (get s "status")))
+              "borders" ["all"]
+              "border_type" "rounded"
+              "border_style" {"fg" (cond (= (get s "status") "error") "red"
+                                         (get s "running?")          "yellow"
+                                         :else                       "green")}
+              "children"
+              [{"type" "list"
+                "items"
+                (concat
+                  [(str (if (= (get s "owner") "human") "\u2302 " "\u21b7 ") (get s "intent"))
+                   (str "\u21b7 " (get s "last"))]
+                  (map (fn [sp]
+                         (str (cond (= (get sp "status") "ok")    "\u2713 "
+                                    (= (get sp "status") "error") "\u2717 "
+                                    :else                          "\u00b7 ")
+                              (get sp "title")))
+                       (get s "spans")))}]})
+           data/sessions)}]})})
