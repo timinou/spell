@@ -40,6 +40,7 @@ defmodule SpellAgent.Tui.App do
     DataBag,
     DataSource,
     DefaultLayout,
+    EffectRegistry,
     ForestDiff,
     HintBar,
     HoleAffordance,
@@ -168,6 +169,7 @@ defmodule SpellAgent.Tui.App do
     # Best-effort: a headless test without the supervised registry no-ops.
     install_data_sources()
     seed_pane_contexts()
+    seed_effects()
 
     {:ok, reproject(state, :all)}
   end
@@ -201,6 +203,39 @@ defmodule SpellAgent.Tui.App do
   # `@native_pane_contexts` floor, so behavior is identical either way.
   defp seed_pane_contexts do
     PaneContext.register_all(@native_pane_contexts)
+  rescue
+    _ -> :ok
+  catch
+    :exit, _ -> :ok
+  end
+
+  # Seed the App effects a reaction may RETURN (PLAN-027 M5). The proven native
+  # effects (quit/submit/reset/leader/insert) stay welded in handle_key_event/2
+  # — this registers only:
+  #   * `app/quit` as a PROTECTED effect: the firewall. It is registered so the
+  #     vocabulary is complete + introspectable, but `EffectRegistry.invoke/3`
+  #     REFUSES to run a protected effect from the reaction path — a runaway or
+  #     hostile reaction returning {:effect "app/quit"} is a no-op, never a halt.
+  #     The real quit still fires from the hardcoded key interceptor above.
+  #   * `ui/set-flag`: a generic, SAFE demonstrator effect a reaction can invoke
+  #     to set a bounded gaze flag (e.g. toggling a drawer, or the cockpit's
+  #     drill tag). Proves the protocol end-to-end without touching a welded
+  #     clause. Bounded by `Ui.safe_flags/1` (the same 32-entry chokepoint).
+  # Best-effort: an absent registry is a no-op.
+  defp seed_effects do
+    EffectRegistry.register("app/quit", fn state, _args -> {:stop, state} end, protected?: true)
+
+    EffectRegistry.register("ui/set-flag", fn state, args ->
+      key = Map.get(args, "key")
+      value = Map.get(args, "value", true)
+
+      if is_binary(key) do
+        flags = Ui.safe_flags(Map.put(state.ui.flags, key, value)) || state.ui.flags
+        {:noreply, %{state | ui: %{state.ui | flags: flags}}}
+      else
+        {:noreply, state}
+      end
+    end)
   rescue
     _ -> :ok
   catch
@@ -556,10 +591,30 @@ defmodule SpellAgent.Tui.App do
     # hole-affordance's decision/resolution records live in this session's
     # own mesh region by default.
     mesh_opts = %{session_id: state.hist_session, region: state.hist_session, store: state.hist_store}
-    ui = Keys.dispatch(resolution, state.ui, forest, &Keys.context_name/1, render_tree(state), mesh_opts)
-    # Navigation changed the gaze → re-mirror every pane (the detail pane
-    # mirrors the new selection; cheap, gaze-fed projection).
-    {:noreply, reproject(%{state | ui: ui}, :all)}
+
+    # PLAN-027 M5: the effect-aware dispatch. A live reaction may return EITHER a
+    # new gaze OR a data-encoded App EFFECT (drill the cockpit, etc.). A gaze
+    # reprojects as before; an effect is interpreted through the bounded
+    # `EffectRegistry` — which REFUSES protected effects (app/quit) from the
+    # reaction path and no-ops an unknown name (the ACT-half of safe_pane). The
+    # proven native effects (quit/submit/reset/leader/insert) stay welded in
+    # handle_key_event/2 above; this path only adds NEW registered effects.
+    case Keys.dispatch_effectful(resolution, state.ui, forest, &Keys.context_name/1, render_tree(state), mesh_opts) do
+      {:gaze, ui} ->
+        # Navigation changed the gaze → re-mirror every pane (the detail pane
+        # mirrors the new selection; cheap, gaze-fed projection).
+        {:noreply, reproject(%{state | ui: ui}, :all)}
+
+      {:effect, name, args} ->
+        # A reaction-requested effect: interpret it. The handler may mutate App
+        # state (focus/drill/pending) a pure gaze transform can't reach, and
+        # returns the App's own {:noreply|:stop, state} reply. Reproject after a
+        # :noreply so a state change the effect made is mirrored; a :stop halts.
+        case EffectRegistry.invoke(name, state, args) do
+          {:noreply, new_state} -> {:noreply, reproject(new_state, :all)}
+          {:stop, new_state} -> {:stop, new_state}
+        end
+    end
   end
 
   # Is there a LIVE (agent-authored) reaction registered for this ctx+intent?

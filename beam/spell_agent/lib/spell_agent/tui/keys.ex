@@ -156,6 +156,54 @@ defmodule SpellAgent.Tui.Keys do
     end
   end
 
+  @doc """
+  Dispatch a resolution to its reaction, returning a TAGGED result
+  (`{:gaze, ui}` | `{:effect, name, args}`) — the M5 effect-aware path
+  (PLAN-027 M5, FUP-040).
+
+  Identical to `dispatch/6` except the return: a live PTC reaction may evaluate to
+  a data-encoded App EFFECT (via `Reaction.Ptc.run_effectful/5`), which the App
+  interprets through the bounded `EffectRegistry`. A compiled `react/3` reaction
+  can only ever produce a gaze, so it is wrapped `{:gaze, ui}`. `:unbound` and an
+  uncompiled context both yield `{:gaze, ui}` (the unchanged gaze). This is the
+  ACT-half sibling of `dispatch/6`'s LOOK-only contract.
+  """
+  @spec dispatch_effectful(term(), Ui.t(), map(), (term() -> atom()), map() | nil, map() | nil) ::
+          {:gaze, Ui.t()} | {:effect, String.t(), map()}
+  def dispatch_effectful(
+        resolution,
+        ui,
+        forest,
+        context_name \\ &default_context_name/1,
+        tree \\ nil,
+        mesh_opts \\ nil
+      )
+
+  def dispatch_effectful(:unbound, %Ui{} = ui, _forest, _name, _tree, _mesh_opts), do: {:gaze, ui}
+
+  def dispatch_effectful({:intent, intent, ctx}, %Ui{} = ui, forest, context_name, tree, mesh_opts) do
+    name = context_name.(ctx)
+
+    case KeymapRegistry.lookup_reaction(name, intent) do
+      nil ->
+        # A compiled react/3 can only produce a gaze — wrap it.
+        {:gaze, compiled_react(ctx, intent, ui, forest)}
+
+      source when is_binary(source) ->
+        run_ptc_reaction_effectful(source, ui, forest, tree, mesh_opts)
+    end
+  end
+
+  defp run_ptc_reaction_effectful(source, ui, forest, tree, mesh_opts) do
+    mod = SpellAgent.Tui.Reaction.Ptc
+
+    if Code.ensure_loaded?(mod) and function_exported?(mod, :run_effectful, 5) do
+      apply(mod, :run_effectful, [source, ui, forest, tree, mesh_opts])
+    else
+      {:gaze, ui}
+    end
+  end
+
   # Default: a context module exposes its registry key via `context_name/0`
   # (panes will; Global answers :global). Falls back to the module itself.
   defp default_context_name(ctx), do: context_name(ctx)

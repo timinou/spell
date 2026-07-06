@@ -50,6 +50,41 @@ defmodule SpellAgent.Tui.Reaction.Ptc do
   @spec run(String.t(), Ui.t(), map(), map() | nil, map() | nil) :: Ui.t()
   def run(source, %Ui{} = ui, forest, tree \\ nil, mesh_opts \\ nil)
       when is_binary(source) and is_map(forest) do
+    # The Ui-ONLY compatibility wrapper (unchanged contract): every pre-M5 caller
+    # gets a gaze back, an effect-tagged return is IGNORED (coerced to the
+    # unchanged gaze). Callers that want to honor a returned effect use
+    # `run_effectful/5`.
+    case run_effectful(source, ui, forest, tree, mesh_opts) do
+      {:gaze, %Ui{} = new_ui} -> new_ui
+      {:effect, _name, _args} -> ui
+    end
+  end
+
+  @typedoc """
+  A reaction's tagged result (PLAN-027 M5): either a new gaze, or a data-encoded
+  App EFFECT the body interprets through `SpellAgent.Tui.EffectRegistry`. A
+  reaction returns an effect by evaluating to a map
+  `{"__effect__" => name, "args" => argsmap}` (the sole-key discipline below).
+  """
+  @type result :: {:gaze, Ui.t()} | {:effect, String.t(), map()}
+
+  # The tag a reaction return carries to request an App effect instead of a gaze.
+  @effect_key "__effect__"
+
+  @doc """
+  Run a reaction, returning a TAGGED result (`{:gaze, ui}` | `{:effect, name,
+  args}`) — the M5 effect-aware path.
+
+  A reaction that evaluates to an effect envelope (a map whose `"__effect__"` is a
+  string effect name, with an optional `"args"` map) returns `{:effect, name,
+  args}`; the body looks it up in the bounded `EffectRegistry`. Any other return
+  (a gaze map, or a non-map) rehydrates to a `%Ui{}` and returns `{:gaze, ui}` —
+  the exact pre-M5 behavior. Never crashes: a failed reaction returns
+  `{:gaze, ui}` with the unchanged gaze.
+  """
+  @spec run_effectful(String.t(), Ui.t(), map(), map() | nil, map() | nil) :: result()
+  def run_effectful(source, %Ui{} = ui, forest, tree \\ nil, mesh_opts \\ nil)
+      when is_binary(source) and is_map(forest) do
     context = %{"ui" => ui_to_map(ui), "forest" => forest}
     # Close the CURRENT gaze into the harness tools so a verb called without an
     # explicit :ui (e.g. `(harness/expand {})` or `(harness/state)`) acts on it.
@@ -63,13 +98,31 @@ defmodule SpellAgent.Tui.Reaction.Ptc do
       |> maybe_merge_mesh_tools(mesh_opts)
 
     case PtcRunner.Lisp.run(source, context: context, tools: tools, caller: :in_process_v1) do
-      {:ok, step} -> rehydrate(step.return, ui)
-      {:error, _step} -> ui
+      {:ok, step} -> classify(step.return, ui)
+      {:error, _step} -> {:gaze, ui}
     end
   rescue
     # A reaction must never crash the App; degrade to the unchanged gaze.
-    _ -> ui
+    _ -> {:gaze, ui}
   end
+
+  # Classify a reaction's return: an effect envelope -> {:effect, name, args};
+  # anything else -> a rehydrated gaze. The effect envelope is the SOLE-KEY
+  # discipline (like the loop/continue signal): the `"__effect__"` value must be
+  # a non-empty string, and `"args"` (if present) a map — else it is treated as
+  # ordinary gaze data (a reaction can't accidentally trip the effect path with a
+  # stray key, and a malformed envelope degrades to a gaze, never a bad effect).
+  defp classify(%{@effect_key => name} = env, _ui) when is_binary(name) and name != "" do
+    args =
+      case Map.get(env, "args") do
+        m when is_map(m) -> m
+        _ -> %{}
+      end
+
+    {:effect, name, args}
+  end
+
+  defp classify(other, ui), do: {:gaze, rehydrate(other, ui)}
 
   defp maybe_merge_lens_tools(tools, tree) when is_map(tree), do: Map.merge(tools, Lens.tools(tree))
   defp maybe_merge_lens_tools(tools, _tree), do: tools

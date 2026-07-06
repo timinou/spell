@@ -121,6 +121,11 @@ defmodule SpellAgent.Application do
       # resolves it generically instead of enumerating specific panes in Elixir.
       # Session-global, same posture as the sibling registries.
       SpellAgent.Tui.PaneContext,
+      # The bounded App-effect registry (PLAN-027 M5 / FUP-040): reactions return
+      # data-encoded effects the body interprets through this fixed registry (the
+      # ACT-half of safe_pane's bounded-intern). Native App effects register here;
+      # protected ones (app/quit) are reaction-unreachable. Session-global.
+      SpellAgent.Tui.EffectRegistry,
       # The L−1 self-view render loop guard (PLAN-016 W3): per-mission render
       # accounting (iteration cap + fixpoint detection) so the render→observe→act
       # cycle can't spin. Self-cleaning via pid monitors. Same posture as the
